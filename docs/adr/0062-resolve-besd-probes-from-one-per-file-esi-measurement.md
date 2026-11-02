@@ -69,11 +69,11 @@ winner chosen by position, by allele order or by row order.
 **That drop is this builder's own policy, not a Dense rule it inherits.** The
 Dense VCF builder meets the same collapse and answers differently, because a
 dense column can hold both source variants' associations against one row:
-`_source_alids_by_alid` blanks the ambiguous source-coordinate provenance
-(`hg38_to_source[hg38_alid] = None  # collision → ambiguous`) and the column
+Variant Routing's `VariantRouting.source_alids` blanks the ambiguous
+source-coordinate provenance (a collision's origin is `None`) and the column
 keeps the last stream occurrence for that row (`tests/test_dense_vcf_build.py::
 test_last_wins_dedup_on_collision`). Its only association-dropping collision is
-a different one — `_drop_cross_assembly_collisions` drops raw tuples declared
+a different one — routing's `_drop_cross_assembly_collisions` drops raw tuples declared
 under *both* assemblies, which is one string naming two physical loci rather
 than two loci resolving to one variant. What BESD borrows from Dense is the
 refusal to guess: Dense will not invent which source coordinate a collapsed

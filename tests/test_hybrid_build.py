@@ -17,7 +17,7 @@ import json
 import shutil
 import weakref
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
@@ -1131,52 +1131,6 @@ def test_cli_invalid_options_fail_at_parse_time_hybrid(tmp_path):
     assert "use hg19/hg38 or aliases grch37/grch38" in clean_ass_output.lower()
 
 
-def test_build_routing_index_long_keys_sorted_and_searchable():
-    """The Hybrid routing index keeps variable-length bytes keys (no 300-byte
-    padding) while remaining sorted and binary-searchable."""
-    from opengwasdb.layouts.hybrid.build import _build_routing_index
-
-    long_alt = "A" * 300
-    source_lookup = {
-        ("1", 10, "A", "G"): "1:10:A:G",
-        ("2", 5, "C", "T"): "2:5:C:T",
-        ("1", 10, "A", long_alt): f"1:10:A:{long_alt}",
-        ("1", 20, "G", "C"): "1:20:C:G",
-    }
-    dense_row = {"1:10:A:G": 0, "2:5:C:T": 1}
-    shared_index = {f"1:10:A:{long_alt}": 0, "1:20:C:G": 1}
-
-    keys, targets, ispanel, swaps = _build_routing_index(
-        source_lookup, dense_row, shared_index
-    )
-
-    assert keys.dtype == object
-    assert list(keys) == sorted(keys)
-
-    expected = []
-    for (chrom, pos, ref, alt), alid in source_lookup.items():
-        row = dense_row.get(alid)
-        if row is not None:
-            expected.append((f"{chrom}:{pos}:{ref}:{alt}".encode(), row, True))
-        else:
-            sidx = shared_index.get(alid)
-            if sidx is not None:
-                expected.append((f"{chrom}:{pos}:{ref}:{alt}".encode(), sidx, False))
-    expected.sort(key=lambda kv: kv[0])
-
-    assert list(keys) == [key for key, _, _ in expected]
-    assert targets.tolist() == [target for _, target, _ in expected]
-    assert ispanel.tolist() == [panel for _, _, panel in expected]
-    assert not swaps.any(), "this fixture lifts no reverse-strand variant"
-
-    long_key = b"1:10:A:" + long_alt.encode()
-    missing_key = b"22:9:C:T"
-    query = np.array([b"1:10:A:G", long_key, missing_key], dtype="S")
-    hits = keys[np.minimum(np.searchsorted(keys, query), len(keys) - 1)] == query
-    assert hits.tolist() == [True, True, False]
-
-
-
 # ── single-pass builds from a precomputed variant reference (issue #186) ─────
 
 
@@ -1209,29 +1163,29 @@ def _write_reference_artifact(
 ) -> Path:
     """Write the artifact the inline two-pass Pass 1 would recompute.
 
-    ``panel_only`` drops the off-panel source key so the artifact is a genuine
-    external panel: only the Dense axis is named, and the off-panel hg19 source
-    can only be resolved during Pass 2.
+    Extracted from the manifest, by the build's own union, lift and naming
+    rules. ``panel_only`` then drops the off-panel source key so the artifact
+    is a genuine external panel: only the Dense axis is named, and the
+    off-panel hg19 source can only be resolved during Pass 2.
     """
-    from opengwasdb.layouts.build_manifest import read_manifest
-    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants
     from opengwasdb.variants.axis import sorted_alids
-    from opengwasdb.variants.reference import write_variant_reference
+    from opengwasdb.variants.reference import (
+        extract_variant_reference,
+        read_variant_reference,
+        write_variant_reference,
+    )
 
-    rows = read_manifest(manifest)
-    source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
-        rows, chain_file=None, liftover_failure_threshold=0.01
-    )
-    if panel_only:
-        panel = {HG38_ALID_1, HG38_ALID_3}
-        alids = sorted_alids(panel)
-        source_lookup = {key: alid for key, alid in source_lookup.items() if alid in panel}
-    else:
-        alids = sorted_alids(source_lookup.values())
-    path = tmp_path / (
-        "panel-only.variant-ref.tsv.gz" if panel_only else "union.variant-ref.tsv.gz"
-    )
-    write_variant_reference(path, alids, source_lookup, rsid_by_alid)
+    union = tmp_path / "union.variant-ref.tsv.gz"
+    extract_variant_reference(manifest, union)
+    if not panel_only:
+        return union
+    extracted = read_variant_reference(union)
+    panel = {HG38_ALID_1, HG38_ALID_3}
+    source_lookup = {
+        key: alid for key, alid in extracted.source_lookup.items() if alid in panel
+    }
+    path = tmp_path / "panel-only.variant-ref.tsv.gz"
+    write_variant_reference(path, sorted_alids(panel), source_lookup, extracted.rsid_by_alid)
     return path
 
 
@@ -1398,13 +1352,22 @@ def test_resolver_overlap_routes_lowercase_ssf_to_dense(tmp_path, artifact_keys)
         assert overflow["z"][0] == pytest.approx(2.0, rel=5e-3)
 
 
-def test_hybrid_casefolded_reference_keys_refuse_conflicting_targets():
-    with pytest.raises(ValueError, match="conflicting variants after case folding"):
-        hybrid_build._build_routing_index(
-            {("1", 100, "a", "g"): "1:100:A:G", ("1", 100, "A", "G"): "1:100:A:T"},
-            {"1:100:A:G": 0, "1:100:A:T": 1},
-            {"1:100:A:G": 0, "1:100:A:T": 1},
-        )
+def _route_only_by_reference(monkeypatch: pytest.MonkeyPatch, hybrid_build: ModuleType) -> None:
+    """Make the build refuse to route by Pass 1's union.
+
+    A reference that names no rsids still has its sources read once, for the
+    names (issue #255), so it is the routing authority this pins, not the read.
+    """
+    from opengwasdb.variants.routing import FromReference
+
+    real_route = hybrid_build.route_variants
+
+    def _by_reference(sources, authority, **kwargs):
+        if not isinstance(authority, FromReference):
+            raise AssertionError("Pass 1's union routed despite --variant-reference")
+        return real_route(sources, authority, **kwargs)
+
+    monkeypatch.setattr(hybrid_build, "route_variants", _by_reference)
 
 
 class TestVariantReference:
@@ -1429,7 +1392,7 @@ class TestVariantReference:
     def test_reference_plus_panel_partitions_and_matches_two_pass(self, tmp_path, monkeypatch):
         """A full-union reference plus a subset ``--reference-panel`` routes the
         off-panel variant to the Overflow and reproduces the legacy two-pass
-        store exactly, without ever running Pass 1."""
+        store exactly, routed by the reference rather than Pass 1's union."""
         import opengwasdb.layouts.hybrid.build as hybrid_build
 
         manifest = _hybrid_manifest(tmp_path)
@@ -1441,10 +1404,7 @@ class TestVariantReference:
             manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
         )
 
-        def _no_pass1(*_args: object, **_kwargs: object) -> None:
-            raise AssertionError("Pass 1 ran despite --variant-reference")
-
-        monkeypatch.setattr(hybrid_build, "_lift_manifest_variants", _no_pass1)
+        _route_only_by_reference(monkeypatch, hybrid_build)
 
         single_pass = tmp_path / "single-pass.opengwasdb"
         result = build_hybrid_from_vcf_manifest(
@@ -1471,10 +1431,7 @@ class TestVariantReference:
             manifest, two_pass, reference_panel=_panel(tmp_path), store_id="s", release_id="r"
         )
 
-        def _no_pass1(*_args: object, **_kwargs: object) -> None:
-            raise AssertionError("Pass 1 ran despite --variant-reference")
-
-        monkeypatch.setattr(hybrid_build, "_lift_manifest_variants", _no_pass1)
+        _route_only_by_reference(monkeypatch, hybrid_build)
 
         single_pass = tmp_path / "single-pass.opengwasdb"
         result = build_hybrid_from_vcf_manifest(
@@ -2280,7 +2237,7 @@ class TestVariantReferenceRsids:
     def test_lowercase_on_reference_row_keeps_its_name(self, tmp_path):
         """Issue #255, round 3: the Hybrid routing case-folds, so a lowercase
         source row lands on the upper-case reference ALID. Its name must land
-        there too -- the candidates are keyed with the same `_routed_site_key`
+        there too -- the candidates are keyed with the same case-folded key
         the association routing keys with, so the rekey and the oracle see the
         keys the association uses."""
         vcf = _make_vcf(
@@ -2307,7 +2264,7 @@ class TestVariantReferenceRsids:
 
     def test_lowercase_off_reference_row_keeps_its_name(self, tmp_path):
         """The off-reference half of the same case-fold: the fold encodes an
-        unknown key upper-cased (`_routed_site_key`), so a lowercase source row
+        unknown key upper-cased (`RoutingKey.CASE_FOLDED`), so a lowercase source row
         becomes an Overflow variant whose name must be stored with it."""
         vcf = _make_vcf(
             tmp_path,
@@ -2573,23 +2530,28 @@ class TestVariantReferenceRsids:
         """The rule cannot miss an Overflow-only loss: the oracle walks every
         routed candidate, off-reference ones included, so a rekey that drops
         just an off-reference ALID fails the build."""
-        import opengwasdb.layouts.dense.build_vcf as build_vcf
+        from opengwasdb.variants.routing import names
 
         manifest = _rsid_hybrid_manifest(tmp_path)
         panel = _panel_file(tmp_path)
-        real_rekey = build_vcf._rekey_rsids_to_alids
+        real_rekey = names._rekey_rsids_to_alids
+        dropped: list[str] = []
 
         def _drop_the_overflow_entry(source_lookup, rsid_by_site):
             rekeyed = real_rekey(source_lookup, rsid_by_site)
-            rekeyed.pop(HG38_ALID_2)  # an off-panel (Overflow) variant's name
+            # An off-panel (Overflow) variant's name, present only once the fold
+            # has routed it.
+            if rekeyed.pop(HG38_ALID_2, None) is not None:
+                dropped.append(HG38_ALID_2)
             return rekeyed
 
-        monkeypatch.setattr(build_vcf, "_rekey_rsids_to_alids", _drop_the_overflow_entry)
+        monkeypatch.setattr(names, "_rekey_rsids_to_alids", _drop_the_overflow_entry)
         with pytest.raises(ValueError, match="disagrees with the routed harvest"):
             build_hybrid_from_vcf_manifest(
                 manifest, tmp_path / "lost.opengwasdb", variant_reference=panel,
                 store_id="s", release_id="r",
             )
+        assert dropped == [HG38_ALID_2], "the fault never reached the Overflow name"
 
     def test_written_shared_table_disagreeing_with_the_map_fails_the_build(
         self, tmp_path, monkeypatch

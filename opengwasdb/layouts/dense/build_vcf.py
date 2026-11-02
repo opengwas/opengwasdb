@@ -1,27 +1,25 @@
 """Two-pass Dense Observed-Only writer from GWAS-VCF manifests with inline liftover.
 
-Association streaming and the union-variant pass go through a ``SourceReader``
-resolved from each row's ``source_reader_capability`` (issue #20) rather than
-importing ``opengwasdb.build.vcf_source`` directly -- GWAS-VCF remains the only
-implementation, so nothing about the build changes, but no bcftools-specific
-assumption is left in this module.
+Variant Routing (`opengwasdb.variants.routing`) decides where every source
+coordinate goes: Pass 1's lifted union or a Variant Reference, the names each
+routed ALID carries, and the route table each Pass 2 worker routes one
+Analysis's associations through. This module writes what routing places --
+the variant axis and index, the per-column spills, and the Dense Component
+bands -- and reads every source through a ``SourceReader`` resolved from its
+row's ``source_reader_capability`` (issue #20).
 """
 
 from __future__ import annotations
 
-import heapq
-import itertools
 import logging
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 import numpy as np
 
@@ -33,12 +31,8 @@ from opengwasdb.build.eaf_orientation import (
     site_hashes,
     verify_eaf_orientation,
 )
-from opengwasdb.build.liftover import (
-    LiftoverFailureError,
-    lift_hg19_to_hg38,
-    statistics_swap,
-)
-from opengwasdb.build.ordered_pool import fork_pool, ordered_map
+from opengwasdb.build.liftover import LiftoverFailureError
+from opengwasdb.build.ordered_pool import fork_each, ordered_map
 from opengwasdb.encoding import (
     EafExceptionBuilder,
     EafMeasurements,
@@ -78,38 +72,22 @@ from opengwasdb.model.enums import (
     AssociationCoverage,
     EafScope,
     PrimaryStorageLayout,
-    StoredEffectScale,
     coverage_for_layout,
 )
-from opengwasdb.readers.column_map import (
-    ColumnMap,
-)
-from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
-from opengwasdb.readers.interface import SourceVariant
-from opengwasdb.readers.registry import resolve_reader
+from opengwasdb.readers.column_map import ColumnMap
+from opengwasdb.readers.registry import open_source
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts, z_critical
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
-from opengwasdb.variants.axis import sorted_alids
-from opengwasdb.variants.reference import (
-    SourceKey,
-    VariantReference,
-    expected_rsids_by_routed_key,
-    expected_rsids_by_routing,
-    read_variant_reference,
-    require_rsids_match_expected,
-    require_written_rsids_match,
-    warn_reference_left_rows_blank,
-)
-from opengwasdb.variants.rsid import RsidConflictPolicy, withhold_disputed
-from opengwasdb.variants.windows import (
-    DEFAULT_MAP_SPILL_RECORDS,
-    DEFAULT_REDUCTION_BATCH_SIZE,
-    DEFAULT_WINDOW_SIZE_MB,
-    WindowKey,
-    window_key,
-    window_size_bp,
+from opengwasdb.variants.reference import VariantReference, read_variant_reference
+from opengwasdb.variants.routing import (
+    FromReference,
+    LiftedUnion,
+    RouteTable,
+    RoutingKey,
+    VariantRouting,
+    route_variants,
 )
 
 log = logging.getLogger(__name__)
@@ -120,169 +98,11 @@ _DENSE_COMPRESSOR = compressor()
 
 __all__ = ["build_dense_from_vcf_manifest", "LiftoverFailureError"]
 
-
-# Pass 2 fork-safe lookup + spill dir, set in the parent immediately before the
-# process pool is created. Forked workers (fork start method — see fork_pool())
-# inherit these; the lookup is a pair of numpy arrays — a sorted object array of
-# Python bytes keys (variable-length, so one rare 546-byte indel no longer pads
-# every key to 546 bytes) and an int32 row array — rather than Python dicts. A
-# worker binary-searches the key array without chaining ~n_variants dict pages,
-# so it avoids the refcount-COW that forced issue 043 item 2.
-#
-# Why disk-spill and not return arrays: an earlier design returned each file's
-# result over IPC. At genome-wide scale (~9.85M rows/file × thousands of files)
-# that pipe traffic deadlocked the pool. Workers write a compact per-file .npz to
-# _pass2_spill_dir and return only col_idx, so no large object crosses the pipe.
-_pass2_keys_sorted: np.ndarray | None = None  # sorted object array of bytes keys
-_pass2_rows_sorted: np.ndarray | None = None  # int32 row per key, same order
-_pass2_swaps_sorted: np.ndarray | None = None  # bool: the lift re-oriented this key
-_pass2_spill_dir: Path | None = None
-
 # Top hits are harvested inline during Pass 2 rather than by a post-hoc scan of
 # the full matrix (which had to reload ~200 GB of float32 and compute a p-value
 # for every finite cell). Each column emits only the cells clearing the loosest
 # threshold's |z| cutoff; the band-write phase accumulates them for the index.
 _TOP_HIT_Z_CRIT = z_critical(max(TOP_HIT_THRESHOLDS))
-
-
-def _encode_variant_keys(chrom: object, pos: object, ref: object, alt: object) -> np.ndarray:
-    """Encode variant fields as ``chrom:pos:ref:alt`` byte-string keys, vectorised.
-
-    Used identically for the parent's sorted key table and each worker's query
-    keys, so the two encodings match exactly. ``pos`` int->bytes via numpy astype
-    (``np.int64(10).astype('S') == b'10'``) avoids per-element Python string work.
-    """
-    chrom_b = np.asarray(chrom, dtype="S")
-    pos_b = np.asarray(pos, dtype=np.int64).astype("S")
-    ref_b = np.asarray(ref, dtype="S")
-    alt_b = np.asarray(alt, dtype="S")
-    key = np.char.add(chrom_b, b":")
-    key = np.char.add(key, pos_b)
-    key = np.char.add(key, b":")
-    key = np.char.add(key, ref_b)
-    key = np.char.add(key, b":")
-    key = np.char.add(key, alt_b)
-    return key
-
-
-def _source_site_key(site: SourceKey) -> str:
-    """A source coordinate in the exact string form the Dense routing keys it by.
-
-    `_build_variant_key_index` writes this key and `_match_batch` queries it, so
-    a harvested candidate looked up with this function is looked up exactly as
-    its association is routed (issue #255). The Dense routing keeps the source's
-    own spelling, an ALID reference's alleles being upper-case already; a Hybrid
-    routing case-folds and passes `hybrid.build._routed_site_key` instead.
-    """
-    chrom, pos, ref, alt = site
-    return f"{chrom}:{pos}:{ref}:{alt}"
-
-
-#: One build's site-key normalisation, applied to both the routing and the
-#: harvested candidates so the two are keyed identically.
-SiteKeyFn = Callable[[SourceKey], str]
-
-#: A source coordinate -> the hg38 ALID it routes to (Pass 1's product).
-SourceLookup = dict[tuple[str, int, str, str], str]
-#: The source keys a reverse-strand lift re-oriented, whose statistics follow
-#: the projected alleles (issue #284).
-ReorientedKeys = set[tuple[str, int, str, str]]
-
-
-def _build_variant_key_index(
-    source_lookup: dict[tuple[str, int, str, str], str],
-    variant_index: dict[str, int],
-    swapped: Collection[tuple[str, int, str, str]] = (),
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compose the two Pass 2 dicts into a fork-safe sorted numpy lookup.
-
-    Returns ``(keys_sorted, rows_sorted, swaps_sorted)``: a sorted array of byte
-    keys for every source variant that maps to a stored row, the matching int32
-    row indices, and -- parallel to them -- whether a reverse-strand lift
-    re-oriented that variant's statistics (issue #284). Workers binary-search
-    this instead of chaining two Python dicts.
-    """
-    chroms: list[str] = []
-    poss: list[int] = []
-    refs: list[str] = []
-    alts: list[str] = []
-    rows: list[int] = []
-    swaps: list[bool] = []
-    for (chrom, pos, ref, alt), alid in source_lookup.items():
-        row = variant_index.get(alid)
-        if row is None:
-            continue
-        chroms.append(chrom)
-        poss.append(pos)
-        refs.append(ref)
-        alts.append(alt)
-        rows.append(row)
-        swaps.append((chrom, pos, ref, alt) in swapped)
-    # Encode as Python bytes and sort the object array directly. ``_encode_variant_keys``
-    # returns an ``S`` array padded to the longest key in the batch; with a rare
-    # 546-byte indel present that pads every one of ~21.3M keys to 546 bytes
-    # (~11.6 GB) and makes ``np.argsort`` walk the whole padded buffer. Python bytes
-    # objects stay at their real length, so the sort and the fork-inherited key
-    # table cost memory proportional to the actual key bytes, not the maximum.
-    keys_list = [
-        _source_site_key((chrom, pos, ref, alt)).encode()
-        for chrom, pos, ref, alt in zip(chroms, poss, refs, alts, strict=True)
-    ]
-    keys = np.array(keys_list, dtype=object)
-    del keys_list, chroms, poss, refs, alts
-    rows_arr = np.array(rows, dtype=np.int32)
-    del rows
-    order = np.argsort(keys, kind="stable")
-    swaps_arr = np.array(swaps, dtype=bool)
-    del swaps
-    return keys[order], rows_arr[order], swaps_arr[order]
-
-
-# Streamed in fixed-size batches so a worker never materialises a whole
-# (genome-wide) VCF as Python lists at once — peak per-worker memory is one batch
-# of columns plus the accumulated matched rows, not the entire file (issue 043).
-_RESOLVE_BATCH = 250_000
-
-
-def _match_batch(
-    chroms: list[str],
-    poss: list[int],
-    refs: list[str],
-    alts: list[str],
-    zs: list[float],
-    ses: list[float],
-    eafs: list[float],
-    keys_sorted: np.ndarray,
-    rows_sorted: np.ndarray,
-    swaps_sorted: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Resolve one batch of associations to (rows, z, se, eaf) for cells whose
-    variant is present in the panel (exact key match). Order-preserving.
-    `eaf` is NaN for associations whose source reported none (ADR 0036).
-
-    ``swaps_sorted`` says which keys a reverse-strand lift re-oriented, so their
-    stored alleles call the other allele A1: those associations' z is negated and
-    their frequency becomes ``1 - eaf`` (issue #284, spec §4-5). Without it the
-    store would carry a source-signed statistic under the projected allele pair.
-    """
-    if len(keys_sorted) == 0:
-        empty_i = np.empty(0, dtype=np.int64)
-        empty_f = np.empty(0, dtype=np.float32)
-        return empty_i, empty_f, empty_f, empty_f
-    query = _encode_variant_keys(chroms, poss, refs, alts)
-    idx = np.searchsorted(keys_sorted, query)
-    idx_clip = np.minimum(idx, len(keys_sorted) - 1)
-    matched = keys_sorted[idx_clip] == query
-    rows = rows_sorted[idx_clip[matched]].astype(np.int64)
-    z_arr = np.array(zs, dtype=np.float32)[matched]
-    se_arr = np.array(ses, dtype=np.float32)[matched]
-    eaf_arr = np.array(eafs, dtype=np.float32)[matched]
-    if swaps_sorted is not None:
-        swapped = swaps_sorted[idx_clip[matched]]
-        if swapped.any():
-            z_arr = np.where(swapped, -z_arr, z_arr)
-            eaf_arr = np.where(swapped, np.float32(1.0) - eaf_arr, eaf_arr)
-    return rows, z_arr, se_arr, eaf_arr
 
 
 def apply_se_divisor(se: np.ndarray, se_divisor: float) -> np.ndarray:
@@ -293,101 +113,6 @@ def apply_se_divisor(se: np.ndarray, se_divisor: float) -> np.ndarray:
     if se_divisor == 1.0:
         return se
     return se / np.float32(se_divisor)
-
-
-def _resolve_column(
-    file_path: str,
-    keys_sorted: np.ndarray,
-    rows_sorted: np.ndarray,
-    se_divisor: float = 1.0,
-    swaps_sorted: np.ndarray | None = None,
-    *,
-    capability: str = GWAS_VCF_CAPABILITY,
-    stored_effect_scale: str = StoredEffectScale.SD.value,
-    column_map: ColumnMap | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Stream one source file, resolve each association's variant to a row via the sorted
-    key lookup, and return deduped ``(rows int64, z f32, se f32, eaf f32)`` for the column.
-    ``eaf`` is NaN where the source reports no frequency (ADR 0036).
-
-    The stream is processed in ``_RESOLVE_BATCH``-sized batches (vectorised searchsorted
-    per batch), so worker peak memory is bounded by one batch rather than the whole file.
-    Batches are matched in stream order and concatenated, so the final last-wins dedup by
-    row is identical to processing the whole file at once: when two source variants lift to
-    the same row, the later stream occurrence wins, so the scattered matrix cell is fixed.
-
-    ``capability`` (with ``column_map`` for a mapped row, issue #281) resolves a
-    ``SourceReader`` (issue #20) rather than this module streaming a VCF itself --
-    ``stored_effect_scale`` is required to construct one but unused past construction
-    here (it is a Pass-2 concern only for readers that attach it to each association).
-
-    ``se_divisor`` divides the returned ``se`` (continuous-trait phenotype-SD
-    standardisation, issue #18: ``stored_se = original_se / sd``). ``z`` is left
-    untouched -- ``z = beta/se`` is invariant to dividing both by the same
-    constant -- and defaults to 1.0 (no-op) for binary-trait analyses.
-    """
-    scale = StoredEffectScale(stored_effect_scale)
-    reader = resolve_reader(capability, file_path, scale, column_map=column_map)
-    rows_parts: list[np.ndarray] = []
-    z_parts: list[np.ndarray] = []
-    se_parts: list[np.ndarray] = []
-    eaf_parts: list[np.ndarray] = []
-    chroms: list[str] = []
-    poss: list[int] = []
-    refs: list[str] = []
-    alts: list[str] = []
-    zs: list[float] = []
-    ses: list[float] = []
-    eafs: list[float] = []
-
-    def _flush() -> None:
-        if not zs:
-            return
-        r, z, se, eaf = _match_batch(
-            chroms, poss, refs, alts, zs, ses, eafs, keys_sorted, rows_sorted, swaps_sorted
-        )
-        rows_parts.append(r)
-        z_parts.append(z)
-        se_parts.append(se)
-        eaf_parts.append(eaf)
-        chroms.clear()
-        poss.clear()
-        refs.clear()
-        alts.clear()
-        zs.clear()
-        ses.clear()
-        eafs.clear()
-
-    for assoc in reader.stream_associations():
-        chroms.append(assoc.chromosome)
-        poss.append(assoc.position)
-        refs.append(assoc.ref)
-        alts.append(assoc.alt)
-        zs.append(assoc.z)
-        ses.append(assoc.se)
-        eafs.append(float("nan") if assoc.eaf is None else assoc.eaf)
-        if len(zs) >= _RESOLVE_BATCH:
-            _flush()
-    _flush()
-
-    if not rows_parts:
-        empty_i = np.empty(0, dtype=np.int64)
-        empty_f = np.empty(0, dtype=np.float32)
-        return empty_i, empty_f, empty_f, empty_f
-
-    rows = np.concatenate(rows_parts)
-    z_arr = np.concatenate(z_parts)
-    se_arr = np.concatenate(se_parts)
-    eaf_arr = np.concatenate(eaf_parts)
-
-    if len(rows):
-        # last-wins dedup by row: unique on the reversed rows returns the first
-        # index in reversed order == the last occurrence in original order.
-        _, first_in_rev = np.unique(rows[::-1], return_index=True)
-        keep = np.sort(len(rows) - 1 - first_in_rev)
-        rows, z_arr, se_arr, eaf_arr = rows[keep], z_arr[keep], se_arr[keep], eaf_arr[keep]
-    se_arr = apply_se_divisor(se_arr, se_divisor)
-    return rows, z_arr, se_arr, eaf_arr
 
 
 def _spill_column(
@@ -411,79 +136,6 @@ def _spill_column(
     tmp.replace(final)
 
 
-#: One Pass 2 task: column index, source file, SE divisor, reader capability,
-#: stored effect scale, and the row's Column Map (issue #281).
-Pass2Task = tuple[int, str, float, str, str, ColumnMap | None]
-
-
-def _resolve_and_spill(
-    spill_dir: Path,
-    col_idx: int,
-    row: ManifestRow,
-    keys_sorted: np.ndarray,
-    rows_sorted: np.ndarray,
-    swaps_sorted: np.ndarray,
-) -> None:
-    """Resolve one Analysis's column against the shared lookup and spill it."""
-    rows, z, se, eaf = _resolve_column(
-        row.file_path,
-        keys_sorted,
-        rows_sorted,
-        row.se_divisor,
-        swaps_sorted,
-        capability=row.source_reader_capability,
-        stored_effect_scale=row.stored_effect_scale,
-        column_map=row.column_map,
-    )
-    _spill_column(spill_dir, col_idx, rows, z, se, eaf)
-
-
-def _pass2_worker(task: Pass2Task) -> int:
-    """Resolve one column against the fork-inherited numpy lookup and spill it.
-    Returns col_idx only — the compact result stays on disk, never in a pipe."""
-    assert _pass2_keys_sorted is not None
-    assert _pass2_rows_sorted is not None
-    assert _pass2_swaps_sorted is not None
-    assert _pass2_spill_dir is not None
-    col_idx, file_path, se_divisor, capability, stored_effect_scale, column_map = task
-    rows, z, se, eaf = _resolve_column(
-        file_path,
-        _pass2_keys_sorted,
-        _pass2_rows_sorted,
-        se_divisor,
-        _pass2_swaps_sorted,
-        capability=capability,
-        stored_effect_scale=stored_effect_scale,
-        column_map=column_map,
-    )
-    _spill_column(_pass2_spill_dir, col_idx, rows, z, se, eaf)
-    return col_idx
-
-
-def pass2_worker_tasks(
-    manifest_rows: Sequence[ManifestRow],
-    analysis_index: Mapping[str, int],
-) -> list[Pass2Task]:
-    """One fork-pool task per manifest row, in manifest order: the column
-    index from ``analysis_index`` followed by the five source fields
-    ``_pass2_worker`` needs to resolve the row's file.
-
-    The Dense and Hybrid builders submit identical task tuples to their own
-    ``_pass2_worker``s, so the list is built here once rather than at each
-    call site.
-    """
-    return [
-        (
-            analysis_index[row.trait_id],
-            row.file_path,
-            row.se_divisor,
-            row.source_reader_capability,
-            row.stored_effect_scale,
-            row.column_map,
-        )
-        for row in manifest_rows
-    ]
-
 
 def log_progress(
     label: str, completed: int, total: int, start_time: float, extra: str, every: int
@@ -503,1063 +155,6 @@ def log_progress(
         _fmt_duration(eta),
     )
 
-
-_Pass1Record = tuple[tuple[str, int, str, str], str]
-
-
-@dataclass(frozen=True)
-class _ShardSpec:
-    """One intermediate variant shard on disk, tagged with its window and rank.
-
-    ``rank`` is ``(chunk_idx, spill_idx)`` -- the manifest-order chunk that
-    produced the shard, then the buffer spill sequence within that chunk.
-    Merging shards in rank order emits equal sites lowest-rank-first, which is
-    what keeps "first named rsid wins" deterministic across the reduction tree
-    (issue #109). A tuple rather than the old bare chunk index is what lets a
-    later spill from one chunk sort strictly after an earlier one (issue #194):
-    Python compares tuples element by element, so manifest order and first-named
-    selection are unchanged by spilling.
-    """
-
-    rank: tuple[int, int]
-    assembly: str
-    window: WindowKey
-    path: Path
-
-
-@dataclass(frozen=True)
-class _WindowShards:
-    """The union pass's result: one final sorted shard per ``(assembly, window)``.
-
-    The shards are the seam (issue #193): the map + tree reduce core exposes
-    them, and a consumer decides what to build from them. Their paths are only
-    valid while the context that yielded this object is open.
-    """
-
-    shards: Mapping[tuple[str, WindowKey], _ShardSpec]
-
-
-@dataclass
-class _Pass1Stats:
-    """Structured measurements from the windowed Pass 1 (issue #191).
-
-    Filled in place by the phases so the build log and the scaling benchmark can
-    report map, reduce and shard-count figures without decoding log lines. The
-    artifact write is timed by the caller that owns it. ``n_reduced_windows``
-    counts windows that held more than one shard and therefore actually ran the
-    tree reduce -- a single-shard window is already final. ``reduce_levels`` is
-    the number of tree-reduce levels that ran; more than one means a window held
-    more shards than ``reduction_batch_size`` (issue #194).
-    """
-
-    map_seconds: float = 0.0
-    reduce_seconds: float = 0.0
-    n_windows: int = 0
-    n_window_shards: int = 0
-    n_reduced_windows: int = 0
-    reduce_levels: int = 0
-
-
-def _record_map_stats(
-    stats: _Pass1Stats, groups: Mapping[tuple[str, WindowKey], list[_ShardSpec]], seconds: float
-) -> None:
-    """Record the map phase's wall time and the shard shape of its windows."""
-    stats.map_seconds = seconds
-    stats.n_windows = len(groups)
-    stats.n_window_shards = sum(len(shards) for shards in groups.values())
-    stats.n_reduced_windows = sum(1 for shards in groups.values() if len(shards) > 1)
-
-
-def _pass1_record_site(record: _Pass1Record) -> tuple[str, int, str, str]:
-    """The variant identity a shard record is sorted and grouped by.
-
-    Both the worker-side sort and the parent-side ``heapq.merge`` compare
-    sites only, never the rsid -- the rsid must not influence ordering, or a
-    site's rsids would be emitted in rsid-string order instead of manifest
-    order and the wrong "first named" would win (issue #109).
-    """
-    return record[0]
-
-
-def _source_file_size(row: ManifestRow) -> int:
-    """A manifest row's source size in bytes, used only to balance the map split.
-
-    A path the split cannot stat counts as one byte rather than zero: the split
-    is a scheduling heuristic, and an unreadable source still fails loudly when
-    its worker's reader opens it. Zero-weighting it here would let a chunk that
-    is not actually free look balanced (issue #195).
-    """
-    try:
-        return Path(row.file_path).stat().st_size
-    except OSError:
-        return 1
-
-
-def _chunks_needed(sizes: Sequence[int], ceiling: int) -> int:
-    """Greedy contiguous chunks needed to keep every chunk at or below ``ceiling``."""
-    chunks = 1
-    current = 0
-    for size in sizes:
-        if current > 0 and current + size > ceiling:
-            chunks += 1
-            current = size
-        else:
-            current += size
-    return chunks
-
-
-def _balanced_ceiling(sizes: Sequence[int], target_chunks: int) -> int:
-    """Smallest chunk-weight ceiling a contiguous partition into ``target_chunks`` meets.
-
-    ``_chunks_needed`` is monotone in the ceiling, so the linear-partition
-    bottleneck is exact by binary search (issue #195).
-    """
-    low, high = max(sizes, default=0), sum(sizes)
-    while low < high:
-        middle = (low + high) // 2
-        if _chunks_needed(sizes, middle) <= target_chunks:
-            high = middle
-        else:
-            low = middle + 1
-    return low
-
-
-def _greedy_chunk_bounds(sizes: Sequence[int], ceiling: int) -> list[int]:
-    """Start indices of the greedy contiguous partition under ``ceiling``."""
-    bounds = [0]
-    current = 0
-    for index, size in enumerate(sizes):
-        if current > 0 and current + size > ceiling:
-            bounds.append(index)
-            current = size
-        else:
-            current += size
-    bounds.append(len(sizes))
-    return bounds
-
-
-def _heaviest_splittable_chunk(bounds: Sequence[int], prefix: Sequence[int]) -> int:
-    """Index of the heaviest chunk holding more than one row, or -1 when none can split."""
-    best, best_weight = -1, -1
-    for chunk in range(len(bounds) - 1):
-        start, end = bounds[chunk], bounds[chunk + 1]
-        if end - start > 1 and prefix[end] - prefix[start] > best_weight:
-            best = chunk
-            best_weight = prefix[end] - prefix[start]
-    return best
-
-
-def _chunk_midpoint(prefix: Sequence[int], start: int, end: int) -> int:
-    """The element boundary inside ``(start, end)`` nearest the chunk's half-weight."""
-    half = (prefix[end] - prefix[start]) / 2
-    return min(range(start + 1, end), key=lambda i: abs(prefix[i] - prefix[start] - half))
-
-
-def _split_to_target(bounds: list[int], prefix: Sequence[int], target_chunks: int) -> list[int]:
-    """Split the heaviest chunks until the contiguous partition has ``target_chunks`` parts.
-
-    The greedy partition holds at most ``target_chunks`` chunks, so this only
-    adds boundaries. It runs only while rows outnumber chunks, so a chunk with
-    more than one row always exists to split.
-    """
-    while len(bounds) - 1 < target_chunks:
-        chunk = _heaviest_splittable_chunk(bounds, prefix)
-        bounds.insert(chunk + 1, _chunk_midpoint(prefix, bounds[chunk], bounds[chunk + 1]))
-    return bounds
-
-
-def _prefix_sums(sizes: Sequence[int]) -> list[int]:
-    """``prefix[i]`` is the cumulative size of ``sizes[:i]``."""
-    prefix = [0]
-    for size in sizes:
-        prefix.append(prefix[-1] + size)
-    return prefix
-
-
-def _partition_exactly(
-    sizes: Sequence[int], start: int, end: int, chunks: int
-) -> list[int]:
-    """Boundaries splitting ``sizes[start:end]`` into exactly ``chunks`` contiguous parts.
-
-    Absolute indices within ``sizes``. The local min-max ceiling is found on the
-    slice alone, so a dominating source outside it cannot inflate the ceiling and
-    leave the slice's own chunks unbalanced (issue #195).
-    """
-    sub = sizes[start:end]
-    bounds = _greedy_chunk_bounds(sub, _balanced_ceiling(sub, chunks))
-    return [start + bound for bound in _split_to_target(bounds, _prefix_sums(sub), chunks)]
-
-
-def _allocate_subchunks(weights: Sequence[int], limits: Sequence[int], extra: int) -> list[int]:
-    """Hand ``extra`` additional parts to the chunks with the largest weight-per-part.
-
-    ``limits`` caps each chunk at its row count. The caller guarantees the extra
-    parts fit across all chunks; a failure to place one means the split is
-    internally inconsistent, so it fails loudly rather than returning a short
-    partition (issue #195).
-    """
-    allocations = [1] * len(weights)
-    for _ in range(extra):
-        target, target_load = -1, -1.0
-        for index in range(len(weights)):
-            if allocations[index] >= limits[index]:
-                continue
-            load = weights[index] / allocations[index]
-            if load > target_load:
-                target, target_load = index, load
-        if target < 0:
-            raise ValueError(
-                f"cannot allocate {extra} extra chunk(s) across {len(weights)} chunk(s)"
-            )
-        allocations[target] += 1
-    return allocations
-
-
-def _chunks_from_bounds(
-    manifest_rows: list[ManifestRow], bounds: Sequence[int]
-) -> list[list[ManifestRow]]:
-    """Slice ``manifest_rows`` between consecutive ``bounds``."""
-    return [manifest_rows[bounds[i] : bounds[i + 1]] for i in range(len(bounds) - 1)]
-
-
-def _balanced_bounds(sizes: Sequence[int], target_chunks: int) -> list[int]:
-    """Boundaries for exactly ``target_chunks`` contiguous, size-balanced parts.
-
-    The min-max greedy gives at most ``target_chunks`` parts under a ceiling a
-    dominating source forces high; the extra parts are then allocated to the
-    heaviest chunks and each is subdivided with its own local ceiling, so the
-    non-dominating sources are balanced among themselves (issue #195).
-    """
-    prefix = _prefix_sums(sizes)
-    bounds = _greedy_chunk_bounds(sizes, _balanced_ceiling(sizes, target_chunks))
-    initial_chunks = len(bounds) - 1
-    weights = [prefix[bounds[i + 1]] - prefix[bounds[i]] for i in range(initial_chunks)]
-    limits = [bounds[i + 1] - bounds[i] for i in range(initial_chunks)]
-    allocations = _allocate_subchunks(weights, limits, target_chunks - initial_chunks)
-    final = [0]
-    for index, allocation in enumerate(allocations):
-        final.extend(
-            _partition_exactly(sizes, bounds[index], bounds[index + 1], allocation)[1:]
-        )
-    return final
-
-
-def _split_manifest_rows(
-    manifest_rows: list[ManifestRow], n_workers: int
-) -> list[list[ManifestRow]]:
-    """Contiguous, size-balanced, manifest-order slices of the input rows.
-
-    Contiguity is what keeps "first named rsid wins" deterministic: chunk
-    ``i`` always owns the rows before chunk ``i + 1``, and the reduction merges
-    shards by that chunk rank (issue #109). Balancing by on-disk source size
-    rather than row count stops one oversized source setting the map phase's
-    makespan (issue #195): the partition targets ``min(n, 4 * n_workers)``
-    contiguous chunks of near-equal cumulative size, so a dominating source
-    lands alone while the rest spread across many chunks the pool can balance.
-    Fewer sources than workers leaves each source its own chunk.
-    """
-    n = len(manifest_rows)
-    if n == 0:
-        return []
-    if n <= n_workers:
-        return [[row] for row in manifest_rows]
-    target_chunks = min(n, max(n_workers, 4 * n_workers))
-    sizes = [_source_file_size(row) for row in manifest_rows]
-    return _chunks_from_bounds(manifest_rows, _balanced_bounds(sizes, target_chunks))
-
-
-def _write_pass1_shard(
-    shard_dir: Path, worker_idx: int, shard_idx: int, records: list[_Pass1Record]
-) -> str:
-    """Write one worker's sorted, deduplicated variants for one window.
-
-    One tab-separated record per variant (``chrom pos ref alt rsid``); the
-    empty rsid means the worker's slice never named one, so a later shard can
-    still supply it at merge time. Sorted here so a merge task streams its
-    batch instead of holding it whole.
-
-    The filename is keyed only by ``(worker, per-worker shard index)``, never
-    by a chromosome sort rank: ranks are not unique -- ``M`` and ``MT`` are
-    both 25, and every unrecognised contig is 1000 -- so a rank-keyed name
-    would let one chromosome's shard silently overwrite another's. The window
-    is carried in the returned spec, not the name.
-    """
-    records.sort(key=_pass1_record_site)
-    path = shard_dir / f"{worker_idx:06d}.{shard_idx:06d}.pass1.variants.tsv"
-    with open(path, "w", encoding="utf-8") as fh:
-        for (chrom, pos, ref, alt), rsid in records:
-            fh.write(f"{chrom}\t{pos}\t{ref}\t{alt}\t{rsid}\n")
-    return str(path)
-
-
-def _iter_pass1_shard(path: Path) -> Iterator[_Pass1Record]:
-    """Stream one shard's records back as ``(site, rsid)`` tuples."""
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            chrom, pos_str, ref, alt, rsid = line.rstrip("\n").split("\t")
-            yield (chrom, int(pos_str), ref, alt), rsid
-
-
-def _first_named_rsid(group: Iterator[_Pass1Record]) -> str:
-    """The first non-empty rsid in one shard-group, in merged (manifest) order."""
-    for _site, rsid in group:
-        if rsid:
-            return rsid
-    return ""
-
-
-def _reduce_worker(task: tuple[str, tuple[str, ...]]) -> str:
-    """Merge a batch of rank-ordered sorted shards into one.
-
-    ``heapq.merge`` emits equal sites rank-by-rank and ``_first_named_rsid``
-    keeps the earliest non-empty rsid -- exactly the serial read's rule. Memory
-    is one record per input shard plus the output buffer, not the window's
-    whole union.
-    """
-    out_path_str, shard_paths = task
-    merged = heapq.merge(
-        *(_iter_pass1_shard(Path(path)) for path in shard_paths), key=_pass1_record_site
-    )
-    with open(out_path_str, "w", encoding="utf-8") as fh:
-        for site, group in itertools.groupby(merged, key=_pass1_record_site):
-            rsid = _first_named_rsid(group)
-            fh.write(f"{site[0]}\t{site[1]}\t{site[2]}\t{site[3]}\t{rsid}\n")
-    return out_path_str
-
-
-def _schedule_reduction_batches(
-    groups: dict[tuple[str, WindowKey], list[_ShardSpec]],
-    batch_size: int,
-    tmp_dir: Path,
-    level: int,
-) -> tuple[list[tuple[str, tuple[str, ...]]], list[tuple[tuple[str, WindowKey], list[_ShardSpec]]]]:
-    """Build one reduction level's merge tasks and the batch each belongs to."""
-    tasks: list[tuple[str, tuple[str, ...]]] = []
-    batches: list[tuple[tuple[str, WindowKey], list[_ShardSpec]]] = []
-    for key, shards in groups.items():
-        if len(shards) <= 1:
-            continue
-        ordered = sorted(shards, key=lambda spec: spec.rank)
-        for i in range(0, len(ordered), batch_size):
-            batch = ordered[i : i + batch_size]
-            target = tmp_dir / f"{level:03d}.{len(tasks):06d}.pass1merge.tsv"
-            tasks.append((str(target), tuple(str(spec.path) for spec in batch)))
-            batches.append((key, batch))
-    return tasks, batches
-
-
-def _apply_reduction_results(
-    groups: dict[tuple[str, WindowKey], list[_ShardSpec]],
-    batches: list[tuple[tuple[str, WindowKey], list[_ShardSpec]]],
-    results: list[str],
-) -> None:
-    """Replace each merged batch with its single output shard."""
-    for (key, batch), path in zip(batches, results, strict=True):
-        merged = _ShardSpec(
-            rank=min(spec.rank for spec in batch),
-            assembly=batch[0].assembly,
-            window=batch[0].window,
-            path=Path(path),
-        )
-        groups[key] = [spec for spec in groups[key] if spec not in batch] + [merged]
-
-
-def _merge_shards_serial(tasks: list[tuple[str, tuple[str, ...]]]) -> list[str]:
-    """Run each merge task in this process (the serial arm's tree-reduce)."""
-    return [_reduce_worker(task) for task in tasks]
-
-
-def _merge_shards_parallel(
-    tasks: list[tuple[str, tuple[str, ...]]], pool: ProcessPoolExecutor
-) -> list[str]:
-    """Submit every merge task to the pool, then collect in task order."""
-    futures = [pool.submit(_reduce_worker, task) for task in tasks]
-    return [future.result() for future in futures]
-
-
-def _reduce_shard_groups(
-    groups: dict[tuple[str, WindowKey], list[_ShardSpec]],
-    merge: Callable[[list[tuple[str, tuple[str, ...]]]], list[str]],
-    batch_size: int,
-    tmp_dir: Path,
-    stats: _Pass1Stats | None = None,
-) -> dict[tuple[str, WindowKey], _ShardSpec]:
-    """Tree-reduce every window's shards in batches.
-
-    One level at a time: each window's shards are sorted by ``(chunk, spill)``
-    rank, batched by ``batch_size`` and merged. Repeats until every window is
-    one shard, so a window holding more shards than ``batch_size`` -- many
-    spills, say -- is reduced over more than one level (issue #194). A window
-    with a single shard is already final. ``merge`` decides whether the batches
-    run on a process pool or in this process; the reduction shape is identical.
-    """
-    level = 0
-    while any(len(shards) > 1 for shards in groups.values()):
-        tasks, batches = _schedule_reduction_batches(groups, batch_size, tmp_dir, level)
-        _apply_reduction_results(groups, batches, merge(tasks))
-        level += 1
-    if stats is not None:
-        stats.reduce_levels = level
-    return {key: shards[0] for key, shards in groups.items()}
-
-
-def _flush_pass1_buffers(
-    sites_by_window: dict[tuple[str, WindowKey], dict[tuple[str, int, str, str], str]],
-    shard_dir: Path,
-    worker_idx: int,
-    spill_idx: int,
-    shard_idx: int,
-    specs: list[_ShardSpec],
-) -> tuple[int, int]:
-    """Write every buffered window as a shard, then clear the buffers.
-
-    Returns the next ``(spill_idx, shard_idx)``. Every shard written here is
-    tagged with the same ``(worker_idx, spill_idx)`` rank, so a later spill of
-    this chunk can never merge ahead of an earlier one (issue #194).
-    """
-    for (assembly, window), sites in sites_by_window.items():
-        path = _write_pass1_shard(shard_dir, worker_idx, shard_idx, list(sites.items()))
-        shard_idx += 1
-        specs.append(_ShardSpec((worker_idx, spill_idx), assembly, window, Path(path)))
-    sites_by_window.clear()
-    return spill_idx + 1, shard_idx
-
-
-def _buffer_pass1_variant(
-    sites: dict[tuple[str, int, str, str], str], variant: SourceVariant
-) -> bool:
-    """Add one variant to a window buffer; return whether its site is new.
-
-    The first non-empty rsid for a site wins and a later empty rsid never
-    clears it, matching the serial read. The bool lets ``_pass1_worker`` count
-    distinct sites to enforce its spill bound without a second lookup.
-    """
-    existing = sites.get(variant.site)
-    if existing is None:
-        sites[variant.site] = variant.rsid or ""
-        return True
-    if not existing and variant.rsid:
-        sites[variant.site] = variant.rsid
-    return False
-
-
-def _pass1_worker(task: tuple[int, list[ManifestRow], str, int, int]) -> list[_ShardSpec]:
-    """Extract one worker's slice of manifest rows to sorted, windowed shards.
-
-    Returns only shard metadata -- never the variant sets themselves -- so no
-    large object crosses the process pipe (the same rule that governs the
-    Pass 2 spills). Each variant is routed to its ``(assembly, window)`` buffer
-    and the worker's first non-empty rsid per site is kept, matching the
-    serial read.
-
-    The buffers hold at most ``map_spill_records`` distinct sites: once that
-    many are buffered every window buffer is written to disk and cleared, so
-    peak memory tracks the threshold rather than the number of rows in the
-    slice (issue #194). ``spill_idx`` rises with reading order and a site seen
-    again in a later spill becomes a later-ranked shard, so the reduction still
-    resolves it to the first non-empty rsid in manifest order.
-    """
-    worker_idx, rows, shard_dir_str, size_bp, map_spill_records = task
-    shard_dir = Path(shard_dir_str)
-    sites_by_window: dict[tuple[str, WindowKey], dict[tuple[str, int, str, str], str]] = {}
-    specs: list[_ShardSpec] = []
-    buffered = 0
-    spill_idx = 0
-    shard_idx = 0
-    for row in rows:
-        reader = resolve_reader(
-            row.source_reader_capability, row.file_path,
-            StoredEffectScale(row.stored_effect_scale), column_map=row.column_map,
-        )
-        for variant in reader.stream_variants():
-            key = (row.source_assembly, window_key(variant.chromosome, variant.position, size_bp))
-            if _buffer_pass1_variant(sites_by_window.setdefault(key, {}), variant):
-                buffered += 1
-            if buffered >= map_spill_records:
-                spill_idx, shard_idx = _flush_pass1_buffers(
-                    sites_by_window, shard_dir, worker_idx, spill_idx, shard_idx, specs
-                )
-                buffered = 0
-    if sites_by_window:
-        _flush_pass1_buffers(sites_by_window, shard_dir, worker_idx, spill_idx, shard_idx, specs)
-    return specs
-
-
-def _validate_union_options(
-    window_size_mb: float, reduction_batch_size: int, map_spill_records: int
-) -> None:
-    """Fail loudly on an unusable window, batch or spill setting before any I/O."""
-    window_size_bp(window_size_mb)
-    if reduction_batch_size < 2:
-        raise ValueError(f"reduction batch size must be at least 2, got {reduction_batch_size}")
-    if map_spill_records < 1:
-        raise ValueError(
-            f"map spill record count must be at least 1, got {map_spill_records}"
-        )
-
-
-def _consume_manifest_shards(
-    manifest_rows: list[ManifestRow],
-    *,
-    n_workers: int,
-    window_size_mb: float,
-    reduction_batch_size: int,
-    map_spill_records: int,
-    stats: _Pass1Stats | None,
-    consume: Callable[[_WindowShards], Any],
-) -> Any:
-    """Run the union core and hand its final per-window shards to ``consume``.
-
-    This is the assembly seam (issue #193): the in-memory site union and Dense /
-    Hybrid's materialised lookup are both consumers of the same core, and a
-    later streaming artifact writer (issues #196/#197) plugs in the same way.
-    """
-    _validate_union_options(window_size_mb, reduction_batch_size, map_spill_records)
-    with _reduce_manifest_windows(
-        manifest_rows,
-        n_workers=n_workers,
-        window_size_mb=window_size_mb,
-        reduction_batch_size=reduction_batch_size,
-        map_spill_records=map_spill_records,
-        stats=stats,
-    ) as window_shards:
-        return consume(window_shards)
-
-
-def _collect_manifest_variant_sites(
-    manifest_rows: list[ManifestRow],
-    *,
-    n_workers: int = 1,
-    window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
-    reduction_batch_size: int = DEFAULT_REDUCTION_BATCH_SIZE,
-    map_spill_records: int = DEFAULT_MAP_SPILL_RECORDS,
-    stats: _Pass1Stats | None = None,
-) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
-    """Pass 1: read every manifest source once for its variant sites.
-
-    Returns the ``tuples_by_assembly`` union and ``rsid_by_site`` (first named
-    rsid wins, issue #109). The map + tree-reduce core
-    (`_reduce_manifest_windows`) exposes the final per-window shards, and this
-    consumer materialises them into memory (issue #193). ``stats``, when given,
-    is filled in place with the map/reduce timings and shard counts (#191).
-    """
-    return _consume_manifest_shards(
-        manifest_rows, n_workers=n_workers, window_size_mb=window_size_mb,
-        reduction_batch_size=reduction_batch_size, map_spill_records=map_spill_records,
-        stats=stats, consume=_materialize_site_union,
-    )
-
-
-def _finalise_serial_groups(
-    groups: dict[tuple[str, WindowKey], list[_ShardSpec]],
-    reduction_batch_size: int,
-    tmp_dir: Path,
-    stats: _Pass1Stats | None,
-) -> dict[tuple[str, WindowKey], _ShardSpec]:
-    """Reduce the serial map's shards, or return the single-shard windows.
-
-    With one shard per window there is nothing to reduce and the stats report
-    no window split; when a low spill threshold left several shards in a
-    window the tree reduce runs in this process (issue #194).
-    """
-    if all(len(shards) == 1 for shards in groups.values()):
-        return {key: shards[0] for key, shards in groups.items()}
-    if stats is not None:
-        _record_map_stats(stats, groups, stats.map_seconds)
-    reduce_start = time.monotonic()
-    final = _reduce_shard_groups(groups, _merge_shards_serial, reduction_batch_size, tmp_dir, stats)
-    if stats is not None:
-        stats.reduce_seconds = time.monotonic() - reduce_start
-    return final
-
-
-def _map_manifest_windows_serial(
-    manifest_rows: list[ManifestRow],
-    size_bp: int,
-    reduction_batch_size: int,
-    map_spill_records: int,
-    tmp_dir: Path,
-    stats: _Pass1Stats | None,
-) -> dict[tuple[str, WindowKey], _ShardSpec]:
-    """Read every source in this process, then reduce any window that spilled.
-
-    The ``n_workers <= 1`` arm of the core. It runs the same per-window map a
-    worker process would, so the serial and parallel arms hand the consumer the
-    same shard shape; ``_finalise_serial_groups`` then reduces only when a low
-    spill threshold actually split a window (issue #194).
-    """
-    log.info("Pass 1: collecting source variants from %d files (serial)", len(manifest_rows))
-    start = time.monotonic()
-    groups: dict[tuple[str, WindowKey], list[_ShardSpec]] = {}
-    for spec in _pass1_worker((0, manifest_rows, str(tmp_dir), size_bp, map_spill_records)):
-        groups.setdefault((spec.assembly, spec.window), []).append(spec)
-    if stats is not None:
-        stats.map_seconds = time.monotonic() - start
-    return _finalise_serial_groups(groups, reduction_batch_size, tmp_dir, stats)
-
-
-def _map_reduce_windows(
-    manifest_rows: list[ManifestRow],
-    workers: int,
-    size_bp: int,
-    reduction_batch_size: int,
-    map_spill_records: int,
-    tmp_dir: Path,
-    stats: _Pass1Stats | None = None,
-) -> dict[tuple[str, WindowKey], _ShardSpec]:
-    """Map rows to window shards, then tree-reduce every window in parallel.
-
-    The manifest is split into more contiguous, size-balanced chunks than there
-    are workers (issue #195). Each chunk's rank is its manifest-order index,
-    fixed here before any task is submitted, and results are collected in
-    completion order -- so which chunk finishes first can never affect shard
-    sorting or first-named-rsid resolution.
-    """
-    tasks = [
-        (chunk_idx, chunk, str(tmp_dir), size_bp, map_spill_records)
-        for chunk_idx, chunk in enumerate(_split_manifest_rows(manifest_rows, workers))
-    ]
-    log.info(
-        "Pass 1: %d source(s) → %d size-balanced chunk(s) across %d worker(s)",
-        len(manifest_rows),
-        len(tasks),
-        workers,
-    )
-    groups: dict[tuple[str, WindowKey], list[_ShardSpec]] = {}
-    map_start = time.monotonic()
-    with fork_pool(workers) as pool:
-        for future in as_completed([pool.submit(_pass1_worker, task) for task in tasks]):
-            for spec in future.result():
-                groups.setdefault((spec.assembly, spec.window), []).append(spec)
-        if stats is not None:
-            _record_map_stats(stats, groups, time.monotonic() - map_start)
-        log.info(
-            "Pass 1 extraction: %d files → %d window group(s)",
-            len(manifest_rows),
-            len(groups),
-        )
-        reduce_start = time.monotonic()
-        final = _reduce_shard_groups(
-            groups,
-            partial(_merge_shards_parallel, pool=pool),
-            reduction_batch_size,
-            tmp_dir,
-            stats,
-        )
-        if stats is not None:
-            stats.reduce_seconds = time.monotonic() - reduce_start
-    return final
-
-
-def _materialize_site_union(
-    window_shards: _WindowShards,
-) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
-    """Read the final per-window shards into the in-memory site union.
-
-    ``rsid_by_site`` is inserted in ``(rank, site)`` order (issue #192): the
-    final shard's manifest-order rank is the primary key and its records are
-    already sorted by site. Reading the shards here -- rather than letting the
-    union set's hash order decide -- is what makes the rsid an ALID carries
-    deterministic.
-    """
-    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]] = {}
-    rsid_by_site: dict[tuple[str, int, str, str], str] = {}
-    ranked: list[tuple[tuple[int, int], tuple[str, int, str, str], str]] = []
-    for key in sorted(window_shards.shards):
-        spec = window_shards.shards[key]
-        sites = tuples_by_assembly.setdefault(key[0], set())
-        for site, rsid in _iter_pass1_shard(spec.path):
-            sites.add(site)
-            if rsid:
-                ranked.append((spec.rank, site, rsid))
-    ranked.sort()
-    for _rank, site, rsid in ranked:
-        rsid_by_site.setdefault(site, rsid)
-    return tuples_by_assembly, rsid_by_site
-
-
-def _materialize_manifest_lookup(
-    window_shards: _WindowShards,
-    *,
-    chain_file: str | Path | None,
-    liftover_failure_threshold: float,
-    site_key: SiteKeyFn = _source_site_key,
-    refuse_cross_assembly_conflicts: bool = False,
-) -> tuple[SourceLookup, SourceLookup, dict[str, str], ReorientedKeys]:
-    """The Dense and Hybrid consumer: final window shards -> the hg38 lookup.
-
-    This is the assembly seam (issue #193). The union pass hands over final
-    per-window shards; this consumer materialises the whole site union and lifts
-    it, which is what Dense and Hybrid need. A later streaming artifact writer
-    (issues #196/#197) can consume the same shards per window without building
-    either dict.
-
-    Returns the lifted lookup, the first-named rsid per *source site* in
-    ``(rank, site)`` order, and the lift's own site->ALID rekey. The site map is
-    returned too because a single-pass build must rekey it through the routing
-    it actually uses, which is not always Pass 1's lift (issue #255).
-
-    ``site_key`` is the *build's* routing key. A raw tuple declared under both
-    assemblies is dropped from the candidates as two physical loci; a build
-    whose routing folds case (Hybrid) must find that collision on the folded key
-    too, which is what ``site_key`` supplies. ``refuse_cross_assembly_conflicts``
-    is for a single-pass build whose routing key folds: two *different* raw
-    tuples declared under different assemblies then collide on one key, which the
-    two-pass build refuses rather than guess, so it refuses here too.
-    """
-    tuples_by_assembly, rsid_by_site = _materialize_site_union(window_shards)
-    source_lookup, rsid_by_alid, dropped_keys, swapped = _resolve_manifest_variants_to_alids(
-        tuples_by_assembly,
-        rsid_by_site,
-        chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
-        site_key=site_key,
-        refuse_cross_assembly_conflicts=refuse_cross_assembly_conflicts,
-    )
-    # The candidates a single-pass build rekeys must exclude the same keys the
-    # lift just dropped: a tuple declared under both assemblies is two loci, and
-    # naming the lifted one from the other's row would attach an rsid to a
-    # variant a different association owns (issue #255 rounds 4-5).
-    candidates = {
-        site: rsid for site, rsid in rsid_by_site.items() if site_key(site) not in dropped_keys
-    }
-    return source_lookup, candidates, rsid_by_alid, swapped
-
-
-@contextmanager
-def _reduce_manifest_windows(
-    manifest_rows: list[ManifestRow],
-    *,
-    n_workers: int,
-    window_size_mb: float,
-    reduction_batch_size: int,
-    map_spill_records: int = DEFAULT_MAP_SPILL_RECORDS,
-    stats: _Pass1Stats | None = None,
-) -> Iterator[_WindowShards]:
-    """Map every manifest source into window shards and tree-reduce each window.
-
-    The union pass core (issues #5, #188): each source is read once and routed
-    into sorted per-window shards, and each window's shards are tree-reduced in
-    parallel batches. A worker spills its buffers whenever ``map_spill_records``
-    variants are buffered, so peak memory tracks that threshold rather than the
-    row count of its manifest slice (issue #194). What it exposes is the shards
-    -- not an in-memory union -- so a consumer can choose what to build from
-    them (issue #193).
-    """
-    size_bp = window_size_bp(window_size_mb)
-    workers = min(n_workers, len(manifest_rows)) if manifest_rows else 0
-    with tempfile.TemporaryDirectory(prefix=".pass1windows.") as tmp_dir_str:
-        tmp_dir = Path(tmp_dir_str)
-        if workers <= 1:
-            yield _WindowShards(
-                shards=_map_manifest_windows_serial(
-                    manifest_rows, size_bp, reduction_batch_size, map_spill_records, tmp_dir, stats
-                )
-            )
-            return
-        log.info(
-            "Pass 1: collecting source variants from %d files (parallel, %d workers, "
-            "%g Mb windows, batch %d)",
-            len(manifest_rows),
-            workers,
-            window_size_mb,
-            reduction_batch_size,
-        )
-        start = time.monotonic()
-        final = _map_reduce_windows(
-            manifest_rows,
-            workers,
-            size_bp,
-            reduction_batch_size,
-            map_spill_records,
-            tmp_dir,
-            stats,
-        )
-        log.info(
-            "Pass 1 merge: %d window(s) in %s",
-            len(final),
-            _fmt_duration(time.monotonic() - start),
-        )
-        yield _WindowShards(shards=final)
-
-
-def _lift_manifest_variants(
-    manifest_rows: list[ManifestRow],
-    *,
-    chain_file: str | Path | None,
-    liftover_failure_threshold: float,
-    n_workers: int = 1,
-    window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
-    reduction_batch_size: int = DEFAULT_REDUCTION_BATCH_SIZE,
-    map_spill_records: int = DEFAULT_MAP_SPILL_RECORDS,
-    stats: _Pass1Stats | None = None,
-) -> tuple[SourceLookup, dict[str, str], ReorientedKeys]:
-    """Resolve every manifest row's union of source variants to hg38 ALIDs
-    (issue #85; the dense and hybrid builders' shared Pass 1).
-
-    Each row declares its own ``source_assembly`` (`read_manifest`). Rows
-    already on hg38 -- a harmonised GWAS-SSF source, say -- map straight to
-    their ALID with no liftover: running an already-hg38 coordinate through
-    the hg19->hg38 chain a second time silently shifts it to the wrong
-    position (the issue #85 bug), and pyliftover has no way to detect that
-    from the coordinate alone. Rows declaring hg19 (the only other build this
-    package knows) go through one shared ``LiftOver`` object for that group,
-    same as when GWAS-VCF was the only source this builder ever saw.
-    ``liftover_failure_threshold`` therefore applies only to the hg19 group's
-    own failure rate, not diluted by (or inflated against) hg38 rows that
-    were never at risk of failing. ``n_workers`` controls the union pass's
-    parallelism (issue 5); the serial read is kept for ``n_workers <= 1``.
-
-    Returns one merged ``{(chrom, pos, ref, alt): hg38_alid}`` lookup -- the
-    shape the fork-safe Pass 2 key index (`_build_variant_key_index` /
-    `_build_routing_index`) is already built from, so nothing downstream of
-    this function changes -- plus ``{hg38_alid: rsid}`` for the rows whose
-    source named one (issue #109). The rsid map rides along on this pass
-    rather than a second one: Pass 1 is already the serial read of every
-    source file, and re-reading them just to recover identifiers the first
-    read saw would double the most expensive part of a genome-scale build.
-    Also returned: the source keys a reverse-strand lift re-oriented, whose
-    statistics must be signed against the projected alleles rather than the
-    source's (issue #284, spec §4-5).
-
-    Where two sources name one variant differently, the first wins; where a
-    source names none, the ALID is simply absent from the map and its row's
-    rsid column is written blank. A raw tuple present in *both* groups is not a
-    same-locus dedup the way a tuple shared by two same-assembly files is:
-    the hg38 group's tuple is a literal coordinate, the hg19 group's
-    identical-looking tuple is a *pre-lift* coordinate bound for a different
-    hg38 position, so the two groups agreeing on a raw tuple means two
-    physically different loci coincidentally share one string, not one real
-    variant reported twice. Binding both to a single stored row would
-    misattribute one row's association to the other's variant -- exactly the
-    kind of silent corruption this fix exists to remove -- so any such tuple
-    is dropped from both groups (never guessed) before returning.
-
-    The union pass core (`_reduce_manifest_windows`) exposes final per-window
-    shards; this function hands them to `_harvest_manifest_variants`, which is
-    the Dense and Hybrid assembly seam (issue #193), and keeps its two maps.
-    """
-    source_lookup, _rsid_by_site, rsid_by_alid, swapped = _harvest_manifest_variants(
-        manifest_rows,
-        chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
-        n_workers=n_workers,
-        window_size_mb=window_size_mb,
-        reduction_batch_size=reduction_batch_size,
-        map_spill_records=map_spill_records,
-        stats=stats,
-    )
-    return source_lookup, rsid_by_alid, swapped
-
-
-def _harvest_manifest_variants(
-    manifest_rows: list[ManifestRow],
-    *,
-    chain_file: str | Path | None,
-    liftover_failure_threshold: float,
-    # Declared in a different order from `_lift_manifest_variants` on purpose:
-    # the two are separate entries, not one parameter block copied twice.
-    n_workers: int = 1,
-    stats: _Pass1Stats | None = None,
-    window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
-    reduction_batch_size: int = DEFAULT_REDUCTION_BATCH_SIZE,
-    map_spill_records: int = DEFAULT_MAP_SPILL_RECORDS,
-    # Declared before `site_key` on purpose: the two keyword blocks are separate
-    # entries, not one parameter list copied twice (the gate judges a clone).
-    refuse_cross_assembly_conflicts: bool = False,
-    site_key: SiteKeyFn = _source_site_key,
-) -> tuple[SourceLookup, SourceLookup, dict[str, str], ReorientedKeys]:
-    """Pass 1's `(lifted lookup, rsid by source site, rsid by lifted ALID,
-    re-oriented source keys)`.
-
-    The site-level map is what a single-pass build needs: it is first-named in
-    ``(rank, site)`` order, but the ALIDs Pass 1's own liftover produces are not
-    always the ALIDs the build routes associations to -- a variant reference is
-    the routing authority, and a Hybrid build's fold adds off-reference rows the
-    lift never saw. Rekeying the site map through the routing the build actually
-    uses (`_rekey_rsids_to_alids`) is what keeps an rsid on the variant its
-    association lands on (issue #255). ``site_key`` is that build's own routing
-    key, so the both-assembly drop and any cross-assembly collision are computed
-    on the key the build routes by rather than on the raw tuple.
-    """
-    return _consume_manifest_shards(
-        manifest_rows, n_workers=n_workers, window_size_mb=window_size_mb,
-        reduction_batch_size=reduction_batch_size, map_spill_records=map_spill_records,
-        stats=stats,
-        consume=partial(
-            _materialize_manifest_lookup,
-            chain_file=chain_file,
-            liftover_failure_threshold=liftover_failure_threshold,
-            site_key=site_key,
-            refuse_cross_assembly_conflicts=refuse_cross_assembly_conflicts,
-        ),
-    )
-
-
-def _lift_union_by_assembly(
-    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]],
-    *,
-    chain_file: str | Path | None,
-    liftover_failure_threshold: float,
-) -> tuple[SourceLookup, SourceLookup, ReorientedKeys]:
-    """Lift each assembly's group; return the hg38 passthrough, the lifted, and
-    the keys the lift re-oriented (issue #284)."""
-    passthrough_lookup: SourceLookup = {}
-    passthrough = tuples_by_assembly.pop("hg38", set())
-    if passthrough:
-        log.info("%d variants already GRCh38 -- no liftover needed", len(passthrough))
-        for chrom, pos, ref, alt in passthrough:
-            a1, a2 = sorted((ref, alt))
-            passthrough_lookup[(chrom, pos, ref, alt)] = f"{chrom}:{pos}:{a1}:{a2}"
-    lifted_lookup, swapped = _lift_hg19_union(
-        tuples_by_assembly.pop("hg19", set()),
-        chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
-    )
-    assert not tuples_by_assembly, f"unhandled source_assembly values: {sorted(tuples_by_assembly)}"
-    return passthrough_lookup, lifted_lookup, swapped
-
-
-def _drop_cross_assembly_collisions(
-    passthrough_lookup: SourceLookup,
-    lifted_lookup: SourceLookup,
-    swapped: ReorientedKeys,
-    *,
-    site_key: SiteKeyFn,
-    refuse_conflicting_keys: bool,
-) -> set[str]:
-    """Drop the raw tuples declared under both assemblies, from both lookups.
-
-    A shared raw tuple is two physical loci, not one variant reported twice, and
-    binding both to one stored row would misattribute one Analysis's
-    association to the other's variant. Returns the dropped routing keys, which
-    a single-pass harvest also drops from its candidates (issue #255).
-    """
-    ambiguous = passthrough_lookup.keys() & lifted_lookup.keys()
-    if ambiguous:
-        log.warning(
-            "%d raw variant tuple(s) declared both hg38 and hg19 in this manifest "
-            "(same chrom/pos/ref/alt string, two different builds -> two different "
-            "physical loci) -- dropped from both rather than guessed which one owns "
-            "the stored row",
-            len(ambiguous),
-        )
-        for key in ambiguous:
-            del passthrough_lookup[key]
-            del lifted_lookup[key]
-            swapped.discard(key)
-    dropped_keys = {site_key(site) for site in ambiguous}
-    if not refuse_conflicting_keys:
-        return dropped_keys
-    cross = (
-        {site_key(site) for site in passthrough_lookup}
-        & {site_key(site) for site in lifted_lookup}
-    ) - dropped_keys
-    if cross:
-        raise ValueError(
-            f"{len(cross)} source routing key(s) are declared under both hg38 and hg19 "
-            f"by different coordinates (e.g. {sorted(cross)[0]!r}); the two-pass "
-            "build refuses to guess which locus owns the stored row, so this build "
-            "refuses too"
-        )
-    return dropped_keys
-
-
-def _lift_hg19_union(
-    hg19_tuples: set[tuple[str, int, str, str]],
-    *,
-    chain_file: str | Path | None,
-    liftover_failure_threshold: float,
-) -> tuple[SourceLookup, ReorientedKeys]:
-    """Lift Pass 1's hg19 group; return its ALIDs and the keys it re-oriented.
-
-    The richer `lift_hg19_to_hg38` rather than `build_liftover_lookup`, because
-    a reverse-strand block re-orients each variant's statistics as well as
-    renaming it (issue #284), and an ALID string cannot say which: a palindromic
-    pair's ALID is identical under either projection.
-    """
-    if not hg19_tuples:
-        return {}, set()
-    log.info("Running liftover hg19 → hg38 (%d variants)", len(hg19_tuples))
-    lifted = lift_hg19_to_hg38(
-        hg19_tuples, chain_file=chain_file, failure_threshold=liftover_failure_threshold
-    )
-    lookup = {key: row.alid for key, row in lifted.items()}
-    log.info("Liftover complete: %d variants mapped", len(lookup))
-    return lookup, {key for key, row in lifted.items() if statistics_swap(key, row)}
-
-
-def _resolve_manifest_variants_to_alids(
-    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]],
-    rsid_by_site: dict[tuple[str, int, str, str], str],
-    *,
-    chain_file: str | Path | None,
-    liftover_failure_threshold: float,
-    site_key: SiteKeyFn = _source_site_key,
-    refuse_cross_assembly_conflicts: bool = False,
-) -> tuple[SourceLookup, dict[str, str], set[str], ReorientedKeys]:
-    """Lift the union to hg38 ALIDs, re-key the rsids, and return the dropped routing keys.
-
-    The dropped keys are the build's own ``site_key`` form of the raw tuples
-    declared under both assemblies: the lift drops those from both lookups, and
-    a single-pass harvest drops the same keys from its candidates (issue #255
-    rounds 4-5). ``refuse_cross_assembly_conflicts`` additionally refuses two
-    *different* raw tuples declared under different assemblies that collide on
-    one key -- the case a folding routing key creates, which the two-pass build
-    refuses rather than guesses.
-    """
-    finalise_start = time.monotonic()
-    passthrough_lookup, lifted_lookup, swapped = _lift_union_by_assembly(
-        tuples_by_assembly,
-        chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
-    )
-    dropped_keys = _drop_cross_assembly_collisions(
-        passthrough_lookup,
-        lifted_lookup,
-        swapped,
-        site_key=site_key,
-        refuse_conflicting_keys=refuse_cross_assembly_conflicts,
-    )
-    source_lookup = {**passthrough_lookup, **lifted_lookup}
-    rsid_by_alid = _rekey_rsids_to_alids(source_lookup, rsid_by_site)
-    # The rekey's own output must equal the map an independent walk of the
-    # candidates over this same lookup produces, so a value the rekey attaches
-    # to the wrong ALID fails here (issue #255).
-    require_rsids_match_expected(
-        rsid_by_alid, expected_rsids_by_routing(rsid_by_site, source_lookup)
-    )
-    log.info(
-        "Pass 1 liftover/finalisation: %d source variants → %d hg38 ALIDs in %s",
-        len(source_lookup),
-        len(set(source_lookup.values())),
-        _fmt_duration(time.monotonic() - finalise_start),
-    )
-    return source_lookup, rsid_by_alid, dropped_keys, swapped
-
-
-#: A candidate or routing key: the raw source tuple, or the string form the
-#: build's routing index keys it by (`_source_site_key`).
-_SiteKeyT = TypeVar("_SiteKeyT")
-
-
-def _rekey_rsids_to_alids(
-    source_lookup: Mapping[_SiteKeyT, str],
-    rsid_by_site: Mapping[_SiteKeyT, str],
-) -> dict[str, str]:
-    """The rsid each ALID carries: the first non-empty in ``(rank, site)`` order.
-
-    ``rsid_by_site`` is produced in that order (issue #192), so iterating it
-    directly pins the winner for an ALID several source keys resolve to.
-    Iterating ``source_lookup`` would fall back to the union set's per-process
-    string hash order and let the answer move between runs (issue #192).
-    """
-    by_alid: dict[str, str] = {}
-    for site, rsid in rsid_by_site.items():
-        alid = source_lookup.get(site)
-        if alid and rsid:
-            by_alid.setdefault(alid, rsid)
-    return by_alid
 
 
 def build_dense_from_vcf_manifest(
@@ -1659,18 +254,14 @@ class _EncodedBands:
 @dataclass(frozen=True)
 class _PreparedBuild:
     """What the preparation phase hands the spill phases: the store's axis and
-    the fork-safe Pass 2 lookup arrays resolved against it.
+    the fork-safe Pass 2 route table built against it.
 
-    The parent-side ``source_lookup``/``variant_index`` dicts are dropped when
-    the preparation phase returns, before any worker forks (issue 043).
+    The routing's site map is consumed when the table is built, before any
+    worker forks (issue 043).
     """
 
     axis: _AxisMetadata
-    keys_sorted: np.ndarray
-    rows_sorted: np.ndarray
-    #: Whether a reverse-strand lift re-oriented that key's statistics, parallel
-    #: to ``keys_sorted`` (issue #284).
-    swaps_sorted: np.ndarray
+    table: RouteTable
     #: The ``--variant-reference`` a single-pass build was given, or None for
     #: the inline two-pass build. Recorded in the store manifest's provenance
     #: so the axis's origin is auditable (issue #185).
@@ -1680,63 +271,23 @@ class _PreparedBuild:
     column_map: dict[str, str] | None = None
 
 
-def _axis_metadata(
-    source_lookup: Mapping[tuple[str, int, str, str], str],
-    manifest_rows: Sequence[ManifestRow],
-    alids: Sequence[str] | None = None,
-) -> tuple[_AxisMetadata, dict[str, int]]:
-    """Resolve the store's axis metadata.
+def _axis_metadata(alids: list[str], manifest_rows: Sequence[ManifestRow]) -> _AxisMetadata:
+    """The store's axis: the routed ALIDs in genomic order, and the Analyses.
 
-    Sorting hg38 ALIDs by (chromosome, position, a1, a2) gives the variant
-    axis a stable, position-ordered row index; the manifest's own row order
-    fixes the analysis column order. ``alids`` overrides the source lookup as
-    the authority when a precomputed variant reference supplied the axis
-    (issue #185). The variant index is returned alongside the axis so the
-    caller can free it (it is the one ~n_variants-sized dict) once the Pass 2
-    lookup arrays are built.
+    The ALIDs' (chromosome, position, a1, a2) order gives the variant axis a
+    stable, position-ordered row index; the manifest's own row order fixes the
+    analysis column order.
     """
-    hg38_alids = sorted_alids(alids if alids is not None else source_lookup.values())
-    variant_index: dict[str, int] = {alid: i for i, alid in enumerate(hg38_alids)}
-    analysis_index: dict[str, int] = {row.trait_id: i for i, row in enumerate(manifest_rows)}
-    analyses: list[Analysis] = [manifest_row_to_analysis(row) for row in manifest_rows]
-    return (
-        _AxisMetadata(
-            alids=hg38_alids,
-            analysis_index=analysis_index,
-            analyses=analyses,
-        ),
-        variant_index,
+    return _AxisMetadata(
+        alids=alids,
+        analysis_index={row.trait_id: i for i, row in enumerate(manifest_rows)},
+        analyses=[manifest_row_to_analysis(row) for row in manifest_rows],
     )
-
-
-def _source_alids_by_alid(
-    source_lookup: Mapping[tuple[str, int, str, str], str],
-    hg38_alids: Sequence[str],
-) -> list[str | None]:
-    """The source-build canonical ALID each stored row was resolved from.
-
-    Provenance (the variant axis's ``source_alid`` column): the hg19 tuple's
-    own canonical ALID, or the passed-through hg38 tuple's, so a reader sees
-    which build coordinate a row's associations came from. A single hg38 ALID
-    can be the target of several source variants (a liftover collapse); when
-    they disagree on the origin the row is ambiguous, so it is left blank --
-    never guessed (a guess would silently misattribute provenance).
-    """
-    hg38_to_source: dict[str, str | None] = {}
-    for (chrom, pos, ref, alt), hg38_alid in source_lookup.items():
-        a1, a2 = sorted((ref, alt))
-        origin = f"{chrom}:{pos}:{a1}:{a2}"
-        if hg38_alid in hg38_to_source:
-            if hg38_to_source[hg38_alid] != origin:
-                hg38_to_source[hg38_alid] = None  # collision → ambiguous
-        else:
-            hg38_to_source[hg38_alid] = origin
-    return [hg38_to_source.get(alid) for alid in hg38_alids]
 
 
 def _write_axis_and_index(
     staged: StagedRelease,
-    source_lookup: Mapping[tuple[str, int, str, str], str],
+    routing: VariantRouting,
     axis: _AxisMetadata,
     rsid_by_alid: Mapping[str, str],
     chunk_shape: tuple[int, int],
@@ -1745,7 +296,7 @@ def _write_axis_and_index(
 
     The variant axis carries one canonical variant per stored row with its
     rsid (first named wins) and the source-build provenance each row resolved
-    from (``_source_alids_by_alid`` -- collisions stay blank, never guessed).
+    from (`VariantRouting.source_alids` -- collisions stay blank, never guessed).
     """
     write_index(staged, axis.alids, axis.analyses, chunk_shape)
     canonical_variants = [
@@ -1758,257 +309,26 @@ def _write_axis_and_index(
         for alid in axis.alids
         for chrom, pos_str, a1, a2 in [alid.split(":")]
     ]
-    source_alids = _source_alids_by_alid(source_lookup, axis.alids)
+    origin = routing.source_alids()
+    source_alids = [origin.get(alid) for alid in axis.alids]
+    del origin
     write_variant_axis(staged.path, canonical_variants, rsid_by_alid, source_alids)
 
 
-def _build_pass2_lookup(
-    source_lookup: dict[tuple[str, int, str, str], str],
-    variant_index: dict[str, int],
-    swapped: Collection[tuple[str, int, str, str]] = (),
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compose the Pass 2 dicts into the sorted numpy lookup workers search.
-
-    Fork-safe by construction: the returned arrays are a contiguous C buffer
-    and an int32 row array, so a worker reading them via searchsorted never
-    touches per-element refcounts (issue 043 item 2). The caller frees the
-    dicts before the pool is created.
-    """
-    keys_sorted, rows_sorted, swaps_sorted = _build_variant_key_index(
-        source_lookup, variant_index, swapped
-    )
-    max_key_len = max((len(key) for key in keys_sorted), default=0)
-    log.info(
-        "Pass 2 lookup: %d variant keys, max key length %d bytes, %d re-oriented by the lift",
-        len(keys_sorted),
-        max_key_len,
-        int(swaps_sorted.sum()),
-    )
-    return keys_sorted, rows_sorted, swaps_sorted
-
-
-def _resolve_axis_source(
-    manifest_rows: list[ManifestRow],
+def _routing_authority(
+    manifest_rows: Sequence[ManifestRow],
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
-    n_workers: int,
     variant_reference: str | Path | None,
-) -> tuple[
-    list[str] | None,
-    dict[tuple[str, int, str, str], str],
-    dict[str, str],
-    Collection[tuple[str, int, str, str]],
-]:
-    """The hg38 axis, its source-coordinate lookup and its rsids.
-
-    With a precomputed ``variant_reference`` the reference is the authority and
-    Pass 1 never runs (single-pass build, issue #185); otherwise the manifest's
-    sources are read once and lifted (the inline two-pass build). ``alids`` is
-    None in the two-pass case so the axis is derived from the lifted union.
-    """
-    if variant_reference is not None:
-        reference = _load_variant_reference(variant_reference, manifest_rows)
-        rsid_by_alid = _reference_axis_rsids(
-            reference, manifest_rows, chain_file, liftover_failure_threshold, n_workers
-        )
-        # A reference's source keys are its own coordinates (identity), so no
-        # lift re-oriented anything they route to.
-        return reference.alids, reference.source_lookup, rsid_by_alid, ()
-    source_lookup, rsid_by_alid, swapped = _lift_manifest_variants(
-        manifest_rows,
-        chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
-        n_workers=n_workers,
+) -> LiftedUnion | FromReference:
+    """The manifest's own lifted union, or the precomputed reference (issue #185)."""
+    if variant_reference is None:
+        return LiftedUnion(chain_file, liftover_failure_threshold)
+    return FromReference(
+        _load_variant_reference(variant_reference, manifest_rows),
+        chain_file,
+        liftover_failure_threshold,
     )
-    return None, source_lookup, rsid_by_alid, swapped
-
-
-def _candidates_by_routing_key(
-    rsid_by_site: Mapping[SourceKey, str],
-    key: SiteKeyFn,
-    *,
-    label: str,
-    on_conflict: RsidConflictPolicy = RsidConflictPolicy.REFUSE,
-) -> tuple[dict[str, str], dict[str, list[str]]]:
-    """The harvest's candidates keyed as the build routes them, order kept, and
-    the keys whose sources name them differently.
-
-    A key function need not be injective -- a Hybrid routing case-folds -- and
-    two raw sites that collapse onto one key are one stored variant, so the
-    first non-empty rsid in `(rank, site)` order wins. Two *different* non-empty
-    names for one key cannot be resolved honestly, so this never picks one:
-    under ``refuse`` the first such key fails the build (issue #255 round 4);
-    under ``drop`` every such key's candidate is "", and the second value maps
-    each to its distinct names in `(rank, site)` order, for the build to report
-    and for `withhold_disputed` to unname the variants they reach (issue
-    #306). A Dense routing key is the identity, so two sites never share one
-    and it is always empty.
-    """
-    candidates: dict[str, str] = {}
-    first_site: dict[str, SourceKey] = {}
-    conflicts: dict[str, list[str]] = {}
-    for site, rsid in rsid_by_site.items():
-        folded = key(site)
-        existing = candidates.get(folded)
-        if existing is None:
-            candidates[folded] = rsid
-            first_site[folded] = site
-        elif not existing:
-            candidates[folded] = rsid
-        elif rsid and rsid != existing:
-            if on_conflict is RsidConflictPolicy.REFUSE:
-                raise _rsid_conflict_error(label, folded, first_site[folded], existing, site, rsid)
-            _note_conflict(conflicts, folded, existing, rsid)
-    # Blanked only now: a key blanked mid-walk would take the next name it met.
-    for folded in conflicts:
-        candidates[folded] = ""
-    return candidates, conflicts
-
-
-def _note_conflict(
-    conflicts: dict[str, list[str]], folded: str, existing: str, rsid: str
-) -> None:
-    """Add ``rsid`` to the distinct names ``folded``'s sources gave it."""
-    names = conflicts.setdefault(folded, [existing])
-    if rsid not in names:
-        names.append(rsid)
-
-
-def _rsid_conflict_error(
-    label: str, folded: str, first: SourceKey, existing: str, site: SourceKey, rsid: str
-) -> ValueError:
-    """The refusal for two names on one routing key (issue #255 round 4)."""
-    return ValueError(
-        f"{label}: two source variants case-fold to one routing key "
-        f"{folded!r} with different rsids: {first!r} names "
-        f"{existing!r} but {site!r} names {rsid!r}; both associations route "
-        "to one stored variant, so refusing to choose a name -- a wrong "
-        "answer indistinguishable from a right one"
-    )
-
-
-def _routing_lookup(
-    source_lookup: Mapping[SourceKey, str], key: SiteKeyFn
-) -> dict[str, str]:
-    """A site -> ALID routing keyed as the build routes it (`key`)."""
-    return {key(site): alid for site, alid in source_lookup.items()}
-
-
-def _log_routing_disagreements(
-    candidates: Mapping[str, str],
-    routing: Mapping[str, str],
-    pass1_lookup: Mapping[SourceKey, str] | None,
-    key: SiteKeyFn,
-    *,
-    label: str,
-) -> None:
-    """Log named sites the build's routing places differently from Pass 1's.
-
-    The build's routing is the authority; Pass 1's lift is only a second
-    opinion, so a disagreement is reported rather than resolved.
-    """
-    if pass1_lookup is None:
-        return
-    # Only a site the reference actually routes can disagree with Pass 1: a site
-    # it does not route is off-reference and is dropped (Dense) or resolved by
-    # the fold (Hybrid), which is the documented behaviour, not a disagreement.
-    disagreed = sum(
-        1
-        for site, pass1_alid in pass1_lookup.items()
-        if key(site) in candidates
-        and (routed := routing.get(key(site))) is not None
-        and routed != pass1_alid
-    )
-    if disagreed:
-        log.warning(
-            "%s: %d source variant(s) that named an rsid route to a different ALID "
-            "under the reference than under Pass 1's own liftover; the reference "
-            "routing wins, so the name stays on the variant its association uses",
-            label,
-            disagreed,
-        )
-
-
-def _rekey_and_verify(
-    rsid_by_site: Mapping[SourceKey, str],
-    routing: Mapping[str, str],
-    pass1_lookup: Mapping[SourceKey, str] | None = None,
-    *,
-    key: SiteKeyFn = _source_site_key,
-    label: str = "Single-pass build",
-    on_conflict: RsidConflictPolicy = RsidConflictPolicy.REFUSE,
-) -> tuple[dict[str, str], set[str]]:
-    """Rekey harvested candidates ONCE through ONE routing, and verify exactly.
-
-    ``routing`` must be the build's own key form and the *final* routing -- a
-    reference's source keys combined with, for a Hybrid build, the fold's
-    off-reference resolution. One rekey in the candidates' `(rank, site)` order
-    and one global oracle comparison, so no partition can win a name the global
-    first-candidate rule would not give it (issue #255).
-
-    The oracle walks the **raw** ``rsid_by_site`` through ``key`` itself rather
-    than reading the keyed candidates, so the key preparation is checked: a
-    collapse that keeps the wrong name disagrees with the raw walk and fails
-    (issue #255 round 4). Under ``drop`` it finds the disputed keys itself too,
-    so a variant one reaches that kept a name fails as well (issue #306).
-    Returns the resolved map and the variants left unnamed under ``drop``.
-    """
-    candidates, conflicts = _candidates_by_routing_key(
-        rsid_by_site, key, label=label, on_conflict=on_conflict
-    )
-    _log_routing_disagreements(candidates, routing, pass1_lookup, key, label=label)
-    resolved = _rekey_rsids_to_alids(routing, candidates)
-    withheld = withhold_disputed(resolved, routing, conflicts)
-    expected = expected_rsids_by_routed_key(
-        rsid_by_site, routing, key, drop_disputed=on_conflict is RsidConflictPolicy.DROP
-    )
-    require_rsids_match_expected(resolved, expected)
-    return resolved, withheld
-
-
-def _reference_axis_rsids(
-    reference: VariantReference,
-    manifest_rows: list[ManifestRow],
-    chain_file: str | Path | None,
-    liftover_failure_threshold: float,
-    n_workers: int,
-) -> dict[str, str]:
-    """The axis's rsids: the reference's own, or Pass 1's rekeyed through it.
-
-    A variant reference that names no rsid -- a plain ALID list, or a Store
-    Variant Table whose ``rsid`` column is ``.``, like OGS-00004's EUR panel --
-    would otherwise leave the single-pass build with a blank ``rsid`` column on
-    every row. The build runs Pass 1's own harvest for the candidate rows and
-    their ``(rank, site)`` order, then rekeys them through the routing it
-    actually uses: the reference's source keys, keyed exactly as the routing
-    index keys them, never Pass 1's own liftover -- because the reference
-    decides which ALID an association lands on (issue #255). A reference that
-    carries rsids is its own authority and no read is spent.
-    """
-    if reference.rsid_by_alid:
-        # A reference that names rsids is used as-is (out of #255's scope); warn
-        # about the axis rows it leaves blank, exactly as the Hybrid builder does
-        # (issue #255 round 5, finding 2).
-        warn_reference_left_rows_blank(reference)
-        return dict(reference.rsid_by_alid)
-    pass1_lookup, rsid_by_site, _rsid_by_alid, _swapped = _harvest_manifest_variants(
-        manifest_rows,
-        chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
-        n_workers=n_workers,
-    )
-    resolved, _withheld = _rekey_and_verify(
-        rsid_by_site,
-        _routing_lookup(reference.source_lookup, _source_site_key),
-        pass1_lookup,
-        key=_source_site_key,
-    )
-    log.info(
-        "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d "
-        "for the variant axis",
-        len(resolved),
-    )
-    return resolved
 
 
 def _load_variant_reference(
@@ -2055,119 +375,97 @@ def _prepare_axis(
     n_workers: int,
     variant_reference: str | Path | None,
 ) -> _PreparedBuild:
-    """Phases 1-4: axis source, axis metadata, index + axis, Pass 2 lookup.
+    """Phases 1-4: route, write the axis and index, and build the Pass 2 table.
 
     hg19-declared rows are lifted to GRCh38 once (issue #85), or a precomputed
-    ``variant_reference`` supplies the axis directly and Pass 1 is skipped
-    (single-pass build, issue #185). Either way the axis metadata and
-    provenance-carrying variant axis are written, and the Pass 2 lookup arrays
-    are composed -- the parent ``source_lookup``/``variant_index`` dicts then
-    drop out of scope before any worker forks (issue 043).
+    ``variant_reference`` supplies the axis directly and Pass 1 only harvests
+    the names it lacks (single-pass build, issues #185, #255). Either way the
+    provenance-carrying variant axis is written and checked against the names
+    it was written from, and the route table is built -- consuming the
+    routing's site map before any worker forks (issue 043).
     """
-    alids, source_lookup, rsid_by_alid, swapped = _resolve_axis_source(
-        manifest_rows, chain_file, liftover_failure_threshold, n_workers, variant_reference,
+    authority = _routing_authority(
+        manifest_rows, chain_file, liftover_failure_threshold, variant_reference
     )
-    axis, variant_index = _axis_metadata(source_lookup, manifest_rows, alids=alids)
-    _write_axis_and_index(staged, source_lookup, axis, rsid_by_alid, chunk_shape)
+    routing = route_variants(
+        [row.source for row in manifest_rows], authority, key=RoutingKey.EXACT, n_workers=n_workers
+    )
+    if routing.names.pending:
+        # A Dense build drops the associations the reference does not route, so
+        # nothing else names a variant; the harvest it held is freed here.
+        routing.names = routing.names.finish()
+    axis = _axis_metadata(routing.alids, manifest_rows)
+    _write_axis_and_index(staged, routing, axis, routing.names.rsid_by_alid, chunk_shape)
     # The table just written must be the table the resolved map describes: a
     # partial harvest loss, an off-reference row dropped from the write, or a
     # table written from a stale map fails here, on the bytes (issue #255).
-    require_written_rsids_match(staged.path, axis.alids, rsid_by_alid)
-    keys_sorted, rows_sorted, swaps_sorted = _build_pass2_lookup(
-        source_lookup, variant_index, swapped
-    )
+    routing.names.require_written(staged.path, axis.alids)
     return _PreparedBuild(
         axis=axis,
-        keys_sorted=keys_sorted,
-        rows_sorted=rows_sorted,
-        swaps_sorted=swaps_sorted,
+        table=routing.table([axis.alids]),
         variant_reference=str(variant_reference) if variant_reference is not None else None,
         column_map=column_map_provenance(manifest_rows),
     )
+
+
+@dataclass(frozen=True)
+class _Pass2Context:
+    """What every Pass 2 worker reads: the route table and where to spill."""
+
+    table: RouteTable
+    spill_dir: Path
+
+
+def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
+    """Route one Analysis's column through the shared table and spill it.
+
+    Returns the column index only: the compact result stays on disk, never in
+    a pipe. An earlier design returned each column over IPC, and at
+    genome-wide scale (~9.85M rows per file, thousands of files) that pipe
+    traffic deadlocked the pool.
+    """
+    col_idx, row = task
+    reader = open_source(row.source)
+    placed = context.table.route_column(reader.stream_associations()).placed[0]
+    se = apply_se_divisor(placed.se, row.se_divisor)
+    _spill_column(context.spill_dir, col_idx, placed.index, placed.z, se, placed.eaf)
+    return col_idx
 
 
 def _spill_columns(
     manifest_rows: Sequence[ManifestRow],
     analysis_index: Mapping[str, int],
     spill_dir: Path,
-    lookup: tuple[np.ndarray, np.ndarray, np.ndarray],
+    table: RouteTable,
     axis: _AxisMetadata,
     n_workers: int,
     pass2_start: float,
 ) -> None:
-    """Pass 2: resolve and spill one column per Analysis, serially or in a pool.
+    """Pass 2: route and spill one column per Analysis, here or in a fork pool.
 
-    One entry point for both because the two differ only in who does the work:
-    ``n_workers <= 1`` resolves each column in this process, one Analysis at a
-    time, so peak memory is one resolved column; more than one hands the columns
-    to a fork pool whose workers inherit the numpy lookup at fork (see the module
-    note on ``_pass2_keys_sorted``) and write only their own ``.npz``, so nothing
-    large crosses the pipe. The globals are reset whether or not every task
-    succeeded.
+    With ``n_workers <= 1`` each column is routed in this process, one Analysis
+    at a time, so peak memory is one routed column; with more, the workers
+    inherit the route table at fork (`fork_each`) and write only their own
+    ``.npz``, so nothing large crosses the pipe.
     """
-    if n_workers > 1:
-        _spill_columns_parallel(
-            lookup, n_workers, pass2_start, spill_dir, axis, manifest_rows, analysis_index
-        )
-        return
-    keys_sorted, rows_sorted, swaps_sorted = lookup
-    log.info(
-        "Pass 2: resolving %d analyses × %d variants (n_workers=1)",
-        len(axis.analyses),
-        len(axis.alids),
-    )
-    for i, row in enumerate(manifest_rows):
-        _resolve_and_spill(
-            spill_dir, analysis_index[row.trait_id], row,
-            keys_sorted, rows_sorted, swaps_sorted,
-        )
-        log_progress(
-            "Pass 2", i + 1, len(axis.analyses), pass2_start, f"last: {row.trait_id}", every=25
-        )
-
-
-def _spill_columns_parallel(
-    lookup: tuple[np.ndarray, np.ndarray, np.ndarray],
-    n_workers: int,
-    pass2_start: float,
-    spill_dir: Path,
-    axis: _AxisMetadata,
-    manifest_rows: Sequence[ManifestRow],
-    analysis_index: Mapping[str, int],
-) -> None:
-    """``_spill_columns``' fork-pool arm; see it for what the workers inherit."""
-    keys_sorted, rows_sorted, swaps_sorted = lookup
     log.info(
         "Pass 2: resolving %d analyses × %d variants (n_workers=%d)",
         len(axis.analyses),
         len(axis.alids),
         n_workers,
     )
-    global _pass2_keys_sorted, _pass2_rows_sorted, _pass2_swaps_sorted, _pass2_spill_dir
-    _pass2_keys_sorted = keys_sorted
-    _pass2_rows_sorted = rows_sorted
-    _pass2_swaps_sorted = swaps_sorted
-    _pass2_spill_dir = spill_dir
-    try:
-        with fork_pool(n_workers) as pool:
-            id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
-            tasks = pass2_worker_tasks(manifest_rows, analysis_index)
-            futures = [pool.submit(_pass2_worker, t) for t in tasks]
-            for i, fut in enumerate(as_completed(futures)):
-                col_idx = fut.result()
-                log_progress(
-                    "Pass 2",
-                    i + 1,
-                    len(axis.analyses),
-                    pass2_start,
-                    f"last: {id_by_col[col_idx]}",
-                    every=25,
-                )
-    finally:
-        _pass2_keys_sorted = None
-        _pass2_rows_sorted = None
-        _pass2_swaps_sorted = None
-        _pass2_spill_dir = None
+    id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
+    tasks = [(analysis_index[row.trait_id], row) for row in manifest_rows]
+    columns = fork_each(_route_and_spill, _Pass2Context(table, spill_dir), tasks, n_workers)
+    for i, col_idx in enumerate(columns):
+        log_progress(
+            "Pass 2",
+            i + 1,
+            len(axis.analyses),
+            pass2_start,
+            f"last: {id_by_col[col_idx]}",
+            every=25,
+        )
 
 
 def _survey_and_verify_eaf(
@@ -2284,7 +582,7 @@ def _spill_verify_and_encode(
             manifest_rows,
             prepared.axis.analysis_index,
             spill_dir,
-            (prepared.keys_sorted, prepared.rows_sorted, prepared.swaps_sorted),
+            prepared.table,
             prepared.axis,
             n_workers,
             pass2_start,
