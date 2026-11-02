@@ -580,6 +580,7 @@ _INDEXED_SUBSET_FIELDS: tuple[str, ...] = (
     "Requested",
     "Resolved",
     "Absent",
+    "Overflow-only",
     "Analyses",
     "Physical bytes",
     "Input SHA-256",
@@ -590,6 +591,16 @@ _INDEXED_SUBSET_FIELDS: tuple[str, ...] = (
     "Builder",
     "Created (UTC)",
 )
+
+#: What an absent attribute reads as, where a decision defines its absence. A
+#: group written before `overflow_only_count` existed records neither it nor its
+#: sample, and its count is zero by construction rather than a count never taken
+#: (ADR 0065). An attribute no decision defines is absent from here and reads
+#: blank.
+_ABSENT_ATTRIBUTE_VALUES: dict[str, str] = {"overflow_only_count": "0"}
+
+#: Attribute names whose values are counts, and so are digit-grouped when shown.
+_COUNT_SUFFIXES: tuple[str, ...] = ("_count", "_analyses", "_variants")
 
 
 def _human_bytes(count: int) -> str:
@@ -626,10 +637,24 @@ def _read_subset_attrs(path: Path) -> dict[str, Any] | None:
 
 
 def _indexed_subset_value(attrs: dict[str, Any], key: str) -> str:
-    value = attrs.get(key, "")
+    """One recorded attribute as a table cell, with its absence decided.
+
+    Where a decision gives an absent attribute a meaning, that is what is shown;
+    `overflow_only_count` is zero by construction for a group written before it
+    existed, because that builder could only refuse an Overflow-only ALID
+    (ADR 0065). An absence no decision defines reads blank, how the page shows
+    every other unrecorded value, never as an invented number. A recorded count
+    is digit-grouped only when it is one; a group's own recorded text is shown as
+    recorded rather than forced through a number format.
+    """
+    if key not in attrs:
+        return _ABSENT_ATTRIBUTE_VALUES.get(key, "")
+    value = attrs[key]
     if isinstance(value, bool) or not isinstance(value, (int, str)):
         return str(value)
-    return f"{value:,}" if key.endswith(("_count", "_analyses", "_variants")) else str(value)
+    if isinstance(value, int) and key.endswith(_COUNT_SUFFIXES):
+        return f"{value:,}"
+    return str(value)
 
 
 def _indexed_subset_row(path: Path, attrs: dict[str, Any], size: int) -> dict[str, str]:
