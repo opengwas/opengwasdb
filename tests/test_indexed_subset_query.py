@@ -56,7 +56,7 @@ from opengwasdb.layouts.dense.indexed_subsets import (
 )
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.query import query_store
-from opengwasdb.stats import beta_from_z_se, p_value_from_z
+from opengwasdb.stats import p_value_from_z
 
 #: The subset's variant slots, chosen so the index carries every class the query
 #: path has to decode: overflow, missing, EAF exception, SE exception and two
@@ -244,11 +244,11 @@ def test_derived_beta_and_p_match_the_primary_result(indexed_store: Path) -> Non
         "the fixture must return derived values for this to mean anything"
     )
     indexed_beta = [
-        beta_from_z_se(float(z), float(se))
+        float(z) * float(se)
         for z, se in zip(indexed["z"], indexed["se"], strict=True)
     ]
     expected_beta = [
-        beta_from_z_se(float(z), float(se))
+        float(z) * float(se)
         for z, se in zip(expected["z"], expected["se"], strict=True)
     ]
     assert indexed_beta == expected_beta
