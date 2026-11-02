@@ -16,7 +16,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from architecture_model import check_model, claims, component_for_path
+import pytest
+import yaml
+from architecture_model import (
+    REQUIRED_COMPONENT_KEYS,
+    ModelError,
+    check_model,
+    claims,
+    component_for_path,
+    load_model,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_PATH = ROOT / "docs" / "architecture" / "components.yaml"
@@ -158,3 +167,69 @@ def test_a_file_claim_inside_anothers_directory_claim_belongs_to_the_file() -> N
 
 def test_nothing_claims_a_path_outside_every_claim() -> None:
     assert component_for_path(claims(_model(_component())), "opengwasdb/cli/main.py") is None
+
+
+YAML = """\
+repo: opengwas/opengwasdb
+layers:
+  - {layer: 1, name: Storage and input}
+  - {layer: 0, name: Foundations}
+components:
+  - id: store
+    name: Store Release envelope
+    container: engine
+    layer: 1
+    stages: [build]
+    summary: Paths, manifest, format versions.
+    paths: [opengwasdb/store/]
+  - id: model
+    name: Store contract model
+    container: engine
+    layer: 0
+    stages: [cross]
+    summary: analyses.tsv and the statistic helpers.
+    paths: [opengwasdb/model/, opengwasdb/stats.py]
+"""
+
+
+def _write_model(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "components.yaml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_a_complete_model_loads(tmp_path: Path) -> None:
+    model = load_model(_write_model(tmp_path, YAML))
+
+    assert model["repo"] == "opengwas/opengwasdb"
+    assert [(c["id"], c["layer"], c["paths"]) for c in model["components"]] == [
+        ("store", 1, ["opengwasdb/store/"]),
+        ("model", 0, ["opengwasdb/model/", "opengwasdb/stats.py"]),
+    ]
+
+
+@pytest.mark.parametrize("key", REQUIRED_COMPONENT_KEYS)
+def test_a_component_missing_a_required_key_fails_naming_it(tmp_path: Path, key: str) -> None:
+    incomplete = _component()
+    assert key in incomplete  # the key was there to remove
+    del incomplete[key]
+    path = _write_model(tmp_path, yaml.safe_dump(_model(incomplete, MODEL_COMPONENT)))
+
+    with pytest.raises(ModelError) as error:
+        load_model(path)
+
+    assert f"has no '{key}'" in str(error.value)
+    # The component is named by id, or by name when the id is what went missing.
+    assert ("'store'" in str(error.value)) or ("Store Release envelope" in str(error.value))
+
+
+def test_two_components_sharing_an_id_fail_naming_it(tmp_path: Path) -> None:
+    text = YAML.replace("- id: model", "- id: store")
+
+    with pytest.raises(ModelError) as error:
+        load_model(_write_model(tmp_path, text))
+
+    assert str(error.value) == (
+        "component 'store' is declared twice; ids must be unique"
+        " in docs/architecture/components.yaml"
+    )

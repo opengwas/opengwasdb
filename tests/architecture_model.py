@@ -16,9 +16,16 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
+import yaml
+
 MODEL_PATH = "docs/architecture/components.yaml"
+
+#: What every component must declare. A missing one is not a defaultable field:
+#: a component without `paths` claims nothing and would silently own no code.
+REQUIRED_COMPONENT_KEYS = ("id", "name", "container", "layer", "stages", "summary", "paths")
 
 #: Where the engine's source lives, and what counts as source. Only `.py` files
 #: under here are claimed: the map is about code, and a data file inside a
@@ -122,3 +129,53 @@ def _unclaimed_source_files(claim_list: Sequence[Claim], tracked: Sequence[str])
         for path in sorted(tracked)
         if is_source_file(path) and component_for_path(claim_list, path) is None
     ]
+
+
+class ModelError(Exception):
+    """A model file that cannot be read as a model. Raised, not returned.
+
+    A structural fault is not a list of problems to report alongside the rest: a
+    component with no `paths` means every check downstream is meaningless, and a
+    model nobody can load should stop the run where the fault is.
+    """
+
+
+def load_model(path: Path) -> dict[str, Any]:
+    """Read a model file and hold it to the shape #418 and #359 rely on.
+
+    Names the component in the message: the person fixing it is looking at a YAML
+    file of fifteen of them, and "a component is missing a key" would send them
+    hunting.
+    """
+    model = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(model, dict):
+        raise ModelError(f"{path}: expected a mapping, found {type(model).__name__}")
+    for key in ("layers", "components"):
+        if not isinstance(model.get(key), list):
+            raise ModelError(f"{path}: expected a {key!r} list")
+
+    seen: set[str] = set()
+    for index, component in enumerate(model["components"]):
+        label = _label(component, index)
+        if not isinstance(component, dict):
+            raise ModelError(f"component {label} is not a mapping in {MODEL_PATH}")
+        for key in REQUIRED_COMPONENT_KEYS:
+            if key not in component:
+                raise ModelError(f"component {label} has no {key!r} key in {MODEL_PATH}")
+        if component["id"] in seen:
+            raise ModelError(
+                f"component {component['id']!r} is declared twice; ids must be unique in"
+                f" {MODEL_PATH}"
+            )
+        seen.add(component["id"])
+    return model
+
+
+def _label(component: object, index: int) -> str:
+    """How to name a component in a message, preferring what the reader can search for."""
+    if isinstance(component, dict):
+        if "id" in component:
+            return repr(component["id"])
+        if "name" in component:
+            return f"#{index} ({component['name']!r})"
+    return f"#{index}"
