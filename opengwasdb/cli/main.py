@@ -792,6 +792,7 @@ def build_dense_vcf_command(
     ),
     variant_reference: Annotated[Path | None, typer.Option(help=_VARIANT_REFERENCE_HELP)] = None,
     column_map: _COLUMN_MAP_OPTION = None,
+    admission_record: _ADMISSION_RECORD_OPTION = None,
 ) -> None:
     """Build a Dense Observed-Only store from a manifest of GWAS-VCF files.
 
@@ -803,7 +804,8 @@ def build_dense_vcf_command(
     a reference that names no rsids runs Pass 1's harvest for them (#255).
     --column-map reads opengwasdb.column-map rows through a Column Map (#281).
     --association-coverage states what the release retains: a Dense release can
-    carry only `gwas`, its default (issue #298).
+    carry only `gwas`, its default (issue #298). --admission-record names where
+    Association Admission's record goes (#357).
     """
     result = build_dense_from_vcf_manifest(
         manifest_path, output_path, store_id=store_id, release_id=release_id,
@@ -813,6 +815,7 @@ def build_dense_vcf_command(
         allow_unverified_eaf=allow_unverified_eaf,
         source_reader_capability=source_reader_capability, source_assembly=source_assembly,
         variant_reference=variant_reference, column_map=column_map,
+        admission_record=admission_record,
     )
     _echo_summary({
         "output_path": str(result.output_path),

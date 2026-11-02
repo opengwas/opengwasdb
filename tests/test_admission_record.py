@@ -2,7 +2,7 @@
 
 The record is written beside the Store Release: one part per Analysis while
 the build runs, then `admission.json`. These tests cover the record on its own
-and as a Hybrid build writes it: the same at one worker and at two, and its
+and as each builder writes it: the same at one worker and at two, and its
 counts the ones the Store's `info_score` provenance reports.
 """
 
@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import test_dense_vcf_build as dense_fixture
 import test_info_score_hybrid_build as info_fixture
 
 from opengwasdb.admission import (
@@ -24,6 +25,7 @@ from opengwasdb.admission import (
     SourceRows,
     admission_record_for,
 )
+from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.model.maf_policy import MafPolicy, MafState
 from opengwasdb.readers.interface import ImputationScoreStatus
@@ -161,3 +163,42 @@ def test_a_hybrid_record_holds_the_counts_its_provenance_reports(tmp_path: Path)
         assert counts["dropped"]["info_below_threshold"] == (
             provenance["associations_below_threshold"]
         )
+
+
+def _dense_vcf(tmp_path: Path, n_workers: int) -> Path:
+    """Two Analyses' GWAS-VCF sources, three rows and two, built Dense."""
+    rows = [
+        f"1\t{position}\t.\t{ref}\t{alt}\t.\tPASS\t.\tES:SE\t{beta}:{se}\n"
+        for position, ref, alt, beta, se in (
+            (dense_fixture.HG19_POS_1, "A", "G", 2.0, 0.5),
+            (dense_fixture.HG19_POS_2, "C", "T", 1.5, 0.3),
+            (dense_fixture.HG19_POS_3, "G", "A", 0.6, 0.2),
+        )
+    ]
+    sources = tmp_path / "sources"
+    sources.mkdir(exist_ok=True)
+    manifest = dense_fixture._make_manifest(
+        sources,
+        [
+            ("trait_a", dense_fixture._make_vcf(sources, "trait_a", rows), "Trait A"),
+            ("trait_b", dense_fixture._make_vcf(sources, "trait_b", rows[1:]), "Trait B"),
+        ],
+    )
+    store = tmp_path / f"dense-{n_workers}.opengwasdb"
+    build_dense_from_vcf_manifest(
+        manifest, store, store_id="s", release_id="r", n_workers=n_workers
+    )
+    return store
+
+
+def test_a_dense_vcf_build_writes_its_record(tmp_path: Path):
+    one, two = _dense_vcf(tmp_path, 1), _dense_vcf(tmp_path, 2)
+
+    record = admission_record_for(one) / "admission.json"
+    written = json.loads(record.read_text(encoding="utf-8"))
+    assert written["command"] == "build-dense-vcf"
+    assert [(a["analysis_id"], a["examined"], a["admitted"]) for a in written["analyses"]] == [
+        ("trait_a", 3, 3),
+        ("trait_b", 2, 2),
+    ]
+    assert record.read_bytes() == (admission_record_for(two) / "admission.json").read_bytes()

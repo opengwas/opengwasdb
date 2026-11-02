@@ -23,6 +23,7 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb.admission import AdmissionRecord, AnalysisRules, admission_record_for
 from opengwasdb.build.eaf_orientation import (
     DEFAULT_SAMPLE_SITES,
     EafOrientationReport,
@@ -168,6 +169,7 @@ def build_dense_from_vcf_manifest(
     source_reader_capability: str | None = None, source_assembly: str | None = None,
     variant_reference: str | Path | None = None, column_map: ColumnMap | str | Path | None = None,
     association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
+    admission_record: str | Path | None = None,
 ) -> DenseBuildResult:
     """Build a Dense Observed-Only Store from a manifest of GWAS-VCF files.
 
@@ -184,6 +186,7 @@ def build_dense_from_vcf_manifest(
     Pass 1 and liftover are bypassed save its rsid harvest (#255). ``column_map`` reads
     ``opengwasdb.column-map`` rows (#281). ``association_coverage`` is a build input
     (issue #298) and a Dense matrix can carry only ``gwas``, its default (ADR 0064).
+    ``admission_record`` is Association Admission's record (#357), beside the Store.
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.DENSE)
     manifest_rows = read_manifest(
@@ -202,6 +205,7 @@ def build_dense_from_vcf_manifest(
         eaf_report, encoded = _spill_verify_and_encode(
             staged, out, manifest_rows, prepared, n_workers, chunk_shape, dtype,
             eaf_reference, eaf_reference_ancestry, allow_unverified_eaf,
+            admission_record_for(out) if admission_record is None else Path(admission_record),
         )
         # Phase 8: top-hit indexes, manifest and analyses.tsv metadata.
         _finalize_store(
@@ -415,10 +419,12 @@ def _prepare_axis(
 
 @dataclass(frozen=True)
 class _Pass2Context:
-    """What every Pass 2 worker reads: the route table and where to spill."""
+    """What every Pass 2 worker reads: the route table, where to spill, and the
+    Admission record its gate writes to."""
 
     table: RouteTable
     spill_dir: Path
+    record: AdmissionRecord
 
 
 def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
@@ -431,9 +437,13 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
     """
     col_idx, row = task
     reader = open_source(row.source)
-    placed = context.table.route_column(reader.stream_associations()).placed[0]
-    se = apply_se_divisor(placed.se, row.se_divisor)
-    _spill_column(context.spill_dir, col_idx, placed.index, placed.z, se, placed.eaf)
+    # A Dense build declares no INFO or MAF filter, so its gate judges every
+    # row by the rule set's other rules alone.
+    with context.record.gate(AnalysisRules(row.trait_id)) as gate:
+        routed = context.table.route_column(reader.stream_associations(), admit=gate.admit)
+        placed = routed.placed[0]
+        se = apply_se_divisor(placed.se, row.se_divisor)
+        _spill_column(context.spill_dir, col_idx, placed.index, placed.z, se, placed.eaf)
     return col_idx
 
 
@@ -443,10 +453,12 @@ def _spill_columns(
     spill_dir: Path,
     table: RouteTable,
     axis: _AxisMetadata,
+    admission_record: Path,
     n_workers: int,
     pass2_start: float,
 ) -> None:
-    """Pass 2: route and spill one column per Analysis, here or in a fork pool.
+    """Pass 2: route and spill one column per Analysis, here or in a fork pool,
+    each through its Admission gate, then finish the record the gates wrote.
 
     With ``n_workers <= 1`` each column is routed in this process, one Analysis
     at a time, so peak memory is one routed column; with more, the workers
@@ -461,7 +473,11 @@ def _spill_columns(
     )
     id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
     tasks = [(analysis_index[row.trait_id], row) for row in manifest_rows]
-    columns = fork_each(_route_and_spill, _Pass2Context(table, spill_dir), tasks, n_workers)
+    record = AdmissionRecord.open(
+        admission_record, [row.trait_id for row in manifest_rows], command="build-dense-vcf"
+    )
+    context = _Pass2Context(table, spill_dir, record)
+    columns = fork_each(_route_and_spill, context, tasks, n_workers)
     for i, col_idx in enumerate(columns):
         log_progress(
             "Pass 2",
@@ -471,6 +487,7 @@ def _spill_columns(
             f"last: {id_by_col[col_idx]}",
             every=25,
         )
+    record.finish()
 
 
 def _survey_and_verify_eaf(
@@ -569,6 +586,7 @@ def _spill_verify_and_encode(
     eaf_reference: str | Path | None,
     eaf_reference_ancestry: str | None,
     allow_unverified_eaf: bool,
+    admission_record: Path,
 ) -> tuple[EafOrientationReport, _EncodedBands]:
     """Phases 5-7: spill each column, verify EAF, and write the encoded planes.
 
@@ -576,7 +594,7 @@ def _spill_verify_and_encode(
     returns or raises, so a phase failure leaves nothing behind and the staged
     release stays atomic. ``n_workers`` > 1 resolves through the fork pool;
     EAF orientation is verified against ``eaf_reference`` before any array is
-    written (issue #115, ADR 0037 §6).
+    written (issue #115, ADR 0037 §6). Pass 2 writes ``admission_record``.
     """
     spill_dir = Path(
         tempfile.mkdtemp(prefix=f".{out.name}.pass2spill.", dir=staged.path.parent)
@@ -589,6 +607,7 @@ def _spill_verify_and_encode(
             spill_dir,
             prepared.table,
             prepared.axis,
+            admission_record,
             n_workers,
             pass2_start,
         )
