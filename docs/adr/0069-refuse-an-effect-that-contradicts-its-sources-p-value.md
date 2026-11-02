@@ -110,7 +110,7 @@ way the numbers differ from a whole-file resolve. The three named sources were a
 | `GCST006867` (clean, named) | 0.00145 (full file, 5,052,917 comparable rows, 20,000 sampled) |
 | random 200 sources: 151 comparable, 44 no p-value, 5 all-SE-from-p | median 1.4e-4, p90 3.6e-3, **p99 0.126, max 0.177** |
 | all 4,783: 3,767 comparable, 963 no p-value, 53 all-SE-from-p, 1 other failure | 3,763 below 1: p99 0.181, **max 0.346** |
-| 40 random FinnGen R13 endpoints (all comparable; first 1M rows each; SAIGE p) | max **5.5e-7**, none skipped or refused |
+| 40 random FinnGen R13 endpoints (all comparable; first 1M rows each; SAIGE p) | p99 5.3e-7, max **5.5e-7**, none skipped or refused |
 | `GCST004461` (log-odds in `odds_ratio`) | **247** (full file, 5,864,147 rows); 249 (1M rows), 231 (200k rows) |
 | `GCST002047` (odds ratios in `beta`) | **1,732** (full file, 2,314,363 rows); 1,724 (1M rows), 1,585 (200k rows) |
 | `GCST90503316` (odds ratios in `beta`; found by this check) | 813 |
@@ -154,7 +154,8 @@ agrees with `beta / sebeta` to the digits it prints. The threshold stands.
 - **Every Resolution Record gains `diagnostics.effect_consistency` and
   `resolution_config.effect_consistency`**, and old records stop being
   resumable (their fingerprint digest changes), exactly as ADR 0054's additions
-  did: `--resume` recomputes. `record_schema_version` stays `1` under that
+  did: `--resume` recomputes. The sibling-repo work (documenting the
+  fields and moving the pin) is opengwas/opengwasdb-stores#413. `record_schema_version` stays `1` under that
   module's additive-field rule.
 - **The built-in `finngen-r13` Column Map now maps `pval`** (`p_value_form = "p"`),
   which it had not: without it every FinnGen Analysis silently skipped the check.

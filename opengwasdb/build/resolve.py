@@ -499,12 +499,25 @@ class _EvidenceSample:
 
 
 def _diagnostics(
-    request: AnalysisRequest, scan: _Scan, source_ancestry: SourceAncestryMeasurement | None = None
+    request: AnalysisRequest,
+    scan: _Scan,
+    source_ancestry: SourceAncestryMeasurement | None = None,
+    *,
+    scanned: bool = True,
 ) -> ScanDiagnostics:
+    """The scan's diagnostics; `scanned=False` when the scan did not complete.
+
+    A source that was never read has no effect-consistency measurement at all
+    (`None`): an empty sample would otherwise read as a measured absence of
+    p-values (`no_source_p_value`), which is a fact about a readable file.
+    """
     ancestry_rows = (
         scan.ancestry_rows_read if scan.ancestry_rows_read > 0 else scan.rows_read
     )
-    return _with_source_ancestry(_scan_diagnostics(request, scan, ancestry_rows), source_ancestry)
+    diagnostics = _scan_diagnostics(request, scan, ancestry_rows)
+    if not scanned:
+        diagnostics = replace(diagnostics, effect_consistency=None)
+    return _with_source_ancestry(diagnostics, source_ancestry)
 
 
 def _with_source_ancestry(
@@ -1171,7 +1184,7 @@ def resolve_analysis(
     except (OSError, EOFError, ValueError) as exc:
         return AnalysisResolution(
             analysis_id=request.analysis_id,
-            diagnostics=_diagnostics(request, scan, source_ancestry),
+            diagnostics=_diagnostics(request, scan, source_ancestry, scanned=False),
             ancestry=None if source_ancestry is None else source_ancestry.assignment,
             error=f"{type(exc).__name__}: {exc}",
         )

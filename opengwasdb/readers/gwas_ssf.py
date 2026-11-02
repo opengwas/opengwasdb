@@ -77,7 +77,6 @@ from opengwasdb.readers.effect_source import (
     EffectSource,
     EffectSourceKind,
     RowCells,
-    RowStatistics,
     refuse_case_control_z_score,
     resolve_effect_source,
     resolve_sample_size_column,
@@ -189,18 +188,6 @@ def _row_cells(
     )
 
 
-def _row_statistics(
-    row: dict[str, str], effect_source: EffectSource | None, sample_size_column: str | None
-) -> RowStatistics:
-    """One row's ``(beta, se)`` from whichever of the row's own columns carry them.
-
-    The rule itself is `opengwasdb.readers.effect_source.row_statistics`; this
-    is only the GWAS-SSF dict-row reading of it, so the full-row parser and the
-    two projections cannot answer differently about the same row (stores #176).
-    """
-    return row_statistics(effect_source, _row_cells(row, effect_source, sample_size_column))
-
-
 def _tabular_row(
     row: dict[str, str],
     source: EffectSource | None,
@@ -227,8 +214,11 @@ def _tabular_row(
         )
     except VariantNormalisationError:
         return None
-    statistics = _row_statistics(row, source, sample_size_column)
     cells = _row_cells(row, source, sample_size_column)
+    # One parse of the row's cells feeds both the statistics and `p_value`, so the
+    # build's hot path reads each row once; the rule itself is
+    # `effect_source.row_statistics`, shared with the two projections (stores #176).
+    statistics = row_statistics(source, cells)
     return TabularRow(
         chromosome=ori.variant.chromosome,
         position=ori.variant.position,

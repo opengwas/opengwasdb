@@ -35,13 +35,33 @@ A caller overrides both with `EffectConsistencyPolicy` (`AnalysisRequest
 .effect_consistency_policy`; `resolve_analyses_manifest(effect_consistency_policy=)`).
 An `evidence_sample` below `min_compared_rows` raises `ValueError` (it could never reach a verdict). There is no CLI flag.
 
+## Calibration (summary; detail in ADR 0069)
+
+Median |Δ| of clean sources, OGS-00011 (first 1M rows each; 200k for the whole manifest):
+
+| | max | p99 |
+|---|---|---|
+| random 200 sources (151 comparable) | 0.177 | 0.126 |
+| whole manifest (3,767 comparable; 3,763 below 1) | 0.346 | 0.181 |
+| 40 FinnGen R13 endpoints | 5.5e-7 | 5.3e-7 |
+
+Refused sources: `GCST002047` 1,732, `GCST004461` 247, `GCST90503316` 813,
+`GCST90165257` 12.9. The threshold **1.0** is 2.9× above the largest clean source
+in the manifest (0.346) and 12.9× below the smallest refused (12.9). The 50-row
+minimum: the worst 50-row resample of a clean source gave 0.298.
+
 ## Resolution Record fields
 
 Additive under `record_schema_version` 1. Records resolved before this check have
-a different fingerprint digest and are recomputed by `--resume`.
+a different fingerprint digest and are recomputed by `--resume`. Documenting the
+fields and moving the pin in `opengwasdb-stores` is opengwas/opengwasdb-stores#413.
 
-`diagnostics.effect_consistency` is `null` only for an Analysis that was never
-scanned (an unreadable or unsupported source); otherwise an object:
+`diagnostics.effect_consistency` is `null` only for an Analysis whose scan did not
+complete (an opening or read failure, such as a missing path: `error` says which).
+That is *no measurement*, and is not the same as a skip: a `skip_reason` is a
+recorded fact about a source that was read (no p-value column, every standard
+error derived from the p-value, too few rows). A source never read is never
+`no_source_p_value`. Otherwise an object:
 
 | field | meaning |
 |---|---|
