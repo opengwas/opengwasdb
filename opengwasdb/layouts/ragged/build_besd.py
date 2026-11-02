@@ -33,7 +33,6 @@ from opengwasdb.build.liftover import (
     require_lifted_alleles_match_reference,
 )
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
-from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.besd_eaf import (
@@ -64,6 +63,7 @@ from opengwasdb.model.enums import (
 )
 from opengwasdb.model.manifest_columns import manifest_column
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
+from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
     CanonicalVariant,
     Orientation,

@@ -59,7 +59,6 @@ from opengwasdb.encoding.timing import log_phase
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import (
     DenseBuildResult,
-    add_hit_counts,
     write_analyses_tsv,
 )
 from opengwasdb.layouts.dense.constants import (
@@ -100,7 +99,7 @@ from opengwasdb.readers.interface import SourceVariant
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
-from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, z_critical
+from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts, z_critical
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.normalise import chromosome_sort_key, normalise_chromosome
 from opengwasdb.variants.reference import (
@@ -3553,7 +3552,7 @@ def _write_manifest(
                 **dense_provenance_block(
                     (n_variants, n_analyses), hint=chunk_shape, se_dtype=encoding.se.dtype
                 ),
-                "top_hit_thresholds": [5e-8, 5e-6, 5e-4],
+                "top_hit_thresholds": list(TOP_HIT_THRESHOLDS),
             },
             **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
             **(

@@ -13,11 +13,16 @@ from typing import Any
 
 import numpy as np
 import test_hybrid_build as hb
+import test_query_eaf_reads as qe
+import zarr
 from conftest import SOURCE_HEADER, SOURCE_ROWS
 from test_ragged_build_besd import _build_store as _build_ragged_store
 
 from opengwasdb.build.observed import build_dense_observed_from_sources
+from opengwasdb.encoding import DenseZPlane
+from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 
 #: 5e-8 / 5e-6 / 5e-4 are the indexed tiers; 1e-9 and 1e-3 have no tier, so a
@@ -51,6 +56,25 @@ def build_ragged(tmp_path: Path) -> Path:
     """The BESD fixture of test_ragged_build_besd: |z| 5.0, 6.7 / 10.0 / 7.5, 6.0,
     of which 1e-9 (z >= 6.11) keeps three of the five."""
     return _build_ragged_store(tmp_path, name="ragged.opengwasdb")
+
+
+def build_completed_dense(tmp_path: Path) -> Path:
+    """test_query_eaf_reads's Reference-Completed Dense Store with one imputed cell
+    made a decisive top hit (z = 8) and the index rebuilt from the store's own plane.
+
+    Its imputed cells are otherwise all low-|z|, so a top-hit query would have no
+    imputed row for `observed_only` to filter (`test_the_completed_fixture_has_an_
+    imputed_top_hit` holds the fixture to it).
+    """
+    out, _, _ = qe._dense_completed_fixture(tmp_path)
+    encoding = StoreManifest.load(out).encoding
+    root = zarr.open_group(str(out / "data.zarr"), mode="r+", zarr_format=3)
+    rows, cols = np.where(np.asarray(root["imputed"][:], dtype=bool))
+    DenseZPlane.open(root, encoding).patch(
+        rows[:1].astype("int64"), cols[:1].astype("int64"), np.array([8.0], dtype=np.float32)
+    )
+    build_top_hit_indexes(out)
+    return out
 
 
 def build_hybrid(tmp_path: Path) -> Path:
@@ -103,5 +127,6 @@ def query_matrix(store_path: Path, analysis_ids: list[str]) -> dict[str, dict[st
 STORES = {
     "dense": (build_dense, ["a1", "a2"]),
     "ragged": (build_ragged, ["ENSG00000000001", "ENSG00000000003"]),
+    "completed": (build_completed_dense, ["a", "b"]),
     "hybrid": (build_hybrid, ["trait_a", "trait_b"]),
 }

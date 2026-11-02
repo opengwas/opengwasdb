@@ -1,4 +1,1582 @@
 {
+ "completed": {
+  "0.0005|None|1|False": {
+   "analysis_index": [
+    0
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.16123898327350616
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "0.0005|None|1|True": {
+   "analysis_index": [
+    0
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.16123898327350616
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "0.0005|None|None|False": {
+   "analysis_index": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "imputed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911,
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911,
+    0.9800000190734863
+   ],
+   "se": [
+    0.16123898327350616,
+    0.07544240355491638,
+    0.07606831938028336,
+    0.07124695181846619,
+    0.19725428521633148,
+    0.08781005442142487,
+    0.09691664576530457,
+    0.09080342948436737,
+    0.3454451858997345
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150,
+    0,
+    50,
+    100,
+    150,
+    196
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "0.0005|None|None|True": {
+   "analysis_index": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    1
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911,
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911
+   ],
+   "se": [
+    0.16123898327350616,
+    0.07544240355491638,
+    0.07606831938028336,
+    0.07124695181846619,
+    0.19725428521633148,
+    0.08781005442142487,
+    0.09691664576530457,
+    0.09080342948436737
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150,
+    0,
+    50,
+    100,
+    150
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "0.0005|a|1|False": {
+   "analysis_index": [
+    0
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.16123898327350616
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "0.0005|a|1|True": {
+   "analysis_index": [
+    0
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.16123898327350616
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "0.0005|a|None|False": {
+   "analysis_index": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911
+   ],
+   "se": [
+    0.16123898327350616,
+    0.07544240355491638,
+    0.07606831938028336,
+    0.07124695181846619
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "0.0005|a|None|True": {
+   "analysis_index": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911
+   ],
+   "se": [
+    0.16123898327350616,
+    0.07544240355491638,
+    0.07606831938028336,
+    0.07124695181846619
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "0.0005|b|1|False": {
+   "analysis_index": [
+    1
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.19725428521633148
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "0.0005|b|1|True": {
+   "analysis_index": [
+    1
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.19725428521633148
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "0.0005|b|None|False": {
+   "analysis_index": [
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "imputed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911,
+    0.9800000190734863
+   ],
+   "se": [
+    0.19725428521633148,
+    0.08781005442142487,
+    0.09691664576530457,
+    0.09080342948436737,
+    0.3454451858997345
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150,
+    196
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "0.0005|b|None|True": {
+   "analysis_index": [
+    1,
+    1,
+    1,
+    1
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911
+   ],
+   "se": [
+    0.19725428521633148,
+    0.08781005442142487,
+    0.09691664576530457,
+    0.09080342948436737
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "0.0005|no-such-analysis|1|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.0005|no-such-analysis|1|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.0005|no-such-analysis|None|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.0005|no-such-analysis|None|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|None|1|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|None|1|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|None|None|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|None|None|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|a|1|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|a|1|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|a|None|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|a|None|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|b|1|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|b|1|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|b|None|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|b|None|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|no-such-analysis|1|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|no-such-analysis|1|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|no-such-analysis|None|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "0.001|no-such-analysis|None|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|None|1|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|None|1|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|None|None|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|None|None|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|a|1|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|a|1|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|a|None|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|a|None|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|b|1|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|b|1|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|b|None|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|b|None|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|no-such-analysis|1|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|no-such-analysis|1|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|no-such-analysis|None|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "1e-09|no-such-analysis|None|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "5e-06|None|1|False": {
+   "analysis_index": [
+    0
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.16123898327350616
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "5e-06|None|1|True": {
+   "analysis_index": [
+    0
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.16123898327350616
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "5e-06|None|None|False": {
+   "analysis_index": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "imputed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911,
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911,
+    0.9800000190734863
+   ],
+   "se": [
+    0.16123898327350616,
+    0.07544240355491638,
+    0.07606831938028336,
+    0.07124695181846619,
+    0.19725428521633148,
+    0.08781005442142487,
+    0.09691664576530457,
+    0.09080342948436737,
+    0.3454451858997345
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150,
+    0,
+    50,
+    100,
+    150,
+    196
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "5e-06|None|None|True": {
+   "analysis_index": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    1
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911,
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911
+   ],
+   "se": [
+    0.16123898327350616,
+    0.07544240355491638,
+    0.07606831938028336,
+    0.07124695181846619,
+    0.19725428521633148,
+    0.08781005442142487,
+    0.09691664576530457,
+    0.09080342948436737
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150,
+    0,
+    50,
+    100,
+    150
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "5e-06|a|1|False": {
+   "analysis_index": [
+    0
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.16123898327350616
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "5e-06|a|1|True": {
+   "analysis_index": [
+    0
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.16123898327350616
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "5e-06|a|None|False": {
+   "analysis_index": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911
+   ],
+   "se": [
+    0.16123898327350616,
+    0.07544240355491638,
+    0.07606831938028336,
+    0.07124695181846619
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "5e-06|a|None|True": {
+   "analysis_index": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911
+   ],
+   "se": [
+    0.16123898327350616,
+    0.07544240355491638,
+    0.07606831938028336,
+    0.07124695181846619
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "5e-06|b|1|False": {
+   "analysis_index": [
+    1
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.19725428521633148
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "5e-06|b|1|True": {
+   "analysis_index": [
+    1
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.19725428521633148
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "5e-06|b|None|False": {
+   "analysis_index": [
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "imputed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911,
+    0.9800000190734863
+   ],
+   "se": [
+    0.19725428521633148,
+    0.08781005442142487,
+    0.09691664576530457,
+    0.09080342948436737,
+    0.3454451858997345
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150,
+    196
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "5e-06|b|None|True": {
+   "analysis_index": [
+    1,
+    1,
+    1,
+    1
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911
+   ],
+   "se": [
+    0.19725428521633148,
+    0.08781005442142487,
+    0.09691664576530457,
+    0.09080342948436737
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "5e-06|no-such-analysis|1|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "5e-06|no-such-analysis|1|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "5e-06|no-such-analysis|None|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "5e-06|no-such-analysis|None|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "5e-08|None|1|False": {
+   "analysis_index": [
+    0
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.16123898327350616
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "5e-08|None|1|True": {
+   "analysis_index": [
+    0
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.16123898327350616
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "5e-08|None|None|False": {
+   "analysis_index": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "imputed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911,
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911,
+    0.9800000190734863
+   ],
+   "se": [
+    0.16123898327350616,
+    0.07544240355491638,
+    0.07606831938028336,
+    0.07124695181846619,
+    0.19725428521633148,
+    0.08781005442142487,
+    0.09691664576530457,
+    0.09080342948436737,
+    0.3454451858997345
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150,
+    0,
+    50,
+    100,
+    150,
+    196
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "5e-08|None|None|True": {
+   "analysis_index": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    1
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911,
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911
+   ],
+   "se": [
+    0.16123898327350616,
+    0.07544240355491638,
+    0.07606831938028336,
+    0.07124695181846619,
+    0.19725428521633148,
+    0.08781005442142487,
+    0.09691664576530457,
+    0.09080342948436737
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150,
+    0,
+    50,
+    100,
+    150
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "5e-08|a|1|False": {
+   "analysis_index": [
+    0
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.16123898327350616
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "5e-08|a|1|True": {
+   "analysis_index": [
+    0
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.16123898327350616
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "5e-08|a|None|False": {
+   "analysis_index": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911
+   ],
+   "se": [
+    0.16123898327350616,
+    0.07544240355491638,
+    0.07606831938028336,
+    0.07124695181846619
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "5e-08|a|None|True": {
+   "analysis_index": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911
+   ],
+   "se": [
+    0.16123898327350616,
+    0.07544240355491638,
+    0.07606831938028336,
+    0.07124695181846619
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "5e-08|b|1|False": {
+   "analysis_index": [
+    1
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.19725428521633148
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "5e-08|b|1|True": {
+   "analysis_index": [
+    1
+   ],
+   "association_status": [
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806
+   ],
+   "se": [
+    0.19725428521633148
+   ],
+   "variant_index": [
+    0
+   ],
+   "z": [
+    8.0
+   ]
+  },
+  "5e-08|b|None|False": {
+   "analysis_index": [
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed",
+    "imputed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911,
+    0.9800000190734863
+   ],
+   "se": [
+    0.19725428521633148,
+    0.08781005442142487,
+    0.09691664576530457,
+    0.09080342948436737,
+    0.3454451858997345
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150,
+    196
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "5e-08|b|None|True": {
+   "analysis_index": [
+    1,
+    1,
+    1,
+    1
+   ],
+   "association_status": [
+    "observed",
+    "observed",
+    "observed",
+    "observed"
+   ],
+   "eaf": [
+    0.05000000074505806,
+    0.27613064646720886,
+    0.5022612810134888,
+    0.7283919453620911
+   ],
+   "se": [
+    0.19725428521633148,
+    0.08781005442142487,
+    0.09691664576530457,
+    0.09080342948436737
+   ],
+   "variant_index": [
+    0,
+    50,
+    100,
+    150
+   ],
+   "z": [
+    8.0,
+    8.0,
+    8.0,
+    8.0
+   ]
+  },
+  "5e-08|no-such-analysis|1|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "5e-08|no-such-analysis|1|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "5e-08|no-such-analysis|None|False": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  },
+  "5e-08|no-such-analysis|None|True": {
+   "analysis_index": [],
+   "association_status": [],
+   "eaf": [],
+   "se": [],
+   "variant_index": [],
+   "z": []
+  }
+ },
  "dense": {
   "0.0005|None|1|False": {
    "analysis_index": [

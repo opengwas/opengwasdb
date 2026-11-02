@@ -29,6 +29,15 @@ def test_golden_pins_are_not_vacuous(layout):
     assert set(THRESHOLDS) == {1e-9, 5e-8, 5e-6, 5e-4, 1e-3}
 
 
+def test_the_completed_fixture_has_an_imputed_top_hit():
+    """`observed_only` only means something if there is an imputed hit to drop."""
+    everything = GOLDEN["completed"]["5e-08|None|None|False"]["association_status"]
+    observed = GOLDEN["completed"]["5e-08|None|None|True"]["association_status"]
+    assert "imputed" in everything
+    assert "imputed" not in observed
+    assert len(observed) < len(everything)
+
+
 @pytest.mark.parametrize("layout", sorted(STORES))
 def test_top_hits_match_the_pins_from_before_the_module(layout, tmp_path):
     build, analysis_ids = STORES[layout]

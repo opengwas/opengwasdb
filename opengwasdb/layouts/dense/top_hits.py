@@ -58,9 +58,8 @@ def write_top_hit_indexes(
         columns["eaf"] = np.asarray(eaf, dtype="float32")
 
     root = store_arrays.open_group_for_write(Path(store_path) / "data.zarr", "a")
-    top = store_arrays.require_group(root, "top_hits")
     top_hits.write_index(
-        top, columns, thresholds, int(root["z"].shape[1]), chunk_size, store_arrays.compressor()
+        root, columns, thresholds, int(root["z"].shape[1]), chunk_size, store_arrays.compressor()
     )
 
 

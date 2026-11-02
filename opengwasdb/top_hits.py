@@ -20,6 +20,7 @@ import importlib
 import logging
 import math
 from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -27,7 +28,8 @@ import numpy as np
 import zarr
 from numcodecs import Blosc
 
-from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS
+from opengwasdb.encoding.timing import log_phase
+from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS, Analysis
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import ArrayRole
 
@@ -36,6 +38,9 @@ log = logging.getLogger(__name__)
 # scipy ships no type stubs; importing by name keeps the build's one scipy use
 # from needing a per-site `type: ignore`.
 _special = importlib.import_module("scipy.special")
+
+#: The group a Store's data.zarr holds the Top-Hit Index in.
+TOP_HIT_GROUP = "top_hits"
 
 #: The thresholds a Store Release indexes, loosest last. Positionally paired with
 #: `TOP_HIT_COUNT_COLUMNS`, the `analyses.tsv` columns the tiers' counts land in.
@@ -92,14 +97,16 @@ def z_critical(threshold: float) -> float:
 
 
 def write_index(
-    top: zarr.Group,
+    root: zarr.Group,
     columns: dict[str, np.ndarray],
     thresholds: tuple[float, ...],
     n_analyses: int,
     chunk_size: int = TOP_HIT_CHUNK_SIZE,
     compressor: Blosc | None = None,
 ) -> dict[str, int]:
-    """Write one tier per threshold into `top`; return each tier's hit count.
+    """Write one tier per threshold into `root`'s Top-Hit Index group (created if
+    absent -- callers pass the Store's data group, never the index's own); return
+    each tier's hit count.
 
     `columns` holds every parallel candidate array the caller has -- the required
     ``variant_index``, ``analysis_index``, ``z`` and ``se`` and the optional
@@ -109,12 +116,14 @@ def write_index(
     lines, so an array cannot be dropped from one of those steps and not the
     others.
     """
+    top = store_arrays.require_group(root, TOP_HIT_GROUP)
     comp = compressor if compressor is not None else store_arrays.compressor()
     abs_z = np.abs(columns["z"]).astype("float32")
     written: dict[str, int] = {}
     for threshold in thresholds:
         key = threshold_key(threshold)
-        written[key] = _write_tier(top, threshold, columns, abs_z, n_analyses, chunk_size, comp)
+        with log_phase(log, f"Top-hit tier {key}"):
+            written[key] = _write_tier(top, threshold, columns, abs_z, n_analyses, chunk_size, comp)
         log.info("%s: %d hits", key, written[key])
     top.attrs["thresholds"] = list(thresholds)
     return written
@@ -282,7 +291,7 @@ class TopHitTiers:
         key = threshold_key(threshold)
         if key not in self._tiers:
             try:
-                self._tiers[key] = TopHitTier(self._root[f"top_hits/{key}"])
+                self._tiers[key] = TopHitTier(self._root[f"{TOP_HIT_GROUP}/{key}"])
             except KeyError:
                 self._tiers[key] = None
         return self._tiers[key]
@@ -308,7 +317,7 @@ def read_top_hit_counts(
     flat ``analysis_index`` array by hand for those.
     """
     root = store_arrays.open_group(Path(store_path) / "data.zarr")
-    top = root["top_hits"]
+    top = root[TOP_HIT_GROUP]
     counts: dict[str, list[int]] = {}
     for threshold in thresholds:
         column = _THRESHOLD_COLUMNS[threshold]
@@ -320,6 +329,28 @@ def read_top_hit_counts(
             analysis_index = np.asarray(group["analysis_index"], dtype=np.int64)
             counts[column] = np.bincount(analysis_index, minlength=n_analyses)[:n_analyses].tolist()
     return counts
+
+
+def add_hit_counts(store_path: str | Path, analyses: list[Analysis]) -> list[Analysis]:
+    """Add per-Analysis Top-Hit Counts from ``store_path``'s already-built
+    top-hit index onto whatever each ``Analysis`` already carries (ADR 0032).
+
+    Blank ``n_hits_*`` fields act as zero, so this both sets counts from
+    scratch (a fresh build's analyses start blank) and accumulates a Hybrid
+    store's Dense Component and Ragged Overflow Component contributions onto
+    the same Analysis when called once per component -- the two partition an
+    Analysis's associations disjointly (CONTEXT.md, Query Component).
+    """
+    counts = read_top_hit_counts(store_path, len(analyses))
+    return [
+        replace(
+            a,
+            n_hits_5e8=str(int(a.n_hits_5e8 or 0) + counts["n_hits_5e8"][i]),
+            n_hits_5e6=str(int(a.n_hits_5e6 or 0) + counts["n_hits_5e6"][i]),
+            n_hits_5e4=str(int(a.n_hits_5e4 or 0) + counts["n_hits_5e4"][i]),
+        )
+        for i, a in enumerate(analyses)
+    ]
 
 
 # ── structural rules ──────────────────────────────────────────────────────────

@@ -15,7 +15,6 @@ from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.store.arrays import (
     array_length,
     open_group_for_write,
-    require_group,
 )
 from opengwasdb.top_hits import TOP_HIT_THRESHOLDS
 
@@ -226,5 +225,4 @@ def build_ragged_top_hit_indexes(
         columns, n_analyses = _collect_ragged_candidates(csr, thresholds, slice_cells)
 
     root = open_group_for_write(store_path / "data.zarr", "a")
-    top = require_group(root, "top_hits")
-    top_hits.write_index(top, columns, thresholds, n_analyses)
+    top_hits.write_index(root, columns, thresholds, n_analyses)

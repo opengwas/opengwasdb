@@ -113,7 +113,7 @@ def _reference_tiers(
     root = zarr.open_group(str(scratch), mode="w", zarr_format=2)
     compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
     top_hits.write_index(root, columns, thresholds, n_analyses, compressor=compressor)
-    return root, n_analyses
+    return root[top_hits.TOP_HIT_GROUP], n_analyses
 
 
 def _arrays(group: zarr.Group) -> dict[str, np.ndarray]:
@@ -197,7 +197,7 @@ def test_streamed_tiers_match_materialising_reference(
         assert encoding.eaf.is_residual, "fixture must select a residual eaf plane"
     store = shutil.copytree(seed_store, tmp_path / "store")
     reference_path = shutil.copytree(seed_reference, tmp_path / "ref.zarr")
-    ref = zarr.open_group(str(reference_path), mode="r")
+    ref = zarr.open_group(str(reference_path), mode="r")[top_hits.TOP_HIT_GROUP]
     build_ragged_top_hit_indexes(
         store, thresholds=TOP_HIT_THRESHOLDS, encoding=encoding, slice_cells=slice_cells
     )

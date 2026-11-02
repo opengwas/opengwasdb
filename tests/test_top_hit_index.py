@@ -35,8 +35,7 @@ def _columns(*, imputed: bool = False, eaf: bool = False) -> dict[str, np.ndarra
 
 def _write(tmp_path, columns, thresholds=(5e-8, 5e-6, 5e-4)):
     root = store_arrays.open_group_for_write(tmp_path / "data.zarr", "a")
-    top = store_arrays.require_group(root, "top_hits")
-    top_hits.write_index(top, columns, thresholds, n_analyses=3)
+    top_hits.write_index(root, columns, thresholds, n_analyses=3)
     return store_arrays.open_group(tmp_path / "data.zarr")
 
 
@@ -85,6 +84,29 @@ def test_tier_keys_and_attributes_are_the_existing_format(tmp_path):
     assert sorted(group.keys()) == sorted(top_hits.TOP_HIT_TIER_ARRAYS)
     assert group["variant_index"].dtype == np.dtype("uint32")
     assert group["p_value"].dtype == np.dtype("float64")
+
+
+def test_the_module_addresses_its_own_group_and_logs_each_tier(tmp_path, caplog):
+    with caplog.at_level("INFO", logger="opengwasdb.top_hits"):
+        root = _write(tmp_path, _columns())
+    assert "top_hits" in root and sorted(root["top_hits"].group_keys()) == [
+        "p_5e_04", "p_5e_06", "p_5e_08"
+    ]
+    messages = [r.getMessage() for r in caplog.records]
+    for key in ("p_5e_08", "p_5e_06", "p_5e_04"):
+        assert any(m.startswith(f"Top-hit tier {key}: done in") for m in messages), key
+
+
+def test_add_hit_counts_sets_and_accumulates_the_counts(tmp_path):
+    from opengwasdb.model.analyses import Analysis
+
+    _write(tmp_path, _columns())
+    blank = [Analysis(analysis_id=f"a{i}", analysis_index=i) for i in range(3)]
+    once = top_hits.add_hit_counts(tmp_path, blank)
+    assert [a.n_hits_5e8 for a in once] == ["1", "1", "1"]
+    assert [a.n_hits_5e4 for a in once] == ["2", "1", "3"]
+    twice = top_hits.add_hit_counts(tmp_path, once)  # a Hybrid adds its two components
+    assert [a.n_hits_5e4 for a in twice] == ["4", "2", "6"]
 
 
 def test_counts_are_the_per_analysis_slice_lengths(tmp_path):

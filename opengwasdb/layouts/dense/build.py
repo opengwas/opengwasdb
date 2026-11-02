@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +44,7 @@ from opengwasdb.model.enums import (
 )
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
-from opengwasdb.top_hits import read_top_hit_counts
+from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts
 from opengwasdb.variants import (
     VARIANT_AXIS_FORMAT,
     VARIANT_OFFSETS_FILENAME,
@@ -63,28 +63,6 @@ class DenseBuildResult:
     output_path: Path
     n_variants: int
     n_analyses: int
-
-
-def add_hit_counts(store_path: str | Path, analyses: list[Analysis]) -> list[Analysis]:
-    """Add per-Analysis Top-Hit Counts from ``store_path``'s already-built
-    top-hit index onto whatever each ``Analysis`` already carries (ADR 0032).
-
-    Blank ``n_hits_*`` fields act as zero, so this both sets counts from
-    scratch (a fresh build's analyses start blank) and accumulates a Hybrid
-    store's Dense Component and Ragged Overflow Component contributions onto
-    the same Analysis when called once per component -- the two partition an
-    Analysis's associations disjointly (CONTEXT.md, Query Component).
-    """
-    counts = read_top_hit_counts(store_path, len(analyses))
-    return [
-        replace(
-            a,
-            n_hits_5e8=str(int(a.n_hits_5e8 or 0) + counts["n_hits_5e8"][i]),
-            n_hits_5e6=str(int(a.n_hits_5e6 or 0) + counts["n_hits_5e6"][i]),
-            n_hits_5e4=str(int(a.n_hits_5e4 or 0) + counts["n_hits_5e4"][i]),
-        )
-        for i, a in enumerate(analyses)
-    ]
 
 
 def write_analyses_tsv(output_path: Path, analyses: list[Analysis]) -> Path:
@@ -340,7 +318,7 @@ def _write_manifest(
             },
             "dense": {
                 **dense_provenance_block(shape, hint=chunk_shape, se_dtype=encoding.se.dtype),
-                "top_hit_thresholds": [5e-8, 5e-6, 5e-4],
+                "top_hit_thresholds": list(TOP_HIT_THRESHOLDS),
                 "variant_axis": {
                     "format": VARIANT_AXIS_FORMAT,
                     "table": VARIANT_TABLE_FILENAME,
