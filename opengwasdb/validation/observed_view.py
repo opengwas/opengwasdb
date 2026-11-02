@@ -72,6 +72,7 @@ FAILING_COUNTERS = (
     "inserted_observed_cells",
     "imputed_mask_invalid",
     "z_se_missingness_mismatch",
+    "non_canonical_marker",
 )
 _INFORMATIONAL_COUNTERS = (
     "missing_now_imputed",
@@ -113,6 +114,15 @@ class _Cells(NamedTuple):
     se: np.ndarray
     eaf: np.ndarray
     flags: np.ndarray | None = None
+
+    def marker_tally(self) -> Tally:
+        """Its cells counted by their two markers, through the shared rule (ADR 0070).
+
+        The imputed flag is not consulted: `PARTIAL` and `NON_CANONICAL` are decided by
+        the markers alone. The second is what `isnan` cannot say -- a NaN other than the
+        canonical one is a marker no reader accepts, not a missing cell (issue #373).
+        """
+        return Tally.of_decoded(self.z, self.se)
 
 
 class _Planes:
@@ -680,11 +690,18 @@ def _compare(
     inserted = np.ones(len(imputed), dtype=bool)
     inserted[local] = False
     on_inserted = _observed(_Cells(child.z[inserted], child.se[inserted], child.eaf[inserted]))
+    parent_markers, child_markers = parent.marker_tally(), child.marker_tally()
     counts = {
         "cells_compared": int(parent.z.size),
         "parent_observed": int(observed.sum()),
         "imputed_mask_invalid": int(((raw_imputed != 0) & (raw_imputed != 1)).sum()),
-        "z_se_missingness_mismatch": count_partial_cells(parent) + count_partial_cells(child),
+        "z_se_missingness_mismatch": (
+            parent_markers.count(State.PARTIAL) + child_markers.count(State.PARTIAL)
+        ),
+        "non_canonical_marker": (
+            parent_markers.count(State.NON_CANONICAL)
+            + child_markers.count(State.NON_CANONICAL)
+        ),
         "infinite_cells": count_infinite_cells(parent) + count_infinite_cells(child),
         "observed_marked_imputed": int((mapped_imputed[observed] != 0).sum()),
         "observed_missing_in_child": int((~child_observed[observed]).sum()),
@@ -709,15 +726,13 @@ def _observed(cells: _Cells) -> np.ndarray:
     decoded (spec §15, ADR 0038 §6). Deliberately not `isfinite`: an infinite
     value is a value, and a cell holding one is compared like any other rather
     than read as missing -- which is what failed a completion that reproduced
-    its source's eight infinite SE cells (issue #337).
+    its source's eight infinite SE cells (issue #337). A non-canonical marker is
+    a NaN too, so such a cell is missing here as well; it is counted apart, as the
+    invalid state it is (`non_canonical_marker`), because a read refuses it rather
+    than answering (spec §15, issue #373).
     """
     observed: np.ndarray = present(cells.z, cells.se)
     return observed
-
-
-def count_partial_cells(cells: _Cells) -> int:
-    """Cells with only one of Z and SE missing: their markers must agree (spec §15)."""
-    return Tally.of(np.isnan(cells.z), np.isnan(cells.se)).count(State.PARTIAL)
 
 
 def count_infinite_cells(cells: _Cells) -> int:

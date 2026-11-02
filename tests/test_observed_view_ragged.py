@@ -32,6 +32,7 @@ import test_dense_completion as tdc
 import test_ragged_completion as trc
 import zarr
 from cli_output import normalize_cli_output
+from presence_fixtures import RAGGED_Z_GROUP, float_plane_z, plant_payload_nan
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
@@ -370,6 +371,32 @@ def test_an_infinite_ragged_se_copied_identically_passes_and_is_counted(tmp_path
     assert result.exit_code == 0, result.output
     assert verdict["passed"] is True and verdict["failures"] == []
     assert verdict["totals"]["infinite_cells"] == 2
+
+
+# --- a non-canonical missing marker (spec §15, issue #373) -----------------
+
+
+def _plant_a_payload_nan(store: Path, analysis_index: int) -> None:
+    """Give one of an Analysis's `nan_rows` Z's non-canonical marker, SE left canonical."""
+    group = float_plane_z(store, RAGGED_Z_GROUP)
+    reader = RaggedCSRReader(store)
+    start, _ = reader.span(analysis_index)
+    missing = np.flatnonzero(np.isnan(reader.get_analysis(analysis_index).z))
+    assert missing.size, "the fixture must hold a missing association to plant in"
+    position = start + int(missing[0])
+    assert np.isnan(np.asarray(group["se"][position], dtype=np.float32))
+    plant_payload_nan(group, position)
+
+
+def test_a_non_canonical_z_in_the_target_is_counted_and_fails(tmp_path, pair):
+    _, completed, _ = pair
+    _plant_a_payload_nan(completed, 1)  # `eur_sparse`, whose four block rows are NaN
+
+    result, verdict = _check(pair, tmp_path)
+
+    assert result.exit_code == 1, result.output
+    assert verdict["totals"]["non_canonical_marker"] == 1
+    assert "non_canonical_marker" in verdict["failures"]
 
 
 # --- seam 3: refusals ------------------------------------------------------

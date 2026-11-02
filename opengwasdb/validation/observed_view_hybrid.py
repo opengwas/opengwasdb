@@ -42,7 +42,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from opengwasdb.associations import Cells, CsrReader
+from opengwasdb.associations import Cells, CsrReader, State
 from opengwasdb.encoding import (
     EAF_BASELINE,
     EafExceptionBuilder,
@@ -77,7 +77,6 @@ from opengwasdb.validation.observed_view import (
     _shard_rows,
     _unsampled_record,
     count_infinite_cells,
-    count_partial_cells,
 )
 from opengwasdb.variants import VariantAxis
 
@@ -91,6 +90,7 @@ OVERFLOW_FAILING = (
     "observed_missing_in_child",
     "missing_became_observed",
     "z_se_missingness_mismatch",
+    "non_canonical_marker",
 )
 _OVERFLOW_INFORMATIONAL = (
     "parent_associations",
@@ -106,6 +106,7 @@ CROSSOVER_FAILING = (
     "observed_marked_imputed",
     "observed_missing_in_child",
     "z_se_missingness_mismatch",
+    "non_canonical_marker",
 )
 
 
@@ -495,10 +496,14 @@ def _check_crossovers(pair: _HybridPair, crossovers: _Crossovers) -> dict[str, A
         tally.totals["observed_marked_imputed"] += int((imputed != 0).sum())
         tally.totals["infinite_cells"] += count_infinite_cells(source) + count_infinite_cells(found)
         # A crossover is the one kind of cell the Dense part cannot check: it is set
-        # aside there (`_CrossoversSetAside`), so the paired-marker rule is enforced
-        # here or nowhere (issue #337, spec §15).
+        # aside there (`_CrossoversSetAside`), so the paired-marker rule and the marker
+        # payloads are enforced here or nowhere (issue #337, issue #373, spec §15).
+        source_markers, found_markers = source.marker_tally(), found.marker_tally()
         tally.totals["z_se_missingness_mismatch"] += (
-            count_partial_cells(source) + count_partial_cells(found)
+            source_markers.count(State.PARTIAL) + found_markers.count(State.PARTIAL)
+        )
+        tally.totals["non_canonical_marker"] += (
+            source_markers.count(State.NON_CANONICAL) + found_markers.count(State.NON_CANONICAL)
         )
         tally.add_planes(expected, found)
         shift.add_planes(source, expected)
@@ -635,6 +640,7 @@ def _compare_analysis(pair: _HybridPair, axes: _HybridAxes, analysis: int, tally
     off_dense = np.flatnonzero(axes.dense_row_of_shared[child.variant_index] < 0)
     p, c = _match(keys[kept], child.variant_index[off_dense])
     p, c = kept[p], off_dense[c]
+    parent_markers, child_markers = parent.cells.marker_tally(), child.cells.marker_tally()
     counts = {
         "parent_associations": len(keys),
         "crossovers": int(crossing.sum()),
@@ -642,7 +648,11 @@ def _compare_analysis(pair: _HybridPair, axes: _HybridAxes, analysis: int, tally
         "observed_missing_in_child": len(kept) - len(p),
         "missing_became_observed": len(off_dense) - len(c),
         "z_se_missingness_mismatch": (
-            count_partial_cells(parent.cells) + count_partial_cells(child.cells)
+            parent_markers.count(State.PARTIAL) + child_markers.count(State.PARTIAL)
+        ),
+        "non_canonical_marker": (
+            parent_markers.count(State.NON_CANONICAL)
+            + child_markers.count(State.NON_CANONICAL)
         ),
         # Present-but-infinite cells on both sides: reported, never a failure (issue #337).
         "infinite_cells": count_infinite_cells(parent.cells) + count_infinite_cells(child.cells),

@@ -45,7 +45,7 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.associations import Cells, CsrReader, Inspection, State
+from opengwasdb.associations import Cells, CsrReader, Inspection, State, Tally
 from opengwasdb.completion.ld_panel import (
     LDBlock,
     LdPanelNotFoundError,
@@ -74,7 +74,6 @@ from opengwasdb.validation.observed_view import (
     _plane_difference,
     _store_record,
     count_infinite_cells,
-    count_partial_cells,
 )
 from opengwasdb.variants import VariantAxis, is_indexable_alid
 
@@ -97,6 +96,7 @@ FAILING_COUNTERS = (
     "imputed_in_non_admitted",
     "imputed_mask_invalid",
     "z_se_missingness_mismatch",
+    "non_canonical_marker",
     "target_variants_unordered",
     "quality_blocks_not_in_regions",
 )
@@ -589,7 +589,7 @@ def _check_analysis(
     matched = np.zeros(len(target_vi), dtype=bool)
     matched[at[both]] = True
     # The target's States and counts are the readers' own (spec §15, ADR 0070).
-    target_tally = tgt.tally()
+    source_tally, target_tally = src.tally(), tgt.tally()
     clean = tgt.state == State.OBSERVED
     is_imputed = raw_imputed == 1
     counts = {
@@ -597,9 +597,7 @@ def _check_analysis(
         "imputed": int(is_imputed.sum()),
         "nan_rows": target_tally.count(State.MISSING),
         "imputed_mask_invalid": target_tally.flags_not_binary,
-        "z_se_missingness_mismatch": (
-            count_partial_cells(source_cells) + count_partial_cells(target_cells)
-        ),
+        **_marker_counts(source_tally, target_tally),
         # Present-but-infinite cells on both sides: reported, never a failure (issue #337).
         "infinite_cells": count_infinite_cells(source_cells) + count_infinite_cells(target_cells),
         "target_variants_unordered": int((np.diff(target_vi) <= 0).sum()),
@@ -619,3 +617,21 @@ def _check_analysis(
             getattr(source_cells, plane)[both], getattr(target_cells, plane)[at[both]]
         )
     return counts, diffs
+
+
+def _marker_counts(source: Tally, target: Tally) -> dict[str, int]:
+    """The counters both sides' markers decide, over an Analysis's whole sequence.
+
+    A cell with one of Z and SE missing rather than both is `PARTIAL`; one whose marker
+    is a NaN other than the canonical one is `NON_CANONICAL`, an invalid state no reader
+    accepts. `isnan` alone reads the second as missing, which is why it has its own
+    counter rather than falling into `nan_rows` (spec §15, issue #373).
+    """
+    return {
+        "z_se_missingness_mismatch": (
+            source.count(State.PARTIAL) + target.count(State.PARTIAL)
+        ),
+        "non_canonical_marker": (
+            source.count(State.NON_CANONICAL) + target.count(State.NON_CANONICAL)
+        ),
+    }

@@ -123,8 +123,9 @@ same way, the Dense Component's before the Overflow's within each Analysis.
   SE decode, the subset's own decoder that `SubsetReader` reads through, and
   the Hybrid observed-view check's codec round trip. The guard recognises a
   decode by what is called, so any other fails it.
-- `check-observed-view` counts by the readers' States, but does not yet count a
-  non-canonical marker on its own; such a cell is missing to it, as before.
+- `check-observed-view` counts by the readers' States, and a non-canonical marker is
+  `non_canonical_marker`, which fails the verdict in whatever part of the pair counts it
+  (`dense.`, `overflow.`, `crossovers.`). Before #373 such a cell was missing to it.
 - Two parts of the approved interface are deferred, neither a regression, since
   the readers they replace also read whole sequences: `windows(max_cells=…)`,
   which would let `validate` read a Ragged sequence a window at a time instead of
