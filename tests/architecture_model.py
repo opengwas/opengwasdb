@@ -42,7 +42,9 @@ REQUIRED_COMPONENT_KEYS = ("id", "name", "container", "layer", "stages", "summar
 SOURCE_ROOT = "opengwasdb/"
 SOURCE_SUFFIX = ".py"
 
-#: The file that names a package rather than a module in it.
+#: The file that names a package rather than a module in it, and how that file
+#: reads at the end of a dotted module name.
+INITIALIZER = "__init__.py"
 SUBPACKAGE_MODULE = ".__init__"
 
 
@@ -158,11 +160,12 @@ def _unclaimed_source_files(claim_list: Sequence[Claim], tracked: Sequence[str])
 class ImportEdge:
     """One import from one engine component into another, as the source wrote it.
 
-    `name` is the dotted target the import names -- `opengwasdb.encoding` for
-    `from opengwasdb.encoding import StoreEncoding`, and the module plus the name
-    for `from opengwasdb.encoding.codec import read`. Keeping the name as written
-    is what makes the baseline a list of imports rather than a count: a second
-    name from an already-listed module is a new entry, not a hidden one.
+    `name` is the dotted target the import names, kept exactly as the source
+    writes it -- `opengwasdb.encoding.StoreEncoding` for `from opengwasdb.encoding
+    import StoreEncoding`, and `opengwasdb.encoding.codec.read` for `from
+    opengwasdb.encoding.codec import read`. Keeping the name as written is what
+    makes the baseline a list of imports rather than a count: a second name from
+    an already-listed module is a new entry, not a hidden one.
     """
 
     file: str
@@ -179,10 +182,25 @@ def module_name(path: str) -> str:
     return dotted
 
 
+def is_initializer(path: str) -> bool:
+    """Whether `path` names a package rather than a module in one.
+
+    The test is on the path, whose last segment is `__init__.py`; testing the
+    dotted name for `.__init__` never matches a path, which silently resolved an
+    initializer's relative imports one package too high (review of #359).
+    """
+    return path == INITIALIZER or path.endswith("/" + INITIALIZER)
+
+
 def package_of(path: str) -> str:
-    """The package a module's relative imports are resolved against."""
+    """The package a module's relative imports are resolved against.
+
+    An initializer is its own package -- `from . import x` in `a/b/__init__.py`
+    means `a.b.x` -- and any other module's package is its name minus the last
+    part.
+    """
     module = module_name(path)
-    return module if path.endswith(SUBPACKAGE_MODULE) else module.rpartition(".")[0]
+    return module if is_initializer(path) else module.rpartition(".")[0]
 
 
 def imports_in_source(path: str, source: str) -> set[str]:

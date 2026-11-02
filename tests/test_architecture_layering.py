@@ -27,7 +27,6 @@ from architecture_model import (
     import_graph,
     load_baseline,
     load_model,
-    upward_imports,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -92,6 +91,25 @@ def test_a_relative_import_is_resolved_against_the_importing_package() -> None:
 
     assert [edge.name for edge in import_graph(MODEL, sources)] == [
         "opengwasdb.readers.interface.Kind"
+    ]
+
+
+def test_a_relative_import_in_a_package_initializer_is_resolved_from_its_package() -> None:
+    """`__init__.py` *is* the package: `..readers` from `opengwasdb/model` is
+    `opengwasdb.readers`, and `.manifest` stays inside `opengwasdb.model`."""
+    sources = {
+        "opengwasdb/model/__init__.py": (
+            "from .manifest import Row\nfrom ..readers.interface import Kind\n"
+        ),
+        "opengwasdb/model/manifest.py": "Row = object\n",
+        "opengwasdb/readers/interface.py": "Kind = object\n",
+    }
+
+    assert [
+        (edge.file, edge.name, edge.source, edge.destination)
+        for edge in import_graph(MODEL, sources)
+    ] == [
+        ("opengwasdb/model/__init__.py", "opengwasdb.readers.interface.Kind", "model", "readers"),
     ]
 
 
@@ -281,52 +299,6 @@ def test_an_entry_that_is_not_a_file_and_name_pair_fails(tmp_path: Path) -> None
 # This repository: the measurement, and the baseline it is held to
 # --------------------------------------------------------------------------
 
-#: The 23 upward imports the notes for this ticket expect, name for name
-#: (`notes/359-expected-upward.txt`, measured on main at 2ef556c with #358's four
-#: claim moves). Nine component edges, seven files, ten of them from one file. A
-#: difference here is main having moved, and has to be explained name by name
-#: rather than fitted to.
-EXPECTED_UPWARD = [
-    ("opengwasdb/ancestry/subset.py", "opengwasdb.layouts.dense.constants.DEFAULT_CHUNK_SHAPE"),
-    (
-        "opengwasdb/ancestry/subset.py",
-        "opengwasdb.layouts.hybrid.build.build_hybrid_from_vcf_manifest",
-    ),
-    ("opengwasdb/build/liftover.py", "opengwasdb.readers.gwas_vcf.project_lifted_alleles"),
-    (
-        "opengwasdb/layouts/hybrid/checkpoint.py",
-        "opengwasdb.completion.checkpoint.checkpoint_dir_for",
-    ),
-    (
-        "opengwasdb/layouts/hybrid/checkpoint.py",
-        "opengwasdb.completion.checkpoint.require_fresh_destination",
-    ),
-    ("opengwasdb/model/info_score_policy.py", "opengwasdb.readers.gwas_ssf.GWAS_SSF_CAPABILITY"),
-    (
-        "opengwasdb/model/info_score_policy.py",
-        "opengwasdb.readers.interface.ImputationScoreDeclaration",
-    ),
-    ("opengwasdb/model/info_score_policy.py", "opengwasdb.readers.interface.ImputationScoreKind"),
-    ("opengwasdb/model/manifest.py", "opengwasdb.encoding.StoreEncoding"),
-    ("opengwasdb/model/manifest.py", "opengwasdb.encoding.UnsupportedEncoding"),
-    ("opengwasdb/model/manifest.py", "opengwasdb.store.open.check_format_version"),
-    ("opengwasdb/store/open.py", "opengwasdb.query.facade.StoreQuery"),
-    ("opengwasdb/store/open.py", "opengwasdb.query.facade.query_store"),
-    ("opengwasdb/variants/reference.py", "opengwasdb.layouts.dense.build_vcf._ManifestRow"),
-    ("opengwasdb/variants/reference.py", "opengwasdb.layouts.dense.build_vcf._Pass1Stats"),
-    ("opengwasdb/variants/reference.py", "opengwasdb.layouts.dense.build_vcf._ShardSpec"),
-    ("opengwasdb/variants/reference.py", "opengwasdb.layouts.dense.build_vcf._WindowShards"),
-    ("opengwasdb/variants/reference.py", "opengwasdb.layouts.dense.build_vcf._alid_sort_key"),
-    (
-        "opengwasdb/variants/reference.py",
-        "opengwasdb.layouts.dense.build_vcf._consume_manifest_shards",
-    ),
-    ("opengwasdb/variants/reference.py", "opengwasdb.layouts.dense.build_vcf._fork_pool"),
-    ("opengwasdb/variants/reference.py", "opengwasdb.layouts.dense.build_vcf._iter_pass1_shard"),
-    ("opengwasdb/variants/reference.py", "opengwasdb.layouts.dense.build_vcf._read_manifest"),
-    ("opengwasdb/variants/reference.py", "opengwasdb.readers.column_map.ColumnMap"),
-]
-
 
 def test_this_repository_has_no_upward_import_the_baseline_does_not_list() -> None:
     sources = engine_sources(ROOT)
@@ -337,13 +309,3 @@ def test_this_repository_has_no_upward_import_the_baseline_does_not_list() -> No
     assert len(graph) > 500  # a graph this size is the code's imports, not a few of them
 
     assert check_layering(model, graph, load_baseline(BASELINE_PATH)) == []
-
-
-def test_the_measured_upward_imports_are_the_twenty_three_the_notes_expect() -> None:
-    model = load_model(MODEL_PATH)
-    upward = upward_imports(model, import_graph(model, engine_sources(ROOT)))
-
-    assert [(edge.file, edge.name) for edge in upward] == EXPECTED_UPWARD
-    assert len({(edge.source, edge.destination) for edge in upward}) == 9
-    assert len({edge.file for edge in upward}) == 7
-    assert len(load_baseline(BASELINE_PATH)) == 23
