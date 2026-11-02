@@ -275,6 +275,7 @@ stopped working when the project moved to Pixi. Neither would fail a test.
 |---|---|---|
 | `docs/spec/store-format.md` | any change to the store format, envelope, or a validation rule | by hand, **in the same commit as the code** |
 | `docs/adr/` | a decision that supersedes an earlier one | banner on the old ADR naming its successor; new ADR |
+| `docs/architecture/components.yaml` and `layering-baseline.yaml` | a new engine source file no component claims, or an upward import that has gone | add the claim `tests/test_architecture_model.py` names; delete the entry `tests/test_architecture_layering.py` names |
 | `CHANGELOG.md` | nothing after the cutover — it is the history up to `0.3.0` | do not edit it; add `changelog.d/<slug>.<type>.md` instead |
 | `docs/store-format-compatibility.md` | a change to `format_version`, or to the formats the package writes or reads | add the row **in the same commit as the code** |
 | `README.md` | status, quickstart, or tooling drift | by hand |

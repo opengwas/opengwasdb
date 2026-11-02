@@ -1,0 +1,87 @@
+# The engine's upward imports: the imports that cross a layer in the wrong direction.
+#
+# Part of the living architecture map (epic opengwas/opengwasdb-stores#416), and the
+# ratchet decision 8 there asks for. `docs/architecture/components.yaml` declares six
+# layers and says a component may import from its own layer or below.
+# tests/test_architecture_layering.py builds the import graph from the AST of
+# `opengwasdb/` and fails on an import that points up a layer and is not listed here,
+# and on a listed import that has gone. Imports within a layer, or down, are allowed
+# and are not listed.
+#
+# A person reviews and commits this list. It only ever shrinks: a new upward import
+# fails CI, and the fix is to move the import or the claim, never to add a line here.
+# Agents do not add to it, the same rule as the quality gates. Once it is empty -- or
+# the layers are redrawn to match the code -- an import-linter contract replaces the
+# test.
+#
+# Each entry is the importing file and the name it imports, as the source writes it
+# (a relative import resolved against its package). Not a count: a count would let a
+# new import from a module already listed hide behind a fixed one, which is exactly
+# how the nine private names below from the Dense VCF builder would go unnoticed.
+#
+# Measured on `orch/416/359`: 23 imports over 9 component edges in 7 files.
+allowed:
+  # Ancestry Assignment (layer 2) -> Dense Layout and Hybrid Layout (layer 3):
+  # subset routing asks a layout to build a subset and to name a chunk shape.
+  - file: opengwasdb/ancestry/subset.py
+    name: opengwasdb.layouts.dense.constants.DEFAULT_CHUNK_SHAPE
+  - file: opengwasdb/ancestry/subset.py
+    name: opengwasdb.layouts.hybrid.build.build_hybrid_from_vcf_manifest
+  # Variant Identity (layer 0) -> Source Readers (layer 1): liftover projects a
+  # lifted record through the GWAS-VCF reader's own allele projection.
+  - file: opengwasdb/build/liftover.py
+    name: opengwasdb.readers.gwas_vcf.project_lifted_alleles
+  # Hybrid Layout (layer 3) -> Reference Completion (layer 4): the checkpoint
+  # helpers live beside the completion pipelines that give a checkpoint its meaning.
+  - file: opengwasdb/layouts/hybrid/checkpoint.py
+    name: opengwasdb.completion.checkpoint.checkpoint_dir_for
+  - file: opengwasdb/layouts/hybrid/checkpoint.py
+    name: opengwasdb.completion.checkpoint.require_fresh_destination
+  # Store contract model (layer 0) -> Source Readers (layer 1): the INFO score
+  # policy names the declaration kinds the readers parse.
+  - file: opengwasdb/model/info_score_policy.py
+    name: opengwasdb.readers.gwas_ssf.GWAS_SSF_CAPABILITY
+  - file: opengwasdb/model/info_score_policy.py
+    name: opengwasdb.readers.interface.ImputationScoreDeclaration
+  - file: opengwasdb/model/info_score_policy.py
+    name: opengwasdb.readers.interface.ImputationScoreKind
+  # Store contract model (layer 0) -> Store Encoding and Store Release envelope
+  # (layer 1): a manifest records the encoding it was written with, and asks the
+  # store whether a format version can be read.
+  - file: opengwasdb/model/manifest.py
+    name: opengwasdb.encoding.StoreEncoding
+  - file: opengwasdb/model/manifest.py
+    name: opengwasdb.encoding.UnsupportedEncoding
+  - file: opengwasdb/model/manifest.py
+    name: opengwasdb.store.open.check_format_version
+  # Store Release envelope (layer 1) -> Query (layer 4): opening a store hands back
+  # the query facade, so the storage layer knows its caller.
+  - file: opengwasdb/store/open.py
+    name: opengwasdb.query.facade.StoreQuery
+  - file: opengwasdb/store/open.py
+    name: opengwasdb.query.facade.query_store
+  # Variant Identity (layer 0) -> Dense Layout (layer 3): reference extraction reuses
+  # the Dense VCF builder's Pass 1 machinery. Ten of the 23 come from this one file,
+  # and the nine private names are the first place to tighten.
+  - file: opengwasdb/variants/reference.py
+    name: opengwasdb.layouts.dense.build_vcf._ManifestRow
+  - file: opengwasdb/variants/reference.py
+    name: opengwasdb.layouts.dense.build_vcf._Pass1Stats
+  - file: opengwasdb/variants/reference.py
+    name: opengwasdb.layouts.dense.build_vcf._ShardSpec
+  - file: opengwasdb/variants/reference.py
+    name: opengwasdb.layouts.dense.build_vcf._WindowShards
+  - file: opengwasdb/variants/reference.py
+    name: opengwasdb.layouts.dense.build_vcf._alid_sort_key
+  - file: opengwasdb/variants/reference.py
+    name: opengwasdb.layouts.dense.build_vcf._consume_manifest_shards
+  - file: opengwasdb/variants/reference.py
+    name: opengwasdb.layouts.dense.build_vcf._fork_pool
+  - file: opengwasdb/variants/reference.py
+    name: opengwasdb.layouts.dense.build_vcf._iter_pass1_shard
+  - file: opengwasdb/variants/reference.py
+    name: opengwasdb.layouts.dense.build_vcf._read_manifest
+  # Variant Identity (layer 0) -> Source Readers (layer 1): reference extraction
+  # reads source columns through a Column Map.
+  - file: opengwasdb/variants/reference.py
+    name: opengwasdb.readers.column_map.ColumnMap
