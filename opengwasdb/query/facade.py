@@ -57,8 +57,12 @@ context, and gene identity carried via `analysis_label`/`trait_ontology_id`,
 ADR 0035) that Dense/Hybrid rows mostly leave blank, and leave Dense/Hybrid's
 other Trait-identity/effect-scale columns mostly blank in turn; a caller
 grouping Ragged Analyses by a shared gene filters this table on
-`trait_ontology_id` rather than through a separate lookup. `rho()`/
-`rho_row()`/`rho_matrix()` (ADR-0025, a Dense storage artifact) are exposed
+`trait_ontology_id` rather than through a separate lookup. `analysis_label`
+reaches a caller as the stored column, blank included -- a release that
+supplied no label says so, rather than having one invented for it; a *display*
+label is `opengwasdb.model.analyses.analysis_label()`'s job, the one
+implementation of that fallback (issue #57). `rho()`/`rho_row()`/
+`rho_matrix()` (ADR-0025, a Dense storage artifact) are exposed
 on `StoreQuery` and on `HybridStoreQuery` (delegated to its Dense Component);
 `RaggedStoreQuery` has no Rho Matrix format. `range_by_analysis()` (query by
 probe/TSS position) is Ragged-only: it scans `AnalysesIndex`'s already

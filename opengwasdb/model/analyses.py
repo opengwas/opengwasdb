@@ -229,6 +229,24 @@ def write_analyses(path: str | Path, table: AnalysesTable) -> Path:
     return out_path
 
 
+def analysis_label(row: Mapping[str, str]) -> str:
+    """The best-available human label for one `analyses.tsv` row.
+
+    `analysis_label`, or the `analysis_id` when the release supplies no label --
+    a store built without a label for an Analysis (and every release predating
+    ADR 0034, whose table has no `analysis_label` column at all) still has to be
+    browsable and sortable under something a person can read.
+
+    Deliberately the *only* implementation of that fallback: `overview.html`'s
+    Rho tab and anything else that wants a display label call this rather than
+    spelling the chain out again (issue #57). It is a presentation helper, so it
+    returns a label rather than writing one back into the row: a blank
+    `analysis_label` in a store's `analyses.tsv` is an honest "no label was
+    supplied", and `analyses_table()` hands that column through unchanged.
+    """
+    return row.get("analysis_label") or row.get("analysis_id", "")
+
+
 def validate_analyses(table: AnalysesTable) -> list[str]:
     """Validate `table` against the analyses.tsv contract.
 

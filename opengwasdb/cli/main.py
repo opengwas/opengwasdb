@@ -39,7 +39,6 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     OverflowOnlyPolicy,
     build_indexed_subset,
 )
-from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.rho import (
     DEFAULT_RHO_MIN_NULLS,
     DEFAULT_RHO_WINDOW_BP,
@@ -60,6 +59,7 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.overview import write_overview_html
 from opengwasdb.query import query_store
 from opengwasdb.query.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
 from opengwasdb.readers import known_capabilities
