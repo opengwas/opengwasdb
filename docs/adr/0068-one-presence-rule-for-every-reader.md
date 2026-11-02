@@ -92,13 +92,15 @@ order is unified on Ragged's.
 - `validate` gains the paired-marker check on Observed-Only Ragged releases and
   Hybrid Overflows, and fails a missing Z beside `+inf`; an imputed cell with an
   infinite SE now passes, warned. No published release changes verdict.
-- `RaggedCSRReader`'s decode surface moves behind `CsrReader`. What stays public
-  is structure, for code that walks the sequence itself: `offsets`, `span()`,
-  `variant_index()`, `variant_index_at()`, `analysis_index_at()`, a Z-only
-  `z_slice()`, the imputed mask and `pair_positions()`. The query facade,
-  `validate`, the observed-view checks and the Ragged Top-Hit harvest reach none
-  of its underscore attributes; Reference Completion's reads of it change with
-  the builders' rework (#352).
+- `RaggedCSRReader` answers the question #58 left open: what stays public is
+  structure, for code that walks the sequence itself -- `offsets`, `span()`,
+  `sequence_length`, `variant_index()`, `variant_index_at()`,
+  `analysis_index_at()`, a Z-only `z_slice()`, the imputed mask and
+  `pair_positions()`. The query facade and the observed-view checks decode only
+  through `CsrReader`, and a test holds them to it. Nothing reaches its
+  underscore attributes except Reference Completion, whose reads, with
+  `get_analysis()`, change in the builders' rework (#352); `validate`'s Top-Hit
+  check and the Top-Hit harvest still call its public decode members.
 - The CLI's `--format json` output still omits `eaf` and `association_status`;
   the record makes adding them a one-line change, which waits on the
   documentation in `opengwasdb-stores`.

@@ -1,7 +1,6 @@
 """Tests for zarr CSR ragged storage (issue 035)."""
 
 import numpy as np
-import pytest
 
 from opengwasdb.encoding import (
     EafEncoding,
@@ -138,18 +137,6 @@ def test_n_associations_counter(tmp_path):
 
     reader = RaggedCSRReader(tmp_path, ENCODING)
     assert reader.n_associations == 5
-
-
-def test_get_analyses_batch(tmp_path):
-    writer, expected = _make_writer(10)
-    writer.flush(tmp_path, ENCODING)
-
-    reader = RaggedCSRReader(tmp_path, ENCODING)
-    results = reader.get_analyses([0, 5, 9])
-    assert len(results) == 3
-    for result, idx in zip(results, [0, 5, 9]):
-        vi, z, se = expected[idx]
-        np.testing.assert_array_equal(result.variant_index, vi)
 
 
 # The Dense and Ragged per-variant shard policies differ above 1,000,000

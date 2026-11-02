@@ -13,7 +13,6 @@ from opengwasdb.encoding import StoreEncoding
 from opengwasdb.encoding.timing import log_phase
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.store.arrays import (
-    array_length,
     open_group_for_write,
 )
 from opengwasdb.top_hits import TOP_HIT_THRESHOLDS
@@ -72,8 +71,8 @@ def _read_ragged_columns(
     cell at 523,060,451 cells.
     """
     csr = RaggedCSRReader(store_path, encoding)
-    offsets = csr._offsets[:]
-    vi_all = csr._variant_index[:].astype(np.int32)
+    offsets = csr.offsets
+    vi_all = csr.variant_index(0, csr.sequence_length)
     z_all = csr.z_all()
     se_all = csr.se_all()
     n_analyses = len(offsets) - 1
@@ -85,9 +84,9 @@ def _read_ragged_columns(
         "z": z_all,
         "se": se_all,
     }
-    if "imputed" in csr._root:
-        columns["imputed"] = csr._root["imputed"][:].astype(np.uint8)
-    if csr._eaf_plane.can_report_frequencies:
+    if csr.has_imputed:
+        columns["imputed"] = csr.imputed(0, csr.sequence_length)
+    if csr.can_report_frequencies:
         columns["eaf"] = csr.eaf_at(np.arange(len(vi_all), dtype=np.int64))
     return columns, n_analyses
 
@@ -112,15 +111,13 @@ def _gather_slice_candidates(
         return None
     positions = np.flatnonzero(keep).astype(np.int64) + lo
     columns: dict[str, np.ndarray] = {
-        "variant_index": np.asarray(csr._variant_index.oindex[positions], dtype=np.int32),
+        "variant_index": csr.variant_index_at(positions),
         "analysis_index": _slice_analysis_indices(offsets, lo, hi)[keep],
         "z": z[keep],
         "se": csr.se_at(positions),
     }
     if has_imputed:
-        columns["imputed"] = np.asarray(
-            csr._root["imputed"].oindex[positions], dtype=np.uint8
-        )
+        columns["imputed"] = csr.imputed_at(positions)
     if has_eaf:
         columns["eaf"] = csr.eaf_at(positions)
     return columns
@@ -156,12 +153,12 @@ def _collect_ragged_candidates(
     with an ``imputed`` column keep exactly the columns the materialising loader
     produced.
     """
-    total = array_length(csr._variant_index)
-    offsets = np.asarray(csr._offsets[:], dtype=np.int64)
+    total = csr.sequence_length
+    offsets = csr.offsets
     n_analyses = len(offsets) - 1
     loosest = top_hits.z_critical(max(thresholds))
-    has_imputed = "imputed" in csr._root
-    has_eaf = csr._eaf_plane.can_report_frequencies
+    has_imputed = csr.has_imputed
+    has_eaf = csr.can_report_frequencies
 
     parts: dict[str, list[np.ndarray]] = {
         "variant_index": [],

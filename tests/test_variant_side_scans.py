@@ -18,9 +18,9 @@ This module pins the two properties the change must hold:
   `se_all` are never called, and a query whose answer touches one chunk of `z`
   reads one chunk, not every chunk, even when the array holds more than one.
 
-The wrong versions live in the tests that monkeypatch them: a search off by one
-on the variant axis and a dropped imputed mask. Each is asserted to make the
-identity check fail, so the identity check is known to have teeth.
+The wrong version lives in the test that monkeypatches it: a dropped imputed
+mask, asserted to make the identity check fail, so the identity check is known
+to have teeth.
 """
 
 from __future__ import annotations
@@ -347,77 +347,8 @@ def test_unindexed_hybrid_store_is_refused(hybrid_residual_scanned: Path) -> Non
 # ── the identity check has teeth (deliberately wrong versions) ──────────────
 
 
-def _off_by_one_using(original):
-    """A scan for the variant one *below* the target: plausible, wrong."""
-
-    def search(self, wanted, **kwargs):
-        return original(self, np.asarray(wanted, dtype=np.int32) - 1, **kwargs)
-
-    return search
-
-
-def _shifted_window(self, wanted, *, analysis_index=None):
-    """Drop each window's first row: a misaligned window boundary."""
-    wanted = np.unique(np.asarray(wanted, dtype=np.int32))
-    if len(wanted) == 0:
-        return np.empty(0, dtype=np.int64)
-    lo, hi = (0, self.n_associations) if analysis_index is None else self._span(analysis_index)
-    window = self.association_chunk
-    parts: list[np.ndarray] = []
-    for start in range(lo, hi, window):
-        stop = min(start + window, hi)
-        vi = np.asarray(self._variant_index[start + 1 : stop], dtype=np.int32)
-        pos = np.searchsorted(wanted, vi)
-        in_bounds = pos < len(wanted)
-        hit = np.zeros(len(vi), dtype=bool)
-        hit[in_bounds] = wanted[pos[in_bounds]] == vi[in_bounds]
-        if hit.any():
-            parts.append(np.where(hit)[0].astype(np.int64) + start + 1)
-    if not parts:
-        return np.empty(0, dtype=np.int64)
-    return np.concatenate(parts)
-
-
 def _analysis_ids(query) -> list[str]:
     return [str(row["analysis_id"]) for _, row in sorted(query.analyses_table().items())]
-
-
-def _scan_target_variant(query: Any, target_variant: int) -> dict[str, np.ndarray]:
-    """Execute a scan query for target_variant directly on the CSR."""
-    hit_positions = query._csr.variant_positions(np.asarray([target_variant], dtype=np.int32))
-    return query._reader.read(Cells.positions(hit_positions))
-
-
-def test_identity_catches_a_misaligned_window(
-    ragged_residual: RaggedResidualScenario, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(RaggedCSRReader, "variant_positions", _shifted_window)
-    with query_store(ragged_residual.completed) as query:
-        first_alid = _any_alid(query)
-        target = query._variant_axis.by_identifier(first_alid)
-        assert target is not None
-        _wanted, want = _oracle_for_alid(query, first_alid)
-        got = _scan_target_variant(query, target.variant_index)
-        assert len(want["z"]) > 0, "the oracle must return the target for a miss to be visible"
-        with pytest.raises(AssertionError):
-            _same_oracle(got, want, "shifted")
-
-
-def test_identity_catches_an_off_by_one_search(
-    ragged_residual: RaggedResidualScenario, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        RaggedCSRReader, "variant_positions", _off_by_one_using(RaggedCSRReader.variant_positions)
-    )
-    with query_store(ragged_residual.completed) as query:
-        alid = _any_alid(query)
-        target = query._variant_axis.by_identifier(alid)
-        assert target is not None
-        _wanted, want = _oracle_for_alid(query, alid)
-        got = _scan_target_variant(query, target.variant_index)
-        assert len(want["z"]) > 0, "the oracle must return the target for a miss to be visible"
-        with pytest.raises(AssertionError):
-            _same_oracle(got, want, "off-by-one")
 
 
 def test_identity_catches_a_dropped_imputed_mask(
@@ -432,8 +363,7 @@ def test_identity_catches_a_dropped_imputed_mask(
     monkeypatch.setattr(RaggedCSRReader, "eaf_at_read", without_mask)
     with query_store(ragged_residual.completed) as query:
         wanted = query._variant_axis.range_indices("1", 900_000, 1_100_000)
-        hit_positions = query._csr.variant_positions(np.asarray(wanted, dtype=np.int32))
-        got = query._reader.read(Cells.positions(hit_positions))
+        got = query._reader.read(Cells.cross(wanted, sorted(query.analyses_table())))
         want = _ragged_oracle(
             query, wanted, analysis_ids=_analysis_ids(query), observed_only=False
         )

@@ -861,6 +861,11 @@ class RaggedCSRReader:
             self._offsets_cache = np.asarray(self._offsets[:], dtype=np.int64)
         return self._offsets_cache
 
+    @property
+    def sequence_length(self) -> int:
+        """How many rows the flat association arrays hold."""
+        return array_length(self._variant_index)
+
     def span(self, analysis_index: int) -> tuple[int, int]:
         """The `[start, end)` slice of the flat arrays one Analysis occupies."""
         offsets = self._offsets[analysis_index : analysis_index + 2]
@@ -998,41 +1003,6 @@ class RaggedCSRReader:
         if len(positions) == 0:
             return np.empty(0, dtype=np.int32)
         return np.asarray(self._variant_index.oindex[positions], dtype=np.int32)
-
-    def variant_positions(self, wanted: np.ndarray) -> np.ndarray:
-        """Flat CSR positions whose variant is in `wanted`, ascending.
-
-        A windowed scan of every Analysis's segment, used where every Analysis
-        may hold the variant and there is no index (#252). The window is a few
-        inner chunks, so peak memory is a window and not the component. A
-        lookup that knows its Analyses must use `segment_positions` instead,
-        which searches the requested segment in O(log) chunk reads rather than
-        scanning it.
-        """
-        wanted = np.unique(np.asarray(wanted, dtype=np.int32))
-        if len(wanted) == 0:
-            return np.empty(0, dtype=np.int64)
-        lo, hi = 0, self.n_associations
-        window = self.scan_window
-        parts: list[np.ndarray] = []
-        single = int(wanted[0]) if len(wanted) == 1 else None
-        for start in range(lo, hi, window):
-            stop = min(start + window, hi)
-            vi = np.asarray(self._variant_index[start:stop], dtype=np.int32)
-            if single is not None:
-                # One wanted variant is the common off-axis PheWAS case, and a
-                # direct compare is 16x fewer operations than a searchsorted.
-                hit = vi == single
-            else:
-                pos = np.searchsorted(wanted, vi)
-                in_bounds = pos < len(wanted)
-                hit = np.zeros(len(vi), dtype=bool)
-                hit[in_bounds] = wanted[pos[in_bounds]] == vi[in_bounds]
-            if hit.any():
-                parts.append(np.where(hit)[0].astype(np.int64) + start)
-        if not parts:
-            return np.empty(0, dtype=np.int64)
-        return np.concatenate(parts)
 
     def _scan_chunk(self, chunk: int, cache: dict[int, np.ndarray], total: int) -> np.ndarray:
         """One inner chunk of `variant_index`, read once and kept for the search.
@@ -1274,7 +1244,3 @@ class RaggedCSRReader:
         if not slots:
             return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
         return np.concatenate(slots), np.concatenate(found)
-
-    def get_analyses(self, analysis_indices: list[int]) -> list[AnalysisAssociations]:
-        """Return associations for multiple analyses."""
-        return [self.get_analysis(i) for i in analysis_indices]

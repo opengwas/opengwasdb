@@ -2032,8 +2032,8 @@ def _validate_ragged_top_hits(
     """
     top = top_hits.index_group(data_root)
     csr = RaggedCSRReader(store_path)
-    offsets = csr._offsets[:]
-    vi_all = csr._variant_index[:].astype(np.int32)
+    offsets = csr.offsets
+    vi_all = csr.variant_index(0, csr.sequence_length)
     z_all = csr.z_all()
     n_analyses = len(offsets) - 1
 
@@ -2044,7 +2044,7 @@ def _validate_ragged_top_hits(
         threshold = top_hits.tier_threshold(key, group, missing=0.0)
         arrays = top_hits.load_tier_arrays(group)
         problem = top_hits.structural_problem(
-            arrays, group, n_analyses, expects_imputed="imputed" in csr._root
+            arrays, group, n_analyses, expects_imputed=csr.has_imputed
         )
         if problem is not None:
             errors.append(f"top-hit index {key} {problem}")
