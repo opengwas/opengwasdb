@@ -1364,7 +1364,7 @@ def _validate_ragged_downstream_seams(
             component_label="data.zarr/ragged",
             n_axis=n_variant_axis,
         )
-    if not errors and "top_hits" in data_root:
+    if not errors and top_hits.has_index(data_root):
         _validate_ragged_top_hits(store.path, data_root, errors)
 
 
@@ -2016,7 +2016,7 @@ def _validate_ragged_top_hits(
     Structural checks (lengths, sort order) are exhaustive.
     CSR cross-validation is sampled to keep validation O(1) for large stores.
     """
-    top = data_root["top_hits"]
+    top = top_hits.index_group(data_root)
     csr = RaggedCSRReader(store_path)
     offsets = csr._offsets[:]
     vi_all = csr._variant_index[:].astype(np.int32)
@@ -2027,7 +2027,7 @@ def _validate_ragged_top_hits(
         group = top[key]
         if _missing_top_hit_arrays(key, group, errors):
             continue
-        threshold = float(group.attrs.get("threshold", 0))
+        threshold = top_hits.tier_threshold(key, group, missing=0.0)
         arrays = top_hits.load_tier_arrays(group)
         problem = top_hits.structural_problem(
             arrays, group, n_analyses, expects_imputed="imputed" in csr._root
@@ -2175,7 +2175,7 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
 
     # 5. Overflow top-hit addressing and CSR consistency.
     data_root = store.arrays(mode="r")
-    if "top_hits" in data_root:
+    if top_hits.has_index(data_root):
         _validate_ragged_top_hits(store_path, data_root, errors)
     return ValidationResult(errors=errors, warnings=warnings)
 
@@ -3790,7 +3790,7 @@ def _top_hit_group_entry(
     if problem is not None:
         errors.append(f"top-hit index {key} {problem}")
         return None
-    threshold = float(group.attrs.get("threshold", key.replace("p_", "").replace("_", "-")))
+    threshold = top_hits.tier_threshold(key, group)
     return {
         "z_crit": z_critical(threshold),
         "rows": arrays["rows"],
@@ -3903,9 +3903,9 @@ def _decode_top_hit_band(
 
 
 def _validate_top_hits(root: Any, errors: list[str], encoding: StoreEncoding) -> None:
-    if "top_hits" not in root:
+    if not top_hits.has_index(root):
         return
-    top = root["top_hits"]
+    top = top_hits.index_group(root)
     z_plane = DenseZPlane.open(root, encoding)
     se_plane = DenseSePlane.open(root, encoding)
     z_arr = z_plane.array

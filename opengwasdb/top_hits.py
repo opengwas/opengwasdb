@@ -80,6 +80,30 @@ def threshold_key(threshold: float) -> str:
     return f"p_{threshold:.0e}".replace("-", "_").replace("+", "")
 
 
+def tier_threshold(key: str, group: Any, *, missing: float | None = None) -> float:
+    """The p-value threshold a tier was written for.
+
+    Its ``threshold`` attribute; when the tier has none, `missing` if the caller
+    names its own fallback, else the threshold its key spells -- the inverse of
+    `threshold_key` (``p_5e_08`` -> 5e-08).
+    """
+    if "threshold" in group.attrs:
+        return float(group.attrs["threshold"])
+    if missing is not None:
+        return missing
+    return float(key.replace("p_", "").replace("_", "-"))
+
+
+def has_index(root: Any) -> bool:
+    """Whether a Store's data group holds a Top-Hit Index."""
+    return TOP_HIT_GROUP in root
+
+
+def index_group(root: Any) -> Any:
+    """The Top-Hit Index group of a Store's data group, one tier per key."""
+    return root[TOP_HIT_GROUP]
+
+
 def z_critical(threshold: float) -> float:
     """|z| cutoff equivalent to two-sided p <= threshold.
 

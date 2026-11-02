@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import csv
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -107,6 +108,28 @@ def test_add_hit_counts_sets_and_accumulates_the_counts(tmp_path):
     assert [a.n_hits_5e4 for a in once] == ["2", "1", "3"]
     twice = top_hits.add_hit_counts(tmp_path, once)  # a Hybrid adds its two components
     assert [a.n_hits_5e4 for a in twice] == ["4", "2", "6"]
+
+
+def test_a_tiers_threshold_is_its_attribute_else_its_name(tmp_path):
+    _write(tmp_path, _columns())
+    writable = store_arrays.open_group_for_write(tmp_path / "data.zarr", "a")
+    group = writable["top_hits/p_5e_06"]
+    assert top_hits.tier_threshold("p_5e_06", group) == 5e-6
+    del group.attrs["threshold"]
+    assert top_hits.tier_threshold("p_5e_06", group) == 5e-6  # parsed from the key
+    assert top_hits.tier_threshold("p_5e_06", group, missing=0.0) == 0.0  # caller's own
+    for threshold in top_hits.TOP_HIT_THRESHOLDS:
+        key = top_hits.threshold_key(threshold)
+        no_attribute = SimpleNamespace(attrs={})
+        assert top_hits.tier_threshold(key, no_attribute) == threshold  # inverse of the key
+
+
+def test_the_index_group_is_found_by_the_module(tmp_path):
+    root = _write(tmp_path, _columns())
+    assert top_hits.has_index(root)
+    assert sorted(top_hits.index_group(root).group_keys()) == ["p_5e_04", "p_5e_06", "p_5e_08"]
+    empty = store_arrays.open_group_for_write(tmp_path / "other.zarr", "a")
+    assert not top_hits.has_index(empty)
 
 
 def test_counts_are_the_per_analysis_slice_lengths(tmp_path):
