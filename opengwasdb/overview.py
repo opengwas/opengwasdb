@@ -39,7 +39,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast
 
 import numpy as np
 
@@ -57,14 +57,38 @@ from opengwasdb.model.analyses import (
 from opengwasdb.store.arrays import open_group
 from opengwasdb.store.open import UnsupportedFormatVersion
 
-# scipy ships no type stubs, so `layouts/dense/rho.py` and `stats.py` import it
-# behind a mypy import-untyped suppression that predates this module and is
-# recorded in cleat's escapes baseline -- and cleat refuses a *new* suppression
-# site. Importing it here through `importlib` keeps mypy's finding count where
-# the integration tip left it without adding one; the clustering below is this
-# module's only scipy use, and both names are used as `Any` either way.
-_hierarchy: Any = importlib.import_module("scipy.cluster.hierarchy")
-_spatial_distance: Any = importlib.import_module("scipy.spatial.distance")
+# scipy publishes no type stubs, so mypy sees nothing of `scipy.cluster.
+# hierarchy` or `scipy.spatial.distance` -- the same reason `layouts/dense/
+# rho.py` and `stats.py` import scipy behind a bare suppression. Left at that,
+# the heatmap's clustering would be an unchecked boundary: a misspelt keyword
+# or a wrongly shaped argument would surface as a `TypeError` while a Store
+# Release's page was being written, not as a finding here. These Protocols
+# declare exactly what this module calls, and the modules are bound to them
+# with `cast`, so mypy checks every scipy call below. Widen a Protocol when a
+# call needs more of scipy; anything outside them is deliberately unavailable.
+
+
+class _HierarchyModule(Protocol):
+    """`scipy.cluster.hierarchy`, as far as the Rho heatmap uses it."""
+
+    def linkage(self, y: np.ndarray, *, method: str) -> np.ndarray:
+        """Cluster a condensed float distance vector, hierarchically."""
+
+    def leaves_list(self, z: np.ndarray) -> np.ndarray:
+        """The leaf order of the tree `linkage` returned."""
+
+
+class _DistanceModule(Protocol):
+    """`scipy.spatial.distance`, as far as the Rho heatmap uses it."""
+
+    def squareform(self, x: np.ndarray, *, checks: bool = ...) -> np.ndarray:
+        """A symmetric square float matrix as its condensed vector."""
+
+
+_hierarchy = cast(_HierarchyModule, importlib.import_module("scipy.cluster.hierarchy"))
+_spatial_distance = cast(
+    _DistanceModule, importlib.import_module("scipy.spatial.distance")
+)
 
 # ── The value the renderer takes (issue #57) ────────────────────────────────
 
