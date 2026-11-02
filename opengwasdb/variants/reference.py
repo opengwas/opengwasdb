@@ -286,13 +286,8 @@ def extract_variant_reference(
             manifest_rows, manifest_path, output_path, options, stats
         )
     return _extract_lifted_reference(
-        manifest_rows,
-        manifest_path,
-        output_path,
-        options,
-        stats,
-        chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
+        manifest_rows, manifest_path, output_path, options, stats,
+        chain_file=chain_file, liftover_failure_threshold=liftover_failure_threshold,
     )
 
 
