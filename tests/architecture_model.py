@@ -1,4 +1,4 @@
-"""The engine's architecture model and the checks over it (issue #358).
+"""The engine's architecture model and the checks over it (issues #358, #359).
 
 `docs/architecture/components.yaml` says which component owns which code; this
 module loads it and checks it against the files git tracks. The functions here
@@ -10,10 +10,15 @@ The split is deliberate. `claims()` and `component_for_path()` are the ownership
 lookup, and opengwas/opengwasdb#359 reuses them to place imports on components;
 `check_model()` is the CI gate, and returns what is wrong rather than raising, so
 one run reports every problem instead of the first.
+
+#359 adds the other half: `import_graph()` turns module sources into the imports
+that cross a component boundary, so the layering can be measured rather than
+asserted. The baseline of upward imports that check is held to comes next.
 """
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +37,9 @@ REQUIRED_COMPONENT_KEYS = ("id", "name", "container", "layer", "stages", "summar
 #: claimed directory is already covered by the directory claim.
 SOURCE_ROOT = "opengwasdb/"
 SOURCE_SUFFIX = ".py"
+
+#: The file that names a package rather than a module in it.
+SUBPACKAGE_MODULE = ".__init__"
 
 
 @dataclass(frozen=True)
@@ -140,6 +148,106 @@ def _unclaimed_source_files(claim_list: Sequence[Claim], tracked: Sequence[str])
         for path in sorted(tracked)
         if is_source_file(path) and component_for_path(claim_list, path) is None
     ]
+
+
+@dataclass(frozen=True)
+class ImportEdge:
+    """One import from one engine component into another, as the source wrote it.
+
+    `name` is the dotted target the import names -- `opengwasdb.encoding` for
+    `from opengwasdb.encoding import StoreEncoding`, and the module plus the name
+    for `from opengwasdb.encoding.codec import read`. Keeping the name as written
+    is what makes the baseline a list of imports rather than a count: a second
+    name from an already-listed module is a new entry, not a hidden one.
+    """
+
+    file: str
+    name: str
+    source: str
+    destination: str
+
+
+def module_name(path: str) -> str:
+    """The dotted module a source file defines: `a/b/__init__.py` is `a.b`."""
+    dotted = path[: -len(SOURCE_SUFFIX)].replace("/", ".")
+    if dotted.endswith(SUBPACKAGE_MODULE):
+        return dotted[: -len(SUBPACKAGE_MODULE)]
+    return dotted
+
+
+def package_of(path: str) -> str:
+    """The package a module's relative imports are resolved against."""
+    module = module_name(path)
+    return module if path.endswith(SUBPACKAGE_MODULE) else module.rpartition(".")[0]
+
+
+def imports_in_source(path: str, source: str) -> set[str]:
+    """Every dotted name `source` imports, de-duplicated within the file.
+
+    Every `import` and `from ... import` node counts, wherever it sits -- inside a
+    function, under `if TYPE_CHECKING:`, behind a guard. They all couple the file
+    to the imported module, which is what an edge in this graph means (decision 8
+    on opengwas/opengwasdb-stores#416).
+    """
+    targets: set[str] = set()
+    for node in ast.walk(ast.parse(source, filename=path)):
+        if isinstance(node, ast.Import):
+            targets.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = _import_base(path, node)
+            targets.update(f"{base}.{alias.name}" if base else alias.name for alias in node.names)
+    return targets
+
+
+def _import_base(path: str, node: ast.ImportFrom) -> str:
+    """The module a `from ... import` names, with its relative dots resolved."""
+    module = node.module or ""
+    if not node.level:
+        return module
+    parts = package_of(path).split(".")
+    if node.level > 1:
+        parts = parts[: len(parts) - (node.level - 1)]
+    return ".".join([*parts, module] if module else parts)
+
+
+def component_for_module(owners: Mapping[str, str], target: str) -> str | None:
+    """The component that owns `target`, by the longest module of it that exists.
+
+    `opengwasdb.encoding.StoreEncoding` is a name inside `opengwasdb.encoding`, so
+    the module is the target minus its last part; `opengwasdb.layouts.dense`
+    imported as a module is itself. The walk is what tells the two apart without
+    guessing which trailing parts are modules.
+    """
+    parts = target.split(".")
+    while parts:
+        owner = owners.get(".".join(parts))
+        if owner is not None:
+            return owner
+        parts.pop()
+    return None
+
+
+def import_graph(model: Mapping[str, Any], sources: Mapping[str, str]) -> tuple[ImportEdge, ...]:
+    """Every import that crosses a component boundary, one entry per (file, name).
+
+    Takes the sources as `path -> text` rather than reading the tree, so a test can
+    hand it four lines of fixture. A file no component claims is skipped: `#358`'s
+    check reports it as unclaimed, and there is no component to draw an edge from.
+    """
+    claim_list = claims(model)
+    owners = {
+        module_name(path): component
+        for path in sources
+        if (component := component_for_path(claim_list, path)) is not None
+    }
+    edges = [
+        ImportEdge(file=path, name=name, source=source, destination=destination)
+        for path in sorted(sources)
+        if (source := owners.get(module_name(path))) is not None
+        for name in sorted(imports_in_source(path, sources[path]))
+        if (destination := component_for_module(owners, name)) not in (None, source)
+    ]
+    return tuple(edges)
 
 
 class ModelError(Exception):
