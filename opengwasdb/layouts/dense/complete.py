@@ -68,7 +68,7 @@ from opengwasdb.encoding import (
     write_eaf_reference,
 )
 from opengwasdb.index import initialise_schema, set_metadata
-from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
+from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
     DEFAULT_DTYPE,
@@ -95,6 +95,7 @@ from opengwasdb.store.open import (
     check_writable_format_version,
     open_store,
 )
+from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
     CanonicalVariant,
     VariantAxis,

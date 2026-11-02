@@ -26,6 +26,7 @@ from opengwasdb.encoding import (
     StoreEncoding,
     ZEncoding,
 )
+from opengwasdb.top_hits import slices_are_ordered
 from opengwasdb.validation.validate import (
     _band_marked_positions,
     _decode_top_hit_band,
@@ -43,7 +44,6 @@ from opengwasdb.validation.validate import (
     _read_top_hit_arrays,
     _report_dense_band_flags,
     _report_dense_eaf_range,
-    _slices_are_ordered,
     _validate_dense_arrays,
     _validate_dense_band,
 )
@@ -91,13 +91,13 @@ def test_strict_top_hit_slice_order_proves_cell_keys_are_unique() -> None:
     offsets = np.array([0, 3], dtype=np.uint64)
     analyses = np.zeros(3, dtype=np.uint32)
 
-    assert _slices_are_ordered(
+    assert slices_are_ordered(
         analyses, np.array([1, 2, 3], dtype=np.uint32), offsets, 1
     )
-    assert not _slices_are_ordered(
+    assert not slices_are_ordered(
         analyses, np.array([1, 1, 3], dtype=np.uint32), offsets, 1
     )
-    assert not _slices_are_ordered(
+    assert not slices_are_ordered(
         analyses, np.array([2, 1, 3], dtype=np.uint32), offsets, 1
     )
 

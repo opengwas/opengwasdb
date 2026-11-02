@@ -79,6 +79,7 @@ from typing import NoReturn
 import numpy as np
 import zarr
 
+from opengwasdb import top_hits
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, EafRead
 from opengwasdb.index import AnalysesIndex
 from opengwasdb.layouts.dense.indexed_subsets import (
@@ -88,7 +89,6 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     rescope_indexed_subset_error,
 )
 from opengwasdb.layouts.dense.rho import DenseRhoReader
-from opengwasdb.layouts.dense.top_hits import DenseTopHitReader, TopHitTiers, z_critical
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.layouts.ragged.by_variant import (
     ByVariantReader,
@@ -99,6 +99,7 @@ from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.query.resolve import resolve_rows
 from opengwasdb.store.open import OpenGWASDBStore, open_store
+from opengwasdb.top_hits import TierRows, TopHitTier, TopHitTiers
 from opengwasdb.variants import VariantAxis
 
 
@@ -166,16 +167,20 @@ def _top_hits_result(
 
 
 def _read_ragged_top_hits(
-    reader: DenseTopHitReader, bounds: tuple[int, int], csr: RaggedCSRReader
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """A Ragged top-hit tier's variant_index, analysis_index, z, se and eaf
-    over `bounds`; eaf falls back to the CSR's own when the tier has none."""
-    vi = reader.read("variant_index", bounds, "int32")
-    ai = reader.read("analysis_index", bounds, "int32")
-    z = reader.read("z", bounds, "float32")
-    se = reader.read("se", bounds, "float32")
-    eaf = reader.read_or("eaf", bounds, "float32", lambda: csr.eaf_pairs(vi, ai))
-    return vi, ai, z, se, eaf
+    tier: TopHitTier, analysis_index: int | None, csr: RaggedCSRReader
+) -> TierRows:
+    """A Ragged top-hit tier's rows (all of it, or one Analysis's slice) with
+    every field present: `eaf` falls back to the CSR's own when the tier has
+    none, and `imputed` to all-observed. `se` is required -- a Ragged index
+    always wrote it."""
+    rows = tier.read(analysis_index, require=("se",))
+    eaf = rows.eaf
+    if eaf is None:
+        eaf = np.asarray(csr.eaf_pairs(rows.variant_index, rows.analysis_index), dtype="float32")
+    imputed = rows.imputed
+    if imputed is None:
+        imputed = np.zeros(len(rows.z), dtype=np.uint8)
+    return rows._replace(eaf=eaf, imputed=imputed)
 
 
 def _empty_rho_result() -> dict[str, np.ndarray]:
@@ -550,26 +555,21 @@ class StoreQuery:
         observed_only: bool = False,
     ) -> dict[str, np.ndarray]:
         """Return genomic-order top hits, optionally for one analysis."""
-        reader = self._top_hits.reader(threshold)
-        if reader is None:
+        tier = self._top_hits.tier(threshold)
+        if tier is None:
             return _empty_result()
         analysis_index: int | None = None
         if analysis_id is not None:
             analysis = self._analyses.by_id(analysis_id)
-            if analysis is None or not reader.has("analysis_offsets"):
+            if analysis is None or not tier.has_offsets:
                 return _empty_result()
             analysis_index = int(analysis["analysis_index"])
-        bounds = reader.bounds(analysis_index)
-        variant_indices = reader.read("variant_index", bounds, "int32")
-        analysis_indices = reader.read("analysis_index", bounds, "int32")
-        z_values = reader.read("z", bounds, "float32")
-        se_values, eaf, imp = self._top_hit_fields(
-            reader, bounds, variant_indices, analysis_indices
-        )
+        rows = tier.read(analysis_index)
+        se_values, eaf, imp = self._top_hit_fields(rows)
         return _top_hits_result(
-            variant_indices,
-            analysis_indices,
-            z_values,
+            rows.variant_index,
+            rows.analysis_index,
+            rows.z,
             se_values,
             eaf,
             imp,
@@ -577,13 +577,7 @@ class StoreQuery:
             limit=limit,
         )
 
-    def _top_hit_fields(
-        self,
-        reader: DenseTopHitReader,
-        bounds: tuple[int, int],
-        variant_indices: np.ndarray,
-        analysis_indices: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _top_hit_fields(self, rows: TierRows) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """`se`, `eaf` and `imputed` for the indexed top hits, each read once.
 
         A current index carries all three decoded. An older one carries none,
@@ -591,9 +585,10 @@ class StoreQuery:
         planes; the one region read is shared between them (#253), where the
         two fallbacks used to read it twice.
         """
-        has_se = reader.has("se")
-        has_eaf = reader.has("eaf")
-        has_imputed = reader.has("imputed")
+        variant_indices, analysis_indices = rows.variant_index, rows.analysis_index
+        has_se = rows.se is not None
+        has_eaf = rows.eaf is not None
+        has_imputed = rows.imputed is not None
         eaf_read = (
             self._eaf.read_points(
                 variant_indices.astype("int64"),
@@ -603,8 +598,8 @@ class StoreQuery:
             if not (has_se and has_eaf)
             else None
         )
-        if has_se:
-            se_values = reader.read("se", bounds, "float32")
+        if rows.se is not None:
+            se_values = rows.se
         else:
             assert eaf_read is not None
             se_values = self._se.points(
@@ -612,9 +607,13 @@ class StoreQuery:
                 analysis_indices.astype("int64"),
                 eaf=eaf_read.values,
             )
-        eaf = reader.read("eaf", bounds, "float32") if has_eaf else eaf_read.values
-        if has_imputed:
-            imp = reader.read("imputed", bounds, "uint8")
+        if rows.eaf is not None:
+            eaf = rows.eaf
+        else:
+            assert eaf_read is not None
+            eaf = eaf_read.values
+        if rows.imputed is not None:
+            imp = rows.imputed
         elif eaf_read is not None and eaf_read.imputed is not None:
             imp = np.asarray(eaf_read.imputed, dtype="uint8")
         else:
@@ -1067,18 +1066,17 @@ class RaggedStoreQuery:
         falls back to a full CSR scan otherwise. The two paths return the
         same shape of answer for the same call.
         """
-        reader = self._top_hits.reader(threshold)
-        if reader is not None:
+        tier = self._top_hits.tier(threshold)
+        if tier is not None:
             analysis_index = None
             if analysis_id is not None:
                 analysis_index = self._resolve_analysis_id(analysis_id)
-                if analysis_index is None or not reader.has("analysis_offsets"):
+                if analysis_index is None or not tier.has_offsets:
                     return self._empty()
-            bounds = reader.bounds(analysis_index)
-            vi, ai, z, se, eaf = _read_ragged_top_hits(reader, bounds, self._csr)
-            imp = reader.read_or(
-                "imputed", bounds, "uint8", lambda: np.zeros(len(vi), dtype=np.uint8)
-            )
+            rows = _read_ragged_top_hits(tier, analysis_index, self._csr)
+            vi, ai, z, se = rows.variant_index, rows.analysis_index, rows.z, rows.se
+            eaf, imp = rows.eaf, rows.imputed
+            assert se is not None and eaf is not None and imp is not None
             # The tiers carry no `n`; each hit is resolved back to its CSR cell,
             # the way an index without `eaf` is (ADR 0067).
             n = self._csr.n_pairs(vi, ai) if self._has_n else None
@@ -1102,7 +1100,7 @@ class RaggedStoreQuery:
         is `z_critical`, the one the index is built with, so a scan and an
         index agree on the boundary.
         """
-        cutoff = z_critical(threshold)
+        cutoff = top_hits.z_critical(threshold)
         windows: list[np.ndarray] = []
         for start, stop in _chunk_windows(lo, hi, self._csr.scan_window):
             mask = np.abs(self._csr.z_slice(start, stop)) >= cutoff
@@ -1533,20 +1531,22 @@ class HybridStoreQuery:
     def _overflow_top_hits(
         self, threshold: float, analysis_index: int | None = None
     ) -> dict[str, np.ndarray]:
-        reader = self._top_hits.reader(threshold)
-        if reader is None:
+        tier = self._top_hits.tier(threshold)
+        if tier is None:
             return _empty_result()
-        if analysis_index is not None and not reader.has("analysis_offsets"):
+        if analysis_index is not None and not tier.has_offsets:
             return _empty_result()
-        bounds = reader.bounds(analysis_index)
-        vi, ai, z, se, eaf = _read_ragged_top_hits(reader, bounds, self._csr)
+        rows = _read_ragged_top_hits(tier, analysis_index, self._csr)
+        assert rows.se is not None and rows.eaf is not None
         return {
-            "variant_index": vi,
-            "analysis_index": ai,
-            "z": z,
-            "se": se,
-            "eaf": eaf,
-            "association_status": _status_array(np.zeros(len(z), dtype=np.uint8), z, se),
+            "variant_index": rows.variant_index,
+            "analysis_index": rows.analysis_index,
+            "z": rows.z,
+            "se": rows.se,
+            "eaf": rows.eaf,
+            "association_status": _status_array(
+                np.zeros(len(rows.z), dtype=np.uint8), rows.z, rows.se
+            ),
         }
 
     def top_hits(

@@ -447,7 +447,7 @@ def test_top_hit_index_is_consistent_with_the_decoded_plane_even_when_stale(
     defect class issue #163 closed for Hybrid -- fails the exhaustive
     index-vs-plane comparison above, which checks every returned row where
     `validate_store` samples only a bounded subset of each tier."""
-    from opengwasdb.layouts.dense.top_hits import threshold_key
+    from opengwasdb.top_hits import threshold_key
 
     stale_store = tmp_path / "stale.opengwasdb"
     shutil.copytree(scenario.completed, stale_store)

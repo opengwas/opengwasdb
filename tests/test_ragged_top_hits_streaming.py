@@ -20,17 +20,11 @@ import pytest
 import zarr
 from numcodecs import Blosc
 
+from opengwasdb import top_hits
 from opengwasdb.encoding import (
     EncodingMeasurements,
     StoreEncoding,
     write_eaf_reference,
-)
-from opengwasdb.layouts.dense.constants import TOP_HIT_THRESHOLDS
-from opengwasdb.layouts.dense.top_hits import (
-    TOP_HIT_CHUNK_SIZE,
-    read_top_hit_counts,
-    threshold_key,
-    write_threshold_tier,
 )
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.top_hits import (
@@ -39,6 +33,11 @@ from opengwasdb.layouts.ragged.top_hits import (
 )
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
 from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS
+from opengwasdb.top_hits import (
+    TOP_HIT_THRESHOLDS,
+    read_top_hit_counts,
+    threshold_key,
+)
 from opengwasdb.validation import validate_store
 
 # Small enough that the cells amortise the per-variant baseline: a residual
@@ -110,14 +109,11 @@ def _reference_tiers(
     scratch: Path,
 ) -> tuple[zarr.Group, int]:
     """The materialising pre-streaming path, written to a scratch group."""
-    columns, abs_z, n_analyses = _read_ragged_columns(store, encoding)
+    columns, n_analyses = _read_ragged_columns(store, encoding)
     root = zarr.open_group(str(scratch), mode="w", zarr_format=2)
     compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
-    for threshold in thresholds:
-        write_threshold_tier(
-            root, threshold, columns, abs_z, n_analyses, TOP_HIT_CHUNK_SIZE, compressor
-        )
-    return root, n_analyses
+    top_hits.write_index(root, columns, thresholds, n_analyses, compressor=compressor)
+    return root[top_hits.TOP_HIT_GROUP], n_analyses
 
 
 def _arrays(group: zarr.Group) -> dict[str, np.ndarray]:
@@ -201,7 +197,7 @@ def test_streamed_tiers_match_materialising_reference(
         assert encoding.eaf.is_residual, "fixture must select a residual eaf plane"
     store = shutil.copytree(seed_store, tmp_path / "store")
     reference_path = shutil.copytree(seed_reference, tmp_path / "ref.zarr")
-    ref = zarr.open_group(str(reference_path), mode="r")
+    ref = zarr.open_group(str(reference_path), mode="r")[top_hits.TOP_HIT_GROUP]
     build_ragged_top_hit_indexes(
         store, thresholds=TOP_HIT_THRESHOLDS, encoding=encoding, slice_cells=slice_cells
     )

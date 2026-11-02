@@ -13,12 +13,12 @@ import pytest
 import zarr
 
 from opengwasdb.completion.ld_panel import LdPanelNotFoundError
-from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation.validate import validate_store
 
 # ── Synthetic BESD fixture (reused from test_ragged_build_besd.py) ─────────
@@ -201,8 +201,8 @@ class TestTopHitCountsRefreshedByCompletion:
     list a threshold is evaluated against."""
 
     def test_completed_top_hit_counts_match_completed_top_hit_index(self, completed_store):
-        from opengwasdb.layouts.dense.top_hits import read_top_hit_counts
         from opengwasdb.model.analyses import read_analyses
+        from opengwasdb.top_hits import read_top_hit_counts
 
         table = read_analyses(completed_store / "analyses.tsv")
         rows = sorted(table.rows, key=lambda r: int(r["analysis_index"]))
@@ -227,8 +227,8 @@ class TestTopHitCountsRefreshedByCompletion:
         top-hit index rather than adding onto whatever the source said, so
         the completed values equal a fresh recomputation for every threshold
         column and the stale marker is neither retained nor double-counted."""
-        from opengwasdb.layouts.dense.top_hits import read_top_hit_counts
         from opengwasdb.model.analyses import read_analyses, write_analyses
+        from opengwasdb.top_hits import read_top_hit_counts
 
         analyses_path = observed_store / "analyses.tsv"
         table = read_analyses(analyses_path)

@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 import numpy as np
 
+from opengwasdb import top_hits
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.encoding import (
     EAF_BASELINE,
@@ -39,7 +40,6 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.index.sqlite import get_metadata
 from opengwasdb.layouts.dense.indexed_subsets import validate_indexed_subsets
-from opengwasdb.layouts.dense.top_hits import threshold_key, z_critical
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.analyses import (
@@ -80,6 +80,7 @@ from opengwasdb.store.open import (
     open_store,
     zarr_format_for_version,
 )
+from opengwasdb.top_hits import threshold_key, z_critical
 from opengwasdb.validation.sample_size import validate_n_plan, validate_ragged_n
 from opengwasdb.variants import (
     VariantAxis,
@@ -1363,7 +1364,7 @@ def _validate_ragged_downstream_seams(
             component_label="data.zarr/ragged",
             n_axis=n_variant_axis,
         )
-    if not errors and "top_hits" in data_root:
+    if not errors and top_hits.has_index(data_root):
         _validate_ragged_top_hits(store.path, data_root, errors)
 
 
@@ -1960,20 +1961,6 @@ def _validate_ragged_completion(
 _TOP_HIT_SAMPLE_SIZE = 1000  # cross-validate this many sampled entries against the CSR
 
 
-def _slices_are_ordered(
-    ais: np.ndarray, vis: np.ndarray, analysis_offsets: np.ndarray, n_analyses: int
-) -> bool:
-    """Whether each analysis's slice holds only its own hits, in genomic order."""
-    for analysis_index in range(n_analyses):
-        start = int(analysis_offsets[analysis_index])
-        end = int(analysis_offsets[analysis_index + 1])
-        if np.any(ais[start:end] != analysis_index):
-            return False
-        if end - start > 1 and np.any(vis[start : end - 1] >= vis[start + 1 : end]):
-            return False
-    return True
-
-
 def _sample_csr_positions(
     key: str,
     sample: np.ndarray,
@@ -2011,15 +1998,9 @@ def _sample_csr_positions(
     return positions
 
 
-#: Every tier of a top-hit index carries these, whatever the layout wrote it.
-TOP_HIT_TIER_ARRAYS = frozenset(
-    {"analysis_offsets", "variant_index", "analysis_index", "abs_z", "z", "se", "p_value"}
-)
-
-
 def _missing_top_hit_arrays(key: str, group: Any, errors: list[str]) -> bool:
     """Record what a tier lacks; True when it lacks anything."""
-    missing = sorted(TOP_HIT_TIER_ARRAYS.difference(group.keys()))
+    missing = top_hits.missing_arrays(group)
     if missing:
         errors.append(f"top-hit index {key} is missing {', '.join(missing)}")
     return bool(missing)
@@ -2035,7 +2016,7 @@ def _validate_ragged_top_hits(
     Structural checks (lengths, sort order) are exhaustive.
     CSR cross-validation is sampled to keep validation O(1) for large stores.
     """
-    top = data_root["top_hits"]
+    top = top_hits.index_group(data_root)
     csr = RaggedCSRReader(store_path)
     offsets = csr._offsets[:]
     vi_all = csr._variant_index[:].astype(np.int32)
@@ -2046,46 +2027,20 @@ def _validate_ragged_top_hits(
         group = top[key]
         if _missing_top_hit_arrays(key, group, errors):
             continue
-        threshold = float(group.attrs.get("threshold", 0))
-        vis = group["variant_index"][:].astype(np.int32)
-        ais = group["analysis_index"][:].astype(np.int32)
-        zs = group["z"][:].astype(np.float32)
-        ses = group["se"][:].astype(np.float32)
-        abs_zs = group["abs_z"][:].astype(np.float32)
-        analysis_offsets = group["analysis_offsets"][:].astype(np.int64)
-        imputed = group["imputed"][:].astype(np.uint8) if "imputed" in group else None
-        eaf = group["eaf"][:].astype(np.float32) if "eaf" in group else None
-
-        if not (
-            len(vis)
-            == len(ais)
-            == len(zs)
-            == len(abs_zs)
-            == array_length(group["se"])
-            == array_length(group["p_value"])
-            and (imputed is None or len(imputed) == len(vis))
-            and (eaf is None or len(eaf) == len(vis))
-        ):
-            errors.append(f"top-hit index {key} has inconsistent array lengths")
+        threshold = top_hits.tier_threshold(key, group, missing=0.0)
+        arrays = top_hits.load_tier_arrays(group)
+        problem = top_hits.structural_problem(
+            arrays, group, n_analyses, expects_imputed="imputed" in csr._root
+        )
+        if problem is not None:
+            errors.append(f"top-hit index {key} {problem}")
             continue
-
-        if (
-            len(analysis_offsets) != n_analyses + 1
-            or analysis_offsets[0] != 0
-            or np.any(analysis_offsets[:-1] > analysis_offsets[1:])
-            or analysis_offsets[-1] != len(vis)
-        ):
-            errors.append(f"top-hit index {key} has invalid analysis offsets")
-            continue
-        if not _slices_are_ordered(ais, vis, analysis_offsets, n_analyses):
-            errors.append(f"top-hit index {key} has incorrect or non-genomic analysis slices")
-            continue
-        if "imputed" in csr._root and imputed is None:
-            errors.append(f"top-hit index {key} is missing imputed completion status")
-            continue
-        if imputed is not None and not np.all((imputed == 0) | (imputed == 1)):
-            errors.append(f"top-hit index {key} has invalid imputed completion status")
-            continue
+        vis = arrays["rows"].astype(np.int32)
+        ais = arrays["cols"].astype(np.int32)
+        zs = arrays["z_values"]
+        ses = arrays["se_values"]
+        abs_zs = arrays["abs_z"]
+        eaf = arrays["eaf_values"]
 
         # Exhaustive: all abs_z must match |z|
         if not np.allclose(abs_zs, np.abs(zs), rtol=1e-3, atol=1e-3):
@@ -2220,7 +2175,7 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
 
     # 5. Overflow top-hit addressing and CSR consistency.
     data_root = store.arrays(mode="r")
-    if "top_hits" in data_root:
+    if top_hits.has_index(data_root):
         _validate_ragged_top_hits(store_path, data_root, errors)
     return ValidationResult(errors=errors, warnings=warnings)
 
@@ -3809,98 +3764,11 @@ def _match_dense_se_exceptions(
 
 
 def _read_top_hit_arrays(key: str, group: Any, errors: list[str]) -> dict[str, Any] | None:
-    """One tier's index arrays, in their compact contract dtypes, or None.
-
-    ``Array[:]`` already returns an ndarray. ``np.asarray`` therefore avoids
-    ``astype``'s unconditional full-size copy on a valid tier while retaining
-    the coercion that lets the validation logic diagnose malformed contents.
-    Keeping the uint32 coordinates compact is material: OGS-00010's nominal
-    tier alone has 45.7 million hits (issue #254).
-    """
+    """One tier's index arrays (`top_hits.load_tier_arrays`), or None having
+    recorded what the tier lacks."""
     if _missing_top_hit_arrays(key, group, errors):
         return None
-    return {
-        "rows": np.asarray(group["variant_index"][:], dtype=np.uint32),
-        "cols": np.asarray(group["analysis_index"][:], dtype=np.uint32),
-        "z_values": np.asarray(group["z"][:], dtype=np.float32),
-        "se_values": np.asarray(group["se"][:], dtype=np.float32),
-        "abs_z": np.asarray(group["abs_z"][:], dtype=np.float32),
-        "offsets": np.asarray(group["analysis_offsets"][:], dtype=np.uint64),
-        "imputed_values": (
-            np.asarray(group["imputed"][:], dtype=np.uint8) if "imputed" in group else None
-        ),
-        "eaf_values": (
-            np.asarray(group["eaf"][:], dtype=np.float32) if "eaf" in group else None
-        ),
-    }
-
-
-def _top_hit_lengths_ok(a: dict[str, Any], group: Any) -> bool:
-    """Whether every parallel array in the tier is the same length."""
-    n = len(a["rows"])
-    optional = [x for x in (a["imputed_values"], a["eaf_values"]) if x is not None]
-    # `a`'s entries are numpy arrays, `group["se"]`/`group["p_value"]` are Zarr
-    # arrays; zarr 3 removed ``len(Array)``, so every length is the leading
-    # axis (which is what ``len`` meant for the numpy ones too).
-    return all(
-        int(x.shape[0]) == n
-        for x in [
-            a["cols"],
-            a["z_values"],
-            a["abs_z"],
-            group["se"],
-            group["p_value"],
-            *optional,
-        ]
-    )
-
-
-def _top_hit_offsets_ok(offsets: np.ndarray, n_rows: int, n_analyses: int) -> bool:
-    """Whether the per-analysis offsets partition the tier's rows."""
-    return bool(
-        len(offsets) == n_analyses + 1
-        and offsets[0] == 0
-        and not np.any(offsets[:-1] > offsets[1:])
-        and offsets[-1] == n_rows
-    )
-
-
-def _imputed_missing(imputed_values: np.ndarray | None, imputed_arr: Any) -> bool:
-    """Whether a completed component's tier failed to record completion status."""
-    return imputed_arr is not None and imputed_values is None
-
-
-def _imputed_values_valid(imputed_values: np.ndarray | None) -> bool:
-    """Whether the recorded completion status is a flag and not something else."""
-    if imputed_values is None:
-        return True
-    return bool(np.all((imputed_values == 0) | (imputed_values == 1)))
-
-
-def _top_hit_structural_problem(
-    a: dict[str, Any], group: Any, n_analyses: int, imputed_arr: Any
-) -> str | None:
-    """The first thing wrong with a tier before the matrix is streamed.
-
-    The order is the order the checks were written in: a structural fault is
-    reported ahead of a value fault, because the second is not worth reading
-    while the first makes the arrays untrustworthy.
-    """
-    if _imputed_missing(a["imputed_values"], imputed_arr):
-        return "is missing imputed completion status"
-    if not _top_hit_lengths_ok(a, group):
-        return "has inconsistent array lengths"
-    if not _top_hit_offsets_ok(a["offsets"], len(a["rows"]), n_analyses):
-        return "has invalid analysis offsets"
-    if not _slices_are_ordered(a["cols"], a["rows"], a["offsets"], n_analyses):
-        return "has incorrect or non-genomic analysis slices"
-    if not _imputed_values_valid(a["imputed_values"]):
-        return "has invalid imputed completion status"
-    # Strictly increasing rows inside slices that each hold only their named
-    # Analysis already prove every (row, column) pair unique. Rebuilding those
-    # pairs as int64 and sorting them with np.unique duplicated hundreds of MB
-    # on production Top-Hit Indexes without checking another invariant (#254).
-    return None
+    return top_hits.load_tier_arrays(group)
 
 
 def _top_hit_group_entry(
@@ -3918,11 +3786,11 @@ def _top_hit_group_entry(
     arrays = _read_top_hit_arrays(key, group, errors)
     if arrays is None:
         return None
-    problem = _top_hit_structural_problem(arrays, group, n_analyses, imputed_arr)
+    problem = top_hits.structural_problem(arrays, group, n_analyses, imputed_arr is not None)
     if problem is not None:
         errors.append(f"top-hit index {key} {problem}")
         return None
-    threshold = float(group.attrs.get("threshold", key.replace("p_", "").replace("_", "-")))
+    threshold = top_hits.tier_threshold(key, group)
     return {
         "z_crit": z_critical(threshold),
         "rows": arrays["rows"],
@@ -4035,9 +3903,9 @@ def _decode_top_hit_band(
 
 
 def _validate_top_hits(root: Any, errors: list[str], encoding: StoreEncoding) -> None:
-    if "top_hits" not in root:
+    if not top_hits.has_index(root):
         return
-    top = root["top_hits"]
+    top = top_hits.index_group(root)
     z_plane = DenseZPlane.open(root, encoding)
     se_plane = DenseSePlane.open(root, encoding)
     z_arr = z_plane.array

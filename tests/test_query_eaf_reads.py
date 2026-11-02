@@ -54,11 +54,12 @@ from opengwasdb.encoding.codec import EAF_ABSENT
 from opengwasdb.encoding.planes import DenseZPlane
 from opengwasdb.layouts.dense.build import build_dense_observed_store
 from opengwasdb.layouts.dense.complete import complete_dense_store
-from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, threshold_key
+from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
+from opengwasdb.top_hits import threshold_key
 
 #: The arrays whose duplicate reads #253 removes.
 _EAF_ARRAYS = ("eaf", "eaf_baseline", "imputed")

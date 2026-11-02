@@ -22,10 +22,10 @@ from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
-from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.store.open import open_store
+from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.reference import (
     extract_variant_reference,

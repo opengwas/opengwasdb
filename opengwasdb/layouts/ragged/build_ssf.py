@@ -33,7 +33,6 @@ from opengwasdb.build.eaf_orientation import (
     select_sites,
 )
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
-from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.by_variant import build_variant_index
@@ -56,6 +55,7 @@ from opengwasdb.model.manifest_columns import (
 )
 from opengwasdb.stats import parse_af
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
+from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants.axis import (
     write_variant_axis,
 )

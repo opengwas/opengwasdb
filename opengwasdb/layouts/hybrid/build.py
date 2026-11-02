@@ -56,7 +56,7 @@ from opengwasdb.encoding import (
     optimise_dense_se_joint,
 )
 from opengwasdb.encoding.timing import format_duration
-from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
+from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
     _RESOLVE_BATCH,
     EafSpillSurvey,
@@ -186,6 +186,7 @@ from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.interface import ImputationScoreStatus
 from opengwasdb.readers.registry import resolve_reader
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
+from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.reference import (
     SourceKey,

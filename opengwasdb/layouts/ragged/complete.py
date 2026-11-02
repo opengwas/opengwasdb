@@ -34,6 +34,7 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb import top_hits
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
 from opengwasdb.completion.checkpoint import (
@@ -73,7 +74,6 @@ from opengwasdb.encoding import (
     write_eaf_reference,
     write_se_csr,
 )
-from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
@@ -1259,7 +1259,7 @@ def _write_top_hits_and_analyses(
         ]
     )
     write_analysis_records(
-        staged.path / "analyses.tsv", add_hit_counts(staged.path, dst_analyses)
+        staged.path / "analyses.tsv", top_hits.add_hit_counts(staged.path, dst_analyses)
     )
 
 

@@ -40,6 +40,7 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb import top_hits
 from opengwasdb.encoding import (
     EAF_BASELINE,
     DenseEafPlane,
@@ -47,7 +48,7 @@ from opengwasdb.encoding import (
     DenseZPlane,
     StoreEncoding,
 )
-from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
+from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import _sorted_alids, _write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
@@ -525,7 +526,7 @@ def _finalize_completed_hybrid(
     # complete_dense_store's already-completed output); add the Ragged
     # Overflow Component's counts on top -- the two partition an Analysis's
     # associations disjointly (ADR 0032).
-    write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
+    write_analyses_tsv(staged.path, top_hits.add_hit_counts(staged.path, analyses))
 
     log.info(
         "Hybrid completion complete: %d shared variants (%d panel + %d off-panel), "

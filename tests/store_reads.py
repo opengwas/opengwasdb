@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from zarr.storage import LocalStore
 
-from opengwasdb.layouts.dense.top_hits import DenseTopHitReader
+from opengwasdb.top_hits import TopHitTier
 
 #: Zarr keys that hold metadata, not chunk bytes; a metadata read is not a read
 #: of the array's data.
@@ -78,14 +78,14 @@ def old_index_without_fields(
     #253 is about is the fallback for an index that predates those fields, so
     the reader is told it has none and the caller derives them from the planes.
     """
-    original = DenseTopHitReader.has
+    original = TopHitTier.has
 
-    def has(self: DenseTopHitReader, name: str) -> bool:
+    def has(self: TopHitTier, name: str) -> bool:
         if name in names or name == "se":
             return False
         return original(self, name)
 
-    monkeypatch.setattr(DenseTopHitReader, "has", has)
+    monkeypatch.setattr(TopHitTier, "has", has)
     yield
 
 

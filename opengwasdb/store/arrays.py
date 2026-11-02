@@ -377,7 +377,7 @@ RHO_CHUNK_ROWS = 1_000_000
 DENSE_CHUNK_SHAPE = (1000, 64)
 
 #: One flat array of a top-hit threshold tier, when a caller supplies no
-#: override.  `layouts/dense/top_hits.TOP_HIT_CHUNK_SIZE` is this value.
+#: override.  `top_hits.TOP_HIT_CHUNK_SIZE` is this value.
 TOP_HIT_CHUNK_SIZE = 16_384
 
 #: One half of an exact-value exception/overflow table, when a caller supplies
