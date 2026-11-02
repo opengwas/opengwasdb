@@ -75,13 +75,15 @@ early physical stop at the ancestry bound.
   there; the Ragged builders ignore a declared `maf_threshold` altogether today
   (ADR 0054's scope amendment says both plainly).
 - **Resume.** `build-hybrid --checkpoint` records `CHECKPOINT_FORMAT_VERSION`
-  2; a format-1 checkpoint predates this rule and is refused rather than resumed.
+  3; a format-1 checkpoint predates this rule, a format-2 one predates
+  Admission's reasons, and both are refused rather than resumed.
 
 ## One admission rule
 
-`opengwasdb.build.row_admission.admit_rows` decides per batch which rows are
-admitted (`keep = ~info_drop & ~maf_drop`). The resolver `_scan` and the Hybrid
-builder's Pass 2 both call it, so `canonical_rows_retained` (resolver) and
+Association Admission (`opengwasdb.admission`) decides per batch which rows are
+admitted, through one counting `Gate` per Analysis, and counts each dropped row
+under one reason, INFO before MAF. The resolver `_scan` and the Hybrid
+builder's Pass 2 both judge through it, so `canonical_rows_retained` (resolver) and
 `associations_retained` (builder) are the same rule on their own populations.
 Ancestry/SD evidence and `build_eligible_rows*` see admitted rows only.
 

@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from opengwasdb.admission import AdmissionCounts, AnalysisRules, counting_gate
 from opengwasdb.build.eaf_orientation import (
     EafOrientationMethod,
     EafOrientationOutcome,
@@ -47,7 +48,6 @@ from opengwasdb.build.eaf_orientation import (
 from opengwasdb.build.info_score_filter import declared_score_state
 from opengwasdb.build.liftover import LiftoverFailureError
 from opengwasdb.build.ordered_pool import fork_each, ordered_map
-from opengwasdb.build.row_admission import AdmissionCounts, admit_rows
 from opengwasdb.encoding import (
     EafMeasurements,
     EncodingMeasurements,
@@ -177,7 +177,6 @@ from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.axis import sorted_alids
 from opengwasdb.variants.reference import read_variant_reference
 from opengwasdb.variants.routing import (
-    AssociationBatch,
     FromReference,
     LiftedUnion,
     RoutedNames,
@@ -277,32 +276,6 @@ def _dedup_last_wins(
     return target[keep], z[keep], se[keep], eaf[keep]
 
 
-@dataclass
-class _Admission:
-    """One Analysis's declared INFO and MAF policies (stores #175, #176), judged
-    on each batch before it is matched, and the dispositions they produced.
-
-    A row either filter excludes reaches neither component, the EAF survey nor
-    the top-hit counts. The counts are of the associations the reader yielded,
-    not of canonical source rows.
-    """
-
-    info_score_policy: InfoScorePolicy
-    maf_policy: MafPolicy
-    counts: AdmissionCounts = field(default_factory=AdmissionCounts)
-
-    def __call__(self, batch: AssociationBatch) -> np.ndarray:
-        admission = admit_rows(
-            batch.imputation_score,
-            batch.imputation_status,
-            batch.eaf,
-            self.info_score_policy,
-            self.maf_policy,
-        )
-        self.counts += admission.counts
-        return admission.keep
-
-
 def _off_reference_spill(unmatched: Unmatched, se_divisor: float) -> _OffReferenceSpill:
     """The associations the route table does not hold, one uint64 key per raw
     coordinate, deduplicated last-wins on that key.
@@ -347,18 +320,18 @@ def _resolve_column_hybrid(
     Analysis's imputation-score declaration reaches the reader, and both
     declared policies judge each batch before it is matched.
     """
-    admission = _Admission(info_score_policy, maf_policy)
+    gate = counting_gate(AnalysisRules(row.trait_id, info=info_score_policy, maf=maf_policy))
     reader = open_source(
         row.source, imputation_score_declaration=info_score_policy.imputation_score_declaration
     )
-    routed = table.route_column(reader.stream_associations(), admit=admission)
+    routed = table.route_column(reader.stream_associations(), admit=gate.admit)
     dense, overflow = routed.placed
     divisor = row.se_divisor
     return (
         (dense.index, dense.z, apply_se_divisor(dense.se, divisor), dense.eaf),
         (overflow.index, overflow.z, apply_se_divisor(overflow.se, divisor), overflow.eaf),
         _off_reference_spill(routed.unmatched, divisor),
-        admission.counts,
+        gate.counts,
     )
 
 

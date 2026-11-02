@@ -555,30 +555,32 @@ class TestRefusals:
         with pytest.raises(ValueError, match="records format version"):
             resume_hybrid_build(checkpoint_dir)
 
-    def test_a_pre_fix_format_one_checkpoint_is_refused(self, tmp_path, monkeypatch):
-        """Opengwasdb#331: a format-1 record may hold un-filtered Pass 2 spills.
+    @pytest.mark.parametrize("older", [1, 2])
+    def test_an_older_format_checkpoint_is_refused(self, tmp_path, monkeypatch, older):
+        """An older record is refused, never reinterpreted.
 
-        Format 1 was written before a declared MAF floor dropped the rows it
-        could not judge, so its spills can hold the monomorphic and blank-frequency
-        associations that flooded a common-variant Store. A resume must refuse the
-        record outright rather than publish them, which is why the bump to 2 exists.
+        Format 1 (opengwasdb#331) was written before a declared MAF floor dropped
+        the rows it could not judge, so its spills can hold the monomorphic and
+        blank-frequency associations that flooded a common-variant Store. Format 2
+        (opengwasdb#357) records its Pass 2 counts in a shape that predates
+        Association Admission's reasons. A resume must refuse either outright.
         """
         store = self._failed_build(tmp_path, monkeypatch)
         checkpoint_dir = checkpoint_dir_for(store)
-        # Fixture first: a real checkpoint with real spills is what a pre-fix
+        # Fixture first: a real checkpoint with real spills is what an older
         # record is; refusing an empty directory would prove nothing.
         assert _dir_bytes(checkpoint_dir / "spill") > 0
-        assert CHECKPOINT_FORMAT_VERSION == 2, (
-            "format 2 is the MAF-admission checkpoint record (opengwasdb#331)"
+        assert CHECKPOINT_FORMAT_VERSION == 3, (
+            "format 3 is the Association Admission checkpoint record (opengwasdb#357)"
         )
 
         path = checkpoint_dir / "build_params.json"
         params = json.loads(path.read_text(encoding="utf-8"))
         assert params["format_version"] == CHECKPOINT_FORMAT_VERSION
-        params["format_version"] = 1
+        params["format_version"] = older
         path.write_text(json.dumps(params), encoding="utf-8")
 
-        with pytest.raises(ValueError, match="records format version 1"):
+        with pytest.raises(ValueError, match=f"records format version {older}"):
             resume_hybrid_build(checkpoint_dir)
         assert not store.exists(), "a refused resume publishes nothing"
 

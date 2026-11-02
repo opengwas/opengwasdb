@@ -95,7 +95,11 @@ __all__ = [
 #: them. There is no reinterpretation that is safe, so format 1 is refused
 #: outright and the build starts again: the alternative is a store that looks
 #: filtered and is not.
-CHECKPOINT_FORMAT_VERSION = 2
+#:
+#: **3** (opengwasdb#357): each Analysis's Pass 2 counts are Association
+#: Admission's, by reason. A format-2 record holds the counts in a shape this
+#: build no longer reads, so it is refused and the build starts again.
+CHECKPOINT_FORMAT_VERSION = 3
 
 #: The function a refusal tells an operator to call.
 RESUME_FUNCTION = "resume_hybrid_build"
