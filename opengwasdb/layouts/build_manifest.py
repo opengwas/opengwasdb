@@ -35,7 +35,7 @@ from opengwasdb.readers.column_map import (
     mapped_row_build,
 )
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
-from opengwasdb.readers.registry import known_capabilities
+from opengwasdb.readers.registry import SourceSpec, known_capabilities
 
 __all__ = ["ManifestRow", "column_map_provenance", "manifest_row_to_analysis", "read_manifest"]
 
@@ -76,6 +76,18 @@ class ManifestRow:
     # #281); `None` for every other capability. Carried on the row so every
     # pass that resolves this row's reader resolves the same one.
     column_map: ColumnMap | None = None
+
+    @property
+    def source(self) -> SourceSpec:
+        """The row's source, as Variant Routing and the Pass 2 workers read it."""
+        return SourceSpec(
+            analysis_id=self.trait_id,
+            path=self.file_path,
+            capability=self.source_reader_capability,
+            assembly=self.source_assembly,
+            stored_effect_scale=StoredEffectScale(self.stored_effect_scale),
+            column_map=self.column_map,
+        )
 
 
 def manifest_row_to_analysis(row: ManifestRow) -> Analysis:

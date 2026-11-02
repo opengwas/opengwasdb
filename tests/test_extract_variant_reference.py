@@ -489,7 +489,8 @@ def _pass1_spill_records(
     buffer (issue #194).
     """
     from opengwasdb.layouts.build_manifest import read_manifest
-    from opengwasdb.layouts.dense.build_vcf import _iter_pass1_shard, _pass1_worker
+    from opengwasdb.readers.registry import open_source
+    from opengwasdb.variants.routing.union import _pass1_worker, iter_shard
     from opengwasdb.variants.windows import window_size_bp
 
     vcf = _make_vcf(
@@ -504,10 +505,13 @@ def _pass1_spill_records(
     rows = read_manifest(manifest)
     shard_dir = tmp_path / "shards"
     shard_dir.mkdir()
-    specs = _pass1_worker((0, rows, str(shard_dir), window_size_bp(200.0), threshold))
+    sources = [row.source for row in rows]
+    specs = _pass1_worker(
+        (0, sources, str(shard_dir), window_size_bp(200.0), threshold, open_source)
+    )
     records_by_spill: Counter[tuple[int, int]] = Counter()
     for spec in specs:
-        records_by_spill[spec.rank] += sum(1 for _ in _iter_pass1_shard(spec.path))
+        records_by_spill[spec.rank] += sum(1 for _ in iter_shard(spec.path))
     return specs, records_by_spill
 
 
@@ -895,19 +899,19 @@ def test_artifact_is_independent_of_task_completion_order(tmp_path, monkeypatch)
     """Issue #195 AC: chunk rank is fixed at split time, so the order results
     arrive in cannot change the artifact. Reversing the futures ``as_completed``
     yields exercises the opposite completion order directly, with no timing."""
-    import opengwasdb.layouts.dense.build_vcf as build_vcf
+    from opengwasdb.variants.routing import union
 
     manifest = _imbalanced_manifest(tmp_path)
     forward = tmp_path / "forward.variant-ref.tsv.gz"
     reverse = tmp_path / "reverse.variant-ref.tsv.gz"
     extract_variant_reference(manifest, forward, n_workers=2, window_size_mb=200.0)
 
-    real_as_completed = build_vcf.as_completed
+    real_as_completed = union.as_completed
 
     def reversed_completion(futures, timeout=None):
         return reversed(list(real_as_completed(futures, timeout)))
 
-    monkeypatch.setattr(build_vcf, "as_completed", reversed_completion)
+    monkeypatch.setattr(union, "as_completed", reversed_completion)
     extract_variant_reference(manifest, reverse, n_workers=2, window_size_mb=200.0)
 
     # The fixture really has cross-chunk rsid conflicts, so the comparison is
@@ -947,6 +951,46 @@ def _streaming_writer_output(
     return _artifact_text(artifact)
 
 
+def _materialised_union(
+    manifest: Path,
+    *,
+    n_workers: int,
+    window_size_mb: float,
+    reduction_batch_size: int = 16,
+    map_spill_records: int = 5_000_000,
+    liftover_failure_threshold: float = 0.01,
+) -> tuple[dict, dict[str, str]]:
+    """Pass 1's union held whole in memory, lifted: its site map and names.
+
+    The names are the independent oracle the build checks its rekey against
+    (`expected_rsids_by_routing`), so this needs no private rekey.
+    """
+    from opengwasdb.layouts.build_manifest import read_manifest
+    from opengwasdb.variants.reference import expected_rsids_by_routing
+    from opengwasdb.variants.routing import RoutingKey
+    from opengwasdb.variants.routing.lift import place_union
+    from opengwasdb.variants.routing.union import (
+        UnionOptions,
+        consume_shards,
+        materialize_site_union,
+    )
+
+    tuples_by_assembly, rsid_by_site = consume_shards(
+        [row.source for row in read_manifest(manifest)],
+        materialize_site_union,
+        n_workers=n_workers,
+        options=UnionOptions(window_size_mb, reduction_batch_size, map_spill_records),
+        stats=None,
+    )
+    source_lookup, _reoriented, _dropped = place_union(
+        tuples_by_assembly,
+        chain_file=None,
+        failure_threshold=liftover_failure_threshold,
+        key=RoutingKey.EXACT,
+    )
+    return source_lookup, expected_rsids_by_routing(rsid_by_site, source_lookup)
+
+
 def _materialising_writer_output(
     manifest: Path,
     *,
@@ -957,19 +1001,15 @@ def _materialising_writer_output(
     liftover_failure_threshold: float = 0.01,
 ) -> str:
     """The retired materialising path's artifact text, from the same manifest."""
-    from opengwasdb.layouts.build_manifest import read_manifest
-    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants
     from opengwasdb.variants.reference import write_variant_reference
 
-    rows = read_manifest(manifest)
-    source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
-        rows,
-        chain_file=None,
-        liftover_failure_threshold=liftover_failure_threshold,
+    source_lookup, rsid_by_alid = _materialised_union(
+        manifest,
         n_workers=n_workers,
         window_size_mb=window_size_mb,
         reduction_batch_size=reduction_batch_size,
         map_spill_records=map_spill_records,
+        liftover_failure_threshold=liftover_failure_threshold,
     )
     out = Path(manifest).parent / "materialised.variant-ref.tsv.gz"
     write_variant_reference(
@@ -988,14 +1028,10 @@ def test_all_hg38_streaming_matches_the_materialising_writer(tmp_path, window_si
     byte-identical to the materialising writer's, for every window and batch
     configuration (and both use the same first-named-rsid rule)."""
     manifest = _wide_manifest(tmp_path)
-    from opengwasdb.layouts.build_manifest import read_manifest
-    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants
     from opengwasdb.variants.reference import write_variant_reference
 
-    rows = read_manifest(manifest)
-    source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
-        rows, chain_file=None, liftover_failure_threshold=0.01,
-        n_workers=2, window_size_mb=window_size_mb, reduction_batch_size=batch,
+    source_lookup, rsid_by_alid = _materialised_union(
+        manifest, n_workers=2, window_size_mb=window_size_mb, reduction_batch_size=batch
     )
     expected = tmp_path / f"expected-{window_size_mb}-{batch}.variant-ref.tsv.gz"
     write_variant_reference(
@@ -1044,17 +1080,17 @@ def test_all_hg38_streaming_writes_concatenated_gzip_members(tmp_path):
 def _forbid_materialising(monkeypatch):
     """Patch the retired materialising consumers to fail loudly if called.
 
-    Returns the mocked ``_materialize_site_union`` so a test can assert it was
+    Returns the mocked ``materialize_site_union`` so a test can assert it was
     never invoked; a fork child that did invoke it would raise through the
     worker future (issues #196/#197).
     """
     from unittest.mock import Mock
 
-    import opengwasdb.layouts.dense.build_vcf as build_vcf
     import opengwasdb.variants.reference as reference
+    from opengwasdb.variants.routing import route
 
     materialise = Mock(side_effect=AssertionError("materialising consumer used"))
-    monkeypatch.setattr(build_vcf, "_materialize_site_union", materialise)
+    monkeypatch.setattr(route, "materialize_site_union", materialise)
     monkeypatch.setattr(
         reference,
         "write_variant_reference",
@@ -1068,7 +1104,7 @@ def test_all_hg38_streaming_never_materialises_the_union(tmp_path, monkeypatch):
     or the in-memory writer -- the parent holds no global site set or lookup.
 
     This is the test that fails against the pre-#196 code, where the all-hg38
-    extraction went through ``_materialize_site_union``.
+    extraction went through ``materialize_site_union``.
     """
     materialise = _forbid_materialising(monkeypatch)
     manifest = _wide_manifest(tmp_path)
@@ -1085,7 +1121,7 @@ def test_hg19_and_mixed_manifests_stream_without_materialising(tmp_path, monkeyp
     materialising consumer or the in-memory writer, even for hg19/mixed rows.
 
     Observed to fail against the pre-#197 code, where the hg19 and mixed paths
-    went through ``_materialize_site_union`` and ``write_variant_reference``.
+    went through ``materialize_site_union`` and ``write_variant_reference``.
     """
     materialise = _forbid_materialising(monkeypatch)
     hg19 = _two_variant_vcf(tmp_path)
@@ -1394,17 +1430,22 @@ def _materialising_peak_bytes(manifest: Path) -> int:
     import tracemalloc
 
     from opengwasdb.layouts.build_manifest import read_manifest
-    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants
+    from opengwasdb.variants.routing import (
+        LiftedUnion,
+        RoutingKey,
+        UnionOptions,
+        route_variants,
+    )
 
-    rows = read_manifest(manifest)
+    sources = [row.source for row in read_manifest(manifest)]
     tracemalloc.start()
     tracemalloc.reset_peak()
-    _lift_manifest_variants(
-        rows,
-        chain_file=None,
-        liftover_failure_threshold=0.01,
+    route_variants(
+        sources,
+        LiftedUnion(),
+        key=RoutingKey.EXACT,
         n_workers=2,
-        window_size_mb=20,
+        union=UnionOptions(window_size_mb=20),
     )
     _current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()

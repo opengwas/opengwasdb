@@ -15,6 +15,10 @@ picklable to cross the pool boundary; results are pickled back.
 
 With ``n_workers <= 1`` no pool is created and ``fn`` runs in the calling
 process, which is the serial path every caller keeps.
+
+``fork_each`` is the per-Analysis form Pass 2 uses: results in completion
+order, and one ``shared`` value -- a routing table, a spill directory --
+handed to every call. Forked workers inherit it, so it is never pickled.
 """
 
 from __future__ import annotations
@@ -22,11 +26,17 @@ from __future__ import annotations
 import multiprocessing
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator
-from concurrent.futures import Future, ProcessPoolExecutor
-from typing import TypeVar
+from concurrent.futures import Future, ProcessPoolExecutor, as_completed
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 R = TypeVar("R")
+S = TypeVar("S")
+
+# The value `fork_each` hands its workers. Set in the parent before the pool
+# forks and cleared when it closes, so a worker reads what the parent held.
+_shared: Any = None
+_sharing = False
 
 
 def fork_pool(n_workers: int) -> ProcessPoolExecutor:
@@ -72,3 +82,36 @@ def ordered_map(
         finally:
             for future in pending:
                 future.cancel()
+
+
+def fork_each(
+    fn: Callable[[S, T], R], shared: S, items: Iterable[T], n_workers: int
+) -> Iterator[R]:
+    """Yield ``fn(shared, item)`` for each item, in completion order.
+
+    Every item is submitted at once, so this suits a modest number of large
+    tasks -- one per Analysis -- whose results are small. ``shared`` reaches
+    each call without pickling: a forked worker inherits it, numpy arrays and
+    all. With ``n_workers <= 1`` the calls run here, in input order. Not
+    re-entrant: a second ``fork_each`` while one has a pool open is refused.
+    """
+    if n_workers <= 1:
+        for item in items:
+            yield fn(shared, item)
+        return
+    global _shared, _sharing
+    if _sharing:
+        raise RuntimeError("fork_each is already sharing a value with a pool")
+    _shared, _sharing = shared, True
+    try:
+        with fork_pool(n_workers) as pool:
+            futures = [pool.submit(_call_shared, fn, item) for item in items]
+            for future in as_completed(futures):
+                yield future.result()
+    finally:
+        _shared, _sharing = None, False
+
+
+def _call_shared(fn: Callable[[Any, T], R], item: T) -> R:
+    """Run ``fn`` in a worker against the value its parent shared before forking."""
+    return fn(_shared, item)

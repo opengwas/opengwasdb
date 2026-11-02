@@ -10,6 +10,7 @@ ticket only introduces the seam.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from opengwasdb.model.enums import StoredEffectScale
@@ -81,6 +82,38 @@ def resolve_reader(
         path, stored_effect_scale, imputation_score_declaration=imputation_score_declaration
     )
 
+
+
+@dataclass(frozen=True)
+class SourceSpec:
+    """One Analysis's source: where it is, how to read it, and its assembly.
+
+    Everything `open_source` needs, and nothing a build copies into the Store
+    from the manifest, so Variant Routing can read sources without knowing
+    what a manifest row is. ``assembly`` is ``"hg19"`` or ``"hg38"``.
+    """
+
+    analysis_id: str
+    path: str
+    capability: str
+    assembly: str
+    stored_effect_scale: StoredEffectScale
+    column_map: ColumnMap | None = None
+
+
+def open_source(
+    spec: SourceSpec,
+    *,
+    imputation_score_declaration: ImputationScoreDeclaration | None = None,
+) -> SourceReader:
+    """The `SourceReader` for one Analysis's source, as `resolve_reader` resolves it."""
+    return resolve_reader(
+        spec.capability,
+        spec.path,
+        spec.stored_effect_scale,
+        imputation_score_declaration=imputation_score_declaration,
+        column_map=spec.column_map,
+    )
 
 def _column_map_reader(
     capability: str,

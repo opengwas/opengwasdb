@@ -48,12 +48,8 @@ from opengwasdb.variants.windows import (
 
 if TYPE_CHECKING:
     from opengwasdb.layouts.build_manifest import ManifestRow
-    from opengwasdb.layouts.dense.build_vcf import (
-        _Pass1Stats,
-        _ShardSpec,
-        _WindowShards,
-    )
     from opengwasdb.readers.column_map import ColumnMap
+    from opengwasdb.variants.routing.union import Pass1Stats, ShardSpec, WindowShards
     from opengwasdb.variants.windows import WindowKey
 
 log = logging.getLogger(__name__)
@@ -264,7 +260,7 @@ def extract_variant_reference(
     ``opengwasdb.column-map`` rows, as the build that consumes the artifact does (#281).
     """
     from opengwasdb.layouts.build_manifest import read_manifest
-    from opengwasdb.layouts.dense.build_vcf import _Pass1Stats
+    from opengwasdb.variants.routing.union import Pass1Stats
 
     manifest_rows = read_manifest(
         manifest_path,
@@ -274,7 +270,7 @@ def extract_variant_reference(
     )
     if len(manifest_rows) == 0:
         raise ValueError(f"manifest {manifest_path} contains no rows to extract a reference from")
-    stats = _Pass1Stats()
+    stats = Pass1Stats()
     options = _UnionOptions(
         n_workers=n_workers,
         window_size_mb=window_size_mb,
@@ -306,8 +302,8 @@ def _streaming_extraction(
     manifest_path: str | Path,
     output_path: str | Path,
     options: _UnionOptions,
-    stats: _Pass1Stats,
-    consume: Callable[[_WindowShards], _StreamedArtifact],
+    stats: Pass1Stats,
+    consume: Callable[[WindowShards], _StreamedArtifact],
 ) -> VariantReferenceExtraction:
     """Run the map/reduce core and hand the shards to a streaming consumer.
 
@@ -315,16 +311,16 @@ def _streaming_extraction(
     only counts and its own phase time, so the parent never materialises the
     union (issues #196/#197).
     """
-    from opengwasdb.layouts.dense.build_vcf import _consume_manifest_shards
+    from opengwasdb.variants.routing.union import UnionOptions, consume_shards
 
-    streamed = _consume_manifest_shards(
-        manifest_rows,
+    streamed = consume_shards(
+        [row.source for row in manifest_rows],
+        consume,
         n_workers=options.n_workers,
-        window_size_mb=options.window_size_mb,
-        reduction_batch_size=options.reduction_batch_size,
-        map_spill_records=options.map_spill_records,
+        options=UnionOptions(
+            options.window_size_mb, options.reduction_batch_size, options.map_spill_records
+        ),
         stats=stats,
-        consume=consume,
     )
     if streamed.n_variants == 0:
         raise ValueError(f"manifest {manifest_path} yielded no hg38 variants to reference")
@@ -343,7 +339,7 @@ def _extract_streaming_reference(
     manifest_path: str | Path,
     output_path: str | Path,
     options: _UnionOptions,
-    stats: _Pass1Stats,
+    stats: Pass1Stats,
 ) -> VariantReferenceExtraction:
     """All-hg38 arm: per-window parallel compression, then ordered concatenation.
 
@@ -363,7 +359,7 @@ def _extract_lifted_reference(
     manifest_path: str | Path,
     output_path: str | Path,
     options: _UnionOptions,
-    stats: _Pass1Stats,
+    stats: Pass1Stats,
     *,
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
@@ -393,7 +389,7 @@ def _extraction_summary(
     n_variants: int,
     n_source_keys: int,
     n_rsids: int,
-    stats: _Pass1Stats,
+    stats: Pass1Stats,
     write_seconds: float,
 ) -> VariantReferenceExtraction:
     """Assemble the extraction's result from its counts and phase timings."""
@@ -436,7 +432,7 @@ def read_variant_reference(path: str | Path) -> VariantReference:
 
 
 #: A candidate or routing key: the raw source tuple, or the string form a
-#: routing index keys it by (`_source_site_key`/`_routed_site_key`).
+#: route table keys it by (`RoutingKey.of`).
 _SiteKeyT = TypeVar("_SiteKeyT")
 
 
@@ -650,8 +646,8 @@ def write_variant_reference(
 ) -> None:
     """Write the artifact the inline two-pass Pass 1 would otherwise recompute.
 
-    ``source_lookup`` is exactly the ``(source coord) -> hg38 ALID`` map
-    ``_lift_manifest_variants`` returns, so a store built through a written
+    ``source_lookup`` is exactly the ``(source coord) -> hg38 ALID`` map Pass
+    1's lifted union routes by, so a store built through a written
     artifact is identical to one built from the same manifest in two passes.
 
     Rows are assembled window by window (issue #188): each genomic window's
@@ -708,13 +704,13 @@ def _stream_window_artifact(task: tuple[WindowKey, str, str]) -> _WindowArtifact
     produces within one window. Runs in a worker process, so only the member
     path and integer counts cross back (issue #196).
     """
-    from opengwasdb.layouts.dense.build_vcf import _iter_pass1_shard
+    from opengwasdb.variants.routing.union import iter_shard
 
     window, shard_path, member_path = task
     rsid_by_alid: dict[str, str] = {}
     source_keys_by_alid: dict[str, list[str]] = {}
     n_source_keys = 0
-    for (chrom, pos, ref, alt), rsid in _iter_pass1_shard(Path(shard_path)):
+    for (chrom, pos, ref, alt), rsid in iter_shard(Path(shard_path)):
         a1, a2 = sorted((ref, alt))
         alid = f"{chrom}:{pos}:{a1}:{a2}"
         if rsid and alid not in rsid_by_alid:
@@ -781,7 +777,7 @@ def _finish_members(
 
 
 def _write_streaming_artifact(
-    window_shards: _WindowShards,
+    window_shards: WindowShards,
     *,
     output_path: str | Path,
     n_workers: int,
@@ -833,7 +829,7 @@ def _read_assembly_records(
     dict[tuple[str, int, str, str], tuple[tuple[int, int], str]],
 ]:
     """Read one pre-lift window's final shards into per-assembly site records."""
-    from opengwasdb.layouts.dense.build_vcf import _iter_pass1_shard
+    from opengwasdb.variants.routing.union import iter_shard
 
     hg38_records: dict[tuple[str, int, str, str], tuple[tuple[int, int], str]] = {}
     hg19_records: dict[tuple[str, int, str, str], tuple[tuple[int, int], str]] = {}
@@ -845,7 +841,7 @@ def _read_assembly_records(
         else:
             raise ValueError(f"unhandled source_assembly value {assembly!r} in window shards")
         rank = (chunk, spill)
-        for site, rsid in _iter_pass1_shard(Path(path)):
+        for site, rsid in iter_shard(Path(path)):
             target[site] = (rank, rsid)
     return hg38_records, hg19_records
 
@@ -993,7 +989,7 @@ def _compress_lifted_window(task: _LiftMergeTask) -> _WindowArtifact:
 
 
 def _stage_all_windows(
-    shards: Mapping[tuple[str, WindowKey], _ShardSpec],
+    shards: Mapping[tuple[str, WindowKey], ShardSpec],
     size_bp: int,
     n_workers: int,
     chain_file: str | None,
@@ -1086,7 +1082,7 @@ def _merge_lifted_windows(
 
 
 def _write_lifted_streaming_artifact(
-    window_shards: _WindowShards,
+    window_shards: WindowShards,
     *,
     output_path: str | Path,
     n_workers: int,

@@ -2,7 +2,7 @@
 
 When the hg19 -> hg38 lift puts two source variants on one ALID,
 `build-dense-vcf` writes both into that ALID's row. The row keeps one rsid and
-one source's statistics, and `_source_alids_by_alid` blanks its `source_alid`
+one source's statistics, and Variant Routing blanks its `source_alid`
 as ambiguous. Nothing fails, and `validate` and `check-observed-view` both pass.
 This module finds every such row in a Store from its Observed-Only parent's
 blank `source_alid`s. It reconstructs the colliding hg19 variants by lifting a

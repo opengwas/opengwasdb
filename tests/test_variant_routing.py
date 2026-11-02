@@ -1,0 +1,467 @@
+"""Variant Routing at its interface: `route_variants`, `RoutedNames`, `RouteTable`.
+
+Every source is a `FakeReader`, opened through `route_variants`' reader seam,
+and every lift goes through a chain whose strands are known by construction
+(`liftover_fixtures`), so no Store is built and no fixture VCF is parsed.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from pathlib import Path
+
+import numpy as np
+import pytest
+from liftover_fixtures import write_collision_chain, write_two_strand_chain
+
+from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.readers.fake import FakeReader
+from opengwasdb.readers.interface import ReaderAssociation, SourceVariant
+from opengwasdb.readers.registry import SourceSpec
+from opengwasdb.variants.reference import VariantReference
+from opengwasdb.variants.routing import (
+    AssociationBatch,
+    FromReference,
+    LiftedUnion,
+    RouteTable,
+    RoutingKey,
+    route_variants,
+)
+from opengwasdb.variants.routing import table as route_table
+from opengwasdb.variants.rsid import RsidConflictPolicy
+
+#: The fake sources of the running test, by path. Forked Pass 1 workers
+#: inherit it, so the reader factory below works at any worker count.
+_SOURCES: dict[str, FakeReader] = {}
+
+Site = tuple[str, int, str, str]
+
+
+@pytest.fixture(autouse=True)
+def _fresh_sources() -> Iterator[None]:
+    _SOURCES.clear()
+    yield
+    _SOURCES.clear()
+
+
+def _fake_reader(spec: SourceSpec) -> FakeReader:
+    return _SOURCES[spec.path]
+
+
+def _source(
+    name: str, assembly: str, variants: list[tuple[str, int, str, str, str]]
+) -> SourceSpec:
+    """A fake source naming ``variants`` as ``(chrom, pos, ref, alt, rsid)``."""
+    _SOURCES[name] = FakeReader(
+        variants=[SourceVariant(*variant) for variant in variants]
+    )
+    return SourceSpec(name, name, "fake", assembly, StoredEffectScale.SD)
+
+
+def _association(site: Site, z: float, *, eaf: float | None = None) -> ReaderAssociation:
+    chrom, pos, ref, alt = site
+    return ReaderAssociation(chrom, pos, ref, alt, z, 0.1, StoredEffectScale.SD, eaf=eaf)
+
+
+def _route(sources, authority, **kwargs):
+    return route_variants(sources, authority, readers=_fake_reader, **kwargs)
+
+
+def _reference(source_lookup: dict[Site, str]) -> VariantReference:
+    """A reference that names no rsids, routing exactly ``source_lookup``."""
+    alids = sorted(set(source_lookup.values()))
+    return VariantReference(alids, source_lookup, {}, explicit_source_keys=True)
+
+
+# ── route_variants and RoutedNames ───────────────────────────────────────────
+
+
+@pytest.mark.parametrize("n_workers", [1, 2])
+def test_the_first_source_to_name_a_site_names_its_variant(n_workers):
+    """First named wins, in source order -- not rsid order, and not whichever
+    worker finished first (issues #109, #192)."""
+    first = _source("a", "hg38", [("1", 100, "A", "G", ""), ("1", 200, "C", "T", "rsZ")])
+    second = _source("b", "hg38", [("1", 100, "A", "G", "rs9"), ("1", 200, "C", "T", "rsA")])
+    third = _source("c", "hg38", [("1", 100, "A", "G", "rs1"), ("2", 50, "G", "A", "")])
+
+    routing = _route(
+        [first, second, third], LiftedUnion(), key=RoutingKey.EXACT, n_workers=n_workers
+    )
+
+    assert routing.alids == ["1:100:A:G", "1:200:C:T", "2:50:A:G"]
+    assert routing.names.rsid_by_alid == {"1:100:A:G": "rs9", "1:200:C:T": "rsZ"}
+    assert not routing.names.pending
+
+
+def test_names_and_axis_do_not_depend_on_the_worker_count(tmp_path):
+    """One worker or several give the same axis, provenance, names and table.
+
+    Every source names one shared site, each by a name that sorts before the
+    names of the sources ahead of it, so only the sources' own order -- fixed
+    before any worker starts -- can give the first source's name (issue #195).
+    """
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    sources = [
+        _source(
+            f"s{i}",
+            "hg19",
+            [("2", 1_000 + i, "G", "A", f"rs{i}"), ("3", 500, "C", "T", f"rs{9 - i}")],
+        )
+        for i in range(5)
+    ]
+
+    serial = _route(sources, LiftedUnion(chain), key=RoutingKey.EXACT, n_workers=1)
+    parallel = _route(sources, LiftedUnion(chain), key=RoutingKey.EXACT, n_workers=3)
+
+    assert serial.alids == parallel.alids
+    assert serial.source_alids() == parallel.source_alids()
+    assert serial.names.rsid_by_alid == parallel.names.rsid_by_alid
+    assert parallel.names.rsid_by_alid["3:500:C:T"] == "rs9"
+    associations = [_association(("2", 1_000 + i, "G", "A"), 1.0 + i) for i in range(5)]
+    by_serial = serial.table([serial.alids]).route_column(associations).placed[0]
+    by_parallel = parallel.table([parallel.alids]).route_column(associations).placed[0]
+    for a, b in zip(
+        (by_serial.index, by_serial.z), (by_parallel.index, by_parallel.z), strict=True
+    ):
+        np.testing.assert_array_equal(a, b)
+
+
+def test_a_tuple_both_assemblies_declare_is_dropped_from_both(tmp_path):
+    """The same raw string under hg19 and hg38 is two loci: neither is routed,
+    and neither names a variant (issue #85)."""
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    shared = ("3", 1_000, "G", "A", "rsShared")
+    hg38 = _source("hg38", "hg38", [shared, ("3", 2_000, "C", "T", "")])
+    hg19 = _source("hg19", "hg19", [shared, ("3", 3_000, "C", "T", "")])
+
+    routing = _route([hg38, hg19], LiftedUnion(chain), key=RoutingKey.EXACT)
+
+    assert routing.alids == ["3:2000:C:T", "3:3000:C:T"]
+    assert routing.names.rsid_by_alid == {}
+
+
+def test_a_harvest_names_no_variant_from_a_tuple_both_assemblies_declare(tmp_path):
+    """The harvest drops the same tuples the lift drops: one string under hg19
+    and hg38 is two loci, so neither row names the variant the reference
+    routes that string to (issue #255 rounds 4-5)."""
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    hg38 = _source("hg38", "hg38", [("3", 1_000, "G", "A", "rsHG38")])
+    hg19 = _source("hg19", "hg19", [("3", 1_000, "G", "A", "rsHG19"), ("3", 7, "C", "T", "rs7")])
+    reference = _reference({("3", 1_000, "G", "A"): "3:1000:A:G", ("3", 7, "C", "T"): "3:7:C:T"})
+
+    routing = _route([hg38, hg19], FromReference(reference, chain), key=RoutingKey.EXACT)
+
+    assert routing.names.finish().rsid_by_alid == {"3:7:C:T": "rs7"}
+
+
+def test_a_folding_key_refuses_two_assemblies_meeting_on_one_key(tmp_path):
+    """Two different raw tuples, one per assembly, that fold onto one key are
+    refused rather than guessed between (issue #255 rounds 4-5)."""
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    hg38 = _source("hg38", "hg38", [("3", 1_000, "g", "a", "rs1")])
+    hg19 = _source("hg19", "hg19", [("3", 1_000, "G", "A", "rs2")])
+    reference = _reference({("3", 1_000, "g", "a"): "3:1000:A:G"})
+
+    with pytest.raises(ValueError, match="declared under both hg38 and hg19"):
+        _route([hg38, hg19], FromReference(reference, chain), key=RoutingKey.CASE_FOLDED)
+    # The exact key spells the two tuples apart, so nothing collides.
+    routing = _route([hg38, hg19], FromReference(reference, chain), key=RoutingKey.EXACT)
+    assert routing.names.finish().rsid_by_alid == {"3:1000:A:G": "rs1"}
+
+
+def test_a_harvested_name_follows_the_reference_routing_not_the_lift(tmp_path):
+    """The reference decides where an association lands, so its name lands
+    there too, wherever Pass 1's own lift would have put it (issue #255)."""
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    source = _source("a", "hg19", [("3", 1_000, "G", "A", "rsSOURCE")])
+    # The identity chain lifts 3:1000 to 3:1000; the reference says 3:5000.
+    reference = _reference({("3", 1_000, "G", "A"): "3:5000:A:G"})
+
+    routing = _route([source], FromReference(reference, chain), key=RoutingKey.EXACT)
+
+    assert routing.names.pending
+    assert routing.names.finish().rsid_by_alid == {"3:5000:A:G": "rsSOURCE"}
+    assert routing.alids == ["3:5000:A:G"]
+
+
+def test_a_named_reference_is_used_as_given_and_nothing_is_read():
+    reference = VariantReference(
+        ["1:100:A:G"], {("1", 100, "A", "G"): "1:100:A:G"}, {"1:100:A:G": "rsREF"}, True
+    )
+
+    def _no_read(_spec: SourceSpec) -> FakeReader:
+        raise AssertionError("a reference that names its variants read a source")
+
+    spec = SourceSpec("a", "a", "fake", "hg38", StoredEffectScale.SD)
+    routing = route_variants(
+        [spec], FromReference(reference), key=RoutingKey.EXACT, readers=_no_read
+    )
+
+    assert routing.names.reference_named
+    assert routing.names.rsid_by_alid == {"1:100:A:G": "rsREF"}
+    assert routing.names.conflicts.n_keys is None
+
+
+def test_finish_gives_a_variant_the_globally_first_name(tmp_path):
+    """A name the fold routes, earlier in ``(rank, site)`` order, beats a
+    reference-routed one that comes later (issue #255)."""
+    first = _source("a", "hg38", [("1", 100, "A", "G", "rsFOLDED")])
+    second = _source("b", "hg38", [("1", 100, "G", "A", "rsREFERENCED")])
+    reference = _reference({("1", 100, "G", "A"): "1:100:A:G"})
+
+    routing = _route([first, second], FromReference(reference), key=RoutingKey.CASE_FOLDED)
+
+    # Before the fold only the reference-routed name is known.
+    assert routing.names.rsid_by_alid == {"1:100:A:G": "rsREFERENCED"}
+    with pytest.raises(ValueError, match="pending"):
+        routing.names.require_written(tmp_path, ["1:100:A:G"])
+    folded = routing.names.finish(lambda key: "1:100:A:G" if key == "1:100:A:G" else None)
+    assert folded.rsid_by_alid == {"1:100:A:G": "rsFOLDED"}
+    with pytest.raises(ValueError, match="already final"):
+        folded.finish()
+
+
+def _disputed_sources() -> list[SourceSpec]:
+    """Two spellings of one folded key named two ways, then the other allele
+    order naming the same variant again."""
+    return [
+        _source("a", "hg38", [("1", 100, "A", "G", "rs1")]),
+        _source("b", "hg38", [("1", 100, "a", "g", "rs2")]),
+        _source("c", "hg38", [("1", 100, "G", "A", "rs1")]),
+    ]
+
+
+def test_a_key_named_two_ways_is_refused_naming_both():
+    reference = _reference({("1", 100, "A", "G"): "1:100:A:G", ("1", 100, "G", "A"): "1:100:A:G"})
+    with pytest.raises(ValueError, match="'rs1' but .* names 'rs2'"):
+        _route(_disputed_sources(), FromReference(reference), key=RoutingKey.CASE_FOLDED)
+
+
+def test_drop_unnames_the_variant_even_through_the_other_allele_order():
+    """Under ``drop`` the disputed key's variant stores no name, although the
+    other allele order -- a different key -- names it undisputed (issue #306)."""
+    reference = _reference({("1", 100, "A", "G"): "1:100:A:G", ("1", 100, "G", "A"): "1:100:A:G"})
+
+    routing = _route(
+        _disputed_sources(),
+        FromReference(reference),
+        key=RoutingKey.CASE_FOLDED,
+        on_rsid_conflict=RsidConflictPolicy.DROP,
+    )
+    names = routing.names.finish()
+
+    assert names.rsid_by_alid == {}
+    assert names.conflicts.n_keys == 1
+    assert names.conflicts.n_variants == 1
+    assert names.conflicts.sample[0].names == ("rs1", "rs2")
+
+
+def test_source_alids_blank_an_ambiguous_liftover_collision(tmp_path):
+    """A stored variant several source loci lift onto has an ambiguous origin,
+    left blank rather than guessed -- unless the sources are one locus, its
+    alleles reported either way round (issue #85)."""
+    chain = write_collision_chain(tmp_path / "collision.chain")
+    source = _source(
+        "a",
+        "hg19",
+        [
+            ("1", 501, "A", "G", ""),  # lifts to 1:5501
+            ("1", 1_001, "A", "G", ""),  # also lifts to 1:5501: ambiguous
+            ("1", 1_501, "C", "T", ""),  # lifts to 1:6001
+            ("1", 1_501, "T", "C", ""),  # the same locus, reported flipped
+        ],
+    )
+
+    routing = _route([source], LiftedUnion(chain), key=RoutingKey.EXACT)
+
+    assert routing.source_alids() == {"1:5501:A:G": None, "1:6001:C:T": "1:1501:C:T"}
+
+
+# ── RouteTable ───────────────────────────────────────────────────────────────
+
+
+def _hg38_routing(sites: list[Site]):
+    return _route(
+        [_source("a", "hg38", [(*site, "") for site in sites])],
+        LiftedUnion(),
+        key=RoutingKey.EXACT,
+    )
+
+
+def test_the_last_association_for_an_index_wins_across_batches(monkeypatch):
+    """Two associations reaching one index keep the later one, even when a batch
+    boundary falls between them, and the disagreement is reported."""
+    monkeypatch.setattr(route_table, "_RESOLVE_BATCH", 2)
+    routing = _hg38_routing([("1", 100, "A", "G"), ("1", 300, "C", "T"), ("1", 100, "G", "A")])
+    assert routing.alids == ["1:100:A:G", "1:300:C:T"]
+    table = routing.table([routing.alids])
+    stream = [
+        _association(("1", 100, "A", "G"), 1.0),
+        _association(("1", 300, "C", "T"), 2.0),
+        _association(("1", 300, "C", "T"), 2.0),  # identical: agrees
+        _association(("1", 100, "G", "A"), 5.0),  # the other allele order, later
+    ]
+
+    placed = table.route_column(stream).placed[0]
+
+    assert placed.index.tolist() == [1, 0]
+    assert placed.z.tolist() == [2.0, 5.0]
+    assert placed.conflicting.tolist() == [0]
+
+
+def test_a_reverse_strand_lift_reorients_statistics_on_every_axis(tmp_path):
+    """z is negated and EAF complemented for a re-oriented key, on the panel
+    axis and the shared axis alike; a forward key is untouched (issue #284)."""
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    sites = [("2", 1_000, "G", "A"), ("2", 2_000, "T", "A"), ("3", 1_000, "G", "A")]
+    routing = _route(
+        [_source("a", "hg19", [(*site, "") for site in sites])],
+        LiftedUnion(chain),
+        key=RoutingKey.CASE_FOLDED,
+    )
+    panel = ["2:999001:C:T"]
+    table = routing.table([panel, routing.alids])
+
+    column = table.route_column([_association(site, 2.0, eaf=0.2) for site in sites])
+    on_panel, shared = column.placed
+
+    assert on_panel.index.tolist() == [0]
+    assert on_panel.z.tolist() == pytest.approx([-2.0])
+    assert on_panel.eaf.tolist() == pytest.approx([0.8])
+    shared_alids = [routing.alids[i] for i in shared.index.tolist()]
+    assert shared_alids == ["2:998001:A:T", "3:1000:A:G"]
+    assert shared.z.tolist() == pytest.approx([-2.0, 2.0])
+    assert shared.eaf.tolist() == pytest.approx([0.8, 0.2])
+
+
+def test_keys_that_fold_together_must_reach_one_place():
+    routing = _route(
+        [_source("a", "hg38", [("1", 100, "a", "g", ""), ("1", 100, "A", "G", "")])],
+        LiftedUnion(),
+        key=RoutingKey.CASE_FOLDED,
+    )
+    with pytest.raises(ValueError, match="conflicting variants after case folding"):
+        routing.table([routing.alids])
+
+
+def test_admission_judges_the_reader_orientation_before_matching(tmp_path):
+    """``admit`` sees the source's own statistics, before a lift re-orients
+    them, and a row it refuses is neither placed nor counted unmatched."""
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    reverse = ("2", 1_000, "G", "A")
+    routing = _route(
+        [_source("a", "hg19", [(*reverse, ""), ("3", 1_000, "G", "A", "")])],
+        LiftedUnion(chain),
+        key=RoutingKey.EXACT,
+    )
+    table = routing.table([routing.alids])
+    seen: list[list[float]] = []
+
+    def admit(batch: AssociationBatch) -> np.ndarray:
+        seen.append(batch.z.tolist())
+        return batch.z > 0
+
+    stream = [
+        _association(reverse, 2.0),
+        _association(("3", 1_000, "G", "A"), -1.0),  # refused
+        _association(("9", 9, "A", "C"), 3.0),  # admitted, then unmatched
+    ]
+    column = table.route_column(stream, admit=admit)
+
+    assert seen == [[2.0, -1.0, 3.0]]
+    assert column.placed[0].z.tolist() == pytest.approx([-2.0])
+    assert column.n_unmatched == 1
+
+
+def test_unmatched_associations_are_kept_by_key_only_when_asked():
+    routing = _route(
+        [_source("a", "hg38", [("1", 100, "A", "G", "")])],
+        LiftedUnion(),
+        key=RoutingKey.CASE_FOLDED,
+    )
+    alids = routing.alids
+    stream = [
+        _association(("1", 200, "c", "t"), 1.0),
+        _association(("1", 100, "A", "G"), 2.0),
+        _association(("1", 200, "C", "T"), 3.0),
+    ]
+    kept = routing.table([alids], keep_unmatched=True).route_column(stream)
+
+    assert kept.unmatched.keys == ["1:200:C:T", "1:200:C:T"]
+    assert kept.unmatched.z.tolist() == [1.0, 3.0]
+    assert kept.n_unmatched == 2
+
+
+def test_unmatched_duplicates_that_disagree_are_named_and_all_rows_kept():
+    """Two off-reference associations for one key with different statistics
+    are a conflict, reported by key as a placed index's would be; rows that
+    agree are not. Every row still comes back, in stream order, for the
+    caller's own last-wins (the reviewer's probe)."""
+    table = RouteTable.build({}, (), [[]], key=RoutingKey.EXACT, keep_unmatched=True)
+    stream = [
+        _association(("1", 200, "A", "G"), 1.0),
+        _association(("1", 300, "C", "T"), 4.0),
+        _association(("1", 200, "A", "G"), 2.0),
+        _association(("1", 300, "C", "T"), 4.0),
+    ]
+
+    column = table.route_column(stream)
+
+    assert column.unmatched.conflicting == ["1:200:A:G"]
+    assert column.unmatched.keys == ["1:200:A:G", "1:300:C:T", "1:200:A:G", "1:300:C:T"]
+    assert column.unmatched.z.tolist() == [1.0, 4.0, 2.0, 4.0]
+    assert column.n_unmatched == 4
+
+
+def test_long_alleles_are_routed_by_their_whole_key():
+    """A 300-byte allele is matched by its whole key, beside short ones, and a
+    key the table does not hold is never snapped to a neighbour."""
+    long_alt = "A" * 300
+    sites = [("1", 10, "A", "G"), ("1", 10, "A", long_alt), ("2", 5, "C", "T")]
+    routing = _hg38_routing(sites)
+    table = routing.table([routing.alids])
+    stream = [_association(site, float(i)) for i, site in enumerate(sites)]
+    stream.append(_association(("1", 10, "A", "A" * 299), 9.0))
+
+    column = table.route_column(stream)
+
+    placed = column.placed[0]
+    routed = dict(zip([routing.alids[i] for i in placed.index], placed.z.tolist(), strict=True))
+    assert routed == {"1:10:A:G": 0.0, f"1:10:A:{long_alt}": 1.0, "2:5:C:T": 2.0}
+    assert column.n_unmatched == 1
+    with pytest.raises(ValueError, match="consumed"):
+        routing.table([routing.alids])
+
+
+@pytest.mark.parametrize(
+    "mask",
+    [np.full(1, np.nan), np.ones(1), np.ones(1, dtype=np.int8), [True]],
+    ids=["nan", "float", "int", "list"],
+)
+def test_an_admit_decision_that_is_not_a_boolean_array_is_refused(mask):
+    """A decision is kept only when it says so: a NaN, a number or a list is
+    not a boolean mask, and coercing it would keep a row nobody admitted."""
+    routing = _hg38_routing([("1", 100, "A", "G")])
+    table = routing.table([routing.alids])
+    with pytest.raises(TypeError, match="boolean array"):
+        table.route_column([_association(("1", 100, "A", "G"), 1.0)], admit=lambda batch: mask)
+
+
+def test_an_admit_mask_of_the_wrong_length_is_refused():
+    routing = _hg38_routing([("1", 100, "A", "G")])
+    table = routing.table([routing.alids])
+    with pytest.raises(ValueError, match="mask of shape"):
+        table.route_column(
+            [_association(("1", 100, "A", "G"), 1.0)], admit=lambda batch: np.ones(2, bool)
+        )
+
+
+def test_a_lift_failing_beyond_its_threshold_is_refused(tmp_path: Path):
+    """The lift's failure threshold is the authority's: a union whose hg19
+    group fails the lift beyond it is refused."""
+    from opengwasdb.build.liftover import LiftoverFailureError
+
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    off_chain = _source("a", "hg19", [("5", 100, "A", "G", ""), ("3", 100, "A", "G", "")])
+    with pytest.raises(LiftoverFailureError):
+        _route([off_chain], LiftedUnion(chain, failure_threshold=0.1), key=RoutingKey.EXACT)
