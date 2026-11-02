@@ -12,13 +12,16 @@ lookup, and opengwas/opengwasdb#359 reuses them to place imports on components;
 one run reports every problem instead of the first.
 
 #359 adds the other half: `import_graph()` turns module sources into the imports
-that cross a component boundary, so the layering can be measured rather than
-asserted. The baseline of upward imports that check is held to comes next.
+that cross a component boundary, and `check_layering()` holds those that point up
+a layer to `docs/architecture/layering-baseline.yaml`. That baseline only
+shrinks, so the check reports both an upward import it does not list -- new debt --
+and a listed import that has gone -- debt already paid.
 """
 
 from __future__ import annotations
 
 import ast
+import subprocess
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +30,7 @@ from typing import Any
 import yaml
 
 MODEL_PATH = "docs/architecture/components.yaml"
+BASELINE_PATH = "docs/architecture/layering-baseline.yaml"
 
 #: What every component must declare. A missing one is not a defaultable field:
 #: a component without `paths` claims nothing and would silently own no code.
@@ -248,6 +252,116 @@ def import_graph(model: Mapping[str, Any], sources: Mapping[str, str]) -> tuple[
         if (destination := component_for_module(owners, name)) not in (None, source)
     ]
     return tuple(edges)
+
+
+def layers_of(model: Mapping[str, Any]) -> dict[str, int]:
+    """Each component's layer, by id, as the model declares it."""
+    return {str(component["id"]): int(component["layer"]) for component in model["components"]}
+
+
+def upward_imports(
+    model: Mapping[str, Any], graph: Iterable[ImportEdge]
+) -> tuple[ImportEdge, ...]:
+    """The imports that point at a component on a higher layer than the importer's own.
+
+    Same layer is allowed, and so is downward: the declared order says a component
+    may build on its own layer or below, and only an import against that order is
+    debt. The graph arrives sorted by (file, name), so this is too.
+    """
+    layers = layers_of(model)
+    return tuple(edge for edge in graph if layers[edge.destination] > layers[edge.source])
+
+
+def check_layering(
+    model: Mapping[str, Any],
+    graph: Iterable[ImportEdge],
+    baseline: Iterable[tuple[str, str]],
+) -> list[str]:
+    """What is wrong with the layering, as messages naming the file and the fix.
+
+    Two failures, and they are opposite halves of one ratchet. An upward import the
+    baseline does not list is new debt, and the fix is to move the import or the
+    claim rather than to list it. A listed import that is no longer upward -- moved,
+    deleted, or made legitimate by a claim move -- is debt that has been paid, and
+    the entry has to go, or the list stops describing the code.
+    """
+    layers = layers_of(model)
+    upward = upward_imports(model, graph)
+    listed = {(edge.file, edge.name) for edge in upward}
+    allowed = set(baseline)
+    return [
+        f"{edge.file}: imports {edge.name} from component {edge.source!r}"
+        f" (layer {layers[edge.source]}) into {edge.destination!r}"
+        f" (layer {layers[edge.destination]}), which is higher; move the import or the claim,"
+        f" because {BASELINE_PATH} only shrinks"
+        for edge in upward
+        if (edge.file, edge.name) not in allowed
+    ] + [
+        f"{file}: imports {name}, listed in {BASELINE_PATH}, is no longer an upward import;"
+        f" delete the entry"
+        for file, name in sorted(allowed - listed)
+    ]
+
+
+class BaselineError(Exception):
+    """A baseline file that cannot be read as one. Raised, not returned.
+
+    A baseline nobody can read is not a list of problems to report alongside the
+    rest: it is the list the check compares against, and an unreadable one would
+    make every import look new, or -- worse -- every import look allowed.
+    """
+
+
+def load_baseline(path: Path) -> tuple[tuple[str, str], ...]:
+    """The baseline's (importing file, imported name) pairs, sorted.
+
+    Sorted so a test can compare it to a literal and a person can diff two
+    versions of it. Duplicates are an error rather than a quiet `set`: an entry
+    added twice is one a reviewer would believe was checked once.
+    """
+    document = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(document, dict) or not isinstance(document.get("allowed"), list):
+        raise BaselineError(f"{path}: expected a mapping with an 'allowed' list")
+
+    pairs: list[tuple[str, str]] = []
+    for index, entry in enumerate(document["allowed"]):
+        if not isinstance(entry, dict) or set(entry) != {"file", "name"}:
+            raise BaselineError(
+                f"{path}: entry #{index} must be a mapping with only 'file' and 'name'"
+            )
+        file, name = entry["file"], entry["name"]
+        if not isinstance(file, str) or not isinstance(name, str):
+            raise BaselineError(f"{path}: entry #{index} must have a string 'file' and 'name'")
+        if not is_source_file(file):
+            raise BaselineError(
+                f"{path}: entry #{index} names {file!r}, which is not an engine source file;"
+                f" a baseline entry is a path under {SOURCE_ROOT} as `git ls-files` prints it"
+            )
+        if (file, name) in pairs:
+            raise BaselineError(f"{path}: {file} imports {name} is listed twice")
+        pairs.append((file, name))
+    return tuple(sorted(pairs))
+
+
+def engine_sources(root: Path) -> dict[str, str]:
+    """The engine's tracked source under `root`, as `path -> text`.
+
+    `git ls-files -z` rather than a walk of the tree: the graph is about the code
+    the repository holds, so a file git does not track is not part of it, and a
+    path with a space stays one path. A file no component claims is included --
+    `import_graph()` skips it, and `check_model()` reports it.
+    """
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--", SOURCE_ROOT],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    return {
+        path: (root / path).read_text(encoding="utf-8")
+        for path in parse_tracked_paths(listed.stdout)
+        if is_source_file(path)
+    }
 
 
 class ModelError(Exception):
