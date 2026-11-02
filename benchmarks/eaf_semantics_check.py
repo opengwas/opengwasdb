@@ -28,21 +28,26 @@ import numpy as np
 
 
 def _cells(q: Any, rows: np.ndarray, col: int, n_cols: int) -> dict[str, object]:
+    from opengwasdb.encoding import DenseEafPlane, DenseSePlane
     from opengwasdb.encoding.codec import StoreCodec
     from opengwasdb.encoding.planes import positions_pairs
 
     cols = np.full(len(rows), col, dtype=np.int64)
-    se_eaf = q._se._eaf.points(rows, cols)
-    result_eaf = q._eaf.points(rows, cols)
+    # This check is about the planes themselves, so it opens them, not a reader.
+    root, encoding = q.store.arrays(mode="r"), q.store.manifest.encoding
+    se_plane, eaf_plane = DenseSePlane.open(root, encoding), DenseEafPlane.open(root, encoding)
+    se_eaf = se_plane._eaf.points(rows, cols)
+    result_eaf = eaf_plane.points(rows, cols)
     raw_codec = StoreCodec(
-        q._encoding.with_eaf_reference(False), eaf_exceptions=q._eaf._codec.eaf_exceptions
+        q.store.manifest.encoding.with_eaf_reference(False),
+        eaf_exceptions=eaf_plane._codec.eaf_exceptions,
     )
     raw_eaf = raw_codec.decode_eaf(
-        q._eaf._array.vindex[rows, cols],
-        baseline=q._eaf._gather(q._eaf._baseline, rows),
+        eaf_plane._array.vindex[rows, cols],
+        baseline=eaf_plane._gather(eaf_plane._baseline, rows),
         positions=positions_pairs(rows, cols, n_cols),
     )
-    se_codes = np.asarray(q._se._array.vindex[rows, cols])
+    se_codes = np.asarray(se_plane._array.vindex[rows, cols])
     rec: dict[str, object] = {
         "cells": int(len(rows)),
         "se_eaf_equals_result_eaf": bool(np.array_equal(se_eaf, result_eaf, equal_nan=True)),
@@ -52,8 +57,8 @@ def _cells(q: Any, rows: np.ndarray, col: int, n_cols: int) -> dict[str, object]
     }
     try:
         positions = positions_pairs(rows, cols, n_cols)
-        se_from_raw = q._se._decode(se_codes, raw_eaf, cols, positions)
-        se_true = q._se.points(rows, cols)
+        se_from_raw = se_plane._decode(se_codes, raw_eaf, cols, positions)
+        se_true = se_plane.points(rows, cols)
     except ValueError as exc:  # residual SE refuses a NaN frequency: the answer recorded
         rec["se_decode_with_raw_eaf"] = f"{type(exc).__name__}: {exc}"
         return rec
@@ -72,10 +77,10 @@ def main() -> None:
 
     out: dict[str, object] = {"store": str(args.store)}
     with query_store(args.store) as q:
-        out["encoding"] = q._encoding.to_manifest()
+        out["encoding"] = q.store.manifest.encoding.to_manifest()
         _, n_cols = q._root["z"].shape
         col = args.column
-        imputed_col = np.asarray(q._imputed[:, col], dtype=bool)
+        imputed_col = np.asarray(q._root["imputed"][:, col], dtype=bool)
         se_raw_col = np.asarray(q._root["se"][:, col])
         rows_imp = np.where(imputed_col)[0][: args.cells]
         rows_obs = np.where(~imputed_col & (se_raw_col != -128))[0][: args.cells]

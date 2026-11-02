@@ -282,7 +282,7 @@ def test_rebuilt_top_hit_index_carries_decoded_frequency(
     with query_store(store) as query:
         expected = query.top_hits(threshold=1.0)["eaf"]
         if layout == "dense":
-            query._eaf_pairs = lambda *_: (_ for _ in ()).throw(AssertionError())
+            query._grid.inspect = lambda *_: (_ for _ in ()).throw(AssertionError())
         else:
             query._csr.eaf_pairs = lambda *_: (_ for _ in ()).throw(AssertionError())
         actual = query.top_hits(threshold=1.0)["eaf"]
@@ -396,7 +396,7 @@ def test_dense_range_phewas_decodes_frequency_as_a_row_band(dense_store: Path):
         def fail_points(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("range_phewas must not gather EAF pointwise")
 
-        query._eaf.points = fail_points
+        query._grid._eaf.points = fail_points
         result = query.range_phewas("1", 100, 800)
     assert len(result["eaf"]) == len(result["z"])
     assert np.any(np.isfinite(result["eaf"]))
@@ -417,8 +417,8 @@ def test_point_frequency_read_indexes_only_requested_baseline_rows(dense_store: 
             return self.array.oindex[key]
 
     with query_store(dense_store) as query:
-        spy = ReadSpy(query._eaf._baseline)
-        query._eaf._baseline = spy
+        spy = ReadSpy(query._grid._eaf._baseline)
+        query._grid._eaf._baseline = spy
         result = query.phewas("1:100:A:G")
     assert len(result["eaf"]) == len(_ANALYSES)
     assert spy.keys
@@ -704,7 +704,7 @@ def test_top_hit_index_materialises_panel_frequency_for_imputed_cells(
     build_top_hit_indexes(completed_store, thresholds=(1.0,))
     with query_store(completed_store) as query:
         result = query.top_hits(threshold=1.0)
-        query._eaf_pairs = lambda *_: (_ for _ in ()).throw(AssertionError())
+        query._grid.inspect = lambda *_: (_ for _ in ()).throw(AssertionError())
         indexed = query.top_hits(threshold=1.0)
     imputed = indexed["association_status"] == "imputed"
     assert imputed.any(), "the fixture imputed nothing, so this test could not fail"

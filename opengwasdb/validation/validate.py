@@ -14,6 +14,8 @@ from typing import Any, Literal
 import numpy as np
 
 from opengwasdb import top_hits
+from opengwasdb.associations import Cells, DenseGridReader, State, Tally, non_canonical
+from opengwasdb.associations import present as present_cells
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.encoding import (
     EAF_BASELINE,
@@ -1284,8 +1286,8 @@ def _validate_ragged_csr_values(
     be decoded -- the completion and Top-Hit seams read decoded se, so a
     store that fails here is not taken further.
     """
+    raw_z = np.asarray(root["z"][:])
     if encoding.z.is_fixed_point:
-        raw_z = np.asarray(root["z"][:])
         _overflow_positions_match(
             "data.zarr/ragged/z",
             np.flatnonzero(raw_z == Z_OVERFLOW).astype(np.int64),
@@ -1299,6 +1301,7 @@ def _validate_ragged_csr_values(
     _match_csr_se_exceptions(root, encoding, errors, "data.zarr/ragged/se")
     if np.any(np.isfinite(se_vals) & (se_vals < 0)):
         errors.append("se contains negative finite values")
+    errors.extend(_paired_marker_errors(raw_z, se_vals, encoding, ""))
     # `eaf` is optional (ADR 0036); when present it is a fourth parallel
     # CSR array and must line up with the other three.
     if "eaf" in root:
@@ -1903,10 +1906,11 @@ def _validate_ragged_imputed_missingness(
 ) -> None:
     """Seam: what an imputed=1 row declares about the row's z and se.
 
-    Imputed rows carry both z and se; rows whose z is missing are never
-    imputed and never carry a finite se. "Present" is the complement of the
-    plane's own missing marker (spec §15), not ``isfinite`` of a float: an
-    integer plane holds no NaN to test for.
+    Imputed rows carry both z and se (spec §15, ADR 0070). "Present" is the
+    complement of the plane's own missing marker, not ``isfinite`` of a float:
+    an integer plane holds no NaN to test for, and an infinite SE is a value.
+    Whether z and se agree with each other is checked on every Ragged
+    component, completed or not (`_paired_marker_errors`).
     """
     codec = StoreCodec(encoding)
     z_missing = codec.missing_mask(root["z"][:])
@@ -1914,19 +1918,41 @@ def _validate_ragged_imputed_missingness(
     if se_error is not None:
         errors.append(se_error)
         return
-    imp_mask = imp == 1
-    if imp_mask.any():
-        if np.any(z_missing[imp_mask]):
-            errors.append("imputed=1 rows have missing z-scores")
-        if not np.all(np.isfinite(se_vals[imp_mask])):
-            errors.append("imputed=1 rows have NaN se values")
+    tally = Tally.of(z_missing, np.isnan(se_vals), imp)
+    if tally.imputed_z_missing:
+        errors.append("imputed=1 rows have missing z-scores")
+    if tally.imputed_se_missing:
+        errors.append("imputed=1 rows have NaN se values")
+    if tally.imputed_z_missing:
+        errors.append("missing z rows have imputed=1 (inconsistent)")
 
-    # Where z is missing: se must also be missing and imputed must be 0
-    if z_missing.any():
-        if not np.all(~np.isfinite(se_vals[z_missing])):
-            errors.append("missing z rows have finite se values (inconsistent missingness)")
-        if np.any(imp[z_missing] == 1):
-            errors.append("missing z rows have imputed=1 (inconsistent)")
+
+def _paired_marker_errors(
+    raw_z: np.ndarray, se_vals: np.ndarray, encoding: StoreEncoding, label: str
+) -> list[str]:
+    """A Ragged component's z and se markers, which must agree row for row and be
+    canonical (spec §15).
+
+    Applied to every association sequence -- an Observed-Only Ragged release
+    and a Hybrid's Ragged Overflow as well as a completed one. An infinite SE
+    is present, so a missing z beside one fails.
+    """
+    z_missing = StoreCodec(encoding).missing_mask(raw_z)
+    se_missing = np.isnan(se_vals)
+    odd = non_canonical(raw_z) | non_canonical(se_vals, se_missing)
+    tally = Tally.of(z_missing, se_missing, odd_marker=odd)
+    found = []
+    if tally.z_only_missing:
+        found.append(f"{label}missing z rows have a present se value (inconsistent missingness)")
+    if tally.se_only_missing:
+        found.append(f"{label}z and se missingness is inconsistent")
+    if tally.count(State.NON_CANONICAL):
+        found.append(_non_canonical_message(label))
+    return found
+
+
+def _non_canonical_message(label: str) -> str:
+    return f"{label}z or se holds a non-canonical missing marker (a NaN other than np.nan)"
 
 
 def _validate_ragged_imputed(
@@ -2018,8 +2044,8 @@ def _validate_ragged_top_hits(
     """
     top = top_hits.index_group(data_root)
     csr = RaggedCSRReader(store_path)
-    offsets = csr._offsets[:]
-    vi_all = csr._variant_index[:].astype(np.int32)
+    offsets = csr.offsets
+    vi_all = csr.variant_index(0, csr.sequence_length)
     z_all = csr.z_all()
     n_analyses = len(offsets) - 1
 
@@ -2030,7 +2056,7 @@ def _validate_ragged_top_hits(
         threshold = top_hits.tier_threshold(key, group, missing=0.0)
         arrays = top_hits.load_tier_arrays(group)
         problem = top_hits.structural_problem(
-            arrays, group, n_analyses, expects_imputed="imputed" in csr._root
+            arrays, group, n_analyses, expects_imputed=csr.has_imputed
         )
         if problem is not None:
             errors.append(f"top-hit index {key} {problem}")
@@ -2259,8 +2285,11 @@ def _validate_overflow_values(
     _match_csr_se_exceptions(root, encoding, errors, "Ragged Overflow se")
     if np.any(np.isfinite(se_vals) & (se_vals < 0)):
         errors.append("Ragged Overflow se contains negative finite values")
+    raw_z = np.asarray(root["z"][:])
+    errors.extend(
+        _paired_marker_errors(raw_z, se_vals, encoding, "Ragged Overflow ")
+    )
     if encoding.z.is_fixed_point:
-        raw_z = np.asarray(root["z"][:])
         _overflow_positions_match(
             "Ragged Overflow z",
             np.flatnonzero(raw_z == Z_OVERFLOW).astype(np.int64),
@@ -3481,6 +3510,7 @@ class _DenseBandState:
     eaf_undecodable: bool = False
     neg_se: bool = False
     missingness: bool = False
+    non_canonical: bool = False
     imp_not_binary: bool = False
     imp_nan_z: bool = False
     imp_nan_se: bool = False
@@ -3543,9 +3573,9 @@ def _validate_dense_band(
         findings.eaf_exception_positions.append(
             _band_marked_positions(eaf_arr[r0:r1], EAF_EXCEPTION, r0, n_analyses)
         )
-    _latch_dense_missingness(findings, z_missing, se_band)
-    imp_mask = _latch_dense_imputed_content(findings, imputed_arr, r0, r1)
-    _latch_dense_imputed_missingness(findings, z_missing, se_band, imp_mask)
+    imp_raw = None if imputed_arr is None else np.asarray(imputed_arr[r0:r1])
+    _latch_dense_states(findings, z_missing, se_band, imp_raw, z_band)
+    imp_mask = _count_dense_imputed(findings, imp_raw)
     _latch_dense_off_panel_imputed(findings, on_panel, imp_mask, r0, r1)
     return True
 
@@ -3580,13 +3610,30 @@ def _latch_infinite_se(findings: _DenseBandState, se_band: np.ndarray) -> None:
     findings.infinite_se_per_analysis += np.isinf(se_band).sum(axis=0, dtype=np.int64)
 
 
-def _latch_dense_missingness(
-    findings: _DenseBandState, z_missing: np.ndarray, se_band: np.ndarray
+def _latch_dense_states(
+    findings: _DenseBandState,
+    z_missing: np.ndarray,
+    se_band: np.ndarray,
+    imputed: np.ndarray | None,
+    z_raw: np.ndarray | None = None,
 ) -> None:
-    """z and se must be missing in exactly the same cells (spec §15)."""
-    if findings.missingness:
-        return
-    findings.missingness = bool(np.any(z_missing != np.isnan(se_band)))
+    """The band's cells under the presence rule (spec §15, ADR 0070).
+
+    Z and SE must be missing in exactly the same cells, each marker canonical;
+    the mask holds only 0 and 1; an imputed cell's Z and SE are both present. An
+    infinite SE is present, so an imputed cell holding one passes here and is
+    warned about by `_latch_infinite_se`.
+    """
+    se_missing = np.isnan(se_band)
+    odd = non_canonical(se_band, se_missing)
+    if z_raw is not None:
+        odd |= non_canonical(z_raw)
+    tally = Tally.of(z_missing, se_missing, imputed, odd)
+    findings.missingness |= tally.count(State.PARTIAL) > 0
+    findings.non_canonical |= tally.count(State.NON_CANONICAL) > 0
+    findings.imp_not_binary |= tally.flags_not_binary > 0
+    findings.imp_nan_z |= tally.imputed_z_missing > 0
+    findings.imp_nan_se |= tally.imputed_se_missing > 0
 
 
 def _latch_dense_eaf_range(
@@ -3614,38 +3661,20 @@ def _latch_dense_eaf_range(
     return eaf
 
 
-def _latch_dense_imputed_content(
-    findings: _DenseBandState, imputed_arr: Any | None, r0: int, r1: int
+def _count_dense_imputed(
+    findings: _DenseBandState, imputed: np.ndarray | None
 ) -> np.ndarray | None:
-    """Per band: the 0/1 flag, the imputed mask, and the per-Analysis counts.
+    """Per band: the imputed cells, counted per Analysis, as a mask.
 
-    The counts keep accumulating even once the 0/1 flag has latched: they feed
+    The counts keep accumulating whatever else the band held: they feed
     ``_imputed_declaration_matches_arrays``, and every imputed cell has to be
-    counted no matter what else the band held.
+    counted.
     """
-    if imputed_arr is None:
+    if imputed is None:
         return None
-    imp = np.asarray(imputed_arr[r0:r1])
-    if not findings.imp_not_binary:
-        findings.imp_not_binary = not bool(np.all((imp == 0) | (imp == 1)))
-    imp_mask: np.ndarray = imp == 1
+    imp_mask: np.ndarray = imputed == 1
     findings.imputed_per_analysis += imp_mask.sum(axis=0, dtype=np.int64)
     return imp_mask
-
-
-def _latch_dense_imputed_missingness(
-    findings: _DenseBandState,
-    z_missing: np.ndarray,
-    se_band: np.ndarray,
-    imp_mask: np.ndarray | None,
-) -> None:
-    """Imputed cells are complete: their z is present and their se is finite."""
-    if imp_mask is None or not bool(imp_mask.any()):
-        return
-    if not findings.imp_nan_z and np.any(z_missing[imp_mask]):
-        findings.imp_nan_z = True
-    if not findings.imp_nan_se and not np.all(np.isfinite(se_band[imp_mask])):
-        findings.imp_nan_se = True
 
 
 def _latch_dense_off_panel_imputed(
@@ -3686,6 +3715,13 @@ def _report_dense_band_flags(
         errors.append("se contains negative finite values")
     if findings.missingness:
         errors.append("z and se missingness is inconsistent")
+    if findings.non_canonical:
+        errors.append(_non_canonical_message(""))
+    _report_dense_imputed_flags(errors, findings)
+
+
+def _report_dense_imputed_flags(errors: list[str], findings: _DenseBandState) -> None:
+    """The band flags about the imputed mask, in the reporter's fixed order."""
     if findings.imp_not_binary:
         errors.append("data.zarr/imputed contains values other than 0 and 1")
     if findings.imp_nan_z:
@@ -4297,18 +4333,17 @@ def _fidelity_blocks(
     Returns ``(z_block, se_block, row_index, col_index)`` where the index maps
     take each pair's variant/analysis index to its position in the block.
     """
-    root = store.arrays(mode="r")
     urows = sorted({pr[0] for pr in pairs})
     ucols = sorted({pr[1] for pr in pairs})
     ri = {r: i for i, r in enumerate(urows)}
     ci = {c: i for i, c in enumerate(ucols)}
-    encoding = store.manifest.encoding
-    return (
-        DenseZPlane.open(root, encoding).block(urows, ucols),
-        DenseSePlane.open(root, encoding).block(urows, ucols),
-        ri,
-        ci,
+    grid = DenseGridReader.open(
+        store.arrays(mode="r"), store.manifest.encoding, source=f"Dense Store Release {store.path}"
     )
+    # A cross region comes Analysis-major: one run of the rows per column.
+    found = grid.inspect(Cells.cross(urows, ucols))
+    shape = (len(ucols), len(urows))
+    return found.z.reshape(shape).T, found.se.reshape(shape).T, ri, ci
 
 
 def _compare_fidelity_cells(
@@ -4329,7 +4364,7 @@ def _compare_fidelity_cells(
     for row, col, z_src, se_src, alid in pairs:
         sz = z_blk[ri[row], ci[col]]
         sse = se_blk[ri[row], ci[col]]
-        if not (np.isfinite(sz) and np.isfinite(sse)):
+        if not present_cells(np.array([sz]), np.array([sse]))[0]:
             continue
         n_compared += 1
         z_ref = float(codec.quantise_z(np.array([z_src]))[0])

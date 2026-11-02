@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import residual_stores
 import test_hybrid_build as hb
-import test_query_eaf_reads as qe
 import zarr
 from conftest import SOURCE_HEADER, SOURCE_ROWS
 from test_ragged_build_besd import _build_store as _build_ragged_store
@@ -59,14 +59,14 @@ def build_ragged(tmp_path: Path) -> Path:
 
 
 def build_completed_dense(tmp_path: Path) -> Path:
-    """test_query_eaf_reads's Reference-Completed Dense Store with one imputed cell
+    """The residual Reference-Completed Dense Store with one imputed cell
     made a decisive top hit (z = 8) and the index rebuilt from the store's own plane.
 
     Its imputed cells are otherwise all low-|z|, so a top-hit query would have no
     imputed row for `observed_only` to filter (`test_the_completed_fixture_has_an_
     imputed_top_hit` holds the fixture to it).
     """
-    out, _, _ = qe._dense_completed_fixture(tmp_path)
+    out, _, _ = residual_stores.dense_completed(tmp_path)
     encoding = StoreManifest.load(out).encoding
     root = zarr.open_group(str(out / "data.zarr"), mode="r+", zarr_format=3)
     rows, cols = np.where(np.asarray(root["imputed"][:], dtype=bool))
