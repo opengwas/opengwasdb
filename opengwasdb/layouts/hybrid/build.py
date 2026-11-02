@@ -878,6 +878,12 @@ def _lift_and_partition(
     """
     dense_dir, dense_staged = _open_dense_component(staged)
     routing, panel_alids = _route(manifest_rows, options)
+    if routing.names.pending:
+        log.info(
+            "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d "
+            "on-reference rsid(s)",
+            len(routing.names.rsid_by_alid),
+        )
     hg38_to_source = routing.source_alids()
     partition = _partition_variants(hg38_to_source.keys(), panel_alids, len(manifest_rows))
     analyses: list[Analysis] = [manifest_row_to_analysis(row) for row in manifest_rows]
@@ -1604,11 +1610,6 @@ def _merge_off_reference_rsids(
     finished = names.finish(_fold_route(fold))
     if finished.rsid_by_alid == names.rsid_by_alid:
         return replace(prepared, names=finished)
-    log.info(
-        "Single-pass build: %d named variant(s) rekeyed against the combined "
-        "reference/fold routing",
-        len(finished.rsid_by_alid),
-    )
     _rewrite_dense_table_if_needed(prepared, finished.rsid_by_alid)
     return replace(prepared, names=finished)
 

@@ -290,6 +290,12 @@ class RoutedNames:
         if merged == self.rsid_by_alid:
             # Unchanged: keep the map a caller may already have written, order and all.
             merged = self.rsid_by_alid
+        else:
+            log.info(
+                "Single-pass build: %d named candidate(s) rekeyed against the combined "
+                "reference/fold routing",
+                len(combined),
+            )
         # Only the combined routing says which stored variant each disputed key reaches.
         conflicts = self.conflicts.reaching(len(withheld))
         _log_dropped_rsids(label, conflicts)
@@ -357,11 +363,6 @@ def harvested_names(
     del reference_routing
     on_reference = _rekey_rsids_to_alids(candidate_routing, candidates)
     withhold_disputed(on_reference, candidate_routing, conflicts)
-    log.info(
-        "%s: reference names no rsids; Pass 1 harvest resolved %d on-reference rsid(s)",
-        label,
-        len(on_reference),
-    )
     return RoutedNames(
         on_reference,
         RsidConflicts.found(policy, conflicts),

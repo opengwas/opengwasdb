@@ -108,12 +108,16 @@ class Unmatched:
 
     Kept only by a table built with ``keep_unmatched``; otherwise empty, and
     only counted. Not deduplicated, and in the reader's orientation.
+    ``conflicting`` names the keys more than one kept association reached
+    with different statistics, as `Placed.conflicting` names an axis's
+    indices; all their rows are still here.
     """
 
     keys: Sequence[str]
     z: np.ndarray
     se: np.ndarray
     eaf: np.ndarray
+    conflicting: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -188,11 +192,30 @@ class _Collected:
         empty = (_empty_index(), _empty_stat(), _empty_stat(), _empty_stat())
         placed = tuple(_placed(*_joined(parts, empty)) for parts in self.parts)
         z, se, eaf = _joined(self.unmatched_parts, (_empty_stat(), _empty_stat(), _empty_stat()))
+        keys = self.unmatched_keys
         return RoutedColumn(
             placed=placed,
-            unmatched=Unmatched(self.unmatched_keys, z, se, eaf),
+            unmatched=Unmatched(keys, z, se, eaf, _conflicting_keys(keys, (z, se, eaf))),
             n_unmatched=self.n_unmatched,
         )
+
+
+def _conflicting_keys(keys: list[str], statistics: tuple[np.ndarray, ...]) -> list[str]:
+    """The repeated keys whose rows disagree, by the rule placed indices meet,
+    in the order each first appeared.
+
+    A column's unmatched keys are nearly always distinct, so the common case
+    costs one set; only a repeat numbers the keys to compare their rows.
+    """
+    if len(set(keys)) == len(keys):
+        return []
+    number: dict[str, int] = {}
+    codes = np.fromiter(
+        (number.setdefault(key, len(number)) for key in keys), dtype=np.int64, count=len(keys)
+    )
+    by_code = list(number)
+    conflicting = _conflicting_indices(codes, last_wins(codes), statistics)
+    return [by_code[int(code)] for code in conflicting]
 
 
 def _joined(
@@ -221,7 +244,11 @@ def _retain_rows(columns: Sequence[list[Any]], keep: np.ndarray) -> None:
 def _admitted(
     admit: Admit, columns: _Columns, scores: list[float | None], statuses: list[Any]
 ) -> np.ndarray:
-    """``admit``'s keep mask for one batch, refused unless it has one entry per row."""
+    """``admit``'s keep mask for one batch: a boolean array with one entry per row.
+
+    Nothing else is coerced into one. A NaN or a number is not a decision to
+    keep a row, so a mask that is not boolean is refused rather than read.
+    """
     chroms, poss, refs, alts, zs, ses, eafs = columns
     batch = AssociationBatch(
         chromosome=chroms,
@@ -234,7 +261,10 @@ def _admitted(
         imputation_score=np.asarray(scores, dtype=np.float64),
         imputation_status=np.asarray(statuses, dtype=object),
     )
-    keep = np.asarray(admit(batch), dtype=bool)
+    keep = admit(batch)
+    if not isinstance(keep, np.ndarray) or keep.dtype != np.bool_:
+        got = keep.dtype if isinstance(keep, np.ndarray) else type(keep).__name__
+        raise TypeError(f"admit must return a boolean array, not {got}")
     if keep.shape != (len(batch),):
         raise ValueError(
             f"admit returned a mask of shape {keep.shape} for a batch of {len(batch)} row(s)"
@@ -296,7 +326,7 @@ class RouteTable:
         if key.folds:
             table._refuse_folded_conflicts()
         log.info(
-            "Route table: %d source keys, max key length %d bytes, %d re-oriented by the lift",
+            "Pass 2 lookup: %d variant keys, max key length %d bytes, %d re-oriented by the lift",
             len(table._keys),
             max((len(k) for k in table._keys), default=0),
             int(table._swaps.sum()),

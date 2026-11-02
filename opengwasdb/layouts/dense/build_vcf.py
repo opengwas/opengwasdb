@@ -394,6 +394,11 @@ def _prepare_axis(
         # A Dense build drops the associations the reference does not route, so
         # nothing else names a variant; the harvest it held is freed here.
         routing.names = routing.names.finish()
+        log.info(
+            "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d for "
+            "the variant axis",
+            len(routing.names.rsid_by_alid),
+        )
     axis = _axis_metadata(routing.alids, manifest_rows)
     _write_axis_and_index(staged, routing, axis, routing.names.rsid_by_alid, chunk_shape)
     # The table just written must be the table the resolved map describes: a

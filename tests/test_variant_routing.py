@@ -23,6 +23,7 @@ from opengwasdb.variants.routing import (
     AssociationBatch,
     FromReference,
     LiftedUnion,
+    RouteTable,
     RoutingKey,
     route_variants,
 )
@@ -391,6 +392,27 @@ def test_unmatched_associations_are_kept_by_key_only_when_asked():
     assert kept.n_unmatched == 2
 
 
+def test_unmatched_duplicates_that_disagree_are_named_and_all_rows_kept():
+    """Two off-reference associations for one key with different statistics
+    are a conflict, reported by key as a placed index's would be; rows that
+    agree are not. Every row still comes back, in stream order, for the
+    caller's own last-wins (the reviewer's probe)."""
+    table = RouteTable.build({}, (), [[]], key=RoutingKey.EXACT, keep_unmatched=True)
+    stream = [
+        _association(("1", 200, "A", "G"), 1.0),
+        _association(("1", 300, "C", "T"), 4.0),
+        _association(("1", 200, "A", "G"), 2.0),
+        _association(("1", 300, "C", "T"), 4.0),
+    ]
+
+    column = table.route_column(stream)
+
+    assert column.unmatched.conflicting == ["1:200:A:G"]
+    assert column.unmatched.keys == ["1:200:A:G", "1:300:C:T", "1:200:A:G", "1:300:C:T"]
+    assert column.unmatched.z.tolist() == [1.0, 4.0, 2.0, 4.0]
+    assert column.n_unmatched == 4
+
+
 def test_long_alleles_are_routed_by_their_whole_key():
     """A 300-byte allele is matched by its whole key, beside short ones, and a
     key the table does not hold is never snapped to a neighbour."""
@@ -409,6 +431,20 @@ def test_long_alleles_are_routed_by_their_whole_key():
     assert column.n_unmatched == 1
     with pytest.raises(ValueError, match="consumed"):
         routing.table([routing.alids])
+
+
+@pytest.mark.parametrize(
+    "mask",
+    [np.full(1, np.nan), np.ones(1), np.ones(1, dtype=np.int8), [True]],
+    ids=["nan", "float", "int", "list"],
+)
+def test_an_admit_decision_that_is_not_a_boolean_array_is_refused(mask):
+    """A decision is kept only when it says so: a NaN, a number or a list is
+    not a boolean mask, and coercing it would keep a row nobody admitted."""
+    routing = _hg38_routing([("1", 100, "A", "G")])
+    table = routing.table([routing.alids])
+    with pytest.raises(TypeError, match="boolean array"):
+        table.route_column([_association(("1", 100, "A", "G"), 1.0)], admit=lambda batch: mask)
 
 
 def test_an_admit_mask_of_the_wrong_length_is_refused():
