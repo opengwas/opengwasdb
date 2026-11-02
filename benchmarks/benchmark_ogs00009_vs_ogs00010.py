@@ -663,13 +663,14 @@ def read_cells(q: Any, rows: np.ndarray, cols: np.ndarray) -> Cells:
 
     A contiguous run reads as a band; a scattered set by orthogonal index. A
     cell is observed exactly as the query facade labels it: present (neither
-    marker set) with imputed flag 0 (ADR 0068).
+    marker set) with imputed flag 0 (ADR 0070).
     """
     from opengwasdb.associations import Cells as Region
-    from opengwasdb.associations import State
+    from opengwasdb.associations import DenseGridReader, State
 
     rows = np.asarray(rows, dtype=np.int64)
-    found = q._grid.inspect(Region.variants(rows))
+    grid = DenseGridReader.open(q.store.arrays(mode="r"), q.store.manifest.encoding)
+    found = grid.inspect(Region.variants(rows))
     if found.flags is None:
         raise SystemExit("a Reference-Completed Store returned no imputed mask")
     shape = (len(rows), -1)

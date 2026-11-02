@@ -28,11 +28,14 @@ import numpy as np
 
 
 def _cells(q: Any, rows: np.ndarray, col: int, n_cols: int) -> dict[str, object]:
+    from opengwasdb.encoding import DenseEafPlane, DenseSePlane
     from opengwasdb.encoding.codec import StoreCodec
     from opengwasdb.encoding.planes import positions_pairs
 
     cols = np.full(len(rows), col, dtype=np.int64)
-    se_plane, eaf_plane = q._grid._se, q._grid._eaf
+    # This check is about the planes themselves, so it opens them, not a reader.
+    root, encoding = q.store.arrays(mode="r"), q.store.manifest.encoding
+    se_plane, eaf_plane = DenseSePlane.open(root, encoding), DenseEafPlane.open(root, encoding)
     se_eaf = se_plane._eaf.points(rows, cols)
     result_eaf = eaf_plane.points(rows, cols)
     raw_codec = StoreCodec(
