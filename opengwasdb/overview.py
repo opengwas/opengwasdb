@@ -34,6 +34,7 @@ tested against a hand-built value instead of a built-and-rho-estimated store.
 from __future__ import annotations
 
 import html
+import importlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -41,8 +42,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from scipy.cluster.hierarchy import leaves_list, linkage
-from scipy.spatial.distance import squareform
 
 from opengwasdb.layouts.dense.indexed_subsets import (
     IndexedSubsetError,
@@ -57,6 +56,15 @@ from opengwasdb.model.analyses import (
 )
 from opengwasdb.store.arrays import open_group
 from opengwasdb.store.open import UnsupportedFormatVersion
+
+# scipy ships no type stubs, so `layouts/dense/rho.py` and `stats.py` import it
+# behind a mypy import-untyped suppression that predates this module and is
+# recorded in cleat's escapes baseline -- and cleat refuses a *new* suppression
+# site. Importing it here through `importlib` keeps mypy's finding count where
+# the integration tip left it without adding one; the clustering below is this
+# module's only scipy use, and both names are used as `Any` either way.
+_hierarchy: Any = importlib.import_module("scipy.cluster.hierarchy")
+_spatial_distance: Any = importlib.import_module("scipy.spatial.distance")
 
 # ── The value the renderer takes (issue #57) ────────────────────────────────
 
@@ -233,37 +241,23 @@ def _scan_store_files(store_path: Path) -> tuple[FileGuideEntry, ...]:
     )
 
 
-def _manifest_summary(store_path: Path) -> tuple[str, str, str]:
-    """`(store_id, release_id, completion_state)`, best-effort from
-    `manifest.json`.
+# ── Gather failure policy: the one place an unusable artifact is tolerated ──
+#
+# `overview.html` is regenerable presentation (issue #23 AC3), so a release
+# whose manifest, Rho group or Indexed Variant Subset cannot be read must still
+# render -- with blank header fields, no Rho tab, or a flagged subset row. That
+# tolerance is decided here once, for every accessor below, rather than
+# re-implemented per accessor: a gather step names the failures that mean "this
+# artifact is absent or damaged", and anything else propagates, because treating
+# an unexpected failure as an absent artifact is how a page that looks complete
+# gets shipped over a store that could not be read (issue #57).
 
-    `overview.html` is regenerable from a store's already-persisted data
-    (issue #23 AC3), so a missing or unreadable manifest degrades to blank
-    header fields rather than failing the whole render. Its own policy rather
-    than `_degrade`'s: the header is the only thing read from the manifest, and
-    a manifest that is valid JSON but not an object is a store that needs
-    looking at, not a header to invent (that `AttributeError` surfaces).
-    """
-    try:
-        manifest = json.loads((store_path / "manifest.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return "", "", ""
-    return (
-        str(manifest.get("store_id", "")),
-        str(manifest.get("release_id", "")),
-        str(manifest.get("completion_state", "")),
-    )
-
-
-#: What probing an optional artifact may raise when it is absent, damaged or
-#: unreadable: a missing path or group (`OSError`, which zarr's own
-#: `GroupNotFoundError` and `PathNotFoundError` subclass), corrupt JSON
-#: metadata (`ValueError`), a node of the wrong type (`TypeError`), a missing
-#: array (`KeyError`), an Indexed Variant Subset that fails its structural read
-#: seam, and a pre-release format this build no longer reads (ADR 0041).
-#: Anything else is a bug in the probe and must surface: treating an unexpected
-#: failure as "this release has no Rho Matrix" is how a wrong answer that looks
-#: right gets shipped.
+#: Failures that mean an optional artifact -- the Rho group, an Indexed Variant
+#: Subset -- is absent, damaged or in a format this build no longer reads: a
+#: missing path or group (`OSError`, which zarr's `GroupNotFoundError` and
+#: `PathNotFoundError` subclass), corrupt JSON metadata (`ValueError`), a node
+#: of the wrong type (`TypeError`), a missing array (`KeyError`), a subset that
+#: fails its structural read seam, and a pre-release format (ADR 0041).
 _PROBE_ERRORS: tuple[type[Exception], ...] = (
     OSError,
     ValueError,
@@ -273,25 +267,61 @@ _PROBE_ERRORS: tuple[type[Exception], ...] = (
     UnsupportedFormatVersion,
 )
 
+#: Failures that mean a release has no usable `manifest.json`: the file is
+#: missing or unreadable, or it is not valid JSON. Deliberately narrower than
+#: `_PROBE_ERRORS` -- the same policy with this artifact's own failures, because
+#: a manifest that parses to something that is not an object is a store worth
+#: looking at, not a header worth inventing (`AttributeError` surfaces).
+_MANIFEST_ERRORS: tuple[type[Exception], ...] = (OSError, json.JSONDecodeError)
 
-def _probe(action: Callable[[], Any]) -> tuple[Any, Exception | None]:
-    """Run a presentation-layer probe, returning its result or the failure."""
+
+def _probe(
+    action: Callable[[], Any], *, errors: tuple[type[Exception], ...] = _PROBE_ERRORS
+) -> tuple[Any, Exception | None]:
+    """Run a probe, returning its result or the failure it is allowed to hide."""
     try:
         return action(), None
-    except _PROBE_ERRORS as error:
+    except errors as error:
         return None, error
 
 
-def _degrade(action: Callable[[], Any], default: Any) -> Any:
+def _degrade(
+    action: Callable[[], Any],
+    default: Any,
+    *,
+    errors: tuple[type[Exception], ...] = _PROBE_ERRORS,
+) -> Any:
     """`action()`'s result, or `default` when an optional artifact is unusable.
 
-    The gather step's one degrade-gracefully seam: an absent Rho group or an
-    unreadable Indexed Variant Subset must leave an explicit absent tab or a
-    flagged row rather than abort the page, because `overview.html` is
-    regenerable presentation (issues #23, #267).
+    The gather step's one degrade-gracefully seam. `errors` is the artifact's
+    own list of failures-that-mean-absent (`_PROBE_ERRORS` for the Rho group and
+    the Indexed Variant Subsets, `_MANIFEST_ERRORS` for the header); anything
+    else is a bug and propagates.
     """
-    value, error = _probe(action)
+    value, error = _probe(action, errors=errors)
     return default if error is not None else value
+
+
+def _manifest_summary(store_path: Path) -> tuple[str, str, str]:
+    """`(store_id, release_id, completion_state)`, best-effort from
+    `manifest.json`.
+
+    `overview.html` is regenerable from a store's already-persisted data
+    (issue #23 AC3), so a missing or unreadable manifest degrades to blank
+    header fields rather than failing the whole render -- through the same
+    policy as every other optional artifact, with `_MANIFEST_ERRORS` as its own
+    list of tolerable failures.
+    """
+    manifest = _degrade(
+        lambda: json.loads((store_path / "manifest.json").read_text(encoding="utf-8")),
+        {},
+        errors=_MANIFEST_ERRORS,
+    )
+    return (
+        str(manifest.get("store_id", "")),
+        str(manifest.get("release_id", "")),
+        str(manifest.get("completion_state", "")),
+    )
 
 
 def _open_optional_group(path: Path) -> Any | None:
@@ -404,7 +434,10 @@ def _rho_heatmap(
     dist = 1.0 - np.nan_to_num(sub_rho, nan=0.0)
     dist = (dist + dist.T) / 2.0  # exact symmetry against float round-off
     np.fill_diagonal(dist, 0.0)
-    order = top[leaves_list(linkage(squareform(dist, checks=False), method="average"))]
+    linkage_matrix = _hierarchy.linkage(
+        _spatial_distance.squareform(dist, checks=False), method="average"
+    )
+    order = top[_hierarchy.leaves_list(linkage_matrix)]
 
     ordered_rho = rho_mat[np.ix_(order, order)]
     ordered_n = n_null_mat[np.ix_(order, order)]

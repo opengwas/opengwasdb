@@ -472,6 +472,30 @@ def test_gather_store_overview_carries_a_corrupt_manifest_as_blanks(tmp_path):
     assert (value.store_id, value.release_id, value.completion_state) == ("", "", "")
 
 
+def test_gather_store_overview_lets_an_unexpected_failure_propagate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only failures an absent or damaged artifact raises are degraded.
+
+    A failure the gather step has no account of -- here opening `data.zarr`
+    raising `RuntimeError` -- must abort the gather rather than be read as "this
+    release has no Rho Matrix", which is how a store that cannot be read gets
+    rendered as a page that looks complete (issue #57; CONTRIBUTING, "fail
+    loudly over degrading quietly"). A broad `except Exception` in the probe
+    turns this red.
+    """
+    _write_manifest(tmp_path)
+    (tmp_path / "data.zarr").mkdir()
+
+    def explode(*_args: object, **_kwargs: object) -> NoReturn:
+        raise RuntimeError("the zarr stack is broken")
+
+    monkeypatch.setattr(overview_module, "open_group", explode)
+
+    with pytest.raises(RuntimeError, match="the zarr stack is broken"):
+        gather_store_overview(tmp_path, _table())
+
+
 def test_gather_store_overview_precomputes_the_rho_bins_and_clustering(tmp_path):
     """The Rho tab's statistics are the gather step's, not the renderer's."""
     store = _build_rho_store(tmp_path)
