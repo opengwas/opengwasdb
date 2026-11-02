@@ -1147,13 +1147,18 @@ outputs. The shapes themselves are `_query_shapes.common_query_patterns`.
 | `zarr3_fixture_trees.py` | one fixture store per builder path, with a given checkout's code | (trees, not committed) |
 | `zarr3_compare_trees.py` | two such trees: chunk bytes apart from metadata, and whether differing chunks decode equal | `compare-split-*.txt`, `chunk-diff-decode-fused-default.json` |
 | `zarr3_encode_scope.py` | compressed tile sizes and band-write time per lever, on real OGS-00009 | `encode_scope.out` |
-| `zarr3_se_plan.py` | the SE encoding plan chosen on a real OGS-00009 slice, per lever and worker count | `se_plan_check*.out` |
+| `zarr3_se_plan.py` | the SE encoding plan chosen on a real OGS-00009 slice, per lever and worker count | `se_plan_check*.out` (see below) |
 | `zarr3_spot_queries.py` | spot queries with every returned array hashed, and the comparison of two records | `spot-*.json`, `spot-step1-compare.txt` |
 | `shape_slice.py` | a 100,000-variant slice of OGS-00009 `z` in candidate shapes; its raw reads; per-plane decode times | `slice/slice_read_*.jsonl`, `slice/round1/`, `slice/decode_by_plane.jsonl`, `slice_build.out` |
 | `shape_harness_geometry.py` | the arrays and chunks each harness shape reads, re-expressed per candidate chunk | `slice/harness_geometry.json` |
 | `shape_screen.py` | the read cost model, the shape screen, the expected 0.2.0 times, the model's rank check, the slice table | `slice/{cost_model,screen,expected_020,screen_rank_check}.{json,out}` |
 | `eaf_read_split.py` | each query's time inside the EAF reads, split by caller (#253) | `eaf/eaf_split_{1,2}.json` |
 | `eaf_semantics_check.py` | which EAF residual SE decodes against on a Reference-Completed release (#253) | `eaf/eaf_semantics_check.json` |
+
+`zarr3_se_plan.py`'s output is committed twice: the `1c27e64`/`8cc6ba1`
+transcripts (#244), and `se_plan_check-format020.out` with
+`se_plan_check_fused-format020.out`, the same six runs on a format 0.2.0 store,
+whose command and date `PROVENANCE.md` records.
 
 The #242 harness made the paired 2.18 / zarr 3 runs (`stage-a*`) and the
 peak-memory runs (`rss-*`), each environment running its own checkout's copy:

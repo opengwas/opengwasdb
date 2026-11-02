@@ -1,0 +1,4 @@
+ 22:19:10 up 32 days, 17:13,  0 users,  load average: 14.61, 18.13, 18.85
+{"label": "asis", "n_workers": 1, "use_threads": true, "finite_se_cells": 113693350, "plan": {"version": 3, "z": {"kind": "int16_fixed", "scale": 1024}, "se": {"kind": "int8_residual", "residual_range": 0.5}, "eaf": {"kind": "float32"}}, "chunk_shape": [1000, 64], "shard_shape": [50000, 1024], "stored_dtype": "int8", "stored_sha": "01d40f8d9efafe0b", "se_shard_bytes": 25316203, "se_shard_files": 3, "s": 46.1}
+{"label": "asis", "n_workers": 4, "use_threads": true, "finite_se_cells": 113693350, "plan": {"version": 3, "z": {"kind": "int16_fixed", "scale": 1024}, "se": {"kind": "int8_residual", "residual_range": 0.5}, "eaf": {"kind": "float32"}}, "chunk_shape": [1000, 64], "shard_shape": [50000, 1024], "stored_dtype": "int8", "stored_sha": "01d40f8d9efafe0b", "se_shard_bytes": 25316203, "se_shard_files": 3, "s": 20.7}
+ 22:21:12 up 32 days, 17:15,  0 users,  load average: 10.67, 15.29, 17.70
