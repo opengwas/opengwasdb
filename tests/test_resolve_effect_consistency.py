@@ -518,3 +518,19 @@ def test_a_record_with_the_measurement_resumes_under_its_policy_and_not_another(
 
     changed = run(EffectConsistencyPolicy(max_median_abs_delta=2.0))
     assert changed.n_resumed == 0
+
+
+def test_an_unscanned_source_has_no_measurement_not_a_skip(tmp_path: Path, panel):
+    """A source never read is not a measured absence of p-values (final review)."""
+    missing = tmp_path / "nowhere.tsv"
+    request = AnalysisRequest(
+        "GCST000001", missing, 20_000.0, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
+        StoredEffectScale.SD,
+    )
+    result = resolve_analysis(
+        request, reader=GwasSsfReader(missing), reference=panel, gates=_GATES,
+    )
+
+    assert result.error.startswith("FileNotFoundError")
+    assert result.diagnostics.rows_read == 0
+    assert result.diagnostics.effect_consistency is None
