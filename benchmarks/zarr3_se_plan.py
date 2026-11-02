@@ -35,19 +35,21 @@ import numpy as np
 MIN_FINITE_CELLS = 1_000_000
 
 
-def stored_data_files(array_path: Path) -> list[Path]:
-    """The files an array's directory holds for the data it stores.
+def stored_shards(array_path: Path) -> list[Path]:
+    """The files an array stores for its shards: every file in its `c/` subtree.
 
-    Zarr V3 sharding stores one file per shard under `c/`, beside `zarr.json`; a
-    V2 array stores one file per chunk beside its dot-files.  Metadata is not
-    data, so it is excluded either way -- counting the directory's entries
-    instead reports the layout's fan-out, not what the rewrite wrote.
+    Zarr V3 addresses a sharded array's chunks under `c/`, one file per shard,
+    and stores nothing else there; the array's `zarr.json` beside it is
+    metadata.  An absent or empty `c/` means this benchmark did not measure a
+    sharded array, which is not a measurement of zero bytes: it fails here
+    rather than reporting a number that looks plausible.
     """
-    return sorted(
-        p
-        for p in array_path.rglob("*")
-        if p.is_file() and p.name != "zarr.json" and not p.name.startswith(".")
-    )
+    shards = sorted(p for p in (array_path / "c").rglob("*") if p.is_file())
+    if not shards:
+        raise SystemExit(
+            f"{array_path}: no shard files under c/ -- expected a sharded Zarr v3 array"
+        )
+    return shards
 
 
 def stage(store: Path, scratch: Path, start: int, n_rows: int) -> tuple[Path, int]:
@@ -115,7 +117,7 @@ def main() -> None:
     elapsed = time.perf_counter() - t0
     stored_plane = arrays.open_group(path)["se"]
     stored = np.asarray(stored_plane[:])
-    shard_files = stored_data_files(path / "se")
+    shard_files = stored_shards(path / "se")
     result = {
         "label": args.label,
         "n_workers": args.n_workers,
