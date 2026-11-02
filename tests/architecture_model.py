@@ -79,6 +79,17 @@ def is_source_file(path: str) -> bool:
     return path.startswith(SOURCE_ROOT) and path.endswith(SOURCE_SUFFIX)
 
 
+def parse_tracked_paths(raw: bytes) -> list[str]:
+    """The paths in `git ls-files -z` output: NUL separated, never split on whitespace.
+
+    A path may contain a space, and splitting on whitespace would cut
+    `opengwasdb/build/new helper.py` into two paths that are not engine source, so
+    the check would pass over a file nobody claims. `-z` also means git does not
+    quote or escape an unusual name, so what comes back is the path itself.
+    """
+    return [path for path in raw.decode("utf-8").split("\0") if path]
+
+
 def check_model(model: Mapping[str, Any], tracked_paths: Iterable[str]) -> list[str]:
     """Everything wrong with the model, as messages naming the file and the fix."""
     claim_list = claims(model)

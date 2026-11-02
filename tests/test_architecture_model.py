@@ -26,6 +26,7 @@ from architecture_model import (
     claims,
     component_for_path,
     load_model,
+    parse_tracked_paths,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -236,16 +237,30 @@ def test_two_components_sharing_an_id_fail_naming_it(tmp_path: Path) -> None:
     )
 
 
+def test_a_tracked_path_with_a_space_is_one_path() -> None:
+    """`git ls-files -z` is NUL separated precisely so a name may contain a space.
+
+    Splitting on whitespace turns `opengwasdb/build/new helper.py` into two paths,
+    neither of them engine source, so the exhaustive check below would pass over a
+    file nobody claimed -- the silent failure this module exists to stop.
+    """
+    raw = b"opengwasdb/build/new helper.py\x00opengwasdb/stats.py\x00"
+
+    assert parse_tracked_paths(raw) == [
+        "opengwasdb/build/new helper.py",
+        "opengwasdb/stats.py",
+    ]
+
+
 def _tracked_paths() -> list[str]:
     """The files git tracks under `opengwasdb/`, as the site collector reads them."""
     listed = subprocess.run(
-        ["git", "ls-files", "--", "opengwasdb/"],
+        ["git", "ls-files", "-z", "--", "opengwasdb/"],
         cwd=ROOT,
         check=True,
         capture_output=True,
-        text=True,
     )
-    return listed.stdout.split()
+    return parse_tracked_paths(listed.stdout)
 
 
 def test_this_repositorys_model_claims_every_engine_source_file() -> None:
