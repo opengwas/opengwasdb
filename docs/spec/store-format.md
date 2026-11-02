@@ -2002,7 +2002,9 @@ replaces its Store under the same id, so this check gates the swap.
     (a source-missing cell observed with `imputed == 0`); `inserted_observed_cells`;
     `imputed_mask_invalid` (an `imputed` value outside 0 and 1);
     `z_se_missingness_mismatch` (a cell, in `SOURCE` or `TARGET`, with only one of Z and SE
-    missing).
+    missing); `non_canonical_marker` (a cell, in `SOURCE` or `TARGET` or on an inserted row,
+    whose Z or SE holds a NaN other than the plane's canonical one, §15: an invalid state a
+    reader refuses, and one `isnan` alone cannot tell from a missing cell — issue #373).
 
   A nonzero failing
   counter, `parent_rows_unmapped > 0`, an order that is not preserved, and differing Analyses
@@ -2058,15 +2060,16 @@ replaces its Store under the same id, so this check gates the swap.
   `infinite_cells` are informational; `z_mismatch`, `se_mismatch`,
   `eaf_mismatch` (a matched association whose decoded value differs, NaN equal to NaN),
   `observed_missing_in_child` (a `SOURCE` association that `TARGET`'s Overflow lacks),
-  `missing_became_observed` (a `TARGET` association that `SOURCE` lacks) and
-  `z_se_missingness_mismatch` fail. `components.overflow.all_analyses` covers every Analysis and
-  all fail: `observed_in_both`, `imputed_cells`, and `analyses_count_mismatch` (Analyses whose
-  count is not `SOURCE`'s less its crossovers). `crossovers.totals` counts `infinite_cells`
-  (informational) and the rest all fail: `z_mismatch`,
-  `se_mismatch`, `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_child` and
-  `z_se_missingness_mismatch` (a crossover cell, in the `SOURCE` Overflow or the `TARGET` Dense
-  Component, with only one of Z and SE missing — the Dense part cannot see it, because a
-  crossover is set aside there).
+  `missing_became_observed` (a `TARGET` association that `SOURCE` lacks),
+  `z_se_missingness_mismatch` and `non_canonical_marker` fail. `components.overflow.all_analyses`
+  covers every Analysis and all fail: `observed_in_both`, `imputed_cells`, and
+  `analyses_count_mismatch` (Analyses whose count is not `SOURCE`'s less its crossovers).
+  `crossovers.totals` counts `infinite_cells` (informational) and the rest all fail:
+  `z_mismatch`, `se_mismatch`, `eaf_mismatch`, `observed_marked_imputed`,
+  `observed_missing_in_child`, `z_se_missingness_mismatch` (a crossover cell, in the `SOURCE`
+  Overflow or the `TARGET` Dense Component, with only one of Z and SE missing — the Dense part
+  cannot see it, because a crossover is set aside there) and `non_canonical_marker` (likewise
+  counted on both sides, and here or nowhere, for the same reason).
   `failures` names each nonzero failing counter with the part that counted it
   (`dense.inserted_observed_cells`, `overflow.observed_in_both`, `crossovers.z_mismatch`), and
   `dense.parent_rows_unmapped`, `dense.order_not_preserved`, the same two for `overflow.` (the
@@ -2121,7 +2124,9 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   `TARGET`, which never fail the check) are informational. Failing: `z_mismatch`, `se_mismatch`,
   `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_target`,
   `target_observed_not_in_source`, `imputed_outside_retained`, `imputed_in_non_admitted`,
-  `imputed_mask_invalid`, `z_se_missingness_mismatch`, `target_variants_unordered` (an Analysis's
+  `imputed_mask_invalid`, `z_se_missingness_mismatch`, `non_canonical_marker` (a cell, in
+  `SOURCE` or `TARGET`, whose Z or SE holds a NaN other than the canonical one: an invalid
+  state, not a `nan_rows` row — issue #373), `target_variants_unordered` (an Analysis's
   variant indices not strictly increasing) and `quality_blocks_not_in_regions`. `sample` lists
   each checked Analysis with its strata, admission, the ids of its retained `blocks` and counts, and `by_stratum` counts
   them.
