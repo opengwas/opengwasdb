@@ -41,8 +41,8 @@ def stage(store: Path, scratch: Path, start: int, n_rows: int) -> tuple[Path, in
 
     with query_store(store) as q:
         rows = np.arange(start, start + n_rows, dtype=np.int64)
-        se = np.asarray(q._se.rows(rows), dtype=np.float32)
-        eaf = np.asarray(q._eaf.band(start, start + n_rows), dtype=np.float32)
+        se = np.asarray(q._grid._se.rows(rows), dtype=np.float32)
+        eaf = np.asarray(q._grid._eaf.band(start, start + n_rows), dtype=np.float32)
     finite = int(np.isfinite(se).sum())
     if finite <= MIN_FINITE_CELLS:
         raise SystemExit(f"{finite:,} finite SE cells: the slice must carry real SE values")

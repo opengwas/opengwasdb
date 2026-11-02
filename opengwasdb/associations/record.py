@@ -54,6 +54,9 @@ class State(IntEnum):
 
 _INVALID_STATES = (State.PARTIAL, State.FLAG_INVALID, State.IMPUTED_MISSING)
 
+#: Cells `Tally.of` counts at a time (4 MiB of int8 states).
+_TALLY_WINDOW = 1 << 22
+
 
 def states(
     z_missing: np.ndarray, se_missing: np.ndarray, flags: np.ndarray | None = None
@@ -113,17 +116,33 @@ class Tally:
     def of(
         cls, z_missing: np.ndarray, se_missing: np.ndarray, flags: np.ndarray | None = None
     ) -> Tally:
-        z_missing = np.asarray(z_missing, dtype=bool)
-        se_missing = np.asarray(se_missing, dtype=bool)
-        counts = np.bincount(
-            states(z_missing, se_missing, flags).ravel().astype(np.intp), minlength=len(State)
-        )
+        """The counts over every cell, taken a window at a time.
+
+        A window bounds the working set -- the per-cell states and the counting
+        copy -- whatever the length: `validate` tallies a whole Ragged sequence
+        at once, 127 million rows on OGS-00027.
+        """
+        z_missing = np.asarray(z_missing, dtype=bool).ravel()
+        se_missing = np.asarray(se_missing, dtype=bool).ravel()
+        raw = None if flags is None else np.asarray(flags).ravel()
+        total = cls()
+        for lo in range(0, len(z_missing), _TALLY_WINDOW):
+            hi = lo + _TALLY_WINDOW
+            total = total + cls._of_window(
+                z_missing[lo:hi], se_missing[lo:hi], None if raw is None else raw[lo:hi]
+            )
+        return total
+
+    @classmethod
+    def _of_window(
+        cls, z_missing: np.ndarray, se_missing: np.ndarray, flags: np.ndarray | None
+    ) -> Tally:
+        counts = np.bincount(states(z_missing, se_missing, flags), minlength=len(State))
         imputed: np.ndarray | None = None
         not_binary = 0
         if flags is not None:
-            raw = np.asarray(flags)
-            imputed = raw == 1
-            not_binary = int(np.count_nonzero(~imputed & (raw != 0)))
+            imputed = flags == 1
+            not_binary = int(np.count_nonzero(~imputed & (flags != 0)))
         return cls(
             by_state=tuple(int(c) for c in counts),
             z_only_missing=int(np.count_nonzero(z_missing & ~se_missing)),
