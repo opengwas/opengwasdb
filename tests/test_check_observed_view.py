@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 import test_dense_completion as tdc
 from cli_output import normalize_cli_output
+from presence_fixtures import float_plane_z, plant_payload_nan
 from typer.testing import CliRunner
 
 from opengwasdb.build.observed import build_dense_observed_from_sources
@@ -309,6 +310,42 @@ def test_a_row_map_shifted_by_an_inserted_row_fails_on_the_cells(tmp_path, pair)
     assert verdict["axis"]["order_preserved"] is True
     assert verdict["totals"]["z_mismatch"] > 0
     assert verdict["totals"]["observed_missing_in_child"] > 0
+
+
+# --- a non-canonical missing marker (spec §15, issue #373) -------------------
+
+# A float16 NaN other than `np.nan`'s 0x7e00 is not a missing marker a reader
+# accepts: it is an invalid state (spec §15), and `isnan` alone cannot tell the two
+# apart. `1:900000:A:G` is a cell a2 does not observe in either Store, so planting
+# Z's payload there changes the marker's bits and nothing else.
+PAYLOAD_CELL = ("1:900000:A:G", 1)
+
+
+def _plant_a_payload_nan(store: Path) -> None:
+    alid, analysis = PAYLOAD_CELL
+    group = float_plane_z(store)
+    row = _row_of(store, alid)
+    assert np.isnan(np.asarray(group["se"][row, analysis], dtype=np.float32))
+    plant_payload_nan(group, (row, analysis))
+
+
+@pytest.mark.parametrize("side", ["target", "source"])
+def test_a_non_canonical_z_is_counted_and_fails(tmp_path, pair, side):
+    """A marker whose payload is not `np.nan`'s is invalid, whichever Store holds it.
+
+    `isnan` reads such a cell as missing, so a check counting by markers alone would
+    pass a Store whose cells no query accepts (spec §15, issue #373).
+    """
+    observed, completed = pair
+    _plant_a_payload_nan({"target": completed, "source": observed}[side])
+    out = tmp_path / "verdict.json"
+
+    result = _run(observed, completed, out)
+
+    assert result.exit_code == 1, result.output
+    verdict = _verdict(result, out)
+    assert verdict["totals"]["non_canonical_marker"] == 1
+    assert "non_canonical_marker" in verdict["failures"]
 
 
 def test_a_different_analyses_order_fails(tmp_path, pair):

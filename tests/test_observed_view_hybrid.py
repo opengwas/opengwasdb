@@ -43,6 +43,12 @@ from shutil import copytree
 import numpy as np
 import pytest
 from cli_output import normalize_cli_output
+from presence_fixtures import (
+    DENSE_Z_GROUP,
+    RAGGED_Z_GROUP,
+    float_plane_z,
+    plant_payload_nan,
+)
 from residual_fixtures import write_gwas_vcf_with_eaf
 from test_check_observed_view import _assert_refused, _run, _verdict
 from test_hybrid_completion import _write_ld_block
@@ -722,6 +728,67 @@ def test_an_infinite_crossover_se_copied_identically_passes_and_is_counted(tmp_p
     assert verdict["passed"] is True and verdict["failures"] == []
     assert verdict["crossovers"]["totals"]["infinite_cells"] == 2
     assert verdict["components"]["dense"]["totals"]["infinite_cells"] == 0
+
+
+# --- a non-canonical missing marker (spec §15, issue #373) ------------------
+#
+# A float16 NaN other than `np.nan`'s 0x7e00 is an invalid state, not a missing one, and
+# each part of a Hybrid pair reads cells of its own: the Dense Component (its own counters,
+# `dense.`), the Overflow's associations (`overflow.`) and a crossover cell, which the Dense
+# part sets aside for the crossover check (`crossovers.`).
+
+# 1:104000 in trait_b is inserted by completion and holds no cell at all.
+DENSE_ONLY_MISSING_CELL = (104_000, "trait_b")
+
+
+def test_a_non_canonical_z_in_the_completed_dense_component_fails(tmp_path, pair):
+    observed, completed = pair
+    # 1:104000 in trait_b is a row completion inserted, imputed in no Analysis and a
+    # crossover in no Analysis: missing, unflagged, and inside the sampled spans.
+    group = float_plane_z(completed / "dense", DENSE_Z_GROUP)
+    rows, cols = _dense_cell(completed, *DENSE_ONLY_MISSING_CELL)
+    cell = (int(rows[0]), int(cols[0]))
+    assert np.isnan(np.asarray(group["se"][cell], np.float32)), "a missing cell"
+    plant_payload_nan(group, cell)
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    assert verdict["components"]["dense"]["totals"]["non_canonical_marker"] == 1
+    assert "dense.non_canonical_marker" in verdict["failures"]
+
+
+def test_a_non_canonical_z_in_the_completed_overflow_fails(tmp_path, pair):
+    observed, completed = pair
+    # 102,000 in trait_a stays in the Overflow, so the Overflow's own sample reads it.
+    group = float_plane_z(completed, RAGGED_Z_GROUP)
+    plant_payload_nan(group, _overflow_position(completed, 102_000, "trait_a"))
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    assert verdict["components"]["overflow"]["totals"]["non_canonical_marker"] == 1
+    assert "overflow.non_canonical_marker" in verdict["failures"]
+    assert verdict["components"]["dense"]["totals"]["non_canonical_marker"] == 0
+
+
+def test_a_non_canonical_z_in_a_completed_crossover_fails(tmp_path, pair):
+    """The Dense part withholds a crossover cell, so only the crossover check can see it.
+
+    A crossover is an observed Dense cell, so its SE is a value: the marker that is
+    wrong here is Z's payload alone, and the cell is `NON_CANONICAL` rather than
+    `PARTIAL` because `states()` decides the payload last (spec §15).
+    """
+    observed, completed = pair
+    group = float_plane_z(completed / "dense", DENSE_Z_GROUP)
+    rows, cols = _dense_cell(completed, *CROSSOVER_CELL)
+    cell = (int(rows[0]), int(cols[0]))
+    assert not np.isnan(np.asarray(group["z"][cell], np.float32)), "the fixture's crossover"
+    plant_payload_nan(group, cell)
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    assert verdict["crossovers"]["totals"]["non_canonical_marker"] == 1
+    assert "crossovers.non_canonical_marker" in verdict["failures"]
+    assert verdict["components"]["dense"]["totals"]["non_canonical_marker"] == 0
 
 
 # --- seam 3: refusals --------------------------------------------------------
