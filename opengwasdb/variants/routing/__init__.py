@@ -4,7 +4,8 @@ One module behind the builders' two passes. `route_variants` reads the
 sources once (Pass 1), places each coordinate on GRCh38 -- through the
 hg19->hg38 lift, or through a Variant Reference's source keys -- and names
 each routed ALID. Its `VariantRouting.table` is the fork-safe lookup a Pass 2
-worker routes one Analysis's associations through. `extract_variant_reference`
+worker routes one Analysis's associations through. `place_sites` is the one
+lift, which Pass 1 and the Hybrid fold both use, and `extract_variant_reference`
 freezes a lifted union as a Variant Reference artifact.
 
 Not imported by `opengwasdb.variants`, which the Source Readers import.
@@ -19,6 +20,7 @@ from opengwasdb.variants.routing.extract import (
     extract_variant_reference,
 )
 from opengwasdb.variants.routing.keys import RoutingKey, SourceKey
+from opengwasdb.variants.routing.lift import SitePlacement, place_sites
 from opengwasdb.variants.routing.names import RoutedNames
 from opengwasdb.variants.routing.route import (
     FromReference,
@@ -50,6 +52,7 @@ __all__ = [
     "RoutedColumn",
     "RoutedNames",
     "RoutingKey",
+    "SitePlacement",
     "SourceKey",
     "UnionOptions",
     "Unmatched",
@@ -57,5 +60,6 @@ __all__ = [
     "VariantRouting",
     "extract_variant_reference",
     "last_wins",
+    "place_sites",
     "route_variants",
 ]

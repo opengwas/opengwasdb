@@ -26,6 +26,7 @@ from opengwasdb.variants.routing import (
     RouteTable,
     RoutingKey,
     extract_variant_reference,
+    place_sites,
     route_variants,
 )
 from opengwasdb.variants.routing import table as route_table
@@ -466,6 +467,56 @@ def test_a_lift_failing_beyond_its_threshold_is_refused(tmp_path: Path):
     off_chain = _source("a", "hg19", [("5", 100, "A", "G", ""), ("3", 100, "A", "G", "")])
     with pytest.raises(LiftoverFailureError):
         _route([off_chain], LiftedUnion(chain, failure_threshold=0.1), key=RoutingKey.EXACT)
+
+
+# ── place_sites ──────────────────────────────────────────────────────────────
+
+
+def test_place_sites_names_hg38_sites_and_lifts_hg19_ones(tmp_path):
+    """An hg38 site is its own ALID; an hg19 site is lifted, a reverse-strand
+    one re-oriented, and one the chain does not cover left out."""
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    placement = place_sites(
+        {
+            "hg38": [("5", 10, "G", "A")],
+            "hg19": [("2", 1_000, "G", "A"), ("3", 1_000, "G", "A"), ("9", 5, "A", "G")],
+        },
+        chain_file=chain,
+        failure_threshold=0.5,
+    )
+
+    assert placement.alid == {
+        ("5", 10, "G", "A"): "5:10:A:G",
+        ("2", 1_000, "G", "A"): "2:999001:C:T",
+        ("3", 1_000, "G", "A"): "3:1000:A:G",
+    }
+    assert placement.reoriented == {("2", 1_000, "G", "A")}
+
+
+def test_place_sites_judges_the_lift_on_the_hg19_group_alone(tmp_path):
+    """Two hg19 sites, one failing, are 50% failed however many hg38 sites
+    ride along; an assembly the lift does not know is refused."""
+    from opengwasdb.build.liftover import LiftoverFailureError
+
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    hg38 = [("5", position, "G", "A") for position in range(1, 101)]
+    with pytest.raises(LiftoverFailureError):
+        place_sites(
+            {"hg38": hg38, "hg19": [("3", 1_000, "G", "A"), ("9", 5, "A", "G")]},
+            chain_file=chain,
+            failure_threshold=0.1,
+        )
+    with pytest.raises(ValueError, match="unhandled source_assembly"):
+        place_sites({"hg18": [("3", 1_000, "G", "A")]})
+
+
+def test_place_sites_refuses_a_tuple_given_under_both_assemblies(tmp_path):
+    """One string under hg19 and hg38 is two loci with two places; keeping
+    either would lose the other in silence, so it is refused, named."""
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    shared = ("3", 1_000, "G", "A")
+    with pytest.raises(ValueError, match=r"both hg38 and hg19.*'3', 1000, 'G', 'A'"):
+        place_sites({"hg38": [shared], "hg19": [shared, ("3", 2_000, "C", "T")]}, chain_file=chain)
 
 
 # ── extract_variant_reference ────────────────────────────────────────────────
