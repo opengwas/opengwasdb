@@ -13,15 +13,12 @@ from __future__ import annotations
 import heapq
 from pathlib import Path
 
-from opengwasdb.layouts.dense.build_vcf import (
-    _ManifestRow,
-    _source_file_size,
-    _split_manifest_rows,
-)
+from opengwasdb.layouts.build_manifest import ManifestRow
+from opengwasdb.layouts.dense.build_vcf import _source_file_size, _split_manifest_rows
 
 
-def _manifest_row(path: Path) -> _ManifestRow:
-    return _ManifestRow(
+def _manifest_row(path: Path) -> ManifestRow:
+    return ManifestRow(
         trait_id=path.stem,
         file_path=str(path),
         trait_name=path.stem,
@@ -35,8 +32,8 @@ def _manifest_row(path: Path) -> _ManifestRow:
     )
 
 
-def _rows_with_sizes(tmp_path: Path, sizes: list[int]) -> list[_ManifestRow]:
-    rows: list[_ManifestRow] = []
+def _rows_with_sizes(tmp_path: Path, sizes: list[int]) -> list[ManifestRow]:
+    rows: list[ManifestRow] = []
     for index, size in enumerate(sizes):
         path = tmp_path / f"source_{index:03d}.tsv.gz"
         path.write_bytes(b"x" * size)
@@ -44,18 +41,18 @@ def _rows_with_sizes(tmp_path: Path, sizes: list[int]) -> list[_ManifestRow]:
     return rows
 
 
-def _chunk_weights(chunks: list[list[_ManifestRow]]) -> list[int]:
+def _chunk_weights(chunks: list[list[ManifestRow]]) -> list[int]:
     return [sum(_source_file_size(row) for row in chunk) for chunk in chunks]
 
 
 def _equal_row_split(
-    rows: list[_ManifestRow], n_chunks: int
-) -> list[list[_ManifestRow]]:
+    rows: list[ManifestRow], n_chunks: int
+) -> list[list[ManifestRow]]:
     """The pre-#195 split: ``n_chunks`` contiguous chunks of equal row count."""
     n = len(rows)
     n_chunks = min(n_chunks, n)
     base, extra = divmod(n, n_chunks)
-    chunks: list[list[_ManifestRow]] = []
+    chunks: list[list[ManifestRow]] = []
     start = 0
     for i in range(n_chunks):
         size = base + (1 if i < extra else 0)
@@ -64,7 +61,7 @@ def _equal_row_split(
     return chunks
 
 
-def _simulated_makespan(chunks: list[list[_ManifestRow]], workers: int) -> int:
+def _simulated_makespan(chunks: list[list[ManifestRow]], workers: int) -> int:
     """FIFO list-scheduling makespan for ``workers`` identical processes.
 
     The fork pool pulls tasks in submission order, so this is the wall-clock

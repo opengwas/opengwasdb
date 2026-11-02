@@ -46,7 +46,7 @@ from opengwasdb.build.eaf_orientation import (
 )
 from opengwasdb.build.info_score_filter import declared_score_state
 from opengwasdb.build.liftover import LiftoverFailureError
-from opengwasdb.build.ordered_pool import ordered_map
+from opengwasdb.build.ordered_pool import fork_pool, ordered_map
 from opengwasdb.build.row_admission import AdmissionCounts, admit_rows
 from opengwasdb.encoding import (
     EafMeasurements,
@@ -56,33 +56,33 @@ from opengwasdb.encoding import (
     optimise_dense_se_joint,
 )
 from opengwasdb.encoding.timing import format_duration
+from opengwasdb.layouts.build_manifest import (
+    ManifestRow,
+    column_map_provenance,
+    manifest_row_to_analysis,
+    read_manifest,
+)
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
     _RESOLVE_BATCH,
     EafSpillSurvey,
     Pass2Task,
-    _apply_eaf_scope,
-    _apply_se_divisor,
     _candidates_by_routing_key,
-    _create_dense_zarr,
     _encode_variant_keys,
-    _fork_pool,
     _harvest_manifest_variants,
     _lift_manifest_variants,
-    _log_progress,
     _log_routing_disagreements,
-    _manifest_row_to_analysis,
-    _ManifestRow,
-    _pass2_worker_tasks,
-    _read_manifest,
     _rekey_and_verify,
     _rekey_rsids_to_alids,
     _routing_lookup,
-    _sorted_alids,
-    _write_dense_bands,
-    _write_index,
-    column_map_provenance,
+    apply_eaf_scope,
+    apply_se_divisor,
+    create_dense_zarr,
+    log_progress,
+    pass2_worker_tasks,
     survey_eaf_spills,
+    write_dense_bands,
+    write_index,
 )
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
@@ -188,6 +188,7 @@ from opengwasdb.readers.registry import resolve_reader
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
+from opengwasdb.variants.axis import sorted_alids
 from opengwasdb.variants.reference import (
     SourceKey,
     read_variant_reference,
@@ -634,7 +635,7 @@ def _resolve_column_hybrid(
             np.concatenate(parts_se),
             np.concatenate(parts_eaf),
         )
-        return idx, z, _apply_se_divisor(se, se_divisor), eaf
+        return idx, z, apply_se_divisor(se, se_divisor), eaf
 
     def _assemble_unknown() -> _OffReferenceSpill:
         if not u_keys:
@@ -654,7 +655,7 @@ def _resolve_column_hybrid(
         lookup = encoded.hashed_lookup()
         hashed_index = np.flatnonzero(is_hashed(keys)).astype(np.int64)
         hashed_raw = [lookup[int(keys[position])] for position in hashed_index.tolist()]
-        return keys, z, _apply_se_divisor(se, se_divisor), eaf, hashed_index, hashed_raw
+        return keys, z, apply_se_divisor(se, se_divisor), eaf, hashed_index, hashed_raw
 
     return (
         _assemble(d_idx, d_z, d_se, d_eaf),
@@ -918,7 +919,7 @@ class _PreparedBuild:
     dense_dir: Path
     dense_staged: StagedRelease
     partition: _VariantPartition
-    manifest_rows: list[_ManifestRow]
+    manifest_rows: list[ManifestRow]
     info_score_policies: Mapping[str, InfoScorePolicy]
     maf_policies: Mapping[str, MafPolicy]
     analyses: list[Analysis]
@@ -1042,7 +1043,7 @@ def _resolve_reference_panel(options: _BuildOptions, reference: VariantReference
     if options.reference_panel is None:
         return reference_alids
     panel_alids = _panel_alids(options)
-    unknown = _sorted_alids(panel_alids - reference_alids)
+    unknown = sorted_alids(panel_alids - reference_alids)
     if unknown:
         log.warning(
             "--reference-panel lists %d ALID(s) absent from variant reference %s "
@@ -1067,9 +1068,9 @@ def _partition_variants(
     the shared root axis."""
     observed_alids = set(source_lookup.values())
     off_panel_set = observed_alids - panel_alids
-    off_panel_alids = _sorted_alids(off_panel_set)
-    panel_sorted = _sorted_alids(panel_alids)
-    shared_sorted = _sorted_alids(panel_alids | off_panel_set)
+    off_panel_alids = sorted_alids(off_panel_set)
+    panel_sorted = sorted_alids(panel_alids)
+    shared_sorted = sorted_alids(panel_alids | off_panel_set)
     log.info(
         "Partition: %d panel (dense), %d off-panel (overflow), %d shared variants, %d analyses",
         len(panel_sorted),
@@ -1128,12 +1129,12 @@ def _load_manifest(
     default_source_reader_capability: str | None = None,
     default_source_assembly: str | None = None,
     column_map: ColumnMap | None = None,
-) -> tuple[list[_ManifestRow], DeclaredPolicies]:
+) -> tuple[list[ManifestRow], DeclaredPolicies]:
     """Read the build manifest, failing loudly on an empty one rather than
     building a store with no Analyses (a plausible empty answer), alongside each
     row's declared INFO and MAF policies (`_read_declared_policies`).
     """
-    manifest_rows = _read_manifest(
+    manifest_rows = read_manifest(
         manifest_path,
         default_source_reader_capability=default_source_reader_capability,
         default_source_assembly=default_source_assembly,
@@ -1145,13 +1146,13 @@ def _load_manifest(
 
 
 def _read_declared_policies(
-    manifest_path: str | Path, rows: list[_ManifestRow]
+    manifest_path: str | Path, rows: list[ManifestRow]
 ) -> DeclaredPolicies:
     """Parse each Analysis's declared INFO and MAF policies (stores #175, #176).
 
-    `_ManifestRow` carries the columns this builder routes with, not the policy
+    `ManifestRow` carries the columns this builder routes with, not the policy
     columns, so the manifest is read once more here -- it lists Analyses, not
-    associations -- and matched row for row against the rows `_read_manifest`
+    associations -- and matched row for row against the rows `read_manifest`
     produced. The reader capability is the row's own resolved value, exactly as
     the manifest resolver parses the same row, so a CLI default applies to both.
     A partial or contradictory declaration is a manifest error naming its
@@ -1187,7 +1188,7 @@ def _read_declared_policies(
 
 
 def _axis_source(
-    staged: StagedRelease, manifest_rows: list[_ManifestRow], options: _BuildOptions
+    staged: StagedRelease, manifest_rows: list[ManifestRow], options: _BuildOptions
 ) -> tuple[
     Path,
     StagedRelease,
@@ -1234,7 +1235,7 @@ def _axis_source(
 
 
 def _single_pass_rsids(
-    reference: VariantReference, manifest_rows: list[_ManifestRow], options: _BuildOptions
+    reference: VariantReference, manifest_rows: list[ManifestRow], options: _BuildOptions
 ) -> _RsidHarvest:
     """The on-reference rsids the Dense skeleton needs, and what the fold will
     finish rekeying (issue #255).
@@ -1311,7 +1312,7 @@ def _log_dropped_rsids(conflicts: RsidConflicts) -> None:
 
 def _lift_and_partition(
     staged: StagedRelease,
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     options: _BuildOptions,
 ) -> _SourceAxis:
     """Phase - axis source and partition/routing: open the Dense staging dir,
@@ -1330,7 +1331,7 @@ def _lift_and_partition(
         panel_alids,
         len(manifest_rows),
     )
-    analyses: list[Analysis] = [_manifest_row_to_analysis(row) for row in manifest_rows]
+    analyses: list[Analysis] = [manifest_row_to_analysis(row) for row in manifest_rows]
     hg38_to_source = _source_origin_map(source_lookup)
     keys_sorted, targets_sorted, ispanel_sorted, swaps_sorted = _build_routing_index(
         source_lookup,
@@ -1368,7 +1369,7 @@ def _write_dense_component_skeleton(
     Table and the dense row -> shared variant_index sidecar. ``dense_to_shared``
     is returned because the EAF survey samples both components on the shared
     axis through it and the query facade reads it back."""
-    _write_index(axis.dense_staged, axis.partition.panel_sorted, axis.analyses, chunk_shape)
+    write_index(axis.dense_staged, axis.partition.panel_sorted, axis.analyses, chunk_shape)
     _write_variant_table(
         axis.dense_dir,
         axis.partition.panel_sorted,
@@ -1980,9 +1981,9 @@ def _build_shared_key_table(
 ) -> tuple[KeyTable, np.ndarray, AlidIndex, list[str], list[str]]:
     """Build key table and axis remapping index for resolved off-reference variants."""
     unknown_alids = set(resolved.alids)
-    off_panel = _sorted_alids(set(prepared.partition.off_panel_alids) | unknown_alids)
+    off_panel = sorted_alids(set(prepared.partition.off_panel_alids) | unknown_alids)
     panel = prepared.partition.panel_sorted
-    shared_sorted = _sorted_alids(set(panel) | set(off_panel))
+    shared_sorted = sorted_alids(set(panel) | set(off_panel))
     index = AlidIndex(shared_sorted)
     table = KeyTable(keys=resolved.keys, shared_index=index.lookup(resolved.alids))
     old_to_new = index.lookup(prepared.partition.shared_sorted)
@@ -2360,7 +2361,7 @@ def _route_serial(
         _spill_hybrid_column(
             prepared.spill_dir, analysis_index[row.trait_id], dense, overflow, off_reference
         )
-        _log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {row.trait_id}", every=25)
+        log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {row.trait_id}", every=25)
     return info_counts
 
 
@@ -2396,13 +2397,13 @@ def _route_parallel(
     }
     info_counts: dict[str, AdmissionCounts] = {}
     try:
-        with _fork_pool(options.n_workers) as pool:
-            tasks = _pass2_worker_tasks(prepared.manifest_rows, analysis_index)
+        with fork_pool(options.n_workers) as pool:
+            tasks = pass2_worker_tasks(prepared.manifest_rows, analysis_index)
             futures = [pool.submit(_pass2_worker, task) for task in tasks]
             for i, future in enumerate(as_completed(futures)):
                 col, counts = future.result()
                 info_counts[id_by_col[col]] = counts
-                _log_progress(
+                log_progress(
                     "Pass 2", i + 1, n_analyses, pass2_start, f"last: {id_by_col[col]}", every=25
                 )
     finally:
@@ -2518,7 +2519,7 @@ def _plan_joint_encoding(
         )
     )
     log.info("Encoding plan: %s", encoding.to_manifest())
-    effective_chunks = _create_dense_zarr(
+    effective_chunks = create_dense_zarr(
         prepared.dense_staged,
         prepared.partition.n_panel,
         prepared.n_analyses,
@@ -2561,7 +2562,7 @@ def _write_dense_component_bands(
 ) -> _DenseWritten:
     """Phase - the Dense band write, reusing the dense builder's band-streamer
     and top-hit harvest."""
-    all_rows, all_cols, all_z, all_se, column_has_eaf = _write_dense_bands(
+    all_rows, all_cols, all_z, all_se, column_has_eaf = write_dense_bands(
         prepared.dense_staged,
         prepared.spill_dir,
         prepared.partition.n_panel,
@@ -2610,7 +2611,7 @@ def _stamp_analyses(
     eaf_scope is the union of what the two components stored, so neither
     analyses.tsv may be written until both have been read."""
     return apply_orientation_evidence(
-        _apply_eaf_scope(prepared.analyses, dense.column_has_eaf | overflow.overflow_has_eaf),
+        apply_eaf_scope(prepared.analyses, dense.column_has_eaf | overflow.overflow_has_eaf),
         evidence.report,
     )
 
@@ -2843,7 +2844,7 @@ def _write_shared_metadata(
     )
     dense_counted = add_hit_counts(prepared.dense_dir, components.analyses)
     shared_analyses = add_hit_counts(prepared.staged.path, dense_counted)
-    _write_index(
+    write_index(
         prepared.staged,
         prepared.partition.shared_sorted,
         components.analyses,
@@ -2872,7 +2873,7 @@ def _write_shared_metadata(
 
 def _prepare_build(
     staged: StagedRelease,
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     policies: DeclaredPolicies,
     options: _BuildOptions,
     spill_dir: Path | None = None,
@@ -3596,7 +3597,7 @@ def _read_params(checkpoint_dir: Path) -> dict[str, Any]:
 
 def _resume_prepared(
     staged: StagedRelease,
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     policies: DeclaredPolicies,
     options: _BuildOptions,
     state: CheckpointState,
@@ -3616,7 +3617,7 @@ def _resume_prepared(
 
 def _recorded_prepared(
     staged: StagedRelease,
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     policies: DeclaredPolicies,
     state: CheckpointState,
 ) -> _PreparedBuild:
@@ -3651,7 +3652,7 @@ def _recorded_prepared(
         manifest_rows=manifest_rows,
         info_score_policies=policies.info,
         maf_policies=policies.maf,
-        analyses=[_manifest_row_to_analysis(row) for row in manifest_rows],
+        analyses=[manifest_row_to_analysis(row) for row in manifest_rows],
         hg38_to_source=read_str_map(state.path / PROVENANCE_SOURCE),
         rsid_by_alid={
             alid: rsid

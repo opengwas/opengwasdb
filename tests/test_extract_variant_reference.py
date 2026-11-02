@@ -486,11 +486,8 @@ def _pass1_spill_records(
     test can assert both the rank ordering and that no spill oversized the
     buffer (issue #194).
     """
-    from opengwasdb.layouts.dense.build_vcf import (
-        _iter_pass1_shard,
-        _pass1_worker,
-        _read_manifest,
-    )
+    from opengwasdb.layouts.build_manifest import read_manifest
+    from opengwasdb.layouts.dense.build_vcf import _iter_pass1_shard, _pass1_worker
     from opengwasdb.variants.windows import window_size_bp
 
     vcf = _make_vcf(
@@ -502,7 +499,7 @@ def _pass1_spill_records(
         ],
     )
     manifest = _make_manifest(tmp_path, [("bounded", vcf, "", "hg38")])
-    rows = _read_manifest(manifest)
+    rows = read_manifest(manifest)
     shard_dir = tmp_path / "shards"
     shard_dir.mkdir()
     specs = _pass1_worker((0, rows, str(shard_dir), window_size_bp(200.0), threshold))
@@ -655,13 +652,13 @@ def test_chromosomes_sharing_a_sort_rank_do_not_collide(tmp_path):
 def test_artifact_rows_are_in_genomic_order_after_windowed_assembly(tmp_path):
     """Window outputs concatenate in order, so the whole artifact is sorted
     without a global re-sort."""
-    from opengwasdb.layouts.dense.build_vcf import _alid_sort_key
+    from opengwasdb.variants.axis import alid_sort_key
 
     manifest = _wide_manifest(tmp_path)
     artifact = tmp_path / "ordered.variant-ref.tsv.gz"
     extract_variant_reference(manifest, artifact, n_workers=2, window_size_mb=5)
     alids = [line.split("\t")[0] for line in _artifact_text(artifact).splitlines()[1:]]
-    assert alids == sorted(alids, key=_alid_sort_key)
+    assert alids == sorted(alids, key=alid_sort_key)
     assert len(alids) > 10, "fixture must span enough variants to be meaningful"
 
 
@@ -958,10 +955,11 @@ def _materialising_writer_output(
     liftover_failure_threshold: float = 0.01,
 ) -> str:
     """The retired materialising path's artifact text, from the same manifest."""
-    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants, _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
+    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants
     from opengwasdb.variants.reference import write_variant_reference
 
-    rows = _read_manifest(manifest)
+    rows = read_manifest(manifest)
     source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
         rows,
         chain_file=None,
@@ -988,10 +986,11 @@ def test_all_hg38_streaming_matches_the_materialising_writer(tmp_path, window_si
     byte-identical to the materialising writer's, for every window and batch
     configuration (and both use the same first-named-rsid rule)."""
     manifest = _wide_manifest(tmp_path)
-    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants, _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
+    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants
     from opengwasdb.variants.reference import write_variant_reference
 
-    rows = _read_manifest(manifest)
+    rows = read_manifest(manifest)
     source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
         rows, chain_file=None, liftover_failure_threshold=0.01,
         n_workers=2, window_size_mb=window_size_mb, reduction_batch_size=batch,
@@ -1335,9 +1334,10 @@ def _materialising_peak_bytes(manifest: Path) -> int:
     """The pre-#196 parent peak: the whole union is materialised in-process."""
     import tracemalloc
 
-    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants, _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
+    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants
 
-    rows = _read_manifest(manifest)
+    rows = read_manifest(manifest)
     tracemalloc.start()
     tracemalloc.reset_peak()
     _lift_manifest_variants(

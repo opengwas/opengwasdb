@@ -36,7 +36,8 @@ from functools import partial
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, TypeVar
 
-from opengwasdb.variants.axis import parse_canonical_alid
+from opengwasdb.build.ordered_pool import fork_pool
+from opengwasdb.variants.axis import alid_sort_key, parse_canonical_alid
 from opengwasdb.variants.windows import (
     DEFAULT_MAP_SPILL_RECORDS,
     DEFAULT_REDUCTION_BATCH_SIZE,
@@ -46,8 +47,8 @@ from opengwasdb.variants.windows import (
 )
 
 if TYPE_CHECKING:
+    from opengwasdb.layouts.build_manifest import ManifestRow
     from opengwasdb.layouts.dense.build_vcf import (
-        _ManifestRow,
         _Pass1Stats,
         _ShardSpec,
         _WindowShards,
@@ -236,9 +237,10 @@ def extract_variant_reference(
     fails loudly before any source is read. ``column_map`` reads the manifest's
     ``opengwasdb.column-map`` rows, as the build that consumes the artifact does (#281).
     """
-    from opengwasdb.layouts.dense.build_vcf import _Pass1Stats, _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
+    from opengwasdb.layouts.dense.build_vcf import _Pass1Stats
 
-    manifest_rows = _read_manifest(
+    manifest_rows = read_manifest(
         manifest_path,
         default_source_reader_capability=source_reader_capability,
         default_source_assembly=source_assembly,
@@ -268,10 +270,10 @@ def extract_variant_reference(
     )
 
 
-def _all_hg38(manifest_rows: Sequence[_ManifestRow]) -> bool:
+def _all_hg38(manifest_rows: Sequence[ManifestRow]) -> bool:
     """Whether every row is already GRCh38, so no liftover is needed (issue #196).
 
-    Rows that omit ``source_assembly`` default to hg19 (`_read_manifest`), so a
+    Rows that omit ``source_assembly`` default to hg19 (`read_manifest`), so a
     manifest reaches the streaming artifact path only when every row declares
     hg38 (explicitly, or through the caller's default).
     """
@@ -279,7 +281,7 @@ def _all_hg38(manifest_rows: Sequence[_ManifestRow]) -> bool:
 
 
 def _streaming_extraction(
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     manifest_path: str | Path,
     output_path: str | Path,
     options: _UnionOptions,
@@ -316,7 +318,7 @@ def _streaming_extraction(
 
 
 def _extract_streaming_reference(
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     manifest_path: str | Path,
     output_path: str | Path,
     options: _UnionOptions,
@@ -336,7 +338,7 @@ def _extract_streaming_reference(
 
 
 def _extract_lifted_reference(
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     manifest_path: str | Path,
     output_path: str | Path,
     options: _UnionOptions,
@@ -635,10 +637,6 @@ def write_variant_reference(
     ALIDs are sorted and the windows concatenate in genomic order, so the axis
     is never re-sorted as a whole -- only one window at a time.
     """
-    # Local import: build_vcf imports this module, so a module-level import
-    # would be a cycle. By call time build_vcf is fully loaded.
-    from opengwasdb.layouts.dense.build_vcf import _alid_sort_key
-
     size_bp = window_size_bp(window_size_mb)
     keys_by_alid = _source_keys_by_alid(source_lookup)
     rsids = rsid_by_alid or {}
@@ -651,7 +649,7 @@ def write_variant_reference(
     with gzip.open(out, "wt", encoding="utf-8") as handle:
         handle.write(_ARTIFACT_HEADER)
         for window in sorted(windows):
-            for alid in sorted(windows[window], key=_alid_sort_key):
+            for alid in sorted(windows[window], key=alid_sort_key):
                 handle.write(_artifact_line(alid, keys_by_alid.get(alid, ()), rsids.get(alid, "")))
 
 
@@ -667,13 +665,9 @@ def _write_member(
     rsid_by_alid: Mapping[str, str],
     source_keys_by_alid: Mapping[str, list[str]],
 ) -> None:
-    """Write one window's ALIDs, sorted by ``_alid_sort_key``, as a gzip member."""
-    # Local import: build_vcf imports this module, so a module-level import
-    # would be a cycle. By call time build_vcf is fully loaded.
-    from opengwasdb.layouts.dense.build_vcf import _alid_sort_key
-
+    """Write one window's ALIDs, sorted by ``alid_sort_key``, as a gzip member."""
     with gzip.open(member_path, "wt", encoding="utf-8") as handle:
-        for alid in sorted(source_keys_by_alid, key=_alid_sort_key):
+        for alid in sorted(source_keys_by_alid, key=alid_sort_key):
             source_keys = source_keys_by_alid[alid]
             source_keys.sort()
             handle.write(_artifact_line(alid, source_keys, rsid_by_alid.get(alid, "")))
@@ -718,12 +712,10 @@ _R = TypeVar("_R")
 
 def _run_pooled(tasks: Sequence[_T], worker: Callable[[_T], _R], n_workers: int) -> list[_R]:
     """Run ``worker`` over ``tasks`` in a fork pool, preserving task order."""
-    from opengwasdb.layouts.dense.build_vcf import _fork_pool
-
     workers = min(n_workers, len(tasks))
     if workers <= 1:
         return [worker(task) for task in tasks]
-    with _fork_pool(workers) as pool:
+    with fork_pool(workers) as pool:
         futures = [pool.submit(worker, task) for task in tasks]
         return [future.result() for future in futures]
 
@@ -938,7 +930,7 @@ def _compress_lifted_window(task: _LiftMergeTask) -> _WindowArtifact:
     Records are ordered by ``(rank, pre-lift site)``, so an ALID several records
     resolve to takes the first non-empty rsid exactly as the materialising
     writer's global ``(rank, site)`` insertion did. Source keys are combined and
-    sorted and the window's ALIDs are sorted by ``_alid_sort_key``.
+    sorted and the window's ALIDs are sorted by ``alid_sort_key``.
     """
     records = _read_lifted_records(task.sub_shards)
     records.sort(key=lambda record: record[:6])

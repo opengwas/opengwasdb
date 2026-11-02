@@ -9,15 +9,13 @@ assumption is left in this module.
 
 from __future__ import annotations
 
-import csv
 import heapq
 import itertools
 import logging
-import multiprocessing
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -38,10 +36,9 @@ from opengwasdb.build.eaf_orientation import (
 from opengwasdb.build.liftover import (
     LiftoverFailureError,
     lift_hg19_to_hg38,
-    normalise_build,
     statistics_swap,
 )
-from opengwasdb.build.ordered_pool import ordered_map
+from opengwasdb.build.ordered_pool import fork_pool, ordered_map
 from opengwasdb.encoding import (
     EafExceptionBuilder,
     EafMeasurements,
@@ -57,6 +54,12 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.encoding.timing import log_phase
 from opengwasdb.index import initialise_schema, set_metadata
+from opengwasdb.layouts.build_manifest import (
+    ManifestRow,
+    column_map_provenance,
+    manifest_row_to_analysis,
+    read_manifest,
+)
 from opengwasdb.layouts.dense.build import (
     DenseBuildResult,
     write_analyses_tsv,
@@ -70,38 +73,25 @@ from opengwasdb.layouts.dense.constants import (
 )
 from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
-from opengwasdb.model.analyses import Analysis, PassthroughMetadata
+from opengwasdb.model.analyses import Analysis
 from opengwasdb.model.enums import (
     AssociationCoverage,
     EafScope,
-    OriginalSdMethod,
     PrimaryStorageLayout,
     StoredEffectScale,
     coverage_for_layout,
 )
-from opengwasdb.model.manifest_columns import (
-    ManifestColumns,
-    manifest_n,
-    manifest_trait_name,
-    require_columns,
-    resolve_manifest_columns,
-)
 from opengwasdb.readers.column_map import (
-    COLUMN_MAP_CAPABILITY,
     ColumnMap,
-    MappedRowDeclaration,
-    as_column_map,
-    check_mapped_rows,
-    mapped_row_build,
 )
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.interface import SourceVariant
-from opengwasdb.readers.registry import known_capabilities, resolve_reader
+from opengwasdb.readers.registry import resolve_reader
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts, z_critical
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
-from opengwasdb.variants.normalise import chromosome_sort_key, normalise_chromosome
+from opengwasdb.variants.axis import sorted_alids
 from opengwasdb.variants.reference import (
     SourceKey,
     VariantReference,
@@ -131,79 +121,8 @@ _DENSE_COMPRESSOR = compressor()
 __all__ = ["build_dense_from_vcf_manifest", "LiftoverFailureError"]
 
 
-@dataclass(frozen=True)
-class _ManifestRow:
-    trait_id: str
-    file_path: str
-    trait_name: str
-    n: int
-    stored_effect_scale: str
-    se_divisor: float  # divides original_se to standardise to SD units (issue #18); 1.0 = no-op
-    source_reader_capability: str  # resolves to a SourceReader (issue #20); GWAS_VCF_CAPABILITY
-    # when the manifest omits the column -- the only format this builder has ever supported.
-    source_assembly: str  # normalised "hg19"/"hg38" (issue #85); "hg19" when the manifest omits
-    # the column -- every source this builder read before GWAS-SSF (#84) was hg19 GWAS-VCF.
-    original_sd: str  # raw manifest value ("" when the sd_method tier carries no magnitude);
-    # not part of PassthroughMetadata because this builder *uses* it (se_divisor), rather
-    # than only copying it.
-    assigned_ancestry: str  # optional manifest column (issue #22); "" when the manifest omits it
-    # or carries no assignment for this row -- e.g. a Catalogue subset's kept rows (already
-    # filtered to one target ancestry) stamp this in verbatim; a bare manifest has no column.
-    # Shared-core analyses.tsv columns the manifest supplies and this builder only copies
-    # (issues #86, #83) -- sample-size interpretation and counts, Original Effect Scale,
-    # ancestry-assignment method and proportions, Attribution. Blank when absent; the shared
-    # builder must not infer their meaning. One type, shared with Ragged, so a column added
-    # to the contract reaches both layouts.
-    metadata: PassthroughMetadata = field(default_factory=PassthroughMetadata)
-    # Trait-ontology columns (ADR 0034, issue #68): optional manifest columns, resolved
-    # directly rather than via a phenotype_id/phenotype_label intermediary. "" when the
-    # manifest omits them -- never fabricated. Not passthrough-shared: Ragged resolves its
-    # own (a gene ID, ADR 0035) rather than copying a manifest column.
-    trait_ontology_id: str = ""
-    trait_ontology_label: str = ""
-    # The Column Map an `opengwasdb.column-map` row is read through (issue
-    # #281); `None` for every other capability. Carried on the row so every
-    # pass that resolves this row's reader resolves the same one.
-    column_map: ColumnMap | None = None
-
-
-def _manifest_row_to_analysis(row: _ManifestRow) -> Analysis:
-    """A manifest row's Analytical + Attribution Metadata (issue #22, ADR
-    0034), shared by the dense and hybrid manifest builders.
-
-    Optional fields are passed through verbatim and remain blank when absent.
-    In particular, the shared builder cannot infer how ancestry was assigned:
-    the manifest producer owns that fact (issue #86).
-    """
-    return row.metadata.applied_to(
-        Analysis(
-            analysis_id=row.trait_id,
-            analysis_label=row.trait_name,
-            trait_ontology_id=row.trait_ontology_id,
-            trait_ontology_label=row.trait_ontology_label,
-            stored_effect_scale=row.stored_effect_scale,
-            assigned_ancestry=row.assigned_ancestry,
-            sample_size=str(row.n) if row.n else "",
-            original_sd=row.original_sd,
-        )
-    )
-
-
-# original_sd_method tiers that carry an actual phenotype-SD magnitude to divide
-# by (ADR-0029 methods 2-5). declared_standardised implies sd=1 (no magnitude
-# recorded); binary_trait is not SD-scale at all -- neither rescales.
-_SD_RESCALE_METHODS = frozenset(
-    {
-        OriginalSdMethod.SOURCE_PROVIDED,
-        OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
-        OriginalSdMethod.ESTIMATED_FROM_REFERENCE_MAF,
-        OriginalSdMethod.ESTIMATED_FROM_BETA_DISTRIBUTION,
-    }
-)
-
-
 # Pass 2 fork-safe lookup + spill dir, set in the parent immediately before the
-# process pool is created. Forked workers (fork start method — see _fork_pool())
+# process pool is created. Forked workers (fork start method — see fork_pool())
 # inherit these; the lookup is a pair of numpy arrays — a sorted object array of
 # Python bytes keys (variable-length, so one rare 546-byte indel no longer pads
 # every key to 546 bytes) and an int32 row array — rather than Python dicts. A
@@ -224,14 +143,6 @@ _pass2_spill_dir: Path | None = None
 # for every finite cell). Each column emits only the cells clearing the loosest
 # threshold's |z| cutoff; the band-write phase accumulates them for the index.
 _TOP_HIT_Z_CRIT = z_critical(max(TOP_HIT_THRESHOLDS))
-
-
-def _fork_pool(n_workers: int) -> ProcessPoolExecutor:
-    """A ProcessPoolExecutor pinned to fork start — required for _pass2_worker to
-    inherit the numpy lookup arrays without re-pickling them per task. Only
-    correct on platforms with fork (Linux)."""
-    fork_ctx = multiprocessing.get_context("fork")
-    return ProcessPoolExecutor(max_workers=n_workers, mp_context=fork_ctx)
 
 
 def _encode_variant_keys(chrom: object, pos: object, ref: object, alt: object) -> np.ndarray:
@@ -374,7 +285,7 @@ def _match_batch(
     return rows, z_arr, se_arr, eaf_arr
 
 
-def _apply_se_divisor(se: np.ndarray, se_divisor: float) -> np.ndarray:
+def apply_se_divisor(se: np.ndarray, se_divisor: float) -> np.ndarray:
     """Continuous-trait phenotype-SD standardisation (issue #18):
     ``stored_se = original_se / sd``. Shared by the dense and hybrid builders,
     both of which resolve an association stream to ``(index, z, se)`` and need
@@ -475,7 +386,7 @@ def _resolve_column(
         _, first_in_rev = np.unique(rows[::-1], return_index=True)
         keep = np.sort(len(rows) - 1 - first_in_rev)
         rows, z_arr, se_arr, eaf_arr = rows[keep], z_arr[keep], se_arr[keep], eaf_arr[keep]
-    se_arr = _apply_se_divisor(se_arr, se_divisor)
+    se_arr = apply_se_divisor(se_arr, se_divisor)
     return rows, z_arr, se_arr, eaf_arr
 
 
@@ -508,7 +419,7 @@ Pass2Task = tuple[int, str, float, str, str, ColumnMap | None]
 def _resolve_and_spill(
     spill_dir: Path,
     col_idx: int,
-    row: _ManifestRow,
+    row: ManifestRow,
     keys_sorted: np.ndarray,
     rows_sorted: np.ndarray,
     swaps_sorted: np.ndarray,
@@ -549,8 +460,8 @@ def _pass2_worker(task: Pass2Task) -> int:
     return col_idx
 
 
-def _pass2_worker_tasks(
-    manifest_rows: Sequence[_ManifestRow],
+def pass2_worker_tasks(
+    manifest_rows: Sequence[ManifestRow],
     analysis_index: Mapping[str, int],
 ) -> list[Pass2Task]:
     """One fork-pool task per manifest row, in manifest order: the column
@@ -574,9 +485,10 @@ def _pass2_worker_tasks(
     ]
 
 
-def _log_progress(
+def log_progress(
     label: str, completed: int, total: int, start_time: float, extra: str, every: int
 ) -> None:
+    """Log a phase's progress, elapsed time and ETA every ``every`` items and at the end."""
     if completed % every != 0 and completed != total:
         return
     elapsed = time.monotonic() - start_time
@@ -669,7 +581,7 @@ def _pass1_record_site(record: _Pass1Record) -> tuple[str, int, str, str]:
     return record[0]
 
 
-def _source_file_size(row: _ManifestRow) -> int:
+def _source_file_size(row: ManifestRow) -> int:
     """A manifest row's source size in bytes, used only to balance the map split.
 
     A path the split cannot stat counts as one byte rather than zero: the split
@@ -804,8 +716,8 @@ def _allocate_subchunks(weights: Sequence[int], limits: Sequence[int], extra: in
 
 
 def _chunks_from_bounds(
-    manifest_rows: list[_ManifestRow], bounds: Sequence[int]
-) -> list[list[_ManifestRow]]:
+    manifest_rows: list[ManifestRow], bounds: Sequence[int]
+) -> list[list[ManifestRow]]:
     """Slice ``manifest_rows`` between consecutive ``bounds``."""
     return [manifest_rows[bounds[i] : bounds[i + 1]] for i in range(len(bounds) - 1)]
 
@@ -833,8 +745,8 @@ def _balanced_bounds(sizes: Sequence[int], target_chunks: int) -> list[int]:
 
 
 def _split_manifest_rows(
-    manifest_rows: list[_ManifestRow], n_workers: int
-) -> list[list[_ManifestRow]]:
+    manifest_rows: list[ManifestRow], n_workers: int
+) -> list[list[ManifestRow]]:
     """Contiguous, size-balanced, manifest-order slices of the input rows.
 
     Contiguity is what keeps "first named rsid wins" deterministic: chunk
@@ -1031,7 +943,7 @@ def _buffer_pass1_variant(
     return False
 
 
-def _pass1_worker(task: tuple[int, list[_ManifestRow], str, int, int]) -> list[_ShardSpec]:
+def _pass1_worker(task: tuple[int, list[ManifestRow], str, int, int]) -> list[_ShardSpec]:
     """Extract one worker's slice of manifest rows to sorted, windowed shards.
 
     Returns only shard metadata -- never the variant sets themselves -- so no
@@ -1087,7 +999,7 @@ def _validate_union_options(
 
 
 def _consume_manifest_shards(
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     *,
     n_workers: int,
     window_size_mb: float,
@@ -1115,7 +1027,7 @@ def _consume_manifest_shards(
 
 
 def _collect_manifest_variant_sites(
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     *,
     n_workers: int = 1,
     window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
@@ -1162,7 +1074,7 @@ def _finalise_serial_groups(
 
 
 def _map_manifest_windows_serial(
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     size_bp: int,
     reduction_batch_size: int,
     map_spill_records: int,
@@ -1187,7 +1099,7 @@ def _map_manifest_windows_serial(
 
 
 def _map_reduce_windows(
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     workers: int,
     size_bp: int,
     reduction_batch_size: int,
@@ -1215,7 +1127,7 @@ def _map_reduce_windows(
     )
     groups: dict[tuple[str, WindowKey], list[_ShardSpec]] = {}
     map_start = time.monotonic()
-    with _fork_pool(workers) as pool:
+    with fork_pool(workers) as pool:
         for future in as_completed([pool.submit(_pass1_worker, task) for task in tasks]):
             for spec in future.result():
                 groups.setdefault((spec.assembly, spec.window), []).append(spec)
@@ -1316,7 +1228,7 @@ def _materialize_manifest_lookup(
 
 @contextmanager
 def _reduce_manifest_windows(
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     *,
     n_workers: int,
     window_size_mb: float,
@@ -1372,7 +1284,7 @@ def _reduce_manifest_windows(
 
 
 def _lift_manifest_variants(
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     *,
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
@@ -1385,7 +1297,7 @@ def _lift_manifest_variants(
     """Resolve every manifest row's union of source variants to hg38 ALIDs
     (issue #85; the dense and hybrid builders' shared Pass 1).
 
-    Each row declares its own ``source_assembly`` (`_read_manifest`). Rows
+    Each row declares its own ``source_assembly`` (`read_manifest`). Rows
     already on hg38 -- a harmonised GWAS-SSF source, say -- map straight to
     their ALID with no liftover: running an already-hg38 coordinate through
     the hg19->hg38 chain a second time silently shifts it to the wrong
@@ -1441,7 +1353,7 @@ def _lift_manifest_variants(
 
 
 def _harvest_manifest_variants(
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     *,
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
@@ -1669,7 +1581,7 @@ def build_dense_from_vcf_manifest(
     materialise the full association matrix (issue 043), and every phase runs
     before the store is committed. Keyword semantics live with the phase that
     consumes each -- the manifest columns and per-release defaults (#174) with
-    `_read_manifest`; ``chain_file`` and ``liftover_failure_threshold`` with the
+    `read_manifest`; ``chain_file`` and ``liftover_failure_threshold`` with the
     hg19→hg38 lift (issue #85); ``eaf_reference``/``eaf_reference_ancestry``/
     ``allow_unverified_eaf`` with EAF orientation verification (issue #115, ADR 0037 §6).
     ``variant_reference`` (issue #185) supplies a precomputed axis
@@ -1679,7 +1591,7 @@ def build_dense_from_vcf_manifest(
     (issue #298) and a Dense matrix can carry only ``gwas``, its default (ADR 0064).
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.DENSE)
-    manifest_rows = _read_manifest(
+    manifest_rows = read_manifest(
         manifest_path, default_source_reader_capability=source_reader_capability,
         default_source_assembly=source_assembly, column_map=column_map,
     )
@@ -1770,7 +1682,7 @@ class _PreparedBuild:
 
 def _axis_metadata(
     source_lookup: Mapping[tuple[str, int, str, str], str],
-    manifest_rows: Sequence[_ManifestRow],
+    manifest_rows: Sequence[ManifestRow],
     alids: Sequence[str] | None = None,
 ) -> tuple[_AxisMetadata, dict[str, int]]:
     """Resolve the store's axis metadata.
@@ -1783,10 +1695,10 @@ def _axis_metadata(
     caller can free it (it is the one ~n_variants-sized dict) once the Pass 2
     lookup arrays are built.
     """
-    hg38_alids = _sorted_alids(alids if alids is not None else source_lookup.values())
+    hg38_alids = sorted_alids(alids if alids is not None else source_lookup.values())
     variant_index: dict[str, int] = {alid: i for i, alid in enumerate(hg38_alids)}
     analysis_index: dict[str, int] = {row.trait_id: i for i, row in enumerate(manifest_rows)}
-    analyses: list[Analysis] = [_manifest_row_to_analysis(row) for row in manifest_rows]
+    analyses: list[Analysis] = [manifest_row_to_analysis(row) for row in manifest_rows]
     return (
         _AxisMetadata(
             alids=hg38_alids,
@@ -1835,7 +1747,7 @@ def _write_axis_and_index(
     rsid (first named wins) and the source-build provenance each row resolved
     from (``_source_alids_by_alid`` -- collisions stay blank, never guessed).
     """
-    _write_index(staged, axis.alids, axis.analyses, chunk_shape)
+    write_index(staged, axis.alids, axis.analyses, chunk_shape)
     canonical_variants = [
         CanonicalVariant(
             chromosome=chrom,
@@ -1876,7 +1788,7 @@ def _build_pass2_lookup(
 
 
 def _resolve_axis_source(
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
     n_workers: int,
@@ -2056,7 +1968,7 @@ def _rekey_and_verify(
 
 def _reference_axis_rsids(
     reference: VariantReference,
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
     n_workers: int,
@@ -2100,7 +2012,7 @@ def _reference_axis_rsids(
 
 
 def _load_variant_reference(
-    variant_reference: str | Path, manifest_rows: Sequence[_ManifestRow]
+    variant_reference: str | Path, manifest_rows: Sequence[ManifestRow]
 ) -> VariantReference:
     """Read the reference and note when it cannot resolve the manifest's assembly.
 
@@ -2136,7 +2048,7 @@ def _load_variant_reference(
 def _prepare_axis(
     staged: StagedRelease,
     out: Path,
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
     chunk_shape: tuple[int, int],
@@ -2175,7 +2087,7 @@ def _prepare_axis(
 
 
 def _spill_columns(
-    manifest_rows: Sequence[_ManifestRow],
+    manifest_rows: Sequence[ManifestRow],
     analysis_index: Mapping[str, int],
     spill_dir: Path,
     lookup: tuple[np.ndarray, np.ndarray, np.ndarray],
@@ -2209,7 +2121,7 @@ def _spill_columns(
             spill_dir, analysis_index[row.trait_id], row,
             keys_sorted, rows_sorted, swaps_sorted,
         )
-        _log_progress(
+        log_progress(
             "Pass 2", i + 1, len(axis.analyses), pass2_start, f"last: {row.trait_id}", every=25
         )
 
@@ -2220,7 +2132,7 @@ def _spill_columns_parallel(
     pass2_start: float,
     spill_dir: Path,
     axis: _AxisMetadata,
-    manifest_rows: Sequence[_ManifestRow],
+    manifest_rows: Sequence[ManifestRow],
     analysis_index: Mapping[str, int],
 ) -> None:
     """``_spill_columns``' fork-pool arm; see it for what the workers inherit."""
@@ -2237,13 +2149,13 @@ def _spill_columns_parallel(
     _pass2_swaps_sorted = swaps_sorted
     _pass2_spill_dir = spill_dir
     try:
-        with _fork_pool(n_workers) as pool:
+        with fork_pool(n_workers) as pool:
             id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
-            tasks = _pass2_worker_tasks(manifest_rows, analysis_index)
+            tasks = pass2_worker_tasks(manifest_rows, analysis_index)
             futures = [pool.submit(_pass2_worker, t) for t in tasks]
             for i, fut in enumerate(as_completed(futures)):
                 col_idx = fut.result()
-                _log_progress(
+                log_progress(
                     "Pass 2",
                     i + 1,
                     len(axis.analyses),
@@ -2260,7 +2172,7 @@ def _spill_columns_parallel(
 
 def _survey_and_verify_eaf(
     spill_dir: Path,
-    manifest_rows: Sequence[_ManifestRow],
+    manifest_rows: Sequence[ManifestRow],
     axis: _AxisMetadata,
     *,
     eaf_reference: str | Path | None,
@@ -2321,10 +2233,10 @@ def _write_encoded_bands(
         )
     )
     log.info("Encoding plan: %s", encoding.to_manifest())
-    effective_chunks = _create_dense_zarr(
+    effective_chunks = create_dense_zarr(
         staged, n_variants, n_analyses, chunk_shape, dtype, encoding
     )
-    rows, cols, z, se, column_has_eaf = _write_dense_bands(
+    rows, cols, z, se, column_has_eaf = write_dense_bands(
         staged,
         spill_dir,
         n_variants,
@@ -2346,7 +2258,7 @@ def _write_encoded_bands(
 def _spill_verify_and_encode(
     staged: StagedRelease,
     out: Path,
-    manifest_rows: Sequence[_ManifestRow],
+    manifest_rows: Sequence[ManifestRow],
     prepared: _PreparedBuild,
     n_workers: int,
     chunk_shape: tuple[int, int],
@@ -2444,7 +2356,7 @@ def _finalize_store(
         encoded.encoding, n_workers=n_workers,
     )
     analyses = apply_orientation_evidence(
-        _apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report
+        apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report
     )
     write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
 
@@ -2460,290 +2372,13 @@ def _fmt_duration(seconds: float) -> str:
     return f"{s}s"
 
 
-def _parse_source_assembly(
-    row: Mapping[str, str], fallback: str, trait_id: str, manifest_path: str | Path
-) -> str:
-    """Resolve and validate source_assembly for one manifest row."""
-    raw = row.get("source_assembly") or fallback
-    try:
-        return normalise_build(raw)
-    except ValueError as exc:
-        raise ValueError(
-            f"manifest {manifest_path}: analysis {trait_id!r} has invalid "
-            f"source_assembly {raw!r}"
-        ) from exc
-
-
-def _parse_reader_capability(
-    row: Mapping[str, str], fallback: str, trait_id: str, manifest_path: str | Path
-) -> str:
-    """Resolve and validate source_reader_capability for one manifest row."""
-    capability = row.get("source_reader_capability") or fallback
-    if capability not in known_capabilities():
-        known = ", ".join(known_capabilities()) or "(none registered)"
-        raise ValueError(
-            f"manifest {manifest_path}: analysis {trait_id!r} has unknown "
-            f"source_reader_capability {capability!r}; known: {known}"
-        )
-    return capability
-
-
-def _parse_original_sd(
-    row: Mapping[str, str], trait_id: str, manifest_path: str | Path
-) -> float:
-    """Validate original_sd_method and original_sd, returning se_divisor."""
-    sd_method_raw = row["original_sd_method"]
-    try:
-        sd_method = OriginalSdMethod(sd_method_raw)
-    except ValueError as exc:
-        raise ValueError(
-            f"manifest {manifest_path}: analysis {trait_id!r} has invalid "
-            f"original_sd_method {sd_method_raw!r}"
-        ) from exc
-    if sd_method is OriginalSdMethod.UNAVAILABLE:
-        raise ValueError(
-            f"manifest {manifest_path}: analysis {trait_id!r} has "
-            "original_sd_method='unavailable' -- its phenotype SD could not be "
-            "established upstream, so the build cannot standardise its effects (issue #18)"
-        )
-    se_divisor = 1.0
-    original_sd_raw = row.get("original_sd", "")
-    if sd_method in _SD_RESCALE_METHODS:
-        try:
-            se_divisor = float(original_sd_raw)
-        except ValueError as exc:
-            raise ValueError(
-                f"manifest {manifest_path}: analysis {trait_id!r} has "
-                f"original_sd_method={sd_method.value!r} but original_sd "
-                f"{original_sd_raw!r} is not a valid number"
-            ) from exc
-        if not se_divisor > 0:
-            raise ValueError(
-                f"manifest {manifest_path}: analysis {trait_id!r} has "
-                f"non-positive original_sd {original_sd_raw!r}"
-            )
-    elif original_sd_raw:
-        raise ValueError(
-            f"manifest {manifest_path}: analysis {trait_id!r} has "
-            f"original_sd_method={sd_method.value!r}, which carries no SD "
-            f"magnitude, but original_sd={original_sd_raw!r} was supplied"
-        )
-    return se_divisor
-
-
-def _parse_manifest_row(
-    row: Mapping[str, str],
-    cols: ManifestColumns,
-    manifest_path: str | Path,
-    fallback_assembly: str,
-    fallback_capability: str,
-) -> _ManifestRow:
-    """Parse and validate one manifest row into a _ManifestRow."""
-    trait_id = row[cols.analysis_id]
-    scale = row["stored_effect_scale"]
-    try:
-        StoredEffectScale(scale)
-    except ValueError as exc:
-        raise ValueError(
-            f"manifest {manifest_path}: analysis {trait_id!r} has invalid "
-            f"stored_effect_scale {scale!r}"
-        ) from exc
-    assembly = _parse_source_assembly(row, fallback_assembly, trait_id, manifest_path)
-    capability = _parse_reader_capability(row, fallback_capability, trait_id, manifest_path)
-    se_divisor = _parse_original_sd(row, trait_id, manifest_path)
-    return _ManifestRow(
-        trait_id=trait_id,
-        file_path=row[cols.source_file],
-        trait_name=manifest_trait_name(row, cols.analysis_label, trait_id),
-        n=manifest_n(row, cols.sample_size),
-        stored_effect_scale=scale,
-        se_divisor=se_divisor,
-        source_reader_capability=capability,
-        source_assembly=assembly,
-        original_sd=row.get("original_sd", ""),
-        assigned_ancestry=row.get("assigned_ancestry") or "",
-        metadata=PassthroughMetadata.from_manifest_row(row),
-        trait_ontology_id=row.get("trait_ontology_id") or "",
-        trait_ontology_label=(
-            row.get("trait_ontology_label") or row.get("trait_ontology_name") or ""
-        ),
-    )
-
-
-def _resolve_manifest_defaults(
-    default_capability: str | None, default_assembly: str | None
-) -> tuple[str, str]:
-    """Validate and resolve fallback capability and assembly."""
-    if default_capability is not None:
-        if not default_capability or default_capability not in known_capabilities():
-            known = ", ".join(known_capabilities()) or "(none registered)"
-            raise ValueError(
-                f"unknown source reader capability {default_capability!r}; known: {known}"
-            )
-    if default_assembly is not None:
-        default_assembly = normalise_build(default_assembly)
-    return default_assembly or "hg19", default_capability or GWAS_VCF_CAPABILITY
-
-
-def _read_manifest(
-    manifest_path: str | Path,
-    *,
-    default_source_reader_capability: str | None = None,
-    default_source_assembly: str | None = None,
-    column_map: ColumnMap | str | Path | None = None,
-) -> list[_ManifestRow]:
-    """Read the build manifest with canonical names, aliases, and option defaults.
-
-    Accepts canonical ``analyses.tsv`` names (``analysis_id``/``source_file``/
-    ``analysis_label``/``sample_size``, ADR 0034, #170) or legacy aliases
-    (``trait_id``/``file_path``/``trait_name``/``n``). An empty manifest is refused
-    here, with the path a caller needs. Requires ``stored_effect_scale``
-    (#17) and ``original_sd_method`` (#18; ``original_sd`` required for rescaling tiers).
-
-    Optional ``source_reader_capability`` (#20, #174) and ``source_assembly`` (#85, #174)
-    fall back to CLI defaults (or GWAS-VCF/hg19). Note harmonised SSF is already hg38 and
-    must declare so or coordinates liftover twice (issue #85 double-liftover warning).
-
-    ``column_map`` is the Column Map ``opengwasdb.column-map`` rows are read
-    through (#281). Its declared genome build stands in for a row omitting
-    ``source_assembly`` when no CLI default is given, and must agree with every
-    such row's build otherwise.
-    """
-    fallback_assembly, fallback_capability = _resolve_manifest_defaults(
-        default_source_reader_capability, default_source_assembly
-    )
-    with open(manifest_path, newline="", encoding="utf-8") as fh:
-        reader = csv.DictReader(fh, delimiter="\t")
-        fieldnames = list(reader.fieldnames or [])
-        rows = list(reader)
-    require_columns(fieldnames, manifest_path, "stored_effect_scale", "original_sd_method")
-    cols = resolve_manifest_columns(fieldnames, manifest_path)
-    loaded_map = as_column_map(column_map)
-    parsed = [
-        _with_column_map(
-            _parse_manifest_row(row, cols, manifest_path, fallback_assembly, fallback_capability),
-            row, loaded_map, default_source_assembly, f"manifest {manifest_path}",
-        )
-        for row in rows
-    ]
-    check_mapped_rows(
-        [
-            MappedRowDeclaration(
-                row.trait_id, row.source_reader_capability, row.source_assembly
-            )
-            for row in parsed
-        ],
-        loaded_map,
-        f"manifest {manifest_path}",
-    )
-    if not parsed:
-        raise ValueError(f"manifest {manifest_path} contains no rows")
-    return parsed
-
-
-def column_map_provenance(rows: Iterable[_ManifestRow]) -> dict[str, str] | None:
-    """The Column Map a build's mapped rows were read through, as a store records it.
-
-    `{"name", "sha256"}` -- the fingerprint a Resolution Record carries -- or
-    `None` when no row was mapped, so an unmapped store's provenance is
-    unchanged (#281). `_read_manifest` gives every mapped row the same map.
-    """
-    for row in rows:
-        if row.column_map is not None:
-            return row.column_map.fingerprint()
-    return None
-
-
-def _with_column_map(
-    row: _ManifestRow,
-    raw: Mapping[str, str],
-    column_map: ColumnMap | None,
-    default_assembly: str | None,
-    context: str,
-) -> _ManifestRow:
-    """A mapped row with its Column Map, in the build `mapped_row_build` gives it.
-
-    The row's own build is re-derived through the shared rule rather than taken
-    from `_parse_manifest_row`, which falls back to hg19 -- a default a mapped
-    row must never inherit (#281).
-    """
-    if row.source_reader_capability != COLUMN_MAP_CAPABILITY or column_map is None:
-        return row
-    declared = row.source_assembly if raw.get("source_assembly") else None
-    build = mapped_row_build(
-        declared, default_assembly, column_map, f"{context}: analysis {row.trait_id!r}"
-    )
-    return replace(row, column_map=column_map, source_assembly=normalise_build(build))
-
-
-def _alid_sort_key(alid: str) -> tuple[tuple[int, str], int, str, str]:
-    chrom, pos_str, a1, a2 = alid.split(":")
-    return (chromosome_sort_key(chrom), int(pos_str), a1, a2)
-
-
-def _sorted_alids(alids: Iterable[str]) -> list[str]:
-    """Sort unique ALIDs by ``(chromosome_sort_key, position, a1, a2)``.
-
-    Exactly equivalent to ``sorted(set(alids), key=_alid_sort_key)`` but built
-    for genome-scale axis construction: the ALIDs are parsed once and each one
-    is re-encoded as a sortable byte key, then ``np.argsort`` orders the byte
-    keys in C rather than calling ``_alid_sort_key`` once per element (~21M
-    Python calls on a dense pilot build).
-
-    The sort key is ``fixed-width rank \\x00 chrom \\x00 zero-padded-position
-    \\x00 a1 \\x00 a2``. ``\\x00`` is smaller than every character that can
-    appear in a chromosome, position or allele, so it terminates the variable-
-    length fields and makes lexicographic byte order equal to the Python tuple
-    order ``_alid_sort_key`` produces.
-    """
-    unique = list(set(alids))
-    if not unique:
-        return []
-
-    n = len(unique)
-    ranks = np.empty(n, dtype=np.int64)
-    chroms: list[str] = [""] * n
-    positions: list[str] = [""] * n
-    a1s: list[str] = [""] * n
-    a2s: list[str] = [""] * n
-    pos_width = 1
-    for i, alid in enumerate(unique):
-        chrom, pos_str, a1, a2 = alid.split(":")
-        canonical_chrom = normalise_chromosome(chrom)
-        chroms[i] = canonical_chrom
-        positions[i] = pos_str
-        a1s[i] = a1
-        a2s[i] = a2
-        ranks[i] = chromosome_sort_key(canonical_chrom)[0]
-        if len(pos_str) > pos_width:
-            pos_width = len(pos_str)
-
-    keys = np.empty(n, dtype=object)
-    rank_width = len(str(int(ranks.max())))
-    for i in range(n):
-        keys[i] = (
-            f"{ranks[i]:0{rank_width}d}".encode()
-            + b"\x00"
-            + chroms[i].encode()
-            + b"\x00"
-            + positions[i].zfill(pos_width).encode()
-            + b"\x00"
-            + a1s[i].encode()
-            + b"\x00"
-            + a2s[i].encode()
-        )
-    del chroms, positions, a1s, a2s
-    order = np.argsort(keys, kind="stable")
-    del keys
-    return [unique[i] for i in order]
-
-
-def _write_index(
+def write_index(
     staged: StagedRelease,
     hg38_alids: list[str],
     analyses: list[Analysis],
     chunk_shape: tuple[int, int],
 ) -> None:
+    """Write a Dense release's ``index.sqlite``: its schema, counts and Dense layout."""
     with staged.index_connection() as connection:
         initialise_schema(connection)
         set_metadata(connection, "schema_version", 1)
@@ -2757,7 +2392,7 @@ def _write_index(
         connection.commit()
 
 
-def _apply_eaf_scope(analyses: list[Analysis], column_has_eaf: np.ndarray) -> list[Analysis]:
+def apply_eaf_scope(analyses: list[Analysis], column_has_eaf: np.ndarray) -> list[Analysis]:
     """Stamp each Analysis's `eaf_scope` from what the build actually stored.
 
     Derived, never copied from the manifest (ADR 0036): only the build knows
@@ -2889,7 +2524,7 @@ def _encode_residual_dense_eaf(
             positions=positions_row_band(r0, n_analyses),
             exceptions=exceptions,
         )
-        _log_progress("Encode eaf", r1, n_variants, pass2_start, f"rows {r0}:{r1}", every=band_rows)
+        log_progress("Encode eaf", r1, n_variants, pass2_start, f"rows {r0}:{r1}", every=band_rows)
     write_eaf_baseline(root, baseline, compressor=_DENSE_COMPRESSOR)
     exceptions.table().write(root)
     log.info(
@@ -2942,7 +2577,7 @@ def _create_eaf_array(
     )
 
 
-def _create_dense_zarr(
+def create_dense_zarr(
     staged: StagedRelease,
     n_variants: int,
     n_analyses: int,
@@ -2954,7 +2589,7 @@ def _create_dense_zarr(
 
     Chunk shape is clipped to the array dimensions (ADR-0021) so zarr's declared
     chunks match what is physically stored. The arrays are created without data;
-    ``_write_dense_bands`` fills them by chunk-column band afterwards. Each plane
+    ``write_dense_bands`` fills them by chunk-column band afterwards. Each plane
     is filled with **its own** missing marker (spec §15): NaN for `se`, the
     reserved sentinel for a fixed-point `z`, so an untouched cell reads as
     missing under either encoding.
@@ -3338,7 +2973,7 @@ def _flush_band(
     """Write one finished band to its plane and report progress."""
     start, stop, band = flush
     arr[:, start:stop] = band[:, : stop - start]
-    _log_progress(label, stop, n_analyses, pass2_start, f"cols {start}:{stop}", every=band_cols)
+    log_progress(label, stop, n_analyses, pass2_start, f"cols {start}:{stop}", every=band_cols)
 
 
 def _shard_columns(arr: Any, effective_chunks: tuple[int, int]) -> int:
@@ -3473,7 +3108,7 @@ def _concatenate_hits(
     )
 
 
-def _write_dense_bands(
+def write_dense_bands(
     staged: StagedRelease,
     spill_dir: Path,
     n_variants: int,

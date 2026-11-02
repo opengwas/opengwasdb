@@ -63,7 +63,7 @@ def subset_catalogue(
 
     Writes the filtered rows verbatim (all Catalogue columns), plus
     ``stored_effect_scale`` and ``original_sd_method``/``original_sd`` stamped
-    onto every row -- the columns `opengwasdb.layouts.dense.build_vcf._read_manifest`
+    onto every row -- the columns `opengwasdb.layouts.build_manifest.read_manifest`
     now requires that the Catalogue itself never carries (issues #17, #18).
     ``original_sd`` applies uniformly to every kept Analysis, like
     ``stored_effect_scale``; leave it ``None`` for ``original_sd_method``
