@@ -1,4 +1,4 @@
-"""Variant Routing: which Variant Index place each source coordinate reaches.
+"""Variant Routing: which Variant Index place each source coordinate reaches (ADR 0071).
 
 One module behind the builders' two passes. `route_variants` reads the
 sources once (Pass 1), places each coordinate on GRCh38 -- through the
