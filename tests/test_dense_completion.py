@@ -817,10 +817,10 @@ class TestQuery:
         global_result = q.top_hits(threshold=5e-4)
         expected = global_result["analysis_index"] == 0
 
-        def fail_imputed_pairs(rows, cols):  # noqa: ARG001
+        def fail_imputed_pairs(*_args: object) -> None:
             raise AssertionError("selected top hits must use indexed imputed flags")
 
-        q._imputed_pairs = fail_imputed_pairs
+        q._grid.inspect = fail_imputed_pairs
         selected = q.top_hits(analysis_id="a1", threshold=5e-4)
         observed = q.top_hits(analysis_id="a1", threshold=5e-4, observed_only=True)
 
@@ -849,10 +849,10 @@ class TestQuery:
     def test_top_hits_uses_indexed_imputed_flags(self, completed_store):
         q = query_store(completed_store)
 
-        def fail_imputed_pairs(rows, cols):  # noqa: ARG001
+        def fail_imputed_pairs(*_args: object) -> None:
             raise AssertionError("top_hits should read indexed imputed flags")
 
-        q._imputed_pairs = fail_imputed_pairs
+        q._grid.inspect = fail_imputed_pairs
         result = q.top_hits(threshold=5e-4)
         assert len(result["association_status"]) == len(result["z"])
         q.close()
@@ -864,7 +864,7 @@ class TestQuery:
         def fail_eaf_pairs(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("top_hits should read indexed frequencies")
 
-        q._eaf_pairs = fail_eaf_pairs
+        q._grid.inspect = fail_eaf_pairs
         result = q.top_hits(threshold=5e-4)
         np.testing.assert_array_equal(result["eaf"], expected)
         q.close()
@@ -888,10 +888,10 @@ class TestQuery:
 
         q = query_store(completed_store)
 
-        def fail_imputed_pairs(rows, cols):  # noqa: ARG001
+        def fail_imputed_pairs(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("range_phewas should read imputed flags as a block")
 
-        q._imputed_pairs = fail_imputed_pairs
+        q._grid._eaf.read_points = fail_imputed_pairs
         result = q.range_phewas("1", 900_000, 1_100_000)
         assert len(result["association_status"]) == len(result["z"])
         assert "imputed" in set(result["association_status"].tolist())

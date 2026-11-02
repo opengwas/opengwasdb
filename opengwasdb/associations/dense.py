@@ -53,6 +53,7 @@ class DenseGridReader:
         # Opened on first use: a top-hit index carrying its decoded EAF must not
         # touch the much larger frequency plane.
         self._eaf_plane: DenseEafPlane | None = None
+        self.has_imputed = "imputed" in group
 
     @classmethod
     def open(

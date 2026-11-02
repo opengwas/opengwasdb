@@ -70,7 +70,7 @@ from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._quiet import wait_for_quiet as _wait_for_quiet
 from benchmarks._rss import run_probe
-from opengwasdb.query.facade import _empty_result
+from opengwasdb.associations import Associations
 
 # Selection anchors, matching the OGS-00009 report (benchmark_ukbb_dense.py):
 # the statin-use exposure Analysis, the chr19 APOE/APOC region, and the seeded
@@ -91,7 +91,7 @@ DEFAULT_OUTPUT = Path("docs/benchmark-output/opengwasdb_store_comparison.json")
 # the query API's own empty result rather than restated here, so the identity
 # check cannot drift from the arrays the queries actually return; hashing all
 # six covers values, order, dtype, length and NaN positions at once.
-RESULT_ARRAY_NAMES: tuple[str, ...] = tuple(_empty_result())
+RESULT_ARRAY_NAMES: tuple[str, ...] = tuple(Associations.empty())
 
 _ZARR_METADATA_NAMES = frozenset({".zarray", ".zattrs", ".zgroup", ".zmetadata", "zarr.json"})
 

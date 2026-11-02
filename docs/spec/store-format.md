@@ -1614,6 +1614,8 @@ Reference-Completed Stores encode Association Status using a per-plane **missing
 
 Each statistic plane's missing marker is defined by that plane's declared encoding, not by its dtype: a floating-point plane marks a missing cell with NaN, and an integer plane with the reserved sentinel its codec declares. Every release declares an encoding (§6a), so there is no plane whose marker has to be inferred. Stating it in terms of the codec rather than of NaN is what lets an integer `z` plane, which cannot hold NaN, express the same contract (ADR 0037, ADR 0038 §6).
 
+A cell is **present** exactly when neither its Z nor its SE carries its plane's missing marker. Finiteness plays no part: **an infinite value is a value.** An SE above a `float16` plane's range is stored `+inf` beside a finite Z (issue #338), and that cell is present, `observed` or `imputed` by its mask, in every reader of every layout (ADR 0068).
+
 State derivation:
 
 | Z | SE | imputed mask | Association Status |
@@ -1628,7 +1630,7 @@ Invalid states:
 - imputed mask is true while Z or SE is missing;
 - a marker payload is non-canonical (for a float plane, a non-canonical NaN).
 
-Builders and validators MUST reject invalid states.
+Builders and validators MUST reject invalid states. Readers MUST refuse them: a query whose region holds an invalid cell fails, naming the component and the cell, rather than dropping it or reading it as missing (ADR 0068).
 
 The imputed mask is:
 
@@ -1724,6 +1726,13 @@ Default thresholds:
 Top-hit results from Reference-Completed releases include imputed associations by default. Observed-Only Query mode applies to Top-Hit Queries as well as exact and range queries.
 
 ## 19. Query result contract
+
+A query returns an association record (`opengwasdb.associations.Associations`):
+parallel arrays read as a mapping, keyed `variant_index`, `analysis_index`, `z`,
+`se`, `eaf`, `n` (below) and `association_status` (ADR 0020, ADR 0068). A
+Dense grid stores no association at a missing cell, so a Dense result omits
+them; a Ragged sequence stores a row for every attempted pair, so a Ragged or
+Ragged Overflow result returns such a row as `missing` (§15).
 
 Query results SHOULD expose:
 

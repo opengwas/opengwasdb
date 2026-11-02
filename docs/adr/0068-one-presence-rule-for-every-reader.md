@@ -1,0 +1,115 @@
+# One presence rule for every association reader
+
+Issue [#351](https://github.com/opengwas/opengwasdb/issues/351), part of epic
+#58. Supersedes [ADR 0033](0033-query-facade-adapter-contract.md) §7 and amends
+its §1 (result type) and §8 (top hits). The read side of the Association
+Admission contract ([#357](https://github.com/opengwas/opengwasdb/issues/357)).
+
+## Context
+
+Spec §15 defines Association Status by each plane's missing marker plus the
+imputed mask. The readers did not apply it, and did not apply anything
+consistently:
+
+- Dense point queries kept a cell only when `isfinite(z) & isfinite(se)`, so a
+  present association whose SE was stored `+inf` (an SE above `float16`'s range,
+  issue #338) was silently dropped, as was a cell holding one marker without
+  the other.
+- Ragged and Ragged Overflow queries, and Dense `top_hits()`, labelled the same
+  `+inf` cell `association_status="missing"`. ADR 0033 §7 recorded the
+  difference as intended.
+- `validate` held three rules of its own: the marker rule on Dense, `isfinite`
+  on imputed cells, and `~isfinite` on missing-Z Ragged rows (which passed a
+  missing Z beside `+inf`). Observed-Only Ragged releases and Hybrid Overflows
+  got no paired-marker check at all.
+- Every caller decoded its own planes, in its own order: the imputed mask, then
+  EAF with the panel substitution, then SE from that EAF. Sixteen sites shared
+  one EAF read with SE decoding by hand (#253), and eight result dicts were
+  assembled in eight places.
+
+On the Store Releases published by 1 Nov 2026, eight cells differ between the
+rules, all in OGS-00011: four `+inf` SEs in the Dense Component
+(GCST90295971 ×2, GCST90827693 ×2), dropped by Dense queries, and four in the
+Ragged Overflow (GCST012879 ×1, GCST90295971 ×3), labelled `missing`. No
+published release holds a cell with one marker without the other.
+
+## Decision
+
+**One presence rule for every layout.** An association is present exactly when
+neither its Z nor its SE carries its plane's missing marker (spec §15), in every
+reader: queries, top hits, `validate`, `check-observed-view` and the Indexed
+Variant Subset. Finiteness plays no part. An infinite SE is a value: a finite Z
+beside SE = `+inf` is present, `observed` or `imputed` by its mask, and every
+layout's queries return it with `se = inf` (beta reads ±inf; the p-value, from
+Z, is unaffected), while `validate` warns (#337). Dense queries therefore return
+OGS-00011's four Dense Component cells they dropped; its four Overflow cells
+change from `missing` to `observed`. #338 stops new builds writing such cells.
+
+What a read returns still follows what each layout stores. A Dense grid stores
+no association at a missing cell, so Dense queries still omit them (ADR 0020).
+A CSR stores a row for every attempted pair, so Ragged and Overflow queries
+still return those rows, labelled `missing`.
+
+A cell spec §15 forbids -- one marker without the other, an imputed flag
+outside {0, 1}, or a flag on a missing cell -- is **refused** by every query,
+with an `InvalidAssociations` error naming the component, the count of each
+kind and the first five cells. It is counted, not refused, by `validate` and
+`check-observed-view`. Admission (#357) decides at build time whether an
+association may be stored; the reader asserts that decision at read time, so a
+Store that holds such a cell is damaged, and a query says so rather than drop
+or relabel it.
+
+**One module reads associations.** `opengwasdb/associations/` holds the rule
+(`states()`, applied to decoded values by `classify()`), the record and three
+adapters at one seam, the place where encodings and layouts differ:
+`DenseGridReader` (a Dense release, or a Hybrid's Dense Component),
+`CsrReader` (a Ragged release, or a Hybrid's Ragged Overflow) and
+`SubsetReader` (an Indexed Variant Subset). Each answers `read(cells)` with an
+`Associations` record and `inspect(cells)` with every cell and its State, and
+hides its planes' decode order. The region value, `Cells`, names one Analysis,
+several, a set of variants, a variant × Analysis cross, elementwise pairs, or
+(a CSR only) flat sequence positions.
+
+**The result is a record, read as the old mapping.** ADR 0033 §1's
+`dict[str, np.ndarray]` becomes `Associations`, a frozen `Mapping` with the same
+keys, dtypes and meanings (ADR 0020, ADR 0067), so `result["z"]`, `items()` and
+`"n" in result` keep working. Mutating a result and `isinstance(result, dict)`
+do not.
+
+**ADR 0033 §8 is withdrawn.** `top_hits()` applies the same rule: a tier row's
+Status comes from its `z`, `se` and imputed flag, so an infinite SE among the
+hits is `observed`, and a tier row with a missing SE beside a present Z is
+refused.
+
+**`lookup()` is Analysis-major on every layout.** Dense returned
+variant-major; Ragged, Analysis-major. ADR 0033 promised grouping only, so the
+order is unified on Ragged's.
+
+## Consequences
+
+- The spec's §15 states that an infinite value is a value, and §19 names the
+  record. Nothing on disk changes, so `format_version` does not move.
+- `validate` gains the paired-marker check on Observed-Only Ragged releases and
+  Hybrid Overflows, and fails a missing Z beside `+inf`; an imputed cell with an
+  infinite SE now passes, warned. No published release changes verdict.
+- `RaggedCSRReader`'s decode surface moves behind `CsrReader`. What stays public
+  is structure, for code that walks the sequence itself: `offsets`, `span()`,
+  `variant_index()`, `variant_index_at()`, `analysis_index_at()`, a Z-only
+  `z_slice()`, the imputed mask and `pair_positions()`. The query facade,
+  `validate`, the observed-view checks and the Ragged Top-Hit harvest reach none
+  of its underscore attributes; Reference Completion's reads of it change with
+  the builders' rework (#352).
+- The CLI's `--format json` output still omits `eaf` and `association_status`;
+  the record makes adding them a one-line change, which waits on the
+  documentation in `opengwasdb-stores`.
+
+## Alternatives considered
+
+**A lazy view** that reads a plane when its attribute is first touched. It also
+serves Z-only scans, but every attribute access becomes a possible read and a
+possible decode error, far from the call that caused it.
+
+**A release-level source** with a fourth, Hybrid composite adapter. It would
+hide the facade's Hybrid dispatch, but `validate` and the observed-view checks
+still need component readers, so it adds a seam on top of this one rather than
+replacing it. It remains a possible follow-on.

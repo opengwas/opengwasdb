@@ -1,7 +1,7 @@
 """#252: the variant-side Ragged and Hybrid Overflow reads are at-position.
 
 Every query that reaches a Ragged store, or a Hybrid store's Ragged Overflow,
-by variant was O(total associations) in time *and* memory: `_hit_rows_result`
+by variant was O(total associations) in time *and* memory: the hit-row decode
 and `_top_hits_by_scan` called `z_all()`/`se_all()` (decoding every z and se in
 the component), `z_at` sliced the whole `z` plane before indexing, `lookup`
 decoded every requested Analysis whole, and the scans held a whole
@@ -12,7 +12,7 @@ This module pins the two properties the change must hold:
 
 * **answers identical.** Each variant-side shape (`phewas`, `range_phewas`,
   `lookup`, and the Hybrid off-panel paths) must return the same six arrays as
-  an oracle built from the Analysis-side `analysis`/`_overflow_for_analysis`
+  an oracle built from the Analysis-side `analysis` and Overflow reads
   decode -- the slice path #253 owns -- with and without `observed_only`.
 * **bounded reads.** No variant-side query decodes a whole plane: `z_all` and
   `se_all` are never called, and a query whose answer touches one chunk of `z`
@@ -43,6 +43,7 @@ from test_hybrid_completion import (
 from test_ragged_completion import _RESULT_KEYS
 from test_ragged_residual_completion import RaggedResidualScenario
 
+from opengwasdb.associations import Cells
 from opengwasdb.encoding import EafRead
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
@@ -50,7 +51,6 @@ from opengwasdb.layouts.ragged.by_variant import VariantIndexError
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
-from opengwasdb.query.facade import _concat_results
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.validation import validate as validate_module
 from opengwasdb.validation import validate_store
@@ -151,7 +151,10 @@ def _oracle_for_alid(query, alid: str) -> tuple[np.ndarray, dict[str, np.ndarray
 
 def _concat_rows(parts: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
     """The union of per-Analysis parts, in the order given (query order)."""
-    return _concat_results(parts)
+    return {
+        key: np.concatenate([np.asarray(p[key]) for p in parts]) if parts else np.empty(0)
+        for key in _RESULT_KEYS
+    }
 
 
 def _filtered(part: dict[str, np.ndarray], wanted: np.ndarray) -> dict[str, np.ndarray]:
@@ -175,7 +178,7 @@ def _overflow_oracle(query, wanted: np.ndarray, columns: list[int]) -> dict[str,
     """The Analysis-side Overflow decode, filtered to `wanted`."""
     parts = []
     for col in columns:
-        part = query._overflow_for_analysis(col)
+        part = query._overflow.read(Cells.analysis(col))
         if len(part["z"]):
             parts.append(_filtered(part, wanted))
     return _concat_rows(parts)
@@ -382,11 +385,7 @@ def _analysis_ids(query) -> list[str]:
 def _scan_target_variant(query: Any, target_variant: int) -> dict[str, np.ndarray]:
     """Execute a scan query for target_variant directly on the CSR."""
     hit_positions = query._csr.variant_positions(np.asarray([target_variant], dtype=np.int32))
-    return query._hit_rows_result(
-        hit_positions,
-        np.full(len(hit_positions), target_variant, dtype="int32"),
-        observed_only=False,
-    )
+    return query._reader.read(Cells.positions(hit_positions))
 
 
 def test_identity_catches_a_misaligned_window(
@@ -434,11 +433,7 @@ def test_identity_catches_a_dropped_imputed_mask(
     with query_store(ragged_residual.completed) as query:
         wanted = query._variant_axis.range_indices("1", 900_000, 1_100_000)
         hit_positions = query._csr.variant_positions(np.asarray(wanted, dtype=np.int32))
-        got = query._hit_rows_result(
-            hit_positions,
-            query._csr.variant_index_at(hit_positions),
-            observed_only=False,
-        )
+        got = query._reader.read(Cells.positions(hit_positions))
         want = _ragged_oracle(
             query, wanted, analysis_ids=_analysis_ids(query), observed_only=False
         )
