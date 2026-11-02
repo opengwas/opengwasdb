@@ -1,4 +1,4 @@
-"""The presence rule and the association record (spec §15, ADR 0068)."""
+"""The presence rule and the association record (spec §15, ADR 0070)."""
 
 from __future__ import annotations
 
@@ -134,3 +134,23 @@ def test_concat_keeps_n_only_when_asked() -> None:
     with pytest.raises(ValueError, match="without n"):
         oa.Associations.concat([record, oa.Associations.empty()], with_n=True)
     assert oa.Associations.concat([], with_n=True)["n"].dtype == np.float64
+
+
+def _float16_bits(bits: int) -> np.ndarray:
+    """A decoded cell whose stored float16 had exactly these bits."""
+    return np.array([bits], np.uint16).view(np.float16).astype(np.float32)
+
+
+@pytest.mark.parametrize("bits", [0x7E01, 0xFE00, 0x7C01])
+def test_a_nan_other_than_the_canonical_one_is_refused(bits: int) -> None:
+    """Spec §15: a non-canonical marker payload is invalid, not missing."""
+    z = np.array([NAN], np.float32)
+    assert oa.classify(z, _float16_bits(0x7E00)).tolist() == [oa.State.MISSING]
+    assert oa.classify(z, _float16_bits(bits)).tolist() == [oa.State.NON_CANONICAL]
+    assert oa.Tally.of_decoded(z, _float16_bits(bits)).invalid == 1
+    with pytest.raises(oa.InvalidAssociations, match="non_canonical"):
+        oa.Associations.from_decoded([0], [0], z, _float16_bits(bits))
+
+
+def test_an_integer_plane_has_no_payload_to_be_wrong() -> None:
+    assert not oa.non_canonical(np.array([-32768, 5], np.int16)).any()

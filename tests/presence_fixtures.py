@@ -1,6 +1,6 @@
 """Small Dense, Ragged and Hybrid Store Releases with one association's value planted.
 
-Shared by the query and validation tests of the presence rule (ADR 0068). A plant
+Shared by the query and validation tests of the presence rule (ADR 0070). A plant
 writes every copy a read may use: a Ragged component's by-variant index holds its
 own copy of each row.
 """

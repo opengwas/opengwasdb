@@ -825,10 +825,13 @@ class RaggedCSRReader:
         # baseline (and, on a Reference-Completed release, the panel frequency
         # for imputed cells) onto the cells being read. Absent on stores whose
         # sources report no frequency at all -- those read back as all-NaN.
+        # Opened once: a membership test or `root[name]` reads the array's
+        # metadata from the store every time (#244).
+        self._imputed_array: zarr.Array | None = (
+            self._root["imputed"] if "imputed" in self._root else None
+        )
         self._eaf_plane = RaggedEafPlane.open(
-            self._root,
-            encoding,
-            imputed=self._root["imputed"] if "imputed" in self._root else None,
+            self._root, encoding, imputed=self._imputed_array
         )
         self._se_plane = RaggedSePlane.open(self._root, encoding, self._eaf_plane)
         # The plan, not the array's presence, says whether there is a plane: one
@@ -883,16 +886,21 @@ class RaggedCSRReader:
     @property
     def has_imputed(self) -> bool:
         """Whether the sequence carries an imputed mask."""
-        return "imputed" in self._root
+        return self._imputed_array is not None
 
     def imputed(self, start: int, end: int) -> np.ndarray:
         """The imputed mask `[start, end)` as stored (uint8)."""
-        return np.asarray(self._root["imputed"][int(start) : int(end)], dtype=np.uint8)
+        return np.asarray(self._require_imputed()[int(start) : int(end)], dtype=np.uint8)
 
     def imputed_at(self, positions: np.ndarray) -> np.ndarray:
         """The imputed mask at flat positions, as stored (uint8)."""
         positions = np.asarray(positions, dtype=np.int64)
-        return np.asarray(self._root["imputed"].oindex[positions], dtype=np.uint8)
+        return np.asarray(self._require_imputed().oindex[positions], dtype=np.uint8)
+
+    def _require_imputed(self) -> zarr.Array:
+        if self._imputed_array is None:
+            raise ValueError("this sequence carries no imputed mask; ask has_imputed first")
+        return self._imputed_array
 
     @property
     def can_report_frequencies(self) -> bool:

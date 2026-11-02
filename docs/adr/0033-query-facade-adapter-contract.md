@@ -1,6 +1,6 @@
 # Query facade stays three adapters behind one documented contract
 
-> **Partly superseded by [ADR 0068](0068-one-presence-rule-for-every-reader.md).**
+> **Partly superseded by [ADR 0070](0070-one-presence-rule-for-every-reader.md).**
 > §7 (finiteness differs by layout) is replaced by one presence rule for every
 > layout; §8 is withdrawn, since `top_hits()` applies the same rule; §1's result
 > type is an `Associations` record read as this mapping; and `lookup()` is

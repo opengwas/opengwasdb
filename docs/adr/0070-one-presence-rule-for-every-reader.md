@@ -51,7 +51,9 @@ A CSR stores a row for every attempted pair, so Ragged and Overflow queries
 still return those rows, labelled `missing`.
 
 A cell spec §15 forbids -- one marker without the other, an imputed flag
-outside {0, 1}, or a flag on a missing cell -- is **refused** by every query,
+outside {0, 1}, a flag on a missing cell, or a float marker that is a NaN other
+than the canonical one (`np.nan`'s bits: `0x7e00` in a `float16` plane, which a
+decode carries into `float32` as `0x7fc00000`) -- is **refused** by every query,
 with an `InvalidAssociations` error naming the component, the count of each
 kind and the first five cells. It is counted, not refused, by `validate` and
 `check-observed-view`. Admission (#357) decides at build time whether an
@@ -81,9 +83,19 @@ Status comes from its `z`, `se` and imputed flag, so an infinite SE among the
 hits is `observed`, and a tier row with a missing SE beside a present Z is
 refused.
 
+**Absence is never read as observed.** A Reference-Completed component's
+imputed mask says which associations are imputed, so a reader opened on a
+completed Dense grid or Ragged sequence without one refuses it. A Top-Hit tier
+that predates its own `imputed` array takes each hit's flag from the
+component's mask. Only a component observed by construction -- an
+Observed-Only release, or a Hybrid's Ragged Overflow (ADR 0026) -- reads with no
+mask, every present association observed.
+
 **`lookup()` is Analysis-major on every layout.** Dense returned
 variant-major; Ragged, Analysis-major. ADR 0033 promised grouping only, so the
-order is unified on Ragged's.
+order is unified on Ragged's: rows come grouped by Analysis, in the order the
+request first names each. A Hybrid lookup groups its two components' rows the
+same way, the Dense Component's before the Overflow's within each Analysis.
 
 ## Consequences
 
@@ -91,7 +103,18 @@ order is unified on Ragged's.
   record. Nothing on disk changes, so `format_version` does not move.
 - `validate` gains the paired-marker check on Observed-Only Ragged releases and
   Hybrid Overflows, and fails a missing Z beside `+inf`; an imputed cell with an
-  infinite SE now passes, warned. No published release changes verdict.
+  infinite SE now passes, warned; and a non-canonical marker fails, in the Dense
+  band pass and every Ragged sequence. No published release changes verdict: on
+  2 Nov 2026 every `float16` SE plane published (OGS-00001, -00002, -00004, -00005,
+  -00007, -00011 and -00027, both components and each by-variant copy) held
+  12.92 billion NaN markers, all canonical; every `z` plane is `int16_fixed`.
+- `check-observed-view` counts by the readers' States, but does not yet count a
+  non-canonical marker on its own; such a cell is missing to it, as before.
+- Two parts of the approved interface are deferred, neither a regression, since
+  the readers they replace also read whole sequences: `windows(max_cells=…)`,
+  which would let `validate` read a Ragged sequence a window at a time instead of
+  whole, and a Dense `analyses(first, stop)` region, which reads a run of
+  Analyses at once rather than one `analysis` region each.
 - `RaggedCSRReader` answers the question #58 left open: what stays public is
   structure, for code that walks the sequence itself -- `offsets`, `span()`,
   `sequence_length`, `variant_index()`, `variant_index_at()`,

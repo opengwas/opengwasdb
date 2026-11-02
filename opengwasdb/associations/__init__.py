@@ -7,7 +7,7 @@ refusing a cell spec §15 forbids -- and `inspect` -- every cell with its
 a Dense grid, `CsrReader` an association sequence and `SubsetReader` an Indexed
 Variant Subset; each hides its planes' decode order (imputed mask, then EAF with
 the panel substitution, then SE) and its routing. Presence is `states()`, in
-`record`, and nowhere else (ADR 0068).
+`record`, and nowhere else (ADR 0070).
 """
 
 from opengwasdb.associations.cells import Cells
@@ -22,6 +22,7 @@ from opengwasdb.associations.record import (
     Status,
     Tally,
     classify,
+    non_canonical,
     present,
     states,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "SubsetReader",
     "Tally",
     "classify",
+    "non_canonical",
     "present",
     "states",
 ]

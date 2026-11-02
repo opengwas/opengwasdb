@@ -45,7 +45,7 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.associations import Cells, CsrReader, Inspection
+from opengwasdb.associations import Cells, CsrReader, Inspection, State
 from opengwasdb.completion.ld_panel import (
     LDBlock,
     LdPanelNotFoundError,
@@ -588,15 +588,15 @@ def _check_analysis(
     both = source_observed & present
     matched = np.zeros(len(target_vi), dtype=bool)
     matched[at[both]] = True
-    clean = (raw_imputed == 0) & target_observed
+    # The target's States and counts are the readers' own (spec §15, ADR 0070).
+    target_tally = tgt.tally()
+    clean = tgt.state == State.OBSERVED
     is_imputed = raw_imputed == 1
     counts = {
         "observed_in_source": int(source_observed.sum()),
         "imputed": int(is_imputed.sum()),
-        # Neither z nor se present and not imputed: NaN, read through each plane's
-        # missing marker (spec §15), so an infinite value is not counted as an empty row.
-        "nan_rows": int((np.isnan(tgt.z) & np.isnan(tgt.se) & (raw_imputed == 0)).sum()),
-        "imputed_mask_invalid": int(((raw_imputed != 0) & (raw_imputed != 1)).sum()),
+        "nan_rows": target_tally.count(State.MISSING),
+        "imputed_mask_invalid": target_tally.flags_not_binary,
         "z_se_missingness_mismatch": (
             count_partial_cells(source_cells) + count_partial_cells(target_cells)
         ),

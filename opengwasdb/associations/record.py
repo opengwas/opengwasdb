@@ -4,7 +4,7 @@ A cell is present exactly when neither its Z nor its SE carries its plane's
 missing marker. Finiteness plays no part: an SE above a `float16` plane's range
 is stored as `+inf` beside a finite Z, and that cell is an association like any
 other (issues #337, #338). The rule is `states()`, here and nowhere else; every
-reader, `validate` and `check-observed-view` classify through it (ADR 0068).
+reader, `validate` and `check-observed-view` classify through it (ADR 0070).
 
 A decoded plane reads NaN exactly where it holds its marker -- a float plane's
 marker is NaN, and an integer plane's codec decodes its sentinel to NaN -- so
@@ -50,22 +50,54 @@ class State(IntEnum):
     FLAG_INVALID = 4
     #: The imputed mask says imputed, and both Z and SE are missing.
     IMPUTED_MISSING = 5
+    #: A float plane's marker is a NaN other than the canonical one.
+    NON_CANONICAL = 6
 
 
-_INVALID_STATES = (State.PARTIAL, State.FLAG_INVALID, State.IMPUTED_MISSING)
+_INVALID_STATES = (
+    State.PARTIAL,
+    State.FLAG_INVALID,
+    State.IMPUTED_MISSING,
+    State.NON_CANONICAL,
+)
+
+#: The one NaN a float plane's missing marker is written as: numpy's `np.nan`
+#: in that dtype. A decoded `float16` plane is `float32` with its payload kept,
+#: so `0x7e00` arrives as `0x7fc00000` and any other NaN as something else.
+_CANONICAL_NAN = {2: 0x7E00, 4: 0x7FC00000, 8: 0x7FF8000000000000}
+_BITS = {2: np.uint16, 4: np.uint32, 8: np.uint64}
+
+
+def non_canonical(values: np.ndarray, missing: np.ndarray | None = None) -> np.ndarray:
+    """Which cells hold a NaN whose bits are not the canonical marker (spec §15).
+
+    An integer plane's marker is a sentinel, so nothing there can be
+    non-canonical. `missing` is `isnan(values)` when the caller has it already.
+    """
+    values = np.asarray(values)
+    if values.dtype.kind != "f":
+        return np.zeros(values.shape, dtype=bool)
+    nan = np.isnan(values) if missing is None else missing
+    size = values.dtype.itemsize
+    odd: np.ndarray = nan & (values.view(_BITS[size]) != _CANONICAL_NAN[size])
+    return odd
 
 #: Cells `Tally.of` counts at a time (4 MiB of int8 states).
 _TALLY_WINDOW = 1 << 22
 
 
 def states(
-    z_missing: np.ndarray, se_missing: np.ndarray, flags: np.ndarray | None = None
+    z_missing: np.ndarray,
+    se_missing: np.ndarray,
+    flags: np.ndarray | None = None,
+    odd_marker: np.ndarray | None = None,
 ) -> np.ndarray:
     """Each cell's `State` (int8) from its markers and its imputed flag.
 
     `flags` is the imputed mask as stored; None means the component holds none,
     so every present cell is observed. A cell whose markers disagree is
-    `PARTIAL` whatever its flag says.
+    `PARTIAL` whatever its flag says, and one whose marker is a non-canonical NaN
+    (`odd_marker`, from `non_canonical`) is `NON_CANONICAL` whatever else it is.
     """
     z_missing = np.asarray(z_missing, dtype=bool)
     se_missing = np.asarray(se_missing, dtype=bool)
@@ -77,6 +109,8 @@ def states(
         out[one & z_missing] = State.IMPUTED_MISSING
         out[(flags != 0) & ~one] = State.FLAG_INVALID
     out[z_missing != se_missing] = State.PARTIAL
+    if odd_marker is not None:
+        out[np.asarray(odd_marker, dtype=bool)] = State.NON_CANONICAL
     return out
 
 
@@ -88,7 +122,28 @@ def present(z: np.ndarray, se: np.ndarray) -> np.ndarray:
 
 def classify(z: np.ndarray, se: np.ndarray, flags: np.ndarray | None = None) -> np.ndarray:
     """Each decoded cell's `State`: a decoded plane reads NaN exactly at its marker."""
-    return states(np.isnan(z), np.isnan(se), flags)
+    z_missing, se_missing = np.isnan(z), np.isnan(se)
+    return states(z_missing, se_missing, flags, _odd_markers(z, se, z_missing, se_missing))
+
+
+def _odd_markers(
+    z: np.ndarray, se: np.ndarray, z_missing: np.ndarray, se_missing: np.ndarray
+) -> np.ndarray:
+    odd: np.ndarray = non_canonical(z, z_missing) | non_canonical(se, se_missing)
+    return odd
+
+
+def require_mask(required: bool, present: bool, source: str) -> None:
+    """Refuse a Reference-Completed component that carries no imputed mask.
+
+    Its mask is what says which associations are imputed; read without one,
+    every present cell would pass for observed (spec §15).
+    """
+    if required and not present:
+        raise ValueError(
+            f"{source}: a Reference-Completed component carries no imputed mask, so "
+            "which associations are imputed cannot be read (spec §15)"
+        )
 
 
 @dataclass(frozen=True)
@@ -113,8 +168,20 @@ class Tally:
     flags_not_binary: int = 0
 
     @classmethod
+    def of_decoded(
+        cls, z: np.ndarray, se: np.ndarray, flags: np.ndarray | None = None
+    ) -> Tally:
+        """The counts over decoded cells, their markers' payloads included."""
+        z_missing, se_missing = np.isnan(z), np.isnan(se)
+        return cls.of(z_missing, se_missing, flags, _odd_markers(z, se, z_missing, se_missing))
+
+    @classmethod
     def of(
-        cls, z_missing: np.ndarray, se_missing: np.ndarray, flags: np.ndarray | None = None
+        cls,
+        z_missing: np.ndarray,
+        se_missing: np.ndarray,
+        flags: np.ndarray | None = None,
+        odd_marker: np.ndarray | None = None,
     ) -> Tally:
         """The counts over every cell, taken a window at a time.
 
@@ -125,19 +192,29 @@ class Tally:
         z_missing = np.asarray(z_missing, dtype=bool).ravel()
         se_missing = np.asarray(se_missing, dtype=bool).ravel()
         raw = None if flags is None else np.asarray(flags).ravel()
+        odd = None if odd_marker is None else np.asarray(odd_marker, dtype=bool).ravel()
         total = cls()
         for lo in range(0, len(z_missing), _TALLY_WINDOW):
             hi = lo + _TALLY_WINDOW
             total = total + cls._of_window(
-                z_missing[lo:hi], se_missing[lo:hi], None if raw is None else raw[lo:hi]
+                z_missing[lo:hi],
+                se_missing[lo:hi],
+                None if raw is None else raw[lo:hi],
+                None if odd is None else odd[lo:hi],
             )
         return total
 
     @classmethod
     def _of_window(
-        cls, z_missing: np.ndarray, se_missing: np.ndarray, flags: np.ndarray | None
+        cls,
+        z_missing: np.ndarray,
+        se_missing: np.ndarray,
+        flags: np.ndarray | None,
+        odd_marker: np.ndarray | None,
     ) -> Tally:
-        counts = np.bincount(states(z_missing, se_missing, flags), minlength=len(State))
+        counts = np.bincount(
+            states(z_missing, se_missing, flags, odd_marker), minlength=len(State)
+        )
         imputed: np.ndarray | None = None
         not_binary = 0
         if flags is not None:
@@ -211,7 +288,7 @@ def _index_column(values: Any, length: int) -> np.ndarray:
 class Associations(Mapping[str, np.ndarray]):
     """Decoded associations as parallel arrays, one row each.
 
-    Read as a mapping it is the query result contract (ADR 0020, ADR 0068):
+    Read as a mapping it is the query result contract (ADR 0020, ADR 0070):
     ``variant_index``, ``analysis_index``, ``z``, ``se``, ``eaf``, ``n`` when
     the component carries the plane, and ``association_status`` as labels.
 
@@ -456,7 +533,7 @@ class Inspection:
         )
 
     def tally(self) -> Tally:
-        return Tally.of(np.isnan(self.z), np.isnan(self.se), self.flags)
+        return Tally.of_decoded(self.z, self.se, self.flags)
 
     @property
     def present(self) -> np.ndarray:

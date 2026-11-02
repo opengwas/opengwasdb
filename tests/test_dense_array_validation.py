@@ -29,13 +29,13 @@ from opengwasdb.encoding import (
 from opengwasdb.top_hits import slices_are_ordered
 from opengwasdb.validation.validate import (
     _band_marked_positions,
+    _count_dense_imputed,
     _decode_top_hit_band,
     _dense_eaf_side_lengths,
     _dense_plane_shape_errors,
     _dense_required_planes,
     _DenseBandState,
     _flatten_band_positions,
-    _count_dense_imputed,
     _latch_dense_eaf_range,
     _latch_dense_off_panel_imputed,
     _latch_dense_states,
@@ -283,7 +283,7 @@ def test_state_latch_reads_missing_z_or_missing_se_on_imputed_cells():
 
 
 def test_state_latch_reads_an_infinite_imputed_se_as_present():
-    """An infinite value is a value (spec §15, ADR 0068); the warning counts it."""
+    """An infinite value is a value (spec §15, ADR 0070); the warning counts it."""
     findings = _band_state()
 
     _latch_dense_states(

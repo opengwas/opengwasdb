@@ -14,7 +14,7 @@ from typing import Any, Literal
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.associations import State, Tally
+from opengwasdb.associations import State, Tally, non_canonical
 from opengwasdb.associations import present as present_cells
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.encoding import (
@@ -1301,7 +1301,7 @@ def _validate_ragged_csr_values(
     _match_csr_se_exceptions(root, encoding, errors, "data.zarr/ragged/se")
     if np.any(np.isfinite(se_vals) & (se_vals < 0)):
         errors.append("se contains negative finite values")
-    errors.extend(_paired_marker_errors(StoreCodec(encoding).missing_mask(raw_z), se_vals, ""))
+    errors.extend(_paired_marker_errors(raw_z, se_vals, encoding, ""))
     # `eaf` is optional (ADR 0036); when present it is a fourth parallel
     # CSR array and must line up with the other three.
     if "eaf" in root:
@@ -1906,7 +1906,7 @@ def _validate_ragged_imputed_missingness(
 ) -> None:
     """Seam: what an imputed=1 row declares about the row's z and se.
 
-    Imputed rows carry both z and se (spec §15, ADR 0068). "Present" is the
+    Imputed rows carry both z and se (spec §15, ADR 0070). "Present" is the
     complement of the plane's own missing marker, not ``isfinite`` of a float:
     an integer plane holds no NaN to test for, and an infinite SE is a value.
     Whether z and se agree with each other is checked on every Ragged
@@ -1927,20 +1927,32 @@ def _validate_ragged_imputed_missingness(
         errors.append("missing z rows have imputed=1 (inconsistent)")
 
 
-def _paired_marker_errors(z_missing: np.ndarray, se_vals: np.ndarray, label: str) -> list[str]:
-    """A Ragged component's z and se markers, which must agree row for row (spec §15).
+def _paired_marker_errors(
+    raw_z: np.ndarray, se_vals: np.ndarray, encoding: StoreEncoding, label: str
+) -> list[str]:
+    """A Ragged component's z and se markers, which must agree row for row and be
+    canonical (spec §15).
 
     Applied to every association sequence -- an Observed-Only Ragged release
     and a Hybrid's Ragged Overflow as well as a completed one. An infinite SE
     is present, so a missing z beside one fails.
     """
-    tally = Tally.of(z_missing, np.isnan(se_vals))
+    z_missing = StoreCodec(encoding).missing_mask(raw_z)
+    se_missing = np.isnan(se_vals)
+    odd = non_canonical(raw_z) | non_canonical(se_vals, se_missing)
+    tally = Tally.of(z_missing, se_missing, odd_marker=odd)
     found = []
     if tally.z_only_missing:
         found.append(f"{label}missing z rows have a present se value (inconsistent missingness)")
     if tally.se_only_missing:
         found.append(f"{label}z and se missingness is inconsistent")
+    if tally.count(State.NON_CANONICAL):
+        found.append(_non_canonical_message(label))
     return found
+
+
+def _non_canonical_message(label: str) -> str:
+    return f"{label}z or se holds a non-canonical missing marker (a NaN other than np.nan)"
 
 
 def _validate_ragged_imputed(
@@ -2275,7 +2287,7 @@ def _validate_overflow_values(
         errors.append("Ragged Overflow se contains negative finite values")
     raw_z = np.asarray(root["z"][:])
     errors.extend(
-        _paired_marker_errors(StoreCodec(encoding).missing_mask(raw_z), se_vals, "Ragged Overflow ")
+        _paired_marker_errors(raw_z, se_vals, encoding, "Ragged Overflow ")
     )
     if encoding.z.is_fixed_point:
         _overflow_positions_match(
@@ -3498,6 +3510,7 @@ class _DenseBandState:
     eaf_undecodable: bool = False
     neg_se: bool = False
     missingness: bool = False
+    non_canonical: bool = False
     imp_not_binary: bool = False
     imp_nan_z: bool = False
     imp_nan_se: bool = False
@@ -3561,7 +3574,7 @@ def _validate_dense_band(
             _band_marked_positions(eaf_arr[r0:r1], EAF_EXCEPTION, r0, n_analyses)
         )
     imp_raw = None if imputed_arr is None else np.asarray(imputed_arr[r0:r1])
-    _latch_dense_states(findings, z_missing, se_band, imp_raw)
+    _latch_dense_states(findings, z_missing, se_band, imp_raw, z_band)
     imp_mask = _count_dense_imputed(findings, imp_raw)
     _latch_dense_off_panel_imputed(findings, on_panel, imp_mask, r0, r1)
     return True
@@ -3602,16 +3615,22 @@ def _latch_dense_states(
     z_missing: np.ndarray,
     se_band: np.ndarray,
     imputed: np.ndarray | None,
+    z_raw: np.ndarray | None = None,
 ) -> None:
-    """The band's cells under the presence rule (spec §15, ADR 0068).
+    """The band's cells under the presence rule (spec §15, ADR 0070).
 
-    Z and SE must be missing in exactly the same cells; the mask holds only 0
-    and 1; an imputed cell's Z and SE are both present. An infinite SE is
-    present, so an imputed cell holding one passes here and is warned about by
-    `_latch_infinite_se`.
+    Z and SE must be missing in exactly the same cells, each marker canonical;
+    the mask holds only 0 and 1; an imputed cell's Z and SE are both present. An
+    infinite SE is present, so an imputed cell holding one passes here and is
+    warned about by `_latch_infinite_se`.
     """
-    tally = Tally.of(z_missing, np.isnan(se_band), imputed)
+    se_missing = np.isnan(se_band)
+    odd = non_canonical(se_band, se_missing)
+    if z_raw is not None:
+        odd |= non_canonical(z_raw)
+    tally = Tally.of(z_missing, se_missing, imputed, odd)
     findings.missingness |= tally.count(State.PARTIAL) > 0
+    findings.non_canonical |= tally.count(State.NON_CANONICAL) > 0
     findings.imp_not_binary |= tally.flags_not_binary > 0
     findings.imp_nan_z |= tally.imputed_z_missing > 0
     findings.imp_nan_se |= tally.imputed_se_missing > 0
@@ -3696,6 +3715,13 @@ def _report_dense_band_flags(
         errors.append("se contains negative finite values")
     if findings.missingness:
         errors.append("z and se missingness is inconsistent")
+    if findings.non_canonical:
+        errors.append(_non_canonical_message(""))
+    _report_dense_imputed_flags(errors, findings)
+
+
+def _report_dense_imputed_flags(errors: list[str], findings: _DenseBandState) -> None:
+    """The band flags about the imputed mask, in the reporter's fixed order."""
     if findings.imp_not_binary:
         errors.append("data.zarr/imputed contains values other than 0 and 1")
     if findings.imp_nan_z:

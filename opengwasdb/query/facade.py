@@ -17,7 +17,7 @@ result, empty ones included, and a release without the plane never has the key
 Ordering -- `analysis()`, `phewas()`, `range_phewas()`, `range_by_analysis()`,
 and `lookup()` make no ordering guarantee beyond grouping (rows for one scan
 target are contiguous, not sorted); `lookup()` is Analysis-major on every
-layout. `top_hits()` returns genomic order -- sorted by
+layout, its rows grouped by Analysis in the order the request first names each. `top_hits()` returns genomic order -- sorted by
 `(analysis_index, variant_index)` -- on every adapter and every internal path
 (indexed and full-scan fallback alike), matching the `group.attrs["order"]` the
 top-hit index itself is built with.
@@ -26,7 +26,7 @@ observed_only / limit -- both apply as filter-then-limit everywhere they are
 accepted, on every internal path: `observed_only` narrows the result set
 first, `limit` then caps the already-filtered rows.
 
-Presence (ADR 0068, superseding ADR 0033 §7) -- every read goes through
+Presence (ADR 0070, superseding ADR 0033 §7) -- every read goes through
 `opengwasdb.associations`, so one rule decides presence on every layout and
 every method, `top_hits()` included: an association is present exactly when
 neither its Z nor its SE carries its plane's missing marker (spec §15). An
@@ -35,8 +35,9 @@ what each layout stores: a Dense grid stores no association at a missing cell,
 so Dense results omit them (ADR 0020); a CSR stores a row for every attempted
 pair, so Ragged and Ragged Overflow results return such a row labelled
 `missing`. A cell spec §15 forbids -- one marker without the other, an imputed
-flag outside {0, 1}, or a flag on a missing cell -- is refused with
-`InvalidAssociations` naming the component and the cell.
+flag outside {0, 1}, a flag on a missing cell, or a non-canonical NaN marker --
+is refused with `InvalidAssociations` naming the component and the cell, and a
+Reference-Completed component without its imputed mask is refused on opening.
 
 Method availability -- `variants_table()`/`analyses_table()` and
 `__enter__`/`__exit__` are present on all three adapters.
@@ -85,7 +86,7 @@ from opengwasdb.layouts.dense.indexed_subsets import (
 from opengwasdb.layouts.dense.rho import DenseRhoReader
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
-from opengwasdb.model.enums import PrimaryStorageLayout
+from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.query.resolve import resolve_rows
 from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.top_hits import TierRows, TopHitTier, TopHitTiers
@@ -102,25 +103,45 @@ def _ragged_tier_record(
 ) -> Associations:
     """A Ragged top-hit tier's rows (all of it, or one Analysis's slice) as a record.
 
-    `eaf` falls back to the CSR's own when the tier has none, and an index
-    predating the imputed mask reads all-observed. `se` is required -- a Ragged
-    index always wrote it. The tiers carry no `n`; each hit is resolved back to
-    its CSR cell for it, the way an index without `eaf` is (ADR 0067).
+    `se` is required -- a Ragged index always wrote it. A field the tier lacks is
+    resolved back to each hit's CSR cell: `eaf` from the frequency plane, `n`
+    always (the tiers carry none, ADR 0067), and the imputed flags from the
+    sequence's own mask. A tier without `imputed` reads all-observed only where
+    the sequence holds no mask, which an opened reader allows only on a
+    component that is observed by construction (`CsrReader`'s `requires_mask`).
     """
     rows = tier.read(analysis_index, require=("se",))
     assert rows.se is not None
     vi, ai = rows.variant_index, rows.analysis_index
     eaf = rows.eaf if rows.eaf is not None else csr.eaf_pairs(vi, ai)
+    imputed = rows.imputed
+    if imputed is None and csr.has_imputed:
+        imputed = csr.imputed_at(_tier_positions(csr, vi, ai, source))
     return Associations.from_decoded(
         vi,
         ai,
         rows.z,
         rows.se,
         eaf,
-        rows.imputed,
+        imputed,
         csr.n_pairs(vi, ai) if with_n else None,
         source=source,
     )
+
+
+def _tier_positions(
+    csr: RaggedCSRReader, variant_index: np.ndarray, analysis_index: np.ndarray, source: str
+) -> np.ndarray:
+    """Each tier hit's flat CSR position; a hit the sequence does not hold is refused."""
+    slots, positions = csr.pair_positions(variant_index, analysis_index)
+    if len(slots) != len(variant_index):
+        raise LookupError(
+            f"{source}: {len(variant_index) - len(slots):,} top hit(s) name a cell the "
+            "association sequence does not hold"
+        )
+    out = np.empty(len(variant_index), dtype=np.int64)
+    out[slots] = positions
+    return out
 
 
 def _empty_rho_result() -> dict[str, np.ndarray]:
@@ -165,6 +186,11 @@ def _variants_table(variant_axis: VariantAxis) -> dict[int, dict]:
         }
         for r in variant_axis.all()
     }
+
+
+def _is_completed(store: OpenGWASDBStore) -> bool:
+    """Whether a release is Reference-Completed, and so must say per cell which are imputed."""
+    return store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
 
 
 class _StoreQueryBase:
@@ -213,10 +239,13 @@ class StoreQuery(_StoreQueryBase):
         self._root = store.arrays(mode="r")
         self._variant_axis = VariantAxis(store.path, self._connection)
         # Every association read goes through the grid reader: the store's
-        # declared encoding (ADR 0037) and the presence rule (ADR 0068) are
+        # declared encoding (ADR 0037) and the presence rule (ADR 0070) are
         # applied there, once, rather than at each result site.
         self._grid = DenseGridReader.open(
-            self._root, store.manifest.encoding, source=f"Dense Store Release {store.path}"
+            self._root,
+            store.manifest.encoding,
+            source=f"Dense Store Release {store.path}",
+            requires_mask=_is_completed(store),
         )
         self._rho_reader: DenseRhoReader | None = (
             DenseRhoReader(self._root["rho"], self._grid.n_analyses)
@@ -425,6 +454,21 @@ class StoreQuery(_StoreQueryBase):
         }
 
 
+def _analysis_major(found: Associations, requested: list[int]) -> Associations:
+    """`found`'s rows grouped by Analysis, in the order `requested` first names each.
+
+    Within an Analysis the rows keep their order, so a Hybrid lookup lists the
+    Dense Component's rows before the Overflow's -- each component's own order --
+    and every layout's `lookup()` is Analysis-major (ADR 0070).
+    """
+    if not found.count:
+        return found
+    order = list(dict.fromkeys(requested))
+    rank = np.full(max(order, default=0) + 1, len(order), dtype=np.int64)
+    rank[order] = np.arange(len(order))
+    return found.take(np.argsort(rank[found.analysis_index], kind="stable"))
+
+
 def _refuse_indexed_subset(store_path: Path, layout: str, subset_name: str) -> NoReturn:
     """Refuse a subset selector on a layout that cannot carry one (ADR 0061).
 
@@ -462,7 +506,10 @@ class RaggedStoreQuery(_StoreQueryBase):
         self.store = store
         self._variant_axis = VariantAxis(store.path)
         self._reader = CsrReader.open(
-            store.path, store.manifest.encoding, source=f"Ragged Store Release {store.path}"
+            store.path,
+            store.manifest.encoding,
+            source=f"Ragged Store Release {store.path}",
+            requires_mask=_is_completed(store),
         )
         # Absence is an error: a release without the variant index is refused
         # with an instruction to build it (ADR 0060).
@@ -844,7 +891,8 @@ class HybridStoreQuery(_StoreQueryBase):
         overflow = self._overflow_read(
             Cells.cross(off_panel, columns), observed_only=observed_only
         )
-        return Associations.concat([dense, overflow])
+        requested = [i for aid in analysis_ids if (i := self._analysis_index(aid)) is not None]
+        return _analysis_major(Associations.concat([dense, overflow]), requested)
 
     def _off_panel_indices(self, identifiers: list[str]) -> list[int]:
         """The shared indices of the identifiers that resolve off the panel, ascending."""

@@ -8,15 +8,16 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.associations.cells import Cells
-from opengwasdb.associations.record import Associations, Inspection
+from opengwasdb.associations.record import Associations, Inspection, require_mask
 from opengwasdb.encoding import StoreEncoding
 from opengwasdb.layouts.ragged.by_variant import (
     ByVariantReader,
     VariantIndexError,
     has_variant_index,
 )
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store import arrays as store_arrays
 
 #: A by-variant index decode's columns, in `Inspection.of`'s order.
 _block_columns = itemgetter("variant_index", "analysis_index", "z", "se", "eaf", "imputed")
@@ -35,13 +36,21 @@ class CsrReader:
     """
 
     def __init__(
-        self, store_path: str | Path, encoding: StoreEncoding | None = None, *, source: str
+        self,
+        store_path: str | Path,
+        encoding: StoreEncoding | None = None,
+        *,
+        source: str,
+        requires_mask: bool = False,
     ) -> None:
         self._path = Path(store_path)
         if encoding is None:
             encoding = StoreManifest.load(self._path).encoding
         self._encoding = encoding
         self._source = source
+        if requires_mask:  # checked before any plane opens, so the refusal names the mask
+            group = store_arrays.open_group(self._path / RAGGED_ZARR_PATH)
+            require_mask(requires_mask, "imputed" in group, source)
         self.structure = RaggedCSRReader(store_path, encoding)
         self._by_variant: ByVariantReader | None = None
         self._offsets: np.ndarray | None = None
@@ -53,8 +62,17 @@ class CsrReader:
         encoding: StoreEncoding | None = None,
         *,
         source: str | None = None,
+        requires_mask: bool = False,
     ) -> CsrReader:
-        return cls(store_path, encoding, source=source or f"Ragged component {store_path}")
+        """`requires_mask` says the component is Reference-Completed: its imputed
+        mask is what says which rows are imputed, so a component without one is
+        refused here rather than read as all-observed (spec §15)."""
+        return cls(
+            store_path,
+            encoding,
+            source=source or f"Ragged component {store_path}",
+            requires_mask=requires_mask,
+        )
 
     @property
     def carries_n(self) -> bool:

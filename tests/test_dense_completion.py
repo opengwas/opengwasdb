@@ -575,7 +575,7 @@ class TestValidation:
         ), result.errors
 
     def test_an_imputed_cell_with_an_infinite_se_is_warned_not_failed(self, completed_store):
-        # An infinite value is a value (spec §15, ADR 0068): an imputed cell with a
+        # An infinite value is a value (spec §15, ADR 0070): an imputed cell with a
         # present Z and SE = +inf is a valid imputed association, so the band pass
         # warns about the infinity (#337) instead of reading it as a missing SE.
         # The fixture imputed nothing, so one present on-panel cell is flagged, as

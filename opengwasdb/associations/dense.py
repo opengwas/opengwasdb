@@ -14,6 +14,7 @@ from opengwasdb.associations.record import (
     State,
     Status,
     classify,
+    require_mask,
 )
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
 
@@ -55,22 +56,33 @@ class DenseGridReader:
 
     carries_n = False
 
-    def __init__(self, group: Any, encoding: StoreEncoding, *, source: str) -> None:
+    def __init__(
+        self, group: Any, encoding: StoreEncoding, *, source: str, requires_mask: bool = False
+    ) -> None:
         self._group = group
         self._encoding = encoding
         self._source = source
+        # Checked before any plane opens, so the refusal names the mask.
+        self.has_imputed = "imputed" in group
+        require_mask(requires_mask, self.has_imputed, source)
         self._z = DenseZPlane.open(group, encoding)
         self._se = DenseSePlane.open(group, encoding)
         # Opened on first use: a top-hit index carrying its decoded EAF must not
         # touch the much larger frequency plane.
         self._eaf_plane: DenseEafPlane | None = None
-        self.has_imputed = "imputed" in group
 
     @classmethod
     def open(
-        cls, group: Any, encoding: StoreEncoding, *, source: str = "Dense grid"
+        cls,
+        group: Any,
+        encoding: StoreEncoding,
+        *,
+        source: str = "Dense grid",
+        requires_mask: bool = False,
     ) -> DenseGridReader:
-        return cls(group, encoding, source=source)
+        """`requires_mask`: a Reference-Completed grid without its imputed mask is
+        refused rather than read as all-observed (spec §15)."""
+        return cls(group, encoding, source=source, requires_mask=requires_mask)
 
     @property
     def n_variants(self) -> int:
