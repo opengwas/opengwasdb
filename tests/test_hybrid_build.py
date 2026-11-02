@@ -422,7 +422,7 @@ def test_top_hits_reads_both_component_frequencies_from_indexes(hybrid_store):
     def fail_overflow(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("Overflow top hits should use indexed frequencies")
 
-    q._dense._eaf_pairs = fail_dense
+    q._dense._grid.inspect = fail_dense
     q._csr.eaf_pairs = fail_overflow
     result = q.top_hits(threshold=5e-4)
     np.testing.assert_array_equal(result["eaf"], expected)

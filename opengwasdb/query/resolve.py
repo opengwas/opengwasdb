@@ -30,7 +30,7 @@ release with a per-association sample-size plane (ADR 0067).
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 
 import numpy as np
 
@@ -42,7 +42,7 @@ from opengwasdb.variants import VariantAxis, VariantRecord
 def resolve_rows(
     analyses: AnalysesIndex,
     variant_axis: VariantAxis,
-    result: dict[str, np.ndarray],
+    result: Mapping[str, np.ndarray],
     *,
     include_variant_info: bool = False,
 ) -> Iterator[dict[str, object]]:
@@ -127,7 +127,7 @@ def _n_or_missing(n: np.ndarray, i: int) -> object:
     return "." if not np.isfinite(value) else int(value)
 
 
-def _eaf_or_missing(result: dict[str, np.ndarray], i: int) -> object:
+def _eaf_or_missing(result: Mapping[str, np.ndarray], i: int) -> object:
     """This association's stored EAF, or "." (ADR 0036).
 
     NaN is the store's per-cell "no EAF here" marker, and `eaf` is absent

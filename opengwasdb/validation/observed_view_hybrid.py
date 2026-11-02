@@ -42,6 +42,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
+from opengwasdb.associations import Cells, CsrReader
 from opengwasdb.encoding import (
     EAF_BASELINE,
     EafExceptionBuilder,
@@ -53,7 +54,6 @@ from opengwasdb.encoding import (
 from opengwasdb.encoding.planes import SE_COEFFICIENTS
 from opengwasdb.layouts.dense.complete import completion_band_rows
 from opengwasdb.layouts.hybrid.layout import dense_component_path
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store.arrays import inner_chunk_of
 from opengwasdb.store.open import OpenGWASDBStore
@@ -124,8 +124,8 @@ def check_hybrid(
         analyses["n_parent"]
     )
     axes = _HybridAxes.map(pair)
-    chunk_rows = int(inner_chunk_of(pair.dense.parent.z.array)[0])
-    band_rows = completion_band_rows(_shard_rows(pair.dense.child.z.array))
+    chunk_rows = int(inner_chunk_of(pair.dense.parent.z_array)[0])
+    band_rows = completion_band_rows(_shard_rows(pair.dense.child.z_array))
     geometry = (chunk_rows, band_rows)
     record = _header_record(pair.dense, seed, n_random, analyses, axes.dense, geometry)
     dense = {"axis": record.pop("axis"), "geometry": record.pop("geometry")}
@@ -154,7 +154,7 @@ def check_hybrid(
 class _Overflow:
     """One Store's Ragged Overflow and the shared axis its variant indices point into."""
 
-    reader: RaggedCSRReader
+    reader: CsrReader
     offsets: np.ndarray
     imputed: Any  # the zarr array, or None: an Overflow is observed-only (ADR 0026)
     n_shared: int
@@ -164,7 +164,7 @@ class _Overflow:
 
     def variant_indices(self, analysis: int, role: str) -> np.ndarray:
         """One Analysis's shared-axis indices, refused if any falls off the axis."""
-        indices = np.asarray(self.reader.variant_indices(analysis), dtype=np.int64)
+        indices = np.asarray(self.reader.structure.variant_indices(analysis), dtype=np.int64)
         if indices.size and (indices.min() < 0 or indices.max() >= self.n_shared):
             raise ObservedViewRefused(
                 f"the {role} store's Overflow holds a variant index outside its "
@@ -207,7 +207,7 @@ def _open_hybrid_pair(source_path: Path, target_path: Path) -> _HybridPair:
     child = _Planes(child_component)
     _refuse_if_incoherent(dense_component_path(source_path), parent, "source Dense Component")
     _refuse_if_incoherent(dense_component_path(target_path), child, "target Dense Component")
-    if child.imputed is None:
+    if not child.has_imputed:
         raise ObservedViewRefused(
             f"the Dense Component of target store {target_path} has no `imputed` mask to check"
         )
@@ -232,7 +232,13 @@ def _open_component(store: OpenGWASDBStore, role: str, wanted: CompletionState) 
 
 def _open_overflow(store: OpenGWASDBStore, role: str) -> _Overflow:
     try:
-        reader = RaggedCSRReader(store.path, store.manifest.encoding)
+        # Observed by construction (ADR 0026): an Overflow never carries an imputed mask.
+        reader = CsrReader.open(
+            store.path,
+            store.manifest.encoding,
+            source=f"the Overflow of {role} store {store.path}",
+            requires_mask=False,
+        )
         group = store.arrays(mode="r")["ragged"]
     except (OSError, ValueError, KeyError) as exc:
         raise ObservedViewRefused(
@@ -410,9 +416,9 @@ def _scan_overflows(pair: _HybridPair, axes: _HybridAxes) -> tuple[_Crossovers, 
     return _gather_crossovers(found), counts
 
 
-def _values_at(reader: RaggedCSRReader, positions: np.ndarray) -> _Cells:
-    eaf = reader.eaf_at(positions)
-    return _Cells(reader.z_at(positions), reader.se_at(positions, eaf=eaf), eaf)
+def _values_at(reader: CsrReader, positions: np.ndarray) -> _Cells:
+    found = reader.inspect(Cells.positions(positions))
+    return _Cells(found.z, found.se, found.eaf)
 
 
 def _imputed_in(overflow: _Overflow, analysis: int) -> int:
@@ -476,13 +482,13 @@ def _check_crossovers(pair: _HybridPair, crossovers: _Crossovers) -> dict[str, A
     child = pair.dense.child
     codec = _DenseCodec(pair.child_component)
     tally, shift = _crossover_tally(), _crossover_tally()
-    for lo, hi in _runs_by_chunk_row(crossovers.rows, int(inner_chunk_of(child.z.array)[0])):
+    for lo, hi in _runs_by_chunk_row(crossovers.rows, int(inner_chunk_of(child.z_array)[0])):
         rows, cols = crossovers.rows[lo:hi], crossovers.cols[lo:hi]
         source = _Cells(*(getattr(crossovers.source, p)[lo:hi] for p in _DIFF_PLANES))
         r0, r1 = int(rows[0]), int(rows[-1]) + 1
         band = child.read(r0, r1)
-        assert child.imputed is not None  # refused when the pair was opened
-        imputed = np.asarray(child.imputed[r0:r1])[rows - r0, cols]
+        assert band.flags is not None  # refused when the pair was opened
+        imputed = band.flags[rows - r0, cols]
         found = _Cells(*(getattr(band, p)[rows - r0, cols] for p in _DIFF_PLANES))
         expected = codec.round_trip(rows, cols, source)
         tally.totals["observed_missing_in_child"] += int((~_observed(found)).sum())
@@ -584,7 +590,7 @@ class _CrossoversSetAside(_Planes):
         cells = super().read(r0, r1)
         lo, hi = np.searchsorted(self._rows, [r0, r1])
         local = (self._rows[lo:hi] - r0, self._cols[lo:hi])
-        for plane in cells:
+        for plane in (cells.z, cells.se, cells.eaf):
             plane[local] = np.nan
         self.set_aside += int(hi - lo)
         return cells
@@ -653,7 +659,7 @@ class _Segment(NamedTuple):
 
 
 def _segment(overflow: _Overflow, analysis: int) -> _Segment:
-    found = overflow.reader.get_analysis(analysis)
+    found = overflow.reader.inspect(Cells.analysis(analysis))
     return _Segment(
         np.asarray(found.variant_index, dtype=np.int64), _Cells(found.z, found.se, found.eaf)
     )

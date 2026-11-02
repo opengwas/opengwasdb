@@ -574,6 +574,30 @@ class TestValidation:
             "imputed=1 cells have NaN se values" in e for e in result.errors
         ), result.errors
 
+    def test_an_imputed_cell_with_an_infinite_se_is_warned_not_failed(self, completed_store):
+        # An infinite value is a value (spec §15, ADR 0070): an imputed cell with a
+        # present Z and SE = +inf is a valid imputed association, so the band pass
+        # warns about the infinity (#337) instead of reading it as a missing SE.
+        # The fixture imputed nothing, so one present on-panel cell is flagged, as
+        # `test_corrupt_imputed_nan_se_fails` does; the completion-count rules that
+        # flag disagrees with are not what this test is about.
+        root = open_store(completed_store).arrays(mode="r+")
+        on_panel_rows = np.where(root["on_panel"][:] == 1)[0]
+        se = root["se"][:]
+        present = np.argwhere(~np.isnan(se[on_panel_rows]))
+        assert len(present) > 0  # the fixture must hold a present on-panel cell
+        r, c = int(on_panel_rows[present[0][0]]), int(present[0][1])
+        imputed = root["imputed"][:]
+        imputed[r, c] = 1
+        root["imputed"][:] = imputed
+        se[r, c] = np.inf
+        root["se"][:] = se
+
+        result = validate_store(completed_store)
+
+        assert not any("NaN se values" in e for e in result.errors), result.errors
+        assert any("infinite se" in w for w in result.warnings), result.warnings
+
     def test_corrupt_eaf_reference_length_fails(self, completed_store):
         # issue #113's shape for a Reference-Completed release with no plane:
         # every imputed cell reads eaf_reference, so a short one hands some
@@ -817,10 +841,10 @@ class TestQuery:
         global_result = q.top_hits(threshold=5e-4)
         expected = global_result["analysis_index"] == 0
 
-        def fail_imputed_pairs(rows, cols):  # noqa: ARG001
+        def fail_imputed_pairs(*_args: object) -> None:
             raise AssertionError("selected top hits must use indexed imputed flags")
 
-        q._imputed_pairs = fail_imputed_pairs
+        q._grid.inspect = fail_imputed_pairs
         selected = q.top_hits(analysis_id="a1", threshold=5e-4)
         observed = q.top_hits(analysis_id="a1", threshold=5e-4, observed_only=True)
 
@@ -849,10 +873,10 @@ class TestQuery:
     def test_top_hits_uses_indexed_imputed_flags(self, completed_store):
         q = query_store(completed_store)
 
-        def fail_imputed_pairs(rows, cols):  # noqa: ARG001
+        def fail_imputed_pairs(*_args: object) -> None:
             raise AssertionError("top_hits should read indexed imputed flags")
 
-        q._imputed_pairs = fail_imputed_pairs
+        q._grid.inspect = fail_imputed_pairs
         result = q.top_hits(threshold=5e-4)
         assert len(result["association_status"]) == len(result["z"])
         q.close()
@@ -864,7 +888,7 @@ class TestQuery:
         def fail_eaf_pairs(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("top_hits should read indexed frequencies")
 
-        q._eaf_pairs = fail_eaf_pairs
+        q._grid.inspect = fail_eaf_pairs
         result = q.top_hits(threshold=5e-4)
         np.testing.assert_array_equal(result["eaf"], expected)
         q.close()
@@ -888,10 +912,10 @@ class TestQuery:
 
         q = query_store(completed_store)
 
-        def fail_imputed_pairs(rows, cols):  # noqa: ARG001
+        def fail_imputed_pairs(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("range_phewas should read imputed flags as a block")
 
-        q._imputed_pairs = fail_imputed_pairs
+        q._grid._eaf.read_points = fail_imputed_pairs
         result = q.range_phewas("1", 900_000, 1_100_000)
         assert len(result["association_status"]) == len(result["z"])
         assert "imputed" in set(result["association_status"].tolist())

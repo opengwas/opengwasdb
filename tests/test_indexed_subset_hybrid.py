@@ -526,9 +526,9 @@ def test_hybrid_indexed_query_never_reads_the_primary_planes_or_the_overflow(
     monkeypatch.setattr(DenseZPlane, "column", boom)
     monkeypatch.setattr(DenseSePlane, "column", boom)
     monkeypatch.setattr(DenseEafPlane, "read_column", boom)
-    from opengwasdb.query.facade import HybridStoreQuery
+    from opengwasdb.associations import CsrReader
 
-    monkeypatch.setattr(HybridStoreQuery, "_overflow_for_analysis", boom)
+    monkeypatch.setattr(CsrReader, "read", boom)
     result = _analyse(indexed_root, "trait_a", indexed_subset="hm3")
     assert len(result["z"]) > 0, "the fixture must return rows for this to prove anything"
 

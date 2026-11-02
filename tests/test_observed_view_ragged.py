@@ -186,7 +186,7 @@ def _flat(store: Path, analysis_index: int, alid: str) -> int:
     finally:
         axis.close()
     reader = RaggedCSRReader(store)
-    start, _ = reader._span(analysis_index)
+    start, _ = reader.span(analysis_index)
     row = reader.variant_indices(analysis_index).tolist().index(index)
     return start + row
 

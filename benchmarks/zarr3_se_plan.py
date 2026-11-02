@@ -35,14 +35,16 @@ MIN_FINITE_CELLS = 1_000_000
 
 def stage(store: Path, scratch: Path, start: int, n_rows: int) -> tuple[Path, int]:
     """Write the slice's decoded `se` and `eaf` as float32 planes; returns (group, finite SE)."""
-    from opengwasdb.query import query_store
+    from opengwasdb.associations import Cells, DenseGridReader
     from opengwasdb.store import arrays
     from opengwasdb.store.arrays import ArrayRole
+    from opengwasdb.store.open import open_store
 
-    with query_store(store) as q:
-        rows = np.arange(start, start + n_rows, dtype=np.int64)
-        se = np.asarray(q._se.rows(rows), dtype=np.float32)
-        eaf = np.asarray(q._eaf.band(start, start + n_rows), dtype=np.float32)
+    release = open_store(store)
+    grid = DenseGridReader.open(release.arrays(mode="r"), release.manifest.encoding)
+    found = grid.inspect(Cells.variants(np.arange(start, start + n_rows, dtype=np.int64)))
+    se = found.se.reshape(n_rows, grid.n_analyses)
+    eaf = found.eaf.reshape(n_rows, grid.n_analyses)
     finite = int(np.isfinite(se).sum())
     if finite <= MIN_FINITE_CELLS:
         raise SystemExit(f"{finite:,} finite SE cells: the slice must carry real SE values")
