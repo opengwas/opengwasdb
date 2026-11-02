@@ -18,13 +18,14 @@ from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.fake import FakeReader
 from opengwasdb.readers.interface import ReaderAssociation, SourceVariant
 from opengwasdb.readers.registry import SourceSpec
-from opengwasdb.variants.reference import VariantReference
+from opengwasdb.variants.reference import VariantReference, read_variant_reference
 from opengwasdb.variants.routing import (
     AssociationBatch,
     FromReference,
     LiftedUnion,
     RouteTable,
     RoutingKey,
+    extract_variant_reference,
     route_variants,
 )
 from opengwasdb.variants.routing import table as route_table
@@ -465,3 +466,52 @@ def test_a_lift_failing_beyond_its_threshold_is_refused(tmp_path: Path):
     off_chain = _source("a", "hg19", [("5", 100, "A", "G", ""), ("3", 100, "A", "G", "")])
     with pytest.raises(LiftoverFailureError):
         _route([off_chain], LiftedUnion(chain, failure_threshold=0.1), key=RoutingKey.EXACT)
+
+
+# ── extract_variant_reference ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("n_workers", [1, 2])
+def test_an_extracted_reference_routes_as_the_union_it_froze(tmp_path, n_workers):
+    """A Variant Reference is a routing, frozen: read back, it names the same
+    ALIDs and rsids, and places every source key where the lifted union does."""
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    sources = [
+        _source("a", "hg19", [("3", 1_000, "G", "A", "rs1"), ("3", 2_000, "C", "T", "")]),
+        _source("b", "hg38", [("5", 10, "G", "A", "rs5"), ("5", 10, "A", "G", "rs9")]),
+    ]
+    artifact = tmp_path / f"union-{n_workers}.variant-ref.tsv.gz"
+
+    result = extract_variant_reference(
+        sources, artifact, chain_file=chain, n_workers=n_workers, readers=_fake_reader
+    )
+    union = _route(sources, LiftedUnion(chain), key=RoutingKey.EXACT)
+    frozen = _route(
+        sources, FromReference(read_variant_reference(artifact)), key=RoutingKey.EXACT
+    )
+
+    assert result.n_variants == len(union.alids) == 3
+    assert frozen.alids == union.alids
+    # Both allele orders of 5:10 are one site each; in source order the
+    # A:G site sorts first, so its name is the first named.
+    assert frozen.names.rsid_by_alid == union.names.rsid_by_alid == {
+        "3:1000:A:G": "rs1",
+        "5:10:A:G": "rs9",
+    }
+    sites = [
+        ("3", 1_000, "G", "A"),
+        ("3", 2_000, "C", "T"),
+        ("5", 10, "G", "A"),
+        ("5", 10, "A", "G"),
+    ]
+    stream = [_association(site, float(i)) for i, site in enumerate(sites)]
+
+    def routed(routing) -> dict[str, float]:
+        placed = routing.table([routing.alids]).route_column(stream).placed[0]
+        return {
+            routing.alids[i]: z
+            for i, z in zip(placed.index.tolist(), placed.z.tolist(), strict=True)
+        }
+
+    expected = {"3:1000:A:G": 0.0, "3:2000:C:T": 1.0, "5:10:A:G": 3.0}
+    assert routed(union) == routed(frozen) == expected

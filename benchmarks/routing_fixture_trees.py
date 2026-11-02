@@ -9,7 +9,7 @@ file.
     inputs   write the fixture inputs once, with the base checkout: the sources,
              the chain file, the manifests, the ALID lists, and the Variant
              Reference artifacts the single-pass builds read (made by that
-             checkout's `extract_variant_reference`)
+             checkout's Variant Reference extraction)
     build    build every case from those inputs into OUT/<case>/
     seed     run each checkpointed case until a phase boundary, fail it there,
              and archive the checkpoint as SEEDS/<case>@<phase>.tar
@@ -292,10 +292,23 @@ def _write_lines(path: Path, lines: list[str]) -> Path:
     return path
 
 
+def _extract(manifest: Path, output: Path, **kwargs: Any) -> Any:
+    """Extract ``manifest``'s Variant Reference with the chosen checkout's own interface.
+
+    Since #352 stage 3 extraction takes sources and the checkout's tests read
+    the manifest for it (`extraction_fixtures`); before, it took the manifest.
+    """
+    try:
+        from extraction_fixtures import extract_from_manifest
+    except ImportError:
+        from opengwasdb.variants.reference import extract_variant_reference
+
+        return extract_variant_reference(manifest, output, **kwargs)
+    return extract_from_manifest(manifest, output, **kwargs)
+
+
 def write_inputs(inputs: Path) -> None:
     """Every case's inputs, with the artifacts this checkout's extraction makes."""
-    from opengwasdb.variants.reference import extract_variant_reference
-
     if inputs.exists():
         raise SystemExit(f"{inputs} exists; inputs are written once and then reused")
     src = inputs / "sources"
@@ -332,11 +345,10 @@ def write_inputs(inputs: Path) -> None:
                  ["1:101000:A:G", "3:1000:A:G", "5:100:A:C", "7:100:A:G", "X:1000:A:G"])
     _write_lines(inputs / "dispute.alids.txt", ["1:100000:A:G", "1:1564620:A:G",
                                                 "1:154311889:T:TTTTG"])
-    extract_variant_reference(inputs / "hg38.manifest.tsv", inputs / "hg38.variant-ref.tsv.gz")
-    extract_variant_reference(inputs / "upper.manifest.tsv", inputs / "upper.variant-ref.tsv.gz")
-    extract_variant_reference(inputs / "fwd.manifest.tsv", inputs / "fwd.variant-ref.tsv.gz",
-                              chain_file=inputs / "fixture.chain",
-                              liftover_failure_threshold=0.5)
+    _extract(inputs / "hg38.manifest.tsv", inputs / "hg38.variant-ref.tsv.gz")
+    _extract(inputs / "upper.manifest.tsv", inputs / "upper.variant-ref.tsv.gz")
+    _extract(inputs / "fwd.manifest.tsv", inputs / "fwd.variant-ref.tsv.gz",
+             chain_file=inputs / "fixture.chain", liftover_failure_threshold=0.5)
 
 
 # ── the cases ────────────────────────────────────────────────────────────────
@@ -450,12 +462,11 @@ def _resolved(case: Case, inputs: Path) -> dict[str, Any]:
 def _run(case: Case, inputs: Path, out: Path, **extra: Any) -> Any:
     from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
     from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-    from opengwasdb.variants.reference import extract_variant_reference
 
     manifest = inputs / f"{case.manifest}.manifest.tsv"
     kwargs = {**_resolved(case, inputs), **extra}
     if case.builder == "extract":
-        return extract_variant_reference(manifest, out / "artifact.variant-ref.tsv.gz", **kwargs)
+        return _extract(manifest, out / "artifact.variant-ref.tsv.gz", **kwargs)
     build = build_dense_from_vcf_manifest if case.builder == "dense" else (
         build_hybrid_from_vcf_manifest)
     return build(manifest, out / "store.opengwasdb", store_id="routing", release_id=case.name,
