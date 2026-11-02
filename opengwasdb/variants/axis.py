@@ -15,6 +15,7 @@ import pysam
 from opengwasdb.variants.normalise import (
     CanonicalVariant,
     VariantNormalisationError,
+    chromosome_sort_key,
     normalise_allele,
     normalise_chromosome,
 )
@@ -179,6 +180,69 @@ def parse_canonical_alid(identifier: str) -> ParsedAlid | None:
         )
     except (TypeError, ValueError, VariantNormalisationError):
         return None
+
+
+def alid_sort_key(alid: str) -> tuple[tuple[int, str], int, str, str]:
+    """The order of a Variant Index: chromosome rank, position, then the two alleles."""
+    chrom, pos_str, a1, a2 = alid.split(":")
+    return (chromosome_sort_key(chrom), int(pos_str), a1, a2)
+
+
+def sorted_alids(alids: Iterable[str]) -> list[str]:
+    """Sort unique ALIDs by ``(chromosome_sort_key, position, a1, a2)``.
+
+    Exactly equivalent to ``sorted(set(alids), key=alid_sort_key)`` but built
+    for genome-scale axis construction: the ALIDs are parsed once and each one
+    is re-encoded as a sortable byte key, then ``np.argsort`` orders the byte
+    keys in C rather than calling ``alid_sort_key`` once per element (~21M
+    Python calls on a dense pilot build).
+
+    The sort key is ``fixed-width rank \\x00 chrom \\x00 zero-padded-position
+    \\x00 a1 \\x00 a2``. ``\\x00`` is smaller than every character that can
+    appear in a chromosome, position or allele, so it terminates the variable-
+    length fields and makes lexicographic byte order equal to the Python tuple
+    order ``alid_sort_key`` produces.
+    """
+    unique = list(set(alids))
+    if not unique:
+        return []
+
+    n = len(unique)
+    ranks = np.empty(n, dtype=np.int64)
+    chroms: list[str] = [""] * n
+    positions: list[str] = [""] * n
+    a1s: list[str] = [""] * n
+    a2s: list[str] = [""] * n
+    pos_width = 1
+    for i, alid in enumerate(unique):
+        chrom, pos_str, a1, a2 = alid.split(":")
+        canonical_chrom = normalise_chromosome(chrom)
+        chroms[i] = canonical_chrom
+        positions[i] = pos_str
+        a1s[i] = a1
+        a2s[i] = a2
+        ranks[i] = chromosome_sort_key(canonical_chrom)[0]
+        if len(pos_str) > pos_width:
+            pos_width = len(pos_str)
+
+    keys = np.empty(n, dtype=object)
+    rank_width = len(str(int(ranks.max())))
+    for i in range(n):
+        keys[i] = (
+            f"{ranks[i]:0{rank_width}d}".encode()
+            + b"\x00"
+            + chroms[i].encode()
+            + b"\x00"
+            + positions[i].zfill(pos_width).encode()
+            + b"\x00"
+            + a1s[i].encode()
+            + b"\x00"
+            + a2s[i].encode()
+        )
+    del chroms, positions, a1s, a2s
+    order = np.argsort(keys, kind="stable")
+    del keys
+    return [unique[i] for i in order]
 
 
 def write_variant_axis(

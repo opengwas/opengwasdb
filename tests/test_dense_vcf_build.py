@@ -467,59 +467,47 @@ def test_liftover_failure_above_threshold_raises(tmp_path):
 
 
 def test_read_manifest_defaults_source_assembly_to_hg19(tmp_path):
-    from opengwasdb.layouts.dense.build_vcf import _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
 
     vcf = _make_vcf(
         tmp_path, "trait_a", [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
     )
     manifest = _make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
 
-    rows = _read_manifest(manifest)
+    rows = read_manifest(manifest)
 
     assert rows[0].source_assembly == "hg19"
 
 
 def test_read_manifest_normalises_source_assembly_aliases(tmp_path):
-    from opengwasdb.layouts.dense.build_vcf import _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
 
     vcf = _make_vcf(
         tmp_path, "trait_a", [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
     )
-    manifest = tmp_path / "manifest.tsv"
-    manifest.write_text(
-        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
-        "\toriginal_sd_method\toriginal_sd\tsource_assembly\n"
-        f"trait_a\t{vcf}\tTrait A\t1000\tsd\tdeclared_standardised\t\tGRCh38\n",
-        encoding="utf-8",
-    )
+    manifest = _manifest_with_source_assembly(tmp_path, [("trait_a", vcf, "Trait A", "GRCh38")])
 
-    rows = _read_manifest(manifest)
+    rows = read_manifest(manifest)
 
     assert rows[0].source_assembly == "hg38"
 
 
 def test_read_manifest_rejects_invalid_source_assembly(tmp_path):
-    from opengwasdb.layouts.dense.build_vcf import _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
 
     vcf = _make_vcf(
         tmp_path, "trait_a", [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
     )
-    manifest = tmp_path / "manifest.tsv"
-    manifest.write_text(
-        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
-        "\toriginal_sd_method\toriginal_sd\tsource_assembly\n"
-        f"trait_a\t{vcf}\tTrait A\t1000\tsd\tdeclared_standardised\t\thg17\n",
-        encoding="utf-8",
-    )
+    manifest = _manifest_with_source_assembly(tmp_path, [("trait_a", vcf, "Trait A", "hg17")])
 
     with pytest.raises(ValueError, match="source_assembly"):
-        _read_manifest(manifest)
+        read_manifest(manifest)
 
 
 def test_canonical_analyses_tsv_columns_build_cleanly(tmp_path):
     """Issue #170: the registry's canonical ``analyses.tsv`` column names are
     accepted directly -- no ``analysis_id``->``trait_id`` rename needed."""
-    from opengwasdb.layouts.dense.build_vcf import _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
 
     vcf = _make_vcf(
         tmp_path, "trait_a", [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
@@ -533,7 +521,7 @@ def test_canonical_analyses_tsv_columns_build_cleanly(tmp_path):
     )
 
     # The reader maps every canonical name onto the builder's own row fields.
-    rows = _read_manifest(manifest)
+    rows = read_manifest(manifest)
     assert len(rows) == 1
     assert rows[0].trait_id == "trait_a"
     assert rows[0].file_path == str(vcf)
@@ -852,10 +840,8 @@ class TestPass1Parallel:
     """
 
     def test_pass1_parallel_union_and_rsids_match_serial(self, tmp_path):
-        from opengwasdb.layouts.dense.build_vcf import (
-            _collect_manifest_variant_sites,
-            _read_manifest,
-        )
+        from opengwasdb.layouts.build_manifest import read_manifest
+        from opengwasdb.layouts.dense.build_vcf import _collect_manifest_variant_sites
 
         vcf1 = _make_vcf(
             tmp_path,
@@ -878,7 +864,7 @@ class TestPass1Parallel:
         manifest = _make_manifest(
             tmp_path, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")]
         )
-        rows = _read_manifest(manifest)
+        rows = read_manifest(manifest)
 
         serial = _collect_manifest_variant_sites(rows, n_workers=1)
         parallel = _collect_manifest_variant_sites(rows, n_workers=2)
@@ -1370,9 +1356,9 @@ class TestForkSafeLookup:
 
 
 def test_sorted_alids_matches_reference_with_long_keys():
-    """`_sorted_alids` preserves `_alid_sort_key` order even when a rare
+    """`sorted_alids` preserves `alid_sort_key` order even when a rare
     long indel would have padded a fixed-width numpy string array to 200+ bytes."""
-    from opengwasdb.layouts.dense.build_vcf import _alid_sort_key, _sorted_alids
+    from opengwasdb.variants.axis import alid_sort_key, sorted_alids
 
     long_a = "A" * 200
     long_c = "C" * 150
@@ -1390,17 +1376,15 @@ def test_sorted_alids_matches_reference_with_long_keys():
         f"1:10:C:{long_a}",
     }
 
-    assert _sorted_alids(alids) == sorted(alids, key=_alid_sort_key)
+    assert sorted_alids(alids) == sorted(alids, key=alid_sort_key)
 
 
 def test_axis_metadata_long_keys_match_reference_sort():
     """`_axis_metadata` sorts the variant axis exactly like the scalar
-    `sorted(..., key=_alid_sort_key)` reference, including >100-byte alleles."""
-    from opengwasdb.layouts.dense.build_vcf import (
-        _alid_sort_key,
-        _axis_metadata,
-        _ManifestRow,
-    )
+    `sorted(..., key=alid_sort_key)` reference, including >100-byte alleles."""
+    from opengwasdb.layouts.build_manifest import ManifestRow
+    from opengwasdb.layouts.dense.build_vcf import _axis_metadata
+    from opengwasdb.variants.axis import alid_sort_key
 
     long_a = "A" * 200
     source_lookup = {
@@ -1410,7 +1394,7 @@ def test_axis_metadata_long_keys_match_reference_sort():
         ("X", 5, "A", "C"): "X:5:A:C",
         ("10", 2, "G", "C"): "10:2:C:G",
     }
-    row = _ManifestRow(
+    row = ManifestRow(
         trait_id="t",
         file_path="unused",
         trait_name="Trait",
@@ -1424,7 +1408,7 @@ def test_axis_metadata_long_keys_match_reference_sort():
     )
 
     axis, variant_index = _axis_metadata(source_lookup, [row])
-    expected = sorted(set(source_lookup.values()), key=_alid_sort_key)
+    expected = sorted(set(source_lookup.values()), key=alid_sort_key)
 
     assert axis.alids == expected
     assert variant_index == {alid: i for i, alid in enumerate(expected)}
@@ -1970,19 +1954,17 @@ def _write_reference_from_manifest(
     Uses the builder's own Pass 1 (union + liftover + first-named rsid) so the
     reference genuinely matches the manifest's variant union.
     """
-    from opengwasdb.layouts.dense.build_vcf import (
-        _lift_manifest_variants,
-        _read_manifest,
-        _sorted_alids,
-    )
+    from opengwasdb.layouts.build_manifest import read_manifest
+    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants
+    from opengwasdb.variants.axis import sorted_alids
 
-    rows = _read_manifest(manifest)
+    rows = read_manifest(manifest)
     source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
         rows, chain_file=None, liftover_failure_threshold=0.01
     )
     path = tmp_path / name
     write_variant_reference(
-        path, _sorted_alids(source_lookup.values()), source_lookup, rsid_by_alid
+        path, sorted_alids(source_lookup.values()), source_lookup, rsid_by_alid
     )
     return path
 
@@ -2477,17 +2459,15 @@ def _capability_manifest(tmp_path: Path, capability: str) -> Path:
 
 def _source_union_lookup(manifest: Path) -> tuple[dict, list[str]]:
     """The manifest's Pass 1 union lookup and its sorted ALIDs."""
-    from opengwasdb.layouts.dense.build_vcf import (
-        _lift_manifest_variants,
-        _read_manifest,
-        _sorted_alids,
-    )
+    from opengwasdb.layouts.build_manifest import read_manifest
+    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants
+    from opengwasdb.variants.axis import sorted_alids
 
-    rows = _read_manifest(manifest)
+    rows = read_manifest(manifest)
     source_lookup, _rsid_by_alid, _swapped = _lift_manifest_variants(
         rows, chain_file=None, liftover_failure_threshold=0.01
     )
-    return source_lookup, _sorted_alids(source_lookup.values())
+    return source_lookup, sorted_alids(source_lookup.values())
 
 
 def _plain_alid_list(tmp_path: Path, manifest: Path, name: str = "plain.alids") -> Path:

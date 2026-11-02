@@ -84,7 +84,7 @@ def manifest_trait_name(
     fallback_on_blank: bool = False,
 ) -> str:
     """The row's analysis_label, or its analysis_id when the manifest names no
-    label column (``_read_manifest``'s legacy ``trait_name`` default).
+    label column (``read_manifest``'s legacy ``trait_name`` default).
 
     When `fallback_on_blank` is False (the default, preserving Dense and
     ADR 0034 semantics), a present-but-blank label column preserves ``""``;
@@ -101,7 +101,7 @@ def manifest_trait_name(
 
 def manifest_n(row: Mapping[str, str], sample_size_col: str | None) -> int:
     """The row's sample_size, or 0 when the manifest names no sample-size
-    column (``_read_manifest``'s legacy ``n`` default)."""
+    column (``read_manifest``'s legacy ``n`` default)."""
     return int((row.get(sample_size_col) or 0) if sample_size_col is not None else 0)
 
 

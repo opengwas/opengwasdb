@@ -22,7 +22,7 @@ from opengwasdb.ancestry import (
 )
 from opengwasdb.ancestry.catalogue import BUILD_COLUMNS, CatalogueRow, read_catalogue
 from opengwasdb.ancestry.mixture import apply_gates, assign_from_source
-from opengwasdb.layouts.dense.build_vcf import _read_manifest
+from opengwasdb.layouts.build_manifest import read_manifest
 from opengwasdb.readers.gwas_vcf import write_regions_file
 
 # Fine groups (two EUR subgroups + one AFR + one EAS) and their super-populations.
@@ -250,7 +250,7 @@ def test_catalogue_is_manifest_superset(tmp_path, reference):
     # plus its ancestry annotations, but is not on its own a complete build
     # manifest as of issue #17: stored_effect_scale is a genuinely separate
     # build input ancestry assignment never needs (it may run before a
-    # study's effect scale is even resolved), so _read_manifest correctly
+    # study's effect scale is even resolved), so read_manifest correctly
     # rejects a Catalogue file until something adds that column
     # (opengwasdb.ancestry.subset does this when bridging into an actual
     # build).
@@ -262,7 +262,7 @@ def test_catalogue_is_manifest_superset(tmp_path, reference):
     assert rows[0]["file_path"] == "/data/t1.vcf.gz"
     assert rows[0]["n"] == "1000"
     with pytest.raises(ValueError, match="stored_effect_scale"):
-        _read_manifest(path)
+        read_manifest(path)
 
     # Parked (non-EUR/Unassigned) analyses are present and labelled, not dropped.
     import csv

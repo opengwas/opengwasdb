@@ -1213,23 +1213,21 @@ def _write_reference_artifact(
     external panel: only the Dense axis is named, and the off-panel hg19 source
     can only be resolved during Pass 2.
     """
-    from opengwasdb.layouts.dense.build_vcf import (
-        _lift_manifest_variants,
-        _read_manifest,
-        _sorted_alids,
-    )
+    from opengwasdb.layouts.build_manifest import read_manifest
+    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants
+    from opengwasdb.variants.axis import sorted_alids
     from opengwasdb.variants.reference import write_variant_reference
 
-    rows = _read_manifest(manifest)
+    rows = read_manifest(manifest)
     source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
         rows, chain_file=None, liftover_failure_threshold=0.01
     )
     if panel_only:
         panel = {HG38_ALID_1, HG38_ALID_3}
-        alids = _sorted_alids(panel)
+        alids = sorted_alids(panel)
         source_lookup = {key: alid for key, alid in source_lookup.items() if alid in panel}
     else:
-        alids = _sorted_alids(source_lookup.values())
+        alids = sorted_alids(source_lookup.values())
     path = tmp_path / (
         "panel-only.variant-ref.tsv.gz" if panel_only else "union.variant-ref.tsv.gz"
     )
