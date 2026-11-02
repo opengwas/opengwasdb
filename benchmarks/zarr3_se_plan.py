@@ -5,9 +5,11 @@ with numcodecs' Blosc. With `n_workers=1` those sizes are measured in the
 parent, where #244 makes Blosc multi-threaded; with `n_workers>1` they are
 measured in forked workers, which numcodecs always runs single-threaded. This
 stages a real slice the way a Dense build stages it -- a float32 `se` plane and
-a float32 `eaf` plane -- runs the production chooser, and prints the plan, a
-hash of the stored codes and the bytes of the rewritten plane. Every label and
-worker count must print the same plan, hash and bytes.
+a float32 `eaf` plane, on the seam's `DENSE_CHUNK_SHAPE` inner chunk, so the
+role's shard policy derives the format's shard as a build's does -- runs the
+production chooser, and prints the plan, the staged layout, a hash of the stored
+codes and the bytes of the rewritten plane's shards. Every label and worker
+count must print the same plan, hash and bytes.
 
   off   numcodecs.blosc.use_threads = False (zarr 3's default)
   on    numcodecs.blosc.use_threads = True
@@ -33,6 +35,21 @@ import numpy as np
 MIN_FINITE_CELLS = 1_000_000
 
 
+def stored_data_files(array_path: Path) -> list[Path]:
+    """The files an array's directory holds for the data it stores.
+
+    Zarr V3 sharding stores one file per shard under `c/`, beside `zarr.json`; a
+    V2 array stores one file per chunk beside its dot-files.  Metadata is not
+    data, so it is excluded either way -- counting the directory's entries
+    instead reports the layout's fan-out, not what the rewrite wrote.
+    """
+    return sorted(
+        p
+        for p in array_path.rglob("*")
+        if p.is_file() and p.name != "zarr.json" and not p.name.startswith(".")
+    )
+
+
 def stage(store: Path, scratch: Path, start: int, n_rows: int) -> tuple[Path, int]:
     """Write the slice's decoded `se` and `eaf` as float32 planes; returns (group, finite SE)."""
     from opengwasdb.associations import Cells, DenseGridReader
@@ -55,7 +72,10 @@ def stage(store: Path, scratch: Path, start: int, n_rows: int) -> tuple[Path, in
             name,
             ArrayRole.DENSE_STATISTIC_PLANE,
             data=plane,
-            hint=(1000, 1000),
+            # The seam decides the Dense grid's inner chunk, and the shard policy
+            # beside it derives the format's shard from that chunk; a chunk this
+            # file picked itself would not tile that shard.
+            hint=arrays.DENSE_CHUNK_SHAPE,
             fill_value=np.nan,
         )
     return scratch, finite
@@ -93,18 +113,21 @@ def main() -> None:
     t0 = time.perf_counter()
     selected = optimise_dense_se(arrays.open_group(path, "r+"), encoding, n_workers=args.n_workers)
     elapsed = time.perf_counter() - t0
-    stored = np.asarray(arrays.open_group(path)["se"][:])
-    chunk_files = sorted(p for p in (path / "se").iterdir() if not p.name.startswith("."))
+    stored_plane = arrays.open_group(path)["se"]
+    stored = np.asarray(stored_plane[:])
+    shard_files = stored_data_files(path / "se")
     result = {
         "label": args.label,
         "n_workers": args.n_workers,
         "use_threads": numcodecs.blosc.use_threads,
         "finite_se_cells": finite,
         "plan": selected.to_manifest(),
+        "chunk_shape": list(arrays.inner_chunk_of(stored_plane)),
+        "shard_shape": [int(size) for size in stored_plane.shards],
         "stored_dtype": str(stored.dtype),
         "stored_sha": hashlib.sha256(stored.tobytes()).hexdigest()[:16],
-        "se_chunk_bytes": sum(p.stat().st_size for p in chunk_files),
-        "se_chunk_files": len(chunk_files),
+        "se_shard_bytes": sum(p.stat().st_size for p in shard_files),
+        "se_shard_files": len(shard_files),
         "s": round(elapsed, 1),
     }
     print(json.dumps(result))
