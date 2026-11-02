@@ -205,7 +205,7 @@ def build_dense_from_vcf_manifest(
         eaf_report, encoded = _spill_verify_and_encode(
             staged, out, manifest_rows, prepared, n_workers, chunk_shape, dtype,
             eaf_reference, eaf_reference_ancestry, allow_unverified_eaf,
-            admission_record_for(out) if admission_record is None else Path(admission_record),
+            admission_record_for(out, admission_record),
         )
         # Phase 8: top-hit indexes, manifest and analyses.tsv metadata.
         _finalize_store(

@@ -8,6 +8,7 @@ dropped row is counted under.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from opengwasdb.admission import (
     AdmissionCounts,
@@ -142,3 +143,58 @@ def test_a_gate_adds_up_its_batches():
 
     assert split.counts == whole.counts
     assert AdmissionCounts.from_dict(whole.counts.as_dict()) == whole.counts
+
+
+def _with_se(af: list[float], se: list[float], scores: list[float]) -> SourceRows:
+    rows = _rows(af, scores)
+    keys = [f"1:{100 + i}:A:G" for i in range(len(af))]
+    return SourceRows(
+        eaf=rows.eaf,
+        imputation_score=rows.imputation_score,
+        imputation_status=rows.imputation_status,
+        se=np.asarray(se, dtype=np.float64),
+        keys_at=lambda positions: [keys[i] for i in positions.tolist()],
+    )
+
+
+def test_an_unusable_se_is_dropped_before_any_declared_filter_judges_the_row():
+    """Missing, zero, negative and infinite SEs are one reason, and it comes
+    first: those rows are not associations, so the declared filters neither
+    drop nor count them, and INFO's tally is over the associations alone."""
+    rows = _with_se(
+        [0.3, 0.3, 0.001, 0.3, 0.3, 0.3],
+        [np.nan, 0.0, -0.1, np.inf, 0.2, 0.2],
+        scores=[0.5, 0.9, 0.9, 0.9, 0.5, 0.9],
+    )
+    gate = counting_gate(AnalysisRules("A1", info=FILTERED_INFO, maf=FILTERED_MAF))
+
+    keep = gate.source_rows(rows)
+
+    assert keep.tolist() == [False, False, False, False, False, True]
+    assert gate.counts.dropped == {Reason.SE_UNUSABLE: 4, Reason.INFO_BELOW_THRESHOLD: 1}
+    assert gate.counts.info.observed == 2
+    assert gate.counts.examined == 6
+    assert gate.dropped == [(f"1:{100 + i}:A:G", Reason.SE_UNUSABLE) for i in range(4)]
+
+
+def test_a_declared_filter_drop_is_counted_but_not_logged():
+    gate = counting_gate(AnalysisRules("A1", info=FILTERED_INFO, maf=FILTERED_MAF))
+    gate.source_rows(_with_se([0.001, 0.3], [0.2, 0.2], scores=[0.9, 0.5]))
+
+    assert gate.counts.dropped == {
+        Reason.INFO_BELOW_THRESHOLD: 1,
+        Reason.MAF_BELOW_THRESHOLD: 1,
+    }
+    assert gate.dropped == []
+
+
+def test_a_batch_that_drops_a_logged_row_must_name_its_keys():
+    rows = SourceRows(eaf=np.array([0.3]), se=np.array([0.0]))
+
+    with pytest.raises(ValueError, match="names no source keys"):
+        counting_gate(AnalysisRules("A1")).source_rows(rows)
+
+
+def test_a_batch_whose_columns_disagree_in_length_is_refused():
+    with pytest.raises(ValueError, match=r"\[2, 3\] row"):
+        SourceRows(eaf=np.zeros(3), se=np.zeros(2))

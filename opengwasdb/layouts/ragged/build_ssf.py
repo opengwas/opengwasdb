@@ -17,13 +17,16 @@ from __future__ import annotations
 
 import csv
 import gzip
+import math
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from itertools import compress
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
 
+from opengwasdb.admission import AdmissionRecord, AnalysisRules, SourceRows, admission_record_for
 from opengwasdb.build.eaf_orientation import (
     EafOrientationReport,
     apply_orientation_evidence,
@@ -176,42 +179,83 @@ class _Assoc(NamedTuple):
     eaf: float | None
 
 
-def _read_filtered(
-    path: Path,
-) -> Iterator[tuple[CanonicalVariant, float, float, str | None, float | None]]:
-    """Yield (CanonicalVariant, z, se, rsid, eaf) for each usable row of a filtered file."""
+#: One filtered-file row with an effect, oriented to the stored allele:
+#: ``(variant, z, se, rsid, eaf)``. ``z`` and ``eaf`` follow the flip (ADR
+#: 0036). ``se`` is the reported one and may be unusable, which Admission
+#: judges; ``z`` is NaN when it is. A plain tuple: there is one per source row.
+_SourceRow = tuple[CanonicalVariant, float, float, str | None, float | None]
+
+
+def _read_filtered(path: Path) -> Iterator[_SourceRow]:
+    """Yield each row of a filtered file that names a variant and has an effect."""
     opener = gzip.open if str(path).endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", newline="") as fh:
-        reader = csv.DictReader(fh, delimiter="\t")
-        for row in reader:
-            try:
-                ori = orient_to_canonical(
-                    row["chromosome"], row["base_pair_location"],
-                    row["effect_allele"], row["other_allele"],
-                )
-            except (VariantNormalisationError, KeyError):
-                continue
-            try:
-                se = float(row.get("standard_error", ""))
-                beta = float(row.get("beta", ""))
-            except (TypeError, ValueError):
-                continue
-            if not (se > 0) or not np.isfinite(se) or not np.isfinite(beta):
-                continue
-            z = beta / se
-            if ori.flipped:
-                z = -z
-            # GWAS-SSF harmonised files carry a dedicated `rsid` column; `variant_id`
-            # is the harmonised (non-rs) identifier and only usable as a fallback
-            # when `rsid` is absent (opengwasdb-stores' download-filter step selects
-            # both columns when present).
-            rsid = _opt(row.get("rsid")) or _opt(row.get("variant_id"))
-            eaf = parse_af(row.get("effect_allele_frequency"))
-            if eaf is not None and ori.flipped:
-                # The column is the frequency of the source's effect allele;
-                # the flip made the *other* allele the stored one (ADR 0036).
-                eaf = 1.0 - eaf
-            yield ori.variant, z, se, rsid, eaf
+        for row in csv.DictReader(fh, delimiter="\t"):
+            parsed = _source_row(row)
+            if parsed is not None:
+                yield parsed
+
+
+def _statistics(row: dict[str, str]) -> tuple[float, float] | None:
+    """``(z, se)`` in the source's orientation, or None when the row has no effect.
+
+    An SE that is missing or unusable is returned as it is, NaN when it does not
+    parse, with a NaN z: Admission, not the parser, drops that row.
+    """
+    try:
+        beta = float(row.get("beta") or "")
+    except ValueError:
+        return None
+    if not math.isfinite(beta):
+        return None
+    try:
+        se = float(row.get("standard_error") or "")
+    except ValueError:
+        se = math.nan
+    return (beta / se if se > 0 and math.isfinite(se) else math.nan), se
+
+
+def _source_row(row: dict[str, str]) -> _SourceRow | None:
+    """One filtered-file row, or None when it names no variant or has no effect."""
+    try:
+        ori = orient_to_canonical(
+            row["chromosome"], row["base_pair_location"],
+            row["effect_allele"], row["other_allele"],
+        )
+    except (VariantNormalisationError, KeyError):
+        return None
+    statistics = _statistics(row)
+    if statistics is None:
+        return None
+    z, se = statistics
+    # GWAS-SSF harmonised files carry a dedicated `rsid` column; `variant_id`
+    # is the harmonised (non-rs) identifier and only usable as a fallback
+    # when `rsid` is absent (opengwasdb-stores' download-filter step selects
+    # both columns when present).
+    rsid = _opt(row.get("rsid")) or _opt(row.get("variant_id"))
+    eaf = parse_af(row.get("effect_allele_frequency"))
+    if ori.flipped:
+        # The frequency column is the source's effect allele's; the flip made
+        # the *other* allele the stored one, and z follows it (ADR 0036).
+        z = -z
+        eaf = None if eaf is None else 1.0 - eaf
+    return ori.variant, z, se, rsid, eaf
+
+
+def _admitted_rows(path: Path, record: AdmissionRecord, analysis_id: str) -> list[_SourceRow]:
+    """One filtered file's rows that its Analysis's Admission gate keeps, in file order."""
+    rows = list(_read_filtered(path))
+    with record.gate(AnalysisRules(analysis_id)) as gate:
+        keep = gate.source_rows(
+            SourceRows(
+                eaf=np.full(len(rows), np.nan),
+                se=np.fromiter((row[2] for row in rows), dtype=np.float64, count=len(rows)),
+                keys_at=lambda positions: [rows[i][0].alid for i in positions.tolist()],
+            )
+        )
+    if keep.all():
+        return rows
+    return list(compress(rows, keep.tolist()))
 
 
 def _dedupe_per_analysis(
@@ -270,6 +314,7 @@ def build_ragged_from_ssf(
     eaf_reference: str | Path | None = None,
     eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False,
+    admission_record: str | Path | None = None,
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from filtered GWAS-SSF inputs.
 
@@ -277,6 +322,7 @@ def build_ragged_from_ssf(
     `_build_ssf_release`. ``association_coverage`` has no default (issue #298)
     -- the same command builds a cis-eQTL release, a signals-only metabolite
     release and a genome-wide one, so the layout cannot choose it (ADR 0064).
+    ``admission_record`` is Association Admission's record (#357), beside the Store.
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     _validate_stored_effect_scale(stored_effect_scale)
@@ -294,6 +340,7 @@ def build_ragged_from_ssf(
                 eaf_reference=eaf_reference,
                 eaf_reference_ancestry=eaf_reference_ancestry,
                 allow_unverified_eaf=allow_unverified_eaf,
+                admission_record=admission_record_for(out, admission_record),
             ),
         )
 
@@ -309,6 +356,7 @@ class _SsfBuildRequest:
     eaf_reference: str | Path | None
     eaf_reference_ancestry: str | None
     allow_unverified_eaf: bool
+    admission_record: Path
 
 
 def _build_ssf_release(
@@ -326,7 +374,12 @@ def _build_ssf_release(
     manifest_path, filtered_dir = sources
     analytes = _read_manifest(manifest_path, filtered_dir)
     print(f"Manifest: {len(analytes)} analyses")
-    per_analysis, alid_variant, rsid_by_alid = _ingest_ssf_sources(analytes)
+    record = AdmissionRecord.open(
+        request.admission_record,
+        [a.analysis_id for a in analytes],
+        command="build-ragged-ssf",
+    )
+    per_analysis, alid_variant, rsid_by_alid = _ingest_ssf_sources(analytes, record)
     eaf_report = _verify_eaf_orientation(
         analytes, per_analysis, alid_variant,
         eaf_reference=request.eaf_reference,
@@ -395,24 +448,24 @@ def _validate_stored_effect_scale(stored_effect_scale: str) -> None:
 
 
 def _ingest_ssf_sources(
-    analytes: list[AnalyteInput],
+    analytes: list[AnalyteInput], record: AdmissionRecord
 ) -> tuple[list[list[_Assoc]], dict[str, CanonicalVariant], dict[str, str]]:
     """Read every filtered source and resolve each analysis's associations.
 
-    One pass per analysis: canonicalise each usable source row, deduplicate
-    rows that canonicalise to the same variant (issue #101), and collect the
-    global canonical-variant set plus each variant's first-seen rsid. The
-    printed per-analysis count is the fail-loud record of what survived: a
-    row with unusable statistics never reaches this point, and a conflicting
-    duplicate pair is dropped for that cell entirely rather than one of them
-    silently kept.
+    One pass per analysis: canonicalise each source row, admit it through the
+    Analysis's gate, deduplicate rows that canonicalise to the same variant
+    (issue #101), and collect the global canonical-variant set plus each
+    variant's first-seen rsid. The printed per-analysis count is the fail-loud
+    record of what survived: a row Admission drops never reaches this point and
+    is in ``record``, and a conflicting duplicate pair is dropped for that cell
+    entirely rather than one of them silently kept.
     """
     per_analysis: list[list[_Assoc]] = []
     alid_variant: dict[str, CanonicalVariant] = {}
     rsid_by_alid: dict[str, str] = {}
     for a in analytes:
         recs: list[_Assoc] = []
-        for variant, z, se, rsid, eaf in _read_filtered(a.filtered_path):
+        for variant, z, se, rsid, eaf in _admitted_rows(a.filtered_path, record, a.analysis_id):
             alid = variant.alid
             recs.append(_Assoc(alid, z, se, eaf))
             if alid not in alid_variant:
@@ -422,6 +475,7 @@ def _ingest_ssf_sources(
         recs, n_consistent, n_conflicting = _dedupe_per_analysis(recs)
         per_analysis.append(recs)
         _print_ingest_summary(a, recs, n_consistent, n_conflicting)
+    record.finish()
     return per_analysis, alid_variant, rsid_by_alid
 
 

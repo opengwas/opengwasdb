@@ -8,13 +8,16 @@ counts the ones the Store's `info_score` provenance reports.
 
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 
+import besd_fixtures
 import numpy as np
 import pytest
 import test_dense_vcf_build as dense_fixture
 import test_info_score_hybrid_build as info_fixture
+import test_ragged_build_ssf as ssf_fixture
 
 from opengwasdb.admission import (
     ADMISSION_RULES,
@@ -27,6 +30,8 @@ from opengwasdb.admission import (
 )
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
+from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.model.maf_policy import MafPolicy, MafState
 from opengwasdb.readers.interface import ImputationScoreStatus
 
@@ -202,3 +207,70 @@ def test_a_dense_vcf_build_writes_its_record(tmp_path: Path):
         ("trait_b", 2, 2),
     ]
     assert record.read_bytes() == (admission_record_for(two) / "admission.json").read_bytes()
+
+
+def _dropped(record: Path, index: int) -> list[list[str]]:
+    """One Analysis's logged drops, header first."""
+    with gzip.open(record / "dropped" / f"{index}.tsv.gz", "rt", encoding="utf-8") as fh:
+        return [line.rstrip("\n").split("\t") for line in fh]
+
+
+def test_a_ragged_ssf_build_logs_each_unusable_se(tmp_path: Path):
+    """The SE of 1:300000 does not parse and that of 1:400000 is 0: both are
+    dropped, counted and logged by ALID. 1:600000's beta is not finite, so it
+    has no effect at all and is not an association Admission judges."""
+    manifest, filtered = ssf_fixture._make_fixture(tmp_path)
+    store = tmp_path / "ssf.opengwasdb"
+    build_ragged_from_ssf(
+        manifest, filtered, store, store_id="s", release_id="r",
+        association_coverage="signals_only",
+    )
+
+    record = admission_record_for(store)
+    # The gzip header's mtime (bytes 4-8) is zero, so the same drops give the
+    # same bytes whenever they are written.
+    assert (record / "dropped" / "0.tsv.gz").read_bytes()[4:8] == bytes(4)
+    written = json.loads((record / "admission.json").read_text(encoding="utf-8"))
+    assert written["command"] == "build-ragged-ssf"
+    first, second = written["analyses"]
+    assert (first["examined"], first["admitted"], first["dropped"]) == (4, 2, {"se_unusable": 2})
+    assert (second["examined"], second["admitted"], second["dropped"]) == (2, 2, {})
+    assert _dropped(record, 0) == [
+        ["source_key", "reason"],
+        ["1:300000:C:T", "se_unusable"],
+        ["1:400000:C:T", "se_unusable"],
+    ]
+    assert not (record / "dropped" / "1.tsv.gz").exists()
+
+
+def test_a_ragged_besd_build_logs_each_unusable_se_by_esi_row(tmp_path: Path):
+    """Every raw BESD row is judged before the ESI map: the SE of ESI row 1 is
+    negative and that of row 4 is not finite."""
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    snps: list[besd_fixtures.EsiRow] = [
+        {"chr": "1", "snp_id": f"rs{i}", "bp": 1_000_000 + 100_000 * i, "a1": "A", "a2": "G"}
+        for i in range(5)
+    ]
+    besd_fixtures.write_esi(fixture / "test.esi", snps)
+    besd_fixtures.write_epi(
+        fixture / "test.epi",
+        [{"chr": "1", "probe_id": f"ENSG{i}", "bp": 1_050_000} for i in range(2)],
+    )
+    besd_fixtures.write_besd_sparse_3f(
+        fixture / "test.besd",
+        2,
+        [[(0, 0.1, 0.02), (1, -0.2, -0.03)], [(2, 0.5, 0.05), (4, 0.3, float("inf"))]],
+    )
+    store = tmp_path / "besd.opengwasdb"
+    result = build_ragged_from_besd(
+        fixture / "test", store, store_id="s", release_id="r",
+        association_coverage="cis_and_signals",
+    )
+
+    assert result.n_associations == 2
+    record = admission_record_for(store)
+    written = json.loads((record / "admission.json").read_text(encoding="utf-8"))
+    assert [(a["examined"], a["admitted"]) for a in written["analyses"]] == [(2, 1), (2, 1)]
+    assert _dropped(record, 0)[1:] == [["esi:1", "se_unusable"]]
+    assert _dropped(record, 1)[1:] == [["esi:4", "se_unusable"]]

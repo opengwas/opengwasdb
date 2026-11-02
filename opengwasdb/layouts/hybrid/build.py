@@ -2774,9 +2774,7 @@ def _new_build_options(
         association_coverage=coverage_for_layout(
             association_coverage, PrimaryStorageLayout.HYBRID
         ),
-        admission_record=Path(
-            admission_record_for(output_path) if admission_record is None else admission_record
-        ),
+        admission_record=admission_record_for(output_path, admission_record),
     )
 
 

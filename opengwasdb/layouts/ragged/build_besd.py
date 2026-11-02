@@ -25,6 +25,13 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
+from opengwasdb.admission import (
+    AdmissionRecord,
+    AnalysisRules,
+    Gate,
+    SourceRows,
+    admission_record_for,
+)
 from opengwasdb.build.eaf_orientation import EafOrientationReport, apply_orientation_evidence
 from opengwasdb.build.liftover import (
     LiftedRow,
@@ -102,6 +109,7 @@ def build_ragged_from_besd(
     eaf_reference: str | Path | None = None,
     eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False,
+    admission_record: str | Path | None = None,
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from BESD files.
 
@@ -128,21 +136,21 @@ def build_ragged_from_besd(
     store_esi_eaf: store the `.esi` frequency per association (opt-in, ADR 0067);
         eaf_reference, eaf_reference_ancestry, allow_unverified_eaf: what it is
         checked against, once -- refused without the flag.
+    admission_record: Association Admission's record (#357), beside the Store.
     """
-    coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
-    prefix = Path(besd_prefix)
-    out = Path(output_path)
-    with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
-        request = _BesdBuildRequest(
-            store_id=store_id, release_id=release_id, coverage=coverage,
-            analyses_path=analyses_path, tissue=tissue, source_build=source_build,
-            chain_file=chain_file, variant_reference=variant_reference,
-            sample_size_table=sample_size_table, store_esi_eaf=store_esi_eaf,
-            eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
-            allow_unverified_eaf=allow_unverified_eaf,
-        )
-        axis, csr = _build_besd_release(staged, prefix, request)
-        return _summarise(out, axis, csr.n_associations, coverage)
+    request = _BesdBuildRequest(
+        store_id=store_id, release_id=release_id,
+        coverage=coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED),
+        analyses_path=analyses_path, tissue=tissue, source_build=source_build,
+        chain_file=chain_file, variant_reference=variant_reference,
+        sample_size_table=sample_size_table, store_esi_eaf=store_esi_eaf,
+        eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
+        allow_unverified_eaf=allow_unverified_eaf,
+        admission_record=admission_record_for(output_path, admission_record),
+    )
+    with OpenGWASDBStore.staging(Path(output_path), overwrite=overwrite) as staged:
+        axis, csr = _build_besd_release(staged, Path(besd_prefix), request)
+        return _summarise(Path(output_path), axis, csr.n_associations, request.coverage)
 
 
 @dataclass(frozen=True)
@@ -157,6 +165,7 @@ class _BesdBuildRequest:
     source_build: str
     chain_file: str | Path | None
     variant_reference: str | Path | None
+    admission_record: Path
     sample_size_table: str | Path | None = None
     store_esi_eaf: bool = False
     eaf_reference: str | Path | None = None
@@ -211,7 +220,12 @@ def _build_besd_release(
         if request.sample_size_table is None
         else SampleSizeTable(Path(request.sample_size_table), [p.probe_id for p in axis.probes])
     )
-    csr, encoding, scopes = _ingest_besd(prefix, axis, staged.path, sample_sizes)
+    record = AdmissionRecord.open(
+        request.admission_record,
+        [analysis.analysis_id for analysis in analyses],
+        command="build-ragged-besd",
+    )
+    csr, encoding, scopes = _ingest_besd(prefix, axis, staged.path, sample_sizes, record)
     analyses, eaf_report = _stamp_probe_scopes(analyses, scopes, axis, eaf_report)
     # Phase 5 — indexes and manifest output.
     _write_besd_outputs(staged, analyses, encoding)
@@ -877,20 +891,39 @@ class _ProbeRows(NamedTuple):
     esi_row: list[int]
 
 
+def _admitted(
+    raw_snp_idx: np.ndarray, betas: np.ndarray, ses: np.ndarray, gate: Gate
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One probe's raw BESD rows that Association Admission keeps.
+
+    Judged before the ESI map, as every builder judges a source row before it is
+    matched: a row with an unusable SE is dropped and logged by its ESI row
+    whether or not its variant made the axis.
+    """
+    keep = gate.source_rows(
+        SourceRows(
+            eaf=np.full(len(ses), np.nan),
+            se=np.asarray(ses, dtype=np.float64),
+            keys_at=lambda positions: [f"esi:{int(i)}" for i in raw_snp_idx[positions]],
+        )
+    )
+    return raw_snp_idx[keep], betas[keep], ses[keep]
+
+
 def _map_probe_rows(
     raw_snp_idx: np.ndarray,
     betas: np.ndarray,
     ses: np.ndarray,
     esi_to_variant: dict[int, tuple[int, bool]],
 ) -> _ProbeRows:
-    """Map one probe's raw BESD rows onto ``(variant_index, z, se, esi_row)`` lists.
+    """Map one probe's admitted BESD rows onto ``(variant_index, z, se, esi_row)`` lists.
 
-    A row whose ESI index never made the variant axis, or whose statistics
-    are unusable (``se <= 0``, a non-finite beta or se), is dropped for that
-    Analysis: the store must not carry a z-score the source did not vouch
-    for. Rows that survive are oriented — ``z`` flips sign when the stored
-    canonical allele is the flipped one. The ESI row travels with each so its
-    frequency and SNP ID can be joined after the sort (ADR 0067).
+    A row whose ESI index never made the variant axis, or whose beta is not
+    finite, is dropped for that Analysis: the store must not carry a z-score
+    the source did not vouch for. Rows that survive are oriented — ``z`` flips
+    sign when the stored canonical allele is the flipped one. The ESI row
+    travels with each so its frequency and SNP ID can be joined after the sort
+    (ADR 0067).
     """
     rows = _ProbeRows([], [], [], [])
     for esi_idx, beta, se in zip(
@@ -900,7 +933,7 @@ def _map_probe_rows(
         if mapping is None:
             continue
         variant_index, flipped = mapping
-        if se <= 0 or not np.isfinite(beta) or not np.isfinite(se):
+        if not np.isfinite(beta):
             continue
         z = beta / se
         if flipped:
@@ -965,6 +998,7 @@ def _ingest_probe(
     probe: ProbeRecord,
     axis: _EsiAxis,
     sample_sizes: SampleSizeTable | None,
+    gate: Gate,
 ) -> tuple[_ProbeScopes, bool]:
     """Add one probe's associations, with their frequency and sample size.
 
@@ -973,11 +1007,12 @@ def _ingest_probe(
     the order it must be grouped in (`SampleSizeTable.sizes_for`).
     """
     raw_snp_idx, betas, ses = besd.get_probe_associations(probe.row_idx)
+    n_raw = len(raw_snp_idx)
     sizes = None if sample_sizes is None else sample_sizes.sizes_for(probe.probe_id)
-    rows = _map_probe_rows(raw_snp_idx, betas, ses, axis.esi_to_variant)
+    rows = _map_probe_rows(*_admitted(raw_snp_idx, betas, ses, gate), axis.esi_to_variant)
     if not rows.variant_index:
         _add_empty_analysis(csr)
-        return _ProbeScopes(has_eaf=False, has_n=False), len(raw_snp_idx) > 0
+        return _ProbeScopes(has_eaf=False, has_n=False), n_raw > 0
     # Sort by variant_index for consistent ordering within each analysis.
     order = np.argsort(rows.variant_index)
     esi = np.asarray(rows.esi_row, dtype=np.int64)[order]
@@ -1021,6 +1056,7 @@ def _ingest_besd(
     axis: _EsiAxis,
     staged_path: Path,
     sample_sizes: SampleSizeTable | None,
+    record: AdmissionRecord,
 ) -> tuple[RaggedCSRWriter, StoreEncoding, list[_ProbeScopes]]:
     """Stream the BESD file into a CSR store under ``staged_path``.
 
@@ -1037,13 +1073,15 @@ def _ingest_besd(
     csr = RaggedCSRWriter(len(axis.variants))
     scopes: list[_ProbeScopes] = []
     skipped_probes = 0
-    for probe in axis.probes:
-        scope, skipped = _ingest_probe(csr, besd, probe, axis, sample_sizes)
+    for probe, analysis_id in zip(axis.probes, record.analyses, strict=True):
+        with record.gate(AnalysisRules(analysis_id)) as gate:
+            scope, skipped = _ingest_probe(csr, besd, probe, axis, sample_sizes, gate)
         scopes.append(scope)
         skipped_probes += skipped
         if (probe.row_idx + 1) % 1000 == 0:
             print(f"  Processed {probe.row_idx + 1} / {len(axis.probes)} probes")
     _require_a_matching_table(sample_sizes)
+    record.finish()
 
     encoding = _decide_encoding(csr, len(axis.probes), n_plane=sample_sizes is not None)
     print(f"Flushing zarr CSR ({csr.n_associations:,} associations) ...")

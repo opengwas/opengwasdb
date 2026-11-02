@@ -1458,6 +1458,7 @@ def build_ragged_besd_command(
     eaf_reference: _BESD_EAF_REFERENCE_OPTION = None,
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
+    admission_record: _ADMISSION_RECORD_OPTION = None,
 ) -> None:
     """Build a Ragged Observed-Only store from BESD files.
 
@@ -1467,7 +1468,8 @@ def build_ragged_besd_command(
     --association-coverage is required: the file set says nothing about which of
     its associations were retained (issue #298).
     --store-esi-eaf stores the .esi frequency per association, checked once
-    against --eaf-reference (ADR 0067).
+    against --eaf-reference (ADR 0067). --admission-record names where
+    Association Admission's record goes (#357).
     """
     result = build_ragged_from_besd(
         besd_prefix,
@@ -1486,6 +1488,7 @@ def build_ragged_besd_command(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
+        admission_record=admission_record,
     )
     _echo_summary(
         {
@@ -1511,6 +1514,7 @@ def build_ragged_ssf_command(
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
+    admission_record: _ADMISSION_RECORD_OPTION = None,
 ) -> None:
     """Build a Ragged Observed-Only store from filtered GWAS-SSF files.
 
@@ -1526,6 +1530,7 @@ def build_ragged_ssf_command(
 
     --association-coverage is required: the filter that produced FILTERED_DIR
     decided what the release retains, and the manifest cannot recover it (#298).
+    --admission-record names where Association Admission's record goes (#357).
     """
     result = build_ragged_from_ssf(
         manifest_path,
@@ -1539,6 +1544,7 @@ def build_ragged_ssf_command(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
+        admission_record=admission_record,
     )
     typer.echo(
         json.dumps(
