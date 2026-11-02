@@ -50,6 +50,7 @@ from test_info_score_hybrid_build import (
     _write_source,
 )
 
+from opengwasdb.admission import RecordIncomplete, admission_record_for
 from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest, resume_hybrid_build
 from opengwasdb.layouts.hybrid.checkpoint import (
@@ -237,7 +238,8 @@ class TestCheckpointedBuild:
         with pytest.raises(RuntimeError, match="simulated crash"):
             _build_panel(manifest, panel, store, checkpoint=True)
         monkeypatch.undo()
-        assert (checkpoint_dir_for(store) / "info_counts.json").exists()
+        record = admission_record_for(store)
+        assert len(list((record / "parts").glob("*.json"))) == 1
 
         resume_hybrid_build(checkpoint_dir_for(store))
 
@@ -251,8 +253,27 @@ class TestCheckpointedBuild:
             < uninterrupted[0]["associations_observed"]
         )
         assert resumed == uninterrupted
+        assert (record / "admission.json").read_bytes() == (
+            admission_record_for(plain) / "admission.json"
+        ).read_bytes()
         _assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
+
+    def test_resume_refuses_a_record_that_lost_a_part(self, tmp_path, monkeypatch):
+        """The Admission counts a resume reloads are the record's parts, and a
+        part that went missing is refused, not counted as zero."""
+        manifest, panel = _info_fixture(tmp_path)
+        store = tmp_path / "info.opengwasdb"
+        _crashing_fit(monkeypatch)
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            _build_panel(manifest, panel, store, checkpoint=True)
+        monkeypatch.undo()
+        (part,) = (admission_record_for(store) / "parts").glob("*.json")
+        part.unlink()
+
+        with pytest.raises(RecordIncomplete, match="no part"):
+            resume_hybrid_build(checkpoint_dir_for(store))
+        assert not store.exists()
 
     def test_resume_may_change_n_workers(self, tmp_path, monkeypatch):
         """`n_workers` is a pure runtime knob (ADR 0023), so a resume may raise
@@ -512,7 +533,7 @@ class TestFootprint:
         assert _dir_bytes(checkpoint_dir / "staged") > 0
 
         n_shared = len(read_lines(checkpoint_dir / "axis_shared.txt"))
-        n_analyses = len(read_json(checkpoint_dir / "info_counts.json"))
+        n_analyses = len(list((admission_record_for(store) / "parts").glob("*.json")))
         assert n_shared * n_analyses > 0
         per_cell = _dir_bytes(checkpoint_dir) / (n_shared * n_analyses)
         assert per_cell <= CHECKPOINT_BYTES_PER_CELL_CEILING, (

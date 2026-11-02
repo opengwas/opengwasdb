@@ -97,8 +97,10 @@ __all__ = [
 #: filtered and is not.
 #:
 #: **3** (opengwasdb#357): each Analysis's Pass 2 counts are Association
-#: Admission's, by reason. A format-2 record holds the counts in a shape this
-#: build no longer reads, so it is refused and the build starts again.
+#: Admission's, by reason, and live in the build's Admission record rather
+#: than in ``info_counts.json``; the record's path is a build parameter. A
+#: format-2 checkpoint has no record to resume, so it is refused and the build
+#: starts again.
 CHECKPOINT_FORMAT_VERSION = 3
 
 #: The function a refusal tells an operator to call.
@@ -112,7 +114,6 @@ RESUME_FUNCTION = "resume_hybrid_build"
 PHASES: tuple[str, ...] = ("pass2", "fold", "orientation", "plan", "dense_bands")
 
 BUILD_PARAMS = "build_params.json"
-INFO_COUNTS = "info_counts.json"
 PLATES = "plates.json"
 ORIENTATION = "orientation.json"
 PLAN = "plan.json"

@@ -35,7 +35,13 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from opengwasdb.admission import AdmissionCounts, AnalysisRules, counting_gate
+from opengwasdb.admission import (
+    AdmissionCounts,
+    AdmissionRecord,
+    AnalysisRules,
+    Gate,
+    admission_record_for,
+)
 from opengwasdb.build.eaf_orientation import (
     EafOrientationMethod,
     EafOrientationOutcome,
@@ -88,7 +94,6 @@ from opengwasdb.layouts.hybrid.checkpoint import (
     AXIS_SHARED,
     FOLD_DIR,
     HITS,
-    INFO_COUNTS,
     ORIENTATION,
     PLAN,
     PROVENANCE_RSID,
@@ -302,27 +307,24 @@ def _off_reference_spill(unmatched: Unmatched, se_divisor: float) -> _OffReferen
 
 
 def _resolve_column_hybrid(
-    table: RouteTable,
-    row: ManifestRow,
-    info_score_policy: InfoScorePolicy,
-    maf_policy: MafPolicy,
-) -> tuple[_Component, _Component, _OffReferenceSpill, AdmissionCounts]:
+    table: RouteTable, row: ManifestRow, gate: Gate
+) -> tuple[_Component, _Component, _OffReferenceSpill]:
     """Stream one study once, routing each association to the dense fill
     (on-panel), the ragged overflow (off-panel), or -- when the route table does
     not hold its source coordinate at all -- an off-reference bucket keyed by
-    the raw coordinate. Returns ``(dense, overflow, off_reference, info_counts)``,
+    the raw coordinate. Returns ``(dense, overflow, off_reference)``,
     each ``(index/key, z f32, se f32, eaf f32)`` deduped last-wins; ``eaf`` is
     NaN where the source reports no frequency (ADR 0036).
 
     The row's ``se_divisor`` divides every returned ``se``, dense and overflow
     alike (continuous-trait phenotype-SD standardisation, issue #18): a study's
     SD rescaling applies whichever component an association routes to. The
-    Analysis's imputation-score declaration reaches the reader, and both
-    declared policies judge each batch before it is matched.
+    Analysis's imputation-score declaration reaches the reader, and ``gate``
+    judges each batch before it is matched.
     """
-    gate = counting_gate(AnalysisRules(row.trait_id, info=info_score_policy, maf=maf_policy))
     reader = open_source(
-        row.source, imputation_score_declaration=info_score_policy.imputation_score_declaration
+        row.source,
+        imputation_score_declaration=gate.rules.info.imputation_score_declaration,
     )
     routed = table.route_column(reader.stream_associations(), admit=gate.admit)
     dense, overflow = routed.placed
@@ -331,7 +333,6 @@ def _resolve_column_hybrid(
         (dense.index, dense.z, apply_se_divisor(dense.se, divisor), dense.eaf),
         (overflow.index, overflow.z, apply_se_divisor(overflow.se, divisor), overflow.eaf),
         _off_reference_spill(routed.unmatched, divisor),
-        gate.counts,
     )
 
 
@@ -371,28 +372,30 @@ def _spill_hybrid_column(
 
 @dataclass(frozen=True)
 class _Pass2Context:
-    """What every Pass 2 worker reads: the route table, where to spill, and each
-    Analysis's declared INFO and MAF policies."""
+    """What every Pass 2 worker reads: the route table, where to spill, each
+    Analysis's declared INFO and MAF policies, and the Admission record its
+    gate writes to."""
 
     table: RouteTable
     spill_dir: Path
     info_score_policies: Mapping[str, InfoScorePolicy]
     maf_policies: Mapping[str, MafPolicy]
+    record: AdmissionRecord
 
 
-def _route_column(
-    context: _Pass2Context, task: tuple[int, ManifestRow]
-) -> tuple[int, AdmissionCounts]:
-    """Route one study and spill it; only its column and dispositions return."""
+def _route_column(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
+    """Route one study and spill it; its Admission part is written beside the
+    Store, and only its column returns."""
     col_idx, row = task
-    dense, overflow, off_reference, counts = _resolve_column_hybrid(
-        context.table,
-        row,
-        context.info_score_policies[row.trait_id],
-        context.maf_policies[row.trait_id],
+    rules = AnalysisRules(
+        row.trait_id,
+        info=context.info_score_policies[row.trait_id],
+        maf=context.maf_policies[row.trait_id],
     )
-    _spill_hybrid_column(context.spill_dir, col_idx, dense, overflow, off_reference)
-    return col_idx, counts
+    with context.record.gate(rules) as gate:
+        dense, overflow, off_reference = _resolve_column_hybrid(context.table, row, gate)
+        _spill_hybrid_column(context.spill_dir, col_idx, dense, overflow, off_reference)
+    return col_idx
 
 
 @dataclass(frozen=True)
@@ -506,6 +509,7 @@ class _BuildOptions:
     allow_unverified_eaf: bool
     on_rsid_conflict: RsidConflictPolicy
     association_coverage: AssociationCoverage
+    admission_record: Path
 
 
 @dataclass(frozen=True)
@@ -1835,17 +1839,33 @@ def _route_studies(
     n_analyses = len(rows)
     log.info("Pass 2: routing %d analyses (n_workers=%d)", n_analyses, options.n_workers)
     pass2_start = time.monotonic()
+    record = _admission_record(prepared, options, resume=False)
     context = _Pass2Context(
-        prepared.table, prepared.spill_dir, prepared.info_score_policies, prepared.maf_policies
+        prepared.table,
+        prepared.spill_dir,
+        prepared.info_score_policies,
+        prepared.maf_policies,
+        record,
     )
     tasks = [(analysis_index[row.trait_id], row) for row in rows]
-    info_counts: dict[str, AdmissionCounts] = {}
     routed = fork_each(_route_column, context, tasks, options.n_workers)
-    for i, (col, counts) in enumerate(routed):
-        info_counts[id_by_col[col]] = counts
+    for i, col in enumerate(routed):
         log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {id_by_col[col]}", every=25)
     return _RoutedSpills(
-        id_by_col=id_by_col, pass2_start=pass2_start, info_counts=info_counts
+        id_by_col=id_by_col, pass2_start=pass2_start, info_counts=record.finish().counts
+    )
+
+
+def _admission_record(
+    prepared: _PreparedBuild, options: _BuildOptions, *, resume: bool
+) -> AdmissionRecord:
+    """The build's Admission record, opened for its Analyses in Manifest Row order."""
+    log.info("Admission record: %s", options.admission_record)
+    return AdmissionRecord.open(
+        options.admission_record,
+        [row.trait_id for row in prepared.manifest_rows],
+        command="build-hybrid",
+        resume=resume,
     )
 
 
@@ -2380,17 +2400,18 @@ def _pass2_phase(
 ) -> _RoutedSpills:
     """Phase - Pass 2: route each study once, or reload the recorded routing.
 
-    The recorded form is each Analysis's declared-score dispositions (stores
-    #175), which the shared manifest's `provenance.info_score` is written from
-    and which nothing else can recover: they are what the sources yielded, not
-    a function of the store.
+    What a resume reloads is each Analysis's Admission counts (stores #175),
+    which the shared manifest's `provenance.info_score` is written from and
+    which nothing else can recover: they are what the sources yielded, not a
+    function of the store. They are the Admission record's parts, which a
+    resumed run keeps.
     """
     if state is not None and state.has("pass2"):
-        return _recorded_routing(prepared, state)
+        return _recorded_routing(prepared, options)
     routed = _route_studies(prepared, options)
     _log_spill_bytes(prepared.spill_dir)
     if state is not None:
-        _record_pass2_product(state, prepared, routed)
+        _record_pass2_product(state)
     return routed
 
 
@@ -2404,36 +2425,24 @@ def _log_spill_bytes(spill_dir: Path) -> None:
     )
 
 
-def _record_pass2_product(
-    state: CheckpointState, prepared: _PreparedBuild, routed: _RoutedSpills
-) -> None:
-    """Record Pass 2's product: the dispositions its workers returned.
-
-    The plates are recorded too, with their sizes, so a resume can refuse a
-    spill directory that lost one rather than build a store short of the
-    associations it claims.
+def _record_pass2_product(state: CheckpointState) -> None:
+    """Record Pass 2's product: its plates, with their sizes, so a resume can
+    refuse a spill directory that lost one rather than build a store short of
+    the associations it claims. Its counts are the Admission record's.
     """
-    write_json(
-        state.path / INFO_COUNTS,
-        {
-            row.trait_id: routed.info_counts[row.trait_id].as_dict()
-            for row in prepared.manifest_rows
-        },
-    )
     record_plates(state.path, (path.name for path in state.spill_dir.iterdir()))
     mark_phase(state.path, "pass2")
 
 
-def _recorded_routing(prepared: _PreparedBuild, state: CheckpointState) -> _RoutedSpills:
-    """Rebuild the routing records a resumed run does not route again."""
-    recorded = read_json(state.path / INFO_COUNTS)
+def _recorded_routing(prepared: _PreparedBuild, options: _BuildOptions) -> _RoutedSpills:
+    """Rebuild the routing records a resumed run does not route again: the
+    counts are re-read from the Admission record's parts, and a record that
+    lost one is refused."""
+    record = _admission_record(prepared, options, resume=True)
     return _RoutedSpills(
         id_by_col={col: row.trait_id for col, row in enumerate(prepared.manifest_rows)},
         pass2_start=time.monotonic(),
-        info_counts={
-            row.trait_id: AdmissionCounts.from_dict(recorded[row.trait_id])
-            for row in prepared.manifest_rows
-        },
+        info_counts=record.finish().counts,
     )
 
 
@@ -2666,6 +2675,7 @@ def build_hybrid_from_vcf_manifest(
     source_assembly: str | None = None, checkpoint: bool = False, resume: bool = False,
     column_map: ColumnMap | str | Path | None = None, on_rsid_conflict: str = "refuse",
     association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
+    admission_record: str | Path | None = None,
 ) -> HybridBuildResult:
     """Build a Hybrid store from a manifest of GWAS-VCF files and a reference
     panel or precomputed variant reference. A thin orchestrator over three deep
@@ -2709,7 +2719,7 @@ def build_hybrid_from_vcf_manifest(
         chunk_shape=chunk_shape, dtype=dtype, n_workers=n_workers,
         eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf, association_coverage=association_coverage,
-        on_rsid_conflict=on_rsid_conflict,
+        on_rsid_conflict=on_rsid_conflict, admission_record=admission_record,
     )
     defaults = _ManifestDefaults(source_reader_capability, source_assembly,
                                  as_column_map(column_map))
@@ -2733,8 +2743,12 @@ def _new_build_options(
     allow_unverified_eaf: bool,
     association_coverage: AssociationCoverage | str,
     on_rsid_conflict: str,
+    admission_record: str | Path | None = None,
 ) -> _BuildOptions:
     """The build's options, refusing a coverage no Hybrid release can carry.
+
+    ``admission_record`` is the directory Association Admission writes its
+    record to, ``<output_path>.admission`` unless named (#357).
 
     The coverage is ``gwas`` or nothing (issue #298), refused here rather than at
     the first phase that needs it, and before a single Manifest Row is read (ADR
@@ -2759,6 +2773,9 @@ def _new_build_options(
         on_rsid_conflict=RsidConflictPolicy(on_rsid_conflict),
         association_coverage=coverage_for_layout(
             association_coverage, PrimaryStorageLayout.HYBRID
+        ),
+        admission_record=Path(
+            admission_record_for(output_path) if admission_record is None else admission_record
         ),
     )
 
@@ -3197,6 +3214,7 @@ def _build_params(
         # Recorded so a resume cannot change what the release claims to retain
         # (#227, #298).
         "association_coverage": options.association_coverage.value,
+        "admission_record": str(options.admission_record.resolve()),
         "overwrite": bool(overwrite),
         "source_reader_capability": defaults.source_reader_capability,
         "source_assembly": defaults.source_assembly,
@@ -3237,6 +3255,7 @@ def _options_from_params(params: Mapping[str, Any], n_workers: int | None) -> _B
         allow_unverified_eaf=params["allow_unverified_eaf"],
         on_rsid_conflict=RsidConflictPolicy(params["on_rsid_conflict"]),
         association_coverage=AssociationCoverage(params["association_coverage"]),
+        admission_record=Path(params["admission_record"]),
     )
 
 

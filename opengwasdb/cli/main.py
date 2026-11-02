@@ -232,6 +232,16 @@ _SOURCE_ASSEMBLY_OPTION = Annotated[
 _ON_RSID_CONFLICT_OPTION = Annotated[
     RsidConflictPolicy, typer.Option(help=_ON_RSID_CONFLICT_HELP)
 ]
+_ADMISSION_RECORD_OPTION = Annotated[
+    Path | None,
+    typer.Option(
+        "--admission-record",
+        help=(
+            "Directory for the build's Association Admission record: what each Analysis "
+            "examined, admitted and dropped, by reason. Default: OUTPUT_PATH.admission."
+        ),
+    ),
+]
 
 
 _REFERENCE_BUILD_OPTION = Annotated[
@@ -834,6 +844,7 @@ def build_hybrid_command(
     assembly: _SOURCE_ASSEMBLY_OPTION = None,
     column_map: _COLUMN_MAP_OPTION = None,
     on_rsid_conflict: _ON_RSID_CONFLICT_OPTION = RsidConflictPolicy.REFUSE,
+    admission_record: _ADMISSION_RECORD_OPTION = None,
 ) -> None:
     """Build a Hybrid store (Dense Component + Ragged Overflow) from a VCF manifest.
 
@@ -849,7 +860,8 @@ def build_hybrid_command(
     --column-map reads opengwasdb.column-map rows through a Column Map (#281).
     --on-rsid-conflict decides a variant its sources name differently (#306).
     --association-coverage states what the release retains: a Hybrid release can
-    carry only `gwas`, its default (issue #298).
+    carry only `gwas`, its default (issue #298). --admission-record names where
+    Association Admission's record goes (#357).
     """
     res = build_hybrid_from_vcf_manifest(
         manifest_path, output_path, reference_panel=reference_panel,
@@ -859,7 +871,7 @@ def build_hybrid_command(
         eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,
         source_reader_capability=capability, source_assembly=assembly,
         checkpoint=checkpoint, resume=resume, column_map=column_map,
-        on_rsid_conflict=on_rsid_conflict,
+        on_rsid_conflict=on_rsid_conflict, admission_record=admission_record,
     )
     _echo_hybrid_result(res)
 
