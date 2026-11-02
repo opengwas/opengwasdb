@@ -49,7 +49,7 @@ from opengwasdb.encoding import (
     StoreEncoding,
 )
 from opengwasdb.layouts.dense.build import write_analyses_tsv
-from opengwasdb.layouts.dense.build_vcf import _sorted_alids, _write_index
+from opengwasdb.layouts.dense.build_vcf import write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import _write_variant_table
@@ -79,6 +79,7 @@ from opengwasdb.store.open import (
     open_store,
 )
 from opengwasdb.variants import VariantAxis, VariantRecord
+from opengwasdb.variants.axis import sorted_alids
 
 log = logging.getLogger(__name__)
 
@@ -368,7 +369,7 @@ def _remap_shared_axis(
         # narrow imprecision for the crossed-over cells' summary statistics).
         build_dense_top_hit_indexes(dense.dir, encoding=dense.encoding)
 
-    union = _sorted_alids(set(dense.alids) | set(overflow_alids.tolist()))
+    union = sorted_alids(set(dense.alids) | set(overflow_alids.tolist()))
     return _SharedAxis(
         alids=union,
         index={alid: i for i, alid in enumerate(union)},
@@ -406,7 +407,7 @@ def _write_shared_tables_and_overflow(
     """
     dense_layout = _dense_component_layout(staged.path)
     chunk = tuple(int(size) for size in dense_layout.get("chunk_shape", _chunk_shape(src_manifest)))
-    _write_index(staged, axis.alids, analyses, (chunk[0], chunk[1]))
+    write_index(staged, axis.alids, analyses, (chunk[0], chunk[1]))
     source_by_alid = {a: overflow.source_alid_by_alid.get(a) for a in axis.alids}
     _write_variant_table(staged.path, axis.alids, source_by_alid, overflow.rsid_by_alid)
     dense_to_shared = np.array([axis.index[a] for a in axis.dense_alids], dtype=np.int32)

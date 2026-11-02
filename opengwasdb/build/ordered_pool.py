@@ -29,6 +29,17 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 
+def fork_pool(n_workers: int) -> ProcessPoolExecutor:
+    """A ``ProcessPoolExecutor`` pinned to the fork start method.
+
+    Its workers inherit the parent's read-only state, numpy lookup arrays among
+    them, without re-pickling it per task. Only correct on platforms with fork
+    (Linux).
+    """
+    fork_ctx = multiprocessing.get_context("fork")
+    return ProcessPoolExecutor(max_workers=n_workers, mp_context=fork_ctx)
+
+
 def ordered_map(
     fn: Callable[[T], R],
     items: Iterable[T],
@@ -49,9 +60,8 @@ def ordered_map(
     limit = max_in_flight if max_in_flight is not None else 2 * n_workers
     if limit < 1:
         raise ValueError(f"max_in_flight must be >= 1, got {limit}")
-    fork_ctx = multiprocessing.get_context("fork")
     pending: deque[Future[R]] = deque()
-    with ProcessPoolExecutor(max_workers=n_workers, mp_context=fork_ctx) as pool:
+    with fork_pool(n_workers) as pool:
         try:
             for item in items:
                 pending.append(pool.submit(fn, item))

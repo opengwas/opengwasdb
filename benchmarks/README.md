@@ -1264,6 +1264,30 @@ conversion as `v3-c64` with `--top-hit-shard-chunks 1`, so the artifact's
 
 ---
 
+### `routing_fixture_trees.py` (#352)
+
+The characterisation instrument for moving Variant Routing into its own module.
+It builds one small Store, Variant Reference artifact or refusal per routing
+path from fixed inputs, with whichever checkout `--repo` names, and compares two
+such trees file by file. `inputs` writes the inputs once, with the base
+checkout; `build` builds the 28 cases; `seed` fails the two checkpointed cases
+after `pass2` and after `fold` and archives each checkpoint; `resume` resumes
+those archives with another checkout. `compare` compares raw bytes, except that
+a manifest is compared without its `created_at` and a gzip file decompressed;
+with `--resumed`, against a resumed tree, an SQLite file is compared by its
+dump, because a resume writes the index metadata a second time. The script's
+docstring lists the paths and the commands.
+
+Two cases, extraction's refusal of a reverse-strand lift, record an outcome that
+arrived with #354's guard (98a6e7a), after the inputs' base (6415be4). Build
+them with `--cases since` at that commit or later, build the base with
+`--cases base`, and compare each part under the same `--cases`.
+
+At 6415be4, two builds of the 26 base cases compare equal (1,906 files), and
+each seeded checkpoint resumed at that commit equals the fresh checkpointed
+build. Each case checks it reached its path (the ALIDs it must hold or lack, the
+refusal it must raise, the dispute it must meet) before anything compares it.
+
 ## Comparison document
 
 After all JSONs are present in `docs/benchmark-output/`, render the comparison report:

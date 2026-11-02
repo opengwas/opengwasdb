@@ -121,9 +121,9 @@ def test_subset_catalogue_is_pure_row_filter(tmp_path):
     header = manifest.read_text().splitlines()[0].split("\t")
     assert header[0] == "trait_id" and "assigned_ancestry" in header
     assert "ancestry_assignment_method" in header
-    from opengwasdb.layouts.dense.build_vcf import _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
 
-    loaded = _read_manifest(manifest)
+    loaded = read_manifest(manifest)
     assert [m.trait_id for m in loaded] == ["eur_a", "eur_b"]
     assert {m.metadata.ancestry_assignment_method for m in loaded} == {"af_assigned"}
 
@@ -140,9 +140,9 @@ def test_legacy_unassigned_catalogue_subset_records_failed_assignment(tmp_path):
         original_sd_method="declared_standardised",
     )
 
-    from opengwasdb.layouts.dense.build_vcf import _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
 
-    loaded = _read_manifest(manifest)
+    loaded = read_manifest(manifest)
     assert [row.trait_id for row in loaded] == ["und_d"]
     assert loaded[0].metadata.ancestry_assignment_method == "unassigned"
 
