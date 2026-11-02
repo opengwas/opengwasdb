@@ -811,6 +811,7 @@ class RaggedCSRReader:
         path = Path(store_path) / RAGGED_ZARR_PATH
         self._root = store_arrays.open_group(path)
         self._offsets: zarr.Array = self._root["offsets"]
+        self._offsets_cache: np.ndarray | None = None
         self._variant_index: zarr.Array = self._root["variant_index"]
         self._z: zarr.Array = self._root["z"]
         self._se: zarr.Array = self._root["se"]  # shape metadata only; values use se_* below
@@ -847,14 +848,55 @@ class RaggedCSRReader:
     def n_associations(self) -> int:
         return int(self._root.attrs.get("n_associations", array_length(self._variant_index)))
 
-    def _span(self, analysis_index: int) -> tuple[int, int]:
+    # ── structure: where the associations sit, for code that walks the sequence ──
+
+    @property
+    def offsets(self) -> np.ndarray:
+        """Every Analysis's start in the flat sequence, plus its end (int64).
+
+        One entry per Analysis, not per association, so it is the one array a
+        caller may hold whole; read once and kept.
+        """
+        if self._offsets_cache is None:
+            self._offsets_cache = np.asarray(self._offsets[:], dtype=np.int64)
+        return self._offsets_cache
+
+    def span(self, analysis_index: int) -> tuple[int, int]:
         """The `[start, end)` slice of the flat arrays one Analysis occupies."""
         offsets = self._offsets[analysis_index : analysis_index + 2]
         return int(offsets[0]), int(offsets[1])
 
+    def variant_index(self, start: int, end: int) -> np.ndarray:
+        """`variant_index[start:end]`, as int32."""
+        return np.asarray(self._variant_index[int(start) : int(end)], dtype=np.int32)
+
+    def analysis_index_at(self, positions: np.ndarray) -> np.ndarray:
+        """The Analysis each flat position belongs to, from the offsets."""
+        positions = np.asarray(positions, dtype=np.int64)
+        return np.searchsorted(self.offsets[1:], positions, side="right").astype(np.int32)
+
+    @property
+    def has_imputed(self) -> bool:
+        """Whether the sequence carries an imputed mask."""
+        return "imputed" in self._root
+
+    def imputed(self, start: int, end: int) -> np.ndarray:
+        """The imputed mask `[start, end)` as stored (uint8)."""
+        return np.asarray(self._root["imputed"][int(start) : int(end)], dtype=np.uint8)
+
+    def imputed_at(self, positions: np.ndarray) -> np.ndarray:
+        """The imputed mask at flat positions, as stored (uint8)."""
+        positions = np.asarray(positions, dtype=np.int64)
+        return np.asarray(self._root["imputed"].oindex[positions], dtype=np.uint8)
+
+    @property
+    def can_report_frequencies(self) -> bool:
+        """Whether an EAF read can return anything but NaN (issue #113)."""
+        return self._eaf_plane.can_report_frequencies
+
     def get_analysis(self, analysis_index: int) -> AnalysisAssociations:
         """Return (variant_index, z, se, eaf) arrays for one analysis. O(1) zarr reads."""
-        start, end = self._span(analysis_index)
+        start, end = self.span(analysis_index)
         if start == end:
             return AnalysisAssociations(
                 variant_index=np.empty(0, dtype=np.int32),
@@ -883,7 +925,7 @@ class RaggedCSRReader:
         Family with no gene target (issue #102) -- should not decode its
         statistics to find it.
         """
-        start, end = self._span(analysis_index)
+        start, end = self.span(analysis_index)
         if start == end:
             return np.empty(0, dtype=np.int32)
         return np.asarray(self._variant_index[start:end], dtype=np.int32)
@@ -1079,7 +1121,7 @@ class RaggedCSRReader:
         wanted = np.unique(np.asarray(wanted, dtype=np.int32))
         if len(wanted) == 0:
             return np.empty(0, dtype=np.int64)
-        lo, hi = self._span(analysis_index)
+        lo, hi = self.span(analysis_index)
         if lo >= hi:
             return np.empty(0, dtype=np.int64)
         size = self.association_chunk
@@ -1144,7 +1186,7 @@ class RaggedCSRReader:
         All-NaN when this component stores no `eaf` array -- built before ADR
         0036, or from sources reporting no frequency. A pair whose variant is
         absent from that Analysis stays NaN rather than silently taking a
-        neighbour's frequency (`_pair_positions`).
+        neighbour's frequency (`pair_positions`).
         """
         out = np.full(len(variant_index), np.nan, dtype=np.float32)
         # The plane's own answer, not `has_eaf`: a release carrying only the
@@ -1155,7 +1197,7 @@ class RaggedCSRReader:
         # Resolve every pair to a flat CSR position first, then decode once:
         # the plane needs the position to resolve an exception cell, and a
         # per-Analysis decode would gather the baseline slice by slice.
-        slots, positions = self._pair_positions(variant_index, analysis_index)
+        slots, positions = self.pair_positions(variant_index, analysis_index)
         if len(slots):
             out[slots] = self.eaf_at(positions)
         return out
@@ -1193,12 +1235,12 @@ class RaggedCSRReader:
         """
         self._require_n()
         out = np.full(len(variant_index), np.nan, dtype=np.float64)
-        slots, positions = self._pair_positions(variant_index, analysis_index)
+        slots, positions = self.pair_positions(variant_index, analysis_index)
         if len(slots):
             out[slots] = self.n_at(positions)
         return out
 
-    def _pair_positions(
+    def pair_positions(
         self, variant_index: np.ndarray, analysis_index: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
         """`(slots, flat positions)` for the pairs this component holds.
