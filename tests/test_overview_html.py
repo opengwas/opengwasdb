@@ -15,6 +15,7 @@ from typing import NoReturn
 
 import numpy as np
 import pytest
+import zarr
 
 from opengwasdb import overview as overview_module
 from opengwasdb.build.observed import build_dense_observed_from_sources
@@ -730,6 +731,15 @@ def _indexed_subsets_section(content: str) -> str:
     return content.split('id="tab-indexed-subsets"')[1].split('id="tab-guide"')[0]
 
 
+def _drop_overflow_only_record(store: Path, name: str = "hm3") -> None:
+    """Make a published group the shape of one built before the option existed."""
+    group = zarr.open_group(
+        str(store / "data.zarr" / "indexed_subsets" / name), mode="r+"
+    )
+    del group.attrs["overflow_only_count"]
+    del group.attrs["overflow_only_sample"]
+
+
 def test_overview_html_omits_indexed_subsets_tab_without_namespace(tmp_path):
     _write_manifest(tmp_path)
     content = write_overview_html(tmp_path, _table()).read_text(encoding="utf-8")
@@ -892,6 +902,41 @@ def test_indexed_subsets_physical_size_matches_du(tmp_path):
     )
 
     assert _physical_bytes(tmp_path) == du
+
+
+def test_indexed_subsets_tab_renders_a_group_built_before_overflow_only_count(
+    tmp_path: Path,
+) -> None:
+    """A group predating the Overflow-only record reads as zero, not a crash.
+
+    ADR 0065: the builder that wrote such a group could only refuse an
+    Overflow-only ALID, so the count it lacks is zero by construction, and the
+    page shows the fact the read seam shows rather than an absent cell.
+    """
+    store = _build_indexed_subset_store(tmp_path)
+    _drop_overflow_only_record(store)
+    table = read_analyses(store / "analyses.tsv")
+
+    content = write_overview_html(store, table).read_text(encoding="utf-8")
+    section = _indexed_subsets_section(content)
+    subsets = gather_store_overview(store, table).indexed_subsets
+
+    assert ">hm3<" in section
+    assert "<th>Overflow-only</th>" in section
+    assert subsets is not None
+    assert subsets.problems == ()
+    assert subsets.rows[0]["Overflow-only"] == "0"
+
+
+def test_indexed_subset_value_leaves_an_absence_no_decision_defines_blank() -> None:
+    """Only an attribute a decision gives a meaning to is filled in.
+
+    The rest read blank, how the page shows every other unrecorded value, rather
+    than as an invented number or a crash.
+    """
+    assert overview_module._indexed_subset_value({}, "overflow_only_count") == "0"
+    assert overview_module._indexed_subset_value({}, "absent_count") == ""
+    assert overview_module._indexed_subset_value({}, "created_at") == ""
 
 
 def test_indexed_subsets_total_counts_each_traversal_once(
