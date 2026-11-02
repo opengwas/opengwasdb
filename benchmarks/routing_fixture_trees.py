@@ -15,36 +15,49 @@ file.
              and archive the checkpoint as SEEDS/<case>@<phase>.tar
     resume   restore each archived checkpoint where it was made, resume it with
              this checkout, and move the result to OUT/<phase>/<case>/
-    compare  BASE HEAD: every file of every case HEAD holds, byte for byte,
-             except a manifest's `created_at`, a gzip file's header and an
-             SQLite file's page layout
+    compare  BASE HEAD: every file of the cases both hold, byte for byte, with
+             two exceptions: a manifest is compared without its `created_at`,
+             and a gzip file decompressed, since its header records when it was
+             written. With `--resumed` (HEAD is a resumed tree) an SQLite file
+             is compared by its dump, since a resume writes the index metadata
+             a second time; every other comparison reads its raw bytes
 
 The paths the cases exercise: Dense two-pass over hg19 (a chain with a forward,
 an offset, a reverse-strand and a colliding region) mixed with hg38, and over
-hg38 alone, each at one and two workers; Dense single-pass from an ALID list
-(rsid harvest) and from an extracted artifact (hg38, and hg19 through the
-chain), and the refusal of an artifact extracted from mixed-case sources;
-Hybrid two-pass with a panel (lifted, hg38 with a MAF threshold at two workers,
-and the refusal of mixed-case sources); Hybrid single-pass from an ALID list
-under `refuse` with agreeing names, under `refuse` with a dispute (a refusal),
-and under `drop` at one and two workers; Hybrid single-pass from an hg19
-artifact whose off-reference rows the fold lifts, and one whose off-reference
-row the fold must refuse to re-orient; the checkpointed `drop` and
-hg19-artifact builds; and extraction over hg38 and hg19 at one and two workers,
-with windows small enough to reduce.
+hg38 alone; Dense single-pass from an ALID list (rsid harvest) and from an
+extracted artifact (hg38, and hg19 through the chain), and the refusal of an
+artifact extracted from mixed-case sources; Hybrid two-pass with a panel
+(lifted, hg38 with a MAF threshold at two workers, and the refusal of mixed-
+case sources); Hybrid single-pass from an ALID list under `refuse` with
+agreeing names, under `refuse` with a dispute (a refusal), and under `drop`;
+Hybrid single-pass from an hg19 artifact whose off-reference rows the fold
+lifts, and one whose off-reference row the fold must refuse to re-orient; the
+checkpointed `drop` and hg19-artifact builds; and extraction over hg38 and
+hg19, with windows small enough to reduce, and its refusal of a reverse-strand
+lift. Every Dense path, Hybrid `drop` and extraction runs at one and two
+workers.
 
 Build with `BLOSC_NTHREADS=1`: a chunk of two or more Blosc blocks compressed
 with threads writes its blocks in completion order (ADR 0056).
 
     export BLOSC_NTHREADS=1; R=".pixi/envs/dev/bin/python benchmarks/routing_fixture_trees.py"
     $R inputs --repo $BASE --inputs $T/inputs
-    $R build --repo $BASE --inputs $T/inputs --out $T/base
+    $R build --repo $BASE --inputs $T/inputs --out $T/base --cases base
+    $R build --repo $TIP --inputs $T/inputs --out $T/since --cases since
     $R seed --repo $BASE --inputs $T/inputs --seeds $T/seeds
     $R build --repo . --inputs $T/inputs --out $T/head
     $R resume --repo . --seeds $T/seeds --out $T/resumed
-    $R compare $T/base $T/head
-    $R compare $T/base $T/resumed/pass2 --subset
-    $R compare $T/base $T/resumed/fold --subset
+    $R compare $T/base $T/head --cases base
+    $R compare $T/since $T/head --cases since
+    $R compare $T/base $T/resumed/pass2 --resumed
+    $R compare $T/base $T/resumed/fold --resumed
+
+The inputs were written at 6415be4. A case whose expectation arrived later
+names that commit in `Case.since`: extraction's refusal of a reverse-strand
+lift came with #354's guard at 98a6e7a, and before it the same case wrote an
+artifact with the wrong ALIDs. Build an older base with `--cases base`, build
+those cases with `--cases since` at their commit or later, and compare a head
+tree with each, under the same `--cases`.
 
 `seed` patches two of the base's private phase functions to fail, so it runs
 only with a checkout that still has them; the archives it writes are what later
@@ -348,6 +361,11 @@ class Case:
     expect_conflicts: bool = False
     absent_alids: tuple[str, ...] = ()
     seed: bool = False
+    #: The commit that brought this case's expected outcome, when it is newer than
+    #: the checkout the inputs were written at. A checkout before it cannot meet
+    #: the expectation, so `build --cases base` leaves the case out, and its tree
+    #: is built with `--cases since` at that commit or later.
+    since: str = ""
 
 
 LIFT = {"chain_file": "fixture.chain", "liftover_failure_threshold": 0.5}
@@ -361,16 +379,19 @@ CASES = (
            absent_alids=CROSS_ASSEMBLY) for n in (1, 2)),
     *(Case(f"dense-hg38-n{n}", "dense", "hg38", {"n_workers": n}, ("X:1000:A:G",))
       for n in (1, 2)),
-    Case("dense-list", "dense", "hg38", {"variant_reference": "hg38.alids.txt"},
-         ("7:100:A:G",)),
-    Case("dense-artifact-hg38", "dense", "upper",
-         {"variant_reference": "upper.variant-ref.tsv.gz"}, ("6:500:C:T",)),
+    *(Case(f"dense-list-n{n}", "dense", "hg38",
+           {"variant_reference": "hg38.alids.txt", "n_workers": n}, ("7:100:A:G",))
+      for n in (1, 2)),
+    *(Case(f"dense-artifact-hg38-n{n}", "dense", "upper",
+           {"variant_reference": "upper.variant-ref.tsv.gz", "n_workers": n}, ("6:500:C:T",))
+      for n in (1, 2)),
     # Extraction keeps a lower-case spelling as its own ALID, as the Dense
     # two-pass build does, and the artifact reader then refuses it as a duplicate.
     Case("dense-artifact-hg38-case", "dense", "hg38",
          {"variant_reference": "hg38.variant-ref.tsv.gz"}, expect_error="duplicate ALID"),
-    Case("dense-artifact-hg19", "dense", "fwd",
-         {**LIFT, "variant_reference": "fwd.variant-ref.tsv.gz"}, ("4:5501:A:G",)),
+    *(Case(f"dense-artifact-hg19-n{n}", "dense", "fwd",
+           {**LIFT, "variant_reference": "fwd.variant-ref.tsv.gz", "n_workers": n},
+           ("4:5501:A:G",)) for n in (1, 2)),
     Case("hybrid-panel-lift", "hybrid", "lift", {**LIFT, "reference_panel": "lift.panel.txt"},
          STRAND_ALIDS, absent_alids=CROSS_ASSEMBLY),
     Case("hybrid-panel-hg38-maf-n2", "hybrid", "hg38_maf",
@@ -400,7 +421,20 @@ CASES = (
     Case("extract-hg38-n2", "extract", "hg38", {"n_workers": 2, **SMALL_WINDOWS}),
     *(Case(f"extract-hg19-n{n}", "extract", "fwd_off", {**LIFT, "n_workers": n, **SMALL_WINDOWS})
       for n in (1, 2)),
+    # R's 2:5000 lifts onto chr2's reverse chain, which an artifact cannot record.
+    # The refusal arrived with #354's guard, after the inputs' base.
+    *(Case(f"extract-hg19-reverse-n{n}", "extract", "rev_off",
+           {**LIFT, "n_workers": n, **SMALL_WINDOWS}, expect_error="ReverseStrandLiftError",
+           since="98a6e7a") for n in (1, 2)),
 )
+
+#: Which cases `build --cases` builds: every one, only those whose expectation
+#: holds at the inputs' base, or only those recorded at a later commit.
+CASE_SETS: dict[str, Callable[[Case], bool]] = {
+    "all": lambda case: True,
+    "base": lambda case: not case.since,
+    "since": lambda case: bool(case.since),
+}
 
 _INPUT_KWARGS = ("chain_file", "variant_reference", "reference_panel")
 
@@ -503,15 +537,16 @@ def _record(case: Case, out: Path, places: Places, run: Callable[[], Any]) -> No
                                          encoding="utf-8")
 
 
-def build_all(inputs: Path, out: Path) -> list[str]:
+def build_all(inputs: Path, out: Path, selection: str = "all") -> list[str]:
     if out.exists():
         raise SystemExit(f"{out} exists; build into a new directory")
-    for case in CASES:
+    cases = [case for case in CASES if CASE_SETS[selection](case)]
+    for case in cases:
         target = out / case.name
         target.mkdir(parents=True)
         places = {target: f"<out>/{case.name}", inputs: "<inputs>"}
         _record(case, target, places, lambda case=case, target=target: _run(case, inputs, target))
-    return [case.name for case in CASES]
+    return [case.name for case in cases]
 
 
 # ── checkpoint seeds ─────────────────────────────────────────────────────────
@@ -602,8 +637,14 @@ def _files(case_dir: Path) -> set[Path]:
     return {p.relative_to(case_dir) for p in case_dir.rglob("*") if p.is_file()}
 
 
-def _same(left: Path, right: Path) -> str:
-    """'' when two files hold the same content; otherwise how they differ."""
+def _same(left: Path, right: Path, *, resumed: bool) -> str:
+    """'' when two files hold the same content; otherwise how they differ.
+
+    A manifest is compared without its `created_at`, and a gzip file
+    decompressed, because its header records when it was written. An SQLite
+    file is compared by its dump only when `resumed`: a resumed build rewrites
+    the index metadata, which a fresh build writes once.
+    """
     a, b = left.read_bytes(), right.read_bytes()
     if a == b:
         return ""
@@ -614,7 +655,7 @@ def _same(left: Path, right: Path) -> str:
         return "" if ja == jb else "manifest content"
     if left.suffix == ".gz":
         return "" if gzip.decompress(a) == gzip.decompress(b) else "decompressed bytes"
-    if left.suffix == ".sqlite":
+    if resumed and left.suffix == ".sqlite":
         return "" if _sqlite_dump(left) == _sqlite_dump(right) else "SQLite content"
     return "bytes"
 
@@ -632,31 +673,42 @@ def _sqlite_dump(path: Path) -> list[str]:
         connection.close()
 
 
-def _compare_case(base: Path, head: Path) -> Iterator[str]:
+def _compare_case(base: Path, head: Path, *, resumed: bool) -> Iterator[str]:
     left, right = _files(base), _files(head)
     for missing in sorted(left - right):
         yield f"{base.name}: only in base: {missing}"
     for extra in sorted(right - left):
         yield f"{base.name}: only in head: {extra}"
     for rel in sorted(left & right):
-        how = _same(base / rel, head / rel)
+        how = _same(base / rel, head / rel, resumed=resumed)
         if how:
             yield f"{base.name}: {rel} differs ({how})"
 
 
-def compare(base: Path, head: Path, *, subset: bool) -> dict[str, Any]:
-    cases = sorted(p.name for p in head.iterdir() if p.is_dir())
+def compare(base: Path, head: Path, *, selection: str, resumed: bool) -> dict[str, Any]:
+    """Compare the selected cases of two trees, file by file.
+
+    Each selected case must be in both trees, except against a resumed tree,
+    which holds only the checkpointed cases: then each case it holds must be in
+    the base. A directory that names no case is a difference either way.
+    """
+    known = {case.name for case in CASES}
+    selected = {case.name for case in CASES if CASE_SETS[selection](case)}
+    in_base = {p.name for p in base.iterdir() if p.is_dir()}
+    in_head = {p.name for p in head.iterdir() if p.is_dir()}
+    differences = [f"{n}: not a case" for n in sorted((in_base | in_head) - known)]
+    in_base &= selected
+    in_head &= selected
+    if not resumed:
+        differences += [f"{n}: missing from head" for n in sorted(in_base - in_head)]
+    differences += [f"{n}: missing from base" for n in sorted(in_head - in_base)]
+    cases = sorted(in_base & in_head)
     if not cases:
-        raise SystemExit(f"no cases under {head}; the comparison would prove nothing")
-    absent = sorted({p.name for p in base.iterdir() if p.is_dir()} - set(cases))
-    differences = [] if subset else [f"{name}: missing from head" for name in absent]
+        raise SystemExit(f"no selected case is in both {base} and {head}; nothing was compared")
     n_files = 0
     for name in cases:
-        if not (base / name).is_dir():
-            differences.append(f"{name}: not in base")
-            continue
         n_files += len(_files(base / name))
-        differences.extend(_compare_case(base / name, head / name))
+        differences.extend(_compare_case(base / name, head / name, resumed=resumed))
     return {"cases": len(cases), "files": n_files, "differences": differences}
 
 
@@ -670,16 +722,21 @@ def main() -> None:
             p.add_argument("--inputs", type=Path, required=True)
         if command in {"build", "resume"}:
             p.add_argument("--out", type=Path, required=True, help="a new directory")
+        if command == "build":
+            p.add_argument("--cases", choices=sorted(CASE_SETS), default="all",
+                           help="base: leave out the cases recorded after the inputs' base")
         if command in {"seed", "resume"}:
             p.add_argument("--seeds", type=Path, required=True)
     p = sub.add_parser("compare")
     p.add_argument("base", type=Path)
     p.add_argument("head", type=Path)
-    p.add_argument("--subset", action="store_true",
-                   help="compare only the cases head holds (a resumed tree)")
+    p.add_argument("--cases", choices=sorted(CASE_SETS), default="all",
+                   help="compare only this set of cases, as `build --cases` built them")
+    p.add_argument("--resumed", action="store_true",
+                   help="head is a resumed tree: only its cases, and SQLite files by dump")
     args = ap.parse_args()
     if args.command == "compare":
-        report = compare(args.base, args.head, subset=args.subset)
+        report = compare(args.base, args.head, selection=args.cases, resumed=args.resumed)
         print(json.dumps(report, indent=1))
         raise SystemExit(1 if report["differences"] else 0)
     use_checkout(args.repo)
@@ -690,7 +747,7 @@ def main() -> None:
         write_inputs(args.inputs)
         print("wrote", args.inputs)
     elif args.command == "build":
-        print("built", build_all(args.inputs, args.out))
+        print("built", build_all(args.inputs, args.out, args.cases))
     elif args.command == "seed":
         print("seeded", seed_all(args.inputs, args.seeds))
     else:
