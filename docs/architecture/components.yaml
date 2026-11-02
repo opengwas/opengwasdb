@@ -13,6 +13,9 @@
 # - tests/architecture_model.py here, which loads it and checks it against
 #   `git ls-files opengwasdb/`. CI fails on a source file no component claims, on
 #   a claim that matches no tracked file, and on a layer `layers` does not declare.
+# - tests/test_architecture_layering.py here, which places every import on the
+#   component that owns it, and holds the ones that go upward to
+#   docs/architecture/layering-baseline.yaml.
 #
 # How ownership is written:
 # - `layers` is the intended layering, top to bottom: a component may import from
