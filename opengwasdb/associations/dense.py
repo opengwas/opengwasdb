@@ -47,6 +47,10 @@ class DenseGridReader:
     region's present cells (ADR 0020) -- except for `pairs`, which answers every
     cell it names. Each region is one read of each of Z, the imputed mask, EAF
     and SE, with the EAF read handed to SE decoding (#253).
+
+    Z is read before the frequency plane. The order is measured, not cosmetic:
+    reading EAF first made a one-variant PheWAS 23% slower on OGS-00016
+    (44.2 ms against 35.9 ms, the same chunk reads in another order).
     """
 
     carries_n = False
@@ -158,14 +162,14 @@ class DenseGridReader:
         assert rows is not None
         if len(rows) == 1:
             row = int(rows[0])
-            eaf = self._eaf.read_row(row, want_imputed=True)
             z = self._z.row(row)[None, :]
+            eaf = self._eaf.read_row(row, want_imputed=True)
             se = self._se.row(row, eaf=eaf.values)[None, :]
             values = np.asarray(eaf.values)[None, :]
             flags = None if eaf.imputed is None else np.asarray(eaf.imputed)[None, :]
         else:
-            block = self._eaf.read_rows(rows, want_imputed=True)
             z = self._z.rows(rows)
+            block = self._eaf.read_rows(rows, want_imputed=True)
             se = (
                 self._se.band(int(rows[0]), int(rows[-1]) + 1, eaf=block.values)
                 if _contiguous(rows)
@@ -182,8 +186,8 @@ class DenseGridReader:
         if len(rows) == 0 or len(cols) == 0:
             empty = np.empty((len(rows), len(cols)), dtype=np.float32)
             return _Grid(rows, cols, empty, empty, empty, None, True, False)
-        block = self._eaf.read_block(rows, cols, want_imputed=True)
         z = self._z.block(rows.tolist(), cols.tolist())
+        block = self._eaf.read_block(rows, cols, want_imputed=True)
         se = self._se.block(rows.tolist(), cols.tolist(), eaf=block.values)
         return _Grid(rows, cols, z, se, np.asarray(block.values), block.imputed, True, False)
 
@@ -191,8 +195,8 @@ class DenseGridReader:
         """The cells `(rows[i], cols[i])`, elementwise."""
         rows, cols = cells.vi, cells.ai
         assert rows is not None and cols is not None
-        points = self._eaf.read_points(rows, cols, want_imputed=True)
         z = self._z.points(rows, cols)
+        points = self._eaf.read_points(rows, cols, want_imputed=True)
         se = self._se.points(rows, cols, eaf=points.values)
         return _Grid(rows, cols, z, se, np.asarray(points.values), points.imputed, False, True)
 

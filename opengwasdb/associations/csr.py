@@ -116,11 +116,13 @@ class CsrReader:
         start, end = csr.span(analysis_index)
         if start == end:
             return self._empty()
+        variants = csr.variant_index(start, end)
+        z = csr.z_slice(start, end)
         eaf = csr.eaf_slice_read(start, end, want_imputed=True)
         return Inspection.of(
-            csr.variant_index(start, end),
+            variants,
             analysis_index,
-            csr.z_slice(start, end),
+            z,
             csr.se_slice(start, end, analysis_index=analysis_index, eaf=eaf.values),
             eaf.values,
             eaf.imputed,
@@ -139,7 +141,12 @@ class CsrReader:
         if len(wanted) == 0:
             return self._empty()
         low, high = int(wanted.min()), int(wanted.max())
-        first, last = self._by_variant.rows_for_variant_range(low, high)
+        # One variant reads its two offsets in one call; a range reads its ends.
+        first, last = (
+            self._by_variant.rows_for_variant(low)
+            if low == high
+            else self._by_variant.rows_for_variant_range(low, high)
+        )
         if first == last:
             return self._empty()
         block = self._by_variant.decode(low, high, first, last)
@@ -186,9 +193,10 @@ class CsrReader:
             return self._empty()
         unique, back = np.unique(positions, return_inverse=True)
         csr = self.structure
+        variants = csr.variant_index_at(unique)
         eaf = csr.eaf_at_read(unique, want_imputed=True)
         found = Inspection.of(
-            csr.variant_index_at(unique),
+            variants,
             csr.analysis_index_at(unique),
             csr.z_at(unique),
             csr.se_at(unique, eaf=eaf.values),
