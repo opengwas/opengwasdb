@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from cli_output import normalize_cli_output
+from liftover_fixtures import strand_vcf_rows, write_two_strand_chain
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
@@ -28,6 +29,7 @@ from opengwasdb.store.open import open_store
 from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.reference import (
+    ReverseStrandLiftError,
     extract_variant_reference,
     read_variant_reference,
 )
@@ -1271,6 +1273,63 @@ def test_hg19_variant_is_re_windowed_to_its_post_lift_position(tmp_path):
     assert _artifact_text(artifact) == _materialising_writer_output(
         manifest, n_workers=2, window_size_mb=0.05
     )
+
+
+def test_extraction_refuses_a_reverse_strand_lift(tmp_path):
+    """Issue #354: a reverse-strand block complements the alleles, and the
+    artifact's ``source_keys`` column carries the source's own pre-lift ones, so
+    the artifact would name the wrong ALID (and, for a palindromic pair, keep the
+    right one under the wrong sign). Extraction stops before writing it."""
+    chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
+    vcf = _make_vcf(tmp_path, "strand_rows", strand_vcf_rows())
+    manifest = _make_manifest(tmp_path, [("strand", vcf, "", "")])
+    out = tmp_path / "strand.variant-ref.tsv.gz"
+
+    with pytest.raises(ReverseStrandLiftError) as refused:
+        extract_variant_reference(
+            manifest, out, chain_file=chain, n_workers=2, window_size_mb=0.05
+        )
+
+    assert "2 source key(s)" in str(refused.value)
+    assert "2:1000:G:A" in str(refused.value)
+    assert not out.exists(), "a refused extraction must leave no artifact"
+
+
+def test_extraction_refuses_a_reverse_strand_indel(tmp_path):
+    """Issue #354: a reverse-strand indel's complement can keep the alleles in
+    their original order, so it swaps no statistic and only the chain block says
+    it was complemented. Its ALID differs all the same -- hg19 2:1000:A:AT lifts
+    to 2:999001:T:TA -- so the refusal follows the strand, not the swap."""
+    chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
+    vcf = _make_vcf(
+        tmp_path, "reverse_indel", ["2\t1000\t.\tA\tAT\t.\tPASS\t.\tES:SE:AF\t0.2:0.1:0.2\n"]
+    )
+    manifest = _make_manifest(tmp_path, [("indel", vcf, "", "")])
+    out = tmp_path / "indel.variant-ref.tsv.gz"
+
+    with pytest.raises(ReverseStrandLiftError) as refused:
+        extract_variant_reference(manifest, out, chain_file=chain, n_workers=2)
+
+    assert "1 source key(s)" in str(refused.value)
+    assert "2:1000:A:AT" in str(refused.value)
+    assert not out.exists(), "a refused extraction must leave no artifact"
+
+
+def test_extraction_writes_the_artifact_when_no_lift_reorients(tmp_path):
+    """The refusal is about orientation, not liftover: the same fixture's
+    forward-strand chromosome extracts as it did (issue #354)."""
+    chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
+    forward_rows = [row for row in strand_vcf_rows() if row.startswith("3\t")]
+    vcf = _make_vcf(tmp_path, "forward_rows", forward_rows)
+    manifest = _make_manifest(tmp_path, [("forward", vcf, "", "")])
+    artifact = tmp_path / "forward.variant-ref.tsv.gz"
+
+    result = extract_variant_reference(manifest, artifact, chain_file=chain, n_workers=2)
+
+    reference = read_variant_reference(artifact)
+    assert result.n_variants == 1
+    assert reference.alids == ["3:1000:A:G"]
+    assert reference.source_lookup[("3", 1_000, "G", "A")] == "3:1000:A:G"
 
 
 def test_liftover_failure_threshold_aggregates_across_windows_and_writes_nothing(tmp_path):

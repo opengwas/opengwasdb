@@ -59,6 +59,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 __all__ = [
+    "ReverseStrandLiftError",
     "VariantReference",
     "VariantReferenceExtraction",
     "expected_rsids_by_routed_key",
@@ -81,6 +82,23 @@ _ARTIFACT_COLUMNS = ("alid", "chromosome", "position", "a1", "a2", "source_keys"
 #: The artifact's first line, written as the first gzip member on the streaming
 #: all-hg38 path (issue #196).
 _ARTIFACT_HEADER = "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n"
+
+
+class ReverseStrandLiftError(ValueError):
+    """Extraction refuses a lift that puts any source key on the reverse strand.
+
+    A Variant Reference artifact names each source key's own ``(ref, alt)`` at
+    the key's post-lift position, so it can only describe a lift that left the
+    alleles as they read. A reverse-strand chain block complements them instead
+    (spec §4), which the artifact has no field to record: a single-pass build
+    reading it would name the wrong ALID, and a palindromic pair -- whose ALID
+    is the same under either projection -- would keep its name and lose its
+    sign. The block's strand, not the statistics, is what makes an artifact
+    unsafe: an indel's complement can keep the alleles in their original order,
+    so it swaps no statistic while still moving the ALID. Extraction therefore
+    stops rather than write an artifact that reads as a right answer (issue
+    #354).
+    """
 
 
 @dataclass(frozen=True)
@@ -175,12 +193,19 @@ class _LiftedBucket:
 
 @dataclass(frozen=True)
 class _StagedWindow:
-    """One pre-lift window's step-A result: sub-shards plus lift and drop counts."""
+    """One pre-lift window's step-A result: sub-shards plus lift and drop counts.
+
+    ``reverse_strand`` counts the window's hg19 keys the chain block put on the
+    reverse strand, and ``first_reverse_strand`` is the genomic-first of them,
+    so the parent can refuse the whole artifact naming one key (issue #354).
+    """
 
     buckets: tuple[_LiftedBucket, ...]
     attempts: int
     failures: int
     collisions: int
+    reverse_strand: int
+    first_reverse_strand: SourceKey | None
 
 
 @dataclass(frozen=True)
@@ -228,9 +253,10 @@ def extract_variant_reference(
     union is written as the ``*.variant-ref.tsv.gz`` artifact
     ``--variant-reference`` consumes. First-named rsids and the union follow the
     build's rule, so the two-stage store matches the one-command build; an empty
-    manifest, or one resolving no variants, fails loudly. ``window_size_mb`` and
-    ``reduction_batch_size`` shape the windowed tree-reduce (issue #188) and
-    never change the artifact; phase timings and shard counts ride on the result.
+    manifest, or one resolving no variants, fails loudly, as does one whose lift
+    puts a source key on the reverse strand, which the artifact cannot record (#354).
+    ``window_size_mb`` and ``reduction_batch_size`` shape the windowed tree-reduce (issue #188)
+    and never change the artifact; phase timings and shard counts ride on the result.
     ``map_spill_records`` bounds how many variants a map worker buffers before
     spilling to disk, so a worker's peak memory tracks that threshold rather
     than the size of its manifest slice (issue #194). A non-positive value
@@ -861,21 +887,31 @@ def _bucket_lifted_records(
     return buckets, len(collisions)
 
 
+def _source_key_order(key: SourceKey) -> tuple[tuple[int, str], int, str, str]:
+    """Genomic order for naming the first of several source keys."""
+    from opengwasdb.variants.normalise import chromosome_sort_key
+
+    return (chromosome_sort_key(key[0]), key[1], key[2], key[3])
+
+
 def _stage_liftover_window(task: _LiftStageTask) -> _StagedWindow:
     """Lift one pre-lift window and re-bucket the survivors by post-lift window.
 
     Both assemblies' final shards are read once, the hg19 rows are lifted with a
     per-worker cached LiftOver, ambiguous raw tuples are dropped from both, and
     each survivor is written to the intermediate sub-shard of the post-lift
-    window its hg38 locus falls in. Lift attempts and failures are counted; only
-    bucket paths and counts cross back (issue #197).
+    window its hg38 locus falls in. Lift attempts and failures are counted, as
+    are the keys the chain block put on the reverse strand; only bucket paths
+    and counts cross back (issues #197, #354).
     """
-    from opengwasdb.build.liftover import liftover_batch
+    from opengwasdb.build.liftover import lifted_rows
 
     hg38_records, hg19_records = _read_assembly_records(task.shards)
-    lifted, attempts, failures = liftover_batch(
+    rows, attempts, failures = lifted_rows(
         hg19_records, chain_file=task.chain_file, from_build="hg19", to_build="hg38"
     )
+    lifted = {key: row.alid for key, row in rows.items()}
+    reverse_strand = [key for key, row in rows.items() if row.strand == "-"]
     buckets, collisions = _bucket_lifted_records(
         hg38_records, hg19_records, lifted, task.size_bp
     )
@@ -886,7 +922,14 @@ def _stage_liftover_window(task: _LiftStageTask) -> _StagedWindow:
         with open(sub_shard_path, "w", encoding="utf-8") as handle:
             handle.writelines(lines)
         specs.append(_LiftedBucket(post_window, sub_shard_path))
-    return _StagedWindow(tuple(specs), attempts, failures, collisions)
+    return _StagedWindow(
+        tuple(specs),
+        attempts,
+        failures,
+        collisions,
+        len(reverse_strand),
+        min(reverse_strand, key=_source_key_order) if reverse_strand else None,
+    )
 
 
 def _read_lifted_records(
@@ -1004,6 +1047,30 @@ def _enforce_liftover_threshold(staged: Sequence[_StagedWindow], threshold: floa
         )
 
 
+def _refuse_reverse_strand_lift(staged: Sequence[_StagedWindow]) -> None:
+    """Refuse the artifact when the lift put any source key on the reverse strand.
+
+    Called between step A and step B: the sub-shards exist, but no post-lift
+    member, and therefore no artifact, has been written (issue #354).
+    """
+    reverse_strand = sum(stage.reverse_strand for stage in staged)
+    if not reverse_strand:
+        return
+    first = min(
+        (stage.first_reverse_strand for stage in staged if stage.first_reverse_strand is not None),
+        key=_source_key_order,
+    )
+    raise ReverseStrandLiftError(
+        f"{reverse_strand} source key(s) lift onto the reverse strand, which complements "
+        f"their alleles (first: {first[0]}:{first[1]}:{first[2]}:{first[3]}), and a "
+        f"Variant Reference artifact cannot record that orientation: it keeps every "
+        f"source key's own pre-lift alleles, so a single-pass build reading it would "
+        f"name the wrong ALID, and a palindromic pair would keep its ALID and lose its "
+        f"sign. Build this manifest two-pass, so the lift happens in Pass 1 and its "
+        f"orientation is applied (issue #354)."
+    )
+
+
 def _merge_lifted_windows(
     staged: Sequence[_StagedWindow], n_workers: int, work_dir: str
 ) -> list[_WindowArtifact]:
@@ -1035,7 +1102,9 @@ def _write_lifted_streaming_artifact(
     """Lift, re-window and concatenate every pre-lift window's records.
 
     Step A lifts each pre-lift window; the parent aggregates attempt/failure
-    counts and enforces the threshold before any post-lift member is written.
+    counts and enforces the threshold before any post-lift member is written,
+    and refuses a lift that put any key on the reverse strand, which would name
+    the artifact's variants on the source's strand (issue #354).
     Step B merges the intermediate sub-shards per post-lift window and compresses
     each; step C writes the header and appends the post-lift members in genomic
     order. No step reads a row or builds a site set in the parent (issue #197).
@@ -1059,6 +1128,7 @@ def _write_lifted_streaming_artifact(
                 collisions,
             )
         _enforce_liftover_threshold(staged, liftover_failure_threshold)
+        _refuse_reverse_strand_lift(staged)
         artifacts = _merge_lifted_windows(staged, n_workers, work_dir)
         return _finish_members(out, artifacts, write_start)
 
