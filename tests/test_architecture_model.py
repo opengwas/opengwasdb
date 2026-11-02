@@ -13,6 +13,7 @@ construction and could never disagree with it.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -233,3 +234,70 @@ def test_two_components_sharing_an_id_fail_naming_it(tmp_path: Path) -> None:
         "component 'store' is declared twice; ids must be unique"
         " in docs/architecture/components.yaml"
     )
+
+
+def _tracked_paths() -> list[str]:
+    """The files git tracks under `opengwasdb/`, as the site collector reads them."""
+    listed = subprocess.run(
+        ["git", "ls-files", "--", "opengwasdb/"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return listed.stdout.split()
+
+
+def test_this_repositorys_model_claims_every_engine_source_file() -> None:
+    tracked = _tracked_paths()
+    assert "opengwasdb/store/convert.py" in tracked  # the listing is not empty
+    assert "opengwasdb/build" not in tracked  # paths are files, not directories
+
+    assert check_model(load_model(MODEL_PATH), tracked) == []
+
+
+def test_the_model_holds_the_engines_fifteen_components() -> None:
+    model = load_model(MODEL_PATH)
+
+    assert [(entry["layer"], entry["name"]) for entry in model["layers"]] == [
+        (5, "Entry"),
+        (4, "Use and check"),
+        (3, "Layouts"),
+        (2, "Analysis"),
+        (1, "Storage and input"),
+        (0, "Foundations"),
+    ]
+    assert [component["id"] for component in model["components"]] == [
+        "readers",
+        "resolution",
+        "ancestry",
+        "variants",
+        "dense",
+        "ragged",
+        "hybrid",
+        "encoding",
+        "store",
+        "completion",
+        "validation",
+        "query",
+        "model",
+        "maintenance",
+        "cli",
+    ]
+    assert {component["container"] for component in model["components"]} == {"engine"}
+    # Decision 9 on opengwas/opengwasdb-stores#416: ADRs are placed by the code
+    # they cite and by component names in their titles, so the term lists go.
+    assert all("terms" not in component for component in model["components"])
+
+
+@pytest.mark.parametrize(
+    ("path", "owner"),
+    [
+        ("opengwasdb/version.py", "model"),
+        ("opengwasdb/build/ordered_pool.py", "model"),
+        ("opengwasdb/build/eaf_orientation.py", "resolution"),
+        ("opengwasdb/store/convert.py", "maintenance"),
+    ],
+)
+def test_a_moved_claim_sits_on_the_component_decision_8_moved_it_to(path: str, owner: str) -> None:
+    assert component_for_path(claims(load_model(MODEL_PATH)), path) == owner
