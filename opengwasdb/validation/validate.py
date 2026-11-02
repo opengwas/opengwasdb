@@ -14,7 +14,7 @@ from typing import Any, Literal
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.associations import State, Tally, non_canonical
+from opengwasdb.associations import Cells, DenseGridReader, State, Tally, non_canonical
 from opengwasdb.associations import present as present_cells
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.encoding import (
@@ -4333,18 +4333,17 @@ def _fidelity_blocks(
     Returns ``(z_block, se_block, row_index, col_index)`` where the index maps
     take each pair's variant/analysis index to its position in the block.
     """
-    root = store.arrays(mode="r")
     urows = sorted({pr[0] for pr in pairs})
     ucols = sorted({pr[1] for pr in pairs})
     ri = {r: i for i, r in enumerate(urows)}
     ci = {c: i for i, c in enumerate(ucols)}
-    encoding = store.manifest.encoding
-    return (
-        DenseZPlane.open(root, encoding).block(urows, ucols),
-        DenseSePlane.open(root, encoding).block(urows, ucols),
-        ri,
-        ci,
+    grid = DenseGridReader.open(
+        store.arrays(mode="r"), store.manifest.encoding, source=f"Dense Store Release {store.path}"
     )
+    # A cross region comes Analysis-major: one run of the rows per column.
+    found = grid.inspect(Cells.cross(urows, ucols))
+    shape = (len(ucols), len(urows))
+    return found.z.reshape(shape).T, found.se.reshape(shape).T, ri, ci
 
 
 def _compare_fidelity_cells(

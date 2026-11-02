@@ -232,8 +232,12 @@ def _open_component(store: OpenGWASDBStore, role: str, wanted: CompletionState) 
 
 def _open_overflow(store: OpenGWASDBStore, role: str) -> _Overflow:
     try:
+        # Observed by construction (ADR 0026): an Overflow never carries an imputed mask.
         reader = CsrReader.open(
-            store.path, store.manifest.encoding, source=f"the Overflow of {role} store {store.path}"
+            store.path,
+            store.manifest.encoding,
+            source=f"the Overflow of {role} store {store.path}",
+            requires_mask=False,
         )
         group = store.arrays(mode="r")["ragged"]
     except (OSError, ValueError, KeyError) as exc:

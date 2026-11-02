@@ -17,10 +17,11 @@ result, empty ones included, and a release without the plane never has the key
 Ordering -- `analysis()`, `phewas()`, `range_phewas()`, `range_by_analysis()`,
 and `lookup()` make no ordering guarantee beyond grouping (rows for one scan
 target are contiguous, not sorted); `lookup()` is Analysis-major on every
-layout, its rows grouped by Analysis in the order the request first names each. `top_hits()` returns genomic order -- sorted by
-`(analysis_index, variant_index)` -- on every adapter and every internal path
-(indexed and full-scan fallback alike), matching the `group.attrs["order"]` the
-top-hit index itself is built with.
+layout, its rows grouped by Analysis in the order the request first names each.
+`top_hits()` returns genomic order -- sorted by `(analysis_index, variant_index)`
+-- on every adapter and every internal path (indexed and full-scan fallback
+alike), matching the `group.attrs["order"]` the top-hit index itself is built
+with.
 
 observed_only / limit -- both apply as filter-then-limit everywhere they are
 accepted, on every internal path: `observed_only` narrows the result set
@@ -640,12 +641,13 @@ class RaggedStoreQuery(_StoreQueryBase):
         cutoff, so the whole-plane `z_all()` decode (plus the whole
         `variant_index` and `imputed` arrays) is never held (#252). The cutoff
         is `z_critical`, the one the index is built with, so a scan and an
-        index agree on the boundary.
+        index agree on the boundary. Each window is read through the reader,
+        which refuses a non-canonical marker the cutoff would otherwise drop.
         """
         cutoff = top_hits.z_critical(threshold)
         windows: list[np.ndarray] = []
         for start, stop in _chunk_windows(lo, hi, self._csr.scan_window):
-            mask = np.abs(self._csr.z_slice(start, stop)) >= cutoff
+            mask = np.abs(self._reader.z(start, stop)) >= cutoff
             if mask.any():
                 windows.append(np.where(mask)[0].astype(np.int64) + start)
         if not windows:
@@ -722,8 +724,13 @@ class HybridStoreQuery(_StoreQueryBase):
         self._dense = StoreQuery(self._dense_store)
         self._dense_to_shared = np.load(dense_to_shared_path(store.path)).astype("int32")
         # The Overflow at store/data.zarr/ragged.
+        # The Overflow is observed by construction (ADR 0026): it never carries an
+        # imputed mask, even in a Reference-Completed release, so it reads without one.
         self._overflow = CsrReader.open(
-            store.path, store.manifest.encoding, source=f"Ragged Overflow of {store.path}"
+            store.path,
+            store.manifest.encoding,
+            source=f"Ragged Overflow of {store.path}",
+            requires_mask=False,
         )
         self._csr = self._overflow.structure
         self._connection = store.index_connection()

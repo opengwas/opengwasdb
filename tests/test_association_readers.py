@@ -10,6 +10,7 @@ reader. The Indexed Variant Subset adapter is pinned to its own Dense release.
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from typing import NamedTuple
@@ -120,8 +121,11 @@ def _write_csr(path: Path, table: tuple[Cell, ...]) -> Path:
 
 
 def _readers(tmp_path: Path, table: tuple[Cell, ...]) -> dict[str, DenseGridReader | CsrReader]:
-    dense = DenseGridReader.open(_write_dense(tmp_path / "grid.zarr", table), ENCODING)
-    csr = CsrReader.open(_write_csr(tmp_path / "csr", table), ENCODING)
+    # A bare grid or sequence records no completion state; this one carries a mask.
+    dense = DenseGridReader.open(
+        _write_dense(tmp_path / "grid.zarr", table), ENCODING, requires_mask=True
+    )
+    csr = CsrReader.open(_write_csr(tmp_path / "csr", table), ENCODING, requires_mask=True)
     csr.open_variant_index(N_VARIANTS)
     return {"dense": dense, "csr": csr}
 
@@ -233,7 +237,7 @@ def test_a_region_holding_an_invalid_cell_is_refused_and_inspect_counts_it(
 
 
 def test_a_variant_region_without_the_index_is_refused(tmp_path) -> None:
-    csr = CsrReader.open(_write_csr(tmp_path / "csr", TABLE), ENCODING)
+    csr = CsrReader.open(_write_csr(tmp_path / "csr", TABLE), ENCODING, requires_mask=True)
     with pytest.raises(VariantIndexError):
         csr.read(Cells.variants([1]))
 
@@ -250,12 +254,11 @@ def test_n_rides_with_its_rows(tmp_path) -> None:
         z=ENCODING.z, se=ENCODING.se, eaf=EafEncoding(kind="absent"), n=_n_encoding()
     )
     writer.flush(tmp_path, encoding)
-    csr = CsrReader.open(tmp_path, encoding)
+    csr = CsrReader.open(tmp_path, encoding, requires_mask=False)
     assert csr.read(Cells.analysis(0))["n"].tolist() == [1000.0, 2000.0]
     assert csr.read(Cells.positions(np.array([1])))["n"].tolist() == [2000.0]
-    assert "n" not in DenseGridReader.open(_write_dense(tmp_path / "g", TABLE), ENCODING).read(
-        Cells.analysis(0)
-    )
+    grid = DenseGridReader.open(_write_dense(tmp_path / "g", TABLE), ENCODING, requires_mask=True)
+    assert "n" not in grid.read(Cells.analysis(0))
 
 
 def _n_encoding():
@@ -313,7 +316,7 @@ def test_a_completed_component_without_its_mask_is_refused(tmp_path) -> None:
     with pytest.raises(ValueError, match="carries no imputed mask"):
         CsrReader.open(csr, ENCODING, requires_mask=True)
     # Observed by construction (an Observed-Only release, a Hybrid's Overflow): read as such.
-    found = DenseGridReader.open(group, ENCODING).read(Cells.analysis(0))
+    found = DenseGridReader.open(group, ENCODING, requires_mask=False).read(Cells.analysis(0))
     assert set(found["association_status"].tolist()) == {"observed"}
 
 
@@ -403,8 +406,8 @@ def _grid(store: Path, component: str = "") -> DenseGridReader:
     return DenseGridReader.open(release.arrays(mode="r"), release.manifest.encoding)
 
 
-def _sequence(store: Path) -> CsrReader:
-    reader = CsrReader.open(store)
+def _sequence(store: Path, *, requires_mask: bool | None = None) -> CsrReader:
+    reader = CsrReader.open(store, requires_mask=requires_mask)
     reader.open_variant_index(len(_release(store).alid))
     return reader
 
@@ -602,7 +605,9 @@ def test_a_csr_region_decodes_the_source_and_the_panel_unmixed(ragged_residual) 
 
 def test_each_hybrid_component_reads_once_and_cuts_in_lockstep(hybrid_residual, monkeypatch):
     analysis = _release(hybrid_residual).analysis["trait_b"]
-    grid, overflow = _grid(hybrid_residual, "dense"), _sequence(hybrid_residual)
+    # The Overflow is observed by construction (ADR 0026), in a completed release too.
+    grid = _grid(hybrid_residual, "dense")
+    overflow = _sequence(hybrid_residual, requires_mask=False)
     # The Overflow's busiest Analysis: completion moved one crossover into the grid.
     busiest = int(np.argmax(np.diff(overflow.structure.offsets)))
     for label, reader, column in (
@@ -618,3 +623,46 @@ def test_each_hybrid_component_reads_once_and_cuts_in_lockstep(hybrid_residual, 
     _assert_observed_only_lockstep(
         grid.read(region), grid.read(region, observed_only=True), "dense component"
     )
+
+
+# ── a completed release read directly, without its mask ─────────────────────
+
+
+def _without_mask(store: Path, components: tuple[str, ...]) -> None:
+    """Delete the imputed mask, and the panel frequencies it would key, so the release
+    reads like a completion whose panel carried no EAF: nothing else refuses it."""
+    for component in components:
+        for name in ("imputed", "eaf_reference", "by_variant/imputed"):
+            shutil.rmtree(store / component / name, ignore_errors=True)
+    path = store / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["encoding"]["eaf"]["reference"] = False
+    path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def test_a_direct_open_of_a_completed_release_without_its_mask_is_refused(
+    dense_residual, ragged_residual, tmp_path
+) -> None:
+    """The reader infers the requirement from the release itself; no caller has to ask."""
+    dense = Path(shutil.copytree(dense_residual[0].store, tmp_path / "dense"))
+    _without_mask(dense, ("data.zarr",))
+    release = open_store(dense)
+    assert release.manifest.completion_state.value == "reference_completed"
+    with pytest.raises(ValueError, match="carries no imputed mask"):
+        DenseGridReader.open(release.arrays(mode="r"), release.manifest.encoding)
+    ragged = Path(shutil.copytree(ragged_residual[1].store, tmp_path / "ragged"))
+    _without_mask(ragged, (RAGGED_ZARR_PATH,))
+    with pytest.raises(ValueError, match="carries no imputed mask"):
+        CsrReader.open(ragged)
+
+
+def test_a_reader_that_cannot_tell_whether_a_mask_is_owed_refuses(tmp_path) -> None:
+    """A grid or sequence that records no completion state cannot say whether it owes
+    a mask; the caller must."""
+    group = _write_dense(tmp_path / "grid.zarr", TABLE)
+    with pytest.raises(ValueError, match="cannot tell"):
+        DenseGridReader.open(group, ENCODING)
+    csr = _write_csr(tmp_path / "csr", TABLE)  # its writer records the state; drop it
+    del zarr.open_group(csr / RAGGED_ZARR_PATH, mode="r+").attrs["completion_state"]
+    with pytest.raises(ValueError, match="cannot tell"):
+        CsrReader.open(csr, ENCODING)

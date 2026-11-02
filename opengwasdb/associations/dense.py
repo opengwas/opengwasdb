@@ -14,6 +14,7 @@ from opengwasdb.associations.record import (
     State,
     Status,
     classify,
+    mask_required,
     require_mask,
 )
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
@@ -57,14 +58,20 @@ class DenseGridReader:
     carries_n = False
 
     def __init__(
-        self, group: Any, encoding: StoreEncoding, *, source: str, requires_mask: bool = False
+        self,
+        group: Any,
+        encoding: StoreEncoding,
+        *,
+        source: str,
+        requires_mask: bool | None = None,
     ) -> None:
         self._group = group
         self._encoding = encoding
         self._source = source
         # Checked before any plane opens, so the refusal names the mask.
         self.has_imputed = "imputed" in group
-        require_mask(requires_mask, self.has_imputed, source)
+        required = mask_required(requires_mask, group.attrs.get("completion_state"), source)
+        require_mask(required, self.has_imputed, source)
         self._z = DenseZPlane.open(group, encoding)
         self._se = DenseSePlane.open(group, encoding)
         # Opened on first use: a top-hit index carrying its decoded EAF must not
@@ -78,10 +85,12 @@ class DenseGridReader:
         encoding: StoreEncoding,
         *,
         source: str = "Dense grid",
-        requires_mask: bool = False,
+        requires_mask: bool | None = None,
     ) -> DenseGridReader:
-        """`requires_mask`: a Reference-Completed grid without its imputed mask is
-        refused rather than read as all-observed (spec §15)."""
+        """A Reference-Completed grid without its imputed mask is refused rather than
+        read as all-observed (spec §15). Whether the grid is completed is the
+        group's own `completion_state` record unless the caller says
+        (`requires_mask`); a grid that records none is refused."""
         return cls(group, encoding, source=source, requires_mask=requires_mask)
 
     @property

@@ -13,20 +13,24 @@ landed before anything is asserted about a query.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from shutil import rmtree
+from shutil import copytree, rmtree
 
 import numpy as np
 import pytest
 import residual_stores
-from presence_fixtures import CELLS, build_stores, plant
+import zarr
+from presence_fixtures import CELLS, build_stores, csr_position, plant
 from test_hybrid_build import HG19_POS_1, HG19_POS_2, HG19_POS_3, _make_manifest, _make_vcf, _panel
 from test_query_metadata_reads import _BUILDERS
 from test_ragged_residual_completion import RaggedResidualScenario
 
 from opengwasdb.associations import Associations, InvalidAssociations
+from opengwasdb.encoding import StoreCodec
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
+from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.top_hits import TopHitTier
 
@@ -199,3 +203,30 @@ def test_hybrid_lookup_is_analysis_major_across_both_components(hybrid_two_sided
             for analysis_id in order:  # and each run holds both components' rows
                 rows = result["variant_index"][[i == analysis_id for i in ids]]
                 assert on_panel[rows].any() and (~on_panel[rows]).any(), analysis_id
+
+
+# ── the Ragged top-hit scan ──────────────────────────────────────────────────
+
+
+def test_the_ragged_top_hit_scan_refuses_a_non_canonical_z(stores, tmp_path) -> None:
+    """A scan thresholds Z, and a NaN clears no cutoff, so a scan that did not check
+    the marker would drop the cell where every other read refuses it (spec §15)."""
+    store = Path(copytree(stores["ragged"], tmp_path / "store"))
+    rmtree(store / "data.zarr" / "top_hits")  # no tier: the scan answers
+    manifest_path = store / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    encoding = StoreManifest.load(store).encoding
+    ragged = zarr.open_group(store / "data.zarr" / "ragged", mode="r+")
+    z = StoreCodec(encoding).decode_z(np.asarray(ragged["z"][:])).astype(np.float16)
+    del ragged["z"]
+    ragged.create_array("z", data=z)  # the same values, in a float plane
+    manifest["encoding"]["z"] = {"kind": "float16"}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    position = csr_position(ragged, 1, 0)
+    ragged["z"][position] = np.array([0x7E01], np.uint16).view(np.float16)[0]
+    ragged["se"][position] = np.nan  # SE's canonical marker: only Z's payload is wrong
+    with query_store(store) as query:
+        with pytest.raises(InvalidAssociations, match="non_canonical"):
+            query.analysis("trait_a")
+        with pytest.raises(InvalidAssociations, match="non_canonical"):
+            query.top_hits(threshold=5e-4)

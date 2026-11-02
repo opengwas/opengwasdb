@@ -133,6 +133,25 @@ def _odd_markers(
     return odd
 
 
+def mask_required(stated: bool | None, completion_state: object, source: str) -> bool:
+    """Whether a component must carry an imputed mask, as its reader decides it.
+
+    A caller that knows says so: a Hybrid's Ragged Overflow is observed by
+    construction (ADR 0026) whatever its release is. Otherwise the component's
+    own record of its completion state settles it, and a component that records
+    none is refused rather than read as observed (spec §15).
+    """
+    if stated is not None:
+        return stated
+    if completion_state is None:
+        raise ValueError(
+            f"{source}: cannot tell whether this component is Reference-Completed, and so "
+            "whether an imputed mask must say which associations are imputed; it records "
+            "no completion state, so the caller must say (requires_mask)"
+        )
+    return str(completion_state) == "reference_completed"
+
+
 def require_mask(required: bool, present: bool, source: str) -> None:
     """Refuse a Reference-Completed component that carries no imputed mask.
 

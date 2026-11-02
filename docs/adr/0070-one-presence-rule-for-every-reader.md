@@ -50,6 +50,10 @@ no association at a missing cell, so Dense queries still omit them (ADR 0020).
 A CSR stores a row for every attempted pair, so Ragged and Overflow queries
 still return those rows, labelled `missing`.
 
+Every read applies the rule before it filters a plane by value: the Ragged
+top-hit scan reads each Z window through the reader, which refuses a
+non-canonical marker that a cutoff comparison would otherwise drop.
+
 A cell spec §15 forbids -- one marker without the other, an imputed flag
 outside {0, 1}, a flag on a missing cell, or a float marker that is a NaN other
 than the canonical one (`np.nan`'s bits: `0x7e00` in a `float16` plane, which a
@@ -85,11 +89,15 @@ refused.
 
 **Absence is never read as observed.** A Reference-Completed component's
 imputed mask says which associations are imputed, so a reader opened on a
-completed Dense grid or Ragged sequence without one refuses it. A Top-Hit tier
-that predates its own `imputed` array takes each hit's flag from the
-component's mask. Only a component observed by construction -- an
-Observed-Only release, or a Hybrid's Ragged Overflow (ADR 0026) -- reads with no
-mask, every present association observed.
+completed Dense grid or Ragged sequence without one refuses it. The reader
+decides this itself, from the component's own record of its completion state
+(a Dense grid's `completion_state` attribute; a sequence's release manifest,
+or its own attribute without one); a component that records no state is
+refused unless its caller says. A Top-Hit tier that predates its own `imputed`
+array takes each hit's flag from the component's mask. Only a component
+observed by construction -- an Observed-Only release, or a Hybrid's Ragged
+Overflow, whose callers say so explicitly (ADR 0026) -- reads with no mask,
+every present association observed.
 
 **`lookup()` is Analysis-major on every layout.** Dense returned
 variant-major; Ragged, Analysis-major. ADR 0033 promised grouping only, so the
@@ -108,6 +116,13 @@ same way, the Dense Component's before the Overflow's within each Analysis.
   2 Nov 2026 every `float16` SE plane published (OGS-00001, -00002, -00004, -00005,
   -00007, -00011 and -00027, both components and each by-variant copy) held
   12.92 billion NaN markers, all canonical; every `z` plane is `int16_fixed`.
+- SE is decoded in this module and in twelve named places besides, each listed
+  with its reason in `tests/test_association_reads_guard.py`: four decodes in
+  `validate` and the subset validation that share an EAF read the check
+  already holds, the plane openers those use, `validate`'s whole-sequence Ragged
+  SE decode, the subset's own decoder that `SubsetReader` reads through, and
+  the Hybrid observed-view check's codec round trip. The guard recognises a
+  decode by what is called, so any other fails it.
 - `check-observed-view` counts by the readers' States, but does not yet count a
   non-canonical marker on its own; such a cell is missing to it, as before.
 - Two parts of the approved interface are deferred, neither a regression, since

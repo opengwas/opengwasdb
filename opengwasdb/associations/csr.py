@@ -7,8 +7,9 @@ from pathlib import Path
 
 import numpy as np
 
+from opengwasdb.associations import record
 from opengwasdb.associations.cells import Cells
-from opengwasdb.associations.record import Associations, Inspection, require_mask
+from opengwasdb.associations.record import Associations, Inspection, InvalidAssociations, State
 from opengwasdb.encoding import StoreEncoding
 from opengwasdb.layouts.ragged.by_variant import (
     ByVariantReader,
@@ -21,6 +22,11 @@ from opengwasdb.store import arrays as store_arrays
 
 #: A by-variant index decode's columns, in `Inspection.of`'s order.
 _block_columns = itemgetter("variant_index", "analysis_index", "z", "se", "eaf", "imputed")
+
+
+def _manifest(path: Path) -> StoreManifest | None:
+    """The release manifest beside a sequence, or None for a bare sequence."""
+    return StoreManifest.load(path) if (path / "manifest.json").exists() else None
 
 
 class CsrReader:
@@ -41,16 +47,26 @@ class CsrReader:
         encoding: StoreEncoding | None = None,
         *,
         source: str,
-        requires_mask: bool = False,
+        requires_mask: bool | None = None,
     ) -> None:
         self._path = Path(store_path)
+        manifest = _manifest(self._path)
         if encoding is None:
-            encoding = StoreManifest.load(self._path).encoding
+            if manifest is None:
+                raise ValueError(f"{source}: no manifest to read the encoding from")
+            encoding = manifest.encoding
         self._encoding = encoding
         self._source = source
-        if requires_mask:  # checked before any plane opens, so the refusal names the mask
-            group = store_arrays.open_group(self._path / RAGGED_ZARR_PATH)
-            require_mask(requires_mask, "imputed" in group, source)
+        # Checked before any plane opens, so the refusal names the mask.
+        group = store_arrays.open_group(self._path / RAGGED_ZARR_PATH)
+        state = (
+            manifest.completion_state
+            if manifest is not None
+            else group.attrs.get("completion_state")
+        )
+        record.require_mask(
+            record.mask_required(requires_mask, state, source), "imputed" in group, source
+        )
         self.structure = RaggedCSRReader(store_path, encoding)
         self._by_variant: ByVariantReader | None = None
         self._offsets: np.ndarray | None = None
@@ -62,11 +78,13 @@ class CsrReader:
         encoding: StoreEncoding | None = None,
         *,
         source: str | None = None,
-        requires_mask: bool = False,
+        requires_mask: bool | None = None,
     ) -> CsrReader:
-        """`requires_mask` says the component is Reference-Completed: its imputed
-        mask is what says which rows are imputed, so a component without one is
-        refused here rather than read as all-observed (spec §15)."""
+        """A Reference-Completed component's imputed mask says which rows are
+        imputed, so one without it is refused rather than read as all-observed
+        (spec §15). Whether the component is completed is its release's manifest
+        -- or, with none, its sequence's `completion_state` record -- unless the
+        caller says (`requires_mask`); a component that records neither is refused."""
         return cls(
             store_path,
             encoding,
@@ -100,6 +118,25 @@ class CsrReader:
         self._by_variant = ByVariantReader(self._path, self._encoding, n_axis=n_variants)
 
     # ── the interface ───────────────────────────────────────────────────────
+
+    def z(self, start: int, stop: int) -> np.ndarray:
+        """Decoded Z of the flat rows `[start, stop)`, for a scan that thresholds Z alone.
+
+        A non-canonical marker is refused here, as every read refuses one (spec §15):
+        a NaN clears no cutoff, so a scan that compared it would drop the row.
+        """
+        z = self.structure.z_slice(start, stop)
+        odd = record.non_canonical(z)
+        if odd.any():
+            rows = np.flatnonzero(odd).astype(np.int64) + int(start)
+            raise InvalidAssociations(
+                self._source,
+                self.structure.variant_index_at(rows),
+                self.structure.analysis_index_at(rows),
+                np.full(len(rows), State.NON_CANONICAL, dtype=np.int8),
+            )
+        return z
+
 
     def read(self, cells: Cells, *, observed_only: bool = False) -> Associations:
         """The region's rows; raises `InvalidAssociations` on a §15-invalid one."""
