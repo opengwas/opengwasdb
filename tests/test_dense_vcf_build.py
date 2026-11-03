@@ -1783,7 +1783,7 @@ def test_cli_invalid_options_fail_at_parse_time_dense(tmp_path):
         "build-dense-vcf",
         str(tmp_path / "manifest.tsv"),
         str(tmp_path / "out.opengwasdb"),
-        "--store-id", "s",
+        "--admission-record", str(tmp_path / "admission"), "--store-id", "s",
         "--release-id", "r",
     ]
 
@@ -2233,6 +2233,7 @@ def test_cli_variant_reference_builds_single_pass(tmp_path):
         app,
         [
             "build-dense-vcf", str(manifest), str(store),
+            "--admission-record", str(tmp_path / "admission"),
             "--store-id", "s", "--release-id", "r",
             "--variant-reference", str(reference),
         ],

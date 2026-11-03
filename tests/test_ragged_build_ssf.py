@@ -691,6 +691,7 @@ def _invoke_cli_build(manifest, filtered_dir, out, *extra: str):
             str(manifest),
             str(filtered_dir),
             str(out),
+            "--admission-record", f"{out}.admission",
             "--store-id", "cli-test",
             "--release-id", "v1",
             *extra,

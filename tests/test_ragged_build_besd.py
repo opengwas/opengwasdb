@@ -137,6 +137,7 @@ def test_cli_build_ragged_besd_refuses_to_guess_the_coverage(tmp_path):
     result = CliRunner().invoke(
         app,
         ["build-ragged-besd", str(prefix), str(out),
+         "--admission-record", str(tmp_path / "admission"),
          "--store-id", "cli-test", "--release-id", "v1"],
     )
 
@@ -699,6 +700,7 @@ def test_cli_build_ragged_besd_accepts_analyses_option(tmp_path):
             "build-ragged-besd",
             str(prefix),
             str(out),
+            "--admission-record", str(tmp_path / "admission"),
             "--store-id", "cli-test",
             "--release-id", "v1",
             "--analyses", str(manifest),

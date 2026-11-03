@@ -112,8 +112,13 @@ below that changes what a rule admits moves it.
 - A Source Reader yields a row with no effect, with a NaN z, where it used to skip
   it. Admission drops it, so every consumer of `stream_associations` must too: the
   phenotype-SD pipeline does.
-- A record sits beside every build's Store. A release workflow that renames a
-  `.partial` Store into place must name the record's directory itself.
+- A record sits beside every build's Store. Every builder command requires
+  `--admission-record DIR`, and exits before writing anything without it. A
+  default beside `OUTPUT_PATH` would follow a staging name: the
+  `opengwasdb-stores` workflow builds `store.opengwasdb.partial` and renames only
+  that, which would leave `store.opengwasdb.partial.admission` beside no Store.
+  Refusing a missing flag fails louder than deriving a final name the package
+  cannot know. The Python API keeps its default, `OUTPUT_PATH.admission`.
 - Routing collects an imputation score only for an Analysis that declared one
   (`route_column(imputation_scores=False)`). Collecting it for every row cost the
   Dense VCF Pass 2 8–12%.

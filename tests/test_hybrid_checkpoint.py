@@ -155,7 +155,8 @@ def _cli_args(manifest: Path, reference: Path, store: Path, *extra: str) -> list
     """The `build-hybrid` command line this module's CLI tests use."""
     return [
         "build-hybrid", str(manifest), str(store),
-        "--variant-reference", str(reference), *extra,
+        "--variant-reference", str(reference), "--admission-record", f"{store}.admission",
+        *extra,
     ]
 
 

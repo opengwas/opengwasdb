@@ -231,6 +231,8 @@ def test_build_hybrid_from_catalogue_cli(tmp_path):
             str(store),
             "--reference-panel",
             str(_panel(tmp_path)),
+            "--admission-record",
+            str(tmp_path / "admission"),
             "--store-id",
             "eur-store",
             "--release-id",
@@ -246,3 +248,6 @@ def test_build_hybrid_from_catalogue_cli(tmp_path):
     assert summary["ancestry"] == "EUR"
     assert summary["n_kept"] == 2 and summary["n_total"] == 4
     assert _ancestry_map(store) == {"eur_a": "EUR", "eur_b": "EUR"}
+    # The record is where the caller named it, and not beside the Store.
+    assert (tmp_path / "admission" / "admission.json").is_file()
+    assert not (tmp_path / "eur_cli.opengwasdb.admission").exists()

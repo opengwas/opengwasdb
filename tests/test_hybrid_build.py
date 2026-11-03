@@ -1112,7 +1112,7 @@ def test_cli_invalid_options_fail_at_parse_time_hybrid(tmp_path):
         str(tmp_path / "out.opengwasdb"),
         "--reference-panel",
         panel,
-        "--store-id",
+        "--admission-record", str(tmp_path / "admission"), "--store-id",
         "s",
         "--release-id",
         "r",
@@ -1544,6 +1544,7 @@ class TestVariantReference:
             [
                 "build-hybrid", str(manifest), str(store),
                 "--variant-reference", str(reference),
+                "--admission-record", str(tmp_path / "admission"),
                 "--store-id", "s", "--release-id", "r",
             ],
         )

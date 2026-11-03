@@ -33,6 +33,7 @@ from opengwasdb.admission import (
 from opengwasdb.layouts.dense import DenseBuildResult
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from opengwasdb.layouts.ragged import RaggedBuildResult
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.model.maf_policy import MafPolicy, MafState
@@ -645,24 +646,27 @@ def test_a_dense_vcf_build_applies_a_declared_info_filter(tmp_path: Path):
     assert analysis["info"]["below_threshold"] == 1
 
 
-def test_a_ragged_ssf_build_applies_a_declared_maf_filter(tmp_path: Path):
-    """D2 for `build-ragged-ssf`, which used to ignore a declared MAF floor."""
+def _ragged_ssf_with_frequencies(
+    tmp_path: Path, frequencies: list[str], maf_threshold: str | None = None
+) -> tuple[Path, RaggedBuildResult]:
+    """A Ragged SSF Store of one Analysis, `trait_a`, one row per frequency
+    cell at 1:100000, 1:200000, ..., under a declared MAF floor if one is given."""
     filtered = tmp_path / "filtered"
     filtered.mkdir()
     ssf_fixture._write_filtered(
         filtered / "trait_a.tsv.gz",
         [
-            {"chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
+            {"chromosome": "1", "base_pair_location": 100_000 * (i + 1), "effect_allele": "A",
              "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
-             "effect_allele_frequency": 0.3},
-            {"chromosome": "1", "base_pair_location": 200_000, "effect_allele": "A",
-             "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
-             "effect_allele_frequency": 0.001},
+             "effect_allele_frequency": af}
+            for i, af in enumerate(frequencies)
         ],
     )
+    floor = ("", "") if maf_threshold is None else ("\tmaf_threshold", f"\t{maf_threshold}")
     manifest = tmp_path / "manifest.tsv"
     manifest.write_text(
-        "analysis_index\tanalysis_id\tfiltered_file\tmaf_threshold\n0\ttrait_a\ttrait_a.tsv.gz\t0.01\n",
+        f"analysis_index\tanalysis_id\tfiltered_file{floor[0]}\n"
+        f"0\ttrait_a\ttrait_a.tsv.gz{floor[1]}\n",
         encoding="utf-8",
     )
     store = tmp_path / "ssf.opengwasdb"
@@ -670,6 +674,12 @@ def test_a_ragged_ssf_build_applies_a_declared_maf_filter(tmp_path: Path):
         manifest, filtered, store, store_id="s", release_id="r",
         association_coverage="signals_only",
     )
+    return store, result
+
+
+def test_a_ragged_ssf_build_applies_a_declared_maf_filter(tmp_path: Path):
+    """D2 for `build-ragged-ssf`, which used to ignore a declared MAF floor."""
+    store, result = _ragged_ssf_with_frequencies(tmp_path, ["0.3", "0.001"], "0.01")
 
     (analysis,) = _analyses(store)
     assert analysis["dropped"] == {"maf_below_threshold": 1}
@@ -751,27 +761,7 @@ def test_a_vcf_build_counts_the_frequencies_it_makes_absent(tmp_path: Path, hybr
 
 
 def test_a_ragged_ssf_build_counts_the_frequencies_it_makes_absent(tmp_path: Path):
-    filtered = tmp_path / "filtered"
-    filtered.mkdir()
-    ssf_fixture._write_filtered(
-        filtered / "trait_a.tsv.gz",
-        [
-            {"chromosome": "1", "base_pair_location": 100_000 * (i + 1), "effect_allele": "A",
-             "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
-             "effect_allele_frequency": af}
-            for i, af in enumerate(["0.3", "1.0", "1.5", "NA"])
-        ],
-    )
-    manifest = tmp_path / "manifest.tsv"
-    manifest.write_text(
-        "analysis_index\tanalysis_id\tfiltered_file\n0\ttrait_a\ttrait_a.tsv.gz\n",
-        encoding="utf-8",
-    )
-    store = tmp_path / "ssf.opengwasdb"
-    build_ragged_from_ssf(
-        manifest, filtered, store, store_id="s", release_id="r",
-        association_coverage="signals_only",
-    )
+    store, _ = _ragged_ssf_with_frequencies(tmp_path, ["0.3", "1.0", "1.5", "NA"])
 
     (analysis,) = _analyses(store)
     assert (analysis["admitted"], analysis["eaf_made_absent"]) == (4, 2)
@@ -834,27 +824,7 @@ def test_a_declared_info_filter_s_drops_are_counted_and_not_logged(tmp_path: Pat
 def test_a_declared_maf_filter_s_drops_are_counted_and_not_logged(tmp_path: Path):
     """D8 for both of the MAF filter's reasons: a frequency below the floor, and
     none at all."""
-    filtered = tmp_path / "filtered"
-    filtered.mkdir()
-    ssf_fixture._write_filtered(
-        filtered / "trait_a.tsv.gz",
-        [
-            {"chromosome": "1", "base_pair_location": 100_000 * (i + 1), "effect_allele": "A",
-             "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
-             "effect_allele_frequency": af}
-            for i, af in enumerate(["0.3", "0.001", "NA"])
-        ],
-    )
-    manifest = tmp_path / "manifest.tsv"
-    manifest.write_text(
-        "analysis_index\tanalysis_id\tfiltered_file\tmaf_threshold\n0\ttrait_a\ttrait_a.tsv.gz\t0.01\n",
-        encoding="utf-8",
-    )
-    store = tmp_path / "ssf.opengwasdb"
-    build_ragged_from_ssf(
-        manifest, filtered, store, store_id="s", release_id="r",
-        association_coverage="signals_only",
-    )
+    store, _ = _ragged_ssf_with_frequencies(tmp_path, ["0.3", "0.001", "NA"], "0.01")
 
     (analysis,) = _analyses(store)
     assert analysis["dropped"] == {"maf_missing": 1, "maf_below_threshold": 1}

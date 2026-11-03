@@ -1,7 +1,9 @@
 - **Every Observed-Only build writes an Association Admission record beside the
-  Store (`--admission-record DIR`, default `OUTPUT_PATH.admission`; issue
-  #357).** `build-hybrid`, `build-dense-vcf`, `build-ragged-ssf` and
-  `build-ragged-besd` all write it. `admission.json` lists, for each Analysis in
+  Store (`--admission-record DIR`, required on the command line; issue #357).**
+  `build-dense`, `build-dense-vcf`, `build-hybrid`,
+  `build-hybrid-from-catalogue`, `build-ragged-ssf` and `build-ragged-besd` all
+  write it. Called from Python, a builder writes it to `OUTPUT_PATH.admission`
+  unless `admission_record=` names another directory. `admission.json` lists, for each Analysis in
   Manifest Row order, the rows it examined and admitted and the rows it dropped,
   by reason. A row dropped for a reason other than a declared INFO or MAF filter
   is also logged by source key, in `dropped/<analysis_index>.tsv.gz`. The record

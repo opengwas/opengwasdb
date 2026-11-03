@@ -238,16 +238,18 @@ _SOURCE_ASSEMBLY_OPTION = Annotated[
 _ON_RSID_CONFLICT_OPTION = Annotated[
     RsidConflictPolicy, typer.Option(help=_ON_RSID_CONFLICT_HELP)
 ]
-_ADMISSION_RECORD_OPTION = Annotated[
-    Path | None,
-    typer.Option(
-        "--admission-record",
-        help=(
-            "Directory for the build's Association Admission record: what each Analysis "
-            "examined, admitted and dropped, by reason. Default: OUTPUT_PATH.admission."
-        ),
+#: Required, with no default (#357): a default beside OUTPUT_PATH would follow a
+#: staging name such as `store.opengwasdb.partial`, and a release workflow that
+#: renames the Store into place would leave the record behind under that name.
+_ADMISSION_RECORD_OPTION: Any = typer.Option(
+    ...,
+    "--admission-record",
+    help=(
+        "Directory for the build's Association Admission record: what each Analysis "
+        "examined, admitted and dropped, by reason, and the rows it logged. Required. "
+        "Name it for the Store's final path (e.g. STORE.admission), not a staging one."
     ),
-]
+)
 
 
 _REFERENCE_BUILD_OPTION = Annotated[
@@ -689,7 +691,7 @@ def build_dense_command(
     release_id: str = typer.Option(...),
     reference_assembly: str = typer.Option("GRCh37"),
     overwrite: bool = typer.Option(False),
-    admission_record: _ADMISSION_RECORD_OPTION = None,
+    admission_record: Path = _ADMISSION_RECORD_OPTION,
 ) -> None:
     """Build a Dense Observed-Only store from a tiny TSV/CSV source.
 
@@ -835,7 +837,7 @@ def build_dense_vcf_command(
     ),
     variant_reference: Annotated[Path | None, typer.Option(help=_VARIANT_REFERENCE_HELP)] = None,
     column_map: _COLUMN_MAP_OPTION = None,
-    admission_record: _ADMISSION_RECORD_OPTION = None,
+    admission_record: Path = _ADMISSION_RECORD_OPTION,
 ) -> None:
     """Build a Dense Observed-Only store from a manifest of GWAS-VCF files.
 
@@ -890,7 +892,7 @@ def build_hybrid_command(
     assembly: _SOURCE_ASSEMBLY_OPTION = None,
     column_map: _COLUMN_MAP_OPTION = None,
     on_rsid_conflict: _ON_RSID_CONFLICT_OPTION = RsidConflictPolicy.REFUSE,
-    admission_record: _ADMISSION_RECORD_OPTION = None,
+    admission_record: Path = _ADMISSION_RECORD_OPTION,
 ) -> None:
     """Build a Hybrid store (Dense Component + Ragged Overflow) from a VCF manifest.
 
@@ -973,6 +975,7 @@ def build_hybrid_from_catalogue_command(
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
     column_map: _COLUMN_MAP_OPTION = None,
+    admission_record: Path = _ADMISSION_RECORD_OPTION,
 ) -> None:
     """Subset the Catalogue to one ancestry and build a Hybrid store from it.
 
@@ -991,7 +994,7 @@ def build_hybrid_from_catalogue_command(
         n_workers=n_workers, chunk_shape=(chunk_variants, chunk_analyses),
         eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf, column_map=column_map,
-        association_coverage=association_coverage,
+        association_coverage=association_coverage, admission_record=admission_record,
     )
     typer.echo(
         json.dumps(
@@ -1501,7 +1504,7 @@ def build_ragged_besd_command(
     eaf_reference: _BESD_EAF_REFERENCE_OPTION = None,
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
-    admission_record: _ADMISSION_RECORD_OPTION = None,
+    admission_record: Path = _ADMISSION_RECORD_OPTION,
 ) -> None:
     """Build a Ragged Observed-Only store from BESD files.
 
@@ -1557,7 +1560,7 @@ def build_ragged_ssf_command(
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
-    admission_record: _ADMISSION_RECORD_OPTION = None,
+    admission_record: Path = _ADMISSION_RECORD_OPTION,
 ) -> None:
     """Build a Ragged Observed-Only store from filtered GWAS-SSF files.
 
