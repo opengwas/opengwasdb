@@ -46,6 +46,7 @@ from opengwasdb.build.vcf_source import (
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.interface import (
     ReaderAssociation,
+    ReferenceAllele,
     SiteMetrics,
     SourceVariant,
     StreamTally,
@@ -387,6 +388,7 @@ class GwasVcfReader:
                 se=se,
                 stored_effect_scale=self.stored_effect_scale,
                 eaf=eaf,
+                reference=ReferenceAllele.REF,
             )
 
     def stream_variants(self) -> Iterator[SourceVariant]:

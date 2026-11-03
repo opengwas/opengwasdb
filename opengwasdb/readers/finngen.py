@@ -1,9 +1,10 @@
 """FinnGen R13 tabular summary-statistics SourceReader.
 
 FinnGen publishes one tab-delimited, bgzip-compressed file per endpoint on
-GRCh38.  ``alt`` is the effect allele; the reader therefore converts
-``beta / sebeta`` to the package-wide canonical A1 orientation while leaving
-the source REF/ALT labels intact on streamed records.
+GRCh38.  ``ref`` is the reference allele and ``alt`` the effect allele; the
+reader therefore converts ``beta / sebeta`` to the package-wide canonical A1
+orientation while leaving the source REF/ALT labels intact on streamed
+records, each declaring ``ref`` the reference.
 """
 
 from __future__ import annotations
@@ -78,6 +79,7 @@ def _iter_rows(
                 se=tabular.parse_positive_float(row.get("sebeta")),
                 af_alt=tabular.parse_af(row.get("af_alt"), frequencies),
                 rsid=_first_rsid(row.get("rsids")),
+                reference=interface.ReferenceAllele.REF,
             )
 
 

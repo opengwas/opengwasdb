@@ -360,7 +360,9 @@ def _resolve_column_hybrid(
         # A two-pass axis is the sources' whole union, so nothing folds an
         # unmatched row onto it later: it is dropped here, and logged.
         gate.unplaced(Reason.OFF_AXIS, unmatched.keys)
-        unmatched = Unmatched([], unmatched.z[:0], unmatched.se[:0], unmatched.eaf[:0])
+        unmatched = Unmatched(
+            [], unmatched.z[:0], unmatched.se[:0], unmatched.eaf[:0], unmatched.reference[:0]
+        )
     divisor = row.se_divisor
     return (
         (dense.index, dense.z, apply_se_divisor(dense.se, divisor), dense.eaf),

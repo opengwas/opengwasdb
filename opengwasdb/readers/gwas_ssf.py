@@ -86,6 +86,7 @@ from opengwasdb.readers.effect_source import (
 from opengwasdb.readers.interface import (
     ImputationScoreDeclaration,
     ReaderAssociation,
+    ReferenceAllele,
     SiteMetrics,
     SourceVariant,
     StreamTally,
@@ -210,6 +211,7 @@ def _tabular_row(
     score_column: str | None = None,
     frequencies: FrequencyTally | None = None,
     faults: IdentityFaults | None = None,
+    reference: ReferenceAllele = ReferenceAllele.UNDECLARED,
 ) -> TabularRow | None:
     """One source row as a `TabularRow`, or `None` when it names no canonical variant.
 
@@ -250,6 +252,7 @@ def _tabular_row(
         effect_from_odds_ratio_fallback=statistics.effect_from_odds_ratio_fallback,
         se_from_ci=statistics.se_from_ci,
         se_from_p_value=statistics.se_from_p_value,
+        reference=reference,
     )
 
 
@@ -292,13 +295,15 @@ def _iter_rows(
     effect_source: EffectSource | None = None,
     score_column: str | None = None,
     tally: StreamTally | None = None,
+    reference: ReferenceAllele = ReferenceAllele.UNDECLARED,
 ) -> Iterator[TabularRow]:
     """Parse each row of a filtered/harmonised GWAS-SSF file once.
 
     `effect_source` is the caller's resolution for this file, so the property
     and the stream cannot disagree; when omitted it is resolved here, which is
     what keeps `stream_full_row_metrics` a faithful reference for the
-    projection's effect handling.
+    projection's effect handling. `reference` is what every row declares of
+    its alleles.
     """
     with _open_text(path) as fh:
         reader = csv.DictReader(fh, delimiter="\t")
@@ -309,7 +314,7 @@ def _iter_rows(
         faults, frequencies = tally.faults, tally.frequencies
         for row in reader:
             parsed = _tabular_row(
-                row, source, sample_size_column, score_column, frequencies, faults
+                row, source, sample_size_column, score_column, frequencies, faults, reference
             )
             if parsed is not None:
                 yield parsed
@@ -383,12 +388,18 @@ class GwasSsfReader:
     translation of a provider file into these columns (issue #281), which is
     how the generic tabular reader reads every mapped collection by this
     reader's rules.
+
+    `reference` is which allele the rows declare the genome's reference.
+    GWAS-SSF names an effect and an other allele and declares neither, so a
+    GWAS-SSF file is `UNDECLARED`, harmonised or not; a Column Map whose
+    `other_allele` is a `ref` column declares it (`REF`).
     """
 
     path: SourcePath
     stored_effect_scale: StoredEffectScale = StoredEffectScale.SD
     chunk_rows: int = DEFAULT_CHUNK_ROWS
     imputation_score_declaration: ImputationScoreDeclaration | None = None
+    reference: ReferenceAllele = ReferenceAllele.UNDECLARED
 
     @property
     def imputation_score_column(self) -> str | None:
@@ -429,6 +440,7 @@ class GwasSsfReader:
                 effect_source=source,
                 score_column=self.imputation_score_column,
                 tally=tally,
+                reference=self.reference,
             ),
             self.stored_effect_scale,
         )

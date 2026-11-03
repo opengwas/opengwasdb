@@ -9,7 +9,6 @@ counts the ones the Store's `info_score` provenance reports.
 from __future__ import annotations
 
 import csv
-import gzip
 import json
 from pathlib import Path
 
@@ -19,7 +18,7 @@ import pytest
 import test_dense_vcf_build as dense_fixture
 import test_info_score_hybrid_build as info_fixture
 import test_ragged_build_ssf as ssf_fixture
-from admission_helpers import ragged_ssf_store, vcf_store
+from admission_helpers import logged, ragged_ssf_store, record_analyses, vcf_store
 
 from opengwasdb.admission import (
     ADMISSION_RULES,
@@ -218,12 +217,6 @@ def test_a_dense_vcf_build_writes_its_record(tmp_path: Path):
     assert record.read_bytes() == (admission_record_for(two) / "admission.json").read_bytes()
 
 
-def _dropped(record: Path, index: int) -> list[list[str]]:
-    """One Analysis's logged drops, header first."""
-    with gzip.open(record / "dropped" / f"{index}.tsv.gz", "rt", encoding="utf-8") as fh:
-        return [line.rstrip("\n").split("\t") for line in fh]
-
-
 def test_a_ragged_ssf_build_logs_each_unusable_se(tmp_path: Path):
     """The SE of 1:300000 does not parse and that of 1:400000 is 0: both are
     dropped, counted and logged by ALID. 1:600000's beta is infinite, so its z
@@ -245,7 +238,7 @@ def test_a_ragged_ssf_build_logs_each_unusable_se(tmp_path: Path):
     assert (first["examined"], first["admitted"]) == (5, 2)
     assert first["dropped"] == {"se_unusable": 2, "z_nonfinite": 1}
     assert (second["examined"], second["admitted"], second["dropped"]) == (2, 2, {})
-    assert _dropped(record, 0) == [
+    assert logged(record, 0) == [
         ["source_key", "reason"],
         ["1:300000:C:T", "se_unusable"],
         ["1:400000:C:T", "se_unusable"],
@@ -283,8 +276,8 @@ def test_a_ragged_besd_build_logs_each_unusable_se_by_esi_row(tmp_path: Path):
     record = admission_record_for(store)
     written = json.loads((record / "admission.json").read_text(encoding="utf-8"))
     assert [(a["examined"], a["admitted"]) for a in written["analyses"]] == [(2, 1), (2, 1)]
-    assert _dropped(record, 0)[1:] == [["esi:1", "se_unusable"]]
-    assert _dropped(record, 1)[1:] == [["esi:4", "se_unusable"]]
+    assert logged(record, 0)[1:] == [["esi:1", "se_unusable"]]
+    assert logged(record, 1)[1:] == [["esi:4", "se_unusable"]]
 
 
 def test_a_vcf_record_with_no_effect_is_logged_by_its_source_coordinate(tmp_path: Path):
@@ -296,9 +289,9 @@ def test_a_vcf_record_with_no_effect_is_logged_by_its_source_coordinate(tmp_path
     ]
     store = _one_vcf_analysis(tmp_path, rows)
     record = admission_record_for(store)
-    (analysis,) = _analyses(store)
+    (analysis,) = record_analyses(store)
     assert (analysis["examined"], analysis["admitted"]) == (2, 1)
-    assert _dropped(record, 0)[1:] == [
+    assert logged(record, 0)[1:] == [
         [f"1:{dense_fixture.HG19_POS_2}:C:T", "effect_missing"]
     ]
 
@@ -354,7 +347,7 @@ def test_a_vcf_record_with_an_unusable_se_is_dropped_and_logged(tmp_path: Path):
     record = admission_record_for(store)
     first, _ = json.loads((record / "admission.json").read_text(encoding="utf-8"))["analyses"]
     assert (first["examined"], first["admitted"], first["dropped"]) == (3, 0, {"se_unusable": 3})
-    assert [row[1] for row in _dropped(record, 0)[1:]] == ["se_unusable"] * 3
+    assert [row[1] for row in logged(record, 0)[1:]] == ["se_unusable"] * 3
 
 
 def test_a_dense_record_with_an_unusable_se_is_dropped_not_raised(tmp_path: Path):
@@ -371,9 +364,9 @@ def test_a_dense_record_with_an_unusable_se_is_dropped_not_raised(tmp_path: Path
     )
     store, result = _dense_from_records(tmp_path, source)
     record = admission_record_for(store)
-    (analysis,) = _analyses(store)
+    (analysis,) = record_analyses(store)
     assert (analysis["examined"], analysis["admitted"]) == (3, 1)
-    assert _dropped(record, 0)[1:] == [
+    assert logged(record, 0)[1:] == [
         ["1:100:A:G", "se_unusable"],
         ["1:200:A:G", "se_unusable"],
     ]
@@ -426,7 +419,7 @@ def test_a_row_with_an_infinite_z_is_dropped_and_logged_not_refused(tmp_path: Pa
     store, _ = _dense_from_records(tmp_path, source)
 
     record = admission_record_for(store)
-    assert _dropped(record, 0)[1:] == [
+    assert logged(record, 0)[1:] == [
         ["1:100:A:G", "z_nonfinite"],
         ["1:200:A:G", "z_nonfinite"],
     ]
@@ -492,10 +485,10 @@ def test_a_dense_vcf_build_collapses_agreeing_duplicates_and_drops_conflicting_o
     ]
     store = _one_vcf_analysis(tmp_path, rows)
     record = admission_record_for(store)
-    (analysis,) = _analyses(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {"duplicate_collapsed": 1, "duplicate_conflicting": 2}
     assert (analysis["examined"], analysis["admitted"]) == (4, 1)
-    (conflict,) = {row[0] for row in _dropped(record, 0)[1:]}
+    (conflict,) = {row[0] for row in logged(record, 0)[1:]}
     assert conflict.endswith(":C:T")
 
 
@@ -512,7 +505,7 @@ def test_a_dense_build_resolves_duplicate_records_rather_than_raising(tmp_path: 
         encoding="utf-8",
     )
     store, result = _dense_from_records(tmp_path, source)
-    (analysis,) = _analyses(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {"duplicate_collapsed": 1, "duplicate_conflicting": 2}
     assert result.n_variants == 1
 
@@ -528,6 +521,7 @@ def test_the_hybrid_off_reference_spill_resolves_its_duplicates():
         np.array([1.0, 1.0, 2.0, -2.0, 3.0], dtype=np.float32),
         np.full(5, 0.1, dtype=np.float32),
         np.full(5, np.nan, dtype=np.float32),
+        np.zeros(5, dtype=np.int8),
     )
     gate = counting_gate(AnalysisRules("A"))
     keys, z, *_ = _off_reference_spill(unmatched, 1.0, gate)
@@ -539,13 +533,6 @@ def test_the_hybrid_off_reference_spill_resolves_its_duplicates():
         ("1:9:C:T", Reason.DUPLICATE_CONFLICTING),
         ("1:9:C:T", Reason.DUPLICATE_CONFLICTING),
     ]
-
-
-def _analyses(store: Path) -> list[dict]:
-    """A Store's Admission record, one entry per Analysis."""
-    text = (admission_record_for(store) / "admission.json").read_text(encoding="utf-8")
-    analyses: list[dict] = json.loads(text)["analyses"]
-    return analyses
 
 
 def _one_vcf_analysis(tmp_path: Path, rows: list[str]) -> Path:
@@ -588,9 +575,9 @@ def test_a_single_pass_dense_build_logs_the_rows_its_reference_lacks(tmp_path: P
         source_assembly="hg38", variant_reference=reference,
     )
 
-    (analysis,) = _analyses(store)
+    (analysis,) = record_analyses(store)
     assert (analysis["admitted"], analysis["dropped"]) == (1, {"off_axis": 1})
-    assert _dropped(admission_record_for(store), 0)[1:] == [["1:2000:C:T", "off_axis"]]
+    assert logged(admission_record_for(store), 0)[1:] == [["1:2000:C:T", "off_axis"]]
 
 
 @pytest.mark.parametrize("folds", [True, False])
@@ -642,7 +629,7 @@ def test_a_dense_vcf_build_applies_a_declared_info_filter(tmp_path: Path):
     store = tmp_path / "dense.opengwasdb"
     build_dense_from_vcf_manifest(manifest, store, store_id="s", release_id="r")
 
-    (analysis,) = _analyses(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {"effect_missing": 1, "info_below_threshold": 1}
     assert analysis["info"]["below_threshold"] == 1
 
@@ -665,7 +652,7 @@ def test_a_ragged_ssf_build_applies_a_declared_maf_filter(tmp_path: Path):
     """D2 for `build-ragged-ssf`, which used to ignore a declared MAF floor."""
     store, result = _ragged_ssf_with_frequencies(tmp_path, ["0.3", "0.001"], "0.01")
 
-    (analysis,) = _analyses(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {"maf_below_threshold": 1}
     assert result.n_associations == 1
 
@@ -726,7 +713,7 @@ def test_a_vcf_build_counts_the_frequencies_it_makes_absent(tmp_path: Path, hybr
     panel = [f"1:{1000 * (i + 1)}:A:G" for i in range(len(_AF_ROWS))] if hybrid else None
     store = vcf_store(tmp_path, _vcf_with_frequencies(tmp_path), panel)
 
-    (analysis,) = _analyses(store)
+    (analysis,) = record_analyses(store)
     assert (analysis["examined"], analysis["admitted"]) == (5, 5)
     assert analysis["eaf_made_absent"] == 3
 
@@ -734,7 +721,7 @@ def test_a_vcf_build_counts_the_frequencies_it_makes_absent(tmp_path: Path, hybr
 def test_a_ragged_ssf_build_counts_the_frequencies_it_makes_absent(tmp_path: Path):
     store, _ = _ragged_ssf_with_frequencies(tmp_path, ["0.3", "1.0", "1.5", "NA"])
 
-    (analysis,) = _analyses(store)
+    (analysis,) = record_analyses(store)
     assert (analysis["admitted"], analysis["eaf_made_absent"]) == (4, 2)
 
 
@@ -753,7 +740,7 @@ def test_a_dense_build_stores_no_frequency_outside_the_interval(tmp_path: Path):
     )
     store, _ = _dense_from_records(tmp_path, source)
 
-    assert [(a["admitted"], a["eaf_made_absent"]) for a in _analyses(store)] == [(2, 1), (2, 2)]
+    assert [(a["admitted"], a["eaf_made_absent"]) for a in record_analyses(store)] == [(2, 1), (2, 2)]
     with (store / "analyses.tsv").open(encoding="utf-8") as fh:
         rows = csv.DictReader(fh, delimiter="\t")
         scopes = {row["analysis_id"]: row["eaf_scope"] for row in rows}
@@ -787,9 +774,9 @@ def test_a_declared_info_filter_s_drops_are_counted_and_not_logged(tmp_path: Pat
     store = _hybrid(tmp_path, _three_analysis_manifest(tmp_path), 1)
 
     record = admission_record_for(store)
-    for index, analysis in enumerate(_analyses(store)):
+    for index, analysis in enumerate(record_analyses(store)):
         assert analysis["dropped"]["info_below_threshold"] > 0
-        assert [reason for _, reason in _dropped(record, index)[1:]] == ["effect_missing"]
+        assert [reason for _, reason in logged(record, index)[1:]] == ["effect_missing"]
 
 
 def test_a_declared_maf_filter_s_drops_are_counted_and_not_logged(tmp_path: Path):
@@ -797,6 +784,6 @@ def test_a_declared_maf_filter_s_drops_are_counted_and_not_logged(tmp_path: Path
     none at all."""
     store, _ = _ragged_ssf_with_frequencies(tmp_path, ["0.3", "0.001", "NA"], "0.01")
 
-    (analysis,) = _analyses(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {"maf_missing": 1, "maf_below_threshold": 1}
     assert not (admission_record_for(store) / "dropped" / "0.tsv.gz").exists()

@@ -5,10 +5,14 @@
   write it. Called from Python, a builder writes it to `OUTPUT_PATH.admission`
   unless `admission_record=` names another directory. `admission.json` lists, for each Analysis in
   Manifest Row order, the rows it examined and admitted and the rows it dropped,
-  by reason. A row dropped for a reason other than a declared INFO or MAF filter
-  is also logged by source key, in `dropped/<analysis_index>.tsv.gz`. The record
-  is not part of the Store Release, so the Store's bytes and its
-  `format_version` are unchanged. Pass 2 workers write it one part per Analysis,
+  by reason, under the rule set it names (`"rules": "admission/10"`). A row
+  dropped by a declared INFO or MAF filter, or collapsed into an agreeing
+  duplicate, is counted only; every other dropped row is also logged, by source
+  key, in `dropped/<analysis_index>.tsv.gz`. The reasons include
+  `duplicate_reversed_indel`: an indel row dropped because its declared
+  reference allele is the one its ALID spells second (ADR 0072; #381 and #382
+  follow up). The record is not part of the Store Release, so the Store's
+  bytes and its `format_version` are unchanged. Pass 2 workers write it one part per Analysis,
   so it is the same at any `--n-workers`. A resumed `--checkpoint` build reads
   its counts back from those parts, and refuses a record that has lost one.
 - **The Ragged builders' unusable-SE drops are counted and logged

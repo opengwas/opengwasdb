@@ -30,6 +30,7 @@ from opengwasdb.readers.interface import (
     ImputationScore,
     ImputationScoreStatus,
     ReaderAssociation,
+    ReferenceAllele,
     SiteMetrics,
     SourceVariant,
     parse_imputation_score,
@@ -1479,10 +1480,12 @@ class TabularRow(TabularMetricsRow):
     """Format-neutral row after source-specific column mapping.
 
     :class:`TabularMetricsRow` plus the source's own identifier for the row --
-    blank when the source records none, never fabricated.
+    blank when the source records none, never fabricated -- and which of `ref`
+    and `alt` the format declares the reference allele, if it declares one.
     """
 
     rsid: str = ""
+    reference: ReferenceAllele = ReferenceAllele.UNDECLARED
 
 
 def stream_associations(
@@ -1510,6 +1513,7 @@ def stream_associations(
             stored_effect_scale=stored_effect_scale,
             eaf=eaf,
             imputation_score=row.imputation_score,
+            reference=row.reference,
         )
 
 

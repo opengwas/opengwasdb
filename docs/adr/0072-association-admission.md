@@ -79,6 +79,7 @@ name the decisions issue #357 took on the rules that differed.
 | `maf_missing` | a `FILTERED` MAF policy finds no usable frequency | no | ADR 0054; every builder since D2 |
 | `maf_below_threshold` | MAF is below a `FILTERED` threshold | no | ADR 0054; every builder since D2 |
 | `duplicate_collapsed` | it agrees on z and SE with an earlier row for its (variant, Analysis), whose association it is | no | D5 |
+| `duplicate_reversed_indel` | it is an indel whose declared reference allele its ALID spells second, at a (variant, Analysis) whose rows disagree, and the row spelling it first is kept | yes | D5, reversed indels |
 | `duplicate_conflicting` | the rows for its (variant, Analysis) disagree on z or SE: all are dropped | yes | D5 |
 | `off_axis` | no axis of the Store holds its variant, and nothing will place it later | yes | D6 |
 
@@ -88,6 +89,39 @@ routing (an axis's rows and the Hybrid's off-reference keys), and Ragged SSF and
 `build-dense` on their own rows. It replaces routing's last-wins, Ragged SSF's
 own rule and `build-dense`'s refusal. The fold's merge of an off-reference entry
 with an existing Overflow one still keeps the later (issue #223).
+
+Two conflicting rows can be two variants. An insertion and a deletion at one
+position share an ALID, because the ALID sorts its alleles: BMI_IRN's
+`1:827587` `G>GGGGCC` (alt frequency 0.83%) and `GGGGCC>G` (0.05%) are both
+`1:827587:G:GGGGCC`. They are two alleles of a repeat, not one variant read
+from opposite alleles, and every conflicting pair in OGS-00003 is of this kind.
+When the source declares which allele is the reference, the row whose
+reference allele the ALID spells first is kept: for an anchored indel, the
+insertion, which is the variant the ALID reads as. The other row is dropped and
+logged (`duplicate_reversed_indel`). The rule judges ref and alt, not effect
+and other: FinnGen's effect allele is its alt, so its insertion is the row
+whose z is negated onto the ALID. A source that declares no reference has
+its pair dropped as conflicting, and so is every other conflicting duplicate,
+SNVs included, since two SNV rows at one ALID are one variant seen from
+opposite alleles. Dropping both rows was rejected because it loses a cell
+base kept; this rule keeps every one.
+
+Which formats declare the reference allele (`ReferenceAllele`, carried on each
+`ReaderAssociation` and through routing as one byte a row):
+- GWAS-VCF's `REF`, FinnGen r13's `ref`, and a Column Map with
+  `ref_alt_effect_is_alt`, whose rows are the FinnGen reader's, do.
+- GWAS-SSF names an effect and an other allele, and its documentation does not
+  make the other allele the reference, harmonised or not. Nor do a
+  `build-dense` record's alleles, a BESD `.esi` row's A1 and A2, or an
+  `effect_and_other` Column Map. None declares one.
+- A `ref_alt_and_effect_allele` Column Map (dbGaP MVP) is treated as declaring
+  none: nothing this package holds documents that the deposit's `ref` is the
+  genome's reference allele.
+
+This is an interim rule. The ALID still spells a reversed pair as one variant:
+#381 gives an indel a ref-first ALID, which is an ADR and a format change, and
+#382 corrects the published cells that hold a deletion's statistics under the
+insertion's ALID.
 
 `off_axis` is a Dense VCF row its axis lacks (a lift failure, a variant a
 Variant Reference omits), a two-pass Hybrid row no axis holds (it used to be
@@ -119,7 +153,7 @@ the Source Reader read, so it can say how much of a source's frequency column
 the Store does not hold. A `.esi` frequency is a variant's, which every probe
 shares, so `build-ragged-besd` logs the file's count once instead.
 
-`admission.json`'s `"rules"` names the rule set's version, `admission/9`. A
+`admission.json`'s `"rules"` names the rule set's version, `admission/10`. A
 change to what a rule admits, or to what the record counts, moves it.
 
 ## Consequences

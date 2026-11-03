@@ -464,6 +464,7 @@ class ColumnMapReader:
             self.stored_effect_scale,
             self.chunk_rows,
             self.imputation_score_declaration,
+            self.column_map.conventions.alleles.reference,
         )
 
     @property

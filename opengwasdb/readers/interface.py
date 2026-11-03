@@ -108,6 +108,23 @@ def parse_imputation_score(value: str | None, *, declared: bool) -> ImputationSc
     return ImputationScore(number, ImputationScoreStatus.OUT_OF_RANGE)
 
 
+class ReferenceAllele(StrEnum):
+    """Which of a row's two alleles its source declares to be the genome's reference.
+
+    Declared by the format, never inferred: GWAS-VCF's `REF` and FinnGen's
+    `ref` are the reference allele (`REF`, the row's own `ref`), while
+    GWAS-SSF, BESD and an effect/other Column Map name an effect allele and an
+    other one, which need not be the reference (`UNDECLARED`). `ALT` is a row
+    whose `alt` its source declares the reference. Association Admission reads
+    it only to tell the two alleles of an indel apart when an insertion and a
+    deletion share one ALID (issue #357).
+    """
+
+    UNDECLARED = "undeclared"
+    REF = "ref"
+    ALT = "alt"
+
+
 @dataclass(frozen=True)
 class ReaderAssociation:
     """One source association's position, effect, and precision.
@@ -128,6 +145,8 @@ class ReaderAssociation:
     source file itself (issue #17): it is Analytical Metadata a reader
     receives from its caller (ultimately the build manifest, validated
     against issue #16's schema) and attaches to every association it yields.
+    `reference` says which of `ref` and `alt` the source declares to be the
+    reference allele, if it declares one.
     """
 
     chromosome: str
@@ -140,6 +159,7 @@ class ReaderAssociation:
     eaf: float | None = None
     # Present only with an independent provider-backed declaration (#175).
     imputation_score: ImputationScore = ImputationScore()
+    reference: ReferenceAllele = ReferenceAllele.UNDECLARED
 
     def __post_init__(self) -> None:
         # An unusable `se` (NaN, not positive, not finite) is the source's, as

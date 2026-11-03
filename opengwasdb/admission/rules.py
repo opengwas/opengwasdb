@@ -41,9 +41,13 @@ is the `maf_missing` a Store's provenance reports.
 After the rules, a row is judged against the other rows that reach its place
 on the Variant Index. Rows that agree on z and SE are one association and
 collapse to the first (`duplicate_collapsed`); rows that disagree are all
-dropped (`duplicate_conflicting`), since nothing says which is right. A row
-whose variant no axis of the Store holds is dropped too (`off_axis`), where a
-build has nowhere else to put it.
+dropped (`duplicate_conflicting`), since nothing says which is right. The one
+exception is a reversed indel: an insertion and a deletion at one position
+share an ALID, because the ALID sorts its alleles, so when the source declares
+which allele is the reference the row whose reference allele the ALID spells
+first is kept and the other dropped (`duplicate_reversed_indel`). A row whose
+variant no axis of the Store holds is dropped too (`off_axis`), where a build
+has nowhere else to put it.
 
 A row dropped by a declared filter, or collapsed into its first, is counted
 only; a row dropped for any other reason is also logged, by its source key,
@@ -99,6 +103,9 @@ class Reason(StrEnum):
     #: A row that agreed with an earlier row for its (variant, Analysis), whose
     #: association it is: not lost, so counted only.
     DUPLICATE_COLLAPSED = "duplicate_collapsed"
+    #: An indel row whose declared reference allele its ALID spells second, at
+    #: a (variant, Analysis) that keeps the row spelling it first.
+    DUPLICATE_REVERSED_INDEL = "duplicate_reversed_indel"
     #: A row for a (variant, Analysis) whose rows disagree on z or SE.
     DUPLICATE_CONFLICTING = "duplicate_conflicting"
     #: A row whose variant no axis of the Store holds, so routing places it nowhere.
@@ -115,6 +122,7 @@ LOGGED: frozenset[Reason] = frozenset(
         Reason.SE_UNUSABLE,
         Reason.EFFECT_MISSING,
         Reason.Z_NONFINITE,
+        Reason.DUPLICATE_REVERSED_INDEL,
         Reason.DUPLICATE_CONFLICTING,
         Reason.OFF_AXIS,
     }

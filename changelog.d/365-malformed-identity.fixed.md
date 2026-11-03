@@ -10,4 +10,4 @@
   `11_KI270927v1_alt` is still a chromosome. No published Store holds such an
   ALID (a census of every release), so no published release changes.
   `SourceReader.stream_associations` takes a `StreamTally` in place of D7's
-  `FrequencyTally`, and the record's rule set is `admission/9`.
+  `FrequencyTally`.
