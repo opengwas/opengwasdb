@@ -298,3 +298,31 @@ def test_a_vcf_record_with_no_effect_is_logged_by_its_source_coordinate(tmp_path
     assert _dropped(record, 0)[1:] == [
         [f"1:{dense_fixture.HG19_POS_2}:C:T", "effect_missing"]
     ]
+
+
+def test_a_dense_build_from_records_writes_its_record(tmp_path: Path):
+    """Each Analysis's records pass its gate, in the order the Analyses first
+    appear, which is the order of the Store's columns."""
+    from opengwasdb.build.observed import build_dense_observed_from_sources
+
+    source = tmp_path / "records.tsv"
+    source.write_text(
+        "analysis_id\tchromosome\tposition\teffect_allele\tother_allele\tbeta\tse\n"
+        "B\t1\t100\tA\tG\t0.2\t0.1\n"
+        "A\t1\t100\tA\tG\t0.3\t0.1\n"
+        "B\t1\t200\tC\tT\t0.1\t0.05\n",
+        encoding="utf-8",
+    )
+    store = tmp_path / "dense.opengwasdb"
+    build_dense_observed_from_sources(
+        [source], store, store_id="s", release_id="r", reference_assembly="GRCh38"
+    )
+
+    written = json.loads(
+        (admission_record_for(store) / "admission.json").read_text(encoding="utf-8")
+    )
+    assert written["command"] == "build-dense"
+    assert [(a["analysis_id"], a["examined"], a["admitted"]) for a in written["analyses"]] == [
+        ("B", 2, 2),
+        ("A", 1, 1),
+    ]

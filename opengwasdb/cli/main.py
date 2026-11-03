@@ -689,8 +689,12 @@ def build_dense_command(
     release_id: str = typer.Option(...),
     reference_assembly: str = typer.Option("GRCh37"),
     overwrite: bool = typer.Option(False),
+    admission_record: _ADMISSION_RECORD_OPTION = None,
 ) -> None:
-    """Build a Dense Observed-Only store from a tiny TSV/CSV source."""
+    """Build a Dense Observed-Only store from a tiny TSV/CSV source.
+
+    --admission-record names where Association Admission's record goes (#357).
+    """
 
     result = build_dense_observed_from_sources(
         [source_path],
@@ -699,6 +703,7 @@ def build_dense_command(
         release_id=release_id,
         reference_assembly=reference_assembly,
         overwrite=overwrite,
+        admission_record=admission_record,
         association_coverage=association_coverage,
     )
     typer.echo(

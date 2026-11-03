@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb.admission import AdmissionRecord, AnalysisRules, SourceRows, admission_record_for
 from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding import (
     DenseEafPlane,
@@ -94,13 +95,16 @@ def build_dense_observed_store(
     dtype: str = DEFAULT_DTYPE,
     overwrite: bool = False,
     association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
+    admission_record: str | Path | None = None,
 ) -> DenseBuildResult:
     """Write a Dense Observed-Only Store Release from normalised associations.
 
     ``association_coverage`` is a build input (issue #298), and a Dense matrix can
     carry only ``gwas``: every cell it holds is a (variant, Analysis) the source
     either reported or did not, so a narrower coverage has no representation
-    here (`coverage_for_layout`, ADR 0064).
+    here (`coverage_for_layout`, ADR 0064). Each Analysis's records pass its
+    Admission gate, which writes ``admission_record`` (beside the Store unless
+    named, #357).
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.DENSE)
 
@@ -109,6 +113,7 @@ def build_dense_observed_store(
 
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
+        records = _admitted_records(records, admission_record_for(out, admission_record))
         variants = _collect_variants(records)
         analyses = _collect_analyses(records)
         z, se, eaf = _scatter_records(records, variants, analyses)
@@ -135,6 +140,29 @@ def build_dense_observed_store(
         build_top_hit_indexes(staged.path, encoding=encoding)
         write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
         return DenseBuildResult(output_path=out, n_variants=len(variants), n_analyses=len(analyses))
+
+
+def _admitted_records(
+    records: list[NormalisedAssociation], directory: Path
+) -> list[NormalisedAssociation]:
+    """The records each Analysis's Admission gate keeps, in source order.
+
+    Analyses are judged in the order they first appear, which is the order the
+    Store's columns take (`_collect_analyses`).
+    """
+    by_analysis: dict[str, list[int]] = {}
+    for position, record in enumerate(records):
+        by_analysis.setdefault(record.analysis_id, []).append(position)
+    record_ = AdmissionRecord.open(directory, list(by_analysis), command="build-dense")
+    keep = np.zeros(len(records), dtype=bool)
+    for analysis_id, positions in by_analysis.items():
+        with record_.gate(AnalysisRules(analysis_id)) as gate:
+            eaf = [records[i].eaf for i in positions]
+            keep[positions] = gate.source_rows(
+                SourceRows(eaf=np.array([np.nan if v is None else v for v in eaf]))
+            )
+    record_.finish()
+    return [record for record, kept in zip(records, keep.tolist(), strict=True) if kept]
 
 
 def _scatter_records(
