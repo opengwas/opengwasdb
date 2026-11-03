@@ -399,6 +399,44 @@ def test_a_non_canonical_z_in_the_target_is_counted_and_fails(tmp_path, pair):
     assert "non_canonical_marker" in verdict["failures"]
 
 
+# --- a part that was not compared is unchecked, not zero (issue #375) ------
+
+
+def test_differing_analyses_report_the_uncompared_counters_as_unchecked(tmp_path, pair):
+    """Analyses the two Stores do not list alike are not compared, cell by cell (issue #375).
+
+    The planted Z is in the part the sample would have compared, so a counter reading
+    0 would claim a clean census of a cell nobody looked at. The verdict still fails on
+    the Analyses, which is the structural count.
+    """
+    _, completed, _ = pair
+    position = _flat(completed, 0, "1:900000:A:G")
+    before = RaggedCSRReader(completed).get_analysis(0).z.copy()
+    _target_group(completed)["z"][position] += 1
+    assert not np.array_equal(RaggedCSRReader(completed).get_analysis(0).z, before)
+    path = completed / "analyses.tsv"
+    header, *lines = path.read_text().splitlines()
+    assert len(lines) == N_ANALYSES
+    renamed = lines[0].replace("eur_rich", "eur_rich_renamed")
+    assert renamed != lines[0], "fixture must hold the Analysis this test renames"
+    path.write_text("\n".join([header, renamed, *lines[1:]]) + "\n", encoding="utf-8")
+
+    result, verdict = _check(pair, tmp_path)
+
+    assert result.exit_code == 1, result.output
+    assert verdict["passed"] is False
+    assert verdict["analyses"]["identical"] is False
+    assert verdict["failures"] == ["analyses_mismatch"]
+    assert verdict["sample"]["analyses_checked"] == 0
+    assert verdict["sample"]["by_stratum"] == {
+        "random": None, "non_admitted": None, "largest": None, "empty": None,
+        "trait_less": None,
+    }
+    assert verdict["totals"]["z_mismatch"] is None
+    assert all(value is None for value in verdict["totals"].values()), verdict["totals"]
+    assert verdict["max_abs_diff"] == {"z": None, "se": None, "eaf": None}
+
+
 # --- seam 3: refusals ------------------------------------------------------
 
 

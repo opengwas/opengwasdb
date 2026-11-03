@@ -2029,7 +2029,13 @@ replaces its Store under the same id, so this check gates the swap.
   counter, `parent_rows_unmapped > 0`, an order that is not preserved, and differing Analyses
   each fail the check (`failures` names `parent_rows_unmapped`, `order_not_preserved`,
   `analyses_mismatch`, or the counter). After an axis or Analyses failure the sample is skipped
-  (`bands_checked` is 0) and the verdict says why.
+  (`bands_checked` is 0) and the verdict says why. **A counter for cells nobody inspected is
+  `null`, never 0** (issue #375): in a skipped sample `totals`, `max_abs_diff` and
+  `bands_by_stratum` are `null` throughout, so no zero in a failed verdict stands in for a
+  clean census of an uncompared part. The keys stay, so a record's shape does not say
+  whether the sample ran; `bands_checked` is 0 because it counts the chunk-rows read, and
+  none were. A `null` tally neither fails a verdict nor passes one: the structural failure
+  is what fails it.
 - **Exit codes.** `0` pass; `1` the check ran and found a mismatch (the verdict is still
   written, and each failure is named on `stderr`); `2` refused: nothing was checked, so no
   verdict is written and the reason is on `stderr`. Refused are a mixed-layout pair, a layout
@@ -2093,7 +2099,11 @@ replaces its Store under the same id, so this check gates the swap.
   (`dense.inserted_observed_cells`, `overflow.observed_in_both`, `crossovers.z_mismatch`), and
   `dense.parent_rows_unmapped`, `dense.order_not_preserved`, the same two for `overflow.` (the
   shared axes), `overflow.child_dense_rows_not_on_shared_axis` and `analyses_mismatch`; after
-  any of these last the comparison is skipped. Also refused: a Dense Component that is not Dense
+  any of these last the comparison is skipped and every tally in all three parts — each
+  `totals`, `all_analyses`, `max_abs_diff`, `reencoding_max_abs_diff` and `bands_by_stratum` —
+  is `null`, as is `crossovers.n` and `rows` (issue #375). `dense.bands_checked` and
+  `overflow.analyses_checked` are 0, because they count what was read and nothing was. Also
+  refused: a Dense Component that is not Dense
   or not in its root's completion state, a `TARGET` Dense Component with no `imputed` mask, and
   an Overflow that cannot be opened or holds a variant index off its shared axis.
 
@@ -2148,7 +2158,9 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   state, not a `nan_rows` row — issue #373), `target_variants_unordered` (an Analysis's
   variant indices not strictly increasing) and `quality_blocks_not_in_regions`. `sample` lists
   each checked Analysis with its strata, admission, the ids of its retained `blocks` and counts, and `by_stratum` counts
-  them.
+  them. An unmapped variant or differing Analyses skip the sample: `sample.analyses_checked`
+  is 0, and `totals`, `max_abs_diff` and `sample.by_stratum` are `null` throughout rather than
+  0, since no cell was inspected (issue #375).
 - **Refused (exit 2)**: a mixed-layout pair, a Ragged pair without `--ld-panel`, an LD panel
   with no chromosomes for the ancestry, an ancestry other than the one recorded, a `TARGET`
   completed against an ancestry other than the panel's, a `TARGET` with no completion ancestry

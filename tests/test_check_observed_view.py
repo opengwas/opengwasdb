@@ -296,6 +296,58 @@ def test_a_misaligned_axis_fails_and_still_writes_a_verdict(tmp_path, pair):
     assert verdict["bands_checked"] == 0  # rows that do not line up are not compared
 
 
+# --- a part that was not compared is unchecked, not zero (issue #375) ------
+
+
+def _rename_an_alid(store: Path, alid: bytes, replacement: bytes) -> None:
+    """Give one indexed row a nearby position's ALID, which no other Store holds.
+
+    The caller moves a position by one base (`1:1100000:A:C` -> `1:1100001:A:C`), so the
+    source row finds nothing to map to. The new key sorts between the same neighbours as
+    the old one, so the index stays searchable and only that one row's identity moves.
+    """
+    path = store / "variant_alid_bytes.npy"
+    alids = np.load(path)
+    at = int(np.flatnonzero(alids == alid)[0])
+    assert len(replacement) <= alids.dtype.itemsize
+    alids[at] = replacement
+    np.save(path, alids)
+
+
+def test_an_unmappable_axis_reports_the_uncompared_counters_as_unchecked(tmp_path, pair):
+    """No cell was inspected, so no counter may read as a measured zero (issue #375).
+
+    The completed axis no longer holds one source ALID, so the check cannot line the
+    two up and never compares a cell -- and the SE it would have counted is planted
+    in exactly that uncompared part. The verdict still fails on the structural count.
+    """
+    observed, completed = pair
+    _perturb_se(completed)
+    rows, cols = _cell(observed, "1:1000000:A:G", "a1")
+    assert not np.array_equal(
+        _plane(observed, DenseSePlane).points(rows, cols),
+        _plane(completed, DenseSePlane).points(rows, cols),
+    ), "fixture must hold an SE the sample would count"
+    _rename_an_alid(completed, b"1:1100000:A:C", b"1:1100001:A:C")
+    out = tmp_path / "verdict.json"
+
+    result = _run(observed, completed, out)
+
+    assert result.exit_code == 1, result.output
+    verdict = _verdict(result, out)
+    assert verdict["passed"] is False
+    assert verdict["failures"] == ["parent_rows_unmapped"]
+    assert verdict["axis"]["parent_rows_unmapped"] == 1
+    assert verdict["bands_checked"] == 0
+    assert verdict["bands_by_stratum"] == {
+        "random": None, "chrom_edge": None, "final_partial": None,
+        "writer_band_boundary": None,
+    }
+    assert verdict["totals"]["se_mismatch"] is None
+    assert all(value is None for value in verdict["totals"].values()), verdict["totals"]
+    assert verdict["max_abs_diff"] == {"z": None, "se": None, "eaf": None}
+
+
 def test_a_row_map_shifted_by_an_inserted_row_fails_on_the_cells(tmp_path, pair):
     # Order is preserved here -- the source row is simply mapped onto the panel row after it --
     # so only the cell comparison can see it (the ADR's shift-by-one negative control).
@@ -362,6 +414,8 @@ def test_a_different_analyses_order_fails(tmp_path, pair):
     verdict = _verdict(result, out)
     assert verdict["analyses"]["identical"] is False
     assert verdict["failures"] == ["analyses_mismatch"]
+    assert verdict["totals"]["se_mismatch"] is None
+    assert all(value is None for value in verdict["totals"].values()), verdict["totals"]
 
 
 # --- an infinite value is a value (issue #337) -----------------------------

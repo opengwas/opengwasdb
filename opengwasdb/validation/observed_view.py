@@ -21,7 +21,9 @@ Two parts, as the ADR specifies:
   observed cell.
 
 The verdict records the seed, so a check is reproducible from its record, and
-the counts, so a pass is a measured zero and not an absence of output. A
+the counts, so a pass is a measured zero and not an absence of output. A tally for a
+part the check did not compare is `null` and never 0: nothing was inspected there, and
+a zero would read as a clean census of cells nobody read (issue #375). A
 refusal (`ObservedViewRefused`) is a different outcome from a failure: nothing
 was checked, so there is no verdict to keep.
 """
@@ -634,13 +636,20 @@ def _sample_and_compare(
 
 
 def _unsampled_record() -> dict[str, Any]:
+    """The sample was skipped, so nothing it would have counted is zero.
+
+    `bands_checked` is 0 because no chunk-row was read; every tally the sample would
+    have filled -- the strata, `totals` and `max_abs_diff` -- is `null`, a value nobody
+    measured rather than a measured zero (issue #375). The keys stay, so a record's shape
+    does not depend on whether the sample ran.
+    """
     return {
         "bands_checked": 0,
-        "bands_by_stratum": dict.fromkeys(STRATA, 0),
+        "bands_by_stratum": dict.fromkeys(STRATA),
         "bands": [],
         "bands_with_mismatch": [],
-        "totals": dict.fromkeys(_TOTAL_KEYS, 0),
-        "max_abs_diff": dict.fromkeys(_DIFF_PLANES, 0.0),
+        "totals": dict.fromkeys(_TOTAL_KEYS),
+        "max_abs_diff": dict.fromkeys(_DIFF_PLANES),
     }
 
 
