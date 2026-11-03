@@ -348,25 +348,30 @@ def _read_place_by_place(place, z, se, reference=None):
             for a, b in ((z[row], z[first]), (se[row], se[first]))
         )
 
-    def reference_first(rows: list[int]) -> list[int] | None:
-        """A reversed indel's rows spelling their reference first, or None."""
-        if reference is None:
+    def reversed_pair(rows: list[int]) -> tuple[list[int], list[int]] | None:
+        """A reversed indel's rows spelling their reference first and second --
+        two distinct rows once agreeing copies collapse -- or None."""
+        if reference is None or any(int(reference[r]) == 0 for r in rows):
             return None
-        codes = [int(reference[r]) for r in rows]
-        firsts = [r for r, code in zip(rows, codes, strict=True) if code == 1]
-        if 0 in codes or 2 not in codes or not firsts:
+        firsts = [r for r in rows if int(reference[r]) == 1]
+        seconds = [r for r in rows if int(reference[r]) == 2]
+        if not firsts or not seconds:
             return None
-        return firsts if all(agrees(r, firsts[0]) for r in firsts) else None
+        one_each = all(agrees(r, firsts[0]) for r in firsts) and all(
+            agrees(r, seconds[0]) for r in seconds
+        )
+        return (firsts, seconds) if one_each else None
 
     keep, conflicting, dropped, reversed_indels, collapsed = [], [], [], [], 0
     for at, rows in rows_at.items():
         if all(agrees(r, rows[0]) for r in rows):
             keep.append(rows[0])
             collapsed += len(rows) - 1
-        elif (firsts := reference_first(rows)) is not None:
+        elif (pair := reversed_pair(rows)) is not None:
+            firsts, seconds = pair
             keep.append(firsts[0])
-            collapsed += len(firsts) - 1
-            reversed_indels += [r for r in rows if r not in firsts]
+            collapsed += len(firsts) - 1 + len(seconds) - 1
+            reversed_indels.append(seconds[0])
         else:
             conflicting.append(at)
             dropped += rows
@@ -437,6 +442,38 @@ def test_a_reversed_indel_keeps_the_row_whose_declared_reference_the_alid_spells
     assert placed.conflicting.tolist() == []
     assert (placed.dropped.tolist(), placed.collapsed) == ([], 0)
     assert placed.reference.tolist() == [route_table.REFERENCE_FIRST]
+
+
+@pytest.mark.parametrize(
+    ("codes", "z", "kept", "reversed_rows", "collapsed"),
+    [
+        # Two copies of the insertion collapse, then one insertion against one
+        # deletion: the insertion is kept.
+        ([1, 1, 2], [2.0, 2.0, 3.0], [0], [2], 1),
+        # Two copies of the deletion collapse too.
+        ([1, 2, 2], [2.0, 3.0, 3.0], [0], [1], 1),
+        # Two distinct insertions: nothing says which, so no row is kept.
+        ([1, 1, 2], [2.0, 2.5, 3.0], [], [], 0),
+        # Two distinct deletions: three distinct rows, not a pair.
+        ([1, 2, 2], [2.0, 3.0, 4.0], [], [], 0),
+    ],
+    ids=["insertion-copies", "deletion-copies", "two-insertions", "two-deletions"],
+)
+def test_a_reversed_indel_is_judged_on_its_distinct_rows(codes, z, kept, reversed_rows, collapsed):
+    """Agreeing copies collapse first, so the exception is one distinct row
+    spelling the reference first against one spelling it second; any other
+    conflicting place keeps no row, every row `duplicate_conflicting`."""
+    reference = np.array(codes, dtype=np.int8)
+
+    found = route_table.collapse_duplicates(
+        np.zeros(3, dtype=np.int64), np.array(z), np.full(3, 0.1), reference
+    )
+
+    assert found.keep.tolist() == kept
+    assert found.reversed_indels.tolist() == reversed_rows
+    assert found.collapsed == collapsed
+    assert found.dropped.tolist() == ([] if kept else [0, 1, 2])
+    assert found.conflicting.tolist() == ([] if kept else [0])
 
 
 def test_a_reversed_indel_with_no_declared_reference_drops_both_rows():

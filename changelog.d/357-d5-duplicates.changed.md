@@ -20,7 +20,9 @@
   two alleles of a repeat, not one variant. When a GWAS-VCF or FinnGen source
   says which allele is the reference, the row whose reference allele the ALID
   spells first is kept, and the other is dropped and logged
-  (`duplicate_reversed_indel`). A source naming only an effect and an other
+  (`duplicate_reversed_indel`). The rule judges distinct rows: agreeing copies
+  collapse first, and two distinct insertions or deletions at one place are
+  all dropped as conflicting. A source naming only an effect and an other
   allele (GWAS-SSF, BESD) declares no reference, so its pair is dropped as
   conflicting, as is any other conflicting duplicate. Each `ReaderAssociation`
   says what its source declares (`reference`). The ALID still spells the pair

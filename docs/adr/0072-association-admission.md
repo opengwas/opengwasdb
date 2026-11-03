@@ -83,7 +83,7 @@ name the decisions issue #357 took on the rules that differed.
 | `maf_missing` | a `FILTERED` MAF policy finds no usable frequency | no | ADR 0054; every builder since D2 |
 | `maf_below_threshold` | MAF is below a `FILTERED` threshold | no | ADR 0054; every builder since D2 |
 | `duplicate_collapsed` | it agrees on z and SE with an earlier row for its (variant, Analysis), whose association it is | no | D5 |
-| `duplicate_reversed_indel` | it is an indel whose declared reference allele its ALID spells second, at a (variant, Analysis) whose rows disagree, and the row spelling it first is kept | yes | D5, reversed indels |
+| `duplicate_reversed_indel` | it is an indel whose declared reference allele its ALID spells second, at a (variant, Analysis) whose distinct rows, once agreeing copies collapse, are this one and one spelling it first, which is kept | yes | D5, reversed indels |
 | `duplicate_conflicting` | the rows for its (variant, Analysis) disagree on z or SE: all are dropped | yes | D5 |
 | `off_axis` | no axis of the Store holds its variant, and nothing will place it later | yes | D6 |
 
@@ -114,9 +114,13 @@ from opposite alleles, and every conflicting pair in OGS-00003 is of this kind.
 When the source declares which allele is the reference, the row whose
 reference allele the ALID spells first is kept: for an anchored indel, the
 insertion, which is the variant the ALID reads as. The other row is dropped and
-logged (`duplicate_reversed_indel`). The rule judges ref and alt, not effect
-and other: FinnGen's effect allele is its alt, so its insertion is the row
-whose z is negated onto the ALID. A source that declares no reference has
+logged (`duplicate_reversed_indel`). The rule judges distinct rows. Agreeing
+copies collapse first, as any agreeing duplicate does, and the exception holds
+only when two distinct rows remain, one spelling the reference first and one
+second. Two distinct insertions, or two distinct deletions, leave no row to
+keep, and every row at the place is `duplicate_conflicting`. The rule judges
+ref and alt, not effect and other: FinnGen's effect allele is its alt, so its
+insertion is the row whose z is negated onto the ALID. A source that declares no reference has
 its pair dropped as conflicting, and so is every other conflicting duplicate,
 SNVs included, since two SNV rows at one ALID are one variant seen from
 opposite alleles. Dropping both rows was rejected because it loses a cell

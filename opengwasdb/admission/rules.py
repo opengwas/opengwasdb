@@ -44,8 +44,9 @@ collapse to the first (`duplicate_collapsed`); rows that disagree are all
 dropped (`duplicate_conflicting`), since nothing says which is right. The one
 exception is a reversed indel: an insertion and a deletion at one position
 share an ALID, because the ALID sorts its alleles, so when the source declares
-which allele is the reference the row whose reference allele the ALID spells
-first is kept and the other dropped (`duplicate_reversed_indel`). A row whose
+which allele is the reference, and the place's distinct rows (agreeing copies
+collapsed) are one spelling it first and one second, the first is kept and the
+second dropped (`duplicate_reversed_indel`). A row whose
 variant no axis of the Store holds is dropped too (`off_axis`), where a build
 has nowhere else to put it.
 

@@ -237,11 +237,13 @@ def collapse_duplicates(
     Except a reversed indel. An insertion and a deletion at one position share
     an ALID, because the ALID sorts its alleles: `G>GGGGCC` and `GGGGCC>G` are
     both `1:827587:G:GGGGCC`, two alleles of a repeat rather than one variant
-    seen from both sides. ``reference`` is each row's `REFERENCE_*` code; when
-    every row at a conflicting place declares its reference allele, some spell
-    it first and some second, and those spelling it first agree, the first of
-    them is kept, the ALID's own reading, and the others are dropped as
-    ``reversed_indels``. Without ``reference`` no row declares one.
+    seen from both sides. ``reference`` is each row's `REFERENCE_*` code.
+    Agreeing copies collapse first, so the rule judges a place's distinct
+    rows: when every row declares its reference allele and the distinct rows
+    are two, one spelling it first and one second, the first is kept, the
+    ALID's own reading, and the second is dropped as one of
+    ``reversed_indels``; their copies are ``collapsed``. Any other conflicting
+    place keeps no row. Without ``reference`` no row declares one.
     """
     # One stable sort finds the repeated places; only their rows are compared,
     # so a column with few duplicates costs what last-wins cost, not a gather
@@ -264,9 +266,9 @@ def collapse_duplicates(
     kept, reversed_indels = firsts, np.empty(0, dtype=np.intp)
     if reference is not None and conflicted.any():
         codes = reference[rows]
-        resolved, kept = _reversed_indels(group, rows, firsts, conflicted, codes, z, se)
+        resolved, kept, displaced = _reversed_indels(group, rows, firsts, conflicted, codes, z, se)
         conflicted &= ~resolved
-        reversed_indels = np.sort(rows[resolved[group] & (codes == REFERENCE_SECOND)])
+        reversed_indels = np.sort(displaced[resolved])
     dropped = np.sort(rows[conflicted[group]])
     keep = np.ones(n, dtype=bool)
     keep[rows] = False
@@ -296,26 +298,47 @@ def _reversed_indels(
     codes: np.ndarray,
     z: np.ndarray,
     se: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Which conflicting places are reversed indels, and the row each place keeps.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Which conflicting places are reversed indels, the row each place keeps,
+    and the row each displaces.
 
-    A place resolves when none of its rows is `REFERENCE_UNKNOWN`, at least one
-    is `REFERENCE_SECOND`, and its `REFERENCE_FIRST` rows exist and agree with
-    the first of them, which is the row it keeps.
+    A place resolves when none of its rows is `REFERENCE_UNKNOWN` and, once
+    agreeing copies collapse, it holds two distinct rows: its
+    `REFERENCE_FIRST` rows all agree with the first of them, which it keeps,
+    and its `REFERENCE_SECOND` rows all agree with the first of them, which it
+    displaces.
     """
     n_places = len(firsts)
     unknown = np.bincount(group[codes == REFERENCE_UNKNOWN], minlength=n_places)
-    second = np.bincount(group[codes == REFERENCE_SECOND], minlength=n_places)
-    at_first = np.flatnonzero(codes == REFERENCE_FIRST)
-    first_group = group[at_first]
-    places_with_first, lead_at = np.unique(first_group, return_index=True)
+    has_first, first, split_first = _one_reading(group, rows, firsts, codes, REFERENCE_FIRST, z, se)
+    has_second, second, split_second = _one_reading(
+        group, rows, firsts, codes, REFERENCE_SECOND, z, se
+    )
+    resolved = (
+        conflicted & (unknown == 0) & has_first & has_second & ~split_first & ~split_second
+    )
+    return resolved, np.where(resolved, first, firsts), second
+
+
+def _one_reading(
+    group: np.ndarray,
+    rows: np.ndarray,
+    firsts: np.ndarray,
+    codes: np.ndarray,
+    code: int,
+    z: np.ndarray,
+    se: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per place, whether any row carries ``code``, the first that does (or the
+    place's first row), and whether those rows disagree among themselves."""
+    at = np.flatnonzero(codes == code)
+    at_group = group[at]
+    places, lead_at = np.unique(at_group, return_index=True)
     lead = firsts.copy()
-    lead[places_with_first] = rows[at_first[lead_at]]
-    has_first = np.zeros(n_places, dtype=bool)
-    has_first[places_with_first] = True
-    split = _disagreeing(first_group, rows[at_first], lead, z, se)
-    resolved = conflicted & (unknown == 0) & (second > 0) & has_first & ~split
-    return resolved, np.where(resolved, lead, firsts)
+    lead[places] = rows[at[lead_at]]
+    has = np.zeros(len(firsts), dtype=bool)
+    has[places] = True
+    return has, lead, _disagreeing(at_group, rows[at], lead, z, se)
 
 
 def _equal(a: np.ndarray, b: np.ndarray) -> np.ndarray:
