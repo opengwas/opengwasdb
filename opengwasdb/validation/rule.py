@@ -183,6 +183,11 @@ class Rule:
     `after` names the rules that must pass on the same target, or on a target it
     belongs to, before this one runs; a rule that failed or was skipped there skips
     this one. A prerequisite that does not apply to the target constrains nothing.
+
+    `witnesses` marks a rule that judges, after the fact, what Association
+    Admission guarantees of every cell it admits (ADR 0072): the Admission
+    `Reason`s whose drops keep such a cell out of a Store, or none where the
+    guarantee is a cell rule no row's `Reason` names. None for every other rule.
     """
 
     name: str
@@ -190,6 +195,12 @@ class Rule:
     after: tuple[str, ...] = ()
     when: Callable[[Target], bool] = _always
     severity: Severity = Severity.ERROR
+    witnesses: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        unknown = sorted(set(self.witnesses or ()) - ADMISSION_REASONS)
+        if unknown:
+            raise ValueError(f"rule {self.name!r} witnesses no Admission Reason {unknown}")
 
     def applies_to(self, target: Target) -> bool:
         return bool(target.kind & self.kinds) and self.when(target)
@@ -200,6 +211,26 @@ class Rule:
 
     def finding(self, target: Target, message: str, severity: Severity | None = None) -> Finding:
         return Finding(self.name, severity or self.severity, message, target.label)
+
+
+#: Association Admission's `Reason` values (ADR 0072, #357), which a witness rule
+#: names. Copied from #357's `opengwasdb.admission.rules.Reason` until it merges;
+#: tests/test_admission_witnesses.py holds this copy to that enum once it does.
+ADMISSION_REASONS = frozenset(
+    {
+        "chromosome_missing",
+        "allele_invalid",
+        "se_unusable",
+        "effect_missing",
+        "z_nonfinite",
+        "info_below_threshold",
+        "maf_missing",
+        "maf_below_threshold",
+        "duplicate_collapsed",
+        "duplicate_conflicting",
+        "off_axis",
+    }
+)
 
 
 class Unreadable(Exception):

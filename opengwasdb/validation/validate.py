@@ -1,9 +1,15 @@
-"""Store validation."""
+"""Store validation: `validate_store` runs the Validation Rule registry (ADR 0074).
+
+The rules live in `validation/rules/`, one module to a subject; their names, in
+the order they run, are spec §20.0's. Beside the registry here are the rules that
+stay with code of this module: the manifest, the Dense Component opening (both
+through `_load_manifest`), the Indexed Variant Subsets, and source fidelity,
+whose read is one function (#56).
+"""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterator, Sequence
-from dataclasses import dataclass
+from collections.abc import Collection, Iterator, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -122,35 +128,10 @@ def release_targets(store: OpenGWASDBStore, options: ValidationOptions) -> list[
     return targets
 
 
-# --- the orchestrators rules replace, each run whole until its checks move out ---
+# --- the registry, and the rules that live beside it ---
 
 #: The rule a release that cannot be opened fails: nothing else can be targeted.
 MANIFEST_RULE = "manifest.loads"
-
-
-@dataclass(frozen=True, kw_only=True)
-class _Legacy(Rule):
-    """A per-layout orchestrator from before rules had names, run as one rule.
-
-    Each is deleted as the checks it runs move into rules of their own.
-    """
-
-    run: Callable[[Target, list[str], list[str]], None]
-
-    def findings(self, target: Target) -> Iterator[Finding]:
-        errors: list[str] = []
-        warnings: list[str] = []
-        try:
-            self.run(target, errors, warnings)
-        finally:
-            # Yielded on the way out of an exception too: what the orchestrator
-            # found before it failed is reported ahead of the failure.
-            yield from (self.finding(target, m, Severity.ERROR) for m in errors)
-            yield from (self.finding(target, m, Severity.WARNING) for m in warnings)
-
-
-def _is(layout: PrimaryStorageLayout) -> Callable[[Target], bool]:
-    return lambda target: target.layout is layout
 
 
 def _not_dense(target: Target) -> bool:
@@ -159,8 +140,6 @@ def _not_dense(target: Target) -> bool:
 
 def _source_given(target: Target) -> bool:
     return target.options.source is not None
-
-
 
 
 def _component_opens(target: Target) -> Iterator[str]:
@@ -204,7 +183,7 @@ def _fidelity_unsupported(_target: Target) -> list[str]:
     return ["source-fidelity check is only supported for dense stores"]
 
 
-def _legacy_fidelity(target: Target) -> list[str]:
+def _source_fidelity(target: Target) -> list[str]:
     errors: list[str] = []
     options = target.options
     assert options.source is not None
@@ -218,7 +197,6 @@ def _legacy_fidelity(target: Target) -> list[str]:
         chain_file=options.chain_file,
     )
     return errors
-
 
 
 #: The rules before source fidelity, in order: it samples what a Store holds, so it
@@ -274,7 +252,7 @@ RULES: tuple[Rule, ...] = check_registry(
             kinds=Kind.GRID,
             when=lambda target: _source_given(target) and _top_level_dense_grid(target),
             after=tuple(r.name for r in _BEFORE_FIDELITY if r.severity is Severity.ERROR),
-            run=_legacy_fidelity,
+            run=_source_fidelity,
         ),
     ]
 )

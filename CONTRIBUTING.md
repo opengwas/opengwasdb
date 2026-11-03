@@ -172,6 +172,29 @@ how a reader gets from a line of code to the reasoning behind it.
   index lives inside `write_variant_axis` precisely so no builder can write
   rsids and forget to index them.
 
+### Adding a validation rule
+
+`validate` is a registry of named Validation Rules (ADR 0074). A new check is a
+new rule, not a new branch in an existing one:
+
+- Write it in the `validation/rules/` module for its subject, as a `Check`, or as
+  a `Fold` if it reads association values. A fold measures each block of the
+  shared `ASSOCIATIONS` scan; it never reads a plane itself. Tests hold every
+  plane to one read per target, and the SE-decode guard fails a decode outside
+  `validation/scans.py`.
+- Name it `subject.what`, register it where its findings should appear, and add
+  its row to spec §20.0 in the same place. `test_validation_registry.py` fails
+  until both agree.
+- Put in `after` only what the rule reads. It runs after unrelated failures, and
+  that is the point: a release with two defects reports both.
+- Where a Dense check and its Ragged twin judge the same thing, write one rule,
+  keeping each layout's message. `validate --format json` is a contract, and its
+  messages do not change in passing.
+- Test it by identity, `result.failed() == {"subject.what"}`, which also catches
+  a collateral failure, and see the test fail on the code before your change.
+- A rule that checks what Association Admission guarantees names, in
+  `witnesses`, the Admission `Reason`s that keep such a cell out of a Store.
+
 ### Tooling
 
 `ruff` (line length 100; `E`, `F`, `I`, `UP`, `B`) and `mypy --strict`:

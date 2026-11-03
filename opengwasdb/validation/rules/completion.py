@@ -178,8 +178,19 @@ CHECKS: tuple[Rule, ...] = (
 
 #: The value rules about the mask, in the order they have always reported.
 RULES: tuple[Rule, ...] = (
-    value_fold("completion.mask_binary", Tally(), tally, _judge_binary, when=completed),
-    value_fold("completion.imputed_present", Tally(), tally, _judge_present, when=completed),
+    # Admission's cell guard refuses a flag neither 0 nor 1; no row's Reason names it.
+    value_fold(
+        "completion.mask_binary", Tally(), tally, _judge_binary, when=completed, witnesses=()
+    ),
+    # Completion admits an imputed cell only with a finite Z and a finite, positive SE.
+    value_fold(
+        "completion.imputed_present",
+        Tally(),
+        tally,
+        _judge_present,
+        when=completed,
+        witnesses=("z_nonfinite", "se_unusable"),
+    ),
     value_fold(
         "completion.off_panel",
         0,

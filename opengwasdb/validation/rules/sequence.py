@@ -179,9 +179,11 @@ def _judge_partition(_target: Target, n: int) -> Iterator[str]:
 _LAID_OUT = (ARRAYS, LENGTHS, *PLAN)
 
 RULES: tuple[Rule, ...] = (
+    # Its repeat case: rows for one (variant, Analysis) collapse or are dropped.
     Fold(
         name="csr.segment_order",
         kinds=Kind.CSR,
+        witnesses=("duplicate_collapsed", "duplicate_conflicting"),
         after=_LAID_OUT,
         scan=ASSOCIATIONS,
         zero=FirstBreak(),

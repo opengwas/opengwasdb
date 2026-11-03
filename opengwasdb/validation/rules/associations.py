@@ -251,11 +251,13 @@ def value_fold(
     severity: Severity = Severity.ERROR,
     when: Callable[[Target], bool] | None = None,
     kinds: Kind = VALUE_KINDS,
+    witnesses: tuple[str, ...] | None = None,
 ) -> Fold[Block, M]:
     """A value rule over `ASSOCIATIONS`, after `VALUES_AFTER`, on every value target."""
     return Fold(
         name=name,
         kinds=kinds,
+        witnesses=witnesses,
         after=VALUES_AFTER,
         when=when if when is not None else _always,
         severity=severity,
@@ -280,9 +282,31 @@ PRESENCE_RULES: tuple[Rule, ...] = (
         _judge_infinite_se,
         severity=Severity.WARNING,
     ),
-    value_fold("associations.se_negative", 0, _negative_se, _judge_negative_se),
-    value_fold("associations.markers_paired", Tally(), tally, _judge_paired),
-    value_fold("associations.markers_canonical", Tally(), tally, _judge_canonical),
+    # Admission drops a row whose SE is not finite and positive.
+    value_fold(
+        "associations.se_negative",
+        0,
+        _negative_se,
+        _judge_negative_se,
+        witnesses=("se_unusable",),
+    ),
+    # A row with a z and no usable SE, or an SE and no effect, is dropped.
+    value_fold(
+        "associations.markers_paired",
+        Tally(),
+        tally,
+        _judge_paired,
+        witnesses=("se_unusable", "effect_missing"),
+    ),
+    # A NaN z, or SE, of any payload is non-finite, and dropped; only the writer's
+    # canonical marker can stand for a missing cell.
+    value_fold(
+        "associations.markers_canonical",
+        Tally(),
+        tally,
+        _judge_canonical,
+        witnesses=("z_nonfinite", "se_unusable"),
+    ),
 )
 
 #: The frequency rule, reported after the completion rules as it always has been.
