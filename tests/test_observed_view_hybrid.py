@@ -618,6 +618,64 @@ def test_an_overflow_observation_moved_onto_an_existing_dense_row_fails(tmp_path
     }
 
 
+# --- a part that was not compared is unchecked, not zero (issue #375) ------
+
+
+def _rename_a_dense_alid(store: Path, alid: bytes, replacement: bytes) -> None:
+    """Give one Dense Component row a nearby position's ALID, which no other Store holds.
+
+    The caller moves a position by one base (`1:3000:A:G` -> `1:3001:A:G`), so that row
+    cannot be mapped. The new key sorts between the same neighbours as the old one, so
+    the component's index stays searchable and only that one row's identity moves.
+    """
+    path = store / "dense" / "variant_alid_bytes.npy"
+    alids = np.load(path)
+    at = int(np.flatnonzero(alids == alid)[0])
+    assert len(replacement) <= alids.dtype.itemsize
+    alids[at] = replacement
+    np.save(path, alids)
+
+
+def test_an_unmappable_axis_leaves_every_part_unchecked(tmp_path, pair):
+    """A part the axes cannot line up is unchecked in all three of a Hybrid verdict's parts.
+
+    One source Dense row is given an ALID the completed axis does not hold, so the Dense
+    axis cannot be mapped and no part of the pair is compared -- and the Z the Dense
+    sample would have counted is planted in it. A counter reading 0 would claim a clean
+    census of cells nobody read (issue #375).
+    """
+    observed, completed = pair
+    _change_a_dense_observation(completed)
+    assert not np.array_equal(
+        _lookup(observed, 3000, "trait_b")["z"], _lookup(completed, 3000, "trait_b")["z"]
+    ), "fixture must hold a Z the Dense sample would count"
+    _rename_a_dense_alid(observed, b"1:3000:A:G", b"1:3001:A:G")
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    assert verdict["failures"] == ["dense.parent_rows_unmapped"]
+    assert verdict["components"]["dense"]["axis"]["parent_rows_unmapped"] == 1
+    dense = verdict["components"]["dense"]
+    assert dense["bands_checked"] == 0
+    assert dense["bands_by_stratum"] == {
+        "random": None, "chrom_edge": None, "final_partial": None,
+        "writer_band_boundary": None,
+    }
+    assert dense["totals"]["z_mismatch"] is None
+    assert all(value is None for value in dense["totals"].values()), dense["totals"]
+    assert dense["max_abs_diff"] == {"z": None, "se": None, "eaf": None}
+    overflow = verdict["components"]["overflow"]
+    assert overflow["analyses_checked"] == 0
+    assert all(value is None for value in overflow["totals"].values()), overflow["totals"]
+    assert all(value is None for value in overflow["all_analyses"].values())
+    assert overflow["max_abs_diff"] == {"z": None, "se": None, "eaf": None}
+    crossovers = verdict["crossovers"]
+    assert (crossovers["n"], crossovers["rows"]) == (None, None)
+    assert all(value is None for value in crossovers["totals"].values()), crossovers["totals"]
+    assert crossovers["max_abs_diff"] == {"z": None, "se": None, "eaf": None}
+    assert crossovers["reencoding_max_abs_diff"] == {"z": None, "se": None, "eaf": None}
+
+
 # --- an infinite value is a value (issue #337) ------------------------------
 
 # 102,000 in trait_a is an ordinary Overflow association: off-panel in the LD panel, so it
