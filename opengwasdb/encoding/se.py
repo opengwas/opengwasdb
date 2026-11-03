@@ -1358,7 +1358,7 @@ def _float16_se_plan(encoding: StoreEncoding) -> StoreEncoding:
     a plan that declared a residual `se` would describe a plane no reader could
     decode.
     """
-    return StoreEncoding(z=encoding.z, se=SeEncoding("float16"), eaf=encoding.eaf)
+    return encoding.with_se(SeEncoding("float16"))
 
 
 def _fall_back_to_float16(
@@ -1396,7 +1396,7 @@ def _select_se_encoding(
         overflow_coefficient_bytes=overflow_coefficient_bytes,
     )
     se_choice = StoreEncoding.decide(EncodingMeasurements(n_analyses, se=measured)).se
-    return StoreEncoding(z=encoding.z, se=se_choice, eaf=encoding.eaf)
+    return encoding.with_se(se_choice)
 
 
 def _measure_candidates(

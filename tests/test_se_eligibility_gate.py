@@ -27,7 +27,13 @@ import pytest
 import zarr
 
 from opengwasdb.encoding.measure import fit_se_grid
-from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+from opengwasdb.encoding.plan import (
+    EafEncoding,
+    NEncoding,
+    SeEncoding,
+    StoreEncoding,
+    ZEncoding,
+)
 from opengwasdb.encoding.planes import DenseSePlane
 from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
 from opengwasdb.encoding.timing import PhaseTimer
@@ -376,3 +382,45 @@ def test_the_fallback_names_the_trigger_and_counts_the_analyses(tmp_path, caplog
     messages = _messages(caplog)
     assert not any(message.startswith("SE fit: no eligible model") for message in messages)
     assert any(message.startswith("SE float16 narrowing: start") for message in messages)
+
+
+# ── The SE choice replaces the plan's SE and nothing else ────────────────────
+
+
+@pytest.mark.parametrize("defect", ["", "no-eaf"], ids=["residual chosen", "float16 fallback"])
+def test_the_returned_plan_differs_from_the_one_given_only_in_se(tmp_path, defect) -> None:
+    """Whichever SE the optimiser settles on, the rest of the plan is the caller's.
+
+    An `n` plane is the part a rebuilt plan could lose without anything else
+    noticing: the manifest would then declare no sample-size plane beside a
+    Store that holds one.
+    """
+    eaf, se = _plane()
+    _defective(eaf, se, defect)
+    given = StoreEncoding(
+        z=ZEncoding("float16"), se=SeEncoding("float16"), eaf=EafEncoding("float32"), n=NEncoding()
+    )
+
+    selected, _ = optimise_dense_se_joint(_group(tmp_path, "plan.zarr", eaf, se), given)
+
+    assert selected.se.is_residual == (defect == ""), "fixture must reach the path it names"
+    assert selected == given.with_se(selected.se)
+    assert selected.n == NEncoding()
+
+
+def test_with_se_replaces_only_se() -> None:
+    plan = StoreEncoding(
+        z=ZEncoding("int16_fixed", scale=1024),
+        se=SeEncoding("float16"),
+        eaf=EafEncoding("int8_residual", residual_range=0.5, reference=True),
+        version=2,
+        n=NEncoding(),
+    )
+    residual = SeEncoding("int8_residual", residual_range=1.0)
+
+    changed = plan.with_se(residual)
+
+    assert changed.se == residual
+    assert (changed.z, changed.eaf, changed.version, changed.n) == (
+        plan.z, plan.eaf, plan.version, plan.n
+    )
