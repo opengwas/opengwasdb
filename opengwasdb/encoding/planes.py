@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import cached_property
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
 
@@ -46,6 +46,9 @@ from opengwasdb.store.arrays import (
     create_array,
     write_shard_cells,
 )
+
+if TYPE_CHECKING:
+    from opengwasdb.encoding.association_codec import Encoded
 
 SE_COEFFICIENTS = "se_coefficients"
 
@@ -155,48 +158,6 @@ class DenseZPlane:
         )
 
     # ---- writing ---------------------------------------------------------
-
-    def patch(self, rows: np.ndarray, cols: np.ndarray, values: np.ndarray) -> None:
-        """Overwrite the cells `(rows[i], cols[i])` with `values[i]`.
-
-        The one partial in-place write against a built plane -- Hybrid
-        completion folding a crossed-over association into the Dense Component
-        (issue #99). The overflow table is rewritten with it, not after it: a
-        patched cell can enter or leave the representable range, and a table
-        left describing the value a cell *used* to have is exactly the kind of
-        stale-by-one-call-site defect the codec exists to make impossible.
-        """
-        if self._group is None:
-            raise ValueError("this plane was opened without its group and cannot be written")
-        rows = np.asarray(rows, dtype=np.int64)
-        cols = np.asarray(cols, dtype=np.int64)
-        if len(rows) == 0:
-            return
-        positions = positions_pairs(rows, cols, self.n_analyses)
-        builder = ZOverflowBuilder()
-        codes = self._codec.encode_z(values, positions=positions, overflow=builder)
-        # One whole-shard write per touched shard, not a per-cell `vindex` write:
-        # the latter is a read-modify-write of the shard and is invisible to the
-        # whole-shard guard (#247 review round 1).
-        write_shard_cells(self._array, rows, cols, codes)
-        if not self._codec.encoding.z.is_fixed_point:
-            # A float plane has no overflow table, and must not acquire an
-            # empty one just because it was written through here.
-            return
-        # Read the whole table from the group: the codec's is a WindowedExactTable
-        # whose in-memory arrays are empty, so `or ZOverflowTable.empty()` would
-        # merge the patched cells with nothing and drop every existing entry
-        # (review round 2, finding 1).
-        previous = ZOverflowTable.read(self._group)
-        untouched = ~np.isin(previous.index, positions)
-        merged = ZOverflowBuilder()
-        merged.add(previous.index[untouched], previous.value[untouched])
-        new_table = builder.table()
-        merged.add(new_table.index, new_table.value)
-        table = merged.table()
-        table.write(self._group)
-        self._codec = StoreCodec(self._codec.encoding, z_overflow=table)
-
 
 class DenseSePlane:
     """Dense Standard Errors decoded against the corresponding physical EAF."""
@@ -339,35 +300,6 @@ class DenseSePlane:
             cols,
             positions_pairs(rows, cols, self.n_analyses),
         )
-
-    def patch(self, rows: np.ndarray, cols: np.ndarray, values: np.ndarray) -> None:
-        """Patch physical SE cells and keep their exact-exception table aligned."""
-        rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
-        if not self._codec.encoding.se.is_residual:
-            write_shard_cells(self._array, rows, cols, np.asarray(values, dtype=np.float16))
-            return
-        assert self._eaf is not None and self._coefficients is not None
-        positions = positions_pairs(rows, cols, self.n_analyses)
-        builder = SeExceptionBuilder()
-        codes = self._codec.encode_se(
-            values,
-            eaf=self._eaf.points(rows, cols),
-            analysis_index=cols,
-            coefficients=np.asarray(self._coefficients[:], dtype=np.float32),
-            positions=positions,
-            exceptions=builder,
-        )
-        write_shard_cells(self._array, rows, cols, codes)
-        previous = SeExceptionTable.read(self._group)
-        merged = SeExceptionBuilder()
-        keep = ~np.isin(previous.index, positions)
-        merged.add(previous.index[keep], previous.value[keep])
-        added = builder.table()
-        merged.add(added.index, added.value)
-        table = merged.table()
-        table.write(self._group, compressor=compressor())
-        self._codec = StoreCodec(self._codec.encoding, se_exceptions=table)
-
 
 class _EafPlaneBase:
     """Shared plumbing for the decoded `eaf` views.
@@ -680,49 +612,6 @@ class DenseEafPlane(_EafPlaneBase):
             )
         return EafRead(values, imputed)
 
-    def patch(self, rows: np.ndarray, cols: np.ndarray, values: np.ndarray) -> None:
-        """Overwrite the cells `(rows[i], cols[i])` with the frequencies
-        `values[i]`, against the baselines already recorded for those variants.
-
-        The one partial in-place write against a built plane -- Hybrid
-        completion folding a crossed-over association into the Dense Component
-        (issue #99). The exception table is rewritten with it, not after it: a
-        patched cell can enter or leave the representable range, and a table
-        left describing the value a cell *used* to have is exactly the kind of
-        stale-by-one-call-site defect the codec exists to make impossible.
-
-        The baseline is *not* recomputed. It describes the Dense Component's
-        own observed cells; a crossed-over cell is one more observation at that
-        variant, and moving the baseline to accommodate it would re-quantise
-        every cell already coded against it.
-        """
-        if self._group is None:
-            raise EafBaselineError("this plane was opened without its group and cannot be written")
-        rows = np.asarray(rows, dtype=np.int64)
-        cols = np.asarray(cols, dtype=np.int64)
-        if self._array is None or len(rows) == 0:
-            return
-        positions = positions_pairs(rows, cols, self.n_analyses)
-        builder = EafExceptionBuilder()
-        codes = self._codec.encode_eaf(
-            values,
-            baseline=self._gather(self._baseline, rows),
-            positions=positions,
-            exceptions=builder,
-        )
-        write_shard_cells(self._array, rows, cols, codes)
-        if not self._codec.encoding.eaf.is_residual:
-            return
-        previous = EafExceptionTable.read(self._group)
-        untouched = ~np.isin(previous.index, positions)
-        merged = EafExceptionBuilder()
-        merged.add(previous.index[untouched], previous.value[untouched])
-        added = builder.table()
-        merged.add(added.index, added.value)
-        table = merged.table()
-        table.write(self._group)
-        self._codec = StoreCodec(self._codec.encoding, eaf_exceptions=table)
-
     def _reference_band(self, r0: int, r1: int, n_analyses: int) -> np.ndarray | None:
         per_row = self._gather(self._reference, np.arange(r0, r1, dtype=np.int64))
         if per_row is None:
@@ -1019,7 +908,7 @@ def _write_se_arrays(
     codec: StoreCodec,
     codes: np.ndarray,
     coefficients: np.ndarray | None,
-    exceptions: SeExceptionBuilder | None,
+    exceptions: SeExceptionTable | None,
     *,
     role: ArrayRole,
     compressor: Any,
@@ -1045,160 +934,128 @@ def _write_se_arrays(
         return
     assert coefficients is not None and exceptions is not None
     write_se_coefficients(group, coefficients, compressor=compressor)
-    exceptions.table().write(
-        group, compressor=compressor, role=_side_table_role(role)
-    )
+    exceptions.write(group, compressor=compressor, role=_side_table_role(role))
 
 
-def _write_se_plane(
+# ── Writing an encoded batch ────────────────────────────────────────────────
+
+
+def write_encoded_planes(
     group: Any,
-    codec: StoreCodec,
-    values: np.ndarray,
-    eaf: np.ndarray,
-    analysis_index: np.ndarray,
-    coefficients: np.ndarray | None,
-    positions: Any,
-    compressor: Any,
-    chunks: tuple[int, ...] | None,
+    plan: StoreEncoding,
+    encoded: Encoded,
+    *,
     role: ArrayRole,
+    compressor: Any,
+    chunks: tuple[int, ...] | None = None,
+    eaf_baseline: np.ndarray | None = None,
+    se_coefficients: np.ndarray | None = None,
 ) -> None:
-    """Encode a plane and write it with both of its side arrays, or as float16.
+    """Write a whole component's statistic planes from one encoded batch.
 
-    Dense and CSR differ only in how a cell's Analysis and flat position are
-    derived; everything downstream of that is one path, so a plane cannot be
-    written by one route and its exception table by another.
+    Each plane with the arrays it cannot be decoded without: z with its
+    overflow table, `eaf` with its baseline and exception table, `se` with its
+    coefficients and exception table. `role` is the planes' own (a Dense grid's
+    or an association sequence's) and decides the side arrays' roles. The `z`
+    plane takes `chunks` as a hint and the others take the chunks it resolved
+    to, so the three planes are chunked alike.
     """
-    data = np.asarray(values, dtype=np.float32)
-    if not codec.encoding.se.is_residual:
-        _write_se_arrays(
-            group,
-            codec,
-            data.astype(np.float16),
-            None,
-            None,
-            role=role,
-            compressor=compressor,
-            chunks=chunks,
-        )
-        return
-    if coefficients is None:
-        raise ValueError("residual SE needs se_coefficients")
-    exceptions = SeExceptionBuilder()
-    codes = codec.encode_se(
-        data,
-        eaf=eaf,
-        analysis_index=analysis_index,
-        coefficients=coefficients,
-        positions=positions,
-        exceptions=exceptions,
+    z_array = create_array(
+        group, "z", role, data=encoded.z, dtype=plan.z.dtype, compressor=compressor, hint=chunks
     )
+    resolved = None if chunks is None else tuple(int(size) for size in z_array.chunks)
+    if plan.z.is_fixed_point:
+        # A float plane has no overflow table, and must not acquire an empty one.
+        encoded.tables.z_overflow.write(group, role=_side_table_role(role))
+    if encoded.eaf is not None:
+        create_array(
+            group,
+            "eaf",
+            role,
+            data=encoded.eaf,
+            dtype=plan.eaf.dtype,
+            compressor=compressor,
+            hint=resolved,
+            overwrite=True,
+        )
+        if plan.eaf.is_residual:
+            if eaf_baseline is None:
+                raise EafBaselineError("a residual eaf plane is written with its eaf_baseline")
+            write_eaf_baseline(
+                group, eaf_baseline, compressor=compressor, role=_per_variant_role(role)
+            )
+            encoded.tables.eaf_exceptions.write(group, role=_side_table_role(role))
     _write_se_arrays(
         group,
-        codec,
-        codes,
-        coefficients,
-        exceptions,
+        StoreCodec(plan),
+        encoded.se,
+        se_coefficients,
+        encoded.tables.se_exceptions,
         role=role,
         compressor=compressor,
-        chunks=chunks,
+        chunks=resolved,
     )
 
 
-def write_se_dense(
-    group: Any,
-    codec: StoreCodec,
-    values: np.ndarray,
-    eaf: np.ndarray,
-    coefficients: np.ndarray | None,
-    *,
-    compressor: Any = None,
-    chunks: tuple[int, ...] | None = None,
+def write_dense_cells(
+    group: Any, plan: StoreEncoding, rows: np.ndarray, cols: np.ndarray, encoded: Encoded
 ) -> None:
-    """Write a Dense SE plane and all residual decode parameters atomically."""
-    data = np.asarray(values, dtype=np.float32)
-    n_analyses = data.shape[1]
-    _write_se_plane(
-        group,
-        codec,
-        data,
-        eaf,
-        np.broadcast_to(np.arange(n_analyses), data.shape),
-        coefficients,
-        positions_row_band(0, n_analyses),
-        compressor,
-        chunks,
-        ArrayRole.DENSE_STATISTIC_PLANE,
-    )
+    """Overwrite the Dense cells `(rows[i], cols[i])` of a built grid with an encoded batch.
 
-
-def write_se_csr(
-    group: Any,
-    codec: StoreCodec,
-    values: np.ndarray,
-    eaf: np.ndarray,
-    analysis_index: np.ndarray,
-    coefficients: np.ndarray | None,
-    *,
-    compressor: Any = None,
-    chunks: tuple[int, ...] | None = None,
-) -> None:
-    """Write a Ragged SE plane with ordinal-keyed exact exceptions."""
-    _write_se_plane(
-        group,
-        codec,
-        values,
-        eaf,
-        analysis_index,
-        coefficients,
-        positions_flat(0),
-        compressor,
-        chunks,
-        ArrayRole.ASSOCIATION_SEQUENCE,
-    )
-
-
-def write_eaf_csr(
-    group: Any,
-    codec: StoreCodec,
-    variant_index: np.ndarray,
-    values: np.ndarray,
-    *,
-    baseline: np.ndarray | None,
-    compressor: Any = None,
-    chunks: tuple[int, ...] | None = None,
-) -> None:
-    """Encode and write a CSR component's `eaf` plane and everything it needs.
-
-    A CSR cell's flat position is its ordinal in the concatenated arrays, which
-    is what its exception entry is keyed on.
+    The one partial in-place write against a built grid -- Hybrid completion
+    folding a crossed-over association into the Dense Component (issue #99).
+    Each side table is rewritten with its plane, not after it: a cell can
+    enter or leave a table, and a table left describing the value a cell used
+    to have is the stale-by-one-call-site defect the codec exists to prevent.
     """
-    encoding = codec.encoding.eaf
-    if encoding.is_absent:
+    rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
+    if len(rows) == 0:
         return
-    exceptions = EafExceptionBuilder()
-    per_cell = (
-        None
-        if baseline is None
-        else np.asarray(baseline, dtype=np.float32)[np.asarray(variant_index, dtype=np.int64)]
+    positions = positions_pairs(rows, cols, int(group["z"].shape[1]))
+    tables = encoded.tables
+    # One whole-shard write per touched shard, not a per-cell `vindex` write:
+    # the latter is a read-modify-write of the shard and is invisible to the
+    # whole-shard guard (#247 review round 1).
+    write_shard_cells(group["z"], rows, cols, encoded.z)
+    if plan.z.is_fixed_point:
+        # A float plane has no overflow table, and must not acquire an empty one.
+        z_table = ZOverflowTable.read(group)
+        _merged(z_table, positions, tables.z_overflow, ZOverflowBuilder()).write(group)
+    if encoded.imputed is not None:
+        write_shard_cells(group["imputed"], rows, cols, encoded.imputed)
+    if encoded.eaf is not None and "eaf" in group:
+        write_shard_cells(group["eaf"], rows, cols, encoded.eaf)
+        if plan.eaf.is_residual:
+            eaf_table = EafExceptionTable.read(group)
+            _merged(eaf_table, positions, tables.eaf_exceptions, EafExceptionBuilder()).write(group)
+    write_shard_cells(group["se"], rows, cols, encoded.se)
+    if plan.se.is_residual:
+        se_table = SeExceptionTable.read(group)
+        merged = _merged(se_table, positions, tables.se_exceptions, SeExceptionBuilder())
+        merged.write(group, compressor=compressor())
+
+
+_Table = ZOverflowTable | EafExceptionTable | SeExceptionTable
+_Builder = ZOverflowBuilder | EafExceptionBuilder | SeExceptionBuilder
+
+
+def _merged(previous: _Table, positions: np.ndarray, added: _Table, builder: _Builder) -> _Table:
+    """`previous` with the entries at `positions` replaced by `added`'s.
+
+    `previous` is the whole table read from the group: a codec's table is a
+    windowed view whose in-memory arrays are empty, and merging with it would
+    drop every existing entry (#99 review round 2, finding 1).
+    """
+    untouched = ~np.isin(previous.index, positions)
+    builder.add(previous.index[untouched], previous.value[untouched])
+    builder.add(added.index, added.value)
+    return builder.table()
+
+
+def _per_variant_role(plane_role: ArrayRole) -> ArrayRole:
+    """The per-variant array role for a plane's role, as `_side_table_role` is for tables."""
+    return (
+        ArrayRole.RAGGED_PER_VARIANT
+        if plane_role is ArrayRole.ASSOCIATION_SEQUENCE
+        else ArrayRole.PER_VARIANT
     )
-    codes = codec.encode_eaf(
-        values, baseline=per_cell, positions=positions_flat(0), exceptions=exceptions
-    )
-    create_array(
-        group,
-        "eaf",
-        ArrayRole.ASSOCIATION_SEQUENCE,
-        data=codes,
-        dtype=codec.eaf_dtype,
-        compressor=compressor,
-        hint=chunks,
-        overwrite=True,
-    )
-    if encoding.is_residual:
-        assert baseline is not None
-        write_eaf_baseline(
-            group, baseline, compressor=compressor, role=ArrayRole.RAGGED_PER_VARIANT
-        )
-        exceptions.table().write(
-            group, role=ArrayRole.RAGGED_EXCEPTION_TABLE
-        )

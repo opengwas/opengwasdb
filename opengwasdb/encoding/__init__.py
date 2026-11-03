@@ -78,10 +78,7 @@ from opengwasdb.encoding.planes import (
     RaggedEafPlane,
     RaggedSePlane,
     write_eaf_baseline,
-    write_eaf_csr,
     write_eaf_reference,
-    write_se_csr,
-    write_se_dense,
 )
 from opengwasdb.encoding.se import (
     OverflowCellBatches,
@@ -170,10 +167,7 @@ __all__ = [
     "positions_rows_cols",
     "per_variant_chunk_size",
     "write_eaf_baseline",
-    "write_eaf_csr",
     "write_eaf_reference",
-    "write_se_dense",
-    "write_se_csr",
     "optimise_dense_se",
     "optimise_dense_se_joint",
     "rewrite_dense_se",

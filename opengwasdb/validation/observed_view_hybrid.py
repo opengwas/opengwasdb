@@ -568,8 +568,7 @@ class _DenseCodec(NamedTuple):
             StoreCodec(self.codec.plan).quantise_z(values.z),
             np.where(z_gone, np.float32(np.nan), back.z),
         ).astype(np.float32)
-        eaf = np.full(len(rows), np.nan, np.float32) if back.eaf is None else back.eaf
-        return _Cells(z, back.se, eaf)
+        return _Cells(z, back.se, back.eaf)
 
 
 class _CrossoversSetAside(_Planes):

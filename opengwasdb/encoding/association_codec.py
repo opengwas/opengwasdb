@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 import numpy as np
 
@@ -46,6 +46,7 @@ __all__ = [
     "SE_FLOAT16_MAX",
     "AssociationCodec",
     "CellValues",
+    "Decoded",
     "Encoded",
     "Placement",
     "Storable",
@@ -75,6 +76,15 @@ class CellValues:
     se: np.ndarray
     eaf: np.ndarray | None = None
     imputed: np.ndarray | None = None
+
+
+class Decoded(NamedTuple):
+    """What a reader decodes for a batch: NaN where a statistic is missing and
+    where no frequency is held, and the panel's frequency on an imputed cell."""
+
+    z: np.ndarray
+    se: np.ndarray
+    eaf: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -237,7 +247,7 @@ class AssociationCodec:
         tables = SideTables(z_overflow.table(), eaf_exceptions.table(), se_exceptions.table())
         return Encoded(z, se, eaf, imputed, tables, kept)
 
-    def round_trip(self, cells: CellValues, at: Placement, *, where: str) -> CellValues:
+    def round_trip(self, cells: CellValues, at: Placement, *, where: str) -> Decoded:
         """What a reader decodes for `cells` once stored at `at`; nothing is written."""
         encoded = self.encode(cells, at, where=where)
         decoder = encoded.tables.decoder(self.plan)
@@ -258,12 +268,7 @@ class AssociationCodec:
                 analysis_index=np.zeros(shape, np.int64),
                 coefficients=np.zeros((0, 2), np.float32),
             )
-        return CellValues(
-            decoder.decode_z(encoded.z, positions=at.positions),
-            se,
-            None if encoded.eaf is None else eaf,
-            cells.imputed,
-        )
+        return Decoded(decoder.decode_z(encoded.z, positions=at.positions), se, eaf)
 
     # ── the planes, in order ────────────────────────────────────────────────
 

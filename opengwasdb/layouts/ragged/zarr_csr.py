@@ -411,10 +411,9 @@ class RaggedCSRWriter:
             Placement.sequence(0, vi, ai, self.n_analyses),
             where="the Ragged writer's SE fit",
         )
-        decoded = np.full(eaf.shape, np.nan, dtype=np.float32) if back.eaf is None else back.eaf
         return OverflowCells(
             se_values=se,
-            eaf_values=decoded,
+            eaf_values=back.eaf,
             analysis_indices=ai,
             n_analyses=self.n_analyses,
         )

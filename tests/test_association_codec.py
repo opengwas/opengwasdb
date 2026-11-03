@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import numpy as np
 import pytest
+import zarr
 
 from opengwasdb.admission import NotAdmitted
 from opengwasdb.encoding import association_codec
@@ -25,6 +27,14 @@ from opengwasdb.encoding.plan import (
     StoreEncoding,
     ZEncoding,
 )
+from opengwasdb.encoding.planes import (
+    DenseEafPlane,
+    DenseSePlane,
+    DenseZPlane,
+    write_dense_cells,
+    write_encoded_planes,
+)
+from opengwasdb.store.arrays import ArrayRole, compressor
 
 NAN = np.float32(np.nan)
 
@@ -163,7 +173,6 @@ def test_se_is_coded_against_the_frequency_a_reader_decodes_not_the_sources() ->
     codec = _codec()
     encoded = codec.encode(cells, at, where="x")
     decoded_eaf = codec.round_trip(cells, at, where="x").eaf
-    assert decoded_eaf is not None
     analyses = np.asarray(at.analyses)
     coefficients = _codec()._model()
 
@@ -195,7 +204,6 @@ def test_an_imputed_cell_is_coded_against_the_panels_frequency() -> None:
 
     back = codec.round_trip(cells, at, where="x")
 
-    assert back.eaf is not None
     assert back.eaf[0] == np.float32(0.25)
     assert abs(back.eaf[1] - 0.4) < 1e-3
     np.testing.assert_allclose(back.se, cells.se, rtol=0.01)
@@ -217,7 +225,7 @@ def test_the_baseline_is_gathered_by_each_cells_row_and_tables_keyed_by_its_posi
     assert encoded.tables.z_overflow.index.tolist() == [2 * _N_ANALYSES + 0]
     assert encoded.tables.eaf_exceptions.index.tolist() == [2 * _N_ANALYSES + 0]
     assert back.z[1] == np.float32(200.0)
-    assert back.eaf is not None and back.eaf[1] == np.float32(0.999999)
+    assert back.eaf[1] == np.float32(0.999999)
 
 
 def test_a_band_encodes_as_its_cells_do() -> None:
@@ -273,3 +281,66 @@ def test_a_cell_admission_forbids_never_reaches_a_plane() -> None:
     at = Placement.pairs(np.array([0]), np.array([0]), _N_ANALYSES)
     with pytest.raises(NotAdmitted, match="one of z and SE missing"):
         _codec().encode(cells, at, where="x")
+
+
+# ── Writing an encoded batch ─────────────────────────────────────────────────
+
+
+def _written_band(tmp_path, n_rows: int = 8) -> tuple[Any, AssociationCodec, CellValues]:
+    """A residual Dense grid written whole, with entries in every side table."""
+    rng = np.random.default_rng(7)
+    codec = _codec()
+    near = codec._baseline[:n_rows, None] * rng.uniform(0.99, 1.01, (n_rows, _N_ANALYSES))
+    eaf = near.astype(np.float32)
+    se = np.exp(-3.0 - 0.5 * np.log(2 * eaf * (1 - eaf))).astype(np.float32)
+    z = rng.normal(0, 2, eaf.shape).astype(np.float32)
+    for row in (0, 5):  # exceptional in every plane
+        z[row, 1], eaf[row, 1], se[row, 1] = 300.0, 0.999999, 4000.0
+    cells = CellValues(z, se, eaf)
+    encoded = codec.encode(cells, Placement.band(0, n_rows, _N_ANALYSES), where="x")
+    group = zarr.open_group(str(tmp_path / "grid.zarr"), mode="w", zarr_format=3)
+    write_encoded_planes(
+        group,
+        _RESIDUAL,
+        encoded,
+        role=ArrayRole.DENSE_STATISTIC_PLANE,
+        compressor=compressor(),
+        eaf_baseline=codec._baseline,
+        se_coefficients=codec._model(),
+    )
+    for table in ("z_overflow_index", "eaf_exception_index", "se_exception_index"):
+        assert group[table][:].tolist() == [1, 5 * _N_ANALYSES + 1], table
+    return group, codec, cells
+
+
+def _read_band(group: Any, n_rows: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    eaf = DenseEafPlane.open(group, _RESIDUAL).band(0, n_rows)
+    se = DenseSePlane.open(group, _RESIDUAL).band(0, n_rows)
+    return DenseZPlane.open(group, _RESIDUAL).band(0, n_rows), se, eaf
+
+
+def test_a_written_grid_reads_back_as_the_codec_round_trips_it(tmp_path) -> None:
+    group, codec, cells = _written_band(tmp_path)
+    expected = codec.round_trip(cells, Placement.band(0, 8, _N_ANALYSES), where="x")
+    for found, want in zip(_read_band(group, 8), expected, strict=True):
+        np.testing.assert_array_equal(found, want)
+
+
+def test_writing_cells_moves_each_cells_table_entries_and_keeps_the_rest(tmp_path) -> None:
+    """Row 0's exceptional cell becomes ordinary and row 2's ordinary one exceptional:
+    each table loses one entry and gains one, and row 5's entries stay."""
+    group, codec, _ = _written_band(tmp_path)
+    rows, cols = np.array([0, 2]), np.array([1, 3])
+    batch = CellValues(_f32(1.5, 400.0), _f32(0.05, 4500.0), _f32(0.4, 0.999999))
+    at = Placement.pairs(rows, cols, _N_ANALYSES)
+
+    write_dense_cells(group, _RESIDUAL, rows, cols, codec.encode(batch, at, where="x"))
+
+    for table in ("z_overflow_index", "eaf_exception_index", "se_exception_index"):
+        assert group[table][:].tolist() == [2 * _N_ANALYSES + 3, 5 * _N_ANALYSES + 1], table
+    expected = codec.round_trip(batch, at, where="x")
+    z, se, eaf = _read_band(group, 8)
+    np.testing.assert_array_equal(z[rows, cols], expected.z)
+    np.testing.assert_array_equal(se[rows, cols], expected.se)
+    np.testing.assert_array_equal(eaf[rows, cols], expected.eaf)
+    assert z[5, 1] == np.float32(300.0) and se[5, 1] == np.float32(4000.0)

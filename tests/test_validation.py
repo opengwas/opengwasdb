@@ -4,6 +4,7 @@ import gzip
 from pathlib import Path
 
 import numpy as np
+import plane_edits
 import pytest
 
 from opengwasdb.encoding import DenseSePlane
@@ -421,7 +422,8 @@ def test_validator_warns_about_an_infinite_se_in_both_hybrid_components(tmp_path
     assert component.manifest.encoding.se.kind == "float16"  # fixture sanity
     rows, cols = np.array([0]), np.array([1])  # trait_c observes the one panel variant
     assert np.isfinite(dense_se.points(rows, cols)[0])  # fixture sanity: an observed cell
-    dense_se.patch(rows, cols, np.array([np.inf], dtype=np.float32))
+    group, encoding = component.arrays(mode="r+"), component.manifest.encoding
+    plane_edits.patch(group, encoding, DenseSePlane, rows, cols, np.array([np.inf], np.float32))
     ragged = open_store(store).arrays(mode="r+")["ragged"]
     assert ragged["se"].dtype == np.dtype("float16")  # fixture sanity
     overflow = int(ragged["offsets"][0])  # trait_a's off-panel association comes first

@@ -32,9 +32,10 @@ import numpy as np
 import pytest
 import zarr
 
-from opengwasdb.encoding import StoreCodec, StoreEncoding, write_eaf_baseline
+from opengwasdb.encoding import StoreEncoding, write_eaf_baseline
+from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, ZEncoding
-from opengwasdb.encoding.planes import write_eaf_csr, write_se_csr
+from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.layouts.dense.constants import DEFAULT_COMPRESSOR
 from opengwasdb.store.arrays import (
     COMPRESSOR_RECORD,
@@ -780,20 +781,20 @@ def test_explicit_overrides_still_win() -> None:
     assert chunk_layout(ArrayRole.DENSE_STATISTIC_PLANE, (3, 2), hint=(1000, 1000)) == (3, 2)
 
 
-def test_csr_writers_honour_an_explicit_chunks_override(tmp_path: Path) -> None:
-    """`write_se_csr`/`write_eaf_csr` must forward `chunks=` to the array."""
+def test_the_plane_writer_honours_an_explicit_chunks_override(tmp_path: Path) -> None:
+    """`write_encoded_planes` must forward `chunks=` to every CSR plane."""
     group = zarr.open_group(str(tmp_path / "ragged.zarr"), mode="w", zarr_format=2)
     plan = StoreEncoding(
         z=ZEncoding("float16"), se=SeEncoding("float16"), eaf=EafEncoding("float32")
     )
-    codec = StoreCodec(plan)
     values = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     eaf = np.array([0.1, 0.2, 0.3], dtype=np.float32)
-    analysis_index = np.array([0, 0, 1], dtype=np.int64)
-    write_se_csr(group, codec, values, eaf, analysis_index, None, chunks=(1,))
-    write_eaf_csr(group, codec, np.arange(3, dtype=np.int32), eaf, baseline=None, chunks=(1,))
-    assert tuple(group["se"].chunks) == (1,)
-    assert tuple(group["eaf"].chunks) == (1,)
+    at = Placement.sequence(0, np.arange(3), np.array([0, 0, 1]), 2)
+    encoded = AssociationCodec(plan).encode(CellValues(values, values, eaf), at, where="x")
+    write_encoded_planes(
+        group, plan, encoded, role=ArrayRole.ASSOCIATION_SEQUENCE, compressor=None, chunks=(1,)
+    )
+    assert [tuple(group[plane].chunks) for plane in ("z", "se", "eaf")] == [(1,)] * 3
 
 
 def test_legacy_per_variant_chunk_size_still_accepts_a_group(tmp_path: Path) -> None:

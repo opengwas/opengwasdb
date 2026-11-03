@@ -14,6 +14,7 @@ import shutil as file_ops
 from pathlib import Path
 
 import numpy as np
+import plane_edits
 import pytest
 import zarr
 from residual_fixtures import write_gwas_vcf_with_eaf
@@ -674,7 +675,7 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
 
     # Row 1 / analysis column 0: dense completion already wrote an LD-imputed
     # guess here before the fold runs.
-    DenseZPlane.open(root, encoding).patch(np.array([1]), np.array([0]), np.array([1.23]))
+    plane_edits.patch(root, encoding, DenseZPlane, np.array([1]), np.array([0]), np.array([1.23]))
     root["se"][1, 0] = 0.5
     root["imputed"][1, 0] = 1
 
@@ -688,7 +689,7 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
 
     n_reclaimed = _fold_panel_crossovers(
         dense_dir, dense_alid_to_row, offsets, src_z, src_se, src_eaf,
-        overflow_alids, is_crossover, encoding=encoding, dense_encoding=encoding,
+        overflow_alids, is_crossover, dense_encoding=encoding,
     )
 
     assert n_reclaimed == 1

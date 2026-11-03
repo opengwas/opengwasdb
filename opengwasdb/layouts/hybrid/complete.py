@@ -42,13 +42,9 @@ import numpy as np
 
 from opengwasdb import top_hits
 from opengwasdb.admission import require_paired
-from opengwasdb.encoding import (
-    EAF_BASELINE,
-    DenseEafPlane,
-    DenseSePlane,
-    DenseZPlane,
-    StoreEncoding,
-)
+from opengwasdb.encoding import EAF_BASELINE, StoreEncoding
+from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
+from opengwasdb.encoding.planes import write_dense_cells
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
@@ -72,7 +68,7 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.arrays import open_group, open_group_for_write, write_shard_cells
+from opengwasdb.store.arrays import open_group, open_group_for_write
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     StagedRelease,
@@ -213,7 +209,7 @@ def complete_hybrid_store(
         # Phase 2: read the source overflow once, fold panel crossovers into
         # the completed component, and rebuild the shared union axis.
         overflow = _read_source_overflow(src)
-        axis = _remap_shared_axis(dense, overflow, src_manifest.encoding)
+        axis = _remap_shared_axis(dense, overflow)
         # Phase 3: shared index/variant table/dense_to_shared map, then the
         # overflow CSR rebuilt on the remapped indices.
         analyses = _read_analyses(dense.dir)
@@ -325,11 +321,7 @@ def _read_source_overflow(src: Path) -> _SourceOverflow:
     )
 
 
-def _remap_shared_axis(
-    dense: _CompletedDense,
-    overflow: _SourceOverflow,
-    source_encoding: StoreEncoding,
-) -> _SharedAxis:
+def _remap_shared_axis(dense: _CompletedDense, overflow: _SourceOverflow) -> _SharedAxis:
     """Fold panel crossovers into the completed Dense Component and rebuild
     the shared union axis (issue #99): an off-panel variant that became
     on-panel after completion has its real observed value folded in (marked
@@ -356,7 +348,6 @@ def _remap_shared_axis(
         overflow.eaf,
         overflow_alids,
         is_crossover,
-        encoding=source_encoding,
         dense_encoding=dense.encoding,
     )
     n_imputed = dense.n_imputed - n_reclaimed_imputed
@@ -553,7 +544,6 @@ def _fold_panel_crossovers(
     src_eaf: np.ndarray,
     overflow_alids: np.ndarray,
     is_crossover: np.ndarray,
-    encoding: StoreEncoding,
     dense_encoding: StoreEncoding,
 ) -> int:
     """Write every crossover association's real observed value into the
@@ -587,22 +577,23 @@ def _fold_panel_crossovers(
     root = open_group_for_write(dense_dir / "data.zarr", "a")
     was_imputed = np.asarray(root["imputed"].vindex[row_idx, col_idx])
     n_reclaimed = int(was_imputed.sum())
-    # Through the plane, so the Dense Component's overflow table moves with the
-    # cells being overwritten rather than being left describing their old values.
-    DenseZPlane.open(root, encoding).patch(row_idx, col_idx, z_vals)
-    write_shard_cells(
-        root["imputed"], row_idx, col_idx, np.zeros(len(row_idx), dtype=np.uint8)
+    # One encode under the Dense Component's own plan, and every side table
+    # rewritten with its plane. The crossed-over cell's EAF moves with its z/se
+    # (ADR 0036): the fold writes one real observation, not two. It is coded
+    # against the Dense Component's baseline, and its SE against that decoded
+    # EAF -- the observation's, since the cell is written as observed
+    # (`imputed=0`) and so the panel's frequency never stands in for it.
+    encoded = AssociationCodec.of_component(root, dense_encoding).encode(
+        CellValues(
+            z_vals,
+            se_vals,
+            eaf_vals if "eaf" in root else None,
+            imputed=np.zeros(len(row_idx), dtype=np.uint8),
+        ),
+        Placement.pairs(row_idx, col_idx, int(root["z"].shape[1])),
+        where="complete-hybrid, a crossover fold",
     )
-    # The crossed-over cell's EAF moves with its z/se (ADR 0036) -- the whole
-    # point of the fold is that this is one real observation, not two. Through
-    # the plane, so the cell is coded against the Dense Component's own
-    # baseline and its exception table moves with it. The Dense Component has
-    # already been completed at this point, so its plan carries reference EAF;
-    # the fold clears `imputed` above, which is what stops the panel value from
-    # standing in for the observation now being written.
-    if "eaf" in root:
-        DenseEafPlane.open(root, dense_encoding).patch(row_idx, col_idx, eaf_vals)
-    DenseSePlane.open(root, dense_encoding).patch(row_idx, col_idx, se_vals)
+    write_dense_cells(root, dense_encoding, row_idx, col_idx, encoded)
     return n_reclaimed
 
 
