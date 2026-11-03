@@ -69,11 +69,12 @@ early physical stop at the ancestry bound.
 - When both filters would drop a row it is counted once, under
   `info_rows_below_threshold` (INFO first), never also under
   `maf_rows_below_threshold`.
-- **Scope.** The rule is the Hybrid builder's Pass 2 and this record. A
-  standalone Dense build (`build-dense-vcf`) writes a fixed reference-panel axis
-  and applies no row admission, so a MAF floor has no admission decision to make
-  there; the Ragged builders ignore a declared `maf_threshold` altogether today
-  (ADR 0054's scope amendment says both plainly).
+- **Scope.** The rule is every builder's and this record's (issue #357, D2,
+  ADR 0072): `build-hybrid`, `build-dense-vcf` and `build-ragged-ssf` apply a
+  declared INFO and MAF filter, and `build-ragged-besd` a declared MAF filter,
+  judged on the `.esi` frequency (with `--store-esi-eaf`; a BESD source has no
+  imputation score, so an INFO threshold there is refused). Before #357 only the
+  Hybrid applied them (ADR 0054's scope amendment).
 - **Resume.** `build-hybrid --checkpoint` records `CHECKPOINT_FORMAT_VERSION`
   3; a format-1 checkpoint predates this rule, a format-2 one predates
   Admission's reasons, and both are refused rather than resumed.

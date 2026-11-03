@@ -627,3 +627,79 @@ def test_a_hybrid_drops_an_unmatched_row_only_where_nothing_folds_it(
     assert len(off_reference[0]) == (1 if folds else 0)
     assert gate.counts.dropped == ({} if folds else {Reason.OFF_AXIS: 1})
     assert gate.dropped == ([] if folds else [("1:900:C:T", Reason.OFF_AXIS)])
+
+
+def test_a_dense_vcf_build_applies_a_declared_info_filter(tmp_path: Path):
+    """D2: the declared INFO threshold used to filter only a Hybrid build; a
+    Dense build of the same GWAS-SSF source now drops the same row."""
+    source = info_fixture._write_source(
+        tmp_path / "GCST_INFO.tsv.gz", [*info_fixture.SCORED_ROWS, info_fixture.NO_EFFECT_ROW]
+    )
+    manifest = info_fixture._manifest(tmp_path, source, "0.7")
+    store = tmp_path / "dense.opengwasdb"
+    build_dense_from_vcf_manifest(manifest, store, store_id="s", release_id="r")
+
+    (analysis,) = _analyses(store)
+    assert analysis["dropped"] == {"effect_missing": 1, "info_below_threshold": 1}
+    assert analysis["info"]["below_threshold"] == 1
+
+
+def test_a_ragged_ssf_build_applies_a_declared_maf_filter(tmp_path: Path):
+    """D2 for `build-ragged-ssf`, which used to ignore a declared MAF floor."""
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    ssf_fixture._write_filtered(
+        filtered / "trait_a.tsv.gz",
+        [
+            {"chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
+             "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
+             "effect_allele_frequency": 0.3},
+            {"chromosome": "1", "base_pair_location": 200_000, "effect_allele": "A",
+             "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
+             "effect_allele_frequency": 0.001},
+        ],
+    )
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "analysis_index\tanalysis_id\tfiltered_file\tmaf_threshold\n0\ttrait_a\ttrait_a.tsv.gz\t0.01\n",
+        encoding="utf-8",
+    )
+    store = tmp_path / "ssf.opengwasdb"
+    result = build_ragged_from_ssf(
+        manifest, filtered, store, store_id="s", release_id="r",
+        association_coverage="signals_only",
+    )
+
+    (analysis,) = _analyses(store)
+    assert analysis["dropped"] == {"maf_below_threshold": 1}
+    assert result.n_associations == 1
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "match"),
+    [
+        ("maf_threshold", "0.01", "--store-esi-eaf"),
+        ("info_score_threshold", "0.6", "INFO policy"),
+    ],
+)
+def test_a_besd_build_refuses_a_filter_it_cannot_judge(
+    tmp_path: Path, column: str, value: str, match: str
+):
+    """D2: a BESD source has no imputation score, and its only frequency is the
+    `.esi`'s, which the build reads only with `store_esi_eaf`."""
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    besd_fixtures.write_esi(
+        fixture / "test.esi",
+        [{"chr": "1", "snp_id": "rs1", "bp": 1_000_000, "a1": "A", "a2": "G"}],
+    )
+    besd_fixtures.write_epi(fixture / "test.epi", [{"chr": "1", "probe_id": "ENSG1", "bp": 1}])
+    besd_fixtures.write_besd_sparse_3f(fixture / "test.besd", 1, [[(0, 0.1, 0.02)]])
+    overlay = tmp_path / "analyses.tsv"
+    overlay.write_text(f"analysis_id\t{column}\nENSG1\t{value}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=match):
+        build_ragged_from_besd(
+            fixture / "test", tmp_path / "besd.opengwasdb", store_id="s", release_id="r",
+            association_coverage="cis_and_signals", analyses_path=overlay,
+        )

@@ -19,6 +19,7 @@ import csv
 import logging
 import math
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -34,6 +35,7 @@ from opengwasdb.admission import (
     admission_record_for,
     require_admitted,
 )
+from opengwasdb.admission.declared import declared_rules
 from opengwasdb.build.eaf_orientation import EafOrientationReport, apply_orientation_evidence
 from opengwasdb.build.liftover import (
     LiftedRow,
@@ -70,6 +72,7 @@ from opengwasdb.model.enums import (
     SampleSizeScope,
     coverage_for_layout,
 )
+from opengwasdb.model.maf_policy import MafState
 from opengwasdb.model.manifest_columns import manifest_column
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import add_hit_counts
@@ -227,7 +230,8 @@ def _build_besd_release(
         [analysis.analysis_id for analysis in analyses],
         command="build-ragged-besd",
     )
-    csr, encoding, scopes = _ingest_besd(prefix, axis, staged.path, sample_sizes, record)
+    rules = _besd_rules(request.analyses_path, analyses, axis)
+    csr, encoding, scopes = _ingest_besd(prefix, axis, staged.path, sample_sizes, record, rules)
     analyses, eaf_report = _stamp_probe_scopes(analyses, scopes, axis, eaf_report)
     # Phase 5 — indexes and manifest output.
     _write_besd_outputs(staged, analyses, encoding)
@@ -893,8 +897,35 @@ class _ProbeRows(NamedTuple):
     esi_row: list[int]
 
 
+def _besd_rules(
+    analyses_path: str | Path | None, analyses: list[Analysis], axis: _EsiAxis
+) -> dict[str, AnalysisRules]:
+    """Each probe's declared filters (D2), from the analyses overlay if one is given.
+
+    A BESD source has no imputation score, so an INFO threshold is refused
+    when parsed. A MAF filter is judged on the `.esi` frequency, which the
+    build holds only with `store_esi_eaf`; a filtering policy without it is
+    refused rather than judged on nothing.
+    """
+    if analyses_path is None:
+        return {a.analysis_id: AnalysisRules(a.analysis_id) for a in analyses}
+    rules = declared_rules(analyses_path, {a.analysis_id: None for a in analyses})
+    filtering = [i for i, r in rules.items() if r.maf.state is MafState.FILTERED]
+    if filtering and axis.eaf_by_esi is None:
+        raise ValueError(
+            f"{len(filtering)} Analysis/Analyses declare a MAF threshold (first: "
+            f"{filtering[0]!r}), which a BESD build judges on the .esi frequency; "
+            "pass --store-esi-eaf so the build reads it"
+        )
+    return rules
+
+
 def _admitted(
-    raw_snp_idx: np.ndarray, betas: np.ndarray, ses: np.ndarray, gate: Gate
+    raw_snp_idx: np.ndarray,
+    betas: np.ndarray,
+    ses: np.ndarray,
+    gate: Gate,
+    eaf_by_esi: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """One probe's raw BESD rows that Association Admission keeps.
 
@@ -907,7 +938,7 @@ def _admitted(
         z = np.where((se > 0) & np.isfinite(se), np.asarray(betas, dtype=np.float64) / se, np.nan)
     keep = gate.source_rows(
         SourceRows(
-            eaf=np.full(len(ses), np.nan),
+            eaf=np.full(len(ses), np.nan) if eaf_by_esi is None else eaf_by_esi[raw_snp_idx],
             se=se,
             z=z,
             keys_at=lambda positions: [f"esi:{int(i)}" for i in raw_snp_idx[positions]],
@@ -1017,7 +1048,8 @@ def _ingest_probe(
     raw_snp_idx, betas, ses = besd.get_probe_associations(probe.row_idx)
     n_raw = len(raw_snp_idx)
     sizes = None if sample_sizes is None else sample_sizes.sizes_for(probe.probe_id)
-    rows = _map_probe_rows(*_admitted(raw_snp_idx, betas, ses, gate), axis.esi_to_variant, gate)
+    admitted = _admitted(raw_snp_idx, betas, ses, gate, axis.eaf_by_esi)
+    rows = _map_probe_rows(*admitted, axis.esi_to_variant, gate)
     if not rows.variant_index:
         _add_empty_analysis(csr)
         return _ProbeScopes(has_eaf=False, has_n=False), n_raw > 0
@@ -1061,6 +1093,7 @@ def _ingest_besd(
     staged_path: Path,
     sample_sizes: SampleSizeTable | None,
     record: AdmissionRecord,
+    rules: Mapping[str, AnalysisRules],
 ) -> tuple[RaggedCSRWriter, StoreEncoding, list[_ProbeScopes]]:
     """Stream the BESD file into a CSR store under ``staged_path``.
 
@@ -1078,7 +1111,7 @@ def _ingest_besd(
     scopes: list[_ProbeScopes] = []
     skipped_probes = 0
     for probe, analysis_id in zip(axis.probes, record.analyses, strict=True):
-        with record.gate(AnalysisRules(analysis_id)) as gate:
+        with record.gate(rules[analysis_id]) as gate:
             scope, skipped = _ingest_probe(csr, besd, probe, axis, sample_sizes, gate)
         scopes.append(scope)
         skipped_probes += skipped

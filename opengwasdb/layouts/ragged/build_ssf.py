@@ -18,7 +18,7 @@ from __future__ import annotations
 import csv
 import gzip
 import math
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from itertools import compress
 from pathlib import Path
@@ -27,6 +27,7 @@ from typing import Any, NamedTuple
 import numpy as np
 
 from opengwasdb import admission
+from opengwasdb.admission.declared import declared_rules
 from opengwasdb.build.eaf_orientation import (
     EafOrientationReport,
     apply_orientation_evidence,
@@ -56,6 +57,9 @@ from opengwasdb.model.manifest_columns import (
     require_columns,
     resolve_manifest_columns,
 )
+from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
+from opengwasdb.readers.interface import ImputationScore, parse_imputation_score
+from opengwasdb.readers.tabular import resolve_imputation_score_column
 from opengwasdb.stats import parse_af
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import add_hit_counts
@@ -181,18 +185,29 @@ class _Assoc(NamedTuple):
 
 
 #: One filtered-file row with an effect, oriented to the stored allele:
-#: ``(variant, z, se, rsid, eaf)``. ``z`` and ``eaf`` follow the flip (ADR
+#: ``(variant, z, se, rsid, eaf, score)``, ``score`` the declared imputation
+#: score's parse, or None when none was declared. ``z`` and ``eaf`` follow the flip (ADR
 #: 0036). ``se`` is the reported one and may be unusable, which Admission
 #: judges; ``z`` is NaN when it is. A plain tuple: there is one per source row.
-_SourceRow = tuple[CanonicalVariant, float, float, str | None, float | None]
+_SourceRow = tuple[
+    CanonicalVariant, float, float, str | None, float | None, ImputationScore | None
+]
 
 
-def _read_filtered(path: Path) -> Iterator[_SourceRow]:
-    """Yield each row of a filtered file that names a variant."""
+def _read_filtered(path: Path, score_column: str | None = None) -> Iterator[_SourceRow]:
+    """Yield each row of a filtered file that names a variant.
+
+    ``score_column`` is a declared imputation score's column, which must occur
+    exactly once with its declared spelling, as the GWAS-SSF reader requires.
+    """
     opener = gzip.open if str(path).endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", newline="") as fh:
-        for row in csv.DictReader(fh, delimiter="\t"):
-            parsed = _source_row(row)
+        reader = csv.DictReader(fh, delimiter="\t")
+        if score_column is not None:
+            header = [name.encode("utf-8") for name in reader.fieldnames or []]
+            resolve_imputation_score_column(header, score_column)
+        for row in reader:
+            parsed = _source_row(row, score_column)
             if parsed is not None:
                 yield parsed
 
@@ -215,7 +230,7 @@ def _statistics(row: dict[str, str]) -> tuple[float, float]:
     return (beta / se if se > 0 and math.isfinite(se) else math.nan), se
 
 
-def _source_row(row: dict[str, str]) -> _SourceRow | None:
+def _source_row(row: dict[str, str], score_column: str | None = None) -> _SourceRow | None:
     """One filtered-file row, or None when it names no variant."""
     try:
         ori = orient_to_canonical(
@@ -236,15 +251,42 @@ def _source_row(row: dict[str, str]) -> _SourceRow | None:
         # the *other* allele the stored one, and z follows it (ADR 0036).
         z = -z
         eaf = None if eaf is None else 1.0 - eaf
-    return ori.variant, z, se, rsid, eaf
+    score = (
+        None if score_column is None
+        else parse_imputation_score(row.get(score_column), declared=True)
+    )
+    return ori.variant, z, se, rsid, eaf, score
+
+
+def _eaf_array(rows: list[_SourceRow]) -> np.ndarray:
+    """Each row's stored-allele frequency, NaN where it has none."""
+    return np.array([np.nan if row[4] is None else row[4] for row in rows], dtype=np.float64)
+
+
+def _score_arrays(rows: list[_SourceRow]) -> tuple[np.ndarray, np.ndarray]:
+    """The declared score's values (NaN where it has none) and statuses, row by row."""
+    scores = [row[5] for row in rows]
+    values = np.array(
+        [np.nan if s is None or s.value is None else s.value for s in scores], dtype=np.float64
+    )
+    statuses = np.array([s.status if s is not None else None for s in scores], dtype=object)
+    return values, statuses
 
 
 def _admitted_rows(path: Path, gate: admission.Gate) -> list[_SourceRow]:
-    """One filtered file's rows that its Analysis's Admission gate keeps, in file order."""
-    rows = list(_read_filtered(path))
+    """One filtered file's rows that its Analysis's Admission gate keeps, in file order.
+
+    The gate judges them by the Analysis's declared INFO and MAF filters too
+    (D2), from the declared score column and the file's own frequency.
+    """
+    declaration = gate.rules.info.imputation_score_declaration
+    rows = list(_read_filtered(path, None if declaration is None else declaration.column_name))
+    score, status = _score_arrays(rows) if declaration is not None else (None, None)
     keep = gate.source_rows(
         admission.SourceRows(
-            eaf=np.full(len(rows), np.nan),
+            eaf=_eaf_array(rows),
+            imputation_score=score,
+            imputation_status=status,
             se=np.fromiter((row[2] for row in rows), dtype=np.float64, count=len(rows)),
             z=np.fromiter((row[1] for row in rows), dtype=np.float64, count=len(rows)),
             keys_at=lambda positions: [rows[i][0].alid for i in positions.tolist()],
@@ -366,7 +408,8 @@ def _build_ssf_release(
         [a.analysis_id for a in analytes],
         command="build-ragged-ssf",
     )
-    per_analysis, alid_variant, rsid_by_alid = _ingest_ssf_sources(analytes, record)
+    rules = declared_rules(manifest_path, {a.analysis_id: GWAS_SSF_CAPABILITY for a in analytes})
+    per_analysis, alid_variant, rsid_by_alid = _ingest_ssf_sources(analytes, record, rules)
     eaf_report = _verify_eaf_orientation(
         analytes, per_analysis, alid_variant,
         eaf_reference=request.eaf_reference,
@@ -435,7 +478,9 @@ def _validate_stored_effect_scale(stored_effect_scale: str) -> None:
 
 
 def _ingest_ssf_sources(
-    analytes: list[AnalyteInput], record: admission.AdmissionRecord
+    analytes: list[AnalyteInput],
+    record: admission.AdmissionRecord,
+    rules: Mapping[str, admission.AnalysisRules],
 ) -> tuple[list[list[_Assoc]], dict[str, CanonicalVariant], dict[str, str]]:
     """Read every filtered source and resolve each analysis's associations.
 
@@ -452,8 +497,8 @@ def _ingest_ssf_sources(
     rsid_by_alid: dict[str, str] = {}
     for a in analytes:
         recs: list[_Assoc] = []
-        with record.gate(admission.AnalysisRules(a.analysis_id)) as gate:
-            for variant, z, se, rsid, eaf in _admitted_rows(a.filtered_path, gate):
+        with record.gate(rules[a.analysis_id]) as gate:
+            for variant, z, se, rsid, eaf, _ in _admitted_rows(a.filtered_path, gate):
                 alid = variant.alid
                 recs.append(_Assoc(alid, z, se, eaf))
                 if alid not in alid_variant:

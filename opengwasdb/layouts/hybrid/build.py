@@ -21,16 +21,15 @@ context, collision/provenance rules, the disjoint-partition layout).
 
 from __future__ import annotations
 
-import csv
 import logging
 import shutil
-import tempfile
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import mkdtemp
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -44,6 +43,7 @@ from opengwasdb.admission import (
     admission_record_for,
     require_admitted,
 )
+from opengwasdb.admission.declared import declared_rules
 from opengwasdb.admission.duplicates import record_duplicates
 from opengwasdb.build.eaf_orientation import (
     EafOrientationMethod,
@@ -173,9 +173,8 @@ from opengwasdb.model.enums import (
 from opengwasdb.model.info_score_policy import (
     InfoScorePolicy,
     InfoScoreState,
-    parse_info_score_policy,
 )
-from opengwasdb.model.maf_policy import MafPolicy, MafState, parse_maf_policy
+from opengwasdb.model.maf_policy import MafPolicy, MafState
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.readers.column_map import ColumnMap, as_column_map, load_column_map
 from opengwasdb.readers.registry import open_source
@@ -810,35 +809,16 @@ def _read_declared_policies(
     produced. The reader capability is the row's own resolved value, exactly as
     the manifest resolver parses the same row, so a CLI default applies to both.
     A partial or contradictory declaration is a manifest error naming its
-    Analysis, never a filter silently not applied.
+    Analysis, never a filter silently not applied. Every builder reads them
+    through `declared_rules`.
     """
-    with open(manifest_path, newline="", encoding="utf-8") as fh:
-        raw_rows = list(csv.DictReader(fh, delimiter="\t"))
-    if len(raw_rows) != len(rows):
-        raise ValueError(
-            f"manifest {manifest_path} changed while it was read: {len(rows)} rows parsed, "
-            f"{len(raw_rows)} re-read"
-        )
-    info: dict[str, InfoScorePolicy] = {}
-    maf: dict[str, MafPolicy] = {}
-    for row, raw in zip(rows, raw_rows, strict=True):
-        try:
-            info[row.trait_id] = parse_info_score_policy(
-                raw, reader_capability=row.source_reader_capability
-            )
-        except ValueError as exc:
-            raise ValueError(
-                f"manifest {manifest_path}: analysis {row.trait_id!r} has invalid INFO "
-                f"policy: {exc}"
-            ) from exc
-        try:
-            maf[row.trait_id] = parse_maf_policy(raw)
-        except ValueError as exc:
-            raise ValueError(
-                f"manifest {manifest_path}: analysis {row.trait_id!r} has invalid MAF "
-                f"policy: {exc}"
-            ) from exc
-    return DeclaredPolicies(info=info, maf=maf)
+    rules = declared_rules(
+        manifest_path, {row.trait_id: row.source_reader_capability for row in rows}
+    )
+    return DeclaredPolicies(
+        info={analysis_id: r.info for analysis_id, r in rules.items()},
+        maf={analysis_id: r.maf for analysis_id, r in rules.items()},
+    )
 
 
 def _route(
@@ -2347,7 +2327,7 @@ def _prepare_build(
     )
     if spill_dir is None:
         spill_dir = Path(
-            tempfile.mkdtemp(
+            mkdtemp(
                 prefix=f".{options.out.name}.hybridspill.",
                 dir=staged.path.parent,
             )

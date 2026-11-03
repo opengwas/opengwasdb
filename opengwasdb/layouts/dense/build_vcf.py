@@ -25,6 +25,7 @@ import numpy as np
 
 from opengwasdb.admission import AdmissionRecord, AnalysisRules, Reason, admission_record_for
 from opengwasdb.admission.cells import require_admitted
+from opengwasdb.admission.declared import declared_rules
 from opengwasdb.admission.duplicates import record_duplicates
 from opengwasdb.build.eaf_orientation import (
     DEFAULT_SAMPLE_SITES,
@@ -191,16 +192,15 @@ def build_dense_from_vcf_manifest(
     ``admission_record`` is Association Admission's record (#357), beside the Store.
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.DENSE)
-    manifest_rows = read_manifest(
-        manifest_path, default_source_reader_capability=source_reader_capability,
-        default_source_assembly=source_assembly, column_map=column_map,
+    manifest_rows, rules = _manifest_and_rules(
+        manifest_path, source_reader_capability, source_assembly, column_map
     )
 
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         prepared = _prepare_axis(
             staged, out, manifest_rows, chain_file, liftover_failure_threshold, chunk_shape,
-            n_workers, variant_reference,
+            n_workers, variant_reference, rules,
         )
         # Phases 5-7 run inside one spill-dir lifetime: every spill is removed
         # even when a phase fails, keeping the staged release atomic.
@@ -220,6 +220,23 @@ def build_dense_from_vcf_manifest(
         )
 
     return DenseBuildResult(out, len(prepared.axis.alids), len(prepared.axis.analyses))
+
+
+def _manifest_and_rules(
+    manifest_path: str | Path,
+    source_reader_capability: str | None,
+    source_assembly: str | None,
+    column_map: ColumnMap | str | Path | None,
+) -> tuple[list[ManifestRow], dict[str, AnalysisRules]]:
+    """The manifest's rows, and each Analysis's declared INFO and MAF filters (D2)."""
+    rows = read_manifest(
+        manifest_path, default_source_reader_capability=source_reader_capability,
+        default_source_assembly=source_assembly, column_map=column_map,
+    )
+    rules = declared_rules(
+        manifest_path, {row.trait_id: row.source_reader_capability for row in rows}
+    )
+    return rows, rules
 
 
 @dataclass(frozen=True)
@@ -268,6 +285,8 @@ class _PreparedBuild:
 
     axis: _AxisMetadata
     table: RouteTable
+    #: Each Analysis's declared INFO and MAF filters, by Analysis id (D2).
+    rules: Mapping[str, AnalysisRules] = field(default_factory=dict)
     #: The ``--variant-reference`` a single-pass build was given, or None for
     #: the inline two-pass build. Recorded in the store manifest's provenance
     #: so the axis's origin is auditable (issue #185).
@@ -380,6 +399,7 @@ def _prepare_axis(
     chunk_shape: tuple[int, int],
     n_workers: int,
     variant_reference: str | Path | None,
+    rules: Mapping[str, AnalysisRules],
 ) -> _PreparedBuild:
     """Phases 1-4: route, write the axis and index, and build the Pass 2 table.
 
@@ -417,6 +437,7 @@ def _prepare_axis(
         table=routing.table([axis.alids], keep_unmatched=True),
         variant_reference=str(variant_reference) if variant_reference is not None else None,
         column_map=column_map_provenance(manifest_rows),
+        rules=rules,
     )
 
 
@@ -429,6 +450,7 @@ class _Pass2Context:
     spill_dir: Path
     record: AdmissionRecord
     alids: Sequence[str]
+    rules: Mapping[str, AnalysisRules]
 
 
 def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
@@ -440,10 +462,11 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
     traffic deadlocked the pool.
     """
     col_idx, row = task
-    reader = open_source(row.source)
-    # A Dense build declares no INFO or MAF filter, so its gate judges every
-    # row by the rule set's other rules alone.
-    with context.record.gate(AnalysisRules(row.trait_id)) as gate:
+    rules = context.rules[row.trait_id]
+    reader = open_source(
+        row.source, imputation_score_declaration=rules.info.imputation_score_declaration
+    )
+    with context.record.gate(rules) as gate:
         routed = context.table.route_column(
             reader.stream_associations(),
             admit=gate.admit,
@@ -460,10 +483,8 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
 
 def _spill_columns(
     manifest_rows: Sequence[ManifestRow],
-    analysis_index: Mapping[str, int],
     spill_dir: Path,
-    table: RouteTable,
-    axis: _AxisMetadata,
+    prepared: _PreparedBuild,
     admission_record: Path,
     n_workers: int,
     pass2_start: float,
@@ -478,22 +499,22 @@ def _spill_columns(
     """
     log.info(
         "Pass 2: resolving %d analyses × %d variants (n_workers=%d)",
-        len(axis.analyses),
-        len(axis.alids),
+        len(prepared.axis.analyses),
+        len(prepared.axis.alids),
         n_workers,
     )
-    id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
-    tasks = [(analysis_index[row.trait_id], row) for row in manifest_rows]
+    id_by_col = {prepared.axis.analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
+    tasks = [(prepared.axis.analysis_index[row.trait_id], row) for row in manifest_rows]
     record = AdmissionRecord.open(
         admission_record, [row.trait_id for row in manifest_rows], command="build-dense-vcf"
     )
-    context = _Pass2Context(table, spill_dir, record, axis.alids)
+    context = _Pass2Context(prepared.table, spill_dir, record, prepared.axis.alids, prepared.rules)
     columns = fork_each(_route_and_spill, context, tasks, n_workers)
     for i, col_idx in enumerate(columns):
         log_progress(
             "Pass 2",
             i + 1,
-            len(axis.analyses),
+            len(prepared.axis.analyses),
             pass2_start,
             f"last: {id_by_col[col_idx]}",
             every=25,
@@ -614,10 +635,8 @@ def _spill_verify_and_encode(
         pass2_start = time.monotonic()
         _spill_columns(
             manifest_rows,
-            prepared.axis.analysis_index,
             spill_dir,
-            prepared.table,
-            prepared.axis,
+            prepared,
             admission_record,
             n_workers,
             pass2_start,

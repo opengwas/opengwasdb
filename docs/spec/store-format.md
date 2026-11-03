@@ -808,8 +808,9 @@ threshold, malformed thresholds, and a declaration alongside `NaN` are invalid.
 The declared source column must occur exactly once with the declared spelling;
 the GWAS-SSF reader rejects absent, padded, or ambiguous source header columns
 when it opens the file. These inputs define an ingestion policy, and a CORE
-build applies it: the Hybrid builder (issue #175) passes the declaration to the
-Source Reader and drops every association the policy excludes — a usable score
+build applies it: every builder (issue #175; since #357 not the Hybrid alone,
+ADR 0072) passes the declaration to the Source Reader and drops every
+association the policy excludes — a usable score
 strictly below a positive threshold, or a score that is missing, malformed,
 non-finite or out of `[0, 1]` — before Dense/Overflow routing, before the EAF
 orientation check and before the Top-Hit Counts, so nothing a declared
