@@ -67,6 +67,7 @@ one of them with the opposite sign, with no record of either.
 |---|---|---|---|
 | `se_unusable` | its reported SE is missing, not positive or not finite | yes | slice 4 (Ragged), D3 (every reader) |
 | `effect_missing` | it has a usable SE but no effect | yes | slice 5 |
+| `z_nonfinite` | its z is infinite, beside a usable SE | yes | D4 |
 | `info_below_threshold` | a usable score is below a `FILTERED` INFO threshold | no | ADR 0054 |
 | `maf_missing` | a `FILTERED` MAF policy finds no usable frequency | no | ADR 0054 |
 | `maf_below_threshold` | MAF is below a `FILTERED` threshold | no | ADR 0054 |

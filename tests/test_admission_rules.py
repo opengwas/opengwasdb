@@ -267,3 +267,17 @@ def test_require_admitted_refuses_each_broken_rule(z, se, eaf, imputed, rule):
             imputed=None if imputed is None else np.array(imputed, dtype=np.uint8),
             where="codec",
         )
+
+
+def test_an_infinite_z_is_its_own_reason_after_the_effect_rule():
+    keys = ["a", "b", "c"]
+    rows = SourceRows(
+        eaf=np.full(3, 0.3),
+        se=np.array([0.1, 0.1, 0.1]),
+        z=np.array([np.inf, -np.inf, np.nan]),
+        keys_at=lambda positions: [keys[i] for i in positions.tolist()],
+    )
+    gate = counting_gate(AnalysisRules("A1"))
+
+    assert gate.source_rows(rows).tolist() == [False, False, False]
+    assert gate.counts.dropped == {Reason.EFFECT_MISSING: 1, Reason.Z_NONFINITE: 2}

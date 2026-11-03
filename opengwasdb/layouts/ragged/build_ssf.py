@@ -187,7 +187,7 @@ _SourceRow = tuple[CanonicalVariant, float, float, str | None, float | None]
 
 
 def _read_filtered(path: Path) -> Iterator[_SourceRow]:
-    """Yield each row of a filtered file that names a variant and has an effect."""
+    """Yield each row of a filtered file that names a variant."""
     opener = gzip.open if str(path).endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", newline="") as fh:
         for row in csv.DictReader(fh, delimiter="\t"):
@@ -196,18 +196,17 @@ def _read_filtered(path: Path) -> Iterator[_SourceRow]:
                 yield parsed
 
 
-def _statistics(row: dict[str, str]) -> tuple[float, float] | None:
-    """``(z, se)`` in the source's orientation, or None when the row has no effect.
+def _statistics(row: dict[str, str]) -> tuple[float, float]:
+    """``(z, se)`` in the source's orientation, each as the row gives it.
 
-    An SE that is missing or unusable is returned as it is, NaN when it does not
-    parse, with a NaN z: Admission, not the parser, drops that row.
+    A value that does not parse is NaN. An unusable SE gives a NaN z, as does a
+    missing effect, and an infinite effect an infinite z: Admission, not the
+    parser, drops and logs each such row.
     """
     try:
         beta = float(row.get("beta") or "")
     except ValueError:
-        return None
-    if not math.isfinite(beta):
-        return None
+        beta = math.nan
     try:
         se = float(row.get("standard_error") or "")
     except ValueError:
@@ -216,7 +215,7 @@ def _statistics(row: dict[str, str]) -> tuple[float, float] | None:
 
 
 def _source_row(row: dict[str, str]) -> _SourceRow | None:
-    """One filtered-file row, or None when it names no variant or has no effect."""
+    """One filtered-file row, or None when it names no variant."""
     try:
         ori = orient_to_canonical(
             row["chromosome"], row["base_pair_location"],
@@ -224,10 +223,7 @@ def _source_row(row: dict[str, str]) -> _SourceRow | None:
         )
     except (VariantNormalisationError, KeyError):
         return None
-    statistics = _statistics(row)
-    if statistics is None:
-        return None
-    z, se = statistics
+    z, se = _statistics(row)
     # GWAS-SSF harmonised files carry a dedicated `rsid` column; `variant_id`
     # is the harmonised (non-rs) identifier and only usable as a fallback
     # when `rsid` is absent (opengwasdb-stores' download-filter step selects
@@ -250,6 +246,7 @@ def _admitted_rows(path: Path, record: AdmissionRecord, analysis_id: str) -> lis
             SourceRows(
                 eaf=np.full(len(rows), np.nan),
                 se=np.fromiter((row[2] for row in rows), dtype=np.float64, count=len(rows)),
+                z=np.fromiter((row[1] for row in rows), dtype=np.float64, count=len(rows)),
                 keys_at=lambda positions: [rows[i][0].alid for i in positions.tolist()],
             )
         )

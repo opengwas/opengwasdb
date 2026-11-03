@@ -221,8 +221,8 @@ def _dropped(record: Path, index: int) -> list[list[str]]:
 
 def test_a_ragged_ssf_build_logs_each_unusable_se(tmp_path: Path):
     """The SE of 1:300000 does not parse and that of 1:400000 is 0: both are
-    dropped, counted and logged by ALID. 1:600000's beta is not finite, so it
-    has no effect at all and is not an association Admission judges."""
+    dropped, counted and logged by ALID. 1:600000's beta is infinite, so its z
+    is too, and it is dropped and logged as well (D4)."""
     manifest, filtered = ssf_fixture._make_fixture(tmp_path)
     store = tmp_path / "ssf.opengwasdb"
     build_ragged_from_ssf(
@@ -237,12 +237,14 @@ def test_a_ragged_ssf_build_logs_each_unusable_se(tmp_path: Path):
     written = json.loads((record / "admission.json").read_text(encoding="utf-8"))
     assert written["command"] == "build-ragged-ssf"
     first, second = written["analyses"]
-    assert (first["examined"], first["admitted"], first["dropped"]) == (4, 2, {"se_unusable": 2})
+    assert (first["examined"], first["admitted"]) == (5, 2)
+    assert first["dropped"] == {"se_unusable": 2, "z_nonfinite": 1}
     assert (second["examined"], second["admitted"], second["dropped"]) == (2, 2, {})
     assert _dropped(record, 0) == [
         ["source_key", "reason"],
         ["1:300000:C:T", "se_unusable"],
         ["1:400000:C:T", "se_unusable"],
+        ["1:600000:C:T", "z_nonfinite"],
     ]
     assert not (record / "dropped" / "1.tsv.gz").exists()
 
@@ -418,3 +420,29 @@ def test_source_fidelity_compares_only_the_rows_admission_stored(tmp_path: Path)
 
     result = validate_store(store, source=source)
     assert result.ok, result.errors
+
+
+def test_a_row_with_an_infinite_z_is_dropped_and_logged_not_refused(tmp_path: Path):
+    """D4: an infinite z used to stop `build-dense` (and the encoder, on a
+    tabular source); one row's statistic does not refuse its Analysis, so it is
+    dropped and logged."""
+    from opengwasdb.build.observed import build_dense_observed_from_sources
+
+    source = tmp_path / "records.tsv"
+    source.write_text(
+        "analysis_id\tchromosome\tposition\teffect_allele\tother_allele\tz\tse\n"
+        "A\t1\t100\tA\tG\tinf\t0.1\n"
+        "A\t1\t200\tA\tG\t-inf\t0.1\n"
+        "A\t1\t300\tA\tG\t2.0\t0.1\n",
+        encoding="utf-8",
+    )
+    store = tmp_path / "dense.opengwasdb"
+    build_dense_observed_from_sources(
+        [source], store, store_id="s", release_id="r", reference_assembly="GRCh38"
+    )
+
+    record = admission_record_for(store)
+    assert _dropped(record, 0)[1:] == [
+        ["1:100:A:G", "z_nonfinite"],
+        ["1:200:A:G", "z_nonfinite"],
+    ]

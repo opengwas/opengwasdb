@@ -8,9 +8,11 @@ an association a Store can hold at all, then the filters the Analysis declared:
    finite;
 2. no effect (`effect_missing`): a usable SE beside a z the source gave no
    effect to compute;
-3. the declared INFO filter (`info_below_threshold`): a usable score below a
+3. a non-finite z (`z_nonfinite`): an infinite effect, or z, beside a usable
+   SE;
+4. the declared INFO filter (`info_below_threshold`): a usable score below a
    `FILTERED` threshold; equality passes;
-4. the declared MAF filter, under a `FILTERED` policy: a row with no usable
+5. the declared MAF filter, under a `FILTERED` policy: a row with no usable
    frequency (`maf_missing`), then a MAF below the threshold
    (`maf_below_threshold`); equality passes.
 
@@ -69,6 +71,7 @@ class Reason(StrEnum):
 
     SE_UNUSABLE = "se_unusable"
     EFFECT_MISSING = "effect_missing"
+    Z_NONFINITE = "z_nonfinite"
     INFO_BELOW_THRESHOLD = "info_below_threshold"
     MAF_MISSING = "maf_missing"
     MAF_BELOW_THRESHOLD = "maf_below_threshold"
@@ -77,7 +80,9 @@ class Reason(StrEnum):
 #: The reasons whose rows are logged by source key, not only counted. A declared
 #: filter's drops are reproducible from the source and the policy, and logging
 #: them would cost more than the Store they filter.
-LOGGED: frozenset[Reason] = frozenset({Reason.SE_UNUSABLE, Reason.EFFECT_MISSING})
+LOGGED: frozenset[Reason] = frozenset(
+    {Reason.SE_UNUSABLE, Reason.EFFECT_MISSING, Reason.Z_NONFINITE}
+)
 
 #: A row's reason code: 0 is admitted, ``i + 1`` is ``_REASONS[i]``.
 _REASONS: tuple[Reason, ...] = tuple(Reason)
@@ -250,6 +255,7 @@ def _value_codes(rows: SourceRows) -> np.ndarray:
             codes[~(rows.se > 0) | ~np.isfinite(rows.se)] = _CODE[Reason.SE_UNUSABLE]
     if rows.z is not None:
         codes[(codes == 0) & np.isnan(rows.z)] = _CODE[Reason.EFFECT_MISSING]
+        codes[(codes == 0) & np.isinf(rows.z)] = _CODE[Reason.Z_NONFINITE]
     return codes
 
 

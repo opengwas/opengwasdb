@@ -476,9 +476,10 @@ Ragged sequence. The arrays are present whenever `z` is `int16_fixed`, even
 when empty. Every out-of-range cell MUST have an entry and the table MUST NOT
 describe any other cell (§20).
 
-A build MUST fail on a non-finite `z` that is not a recorded absence (±inf, or
-a malformed statistic): it is neither a value nor an absence, and no encoding
-of it is honest.
+A non-finite `z` that is not a recorded absence (±inf, or a malformed
+statistic) is neither a value nor an absence, and no encoding of it is honest.
+A build never stores one: Association Admission drops the source row and logs
+it (`z_nonfinite`, ADR 0072), and a writer handed one refuses it.
 
 **`se` — `float16` or `int8_residual`.** Residual coding predicts
 `log(SE) = intercept + slope × log(2 × EAF × (1 − EAF))` using decoded,

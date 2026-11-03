@@ -112,8 +112,7 @@ def _normalise_row(row: dict[str, str], row_number: int) -> NormalisedAssociatio
         z = beta / se if usable_se else math.nan
     else:
         z = _parse_float(z_text, row_number, "z")
-    if usable_se and not math.isfinite(z):
-        raise SourceRowError(f"row {row_number}: z must be finite")
+    # A non-finite z is the source's too: Admission drops and logs the row.
 
     eaf_text = field("eaf", "effect_allele_frequency", required=False)
     eaf = _parse_float(eaf_text, row_number, "eaf") if eaf_text is not None else None

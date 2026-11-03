@@ -897,13 +897,17 @@ def _admitted(
     """One probe's raw BESD rows that Association Admission keeps.
 
     Judged before the ESI map, as every builder judges a source row before it is
-    matched: a row with an unusable SE is dropped and logged by its ESI row
-    whether or not its variant made the axis.
+    matched: a row with an unusable SE or a non-finite beta is dropped and
+    logged by its ESI row whether or not its variant made the axis.
     """
+    se = np.asarray(ses, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = np.where((se > 0) & np.isfinite(se), np.asarray(betas, dtype=np.float64) / se, np.nan)
     keep = gate.source_rows(
         SourceRows(
             eaf=np.full(len(ses), np.nan),
-            se=np.asarray(ses, dtype=np.float64),
+            se=se,
+            z=z,
             keys_at=lambda positions: [f"esi:{int(i)}" for i in raw_snp_idx[positions]],
         )
     )
@@ -918,10 +922,9 @@ def _map_probe_rows(
 ) -> _ProbeRows:
     """Map one probe's admitted BESD rows onto ``(variant_index, z, se, esi_row)`` lists.
 
-    A row whose ESI index never made the variant axis, or whose beta is not
-    finite, is dropped for that Analysis: the store must not carry a z-score
-    the source did not vouch for. Rows that survive are oriented — ``z`` flips
-    sign when the stored canonical allele is the flipped one. The ESI row
+    A row whose ESI index never made the variant axis is dropped for that
+    Analysis. Rows that survive are oriented — ``z`` flips sign when the
+    stored canonical allele is the flipped one. The ESI row
     travels with each so its frequency and SNP ID can be joined after the sort
     (ADR 0067).
     """
@@ -933,8 +936,6 @@ def _map_probe_rows(
         if mapping is None:
             continue
         variant_index, flipped = mapping
-        if not np.isfinite(beta):
-            continue
         z = beta / se
         if flipped:
             z = -z
