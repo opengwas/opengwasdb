@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import numbers
-import os
 import sqlite3
 from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -30,7 +28,6 @@ from opengwasdb.encoding import (
     DenseEafPlane,
     DenseSePlane,
     DenseZPlane,
-    EafEncoding,
     EafExceptionTable,
     RaggedEafPlane,
     RaggedSePlane,
@@ -45,19 +42,11 @@ from opengwasdb.layouts.dense.indexed_subsets import validate_indexed_subsets
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.analyses import (
-    RETIRED_ANALYSIS_COLUMNS,
-    TOP_HIT_COUNT_COLUMNS,
     read_analyses,
 )
 from opengwasdb.model.enums import (
-    COVERAGES_BY_LAYOUT,
-    AncestryAssignmentMethod,
     CompletionState,
-    EafOrientationOutcome,
-    EafScope,
-    OriginalSdMethod,
     PrimaryStorageLayout,
-    StoredEffectScale,
 )
 from opengwasdb.stats import p_value_from_z
 from opengwasdb.store.arrays import (
@@ -73,14 +62,9 @@ from opengwasdb.store.arrays import (
     shard_layout,
 )
 from opengwasdb.store.open import (
-    DENSE_ENVELOPE,
-    HYBRID_DENSE_COMPONENT_ENVELOPE,
-    HYBRID_ENVELOPE,
-    RAGGED_ENVELOPE,
     OpenGWASDBStore,
     UnsupportedFormatVersion,
     open_store,
-    zarr_format_for_version,
 )
 from opengwasdb.top_hits import threshold_key, z_critical
 from opengwasdb.validation.rule import (
@@ -94,6 +78,9 @@ from opengwasdb.validation.rule import (
     ValidationResult,
     check_registry,
 )
+from opengwasdb.validation.rules import analyses as analyses_rules
+from opengwasdb.validation.rules import release as release_rules
+from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.sample_size import validate_n_plan, validate_ragged_n
 from opengwasdb.variants import (
     VariantAxis,
@@ -101,10 +88,6 @@ from opengwasdb.variants import (
     is_indexable_alid,
     is_indexable_rsid,
     iter_variant_records,
-    variant_alid_bytes_path,
-    variant_alid_rows_path,
-    variant_offsets_path,
-    variant_tabix_path,
     variant_table_path,
 )
 
@@ -145,8 +128,22 @@ def validate_store(
 
 
 def release_targets(store: OpenGWASDBStore, options: ValidationOptions) -> list[Target]:
-    """The targets one Store Release is judged as."""
-    return [Target(Kind.RELEASE, ".", store, options=options)]
+    """The targets one Store Release is judged as.
+
+    A Hybrid release's Dense Component is a nested Store Release (spec §16) and is
+    judged as one, by the same rules, when it opens as a Dense release; when it does
+    not, the Hybrid rules say why and nothing is judged against it.
+    """
+    release = Target(Kind.RELEASE, ".", store, options=options)
+    targets = [release]
+    if store.manifest.primary_layout is PrimaryStorageLayout.HYBRID:
+        component = _load_manifest(dense_component_path(store.path), [])
+        dense = PrimaryStorageLayout.DENSE
+        if component is not None and component.manifest.primary_layout is dense:
+            targets.append(
+                Target(Kind.RELEASE, "dense", component, parent=release, options=options)
+            )
+    return targets
 
 
 #: How a rule ended on one target, as the rules that run after it see it.
@@ -292,13 +289,6 @@ def _source_given(target: Target) -> bool:
     return target.options.source is not None
 
 
-def _legacy_zarr_format(target: Target) -> list[str]:
-    errors: list[str] = []
-    store = target.store
-    _validate_zarr_format(store.data_path, store.manifest.format_version, errors, label="data.zarr")
-    return errors
-
-
 def _legacy_infinite_se(target: Target) -> list[str]:
     warnings: list[str] = []
     _warn_about_infinite_ragged_se(target.store, warnings)
@@ -309,17 +299,15 @@ def _legacy_ragged(target: Target, errors: list[str], _warnings: list[str]) -> N
     _validate_ragged_store(target.store, errors)
 
 
-def _legacy_hybrid(target: Target, errors: list[str], warnings: list[str]) -> None:
-    _validate_nested_component_format(target.store.path, errors)
-    _validate_hybrid_store(target.store, errors, warnings)
+def _legacy_hybrid(target: Target, errors: list[str], _warnings: list[str]) -> None:
+    _validate_hybrid_store(target.store, errors)
 
 
 def _legacy_dense(target: Target, errors: list[str], warnings: list[str]) -> None:
-    _validate_dense_store(target.store, errors, warnings)
-
-
-def _legacy_eaf_orientation(target: Target, errors: list[str], warnings: list[str]) -> None:
-    _validate_eaf_orientation(target.store, errors, warnings)
+    # A Hybrid release's Dense Component is a Dense release at `<store>/dense` (spec
+    # §16), so a warning naming plain `data.zarr` would send its reader to the wrong one.
+    label = "dense/data.zarr/se" if target.parent is not None else "data.zarr/se"
+    _validate_dense_store(target.store, errors, warnings, label=label)
 
 
 def _fidelity_unsupported(_target: Target) -> list[str]:
@@ -342,10 +330,34 @@ def _legacy_fidelity(target: Target) -> list[str]:
     return errors
 
 
+def _fidelity_prerequisites() -> tuple[str, ...]:
+    """Every rule a Dense release reports an error from before source fidelity runs.
+
+    Source fidelity samples what a Store holds, so it runs only on a release no
+    earlier rule found wrong.
+    """
+    earlier = (
+        *release_rules.RULES,
+        *analyses_rules.TABLE_RULES,
+        _LEGACY_DENSE,
+        *analyses_rules.ORIENTATION_RULES,
+    )
+    return tuple(r.name for r in earlier if r.severity is Severity.ERROR)
+
+
+_LEGACY_DENSE = _Legacy(
+    name="legacy.dense",
+    kinds=Kind.RELEASE,
+    when=_is(PrimaryStorageLayout.DENSE),
+    after=(REQUIRED,),
+    run=_legacy_dense,
+)
+
 RULES: tuple[Rule, ...] = check_registry(
     [
         Check(name=MANIFEST_RULE, kinds=Kind.RELEASE, run=lambda _target: ()),
-        Check(name="legacy.zarr_format", kinds=Kind.RELEASE, run=_legacy_zarr_format),
+        *release_rules.RULES,
+        *analyses_rules.TABLE_RULES,
         Check(
             name="legacy.infinite_se",
             kinds=Kind.RELEASE,
@@ -356,21 +368,18 @@ RULES: tuple[Rule, ...] = check_registry(
             name="legacy.ragged",
             kinds=Kind.RELEASE,
             when=_is(PrimaryStorageLayout.RAGGED),
+            after=(REQUIRED,),
             run=_legacy_ragged,
         ),
+        _LEGACY_DENSE,
         _Legacy(
             name="legacy.hybrid",
             kinds=Kind.RELEASE,
             when=_is(PrimaryStorageLayout.HYBRID),
+            after=(REQUIRED,),
             run=_legacy_hybrid,
         ),
-        _Legacy(
-            name="legacy.dense",
-            kinds=Kind.RELEASE,
-            when=_is(PrimaryStorageLayout.DENSE),
-            run=_legacy_dense,
-        ),
-        _Legacy(name="legacy.eaf_orientation", kinds=Kind.RELEASE, run=_legacy_eaf_orientation),
+        *analyses_rules.ORIENTATION_RULES,
         Check(
             name="legacy.fidelity_unsupported",
             kinds=Kind.RELEASE,
@@ -381,7 +390,7 @@ RULES: tuple[Rule, ...] = check_registry(
             name="legacy.fidelity",
             kinds=Kind.RELEASE,
             when=lambda target: _source_given(target) and not _not_dense(target),
-            after=("legacy.zarr_format", "legacy.dense", "legacy.eaf_orientation"),
+            after=_fidelity_prerequisites(),
             run=_legacy_fidelity,
         ),
     ]
@@ -393,15 +402,6 @@ RULES: tuple[Rule, ...] = check_registry(
 #: Analyses one infinite-se warning names. The count says how much of the release is
 #: affected; five ids say where to start reading it.
 INFINITE_SE_ANALYSES_NAMED = 5
-
-#: The `se` plane a Dense validator is reading, by the envelope it was given: a Hybrid
-#: release's Dense Component is a Dense release at `<store>/dense` (spec §16), so a
-#: warning naming plain `data.zarr` would leave the reader looking in the wrong one.
-_DENSE_SE_LABELS = {
-    DENSE_ENVELOPE: "data.zarr/se",
-    HYBRID_DENSE_COMPONENT_ENVELOPE: "dense/data.zarr/se",
-}
-
 
 def _warn_about_infinite_ragged_se(store: OpenGWASDBStore, warnings: list[str]) -> None:
     """Warn about the infinite `se` cells of every Ragged component of this release.
@@ -497,196 +497,8 @@ def _analysis_ids(analyses_path: Path) -> dict[int, str]:
         try:
             ids[int(row.get("analysis_index", ""))] = str(row.get("analysis_id", ""))
         except ValueError:
-            continue  # a malformed row is already reported by _validate_analyses_tsv
+            continue  # a malformed row is reported by the analyses.analysis_index rule
     return ids
-
-
-def _validate_nested_component_format(store_path: Path, errors: list[str]) -> None:
-    """A Hybrid release's nested Dense Component must match its own manifest."""
-    component_manifest = store_path / "dense" / "manifest.json"
-    if not component_manifest.exists():
-        return
-    component_version = str(
-        json.loads(component_manifest.read_text(encoding="utf-8")).get("format_version")
-    )
-    _validate_zarr_format(
-        store_path / "dense" / "data.zarr",
-        component_version,
-        errors,
-        label="dense/data.zarr",
-    )
-
-
-def _validate_closed_envelope(store_path: Path, allowed: frozenset[str], errors: list[str]) -> None:
-    """store-format spec §1/§20 (issue #80): a Store Release's top-level
-    directory is closed -- no file or directory beyond what its layout
-    legitimately produces. Every other check here is a *presence* check
-    ("required entry X exists"); this is the one *closure* check, catching
-    drift like the long-unnoticed Ragged `traits.tsv.gz` side-file (retired
-    in issue #69) that no presence check could ever have flagged."""
-    for name in sorted(p.name for p in store_path.iterdir() if p.name not in allowed):
-        errors.append(
-            f"unexpected store entry {name!r} in {store_path} is not part of the "
-            "documented store envelope for this layout (store-format spec §1)"
-        )
-
-
-def _missing_entry_errors(store: OpenGWASDBStore, entries: list[tuple[str, Path]]) -> list[str]:
-    """Which required release entries are absent, in the order named.
-
-    The Dense, Ragged and Hybrid envelope seams each name their own required
-    entries; the presence check is one shape, so the loop that turns a
-    (label, path) pair into a missing-entry error lives here once.
-    """
-    return [f"missing {label}" for label, p in entries if not p.exists()]
-
-
-def _validate_dense_envelope(
-    store: OpenGWASDBStore, envelope: frozenset[str], errors: list[str]
-) -> bool:
-    """Dense's half of the envelope seam: required entries present, nothing else.
-
-    Every later Dense seam assumes the paths this one names exist. Returns
-    False when an entry is missing or unexpected, which stops the pipeline
-    before it opens arrays a malformed release may not have.
-    """
-    before = len(errors)
-    store_path = store.path
-    errors.extend(
-        _missing_entry_errors(
-            store,
-            [
-                ("index.sqlite", store.index_path),
-                ("data.zarr", store.data_path),
-                ("analyses.tsv", store.analyses_path),
-                ("variants.tsv.gz", variant_table_path(store_path)),
-                ("variants.tsv.gz.tbi", variant_tabix_path(store_path)),
-                ("variant_offsets.npy", variant_offsets_path(store_path)),
-            ],
-        )
-    )
-    # The ALID search index has no reader fallback, so its absence names the
-    # rebuild rather than reading as an internal inconsistency.
-    for name in ("variant_alid_bytes.npy", "variant_alid_rows.npy"):
-        if not (store_path / name).exists():
-            errors.append(
-                f"missing {name} — rebuild the store to generate the ALID search index"
-            )
-    _validate_closed_envelope(store_path, envelope, errors)
-    return len(errors) == before
-
-
-#: Zarr metadata files that name one node, keyed by the Zarr format they belong
-#: to.  A node carries exactly one of these; two is a half-converted store.
-_V2_NODE_METADATA = (".zarray", ".zgroup")
-_V3_NODE_METADATA = "zarr.json"
-
-
-def _zarr_nodes(directory: Path) -> Iterator[tuple[Path, set[str]]]:
-    """Every Zarr node directory under `directory`, with its metadata filenames.
-
-    Read from the filesystem, not through zarr: the check is precisely that the
-    stored metadata and the manifest agree, and asking zarr would let it hide a
-    node behind a consolidated record or an auto-detected format.
-    """
-    for dirpath, _dirnames, filenames in os.walk(directory):
-        present = {name for name in filenames if name in (*_V2_NODE_METADATA, _V3_NODE_METADATA)}
-        if present:
-            yield Path(dirpath), present
-
-
-def _validate_zarr_format(
-    directory: Path, format_version: str, errors: list[str], *, label: str
-) -> None:
-    """The Zarr on-disk format must be the one `format_version` names.
-
-    0.1.0 is Zarr v2: every group has a `.zgroup` and every array a `.zarray`,
-    each declaring ``zarr_format: 2``, and no v3 `zarr.json` exists.  0.2.0 is
-    Zarr v3 with sharding: nothing carries v2 metadata, every node has a
-    `zarr.json` declaring ``zarr_format: 3``, and every array uses the
-    ``sharding_indexed`` codec.  A half-converted release -- one manifest, two
-    formats under it -- is the failure this rule exists to catch, and it is
-    invisible to any check that opens the store through zarr (issue #245).
-    """
-    if not directory.is_dir():
-        return
-    # The expected layout comes from the version-to-layout seam, which is the
-    # same table the reader checks, rather than a second reading of the version
-    # string here (#264 review).
-    try:
-        expected_zarr_format = zarr_format_for_version(format_version, source=label)
-    except UnsupportedFormatVersion as exc:
-        errors.append(str(exc))
-        return
-    expected_v3 = expected_zarr_format == 3
-    nodes = 0
-    for node_path, present in _zarr_nodes(directory):
-        nodes += 1
-        relative = f"{label}/{node_path.relative_to(directory)}"
-        if expected_v3:
-            errors.extend(_zarr_v3_node_errors(relative, node_path, present, format_version))
-        else:
-            errors.extend(_zarr_v2_node_errors(relative, node_path, present, format_version))
-    if nodes == 0:
-        errors.append(f"{label}: no Zarr metadata found; the array tree is missing")
-
-
-def _zarr_v2_node_errors(
-    relative: str, node_path: Path, present: set[str], format_version: str
-) -> list[str]:
-    """One node's errors under a 0.1.0 (Zarr v2) manifest."""
-    if _V3_NODE_METADATA in present:
-        return [
-            f"{relative}: Zarr v3 metadata under format_version {format_version}; a "
-            f"{format_version} release is Zarr v2 (issue #245)"
-        ]
-    if len(present) > 1:
-        return [
-            f"{relative}: carries {sorted(present)}; a Zarr node has exactly one metadata "
-            "file"
-        ]
-    metadata = next(iter(present))
-    declared = json.loads((node_path / metadata).read_text(encoding="utf-8")).get(
-        "zarr_format"
-    )
-    if declared != 2:
-        return [
-            f"{relative}/{metadata}: zarr_format is {declared!r}, not 2, but the release "
-            f"declares format_version {format_version}"
-        ]
-    return []
-
-
-def _zarr_v3_node_errors(
-    relative: str, node_path: Path, present: set[str], format_version: str
-) -> list[str]:
-    """One node's errors under a 0.2.0 (Zarr v3, sharded) manifest."""
-    v2_metadata = sorted(present & set(_V2_NODE_METADATA))
-    if v2_metadata:
-        return [
-            f"{relative}: Zarr v2 metadata {v2_metadata} under format_version "
-            f"{format_version}; a {format_version} release is Zarr v3, and a "
-            "half-converted release is invalid (issue #245)"
-        ]
-    metadata = json.loads((node_path / _V3_NODE_METADATA).read_text(encoding="utf-8"))
-    errors: list[str] = []
-    if metadata.get("zarr_format") != 3:
-        errors.append(
-            f"{relative}/zarr.json: zarr_format is {metadata.get('zarr_format')!r}, not 3, "
-            f"but the release declares format_version {format_version}"
-        )
-    if metadata.get("node_type") == "array":
-        names = [
-            codec.get("name")
-            for codec in metadata.get("codecs", [])
-            if isinstance(codec, dict)
-        ]
-        if "sharding_indexed" not in names:
-            errors.append(
-                f"{relative}/zarr.json: a {format_version} array must use the sharding "
-                f"codec; its codecs are {names}"
-            )
-    return errors
 
 
 def _recorded_from_block(
@@ -1105,7 +917,7 @@ def _validate_dense_store(
     errors: list[str],
     warnings: list[str],
     *,
-    envelope: frozenset[str] = DENSE_ENVELOPE,
+    label: str = "data.zarr/se",
 ) -> None:
     """Validate a Dense Store Release (spec §3) in fail-safe seams.
 
@@ -1115,11 +927,7 @@ def _validate_dense_store(
     An exception is reported by the rule that runs this, after whatever was found
     before it.
     """
-    label = _DENSE_SE_LABELS.get(envelope, "data.zarr/se")
-    if not _validate_dense_envelope(store, envelope, errors):
-        return
     manifest = store.manifest
-    _require_layout_coverage(manifest, errors)
     with store.index_connection() as connection:
         variant_axis = VariantAxis(store.path, connection)
         try:
@@ -1127,7 +935,7 @@ def _validate_dense_store(
             _validate_sqlite(connection, n_variants, errors)
         finally:
             variant_axis.close()
-        n_analyses = _validate_analyses_tsv(store.analyses_path, errors)
+        n_analyses = len(read_analyses(store.analyses_path).rows)
         root = store.arrays(mode="r")
         imputed_arr = None
         on_panel_arr = None
@@ -1305,33 +1113,6 @@ def _decoded_csr_se(root: Any, encoding: StoreEncoding, n_assoc: int, label: str
         return RaggedSePlane.open(root, encoding).slice(0, n_assoc), None
     except ValueError as exc:
         return None, f"{label} cannot be decoded under the declared plan: {exc}"
-
-
-def _validate_ragged_envelope(store: OpenGWASDBStore, errors: list[str]) -> bool:
-    """Seam: the release's required entries are present, and nothing else is.
-
-    The one *closure* check in this validator (store-format spec §1, issue
-    #80): a Ragged Store Release carries no side-file beyond its documented
-    envelope, and every later seam assumes the paths this one names exist.
-    Returns False when an entry is missing or unexpected, which stops the
-    pipeline before it tries to open arrays a malformed release may not have.
-    """
-    before = len(errors)
-    store_path = store.path
-    for label, p in [
-        ("index.sqlite", store.index_path),
-        ("data.zarr", store.data_path),
-        ("data.zarr/ragged", store.data_path / "ragged"),
-        ("variants.tsv.gz", variant_table_path(store_path)),
-        ("variants.tsv.gz.tbi", variant_tabix_path(store_path)),
-        ("variant_alid_bytes.npy", variant_alid_bytes_path(store_path)),
-        ("variant_alid_rows.npy", variant_alid_rows_path(store_path)),
-        ("analyses.tsv", store.analyses_path),
-    ]:
-        if not p.exists():
-            errors.append(f"missing {label}")
-    _validate_closed_envelope(store_path, RAGGED_ENVELOPE, errors)
-    return len(errors) == before
 
 
 def _missing_csr_arrays(root: Any, errors: list[str]) -> bool:
@@ -1544,14 +1325,12 @@ def _validate_ragged_analyses(
     CSR's offsets bound, and a leftover SQLite `analyses` table is a failure
     rather than a harmless relic (ADR 0034, issue #72).
     """
-    n_analyses_tsv = _validate_analyses_tsv(store.analyses_path, errors)
+    n_analyses_tsv = len(read_analyses(store.analyses_path).rows)
     if n_analyses_tsv != n_analyses_csr:
         errors.append(
             f"analyses.tsv has {n_analyses_tsv} rows but "
             f"zarr CSR offsets imply {n_analyses_csr} analyses"
         )
-    with store.index_connection() as conn:
-        _reject_stray_analyses_table(conn, errors)
 
 
 def _validate_ragged_downstream_seams(
@@ -2078,8 +1857,6 @@ def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> None:
     crash in a later read. An exception is reported by the rule that runs this,
     after whatever was found before it.
     """
-    if not _validate_ragged_envelope(store, errors):
-        return
     ragged_path = store.data_path / "ragged"
     root = open_group(ragged_path)
     csr = _validate_ragged_csr_structure(root, store.manifest.encoding, errors)
@@ -2308,73 +2085,21 @@ def _validate_ragged_top_hits(
                 errors.append(f"top-hit index {key} eaf value inconsistent with CSR")
 
 
-def _require_layout_coverage(manifest: Any, errors: list[str]) -> None:
-    """The coverage this release declares must be one its layout can carry.
+def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> None:
+    """Validate what a Hybrid store adds to its Dense Component (ADR 0026 / issue 059).
 
-    A Dense or Hybrid release has a cell for every (variant, Analysis), so a
-    coverage narrower than `gwas` would leave cells whose absence means
-    "filtered out" while every other missing cell means "the source did not
-    report it" -- two answers with one representation (issue #298). The set of
-    values each layout can carry is `COVERAGES_BY_LAYOUT`, the same one every
-    builder is held to, so a release no builder could have written is refused
-    rather than reported as a Store of a different kind.
-    """
-    accepted = COVERAGES_BY_LAYOUT[manifest.primary_layout]
-    if manifest.association_coverage not in accepted:
-        errors.append(
-            f"a {manifest.primary_layout.value} store cannot carry "
-            f"association_coverage={manifest.association_coverage.value} "
-            f"(it accepts {', '.join(sorted(c.value for c in accepted))})"
-        )
-
-
-def _validate_hybrid_store(
-    store: OpenGWASDBStore, errors: list[str], warnings: list[str]
-) -> None:
-    """Validate a Hybrid store (ADR 0026 / issue 059).
-
-    Reuses the dense component validator on ``<store>/dense`` and adds only the
+    The component is judged as a Dense release of its own; this adds the
     hybrid-specific invariants: the shared union table covers both components, the
     on-panel/off-panel partition is disjoint, and the overflow is observed-only.
     """
-    _require_layout_coverage(store.manifest, errors)
-    _hybrid_envelope(store, errors)
-    if errors:
-        return
     dense_store = _hybrid_dense_component(store, errors)
     if dense_store is None:
         return
-    before = len(errors)
-    # The component's warnings are this release's warnings: an infinite `se` cell in
-    # its Dense Component is the same finding as one in a standalone Dense release
-    # (issues #337, #338).
-    _validate_dense_store(dense_store, errors, warnings, envelope=HYBRID_DENSE_COMPONENT_ENVELOPE)
-    if len(errors) > before:
-        return
-    # The outer recordings must describe the component just validated.
+    # The outer recordings must describe the component, which is judged as a Dense
+    # release of its own.
     _validate_hybrid_recordings(store, dense_store, errors)
     if not errors:
         _validate_hybrid_outer(store, errors)
-
-
-def _hybrid_envelope(store: OpenGWASDBStore, errors: list[str]) -> None:
-    """A Hybrid release's required entries are present, and nothing else is."""
-    store_path = store.path
-    dense_dir = dense_component_path(store_path)
-    for label, p in [
-        ("dense/ (Dense Component)", dense_dir),
-        ("dense/manifest.json", dense_dir / "manifest.json"),
-        ("dense/dense_to_shared.npy", dense_to_shared_path(store_path)),
-        ("index.sqlite", store_path / "index.sqlite"),
-        ("variants.tsv.gz", variant_table_path(store_path)),
-        ("variants.tsv.gz.tbi", variant_tabix_path(store_path)),
-        ("variant_alid_bytes.npy", variant_alid_bytes_path(store_path)),
-        ("variant_alid_rows.npy", variant_alid_rows_path(store_path)),
-        ("data.zarr/ragged (Ragged Overflow)", store_path / "data.zarr" / "ragged"),
-    ]:
-        if not p.exists():
-            errors.append(f"missing {label}")
-    _validate_closed_envelope(store_path, HYBRID_ENVELOPE, errors)
 
 
 def _hybrid_dense_component(
@@ -2657,263 +2382,6 @@ def _validate_sqlite(
         variant_index = int(row["variant_index"])
         if variant_index < 0 or variant_index >= n_variants:
             errors.append(f"alias {row['alias']!r} points to missing variant {variant_index}")
-    _reject_stray_analyses_table(connection, errors)
-
-
-def _reject_stray_analyses_table(connection: sqlite3.Connection, errors: list[str]) -> None:
-    """Every layout shares this rule (ADR 0034, issue #72): analyses.tsv is
-    the sole source of truth for Analytical Metadata, so a leftover SQL
-    ``analyses`` table -- Dense/Hybrid retired theirs in issue #68, Ragged in
-    issue #69 -- is a validation failure, not a harmless relic."""
-    tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if "analyses" in tables:
-        errors.append(
-            "index.sqlite still contains an analyses table -- analyses.tsv is the sole "
-            "source of truth for Analytical Metadata (ADR 0030, issue #22)"
-        )
-
-
-def _component_eaf_plans(store: OpenGWASDBStore) -> list[EafEncoding]:
-    """Every `eaf` plan that describes some part of this release's arrays.
-
-    One for a Dense or Ragged release. Two for a Hybrid one, whose nested
-    Dense Component declares its own (spec §6a, §16) -- and whose `analyses.tsv`
-    describes the Analyses of both.
-    """
-    plans = [store.manifest.encoding.eaf]
-    if store.manifest.primary_layout is PrimaryStorageLayout.HYBRID:
-        try:
-            plans.append(store.dense_component().manifest.encoding.eaf)
-        except Exception:  # noqa: BLE001 - the component's own checks report it
-            pass
-    return plans
-
-
-def _validate_eaf_orientation(
-    store: OpenGWASDBStore, errors: list[str], warnings: list[str]
-) -> None:
-    """Every Analysis storing EAF must carry orientation evidence (issue #115).
-
-    Checks the *recorded* evidence, not the reference panel: a Store Release is
-    meant to be interpretable on its own, long after the panel it was built
-    against has moved or been superseded. `opengwasdb audit-eaf-orientation`
-    re-runs the correlation when a panel is supplied.
-
-    A blank `eaf_orientation` on an Analysis whose `eaf_scope` is `association`
-    is an error, not a shrug: it means the store was built before the check
-    existed, and its frequency column has never been confirmed to describe the
-    allele the store says it does -- which is exactly the state
-    `gwas-catalog-eur-hybrid` was in. `unverified` is a warning: honestly
-    recorded, still not evidence of correctness.
-    """
-    analyses_path = store.analyses_path
-    if not analyses_path.exists():
-        return
-    try:
-        table = read_analyses(analyses_path)
-    except Exception as exc:  # noqa: BLE001 - reported, not raised
-        errors.append(f"cannot read analyses.tsv for the EAF orientation check: {exc}")
-        return
-    # `eaf_scope` is per Analysis and the encoding plan is per store: two
-    # granularities of the same fact, so they must agree. Their *disagreement*
-    # is what got through review on #106 -- `analyses.tsv` declared
-    # `eaf_scope=association` for a store that had no `eaf` array at all.
-    declares_association = [
-        str(row.get("analysis_id", ""))
-        for row in table.rows
-        if row.get("eaf_scope", "") == EafScope.ASSOCIATION.value
-    ]
-    declared_eaf = store.manifest.encoding.eaf
-    # `reference` excepted: a completed release whose Analyses reported no
-    # frequency of their own still holds one for every cell it imputed -- the
-    # panel's -- so an Analysis that gained imputed cells declaring
-    # `eaf_scope=association` is stating a fact about its arrays, not
-    # disagreeing with them (ADR 0037 §4, issue #113).
-    #
-    # A Hybrid release's Analyses span both components, and `eaf_reference` is
-    # per component (spec §6a): its Dense Component has imputed cells where its
-    # observed-only Ragged Overflow does not. So the question "does this
-    # release hold frequencies" is asked of every component, not only of the
-    # top-level plan -- the top-level plan alone would call a Hybrid release
-    # whose frequencies are all in its Dense Component a contradiction.
-    holds_frequencies = any(
-        not plan.is_absent or plan.reference for plan in _component_eaf_plans(store)
-    )
-    if not holds_frequencies and declares_association:
-        errors.append(
-            f"{len(declares_association)} analysis/analyses declare "
-            f"eaf_scope=association (first {declares_association[0]!r}) but no component "
-            "of this release declares an eaf plane or reference EAF; the store's metadata "
-            "and its arrays disagree about whether it holds frequencies "
-            "(ADR 0036, ADR 0037)"
-        )
-    if declared_eaf.kind in ("float32", "int8_residual") and not declares_association:
-        errors.append(
-            "the manifest declares an eaf plane but no Analysis declares "
-            "eaf_scope=association; a release stores frequencies for the Analyses that "
-            "say they have them, or for none"
-        )
-
-    recorded = store.manifest.provenance.get("eaf_orientation") or {}
-    by_id = {str(entry.get("analysis_id", "")): entry for entry in recorded.get("analyses", [])}
-    # Whether any component stores frequencies *of its own*. When none does,
-    # every `eaf_scope=association` in this release is describing the panel's
-    # reference EAF and nothing else (issue #113): there is no cohort column to
-    # be reported against the other allele, and `panel_a1_eaf` orients what
-    # there is by construction. Demanding orientation evidence there asks for a
-    # check on a column that does not exist, which no build can supply -- it
-    # rejected every Reference-Completed release whose source reported no
-    # frequency, which is exactly the release #113 was raised about.
-    stores_own_frequencies = any(not plan.is_absent for plan in _component_eaf_plans(store))
-    for row in table.rows:
-        analysis_id = row.get("analysis_id", "")
-        if row.get("eaf_scope", "") != EafScope.ASSOCIATION.value:
-            continue
-        outcome = row.get("eaf_orientation", "")
-        if not outcome and not stores_own_frequencies:
-            continue
-        if not outcome:
-            errors.append(
-                f"analysis {analysis_id!r} stores per-association EAF but carries no "
-                "eaf_orientation evidence -- its frequencies have never been checked "
-                "against a reference, so a column reported against the other allele "
-                "would be indistinguishable from a correct one (issue #115). Rebuild "
-                "the store, or audit it with a reference panel"
-            )
-            continue
-        if outcome == EafOrientationOutcome.FAILED.value:
-            errors.append(
-                f"analysis {analysis_id!r} recorded eaf_orientation=failed "
-                f"(r = {row.get('eaf_orientation_r', '?')}): its stored EAF is reported "
-                "against the other allele and must not be read as a frequency of the "
-                "stored effect allele"
-            )
-        elif outcome == EafOrientationOutcome.UNVERIFIED.value:
-            entry = by_id.get(analysis_id, {})
-            warnings.append(
-                f"analysis {analysis_id!r} stores EAF whose orientation is unverified"
-                + (f": {entry['note']}" if entry.get("note") else "")
-            )
-        entry = by_id.get(analysis_id)
-        if entry is None:
-            errors.append(
-                f"analysis {analysis_id!r} records eaf_orientation={outcome!r} in "
-                "analyses.tsv, but manifest.json's provenance has no orientation "
-                "evidence for it -- the two must agree on what was checked"
-            )
-        elif str(entry.get("outcome", "")) != outcome:
-            errors.append(
-                f"analysis {analysis_id!r} records eaf_orientation={outcome!r} in "
-                f"analyses.tsv but {entry.get('outcome')!r} in manifest.json provenance"
-            )
-
-
-def _validate_analyses_tsv(analyses_path: Path, errors: list[str]) -> int:
-    """Validate `analyses.tsv` (store-format spec §20, ADR 0030) and return its
-    row count -- the `n_analyses` the rest of dense validation cross-checks
-    zarr array shapes against.
-
-    Deliberately narrower than `opengwasdb.model.analyses.validate_analyses`
-    (issue #16): that function's `REQUIRED_COLUMNS` enforces non-blank
-    `sample_size_kind`/`sample_size_scope`/`sample_size`/`original_effect_scale`
-    per row, which is the contract a *registry* manifest must satisfy before a
-    build even runs. No current build path here has a source for those fields
-    (issue #22 scope note), so a built store leaves them honestly blank; a
-    store-level validator that required them would fail every store this
-    package can currently build. This function instead checks only what a
-    *built* store can actually promise: structural integrity (one row per
-    `analysis_index`, no duplicate `analysis_id`) and vocabulary conformance
-    for whichever controlled-vocabulary columns are present.
-    """
-    table = read_analyses(analyses_path)
-    n = len(table.rows)
-    retired_present = [c for c in RETIRED_ANALYSIS_COLUMNS if c in table.fieldnames]
-    if retired_present:
-        errors.append(
-            "analyses.tsv carries retired column(s) "
-            f"{', '.join(retired_present)} -- a Store Release built against a "
-            "prior column list is not valid against the current schema "
-            "(store-format spec §7a, ADR 0034/0035)"
-        )
-    seen_index: set[int] = set()
-    seen_id: set[str] = set()
-    for row in table.rows:
-        raw_index = row.get("analysis_index", "")
-        try:
-            index = int(raw_index)
-        except ValueError:
-            errors.append(f"analyses.tsv row has a non-integer analysis_index {raw_index!r}")
-            continue
-        if index in seen_index:
-            errors.append(f"analyses.tsv has more than one row for analysis_index {index}")
-        seen_index.add(index)
-        analysis_id = row.get("analysis_id", "")
-        if analysis_id in seen_id:
-            errors.append(f"analyses.tsv has more than one row for analysis_id {analysis_id!r}")
-        seen_id.add(analysis_id)
-    if seen_index and seen_index != set(range(n)):
-        errors.append(f"analyses.tsv analysis_index values are not exactly the range 0..{n - 1}")
-    for row in table.rows:
-        # An Analysis completed against no ancestry gained no imputed cells.
-        # The two columns are written by different steps -- `completed_against`
-        # from the ancestry-match filter, `completion_n_imputed_total` from the
-        # per-block quality rollup -- so their disagreement is what a filter
-        # applied to one and not the other looks like from outside (ADR 0028).
-        # It is also what `eaf_scope` is derived from, which is why it is
-        # checked here rather than left to the reader to notice.
-        if row.get("completed_against", ""):
-            continue
-        try:
-            n_imputed = int(row.get("completion_n_imputed_total", "") or 0)
-        except ValueError:
-            errors.append(
-                f"analyses.tsv row {row.get('analysis_id', '')!r} has a non-integer "
-                f"completion_n_imputed_total {row.get('completion_n_imputed_total', '')!r}"
-            )
-            continue
-        if n_imputed:
-            errors.append(
-                f"analysis {row.get('analysis_id', '')!r} declares "
-                f"completion_n_imputed_total={n_imputed} but completed_against is blank; "
-                "it was not completed against any ancestry, so it holds no imputed cells "
-                "and the count -- and any eaf_scope derived from it -- describes cells "
-                "the release does not contain (ADR 0028, ADR 0037 §4)"
-            )
-    for row in table.rows:
-        for column, vocabulary in (
-            ("stored_effect_scale", StoredEffectScale),
-            ("original_sd_method", OriginalSdMethod),
-            ("ancestry_assignment_method", AncestryAssignmentMethod),
-            ("eaf_orientation", EafOrientationOutcome),
-        ):
-            value = row.get(column, "")
-            if not value:
-                continue
-            try:
-                vocabulary(value)
-            except ValueError:
-                errors.append(
-                    f"analyses.tsv analysis {row.get('analysis_id')!r} has invalid "
-                    f"{column} {value!r}"
-                )
-    # Top-Hit Counts (ADR 0032) are computed by every build path, unlike the
-    # completion_* rollups above (Reference-Completed releases only) -- so,
-    # unlike those, their presence is checked unconditionally here.
-    missing_hit_columns = [c for c in TOP_HIT_COUNT_COLUMNS if c not in table.fieldnames]
-    if missing_hit_columns:
-        errors.append(
-            f"analyses.tsv is missing Top-Hit Count column(s): {', '.join(missing_hit_columns)}"
-        )
-    else:
-        for row in table.rows:
-            for column in TOP_HIT_COUNT_COLUMNS:
-                value = row.get(column, "")
-                if not value.isdigit():
-                    errors.append(
-                        f"analyses.tsv analysis {row.get('analysis_id')!r} has invalid "
-                        f"{column} {value!r} (must be a non-negative integer)"
-                    )
-    return n
 
 
 def _validate_rsid_index(
@@ -3553,13 +3021,13 @@ def _imputed_declaration_matches_arrays(
         try:
             index = int(row.get("analysis_index", ""))
         except ValueError:
-            continue  # already reported by _validate_analyses_tsv
+            continue  # reported by the analyses rules
         if not 0 <= index < len(imputed_per_analysis):
             continue
         try:
             declared = int(row.get("completion_n_imputed_total", "") or 0)
         except ValueError:
-            continue  # already reported by _validate_analyses_tsv
+            continue  # reported by the analyses rules
         actual = int(imputed_per_analysis[index])
         analysis_id = row.get("analysis_id", "")
         if declared and not actual:

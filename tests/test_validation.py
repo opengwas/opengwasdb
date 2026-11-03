@@ -141,7 +141,7 @@ def test_validator_rejects_invalid_stored_effect_scale(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"analyses.vocabularies"}
     assert any("invalid stored_effect_scale" in error for error in result.errors)
 
 
@@ -172,7 +172,7 @@ def test_validator_rejects_missing_variant_axis_file(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"envelope.required"}
     assert "missing variants.tsv.gz" in result.errors
 
 
@@ -182,7 +182,7 @@ def test_validator_rejects_missing_alid_index_file_for_dense(dense_store_path, n
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"envelope.required"}
     assert any(
         error == f"missing {name} — rebuild the store to generate the ALID search index"
         for error in result.errors
@@ -215,8 +215,7 @@ def test_validator_rejects_leftover_sqlite_analyses_table(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
-    assert any("still contains an analyses table" in error for error in result.errors)
+    assert result.failed() == {"sqlite.analyses_table"}
 
 
 def test_validator_accepts_store_without_sqlite_analyses_table(dense_store_path):
@@ -238,8 +237,7 @@ def test_validator_rejects_leftover_sqlite_analyses_table_ragged(ragged_store_pa
 
     result = validate_store(ragged_store_path)
 
-    assert not result.ok
-    assert any("still contains an analyses table" in error for error in result.errors)
+    assert result.failed() == {"sqlite.analyses_table"}
 
 
 def test_validator_rejects_missing_ragged_csr_array(ragged_store_path):
@@ -503,8 +501,8 @@ def test_validator_rejects_leftover_sqlite_analyses_table_hybrid(hybrid_store_pa
 
     result = validate_store(hybrid_store_path)
 
-    assert not result.ok
-    assert any("still contains an analyses table" in error for error in result.errors)
+    assert result.failed() == {"sqlite.analyses_table"}
+    assert [f.target for f in result.of("sqlite.analyses_table")] == ["dense"]
 
 
 def test_validator_rejects_duplicate_analysis_id_hybrid(hybrid_store_path):
@@ -517,8 +515,8 @@ def test_validator_rejects_duplicate_analysis_id_hybrid(hybrid_store_path):
 
     result = validate_store(hybrid_store_path)
 
-    assert not result.ok
-    assert any("more than one row for analysis_id" in error for error in result.errors)
+    assert result.failed() == {"analyses.analysis_id"}
+    assert [f.target for f in result.of("analyses.analysis_id")] == ["dense"]
 
 
 def test_validator_rejects_duplicate_analysis_id(dense_store_path):
@@ -532,8 +530,7 @@ def test_validator_rejects_duplicate_analysis_id(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
-    assert any("more than one row for analysis_id" in error for error in result.errors)
+    assert result.failed() == {"analyses.analysis_id"}
 
 
 def test_validator_rejects_stray_file_in_dense_store(dense_store_path):
@@ -544,7 +541,7 @@ def test_validator_rejects_stray_file_in_dense_store(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"envelope.closed"}
     assert any(
         "unexpected store entry" in error and "traits.tsv.gz" in error
         for error in result.errors
@@ -556,7 +553,7 @@ def test_validator_rejects_stray_directory_in_ragged_store(ragged_store_path):
 
     result = validate_store(ragged_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"envelope.closed"}
     assert any(
         "unexpected store entry" in error and "extra_dir" in error for error in result.errors
     )
@@ -567,7 +564,7 @@ def test_validator_rejects_stray_file_at_hybrid_top_level(hybrid_store_path):
 
     result = validate_store(hybrid_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"envelope.closed"}
     assert any(
         "unexpected store entry" in error and "traits.tsv.gz" in error
         for error in result.errors
@@ -581,7 +578,7 @@ def test_validator_rejects_stray_file_in_hybrid_dense_component(hybrid_store_pat
 
     result = validate_store(hybrid_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"envelope.closed"}
     assert any(
         "unexpected store entry" in error and "stray.txt" in error for error in result.errors
     )
@@ -605,7 +602,7 @@ def test_validator_rejects_coverage_the_layout_cannot_carry(
 
         result = validate_store(store_path)
 
-        assert not result.ok
+        assert result.failed() == {"manifest.coverage"}, result.errors
         assert any(
             "cannot carry association_coverage=cis" in error
             and layout in error
@@ -699,8 +696,24 @@ def test_validator_rejects_retired_gene_id_column(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"analyses.retired_columns"}
     assert any("retired column" in error and "gene_id" in error for error in result.errors)
+
+
+def test_a_stray_file_no_longer_hides_an_invalid_vocabulary(dense_store_path):
+    # Issue #55: a stray entry stopped every Dense check, so a release with two
+    # independent defects reported one. Each rule now runs unless a rule it reads
+    # after failed, and nothing reads a stray file.
+    (dense_store_path / "traits.tsv.gz").write_bytes(b"stray")
+    analyses_path = dense_store_path / "analyses.tsv"
+    table = read_analyses(analyses_path)
+    for row in table.rows:
+        row["stored_effect_scale"] = "kg"
+    write_analyses(analyses_path, table)
+
+    result = validate_store(dense_store_path)
+
+    assert result.failed() == {"envelope.closed", "analyses.vocabularies"}
 
 
 def test_validator_accepts_duplicate_trait_ontology_id(dense_store_path):
@@ -726,7 +739,7 @@ def test_validator_rejects_invalid_original_sd_method(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"analyses.vocabularies"}
     assert any("invalid original_sd_method" in error for error in result.errors)
 
 
@@ -752,7 +765,7 @@ def test_validator_rejects_invalid_ancestry_assignment_method(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"analyses.vocabularies"}
     assert any("invalid ancestry_assignment_method" in error for error in result.errors)
 
 
@@ -783,7 +796,7 @@ def test_validator_rejects_analyses_tsv_missing_referenced_analysis_index(dense_
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert "analyses.analysis_index" in result.failed()
     assert any(
         "analysis_index values are not exactly the range" in error for error in result.errors
     )

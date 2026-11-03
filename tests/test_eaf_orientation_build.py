@@ -387,7 +387,7 @@ def test_validation_flags_a_store_that_stores_eaf_it_never_checked(
     _strip_orientation_evidence(store)
 
     result = validate_store(store)
-    assert not result.ok
+    assert result.failed() == {"eaf_orientation.evidence"}
     assert any("never been checked" in error for error in result.errors)
 
 
@@ -404,8 +404,7 @@ def test_validation_warns_about_an_unverified_frequency_column(tmp_path, freqs):
     result = validate_store(store)
 
     assert result.ok, result.errors
-    assert len(result.warnings) == 2
-    assert all("unverified" in warning for warning in result.warnings)
+    assert [f.rule for f in result.findings] == ["eaf_orientation.unverified"] * 2
 
 
 def test_validation_rejects_evidence_that_contradicts_the_manifest(
@@ -426,7 +425,7 @@ def test_validation_rejects_evidence_that_contradicts_the_manifest(
 
     result = validate_store(store)
 
-    assert not result.ok
+    assert result.failed() == {"eaf_orientation.evidence"}
     assert any("provenance" in error for error in result.errors)
 
 

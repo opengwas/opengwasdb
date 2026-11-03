@@ -18,8 +18,10 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Flag, StrEnum, auto
+from functools import cached_property
 from pathlib import Path
 
+from opengwasdb.model.analyses import AnalysesTable, read_analyses
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store.open import OpenGWASDBStore
 
@@ -71,8 +73,10 @@ class Target:
     """The part of a Store Release one rule is judged against.
 
     `label` names it in a finding. `parent` is the target it belongs to: a grid's or
-    a sequence's release, a Dense Component's Hybrid release. A rule's prerequisites
-    are looked up on the target first, then up this chain.
+    a sequence's release, a Dense Component's Hybrid release; `children` are the
+    targets that belong to it. A rule's prerequisites are looked up on the target
+    first, then up the `parent` chain. What several rules read about a target is
+    read once, here.
     """
 
     def __init__(
@@ -88,6 +92,9 @@ class Target:
         self.label = label
         self._store = store
         self.parent = parent
+        self.children: list[Target] = []
+        if parent is not None:
+            parent.children.append(self)
         self.options = options if options is not None else ValidationOptions()
 
     @property
@@ -99,6 +106,11 @@ class Target:
     @property
     def layout(self) -> PrimaryStorageLayout:
         return self.store.manifest.primary_layout
+
+    @cached_property
+    def analyses(self) -> AnalysesTable:
+        """The release's `analyses.tsv`, read on first use."""
+        return read_analyses(self.store.analyses_path)
 
     def __repr__(self) -> str:
         return f"Target({self.kind.name}, {self.label!r})"
