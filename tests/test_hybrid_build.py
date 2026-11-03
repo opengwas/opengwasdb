@@ -2740,3 +2740,26 @@ def test_single_pass_off_reference_lift_refuses_to_store_unoriented_statistics(t
         )
 
     assert not store_path.exists(), "a failed build must not leave a release behind"
+
+
+def test_a_two_pass_build_refuses_an_off_reference_spill(tmp_path, monkeypatch):
+    """D6 (issue #357): a two-pass axis is the sources' whole union, so Pass 2
+    drops and logs an unmatched row and nothing folds a `.unk` spill. One that
+    appears all the same is refused, where it used to be deleted unread."""
+    from opengwasdb.layouts.hybrid.unknown_keys import encode_keys
+
+    real_spill = hybrid_build._off_reference_spill
+
+    def _spill_a_row(unmatched, se_divisor, gate):
+        spill = real_spill(unmatched, se_divisor, gate)
+        assert not len(spill[0]), "a two-pass Pass 2 spills nothing of its own"
+        one = np.ones(1, dtype=np.float32)
+        keys = encode_keys(["1:5:A:G"])
+        return keys.values, one, one, one, np.zeros(1, dtype=np.int8), keys.hashed_index, []
+
+    monkeypatch.setattr(hybrid_build, "_off_reference_spill", _spill_a_row)
+    with pytest.raises(RuntimeError, match=r"two-pass Hybrid build found \d+ off-reference"):
+        build_hybrid_from_vcf_manifest(
+            _hybrid_manifest(tmp_path), tmp_path / "store.opengwasdb",
+            reference_panel=_panel(tmp_path), store_id="s", release_id="r",
+        )

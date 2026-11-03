@@ -142,9 +142,12 @@ insertion's ALID.
 `off_axis` is a Dense VCF row its axis lacks (a lift failure, a variant a
 Variant Reference omits), a two-pass Hybrid row no axis holds (it used to be
 spilled and deleted unread), and a BESD row whose ESI entry never made the
-axis. A single-pass Hybrid's unmatched rows are not dropped here: the fold
-places them in the Ragged Overflow, and the rows the fold cannot place are its
-own to count.
+axis. A single-pass Hybrid's unmatched rows are not dropped in Pass 2: the
+fold places them in the Ragged Overflow. A row whose off-reference key the
+fold cannot resolve (a failed lift, a key the resolution drops) is `off_axis`
+too, counted and logged by raw key in the record's `fold` stage. A two-pass
+build folds nothing, so it refuses a `.unk` spill it finds rather than delete
+rows no stage has counted.
 
 The two identity rules come first, because a row they drop names no variant:
 no ALID can spell it, so no other rule has anything to judge. The Source Reader

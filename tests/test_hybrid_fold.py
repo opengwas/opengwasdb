@@ -408,3 +408,37 @@ def test_fold_parallel_matches_serial(tmp_path: Path) -> None:
                 np.testing.assert_array_equal(d_ser["eaf"], d_par["eaf"])
         assert not (serial_dir / f"{col}.unk.npz").exists()
         assert not (parallel_dir / f"{col}.unk.npz").exists()
+
+
+def test_fold_counts_and_logs_the_rows_no_key_resolves(tmp_path: Path) -> None:
+    """D6 (issue #357): a row whose off-reference key the fold cannot resolve
+    reaches no axis. It is counted and logged as `off_axis` by its raw key, a
+    packed SNV decoded from its bits and a hashed indel from the side file,
+    where it used to vanish after the gates had written their record."""
+    from opengwasdb.layouts.hybrid.build import _write_unknown_side_file
+    from opengwasdb.layouts.hybrid.unknown_keys import encode_keys
+
+    spill_dir = tmp_path / "spills"
+    spill_dir.mkdir()
+    raw = ["1:5:A:G", "1:7:C:T", "1:9:A:AT"]
+    encoded = encode_keys(raw)
+    assert encoded.hashed_index.tolist() == [2], "the fixture must hold a hashed key"
+    np.savez(
+        spill_dir / "0.unk.npz",
+        keys=encoded.values,
+        z=np.array([1.0, 2.0, 3.0], dtype=np.float32),
+        se=np.full(3, 0.1, dtype=np.float32),
+        eaf=np.full(3, np.nan, dtype=np.float32),
+        reference=np.zeros(3, dtype=np.int8),
+        hashed_index=encoded.hashed_index,
+    )
+    _write_unknown_side_file(spill_dir, 0, encoded.hashed_raw)
+    canonical = _canonical_keys((int(encoded.values[2]), "1:9:A:AT"))
+    table = KeyTable(keys=encoded.values[:1], shared_index=np.array([10], dtype=np.int64))
+
+    vi, z, _, _ = _run_fold_column(spill_dir, table, canonical)
+
+    assert (vi.tolist(), z.tolist()) == ([10], [1.0])
+    part, logged_rows = _fold_stage(spill_dir)
+    assert (part["admitted"], part["dropped"]) == (-2, {"off_axis": 2})
+    assert logged_rows == ["1:7:C:T\toff_axis", "1:9:A:AT\toff_axis"]

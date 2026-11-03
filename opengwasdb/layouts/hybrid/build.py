@@ -153,6 +153,7 @@ from opengwasdb.layouts.hybrid.layout import (
 from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
     check_hash,
+    decode_packed,
     encode_key,
     encode_keys,
     is_hashed,
@@ -1383,26 +1384,56 @@ def _load_fold_existing(ctx: _FoldContext, spill_dir: Path, col: int) -> _Overfl
     return _load_existing_overflow(spill_dir, col, ctx.old_to_new)
 
 
-def _load_off_reference(ctx: _FoldContext, spill_dir: Path, col: int) -> _Overflow | None:
-    """Load, verify, and resolve off-reference associations with searchsorted."""
+def _load_off_reference(
+    ctx: _FoldContext, spill_dir: Path, col: int
+) -> tuple[_Overflow | None, list[str]]:
+    """Load, verify, and resolve off-reference associations with searchsorted.
+
+    Returns the resolved rows, ``None`` when there are none, and the raw keys
+    of the rows no off-reference key resolved: a failed lift, or a key the
+    resolution dropped. Those rows reach no axis (D6).
+    """
     unk_path = spill_dir / f"{col}.unk.npz"
     if not unk_path.exists():
-        return None
+        return None, []
     with np.load(unk_path) as data:
         keys = data["keys"]
         u_z, u_se, u_eaf, u_reference = data["z"], data["se"], data["eaf"], data["reference"]
         hashed_index = data["hashed_index"]
     canonical = CanonicalRawKeys(ctx.canonical_values, ctx.canonical_raw)
-    _verify_hashed_rows(spill_dir, col, keys, hashed_index, canonical)
+    raws = _verify_hashed_rows(spill_dir, col, keys, hashed_index, canonical)
     keep, shared = lookup_matched(ctx.table_keys, ctx.table_shared_index, keys)
+    unresolved = _unresolved_keys(keys, hashed_index, raws, keep)
     if not len(keep):
-        return None
-    return shared, u_z[keep], u_se[keep], u_eaf[keep], u_reference[keep]
+        return None, unresolved
+    return (shared, u_z[keep], u_se[keep], u_eaf[keep], u_reference[keep]), unresolved
 
 
-def _record_fold(ctx: _FoldContext, col: int, folded: _FoldedOverflow) -> None:
-    """Write what the fold dropped of one column's admitted rows, by ALID, as
-    the Admission record's `fold` stage for that Analysis."""
+def _unresolved_keys(
+    keys: np.ndarray, hashed_index: np.ndarray, raws: list[str], keep: np.ndarray
+) -> list[str]:
+    """The raw keys of one column's rows outside ``keep``, in stream order: a
+    packed key decodes from its bits, a hashed one is its side-file string."""
+    missing = np.ones(len(keys), dtype=bool)
+    missing[keep] = False
+    at = np.flatnonzero(missing)
+    if not len(at):
+        return []
+    raw_at = dict(zip(hashed_index.tolist(), raws, strict=True))
+    hashed = is_hashed(keys[at])
+    packed = iter(decode_packed(keys[at][~hashed]))
+    return [
+        raw_at[position] if is_raw else next(packed)
+        for position, is_raw in zip(at.tolist(), hashed.tolist(), strict=True)
+    ]
+
+
+def _record_fold(
+    ctx: _FoldContext, col: int, folded: _FoldedOverflow, unresolved: list[str]
+) -> None:
+    """Write what the fold dropped of one column's admitted rows as the
+    Admission record's `fold` stage for that Analysis: its duplicates by ALID,
+    and the rows no key resolved, by raw key, as `off_axis` (D6)."""
     alids = ctx.shared_alids
     with ctx.record.stage(ctx.record.analyses[col], "fold") as gate:
         gate.duplicates(
@@ -1410,6 +1441,7 @@ def _record_fold(ctx: _FoldContext, col: int, folded: _FoldedOverflow) -> None:
             folded.collapsed,
             [alids[i] for i in folded.reversed_indels],
         )
+        gate.unplaced(Reason.OFF_AXIS, unresolved)
 
 
 def _fold_column(col: int) -> int:
@@ -1433,13 +1465,13 @@ def _fold_column(col: int) -> int:
     # With no remap (the all-keys-drop path), the existing overflow spill is
     # already on the final axis and must remain untouched.  Avoid reading it.
     ex = _load_fold_existing(ctx, spill_dir, col)
-    off = _load_off_reference(ctx, spill_dir, col)
+    off, unresolved = _load_off_reference(ctx, spill_dir, col)
     if ex is None and off is None and not unk_path.exists():
         _mark_folded(ctx, col)
         return col
 
     folded = _combine_overflow(ex, off, ctx.old_to_new is not None)
-    _record_fold(ctx, col, folded)
+    _record_fold(ctx, col, folded, unresolved)
     final = folded.final
     if final is not None:
         tmp_ovf = spill_dir / f"{col}.ovf.tmp.npz"
@@ -1478,8 +1510,9 @@ def _verify_hashed_rows(
     keys: np.ndarray,
     hashed_index: np.ndarray,
     canonical: CanonicalRawKeys,
-) -> None:
-    """Check each of one column's hashed rows carries its value's canonical raw key.
+) -> list[str]:
+    """Check each of one column's hashed rows carries its value's canonical raw
+    key, and return the side file's raw keys, in ``hashed_index``'s order.
 
     The exact half of the build-wide collision guarantee (#218, ticket #222
     review round 2): the merge's check hash only filters, and two keys can
@@ -1489,6 +1522,7 @@ def _verify_hashed_rows(
     raws = _read_unknown_side_file(spill_dir, col)
     values = placed_hashed_values(keys, hashed_index, raws)
     canonical.verify(col, values, np.array(raws, dtype=RAW_KEY_DTYPE))
+    return raws
 
 
 def _fold_unknown_spills(
@@ -1563,6 +1597,22 @@ def _build_shared_key_table(
     return table, old_to_new, index, off_panel, shared_sorted
 
 
+def _refuse_off_reference_spills(spill_dir: Path) -> None:
+    """Refuse a two-pass build's ``.unk`` spill rather than delete it unread.
+
+    A two-pass axis is the sources' whole union, so Pass 2 drops and logs an
+    unmatched row (`off_axis`, D6) and nothing folds one. A spill found here
+    is rows no stage would count, so it is a defect.
+    """
+    stray = sorted(path.name for path in spill_dir.glob("*.unk.npz"))
+    if stray:
+        raise RuntimeError(
+            f"a two-pass Hybrid build found {len(stray)} off-reference spill(s) "
+            f"(first: {stray[0]}); Pass 2 drops and logs an unmatched row, so "
+            "nothing folds them and their rows would be lost unrecorded"
+        )
+
+
 def _finalise_reference_partition(
     prepared: _PreparedBuild,
     options: _BuildOptions,
@@ -1589,6 +1639,7 @@ def _finalise_reference_partition(
     the recorded rsid map -- is written.
     """
     if options.variant_reference is None:
+        _refuse_off_reference_spills(prepared.spill_dir)
         _record_axis(state, prepared, None)
         return prepared
     recorded = _recorded_axis(state)
