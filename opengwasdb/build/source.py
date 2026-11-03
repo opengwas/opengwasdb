@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.model.maf_policy import MafPolicy, parse_maf_policy
 from opengwasdb.variants import CanonicalVariant, VariantNormalisationError, orient_to_canonical
 from opengwasdb.variants.normalise import IdentityFaults, MalformedIdentity, identity_fault
 
@@ -20,7 +21,11 @@ class SourceRowError(ValueError):
 
 @dataclass(frozen=True)
 class NormalisedAssociation:
-    """One source association oriented to canonical Store ALID convention."""
+    """One source association oriented to canonical Store ALID convention.
+
+    ``maf_policy`` is the MAF filter the row's Analysis declares in its
+    `maf_threshold` column (D2), as an `analyses.tsv` row declares one.
+    """
 
     analysis_id: str
     variant: CanonicalVariant
@@ -37,6 +42,7 @@ class NormalisedAssociation:
     first_author: str | None = None
     stored_effect_scale: StoredEffectScale = StoredEffectScale.SD
     eaf: float | None = None
+    maf_policy: MafPolicy = MafPolicy()
 
 
 class _MalformedRow(Exception):
@@ -156,6 +162,7 @@ def _normalise_row(row: dict[str, str], row_number: int) -> NormalisedAssociatio
     except ValueError as exc:
         message = f"row {row_number}: invalid stored_effect_scale {scale_text!r}"
         raise SourceRowError(message) from exc
+    maf_policy = _declared_maf_policy(lookup, row_number)
 
     return NormalisedAssociation(
         analysis_id=analysis_id,
@@ -175,7 +182,28 @@ def _normalise_row(row: dict[str, str], row_number: int) -> NormalisedAssociatio
         first_author=field("first_author", required=False),
         stored_effect_scale=scale,
         eaf=eaf,
+        maf_policy=maf_policy,
     )
+
+
+def _declared_maf_policy(lookup: Mapping[str, str | None], row_number: int) -> MafPolicy:
+    """The MAF filter a row declares (D2), judged on the row's own frequency.
+
+    An INFO threshold other than `NaN` is refused: a record carries no
+    imputation score for it to be judged on, and a filter that silently did
+    not apply is the failure the column exists to prevent.
+    """
+    info = lookup.get("info_score_threshold")
+    if info is not None and info.strip() != "NaN":
+        raise SourceRowError(
+            f"row {row_number}: declares an INFO threshold ({info!r}), which build-dense "
+            "cannot judge: its records carry no imputation score"
+        )
+    declared = {key: value for key, value in lookup.items() if value is not None}
+    try:
+        return parse_maf_policy(declared)
+    except ValueError as exc:
+        raise SourceRowError(f"row {row_number}: {exc}") from exc
 
 
 def _refuse_malformed(analysis_id: str, lookup: Mapping[str, str | None]) -> None:

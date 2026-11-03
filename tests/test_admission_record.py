@@ -853,3 +853,53 @@ def test_a_later_stage_s_drops_join_its_analysis_once_however_often_it_runs(tmp_
     with pytest.raises(ValueError, match="identifier"):
         with record.stage("A", "../fold"):
             pass
+
+
+_RECORDS_HEADER = "analysis_id\tchromosome\tposition\teffect_allele\tother_allele\tz\tse\teaf"
+
+
+def test_a_dense_build_applies_the_maf_filter_its_records_declare(tmp_path: Path):
+    """D2 in `build-dense`: a record's `maf_threshold`, as an `analyses.tsv` row
+    declares one, filters its Analysis's rows on their own frequency; an
+    Analysis declaring none keeps a rare row."""
+    source = tmp_path / "records.tsv"
+    source.write_text(
+        f"{_RECORDS_HEADER}\tmaf_threshold\n"
+        "A\t1\t100\tA\tG\t2.0\t0.1\t0.01\t0.05\n"
+        "A\t1\t200\tA\tG\t1.0\t0.1\t0.30\t0.05\n"
+        "B\t1\t100\tA\tG\t2.0\t0.1\t0.01\tNaN\n",
+        encoding="utf-8",
+    )
+
+    store, _ = _dense_from_records(tmp_path, source)
+
+    a, b = record_analyses(store)
+    assert (a["analysis_id"], a["admitted"], a["dropped"]) == (
+        "A", 1, {"maf_below_threshold": 1},
+    )
+    assert (b["analysis_id"], b["admitted"], b["dropped"]) == ("B", 1, {})
+
+
+def test_a_dense_build_refuses_a_filter_its_records_cannot_be_judged_by(tmp_path: Path):
+    """A record carries no imputation score, so an INFO threshold is refused; and
+    one Analysis's records declaring two MAF thresholds are refused, since
+    which applies is not the build's to choose."""
+    from opengwasdb.build.source import SourceRowError
+
+    info = tmp_path / "info.tsv"
+    info.write_text(
+        f"{_RECORDS_HEADER}\tinfo_score_threshold\nA\t1\t100\tA\tG\t2.0\t0.1\t0.3\t0.8\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(SourceRowError, match="row 2: "):
+        _dense_from_records(tmp_path, info)
+
+    two = tmp_path / "two.tsv"
+    two.write_text(
+        f"{_RECORDS_HEADER}\tmaf_threshold\n"
+        "A\t1\t100\tA\tG\t2.0\t0.1\t0.3\t0.05\n"
+        "A\t1\t200\tA\tG\t1.0\t0.1\t0.3\t0.01\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="'A' declares 2 different MAF thresholds"):
+        _dense_from_records(tmp_path, two)

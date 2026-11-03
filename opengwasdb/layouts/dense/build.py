@@ -43,6 +43,7 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
     coverage_for_layout,
 )
+from opengwasdb.model.maf_policy import MafPolicy
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.stats import FrequencyTally, parse_af
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
@@ -158,10 +159,10 @@ def _admitted_records(
     """The records each Analysis's Admission gate keeps, in source order.
 
     Analyses are judged in the order they first appear, which is the order the
-    Store's columns take (`_collect_analyses`). An Analysis's records for one
-    variant resolve as routing resolves an axis's (`collapse_duplicates`):
-    agreeing ones collapse to the first, conflicting ones are all dropped and
-    logged.
+    Store's columns take (`_collect_analyses`), each under the MAF filter its
+    records declare (D2). An Analysis's records for one variant resolve as
+    routing resolves an axis's (`collapse_duplicates`): agreeing ones collapse
+    to the first, conflicting ones are all dropped and logged.
     """
     by_analysis: dict[str, list[int]] = {}
     for position, record in enumerate(records):
@@ -174,12 +175,29 @@ def _admitted_records(
     for analysis_id, positions in by_analysis.items():
         tally = StreamTally(faults=malformed.get(analysis_id, IdentityFaults()))
         _usable_frequencies(records, positions, tally.frequencies)
-        with record_.gate(admission.AnalysisRules(analysis_id)) as gate:
+        rules = admission.AnalysisRules(analysis_id, maf=_declared_maf(records, positions))
+        with record_.gate(rules) as gate:
             gate.streamed(tally)
             if positions:
                 keep[positions] = _admitted(records, positions, gate)
     record_.finish()
     return [record for record, kept in zip(records, keep.tolist(), strict=True) if kept]
+
+
+def _declared_maf(records: list[NormalisedAssociation], positions: list[int]) -> MafPolicy:
+    """The one MAF filter an Analysis's records declare, or none.
+
+    Rows of one Analysis declaring different thresholds are refused: which
+    of them applies is not the build's to choose.
+    """
+    policies = {records[i].maf_policy for i in positions}
+    if len(policies) > 1:
+        analysis_id = records[positions[0]].analysis_id
+        raise ValueError(
+            f"Analysis {analysis_id!r} declares {len(policies)} different MAF thresholds "
+            "across its records; one Analysis declares one"
+        )
+    return policies.pop() if policies else MafPolicy()
 
 
 def _usable_frequencies(
