@@ -507,13 +507,19 @@ def _listing_entry(
 
 
 def _unsampled_record() -> dict[str, Any]:
+    """The sample was skipped, so nothing it would have counted is zero (issue #375).
+
+    `analyses_checked` is 0 because no Analysis was read; the strata, `totals` and
+    `max_abs_diff` are `null`, a value nobody measured rather than a measured zero. The
+    keys stay, so a record's shape does not depend on whether the sample ran.
+    """
     return {
         "sample": {
             "analyses_checked": 0, "non_admitted": 0,
-            "by_stratum": dict.fromkeys(STRATA, 0), "analyses": [],
+            "by_stratum": dict.fromkeys(STRATA), "analyses": [],
         },
-        "totals": dict.fromkeys(_TOTAL_KEYS, 0),
-        "max_abs_diff": dict.fromkeys(_DIFF_PLANES, 0.0),
+        "totals": dict.fromkeys(_TOTAL_KEYS),
+        "max_abs_diff": dict.fromkeys(_DIFF_PLANES),
     }
 
 
