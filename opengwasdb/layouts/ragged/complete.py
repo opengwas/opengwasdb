@@ -28,6 +28,7 @@ import json
 import logging
 import shutil
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -179,12 +180,26 @@ def _admitted_observed(
     return AnalysisAssociations(*(column[keep] for column in obs)), found
 
 
-def _warn_observed_duplicates(ai: int, found: Duplicates, src_alids: list[str]) -> None:
-    """Say what `_admitted_observed` dropped or collapsed of one Analysis's rows.
+def _log_dropped(ai: int, what: str, rows: Iterable[tuple[str, float, float]]) -> None:
+    """Log every row completion drops, one line each (D8): its Analysis, its
+    variant, its z and SE, and the reason.
 
-    A completion writes no Admission record (ADR 0072), so the log is where
-    a source Store's duplicate cells are named.
+    D8 logs each row dropped for a reason other than a declared filter, and a
+    completion writes no Admission record (ADR 0072), so its log is where those
+    rows are named, all of them.
     """
+    for alid, z, se in rows:
+        log.warning(
+            "Analysis %d: dropped %s %s (z=%r, se=%r): duplicate_conflicting",
+            ai, what, alid, z, se,
+        )
+
+
+def _warn_observed_duplicates(
+    ai: int, obs: AnalysisAssociations, found: Duplicates, src_alids: list[str]
+) -> None:
+    """Say what `_admitted_observed` dropped or collapsed of one Analysis's
+    rows, ``obs``: a count, and a line for every dropped row."""
     if len(found.dropped):
         first = [src_alids[int(i)] for i in found.conflicting[:5]]
         log.warning(
@@ -192,6 +207,10 @@ def _warn_observed_duplicates(ai: int, found: Duplicates, src_alids: list[str]) 
             "carried (duplicate_conflicting); first: %s",
             ai, len(found.dropped), len(found.conflicting), first,
         )
+        _log_dropped(ai, "observed row", (
+            (src_alids[int(obs.variant_index[i])], float(obs.z[i]), float(obs.se[i]))
+            for i in found.dropped.tolist()
+        ))
     if found.collapsed:
         log.warning(
             "Analysis %d: %d observed row(s) repeat an agreeing row and are collapsed "
@@ -874,7 +893,8 @@ class _Fills:
     however many blocks hold it. `resolved` keeps each variant once by
     Association Admission's duplicate rule (D5): fills that agree are one, and
     fills that disagree are all dropped, leaving the cell missing, rather than
-    keeping whichever block's checkpoint sorted last.
+    keeping whichever block's checkpoint sorted last. Each dropped fill is
+    logged (`_log_dropped`).
     """
 
     def __init__(self) -> None:
@@ -902,6 +922,9 @@ class _Fills:
                 ai, len(found.dropped), len(found.conflicting),
                 [self.alids[int(i)] for i in found.dropped[:5]],
             )
+            _log_dropped(ai, "fill", (
+                (self.alids[i], self.z[i], self.se[i]) for i in found.dropped.tolist()
+            ))
         return {self.alids[i]: (self.z[i], self.se[i]) for i in found.keep.tolist()}
 
 
@@ -1074,7 +1097,7 @@ def _completed_analysis(
     # D1: a half-missing source cell is refused, whatever completes the Analysis.
     require_paired(source.z, source.se, where=f"complete-ragged, Analysis {ai}")
     obs, found = _admitted_observed(source)
-    _warn_observed_duplicates(ai, found, src_alids)
+    _warn_observed_duplicates(ai, source, found, src_alids)
     if not block_ids:
         return _passthrough_analysis(obs, src_idx_remap)
     observed = _observed_alid_maps(obs, src_alids)

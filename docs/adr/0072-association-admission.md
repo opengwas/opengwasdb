@@ -104,7 +104,9 @@ and `build-dense`'s refusal. The fold runs after Pass 2's gates have written
 their parts, so it writes its own: `parts/<index>.fold.json` and
 `dropped/<index>.fold.tsv.gz`, added to the Analysis when the record is
 finished. A fold run again for a column replaces them. A completion writes no
-record, so it logs a source Store's duplicates and the fills it drops.
+record, so its log names every row it drops, a source Store's duplicate cells
+and the fills two blocks disagree on, one line each with the row's variant, z,
+SE and reason (D8).
 
 Two conflicting rows can be two variants. An insertion and a deletion at one
 position share an ALID, because the ALID sorts its alleles: BMI_IRN's

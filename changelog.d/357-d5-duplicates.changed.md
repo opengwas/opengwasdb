@@ -12,7 +12,7 @@
   of a source Store's repeated cell and of two LD blocks' fills for one
   variant. Each now applies the rule: the fold records its drops in the
   Admission record (`parts/<index>.fold.json`), and a completion, which writes
-  no record, logs them. The rule is Variant Routing's `collapse_duplicates`;
+  no record, logs every row it drops, one line each. The rule is Variant Routing's `collapse_duplicates`;
   `Placed` reports what it collapsed and dropped.
 - **An insertion and a deletion that share an ALID keep the insertion, where
   the source declares the reference allele.** The ALID sorts its alleles, so

@@ -1831,25 +1831,10 @@ class TestObservedDuplicates:
         assert "2 observed row(s) at 1 variant(s) disagree" in caplog.text
 
     def test_fills_two_blocks_disagree_on_are_dropped(self, tmp_path):
-        import sqlite3
-
-        from opengwasdb.completion.checkpoint import (
-            BlockCompletionResult,
-            FillRow,
-            write_block_checkpoint,
+        fills_by_analysis = _merged_fills(
+            tmp_path,
+            {z: [("1:100:A:G", 1.0, 0.25), ("1:200:C:T", z, 0.5)] for z in (1.5, 2.5)},
         )
-        from opengwasdb.completion.schema import create_completion_quality_table
-        from opengwasdb.layouts.ragged.complete import _merge_checkpoint_rows
-
-        blocks = tmp_path / "blocks"
-        blocks.mkdir()
-        for name, z in (("a", 1.5), ("b", 2.5)):
-            fills = [FillRow("1:100:A:G", 0, 1.0, 0.25), FillRow("1:200:C:T", 0, z, 0.5)]
-            write_block_checkpoint(blocks / f"{name}.npz", BlockCompletionResult(name, [], fills))
-        db = sqlite3.connect(tmp_path / "index.sqlite")
-        create_completion_quality_table(db)
-
-        fills_by_analysis, _ = _merge_checkpoint_rows(blocks, db)
 
         assert fills_by_analysis == {0: {"1:100:A:G": (1.0, 0.25)}}
 
@@ -1882,3 +1867,88 @@ def test_a_half_missing_source_cell_is_refused_even_where_no_block_completes(mon
             block_canonical_alids={},
             fills={},
         )
+
+
+#: Six variants, each reached by two rows that disagree on z.
+_SIX = [f"1:{100 * (i + 1)}:A:G" for i in range(6)]
+
+
+def _logged_drops(caplog) -> list[tuple[str, str]]:
+    """Each row completion logged as dropped: its variant and the reason."""
+    drops = []
+    for record in caplog.records:
+        message = record.getMessage()
+        if ": dropped " in message:
+            alid = message.split(": dropped ", 1)[1].split(" (", 1)[0].split()[-1]
+            drops.append((alid, message.rsplit(": ", 1)[1]))
+    return drops
+
+
+def _merged_fills(tmp_path, blocks: dict[float, list[tuple[str, float, float]]]) -> dict:
+    """What `_merge_checkpoint_rows` makes of one block checkpoint per entry,
+    each holding Analysis 0's ``(alid, z, se)`` fills."""
+    import sqlite3
+
+    from opengwasdb.completion.checkpoint import (
+        BlockCompletionResult,
+        FillRow,
+        write_block_checkpoint,
+    )
+    from opengwasdb.completion.schema import create_completion_quality_table
+    from opengwasdb.layouts.ragged.complete import _merge_checkpoint_rows
+
+    directory = tmp_path / "blocks"
+    directory.mkdir()
+    for i, fills in enumerate(blocks.values()):
+        rows = [FillRow(alid, 0, z, se) for alid, z, se in fills]
+        write_block_checkpoint(directory / f"{i}.npz", BlockCompletionResult(str(i), [], rows))
+    db = sqlite3.connect(tmp_path / "index.sqlite")
+    create_completion_quality_table(db)
+    fills_by_analysis, _ = _merge_checkpoint_rows(directory, db)
+    return fills_by_analysis
+
+
+def test_every_fill_completion_drops_is_logged(tmp_path, caplog):
+    """D8 (issue #357): a row dropped for a reason other than a declared filter
+    is logged, every one, where completion logs its drops. Six variants two LD
+    blocks fill differently drop twelve fills, and the log names all twelve."""
+    fills_by_analysis = _merged_fills(
+        tmp_path, {z: [(alid, z, 0.5) for alid in _SIX] for z in (1.5, 2.5)}
+    )
+
+    assert fills_by_analysis == {0: {}}
+    assert sorted(_logged_drops(caplog)) == sorted(
+        (alid, "duplicate_conflicting") for alid in _SIX * 2
+    )
+
+
+def test_every_observed_row_completion_drops_is_logged(caplog):
+    """The same for a source Store's observed rows: twelve rows at six
+    variants that disagree are all named, not a sample of them."""
+    from types import SimpleNamespace
+
+    from opengwasdb.layouts.ragged.complete import _completed_analysis
+    from opengwasdb.layouts.ragged.zarr_csr import AnalysisAssociations
+
+    observed = AnalysisAssociations(
+        variant_index=np.tile(np.arange(6, dtype=np.int32), 2),
+        z=np.repeat(np.array([1.0, 2.0], dtype=np.float32), 6),
+        se=np.full(12, 0.25, dtype=np.float32),
+        eaf=np.full(12, 0.5, dtype=np.float32),
+    )
+
+    completed = _completed_analysis(
+        0,
+        src_csr=SimpleNamespace(get_analysis=lambda ai: observed),
+        src_alids=_SIX,
+        src_idx_remap=list(range(6)),
+        new_alid_to_idx={alid: i for i, alid in enumerate(_SIX)},
+        block_ids=[],
+        block_canonical_alids={},
+        fills={},
+    )
+
+    assert completed.vi.tolist() == []
+    assert sorted(_logged_drops(caplog)) == sorted(
+        (alid, "duplicate_conflicting") for alid in _SIX * 2
+    )
