@@ -11,9 +11,19 @@ from opengwasdb.admission import NotAdmitted
 from opengwasdb.encoding import association_codec
 from opengwasdb.encoding.association_codec import (
     SE_FLOAT16_MAX,
+    AssociationCodec,
     CellValues,
+    Placement,
     log_se_out_of_range,
     storable,
+)
+from opengwasdb.encoding.codec import SeExceptionBuilder, StoreCodec
+from opengwasdb.encoding.plan import (
+    EAF_EXCEPTION,
+    EafEncoding,
+    SeEncoding,
+    StoreEncoding,
+    ZEncoding,
 )
 
 NAN = np.float32(np.nan)
@@ -112,3 +122,154 @@ def test_the_count_is_logged_once_naming_each_analysis(caplog) -> None:
     assert [r.getMessage() for r in caplog.records] == [
         "build-x: 7 SE value(s) above 65,504, stored as +inf (spec §15): b: 5, c: 2"
     ]
+
+
+# ── AssociationCodec: one encode, in the order the planes allow ──────────────
+
+_RESIDUAL = StoreEncoding(
+    z=ZEncoding("int16_fixed", scale=1024),
+    se=SeEncoding("int8_residual", residual_range=0.5),
+    eaf=EafEncoding("int8_residual", residual_range=0.5),
+)
+_FLOAT16_SE = _RESIDUAL.with_se(SeEncoding("float16"))
+_N_VARIANTS, _N_ANALYSES = 10_000, 4
+
+
+def _random_cells(n: int, seed: int = 0, *, missing: float = 0.2) -> tuple[CellValues, Placement]:
+    """`n` Dense cells at random places, about `missing` of them missing in both statistics."""
+    rng = np.random.default_rng(seed)
+    rows, cols = np.divmod(rng.choice(_N_VARIANTS * _N_ANALYSES, n, replace=False), _N_ANALYSES)
+    eaf = rng.uniform(0.01, 0.99, n).astype(np.float32)
+    se = np.exp(-3.0 - 0.5 * np.log(2 * eaf * (1 - eaf)) + rng.normal(0, 0.05, n))
+    z = rng.normal(0, 3, n).astype(np.float32)
+    gone = rng.random(n) < missing
+    z[gone] = np.nan
+    se[gone] = np.nan
+    cells = CellValues(z, se.astype(np.float32), eaf)
+    return cells, Placement.pairs(rows, cols, _N_ANALYSES)
+
+
+def _codec(plan: StoreEncoding = _RESIDUAL, **kwargs: np.ndarray) -> AssociationCodec:
+    rng = np.random.default_rng(1)
+    defaults = {
+        "eaf_baseline": rng.uniform(0.02, 0.98, _N_VARIANTS).astype(np.float32),
+        "se_coefficients": np.tile(np.array([[-3.0, -0.5]], np.float32), (_N_ANALYSES, 1)),
+    }
+    return AssociationCodec(plan, **{**defaults, **kwargs})
+
+
+def test_se_is_coded_against_the_frequency_a_reader_decodes_not_the_sources() -> None:
+    cells, at = _random_cells(20_000)
+    codec = _codec()
+    encoded = codec.encode(cells, at, where="x")
+    decoded_eaf = codec.round_trip(cells, at, where="x").eaf
+    assert decoded_eaf is not None
+    analyses = np.asarray(at.analyses)
+    coefficients = _codec()._model()
+
+    def se_codes(eaf: np.ndarray) -> np.ndarray:
+        return StoreCodec(_RESIDUAL).encode_se(
+            cells.se,
+            eaf=eaf,
+            analysis_index=analyses,
+            coefficients=coefficients,
+            positions=at.positions,
+            exceptions=SeExceptionBuilder(),
+        )
+
+    against_source = se_codes(cells.eaf)
+    assert np.array_equal(encoded.se, se_codes(decoded_eaf))
+    assert (encoded.se != against_source).sum() > 0, "fixture must make the order matter"
+
+
+def test_an_imputed_cell_is_coded_against_the_panels_frequency() -> None:
+    panel = np.full(_N_VARIANTS, 0.25, dtype=np.float32)
+    codec = _codec(_RESIDUAL.with_eaf_reference(True), eaf_reference=panel)
+    cells = CellValues(
+        _f32(1.0, 2.0),
+        _f32(0.08, 0.09),
+        eaf=_f32(NAN, 0.4),
+        imputed=np.array([1, 0], dtype=np.uint8),
+    )
+    at = Placement.pairs(np.array([3, 7]), np.array([0, 1]), _N_ANALYSES)
+
+    back = codec.round_trip(cells, at, where="x")
+
+    assert back.eaf is not None
+    assert back.eaf[0] == np.float32(0.25)
+    assert abs(back.eaf[1] - 0.4) < 1e-3
+    np.testing.assert_allclose(back.se, cells.se, rtol=0.01)
+
+
+def test_the_baseline_is_gathered_by_each_cells_row_and_tables_keyed_by_its_position() -> None:
+    baseline = np.linspace(0.05, 0.95, _N_VARIANTS, dtype=np.float32)
+    codec = _codec(eaf_baseline=baseline)
+    rows, cols = np.array([40, 2, 17]), np.array([3, 0, 2])
+    eaf = np.array([baseline[40], 0.999999, baseline[17]], dtype=np.float32)
+    cells = CellValues(_f32(1.0, 200.0, -2.0), _f32(0.1, 0.2, 0.3), eaf=eaf)
+    at = Placement.pairs(rows, cols, _N_ANALYSES)
+
+    encoded = codec.encode(cells, at, where="x")
+    back = codec.round_trip(cells, at, where="x")
+
+    assert encoded.eaf is not None
+    assert encoded.eaf.tolist() == [0, EAF_EXCEPTION, 0], "a cell at its own baseline codes as 0"
+    assert encoded.z_overflow.index.tolist() == [2 * _N_ANALYSES + 0]
+    assert encoded.eaf_exceptions.index.tolist() == [2 * _N_ANALYSES + 0]
+    assert back.z[1] == np.float32(200.0)
+    assert back.eaf is not None and back.eaf[1] == np.float32(0.999999)
+
+
+def test_a_band_encodes_as_its_cells_do() -> None:
+    rng = np.random.default_rng(3)
+    r0, r1 = 10, 14
+    eaf = rng.uniform(0.05, 0.95, (r1 - r0, _N_ANALYSES)).astype(np.float32)
+    se = rng.uniform(0.05, 0.2, eaf.shape).astype(np.float32)
+    z = rng.normal(0, 40, eaf.shape).astype(np.float32)
+    codec = _codec()
+    band = codec.encode(CellValues(z, se, eaf), Placement.band(r0, r1, _N_ANALYSES), where="x")
+    rows, cols = np.nonzero(np.ones(eaf.shape, bool))
+    cells = CellValues(z[rows, cols], se[rows, cols], eaf[rows, cols])
+    pairs = codec.encode(cells, Placement.pairs(rows + r0, cols, _N_ANALYSES), where="x")
+
+    assert len(band.z_overflow) > 0, "fixture must overflow z"
+    for plane in ("z", "se", "eaf"):
+        assert np.array_equal(getattr(band, plane).ravel(), getattr(pairs, plane))
+    assert band.z_overflow.index.tolist() == pairs.z_overflow.index.tolist()
+
+
+def test_z_and_se_are_missing_together_after_a_round_trip() -> None:
+    for seed in range(5):
+        cells, at = _random_cells(5_000, seed)
+        back = _codec().round_trip(cells, at, where="x")
+        assert np.array_equal(np.isnan(back.z), np.isnan(cells.z))
+        assert np.array_equal(np.isnan(back.se), np.isnan(back.z))
+
+
+def test_an_se_above_float16s_range_reads_back_as_infinity_until_issue_338() -> None:
+    cells = CellValues(_f32(1.0, 2.0), _f32(70_000.0, 0.1), eaf=_f32(0.3, 0.4))
+    at = Placement.pairs(np.array([0, 1]), np.array([0, 2]), _N_ANALYSES)
+
+    encoded = _codec(_FLOAT16_SE).encode(cells, at, where="x")
+    back = _codec(_FLOAT16_SE).round_trip(cells, at, where="x")
+
+    assert back.se[0] == np.inf and back.z[0] == np.float32(1.0)
+    assert encoded.storable.se_out_of_range.tolist() == [1, 0, 0, 0]
+
+
+def test_a_frequency_the_plan_has_no_plane_for_is_refused() -> None:
+    plan = StoreEncoding(z=_RESIDUAL.z, se=SeEncoding("float16"))
+    cells = CellValues(_f32(1.0), _f32(0.1), eaf=_f32(0.3))
+    at = Placement.pairs(np.array([0]), np.array([0]), _N_ANALYSES)
+    with pytest.raises(ValueError, match="x: 1 cell"):
+        AssociationCodec(plan).encode(cells, at, where="x")
+    assert (
+        AssociationCodec(plan).encode(CellValues(_f32(1.0), _f32(0.1)), at, where="x").eaf is None
+    )
+
+
+def test_a_cell_admission_forbids_never_reaches_a_plane() -> None:
+    cells = CellValues(_f32(1.0), _f32(NAN), eaf=_f32(0.3))
+    at = Placement.pairs(np.array([0]), np.array([0]), _N_ANALYSES)
+    with pytest.raises(NotAdmitted, match="one of z and SE missing"):
+        _codec().encode(cells, at, where="x")

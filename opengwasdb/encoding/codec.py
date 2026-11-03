@@ -929,7 +929,10 @@ class StoreCodec:
     ) -> np.ndarray:
         v = np.asarray(values, dtype=np.float64)
         if not self.encoding.se.is_residual:
-            return v.astype(np.float16)
+            # An SE above 65,504 is stored as +inf, and stays an association
+            # (spec §15, issue #337).
+            with np.errstate(over="ignore"):
+                return v.astype(np.float16)
         prediction = self._se_prediction(eaf, analysis_index, coefficients)
         if prediction.shape != v.shape:
             raise ValueError(f"EAF shape {prediction.shape} does not match se shape {v.shape}")

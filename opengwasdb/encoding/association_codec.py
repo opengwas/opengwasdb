@@ -6,6 +6,13 @@ above what a `float16` plane can represent is counted per Analysis. Admission
 guarantees the first for every source row, so a cell that breaks it here was
 produced after admission -- a completion fill, a merged pass, a re-encode --
 and the write is refused, naming Admission's rule. Nothing is filtered here.
+
+`AssociationCodec` encodes a batch under one component's plan, in the one
+order the planes allow: `storable`, then z, then EAF against each cell's
+variant baseline, then SE against the EAF a reader will decode for the cell
+(the panel's on an imputed one). `Placement` says where the batch sits, so the
+baseline, the SE model and the side tables are each looked up by the right
+index; `round_trip` is what a reader would read back, without a write.
 """
 
 from __future__ import annotations
@@ -13,17 +20,37 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Any, Final
 
 import numpy as np
 
 from opengwasdb.admission import require_admitted
+from opengwasdb.encoding.codec import (
+    EAF_BASELINE,
+    EAF_REFERENCE,
+    EafExceptionBuilder,
+    EafExceptionTable,
+    PositionSource,
+    SeExceptionBuilder,
+    SeExceptionTable,
+    StoreCodec,
+    ZOverflowBuilder,
+    ZOverflowTable,
+    positions_flat,
+    positions_pairs,
+    positions_row_band,
+)
+from opengwasdb.encoding.plan import StoreEncoding
+from opengwasdb.encoding.planes import SE_COEFFICIENTS
 
 log = logging.getLogger(__name__)
 
 __all__ = [
     "SE_FLOAT16_MAX",
+    "AssociationCodec",
     "CellValues",
+    "Encoded",
+    "Placement",
     "Storable",
     "log_se_out_of_range",
     "storable",
@@ -90,6 +117,264 @@ def storable(
             _refuse(z_w, se_w, imputed_w, where=_where(where, window, z.shape))
         over += _out_of_range(se_w, owner[window], n_analyses)
     return Storable(cells=cells, stored=~np.isnan(z), se_out_of_range=over)
+
+
+@dataclass(frozen=True)
+class Placement:
+    """Where a batch of cells sits in one component's planes.
+
+    `rows` and `analyses` broadcast against the batch's shape; `positions` is
+    each cell's flat position, which keys every side table (spec §6a).
+    """
+
+    #: Each cell's variant row: what gathers its EAF baseline and panel EAF.
+    rows: np.ndarray
+    #: Each cell's Analysis index: what gathers its SE model.
+    analyses: np.ndarray
+    positions: PositionSource
+    n_analyses: int
+
+    @classmethod
+    def band(cls, r0: int, r1: int, n_analyses: int) -> Placement:
+        """Rows `[r0:r1)` of a Dense grid, every Analysis: a `(r1 - r0, n_analyses)` batch."""
+        return cls(
+            rows=np.arange(r0, r1, dtype=np.int64)[:, None],
+            analyses=np.arange(n_analyses, dtype=np.int64)[None, :],
+            positions=positions_row_band(r0, n_analyses),
+            n_analyses=n_analyses,
+        )
+
+    @classmethod
+    def pairs(cls, rows: np.ndarray, cols: np.ndarray, n_analyses: int) -> Placement:
+        """The Dense cells `(rows[i], cols[i])`, as `Cells.pairs` names them."""
+        rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
+        return cls(rows, cols, positions_pairs(rows, cols, n_analyses), n_analyses)
+
+    @classmethod
+    def sequence(
+        cls,
+        start: int,
+        variant_index: np.ndarray,
+        analysis_index: np.ndarray | int,
+        n_analyses: int,
+    ) -> Placement:
+        """A run of an association sequence from flat position `start`."""
+        return cls(
+            np.asarray(variant_index, dtype=np.int64),
+            np.asarray(analysis_index, dtype=np.int64),
+            positions_flat(start),
+            n_analyses,
+        )
+
+
+@dataclass(frozen=True)
+class Encoded:
+    """A batch's codes in the plan's dtypes, and the side-table entries it owes."""
+
+    z: np.ndarray
+    se: np.ndarray
+    #: None when the batch carries no frequency plane.
+    eaf: np.ndarray | None
+    #: The imputed mask as stored, or None when the batch carries none.
+    imputed: np.ndarray | None
+    #: Exactly the batch's exceptional cells, keyed by `Placement.positions`.
+    z_overflow: ZOverflowTable
+    eaf_exceptions: EafExceptionTable
+    se_exceptions: SeExceptionTable
+    storable: Storable
+
+
+class AssociationCodec:
+    """How one component stores associations under one plan (ADR 0037, spec §6a, §15).
+
+    `eaf_baseline` and `eaf_reference` are per variant row of the component;
+    `se_coefficients` is `(n_analyses, 2)`, needed by a residual SE plan only.
+    A preliminary plan whose SE is still `float16` round-trips EAF before the
+    SE model exists.
+    """
+
+    def __init__(
+        self,
+        plan: StoreEncoding,
+        *,
+        eaf_baseline: np.ndarray | None = None,
+        eaf_reference: np.ndarray | None = None,
+        se_coefficients: np.ndarray | None = None,
+    ) -> None:
+        self.plan = plan
+        self._codec = StoreCodec(plan)
+        self._baseline = _float32_or_none(eaf_baseline)
+        self._reference = _float32_or_none(eaf_reference)
+        self._coefficients = _float32_or_none(se_coefficients)
+
+    @classmethod
+    def of_component(cls, group: Any, plan: StoreEncoding) -> AssociationCodec:
+        """The codec for a written component: its baseline, panel EAF and SE model."""
+
+        def held(name: str) -> np.ndarray | None:
+            return np.asarray(group[name][:], dtype=np.float32) if name in group else None
+
+        return cls(
+            plan,
+            eaf_baseline=held(EAF_BASELINE),
+            eaf_reference=held(EAF_REFERENCE),
+            se_coefficients=held(SE_COEFFICIENTS) if plan.se.is_residual else None,
+        )
+
+    def encode(self, cells: CellValues, at: Placement, *, where: str) -> Encoded:
+        """`storable`, then each plane's codes, in the order the planes allow.
+
+        No I/O and deterministic. Raises `NotAdmitted` (`storable`),
+        `EafBaselineError` (a residual EAF plan with no baseline), and
+        `ValueError` for what the plan cannot hold: a frequency outside
+        [0, 1], a frequency where the plan declares no EAF plane, or a
+        residual SE with no model or no decoded frequency (issue #159).
+        """
+        kept = storable(cells, at.analyses, at.n_analyses, where=where)
+        values = kept.cells
+        z_overflow = ZOverflowBuilder()
+        z = self._codec.encode_z(values.z, positions=at.positions, overflow=z_overflow)
+        eaf_exceptions = EafExceptionBuilder()
+        eaf = self._encode_eaf(values, at, eaf_exceptions, where)
+        se_exceptions = SeExceptionBuilder()
+        se = self._encode_se(values, at, eaf, eaf_exceptions.table(), se_exceptions)
+        imputed = None if values.imputed is None else np.asarray(values.imputed, dtype=np.uint8)
+        return Encoded(
+            z,
+            se,
+            eaf,
+            imputed,
+            z_overflow.table(),
+            eaf_exceptions.table(),
+            se_exceptions.table(),
+            kept,
+        )
+
+    def round_trip(self, cells: CellValues, at: Placement, *, where: str) -> CellValues:
+        """What a reader decodes for `cells` once stored at `at`; nothing is written."""
+        encoded = self.encode(cells, at, where=where)
+        decoder = StoreCodec(
+            self.plan,
+            z_overflow=encoded.z_overflow,
+            eaf_exceptions=encoded.eaf_exceptions,
+            se_exceptions=encoded.se_exceptions,
+        )
+        shape = np.shape(encoded.z)
+        eaf = self._decoded_eaf(decoder, encoded.eaf, encoded.imputed, at, shape)
+        if self.plan.se.is_residual:
+            se = decoder.decode_se(
+                encoded.se,
+                eaf=eaf,
+                analysis_index=np.broadcast_to(at.analyses, shape),
+                coefficients=self._model(),
+                positions=at.positions,
+            )
+        else:
+            se = decoder.decode_se(
+                encoded.se,
+                eaf=eaf,
+                analysis_index=np.zeros(shape, np.int64),
+                coefficients=np.zeros((0, 2), np.float32),
+            )
+        return CellValues(
+            decoder.decode_z(encoded.z, positions=at.positions),
+            se,
+            None if encoded.eaf is None else eaf,
+            cells.imputed,
+        )
+
+    # ── the planes, in order ────────────────────────────────────────────────
+
+    def _encode_eaf(
+        self, values: CellValues, at: Placement, exceptions: EafExceptionBuilder, where: str
+    ) -> np.ndarray | None:
+        if values.eaf is None:
+            return None
+        if self.plan.eaf.is_absent:
+            held = int(np.count_nonzero(~np.isnan(np.asarray(values.eaf))))
+            if held:
+                raise ValueError(
+                    f"{where}: {held:,} cell(s) carry a frequency, but the plan declares "
+                    "no EAF plane to hold one"
+                )
+            return None
+        return self._codec.encode_eaf(
+            values.eaf,
+            baseline=self._per_cell(self._baseline, at, np.shape(values.eaf)),
+            positions=at.positions,
+            exceptions=exceptions,
+        )
+
+    def _encode_se(
+        self,
+        values: CellValues,
+        at: Placement,
+        eaf_codes: np.ndarray | None,
+        eaf_exceptions: EafExceptionTable,
+        exceptions: SeExceptionBuilder,
+    ) -> np.ndarray:
+        shape = np.shape(values.se)
+        if not self.plan.se.is_residual:
+            return self._codec.encode_se(
+                values.se,
+                eaf=np.empty(shape, np.float32),
+                analysis_index=np.zeros(shape, np.int64),
+                coefficients=np.zeros((0, 2), np.float32),
+            )
+        decoder = StoreCodec(self.plan, eaf_exceptions=eaf_exceptions)
+        imputed = None if values.imputed is None else np.asarray(values.imputed, dtype=np.uint8)
+        eaf = self._decoded_eaf(decoder, eaf_codes, imputed, at, shape)
+        return self._codec.encode_se(
+            values.se,
+            eaf=eaf,
+            analysis_index=np.broadcast_to(at.analyses, shape),
+            coefficients=self._model(),
+            positions=at.positions,
+            exceptions=exceptions,
+        )
+
+    def _decoded_eaf(
+        self,
+        decoder: StoreCodec,
+        codes: np.ndarray | None,
+        imputed: np.ndarray | None,
+        at: Placement,
+        shape: tuple[int, ...],
+    ) -> np.ndarray:
+        """The EAF a reader decodes at these cells: the panel's on an imputed one."""
+        reference = self._per_cell(self._reference, at, shape) if self.plan.eaf.reference else None
+        flags = np.zeros(shape, np.uint8) if imputed is None else imputed
+        if codes is None:
+            # No frequency plane: NaN, unless the panel's stands in on an imputed cell.
+            no_plane = StoreEncoding(z=self.plan.z, se=self.plan.se).with_eaf_reference(
+                self.plan.eaf.reference
+            )
+            blank = np.full(shape, np.nan, np.float32)
+            return StoreCodec(no_plane).decode_eaf(blank, imputed=flags, reference=reference)
+        return decoder.decode_eaf(
+            codes,
+            baseline=self._per_cell(self._baseline, at, shape),
+            positions=at.positions,
+            imputed=flags,
+            reference=reference,
+        )
+
+    def _model(self) -> np.ndarray:
+        if self._coefficients is None:
+            raise ValueError("residual SE needs se_coefficients, and this codec was given none")
+        return self._coefficients
+
+    @staticmethod
+    def _per_cell(
+        per_variant: np.ndarray | None, at: Placement, shape: tuple[int, ...]
+    ) -> np.ndarray | None:
+        if per_variant is None:
+            return None
+        return np.broadcast_to(per_variant[at.rows], shape)
+
+
+def _float32_or_none(values: np.ndarray | None) -> np.ndarray | None:
+    return None if values is None else np.asarray(values, dtype=np.float32)
 
 
 def log_se_out_of_range(counts: np.ndarray, analysis_ids: Sequence[str], *, where: str) -> None:
