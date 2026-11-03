@@ -21,7 +21,7 @@ import math
 from array import array
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from functools import lru_cache
+from functools import cached_property, lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -100,8 +100,11 @@ class BesdSource:
         """Rows with a canonical variant and a usable frequency."""
         return int(np.count_nonzero(self.has_canonical_variant & np.isfinite(self.af)))
 
-    @property
+    @cached_property
     def has_canonical_variant(self) -> np.ndarray:
+        """Each row's having a canonical variant, computed once per file set:
+        every probe's read indexes it, and comparing nine million ALIDs per
+        probe cost OGS-00027's build longer than reading every probe."""
         present: np.ndarray = self.alid != ""
         return present
 
