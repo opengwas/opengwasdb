@@ -54,8 +54,10 @@ one of them with the opposite sign, with no record of either.
   It refuses a source cell with one of z and SE missing, rather than pairing an
   imputed value with an observed one (D1). What it leaves unimputed is already
   counted in each Store's `completion_quality`, so a completion writes no record.
-- **`require_admitted`** checks Admission's guarantee on cells a writer is handed
-  from anywhere else:
+- **`require_admitted`** checks Admission's guarantee on cells a writer is handed.
+  Every builder calls it on the z and SE it is about to store, so a half-missing
+  pair (spec §15) or any other cell a gate should have dropped refuses the build,
+  naming where (D1). No source row can reach it through a working gate. It checks:
   - a present cell has a finite z and a finite, positive SE;
   - z is missing exactly where SE is (spec §15, ADR 0070's `states()`);
   - a frequency is NaN or inside (0, 1);

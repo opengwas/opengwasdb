@@ -27,6 +27,7 @@ from typing import Any, NamedTuple
 import numpy as np
 
 from opengwasdb.admission import AdmissionRecord, AnalysisRules, SourceRows, admission_record_for
+from opengwasdb.admission.cells import require_admitted
 from opengwasdb.build.eaf_orientation import (
     EafOrientationReport,
     apply_orientation_evidence,
@@ -570,12 +571,12 @@ def _encode_ssf_csr(
     """
     csr = RaggedCSRWriter(n_variants)
     eaf_scopes: list[str] = []
-    for recs in per_analysis:
+    for index, recs in enumerate(per_analysis):
         if not recs:
             _add_empty_analysis(csr)
             eaf_scopes.append(EafScope.ABSENT.value)
             continue
-        eaf_scopes.append(_add_ssf_associations(csr, recs, alid_to_idx))
+        eaf_scopes.append(_add_ssf_associations(csr, recs, alid_to_idx, index))
     eaf_measurements = csr.eaf_measurements()
     preliminary = StoreEncoding.decide(
         EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measurements)
@@ -600,7 +601,7 @@ def _add_empty_analysis(csr: RaggedCSRWriter) -> None:
 
 
 def _add_ssf_associations(
-    csr: RaggedCSRWriter, recs: list[_Assoc], alid_to_idx: dict[str, int]
+    csr: RaggedCSRWriter, recs: list[_Assoc], alid_to_idx: dict[str, int], index: int
 ) -> str:
     """Append one non-empty analysis, sorted by variant_index.
 
@@ -614,6 +615,7 @@ def _add_ssf_associations(
     eaf_arr = np.fromiter(
         (np.nan if r.eaf is None else r.eaf for r in recs), dtype=np.float32, count=len(recs)
     )
+    require_admitted(z_arr, se_arr, where=f"build-ragged-ssf, analysis_index {index}")
     order = np.argsort(vi, kind="stable")
     has_eaf = bool(np.isfinite(eaf_arr).any())
     if has_eaf:

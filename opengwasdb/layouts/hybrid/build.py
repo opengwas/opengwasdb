@@ -41,6 +41,7 @@ from opengwasdb.admission import (
     AnalysisRules,
     Gate,
     admission_record_for,
+    require_admitted,
 )
 from opengwasdb.build.eaf_orientation import (
     EafOrientationMethod,
@@ -398,6 +399,9 @@ def _route_column(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
     )
     with context.record.gate(rules) as gate:
         dense, overflow, off_reference = _resolve_column_hybrid(context.table, row, gate)
+        parts = (("Dense", dense), ("Overflow", overflow), ("off-reference", off_reference))
+        for name, part in parts:
+            require_admitted(part[1], part[2], where=f"build-hybrid {row.trait_id} {name}")
         _spill_hybrid_column(context.spill_dir, col_idx, dense, overflow, off_reference)
     return col_idx
 

@@ -24,6 +24,7 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.admission import AdmissionRecord, AnalysisRules, admission_record_for
+from opengwasdb.admission.cells import require_admitted
 from opengwasdb.build.eaf_orientation import (
     DEFAULT_SAMPLE_SITES,
     EafOrientationReport,
@@ -447,6 +448,7 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
         )
         placed = routed.placed[0]
         se = apply_se_divisor(placed.se, row.se_divisor)
+        require_admitted(placed.z, se, where=f"build-dense-vcf, Analysis {row.trait_id}")
         _spill_column(context.spill_dir, col_idx, placed.index, placed.z, se, placed.eaf)
     return col_idx
 

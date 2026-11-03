@@ -31,6 +31,7 @@ from opengwasdb.admission import (
     Gate,
     SourceRows,
     admission_record_for,
+    require_admitted,
 )
 from opengwasdb.build.eaf_orientation import EafOrientationReport, apply_orientation_evidence
 from opengwasdb.build.liftover import (
@@ -1019,13 +1020,9 @@ def _ingest_probe(
     esi = np.asarray(rows.esi_row, dtype=np.int64)[order]
     eaf = None if axis.eaf_by_esi is None else axis.eaf_by_esi[esi]
     n = None if sample_sizes is None else _pair_sample_sizes(esi, axis, sample_sizes, sizes)
-    csr.add_analysis(
-        np.array(rows.variant_index, dtype=np.int32)[order],
-        np.array(rows.z, dtype=np.float32)[order],
-        np.array(rows.se, dtype=np.float32)[order],
-        eaf=eaf,
-        n=n,
-    )
+    z, se = np.array(rows.z, dtype=np.float32)[order], np.array(rows.se, dtype=np.float32)[order]
+    require_admitted(z, se, where=f"build-ragged-besd, probe {probe.probe_id}")
+    csr.add_analysis(np.array(rows.variant_index, dtype=np.int32)[order], z, se, eaf=eaf, n=n)
     return _ProbeScopes.of(eaf, n), False
 
 

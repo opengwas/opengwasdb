@@ -446,3 +446,50 @@ def test_a_row_with_an_infinite_z_is_dropped_and_logged_not_refused(tmp_path: Pa
         ["1:100:A:G", "z_nonfinite"],
         ["1:200:A:G", "z_nonfinite"],
     ]
+
+
+def _gate_admitting_everything(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A gate with a defect: it keeps every row it is handed."""
+    from opengwasdb.admission import Gate
+
+    monkeypatch.setattr(Gate, "source_rows", lambda self, rows: np.ones(len(rows), dtype=bool))
+
+
+def test_a_writer_refuses_a_half_missing_pair_that_passed_its_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """D1: spec §15 forbids a cell with one of z and SE missing. A source row
+    cannot become one through a working gate, so one at the writer is a defect
+    and refused, naming where."""
+    from opengwasdb.admission import NotAdmitted
+    from opengwasdb.build.observed import build_dense_observed_from_sources
+
+    source = tmp_path / "records.tsv"
+    source.write_text(
+        "analysis_id\tchromosome\tposition\teffect_allele\tother_allele\tz\tse\n"
+        "A\t1\t100\tA\tG\t2.0\tNA\n",
+        encoding="utf-8",
+    )
+    _gate_admitting_everything(monkeypatch)
+
+    with pytest.raises(NotAdmitted, match=r"build-dense: .*one of z and SE missing: 1"):
+        build_dense_observed_from_sources(
+            [source], tmp_path / "dense.opengwasdb", store_id="s", release_id="r",
+            reference_assembly="GRCh38",
+        )
+
+
+def test_a_dense_vcf_writer_refuses_an_unusable_se_that_passed_its_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from opengwasdb.admission import NotAdmitted
+
+    rows = [f"1\t{dense_fixture.HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tEZ:SE\t2.0:nan\n"]
+    vcf = dense_fixture._make_vcf(tmp_path, "trait_a", rows)
+    manifest = dense_fixture._make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
+    _gate_admitting_everything(monkeypatch)
+
+    with pytest.raises(NotAdmitted, match=r"build-dense-vcf, Analysis trait_a: .*z and SE"):
+        build_dense_from_vcf_manifest(
+            manifest, tmp_path / "dense.opengwasdb", store_id="s", release_id="r"
+        )

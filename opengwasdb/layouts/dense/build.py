@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.admission import AdmissionRecord, AnalysisRules, SourceRows, admission_record_for
+from opengwasdb.admission.cells import require_admitted
 from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding import (
     DenseEafPlane,
@@ -202,6 +203,7 @@ def _scatter_records(
         se[row, col] = record.se
         if record.eaf is not None:
             eaf[row, col] = record.eaf
+    require_admitted(z, se, where="build-dense")
     return z, se, eaf
 
 
