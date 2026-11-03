@@ -51,7 +51,7 @@ def _first_rsid(value: str | None) -> str:
 
 def _iter_rows(
     path: str | Path, tally: interface.StreamTally | None = None
-) -> Iterator[tabular.TabularRow]:
+) -> Iterator[tabular.SourceRow]:
     tally = tally or interface.StreamTally()
     faults, frequencies = tally.faults, tally.frequencies
     opener = gzip.open if str(path).endswith((".gz", ".bgz")) else open
@@ -68,7 +68,7 @@ def _iter_rows(
             orientation = orient_or_drop(chromosome, row.get("pos"), alt, ref, faults)
             if orientation is None or ref is None or alt is None:
                 continue
-            yield tabular.TabularRow(
+            yield tabular.SourceRow(
                 chromosome=orientation.variant.chromosome,
                 position=orientation.variant.position,
                 ref=ref,

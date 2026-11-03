@@ -4126,15 +4126,24 @@ def _stream_unit(
 ) -> Iterator[tuple[str, str, int, str, str, float, float]]:
     """Yield canonical (analysis_id, chrom, pos, a1, a2, z, se) from one source."""
     if is_vcf:
-        from opengwasdb.build.vcf_source import stream_vcf_associations
+        from opengwasdb.model.enums import StoredEffectScale
+        from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
+        from opengwasdb.readers.registry import resolve_reader
+        from opengwasdb.variants.normalise import canonical_alid
 
         if analysis_id is None:
             return  # a VCF carries no analysis_id; it needs a manifest trait_id
-        # `_eaf` is unused here: this check compares stored z/se against the
-        # source, and EAF plays no part in that (ADR 0036).
-        for chrom, pos, ref, alt, z, se, _eaf in stream_vcf_associations(path):
-            a1, a2 = sorted((ref, alt))
-            yield (analysis_id, chrom, int(pos), a1, a2, float(z), float(se))
+        # The scale is never read: this check compares stored z/se against the
+        # source, and neither the scale nor the EAF plays a part in that.
+        reader = resolve_reader(GWAS_VCF_CAPABILITY, path, StoredEffectScale.SD)
+        for association in reader.stream_associations():
+            _chrom, _pos, a1, a2 = canonical_alid(
+                association.chromosome, association.position, association.ref, association.alt
+            ).split(":")
+            yield (
+                analysis_id, association.chromosome, association.position, a1, a2,
+                association.z, association.se,
+            )
     else:
         from opengwasdb.build.source import read_normalised_associations
 

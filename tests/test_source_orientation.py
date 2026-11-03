@@ -17,7 +17,7 @@ import pytest
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.orientation import a1_frequencies, is_palindromic, swap, swap_one
 from opengwasdb.readers.tabular import (
-    TabularRow,
+    SourceRow,
     extract_at_sites,
     metrics_chunks_from_rows,
     stream_associations,
@@ -25,10 +25,10 @@ from opengwasdb.readers.tabular import (
 
 
 def _row(*, flipped: bool, beta: float | None = 0.4, se: float | None = 0.2,
-         af: float | None = 0.3) -> TabularRow:
-    # effect allele G, other A: A1 is A, so the source's effect allele is A2.
+         af: float | None = 0.3) -> SourceRow:
+    # The effect allele is `alt` and A1 is A, so the row whose alt is G is flipped.
     ref, alt = ("G", "A") if not flipped else ("A", "G")
-    return TabularRow(
+    return SourceRow(
         chromosome="1", position=100, ref=ref, alt=alt, alid="1:100:A:G",
         flipped=flipped, af_alt=af, beta=beta, se=se,
     )

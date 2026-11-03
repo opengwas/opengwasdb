@@ -98,8 +98,8 @@ from opengwasdb.readers.tabular import (
     MetricsChunk,
     MetricsProjectionColumns,
     SourcePath,
+    SourceRow,
     TabularMetricsRow,
-    TabularRow,
     TabularSource,
     VariantProjectionColumns,
     extract_at_sites,
@@ -214,8 +214,8 @@ def _tabular_row(
     frequencies: FrequencyTally | None = None,
     faults: IdentityFaults | None = None,
     infinite_effects: bool = False,
-) -> TabularRow | None:
-    """One source row as a `TabularRow`, or `None` when it names no canonical variant.
+) -> SourceRow | None:
+    """One source row as a `SourceRow`, or `None` when it names no canonical variant.
 
     A row whose chromosome, position or allele pair cannot be represented is
     dropped from every stream; a row with a valid identity but an unusable
@@ -242,7 +242,7 @@ def _tabular_row(
     beta, from_fallback = statistics.beta, statistics.effect_from_odds_ratio_fallback
     if infinite_effects:
         beta, from_fallback = _reported_effect(row, source, beta, from_fallback)
-    return TabularRow(
+    return SourceRow(
         chromosome=ori.variant.chromosome,
         position=ori.variant.position,
         alid=ori.variant.alid,
@@ -343,7 +343,7 @@ def _iter_rows(
     score_column: str | None = None,
     tally: StreamTally | None = None,
     infinite_effects: bool = False,
-) -> Iterator[TabularRow]:
+) -> Iterator[SourceRow]:
     """Parse each row of a filtered/harmonised GWAS-SSF file once.
 
     `effect_source` is the caller's resolution for this file, so the property
@@ -412,7 +412,7 @@ def stream_full_row_metrics(path: str | Path) -> Iterator[TabularMetricsRow]:
     Kept so the projection `stream_metrics` replaces can be compared against it
     field for field on the same file -- the arrangement
     `stream_full_row_variants` provides for the variant projection. A
-    `TabularRow` *is* a `TabularMetricsRow`; it adds only the identifier this
+    `SourceRow` *is* a `TabularMetricsRow`; it adds only the identifier this
     seam never reads. It reads an infinite effect as the projections do, absent
     or recovered from the odds ratio; only the association stream keeps it (D4).
     """
