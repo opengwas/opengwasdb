@@ -56,8 +56,8 @@ components:
     container: engine
     layer: 2
     stages: [resolve]
-    summary: One scan per Analysis to its Analytical Metadata and Resolution Record; row admission, INFO and SD.
-    paths: [opengwasdb/build/resolve.py, opengwasdb/build/resolve_manifest.py, opengwasdb/build/resolve_besd.py, opengwasdb/build/row_admission.py, opengwasdb/build/info_score_filter.py, opengwasdb/build/phenotype_sd.py, opengwasdb/build/phenotype_sd_pipeline.py, opengwasdb/build/eaf_orientation.py]
+    summary: One scan per Analysis to its Analytical Metadata and Resolution Record; row admission, INFO, SD and effect consistency.
+    paths: [opengwasdb/build/resolve.py, opengwasdb/build/resolve_manifest.py, opengwasdb/build/resolve_besd.py, opengwasdb/build/row_admission.py, opengwasdb/build/info_score_filter.py, opengwasdb/build/phenotype_sd.py, opengwasdb/build/phenotype_sd_pipeline.py, opengwasdb/build/eaf_orientation.py, opengwasdb/build/effect_consistency.py, opengwasdb/build/hash_sample.py]
   - id: ancestry
     name: Ancestry Assignment
     container: engine
