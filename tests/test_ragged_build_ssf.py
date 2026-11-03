@@ -1026,3 +1026,72 @@ def test_source_file_alias_precedence_deterministic(tmp_path):
         assert rows_all[0]["z"] == pytest.approx(2.0, rel=1e-3)
 
 
+
+
+def _one_analysis(tmp_path: Path, rows: list[dict], **manifest: str) -> tuple[Path, Path]:
+    """A one-Analysis build input: ``rows`` in one filtered file, and its manifest."""
+    filtered_dir = tmp_path / "filtered"
+    filtered_dir.mkdir()
+    _write_filtered(filtered_dir / "trait.tsv.gz", rows)
+    header = ["analysis_index", "analysis_id", "filtered_file", *manifest]
+    path = tmp_path / "manifest.tsv"
+    path.write_text(
+        "\t".join(header) + "\n" + "\t".join(["0", "trait", "trait.tsv.gz", *manifest.values()])
+        + "\n",
+        encoding="utf-8",
+    )
+    return path, filtered_dir
+
+
+def test_a_non_rs_rsid_cell_falls_back_to_the_variant_ids_rs_identifier(tmp_path):
+    """The GWAS-SSF reader's rsid rule: the first of `rsid` and `variant_id`
+    that is an rs identifier. A harmonised file can hold a provider token in
+    `rsid` and the rs id in `variant_id` (110 rows of OGS-00006's sources)."""
+    manifest, filtered_dir = _one_analysis(tmp_path, [{
+        "chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
+        "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
+        "rsid": "TMP_ESP_1_100000", "variant_id": "rs77",
+    }])
+    out = tmp_path / "out.opengwasdb"
+    build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="t", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
+    assert {v.alid: v.rsid for v in VariantAxis(out).all()} == {"1:100000:A:G": "rs77"}
+
+
+def test_a_declared_build_other_than_grch38_is_refused(tmp_path):
+    manifest, filtered_dir = _one_analysis(tmp_path, [{
+        "chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
+        "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
+    }], source_genome_build="GRCh37")
+    with pytest.raises(ValueError, match="declares source_genome_build hg19"):
+        build_ragged_from_ssf(
+            manifest, filtered_dir, tmp_path / "out.opengwasdb", store_id="t",
+            release_id="v1", association_coverage="cis_and_signals",
+        )
+
+
+def test_an_odds_ratio_is_read_as_its_log_by_the_gwas_ssf_rule(tmp_path):
+    """A file reporting `odds_ratio` and no `beta` is read by the GWAS-SSF
+    reader's effect rule, `log(odds_ratio)`, rather than as rows with no effect."""
+    filtered_dir = tmp_path / "filtered"
+    filtered_dir.mkdir()
+    with gzip.open(filtered_dir / "trait.tsv.gz", "wt", encoding="utf-8") as fh:
+        fh.write(
+            "chromosome\tbase_pair_location\teffect_allele\tother_allele\todds_ratio\t"
+            "standard_error\n1\t100000\tA\tG\t2.0\t0.5\n"
+        )
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "analysis_index\tanalysis_id\tfiltered_file\n0\ttrait\ttrait.tsv.gz\n", encoding="utf-8"
+    )
+    out = tmp_path / "out.opengwasdb"
+    build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="t", release_id="v1",
+        association_coverage="cis_and_signals", stored_effect_scale="log_or",
+    )
+    stored = RaggedCSRReader(out).get_analysis(0)
+    assert len(stored.variant_index) == 1
+    # A is A1 and the effect allele, so the z is the odds ratio's own.
+    assert float(stored.z[0]) == pytest.approx(np.log(2.0) / 0.5, rel=5e-3)
