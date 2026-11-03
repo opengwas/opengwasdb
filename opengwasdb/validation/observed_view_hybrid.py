@@ -549,12 +549,13 @@ class _DenseCodec(NamedTuple):
 
         A crossover with one of Z and SE missing is one the fold refuses and the
         tally counts (spec §15). It is still compared statistic by statistic: its
-        Z as the plane holds it, and its SE beside a stand-in Z.
+        Z as the plane holds it, and its SE beside a stand-in Z. A crossover with
+        both missing is a missing cell, and round-trips as one.
         """
         z_gone, se_gone = np.isnan(values.z), np.isnan(values.se)
-        z_only = se_gone & ~z_gone
+        z_only, se_only = se_gone & ~z_gone, z_gone & ~se_gone
         paired = CellValues(
-            np.where(z_only, np.nan, np.where(z_gone, np.float32(0.0), values.z)),
+            np.where(z_only, np.nan, np.where(se_only, np.float32(0.0), values.z)),
             values.se,
             values.eaf,
         )

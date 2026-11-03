@@ -64,6 +64,7 @@ from opengwasdb.encoding import (
     StoreCodec,
     positions_pairs,
 )
+from opengwasdb.encoding.plan import Z_MISSING
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged.by_variant import build_variant_index
@@ -771,6 +772,28 @@ def test_a_completed_crossover_with_se_and_no_z_fails_on_the_crossover_counter(t
     assert verdict["crossovers"]["totals"]["z_se_missingness_mismatch"] == 1
     assert "crossovers.z_se_missingness_mismatch" in verdict["failures"]
     assert verdict["components"]["dense"]["totals"]["z_se_missingness_mismatch"] == 0
+
+
+def test_a_source_crossover_missing_both_statistics_is_compared_not_refused(tmp_path, pair):
+    """The source Overflow's crossover cell loses both Z and SE: a missing cell, not an
+    invalid one, so the check compares it with the completed Dense cell, which still
+    holds the observation, and returns its verdict.
+
+    Mutation that makes this fail: stand a Z in for every missing Z, not only one beside
+    an SE; the round trip is then handed a half-missing pair and raises `NotAdmitted`.
+    """
+    observed, completed = pair
+    overflow = _overflow(observed)
+    assert overflow["z"].dtype == np.int16, "fixture's Overflow Z is fixed point"
+    position = _overflow_position(observed, *CROSSOVER_CELL)
+    overflow["z"][position] = Z_MISSING
+    overflow["se"][position] = np.nan
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    totals = verdict["crossovers"]["totals"]
+    assert totals["z_se_missingness_mismatch"] == 0
+    assert (totals["z_mismatch"], totals["se_mismatch"]) == (1, 1)
 
 
 def test_an_infinite_crossover_se_copied_identically_passes_and_is_counted(tmp_path, pair):
