@@ -136,10 +136,17 @@ and accepts EAF in [0, 1].
   read `z`, `se` and `eaf` 2.17 times, `imputed` 3.17 times and `eaf_baseline`
   3 times, and now reads them 1.17, 1.17 and 1.0 times. The remainder is
   `by_variant.sample`'s cells.
-- **Time.** OGS-00006 takes about 11% longer than base. The variant-table rules
-  it now gains cost about 40 s, more than the single decode saved; a faster table
-  stream would recover it, and none is filed. Peak RSS fell from about 4.0 GB to
-  1.6 GB.
+- **Time and memory**, measured against the release before, with RSS sampled:
+  - OGS-00006, a Ragged release, back to back: 74–82 s against 76–81 s, and
+    peak RSS from 3.9–4.0 GiB to 1.6–1.8 GiB. Its new variant-table rules cost
+    about 40 s. The single decode, and `by_variant.sample` reading each column
+    once rather than a cell at a time, saved as much.
+  - OGS-00008, a Dense release, back to back: 59 s against 89–91 s, and peak
+    RSS from 0.79 GiB to 0.56–0.57 GiB.
+  - OGS-00011, a Hybrid release, side by side and without the Indexed Variant
+    Subset check, which did not change: 13,962 s against 14,192 s, and peak
+    RSS from 110 GiB to 48 GiB. That check is 30,209 s of an instrumented
+    45,132 s run. A full run still peaks at 113 GiB, in that check.
 - **SE decoding.** ADR 0070's list of `validate`'s own SE decodes is now two:
   `_dense_band_se` and `_sequence_window_se` in `validation/scans.py`, one decode
   per block, shared by every rule. The whole-sequence Ragged decode is gone. The
