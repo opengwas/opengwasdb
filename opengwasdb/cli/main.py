@@ -27,6 +27,7 @@ from opengwasdb.build.phenotype_sd_pipeline import (
 )
 from opengwasdb.build.resolve import DEFAULT_EVIDENCE_SAMPLE
 from opengwasdb.build.resolve_manifest import resolve_analyses_manifest
+from opengwasdb.layouts.build_manifest import read_manifest
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.complete import (
     complete_dense_store,
@@ -66,7 +67,12 @@ from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.validation import validate_store
-from opengwasdb.variants.reference import extract_variant_reference
+from opengwasdb.variants.routing import (
+    EmptyReferenceError,
+    UnionOptions,
+    VariantReferenceExtraction,
+    extract_variant_reference,
+)
 from opengwasdb.variants.rsid import RsidConflictPolicy
 from opengwasdb.variants.windows import (
     DEFAULT_MAP_SPILL_RECORDS,
@@ -708,6 +714,39 @@ def build_dense_command(
     )
 
 
+def _extract_manifest_reference(
+    manifest_path: Path,
+    output_path: Path,
+    *,
+    defaults: tuple[str | None, str | None, str | None],
+    chain_file: Path | None,
+    failure_threshold: float,
+    n_workers: int,
+    union: UnionOptions,
+) -> VariantReferenceExtraction:
+    """Extract the Variant Reference of a manifest's sources, naming the manifest
+    when there is none.
+
+    ``defaults`` are the reader capability, source assembly and Column Map the
+    manifest's rows default to. Routing reads sources, not manifests, so the
+    manifest's path is put back into its refusal here, where it is known.
+    """
+    capability, assembly, column_map = defaults
+    rows = read_manifest(
+        manifest_path, default_source_reader_capability=capability,
+        default_source_assembly=assembly, column_map=column_map,
+    )
+    if not rows:
+        raise ValueError(f"manifest {manifest_path} contains no rows to extract a reference from")
+    try:
+        return extract_variant_reference(
+            [row.source for row in rows], output_path, chain_file=chain_file,
+            failure_threshold=failure_threshold, n_workers=n_workers, union=union,
+        )
+    except EmptyReferenceError as exc:
+        raise ValueError(f"manifest {manifest_path} yielded no hg38 variants to reference") from exc
+
+
 @app.command("extract-variant-reference")
 def extract_variant_reference_command(
     manifest_path: Path,
@@ -753,12 +792,11 @@ def extract_variant_reference_command(
     genomic tree-reduce (issue #188) and never change the artifact.
     --map-spill-records bounds a worker's peak memory (issue #194).
     """
-    result = extract_variant_reference(
-        manifest_path, output_path, chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold, n_workers=n_workers,
-        source_reader_capability=source_reader_capability, source_assembly=source_assembly,
-        window_size_mb=window_size_mb, reduction_batch_size=reduction_batch_size,
-        map_spill_records=map_spill_records, column_map=column_map,
+    result = _extract_manifest_reference(
+        manifest_path, output_path,
+        defaults=(source_reader_capability, source_assembly, column_map),
+        chain_file=chain_file, failure_threshold=liftover_failure_threshold, n_workers=n_workers,
+        union=UnionOptions(window_size_mb, reduction_batch_size, map_spill_records),
     )
     _echo_summary(
         {

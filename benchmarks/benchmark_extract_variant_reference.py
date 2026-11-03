@@ -26,8 +26,13 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from opengwasdb.layouts.build_manifest import read_manifest
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
-from opengwasdb.variants.reference import VariantReferenceExtraction, extract_variant_reference
+from opengwasdb.variants.routing import (
+    UnionOptions,
+    VariantReferenceExtraction,
+    extract_variant_reference,
+)
 
 _SSF_HEADER = (
     "chromosome\tbase_pair_location\tother_allele\teffect_allele\tbeta\tstandard_error"
@@ -135,13 +140,13 @@ def _run_once(
     window_size_mb: float,
     batch: int,
 ) -> tuple[str, VariantReferenceExtraction, float]:
+    sources = [row.source for row in read_manifest(manifest)]
     start = time.monotonic()
     result = extract_variant_reference(
-        manifest,
+        sources,
         artifact,
         n_workers=n_workers,
-        window_size_mb=window_size_mb,
-        reduction_batch_size=batch,
+        union=UnionOptions(window_size_mb=window_size_mb, reduction_batch_size=batch),
     )
     total = time.monotonic() - start
     text = gzip.decompress(artifact.read_bytes()).decode("utf-8")

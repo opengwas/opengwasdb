@@ -160,6 +160,12 @@ The Store-wide union of canonical variants referenced by its Analyses. Each vari
 **Variant Index**:
 A compact Store-local reference to a row in the Store Variant Table. It has no identity or stability guarantee outside its Store Release.
 
+**Variant Routing**:
+Deciding which **Variant Index** each source coordinate of a build reaches, and what rs identifier the variant it reaches carries (`opengwasdb.variants.routing`, ADR 0071). The authority is either the build's own sources, read once and lifted from hg19 to GRCh38 (Pass 1), or a Variant Reference, a routing frozen as an artifact. Routing re-orients a statistic a reverse-strand lift swapped, keeps the last association when two reach one place, and refuses rather than guesses where two loci or two names collide. Distinct from routing an Analysis by its **Assigned Ancestry**, which decides which release it belongs to, not where its associations land.
+
+**Routing Key**:
+The spelling a build matches a source coordinate by, `chrom:pos:ref:alt`, the same for the names it harvests and the associations it routes. A Dense build keys by the source's own allele spelling; a Hybrid build upper-cases the alleles and keeps their order, since case is not an orientation change. Two coordinates one key folds together must route to one place, or the build refuses.
+
 **By-Variant Index**:
 An optional, additive structure inside a Ragged component (`ragged/by_variant/`, ADR 0060): a `(variant index, Analysis)`-ordered duplicate of the component's cell-keyed arrays that makes a by-variant PheWAS or region query proportional to the answer. Distinct from the **Variant Index** (a row reference); the name is deliberately different. It does not change `format_version`, and a release without it answers every query through the scan it replaces.
 
