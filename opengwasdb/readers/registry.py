@@ -81,7 +81,7 @@ def known_capabilities() -> tuple[str, ...]:
 
 
 def resolve_reader(
-    capability: str, path: str | Path, stored_effect_scale: StoredEffectScale,
+    capability: str, path: str | Path, stored_effect_scale: StoredEffectScale | None,
     *, imputation_score_declaration: ImputationScoreDeclaration | None = None,
     column_map: ColumnMap | None = None,
     liftover: object | None = None,
@@ -110,6 +110,8 @@ def resolve_reader(
     """
     if requires_probe_id(capability) or probe_id is not None:
         return _probe_reader(capability, path, stored_effect_scale, probe_id, liftover)
+    if stored_effect_scale is None:
+        raise ValueError(f"a {capability!r} source needs its Analysis's stored_effect_scale")
     if liftover is not None:
         return _lifted_reader(
             capability, path, stored_effect_scale, imputation_score_declaration,
@@ -162,12 +164,19 @@ class SourceSpec:
     path: str
     capability: str
     assembly: str
-    stored_effect_scale: StoredEffectScale
+    #: ``None`` only for a BESD probe that declares no scale: its batches
+    #: carry none, and its association stream refuses to assume one.
+    stored_effect_scale: StoredEffectScale | None
     column_map: ColumnMap | None = None
     #: The `.epi` probe a BESD Analysis is; ``None`` for every other format.
     probe_id: str | None = None
 
     def __post_init__(self) -> None:
+        if self.stored_effect_scale is None and not requires_probe_id(self.capability):
+            raise ValueError(
+                f"Analysis {self.analysis_id!r}: a {self.capability!r} source needs the "
+                "Analysis's stored_effect_scale"
+            )
         if requires_probe_id(self.capability) != (self.probe_id is not None):
             raise ValueError(
                 f"Analysis {self.analysis_id!r}: a {self.capability!r} source "
