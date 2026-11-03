@@ -274,7 +274,7 @@ def test_validator_rejects_missing_ragged_csr_array(ragged_store_path):
 
     result = validate_store(ragged_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"csr.arrays"}
     assert "missing data.zarr/ragged/se" in result.errors
 
 
@@ -322,7 +322,7 @@ def test_validator_rejects_ragged_csr_array_outside_declared_plan(ragged_store_p
 
     result = validate_store(ragged_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"encoding.dtypes"}
     assert any(
         "data.zarr/ragged/z has dtype float32 but the manifest declares int16_fixed"
         in error
@@ -723,20 +723,49 @@ def test_validator_rejects_retired_gene_id_column(dense_store_path):
     assert any("retired column" in error and "gene_id" in error for error in result.errors)
 
 
-def test_a_stray_file_no_longer_hides_an_invalid_vocabulary(dense_store_path):
-    # Issue #55: a stray entry stopped every Dense check, so a release with two
-    # independent defects reported one. Each rule now runs unless a rule it reads
-    # after failed, and nothing reads a stray file.
-    (dense_store_path / "traits.tsv.gz").write_bytes(b"stray")
-    analyses_path = dense_store_path / "analyses.tsv"
+def _give_every_analysis_an_invalid_effect_scale(store_path: Path) -> None:
+    """An `analyses.tsv` defect no plane rule reads: the unrelated error beside another."""
+    analyses_path = store_path / "analyses.tsv"
     table = read_analyses(analyses_path)
     for row in table.rows:
         row["stored_effect_scale"] = "kg"
     write_analyses(analyses_path, table)
 
+
+def test_a_stray_file_no_longer_hides_an_invalid_vocabulary(dense_store_path):
+    # Issue #55: a stray entry stopped every Dense check, so a release with two
+    # independent defects reported one. Each rule now runs unless a rule it reads
+    # after failed, and nothing reads a stray file.
+    (dense_store_path / "traits.tsv.gz").write_bytes(b"stray")
+    _give_every_analysis_an_invalid_effect_scale(dense_store_path)
+
     result = validate_store(dense_store_path)
 
     assert result.failed() == {"envelope.closed", "analyses.vocabularies"}
+
+
+def test_a_z_overflow_table_defect_is_reported_beside_an_unrelated_error(dense_store_path):
+    # Issue #55: the fixed-point z plan was checked only when no error of any kind
+    # had been found before it, so an overflow table holding a non-finite exact
+    # value hid behind any other defect. It needs only `z` and its plan.
+    root = open_store(dense_store_path).arrays(mode="a")
+    for name in ("z_overflow_index", "z_overflow_value"):
+        if name in root:
+            del root[name]
+    create_array(
+        root, "z_overflow_index", ArrayRole.EXCEPTION_TABLE,
+        data=np.array([3, 5], dtype=np.int64), compressor=compressor(),
+    )
+    create_array(
+        root, "z_overflow_value", ArrayRole.EXCEPTION_TABLE,
+        data=np.array([np.nan, 41.0], dtype=np.float32), compressor=compressor(),
+    )
+    _give_every_analysis_an_invalid_effect_scale(dense_store_path)
+
+    result = validate_store(dense_store_path)
+
+    assert result.failed() == {"encoding.z", "analyses.vocabularies"}
+    assert "data.zarr z overflow table contains non-finite values" in result.errors
 
 
 def test_validator_accepts_duplicate_trait_ontology_id(dense_store_path):

@@ -387,8 +387,11 @@ def test_validate_rejects_an_n_plane_the_manifest_does_not_declare(
     manifest = json.loads((store / "manifest.json").read_text())
     del manifest["encoding"]["n"]
     (store / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    errors = _errors(store)
-    assert any("carries an n plane but the manifest declares none" in e for e in errors), errors
+    from opengwasdb.validation import validate_store
+
+    result = validate_store(store)
+    assert result.failed() == {"encoding.n"}, result.errors
+    assert any("carries an n plane but the manifest declares none" in e for e in result.errors)
 
 
 def test_validate_rejects_a_declared_n_plane_that_is_missing(
@@ -398,8 +401,11 @@ def test_validate_rejects_a_declared_n_plane_that_is_missing(
 
     store = _copy(sampled, tmp_path)
     shutil.rmtree(store / "data.zarr" / "ragged" / "n")
-    errors = _errors(store)
-    assert any("declares an n plane but carries none" in e for e in errors), errors
+    from opengwasdb.validation import validate_store
+
+    result = validate_store(store)
+    assert "encoding.n" in result.failed(), result.errors
+    assert any("declares an n plane but carries none" in e for e in result.errors)
 
 
 def test_validate_rejects_analysis_level_scope_on_an_analysis_with_n(
@@ -767,15 +773,19 @@ def test_the_validation_rule_names_residual_se_beside_an_n_plan() -> None:
     from dataclasses import replace
 
     from opengwasdb.encoding import SeEncoding
-    from opengwasdb.validation.sample_size import validate_n_plan
+    from opengwasdb.validation.rule import Kind, Target
+    from opengwasdb.validation.rules import encoding
+    from opengwasdb.validation.run import evaluate
 
     plan = replace(
         StoreEncoding.decide(EncodingMeasurements(n_analyses=1, n_plane=True)),
         se=SeEncoding("int8_residual", 0.5),
     )
-    errors: list[str] = []
-    validate_n_plan({"n": np.ones(1, dtype=np.uint32)}, plan, errors, label="data.zarr/ragged")
-    assert errors == [
+    sequence = Target(
+        Kind.CSR, "data.zarr/ragged", group={"n": np.ones(1, dtype=np.uint32)}, encoding=plan
+    )
+    result = evaluate(encoding.RULES, [sequence])
+    assert [f.message for f in result.of("encoding.n")] == [
         "data.zarr/ragged declares an n plane beside se int8_residual, but an n plane "
         "requires float16 se (ADR 0067 §4)"
     ]

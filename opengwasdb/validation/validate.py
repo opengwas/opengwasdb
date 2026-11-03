@@ -18,13 +18,9 @@ from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.encoding import (
     EAF_BASELINE,
     EAF_EXCEPTION,
-    EAF_EXCEPTION_INDEX,
-    EAF_EXCEPTION_VALUE,
     EAF_REFERENCE,
     SE_EXCEPTION,
     Z_OVERFLOW,
-    Z_OVERFLOW_INDEX,
-    Z_OVERFLOW_VALUE,
     DenseEafPlane,
     DenseSePlane,
     DenseZPlane,
@@ -35,7 +31,6 @@ from opengwasdb.encoding import (
     StoreCodec,
     StoreEncoding,
     ZOverflowTable,
-    per_variant_chunk_size,
 )
 from opengwasdb.index.sqlite import get_metadata
 from opengwasdb.layouts.dense.indexed_subsets import validate_indexed_subsets
@@ -79,12 +74,16 @@ from opengwasdb.validation.rule import (
     check_registry,
 )
 from opengwasdb.validation.rules import analyses as analyses_rules
+from opengwasdb.validation.rules import csr as csr_rules
+from opengwasdb.validation.rules import encoding as encoding_rules
 from opengwasdb.validation.rules import release as release_rules
 from opengwasdb.validation.rules import variants as variant_rules
+from opengwasdb.validation.rules.csr import ARRAYS
+from opengwasdb.validation.rules.encoding import PLAN
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.rules.variants import representative_variant_indices
 from opengwasdb.validation.run import evaluate, selected
-from opengwasdb.validation.sample_size import validate_n_plan, validate_ragged_n
+from opengwasdb.validation.sample_size import validate_ragged_n
 from opengwasdb.variants import (
     VariantAxis,
     variant_table_path,
@@ -129,19 +128,25 @@ def validate_store(
 def release_targets(store: OpenGWASDBStore, options: ValidationOptions) -> list[Target]:
     """The targets one Store Release is judged as.
 
-    A Hybrid release's Dense Component is a nested Store Release (spec §16) and is
-    judged as one, by the same rules, when it opens as a Dense release; when it does
-    not, the Hybrid rules say why and nothing is judged against it.
+    A Dense release is a release and its grid; a Ragged one, a release and its
+    association sequence. A Hybrid release is its outer release, its Ragged
+    Overflow, and its Dense Component, which is a nested Store Release (spec §16)
+    judged as one, by the same rules, when it opens as a Dense release; when it
+    does not, the Hybrid rules say why and nothing is judged against it.
     """
     release = Target(Kind.RELEASE, ".", store, options=options)
-    targets = [release]
-    if store.manifest.primary_layout is PrimaryStorageLayout.HYBRID:
-        component = _load_manifest(dense_component_path(store.path), [])
-        dense = PrimaryStorageLayout.DENSE
-        if component is not None and component.manifest.primary_layout is dense:
-            targets.append(
-                Target(Kind.RELEASE, "dense", component, parent=release, options=options)
-            )
+    layout = store.manifest.primary_layout
+    if layout is PrimaryStorageLayout.DENSE:
+        return [release, Target(Kind.GRID, "data.zarr", store, parent=release, options=options)]
+    sequence = Target(Kind.CSR, "data.zarr/ragged", store, parent=release, options=options)
+    if layout is PrimaryStorageLayout.RAGGED:
+        return [release, sequence]
+    targets = [release, sequence]
+    component = _load_manifest(dense_component_path(store.path), [])
+    if component is not None and component.manifest.primary_layout is PrimaryStorageLayout.DENSE:
+        nested = Target(Kind.RELEASE, "dense", component, parent=release, options=options)
+        grid = Target(Kind.GRID, "dense/data.zarr", component, parent=nested, options=options)
+        targets += [nested, grid]
     return targets
 
 
@@ -198,11 +203,28 @@ def _legacy_hybrid(target: Target, errors: list[str], _warnings: list[str]) -> N
     _validate_hybrid_store(target.store, errors)
 
 
+def _legacy_dense_completion(target: Target, errors: list[str], _warnings: list[str]) -> None:
+    _dense_completion(target, errors)
+
+
 def _legacy_dense(target: Target, errors: list[str], warnings: list[str]) -> None:
-    # A Hybrid release's Dense Component is a Dense release at `<store>/dense` (spec
-    # §16), so a warning naming plain `data.zarr` would send its reader to the wrong one.
-    label = "dense/data.zarr/se" if target.parent is not None else "data.zarr/se"
-    _validate_dense_store(target.store, errors, warnings, label=label)
+    _dense_values(target, errors, warnings)
+
+
+def _legacy_dense_layout(target: Target, errors: list[str], _warnings: list[str]) -> None:
+    _dense_layout(target, errors)
+
+
+def _legacy_overflow(target: Target, errors: list[str], _warnings: list[str]) -> None:
+    _overflow(target, errors)
+
+
+def _completed(target: Target) -> bool:
+    return target.store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
+
+
+def _top_level_dense_grid(target: Target) -> bool:
+    return target.layout is PrimaryStorageLayout.DENSE and not target.is_component
 
 
 def _fidelity_unsupported(_target: Target) -> list[str]:
@@ -225,58 +247,66 @@ def _legacy_fidelity(target: Target) -> list[str]:
     return errors
 
 
-def _fidelity_prerequisites() -> tuple[str, ...]:
-    """Every rule a Dense release reports an error from before source fidelity runs.
+_DENSE_COMPLETION = "legacy.dense_completion"
 
-    Source fidelity samples what a Store holds, so it runs only on a release no
-    earlier rule found wrong.
-    """
-    earlier = (
-        *release_rules.RULES,
-        *variant_rules.RULES,
-        *analyses_rules.TABLE_RULES,
-        _LEGACY_DENSE,
-        *analyses_rules.ORIENTATION_RULES,
-    )
-    return tuple(r.name for r in earlier if r.severity is Severity.ERROR)
-
-
-_LEGACY_DENSE = _Legacy(
-    name="legacy.dense",
-    kinds=Kind.RELEASE,
-    when=_is(PrimaryStorageLayout.DENSE),
-    after=(REQUIRED,),
-    run=_legacy_dense,
+#: The rules before source fidelity, in order: it samples what a Store holds, so it
+#: runs only on a release none of them found wrong.
+_BEFORE_FIDELITY: tuple[Rule, ...] = (
+    Check(name=MANIFEST_RULE, kinds=Kind.RELEASE, run=lambda _target: ()),
+    *release_rules.RULES,
+    *variant_rules.RULES,
+    *analyses_rules.TABLE_RULES,
+    *csr_rules.RULES,
+    *encoding_rules.RULES,
+    Check(
+        name="legacy.infinite_se",
+        kinds=Kind.RELEASE,
+        severity=Severity.WARNING,
+        run=_legacy_infinite_se,
+    ),
+    _Legacy(
+        name="legacy.ragged",
+        kinds=Kind.CSR,
+        when=_is(PrimaryStorageLayout.RAGGED),
+        after=(ARRAYS, *PLAN),
+        run=_legacy_ragged,
+    ),
+    _Legacy(
+        name=_DENSE_COMPLETION,
+        kinds=Kind.GRID,
+        when=_completed,
+        after=(REQUIRED,),
+        run=_legacy_dense_completion,
+    ),
+    _Legacy(
+        name="legacy.dense_values",
+        kinds=Kind.GRID,
+        after=(*PLAN, _DENSE_COMPLETION),
+        run=_legacy_dense,
+    ),
+    _Legacy(
+        name="legacy.dense_layout", kinds=Kind.GRID, after=(REQUIRED,), run=_legacy_dense_layout
+    ),
+    _Legacy(
+        name="legacy.overflow",
+        kinds=Kind.CSR,
+        when=_is(PrimaryStorageLayout.HYBRID),
+        after=(ARRAYS, *PLAN),
+        run=_legacy_overflow,
+    ),
+    _Legacy(
+        name="legacy.hybrid",
+        kinds=Kind.RELEASE,
+        when=_is(PrimaryStorageLayout.HYBRID),
+        after=(REQUIRED,),
+        run=_legacy_hybrid,
+    ),
+    *analyses_rules.ORIENTATION_RULES,
 )
 
 RULES: tuple[Rule, ...] = check_registry(
     [
-        Check(name=MANIFEST_RULE, kinds=Kind.RELEASE, run=lambda _target: ()),
-        *release_rules.RULES,
-        *variant_rules.RULES,
-        *analyses_rules.TABLE_RULES,
-        Check(
-            name="legacy.infinite_se",
-            kinds=Kind.RELEASE,
-            severity=Severity.WARNING,
-            run=_legacy_infinite_se,
-        ),
-        _Legacy(
-            name="legacy.ragged",
-            kinds=Kind.RELEASE,
-            when=_is(PrimaryStorageLayout.RAGGED),
-            after=(REQUIRED,),
-            run=_legacy_ragged,
-        ),
-        _LEGACY_DENSE,
-        _Legacy(
-            name="legacy.hybrid",
-            kinds=Kind.RELEASE,
-            when=_is(PrimaryStorageLayout.HYBRID),
-            after=(REQUIRED,),
-            run=_legacy_hybrid,
-        ),
-        *analyses_rules.ORIENTATION_RULES,
+        *_BEFORE_FIDELITY,
         Check(
             name="legacy.fidelity_unsupported",
             kinds=Kind.RELEASE,
@@ -285,9 +315,9 @@ RULES: tuple[Rule, ...] = check_registry(
         ),
         Check(
             name="legacy.fidelity",
-            kinds=Kind.RELEASE,
-            when=lambda target: _source_given(target) and not _not_dense(target),
-            after=_fidelity_prerequisites(),
+            kinds=Kind.GRID,
+            when=lambda target: _source_given(target) and _top_level_dense_grid(target),
+            after=tuple(r.name for r in _BEFORE_FIDELITY if r.severity is Severity.ERROR),
             run=_legacy_fidelity,
         ),
     ]
@@ -809,57 +839,85 @@ def _hybrid_outer_recordings(
     return recorded
 
 
-def _validate_dense_store(
-    store: OpenGWASDBStore,
-    errors: list[str],
-    warnings: list[str],
-    *,
-    label: str = "data.zarr/se",
-) -> None:
-    """Validate a Dense Store Release (spec §3) in fail-safe seams.
+def _dense_counts(target: Target) -> tuple[int, int]:
+    """The grid's expected shape: the variant axis's rows by `analyses.tsv`'s."""
+    store = target.store
+    n_variants = target.remember("n_variants", lambda: _n_variants(store.path))
+    n_analyses = target.remember("n_analyses", lambda: len(read_analyses(store.analyses_path).rows))
+    return n_variants, n_analyses
 
-    ``_validate_dense_store`` is a thin orchestrator: the envelope first, then the
-    guarded metadata/array seams once their reads are safe. Its warnings go to the
-    caller's list, which is how a Hybrid's Dense Component's reach the release (#337).
-    An exception is reported by the rule that runs this, after whatever was found
-    before it.
-    """
-    manifest = store.manifest
-    n_variants = _n_variants(store.path)
+
+def _dense_completion(target: Target, errors: list[str]) -> None:
+    """A Reference-Completed grid's mask, panel flags and completion metadata."""
+    store = target.store
+    n_variants, n_analyses = _dense_counts(target)
     with store.index_connection() as connection:
-        n_analyses = len(read_analyses(store.analyses_path).rows)
-        root = store.arrays(mode="r")
-        imputed_arr = None
-        on_panel_arr = None
-        if manifest.completion_state is CompletionState.REFERENCE_COMPLETED:
-            imputed_arr, on_panel_arr = _validate_completion_metadata(
-                root, connection, store.analyses_path, n_variants, n_analyses, errors
-            )
-        _validate_encoding_plan(root, manifest.encoding, errors, label="data.zarr")
-        if not errors:
-            _validate_dense_arrays(
-                root,
-                n_variants,
-                n_analyses,
-                errors,
-                manifest.encoding,
-                imputed_arr,
-                on_panel_arr,
-                store.analyses_path, warnings, label,
-            )
-        if not errors:
-            _validate_top_hits(root, errors, manifest.encoding)
-        if not errors:
-            _validate_rho(root, n_analyses, errors)
-        # After the shape seam, so a plane that does not span the axis is
-        # named as such rather than only as a layout disagreement (#245).
-        _validate_recorded_layout(manifest, connection, root, errors)
-        # The optional indexed-subset namespace (ADR 0061, #264).  A release
-        # without it stays valid and unchanged; a release with it must hold
-        # only published, self-consistent, value-equal subsets.
-        validate_indexed_subsets(
-            store.path, root, manifest, n_variants, n_analyses, errors
+        _validate_completion_metadata(
+            target.group, connection, store.analyses_path, n_variants, n_analyses, errors
         )
+
+
+def _dense_values(target: Target, errors: list[str], warnings: list[str]) -> None:
+    """The streamed band pass, then the Top-Hit Indexes and rho against the planes.
+
+    Runs after the plan and completion rules, so every plane it decodes is the
+    shape and encoding they say.
+    """
+    store = target.store
+    root = target.group
+    manifest = store.manifest
+    n_variants, n_analyses = _dense_counts(target)
+    imputed_arr = on_panel = None
+    if manifest.completion_state is CompletionState.REFERENCE_COMPLETED:
+        imputed_arr = root["imputed"]
+        on_panel = target.remember("on_panel", lambda: root["on_panel"][:])
+    # A Hybrid release's Dense Component is a Dense release at `<store>/dense` (spec
+    # §16), so a warning naming plain `data.zarr` would send its reader to the wrong one.
+    label = "dense/data.zarr/se" if target.is_component else "data.zarr/se"
+    _validate_dense_arrays(
+        root, n_variants, n_analyses, errors, manifest.encoding,
+        imputed_arr, on_panel, store.analyses_path, warnings, label,
+    )
+    if not errors:
+        _validate_top_hits(root, errors, manifest.encoding)
+    if not errors:
+        _validate_rho(root, n_analyses, errors)
+
+
+def _dense_layout(target: Target, errors: list[str]) -> None:
+    """The recorded layout against the planes, and any Indexed Variant Subsets."""
+    store = target.store
+    n_variants, n_analyses = _dense_counts(target)
+    # After the shape seam, so a plane that does not span the axis is named as
+    # such rather than only as a layout disagreement (#245).
+    with store.index_connection() as connection:
+        _validate_recorded_layout(store.manifest, connection, target.group, errors)
+    # The optional indexed-subset namespace (ADR 0061, #264).  A release without it
+    # stays valid and unchanged; a release with it must hold only published,
+    # self-consistent, value-equal subsets.
+    validate_indexed_subsets(
+        store.path, target.group, store.manifest, n_variants, n_analyses, errors
+    )
+
+
+def _overflow(target: Target, errors: list[str]) -> None:
+    """The Overflow's structure and values, then the cross-component invariants,
+    then its Top-Hit Index -- each only once the one before it found nothing."""
+    store = target.store
+    root = target.group
+    n_shared = _n_variants(store.path)
+    n_assoc = _validate_overflow_structure(root, n_shared, errors)
+    if n_assoc is None:
+        return
+    _validate_overflow_values(root, store.manifest.encoding, n_assoc, errors)
+    if errors:
+        return
+    _validate_hybrid_invariants(store.path, dense_component_path(store.path), n_shared, errors)
+    if errors:
+        return
+    data_root = store.arrays(mode="r")
+    if top_hits.has_index(data_root):
+        _validate_ragged_top_hits(store.path, data_root, errors)
 
 
 def _validate_completion_metadata(
@@ -1007,20 +1065,6 @@ def _decoded_csr_se(root: Any, encoding: StoreEncoding, n_assoc: int, label: str
         return None, f"{label} cannot be decoded under the declared plan: {exc}"
 
 
-def _missing_csr_arrays(root: Any, errors: list[str]) -> bool:
-    """Whether a CSR group lacks one of its four required parallel arrays.
-
-    ``offsets``, ``variant_index``, ``z`` and ``se`` travel together in every
-    Ragged store -- the Ragged Overflow's own CSR and the shared Ragged
-    structure seam name the same four, so their absence is recorded the same
-    way.
-    """
-    missing = [name for name in ("offsets", "variant_index", "z", "se") if name not in root]
-    for name in missing:
-        errors.append(f"missing data.zarr/ragged/{name}")
-    return bool(missing)
-
-
 def _csr_parallel_length_errors(root: Any, n_assoc: int, errors: list[str]) -> None:
     """Record each parallel CSR array whose length disagrees with ``offsets``."""
     for name in ("variant_index", "z", "se"):
@@ -1144,22 +1188,13 @@ def _segment_order_errors(
     return checked
 
 
-def _validate_ragged_csr_structure(
-    root: Any, encoding: StoreEncoding, errors: list[str]
-) -> tuple[int, int] | None:
-    """Seam: the CSR exists as one decodable, shape-consistent artifact.
+def _validate_ragged_csr_structure(root: Any, errors: list[str]) -> tuple[int, int]:
+    """Seam: the CSR's parallel arrays agree in length, and each segment is ordered.
 
-    Returns ``(n_assoc, n_analyses)`` when the parallel arrays are present
-    and the manifest's plan governs them; ``None`` when a guard failed, which
-    stops the pipeline. A length disagreement against ``offsets`` records an
-    error but does not stop it -- the value seam reports what the arrays
-    decode to either way.
+    Returns ``(n_assoc, n_analyses)``. A length disagreement against ``offsets``
+    records an error but does not stop the pipeline -- the value seam reports
+    what the arrays decode to either way.
     """
-    if _missing_csr_arrays(root, errors):
-        return None
-    _validate_encoding_plan(root, encoding, errors, label="data.zarr/ragged")
-    if errors:
-        return None
     offsets = np.asarray(root["offsets"][:], dtype=np.int64)
     n_assoc = int(offsets[-1])
     _csr_parallel_length_errors(root, n_assoc, errors)
@@ -1741,9 +1776,10 @@ def _validate_variant_index_ordering(
 def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> None:
     """Validate a Ragged Store Release (spec §11, §15, §17) in fail-safe seams.
 
-    ``_validate_ragged_store`` is a thin orchestrator over five seams -- the
-    envelope, the CSR structure, the encoded values, the Analysis/SQLite
-    metadata, then completion and the Top-Hit Indexes (issue #130). Each seam
+    ``_validate_ragged_store`` is a thin orchestrator over the seams that follow
+    the envelope, the CSR's arrays and its plan, which are rules of their own:
+    the CSR structure, the encoded values, the Analysis metadata, then
+    completion and the Top-Hit Indexes (issue #130). Each seam
     stops the pipeline when a later seam would read what it guards, so a
     malformed release is reported where it first goes wrong rather than as a
     crash in a later read. An exception is reported by the rule that runs this,
@@ -1751,10 +1787,7 @@ def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> None:
     """
     ragged_path = store.data_path / "ragged"
     root = open_group(ragged_path)
-    csr = _validate_ragged_csr_structure(root, store.manifest.encoding, errors)
-    if csr is None:
-        return
-    n_assoc, n_analyses_csr = csr
+    n_assoc, n_analyses_csr = _validate_ragged_csr_structure(root, errors)
     if not _validate_ragged_csr_values(root, store.manifest.encoding, n_assoc, errors):
         return
     _validate_ragged_analyses(store, n_analyses_csr, errors)
@@ -1978,11 +2011,11 @@ def _validate_ragged_top_hits(
 
 
 def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> None:
-    """Validate what a Hybrid store adds to its Dense Component (ADR 0026 / issue 059).
+    """A Hybrid release's Dense Component opens as Dense, under the release's plan,
+    and the outer recordings describe it (ADR 0026 / issue 059).
 
-    The component is judged as a Dense release of its own; this adds the
-    hybrid-specific invariants: the shared union table covers both components, the
-    on-panel/off-panel partition is disjoint, and the overflow is observed-only.
+    The component is judged as a Dense release of its own, and the Overflow as a
+    sequence of its own.
     """
     dense_store = _hybrid_dense_component(store, errors)
     if dense_store is None:
@@ -1990,8 +2023,6 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> None:
     # The outer recordings must describe the component, which is judged as a Dense
     # release of its own.
     _validate_hybrid_recordings(store, dense_store, errors)
-    if not errors:
-        _validate_hybrid_outer(store, errors)
 
 
 def _n_variants(store_path: Path) -> int:
@@ -2026,22 +2057,6 @@ def _hybrid_dense_component(
     return dense_store
 
 
-def _validate_hybrid_outer(store: OpenGWASDBStore, errors: list[str]) -> None:
-    """The Overflow, the cross-component invariants, the Overflow's top hits."""
-    store_path = store.path
-    n_shared = _n_variants(store_path)
-    ragged_path = store_path / "data.zarr" / "ragged"
-    _validate_overflow(store_path, ragged_path, n_shared, errors, store.manifest.encoding)
-    if errors:
-        return
-    _validate_hybrid_invariants(store_path, dense_component_path(store_path), n_shared, errors)
-    if errors:
-        return
-    data_root = store.arrays(mode="r")
-    if top_hits.has_index(data_root):
-        _validate_ragged_top_hits(store_path, data_root, errors)
-
-
 def _component_encoding_error(
     dense_store: OpenGWASDBStore, release: StoreEncoding
 ) -> str | None:
@@ -2065,23 +2080,14 @@ def _component_encoding_error(
     )
 
 
-def _validate_overflow_structure(
-    root: Any, encoding: StoreEncoding, n_shared: int, errors: list[str]
-) -> int | None:
+def _validate_overflow_structure(root: Any, n_shared: int, errors: list[str]) -> int | None:
     """Seam: the Overflow CSR's shape, shared-index bounds, and observed-only status.
 
     Returns the association count when the structural guards pass; ``None``
     stops the pipeline. ``variant_index`` bounds are checked against the
     shared variant table the Overflow's indices address.
     """
-    if _missing_csr_arrays(root, errors):
-        return None
-    # Both Hybrid components are written under one plan (issue #119): the
-    # Dense Component and the Ragged Overflow partition one Analysis's
-    # associations, so a shared result contract needs a shared encoding.
-    _validate_encoding_plan(root, encoding, errors, label="data.zarr/ragged")
-    if errors:
-        return None
+    before = len(errors)
     n_assoc = int(root["offsets"][:][-1])
     _csr_parallel_length_errors(root, n_assoc, errors)
     _segment_order_errors(
@@ -2093,7 +2099,7 @@ def _validate_overflow_structure(
             "Ragged Overflow has an imputed array — the overflow is off-panel and "
             "must never be imputed (always observed)"
         )
-    if errors:
+    if len(errors) > before:
         return None
     vi = root["variant_index"][:]
     if n_assoc and (int(vi.min()) < 0 or int(vi.max()) >= n_shared):
@@ -2132,30 +2138,6 @@ def _validate_overflow_values(
             ZOverflowTable.read(root),
             errors,
         )
-
-
-def _validate_overflow(
-    store_path: Path,
-    ragged_path: Path,
-    n_shared: int,
-    errors: list[str],
-    encoding: StoreEncoding,
-) -> int | None:
-    """Validate the Ragged Overflow CSR: array lengths, se sign, shared-index
-    bounds, and that it is observed-only (never imputed, even after completion).
-
-    Returns the association count, or `None` when a structural guard failed.
-    """
-    try:
-        root = open_group(ragged_path)
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"cannot open Ragged Overflow CSR: {exc}")
-        return None
-    n_assoc = _validate_overflow_structure(root, encoding, n_shared, errors)
-    if n_assoc is None:
-        return None
-    _validate_overflow_values(root, encoding, n_assoc, errors)
-    return n_assoc
 
 
 def _validate_hybrid_invariants(
@@ -2306,94 +2288,6 @@ def _dense_array_validation_bands(
     return _dense_validation_bands(n_variants, n_analyses, inner_chunk_of(array)[0])
 
 
-def _validate_eaf_plan(
-    group: Any, encoding: StoreEncoding, errors: list[str], *, label: str
-) -> None:
-    """The `eaf` plane, its baseline, its exception table and its reference.
-
-    They are one artifact in up to four arrays, and a component holding some of
-    them and not others cannot be decoded: an `int8` residual plane without its
-    baseline is meaningless, and an exception cell with no table entry has lost
-    its value entirely. The plan says which should be there; this is where that
-    stops being a claim.
-    """
-    declared = encoding.eaf
-    present = "eaf" in group
-    if declared.is_absent and present:
-        errors.append(f"{label} carries an eaf plane but the manifest declares eaf absent")
-    if not present and declared.kind in ("float32", "int8_residual"):
-        errors.append(
-            f"{label} declares an eaf encoding of {declared.kind!r} but carries no eaf plane"
-        )
-
-    has_baseline = EAF_BASELINE in group
-    has_table = EAF_EXCEPTION_INDEX in group or EAF_EXCEPTION_VALUE in group
-    if not declared.is_residual:
-        if has_baseline:
-            errors.append(
-                f"{label} carries {EAF_BASELINE} but declares no residual-coded eaf plane"
-            )
-        if has_table:
-            errors.append(
-                f"{label} carries an eaf exception table but declares no residual-coded eaf plane"
-            )
-    else:
-        if not has_baseline:
-            errors.append(
-                f"{label} declares a residual-coded eaf plane but is missing {EAF_BASELINE}, "
-                "without which the plane cannot be decoded"
-            )
-        elif not _baseline_in_unit_interval(group[EAF_BASELINE]):
-            errors.append(f"{label}/{EAF_BASELINE} holds a finite value outside (0, 1)")
-        if EAF_EXCEPTION_INDEX not in group or EAF_EXCEPTION_VALUE not in group:
-            errors.append(
-                f"{label} declares a residual-coded eaf plane but is missing "
-                f"{EAF_EXCEPTION_INDEX}/{EAF_EXCEPTION_VALUE}, which hold the exact values "
-                "of any cell the residual coding cannot express"
-            )
-        else:
-            table = EafExceptionTable.read(group)
-            if len(table.index) != len(table.value):
-                errors.append(
-                    f"{label} eaf exception table has {len(table.index)} positions but "
-                    f"{len(table.value)} values"
-                )
-            elif len(table.index) > 1 and np.any(table.index[1:] <= table.index[:-1]):
-                errors.append(
-                    f"{label} eaf exception table is not sorted by position, or repeats one"
-                )
-            elif len(table.value) and not np.all(
-                np.isfinite(table.value) & (table.value >= 0.0) & (table.value <= 1.0)
-            ):
-                errors.append(
-                    f"{label} eaf exception table holds a value that is not a frequency in [0, 1]"
-                )
-
-    has_reference = EAF_REFERENCE in group
-    if declared.reference and not has_reference:
-        errors.append(
-            f"{label} declares reference EAF for its imputed cells but carries no "
-            f"{EAF_REFERENCE} array"
-        )
-    if declared.reference and "imputed" not in group:
-        errors.append(
-            f"{label} declares reference EAF but carries no imputed mask to say which "
-            "cells it describes (spec §9, §15)"
-        )
-    if has_reference and not declared.reference:
-        errors.append(
-            f"{label} carries {EAF_REFERENCE} but the manifest does not declare it; a "
-            "reader following the plan would never read those frequencies"
-        )
-    elif has_reference and not _frequencies_in_unit_interval(group[EAF_REFERENCE]):
-        # A panel frequency is returned to the caller as it stands, so it is
-        # checked as a frequency here rather than only where a plane is decoded
-        # -- a release that carries reference EAF and no plane of its own has
-        # no decode to check it in (issue #113). Inclusive, unlike the
-        # baseline: 0 and 1 have no logit but are perfectly good frequencies.
-        errors.append(f"{label}/{EAF_REFERENCE} holds a finite value outside [0, 1]")
-
-
 def _validate_ragged_eaf_values(
     root: Any, encoding: StoreEncoding, n_assoc: int, errors: list[str]
 ) -> None:
@@ -2424,212 +2318,6 @@ def _validate_ragged_eaf_values(
     finite = np.isfinite(values)
     if np.any(finite & ((values < 0.0) | (values > 1.0))):
         errors.append("data.zarr/ragged/eaf contains finite values outside [0, 1]")
-
-
-def _baseline_in_unit_interval(array: Any) -> bool:
-    values = np.asarray(array[:], dtype=np.float64)
-    finite = np.isfinite(values)
-    return not bool(np.any(finite & ((values <= 0.0) | (values >= 1.0))))
-
-
-def _frequencies_in_unit_interval(array: Any) -> bool:
-    values = np.asarray(array[:], dtype=np.float64)
-    finite = np.isfinite(values)
-    return not bool(np.any(finite & ((values < 0.0) | (values > 1.0))))
-
-
-def _validate_per_variant_chunking(group: Any, errors: list[str], *, label: str) -> None:
-    """Reject a per-variant array chunked as one block (issue #135).
-
-    A whole-array chunk means every read of the frequency plane decompresses
-    the entire baseline, whatever it asked for, so the chunking is part of the
-    release's contract rather than a detail of how it was written.
-    """
-    for name in (EAF_BASELINE, EAF_REFERENCE):
-        if name not in group:
-            continue
-        array = group[name]
-        expected = per_variant_chunk_size(group, array_length(array))
-        actual = inner_chunk_of(array)[0]
-        if actual > expected:
-            errors.append(
-                f"{label}/{name} has inner chunk shape {inner_chunk_of(array)}; its "
-                f"per-variant chunk must be no larger than {expected}, matching this "
-                "component's variant/read axis rather than spanning the whole array. "
-                "(A sharded array's *inner* chunk is the unit a query reads; the shard "
-                "is not judged here.)"
-            )
-
-
-SE_TABLE_NAMES = ("se_exception_index", "se_exception_value", "se_coefficients")
-
-
-def _se_coefficients_errors(group: Any, label: str) -> list[str]:
-    """`se_coefficients` is `float32`, `(n_analyses, 2)`, and wholly finite."""
-    coefficients = group["se_coefficients"]
-    n_analyses = (
-        int(group["se"].shape[1])
-        if group["se"].ndim == 2
-        else array_length(group["offsets"]) - 1
-    )
-    if str(coefficients.dtype) != "float32" or tuple(coefficients.shape) != (n_analyses, 2):
-        return [f"{label}/se_coefficients must have float32 shape ({n_analyses}, 2)"]
-    if not np.all(np.isfinite(coefficients[:])):
-        return [f"{label}/se_coefficients contains non-finite values"]
-    return []
-
-
-def _se_table_shape_errors(index: Any, value: Any, label: str) -> list[str]:
-    """The two side arrays are parallel, one-dimensional and correctly typed."""
-    if (
-        index.ndim != 1
-        or value.ndim != 1
-        # zarr 3 removed ``len(Array)``; the leading axis is the length.
-        or int(index.shape[0]) != int(value.shape[0])
-    ):
-        return [f"{label} se exception arrays must be parallel one-dimensional arrays"]
-    if str(index.dtype) != "int64" or str(value.dtype) != "float32":
-        return [f"{label} se exception arrays must use int64 positions and float32 values"]
-    return []
-
-
-def _se_table_content_errors(
-    positions: np.ndarray, values: np.ndarray, plane_size: int, label: str
-) -> list[str]:
-    """The keys are sorted, unique and inside the plane; the values are finite."""
-    found = []
-    if len(positions) > 1 and np.any(positions[1:] <= positions[:-1]):
-        found.append(f"{label} se exception positions are unsorted or contain duplicates")
-    elif len(positions) and (int(positions[0]) < 0 or int(positions[-1]) >= plane_size):
-        found.append(f"{label} se exception position is outside the se plane")
-    if not np.all(np.isfinite(values)):
-        found.append(f"{label} se exception values contain non-finite values")
-    return found
-
-
-def _se_exception_table_errors(group: Any, label: str) -> list[str]:
-    """The side table is parallel, typed, sorted, unique, in range and finite."""
-    index = group["se_exception_index"]
-    value = group["se_exception_value"]
-    shape_errors = _se_table_shape_errors(index, value, label)
-    if shape_errors:
-        return shape_errors
-    return _se_table_content_errors(
-        np.asarray(index[:], dtype=np.int64),
-        np.asarray(value[:], dtype=np.float32),
-        int(group["se"].size),
-        label,
-    )
-
-
-def _se_side_array_errors(group: Any, encoding: StoreEncoding, label: str) -> list[str]:
-    """What a residual plane needs beside it before its contents can be judged."""
-    if missing := [name for name in SE_TABLE_NAMES if name not in group]:
-        return [f"{label} residual se is missing required arrays: {missing}"]
-    if encoding.eaf.is_absent or "eaf" not in group:
-        return [f"{label} residual se requires a complete eaf plane beside it"]
-    return []
-
-
-def _validate_se_plan(
-    group: Any, encoding: StoreEncoding, errors: list[str], *, label: str
-) -> None:
-    """store-format spec §20: the `se` plane and its side arrays agree with the plan.
-
-    A residual plane is unreadable without its coefficients, its exception
-    table *and* a complete `eaf` plane; a `float16` plane must carry none of
-    them, so a leftover side array is a failure rather than a harmless relic.
-    """
-    if not encoding.se.is_residual:
-        if any(name in group for name in SE_TABLE_NAMES):
-            errors.append(f"{label} carries residual se side arrays but declares float16 se")
-        return
-    if present := _se_side_array_errors(group, encoding, label):
-        errors.extend(present)
-        return
-    errors.extend(_se_coefficients_errors(group, label))
-    errors.extend(_se_exception_table_errors(group, label))
-
-
-def _validate_z_plan(
-    group: Any, encoding: StoreEncoding, errors: list[str], *, label: str
-) -> None:
-    """Seam: the fixed-point `z` side table agrees with the declared plan.
-
-    The overflow side table is only read under the fixed-point encoding the
-    manifest declares, so a stray table under float z is a failure rather than
-    a harmless relic, and a declared fixed-point z without its exact-value
-    side table cannot be decoded faithfully at all (issue #119, issue #106).
-    """
-    declared = encoding.z
-    has_table = Z_OVERFLOW_INDEX in group or Z_OVERFLOW_VALUE in group
-    if not declared.is_fixed_point:
-        if has_table:
-            errors.append(
-                f"{label} carries a z overflow table but declares no fixed-point z encoding"
-            )
-        return
-    missing = [name for name in (Z_OVERFLOW_INDEX, Z_OVERFLOW_VALUE) if name not in group]
-    if missing:
-        errors.append(
-            f"{label} declares fixed-point z but is missing "
-            f"{Z_OVERFLOW_INDEX}/{Z_OVERFLOW_VALUE}, which hold the exact values of "
-            "any cell outside the representable range"
-        )
-        return
-    _validate_z_overflow_table(ZOverflowTable.read(group), errors, label=label)
-
-
-def _validate_z_overflow_table(
-    table: ZOverflowTable, errors: list[str], *, label: str
-) -> None:
-    """Seam: a present fixed-point `z` side table is self-consistent.
-
-    Positions must pair one-to-one with values, be sorted and unrepeated, and
-    every stored exact value must be finite -- the table is the authoritative
-    decode for cells the fixed-point plane cannot represent.
-    """
-    if len(table.index) != len(table.value):
-        errors.append(
-            f"{label} z overflow table has {len(table.index)} positions but "
-            f"{len(table.value)} values"
-        )
-        return
-    if len(table.index) > 1 and np.any(table.index[1:] <= table.index[:-1]):
-        errors.append(f"{label} z overflow table is not sorted by position, or repeats one")
-        return
-    if len(table.index) and not np.all(np.isfinite(table.value)):
-        errors.append(f"{label} z overflow table contains non-finite values")
-
-
-def _validate_encoding_plan(
-    group: Any, encoding: StoreEncoding, errors: list[str], *, label: str
-) -> None:
-    """Check the arrays against the plan the manifest declares (issue #119).
-
-    The plan is authoritative: a reader decodes what the manifest says, so a
-    store whose `z` plane is not in its declared encoding does not read as
-    "the other encoding" -- it reads as plausible, wrong z-scores. That is the
-    disagreement between declared metadata and actual arrays that got through
-    review once already (#106), and it is why the check exists at all.
-    """
-    planes = (("z", encoding.z), ("se", encoding.se), ("eaf", encoding.eaf))
-    for name, declared_plane in planes:
-        if name not in group:
-            continue
-        actual = str(group[name].dtype)
-        if actual != declared_plane.dtype:
-            errors.append(
-                f"{label}/{name} has dtype {actual} but the manifest declares "
-                f"{declared_plane.kind} ({declared_plane.dtype})"
-            )
-    _validate_per_variant_chunking(group, errors, label=label)
-    _validate_eaf_plan(group, encoding, errors, label=label)
-    validate_n_plan(group, encoding, errors, label=label)
-    _validate_se_plan(group, encoding, errors, label=label)
-    if errors or "z" not in group:
-        return
-    _validate_z_plan(group, encoding, errors, label=label)
 
 
 def _overflow_positions_match(

@@ -197,7 +197,7 @@ def test_a_z_plane_that_contradicts_the_manifest_is_rejected(dense_store):
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_store(dense_store)
-    assert not result.ok
+    assert result.failed() == {"encoding.dtypes", "encoding.z"}, result.errors
     assert any("dtype int16" in error for error in result.errors), result.errors
 
 
@@ -248,7 +248,7 @@ def test_a_reader_meeting_an_unknown_encoding_kind_rejects_the_release(dense_sto
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_store(dense_store)
-    assert not result.ok
+    assert result.failed() == {"manifest.loads"}
     assert any("int12_fixed" in error for error in result.errors), result.errors
 
 

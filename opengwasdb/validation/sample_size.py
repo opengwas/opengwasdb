@@ -27,33 +27,6 @@ from opengwasdb.store.arrays import array_length
 _WINDOW = 1_000_000
 
 
-def validate_n_plan(group: Any, encoding: StoreEncoding, errors: list[str], *, label: str) -> None:
-    """The `n` plane is present exactly when the plan declares it, in its dtype,
-    and only beside a `float16` `se` plane (ADR 0067 §4)."""
-    present = "n" in group
-    if encoding.n is not None and encoding.se.is_residual:
-        errors.append(
-            f"{label} declares an n plane beside se {encoding.se.kind}, but an n plane "
-            "requires float16 se (ADR 0067 §4)"
-        )
-    if encoding.n is None:
-        if present:
-            errors.append(
-                f"{label} carries an n plane but the manifest declares none; a reader "
-                "following the plan would never read those sample sizes (ADR 0067)"
-            )
-        return
-    if not present:
-        errors.append(f"{label} declares an n plane but carries none (ADR 0067)")
-        return
-    actual = str(group["n"].dtype)
-    if actual != encoding.n.dtype:
-        errors.append(
-            f"{label}/n has dtype {actual} but the manifest declares "
-            f"{encoding.n.kind} ({encoding.n.dtype})"
-        )
-
-
 @dataclass(frozen=True)
 class _PlaneScan:
     """One windowed pass over the plane: what it holds, per Analysis."""

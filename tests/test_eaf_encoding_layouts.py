@@ -543,7 +543,7 @@ def test_an_eaf_plane_that_contradicts_the_manifest_is_rejected(dense_store: Pat
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_store(dense_store)
-    assert not result.ok
+    assert result.failed() == {"encoding.dtypes", "encoding.eaf"}, result.errors
     assert any("dtype int8" in error for error in result.errors), result.errors
 
 
@@ -564,7 +564,7 @@ def test_a_residual_plane_with_no_baseline_is_rejected(dense_store: Path):
     del root[EAF_BASELINE]
 
     result = validate_store(dense_store)
-    assert not result.ok
+    assert result.failed() == {"encoding.eaf"}, result.errors
     assert any(EAF_BASELINE in error for error in result.errors), result.errors
 
 
@@ -734,7 +734,7 @@ def test_a_reference_array_the_plan_does_not_declare_is_rejected(completed_store
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_store(completed_store)
-    assert not result.ok
+    assert result.failed() == {"encoding.eaf"}, result.errors
     assert any(EAF_REFERENCE in error for error in result.errors), result.errors
 
 

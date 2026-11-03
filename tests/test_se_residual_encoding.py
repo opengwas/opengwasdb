@@ -225,11 +225,11 @@ def test_validation_rejects_malformed_residual_se_side_arrays(tmp_path) -> None:
 
     path, group = malformed("missing-table")
     del group["se_exception_value"]
-    assert any("missing required arrays" in error for error in validate_store(path).errors)
+    assert validate_store(path).failed() == {"encoding.se"}
 
     path, group = malformed("bad-coefficients")
     group["se_coefficients"][0, 0] = np.nan
-    assert any("non-finite" in error for error in validate_store(path).errors)
+    assert validate_store(path).failed() == {"encoding.se"}
 
     path, group = malformed("stray-exception")
     del group["se_exception_index"]
@@ -255,7 +255,9 @@ def test_validation_rejects_malformed_residual_se_side_arrays(tmp_path) -> None:
         group, "se_exception_value", ArrayRole.EXCEPTION_TABLE,
         data=np.array([0.1, 0.1], dtype=np.float32), compressor=compressor(),
     )
-    assert any("duplicates" in error for error in validate_store(path).errors)
+    result = validate_store(path)
+    assert result.failed() == {"encoding.se"}
+    assert any("duplicates" in error for error in result.errors)
 
     path, group = malformed("dtype-disagreement")
     raw = np.asarray(group["se"][:], dtype=np.float16)
@@ -265,7 +267,9 @@ def test_validation_rejects_malformed_residual_se_side_arrays(tmp_path) -> None:
         group, "se", ArrayRole.DENSE_STATISTIC_PLANE,
         data=np.asarray(raw, dtype="float16"), compressor=compressor(), inner_chunk=chunks,
     )
-    assert any("dtype float16" in error for error in validate_store(path).errors)
+    result = validate_store(path)
+    assert result.failed() == {"encoding.dtypes"}
+    assert any("dtype float16" in error for error in result.errors)
 
 
 def test_hybrid_joint_selection_streams_dense_and_uses_one_fit(tmp_path) -> None:

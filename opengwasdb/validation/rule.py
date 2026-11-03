@@ -22,8 +22,10 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any, Generic, TypeVar
 
+from opengwasdb.encoding import StoreEncoding
 from opengwasdb.model.analyses import AnalysesTable, read_analyses
 from opengwasdb.model.enums import PrimaryStorageLayout
+from opengwasdb.store.arrays import open_group
 from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.variants import VariantAxis
 
@@ -31,6 +33,8 @@ from opengwasdb.variants import VariantAxis
 B = TypeVar("B")
 #: What a fold measures in each block and adds up over the scan.
 M = TypeVar("M")
+#: What a target remembers having read.
+T = TypeVar("T")
 
 
 class Severity(StrEnum):
@@ -94,10 +98,15 @@ class Target:
         *,
         parent: Target | None = None,
         options: ValidationOptions | None = None,
+        group: Any = None,
+        encoding: StoreEncoding | None = None,
     ) -> None:
         self.kind = kind
         self.label = label
         self._store = store
+        self._group = group
+        self._encoding = encoding
+        self._read: dict[str, Any] = {}
         self.parent = parent
         self.children: list[Target] = []
         if parent is not None:
@@ -113,6 +122,35 @@ class Target:
     @property
     def layout(self) -> PrimaryStorageLayout:
         return self.store.manifest.primary_layout
+
+    @property
+    def encoding(self) -> StoreEncoding:
+        """The plan this target's planes are written under: its release's manifest's."""
+        return self._encoding if self._encoding is not None else self.store.manifest.encoding
+
+    @property
+    def is_component(self) -> bool:
+        """Whether this target belongs to a Hybrid release's Dense Component."""
+        release = self if self.kind is Kind.RELEASE else self.parent
+        return release is not None and release.parent is not None
+
+    @property
+    def group(self) -> Any:
+        """The Zarr group this target's arrays are in, opened on first use.
+
+        A grid's is its release's `data.zarr`; a sequence's, `data.zarr/ragged`.
+        """
+        if self._group is None:
+            path = self.store.data_path
+            self._group = open_group(path / "ragged" if self.kind is Kind.CSR else path)
+        return self._group
+
+    def remember(self, key: str, read: Callable[[], T]) -> T:
+        """`read()`, once per target: what two rules read about it is read once."""
+        if key not in self._read:
+            self._read[key] = read()
+        value: T = self._read[key]
+        return value
 
     @cached_property
     def analyses(self) -> AnalysesTable:
