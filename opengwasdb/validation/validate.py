@@ -6,7 +6,7 @@ import json
 import numbers
 import os
 import sqlite3
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -83,6 +83,17 @@ from opengwasdb.store.open import (
     zarr_format_for_version,
 )
 from opengwasdb.top_hits import threshold_key, z_critical
+from opengwasdb.validation.rule import (
+    Check,
+    Finding,
+    Kind,
+    Rule,
+    Severity,
+    Target,
+    ValidationOptions,
+    ValidationResult,
+    check_registry,
+)
 from opengwasdb.validation.sample_size import validate_n_plan, validate_ragged_n
 from opengwasdb.variants import (
     VariantAxis,
@@ -98,18 +109,6 @@ from opengwasdb.variants import (
 )
 
 
-@dataclass(frozen=True)
-class ValidationResult:
-    """Validation outcome with actionable error strings."""
-
-    errors: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-
-    @property
-    def ok(self) -> bool:
-        return not self.errors
-
-
 def validate_store(
     path: str | Path,
     source: str | Path | Sequence[str | Path] | None = None,
@@ -118,56 +117,275 @@ def validate_store(
     fidelity_seed: int = 0,
     source_assembly: str | None = None,
     chain_file: str | Path | None = None,
+    rules: Collection[str] | None = None,
 ) -> ValidationResult:
-    """Validate a Store Release directory.
+    """Validate a Store Release directory by running every Validation Rule that applies.
 
     Internal (structural) validation is always run.  When ``source`` is given —
     the original dataset the store was built from — a **source-fidelity** check
     is also run for dense stores: a random sample of source associations is
     compared against the store, orienting through the stored source-ALID
     provenance (or, for lifted stores, via liftover).
+
+    ``rules`` runs only the named rules and the rules they run after; a name no
+    rule has is refused before anything is read.
+    """
+    if rules is not None:
+        _selected(RULES, rules)
+    options = ValidationOptions(
+        source, fidelity_samples, fidelity_seed, source_assembly, chain_file
+    )
+    errors: list[str] = []
+    store = _load_manifest(Path(path), errors)
+    if store is None:
+        return ValidationResult(
+            findings=tuple(Finding(MANIFEST_RULE, Severity.ERROR, e, ".") for e in errors)
+        )
+    return evaluate(RULES, release_targets(store, options), rules)
+
+
+def release_targets(store: OpenGWASDBStore, options: ValidationOptions) -> list[Target]:
+    """The targets one Store Release is judged as."""
+    return [Target(Kind.RELEASE, ".", store, options=options)]
+
+
+#: How a rule ended on one target, as the rules that run after it see it.
+_PASSED, _FAILED, _SKIPPED = "passed", "failed", "skipped"
+
+
+def evaluate(
+    rules: Sequence[Rule],
+    targets: Sequence[Target],
+    selection: Collection[str] | None = None,
+) -> ValidationResult:
+    """Run `rules` over `targets` in registration order; report findings in that order.
+
+    A rule runs on each target it applies to unless a prerequisite failed or was
+    skipped there; a skip is recorded, not reported. An exception in one rule is
+    that rule's failure and no other's.
+    """
+    run = _Run(targets)
+    chosen = _selected(rules, selection)
+    for rule in rules:
+        if rule.name in chosen:
+            run.judge(rule)
+    ordered = tuple(
+        f for rule in rules for i in range(len(targets)) for f in run.found.get((rule.name, i), ())
+    )
+    return ValidationResult(ordered, {name: tuple(b) for name, b in run.skipped.items()})
+
+
+class _Run:
+    """What one run has decided so far: each rule's state and findings on each target."""
+
+    def __init__(self, targets: Sequence[Target]) -> None:
+        self.targets = targets
+        self.position = {id(target): i for i, target in enumerate(targets)}
+        self.states: dict[tuple[str, int], str] = {}
+        self.found: dict[tuple[str, int], list[Finding]] = {}
+        self.skipped: dict[str, list[str]] = {}
+
+    def judge(self, rule: Rule) -> None:
+        for i, target in enumerate(self.targets):
+            if not rule.applies_to(target):
+                continue
+            blockers = _blockers(rule, target, self.states, self.position)
+            if blockers:
+                self.skip(rule.name, i, blockers)
+                continue
+            findings = _contained(rule, target)
+            self.found[(rule.name, i)] = findings
+            failed = any(f.severity is Severity.ERROR for f in findings)
+            self.states[(rule.name, i)] = _FAILED if failed else _PASSED
+
+    def skip(self, name: str, i: int, blockers: list[str]) -> None:
+        self.states[(name, i)] = _SKIPPED
+        held = self.skipped.setdefault(name, [])
+        held.extend(b for b in blockers if b not in held)
+
+
+def _blockers(
+    rule: Rule, target: Target, states: dict[tuple[str, int], str], position: dict[int, int]
+) -> list[str]:
+    """The prerequisites of `rule` that did not pass on `target` or a target it belongs to."""
+    blockers = []
+    for name in rule.after:
+        owner: Target | None = target
+        while owner is not None:
+            state = states.get((name, position.get(id(owner), -1)))
+            if state is not None:
+                if state != _PASSED:
+                    blockers.append(name)
+                break
+            owner = owner.parent
+    return blockers
+
+
+def _contained(rule: Rule, target: Target) -> list[Finding]:
+    """`rule`'s findings on `target`, ending with its failure if it raised.
+
+    An exception says nothing about any other rule, so it fails this one alone; the
+    findings the rule made before it are kept.
+    """
+    found: list[Finding] = []
+    try:
+        found.extend(rule.findings(target))
+    except Exception as exc:  # noqa: BLE001
+        found.append(rule.finding(target, f"validation failed: {exc}", Severity.ERROR))
+    return found
+
+
+def _selected(rules: Sequence[Rule], selection: Collection[str] | None) -> set[str]:
+    """The names to run: everything, or `selection` and every rule it runs after."""
+    by_name = {rule.name: rule for rule in rules}
+    if selection is None:
+        return set(by_name)
+    unknown = sorted(set(selection) - by_name.keys())
+    if unknown:
+        raise ValueError(f"no validation rule is named {', '.join(map(repr, unknown))}")
+    chosen: set[str] = set()
+    pending = list(selection)
+    while pending:
+        name = pending.pop()
+        if name not in chosen:
+            chosen.add(name)
+            pending.extend(by_name[name].after)
+    return chosen
+
+
+# --- the orchestrators rules replace, each run whole until its checks move out ---
+
+#: The rule a release that cannot be opened fails: nothing else can be targeted.
+MANIFEST_RULE = "manifest.loads"
+
+
+@dataclass(frozen=True, kw_only=True)
+class _Legacy(Rule):
+    """A per-layout orchestrator from before rules had names, run as one rule.
+
+    Each is deleted as the checks it runs move into rules of their own.
     """
 
-    store_path = Path(path)
+    run: Callable[[Target, list[str], list[str]], None]
+
+    def findings(self, target: Target) -> Iterator[Finding]:
+        errors: list[str] = []
+        warnings: list[str] = []
+        try:
+            self.run(target, errors, warnings)
+        finally:
+            # Yielded on the way out of an exception too: what the orchestrator
+            # found before it failed is reported ahead of the failure.
+            yield from (self.finding(target, m, Severity.ERROR) for m in errors)
+            yield from (self.finding(target, m, Severity.WARNING) for m in warnings)
+
+
+def _is(layout: PrimaryStorageLayout) -> Callable[[Target], bool]:
+    return lambda target: target.layout is layout
+
+
+def _not_dense(target: Target) -> bool:
+    return target.layout is not PrimaryStorageLayout.DENSE
+
+
+def _source_given(target: Target) -> bool:
+    return target.options.source is not None
+
+
+def _legacy_zarr_format(target: Target) -> list[str]:
     errors: list[str] = []
+    store = target.store
+    _validate_zarr_format(store.data_path, store.manifest.format_version, errors, label="data.zarr")
+    return errors
+
+
+def _legacy_infinite_se(target: Target) -> list[str]:
     warnings: list[str] = []
-    store = _load_manifest(store_path, errors)
-    if store is None:
-        return ValidationResult(errors=errors)
-    manifest = store.manifest
-    _validate_zarr_format(
-        store.data_path, manifest.format_version, errors, label="data.zarr"
+    _warn_about_infinite_ragged_se(target.store, warnings)
+    return warnings
+
+
+def _legacy_ragged(target: Target, errors: list[str], _warnings: list[str]) -> None:
+    _validate_ragged_store(target.store, errors)
+
+
+def _legacy_hybrid(target: Target, errors: list[str], warnings: list[str]) -> None:
+    _validate_nested_component_format(target.store.path, errors)
+    _validate_hybrid_store(target.store, errors, warnings)
+
+
+def _legacy_dense(target: Target, errors: list[str], warnings: list[str]) -> None:
+    _validate_dense_store(target.store, errors, warnings)
+
+
+def _legacy_eaf_orientation(target: Target, errors: list[str], warnings: list[str]) -> None:
+    _validate_eaf_orientation(target.store, errors, warnings)
+
+
+def _fidelity_unsupported(_target: Target) -> list[str]:
+    return ["source-fidelity check is only supported for dense stores"]
+
+
+def _legacy_fidelity(target: Target) -> list[str]:
+    errors: list[str] = []
+    options = target.options
+    assert options.source is not None
+    _validate_source_fidelity(
+        target.store,
+        options.source,
+        errors,
+        n_samples=options.fidelity_samples,
+        seed=options.fidelity_seed,
+        source_assembly=options.source_assembly,
+        chain_file=options.chain_file,
     )
-    _warn_about_infinite_ragged_se(store, warnings)
+    return errors
 
-    if manifest.primary_layout is PrimaryStorageLayout.RAGGED:
-        _validate_ragged_store(store, errors)
-        _validate_eaf_orientation(store, errors, warnings)
-        if source is not None:
-            errors.append("source-fidelity check is only supported for dense stores")
-        return ValidationResult(errors=errors, warnings=warnings)
 
-    if manifest.primary_layout is PrimaryStorageLayout.HYBRID:
-        _validate_nested_component_format(store_path, errors)
-        warnings.extend(_validate_hybrid_store(store, errors).warnings)
-        _validate_eaf_orientation(store, errors, warnings)
-        if source is not None:
-            errors.append("source-fidelity check is only supported for dense stores")
-        return ValidationResult(errors=errors, warnings=warnings)
-
-    warnings.extend(_validate_dense_store(store, errors).warnings)
-    _validate_eaf_orientation(store, errors, warnings)
-    if source is not None and not errors:
-        _validate_source_fidelity(
-            store,
-            source,
-            errors,
-            n_samples=fidelity_samples,
-            seed=fidelity_seed,
-            source_assembly=source_assembly,
-            chain_file=chain_file,
-        )
-    return ValidationResult(errors=errors, warnings=warnings)
+RULES: tuple[Rule, ...] = check_registry(
+    [
+        Check(name=MANIFEST_RULE, kinds=Kind.RELEASE, run=lambda _target: ()),
+        Check(name="legacy.zarr_format", kinds=Kind.RELEASE, run=_legacy_zarr_format),
+        Check(
+            name="legacy.infinite_se",
+            kinds=Kind.RELEASE,
+            severity=Severity.WARNING,
+            run=_legacy_infinite_se,
+        ),
+        _Legacy(
+            name="legacy.ragged",
+            kinds=Kind.RELEASE,
+            when=_is(PrimaryStorageLayout.RAGGED),
+            run=_legacy_ragged,
+        ),
+        _Legacy(
+            name="legacy.hybrid",
+            kinds=Kind.RELEASE,
+            when=_is(PrimaryStorageLayout.HYBRID),
+            run=_legacy_hybrid,
+        ),
+        _Legacy(
+            name="legacy.dense",
+            kinds=Kind.RELEASE,
+            when=_is(PrimaryStorageLayout.DENSE),
+            run=_legacy_dense,
+        ),
+        _Legacy(name="legacy.eaf_orientation", kinds=Kind.RELEASE, run=_legacy_eaf_orientation),
+        Check(
+            name="legacy.fidelity_unsupported",
+            kinds=Kind.RELEASE,
+            when=lambda target: _source_given(target) and _not_dense(target),
+            run=_fidelity_unsupported,
+        ),
+        Check(
+            name="legacy.fidelity",
+            kinds=Kind.RELEASE,
+            when=lambda target: _source_given(target) and not _not_dense(target),
+            after=("legacy.zarr_format", "legacy.dense", "legacy.eaf_orientation"),
+            run=_legacy_fidelity,
+        ),
+    ]
+)
 
 
 # --- an infinite se is a value: reported, never a failure (issues #337, #338) ---
@@ -883,64 +1101,65 @@ def _hybrid_outer_recordings(
 
 
 def _validate_dense_store(
-    store: OpenGWASDBStore, errors: list[str], *, envelope: frozenset[str] = DENSE_ENVELOPE
-) -> ValidationResult:
+    store: OpenGWASDBStore,
+    errors: list[str],
+    warnings: list[str],
+    *,
+    envelope: frozenset[str] = DENSE_ENVELOPE,
+) -> None:
     """Validate a Dense Store Release (spec §3) in fail-safe seams.
 
     ``_validate_dense_store`` is a thin orchestrator: the envelope first, then the
-    guarded metadata/array seams once their reads are safe. Its warnings come back in
-    the result, which is how a Hybrid's Dense Component reaches the caller (#337).
+    guarded metadata/array seams once their reads are safe. Its warnings go to the
+    caller's list, which is how a Hybrid's Dense Component's reach the release (#337).
+    An exception is reported by the rule that runs this, after whatever was found
+    before it.
     """
-    warnings: list[str] = []
     label = _DENSE_SE_LABELS.get(envelope, "data.zarr/se")
     if not _validate_dense_envelope(store, envelope, errors):
-        return ValidationResult(errors=errors)
+        return
     manifest = store.manifest
     _require_layout_coverage(manifest, errors)
-    try:
-        with store.index_connection() as connection:
-            variant_axis = VariantAxis(store.path, connection)
-            try:
-                n_variants = _validate_variant_axis(variant_axis, errors)
-                _validate_sqlite(connection, n_variants, errors)
-            finally:
-                variant_axis.close()
-            n_analyses = _validate_analyses_tsv(store.analyses_path, errors)
-            root = store.arrays(mode="r")
-            imputed_arr = None
-            on_panel_arr = None
-            if manifest.completion_state is CompletionState.REFERENCE_COMPLETED:
-                imputed_arr, on_panel_arr = _validate_completion_metadata(
-                    root, connection, store.analyses_path, n_variants, n_analyses, errors
-                )
-            _validate_encoding_plan(root, manifest.encoding, errors, label="data.zarr")
-            if not errors:
-                _validate_dense_arrays(
-                    root,
-                    n_variants,
-                    n_analyses,
-                    errors,
-                    manifest.encoding,
-                    imputed_arr,
-                    on_panel_arr,
-                    store.analyses_path, warnings, label,
-                )
-            if not errors:
-                _validate_top_hits(root, errors, manifest.encoding)
-            if not errors:
-                _validate_rho(root, n_analyses, errors)
-            # After the shape seam, so a plane that does not span the axis is
-            # named as such rather than only as a layout disagreement (#245).
-            _validate_recorded_layout(manifest, connection, root, errors)
-            # The optional indexed-subset namespace (ADR 0061, #264).  A release
-            # without it stays valid and unchanged; a release with it must hold
-            # only published, self-consistent, value-equal subsets.
-            validate_indexed_subsets(
-                store.path, root, manifest, n_variants, n_analyses, errors
+    with store.index_connection() as connection:
+        variant_axis = VariantAxis(store.path, connection)
+        try:
+            n_variants = _validate_variant_axis(variant_axis, errors)
+            _validate_sqlite(connection, n_variants, errors)
+        finally:
+            variant_axis.close()
+        n_analyses = _validate_analyses_tsv(store.analyses_path, errors)
+        root = store.arrays(mode="r")
+        imputed_arr = None
+        on_panel_arr = None
+        if manifest.completion_state is CompletionState.REFERENCE_COMPLETED:
+            imputed_arr, on_panel_arr = _validate_completion_metadata(
+                root, connection, store.analyses_path, n_variants, n_analyses, errors
             )
-    except Exception as exc:  # noqa: BLE001 - validators should report actionable failures
-        errors.append(f"validation failed: {exc}")
-    return ValidationResult(errors=errors, warnings=warnings)
+        _validate_encoding_plan(root, manifest.encoding, errors, label="data.zarr")
+        if not errors:
+            _validate_dense_arrays(
+                root,
+                n_variants,
+                n_analyses,
+                errors,
+                manifest.encoding,
+                imputed_arr,
+                on_panel_arr,
+                store.analyses_path, warnings, label,
+            )
+        if not errors:
+            _validate_top_hits(root, errors, manifest.encoding)
+        if not errors:
+            _validate_rho(root, n_analyses, errors)
+        # After the shape seam, so a plane that does not span the axis is
+        # named as such rather than only as a layout disagreement (#245).
+        _validate_recorded_layout(manifest, connection, root, errors)
+        # The optional indexed-subset namespace (ADR 0061, #264).  A release
+        # without it stays valid and unchanged; a release with it must hold
+        # only published, self-consistent, value-equal subsets.
+        validate_indexed_subsets(
+            store.path, root, manifest, n_variants, n_analyses, errors
+        )
 
 
 def _validate_completion_metadata(
@@ -1848,7 +2067,7 @@ def _validate_variant_index_ordering(
             return
 
 
-def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> ValidationResult:
+def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> None:
     """Validate a Ragged Store Release (spec §11, §15, §17) in fail-safe seams.
 
     ``_validate_ragged_store`` is a thin orchestrator over five seams -- the
@@ -1856,25 +2075,22 @@ def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
     metadata, then completion and the Top-Hit Indexes (issue #130). Each seam
     stops the pipeline when a later seam would read what it guards, so a
     malformed release is reported where it first goes wrong rather than as a
-    crash in a later read.
+    crash in a later read. An exception is reported by the rule that runs this,
+    after whatever was found before it.
     """
     if not _validate_ragged_envelope(store, errors):
-        return ValidationResult(errors=errors)
-    try:
-        ragged_path = store.data_path / "ragged"
-        root = open_group(ragged_path)
-        csr = _validate_ragged_csr_structure(root, store.manifest.encoding, errors)
-        if csr is None:
-            return ValidationResult(errors=errors)
-        n_assoc, n_analyses_csr = csr
-        if not _validate_ragged_csr_values(root, store.manifest.encoding, n_assoc, errors):
-            return ValidationResult(errors=errors)
-        _validate_ragged_analyses(store, n_analyses_csr, errors)
-        validate_ragged_n(store, root, store.manifest.encoding, errors)
-        _validate_ragged_downstream_seams(store, ragged_path, n_assoc, n_analyses_csr, errors)
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"validation failed: {exc}")
-    return ValidationResult(errors=errors)
+        return
+    ragged_path = store.data_path / "ragged"
+    root = open_group(ragged_path)
+    csr = _validate_ragged_csr_structure(root, store.manifest.encoding, errors)
+    if csr is None:
+        return
+    n_assoc, n_analyses_csr = csr
+    if not _validate_ragged_csr_values(root, store.manifest.encoding, n_assoc, errors):
+        return
+    _validate_ragged_analyses(store, n_analyses_csr, errors)
+    validate_ragged_n(store, root, store.manifest.encoding, errors)
+    _validate_ragged_downstream_seams(store, ragged_path, n_assoc, n_analyses_csr, errors)
 
 
 def _validate_ragged_imputed_mask(
@@ -2112,19 +2328,39 @@ def _require_layout_coverage(manifest: Any, errors: list[str]) -> None:
         )
 
 
-def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> ValidationResult:
+def _validate_hybrid_store(
+    store: OpenGWASDBStore, errors: list[str], warnings: list[str]
+) -> None:
     """Validate a Hybrid store (ADR 0026 / issue 059).
 
     Reuses the dense component validator on ``<store>/dense`` and adds only the
     hybrid-specific invariants: the shared union table covers both components, the
     on-panel/off-panel partition is disjoint, and the overflow is observed-only.
     """
-    store_path = store.path
-    manifest = store.manifest
-    _require_layout_coverage(manifest, errors)
+    _require_layout_coverage(store.manifest, errors)
+    _hybrid_envelope(store, errors)
+    if errors:
+        return
+    dense_store = _hybrid_dense_component(store, errors)
+    if dense_store is None:
+        return
+    before = len(errors)
+    # The component's warnings are this release's warnings: an infinite `se` cell in
+    # its Dense Component is the same finding as one in a standalone Dense release
+    # (issues #337, #338).
+    _validate_dense_store(dense_store, errors, warnings, envelope=HYBRID_DENSE_COMPONENT_ENVELOPE)
+    if len(errors) > before:
+        return
+    # The outer recordings must describe the component just validated.
+    _validate_hybrid_recordings(store, dense_store, errors)
+    if not errors:
+        _validate_hybrid_outer(store, errors)
 
+
+def _hybrid_envelope(store: OpenGWASDBStore, errors: list[str]) -> None:
+    """A Hybrid release's required entries are present, and nothing else is."""
+    store_path = store.path
     dense_dir = dense_component_path(store_path)
-    ragged_path = store_path / "data.zarr" / "ragged"
     for label, p in [
         ("dense/ (Dense Component)", dense_dir),
         ("dense/manifest.json", dense_dir / "manifest.json"),
@@ -2134,48 +2370,39 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
         ("variants.tsv.gz.tbi", variant_tabix_path(store_path)),
         ("variant_alid_bytes.npy", variant_alid_bytes_path(store_path)),
         ("variant_alid_rows.npy", variant_alid_rows_path(store_path)),
-        ("data.zarr/ragged (Ragged Overflow)", ragged_path),
+        ("data.zarr/ragged (Ragged Overflow)", store_path / "data.zarr" / "ragged"),
     ]:
         if not p.exists():
             errors.append(f"missing {label}")
     _validate_closed_envelope(store_path, HYBRID_ENVELOPE, errors)
-    if errors:
-        return ValidationResult(errors=errors)
 
-    # 1. Dense Component — reuse the dense validator unchanged, but with the
-    #    Dense Component's own envelope (it additionally carries
-    #    dense_to_shared.npy, which a standalone Dense release never does).
-    dense_store = _load_manifest(dense_dir, errors)
+
+def _hybrid_dense_component(
+    store: OpenGWASDBStore, errors: list[str]
+) -> OpenGWASDBStore | None:
+    """The Dense Component, opened, Dense, and under the release's plan; else None."""
+    dense_store = _load_manifest(dense_component_path(store.path), errors)
     if dense_store is None:
-        return ValidationResult(errors=errors)
+        return None
     if dense_store.manifest.primary_layout is not PrimaryStorageLayout.DENSE:
         errors.append(
             f"Dense Component manifest must be primary_layout=dense "
             f"(got {dense_store.manifest.primary_layout.value})"
         )
-        return ValidationResult(errors=errors)
+        return None
     # One plan for both components (issue #119): they partition one Analysis's
     # associations, so a result assembled from both is only coherent if they were
     # encoded the same way, and nothing but this check couples the two manifests.
-    encoding_error = _component_encoding_error(dense_store, manifest.encoding)
+    encoding_error = _component_encoding_error(dense_store, store.manifest.encoding)
     if encoding_error is not None:
         errors.append(encoding_error)
-        return ValidationResult(errors=errors)
-    before = len(errors)
-    # The component's warnings are this release's warnings: an infinite `se` cell in
-    # its Dense Component is the same finding as one in a standalone Dense release
-    # (issues #337, #338), and it reaches the caller only through this result.
-    warnings = _validate_dense_store(
-        dense_store, errors, envelope=HYBRID_DENSE_COMPONENT_ENVELOPE
-    ).warnings
-    if len(errors) > before:
-        return ValidationResult(errors=errors, warnings=warnings)
-    # 1b. The outer recordings must describe the component just validated.
-    _validate_hybrid_recordings(store, dense_store, errors)
-    if errors:
-        return ValidationResult(errors=errors, warnings=warnings)
+        return None
+    return dense_store
 
-    # 2. Shared union table structural checks.
+
+def _validate_hybrid_outer(store: OpenGWASDBStore, errors: list[str]) -> None:
+    """The shared table, the Overflow, the cross-component invariants, its top hits."""
+    store_path = store.path
     try:
         with store.index_connection() as connection:
             variant_axis = VariantAxis(store_path, connection)
@@ -2186,24 +2413,19 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
                 variant_axis.close()
     except Exception as exc:  # noqa: BLE001
         errors.append(f"hybrid shared-table validation failed: {exc}")
-        return ValidationResult(errors=errors, warnings=warnings)
+        return
     if errors:
-        return ValidationResult(errors=errors, warnings=warnings)
-
-    # 3. Ragged Overflow structural checks + observed-only invariant.
-    _validate_overflow(store_path, ragged_path, n_shared, errors, manifest.encoding)
+        return
+    ragged_path = store_path / "data.zarr" / "ragged"
+    _validate_overflow(store_path, ragged_path, n_shared, errors, store.manifest.encoding)
     if errors:
-        return ValidationResult(errors=errors, warnings=warnings)
-    # 4. Hybrid cross-component invariants (coverage + disjoint partition).
-    _validate_hybrid_invariants(store_path, dense_dir, n_shared, errors)
+        return
+    _validate_hybrid_invariants(store_path, dense_component_path(store_path), n_shared, errors)
     if errors:
-        return ValidationResult(errors=errors, warnings=warnings)
-
-    # 5. Overflow top-hit addressing and CSR consistency.
+        return
     data_root = store.arrays(mode="r")
     if top_hits.has_index(data_root):
         _validate_ragged_top_hits(store_path, data_root, errors)
-    return ValidationResult(errors=errors, warnings=warnings)
 
 
 def _component_encoding_error(
