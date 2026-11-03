@@ -97,7 +97,7 @@ The owner's rulings on the unifications, issue #56:
 | | Unification | Published Stores |
 |---|---|---|
 | O1 | Ragged SSF takes the GWAS-SSF reader's rsid rule: the first of `rsid` and `variant_id` that is an rs identifier | OGS-00006 gains 21 rsids; none is lost or replaced. OGS-00007 is unchanged |
-| O2 | Ragged SSF takes the reader's effect and SE rules (`odds_ratio`, signed z, CI and p recovery) and its refusals | 0 of 58,257,233 rows change; 0 of 1,410 files are refused |
+| O2 | Ragged SSF takes the reader's effect and SE rules (`odds_ratio`, signed z, CI and p recovery) and its refusals | 0 of OGS-00006's and -07's 58,257,233 rows change; 0 of their 1,410 files are refused |
 | O3 | Ragged SSF refuses a declared build other than GRCh38; it lifts nothing | 0 of 1,410 manifest rows |
 | O4 | Ragged BESD orients in the declared assembly and re-orients after the lift | 0 bytes |
 | O5 | The two `.esi` lifts stay until routing owns them | none |
@@ -119,8 +119,27 @@ The owner's rulings on the unifications, issue #56:
   read every chromosome.
 - The Ragged BESD build reads each probe's `.besd` slice by seeking instead
   of loading the whole file.
+- A BESD reader opened lifted keeps both orientations. Its variants,
+  associations and batches stay in the file set's declared assembly; its
+  metric blocks and sites come from the file set lifted onto the reference
+  build. Each projection's z is therefore on the A1 of the alleles it reports.
+  The resolver reads only the lifted metric blocks, and no builder opens a
+  BESD reader lifted.
 - `build-dense`'s record reader (`build.source`) is not yet a registered
-  reader. It orients through the module, but it refuses an unreadable row
+  reader, though it orients through the module. It refuses an unreadable row
   where every registered reader drops one, and it carries per-row Analysis
-  metadata. Registering it is a decision about those semantics, left to a
-  later change.
+  metadata. An adapter that keeps both is possible, but it is out of this
+  change's scope; a follow-up owns that second parse path.
+- A Ragged SSF build costs more per row. The GWAS-SSF reader's row parser
+  applies every rule the old Ragged parser skipped. It was timed on one of
+  OGS-00006's 1,400 sources, GCST90199621.filtered.tsv.gz, with 77,825 rows
+  (the largest, GCST90200541, has 7,036,338). There it takes 9.3 µs a row
+  against the old parser's 4.6 µs (2.0×). The whole per-Analysis read loop,
+  from parsing to the duplicate rule, takes 11.3 µs against 7.6 µs (1.48×).
+  These figures are the median of four interleaved pairs, one process each,
+  best of seven reads. Over OGS-00006's 58,054,430 rows, those 3.67 µs a row
+  are about 213 s of the 271 s by which its build grew (774 s to 1,045 s).
+  The parser is most of the cost. A column-projected batch scan, like the
+  resolver's metrics projection, is the follow-up that would recover it. The
+  same reader's association stream, which Dense and Hybrid GWAS-SSF builds
+  read, got faster.

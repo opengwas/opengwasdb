@@ -10,8 +10,9 @@
     its new name. `readers.tabular.extract_at_sites`, `stream_associations`,
     `stream_variants`, `metrics_chunks_from_rows` and `MetricsChunk` still
     import from there.
-  - `is_palindromic` moves to `opengwasdb.readers.orientation`; `opengwasdb.readers`
-    still exports it, and `opengwasdb.readers.gwas_vcf` no longer does.
+  - `is_palindromic` is defined in `opengwasdb.readers.orientation`, and now
+    compares the alleles as `identity_allele` spells them.
+    `opengwasdb.readers` and `opengwasdb.readers.gwas_vcf` still provide it.
   - `SourceSpec.stored_effect_scale` may be `None`, for a BESD probe only.
   - A caller of `assign_from_source` that passes `liftover` for a capability
     that cannot lift is refused, where the lift used to be silently ignored.
