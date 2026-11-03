@@ -152,8 +152,9 @@ def test_a_hybrid_record_is_the_same_at_one_and_two_workers(tmp_path: Path):
 
     record = admission_record_for(one) / "admission.json"
     written = json.loads(record.read_text(encoding="utf-8"))
-    # Fixture first: every Analysis dropped rows, so equal records are not two
-    # records of nothing.
+    # Fixture first: the record names all three Analyses, and each dropped rows,
+    # so equal records are not two records of nothing.
+    assert [a["analysis_id"] for a in written["analyses"]] == ["GCST_A", "GCST_B", "GCST_C"]
     assert all(a["dropped"].get("info_below_threshold", 0) > 0 for a in written["analyses"])
     assert record.read_bytes() == (admission_record_for(two) / "admission.json").read_bytes()
 
