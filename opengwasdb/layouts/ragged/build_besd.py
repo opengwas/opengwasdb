@@ -918,7 +918,7 @@ def _add_empty_analysis(csr: RaggedCSRWriter) -> None:
     csr.add_analysis(
         np.empty(0, dtype=np.int32),
         np.empty(0, dtype=np.float32),
-        np.empty(0, dtype=np.float16),
+        np.empty(0, dtype=np.float32),
     )
 
 

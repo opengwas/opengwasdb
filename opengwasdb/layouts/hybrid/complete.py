@@ -445,7 +445,7 @@ def _remapped_analysis_arrays(
     empty: tuple[np.ndarray, np.ndarray, np.ndarray, None] = (
         np.empty(0, dtype=np.int32),
         np.empty(0, dtype=np.float32),
-        np.empty(0, dtype=np.float16),
+        np.empty(0, dtype=np.float32),
         None,
     )
     if e == s:

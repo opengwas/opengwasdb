@@ -107,6 +107,20 @@ def _positions_for(mask: np.ndarray, positions: PositionSource, *, what: str) ->
     return np.asarray(resolved[mask], dtype=np.int64)
 
 
+def se_float16(values: np.ndarray) -> np.ndarray:
+    """SEs as a `float16` SE plane holds them: the one place an SE is narrowed.
+
+    Rounded to nearest; an SE above 65,504 becomes `+inf` and stays an
+    association (spec §15, issue #337). The plane's writers, its byte
+    measurement and the Dense build's rounding of the SEs it holds exactly
+    (issue #355) all come through here, so a plane cannot be measured under
+    one rounding and written under another.
+    """
+    with np.errstate(over="ignore"):
+        narrowed: np.ndarray = np.asarray(values).astype(np.float16)
+    return narrowed
+
+
 def se_residual_codes(
     values: np.ndarray, residual: np.ndarray, step: float
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -947,10 +961,7 @@ class StoreCodec:
     ) -> np.ndarray:
         v = np.asarray(values, dtype=np.float64)
         if not self.encoding.se.is_residual:
-            # An SE above 65,504 is stored as +inf, and stays an association
-            # (spec §15, issue #337).
-            with np.errstate(over="ignore"):
-                return v.astype(np.float16)
+            return se_float16(v)
         prediction = self._se_prediction(eaf, analysis_index, coefficients)
         if prediction.shape != v.shape:
             raise ValueError(f"EAF shape {prediction.shape} does not match se shape {v.shape}")

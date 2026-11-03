@@ -40,6 +40,7 @@ from opengwasdb.encoding import (
     ZOverflowTable,
     per_variant_chunk_size,
 )
+from opengwasdb.encoding.codec import se_float16
 from opengwasdb.index.sqlite import get_metadata
 from opengwasdb.layouts.dense.indexed_subsets import validate_indexed_subsets
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
@@ -4368,7 +4369,7 @@ def _compare_fidelity_cells(
             continue
         n_compared += 1
         z_ref = float(codec.quantise_z(np.array([z_src]))[0])
-        se_ref = float(np.float16(se_src))
+        se_ref = float(se_float16(np.array([se_src]))[0])
         if not (
             np.isclose(sz, z_ref, rtol=_FIDELITY_RTOL, atol=_FIDELITY_ATOL)
             and np.isclose(sse, se_ref, rtol=_FIDELITY_RTOL, atol=_FIDELITY_ATOL)

@@ -651,7 +651,7 @@ def _encode_ssf_csr(
 def _add_empty_analysis(csr: RaggedCSRWriter) -> None:
     """An analysis with no associations still occupies its CSR slot."""
     csr.add_analysis(
-        np.empty(0, np.int32), np.empty(0, np.float32), np.empty(0, np.float16)
+        np.empty(0, np.int32), np.empty(0, np.float32), np.empty(0, np.float32)
     )
 
 

@@ -21,6 +21,7 @@ from opengwasdb.encoding.codec import (
     StoreCodec,
     positions_flat,
     positions_row_band,
+    se_float16,
     se_residual_codes,
 )
 from opengwasdb.encoding.measure import packed_chunk_bytes, solve_log_se
@@ -407,7 +408,7 @@ def _measure_one_band(r0: int) -> _BandMeasurement:
     with _optional_phase(ctx.timer, "measure.float16"):
         float_bytes = _band_chunk_bytes(
             ctx.compressor,
-            values.astype(np.float16),
+            se_float16(values),
             ctx.row_chunk,
             ctx.col_chunk,
             ctx.float16_fill,
@@ -605,7 +606,7 @@ def _measure_overflow_band(start: int) -> _BandMeasurement:
     # default fill), so every edge chunk -- the final one of a length that does
     # not divide the chunk -- is padded with 0 before it is compressed. Charged
     # through the shared `packed_chunk_bytes` (issue #158).
-    float_bytes = packed_chunk_bytes(ctx.compressor, se.astype(np.float16), (ctx.chunk,), 0)
+    float_bytes = packed_chunk_bytes(ctx.compressor, se_float16(se), (ctx.chunk,), 0)
     code_bytes: dict[float, int] = {}
     exceptions: dict[float, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     for candidate in SE_RANGE_CANDIDATES:
@@ -1650,7 +1651,7 @@ def _narrow_dense_se_to_float16(group: Any, timer: PhaseTimer | None = None) -> 
         with _optional_phase(timer, "rewrite.narrow"):
             for index, r0 in enumerate(starts, start=1):
                 r1 = min(r0 + row_chunk, n_rows)
-                pending[r0:r1] = np.asarray(source[r0:r1], dtype=np.float16)
+                pending[r0:r1] = se_float16(source[r0:r1])
                 log_progress(
                     log,
                     "SE float16 narrowing",

@@ -50,6 +50,7 @@ from opengwasdb.encoding import (
     write_eaf_baseline,
 )
 from opengwasdb.encoding.association_codec import CellValues, log_se_out_of_range, storable
+from opengwasdb.encoding.codec import se_float16
 from opengwasdb.encoding.timing import log_phase
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.build_manifest import (
@@ -1206,7 +1207,7 @@ class _LoadedZeColumn:
 
 
 def _load_z_column(
-    spill_dir: Path, n_variants: int, n_analyses: int, codec: StoreCodec, dtype: str, c: int
+    spill_dir: Path, n_variants: int, n_analyses: int, codec: StoreCodec, c: int
 ) -> _LoadedZeColumn:
     """Load one Analysis's spill and encode/harvest it, in a worker.
 
@@ -1232,7 +1233,9 @@ def _load_z_column(
         if np.any(hit):
             hit_rows = rows[hit]
             hit_z = zc[hit]
-            hit_se = data["se"][hit].astype(dtype).astype(np.float32)
+            # As the band pass holds it (`_load_se_column`); a residual plan's
+            # index re-reads its SE through the plane once the plan exists.
+            hit_se = se_float16(data["se"][hit]).astype(np.float32)
         else:
             hit_rows = np.empty(0, dtype=np.int64)
             hit_z = np.empty(0, dtype=np.float32)
@@ -1249,12 +1252,10 @@ def _load_z_column(
         )
 
 
-def _load_sparse_column(
-    spill_dir: Path, n_variants: int, key: str, dtype: str, c: int
-) -> np.ndarray:
-    """Scatter one spilled array onto a missing-filled ``n_variants`` column."""
+def _load_sparse_column(spill_dir: Path, n_variants: int, key: str, c: int) -> np.ndarray:
+    """Scatter one spilled array onto a missing-filled float32 ``n_variants`` column."""
     with np.load(spill_dir / f"{c}.npz") as data:
-        column = np.full(n_variants, np.nan, dtype=dtype)
+        column = np.full(n_variants, np.nan, dtype=np.float32)
         column[data["rows"]] = data[key]
         return column
 
@@ -1267,15 +1268,21 @@ class _LoadedColumn:
     column: np.ndarray
 
 
-def _load_se_column(spill_dir: Path, n_variants: int, dtype: str, c: int) -> _LoadedColumn:
-    return _LoadedColumn(
-        col=c, column=_load_sparse_column(spill_dir, n_variants, "se", dtype, c)
-    )
+def _load_se_column(spill_dir: Path, n_variants: int, c: int) -> _LoadedColumn:
+    """One Analysis's SE column, rounded to `float16` before the float32 scratch holds it.
+
+    The rounding reaches every SE the plane keeps exactly, so a residual plan's
+    exception table holds `float16`-rounded values, not the source's (issue
+    #355, which fixes it; spec §6a promises the source's). It is kept here, in
+    the open, so the Stores this build writes stay byte-identical until then.
+    """
+    column = _load_sparse_column(spill_dir, n_variants, "se", c)
+    return _LoadedColumn(col=c, column=se_float16(column))
 
 
 def _load_eaf_column(spill_dir: Path, n_variants: int, c: int) -> _LoadedColumn:
     return _LoadedColumn(
-        col=c, column=_load_sparse_column(spill_dir, n_variants, "eaf", "float32", c)
+        col=c, column=_load_sparse_column(spill_dir, n_variants, "eaf", c)
     )
 
 
@@ -1395,7 +1402,7 @@ def _write_dense_z_bands(
         band_cols,
         n_workers,
     )
-    loader = partial(_load_z_column, spill_dir, n_variants, n_analyses, codec, dtype)
+    loader = partial(_load_z_column, spill_dir, n_variants, n_analyses, codec)
     with log_phase(log, "Band-write z"):
         for c, loaded, flush in _ordered_bands(
             loader, n_analyses, n_workers, n_variants, band_cols, codec.z_dtype, "z"
@@ -1432,7 +1439,7 @@ def _write_dense_se_bands(
     them in Analysis order so the written band is the serial one.
     """
     se_arr = root["se"]
-    loader = partial(_load_se_column, spill_dir, n_variants, dtype)
+    loader = partial(_load_se_column, spill_dir, n_variants)
     with log_phase(log, "Band-write se"):
         for _c, _loaded, flush in _ordered_bands(
             loader, n_analyses, n_workers, n_variants, band_cols, dtype, "se"
