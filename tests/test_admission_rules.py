@@ -219,3 +219,12 @@ def test_a_row_with_no_effect_is_dropped_after_the_se_rule_and_logged():
         ("1:100:A:G", Reason.EFFECT_MISSING),
         ("1:101:A:G", Reason.SE_UNUSABLE),
     ]
+
+
+def test_a_completion_candidate_is_admissible_only_with_finite_z_and_positive_se():
+    from opengwasdb.admission.cells import admissible
+
+    z = np.array([1.0, np.nan, np.inf, 2.0, 2.0, 2.0])
+    se = np.array([0.1, 0.1, 0.1, 0.0, -0.1, np.nan])
+
+    assert admissible(z, se).tolist() == [True, False, False, False, False, False]
