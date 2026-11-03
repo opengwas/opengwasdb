@@ -101,9 +101,13 @@ def test_an_infinite_beta_is_z_nonfinite_in_gwas_ssf(tmp_path: Path, through_map
 
 def test_an_infinite_beta_stays_absent_in_the_resolver_s_metrics(tmp_path: Path):
     """The metrics projections read an infinite beta as absent, as before: the
-    resolver estimates nothing from it."""
+    resolver estimates nothing from it. The full-row parser they are checked
+    against agrees, though the association stream keeps the beta."""
+    from opengwasdb.readers.gwas_ssf import stream_full_row_metrics
+
     source = _gwas_ssf(tmp_path / "ssf.tsv", BETAS)
 
     betas = [row.beta for row in GwasSsfReader(source).stream_metrics()]
 
     assert betas == [None, None, None, 0.2]
+    assert [row.beta for row in stream_full_row_metrics(source)] == betas

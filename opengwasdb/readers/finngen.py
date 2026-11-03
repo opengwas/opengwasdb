@@ -68,7 +68,6 @@ def _iter_rows(
             orientation = orient_or_drop(chromosome, row.get("pos"), alt, ref, faults)
             if orientation is None or ref is None or alt is None:
                 continue
-            beta = row.get("beta")
             yield tabular.TabularRow(
                 chromosome=orientation.variant.chromosome,
                 position=orientation.variant.position,
@@ -76,12 +75,10 @@ def _iter_rows(
                 alt=alt,
                 alid=orientation.variant.alid,
                 flipped=orientation.flipped,
-                beta=tabular.parse_finite_float(beta),
+                beta=tabular.parse_effect(row.get("beta")),
                 se=tabular.parse_positive_float(row.get("sebeta")),
                 af_alt=tabular.parse_af(row.get("af_alt"), frequencies),
                 rsid=_first_rsid(row.get("rsids")),
-                reference=interface.ReferenceAllele.REF,
-                infinite_effect=tabular.is_infinite(beta),
             )
 
 
@@ -223,7 +220,10 @@ class FinnGenR13Reader:
         self, tally: interface.StreamTally | None = None
     ) -> Iterator[ReaderAssociation]:
         rows = _iter_rows(self.path, tally)
-        yield from tabular.stream_associations(rows, self.stored_effect_scale)
+        # FinnGen's `ref` is the GRCh38 reference allele.
+        yield from tabular.stream_associations(
+            rows, self.stored_effect_scale, interface.ReferenceAllele.REF
+        )
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         yield from _iter_variants(self.path)

@@ -67,8 +67,9 @@ from __future__ import annotations
 import csv
 import gzip
 import io
+import math
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO
 
@@ -102,8 +103,8 @@ from opengwasdb.readers.tabular import (
     TabularSource,
     VariantProjectionColumns,
     extract_at_sites,
-    is_infinite,
     parse_af,
+    parse_effect,
     parse_finite_float,
     require_signed_z_score,
     resolve_imputation_score_column,
@@ -212,7 +213,6 @@ def _tabular_row(
     score_column: str | None = None,
     frequencies: FrequencyTally | None = None,
     faults: IdentityFaults | None = None,
-    reference: ReferenceAllele = ReferenceAllele.UNDECLARED,
 ) -> TabularRow | None:
     """One source row as a `TabularRow`, or `None` when it names no canonical variant.
 
@@ -237,6 +237,9 @@ def _tabular_row(
     if ori is None or effect_allele is None or other_allele is None:
         return None
     statistics = _row_statistics(row, source, sample_size_column)
+    beta = statistics.beta
+    if beta is None:
+        beta = _infinite_effect(row, source)
     return TabularRow(
         chromosome=ori.variant.chromosome,
         position=ori.variant.position,
@@ -244,7 +247,7 @@ def _tabular_row(
         ref=other_allele,
         alt=effect_allele,
         flipped=ori.flipped,
-        beta=statistics.beta,
+        beta=beta,
         se=statistics.se,
         af_alt=parse_af(row.get("effect_allele_frequency"), frequencies),
         rsid=_rsid(row.get("rsid"), row.get("variant_id")),
@@ -255,23 +258,26 @@ def _tabular_row(
         effect_from_odds_ratio_fallback=statistics.effect_from_odds_ratio_fallback,
         se_from_ci=statistics.se_from_ci,
         se_from_p_value=statistics.se_from_p_value,
-        reference=reference,
-        infinite_effect=statistics.beta is None and _reports_infinite_effect(row, source),
     )
 
 
-def _reports_infinite_effect(row: dict[str, str], source: EffectSource | None) -> bool:
-    """Whether the row's effect columns report an infinite value, not none (D4).
+def _infinite_effect(row: dict[str, str], source: EffectSource | None) -> float | None:
+    """The infinite effect a row with no usable one reports, if any (D4).
 
     `row_statistics` reads an infinite effect as unusable, which the metrics
-    projections need; the association stream keeps it infinite, so Admission
-    drops the row as `z_nonfinite`. A z-score row derives its SE from the z, so
-    an infinite z leaves it no SE, and `se_unusable` comes first.
+    projections need; the full-row parser keeps it, so the association's z is
+    infinite and Admission drops the row as `z_nonfinite`. A z-score row
+    derives its SE from the z, so an infinite z leaves it no SE, and
+    `se_unusable` comes first.
     """
     if source is None:
-        return False
-    columns = (source.column_name, source.fallback_column_name)
-    return any(is_infinite(row.get(column)) for column in columns if column)
+        return None
+    for column in (source.column_name, source.fallback_column_name):
+        if column:
+            effect = parse_effect(row.get(column))
+            if effect is not None and math.isinf(effect):
+                return effect
+    return None
 
 
 def _sample_size_column(
@@ -313,15 +319,13 @@ def _iter_rows(
     effect_source: EffectSource | None = None,
     score_column: str | None = None,
     tally: StreamTally | None = None,
-    reference: ReferenceAllele = ReferenceAllele.UNDECLARED,
 ) -> Iterator[TabularRow]:
     """Parse each row of a filtered/harmonised GWAS-SSF file once.
 
     `effect_source` is the caller's resolution for this file, so the property
     and the stream cannot disagree; when omitted it is resolved here, which is
     what keeps `stream_full_row_metrics` a faithful reference for the
-    projection's effect handling. `reference` is what every row declares of
-    its alleles.
+    projection's effect handling.
     """
     with _open_text(path) as fh:
         reader = csv.DictReader(fh, delimiter="\t")
@@ -332,7 +336,7 @@ def _iter_rows(
         faults, frequencies = tally.faults, tally.frequencies
         for row in reader:
             parsed = _tabular_row(
-                row, source, sample_size_column, score_column, frequencies, faults, reference
+                row, source, sample_size_column, score_column, frequencies, faults
             )
             if parsed is not None:
                 yield parsed
@@ -383,9 +387,12 @@ def stream_full_row_metrics(path: str | Path) -> Iterator[TabularMetricsRow]:
     field for field on the same file -- the arrangement
     `stream_full_row_variants` provides for the variant projection. A
     `TabularRow` *is* a `TabularMetricsRow`; it adds only the identifier this
-    seam never reads.
+    seam never reads. Its infinite beta, which the association stream keeps
+    (D4), is absent here, as the projections read it.
     """
-    yield from _iter_rows(path)
+    for row in _iter_rows(path):
+        infinite = row.beta is not None and math.isinf(row.beta)
+        yield replace(row, beta=None) if infinite else row
 
 
 @dataclass(frozen=True)
@@ -458,9 +465,9 @@ class GwasSsfReader:
                 effect_source=source,
                 score_column=self.imputation_score_column,
                 tally=tally,
-                reference=self.reference,
             ),
             self.stored_effect_scale,
+            self.reference,
         )
 
     def stream_variants(self) -> Iterator[SourceVariant]:
