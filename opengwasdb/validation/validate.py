@@ -11,11 +11,9 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.associations import Cells, DenseGridReader, Tally
+from opengwasdb.associations import Cells, DenseGridReader
 from opengwasdb.associations import present as present_cells
-from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.encoding import (
-    RaggedSePlane,
     StoreCodec,
     StoreEncoding,
 )
@@ -26,7 +24,6 @@ from opengwasdb.model.analyses import (
     read_analyses,
 )
 from opengwasdb.model.enums import (
-    CompletionState,
     PrimaryStorageLayout,
 )
 from opengwasdb.store.arrays import (
@@ -35,7 +32,6 @@ from opengwasdb.store.arrays import (
     ArrayRole,
     array_length,
     inner_chunk_of,
-    open_group,
     shard_layout,
 )
 from opengwasdb.store.open import (
@@ -68,14 +64,12 @@ from opengwasdb.validation.rules import sequence as sequence_rules
 from opengwasdb.validation.rules import side_tables as side_table_rules
 from opengwasdb.validation.rules import top_hits as top_hit_rules
 from opengwasdb.validation.rules import variants as variant_rules
-from opengwasdb.validation.rules.associations import DECODABLE, grid_counts
-from opengwasdb.validation.rules.csr import ARRAYS, LENGTHS
+from opengwasdb.validation.rules.associations import grid_counts
 from opengwasdb.validation.rules.encoding import PLAN
 from opengwasdb.validation.rules.hybrid import DENSE_TO_SHARED
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.rules.variants import representative_variant_indices
 from opengwasdb.validation.run import evaluate, selected
-from opengwasdb.validation.scans import sequence_offsets
 from opengwasdb.variants import (
     VariantAxis,
     variant_table_path,
@@ -181,20 +175,10 @@ def _source_given(target: Target) -> bool:
     return target.options.source is not None
 
 
-def _legacy_ragged_completion(target: Target, errors: list[str], _warnings: list[str]) -> None:
-    store = target.store
-    offsets = sequence_offsets(target)
-    _validate_ragged_completion(
-        store.data_path / "ragged", store, int(offsets[-1]), len(offsets) - 1, errors
-    )
 
 
 def _legacy_hybrid(target: Target, errors: list[str], _warnings: list[str]) -> None:
     _validate_hybrid_store(target.store, errors)
-
-
-def _legacy_dense_completion(target: Target, errors: list[str], _warnings: list[str]) -> None:
-    _dense_completion(target, errors)
 
 
 def _legacy_rho(target: Target, errors: list[str], _warnings: list[str]) -> None:
@@ -207,10 +191,6 @@ def _legacy_dense_layout(target: Target, errors: list[str], _warnings: list[str]
 
 def _legacy_overflow(target: Target, errors: list[str], _warnings: list[str]) -> None:
     _overflow(target, errors)
-
-
-def _completed(target: Target) -> bool:
-    return target.store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
 
 
 def _top_level_dense_grid(target: Target) -> bool:
@@ -237,8 +217,6 @@ def _legacy_fidelity(target: Target) -> list[str]:
     return errors
 
 
-_DENSE_COMPLETION = "legacy.dense_completion"
-_RAGGED_COMPLETION = "legacy.ragged_completion"
 
 #: Every rule about a sequence's own arrays and values: the by_variant and Top-Hit
 #: cross-checks read the sequence, and would "confirm" one these found broken.
@@ -283,20 +261,7 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
     *top_hit_rules.STRUCTURE_RULES,
     *top_hit_rules.VALUE_RULES,
     by_variant_rules.SAMPLE,
-    _Legacy(
-        name=_RAGGED_COMPLETION,
-        kinds=Kind.CSR,
-        when=lambda target: _is(PrimaryStorageLayout.RAGGED)(target) and _completed(target),
-        after=(ARRAYS, LENGTHS, *PLAN, DECODABLE),
-        run=_legacy_ragged_completion,
-    ),
-    _Legacy(
-        name=_DENSE_COMPLETION,
-        kinds=Kind.GRID,
-        when=_completed,
-        after=(REQUIRED,),
-        run=_legacy_dense_completion,
-    ),
+    *completion_rules.METADATA_RULES,
     _Legacy(name="legacy.rho", kinds=Kind.GRID, after=(REQUIRED,), run=_legacy_rho),
     _Legacy(
         name="legacy.dense_layout", kinds=Kind.GRID, after=(REQUIRED,), run=_legacy_dense_layout
@@ -749,15 +714,6 @@ def _hybrid_outer_recordings(
     return recorded
 
 
-def _dense_completion(target: Target, errors: list[str]) -> None:
-    """A Reference-Completed grid's completion metadata."""
-    store = target.store
-    with store.index_connection() as connection:
-        _validate_completion_metadata(
-            connection, store.analyses_path, grid_counts(target)[1], errors
-        )
-
-
 def _dense_rho(target: Target, errors: list[str]) -> None:
     """The optional Rho Matrix against `analyses.tsv`."""
     _validate_rho(target.group, grid_counts(target)[1], errors)
@@ -787,157 +743,6 @@ def _overflow(target: Target, errors: list[str]) -> None:
         store.path, dense_component_path(store.path), dense_to_shared, len(dense_to_shared), errors
     )
 
-
-def _validate_completion_metadata(
-    connection: sqlite3.Connection, analyses_path: Path, n_analyses: int, errors: list[str]
-) -> None:
-    """A Reference-Completed Dense store's completion metadata beside its arrays.
-
-    The `completion_quality` table and the `completion_n_missing_total` column; the
-    mask and panel flags are `completion.mask`, and what they hold is judged by
-    the completion rules over the band scan.
-    """
-    _validate_completion_quality_table(connection, n_analyses, errors)
-    analyses_cols = set(read_analyses(analyses_path).fieldnames)
-    if "completion_n_missing_total" not in analyses_cols:
-        errors.append(
-            "analyses.tsv is missing completion_n_missing_total for a reference-completed store"
-        )
-
-
-def _validate_completion_quality_table(
-    connection: sqlite3.Connection, n_analyses: int, errors: list[str]
-) -> None:
-    """Seam: the completion_quality table exists, is complete, and is in range.
-
-    ``completion_quality.analysis_index`` is a positional reference into
-    analyses.tsv, not a SQL foreign key (ADR 0030 consequences) -- this is the
-    validator rule that decision says must stand in for the database engine's
-    constraint, and it is shared by Dense and Ragged Reference-Completed
-    stores so a quality row can never describe an Analysis that does not exist.
-    """
-    tables = {
-        r[0]
-        for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-    }
-    if "completion_quality" not in tables:
-        errors.append(
-            "index.sqlite is missing the completion_quality table for a reference-completed store"
-        )
-        return
-    cols = {
-        r[1] for r in connection.execute("PRAGMA table_info(completion_quality)").fetchall()
-    }
-    required = COMPLETION_QUALITY_COLUMNS
-    missing_cols = required - cols
-    if missing_cols:
-        errors.append(
-            f"completion_quality table is missing columns: {', '.join(sorted(missing_cols))}"
-        )
-        return
-    out_of_range = connection.execute(
-        "SELECT COUNT(*) FROM completion_quality "
-        "WHERE analysis_index < 0 OR analysis_index >= ?",
-        (n_analyses,),
-    ).fetchone()[0]
-    if out_of_range:
-        errors.append(
-            f"completion_quality has {out_of_range} row(s) with analysis_index "
-            f"outside analyses.tsv's range [0, {n_analyses})"
-        )
-
-
-def _decoded_csr_se(root: Any, encoding: StoreEncoding, n_assoc: int, label: str) -> Any:
-    """Decoded CSR SE, or the reason it cannot be decoded.
-
-    A residual plane needs its coefficients, its side table and a decodable EAF
-    for every predicted cell. When one of those is wrong the codec raises, and
-    validation must report that as a finding about the release rather than
-    letting it escape as a traceback from `validate_store`.
-    """
-    try:
-        return RaggedSePlane.open(root, encoding).slice(0, n_assoc), None
-    except ValueError as exc:
-        return None, f"{label} cannot be decoded under the declared plan: {exc}"
-
-
-def _validate_ragged_imputed_mask(
-    root: Any, n_assoc: int, errors: list[str]
-) -> np.ndarray | None:
-    """Seam: the loaded Ragged imputed mask, or ``None`` when it cannot be used.
-
-    A missing array or a length that disagrees with the CSR offsets stops the
-    completion seam; a mask holding values other than 0/1 records its error but
-    still comes back so the missingness cross-checks can report what the mask
-    declares.
-    """
-    if "imputed" not in root:
-        errors.append("reference-completed store is missing data.zarr/ragged/imputed")
-        return None
-    imp: np.ndarray = root["imputed"][:]
-    if len(imp) != n_assoc:
-        errors.append(
-            f"data.zarr/ragged/imputed has {len(imp)} entries but offsets imply {n_assoc}"
-        )
-        return None
-    if not np.all((imp == 0) | (imp == 1)):
-        errors.append("data.zarr/ragged/imputed contains values other than 0 and 1")
-    return imp
-
-
-def _validate_ragged_imputed_missingness(
-    root: Any, encoding: StoreEncoding, imp: np.ndarray, n_assoc: int, errors: list[str]
-) -> None:
-    """Seam: what an imputed=1 row declares about the row's z and se.
-
-    Imputed rows carry both z and se (spec §15, ADR 0070). "Present" is the
-    complement of the plane's own missing marker, not ``isfinite`` of a float:
-    an integer plane holds no NaN to test for, and an infinite SE is a value.
-    Whether z and se agree with each other is checked on every Ragged
-    component, completed or not (`associations.markers_paired`).
-    """
-    codec = StoreCodec(encoding)
-    z_missing = codec.missing_mask(root["z"][:])
-    se_vals, se_error = _decoded_csr_se(root, encoding, n_assoc, "data.zarr/ragged/se")
-    if se_error is not None:
-        errors.append(se_error)
-        return
-    tally = Tally.of(z_missing, np.isnan(se_vals), imp)
-    if tally.imputed_z_missing:
-        errors.append("imputed=1 rows have missing z-scores")
-    if tally.imputed_se_missing:
-        errors.append("imputed=1 rows have NaN se values")
-    if tally.imputed_z_missing:
-        errors.append("missing z rows have imputed=1 (inconsistent)")
-
-
-def _validate_ragged_imputed(
-    root: Any, encoding: StoreEncoding, n_assoc: int, errors: list[str]
-) -> bool:
-    """Seam: the Ragged imputed mask and the missingness it declares.
-
-    Returns False when the mask cannot be used, stopping the pipeline.
-    """
-    imp = _validate_ragged_imputed_mask(root, n_assoc, errors)
-    if imp is None:
-        return False
-    _validate_ragged_imputed_missingness(root, encoding, imp, n_assoc, errors)
-    return True
-
-
-def _validate_ragged_completion(
-    ragged_path: Path,
-    store: OpenGWASDBStore,
-    n_assoc: int,
-    n_analyses_csr: int,
-    errors: list[str],
-) -> None:
-    """Validate the imputed mask and completion_quality table in a Reference-Completed store."""
-    root = open_group(ragged_path)
-    if not _validate_ragged_imputed(root, store.manifest.encoding, n_assoc, errors):
-        return
-    with store.index_connection() as conn:
-        _validate_completion_quality_table(conn, n_analyses_csr, errors)
 
 
 def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> None:

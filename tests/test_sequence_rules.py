@@ -17,9 +17,9 @@ import pytest
 import residual_stores
 import zarr
 from store_reads import element_reads, times_read
-from test_ragged_residual_completion import build_residual_ssf_source
+from test_ragged_residual_completion import RaggedResidualScenario, build_residual_ssf_source
 
-from opengwasdb.encoding import SE_EXCEPTION, SeExceptionTable
+from opengwasdb.encoding import SE_EXCEPTION, Z_MISSING, SeExceptionTable
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.scans import analyses_of
@@ -73,6 +73,69 @@ def test_the_value_rules_read_a_sequence_once(
     assert {name: times_read(counts, group[name]) for name in planes} == dict.fromkeys(
         planes, 1.0
     )
+
+
+#: The rules about a completed sequence's mask, over the same windows.
+COMPLETION_RULES = {"completion.mask", "completion.mask_binary", "completion.imputed_present"}
+
+
+def test_a_completed_sequence_reads_its_mask_with_its_planes_once(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mask is read once, with the planes, for the frequency substitution and the
+    completion rules alike; SE is decoded once, not again to check the mask."""
+    completed = RaggedResidualScenario(tmp_path_factory)
+    assert completed.result.n_imputed > 0, "the fixture must hold imputed cells"
+    store = completed.completed
+    group = open_store(store).arrays(mode="r")["ragged"]
+    planes = ("z", "se", "eaf", "imputed", "variant_index", "eaf_baseline", "eaf_reference")
+    assert all(name in group for name in planes), "the fixture must carry every plane"
+
+    with element_reads(monkeypatch) as counts:
+        result = validate_store(store, rules=SEQUENCE_RULES | COMPLETION_RULES)
+
+    assert result.ok, result.errors
+    assert not result.skipped, result.skipped
+    assert {name: times_read(counts, group[name]) for name in planes} == dict.fromkeys(
+        planes, 1.0
+    )
+
+
+def test_a_sequence_mask_flagging_a_missing_cell_fails_the_completion_rule(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """A mask that flags a missing association is the completion rule's, on a sequence
+    as on a grid, in the words a sequence has always used."""
+    store = RaggedResidualScenario(tmp_path_factory).completed
+    group = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="r+")
+    z_missing = np.asarray(group["z"][:]) == Z_MISSING
+    imputed = np.asarray(group["imputed"][:])
+    candidates = np.flatnonzero(z_missing & (imputed == 0))
+    assert len(candidates), "the fixture must hold a missing association"
+    cell = int(candidates[0])
+    group["imputed"][cell] = 1
+    _flag_in_the_variant_index(group, cell)
+
+    result = validate_store(store)
+
+    assert result.failed() == {"completion.imputed_present"}, result.errors
+    assert result.errors == [
+        "imputed=1 rows have missing z-scores",
+        "imputed=1 rows have NaN se values",
+        "missing z rows have imputed=1 (inconsistent)",
+    ]
+
+
+def _flag_in_the_variant_index(group: zarr.Group, cell: int) -> None:
+    """Flag the same association imputed in the variant index, so the two copies agree."""
+    offsets = np.asarray(group["offsets"][:])
+    analysis = int(np.searchsorted(offsets, cell, side="right")) - 1
+    variant = int(group["variant_index"][cell])
+    index = group["by_variant"]
+    lo, hi = (int(x) for x in index["offsets"][variant : variant + 2])
+    rows = np.flatnonzero(np.asarray(index["analysis_index"][lo:hi]) == analysis)
+    assert len(rows) == 1, "the association must have one row in the variant index"
+    index["imputed"][lo + int(rows[0])] = 1
 
 
 def test_the_value_rules_read_an_overflow_once(
