@@ -38,6 +38,7 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
     packed_alids,
     packed_fields,
 )
+from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.variants.routing import SitePlacement, place_sites
 
 __all__ = [
@@ -295,10 +296,9 @@ def _string_hashes(strings: Sequence[str]) -> np.ndarray:
 
 
 def _canonical_source_key(key: str) -> str:
-    """The ALID a source key names before any liftover (alleles sorted)."""
+    """The ALID a source key names before any liftover (`canonical_alid`)."""
     chrom, position, ref, alt = key.split(":")
-    a1, a2 = sorted((ref, alt))
-    return f"{chrom}:{int(position)}:{a1}:{a2}"
+    return canonical_alid(chrom, int(position), ref, alt)
 
 
 def _hashed_raw_list(queries: np.ndarray, merged: DistinctKeys) -> list[str]:

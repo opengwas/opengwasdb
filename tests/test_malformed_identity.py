@@ -32,6 +32,7 @@ from opengwasdb.variants.normalise import (
     IdentityFaults,
     InvalidAllele,
     MissingChromosome,
+    allele_fault,
     identity_fault,
     normalise_allele,
     normalise_chromosome,
@@ -78,6 +79,14 @@ def test_an_alt_or_random_contig_is_a_chromosome(contig: str, name: str):
 def test_an_allele_outside_the_alphabet_is_invalid(allele: str):
     with pytest.raises(InvalidAllele):
         normalise_allele(allele)
+
+
+def test_a_lower_case_base_is_in_the_alphabet():
+    """#360 upper-cases an allele before identity, and the rule judges that."""
+    assert allele_fault("a", "g") is None
+    assert allele_fault("acgt", "T") is None
+    assert identity_fault("1", "a", "G") is None
+    assert isinstance(allele_fault("a", "n"), InvalidAllele)
 
 
 def test_a_malformed_identity_is_judged_before_the_rest_of_the_row():

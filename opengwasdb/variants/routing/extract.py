@@ -24,6 +24,7 @@ import shutil
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -33,9 +34,10 @@ from opengwasdb.build.liftover import LiftoverFailureError, lifted_rows
 from opengwasdb.build.ordered_pool import fork_pool
 from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.variants.axis import alid_sort_key
-from opengwasdb.variants.normalise import chromosome_sort_key
+from opengwasdb.variants.normalise import canonical_alid, chromosome_sort_key
 from opengwasdb.variants.reference import ARTIFACT_HEADER, artifact_line
-from opengwasdb.variants.routing.keys import SourceKey
+from opengwasdb.variants.routing.keys import SourceKey, routing_key
+from opengwasdb.variants.routing.lift import cross_assembly_collisions, log_cross_assembly_drop
 from opengwasdb.variants.routing.union import (
     Pass1Stats,
     ReaderFactory,
@@ -312,8 +314,7 @@ def _stream_window_artifact(task: tuple[WindowKey, str, str]) -> _WindowArtifact
     source_keys_by_alid: dict[str, list[str]] = {}
     n_source_keys = 0
     for (chrom, pos, ref, alt), rsid in iter_shard(Path(shard_path)):
-        a1, a2 = sorted((ref, alt))
-        alid = f"{chrom}:{pos}:{a1}:{a2}"
+        alid = canonical_alid(chrom, pos, ref, alt)
         if rsid and alid not in rsid_by_alid:
             rsid_by_alid[alid] = rsid
         source_keys_by_alid.setdefault(alid, []).append(f"{chrom}:{pos}:{ref}:{alt}")
@@ -452,12 +453,13 @@ def _bucket_lifted_records(
 ) -> tuple[dict[WindowKey, list[str]], int]:
     """Drop cross-assembly ambiguous tuples, then bucket survivors by post-lift window.
 
-    A raw tuple in the hg38 group that also successfully lifted from hg19 is
-    dropped from both: because a raw tuple fixes its pre-lift window, the union
-    of these window-local intersections is exactly the global rule (issue #197).
-    Returns the buckets and the number of dropped tuples.
+    The union's rule, `cross_assembly_collisions`, over the hg38 group and the
+    hg19 sites that lifted: every spelling of an identity both declare is
+    dropped from both. A routing key fixes its pre-lift window, so the union
+    of these window-local rulings is exactly the global one (issue #197).
+    Returns the buckets and the number of identities both groups declared.
     """
-    collisions = hg38_records.keys() & lifted.keys()
+    n_tuples, collisions = _colliding_sites(hg38_records.keys(), lifted.keys())
     buckets: dict[WindowKey, list[str]] = {}
     for site, (rank, rsid) in hg38_records.items():
         if site in collisions:
@@ -473,7 +475,20 @@ def _bucket_lifted_records(
         buckets.setdefault(window_key(post_chrom, int(post_pos), size_bp), []).append(
             _lifted_line(rank, site, post_chrom, int(post_pos), rsid)
         )
-    return buckets, len(collisions)
+    return buckets, n_tuples
+
+
+def _colliding_sites(
+    hg38: AbstractSet[SourceKey], hg19: AbstractSet[SourceKey]
+) -> tuple[int, set[SourceKey]]:
+    """`cross_assembly_collisions` over one window's two groups: the number of
+    identities both declare, and every site that spells one of them."""
+    dropped = cross_assembly_collisions(hg38, hg19)
+    if not dropped:
+        return 0, set()
+    return len(dropped), {
+        site for group in (hg38, hg19) for site in group if routing_key(site) in dropped
+    }
 
 
 def _source_key_order(key: SourceKey) -> tuple[tuple[int, str], int, str, str]:
@@ -565,8 +580,7 @@ def _compress_lifted_window(task: _LiftMergeTask) -> _WindowArtifact:
     rsid_by_alid: dict[str, str] = {}
     source_keys_by_alid: dict[str, list[str]] = {}
     for _chunk, _spill, pre_chrom, pre_pos, pre_ref, pre_alt, post_chrom, post_pos, rsid in records:
-        a1, a2 = sorted((pre_ref, pre_alt))
-        alid = f"{post_chrom}:{post_pos}:{a1}:{a2}"
+        alid = canonical_alid(post_chrom, post_pos, pre_ref, pre_alt)
         if rsid and alid not in rsid_by_alid:
             rsid_by_alid[alid] = rsid
         source_keys_by_alid.setdefault(alid, []).append(
@@ -701,15 +715,7 @@ def _write_lifted_streaming_artifact(
     with tempfile.TemporaryDirectory(prefix=".variantreflift.") as work_dir:
         chain_file_str = str(chain_file) if chain_file is not None else None
         staged = _stage_all_windows(shards, size_bp, n_workers, chain_file_str, work_dir)
-        collisions = sum(stage.collisions for stage in staged)
-        if collisions:
-            log.warning(
-                "%d raw variant tuple(s) declared both hg38 and hg19 in this manifest "
-                "(same chrom/pos/ref/alt string, two different builds -> two different "
-                "physical loci) -- dropped from both rather than guessed which one owns "
-                "the stored row",
-                collisions,
-            )
+        log_cross_assembly_drop(sum(stage.collisions for stage in staged))
         _enforce_liftover_threshold(staged, liftover_failure_threshold)
         _refuse_reverse_strand_lift(staged)
         artifacts = _merge_lifted_windows(staged, n_workers, work_dir)

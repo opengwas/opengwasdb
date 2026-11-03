@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 VALID_BASES = frozenset("ACGT")
@@ -109,10 +110,58 @@ def normalise_chromosome(chromosome: str) -> str:
     return chrom
 
 
-def normalise_allele(allele: str) -> str:
-    """Upper-case and validate a simple v0.1 allele string."""
+def identity_allele(allele: str) -> str:
+    """An allele as a variant's identity is assigned from it: upper-cased (spec §4).
 
-    value = str(allele).strip().upper()
+    Bases are case-insensitive in VCF and GWAS-SSF, so ``a`` is the base ``A``.
+    Every routing key and ALID, and every choice of A1 -- which sets the sign a
+    statistic is stored with -- is made from alleles spelt this way, on every
+    build path and in extraction (issue #360). A source's own spelling is kept
+    only as provenance: a Variant Reference's source keys, and the rsid
+    harvest, which compares the names a site's spellings carry.
+
+    This is the rule. `identity_alleles` is its batch form, for Pass 2's
+    per-association keys, and `identity_base` its byte-level fast form, for a
+    reader's one-base cells; a contract test holds all three to one answer
+    over every byte an allele can hold.
+    """
+    return allele.upper()
+
+
+def identity_alleles(alleles: Iterable[str]) -> list[str]:
+    """`identity_allele` over a batch."""
+    return list(map(identity_allele, alleles))
+
+
+def identity_base(cell: bytes) -> str | None:
+    """`normalise_allele` of a cell holding one base, at byte speed, else ``None``.
+
+    The fast form of `identity_allele` for a reader's per-row hot path: the
+    mask ``0xDF`` clears ASCII's case bit, and only the ALID alphabet is
+    returned, so every other cell -- an indel, an empty cell, any other byte
+    -- is left to `normalise_allele`.
+    """
+    stripped = cell.strip()
+    if len(stripped) != 1:
+        return None
+    base = chr(stripped[0] & 0xDF)
+    return base if base in VALID_BASES else None
+
+
+def canonical_alid(chromosome: str, position: int | str, first: str, second: str) -> str:
+    """The ALID of the variant whose alleles are ``first`` and ``second``, either way round.
+
+    ``chr:pos:A1:A2``: each allele spelt as `identity_allele` spells it, A1 the
+    alphabetically first. The one place an ALID is formed from raw alleles.
+    """
+    a1, a2 = sorted((identity_allele(first), identity_allele(second)))
+    return f"{chromosome}:{position}:{a1}:{a2}"
+
+
+def normalise_allele(allele: str) -> str:
+    """Upper-case (`identity_allele`) and validate a simple v0.1 allele string."""
+
+    value = identity_allele(str(allele).strip())
     if not value:
         raise InvalidAllele("allele is missing")
     if any(base not in VALID_BASES for base in value):
@@ -123,8 +172,10 @@ def normalise_allele(allele: str) -> str:
 def allele_fault(*alleles: str | None) -> InvalidAllele | None:
     """Why the first of ``alleles`` outside the ALID alphabet is, or ``None``.
 
-    `normalise_allele`'s rule, for a reader that forms no `Orientation`; a
-    one-base cell costs a set lookup. A missing cell (``None``) is empty.
+    `normalise_allele`'s rule, for a reader that forms no `Orientation`: an
+    allele is judged as identity spells it (`identity_allele`), so ``a`` is in
+    the alphabet. A one-base cell costs a set lookup. A missing cell (``None``)
+    is empty.
     """
     for allele in alleles:
         if allele in _ONE_BASE:

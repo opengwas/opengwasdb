@@ -606,7 +606,7 @@ def test_a_hybrid_drops_an_unmatched_row_only_where_nothing_folds_it(
     from opengwasdb.model.enums import StoredEffectScale
     from opengwasdb.readers.fake import FakeReader
     from opengwasdb.readers.interface import ReaderAssociation
-    from opengwasdb.variants.routing import RouteTable, RoutingKey
+    from opengwasdb.variants.routing import RouteTable
 
     rows = [
         ReaderAssociation("1", 100, "A", "G", 2.0, 0.1, StoredEffectScale.SD),
@@ -617,7 +617,7 @@ def test_a_hybrid_drops_an_unmatched_row_only_where_nothing_folds_it(
     )
     table = RouteTable.build(
         {("1", 100, "A", "G"): "1:100:A:G"}, (), [["1:100:A:G"], ["1:100:A:G"]],
-        key=RoutingKey.CASE_FOLDED, keep_unmatched=True,
+        keep_unmatched=True,
     )
     gate = counting_gate(AnalysisRules("A"))
     row = SimpleNamespace(source=None, se_divisor=1.0, trait_id="A")

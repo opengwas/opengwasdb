@@ -189,7 +189,6 @@ from opengwasdb.variants.routing import (
     LiftedUnion,
     RoutedNames,
     RouteTable,
-    RoutingKey,
     Unmatched,
     VariantRouting,
     collapse_duplicates,
@@ -855,9 +854,9 @@ def _route(
     routing = route_variants(
         [row.source for row in manifest_rows],
         authority,
-        key=RoutingKey.CASE_FOLDED,
         on_rsid_conflict=options.on_rsid_conflict,
         n_workers=options.n_workers,
+        label="Hybrid single-pass build",
     )
     return routing, panel_alids
 
