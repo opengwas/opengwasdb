@@ -5,7 +5,7 @@ from __future__ import annotations
 import numbers
 import sqlite3
 from collections.abc import Callable, Collection, Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -16,9 +16,7 @@ from opengwasdb.associations import Cells, DenseGridReader, State, Tally, non_ca
 from opengwasdb.associations import present as present_cells
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.encoding import (
-    EAF_BASELINE,
     EAF_EXCEPTION,
-    EAF_REFERENCE,
     SE_EXCEPTION,
     Z_OVERFLOW,
     DenseEafPlane,
@@ -74,16 +72,27 @@ from opengwasdb.validation.rule import (
     check_registry,
 )
 from opengwasdb.validation.rules import analyses as analyses_rules
+from opengwasdb.validation.rules import associations as association_rules
+from opengwasdb.validation.rules import completion as completion_rules
 from opengwasdb.validation.rules import csr as csr_rules
 from opengwasdb.validation.rules import encoding as encoding_rules
 from opengwasdb.validation.rules import release as release_rules
+from opengwasdb.validation.rules import side_tables as side_table_rules
 from opengwasdb.validation.rules import variants as variant_rules
+from opengwasdb.validation.rules.associations import (
+    DECODABLE,
+    VALUES_AFTER,
+    grid_counts,
+    infinite_se_message,
+)
 from opengwasdb.validation.rules.csr import ARRAYS
 from opengwasdb.validation.rules.encoding import PLAN
 from opengwasdb.validation.rules.release import REQUIRED
+from opengwasdb.validation.rules.side_tables import positions_match
 from opengwasdb.validation.rules.variants import representative_variant_indices
 from opengwasdb.validation.run import evaluate, selected
 from opengwasdb.validation.sample_size import validate_ragged_n
+from opengwasdb.validation.scans import band_limits
 from opengwasdb.variants import (
     VariantAxis,
     variant_table_path,
@@ -207,8 +216,8 @@ def _legacy_dense_completion(target: Target, errors: list[str], _warnings: list[
     _dense_completion(target, errors)
 
 
-def _legacy_dense(target: Target, errors: list[str], warnings: list[str]) -> None:
-    _dense_values(target, errors, warnings)
+def _legacy_dense(target: Target, errors: list[str], _warnings: list[str]) -> None:
+    _dense_values(target, errors)
 
 
 def _legacy_dense_layout(target: Target, errors: list[str], _warnings: list[str]) -> None:
@@ -264,6 +273,12 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
         severity=Severity.WARNING,
         run=_legacy_infinite_se,
     ),
+    *association_rules.CHECKS,
+    *completion_rules.CHECKS,
+    *association_rules.PRESENCE_RULES,
+    *completion_rules.RULES,
+    *association_rules.EAF_RULES,
+    *side_table_rules.RULES,
     _Legacy(
         name="legacy.ragged",
         kinds=Kind.CSR,
@@ -281,7 +296,7 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
     _Legacy(
         name="legacy.dense_values",
         kinds=Kind.GRID,
-        after=(*PLAN, _DENSE_COMPLETION),
+        after=(*VALUES_AFTER, DECODABLE),
         run=_legacy_dense,
     ),
     _Legacy(
@@ -326,9 +341,6 @@ RULES: tuple[Rule, ...] = check_registry(
 
 # --- an infinite se is a value: reported, never a failure (issues #337, #338) ---
 
-#: Analyses one infinite-se warning names. The count says how much of the release is
-#: affected; five ids say where to start reading it.
-INFINITE_SE_ANALYSES_NAMED = 5
 
 def _warn_about_infinite_ragged_se(store: OpenGWASDBStore, warnings: list[str]) -> None:
     """Warn about the infinite `se` cells of every Ragged component of this release.
@@ -346,9 +358,10 @@ def _warn_about_infinite_ragged_se(store: OpenGWASDBStore, warnings: list[str]) 
     """
     try:
         for group, label in _ragged_se_planes(store):
-            _report_infinite_se(
-                warnings, label, _csr_infinite_se_counts(group), store.analyses_path
-            )
+            counts = _csr_infinite_se_counts(group)
+            message = infinite_se_message(label, counts, store.analyses_path)
+            if message is not None:
+                warnings.append(message)
     except (OSError, ValueError, KeyError, IndexError):
         # A release whose arrays cannot be read is a failure its layout's own validator
         # reports in as many words; a warning is not the place to say so twice.
@@ -383,49 +396,6 @@ def _csr_infinite_se_counts(group: Any) -> np.ndarray:
             # a position names the Analysis holding it.
             np.add.at(counts, np.searchsorted(offsets, hits, side="right") - 1, 1)
     return counts
-
-
-def _report_infinite_se(
-    warnings: list[str],
-    label: str,
-    per_analysis: np.ndarray,
-    analyses_path: Path | None,
-) -> None:
-    """Warn about one plane's infinite `se` cells, naming the count and first Analyses."""
-    total = int(per_analysis.sum())
-    if not total:
-        return
-    named = _first_infinite_analyses(per_analysis, analyses_path)
-    message = (
-        f"{total} cell(s) of {label} hold an infinite se: a source standard error above "
-        "the plane's range is stored as +inf, so beta = z * se reads as infinity although "
-        "the source value was finite (issue #338)"
-    )
-    if named:
-        message += f". The first Analyses holding one: {', '.join(map(repr, named))}"
-    warnings.append(message)
-
-
-def _first_infinite_analyses(
-    per_analysis: np.ndarray, analyses_path: Path | None
-) -> list[str]:
-    """The `analysis_id` of up to `INFINITE_SE_ANALYSES_NAMED` Analyses holding an infinite se."""
-    holding = np.flatnonzero(per_analysis)[:INFINITE_SE_ANALYSES_NAMED].tolist()
-    if not holding or analyses_path is None:
-        return []
-    ids = _analysis_ids(analyses_path)
-    return [ids[i] for i in holding if i in ids]
-
-
-def _analysis_ids(analyses_path: Path) -> dict[int, str]:
-    """`analysis_index` -> `analysis_id`, for naming an Analysis a warning is about."""
-    ids: dict[int, str] = {}
-    for row in read_analyses(analyses_path).rows:
-        try:
-            ids[int(row.get("analysis_index", ""))] = str(row.get("analysis_id", ""))
-        except ValueError:
-            continue  # a malformed row is reported by the analyses.analysis_index rule
-    return ids
 
 
 def _recorded_from_block(
@@ -839,55 +809,27 @@ def _hybrid_outer_recordings(
     return recorded
 
 
-def _dense_counts(target: Target) -> tuple[int, int]:
-    """The grid's expected shape: the variant axis's rows by `analyses.tsv`'s."""
-    store = target.store
-    n_variants = target.remember("n_variants", lambda: _n_variants(store.path))
-    n_analyses = target.remember("n_analyses", lambda: len(read_analyses(store.analyses_path).rows))
-    return n_variants, n_analyses
-
-
 def _dense_completion(target: Target, errors: list[str]) -> None:
-    """A Reference-Completed grid's mask, panel flags and completion metadata."""
+    """A Reference-Completed grid's completion metadata."""
     store = target.store
-    n_variants, n_analyses = _dense_counts(target)
     with store.index_connection() as connection:
         _validate_completion_metadata(
-            target.group, connection, store.analyses_path, n_variants, n_analyses, errors
+            connection, store.analyses_path, grid_counts(target)[1], errors
         )
 
 
-def _dense_values(target: Target, errors: list[str], warnings: list[str]) -> None:
-    """The streamed band pass, then the Top-Hit Indexes and rho against the planes.
-
-    Runs after the plan and completion rules, so every plane it decodes is the
-    shape and encoding they say.
-    """
-    store = target.store
+def _dense_values(target: Target, errors: list[str]) -> None:
+    """The Top-Hit Indexes and rho against the planes the value rules read."""
     root = target.group
-    manifest = store.manifest
-    n_variants, n_analyses = _dense_counts(target)
-    imputed_arr = on_panel = None
-    if manifest.completion_state is CompletionState.REFERENCE_COMPLETED:
-        imputed_arr = root["imputed"]
-        on_panel = target.remember("on_panel", lambda: root["on_panel"][:])
-    # A Hybrid release's Dense Component is a Dense release at `<store>/dense` (spec
-    # §16), so a warning naming plain `data.zarr` would send its reader to the wrong one.
-    label = "dense/data.zarr/se" if target.is_component else "data.zarr/se"
-    _validate_dense_arrays(
-        root, n_variants, n_analyses, errors, manifest.encoding,
-        imputed_arr, on_panel, store.analyses_path, warnings, label,
-    )
+    _validate_top_hits(root, errors, target.encoding)
     if not errors:
-        _validate_top_hits(root, errors, manifest.encoding)
-    if not errors:
-        _validate_rho(root, n_analyses, errors)
+        _validate_rho(root, grid_counts(target)[1], errors)
 
 
 def _dense_layout(target: Target, errors: list[str]) -> None:
     """The recorded layout against the planes, and any Indexed Variant Subsets."""
     store = target.store
-    n_variants, n_analyses = _dense_counts(target)
+    n_variants, n_analyses = grid_counts(target)
     # After the shape seam, so a plane that does not span the axis is named as
     # such rather than only as a layout disagreement (#245).
     with store.index_connection() as connection:
@@ -921,71 +863,20 @@ def _overflow(target: Target, errors: list[str]) -> None:
 
 
 def _validate_completion_metadata(
-    root: Any,
-    connection: sqlite3.Connection,
-    analyses_path: Path,
-    n_variants: int,
-    n_analyses: int,
-    errors: list[str],
-) -> tuple[Any, np.ndarray | None]:
-    """Validate the non-matrix completion metadata for a Reference-Completed
-    Dense store and hand back the arrays the streamed band pass needs.
+    connection: sqlite3.Connection, analyses_path: Path, n_analyses: int, errors: list[str]
+) -> None:
+    """A Reference-Completed Dense store's completion metadata beside its arrays.
 
-    The matrix-touching checks (imputed values are 0/1, imputed cells have
-    finite z/se, off-panel rows are never imputed) are *not* done here — they
-    are folded into ``_validate_dense_arrays``' row-band loop so the full
-    z/se/imputed matrices are never resident (issue 045). This function only
-    runs the cheap structural/metadata checks and returns the ``imputed`` zarr
-    array (lazy) and the fully-loaded 1-D ``on_panel`` array (~n_variants bytes)
-    for that loop. Returns ``(None, None)`` if the arrays are missing/malformed,
-    which the caller treats as a hard error and skips the band pass.
+    The `completion_quality` table and the `completion_n_missing_total` column; the
+    mask and panel flags are `completion.mask`, and what they hold is judged by
+    the completion rules over the band scan.
     """
-    imputed_arr, on_panel = _dense_completion_arrays(root, n_variants, n_analyses, errors)
-    if errors:
-        return None, None
     _validate_completion_quality_table(connection, n_analyses, errors)
     analyses_cols = set(read_analyses(analyses_path).fieldnames)
     if "completion_n_missing_total" not in analyses_cols:
         errors.append(
             "analyses.tsv is missing completion_n_missing_total for a reference-completed store"
         )
-
-    # Only hand the arrays to the band pass if they are well-formed; a shape
-    # mismatch above already recorded a hard error, so the caller skips the pass.
-    if errors:
-        return None, None
-    return imputed_arr, on_panel
-
-
-def _dense_completion_arrays(
-    root: Any, n_variants: int, n_analyses: int, errors: list[str]
-) -> tuple[Any, np.ndarray | None]:
-    """Seam: the lazy ``imputed`` array and fully-loaded ``on_panel`` vector.
-
-    ``imputed`` stays lazy and ``on_panel`` stays a 1-D array of ~n_variants
-    bytes so the band pass that consumes them never holds the full matrices
-    resident (issue 045). Missing or malformed arrays record their own errors;
-    the caller returns ``(None, None)`` for them.
-    """
-    for name in ("imputed", "on_panel"):
-        if name not in root:
-            errors.append(f"reference-completed store is missing data.zarr/{name}")
-    if errors:
-        return None, None
-
-    imputed_arr = root["imputed"]
-    expected_shape = (n_variants, n_analyses)
-    if tuple(imputed_arr.shape) != expected_shape:
-        errors.append(
-            f"data.zarr/imputed shape {tuple(imputed_arr.shape)} does not match {expected_shape}"
-        )
-
-    on_panel = root["on_panel"][:]
-    if len(on_panel) != n_variants:
-        errors.append(f"data.zarr/on_panel has {len(on_panel)} entries but expected {n_variants}")
-    if not np.all((on_panel == 0) | (on_panel == 1)):
-        errors.append("data.zarr/on_panel contains values other than 0 and 1")
-    return imputed_arr, on_panel
 
 
 def _validate_completion_quality_table(
@@ -1041,7 +932,7 @@ def _match_csr_se_exceptions(
     """
     if not encoding.se.is_residual:
         return
-    _overflow_positions_match(
+    positions_match(
         label,
         np.flatnonzero(np.asarray(root["se"][:]) == SE_EXCEPTION).astype(np.int64),
         SeExceptionTable.read(root),
@@ -1215,7 +1106,7 @@ def _validate_ragged_csr_values(
     """
     raw_z = np.asarray(root["z"][:])
     if encoding.z.is_fixed_point:
-        _overflow_positions_match(
+        positions_match(
             "data.zarr/ragged/z",
             np.flatnonzero(raw_z == Z_OVERFLOW).astype(np.int64),
             ZOverflowTable.read(root),
@@ -2132,7 +2023,7 @@ def _validate_overflow_values(
         _paired_marker_errors(raw_z, se_vals, encoding, "Ragged Overflow ")
     )
     if encoding.z.is_fixed_point:
-        _overflow_positions_match(
+        positions_match(
             "Ragged Overflow z",
             np.flatnonzero(raw_z == Z_OVERFLOW).astype(np.int64),
             ZOverflowTable.read(root),
@@ -2239,53 +2130,6 @@ def _load_manifest(store_path: Path, errors: list[str]) -> OpenGWASDBStore | Non
     return None
 
 
-# Dense validation decodes several raw, float32/float64 and boolean views of a
-# cell at once. OGS-00009/10 profiling measured at most 59 bytes per cell in
-# the Dense pass and 47 in the Top-Hit pass; the 96-byte allowance leaves 63%
-# headroom inside this one-GiB decoded working-set budget. Top-Hit Index arrays
-# retain their compact contract dtypes separately. The row cap preserves the
-# old call size for a narrow store, while the byte budget makes a wide Store's
-# band shrink instead of scaling its memory with the number of Analyses
-# (issue #254).
-_VALIDATE_BAND_ROWS = 250_000
-_DENSE_VALIDATE_WORKING_BYTES = 1024**3
-_DENSE_VALIDATE_BYTES_PER_CELL = 96
-
-
-def _dense_validation_band_rows(n_analyses: int, row_chunk: int) -> int:
-    """Rows whose decoded working set fits the Dense validation byte budget.
-
-    Whole inner chunks avoid decoding a physical chunk into two consecutive
-    bands. A single row is the irreducible minimum when an exceptionally wide
-    store exceeds the budget by itself.
-    """
-    if n_analyses <= 0:
-        return _VALIDATE_BAND_ROWS
-    budget_rows = max(
-        1,
-        _DENSE_VALIDATE_WORKING_BYTES
-        // (_DENSE_VALIDATE_BYTES_PER_CELL * n_analyses),
-    )
-    rows = min(_VALIDATE_BAND_ROWS, budget_rows)
-    if row_chunk > 0 and rows >= row_chunk:
-        rows = max(row_chunk, rows // row_chunk * row_chunk)
-    return rows
-
-
-def _dense_validation_bands(
-    n_variants: int, n_analyses: int, row_chunk: int
-) -> Iterator[tuple[int, int]]:
-    """Every Dense row band, exhaustively, under the decoded-byte budget."""
-    rows = _dense_validation_band_rows(n_analyses, row_chunk)
-    for r0 in range(0, n_variants, rows):
-        yield r0, min(r0 + rows, n_variants)
-
-
-def _dense_array_validation_bands(
-    array: Any, n_variants: int, n_analyses: int
-) -> Iterator[tuple[int, int]]:
-    """Byte-bounded bands aligned to a Dense plane's physical read unit."""
-    return _dense_validation_bands(n_variants, n_analyses, inner_chunk_of(array)[0])
 
 
 def _validate_ragged_eaf_values(
@@ -2299,7 +2143,7 @@ def _validate_ragged_eaf_values(
     """
     if encoding.eaf.is_residual:
         before = len(errors)
-        _overflow_positions_match(
+        positions_match(
             "data.zarr/ragged/eaf",
             np.flatnonzero(np.asarray(root["eaf"][:]) == EAF_EXCEPTION).astype(np.int64),
             EafExceptionTable.read(root),
@@ -2318,527 +2162,6 @@ def _validate_ragged_eaf_values(
     finite = np.isfinite(values)
     if np.any(finite & ((values < 0.0) | (values > 1.0))):
         errors.append("data.zarr/ragged/eaf contains finite values outside [0, 1]")
-
-
-def _overflow_positions_match(
-    label: str,
-    observed: np.ndarray,
-    table: ZOverflowTable | EafExceptionTable | SeExceptionTable,
-    errors: list[str],
-    *,
-    what: str = "out-of-range z",
-    table_name: str = "overflow",
-) -> None:
-    """Every side-table cell has an exact value, and nothing else does.
-
-    A plane that says "look in the table" for a cell the table does not
-    describe has lost that association outright. For `z` it would be the
-    *largest* |z| in the store -- exactly the value nothing may be quietly
-    wrong about -- and for `eaf` it is the frequency furthest from its
-    baseline, which is the rare variant a user is filtering on.
-    """
-    if np.array_equal(np.sort(observed), table.index):
-        return
-    orphan = np.setdiff1d(observed, table.index)
-    stray = np.setdiff1d(table.index, observed)
-    if len(orphan):
-        errors.append(
-            f"{label}: {len(orphan)} {what} cell(s) have no entry in the {table_name} "
-            f"table (first at flat position {int(orphan[0])})"
-        )
-    if len(stray):
-        errors.append(
-            f"{label}: {table_name} table describes {len(stray)} cell(s) that are not marked "
-            f"{what} (first at flat position {int(stray[0])})"
-        )
-
-
-def _imputed_declaration_matches_arrays(
-    analyses_path: Path,
-    imputed_per_analysis: np.ndarray,
-    errors: list[str],
-) -> None:
-    """Each Analysis holds imputed cells if and only if it says it does.
-
-    Categorical, not a count comparison: `completion_n_imputed_total` is rolled
-    up from per-block quality and the arrays hold what was actually written, so
-    the two need not agree to the cell. What they may not do is disagree about
-    *whether there are any* -- that is the shape the ancestry-match filter's
-    defect took, an Analysis carried through observed-only while its metadata
-    claimed thousands of imputed cells, and `eaf_scope` derived from the claim
-    (ADR 0028, ADR 0037 §4). #106's defect was the same disagreement one
-    granularity up.
-    """
-    for row in read_analyses(analyses_path).rows:
-        try:
-            index = int(row.get("analysis_index", ""))
-        except ValueError:
-            continue  # reported by the analyses rules
-        if not 0 <= index < len(imputed_per_analysis):
-            continue
-        try:
-            declared = int(row.get("completion_n_imputed_total", "") or 0)
-        except ValueError:
-            continue  # reported by the analyses rules
-        actual = int(imputed_per_analysis[index])
-        analysis_id = row.get("analysis_id", "")
-        if declared and not actual:
-            errors.append(
-                f"analysis {analysis_id!r} declares completion_n_imputed_total={declared} "
-                "but has no imputed=1 cell in data.zarr/imputed; the metadata describes "
-                "cells the release does not contain"
-            )
-        elif actual and not declared:
-            errors.append(
-                f"analysis {analysis_id!r} has {actual} imputed=1 cell(s) in "
-                "data.zarr/imputed but declares completion_n_imputed_total="
-                f"{row.get('completion_n_imputed_total', '')!r}; the release holds "
-                "imputed cells its metadata does not account for"
-            )
-
-
-def _validate_dense_arrays(
-    root: Any, n_variants: int, n_analyses: int, errors: list[str],
-    encoding: StoreEncoding, imputed_arr: Any = None,
-    on_panel: np.ndarray | None = None, analyses_path: Path | None = None,
-    warnings: list[str] | None = None, label: str = "data.zarr/se",
-) -> None:
-    """Stream the dense z/se (and, for a completed store, imputed) matrices in
-    row-bands and run every matrix-touching content check in one pass.
-
-    ``imputed_arr``/``on_panel`` are supplied only for Reference-Completed
-    stores (from ``_validate_completion_metadata``); when present, the imputed
-    checks that used to load the whole matrix are folded into this same band
-    loop so peak memory stays at one band rather than the full matrices
-    (issue 045). ``analyses_path`` lets the same pass answer the per-Analysis
-    question -- does each Analysis hold the imputed cells it declares? -- for
-    the cost of one ``int64`` per analysis, since the loop already reads
-    ``imputed``.
-    """
-    planes = _dense_required_planes(root, errors)
-    if planes is None:
-        return
-    z_arr, se_arr = planes
-    eaf_arr = _dense_plane_shape_errors(root, z_arr, se_arr, n_variants, n_analyses, errors)
-    _dense_eaf_side_lengths(root, n_variants, errors)
-    if errors:
-        return
-    # Opened when there is a plane to decode *or* a panel frequency to
-    # substitute: both are frequencies a query returns, so both are checked.
-    eaf_plane = (
-        DenseEafPlane.open(root, encoding)
-        if eaf_arr is not None or encoding.eaf.reference
-        else None
-    )
-    try:
-        se_plane = DenseSePlane.open(root, encoding)
-    except ValueError as exc:
-        errors.append(str(exc))
-        return
-
-    # Stream in row-bands. Missingness is read through the plane's declared
-    # missing *marker* (spec §15) -- NaN for a float plane, the reserved
-    # sentinel for an integer one -- so nothing here decodes a value it does
-    # not need, and no band is upcast.
-    codec = StoreCodec(encoding)
-    findings = _DenseBandState(n_analyses)
-    for r0, r1 in _dense_array_validation_bands(z_arr, n_variants, n_analyses):
-        if not _validate_dense_band(
-            z_arr,
-            se_arr,
-            eaf_arr,
-            se_plane,
-            codec,
-            encoding,
-            eaf_plane,
-            imputed_arr,
-            on_panel,
-            findings,
-            n_analyses,
-            r0,
-            r1,
-            errors,
-        ):
-            return
-    _report_dense_band_flags(errors, findings, warnings, analyses_path, label)
-    if imputed_arr is not None and analyses_path is not None:
-        _imputed_declaration_matches_arrays(analyses_path, findings.imputed_per_analysis, errors)
-    _report_dense_eaf_range(errors, findings)
-    _report_dense_z_overflow(root, encoding, findings, errors)
-    _report_dense_eaf_exceptions(root, encoding, eaf_plane, findings, errors)
-    _match_dense_se_exceptions(root, encoding, findings.se_exception_positions, errors)
-
-
-def _dense_required_planes(root: Any, errors: list[str]) -> tuple[Any, Any] | None:
-    """The `z` and `se` planes exist, or every missing one is named and the pass stops.
-
-    The first fail-safe guard: no check downstream means anything for a release
-    that has no plane to check, and naming *both* missing planes rather than the
-    first saves a repair-and-revalidate round trip.
-    """
-    for name in ("z", "se"):
-        if name not in root:
-            errors.append(f"missing data.zarr/{name}")
-    if errors:
-        return None
-    return root["z"], root["se"]
-
-
-def _dense_plane_shape_errors(
-    root: Any,
-    z_arr: Any,
-    se_arr: Any,
-    n_variants: int,
-    n_analyses: int,
-    errors: list[str],
-) -> Any | None:
-    """`z`/`se`/`eaf` all span exactly the (n_variants, n_analyses) matrix.
-
-    `eaf` is optional (ADR 0036) -- absent on every store built before it, and
-    on any build whose sources report no frequency -- but when present it is a
-    third parallel plane and must have the same shape as z/se. A mis-shaped one
-    is dropped here so no later seam decodes a plane that does not line up with
-    the variant/analysis axes it would be read against; its shape error is
-    already on the list, and the caller stops.
-    """
-    expected_shape = (n_variants, n_analyses)
-    if tuple(z_arr.shape) != expected_shape:
-        errors.append(f"z shape {tuple(z_arr.shape)} does not match {expected_shape}")
-    if tuple(se_arr.shape) != expected_shape:
-        errors.append(f"se shape {tuple(se_arr.shape)} does not match {expected_shape}")
-    eaf_arr = root["eaf"] if "eaf" in root else None
-    if eaf_arr is not None and tuple(eaf_arr.shape) != expected_shape:
-        errors.append(f"eaf shape {tuple(eaf_arr.shape)} does not match {expected_shape}")
-        eaf_arr = None
-    return eaf_arr
-
-
-def _dense_eaf_side_lengths(root: Any, n_variants: int, errors: list[str]) -> None:
-    """The per-variant eaf side arrays are the length of the variant axis.
-
-    Checked whether or not there is an `eaf` plane: a completed release whose
-    Analyses reported no frequency carries `eaf_reference` and nothing else,
-    and a mis-sized one there would hand every imputed cell the frequency of
-    some other variant (issue #113).
-    """
-    if EAF_BASELINE in root and array_length(root[EAF_BASELINE]) != n_variants:
-        errors.append(
-            f"{EAF_BASELINE} has {array_length(root[EAF_BASELINE])} entries but the variant axis "
-            f"has {n_variants}"
-        )
-    if EAF_REFERENCE in root and array_length(root[EAF_REFERENCE]) != n_variants:
-        errors.append(
-            f"{EAF_REFERENCE} has {array_length(root[EAF_REFERENCE])} entries but the variant axis "
-            f"has {n_variants}"
-        )
-
-
-@dataclass
-class _DenseBandState:
-    """What one streamed band pass has found so far (issue 045).
-
-    The state seam the row-band loop feeds: one field per independent flag or
-    counter, and one list per side-table whose positions the report seams
-    reconcile. Each ``_latch_*`` helper below owns exactly one field or one list,
-    so no check sets another check's flag as a side effect.
-    """
-
-    n_analyses: int
-    imputed_per_analysis: np.ndarray = field(init=False)
-    infinite_se_per_analysis: np.ndarray = field(init=False)
-    overflow_positions: list[np.ndarray] = field(default_factory=list)
-    eaf_exception_positions: list[np.ndarray] = field(default_factory=list)
-    se_exception_positions: list[np.ndarray] = field(default_factory=list)
-    eaf_undecodable: bool = False
-    neg_se: bool = False
-    missingness: bool = False
-    non_canonical: bool = False
-    imp_not_binary: bool = False
-    imp_nan_z: bool = False
-    imp_nan_se: bool = False
-    off_panel_imputed: bool = False
-    eaf_out_of_range: bool = False
-
-    def __post_init__(self) -> None:
-        self.imputed_per_analysis = np.zeros(self.n_analyses, dtype=np.int64)
-        self.infinite_se_per_analysis = np.zeros(self.n_analyses, dtype=np.int64)
-
-
-def _validate_dense_band(
-    z_arr: Any,
-    se_arr: Any,
-    eaf_arr: Any | None,
-    se_plane: DenseSePlane,
-    codec: StoreCodec,
-    encoding: StoreEncoding,
-    eaf_plane: DenseEafPlane | None,
-    imputed_arr: Any | None,
-    on_panel: np.ndarray | None,
-    findings: _DenseBandState,
-    n_analyses: int,
-    r0: int,
-    r1: int,
-    errors: list[str],
-) -> bool:
-    """One row-band of the streamed pass; False after reporting a decode failure.
-
-    Each band is sliced once per plane and handed to the flag and side-table
-    seams below. A band whose `se` cannot be decoded is a hard stop -- the
-    caller skips every report seam -- because a plane that cannot be decoded is
-    not a release to keep reading.
-    """
-    # Residual SE decodes against physical EAF. Read that expensive plane once
-    # and share it with the independent frequency-range check instead of
-    # decoding it twice for every band (issue #254).
-    eaf_band = _latch_dense_eaf_range(findings, eaf_plane, r0, r1)
-    try:
-        se_band = se_plane.band(r0, r1, eaf=eaf_band)
-    except ValueError as exc:
-        errors.append(f"cannot decode se: {exc}")
-        return False
-    z_band = z_arr[r0:r1]
-    z_missing = codec.missing_mask(z_band)
-    if encoding.z.is_fixed_point:
-        findings.overflow_positions.append(
-            _band_marked_positions(z_band, Z_OVERFLOW, r0, n_analyses)
-        )
-    if encoding.se.is_residual:
-        findings.se_exception_positions.append(
-            _band_marked_positions(se_arr[r0:r1], SE_EXCEPTION, r0, n_analyses)
-        )
-    _latch_negative_se(findings, se_band)
-    # Only a floating-point plane can hold an infinity; a residual `int8` plane's decoded
-    # values are finite by construction, so there is nothing there to count.
-    if not encoding.se.is_residual:
-        _latch_infinite_se(findings, se_band)
-    if eaf_arr is not None and encoding.eaf.is_residual:
-        findings.eaf_exception_positions.append(
-            _band_marked_positions(eaf_arr[r0:r1], EAF_EXCEPTION, r0, n_analyses)
-        )
-    imp_raw = None if imputed_arr is None else np.asarray(imputed_arr[r0:r1])
-    _latch_dense_states(findings, z_missing, se_band, imp_raw, z_band)
-    imp_mask = _count_dense_imputed(findings, imp_raw)
-    _latch_dense_off_panel_imputed(findings, on_panel, imp_mask, r0, r1)
-    return True
-
-
-def _band_marked_positions(raw: Any, marker: int, r0: int, n_analyses: int) -> np.ndarray:
-    """Flat positions of the cells equal to ``marker`` in one Dense row band."""
-    return np.flatnonzero(np.asarray(raw) == marker).astype(np.int64) + r0 * n_analyses
-
-
-def _flatten_band_positions(bands: list[np.ndarray]) -> np.ndarray:
-    """Band position lists concatenated in band order, or an empty int64 array."""
-    return np.concatenate(bands) if bands else np.empty(0, dtype=np.int64)
-
-
-def _latch_negative_se(findings: _DenseBandState, se_band: np.ndarray) -> None:
-    """Any band with a finite negative se raises the flag once; later bands skip it."""
-    if findings.neg_se:
-        return
-    findings.neg_se = bool(np.any(np.isfinite(se_band) & (se_band < 0)))
-
-
-def _latch_infinite_se(findings: _DenseBandState, se_band: np.ndarray) -> None:
-    """Count each Analysis's infinite se cells: a value, reported, never a failure.
-
-    A source SE above `float16`'s maximum is narrowed to `+inf` beside a finite Z
-    (issue #338). Spec §15 makes that cell present, so the release is valid -- but
-    `beta = z * se` reads as infinity, and nothing else in a Store says so, so it
-    is counted from the band the pass has already decoded and reported as a
-    warning (issue #337). No plane is read a second time for this: the cost is one
-    `isinf` pass over a band that is already resident, about 0.8 ns a cell.
-    """
-    findings.infinite_se_per_analysis += np.isinf(se_band).sum(axis=0, dtype=np.int64)
-
-
-def _latch_dense_states(
-    findings: _DenseBandState,
-    z_missing: np.ndarray,
-    se_band: np.ndarray,
-    imputed: np.ndarray | None,
-    z_raw: np.ndarray | None = None,
-) -> None:
-    """The band's cells under the presence rule (spec §15, ADR 0070).
-
-    Z and SE must be missing in exactly the same cells, each marker canonical;
-    the mask holds only 0 and 1; an imputed cell's Z and SE are both present. An
-    infinite SE is present, so an imputed cell holding one passes here and is
-    warned about by `_latch_infinite_se`.
-    """
-    se_missing = np.isnan(se_band)
-    odd = non_canonical(se_band, se_missing)
-    if z_raw is not None:
-        odd |= non_canonical(z_raw)
-    tally = Tally.of(z_missing, se_missing, imputed, odd)
-    findings.missingness |= tally.count(State.PARTIAL) > 0
-    findings.non_canonical |= tally.count(State.NON_CANONICAL) > 0
-    findings.imp_not_binary |= tally.flags_not_binary > 0
-    findings.imp_nan_z |= tally.imputed_z_missing > 0
-    findings.imp_nan_se |= tally.imputed_se_missing > 0
-
-
-def _latch_dense_eaf_range(
-    findings: _DenseBandState, eaf_plane: DenseEafPlane | None, r0: int, r1: int
-) -> np.ndarray | None:
-    """Decode once, latch an EAF finding, and return the block for SE reuse.
-
-    Decoded, not raw: an `int8` residual plane's bytes are codes, and checking
-    those for "in [0, 1]" would pass every store while saying nothing about
-    the frequencies a query returns. A decode that cannot resolve an exception
-    cell is not reported from here: the position check says exactly which cell
-    and why, so a band that fails to decode only sets the flag that stops
-    further decode attempts.
-    """
-    if eaf_plane is None or findings.eaf_out_of_range or findings.eaf_undecodable:
-        return None
-    try:
-        eaf = eaf_plane.band(r0, r1)
-    except ValueError:
-        findings.eaf_undecodable = True
-        return None
-    finite = np.isfinite(eaf)
-    if np.any(finite & ((eaf < 0.0) | (eaf > 1.0))):
-        findings.eaf_out_of_range = True
-    return eaf
-
-
-def _count_dense_imputed(
-    findings: _DenseBandState, imputed: np.ndarray | None
-) -> np.ndarray | None:
-    """Per band: the imputed cells, counted per Analysis, as a mask.
-
-    The counts keep accumulating whatever else the band held: they feed
-    ``_imputed_declaration_matches_arrays``, and every imputed cell has to be
-    counted.
-    """
-    if imputed is None:
-        return None
-    imp_mask: np.ndarray = imputed == 1
-    findings.imputed_per_analysis += imp_mask.sum(axis=0, dtype=np.int64)
-    return imp_mask
-
-
-def _latch_dense_off_panel_imputed(
-    findings: _DenseBandState,
-    on_panel: np.ndarray | None,
-    imp_mask: np.ndarray | None,
-    r0: int,
-    r1: int,
-) -> None:
-    """Off-panel rows can never be imputed (no LD structure)."""
-    if imp_mask is None or findings.off_panel_imputed:
-        return
-    if on_panel is None:
-        raise ValueError("imputed validation requires the on_panel array")
-    off_band = on_panel[r0:r1] == 0
-    if off_band.any() and np.any(imp_mask[off_band]):
-        findings.off_panel_imputed = True
-
-
-def _report_dense_band_flags(
-    errors: list[str],
-    findings: _DenseBandState,
-    warnings: list[str] | None,
-    analyses_path: Path | None,
-    label: str,
-) -> None:
-    """The independent value flags the band latches set, in a fixed order.
-
-    The one finding a release may keep -- an infinite `se` cell (issues #337, #338) --
-    is a warning rather than an error, appended here so the band pass reports it
-    without a second read of the plane.
-    """
-    if warnings is not None:
-        _report_infinite_se(
-            warnings, label, findings.infinite_se_per_analysis, analyses_path
-        )
-    if findings.neg_se:
-        errors.append("se contains negative finite values")
-    if findings.missingness:
-        errors.append("z and se missingness is inconsistent")
-    if findings.non_canonical:
-        errors.append(_non_canonical_message(""))
-    _report_dense_imputed_flags(errors, findings)
-
-
-def _report_dense_imputed_flags(errors: list[str], findings: _DenseBandState) -> None:
-    """The band flags about the imputed mask, in the reporter's fixed order."""
-    if findings.imp_not_binary:
-        errors.append("data.zarr/imputed contains values other than 0 and 1")
-    if findings.imp_nan_z:
-        errors.append("imputed=1 cells have missing z-scores")
-    if findings.imp_nan_se:
-        errors.append("imputed=1 cells have NaN se values")
-    if findings.off_panel_imputed:
-        errors.append(
-            "off-panel (on_panel=0) rows have imputed=1 cells — off-panel is never imputable"
-        )
-
-
-def _report_dense_eaf_range(errors: list[str], findings: _DenseBandState) -> None:
-    """Decoded frequencies are frequencies: none may fall outside [0, 1]."""
-    if findings.eaf_out_of_range:
-        errors.append("data.zarr/eaf contains finite values outside [0, 1]")
-
-
-def _report_dense_z_overflow(
-    root: Any, encoding: StoreEncoding, findings: _DenseBandState, errors: list[str]
-) -> None:
-    """The z overflow table describes exactly the Z_OVERFLOW cells (issue #114)."""
-    if not encoding.z.is_fixed_point:
-        return
-    _overflow_positions_match(
-        "data.zarr/z",
-        _flatten_band_positions(findings.overflow_positions),
-        ZOverflowTable.read(root),
-        errors,
-    )
-
-
-def _report_dense_eaf_exceptions(
-    root: Any,
-    encoding: StoreEncoding,
-    eaf_plane: DenseEafPlane | None,
-    findings: _DenseBandState,
-    errors: list[str],
-) -> None:
-    """Every eaf exception cell has an exact table entry, and no entry is stray.
-
-    An undecodable band is only reported once the positions have been
-    reconciled: a table that disagrees with the plane is the *reason* the plane
-    cannot be decoded, and saying "cannot decode" before naming that reason
-    would hide it.
-    """
-    if eaf_plane is None or not encoding.eaf.is_residual:
-        return
-    before = len(errors)
-    _overflow_positions_match(
-        "data.zarr/eaf",
-        _flatten_band_positions(findings.eaf_exception_positions),
-        EafExceptionTable.read(root),
-        errors,
-        what="eaf exception",
-        table_name="eaf exception",
-    )
-    if findings.eaf_undecodable and len(errors) == before:
-        errors.append("data.zarr/eaf cannot be decoded under the declared plan")
-
-
-def _match_dense_se_exceptions(
-    root: Any, encoding: StoreEncoding, bands: list[np.ndarray], errors: list[str]
-) -> None:
-    """Every `-127` in a Dense `se` plane has a table entry, and no entry is stray."""
-    if not encoding.se.is_residual:
-        return
-    _overflow_positions_match(
-        "data.zarr/se",
-        _flatten_band_positions(bands),
-        SeExceptionTable.read(root),
-        errors,
-        what="se exception",
-        table_name="se exception",
-    )
 
 
 def _read_top_hit_arrays(key: str, group: Any, errors: list[str]) -> dict[str, Any] | None:
@@ -3005,7 +2328,7 @@ def _validate_top_hits(root: Any, errors: list[str], encoding: StoreEncoding) ->
     # Single streamed pass over the matrix in row-bands: per band, count cells that
     # pass each threshold (completeness) and verify every index cell in that band
     # (matrix z finite, matches the stored index z, and itself clears the cutoff).
-    for r0, r1 in _dense_array_validation_bands(z_arr, n_variants, n_analyses):
+    for r0, r1 in band_limits(n_variants, n_analyses, inner_chunk_of(z_arr)[0]):
         z_band, se_band, abs_band, cached = _decode_top_hit_band(
             z_plane, se_plane, eaf_plane, encoding, r0, r1
         )

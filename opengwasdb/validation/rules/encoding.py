@@ -28,6 +28,7 @@ from opengwasdb.store.arrays import array_length, inner_chunk_of
 from opengwasdb.validation.rule import Check, Kind, Rule, Target
 from opengwasdb.validation.rules.csr import ARRAYS
 from opengwasdb.validation.rules.release import REQUIRED
+from opengwasdb.validation.scans import per_variant
 
 #: The rules a component's values are decoded under: a decode needs every one.
 PLAN = (
@@ -41,6 +42,9 @@ PLAN = (
 
 
 SE_TABLE_NAMES = ("se_exception_index", "se_exception_value", "se_coefficients")
+
+#: How an EAF plan rule reads a per-variant array: once, for the plan and the decode.
+_Read = Callable[[str], np.ndarray]
 
 #: The arrays each exact-value side table is stored in, as its reader names them.
 EAF_EXCEPTION_INDEX = EafExceptionTable.index_name
@@ -289,14 +293,14 @@ def _eaf_stray_residual_arrays(group: Any, label: str) -> Iterator[str]:
         yield f"{label} carries an eaf exception table but declares no residual-coded eaf plane"
 
 
-def _eaf_residual_arrays(group: Any, label: str) -> Iterator[str]:
+def _eaf_residual_arrays(group: Any, read: _Read, label: str) -> Iterator[str]:
     """A residual plane's baseline, in (0, 1), and its exception table, both present."""
     if EAF_BASELINE not in group:
         yield (
             f"{label} declares a residual-coded eaf plane but is missing {EAF_BASELINE}, "
             "without which the plane cannot be decoded"
         )
-    elif not _baseline_in_unit_interval(group[EAF_BASELINE]):
+    elif not _baseline_in_unit_interval(read(EAF_BASELINE)):
         yield f"{label}/{EAF_BASELINE} holds a finite value outside (0, 1)"
     if EAF_EXCEPTION_INDEX not in group or EAF_EXCEPTION_VALUE not in group:
         yield (
@@ -323,11 +327,11 @@ def _eaf_exception_table(table: EafExceptionTable, label: str) -> Iterator[str]:
         yield f"{label} eaf exception table holds a value that is not a frequency in [0, 1]"
 
 
-def _eaf_reference(group: Any, declared: Any, label: str) -> Iterator[str]:
+def _eaf_reference(group: Any, read: _Read, declared: Any, label: str) -> Iterator[str]:
     """Reference EAF exactly when declared, beside an imputed mask, and in [0, 1]."""
     has_reference = EAF_REFERENCE in group
     if declared.reference:
-        yield from _declared_reference(group, has_reference, label)
+        yield from _declared_reference(group, read, has_reference, label)
     elif has_reference:
         yield (
             f"{label} carries {EAF_REFERENCE} but the manifest does not declare it; a "
@@ -335,7 +339,9 @@ def _eaf_reference(group: Any, declared: Any, label: str) -> Iterator[str]:
         )
 
 
-def _declared_reference(group: Any, has_reference: bool, label: str) -> Iterator[str]:
+def _declared_reference(
+    group: Any, read: _Read, has_reference: bool, label: str
+) -> Iterator[str]:
     """A declared reference: present, beside an imputed mask, and holding frequencies.
 
     A panel frequency is returned to the caller as it stands, so it is checked as
@@ -354,7 +360,7 @@ def _declared_reference(group: Any, has_reference: bool, label: str) -> Iterator
             f"{label} declares reference EAF but carries no imputed mask to say which "
             "cells it describes (spec §9, §15)"
         )
-    if has_reference and not _frequencies_in_unit_interval(group[EAF_REFERENCE]):
+    if has_reference and not _frequencies_in_unit_interval(read(EAF_REFERENCE)):
         yield f"{label}/{EAF_REFERENCE} holds a finite value outside [0, 1]"
 
 
@@ -368,12 +374,16 @@ def eaf_plan(target: Target) -> Iterator[str]:
     stops being a claim.
     """
     group, declared, label = target.group, target.encoding.eaf, plan_label(target)
+
+    def read(name: str) -> np.ndarray:
+        return per_variant(target, name)
+
     yield from _eaf_plane(group, declared, label)
     if declared.is_residual:
-        yield from _eaf_residual_arrays(group, label)
+        yield from _eaf_residual_arrays(group, read, label)
     else:
         yield from _eaf_stray_residual_arrays(group, label)
-    yield from _eaf_reference(group, declared, label)
+    yield from _eaf_reference(group, read, declared, label)
 
 
 def per_variant_chunks(target: Target) -> list[str]:

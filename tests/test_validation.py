@@ -117,7 +117,7 @@ def test_validator_rejects_negative_se(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"associations.se_negative"}
     assert "se contains negative finite values" in result.errors
 
 
@@ -127,7 +127,7 @@ def test_validator_rejects_inconsistent_missingness(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"associations.markers_paired"}
     assert "z and se missingness is inconsistent" in result.errors
 
 
@@ -356,8 +356,8 @@ def test_validator_warns_about_an_infinite_dense_se(dense_store_path):
     so the release stays valid and the warning names the count and the Analysis
     (issue #337).
 
-    Mutation that makes this fail: drop `_latch_infinite_se` from `_validate_dense_band`
-    (no warning is counted), or stop reporting the band pass's warning.
+    Mutation that makes this fail: count nothing in `associations.se_infinite`'s
+    measure, or stop judging its total.
     """
     root = open_store(dense_store_path).arrays(mode="a")
     assert root["se"].dtype == np.dtype("float16")  # fixture sanity
@@ -367,7 +367,7 @@ def test_validator_warns_about_an_infinite_dense_se(dense_store_path):
 
     assert result.ok, result.errors
     warnings = _infinite_se_warnings(result)
-    assert len(warnings) == 1, result.warnings
+    assert [f.rule for f in result.findings] == ["associations.se_infinite"]
     assert "1 cell(s) of data.zarr/se" in warnings[0]
     assert "'a1'" in warnings[0]
 
@@ -431,10 +431,9 @@ def test_validator_warns_about_an_infinite_se_in_both_hybrid_components(tmp_path
     """One infinite SE cell in each component: two warnings, each naming its own plane.
 
     Mutation that makes this fail: dropping the Overflow plane from
-    `_ragged_se_planes` (one warning), dropping the band-pass latch from
-    `_validate_dense_band` or the component's warnings from the Hybrid's result (one
-    warning), yielding or reporting a plane twice (three), or labelling both planes
-    alike (the label assertions).
+    `_ragged_se_planes` (one warning), dropping the Dense Component's grid from the
+    Hybrid's targets (one warning), yielding or reporting a plane twice (three), or
+    labelling both planes alike (the label assertions).
     """
     store = _hybrid_store_with_both_components(tmp_path)
     component = open_store(store).dense_component()

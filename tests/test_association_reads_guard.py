@@ -5,8 +5,10 @@ the imputed mask, then EAF with the panel substitution, then SE from that EAF --
 and each copy was a place for the order or the shared read to go wrong (#253).
 They now ask `opengwasdb.associations`, and must not touch a plane at all.
 
-`validate` and the Indexed Variant Subset's validation keep decodes of their own,
-named below by the function each sits in. SE decoding is recognised by what is
+Validation -- every module under `validation/` that is not a reader, the
+Validation Rules and their scans included (ADR 0074) -- and the Indexed Variant
+Subset's validation keep decodes of their own, named below by the function each
+sits in. SE decoding is recognised by what is
 called -- the codec's `decode_se`, an SE plane type named (to open one, or to
 annotate a parameter that receives one), or an SE plane read -- so a decode
 anywhere else in those modules fails, however it is spelled.
@@ -34,14 +36,25 @@ READERS = (
 #: source's crossover cells and decodes them, to predict what completion stored.
 READER_ROUND_TRIPS = {("validation/observed_view_hybrid.py", "round_trip")}
 
-#: Modules that keep reviewed decodes of their own, and only those.
-CHECKED = ("validation/validate.py", "layouts/dense/indexed_subsets.py")
+#: Every module under `validation/`.
+VALIDATION = tuple(
+    sorted(str(path.relative_to(ROOT)) for path in (ROOT / "validation").rglob("*.py"))
+)
+
+#: Modules that keep reviewed decodes of their own, and only those: every validation
+#: module that is not a reader -- so a new rule or scan module cannot decode SE unseen
+#: -- and the Indexed Variant Subset's validation.
+CHECKED = (
+    *(module for module in VALIDATION if module not in READERS),
+    "layouts/dense/indexed_subsets.py",
+)
 
 #: The reviewed SE decodes, by the function (or class) each sits in.
 ALLOWED = {
     # Each shares an EAF read the check already holds.
-    ("validation/validate.py", "_validate_dense_band"):
-        "one frequency read per band, shared by the EAF range check and SE decoding",
+    ("validation/scans.py", "_dense_band_se"):
+        "one SE decode per band, from the codes the band already holds and its own EAF "
+        "read, shared by every value rule that folds over the band",
     ("validation/validate.py", "_decode_top_hit_band"):
         "the band the Top-Hit Index check already read for its own EAF comparison",
     ("layouts/dense/indexed_subsets.py", "_compare_indexed_band"):
@@ -49,8 +62,6 @@ ALLOWED = {
     ("layouts/dense/indexed_subsets.py", "_sample_decoded_view"):
         "the sampled primary cells the subset's EAF is compared against",
     # The planes those decodes read, and the decoders the readers stand on.
-    ("validation/validate.py", "_validate_dense_arrays"):
-        "opens the SE plane `_validate_dense_band` decodes",
     ("validation/validate.py", "_validate_top_hits"):
         "opens the SE plane `_decode_top_hit_band` decodes",
     ("validation/validate.py", "_decoded_csr_se"):
@@ -192,8 +203,15 @@ def test_the_guard_sees_a_new_decode_beside_the_reviewed_ones(module: str, bypas
 
 
 def test_the_guard_lets_the_reviewed_functions_be() -> None:
-    source = "def _validate_dense_band(se_plane, eaf):\n    return se_plane.band(0, 1, eaf=eaf)\n"
-    assert unreviewed_decodes("validation/validate.py", source) == []
+    source = "def _dense_band_se(se_plane, eaf):\n    return se_plane.band(0, 1, eaf=eaf)\n"
+    assert unreviewed_decodes("validation/scans.py", source) == []
+
+
+def test_every_validation_module_is_a_reader_or_checked() -> None:
+    readers = {module for module in READERS if module.startswith("validation/")}
+    assert readers <= set(VALIDATION), "a reader the guard names no longer exists"
+    assert "validation/scans.py" in CHECKED, "the band scan must be checked"
+    assert set(VALIDATION) == readers | {m for m in CHECKED if m.startswith("validation/")}
 
 
 @pytest.mark.parametrize("module", READERS)
