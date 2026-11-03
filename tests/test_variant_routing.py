@@ -335,6 +335,46 @@ def test_duplicates_for_an_index_collapse_or_drop_across_batches(monkeypatch):
     assert placed.collapsed == 1
 
 
+def _read_place_by_place(place, z, se):
+    """D5's rule read one place at a time: keep, conflicting, dropped, collapsed."""
+    rows_at: dict[int, list[int]] = {}
+    for row, at in enumerate(place.tolist()):
+        rows_at.setdefault(at, []).append(row)
+
+    def agrees(row: int, first: int) -> bool:
+        return all(
+            a == b or (np.isnan(a) and np.isnan(b))
+            for a, b in ((z[row], z[first]), (se[row], se[first]))
+        )
+
+    conflicting = sorted(
+        at for at, rows in rows_at.items() if not all(agrees(r, rows[0]) for r in rows)
+    )
+    keep = sorted(rows[0] for at, rows in rows_at.items() if at not in conflicting)
+    dropped = sorted(r for at in conflicting for r in rows_at[at])
+    collapsed = sum(len(rows) - 1 for at, rows in rows_at.items() if at not in conflicting)
+    return keep, conflicting, dropped, collapsed
+
+
+def test_collapse_duplicates_reads_each_place_as_the_rule_says():
+    """`collapse_duplicates` touches only the rows that share a place; on random
+    columns of repeated places, NaNs, and agreeing and disagreeing rows, it
+    answers as a plain reading of each place does."""
+    rng = np.random.default_rng(357)
+    for _ in range(300):
+        n = int(rng.integers(0, 40))
+        place = rng.integers(0, 12, n)
+        z = rng.choice([1.0, 2.0, np.nan], n)
+        se = rng.choice([0.1, 0.2, np.nan], n)
+
+        found = route_table.collapse_duplicates(place, z, se)
+
+        assert (
+            found.keep.tolist(), found.conflicting.tolist(), found.dropped.tolist(),
+            found.collapsed,
+        ) == _read_place_by_place(place, z, se)
+
+
 def test_duplicates_that_differ_only_in_frequency_are_one_association():
     """The frequency is annotation, not the finding (ADR 0036): rows agreeing on
     z and SE collapse to the first, frequency and all."""

@@ -172,17 +172,33 @@ def collapse_duplicates(place: np.ndarray, z: np.ndarray, se: np.ndarray) -> Dup
     rows disagree keeps none of them, because nothing in the rows says which
     is right.
     """
+    # One stable sort finds the repeated places; only their rows are compared,
+    # so a column with few duplicates costs what last-wins cost, not a gather
+    # of every row (#357: ~340 MB a worker on a 21 M-row FinnGen column).
     n = len(place)
-    values, first, inverse = np.unique(place, return_index=True, return_inverse=True)
-    if len(values) == n:
+    order = np.argsort(place, kind="stable")
+    ordered = place[order]
+    repeats = ordered[1:] == ordered[:-1]
+    if not repeats.any():
         return Duplicates(np.arange(n), place[:0], np.empty(0, dtype=np.intp), 0)
-    origin = first[inverse]
-    agrees = _equal(z, z[origin]) & _equal(se, se[origin])
-    conflicted = np.zeros(len(values), dtype=bool)
-    conflicted[inverse[~agrees]] = True
-    dropped = np.flatnonzero(conflicted[inverse])
-    collapsed = (n - len(values)) - (len(dropped) - int(conflicted.sum()))
-    return Duplicates(np.sort(first[~conflicted]), values[conflicted], dropped, collapsed)
+    shared = np.zeros(n, dtype=bool)
+    shared[1:] |= repeats
+    shared[:-1] |= repeats
+    at = np.flatnonzero(shared)
+    rows, places = order[at], ordered[at]
+    starts = np.concatenate(([True], places[1:] != places[:-1]))
+    group = np.cumsum(starts) - 1
+    firsts = rows[starts]  # the stable sort keeps each place's rows in stream order
+    origin = firsts[group]
+    agrees = _equal(z[rows], z[origin]) & _equal(se[rows], se[origin])
+    conflicted = np.zeros(len(firsts), dtype=bool)
+    conflicted[group[~agrees]] = True
+    dropped = np.sort(rows[conflicted[group]])
+    keep = np.ones(n, dtype=bool)
+    keep[rows] = False
+    keep[firsts[~conflicted]] = True
+    collapsed = (len(rows) - len(firsts)) - (len(dropped) - int(conflicted.sum()))
+    return Duplicates(np.flatnonzero(keep), places[starts][conflicted], dropped, collapsed)
 
 
 def _equal(a: np.ndarray, b: np.ndarray) -> np.ndarray:
