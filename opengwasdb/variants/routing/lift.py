@@ -17,12 +17,14 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Collection, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from pathlib import Path
 
 from opengwasdb.build.liftover import lift_hg19_to_hg38, statistics_swap
 from opengwasdb.encoding.timing import format_duration
-from opengwasdb.variants.routing.keys import RoutingKey, SourceKey
+from opengwasdb.variants.normalise import canonical_alid
+from opengwasdb.variants.routing.keys import SourceKey, routing_key
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +57,7 @@ def place_sites(
 ) -> SitePlacement:
     """Place each site, grouped by its declared assembly, on GRCh38.
 
-    An hg38 site is its own ALID, its alleles sorted. hg19 sites go through one
+    An hg38 site is its own ALID (`canonical_alid`). hg19 sites go through one
     lift, whose failure threshold applies to that group alone, so hg38 sites can
     neither dilute nor inflate it; more failures than it allows raise
     `LiftoverFailureError`. Any other assembly is refused with ``ValueError``,
@@ -80,11 +82,10 @@ def place_sites(
 
 
 def _place_hg38(sites: Collection[SourceKey], placement: SitePlacement) -> None:
-    """Name each hg38 site by its own coordinate, its alleles sorted."""
+    """Name each hg38 site by its own coordinate (`canonical_alid`)."""
     log.info("%d variants already GRCh38 -- no liftover needed", len(sites))
     for chrom, pos, ref, alt in sites:
-        a1, a2 = sorted((ref, alt))
-        placement.alid[(chrom, pos, ref, alt)] = f"{chrom}:{pos}:{a1}:{a2}"
+        placement.alid[(chrom, pos, ref, alt)] = canonical_alid(chrom, pos, ref, alt)
 
 
 def _lift_hg19(
@@ -143,51 +144,55 @@ def _lift_union_by_assembly(
     return passthrough.alid, lifted.alid, lifted.reoriented
 
 
+def cross_assembly_collisions(
+    hg38: AbstractSet[SourceKey], hg19: AbstractSet[SourceKey]
+) -> set[str]:
+    """The routing keys both groups declare, which a placement must not route.
+
+    ``hg19`` is the hg19 sites the lift placed. A routing key spells a site's
+    identity -- its alleles upper-cased -- so a key in both groups is one
+    identity declared under both assemblies: two physical loci, not one variant
+    reported twice, whether the two spell it alike or one writes `g/a` and the
+    other `G/A`. Binding both to one stored row would misattribute one
+    Analysis's association to the other's variant, so every site any of these
+    keys spells is dropped from both groups (issues #85, #255, #360).
+
+    The union's placement and extraction's windows both call this, so a
+    Variant Reference drops exactly what the union does.
+    """
+    if not hg38 or not hg19:
+        return set()
+    return {routing_key(site) for site in hg38} & {routing_key(site) for site in hg19}
+
+
+def log_cross_assembly_drop(n_tuples: int) -> None:
+    """Say how many identities both assemblies declared, which were dropped."""
+    if n_tuples:
+        log.warning(
+            "%d raw variant tuple(s) declared both hg38 and hg19 in this manifest "
+            "(same chrom/pos/ref/alt string, two different builds -> two different "
+            "physical loci) -- dropped from both, with every other spelling of them, "
+            "rather than guessed which one owns the stored row",
+            n_tuples,
+        )
+
+
 def _drop_cross_assembly_collisions(
     passthrough_lookup: SourceLookup,
     lifted_lookup: SourceLookup,
     swapped: ReorientedKeys,
-    *,
-    key: RoutingKey,
 ) -> set[str]:
-    """Drop the raw tuples declared under both assemblies, from both lookups.
-
-    A shared raw tuple is two physical loci, not one variant reported twice, and
-    binding both to one stored row would misattribute one Analysis's
-    association to the other's variant. Returns the dropped tuples as ``key``
-    spells them, which a harvest also drops from its candidates (issue #255).
-
-    A key that folds can also make two *different* raw tuples declared under
-    different assemblies collide; the two-pass build refuses that rather than
-    guess, so this refuses too. An exact key cannot collide that way.
-    """
-    ambiguous = passthrough_lookup.keys() & lifted_lookup.keys()
-    if ambiguous:
-        log.warning(
-            "%d raw variant tuple(s) declared both hg38 and hg19 in this manifest "
-            "(same chrom/pos/ref/alt string, two different builds -> two different "
-            "physical loci) -- dropped from both rather than guessed which one owns "
-            "the stored row",
-            len(ambiguous),
-        )
-        for site in ambiguous:
-            del passthrough_lookup[site]
-            del lifted_lookup[site]
-            swapped.discard(site)
-    dropped_keys = {key.of(site) for site in ambiguous}
-    if not key.folds:
-        return dropped_keys
-    cross = (
-        {key.of(site) for site in passthrough_lookup} & {key.of(site) for site in lifted_lookup}
-    ) - dropped_keys
-    if cross:
-        raise ValueError(
-            f"{len(cross)} source routing key(s) are declared under both hg38 and hg19 "
-            f"by different coordinates (e.g. {sorted(cross)[0]!r}); the two-pass "
-            "build refuses to guess which locus owns the stored row, so this build "
-            "refuses too"
-        )
-    return dropped_keys
+    """Apply `cross_assembly_collisions` to the union's two placed groups, and
+    return the dropped routing keys, which a harvest also drops from its
+    candidates."""
+    dropped = cross_assembly_collisions(passthrough_lookup.keys(), lifted_lookup.keys())
+    log_cross_assembly_drop(len(dropped))
+    if dropped:
+        for lookup in (passthrough_lookup, lifted_lookup):
+            for site in [site for site in lookup if routing_key(site) in dropped]:
+                del lookup[site]
+                swapped.discard(site)
+    return dropped
 
 
 def place_union(
@@ -195,14 +200,9 @@ def place_union(
     *,
     chain_file: str | Path | None,
     failure_threshold: float,
-    key: RoutingKey,
 ) -> tuple[SourceLookup, ReorientedKeys, set[str]]:
     """Place the union on hg38: its lookup, the keys the lift re-oriented, and
-    the both-assembly tuples it dropped, as ``key`` spells them.
-
-    ``key`` is the spelling the drop is computed on: the raw tuple for the
-    union a build routes by, or the build's own key for a harvest whose
-    candidates are keyed that way (issue #255 rounds 4-5).
+    the both-assembly tuples it dropped, as routing keys (issue #255 rounds 4-5).
     """
     finalise_start = time.monotonic()
     passthrough_lookup, lifted_lookup, swapped = _lift_union_by_assembly(
@@ -210,9 +210,7 @@ def place_union(
         chain_file=chain_file,
         liftover_failure_threshold=failure_threshold,
     )
-    dropped_keys = _drop_cross_assembly_collisions(
-        passthrough_lookup, lifted_lookup, swapped, key=key
-    )
+    dropped_keys = _drop_cross_assembly_collisions(passthrough_lookup, lifted_lookup, swapped)
     source_lookup = {**passthrough_lookup, **lifted_lookup}
     log.info(
         "Pass 1 liftover/finalisation: %d source variants → %d hg38 ALIDs in %s",

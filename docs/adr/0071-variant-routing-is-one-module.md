@@ -1,5 +1,10 @@
 # Variant Routing is one module
 
+> **Partly superseded by [ADR 0075](0075-alleles-are-upper-cased-before-identity-assignment.md).**
+> The module stands. What no longer holds is `RoutingKey`: alleles are
+> upper-cased before identity assignment on every build, so its two modes
+> became one and it is removed, and routing's functions take no `key`.
+
 Issue [#352](https://github.com/opengwas/opengwasdb/issues/352), part of epic
 #58. Records how the Dense and Hybrid builders, Variant Reference extraction
 and the Hybrid fold decide where a source coordinate goes.

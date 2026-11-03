@@ -108,7 +108,7 @@ def read_variant_reference(path: str | Path) -> VariantReference:
 
 
 #: A candidate or routing key: the raw source tuple, or the string form a
-#: route table keys it by (`RoutingKey.of`).
+#: route table keys it by (`opengwasdb.variants.routing.keys.routing_key`).
 _SiteKeyT = TypeVar("_SiteKeyT")
 
 

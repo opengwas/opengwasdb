@@ -2,7 +2,8 @@
 
 Follows the GWAS-VCF / GWAS-SSF spec (Lyon et al. 2021).
 All orientation is normalised to canonical ALID convention: A1 = alphabetically
-first allele.  Z-scores are negated when the VCF effect allele (ALT) is not A1.
+first allele, upper-cased (`identity_allele`).  Z-scores are negated when the
+VCF effect allele (ALT) is not A1.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from opengwasdb.stats import parse_af
-from opengwasdb.variants.normalise import normalise_chromosome
+from opengwasdb.variants.normalise import identity_allele, normalise_chromosome
 
 log = logging.getLogger(__name__)
 
@@ -83,8 +84,9 @@ def stream_vcf_associations(
 ) -> Iterator[tuple[str, int, str, str, float, float, float | None]]:
     """Yield (bare_chrom, pos, ref, alt, z, se, eaf) for each biallelic record.
 
-    z is oriented to canonical ALID convention: A1 = min(ref, alt).  When the
-    VCF effect allele (ALT) is not A1, z is negated.  SE is always positive.
+    z is oriented to canonical ALID convention: A1 = min(ref, alt), compared
+    upper-cased (`identity_allele`: a lower-case base is the same base).  When
+    the VCF effect allele (ALT) is not A1, z is negated.  SE is always positive.
     `eaf` follows z: it is FORMAT/AF re-expressed for the *stored* effect
     allele, so a negated z carries ``1 - AF`` (ADR 0036). None when the file
     declares no AF tag, or reports none for this record.
@@ -133,7 +135,7 @@ def stream_vcf_associations(
                 continue
 
             eaf = af
-            if alt > ref:
+            if identity_allele(alt) > identity_allele(ref):
                 z = -z
                 # ALT is the VCF's effect allele; A1 = min(ref, alt), so the
                 # stored effect allele is REF here and AF must follow (ADR 0036).

@@ -181,9 +181,18 @@ where:
 - chromosome labels use canonical `X`, `Y`, and `MT`; source labels `23`, `24`,
   and `25`/`26`/`M` respectively MUST be normalised to those labels before
   identity assignment (ADR 0052);
-- alleles are trimmed and left-aligned before identity assignment;
+- alleles are upper-cased, trimmed and left-aligned before identity
+  assignment. VCF and GWAS-SSF bases are case-insensitive, so a lower-case
+  base is the same base: a source spelling `a`/`g` and one spelling `A`/`G`
+  name one variant, on every build path and in extraction (issue #360);
 - `A1` is alphabetically first;
 - `A2` is the other allele.
+
+A signed statistic is oriented on the same upper-cased alleles: it is stored
+for `A1`, so a source allele pair `a`/`G` whose effect allele is `G` is
+negated, as `A`/`G` would be. A source's own spelling survives only as
+provenance — a Variant Reference's source keys — and in the rsid harvest
+below, which compares the names a site's spellings carry.
 
 A build that lifts a source variant from another Reference Assembly MUST project
 the variant onto the release's assembly using the chain block's orientation: on a
@@ -249,8 +258,8 @@ is part of the contract (issue #255):
   or empty cell names nothing and never clears an earlier name. Several source
   coordinates that canonicalise to one ALID therefore take the answer of the
   one that sorts first, not of the one that appears first in a file. The one
-  exception is a Hybrid build's routing key that its sources name differently,
-  below.
+  exception is a single-pass build's routing key that its sources name
+  differently, below.
 - A GWAS-SSF source, read directly or through a Column Map, names a variant by
   the first of its `rsid` and `variant_id` cells that names an rs identifier,
   normalised before any name is compared (issue #306): a `;`-separated list
@@ -261,11 +270,14 @@ is part of the contract (issue #255):
   the same variant — and the normalisation makes them one name. The GWAS-VCF
   reader's `ID` and the FinnGen reader's first comma-separated `rsids` item are
   read as before.
-- A Hybrid routing key upper-cases alleles, so source coordinates spelt in
-  different case are one stored variant. When their sources name it with
-  different (normalised) rsids, nothing in the sources says which is right, and
-  `build-hybrid --on-rsid-conflict` decides (issue #306). `refuse`, the default,
-  fails the build and names the routing key and both names. `drop` gives **no
+- A routing key spells a coordinate's alleles upper-cased, as identity does
+  (above), so source coordinates spelt in different case are one stored
+  variant on every build. A single-pass build that harvests compares the
+  names those spellings carry: when their sources name it with different
+  (normalised) rsids, nothing in the sources says which is right, and
+  `build-hybrid --on-rsid-conflict` decides (issue #306); `build-dense-vcf`
+  has no such option and always refuses. Under `build-hybrid`, `refuse`, the
+  default, fails the build and names the routing key and both names. `drop` gives **no
   rsid** to every stored variant such a key routes to, over the build's final
   combined routing — even when a second routing key reaches the same variant
   with a name of its own (the same site reported in the other allele order),
@@ -290,16 +302,15 @@ is part of the contract (issue #255):
   the other policy is refused. A resume past the fold does not harvest again, so
   one whose recorded counts are missing is refused too, unless its checkpoint
   predates the option (records no `on_rsid_conflict`); its counts are then
-  `null`. A Dense routing key is the source's own spelling,
-  so two source coordinates never share one and a Dense build never meets this
-  case.
+  `null`. A two-pass build compares no names across sources, so it names such
+  a variant by the first-non-empty rule above.
 - A single-pass build given `--variant-reference` MUST NOT write a `rsid`
   column blank simply because the reference it was given is a plain ALID list.
   When the reference names none of its variants, the build runs the same Pass 1
   harvest the two-pass build runs for its candidates and their `(rank, site)`
   order, keys those candidates with **exactly the key normalisation the build's
-  own association routing uses** (upper-cased alleles for a Hybrid routing,
-  the source's own spelling for a Dense one, allele order kept), and then rekeys
+  own association routing uses** (alleles upper-cased, allele order kept),
+  and then rekeys
   them **once** over **one combined site → ALID routing** — the reference's own
   source keys, plus a Hybrid build's fold for off-reference rows — so a name
   always lands on the ALID its association lands on and the global first

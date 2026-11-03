@@ -152,7 +152,7 @@ The correlation between two Analyses' association statistics under the null — 
 A release-level derived structure for a Dense Store giving Rho between every pair of Analyses. It is optional provenance-bearing metadata (which variants and null threshold produced it), not part of the association data, and shares the Store's Analysis identity and query concepts.
 
 **Variant Identity**:
-The canonical within-Store variant key is ALID, `chr:pos:A1:A2`, where A1 is alphabetically first and A2 is the other allele after trimming and left alignment. Cross-Store identity is the pair (**Reference Assembly**, ALID).
+The canonical within-Store variant key is ALID, `chr:pos:A1:A2`, where A1 is alphabetically first and A2 is the other allele after upper-casing, trimming and left alignment. A lower-case base is the same base, so `a`/`g` and `A`/`G` are one variant on every layout, and a statistic is signed against the upper-cased pair's A1 (issue #360). Cross-Store identity is the pair (**Reference Assembly**, ALID).
 
 **Store Variant Table**:
 The Store-wide union of canonical variants referenced by its Analyses. Each variant occurs once in a Store Release, independently of how many Analyses report it.
@@ -164,7 +164,7 @@ A compact Store-local reference to a row in the Store Variant Table. It has no i
 Deciding which **Variant Index** each source coordinate of a build reaches, and what rs identifier the variant it reaches carries (`opengwasdb.variants.routing`, ADR 0071). The authority is either the build's own sources, read once and lifted from hg19 to GRCh38 (Pass 1), or a Variant Reference, a routing frozen as an artifact. Routing re-orients a statistic a reverse-strand lift swapped, keeps the last association when two reach one place, and refuses rather than guesses where two loci or two names collide. Distinct from routing an Analysis by its **Assigned Ancestry**, which decides which release it belongs to, not where its associations land.
 
 **Routing Key**:
-The spelling a build matches a source coordinate by, `chrom:pos:ref:alt`, the same for the names it harvests and the associations it routes. A Dense build keys by the source's own allele spelling; a Hybrid build upper-cases the alleles and keeps their order, since case is not an orientation change. Two coordinates one key folds together must route to one place, or the build refuses.
+The spelling a build matches a source coordinate by, `chrom:pos:ref:alt`, the same for the names it harvests and the associations it routes. Its alleles are upper-cased, as **Variant Identity** spells them, and kept in the source's order, since case is not an orientation change; every build keys this way. Two coordinates one key spells — one site written in two cases — must route to one place, or the build refuses.
 
 **By-Variant Index**:
 An optional, additive structure inside a Ragged component (`ragged/by_variant/`, ADR 0060): a `(variant index, Analysis)`-ordered duplicate of the component's cell-keyed arrays that makes a by-variant PheWAS or region query proportional to the answer. Distinct from the **Variant Index** (a row reference); the name is deliberately different. It does not change `format_version`, and a release without it answers every query through the scan it replaces.
