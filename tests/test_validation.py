@@ -240,6 +240,29 @@ def test_validator_rejects_leftover_sqlite_analyses_table_ragged(ragged_store_pa
     assert result.failed() == {"sqlite.analyses_table"}
 
 
+def test_a_ragged_release_has_its_variant_table_checked(ragged_store_path):
+    # Issue #55: the variant-table rules ran on Dense and Hybrid releases only; a
+    # Ragged release's offset sidecar could point at the wrong row unremarked.
+    offsets_path = ragged_store_path / "variant_offsets.npy"
+    offsets = np.load(offsets_path)
+    assert len(offsets) >= 2, "the fixture must have a second row to misdirect"
+    offsets[1] = offsets[0]
+    np.save(offsets_path, offsets)
+
+    result = validate_store(ragged_store_path)
+
+    assert result.failed() == {"variant_table.representatives"}
+
+
+def test_a_ragged_release_has_no_alias_table_and_is_not_said_to_pass_it(ragged_store_path):
+    result = validate_store(ragged_store_path)
+
+    assert result.ok, result.errors
+    assert result.skipped["sqlite.variant_aliases"] == (
+        "index.sqlite has no variant_aliases table",
+    )
+
+
 def test_validator_rejects_missing_ragged_csr_array(ragged_store_path):
     # The Ragged validator's CSR-structure seam must not turn a missing
     # parallel array into a decode crash in a later seam.

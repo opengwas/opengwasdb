@@ -254,16 +254,10 @@ def variant_aliases(target: Target) -> Iterator[str]:
             yield f"alias {row['alias']!r} points to missing variant {variant_index}"
 
 
-def _carries_the_table(target: Target) -> bool:
-    """Dense and Hybrid releases, and a Hybrid's Dense Component."""
-    return target.layout is not PrimaryStorageLayout.RAGGED
-
-
 RULES: tuple[Rule, ...] = (
     Fold(
         name=ROWS,
         kinds=Kind.RELEASE,
-        when=_carries_the_table,
         after=(REQUIRED,),
         scan=VARIANT_TABLE,
         zero=0,
@@ -273,7 +267,6 @@ RULES: tuple[Rule, ...] = (
     Fold(
         name="variant_table.alid_index",
         kinds=Kind.RELEASE,
-        when=_carries_the_table,
         after=(REQUIRED,),
         scan=VARIANT_TABLE,
         zero=Counter[str](),
@@ -283,7 +276,6 @@ RULES: tuple[Rule, ...] = (
     Fold(
         name="variant_table.rsid_index",
         kinds=Kind.RELEASE,
-        when=_carries_the_table,
         after=(REQUIRED,),
         scan=VARIANT_TABLE,
         zero=0,
@@ -293,7 +285,6 @@ RULES: tuple[Rule, ...] = (
     Fold(
         name="variant_table.sequence",
         kinds=Kind.RELEASE,
-        when=_carries_the_table,
         after=(REQUIRED,),
         scan=VARIANT_TABLE,
         zero=_FirstFault(),
@@ -303,7 +294,6 @@ RULES: tuple[Rule, ...] = (
     Fold(
         name="variant_table.representatives",
         kinds=Kind.RELEASE,
-        when=_carries_the_table,
         after=(REQUIRED,),
         scan=VARIANT_TABLE,
         zero=_Picked(),
@@ -313,7 +303,6 @@ RULES: tuple[Rule, ...] = (
     Check(
         name="sqlite.variant_aliases",
         kinds=Kind.RELEASE,
-        when=_carries_the_table,
         after=(ROWS,),
         run=variant_aliases,
     ),
