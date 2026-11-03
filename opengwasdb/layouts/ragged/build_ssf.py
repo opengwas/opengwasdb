@@ -92,8 +92,8 @@ class AnalyteInput:
     context: str | None
     mhc: bool
     filtered_path: Path
-    #: The build the manifest row declares (`source_genome_build`), normalised;
-    #: GRCh38 where it declares none, the only build this layout reads.
+    #: The build the manifest row declares (`source_genome_build`), normalised,
+    #: or the caller's ``undeclared_source_build`` where it declares none.
     source_build: str = "hg38"
     assigned_ancestry: str = ""  # optional manifest column (ADR 0028); "" when omitted
     # Shared-core analyses.tsv columns the manifest supplies and this builder only
@@ -111,6 +111,7 @@ def _analyte_from_row(
     r: dict[str, str],
     cols: ManifestColumns,
     filtered_dir: str | Path,
+    undeclared_source_build: str | None,
 ) -> AnalyteInput:
     """Parse one AnalyteInput from a manifest row."""
     bp = _opt(r.get("trait_bp"))
@@ -133,21 +134,24 @@ def _analyte_from_row(
         context=_opt(r.get("context")),
         mhc=str(r.get("mhc", "")).strip().upper() in {"TRUE", "1", "YES"},
         filtered_path=filtered_path,
-        source_build=_grch38_source(r, analysis_id),
+        source_build=_grch38_source(r, analysis_id, undeclared_source_build),
         assigned_ancestry=_opt(r.get("assigned_ancestry")) or "",
         metadata=PassthroughMetadata.from_manifest_row(r),
     )
 
 
-def _grch38_source(row: Mapping[str, str], analysis_id: str) -> str:
+def _grch38_source(
+    row: Mapping[str, str], analysis_id: str, undeclared_source_build: str | None
+) -> str:
     """The row's declared build, refused unless it is GRCh38.
 
     A Ragged SSF build lifts nothing, so a source on another build would be
     stored at coordinates its variants do not have. A row that declares no
-    build is read as this layout's GRCh38, as it always was.
+    build is read as ``undeclared_source_build``, the caller's, and refused
+    when that is `None`.
     """
     build = declared_source_build(
-        row, default=RAGGED_REFERENCE_ASSEMBLY, context=f"analysis {analysis_id!r}"
+        row, default=undeclared_source_build, context=f"analysis {analysis_id!r}"
     )
     if build != normalise_build(RAGGED_REFERENCE_ASSEMBLY):
         raise ValueError(
@@ -157,7 +161,9 @@ def _grch38_source(row: Mapping[str, str], analysis_id: str) -> str:
     return build
 
 
-def _read_manifest(manifest_path: str | Path, filtered_dir: str | Path) -> list[AnalyteInput]:
+def _read_manifest(
+    manifest_path: str | Path, filtered_dir: str | Path, undeclared_source_build: str | None
+) -> list[AnalyteInput]:
     """Read the build manifest into one `AnalyteInput` per analysis.
 
     Beyond the molecular/context columns this builder interprets (trait
@@ -186,7 +192,7 @@ def _read_manifest(manifest_path: str | Path, filtered_dir: str | Path) -> list[
         require_columns(fieldnames, manifest_path, "analysis_index")
         cols = resolve_manifest_columns(fieldnames, manifest_path)
         for r in reader:
-            rows.append(_analyte_from_row(r, cols, filtered_dir))
+            rows.append(_analyte_from_row(r, cols, filtered_dir, undeclared_source_build))
     rows.sort(key=lambda a: a.analysis_index)
     # analysis_index must be a dense 0..n-1 sequence for CSR offset alignment.
     for expected, a in enumerate(rows):
@@ -322,6 +328,7 @@ def build_ragged_from_ssf(
     eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False,
     admission_record: str | Path | None = None,
+    undeclared_source_build: str | None = RAGGED_REFERENCE_ASSEMBLY,
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from filtered GWAS-SSF inputs.
 
@@ -330,6 +337,11 @@ def build_ragged_from_ssf(
     -- the same command builds a cis-eQTL release, a signals-only metabolite
     release and a genome-wide one, so the layout cannot choose it (ADR 0064).
     ``admission_record`` is Association Admission's record (#357), beside the Store.
+    ``undeclared_source_build`` is the build a manifest row that declares no
+    `source_genome_build` is read as: GRCh38 by default, as this layout always
+    read one, since `opengwasdb-stores`' own test manifests declare none;
+    `None` refuses such a row. A declared build other than GRCh38 is refused
+    either way, since the build lifts nothing.
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     _validate_stored_effect_scale(stored_effect_scale)
@@ -348,6 +360,7 @@ def build_ragged_from_ssf(
                 eaf_reference_ancestry=eaf_reference_ancestry,
                 allow_unverified_eaf=allow_unverified_eaf,
                 admission_record=admission.admission_record_for(out, admission_record),
+                undeclared_source_build=undeclared_source_build,
             ),
         )
 
@@ -364,6 +377,7 @@ class _SsfBuildRequest:
     eaf_reference_ancestry: str | None
     allow_unverified_eaf: bool
     admission_record: Path
+    undeclared_source_build: str | None
 
 
 def _build_ssf_release(
@@ -379,7 +393,7 @@ def _build_ssf_release(
     passed over.
     """
     manifest_path, filtered_dir = sources
-    analytes = _read_manifest(manifest_path, filtered_dir)
+    analytes = _read_manifest(manifest_path, filtered_dir, request.undeclared_source_build)
     print(f"Manifest: {len(analytes)} analyses")
     record = admission.AdmissionRecord.open(
         request.admission_record,

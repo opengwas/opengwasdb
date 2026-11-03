@@ -1095,3 +1095,23 @@ def test_an_odds_ratio_is_read_as_its_log_by_the_gwas_ssf_rule(tmp_path):
     assert len(stored.variant_index) == 1
     # A is A1 and the effect allele, so the z is the odds ratio's own.
     assert float(stored.z[0]) == pytest.approx(np.log(2.0) / 0.5, rel=5e-3)
+
+
+def test_an_undeclared_build_is_read_as_the_callers_default_and_refused_without_one(tmp_path):
+    """A row declaring no `source_genome_build` is read as the build the caller
+    names (GRCh38, the command's), and refused when the caller names none."""
+    manifest, filtered_dir = _one_analysis(tmp_path, [{
+        "chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
+        "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
+    }])
+    common = {"store_id": "t", "release_id": "v1", "association_coverage": "cis_and_signals"}
+    with pytest.raises(ValueError, match="source_genome_build is required"):
+        build_ragged_from_ssf(
+            manifest, filtered_dir, tmp_path / "refused.opengwasdb",
+            undeclared_source_build=None, **common,
+        )
+    build_ragged_from_ssf(
+        manifest, filtered_dir, tmp_path / "read.opengwasdb",
+        undeclared_source_build="GRCh38", **common,
+    )
+    assert [v.alid for v in VariantAxis(tmp_path / "read.opengwasdb").all()] == ["1:100000:A:G"]

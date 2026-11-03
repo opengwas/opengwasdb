@@ -49,6 +49,7 @@ from opengwasdb.layouts.dense.rho import (
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import HybridBuildResult, build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
+from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
@@ -1591,6 +1592,9 @@ def build_ragged_ssf_command(
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
         admission_record=admission_record,
+        # A manifest row declaring no source_genome_build is read as GRCh38, as
+        # this command always read one (issue #56 measured who relies on it).
+        undeclared_source_build=RAGGED_REFERENCE_ASSEMBLY,
     )
     typer.echo(
         json.dumps(
