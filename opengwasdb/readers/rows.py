@@ -59,8 +59,8 @@ class TabularMetricsRow:
     """One source row's variant identity and the statistics both pre-build
     annotation stages read (issue #207).
 
-    The parent of :class:`SourceRow`, which adds the source's own identifier for
-    the row and nothing else. The split is not cosmetic: the one-pass resolver
+    The parent of :class:`SourceRow`, which adds the source's own identifiers
+    for the row and the z it reports. The split is not cosmetic: the one-pass resolver
     reads a genome-wide file per Analysis and never looks at an rsid, so the
     metrics projection does not pay for the identifier columns or for decoding
     them -- and a row shape that could not name an rsid is not a row shape
