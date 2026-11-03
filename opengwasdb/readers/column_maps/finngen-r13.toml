@@ -19,11 +19,16 @@ frequency = "af_alt"
 
 [optional_columns]
 rsid = "rsids"
+# SAIGE's saddle-point p-value: read by the resolver's effect-consistency check
+# (ADR 0069), never to derive a standard error unless `sebeta` is unusable.
+p_value = "pval"
 
 [conventions]
 missing_values = "any_non_numeric"
 unmapped_columns = "ignore"
 alleles = "ref_alt_effect_is_alt"
+# `pval` is the two-sided p itself (`mlogp` is its -log10, which is not read).
+p_value_form = "p"
 # af_alt is the alt allele's frequency, and alt is the effect allele.
 frequency_allele = "effect_allele"
 position_notation = "integer"

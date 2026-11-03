@@ -233,7 +233,15 @@ def test_an_unmapped_record_s_fingerprint_is_unchanged_by_column_maps() -> None:
     )
 
     assert "column_map" not in fingerprint["resolution_config"]
-    assert fingerprint["fingerprint_digest"] == _PRE_281_DIGEST
+    # ADR 0069 binds the effect-consistency threshold into every fingerprint, on
+    # purpose: records resolved without the check are not resumable. Without that
+    # one key the digest is still the pre-#281 literal, which is what this guards.
+    without_check = {**fingerprint, "resolution_config": {
+        k: v for k, v in fingerprint["resolution_config"].items() if k != "effect_consistency"
+    }}
+    assert "effect_consistency" in fingerprint["resolution_config"]
+    assert rm.compute_fingerprint_digest(without_check) == _PRE_281_DIGEST
+    assert fingerprint["fingerprint_digest"] != _PRE_281_DIGEST
 
 
 def test_a_built_in_named_by_name_or_by_path_records_the_same_fingerprint(
