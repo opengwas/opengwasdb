@@ -41,7 +41,6 @@ from opengwasdb.admission import (
     Gate,
     Reason,
     admission_record_for,
-    require_admitted,
 )
 from opengwasdb.admission.declared import declared_rules
 from opengwasdb.admission.duplicates import record_duplicates
@@ -64,6 +63,7 @@ from opengwasdb.encoding import (
     combine_eaf_measurements,
     optimise_dense_se_joint,
 )
+from opengwasdb.encoding.association_codec import CellValues, log_se_out_of_range, storable
 from opengwasdb.encoding.timing import format_duration
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
@@ -438,7 +438,12 @@ def _route_column(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
         )
         parts = (("Dense", dense), ("Overflow", overflow), ("off-reference", off_reference))
         for name, part in parts:
-            require_admitted(part[1], part[2], where=f"build-hybrid {row.trait_id} {name}")
+            where = f"build-hybrid {row.trait_id} {name}"
+            kept = storable(CellValues(part[1], part[2]), 0, 1, where=where)
+            if name == "Dense":
+                # The Overflow's and the off-reference rows' are logged by the
+                # Ragged writer they reach.
+                log_se_out_of_range(kept.se_out_of_range, where=where)
         _spill_hybrid_column(context.spill_dir, col_idx, dense, overflow, off_reference)
     return col_idx
 

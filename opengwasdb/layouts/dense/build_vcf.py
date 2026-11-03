@@ -24,7 +24,6 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.admission import AdmissionRecord, AnalysisRules, Reason, admission_record_for
-from opengwasdb.admission.cells import require_admitted
 from opengwasdb.admission.declared import declared_rules
 from opengwasdb.admission.duplicates import record_duplicates
 from opengwasdb.build.eaf_orientation import (
@@ -50,6 +49,7 @@ from opengwasdb.encoding import (
     positions_row_band,
     write_eaf_baseline,
 )
+from opengwasdb.encoding.association_codec import CellValues, log_se_out_of_range, storable
 from opengwasdb.encoding.timing import log_phase
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.build_manifest import (
@@ -478,7 +478,9 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
         record_duplicates(gate, placed, context.alids)
         gate.unplaced(Reason.OFF_AXIS, routed.unmatched.keys)
         se = apply_se_divisor(placed.se, row.se_divisor)
-        require_admitted(placed.z, se, where=f"build-dense-vcf, Analysis {row.trait_id}")
+        where = f"build-dense-vcf, Analysis {row.trait_id}"
+        kept = storable(CellValues(placed.z, se), 0, 1, where=where)
+        log_se_out_of_range(kept.se_out_of_range, where=where)
         _spill_column(context.spill_dir, col_idx, placed.index, placed.z, se, placed.eaf)
     return col_idx
 

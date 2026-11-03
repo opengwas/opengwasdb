@@ -84,7 +84,7 @@ def test_a_present_cell_admission_would_not_admit_is_refused(z, se) -> None:
 
 def test_an_se_narrowed_to_infinity_is_a_stored_value_and_counted() -> None:
     kept = storable(CellValues(_f32(1.0, NAN), _f32(np.inf, NAN)), 0, 1, where="x")
-    assert kept.stored.tolist() == [True, False]
+    assert kept.stored.tolist() == [True, True]
     assert kept.se_out_of_range.tolist() == [1]
 
 
@@ -107,7 +107,7 @@ def test_storable_changes_nothing_it_keeps_and_is_idempotent() -> None:
     once = storable(cells, 0, 1, where="x")
     twice = storable(once.cells, 0, 1, where="x")
     assert once.cells is cells
-    assert twice.stored.tolist() == once.stored.tolist() == [True, False, True]
+    assert twice.stored.tolist() == once.stored.tolist() == [True, True, True]
     assert twice.se_out_of_range.tolist() == once.se_out_of_range.tolist() == [1]
 
 
@@ -129,8 +129,10 @@ def test_the_count_is_logged_once_naming_each_analysis(caplog) -> None:
     with caplog.at_level(logging.WARNING, logger="opengwasdb.encoding.association_codec"):
         log_se_out_of_range(np.array([0, 5, 2]), ["a", "b", "c"], where="build-x")
         log_se_out_of_range(np.zeros(3, dtype=np.int64), ["a", "b", "c"], where="build-x")
+        log_se_out_of_range(np.array([3]), where="build-y, analysis_index 4")
     assert [r.getMessage() for r in caplog.records] == [
-        "build-x: 7 SE value(s) above 65,504, stored as +inf (spec §15): b: 5, c: 2"
+        "build-x: 7 SE value(s) above 65,504, stored as +inf (spec §15): b: 5, c: 2",
+        "build-y, analysis_index 4: 3 SE value(s) above 65,504, stored as +inf (spec §15)",
     ]
 
 

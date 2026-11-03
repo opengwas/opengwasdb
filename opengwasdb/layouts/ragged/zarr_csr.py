@@ -32,7 +32,13 @@ from opengwasdb.encoding import (
     positions_flat,
     write_eaf_baseline,
 )
-from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
+from opengwasdb.encoding.association_codec import (
+    AssociationCodec,
+    CellValues,
+    Placement,
+    log_se_out_of_range,
+    storable,
+)
 from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.model.manifest import StoreManifest
@@ -96,6 +102,28 @@ class AnalysisAssociations(NamedTuple):
     eaf: np.ndarray  # float32, all-NaN when the store carries no EAF
 
 
+def _sorted_variant_indices(variant_index: np.ndarray) -> np.ndarray:
+    """One Analysis's variant indices, refused unless ascending.
+
+    Every builder sorts an Analysis's associations by variant_index before
+    adding them (build_besd, build_ssf, Hybrid's `_assemble_overflow_column`
+    and completion's `_remapped_analysis_arrays` all argsort). The variant-
+    side queries rely on it: `lookup` and the Hybrid overflow lookup
+    binary-search each Analysis's segment instead of scanning the store
+    (#252). An unsorted segment would make those searches return a
+    plausible, wrong row, so it is refused here rather than assumed.
+    """
+    vi = np.asarray(variant_index, dtype=np.int32)
+    if vi.size > 1 and bool(np.any(vi[1:] < vi[:-1])):
+        offset = int(np.argmax(vi[1:] < vi[:-1])) + 1
+        raise ValueError(
+            "an Analysis's associations must be sorted ascending by variant_index "
+            f"(decrease at offset {offset}); the variant-side queries binary-search "
+            "each Analysis's CSR segment and cannot be correct on unsorted rows (#252)"
+        )
+    return vi
+
+
 class RaggedCSRWriter:
     """Accumulate per-analysis associations and flush to zarr CSR arrays.
 
@@ -142,8 +170,16 @@ class RaggedCSRWriter:
         se: np.ndarray,
         eaf: np.ndarray | None = None,
         n: np.ndarray | None = None,
+        *,
+        where: str | None = None,
     ) -> None:
         """Append one analysis. Arrays must be parallel and the same length.
+
+        Its associations are judged whole first (`storable`): one Association
+        Admission would not admit refuses the build, named by `where` (the
+        builder and the Analysis; this writer's Analysis index by default),
+        and an SE above `float16`'s range is logged, since that is what it
+        becomes in a `float16` plane.
 
         `eaf` is optional (ADR 0036): an Analysis whose source reports no
         frequency passes None and contributes all-NaN, so the flat array stays
@@ -156,21 +192,10 @@ class RaggedCSRWriter:
         Analysis that carries it; the plane is written only when the plan
         declares one.
         """
-        vi = np.asarray(variant_index, dtype=np.int32)
-        # Every builder sorts an Analysis's associations by variant_index before
-        # adding them (build_besd, build_ssf, Hybrid's `_assemble_overflow_column`
-        # and completion's `_remapped_analysis_arrays` all argsort). The variant-
-        # side queries rely on it: `lookup` and the Hybrid overflow lookup
-        # binary-search each Analysis's segment instead of scanning the store
-        # (#252). An unsorted segment would make those searches return a
-        # plausible, wrong row, so it is refused here rather than assumed.
-        if vi.size > 1 and bool(np.any(vi[1:] < vi[:-1])):
-            offset = int(np.argmax(vi[1:] < vi[:-1])) + 1
-            raise ValueError(
-                "an Analysis's associations must be sorted ascending by variant_index "
-                f"(decrease at offset {offset}); the variant-side queries binary-search "
-                "each Analysis's CSR segment and cannot be correct on unsorted rows (#252)"
-            )
+        where = where or f"the Ragged writer, analysis_index {self.n_analyses}"
+        kept = storable(CellValues(np.asarray(z), np.asarray(se)), 0, 1, where=where)
+        log_se_out_of_range(kept.se_out_of_range, where=where)
+        vi = _sorted_variant_indices(variant_index)
         self._variant_indices.append(vi)
         # Held as float32 and quantised once, by the codec, at flush -- never
         # pre-rounded into a stored dtype here.

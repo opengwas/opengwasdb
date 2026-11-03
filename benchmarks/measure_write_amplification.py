@@ -17,7 +17,7 @@ The fixture's plan is built explicitly as `se int8_residual` + `eaf
 int8_residual`, and the cells are drawn so the residual branches and every side
 table are exercised: frequencies sit on a per-variant baseline with small noise
 (the residual EAF plane), standard errors follow the MAF model (the residual SE
-fit), and a handful of cells per Analysis are exact SE exceptions (0.0),
+fit), and a handful of cells per Analysis are exact SE exceptions (1,000),
 out-of-range z (|z| = 100, the z overflow table) and out-of-range EAF (1.0,
 the EAF exception table).
 
@@ -63,8 +63,9 @@ from opengwasdb.store.arrays import (
 #: The guard switch, recorded per run so the artifact says which configuration
 #: each number came from (the fixed run is guard-on, the legacy run guard-off).
 GUARD_ENV = "OPEN_GWASDB_REQUIRE_WHOLE_SHARD_WRITES"
-#: Exact `se` exceptions (0.0) and EAF exceptions (1.0), and out-of-range z, per
-#: Analysis, so every side table the residual plan can write is non-empty.
+#: Exact `se` exceptions (1,000, at a frequency of 1.0 no model predicts) and EAF
+#: exceptions (1.0), and out-of-range z, per Analysis, so every side table the
+#: residual plan can write is non-empty.
 _N_EXCEPTIONS = 4
 _N_OVERFLOW = 2
 _OVERFLOW_Z = 100.0
@@ -103,7 +104,7 @@ def _synthetic_writer(
         se = np.exp(_SE_INTERCEPT + _SE_SLOPE * x + rng.normal(0, 0.01, per_analysis))
         z = rng.standard_normal(per_analysis)
         for offset in range(_N_EXCEPTIONS):
-            se[offset] = 0.0
+            se[offset] = 1000.0
             eaf[offset] = 1.0
         for offset in range(_N_OVERFLOW):
             z[per_analysis - 1 - offset] = _OVERFLOW_Z

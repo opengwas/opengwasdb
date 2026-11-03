@@ -17,7 +17,12 @@ from opengwasdb.encoding import (
     fit_se_grid,
     measure_eaf_grid,
 )
-from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
+from opengwasdb.encoding.association_codec import (
+    AssociationCodec,
+    CellValues,
+    Placement,
+    log_se_out_of_range,
+)
 from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import (
@@ -139,7 +144,7 @@ def build_dense_observed_store(
         )
         write_variant_axis(staged.path, variants, rsid_by_alid)
         _write_index(staged, variants, analyses, records, chunk_shape)
-        _write_zarr(staged, z, se, eaf, coefficients, chunk_shape, dtype, encoding)
+        _write_zarr(staged, (z, se, eaf), coefficients, chunk_shape, encoding, analyses)
         build_top_hit_indexes(staged.path, encoding=encoding)
         write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
         return DenseBuildResult(output_path=out, n_variants=len(variants), n_analyses=len(analyses))
@@ -482,15 +487,15 @@ def _first_rsids_by_alid(records: list[NormalisedAssociation]) -> dict[str, str]
 
 def _write_zarr(
     staged: StagedRelease,
-    z: np.ndarray,
-    se: np.ndarray,
-    eaf: np.ndarray,
+    grids: tuple[np.ndarray, np.ndarray, np.ndarray],
     se_coefficients: np.ndarray,
     chunk_shape: tuple[int, int],
-    dtype: str,
     encoding: StoreEncoding,
+    analyses: list[Analysis],
 ) -> None:
-    """Encode the whole grid once, and write each plane with its side arrays."""
+    """Encode the `(z, se, eaf)` grid once, write each plane with its side
+    arrays, and log each Analysis's SEs above `float16`'s range."""
+    z, se, eaf = grids
     root = staged.arrays(mode="w")
     baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
     coefficients = se_coefficients if encoding.se.is_residual else None
@@ -513,3 +518,8 @@ def _write_zarr(
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "observed_only"
     root.attrs.update(dense_layout_records(z.shape, hint=chunk_shape))
+    log_se_out_of_range(
+        encoded.storable.se_out_of_range,
+        [analysis.analysis_id for analysis in analyses],
+        where="build-dense",
+    )

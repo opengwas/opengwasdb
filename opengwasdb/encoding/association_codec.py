@@ -91,9 +91,10 @@ class Decoded(NamedTuple):
 class Storable:
     """What a Store holds of a batch, and what the batch counted."""
 
-    #: The cells to encode.
+    #: The cells to encode: a missing one is written as its plane's marker.
     cells: CellValues
-    #: Which cells hold an association once stored.
+    #: Which cells the Store keeps. A grid writes every cell of `cells`; a
+    #: writer of association rows (a CSR) keeps only these. Every cell, today.
     stored: np.ndarray
     #: Per Analysis, how many stored SEs exceed `SE_FLOAT16_MAX`, `+inf` included.
     se_out_of_range: np.ndarray
@@ -123,7 +124,7 @@ def storable(
         if _breaks_admission(z_w, se_w, imputed_w):
             _refuse(z_w, se_w, imputed_w, where=_where(where, window, z.shape))
         over += _out_of_range(se_w, owner[window], n_analyses)
-    return Storable(cells=cells, stored=~np.isnan(z), se_out_of_range=over)
+    return Storable(cells=cells, stored=np.ones(z.shape, dtype=bool), se_out_of_range=over)
 
 
 @dataclass(frozen=True)
@@ -364,8 +365,11 @@ def _float32_or_none(values: np.ndarray | None) -> np.ndarray | None:
     return None if values is None else np.asarray(values, dtype=np.float32)
 
 
-def log_se_out_of_range(counts: np.ndarray, analysis_ids: Sequence[str], *, where: str) -> None:
-    """Log, as one warning, each Analysis's SEs above `SE_FLOAT16_MAX`.
+def log_se_out_of_range(
+    counts: np.ndarray, analysis_ids: Sequence[str] | None = None, *, where: str
+) -> None:
+    """Log, as one warning, the SEs above `SE_FLOAT16_MAX`, by Analysis when
+    `analysis_ids` names them (`where` names the one Analysis otherwise).
 
     Such an SE is stored as `+inf` and stays an association; the count is the
     one issue #338 makes each Store record. Nothing is logged for none.
@@ -374,9 +378,13 @@ def log_se_out_of_range(counts: np.ndarray, analysis_ids: Sequence[str], *, wher
     found = np.flatnonzero(counts)
     if not len(found):
         return
-    named = ", ".join(f"{analysis_ids[i]}: {int(counts[i]):,}" for i in found.tolist())
+    named = (
+        ""
+        if analysis_ids is None
+        else ": " + ", ".join(f"{analysis_ids[i]}: {int(counts[i]):,}" for i in found.tolist())
+    )
     log.warning(
-        "%s: %s SE value(s) above %s, stored as +inf (spec §15): %s",
+        "%s: %s SE value(s) above %s, stored as +inf (spec §15)%s",
         where,
         f"{int(counts.sum()):,}",
         f"{SE_FLOAT16_MAX:,.0f}",
