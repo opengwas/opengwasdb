@@ -32,7 +32,7 @@ from benchmarks._rss import RssSampler, rss_mb
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.arrays import array_length, open_group
-from opengwasdb.validation.validate import _segment_order_errors
+from opengwasdb.validation.rules.sequence import segment_order_errors
 
 
 def _loads() -> list[float]:
@@ -87,7 +87,7 @@ def _check_one(store: Path) -> dict[str, object]:
             )
             checked = 0
         else:
-            checked = _segment_order_errors(root, offsets, n_assoc, errors, "data.zarr/ragged")
+            checked = segment_order_errors(root, offsets, n_assoc, errors, "data.zarr/ragged")
         elapsed = time.perf_counter() - started
     return {
         "segments_checked": max(len(offsets) - 1, 0),

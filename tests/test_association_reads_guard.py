@@ -55,14 +55,17 @@ ALLOWED = {
     ("validation/scans.py", "_dense_band_se"):
         "one SE decode per band, from the codes the band already holds and its own EAF "
         "read, shared by every value rule that folds over the band",
+    ("validation/scans.py", "_sequence_window_se"):
+        "one SE decode per sequence window, from the codes the window already holds and "
+        "its own EAF read, shared by every value rule that folds over the window",
     ("layouts/dense/indexed_subsets.py", "_compare_indexed_band"):
         "the primary block the subset's EAF is compared against",
     ("layouts/dense/indexed_subsets.py", "_sample_decoded_view"):
         "the sampled primary cells the subset's EAF is compared against",
     # The planes those decodes read, and the decoders the readers stand on.
     ("validation/validate.py", "_decoded_csr_se"):
-        "one whole-sequence SE decode for the value, exception and marker checks; a "
-        "reader would decode Z, EAF and n with it",
+        "one whole-sequence SE decode for the Ragged imputed-mask checks, until they "
+        "fold over the sequence's windows",
     ("layouts/dense/indexed_subsets.py", "_decode_se_column"):
         "the subset's own decoder, which `SubsetReader` reads through",
     ("layouts/dense/indexed_subsets.py", "_se_band_error"):

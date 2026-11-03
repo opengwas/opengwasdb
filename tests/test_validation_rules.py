@@ -28,6 +28,7 @@ from opengwasdb.validation.rule import (
     check_registry,
 )
 from opengwasdb.validation.run import evaluate
+from opengwasdb.validation.scans import Undecodable
 
 
 def _check(
@@ -209,6 +210,35 @@ def test_a_read_that_fails_is_reported_once_and_skips_the_other_folds() -> None:
     assert result.errors == ["cannot read numbers: truncated"]
     assert result.failed() == {"a"}
     assert result.skipped == {"b": ("a",)}
+
+
+def test_a_plane_that_cannot_be_decoded_blocks_only_the_folds_that_read_it() -> None:
+    """The first fold to read it reports it, once; a fold that never reads it sees
+    every block."""
+
+    def read(target: Target) -> Iterator[int]:
+        yield from (1, 2, 3)
+
+    scan = Scan("numbers", read, lambda target, exc: f"cannot decode numbers: {exc}")
+
+    def decoded(target: Target, block: int) -> int:
+        raise Undecodable("bad codes")
+
+    def reads_the_plane(name: str) -> Fold[int, int]:
+        return Fold(
+            name=name,
+            kinds=Kind.RELEASE,
+            scan=scan,
+            zero=0,
+            measure=decoded,
+            judge=lambda target, total: [],
+        )
+
+    rules = [reads_the_plane("first"), _sum_fold("codes", scan, 0), reads_the_plane("later")]
+    result = evaluate(rules, [RELEASE])
+    assert result.errors == ["cannot decode numbers: bad codes", "codes: total 6"]
+    assert result.failed() == {"first", "codes"}
+    assert result.skipped == {"later": ("first",)}
 
 
 def test_a_rule_that_cannot_judge_its_target_is_skipped_with_its_reason() -> None:

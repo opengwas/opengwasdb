@@ -21,6 +21,7 @@ from opengwasdb.validation.rule import (
     Severity,
     Skip,
     Target,
+    Unreadable,
     ValidationResult,
 )
 
@@ -134,16 +135,16 @@ class _Run:
     def scan(self, scan: Scan[Any], i: int, target: Target) -> None:
         """Read `scan` once on target `i` for every fold on it that can run there."""
         ready = [fold for fold in self.folds_on(scan, i, target) if self.ready(fold, i, target)]
-        totals, failures, broken = _drive(scan, target, ready)
+        done = _Pass(scan, target, ready)
+        done.drive()
         for fold in ready:
-            if fold.name in failures:
-                self.settle(fold, i, [failures[fold.name]])
-            elif broken is not None:
-                self.skip(fold.name, i, [broken])
+            if fold.name in done.failures:
+                self.settle(fold, i, [done.failures[fold.name]])
+            elif fold.name in done.blocked:
+                self.skip(fold.name, i, [done.blocked[fold.name]])
             else:
-                judged = partial(fold.judged, target, totals[fold.name])
+                judged = partial(fold.judged, target, done.totals[fold.name])
                 self.settle(fold, i, _contained(fold, target, judged))
-
 
     def folds_on(self, scan: Scan[Any], i: int, target: Target) -> list[Fold[Any, Any]]:
         """The selected, undecided folds on `scan` that apply to target `i`."""
@@ -158,45 +159,55 @@ class _Run:
         return chosen and rule.applies_to(target)
 
 
-def _drive(
-    scan: Scan[Any], target: Target, folds: list[Fold[Any, Any]]
-) -> tuple[dict[str, Any], dict[str, Finding], str | None]:
-    """One pass of `scan`: each fold's total, the folds that raised, and who broke the read.
+class _Pass:
+    """One pass of a scan for its ready folds: each fold's total, failure or blocker.
 
     A fold that raises while measuring fails alone and stops measuring. A read that
-    fails part-way is reported by the first fold still measuring; the others are
-    skipped, blocked by it, since a part of the data says nothing about the whole.
+    fails part-way is reported by the first fold still measuring, and blocks the
+    others, since a part of the data says nothing about the whole. A plane that
+    cannot be decoded (`Unreadable`) is reported by the first fold that reads it
+    and blocks only the folds that read it after.
     """
-    totals = {fold.name: fold.zero for fold in folds}
-    failures: dict[str, Finding] = {}
-    try:
-        for block in scan.blocks(target):
-            _measure(folds, target, block, totals, failures)
-    except Exception as exc:  # the read itself failed, so no fold saw all of it
-        measuring = [fold for fold in folds if fold.name not in failures]
-        if not measuring:
-            return totals, failures, None
-        first = measuring[0]
-        failures[first.name] = first.finding(target, scan.failure(target, exc), Severity.ERROR)
-        return totals, failures, first.name
-    return totals, failures, None
 
+    def __init__(self, scan: Scan[Any], target: Target, folds: list[Fold[Any, Any]]) -> None:
+        self.scan, self.target, self.folds = scan, target, folds
+        self.totals = {fold.name: fold.zero for fold in folds}
+        self.failures: dict[str, Finding] = {}
+        self.blocked: dict[str, str] = {}
+        self.unreadable_by: str | None = None
 
-def _measure(
-    folds: list[Fold[Any, Any]],
-    target: Target,
-    block: Any,
-    totals: dict[str, Any],
-    failures: dict[str, Finding],
-) -> None:
-    """Add one block's measure to each fold's total; a fold that raises stops there."""
-    for fold in folds:
-        if fold.name in failures:
-            continue
+    def measuring(self) -> list[Fold[Any, Any]]:
+        stopped = self.failures.keys() | self.blocked.keys()
+        return [fold for fold in self.folds if fold.name not in stopped]
+
+    def drive(self) -> None:
         try:
-            totals[fold.name] = totals[fold.name] + fold.measure(target, block)
+            for block in self.scan.blocks(self.target):
+                for fold in self.measuring():
+                    self.measure(fold, block)
+        except Exception as exc:  # the read itself failed, so no fold saw all of it
+            measuring = self.measuring()
+            if measuring:
+                self.report(measuring[0], exc)
+                for fold in measuring[1:]:
+                    self.blocked[fold.name] = measuring[0].name
+
+    def measure(self, fold: Fold[Any, Any], block: Any) -> None:
+        """Add one block's measure to `fold`'s total; a fold that raises stops there."""
+        try:
+            self.totals[fold.name] = self.totals[fold.name] + fold.measure(self.target, block)
+        except Unreadable as exc:
+            if self.unreadable_by is None:
+                self.unreadable_by = fold.name
+                self.report(fold, exc)
+            else:
+                self.blocked[fold.name] = self.unreadable_by
         except Exception as exc:  # this fold's failure, and no other's
-            failures[fold.name] = _failure(fold, target, exc)
+            self.failures[fold.name] = _failure(fold, self.target, exc)
+
+    def report(self, fold: Fold[Any, Any], exc: Exception) -> None:
+        message = self.scan.failure(self.target, exc)
+        self.failures[fold.name] = fold.finding(self.target, message, Severity.ERROR)
 
 
 def _failure(rule: Rule, target: Target, exc: Exception) -> Finding:

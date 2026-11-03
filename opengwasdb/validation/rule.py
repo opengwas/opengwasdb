@@ -202,6 +202,15 @@ class Rule:
         return Finding(self.name, severity or self.severity, message, target.label)
 
 
+class Unreadable(Exception):
+    """A plane of one block that cannot be read or decoded; the scan words why.
+
+    Raised from a block's lazily decoded plane, so it reaches only the folds that
+    read that plane: the first to meet it reports it, the others that meet it are
+    skipped, and a fold that never reads the plane still sees every block.
+    """
+
+
 class Skip(Exception):
     """Raised by a rule that cannot judge this target; recorded with its reason.
 
@@ -230,7 +239,8 @@ class Scan(Generic[B]):
 
     `blocks` yields the target's data in order, a block at a time. `failure` words
     a read that fails part-way, which is reported once, by the first fold on the
-    scan; the others are skipped.
+    scan; the others are skipped. A plane that cannot be decoded (`Unreadable`) is
+    worded the same way and reported by the first fold that reads it.
     """
 
     name: str

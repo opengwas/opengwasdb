@@ -7,12 +7,12 @@ import sqlite3
 from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.associations import Cells, DenseGridReader, State, Tally, non_canonical
+from opengwasdb.associations import Cells, DenseGridReader, Tally
 from opengwasdb.associations import present as present_cells
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.encoding import (
@@ -20,7 +20,6 @@ from opengwasdb.encoding import (
     SE_EXCEPTION,
     Z_OVERFLOW,
     EafExceptionTable,
-    RaggedEafPlane,
     RaggedSePlane,
     SeExceptionTable,
     StoreCodec,
@@ -73,21 +72,21 @@ from opengwasdb.validation.rules import associations as association_rules
 from opengwasdb.validation.rules import completion as completion_rules
 from opengwasdb.validation.rules import csr as csr_rules
 from opengwasdb.validation.rules import encoding as encoding_rules
+from opengwasdb.validation.rules import hybrid as hybrid_rules
 from opengwasdb.validation.rules import release as release_rules
+from opengwasdb.validation.rules import sample_size as sample_size_rules
+from opengwasdb.validation.rules import sequence as sequence_rules
 from opengwasdb.validation.rules import side_tables as side_table_rules
 from opengwasdb.validation.rules import top_hits as top_hit_rules
 from opengwasdb.validation.rules import variants as variant_rules
-from opengwasdb.validation.rules.associations import (
-    grid_counts,
-    infinite_se_message,
-)
-from opengwasdb.validation.rules.csr import ARRAYS
+from opengwasdb.validation.rules.associations import DECODABLE, grid_counts
+from opengwasdb.validation.rules.csr import ARRAYS, LENGTHS
 from opengwasdb.validation.rules.encoding import PLAN
+from opengwasdb.validation.rules.hybrid import DENSE_TO_SHARED
 from opengwasdb.validation.rules.release import REQUIRED
-from opengwasdb.validation.rules.side_tables import positions_match
 from opengwasdb.validation.rules.variants import representative_variant_indices
 from opengwasdb.validation.run import evaluate, selected
-from opengwasdb.validation.sample_size import validate_ragged_n
+from opengwasdb.validation.scans import sequence_offsets
 from opengwasdb.variants import (
     VariantAxis,
     variant_table_path,
@@ -193,14 +192,16 @@ def _source_given(target: Target) -> bool:
     return target.options.source is not None
 
 
-def _legacy_infinite_se(target: Target) -> list[str]:
-    warnings: list[str] = []
-    _warn_about_infinite_ragged_se(target.store, warnings)
-    return warnings
-
-
 def _legacy_ragged(target: Target, errors: list[str], _warnings: list[str]) -> None:
     _validate_ragged_store(target.store, errors)
+
+
+def _legacy_ragged_completion(target: Target, errors: list[str], _warnings: list[str]) -> None:
+    store = target.store
+    offsets = sequence_offsets(target)
+    _validate_ragged_completion(
+        store.data_path / "ragged", store, int(offsets[-1]), len(offsets) - 1, errors
+    )
 
 
 def _legacy_hybrid(target: Target, errors: list[str], _warnings: list[str]) -> None:
@@ -252,6 +253,26 @@ def _legacy_fidelity(target: Target) -> list[str]:
 
 
 _DENSE_COMPLETION = "legacy.dense_completion"
+_RAGGED_COMPLETION = "legacy.ragged_completion"
+
+#: Every rule about a sequence's own arrays and values: the by_variant and Top-Hit
+#: cross-checks read the sequence, and would "confirm" one these found broken.
+_SEQUENCE_JUDGED: tuple[str, ...] = (
+    *PLAN,
+    *(
+        rule.name
+        for rule in (
+            *csr_rules.RULES,
+            *sample_size_rules.CHECKS,
+            *sequence_rules.RULES,
+            *association_rules.PRESENCE_RULES,
+            *association_rules.EAF_RULES,
+            *side_table_rules.RULES,
+            *sample_size_rules.RULES,
+        )
+        if rule.severity is Severity.ERROR
+    ),
+)
 
 #: The rules before source fidelity, in order: it samples what a Store holds, so it
 #: runs only on a release none of them found wrong.
@@ -261,26 +282,31 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
     *variant_rules.RULES,
     *analyses_rules.TABLE_RULES,
     *csr_rules.RULES,
+    *hybrid_rules.RULES,
     *encoding_rules.RULES,
-    Check(
-        name="legacy.infinite_se",
-        kinds=Kind.RELEASE,
-        severity=Severity.WARNING,
-        run=_legacy_infinite_se,
-    ),
+    *sample_size_rules.CHECKS,
     *association_rules.CHECKS,
     *completion_rules.CHECKS,
+    *sequence_rules.RULES,
     *association_rules.PRESENCE_RULES,
     *completion_rules.RULES,
     *association_rules.EAF_RULES,
     *side_table_rules.RULES,
+    *sample_size_rules.RULES,
     *top_hit_rules.STRUCTURE_RULES,
     *top_hit_rules.VALUE_RULES,
+    _Legacy(
+        name=_RAGGED_COMPLETION,
+        kinds=Kind.CSR,
+        when=lambda target: _is(PrimaryStorageLayout.RAGGED)(target) and _completed(target),
+        after=(ARRAYS, LENGTHS, *PLAN, DECODABLE),
+        run=_legacy_ragged_completion,
+    ),
     _Legacy(
         name="legacy.ragged",
         kinds=Kind.CSR,
         when=_is(PrimaryStorageLayout.RAGGED),
-        after=(ARRAYS, *PLAN),
+        after=(*_SEQUENCE_JUDGED, _RAGGED_COMPLETION),
         run=_legacy_ragged,
     ),
     _Legacy(
@@ -298,7 +324,7 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
         name="legacy.overflow",
         kinds=Kind.CSR,
         when=_is(PrimaryStorageLayout.HYBRID),
-        after=(ARRAYS, *PLAN),
+        after=(*_SEQUENCE_JUDGED, DENSE_TO_SHARED),
         run=_legacy_overflow,
     ),
     _Legacy(
@@ -329,65 +355,6 @@ RULES: tuple[Rule, ...] = check_registry(
         ),
     ]
 )
-
-
-# --- an infinite se is a value: reported, never a failure (issues #337, #338) ---
-
-
-def _warn_about_infinite_ragged_se(store: OpenGWASDBStore, warnings: list[str]) -> None:
-    """Warn about the infinite `se` cells of every Ragged component of this release.
-
-    An SE above a `float16` plane's range is narrowed to `+inf` beside a finite Z
-    (issue #338). Spec §15 makes that cell present, so the release is valid and the
-    Observed-View Check compares it -- but `beta = z * se` reads as infinity, and
-    nothing else in a Store says so (issue #337).
-
-    A Dense plane is not read here: `_validate_dense_store` counts it in the band
-    pass it already runs over that plane, which costs no second read. A Ragged
-    Store Release's plane and a Hybrid release's Overflow have no such pass, so
-    they are read windowed here -- and only when the plane is floating-point,
-    because `+inf` is a value no integer plane can hold.
-    """
-    try:
-        for group, label in _ragged_se_planes(store):
-            counts = _csr_infinite_se_counts(group)
-            message = infinite_se_message(label, counts, store.analyses_path)
-            if message is not None:
-                warnings.append(message)
-    except (OSError, ValueError, KeyError, IndexError):
-        # A release whose arrays cannot be read is a failure its layout's own validator
-        # reports in as many words; a warning is not the place to say so twice.
-        return
-
-
-def _ragged_se_planes(store: OpenGWASDBStore) -> Iterator[tuple[Any, str]]:
-    """Each of a release's Ragged `se` planes, with the label a warning should name it by."""
-    layout = store.manifest.primary_layout
-    if layout in (PrimaryStorageLayout.HYBRID, PrimaryStorageLayout.RAGGED):
-        yield store.arrays(mode="r")["ragged"], "data.zarr/ragged/se"
-
-
-def _csr_infinite_se_counts(group: Any) -> np.ndarray:
-    """Per Analysis, how many cells of a stored Ragged or Overflow `se` plane are infinite.
-
-    Read in `_INDEX_WINDOW` cells, so the sequence is never resident, and not at all
-    from an integer plane: `+inf` is a value only a floating-point plane can hold, so
-    a residual `int8` plane has no cell for this to find, and skipping it costs
-    nothing rather than a full read that cannot succeed.
-    """
-    offsets = np.asarray(group["offsets"][:], dtype=np.int64)
-    counts = np.zeros(max(len(offsets) - 1, 0), dtype=np.int64)
-    n_assoc = int(offsets[-1]) if len(offsets) else 0
-    if not np.issubdtype(group["se"].dtype, np.floating):
-        return counts
-    for lo in range(0, n_assoc, _INDEX_WINDOW):
-        window = np.asarray(group["se"][lo : min(lo + _INDEX_WINDOW, n_assoc)])
-        hits = np.flatnonzero(np.isinf(window)) + lo
-        if hits.size:
-            # `offsets` bounds each Analysis's segment, so the last boundary at or before
-            # a position names the Analysis holding it.
-            np.add.at(counts, np.searchsorted(offsets, hits, side="right") - 1, 1)
-    return counts
 
 
 def _recorded_from_block(
@@ -832,18 +799,15 @@ def _dense_layout(target: Target, errors: list[str]) -> None:
 
 
 def _overflow(target: Target, errors: list[str]) -> None:
-    """The Overflow's structure and values, then the cross-component invariants,
-    then its Top-Hit Index -- each only once the one before it found nothing."""
+    """The Dense Component's coverage and the Overflow's variant index, then its
+    Top-Hit Index -- each only once the one before it found nothing."""
     store = target.store
-    root = target.group
     n_shared = _n_variants(store.path)
-    n_assoc = _validate_overflow_structure(root, n_shared, errors)
-    if n_assoc is None:
-        return
-    _validate_overflow_values(root, store.manifest.encoding, n_assoc, errors)
-    if errors:
-        return
-    _validate_hybrid_invariants(store.path, dense_component_path(store.path), n_shared, errors)
+    dense_to_shared = np.load(dense_to_shared_path(store.path))
+    _validate_dense_coverage(
+        store.path, dense_component_path(store.path), dense_to_shared, len(dense_to_shared), errors
+    )
+    _validate_overflow_index(store.path, n_shared, errors)
     if errors:
         return
     data_root = store.arrays(mode="r")
@@ -910,27 +874,6 @@ def _validate_completion_quality_table(
         )
 
 
-def _match_csr_se_exceptions(
-    root: Any, encoding: StoreEncoding, errors: list[str], label: str
-) -> None:
-    """Every `-127` in a CSR `se` plane has a table entry, and the table has no other.
-
-    A residual plane and its side table are one artifact: a code marked as an
-    exception with nothing behind it decodes to whatever the lookup returns,
-    and an entry for a cell that is not marked is never read at all.
-    """
-    if not encoding.se.is_residual:
-        return
-    positions_match(
-        label,
-        np.flatnonzero(np.asarray(root["se"][:]) == SE_EXCEPTION).astype(np.int64),
-        SeExceptionTable.read(root),
-        errors,
-        what="se exception",
-        table_name="se exception",
-    )
-
-
 def _decoded_csr_se(root: Any, encoding: StoreEncoding, n_assoc: int, label: str) -> Any:
     """Decoded CSR SE, or the reason it cannot be decoded.
 
@@ -945,233 +888,24 @@ def _decoded_csr_se(root: Any, encoding: StoreEncoding, n_assoc: int, label: str
         return None, f"{label} cannot be decoded under the declared plan: {exc}"
 
 
-def _csr_parallel_length_errors(root: Any, n_assoc: int, errors: list[str]) -> None:
-    """Record each parallel CSR array whose length disagrees with ``offsets``."""
-    for name in ("variant_index", "z", "se"):
-        if array_length(root[name]) != n_assoc:
-            errors.append(
-                f"data.zarr/ragged/{name} has {array_length(root[name])} entries "
-                f"but offsets imply {n_assoc}"
-            )
-
-
-#: Cells one `variant_index` ordering window holds. The rule must never
-#: materialise the array -- validation memory is already a problem (#254) -- so
-#: it reads this many int32 at once (4 MB) and carries one previous value
-#: across windows. Peak memory is the window, its comparison bool and the
-#: per-Analysis offsets (8 bytes each), independent of the association count.
-_ORDER_WINDOW = 1_000_000
-
-#: The two ways one Analysis's `variant_index` slice can break its invariant.
-_BreakKind = Literal["decrease", "repeat"]
-_DECREASE: _BreakKind = "decrease"
-_REPEAT: _BreakKind = "repeat"
-
-
-@dataclass(frozen=True)
-class _SegmentBreak:
-    """The first row of one Analysis's segment that is not above its predecessor.
-
-    One object rather than a bare offset and a separately-typed kind: the kind
-    decides what the failure means, so it cannot be optional where the failure
-    is not, and a caller that has a `_SegmentBreak` has both.
-    """
-
-    offset: int
-    kind: _BreakKind
-
-
-def _segment_first_break(
-    variant_index: Any, start: int, end: int
-) -> tuple[_SegmentBreak | None, int]:
-    """First break in `[start, end)`, and the rows read to find it.
-
-    Bounded: `_ORDER_WINDOW` cells at a time, the preceding cell carried across
-    a window boundary. The comparison is `<=`, so a repeat is found at the same
-    offset a decrease would be, and the first offending row is always the one
-    reported (the kind is read off the pair, not from which test ran first).
-    Returns `(break or None, entries read)` so a caller can report what was
-    actually checked rather than what the offsets imply.
-    """
-    previous: int | None = None
-    read = 0
-    for lo in range(start, end, _ORDER_WINDOW):
-        hi = min(lo + _ORDER_WINDOW, end)
-        window = np.asarray(variant_index[lo:hi], dtype=np.int32)
-        read += len(window)
-        if previous is not None and int(window[0]) <= previous:
-            kind: _BreakKind = _REPEAT if int(window[0]) == previous else _DECREASE
-            return _SegmentBreak(lo, kind), read
-        breaks = np.flatnonzero(window[1:] <= window[:-1])
-        if len(breaks):
-            failure = lo + int(breaks[0]) + 1
-            repeated = int(window[failure - lo]) == int(window[failure - lo - 1])
-            return _SegmentBreak(failure, _REPEAT if repeated else _DECREASE), read
-        previous = int(window[-1])
-    return None, read
-
-
-def _segment_order_error(
-    label: str, analysis: int, variant_index: Any, failure: _SegmentBreak
-) -> str:
-    """Name the Analysis whose segment broke the ordering invariant, and how.
-
-    A repeat and a decrease are different defects and are reported differently:
-    a repeat is two associations at one variant of one Analysis (a post-lift
-    collision, or a duplicate source row), which no reader can resolve; a
-    decrease is a segment out of genomic order, on which the variant-side
-    binary search answers with a plausible, wrong row.
-    """
-    offset = failure.offset
-    previous = int(variant_index[offset - 1])
-    held = int(variant_index[offset])
-    if failure.kind == _REPEAT:
-        return (
-            f"{label}/variant_index repeats variant {held} within Analysis "
-            f"{analysis}'s segment: offsets {offset - 1} and {offset} both hold it, "
-            f"so one Analysis carries two associations at one variant"
-        )
-    return (
-        f"{label}/variant_index is not non-decreasing within Analysis "
-        f"{analysis}'s segment: offset {offset} holds {held} after {previous}"
-    )
-
-
-def _segment_order_errors(
-    root: Any, offsets: np.ndarray, n_assoc: int, errors: list[str], label: str
-) -> int:
-    """Require `variant_index` strictly increasing within every Analysis's segment.
-
-    The variant-side binary search (`RaggedCSRReader.segment_positions`) is
-    correct only on an ordered segment, and a repeated `variant_index` is two
-    associations at one variant, which `(variant, Analysis)` resolution cannot
-    represent; so the invariant is checked on every release, not only on the
-    ones this build wrote. The read is bounded: `_ORDER_WINDOW` cells at a
-    time, the preceding cell carried across a window boundary, the comparison
-    reset at each Analysis boundary. Returns the number of entries actually
-    read, so an evidence runner can report a counted total and not an
-    offset-implied one.
-    """
-    if array_length(root["variant_index"]) != n_assoc:
-        return 0  # the parallel-length rule reports this
-    variant_index = root["variant_index"]
-    checked = 0
-    for analysis in range(len(offsets) - 1):
-        start, end = int(offsets[analysis]), int(offsets[analysis + 1])
-        if end <= start:
-            continue
-        failure, read = _segment_first_break(variant_index, start, end)
-        checked += read
-        if failure is not None:
-            errors.append(_segment_order_error(label, analysis, variant_index, failure))
-            return checked
-    return checked
-
-
-def _validate_ragged_csr_structure(root: Any, errors: list[str]) -> tuple[int, int]:
-    """Seam: the CSR's parallel arrays agree in length, and each segment is ordered.
-
-    Returns ``(n_assoc, n_analyses)``. A length disagreement against ``offsets``
-    records an error but does not stop the pipeline -- the value seam reports
-    what the arrays decode to either way.
-    """
-    offsets = np.asarray(root["offsets"][:], dtype=np.int64)
-    n_assoc = int(offsets[-1])
-    _csr_parallel_length_errors(root, n_assoc, errors)
-    _segment_order_errors(root, offsets, n_assoc, errors, "data.zarr/ragged")
-    return n_assoc, len(offsets) - 1
-
-
-def _validate_ragged_csr_values(
-    root: Any, encoding: StoreEncoding, n_assoc: int, errors: list[str]
-) -> bool:
-    """Seam: every value the CSR holds decodes to what its plane claims.
-
-    Decoded, not raw: a fixed-point plane's bytes are codes, not values, and
-    a residual `se` plane can only be checked against its side tables and
-    coefficients once it decodes (issue #118). Returns False when `se` cannot
-    be decoded -- the completion and Top-Hit seams read decoded se, so a
-    store that fails here is not taken further.
-    """
-    raw_z = np.asarray(root["z"][:])
-    if encoding.z.is_fixed_point:
-        positions_match(
-            "data.zarr/ragged/z",
-            np.flatnonzero(raw_z == Z_OVERFLOW).astype(np.int64),
-            ZOverflowTable.read(root),
-            errors,
-        )
-    se_vals, se_error = _decoded_csr_se(root, encoding, n_assoc, "data.zarr/ragged/se")
-    if se_error is not None:
-        errors.append(se_error)
-        return False
-    _match_csr_se_exceptions(root, encoding, errors, "data.zarr/ragged/se")
-    if np.any(np.isfinite(se_vals) & (se_vals < 0)):
-        errors.append("se contains negative finite values")
-    errors.extend(_paired_marker_errors(raw_z, se_vals, encoding, ""))
-    # `eaf` is optional (ADR 0036); when present it is a fourth parallel
-    # CSR array and must line up with the other three.
-    if "eaf" in root:
-        if array_length(root["eaf"]) != n_assoc:
-            errors.append(
-                f"data.zarr/ragged/eaf has {array_length(root['eaf'])} entries "
-                f"but offsets imply {n_assoc}"
-            )
-        else:
-            _validate_ragged_eaf_values(root, encoding, n_assoc, errors)
-    return True
-
-
-def _validate_ragged_analyses(
-    store: OpenGWASDBStore, n_analyses_csr: int, errors: list[str]
-) -> None:
-    """Seam: analyses.tsv and index.sqlite describe the Analyses the CSR does.
-
-    `analyses.tsv` is the sole source of truth for Analytical Metadata (ADR
-    0030, ADR 0034), so its row count must equal the number of Analyses the
-    CSR's offsets bound, and a leftover SQLite `analyses` table is a failure
-    rather than a harmless relic (ADR 0034, issue #72).
-    """
-    n_analyses_tsv = len(read_analyses(store.analyses_path).rows)
-    if n_analyses_tsv != n_analyses_csr:
-        errors.append(
-            f"analyses.tsv has {n_analyses_tsv} rows but "
-            f"zarr CSR offsets imply {n_analyses_csr} analyses"
-        )
-
-
 def _validate_ragged_downstream_seams(
-    store: OpenGWASDBStore,
-    ragged_path: Path,
-    n_assoc: int,
-    n_analyses_csr: int,
-    errors: list[str],
+    store: OpenGWASDBStore, ragged_path: Path, n_assoc: int, errors: list[str]
 ) -> None:
-    """Seam: Reference-Completion state, the variant index, then Top-Hit Indexes.
+    """Seam: the variant index, then Top-Hit Indexes.
 
-    Completion is validated whenever the release declares it, for its own
-    sake. The variant-centric index and the Top-Hit Indexes are only
-    cross-checked against the CSR once every earlier seam passed -- both read
-    the CSR and would otherwise "confirm" a store the structural and value
-    seams already found broken.
+    Both are cross-checked against the CSR only once the rules about the CSR's own
+    arrays and values passed -- both read the CSR and would otherwise "confirm" a
+    store those rules already found broken.
     """
     data_root = store.arrays(mode="r")
-    if store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED:
-        _validate_ragged_completion(ragged_path, store, n_assoc, n_analyses_csr, errors)
-    if not errors:
-        axis = VariantAxis(store.path)
-        try:
-            n_variant_axis = axis.n_variants
-        finally:
-            axis.close()
-        _validate_variant_index(
-            store,
-            ragged_path,
-            n_assoc,
-            errors,
-            component_label="data.zarr/ragged",
-            n_axis=n_variant_axis,
-        )
+    _validate_variant_index(
+        store,
+        ragged_path,
+        n_assoc,
+        errors,
+        component_label="data.zarr/ragged",
+        n_axis=_n_variants(store.path),
+    )
     if not errors and top_hits.has_index(data_root):
         _validate_ragged_top_hits(store.path, data_root, errors)
 
@@ -1654,25 +1388,14 @@ def _validate_variant_index_ordering(
 
 
 def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> None:
-    """Validate a Ragged Store Release (spec §11, §15, §17) in fail-safe seams.
+    """A Ragged Store Release's variant index and Top-Hit Indexes (spec §11, §17).
 
-    ``_validate_ragged_store`` is a thin orchestrator over the seams that follow
-    the envelope, the CSR's arrays and its plan, which are rules of their own:
-    the CSR structure, the encoded values, the Analysis metadata, then
-    completion and the Top-Hit Indexes (issue #130). Each seam
-    stops the pipeline when a later seam would read what it guards, so a
-    malformed release is reported where it first goes wrong rather than as a
-    crash in a later read. An exception is reported by the rule that runs this,
-    after whatever was found before it.
+    Everything else about the release is a rule of its own. An exception is
+    reported by the rule that runs this, after whatever was found before it.
     """
     ragged_path = store.data_path / "ragged"
-    root = open_group(ragged_path)
-    n_assoc, n_analyses_csr = _validate_ragged_csr_structure(root, errors)
-    if not _validate_ragged_csr_values(root, store.manifest.encoding, n_assoc, errors):
-        return
-    _validate_ragged_analyses(store, n_analyses_csr, errors)
-    validate_ragged_n(store, root, store.manifest.encoding, errors)
-    _validate_ragged_downstream_seams(store, ragged_path, n_assoc, n_analyses_csr, errors)
+    offsets = np.asarray(open_group(ragged_path)["offsets"][:], dtype=np.int64)
+    _validate_ragged_downstream_seams(store, ragged_path, int(offsets[-1]), errors)
 
 
 def _validate_ragged_imputed_mask(
@@ -1708,7 +1431,7 @@ def _validate_ragged_imputed_missingness(
     complement of the plane's own missing marker, not ``isfinite`` of a float:
     an integer plane holds no NaN to test for, and an infinite SE is a value.
     Whether z and se agree with each other is checked on every Ragged
-    component, completed or not (`_paired_marker_errors`).
+    component, completed or not (`associations.markers_paired`).
     """
     codec = StoreCodec(encoding)
     z_missing = codec.missing_mask(root["z"][:])
@@ -1723,34 +1446,6 @@ def _validate_ragged_imputed_missingness(
         errors.append("imputed=1 rows have NaN se values")
     if tally.imputed_z_missing:
         errors.append("missing z rows have imputed=1 (inconsistent)")
-
-
-def _paired_marker_errors(
-    raw_z: np.ndarray, se_vals: np.ndarray, encoding: StoreEncoding, label: str
-) -> list[str]:
-    """A Ragged component's z and se markers, which must agree row for row and be
-    canonical (spec §15).
-
-    Applied to every association sequence -- an Observed-Only Ragged release
-    and a Hybrid's Ragged Overflow as well as a completed one. An infinite SE
-    is present, so a missing z beside one fails.
-    """
-    z_missing = StoreCodec(encoding).missing_mask(raw_z)
-    se_missing = np.isnan(se_vals)
-    odd = non_canonical(raw_z) | non_canonical(se_vals, se_missing)
-    tally = Tally.of(z_missing, se_missing, odd_marker=odd)
-    found = []
-    if tally.z_only_missing:
-        found.append(f"{label}missing z rows have a present se value (inconsistent missingness)")
-    if tally.se_only_missing:
-        found.append(f"{label}z and se missingness is inconsistent")
-    if tally.count(State.NON_CANONICAL):
-        found.append(_non_canonical_message(label))
-    return found
-
-
-def _non_canonical_message(label: str) -> str:
-    return f"{label}z or se holds a non-canonical missing marker (a NaN other than np.nan)"
 
 
 def _validate_ragged_imputed(
@@ -1949,107 +1644,6 @@ def _component_encoding_error(
     )
 
 
-def _validate_overflow_structure(root: Any, n_shared: int, errors: list[str]) -> int | None:
-    """Seam: the Overflow CSR's shape, shared-index bounds, and observed-only status.
-
-    Returns the association count when the structural guards pass; ``None``
-    stops the pipeline. ``variant_index`` bounds are checked against the
-    shared variant table the Overflow's indices address.
-    """
-    before = len(errors)
-    n_assoc = int(root["offsets"][:][-1])
-    _csr_parallel_length_errors(root, n_assoc, errors)
-    _segment_order_errors(
-        root, np.asarray(root["offsets"][:], dtype=np.int64), n_assoc, errors,
-        "data.zarr/ragged",
-    )
-    if "imputed" in root:
-        errors.append(
-            "Ragged Overflow has an imputed array — the overflow is off-panel and "
-            "must never be imputed (always observed)"
-        )
-    if len(errors) > before:
-        return None
-    vi = root["variant_index"][:]
-    if n_assoc and (int(vi.min()) < 0 or int(vi.max()) >= n_shared):
-        errors.append(
-            f"Ragged Overflow variant_index falls outside the shared variant table [0, {n_shared})"
-        )
-    return n_assoc
-
-
-def _validate_overflow_values(
-    root: Any, encoding: StoreEncoding, n_assoc: int, errors: list[str]
-) -> None:
-    """Seam: what the Overflow's encoded values decode to.
-
-    Decoded, not raw: a fixed-point `z`'s bytes are codes, and a residual `se`
-    plane can only be checked against its side tables and coefficients once
-    it decodes (issue #118). Runs even when the shared-index bounds check
-    above failed, so every defect reports rather than the first one masking
-    the rest.
-    """
-    se_vals, se_error = _decoded_csr_se(root, encoding, n_assoc, "Ragged Overflow se")
-    if se_error is not None:
-        errors.append(se_error)
-        return
-    _match_csr_se_exceptions(root, encoding, errors, "Ragged Overflow se")
-    if np.any(np.isfinite(se_vals) & (se_vals < 0)):
-        errors.append("Ragged Overflow se contains negative finite values")
-    raw_z = np.asarray(root["z"][:])
-    errors.extend(
-        _paired_marker_errors(raw_z, se_vals, encoding, "Ragged Overflow ")
-    )
-    if encoding.z.is_fixed_point:
-        positions_match(
-            "Ragged Overflow z",
-            np.flatnonzero(raw_z == Z_OVERFLOW).astype(np.int64),
-            ZOverflowTable.read(root),
-            errors,
-        )
-
-
-def _validate_hybrid_invariants(
-    store_path: Path, dense_dir: Path, n_shared: int, errors: list[str]
-) -> None:
-    """Coverage, disjoint-partition and variant-index invariants over the shared space.
-
-    The Overflow's variant-centric index (ADR 0060) is checked last, after the
-    partition invariant, so a corruption that both breaks disjointness and
-    stales the index reports the disjointness it broke rather than only the
-    index's disagreement.
-    """
-    dense_to_shared = np.load(dense_to_shared_path(store_path))
-    n_panel = len(dense_to_shared)
-
-    # dense_to_shared must be a strictly-increasing set of valid shared rows.
-    if n_panel and (int(dense_to_shared.min()) < 0 or int(dense_to_shared.max()) >= n_shared):
-        errors.append("dense_to_shared references rows outside the shared variant table")
-        return
-    if n_panel != len(np.unique(dense_to_shared)):
-        errors.append("dense_to_shared maps two Dense Component rows to one shared row")
-        return
-
-    _validate_overflow_disjoint(store_path, n_shared, dense_to_shared, errors)
-    _validate_dense_coverage(store_path, dense_dir, dense_to_shared, n_panel, errors)
-    _validate_overflow_index(store_path, n_shared, errors)
-
-
-def _validate_overflow_disjoint(
-    store_path: Path, n_shared: int, dense_to_shared: np.ndarray, errors: list[str]
-) -> None:
-    """No overflow variant may also be a Dense Component (on-panel) row."""
-    ragged_root = open_group(store_path / "data.zarr" / "ragged")
-    overflow_vi = np.unique(ragged_root["variant_index"][:])
-    on_panel = np.zeros(n_shared, dtype=bool)
-    on_panel[dense_to_shared] = True
-    if len(overflow_vi) and np.any(on_panel[overflow_vi]):
-        errors.append(
-            "disjoint-partition violated: an overflow association references an "
-            "on-panel (Dense Component) variant"
-        )
-
-
 def _validate_dense_coverage(
     store_path: Path,
     dense_dir: Path,
@@ -2108,38 +1702,6 @@ def _load_manifest(store_path: Path, errors: list[str]) -> OpenGWASDBStore | Non
     return None
 
 
-
-
-def _validate_ragged_eaf_values(
-    root: Any, encoding: StoreEncoding, n_assoc: int, errors: list[str]
-) -> None:
-    """Decoded frequencies are frequencies, and every exception cell is held.
-
-    Decoded, not raw: an `int8` residual plane's bytes are codes, and checking
-    those against `[0, 1]` would pass every store while saying nothing about
-    what a query returns.
-    """
-    if encoding.eaf.is_residual:
-        before = len(errors)
-        positions_match(
-            "data.zarr/ragged/eaf",
-            np.flatnonzero(np.asarray(root["eaf"][:]) == EAF_EXCEPTION).astype(np.int64),
-            EafExceptionTable.read(root),
-            errors,
-            what="eaf exception",
-            table_name="eaf exception",
-        )
-        if len(errors) > before:
-            # The plane cannot be decoded at all while its table disagrees with
-            # it, and saying so twice adds nothing.
-            return
-    plane = RaggedEafPlane.open(
-        root, encoding, imputed=root["imputed"] if "imputed" in root else None
-    )
-    values = plane.slice(0, n_assoc)
-    finite = np.isfinite(values)
-    if np.any(finite & ((values < 0.0) | (values > 1.0))):
-        errors.append("data.zarr/ragged/eaf contains finite values outside [0, 1]")
 
 
 _RHO_REQUIRED_ATTRS = (

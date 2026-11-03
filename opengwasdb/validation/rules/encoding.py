@@ -24,6 +24,7 @@ from opengwasdb.encoding import (
     ZOverflowTable,
     per_variant_chunk_size,
 )
+from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store.arrays import array_length, inner_chunk_of
 from opengwasdb.validation.rule import Check, Kind, Rule, Target
 from opengwasdb.validation.rules.csr import ARRAYS
@@ -56,6 +57,17 @@ Z_OVERFLOW_VALUE = ZOverflowTable.value_name
 def plan_label(target: Target) -> str:
     """The group a plan message names: `data.zarr` for a grid, `data.zarr/ragged` else."""
     return "data.zarr/ragged" if target.kind is Kind.CSR else "data.zarr"
+
+
+def plane_label(target: Target, plane: str) -> str:
+    """The plane a value message names, as each component has always named it.
+
+    An Overflow's value messages say which component they are about; a Ragged
+    release's and a grid's name the plane's path.
+    """
+    if target.kind is Kind.CSR and target.layout is PrimaryStorageLayout.HYBRID:
+        return f"Ragged Overflow {plane}"
+    return f"{plan_label(target)}/{plane}"
 
 
 def dtypes(target: Target) -> list[str]:

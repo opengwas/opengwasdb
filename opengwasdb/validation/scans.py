@@ -1,13 +1,18 @@
 """The streamed reads value rules fold over: a component's associations, a block at a time.
 
-`ASSOCIATIONS` reads a Dense grid as row bands. Every plane is read once per block,
-as stored codes, and decoded from those codes: SE from the block's own EAF read, EAF with
-the panel's frequency on imputed cells. Every rule that judges values folds over
-the same blocks, so a component's planes are read once however many rules there
-are (issue #254 bounds each block's decoded size).
+`ASSOCIATIONS` reads a Dense grid as row bands and an association sequence -- a
+Ragged release's, or a Hybrid's Overflow -- as windows of consecutive cells. Every
+plane is read once per block, as stored codes, and decoded from those codes: SE
+from the block's own EAF read, EAF with the panel's frequency on imputed cells.
+Every rule that judges values folds over the same blocks, so a component's planes
+are read once however many rules there are (issue #254 bounds each block's
+decoded size).
 
-A `Block` is the seam: `dense_bands` makes one from a grid band, and `Block.of`
-from arrays a test holds.
+SE and Z are decoded on first use, so a plane that cannot be decoded reaches only
+the rules that read it (`Unreadable`).
+
+A `Block` is the seam: `dense_bands` makes one from a grid band, `sequence_windows`
+from a run of a sequence, and `Block.of` from arrays a test holds.
 """
 
 from __future__ import annotations
@@ -15,20 +20,31 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from functools import cached_property, partial
+from typing import Any
 
 import numpy as np
 
 from opengwasdb.associations import Tally, non_canonical
 from opengwasdb.encoding.codec import (
+    EAF_BASELINE,
+    EAF_REFERENCE,
     EafExceptionTable,
     SeExceptionTable,
     StoreCodec,
     ZOverflowTable,
+    positions_flat,
 )
-from opengwasdb.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
-from opengwasdb.model.enums import CompletionState
-from opengwasdb.store.arrays import inner_chunk_of
-from opengwasdb.validation.rule import Kind, Scan, Target
+from opengwasdb.encoding.plan import EafBaselineError
+from opengwasdb.encoding.planes import (
+    SE_COEFFICIENTS,
+    DenseEafPlane,
+    DenseSePlane,
+    DenseZPlane,
+    RaggedEafPlane,
+)
+from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.store.arrays import array_length, inner_chunk_of
+from opengwasdb.validation.rule import Kind, Scan, Target, Unreadable
 
 # Dense validation decodes several raw, float32/float64 and boolean views of a
 # cell at once. OGS-00009/10 profiling measured at most 59 bytes per cell in
@@ -74,7 +90,7 @@ def per_variant(target: Target, name: str) -> np.ndarray:
     return target.remember(name, lambda: np.asarray(target.group[name][:], dtype=np.float32))
 
 
-class Undecodable(Exception):
+class Undecodable(Unreadable):
     """A block whose planes the declared plan cannot decode; the message says which."""
 
 
@@ -82,10 +98,13 @@ class Undecodable(Exception):
 class Block:
     """Cells of one component, every plane read once, as codes and decoded.
 
-    A Dense band is `rows x n_analyses`; `offset` is the flat position of its
-    first cell, the key the exact-value side tables use. `eaf` is None where the
-    component holds no frequency; `eaf_undecodable` says the plane could not be
-    decoded here, which the exception-table rule explains.
+    A Dense band is `rows x n_analyses`; a sequence window is a run of cells,
+    with each cell's `analysis` and `variant`, and the cell before it in
+    `previous`. `offset` is the flat position of the first cell, the key the
+    exact-value side tables use. `eaf` is None where the component holds no
+    frequency; `eaf_undecodable` says the plane could not be decoded here, which
+    the exception-table rule explains. `se`, `z` and `n_codes` are read or decoded
+    on first use.
     """
 
     offset: int
@@ -93,14 +112,20 @@ class Block:
     z_codes: np.ndarray
     se_codes: np.ndarray
     z_missing: np.ndarray
-    se: np.ndarray
     eaf_codes: np.ndarray | None = None
     eaf: np.ndarray | None = None
     eaf_undecodable: bool = False
     imputed: np.ndarray | None = None
     on_panel: np.ndarray | None = None
-    #: Decodes `z_codes`; a block built from values holds them as their own codes.
+    analysis: np.ndarray | None = None
+    variant: np.ndarray | None = None
+    #: The `(analysis, variant)` of the cell before a window, when there is one.
+    previous: tuple[int, int] | None = None
+    #: Decode `z_codes` and `se_codes`; a block built from values holds them as codes.
     z_decoder: Callable[[np.ndarray], np.ndarray] | None = field(default=None, repr=False)
+    se_decoder: Callable[[np.ndarray], np.ndarray] | None = field(default=None, repr=False)
+    #: Reads the block's `n` codes, when the component holds a sample-size plane.
+    read_n: Callable[[], np.ndarray] | None = field(default=None, repr=False)
     rows: int = field(init=False)
 
     def __post_init__(self) -> None:
@@ -126,7 +151,6 @@ class Block:
             z_codes=z,
             se_codes=se,
             z_missing=np.isnan(z),
-            se=se,
             eaf_codes=None if eaf is None else np.asarray(eaf, dtype=np.float32),
             eaf=None if eaf is None else np.asarray(eaf, dtype=np.float32),
             imputed=None if imputed is None else np.asarray(imputed),
@@ -141,6 +165,18 @@ class Block:
         return self.z_decoder(self.z_codes)
 
     @cached_property
+    def se(self) -> np.ndarray:
+        """The block's decoded SE, decoded on first use; `Undecodable` when it cannot be."""
+        if self.se_decoder is None:
+            return np.asarray(self.se_codes, dtype=np.float32)
+        return self.se_decoder(self.se_codes)
+
+    @cached_property
+    def n_codes(self) -> np.ndarray | None:
+        """The block's stored sample sizes, read on first use; None without a plane."""
+        return None if self.read_n is None else self.read_n()
+
+    @cached_property
     def tally(self) -> Tally:
         """The block's cells under the presence rule (spec §15, ADR 0070), counted once."""
         se_missing = np.isnan(self.se)
@@ -151,6 +187,11 @@ class Block:
 
     def per_analysis(self, mask: np.ndarray) -> np.ndarray:
         """How many cells `mask` holds in each Analysis."""
+        if self.analysis is not None:
+            held: np.ndarray = np.bincount(
+                self.analysis[np.asarray(mask, dtype=bool)], minlength=self.n_analyses
+            ).astype(np.int64)
+            return held
         counts: np.ndarray = np.asarray(mask).sum(axis=0, dtype=np.int64)
         return counts
 
@@ -161,6 +202,8 @@ class Block:
         its index into the block's flattened arrays. Found from the cells' row order,
         so a band's share costs what the band holds, not the whole index.
         """
+        if self.analysis is not None:
+            return self._locate_in_sequence(cells)
         r0 = self.offset // self.n_analyses
         order, sorted_rows = cells.by_row
         lo, hi = np.searchsorted(sorted_rows, (r0, r0 + self.rows))
@@ -168,10 +211,44 @@ class Block:
         flat = (cells.rows[found].astype(np.int64) - r0) * self.n_analyses + cells.cols[found]
         return found, flat
 
+    @cached_property
+    def _keys(self) -> tuple[np.ndarray | None, np.ndarray]:
+        """The window's `(analysis, variant)` keys in ascending order, and how to undo it.
+
+        A sound sequence holds them ascending already; one whose segments are out of
+        order (which `csr.segment_order` reports) is sorted here so a lookup is still
+        exact.
+        """
+        assert self.analysis is not None and self.variant is not None
+        keys = _cell_keys(self.analysis, self.variant)
+        if len(keys) < 2 or bool(np.all(keys[1:] > keys[:-1])):
+            return None, keys
+        order = np.argsort(keys, kind="stable")
+        return order, keys[order]
+
+    def _locate_in_sequence(self, cells: CellIndex) -> tuple[np.ndarray, np.ndarray]:
+        order, keys = self._keys
+        if len(keys) == 0:
+            return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+        wanted = cells.keys
+        lo, hi = np.searchsorted(wanted, (keys[0], keys[-1]))
+        hi = int(np.searchsorted(wanted, keys[-1], side="right"))
+        candidates = np.arange(lo, hi, dtype=np.int64)
+        slots = np.minimum(np.searchsorted(keys, wanted[candidates]), len(keys) - 1)
+        matched = keys[slots] == wanted[candidates]
+        local = slots[matched] if order is None else order[slots[matched]]
+        return candidates[matched], local.astype(np.int64)
+
     def positions(self, mask: np.ndarray) -> np.ndarray:
         """The flat positions of the cells `mask` holds."""
         found: np.ndarray = np.flatnonzero(np.asarray(mask)).astype(np.int64) + self.offset
         return found
+
+
+def _cell_keys(analysis: np.ndarray, variant: np.ndarray) -> np.ndarray:
+    """One sortable key per cell: Analysis-major, then variant, as a sequence is held."""
+    keys: np.ndarray = (analysis.astype(np.uint64) << np.uint64(32)) | variant.astype(np.uint64)
+    return keys
 
 
 class CellIndex:
@@ -180,6 +257,11 @@ class CellIndex:
     def __init__(self, rows: np.ndarray, cols: np.ndarray) -> None:
         self.rows = rows
         self.cols = cols
+
+    @cached_property
+    def keys(self) -> np.ndarray:
+        """The cells' `(Analysis, variant)` keys, ascending for a sound tier."""
+        return _cell_keys(self.cols, self.rows)
 
     @cached_property
     def by_row(self) -> tuple[np.ndarray, np.ndarray]:
@@ -247,13 +329,13 @@ class _DenseGrid:
             z_codes=z_codes,
             se_codes=se_codes,
             z_missing=self.missing(z_codes),
-            se=_dense_band_se(self, se_codes, eaf, failure, r0, r1),
             eaf_codes=eaf_codes,
             eaf=eaf,
             eaf_undecodable=failure is not None,
             imputed=imputed if self.completed else None,
             on_panel=None if self.on_panel is None else self.on_panel[r0:r1],
             z_decoder=partial(self._z, r0, r1),
+            se_decoder=partial(_dense_band_se, self, eaf=eaf, eaf_failure=failure, r0=r0, r1=r1),
         )
 
     def _z(self, r0: int, r1: int, codes: np.ndarray) -> np.ndarray:
@@ -287,6 +369,7 @@ class _DenseGrid:
 def _dense_band_se(
     grid: _DenseGrid,
     codes: np.ndarray,
+    *,
     eaf: np.ndarray | None,
     eaf_failure: ValueError | None,
     r0: int,
@@ -309,22 +392,250 @@ def _dense_band_se(
         raise Undecodable(f"cannot decode se: {exc}") from exc
 
 
+def completed(target: Target) -> bool:
+    """Whether the component's mask flags imputed cells: a Reference-Completed one's does."""
+    return target.store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
+
+
 def dense_bands(target: Target) -> Iterator[Block]:
     """A Dense grid's rows in byte-bounded bands aligned to its physical read unit."""
     group = target.group
     on_panel = None
     if "on_panel" in group:
         on_panel = target.remember("on_panel", lambda: np.asarray(group["on_panel"][:]))
-    completed = target.store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
-    grid = _DenseGrid(target, on_panel, completed)
+    grid = _DenseGrid(target, on_panel, completed(target))
     n_variants, n_analyses = grid.shape
     for r0, r1 in band_limits(n_variants, n_analyses, inner_chunk_of(grid.z)[0]):
         yield grid.band(r0, r1)
 
 
+# --- an association sequence, a window of consecutive cells at a time ---
+
+
+def sequence_offsets(target: Target) -> np.ndarray:
+    """A sequence's `offsets`, which bound each Analysis's segment, read once per run."""
+    return target.remember(
+        "offsets", lambda: np.asarray(target.group["offsets"][:], dtype=np.int64)
+    )
+
+
+def window_cells(cell_chunk: int) -> int:
+    """Cells one sequence window holds: the Dense band's byte budget, in whole chunks."""
+    cells = max(1, _WORKING_BYTES // BYTES_PER_CELL)
+    if cell_chunk > 0 and cells >= cell_chunk:
+        cells = cells // cell_chunk * cell_chunk
+    return cells
+
+
+def analyses_of(offsets: np.ndarray, lo: int, hi: int) -> np.ndarray:
+    """The Analysis holding each cell of `[lo, hi)`, from the segments' bounds."""
+    if hi <= lo:
+        return np.empty(0, dtype=np.int32)
+    first = int(np.searchsorted(offsets, lo, side="right")) - 1
+    last = int(np.searchsorted(offsets, hi - 1, side="right")) - 1
+    held = np.diff(np.clip(offsets[first : last + 2], lo, hi))
+    found: np.ndarray = np.repeat(np.arange(first, last + 1, dtype=np.int32), held)
+    return found
+
+
+class _Held:
+    """A per-variant array already in memory, read the way a plane reads a Zarr array."""
+
+    def __init__(self, values: np.ndarray) -> None:
+        self._values = values
+
+    def __getitem__(self, key: slice) -> np.ndarray:
+        return self._values[key]
+
+    @property
+    def oindex(self) -> np.ndarray:
+        return self._values
+
+
+def _parallel(group: Any, name: str, n_cells: int) -> Any:
+    """An optional array beside the sequence, when it has one entry per cell, else None.
+
+    A length that disagrees with `offsets` is a rule's finding; read anyway, it
+    would hand each cell another association's value.
+    """
+    if name not in group:
+        return None
+    array = group[name]
+    return array if array_length(array) == n_cells else None
+
+
+def judges_frequencies(target: Target) -> bool:
+    """Whether the frequency rules judge this component: a grid's and a Ragged release's."""
+    return target.kind is not Kind.CSR or target.layout is not PrimaryStorageLayout.HYBRID
+
+
+class _Sequence:
+    """What every window of one association sequence shares: arrays, codecs, side vectors."""
+
+    def __init__(self, target: Target) -> None:
+        group = target.group
+        encoding = target.encoding
+        self.group, self.encoding = group, encoding
+        self.offsets = sequence_offsets(target)
+        self.n_cells = int(self.offsets[-1]) if len(self.offsets) else 0
+        self.n_analyses = max(len(self.offsets) - 1, 0)
+        self.shape = (self.n_cells,)
+        self.completed = completed(target)
+        self.z, self.se_array, self.variant_index = group["z"], group["se"], group["variant_index"]
+        self.imputed = _parallel(group, "imputed", self.n_cells)
+        self.n_array = _parallel(group, "n", self.n_cells) if encoding.n is not None else None
+        self.decodes_eaf = "eaf" in group or bool(encoding.eaf.reference)
+        self.se_reads_eaf = _se_reads_eaf(target)
+        self.eaf_array = group["eaf"] if self.decodes_eaf and "eaf" in group else None
+        self.baseline = _held(target, EAF_BASELINE)
+        self.reference = _held(target, EAF_REFERENCE)
+        self.eaf_codec = StoreCodec(encoding, eaf_exceptions=EafExceptionTable.open(group))
+        self.se_codec = StoreCodec(encoding, se_exceptions=SeExceptionTable.open(group))
+        self.z_codec = StoreCodec(encoding, z_overflow=ZOverflowTable.open(group))
+        self.coefficients = _coefficients(target)
+        self.missing = StoreCodec(encoding).missing_mask
+        overflow = target.layout is PrimaryStorageLayout.HYBRID
+        self.se_label = "Ragged Overflow se" if overflow else "data.zarr/ragged/se"
+
+    def window(self, lo: int, hi: int, previous: tuple[int, int] | None) -> Block:
+        z_codes = np.asarray(self.z[lo:hi])
+        variant = np.asarray(self.variant_index[lo:hi])
+        imputed = None if self.imputed is None else np.asarray(self.imputed[lo:hi])
+        eaf_codes = None if self.eaf_array is None else np.asarray(self.eaf_array[lo:hi])
+        eaf, failure = self._eaf(eaf_codes, variant, imputed, lo, hi)
+        analysis = analyses_of(self.offsets, lo, hi)
+        return Block(
+            offset=lo,
+            n_analyses=self.n_analyses,
+            z_codes=z_codes,
+            se_codes=np.asarray(self.se_array[lo:hi]),
+            z_missing=self.missing(z_codes),
+            eaf_codes=eaf_codes,
+            eaf=eaf,
+            eaf_undecodable=failure is not None,
+            imputed=imputed if self.completed else None,
+            analysis=analysis,
+            variant=variant,
+            previous=previous,
+            z_decoder=partial(self._z, lo),
+            se_decoder=partial(
+                _sequence_window_se, self, eaf=eaf, eaf_failure=failure, analysis=analysis, lo=lo
+            ),
+            read_n=None if self.n_array is None else partial(self._n, lo, hi),
+        )
+
+    def _z(self, lo: int, codes: np.ndarray) -> np.ndarray:
+        return self.z_codec.decode_z(codes, positions=positions_flat(lo))
+
+    def _n(self, lo: int, hi: int) -> np.ndarray:
+        assert self.n_array is not None
+        return np.asarray(self.n_array[lo:hi])
+
+    def _eaf(
+        self,
+        codes: np.ndarray | None,
+        variant: np.ndarray,
+        imputed: np.ndarray | None,
+        lo: int,
+        hi: int,
+    ) -> tuple[np.ndarray | None, Exception | None]:
+        """The window's decoded frequencies, from the codes it holds, or why they cannot be.
+
+        A mask whose length disagrees with `offsets` is not read, so a plan that
+        substitutes the panel's frequency cannot be decoded either; the mask's own
+        rule says why.
+        """
+        if not self.decodes_eaf:
+            return None, None
+        try:
+            plane = RaggedEafPlane(
+                None if codes is None else _RowWindow(codes, lo, self.shape),
+                self.eaf_codec,
+                _RowWindow(variant, lo, self.shape),
+                baseline=self.baseline,
+                reference=self.reference,
+                imputed=None if imputed is None else _RowWindow(imputed, lo, self.shape),
+                group=self.group,
+            )
+            return plane.slice(lo, hi), None
+        except (ValueError, EafBaselineError) as exc:
+            return None, exc
+
+
+def _se_reads_eaf(target: Target) -> bool:
+    """Whether a window's SE cannot be decoded when its frequencies cannot.
+
+    A residual SE is predicted from them. An Overflow's frequencies are judged by
+    no rule of their own, so a frequency that cannot be decoded fails its SE, as it
+    always has.
+    """
+    return target.encoding.se.is_residual or not judges_frequencies(target)
+
+
+def _coefficients(target: Target) -> np.ndarray:
+    """A residual SE plane's per-Analysis fit, held for every window."""
+    if not target.encoding.se.is_residual:
+        return np.empty((0, 2), dtype=np.float32)
+    return np.asarray(target.group[SE_COEFFICIENTS][:], dtype=np.float32)
+
+
+def _held(target: Target, name: str) -> _Held | None:
+    return _Held(per_variant(target, name)) if name in target.group else None
+
+
+def _sequence_window_se(
+    sequence: _Sequence,
+    codes: np.ndarray,
+    *,
+    eaf: np.ndarray | None,
+    eaf_failure: Exception | None,
+    analysis: np.ndarray,
+    lo: int,
+) -> np.ndarray:
+    """One window's SE, decoded from its codes against the window's own EAF read.
+
+    A residual plane is predicted from the frequency, so when the window's
+    frequency cannot be decoded neither can its SE, for the same reason.
+    """
+    label = sequence.se_label
+    if sequence.se_reads_eaf and eaf_failure is not None:
+        raise Undecodable(
+            f"{label} cannot be decoded under the declared plan: {eaf_failure}"
+        ) from eaf_failure
+    frequencies = np.full(len(codes), np.nan, dtype=np.float32) if eaf is None else eaf
+    try:
+        return sequence.se_codec.decode_se(
+            codes,
+            eaf=frequencies,
+            analysis_index=analysis,
+            coefficients=sequence.coefficients,
+            positions=positions_flat(lo),
+        )
+    except ValueError as exc:
+        raise Undecodable(f"{label} cannot be decoded under the declared plan: {exc}") from exc
+
+
+def sequence_windows(target: Target) -> Iterator[Block]:
+    """A sequence's cells in byte-bounded windows aligned to its physical read unit.
+
+    Each window carries the Analysis and variant of the cell before it, so a rule
+    about consecutive cells sees across a window's edge.
+    """
+    sequence = _Sequence(target)
+    step = window_cells(inner_chunk_of(sequence.z)[0])
+    previous: tuple[int, int] | None = None
+    for lo in range(0, sequence.n_cells, step):
+        block = sequence.window(lo, min(lo + step, sequence.n_cells), previous)
+        assert block.analysis is not None and block.variant is not None
+        previous = (int(block.analysis[-1]), int(block.variant[-1]))
+        yield block
+
+
 def _blocks(target: Target) -> Iterator[Block]:
     if target.kind is Kind.GRID:
         yield from dense_bands(target)
+    elif target.kind is Kind.CSR:
+        yield from sequence_windows(target)
 
 
 def _read_failure(_target: Target, exc: Exception) -> str:

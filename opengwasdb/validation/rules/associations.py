@@ -2,10 +2,12 @@
 
 Each value rule is a fold over `ASSOCIATIONS`: it measures every block the scan
 reads and is judged on the total, so the planes are read once however many rules
-there are. The presence rules count through `Tally`, the one presence rule every
-reader shares (spec §15, ADR 0070). `grid.planes` and `grid.eaf_side_lengths`
-come first: no value means anything on a plane that does not span the axes it is
-read against.
+there are. A Dense grid and an association sequence are judged by the same rules,
+each in the words it has always been reported in. The presence rules count
+through `Tally`, the one presence rule every reader shares (spec §15, ADR 0070).
+`grid.planes` and `grid.eaf_side_lengths`, and a sequence's `csr.lengths`, come
+first: no value means anything on a plane that does not span the axes it is read
+against.
 """
 
 from __future__ import annotations
@@ -21,19 +23,29 @@ from opengwasdb.encoding import EAF_BASELINE, EAF_REFERENCE
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.store.arrays import array_length
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Severity, Target
-from opengwasdb.validation.rules.encoding import PLAN
+from opengwasdb.validation.rules.csr import ARRAYS, LENGTHS, OBSERVED_ONLY, prefix
+from opengwasdb.validation.rules.encoding import PLAN, plane_label
 from opengwasdb.validation.rules.release import REQUIRED
-from opengwasdb.validation.scans import ASSOCIATIONS, Block
+from opengwasdb.validation.scans import ASSOCIATIONS, Block, judges_frequencies
 
 #: The rule every value rule runs after for a grid's planes to span its axes.
 GRID_PLANES = "grid.planes"
 #: The rule a read that fails part-way is reported by.
 DECODABLE = "associations.decodable"
 #: The targets the value rules judge.
-VALUE_KINDS = Kind.GRID
+VALUE_KINDS = Kind.GRID | Kind.CSR
 #: What every value rule runs after: the plan its planes decode under, planes that
-#: span the axes, and, on a completed grid, a mask the same shape.
-VALUES_AFTER = (*PLAN, GRID_PLANES, "grid.eaf_side_lengths", "completion.mask")
+#: span the axes, on a completed grid a mask the same shape, and on a sequence
+#: parallel arrays one entry per association -- none of them imputed in an Overflow.
+VALUES_AFTER = (
+    *PLAN,
+    GRID_PLANES,
+    "grid.eaf_side_lengths",
+    "completion.mask",
+    ARRAYS,
+    LENGTHS,
+    OBSERVED_ONLY,
+)
 
 #: What a value rule measures in a block and adds up.
 M = TypeVar("M")
@@ -93,11 +105,16 @@ def eaf_side_lengths(target: Target) -> Iterator[str]:
             )
 
 
-def _nothing(_target: Target, _block: Block) -> int:
-    return 0
+def _decoded(_target: Target, block: Block) -> int:
+    """The cells whose SE decodes: decoded here first, so a failure is this rule's.
+
+    Every later rule reading SE shares the decode; one that cannot be made is
+    reported here, once, and those rules are skipped.
+    """
+    return int(block.se.size)
 
 
-def _judge_nothing(_target: Target, _total: int) -> Iterator[str]:
+def _judge_decoded(_target: Target, _decoded_cells: int) -> Iterator[str]:
     yield from ()
 
 
@@ -147,10 +164,16 @@ def _first_holding(counts: np.ndarray, analyses_path: Path | None) -> list[str]:
     return [ids[i] for i in holding if i in ids]
 
 
-def _judge_infinite_se(target: Target, per_analysis: np.ndarray) -> Iterator[str]:
+def _infinite_se_label(target: Target) -> str:
     # A Hybrid release's Dense Component is a Dense release at `<store>/dense` (spec
     # §16), so a warning naming plain `data.zarr` would send its reader to the wrong one.
-    label = "dense/data.zarr/se" if target.is_component else "data.zarr/se"
+    if target.kind is Kind.CSR:
+        return "data.zarr/ragged/se"
+    return "dense/data.zarr/se" if target.is_component else "data.zarr/se"
+
+
+def _judge_infinite_se(target: Target, per_analysis: np.ndarray) -> Iterator[str]:
+    label = _infinite_se_label(target)
     message = infinite_se_message(label, per_analysis, target.store.analyses_path)
     if message is not None:
         yield message
@@ -160,9 +183,9 @@ def _negative_se(_target: Target, block: Block) -> int:
     return int(np.count_nonzero(np.isfinite(block.se) & (block.se < 0)))
 
 
-def _judge_negative_se(_target: Target, n: int) -> Iterator[str]:
+def _judge_negative_se(target: Target, n: int) -> Iterator[str]:
     if n:
-        yield "se contains negative finite values"
+        yield f"{prefix(target)}se contains negative finite values"
 
 
 def tally(_target: Target, block: Block) -> Tally:
@@ -170,16 +193,29 @@ def tally(_target: Target, block: Block) -> Tally:
     return block.tally
 
 
-def _judge_paired(_target: Target, total: Tally) -> Iterator[str]:
-    """Z and SE are missing in exactly the same cells (spec §15)."""
-    if total.count(State.PARTIAL):
-        yield "z and se missingness is inconsistent"
+def _judge_paired(target: Target, total: Tally) -> Iterator[str]:
+    """Z and SE are missing in exactly the same cells (spec §15).
+
+    A sequence has always named which of the two is missing alone; a grid, that
+    they disagree. An infinite SE is present, so a missing Z beside one fails.
+    """
+    if target.kind is Kind.GRID:
+        if total.count(State.PARTIAL):
+            yield "z and se missingness is inconsistent"
+        return
+    if total.z_only_missing:
+        yield f"{prefix(target)}missing z rows have a present se value (inconsistent missingness)"
+    if total.se_only_missing:
+        yield f"{prefix(target)}z and se missingness is inconsistent"
 
 
-def _judge_canonical(_target: Target, total: Tally) -> Iterator[str]:
+def _judge_canonical(target: Target, total: Tally) -> Iterator[str]:
     """Every missing marker is the canonical one (spec §15, ADR 0070)."""
     if total.count(State.NON_CANONICAL):
-        yield "z or se holds a non-canonical missing marker (a NaN other than np.nan)"
+        yield (
+            f"{prefix(target)}z or se holds a non-canonical missing marker "
+            "(a NaN other than np.nan)"
+        )
 
 
 def _eaf_out_of_range(_target: Target, block: Block) -> int:
@@ -189,7 +225,7 @@ def _eaf_out_of_range(_target: Target, block: Block) -> int:
     return int(np.count_nonzero(np.isfinite(eaf) & ((eaf < 0.0) | (eaf > 1.0))))
 
 
-def _judge_eaf_range(_target: Target, n: int) -> Iterator[str]:
+def _judge_eaf_range(target: Target, n: int) -> Iterator[str]:
     """Decoded frequencies are frequencies: none may fall outside [0, 1].
 
     Decoded, not raw: an `int8` residual plane's bytes are codes, and checking those
@@ -197,7 +233,7 @@ def _judge_eaf_range(_target: Target, n: int) -> Iterator[str]:
     frequencies a query returns.
     """
     if n:
-        yield "data.zarr/eaf contains finite values outside [0, 1]"
+        yield f"{plane_label(target, 'eaf')} contains finite values outside [0, 1]"
 
 
 CHECKS: tuple[Rule, ...] = (
@@ -214,11 +250,12 @@ def value_fold(
     *,
     severity: Severity = Severity.ERROR,
     when: Callable[[Target], bool] | None = None,
+    kinds: Kind = VALUE_KINDS,
 ) -> Fold[Block, M]:
     """A value rule over `ASSOCIATIONS`, after `VALUES_AFTER`, on every value target."""
     return Fold(
         name=name,
-        kinds=VALUE_KINDS,
+        kinds=kinds,
         after=VALUES_AFTER,
         when=when if when is not None else _always,
         severity=severity,
@@ -235,7 +272,7 @@ def _always(_target: Target) -> bool:
 
 #: The read every value rule shares, and the presence rules.
 PRESENCE_RULES: tuple[Rule, ...] = (
-    value_fold(DECODABLE, 0, _nothing, _judge_nothing),
+    value_fold(DECODABLE, 0, _decoded, _judge_decoded),
     value_fold(
         "associations.se_infinite",
         np.zeros((), dtype=np.int64),
@@ -250,5 +287,11 @@ PRESENCE_RULES: tuple[Rule, ...] = (
 
 #: The frequency rule, reported after the completion rules as it always has been.
 EAF_RULES: tuple[Rule, ...] = (
-    value_fold("associations.eaf_range", 0, _eaf_out_of_range, _judge_eaf_range),
+    value_fold(
+        "associations.eaf_range",
+        0,
+        _eaf_out_of_range,
+        _judge_eaf_range,
+        when=judges_frequencies,
+    ),
 )

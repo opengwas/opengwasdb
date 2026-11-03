@@ -243,7 +243,6 @@ def _codes_block(codes: np.ndarray, offset: int) -> Block:
         z_codes=codes,
         se_codes=zeros,
         z_missing=np.zeros(codes.shape, dtype=bool),
-        se=zeros,
     )
 
 

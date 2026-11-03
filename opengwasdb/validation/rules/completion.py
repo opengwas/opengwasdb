@@ -140,14 +140,31 @@ CHECKS: tuple[Rule, ...] = (
 
 #: The value rules about the mask, in the order they have always reported.
 RULES: tuple[Rule, ...] = (
-    value_fold("completion.mask_binary", Tally(), tally, _judge_binary, when=completed),
-    value_fold("completion.imputed_present", Tally(), tally, _judge_present, when=completed),
-    value_fold("completion.off_panel", 0, _off_panel_imputed, _judge_off_panel, when=completed),
+    value_fold(
+        "completion.mask_binary", Tally(), tally, _judge_binary, when=completed, kinds=Kind.GRID
+    ),
+    value_fold(
+        "completion.imputed_present",
+        Tally(),
+        tally,
+        _judge_present,
+        when=completed,
+        kinds=Kind.GRID,
+    ),
+    value_fold(
+        "completion.off_panel",
+        0,
+        _off_panel_imputed,
+        _judge_off_panel,
+        when=completed,
+        kinds=Kind.GRID,
+    ),
     value_fold(
         "completion.declaration",
         np.zeros((), dtype=np.int64),
         _imputed_per_analysis,
         _judge_declaration,
         when=completed,
+        kinds=Kind.GRID,
     ),
 )

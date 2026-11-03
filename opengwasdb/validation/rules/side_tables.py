@@ -26,8 +26,8 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.validation.rule import Fold, Rule, Target
 from opengwasdb.validation.rules.associations import VALUE_KINDS, VALUES_AFTER
-from opengwasdb.validation.rules.encoding import plan_label
-from opengwasdb.validation.scans import ASSOCIATIONS, Block
+from opengwasdb.validation.rules.encoding import plane_label
+from opengwasdb.validation.scans import ASSOCIATIONS, Block, judges_frequencies
 
 
 @dataclass(frozen=True)
@@ -92,7 +92,7 @@ def _judge_z_overflow(target: Target, marked: Marked) -> Iterator[str]:
     if not target.encoding.z.is_fixed_point:
         return
     errors: list[str] = []
-    label = f"{plan_label(target)}/z"
+    label = plane_label(target, "z")
     positions_match(label, marked.positions, ZOverflowTable.read(target.group), errors)
     yield from errors
 
@@ -114,7 +114,7 @@ def _judge_eaf_exceptions(target: Target, marked: Marked) -> Iterator[str]:
     if not target.encoding.eaf.is_residual or "eaf" not in target.group:
         return
     errors: list[str] = []
-    label = f"{plan_label(target)}/eaf"
+    label = plane_label(target, "eaf")
     positions_match(
         label,
         marked.positions,
@@ -140,7 +140,7 @@ def _judge_se_exceptions(target: Target, marked: Marked) -> Iterator[str]:
         return
     errors: list[str] = []
     positions_match(
-        f"{plan_label(target)}/se",
+        plane_label(target, "se"),
         marked.positions,
         SeExceptionTable.read(target.group),
         errors,
@@ -163,6 +163,7 @@ RULES: tuple[Rule, ...] = (
     Fold(
         name="side_tables.eaf_exceptions",
         kinds=VALUE_KINDS,
+        when=judges_frequencies,
         after=VALUES_AFTER,
         scan=ASSOCIATIONS,
         zero=Marked(),
