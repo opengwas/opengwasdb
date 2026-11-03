@@ -25,6 +25,7 @@ import numpy as np
 
 from opengwasdb.admission import AdmissionRecord, AnalysisRules, admission_record_for
 from opengwasdb.admission.cells import require_admitted
+from opengwasdb.admission.duplicates import record_duplicates
 from opengwasdb.build.eaf_orientation import (
     DEFAULT_SAMPLE_SITES,
     EafOrientationReport,
@@ -426,6 +427,7 @@ class _Pass2Context:
     table: RouteTable
     spill_dir: Path
     record: AdmissionRecord
+    alids: Sequence[str]
 
 
 def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
@@ -447,6 +449,7 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
             imputation_scores=gate.reads_imputation_scores,
         )
         placed = routed.placed[0]
+        record_duplicates(gate, placed, context.alids)
         se = apply_se_divisor(placed.se, row.se_divisor)
         require_admitted(placed.z, se, where=f"build-dense-vcf, Analysis {row.trait_id}")
         _spill_column(context.spill_dir, col_idx, placed.index, placed.z, se, placed.eaf)
@@ -482,7 +485,7 @@ def _spill_columns(
     record = AdmissionRecord.open(
         admission_record, [row.trait_id for row in manifest_rows], command="build-dense-vcf"
     )
-    context = _Pass2Context(table, spill_dir, record)
+    context = _Pass2Context(table, spill_dir, record, axis.alids)
     columns = fork_each(_route_and_spill, context, tasks, n_workers)
     for i, col_idx in enumerate(columns):
         log_progress(

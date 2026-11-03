@@ -26,8 +26,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from opengwasdb.admission import AdmissionRecord, AnalysisRules, SourceRows, admission_record_for
-from opengwasdb.admission.cells import require_admitted
+from opengwasdb import admission
 from opengwasdb.build.eaf_orientation import (
     EafOrientationReport,
     apply_orientation_evidence,
@@ -69,6 +68,7 @@ from opengwasdb.variants.normalise import (
     chromosome_sort_key,
     orient_to_canonical,
 )
+from opengwasdb.variants.routing import collapse_duplicates
 
 _MISSING = {"", ".", "NA", "NaN", "nan", "None"}
 
@@ -239,26 +239,23 @@ def _source_row(row: dict[str, str]) -> _SourceRow | None:
     return ori.variant, z, se, rsid, eaf
 
 
-def _admitted_rows(path: Path, record: AdmissionRecord, analysis_id: str) -> list[_SourceRow]:
+def _admitted_rows(path: Path, gate: admission.Gate) -> list[_SourceRow]:
     """One filtered file's rows that its Analysis's Admission gate keeps, in file order."""
     rows = list(_read_filtered(path))
-    with record.gate(AnalysisRules(analysis_id)) as gate:
-        keep = gate.source_rows(
-            SourceRows(
-                eaf=np.full(len(rows), np.nan),
-                se=np.fromiter((row[2] for row in rows), dtype=np.float64, count=len(rows)),
-                z=np.fromiter((row[1] for row in rows), dtype=np.float64, count=len(rows)),
-                keys_at=lambda positions: [rows[i][0].alid for i in positions.tolist()],
-            )
+    keep = gate.source_rows(
+        admission.SourceRows(
+            eaf=np.full(len(rows), np.nan),
+            se=np.fromiter((row[2] for row in rows), dtype=np.float64, count=len(rows)),
+            z=np.fromiter((row[1] for row in rows), dtype=np.float64, count=len(rows)),
+            keys_at=lambda positions: [rows[i][0].alid for i in positions.tolist()],
         )
+    )
     if keep.all():
         return rows
     return list(compress(rows, keep.tolist()))
 
 
-def _dedupe_per_analysis(
-    recs: list[_Assoc],
-) -> tuple[list[_Assoc], int, int]:
+def _dedupe_per_analysis(recs: list[_Assoc], gate: admission.Gate) -> tuple[list[_Assoc], int, int]:
     """Resolve multiple source rows canonicalizing to the same variant within
     one analysis (issue #101): rows with identical (z, se) are a harmless
     duplicate submission and collapse to one; rows that disagree are dropped
@@ -268,35 +265,27 @@ def _dedupe_per_analysis(
     and when their canonicalized z-scores conflict there is no principled way
     to pick a winner from the data alone.
 
-    Agreement is judged on `(z, se)` alone. A duplicate pair that agrees on
-    the statistics but not on `eaf` is still one association -- the frequency
-    is annotation, not the finding -- so the first row's `eaf` is kept rather
-    than the cell being dropped over it (ADR 0036).
+    The rule is Variant Routing's (`collapse_duplicates`), so every builder
+    resolves a duplicate alike. Agreement is judged on `(z, se)` alone. A
+    duplicate pair that agrees on the statistics but not on `eaf` is still one
+    association -- the frequency is annotation, not the finding -- so the first
+    row's `eaf` is kept rather than the cell being dropped over it (ADR 0036).
+    The gate counts the collapsed rows and counts and logs the dropped ones.
 
-    Returns ``(deduped_recs, n_consistent_collapsed, n_conflicting_dropped)``.
+    Returns ``(deduped_recs, n_consistent_collapsed, n_conflicting_dropped)``,
+    the last two counting variants.
     """
-    by_alid: dict[str, list[_Assoc]] = {}
-    order: list[str] = []
-    for rec in recs:
-        if rec.alid not in by_alid:
-            order.append(rec.alid)
-        by_alid.setdefault(rec.alid, []).append(rec)
-
-    out: list[_Assoc] = []
-    n_consistent = 0
-    n_conflicting = 0
-    for alid in order:
-        values = by_alid[alid]
-        if len(values) == 1:
-            out.append(values[0])
-            continue
-        first = values[0]
-        if all((v.z, v.se) == (first.z, first.se) for v in values[1:]):
-            out.append(first)
-            n_consistent += 1
-        else:
-            n_conflicting += 1
-    return out, n_consistent, n_conflicting
+    number: dict[str, int] = {}
+    codes = np.fromiter(
+        (number.setdefault(rec.alid, len(number)) for rec in recs), dtype=np.int64, count=len(recs)
+    )
+    z = np.fromiter((rec.z for rec in recs), dtype=np.float64, count=len(recs))
+    se = np.fromiter((rec.se for rec in recs), dtype=np.float64, count=len(recs))
+    found = collapse_duplicates(codes, z, se)
+    gate.duplicates([recs[i].alid for i in found.dropped.tolist()], found.collapsed)
+    repeated = int(np.count_nonzero(np.bincount(codes, minlength=len(number)) > 1))
+    n_conflicting = len(found.conflicting)
+    return [recs[i] for i in found.keep.tolist()], repeated - n_conflicting, n_conflicting
 
 
 def build_ragged_from_ssf(
@@ -338,7 +327,7 @@ def build_ragged_from_ssf(
                 eaf_reference=eaf_reference,
                 eaf_reference_ancestry=eaf_reference_ancestry,
                 allow_unverified_eaf=allow_unverified_eaf,
-                admission_record=admission_record_for(out, admission_record),
+                admission_record=admission.admission_record_for(out, admission_record),
             ),
         )
 
@@ -372,7 +361,7 @@ def _build_ssf_release(
     manifest_path, filtered_dir = sources
     analytes = _read_manifest(manifest_path, filtered_dir)
     print(f"Manifest: {len(analytes)} analyses")
-    record = AdmissionRecord.open(
+    record = admission.AdmissionRecord.open(
         request.admission_record,
         [a.analysis_id for a in analytes],
         command="build-ragged-ssf",
@@ -446,7 +435,7 @@ def _validate_stored_effect_scale(stored_effect_scale: str) -> None:
 
 
 def _ingest_ssf_sources(
-    analytes: list[AnalyteInput], record: AdmissionRecord
+    analytes: list[AnalyteInput], record: admission.AdmissionRecord
 ) -> tuple[list[list[_Assoc]], dict[str, CanonicalVariant], dict[str, str]]:
     """Read every filtered source and resolve each analysis's associations.
 
@@ -463,14 +452,15 @@ def _ingest_ssf_sources(
     rsid_by_alid: dict[str, str] = {}
     for a in analytes:
         recs: list[_Assoc] = []
-        for variant, z, se, rsid, eaf in _admitted_rows(a.filtered_path, record, a.analysis_id):
-            alid = variant.alid
-            recs.append(_Assoc(alid, z, se, eaf))
-            if alid not in alid_variant:
-                alid_variant[alid] = variant
-                if rsid and rsid.startswith("rs"):
-                    rsid_by_alid[alid] = rsid
-        recs, n_consistent, n_conflicting = _dedupe_per_analysis(recs)
+        with record.gate(admission.AnalysisRules(a.analysis_id)) as gate:
+            for variant, z, se, rsid, eaf in _admitted_rows(a.filtered_path, gate):
+                alid = variant.alid
+                recs.append(_Assoc(alid, z, se, eaf))
+                if alid not in alid_variant:
+                    alid_variant[alid] = variant
+                    if rsid and rsid.startswith("rs"):
+                        rsid_by_alid[alid] = rsid
+            recs, n_consistent, n_conflicting = _dedupe_per_analysis(recs, gate)
         per_analysis.append(recs)
         _print_ingest_summary(a, recs, n_consistent, n_conflicting)
     record.finish()
@@ -615,7 +605,7 @@ def _add_ssf_associations(
     eaf_arr = np.fromiter(
         (np.nan if r.eaf is None else r.eaf for r in recs), dtype=np.float32, count=len(recs)
     )
-    require_admitted(z_arr, se_arr, where=f"build-ragged-ssf, analysis_index {index}")
+    admission.require_admitted(z_arr, se_arr, where=f"build-ragged-ssf, analysis_index {index}")
     order = np.argsort(vi, kind="stable")
     has_eaf = bool(np.isfinite(eaf_arr).any())
     if has_eaf:

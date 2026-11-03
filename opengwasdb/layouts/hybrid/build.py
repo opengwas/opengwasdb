@@ -40,9 +40,11 @@ from opengwasdb.admission import (
     AdmissionRecord,
     AnalysisRules,
     Gate,
+    Reason,
     admission_record_for,
     require_admitted,
 )
+from opengwasdb.admission.duplicates import record_duplicates
 from opengwasdb.build.eaf_orientation import (
     EafOrientationMethod,
     EafOrientationOutcome,
@@ -190,6 +192,7 @@ from opengwasdb.variants.routing import (
     RoutingKey,
     Unmatched,
     VariantRouting,
+    collapse_duplicates,
     last_wins,
     route_variants,
 )
@@ -275,16 +278,21 @@ _Component = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 def _dedup_last_wins(
     target: np.ndarray, z: np.ndarray, se: np.ndarray, eaf: np.ndarray
 ) -> _Component:
-    """Keep the last stream occurrence per index, as Variant Routing keeps a column's."""
+    """Keep the last stream occurrence per index: the fold's precedence for an
+    off-reference entry over an existing Overflow one on a shared index (#223)."""
     if len(target) == 0:
         return target, z, se, eaf
     keep = last_wins(target)
     return target[keep], z[keep], se[keep], eaf[keep]
 
 
-def _off_reference_spill(unmatched: Unmatched, se_divisor: float) -> _OffReferenceSpill:
+def _off_reference_spill(
+    unmatched: Unmatched, se_divisor: float, gate: Gate
+) -> _OffReferenceSpill:
     """The associations the route table does not hold, one uint64 key per raw
-    coordinate, deduplicated last-wins on that key.
+    coordinate, their duplicates on that key resolved as an axis's are
+    (`collapse_duplicates`): a conflicting key's rows are dropped and logged
+    by raw coordinate.
 
     The reference never named them, so their shared index is assigned only by
     the fold. Only the hashed survivors need a raw string in the side file;
@@ -300,7 +308,14 @@ def _off_reference_spill(unmatched: Unmatched, se_divisor: float) -> _OffReferen
             [],
         )
     encoded = encode_keys(unmatched.keys)
-    keys, z, se, eaf = _dedup_last_wins(encoded.values, unmatched.z, unmatched.se, unmatched.eaf)
+    found = collapse_duplicates(encoded.values, unmatched.z, unmatched.se)
+    gate.unplaced(
+        Reason.DUPLICATE_CONFLICTING, [unmatched.keys[i] for i in found.dropped.tolist()]
+    )
+    gate.collapsed(found.collapsed)
+    keep = found.keep
+    keys, z, se = encoded.values[keep], unmatched.z[keep], unmatched.se[keep]
+    eaf = unmatched.eaf[keep]
     lookup = encoded.hashed_lookup()
     hashed_index = np.flatnonzero(is_hashed(keys)).astype(np.int64)
     hashed_raw = [lookup[int(keys[position])] for position in hashed_index.tolist()]
@@ -308,7 +323,7 @@ def _off_reference_spill(unmatched: Unmatched, se_divisor: float) -> _OffReferen
 
 
 def _resolve_column_hybrid(
-    table: RouteTable, row: ManifestRow, gate: Gate
+    table: RouteTable, row: ManifestRow, gate: Gate, axes: tuple[Sequence[str], ...]
 ) -> tuple[_Component, _Component, _OffReferenceSpill]:
     """Stream one study once, routing each association to the dense fill
     (on-panel), the ragged overflow (off-panel), or -- when the route table does
@@ -333,11 +348,13 @@ def _resolve_column_hybrid(
         imputation_scores=gate.reads_imputation_scores,
     )
     dense, overflow = routed.placed
+    for placed, alids in zip(routed.placed, axes, strict=True):
+        record_duplicates(gate, placed, alids)
     divisor = row.se_divisor
     return (
         (dense.index, dense.z, apply_se_divisor(dense.se, divisor), dense.eaf),
         (overflow.index, overflow.z, apply_se_divisor(overflow.se, divisor), overflow.eaf),
-        _off_reference_spill(routed.unmatched, divisor),
+        _off_reference_spill(routed.unmatched, divisor, gate),
     )
 
 
@@ -386,6 +403,7 @@ class _Pass2Context:
     info_score_policies: Mapping[str, InfoScorePolicy]
     maf_policies: Mapping[str, MafPolicy]
     record: AdmissionRecord
+    axes: tuple[Sequence[str], ...]
 
 
 def _route_column(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
@@ -398,7 +416,9 @@ def _route_column(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
         maf=context.maf_policies[row.trait_id],
     )
     with context.record.gate(rules) as gate:
-        dense, overflow, off_reference = _resolve_column_hybrid(context.table, row, gate)
+        dense, overflow, off_reference = _resolve_column_hybrid(
+            context.table, row, gate, context.axes
+        )
         parts = (("Dense", dense), ("Overflow", overflow), ("off-reference", off_reference))
         for name, part in parts:
             require_admitted(part[1], part[2], where=f"build-hybrid {row.trait_id} {name}")
@@ -1854,6 +1874,7 @@ def _route_studies(
         prepared.info_score_policies,
         prepared.maf_policies,
         record,
+        (prepared.partition.panel_sorted, prepared.partition.shared_sorted),
     )
     tasks = [(analysis_index[row.trait_id], row) for row in rows]
     routed = fork_each(_route_column, context, tasks, options.n_workers)

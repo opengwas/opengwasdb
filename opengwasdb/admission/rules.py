@@ -33,9 +33,14 @@ rows with no usable frequency are also counted on their own, whatever INFO
 did, under any policy that reads the column (`DISABLED` and `FILTERED`), which
 is the `maf_missing` a Store's provenance reports.
 
-A row dropped by a declared filter is counted only; a row dropped for any other
-reason is also logged, by its source key, because nothing but the source can
-say which rows those were.
+After the rules, a row is judged against the other rows that reach its place
+on the Variant Index. Rows that agree on z and SE are one association and
+collapse to the first (`duplicate_collapsed`); rows that disagree are all
+dropped (`duplicate_conflicting`), since nothing says which is right.
+
+A row dropped by a declared filter, or collapsed into its first, is counted
+only; a row dropped for any other reason is also logged, by its source key,
+because nothing but the source can say which rows those were.
 """
 
 from __future__ import annotations
@@ -75,13 +80,23 @@ class Reason(StrEnum):
     INFO_BELOW_THRESHOLD = "info_below_threshold"
     MAF_MISSING = "maf_missing"
     MAF_BELOW_THRESHOLD = "maf_below_threshold"
+    #: A row that agreed with an earlier row for its (variant, Analysis), whose
+    #: association it is: not lost, so counted only.
+    DUPLICATE_COLLAPSED = "duplicate_collapsed"
+    #: A row for a (variant, Analysis) whose rows disagree on z or SE.
+    DUPLICATE_CONFLICTING = "duplicate_conflicting"
 
 
 #: The reasons whose rows are logged by source key, not only counted. A declared
 #: filter's drops are reproducible from the source and the policy, and logging
 #: them would cost more than the Store they filter.
 LOGGED: frozenset[Reason] = frozenset(
-    {Reason.SE_UNUSABLE, Reason.EFFECT_MISSING, Reason.Z_NONFINITE}
+    {
+        Reason.SE_UNUSABLE,
+        Reason.EFFECT_MISSING,
+        Reason.Z_NONFINITE,
+        Reason.DUPLICATE_CONFLICTING,
+    }
 )
 
 #: A row's reason code: 0 is admitted, ``i + 1`` is ``_REASONS[i]``.

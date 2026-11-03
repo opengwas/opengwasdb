@@ -31,10 +31,12 @@ from opengwasdb.variants.routing.route import (
 from opengwasdb.variants.routing.table import (
     Admit,
     AssociationBatch,
+    Duplicates,
     Placed,
     RoutedColumn,
     RouteTable,
     Unmatched,
+    collapse_duplicates,
     last_wins,
 )
 from opengwasdb.variants.routing.union import Pass1Stats, UnionOptions
@@ -42,6 +44,7 @@ from opengwasdb.variants.routing.union import Pass1Stats, UnionOptions
 __all__ = [
     "Admit",
     "AssociationBatch",
+    "Duplicates",
     "EmptyReferenceError",
     "FromReference",
     "LiftedUnion",
@@ -58,6 +61,7 @@ __all__ = [
     "Unmatched",
     "VariantReferenceExtraction",
     "VariantRouting",
+    "collapse_duplicates",
     "extract_variant_reference",
     "last_wins",
     "place_sites",

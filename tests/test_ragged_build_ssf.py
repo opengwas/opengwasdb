@@ -657,6 +657,22 @@ def test_duplicate_canonical_variant_within_analysis_is_resolved(tmp_path):
     surviving_alids = {alid_by_index[int(i)] for i in a0.variant_index}
     assert surviving_alids == {"1:100000:A:G", "1:300000:A:G"}
 
+    # The Admission record counts the collapsed row and logs both conflicting ones.
+    import gzip
+    import json
+
+    from opengwasdb.admission import admission_record_for
+
+    record = admission_record_for(out)
+    (analysis,) = json.loads((record / "admission.json").read_text(encoding="utf-8"))["analyses"]
+    assert analysis["dropped"] == {"duplicate_collapsed": 1, "duplicate_conflicting": 2}
+    assert (analysis["examined"], analysis["admitted"]) == (5, 2)
+    with gzip.open(record / "dropped" / "0.tsv.gz", "rt", encoding="utf-8") as fh:
+        assert fh.read().splitlines()[1:] == [
+            "1:200000:A:G\tduplicate_conflicting",
+            "1:200000:A:G\tduplicate_conflicting",
+        ]
+
     from opengwasdb.validation import validate_store
 
     assert validate_store(out).ok

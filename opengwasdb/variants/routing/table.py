@@ -10,9 +10,9 @@ indel does not pad every key to 546 bytes.
 
 `RouteTable.route_column` streams one Analysis's associations in fixed-size
 batches, so a worker never holds a genome-wide source as Python lists, and
-returns each axis's rows with the last stream occurrence of each index kept:
-when two source keys reach one index, the later one wins, as it would were
-the whole source matched at once.
+returns each axis's rows with each index's duplicates resolved
+(`collapse_duplicates`): rows that agree collapse to the first, and rows that
+disagree are all dropped, since no row says which is right.
 """
 
 from __future__ import annotations
@@ -87,12 +87,14 @@ Admit = Callable[[AssociationBatch], np.ndarray]
 
 @dataclass(frozen=True)
 class Placed:
-    """One axis's rows for one Analysis, the last stream occurrence of each index kept.
+    """One axis's rows for one Analysis, each index's duplicates resolved.
 
     ``index`` is a position on that axis, in the stream order of the kept
     rows. ``z`` and ``eaf`` follow the stored alleles; ``se`` is the
-    source's. ``conflicting`` holds the indices more than one association
-    reached with different statistics, of which only the last is kept.
+    source's. An index more than one association reached keeps the first of
+    them when all agree on z and SE, and ``collapsed`` counts the rest. When
+    they disagree none is kept: ``conflicting`` holds those indices, and
+    ``dropped`` the index of every row dropped for them, in stream order.
     """
 
     index: np.ndarray
@@ -100,6 +102,8 @@ class Placed:
     se: np.ndarray
     eaf: np.ndarray
     conflicting: np.ndarray = field(default_factory=_empty_index)
+    dropped: np.ndarray = field(default_factory=_empty_index)
+    collapsed: int = 0
 
 
 @dataclass(frozen=True)
@@ -109,8 +113,9 @@ class Unmatched:
     Kept only by a table built with ``keep_unmatched``; otherwise empty, and
     only counted. Not deduplicated, and in the reader's orientation.
     ``conflicting`` names the keys more than one kept association reached
-    with different statistics, as `Placed.conflicting` names an axis's
-    indices; all their rows are still here.
+    with a different z or SE, by `collapse_duplicates`' rule, as
+    `Placed.conflicting` names an axis's indices; all their rows are still
+    here.
     """
 
     keys: Sequence[str]
@@ -141,32 +146,60 @@ def last_wins(index: np.ndarray) -> np.ndarray:
     return np.sort(len(index) - 1 - first_in_reverse)
 
 
+@dataclass(frozen=True)
+class Duplicates:
+    """How one stream's rows for repeated places resolve.
+
+    ``keep`` holds the positions kept, in stream order: each place's first row,
+    unless the place conflicts. ``conflicting`` holds, sorted, the places whose
+    rows disagree on z or SE, and ``dropped`` the position of every row at
+    one, in stream order. ``collapsed`` counts the rows that agreed with their
+    place's first row and so are not kept as rows of their own.
+    """
+
+    keep: np.ndarray
+    conflicting: np.ndarray
+    dropped: np.ndarray
+    collapsed: int
+
+
+def collapse_duplicates(place: np.ndarray, z: np.ndarray, se: np.ndarray) -> Duplicates:
+    """Resolve the rows that share a place: agreeing ones collapse, conflicting ones go.
+
+    Rows agree when z and SE are equal, NaN agreeing with NaN; the frequency is
+    annotation, not the finding (ADR 0036), so a pair that differs only there
+    is one association, and its first row's frequency is kept. A place whose
+    rows disagree keeps none of them, because nothing in the rows says which
+    is right.
+    """
+    n = len(place)
+    values, first, inverse = np.unique(place, return_index=True, return_inverse=True)
+    if len(values) == n:
+        return Duplicates(np.arange(n), place[:0], np.empty(0, dtype=np.intp), 0)
+    origin = first[inverse]
+    agrees = _equal(z, z[origin]) & _equal(se, se[origin])
+    conflicted = np.zeros(len(values), dtype=bool)
+    conflicted[inverse[~agrees]] = True
+    dropped = np.flatnonzero(conflicted[inverse])
+    collapsed = (n - len(values)) - (len(dropped) - int(conflicted.sum()))
+    return Duplicates(np.sort(first[~conflicted]), values[conflicted], dropped, collapsed)
+
+
+def _equal(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    same: np.ndarray = (a == b) | (np.isnan(a) & np.isnan(b))
+    return same
+
+
 def _placed(index: np.ndarray, z: np.ndarray, se: np.ndarray, eaf: np.ndarray) -> Placed:
-    """One axis's rows with each index's last occurrence kept, and the conflicts named."""
+    """One axis's rows with each index's duplicates resolved, and the conflicts named."""
     if len(index) == 0:
         return Placed(index, z, se, eaf)
-    keep = last_wins(index)
-    conflicting = _empty_index()
-    if len(keep) < len(index):
-        conflicting = _conflicting_indices(index, keep, (z, se, eaf))
-    return Placed(index[keep], z[keep], se[keep], eaf[keep], conflicting)
-
-
-def _conflicting_indices(
-    index: np.ndarray, keep: np.ndarray, statistics: tuple[np.ndarray, ...]
-) -> np.ndarray:
-    """The duplicated indices whose rows disagree; NaN agrees with NaN."""
-    earlier = np.ones(len(index), dtype=bool)
-    earlier[keep] = False
-    rows = np.flatnonzero(np.isin(index, np.unique(index[earlier])))
-    rows = rows[np.argsort(index[rows], kind="stable")]
-    grouped = index[rows]
-    same = grouped[1:] == grouped[:-1]
-    for values in statistics:
-        ordered = values[rows]
-        a, b = ordered[1:], ordered[:-1]
-        same &= (a == b) | (np.isnan(a) & np.isnan(b))
-    return np.unique(grouped[1:][(grouped[1:] == grouped[:-1]) & ~same])
+    found = collapse_duplicates(index, z, se)
+    keep = found.keep
+    return Placed(
+        index[keep], z[keep], se[keep], eaf[keep],
+        found.conflicting, index[found.dropped], found.collapsed,
+    )
 
 
 class _Collected:
@@ -195,12 +228,12 @@ class _Collected:
         keys = self.unmatched_keys
         return RoutedColumn(
             placed=placed,
-            unmatched=Unmatched(keys, z, se, eaf, _conflicting_keys(keys, (z, se, eaf))),
+            unmatched=Unmatched(keys, z, se, eaf, _conflicting_keys(keys, (z, se))),
             n_unmatched=self.n_unmatched,
         )
 
 
-def _conflicting_keys(keys: list[str], statistics: tuple[np.ndarray, ...]) -> list[str]:
+def _conflicting_keys(keys: list[str], statistics: tuple[np.ndarray, np.ndarray]) -> list[str]:
     """The repeated keys whose rows disagree, by the rule placed indices meet,
     in the order each first appeared.
 
@@ -214,7 +247,7 @@ def _conflicting_keys(keys: list[str], statistics: tuple[np.ndarray, ...]) -> li
         (number.setdefault(key, len(number)) for key in keys), dtype=np.int64, count=len(keys)
     )
     by_code = list(number)
-    conflicting = _conflicting_indices(codes, last_wins(codes), statistics)
+    conflicting = collapse_duplicates(codes, *statistics).conflicting
     return [by_code[int(code)] for code in conflicting]
 
 

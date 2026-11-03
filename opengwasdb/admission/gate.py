@@ -14,7 +14,14 @@ from typing import Protocol
 
 import numpy as np
 
-from opengwasdb.admission.rules import AdmissionCounts, AnalysisRules, Reason, SourceRows, judge
+from opengwasdb.admission.rules import (
+    LOGGED,
+    AdmissionCounts,
+    AnalysisRules,
+    Reason,
+    SourceRows,
+    judge,
+)
 
 __all__ = ["Gate", "RoutedBatch", "counting_gate"]
 
@@ -86,6 +93,29 @@ class Gate:
             self._dropped.extend(zip(rows.keys_at(positions), reasons, strict=True))
         self._counts += verdict.counts
         return verdict.keep
+
+    def unplaced(self, reason: Reason, keys: Sequence[str]) -> None:
+        """Rows this gate admitted that were not placed, named by ``keys``.
+
+        They leave ``admitted`` for ``reason``, and are logged when it is a
+        logged reason: duplicates that disagree, and (D6) rows no axis holds.
+        """
+        if not keys:
+            return
+        self._counts += AdmissionCounts(admitted=-len(keys), dropped={reason: len(keys)})
+        if reason in LOGGED:
+            self._dropped.extend((key, reason) for key in keys)
+
+    def collapsed(self, n: int) -> None:
+        """``n`` admitted rows agreed with an earlier row for their place."""
+        if n:
+            self._counts += AdmissionCounts(admitted=-n, dropped={Reason.DUPLICATE_COLLAPSED: n})
+
+    def duplicates(self, conflicting: Sequence[str], collapsed: int) -> None:
+        """One batch of duplicates resolved: the keys of the rows dropped because
+        their (variant, Analysis) conflicts, and how many rows collapsed."""
+        self.unplaced(Reason.DUPLICATE_CONFLICTING, conflicting)
+        self.collapsed(collapsed)
 
     def admit(self, batch: RoutedBatch) -> np.ndarray:
         """`source_rows` for one of Variant Routing's batches: its ``admit=``.

@@ -27,7 +27,9 @@ from opengwasdb.admission import (
     RecordIncomplete,
     SourceRows,
     admission_record_for,
+    counting_gate,
 )
+from opengwasdb.layouts.dense import DenseBuildResult
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
@@ -289,13 +291,9 @@ def test_a_vcf_record_with_no_effect_is_logged_by_its_source_coordinate(tmp_path
         f"1\t{dense_fixture.HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
         f"1\t{dense_fixture.HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t.:0.3\n",
     ]
-    vcf = dense_fixture._make_vcf(tmp_path, "trait_a", rows)
-    manifest = dense_fixture._make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
-    store = tmp_path / "dense.opengwasdb"
-    build_dense_from_vcf_manifest(manifest, store, store_id="s", release_id="r")
-
+    store = _one_vcf_analysis(tmp_path, rows)
     record = admission_record_for(store)
-    (analysis,) = json.loads((record / "admission.json").read_text(encoding="utf-8"))["analyses"]
+    (analysis,) = _analyses(store)
     assert (analysis["examined"], analysis["admitted"]) == (2, 1)
     assert _dropped(record, 0)[1:] == [
         [f"1:{dense_fixture.HG19_POS_2}:C:T", "effect_missing"]
@@ -305,7 +303,6 @@ def test_a_vcf_record_with_no_effect_is_logged_by_its_source_coordinate(tmp_path
 def test_a_dense_build_from_records_writes_its_record(tmp_path: Path):
     """Each Analysis's records pass its gate, in the order the Analyses first
     appear, which is the order of the Store's columns."""
-    from opengwasdb.build.observed import build_dense_observed_from_sources
 
     source = tmp_path / "records.tsv"
     source.write_text(
@@ -315,10 +312,7 @@ def test_a_dense_build_from_records_writes_its_record(tmp_path: Path):
         "B\t1\t200\tC\tT\t0.1\t0.05\n",
         encoding="utf-8",
     )
-    store = tmp_path / "dense.opengwasdb"
-    build_dense_observed_from_sources(
-        [source], store, store_id="s", release_id="r", reference_assembly="GRCh38"
-    )
+    store, _ = _dense_from_records(tmp_path, source)
 
     written = json.loads(
         (admission_record_for(store) / "admission.json").read_text(encoding="utf-8")
@@ -363,7 +357,6 @@ def test_a_vcf_record_with_an_unusable_se_is_dropped_and_logged(tmp_path: Path):
 def test_a_dense_record_with_an_unusable_se_is_dropped_not_raised(tmp_path: Path):
     """D3 for `build-dense`: an SE of 0 beside a given z used to be stored, and
     a missing or NaN SE raised; each is now dropped and logged."""
-    from opengwasdb.build.observed import build_dense_observed_from_sources
 
     source = tmp_path / "records.tsv"
     source.write_text(
@@ -373,13 +366,9 @@ def test_a_dense_record_with_an_unusable_se_is_dropped_not_raised(tmp_path: Path
         "A\t1\t300\tA\tG\t2.0\t0.1\n",
         encoding="utf-8",
     )
-    store = tmp_path / "dense.opengwasdb"
-    result = build_dense_observed_from_sources(
-        [source], store, store_id="s", release_id="r", reference_assembly="GRCh38"
-    )
-
+    store, result = _dense_from_records(tmp_path, source)
     record = admission_record_for(store)
-    (analysis,) = json.loads((record / "admission.json").read_text(encoding="utf-8"))["analyses"]
+    (analysis,) = _analyses(store)
     assert (analysis["examined"], analysis["admitted"]) == (3, 1)
     assert _dropped(record, 0)[1:] == [
         ["1:100:A:G", "se_unusable"],
@@ -402,7 +391,6 @@ def test_source_fidelity_compares_only_the_rows_admission_stored(tmp_path: Path)
     """A source row Admission dropped is not in the Store. Validating the Store
     against its source skips the cell, missing in the Store, rather than
     report a disagreement: B holds the variant A's dropped row names."""
-    from opengwasdb.build.observed import build_dense_observed_from_sources
     from opengwasdb.validation import validate_store
 
     source = tmp_path / "records.tsv"
@@ -413,10 +401,7 @@ def test_source_fidelity_compares_only_the_rows_admission_stored(tmp_path: Path)
         "B\t1\t100\tA\tG\t1.0\t0.2\n",
         encoding="utf-8",
     )
-    store = tmp_path / "dense.opengwasdb"
-    build_dense_observed_from_sources(
-        [source], store, store_id="s", release_id="r", reference_assembly="GRCh38"
-    )
+    store, _ = _dense_from_records(tmp_path, source)
 
     result = validate_store(store, source=source)
     assert result.ok, result.errors
@@ -426,7 +411,6 @@ def test_a_row_with_an_infinite_z_is_dropped_and_logged_not_refused(tmp_path: Pa
     """D4: an infinite z used to stop `build-dense` (and the encoder, on a
     tabular source); one row's statistic does not refuse its Analysis, so it is
     dropped and logged."""
-    from opengwasdb.build.observed import build_dense_observed_from_sources
 
     source = tmp_path / "records.tsv"
     source.write_text(
@@ -436,10 +420,7 @@ def test_a_row_with_an_infinite_z_is_dropped_and_logged_not_refused(tmp_path: Pa
         "A\t1\t300\tA\tG\t2.0\t0.1\n",
         encoding="utf-8",
     )
-    store = tmp_path / "dense.opengwasdb"
-    build_dense_observed_from_sources(
-        [source], store, store_id="s", release_id="r", reference_assembly="GRCh38"
-    )
+    store, _ = _dense_from_records(tmp_path, source)
 
     record = admission_record_for(store)
     assert _dropped(record, 0)[1:] == [
@@ -493,3 +474,92 @@ def test_a_dense_vcf_writer_refuses_an_unusable_se_that_passed_its_gate(
         build_dense_from_vcf_manifest(
             manifest, tmp_path / "dense.opengwasdb", store_id="s", release_id="r"
         )
+
+
+def test_a_dense_vcf_build_collapses_agreeing_duplicates_and_drops_conflicting_ones(tmp_path: Path):
+    """D5: two source keys reaching one row (a liftover collision) are one
+    association when they agree, collapsed to the first; when they disagree,
+    neither is stored, and both are logged by the variant's ALID."""
+    hg19 = dense_fixture.HG19_POS_1
+    rows = [
+        f"1\t{hg19}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+        f"1\t{hg19}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+        f"1\t{dense_fixture.HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
+        f"1\t{dense_fixture.HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t-1.5:0.3\n",
+    ]
+    store = _one_vcf_analysis(tmp_path, rows)
+    record = admission_record_for(store)
+    (analysis,) = _analyses(store)
+    assert analysis["dropped"] == {"duplicate_collapsed": 1, "duplicate_conflicting": 2}
+    assert (analysis["examined"], analysis["admitted"]) == (4, 1)
+    (conflict,) = {row[0] for row in _dropped(record, 0)[1:]}
+    assert conflict.endswith(":C:T")
+
+
+def test_a_dense_build_resolves_duplicate_records_rather_than_raising(tmp_path: Path):
+    """D5 for `build-dense`, which used to refuse any duplicate."""
+
+    source = tmp_path / "records.tsv"
+    source.write_text(
+        "analysis_id\tchromosome\tposition\teffect_allele\tother_allele\tz\tse\n"
+        "A\t1\t100\tA\tG\t2.0\t0.1\n"
+        "A\t1\t100\tA\tG\t2.0\t0.1\n"
+        "A\t1\t200\tA\tG\t1.0\t0.1\n"
+        "A\t1\t200\tA\tG\t3.0\t0.1\n",
+        encoding="utf-8",
+    )
+    store, result = _dense_from_records(tmp_path, source)
+    (analysis,) = _analyses(store)
+    assert analysis["dropped"] == {"duplicate_collapsed": 1, "duplicate_conflicting": 2}
+    assert result.n_variants == 1
+
+
+def test_the_hybrid_off_reference_spill_resolves_its_duplicates():
+    """D5 for associations no axis holds: a raw key's agreeing rows collapse to
+    the first, and a conflicting key's rows are all dropped and logged."""
+    from opengwasdb.layouts.hybrid.build import _off_reference_spill
+    from opengwasdb.variants.routing import Unmatched
+
+    unmatched = Unmatched(
+        ["1:5:A:G", "1:5:A:G", "1:9:C:T", "1:9:C:T", "2:4:A:C"],
+        np.array([1.0, 1.0, 2.0, -2.0, 3.0], dtype=np.float32),
+        np.full(5, 0.1, dtype=np.float32),
+        np.full(5, np.nan, dtype=np.float32),
+    )
+    gate = counting_gate(AnalysisRules("A"))
+    keys, z, *_ = _off_reference_spill(unmatched, 1.0, gate)
+
+    assert z.tolist() == [1.0, 3.0]
+    assert len(keys) == 2
+    assert gate.counts.dropped == {Reason.DUPLICATE_COLLAPSED: 1, Reason.DUPLICATE_CONFLICTING: 2}
+    assert gate.dropped == [
+        ("1:9:C:T", Reason.DUPLICATE_CONFLICTING),
+        ("1:9:C:T", Reason.DUPLICATE_CONFLICTING),
+    ]
+
+
+def _analyses(store: Path) -> list[dict]:
+    """A Store's Admission record, one entry per Analysis."""
+    text = (admission_record_for(store) / "admission.json").read_text(encoding="utf-8")
+    analyses: list[dict] = json.loads(text)["analyses"]
+    return analyses
+
+
+def _one_vcf_analysis(tmp_path: Path, rows: list[str]) -> Path:
+    """A Dense VCF Store of one Analysis, `trait_a`, from these VCF records."""
+    vcf = dense_fixture._make_vcf(tmp_path, "trait_a", rows)
+    manifest = dense_fixture._make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
+    store = tmp_path / "dense.opengwasdb"
+    build_dense_from_vcf_manifest(manifest, store, store_id="s", release_id="r")
+    return store
+
+
+def _dense_from_records(tmp_path: Path, source: Path) -> tuple[Path, DenseBuildResult]:
+    """A `build-dense` Store from one records file, and the build's result."""
+    from opengwasdb.build.observed import build_dense_observed_from_sources
+
+    store = tmp_path / "dense.opengwasdb"
+    result = build_dense_observed_from_sources(
+        [source], store, store_id="s", release_id="r", reference_assembly="GRCh38"
+    )
+    return store, result

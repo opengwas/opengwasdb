@@ -290,9 +290,10 @@ def _hg38_routing(sites: list[Site]):
     )
 
 
-def test_the_last_association_for_an_index_wins_across_batches(monkeypatch):
-    """Two associations reaching one index keep the later one, even when a batch
-    boundary falls between them, and the disagreement is reported."""
+def test_duplicates_for_an_index_collapse_or_drop_across_batches(monkeypatch):
+    """Rows reaching one index that agree on z and SE collapse to the first, and
+    rows that disagree are all dropped and named, even when a batch boundary
+    falls between them."""
     monkeypatch.setattr(route_table, "_RESOLVE_BATCH", 2)
     routing = _hg38_routing([("1", 100, "A", "G"), ("1", 300, "C", "T"), ("1", 100, "G", "A")])
     assert routing.alids == ["1:100:A:G", "1:300:C:T"]
@@ -306,9 +307,29 @@ def test_the_last_association_for_an_index_wins_across_batches(monkeypatch):
 
     placed = table.route_column(stream).placed[0]
 
-    assert placed.index.tolist() == [1, 0]
-    assert placed.z.tolist() == [2.0, 5.0]
+    assert placed.index.tolist() == [1]
+    assert placed.z.tolist() == [2.0]
     assert placed.conflicting.tolist() == [0]
+    assert placed.dropped.tolist() == [0, 0]
+    assert placed.collapsed == 1
+
+
+def test_duplicates_that_differ_only_in_frequency_are_one_association():
+    """The frequency is annotation, not the finding (ADR 0036): rows agreeing on
+    z and SE collapse to the first, frequency and all."""
+    routing = _hg38_routing([("1", 100, "A", "G")])
+    table = routing.table([routing.alids])
+    stream = [
+        _association(("1", 100, "A", "G"), 1.0, eaf=0.2),
+        _association(("1", 100, "A", "G"), 1.0, eaf=0.3),
+    ]
+
+    placed = table.route_column(stream).placed[0]
+
+    assert placed.index.tolist() == [0]
+    assert placed.eaf.tolist() == pytest.approx([0.2])
+    assert placed.collapsed == 1
+    assert placed.conflicting.tolist() == []
 
 
 def test_a_reverse_strand_lift_reorients_statistics_on_every_axis(tmp_path):
@@ -582,7 +603,9 @@ def test_an_extracted_reference_routes_as_the_union_it_froze(tmp_path, n_workers
         ("5", 10, "G", "A"),
         ("5", 10, "A", "G"),
     ]
-    stream = [_association(site, float(i)) for i, site in enumerate(sites)]
+    # The two spellings of 5:10 reach one ALID; equal statistics make them one
+    # association, so where it lands is observable.
+    stream = [_association(site, z) for site, z in zip(sites, (0.0, 1.0, 3.0, 3.0), strict=True)]
 
     def routed(routing) -> dict[str, float]:
         placed = routing.table([routing.alids]).route_column(stream).placed[0]

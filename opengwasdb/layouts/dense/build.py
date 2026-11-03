@@ -8,8 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.admission import AdmissionRecord, AnalysisRules, SourceRows, admission_record_for
-from opengwasdb.admission.cells import require_admitted
+from opengwasdb import admission
 from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding import (
     DenseEafPlane,
@@ -55,6 +54,7 @@ from opengwasdb.variants import (
     chromosome_sort_key,
     write_variant_axis,
 )
+from opengwasdb.variants.routing import collapse_duplicates
 
 
 @dataclass(frozen=True)
@@ -114,7 +114,7 @@ def build_dense_observed_store(
 
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
-        records = _admitted_records(records, admission_record_for(out, admission_record))
+        records = _admitted_records(records, admission.admission_record_for(out, admission_record))
         variants = _collect_variants(records)
         analyses = _collect_analyses(records)
         z, se, eaf = _scatter_records(records, variants, analyses)
@@ -149,24 +149,55 @@ def _admitted_records(
     """The records each Analysis's Admission gate keeps, in source order.
 
     Analyses are judged in the order they first appear, which is the order the
-    Store's columns take (`_collect_analyses`).
+    Store's columns take (`_collect_analyses`). An Analysis's records for one
+    variant resolve as routing resolves an axis's (`collapse_duplicates`):
+    agreeing ones collapse to the first, conflicting ones are all dropped and
+    logged.
     """
     by_analysis: dict[str, list[int]] = {}
     for position, record in enumerate(records):
         by_analysis.setdefault(record.analysis_id, []).append(position)
-    record_ = AdmissionRecord.open(directory, list(by_analysis), command="build-dense")
+    record_ = admission.AdmissionRecord.open(directory, list(by_analysis), command="build-dense")
     keep = np.zeros(len(records), dtype=bool)
     for analysis_id, positions in by_analysis.items():
-        with record_.gate(AnalysisRules(analysis_id)) as gate:
-            keep[positions] = gate.source_rows(_source_rows([records[i] for i in positions]))
+        with record_.gate(admission.AnalysisRules(analysis_id)) as gate:
+            keep[positions] = _admitted(records, positions, gate)
     record_.finish()
     return [record for record, kept in zip(records, keep.tolist(), strict=True) if kept]
 
 
-def _source_rows(records: list[NormalisedAssociation]) -> SourceRows:
+def _admitted(
+    records: list[NormalisedAssociation], positions: list[int], gate: admission.Gate
+) -> np.ndarray:
+    """Which of one Analysis's records, at ``positions``, its gate and its
+    duplicates' resolution keep."""
+    keep = gate.source_rows(_source_rows([records[i] for i in positions]))
+    kept = [position for position, judged in zip(positions, keep.tolist(), strict=True) if judged]
+    keep[keep] = _resolved_duplicates([records[i] for i in kept], gate)
+    return keep
+
+
+def _resolved_duplicates(records: list[NormalisedAssociation], gate: admission.Gate) -> np.ndarray:
+    """Which of one Analysis's admitted records survive its duplicates' resolution."""
+    number: dict[str, int] = {}
+    codes = np.array(
+        [number.setdefault(r.variant.alid, len(number)) for r in records], dtype=np.int64
+    )
+    found = collapse_duplicates(
+        codes,
+        np.array([r.z for r in records], dtype=np.float64),
+        np.array([r.se for r in records], dtype=np.float64),
+    )
+    gate.duplicates([records[i].variant.alid for i in found.dropped.tolist()], found.collapsed)
+    keep = np.zeros(len(records), dtype=bool)
+    keep[found.keep] = True
+    return keep
+
+
+def _source_rows(records: list[NormalisedAssociation]) -> admission.SourceRows:
     """One Analysis's records as the batch its gate judges, each named by its ALID."""
     alids = [record.variant.alid for record in records]
-    return SourceRows(
+    return admission.SourceRows(
         eaf=np.array([np.nan if r.eaf is None else r.eaf for r in records], dtype=np.float64),
         se=np.array([r.se for r in records], dtype=np.float64),
         z=np.array([r.z for r in records], dtype=np.float64),
@@ -203,7 +234,7 @@ def _scatter_records(
         se[row, col] = record.se
         if record.eaf is not None:
             eaf[row, col] = record.eaf
-    require_admitted(z, se, where="build-dense")
+    admission.require_admitted(z, se, where="build-dense")
     return z, se, eaf
 
 
