@@ -138,8 +138,8 @@ class ReaderAssociation:
     imputation_score: ImputationScore = ImputationScore()
 
     def __post_init__(self) -> None:
-        if self.se < 0:
-            raise ValueError(f"se must be non-negative, got {self.se!r}")
+        # An unusable `se` (NaN, not positive, not finite) is the source's, as
+        # read: Association Admission drops and logs the row.
         if self.eaf is not None and not 0.0 <= self.eaf <= 1.0:
             raise ValueError(f"eaf must be in [0, 1], got {self.eaf!r}")
 

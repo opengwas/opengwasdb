@@ -84,14 +84,16 @@ def stream_vcf_associations(
     """Yield (bare_chrom, pos, ref, alt, z, se, eaf) for each biallelic record.
 
     z is oriented to canonical ALID convention: A1 = min(ref, alt).  When the
-    VCF effect allele (ALT) is not A1, z is negated.  SE is always positive.
+    VCF effect allele (ALT) is not A1, z is negated.  SE is the record's own:
+    NaN when it is missing, and possibly not positive or not finite, which
+    Association Admission drops and logs.
     `eaf` follows z: it is FORMAT/AF re-expressed for the *stored* effect
     allele, so a negated z carries ``1 - AF`` (ADR 0036). None when the file
     declares no AF tag, or reports none for this record.
 
-    Records with SE missing or ≤ 0, or an infinite z, are skipped. A record
-    with neither EZ nor ES is yielded with a NaN z: it has no effect, and
-    Association Admission drops and logs it.
+    A record with an infinite z is skipped. A record with neither EZ nor ES, or
+    with only ES beside an unusable SE, is yielded with a NaN z: Association
+    Admission drops and logs it.
 
     Carries no effect-scale information: the VCF's own `##SAMPLE` `StudyType`
     header is not authoritative for `stored_effect_scale` (issue #17 --
@@ -126,9 +128,8 @@ def stream_vcf_associations(
             if "," in alt:
                 continue
 
-            se = _parse_float(se_str)
-            if se is None or se <= 0:
-                continue
+            parsed_se = _parse_float(se_str)
+            se = math.nan if parsed_se is None else parsed_se
 
             z = _derive_z(ez_str, es_str, se)
             if z is None:
@@ -164,6 +165,6 @@ def _derive_z(ez_str: str, es_str: str, se: float) -> float | None:
     if ez is not None and math.isfinite(ez):
         return ez
     es = _parse_float(es_str)
-    if es is not None and se > 0:
+    if es is not None and se > 0 and math.isfinite(se):
         return es / se
     return None

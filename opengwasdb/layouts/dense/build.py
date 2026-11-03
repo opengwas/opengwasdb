@@ -157,12 +157,20 @@ def _admitted_records(
     keep = np.zeros(len(records), dtype=bool)
     for analysis_id, positions in by_analysis.items():
         with record_.gate(AnalysisRules(analysis_id)) as gate:
-            eaf = [records[i].eaf for i in positions]
-            keep[positions] = gate.source_rows(
-                SourceRows(eaf=np.array([np.nan if v is None else v for v in eaf]))
-            )
+            keep[positions] = gate.source_rows(_source_rows([records[i] for i in positions]))
     record_.finish()
     return [record for record, kept in zip(records, keep.tolist(), strict=True) if kept]
+
+
+def _source_rows(records: list[NormalisedAssociation]) -> SourceRows:
+    """One Analysis's records as the batch its gate judges, each named by its ALID."""
+    alids = [record.variant.alid for record in records]
+    return SourceRows(
+        eaf=np.array([np.nan if r.eaf is None else r.eaf for r in records], dtype=np.float64),
+        se=np.array([r.se for r in records], dtype=np.float64),
+        z=np.array([r.z for r in records], dtype=np.float64),
+        keys_at=lambda at: [alids[i] for i in at.tolist()],
+    )
 
 
 def _scatter_records(

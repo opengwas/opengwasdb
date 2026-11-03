@@ -38,6 +38,9 @@ class RoutedBatch(Protocol):
     def z(self) -> np.ndarray: ...
 
     @property
+    def se(self) -> np.ndarray: ...
+
+    @property
     def eaf(self) -> np.ndarray: ...
 
     @property
@@ -97,6 +100,7 @@ class Gate:
                 eaf=batch.eaf,
                 imputation_score=batch.imputation_score if declared else None,
                 imputation_status=batch.imputation_status if declared else None,
+                se=batch.se,
                 z=batch.z,
                 keys_at=lambda positions: [
                     f"{batch.chromosome[i]}:{batch.position[i]}:{batch.ref[i]}:{batch.alt[i]}"

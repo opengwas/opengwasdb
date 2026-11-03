@@ -98,21 +98,21 @@ def _normalise_row(row: dict[str, str], row_number: int) -> NormalisedAssociatio
     except VariantNormalisationError as exc:
         raise SourceRowError(f"row {row_number}: {exc}") from exc
 
-    se = _parse_float(field("se", "standard_error"), row_number, "se")
-    if not math.isfinite(se) or se < 0:
-        raise SourceRowError(f"row {row_number}: se must be finite and non-negative")
+    # A missing, non-positive or non-finite SE is the source's: Association
+    # Admission drops and logs the row, and its z is NaN when it depends on it.
+    se_text = field("se", "standard_error", required=False)
+    se = math.nan if se_text is None else _parse_float(se_text, row_number, "se")
+    usable_se = math.isfinite(se) and se > 0
 
     z_text = field("z", "zscore", "z_score", required=False)
     if z_text is None:
         beta_text = field("beta", "effect", "effect_size")
         assert beta_text is not None
         beta = _parse_float(beta_text, row_number, "beta")
-        if se == 0:
-            raise SourceRowError(f"row {row_number}: cannot derive z when se is zero")
-        z = beta / se
+        z = beta / se if usable_se else math.nan
     else:
         z = _parse_float(z_text, row_number, "z")
-    if not math.isfinite(z):
+    if usable_se and not math.isfinite(z):
         raise SourceRowError(f"row {row_number}: z must be finite")
 
     eaf_text = field("eaf", "effect_allele_frequency", required=False)

@@ -1497,11 +1497,11 @@ def stream_associations(
     rows: Iterable[TabularRow], stored_effect_scale: StoredEffectScale
 ) -> Iterator[ReaderAssociation]:
     for row in rows:
-        if row.se is None:
-            continue
-        # A row with no effect is yielded with a NaN z, for Association
-        # Admission to drop and log; it is not an association.
-        z = math.nan if row.beta is None else row.beta / row.se
+        # A row with no effect, or no usable SE, is yielded with a NaN z (and a
+        # NaN SE), for Association Admission to drop and log; it is not an
+        # association. A reader recovers an SE it can (a CI, a p) before this.
+        se = math.nan if row.se is None else row.se
+        z = math.nan if row.beta is None or row.se is None else row.beta / row.se
         eaf = row.af_alt
         if row.flipped:
             z = -z
@@ -1514,7 +1514,7 @@ def stream_associations(
             ref=row.ref,
             alt=row.alt,
             z=z,
-            se=row.se,
+            se=se,
             stored_effect_scale=stored_effect_scale,
             eaf=eaf,
             imputation_score=row.imputation_score,

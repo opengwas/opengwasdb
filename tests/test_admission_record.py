@@ -326,3 +326,95 @@ def test_a_dense_build_from_records_writes_its_record(tmp_path: Path):
         ("B", 2, 2),
         ("A", 1, 1),
     ]
+
+
+def test_a_vcf_record_with_an_unusable_se_is_dropped_and_logged(tmp_path: Path):
+    """D3: a GWAS-VCF record whose SE is NaN or infinite used to be stored, and
+    one whose SE is 0 or missing skipped in silence. Each is now dropped and
+    logged as `se_unusable`."""
+    positions = (
+        dense_fixture.HG19_POS_1,
+        dense_fixture.HG19_POS_2,
+        dense_fixture.HG19_POS_3,
+    )
+    rows = [
+        f"1\t{positions[0]}\t.\tA\tG\t.\tPASS\t.\tEZ:SE\t2.0:nan\n",
+        f"1\t{positions[1]}\t.\tC\tT\t.\tPASS\t.\tEZ:SE\t1.5:inf\n",
+        f"1\t{positions[2]}\t.\tG\tA\t.\tPASS\t.\tEZ:SE\t1.0:0\n",
+    ]
+    vcf = dense_fixture._make_vcf(tmp_path, "trait_a", rows)
+    good = dense_fixture._make_vcf(
+        tmp_path, "trait_b", [f"1\t{positions[0]}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
+    )
+    manifest = dense_fixture._make_manifest(
+        tmp_path, [("trait_a", vcf, "Trait A"), ("trait_b", good, "Trait B")]
+    )
+    store = tmp_path / "dense.opengwasdb"
+    build_dense_from_vcf_manifest(manifest, store, store_id="s", release_id="r")
+
+    record = admission_record_for(store)
+    first, _ = json.loads((record / "admission.json").read_text(encoding="utf-8"))["analyses"]
+    assert (first["examined"], first["admitted"], first["dropped"]) == (3, 0, {"se_unusable": 3})
+    assert [row[1] for row in _dropped(record, 0)[1:]] == ["se_unusable"] * 3
+
+
+def test_a_dense_record_with_an_unusable_se_is_dropped_not_raised(tmp_path: Path):
+    """D3 for `build-dense`: an SE of 0 beside a given z used to be stored, and
+    a missing or NaN SE raised; each is now dropped and logged."""
+    from opengwasdb.build.observed import build_dense_observed_from_sources
+
+    source = tmp_path / "records.tsv"
+    source.write_text(
+        "analysis_id\tchromosome\tposition\teffect_allele\tother_allele\tz\tse\n"
+        "A\t1\t100\tA\tG\t2.0\t0\n"
+        "A\t1\t200\tA\tG\t2.0\tNA\n"
+        "A\t1\t300\tA\tG\t2.0\t0.1\n",
+        encoding="utf-8",
+    )
+    store = tmp_path / "dense.opengwasdb"
+    result = build_dense_observed_from_sources(
+        [source], store, store_id="s", release_id="r", reference_assembly="GRCh38"
+    )
+
+    record = admission_record_for(store)
+    (analysis,) = json.loads((record / "admission.json").read_text(encoding="utf-8"))["analyses"]
+    assert (analysis["examined"], analysis["admitted"]) == (3, 1)
+    assert _dropped(record, 0)[1:] == [
+        ["1:100:A:G", "se_unusable"],
+        ["1:200:A:G", "se_unusable"],
+    ]
+    assert result.n_variants == 1
+
+
+def test_a_reader_association_keeps_the_se_its_source_gave():
+    """An unusable SE is the source's, as read: Admission, not the reader's
+    record type, decides the row is not an association."""
+    from opengwasdb.model.enums import StoredEffectScale
+    from opengwasdb.readers.interface import ReaderAssociation
+
+    association = ReaderAssociation("1", 100, "A", "G", 1.0, -0.5, StoredEffectScale.SD)
+    assert association.se == -0.5
+
+
+def test_source_fidelity_compares_only_the_rows_admission_stored(tmp_path: Path):
+    """A source row Admission dropped is not in the Store. Validating the Store
+    against its source skips the cell, missing in the Store, rather than
+    report a disagreement: B holds the variant A's dropped row names."""
+    from opengwasdb.build.observed import build_dense_observed_from_sources
+    from opengwasdb.validation import validate_store
+
+    source = tmp_path / "records.tsv"
+    source.write_text(
+        "analysis_id\tchromosome\tposition\teffect_allele\tother_allele\tz\tse\n"
+        "A\t1\t100\tA\tG\t2.0\tNA\n"
+        "A\t1\t200\tA\tG\t2.0\t0.1\n"
+        "B\t1\t100\tA\tG\t1.0\t0.2\n",
+        encoding="utf-8",
+    )
+    store = tmp_path / "dense.opengwasdb"
+    build_dense_observed_from_sources(
+        [source], store, store_id="s", release_id="r", reference_assembly="GRCh38"
+    )
+
+    result = validate_store(store, source=source)
+    assert result.ok, result.errors
