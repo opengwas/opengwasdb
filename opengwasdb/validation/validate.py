@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import numbers
-import sqlite3
 from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,11 +13,9 @@ from opengwasdb.associations import Cells, DenseGridReader
 from opengwasdb.associations import present as present_cells
 from opengwasdb.encoding import (
     StoreCodec,
-    StoreEncoding,
 )
-from opengwasdb.index.sqlite import get_metadata
 from opengwasdb.layouts.dense.indexed_subsets import validate_indexed_subsets
-from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
+from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.analyses import (
     read_analyses,
 )
@@ -27,12 +23,7 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
 )
 from opengwasdb.store.arrays import (
-    COMPRESSOR_RECORD,
-    SHARDED_COMPRESSOR_RECORD,
-    ArrayRole,
     array_length,
-    inner_chunk_of,
-    shard_layout,
 )
 from opengwasdb.store.open import (
     OpenGWASDBStore,
@@ -58,6 +49,7 @@ from opengwasdb.validation.rules import completion as completion_rules
 from opengwasdb.validation.rules import csr as csr_rules
 from opengwasdb.validation.rules import encoding as encoding_rules
 from opengwasdb.validation.rules import hybrid as hybrid_rules
+from opengwasdb.validation.rules import layout as layout_rules
 from opengwasdb.validation.rules import release as release_rules
 from opengwasdb.validation.rules import sample_size as sample_size_rules
 from opengwasdb.validation.rules import sequence as sequence_rules
@@ -65,10 +57,7 @@ from opengwasdb.validation.rules import side_tables as side_table_rules
 from opengwasdb.validation.rules import top_hits as top_hit_rules
 from opengwasdb.validation.rules import variants as variant_rules
 from opengwasdb.validation.rules.associations import grid_counts
-from opengwasdb.validation.rules.encoding import PLAN
-from opengwasdb.validation.rules.hybrid import DENSE_TO_SHARED
 from opengwasdb.validation.rules.release import REQUIRED
-from opengwasdb.validation.rules.variants import representative_variant_indices
 from opengwasdb.validation.run import evaluate, selected
 from opengwasdb.variants import (
     VariantAxis,
@@ -177,20 +166,26 @@ def _source_given(target: Target) -> bool:
 
 
 
-def _legacy_hybrid(target: Target, errors: list[str], _warnings: list[str]) -> None:
-    _validate_hybrid_store(target.store, errors)
+def _component_opens(target: Target) -> Iterator[str]:
+    """A Hybrid release's Dense Component opens, as a Dense release (ADR 0026)."""
+    errors: list[str] = []
+    dense_store = _load_manifest(dense_component_path(target.store.path), errors)
+    yield from errors
+    if dense_store is not None and dense_store.manifest.primary_layout is not (
+        PrimaryStorageLayout.DENSE
+    ):
+        yield (
+            f"Dense Component manifest must be primary_layout=dense "
+            f"(got {dense_store.manifest.primary_layout.value})"
+        )
 
 
 def _legacy_rho(target: Target, errors: list[str], _warnings: list[str]) -> None:
     _dense_rho(target, errors)
 
 
-def _legacy_dense_layout(target: Target, errors: list[str], _warnings: list[str]) -> None:
-    _dense_layout(target, errors)
-
-
-def _legacy_overflow(target: Target, errors: list[str], _warnings: list[str]) -> None:
-    _overflow(target, errors)
+def _legacy_subsets(target: Target, errors: list[str], _warnings: list[str]) -> None:
+    _dense_subsets(target, errors)
 
 
 def _top_level_dense_grid(target: Target) -> bool:
@@ -218,25 +213,6 @@ def _legacy_fidelity(target: Target) -> list[str]:
 
 
 
-#: Every rule about a sequence's own arrays and values: the by_variant and Top-Hit
-#: cross-checks read the sequence, and would "confirm" one these found broken.
-_SEQUENCE_JUDGED: tuple[str, ...] = (
-    *PLAN,
-    *(
-        rule.name
-        for rule in (
-            *csr_rules.RULES,
-            *sample_size_rules.CHECKS,
-            *sequence_rules.RULES,
-            *association_rules.PRESENCE_RULES,
-            *association_rules.EAF_RULES,
-            *side_table_rules.RULES,
-            *sample_size_rules.RULES,
-        )
-        if rule.severity is Severity.ERROR
-    ),
-)
-
 #: The rules before source fidelity, in order: it samples what a Store holds, so it
 #: runs only on a release none of them found wrong.
 _BEFORE_FIDELITY: tuple[Rule, ...] = (
@@ -246,6 +222,14 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
     *analyses_rules.TABLE_RULES,
     *csr_rules.RULES,
     *hybrid_rules.RULES,
+    Check(
+        name=hybrid_rules.COMPONENT,
+        kinds=Kind.RELEASE,
+        when=hybrid_rules.is_hybrid,
+        after=(REQUIRED,),
+        run=_component_opens,
+    ),
+    *hybrid_rules.COMPONENT_RULES,
     *encoding_rules.RULES,
     *sample_size_rules.CHECKS,
     *by_variant_rules.CHECKS,
@@ -263,23 +247,8 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
     by_variant_rules.SAMPLE,
     *completion_rules.METADATA_RULES,
     _Legacy(name="legacy.rho", kinds=Kind.GRID, after=(REQUIRED,), run=_legacy_rho),
-    _Legacy(
-        name="legacy.dense_layout", kinds=Kind.GRID, after=(REQUIRED,), run=_legacy_dense_layout
-    ),
-    _Legacy(
-        name="legacy.overflow",
-        kinds=Kind.CSR,
-        when=_is(PrimaryStorageLayout.HYBRID),
-        after=(*_SEQUENCE_JUDGED, DENSE_TO_SHARED),
-        run=_legacy_overflow,
-    ),
-    _Legacy(
-        name="legacy.hybrid",
-        kinds=Kind.RELEASE,
-        when=_is(PrimaryStorageLayout.HYBRID),
-        after=(REQUIRED,),
-        run=_legacy_hybrid,
-    ),
+    *layout_rules.RULES,
+    _Legacy(name="legacy.subsets", kinds=Kind.GRID, after=(REQUIRED,), run=_legacy_subsets),
     *analyses_rules.ORIENTATION_RULES,
 )
 
@@ -303,541 +272,21 @@ RULES: tuple[Rule, ...] = check_registry(
 )
 
 
-def _recorded_from_block(
-    label: str, block: Any
-) -> tuple[str, Any, Any, Any, Any] | None:
-    """One manifest provenance block as a recording, or `None` when it names no shape."""
-    if isinstance(block, dict) and "chunk_shape" in block:
-        return (
-            label,
-            block.get("chunk_shape"),
-            block.get("shard_shape"),
-            block.get("compressor"),
-            block.get("zarr_format"),
-        )
-    return None
-
-
-def _recorded_from_index(
-    connection: sqlite3.Connection,
-) -> tuple[str, Any, Any, Any, Any] | None:
-    """The `index.sqlite` `dense` blob as a recording, or `None` when absent.
-
-    An absent `dense` blob is not a disagreement -- none of the Dense
-    Reference-Completion path writes one -- so only a present blob is judged.
-    """
-    blob = get_metadata(connection, "dense", default=None)
-    if isinstance(blob, dict):
-        return (
-            "index.sqlite dense metadata",
-            blob.get("chunk_shape"),
-            blob.get("shard_shape"),
-            blob.get("compressor"),
-            blob.get("zarr_format"),
-        )
-    return None
-
-
-def _recorded_layouts(
-    manifest: Any,
-    connection: sqlite3.Connection,
-    root: Any,
-    errors: list[str],
-    *,
-    require_all: bool,
-) -> list[tuple[str, Any, Any, Any, Any]]:
-    """The three places a Dense release records its chunk shape, as (label, ...).
-
-    Returns `(label, chunk_shape, shard_shape, compressor, zarr_format)` for the
-    manifest provenance, the `index.sqlite` `dense` blob and the `data.zarr` root
-    attrs.  All three are written by the Dense builders and by the converter
-    (#245) and none is derived from the arrays themselves, so they are the copies
-    a disagreeing manifest hides behind.
-
-    `require_all` is set for a 0.2.0 release, where spec §10a mandates all three:
-    an absent `provenance.dense` or `dense` blob is then an error, not a skipped
-    comparison (issue #248 review round 3).  A 0.1.0 release is only judged on
-    the recordings it carries -- the completion path writes no `dense` blob.
-    """
-    recorded: list[tuple[str, Any, Any, Any, Any]] = []
-    provenance = manifest.provenance if isinstance(manifest.provenance, dict) else {}
-    block = None
-    for key in ("dense", "hybrid"):
-        block = _recorded_from_block(f"manifest.json provenance.{key}", provenance.get(key))
-        if block is not None:
-            recorded.append(block)
-            break
-    if block is None and require_all:
-        errors.append(
-            "manifest.json provenance.dense: no chunk_shape recorded, so the release "
-            "does not describe its Dense planes' layout (spec §10a)"
-        )
-    index = _recorded_from_index(connection)
-    if index is not None:
-        recorded.append(index)
-    elif require_all:
-        errors.append(
-            "index.sqlite dense metadata: no dense blob recorded, so the release does "
-            "not describe its Dense planes' layout (spec §10a)"
-        )
-    attrs = dict(root.attrs)
-    recorded.append(
-        (
-            "data.zarr root attrs",
-            attrs.get("chunk_shape"),
-            attrs.get("shard_shape"),
-            attrs.get("compressor"),
-            attrs.get("zarr_format"),
-        )
-    )
-    return recorded
-
-
-def _recorded_layout_mismatches(
-    recorded: list[tuple[str, Any, Any, Any, Any]],
-    planes: list[tuple[str, tuple[int, ...], tuple[int, ...], tuple[int, ...] | None]],
-    errors: list[str],
-    *,
-    zarr_label: str,
-    require_compressor: bool,
-) -> None:
-    """Hold every recording against every present plane of one Zarr tree."""
-    for name, shape, actual_inner, actual_shard in planes:
-        for label, chunk_shape, shard_shape, _compressor, _zarr_format in recorded:
-            plane_label = f"{label} ({zarr_label}/{name})"
-            expected_inner = _recorded_chunk_errors(
-                plane_label, chunk_shape, shape, actual_inner, errors
-            )
-            if expected_inner is not None:
-                errors.extend(
-                    _recorded_shard_errors(
-                        plane_label, shard_shape, shape, expected_inner, actual_shard
-                    )
-                )
-    errors.extend(
-        _recorded_compressor_errors(
-            recorded, planes[0][3], require=require_compressor
-        )
-    )
-    errors.extend(_recorded_zarr_format_errors(recorded, planes[0][3]))
-
-
-def _validate_recorded_layout(
-    manifest: Any, connection: sqlite3.Connection, root: Any, errors: list[str]
-) -> None:
-    """Every recorded chunk and shard shape must describe the arrays present.
-
-    A manifest that describes one shape over arrays of another is a silent
-    failure class: a reader sizing its reads from the manifest would decode the
-    wrong blocks.  Each of the three recordings is clipped to the plane's own
-    dimensions exactly as the seam's role policy clips it (so a small store's
-    build-wide hint is not a disagreement), then compared with the Dense
-    plane's actual **inner** chunk and, for a sharded 0.2.0 release, its shard
-    (issue #245).
-    """
-    if "z" not in root:
-        return
-    planes = _recorded_dense_planes(root)
-    sharded = planes[0][3] is not None
-    recorded = _recorded_layouts(manifest, connection, root, errors, require_all=sharded)
-    _recorded_layout_mismatches(
-        recorded,
-        planes,
-        errors,
-        zarr_label="data.zarr",
-        require_compressor=sharded,
-    )
-
-
-def _recorded_dense_planes(
-    root: Any,
-) -> list[tuple[str, tuple[int, ...], tuple[int, ...], tuple[int, ...] | None]]:
-    """Every present Dense statistic plane as (name, shape, inner chunk, shard).
-
-    The recorded layout is one grid, but the rule must hold it against **every**
-    plane that uses it: checking only `z` would let `se`, `eaf` or the imputed
-    mask disagree with the manifest and still validate (issue #245 review).
-    The imputed mask is present only in a Reference-Completed release.
-    """
-    planes: list[tuple[str, tuple[int, ...], tuple[int, ...], tuple[int, ...] | None]] = []
-    for name in ("z", "se", "eaf", "imputed"):
-        if name not in root:
-            continue
-        plane = root[name]
-        shape = tuple(int(size) for size in plane.shape)
-        shard = (
-            None
-            if getattr(plane, "shards", None) is None
-            else tuple(int(size) for size in plane.shards)
-        )
-        planes.append((name, shape, inner_chunk_of(plane), shard))
-    return planes
-
-
-def _recorded_chunk_errors(
-    label: str,
-    chunk_shape: Any,
-    shape: tuple[int, ...],
-    actual_inner: tuple[int, ...],
-    errors: list[str],
-) -> tuple[int, ...] | None:
-    """One recording's chunk shape against the plane's inner chunk.
-
-    Returns the clipped inner chunk for the shard check that follows, or `None`
-    when the recording cannot describe this plane at all.
-    """
-    if chunk_shape is None:
-        errors.append(
-            f"{label}: no chunk_shape recorded, so the release does not describe its own "
-            "Dense plane layout (issue #245)"
-        )
-        return None
-    if len(chunk_shape) != len(shape):
-        errors.append(
-            f"{label} records chunk_shape {list(chunk_shape)} for a {len(shape)}-D plane "
-            "(issue #245)"
-        )
-        return None
-    expected_inner = tuple(
-        min(int(size), dim) for size, dim in zip(chunk_shape, shape, strict=True)
-    )
-    if expected_inner != actual_inner:
-        errors.append(
-            f"{label} records chunk_shape {list(chunk_shape)}, which describes "
-            f"{list(expected_inner)} for a {shape} plane, but data.zarr/z is chunked "
-            f"{list(actual_inner)}; a manifest and arrays that disagree are a silent "
-            "failure class (issue #245)"
-        )
-    return expected_inner
-
-
-def _recorded_shard_errors(
-    label: str,
-    shard_shape: Any,
-    shape: tuple[int, ...],
-    expected_inner: tuple[int, ...],
-    actual_shard: tuple[int, ...] | None,
-) -> list[str]:
-    """One recording's shard shape against the plane's shard, or nothing for v2."""
-    if actual_shard is None:
-        return []
-    if shard_shape is None:
-        return [
-            f"{label}: data.zarr/z is sharded ({list(actual_shard)}) but no shard_shape "
-            "is recorded (issue #245)"
-        ]
-    if len(shard_shape) != len(shape):
-        return [
-            f"{label} records shard_shape {list(shard_shape)} for a {len(shape)}-D Dense "
-            "plane (issue #245)"
-        ]
-    recorded_shard = tuple(int(size) for size in shard_shape)
-    try:
-        expected_shard = shard_layout(
-            ArrayRole.DENSE_STATISTIC_PLANE,
-            shape,
-            inner_chunk=expected_inner,
-            dense_shard=(recorded_shard[0], recorded_shard[1]),
-        )
-    except ValueError as exc:
-        return [
-            f"{label} records shard_shape {list(shard_shape)}, which cannot describe a "
-            f"{shape} plane chunked {list(expected_inner)}: {exc}"
-        ]
-    if expected_shard != actual_shard:
-        return [
-            f"{label} records shard_shape {list(shard_shape)}, which describes "
-            f"{list(expected_shard)} for this plane, but data.zarr/z is sharded "
-            f"{list(actual_shard)} (issue #245)"
-        ]
-    return []
-
-
-def _recorded_compressor_errors(
-    recorded: list[tuple[str, Any, Any, Any, Any]],
-    actual_shard: tuple[int, ...] | None,
-    *,
-    require: bool,
-) -> list[str]:
-    """The three recordings' compressors agree, and name the format present.
-
-    `require` is set where spec §10a mandates the compressor: the Hybrid outer
-    recording always, and any sharded (0.2.0) recording.  A 0.1.0 nested Dense
-    Component's `provenance.dense` predates the completion writing one, so a v2
-    recording is only judged when it carries a compressor -- the builder gap is
-    reported, not silently accepted or turned into a false failure.
-    """
-    expected = SHARDED_COMPRESSOR_RECORD if actual_shard is not None else COMPRESSOR_RECORD
-    kind = "Zarr v3 sharded" if actual_shard is not None else "Zarr v2"
-    return _compressor_consistency_errors(recorded) + _compressor_record_errors(
-        recorded, expected, kind, require=require
-    )
-
-
-def _compressor_consistency_errors(
-    recorded: list[tuple[str, Any, Any, Any, Any]],
-) -> list[str]:
-    """The recordings must not contradict each other about the compressor."""
-    present = [entry[3] for entry in recorded if entry[3] is not None]
-    if len(present) <= 1 or all(entry == present[0] for entry in present):
-        return []
-    return [
-        "manifest provenance, index.sqlite dense metadata and data.zarr root attrs "
-        f"record different compressors ({present}); they describe the same arrays and "
-        "must agree (issue #245)"
-    ]
-
-
-def _compressor_record_errors(
-    recorded: list[tuple[str, Any, Any, Any, Any]],
-    expected: dict[str, Any],
-    kind: str,
-    *,
-    require: bool,
-) -> list[str]:
-    """Every recording MUST name the format's one compressor when `require`."""
-    errors: list[str] = []
-    for label, _chunk, _shard, compressor, _zarr_format in recorded:
-        if compressor is None:
-            if require:
-                errors.append(
-                    f"{label}: no compressor recorded, so the release does not "
-                    "describe the codec its arrays are stored with (spec §10a)"
-                )
-        elif compressor != expected:
-            errors.append(
-                f"{label} records compressor {compressor!r}, not the {kind} record "
-                f"{expected!r} (issue #245)"
-            )
-    return errors
-
-
-def _recorded_zarr_format_errors(
-    recorded: list[tuple[str, Any, Any, Any, Any]], actual_shard: tuple[int, ...] | None
-) -> list[str]:
-    """A sharded (0.2.0) recording MUST name Zarr format 3; a v2 one must not claim otherwise.
-
-    Spec §10a records `zarr_format` alongside the compressor.  A 0.1.0 release has
-    no shard and does not record a format, but a 0.2.0 one must, and a recording
-    that names the wrong format is the same silent failure class as a wrong chunk
-    (issue #248 review round 2).
-
-    The value must be the **integer** 2 or 3, compared without coercion: a JSON
-    string `"3"`, a float `3.0`/`3.5` and `true` are all validation errors rather
-    than being `int(...)`-ed into a passing value or raising (issue #248 review
-    round 3).
-    """
-    errors: list[str] = []
-    for label, _chunk, _shard, _compressor, zarr_format in recorded:
-        value = _zarr_format_int(zarr_format)
-        if actual_shard is not None:
-            if value is None:
-                errors.append(
-                    f"{label}: zarr_format {zarr_format!r} is not the integer 3, which a "
-                    "Zarr v3 sharded release MUST record (spec §10a)"
-                )
-            elif value != 3:
-                errors.append(
-                    f"{label} records zarr_format {zarr_format!r}, not 3; the arrays "
-                    "are Zarr v3 sharded (spec §10a)"
-                )
-        elif zarr_format is not None and value != 2:
-            errors.append(
-                f"{label} records zarr_format {zarr_format!r}, not the integer 2; the "
-                "arrays are Zarr v2 (spec §10a)"
-            )
-    return errors
-
-
-def _zarr_format_int(value: Any) -> int | None:
-    """`value` as a Zarr format integer, or `None` when it is not one.
-
-    Only a true integer counts.  `bool` is excluded although it is an `int`
-    subclass, and strings, floats and `None` are refused without coercion.
-    """
-    if isinstance(value, bool) or not isinstance(value, numbers.Integral):
-        return None
-    return int(value)
-
-
-def _validate_hybrid_recordings(store: Any, dense_store: Any, errors: list[str]) -> None:
-    """A Hybrid's outer layout recordings must agree with its nested component.
-
-    Spec §10a: the outer `provenance.hybrid` and the outer `index.sqlite` `dense`
-    blob describe the nested Dense Component's arrays and MUST agree with them,
-    just as the component's own three recordings do.  `_validate_recorded_layout`
-    never sees them -- it runs on the component's own root and returns when that
-    root has no `z` -- so without this seam a Hybrid whose outer manifest was
-    left on an older layout validates, and a reader sizing its reads from
-    `provenance.hybrid` decodes the wrong blocks (issue #248 review round 1).
-    """
-    planes = _recorded_dense_planes(dense_store.arrays(mode="r"))
-    if not planes:
-        return
-    _recorded_layout_mismatches(
-        _hybrid_outer_recordings(store, errors),
-        planes,
-        errors,
-        zarr_label="dense/data.zarr",
-        require_compressor=True,
-    )
-
-
-def _hybrid_outer_recordings(
-    store: Any, errors: list[str]
-) -> list[tuple[str, Any, Any, Any, Any]]:
-    """The outer `provenance.hybrid` and index blob, as recordings.
-
-    The outer manifest MUST carry `chunk_shape` (spec §10a); a missing one is an
-    error rather than a silently skipped comparison.  The outer `dense` blob is
-    judged only when present, as for a standalone release.
-    """
-    recorded: list[tuple[str, Any, Any, Any, Any]] = []
-    provenance = store.manifest.provenance if isinstance(store.manifest.provenance, dict) else {}
-    block = _recorded_from_block(
-        "manifest.json provenance.hybrid", provenance.get("hybrid")
-    )
-    if block is None:
-        errors.append(
-            "manifest.json provenance.hybrid: no chunk_shape recorded, so the release "
-            "does not describe its Dense Component's layout (spec §10a, issue #248)"
-        )
-    else:
-        recorded.append(block)
-    connection = store.index_connection()
-    try:
-        index = _recorded_from_index(connection)
-    finally:
-        connection.close()
-    if index is not None:
-        recorded.append(index)
-    return recorded
-
-
 def _dense_rho(target: Target, errors: list[str]) -> None:
     """The optional Rho Matrix against `analyses.tsv`."""
     _validate_rho(target.group, grid_counts(target)[1], errors)
 
 
-def _dense_layout(target: Target, errors: list[str]) -> None:
-    """The recorded layout against the planes, and any Indexed Variant Subsets."""
+def _dense_subsets(target: Target, errors: list[str]) -> None:
+    """Any Indexed Variant Subsets."""
     store = target.store
     n_variants, n_analyses = grid_counts(target)
-    # After the shape seam, so a plane that does not span the axis is named as
-    # such rather than only as a layout disagreement (#245).
-    with store.index_connection() as connection:
-        _validate_recorded_layout(store.manifest, connection, target.group, errors)
     # The optional indexed-subset namespace (ADR 0061, #264).  A release without it
     # stays valid and unchanged; a release with it must hold only published,
     # self-consistent, value-equal subsets.
     validate_indexed_subsets(
         store.path, target.group, store.manifest, n_variants, n_analyses, errors
     )
-
-
-def _overflow(target: Target, errors: list[str]) -> None:
-    """The Dense Component's coverage of the shared variant table."""
-    store = target.store
-    dense_to_shared = np.load(dense_to_shared_path(store.path))
-    _validate_dense_coverage(
-        store.path, dense_component_path(store.path), dense_to_shared, len(dense_to_shared), errors
-    )
-
-
-
-def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> None:
-    """A Hybrid release's Dense Component opens as Dense, under the release's plan,
-    and the outer recordings describe it (ADR 0026 / issue 059).
-
-    The component is judged as a Dense release of its own, and the Overflow as a
-    sequence of its own.
-    """
-    dense_store = _hybrid_dense_component(store, errors)
-    if dense_store is None:
-        return
-    # The outer recordings must describe the component, which is judged as a Dense
-    # release of its own.
-    _validate_hybrid_recordings(store, dense_store, errors)
-
-
-def _n_variants(store_path: Path) -> int:
-    """The rows of a release's Store Variant Table, by its offset sidecar."""
-    axis = VariantAxis(store_path)
-    try:
-        return axis.n_variants
-    finally:
-        axis.close()
-
-
-def _hybrid_dense_component(
-    store: OpenGWASDBStore, errors: list[str]
-) -> OpenGWASDBStore | None:
-    """The Dense Component, opened, Dense, and under the release's plan; else None."""
-    dense_store = _load_manifest(dense_component_path(store.path), errors)
-    if dense_store is None:
-        return None
-    if dense_store.manifest.primary_layout is not PrimaryStorageLayout.DENSE:
-        errors.append(
-            f"Dense Component manifest must be primary_layout=dense "
-            f"(got {dense_store.manifest.primary_layout.value})"
-        )
-        return None
-    # One plan for both components (issue #119): they partition one Analysis's
-    # associations, so a result assembled from both is only coherent if they were
-    # encoded the same way, and nothing but this check couples the two manifests.
-    encoding_error = _component_encoding_error(dense_store, store.manifest.encoding)
-    if encoding_error is not None:
-        errors.append(encoding_error)
-        return None
-    return dense_store
-
-
-def _component_encoding_error(
-    dense_store: OpenGWASDBStore, release: StoreEncoding
-) -> str | None:
-    """Why a Hybrid release's two components disagree about their statistic encoding.
-
-    They partition one Analysis's associations, so a result assembled from both is
-    only coherent if they were written under one plan -- and each component carries
-    its own manifest, so nothing but this check couples them. `eaf_reference` is the
-    one field that legitimately differs: it records a physical fact about the
-    component that declares it, and only the Dense Component has imputed cells for a
-    reference frequency to describe (ADR 0037 §4). Compared with it normalised away,
-    so a real disagreement about the *encoding* still fails.
-    """
-    encoding = dense_store.manifest.encoding
-    if encoding.with_eaf_reference(False) == release:
-        return None
-    return (
-        "the Dense Component and the Hybrid release declare different statistic "
-        f"encodings ({encoding.to_manifest()} vs {release.to_manifest()}); both "
-        "components of a Hybrid release are written under one plan"
-    )
-
-
-def _validate_dense_coverage(
-    store_path: Path,
-    dense_dir: Path,
-    dense_to_shared: np.ndarray,
-    n_panel: int,
-    errors: list[str],
-) -> None:
-    """The shared row each dense row maps to must carry the Dense Component's ALID."""
-    dense_axis = VariantAxis(dense_dir)
-    shared_axis = VariantAxis(store_path)
-    try:
-        for r in representative_variant_indices(n_panel):
-            dense_rec = dense_axis.by_index(r)
-            shared_rec = shared_axis.by_index(int(dense_to_shared[r]))
-            if dense_rec is None or shared_rec is None or dense_rec.alid != shared_rec.alid:
-                errors.append(
-                    "dense_to_shared coverage violated: Dense Component row "
-                    f"{r} does not match its shared variant table row"
-                )
-                break
-    finally:
-        dense_axis.close()
-        shared_axis.close()
 
 
 def _load_manifest(store_path: Path, errors: list[str]) -> OpenGWASDBStore | None:

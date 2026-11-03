@@ -240,6 +240,25 @@ def test_the_variant_index_rules_read_each_array_once(
     assert times_read(counts, index["analysis_index"]) == 1.0
 
 
+def test_a_component_defect_does_not_hide_an_overflow_defect(tmp_path: Path) -> None:
+    """A Hybrid's Dense Component and its Overflow are judged apart.
+
+    Before, any error in the Dense Component stopped the Overflow's checks, so a
+    release with a defect in each reported only the first.
+    """
+    store = residual_stores.hybrid_completed(tmp_path)
+    for data in (store / "dense" / "data.zarr", store / "data.zarr"):
+        tiers = zarr.open_group(str(data / "top_hits"), mode="r+")
+        tier = tiers[sorted(tiers.group_keys())[0]]
+        assert tier["z"].shape[0] > 0, "each component's tier must hold a cell"
+        tier["z"][0] = 0.0
+
+    result = validate_store(store)
+
+    assert {f.target for f in result.of("top_hits.z")} == {"dense/data.zarr", "data.zarr/ragged"}
+    assert result.failed() == {"top_hits.z", "top_hits.abs_z"}, result.errors
+
+
 def test_an_undecodable_se_does_not_hide_the_table_that_explains_it(tmp_path: Path) -> None:
     """An exception code with no table entry: the decode fails, and the table says why.
 
