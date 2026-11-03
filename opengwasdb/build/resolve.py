@@ -45,11 +45,10 @@ from __future__ import annotations
 
 import heapq
 import math
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol, runtime_checkable
 
 import numpy as np
 
@@ -68,6 +67,7 @@ from opengwasdb.build.phenotype_sd import (
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.info_score_policy import InfoScorePolicy, InfoScoreState
 from opengwasdb.model.maf_policy import MafPolicy, MafState
+from opengwasdb.readers.interface import SourceReader
 from opengwasdb.readers.tabular import MetricsChunk
 
 __all__ = [
@@ -76,7 +76,6 @@ __all__ = [
     "AnalysisRequest",
     "AnalysisResolution",
     "DEFAULT_EVIDENCE_SAMPLE",
-    "MetricsReader",
     "PhenotypeSdResolution",
     "ScanDiagnostics",
     "ScanLimit",
@@ -372,21 +371,6 @@ class AnalysisResolution:
     error: str = ""
 
 
-@runtime_checkable
-class MetricsReader(Protocol):
-    """A source reader that can stream one row's identity and statistics.
-
-    Narrower than `SourceReader` on purpose. `stream_associations` cannot serve
-    this resolver: it carries a `z` rather than the beta behind it, and it drops
-    every row whose beta is unusable, which is a row ancestry assignment can
-    still read a frequency from. GWAS-SSF provides a projected tabular scan and
-    GWAS-VCF provides one bounded streaming ``bcftools query`` (issue #278).
-    Readers without either explicit metrics projection are refused loudly.
-    """
-
-    def stream_metric_chunks(self) -> Iterator[MetricsChunk]: ...
-
-
 @dataclass
 class _Scan:
     """One source scan's mutable state, readable even if the scan raises mid-file.
@@ -558,7 +542,7 @@ def _scan_diagnostics(
 
 
 def _scan(
-    reader: MetricsReader,
+    reader: SourceReader,
     panel: Collection[str],
     scan: _Scan,
     evidence: _EvidenceSample,
@@ -1062,7 +1046,7 @@ def _ancestry(
 def resolve_analysis(
     request: AnalysisRequest,
     *,
-    reader: MetricsReader,
+    reader: SourceReader,
     reference: AncestryReference,
     extraction_panel: Collection[str] | None = None,
     gates: Gates | None = None,
@@ -1117,11 +1101,6 @@ def resolve_analysis(
         )
     if scan_limit is not None:
         scan_limit.validate()
-    if not isinstance(reader, MetricsReader):
-        raise TypeError(
-            f"{type(reader).__name__} cannot stream source metrics; the one-pass resolver "
-            f"requires an explicit bounded metrics projection (issues #207, #278)"
-        )
     scan = _Scan()
     evidence = _EvidenceSample(k=evidence_sample, tier=request.original_sd_method)
     panel = _ancestry_panel(reference, extraction_panel, source_ancestry)

@@ -40,6 +40,7 @@ from opengwasdb.readers import (
     resolve_reader,
     site_metrics_arrays,
 )
+from opengwasdb.readers.besd import BESD_CAPABILITY
 
 
 def _write_vcf(path: Path, body: str, study_type: str = "Continuous") -> None:
@@ -149,7 +150,8 @@ def test_known_capabilities_returns_sorted_registered_set():
     caps = known_capabilities()
     assert isinstance(caps, tuple)
     assert caps == (
-        COLUMN_MAP_CAPABILITY, FINNGEN_R13_CAPABILITY, GWAS_SSF_CAPABILITY, GWAS_VCF_CAPABILITY
+        BESD_CAPABILITY, COLUMN_MAP_CAPABILITY, FINNGEN_R13_CAPABILITY, GWAS_SSF_CAPABILITY,
+        GWAS_VCF_CAPABILITY,
     )
 
 
@@ -158,7 +160,7 @@ def test_resolve_reader_rejects_unknown_capability(tmp_path):
         ValueError,
         match=(
             r"unknown source reader capability '.*'; "
-            r"known: opengwasdb\.column-map, opengwasdb\.finngen-r13, "
+            r"known: opengwasdb\.besd, opengwasdb\.column-map, opengwasdb\.finngen-r13, "
             r"opengwasdb\.gwas-ssf, opengwasdb\.gwas-vcf"
         ),
     ):

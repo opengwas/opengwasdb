@@ -88,11 +88,13 @@ from opengwasdb.readers.interface import (
     ImputationScoreDeclaration,
     ReaderAssociation,
     ReferenceAllele,
+    RegionsFile,
     SiteMetrics,
     SourceVariant,
     StreamTally,
     parse_imputation_score,
 )
+from opengwasdb.readers.rows import ReaderBatch, stream_batches
 from opengwasdb.readers.tabular import (
     DEFAULT_CHUNK_ROWS,
     MetricsChunk,
@@ -474,7 +476,8 @@ class GwasSsfReader:
         """
         return resolve_effect_source(_header(self.path))
 
-    def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
+    def _association_rows(self, tally: StreamTally | None) -> Iterator[SourceRow]:
+        """The rows both association projections read, an infinite effect kept."""
         source = self.effect_source
         # A z-score source is derived, not read: refuse it on a case-control
         # scale and refuse an unsigned column before yielding any row (#215).
@@ -483,16 +486,22 @@ class GwasSsfReader:
             # A file naming no effect column holds no associations at all, and
             # yields none, rather than one row with no effect per source row.
             return
+        yield from _iter_rows(
+            self.path,
+            effect_source=source,
+            score_column=self.imputation_score_column,
+            tally=tally,
+            infinite_effects=True,
+        )
+
+    def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
         yield from stream_associations(
-            _iter_rows(
-                self.path,
-                effect_source=source,
-                score_column=self.imputation_score_column,
-                tally=tally,
-                infinite_effects=True,
-            ),
-            self.stored_effect_scale,
-            self.reference,
+            self._association_rows(tally), self.stored_effect_scale, self.reference
+        )
+
+    def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
+        yield from stream_batches(
+            self._association_rows(tally), self.reference, chunk_rows=self.chunk_rows
         )
 
     def stream_variants(self) -> Iterator[SourceVariant]:
@@ -530,5 +539,7 @@ class GwasSsfReader:
             score_column=self.imputation_score_column,
         )
 
-    def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
-        return extract_at_sites(_iter_rows(self.path), alids)
+    def extract_at_sites(
+        self, alids: Iterable[str], *, region: str | None = None, regions_file: RegionsFile = None
+    ) -> dict[str, SiteMetrics]:
+        return extract_at_sites(_iter_rows(self.path), alids, region=region)

@@ -6,6 +6,8 @@ source's own effect allele's statistics -- and this module presents them:
 
 - `stream_associations`, one `ReaderAssociation` per row, which Variant
   Routing's Pass 2 and phenotype-SD estimation read;
+- `stream_batches`, the same associations as columns (`ReaderBatch`), which a
+  Ragged build hands to Association Admission and stores;
 - `stream_variants`, each row's variant and rsid;
 - `metrics_chunks_from_rows`, the resolver's block form (`MetricsChunk`);
 - `extract_at_sites`, A1 frequency and SE at requested sites.
@@ -19,9 +21,9 @@ loop) keeps it, held to these by parity tests.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable, Iterator, KeysView
-from dataclasses import dataclass, field
-from typing import cast
+from collections.abc import Callable, Collection, Iterable, Iterator, KeysView, Sequence
+from dataclasses import dataclass, field, replace
+from typing import TypeVar, cast
 
 import numpy as np
 from numpy.typing import DTypeLike
@@ -35,16 +37,19 @@ from opengwasdb.readers.interface import (
     SiteMetrics,
     SourceVariant,
 )
-from opengwasdb.readers.orientation import a1_frequencies, is_palindromic, swap_one
+from opengwasdb.readers.orientation import a1_frequencies, is_palindromic, swap, swap_one
+from opengwasdb.variants.normalise import identity_allele, normalise_chromosome
 
 __all__ = [
     "DEFAULT_CHUNK_ROWS",
     "MetricsChunk",
+    "ReaderBatch",
     "SourceRow",
     "TabularMetricsRow",
     "extract_at_sites",
     "metrics_chunks_from_rows",
     "stream_associations",
+    "stream_batches",
     "stream_variants",
 ]
 
@@ -89,6 +94,10 @@ class TabularMetricsRow:
 #: costs about 23 MB against a genome-wide source where 1,000,000 costs 359 MB,
 #: and measures fractionally *faster* for it (issue #209).
 DEFAULT_CHUNK_ROWS = 50_000
+
+
+#: Any row the presenters read: a metrics row or a full `SourceRow`.
+RowT = TypeVar("RowT", bound="TabularMetricsRow")
 
 
 @dataclass(frozen=True)
@@ -205,8 +214,8 @@ def _score_chunk_arrays(rows: list[TabularMetricsRow]) -> tuple[np.ndarray, np.n
 
 
 def _row_array(
-    rows: list[TabularMetricsRow],
-    value: Callable[[TabularMetricsRow], object],
+    rows: Sequence[RowT],
+    value: Callable[[RowT], object],
     dtype: DTypeLike,
 ) -> np.ndarray:
     """One chunk array, from a row-wise projection's rows, in row order."""
@@ -334,16 +343,24 @@ def stream_variants(rows: Iterable[SourceRow]) -> Iterator[SourceVariant]:
 
 
 def extract_at_sites(
-    rows: Iterable[SourceRow], alids: Iterable[str]
+    rows: Iterable[SourceRow], alids: Iterable[str], *, region: str | None = None
 ) -> dict[str, SiteMetrics]:
     """Each requested site's A1 frequency and SE, from the rows that report both.
 
     A palindromic pair is left out, since nothing puts its frequency on a
-    strand; a later row wins a repeated ALID.
+    strand; a later row wins a repeated ALID. ``region`` keeps only the rows
+    on that chromosome.
     """
     wanted = alids if isinstance(alids, (set, frozenset, dict, KeysView)) else set(alids)
     if not wanted:
         return {}
+    if region is not None:
+        chromosome = normalise_chromosome(region)
+        rows = (row for row in rows if row.chromosome == chromosome)
+    return _sites(rows, wanted)
+
+
+def _sites(rows: Iterable[SourceRow], wanted: Collection[str]) -> dict[str, SiteMetrics]:
     result: dict[str, SiteMetrics] = {}
     for row in rows:
         if row.alid not in wanted or row.af_alt is None or row.se is None:
@@ -353,3 +370,153 @@ def extract_at_sites(
         _z, af = swap_one(row.flipped, math.nan, row.af_alt)
         result[row.alid] = SiteMetrics(af=cast(float, af), se=row.se)
     return result
+
+
+@dataclass(frozen=True)
+class ReaderBatch:
+    """A block of one Source Reader's associations as columns, oriented to A1.
+
+    The columnar form of `stream_associations`: the same rows, in the same order,
+    with the same z, SE and frequency, for a builder that judges and stores them
+    a block at a time. Every array is positionally parallel.
+
+    - ``alid``: each row's canonical ALID, in the reader's declared assembly. No
+      caller forms it again.
+    - ``source_row``: the row's place among the rows the reader yields, counted
+      from 0, or for a BESD probe the `.esi` row its variant is on.
+    - ``flipped``: whether the source's effect allele is A2, so `swap` put ``z``
+      and ``eaf`` on A1. A lift that swaps A1 and A2 again re-orients by it.
+    - ``z``, ``se``, ``eaf``: NaN where the source reports none; the SE is the
+      reported one, possibly unusable, for Association Admission to judge.
+    - ``imputation_score`` and ``imputation_status``: the declared score's parse,
+      NaN and `UNDECLARED` where the Analysis declares none.
+    - ``rsid``: the source's rs identifier for the row's variant, ``""`` where none.
+    - ``reference``: the format's declaration of which allele is the genome's
+      reference, carried unchanged from the reader (`ReferenceAllele`).
+    - ``ref_first``: for each row, whether its declared reference allele is the
+      one its ALID spells first, as Variant Routing's `allele_order` reads it.
+      Only ``reference`` gives it meaning; it is not computed when the format
+      declares none.
+    - ``key_prefix``: how a dropped row is named in Admission's log: by ALID when
+      empty, else ``key_prefix`` and its ``source_row`` (``esi:12``).
+    """
+
+    alid: np.ndarray
+    source_row: np.ndarray
+    flipped: np.ndarray
+    z: np.ndarray
+    se: np.ndarray
+    eaf: np.ndarray
+    imputation_score: np.ndarray
+    imputation_status: np.ndarray
+    rsid: np.ndarray
+    reference: ReferenceAllele = ReferenceAllele.UNDECLARED
+    ref_first: np.ndarray | None = None
+    key_prefix: str = ""
+
+    def __len__(self) -> int:
+        return int(self.alid.shape[0])
+
+    def take(self, keep: np.ndarray) -> ReaderBatch:
+        """The rows ``keep`` selects (a mask or positions), in order."""
+        return replace(
+            self,
+            alid=self.alid[keep],
+            source_row=self.source_row[keep],
+            flipped=self.flipped[keep],
+            z=self.z[keep],
+            se=self.se[keep],
+            eaf=self.eaf[keep],
+            imputation_score=self.imputation_score[keep],
+            imputation_status=self.imputation_status[keep],
+            rsid=self.rsid[keep],
+            ref_first=None if self.ref_first is None else self.ref_first[keep],
+        )
+
+    def keys_at(self, positions: np.ndarray) -> list[str]:
+        """The source keys Association Admission logs a dropped row by."""
+        if self.key_prefix:
+            return [f"{self.key_prefix}{int(row)}" for row in self.source_row[positions]]
+        return [str(alid) for alid in self.alid[positions]]
+
+    def reference_codes(self) -> np.ndarray:
+        """Each row's `REFERENCE_*` code, for Variant Routing's duplicate rule.
+
+        `REFERENCE_UNKNOWN` everywhere when the format declares no reference.
+        """
+        from opengwasdb.variants.routing.table import (
+            REFERENCE_FIRST,
+            REFERENCE_SECOND,
+            REFERENCE_UNKNOWN,
+        )
+
+        codes = np.full(len(self), REFERENCE_UNKNOWN, dtype=np.int8)
+        if self.reference is ReferenceAllele.UNDECLARED or self.ref_first is None:
+            return codes
+        first = self.ref_first if self.reference is ReferenceAllele.REF else ~self.ref_first
+        indel = self._indel()
+        codes[indel & first] = REFERENCE_FIRST
+        codes[indel & ~first] = REFERENCE_SECOND
+        return codes
+
+    def _indel(self) -> np.ndarray:
+        """Rows whose two alleles differ in length, read from the ALID."""
+        lengths = [alid.split(":", 3)[2:] for alid in self.alid.tolist()]
+        return np.fromiter(
+            (len(a1) != len(a2) for a1, a2 in lengths), dtype=bool, count=len(lengths)
+        )
+
+
+def stream_batches(
+    rows: Iterable[SourceRow],
+    reference: ReferenceAllele = ReferenceAllele.UNDECLARED,
+    *,
+    chunk_rows: int = DEFAULT_CHUNK_ROWS,
+) -> Iterator[ReaderBatch]:
+    """`stream_associations`' rows, ``chunk_rows`` at a time, as `ReaderBatch`es.
+
+    Each row's z and frequency are oriented by `swap`, the same rule
+    `stream_associations` applies one row at a time.
+    """
+    block: list[SourceRow] = []
+    start = 0
+    for row in rows:
+        block.append(row)
+        if len(block) >= chunk_rows:
+            yield _batch_of_rows(block, start, reference)
+            start += len(block)
+            block = []
+    if block:
+        yield _batch_of_rows(block, start, reference)
+
+
+def _batch_of_rows(
+    rows: list[SourceRow], start: int, reference: ReferenceAllele
+) -> ReaderBatch:
+    n = len(rows)
+    flipped = _row_array(rows, lambda row: row.flipped, bool)
+    z, eaf = swap(
+        flipped,
+        _row_array(rows, _association_z, np.float64),
+        _row_array(rows, lambda row: _or_nan(row.af_alt), np.float64),
+    )
+    return ReaderBatch(
+        alid=_row_array(rows, lambda row: row.alid, object),
+        source_row=np.arange(start, start + n, dtype=np.int64),
+        flipped=flipped,
+        z=z,
+        se=_row_array(rows, lambda row: _or_nan(row.se), np.float64),
+        eaf=eaf,
+        imputation_score=_row_array(
+            rows, lambda row: _or_nan(row.imputation_score.value), np.float64
+        ),
+        imputation_status=_row_array(rows, lambda row: row.imputation_score.status, object),
+        rsid=_row_array(rows, lambda row: row.rsid, object),
+        reference=reference,
+        ref_first=None if reference is ReferenceAllele.UNDECLARED else _ref_first(rows),
+    )
+
+
+def _ref_first(rows: list[SourceRow]) -> np.ndarray:
+    """Whether each row's `ref` is the allele its ALID spells first."""
+    return _row_array(rows, lambda row: identity_allele(row.ref) < identity_allele(row.alt), bool)

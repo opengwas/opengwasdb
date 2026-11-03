@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import TextIO
 
 from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.readers import interface
 from opengwasdb.readers.interface import (
     ReaderAssociation,
     ReferenceAllele,
@@ -43,10 +44,12 @@ from opengwasdb.readers.interface import (
 from opengwasdb.readers.orientation import is_palindromic
 from opengwasdb.readers.rows import (
     MetricsChunk,
+    ReaderBatch,
     SourceRow,
     extract_at_sites,
     metrics_chunks_from_rows,
     stream_associations,
+    stream_batches,
 )
 from opengwasdb.stats import FrequencyTally, parse_af
 from opengwasdb.variants.normalise import (
@@ -593,6 +596,10 @@ class GwasVcfReader:
         with contextlib.closing(_record_rows(self.path, tally=tally)) as rows:
             yield from stream_associations(rows, self.stored_effect_scale, ReferenceAllele.REF)
 
+    def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
+        with contextlib.closing(_record_rows(self.path, tally=tally)) as rows:
+            yield from stream_batches(rows, ReferenceAllele.REF, chunk_rows=self.chunk_rows)
+
     def stream_variants(self) -> Iterator[SourceVariant]:
         yield from _variants(self.path)
 
@@ -608,21 +615,33 @@ class GwasVcfReader:
         with contextlib.closing(_record_rows(self.path, liftover=self.liftover)) as rows:
             yield from metrics_chunks_from_rows(rows, chunk_rows=self.chunk_rows)
 
-    def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
+    def extract_at_sites(
+        self,
+        alids: Iterable[str],
+        *,
+        region: str | None = None,
+        regions_file: interface.RegionsFile = None,
+    ) -> dict[str, SiteMetrics]:
+        """The requested sites, read by bcftools' own restriction.
+
+        ``region`` and ``regions_file`` are the reader's own when not given.
+        """
         wanted = (
             alids if isinstance(alids, (set, frozenset, dict, KeysView)) else set(alids)
         )
         if not wanted:
             return {}
+        region = self.region if region is None else region
+        regions_file = self.regions_file if regions_file is None else regions_file
         with contextlib.ExitStack() as stack:
             # bcftools rejects -r/-R together, so region (a coarser, cheaper
             # restriction) takes priority when set.
             restriction: tuple[str, ...] = ()
-            if self.region is not None:
-                restriction = ("-r", str(self.region))
+            if region is not None:
+                restriction = ("-r", str(region))
             elif self.liftover is None:
-                if self.regions_file is not None:
-                    regions_path = Path(self.regions_file)
+                if regions_file is not None:
+                    regions_path = Path(regions_file)
                 else:
                     tmp_dir = stack.enter_context(tempfile.TemporaryDirectory())
                     regions_path = write_regions_file(wanted, Path(tmp_dir) / "regions.tsv")
