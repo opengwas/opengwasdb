@@ -6,9 +6,11 @@ an association a Store can hold at all, then the filters the Analysis declared:
 
 1. an unusable reported SE (`se_unusable`): missing, not positive, or not
    finite;
-2. the declared INFO filter (`info_below_threshold`): a usable score below a
+2. no effect (`effect_missing`): a usable SE beside a z the source gave no
+   effect to compute;
+3. the declared INFO filter (`info_below_threshold`): a usable score below a
    `FILTERED` threshold; equality passes;
-3. the declared MAF filter, under a `FILTERED` policy: a row with no usable
+4. the declared MAF filter, under a `FILTERED` policy: a row with no usable
    frequency (`maf_missing`), then a MAF below the threshold
    (`maf_below_threshold`); equality passes.
 
@@ -66,6 +68,7 @@ class Reason(StrEnum):
     """Why Association Admission dropped a row: one per dropped row, in precedence order."""
 
     SE_UNUSABLE = "se_unusable"
+    EFFECT_MISSING = "effect_missing"
     INFO_BELOW_THRESHOLD = "info_below_threshold"
     MAF_MISSING = "maf_missing"
     MAF_BELOW_THRESHOLD = "maf_below_threshold"
@@ -74,7 +77,7 @@ class Reason(StrEnum):
 #: The reasons whose rows are logged by source key, not only counted. A declared
 #: filter's drops are reproducible from the source and the policy, and logging
 #: them would cost more than the Store they filter.
-LOGGED: frozenset[Reason] = frozenset({Reason.SE_UNUSABLE})
+LOGGED: frozenset[Reason] = frozenset({Reason.SE_UNUSABLE, Reason.EFFECT_MISSING})
 
 #: A row's reason code: 0 is admitted, ``i + 1`` is ``_REASONS[i]``.
 _REASONS: tuple[Reason, ...] = tuple(Reason)
@@ -103,21 +106,23 @@ class SourceRows:
     reports none. ``imputation_score`` and ``imputation_status`` are what the
     declared score column parsed to, or ``None`` where no score was declared,
     which is every row `UNDECLARED`. ``se`` is the reported SE, before any
-    standardisation, or ``None`` from a caller whose reader has already
-    judged it. ``keys_at`` names rows for the log; a batch that can drop a
-    logged row must carry it.
+    standardisation, and ``z`` the row's z, NaN where the source reports no
+    effect; either is ``None`` from a caller whose reader has already judged
+    it. ``keys_at`` names rows for the log; a batch that can drop a logged row
+    must carry it.
     """
 
     eaf: np.ndarray
     imputation_score: np.ndarray | None = None
     imputation_status: np.ndarray | None = None
     se: np.ndarray | None = None
+    z: np.ndarray | None = None
     keys_at: KeysAt | None = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
         # One row judged against another row's statistics would keep the wrong
         # rows in silence, so a ragged batch is refused (stores #175).
-        columns = (self.eaf, self.imputation_score, self.imputation_status, self.se)
+        columns = (self.eaf, self.imputation_score, self.imputation_status, self.se, self.z)
         lengths = {len(values) for values in columns if values is not None}
         if len(lengths) != 1:
             raise ValueError(
@@ -213,10 +218,7 @@ class Verdict:
 
 def judge(rows: SourceRows, rules: AnalysisRules) -> Verdict:
     """Each row's reason, by the rule set's precedence, and what the batch counts."""
-    codes = np.zeros(len(rows), dtype=np.uint8)
-    if rows.se is not None:
-        with np.errstate(invalid="ignore"):
-            codes[~(rows.se > 0) | ~np.isfinite(rows.se)] = _CODE[Reason.SE_UNUSABLE]
+    codes = _value_codes(rows)
     associations = np.flatnonzero(codes == 0)
     info = _judge_info(codes, rows, associations, rules.info)
     eaf = rows.eaf[associations]
@@ -238,6 +240,17 @@ def judge(rows: SourceRows, rules: AnalysisRules) -> Verdict:
             maf_missing=maf_missing,
         ),
     )
+
+
+def _value_codes(rows: SourceRows) -> np.ndarray:
+    """Each row's code from the rules that decide whether it is an association."""
+    codes = np.zeros(len(rows), dtype=np.uint8)
+    if rows.se is not None:
+        with np.errstate(invalid="ignore"):
+            codes[~(rows.se > 0) | ~np.isfinite(rows.se)] = _CODE[Reason.SE_UNUSABLE]
+    if rows.z is not None:
+        codes[(codes == 0) & np.isnan(rows.z)] = _CODE[Reason.EFFECT_MISSING]
+    return codes
 
 
 def _judge_info(

@@ -1038,9 +1038,9 @@ def test_gwas_ssf_metrics_projection_keeps_rows_the_association_stream_drops(tmp
     """The reason the metrics seam exists, asserted rather than assumed.
 
     A row carrying a frequency and a standard error but no usable beta is
-    evidence for ancestry assignment and none for the SD estimator; the
-    association stream drops it, so a resolver built on that stream would lose
-    ancestry evidence the source actually carries.
+    evidence for ancestry assignment and none for the SD estimator; a file
+    naming no effect column yields no associations at all, so a resolver built
+    on that stream would lose ancestry evidence the source actually carries.
     """
     path = tmp_path / "no-beta-column.tsv"
     _write_metrics_fixture(
@@ -1055,7 +1055,7 @@ def test_gwas_ssf_metrics_projection_keeps_rows_the_association_stream_drops(tmp
     assert len(metrics) == 1, "the metrics stream must see the row"
     assert metrics[0][7] is None, "the row has no beta, and none is fabricated"
     assert metrics[0][6] == pytest.approx(0.30)
-    assert associations == [], "the association stream must drop the same row"
+    assert associations == [], "a file naming no effect column yields no associations"
 
 
 def test_metrics_projection_fails_loudly_when_identity_column_is_missing(tmp_path):
@@ -1166,9 +1166,9 @@ def test_gwas_ssf_reader_drops_a_non_positive_or_unparseable_odds_ratio(tmp_path
 
     associations = list(GwasSsfReader(path, StoredEffectScale.LOG_OR).stream_associations())
 
-    assert [association.position for association in associations] == [500], (
-        "only the usable odds-ratio row may reach the association stream"
-    )
+    assert [math.isfinite(association.z) for association in associations] == [
+        False, False, False, False, True
+    ], "only the usable odds-ratio row has an effect; the rest are no-effect rows"
     # The metrics seam still sees every row, with the unusable beta absent.
     assert [row[7] for row in _metrics_rows(path)] == [
         None, None, None, None, pytest.approx(math.log(2.0))

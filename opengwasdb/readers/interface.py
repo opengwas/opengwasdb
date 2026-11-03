@@ -112,7 +112,9 @@ class ReaderAssociation:
 
     `ref`/`alt` are the source's own allele labelling, not reordered to
     canonical A1/A2 -- `z` is already sign-corrected to the A1 = min(ref, alt)
-    convention every reader in this package follows. `eaf` follows `z`: it is
+    convention every reader in this package follows. `z` is NaN for a source
+    row that reports no effect: such a row is not an association, and
+    Association Admission drops and logs it (`effect_missing`). `eaf` follows `z`: it is
     the frequency of the *stored* effect allele, so a reader that negated `z`
     also stores `1 - af` (ADR 0036). None where the source reports no usable
     frequency -- never fabricated, and never a substitute 0.5. There is no

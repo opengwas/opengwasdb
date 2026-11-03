@@ -9,6 +9,7 @@ reports come from one judgement and cannot disagree (stores #176).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol
 
 import numpy as np
@@ -20,6 +21,21 @@ __all__ = ["Gate", "RoutedBatch", "counting_gate"]
 
 class RoutedBatch(Protocol):
     """What Variant Routing's ``admit=`` hands a gate: one batch, before matching."""
+
+    @property
+    def chromosome(self) -> Sequence[str]: ...
+
+    @property
+    def position(self) -> Sequence[int]: ...
+
+    @property
+    def ref(self) -> Sequence[str]: ...
+
+    @property
+    def alt(self) -> Sequence[str]: ...
+
+    @property
+    def z(self) -> np.ndarray: ...
 
     @property
     def eaf(self) -> np.ndarray: ...
@@ -72,7 +88,8 @@ class Gate:
         """`source_rows` for one of Variant Routing's batches: its ``admit=``.
 
         An Analysis that declared no score was read without one, so its rows'
-        scores are not handed on.
+        scores are not handed on. A logged row is named by its source
+        coordinate, ``chromosome:position:ref:alt`` as the reader spelt it.
         """
         declared = self.reads_imputation_scores
         return self.source_rows(
@@ -80,6 +97,11 @@ class Gate:
                 eaf=batch.eaf,
                 imputation_score=batch.imputation_score if declared else None,
                 imputation_status=batch.imputation_status if declared else None,
+                z=batch.z,
+                keys_at=lambda positions: [
+                    f"{batch.chromosome[i]}:{batch.position[i]}:{batch.ref[i]}:{batch.alt[i]}"
+                    for i in positions.tolist()
+                ],
             )
         )
 

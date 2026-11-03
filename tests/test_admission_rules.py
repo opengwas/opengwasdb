@@ -198,3 +198,24 @@ def test_a_batch_that_drops_a_logged_row_must_name_its_keys():
 def test_a_batch_whose_columns_disagree_in_length_is_refused():
     with pytest.raises(ValueError, match=r"\[2, 3\] row"):
         SourceRows(eaf=np.zeros(3), se=np.zeros(2))
+
+
+def test_a_row_with_no_effect_is_dropped_after_the_se_rule_and_logged():
+    """A NaN z beside a usable SE is a row the source gave no effect: it is not
+    an association, so it is dropped and logged before any declared filter. A
+    row with neither is counted under the SE rule, which comes first."""
+    keys = ["1:100:A:G", "1:101:A:G", "1:102:A:G"]
+    rows = SourceRows(
+        eaf=np.array([0.3, 0.3, 0.3]),
+        se=np.array([0.2, np.nan, 0.2]),
+        z=np.array([np.nan, np.nan, 1.5]),
+        keys_at=lambda positions: [keys[i] for i in positions.tolist()],
+    )
+    gate = counting_gate(AnalysisRules("A1", maf=FILTERED_MAF))
+
+    assert gate.source_rows(rows).tolist() == [False, False, True]
+    assert gate.counts.dropped == {Reason.SE_UNUSABLE: 1, Reason.EFFECT_MISSING: 1}
+    assert gate.dropped == [
+        ("1:100:A:G", Reason.EFFECT_MISSING),
+        ("1:101:A:G", Reason.SE_UNUSABLE),
+    ]

@@ -410,6 +410,10 @@ class GwasSsfReader:
         # A z-score source is derived, not read: refuse it on a case-control
         # scale and refuse an unsigned column before yielding any row (#215).
         require_z_score_usable(self.path, source, self.stored_effect_scale)
+        if source is None:
+            # A file naming no effect column holds no associations at all, and
+            # yields none, rather than one row with no effect per source row.
+            return
         yield from stream_associations(
             _iter_rows(self.path, effect_source=source, score_column=self.imputation_score_column),
             self.stored_effect_scale,

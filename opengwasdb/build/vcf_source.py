@@ -89,7 +89,9 @@ def stream_vcf_associations(
     allele, so a negated z carries ``1 - AF`` (ADR 0036). None when the file
     declares no AF tag, or reports none for this record.
 
-    Records with SE ≤ 0, non-finite z, or all EZ/ES/SE missing are skipped.
+    Records with SE missing or ≤ 0, or an infinite z, are skipped. A record
+    with neither EZ nor ES is yielded with a NaN z: it has no effect, and
+    Association Admission drops and logs it.
 
     Carries no effect-scale information: the VCF's own `##SAMPLE` `StudyType`
     header is not authoritative for `stored_effect_scale` (issue #17 --
@@ -129,7 +131,9 @@ def stream_vcf_associations(
                 continue
 
             z = _derive_z(ez_str, es_str, se)
-            if z is None or not math.isfinite(z):
+            if z is None:
+                z = math.nan
+            elif not math.isfinite(z):
                 continue
 
             eaf = af

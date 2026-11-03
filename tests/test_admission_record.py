@@ -163,7 +163,11 @@ def test_a_hybrid_record_holds_the_counts_its_provenance_reports(tmp_path: Path)
     provenances = info_fixture._info_analyses(store)
     for counts, provenance in zip(written["analyses"], provenances, strict=True):
         assert counts["analysis_id"] == provenance["analysis_id"]
-        assert counts["examined"] == provenance["associations_observed"]
+        # The source's one row with no effect is examined and dropped before the
+        # declared filter, which counts the associations alone.
+        assert counts["dropped"]["effect_missing"] == 1
+        assert counts["examined"] == provenance["associations_observed"] + 1
+        assert counts["info"]["observed"] == provenance["associations_observed"]
         assert counts["admitted"] == provenance["associations_retained"]
         assert counts["dropped"]["info_below_threshold"] == (
             provenance["associations_below_threshold"]
@@ -274,3 +278,23 @@ def test_a_ragged_besd_build_logs_each_unusable_se_by_esi_row(tmp_path: Path):
     assert [(a["examined"], a["admitted"]) for a in written["analyses"]] == [(2, 1), (2, 1)]
     assert _dropped(record, 0)[1:] == [["esi:1", "se_unusable"]]
     assert _dropped(record, 1)[1:] == [["esi:4", "se_unusable"]]
+
+
+def test_a_vcf_record_with_no_effect_is_logged_by_its_source_coordinate(tmp_path: Path):
+    """A GWAS-VCF record with neither EZ nor ES has no effect: the Dense build
+    drops it, and its record names it as the reader spelt it."""
+    rows = [
+        f"1\t{dense_fixture.HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+        f"1\t{dense_fixture.HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t.:0.3\n",
+    ]
+    vcf = dense_fixture._make_vcf(tmp_path, "trait_a", rows)
+    manifest = dense_fixture._make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
+    store = tmp_path / "dense.opengwasdb"
+    build_dense_from_vcf_manifest(manifest, store, store_id="s", release_id="r")
+
+    record = admission_record_for(store)
+    (analysis,) = json.loads((record / "admission.json").read_text(encoding="utf-8"))["analyses"]
+    assert (analysis["examined"], analysis["admitted"]) == (2, 1)
+    assert _dropped(record, 0)[1:] == [
+        [f"1:{dense_fixture.HG19_POS_2}:C:T", "effect_missing"]
+    ]
