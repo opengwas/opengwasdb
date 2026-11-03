@@ -43,7 +43,7 @@ __all__ = [
 
 #: The rule set's version, recorded in every summary; each change to what a rule
 #: admits moves it.
-ADMISSION_RULES = "admission/7"
+ADMISSION_RULES = "admission/8"
 
 SUMMARY = "admission.json"
 _PARTS = "parts"

@@ -20,6 +20,7 @@ whatever the `.esi` reports. With no reference the outcome is therefore
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -36,8 +37,10 @@ from opengwasdb.build.eaf_orientation import (
 )
 from opengwasdb.layouts.ragged.besd_reader import SnpRecord
 from opengwasdb.model.enums import EafOrientationMethod, EafOrientationOutcome
-from opengwasdb.stats import parse_af
+from opengwasdb.stats import FrequencyTally, parse_af
 from opengwasdb.variants import CanonicalVariant
+
+log = logging.getLogger(__name__)
 
 #: The key the one `.esi` check is run under, before it is copied to each probe.
 _ESI_KEY = ".esi"
@@ -59,12 +62,19 @@ def stored_esi_frequencies(
     release it built before frequencies were stored.
     """
     out = np.full(len(snps), np.nan, dtype=np.float32)
+    frequencies = FrequencyTally()
     for snp in snps:
         mapping = esi_to_variant.get(snp.row_idx)
-        frequency = parse_af(snp.freq)
+        frequency = parse_af(snp.freq, frequencies)
         if mapping is None or frequency is None:
             continue
         out[snp.row_idx] = 1.0 - frequency if mapping[1] else frequency
+    if frequencies.made_absent:
+        # A `.esi` frequency is a variant's, which every probe shares, so it is
+        # counted once here and not in any one Analysis's Admission record (D7).
+        log.info(
+            ".esi: %d reported frequencies outside (0, 1) are absent", frequencies.made_absent
+        )
     return out if bool(np.isfinite(out).any()) else None
 
 

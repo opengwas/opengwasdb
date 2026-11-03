@@ -60,7 +60,7 @@ from opengwasdb.model.manifest_columns import (
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.interface import ImputationScore, parse_imputation_score
 from opengwasdb.readers.tabular import resolve_imputation_score_column
-from opengwasdb.stats import parse_af
+from opengwasdb.stats import FrequencyTally, parse_af
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants.axis import (
@@ -194,11 +194,14 @@ _SourceRow = tuple[
 ]
 
 
-def _read_filtered(path: Path, score_column: str | None = None) -> Iterator[_SourceRow]:
+def _read_filtered(
+    path: Path, score_column: str | None = None, frequencies: FrequencyTally | None = None
+) -> Iterator[_SourceRow]:
     """Yield each row of a filtered file that names a variant.
 
     ``score_column`` is a declared imputation score's column, which must occur
     exactly once with its declared spelling, as the GWAS-SSF reader requires.
+    ``frequencies`` counts the reported frequencies made absent (D7).
     """
     opener = gzip.open if str(path).endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", newline="") as fh:
@@ -207,7 +210,7 @@ def _read_filtered(path: Path, score_column: str | None = None) -> Iterator[_Sou
             header = [name.encode("utf-8") for name in reader.fieldnames or []]
             resolve_imputation_score_column(header, score_column)
         for row in reader:
-            parsed = _source_row(row, score_column)
+            parsed = _source_row(row, score_column, frequencies)
             if parsed is not None:
                 yield parsed
 
@@ -230,7 +233,11 @@ def _statistics(row: dict[str, str]) -> tuple[float, float]:
     return (beta / se if se > 0 and math.isfinite(se) else math.nan), se
 
 
-def _source_row(row: dict[str, str], score_column: str | None = None) -> _SourceRow | None:
+def _source_row(
+    row: dict[str, str],
+    score_column: str | None = None,
+    frequencies: FrequencyTally | None = None,
+) -> _SourceRow | None:
     """One filtered-file row, or None when it names no variant."""
     try:
         ori = orient_to_canonical(
@@ -245,7 +252,7 @@ def _source_row(row: dict[str, str], score_column: str | None = None) -> _Source
     # when `rsid` is absent (opengwasdb-stores' download-filter step selects
     # both columns when present).
     rsid = _opt(row.get("rsid")) or _opt(row.get("variant_id"))
-    eaf = parse_af(row.get("effect_allele_frequency"))
+    eaf = parse_af(row.get("effect_allele_frequency"), frequencies)
     if ori.flipped:
         # The frequency column is the source's effect allele's; the flip made
         # the *other* allele the stored one, and z follows it (ADR 0036).
@@ -280,7 +287,13 @@ def _admitted_rows(path: Path, gate: admission.Gate) -> list[_SourceRow]:
     (D2), from the declared score column and the file's own frequency.
     """
     declaration = gate.rules.info.imputation_score_declaration
-    rows = list(_read_filtered(path, None if declaration is None else declaration.column_name))
+    frequencies = FrequencyTally()
+    rows = list(
+        _read_filtered(
+            path, None if declaration is None else declaration.column_name, frequencies
+        )
+    )
+    gate.frequencies_made_absent(frequencies.made_absent)
     score, status = _score_arrays(rows) if declaration is not None else (None, None)
     keep = gate.source_rows(
         admission.SourceRows(

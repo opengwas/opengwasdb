@@ -8,6 +8,7 @@ counts the ones the Store's `info_score` provenance reports.
 
 from __future__ import annotations
 
+import csv
 import gzip
 import json
 from pathlib import Path
@@ -703,3 +704,116 @@ def test_a_besd_build_refuses_a_filter_it_cannot_judge(
             fixture / "test", tmp_path / "besd.opengwasdb", store_id="s", release_id="r",
             association_coverage="cis_and_signals", analyses_path=overlay,
         )
+
+
+_AF_ROWS = ["0.3", "1", "0", "1.5", "."]
+
+
+def _vcf_with_frequencies(tmp_path: Path) -> Path:
+    """One Analysis's VCF whose FORMAT AF is each of `_AF_ROWS`: three reported
+    frequencies outside (0, 1), and one the source left missing."""
+    header = dense_fixture._vcf_header("Continuous").replace(
+        "##FORMAT=<ID=EZ",
+        '##FORMAT=<ID=AF,Number=A,Type=Float,Description="Allele frequency">\n##FORMAT=<ID=EZ',
+    )
+    rows = "".join(
+        f"1\t{1000 * (i + 1)}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t1.0:0.5:{af}\n"
+        for i, af in enumerate(_AF_ROWS)
+    )
+    vcf = tmp_path / "trait_a.vcf"
+    vcf.write_text(header + rows, encoding="utf-8")
+    return dense_fixture._make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
+
+
+@pytest.mark.parametrize("hybrid", [False, True])
+def test_a_vcf_build_counts_the_frequencies_it_makes_absent(tmp_path: Path, hybrid: bool):
+    """D7: a frequency outside (0, 1) was already absent in a Store, and nothing
+    said how many; the Admission record now counts them, and keeps the rows."""
+    manifest = _vcf_with_frequencies(tmp_path)
+    store = tmp_path / "store.opengwasdb"
+    if hybrid:
+        panel = tmp_path / "panel.txt"
+        panel.write_text(
+            "".join(f"1:{1000 * (i + 1)}:A:G\n" for i in range(len(_AF_ROWS))), encoding="utf-8"
+        )
+        build_hybrid_from_vcf_manifest(
+            manifest, store, reference_panel=panel, store_id="s", release_id="r",
+            source_assembly="hg38",
+        )
+    else:
+        build_dense_from_vcf_manifest(
+            manifest, store, store_id="s", release_id="r", source_assembly="hg38"
+        )
+
+    (analysis,) = _analyses(store)
+    assert (analysis["examined"], analysis["admitted"]) == (5, 5)
+    assert analysis["eaf_made_absent"] == 3
+
+
+def test_a_ragged_ssf_build_counts_the_frequencies_it_makes_absent(tmp_path: Path):
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    ssf_fixture._write_filtered(
+        filtered / "trait_a.tsv.gz",
+        [
+            {"chromosome": "1", "base_pair_location": 100_000 * (i + 1), "effect_allele": "A",
+             "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
+             "effect_allele_frequency": af}
+            for i, af in enumerate(["0.3", "1.0", "1.5", "NA"])
+        ],
+    )
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "analysis_index\tanalysis_id\tfiltered_file\n0\ttrait_a\ttrait_a.tsv.gz\n",
+        encoding="utf-8",
+    )
+    store = tmp_path / "ssf.opengwasdb"
+    build_ragged_from_ssf(
+        manifest, filtered, store, store_id="s", release_id="r",
+        association_coverage="signals_only",
+    )
+
+    (analysis,) = _analyses(store)
+    assert (analysis["admitted"], analysis["eaf_made_absent"]) == (4, 2)
+
+
+def test_a_dense_build_stores_no_frequency_outside_the_interval(tmp_path: Path):
+    """D7 for `build-dense`, which used to store a record's frequency of 1 or
+    1.2 as given: they are absent now, and counted, and the Analysis whose only
+    frequencies they were reports none."""
+    source = tmp_path / "records.tsv"
+    source.write_text(
+        "analysis_id\tchromosome\tposition\teffect_allele\tother_allele\tz\tse\teaf\n"
+        "A\t1\t100\tA\tG\t2.0\t0.1\t0.3\n"
+        "A\t1\t200\tA\tG\t2.0\t0.1\t1.2\n"
+        "B\t1\t100\tA\tG\t1.0\t0.1\t1\n"
+        "B\t1\t200\tA\tG\t1.0\t0.1\t0\n",
+        encoding="utf-8",
+    )
+    store, _ = _dense_from_records(tmp_path, source)
+
+    assert [(a["admitted"], a["eaf_made_absent"]) for a in _analyses(store)] == [(2, 1), (2, 2)]
+    with (store / "analyses.tsv").open(encoding="utf-8") as fh:
+        rows = csv.DictReader(fh, delimiter="\t")
+        scopes = {row["analysis_id"]: row["eaf_scope"] for row in rows}
+    assert scopes == {"A": "association", "B": "absent"}
+
+
+def test_an_esi_frequency_outside_the_interval_is_counted_once_for_the_file(
+    caplog: pytest.LogCaptureFixture,
+):
+    """A `.esi` frequency is a variant's, shared by every probe, so D7's count
+    for a BESD source is the file's, logged once, not any Analysis's."""
+    from opengwasdb.layouts.ragged.besd_eaf import stored_esi_frequencies
+    from opengwasdb.layouts.ragged.besd_reader import SnpRecord
+
+    snps = [
+        SnpRecord(i, "1", f"rs{i}", 100 * (i + 1), "A", "G", freq)
+        for i, freq in enumerate([0.3, 1.0, 1.5, None])
+    ]
+    with caplog.at_level("INFO", logger="opengwasdb.layouts.ragged.besd_eaf"):
+        stored = stored_esi_frequencies(snps, {i: (i, False) for i in range(4)})
+
+    assert stored is not None
+    assert np.isnan(stored[1:]).all()
+    assert ".esi: 2 reported frequencies outside (0, 1) are absent" in caplog.messages

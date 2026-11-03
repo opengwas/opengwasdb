@@ -91,6 +91,15 @@ axis. A single-pass Hybrid's unmatched rows are not dropped here: the fold
 places them in the Ragged Overflow, and the rows the fold cannot place are its
 own to count.
 
+A frequency is never a reason to drop a row (D7). One a source reported
+outside (0, 1) -- exactly 0 or 1, beyond the interval, not finite, or not a
+number -- is absent in the Store, by the rule `parse_af` applies in every reader
+(ADR 0036). `build-dense`, which stored a record's frequency as given, applies
+it too. The record counts them per Analysis (`eaf_made_absent`), over the rows
+the Source Reader read, so it can say how much of a source's frequency column
+the Store does not hold. A `.esi` frequency is a variant's, which every probe
+shares, so `build-ragged-besd` logs the file's count once instead.
+
 `admission.json`'s `"rules"` names the rule set's version, and each decision
 below that changes what a rule admits moves it.
 

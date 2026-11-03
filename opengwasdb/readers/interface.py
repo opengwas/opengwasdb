@@ -30,6 +30,7 @@ from typing import Protocol
 import numpy as np
 
 from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.stats import FrequencyTally
 
 
 class ImputationScoreStatus(StrEnum):
@@ -190,8 +191,14 @@ class SourceReader(Protocol):
     """One Source Format's reader: association streaming plus per-site AF/SE
     lookup for annotation."""
 
-    def stream_associations(self) -> Iterator[ReaderAssociation]:
-        """Yield every association in the source, oriented per ReaderAssociation."""
+    def stream_associations(
+        self, frequencies: FrequencyTally | None = None
+    ) -> Iterator[ReaderAssociation]:
+        """Yield every association in the source, oriented per ReaderAssociation.
+
+        ``frequencies``, given, counts the reported frequencies the stream made
+        absent because they lie outside (0, 1) (issue #357, D7).
+        """
         ...
 
     def stream_variants(self) -> Iterator[SourceVariant]:

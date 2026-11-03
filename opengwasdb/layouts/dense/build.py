@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +42,7 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
     coverage_for_layout,
 )
+from opengwasdb.stats import FrequencyTally, parse_af
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts
@@ -158,12 +159,25 @@ def _admitted_records(
     for position, record in enumerate(records):
         by_analysis.setdefault(record.analysis_id, []).append(position)
     record_ = admission.AdmissionRecord.open(directory, list(by_analysis), command="build-dense")
+    records = list(records)
     keep = np.zeros(len(records), dtype=bool)
     for analysis_id, positions in by_analysis.items():
         with record_.gate(admission.AnalysisRules(analysis_id)) as gate:
+            gate.frequencies_made_absent(_usable_frequencies(records, positions))
             keep[positions] = _admitted(records, positions, gate)
     record_.finish()
     return [record for record, kept in zip(records, keep.tolist(), strict=True) if kept]
+
+
+def _usable_frequencies(records: list[NormalisedAssociation], positions: list[int]) -> int:
+    """Make absent each frequency at ``positions`` outside (0, 1), in place, and
+    return how many (D7): the rule `parse_af` applies to every source."""
+    tally = FrequencyTally()
+    for i in positions:
+        eaf = records[i].eaf
+        if eaf is not None and parse_af(eaf, tally) is None:
+            records[i] = replace(records[i], eaf=None)
+    return tally.made_absent
 
 
 def _admitted(

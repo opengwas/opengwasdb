@@ -43,6 +43,10 @@ build has nowhere else to put it.
 A row dropped by a declared filter, or collapsed into its first, is counted
 only; a row dropped for any other reason is also logged, by its source key,
 because nothing but the source can say which rows those were.
+
+A frequency is not a reason to drop a row. One the source reported outside
+(0, 1) -- exactly 0 or 1, beyond the interval, or not finite -- is absent in the
+Store, and counted (`eaf_made_absent`) over the rows the Source Reader read.
 """
 
 from __future__ import annotations
@@ -170,7 +174,9 @@ class AdmissionCounts:
     rules before the declared filters admitted. ``maf_missing`` counts every
     one of those rows with no usable frequency, whatever INFO did, unless the
     Analysis declared no MAF filter; it is not ``dropped[MAF_MISSING]``, which
-    counts only the rows dropped for it.
+    counts only the rows dropped for it. ``eaf_made_absent`` counts the reported
+    frequencies outside (0, 1) the Store holds as absent, over every row read
+    (D7); a row is never dropped for one.
     """
 
     examined: int = 0
@@ -178,6 +184,7 @@ class AdmissionCounts:
     dropped: Mapping[Reason, int] = field(default_factory=dict)
     info: InfoScoreCounts = field(default_factory=InfoScoreCounts)
     maf_missing: int = 0
+    eaf_made_absent: int = 0
 
     def __add__(self, other: AdmissionCounts) -> AdmissionCounts:
         dropped = {
@@ -191,6 +198,7 @@ class AdmissionCounts:
             dropped=dropped,
             info=self.info + other.info,
             maf_missing=self.maf_missing + other.maf_missing,
+            eaf_made_absent=self.eaf_made_absent + other.eaf_made_absent,
         )
 
     @property
@@ -206,6 +214,7 @@ class AdmissionCounts:
             "dropped": {reason.value: n for reason, n in self._ordered_drops()},
             "info": asdict(self.info),
             "maf_missing": self.maf_missing,
+            "eaf_made_absent": self.eaf_made_absent,
         }
 
     @classmethod
@@ -217,6 +226,7 @@ class AdmissionCounts:
             dropped={Reason(name): int(n) for name, n in data["dropped"].items()},
             info=InfoScoreCounts(**data["info"]),
             maf_missing=int(data["maf_missing"]),
+            eaf_made_absent=int(data["eaf_made_absent"]),
         )
 
     def _ordered_drops(self) -> list[tuple[Reason, int]]:

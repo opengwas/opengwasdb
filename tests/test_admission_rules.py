@@ -24,6 +24,7 @@ from opengwasdb.readers.interface import (
     ImputationScoreKind,
     ImputationScoreStatus,
 )
+from opengwasdb.stats import FrequencyTally, parse_af
 
 USABLE = ImputationScoreStatus.USABLE
 DECLARATION = ImputationScoreDeclaration(
@@ -143,6 +144,30 @@ def test_a_gate_adds_up_its_batches():
 
     assert split.counts == whole.counts
     assert AdmissionCounts.from_dict(whole.counts.as_dict()) == whole.counts
+
+
+def test_a_frequency_outside_the_interval_is_absent_and_counted():
+    """D7: a reported frequency that is 0, 1, beyond (0, 1), not finite or not a
+    number is absent, and counted; a missing token is absent but was never
+    reported, so it is not."""
+    tally = FrequencyTally()
+    reported = ["0", "1", "1.5", "-0.1", "inf", "oops", 1.0, 0.0, float("nan")]
+    missing = [None, "", ".", "NA", "NaN", "nan"]
+
+    assert [parse_af(value, tally) for value in reported + missing] == [None] * 15
+    assert tally.made_absent == len(reported)
+    assert parse_af("0.3", tally) == 0.3
+    assert tally.made_absent == len(reported)
+
+
+def test_a_gate_counts_the_frequencies_made_absent_and_keeps_its_rows():
+    gate = counting_gate(AnalysisRules("A1"))
+    gate.source_rows(_rows([0.3, np.nan], [0.9, 0.9]))
+    gate.frequencies_made_absent(1)
+    gate.frequencies_made_absent(0)
+
+    assert (gate.counts.admitted, gate.counts.eaf_made_absent) == (2, 1)
+    assert AdmissionCounts.from_dict(gate.counts.as_dict()) == gate.counts
 
 
 def _with_se(af: list[float], se: list[float], scores: list[float]) -> SourceRows:

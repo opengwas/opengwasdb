@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
+from opengwasdb.stats import FrequencyTally
 
 
 class FakeReader:
@@ -39,7 +40,9 @@ class FakeReader:
             ]
         )
 
-    def stream_associations(self) -> Iterator[ReaderAssociation]:
+    def stream_associations(
+        self, frequencies: FrequencyTally | None = None
+    ) -> Iterator[ReaderAssociation]:
         yield from self._associations
 
     def stream_variants(self) -> Iterator[SourceVariant]:

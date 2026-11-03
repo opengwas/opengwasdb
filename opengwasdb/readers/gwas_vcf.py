@@ -45,7 +45,7 @@ from opengwasdb.build.vcf_source import (
 )
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
-from opengwasdb.stats import parse_af
+from opengwasdb.stats import FrequencyTally, parse_af
 from opengwasdb.variants.normalise import (
     Orientation,
     VariantNormalisationError,
@@ -368,8 +368,10 @@ class GwasVcfReader:
         if self.chunk_rows <= 0:
             raise ValueError(f"chunk_rows must be positive, got {self.chunk_rows!r}")
 
-    def stream_associations(self) -> Iterator[ReaderAssociation]:
-        for chrom, pos, ref, alt, z, se, eaf in stream_vcf_associations(self.path):
+    def stream_associations(
+        self, frequencies: FrequencyTally | None = None
+    ) -> Iterator[ReaderAssociation]:
+        for chrom, pos, ref, alt, z, se, eaf in stream_vcf_associations(self.path, frequencies):
             yield ReaderAssociation(
                 chromosome=chrom,
                 position=pos,

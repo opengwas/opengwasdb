@@ -106,6 +106,11 @@ class Gate:
         if reason in LOGGED:
             self._dropped.extend((key, reason) for key in keys)
 
+    def frequencies_made_absent(self, n: int) -> None:
+        """``n`` reported frequencies lay outside (0, 1), and are absent (D7)."""
+        if n:
+            self._counts += AdmissionCounts(eaf_made_absent=n)
+
     def collapsed(self, n: int) -> None:
         """``n`` admitted rows agreed with an earlier row for their place."""
         if n:

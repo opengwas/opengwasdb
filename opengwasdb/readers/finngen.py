@@ -17,6 +17,7 @@ from pathlib import Path
 import opengwasdb.readers.tabular as tabular
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
+from opengwasdb.stats import FrequencyTally
 from opengwasdb.variants.normalise import (
     VariantNormalisationError,
     normalise_chromosome,
@@ -48,7 +49,9 @@ def _first_rsid(value: str | None) -> str:
     return first if first.startswith("rs") else ""
 
 
-def _iter_rows(path: str | Path) -> Iterator[tabular.TabularRow]:
+def _iter_rows(
+    path: str | Path, frequencies: FrequencyTally | None = None
+) -> Iterator[tabular.TabularRow]:
     opener = gzip.open if str(path).endswith((".gz", ".bgz")) else open
     with opener(path, "rt", encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
@@ -73,7 +76,7 @@ def _iter_rows(path: str | Path) -> Iterator[tabular.TabularRow]:
                 flipped=orientation.flipped,
                 beta=tabular.parse_finite_float(row.get("beta")),
                 se=tabular.parse_positive_float(row.get("sebeta")),
-                af_alt=tabular.parse_af(row.get("af_alt")),
+                af_alt=tabular.parse_af(row.get("af_alt"), frequencies),
                 rsid=_first_rsid(row.get("rsids")),
             )
 
@@ -212,8 +215,12 @@ class FinnGenR13Reader:
     path: str | Path
     stored_effect_scale: StoredEffectScale = StoredEffectScale.LOG_OR
 
-    def stream_associations(self) -> Iterator[ReaderAssociation]:
-        yield from tabular.stream_associations(_iter_rows(self.path), self.stored_effect_scale)
+    def stream_associations(
+        self, frequencies: FrequencyTally | None = None
+    ) -> Iterator[ReaderAssociation]:
+        yield from tabular.stream_associations(
+            _iter_rows(self.path, frequencies), self.stored_effect_scale
+        )
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         yield from _iter_variants(self.path)

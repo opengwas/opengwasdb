@@ -14,7 +14,7 @@ import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
-from opengwasdb.stats import parse_af
+from opengwasdb.stats import FrequencyTally, parse_af
 from opengwasdb.variants.normalise import normalise_chromosome
 
 log = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ def has_format_tag(path: str | Path, tag: str) -> bool:
 
 
 def stream_vcf_associations(
-    path: str | Path,
+    path: str | Path, frequencies: FrequencyTally | None = None
 ) -> Iterator[tuple[str, int, str, str, float, float, float | None]]:
     """Yield (bare_chrom, pos, ref, alt, z, se, eaf) for each biallelic record.
 
@@ -124,7 +124,7 @@ def stream_vcf_associations(
             if len(parts) != n_fields:
                 continue
             chrom_raw, pos_str, ref, alt, ez_str, es_str, se_str = parts[:7]
-            af = parse_af(parts[7]) if with_af else None
+            af = parse_af(parts[7], frequencies) if with_af else None
             if "," in alt:
                 continue
 

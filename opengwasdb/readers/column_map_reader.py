@@ -58,6 +58,7 @@ from opengwasdb.readers.tabular import (
     open_binary,
     stream_projected_variants,
 )
+from opengwasdb.stats import FrequencyTally
 
 __all__ = ["ColumnMapReader", "MappedSource"]
 
@@ -472,8 +473,10 @@ class ColumnMapReader:
     def imputation_score_column(self) -> str | None:
         return self._delegate.imputation_score_column
 
-    def stream_associations(self) -> Iterator[ReaderAssociation]:
-        yield from self._delegate.stream_associations()
+    def stream_associations(
+        self, frequencies: FrequencyTally | None = None
+    ) -> Iterator[ReaderAssociation]:
+        yield from self._delegate.stream_associations(frequencies)
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         separator = self.column_map.conventions.rsid_separator

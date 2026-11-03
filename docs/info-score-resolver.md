@@ -22,7 +22,9 @@ columns answered them (ADR 0055):
   non-zero beta. A derived SE must itself be positive and finite.
 
 A source frequency of exactly `0.0` or exactly `1.0` is missing rather than a
-usable zero (ADR 0036), in every path that reads one.
+usable zero (ADR 0036), in every path that reads one. A build's Admission record
+counts each reported frequency it made absent so (`eaf_made_absent`, issue
+#357, D7).
 
 ## Whole-stream evidence (stores #176)
 

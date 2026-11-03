@@ -80,6 +80,7 @@ from opengwasdb.model.enums import (
 )
 from opengwasdb.readers.column_map import ColumnMap
 from opengwasdb.readers.registry import open_source
+from opengwasdb.stats import FrequencyTally
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts, z_critical
@@ -466,12 +467,14 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
     reader = open_source(
         row.source, imputation_score_declaration=rules.info.imputation_score_declaration
     )
+    frequencies = FrequencyTally()
     with context.record.gate(rules) as gate:
         routed = context.table.route_column(
-            reader.stream_associations(),
+            reader.stream_associations(frequencies),
             admit=gate.admit,
             imputation_scores=gate.reads_imputation_scores,
         )
+        gate.frequencies_made_absent(frequencies.made_absent)
         placed = routed.placed[0]
         record_duplicates(gate, placed, context.alids)
         gate.unplaced(Reason.OFF_AXIS, routed.unmatched.keys)
