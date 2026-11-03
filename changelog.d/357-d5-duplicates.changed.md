@@ -26,3 +26,13 @@
   says what its source declares (`reference`). The ALID still spells the pair
   as one variant: #381 gives indels a ref-first ALID, and #382 corrects the
   published cells.
+- **Measured on the published releases, each rebuilt against the builder before
+  #357.** OGS-00003's 964,224 conflicting (variant, Analysis) places, in its
+  ten FinnGen Analyses, are all reversed indels. The old builder stored the
+  later row of each pair, the deletion; each place now holds the insertion,
+  so no cell is lost, and 963,922 cells change z (at the other 302 both rows
+  store one z code). OGS-00004 (1,085 conflicting rows at 542 places),
+  OGS-00005 (132 at 66), OGS-00008 (154 at 77) and seven Analyses of
+  OGS-00011 (265 at 132) hold no reversed indel, so those cells are absent.
+  `complete-ragged` of OGS-00001 (OGS-00002's argv) leaves two cells missing
+  that two LD blocks imputed differently, of 106,653 fills.

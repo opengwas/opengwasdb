@@ -120,7 +120,7 @@ whose z is negated onto the ALID. A source that declares no reference has
 its pair dropped as conflicting, and so is every other conflicting duplicate,
 SNVs included, since two SNV rows at one ALID are one variant seen from
 opposite alleles. Dropping both rows was rejected because it loses a cell
-base kept; this rule keeps every one.
+base kept; this rule keeps it wherever the source declares the reference.
 
 Which formats declare the reference allele (`ReferenceAllele`, carried on each
 `ReaderAssociation` and through routing as one byte a row):

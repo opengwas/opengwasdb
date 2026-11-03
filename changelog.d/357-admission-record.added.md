@@ -13,9 +13,10 @@
   `duplicate_reversed_indel`: an indel row dropped because its declared
   reference allele is the one its ALID spells second (ADR 0072; #381 and #382
   follow up). The record is not part of the Store Release, so the Store's
-  bytes and its `format_version` are unchanged. Pass 2 workers write it one part per Analysis,
-  so it is the same at any `--n-workers`. A resumed `--checkpoint` build reads
-  its counts back from those parts, and refuses a record that has lost one.
+  bytes and its `format_version` are unchanged. Pass 2 workers write it one
+  part per Analysis, so it is the same at any `--n-workers`. A resumed
+  `--checkpoint` build reads its counts back from those parts, and refuses a
+  record that has lost one.
 - **The Ragged builders' unusable-SE drops are counted and logged
   (`se_unusable`).** `build-ragged-ssf` and `build-ragged-besd` already dropped
   a row whose SE was missing, not positive or not finite, but left no trace of
