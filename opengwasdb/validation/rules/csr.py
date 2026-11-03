@@ -16,7 +16,7 @@ from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store.arrays import array_length
 from opengwasdb.validation.rule import Check, Kind, Rule, Target
 from opengwasdb.validation.rules.release import REQUIRED
-from opengwasdb.validation.scans import judges_frequencies, sequence_offsets
+from opengwasdb.validation.scans import sequence_offsets
 
 #: The rule every rule that reads a sequence's parallel arrays runs after.
 ARRAYS = "csr.arrays"
@@ -58,7 +58,7 @@ def lengths(target: Target) -> Iterator[str]:
     group = target.group
     n_assoc = int(sequence_offsets(target)[-1])
     names = ["variant_index", "z", "se"]
-    if "eaf" in group and judges_frequencies(target):
+    if "eaf" in group:
         names.append("eaf")
     for name in names:
         if array_length(group[name]) != n_assoc:

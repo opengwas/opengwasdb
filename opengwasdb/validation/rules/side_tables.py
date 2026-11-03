@@ -27,7 +27,7 @@ from opengwasdb.encoding import (
 from opengwasdb.validation.rule import Fold, Rule, Target
 from opengwasdb.validation.rules.associations import VALUE_KINDS, VALUES_AFTER
 from opengwasdb.validation.rules.encoding import plane_label
-from opengwasdb.validation.scans import ASSOCIATIONS, Block, judges_frequencies
+from opengwasdb.validation.scans import ASSOCIATIONS, Block
 
 
 @dataclass(frozen=True)
@@ -163,7 +163,6 @@ RULES: tuple[Rule, ...] = (
     Fold(
         name="side_tables.eaf_exceptions",
         kinds=VALUE_KINDS,
-        when=judges_frequencies,
         after=VALUES_AFTER,
         scan=ASSOCIATIONS,
         zero=Marked(),

@@ -26,7 +26,7 @@ from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Severity, Target
 from opengwasdb.validation.rules.csr import ARRAYS, LENGTHS, OBSERVED_ONLY, prefix
 from opengwasdb.validation.rules.encoding import PLAN, plane_label
 from opengwasdb.validation.rules.release import REQUIRED
-from opengwasdb.validation.scans import ASSOCIATIONS, Block, judges_frequencies
+from opengwasdb.validation.scans import ASSOCIATIONS, Block
 
 #: The rule every value rule runs after for a grid's planes to span its axes.
 GRID_PLANES = "grid.planes"
@@ -287,11 +287,5 @@ PRESENCE_RULES: tuple[Rule, ...] = (
 
 #: The frequency rule, reported after the completion rules as it always has been.
 EAF_RULES: tuple[Rule, ...] = (
-    value_fold(
-        "associations.eaf_range",
-        0,
-        _eaf_out_of_range,
-        _judge_eaf_range,
-        when=judges_frequencies,
-    ),
+    value_fold("associations.eaf_range", 0, _eaf_out_of_range, _judge_eaf_range),
 )

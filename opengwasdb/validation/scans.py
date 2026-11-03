@@ -464,11 +464,6 @@ def _parallel(group: Any, name: str, n_cells: int) -> Any:
     return array if array_length(array) == n_cells else None
 
 
-def judges_frequencies(target: Target) -> bool:
-    """Whether the frequency rules judge this component: a grid's and a Ragged release's."""
-    return target.kind is not Kind.CSR or target.layout is not PrimaryStorageLayout.HYBRID
-
-
 class _Sequence:
     """What every window of one association sequence shares: arrays, codecs, side vectors."""
 
@@ -485,8 +480,7 @@ class _Sequence:
         self.imputed = _parallel(group, "imputed", self.n_cells)
         self.n_array = _parallel(group, "n", self.n_cells) if encoding.n is not None else None
         self.decodes_eaf = "eaf" in group or bool(encoding.eaf.reference)
-        self.se_reads_eaf = _se_reads_eaf(target)
-        self.eaf_array = group["eaf"] if self.decodes_eaf and "eaf" in group else None
+        self.eaf_array = group["eaf"] if "eaf" in group else None
         self.baseline = _held(target, EAF_BASELINE)
         self.reference = _held(target, EAF_REFERENCE)
         self.eaf_codec = StoreCodec(encoding, eaf_exceptions=EafExceptionTable.open(group))
@@ -562,16 +556,6 @@ class _Sequence:
             return None, exc
 
 
-def _se_reads_eaf(target: Target) -> bool:
-    """Whether a window's SE cannot be decoded when its frequencies cannot.
-
-    A residual SE is predicted from them. An Overflow's frequencies are judged by
-    no rule of their own, so a frequency that cannot be decoded fails its SE, as it
-    always has.
-    """
-    return target.encoding.se.is_residual or not judges_frequencies(target)
-
-
 def _coefficients(target: Target) -> np.ndarray:
     """A residual SE plane's per-Analysis fit, held for every window."""
     if not target.encoding.se.is_residual:
@@ -598,7 +582,7 @@ def _sequence_window_se(
     frequency cannot be decoded neither can its SE, for the same reason.
     """
     label = sequence.se_label
-    if sequence.se_reads_eaf and eaf_failure is not None:
+    if sequence.encoding.se.is_residual and eaf_failure is not None:
         raise Undecodable(
             f"{label} cannot be decoded under the declared plan: {eaf_failure}"
         ) from eaf_failure

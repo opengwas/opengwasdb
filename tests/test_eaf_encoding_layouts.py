@@ -611,6 +611,31 @@ def test_an_exception_table_that_lost_a_cell_is_rejected(dense_store: Path):
     assert any("no entry in the eaf exception table" in e for e in result.errors), result.errors
 
 
+def test_an_overflow_exception_table_that_lost_a_cell_is_rejected(hybrid_store: Path):
+    """An Overflow's frequencies are held to their table as the Dense Component's are.
+
+    Its `se` is `float16` here, so nothing but the frequency rules reads the plane:
+    a table that lost a cell would leave that cell's frequency to whatever the lookup
+    returned.
+    """
+    overflow = zarr.open_group(str(hybrid_store / "data.zarr" / "ragged"), mode="a")
+    encoding = open_store(hybrid_store).manifest.encoding
+    assert encoding.eaf.is_residual and not encoding.se.is_residual
+    assert overflow[EAF_EXCEPTION_INDEX].shape[0] >= 1, "the Overflow must hold an exception"
+    lost = int(overflow[EAF_EXCEPTION_INDEX][0])
+    replace_exception_table(overflow, EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE)
+
+    result = validate_store(hybrid_store)
+
+    assert result.failed() == {"side_tables.eaf_exceptions"}, result.errors
+    (finding,) = result.of("side_tables.eaf_exceptions")
+    assert finding.target == "data.zarr/ragged"
+    assert finding.message == (
+        "Ragged Overflow eaf: 1 eaf exception cell(s) have no entry in the eaf exception "
+        f"table (first at flat position {lost})"
+    )
+
+
 def test_a_store_whose_eaf_scope_contradicts_its_plan_is_rejected(dense_store: Path):
     """`eaf_scope` (per Analysis) and the plan (per store) describe the same
     fact at two granularities; their disagreement is the defect that got
