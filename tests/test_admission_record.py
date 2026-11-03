@@ -817,3 +817,45 @@ def test_an_esi_frequency_outside_the_interval_is_counted_once_for_the_file(
     assert stored is not None
     assert np.isnan(stored[1:]).all()
     assert ".esi: 2 reported frequencies outside (0, 1) are absent" in caplog.messages
+
+
+def test_a_declared_info_filter_s_drops_are_counted_and_not_logged(tmp_path: Path):
+    """D8: a row a declared filter drops is reproducible from the source and the
+    policy, so it is counted only. The log names the rows dropped for any other
+    reason, and only those."""
+    store = _hybrid(tmp_path, _three_analysis_manifest(tmp_path), 1)
+
+    record = admission_record_for(store)
+    for index, analysis in enumerate(_analyses(store)):
+        assert analysis["dropped"]["info_below_threshold"] > 0
+        assert [reason for _, reason in _dropped(record, index)[1:]] == ["effect_missing"]
+
+
+def test_a_declared_maf_filter_s_drops_are_counted_and_not_logged(tmp_path: Path):
+    """D8 for both of the MAF filter's reasons: a frequency below the floor, and
+    none at all."""
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    ssf_fixture._write_filtered(
+        filtered / "trait_a.tsv.gz",
+        [
+            {"chromosome": "1", "base_pair_location": 100_000 * (i + 1), "effect_allele": "A",
+             "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
+             "effect_allele_frequency": af}
+            for i, af in enumerate(["0.3", "0.001", "NA"])
+        ],
+    )
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "analysis_index\tanalysis_id\tfiltered_file\tmaf_threshold\n0\ttrait_a\ttrait_a.tsv.gz\t0.01\n",
+        encoding="utf-8",
+    )
+    store = tmp_path / "ssf.opengwasdb"
+    build_ragged_from_ssf(
+        manifest, filtered, store, store_id="s", release_id="r",
+        association_coverage="signals_only",
+    )
+
+    (analysis,) = _analyses(store)
+    assert analysis["dropped"] == {"maf_missing": 1, "maf_below_threshold": 1}
+    assert not (admission_record_for(store) / "dropped" / "0.tsv.gz").exists()

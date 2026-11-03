@@ -46,10 +46,12 @@ one of them with the opposite sign, with no record of either.
   same at any worker count, and a resumed Hybrid build rereads its counts from the
   parts. Checkpoint format 3 records the record's path instead of
   `info_counts.json`, and refuses a format-2 checkpoint.
-- **What is logged.** A row dropped by a declared INFO or MAF filter is counted
-  only: it is reproducible from the source and the policy, and a per-row log would
-  cost more than the Store (an estimated 51–54 GB for OGS-00011). Every other
-  reason's rows are also logged, by source key.
+- **What is logged (D8).** A row dropped by a declared INFO or MAF filter is
+  counted only: it is reproducible from the source and the policy, and a per-row
+  log would cost more than the Store (an estimated 51–54 GB for OGS-00011). So is
+  a row collapsed into an agreeing duplicate, whose association the Store holds.
+  Every other reason's rows are also logged, by source key, because nothing but
+  the source can say which rows those were.
 - **Completion** admits an imputed candidate by the same cell rule (`admissible`).
   It refuses a source cell with one of z and SE missing, rather than pairing an
   imputed value with an observed one (D1). What it leaves unimputed is already
