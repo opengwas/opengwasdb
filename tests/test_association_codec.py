@@ -214,8 +214,8 @@ def test_the_baseline_is_gathered_by_each_cells_row_and_tables_keyed_by_its_posi
 
     assert encoded.eaf is not None
     assert encoded.eaf.tolist() == [0, EAF_EXCEPTION, 0], "a cell at its own baseline codes as 0"
-    assert encoded.z_overflow.index.tolist() == [2 * _N_ANALYSES + 0]
-    assert encoded.eaf_exceptions.index.tolist() == [2 * _N_ANALYSES + 0]
+    assert encoded.tables.z_overflow.index.tolist() == [2 * _N_ANALYSES + 0]
+    assert encoded.tables.eaf_exceptions.index.tolist() == [2 * _N_ANALYSES + 0]
     assert back.z[1] == np.float32(200.0)
     assert back.eaf is not None and back.eaf[1] == np.float32(0.999999)
 
@@ -232,10 +232,10 @@ def test_a_band_encodes_as_its_cells_do() -> None:
     cells = CellValues(z[rows, cols], se[rows, cols], eaf[rows, cols])
     pairs = codec.encode(cells, Placement.pairs(rows + r0, cols, _N_ANALYSES), where="x")
 
-    assert len(band.z_overflow) > 0, "fixture must overflow z"
+    assert len(band.tables.z_overflow) > 0, "fixture must overflow z"
     for plane in ("z", "se", "eaf"):
         assert np.array_equal(getattr(band, plane).ravel(), getattr(pairs, plane))
-    assert band.z_overflow.index.tolist() == pairs.z_overflow.index.tolist()
+    assert band.tables.z_overflow.index.tolist() == pairs.tables.z_overflow.index.tolist()
 
 
 def test_z_and_se_are_missing_together_after_a_round_trip() -> None:

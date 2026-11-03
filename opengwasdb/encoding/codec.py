@@ -630,6 +630,24 @@ class SeExceptionBuilder(SparseExactBuilder):
         return cast(SeExceptionTable, super().table())
 
 
+@dataclass(frozen=True)
+class SideTables:
+    """One batch's exact side-table entries, one table per plane that has one."""
+
+    z_overflow: ZOverflowTable
+    eaf_exceptions: EafExceptionTable
+    se_exceptions: SeExceptionTable
+
+    def decoder(self, encoding: StoreEncoding) -> StoreCodec:
+        """A codec that decodes the batch these entries came from."""
+        return StoreCodec(
+            encoding,
+            z_overflow=self.z_overflow,
+            eaf_exceptions=self.eaf_exceptions,
+            se_exceptions=self.se_exceptions,
+        )
+
+
 # ── EAF baselines ───────────────────────────────────────────────────────────
 #
 # The baseline is a per-variant `float32`: the within-store representative

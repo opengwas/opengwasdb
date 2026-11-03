@@ -43,15 +43,8 @@ from typing import Any, NamedTuple
 import numpy as np
 
 from opengwasdb.associations import Cells, CsrReader, State
-from opengwasdb.encoding import (
-    EAF_BASELINE,
-    EafExceptionBuilder,
-    SeExceptionBuilder,
-    StoreCodec,
-    ZOverflowBuilder,
-    positions_pairs,
-)
-from opengwasdb.encoding.planes import SE_COEFFICIENTS
+from opengwasdb.encoding import StoreCodec
+from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
 from opengwasdb.layouts.dense.complete import completion_band_rows
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
@@ -491,7 +484,7 @@ def _check_crossovers(pair: _HybridPair, crossovers: _Crossovers) -> dict[str, A
     source values; it is informational, as moving them is what the codec does.
     """
     child = pair.dense.child
-    codec = _DenseCodec(pair.child_component)
+    codec = _DenseCodec.of(pair.child_component)
     tally, shift = _crossover_tally(), _crossover_tally()
     for lo, hi in _runs_by_chunk_row(crossovers.rows, int(inner_chunk_of(child.z_array)[0])):
         rows, cols = crossovers.rows[lo:hi], crossovers.cols[lo:hi]
@@ -535,56 +528,48 @@ def _runs_by_chunk_row(rows: np.ndarray, chunk_rows: int) -> Iterator[tuple[int,
     yield from zip(starts.tolist(), ends.tolist(), strict=True)
 
 
-class _DenseCodec:
+class _DenseCodec(NamedTuple):
     """What a completed Dense Component stores for a value: encoded, then decoded.
 
-    The crossover fold writes each value through the Dense planes (`patch`):
-    Z, then EAF against that row's `eaf_baseline`, then SE against the EAF the
-    cell now decodes to. This does the same arithmetic without writing.
+    The crossover fold writes each value through the Dense Component's
+    `AssociationCodec`; this asks the same codec, without writing.
     """
 
-    def __init__(self, component: OpenGWASDBStore) -> None:
+    codec: AssociationCodec
+    n_analyses: int
+
+    @classmethod
+    def of(cls, component: OpenGWASDBStore) -> _DenseCodec:
         root = component.arrays(mode="r")
-        self._encoding = component.manifest.encoding
-        self._n_analyses = int(root["z"].shape[1])
-        self._baseline = (
-            np.asarray(root[EAF_BASELINE][:], dtype=np.float32) if EAF_BASELINE in root else None
-        )
-        self._coefficients = (
-            np.asarray(root[SE_COEFFICIENTS][:], dtype=np.float32)
-            if self._encoding.se.is_residual
-            else np.empty((0, 2), dtype=np.float32)
-        )
+        encoding = component.manifest.encoding
+        return cls(AssociationCodec.of_component(root, encoding), int(root["z"].shape[1]))
 
     def round_trip(self, rows: np.ndarray, cols: np.ndarray, values: _Cells) -> _Cells:
-        positions = positions_pairs(rows, cols, self._n_analyses)
-        encoder = StoreCodec(self._encoding)
-        z_overflow, eaf_exceptions, se_exceptions = (
-            ZOverflowBuilder(), EafExceptionBuilder(), SeExceptionBuilder()
+        """Each crossover's source value as the Dense Component reads it back.
+
+        A crossover with one of Z and SE missing is one the fold refuses and the
+        tally counts (spec §15). It is still compared statistic by statistic: its
+        Z as the plane holds it, and its SE beside a stand-in Z.
+        """
+        z_gone, se_gone = np.isnan(values.z), np.isnan(values.se)
+        z_only = se_gone & ~z_gone
+        paired = CellValues(
+            np.where(z_only, np.nan, np.where(z_gone, np.float32(0.0), values.z)),
+            values.se,
+            values.eaf,
         )
-        baseline = None if self._baseline is None else self._baseline[rows]
-        z_codes = encoder.encode_z(values.z, positions=positions, overflow=z_overflow)
-        eaf_codes = encoder.encode_eaf(
-            values.eaf, baseline=baseline, positions=positions, exceptions=eaf_exceptions
+        back = self.codec.round_trip(
+            paired,
+            Placement.pairs(rows, cols, self.n_analyses),
+            where="check-observed-view, a crossover",
         )
-        decoder = StoreCodec(
-            self._encoding, z_overflow=z_overflow.table(), eaf_exceptions=eaf_exceptions.table()
-        )
-        # An observed cell: the panel's frequency never stands in for it.
-        eaf = decoder.decode_eaf(
-            eaf_codes, baseline=baseline, positions=positions,
-            imputed=np.zeros(len(rows), dtype=np.uint8),
-            reference=np.full(len(rows), np.nan, dtype=np.float32),
-        )
-        se_codes = encoder.encode_se(
-            values.se, eaf=eaf, analysis_index=cols, coefficients=self._coefficients,
-            positions=positions, exceptions=se_exceptions,
-        )
-        se = StoreCodec(self._encoding, se_exceptions=se_exceptions.table()).decode_se(
-            se_codes, eaf=eaf, analysis_index=cols, coefficients=self._coefficients,
-            positions=positions,
-        )
-        return _Cells(decoder.decode_z(z_codes, positions=positions), se, eaf)
+        z = np.where(
+            z_only,
+            StoreCodec(self.codec.plan).quantise_z(values.z),
+            np.where(z_gone, np.float32(np.nan), back.z),
+        ).astype(np.float32)
+        eaf = np.full(len(rows), np.nan, np.float32) if back.eaf is None else back.eaf
+        return _Cells(z, back.se, eaf)
 
 
 class _CrossoversSetAside(_Planes):

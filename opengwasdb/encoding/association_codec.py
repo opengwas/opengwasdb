@@ -24,18 +24,15 @@ from typing import Any, Final
 
 import numpy as np
 
-from opengwasdb.admission import require_admitted
 from opengwasdb.encoding.codec import (
     EAF_BASELINE,
     EAF_REFERENCE,
     EafExceptionBuilder,
-    EafExceptionTable,
     PositionSource,
     SeExceptionBuilder,
-    SeExceptionTable,
+    SideTables,
     StoreCodec,
     ZOverflowBuilder,
-    ZOverflowTable,
     positions_flat,
     positions_pairs,
     positions_row_band,
@@ -178,9 +175,7 @@ class Encoded:
     #: The imputed mask as stored, or None when the batch carries none.
     imputed: np.ndarray | None
     #: Exactly the batch's exceptional cells, keyed by `Placement.positions`.
-    z_overflow: ZOverflowTable
-    eaf_exceptions: EafExceptionTable
-    se_exceptions: SeExceptionTable
+    tables: SideTables
     storable: Storable
 
 
@@ -237,28 +232,15 @@ class AssociationCodec:
         eaf_exceptions = EafExceptionBuilder()
         eaf = self._encode_eaf(values, at, eaf_exceptions, where)
         se_exceptions = SeExceptionBuilder()
-        se = self._encode_se(values, at, eaf, eaf_exceptions.table(), se_exceptions)
+        se = self._encode_se(values, at, eaf, eaf_exceptions, se_exceptions)
         imputed = None if values.imputed is None else np.asarray(values.imputed, dtype=np.uint8)
-        return Encoded(
-            z,
-            se,
-            eaf,
-            imputed,
-            z_overflow.table(),
-            eaf_exceptions.table(),
-            se_exceptions.table(),
-            kept,
-        )
+        tables = SideTables(z_overflow.table(), eaf_exceptions.table(), se_exceptions.table())
+        return Encoded(z, se, eaf, imputed, tables, kept)
 
     def round_trip(self, cells: CellValues, at: Placement, *, where: str) -> CellValues:
         """What a reader decodes for `cells` once stored at `at`; nothing is written."""
         encoded = self.encode(cells, at, where=where)
-        decoder = StoreCodec(
-            self.plan,
-            z_overflow=encoded.z_overflow,
-            eaf_exceptions=encoded.eaf_exceptions,
-            se_exceptions=encoded.se_exceptions,
-        )
+        decoder = encoded.tables.decoder(self.plan)
         shape = np.shape(encoded.z)
         eaf = self._decoded_eaf(decoder, encoded.eaf, encoded.imputed, at, shape)
         if self.plan.se.is_residual:
@@ -310,7 +292,7 @@ class AssociationCodec:
         values: CellValues,
         at: Placement,
         eaf_codes: np.ndarray | None,
-        eaf_exceptions: EafExceptionTable,
+        eaf_exceptions: EafExceptionBuilder,
         exceptions: SeExceptionBuilder,
     ) -> np.ndarray:
         shape = np.shape(values.se)
@@ -321,7 +303,7 @@ class AssociationCodec:
                 analysis_index=np.zeros(shape, np.int64),
                 coefficients=np.zeros((0, 2), np.float32),
             )
-        decoder = StoreCodec(self.plan, eaf_exceptions=eaf_exceptions)
+        decoder = StoreCodec(self.plan, eaf_exceptions=eaf_exceptions.table())
         imputed = None if values.imputed is None else np.asarray(values.imputed, dtype=np.uint8)
         eaf = self._decoded_eaf(decoder, eaf_codes, imputed, at, shape)
         return self._codec.encode_se(
@@ -447,6 +429,10 @@ def _refuse(z: np.ndarray, se: np.ndarray, imputed: np.ndarray | None, *, where:
     An SE narrowed to `+inf` is handed on as `SE_FLOAT16_MAX`, so the check
     judges every other rule and names the cell that broke one.
     """
+    # Imported on refusal only: Admission's package imports the association
+    # readers, whose Ragged adapter imports the writer that imports this module.
+    from opengwasdb.admission.cells import require_admitted
+
     finite_se = np.where(np.isposinf(se), np.float32(SE_FLOAT16_MAX), se)
     require_admitted(z, finite_se, imputed=imputed, where=where)
     raise AssertionError(f"{where}: a cell broke Admission's guarantee, yet its check passed")

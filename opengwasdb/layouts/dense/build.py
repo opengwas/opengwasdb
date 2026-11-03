@@ -25,6 +25,7 @@ from opengwasdb.encoding import (
     write_eaf_baseline,
     write_se_dense,
 )
+from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
@@ -129,7 +130,7 @@ def build_dense_observed_store(
 
         # The encoding plan is decided once, here, and read back from the
         # manifest by everything downstream (ADR 0037, issue #119).
-        encoding, coefficients = _decide_encoding(eaf, se, chunk_shape)
+        encoding, coefficients = _decide_encoding(z, se, eaf, chunk_shape)
         rsid_by_alid = _first_rsids_by_alid(records)
         _write_manifest(
             staged,
@@ -284,7 +285,7 @@ def _scatter_records(
 
 
 def _decide_encoding(
-    eaf: np.ndarray, se: np.ndarray, chunk_shape: tuple[int, int]
+    z: np.ndarray, se: np.ndarray, eaf: np.ndarray, chunk_shape: tuple[int, int]
 ) -> tuple[StoreEncoding, np.ndarray]:
     """Measure both planes and settle the store's plan, in the required order.
 
@@ -297,7 +298,13 @@ def _decide_encoding(
     preliminary = StoreEncoding.decide(
         EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measured)
     )
-    decoded_eaf = _round_trip_eaf(eaf, preliminary)
+    baseline = eaf_baseline_from_grid(eaf) if preliminary.eaf.is_residual else None
+    decoded = (
+        AssociationCodec(preliminary, eaf_baseline=baseline)
+        .round_trip(CellValues(z, se, eaf), Placement.band(0, *eaf.shape), where="build-dense")
+        .eaf
+    )
+    decoded_eaf = np.full(eaf.shape, np.nan, dtype=np.float32) if decoded is None else decoded
     coefficients, se_measured = fit_se_grid(
         se,
         decoded_eaf,
@@ -309,25 +316,6 @@ def _decide_encoding(
             EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measured, se=se_measured)
         ),
         coefficients,
-    )
-
-
-def _round_trip_eaf(eaf: np.ndarray, encoding: StoreEncoding) -> np.ndarray:
-    """The frequencies a reader gets back from this plan, cell for cell."""
-    if encoding.eaf.is_absent:
-        return np.full(eaf.shape, np.nan, dtype=np.float32)
-    n_analyses = eaf.shape[1]
-    baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
-    per_cell = None if baseline is None else np.repeat(baseline[:, None], n_analyses, axis=1)
-    exceptions = EafExceptionBuilder()
-    raw = StoreCodec(encoding).encode_eaf(
-        eaf,
-        baseline=per_cell,
-        positions=positions_row_band(0, n_analyses),
-        exceptions=exceptions,
-    )
-    return StoreCodec(encoding, eaf_exceptions=exceptions.table()).decode_eaf(
-        raw, baseline=per_cell, positions=positions_row_band(0, n_analyses)
     )
 
 

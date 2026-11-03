@@ -17,6 +17,7 @@ from opengwasdb.encoding import (
     OverflowCells,
     RaggedEafPlane,
     RaggedSePlane,
+    SeEncoding,
     SeExceptionBuilder,
     SeMeasurements,
     StoreCodec,
@@ -31,6 +32,7 @@ from opengwasdb.encoding import (
     positions_flat,
     write_eaf_baseline,
 )
+from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
 from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.model.manifest import StoreManifest
@@ -386,57 +388,30 @@ class RaggedCSRWriter:
             self._derived_baseline = self._derive_eaf_baseline()
         return self._derived_baseline
 
-    def _decode_round_trip(
-        self,
-        encoding: StoreEncoding,
-        eaf: np.ndarray,
-        baseline: np.ndarray | None,
-        vi: np.ndarray,
-    ) -> np.ndarray:
-        """The frequencies a reader gets back for these cells.
-
-        The SE model has to predict from what is stored, not from the source
-        (ADR 0037), so the fit and the measurement both see the round trip.
-        """
-        if encoding.eaf.is_absent:
-            return np.full(eaf.shape, np.nan, dtype=np.float32)
-        gathered = None if baseline is None else baseline[vi]
-        exceptions = EafExceptionBuilder()
-        raw = StoreCodec(encoding).encode_eaf(
-            eaf, baseline=gathered, positions=positions_flat(0), exceptions=exceptions
-        )
-        return StoreCodec(encoding, eaf_exceptions=exceptions.table()).decode_eaf(
-            raw, baseline=gathered, positions=positions_flat(0)
-        )
-
     def se_fit_inputs(self, encoding: StoreEncoding) -> OverflowCells:
-        """Named `(se, decoded_eaf, analysis_index)` for a shared plan."""
+        """Named `(se, decoded_eaf, analysis_index)` for a shared plan.
+
+        The frequencies are what a reader decodes, not the source's: the SE
+        model has to predict from what is stored (ADR 0037). SE is round-tripped
+        as `float16`, since its model is what these cells are about to fit.
+        """
         vi, eaf = self._flat()
-        se = (
-            np.concatenate(self._ses).astype(np.float32)
+        z, se = (
+            (np.concatenate(values).astype(np.float32) for values in (self._zscores, self._ses))
             if self.n_associations
-            else np.empty(0, dtype=np.float32)
-        )
-        baseline = self._eaf_baseline(encoding)
-        codec = StoreCodec(encoding)
-        exceptions = EafExceptionBuilder()
-        raw = codec.encode_eaf(
-            eaf,
-            baseline=None if baseline is None else baseline[vi],
-            positions=positions_flat(0),
-            exceptions=exceptions,
-        )
-        decoded = (
-            StoreCodec(encoding, eaf_exceptions=exceptions.table()).decode_eaf(
-                raw,
-                baseline=None if baseline is None else baseline[vi],
-                positions=positions_flat(0),
-            )
-            if not encoding.eaf.is_absent
-            else np.full(eaf.shape, np.nan, dtype=np.float32)
+            else (np.empty(0, dtype=np.float32) for _ in range(2))
         )
         offsets = np.asarray(self._offsets, dtype=np.int64)
         ai = np.searchsorted(offsets[1:], np.arange(len(se)), side="right")
+        codec = AssociationCodec(
+            encoding.with_se(SeEncoding("float16")), eaf_baseline=self._eaf_baseline(encoding)
+        )
+        back = codec.round_trip(
+            CellValues(z, se, eaf),
+            Placement.sequence(0, vi, ai, self.n_analyses),
+            where="the Ragged writer's SE fit",
+        )
+        decoded = np.full(eaf.shape, np.nan, dtype=np.float32) if back.eaf is None else back.eaf
         return OverflowCells(
             se_values=se,
             eaf_values=decoded,
