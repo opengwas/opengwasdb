@@ -45,6 +45,11 @@ class Gate:
         return self._counts
 
     @property
+    def reads_imputation_scores(self) -> bool:
+        """Whether the Analysis declared a score, so its rows' scores are judged."""
+        return self.rules.info.imputation_score_declaration is not None
+
+    @property
     def dropped(self) -> list[tuple[str, Reason]]:
         """The logged drops so far, ``(source key, reason)``, in the order judged."""
         return list(self._dropped)
@@ -69,7 +74,7 @@ class Gate:
         An Analysis that declared no score was read without one, so its rows'
         scores are not handed on.
         """
-        declared = self.rules.info.imputation_score_declaration is not None
+        declared = self.reads_imputation_scores
         return self.source_rows(
             SourceRows(
                 eaf=batch.eaf,

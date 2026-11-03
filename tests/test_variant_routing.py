@@ -375,6 +375,33 @@ def test_admission_judges_the_reader_orientation_before_matching(tmp_path):
     assert column.n_unmatched == 1
 
 
+def test_an_analysis_without_a_declared_score_hands_admit_no_scores():
+    """``imputation_scores=False`` says no score was declared: the batch carries
+    every row's score as undeclared, whatever the associations hold, and the
+    default hands ``admit`` the scores the reader parsed."""
+    from opengwasdb.readers.interface import ImputationScore, ImputationScoreStatus
+
+    routing = _hg38_routing([("1", 100, "A", "G")])
+    table = routing.table([routing.alids])
+    scored = ReaderAssociation(
+        "1", 100, "A", "G", 1.0, 0.1, StoredEffectScale.SD,
+        imputation_score=ImputationScore(0.9, ImputationScoreStatus.USABLE),
+    )
+    seen: dict[bool, tuple[list[float], list[ImputationScoreStatus]]] = {}
+    for collect in (True, False):
+
+        def admit(batch: AssociationBatch, collect: bool = collect) -> np.ndarray:
+            seen[collect] = (batch.imputation_score.tolist(), batch.imputation_status.tolist())
+            return np.ones(len(batch), dtype=bool)
+
+        column = table.route_column([scored], admit=admit, imputation_scores=collect)
+        assert column.placed[0].z.tolist() == [1.0]
+
+    assert seen[True] == ([0.9], [ImputationScoreStatus.USABLE])
+    scores, statuses = seen[False]
+    assert np.isnan(scores).all() and statuses == [ImputationScoreStatus.UNDECLARED]
+
+
 def test_unmatched_associations_are_kept_by_key_only_when_asked():
     routing = _route(
         [_source("a", "hg38", [("1", 100, "A", "G", "")])],

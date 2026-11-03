@@ -326,7 +326,11 @@ def _resolve_column_hybrid(
         row.source,
         imputation_score_declaration=gate.rules.info.imputation_score_declaration,
     )
-    routed = table.route_column(reader.stream_associations(), admit=gate.admit)
+    routed = table.route_column(
+        reader.stream_associations(),
+        admit=gate.admit,
+        imputation_scores=gate.reads_imputation_scores,
+    )
     dense, overflow = routed.placed
     divisor = row.se_divisor
     return (

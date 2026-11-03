@@ -248,8 +248,16 @@ def _admitted(
 
     Nothing else is coerced into one. A NaN or a number is not a decision to
     keep a row, so a mask that is not boolean is refused rather than read.
+    ``scores`` and ``statuses`` are empty when no score was collected, and the
+    batch then carries every row's score as undeclared.
     """
     chroms, poss, refs, alts, zs, ses, eafs = columns
+    if statuses:
+        imputation_score = np.asarray(scores, dtype=np.float64)
+        imputation_status = np.asarray(statuses, dtype=object)
+    else:
+        imputation_score = np.full(len(zs), np.nan)
+        imputation_status = np.full(len(zs), ImputationScoreStatus.UNDECLARED, dtype=object)
     batch = AssociationBatch(
         chromosome=chroms,
         position=poss,
@@ -258,8 +266,8 @@ def _admitted(
         z=np.asarray(zs, dtype=np.float64),
         se=np.asarray(ses, dtype=np.float64),
         eaf=np.asarray(eafs, dtype=np.float64),
-        imputation_score=np.asarray(scores, dtype=np.float64),
-        imputation_status=np.asarray(statuses, dtype=object),
+        imputation_score=imputation_score,
+        imputation_status=imputation_status,
     )
     keep = admit(batch)
     if not isinstance(keep, np.ndarray) or keep.dtype != np.bool_:
@@ -349,15 +357,22 @@ class RouteTable:
             )
 
     def route_column(
-        self, associations: Iterable[ReaderAssociation], *, admit: Admit | None = None
+        self,
+        associations: Iterable[ReaderAssociation],
+        *,
+        admit: Admit | None = None,
+        imputation_scores: bool = True,
     ) -> RoutedColumn:
         """Route one Analysis's associations, batch by batch, onto the axes.
 
         ``admit``, given, judges each batch before it is matched and returns a
         keep mask; a refused row reaches no axis and is not counted unmatched.
-        Without it every row is routed. A key a reverse-strand lift re-oriented
-        has its z negated and its EAF complemented, so both follow the stored
-        alleles (issue #284, spec §4-5).
+        Without it every row is routed. ``imputation_scores=False`` says the
+        Analysis declared no score, so its rows' scores are not collected and
+        each batch carries them as undeclared, which is what such a reader
+        yields anyway. A key a reverse-strand lift re-oriented has its z
+        negated and its EAF complemented, so both follow the stored alleles
+        (issue #284, spec §4-5).
         """
         columns: _Columns = ([], [], [], [], [], [], [])
         chroms, poss, refs, alts, zs, ses, eafs = columns
@@ -365,6 +380,9 @@ class RouteTable:
         statuses: list[ImputationScoreStatus] = []
         collected = _Collected(self._n_axes, self._keep_unmatched)
         batch_size = _RESOLVE_BATCH
+        # Collecting each row's score costs a Pass 2 worker about a fifth of its
+        # per-row routing time, so it is done only for a batch that can use it.
+        collect_scores = admit is not None and imputation_scores
         for assoc in associations:
             chroms.append(assoc.chromosome)
             poss.append(assoc.position)
@@ -373,7 +391,7 @@ class RouteTable:
             zs.append(assoc.z)
             ses.append(assoc.se)
             eafs.append(float("nan") if assoc.eaf is None else assoc.eaf)
-            if admit is not None:
+            if collect_scores:
                 scores.append(assoc.imputation_score.value)
                 statuses.append(assoc.imputation_score.status)
             if len(zs) >= batch_size:

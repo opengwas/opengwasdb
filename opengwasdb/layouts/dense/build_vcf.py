@@ -440,7 +440,11 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
     # A Dense build declares no INFO or MAF filter, so its gate judges every
     # row by the rule set's other rules alone.
     with context.record.gate(AnalysisRules(row.trait_id)) as gate:
-        routed = context.table.route_column(reader.stream_associations(), admit=gate.admit)
+        routed = context.table.route_column(
+            reader.stream_associations(),
+            admit=gate.admit,
+            imputation_scores=gate.reads_imputation_scores,
+        )
         placed = routed.placed[0]
         se = apply_se_divisor(placed.se, row.se_divisor)
         _spill_column(context.spill_dir, col_idx, placed.index, placed.z, se, placed.eaf)
