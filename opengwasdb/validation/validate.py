@@ -15,15 +15,9 @@ from opengwasdb.associations import Cells, DenseGridReader, Tally
 from opengwasdb.associations import present as present_cells
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.encoding import (
-    EAF_EXCEPTION,
-    SE_EXCEPTION,
-    Z_OVERFLOW,
-    EafExceptionTable,
     RaggedSePlane,
-    SeExceptionTable,
     StoreCodec,
     StoreEncoding,
-    ZOverflowTable,
 )
 from opengwasdb.index.sqlite import get_metadata
 from opengwasdb.layouts.dense.indexed_subsets import validate_indexed_subsets
@@ -40,11 +34,8 @@ from opengwasdb.store.arrays import (
     SHARDED_COMPRESSOR_RECORD,
     ArrayRole,
     array_length,
-    chunk_layout,
-    inner_chunk_hint_for_path,
     inner_chunk_of,
     open_group,
-    role_for_array_path,
     shard_layout,
 )
 from opengwasdb.store.open import (
@@ -66,6 +57,7 @@ from opengwasdb.validation.rule import (
 )
 from opengwasdb.validation.rules import analyses as analyses_rules
 from opengwasdb.validation.rules import associations as association_rules
+from opengwasdb.validation.rules import by_variant as by_variant_rules
 from opengwasdb.validation.rules import completion as completion_rules
 from opengwasdb.validation.rules import csr as csr_rules
 from opengwasdb.validation.rules import encoding as encoding_rules
@@ -189,10 +181,6 @@ def _source_given(target: Target) -> bool:
     return target.options.source is not None
 
 
-def _legacy_ragged(target: Target, errors: list[str], _warnings: list[str]) -> None:
-    _validate_ragged_store(target.store, errors)
-
-
 def _legacy_ragged_completion(target: Target, errors: list[str], _warnings: list[str]) -> None:
     store = target.store
     offsets = sequence_offsets(target)
@@ -282,9 +270,11 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
     *hybrid_rules.RULES,
     *encoding_rules.RULES,
     *sample_size_rules.CHECKS,
+    *by_variant_rules.CHECKS,
     *association_rules.CHECKS,
     *completion_rules.CHECKS,
     *sequence_rules.RULES,
+    by_variant_rules.COUNTS,
     *association_rules.PRESENCE_RULES,
     *completion_rules.RULES,
     *association_rules.EAF_RULES,
@@ -292,19 +282,13 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
     *sample_size_rules.RULES,
     *top_hit_rules.STRUCTURE_RULES,
     *top_hit_rules.VALUE_RULES,
+    by_variant_rules.SAMPLE,
     _Legacy(
         name=_RAGGED_COMPLETION,
         kinds=Kind.CSR,
         when=lambda target: _is(PrimaryStorageLayout.RAGGED)(target) and _completed(target),
         after=(ARRAYS, LENGTHS, *PLAN, DECODABLE),
         run=_legacy_ragged_completion,
-    ),
-    _Legacy(
-        name="legacy.ragged",
-        kinds=Kind.CSR,
-        when=_is(PrimaryStorageLayout.RAGGED),
-        after=(*_SEQUENCE_JUDGED, _RAGGED_COMPLETION),
-        run=_legacy_ragged,
     ),
     _Legacy(
         name=_DENSE_COMPLETION,
@@ -796,14 +780,12 @@ def _dense_layout(target: Target, errors: list[str]) -> None:
 
 
 def _overflow(target: Target, errors: list[str]) -> None:
-    """The Dense Component's coverage, then the Overflow's variant index."""
+    """The Dense Component's coverage of the shared variant table."""
     store = target.store
-    n_shared = _n_variants(store.path)
     dense_to_shared = np.load(dense_to_shared_path(store.path))
     _validate_dense_coverage(
         store.path, dense_component_path(store.path), dense_to_shared, len(dense_to_shared), errors
     )
-    _validate_overflow_index(store.path, n_shared, errors)
 
 
 def _validate_completion_metadata(
@@ -877,513 +859,6 @@ def _decoded_csr_se(root: Any, encoding: StoreEncoding, n_assoc: int, label: str
         return RaggedSePlane.open(root, encoding).slice(0, n_assoc), None
     except ValueError as exc:
         return None, f"{label} cannot be decoded under the declared plan: {exc}"
-
-
-def _validate_ragged_downstream_seams(
-    store: OpenGWASDBStore, ragged_path: Path, n_assoc: int, errors: list[str]
-) -> None:
-    """Seam: the variant index.
-
-    It is cross-checked against the CSR only once the rules about the CSR's own
-    arrays and values passed -- it reads the CSR and would otherwise "confirm" a
-    store those rules already found broken.
-    """
-    _validate_variant_index(
-        store,
-        ragged_path,
-        n_assoc,
-        errors,
-        component_label="data.zarr/ragged",
-        n_axis=_n_variants(store.path),
-    )
-
-
-#: The one source of the index group name, duplicated from the builder module
-#: to keep validation importable without the build stack.
-_BY_VARIANT_GROUP = "by_variant"
-
-#: Array cells scanned in one window (issue #254).
-_INDEX_WINDOW = 1_000_000
-
-
-def _validate_variant_index_presence(
-    store: OpenGWASDBStore, root: Any, errors: list[str], label: str
-) -> Any | None:
-    """Check the group and its manifest provenance block agree; return the group."""
-    group = root[_BY_VARIANT_GROUP] if _BY_VARIANT_GROUP in root else None
-    block = store.manifest.provenance.get("ragged", {}).get("by_variant")
-    if group is None:
-        if block is not None:
-            errors.append(
-                f"{label}: the manifest records provenance.ragged.by_variant but the release "
-                f"carries no {_BY_VARIANT_GROUP} group; the index it describes is absent"
-            )
-        else:
-            errors.append(
-                f"{label}: carries no {_BY_VARIANT_GROUP} group; a Ragged component must "
-                f"carry the variant-centric index (ADR 0060)"
-            )
-        return None
-    if block is None:
-        errors.append(
-            f"{label}/{_BY_VARIANT_GROUP}: the release carries a variant index but its "
-            "manifest records no provenance.ragged.by_variant block"
-        )
-    return group
-
-
-def _validate_variant_index_structure(
-    index: Any,
-    n_axis: int,
-    n_analyses: int,
-    n_assoc: int,
-    errors: list[str],
-    label: str,
-) -> np.ndarray | None:
-    """Shape/ordering checks for the index, returning its offsets or `None`."""
-    offsets = _validate_index_offsets(index, n_axis, n_assoc, errors, label)
-    if offsets is None:
-        return None
-    if not _validate_index_analyses(index, n_analyses, n_assoc, errors, label):
-        return None
-    return offsets
-
-
-def _validate_index_offsets(
-    index: Any, n_axis: int, n_assoc: int, errors: list[str], label: str
-) -> np.ndarray | None:
-    """The offsets array must span `[0, n_assoc)` over `n_axis` variants."""
-    offsets = np.asarray(index["offsets"][:], dtype=np.int64)
-    if len(offsets) != n_axis + 1:
-        errors.append(
-            f"{label}/{_BY_VARIANT_GROUP}/offsets has {len(offsets)} entries but the variant "
-            f"axis is {n_axis} (expected {n_axis + 1})"
-        )
-        return None
-    if int(offsets[0]) != 0 or int(offsets[-1]) != n_assoc:
-        errors.append(
-            f"{label}/{_BY_VARIANT_GROUP}/offsets does not span [0, {n_assoc}) "
-            f"(starts {int(offsets[0])}, ends {int(offsets[-1])})"
-        )
-        return None
-    if np.any(np.diff(offsets) < 0):
-        errors.append(f"{label}/{_BY_VARIANT_GROUP}/offsets is not non-decreasing")
-        return None
-    for name in ("z", "se", "analysis_index"):
-        if array_length(index[name]) != n_assoc:
-            errors.append(
-                f"{label}/{_BY_VARIANT_GROUP}/{name} has {array_length(index[name])} "
-                f"entries but the component has {n_assoc} associations"
-            )
-            return None
-    return offsets
-
-
-def _validate_index_analyses(
-    index: Any, n_analyses: int, n_assoc: int, errors: list[str], label: str
-) -> bool:
-    """Every `analysis_index` must name a real Analysis, checked in windows.
-
-    Windowed so a 3.09 B-row index does not read its 12.3 GB `analysis_index`
-    twice as int64 (review round 1, finding 3).
-    """
-    if n_assoc == 0:
-        return True
-    lowest = np.iinfo(np.int64).max
-    highest = np.iinfo(np.int64).min
-    for lo in range(0, n_assoc, _INDEX_WINDOW):
-        hi = min(lo + _INDEX_WINDOW, n_assoc)
-        window = np.asarray(index["analysis_index"][lo:hi], dtype=np.int64)
-        lowest = min(lowest, int(window.min()))
-        highest = max(highest, int(window.max()))
-    if lowest < 0 or highest >= n_analyses:
-        errors.append(
-            f"{label}/{_BY_VARIANT_GROUP}/analysis_index is outside the component's "
-            f"{n_analyses} Analyses"
-        )
-        return False
-    return True
-
-
-def _validate_variant_index_members(
-    index: Any, root: Any, errors: list[str], label: str
-) -> None:
-    """`eaf`, `imputed` and `n` must be present on exactly both sides or neither."""
-    for name in ("eaf", "imputed", "n"):
-        if (name in index) != (name in root):
-            errors.append(
-                f"{label}/{_BY_VARIANT_GROUP}/{name} is present on one side only; the "
-                "component and its variant index must carry the same members"
-            )
-
-
-def _code_differs(a: Any, b: Any) -> bool:
-    """True when stored codes a and b differ, treating NaN == NaN."""
-    if a == b:
-        return False
-    try:
-        return not (np.isnan(a) and np.isnan(b))
-    except (TypeError, ValueError):
-        return True
-
-
-def _sample_non_empty_variants(by_offsets: np.ndarray, sample_variants: int) -> np.ndarray:
-    """Deterministic selection of non-empty variant indices for sampled validation."""
-    widths = np.diff(by_offsets)
-    non_empty = np.where(widths > 0)[0]
-    if len(non_empty) <= sample_variants:
-        return non_empty
-    rng = np.random.default_rng(0)
-    chosen = rng.choice(non_empty, size=sample_variants - 2, replace=False)
-    return np.unique(np.concatenate([[non_empty[0], non_empty[-1]], chosen]))
-
-
-def _check_z_overflow(
-    root: Any, index: Any, b_z: Any, tag: str, s_idx: int, src_idx: int
-) -> str | None:
-    if b_z != Z_OVERFLOW:
-        return None
-    idx_v = ZOverflowTable.open(index).lookup(np.array([s_idx]))
-    src_v = ZOverflowTable.open(root).lookup(np.array([src_idx]))
-    return f"{tag} z overflow value != Analysis-sorted table" if idx_v != src_v else None
-
-
-def _check_eaf_exception(
-    root: Any, index: Any, b_eaf: Any, tag: str, s_idx: int, src_idx: int
-) -> str | None:
-    if b_eaf != EAF_EXCEPTION:
-        return None
-    idx_v = EafExceptionTable.open(index).lookup(np.array([s_idx]))
-    src_v = EafExceptionTable.open(root).lookup(np.array([src_idx]))
-    return f"{tag} eaf exception value != Analysis-sorted table" if idx_v != src_v else None
-
-
-def _check_se_exception(
-    root: Any, index: Any, b_se: Any, tag: str, s_idx: int, src_idx: int
-) -> str | None:
-    if b_se != SE_EXCEPTION:
-        return None
-    idx_v = SeExceptionTable.open(index).lookup(np.array([s_idx]))
-    src_v = SeExceptionTable.open(root).lookup(np.array([src_idx]))
-    return f"{tag} se exception value != Analysis-sorted table" if idx_v != src_v else None
-
-
-def _check_cell_exceptions(
-    root: Any,
-    index: Any,
-    encoding: StoreEncoding,
-    b_z: Any,
-    b_se: Any,
-    b_eaf: Any,
-    tag: str,
-    s_idx: int,
-    src_idx: int,
-) -> str | None:
-    """Validate exception-table values at an exception cell; returns an error string or None."""
-    if encoding.z.is_fixed_point:
-        err = _check_z_overflow(root, index, b_z, tag, s_idx, src_idx)
-        if err is not None:
-            return err
-    if encoding.eaf.is_residual and b_eaf is not None:
-        err = _check_eaf_exception(root, index, b_eaf, tag, s_idx, src_idx)
-        if err is not None:
-            return err
-    if encoding.se.is_residual:
-        return _check_se_exception(root, index, b_se, tag, s_idx, src_idx)
-    return None
-
-
-def _check_cell_codes(
-    root: Any,
-    b_z: Any,
-    b_se: Any,
-    b_eaf: Any,
-    b_imp: Any,
-    tag: str,
-    src_idx: int,
-    b_n: Any = None,
-) -> str | None:
-    """Compare raw stored codes for equality, returning an error string on mismatch."""
-    if _code_differs(b_z, root["z"][src_idx]):
-        return f"{tag} z code {b_z!r} != source {root['z'][src_idx]!r}"
-    if _code_differs(b_se, root["se"][src_idx]):
-        return f"{tag} se code {b_se!r} != source {root['se'][src_idx]!r}"
-    for name, code in (("eaf", b_eaf), ("n", b_n)):
-        if code is not None and _code_differs(code, root[name][src_idx]):
-            return f"{tag} {name} code {code!r} != source {root[name][src_idx]!r}"
-    if b_imp is not None and b_imp != root["imputed"][src_idx]:
-        return f"{tag} imputed {b_imp!r} != source {root['imputed'][src_idx]!r}"
-    return None
-
-
-def _find_source_position(
-    src_vi: np.ndarray, v: int, a: int, label: str
-) -> tuple[int, str | None]:
-    pos = int(np.searchsorted(src_vi, v))
-    if pos >= len(src_vi) or src_vi[pos] != v:
-        return -1, (
-            f"{label}/{_BY_VARIANT_GROUP}: variant {v} in Analysis {a} is missing "
-            "from the Analysis-sorted planes"
-        )
-    return pos, None
-
-
-def _validate_one_cell(
-    root: Any,
-    index: Any,
-    offsets: np.ndarray,
-    encoding: StoreEncoding,
-    label: str,
-    v: int,
-    a: int,
-    codes: tuple[Any, Any, Any, Any, Any],
-    ordinal: int,
-) -> str | None:
-    cs, ce = int(offsets[a]), int(offsets[a + 1])
-    src_vi = np.asarray(root["variant_index"][cs:ce], dtype=np.int32)
-    pos, err = _find_source_position(src_vi, v, a, label)
-    if err is not None:
-        return err
-    src_pos = cs + pos
-    tag = f"{label}/{_BY_VARIANT_GROUP}: (variant={v}, analysis={a})"
-    b_z, b_se, b_eaf, b_imp, b_n = codes
-    err = _check_cell_codes(root, b_z, b_se, b_eaf, b_imp, tag, src_pos, b_n)
-    if err is not None:
-        return err
-    return _check_cell_exceptions(root, index, encoding, b_z, b_se, b_eaf, tag, ordinal, src_pos)
-
-
-def _load_optional_columns(
-    root: Any, index: Any, s: int, e: int
-) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
-    """`eaf`, `imputed` and `n` for index rows `[s, e)`, each `None` unless both sides hold it."""
-
-    def column(name: str) -> np.ndarray | None:
-        return np.asarray(index[name][s:e]) if name in index and name in root else None
-
-    return column("eaf"), column("imputed"), column("n")
-
-
-def _cell_codes_tuple(
-    b_z: np.ndarray,
-    b_se: np.ndarray,
-    b_eaf: np.ndarray | None,
-    b_imp: np.ndarray | None,
-    i: int,
-    b_n: np.ndarray | None = None,
-) -> tuple[Any, Any, Any, Any, Any]:
-    eaf_val = b_eaf[i] if b_eaf is not None else None
-    imp_val = b_imp[i] if b_imp is not None else None
-    n_val = b_n[i] if b_n is not None else None
-    return (b_z[i], b_se[i], eaf_val, imp_val, n_val)
-
-
-def _validate_variant_cells(
-    root: Any,
-    index: Any,
-    offsets: np.ndarray,
-    by_offsets: np.ndarray,
-    encoding: StoreEncoding,
-    label: str,
-    v: int,
-) -> str | None:
-    """Compare all index cells for one variant against the source planes."""
-    s, e = int(by_offsets[v]), int(by_offsets[v + 1])
-    b_analyses = np.asarray(index["analysis_index"][s:e], dtype=np.int32)
-    b_z, b_se = np.asarray(index["z"][s:e]), np.asarray(index["se"][s:e])
-    b_eaf, b_imp, b_n = _load_optional_columns(root, index, s, e)
-    for i, a_val in enumerate(b_analyses):
-        codes = _cell_codes_tuple(b_z, b_se, b_eaf, b_imp, i, b_n)
-        err = _validate_one_cell(
-            root, index, offsets, encoding, label, v, int(a_val), codes, s + i
-        )
-        if err is not None:
-            return err
-    return None
-
-
-def _validate_variant_index_sample(
-    root: Any,
-    index: Any,
-    offsets: np.ndarray,
-    by_offsets: np.ndarray,
-    encoding: StoreEncoding,
-    n_assoc: int,
-    errors: list[str],
-    label: str,
-    *,
-    sample_variants: int = 100,
-) -> None:
-    """Sampled cell comparison: cells in `by_variant` match the Analysis-sorted planes."""
-    if n_assoc == 0:
-        return
-    sample = _sample_non_empty_variants(by_offsets, sample_variants)
-    for v in sample:
-        err = _validate_variant_cells(root, index, offsets, by_offsets, encoding, label, int(v))
-        if err is not None:
-            errors.append(err)
-            return
-
-
-def _validate_variant_index(
-    store: OpenGWASDBStore,
-    ragged_path: Path,
-    n_assoc: int,
-    errors: list[str],
-    *,
-    component_label: str,
-    n_axis: int,
-) -> None:
-    """Seam: the variant-centric index agrees with the Analysis-sorted planes.
-
-    Presence, shape, per-variant counts, within-variant ordering, and a
-    sampled cell comparison against the Analysis-sorted side.
-    """
-    root = open_group(ragged_path)
-    index = _validate_variant_index_presence(store, root, errors, component_label)
-    if index is None:
-        return
-    offsets = np.asarray(root["offsets"][:], dtype=np.int64)
-    by_offsets = _validate_variant_index_structure(
-        index, n_axis, len(offsets) - 1, n_assoc, errors, component_label
-    )
-    if by_offsets is None:
-        return
-    _validate_variant_index_block(store, n_axis, n_assoc, errors, component_label)
-    _validate_variant_index_members(index, root, errors, component_label)
-    _validate_variant_index_layout(index, errors, component_label)
-    _validate_variant_index_counts(root, by_offsets, n_axis, n_assoc, errors, component_label)
-    _validate_variant_index_ordering(index, by_offsets, n_assoc, errors, component_label)
-    if errors:
-        return
-    _validate_variant_index_sample(
-        root, index, offsets, by_offsets, store.manifest.encoding, n_assoc, errors, component_label
-    )
-
-
-def _validate_variant_index_block(
-    store: OpenGWASDBStore,
-    n_axis: int,
-    n_assoc: int,
-    errors: list[str],
-    label: str,
-) -> None:
-    """The recorded provenance block must describe the index that is present."""
-    block = store.manifest.provenance.get("ragged", {}).get("by_variant")
-    if block is None:
-        return
-    if int(block.get("n_axis", -1)) != n_axis or int(block.get("n_rows", -1)) != n_assoc:
-        errors.append(
-            f"{label}: provenance.ragged.by_variant records "
-            f"n_axis={block.get('n_axis')!r} n_rows={block.get('n_rows')!r} but the index "
-            f"holds {n_axis} variants over {n_assoc} rows"
-        )
-
-
-def _validate_variant_index_layout(index: Any, errors: list[str], label: str) -> None:
-    """Every `by_variant/` array must carry the role's decided inner chunk and shard.
-
-    ADR 0060: the index adds no role and no shard policy, and the offsets array's
-    1,000-element inner-chunk hint is part of its recorded layout.  A
-    conversion that reproduced a different chunk from a build would be a layout
-    divergence a reader cannot see, so it is checked here.
-    """
-    for name in sorted(index.array_keys()):
-        _validate_one_index_array(index, name, errors, label)
-
-
-def _validate_one_index_array(
-    index: Any, name: str, errors: list[str], label: str
-) -> None:
-    """One `by_variant/` array's inner chunk and shard against its role policy."""
-    path = f"ragged/by_variant/{name}"
-    role = role_for_array_path(path)
-    if role is None:
-        errors.append(f"{label}/{path}: no ArrayRole is registered for this path")
-        return
-    array = index[name]
-    shape = tuple(int(size) for size in array.shape)
-    expected = chunk_layout(role, shape, hint=inner_chunk_hint_for_path(path))
-    if tuple(inner_chunk_of(array)) != expected:
-        errors.append(
-            f"{label}/{path}: inner chunk {tuple(inner_chunk_of(array))} != the "
-            f"role policy's {expected}"
-        )
-    expected_shard = shard_layout(role, shape, inner_chunk=expected)
-    if array.shards is not None and tuple(int(s) for s in array.shards) != expected_shard:
-        errors.append(
-            f"{label}/{path}: shard {tuple(int(s) for s in array.shards)} != the "
-            f"role policy's {expected_shard}"
-        )
-
-
-def _validate_variant_index_counts(
-    root: Any,
-    by_offsets: np.ndarray,
-    n_axis: int,
-    n_assoc: int,
-    errors: list[str],
-    label: str,
-) -> None:
-    """Every variant must hold exactly as many index rows as the source.
-
-    The histogram is accumulated with `np.add.at` over each window's unique
-    values, not `np.bincount(minlength=n_axis)`: the latter allocates 1.31 GB
-    per window (3,085 windows at OGS-00011) where the former allocates one
-    window's uniques (review round 1, finding 3).
-    """
-    counts = np.zeros(n_axis, dtype=np.int64)
-    for lo in range(0, n_assoc, _INDEX_WINDOW):
-        hi = min(lo + _INDEX_WINDOW, n_assoc)
-        window = np.asarray(root["variant_index"][lo:hi], dtype=np.int64)
-        values, multiplicity = np.unique(window, return_counts=True)
-        np.add.at(counts, values, multiplicity)
-    if not np.array_equal(np.diff(by_offsets), counts):
-        differing = int(np.argmax(np.diff(by_offsets) != counts))
-        errors.append(
-            f"{label}/{_BY_VARIANT_GROUP}/offsets: variant {differing} holds "
-            f"{int(by_offsets[differing + 1] - by_offsets[differing])} rows but the "
-            f"Analysis-sorted planes hold {int(counts[differing])}"
-        )
-
-
-def _validate_variant_index_ordering(
-    index: Any,
-    by_offsets: np.ndarray,
-    n_assoc: int,
-    errors: list[str],
-    label: str,
-) -> None:
-    """Within each variant, the index's analyses must be non-decreasing.
-
-    Bounded by the same window the digest uses; the comparison resets at each
-    variant boundary carried by `by_offsets` and the window's array is read one
-    window at a time (review round 1, finding 3).
-    """
-    for lo in range(0, n_assoc, _INDEX_WINDOW):
-        hi = min(lo + _INDEX_WINDOW, n_assoc)
-        window = np.asarray(index["analysis_index"][lo:hi], dtype=np.int64)
-        if len(window) < 2:
-            continue
-        variant = np.searchsorted(by_offsets, np.arange(lo, hi, dtype=np.int64), side="right") - 1
-        same_variant = variant[1:] == variant[:-1]
-        if np.any(same_variant & (window[1:] < window[:-1])):
-            errors.append(
-                f"{label}/{_BY_VARIANT_GROUP}/analysis_index is not non-decreasing within "
-                "a variant's block"
-            )
-            return
-
-
-def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> None:
-    """A Ragged Store Release's variant index and Top-Hit Indexes (spec §11, §17).
-
-    Everything else about the release is a rule of its own. An exception is
-    reported by the rule that runs this, after whatever was found before it.
-    """
-    ragged_path = store.data_path / "ragged"
-    offsets = np.asarray(open_group(ragged_path)["offsets"][:], dtype=np.int64)
-    _validate_ragged_downstream_seams(store, ragged_path, int(offsets[-1]), errors)
 
 
 def _validate_ragged_imputed_mask(
@@ -1558,23 +1033,6 @@ def _validate_dense_coverage(
     finally:
         dense_axis.close()
         shared_axis.close()
-
-
-def _validate_overflow_index(store_path: Path, n_shared: int, errors: list[str]) -> None:
-    """Validate the Overflow's variant-centric index (ADR 0060)."""
-    ragged_path = store_path / "data.zarr" / "ragged"
-    if errors:
-        return
-    root = open_group(ragged_path)
-    offsets = np.asarray(root["offsets"][:], dtype=np.int64)
-    _validate_variant_index(
-        open_store(store_path),
-        ragged_path,
-        int(offsets[-1]),
-        errors,
-        component_label="data.zarr/ragged",
-        n_axis=n_shared,
-    )
 
 
 def _load_manifest(store_path: Path, errors: list[str]) -> OpenGWASDBStore | None:

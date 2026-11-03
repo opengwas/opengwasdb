@@ -95,6 +95,36 @@ def test_the_value_rules_read_an_overflow_once(
     )
 
 
+#: The rules about a sequence's variant index that read whole arrays.
+VARIANT_INDEX_RULES = {
+    "by_variant.present",
+    "by_variant.provenance",
+    "by_variant.offsets",
+    "by_variant.members",
+    "by_variant.layout",
+    "by_variant.analyses",
+    "by_variant.order",
+    "by_variant.counts",
+}
+
+
+def test_the_variant_index_rules_read_each_array_once(
+    residual_ragged: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The index's Analyses are read once for its bounds and order, and its runs are
+    counted from the sequence's one read, not a second pass over `variant_index`."""
+    group = open_store(residual_ragged).arrays(mode="r")["ragged"]
+    index = group["by_variant"]
+
+    with element_reads(monkeypatch) as counts:
+        result = validate_store(residual_ragged, rules=VARIANT_INDEX_RULES)
+
+    assert result.ok, result.errors
+    assert not result.skipped, result.skipped
+    assert times_read(counts, group["variant_index"]) == 1.0
+    assert times_read(counts, index["analysis_index"]) == 1.0
+
+
 def test_an_undecodable_se_does_not_hide_the_table_that_explains_it(tmp_path: Path) -> None:
     """An exception code with no table entry: the decode fails, and the table says why.
 

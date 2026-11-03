@@ -20,8 +20,8 @@ from opengwasdb.store.arrays import array_length
 from opengwasdb.validation.rule import Fold, Kind, Rule, Target
 from opengwasdb.validation.rules.csr import ARRAYS, LENGTHS, is_overflow
 from opengwasdb.validation.rules.encoding import PLAN
-from opengwasdb.validation.rules.hybrid import DENSE_TO_SHARED, dense_to_shared, shared_rows
-from opengwasdb.validation.scans import ASSOCIATIONS, Block, analyses_of
+from opengwasdb.validation.rules.hybrid import DENSE_TO_SHARED, dense_to_shared
+from opengwasdb.validation.scans import ASSOCIATIONS, Block, analyses_of, release_rows
 
 #: Cells the standalone ordering check reads at once (4 MB of `int32`).
 _ORDER_WINDOW = 1_000_000
@@ -136,7 +136,7 @@ def _judge_segment_order(_target: Target, total: FirstBreak) -> Iterator[str]:
 def _outside_shared(target: Target, block: Block) -> int:
     assert block.variant is not None
     variant = block.variant
-    return int(np.count_nonzero((variant < 0) | (variant >= shared_rows(target))))
+    return int(np.count_nonzero((variant < 0) | (variant >= release_rows(target))))
 
 
 def _judge_outside_shared(target: Target, n: int) -> Iterator[str]:
@@ -144,7 +144,7 @@ def _judge_outside_shared(target: Target, n: int) -> Iterator[str]:
     if n:
         yield (
             "Ragged Overflow variant_index falls outside the shared variant table "
-            f"[0, {shared_rows(target)})"
+            f"[0, {release_rows(target)})"
         )
 
 
@@ -152,7 +152,7 @@ def _on_panel(target: Target) -> np.ndarray:
     """Which shared rows are Dense Component rows, held once for the run."""
 
     def build() -> np.ndarray:
-        rows = np.zeros(shared_rows(target), dtype=bool)
+        rows = np.zeros(release_rows(target), dtype=bool)
         rows[dense_to_shared(target)] = True
         return rows
 

@@ -50,6 +50,7 @@ from opengwasdb.query import query_store
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store import open_store
 from opengwasdb.validation import validate_store
+from opengwasdb.validation.rules import by_variant as by_variant_rules
 
 #: The arrays a `by_variant` group always carries beside its offsets.
 _CORE_LEAVES = ("analysis_index", "z", "se")
@@ -325,22 +326,44 @@ def test_validation_rejects_a_wrong_code(observed_ssf: Path, tmp_path: Path) -> 
     assert any(BY_VARIANT_GROUP in error for error in result.errors), result.errors
 
 
-def test_validation_rejects_a_swapped_analysis(observed_ssf: Path, tmp_path: Path) -> None:
-    store = _copy_and_validate(observed_ssf, tmp_path)
+def _swap_two_analyses_of_one_variant(store: Path) -> None:
+    """Flip the first two rows of a variant that genuinely holds two Analyses."""
     index = store / "data.zarr" / "ragged" / BY_VARIANT_GROUP
     root = store_arrays.open_group(index)
     offsets = np.asarray(root["offsets"][:], dtype=np.int64)
     analysis = np.asarray(root["analysis_index"][:])
-    # Flip the two rows of a variant that genuinely holds two Analyses.
     widths = np.diff(offsets)
     variant = int(np.argmax(widths >= 2))
     assert widths[variant] >= 2, "fixture must have a multi-Analysis variant"
     start = int(offsets[variant])
     analysis[start], analysis[start + 1] = analysis[start + 1], analysis[start]
     _damage(index, "analysis_index", analysis.astype("int32"))
+
+
+def test_validation_rejects_a_swapped_analysis(observed_ssf: Path, tmp_path: Path) -> None:
+    store = _copy_and_validate(observed_ssf, tmp_path)
+    _swap_two_analyses_of_one_variant(store)
     result = validate_store(store)
     assert not result.ok
     assert any(BY_VARIANT_GROUP in error for error in result.errors), result.errors
+
+
+def test_rows_out_of_order_are_found_across_a_window_edge(
+    observed_ssf: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The index is read a window at a time; a variant's run crossing a window's
+    edge is compared across it, with the row before the window carried in."""
+    monkeypatch.setattr(by_variant_rules, "_WINDOW", 1)
+    store = _copy_and_validate(observed_ssf, tmp_path)
+    _swap_two_analyses_of_one_variant(store)
+
+    result = validate_store(store)
+
+    assert result.failed() == {"by_variant.order"}, result.errors
+    assert result.errors == [
+        "data.zarr/ragged/by_variant/analysis_index is not non-decreasing within "
+        "a variant's block"
+    ]
 
 
 def test_validation_rejects_a_broken_offsets(observed_ssf: Path, tmp_path: Path) -> None:

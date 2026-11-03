@@ -412,6 +412,17 @@ def dense_bands(target: Target) -> Iterator[Block]:
 # --- an association sequence, a window of consecutive cells at a time ---
 
 
+def release_rows(target: Target) -> int:
+    """The rows of the Store Variant Table the target's cells address, read once.
+
+    A Ragged release's own table; for a Hybrid, the table both components share.
+    """
+    release = target
+    while release.parent is not None:
+        release = release.parent
+    return release.remember("n_variants_shared", lambda: release.variant_axis.n_variants)
+
+
 def sequence_offsets(target: Target) -> np.ndarray:
     """A sequence's `offsets`, which bound each Analysis's segment, read once per run."""
     return target.remember(
