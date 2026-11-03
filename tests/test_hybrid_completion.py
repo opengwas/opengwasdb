@@ -714,3 +714,27 @@ def test_rho_delegates_to_dense_component(completed_hybrid) -> None:
     assert len(q.rho("trait_a", "trait_b")["rho"]) == 0
     assert len(q.rho_row("trait_a")["rho"]) == 0
     assert q.rho_matrix(["trait_a", "trait_b"])["rho"].shape == (0, 0)
+
+
+def test_a_half_missing_overflow_cell_is_refused(tmp_path: Path, monkeypatch) -> None:
+    """D1 (issue #357): the source's Ragged Overflow is carried across, so a
+    cell with one of z and SE missing is refused, as the Dense Component's
+    completion refuses one of its own (spec §15)."""
+    from opengwasdb.admission import NotAdmitted
+
+    src = _build_source(tmp_path)
+    original = RaggedCSRReader.se_all
+
+    def se_all(self):
+        se = np.array(original(self), dtype=np.float32, copy=True)
+        # Fixture first: the Overflow holds a present cell to break.
+        assert np.isfinite(se).any()
+        se[np.flatnonzero(np.isfinite(se))[0]] = np.nan
+        return se
+
+    monkeypatch.setattr(RaggedCSRReader, "se_all", se_all)
+    with pytest.raises(NotAdmitted, match="Ragged Overflow: .*one of z and SE missing: 1"):
+        complete_hybrid_store(
+            src, tmp_path / "dst.opengwasdb", _make_ld_panel(tmp_path), min_cor=0.0, thresh=0.9
+        )
+    assert not (tmp_path / "dst.opengwasdb").exists()

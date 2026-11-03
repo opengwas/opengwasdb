@@ -5,5 +5,7 @@
   Admission now drops the source rows that would make one (D3, D4). Each
   builder's writer also checks the z and SE it is about to store with
   `require_admitted`, and refuses (`NotAdmitted`, naming the build and the
-  Analysis) a cell that should not have passed a gate. The completions refuse a
-  half-missing source cell.
+  Analysis) a cell that should not have passed a gate. Every completion refuses
+  a half-missing source cell, wherever it would carry one: `complete-dense`'s
+  bands, `complete-ragged`'s observed rows, including an Analysis no LD block
+  touches, and `complete-hybrid`'s Ragged Overflow.

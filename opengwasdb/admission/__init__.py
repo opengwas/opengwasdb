@@ -13,7 +13,12 @@ from anywhere else.
 
 from __future__ import annotations
 
-from opengwasdb.admission.cells import NotAdmitted, admissible, require_admitted
+from opengwasdb.admission.cells import (
+    NotAdmitted,
+    admissible,
+    require_admitted,
+    require_paired,
+)
 from opengwasdb.admission.gate import Gate, RoutedBatch, counting_gate
 from opengwasdb.admission.record import (
     ADMISSION_RULES,
@@ -40,4 +45,5 @@ __all__ = [
     "admission_record_for",
     "counting_gate",
     "require_admitted",
+    "require_paired",
 ]

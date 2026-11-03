@@ -35,6 +35,7 @@ from typing import Any
 import numpy as np
 
 from opengwasdb import top_hits
+from opengwasdb.admission import require_paired
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
 from opengwasdb.completion.checkpoint import (
@@ -1069,7 +1070,10 @@ def _completed_analysis(
     0036), block fills as imputed, block positions neither produced as
     missing -- or, when no completable block touches the Analysis, its source
     association list untouched."""
-    obs, found = _admitted_observed(src_csr.get_analysis(ai))
+    source = src_csr.get_analysis(ai)
+    # D1: a half-missing source cell is refused, whatever completes the Analysis.
+    require_paired(source.z, source.se, where=f"complete-ragged, Analysis {ai}")
+    obs, found = _admitted_observed(source)
     _warn_observed_duplicates(ai, found, src_alids)
     if not block_ids:
         return _passthrough_analysis(obs, src_idx_remap)

@@ -1852,3 +1852,33 @@ class TestObservedDuplicates:
         fills_by_analysis, _ = _merge_checkpoint_rows(blocks, db)
 
         assert fills_by_analysis == {0: {"1:100:A:G": (1.0, 0.25)}}
+
+
+def test_a_half_missing_source_cell_is_refused_even_where_no_block_completes(monkeypatch):
+    """D1 (issue #357): spec §15 forbids a cell with one of z and SE missing.
+    An Analysis no completable block touches is carried through as it stands,
+    so its half-missing cell is refused rather than written."""
+    from types import SimpleNamespace
+
+    from opengwasdb.admission import NotAdmitted
+    from opengwasdb.layouts.ragged.complete import _completed_analysis
+    from opengwasdb.layouts.ragged.zarr_csr import AnalysisAssociations
+
+    observed = AnalysisAssociations(
+        variant_index=np.array([0, 1], dtype=np.int32),
+        z=np.array([2.0, 1.0], dtype=np.float32),
+        se=np.array([np.nan, 0.5], dtype=np.float32),
+        eaf=np.array([0.25, 0.5], dtype=np.float32),
+    )
+
+    with pytest.raises(NotAdmitted, match=r"complete-ragged, Analysis 0: .*one of z and SE"):
+        _completed_analysis(
+            0,
+            src_csr=SimpleNamespace(get_analysis=lambda ai: observed),
+            src_alids=["1:100:A:G", "1:200:C:T"],
+            src_idx_remap=[0, 1],
+            new_alid_to_idx={"1:100:A:G": 0, "1:200:C:T": 1},
+            block_ids=[],
+            block_canonical_alids={},
+            fills={},
+        )

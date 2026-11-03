@@ -14,7 +14,7 @@ import numpy as np
 
 from opengwasdb.associations.record import State, states
 
-__all__ = ["NotAdmitted", "admissible", "require_admitted"]
+__all__ = ["NotAdmitted", "admissible", "require_admitted", "require_paired"]
 
 
 class NotAdmitted(ValueError):
@@ -58,6 +58,19 @@ def require_admitted(
         with np.errstate(invalid="ignore"):
             broken["frequency outside (0, 1)"] = ~np.isnan(eaf) & ~((eaf > 0) & (eaf < 1))
     _raise_if_broken(broken, where)
+
+
+def require_paired(z: np.ndarray, se: np.ndarray, *, where: str) -> None:
+    """Refuse cells with one of z and SE missing (spec §15, D1), naming ``where``.
+
+    What a completion checks of the cells it carries from a source Store, as
+    the Dense completion does of its bands: a half-missing pair would be stored
+    beside an imputed partner, or carried as a cell no reader can use.
+    """
+    unpaired = np.isnan(np.asarray(z, dtype=np.float64)) != np.isnan(
+        np.asarray(se, dtype=np.float64)
+    )
+    _raise_if_broken({"one of z and SE missing": unpaired}, where)
 
 
 def _raise_if_broken(broken: dict[str, np.ndarray], where: str) -> None:

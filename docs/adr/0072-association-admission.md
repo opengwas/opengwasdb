@@ -54,9 +54,13 @@ name the decisions issue #357 took on the rules that differed.
   Every other reason's rows are also logged, by source key, because nothing but
   the source can say which rows those were.
 - **Completion** admits an imputed candidate by the same cell rule (`admissible`).
-  It refuses a source cell with one of z and SE missing, rather than pairing an
-  imputed value with an observed one (D1). What it leaves unimputed is already
-  counted in each Store's `completion_quality`, so a completion writes no record.
+  It refuses a source cell with one of z and SE missing (`require_paired`, D1),
+  rather than pairing an imputed value with an observed one or carrying the
+  cell as it stands. Every completion checks every cell it carries: the Dense
+  bands, a Ragged Analysis's observed rows (including one no LD block
+  touches), and the Hybrid's Ragged Overflow. What it leaves unimputed is
+  already counted in each Store's `completion_quality`, so a completion writes
+  no record.
 - **`require_admitted`** checks Admission's guarantee on cells a writer is handed.
   Every builder calls it on the z and SE it is about to store, so a half-missing
   pair (spec §15) or any other cell a gate should have dropped refuses the build,
