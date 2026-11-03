@@ -27,6 +27,12 @@ from opengwasdb.validation.scans import analyses_of
 #: The rules that fold over a sequence's windows.
 SEQUENCE_RULES = {
     "csr.segment_order",
+    "top_hits.held",
+    "top_hits.z",
+    "top_hits.se",
+    "top_hits.imputed",
+    "top_hits.eaf",
+    "top_hits.complete",
     "associations.decodable",
     "associations.se_infinite",
     "associations.se_negative",
@@ -118,6 +124,56 @@ def test_an_undecodable_se_does_not_hide_the_table_that_explains_it(tmp_path: Pa
     assert result.skipped["associations.se_negative"] == ("associations.decodable",)
     assert "side_tables.z_overflow" not in result.skipped
     assert "csr.segment_order" not in result.skipped
+
+
+def test_a_tier_missing_an_association_above_its_cutoff_is_incomplete(tmp_path: Path) -> None:
+    """A tier holds every association that clears its cutoff, as a grid's does.
+
+    Raising the tier's threshold lowers its cutoff below cells it does not list.
+    A sampled check of the cells a tier does list cannot see that.
+    """
+    store, _se = build_residual_ssf_source(tmp_path)
+    tier = open_store(store).arrays(mode="a")["top_hits"]["p_5e_08"]
+    assert tier.attrs["threshold"] == 5e-08, "the fixture's tier must record its threshold"
+    tier.attrs["threshold"] = 0.5
+
+    result = validate_store(store)
+
+    assert result.failed() == {"top_hits.complete"}
+    assert result.errors == ["top-hit index p_5e_08 does not match stored z values"]
+
+
+def test_a_tier_cell_the_sequence_does_not_hold_is_reported(tmp_path: Path) -> None:
+    """Every tier cell is an association the sequence holds; one it lacks is named."""
+    store, _se = build_residual_ssf_source(tmp_path)
+    data = open_store(store).arrays(mode="a")
+    tier = data["top_hits"]["p_5e_08"]
+    rows = np.asarray(tier["variant_index"][:])
+    cols = np.asarray(tier["analysis_index"][:])
+    i, absent = _an_absent_variant_between_neighbours(data["ragged"], rows, cols)
+    rows[i] = absent
+    tier["variant_index"][:] = rows
+
+    result = validate_store(store)
+
+    assert result.failed() == {"top_hits.held"}
+    assert result.errors == ["top-hit index p_5e_08 references missing association"]
+
+
+def _an_absent_variant_between_neighbours(
+    sequence: zarr.Group, rows: np.ndarray, cols: np.ndarray
+) -> tuple[int, int]:
+    """A tier cell, and a variant its Analysis does not hold that keeps the tier ordered."""
+    offsets = np.asarray(sequence["offsets"][:])
+    for i in range(1, len(rows) - 1):
+        if cols[i - 1] != cols[i] or cols[i + 1] != cols[i]:
+            continue
+        a = int(cols[i])
+        held = set(np.asarray(sequence["variant_index"][offsets[a] : offsets[a + 1]]).tolist())
+        for v in range(int(rows[i - 1]) + 1, int(rows[i + 1])):
+            if v not in held:
+                return i, v
+    raise AssertionError("the fixture's tier must leave a gap its Analysis does not hold")
 
 
 @pytest.mark.parametrize(

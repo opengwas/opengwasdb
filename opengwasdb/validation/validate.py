@@ -11,7 +11,6 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb import top_hits
 from opengwasdb.associations import Cells, DenseGridReader, Tally
 from opengwasdb.associations import present as present_cells
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
@@ -29,7 +28,6 @@ from opengwasdb.encoding import (
 from opengwasdb.index.sqlite import get_metadata
 from opengwasdb.layouts.dense.indexed_subsets import validate_indexed_subsets
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.analyses import (
     read_analyses,
 )
@@ -37,7 +35,6 @@ from opengwasdb.model.enums import (
     CompletionState,
     PrimaryStorageLayout,
 )
-from opengwasdb.stats import p_value_from_z
 from opengwasdb.store.arrays import (
     COMPRESSOR_RECORD,
     SHARDED_COMPRESSOR_RECORD,
@@ -799,8 +796,7 @@ def _dense_layout(target: Target, errors: list[str]) -> None:
 
 
 def _overflow(target: Target, errors: list[str]) -> None:
-    """The Dense Component's coverage and the Overflow's variant index, then its
-    Top-Hit Index -- each only once the one before it found nothing."""
+    """The Dense Component's coverage, then the Overflow's variant index."""
     store = target.store
     n_shared = _n_variants(store.path)
     dense_to_shared = np.load(dense_to_shared_path(store.path))
@@ -808,11 +804,6 @@ def _overflow(target: Target, errors: list[str]) -> None:
         store.path, dense_component_path(store.path), dense_to_shared, len(dense_to_shared), errors
     )
     _validate_overflow_index(store.path, n_shared, errors)
-    if errors:
-        return
-    data_root = store.arrays(mode="r")
-    if top_hits.has_index(data_root):
-        _validate_ragged_top_hits(store.path, data_root, errors)
 
 
 def _validate_completion_metadata(
@@ -891,13 +882,12 @@ def _decoded_csr_se(root: Any, encoding: StoreEncoding, n_assoc: int, label: str
 def _validate_ragged_downstream_seams(
     store: OpenGWASDBStore, ragged_path: Path, n_assoc: int, errors: list[str]
 ) -> None:
-    """Seam: the variant index, then Top-Hit Indexes.
+    """Seam: the variant index.
 
-    Both are cross-checked against the CSR only once the rules about the CSR's own
-    arrays and values passed -- both read the CSR and would otherwise "confirm" a
+    It is cross-checked against the CSR only once the rules about the CSR's own
+    arrays and values passed -- it reads the CSR and would otherwise "confirm" a
     store those rules already found broken.
     """
-    data_root = store.arrays(mode="r")
     _validate_variant_index(
         store,
         ragged_path,
@@ -906,8 +896,6 @@ def _validate_ragged_downstream_seams(
         component_label="data.zarr/ragged",
         n_axis=_n_variants(store.path),
     )
-    if not errors and top_hits.has_index(data_root):
-        _validate_ragged_top_hits(store.path, data_root, errors)
 
 
 #: The one source of the index group name, duplicated from the builder module
@@ -1475,103 +1463,6 @@ def _validate_ragged_completion(
         return
     with store.index_connection() as conn:
         _validate_completion_quality_table(conn, n_analyses_csr, errors)
-
-
-_TOP_HIT_SAMPLE_SIZE = 1000  # cross-validate this many sampled entries against the CSR
-
-
-def _sample_csr_positions(
-    key: str,
-    sample: np.ndarray,
-    vis: np.ndarray,
-    ais: np.ndarray,
-    zs: np.ndarray,
-    threshold: float,
-    offsets: np.ndarray,
-    vi_all: np.ndarray,
-    z_all: np.ndarray,
-    errors: list[str],
-) -> list[int]:
-    """Locate each sampled hit in the CSR and check what it claims about it.
-
-    Returns the CSR positions found, which is short of `sample` exactly when a
-    check failed -- the caller uses that to skip the frequency comparison
-    rather than compare against positions it never resolved.
-    """
-    positions: list[int] = []
-    for idx in sample.tolist():
-        ai, vi = int(ais[idx]), int(vis[idx])
-        start, end = int(offsets[ai]), int(offsets[ai + 1])
-        pos = start + int(np.searchsorted(vi_all[start:end], vi))
-        if pos >= end or int(vi_all[pos]) != vi:
-            errors.append(f"top-hit index {key} references missing association")
-            return positions
-        stored_z = float(z_all[pos])
-        if not np.isclose(stored_z, float(zs[idx]), rtol=1e-3, atol=1e-3):
-            errors.append(f"top-hit index {key} z value inconsistent with CSR")
-            return positions
-        if p_value_from_z(stored_z) > threshold:
-            errors.append(f"top-hit index {key} contains association above threshold")
-            return positions
-        positions.append(pos)
-    return positions
-
-
-def _validate_ragged_top_hits(
-    store_path: Path,
-    data_root: Any,
-    errors: list[str],
-) -> None:
-    """Validate the top-hit index groups in a ragged zarr store.
-
-    A tier's arrays and structure are the `top_hits` rules'; a tier failing them
-    is not compared here. CSR cross-validation is sampled to keep validation
-    O(1) for large stores.
-    """
-    top = top_hits.index_group(data_root)
-    csr = RaggedCSRReader(store_path)
-    offsets = csr.offsets
-    vi_all = csr.variant_index(0, csr.sequence_length)
-    z_all = csr.z_all()
-    n_analyses = len(offsets) - 1
-
-    for key in top:
-        group = top[key]
-        if top_hits.missing_arrays(group):
-            continue
-        threshold = top_hits.tier_threshold(key, group, missing=0.0)
-        arrays = top_hits.load_tier_arrays(group)
-        if top_hits.structural_problem(arrays, group, n_analyses, csr.has_imputed):
-            continue
-        vis = arrays["rows"].astype(np.int32)
-        ais = arrays["cols"].astype(np.int32)
-        zs = arrays["z_values"]
-        ses = arrays["se_values"]
-        abs_zs = arrays["abs_z"]
-        eaf = arrays["eaf_values"]
-
-        # Exhaustive: all abs_z must match |z|
-        if not np.allclose(abs_zs, np.abs(zs), rtol=1e-3, atol=1e-3):
-            errors.append(f"top-hit index {key} abs_z inconsistent with z")
-
-        # Sampled cross-validation against the CSR
-        n = len(vis)
-        if n == 0:
-            continue
-        rng = np.random.default_rng(0)
-        sample = rng.choice(n, size=min(_TOP_HIT_SAMPLE_SIZE, n), replace=False)
-        sample_positions = _sample_csr_positions(
-            key, sample, vis, ais, zs, threshold, offsets, vi_all, z_all, errors
-        )
-        if len(sample_positions) == len(sample):
-            expected_se = csr.se_at(np.asarray(sample_positions, dtype=np.int64))
-            # Same tolerance, same reason, as the Dense band check above.
-            if not np.allclose(ses[sample], expected_se, rtol=1e-6, atol=0.0, equal_nan=True):
-                errors.append(f"top-hit index {key} se value inconsistent with decoded CSR se")
-        if eaf is not None and len(sample_positions) == len(sample):
-            expected_eaf = csr.eaf_at(np.asarray(sample_positions, dtype=np.int64))
-            if not np.allclose(eaf[sample], expected_eaf, equal_nan=True):
-                errors.append(f"top-hit index {key} eaf value inconsistent with CSR")
 
 
 def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> None:
