@@ -228,3 +228,42 @@ def test_a_completion_candidate_is_admissible_only_with_finite_z_and_positive_se
     se = np.array([0.1, 0.1, 0.1, 0.0, -0.1, np.nan])
 
     assert admissible(z, se).tolist() == [True, False, False, False, False, False]
+
+
+def test_require_admitted_accepts_what_admission_stores():
+    from opengwasdb.admission import require_admitted
+
+    require_admitted(
+        np.array([1.0, np.nan, -2.0]),
+        np.array([0.1, np.nan, 0.2]),
+        eaf=np.array([0.3, np.nan, 0.9]),
+        imputed=np.array([0, 0, 1], dtype=np.uint8),
+        where="test",
+    )
+
+
+@pytest.mark.parametrize(
+    ("z", "se", "eaf", "imputed", "rule"),
+    [
+        ([1.0], [np.nan], None, None, "one of z and SE missing"),
+        ([np.nan], [0.1], None, None, "one of z and SE missing"),
+        ([np.inf], [0.1], None, None, "infinite z"),
+        ([1.0], [0.0], None, None, "SE not finite and positive"),
+        ([1.0], [-0.1], None, None, "SE not finite and positive"),
+        ([1.0], [0.1], [1.0], None, "frequency outside"),
+        ([1.0], [0.1], [0.0], None, "frequency outside"),
+        ([np.nan], [np.nan], None, [1], "imputed flag on a missing cell"),
+        ([1.0], [0.1], None, [2], "imputed flag neither 0 nor 1"),
+    ],
+)
+def test_require_admitted_refuses_each_broken_rule(z, se, eaf, imputed, rule):
+    from opengwasdb.admission import NotAdmitted, require_admitted
+
+    with pytest.raises(NotAdmitted, match=rf"codec: .*{rule}"):
+        require_admitted(
+            np.array(z),
+            np.array(se),
+            eaf=None if eaf is None else np.array(eaf),
+            imputed=None if imputed is None else np.array(imputed, dtype=np.uint8),
+            where="codec",
+        )
