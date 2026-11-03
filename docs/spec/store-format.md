@@ -398,6 +398,8 @@ Every association MUST be normalised to the Store's canonical allele orientation
 
 If the source effect allele is not canonical `A1`, the builder MUST swap orientation and negate signed statistics. Z is signed and carries effect direction. SE is non-negative.
 
+A source row is oriented in the source's declared assembly. When a lift onto the release's assembly makes the other allele `A1` (a reverse-strand chain block), the row is re-oriented by the same rule: its z is negated again and its effect-allele frequency complemented again. Every layout applies this one model.
+
 Derived beta is:
 
 ```text

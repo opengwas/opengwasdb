@@ -58,9 +58,11 @@ one place Analysis metadata is written, so there is nothing to keep in sync.
 - `docs/spec/store-format.md` needs updating: the release envelope (§1), the
   `analyses` table definition, and the validation rules (§20) all currently
   predate this decision.
-- Ragged/BESD stores (`opengwasdb/layouts/ragged/build_besd.py`) have their own,
-  divergent `analyses` schema with no `stored_effect_scale` at all — bringing them
-  onto this contract is tracked separately (`issues/067-align-ragged-analyses-schema.md`).
+- Ragged/BESD stores (`opengwasdb/layouts/ragged/build_besd.py`) had their own,
+  divergent `analyses` schema with no `stored_effect_scale` at all. They were
+  brought onto this contract by [ADR 0034](0034-unify-analysestsv-across-layouts-retire-phenotype-id.md)
+  (issues #69–#73): every Ragged release carries `analyses.tsv` and no
+  `analyses` table.
 - `completion_quality.analysis_index` becomes a positional reference into
   `analyses.tsv` rather than a SQL foreign key, since SQLite cannot enforce a
   constraint across a file boundary; a validator rule must check this instead of
