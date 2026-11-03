@@ -75,6 +75,7 @@ from opengwasdb.model.enums import (
 from opengwasdb.model.maf_policy import MafState
 from opengwasdb.model.manifest_columns import manifest_column
 from opengwasdb.readers.interface import StreamTally
+from opengwasdb.readers.orientation import swap_one
 from opengwasdb.stats import FrequencyTally
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import add_hit_counts
@@ -1030,9 +1031,7 @@ def _map_probe_rows(
             off_axis.append(f"esi:{int(esi_idx)}")
             continue
         variant_index, flipped = mapping
-        z = beta / se
-        if flipped:
-            z = -z
+        z, _eaf = swap_one(flipped, beta / se, None)
         rows.variant_index.append(variant_index)
         rows.z.append(z)
         rows.se.append(se)

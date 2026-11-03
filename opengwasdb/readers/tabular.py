@@ -25,7 +25,6 @@ from opengwasdb.readers.effect_source import (
     resolve_sample_size_column,
     row_statistics,
 )
-from opengwasdb.readers.gwas_vcf import is_palindromic
 from opengwasdb.readers.interface import (
     ImputationScore,
     ImputationScoreStatus,
@@ -35,6 +34,7 @@ from opengwasdb.readers.interface import (
     SourceVariant,
     parse_imputation_score,
 )
+from opengwasdb.readers.orientation import a1_frequencies, is_palindromic, swap_one
 from opengwasdb.stats import Z_975, inverse_normal_denominators, parse_af
 from opengwasdb.variants.normalise import (
     VariantNormalisationError,
@@ -972,6 +972,10 @@ class MetricsChunk:
     def __len__(self) -> int:
         return int(self.alid.shape[0])
 
+    def a1_frequency(self) -> np.ndarray:
+        """Each row's frequency of its canonical A1, NaN where it reports none."""
+        return a1_frequencies(self.flipped, self.af_alt)
+
 
 #: Every `MetricsChunk` array a reader may leave out entirely, with the value it
 #: is filled with when absent. One list, so the default fill and the alignment
@@ -1520,13 +1524,11 @@ def stream_associations(
         # association. A reader recovers an SE it can (a CI, a p) before this.
         # An infinite reported effect gives an infinite z.
         se = math.nan if row.se is None else row.se
-        z = math.nan if row.beta is None or row.se is None else row.beta / row.se
-        eaf = row.af_alt
-        if row.flipped:
-            z = -z
-            # `af_alt` is the frequency of the source's alt allele; flipping
-            # swapped which allele is stored as the effect one (ADR 0036).
-            eaf = None if eaf is None else 1.0 - eaf
+        z, eaf = swap_one(
+            row.flipped,
+            math.nan if row.beta is None or row.se is None else row.beta / row.se,
+            row.af_alt,
+        )
         yield ReaderAssociation(
             chromosome=row.chromosome,
             position=row.position,
@@ -1564,8 +1566,6 @@ def extract_at_sites(
             continue
         if is_palindromic(row.ref, row.alt):
             continue
-        result[row.alid] = SiteMetrics(
-            af=(1.0 - row.af_alt) if row.flipped else row.af_alt,
-            se=row.se,
-        )
+        _z, af = swap_one(row.flipped, math.nan, row.af_alt)
+        result[row.alid] = SiteMetrics(af=cast(float, af), se=row.se)
     return result

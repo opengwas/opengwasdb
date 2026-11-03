@@ -20,6 +20,7 @@ whatever the `.esi` reports. With no reference the outcome is therefore
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -37,6 +38,7 @@ from opengwasdb.build.eaf_orientation import (
 )
 from opengwasdb.layouts.ragged.besd_reader import SnpRecord
 from opengwasdb.model.enums import EafOrientationMethod, EafOrientationOutcome
+from opengwasdb.readers.orientation import swap_one
 from opengwasdb.stats import parse_af
 from opengwasdb.variants import CanonicalVariant
 
@@ -83,7 +85,7 @@ def stored_esi_frequencies(
             continue
         mapping = esi_to_variant.get(snp.row_idx)
         if mapping is not None:
-            out[snp.row_idx] = 1.0 - frequency if mapping[1] else frequency
+            out[snp.row_idx] = swap_one(mapping[1], math.nan, frequency)[1]
     return EsiFrequencies(out if bool(np.isfinite(out).any()) else None, made_absent)
 
 

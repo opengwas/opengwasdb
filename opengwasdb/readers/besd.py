@@ -24,7 +24,8 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.layouts.ragged.besd_reader import iter_esi, read_besd_probe, read_epi
-from opengwasdb.readers.gwas_vcf import is_palindromic, oriented_variant
+from opengwasdb.readers.gwas_vcf import oriented_variant
+from opengwasdb.readers.orientation import a1_frequencies, is_palindromic
 from opengwasdb.readers.tabular import MetricsChunk
 from opengwasdb.stats import parse_af
 
@@ -83,8 +84,7 @@ class BesdSource:
 
     def a1_frequencies(self) -> np.ndarray:
         """Each row's frequency of its canonical A1, the orientation ancestry reads."""
-        oriented: np.ndarray = np.where(self.flipped, 1.0 - self.af, self.af)
-        return oriented
+        return a1_frequencies(self.flipped, self.af)
 
     def read_probe_metrics(self, probe_id: str) -> MetricsChunk:
         """Read one probe's slice and join it to this file set's variant facts."""

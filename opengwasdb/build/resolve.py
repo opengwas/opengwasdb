@@ -695,7 +695,7 @@ def _admit(observed: MetricsChunk, rules: AnalysisRules) -> tuple[np.ndarray, Ad
     gate = counting_gate(rules)
     keep = gate.source_rows(
         SourceRows(
-            eaf=np.where(observed.flipped, 1.0 - observed.af_alt, observed.af_alt),
+            eaf=observed.a1_frequency(),
             imputation_score=observed.imputation_score,
             imputation_status=observed.imputation_score_status,
         )
@@ -772,7 +772,7 @@ def _accumulate_ancestry(
     """
     usable = np.isfinite(chunk.se) & np.isfinite(chunk.af_alt) & ~chunk.palindromic
     rows = np.flatnonzero(usable)
-    frequencies = np.where(chunk.flipped[rows], 1.0 - chunk.af_alt[rows], chunk.af_alt[rows])
+    frequencies = chunk.a1_frequency()[rows]
     sites = limit.max_ancestry_sites if limit is not None else None
     return _record_panel_frequencies(
         rows, chunk.alid[rows], frequencies, panel, panel_af, sites

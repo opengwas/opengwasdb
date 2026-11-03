@@ -63,6 +63,7 @@ from opengwasdb.readers.interface import (
     StreamTally,
     parse_imputation_score,
 )
+from opengwasdb.readers.orientation import swap_one
 from opengwasdb.readers.tabular import resolve_imputation_score_column
 from opengwasdb.stats import parse_af
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
@@ -261,12 +262,9 @@ def _source_row(
     # when `rsid` is absent (opengwasdb-stores' download-filter step selects
     # both columns when present).
     rsid = _opt(row.get("rsid")) or _opt(row.get("variant_id"))
-    eaf = parse_af(row.get("effect_allele_frequency"), frequencies)
-    if ori.flipped:
-        # The frequency column is the source's effect allele's; the flip made
-        # the *other* allele the stored one, and z follows it (ADR 0036).
-        z = -z
-        eaf = None if eaf is None else 1.0 - eaf
+    # The frequency column is the source's effect allele's; the flip makes the
+    # *other* allele the stored one, and z follows it (ADR 0036).
+    z, eaf = swap_one(ori.flipped, z, parse_af(row.get("effect_allele_frequency"), frequencies))
     score = (
         None if score_column is None
         else parse_imputation_score(row.get(score_column), declared=True)

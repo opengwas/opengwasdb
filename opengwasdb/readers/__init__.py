@@ -31,7 +31,6 @@ from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
 from opengwasdb.readers.gwas_vcf import (
     GWAS_VCF_CAPABILITY,
     GwasVcfReader,
-    is_palindromic,
     load_liftover,
     write_regions_file,
 )
@@ -43,6 +42,7 @@ from opengwasdb.readers.interface import (
     af_only,
     site_metrics_arrays,
 )
+from opengwasdb.readers.orientation import is_palindromic
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
 
 __all__ = [

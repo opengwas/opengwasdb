@@ -15,6 +15,7 @@ import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
+from opengwasdb.readers.orientation import swap_one
 from opengwasdb.stats import FrequencyTally, parse_af
 from opengwasdb.variants.normalise import (
     IdentityFaults,
@@ -154,12 +155,9 @@ def stream_vcf_associations(
             derived = _derive_z(ez_str, es_str, se)
             z = math.nan if derived is None else derived
 
-            eaf = af
-            if identity_allele(alt) > identity_allele(ref):
-                z = -z
-                # ALT is the VCF's effect allele; A1 = min(ref, alt), so the
-                # stored effect allele is REF here and AF must follow (ADR 0036).
-                eaf = None if af is None else 1.0 - af
+            # ALT is the VCF's effect allele; A1 = min(ref, alt), so where ALT
+            # is A2 the stored effect allele is REF and AF follows (ADR 0036).
+            z, eaf = swap_one(identity_allele(alt) > identity_allele(ref), z, af)
 
             yield chrom, int(pos_str), ref, alt, z, se, eaf
     finally:

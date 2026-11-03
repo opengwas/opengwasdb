@@ -35,7 +35,7 @@ from collections.abc import Generator, Iterable, Iterator, KeysView
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING, TextIO
+from typing import TYPE_CHECKING, TextIO, cast
 
 from opengwasdb.build.vcf_source import (
     _derive_z,
@@ -51,6 +51,7 @@ from opengwasdb.readers.interface import (
     SourceVariant,
     StreamTally,
 )
+from opengwasdb.readers.orientation import is_palindromic, swap_one
 from opengwasdb.stats import parse_af
 from opengwasdb.variants.normalise import (
     Orientation,
@@ -62,14 +63,6 @@ if TYPE_CHECKING:
     from opengwasdb.readers.tabular import MetricsChunk, TabularMetricsRow
 
 GWAS_VCF_CAPABILITY = "opengwasdb.gwas-vcf"
-
-# Strand-ambiguous allele pairs: unalignable without strand info, so excluded.
-_PALINDROMES = frozenset({frozenset({"A", "T"}), frozenset({"C", "G"})})
-
-
-def is_palindromic(ref: str, alt: str) -> bool:
-    """True for strand-ambiguous A/T or C/G variants."""
-    return frozenset({ref.upper(), alt.upper()}) in _PALINDROMES
 
 
 def write_regions_file(alids: Iterable[str], path: str | Path) -> Path:
@@ -475,10 +468,8 @@ class GwasVcfReader:
                     alid = orientation.variant.alid
                     if alid not in wanted:
                         continue
-                    out[alid] = SiteMetrics(
-                        af=(1.0 - af) if orientation.flipped else af,
-                        se=se,
-                    )
+                    _z, a1_af = swap_one(orientation.flipped, math.nan, af)
+                    out[alid] = SiteMetrics(af=cast(float, a1_af), se=se)
             finally:
                 proc.stdout.close()  # type: ignore[union-attr]
                 proc.wait()
