@@ -188,6 +188,26 @@ def test_build_dense_rho_round_trips_against_direct_estimation(rho_store_path):
     assert stored_rho == pytest.approx(direct, abs=1e-2)
 
 
+def test_two_rho_defects_are_both_reported(rho_store_path):
+    """A Rho Matrix sized for the wrong Analyses and one that miscounts its variants
+    are two defects; the first no longer hides the second (issue #55)."""
+    build_dense_rho(rho_store_path, window_bp=50, z_thresh=1.0, min_nulls=20, n_workers=1)
+    assert validate_store(rho_store_path).ok
+    group = open_store(rho_store_path).arrays(mode="a")["rho"]
+    used = int(group.attrs["n_variants_used"])
+    group.attrs["n_analyses"] = N_ANALYSES + 1
+    group.attrs["n_variants_used"] = used + 1
+
+    result = validate_store(rho_store_path)
+
+    assert result.failed() == {"rho.analyses", "rho.variants"}
+    assert result.errors == [
+        f"rho group n_analyses attr {N_ANALYSES + 1} does not match "
+        f"analyses.tsv's {N_ANALYSES}",
+        f"rho variant_index has {used} entries but n_variants_used attr says {used + 1}",
+    ]
+
+
 def test_rho_is_nan_exactly_below_min_nulls(rho_store_path):
     build_dense_rho(rho_store_path, window_bp=50, z_thresh=1.0, min_nulls=20, n_workers=1)
 

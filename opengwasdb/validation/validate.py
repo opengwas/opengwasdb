@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
@@ -21,9 +20,6 @@ from opengwasdb.model.analyses import (
 )
 from opengwasdb.model.enums import (
     PrimaryStorageLayout,
-)
-from opengwasdb.store.arrays import (
-    array_length,
 )
 from opengwasdb.store.open import (
     OpenGWASDBStore,
@@ -51,6 +47,7 @@ from opengwasdb.validation.rules import encoding as encoding_rules
 from opengwasdb.validation.rules import hybrid as hybrid_rules
 from opengwasdb.validation.rules import layout as layout_rules
 from opengwasdb.validation.rules import release as release_rules
+from opengwasdb.validation.rules import rho as rho_rules
 from opengwasdb.validation.rules import sample_size as sample_size_rules
 from opengwasdb.validation.rules import sequence as sequence_rules
 from opengwasdb.validation.rules import side_tables as side_table_rules
@@ -180,12 +177,23 @@ def _component_opens(target: Target) -> Iterator[str]:
         )
 
 
-def _legacy_rho(target: Target, errors: list[str], _warnings: list[str]) -> None:
-    _dense_rho(target, errors)
+def _indexed_subsets(target: Target) -> Iterator[str]:
+    """Every published Indexed Variant Subset is self-consistent and value-equal.
 
-
-def _legacy_subsets(target: Target, errors: list[str], _warnings: list[str]) -> None:
-    _dense_subsets(target, errors)
+    The rules are the ones the build's publication gate runs on a subset before
+    publishing it, there over a deterministic sample and here over every cell
+    (#270).
+    """
+    errors: list[str] = []
+    store = target.store
+    n_variants, n_analyses = grid_counts(target)
+    # The optional indexed-subset namespace (ADR 0061, #264).  A release without it
+    # stays valid and unchanged; a release with it must hold only published,
+    # self-consistent, value-equal subsets.
+    validate_indexed_subsets(
+        store.path, target.group, store.manifest, n_variants, n_analyses, errors
+    )
+    yield from errors
 
 
 def _top_level_dense_grid(target: Target) -> bool:
@@ -246,9 +254,9 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
     *top_hit_rules.VALUE_RULES,
     by_variant_rules.SAMPLE,
     *completion_rules.METADATA_RULES,
-    _Legacy(name="legacy.rho", kinds=Kind.GRID, after=(REQUIRED,), run=_legacy_rho),
+    *rho_rules.RULES,
     *layout_rules.RULES,
-    _Legacy(name="legacy.subsets", kinds=Kind.GRID, after=(REQUIRED,), run=_legacy_subsets),
+    Check(name="subsets.indexed", kinds=Kind.GRID, after=(REQUIRED,), run=_indexed_subsets),
     *analyses_rules.ORIENTATION_RULES,
 )
 
@@ -256,13 +264,13 @@ RULES: tuple[Rule, ...] = check_registry(
     [
         *_BEFORE_FIDELITY,
         Check(
-            name="legacy.fidelity_unsupported",
+            name="fidelity.unsupported",
             kinds=Kind.RELEASE,
             when=lambda target: _source_given(target) and _not_dense(target),
             run=_fidelity_unsupported,
         ),
         Check(
-            name="legacy.fidelity",
+            name="fidelity.source",
             kinds=Kind.GRID,
             when=lambda target: _source_given(target) and _top_level_dense_grid(target),
             after=tuple(r.name for r in _BEFORE_FIDELITY if r.severity is Severity.ERROR),
@@ -270,23 +278,6 @@ RULES: tuple[Rule, ...] = check_registry(
         ),
     ]
 )
-
-
-def _dense_rho(target: Target, errors: list[str]) -> None:
-    """The optional Rho Matrix against `analyses.tsv`."""
-    _validate_rho(target.group, grid_counts(target)[1], errors)
-
-
-def _dense_subsets(target: Target, errors: list[str]) -> None:
-    """Any Indexed Variant Subsets."""
-    store = target.store
-    n_variants, n_analyses = grid_counts(target)
-    # The optional indexed-subset namespace (ADR 0061, #264).  A release without it
-    # stays valid and unchanged; a release with it must hold only published,
-    # self-consistent, value-equal subsets.
-    validate_indexed_subsets(
-        store.path, target.group, store.manifest, n_variants, n_analyses, errors
-    )
 
 
 def _load_manifest(store_path: Path, errors: list[str]) -> OpenGWASDBStore | None:
@@ -305,75 +296,6 @@ def _load_manifest(store_path: Path, errors: list[str]) -> OpenGWASDBStore | Non
     return None
 
 
-
-
-_RHO_REQUIRED_ATTRS = (
-    "z_thresh",
-    "min_nulls",
-    "grid_n",
-    "window_bp",
-    "n_variants_used",
-    "observed_only",
-    "method",
-    "n_analyses",
-)
-
-
-def _validate_rho(root: Any, n_analyses: int, errors: list[str]) -> None:
-    """Validate the optional ``data.zarr/rho`` group when present (PRD
-    "Validation", issue 049). A store without it stays valid unchanged --
-    Rho is opt-in, add-in-place metadata (ADR 0025), not association data.
-    Structural/consistency only: this does not re-run the estimator.
-    """
-    if "rho" not in root:
-        return
-    group = root["rho"]
-
-    missing_attrs = [a for a in _RHO_REQUIRED_ATTRS if a not in group.attrs]
-    if missing_attrs:
-        errors.append(f"rho group is missing provenance attrs: {', '.join(missing_attrs)}")
-        return
-    for name in ("rho", "n_null", "variant_index"):
-        if name not in group:
-            errors.append(f"rho group is missing data.zarr/rho/{name}")
-    if errors:
-        return
-
-    attr_n_analyses = int(group.attrs["n_analyses"])
-    if attr_n_analyses != n_analyses:
-        errors.append(
-            f"rho group n_analyses attr {attr_n_analyses} does not match "
-            f"analyses.tsv's {n_analyses}"
-        )
-        return
-
-    expected_len = n_analyses * (n_analyses - 1) // 2
-    rho_vals = np.asarray(group["rho"][:], dtype=np.float32)
-    n_null_vals = np.asarray(group["n_null"][:], dtype=np.int64)
-    if len(rho_vals) != expected_len:
-        errors.append(f"rho array has {len(rho_vals)} entries but expected {expected_len}")
-    if len(n_null_vals) != expected_len:
-        errors.append(f"n_null array has {len(n_null_vals)} entries but expected {expected_len}")
-    if errors:
-        return
-
-    min_nulls = int(group.attrs["min_nulls"])
-    finite = np.isfinite(rho_vals)
-    should_be_finite = n_null_vals >= min_nulls
-    if not np.array_equal(finite, should_be_finite):
-        errors.append(f"rho finiteness is inconsistent with n_null support (min_nulls={min_nulls})")
-    if finite.any():
-        vals = rho_vals[finite]
-        if np.any(vals < -1.0) or np.any(vals > 1.0):
-            errors.append("rho contains values outside [-1, 1]")
-
-    n_variants_used = int(group.attrs["n_variants_used"])
-    variant_index = group["variant_index"]
-    if array_length(variant_index) != n_variants_used:
-        errors.append(
-            f"rho variant_index has {array_length(variant_index)} entries but "
-            f"n_variants_used attr says {n_variants_used}"
-        )
 
 
 # ── Source-fidelity check ────────────────────────────────────────────────────
