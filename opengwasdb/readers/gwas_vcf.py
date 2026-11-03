@@ -363,12 +363,26 @@ def _identity(
     return chrom if invalid is None else invalid
 
 
+def _oriented(chrom: str, pos: str, effect: str, other: str) -> tuple[int, str, bool] | None:
+    """``(position, alid, flipped)`` of a record whose identity is judged, or ``None``
+    for an unparseable position or one allele spelt twice."""
+    position = _position(pos)
+    if position is None:
+        return None
+    oriented = oriented_alid(chrom, position, effect, other)
+    return None if oriented is None else (position, *oriented)
+
+
 def _position(cell: str) -> int | None:
     try:
         position = int(cell)
     except ValueError:
         return None
     return position if position > 0 else None
+
+
+#: How bcftools prints a missing value, and an empty cell.
+_MISSING_CELLS = frozenset({".", ""})
 
 
 def _parse_float(s: str) -> float | None:
@@ -389,9 +403,13 @@ def _derive_z(ez_str: str, es_str: str, se: float | None) -> float | None:
     reading as no effect. A NaN reports nothing. ``se`` is the record's usable
     SE, or ``None``.
     """
-    ez = _parse_float(ez_str)
-    if ez is not None and not math.isnan(ez):
-        return ez
+    if ez_str not in _MISSING_CELLS:
+        try:
+            ez = float(ez_str)
+        except ValueError:
+            ez = math.nan
+        if ez == ez:  # not NaN
+            return ez
     es = _parse_float(es_str)
     if es is not None and not math.isnan(es) and se is not None:
         return es / se
@@ -453,22 +471,21 @@ def _record_rows(
     tally = tally or StreamTally()
     query_format = _record_query_format(_format_tags(path))
     with contextlib.closing(_query(path, query_format, _RECORD_FIELDS, restriction)) as records:
-        if sites:
-            # A site extraction's frequencies are not the stream's to count (D7).
-            yield from _rows_of(filter(_usable_site, records), tally.faults, None, liftover)
+        # A site extraction's frequencies are not the stream's to count (D7).
+        frequencies = None if sites else tally.frequencies
+        rows = filter(_usable_site, records) if sites else records
+        if liftover is None:
+            yield from _rows_of(rows, tally.faults, frequencies)
         else:
-            yield from _rows_of(records, tally.faults, tally.frequencies, liftover)
+            yield from _lifted_rows_of(rows, tally.faults, frequencies, liftover)
 
 
 def _rows_of(
-    records: Iterable[list[str]],
-    faults: IdentityFaults,
-    frequencies: FrequencyTally | None,
-    liftover: object | None,
+    records: Iterable[list[str]], faults: IdentityFaults, frequencies: FrequencyTally | None
 ) -> Iterator[SourceRow]:
+    """Each record's row in its own coordinates: Pass 2's per-record path."""
     chromosomes: dict[str, str] = {}
-    for cells in records:
-        chrom_raw, pos, id_field, ref, alt, ez, es, se_cell, af_cell = cells
+    for chrom_raw, pos, id_field, ref, alt, ez, es, se_cell, af_cell in records:
         if "," in alt:
             continue
         # A one-base pair on a chromosome already seen is the common record.
@@ -479,12 +496,39 @@ def _rows_of(
                 faults.record(f"{chrom_raw}:{pos}:{ref}:{alt}", identity)
                 continue
             chrom = identity
-        placed = _placed(liftover, chrom, chrom_raw, pos, ref, alt)
-        if placed is None:
+        oriented = _oriented(chrom, pos, alt, ref)
+        if oriented is None:
             continue
         se = _parse_positive_float(se_cell)
         yield _row(
-            *placed, parse_af(af_cell, frequencies), se, _derive_z(ez, es, se), id_field
+            chrom, oriented[0], ref, alt, oriented[1], oriented[2],
+            parse_af(af_cell, frequencies), se, _derive_z(ez, es, se), id_field,
+        )
+
+
+def _lifted_rows_of(
+    records: Iterable[list[str]],
+    faults: IdentityFaults,
+    frequencies: FrequencyTally | None,
+    liftover: object,
+) -> Iterator[SourceRow]:
+    """Each record's row lifted onto the reference build (`oriented_variant`)."""
+    chromosomes: dict[str, str] = {}
+    for chrom_raw, pos, id_field, ref, alt, ez, es, se_cell, af_cell in records:
+        if "," in alt:
+            continue
+        identity = _identity(chromosomes, chrom_raw, ref, alt)
+        if isinstance(identity, MalformedIdentity):
+            faults.record(f"{chrom_raw}:{pos}:{ref}:{alt}", identity)
+            continue
+        orientation = oriented_variant(liftover, chrom_raw, pos, alt, ref)
+        if orientation is None:
+            continue
+        variant = orientation.variant
+        se = _parse_positive_float(se_cell)
+        yield _row(
+            variant.chromosome, variant.position, ref, alt, variant.alid, orientation.flipped,
+            parse_af(af_cell, frequencies), se, _derive_z(ez, es, se), id_field,
         )
 
 
@@ -497,29 +541,6 @@ def _usable_site(cells: list[str]) -> bool:
         and parse_af(af_cell) is not None
         and not is_palindromic(ref, alt)
     )
-
-
-def _placed(
-    liftover: object | None, chrom: str, chrom_raw: str, pos: str, ref: str, alt: str
-) -> tuple[str, int, str, str, str, bool] | None:
-    """``(chromosome, position, ref, alt, alid, flipped)`` of one record, or ``None``.
-
-    Its own coordinate, or with ``liftover`` the lifted one, oriented by
-    `variants.normalise`'s rule; ``ref``/``alt`` stay the file's spelling.
-    """
-    if liftover is not None:
-        orientation = oriented_variant(liftover, chrom_raw, pos, alt, ref)
-        if orientation is None:
-            return None
-        variant = orientation.variant
-        return (
-            variant.chromosome, variant.position, ref, alt, variant.alid, orientation.flipped
-        )
-    position = _position(pos)
-    oriented = None if position is None else oriented_alid(chrom, position, alt, ref)
-    if position is None or oriented is None:
-        return None
-    return chrom, position, ref, alt, *oriented
 
 
 def _variants(path: str | Path) -> Iterator[SourceVariant]:
