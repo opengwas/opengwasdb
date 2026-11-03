@@ -9,7 +9,10 @@ once for every probe.
 
 from __future__ import annotations
 
+import dataclasses
 import gzip
+import inspect
+from dataclasses import replace
 from pathlib import Path
 from subprocess import run
 
@@ -20,13 +23,19 @@ from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers import ReferenceAllele
 from opengwasdb.readers.assembly import AssemblyPlan, assembly_plan
 from opengwasdb.readers.besd import BESD_CAPABILITY, BesdProbeReader, load_besd_source
-from opengwasdb.readers.column_map import load_column_map
+from opengwasdb.readers.column_map import COLUMN_MAP_CAPABILITY, load_column_map
 from opengwasdb.readers.column_map_reader import ColumnMapReader
 from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY, FinnGenR13Reader
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader
-from opengwasdb.readers.interface import SourceReader, StreamTally
+from opengwasdb.readers.interface import (
+    ImputationScoreDeclaration,
+    ImputationScoreKind,
+    SourceReader,
+    StreamTally,
+)
 from opengwasdb.readers.registry import SourceSpec, open_source, resolve_reader
+from opengwasdb.readers.rows import ReaderBatch, SourceRow, stream_associations, stream_batches
 from opengwasdb.variants.routing.table import (
     REFERENCE_SECOND,
     REFERENCE_UNKNOWN,
@@ -248,3 +257,143 @@ def test_every_probe_shares_one_read_of_the_esi(tmp_path: Path) -> None:
     assert first.source is second.source is load_besd_source(prefix)
     (batch,) = second.stream_batches()
     np.testing.assert_allclose(batch.z, [-2.0])
+
+
+class _ReverseStrandLift:
+    """A chain that maps every position 1,000 bp on, onto the reverse strand."""
+
+    def convert_coordinate(self, chrom: str, pos0: int) -> list[tuple[str, int, str, float]]:
+        return [(chrom, pos0 + 1000, "-", 1.0)]
+
+
+def test_a_lifted_besd_reader_keeps_each_projections_z_on_its_own_alleles(
+    tmp_path: Path,
+) -> None:
+    """The associations and batches stay in the `.esi`'s assembly; the metric
+    blocks and sites are on the reference build. A reverse-strand lift makes
+    the other allele A1, so the two orientations' z differ in sign."""
+    prefix = tmp_path / "lifted"
+    write_esi(Path(f"{prefix}.esi"), [
+        {"chr": "1", "snp_id": "rs1", "bp": 100, "a1": "G", "a2": "A", "freq": "0.2"},
+    ])
+    write_epi(Path(f"{prefix}.epi"), [{"chr": "1", "probe_id": "P1", "bp": 1000}])
+    write_besd_sparse_3f(Path(f"{prefix}.besd"), 1, [[(0, 0.5, 0.1)]])
+    reader = resolve_reader(
+        BESD_CAPABILITY, prefix, StoredEffectScale.SD, liftover=_ReverseStrandLift(),
+        probe_id="P1",
+    )
+    # In the .esi's assembly the effect allele G is A2 of A/G: z is negated.
+    (association,) = reader.stream_associations()
+    assert (association.position, association.ref, association.alt) == (100, "A", "G")
+    assert association.z == pytest.approx(-5.0)
+    assert association.eaf == pytest.approx(0.8)
+    (batch,) = reader.stream_batches()
+    assert batch.alid.tolist() == ["1:100:A:G"]
+    np.testing.assert_allclose(batch.z, [-5.0])
+    # Lifted, G/A reads C/T on the forward strand, and the effect allele C is A1.
+    (chunk,) = reader.stream_metric_chunks()
+    assert chunk.alid.tolist() == ["1:1100:C:T"]
+    assert chunk.flipped.tolist() == [False]
+    np.testing.assert_allclose(chunk.a1_frequency(), [0.2])
+    assert reader.extract_at_sites({"1:1100:C:T"})["1:1100:C:T"].af == pytest.approx(0.2)
+
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _declared_readers(tmp_path: Path) -> dict[str, tuple[SourceReader, ReferenceAllele]]:
+    """Every registered capability, and every Column Map, with the reference
+    declaration its format makes (ADR 0072): stated here, not read off a reader."""
+    scale = StoredEffectScale.SD
+    return {
+        "gwas-vcf": (
+            resolve_reader(GWAS_VCF_CAPABILITY, _indexed(_vcf(tmp_path)), scale),
+            ReferenceAllele.REF,
+        ),
+        "gwas-ssf": (
+            resolve_reader(GWAS_SSF_CAPABILITY, _ssf(tmp_path), scale), ReferenceAllele.UNDECLARED
+        ),
+        "finngen-r13": (
+            resolve_reader(FINNGEN_R13_CAPABILITY, _finngen(tmp_path), scale), ReferenceAllele.REF
+        ),
+        "besd": (
+            resolve_reader(BESD_CAPABILITY, _besd(tmp_path), scale, probe_id="P1"),
+            ReferenceAllele.UNDECLARED,
+        ),
+        "column-map gwas-ssf": (
+            resolve_reader(
+                COLUMN_MAP_CAPABILITY, _ssf(tmp_path), scale, column_map=load_column_map("gwas-ssf")
+            ),
+            ReferenceAllele.UNDECLARED,
+        ),
+        "column-map finngen-r13": (
+            resolve_reader(
+                COLUMN_MAP_CAPABILITY, _finngen(tmp_path), scale,
+                column_map=load_column_map("finngen-r13"),
+            ),
+            ReferenceAllele.REF,
+        ),
+        "column-map mvp-gia": (
+            resolve_reader(
+                COLUMN_MAP_CAPABILITY, _FIXTURES / "dbgap_mvp" / "raw" / "continuous.tsv", scale,
+                column_map=load_column_map(_FIXTURES / "dbgap_mvp" / "mvp-gia.toml"),
+            ),
+            ReferenceAllele.UNDECLARED,
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "gwas-vcf", "gwas-ssf", "finngen-r13", "besd", "column-map gwas-ssf",
+        "column-map finngen-r13", "column-map mvp-gia",
+    ],
+)
+def test_every_reader_carries_its_one_reference_declaration(tmp_path: Path, name: str) -> None:
+    reader, declared = _declared_readers(tmp_path)[name]
+    associations = list(reader.stream_associations())
+    batches = list(reader.stream_batches())
+    assert associations and sum(len(batch) for batch in batches) == len(associations)
+    assert {a.reference for a in associations} == {declared}
+    assert {batch.reference for batch in batches} == {declared}
+
+
+def test_the_presenters_and_the_batch_take_the_declaration_without_a_default() -> None:
+    """A reader that forgot its declaration would otherwise pass the default's."""
+    for presenter in (stream_associations, stream_batches):
+        reference = inspect.signature(presenter).parameters["reference"]
+        assert reference.default is inspect.Parameter.empty
+    (field,) = (f for f in dataclasses.fields(ReaderBatch) if f.name == "reference")
+    assert field.default is dataclasses.MISSING
+
+
+def test_a_batch_declaring_a_reference_needs_each_rows_allele_order() -> None:
+    """Without `ref_first`, a declared batch would give every row
+    `REFERENCE_UNKNOWN`, and a reversed indel could not be told apart."""
+    row = SourceRow(
+        chromosome="1", position=200, ref="GGGGCC", alt="G", alid="1:200:G:GGGGCC",
+        flipped=False, af_alt=None, beta=0.4, se=0.2,
+    )
+    (batch,) = stream_batches([row], ReferenceAllele.REF)
+    assert batch.reference_codes().tolist() == [REFERENCE_SECOND]
+    with pytest.raises(ValueError, match="needs each row's ref_first"):
+        replace(batch, ref_first=None)
+
+
+def test_a_besd_probe_refuses_a_column_map_and_a_score_declaration(tmp_path: Path) -> None:
+    """A BESD reader reads neither, so either one is refused, not ignored."""
+    prefix = _besd(tmp_path)
+    with pytest.raises(ValueError, match="a Column Map reads only"):
+        resolve_reader(
+            BESD_CAPABILITY, prefix, StoredEffectScale.SD, probe_id="P1",
+            column_map=load_column_map("gwas-ssf"),
+        )
+    declaration = ImputationScoreDeclaration(
+        "info", ImputationScoreKind.IMPUTATION_INFO, "provider documentation"
+    )
+    with pytest.raises(ValueError, match="imputation score declaration unsupported"):
+        resolve_reader(
+            BESD_CAPABILITY, prefix, StoredEffectScale.SD, probe_id="P1",
+            imputation_score_declaration=declaration,
+        )

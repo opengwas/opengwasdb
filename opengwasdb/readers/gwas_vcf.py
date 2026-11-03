@@ -65,6 +65,8 @@ from opengwasdb.variants.normalise import (
 )
 
 GWAS_VCF_CAPABILITY = "opengwasdb.gwas-vcf"
+#: GWAS-VCF's REF is the genome's reference allele, on every record.
+_REFERENCE = ReferenceAllele.REF
 
 
 def write_regions_file(alids: Iterable[str], path: str | Path) -> Path:
@@ -613,13 +615,12 @@ class GwasVcfReader:
             raise ValueError(f"chunk_rows must be positive, got {self.chunk_rows!r}")
 
     def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
-        # GWAS-VCF's REF is the reference allele.
         with contextlib.closing(_record_rows(self.path, tally=tally)) as rows:
-            yield from stream_associations(rows, self.stored_effect_scale, ReferenceAllele.REF)
+            yield from stream_associations(rows, self.stored_effect_scale, _REFERENCE)
 
     def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
         with contextlib.closing(_record_rows(self.path, tally=tally)) as rows:
-            yield from stream_batches(rows, ReferenceAllele.REF, chunk_rows=self.chunk_rows)
+            yield from stream_batches(rows, _REFERENCE, chunk_rows=self.chunk_rows)
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         yield from _variants(self.path)

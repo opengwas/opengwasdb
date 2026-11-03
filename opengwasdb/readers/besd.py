@@ -128,12 +128,16 @@ class BesdSource:
 
     def read_probe_metrics(self, probe_id: str) -> MetricsChunk:
         """Read one probe's slice and join it to this file set's variant facts."""
+        return self.probe_metrics(probe_id)[1]
+
+    def probe_metrics(self, probe_id: str) -> tuple[np.ndarray, MetricsChunk]:
+        """One probe's metrics block, and the `.esi` row each of its rows is at."""
         rows, betas, ses = self.probe_rows(probe_id)
         keep = self.has_canonical_variant[rows]
         rows = rows[keep]
         beta = betas[keep].astype(np.float64)
         se = ses[keep].astype(np.float64)
-        return MetricsChunk(
+        return rows, MetricsChunk(
             alid=self.alid[rows],
             flipped=self.flipped[rows],
             palindromic=self.palindromic[rows],
@@ -263,6 +267,11 @@ def _probe_rows(epi: Path) -> dict[str, int]:
     return probes
 
 
+#: A BESD names an effect allele `a1` and another `a2`, and declares neither
+#: the genome's reference: every projection of every probe carries this.
+_REFERENCE = interface.ReferenceAllele.UNDECLARED
+
+
 @dataclass(frozen=True)
 class BesdProbeReader:
     """The Source Reader for one probe of a BESD file set: one Analysis.
@@ -270,10 +279,16 @@ class BesdProbeReader:
     Every projection reads the probe's own `.besd` slice and joins it to the
     file set's shared `BesdSource`. A row at a `.esi` row whose identity is
     malformed is left out of every projection, and named in a stream's
-    ``tally`` (#365); one whose variant does not orient is left out. A BESD
-    names an effect allele `a1` and another `a2`, and declares neither the
-    genome's reference (`ReferenceAllele.UNDECLARED`); an association's `alt`
-    is `a1` and its `ref` `a2`, as a GWAS-VCF's ALT is its effect allele.
+    ``tally`` (#365); one whose variant does not orient is left out. An
+    association's `alt` is the `.esi`'s `a1` and its `ref` `a2`, as a
+    GWAS-VCF's ALT is its effect allele; neither is declared the reference.
+
+    The variants, associations and batches are the file set's own, oriented in
+    its declared assembly (`source`, read once per process from ``prefix``).
+    ``aligned``, given, is the same file set lifted onto the reference build:
+    the metric blocks and sites are read from it, as every reader opened with
+    a lift presents its annotation projections. Each projection's z and
+    frequency are therefore on the A1 of the alleles it reports.
 
     The metrics projection follows the tabular usability rule -- a finite beta;
     a finite, positive SE -- and is `NaN` otherwise; the association
@@ -286,13 +301,31 @@ class BesdProbeReader:
     refuses to stream without one rather than assume it.
     """
 
-    source: BesdSource
+    prefix: str | Path
     probe_id: str
     stored_effect_scale: StoredEffectScale | None = None
+    aligned: BesdSource | None = None
+
+    def __post_init__(self) -> None:
+        if self.aligned is not None and self.aligned.prefix != Path(self.prefix).resolve():
+            raise ValueError(
+                f"BESD probe {self.probe_id!r}: the aligned file set {self.aligned.prefix} "
+                f"is not {self.prefix}"
+            )
+
+    @cached_property
+    def source(self) -> BesdSource:
+        """The file set in its declared assembly (`load_besd_source`, read once)."""
+        return load_besd_source(self.prefix)
+
+    @property
+    def annotated(self) -> BesdSource:
+        """The file set the metric blocks and sites are read from."""
+        return self.source if self.aligned is None else self.aligned
 
     def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
         """The probe's associations as one block: a cis probe has a few thousand."""
-        yield self.source.read_probe_metrics(self.probe_id)
+        yield self.annotated.read_probe_metrics(self.probe_id)
 
     def stream_batches(
         self, tally: interface.StreamTally | None = None
@@ -324,7 +357,7 @@ class BesdProbeReader:
             imputation_score=np.full(len(rows), np.nan),
             imputation_status=np.full(len(rows), _UNDECLARED_SCORE, dtype=object),
             rsid=np.array([s if s.startswith("rs") else "" for s in snp_ids], dtype=object),
-            reference=interface.ReferenceAllele.UNDECLARED,
+            reference=_REFERENCE,
             key_prefix="esi:",
         )
 
@@ -368,7 +401,7 @@ class BesdProbeReader:
                     se=se,
                     stored_effect_scale=self.stored_effect_scale,
                     eaf=None if math.isnan(eaf) else eaf,
-                    reference=interface.ReferenceAllele.UNDECLARED,
+                    reference=batch.reference,
                 )
 
     def stream_variants(self) -> Iterator[interface.SourceVariant]:
@@ -396,14 +429,16 @@ class BesdProbeReader:
         A `.besd` cannot be read by position, so ``regions_file`` reads nothing less.
         """
         wanted = set(alids)
-        chunk = self.source.read_probe_metrics(self.probe_id)
+        rows, chunk = self.annotated.probe_metrics(self.probe_id)
         usable = np.isfinite(chunk.se) & np.isfinite(chunk.af_alt) & ~chunk.palindromic
-        chromosome = None if region is None else normalise_chromosome(region)
-        result: dict[str, interface.SiteMetrics] = {}
-        for alid, af, se in zip(
-            chunk.alid[usable].tolist(), chunk.a1_frequency()[usable].tolist(),
-            chunk.se[usable].tolist(), strict=True,
-        ):
-            if alid in wanted and (chromosome is None or alid.split(":", 1)[0] == chromosome):
-                result[alid] = interface.SiteMetrics(af=af, se=se)
-        return result
+        if region is not None:
+            # The chromosome the `.esi` names the row on, as for every reader.
+            usable &= self.source.chromosome[rows] == normalise_chromosome(region)
+        return {
+            alid: interface.SiteMetrics(af=af, se=se)
+            for alid, af, se in zip(
+                chunk.alid[usable].tolist(), chunk.a1_frequency()[usable].tolist(),
+                chunk.se[usable].tolist(), strict=True,
+            )
+            if alid in wanted
+        }

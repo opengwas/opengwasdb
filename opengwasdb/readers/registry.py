@@ -65,6 +65,11 @@ _LIFTING: dict[str, Callable[[str | Path, StoredEffectScale, object], SourceRead
 }
 
 
+#: The capabilities that read a declared imputation score column (#175): the
+#: GWAS-SSF reader, and the Column Map reader that reads by its rules.
+_SCORED = frozenset({GWAS_SSF_CAPABILITY, COLUMN_MAP_CAPABILITY})
+
+
 def requires_probe_id(capability: str) -> bool:
     """Whether a capability's source holds many Analyses, one per named probe.
 
@@ -108,20 +113,77 @@ def resolve_reader(
     Raises ValueError for an unknown capability, naming the ones this
     package knows about.
     """
-    if requires_probe_id(capability) or probe_id is not None:
-        return _probe_reader(capability, path, stored_effect_scale, probe_id, liftover)
+    _refuse_unhonoured(
+        capability,
+        column_map=column_map,
+        imputation_score_declaration=imputation_score_declaration,
+        liftover=liftover,
+        probe_id=probe_id,
+    )
+    if requires_probe_id(capability):
+        return _probe_reader(path, stored_effect_scale, probe_id, liftover)
     if stored_effect_scale is None:
         raise ValueError(f"a {capability!r} source needs its Analysis's stored_effect_scale")
     if liftover is not None:
-        return _lifted_reader(
-            capability, path, stored_effect_scale, imputation_score_declaration,
-            column_map, liftover,
-        )
+        return _LIFTING[capability](path, stored_effect_scale, liftover)
     if column_map is not None:
-        return _column_map_reader(
-            capability, path, stored_effect_scale, imputation_score_declaration, column_map
+        return ColumnMapReader(
+            path, column_map, stored_effect_scale,
+            imputation_score_declaration=imputation_score_declaration,
         )
     return _registered_reader(capability, path, stored_effect_scale, imputation_score_declaration)
+
+
+def _refuse_unhonoured(
+    capability: str,
+    *,
+    column_map: ColumnMap | None,
+    imputation_score_declaration: ImputationScoreDeclaration | None,
+    liftover: object | None,
+    probe_id: str | None,
+) -> None:
+    """Refuse, before any reader is opened, what ``capability`` cannot honour.
+
+    Each of these is a declaration about how to read the source; a reader that
+    went on without it would read the source some other way than declared.
+    """
+    if capability not in _READERS:
+        known = ", ".join(known_capabilities()) or "(none registered)"
+        raise ValueError(f"unknown source reader capability {capability!r}; known: {known}")
+    declared = {
+        "column_map": column_map,
+        "imputation_score_declaration": imputation_score_declaration,
+        "liftover": liftover,
+        "probe_id": probe_id,
+    }
+    for name, value in declared.items():
+        honoured_by, refusal = _HONOURED[name]
+        if value is not None and capability not in honoured_by():
+            raise ValueError(refusal.format(capability=capability, value=value))
+
+
+#: Each declaration `resolve_reader` takes: the capabilities that honour it,
+#: and how one that cannot is refused.
+_HONOURED: dict[str, tuple[Callable[[], frozenset[str]], str]] = {
+    "column_map": (
+        lambda: frozenset({COLUMN_MAP_CAPABILITY}),
+        f"a Column Map reads only {COLUMN_MAP_CAPABILITY!r} sources, not {{capability!r}}",
+    ),
+    "imputation_score_declaration": (
+        lambda: _SCORED,
+        "imputation score declaration unsupported by {capability!r}",
+    ),
+    "liftover": (
+        lambda: frozenset(_LIFTING),
+        "source reader capability {capability!r} cannot lift its source onto the reference "
+        f"build; capabilities that can: {', '.join(sorted(_LIFTING))}",
+    ),
+    "probe_id": (
+        lambda: frozenset({BESD_CAPABILITY}),
+        f"{{capability!r}} sources hold one Analysis each; only {BESD_CAPABILITY!r} names a "
+        "probe, not {value!r}",
+    ),
+}
 
 
 def _registered_reader(
@@ -131,20 +193,11 @@ def _registered_reader(
     imputation_score_declaration: ImputationScoreDeclaration | None,
 ) -> SourceReader:
     """`resolve_reader` for a capability read by its own registered factory."""
-    try:
-        reader_factory = _READERS[capability]
-    except KeyError:
-        known = ", ".join(known_capabilities()) or "(none registered)"
-        raise ValueError(
-            f"unknown source reader capability {capability!r}; known: {known}"
-        ) from None
     # Built first, so a capability that cannot be read as given (a mapped one
     # without its map) says so before anything else is said about it.
-    reader = reader_factory(path, stored_effect_scale)
+    reader = _READERS[capability](path, stored_effect_scale)
     if imputation_score_declaration is None:
         return reader
-    if capability != GWAS_SSF_CAPABILITY:
-        raise ValueError(f"imputation score declaration unsupported by {capability!r}")
     return GwasSsfReader(
         path, stored_effect_scale, imputation_score_declaration=imputation_score_declaration
     )
@@ -218,56 +271,20 @@ def lifting_capabilities() -> frozenset[str]:
 
 
 def _probe_reader(
-    capability: str,
     path: str | Path,
     stored_effect_scale: StoredEffectScale | None,
     probe_id: str | None,
     liftover: object | None,
 ) -> SourceReader:
-    """One probe's reader of a multi-Analysis file set, its `.esi` read once."""
-    if not requires_probe_id(capability):
-        raise ValueError(
-            f"{capability!r} sources hold one Analysis each; only {BESD_CAPABILITY!r} "
-            f"names a probe, not {probe_id!r}"
-        )
+    """One probe's reader of a multi-Analysis file set, its `.esi` read once.
+
+    Opened lifted, its metric blocks and sites are read from the file set
+    lifted onto the reference build; its associations stay in the file set's
+    own assembly, as every reader's do.
+    """
     if probe_id is None:
         return _needs_probe_id(path, StoredEffectScale.SD)
-    return BesdProbeReader(load_besd_source(path, liftover=liftover), probe_id, stored_effect_scale)
-
-
-def _lifted_reader(
-    capability: str,
-    path: str | Path,
-    stored_effect_scale: StoredEffectScale,
-    imputation_score_declaration: ImputationScoreDeclaration | None,
-    column_map: ColumnMap | None,
-    liftover: object,
-) -> SourceReader:
-    """`resolve_reader` for a reader opened lifted; refused where it cannot lift."""
-    factory = _LIFTING.get(capability)
-    if factory is None:
-        raise ValueError(
-            f"source reader capability {capability!r} cannot lift its source onto the "
-            f"reference build; capabilities that can: {', '.join(sorted(_LIFTING))}"
-        )
-    if imputation_score_declaration is not None or column_map is not None:
-        raise ValueError(f"{capability!r} reads neither an imputation score nor a Column Map")
-    return factory(path, stored_effect_scale, liftover)
-
-def _column_map_reader(
-    capability: str,
-    path: str | Path,
-    stored_effect_scale: StoredEffectScale,
-    imputation_score_declaration: ImputationScoreDeclaration | None,
-    column_map: ColumnMap,
-) -> ColumnMapReader:
-    if capability != COLUMN_MAP_CAPABILITY:
-        raise ValueError(
-            f"a Column Map reads only {COLUMN_MAP_CAPABILITY!r} sources, not {capability!r}"
-        )
-    return ColumnMapReader(
-        path,
-        column_map,
-        stored_effect_scale,
-        imputation_score_declaration=imputation_score_declaration,
+    return BesdProbeReader(
+        path, probe_id, stored_effect_scale,
+        aligned=None if liftover is None else load_besd_source(path, liftover=liftover),
     )

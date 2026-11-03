@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.readers.interface import ReferenceAllele
 from opengwasdb.readers.orientation import a1_frequencies, is_palindromic, swap, swap_one
 from opengwasdb.readers.tabular import (
     SourceRow,
@@ -53,7 +54,9 @@ def test_swap_is_swap_one_over_arrays() -> None:
 
 @pytest.mark.parametrize("flipped", [False, True])
 def test_the_association_stream_orients_through_the_rule(flipped: bool) -> None:
-    (association,) = stream_associations([_row(flipped=flipped)], StoredEffectScale.SD)
+    (association,) = stream_associations(
+        [_row(flipped=flipped)], StoredEffectScale.SD, ReferenceAllele.UNDECLARED
+    )
     assert association.z == pytest.approx(-2.0 if flipped else 2.0)
     assert association.eaf == pytest.approx(0.7 if flipped else 0.3)
     # The source's own labelling is kept, whichever allele is stored.
@@ -73,7 +76,7 @@ def test_site_extraction_and_metric_blocks_orient_the_frequency(flipped: bool) -
 def test_a_row_without_an_effect_keeps_a_nan_z_on_either_allele() -> None:
     for flipped in (False, True):
         (association,) = stream_associations(
-            [_row(flipped=flipped, beta=None)], StoredEffectScale.SD
+            [_row(flipped=flipped, beta=None)], StoredEffectScale.SD, ReferenceAllele.UNDECLARED
         )
         assert math.isnan(association.z)
 

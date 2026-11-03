@@ -289,12 +289,13 @@ def _association_z(row: SourceRow) -> float:
 def stream_associations(
     rows: Iterable[SourceRow],
     stored_effect_scale: StoredEffectScale,
-    reference: ReferenceAllele = ReferenceAllele.UNDECLARED,
+    reference: ReferenceAllele,
 ) -> Iterator[ReaderAssociation]:
     """Each row as a `ReaderAssociation`, oriented to A1 by `swap_one`.
 
-    ``reference`` is what the format declares of every row's alleles, and is
-    carried onto each association unchanged. A row with no usable SE has a NaN
+    ``reference`` is the reader's one declaration of what its format says of
+    every row's alleles, and is carried onto each association unchanged; it
+    has no default, so a reader cannot forget to pass it. A row with no usable SE has a NaN
     SE, and one with no effect a NaN z, for Association Admission to drop and
     log; a reader recovers an SE it can (a CI, a p) before this.
     """
@@ -393,10 +394,10 @@ class ReaderBatch:
     - ``rsid``: the source's rs identifier for the row's variant, ``""`` where none.
     - ``reference``: the format's declaration of which allele is the genome's
       reference, carried unchanged from the reader (`ReferenceAllele`).
-    - ``ref_first``: for each row, whether its declared reference allele is the
-      one its ALID spells first, as Variant Routing's `allele_order` reads it.
-      Only ``reference`` gives it meaning; it is not computed when the format
-      declares none.
+    - ``ref_first``: for each row, whether its `ref` is the allele its ALID
+      spells first, as Variant Routing's `allele_order` reads it. Only
+      ``reference`` gives it meaning: it is required where the format declares
+      a reference, and not computed where it declares none.
     - ``key_prefix``: how a dropped row is named in Admission's log: by ALID when
       empty, else ``key_prefix`` and its ``source_row`` (``esi:12``).
     """
@@ -410,9 +411,19 @@ class ReaderBatch:
     imputation_score: np.ndarray
     imputation_status: np.ndarray
     rsid: np.ndarray
-    reference: ReferenceAllele = ReferenceAllele.UNDECLARED
+    reference: ReferenceAllele
     ref_first: np.ndarray | None = None
     key_prefix: str = ""
+
+    def __post_init__(self) -> None:
+        if self.reference is not ReferenceAllele.UNDECLARED and self.ref_first is None:
+            raise ValueError(
+                f"a batch whose reader declares {self.reference.value!r} the reference "
+                "allele needs each row's ref_first: without it a reversed indel could "
+                "not be told apart"
+            )
+        if self.ref_first is not None and len(self.ref_first) != len(self.alid):
+            raise ValueError("ref_first must hold one value per row of the batch")
 
     def __len__(self) -> int:
         return int(self.alid.shape[0])
@@ -451,7 +462,7 @@ class ReaderBatch:
         )
 
         codes = np.full(len(self), REFERENCE_UNKNOWN, dtype=np.int8)
-        if self.reference is ReferenceAllele.UNDECLARED or self.ref_first is None:
+        if self.ref_first is None:  # the format declares no reference (`__post_init__`)
             return codes
         first = self.ref_first if self.reference is ReferenceAllele.REF else ~self.ref_first
         indel = self._indel()
@@ -469,14 +480,15 @@ class ReaderBatch:
 
 def stream_batches(
     rows: Iterable[SourceRow],
-    reference: ReferenceAllele = ReferenceAllele.UNDECLARED,
+    reference: ReferenceAllele,
     *,
     chunk_rows: int = DEFAULT_CHUNK_ROWS,
 ) -> Iterator[ReaderBatch]:
     """`stream_associations`' rows, ``chunk_rows`` at a time, as `ReaderBatch`es.
 
     Each row's z and frequency are oriented by `swap`, the same rule
-    `stream_associations` applies one row at a time.
+    `stream_associations` applies one row at a time. ``reference`` is the
+    reader's declaration, as `stream_associations` takes it.
     """
     block: list[SourceRow] = []
     start = 0
