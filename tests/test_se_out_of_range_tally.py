@@ -21,7 +21,7 @@ from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 
-_TALLY = "SE value(s) above 65,504, stored as +inf"
+_TALLY = "SE value(s) above 65,504, more than a float16 plane holds"
 
 
 def _tally_lines(caplog: pytest.LogCaptureFixture) -> list[str]:

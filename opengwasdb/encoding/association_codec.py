@@ -1,11 +1,12 @@
 """How a component stores associations: what it may hold, and how it encodes them.
 
 `storable` is the one judgement a writer makes before any plane is written:
-every cell must be one Association Admission would admit (ADR 0072), and an SE
-above what a `float16` plane can represent is counted per Analysis. Admission
-guarantees the first for every source row, so a cell that breaks it here was
-produced after admission -- a completion fill, a merged pass, a re-encode --
-and the write is refused, naming Admission's rule. Nothing is filtered here.
+every cell must be one Association Admission would admit (ADR 0072), judged by
+Admission's own check, and an SE above the largest a `float16` plane holds is
+counted per Analysis. Admission guarantees the first for every source row, so
+a cell that breaks it here was produced after admission -- a completion fill,
+a merged pass, a re-encode -- and the write is refused. A writer writes what
+`storable` returns; today that is every cell it was handed, unchanged.
 
 `AssociationCodec` encodes a batch under one component's plan, in the one
 order the planes allow: `storable`, then z, then EAF against each cell's
@@ -54,8 +55,9 @@ __all__ = [
     "storable",
 ]
 
-#: The largest SE a `float16` plane holds as itself (65,504). A larger one is
-#: stored as `+inf`, which is still an association (spec §15, issue #337).
+#: The largest SE a `float16` plane holds (65,504). A larger one is rounded to
+#: 65,504 below 65,520 and stored as `+inf` from there; either way it is still an
+#: association (spec §15, issue #337).
 SE_FLOAT16_MAX: Final = float(np.finfo(np.float16).max)
 
 #: Cells `storable` checks at a time, so a Dense band costs window-sized masks.
@@ -89,14 +91,19 @@ class Decoded(NamedTuple):
 
 @dataclass(frozen=True)
 class Storable:
-    """What a Store holds of a batch, and what the batch counted."""
+    """What a Store holds of a batch, and what the batch counted.
 
-    #: The cells to encode: a missing one is written as its plane's marker.
+    A writer writes this, never the batch it was handed. A grid writes
+    `cells`, where an association the Store does not keep is missing, with no
+    frequency and no imputed flag. A writer of association rows (a CSR, a
+    spill) keeps the rows `stored` names, with `cells`' values, and a writer
+    that holds frequencies apart from z and SE drops them where `stored` is
+    False. Today every cell is stored, unchanged.
+    """
+
     cells: CellValues
-    #: Which cells the Store keeps. A grid writes every cell of `cells`; a
-    #: writer of association rows (a CSR) keeps only these. Every cell, today.
     stored: np.ndarray
-    #: Per Analysis, how many stored SEs exceed `SE_FLOAT16_MAX`, `+inf` included.
+    #: Per Analysis, how many SEs exceed `SE_FLOAT16_MAX`, `+inf` included.
     se_out_of_range: np.ndarray
 
 
@@ -110,19 +117,26 @@ def storable(
     `where` names the writer, for the refusal. Pure and idempotent: the plan
     plays no part, so a writer calls it before the SE plan exists.
 
-    Raises `opengwasdb.admission.NotAdmitted`, through Admission's own check,
-    when a cell is one Admission would not admit (one of z and SE missing, an
-    infinite z, an SE not positive, an imputed flag that is not 0/1 or sits on
-    a missing cell). An SE of `+inf` is not refused: it is a stored value.
+    Raises `opengwasdb.admission.NotAdmitted` when a cell is one Admission
+    would not admit, by Admission's own check (`require_admitted`): one of z and
+    SE missing, an infinite z, an SE not positive, an imputed flag that is not
+    0/1 or sits on a missing cell. An SE of `+inf` is not refused: it is what a
+    `float16` plane holds for an SE of 65,520 or more.
     """
+    # Imported here: Admission's package imports the association readers, whose
+    # Ragged adapter imports the writer that imports this module, and importing
+    # any module of the package runs its `__init__` first.
+    from opengwasdb.admission.cells import require_admitted
+
     z, se, imputed = _parallel(cells, where)
     owner = np.broadcast_to(np.asarray(analyses, dtype=np.int64), z.shape)
     over = np.zeros(n_analyses, dtype=np.int64)
     for window in _windows(z.shape):
-        z_w, se_w = z[window], se[window]
-        imputed_w = None if imputed is None else imputed[window]
-        if _breaks_admission(z_w, se_w, imputed_w):
-            _refuse(z_w, se_w, imputed_w, where=_where(where, window, z.shape))
+        se_w, imputed_w = se[window], None if imputed is None else imputed[window]
+        require_admitted(
+            z[window], se_w, imputed=imputed_w, where=_where(where, window, z.shape),
+            narrowed_se=True,
+        )
         over += _out_of_range(se_w, owner[window], n_analyses)
     return Storable(cells=cells, stored=np.ones(z.shape, dtype=bool), se_out_of_range=over)
 
@@ -371,8 +385,10 @@ def log_se_out_of_range(
     """Log, as one warning, the SEs above `SE_FLOAT16_MAX`, by Analysis when
     `analysis_ids` names them (`where` names the one Analysis otherwise).
 
-    Such an SE is stored as `+inf` and stays an association; the count is the
-    one issue #338 makes each Store record. Nothing is logged for none.
+    A `float16` plane cannot hold such an SE as itself: it rounds one below
+    65,520 to 65,504 and stores the rest as `+inf`, and either stays an
+    association. The count is the one issue #338 makes each Store record.
+    Nothing is logged for none.
     """
     counts = np.asarray(counts, dtype=np.int64)
     found = np.flatnonzero(counts)
@@ -384,7 +400,7 @@ def log_se_out_of_range(
         else ": " + ", ".join(f"{analysis_ids[i]}: {int(counts[i]):,}" for i in found.tolist())
     )
     log.warning(
-        "%s: %s SE value(s) above %s, stored as +inf (spec §15)%s",
+        "%s: %s SE value(s) above %s, more than a float16 plane holds (spec §15)%s",
         where,
         f"{int(counts.sum()):,}",
         f"{SE_FLOAT16_MAX:,.0f}",
@@ -417,38 +433,6 @@ def _windows(shape: tuple[int, ...]) -> list[tuple[slice, ...]]:
     width = int(np.prod(shape[1:], dtype=np.int64)) or 1
     step = max(1, _WINDOW // width)
     return [(slice(i, min(i + step, shape[0])),) for i in range(0, max(shape[0], 1), step)]
-
-
-def _breaks_admission(z: np.ndarray, se: np.ndarray, imputed: np.ndarray | None) -> bool:
-    """Whether any cell breaks Admission's guarantee, `+inf` SE allowed; in the
-    cells' own dtype, so a band is not copied to `float64` to find nothing."""
-    z_missing, se_missing = np.isnan(z), np.isnan(se)
-    if np.any(z_missing != se_missing):
-        return True
-    present = ~z_missing
-    with np.errstate(invalid="ignore"):
-        if np.any(present & (~np.isfinite(z) | ~(se > 0))):
-            return True
-    if imputed is not None:
-        flagged = imputed != 0
-        if np.any(flagged & ((imputed != 1) | z_missing)):
-            return True
-    return False
-
-
-def _refuse(z: np.ndarray, se: np.ndarray, imputed: np.ndarray | None, *, where: str) -> None:
-    """Raise Admission's own refusal for these cells.
-
-    An SE narrowed to `+inf` is handed on as `SE_FLOAT16_MAX`, so the check
-    judges every other rule and names the cell that broke one.
-    """
-    # Imported on refusal only: Admission's package imports the association
-    # readers, whose Ragged adapter imports the writer that imports this module.
-    from opengwasdb.admission.cells import require_admitted
-
-    finite_se = np.where(np.isposinf(se), np.float32(SE_FLOAT16_MAX), se)
-    require_admitted(z, finite_se, imputed=imputed, where=where)
-    raise AssertionError(f"{where}: a cell broke Admission's guarantee, yet its check passed")
 
 
 def _where(where: str, window: tuple[slice, ...], shape: tuple[int, ...]) -> str:

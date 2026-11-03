@@ -19,7 +19,7 @@ from opengwasdb.encoding.association_codec import (
     log_se_out_of_range,
     storable,
 )
-from opengwasdb.encoding.codec import SeExceptionBuilder, StoreCodec
+from opengwasdb.encoding.codec import EafExceptionBuilder, SeExceptionBuilder, StoreCodec
 from opengwasdb.encoding.plan import (
     EAF_EXCEPTION,
     EafEncoding,
@@ -130,9 +130,10 @@ def test_the_count_is_logged_once_naming_each_analysis(caplog) -> None:
         log_se_out_of_range(np.array([0, 5, 2]), ["a", "b", "c"], where="build-x")
         log_se_out_of_range(np.zeros(3, dtype=np.int64), ["a", "b", "c"], where="build-x")
         log_se_out_of_range(np.array([3]), where="build-y, analysis_index 4")
+    tally = "SE value(s) above 65,504, more than a float16 plane holds (spec §15)"
     assert [r.getMessage() for r in caplog.records] == [
-        "build-x: 7 SE value(s) above 65,504, stored as +inf (spec §15): b: 5, c: 2",
-        "build-y, analysis_index 4: 3 SE value(s) above 65,504, stored as +inf (spec §15)",
+        f"build-x: 7 {tally}: b: 5, c: 2",
+        f"build-y, analysis_index 4: 3 {tally}",
     ]
 
 
@@ -171,26 +172,35 @@ def _codec(plan: StoreEncoding = _RESIDUAL, **kwargs: np.ndarray) -> Association
 
 
 def test_se_is_coded_against_the_frequency_a_reader_decodes_not_the_sources() -> None:
+    """The expected codes are built from `StoreCodec`'s per-plane calls, the way the
+    writers composed them before the codec existed: EAF encoded against each cell's
+    row baseline and decoded with its exception table, then SE against that."""
     cells, at = _random_cells(20_000)
     codec = _codec()
-    encoded = codec.encode(cells, at, where="x")
-    decoded_eaf = codec.round_trip(cells, at, where="x").eaf
-    analyses = np.asarray(at.analyses)
-    coefficients = _codec()._model()
+    rows, analyses = np.asarray(at.rows), np.asarray(at.analyses)
+    baseline = codec._baseline[rows]
+    eaf_entries = EafExceptionBuilder()
+    eaf_codes = StoreCodec(_RESIDUAL).encode_eaf(
+        cells.eaf, baseline=baseline, positions=at.positions, exceptions=eaf_entries
+    )
+    decoded_eaf = StoreCodec(_RESIDUAL, eaf_exceptions=eaf_entries.table()).decode_eaf(
+        eaf_codes, baseline=baseline, positions=at.positions
+    )
 
     def se_codes(eaf: np.ndarray) -> np.ndarray:
         return StoreCodec(_RESIDUAL).encode_se(
             cells.se,
             eaf=eaf,
             analysis_index=analyses,
-            coefficients=coefficients,
+            coefficients=codec._model(),
             positions=at.positions,
             exceptions=SeExceptionBuilder(),
         )
 
-    against_source = se_codes(cells.eaf)
-    assert np.array_equal(encoded.se, se_codes(decoded_eaf))
-    assert (encoded.se != against_source).sum() > 0, "fixture must make the order matter"
+    expected, against_source = se_codes(decoded_eaf), se_codes(cells.eaf)
+    assert (expected != against_source).sum() > 0, "fixture must make the order matter"
+
+    assert np.array_equal(codec.encode(cells, at, where="x").se, expected)
 
 
 def test_an_imputed_cell_is_coded_against_the_panels_frequency() -> None:

@@ -110,8 +110,9 @@ def _positions_for(mask: np.ndarray, positions: PositionSource, *, what: str) ->
 def se_float16(values: np.ndarray) -> np.ndarray:
     """SEs as a `float16` SE plane holds them: the one place an SE is narrowed.
 
-    Rounded to nearest; an SE above 65,504 becomes `+inf` and stays an
-    association (spec §15, issue #337). The plane's writers, its byte
+    Rounded to nearest, so an SE above 65,504 and below 65,520 becomes 65,504,
+    and one of 65,520 or more becomes `+inf`; either stays an association (spec
+    §15, issue #337). The plane's writers, its byte
     measurement and the Dense build's rounding of the SEs it holds exactly
     (issue #355) all come through here, so a plane cannot be measured under
     one rounding and written under another.
