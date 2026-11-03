@@ -20,6 +20,7 @@ from store_reads import element_reads, times_read
 from test_ragged_residual_completion import RaggedResidualScenario, build_residual_ssf_source
 
 from opengwasdb.encoding import SE_EXCEPTION, Z_MISSING, SeExceptionTable
+from opengwasdb.model.analyses import AnalysesTable, read_analyses, write_analyses
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.scans import analyses_of
@@ -124,6 +125,57 @@ def test_a_sequence_mask_flagging_a_missing_cell_fails_the_completion_rule(
         "imputed=1 rows have NaN se values",
         "missing z rows have imputed=1 (inconsistent)",
     ]
+
+
+def test_a_sequence_whose_metadata_denies_its_imputed_cells_fails(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Each Analysis holds imputed cells exactly when it says it does, on a sequence too.
+
+    That disagreement is the shape the ancestry-match filter's defect took on a grid
+    (ADR 0028); nothing held a Ragged release to it.
+    """
+    store = RaggedResidualScenario(tmp_path_factory).completed
+    imputed = np.asarray(zarr.open_group(str(store / "data.zarr" / "ragged"))["imputed"][:])
+    table = read_analyses(store / "analyses.tsv")
+    row = next(r for r in table.rows if int(r["completion_n_imputed_total"] or 0))
+    assert imputed.any(), "the fixture must hold imputed cells"
+    row["completion_n_imputed_total"] = "0"
+    write_analyses(store / "analyses.tsv", table)
+
+    result = validate_store(store)
+
+    assert result.failed() == {"completion.declaration"}, result.errors
+    (finding,) = result.of("completion.declaration")
+    assert finding.message.startswith(
+        f"analysis {row['analysis_id']!r} has "
+    ) and finding.message.endswith(
+        " imputed=1 cell(s) in data.zarr/ragged/imputed but declares "
+        "completion_n_imputed_total='0'; the release holds imputed cells its metadata "
+        "does not account for"
+    )
+
+
+def test_a_sequence_without_its_missing_counts_fails(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """A completed sequence records how many cells completion left missing, as a grid does."""
+    store = RaggedResidualScenario(tmp_path_factory).completed
+    table = read_analyses(store / "analyses.tsv")
+    assert "completion_n_missing_total" in table.fieldnames
+    write_analyses(store / "analyses.tsv", _without_column(table, "completion_n_missing_total"))
+
+    result = validate_store(store)
+
+    assert result.failed() == {"completion.n_missing_column"}, result.errors
+    assert result.errors == [
+        "analyses.tsv is missing completion_n_missing_total for a reference-completed store"
+    ]
+
+
+def _without_column(table: AnalysesTable, name: str) -> AnalysesTable:
+    kept = tuple(field for field in table.fieldnames if field != name)
+    return AnalysesTable(kept, tuple({k: row[k] for k in kept} for row in table.rows))
 
 
 def _flag_in_the_variant_index(group: zarr.Group, cell: int) -> None:

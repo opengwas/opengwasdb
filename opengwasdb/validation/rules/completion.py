@@ -118,14 +118,18 @@ def _imputed_per_analysis(_target: Target, block: Block) -> np.ndarray:
 
 
 def _judge_declaration(target: Target, total: np.ndarray) -> Iterator[str]:
-    counts = np.zeros(grid_counts(target)[1], dtype=np.int64) + total
+    counts = np.zeros(_n_analyses(target), dtype=np.int64) + total
     errors: list[str] = []
-    declaration_matches_mask(target.store.analyses_path, counts, errors)
+    label = plane_label(target, "imputed")
+    declaration_matches_mask(target.store.analyses_path, counts, errors, label)
     yield from errors
 
 
 def declaration_matches_mask(
-    analyses_path: Path, imputed_per_analysis: np.ndarray, errors: list[str]
+    analyses_path: Path,
+    imputed_per_analysis: np.ndarray,
+    errors: list[str],
+    label: str,
 ) -> None:
     """Each Analysis holds imputed cells if and only if it says it does.
 
@@ -144,24 +148,24 @@ def declaration_matches_mask(
         except ValueError:
             continue  # reported by the analyses rules
         if 0 <= index < len(imputed_per_analysis):
-            message = _disagreement(row, declared, int(imputed_per_analysis[index]))
+            message = _disagreement(row, declared, int(imputed_per_analysis[index]), label)
             if message is not None:
                 errors.append(message)
 
 
-def _disagreement(row: dict[str, str], declared: int, actual: int) -> str | None:
+def _disagreement(row: dict[str, str], declared: int, actual: int, label: str) -> str | None:
     """What one Analysis's declaration and mask disagree on, if they do."""
     analysis_id = row.get("analysis_id", "")
     if declared and not actual:
         return (
             f"analysis {analysis_id!r} declares completion_n_imputed_total={declared} "
-            "but has no imputed=1 cell in data.zarr/imputed; the metadata describes "
+            f"but has no imputed=1 cell in {label}; the metadata describes "
             "cells the release does not contain"
         )
     if actual and not declared:
         return (
             f"analysis {analysis_id!r} has {actual} imputed=1 cell(s) in "
-            "data.zarr/imputed but declares completion_n_imputed_total="
+            f"{label} but declares completion_n_imputed_total="
             f"{row.get('completion_n_imputed_total', '')!r}; the release holds "
             "imputed cells its metadata does not account for"
         )
@@ -190,7 +194,6 @@ RULES: tuple[Rule, ...] = (
         _imputed_per_analysis,
         _judge_declaration,
         when=completed,
-        kinds=Kind.GRID,
     ),
 )
 
@@ -270,7 +273,7 @@ METADATA_RULES: tuple[Rule, ...] = (
     ),
     Check(
         name="completion.n_missing_column",
-        kinds=Kind.GRID,
+        kinds=VALUE_KINDS,
         when=completed,
         after=(REQUIRED, "analyses.readable"),
         run=n_missing_column,
