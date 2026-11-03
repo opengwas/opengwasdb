@@ -19,12 +19,23 @@ import csv
 import logging
 import math
 from collections import Counter
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
 
+from opengwasdb.admission import (
+    AdmissionRecord,
+    AnalysisRules,
+    Gate,
+    Reason,
+    SourceRows,
+    admission_record_for,
+    require_admitted,
+)
+from opengwasdb.admission.declared import declared_rules
 from opengwasdb.build.eaf_orientation import EafOrientationReport, apply_orientation_evidence
 from opengwasdb.build.liftover import (
     LiftedRow,
@@ -61,7 +72,10 @@ from opengwasdb.model.enums import (
     SampleSizeScope,
     coverage_for_layout,
 )
+from opengwasdb.model.maf_policy import MafState
 from opengwasdb.model.manifest_columns import manifest_column
+from opengwasdb.readers.interface import StreamTally
+from opengwasdb.stats import FrequencyTally
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
@@ -73,6 +87,8 @@ from opengwasdb.variants import (
     orient_to_canonical,
     write_variant_axis,
 )
+from opengwasdb.variants.normalise import MalformedIdentity, allele_fault, identity_fault
+from opengwasdb.variants.routing import collapse_duplicates
 
 log = logging.getLogger(__name__)
 
@@ -102,6 +118,7 @@ def build_ragged_from_besd(
     eaf_reference: str | Path | None = None,
     eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False,
+    admission_record: str | Path | None = None,
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from BESD files.
 
@@ -128,21 +145,21 @@ def build_ragged_from_besd(
     store_esi_eaf: store the `.esi` frequency per association (opt-in, ADR 0067);
         eaf_reference, eaf_reference_ancestry, allow_unverified_eaf: what it is
         checked against, once -- refused without the flag.
+    admission_record: Association Admission's record (#357), beside the Store.
     """
-    coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
-    prefix = Path(besd_prefix)
-    out = Path(output_path)
-    with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
-        request = _BesdBuildRequest(
-            store_id=store_id, release_id=release_id, coverage=coverage,
-            analyses_path=analyses_path, tissue=tissue, source_build=source_build,
-            chain_file=chain_file, variant_reference=variant_reference,
-            sample_size_table=sample_size_table, store_esi_eaf=store_esi_eaf,
-            eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
-            allow_unverified_eaf=allow_unverified_eaf,
-        )
-        axis, csr = _build_besd_release(staged, prefix, request)
-        return _summarise(out, axis, csr.n_associations, coverage)
+    request = _BesdBuildRequest(
+        store_id=store_id, release_id=release_id,
+        coverage=coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED),
+        analyses_path=analyses_path, tissue=tissue, source_build=source_build,
+        chain_file=chain_file, variant_reference=variant_reference,
+        sample_size_table=sample_size_table, store_esi_eaf=store_esi_eaf,
+        eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
+        allow_unverified_eaf=allow_unverified_eaf,
+        admission_record=admission_record_for(output_path, admission_record),
+    )
+    with OpenGWASDBStore.staging(Path(output_path), overwrite=overwrite) as staged:
+        axis, csr = _build_besd_release(staged, Path(besd_prefix), request)
+        return _summarise(Path(output_path), axis, csr.n_associations, request.coverage)
 
 
 @dataclass(frozen=True)
@@ -157,6 +174,7 @@ class _BesdBuildRequest:
     source_build: str
     chain_file: str | Path | None
     variant_reference: str | Path | None
+    admission_record: Path
     sample_size_table: str | Path | None = None
     store_esi_eaf: bool = False
     eaf_reference: str | Path | None = None
@@ -211,7 +229,13 @@ def _build_besd_release(
         if request.sample_size_table is None
         else SampleSizeTable(Path(request.sample_size_table), [p.probe_id for p in axis.probes])
     )
-    csr, encoding, scopes = _ingest_besd(prefix, axis, staged.path, sample_sizes)
+    record = AdmissionRecord.open(
+        request.admission_record,
+        [analysis.analysis_id for analysis in analyses],
+        command="build-ragged-besd",
+    )
+    rules = _besd_rules(request.analyses_path, analyses, axis)
+    csr, encoding, scopes = _ingest_besd(prefix, axis, staged.path, sample_sizes, record, rules)
     analyses, eaf_report = _stamp_probe_scopes(analyses, scopes, axis, eaf_report)
     # Phase 5 — indexes and manifest output.
     _write_besd_outputs(staged, analyses, encoding)
@@ -320,8 +344,13 @@ class _EsiAxis:
     the axis and no association can sit at a wrong coordinate.
 
     ``eaf_by_esi`` is each ESI row's stored-allele frequency (`None` when the
-    `.esi` reports none), and ``snp_ids`` each row's SNP ID, kept only for a
-    build that joins a sample-size table on it (ADR 0067).
+    `.esi` reports none), ``eaf_made_absent`` which ESI rows reported one the
+    Store holds as absent (D7), both only for a build that stores the
+    frequency, and ``snp_ids`` each row's SNP ID, kept only for a
+    build that joins a sample-size table on it (ADR 0067). ``malformed`` names
+    each ESI row whose identity no ALID can spell, and why (#365): it is
+    neither lifted nor placed, and every probe's row at it is dropped and
+    logged under that reason.
     """
 
     probes: list[ProbeRecord]
@@ -331,7 +360,9 @@ class _EsiAxis:
     collisions: _VariantCollisions
     lift: dict[str, object] | None
     eaf_by_esi: np.ndarray | None = None
+    eaf_made_absent: np.ndarray | None = None
     snp_ids: list[str] | None = None
+    malformed: dict[int, str] = field(default_factory=dict)
 
 
 def _esi_axis(
@@ -345,14 +376,19 @@ def _esi_axis(
 ) -> _EsiAxis:
     """Read one file set's `.esi`/`.epi` and canonicalise the ESI rows."""
     snps, probes = _read_sources(prefix)
+    malformed = _malformed_esi_rows(snps)
+    usable = [snp for snp in snps if snp.row_idx not in malformed] if malformed else snps
     lifted, lift_provenance = _lifted_coordinates(
-        snps, source_build, chain_file=chain_file, variant_reference=variant_reference
+        usable, source_build, chain_file=chain_file, variant_reference=variant_reference
     )
-    canonical = _canonical_variants(snps, lifted)
+    canonical = _canonical_variants(usable, lifted)
     canonical.collisions.report()
     print(f"Canonical variants: {len(canonical.variants)} (from {len(snps)} ESI entries)")
     lift_provenance = canonical.collisions.record(lift_provenance)
     snp_ids = _unique_snp_ids(snps, canonical.esi_to_variant) if keep_snp_ids else None
+    frequencies = (
+        stored_esi_frequencies(snps, canonical.esi_to_variant) if keep_frequencies else None
+    )
     return _EsiAxis(
         probes,
         canonical.variants,
@@ -360,11 +396,30 @@ def _esi_axis(
         canonical.esi_to_variant,
         canonical.collisions,
         lift_provenance,
-        eaf_by_esi=(
-            stored_esi_frequencies(snps, canonical.esi_to_variant) if keep_frequencies else None
-        ),
+        eaf_by_esi=None if frequencies is None else frequencies.stored,
+        eaf_made_absent=None if frequencies is None else frequencies.made_absent,
         snp_ids=snp_ids,
+        malformed=malformed,
     )
+
+
+def _malformed_esi_rows(snps: list[SnpRecord]) -> dict[int, str]:
+    """Each ESI row whose identity is malformed, and its reason (#365).
+
+    The rule is `identity_fault`'s, which every Source Reader applies; each
+    spelling of a chromosome is judged once.
+    """
+    chromosomes: dict[str, MalformedIdentity | None] = {}
+    malformed: dict[int, str] = {}
+    for snp in snps:
+        if snp.chromosome not in chromosomes:
+            chromosomes[snp.chromosome] = identity_fault(snp.chromosome)
+        fault = chromosomes[snp.chromosome] or allele_fault(snp.a1, snp.a2)
+        if fault is not None:
+            malformed[snp.row_idx] = fault.reason
+    if malformed:
+        log.warning(".esi: %d rows have a malformed identity and are left out", len(malformed))
+    return malformed
 
 
 def _unique_snp_ids(
@@ -877,31 +932,104 @@ class _ProbeRows(NamedTuple):
     esi_row: list[int]
 
 
+def _besd_rules(
+    analyses_path: str | Path | None, analyses: list[Analysis], axis: _EsiAxis
+) -> dict[str, AnalysisRules]:
+    """Each probe's declared filters (D2), from the analyses overlay if one is given.
+
+    A BESD source has no imputation score, so an INFO threshold is refused
+    when parsed. A MAF filter is judged on the `.esi` frequency, which the
+    build holds only with `store_esi_eaf`; a filtering policy without it is
+    refused rather than judged on nothing.
+    """
+    if analyses_path is None:
+        return {a.analysis_id: AnalysisRules(a.analysis_id) for a in analyses}
+    rules = declared_rules(analyses_path, {a.analysis_id: None for a in analyses})
+    filtering = [i for i, r in rules.items() if r.maf.state is MafState.FILTERED]
+    if filtering and axis.eaf_by_esi is None:
+        raise ValueError(
+            f"{len(filtering)} Analysis/Analyses declare a MAF threshold (first: "
+            f"{filtering[0]!r}), which a BESD build judges on the .esi frequency; "
+            "pass --store-esi-eaf so the build reads it"
+        )
+    return rules
+
+
+def _admitted(
+    raw_snp_idx: np.ndarray,
+    betas: np.ndarray,
+    ses: np.ndarray,
+    gate: Gate,
+    eaf_by_esi: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One probe's raw BESD rows that Association Admission keeps.
+
+    Judged before the ESI map, as every builder judges a source row before it is
+    matched: a row with an unusable SE or a non-finite beta is dropped and
+    logged by its ESI row whether or not its variant made the axis.
+    """
+    se = np.asarray(ses, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = np.where((se > 0) & np.isfinite(se), np.asarray(betas, dtype=np.float64) / se, np.nan)
+    keep = gate.source_rows(
+        SourceRows(
+            eaf=np.full(len(ses), np.nan) if eaf_by_esi is None else eaf_by_esi[raw_snp_idx],
+            se=se,
+            z=z,
+            keys_at=lambda positions: [f"esi:{int(i)}" for i in raw_snp_idx[positions]],
+        )
+    )
+    return raw_snp_idx[keep], betas[keep], ses[keep]
+
+
+def _without_malformed(
+    raw_snp_idx: np.ndarray,
+    betas: np.ndarray,
+    ses: np.ndarray,
+    malformed: dict[int, str],
+    gate: Gate,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One probe's rows less those at a malformed ESI row, which its gate
+    examines, drops and logs by ESI index under the row's reason (#365)."""
+    at = [i for i, esi in enumerate(raw_snp_idx.tolist()) if esi in malformed]
+    if not at:
+        return raw_snp_idx, betas, ses
+    tally = StreamTally()
+    tally.faults.rows.extend(
+        (f"esi:{int(raw_snp_idx[i])}", malformed[int(raw_snp_idx[i])]) for i in at
+    )
+    gate.streamed(tally)
+    keep = np.ones(len(raw_snp_idx), dtype=bool)
+    keep[at] = False
+    return raw_snp_idx[keep], betas[keep], ses[keep]
+
+
 def _map_probe_rows(
     raw_snp_idx: np.ndarray,
     betas: np.ndarray,
     ses: np.ndarray,
     esi_to_variant: dict[int, tuple[int, bool]],
+    gate: Gate,
 ) -> _ProbeRows:
-    """Map one probe's raw BESD rows onto ``(variant_index, z, se, esi_row)`` lists.
+    """Map one probe's admitted BESD rows onto ``(variant_index, z, se, esi_row)`` lists.
 
-    A row whose ESI index never made the variant axis, or whose statistics
-    are unusable (``se <= 0``, a non-finite beta or se), is dropped for that
-    Analysis: the store must not carry a z-score the source did not vouch
-    for. Rows that survive are oriented — ``z`` flips sign when the stored
-    canonical allele is the flipped one. The ESI row travels with each so its
-    frequency and SNP ID can be joined after the sort (ADR 0067).
+    A row whose ESI index never made the variant axis is dropped for that
+    Analysis, and counted and logged by its gate (`off_axis`). Rows that
+    survive are oriented — ``z`` flips sign when the
+    stored canonical allele is the flipped one. The ESI row
+    travels with each so its frequency and SNP ID can be joined after the sort
+    (ADR 0067).
     """
     rows = _ProbeRows([], [], [], [])
+    off_axis: list[str] = []
     for esi_idx, beta, se in zip(
         raw_snp_idx.tolist(), betas.tolist(), ses.tolist(), strict=True
     ):
         mapping = esi_to_variant.get(int(esi_idx))
         if mapping is None:
+            off_axis.append(f"esi:{int(esi_idx)}")
             continue
         variant_index, flipped = mapping
-        if se <= 0 or not np.isfinite(beta) or not np.isfinite(se):
-            continue
         z = beta / se
         if flipped:
             z = -z
@@ -909,7 +1037,28 @@ def _map_probe_rows(
         rows.z.append(z)
         rows.se.append(se)
         rows.esi_row.append(int(esi_idx))
+    gate.unplaced(Reason.OFF_AXIS, off_axis)
     return rows
+
+
+def _resolved_duplicates(rows: _ProbeRows, gate: Gate) -> _ProbeRows:
+    """One probe's rows, each variant once, by Association Admission's
+    duplicate rule (`collapse_duplicates`, D5).
+
+    A BESD probe can name one SNP twice. Rows that agree on z and SE are one
+    association, collapsed to the first; rows that disagree are all dropped,
+    and logged by ESI row, where both used to be stored.
+    """
+    found = collapse_duplicates(
+        np.asarray(rows.variant_index, dtype=np.int64),
+        np.asarray(rows.z, dtype=np.float64),
+        np.asarray(rows.se, dtype=np.float64),
+    )
+    if len(found.keep) == len(rows.variant_index):
+        return rows
+    gate.duplicates([f"esi:{rows.esi_row[i]}" for i in found.dropped.tolist()], found.collapsed)
+    keep = found.keep.tolist()
+    return _ProbeRows(*([column[i] for i in keep] for column in rows))
 
 
 def _decide_encoding(csr: RaggedCSRWriter, n_analyses: int, *, n_plane: bool) -> StoreEncoding:
@@ -965,6 +1114,7 @@ def _ingest_probe(
     probe: ProbeRecord,
     axis: _EsiAxis,
     sample_sizes: SampleSizeTable | None,
+    gate: Gate,
 ) -> tuple[_ProbeScopes, bool]:
     """Add one probe's associations, with their frequency and sample size.
 
@@ -973,23 +1123,27 @@ def _ingest_probe(
     the order it must be grouped in (`SampleSizeTable.sizes_for`).
     """
     raw_snp_idx, betas, ses = besd.get_probe_associations(probe.row_idx)
+    n_raw = len(raw_snp_idx)
+    if axis.malformed:
+        raw_snp_idx, betas, ses = _without_malformed(raw_snp_idx, betas, ses, axis.malformed, gate)
+    if axis.eaf_made_absent is not None:
+        # The `.esi` frequency of each row the probe reads, made absent (D7).
+        made_absent = int(axis.eaf_made_absent[raw_snp_idx].sum())
+        gate.streamed(StreamTally(frequencies=FrequencyTally(made_absent=made_absent)))
     sizes = None if sample_sizes is None else sample_sizes.sizes_for(probe.probe_id)
-    rows = _map_probe_rows(raw_snp_idx, betas, ses, axis.esi_to_variant)
+    admitted = _admitted(raw_snp_idx, betas, ses, gate, axis.eaf_by_esi)
+    rows = _resolved_duplicates(_map_probe_rows(*admitted, axis.esi_to_variant, gate), gate)
     if not rows.variant_index:
         _add_empty_analysis(csr)
-        return _ProbeScopes(has_eaf=False, has_n=False), len(raw_snp_idx) > 0
+        return _ProbeScopes(has_eaf=False, has_n=False), n_raw > 0
     # Sort by variant_index for consistent ordering within each analysis.
     order = np.argsort(rows.variant_index)
     esi = np.asarray(rows.esi_row, dtype=np.int64)[order]
     eaf = None if axis.eaf_by_esi is None else axis.eaf_by_esi[esi]
     n = None if sample_sizes is None else _pair_sample_sizes(esi, axis, sample_sizes, sizes)
-    csr.add_analysis(
-        np.array(rows.variant_index, dtype=np.int32)[order],
-        np.array(rows.z, dtype=np.float32)[order],
-        np.array(rows.se, dtype=np.float32)[order],
-        eaf=eaf,
-        n=n,
-    )
+    z, se = np.array(rows.z, dtype=np.float32)[order], np.array(rows.se, dtype=np.float32)[order]
+    require_admitted(z, se, where=f"build-ragged-besd, probe {probe.probe_id}")
+    csr.add_analysis(np.array(rows.variant_index, dtype=np.int32)[order], z, se, eaf=eaf, n=n)
     return _ProbeScopes.of(eaf, n), False
 
 
@@ -1021,6 +1175,8 @@ def _ingest_besd(
     axis: _EsiAxis,
     staged_path: Path,
     sample_sizes: SampleSizeTable | None,
+    record: AdmissionRecord,
+    rules: Mapping[str, AnalysisRules],
 ) -> tuple[RaggedCSRWriter, StoreEncoding, list[_ProbeScopes]]:
     """Stream the BESD file into a CSR store under ``staged_path``.
 
@@ -1037,13 +1193,15 @@ def _ingest_besd(
     csr = RaggedCSRWriter(len(axis.variants))
     scopes: list[_ProbeScopes] = []
     skipped_probes = 0
-    for probe in axis.probes:
-        scope, skipped = _ingest_probe(csr, besd, probe, axis, sample_sizes)
+    for probe, analysis_id in zip(axis.probes, record.analyses, strict=True):
+        with record.gate(rules[analysis_id]) as gate:
+            scope, skipped = _ingest_probe(csr, besd, probe, axis, sample_sizes, gate)
         scopes.append(scope)
         skipped_probes += skipped
         if (probe.row_idx + 1) % 1000 == 0:
             print(f"  Processed {probe.row_idx + 1} / {len(axis.probes)} probes")
     _require_a_matching_table(sample_sizes)
+    record.finish()
 
     encoding = _decide_encoding(csr, len(axis.probes), n_plane=sample_sizes is not None)
     print(f"Flushing zarr CSR ({csr.n_associations:,} associations) ...")

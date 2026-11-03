@@ -1281,9 +1281,10 @@ def _route_vcf(vcf: Path, site_alid: dict, axis: list[str]):
 
 
 class TestForkSafeLookup:
-    def test_last_wins_dedup_on_collision(self, tmp_path):
+    def test_conflicting_rows_for_one_row_are_all_dropped(self, tmp_path):
         """Two source variants mapping to the same row (as a liftover collision
-        would) resolve to one row, keeping the last stream occurrence."""
+        would) with different statistics leave the row empty: nothing says
+        which is right."""
         # Both hg19 keys map to the same hg38 ALID → same row 0.
         hg19_lookup = {("1", 100, "A", "G"): "1:100:A:G", ("1", 200, "A", "G"): "1:100:A:G"}
 
@@ -1295,9 +1296,8 @@ class TestForkSafeLookup:
                 "1\t200\t.\tA\tG\t.\tPASS\t.\tES:SE\t3.0:0.5\n",  # z=6.0, flip → -6.0 (later)
             ],
         )
-        r, z, _se, _eaf = _route_vcf(vcf, hg19_lookup, ["1:100:A:G"])
-        assert r.tolist() == [0]
-        assert z[0] == pytest.approx(-6.0, rel=5e-3)  # last occurrence wins
+        r, _z, _se, _eaf = _route_vcf(vcf, hg19_lookup, ["1:100:A:G"])
+        assert r.tolist() == []
 
     def test_absent_variant_not_mismapped(self, tmp_path):
         """A variant not in the panel must be dropped, not snapped to a neighbour."""
@@ -1331,7 +1331,7 @@ class TestForkSafeLookup:
             [
                 "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n",  # row 0
                 "1\t300\t.\tC\tT\t.\tPASS\t.\tES:SE\t2.0:0.5\n",  # row 1
-                "1\t200\t.\tA\tG\t.\tPASS\t.\tES:SE\t3.0:0.5\n",  # row 0 again, last wins
+                "1\t200\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n",  # row 0 again, agreeing
             ],
         )
         whole = _route_vcf(vcf, hg19_lookup, axis)
@@ -1342,8 +1342,8 @@ class TestForkSafeLookup:
             np.testing.assert_array_equal(a, b)
         r, z, _se, _eaf = batched
         assert sorted(r.tolist()) == [0, 1]
-        # row 0 kept the later (pos 200) occurrence: z=6.0 flipped to -6.0
-        assert z[r.tolist().index(0)] == pytest.approx(-6.0, rel=5e-3)
+        # row 0's two rows agree, so they are one association: z=2.0 flipped
+        assert z[r.tolist().index(0)] == pytest.approx(-2.0, rel=5e-3)
 
 
 def test_sorted_alids_matches_reference_with_long_keys():
@@ -1783,7 +1783,7 @@ def test_cli_invalid_options_fail_at_parse_time_dense(tmp_path):
         "build-dense-vcf",
         str(tmp_path / "manifest.tsv"),
         str(tmp_path / "out.opengwasdb"),
-        "--store-id", "s",
+        "--admission-record", str(tmp_path / "admission"), "--store-id", "s",
         "--release-id", "r",
     ]
 
@@ -2233,6 +2233,7 @@ def test_cli_variant_reference_builds_single_pass(tmp_path):
         app,
         [
             "build-dense-vcf", str(manifest), str(store),
+            "--admission-record", str(tmp_path / "admission"),
             "--store-id", "s", "--release-id", "r",
             "--variant-reference", str(reference),
         ],

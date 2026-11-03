@@ -16,7 +16,7 @@ from liftover_fixtures import write_collision_chain, write_two_strand_chain
 
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.fake import FakeReader
-from opengwasdb.readers.interface import ReaderAssociation, SourceVariant
+from opengwasdb.readers.interface import ReaderAssociation, ReferenceAllele, SourceVariant
 from opengwasdb.readers.registry import SourceSpec
 from opengwasdb.variants.reference import VariantReference, read_variant_reference
 from opengwasdb.variants.routing import (
@@ -311,9 +311,10 @@ def _hg38_routing(sites: list[Site]):
     )
 
 
-def test_the_last_association_for_an_index_wins_across_batches(monkeypatch):
-    """Two associations reaching one index keep the later one, even when a batch
-    boundary falls between them, and the disagreement is reported."""
+def test_duplicates_for_an_index_collapse_or_drop_across_batches(monkeypatch):
+    """Rows reaching one index that agree on z and SE collapse to the first, and
+    rows that disagree are all dropped and named, even when a batch boundary
+    falls between them."""
     monkeypatch.setattr(route_table, "_RESOLVE_BATCH", 2)
     routing = _hg38_routing([("1", 100, "A", "G"), ("1", 300, "C", "T"), ("1", 100, "G", "A")])
     assert routing.alids == ["1:100:A:G", "1:300:C:T"]
@@ -327,9 +328,270 @@ def test_the_last_association_for_an_index_wins_across_batches(monkeypatch):
 
     placed = table.route_column(stream).placed[0]
 
-    assert placed.index.tolist() == [1, 0]
-    assert placed.z.tolist() == [2.0, 5.0]
+    assert placed.index.tolist() == [1]
+    assert placed.z.tolist() == [2.0]
     assert placed.conflicting.tolist() == [0]
+    assert placed.dropped.tolist() == [0, 0]
+    assert placed.collapsed == 1
+
+
+def _read_place_by_place(place, z, se, reference=None):
+    """D5's rule read one place at a time: keep, conflicting, dropped, collapsed,
+    and the rows a reversed indel's kept row displaced."""
+    rows_at: dict[int, list[int]] = {}
+    for row, at in enumerate(place.tolist()):
+        rows_at.setdefault(at, []).append(row)
+
+    def agrees(row: int, first: int) -> bool:
+        return all(
+            a == b or (np.isnan(a) and np.isnan(b))
+            for a, b in ((z[row], z[first]), (se[row], se[first]))
+        )
+
+    def reversed_pair(rows: list[int]) -> tuple[list[int], list[int]] | None:
+        """A reversed indel's rows spelling their reference first and second --
+        two distinct rows once agreeing copies collapse -- or None."""
+        if reference is None or any(int(reference[r]) == 0 for r in rows):
+            return None
+        firsts = [r for r in rows if int(reference[r]) == 1]
+        seconds = [r for r in rows if int(reference[r]) == 2]
+        if not firsts or not seconds:
+            return None
+        one_each = all(agrees(r, firsts[0]) for r in firsts) and all(
+            agrees(r, seconds[0]) for r in seconds
+        )
+        return (firsts, seconds) if one_each else None
+
+    keep, conflicting, dropped, reversed_indels, collapsed = [], [], [], [], 0
+    for at, rows in rows_at.items():
+        if all(agrees(r, rows[0]) for r in rows):
+            keep.append(rows[0])
+            collapsed += len(rows) - 1
+        elif (pair := reversed_pair(rows)) is not None:
+            firsts, seconds = pair
+            keep.append(firsts[0])
+            collapsed += len(firsts) - 1 + len(seconds) - 1
+            reversed_indels.append(seconds[0])
+        else:
+            conflicting.append(at)
+            dropped += rows
+    return sorted(keep), sorted(conflicting), sorted(dropped), collapsed, sorted(reversed_indels)
+
+
+@pytest.mark.parametrize("declared", [False, True], ids=["undeclared", "declared"])
+def test_collapse_duplicates_reads_each_place_as_the_rule_says(declared):
+    """`collapse_duplicates` touches only the rows that share a place; on random
+    columns of repeated places, NaNs, agreeing and disagreeing rows, and rows
+    whose reference allele the ALID spells first, second or not at all, it
+    answers as a plain reading of each place does."""
+    rng = np.random.default_rng(357)
+    reversed_seen = 0
+    for _ in range(300):
+        n = int(rng.integers(0, 40))
+        place = rng.integers(0, 12, n)
+        z = rng.choice([1.0, 2.0, np.nan], n)
+        se = rng.choice([0.1, 0.2, np.nan], n)
+        reference = rng.choice([0, 1, 1, 2, 2], n).astype(np.int8) if declared else None
+
+        found = route_table.collapse_duplicates(place, z, se, reference)
+
+        assert (
+            found.keep.tolist(), found.conflicting.tolist(), found.dropped.tolist(),
+            found.collapsed, found.reversed_indels.tolist(),
+        ) == _read_place_by_place(place, z, se, reference)
+        reversed_seen += len(found.reversed_indels)
+    assert (reversed_seen > 0) == declared
+
+
+def _indel_association(
+    site: Site, z: float, reference: ReferenceAllele = ReferenceAllele.REF
+) -> ReaderAssociation:
+    chrom, pos, ref, alt = site
+    return ReaderAssociation(
+        chrom, pos, ref, alt, z, 0.1, StoredEffectScale.SD, reference=reference
+    )
+
+
+#: BMI_IRN (FinnGen r13) at 1:827587: an insertion and a deletion of one repeat,
+#: whose sorted alleles make one ALID, `1:827587:G:GGGGCC`.
+INSERTION: Site = ("1", 827587, "G", "GGGGCC")
+DELETION: Site = ("1", 827587, "GGGGCC", "G")
+
+
+def _reversed_pair_column(stream):
+    routing = _hg38_routing([INSERTION, DELETION])
+    (alid,) = routing.alids
+    assert alid == "1:827587:G:GGGGCC"
+    return routing.table([routing.alids]).route_column(stream).placed[0]
+
+
+@pytest.mark.parametrize("order", ["insertion first", "deletion first"])
+def test_a_reversed_indel_keeps_the_row_whose_declared_reference_the_alid_spells_first(order):
+    """D5 for an insertion and a deletion sharing an ALID: when the source
+    declares which allele is the reference, the insertion -- the reading the
+    ALID spells -- is kept wherever it falls, and the deletion is dropped."""
+    stream = [_indel_association(INSERTION, 1.5), _indel_association(DELETION, -0.5)]
+    if order == "deletion first":
+        stream.reverse()
+
+    placed = _reversed_pair_column(stream)
+
+    assert placed.index.tolist() == [0]
+    assert placed.z.tolist() == [1.5]
+    assert placed.reversed_indels.tolist() == [0]
+    assert placed.conflicting.tolist() == []
+    assert (placed.dropped.tolist(), placed.collapsed) == ([], 0)
+    assert placed.reference.tolist() == [route_table.REFERENCE_FIRST]
+
+
+@pytest.mark.parametrize(
+    ("codes", "z", "kept", "reversed_rows", "collapsed"),
+    [
+        # Two copies of the insertion collapse, then one insertion against one
+        # deletion: the insertion is kept.
+        ([1, 1, 2], [2.0, 2.0, 3.0], [0], [2], 1),
+        # Two copies of the deletion collapse too.
+        ([1, 2, 2], [2.0, 3.0, 3.0], [0], [1], 1),
+        # Two distinct insertions: nothing says which, so no row is kept.
+        ([1, 1, 2], [2.0, 2.5, 3.0], [], [], 0),
+        # Two distinct deletions: three distinct rows, not a pair.
+        ([1, 2, 2], [2.0, 3.0, 4.0], [], [], 0),
+    ],
+    ids=["insertion-copies", "deletion-copies", "two-insertions", "two-deletions"],
+)
+def test_a_reversed_indel_is_judged_on_its_distinct_rows(codes, z, kept, reversed_rows, collapsed):
+    """Agreeing copies collapse first, so the exception is one distinct row
+    spelling the reference first against one spelling it second; any other
+    conflicting place keeps no row, every row `duplicate_conflicting`."""
+    reference = np.array(codes, dtype=np.int8)
+
+    found = route_table.collapse_duplicates(
+        np.zeros(3, dtype=np.int64), np.array(z), np.full(3, 0.1), reference
+    )
+
+    assert found.keep.tolist() == kept
+    assert found.reversed_indels.tolist() == reversed_rows
+    assert found.collapsed == collapsed
+    assert found.dropped.tolist() == ([] if kept else [0, 1, 2])
+    assert found.conflicting.tolist() == ([] if kept else [0])
+
+
+def test_a_reversed_indel_with_no_declared_reference_drops_both_rows():
+    """Effect and other alleles do not say which is the genome's: D5 unchanged."""
+    stream = [
+        _indel_association(INSERTION, 1.5, ReferenceAllele.UNDECLARED),
+        _indel_association(DELETION, -0.5, ReferenceAllele.UNDECLARED),
+    ]
+
+    placed = _reversed_pair_column(stream)
+
+    assert placed.index.tolist() == []
+    assert placed.conflicting.tolist() == [0]
+    assert placed.dropped.tolist() == [0, 0]
+    assert placed.reversed_indels.tolist() == []
+
+
+def test_a_declared_alt_reference_is_judged_on_the_alt_allele():
+    """A row whose source declares its `alt` the reference spells the ALID's
+    first allele when its `alt` sorts first: `GGGGCC>G` with `G` the reference
+    is the insertion, and is kept over `G>GGGGCC` whose reference is `GGGGCC`."""
+    stream = [
+        _indel_association(INSERTION, 1.5, ReferenceAllele.ALT),
+        _indel_association(DELETION, -0.5, ReferenceAllele.ALT),
+    ]
+
+    placed = _reversed_pair_column(stream)
+
+    assert placed.z.tolist() == [-0.5]
+    assert placed.reversed_indels.tolist() == [0]
+
+
+def test_snvs_spelling_the_reference_both_ways_still_drop_both_rows():
+    """Two SNV rows at one ALID are one variant seen from opposite alleles, so
+    a declared reference tells them nothing: both are dropped."""
+    routing = _hg38_routing([("1", 100, "A", "G"), ("1", 100, "G", "A")])
+    table = routing.table([routing.alids])
+    stream = [
+        _indel_association(("1", 100, "A", "G"), 1.0),
+        _indel_association(("1", 100, "G", "A"), 3.0),
+    ]
+
+    placed = table.route_column(stream).placed[0]
+
+    assert placed.index.tolist() == []
+    assert placed.dropped.tolist() == [0, 0]
+    assert placed.reversed_indels.tolist() == []
+
+
+def test_a_reversed_indel_is_resolved_across_batches(monkeypatch):
+    """The declaration travels with each row through a batch boundary, and a
+    reader that changes it mid-stream changes it from that row on."""
+    monkeypatch.setattr(route_table, "_RESOLVE_BATCH", 2)
+    routing = _hg38_routing([INSERTION, DELETION, ("1", 900, "A", "AT"), ("1", 900, "AT", "A")])
+    table = routing.table([routing.alids])
+    stream = [
+        _indel_association(("1", 900, "A", "AT"), 1.0, ReferenceAllele.UNDECLARED),
+        _indel_association(DELETION, -0.5),
+        _indel_association(("1", 900, "AT", "A"), 2.0, ReferenceAllele.UNDECLARED),
+        _indel_association(INSERTION, 1.5),
+    ]
+
+    placed = table.route_column(stream).placed[0]
+    alids = [routing.alids[i] for i in placed.index.tolist()]
+
+    assert alids == ["1:827587:G:GGGGCC"]
+    assert placed.z.tolist() == [1.5]
+    assert [routing.alids[i] for i in placed.conflicting.tolist()] == ["1:900:A:AT"]
+
+
+def test_a_lift_that_reorients_a_site_moves_its_reference_to_the_other_side():
+    """A reverse-strand lift swaps which allele the stored ALID spells first,
+    so a re-oriented insertion's reference sits second."""
+    alid = "1:827587:G:GGGGCC"
+    table = route_table.RouteTable.build(
+        {INSERTION: alid}, {INSERTION}, [[alid]], keep_unmatched=False
+    )
+
+    placed = table.route_column([_indel_association(INSERTION, 1.5)]).placed[0]
+
+    assert placed.z.tolist() == [-1.5]
+    assert placed.reference.tolist() == [route_table.REFERENCE_SECOND]
+
+
+def test_an_unmatched_row_carries_its_reference_code():
+    """A row no axis holds is coded against its own key's alleles, which is
+    what the Hybrid's fold resolves it under."""
+    routing = _hg38_routing([("1", 100, "A", "G")])
+    table = routing.table([routing.alids], keep_unmatched=True)
+    stream = [
+        _indel_association(INSERTION, 1.5),
+        _indel_association(DELETION, -0.5),
+        _indel_association(DELETION, -0.5, ReferenceAllele.UNDECLARED),
+    ]
+
+    unmatched = table.route_column(stream).unmatched
+
+    assert unmatched.reference.tolist() == [
+        route_table.REFERENCE_FIRST, route_table.REFERENCE_SECOND, route_table.REFERENCE_UNKNOWN,
+    ]
+
+
+def test_duplicates_that_differ_only_in_frequency_are_one_association():
+    """The frequency is annotation, not the finding (ADR 0036): rows agreeing on
+    z and SE collapse to the first, frequency and all."""
+    routing = _hg38_routing([("1", 100, "A", "G")])
+    table = routing.table([routing.alids])
+    stream = [
+        _association(("1", 100, "A", "G"), 1.0, eaf=0.2),
+        _association(("1", 100, "A", "G"), 1.0, eaf=0.3),
+    ]
+
+    placed = table.route_column(stream).placed[0]
+
+    assert placed.index.tolist() == [0]
+    assert placed.eaf.tolist() == pytest.approx([0.2])
+    assert placed.collapsed == 1
+    assert placed.conflicting.tolist() == []
 
 
 def test_a_reverse_strand_lift_reorients_statistics_on_every_axis(tmp_path):
@@ -384,8 +646,9 @@ def test_two_spellings_reaching_one_variant_oriented_two_ways_are_refused():
 
 def test_one_site_spelt_in_two_cases_is_one_routing_key():
     """`a`/`g` and `A`/`G` are one site (issue #360): the union names one ALID,
-    and either spelling of an association reaches it -- the later one kept, and
-    their disagreement reported, as for any two associations on one index."""
+    and either spelling of an association reaches it. Two that disagree are
+    resolved as any two associations on one index are (#357, D5): neither is
+    kept, and the index is reported conflicting."""
     routing = _route(
         [_source("a", "hg38", [("1", 100, "a", "g", ""), ("1", 100, "A", "G", "")])],
         LiftedUnion(),
@@ -397,9 +660,9 @@ def test_one_site_spelt_in_two_cases_is_one_routing_key():
         [_association(("1", 100, "a", "g"), 1.0), _association(("1", 100, "A", "G"), 2.0)]
     ).placed[0]
 
-    assert placed.index.tolist() == [0]
-    assert placed.z.tolist() == [2.0]
+    assert placed.index.tolist() == []
     assert placed.conflicting.tolist() == [0]
+    assert placed.dropped.tolist() == [0, 0]  # both rows, each at index 0
 
 
 def test_a_reference_sending_one_routing_key_two_ways_is_refused():
@@ -444,6 +707,33 @@ def test_admission_judges_the_reader_orientation_before_matching(tmp_path):
     assert seen == [[2.0, -1.0, 3.0]]
     assert column.placed[0].z.tolist() == pytest.approx([-2.0])
     assert column.n_unmatched == 1
+
+
+def test_an_analysis_without_a_declared_score_hands_admit_no_scores():
+    """``imputation_scores=False`` says no score was declared: the batch carries
+    every row's score as undeclared, whatever the associations hold, and the
+    default hands ``admit`` the scores the reader parsed."""
+    from opengwasdb.readers.interface import ImputationScore, ImputationScoreStatus
+
+    routing = _hg38_routing([("1", 100, "A", "G")])
+    table = routing.table([routing.alids])
+    scored = ReaderAssociation(
+        "1", 100, "A", "G", 1.0, 0.1, StoredEffectScale.SD,
+        imputation_score=ImputationScore(0.9, ImputationScoreStatus.USABLE),
+    )
+    seen: dict[bool, tuple[list[float], list[ImputationScoreStatus]]] = {}
+    for collect in (True, False):
+
+        def admit(batch: AssociationBatch, collect: bool = collect) -> np.ndarray:
+            seen[collect] = (batch.imputation_score.tolist(), batch.imputation_status.tolist())
+            return np.ones(len(batch), dtype=bool)
+
+        column = table.route_column([scored], admit=admit, imputation_scores=collect)
+        assert column.placed[0].z.tolist() == [1.0]
+
+    assert seen[True] == ([0.9], [ImputationScoreStatus.USABLE])
+    scores, statuses = seen[False]
+    assert np.isnan(scores).all() and statuses == [ImputationScoreStatus.UNDECLARED]
 
 
 def test_unmatched_associations_are_kept_by_key_only_when_asked():
@@ -625,7 +915,9 @@ def test_an_extracted_reference_routes_as_the_union_it_froze(tmp_path, n_workers
         ("5", 10, "G", "A"),
         ("5", 10, "A", "G"),
     ]
-    stream = [_association(site, float(i)) for i, site in enumerate(sites)]
+    # The two spellings of 5:10 reach one ALID; equal statistics make them one
+    # association, so where it lands is observable.
+    stream = [_association(site, z) for site, z in zip(sites, (0.0, 1.0, 3.0, 3.0), strict=True)]
 
     def routed(routing) -> dict[str, float]:
         placed = routing.table([routing.alids]).route_column(stream).placed[0]

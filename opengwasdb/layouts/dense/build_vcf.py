@@ -23,6 +23,10 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb.admission import AdmissionRecord, AnalysisRules, Reason, admission_record_for
+from opengwasdb.admission.cells import require_admitted
+from opengwasdb.admission.declared import declared_rules
+from opengwasdb.admission.duplicates import record_duplicates
 from opengwasdb.build.eaf_orientation import (
     DEFAULT_SAMPLE_SITES,
     EafOrientationReport,
@@ -75,6 +79,7 @@ from opengwasdb.model.enums import (
     coverage_for_layout,
 )
 from opengwasdb.readers.column_map import ColumnMap
+from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import open_source
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
@@ -167,6 +172,7 @@ def build_dense_from_vcf_manifest(
     source_reader_capability: str | None = None, source_assembly: str | None = None,
     variant_reference: str | Path | None = None, column_map: ColumnMap | str | Path | None = None,
     association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
+    admission_record: str | Path | None = None,
 ) -> DenseBuildResult:
     """Build a Dense Observed-Only Store from a manifest of GWAS-VCF files.
 
@@ -183,24 +189,25 @@ def build_dense_from_vcf_manifest(
     Pass 1 and liftover are bypassed save its rsid harvest (#255). ``column_map`` reads
     ``opengwasdb.column-map`` rows (#281). ``association_coverage`` is a build input
     (issue #298) and a Dense matrix can carry only ``gwas``, its default (ADR 0064).
+    ``admission_record`` is Association Admission's record (#357), beside the Store.
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.DENSE)
-    manifest_rows = read_manifest(
-        manifest_path, default_source_reader_capability=source_reader_capability,
-        default_source_assembly=source_assembly, column_map=column_map,
+    manifest_rows, rules = _manifest_and_rules(
+        manifest_path, source_reader_capability, source_assembly, column_map
     )
 
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         prepared = _prepare_axis(
             staged, out, manifest_rows, chain_file, liftover_failure_threshold, chunk_shape,
-            n_workers, variant_reference,
+            n_workers, variant_reference, rules,
         )
         # Phases 5-7 run inside one spill-dir lifetime: every spill is removed
         # even when a phase fails, keeping the staged release atomic.
         eaf_report, encoded = _spill_verify_and_encode(
             staged, out, manifest_rows, prepared, n_workers, chunk_shape, dtype,
             eaf_reference, eaf_reference_ancestry, allow_unverified_eaf,
+            admission_record_for(out, admission_record),
         )
         # Phase 8: top-hit indexes, manifest and analyses.tsv metadata.
         _finalize_store(
@@ -213,6 +220,23 @@ def build_dense_from_vcf_manifest(
         )
 
     return DenseBuildResult(out, len(prepared.axis.alids), len(prepared.axis.analyses))
+
+
+def _manifest_and_rules(
+    manifest_path: str | Path,
+    source_reader_capability: str | None,
+    source_assembly: str | None,
+    column_map: ColumnMap | str | Path | None,
+) -> tuple[list[ManifestRow], dict[str, AnalysisRules]]:
+    """The manifest's rows, and each Analysis's declared INFO and MAF filters (D2)."""
+    rows = read_manifest(
+        manifest_path, default_source_reader_capability=source_reader_capability,
+        default_source_assembly=source_assembly, column_map=column_map,
+    )
+    rules = declared_rules(
+        manifest_path, {row.trait_id: row.source_reader_capability for row in rows}
+    )
+    return rows, rules
 
 
 @dataclass(frozen=True)
@@ -261,6 +285,8 @@ class _PreparedBuild:
 
     axis: _AxisMetadata
     table: RouteTable
+    #: Each Analysis's declared INFO and MAF filters, by Analysis id (D2).
+    rules: Mapping[str, AnalysisRules] = field(default_factory=dict)
     #: The ``--variant-reference`` a single-pass build was given, or None for
     #: the inline two-pass build. Recorded in the store manifest's provenance
     #: so the axis's origin is auditable (issue #185).
@@ -373,6 +399,7 @@ def _prepare_axis(
     chunk_shape: tuple[int, int],
     n_workers: int,
     variant_reference: str | Path | None,
+    rules: Mapping[str, AnalysisRules],
 ) -> _PreparedBuild:
     """Phases 1-4: route, write the axis and index, and build the Pass 2 table.
 
@@ -406,18 +433,24 @@ def _prepare_axis(
     routing.names.require_written(staged.path, axis.alids)
     return _PreparedBuild(
         axis=axis,
-        table=routing.table([axis.alids]),
+        # Its unmatched rows are kept by key so the gate can log them (D6).
+        table=routing.table([axis.alids], keep_unmatched=True),
         variant_reference=str(variant_reference) if variant_reference is not None else None,
         column_map=column_map_provenance(manifest_rows),
+        rules=rules,
     )
 
 
 @dataclass(frozen=True)
 class _Pass2Context:
-    """What every Pass 2 worker reads: the route table and where to spill."""
+    """What every Pass 2 worker reads: the route table, where to spill, and the
+    Admission record its gate writes to."""
 
     table: RouteTable
     spill_dir: Path
+    record: AdmissionRecord
+    alids: Sequence[str]
+    rules: Mapping[str, AnalysisRules]
 
 
 def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
@@ -429,23 +462,37 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
     traffic deadlocked the pool.
     """
     col_idx, row = task
-    reader = open_source(row.source)
-    placed = context.table.route_column(reader.stream_associations()).placed[0]
-    se = apply_se_divisor(placed.se, row.se_divisor)
-    _spill_column(context.spill_dir, col_idx, placed.index, placed.z, se, placed.eaf)
+    rules = context.rules[row.trait_id]
+    reader = open_source(
+        row.source, imputation_score_declaration=rules.info.imputation_score_declaration
+    )
+    tally = StreamTally()
+    with context.record.gate(rules) as gate:
+        routed = context.table.route_column(
+            reader.stream_associations(tally),
+            admit=gate.admit,
+            imputation_scores=gate.reads_imputation_scores,
+        )
+        gate.streamed(tally)
+        placed = routed.placed[0]
+        record_duplicates(gate, placed, context.alids)
+        gate.unplaced(Reason.OFF_AXIS, routed.unmatched.keys)
+        se = apply_se_divisor(placed.se, row.se_divisor)
+        require_admitted(placed.z, se, where=f"build-dense-vcf, Analysis {row.trait_id}")
+        _spill_column(context.spill_dir, col_idx, placed.index, placed.z, se, placed.eaf)
     return col_idx
 
 
 def _spill_columns(
     manifest_rows: Sequence[ManifestRow],
-    analysis_index: Mapping[str, int],
     spill_dir: Path,
-    table: RouteTable,
-    axis: _AxisMetadata,
+    prepared: _PreparedBuild,
+    admission_record: Path,
     n_workers: int,
     pass2_start: float,
 ) -> None:
-    """Pass 2: route and spill one column per Analysis, here or in a fork pool.
+    """Pass 2: route and spill one column per Analysis, here or in a fork pool,
+    each through its Admission gate, then finish the record the gates wrote.
 
     With ``n_workers <= 1`` each column is routed in this process, one Analysis
     at a time, so peak memory is one routed column; with more, the workers
@@ -454,22 +501,27 @@ def _spill_columns(
     """
     log.info(
         "Pass 2: resolving %d analyses × %d variants (n_workers=%d)",
-        len(axis.analyses),
-        len(axis.alids),
+        len(prepared.axis.analyses),
+        len(prepared.axis.alids),
         n_workers,
     )
-    id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
-    tasks = [(analysis_index[row.trait_id], row) for row in manifest_rows]
-    columns = fork_each(_route_and_spill, _Pass2Context(table, spill_dir), tasks, n_workers)
+    id_by_col = {prepared.axis.analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
+    tasks = [(prepared.axis.analysis_index[row.trait_id], row) for row in manifest_rows]
+    record = AdmissionRecord.open(
+        admission_record, [row.trait_id for row in manifest_rows], command="build-dense-vcf"
+    )
+    context = _Pass2Context(prepared.table, spill_dir, record, prepared.axis.alids, prepared.rules)
+    columns = fork_each(_route_and_spill, context, tasks, n_workers)
     for i, col_idx in enumerate(columns):
         log_progress(
             "Pass 2",
             i + 1,
-            len(axis.analyses),
+            len(prepared.axis.analyses),
             pass2_start,
             f"last: {id_by_col[col_idx]}",
             every=25,
         )
+    record.finish()
 
 
 def _survey_and_verify_eaf(
@@ -568,6 +620,7 @@ def _spill_verify_and_encode(
     eaf_reference: str | Path | None,
     eaf_reference_ancestry: str | None,
     allow_unverified_eaf: bool,
+    admission_record: Path,
 ) -> tuple[EafOrientationReport, _EncodedBands]:
     """Phases 5-7: spill each column, verify EAF, and write the encoded planes.
 
@@ -575,7 +628,7 @@ def _spill_verify_and_encode(
     returns or raises, so a phase failure leaves nothing behind and the staged
     release stays atomic. ``n_workers`` > 1 resolves through the fork pool;
     EAF orientation is verified against ``eaf_reference`` before any array is
-    written (issue #115, ADR 0037 §6).
+    written (issue #115, ADR 0037 §6). Pass 2 writes ``admission_record``.
     """
     spill_dir = Path(
         tempfile.mkdtemp(prefix=f".{out.name}.pass2spill.", dir=staged.path.parent)
@@ -584,10 +637,9 @@ def _spill_verify_and_encode(
         pass2_start = time.monotonic()
         _spill_columns(
             manifest_rows,
-            prepared.axis.analysis_index,
             spill_dir,
-            prepared.table,
-            prepared.axis,
+            prepared,
+            admission_record,
             n_workers,
             pass2_start,
         )

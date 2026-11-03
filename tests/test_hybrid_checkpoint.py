@@ -50,6 +50,7 @@ from test_info_score_hybrid_build import (
     _write_source,
 )
 
+from opengwasdb.admission import RecordIncomplete, admission_record_for
 from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest, resume_hybrid_build
 from opengwasdb.layouts.hybrid.checkpoint import (
@@ -154,7 +155,8 @@ def _cli_args(manifest: Path, reference: Path, store: Path, *extra: str) -> list
     """The `build-hybrid` command line this module's CLI tests use."""
     return [
         "build-hybrid", str(manifest), str(store),
-        "--variant-reference", str(reference), *extra,
+        "--variant-reference", str(reference), "--admission-record", f"{store}.admission",
+        *extra,
     ]
 
 
@@ -237,7 +239,8 @@ class TestCheckpointedBuild:
         with pytest.raises(RuntimeError, match="simulated crash"):
             _build_panel(manifest, panel, store, checkpoint=True)
         monkeypatch.undo()
-        assert (checkpoint_dir_for(store) / "info_counts.json").exists()
+        record = admission_record_for(store)
+        assert len(list((record / "parts").glob("*.json"))) == 1
 
         resume_hybrid_build(checkpoint_dir_for(store))
 
@@ -251,8 +254,27 @@ class TestCheckpointedBuild:
             < uninterrupted[0]["associations_observed"]
         )
         assert resumed == uninterrupted
+        assert (record / "admission.json").read_bytes() == (
+            admission_record_for(plain) / "admission.json"
+        ).read_bytes()
         _assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
+
+    def test_resume_refuses_a_record_that_lost_a_part(self, tmp_path, monkeypatch):
+        """The Admission counts a resume reloads are the record's parts, and a
+        part that went missing is refused, not counted as zero."""
+        manifest, panel = _info_fixture(tmp_path)
+        store = tmp_path / "info.opengwasdb"
+        _crashing_fit(monkeypatch)
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            _build_panel(manifest, panel, store, checkpoint=True)
+        monkeypatch.undo()
+        (part,) = (admission_record_for(store) / "parts").glob("*.json")
+        part.unlink()
+
+        with pytest.raises(RecordIncomplete, match="no part"):
+            resume_hybrid_build(checkpoint_dir_for(store))
+        assert not store.exists()
 
     def test_resume_may_change_n_workers(self, tmp_path, monkeypatch):
         """`n_workers` is a pure runtime knob (ADR 0023), so a resume may raise
@@ -512,7 +534,7 @@ class TestFootprint:
         assert _dir_bytes(checkpoint_dir / "staged") > 0
 
         n_shared = len(read_lines(checkpoint_dir / "axis_shared.txt"))
-        n_analyses = len(read_json(checkpoint_dir / "info_counts.json"))
+        n_analyses = len(list((admission_record_for(store) / "parts").glob("*.json")))
         assert n_shared * n_analyses > 0
         per_cell = _dir_bytes(checkpoint_dir) / (n_shared * n_analyses)
         assert per_cell <= CHECKPOINT_BYTES_PER_CELL_CEILING, (
@@ -555,30 +577,32 @@ class TestRefusals:
         with pytest.raises(ValueError, match="records format version"):
             resume_hybrid_build(checkpoint_dir)
 
-    def test_a_pre_fix_format_one_checkpoint_is_refused(self, tmp_path, monkeypatch):
-        """Opengwasdb#331: a format-1 record may hold un-filtered Pass 2 spills.
+    @pytest.mark.parametrize("older", [1, 2])
+    def test_an_older_format_checkpoint_is_refused(self, tmp_path, monkeypatch, older):
+        """An older record is refused, never reinterpreted.
 
-        Format 1 was written before a declared MAF floor dropped the rows it
-        could not judge, so its spills can hold the monomorphic and blank-frequency
-        associations that flooded a common-variant Store. A resume must refuse the
-        record outright rather than publish them, which is why the bump to 2 exists.
+        Format 1 (opengwasdb#331) was written before a declared MAF floor dropped
+        the rows it could not judge, so its spills can hold the monomorphic and
+        blank-frequency associations that flooded a common-variant Store. Format 2
+        (opengwasdb#357) records its Pass 2 counts in a shape that predates
+        Association Admission's reasons. A resume must refuse either outright.
         """
         store = self._failed_build(tmp_path, monkeypatch)
         checkpoint_dir = checkpoint_dir_for(store)
-        # Fixture first: a real checkpoint with real spills is what a pre-fix
+        # Fixture first: a real checkpoint with real spills is what an older
         # record is; refusing an empty directory would prove nothing.
         assert _dir_bytes(checkpoint_dir / "spill") > 0
-        assert CHECKPOINT_FORMAT_VERSION == 2, (
-            "format 2 is the MAF-admission checkpoint record (opengwasdb#331)"
+        assert CHECKPOINT_FORMAT_VERSION == 3, (
+            "format 3 is the Association Admission checkpoint record (opengwasdb#357)"
         )
 
         path = checkpoint_dir / "build_params.json"
         params = json.loads(path.read_text(encoding="utf-8"))
         assert params["format_version"] == CHECKPOINT_FORMAT_VERSION
-        params["format_version"] = 1
+        params["format_version"] = older
         path.write_text(json.dumps(params), encoding="utf-8")
 
-        with pytest.raises(ValueError, match="records format version 1"):
+        with pytest.raises(ValueError, match=f"records format version {older}"):
             resume_hybrid_build(checkpoint_dir)
         assert not store.exists(), "a refused resume publishes nothing"
 

@@ -10,6 +10,7 @@ reads it.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from unittest.mock import patch
 
@@ -133,7 +134,9 @@ def test_stream_vcf_associations_se_unchanged_after_flip(tmp_path):
     assert se == pytest.approx(0.25, rel=1e-4)
 
 
-def test_stream_vcf_associations_skips_zero_se(tmp_path):
+def test_stream_vcf_associations_yields_a_zero_se_for_admission(tmp_path):
+    """An SE of 0 is the record's own: it is yielded, with no z, for
+    Association Admission to drop and log (`se_unusable`)."""
     vcf = tmp_path / "test.vcf"
     _write_vcf(
         vcf,
@@ -142,8 +145,8 @@ def test_stream_vcf_associations_skips_zero_se(tmp_path):
     )
 
     assocs = list(stream_vcf_associations(vcf))
-    assert len(assocs) == 1
-    assert assocs[0][1] == 200
+    assert [(a[1], a[5]) for a in assocs] == [(100, 0.0), (200, 0.1)]
+    assert math.isnan(assocs[0][4])
 
 
 def test_stream_vcf_associations_yields_seven_element_tuples(tmp_path):

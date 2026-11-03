@@ -17,13 +17,17 @@ from __future__ import annotations
 
 import csv
 import gzip
-from collections.abc import Iterator
+import math
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
+from itertools import compress
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
 
+from opengwasdb import admission
+from opengwasdb.admission.declared import declared_rules
 from opengwasdb.build.eaf_orientation import (
     EafOrientationReport,
     apply_orientation_evidence,
@@ -53,6 +57,13 @@ from opengwasdb.model.manifest_columns import (
     require_columns,
     resolve_manifest_columns,
 )
+from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
+from opengwasdb.readers.interface import (
+    ImputationScore,
+    StreamTally,
+    parse_imputation_score,
+)
+from opengwasdb.readers.tabular import resolve_imputation_score_column
 from opengwasdb.stats import parse_af
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import add_hit_counts
@@ -61,10 +72,10 @@ from opengwasdb.variants.axis import (
 )
 from opengwasdb.variants.normalise import (
     CanonicalVariant,
-    VariantNormalisationError,
     chromosome_sort_key,
-    orient_to_canonical,
+    orient_or_drop,
 )
+from opengwasdb.variants.routing import collapse_duplicates
 
 _MISSING = {"", ".", "NA", "NaN", "nan", "None"}
 
@@ -176,47 +187,137 @@ class _Assoc(NamedTuple):
     eaf: float | None
 
 
+#: One filtered-file row with an effect, oriented to the stored allele:
+#: ``(variant, z, se, rsid, eaf, score)``, ``score`` the declared imputation
+#: score's parse, or None when none was declared. ``z`` and ``eaf`` follow the flip (ADR
+#: 0036). ``se`` is the reported one and may be unusable, which Admission
+#: judges; ``z`` is NaN when it is. A plain tuple: there is one per source row.
+_SourceRow = tuple[
+    CanonicalVariant, float, float, str | None, float | None, ImputationScore | None
+]
+
+
 def _read_filtered(
-    path: Path,
-) -> Iterator[tuple[CanonicalVariant, float, float, str | None, float | None]]:
-    """Yield (CanonicalVariant, z, se, rsid, eaf) for each usable row of a filtered file."""
+    path: Path, score_column: str | None = None, tally: StreamTally | None = None
+) -> Iterator[_SourceRow]:
+    """Yield each row of a filtered file that names a variant.
+
+    ``score_column`` is a declared imputation score's column, which must occur
+    exactly once with its declared spelling, as the GWAS-SSF reader requires.
+    ``tally`` names the rows dropped for a malformed identity (#365), and
+    counts the reported frequencies made absent (D7).
+    """
+    tally = tally or StreamTally()
     opener = gzip.open if str(path).endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
+        if score_column is not None:
+            header = [name.encode("utf-8") for name in reader.fieldnames or []]
+            resolve_imputation_score_column(header, score_column)
         for row in reader:
-            try:
-                ori = orient_to_canonical(
-                    row["chromosome"], row["base_pair_location"],
-                    row["effect_allele"], row["other_allele"],
-                )
-            except (VariantNormalisationError, KeyError):
-                continue
-            try:
-                se = float(row.get("standard_error", ""))
-                beta = float(row.get("beta", ""))
-            except (TypeError, ValueError):
-                continue
-            if not (se > 0) or not np.isfinite(se) or not np.isfinite(beta):
-                continue
-            z = beta / se
-            if ori.flipped:
-                z = -z
-            # GWAS-SSF harmonised files carry a dedicated `rsid` column; `variant_id`
-            # is the harmonised (non-rs) identifier and only usable as a fallback
-            # when `rsid` is absent (opengwasdb-stores' download-filter step selects
-            # both columns when present).
-            rsid = _opt(row.get("rsid")) or _opt(row.get("variant_id"))
-            eaf = parse_af(row.get("effect_allele_frequency"))
-            if eaf is not None and ori.flipped:
-                # The column is the frequency of the source's effect allele;
-                # the flip made the *other* allele the stored one (ADR 0036).
-                eaf = 1.0 - eaf
-            yield ori.variant, z, se, rsid, eaf
+            parsed = _source_row(row, score_column, tally)
+            if parsed is not None:
+                yield parsed
 
 
-def _dedupe_per_analysis(
-    recs: list[_Assoc],
-) -> tuple[list[_Assoc], int, int]:
+def _statistics(row: dict[str, str]) -> tuple[float, float]:
+    """``(z, se)`` in the source's orientation, each as the row gives it.
+
+    A value that does not parse is NaN. An unusable SE gives a NaN z, as does a
+    missing effect, and an infinite effect an infinite z: Admission, not the
+    parser, drops and logs each such row.
+    """
+    try:
+        beta = float(row.get("beta") or "")
+    except ValueError:
+        beta = math.nan
+    try:
+        se = float(row.get("standard_error") or "")
+    except ValueError:
+        se = math.nan
+    return (beta / se if se > 0 and math.isfinite(se) else math.nan), se
+
+
+def _source_row(
+    row: dict[str, str],
+    score_column: str | None,
+    tally: StreamTally,
+) -> _SourceRow | None:
+    """One filtered-file row, or None when it names no variant."""
+    faults, frequencies = tally.faults, tally.frequencies
+    try:
+        identity = (
+            row["chromosome"], row["base_pair_location"],
+            row["effect_allele"], row["other_allele"],
+        )
+    except KeyError:
+        return None
+    ori = orient_or_drop(*identity, faults)
+    if ori is None:
+        return None
+    z, se = _statistics(row)
+    # GWAS-SSF harmonised files carry a dedicated `rsid` column; `variant_id`
+    # is the harmonised (non-rs) identifier and only usable as a fallback
+    # when `rsid` is absent (opengwasdb-stores' download-filter step selects
+    # both columns when present).
+    rsid = _opt(row.get("rsid")) or _opt(row.get("variant_id"))
+    eaf = parse_af(row.get("effect_allele_frequency"), frequencies)
+    if ori.flipped:
+        # The frequency column is the source's effect allele's; the flip made
+        # the *other* allele the stored one, and z follows it (ADR 0036).
+        z = -z
+        eaf = None if eaf is None else 1.0 - eaf
+    score = (
+        None if score_column is None
+        else parse_imputation_score(row.get(score_column), declared=True)
+    )
+    return ori.variant, z, se, rsid, eaf, score
+
+
+def _eaf_array(rows: list[_SourceRow]) -> np.ndarray:
+    """Each row's stored-allele frequency, NaN where it has none."""
+    return np.array([np.nan if row[4] is None else row[4] for row in rows], dtype=np.float64)
+
+
+def _score_arrays(rows: list[_SourceRow]) -> tuple[np.ndarray, np.ndarray]:
+    """The declared score's values (NaN where it has none) and statuses, row by row."""
+    scores = [row[5] for row in rows]
+    values = np.array(
+        [np.nan if s is None or s.value is None else s.value for s in scores], dtype=np.float64
+    )
+    statuses = np.array([s.status if s is not None else None for s in scores], dtype=object)
+    return values, statuses
+
+
+def _admitted_rows(path: Path, gate: admission.Gate) -> list[_SourceRow]:
+    """One filtered file's rows that its Analysis's Admission gate keeps, in file order.
+
+    The gate judges them by the Analysis's declared INFO and MAF filters too
+    (D2), from the declared score column and the file's own frequency.
+    """
+    declaration = gate.rules.info.imputation_score_declaration
+    tally = StreamTally()
+    rows = list(
+        _read_filtered(path, None if declaration is None else declaration.column_name, tally)
+    )
+    gate.streamed(tally)
+    score, status = _score_arrays(rows) if declaration is not None else (None, None)
+    keep = gate.source_rows(
+        admission.SourceRows(
+            eaf=_eaf_array(rows),
+            imputation_score=score,
+            imputation_status=status,
+            se=np.fromiter((row[2] for row in rows), dtype=np.float64, count=len(rows)),
+            z=np.fromiter((row[1] for row in rows), dtype=np.float64, count=len(rows)),
+            keys_at=lambda positions: [rows[i][0].alid for i in positions.tolist()],
+        )
+    )
+    if keep.all():
+        return rows
+    return list(compress(rows, keep.tolist()))
+
+
+def _dedupe_per_analysis(recs: list[_Assoc], gate: admission.Gate) -> tuple[list[_Assoc], int, int]:
     """Resolve multiple source rows canonicalizing to the same variant within
     one analysis (issue #101): rows with identical (z, se) are a harmless
     duplicate submission and collapse to one; rows that disagree are dropped
@@ -226,35 +327,27 @@ def _dedupe_per_analysis(
     and when their canonicalized z-scores conflict there is no principled way
     to pick a winner from the data alone.
 
-    Agreement is judged on `(z, se)` alone. A duplicate pair that agrees on
-    the statistics but not on `eaf` is still one association -- the frequency
-    is annotation, not the finding -- so the first row's `eaf` is kept rather
-    than the cell being dropped over it (ADR 0036).
+    The rule is Variant Routing's (`collapse_duplicates`), so every builder
+    resolves a duplicate alike. Agreement is judged on `(z, se)` alone. A
+    duplicate pair that agrees on the statistics but not on `eaf` is still one
+    association -- the frequency is annotation, not the finding -- so the first
+    row's `eaf` is kept rather than the cell being dropped over it (ADR 0036).
+    The gate counts the collapsed rows and counts and logs the dropped ones.
 
-    Returns ``(deduped_recs, n_consistent_collapsed, n_conflicting_dropped)``.
+    Returns ``(deduped_recs, n_consistent_collapsed, n_conflicting_dropped)``,
+    the last two counting variants.
     """
-    by_alid: dict[str, list[_Assoc]] = {}
-    order: list[str] = []
-    for rec in recs:
-        if rec.alid not in by_alid:
-            order.append(rec.alid)
-        by_alid.setdefault(rec.alid, []).append(rec)
-
-    out: list[_Assoc] = []
-    n_consistent = 0
-    n_conflicting = 0
-    for alid in order:
-        values = by_alid[alid]
-        if len(values) == 1:
-            out.append(values[0])
-            continue
-        first = values[0]
-        if all((v.z, v.se) == (first.z, first.se) for v in values[1:]):
-            out.append(first)
-            n_consistent += 1
-        else:
-            n_conflicting += 1
-    return out, n_consistent, n_conflicting
+    number: dict[str, int] = {}
+    codes = np.fromiter(
+        (number.setdefault(rec.alid, len(number)) for rec in recs), dtype=np.int64, count=len(recs)
+    )
+    z = np.fromiter((rec.z for rec in recs), dtype=np.float64, count=len(recs))
+    se = np.fromiter((rec.se for rec in recs), dtype=np.float64, count=len(recs))
+    found = collapse_duplicates(codes, z, se)
+    gate.duplicates([recs[i].alid for i in found.dropped.tolist()], found.collapsed)
+    repeated = int(np.count_nonzero(np.bincount(codes, minlength=len(number)) > 1))
+    n_conflicting = len(found.conflicting)
+    return [recs[i] for i in found.keep.tolist()], repeated - n_conflicting, n_conflicting
 
 
 def build_ragged_from_ssf(
@@ -270,6 +363,7 @@ def build_ragged_from_ssf(
     eaf_reference: str | Path | None = None,
     eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False,
+    admission_record: str | Path | None = None,
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from filtered GWAS-SSF inputs.
 
@@ -277,6 +371,7 @@ def build_ragged_from_ssf(
     `_build_ssf_release`. ``association_coverage`` has no default (issue #298)
     -- the same command builds a cis-eQTL release, a signals-only metabolite
     release and a genome-wide one, so the layout cannot choose it (ADR 0064).
+    ``admission_record`` is Association Admission's record (#357), beside the Store.
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     _validate_stored_effect_scale(stored_effect_scale)
@@ -294,6 +389,7 @@ def build_ragged_from_ssf(
                 eaf_reference=eaf_reference,
                 eaf_reference_ancestry=eaf_reference_ancestry,
                 allow_unverified_eaf=allow_unverified_eaf,
+                admission_record=admission.admission_record_for(out, admission_record),
             ),
         )
 
@@ -309,6 +405,7 @@ class _SsfBuildRequest:
     eaf_reference: str | Path | None
     eaf_reference_ancestry: str | None
     allow_unverified_eaf: bool
+    admission_record: Path
 
 
 def _build_ssf_release(
@@ -326,7 +423,13 @@ def _build_ssf_release(
     manifest_path, filtered_dir = sources
     analytes = _read_manifest(manifest_path, filtered_dir)
     print(f"Manifest: {len(analytes)} analyses")
-    per_analysis, alid_variant, rsid_by_alid = _ingest_ssf_sources(analytes)
+    record = admission.AdmissionRecord.open(
+        request.admission_record,
+        [a.analysis_id for a in analytes],
+        command="build-ragged-ssf",
+    )
+    rules = declared_rules(manifest_path, {a.analysis_id: GWAS_SSF_CAPABILITY for a in analytes})
+    per_analysis, alid_variant, rsid_by_alid = _ingest_ssf_sources(analytes, record, rules)
     eaf_report = _verify_eaf_orientation(
         analytes, per_analysis, alid_variant,
         eaf_reference=request.eaf_reference,
@@ -396,32 +499,36 @@ def _validate_stored_effect_scale(stored_effect_scale: str) -> None:
 
 def _ingest_ssf_sources(
     analytes: list[AnalyteInput],
+    record: admission.AdmissionRecord,
+    rules: Mapping[str, admission.AnalysisRules],
 ) -> tuple[list[list[_Assoc]], dict[str, CanonicalVariant], dict[str, str]]:
     """Read every filtered source and resolve each analysis's associations.
 
-    One pass per analysis: canonicalise each usable source row, deduplicate
-    rows that canonicalise to the same variant (issue #101), and collect the
-    global canonical-variant set plus each variant's first-seen rsid. The
-    printed per-analysis count is the fail-loud record of what survived: a
-    row with unusable statistics never reaches this point, and a conflicting
-    duplicate pair is dropped for that cell entirely rather than one of them
-    silently kept.
+    One pass per analysis: canonicalise each source row, admit it through the
+    Analysis's gate, deduplicate rows that canonicalise to the same variant
+    (issue #101), and collect the global canonical-variant set plus each
+    variant's first-seen rsid. The printed per-analysis count is the fail-loud
+    record of what survived: a row Admission drops never reaches this point and
+    is in ``record``, and a conflicting duplicate pair is dropped for that cell
+    entirely rather than one of them silently kept.
     """
     per_analysis: list[list[_Assoc]] = []
     alid_variant: dict[str, CanonicalVariant] = {}
     rsid_by_alid: dict[str, str] = {}
     for a in analytes:
         recs: list[_Assoc] = []
-        for variant, z, se, rsid, eaf in _read_filtered(a.filtered_path):
-            alid = variant.alid
-            recs.append(_Assoc(alid, z, se, eaf))
-            if alid not in alid_variant:
-                alid_variant[alid] = variant
-                if rsid and rsid.startswith("rs"):
-                    rsid_by_alid[alid] = rsid
-        recs, n_consistent, n_conflicting = _dedupe_per_analysis(recs)
+        with record.gate(rules[a.analysis_id]) as gate:
+            for variant, z, se, rsid, eaf, _ in _admitted_rows(a.filtered_path, gate):
+                alid = variant.alid
+                recs.append(_Assoc(alid, z, se, eaf))
+                if alid not in alid_variant:
+                    alid_variant[alid] = variant
+                    if rsid and rsid.startswith("rs"):
+                        rsid_by_alid[alid] = rsid
+            recs, n_consistent, n_conflicting = _dedupe_per_analysis(recs, gate)
         per_analysis.append(recs)
         _print_ingest_summary(a, recs, n_consistent, n_conflicting)
+    record.finish()
     return per_analysis, alid_variant, rsid_by_alid
 
 
@@ -519,12 +626,12 @@ def _encode_ssf_csr(
     """
     csr = RaggedCSRWriter(n_variants)
     eaf_scopes: list[str] = []
-    for recs in per_analysis:
+    for index, recs in enumerate(per_analysis):
         if not recs:
             _add_empty_analysis(csr)
             eaf_scopes.append(EafScope.ABSENT.value)
             continue
-        eaf_scopes.append(_add_ssf_associations(csr, recs, alid_to_idx))
+        eaf_scopes.append(_add_ssf_associations(csr, recs, alid_to_idx, index))
     eaf_measurements = csr.eaf_measurements()
     preliminary = StoreEncoding.decide(
         EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measurements)
@@ -549,7 +656,7 @@ def _add_empty_analysis(csr: RaggedCSRWriter) -> None:
 
 
 def _add_ssf_associations(
-    csr: RaggedCSRWriter, recs: list[_Assoc], alid_to_idx: dict[str, int]
+    csr: RaggedCSRWriter, recs: list[_Assoc], alid_to_idx: dict[str, int], index: int
 ) -> str:
     """Append one non-empty analysis, sorted by variant_index.
 
@@ -563,6 +670,7 @@ def _add_ssf_associations(
     eaf_arr = np.fromiter(
         (np.nan if r.eaf is None else r.eaf for r in recs), dtype=np.float32, count=len(recs)
     )
+    admission.require_admitted(z_arr, se_arr, where=f"build-ragged-ssf, analysis_index {index}")
     order = np.argsort(vi, kind="stable")
     has_eaf = bool(np.isfinite(eaf_arr).any())
     if has_eaf:

@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
+from opengwasdb.admission.cells import admissible
 from opengwasdb.completion.checkpoint import BlockCompletionResult, FillRow, QualityRow
 from opengwasdb.completion.impute import impute_z_block, scalar_n_se
 from opengwasdb.completion.ld_panel import (
@@ -140,10 +141,11 @@ def complete_block_for_analysis(
         obs_absz_s = np.abs(z_dense[obs_idx])[o_order]
 
     fills: list[tuple[int, float, float]] = []
-    for i in np.where(~obs_mask)[0]:
+    candidates = np.where(~obs_mask)[0]
+    # Only a cell Association Admission would store as present is a fill; the
+    # rest stay missing and are counted `n_missing`.
+    for i in candidates[admissible(z_imp_arr[candidates], se_all[candidates])].tolist():
         zv, sev = float(z_imp_arr[i]), float(se_all[i])
-        if not (np.isfinite(zv) and np.isfinite(sev)):
-            continue
         if region_cap_bp is not None:
             zv = _region_capped_z(zv, int(positions[i]), obs_pos_s, obs_absz_s, region_cap_bp)
         fills.append((int(i), zv, sev))

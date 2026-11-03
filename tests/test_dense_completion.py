@@ -1739,3 +1739,59 @@ class TestReaderSeam:
             assert not np.isfinite(se_col[1]).any()
             assert not np.isfinite(z_col[2]).any()
             assert not np.isfinite(se_col[2]).any()
+
+
+@pytest.mark.parametrize("plane", ["se", "z"])
+def test_a_source_cell_with_one_of_z_and_se_missing_is_refused(
+    tmp_path: Path,
+    observed_store: Path,
+    ld_panel: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plane: str,
+):
+    """Spec §15 forbids a half-missing pair. Completing one would pair an imputed
+    value with an observed one, so completion refuses the source instead; the
+    source's first present cell is read back with one of its two values missing."""
+    from opengwasdb.admission.cells import NotAdmitted
+    from opengwasdb.encoding.planes import DenseSePlane, DenseZPlane
+
+    cls = DenseSePlane if plane == "se" else DenseZPlane
+    original = cls.rows
+
+    def rows(self, *args, **kwargs):
+        out = np.array(original(self, *args, **kwargs), dtype=np.float32, copy=True)
+        present = np.flatnonzero(np.isfinite(out))
+        # Fixture first: the band holds a present cell to break.
+        assert present.size
+        out.flat[present[0]] = np.nan
+        return out
+
+    monkeypatch.setattr(cls, "rows", rows)
+    with pytest.raises(NotAdmitted, match="one of z and SE missing"):
+        complete_dense_store(
+            observed_store, tmp_path / "comp.opengwasdb", ld_panel,
+            ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+        )
+    assert not (tmp_path / "comp.opengwasdb").exists()
+
+
+def test_a_candidate_with_no_usable_se_is_not_a_fill(monkeypatch: pytest.MonkeyPatch):
+    """A panel frequency of 0 gives a candidate no SE: it is not stored as a
+    fill, and it is counted missing, as every candidate Admission would not
+    store is. The imputation itself is stubbed, so only that rule decides."""
+    from opengwasdb.completion import block
+
+    imputed = np.array([2.0, 1.5, 0.8, 0.6])
+    monkeypatch.setattr(block, "impute_z_block", lambda *args, **kwargs: (imputed, 0.9))
+    z = np.array([2.0, 1.5, np.nan, np.nan])
+    se = np.array([0.1, 0.12, np.nan, np.nan])
+    eaf = np.array([0.3, 0.4, 0.2, 0.0])
+
+    result = block.complete_block_for_analysis(
+        z, se, eaf, np.arange(4) * 1000, np.eye(4), np.ones(4),
+        min_cor=0.0, region_cap_bp=None,
+    )
+
+    assert result.pearson_r == 0.9
+    assert [fill[0] for fill in result.fills] == [2]
+    assert result.n_missing == 1

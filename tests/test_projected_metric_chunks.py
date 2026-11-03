@@ -190,12 +190,17 @@ def test_ragged_and_quoted_rows_parity(tmp_path: Path) -> None:
     _assert_parity(path, expected_rows=2)
 
 
-def test_chromosome_spelled_like_a_missing_value_is_kept(tmp_path: Path) -> None:
-    """`NA` names a chromosome the row-wise projection keeps, so this one must.
+def test_chromosome_spelled_like_a_missing_value_follows_the_row_wise_rule(
+    tmp_path: Path,
+) -> None:
+    """The row-wise projection decides which spellings are a missing chromosome,
+    so the blocked one must agree on each.
 
     The blocked path reads the identity columns through pandas, whose default
-    missing-value tokens include `NA`, `NULL` and `None`. Letting those become
-    missing would silently drop rows the reference projection reports.
+    missing-value tokens include `NA`, `NULL` and `None`. Letting pandas decide
+    would drop rows the reference projection reports. Since #365 `NA` and `None`
+    are a missing chromosome on every reader, and `NULL`, which no reader treats
+    as missing, is still a contig name.
     """
     rows = [
         ["NA", "100", "A", "G", "0.1", "0.05", "0.2"],
@@ -206,9 +211,9 @@ def test_chromosome_spelled_like_a_missing_value_is_kept(tmp_path: Path) -> None
     path = _write(tmp_path / "na_chromosome.tsv.gz", _HEADER, rows)
 
     reference = _row_wise(path)
-    assert [row[0] for row in reference] == [
-        "NA:100:A:G", "NULL:200:A:C", "None:300:A:C", "1:400:A:C"
-    ], "the fixture only means something if the row-wise projection keeps all four"
+    assert [row[0] for row in reference] == ["NULL:200:A:C", "1:400:A:C"], (
+        "the fixture only means something if the row-wise projection drops two and keeps two"
+    )
     assert _blocked(path) == reference
 
 

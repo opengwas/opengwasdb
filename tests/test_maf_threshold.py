@@ -1,7 +1,8 @@
 """Per-Analysis MAF threshold: model validation, resolver and Hybrid build (stores #176).
 
-The rule is `opengwasdb.build.row_admission.admit_rows`, so the resolver's record
-and the store a Hybrid build writes are two views of the same decision. The
+The rule is Association Admission's (`opengwasdb.admission`), so the resolver's
+record and the store a Hybrid build writes are two views of the same decision;
+`test_admission_rules.py` tests the rule itself. The
 parity test at the end runs one source, one manifest and both filters through
 both callers and asserts the counts agree.
 """
@@ -11,12 +12,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import numpy as np
 import pytest
 from test_resolve_manifest import _write_panel
 
 from opengwasdb.build.resolve_manifest import read_resolve_manifest, resolve_analyses_manifest
-from opengwasdb.build.row_admission import admit_rows
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.model.analyses import read_analyses, validate_analyses
 from opengwasdb.model.info_score_policy import InfoScorePolicy, InfoScoreState
@@ -24,7 +23,6 @@ from opengwasdb.model.maf_policy import MafPolicy, MafState, parse_maf_policy
 from opengwasdb.readers.interface import (
     ImputationScoreDeclaration,
     ImputationScoreKind,
-    ImputationScoreStatus,
 )
 
 DECLARATION = ImputationScoreDeclaration(
@@ -172,74 +170,6 @@ def test_analyses_validator_accepts_nan_and_rejects_above_half(tmp_path: Path):
         read_resolve_manifest(bad)
 
 
-# --- the shared rule -------------------------------------------------------
-
-
-def test_admit_rows_drops_monomorphic_and_boundary_frequencies_under_filtered():
-    """A frequency of exactly 0 or exactly 1 is a frequency, and its MAF is 0.
-
-    Opengwas #331: a monomorphic row under a `filtered` policy carries a MAF of
-    0, which is below any positive threshold, so it must be dropped -- and
-    counted below-threshold, because the threshold was compared. Treating it as
-    an absent frequency let tens of millions of monomorphic rows into a
-    common-variant Store. The boundary stays: `0.0049` drops, `0.005` passes.
-    """
-    af = np.array([0.0, 1.0, 0.0049, 0.005, 0.5])
-    scores = np.full(af.shape, 0.9)
-    statuses = np.array([ImputationScoreStatus.USABLE] * af.size, dtype=object)
-    admission = admit_rows(
-        scores, statuses, af, InfoScorePolicy(), MafPolicy(0.005, MafState.FILTERED)
-    )
-
-    assert admission.keep.tolist() == [False, False, False, True, True]
-    assert admission.counts.admitted == 2
-    assert admission.counts.maf_below_threshold == 3
-    assert admission.counts.maf_missing == 0
-
-
-def test_admit_rows_drops_unusable_frequencies_under_filtered():
-    """Under `filtered`, a row with no usable frequency cannot bypass admission.
-
-    A NaN, an infinity and an out-of-range value are all "no frequency
-    evidence": a common-variant Store cannot admit a row whose MAF it cannot
-    read, or the filter is defeated by blanks. They are dropped and counted
-    `maf_missing` -- not below-threshold, because no threshold was compared.
-    """
-    af = np.array([np.nan, np.inf, -0.1, 1.5, 0.001, 0.01])
-    scores = np.full(af.shape, 0.9)
-    statuses = np.array([ImputationScoreStatus.USABLE] * af.size, dtype=object)
-    admission = admit_rows(
-        scores, statuses, af, InfoScorePolicy(), MafPolicy(0.005, MafState.FILTERED)
-    )
-
-    assert admission.keep.tolist() == [False, False, False, False, False, True]
-    assert admission.counts.maf_below_threshold == 1
-    assert admission.counts.maf_missing == 4
-
-
-def test_admit_rows_preserves_frequencies_when_no_filter_is_applied():
-    """`disabled` and `unavailable` drop no row and preserve its frequency.
-
-    Only a declared positive threshold admits the "no frequency evidence"
-    reading; `0` asked for no filtering and an undeclared column records no MAF
-    dispositions at all.
-    """
-    af = np.array([0.0, 1.0, 0.001, np.nan])
-    scores = np.full(af.shape, 0.9)
-    statuses = np.array([ImputationScoreStatus.USABLE] * af.size, dtype=object)
-
-    disabled = admit_rows(
-        scores, statuses, af, InfoScorePolicy(), MafPolicy(0.0, MafState.DISABLED)
-    )
-    assert disabled.keep.tolist() == [True, True, True, True]
-    assert disabled.counts.maf_below_threshold == 0
-    assert disabled.counts.maf_missing == 1
-
-    undeclared = admit_rows(scores, statuses, af, InfoScorePolicy(), MafPolicy())
-    assert undeclared.keep.tolist() == [True, True, True, True]
-    assert undeclared.counts.maf_below_threshold == undeclared.counts.maf_missing == 0
-
-
 # --- resolver --------------------------------------------------------------
 
 
@@ -265,7 +195,7 @@ def test_resolver_zero_disables_and_absent_or_nan_is_unavailable(tmp_path: Path)
     assert zero["maf_state"] == "disabled"
     assert zero["maf_rows_below_threshold"] == 0
     # Both no-frequency cells -- the blank one and the `0.0` one -- reach
-    # `admit_rows` as no frequency at all, because the reader maps exactly 0 and
+    # Admission as no frequency at all, because the reader maps exactly 0 and
     # 1 to no stored EAF (ADR 0036). Nothing is dropped here because `0` asked
     # for no filtering.
     assert zero["maf_rows_missing"] == 2

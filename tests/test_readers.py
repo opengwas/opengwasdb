@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from admission_helpers import admitted
 
 import opengwasdb.readers.finngen as finngen_module
 import opengwasdb.readers.gwas_ssf as gwas_ssf_module
@@ -255,10 +256,11 @@ def reader(request, tmp_path):
 
 
 def _malformed_fake_reader() -> FakeReader:
-    """A negative SE violates ReaderAssociation's own invariant -- raised at
-    construction, which is what lets "rejection of malformed input" be a
-    genuinely shared, reader-agnostic conformance check rather than one only
-    a file-parsing reader can exercise."""
+    """A frequency outside [0, 1] violates ReaderAssociation's own invariant --
+    raised at construction, which is what lets "rejection of malformed input"
+    be a genuinely shared, reader-agnostic conformance check rather than one
+    only a file-parsing reader can exercise. (An unusable SE is not malformed:
+    it is the source's, and Association Admission drops and logs the row.)"""
     return FakeReader(
         associations=[
             ReaderAssociation(
@@ -267,8 +269,9 @@ def _malformed_fake_reader() -> FakeReader:
                 ref="A",
                 alt="G",
                 z=1.0,
-                se=-0.5,
+                se=0.5,
                 stored_effect_scale=StoredEffectScale.SD,
+                eaf=1.5,
             )
         ]
     )
@@ -360,7 +363,9 @@ def test_finngen_r13_drops_unusable_rows_without_fabricating_metrics(tmp_path):
     variants = list(reader.stream_variants())
     sites = reader.extract_at_sites(["1:400:A:C"])
 
-    assert associations == []
+    # The row with no beta and an SE of 0 is yielded for Admission to drop.
+    assert [(a.position, math.isnan(a.z)) for a in associations] == [(400, True)]
+    assert admitted(associations) == []
     assert [v.site for v in variants] == [("1", 400, "A", "C")]
     assert sites == {}
 
@@ -453,17 +458,17 @@ def test_gwas_vcf_reader_extract_at_sites_with_no_sites_returns_empty(tmp_path):
 
 
 def test_gwas_vcf_reader_stream_variants_includes_rows_dropped_from_associations(tmp_path):
-    """A row with an invalid SE is skipped by stream_associations (issue #19)
+    """A row with an invalid SE is dropped by Association Admission (issue #19)
     but still belongs on a builder's union-variant axis (issue #20)."""
     vcf = tmp_path / "study.vcf"
     _write_vcf(
         vcf,
         "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n"
-        "1\t200\t.\tG\tA\t.\tPASS\t.\tES:SE\t1.0:0\n",  # SE=0 -> dropped by stream_associations
+        "1\t200\t.\tG\tA\t.\tPASS\t.\tES:SE\t1.0:0\n",  # SE=0 -> dropped by Admission
     )
     reader = GwasVcfReader(vcf, StoredEffectScale.SD)
 
-    assoc_positions = {(a.chromosome, a.position) for a in reader.stream_associations()}
+    assoc_positions = {(a.chromosome, a.position) for a in admitted(reader.stream_associations())}
     variant_positions = {(v.chromosome, v.position) for v in reader.stream_variants()}
 
     assert assoc_positions == {("1", 100)}
@@ -509,7 +514,7 @@ def test_gwas_ssf_reader_extract_at_sites_returns_nothing_when_file_has_no_af_co
 
 
 def test_gwas_ssf_reader_stream_variants_includes_rows_dropped_from_associations(tmp_path):
-    """A row with a non-positive SE is skipped by stream_associations but
+    """A row with a non-positive SE is dropped by Association Admission but
     still belongs on a builder's union-variant axis (issue #20), mirroring
     GwasVcfReader's identical contract."""
     path = tmp_path / "study.tsv.gz"
@@ -530,7 +535,7 @@ def test_gwas_ssf_reader_stream_variants_includes_rows_dropped_from_associations
     )
     reader = GwasSsfReader(path, StoredEffectScale.SD)
 
-    assoc_positions = {(a.chromosome, a.position) for a in reader.stream_associations()}
+    assoc_positions = {(a.chromosome, a.position) for a in admitted(reader.stream_associations())}
     variant_positions = {(v.chromosome, v.position) for v in reader.stream_variants()}
 
     assert assoc_positions == {("1", 100)}
@@ -1038,9 +1043,9 @@ def test_gwas_ssf_metrics_projection_keeps_rows_the_association_stream_drops(tmp
     """The reason the metrics seam exists, asserted rather than assumed.
 
     A row carrying a frequency and a standard error but no usable beta is
-    evidence for ancestry assignment and none for the SD estimator; the
-    association stream drops it, so a resolver built on that stream would lose
-    ancestry evidence the source actually carries.
+    evidence for ancestry assignment and none for the SD estimator; a file
+    naming no effect column yields no associations at all, so a resolver built
+    on that stream would lose ancestry evidence the source actually carries.
     """
     path = tmp_path / "no-beta-column.tsv"
     _write_metrics_fixture(
@@ -1055,7 +1060,7 @@ def test_gwas_ssf_metrics_projection_keeps_rows_the_association_stream_drops(tmp
     assert len(metrics) == 1, "the metrics stream must see the row"
     assert metrics[0][7] is None, "the row has no beta, and none is fabricated"
     assert metrics[0][6] == pytest.approx(0.30)
-    assert associations == [], "the association stream must drop the same row"
+    assert associations == [], "a file naming no effect column yields no associations"
 
 
 def test_metrics_projection_fails_loudly_when_identity_column_is_missing(tmp_path):
@@ -1166,9 +1171,9 @@ def test_gwas_ssf_reader_drops_a_non_positive_or_unparseable_odds_ratio(tmp_path
 
     associations = list(GwasSsfReader(path, StoredEffectScale.LOG_OR).stream_associations())
 
-    assert [association.position for association in associations] == [500], (
-        "only the usable odds-ratio row may reach the association stream"
-    )
+    assert [math.isfinite(association.z) for association in associations] == [
+        False, False, False, False, True
+    ], "only the usable odds-ratio row has an effect; the rest are no-effect rows"
     # The metrics seam still sees every row, with the unusable beta absent.
     assert [row[7] for row in _metrics_rows(path)] == [
         None, None, None, None, pytest.approx(math.log(2.0))
@@ -1372,7 +1377,7 @@ def test_other_gwas_ssf_columns_stay_case_sensitive(tmp_path):
     assert metrics[0][7] == pytest.approx(0.25), "BETA is read"
     assert metrics[0][8] is None, "STANDARD_ERROR is not standard_error"
     assert metrics == _reference_metrics_rows(path)
-    assert list(reader.stream_associations()) == [], "no usable SE means no association"
+    assert admitted(reader.stream_associations()) == [], "no usable SE means no association"
 
 
 # --- z-score derivation: beta from a signed z, EAF and per-row N (issue #215) ---
@@ -1454,7 +1459,7 @@ def test_gwas_ssf_reader_drops_z_rows_with_unusable_eaf_or_n(tmp_path):
         header=_Z_HEADER,
     )
 
-    associations = list(GwasSsfReader(path, StoredEffectScale.SD).stream_associations())
+    associations = admitted(GwasSsfReader(path, StoredEffectScale.SD).stream_associations())
 
     assert [association.position for association in associations] == [700]
     assert [row[8] for row in _metrics_rows(path)] == [
@@ -1479,7 +1484,7 @@ def test_gwas_ssf_reader_z_derivation_requires_a_sample_size_column(tmp_path):
 
     reader = GwasSsfReader(path, StoredEffectScale.SD)
 
-    assert list(reader.stream_associations()) == []
+    assert admitted(reader.stream_associations()) == []
     metrics = _metrics_rows(path)
     assert len(metrics) == 1
     assert metrics[0][7] is None and metrics[0][8] is None

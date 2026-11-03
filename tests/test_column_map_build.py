@@ -69,7 +69,10 @@ def _store_contents(store: Path, analyses: list[str]) -> dict[str, Any]:
 
 def test_build_dense_vcf_builds_mvp_raw_files_as_their_rewrite(tmp_path: Path) -> None:
     raw_store, ssf_store = tmp_path / "raw.opengwasdb", tmp_path / "ssf.opengwasdb"
-    common = ("--store-id", "mvp", "--release-id", "r1")
+    common = (
+        "--store-id", "mvp", "--release-id", "r1",
+        "--admission-record", str(tmp_path / "admission"),
+    )
     rewrite = _invoke(
         "build-dense-vcf", str(_mvp_manifest(tmp_path / "ssf.tsv", raw=False)), str(ssf_store),
         *common,
@@ -109,7 +112,9 @@ def test_build_hybrid_reads_through_a_built_in_map_by_name(tmp_path: Path) -> No
         store = tmp_path / f"{capability}.opengwasdb"
         result = _invoke(
             "build-hybrid", str(_finngen_manifest(tmp_path / f"{capability}.tsv", capability)),
-            str(store), "--reference-panel", str(panel), "--store-id", "f", "--release-id", "r",
+            str(store), "--reference-panel", str(panel),
+            "--admission-record", str(tmp_path / "admission"),
+            "--store-id", "f", "--release-id", "r",
             *flags,
         )
         assert result.exit_code == 0, result.output
@@ -146,6 +151,7 @@ def test_a_mapped_analysis_without_a_map_is_refused_before_building(tmp_path: Pa
 
     result = _invoke(
         "build-dense-vcf", str(_mvp_manifest(tmp_path / "raw.tsv", raw=True)), str(store),
+        "--admission-record", str(tmp_path / "admission"),
         "--store-id", "mvp", "--release-id", "r1",
     )
 
@@ -171,7 +177,9 @@ def test_a_mapped_row_with_no_build_anywhere_is_refused_by_the_build(tmp_path: P
     store = tmp_path / "raw.opengwasdb"
 
     result = _invoke(
-        "build-dense-vcf", str(manifest), str(store), "--store-id", "mvp", "--release-id", "r1",
+        "build-dense-vcf", str(manifest), str(store),
+        "--admission-record", str(tmp_path / "admission"),
+        "--store-id", "mvp", "--release-id", "r1",
         "--column-map", str(column_map),
     )
 
@@ -203,7 +211,10 @@ def test_a_store_records_the_map_it_was_built_through(tmp_path: Path) -> None:
         ):
             store = tmp_path / f"{command}-{capability}.opengwasdb"
             manifest = _finngen_manifest(tmp_path / f"{command}-{capability}.tsv", capability)
-            result = _invoke(command, str(manifest), str(store), *common, *extra, *flags)
+            result = _invoke(
+                command, str(manifest), str(store), *common, *extra, *flags,
+                "--admission-record", f"{store}.admission",
+            )
             assert result.exit_code == 0, result.output
 
             recorded = _provenance(store).get("column_map")

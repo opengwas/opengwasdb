@@ -33,7 +33,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 from functools import cached_property
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, TYPE_CHECKING, Any
 
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.column_map import (
@@ -58,6 +58,9 @@ from opengwasdb.readers.tabular import (
     open_binary,
     stream_projected_variants,
 )
+
+if TYPE_CHECKING:
+    from opengwasdb.readers.interface import StreamTally
 
 __all__ = ["ColumnMapReader", "MappedSource"]
 
@@ -461,6 +464,7 @@ class ColumnMapReader:
             self.stored_effect_scale,
             self.chunk_rows,
             self.imputation_score_declaration,
+            self.column_map.conventions.alleles.reference,
         )
 
     @property
@@ -472,8 +476,8 @@ class ColumnMapReader:
     def imputation_score_column(self) -> str | None:
         return self._delegate.imputation_score_column
 
-    def stream_associations(self) -> Iterator[ReaderAssociation]:
-        yield from self._delegate.stream_associations()
+    def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
+        yield from self._delegate.stream_associations(tally)
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         separator = self.column_map.conventions.rsid_separator

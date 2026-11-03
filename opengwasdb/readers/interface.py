@@ -23,13 +23,15 @@ importing a source module directly.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
 import numpy as np
 
 from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.stats import FrequencyTally
+from opengwasdb.variants.normalise import IdentityFaults
 
 
 class ImputationScoreStatus(StrEnum):
@@ -106,6 +108,23 @@ def parse_imputation_score(value: str | None, *, declared: bool) -> ImputationSc
     return ImputationScore(number, ImputationScoreStatus.OUT_OF_RANGE)
 
 
+class ReferenceAllele(StrEnum):
+    """Which of a row's two alleles its source declares to be the genome's reference.
+
+    Declared by the format, never inferred: GWAS-VCF's `REF` and FinnGen's
+    `ref` are the reference allele (`REF`, the row's own `ref`), while
+    GWAS-SSF, BESD and an effect/other Column Map name an effect allele and an
+    other one, which need not be the reference (`UNDECLARED`). `ALT` is a row
+    whose `alt` its source declares the reference. Association Admission reads
+    it only to tell the two alleles of an indel apart when an insertion and a
+    deletion share one ALID (issue #357).
+    """
+
+    UNDECLARED = "undeclared"
+    REF = "ref"
+    ALT = "alt"
+
+
 @dataclass(frozen=True)
 class ReaderAssociation:
     """One source association's position, effect, and precision.
@@ -114,7 +133,9 @@ class ReaderAssociation:
     reordered to canonical A1/A2 -- `z` is already sign-corrected to the
     A1 = min(ref, alt) convention every reader in this package follows, the two
     compared upper-cased (`opengwasdb.variants.normalise.identity_allele`, spec
-    §4: a lower-case base is the same base). `eaf` follows `z`: it is
+    §4: a lower-case base is the same base). `z` is NaN for a source row that
+    reports no effect: such a row is not an association, and Association
+    Admission drops and logs it (`effect_missing`). `eaf` follows `z`: it is
     the frequency of the *stored* effect allele, so a reader that negated `z`
     also stores `1 - af` (ADR 0036). None where the source reports no usable
     frequency -- never fabricated, and never a substitute 0.5. There is no
@@ -124,6 +145,8 @@ class ReaderAssociation:
     source file itself (issue #17): it is Analytical Metadata a reader
     receives from its caller (ultimately the build manifest, validated
     against issue #16's schema) and attaches to every association it yields.
+    `reference` says which of `ref` and `alt` the source declares to be the
+    reference allele, if it declares one.
     """
 
     chromosome: str
@@ -136,10 +159,11 @@ class ReaderAssociation:
     eaf: float | None = None
     # Present only with an independent provider-backed declaration (#175).
     imputation_score: ImputationScore = ImputationScore()
+    reference: ReferenceAllele = ReferenceAllele.UNDECLARED
 
     def __post_init__(self) -> None:
-        if self.se < 0:
-            raise ValueError(f"se must be non-negative, got {self.se!r}")
+        # An unusable `se` (NaN, not positive, not finite) is the source's, as
+        # read: Association Admission drops and logs the row.
         if self.eaf is not None and not 0.0 <= self.eaf <= 1.0:
             raise ValueError(f"eaf must be in [0, 1], got {self.eaf!r}")
 
@@ -186,12 +210,29 @@ class SiteMetrics:
             raise ValueError(f"se must be non-negative, got {self.se!r}")
 
 
+@dataclass
+class StreamTally:
+    """What one Source Reader stream did to the rows it read, for Association
+    Admission to record (issue #357): the rows it dropped because no ALID can
+    spell their identity (#365), and the reported frequencies it made absent
+    (D7)."""
+
+    faults: IdentityFaults = field(default_factory=IdentityFaults)
+    frequencies: FrequencyTally = field(default_factory=FrequencyTally)
+
+
 class SourceReader(Protocol):
     """One Source Format's reader: association streaming plus per-site AF/SE
     lookup for annotation."""
 
-    def stream_associations(self) -> Iterator[ReaderAssociation]:
-        """Yield every association in the source, oriented per ReaderAssociation."""
+    def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
+        """Yield every association in the source, oriented per ReaderAssociation.
+
+        A row whose identity is malformed (a missing chromosome, an allele
+        outside A, C, G and T) is not yielded. ``tally``, given, names each
+        such row, and counts the reported frequencies the stream made absent
+        because they lie outside (0, 1) (issue #357: D7, #365).
+        """
         ...
 
     def stream_variants(self) -> Iterator[SourceVariant]:

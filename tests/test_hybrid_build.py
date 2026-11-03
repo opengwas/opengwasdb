@@ -22,6 +22,7 @@ from types import ModuleType, SimpleNamespace
 import numpy as np
 import pytest
 import zarr
+from admission_helpers import logged, record_analyses
 from cli_output import normalize_cli_output
 from liftover_fixtures import (
     STRAND_ROWS,
@@ -31,6 +32,7 @@ from liftover_fixtures import (
 )
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
+from opengwasdb.admission import admission_record_for
 from opengwasdb.ancestry.reference import AncestryReference
 from opengwasdb.build.resolve import AnalysisRequest, resolve_analysis
 from opengwasdb.build.resolve_manifest import load_variant_reference
@@ -1112,7 +1114,7 @@ def test_cli_invalid_options_fail_at_parse_time_hybrid(tmp_path):
         str(tmp_path / "out.opengwasdb"),
         "--reference-panel",
         panel,
-        "--store-id",
+        "--admission-record", str(tmp_path / "admission"), "--store-id",
         "s",
         "--release-id",
         "r",
@@ -1544,6 +1546,7 @@ class TestVariantReference:
             [
                 "build-hybrid", str(manifest), str(store),
                 "--variant-reference", str(reference),
+                "--admission-record", str(tmp_path / "admission"),
                 "--store-id", "s", "--release-id", "r",
             ],
         )
@@ -1851,10 +1854,12 @@ class TestVariantReference:
         assert set(rows) == {HG38_ALID_1, HG38_ALID_2, HG38_ALID_3}
         assert rows[HG38_ALID_2].source_alid is None
 
-    def test_two_raw_keys_in_same_analysis_join_one_variant_last_wins(self, tmp_path):
-        """Issue #223 AC4: when two different raw keys within the SAME Analysis
-        map to the same Variant Index (e.g. A:G and G:A both canonicalising to
-        A:G), the later stream occurrence must win (last-wins deduplication)."""
+    def test_two_raw_keys_in_same_analysis_that_disagree_are_both_dropped(self, tmp_path):
+        """D5 (issue #357) in the fold: two raw keys of one Analysis that the
+        fold resolves to one Variant Index (A:G and G:A, both A:G) and that
+        disagree are both dropped and logged, where the later used to win
+        (issue #223). Two SNV rows are one variant read from opposite alleles,
+        so the source's declared reference does not choose between them."""
         reference = _write_reference_artifact(
             tmp_path, _hybrid_manifest(tmp_path), panel_only=True
         )
@@ -1880,16 +1885,53 @@ class TestVariantReference:
 
         assert result.n_panel == 2
         assert result.n_off_panel == 1, "both raw keys resolve to one variant"
-        assert result.n_overflow == 1, "deduplicated to exactly 1 association in overflow"
+        assert result.n_overflow == 0, "neither of two disagreeing rows is stored"
 
         validation = validate_store(store)
         assert validation.ok, validation.errors
+        (analysis,) = record_analyses(store)
+        assert analysis["dropped"] == {"duplicate_conflicting": 2}
+        assert logged(admission_record_for(store), 0, "fold")[1:] == [
+            ["1:500000:A:G", "duplicate_conflicting"]
+        ] * 2
 
+    @pytest.mark.parametrize("deletion_first", [True, False], ids=["deletion", "insertion"])
+    def test_a_reversed_indel_the_fold_resolves_keeps_its_insertion(
+        self, tmp_path, deletion_first
+    ):
+        """D5 for a reversed indel no reference names (issue #357): the fold
+        resolves `G>GGGGCC` and `GGGGCC>G` to one ALID, and GWAS-VCF declares
+        `REF` the reference, so the insertion is kept wherever it falls and the
+        deletion is logged."""
+        reference = _write_reference_artifact(
+            tmp_path, _hybrid_manifest(tmp_path), panel_only=True
+        )
+        rows = [
+            "1\t827587\t.\tG\tGGGGCC\t.\tPASS\t.\tES:SE\t-0.00115727:0.0135908\n",
+            "1\t827587\t.\tGGGGCC\tG\t.\tPASS\t.\tES:SE\t0.0226233:0.05058\n",
+        ]
+        vcf = _make_vcf(tmp_path, "bmi_irn", rows[::-1] if deletion_first else rows)
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("bmi_irn", vcf, "BMI_IRN", "hg38")]
+        )
+        store = tmp_path / "reversed.opengwasdb"
+
+        result = build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=reference, store_id="s", release_id="r",
+            n_workers=2,
+        )
+
+        assert (result.n_off_panel, result.n_overflow) == (1, 1)
         with query_store(store) as q:
-            res = q.lookup(["1:500000:A:G"], ["trait_same"])
-            assert len(res["z"]) == 1
-            # Row 2 (z = 4.0) must win over Row 1 (z = -2.0)
-            assert res["z"][0] == pytest.approx(4.0, rel=5e-3)
+            res = q.lookup(["1:827587:G:GGGGCC"], ["bmi_irn"])
+        # The insertion's z, its effect allele sorting second: within the z
+        # code's resolution of +0.0852, where the deletion's would be 0.447.
+        assert res["z"].tolist() == pytest.approx([0.00115727 / 0.0135908], abs=1e-3)
+        (analysis,) = record_analyses(store)
+        assert analysis["dropped"] == {"duplicate_reversed_indel": 1}
+        assert logged(admission_record_for(store), 0, "fold")[1:] == [
+            ["1:827587:G:GGGGCC", "duplicate_reversed_indel"]
+        ]
 
     def test_manifest_records_the_variant_reference(self, tmp_path):
         manifest = _hybrid_manifest(tmp_path)
@@ -2698,3 +2740,26 @@ def test_single_pass_off_reference_lift_refuses_to_store_unoriented_statistics(t
         )
 
     assert not store_path.exists(), "a failed build must not leave a release behind"
+
+
+def test_a_two_pass_build_refuses_an_off_reference_spill(tmp_path, monkeypatch):
+    """D6 (issue #357): a two-pass axis is the sources' whole union, so Pass 2
+    drops and logs an unmatched row and nothing folds a `.unk` spill. One that
+    appears all the same is refused, where it used to be deleted unread."""
+    from opengwasdb.layouts.hybrid.unknown_keys import encode_keys
+
+    real_spill = hybrid_build._off_reference_spill
+
+    def _spill_a_row(unmatched, se_divisor, gate):
+        spill = real_spill(unmatched, se_divisor, gate)
+        assert not len(spill[0]), "a two-pass Pass 2 spills nothing of its own"
+        one = np.ones(1, dtype=np.float32)
+        keys = encode_keys(["1:5:A:G"])
+        return keys.values, one, one, one, np.zeros(1, dtype=np.int8), keys.hashed_index, []
+
+    monkeypatch.setattr(hybrid_build, "_off_reference_spill", _spill_a_row)
+    with pytest.raises(RuntimeError, match=r"two-pass Hybrid build found \d+ off-reference"):
+        build_hybrid_from_vcf_manifest(
+            _hybrid_manifest(tmp_path), tmp_path / "store.opengwasdb",
+            reference_panel=_panel(tmp_path), store_id="s", release_id="r",
+        )

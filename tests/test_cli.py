@@ -10,6 +10,27 @@ from typer.testing import CliRunner
 from opengwasdb.cli.main import _format_p, app
 
 
+def _build_dense(source_path, store_path, *options: str):
+    """`build-dense` through the CLI, its Admission record beside the Store."""
+    return CliRunner().invoke(
+        app,
+        [
+            "build-dense", str(source_path), str(store_path),
+            "--admission-record", f"{store_path}.admission", *options,
+        ],
+    )
+
+
+def _fixture_store(tmp_path, source_path):
+    """The `cli-fixture` Store of the fixture source, built through the CLI."""
+    store_path = tmp_path / "cli-store.opengwasdb"
+    build = _build_dense(
+        source_path, store_path, "--store-id", "cli-fixture", "--release-id", "observed-v1"
+    )
+    assert build.exit_code == 0, build.output
+    return store_path, build
+
+
 def test_format_p_underflow_and_nan():
     # Ordinary p, e.g. p=0.05 -> log10(p) ~= -1.301.
     assert _format_p(math.log10(0.05)) == "0.05"
@@ -21,21 +42,7 @@ def test_format_p_underflow_and_nan():
 
 def test_cli_build_validate_info_and_query_workflow(tmp_path, source_path):
     runner = CliRunner()
-    store_path = tmp_path / "cli-store.opengwasdb"
-
-    build = runner.invoke(
-        app,
-        [
-            "build-dense",
-            str(source_path),
-            str(store_path),
-            "--store-id",
-            "cli-fixture",
-            "--release-id",
-            "observed-v1",
-        ],
-    )
-    assert build.exit_code == 0, build.output
+    store_path, build = _fixture_store(tmp_path, source_path)
     assert json.loads(build.output)["n_variants"] == 3
 
     validate = runner.invoke(app, ["validate", str(store_path)])
@@ -71,15 +78,7 @@ def test_cli_build_validate_info_and_query_workflow(tmp_path, source_path):
 
 def test_cli_query_defaults_to_resolved_tsv(tmp_path, source_path):
     runner = CliRunner()
-    store_path = tmp_path / "cli-store.opengwasdb"
-    build = runner.invoke(
-        app,
-        [
-            "build-dense", str(source_path), str(store_path),
-            "--store-id", "cli-fixture", "--release-id", "observed-v1",
-        ],
-    )
-    assert build.exit_code == 0, build.output
+    store_path, _ = _fixture_store(tmp_path, source_path)
 
     phewas = runner.invoke(app, ["query-phewas", str(store_path), "rs1"])
     assert phewas.exit_code == 0, phewas.output
@@ -139,6 +138,7 @@ def test_cli_default_tsv_shows_materialised_eaf(tmp_path):
         app,
         [
             "build-dense-vcf", str(manifest), str(store_path),
+            "--admission-record", str(tmp_path / "admission"),
             "--store-id", "eaf-cli", "--release-id", "v1",
         ],
     )
@@ -157,15 +157,7 @@ def test_cli_default_tsv_shows_materialised_eaf(tmp_path):
 
 def test_cli_query_variant_info_adds_only_rsid(tmp_path, source_path):
     runner = CliRunner()
-    store_path = tmp_path / "cli-store.opengwasdb"
-    build = runner.invoke(
-        app,
-        [
-            "build-dense", str(source_path), str(store_path),
-            "--store-id", "cli-fixture", "--release-id", "observed-v1",
-        ],
-    )
-    assert build.exit_code == 0, build.output
+    store_path, _ = _fixture_store(tmp_path, source_path)
 
     without_it = runner.invoke(app, ["query-phewas", str(store_path), "rs1"])
     assert without_it.exit_code == 0, without_it.output
@@ -194,20 +186,7 @@ def test_cli_query_variant_info_adds_only_rsid(tmp_path, source_path):
 
 def test_cli_regenerate_overview_rewrites_from_persisted_data_only(tmp_path, source_path):
     runner = CliRunner()
-    store_path = tmp_path / "cli-store.opengwasdb"
-    build = runner.invoke(
-        app,
-        [
-            "build-dense",
-            str(source_path),
-            str(store_path),
-            "--store-id",
-            "cli-fixture",
-            "--release-id",
-            "observed-v1",
-        ],
-    )
-    assert build.exit_code == 0, build.output
+    store_path, _ = _fixture_store(tmp_path, source_path)
 
     index_sqlite_before = (store_path / "index.sqlite").read_bytes()
     analyses_tsv_before = (store_path / "analyses.tsv").read_text(encoding="utf-8")
@@ -236,13 +215,11 @@ def test_cli_build_dense_refuses_a_coverage_a_dense_matrix_cannot_hold(tmp_path,
 
     store_path = tmp_path / "refused.opengwasdb"
 
-    build = CliRunner().invoke(
-        app,
-        [
-            "build-dense", str(source_path), str(store_path),
-            "--store-id", "cf", "--release-id", "ov1",
-            "--association-coverage", "cis",
-        ],
+    build = _build_dense(
+        source_path, store_path,
+        "--store-id", "cf",
+        "--release-id", "ov1",
+        "--association-coverage", "cis",
     )
 
     assert build.exit_code != 0
@@ -290,6 +267,7 @@ def test_cli_build_hybrid_validate_and_query(tmp_path):
         [
             "build-hybrid", str(manifest), str(store),
             "--reference-panel", str(panel),
+            "--admission-record", str(tmp_path / "admission"),
             "--store-id", "hyb-cli", "--release-id", "v1",
         ],
     )
@@ -321,13 +299,7 @@ def test_cli_info_and_validate_format_json(tmp_path, source_path):
 
     runner = CliRunner()
     store_path = tmp_path / "cli-store.opengwasdb"
-    build = runner.invoke(
-        app,
-        [
-            "build-dense", str(source_path), str(store_path),
-            "--store-id", "cf", "--release-id", "ov1",
-        ],
-    )
+    build = _build_dense(source_path, store_path, "--store-id", "cf", "--release-id", "ov1")
     assert build.exit_code == 0, build.output
     build_summary = json.loads(build.output.strip().splitlines()[-1])
     assert build_summary["association_coverage"] == "gwas"
@@ -407,3 +379,42 @@ def test_cli_info_and_validate_format_json(tmp_path, source_path):
     assert isinstance(bad_data["warnings"], list)
 
 
+
+
+_BUILDERS = (
+    "build-dense",
+    "build-dense-vcf",
+    "build-hybrid",
+    "build-hybrid-from-catalogue",
+    "build-ragged-ssf",
+    "build-ragged-besd",
+)
+
+
+@pytest.mark.parametrize("command", _BUILDERS)
+def test_every_builder_requires_its_admission_record_path(command: str):
+    """#357: a default beside OUTPUT_PATH would follow a staging name, so a
+    workflow that renames `store.opengwasdb.partial` into place would leave the
+    record behind as `store.opengwasdb.partial.admission`. The caller names it."""
+    from typer.main import get_command
+
+    params = {param.name: param for param in get_command(app).commands[command].params}
+    assert params["admission_record"].opts == ["--admission-record"]
+    assert params["admission_record"].required
+
+
+def test_a_build_without_an_admission_record_is_refused_before_writing(tmp_path, source_path):
+    store_path = tmp_path / "cli-store.opengwasdb"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "build-dense", str(source_path), str(store_path),
+            "--store-id", "cli-fixture", "--release-id", "observed-v1",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "--admission-record" in result.output
+    assert not store_path.exists()
+    assert not (tmp_path / "cli-store.opengwasdb.admission").exists()

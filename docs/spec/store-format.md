@@ -194,6 +194,12 @@ negated, as `A`/`G` would be. A source's own spelling survives only as
 provenance — a Variant Reference's source keys — and in the rsid harvest
 below, which compares the names a site's spellings carry.
 
+A source row whose chromosome is missing (an empty cell, `.`, `NA`) or whose
+allele, upper-cased, holds a character other than A, C, G or T names no ALID.
+Every builder drops it, and logs it in the build's Admission record as
+`chromosome_missing` or `allele_invalid` (issue #365, ADR 0072). An alt, random
+or unplaced contig is a chromosome.
+
 A build that lifts a source variant from another Reference Assembly MUST project
 the variant onto the release's assembly using the chain block's orientation: on a
 reverse-strand block the alleles are complemented before the ALID is formed, so
@@ -487,9 +493,10 @@ Ragged sequence. The arrays are present whenever `z` is `int16_fixed`, even
 when empty. Every out-of-range cell MUST have an entry and the table MUST NOT
 describe any other cell (§20).
 
-A build MUST fail on a non-finite `z` that is not a recorded absence (±inf, or
-a malformed statistic): it is neither a value nor an absence, and no encoding
-of it is honest.
+A non-finite `z` that is not a recorded absence (±inf, or a malformed
+statistic) is neither a value nor an absence, and no encoding of it is honest.
+A build never stores one: Association Admission drops the source row and logs
+it (`z_nonfinite`, ADR 0072), and a writer handed one refuses it.
 
 **`se` — `float16` or `int8_residual`.** Residual coding predicts
 `log(SE) = intercept + slope × log(2 × EAF × (1 − EAF))` using decoded,
@@ -818,8 +825,9 @@ threshold, malformed thresholds, and a declaration alongside `NaN` are invalid.
 The declared source column must occur exactly once with the declared spelling;
 the GWAS-SSF reader rejects absent, padded, or ambiguous source header columns
 when it opens the file. These inputs define an ingestion policy, and a CORE
-build applies it: the Hybrid builder (issue #175) passes the declaration to the
-Source Reader and drops every association the policy excludes — a usable score
+build applies it: every builder (issue #175; since #357 not the Hybrid alone,
+ADR 0072) passes the declaration to the Source Reader and drops every
+association the policy excludes — a usable score
 strictly below a positive threshold, or a score that is missing, malformed,
 non-finite or out of `[0, 1]` — before Dense/Overflow routing, before the EAF
 orientation check and before the Top-Hit Counts, so nothing a declared
@@ -1641,7 +1649,7 @@ Invalid states:
 - imputed mask is true while Z or SE is missing;
 - a marker payload is non-canonical (for a float plane, a non-canonical NaN).
 
-Builders and validators MUST reject invalid states. Readers MUST refuse them: a query whose region holds an invalid cell fails, naming the component and the cell, rather than dropping it or reading it as missing (ADR 0070).
+Builders and validators MUST reject invalid states. A builder rejects them through Association Admission (ADR 0072): a source row becomes a cell only through an Analysis's gate, which admits a row only with both a usable Z and a usable SE, and a writer handed cells from anywhere else checks them with `require_admitted`. Readers MUST refuse them: a query whose region holds an invalid cell fails, naming the component and the cell, rather than dropping it or reading it as missing (ADR 0070).
 
 The imputed mask is:
 

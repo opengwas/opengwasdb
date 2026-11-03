@@ -1,5 +1,15 @@
 # Whole-stream evidence and one row-admission rule
 
+> **Amended by [ADR 0072](0072-association-admission.md) (issue #357):** the
+> one row-admission rule is now Association Admission's declared-filter stage
+> (`opengwasdb.admission`); `opengwasdb.build.row_admission.admit_rows` is gone.
+> The INFO-then-MAF precedence and every count below are unchanged. Two things
+> change. The filters now judge only the rows Admission's earlier rules admit as
+> associations, which are the rows a reader yielded before. And this ADR's scope
+> is no longer the resolver and the Hybrid builder alone: every builder judges
+> through the same gate, so the scope paragraphs below describe the rule before
+> #357.
+
 ADR 0048 decoupled the ancestry-site bound from quantitative phenotype-SD
 evidence: the bound stops ancestry accumulation, and a quantitative Analysis
 continues its physical scan to EOF. It left the case-control path terminating

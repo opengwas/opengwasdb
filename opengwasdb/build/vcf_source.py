@@ -15,8 +15,14 @@ import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
-from opengwasdb.stats import parse_af
-from opengwasdb.variants.normalise import identity_allele, normalise_chromosome
+from opengwasdb.stats import FrequencyTally, parse_af
+from opengwasdb.variants.normalise import (
+    IdentityFaults,
+    MalformedIdentity,
+    allele_fault,
+    identity_allele,
+    normalise_chromosome,
+)
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +46,7 @@ def stream_vcf_variants(path: str | Path) -> Iterator[tuple[str, int, str, str, 
     are skipped silently. CHROM is normalised to bare form (no chr prefix).
     """
     bcftools = _require_bcftools()
+    chromosomes: dict[str, str] = {}
     proc = subprocess.Popen(
         [bcftools, "query", "-f", "%CHROM\t%POS\t%REF\t%ALT\t%ID\n", str(path)],
         stdout=subprocess.PIPE,
@@ -53,8 +60,11 @@ def stream_vcf_variants(path: str | Path) -> Iterator[tuple[str, int, str, str, 
             chrom_raw, pos_str, ref, alt, id_field = line.split("\t")
             if "," in alt:
                 continue
+            chrom = _identity(chromosomes, chrom_raw, ref, alt)
+            if isinstance(chrom, MalformedIdentity):
+                continue  # the association stream reports it; the axis never holds it
             rsid = id_field if id_field.startswith("rs") else ""
-            yield normalise_chromosome(chrom_raw), int(pos_str), ref, alt, rsid
+            yield chrom, int(pos_str), ref, alt, rsid
     finally:
         proc.stdout.close()  # type: ignore[union-attr]
         proc.wait()
@@ -81,17 +91,23 @@ def has_format_tag(path: str | Path, tag: str) -> bool:
 
 def stream_vcf_associations(
     path: str | Path,
+    frequencies: FrequencyTally | None = None,
+    faults: IdentityFaults | None = None,
 ) -> Iterator[tuple[str, int, str, str, float, float, float | None]]:
     """Yield (bare_chrom, pos, ref, alt, z, se, eaf) for each biallelic record.
 
     z is oriented to canonical ALID convention: A1 = min(ref, alt), compared
     upper-cased (`identity_allele`: a lower-case base is the same base).  When
-    the VCF effect allele (ALT) is not A1, z is negated.  SE is always positive.
+    the VCF effect allele (ALT) is not A1, z is negated.  SE is the record's
+    own: NaN when it is missing, and possibly not positive or not finite, which
+    Association Admission drops and logs.
     `eaf` follows z: it is FORMAT/AF re-expressed for the *stored* effect
     allele, so a negated z carries ``1 - AF`` (ADR 0036). None when the file
     declares no AF tag, or reports none for this record.
 
-    Records with SE ≤ 0, non-finite z, or all EZ/ES/SE missing are skipped.
+    Every biallelic record is yielded. One with neither EZ nor ES, or with only
+    ES beside an unusable SE, has a NaN z, and one whose z is infinite keeps it:
+    Association Admission drops and logs both.
 
     Carries no effect-scale information: the VCF's own `##SAMPLE` `StudyType`
     header is not authoritative for `stored_effect_scale` (issue #17 --
@@ -102,6 +118,7 @@ def stream_vcf_associations(
     schema (issue #16).
     """
     bcftools = _require_bcftools()
+    chromosomes: dict[str, str] = {}
     with_af = has_format_tag(path, "AF")
     fields = "%CHROM\t%POS\t%REF\t%ALT\t[%EZ]\t[%ES]\t[%SE]"
     n_fields = 7
@@ -122,17 +139,20 @@ def stream_vcf_associations(
             if len(parts) != n_fields:
                 continue
             chrom_raw, pos_str, ref, alt, ez_str, es_str, se_str = parts[:7]
-            af = parse_af(parts[7]) if with_af else None
             if "," in alt:
                 continue
-
-            se = _parse_float(se_str)
-            if se is None or se <= 0:
+            chrom = _identity(chromosomes, chrom_raw, ref, alt)
+            if isinstance(chrom, MalformedIdentity):
+                if faults is not None:
+                    faults.record(f"{chrom_raw}:{pos_str}:{ref}:{alt}", chrom)
                 continue
+            af = parse_af(parts[7], frequencies) if with_af else None
 
-            z = _derive_z(ez_str, es_str, se)
-            if z is None or not math.isfinite(z):
-                continue
+            parsed_se = _parse_float(se_str)
+            se = math.nan if parsed_se is None else parsed_se
+
+            derived = _derive_z(ez_str, es_str, se)
+            z = math.nan if derived is None else derived
 
             eaf = af
             if identity_allele(alt) > identity_allele(ref):
@@ -141,10 +161,36 @@ def stream_vcf_associations(
                 # stored effect allele is REF here and AF must follow (ADR 0036).
                 eaf = None if af is None else 1.0 - af
 
-            yield normalise_chromosome(chrom_raw), int(pos_str), ref, alt, z, se, eaf
+            yield chrom, int(pos_str), ref, alt, z, se, eaf
     finally:
         proc.stdout.close()  # type: ignore[union-attr]
         proc.wait()
+
+
+#: A one-base allele in either case, which nearly every record holds.
+_ONE_BASE = frozenset("ACGTacgt")
+
+
+def _identity(
+    chromosomes: dict[str, str], chrom_raw: str, ref: str, alt: str
+) -> str | MalformedIdentity:
+    """A record's bare chromosome, or why its identity is malformed (#365).
+
+    ``chromosomes`` caches each spelling's normalised name, so a record pays a
+    dictionary lookup and two set lookups. A chromosome refused for another
+    reason (an unsupported number) still raises.
+    """
+    chrom = chromosomes.get(chrom_raw)
+    if chrom is None:
+        try:
+            chrom = normalise_chromosome(chrom_raw)
+        except MalformedIdentity as missing:
+            return missing
+        chromosomes[chrom_raw] = chrom
+    if ref in _ONE_BASE and alt in _ONE_BASE:
+        return chrom
+    invalid = allele_fault(ref, alt)
+    return chrom if invalid is None else invalid
 
 
 def _parse_float(s: str) -> float | None:
@@ -157,11 +203,17 @@ def _parse_float(s: str) -> float | None:
 
 
 def _derive_z(ez_str: str, es_str: str, se: float) -> float | None:
-    """Prefer EZ; fall back to ES/SE."""
+    """A record's z: its EZ when it reports one, else ES/SE; ``None`` for no effect.
+
+    An infinite EZ or ES is a value the record reports, not a missing one, so
+    the z stays infinite, for Association Admission to drop as `z_nonfinite`
+    (D4), rather than ES/SE standing in for an infinite EZ or an infinite ES
+    reading as no effect. A NaN reports nothing.
+    """
     ez = _parse_float(ez_str)
-    if ez is not None and math.isfinite(ez):
+    if ez is not None and not math.isnan(ez):
         return ez
     es = _parse_float(es_str)
-    if es is not None and se > 0:
+    if es is not None and not math.isnan(es) and se > 0 and math.isfinite(se):
         return es / se
     return None

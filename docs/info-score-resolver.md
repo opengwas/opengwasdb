@@ -22,7 +22,9 @@ columns answered them (ADR 0055):
   non-zero beta. A derived SE must itself be positive and finite.
 
 A source frequency of exactly `0.0` or exactly `1.0` is missing rather than a
-usable zero (ADR 0036), in every path that reads one.
+usable zero (ADR 0036), in every path that reads one. A build's Admission record
+counts each reported frequency it made absent so (`eaf_made_absent`, issue
+#357, D7).
 
 ## Whole-stream evidence (stores #176)
 
@@ -69,19 +71,22 @@ early physical stop at the ancestry bound.
 - When both filters would drop a row it is counted once, under
   `info_rows_below_threshold` (INFO first), never also under
   `maf_rows_below_threshold`.
-- **Scope.** The rule is the Hybrid builder's Pass 2 and this record. A
-  standalone Dense build (`build-dense-vcf`) writes a fixed reference-panel axis
-  and applies no row admission, so a MAF floor has no admission decision to make
-  there; the Ragged builders ignore a declared `maf_threshold` altogether today
-  (ADR 0054's scope amendment says both plainly).
+- **Scope.** The rule is every builder's and this record's (issue #357, D2,
+  ADR 0072): `build-hybrid`, `build-dense-vcf` and `build-ragged-ssf` apply a
+  declared INFO and MAF filter, and `build-ragged-besd` a declared MAF filter,
+  judged on the `.esi` frequency (with `--store-esi-eaf`; a BESD source has no
+  imputation score, so an INFO threshold there is refused). Before #357 only the
+  Hybrid applied them (ADR 0054's scope amendment).
 - **Resume.** `build-hybrid --checkpoint` records `CHECKPOINT_FORMAT_VERSION`
-  2; a format-1 checkpoint predates this rule and is refused rather than resumed.
+  3; a format-1 checkpoint predates this rule, a format-2 one predates
+  Admission's reasons, and both are refused rather than resumed.
 
 ## One admission rule
 
-`opengwasdb.build.row_admission.admit_rows` decides per batch which rows are
-admitted (`keep = ~info_drop & ~maf_drop`). The resolver `_scan` and the Hybrid
-builder's Pass 2 both call it, so `canonical_rows_retained` (resolver) and
+Association Admission (`opengwasdb.admission`) decides per batch which rows are
+admitted, through one counting `Gate` per Analysis, and counts each dropped row
+under one reason, INFO before MAF. The resolver `_scan` and the Hybrid
+builder's Pass 2 both judge through it, so `canonical_rows_retained` (resolver) and
 `associations_retained` (builder) are the same rule on their own populations.
 Ancestry/SD evidence and `build_eligible_rows*` see admitted rows only.
 

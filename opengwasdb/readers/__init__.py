@@ -37,6 +37,7 @@ from opengwasdb.readers.gwas_vcf import (
 )
 from opengwasdb.readers.interface import (
     ReaderAssociation,
+    ReferenceAllele,
     SiteMetrics,
     SourceReader,
     af_only,
@@ -61,6 +62,7 @@ __all__ = [
     "GwasSsfReader",
     "GwasVcfReader",
     "ReaderAssociation",
+    "ReferenceAllele",
     "RowCells",
     "RowStatistics",
     "SiteMetrics",

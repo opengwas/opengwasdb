@@ -390,3 +390,28 @@ def test_streams_more_sites_than_a_command_line_array_would_hold(tmp_path):
 
     _header, rows = _read_tsv(out)
     assert float(rows[0]["original_sd"]) == pytest.approx(_SD_TRUE, rel=1e-6)
+
+
+def test_a_row_with_no_effect_is_not_evidence_for_any_tier():
+    """A reader yields a row with no effect (a NaN z) for Association Admission
+    to drop; its SE and frequency are not an association's, so no tier reads
+    them."""
+    import math
+
+    from opengwasdb.build.phenotype_sd_pipeline import _gather_evidence
+    from opengwasdb.model.enums import StoredEffectScale
+    from opengwasdb.readers.fake import FakeReader
+    from opengwasdb.readers.interface import ReaderAssociation
+
+    reader = FakeReader(
+        associations=[
+            ReaderAssociation("1", 100, "A", "G", 2.0, 0.1, StoredEffectScale.SD, eaf=0.3),
+            ReaderAssociation("1", 200, "A", "G", math.nan, 0.2, StoredEffectScale.SD, eaf=0.4),
+        ]
+    )
+
+    se, af, _ = _gather_evidence(reader, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF, None)
+    assert se is not None and af is not None
+    assert se.tolist() == [0.1] and af.tolist() == [0.3]
+    _, _, beta = _gather_evidence(reader, OriginalSdMethod.ESTIMATED_FROM_BETA_DISTRIBUTION, None)
+    assert beta is not None and beta.tolist() == pytest.approx([0.2])

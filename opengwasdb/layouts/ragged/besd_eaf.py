@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -47,25 +48,43 @@ _ESI_KEY = ".esi"
 SHARED_NOTE = "measured once over the .esi frequencies, which every probe shares (ADR 0067)"
 
 
+class EsiFrequencies(NamedTuple):
+    """What a `.esi`'s frequency column gives a build that stores it.
+
+    ``stored`` is each ESI row's frequency of the *stored* effect allele, or
+    `None` when no row has one. ``made_absent`` marks each ESI row that reported
+    a frequency the Store holds as absent (D7): a probe counts its rows at those
+    ESI rows in its Admission record, as every reader counts the frequencies of
+    the rows it reads.
+    """
+
+    stored: np.ndarray | None
+    made_absent: np.ndarray
+
+
 def stored_esi_frequencies(
     snps: Sequence[SnpRecord], esi_to_variant: dict[int, tuple[int, bool]]
-) -> np.ndarray | None:
-    """Each ESI row's frequency of the *stored* effect allele, or `None`.
+) -> EsiFrequencies:
+    """Each ESI row's stored-allele frequency, and which reported ones are absent.
 
     Indexed by ESI row; NaN for a row that reaches no variant or reports no
-    usable frequency (`parse_af`: missing, out of range, exactly 0 or 1). A
-    flipped row holds `1 - f`, the same rule `z`'s sign follows. `None` when no
-    row reaches the axis with a frequency, so a `.esi` without one builds the
-    release it built before frequencies were stored.
+    usable frequency (`parse_af`: missing, out of range, exactly 0 or 1, not
+    finite). A flipped row holds `1 - f`, the same rule `z`'s sign follows.
+    ``stored`` is `None` when no row reaches the axis with a frequency, so a
+    `.esi` without one builds the release it built before frequencies were
+    stored.
     """
     out = np.full(len(snps), np.nan, dtype=np.float32)
+    made_absent = np.zeros(len(snps), dtype=bool)
     for snp in snps:
-        mapping = esi_to_variant.get(snp.row_idx)
         frequency = parse_af(snp.freq)
-        if mapping is None or frequency is None:
+        if frequency is None:
+            made_absent[snp.row_idx] = snp.freq is not None
             continue
-        out[snp.row_idx] = 1.0 - frequency if mapping[1] else frequency
-    return out if bool(np.isfinite(out).any()) else None
+        mapping = esi_to_variant.get(snp.row_idx)
+        if mapping is not None:
+            out[snp.row_idx] = 1.0 - frequency if mapping[1] else frequency
+    return EsiFrequencies(out if bool(np.isfinite(out).any()) else None, made_absent)
 
 
 def verify_esi_orientation(

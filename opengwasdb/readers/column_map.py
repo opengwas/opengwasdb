@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from opengwasdb.build.liftover import normalise_build
+from opengwasdb.readers.interface import ReferenceAllele
 
 __all__ = [
     "BUILTIN_COLUMN_MAPS",
@@ -80,6 +81,19 @@ class AlleleConvention(StrEnum):
     #: `ref`, `alt` and an `effect_allele` column naming one of them; the other
     #: allele is whichever of the two it does not name (dbGaP MVP).
     REF_ALT_AND_EFFECT_ALLELE = "ref_alt_and_effect_allele"
+
+    @property
+    def reference(self) -> ReferenceAllele:
+        """What the convention's rows declare of their alleles.
+
+        A `ref`/`alt` pair whose effect is `alt` (FinnGen) declares `ref` the
+        reference, as the FinnGen reader does. An `effect_allele` naming either
+        of `ref`/`alt` (dbGaP MVP) is left undeclared: nothing this package
+        holds documents that the deposit's `ref` is the genome's reference.
+        """
+        if self is AlleleConvention.REF_ALT_EFFECT_IS_ALT:
+            return ReferenceAllele.REF
+        return ReferenceAllele.UNDECLARED
 
 
 class UnmappedColumns(StrEnum):

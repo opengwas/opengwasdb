@@ -1,9 +1,10 @@
 """FinnGen R13 tabular summary-statistics SourceReader.
 
 FinnGen publishes one tab-delimited, bgzip-compressed file per endpoint on
-GRCh38.  ``alt`` is the effect allele; the reader therefore converts
-``beta / sebeta`` to the package-wide canonical A1 orientation while leaving
-the source REF/ALT labels intact on streamed records.
+GRCh38.  ``ref`` is the reference allele and ``alt`` the effect allele; the
+reader therefore converts ``beta / sebeta`` to the package-wide canonical A1
+orientation while leaving the source REF/ALT labels intact on streamed
+records, each declaring ``ref`` the reference.
 """
 
 from __future__ import annotations
@@ -14,13 +15,13 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import opengwasdb.readers.interface as interface
 import opengwasdb.readers.tabular as tabular
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
 from opengwasdb.variants.normalise import (
-    VariantNormalisationError,
     normalise_chromosome,
-    orient_to_canonical,
+    orient_or_drop,
 )
 
 FINNGEN_R13_CAPABILITY = "opengwasdb.finngen-r13"
@@ -48,21 +49,24 @@ def _first_rsid(value: str | None) -> str:
     return first if first.startswith("rs") else ""
 
 
-def _iter_rows(path: str | Path) -> Iterator[tabular.TabularRow]:
+def _iter_rows(
+    path: str | Path, tally: interface.StreamTally | None = None
+) -> Iterator[tabular.TabularRow]:
+    tally = tally or interface.StreamTally()
+    faults, frequencies = tally.faults, tally.frequencies
     opener = gzip.open if str(path).endswith((".gz", ".bgz")) else open
     with opener(path, "rt", encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
         for row in reader:
             # R13 uses #chrom. Accepting chrom as well preserves compatibility
             # with older captured FinnGen releases without changing semantics.
-            chromosome = row.get("#chrom", row.get("chrom", ""))
+            chromosome = row.get("#chrom", row.get("chrom"))
             ref = row.get("ref")
             alt = row.get("alt")
-            if ref is None or alt is None:
-                continue
-            try:
-                orientation = orient_to_canonical(chromosome, row.get("pos", ""), alt, ref)
-            except VariantNormalisationError:
+            # A row too short to reach an allele has a missing one, which
+            # `faults` names (#365); the None checks are the type checker's.
+            orientation = orient_or_drop(chromosome, row.get("pos"), alt, ref, faults)
+            if orientation is None or ref is None or alt is None:
                 continue
             yield tabular.TabularRow(
                 chromosome=orientation.variant.chromosome,
@@ -71,9 +75,9 @@ def _iter_rows(path: str | Path) -> Iterator[tabular.TabularRow]:
                 alt=alt,
                 alid=orientation.variant.alid,
                 flipped=orientation.flipped,
-                beta=tabular.parse_finite_float(row.get("beta")),
+                beta=tabular.parse_effect(row.get("beta")),
                 se=tabular.parse_positive_float(row.get("sebeta")),
-                af_alt=tabular.parse_af(row.get("af_alt")),
+                af_alt=tabular.parse_af(row.get("af_alt"), frequencies),
                 rsid=_first_rsid(row.get("rsids")),
             )
 
@@ -212,8 +216,14 @@ class FinnGenR13Reader:
     path: str | Path
     stored_effect_scale: StoredEffectScale = StoredEffectScale.LOG_OR
 
-    def stream_associations(self) -> Iterator[ReaderAssociation]:
-        yield from tabular.stream_associations(_iter_rows(self.path), self.stored_effect_scale)
+    def stream_associations(
+        self, tally: interface.StreamTally | None = None
+    ) -> Iterator[ReaderAssociation]:
+        rows = _iter_rows(self.path, tally)
+        # FinnGen's `ref` is the GRCh38 reference allele.
+        yield from tabular.stream_associations(
+            rows, self.stored_effect_scale, interface.ReferenceAllele.REF
+        )
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         yield from _iter_variants(self.path)

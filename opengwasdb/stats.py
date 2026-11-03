@@ -14,6 +14,7 @@ in one file.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 from scipy import stats as _scipy_stats
@@ -31,7 +32,19 @@ Z_975 = 1.959963984540054
 _MISSING_AF = {"", ".", "NA", "NaN", "nan", "None"}
 
 
-def parse_af(value: str | float | None) -> float | None:
+@dataclass
+class FrequencyTally:
+    """How many reported frequencies `parse_af` made absent, for one stream.
+
+    A frequency the source reported (not one of its missing tokens) that is
+    not a finite number strictly inside (0, 1) is absent in a Store, and
+    Association Admission counts it (issue #357, D7).
+    """
+
+    made_absent: int = 0
+
+
+def parse_af(value: str | float | None, tally: FrequencyTally | None = None) -> float | None:
     """A usable allele frequency, or None (ADR 0036).
 
     One rule for every source format: unparseable, non-finite, and
@@ -60,10 +73,14 @@ def parse_af(value: str | float | None) -> float | None:
         try:
             af = float(value)
         except ValueError:
-            return None
+            af = math.nan
     else:
         af = float(value)
-    return af if math.isfinite(af) and 0.0 < af < 1.0 else None
+    if math.isfinite(af) and 0.0 < af < 1.0:
+        return af
+    if tally is not None:
+        tally.made_absent += 1
+    return None
 
 
 def p_value_from_z(z: float) -> float:

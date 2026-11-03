@@ -30,6 +30,7 @@ from opengwasdb.readers.interface import (
     ImputationScore,
     ImputationScoreStatus,
     ReaderAssociation,
+    ReferenceAllele,
     SiteMetrics,
     SourceVariant,
     parse_imputation_score,
@@ -63,6 +64,24 @@ def parse_finite_float(value: str | None) -> float | None:
     except ValueError:
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def parse_effect(value: str | None) -> float | None:
+    """An effect cell: `parse_finite_float`'s value, or an infinite one.
+
+    `parse_finite_float` reads an infinite number as absent, which is right for
+    a statistic but not for an effect: an infinite effect is reported, and
+    Association Admission drops its row as `z_nonfinite` (D4), not as
+    `effect_missing`. Only a cell that is not a finite number is parsed twice.
+    """
+    finite = parse_finite_float(value)
+    if finite is not None or value is None:
+        return finite
+    try:
+        parsed = float(value)
+    except ValueError:
+        return None
+    return parsed if math.isinf(parsed) else None
 
 
 def parse_positive_float(value: str | None) -> float | None:
@@ -1479,19 +1498,29 @@ class TabularRow(TabularMetricsRow):
     """Format-neutral row after source-specific column mapping.
 
     :class:`TabularMetricsRow` plus the source's own identifier for the row --
-    blank when the source records none, never fabricated.
+    blank when the source records none, never fabricated. Its ``beta`` is the
+    effect the row reports, an infinite one included, which gives the
+    association an infinite z for Association Admission to drop (D4); the
+    metrics projections read an infinite beta as absent.
     """
 
     rsid: str = ""
 
 
 def stream_associations(
-    rows: Iterable[TabularRow], stored_effect_scale: StoredEffectScale
+    rows: Iterable[TabularRow],
+    stored_effect_scale: StoredEffectScale,
+    reference: ReferenceAllele = ReferenceAllele.UNDECLARED,
 ) -> Iterator[ReaderAssociation]:
+    """Each row as a `ReaderAssociation`; ``reference`` is what the format
+    declares of every row's alleles."""
     for row in rows:
-        if row.beta is None or row.se is None:
-            continue
-        z = row.beta / row.se
+        # A row with no effect, or no usable SE, is yielded with a NaN z (and a
+        # NaN SE), for Association Admission to drop and log; it is not an
+        # association. A reader recovers an SE it can (a CI, a p) before this.
+        # An infinite reported effect gives an infinite z.
+        se = math.nan if row.se is None else row.se
+        z = math.nan if row.beta is None or row.se is None else row.beta / row.se
         eaf = row.af_alt
         if row.flipped:
             z = -z
@@ -1504,10 +1533,11 @@ def stream_associations(
             ref=row.ref,
             alt=row.alt,
             z=z,
-            se=row.se,
+            se=se,
             stored_effect_scale=stored_effect_scale,
             eaf=eaf,
             imputation_score=row.imputation_score,
+            reference=reference,
         )
 
 
