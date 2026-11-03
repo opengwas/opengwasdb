@@ -15,6 +15,7 @@ from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 
@@ -26,6 +27,7 @@ from opengwasdb.variants import (
     is_indexable_alid,
     is_indexable_rsid,
     iter_variant_records,
+    variant_alid_bytes_path,
     variant_table_path,
 )
 
@@ -99,8 +101,7 @@ def _judge_alid_index(target: Target, counts: Counter[str]) -> Iterator[str]:
             f"variants.tsv.gz has {counts['indexable']} ALID(s) narrow enough to index "
             f"(of {counts['rows']} rows)"
         )
-    keys = np.asarray(keys)
-    collisions = int(np.count_nonzero(keys[1:] == keys[:-1])) if len(keys) > 1 else 0
+    collisions = _adjacent_repeats(variant_alid_bytes_path(target.store.path))
     if collisions:
         yield (
             f"variant_alid_bytes.npy holds {collisions} key(s) shared by more than "
@@ -108,6 +109,25 @@ def _judge_alid_index(target: Target, counts: Counter[str]) -> Iterator[str]:
             "This is what silently truncating an over-wide ALID produced before "
             "issue #127 — rebuild the store"
         )
+
+
+#: Keys one collision window compares: 1,000,000 32-byte keys is 32 MB.
+_KEY_WINDOW = 1_000_000
+
+
+def _adjacent_repeats(path: Path) -> int:
+    """How many keys of the sorted ALID index equal the key before them.
+
+    Read a window at a time, each window mapped and released on its own, so the
+    index -- 369 MB on OGS-00006 -- is never held whole; one key of overlap carries
+    the comparison across a window boundary.
+    """
+    n_keys = len(np.load(path, mmap_mode="r"))
+    repeats = 0
+    for lo in range(0, max(n_keys - 1, 0), _KEY_WINDOW):
+        window = np.array(np.load(path, mmap_mode="r")[lo : lo + _KEY_WINDOW + 1])
+        repeats += int(np.count_nonzero(window[1:] == window[:-1]))
+    return repeats
 
 
 def _named_rsids(_target: Target, block: TableBlock) -> int:

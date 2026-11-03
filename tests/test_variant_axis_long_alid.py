@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+import pytest
+
 from opengwasdb.variants import VariantAxis
 from opengwasdb.variants.axis import _ALID_WIDTH, is_indexable_alid, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant
@@ -212,3 +214,18 @@ def test_validation_streams_the_variant_table_once(dense_store_path, monkeypatch
     assert result.ok, result.errors
     rows = [line for line in streamed if not line.startswith(b"#")]
     assert len(rows) == n_rows
+
+
+@pytest.mark.parametrize("window", [1, 2, 3, 1_000_000])
+def test_repeated_index_keys_are_counted_across_window_boundaries(tmp_path, monkeypatch, window):
+    """The collision count reads the index a window at a time; a repeat straddling
+    two windows must still be counted, and a key compared with itself must not be."""
+    import numpy as np
+
+    from opengwasdb.validation.rules import variants
+
+    keys = np.array([b"a", b"b", b"b", b"c", b"d", b"d", b"d"], dtype="|S4")
+    path = tmp_path / "variant_alid_bytes.npy"
+    np.save(path, keys)
+    monkeypatch.setattr(variants, "_KEY_WINDOW", window)
+    assert variants._adjacent_repeats(path) == 3
