@@ -110,9 +110,11 @@ def parse_imputation_score(value: str | None, *, declared: bool) -> ImputationSc
 class ReaderAssociation:
     """One source association's position, effect, and precision.
 
-    `ref`/`alt` are the source's own allele labelling, not reordered to
-    canonical A1/A2 -- `z` is already sign-corrected to the A1 = min(ref, alt)
-    convention every reader in this package follows. `eaf` follows `z`: it is
+    `ref`/`alt` are the source's own allele labelling, case included, not
+    reordered to canonical A1/A2 -- `z` is already sign-corrected to the
+    A1 = min(ref, alt) convention every reader in this package follows, the two
+    compared upper-cased (`opengwasdb.variants.normalise.identity_allele`, spec
+    §4: a lower-case base is the same base). `eaf` follows `z`: it is
     the frequency of the *stored* effect allele, so a reader that negated `z`
     also stores `1 - af` (ADR 0036). None where the source reports no usable
     frequency -- never fabricated, and never a substitute 0.5. There is no

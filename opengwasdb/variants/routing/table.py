@@ -25,7 +25,7 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.readers.interface import ImputationScoreStatus, ReaderAssociation
-from opengwasdb.variants.routing.keys import RoutingKey, SourceKey
+from opengwasdb.variants.routing.keys import SourceKey, encode_routing_keys, routing_key
 
 log = logging.getLogger(__name__)
 
@@ -287,7 +287,6 @@ class RouteTable:
         swaps: np.ndarray,
         *,
         n_axes: int,
-        key: RoutingKey,
         keep_unmatched: bool,
     ) -> None:
         self._keys = keys
@@ -295,7 +294,6 @@ class RouteTable:
         self._axis = axis
         self._swaps = swaps
         self._n_axes = n_axes
-        self._key = key
         self._keep_unmatched = keep_unmatched
 
     @classmethod
@@ -305,26 +303,25 @@ class RouteTable:
         reoriented: Collection[SourceKey],
         axes: Sequence[Sequence[str]],
         *,
-        key: RoutingKey,
         keep_unmatched: bool,
     ) -> RouteTable:
         """Place every routed site on the first axis that holds its ALID.
 
         A site whose ALID no axis holds is left out, so its associations are
-        unmatched. Two sites a folding key spells alike must reach the same
-        place: otherwise which one a lookup finds would depend on insertion
-        order, and an association would be misplaced in silence.
+        unmatched. Two sites one routing key spells -- one site written in two
+        cases -- must reach the same place with the same orientation: otherwise
+        which one a lookup finds would depend on insertion order, and an
+        association would be misplaced in silence.
         """
         if not axes or max(len(axis) for axis in axes) >= np.iinfo(np.int32).max:
             raise ValueError("a route table needs one or more axes, each shorter than int32")
         indices = [{alid: i for i, alid in enumerate(axis)} for axis in axes]
-        placed = _placed_sites(site_alid, reoriented, indices, key)
+        placed = _placed_sites(site_alid, reoriented, indices)
         del indices
         arrays = _sorted_by_key(*placed)
         del placed
-        table = cls(*arrays, n_axes=len(axes), key=key, keep_unmatched=keep_unmatched)
-        if key.folds:
-            table._refuse_folded_conflicts()
+        table = cls(*arrays, n_axes=len(axes), keep_unmatched=keep_unmatched)
+        table._refuse_folded_conflicts()
         log.info(
             "Pass 2 lookup: %d variant keys, max key length %d bytes, %d re-oriented by the lift",
             len(table._keys),
@@ -339,7 +336,9 @@ class RouteTable:
     def _refuse_folded_conflicts(self) -> None:
         keys = self._keys
         duplicate = keys[1:] == keys[:-1]
-        conflicting = duplicate & (self._target[1:] != self._target[:-1])
+        conflicting = duplicate & (
+            (self._target[1:] != self._target[:-1]) | (self._swaps[1:] != self._swaps[:-1])
+        )
         if self._axis is not None:
             conflicting |= duplicate & (self._axis[1:] != self._axis[:-1])
         if np.any(conflicting):
@@ -411,7 +410,7 @@ class RouteTable:
             matched = np.zeros(len(zs), dtype=bool)
             position = _empty_index()
         else:
-            query = self._key.encode_batch(chroms, poss, refs, alts)
+            query = encode_routing_keys(chroms, poss, refs, alts)
             clipped = np.minimum(np.searchsorted(self._keys, query), len(self._keys) - 1)
             matched = self._keys[clipped] == query
             position = clipped[matched]
@@ -423,7 +422,7 @@ class RouteTable:
         collected.n_unmatched += int(unmatched.sum())
         if self._keep_unmatched:
             keys = [
-                self._key.of((chroms[j], poss[j], refs[j], alts[j]))
+                routing_key((chroms[j], poss[j], refs[j], alts[j]))
                 for j in np.flatnonzero(unmatched)
             ]
             collected.add_unmatched(keys, (z[unmatched], se[unmatched], eaf[unmatched]))
@@ -475,14 +474,12 @@ def _placed_sites(
     site_alid: Mapping[SourceKey, str],
     reoriented: Collection[SourceKey],
     indices: list[dict[str, int]],
-    key: RoutingKey,
 ) -> tuple[list[bytes], list[int], list[int] | None, list[bool]]:
     """Each placeable site's key, target, axis (with more than one) and swap."""
     keys: list[bytes] = []
     targets: list[int] = []
     axis_ids: list[int] | None = [] if len(indices) > 1 else None
     swaps: list[bool] = []
-    spell = key.of
     for site, alid in site_alid.items():
         axis_id = 0
         target = None
@@ -493,7 +490,7 @@ def _placed_sites(
             axis_id += 1
         if target is None:
             continue
-        keys.append(spell(site).encode())
+        keys.append(routing_key(site).encode())
         targets.append(target)
         if axis_ids is not None:
             axis_ids.append(axis_id)

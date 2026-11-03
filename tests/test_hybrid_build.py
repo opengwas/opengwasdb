@@ -2262,7 +2262,7 @@ class TestVariantReferenceRsids:
 
     def test_lowercase_off_reference_row_keeps_its_name(self, tmp_path):
         """The off-reference half of the same case-fold: the fold encodes an
-        unknown key upper-cased (`RoutingKey.CASE_FOLDED`), so a lowercase source row
+        unknown key upper-cased (`routing_key`), so a lowercase source row
         becomes an Overflow variant whose name must be stored with it."""
         vcf = _make_vcf(
             tmp_path,
@@ -2335,25 +2335,35 @@ class TestVariantReferenceRsids:
         assert validate_store(two_pass).ok
         assert validate_store(single_pass).ok
 
-    def test_cross_assembly_tuple_is_not_named_from_the_other_locus(self, tmp_path):
-        """Issue #255, round 4: a raw tuple declared under both assemblies is two
+    @pytest.mark.parametrize(
+        ("hg38_alleles", "hg19_alleles"),
+        [(("C", "T"), ("C", "T")), (("c", "t"), ("C", "T")), (("C", "T"), ("c", "t"))],
+        ids=["same-tuple", "hg38-lower", "hg19-lower"],
+    )
+    def test_cross_assembly_tuple_is_not_named_from_the_other_locus(
+        self, tmp_path, hg38_alleles, hg19_alleles
+    ):
+        """Issue #255, round 4: an identity declared under both assemblies is two
         physical loci, and the two-pass build drops it from both. The harvest's
         candidates must drop it too, or an hg38 row's name lands on the ALID the
-        hg19 row's association was lifted to."""
+        hg19 row's association was lifted to. Alleles are upper-cased before
+        identity (issue #360), so a pair whose case differs is that identity
+        too, and is dropped alike rather than refused."""
+        (ref38, alt38), (ref19, alt19) = hg38_alleles, hg19_alleles
         hg38 = _make_vcf(
             tmp_path,
             "hg38_named",
             [
                 "1\t100000\trsPANEL\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
                 # hg38 1:1000000 C/T is named but has no usable association.
-                "1\t1000000\trsHG38_LOCUS\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0\n",
+                f"1\t1000000\trsHG38_LOCUS\t{ref38}\t{alt38}\t.\tPASS\t.\tES:SE\t1.0:0\n",
             ],
         )
         hg19 = _make_vcf(
             tmp_path,
             "hg19_unnamed",
-            # The same raw tuple, lifted to a different locus and unnamed.
-            ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
+            # The same identity, lifted to a different locus and unnamed.
+            [f"1\t1000000\t.\t{ref19}\t{alt19}\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
         )
         manifest = _manifest_with_source_assembly(
             tmp_path, [("a38", hg38, "A hg38", "hg38"), ("b19", hg19, "B hg19", "hg19")]
@@ -2378,11 +2388,14 @@ class TestVariantReferenceRsids:
         assert validate_store(single_pass).ok
 
     @pytest.mark.parametrize("assembly", ["hg38", "hg19"], ids=["reference", "fold"])
-    def test_mixed_case_conflicting_names_refuse_the_build(self, tmp_path, assembly):
-        """Issue #255, round 4: two raw sites that case-fold to one routing key
-        but name it differently cannot be resolved honestly. The two-pass build
-        refuses such an input; the single-pass build must too, on the reference
-        path (hg38) and the fold path (hg19) alike -- not silently keep one."""
+    def test_mixed_case_conflicting_names(self, tmp_path, assembly):
+        """Two raw sites spelt in different case are one variant (issue #360),
+        so the two-pass build stores both associations on it and names it as
+        it names any variant two sources name differently: the first non-empty
+        name in `(rank, site)` order. The single-pass harvest compares the
+        names a routing key's spellings carry and, under `refuse`, refuses
+        them, on the reference path (hg38) and the fold path (hg19) alike --
+        not silently keep one (issue #255, round 4)."""
         first = _make_vcf(
             tmp_path, "first", ["1\t1000000\trsUPPER\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
         )
@@ -2395,11 +2408,14 @@ class TestVariantReferenceRsids:
         panel = tmp_path / "case-panel.txt"
         panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
 
-        with pytest.raises(ValueError, match="case.?fold"):
-            build_hybrid_from_vcf_manifest(
-                manifest, tmp_path / "case.opengwasdb", reference_panel=panel,
-                store_id="s", release_id="r",
-            )
+        two_pass = tmp_path / "case.opengwasdb"
+        build_hybrid_from_vcf_manifest(
+            manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
+        )
+        alid = "1:1000000:C:T" if assembly == "hg38" else HG38_ALID_2
+        assert _hybrid_axis_rsids(two_pass)[alid] == "rsUPPER"
+        with query_store(two_pass) as query:
+            assert len(query.lookup([alid], ["first", "second"])["z"]) == 2
         with pytest.raises(ValueError, match="case.?fold"):
             build_hybrid_from_vcf_manifest(
                 manifest, tmp_path / "case-one.opengwasdb", variant_reference=panel,
@@ -2460,50 +2476,6 @@ class TestVariantReferenceRsids:
         assert validate_store(single_pass).ok
         assert "names 1 of its 2 ALIDs and leaves 1 blank" in caplog.text
         assert "off-reference (Overflow) variant(s)" in caplog.text
-
-    @pytest.mark.parametrize(
-        ("hg38_row", "hg19_row"),
-        [
-            (
-                "1\t1000000\trsHG38_LOCUS\tc\tt\t.\tPASS\t.\tES:SE\t1.0:0\n",
-                "1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
-            ),
-            (
-                "1\t1000000\trsHG38_LOCUS\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0\n",
-                "1\t1000000\t.\tc\tt\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
-            ),
-        ],
-        ids=["hg38-lower", "hg19-lower"],
-    )
-    def test_case_folded_cross_assembly_collision_refuses(self, tmp_path, hg38_row, hg19_row):
-        """Issue #255, round 5: the both-assembly drop must be computed on the
-        build's routing key, and the Hybrid routing case-folds. Two *different*
-        raw tuples declared under different assemblies then collide on one key,
-        so the hg38 locus's name would land on the hg19 locus's lifted ALID.
-        The two-pass build refuses that input; this build refuses it too, in
-        both case orientations."""
-        hg38 = _make_vcf(
-            tmp_path,
-            "hg38_named",
-            ["1\t100000\trsPANEL\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n", hg38_row],
-        )
-        hg19 = _make_vcf(tmp_path, "hg19_unnamed", [hg19_row])
-        manifest = _manifest_with_source_assembly(
-            tmp_path, [("a38", hg38, "A hg38", "hg38"), ("b19", hg19, "B hg19", "hg19")]
-        )
-        panel = tmp_path / "case-cross-panel.txt"
-        panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
-
-        with pytest.raises(ValueError, match="case.?fold"):
-            build_hybrid_from_vcf_manifest(
-                manifest, tmp_path / "case-cross-two.opengwasdb", reference_panel=panel,
-                store_id="s", release_id="r",
-            )
-        with pytest.raises(ValueError, match="declared under both hg38 and hg19"):
-            build_hybrid_from_vcf_manifest(
-                manifest, tmp_path / "case-cross-one.opengwasdb", variant_reference=panel,
-                store_id="s", release_id="r",
-            )
 
     def test_admission_rejected_row_still_names_its_variant(self, tmp_path):
         """Hybrid admission (a MAF threshold here) runs inside Pass 2, after the

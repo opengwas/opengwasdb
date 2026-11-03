@@ -23,9 +23,10 @@ from opengwasdb.variants.reference import (
     require_rsids_match_expected,
     warn_reference_left_rows_blank,
 )
-from opengwasdb.variants.routing.keys import RoutingKey, SourceKey
+from opengwasdb.variants.routing.keys import SourceKey, routing_key, source_alid
 from opengwasdb.variants.routing.lift import place_union
 from opengwasdb.variants.routing.names import (
+    HARVEST_LABEL,
     RoutedNames,
     _rekey_rsids_to_alids,
     harvested_names,
@@ -86,14 +87,12 @@ class VariantRouting:
         axis: Sequence[str] | None,
         names: RoutedNames,
         stats: Pass1Stats,
-        key: RoutingKey,
     ) -> None:
         self._site_alid: Mapping[SourceKey, str] | None = site_alid
         self._reoriented = reoriented
         self._axis = axis
         self.names = names
         self.stats = stats
-        self.key = key
 
     def _sites(self) -> Mapping[SourceKey, str]:
         if self._site_alid is None:
@@ -115,10 +114,9 @@ class VariantRouting:
         different origins the provenance is ambiguous and is ``None``, never a
         guess (issue #85). Computed afresh on each call.
         """
-        origin = self.key.origin
         by_alid: dict[str, str | None] = {}
         for site, alid in self._sites().items():
-            source = origin(site)
+            source = source_alid(site)
             if alid not in by_alid:
                 by_alid[alid] = source
             elif by_alid[alid] != source:
@@ -135,7 +133,7 @@ class VariantRouting:
         counted. Consumes the site map, so it runs once.
         """
         table = RouteTable.build(
-            self._sites(), self._reoriented, axes, key=self.key, keep_unmatched=keep_unmatched
+            self._sites(), self._reoriented, axes, keep_unmatched=keep_unmatched
         )
         self._site_alid = None
         self._reoriented = ()
@@ -146,21 +144,22 @@ def route_variants(
     sources: Sequence[SourceSpec],
     authority: LiftedUnion | FromReference,
     *,
-    key: RoutingKey,
     on_rsid_conflict: RsidConflictPolicy = RsidConflictPolicy.REFUSE,
     n_workers: int = 1,
     union: UnionOptions | None = None,
     readers: ReaderFactory = open_source,
+    label: str = HARVEST_LABEL,
 ) -> VariantRouting:
     """Route every source coordinate to the Variant Index, and name what it reaches.
 
-    ``key`` is how the build spells a coordinate (spec §4). ``n_workers`` and
+    Every coordinate is matched by its routing key (spec §4). ``n_workers`` and
     ``union`` shape Pass 1's parallel union and never change its result.
-    ``readers`` opens a source; a test passes a fake.
+    ``readers`` opens a source; a test passes a fake. ``label`` is what a
+    harvest's refusals and warnings call the build.
 
     Raises `LiftoverFailureError` when more of the hg19 group fails the lift
-    than the threshold allows, and ``ValueError`` when a key folds two
-    assemblies' coordinates together, when a disputed name meets
+    than the threshold allows, and ``ValueError`` when one routing key spells
+    two assemblies' coordinates, when a disputed name meets
     ``on_rsid_conflict=refuse``, or when a rekeyed name disagrees with the
     independent walk of the raw names.
     """
@@ -168,16 +167,12 @@ def route_variants(
         sources, n_workers, union if union is not None else UnionOptions(), Pass1Stats(), readers
     )
     if isinstance(authority, FromReference):
-        return _route_by_reference(union_pass, authority, key, on_rsid_conflict)
+        return _route_by_reference(union_pass, authority, on_rsid_conflict, label)
     tuples_by_assembly, rsid_by_site = union_pass.sites()
-    # The union is routed by its raw tuples, whatever the build's key: a tuple
-    # declared under both assemblies is two loci, and a pair a folding key
-    # collapses fails when the table is built.
     site_alid, reoriented, _dropped = place_union(
         tuples_by_assembly,
         chain_file=authority.chain_file,
         failure_threshold=authority.failure_threshold,
-        key=RoutingKey.EXACT,
     )
     rsid_by_alid = _rekey_rsids_to_alids(site_alid, rsid_by_site)
     # The rekey's own output must equal the map an independent walk of the
@@ -187,7 +182,7 @@ def route_variants(
     # The two-pass build compares no names across sources: it keeps the first.
     names = RoutedNames(rsid_by_alid, RsidConflicts(on_rsid_conflict, None))
     return VariantRouting(
-        site_alid, reoriented, axis=None, names=names, stats=union_pass.stats, key=key
+        site_alid, reoriented, axis=None, names=names, stats=union_pass.stats
     )
 
 
@@ -218,15 +213,15 @@ class _UnionPass:
 def _route_by_reference(
     union_pass: _UnionPass,
     authority: FromReference,
-    key: RoutingKey,
     policy: RsidConflictPolicy,
+    label: str,
 ) -> VariantRouting:
     """A reference's routing, named by the reference or by Pass 1's harvest.
 
     A reference that names rsids is used as given, and nothing is read. One
-    that names none is harvested: Pass 1's candidates, keyed as ``key``
-    spells them, minus the tuples both assemblies declare (issue #255 rounds
-    4-5). Its source keys are its own coordinates, so nothing is re-oriented.
+    that names none is harvested: Pass 1's candidates, by routing key, minus
+    the tuples both assemblies declare (issue #255 rounds 4-5). Its source keys
+    are its own coordinates, so nothing is re-oriented.
     """
     reference = authority.reference
     if reference.rsid_by_alid:
@@ -240,7 +235,6 @@ def _route_by_reference(
             tuples_by_assembly,
             chain_file=authority.chain_file,
             failure_threshold=authority.failure_threshold,
-            key=key,
         )
         # A tuple declared under both assemblies is two loci; naming the lifted
         # one from the other's row would attach an rsid to a variant a different
@@ -248,11 +242,13 @@ def _route_by_reference(
         candidates = rsid_by_site
         if dropped:
             candidates = {
-                site: rsid for site, rsid in rsid_by_site.items() if key.of(site) not in dropped
+                site: rsid
+                for site, rsid in rsid_by_site.items()
+                if routing_key(site) not in dropped
             }
         del rsid_by_site
         names = harvested_names(
-            candidates, reference.source_lookup, pass1_lookup, key=key, policy=policy
+            candidates, reference.source_lookup, pass1_lookup, policy=policy, label=label
         )
     return VariantRouting(
         reference.source_lookup,
@@ -260,5 +256,4 @@ def _route_by_reference(
         axis=reference.alids,
         names=names,
         stats=union_pass.stats,
-        key=key,
     )

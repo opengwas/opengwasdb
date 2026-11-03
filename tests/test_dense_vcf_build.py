@@ -693,9 +693,9 @@ def test_an_empty_route_table_routes_nothing_without_crashing():
     crash indexing an empty array (`np.searchsorted` on an empty array always
     returns 0, so the clipped index is -1 on a zero-length array)."""
     from opengwasdb.readers.interface import ReaderAssociation
-    from opengwasdb.variants.routing import RouteTable, RoutingKey
+    from opengwasdb.variants.routing import RouteTable
 
-    table = RouteTable.build({}, (), [["1:100:A:G"]], key=RoutingKey.EXACT, keep_unmatched=False)
+    table = RouteTable.build({}, (), [["1:100:A:G"]], keep_unmatched=False)
     column = table.route_column(
         [ReaderAssociation("1", 100, "A", "G", 1.0, 0.5, StoredEffectScale.SD)]
     )
@@ -841,7 +841,7 @@ class TestPass1Parallel:
 
     def test_pass1_parallel_union_and_rsids_match_serial(self, tmp_path):
         from opengwasdb.layouts.build_manifest import read_manifest
-        from opengwasdb.variants.routing import LiftedUnion, RoutingKey, route_variants
+        from opengwasdb.variants.routing import LiftedUnion, route_variants
 
         vcf1 = _make_vcf(
             tmp_path,
@@ -866,8 +866,8 @@ class TestPass1Parallel:
         )
         sources = [row.source for row in read_manifest(manifest)]
 
-        serial = route_variants(sources, LiftedUnion(), key=RoutingKey.EXACT, n_workers=1)
-        parallel = route_variants(sources, LiftedUnion(), key=RoutingKey.EXACT, n_workers=2)
+        serial = route_variants(sources, LiftedUnion(), n_workers=1)
+        parallel = route_variants(sources, LiftedUnion(), n_workers=2)
 
         assert serial.alids == parallel.alids
         assert serial.source_alids() == parallel.source_alids()
@@ -1272,9 +1272,9 @@ def _route_vcf(vcf: Path, site_alid: dict, axis: list[str]):
     """One VCF's column routed onto ``axis`` through a route table of ``site_alid``."""
     from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
     from opengwasdb.readers.registry import SourceSpec, open_source
-    from opengwasdb.variants.routing import RouteTable, RoutingKey
+    from opengwasdb.variants.routing import RouteTable
 
-    table = RouteTable.build(site_alid, (), [axis], key=RoutingKey.EXACT, keep_unmatched=False)
+    table = RouteTable.build(site_alid, (), [axis], keep_unmatched=False)
     spec = SourceSpec("t", str(vcf), GWAS_VCF_CAPABILITY, "hg19", StoredEffectScale.SD)
     placed = table.route_column(open_source(spec).stream_associations()).placed[0]
     return placed.index, placed.z, placed.se, placed.eaf
@@ -2335,10 +2335,10 @@ def _capability_manifest(tmp_path: Path, capability: str) -> Path:
 def _source_union_alids(manifest: Path) -> list[str]:
     """The ALIDs the manifest's Pass 1 union routes to, in genomic order."""
     from opengwasdb.layouts.build_manifest import read_manifest
-    from opengwasdb.variants.routing import LiftedUnion, RoutingKey, route_variants
+    from opengwasdb.variants.routing import LiftedUnion, route_variants
 
     sources = [row.source for row in read_manifest(manifest)]
-    return route_variants(sources, LiftedUnion(), key=RoutingKey.EXACT).alids
+    return route_variants(sources, LiftedUnion()).alids
 
 
 def _plain_alid_list(tmp_path: Path, manifest: Path, name: str = "plain.alids") -> Path:

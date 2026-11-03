@@ -26,9 +26,9 @@ The paths the cases exercise: Dense two-pass over hg19 (a chain with a forward,
 an offset, a reverse-strand and a colliding region) mixed with hg38, and over
 hg38 alone; Dense single-pass from an ALID list (rsid harvest) and from an
 extracted artifact (hg38, and hg19 through the chain), and the refusal of an
-artifact extracted from mixed-case sources; Hybrid two-pass with a panel
-(lifted, hg38 with a MAF threshold at two workers, and the refusal of mixed-
-case sources); Hybrid single-pass from an ALID list under `refuse` with
+artifact that names one variant twice; Hybrid two-pass with a panel (lifted,
+hg38 with a MAF threshold at two workers, and mixed-case sources); Hybrid
+single-pass from an ALID list under `refuse` with
 agreeing names, under `refuse` with a dispute (a refusal), and under `drop`;
 Hybrid single-pass from an hg19 artifact whose off-reference rows the fold
 lifts, and one whose off-reference row the fold must refuse to re-orient; the
@@ -373,8 +373,8 @@ class Case:
     expect_conflicts: bool = False
     absent_alids: tuple[str, ...] = ()
     seed: bool = False
-    #: The commit that brought this case's expected outcome, when it is newer than
-    #: the checkout the inputs were written at. A checkout before it cannot meet
+    #: The commit (or ticket) that brought this case's expected outcome, when it
+    #: is newer than the checkout the inputs were written at. A checkout before it cannot meet
     #: the expectation, so `build --cases base` leaves the case out, and its tree
     #: is built with `--cases since` at that commit or later.
     since: str = ""
@@ -385,20 +385,27 @@ SMALL_WINDOWS = {"window_size_mb": 0.001, "reduction_batch_size": 2, "map_spill_
 STRAND_ALIDS = ("1:101000:A:G", "2:999001:C:T", "2:998001:A:T", "4:5501:A:G")
 #: The raw tuple B (hg19) and C (hg38) both spell: two loci, so dropped from both.
 CROSS_ASSEMBLY = ("3:2000:A:G",)
+#: E's lower-case spellings of D's variants. Alleles are upper-cased before
+#: identity assignment (#360), so neither is a variant of its own.
+LOWER_CASE = ("1:101000:a:g", "X:1000:a:g")
 
 CASES = (
     *(Case(f"dense-lift-n{n}", "dense", "lift", {**LIFT, "n_workers": n}, STRAND_ALIDS,
            absent_alids=CROSS_ASSEMBLY) for n in (1, 2)),
-    *(Case(f"dense-hg38-n{n}", "dense", "hg38", {"n_workers": n}, ("X:1000:A:G",))
-      for n in (1, 2)),
+    *(Case(f"dense-hg38-n{n}", "dense", "hg38", {"n_workers": n}, ("X:1000:A:G",),
+           absent_alids=LOWER_CASE, since="#360") for n in (1, 2)),
+    # E's lower-case rows reach the list's upper-case ALIDs, rather than being
+    # dropped as unmatched (#360).
     *(Case(f"dense-list-n{n}", "dense", "hg38",
-           {"variant_reference": "hg38.alids.txt", "n_workers": n}, ("7:100:A:G",))
-      for n in (1, 2)),
+           {"variant_reference": "hg38.alids.txt", "n_workers": n}, ("7:100:A:G",),
+           since="#360") for n in (1, 2)),
     *(Case(f"dense-artifact-hg38-n{n}", "dense", "upper",
            {"variant_reference": "upper.variant-ref.tsv.gz", "n_workers": n}, ("6:500:C:T",))
       for n in (1, 2)),
-    # Extraction keeps a lower-case spelling as its own ALID, as the Dense
-    # two-pass build does, and the artifact reader then refuses it as a duplicate.
+    # The inputs' hg38 artifact was extracted at 6415be4, before #360, and names
+    # E's lower-case spelling of 1:101000 as a second ALID; the reader refuses
+    # an artifact holding one variant twice. Extraction since #360 writes the
+    # one row (extract-hg38-*).
     Case("dense-artifact-hg38-case", "dense", "hg38",
          {"variant_reference": "hg38.variant-ref.tsv.gz"}, expect_error="duplicate ALID"),
     *(Case(f"dense-artifact-hg19-n{n}", "dense", "fwd",
@@ -408,10 +415,10 @@ CASES = (
          STRAND_ALIDS, absent_alids=CROSS_ASSEMBLY),
     Case("hybrid-panel-hg38-maf-n2", "hybrid", "hg38_maf",
          {"reference_panel": "hg38.panel.txt", "n_workers": 2}, ("5:200:A:T",)),
-    # Pass 1 keeps a lower-case spelling as its own ALID; folding the keys then
-    # routes one source key to two variants, which the build refuses.
+    # E's lower-case spellings are D's variants, so Pass 1 names one ALID for
+    # each; before #360 it named two and the folded keys refused the build.
     Case("hybrid-panel-hg38-case", "hybrid", "hg38", {"reference_panel": "hg38.panel.txt"},
-         expect_error="conflicting variants after case folding"),
+         ("1:101000:A:G", "X:1000:A:G"), absent_alids=LOWER_CASE, since="#360"),
     Case("hybrid-list-agree", "hybrid", "agree",
          {"variant_reference": "dispute.alids.txt"}, ("1:2000000:C:T",)),
     Case("hybrid-list-refuse", "hybrid", "dispute",
@@ -429,8 +436,10 @@ CASES = (
     Case("hybrid-checkpoint-artifact-hg19", "hybrid", "fwd_off",
          {**LIFT, "variant_reference": "fwd.variant-ref.tsv.gz", "checkpoint": True},
          ("1:104000:A:G",), seed=True),
-    Case("extract-hg38-n1", "extract", "hg38"),
-    Case("extract-hg38-n2", "extract", "hg38", {"n_workers": 2, **SMALL_WINDOWS}),
+    Case("extract-hg38-n1", "extract", "hg38", expect_alids=("1:101000:A:G",),
+         absent_alids=LOWER_CASE, since="#360"),
+    Case("extract-hg38-n2", "extract", "hg38", {"n_workers": 2, **SMALL_WINDOWS},
+         expect_alids=("1:101000:A:G",), absent_alids=LOWER_CASE, since="#360"),
     *(Case(f"extract-hg19-n{n}", "extract", "fwd_off", {**LIFT, "n_workers": n, **SMALL_WINDOWS})
       for n in (1, 2)),
     # R's 2:5000 lifts onto chr2's reverse chain, which an artifact cannot record.
@@ -503,8 +512,14 @@ def _placeholdered(text: str, places: Places) -> str:
 
 
 def _store_alids(store: Path) -> set[str]:
-    with gzip.open(store / "variants.tsv.gz", "rt", encoding="utf-8") as handle:
-        header = handle.readline().rstrip("\n").split("\t")
+    return _written_alids(store / "variants.tsv.gz")
+
+
+def _written_alids(table: Path) -> set[str]:
+    """The ALID column of a variant table or artifact, as written: a reader
+    that normalises would hide a lower-case ALID."""
+    with gzip.open(table, "rt", encoding="utf-8") as handle:
+        header = handle.readline().lstrip("#").rstrip("\n").split("\t")
         column = header.index("alid")
         return {line.rstrip("\n").split("\t")[column] for line in handle}
 
@@ -521,8 +536,9 @@ def _check_meaningful(case: Case, out: Path, result: Any, error: str) -> None:
     if case.builder == "extract":
         if result.n_variants == 0:
             raise SystemExit(f"{case.name}: extracted no variants")
-        return
-    alids = _store_alids(out / "store.opengwasdb")
+        alids = _written_alids(out / "artifact.variant-ref.tsv.gz")
+    else:
+        alids = _store_alids(out / "store.opengwasdb")
     missing = set(case.expect_alids) - alids
     if missing:
         raise SystemExit(f"{case.name}: variant table lacks {sorted(missing)}")

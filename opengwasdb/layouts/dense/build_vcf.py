@@ -85,7 +85,6 @@ from opengwasdb.variants.routing import (
     FromReference,
     LiftedUnion,
     RouteTable,
-    RoutingKey,
     VariantRouting,
     route_variants,
 )
@@ -388,7 +387,7 @@ def _prepare_axis(
         manifest_rows, chain_file, liftover_failure_threshold, variant_reference
     )
     routing = route_variants(
-        [row.source for row in manifest_rows], authority, key=RoutingKey.EXACT, n_workers=n_workers
+        [row.source for row in manifest_rows], authority, n_workers=n_workers
     )
     if routing.names.pending:
         # A Dense build drops the associations the reference does not route, so

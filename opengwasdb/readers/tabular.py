@@ -36,8 +36,8 @@ from opengwasdb.readers.interface import (
 )
 from opengwasdb.stats import Z_975, inverse_normal_denominators, parse_af
 from opengwasdb.variants.normalise import (
-    VALID_BASES,
     VariantNormalisationError,
+    identity_base,
     normalise_allele,
     normalise_chromosome,
 )
@@ -643,23 +643,15 @@ def _metrics_float(
     return parse(cell.decode("utf-8") if cell else None)
 
 
-def _fast_allele(cell: bytes) -> str | None:
-    """The normalised allele when the cell is one base, else ``None``."""
-    stripped = cell.strip()
-    if len(stripped) != 1:
-        return None
-    base = chr(stripped[0] & 0xDF)
-    return base if base in VALID_BASES else None
-
-
 def _metrics_allele(cell: bytes) -> str:
     """One normalised allele, via the single-base fast path where it applies.
 
-    `normalise_allele` remains the rule: the fast path covers exactly the cells
-    it would return unchanged (one base, either case, stripped), and everything
-    else -- indels, empty cells, non-ACGT -- is handed to it.
+    `normalise_allele` remains the rule: the fast path (`identity_base`) covers
+    exactly the cells it would return unchanged (one base, either case,
+    stripped), and everything else -- indels, empty cells, non-ACGT -- is
+    handed to it.
     """
-    fast = _fast_allele(cell)
+    fast = identity_base(cell)
     if fast is not None:
         return fast
     return normalise_allele(cell.decode("utf-8"))

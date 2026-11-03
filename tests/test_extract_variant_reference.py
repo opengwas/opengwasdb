@@ -989,7 +989,6 @@ def _materialised_union(
     """
     from opengwasdb.layouts.build_manifest import read_manifest
     from opengwasdb.variants.reference import expected_rsids_by_routing
-    from opengwasdb.variants.routing import RoutingKey
     from opengwasdb.variants.routing.lift import place_union
     from opengwasdb.variants.routing.union import (
         UnionOptions,
@@ -1008,7 +1007,6 @@ def _materialised_union(
         tuples_by_assembly,
         chain_file=None,
         failure_threshold=liftover_failure_threshold,
-        key=RoutingKey.EXACT,
     )
     return source_lookup, expected_rsids_by_routing(rsid_by_site, source_lookup)
 
@@ -1454,7 +1452,6 @@ def _materialising_peak_bytes(manifest: Path) -> int:
     from opengwasdb.layouts.build_manifest import read_manifest
     from opengwasdb.variants.routing import (
         LiftedUnion,
-        RoutingKey,
         UnionOptions,
         route_variants,
     )
@@ -1465,7 +1462,6 @@ def _materialising_peak_bytes(manifest: Path) -> int:
     route_variants(
         sources,
         LiftedUnion(),
-        key=RoutingKey.EXACT,
         n_workers=2,
         union=UnionOptions(window_size_mb=20),
     )

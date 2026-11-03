@@ -19,7 +19,7 @@ from opengwasdb.variants.routing.extract import (
     VariantReferenceExtraction,
     extract_variant_reference,
 )
-from opengwasdb.variants.routing.keys import RoutingKey, SourceKey
+from opengwasdb.variants.routing.keys import SourceKey
 from opengwasdb.variants.routing.lift import SitePlacement, place_sites
 from opengwasdb.variants.routing.names import RoutedNames
 from opengwasdb.variants.routing.route import (
@@ -51,7 +51,6 @@ __all__ = [
     "RouteTable",
     "RoutedColumn",
     "RoutedNames",
-    "RoutingKey",
     "SitePlacement",
     "SourceKey",
     "UnionOptions",
