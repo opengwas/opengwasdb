@@ -68,6 +68,7 @@ def _iter_rows(
             orientation = orient_or_drop(chromosome, row.get("pos", ""), alt, ref, faults)
             if orientation is None:
                 continue
+            beta = row.get("beta")
             yield tabular.TabularRow(
                 chromosome=orientation.variant.chromosome,
                 position=orientation.variant.position,
@@ -75,11 +76,12 @@ def _iter_rows(
                 alt=alt,
                 alid=orientation.variant.alid,
                 flipped=orientation.flipped,
-                beta=tabular.parse_finite_float(row.get("beta")),
+                beta=tabular.parse_finite_float(beta),
                 se=tabular.parse_positive_float(row.get("sebeta")),
                 af_alt=tabular.parse_af(row.get("af_alt"), frequencies),
                 rsid=_first_rsid(row.get("rsids")),
                 reference=interface.ReferenceAllele.REF,
+                infinite_effect=tabular.is_infinite(beta),
             )
 
 

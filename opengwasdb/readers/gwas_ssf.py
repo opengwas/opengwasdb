@@ -102,6 +102,7 @@ from opengwasdb.readers.tabular import (
     TabularSource,
     VariantProjectionColumns,
     extract_at_sites,
+    is_infinite,
     parse_af,
     parse_finite_float,
     require_signed_z_score,
@@ -253,7 +254,22 @@ def _tabular_row(
         se_from_ci=statistics.se_from_ci,
         se_from_p_value=statistics.se_from_p_value,
         reference=reference,
+        infinite_effect=statistics.beta is None and _reports_infinite_effect(row, source),
     )
+
+
+def _reports_infinite_effect(row: dict[str, str], source: EffectSource | None) -> bool:
+    """Whether the row's effect columns report an infinite value, not none (D4).
+
+    `row_statistics` reads an infinite effect as unusable, which the metrics
+    projections need; the association stream keeps it infinite, so Admission
+    drops the row as `z_nonfinite`. A z-score row derives its SE from the z, so
+    an infinite z leaves it no SE, and `se_unusable` comes first.
+    """
+    if source is None:
+        return False
+    columns = (source.column_name, source.fallback_column_name)
+    return any(is_infinite(row.get(column)) for column in columns if column)
 
 
 def _sample_size_column(

@@ -203,11 +203,17 @@ def _parse_float(s: str) -> float | None:
 
 
 def _derive_z(ez_str: str, es_str: str, se: float) -> float | None:
-    """Prefer EZ; fall back to ES/SE."""
+    """A record's z: its EZ when it reports one, else ES/SE; ``None`` for no effect.
+
+    An infinite EZ or ES is a value the record reports, not a missing one, so
+    the z stays infinite, for Association Admission to drop as `z_nonfinite`
+    (D4), rather than ES/SE standing in for an infinite EZ or an infinite ES
+    reading as no effect. A NaN reports nothing.
+    """
     ez = _parse_float(ez_str)
-    if ez is not None and math.isfinite(ez):
+    if ez is not None and not math.isnan(ez):
         return ez
     es = _parse_float(es_str)
-    if es is not None and se > 0 and math.isfinite(se):
+    if es is not None and not math.isnan(es) and se > 0 and math.isfinite(se):
         return es / se
     return None

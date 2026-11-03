@@ -66,6 +66,21 @@ def parse_finite_float(value: str | None) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
+def is_infinite(value: str | None) -> bool:
+    """Whether a cell reports an infinite number (`inf`, `-Infinity`).
+
+    `parse_finite_float` reads one as absent, which is right for a statistic
+    but not for an effect: an infinite effect is reported, and Association
+    Admission drops its row as `z_nonfinite` (D4), not as `effect_missing`.
+    """
+    if value is None:
+        return False
+    try:
+        return math.isinf(float(value))
+    except ValueError:
+        return False
+
+
 def parse_positive_float(value: str | None) -> float | None:
     parsed = parse_finite_float(value)
     return parsed if parsed is not None and parsed > 0.0 else None
@@ -1480,12 +1495,16 @@ class TabularRow(TabularMetricsRow):
     """Format-neutral row after source-specific column mapping.
 
     :class:`TabularMetricsRow` plus the source's own identifier for the row --
-    blank when the source records none, never fabricated -- and which of `ref`
-    and `alt` the format declares the reference allele, if it declares one.
+    blank when the source records none, never fabricated -- which of `ref`
+    and `alt` the format declares the reference allele, if it declares one,
+    and whether the effect the row reports is infinite. ``beta`` is ``None``
+    for such a row, as the metrics projections read it, so the flag is what
+    gives its association an infinite z (D4).
     """
 
     rsid: str = ""
     reference: ReferenceAllele = ReferenceAllele.UNDECLARED
+    infinite_effect: bool = False
 
 
 def stream_associations(
@@ -1495,8 +1514,12 @@ def stream_associations(
         # A row with no effect, or no usable SE, is yielded with a NaN z (and a
         # NaN SE), for Association Admission to drop and log; it is not an
         # association. A reader recovers an SE it can (a CI, a p) before this.
+        # An infinite reported effect is not a missing one: its z is infinite.
         se = math.nan if row.se is None else row.se
-        z = math.nan if row.beta is None or row.se is None else row.beta / row.se
+        if row.infinite_effect:
+            z = math.inf
+        else:
+            z = math.nan if row.beta is None or row.se is None else row.beta / row.se
         eaf = row.af_alt
         if row.flipped:
             z = -z
