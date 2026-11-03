@@ -29,7 +29,8 @@ from opengwasdb.store.arrays import (
     role_for_array_path,
     shard_layout,
 )
-from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Target
+from opengwasdb.store.open import parse_format_version
+from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Skip, Target
 from opengwasdb.validation.rules.csr import ARRAYS, LENGTHS
 from opengwasdb.validation.rules.encoding import PLAN
 from opengwasdb.validation.scans import ASSOCIATIONS, Block, release_rows, sequence_offsets
@@ -66,8 +67,18 @@ def index_offsets(target: Target) -> np.ndarray:
     )
 
 
+#: The format from which every Ragged component carries the index (spec §11.1).
+_REQUIRED_FROM = (0, 2, 0)
+
+
 def present(target: Target) -> Iterator[str]:
-    """Every Ragged component carries the variant-centric index (spec §11.1)."""
+    """Every Ragged component carries the variant-centric index, in format 0.2.0.
+
+    A 0.1.0 component may lack it (spec §11.1, #380): the index did not exist
+    when those releases were built. Its absence there is a skip, with that reason,
+    not a pass, and one it does carry is judged like any other. A manifest that
+    records an index the release does not carry is wrong in any format.
+    """
     if GROUP in target.group:
         return
     if _block(target) is not None:
@@ -75,11 +86,17 @@ def present(target: Target) -> Iterator[str]:
             f"{_LABEL}: the manifest records provenance.ragged.by_variant but the release "
             f"carries no {GROUP} group; the index it describes is absent"
         )
-    else:
-        yield (
-            f"{_LABEL}: carries no {GROUP} group; a Ragged component must "
-            f"carry the variant-centric index (ADR 0060)"
+        return
+    version = target.store.manifest.format_version
+    if parse_format_version(version) < _REQUIRED_FROM:
+        raise Skip(
+            f"a format {version} component need not carry the variant-centric index "
+            "(spec §11.1)"
         )
+    yield (
+        f"{_LABEL}: carries no {GROUP} group; a Ragged component must "
+        f"carry the variant-centric index (ADR 0060)"
+    )
 
 
 def provenance(target: Target) -> Iterator[str]:
