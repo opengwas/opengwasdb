@@ -1,0 +1,88 @@
+# Association Admission: one rule set, one gate, one record
+
+Issue [#357](https://github.com/opengwas/opengwasdb/issues/357), part of epic
+#58. Records which of an Analysis's source rows a Store admits, where that is
+decided, and where what it dropped is written down. Amends ADR 0054, whose one
+row-admission rule this generalises, and ADR 0053's checkpoint record.
+
+## Context
+
+Every builder decided for itself which source rows to store, and each decided
+differently. The inventory (`reports/357-proposal.md` §1) found 19 rules, nine
+of which behaved differently by layout:
+
+- an unusable SE was substituted by one reader, dropped silently by three,
+  stored as NaN or `inf` by the VCF reader and raised on by `build-dense`;
+- a duplicate (variant, Analysis) kept the last row in Dense and Hybrid builds,
+  collapsed agreeing rows in Ragged SSF, and raised in `build-dense`;
+- a declared INFO or MAF threshold filtered only the Hybrid build;
+- nothing counted the rows a reader skipped, or the ones routing could not place.
+
+None of these raised an error. OGS-00027 lost 7,444 associations with an unusable
+SE, and GCST90295971 (OGS-00011) stored the last of seven conflicting duplicates,
+one of them with the opposite sign, with no record of either.
+
+## Decision
+
+**Association Admission is one module, `opengwasdb.admission`.**
+
+- **The rule set** (`rules.py`) judges a batch of an Analysis's rows and gives
+  each dropped row exactly one `Reason`. First the rules that decide whether a row
+  is an association at all, then the filters the Analysis declared. The declared
+  filters therefore judge and count only associations, which is the population a
+  Store's `info_score` and `maf` provenance has always described.
+- **A `Gate`** is opened once per Analysis. It returns each batch's keep mask, adds
+  the batch to the Analysis's `AdmissionCounts`, and keeps the source key and reason
+  of every row dropped for a logged reason. Builders hand it rows before they are
+  matched to the Variant Index: through Variant Routing's `admit=` (Dense VCF,
+  Hybrid), or directly (Ragged SSF, Ragged BESD, `build-dense`). The resolver uses
+  `counting_gate`, which only counts.
+- **An `AdmissionRecord`** is the build-level record, written beside the Store
+  Release and never inside it, so a Store's bytes and `format_version` do not
+  depend on it. A gate writes its Analysis's part (`parts/<index>.json`, and
+  `dropped/<index>.tsv.gz` when it logged anything) temp-then-rename, from
+  whichever process judged the Analysis. `finish()` refuses a record missing a part
+  and writes `admission.json`, in Manifest Row order. The record is therefore the
+  same at any worker count, and a resumed Hybrid build rereads its counts from the
+  parts. Checkpoint format 3 records the record's path instead of
+  `info_counts.json`, and refuses a format-2 checkpoint.
+- **What is logged.** A row dropped by a declared INFO or MAF filter is counted
+  only: it is reproducible from the source and the policy, and a per-row log would
+  cost more than the Store (an estimated 51–54 GB for OGS-00011). Every other
+  reason's rows are also logged, by source key.
+- **Completion** admits an imputed candidate by the same cell rule (`admissible`).
+  It refuses a source cell with one of z and SE missing, rather than pairing an
+  imputed value with an observed one (D1). What it leaves unimputed is already
+  counted in each Store's `completion_quality`, so a completion writes no record.
+- **`require_admitted`** checks Admission's guarantee on cells a writer is handed
+  from anywhere else:
+  - a present cell has a finite z and a finite, positive SE;
+  - z is missing exactly where SE is (spec §15, ADR 0070's `states()`);
+  - a frequency is NaN or inside (0, 1);
+  - an imputed flag is 0 or 1, and 1 only on a present cell.
+
+### The rules, in precedence order
+
+| Reason | A row is dropped when | Logged | Since |
+|---|---|---|---|
+| `se_unusable` | its reported SE is missing, not positive or not finite | yes | slice 4 (Ragged), D3 (every reader) |
+| `effect_missing` | it has a usable SE but no effect | yes | slice 5 |
+| `info_below_threshold` | a usable score is below a `FILTERED` INFO threshold | no | ADR 0054 |
+| `maf_missing` | a `FILTERED` MAF policy finds no usable frequency | no | ADR 0054 |
+| `maf_below_threshold` | MAF is below a `FILTERED` threshold | no | ADR 0054 |
+
+`admission.json`'s `"rules"` names the rule set's version, and each decision
+below that changes what a rule admits moves it.
+
+## Consequences
+
+- One place answers "why is this association not in the Store": the record names
+  each drop's reason, and its log names the row.
+- A Source Reader yields a row with no effect, with a NaN z, where it used to skip
+  it. Admission drops it, so every consumer of `stream_associations` must too: the
+  phenotype-SD pipeline does.
+- A record sits beside every build's Store. A release workflow that renames a
+  `.partial` Store into place must name the record's directory itself.
+- Routing collects an imputation score only for an Analysis that declared one
+  (`route_column(imputation_scores=False)`). Collecting it for every row cost the
+  Dense VCF Pass 2 8–12%.

@@ -1630,7 +1630,7 @@ Invalid states:
 - imputed mask is true while Z or SE is missing;
 - a marker payload is non-canonical (for a float plane, a non-canonical NaN).
 
-Builders and validators MUST reject invalid states. Readers MUST refuse them: a query whose region holds an invalid cell fails, naming the component and the cell, rather than dropping it or reading it as missing (ADR 0070).
+Builders and validators MUST reject invalid states. A builder rejects them through Association Admission (ADR 0072): a source row becomes a cell only through an Analysis's gate, which admits a row only with both a usable Z and a usable SE, and a writer handed cells from anywhere else checks them with `require_admitted`. Readers MUST refuse them: a query whose region holds an invalid cell fails, naming the component and the cell, rather than dropping it or reading it as missing (ADR 0070).
 
 The imputed mask is:
 
