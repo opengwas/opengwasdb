@@ -1168,15 +1168,13 @@ def _write_reference_artifact(
     is a genuine external panel: only the Dense axis is named, and the
     off-panel hg19 source can only be resolved during Pass 2.
     """
+    from extraction_fixtures import extract_from_manifest
+
     from opengwasdb.variants.axis import sorted_alids
-    from opengwasdb.variants.reference import (
-        extract_variant_reference,
-        read_variant_reference,
-        write_variant_reference,
-    )
+    from opengwasdb.variants.reference import read_variant_reference, write_variant_reference
 
     union = tmp_path / "union.variant-ref.tsv.gz"
-    extract_variant_reference(manifest, union)
+    extract_from_manifest(manifest, union)
     if not panel_only:
         return union
     extracted = read_variant_reference(union)

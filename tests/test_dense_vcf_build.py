@@ -1836,10 +1836,10 @@ def _write_reference_from_manifest(
     Extracted from the manifest (union + liftover + first-named rsid, the
     build's own rules), so the reference genuinely matches its variant union.
     """
-    from opengwasdb.variants.reference import extract_variant_reference
+    from extraction_fixtures import extract_from_manifest
 
     path = tmp_path / name
-    extract_variant_reference(manifest, path)
+    extract_from_manifest(manifest, path)
     return path
 
 

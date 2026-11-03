@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from opengwasdb.build.liftover import lift_hg19_to_hg38, statistics_swap
@@ -31,28 +33,114 @@ SourceLookup = dict[SourceKey, str]
 ReorientedKeys = set[SourceKey]
 
 
+@dataclass(frozen=True)
+class SitePlacement:
+    """Where source sites land on GRCh38.
+
+    ``alid`` maps each placed site to its hg38 ALID; a site whose lift failed
+    is absent. ``reoriented`` holds the sites a reverse-strand chain block
+    re-oriented: their stored alleles call the other allele A1, so a z signed
+    by the source must be negated and an EAF complemented (issue #284).
+    """
+
+    alid: SourceLookup
+    reoriented: ReorientedKeys
+
+
+def place_sites(
+    sites_by_assembly: Mapping[str, Collection[SourceKey]],
+    *,
+    chain_file: str | Path | None = None,
+    failure_threshold: float = 0.01,
+) -> SitePlacement:
+    """Place each site, grouped by its declared assembly, on GRCh38.
+
+    An hg38 site is its own ALID, its alleles sorted. hg19 sites go through one
+    lift, whose failure threshold applies to that group alone, so hg38 sites can
+    neither dilute nor inflate it; more failures than it allows raise
+    `LiftoverFailureError`. Any other assembly is refused with ``ValueError``,
+    and so is a tuple given under both: it is two loci, each with its own
+    place, and a result keyed by the tuple could keep only one. Pass 1's union
+    and the Hybrid fold's off-reference keys are both placed here, so the lift
+    and its orientation have one rule.
+    """
+    unknown = set(sites_by_assembly) - {"hg19", "hg38"}
+    if unknown:
+        raise ValueError(f"unhandled source_assembly values: {sorted(unknown)}")
+    hg38 = sites_by_assembly.get("hg38", ())
+    hg19 = sites_by_assembly.get("hg19", ())
+    if hg38 and hg19:
+        _refuse_both_assemblies(hg38, hg19)
+    placement = SitePlacement({}, set())
+    if hg38:
+        _place_hg38(hg38, placement)
+    if hg19:
+        _lift_hg19(hg19, placement, chain_file=chain_file, failure_threshold=failure_threshold)
+    return placement
+
+
+def _place_hg38(sites: Collection[SourceKey], placement: SitePlacement) -> None:
+    """Name each hg38 site by its own coordinate, its alleles sorted."""
+    log.info("%d variants already GRCh38 -- no liftover needed", len(sites))
+    for chrom, pos, ref, alt in sites:
+        a1, a2 = sorted((ref, alt))
+        placement.alid[(chrom, pos, ref, alt)] = f"{chrom}:{pos}:{a1}:{a2}"
+
+
+def _lift_hg19(
+    sites: Collection[SourceKey],
+    placement: SitePlacement,
+    *,
+    chain_file: str | Path | None,
+    failure_threshold: float,
+) -> None:
+    """Lift the hg19 sites, recording the ones a reverse-strand block re-oriented.
+
+    The richer `lift_hg19_to_hg38` rather than `build_liftover_lookup`: a
+    reverse-strand block re-orients a variant's statistics as well as renaming
+    it, and an ALID string cannot say which -- a palindromic pair's ALID is
+    identical under either projection.
+    """
+    log.info("Running liftover hg19 → hg38 (%d variants)", len(sites))
+    lifted = lift_hg19_to_hg38(sites, chain_file=chain_file, failure_threshold=failure_threshold)
+    for key, row in lifted.items():
+        placement.alid[key] = row.alid
+        if statistics_swap(key, row):
+            placement.reoriented.add(key)
+    log.info("Liftover complete: %d variants mapped", len(lifted))
+
+
+def _refuse_both_assemblies(
+    hg38: Collection[SourceKey], hg19: Collection[SourceKey]
+) -> None:
+    """Refuse the tuples declared under both assemblies, naming the first."""
+    both = set(hg38) & set(hg19)
+    if both:
+        raise ValueError(
+            f"{len(both)} site(s) given under both hg38 and hg19 (first: {min(both)!r}); "
+            "each is two loci with two places, so place each assembly's sites apart "
+            "and decide which locus owns the row before placing them"
+        )
+
+
 def _lift_union_by_assembly(
     tuples_by_assembly: dict[str, set[SourceKey]],
     *,
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
 ) -> tuple[SourceLookup, SourceLookup, ReorientedKeys]:
-    """Lift each assembly's group; return the hg38 passthrough, the lifted, and
-    the keys the lift re-oriented (issue #284)."""
-    passthrough_lookup: SourceLookup = {}
-    passthrough = tuples_by_assembly.pop("hg38", set())
-    if passthrough:
-        log.info("%d variants already GRCh38 -- no liftover needed", len(passthrough))
-        for chrom, pos, ref, alt in passthrough:
-            a1, a2 = sorted((ref, alt))
-            passthrough_lookup[(chrom, pos, ref, alt)] = f"{chrom}:{pos}:{a1}:{a2}"
-    lifted_lookup, swapped = _lift_hg19_union(
-        tuples_by_assembly.pop("hg19", set()),
+    """Place each assembly's group; return the hg38 passthrough, the lifted, and
+    the keys the lift re-oriented (issue #284). Kept apart so the
+    both-assembly drop can compare them."""
+    passthrough = place_sites({"hg38": tuples_by_assembly.pop("hg38", set())})
+    lifted = place_sites(
+        {"hg19": tuples_by_assembly.pop("hg19", set())},
         chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
+        failure_threshold=liftover_failure_threshold,
     )
-    assert not tuples_by_assembly, f"unhandled source_assembly values: {sorted(tuples_by_assembly)}"
-    return passthrough_lookup, lifted_lookup, swapped
+    if tuples_by_assembly:
+        raise ValueError(f"unhandled source_assembly values: {sorted(tuples_by_assembly)}")
+    return passthrough.alid, lifted.alid, lifted.reoriented
 
 
 def _drop_cross_assembly_collisions(
@@ -100,30 +188,6 @@ def _drop_cross_assembly_collisions(
             "refuses too"
         )
     return dropped_keys
-
-
-def _lift_hg19_union(
-    hg19_tuples: set[SourceKey],
-    *,
-    chain_file: str | Path | None,
-    liftover_failure_threshold: float,
-) -> tuple[SourceLookup, ReorientedKeys]:
-    """Lift Pass 1's hg19 group; return its ALIDs and the keys it re-oriented.
-
-    The richer `lift_hg19_to_hg38` rather than `build_liftover_lookup`, because
-    a reverse-strand block re-orients each variant's statistics as well as
-    renaming it (issue #284), and an ALID string cannot say which: a palindromic
-    pair's ALID is identical under either projection.
-    """
-    if not hg19_tuples:
-        return {}, set()
-    log.info("Running liftover hg19 → hg38 (%d variants)", len(hg19_tuples))
-    lifted = lift_hg19_to_hg38(
-        hg19_tuples, chain_file=chain_file, failure_threshold=liftover_failure_threshold
-    )
-    lookup = {key: row.alid for key, row in lifted.items()}
-    log.info("Liftover complete: %d variants mapped", len(lookup))
-    return lookup, {key for key, row in lifted.items() if statistics_swap(key, row)}
 
 
 def place_union(
