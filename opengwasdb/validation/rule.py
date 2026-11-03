@@ -20,10 +20,17 @@ from dataclasses import dataclass, field
 from enum import Flag, StrEnum, auto
 from functools import cached_property
 from pathlib import Path
+from typing import Any, Generic, TypeVar
 
 from opengwasdb.model.analyses import AnalysesTable, read_analyses
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store.open import OpenGWASDBStore
+from opengwasdb.variants import VariantAxis
+
+#: What one scan yields: a block of the data it reads.
+B = TypeVar("B")
+#: What a fold measures in each block and adds up over the scan.
+M = TypeVar("M")
 
 
 class Severity(StrEnum):
@@ -112,6 +119,17 @@ class Target:
         """The release's `analyses.tsv`, read on first use."""
         return read_analyses(self.store.analyses_path)
 
+    @cached_property
+    def variant_axis(self) -> VariantAxis:
+        """The release's Store Variant Table, opened on first use and closed by `close`."""
+        return VariantAxis(self.store.path)
+
+    def close(self) -> None:
+        """Release what this target opened for its rules."""
+        axis = self.__dict__.pop("variant_axis", None)
+        if axis is not None:
+            axis.close()
+
     def __repr__(self) -> str:
         return f"Target({self.kind.name}, {self.label!r})"
 
@@ -146,6 +164,13 @@ class Rule:
         return Finding(self.name, severity or self.severity, message, target.label)
 
 
+class Skip(Exception):
+    """Raised by a rule that cannot judge this target; recorded with its reason.
+
+    A skip is not a pass: the rules that run after this one are skipped too.
+    """
+
+
 @dataclass(frozen=True, kw_only=True)
 class Check(Rule):
     """A rule that reads what it needs for itself: metadata and small arrays."""
@@ -157,12 +182,53 @@ class Check(Rule):
             yield self.finding(target, message)
 
 
+def _validation_failed(_target: Target, exc: Exception) -> str:
+    return f"validation failed: {exc}"
+
+
+@dataclass(frozen=True)
+class Scan(Generic[B]):
+    """One streamed read of a target, shared by every fold that names it.
+
+    `blocks` yields the target's data in order, a block at a time. `failure` words
+    a read that fails part-way, which is reported once, by the first fold on the
+    scan; the others are skipped.
+    """
+
+    name: str
+    blocks: Callable[[Target], Iterator[B]]
+    failure: Callable[[Target, Exception], str] = _validation_failed
+
+
+@dataclass(frozen=True, kw_only=True)
+class Fold(Rule, Generic[B, M]):
+    """A rule judged from one pass of a scan: it measures each block and adds up.
+
+    `measure` returns what one block holds (an int, an array, or a value with
+    `+`); the runner adds the measures from `zero` in block order and hands the
+    total to `judge`. Every fold on one scan shares its single read.
+    """
+
+    scan: Scan[B]
+    zero: M
+    measure: Callable[[Target, B], M]
+    judge: Callable[[Target, M], Iterable[str]]
+
+    def findings(self, target: Target) -> Iterator[Finding]:
+        raise TypeError(f"fold {self.name!r} is judged from its scan, {self.scan.name!r}")
+
+    def judged(self, target: Target, total: M) -> Iterator[Finding]:
+        for message in self.judge(target, total):
+            yield self.finding(target, message)
+
+
 @dataclass(frozen=True)
 class ValidationResult:
     """A run's findings, in rule order, and the rules it skipped.
 
-    `skipped` maps each skipped rule to the prerequisites that failed or were
-    skipped before it. `errors`, `warnings` and `ok` read as they always have.
+    `skipped` maps each skipped rule to why: the prerequisites that failed or were
+    skipped before it, or the reason the rule gave. `errors`, `warnings` and `ok`
+    read as they always have.
     """
 
     findings: tuple[Finding, ...] = ()
@@ -193,17 +259,26 @@ def check_registry(rules: Sequence[Rule]) -> tuple[Rule, ...]:
     """The rules, refused unless names are unique and every prerequisite comes first.
 
     Running in registration order then decides every prerequisite before the rule
-    that names it.
+    that names it. A scan runs when its first fold is reached, so every fold on it
+    must run after rules registered before that first fold.
     """
     seen: set[str] = set()
+    first_fold: dict[str, set[str]] = {}
     for rule in rules:
+        if isinstance(rule, Fold):
+            _check_fold_order(rule, first_fold.setdefault(rule.scan.name, set(seen)))
         if rule.name in seen:
             raise ValueError(f"validation rule {rule.name!r} is registered twice")
-        unknown = [name for name in rule.after if name not in seen]
-        if unknown:
-            raise ValueError(
-                f"validation rule {rule.name!r} runs after {unknown}, which are not "
-                "registered before it"
-            )
+        _check_order(rule, seen, "registered before it")
         seen.add(rule.name)
     return tuple(rules)
+
+
+def _check_fold_order(fold: Fold[Any, Any], before_scan: set[str]) -> None:
+    _check_order(fold, before_scan, f"registered before the first fold on {fold.scan.name!r}")
+
+
+def _check_order(rule: Rule, before: set[str], where: str) -> None:
+    late = [name for name in rule.after if name not in before]
+    if late:
+        raise ValueError(f"validation rule {rule.name!r} runs after {late}, which are not {where}")

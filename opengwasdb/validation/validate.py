@@ -80,14 +80,13 @@ from opengwasdb.validation.rule import (
 )
 from opengwasdb.validation.rules import analyses as analyses_rules
 from opengwasdb.validation.rules import release as release_rules
+from opengwasdb.validation.rules import variants as variant_rules
 from opengwasdb.validation.rules.release import REQUIRED
+from opengwasdb.validation.rules.variants import representative_variant_indices
+from opengwasdb.validation.run import evaluate, selected
 from opengwasdb.validation.sample_size import validate_n_plan, validate_ragged_n
 from opengwasdb.variants import (
     VariantAxis,
-    VariantRecord,
-    is_indexable_alid,
-    is_indexable_rsid,
-    iter_variant_records,
     variant_table_path,
 )
 
@@ -114,7 +113,7 @@ def validate_store(
     rule has is refused before anything is read.
     """
     if rules is not None:
-        _selected(RULES, rules)
+        selected(RULES, rules)
     options = ValidationOptions(
         source, fidelity_samples, fidelity_seed, source_assembly, chain_file
     )
@@ -144,110 +143,6 @@ def release_targets(store: OpenGWASDBStore, options: ValidationOptions) -> list[
                 Target(Kind.RELEASE, "dense", component, parent=release, options=options)
             )
     return targets
-
-
-#: How a rule ended on one target, as the rules that run after it see it.
-_PASSED, _FAILED, _SKIPPED = "passed", "failed", "skipped"
-
-
-def evaluate(
-    rules: Sequence[Rule],
-    targets: Sequence[Target],
-    selection: Collection[str] | None = None,
-) -> ValidationResult:
-    """Run `rules` over `targets` in registration order; report findings in that order.
-
-    A rule runs on each target it applies to unless a prerequisite failed or was
-    skipped there; a skip is recorded, not reported. An exception in one rule is
-    that rule's failure and no other's.
-    """
-    run = _Run(targets)
-    chosen = _selected(rules, selection)
-    for rule in rules:
-        if rule.name in chosen:
-            run.judge(rule)
-    ordered = tuple(
-        f for rule in rules for i in range(len(targets)) for f in run.found.get((rule.name, i), ())
-    )
-    return ValidationResult(ordered, {name: tuple(b) for name, b in run.skipped.items()})
-
-
-class _Run:
-    """What one run has decided so far: each rule's state and findings on each target."""
-
-    def __init__(self, targets: Sequence[Target]) -> None:
-        self.targets = targets
-        self.position = {id(target): i for i, target in enumerate(targets)}
-        self.states: dict[tuple[str, int], str] = {}
-        self.found: dict[tuple[str, int], list[Finding]] = {}
-        self.skipped: dict[str, list[str]] = {}
-
-    def judge(self, rule: Rule) -> None:
-        for i, target in enumerate(self.targets):
-            if not rule.applies_to(target):
-                continue
-            blockers = _blockers(rule, target, self.states, self.position)
-            if blockers:
-                self.skip(rule.name, i, blockers)
-                continue
-            findings = _contained(rule, target)
-            self.found[(rule.name, i)] = findings
-            failed = any(f.severity is Severity.ERROR for f in findings)
-            self.states[(rule.name, i)] = _FAILED if failed else _PASSED
-
-    def skip(self, name: str, i: int, blockers: list[str]) -> None:
-        self.states[(name, i)] = _SKIPPED
-        held = self.skipped.setdefault(name, [])
-        held.extend(b for b in blockers if b not in held)
-
-
-def _blockers(
-    rule: Rule, target: Target, states: dict[tuple[str, int], str], position: dict[int, int]
-) -> list[str]:
-    """The prerequisites of `rule` that did not pass on `target` or a target it belongs to."""
-    blockers = []
-    for name in rule.after:
-        owner: Target | None = target
-        while owner is not None:
-            state = states.get((name, position.get(id(owner), -1)))
-            if state is not None:
-                if state != _PASSED:
-                    blockers.append(name)
-                break
-            owner = owner.parent
-    return blockers
-
-
-def _contained(rule: Rule, target: Target) -> list[Finding]:
-    """`rule`'s findings on `target`, ending with its failure if it raised.
-
-    An exception says nothing about any other rule, so it fails this one alone; the
-    findings the rule made before it are kept.
-    """
-    found: list[Finding] = []
-    try:
-        found.extend(rule.findings(target))
-    except Exception as exc:  # noqa: BLE001
-        found.append(rule.finding(target, f"validation failed: {exc}", Severity.ERROR))
-    return found
-
-
-def _selected(rules: Sequence[Rule], selection: Collection[str] | None) -> set[str]:
-    """The names to run: everything, or `selection` and every rule it runs after."""
-    by_name = {rule.name: rule for rule in rules}
-    if selection is None:
-        return set(by_name)
-    unknown = sorted(set(selection) - by_name.keys())
-    if unknown:
-        raise ValueError(f"no validation rule is named {', '.join(map(repr, unknown))}")
-    chosen: set[str] = set()
-    pending = list(selection)
-    while pending:
-        name = pending.pop()
-        if name not in chosen:
-            chosen.add(name)
-            pending.extend(by_name[name].after)
-    return chosen
 
 
 # --- the orchestrators rules replace, each run whole until its checks move out ---
@@ -338,6 +233,7 @@ def _fidelity_prerequisites() -> tuple[str, ...]:
     """
     earlier = (
         *release_rules.RULES,
+        *variant_rules.RULES,
         *analyses_rules.TABLE_RULES,
         _LEGACY_DENSE,
         *analyses_rules.ORIENTATION_RULES,
@@ -357,6 +253,7 @@ RULES: tuple[Rule, ...] = check_registry(
     [
         Check(name=MANIFEST_RULE, kinds=Kind.RELEASE, run=lambda _target: ()),
         *release_rules.RULES,
+        *variant_rules.RULES,
         *analyses_rules.TABLE_RULES,
         Check(
             name="legacy.infinite_se",
@@ -928,13 +825,8 @@ def _validate_dense_store(
     before it.
     """
     manifest = store.manifest
+    n_variants = _n_variants(store.path)
     with store.index_connection() as connection:
-        variant_axis = VariantAxis(store.path, connection)
-        try:
-            n_variants = _validate_variant_axis(variant_axis, errors)
-            _validate_sqlite(connection, n_variants, errors)
-        finally:
-            variant_axis.close()
         n_analyses = len(read_analyses(store.analyses_path).rows)
         root = store.arrays(mode="r")
         imputed_arr = None
@@ -2102,6 +1994,15 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> None:
         _validate_hybrid_outer(store, errors)
 
 
+def _n_variants(store_path: Path) -> int:
+    """The rows of a release's Store Variant Table, by its offset sidecar."""
+    axis = VariantAxis(store_path)
+    try:
+        return axis.n_variants
+    finally:
+        axis.close()
+
+
 def _hybrid_dense_component(
     store: OpenGWASDBStore, errors: list[str]
 ) -> OpenGWASDBStore | None:
@@ -2126,21 +2027,9 @@ def _hybrid_dense_component(
 
 
 def _validate_hybrid_outer(store: OpenGWASDBStore, errors: list[str]) -> None:
-    """The shared table, the Overflow, the cross-component invariants, its top hits."""
+    """The Overflow, the cross-component invariants, the Overflow's top hits."""
     store_path = store.path
-    try:
-        with store.index_connection() as connection:
-            variant_axis = VariantAxis(store_path, connection)
-            try:
-                n_shared = _validate_variant_axis(variant_axis, errors)
-                _validate_sqlite(connection, n_shared, errors)
-            finally:
-                variant_axis.close()
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"hybrid shared-table validation failed: {exc}")
-        return
-    if errors:
-        return
+    n_shared = _n_variants(store_path)
     ragged_path = store_path / "data.zarr" / "ragged"
     _validate_overflow(store_path, ragged_path, n_shared, errors, store.manifest.encoding)
     if errors:
@@ -2321,7 +2210,7 @@ def _validate_dense_coverage(
     dense_axis = VariantAxis(dense_dir)
     shared_axis = VariantAxis(store_path)
     try:
-        for r in _representative_variant_indices(n_panel):
+        for r in representative_variant_indices(n_panel):
             dense_rec = dense_axis.by_index(r)
             shared_rec = shared_axis.by_index(int(dense_to_shared[r]))
             if dense_rec is None or shared_rec is None or dense_rec.alid != shared_rec.alid:
@@ -2366,231 +2255,6 @@ def _load_manifest(store_path: Path, errors: list[str]) -> OpenGWASDBStore | Non
     except Exception as exc:  # noqa: BLE001
         errors.append(f"manifest is malformed: {exc}")
     return None
-
-
-def _validate_sqlite(
-    connection: sqlite3.Connection,
-    n_variants: int,
-    errors: list[str],
-) -> None:
-    # No duplicate-ALID query here any more: SQLite holds no variant rows
-    # (issue #128). `_validate_variant_axis` checks the same thing against
-    # `variants.tsv.gz` and the ALID search index -- the structures queries
-    # actually read -- which is strictly stronger.
-    alias_rows = connection.execute("SELECT alias, variant_index FROM variant_aliases").fetchall()
-    for row in alias_rows:
-        variant_index = int(row["variant_index"])
-        if variant_index < 0 or variant_index >= n_variants:
-            errors.append(f"alias {row['alias']!r} points to missing variant {variant_index}")
-
-
-def _validate_rsid_index(
-    variant_axis: VariantAxis, named_rsids: int, errors: list[str]
-) -> None:
-    """Every rsid in `variants.tsv.gz` must be resolvable (issue #109).
-
-    The failure this exists to catch is silent by construction: a store whose
-    variant table is full of rsids but whose index is empty answers every rsid
-    lookup with "nothing here", which reads exactly like a real negative. That
-    was the state of every Store Release built before #109, and it was also
-    reintroduced once afterwards, by a completion path that rewrote the
-    variant table and dropped the rsids on the way through.
-
-    A store with no rsids at all is fine -- not every source names variants --
-    so this compares the index against the table rather than demanding either
-    be non-empty. A *missing* index is likewise only an error when there are
-    rsids to index: stores built before #109 have none of these sidecars, and
-    an rsid-less one of those is not wrong, merely older. That is why the
-    index is not in any layout's required-entry list, only its envelope.
-    """
-    # `named_rsids` is counted through the same predicate `_write_rsid_index`
-    # indexes by, so a correctly-built store cannot fail its own validator over
-    # an identifier that was deliberately left out.
-    indexed = variant_axis._rsid_bytes
-    if indexed is None:
-        if named_rsids:
-            errors.append(
-                f"variants.tsv.gz names {named_rsids} rsid(s) but the store has no rsid "
-                "search index — rebuild the store, or every rsid lookup against it "
-                "returns nothing"
-            )
-        return
-    if len(indexed) != named_rsids:
-        errors.append(
-            f"variant_rsid_bytes.npy has {len(indexed)} entries but variants.tsv.gz "
-            f"names {named_rsids} rsid(s)"
-        )
-
-
-@dataclass
-class _VariantTableScan:
-    """One streaming pass over the Store Variant Table (issue #254)."""
-
-    n_rows: int
-    indexable: int
-    named_rsids: int
-    mismatch: tuple[int, int] | None
-    duplicate_alid: str | None
-
-
-def _scan_variant_table(variant_axis: VariantAxis) -> _VariantTableScan:
-    """Count rows/indexable ALIDs/named rsids and find the first row fault.
-
-    Streams the table rather than materialising ``VariantAxis.all()``'s list of
-    one ``VariantRecord`` per row -- tens of millions of heap objects and the
-    dominant remaining source of the `validate` peak once the Dense band was
-    bounded (issue #254). The table is written ALID-sorted (``_alid_sort_key``),
-    so a duplicate canonical variant is adjacent to its twin.
-    """
-    n_rows = 0
-    indexable = 0
-    named_rsids = 0
-    previous_alid: str | None = None
-    first_issue_row: int | None = None
-    mismatch: tuple[int, int] | None = None
-    duplicate_alid: str | None = None
-
-    for expected_index, record in enumerate(iter_variant_records(variant_axis.table_path)):
-        if first_issue_row is None:
-            if record.variant_index != expected_index:
-                first_issue_row = expected_index
-                mismatch = (expected_index, record.variant_index)
-            elif record.alid == previous_alid:
-                first_issue_row = expected_index
-                duplicate_alid = record.alid
-        previous_alid = record.alid
-        if is_indexable_alid(record.alid):
-            indexable += 1
-        if is_indexable_rsid(record.rsid):
-            named_rsids += 1
-        n_rows += 1
-
-    return _VariantTableScan(
-        n_rows=n_rows,
-        indexable=indexable,
-        named_rsids=named_rsids,
-        mismatch=mismatch,
-        duplicate_alid=duplicate_alid,
-    )
-
-
-def _validate_alid_index(
-    variant_axis: VariantAxis, indexable: int, n_rows: int, errors: list[str]
-) -> None:
-    """The ALID search index covers exactly the indexable ALIDs, collision-free."""
-    if variant_axis._alid_bytes is None:
-        return
-    # One entry per *indexable* ALID, not per variant: an ALID too wide for the
-    # slot is left out rather than truncated into a key it shares with another
-    # variant (issue #127). Those resolve by exact scan.
-    if len(variant_axis._alid_bytes) != indexable:
-        errors.append(
-            f"variant_alid_bytes.npy has {len(variant_axis._alid_bytes)} entries but "
-            f"variants.tsv.gz has {indexable} ALID(s) narrow enough to index "
-            f"(of {n_rows} rows)"
-        )
-    keys = np.asarray(variant_axis._alid_bytes)
-    if len(keys) > 1:
-        collisions = int(np.count_nonzero(keys[1:] == keys[:-1]))
-        if collisions:
-            errors.append(
-                f"variant_alid_bytes.npy holds {collisions} key(s) shared by more than "
-                "one variant: a lookup by one variant's ALID returns another's row. "
-                "This is what silently truncating an over-wide ALID produced before "
-                "issue #127 — rebuild the store"
-            )
-
-
-def _validate_variant_axis(variant_axis: VariantAxis, errors: list[str]) -> int:
-    """Stream the Store Variant Table rather than materialising every record.
-
-    ``VariantAxis.all()`` built a list with one ``VariantRecord`` object per row
-    -- tens of millions of heap objects, and the dominant remaining source of
-    the `validate` peak once the Dense band was bounded (issue #254). Every
-    check here is a single-pass count or a per-adjacent-row comparison.
-    """
-    scan = _scan_variant_table(variant_axis)
-    if variant_axis.n_variants != scan.n_rows:
-        errors.append(
-            f"variant_offsets.npy has {variant_axis.n_variants} rows but "
-            f"variants.tsv.gz has {scan.n_rows} rows"
-        )
-    _validate_alid_index(variant_axis, scan.indexable, scan.n_rows, errors)
-    _validate_rsid_index(variant_axis, scan.named_rsids, errors)
-    if scan.mismatch is not None:
-        expected_index, found = scan.mismatch
-        errors.append(f"variant table row {expected_index} has variant_index {found}")
-    elif scan.duplicate_alid is not None:
-        errors.append("duplicate canonical variants in variant table")
-    _validate_representative_variants(variant_axis, scan.n_rows, errors)
-    return scan.n_rows
-
-
-def _validate_representative_variants(
-    variant_axis: VariantAxis, n_rows: int, errors: list[str]
-) -> None:
-    """Offset and tabix spot checks at a bounded, representative set of rows.
-
-    The full table is streamed (never materialised) in ``_scan_variant_table``;
-    re-reading a handful of rows here is the random-access spot check the offset
-    sidecar and tabix index exist to serve, and stays O(representatives) memory
-    (issue #254).
-    """
-    representative = _representative_variant_indices(n_rows)
-    if not representative:
-        return
-    table_records = _representative_table_records(variant_axis, set(representative))
-    for expected_index in representative:
-        if not _check_representative_variant(
-            variant_axis, expected_index, table_records[expected_index], errors
-        ):
-            break
-
-
-def _representative_table_records(
-    variant_axis: VariantAxis, wanted: set[int]
-) -> dict[int, VariantRecord]:
-    """Re-read the table for a bounded set of rows, without materialising all."""
-    table_records: dict[int, VariantRecord] = {}
-    for expected_index, record in enumerate(iter_variant_records(variant_axis.table_path)):
-        if expected_index in wanted:
-            table_records[expected_index] = record
-            if len(table_records) == len(wanted):
-                break
-    return table_records
-
-
-def _check_representative_variant(
-    variant_axis: VariantAxis,
-    expected_index: int,
-    record: VariantRecord,
-    errors: list[str],
-) -> bool:
-    """Offset and tabix spot checks for one row; False stops the sweep."""
-    try:
-        offset_record = variant_axis.by_index(expected_index)
-    except ValueError as exc:
-        errors.append(str(exc))
-        return False
-    if offset_record != record:
-        errors.append(f"variant offset for row {expected_index} points to a different row")
-        return False
-    fetched = variant_axis.range(record.chromosome, record.position, record.position)
-    if record not in fetched:
-        errors.append(f"tabix index cannot fetch variant {record.alid}")
-        return False
-    return True
-
-
-def _representative_variant_indices(n_variants: int) -> list[int]:
-    if n_variants <= 0:
-        return []
-    if n_variants <= 1000:
-        return list(range(n_variants))
-    anchors = {0, n_variants // 2, n_variants - 1}
-    step = max(1, n_variants // 997)
-    anchors.update(range(0, n_variants, step))
-    return sorted(index for index in anchors if 0 <= index < n_variants)
 
 
 # Dense validation decodes several raw, float32/float64 and boolean views of a

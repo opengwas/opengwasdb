@@ -9,7 +9,7 @@ runs after.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import pytest
@@ -18,13 +18,16 @@ from opengwasdb.validation import validate_store
 from opengwasdb.validation.rule import (
     Check,
     Finding,
+    Fold,
     Kind,
+    Scan,
     Severity,
+    Skip,
     Target,
     ValidationResult,
     check_registry,
 )
-from opengwasdb.validation.validate import evaluate
+from opengwasdb.validation.run import evaluate
 
 
 def _check(
@@ -139,3 +142,88 @@ def test_a_release_that_cannot_be_opened_fails_the_manifest_rule(tmp_path: Path)
     result = validate_store(tmp_path)
     assert result.failed() == {"manifest.loads"}
     assert result.errors == ["missing manifest.json"]
+
+
+def _counting_scan(blocks: list[int], reads: list[int]) -> Scan[int]:
+    def read(target: Target) -> Iterator[int]:
+        for block in blocks:
+            reads.append(block)
+            yield block
+
+    return Scan("numbers", read)
+
+
+def _sum_fold(
+    name: str, scan: Scan[int], limit: int, after: tuple[str, ...] = ()
+) -> Fold[int, int]:
+    def judge(target: Target, total: int) -> Iterable[str]:
+        return [f"{name}: total {total}"] if total > limit else []
+
+    return Fold(
+        name=name,
+        kinds=Kind.RELEASE,
+        after=after,
+        scan=scan,
+        zero=0,
+        measure=lambda target, block: block,
+        judge=judge,
+    )
+
+
+def test_every_fold_on_a_scan_shares_one_read() -> None:
+    reads: list[int] = []
+    scan = _counting_scan([1, 2, 3], reads)
+    rules = [_sum_fold("a", scan, 5), _check("between"), _sum_fold("b", scan, 1)]
+    result = evaluate(rules, [RELEASE])
+    assert reads == [1, 2, 3]
+    assert result.errors == ["a: total 6", "b: total 6"]
+
+
+def test_a_fold_that_raises_fails_alone() -> None:
+    scan = _counting_scan([1, 2], [])
+
+    def measure(target: Target, block: int) -> int:
+        raise RuntimeError("bad block")
+
+    broken = Fold(
+        name="broken",
+        kinds=Kind.RELEASE,
+        scan=scan,
+        zero=0,
+        measure=measure,
+        judge=lambda target, total: [],
+    )
+    result = evaluate([broken, _sum_fold("fine", scan, 2)], [RELEASE])
+    failure = Finding("broken", Severity.ERROR, "validation failed: bad block", ".")
+    assert result.of("broken") == [failure]
+    assert result.of("fine")[0].message == "fine: total 3"
+
+
+def test_a_read_that_fails_is_reported_once_and_skips_the_other_folds() -> None:
+    def read(target: Target) -> Iterator[int]:
+        yield 1
+        raise OSError("truncated")
+
+    scan = Scan("numbers", read, lambda target, exc: f"cannot read numbers: {exc}")
+    result = evaluate([_sum_fold("a", scan, 0), _sum_fold("b", scan, 0)], [RELEASE])
+    assert result.errors == ["cannot read numbers: truncated"]
+    assert result.failed() == {"a"}
+    assert result.skipped == {"b": ("a",)}
+
+
+def test_a_rule_that_cannot_judge_its_target_is_skipped_with_its_reason() -> None:
+    def run(target: Target) -> Iterable[str]:
+        raise Skip("nothing to check")
+
+    rules = [Check(name="a", kinds=Kind.RELEASE, run=run), _check("b", "ran", after=("a",))]
+    result = evaluate(rules, [RELEASE])
+    assert result.ok
+    assert result.skipped == {"a": ("nothing to check",), "b": ("a",)}
+
+
+def test_the_registry_refuses_a_fold_after_a_rule_registered_after_its_scan_starts() -> None:
+    scan = _counting_scan([1], [])
+    with pytest.raises(ValueError, match="before the first fold on 'numbers'"):
+        check_registry(
+            [_sum_fold("a", scan, 0), _check("c"), _sum_fold("b", scan, 0, after=("c",))]
+        )
