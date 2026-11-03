@@ -563,3 +563,67 @@ def _dense_from_records(tmp_path: Path, source: Path) -> tuple[Path, DenseBuildR
         [source], store, store_id="s", release_id="r", reference_assembly="GRCh38"
     )
     return store, result
+
+
+def test_a_single_pass_dense_build_logs_the_rows_its_reference_lacks(tmp_path: Path):
+    """D6: a row whose variant the Variant Reference does not hold reaches no
+    row of the Store; it used to be counted nowhere, and is now logged."""
+    vcf = dense_fixture._make_vcf(
+        tmp_path,
+        "trait_a",
+        [
+            "1\t1000\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+            "1\t2000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0.5\n",
+        ],
+    )
+    manifest = dense_fixture._make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
+    reference = tmp_path / "reference.txt"
+    reference.write_text("1:1000:A:G\n", encoding="utf-8")
+    store = tmp_path / "dense.opengwasdb"
+    build_dense_from_vcf_manifest(
+        manifest, store, store_id="s", release_id="r",
+        source_assembly="hg38", variant_reference=reference,
+    )
+
+    (analysis,) = _analyses(store)
+    assert (analysis["admitted"], analysis["dropped"]) == (1, {"off_axis": 1})
+    assert _dropped(admission_record_for(store), 0)[1:] == [["1:2000:C:T", "off_axis"]]
+
+
+@pytest.mark.parametrize("folds", [True, False])
+def test_a_hybrid_drops_an_unmatched_row_only_where_nothing_folds_it(
+    monkeypatch: pytest.MonkeyPatch, folds: bool
+):
+    """D6: a single-pass Hybrid folds an unmatched row onto its axis later, so
+    it keeps the row; a two-pass one has nowhere to put it, so it counts and
+    logs it rather than spill it for nobody to read."""
+    from types import SimpleNamespace
+
+    from opengwasdb.layouts.hybrid import build as hybrid_build
+    from opengwasdb.model.enums import StoredEffectScale
+    from opengwasdb.readers.fake import FakeReader
+    from opengwasdb.readers.interface import ReaderAssociation
+    from opengwasdb.variants.routing import RouteTable, RoutingKey
+
+    rows = [
+        ReaderAssociation("1", 100, "A", "G", 2.0, 0.1, StoredEffectScale.SD),
+        ReaderAssociation("1", 900, "C", "T", 1.0, 0.1, StoredEffectScale.SD),
+    ]
+    monkeypatch.setattr(
+        hybrid_build, "open_source", lambda *args, **kwargs: FakeReader(associations=rows)
+    )
+    table = RouteTable.build(
+        {("1", 100, "A", "G"): "1:100:A:G"}, (), [["1:100:A:G"], ["1:100:A:G"]],
+        key=RoutingKey.CASE_FOLDED, keep_unmatched=True,
+    )
+    gate = counting_gate(AnalysisRules("A"))
+    row = SimpleNamespace(source=None, se_divisor=1.0, trait_id="A")
+
+    dense, _, off_reference = hybrid_build._resolve_column_hybrid(
+        table, row, gate, (["1:100:A:G"], ["1:100:A:G"]), folds
+    )
+
+    assert dense[0].tolist() == [0]
+    assert len(off_reference[0]) == (1 if folds else 0)
+    assert gate.counts.dropped == ({} if folds else {Reason.OFF_AXIS: 1})
+    assert gate.dropped == ([] if folds else [("1:900:C:T", Reason.OFF_AXIS)])

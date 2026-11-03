@@ -23,7 +23,7 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.admission import AdmissionRecord, AnalysisRules, admission_record_for
+from opengwasdb.admission import AdmissionRecord, AnalysisRules, Reason, admission_record_for
 from opengwasdb.admission.cells import require_admitted
 from opengwasdb.admission.duplicates import record_duplicates
 from opengwasdb.build.eaf_orientation import (
@@ -413,7 +413,8 @@ def _prepare_axis(
     routing.names.require_written(staged.path, axis.alids)
     return _PreparedBuild(
         axis=axis,
-        table=routing.table([axis.alids]),
+        # Its unmatched rows are kept by key so the gate can log them (D6).
+        table=routing.table([axis.alids], keep_unmatched=True),
         variant_reference=str(variant_reference) if variant_reference is not None else None,
         column_map=column_map_provenance(manifest_rows),
     )
@@ -450,6 +451,7 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
         )
         placed = routed.placed[0]
         record_duplicates(gate, placed, context.alids)
+        gate.unplaced(Reason.OFF_AXIS, routed.unmatched.keys)
         se = apply_se_divisor(placed.se, row.se_divisor)
         require_admitted(placed.z, se, where=f"build-dense-vcf, Analysis {row.trait_id}")
         _spill_column(context.spill_dir, col_idx, placed.index, placed.z, se, placed.eaf)

@@ -75,6 +75,7 @@ one of them with the opposite sign, with no record of either.
 | `maf_below_threshold` | MAF is below a `FILTERED` threshold | no | ADR 0054 |
 | `duplicate_collapsed` | it agrees on z and SE with an earlier row for its (variant, Analysis), whose association it is | no | D5 |
 | `duplicate_conflicting` | the rows for its (variant, Analysis) disagree on z or SE: all are dropped | yes | D5 |
+| `off_axis` | no axis of the Store holds its variant, and nothing will place it later | yes | D6 |
 
 The duplicate rule is Variant Routing's `collapse_duplicates`, applied after
 the rules above. Each builder uses it: the Dense VCF and Hybrid builds through
@@ -82,6 +83,13 @@ routing (an axis's rows and the Hybrid's off-reference keys), and Ragged SSF and
 `build-dense` on their own rows. It replaces routing's last-wins, Ragged SSF's
 own rule and `build-dense`'s refusal. The fold's merge of an off-reference entry
 with an existing Overflow one still keeps the later (issue #223).
+
+`off_axis` is a Dense VCF row its axis lacks (a lift failure, a variant a
+Variant Reference omits), a two-pass Hybrid row no axis holds (it used to be
+spilled and deleted unread), and a BESD row whose ESI entry never made the
+axis. A single-pass Hybrid's unmatched rows are not dropped here: the fold
+places them in the Ragged Overflow, and the rows the fold cannot place are its
+own to count.
 
 `admission.json`'s `"rules"` names the rule set's version, and each decision
 below that changes what a rule admits moves it.

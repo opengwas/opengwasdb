@@ -36,7 +36,9 @@ is the `maf_missing` a Store's provenance reports.
 After the rules, a row is judged against the other rows that reach its place
 on the Variant Index. Rows that agree on z and SE are one association and
 collapse to the first (`duplicate_collapsed`); rows that disagree are all
-dropped (`duplicate_conflicting`), since nothing says which is right.
+dropped (`duplicate_conflicting`), since nothing says which is right. A row
+whose variant no axis of the Store holds is dropped too (`off_axis`), where a
+build has nowhere else to put it.
 
 A row dropped by a declared filter, or collapsed into its first, is counted
 only; a row dropped for any other reason is also logged, by its source key,
@@ -85,6 +87,8 @@ class Reason(StrEnum):
     DUPLICATE_COLLAPSED = "duplicate_collapsed"
     #: A row for a (variant, Analysis) whose rows disagree on z or SE.
     DUPLICATE_CONFLICTING = "duplicate_conflicting"
+    #: A row whose variant no axis of the Store holds, so routing places it nowhere.
+    OFF_AXIS = "off_axis"
 
 
 #: The reasons whose rows are logged by source key, not only counted. A declared
@@ -96,6 +100,7 @@ LOGGED: frozenset[Reason] = frozenset(
         Reason.EFFECT_MISSING,
         Reason.Z_NONFINITE,
         Reason.DUPLICATE_CONFLICTING,
+        Reason.OFF_AXIS,
     }
 )
 

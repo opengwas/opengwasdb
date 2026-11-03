@@ -29,6 +29,7 @@ from opengwasdb.admission import (
     AdmissionRecord,
     AnalysisRules,
     Gate,
+    Reason,
     SourceRows,
     admission_record_for,
     require_admitted,
@@ -920,21 +921,25 @@ def _map_probe_rows(
     betas: np.ndarray,
     ses: np.ndarray,
     esi_to_variant: dict[int, tuple[int, bool]],
+    gate: Gate,
 ) -> _ProbeRows:
     """Map one probe's admitted BESD rows onto ``(variant_index, z, se, esi_row)`` lists.
 
     A row whose ESI index never made the variant axis is dropped for that
-    Analysis. Rows that survive are oriented — ``z`` flips sign when the
+    Analysis, and counted and logged by its gate (`off_axis`). Rows that
+    survive are oriented — ``z`` flips sign when the
     stored canonical allele is the flipped one. The ESI row
     travels with each so its frequency and SNP ID can be joined after the sort
     (ADR 0067).
     """
     rows = _ProbeRows([], [], [], [])
+    off_axis: list[str] = []
     for esi_idx, beta, se in zip(
         raw_snp_idx.tolist(), betas.tolist(), ses.tolist(), strict=True
     ):
         mapping = esi_to_variant.get(int(esi_idx))
         if mapping is None:
+            off_axis.append(f"esi:{int(esi_idx)}")
             continue
         variant_index, flipped = mapping
         z = beta / se
@@ -944,6 +949,7 @@ def _map_probe_rows(
         rows.z.append(z)
         rows.se.append(se)
         rows.esi_row.append(int(esi_idx))
+    gate.unplaced(Reason.OFF_AXIS, off_axis)
     return rows
 
 
@@ -1011,7 +1017,7 @@ def _ingest_probe(
     raw_snp_idx, betas, ses = besd.get_probe_associations(probe.row_idx)
     n_raw = len(raw_snp_idx)
     sizes = None if sample_sizes is None else sample_sizes.sizes_for(probe.probe_id)
-    rows = _map_probe_rows(*_admitted(raw_snp_idx, betas, ses, gate), axis.esi_to_variant)
+    rows = _map_probe_rows(*_admitted(raw_snp_idx, betas, ses, gate), axis.esi_to_variant, gate)
     if not rows.variant_index:
         _add_empty_analysis(csr)
         return _ProbeScopes(has_eaf=False, has_n=False), n_raw > 0

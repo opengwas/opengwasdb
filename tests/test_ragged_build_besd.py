@@ -1003,6 +1003,18 @@ def test_same_assembly_duplicate_variant_is_dropped_and_counted_at_the_root(
     assert result.n_variants == 1
     assert result.n_associations == 1, "the duplicated entries' associations must go too"
 
+    # Their associations reach no axis, and the Admission record names each (D6).
+    import gzip
+
+    from opengwasdb.admission import admission_record_for
+
+    record = admission_record_for(out)
+    first, second = json.loads((record / "admission.json").read_text())["analyses"]
+    assert (first["admitted"], first["dropped"]) == (1, {"off_axis": 2})
+    assert (second["admitted"], second["dropped"]) == (0, {"off_axis": 1})
+    with gzip.open(record / "dropped" / "0.tsv.gz", "rt") as fh:
+        assert fh.read().splitlines()[1:] == ["esi:0\toff_axis", "esi:1\toff_axis"]
+
     reader = RaggedCSRReader(out)
     assert len(reader.get_analysis(0).z) == 1
     assert len(reader.get_analysis(1).z) == 0, "a probe with only duplicated rows is empty"

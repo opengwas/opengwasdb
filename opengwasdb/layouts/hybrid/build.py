@@ -323,7 +323,11 @@ def _off_reference_spill(
 
 
 def _resolve_column_hybrid(
-    table: RouteTable, row: ManifestRow, gate: Gate, axes: tuple[Sequence[str], ...]
+    table: RouteTable,
+    row: ManifestRow,
+    gate: Gate,
+    axes: tuple[Sequence[str], ...],
+    folds: bool,
 ) -> tuple[_Component, _Component, _OffReferenceSpill]:
     """Stream one study once, routing each association to the dense fill
     (on-panel), the ragged overflow (off-panel), or -- when the route table does
@@ -350,11 +354,17 @@ def _resolve_column_hybrid(
     dense, overflow = routed.placed
     for placed, alids in zip(routed.placed, axes, strict=True):
         record_duplicates(gate, placed, alids)
+    unmatched = routed.unmatched
+    if not folds:
+        # A two-pass axis is the sources' whole union, so nothing folds an
+        # unmatched row onto it later: it is dropped here, and logged.
+        gate.unplaced(Reason.OFF_AXIS, unmatched.keys)
+        unmatched = Unmatched([], unmatched.z[:0], unmatched.se[:0], unmatched.eaf[:0])
     divisor = row.se_divisor
     return (
         (dense.index, dense.z, apply_se_divisor(dense.se, divisor), dense.eaf),
         (overflow.index, overflow.z, apply_se_divisor(overflow.se, divisor), overflow.eaf),
-        _off_reference_spill(routed.unmatched, divisor, gate),
+        _off_reference_spill(unmatched, divisor, gate),
     )
 
 
@@ -404,6 +414,7 @@ class _Pass2Context:
     maf_policies: Mapping[str, MafPolicy]
     record: AdmissionRecord
     axes: tuple[Sequence[str], ...]
+    folds: bool
 
 
 def _route_column(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
@@ -417,7 +428,7 @@ def _route_column(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
     )
     with context.record.gate(rules) as gate:
         dense, overflow, off_reference = _resolve_column_hybrid(
-            context.table, row, gate, context.axes
+            context.table, row, gate, context.axes, context.folds
         )
         parts = (("Dense", dense), ("Overflow", overflow), ("off-reference", off_reference))
         for name, part in parts:
@@ -1875,6 +1886,7 @@ def _route_studies(
         prepared.maf_policies,
         record,
         (prepared.partition.panel_sorted, prepared.partition.shared_sorted),
+        folds=options.variant_reference is not None,
     )
     tasks = [(analysis_index[row.trait_id], row) for row in rows]
     routed = fork_each(_route_column, context, tasks, options.n_workers)
