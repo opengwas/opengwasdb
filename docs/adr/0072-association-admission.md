@@ -170,7 +170,10 @@ number -- is absent in the Store, by the rule `parse_af` applies in every reader
 it too. The record counts them per Analysis (`eaf_made_absent`), over the rows
 the Source Reader read, so it can say how much of a source's frequency column
 the Store does not hold. A `.esi` frequency is a variant's, which every probe
-shares, so `build-ragged-besd` logs the file's count once instead.
+shares, so a `build-ragged-besd` probe counts the rows it reads at a variant
+whose reported frequency is absent, when the build stores the frequency. An
+infinite `.esi` frequency is one of them; the `.esi` reader used to refuse
+the file for it.
 
 `admission.json`'s `"rules"` names the rule set's version, `admission/10`. A
 change to what a rule admits, or to what the record counts, moves it.

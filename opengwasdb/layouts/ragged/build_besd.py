@@ -75,6 +75,7 @@ from opengwasdb.model.enums import (
 from opengwasdb.model.maf_policy import MafState
 from opengwasdb.model.manifest_columns import manifest_column
 from opengwasdb.readers.interface import StreamTally
+from opengwasdb.stats import FrequencyTally
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
@@ -343,7 +344,9 @@ class _EsiAxis:
     the axis and no association can sit at a wrong coordinate.
 
     ``eaf_by_esi`` is each ESI row's stored-allele frequency (`None` when the
-    `.esi` reports none), and ``snp_ids`` each row's SNP ID, kept only for a
+    `.esi` reports none), ``eaf_made_absent`` which ESI rows reported one the
+    Store holds as absent (D7), both only for a build that stores the
+    frequency, and ``snp_ids`` each row's SNP ID, kept only for a
     build that joins a sample-size table on it (ADR 0067). ``malformed`` names
     each ESI row whose identity no ALID can spell, and why (#365): it is
     neither lifted nor placed, and every probe's row at it is dropped and
@@ -357,6 +360,7 @@ class _EsiAxis:
     collisions: _VariantCollisions
     lift: dict[str, object] | None
     eaf_by_esi: np.ndarray | None = None
+    eaf_made_absent: np.ndarray | None = None
     snp_ids: list[str] | None = None
     malformed: dict[int, str] = field(default_factory=dict)
 
@@ -382,6 +386,9 @@ def _esi_axis(
     print(f"Canonical variants: {len(canonical.variants)} (from {len(snps)} ESI entries)")
     lift_provenance = canonical.collisions.record(lift_provenance)
     snp_ids = _unique_snp_ids(snps, canonical.esi_to_variant) if keep_snp_ids else None
+    frequencies = (
+        stored_esi_frequencies(snps, canonical.esi_to_variant) if keep_frequencies else None
+    )
     return _EsiAxis(
         probes,
         canonical.variants,
@@ -389,9 +396,8 @@ def _esi_axis(
         canonical.esi_to_variant,
         canonical.collisions,
         lift_provenance,
-        eaf_by_esi=(
-            stored_esi_frequencies(snps, canonical.esi_to_variant) if keep_frequencies else None
-        ),
+        eaf_by_esi=None if frequencies is None else frequencies.stored,
+        eaf_made_absent=None if frequencies is None else frequencies.made_absent,
         snp_ids=snp_ids,
         malformed=malformed,
     )
@@ -1120,6 +1126,10 @@ def _ingest_probe(
     n_raw = len(raw_snp_idx)
     if axis.malformed:
         raw_snp_idx, betas, ses = _without_malformed(raw_snp_idx, betas, ses, axis.malformed, gate)
+    if axis.eaf_made_absent is not None:
+        # The `.esi` frequency of each row the probe reads, made absent (D7).
+        made_absent = int(axis.eaf_made_absent[raw_snp_idx].sum())
+        gate.streamed(StreamTally(frequencies=FrequencyTally(made_absent=made_absent)))
     sizes = None if sample_sizes is None else sample_sizes.sizes_for(probe.probe_id)
     admitted = _admitted(raw_snp_idx, betas, ses, gate, axis.eaf_by_esi)
     rows = _resolved_duplicates(_map_probe_rows(*admitted, axis.esi_to_variant, gate), gate)

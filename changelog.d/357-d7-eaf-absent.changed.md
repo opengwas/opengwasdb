@@ -4,6 +4,8 @@
   (ADR 0036); `build-dense` stored a record's frequency as given, and now reads
   it the same way. Each Analysis's entry in the Admission record counts these
   (`eaf_made_absent`), over the rows its source yielded; no row is dropped for
-  one. `build-ragged-besd` logs its `.esi`'s count once, since that frequency is
-  every probe's. `SourceReader.stream_associations` takes an optional
-  `StreamTally`, which counts them.
+  one. A `build-ragged-besd` probe counts its rows at a `.esi` frequency made
+  absent, when the build stores the frequency (`--store-esi-eaf`), and an
+  infinite `.esi` frequency is one of them, where the build used to refuse the
+  file. `SourceReader.stream_associations` takes an optional `StreamTally`,
+  which counts them.

@@ -748,24 +748,37 @@ def test_a_dense_build_stores_no_frequency_outside_the_interval(tmp_path: Path):
     assert scopes == {"A": "association", "B": "absent"}
 
 
-def test_an_esi_frequency_outside_the_interval_is_counted_once_for_the_file(
-    caplog: pytest.LogCaptureFixture,
-):
-    """A `.esi` frequency is a variant's, shared by every probe, so D7's count
-    for a BESD source is the file's, logged once, not any Analysis's."""
-    from opengwasdb.layouts.ragged.besd_eaf import stored_esi_frequencies
-    from opengwasdb.layouts.ragged.besd_reader import SnpRecord
-
-    snps = [
-        SnpRecord(i, "1", f"rs{i}", 100 * (i + 1), "A", "G", freq)
-        for i, freq in enumerate([0.3, 1.0, 1.5, None])
+def test_a_probe_counts_the_esi_frequencies_its_rows_make_absent(tmp_path: Path):
+    """D7 for BESD: a `.esi` frequency is a variant's, shared by every probe, and
+    each probe counts the rows it reads at a reported frequency the Store holds
+    as absent, as every reader counts its rows' frequencies. An infinite one is
+    such a frequency, where the file used to be refused; `NA` reports none."""
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    frequencies = ["0.3", "1.0", "inf", "1.5", "NA"]
+    snps: list[besd_fixtures.EsiRow] = [
+        {
+            "chr": "1", "snp_id": f"rs{i}", "bp": 1_000_000 + 100_000 * i, "a1": "A", "a2": "G",
+            "freq": frequency,
+        }
+        for i, frequency in enumerate(frequencies)
     ]
-    with caplog.at_level("INFO", logger="opengwasdb.layouts.ragged.besd_eaf"):
-        stored = stored_esi_frequencies(snps, {i: (i, False) for i in range(4)})
+    besd_fixtures.write_esi(fixture / "test.esi", snps)
+    probes = [{"chr": "1", "probe_id": f"ENSG{i}", "bp": 1_050_000} for i in range(2)]
+    besd_fixtures.write_epi(fixture / "test.epi", probes)
+    besd_fixtures.write_besd_sparse_3f(
+        fixture / "test.besd",
+        2,
+        [[(i, 0.2, 0.1) for i in range(5)], [(0, 0.2, 0.1), (2, 0.2, 0.1), (4, 0.2, 0.1)]],
+    )
+    store = tmp_path / "besd.opengwasdb"
+    build_ragged_from_besd(
+        fixture / "test", store, store_id="s", release_id="r",
+        association_coverage="cis_and_signals", store_esi_eaf=True, allow_unverified_eaf=True,
+    )
 
-    assert stored is not None
-    assert np.isnan(stored[1:]).all()
-    assert ".esi: 2 reported frequencies outside (0, 1) are absent" in caplog.messages
+    counts = [(a["admitted"], a["eaf_made_absent"]) for a in record_analyses(store)]
+    assert counts == [(5, 3), (3, 1)]
 
 
 def test_a_declared_info_filter_s_drops_are_counted_and_not_logged(tmp_path: Path):
