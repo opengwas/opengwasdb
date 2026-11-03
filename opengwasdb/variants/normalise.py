@@ -237,10 +237,10 @@ def orient_to_canonical(
 
 
 def orient_or_drop(
-    chromosome: str,
-    position: int | str,
-    source_effect_allele: str,
-    source_other_allele: str,
+    chromosome: str | None,
+    position: int | str | None,
+    source_effect_allele: str | None,
+    source_other_allele: str | None,
     faults: IdentityFaults | None = None,
 ) -> Orientation | None:
     """`orient_to_canonical`, or ``None`` for a row that names no variant.
@@ -248,8 +248,12 @@ def orient_or_drop(
     A malformed identity is recorded in ``faults`` under its source key
     (``chromosome:position:other:effect``, the source's ref then alt), for
     Association Admission to count and log (#365); every other refusal stays
-    the reader's own silent drop.
+    the reader's own silent drop. A cell a truncated row does not reach is
+    ``None``, which is an empty cell: a missing chromosome or allele.
     """
+    chromosome, position = chromosome or "", "" if position is None else position
+    source_effect_allele = source_effect_allele or ""
+    source_other_allele = source_other_allele or ""
     try:
         return orient_to_canonical(
             chromosome, position, source_effect_allele, source_other_allele

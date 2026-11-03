@@ -220,19 +220,21 @@ def _tabular_row(
     dropped from every stream; a row with a valid identity but an unusable
     effect/`standard_error` still yields a row (its `beta`/`se` are `None`) so
     `stream_variants` can still see it per the interface's superset contract.
+    A row too short to reach an allele has a missing allele, which `faults`
+    names (#365).
     """
     effect_allele = row.get("effect_allele")
     other_allele = row.get("other_allele")
-    if effect_allele is None or other_allele is None:
-        return None
     ori = orient_or_drop(
-        row.get("chromosome", ""),
-        row.get("base_pair_location", ""),
+        row.get("chromosome"),
+        row.get("base_pair_location"),
         effect_allele,
         other_allele,
         faults,
     )
-    if ori is None:
+    # An allele a row does not reach never orients, so the two None checks
+    # only say so to the type checker.
+    if ori is None or effect_allele is None or other_allele is None:
         return None
     statistics = _row_statistics(row, source, sample_size_column)
     return TabularRow(

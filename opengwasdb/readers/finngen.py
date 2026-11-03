@@ -60,13 +60,13 @@ def _iter_rows(
         for row in reader:
             # R13 uses #chrom. Accepting chrom as well preserves compatibility
             # with older captured FinnGen releases without changing semantics.
-            chromosome = row.get("#chrom", row.get("chrom", ""))
+            chromosome = row.get("#chrom", row.get("chrom"))
             ref = row.get("ref")
             alt = row.get("alt")
-            if ref is None or alt is None:
-                continue
-            orientation = orient_or_drop(chromosome, row.get("pos", ""), alt, ref, faults)
-            if orientation is None:
+            # A row too short to reach an allele has a missing one, which
+            # `faults` names (#365); the None checks are the type checker's.
+            orientation = orient_or_drop(chromosome, row.get("pos"), alt, ref, faults)
+            if orientation is None or ref is None or alt is None:
                 continue
             beta = row.get("beta")
             yield tabular.TabularRow(

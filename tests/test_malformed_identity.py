@@ -237,3 +237,50 @@ def test_a_besd_build_logs_each_probe_s_row_at_a_malformed_esi_row(tmp_path: Pat
     assert logged == [["esi:1", "chromosome_missing"], ["esi:2", "allele_invalid"],
                       ["esi:3", "allele_invalid"]]
     assert _alids(store) == ["1:1000:A:G"]
+
+
+def _truncated_ssf(tmp_path: Path) -> SourceReader:
+    path = tmp_path / "trait_a.tsv"
+    path.write_text(
+        "chromosome\tbase_pair_location\teffect_allele\tother_allele\tbeta\tstandard_error\n"
+        "1\t1000\tG\tA\t1.0\t0.5\n"
+        "1\t2000\tG\n"
+        "1\t3000\n",
+        encoding="utf-8",
+    )
+    return GwasSsfReader(path)
+
+
+def _truncated_finngen(tmp_path: Path) -> SourceReader:
+    path = tmp_path / "trait_a.finngen.tsv"
+    path.write_text(
+        "#chrom\tpos\tref\talt\trsids\tpval\tbeta\tsebeta\taf_alt\n"
+        "1\t1000\tA\tG\t\t0.05\t1.0\t0.5\t0.3\n"
+        "1\t2000\tA\n"
+        "1\t3000\n",
+        encoding="utf-8",
+    )
+    return FinnGenR13Reader(path)
+
+
+@pytest.mark.parametrize(
+    ("reader_for", "short_key"),
+    # The key spells ref then alt: GWAS-SSF's row keeps its effect (alt)
+    # allele, FinnGen's its ref.
+    [(_truncated_ssf, "1:2000::G"), (_truncated_finngen, "1:2000:A:")],
+    ids=["gwas-ssf", "finngen"],
+)
+def test_a_truncated_row_s_missing_allele_is_named_not_skipped(
+    tmp_path: Path, reader_for: Callable[[Path], SourceReader], short_key: str
+):
+    """#365: a row that stops before an allele has a missing allele, so the
+    association stream names it as `allele_invalid`, where the reader used to
+    skip it unseen."""
+    tally = StreamTally()
+
+    yielded = [(a.chromosome, a.position) for a in reader_for(tmp_path).stream_associations(tally)]
+
+    assert yielded == [("1", 1000)]
+    assert [list(row) for row in tally.faults.rows] == [
+        [short_key, "allele_invalid"], ["1:3000::", "allele_invalid"],
+    ]
