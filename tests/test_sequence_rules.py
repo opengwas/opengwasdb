@@ -56,6 +56,32 @@ def residual_ragged(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return store
 
 
+@pytest.fixture
+def fresh_ragged(residual_ragged: Path, tmp_path: Path) -> Path:
+    """A private copy of `residual_ragged`, for a test that damages it."""
+    return residual_stores.copied(residual_ragged, tmp_path)
+
+
+@pytest.fixture(scope="module")
+def completed_scenario(tmp_path_factory: pytest.TempPathFactory) -> RaggedResidualScenario:
+    """A Reference-Completed Ragged release with residual planes and imputed cells."""
+    scenario = RaggedResidualScenario(tmp_path_factory)
+    assert scenario.result.n_imputed > 0, "the fixture must hold imputed cells"
+    return scenario
+
+
+@pytest.fixture
+def completed_ragged(completed_scenario: RaggedResidualScenario, tmp_path: Path) -> Path:
+    """A private copy of the completed release, for a test that damages it."""
+    return residual_stores.copied(completed_scenario.completed, tmp_path)
+
+
+@pytest.fixture(scope="module")
+def completed_hybrid(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A Reference-Completed Hybrid with residual SE in both components."""
+    return residual_stores.hybrid_completed(tmp_path_factory.mktemp("completed_hybrid"))
+
+
 def test_the_value_rules_read_a_sequence_once(
     residual_ragged: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -81,13 +107,11 @@ COMPLETION_RULES = {"completion.mask", "completion.mask_binary", "completion.imp
 
 
 def test_a_completed_sequence_reads_its_mask_with_its_planes_once(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    completed_scenario: RaggedResidualScenario, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The mask is read once, with the planes, for the frequency substitution and the
     completion rules alike; SE is decoded once, not again to check the mask."""
-    completed = RaggedResidualScenario(tmp_path_factory)
-    assert completed.result.n_imputed > 0, "the fixture must hold imputed cells"
-    store = completed.completed
+    store = completed_scenario.completed
     group = open_store(store).arrays(mode="r")["ragged"]
     planes = ("z", "se", "eaf", "imputed", "variant_index", "eaf_baseline", "eaf_reference")
     assert all(name in group for name in planes), "the fixture must carry every plane"
@@ -103,11 +127,11 @@ def test_a_completed_sequence_reads_its_mask_with_its_planes_once(
 
 
 def test_a_sequence_mask_flagging_a_missing_cell_fails_the_completion_rule(
-    tmp_path_factory: pytest.TempPathFactory,
+    completed_ragged: Path,
 ) -> None:
     """A mask that flags a missing association is the completion rule's, on a sequence
     as on a grid, in the words a sequence has always used."""
-    store = RaggedResidualScenario(tmp_path_factory).completed
+    store = completed_ragged
     group = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="r+")
     z_missing = np.asarray(group["z"][:]) == Z_MISSING
     imputed = np.asarray(group["imputed"][:])
@@ -128,14 +152,14 @@ def test_a_sequence_mask_flagging_a_missing_cell_fails_the_completion_rule(
 
 
 def test_a_sequence_whose_metadata_denies_its_imputed_cells_fails(
-    tmp_path_factory: pytest.TempPathFactory,
+    completed_ragged: Path,
 ) -> None:
     """Each Analysis holds imputed cells exactly when it says it does, on a sequence too.
 
     That disagreement is the shape the ancestry-match filter's defect took on a grid
     (ADR 0028); nothing held a Ragged release to it.
     """
-    store = RaggedResidualScenario(tmp_path_factory).completed
+    store = completed_ragged
     imputed = np.asarray(zarr.open_group(str(store / "data.zarr" / "ragged"))["imputed"][:])
     table = read_analyses(store / "analyses.tsv")
     row = next(r for r in table.rows if int(r["completion_n_imputed_total"] or 0))
@@ -156,11 +180,9 @@ def test_a_sequence_whose_metadata_denies_its_imputed_cells_fails(
     )
 
 
-def test_a_sequence_without_its_missing_counts_fails(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> None:
+def test_a_sequence_without_its_missing_counts_fails(completed_ragged: Path) -> None:
     """A completed sequence records how many cells completion left missing, as a grid does."""
-    store = RaggedResidualScenario(tmp_path_factory).completed
+    store = completed_ragged
     table = read_analyses(store / "analyses.tsv")
     assert "completion_n_missing_total" in table.fieldnames
     write_analyses(store / "analyses.tsv", _without_column(table, "completion_n_missing_total"))
@@ -191,9 +213,9 @@ def _flag_in_the_variant_index(group: zarr.Group, cell: int) -> None:
 
 
 def test_the_value_rules_read_an_overflow_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    completed_hybrid: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = residual_stores.hybrid_completed(tmp_path)
+    store = completed_hybrid
     opened = open_store(store)
     overflow = opened.arrays(mode="r")["ragged"]
     planes = ("z", "se", "eaf", "variant_index")
@@ -240,13 +262,15 @@ def test_the_variant_index_rules_read_each_array_once(
     assert times_read(counts, index["analysis_index"]) == 1.0
 
 
-def test_a_component_defect_does_not_hide_an_overflow_defect(tmp_path: Path) -> None:
+def test_a_component_defect_does_not_hide_an_overflow_defect(
+    completed_hybrid: Path, tmp_path: Path
+) -> None:
     """A Hybrid's Dense Component and its Overflow are judged apart.
 
     Before, any error in the Dense Component stopped the Overflow's checks, so a
     release with a defect in each reported only the first.
     """
-    store = residual_stores.hybrid_completed(tmp_path)
+    store = residual_stores.copied(completed_hybrid, tmp_path)
     for data in (store / "dense" / "data.zarr", store / "data.zarr"):
         tiers = zarr.open_group(str(data / "top_hits"), mode="r+")
         tier = tiers[sorted(tiers.group_keys())[0]]
@@ -259,13 +283,13 @@ def test_a_component_defect_does_not_hide_an_overflow_defect(tmp_path: Path) -> 
     assert result.failed() == {"top_hits.z", "top_hits.abs_z"}, result.errors
 
 
-def test_an_undecodable_se_does_not_hide_the_table_that_explains_it(tmp_path: Path) -> None:
+def test_an_undecodable_se_does_not_hide_the_table_that_explains_it(fresh_ragged: Path) -> None:
     """An exception code with no table entry: the decode fails, and the table says why.
 
     The rules that read decoded SE are skipped behind the decode; the rules that
     read only codes, or other planes, still see every window.
     """
-    store, _se = build_residual_ssf_source(tmp_path)
+    store = fresh_ragged
     assert validate_store(store).ok, "the planted code must be the only defect"
     group = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="r+")
     held = set(SeExceptionTable.read(group).index.tolist())
@@ -290,13 +314,13 @@ def test_an_undecodable_se_does_not_hide_the_table_that_explains_it(tmp_path: Pa
     assert "csr.segment_order" not in result.skipped
 
 
-def test_a_tier_missing_an_association_above_its_cutoff_is_incomplete(tmp_path: Path) -> None:
+def test_a_tier_missing_an_association_above_its_cutoff_is_incomplete(fresh_ragged: Path) -> None:
     """A tier holds every association that clears its cutoff, as a grid's does.
 
     Raising the tier's threshold lowers its cutoff below cells it does not list.
     A sampled check of the cells a tier does list cannot see that.
     """
-    store, _se = build_residual_ssf_source(tmp_path)
+    store = fresh_ragged
     tier = open_store(store).arrays(mode="a")["top_hits"]["p_5e_08"]
     assert tier.attrs["threshold"] == 5e-08, "the fixture's tier must record its threshold"
     tier.attrs["threshold"] = 0.5
@@ -307,9 +331,9 @@ def test_a_tier_missing_an_association_above_its_cutoff_is_incomplete(tmp_path: 
     assert result.errors == ["top-hit index p_5e_08 does not match stored z values"]
 
 
-def test_a_tier_cell_the_sequence_does_not_hold_is_reported(tmp_path: Path) -> None:
+def test_a_tier_cell_the_sequence_does_not_hold_is_reported(fresh_ragged: Path) -> None:
     """Every tier cell is an association the sequence holds; one it lacks is named."""
-    store, _se = build_residual_ssf_source(tmp_path)
+    store = fresh_ragged
     data = open_store(store).arrays(mode="a")
     tier = data["top_hits"]["p_5e_08"]
     rows = np.asarray(tier["variant_index"][:])

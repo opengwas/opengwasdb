@@ -327,6 +327,35 @@ def test_validation_rejects_a_wrong_code(observed_ssf: Path, tmp_path: Path) -> 
     assert any(BY_VARIANT_GROUP in error for error in result.errors), result.errors
 
 
+def test_a_wrong_code_is_named_as_the_sequence_holds_it(
+    observed_ssf: Path, tmp_path: Path
+) -> None:
+    """The sampled comparison names both codes as they are stored, word for word.
+
+    Each source code is reported as a single-cell read returns it, a 0-d array,
+    however the cells are read.
+    """
+    store = _copy_and_validate(observed_ssf, tmp_path)
+    index = zarr.open_group(str(store / "data.zarr" / "ragged" / BY_VARIANT_GROUP), mode="r+")
+    sequence = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="r")
+    first_variant = int(np.flatnonzero(np.diff(np.asarray(index["offsets"][:])) > 0)[0])
+    row = int(index["offsets"][first_variant])
+    analysis = int(index["analysis_index"][row])
+    held = np.asarray(index["z"][:])
+    held[row] = held[row] + 1
+    index["z"][...] = held
+    offsets = np.asarray(sequence["offsets"][:])
+    segment = np.asarray(sequence["variant_index"][offsets[analysis] : offsets[analysis + 1]])
+    source = int(offsets[analysis]) + int(np.searchsorted(segment, first_variant))
+
+    result = validate_store(store)
+
+    assert result.errors == [
+        f"data.zarr/ragged/by_variant: (variant={first_variant}, analysis={analysis}) "
+        f"z code {held[row]!r} != source {np.asarray(sequence['z'][source])!r}"
+    ]
+
+
 def _swap_two_analyses_of_one_variant(store: Path) -> None:
     """Flip the first two rows of a variant that genuinely holds two Analyses.
 

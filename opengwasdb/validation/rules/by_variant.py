@@ -90,8 +90,7 @@ def present(target: Target) -> Iterator[str]:
     version = target.store.manifest.format_version
     if parse_format_version(version) < _REQUIRED_FROM:
         raise Skip(
-            f"a format {version} component need not carry the variant-centric index "
-            "(spec §11.1)"
+            f"a format {version} component need not carry the variant-centric index (spec §11.1)"
         )
     yield (
         f"{_LABEL}: carries no {GROUP} group; a Ragged component must "
@@ -224,10 +223,7 @@ def _judge_span(target: Target, span: Span) -> Iterator[str]:
     """Every row names one of the component's Analyses."""
     n_analyses = len(sequence_offsets(target)) - 1
     if _n_assoc(target) and (span.lowest < 0 or span.highest >= n_analyses):
-        yield (
-            f"{_LABEL}/{GROUP}/analysis_index is outside the component's "
-            f"{n_analyses} Analyses"
-        )
+        yield f"{_LABEL}/{GROUP}/analysis_index is outside the component's {n_analyses} Analyses"
 
 
 def _decreasing(_target: Target, window: IndexWindow) -> int:
@@ -242,10 +238,7 @@ def _decreasing(_target: Target, window: IndexWindow) -> int:
 def _judge_order(_target: Target, n: int) -> Iterator[str]:
     """Within each variant's run, the rows' Analyses are non-decreasing."""
     if n:
-        yield (
-            f"{_LABEL}/{GROUP}/analysis_index is not non-decreasing within "
-            "a variant's block"
-        )
+        yield f"{_LABEL}/{GROUP}/analysis_index is not non-decreasing within a variant's block"
 
 
 # --- each variant's run against the sequence, over the association scan ---
@@ -311,7 +304,6 @@ def sample(target: Target) -> Iterator[str]:
         _LABEL,
     )
     yield from errors
-
 
 
 def _code_differs(a: Any, b: Any) -> bool:
@@ -413,31 +405,6 @@ def _check_cell_codes(
     return None
 
 
-def _load_optional_columns(
-    root: Any, index: Any, s: int, e: int
-) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
-    """`eaf`, `imputed` and `n` for index rows `[s, e)`, each `None` unless both sides hold it."""
-
-    def column(name: str) -> np.ndarray | None:
-        return np.asarray(index[name][s:e]) if name in index and name in root else None
-
-    return column("eaf"), column("imputed"), column("n")
-
-
-def _cell_codes_tuple(
-    b_z: np.ndarray,
-    b_se: np.ndarray,
-    b_eaf: np.ndarray | None,
-    b_imp: np.ndarray | None,
-    i: int,
-    b_n: np.ndarray | None = None,
-) -> tuple[Any, Any, Any, Any, Any]:
-    eaf_val = b_eaf[i] if b_eaf is not None else None
-    imp_val = b_imp[i] if b_imp is not None else None
-    n_val = b_n[i] if b_n is not None else None
-    return (b_z[i], b_se[i], eaf_val, imp_val, n_val)
-
-
 @dataclasses.dataclass(frozen=True)
 class _SampledCell:
     """One index row of a sampled variant, with the codes it holds."""
@@ -449,16 +416,39 @@ class _SampledCell:
     codes: tuple[Any, Any, Any, Any, Any]
 
 
-def _sampled_cells(root: Any, index: Any, by_offsets: np.ndarray, v: int) -> list[_SampledCell]:
-    """Every index row of variant `v`."""
-    s, e = int(by_offsets[v]), int(by_offsets[v + 1])
-    b_analyses = np.asarray(index["analysis_index"][s:e], dtype=np.int32)
-    b_z, b_se = np.asarray(index["z"][s:e]), np.asarray(index["se"][s:e])
-    b_eaf, b_imp, b_n = _load_optional_columns(root, index, s, e)
-    return [
-        _SampledCell(v, int(a), s + i, _cell_codes_tuple(b_z, b_se, b_eaf, b_imp, i, b_n))
-        for i, a in enumerate(b_analyses)
-    ]
+#: The index columns a sampled cell's codes are read from, in its `codes` order.
+_CODES = ("z", "se", "eaf", "imputed", "n")
+
+
+def _index_columns(root: Any, index: Any, rows: np.ndarray) -> dict[str, np.ndarray]:
+    """The index's columns at `rows`, each read once. `eaf`, `imputed` and `n` are
+    read only where both sides hold them, since only then are they compared."""
+    shared = [name for name in ("eaf", "imputed", "n") if name in index and name in root]
+    return {
+        name: np.asarray(index[name].oindex[rows])
+        for name in ("analysis_index", "z", "se", *shared)
+    }
+
+
+def _codes_at(columns: dict[str, np.ndarray], k: int) -> tuple[Any, Any, Any, Any, Any]:
+    z, se, eaf, imputed, n = (columns[name][k] if name in columns else None for name in _CODES)
+    return z, se, eaf, imputed, n
+
+
+def _sampled_cells(
+    root: Any, index: Any, by_offsets: np.ndarray, variants: list[int]
+) -> list[_SampledCell]:
+    """Every index row of each sampled variant, in sampled-variant order."""
+    bounds = [(int(by_offsets[v]), int(by_offsets[v + 1])) for v in variants]
+    rows = np.concatenate([np.arange(s, e, dtype=np.int64) for s, e in bounds])
+    columns = _index_columns(root, index, rows)
+    analyses = columns["analysis_index"].astype(np.int32)
+    cells: list[_SampledCell] = []
+    for v, (s, e) in zip(variants, bounds, strict=True):
+        for row in range(s, e):
+            k = len(cells)
+            cells.append(_SampledCell(v, int(analyses[k]), row, _codes_at(columns, k)))
+    return cells
 
 
 def _source_positions(
@@ -483,8 +473,40 @@ def _source_positions(
     return found
 
 
+class _Gathered:
+    """The sequence's codes at the sampled cells, each plane read once, not a cell at a time.
+
+    Indexed as the sequence is, `gathered["z"][position]`, and each code comes back
+    as the 0-d array a single-cell Zarr read returns, so a finding names a code in
+    exactly the words it always has.
+    """
+
+    _PLANES = ("z", "se", "eaf", "n", "imputed")
+
+    def __init__(self, root: Any, positions: list[int]) -> None:
+        wanted = np.asarray(sorted(set(positions)), dtype=np.int64)
+        self._where = {int(p): i for i, p in enumerate(wanted)}
+        self._codes = {
+            name: np.asarray(root[name].oindex[wanted])
+            for name in self._PLANES
+            if name in root and len(wanted)
+        }
+
+    def __getitem__(self, name: str) -> _GatheredPlane:
+        return _GatheredPlane(self._codes[name], self._where)
+
+
+class _GatheredPlane:
+    def __init__(self, codes: np.ndarray, where: dict[int, int]) -> None:
+        self._codes, self._where = codes, where
+
+    def __getitem__(self, position: int) -> np.ndarray:
+        return np.asarray(self._codes[self._where[position]])
+
+
 def _validate_one_cell(
     root: Any,
+    gathered: _Gathered,
     index: Any,
     encoding: enc.StoreEncoding,
     label: str,
@@ -499,7 +521,7 @@ def _validate_one_cell(
         )
     tag = f"{label}/{GROUP}: (variant={v}, analysis={a})"
     b_z, b_se, b_eaf, b_imp, b_n = cell.codes
-    err = _check_cell_codes(root, b_z, b_se, b_eaf, b_imp, tag, src_pos, b_n)
+    err = _check_cell_codes(gathered, b_z, b_se, b_eaf, b_imp, tag, src_pos, b_n)
     if err is not None:
         return err
     return _check_cell_exceptions(
@@ -525,24 +547,20 @@ def _validate_variant_index_sample(
     """
     if n_assoc == 0:
         return
-    cells = [
-        cell
-        for v in _sample_non_empty_variants(by_offsets, sample_variants)
-        for cell in _sampled_cells(root, index, by_offsets, int(v))
-    ]
+    variants = [int(v) for v in _sample_non_empty_variants(by_offsets, sample_variants)]
+    cells = _sampled_cells(root, index, by_offsets, variants)
     positions = _source_positions(root, offsets, cells)
+    gathered = _Gathered(root, [p for p in positions.values() if p >= 0])
     for cell in cells:
         err = _validate_one_cell(
-            root, index, encoding, label, cell, positions[(cell.variant, cell.analysis)]
+            root, gathered, index, encoding, label, cell, positions[(cell.variant, cell.analysis)]
         )
         if err is not None:
             errors.append(err)
             return
 
 
-def _validate_one_index_array(
-    index: Any, name: str, errors: list[str], label: str
-) -> None:
+def _validate_one_index_array(index: Any, name: str, errors: list[str], label: str) -> None:
     """One `by_variant/` array's inner chunk and shard against its role policy."""
     path = f"ragged/by_variant/{name}"
     role = role_for_array_path(path)
