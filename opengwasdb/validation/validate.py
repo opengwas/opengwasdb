@@ -19,9 +19,6 @@ from opengwasdb.encoding import (
     EAF_EXCEPTION,
     SE_EXCEPTION,
     Z_OVERFLOW,
-    DenseEafPlane,
-    DenseSePlane,
-    DenseZPlane,
     EafExceptionTable,
     RaggedEafPlane,
     RaggedSePlane,
@@ -59,7 +56,7 @@ from opengwasdb.store.open import (
     UnsupportedFormatVersion,
     open_store,
 )
-from opengwasdb.top_hits import threshold_key, z_critical
+from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation.rule import (
     Check,
     Finding,
@@ -78,10 +75,9 @@ from opengwasdb.validation.rules import csr as csr_rules
 from opengwasdb.validation.rules import encoding as encoding_rules
 from opengwasdb.validation.rules import release as release_rules
 from opengwasdb.validation.rules import side_tables as side_table_rules
+from opengwasdb.validation.rules import top_hits as top_hit_rules
 from opengwasdb.validation.rules import variants as variant_rules
 from opengwasdb.validation.rules.associations import (
-    DECODABLE,
-    VALUES_AFTER,
     grid_counts,
     infinite_se_message,
 )
@@ -92,7 +88,6 @@ from opengwasdb.validation.rules.side_tables import positions_match
 from opengwasdb.validation.rules.variants import representative_variant_indices
 from opengwasdb.validation.run import evaluate, selected
 from opengwasdb.validation.sample_size import validate_ragged_n
-from opengwasdb.validation.scans import band_limits
 from opengwasdb.variants import (
     VariantAxis,
     variant_table_path,
@@ -216,8 +211,8 @@ def _legacy_dense_completion(target: Target, errors: list[str], _warnings: list[
     _dense_completion(target, errors)
 
 
-def _legacy_dense(target: Target, errors: list[str], _warnings: list[str]) -> None:
-    _dense_values(target, errors)
+def _legacy_rho(target: Target, errors: list[str], _warnings: list[str]) -> None:
+    _dense_rho(target, errors)
 
 
 def _legacy_dense_layout(target: Target, errors: list[str], _warnings: list[str]) -> None:
@@ -279,6 +274,8 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
     *completion_rules.RULES,
     *association_rules.EAF_RULES,
     *side_table_rules.RULES,
+    *top_hit_rules.STRUCTURE_RULES,
+    *top_hit_rules.VALUE_RULES,
     _Legacy(
         name="legacy.ragged",
         kinds=Kind.CSR,
@@ -293,12 +290,7 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
         after=(REQUIRED,),
         run=_legacy_dense_completion,
     ),
-    _Legacy(
-        name="legacy.dense_values",
-        kinds=Kind.GRID,
-        after=(*VALUES_AFTER, DECODABLE),
-        run=_legacy_dense,
-    ),
+    _Legacy(name="legacy.rho", kinds=Kind.GRID, after=(REQUIRED,), run=_legacy_rho),
     _Legacy(
         name="legacy.dense_layout", kinds=Kind.GRID, after=(REQUIRED,), run=_legacy_dense_layout
     ),
@@ -818,12 +810,9 @@ def _dense_completion(target: Target, errors: list[str]) -> None:
         )
 
 
-def _dense_values(target: Target, errors: list[str]) -> None:
-    """The Top-Hit Indexes and rho against the planes the value rules read."""
-    root = target.group
-    _validate_top_hits(root, errors, target.encoding)
-    if not errors:
-        _validate_rho(root, grid_counts(target)[1], errors)
+def _dense_rho(target: Target, errors: list[str]) -> None:
+    """The optional Rho Matrix against `analyses.tsv`."""
+    _validate_rho(target.group, grid_counts(target)[1], errors)
 
 
 def _dense_layout(target: Target, errors: list[str]) -> None:
@@ -1833,14 +1822,6 @@ def _sample_csr_positions(
     return positions
 
 
-def _missing_top_hit_arrays(key: str, group: Any, errors: list[str]) -> bool:
-    """Record what a tier lacks; True when it lacks anything."""
-    missing = top_hits.missing_arrays(group)
-    if missing:
-        errors.append(f"top-hit index {key} is missing {', '.join(missing)}")
-    return bool(missing)
-
-
 def _validate_ragged_top_hits(
     store_path: Path,
     data_root: Any,
@@ -1848,8 +1829,9 @@ def _validate_ragged_top_hits(
 ) -> None:
     """Validate the top-hit index groups in a ragged zarr store.
 
-    Structural checks (lengths, sort order) are exhaustive.
-    CSR cross-validation is sampled to keep validation O(1) for large stores.
+    A tier's arrays and structure are the `top_hits` rules'; a tier failing them
+    is not compared here. CSR cross-validation is sampled to keep validation
+    O(1) for large stores.
     """
     top = top_hits.index_group(data_root)
     csr = RaggedCSRReader(store_path)
@@ -1860,15 +1842,11 @@ def _validate_ragged_top_hits(
 
     for key in top:
         group = top[key]
-        if _missing_top_hit_arrays(key, group, errors):
+        if top_hits.missing_arrays(group):
             continue
         threshold = top_hits.tier_threshold(key, group, missing=0.0)
         arrays = top_hits.load_tier_arrays(group)
-        problem = top_hits.structural_problem(
-            arrays, group, n_analyses, expects_imputed=csr.has_imputed
-        )
-        if problem is not None:
-            errors.append(f"top-hit index {key} {problem}")
+        if top_hits.structural_problem(arrays, group, n_analyses, csr.has_imputed):
             continue
         vis = arrays["rows"].astype(np.int32)
         ais = arrays["cols"].astype(np.int32)
@@ -2162,189 +2140,6 @@ def _validate_ragged_eaf_values(
     finite = np.isfinite(values)
     if np.any(finite & ((values < 0.0) | (values > 1.0))):
         errors.append("data.zarr/ragged/eaf contains finite values outside [0, 1]")
-
-
-def _read_top_hit_arrays(key: str, group: Any, errors: list[str]) -> dict[str, Any] | None:
-    """One tier's index arrays (`top_hits.load_tier_arrays`), or None having
-    recorded what the tier lacks."""
-    if _missing_top_hit_arrays(key, group, errors):
-        return None
-    return top_hits.load_tier_arrays(group)
-
-
-def _top_hit_group_entry(
-    key: str,
-    group: Any,
-    n_analyses: int,
-    imputed_arr: Any,
-    errors: list[str],
-) -> dict[str, Any] | None:
-    """Every check on one tier that does not need the matrix, then its entry.
-
-    Returns None -- having recorded why -- when the tier is malformed enough
-    that streaming the matrix against it would be meaningless.
-    """
-    arrays = _read_top_hit_arrays(key, group, errors)
-    if arrays is None:
-        return None
-    problem = top_hits.structural_problem(arrays, group, n_analyses, imputed_arr is not None)
-    if problem is not None:
-        errors.append(f"top-hit index {key} {problem}")
-        return None
-    threshold = top_hits.tier_threshold(key, group)
-    return {
-        "z_crit": z_critical(threshold),
-        "rows": arrays["rows"],
-        "cols": arrays["cols"],
-        "z_values": arrays["z_values"],
-        "se_values": arrays["se_values"],
-        "imputed_values": arrays["imputed_values"],
-        "eaf_values": arrays["eaf_values"],
-        "n": len(arrays["rows"]),
-        "pass_count": 0,
-        "consistent": True,
-        "se_consistent": True,
-        "imputed_consistent": True,
-        "eaf_consistent": True,
-    }
-
-
-def _band_z_consistent(g: dict[str, Any], gathered: np.ndarray, in_band: np.ndarray) -> bool:
-    """Whether the matrix agrees with what the tier recorded for these cells."""
-    return bool(
-        np.all(np.isfinite(gathered))
-        and np.all(np.isclose(gathered, g["z_values"][in_band], rtol=1e-3, atol=1e-3))
-        and np.all(np.abs(gathered) >= g["z_crit"])
-    )
-
-
-def _mark_band_mismatch(
-    g: dict[str, Any],
-    flag: str,
-    gathered: np.ndarray,
-    indexed: np.ndarray,
-    *,
-    rtol: float = 1e-5,
-    atol: float = 1e-8,
-) -> None:
-    """Clear `flag` when the index disagrees with the plane it was built from.
-
-    The tolerances are numpy's defaults unless a caller widens them: `eaf` is
-    written from the decoded plane and must match it, while `se` is compared
-    across a residual round trip and is allowed its quantisation step.
-    """
-    if not np.allclose(gathered, indexed, rtol=rtol, atol=atol, equal_nan=True):
-        g[flag] = False
-
-
-def _check_top_hit_band(
-    g: dict[str, Any],
-    r0: int,
-    r1: int,
-    z_band: np.ndarray,
-    se_band: np.ndarray,
-    abs_band: np.ndarray,
-    imputed_arr: Any,
-    eaf_band: Callable[[], np.ndarray],
-) -> None:
-    """Verify one tier's cells that fall in this row band, and count its passes."""
-    g["pass_count"] += int(np.count_nonzero(abs_band >= g["z_crit"]))
-    in_band = (g["rows"] >= r0) & (g["rows"] < r1)
-    if not np.any(in_band):
-        return
-    br = g["rows"][in_band] - r0
-    bc = g["cols"][in_band]
-    if not _band_z_consistent(g, z_band[br, bc], in_band):
-        g["consistent"] = False
-    # rtol=1e-6, atol=0: the index is *written* from the decoded plane, so the
-    # two are bit-identical in a sound store and anything looser hides the
-    # defect this checks for. A stale index left over from a format migration
-    # differs by the coding's half step -- 0.197% at range 0.5 -- which against
-    # a typical SE of 0.05 is 1e-4, and an atol of 1e-3 waves it straight
-    # through. Measured on the FinnGen R13 pilot, where exactly that happened.
-    _mark_band_mismatch(
-        g, "se_consistent", se_band[br, bc], g["se_values"][in_band], rtol=1e-6, atol=0.0
-    )
-    if g["imputed_values"] is not None and imputed_arr is not None:
-        gathered = imputed_arr[r0:r1][br, bc].astype(np.uint8)
-        if not np.array_equal(gathered, g["imputed_values"][in_band]):
-            g["imputed_consistent"] = False
-    if g["eaf_values"] is not None:
-        _mark_band_mismatch(g, "eaf_consistent", eaf_band()[br, bc], g["eaf_values"][in_band])
-
-
-def _report_top_hit_group(key: str, g: dict[str, Any], errors: list[str]) -> None:
-    """The first thing wrong with a tier, once the streamed pass has finished."""
-    if not g["consistent"]:
-        errors.append(f"top-hit index {key} contains z value inconsistent with z array")
-    elif not g["se_consistent"]:
-        errors.append(f"top-hit index {key} contains se value inconsistent with decoded se plane")
-    elif not g["imputed_consistent"]:
-        errors.append(f"top-hit index {key} contains imputed value inconsistent with imputed array")
-    elif not g["eaf_consistent"]:
-        errors.append(f"top-hit index {key} contains eaf value inconsistent with eaf plane")
-    elif g["n"] != g["pass_count"]:
-        errors.append(f"top-hit index {key} does not match stored z values")
-
-
-def _decode_top_hit_band(
-    z_plane: DenseZPlane,
-    se_plane: DenseSePlane,
-    eaf_plane: DenseEafPlane,
-    encoding: StoreEncoding,
-    r0: int,
-    r1: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[np.ndarray]]:
-    """Decode one Top-Hit validation band, sharing EAF with residual SE."""
-    z_band = z_plane.band(r0, r1)
-    shared_eaf = eaf_plane.band(r0, r1) if encoding.se.is_residual else None
-    se_band = se_plane.band(r0, r1, eaf=shared_eaf)
-    cached_eaf = [] if shared_eaf is None else [shared_eaf]
-    return z_band, se_band, np.abs(z_band), cached_eaf
-
-
-def _validate_top_hits(root: Any, errors: list[str], encoding: StoreEncoding) -> None:
-    if not top_hits.has_index(root):
-        return
-    top = top_hits.index_group(root)
-    z_plane = DenseZPlane.open(root, encoding)
-    se_plane = DenseSePlane.open(root, encoding)
-    z_arr = z_plane.array
-    imputed_arr = root["imputed"] if "imputed" in root else None
-    eaf_plane = DenseEafPlane.open(root, encoding)
-    n_variants, n_analyses = int(z_arr.shape[0]), int(z_arr.shape[1])
-
-    # Load each threshold group's (comparatively small) index arrays and run the
-    # checks that don't need the matrix: array-length consistency, descending-|z|
-    # ranking, and cell uniqueness. Keep the survivors for the streamed matrix pass.
-    groups: dict[str, dict[str, Any]] = {}
-    for key in top:
-        entry = _top_hit_group_entry(key, top[key], n_analyses, imputed_arr, errors)
-        if entry is not None:
-            groups[key] = entry
-    if not groups:
-        return
-
-    # Single streamed pass over the matrix in row-bands: per band, count cells that
-    # pass each threshold (completeness) and verify every index cell in that band
-    # (matrix z finite, matches the stored index z, and itself clears the cutoff).
-    for r0, r1 in band_limits(n_variants, n_analyses, inner_chunk_of(z_arr)[0]):
-        z_band, se_band, abs_band, cached = _decode_top_hit_band(
-            z_plane, se_plane, eaf_plane, encoding, r0, r1
-        )
-        # Decoding the frequency plane is the most expensive read in this pass,
-        # and every tier gathers from the same band: decode it at most once.
-
-        def eaf_band(r0: int = r0, r1: int = r1, cached: list[np.ndarray] = cached) -> np.ndarray:
-            if not cached:
-                cached.append(eaf_plane.band(r0, r1))
-            return cached[0]
-
-        for g in groups.values():
-            _check_top_hit_band(g, r0, r1, z_band, se_band, abs_band, imputed_arr, eaf_band)
-
-    for key, g in groups.items():
-        _report_top_hit_group(key, g, errors)
 
 
 _RHO_REQUIRED_ATTRS = (

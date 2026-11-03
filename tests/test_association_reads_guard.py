@@ -55,15 +55,11 @@ ALLOWED = {
     ("validation/scans.py", "_dense_band_se"):
         "one SE decode per band, from the codes the band already holds and its own EAF "
         "read, shared by every value rule that folds over the band",
-    ("validation/validate.py", "_decode_top_hit_band"):
-        "the band the Top-Hit Index check already read for its own EAF comparison",
     ("layouts/dense/indexed_subsets.py", "_compare_indexed_band"):
         "the primary block the subset's EAF is compared against",
     ("layouts/dense/indexed_subsets.py", "_sample_decoded_view"):
         "the sampled primary cells the subset's EAF is compared against",
     # The planes those decodes read, and the decoders the readers stand on.
-    ("validation/validate.py", "_validate_top_hits"):
-        "opens the SE plane `_decode_top_hit_band` decodes",
     ("validation/validate.py", "_decoded_csr_se"):
         "one whole-sequence SE decode for the value, exception and marker checks; a "
         "reader would decode Z, EAF and n with it",

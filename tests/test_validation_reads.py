@@ -1,14 +1,16 @@
-"""Every value rule reads one pass of each plane (issue #55, ADR 0074).
+"""`validate` reads each plane of a Dense grid once (issue #55, ADR 0074).
 
-The rules that judge a Dense grid's values fold over one streamed read of it:
-each band's `z`, `se`, `eaf` and imputed codes are read once and decoded from
-those codes, SE against the band's own frequency read, and the per-variant
-`eaf_baseline`, `eaf_reference` and `on_panel` are read once for the plan rules
-and every band. Before, each band read `se` and `eaf` twice -- once to decode,
-once for the exception positions -- and the plan rule read the baseline again.
+The rules that judge a grid's values -- the Top-Hit Index's included -- fold over
+one streamed read of it: each band's `z`, `se`, `eaf` and imputed codes are read
+once and decoded from those codes, SE against the band's own frequency read, and
+the per-variant `eaf_baseline`, `eaf_reference` and `on_panel` are read once for
+the plan rules and every band. Before, a full `validate` read `se`, `eaf` and the
+per-variant arrays three times and the imputed mask six.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 from residual_stores import dense_completed
@@ -36,6 +38,16 @@ VALUE_RULES = {
 
 
 def test_the_value_rules_read_each_plane_once(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _each_plane_read_once(tmp_path, monkeypatch, VALUE_RULES)
+
+
+def test_validate_reads_each_plane_once(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _each_plane_read_once(tmp_path, monkeypatch, None)
+
+
+def _each_plane_read_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rules: set[str] | None
+) -> None:
     store, _observed, _panel = dense_completed(tmp_path)
     opened = open_store(store)
     root = opened.arrays(mode="r")
@@ -44,8 +56,8 @@ def test_the_value_rules_read_each_plane_once(tmp_path, monkeypatch: pytest.Monk
     assert all(name in root for name in planes), "the fixture must carry every plane"
 
     with element_reads(monkeypatch) as counts:
-        result = validate_store(store, rules=VALUE_RULES)
+        result = validate_store(store, rules=rules)
 
     assert result.ok, result.errors
-    assert result.skipped == {}
+    assert not any(name.startswith(("associations", "completion")) for name in result.skipped)
     assert {name: times_read(counts, root[name]) for name in planes} == dict.fromkeys(planes, 1.0)

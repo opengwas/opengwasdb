@@ -12,20 +12,20 @@ from arrays a test holds.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from functools import cached_property
+from functools import cached_property, partial
 
 import numpy as np
 
 from opengwasdb.associations import Tally, non_canonical
-from opengwasdb.encoding import (
-    DenseEafPlane,
-    DenseSePlane,
+from opengwasdb.encoding.codec import (
     EafExceptionTable,
     SeExceptionTable,
     StoreCodec,
+    ZOverflowTable,
 )
+from opengwasdb.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.model.enums import CompletionState
 from opengwasdb.store.arrays import inner_chunk_of
 from opengwasdb.validation.rule import Kind, Scan, Target
@@ -99,6 +99,8 @@ class Block:
     eaf_undecodable: bool = False
     imputed: np.ndarray | None = None
     on_panel: np.ndarray | None = None
+    #: Decodes `z_codes`; a block built from values holds them as their own codes.
+    z_decoder: Callable[[np.ndarray], np.ndarray] | None = field(default=None, repr=False)
     rows: int = field(init=False)
 
     def __post_init__(self) -> None:
@@ -132,6 +134,13 @@ class Block:
         )
 
     @cached_property
+    def z(self) -> np.ndarray:
+        """The block's decoded Z, from the codes it holds, decoded on first use."""
+        if self.z_decoder is None:
+            return np.asarray(self.z_codes, dtype=np.float32)
+        return self.z_decoder(self.z_codes)
+
+    @cached_property
     def tally(self) -> Tally:
         """The block's cells under the presence rule (spec §15, ADR 0070), counted once."""
         se_missing = np.isnan(self.se)
@@ -145,10 +154,38 @@ class Block:
         counts: np.ndarray = np.asarray(mask).sum(axis=0, dtype=np.int64)
         return counts
 
+    def locate(self, cells: CellIndex) -> tuple[np.ndarray, np.ndarray]:
+        """The cells of `cells` this block holds: their indices, and where they sit here.
+
+        Returns the indices into `cells` of the cells this block holds and, for each,
+        its index into the block's flattened arrays. Found from the cells' row order,
+        so a band's share costs what the band holds, not the whole index.
+        """
+        r0 = self.offset // self.n_analyses
+        order, sorted_rows = cells.by_row
+        lo, hi = np.searchsorted(sorted_rows, (r0, r0 + self.rows))
+        found = order[lo:hi]
+        flat = (cells.rows[found].astype(np.int64) - r0) * self.n_analyses + cells.cols[found]
+        return found, flat
+
     def positions(self, mask: np.ndarray) -> np.ndarray:
         """The flat positions of the cells `mask` holds."""
         found: np.ndarray = np.flatnonzero(np.asarray(mask)).astype(np.int64) + self.offset
         return found
+
+
+class CellIndex:
+    """Cells named by `(variant, Analysis)`, arranged once to be found block by block."""
+
+    def __init__(self, rows: np.ndarray, cols: np.ndarray) -> None:
+        self.rows = rows
+        self.cols = cols
+
+    @cached_property
+    def by_row(self) -> tuple[np.ndarray, np.ndarray]:
+        """The cells' order by variant row, and their rows in that order."""
+        order = np.argsort(self.rows, kind="stable").astype(np.uint32)
+        return order, self.rows[order]
 
 
 class _RowWindow:
@@ -189,6 +226,7 @@ class _DenseGrid:
         self.decodes_eaf = self.eaf_array is not None or bool(encoding.eaf.reference)
         self.eaf_codec = StoreCodec(encoding, eaf_exceptions=EafExceptionTable.open(group))
         self.se_codec = StoreCodec(encoding, se_exceptions=SeExceptionTable.open(group))
+        self.z_codec = StoreCodec(encoding, z_overflow=ZOverflowTable.open(group))
         self.coefficients = (
             np.asarray(group["se_coefficients"][:], dtype=np.float32)
             if encoding.se.is_residual
@@ -215,7 +253,12 @@ class _DenseGrid:
             eaf_undecodable=failure is not None,
             imputed=imputed if self.completed else None,
             on_panel=None if self.on_panel is None else self.on_panel[r0:r1],
+            z_decoder=partial(self._z, r0, r1),
         )
+
+    def _z(self, r0: int, r1: int, codes: np.ndarray) -> np.ndarray:
+        """One band's Z, decoded from the codes the band holds."""
+        return DenseZPlane(_RowWindow(codes, r0, self.shape), self.z_codec).band(r0, r1)
 
     def _eaf(
         self, codes: np.ndarray | None, imputed: np.ndarray | None, r0: int, r1: int

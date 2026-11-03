@@ -151,8 +151,24 @@ def test_validator_rejects_inconsistent_top_hit_index(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
-    assert any("top-hit index p_5e_08" in error for error in result.errors)
+    assert result.failed() == {"top_hits.z"}
+    assert result.errors == ["top-hit index p_5e_08 contains z value inconsistent with z array"]
+
+
+def test_a_bad_variant_offset_and_a_bad_top_hit_tier_are_both_reported(dense_store_path):
+    # Issue #55's acceptance case: two independent defects in one release. The
+    # Top-Hit Index was checked only when nothing else had failed, so the offset
+    # error hid the tier's.
+    offsets_path = dense_store_path / "variant_offsets.npy"
+    offsets = np.load(offsets_path)
+    offsets[1] = offsets[0]
+    np.save(offsets_path, offsets)
+    root = open_store(dense_store_path).arrays(mode="a")
+    root["top_hits"]["p_5e_08"]["z"][0] = 0.0
+
+    result = validate_store(dense_store_path)
+
+    assert result.failed() == {"variant_table.representatives", "top_hits.z"}
 
 
 def test_validator_rejects_invalid_top_hit_offsets(dense_store_path):
@@ -163,7 +179,7 @@ def test_validator_rejects_invalid_top_hit_offsets(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"top_hits.structure"}
     assert any("invalid analysis offsets" in error for error in result.errors)
 
 
@@ -197,7 +213,7 @@ def test_validator_rejects_bad_variant_offset(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"variant_table.representatives"}
     assert any("variant offset for row 1" in error for error in result.errors)
 
 

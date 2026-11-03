@@ -18,11 +18,11 @@ from typing import Any
 import numpy as np
 import zarr
 
+from opengwasdb import top_hits
 from opengwasdb.encoding import (
     EAF_BASELINE,
     EAF_REFERENCE,
     Z_OVERFLOW,
-    EafEncoding,
     SeEncoding,
     StoreEncoding,
     ZEncoding,
@@ -32,8 +32,7 @@ from opengwasdb.validation import RULES
 from opengwasdb.validation.rule import Fold, Kind, Target
 from opengwasdb.validation.rules import associations
 from opengwasdb.validation.run import evaluate
-from opengwasdb.validation.scans import BYTES_PER_CELL, Block, band_limits
-from opengwasdb.validation.validate import _decode_top_hit_band, _read_top_hit_arrays
+from opengwasdb.validation.scans import BYTES_PER_CELL, Block, CellIndex, band_limits
 
 FOLDS: dict[str, Fold[Any, Any]] = {rule.name: rule for rule in RULES if isinstance(rule, Fold)}
 
@@ -78,9 +77,8 @@ def test_top_hit_arrays_remain_in_their_compact_contract_dtypes() -> None:
     for name, values in arrays.items():
         group.create_array(name, data=values)
 
-    loaded = _read_top_hit_arrays("p_5e_08", group, [])
+    loaded = top_hits.load_tier_arrays(group)
 
-    assert loaded is not None
     assert loaded["rows"].dtype == np.uint32
     assert loaded["cols"].dtype == np.uint32
     assert loaded["offsets"].dtype == np.uint64
@@ -265,57 +263,13 @@ def test_marked_cells_are_flat_plane_positions_in_block_order() -> None:
     assert fold.zero.positions.dtype == np.int64 and len(fold.zero.positions) == 0
 
 
-class _FakeEafPlane:
-    """A plane stub: decodes a band, or raises, and counts decode attempts."""
+def test_a_band_locates_the_cells_it_holds_by_their_grid_coordinates() -> None:
+    zeros = np.zeros((2, 3), dtype=np.float32)
+    band = Block.of(zeros, zeros, offset=2 * 3)  # rows 2 and 3 of a three-Analysis grid
+    rows = np.array([1, 2, 3, 3, 4], dtype=np.uint32)
+    cols = np.array([0, 2, 0, 1, 0], dtype=np.uint32)
 
-    def __init__(self, values: np.ndarray | None = None, raises: bool = False) -> None:
-        self.values = values
-        self.raises = raises
-        self.calls = 0
+    found, flat = band.locate(CellIndex(rows, cols))
 
-    def band(self, r0: int, r1: int) -> np.ndarray:
-        self.calls += 1
-        if self.raises:
-            raise ValueError("no table entry for an exception cell")
-        assert self.values is not None
-        return self.values
-
-
-class _FakeSePlane:
-    def __init__(self, expected_eaf: np.ndarray) -> None:
-        self.expected_eaf = expected_eaf
-
-    def band(self, r0: int, r1: int, *, eaf: np.ndarray | None = None) -> np.ndarray:
-        assert (r0, r1) == (0, 2)
-        assert eaf is self.expected_eaf
-        return np.ones_like(self.expected_eaf)
-
-
-class _FakeZPlane:
-    def band(self, r0: int, r1: int) -> np.ndarray:
-        assert (r0, r1) == (0, 2)
-        return np.full((2, 2), -7.0, dtype=np.float32)
-
-
-def _residual_eaf_encoding() -> StoreEncoding:
-    return StoreEncoding(
-        z=ZEncoding(kind="float16"),
-        se=SeEncoding(kind="int8_residual", residual_range=1.0),
-        eaf=EafEncoding(kind="float32"),
-    )
-
-
-def test_top_hit_band_reuses_its_one_eaf_decode_for_se() -> None:
-    values = np.full((2, 2), 0.4, dtype=np.float32)
-    eaf_plane = _FakeEafPlane(values=values)
-    encoding = _residual_eaf_encoding()
-
-    z, se, absolute_z, cached_eaf = _decode_top_hit_band(
-        _FakeZPlane(), _FakeSePlane(values), eaf_plane, encoding, 0, 2
-    )
-
-    assert np.array_equal(absolute_z, np.abs(z))
-    assert se.shape == z.shape
-    assert len(cached_eaf) == 1
-    assert cached_eaf[0] is values
-    assert eaf_plane.calls == 1
+    assert found.tolist() == [1, 2, 3]
+    assert flat.tolist() == [2, 3, 4]
