@@ -69,7 +69,7 @@ import gzip
 import io
 import math
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
@@ -213,6 +213,7 @@ def _tabular_row(
     score_column: str | None = None,
     frequencies: FrequencyTally | None = None,
     faults: IdentityFaults | None = None,
+    infinite_effects: bool = False,
 ) -> TabularRow | None:
     """One source row as a `TabularRow`, or `None` when it names no canonical variant.
 
@@ -221,7 +222,8 @@ def _tabular_row(
     effect/`standard_error` still yields a row (its `beta`/`se` are `None`) so
     `stream_variants` can still see it per the interface's superset contract.
     A row too short to reach an allele has a missing allele, which `faults`
-    names (#365).
+    names (#365). With ``infinite_effects`` (the association stream), an
+    effect the row reports as infinite is its beta (`_infinite_effect`).
     """
     effect_allele = row.get("effect_allele")
     other_allele = row.get("other_allele")
@@ -237,9 +239,9 @@ def _tabular_row(
     if ori is None or effect_allele is None or other_allele is None:
         return None
     statistics = _row_statistics(row, source, sample_size_column)
-    beta = statistics.beta
-    if beta is None:
-        beta = _infinite_effect(row, source)
+    beta, from_fallback = statistics.beta, statistics.effect_from_odds_ratio_fallback
+    if infinite_effects:
+        beta, from_fallback = _reported_effect(row, source, beta, from_fallback)
     return TabularRow(
         chromosome=ori.variant.chromosome,
         position=ori.variant.position,
@@ -255,28 +257,49 @@ def _tabular_row(
             row.get(score_column) if score_column is not None else None,
             declared=score_column is not None,
         ),
-        effect_from_odds_ratio_fallback=statistics.effect_from_odds_ratio_fallback,
+        effect_from_odds_ratio_fallback=from_fallback,
         se_from_ci=statistics.se_from_ci,
         se_from_p_value=statistics.se_from_p_value,
     )
 
 
-def _infinite_effect(row: dict[str, str], source: EffectSource | None) -> float | None:
-    """The infinite effect a row with no usable one reports, if any (D4).
+def _reported_effect(
+    row: dict[str, str], source: EffectSource | None, beta: float | None, from_fallback: bool
+) -> tuple[float | None, bool]:
+    """The row's beta for its association, and whether the fallback gave it.
 
-    `row_statistics` reads an infinite effect as unusable, which the metrics
-    projections need; the full-row parser keeps it, so the association's z is
-    infinite and Admission drops the row as `z_nonfinite`. A z-score row
-    derives its SE from the z, so an infinite z leaves it no SE, and
-    `se_unusable` comes first.
+    A beta read from the effect column itself is finite; only a row whose
+    effect came from the fallback, or that has none, can report an infinity.
+    """
+    if beta is not None and not from_fallback:
+        return beta, from_fallback
+    infinite = _infinite_effect(row, source, recovered=beta is not None)
+    return (beta, from_fallback) if infinite is None else (infinite, False)
+
+
+def _infinite_effect(
+    row: dict[str, str], source: EffectSource | None, *, recovered: bool
+) -> float | None:
+    """The infinite effect a row reports, for its association (D4).
+
+    `row_statistics` reads an infinite effect as unusable and recovers the
+    effect from the odds-ratio column instead, which the metrics projections
+    need (ADR 0055). For the association an infinity the effect column reports
+    is the row's effect, whatever the fallback holds, so its z is infinite and
+    Admission drops it as `z_nonfinite` rather than admit the fallback. An
+    infinite odds ratio is the effect only when nothing was ``recovered``. A
+    z-score row derives its SE from the z, so an infinite z leaves it no SE,
+    and `se_unusable` comes first.
     """
     if source is None:
         return None
-    for column in (source.column_name, source.fallback_column_name):
-        if column:
-            effect = parse_effect(row.get(column))
-            if effect is not None and math.isinf(effect):
-                return effect
+    columns = [source.column_name]
+    if not recovered and source.fallback_column_name:
+        columns.append(source.fallback_column_name)
+    for column in columns:
+        effect = parse_effect(row.get(column))
+        if effect is not None and math.isinf(effect):
+            return effect
     return None
 
 
@@ -319,13 +342,15 @@ def _iter_rows(
     effect_source: EffectSource | None = None,
     score_column: str | None = None,
     tally: StreamTally | None = None,
+    infinite_effects: bool = False,
 ) -> Iterator[TabularRow]:
     """Parse each row of a filtered/harmonised GWAS-SSF file once.
 
     `effect_source` is the caller's resolution for this file, so the property
     and the stream cannot disagree; when omitted it is resolved here, which is
     what keeps `stream_full_row_metrics` a faithful reference for the
-    projection's effect handling.
+    projection's effect handling. ``infinite_effects`` keeps an effect a row
+    reports as infinite, which only the association stream asks for.
     """
     with _open_text(path) as fh:
         reader = csv.DictReader(fh, delimiter="\t")
@@ -336,7 +361,8 @@ def _iter_rows(
         faults, frequencies = tally.faults, tally.frequencies
         for row in reader:
             parsed = _tabular_row(
-                row, source, sample_size_column, score_column, frequencies, faults
+                row, source, sample_size_column, score_column, frequencies, faults,
+                infinite_effects,
             )
             if parsed is not None:
                 yield parsed
@@ -387,12 +413,10 @@ def stream_full_row_metrics(path: str | Path) -> Iterator[TabularMetricsRow]:
     field for field on the same file -- the arrangement
     `stream_full_row_variants` provides for the variant projection. A
     `TabularRow` *is* a `TabularMetricsRow`; it adds only the identifier this
-    seam never reads. Its infinite beta, which the association stream keeps
-    (D4), is absent here, as the projections read it.
+    seam never reads. It reads an infinite effect as the projections do, absent
+    or recovered from the odds ratio; only the association stream keeps it (D4).
     """
-    for row in _iter_rows(path):
-        infinite = row.beta is not None and math.isinf(row.beta)
-        yield replace(row, beta=None) if infinite else row
+    yield from _iter_rows(path)
 
 
 @dataclass(frozen=True)
@@ -465,6 +489,7 @@ class GwasSsfReader:
                 effect_source=source,
                 score_column=self.imputation_score_column,
                 tally=tally,
+                infinite_effects=True,
             ),
             self.stored_effect_scale,
             self.reference,

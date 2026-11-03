@@ -111,3 +111,52 @@ def test_an_infinite_beta_stays_absent_in_the_resolver_s_metrics(tmp_path: Path)
 
     assert betas == [None, None, None, 0.2]
     assert [row.beta for row in stream_full_row_metrics(source)] == betas
+
+
+def _gwas_ssf_with_odds_ratio(path: Path) -> Path:
+    """An infinite beta beside a usable odds ratio, an absent beta beside one,
+    and a plain beta: the second column is ADR 0055's per-row fallback."""
+    path.write_text(
+        "chromosome\tbase_pair_location\teffect_allele\tother_allele\tbeta\todds_ratio"
+        "\tstandard_error\teffect_allele_frequency\tp_value\n"
+        "1\t100\tG\tA\tinf\t1.2\t0.1\t0.3\t0.5\n"
+        "1\t200\tG\tA\tNA\t1.2\t0.1\t0.3\t0.5\n"
+        "1\t300\tG\tA\t0.2\t1.2\t0.1\t0.3\t0.5\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.mark.parametrize("through_map", [False, True], ids=["reader", "column-map"])
+def test_an_infinite_beta_is_not_replaced_by_the_odds_ratio_fallback(
+    tmp_path: Path, through_map: bool
+):
+    """The fallback recovers an effect the row does not report. An infinite
+    beta is reported, so the association keeps it and Admission drops the row,
+    where the odds ratio's finite z used to be admitted."""
+    source = _gwas_ssf_with_odds_ratio(tmp_path / "ssf.tsv")
+    reader = (
+        ColumnMapReader(source, load_column_map("gwas-ssf"))
+        if through_map
+        else GwasSsfReader(source)
+    )
+
+    associations = list(reader.stream_associations())
+
+    assert [a.position for a in associations] == [100, 200, 300]
+    assert np.isinf(associations[0].z)
+    assert np.isfinite([a.z for a in associations[1:]]).all()
+    assert _judged(associations) == {Reason.Z_NONFINITE: 1}
+
+
+def test_the_resolver_s_metrics_still_recover_the_odds_ratio(tmp_path: Path):
+    """The metrics read the per-row fallback as ADR 0055 sets it, and the
+    full-row parser they are checked against agrees."""
+    from opengwasdb.readers.gwas_ssf import stream_full_row_metrics
+
+    source = _gwas_ssf_with_odds_ratio(tmp_path / "ssf.tsv")
+
+    rows = list(GwasSsfReader(source).stream_metrics())
+
+    assert [row.effect_from_odds_ratio_fallback for row in rows] == [True, True, False]
+    assert [row.beta for row in stream_full_row_metrics(source)] == [row.beta for row in rows]
