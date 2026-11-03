@@ -8,10 +8,16 @@ judges the stream through a real counting gate rather than restating the rules.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from pathlib import Path
 
 import numpy as np
+import test_ragged_build_ssf as ssf_fixture
 
 from opengwasdb.admission import AnalysisRules, SourceRows, counting_gate
+from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
+from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from opengwasdb.layouts.ragged import RaggedBuildResult
+from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.readers.interface import ReaderAssociation
 
 
@@ -27,3 +33,44 @@ def admitted(associations: Iterable[ReaderAssociation]) -> list[ReaderAssociatio
         )
     )
     return [a for a, kept in zip(rows, keep.tolist(), strict=True) if kept]
+
+
+def ragged_ssf_store(
+    tmp_path: Path, rows: list[dict], maf_threshold: str | None = None
+) -> tuple[Path, RaggedBuildResult]:
+    """A Ragged SSF Store of one Analysis, `trait_a`, from these filtered-file
+    rows, under a declared MAF floor if one is given."""
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    ssf_fixture._write_filtered(filtered / "trait_a.tsv.gz", rows)
+    floor = ("", "") if maf_threshold is None else ("\tmaf_threshold", f"\t{maf_threshold}")
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        f"analysis_index\tanalysis_id\tfiltered_file{floor[0]}\n"
+        f"0\ttrait_a\ttrait_a.tsv.gz{floor[1]}\n",
+        encoding="utf-8",
+    )
+    store = tmp_path / "ssf.opengwasdb"
+    result = build_ragged_from_ssf(
+        manifest, filtered, store, store_id="s", release_id="r",
+        association_coverage="signals_only",
+    )
+    return store, result
+
+
+def vcf_store(tmp_path: Path, manifest: Path, panel: list[str] | None = None) -> Path:
+    """A Dense VCF Store of ``manifest``'s hg38 sources, or a Hybrid one on a
+    Dense Component axis of ``panel``'s ALIDs."""
+    store = tmp_path / "store.opengwasdb"
+    if panel is None:
+        build_dense_from_vcf_manifest(
+            manifest, store, store_id="s", release_id="r", source_assembly="hg38"
+        )
+        return store
+    panel_path = tmp_path / "panel.txt"
+    panel_path.write_text("".join(f"{alid}\n" for alid in panel), encoding="utf-8")
+    build_hybrid_from_vcf_manifest(
+        manifest, store, reference_panel=panel_path, store_id="s", release_id="r",
+        source_assembly="hg38",
+    )
+    return store

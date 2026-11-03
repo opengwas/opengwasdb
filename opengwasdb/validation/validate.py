@@ -4138,7 +4138,7 @@ def _stream_unit(
     else:
         from opengwasdb.build.source import read_normalised_associations
 
-        for assoc in read_normalised_associations(path):
+        for assoc in read_normalised_associations(path, malformed={}):
             v = assoc.variant
             a1, a2 = sorted((v.effect_allele, v.other_allele))
             yield (

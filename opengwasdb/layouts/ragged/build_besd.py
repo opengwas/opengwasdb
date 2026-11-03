@@ -20,7 +20,7 @@ import logging
 import math
 from collections import Counter
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -74,6 +74,7 @@ from opengwasdb.model.enums import (
 )
 from opengwasdb.model.maf_policy import MafState
 from opengwasdb.model.manifest_columns import manifest_column
+from opengwasdb.readers.interface import StreamTally
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
@@ -85,6 +86,7 @@ from opengwasdb.variants import (
     orient_to_canonical,
     write_variant_axis,
 )
+from opengwasdb.variants.normalise import MalformedIdentity, allele_fault, identity_fault
 
 log = logging.getLogger(__name__)
 
@@ -341,7 +343,10 @@ class _EsiAxis:
 
     ``eaf_by_esi`` is each ESI row's stored-allele frequency (`None` when the
     `.esi` reports none), and ``snp_ids`` each row's SNP ID, kept only for a
-    build that joins a sample-size table on it (ADR 0067).
+    build that joins a sample-size table on it (ADR 0067). ``malformed`` names
+    each ESI row whose identity no ALID can spell, and why (#365): it is
+    neither lifted nor placed, and every probe's row at it is dropped and
+    logged under that reason.
     """
 
     probes: list[ProbeRecord]
@@ -352,6 +357,7 @@ class _EsiAxis:
     lift: dict[str, object] | None
     eaf_by_esi: np.ndarray | None = None
     snp_ids: list[str] | None = None
+    malformed: dict[int, str] = field(default_factory=dict)
 
 
 def _esi_axis(
@@ -365,10 +371,12 @@ def _esi_axis(
 ) -> _EsiAxis:
     """Read one file set's `.esi`/`.epi` and canonicalise the ESI rows."""
     snps, probes = _read_sources(prefix)
+    malformed = _malformed_esi_rows(snps)
+    usable = [snp for snp in snps if snp.row_idx not in malformed] if malformed else snps
     lifted, lift_provenance = _lifted_coordinates(
-        snps, source_build, chain_file=chain_file, variant_reference=variant_reference
+        usable, source_build, chain_file=chain_file, variant_reference=variant_reference
     )
-    canonical = _canonical_variants(snps, lifted)
+    canonical = _canonical_variants(usable, lifted)
     canonical.collisions.report()
     print(f"Canonical variants: {len(canonical.variants)} (from {len(snps)} ESI entries)")
     lift_provenance = canonical.collisions.record(lift_provenance)
@@ -384,7 +392,27 @@ def _esi_axis(
             stored_esi_frequencies(snps, canonical.esi_to_variant) if keep_frequencies else None
         ),
         snp_ids=snp_ids,
+        malformed=malformed,
     )
+
+
+def _malformed_esi_rows(snps: list[SnpRecord]) -> dict[int, str]:
+    """Each ESI row whose identity is malformed, and its reason (#365).
+
+    The rule is `identity_fault`'s, which every Source Reader applies; each
+    spelling of a chromosome is judged once.
+    """
+    chromosomes: dict[str, MalformedIdentity | None] = {}
+    malformed: dict[int, str] = {}
+    for snp in snps:
+        if snp.chromosome not in chromosomes:
+            chromosomes[snp.chromosome] = identity_fault(snp.chromosome)
+        fault = chromosomes[snp.chromosome] or allele_fault(snp.a1, snp.a2)
+        if fault is not None:
+            malformed[snp.row_idx] = fault.reason
+    if malformed:
+        log.warning(".esi: %d rows have a malformed identity and are left out", len(malformed))
+    return malformed
 
 
 def _unique_snp_ids(
@@ -947,6 +975,28 @@ def _admitted(
     return raw_snp_idx[keep], betas[keep], ses[keep]
 
 
+def _without_malformed(
+    raw_snp_idx: np.ndarray,
+    betas: np.ndarray,
+    ses: np.ndarray,
+    malformed: dict[int, str],
+    gate: Gate,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One probe's rows less those at a malformed ESI row, which its gate
+    examines, drops and logs by ESI index under the row's reason (#365)."""
+    at = [i for i, esi in enumerate(raw_snp_idx.tolist()) if esi in malformed]
+    if not at:
+        return raw_snp_idx, betas, ses
+    tally = StreamTally()
+    tally.faults.rows.extend(
+        (f"esi:{int(raw_snp_idx[i])}", malformed[int(raw_snp_idx[i])]) for i in at
+    )
+    gate.streamed(tally)
+    keep = np.ones(len(raw_snp_idx), dtype=bool)
+    keep[at] = False
+    return raw_snp_idx[keep], betas[keep], ses[keep]
+
+
 def _map_probe_rows(
     raw_snp_idx: np.ndarray,
     betas: np.ndarray,
@@ -1047,6 +1097,8 @@ def _ingest_probe(
     """
     raw_snp_idx, betas, ses = besd.get_probe_associations(probe.row_idx)
     n_raw = len(raw_snp_idx)
+    if axis.malformed:
+        raw_snp_idx, betas, ses = _without_malformed(raw_snp_idx, betas, ses, axis.malformed, gate)
     sizes = None if sample_sizes is None else sample_sizes.sizes_for(probe.probe_id)
     admitted = _admitted(raw_snp_idx, betas, ses, gate, axis.eaf_by_esi)
     rows = _map_probe_rows(*admitted, axis.esi_to_variant, gate)

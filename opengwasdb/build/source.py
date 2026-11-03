@@ -5,12 +5,13 @@ from __future__ import annotations
 import csv
 import gzip
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.variants import CanonicalVariant, VariantNormalisationError, orient_to_canonical
+from opengwasdb.variants.normalise import IdentityFaults, MalformedIdentity, identity_fault
 
 
 class SourceRowError(ValueError):
@@ -38,12 +39,27 @@ class NormalisedAssociation:
     eaf: float | None = None
 
 
-def read_normalised_associations(path: str | Path) -> list[NormalisedAssociation]:
+class _MalformedRow(Exception):
+    """One row whose identity no ALID can spell, and the Analysis it was for."""
+
+    def __init__(self, analysis_id: str, key: str, fault: MalformedIdentity) -> None:
+        super().__init__(str(fault))
+        self.analysis_id, self.key, self.fault = analysis_id, key, fault
+
+
+def read_normalised_associations(
+    path: str | Path, malformed: dict[str, IdentityFaults] | None = None
+) -> list[NormalisedAssociation]:
     """Read a tiny TSV/CSV source file into normalised association records.
 
     Required logical fields are analysis id, chromosome, position, effect allele,
     other allele, SE, and either Z or beta. Column aliases cover the fixture
     style used in tests and common GWAS-SSF-ish names.
+
+    A row whose chromosome is missing or whose allele lies outside A, C, G and
+    T is malformed (#365). With ``malformed`` it is left out and named there,
+    under its Analysis, for the build's Admission record; without, it is
+    refused like any other row the reader cannot read.
     """
 
     source_path = Path(path)
@@ -53,15 +69,26 @@ def read_normalised_associations(path: str | Path) -> list[NormalisedAssociation
         reader = csv.DictReader(handle, delimiter=delimiter)
         if reader.fieldnames is None:
             raise SourceRowError(f"{source_path} has no header")
-        return [_normalise_row(row, row_number=i + 2) for i, row in enumerate(reader)]
+        records: list[NormalisedAssociation] = []
+        for i, row in enumerate(reader):
+            try:
+                records.append(_normalise_row(row, row_number=i + 2))
+            except _MalformedRow as dropped:
+                if malformed is None:
+                    raise SourceRowError(f"row {i + 2}: {dropped.fault}") from dropped.fault
+                faults = malformed.setdefault(dropped.analysis_id, IdentityFaults())
+                faults.record(dropped.key, dropped.fault)
+        return records
 
 
-def stream_normalised_associations(paths: Iterable[str | Path]) -> list[NormalisedAssociation]:
+def stream_normalised_associations(
+    paths: Iterable[str | Path], malformed: dict[str, IdentityFaults] | None = None
+) -> list[NormalisedAssociation]:
     """Read one or more source files preserving row order within each file."""
 
     records: list[NormalisedAssociation] = []
     for path in paths:
-        records.extend(read_normalised_associations(path))
+        records.extend(read_normalised_associations(path, malformed))
     return records
 
 
@@ -79,6 +106,7 @@ def _normalise_row(row: dict[str, str], row_number: int) -> NormalisedAssociatio
 
     analysis_id = field("analysis_id", "study_id", "trait_id")
     assert analysis_id is not None
+    _refuse_malformed(analysis_id, lookup)
 
     try:
         chromosome = field("chromosome", "chrom", "chr")
@@ -148,6 +176,24 @@ def _normalise_row(row: dict[str, str], row_number: int) -> NormalisedAssociatio
         stored_effect_scale=scale,
         eaf=eaf,
     )
+
+
+def _refuse_malformed(analysis_id: str, lookup: Mapping[str, str | None]) -> None:
+    """Raise `_MalformedRow` for a row whose identity is malformed (#365), before
+    any other field is required of it. It reads the cells as the source spelt
+    them, missing-value tokens and all, which is how its log names the row."""
+
+    def raw(*names: str) -> str:
+        cells = (lookup.get(name) for name in names)
+        return next((str(cell).strip() for cell in cells if cell is not None), "")
+
+    chromosome = raw("chromosome", "chrom", "chr")
+    position = raw("position", "pos", "base_pair_location")
+    effect = raw("effect_allele", "ea", "a1")
+    other = raw("other_allele", "oa", "a2", "non_effect_allele")
+    fault = identity_fault(chromosome, effect, other)
+    if fault is not None:
+        raise _MalformedRow(analysis_id, f"{chromosome}:{position}:{other}:{effect}", fault)
 
 
 def _parse_float(value: str | None, row_number: int, field_name: str) -> float:

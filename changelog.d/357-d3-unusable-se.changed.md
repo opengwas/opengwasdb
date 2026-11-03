@@ -9,4 +9,4 @@
   Now each such row reaches Association Admission, which drops it and logs it by
   source coordinate. A reader still recovers an SE it can (from a CI or a p)
   first. `ReaderAssociation` no longer refuses a negative SE: the gate judges
-  it. The Admission record's rule set is `admission/2`.
+  it.

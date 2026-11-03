@@ -185,6 +185,12 @@ where:
 - `A1` is alphabetically first;
 - `A2` is the other allele.
 
+A source row whose chromosome is missing (an empty cell, `.`, `NA`) or whose
+allele holds a character other than A, C, G or T names no ALID. Every builder
+drops it, and logs it in the build's Admission record as `chromosome_missing`
+or `allele_invalid` (issue #365, ADR 0072). An alt, random or unplaced contig
+is a chromosome.
+
 A build that lifts a source variant from another Reference Assembly MUST project
 the variant onto the release's assembly using the chain block's orientation: on a
 reverse-strand block the alleles are complemented before the ALID is formed, so

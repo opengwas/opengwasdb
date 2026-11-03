@@ -19,6 +19,7 @@ import pytest
 import test_dense_vcf_build as dense_fixture
 import test_info_score_hybrid_build as info_fixture
 import test_ragged_build_ssf as ssf_fixture
+from admission_helpers import ragged_ssf_store, vcf_store
 
 from opengwasdb.admission import (
     ADMISSION_RULES,
@@ -651,30 +652,13 @@ def _ragged_ssf_with_frequencies(
 ) -> tuple[Path, RaggedBuildResult]:
     """A Ragged SSF Store of one Analysis, `trait_a`, one row per frequency
     cell at 1:100000, 1:200000, ..., under a declared MAF floor if one is given."""
-    filtered = tmp_path / "filtered"
-    filtered.mkdir()
-    ssf_fixture._write_filtered(
-        filtered / "trait_a.tsv.gz",
-        [
-            {"chromosome": "1", "base_pair_location": 100_000 * (i + 1), "effect_allele": "A",
-             "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
-             "effect_allele_frequency": af}
-            for i, af in enumerate(frequencies)
-        ],
-    )
-    floor = ("", "") if maf_threshold is None else ("\tmaf_threshold", f"\t{maf_threshold}")
-    manifest = tmp_path / "manifest.tsv"
-    manifest.write_text(
-        f"analysis_index\tanalysis_id\tfiltered_file{floor[0]}\n"
-        f"0\ttrait_a\ttrait_a.tsv.gz{floor[1]}\n",
-        encoding="utf-8",
-    )
-    store = tmp_path / "ssf.opengwasdb"
-    result = build_ragged_from_ssf(
-        manifest, filtered, store, store_id="s", release_id="r",
-        association_coverage="signals_only",
-    )
-    return store, result
+    rows = [
+        {"chromosome": "1", "base_pair_location": 100_000 * (i + 1), "effect_allele": "A",
+         "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
+         "effect_allele_frequency": af}
+        for i, af in enumerate(frequencies)
+    ]
+    return ragged_ssf_store(tmp_path, rows, maf_threshold)
 
 
 def test_a_ragged_ssf_build_applies_a_declared_maf_filter(tmp_path: Path):
@@ -739,21 +723,8 @@ def _vcf_with_frequencies(tmp_path: Path) -> Path:
 def test_a_vcf_build_counts_the_frequencies_it_makes_absent(tmp_path: Path, hybrid: bool):
     """D7: a frequency outside (0, 1) was already absent in a Store, and nothing
     said how many; the Admission record now counts them, and keeps the rows."""
-    manifest = _vcf_with_frequencies(tmp_path)
-    store = tmp_path / "store.opengwasdb"
-    if hybrid:
-        panel = tmp_path / "panel.txt"
-        panel.write_text(
-            "".join(f"1:{1000 * (i + 1)}:A:G\n" for i in range(len(_AF_ROWS))), encoding="utf-8"
-        )
-        build_hybrid_from_vcf_manifest(
-            manifest, store, reference_panel=panel, store_id="s", release_id="r",
-            source_assembly="hg38",
-        )
-    else:
-        build_dense_from_vcf_manifest(
-            manifest, store, store_id="s", release_id="r", source_assembly="hg38"
-        )
+    panel = [f"1:{1000 * (i + 1)}:A:G" for i in range(len(_AF_ROWS))] if hybrid else None
+    store = vcf_store(tmp_path, _vcf_with_frequencies(tmp_path), panel)
 
     (analysis,) = _analyses(store)
     assert (analysis["examined"], analysis["admitted"]) == (5, 5)

@@ -15,7 +15,12 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from opengwasdb.stats import FrequencyTally, parse_af
-from opengwasdb.variants.normalise import normalise_chromosome
+from opengwasdb.variants.normalise import (
+    IdentityFaults,
+    MalformedIdentity,
+    allele_fault,
+    normalise_chromosome,
+)
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +44,7 @@ def stream_vcf_variants(path: str | Path) -> Iterator[tuple[str, int, str, str, 
     are skipped silently. CHROM is normalised to bare form (no chr prefix).
     """
     bcftools = _require_bcftools()
+    chromosomes: dict[str, str] = {}
     proc = subprocess.Popen(
         [bcftools, "query", "-f", "%CHROM\t%POS\t%REF\t%ALT\t%ID\n", str(path)],
         stdout=subprocess.PIPE,
@@ -52,8 +58,11 @@ def stream_vcf_variants(path: str | Path) -> Iterator[tuple[str, int, str, str, 
             chrom_raw, pos_str, ref, alt, id_field = line.split("\t")
             if "," in alt:
                 continue
+            chrom = _identity(chromosomes, chrom_raw, ref, alt)
+            if isinstance(chrom, MalformedIdentity):
+                continue  # the association stream reports it; the axis never holds it
             rsid = id_field if id_field.startswith("rs") else ""
-            yield normalise_chromosome(chrom_raw), int(pos_str), ref, alt, rsid
+            yield chrom, int(pos_str), ref, alt, rsid
     finally:
         proc.stdout.close()  # type: ignore[union-attr]
         proc.wait()
@@ -79,7 +88,9 @@ def has_format_tag(path: str | Path, tag: str) -> bool:
 
 
 def stream_vcf_associations(
-    path: str | Path, frequencies: FrequencyTally | None = None
+    path: str | Path,
+    frequencies: FrequencyTally | None = None,
+    faults: IdentityFaults | None = None,
 ) -> Iterator[tuple[str, int, str, str, float, float, float | None]]:
     """Yield (bare_chrom, pos, ref, alt, z, se, eaf) for each biallelic record.
 
@@ -104,6 +115,7 @@ def stream_vcf_associations(
     schema (issue #16).
     """
     bcftools = _require_bcftools()
+    chromosomes: dict[str, str] = {}
     with_af = has_format_tag(path, "AF")
     fields = "%CHROM\t%POS\t%REF\t%ALT\t[%EZ]\t[%ES]\t[%SE]"
     n_fields = 7
@@ -124,9 +136,14 @@ def stream_vcf_associations(
             if len(parts) != n_fields:
                 continue
             chrom_raw, pos_str, ref, alt, ez_str, es_str, se_str = parts[:7]
-            af = parse_af(parts[7], frequencies) if with_af else None
             if "," in alt:
                 continue
+            chrom = _identity(chromosomes, chrom_raw, ref, alt)
+            if isinstance(chrom, MalformedIdentity):
+                if faults is not None:
+                    faults.record(f"{chrom_raw}:{pos_str}:{ref}:{alt}", chrom)
+                continue
+            af = parse_af(parts[7], frequencies) if with_af else None
 
             parsed_se = _parse_float(se_str)
             se = math.nan if parsed_se is None else parsed_se
@@ -141,10 +158,36 @@ def stream_vcf_associations(
                 # stored effect allele is REF here and AF must follow (ADR 0036).
                 eaf = None if af is None else 1.0 - af
 
-            yield normalise_chromosome(chrom_raw), int(pos_str), ref, alt, z, se, eaf
+            yield chrom, int(pos_str), ref, alt, z, se, eaf
     finally:
         proc.stdout.close()  # type: ignore[union-attr]
         proc.wait()
+
+
+#: A one-base allele in either case, which nearly every record holds.
+_ONE_BASE = frozenset("ACGTacgt")
+
+
+def _identity(
+    chromosomes: dict[str, str], chrom_raw: str, ref: str, alt: str
+) -> str | MalformedIdentity:
+    """A record's bare chromosome, or why its identity is malformed (#365).
+
+    ``chromosomes`` caches each spelling's normalised name, so a record pays a
+    dictionary lookup and two set lookups. A chromosome refused for another
+    reason (an unsupported number) still raises.
+    """
+    chrom = chromosomes.get(chrom_raw)
+    if chrom is None:
+        try:
+            chrom = normalise_chromosome(chrom_raw)
+        except MalformedIdentity as missing:
+            return missing
+        chromosomes[chrom_raw] = chrom
+    if ref in _ONE_BASE and alt in _ONE_BASE:
+        return chrom
+    invalid = allele_fault(ref, alt)
+    return chrom if invalid is None else invalid
 
 
 def _parse_float(s: str) -> float | None:

@@ -69,6 +69,8 @@ one of them with the opposite sign, with no record of either.
 
 | Reason | A row is dropped when | Logged | Since |
 |---|---|---|---|
+| `chromosome_missing` | its chromosome is an empty cell or a missing-value token (`.`, `NA`, `NaN`, `None`) | yes | #365 |
+| `allele_invalid` | an allele is empty or holds a character other than A, C, G or T | yes | #365 |
 | `se_unusable` | its reported SE is missing, not positive or not finite | yes | slice 4 (Ragged), D3 (every reader) |
 | `effect_missing` | it has a usable SE but no effect | yes | slice 5 |
 | `z_nonfinite` | its z is infinite, beside a usable SE | yes | D4 |
@@ -92,6 +94,20 @@ spilled and deleted unread), and a BESD row whose ESI entry never made the
 axis. A single-pass Hybrid's unmatched rows are not dropped here: the fold
 places them in the Ragged Overflow, and the rows the fold cannot place are its
 own to count.
+
+The two identity rules come first, because a row they drop names no variant:
+no ALID can spell it, so no other rule has anything to judge. The Source Reader
+finds them as it forms the row's identity (`variants.normalise`: a
+`MalformedIdentity` raised by `normalise_chromosome` or `normalise_allele`),
+leaves the row out of both of its streams, so no axis holds its variant, and
+names it in the stream's `StreamTally`; the gate then counts and logs it
+(#365). Every reader applies them the same way: the GWAS-VCF build streams,
+which validated no allele and kept `NA` as a contig, the tabular readers, which
+dropped such rows unseen, `build-dense`, which refused the source, and BESD,
+whose `.esi` rows they judge once for every probe. An alt, random or unplaced
+contig is a chromosome (`11_KI270927v1_alt`). A row the readers drop for
+another identity reason (an unparseable position, equal alleles, an
+unsupported chromosome number) is still the reader's own.
 
 A frequency is never a reason to drop a row (D7). One a source reported
 outside (0, 1) -- exactly 0 or 1, beyond the interval, not finite, or not a

@@ -7,5 +7,4 @@
   it refuses such a threshold, and a BESD source has no imputation score, so an
   INFO threshold there is refused when the overlay is read. No published Dense
   or Ragged release declares a threshold. Every builder reads the policies one
-  way (`opengwasdb.admission.declared.declared_rules`). The Admission record's
-  rule set is `admission/7`.
+  way (`opengwasdb.admission.declared.declared_rules`).

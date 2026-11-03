@@ -177,8 +177,8 @@ from opengwasdb.model.info_score_policy import (
 from opengwasdb.model.maf_policy import MafPolicy, MafState
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.readers.column_map import ColumnMap, as_column_map, load_column_map
+from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import open_source
-from opengwasdb.stats import FrequencyTally
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
@@ -346,13 +346,13 @@ def _resolve_column_hybrid(
         row.source,
         imputation_score_declaration=gate.rules.info.imputation_score_declaration,
     )
-    frequencies = FrequencyTally()
+    tally = StreamTally()
     routed = table.route_column(
-        reader.stream_associations(frequencies),
+        reader.stream_associations(tally),
         admit=gate.admit,
         imputation_scores=gate.reads_imputation_scores,
     )
-    gate.frequencies_made_absent(frequencies.made_absent)
+    gate.streamed(tally)
     dense, overflow = routed.placed
     for placed, alids in zip(routed.placed, axes, strict=True):
         record_duplicates(gate, placed, alids)

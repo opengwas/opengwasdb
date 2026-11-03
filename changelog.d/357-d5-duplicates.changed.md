@@ -7,5 +7,4 @@
   GCST90295971's seven conflicting pairs, one of them of opposite sign.
   `build-dense` refused the build, and `build-ragged-ssf` dropped conflicting
   rows with a line on stdout. The rule is Variant Routing's
-  `collapse_duplicates`; `Placed` reports what it collapsed and dropped. The
-  Admission record's rule set is `admission/5`.
+  `collapse_duplicates`; `Placed` reports what it collapsed and dropped.

@@ -88,6 +88,7 @@ from opengwasdb.readers.interface import (
     ReaderAssociation,
     SiteMetrics,
     SourceVariant,
+    StreamTally,
     parse_imputation_score,
 )
 from opengwasdb.readers.tabular import (
@@ -111,7 +112,7 @@ from opengwasdb.readers.tabular import (
     stream_variants,
 )
 from opengwasdb.stats import FrequencyTally
-from opengwasdb.variants.normalise import VariantNormalisationError, orient_to_canonical
+from opengwasdb.variants.normalise import IdentityFaults, orient_or_drop
 from opengwasdb.variants.rsid import normalise_rsid
 
 GWAS_SSF_CAPABILITY = "opengwasdb.gwas-ssf"
@@ -208,6 +209,7 @@ def _tabular_row(
     sample_size_column: str | None,
     score_column: str | None = None,
     frequencies: FrequencyTally | None = None,
+    faults: IdentityFaults | None = None,
 ) -> TabularRow | None:
     """One source row as a `TabularRow`, or `None` when it names no canonical variant.
 
@@ -220,14 +222,14 @@ def _tabular_row(
     other_allele = row.get("other_allele")
     if effect_allele is None or other_allele is None:
         return None
-    try:
-        ori = orient_to_canonical(
-            row.get("chromosome", ""),
-            row.get("base_pair_location", ""),
-            effect_allele,
-            other_allele,
-        )
-    except VariantNormalisationError:
+    ori = orient_or_drop(
+        row.get("chromosome", ""),
+        row.get("base_pair_location", ""),
+        effect_allele,
+        other_allele,
+        faults,
+    )
+    if ori is None:
         return None
     statistics = _row_statistics(row, source, sample_size_column)
     return TabularRow(
@@ -289,7 +291,7 @@ def _iter_rows(
     *,
     effect_source: EffectSource | None = None,
     score_column: str | None = None,
-    frequencies: FrequencyTally | None = None,
+    tally: StreamTally | None = None,
 ) -> Iterator[TabularRow]:
     """Parse each row of a filtered/harmonised GWAS-SSF file once.
 
@@ -303,8 +305,12 @@ def _iter_rows(
         source = effect_source or resolve_effect_source(reader.fieldnames or ())
         sample_size_column = _sample_size_column(reader.fieldnames, source)
         score_column = _validated_score_column(reader.fieldnames, score_column)
+        tally = tally or StreamTally()
+        faults, frequencies = tally.faults, tally.frequencies
         for row in reader:
-            parsed = _tabular_row(row, source, sample_size_column, score_column, frequencies)
+            parsed = _tabular_row(
+                row, source, sample_size_column, score_column, frequencies, faults
+            )
             if parsed is not None:
                 yield parsed
 
@@ -408,9 +414,7 @@ class GwasSsfReader:
         """
         return resolve_effect_source(_header(self.path))
 
-    def stream_associations(
-        self, frequencies: FrequencyTally | None = None
-    ) -> Iterator[ReaderAssociation]:
+    def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
         source = self.effect_source
         # A z-score source is derived, not read: refuse it on a case-control
         # scale and refuse an unsigned column before yielding any row (#215).
@@ -424,7 +428,7 @@ class GwasSsfReader:
                 self.path,
                 effect_source=source,
                 score_column=self.imputation_score_column,
-                frequencies=frequencies,
+                tally=tally,
             ),
             self.stored_effect_scale,
         )

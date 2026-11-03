@@ -23,7 +23,7 @@ importing a source module directly.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
@@ -31,6 +31,7 @@ import numpy as np
 
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.stats import FrequencyTally
+from opengwasdb.variants.normalise import IdentityFaults
 
 
 class ImputationScoreStatus(StrEnum):
@@ -187,17 +188,28 @@ class SiteMetrics:
             raise ValueError(f"se must be non-negative, got {self.se!r}")
 
 
+@dataclass
+class StreamTally:
+    """What one Source Reader stream did to the rows it read, for Association
+    Admission to record (issue #357): the rows it dropped because no ALID can
+    spell their identity (#365), and the reported frequencies it made absent
+    (D7)."""
+
+    faults: IdentityFaults = field(default_factory=IdentityFaults)
+    frequencies: FrequencyTally = field(default_factory=FrequencyTally)
+
+
 class SourceReader(Protocol):
     """One Source Format's reader: association streaming plus per-site AF/SE
     lookup for annotation."""
 
-    def stream_associations(
-        self, frequencies: FrequencyTally | None = None
-    ) -> Iterator[ReaderAssociation]:
+    def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
         """Yield every association in the source, oriented per ReaderAssociation.
 
-        ``frequencies``, given, counts the reported frequencies the stream made
-        absent because they lie outside (0, 1) (issue #357, D7).
+        A row whose identity is malformed (a missing chromosome, an allele
+        outside A, C, G and T) is not yielded. ``tally``, given, names each
+        such row, and counts the reported frequencies the stream made absent
+        because they lie outside (0, 1) (issue #357: D7, #365).
         """
         ...
 

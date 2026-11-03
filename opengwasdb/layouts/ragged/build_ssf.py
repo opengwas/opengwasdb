@@ -58,9 +58,13 @@ from opengwasdb.model.manifest_columns import (
     resolve_manifest_columns,
 )
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
-from opengwasdb.readers.interface import ImputationScore, parse_imputation_score
+from opengwasdb.readers.interface import (
+    ImputationScore,
+    StreamTally,
+    parse_imputation_score,
+)
 from opengwasdb.readers.tabular import resolve_imputation_score_column
-from opengwasdb.stats import FrequencyTally, parse_af
+from opengwasdb.stats import parse_af
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants.axis import (
@@ -68,9 +72,8 @@ from opengwasdb.variants.axis import (
 )
 from opengwasdb.variants.normalise import (
     CanonicalVariant,
-    VariantNormalisationError,
     chromosome_sort_key,
-    orient_to_canonical,
+    orient_or_drop,
 )
 from opengwasdb.variants.routing import collapse_duplicates
 
@@ -195,14 +198,16 @@ _SourceRow = tuple[
 
 
 def _read_filtered(
-    path: Path, score_column: str | None = None, frequencies: FrequencyTally | None = None
+    path: Path, score_column: str | None = None, tally: StreamTally | None = None
 ) -> Iterator[_SourceRow]:
     """Yield each row of a filtered file that names a variant.
 
     ``score_column`` is a declared imputation score's column, which must occur
     exactly once with its declared spelling, as the GWAS-SSF reader requires.
-    ``frequencies`` counts the reported frequencies made absent (D7).
+    ``tally`` names the rows dropped for a malformed identity (#365), and
+    counts the reported frequencies made absent (D7).
     """
+    tally = tally or StreamTally()
     opener = gzip.open if str(path).endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
@@ -210,7 +215,7 @@ def _read_filtered(
             header = [name.encode("utf-8") for name in reader.fieldnames or []]
             resolve_imputation_score_column(header, score_column)
         for row in reader:
-            parsed = _source_row(row, score_column, frequencies)
+            parsed = _source_row(row, score_column, tally)
             if parsed is not None:
                 yield parsed
 
@@ -235,16 +240,20 @@ def _statistics(row: dict[str, str]) -> tuple[float, float]:
 
 def _source_row(
     row: dict[str, str],
-    score_column: str | None = None,
-    frequencies: FrequencyTally | None = None,
+    score_column: str | None,
+    tally: StreamTally,
 ) -> _SourceRow | None:
     """One filtered-file row, or None when it names no variant."""
+    faults, frequencies = tally.faults, tally.frequencies
     try:
-        ori = orient_to_canonical(
+        identity = (
             row["chromosome"], row["base_pair_location"],
             row["effect_allele"], row["other_allele"],
         )
-    except (VariantNormalisationError, KeyError):
+    except KeyError:
+        return None
+    ori = orient_or_drop(*identity, faults)
+    if ori is None:
         return None
     z, se = _statistics(row)
     # GWAS-SSF harmonised files carry a dedicated `rsid` column; `variant_id`
@@ -287,13 +296,11 @@ def _admitted_rows(path: Path, gate: admission.Gate) -> list[_SourceRow]:
     (D2), from the declared score column and the file's own frequency.
     """
     declaration = gate.rules.info.imputation_score_declaration
-    frequencies = FrequencyTally()
+    tally = StreamTally()
     rows = list(
-        _read_filtered(
-            path, None if declaration is None else declaration.column_name, frequencies
-        )
+        _read_filtered(path, None if declaration is None else declaration.column_name, tally)
     )
-    gate.frequencies_made_absent(frequencies.made_absent)
+    gate.streamed(tally)
     score, status = _score_arrays(rows) if declaration is not None else (None, None)
     keep = gate.source_rows(
         admission.SourceRows(

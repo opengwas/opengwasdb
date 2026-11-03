@@ -6,4 +6,4 @@
   (`eaf_made_absent`), over the rows its source yielded; no row is dropped for
   one. `build-ragged-besd` logs its `.esi`'s count once, since that frequency is
   every probe's. `SourceReader.stream_associations` takes an optional
-  `FrequencyTally` to count them. The record's rule set is `admission/8`.
+  `StreamTally`, which counts them.

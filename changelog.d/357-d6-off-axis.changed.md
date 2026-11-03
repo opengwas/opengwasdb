@@ -7,5 +7,4 @@
   - a `build-ragged-besd` row whose ESI entry never made the axis.
 
   Each is now in the Admission record and its log, by source key. A single-pass
-  Hybrid still folds such rows into its Ragged Overflow. The record's rule set
-  is `admission/6`.
+  Hybrid still folds such rows into its Ragged Overflow.

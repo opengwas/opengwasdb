@@ -9,6 +9,7 @@ reports come from one judgement and cannot disagree (stores #176).
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
 from typing import Protocol
 
@@ -22,6 +23,7 @@ from opengwasdb.admission.rules import (
     SourceRows,
     judge,
 )
+from opengwasdb.readers.interface import StreamTally
 
 __all__ = ["Gate", "RoutedBatch", "counting_gate"]
 
@@ -106,10 +108,21 @@ class Gate:
         if reason in LOGGED:
             self._dropped.extend((key, reason) for key in keys)
 
-    def frequencies_made_absent(self, n: int) -> None:
-        """``n`` reported frequencies lay outside (0, 1), and are absent (D7)."""
-        if n:
-            self._counts += AdmissionCounts(eaf_made_absent=n)
+    def streamed(self, tally: StreamTally) -> None:
+        """What the Source Reader did to this Analysis's rows as it read them.
+
+        Each row it dropped because no ALID can spell its identity (#365) is
+        examined, dropped and logged under its reason; each reported frequency
+        it made absent is counted (D7).
+        """
+        rows = tally.faults.rows
+        if rows:
+            reasons = [Reason(reason) for _, reason in rows]
+            self._counts += AdmissionCounts(examined=len(rows), dropped=Counter(reasons))
+            self._dropped.extend(zip((key for key, _ in rows), reasons, strict=True))
+        made_absent = tally.frequencies.made_absent
+        if made_absent:
+            self._counts += AdmissionCounts(eaf_made_absent=made_absent)
 
     def collapsed(self, n: int) -> None:
         """``n`` admitted rows agreed with an earlier row for their place."""

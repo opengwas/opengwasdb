@@ -6,4 +6,4 @@
   builder's writer also checks the z and SE it is about to store with
   `require_admitted`, and refuses (`NotAdmitted`, naming the build and the
   Analysis) a cell that should not have passed a gate. The completions refuse a
-  half-missing source cell. The rule set is `admission/4`.
+  half-missing source cell.

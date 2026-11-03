@@ -23,8 +23,10 @@ from opengwasdb.readers.interface import (
     ImputationScoreDeclaration,
     ImputationScoreKind,
     ImputationScoreStatus,
+    StreamTally,
 )
 from opengwasdb.stats import FrequencyTally, parse_af
+from opengwasdb.variants.normalise import InvalidAllele, MissingChromosome
 
 USABLE = ImputationScoreStatus.USABLE
 DECLARATION = ImputationScoreDeclaration(
@@ -160,14 +162,25 @@ def test_a_frequency_outside_the_interval_is_absent_and_counted():
     assert tally.made_absent == len(reported)
 
 
-def test_a_gate_counts_the_frequencies_made_absent_and_keeps_its_rows():
+def test_a_gate_records_what_its_stream_left_out():
+    """D7: a frequency made absent is counted and its row kept. #365: a row the
+    reader dropped for a malformed identity is examined, dropped and logged."""
     gate = counting_gate(AnalysisRules("A1"))
     gate.source_rows(_rows([0.3, np.nan], [0.9, 0.9]))
-    gate.frequencies_made_absent(1)
-    gate.frequencies_made_absent(0)
+    tally = StreamTally(frequencies=FrequencyTally(made_absent=1))
+    tally.faults.record("NA:100:A:G", MissingChromosome("NA"))
+    tally.faults.record("1:200:N:G", InvalidAllele("N"))
+    gate.streamed(tally)
+    gate.streamed(StreamTally())
 
-    assert (gate.counts.admitted, gate.counts.eaf_made_absent) == (2, 1)
-    assert AdmissionCounts.from_dict(gate.counts.as_dict()) == gate.counts
+    counts = gate.counts
+    assert (counts.examined, counts.admitted, counts.eaf_made_absent) == (4, 2, 1)
+    assert counts.dropped == {Reason.CHROMOSOME_MISSING: 1, Reason.ALLELE_INVALID: 1}
+    assert gate.dropped == [
+        ("NA:100:A:G", Reason.CHROMOSOME_MISSING),
+        ("1:200:N:G", Reason.ALLELE_INVALID),
+    ]
+    assert AdmissionCounts.from_dict(counts.as_dict()) == counts
 
 
 def _with_se(af: list[float], se: list[float], scores: list[float]) -> SourceRows:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,7 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
     coverage_for_layout,
 )
+from opengwasdb.readers.interface import StreamTally
 from opengwasdb.stats import FrequencyTally, parse_af
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
@@ -55,6 +57,7 @@ from opengwasdb.variants import (
     chromosome_sort_key,
     write_variant_axis,
 )
+from opengwasdb.variants.normalise import IdentityFaults
 from opengwasdb.variants.routing import collapse_duplicates
 
 
@@ -98,6 +101,7 @@ def build_dense_observed_store(
     overwrite: bool = False,
     association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
     admission_record: str | Path | None = None,
+    malformed: Mapping[str, IdentityFaults] | None = None,
 ) -> DenseBuildResult:
     """Write a Dense Observed-Only Store Release from normalised associations.
 
@@ -106,7 +110,8 @@ def build_dense_observed_store(
     either reported or did not, so a narrower coverage has no representation
     here (`coverage_for_layout`, ADR 0064). Each Analysis's records pass its
     Admission gate, which writes ``admission_record`` (beside the Store unless
-    named, #357).
+    named, #357), and logs there the rows the reader left out under
+    ``malformed``, by Analysis (#365).
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.DENSE)
 
@@ -115,7 +120,8 @@ def build_dense_observed_store(
 
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
-        records = _admitted_records(records, admission.admission_record_for(out, admission_record))
+        directory = admission.admission_record_for(out, admission_record)
+        records = _admitted_records(records, directory, malformed or {})
         variants = _collect_variants(records)
         analyses = _collect_analyses(records)
         z, se, eaf = _scatter_records(records, variants, analyses)
@@ -145,7 +151,9 @@ def build_dense_observed_store(
 
 
 def _admitted_records(
-    records: list[NormalisedAssociation], directory: Path
+    records: list[NormalisedAssociation],
+    directory: Path,
+    malformed: Mapping[str, IdentityFaults],
 ) -> list[NormalisedAssociation]:
     """The records each Analysis's Admission gate keeps, in source order.
 
@@ -158,26 +166,31 @@ def _admitted_records(
     by_analysis: dict[str, list[int]] = {}
     for position, record in enumerate(records):
         by_analysis.setdefault(record.analysis_id, []).append(position)
+    for analysis_id in malformed:  # an Analysis every row of which was malformed
+        by_analysis.setdefault(analysis_id, [])
     record_ = admission.AdmissionRecord.open(directory, list(by_analysis), command="build-dense")
     records = list(records)
     keep = np.zeros(len(records), dtype=bool)
     for analysis_id, positions in by_analysis.items():
+        tally = StreamTally(faults=malformed.get(analysis_id, IdentityFaults()))
+        _usable_frequencies(records, positions, tally.frequencies)
         with record_.gate(admission.AnalysisRules(analysis_id)) as gate:
-            gate.frequencies_made_absent(_usable_frequencies(records, positions))
-            keep[positions] = _admitted(records, positions, gate)
+            gate.streamed(tally)
+            if positions:
+                keep[positions] = _admitted(records, positions, gate)
     record_.finish()
     return [record for record, kept in zip(records, keep.tolist(), strict=True) if kept]
 
 
-def _usable_frequencies(records: list[NormalisedAssociation], positions: list[int]) -> int:
+def _usable_frequencies(
+    records: list[NormalisedAssociation], positions: list[int], tally: FrequencyTally
+) -> None:
     """Make absent each frequency at ``positions`` outside (0, 1), in place, and
-    return how many (D7): the rule `parse_af` applies to every source."""
-    tally = FrequencyTally()
+    count it in ``tally`` (D7): the rule `parse_af` applies to every source."""
     for i in positions:
         eaf = records[i].eaf
         if eaf is not None and parse_af(eaf, tally) is None:
             records[i] = replace(records[i], eaf=None)
-    return tally.made_absent
 
 
 def _admitted(

@@ -4,6 +4,11 @@ One rule set, judged row by row and in a fixed precedence, so each dropped
 row carries exactly one `Reason`. First the rules that decide whether a row is
 an association a Store can hold at all, then the filters the Analysis declared:
 
+0. a malformed identity, which no ALID can spell: a missing chromosome
+   (`chromosome_missing`: an empty cell, `.`, `NA`), then an allele outside
+   A, C, G and T (`allele_invalid`). The Source Reader finds these as it forms
+   the row's identity (`variants.normalise.MalformedIdentity`), drops the row
+   and reports it, the same on every reader;
 1. an unusable reported SE (`se_unusable`): missing, not positive, or not
    finite;
 2. no effect (`effect_missing`): a usable SE beside a z the source gave no
@@ -65,6 +70,7 @@ from opengwasdb.build.info_score_filter import (
 )
 from opengwasdb.model.info_score_policy import InfoScorePolicy
 from opengwasdb.model.maf_policy import MafPolicy, MafState
+from opengwasdb.variants.normalise import InvalidAllele, MissingChromosome
 
 __all__ = [
     "LOGGED",
@@ -80,6 +86,10 @@ __all__ = [
 class Reason(StrEnum):
     """Why Association Admission dropped a row: one per dropped row, in precedence order."""
 
+    #: A row whose chromosome the source does not give (#365).
+    CHROMOSOME_MISSING = MissingChromosome.reason
+    #: A row with an allele outside the ALID alphabet (#365).
+    ALLELE_INVALID = InvalidAllele.reason
     SE_UNUSABLE = "se_unusable"
     EFFECT_MISSING = "effect_missing"
     Z_NONFINITE = "z_nonfinite"
@@ -100,6 +110,8 @@ class Reason(StrEnum):
 #: them would cost more than the Store they filter.
 LOGGED: frozenset[Reason] = frozenset(
     {
+        Reason.CHROMOSOME_MISSING,
+        Reason.ALLELE_INVALID,
         Reason.SE_UNUSABLE,
         Reason.EFFECT_MISSING,
         Reason.Z_NONFINITE,
