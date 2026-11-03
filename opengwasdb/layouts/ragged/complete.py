@@ -76,7 +76,11 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
+from opengwasdb.layouts.ragged.zarr_csr import (
+    RAGGED_ZARR_PATH,
+    AnalysisAssociations,
+    RaggedCSRReader,
+)
 from opengwasdb.model.analyses import (
     Analysis,
     ancestry_impute_mask,
@@ -104,6 +108,7 @@ from opengwasdb.variants.normalise import (
     chromosome_sort_key,
     orient_to_canonical,
 )
+from opengwasdb.variants.routing import Duplicates, collapse_duplicates
 
 log = logging.getLogger(__name__)
 
@@ -154,12 +159,54 @@ class _ObservedAlidMaps:
     eaf_by_alid: dict[str, float]
 
 
-def _observed_alid_maps(obs: Any, src_alids: list[str]) -> _ObservedAlidMaps:
+def _admitted_observed(
+    obs: AnalysisAssociations,
+) -> tuple[AnalysisAssociations, Duplicates]:
+    """One Analysis's observed rows, each variant's duplicates resolved by
+    Association Admission's rule (`collapse_duplicates`, D5).
+
+    A Store holds a (variant, Analysis) once, but a Store a builder wrote
+    before D5 can hold one twice (a BESD probe naming a SNP twice). Rows that
+    agree are one association, collapsed to the first; rows that disagree are
+    all dropped, so the cell is missing and completion may impute it, rather
+    than whichever row a map wrote last.
+    """
+    found = collapse_duplicates(obs.variant_index, obs.z, obs.se)
+    if len(found.keep) == len(obs.variant_index):
+        return obs, found
+    keep = found.keep
+    return AnalysisAssociations(*(column[keep] for column in obs)), found
+
+
+def _warn_observed_duplicates(ai: int, found: Duplicates, src_alids: list[str]) -> None:
+    """Say what `_admitted_observed` dropped or collapsed of one Analysis's rows.
+
+    A completion writes no Admission record (ADR 0072), so the log is where
+    a source Store's duplicate cells are named.
+    """
+    if len(found.dropped):
+        first = [src_alids[int(i)] for i in found.conflicting[:5]]
+        log.warning(
+            "Analysis %d: %d observed row(s) at %d variant(s) disagree, so none is "
+            "carried (duplicate_conflicting); first: %s",
+            ai, len(found.dropped), len(found.conflicting), first,
+        )
+    if found.collapsed:
+        log.warning(
+            "Analysis %d: %d observed row(s) repeat an agreeing row and are collapsed "
+            "into it (duplicate_collapsed)",
+            ai, found.collapsed,
+        )
+
+
+def _observed_alid_maps(obs: AnalysisAssociations, src_alids: list[str]) -> _ObservedAlidMaps:
     """Map one Analysis's observed CSR rows onto ``{alid: z/se/eaf}``. Observed
     EAF is carried across the rebuild (ADR 0036): Reference Completion adds
     panel rows to an Analysis; it does not change what the source reported for
     the rows it already had. Both the block reader and Phase 3's assembly fold
-    the same observed rows this way."""
+    the same observed rows this way, each variant's duplicates resolved by D5
+    (`_admitted_observed`)."""
+    obs, _ = _admitted_observed(obs)
     obs_alid_to_z: dict[str, float] = {}
     obs_alid_to_se: dict[str, float] = {}
     obs_alid_to_eaf: dict[str, float] = {}
@@ -787,7 +834,7 @@ def _merge_checkpoint_rows(
     resumed from disk -- into `completion_quality` rows (batched) and the
     per-Analysis fill maps the CSR assembly layers onto the observed rows."""
     print("Merging block results from checkpoints...")
-    fills_by_analysis: dict[int, dict[str, tuple[float, float]]] = {}
+    fills: dict[int, _Fills] = {}
     quality_batch: list[tuple[int, str, float | None, int, int]] = []
     quality_batch_size = 100_000
     quality_count = 0
@@ -812,10 +859,49 @@ def _merge_checkpoint_rows(
             if len(quality_batch) >= quality_batch_size:
                 _flush_quality()
         for alid, ai, z, se in block_result.fills:
-            fills_by_analysis.setdefault(ai, {})[alid] = (z, se)
+            fills.setdefault(ai, _Fills()).add(alid, z, se)
     _flush_quality()
     print(f"Wrote {quality_count:,} completion quality rows")
+    fills_by_analysis = {ai: fills.pop(ai).resolved(ai) for ai in sorted(fills)}
     return fills_by_analysis, quality_count
+
+
+class _Fills:
+    """One Analysis's imputed cells, as the block checkpoints give them.
+
+    Two blocks can fill one variant: `_reference_alids` lists a variant once
+    however many blocks hold it. `resolved` keeps each variant once by
+    Association Admission's duplicate rule (D5): fills that agree are one, and
+    fills that disagree are all dropped, leaving the cell missing, rather than
+    keeping whichever block's checkpoint sorted last.
+    """
+
+    def __init__(self) -> None:
+        self.alids: list[str] = []
+        self.z: list[float] = []
+        self.se: list[float] = []
+
+    def add(self, alid: str, z: float, se: float) -> None:
+        self.alids.append(alid)
+        self.z.append(z)
+        self.se.append(se)
+
+    def resolved(self, ai: int) -> dict[str, tuple[float, float]]:
+        number: dict[str, int] = {}
+        codes = np.fromiter(
+            (number.setdefault(alid, len(number)) for alid in self.alids),
+            dtype=np.int64,
+            count=len(self.alids),
+        )
+        found = collapse_duplicates(codes, np.asarray(self.z), np.asarray(self.se))
+        if len(found.dropped):
+            log.warning(
+                "Analysis %d: %d fill(s) at %d variant(s) disagree across LD blocks, "
+                "so none is kept (duplicate_conflicting); first: %s",
+                ai, len(found.dropped), len(found.conflicting),
+                [self.alids[int(i)] for i in found.dropped[:5]],
+            )
+        return {self.alids[i]: (self.z[i], self.se[i]) for i in found.keep.tolist()}
 
 
 def _checkpoint_and_assemble(
@@ -871,7 +957,9 @@ def _reference_alids(
     return unique_ref_alids
 
 
-def _passthrough_analysis(obs: Any, src_idx_remap: list[int]) -> _AnalysisCompleted:
+def _passthrough_analysis(
+    obs: AnalysisAssociations, src_idx_remap: list[int]
+) -> _AnalysisCompleted:
     """An Analysis no completable block touches: its source association list
     remapped onto the merged axis, every row marked observed."""
     vi = np.array([src_idx_remap[v] for v in obs.variant_index.tolist()], dtype=np.int32)
@@ -981,7 +1069,8 @@ def _completed_analysis(
     0036), block fills as imputed, block positions neither produced as
     missing -- or, when no completable block touches the Analysis, its source
     association list untouched."""
-    obs = src_csr.get_analysis(ai)
+    obs, found = _admitted_observed(src_csr.get_analysis(ai))
+    _warn_observed_duplicates(ai, found, src_alids)
     if not block_ids:
         return _passthrough_analysis(obs, src_idx_remap)
     observed = _observed_alid_maps(obs, src_alids)

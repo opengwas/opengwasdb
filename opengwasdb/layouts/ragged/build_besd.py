@@ -87,6 +87,7 @@ from opengwasdb.variants import (
     write_variant_axis,
 )
 from opengwasdb.variants.normalise import MalformedIdentity, allele_fault, identity_fault
+from opengwasdb.variants.routing import collapse_duplicates
 
 log = logging.getLogger(__name__)
 
@@ -1034,6 +1035,26 @@ def _map_probe_rows(
     return rows
 
 
+def _resolved_duplicates(rows: _ProbeRows, gate: Gate) -> _ProbeRows:
+    """One probe's rows, each variant once, by Association Admission's
+    duplicate rule (`collapse_duplicates`, D5).
+
+    A BESD probe can name one SNP twice. Rows that agree on z and SE are one
+    association, collapsed to the first; rows that disagree are all dropped,
+    and logged by ESI row, where both used to be stored.
+    """
+    found = collapse_duplicates(
+        np.asarray(rows.variant_index, dtype=np.int64),
+        np.asarray(rows.z, dtype=np.float64),
+        np.asarray(rows.se, dtype=np.float64),
+    )
+    if len(found.keep) == len(rows.variant_index):
+        return rows
+    gate.duplicates([f"esi:{rows.esi_row[i]}" for i in found.dropped.tolist()], found.collapsed)
+    keep = found.keep.tolist()
+    return _ProbeRows(*([column[i] for i in keep] for column in rows))
+
+
 def _decide_encoding(csr: RaggedCSRWriter, n_analyses: int, *, n_plane: bool) -> StoreEncoding:
     """One encoding plan per build, decided from what the build holds
     (ADR 0037, issue #119).
@@ -1101,7 +1122,7 @@ def _ingest_probe(
         raw_snp_idx, betas, ses = _without_malformed(raw_snp_idx, betas, ses, axis.malformed, gate)
     sizes = None if sample_sizes is None else sample_sizes.sizes_for(probe.probe_id)
     admitted = _admitted(raw_snp_idx, betas, ses, gate, axis.eaf_by_esi)
-    rows = _map_probe_rows(*admitted, axis.esi_to_variant, gate)
+    rows = _resolved_duplicates(_map_probe_rows(*admitted, axis.esi_to_variant, gate), gate)
     if not rows.variant_index:
         _add_empty_analysis(csr)
         return _ProbeScopes(has_eaf=False, has_n=False), n_raw > 0

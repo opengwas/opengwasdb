@@ -6,8 +6,14 @@
   `build-hybrid` stored the last row in silence, including the last of
   GCST90295971's seven conflicting pairs, one of them of opposite sign.
   `build-dense` refused the build, and `build-ragged-ssf` dropped conflicting
-  rows with a line on stdout. The rule is Variant Routing's
-  `collapse_duplicates`; `Placed` reports what it collapsed and dropped.
+  rows with a line on stdout. The Hybrid's fold kept the later of two rows its
+  off-reference keys brought to one variant, `build-ragged-besd` stored both
+  rows of a probe that names one SNP twice, and `complete-ragged` kept the last
+  of a source Store's repeated cell and of two LD blocks' fills for one
+  variant. Each now applies the rule: the fold records its drops in the
+  Admission record (`parts/<index>.fold.json`), and a completion, which writes
+  no record, logs them. The rule is Variant Routing's `collapse_duplicates`;
+  `Placed` reports what it collapsed and dropped.
 - **An insertion and a deletion that share an ALID keep the insertion, where
   the source declares the reference allele.** The ALID sorts its alleles, so
   FinnGen's `1:827587` `G>GGGGCC` and `GGGGCC>G` are both `1:827587:G:GGGGCC`:

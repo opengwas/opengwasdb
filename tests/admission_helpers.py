@@ -85,7 +85,14 @@ def record_analyses(store: Path) -> list[dict]:
     return analyses
 
 
-def logged(record: Path, index: int) -> list[list[str]]:
-    """One Analysis's logged drops, header first."""
-    with gzip.open(record / "dropped" / f"{index}.tsv.gz", "rt", encoding="utf-8") as fh:
+def stage_part(record: Path, index: int, stage: str) -> dict:
+    """What a later stage of a build wrote for one Analysis: its part."""
+    part: dict = json.loads((record / "parts" / f"{index}.{stage}.json").read_text("utf-8"))
+    return part
+
+
+def logged(record: Path, index: int, stage: str | None = None) -> list[list[str]]:
+    """One Analysis's logged drops, header first: its gate's, or a later stage's."""
+    name = f"{index}.tsv.gz" if stage is None else f"{index}.{stage}.tsv.gz"
+    with gzip.open(record / "dropped" / name, "rt", encoding="utf-8") as fh:
         return [line.rstrip("\n").split("\t") for line in fh]

@@ -1778,3 +1778,77 @@ class TestRaggedLookupSeam:
         for name in ("z", "se", "eaf"):
             assert result[name].dtype.kind == "f"
         q.close()
+
+
+class TestObservedDuplicates:
+    """D5 in Reference Completion (issue #357): a source Store's repeated
+    (variant, Analysis) and a variant two LD blocks fill are resolved by
+    Association Admission's duplicate rule, where a map used to keep the last.
+    Rows that agree collapse to the first; rows that disagree are all dropped."""
+
+    _ALIDS = ["1:100:A:G", "1:200:C:T", "1:300:A:C"]
+
+    @staticmethod
+    def _observed():
+        from opengwasdb.layouts.ragged.zarr_csr import AnalysisAssociations
+
+        # Variant 0 twice, agreeing on z and SE but not on EAF; variant 1
+        # twice, disagreeing; variant 2 once.
+        return AnalysisAssociations(
+            variant_index=np.array([0, 1, 0, 1, 2], dtype=np.int32),
+            z=np.array([1.0, 2.0, 1.0, 3.0, 4.0], dtype=np.float32),
+            se=np.array([0.25, 0.5, 0.25, 0.5, 0.125], dtype=np.float32),
+            eaf=np.array([0.25, 0.5, 0.75, 0.5, 0.5], dtype=np.float32),
+        )
+
+    def test_the_block_reader_s_maps_hold_each_variant_by_the_rule(self):
+        from opengwasdb.layouts.ragged.complete import _observed_alid_maps
+
+        maps = _observed_alid_maps(self._observed(), self._ALIDS)
+
+        assert maps.z_by_alid == {"1:100:A:G": 1.0, "1:300:A:C": 4.0}
+        assert maps.eaf_by_alid == {"1:100:A:G": 0.25, "1:300:A:C": 0.5}
+
+    def test_an_analysis_no_block_touches_passes_through_each_variant_once(self, caplog):
+        from types import SimpleNamespace
+
+        from opengwasdb.layouts.ragged.complete import _completed_analysis
+
+        completed = _completed_analysis(
+            0,
+            src_csr=SimpleNamespace(get_analysis=lambda ai: self._observed()),
+            src_alids=self._ALIDS,
+            src_idx_remap=[0, 1, 2],
+            new_alid_to_idx={alid: i for i, alid in enumerate(self._ALIDS)},
+            block_ids=[],
+            block_canonical_alids={},
+            fills={},
+        )
+
+        assert completed.vi.tolist() == [0, 2]
+        assert completed.z.tolist() == [1.0, 4.0]
+        assert completed.eaf.tolist() == [0.25, 0.5]
+        assert "2 observed row(s) at 1 variant(s) disagree" in caplog.text
+
+    def test_fills_two_blocks_disagree_on_are_dropped(self, tmp_path):
+        import sqlite3
+
+        from opengwasdb.completion.checkpoint import (
+            BlockCompletionResult,
+            FillRow,
+            write_block_checkpoint,
+        )
+        from opengwasdb.completion.schema import create_completion_quality_table
+        from opengwasdb.layouts.ragged.complete import _merge_checkpoint_rows
+
+        blocks = tmp_path / "blocks"
+        blocks.mkdir()
+        for name, z in (("a", 1.5), ("b", 2.5)):
+            fills = [FillRow("1:100:A:G", 0, 1.0, 0.25), FillRow("1:200:C:T", 0, z, 0.5)]
+            write_block_checkpoint(blocks / f"{name}.npz", BlockCompletionResult(name, [], fills))
+        db = sqlite3.connect(tmp_path / "index.sqlite")
+        create_completion_quality_table(db)
+
+        fills_by_analysis, _ = _merge_checkpoint_rows(blocks, db)
+
+        assert fills_by_analysis == {0: {"1:100:A:G": (1.0, 0.25)}}

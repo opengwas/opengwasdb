@@ -740,7 +740,8 @@ def test_a_dense_build_stores_no_frequency_outside_the_interval(tmp_path: Path):
     )
     store, _ = _dense_from_records(tmp_path, source)
 
-    assert [(a["admitted"], a["eaf_made_absent"]) for a in record_analyses(store)] == [(2, 1), (2, 2)]
+    counts = [(a["admitted"], a["eaf_made_absent"]) for a in record_analyses(store)]
+    assert counts == [(2, 1), (2, 2)]
     with (store / "analyses.tsv").open(encoding="utf-8") as fh:
         rows = csv.DictReader(fh, delimiter="\t")
         scopes = {row["analysis_id"]: row["eaf_scope"] for row in rows}
@@ -787,3 +788,55 @@ def test_a_declared_maf_filter_s_drops_are_counted_and_not_logged(tmp_path: Path
     (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {"maf_missing": 1, "maf_below_threshold": 1}
     assert not (admission_record_for(store) / "dropped" / "0.tsv.gz").exists()
+
+
+def test_a_besd_probe_naming_a_snp_twice_is_resolved_by_d5(tmp_path: Path):
+    """A BESD probe can name one SNP twice: rows that agree are one association,
+    and rows that disagree (z 2 and 3) are both dropped and logged by ESI row,
+    where both used to be stored."""
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    snps: list[besd_fixtures.EsiRow] = [
+        {"chr": "1", "snp_id": f"rs{i}", "bp": 1_000_000 + 100_000 * i, "a1": "A", "a2": "G"}
+        for i in range(3)
+    ]
+    besd_fixtures.write_esi(fixture / "test.esi", snps)
+    probes = [{"chr": "1", "probe_id": "ENSG0", "bp": 1_050_000}]
+    besd_fixtures.write_epi(fixture / "test.epi", probes)
+    besd_fixtures.write_besd_sparse_3f(
+        fixture / "test.besd",
+        1,
+        [[(0, 0.2, 0.1), (1, 0.4, 0.1), (0, 0.3, 0.1), (1, 0.4, 0.1), (2, 0.1, 0.1)]],
+    )
+    store = tmp_path / "besd.opengwasdb"
+    result = build_ragged_from_besd(
+        fixture / "test", store, store_id="s", release_id="r",
+        association_coverage="cis_and_signals",
+    )
+
+    assert result.n_associations == 2
+    (analysis,) = record_analyses(store)
+    assert (analysis["examined"], analysis["admitted"]) == (5, 2)
+    assert analysis["dropped"] == {"duplicate_collapsed": 1, "duplicate_conflicting": 2}
+    assert logged(admission_record_for(store), 0)[1:] == [
+        ["esi:0", "duplicate_conflicting"], ["esi:0", "duplicate_conflicting"],
+    ]
+
+
+def test_a_later_stage_s_drops_join_its_analysis_once_however_often_it_runs(tmp_path: Path):
+    """The Hybrid's fold drops rows its gate admitted: its stage part is added
+    to the Analysis, and a stage run again replaces what it wrote."""
+    record = AdmissionRecord.open(tmp_path / "rec", ["A"], command="build-test")
+    _judge(record, "A", [0.3, 0.3, 0.3])
+    for _ in range(2):
+        with record.stage("A", "fold") as gate:
+            gate.duplicates(["1:5:A:G", "1:5:A:G"], 0)
+
+    counts = record.finish().counts["A"]
+
+    assert (counts.examined, counts.admitted) == (3, 1)
+    assert counts.dropped == {Reason.DUPLICATE_CONFLICTING: 2}
+    assert logged(tmp_path / "rec", 0, "fold")[1:] == [["1:5:A:G", "duplicate_conflicting"]] * 2
+    with pytest.raises(ValueError, match="identifier"):
+        with record.stage("A", "../fold"):
+            pass

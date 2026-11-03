@@ -7,12 +7,17 @@ Written beside the Store Release, never inside it, so a Store's bytes and its
     <directory>/parts/<index>.json        one Analysis's counts, while building
     <directory>/dropped/<index>.tsv.gz    one Analysis's logged drops, if any:
                                           `source_key`, `reason`, in source order
+    <directory>/parts/<index>.<stage>.json
+    <directory>/dropped/<index>.<stage>.tsv.gz
+                                          what a later stage dropped of the rows
+                                          the gate admitted (the Hybrid's fold)
 
 A part is written by whichever process judged the Analysis -- a forked Pass 2
 worker, typically -- temp-then-rename, so a part is either whole or absent.
 `AdmissionRecord.finish` reads one part per Analysis, refuses a record that
-lacks one, and writes `admission.json`. A resumed build keeps the parts its
-first run wrote; any other build discards whatever record it finds, because
+lacks one, adds each stage's part to it, and writes `admission.json`. A
+resumed build keeps the parts its first run wrote; any other build discards
+whatever record it finds, because
 the Store it described is the one this build replaces (the Store's own
 destination check decides whether it may).
 """
@@ -106,6 +111,24 @@ class AdmissionRecord:
         self._write_log(index, gate.dropped)
         self._write_part(index, gate.counts)
 
+    @contextmanager
+    def stage(self, analysis_id: str, name: str) -> Iterator[Gate]:
+        """A later stage's gate for one Analysis: the rows the Analysis's gate
+        admitted that ``name`` then dropped, through `Gate.unplaced` and
+        `Gate.duplicates`.
+
+        Written as that stage's own part and log when the block exits cleanly,
+        replacing whatever an interrupted run of the stage wrote, so a stage
+        run again for an Analysis counts its rows once.
+        """
+        if not name or not name.isidentifier():
+            raise ValueError(f"an Admission stage is named by an identifier, not {name!r}")
+        index = self.analyses.index(analysis_id)
+        gate = Gate(AnalysisRules(analysis_id))
+        yield gate
+        self._write_log(index, gate.dropped, name)
+        self._write_part(index, gate.counts, name)
+
     def finish(self) -> AdmissionSummary:
         """Read every part, write the summary, and return the counts.
 
@@ -120,7 +143,11 @@ class AdmissionRecord:
                 f"{len(missing)} Analysis/Analyses (first: {missing[:5]}); the build "
                 "that should have written them did not finish them"
             )
-        counts = {self.analyses[i]: part for i, part in parts.items() if part is not None}
+        counts = {
+            self.analyses[i]: sum(self._stages(i), part)
+            for i, part in parts.items()
+            if part is not None
+        }
         _write_json(self.directory / SUMMARY, self._summary(counts))
         return AdmissionSummary(counts=counts)
 
@@ -139,11 +166,20 @@ class AdmissionRecord:
         for name in (_PARTS, _DROPPED):
             shutil.rmtree(self.directory / name, ignore_errors=True)
 
-    def _part_path(self, index: int) -> Path:
-        return self.directory / _PARTS / f"{index}.json"
+    def _part_path(self, index: int, stage: str | None = None) -> Path:
+        name = f"{index}.json" if stage is None else f"{index}.{stage}.json"
+        return self.directory / _PARTS / name
 
-    def _write_log(self, index: int, dropped: list[tuple[str, Reason]]) -> None:
-        path = self.directory / _DROPPED / f"{index}.tsv.gz"
+    def _stages(self, index: int) -> list[AdmissionCounts]:
+        """The parts later stages wrote for one Analysis, in name order."""
+        paths = sorted((self.directory / _PARTS).glob(f"{index}.*.json"))
+        return [self._read_counts(index, path) for path in paths]
+
+    def _write_log(
+        self, index: int, dropped: list[tuple[str, Reason]], stage: str | None = None
+    ) -> None:
+        name = f"{index}.tsv.gz" if stage is None else f"{index}.{stage}.tsv.gz"
+        path = self.directory / _DROPPED / name
         if not dropped:
             path.unlink(missing_ok=True)
             return
@@ -155,9 +191,9 @@ class AdmissionRecord:
             fh.write(text.encode("utf-8"))
         _write_bytes(path, buffer.getvalue())
 
-    def _write_part(self, index: int, counts: AdmissionCounts) -> None:
+    def _write_part(self, index: int, counts: AdmissionCounts, stage: str | None = None) -> None:
         _write_json(
-            self._part_path(index),
+            self._part_path(index, stage),
             {"analysis_id": self.analyses[index], **counts.as_dict()},
         )
 
@@ -165,6 +201,9 @@ class AdmissionRecord:
         path = self._part_path(index)
         if not path.exists():
             return None
+        return self._read_counts(index, path)
+
+    def _read_counts(self, index: int, path: Path) -> AdmissionCounts:
         data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("analysis_id") != self.analyses[index]:
             raise RecordIncomplete(

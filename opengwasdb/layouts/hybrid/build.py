@@ -192,7 +192,6 @@ from opengwasdb.variants.routing import (
     Unmatched,
     VariantRouting,
     collapse_duplicates,
-    last_wins,
     route_variants,
 )
 from opengwasdb.variants.rsid import RsidConflictPolicy, RsidConflicts
@@ -202,11 +201,15 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# One column's off-reference spill: encoded uint64 keys, z, se, eaf, and the
-# side-file half of the hashed keys (row positions plus their raw strings).
+# One column's off-reference spill: encoded uint64 keys, z, se, eaf, each row's
+# `REFERENCE_*` code, and the side-file half of the hashed keys (row positions
+# plus their raw strings).
 _OffReferenceSpill = tuple[
-    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]
 ]
+# One column's Overflow rows: Variant Index, z, se, eaf and `REFERENCE_*` code,
+# which the fold needs to resolve an off-reference row reaching the same index.
+_Overflow = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
 __all__ = [
     "build_hybrid_from_vcf_manifest",
@@ -274,17 +277,6 @@ def read_reference_panel_alids(panel_path: str | Path) -> set[str]:
 _Component = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
 
-def _dedup_last_wins(
-    target: np.ndarray, z: np.ndarray, se: np.ndarray, eaf: np.ndarray
-) -> _Component:
-    """Keep the last stream occurrence per index: the fold's precedence for an
-    off-reference entry over an existing Overflow one on a shared index (#223)."""
-    if len(target) == 0:
-        return target, z, se, eaf
-    keep = last_wins(target)
-    return target[keep], z[keep], se[keep], eaf[keep]
-
-
 def _off_reference_spill(
     unmatched: Unmatched, se_divisor: float, gate: Gate
 ) -> _OffReferenceSpill:
@@ -303,10 +295,13 @@ def _off_reference_spill(
             np.empty(0, dtype=np.float32),
             np.empty(0, dtype=np.float32),
             np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.int8),
             np.empty(0, dtype=np.int64),
             [],
         )
     encoded = encode_keys(unmatched.keys)
+    # One raw key is one spelling of its alleles, so its rows are never a
+    # reversed indel; those meet only when the fold resolves two keys to one ALID.
     found = collapse_duplicates(encoded.values, unmatched.z, unmatched.se)
     gate.unplaced(
         Reason.DUPLICATE_CONFLICTING, [unmatched.keys[i] for i in found.dropped.tolist()]
@@ -314,11 +309,11 @@ def _off_reference_spill(
     gate.collapsed(found.collapsed)
     keep = found.keep
     keys, z, se = encoded.values[keep], unmatched.z[keep], unmatched.se[keep]
-    eaf = unmatched.eaf[keep]
+    eaf, reference = unmatched.eaf[keep], unmatched.reference[keep]
     lookup = encoded.hashed_lookup()
     hashed_index = np.flatnonzero(is_hashed(keys)).astype(np.int64)
     hashed_raw = [lookup[int(keys[position])] for position in hashed_index.tolist()]
-    return keys, z, apply_se_divisor(se, se_divisor), eaf, hashed_index, hashed_raw
+    return keys, z, apply_se_divisor(se, se_divisor), eaf, reference, hashed_index, hashed_raw
 
 
 def _resolve_column_hybrid(
@@ -327,13 +322,14 @@ def _resolve_column_hybrid(
     gate: Gate,
     axes: tuple[Sequence[str], ...],
     folds: bool,
-) -> tuple[_Component, _Component, _OffReferenceSpill]:
+) -> tuple[_Component, _Overflow, _OffReferenceSpill]:
     """Stream one study once, routing each association to the dense fill
     (on-panel), the ragged overflow (off-panel), or -- when the route table does
     not hold its source coordinate at all -- an off-reference bucket keyed by
     the raw coordinate. Returns ``(dense, overflow, off_reference)``,
-    each ``(index/key, z f32, se f32, eaf f32)`` deduped last-wins; ``eaf`` is
-    NaN where the source reports no frequency (ADR 0036).
+    each ``(index/key, z f32, se f32, eaf f32)`` with its duplicates resolved
+    (`collapse_duplicates`), the last two with each row's `REFERENCE_*` code;
+    ``eaf`` is NaN where the source reports no frequency (ADR 0036).
 
     The row's ``se_divisor`` divides every returned ``se``, dense and overflow
     alike (continuous-trait phenotype-SD standardisation, issue #18): a study's
@@ -364,9 +360,10 @@ def _resolve_column_hybrid(
             [], unmatched.z[:0], unmatched.se[:0], unmatched.eaf[:0], unmatched.reference[:0]
         )
     divisor = row.se_divisor
+    overflow_se = apply_se_divisor(overflow.se, divisor)
     return (
         (dense.index, dense.z, apply_se_divisor(dense.se, divisor), dense.eaf),
-        (overflow.index, overflow.z, apply_se_divisor(overflow.se, divisor), overflow.eaf),
+        (overflow.index, overflow.z, overflow_se, overflow.eaf, overflow.reference),
         _off_reference_spill(unmatched, divisor, gate),
     )
 
@@ -375,30 +372,35 @@ def _spill_hybrid_column(
     spill_dir: Path,
     col_idx: int,
     dense: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    overflow: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    overflow: _Overflow,
     off_reference: _OffReferenceSpill,
 ) -> None:
     """Spill one resolved study column: dense rows to ``{col}.npz`` (the layout the
     dense band-writer consumes), overflow to ``{col}.ovf.npz``, and off-reference
     associations -- keyed by one uint64 per raw source coordinate -- to
     ``{col}.unk.npz`` with a ``{col}.unk.raw`` side file for any key the packed
-    encoding could not represent."""
+    encoding could not represent. Overflow and off-reference rows carry their
+    `REFERENCE_*` codes, which the fold resolves their duplicates by."""
     d_rows, d_z, d_se, d_eaf = dense
-    o_idx, o_z, o_se, o_eaf = overflow
+    o_idx, o_z, o_se, o_eaf, o_reference = overflow
     for suffix, arrs in (
         ("", {"rows": d_rows, "z": d_z, "se": d_se, "eaf": d_eaf}),
-        (".ovf", {"variant_index": o_idx, "z": o_z, "se": o_se, "eaf": o_eaf}),
+        (
+            ".ovf",
+            {"variant_index": o_idx, "z": o_z, "se": o_se, "eaf": o_eaf, "reference": o_reference},
+        ),
     ):
         final = spill_dir / f"{col_idx}{suffix}.npz"
         tmp = spill_dir / f"{col_idx}{suffix}.tmp.npz"
         np.savez(tmp, **arrs)
         tmp.replace(final)
-    u_keys, u_z, u_se, u_eaf, u_hashed_index, u_hashed_raw = off_reference
+    u_keys, u_z, u_se, u_eaf, u_reference, u_hashed_index, u_hashed_raw = off_reference
     if len(u_keys):
         final = spill_dir / f"{col_idx}.unk.npz"
         tmp = spill_dir / f"{col_idx}.unk.tmp.npz"
         np.savez(
-            tmp, keys=u_keys, z=u_z, se=u_se, eaf=u_eaf, hashed_index=u_hashed_index
+            tmp, keys=u_keys, z=u_z, se=u_se, eaf=u_eaf, reference=u_reference,
+            hashed_index=u_hashed_index,
         )
         tmp.replace(final)
         if len(u_hashed_index):
@@ -1256,12 +1258,17 @@ def _merge_unknown_provenance(
 
 @dataclass(frozen=True)
 class _FoldContext:
+    """What every fold worker reads. ``record`` and ``shared_alids`` are where
+    a column's fold-stage drops are written and the axis that names them."""
+
     spill_dir: Path
     table_keys: np.ndarray
     table_shared_index: np.ndarray
     canonical_values: np.ndarray
     canonical_raw: np.ndarray
     old_to_new: np.ndarray | None
+    record: AdmissionRecord
+    shared_alids: Sequence[str]
     marker_dir: Path | None = None
 
 
@@ -1315,66 +1322,94 @@ def _folded_columns(state: CheckpointState | None) -> frozenset[int]:
     return frozenset(int(path.stem) for path in marker_dir.glob("*.done"))
 
 
-def _combine_overflow(
-    ex: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None,
-    off: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None,
-    needs_remap: bool,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
-    """Combine existing overflow and off-reference entries with last-wins precedence.
+@dataclass(frozen=True)
+class _FoldedOverflow:
+    """One column's Overflow after the fold, and the duplicates it resolved.
 
-    Off-reference entries are concatenated after existing overflow entries, so
-    they always win on duplicate shared indices (issue #223).
+    ``final`` is ``None`` when the existing spill stands as it is. The dropped
+    rows are named by the shared Variant Index each reached.
     """
-    if ex is not None and off is not None:
-        comb = tuple(np.concatenate([e, o]) for e, o in zip(ex, off, strict=True))
-        return _dedup_last_wins(*comb)
-    if off is not None:
-        return _dedup_last_wins(*off)
-    if ex is not None and needs_remap:
-        return _dedup_last_wins(*ex)
-    return None
+
+    final: _Overflow | None
+    conflicting: list[int]
+    reversed_indels: list[int]
+    collapsed: int
+
+
+def _combine_overflow(
+    ex: _Overflow | None, off: _Overflow | None, needs_remap: bool
+) -> _FoldedOverflow:
+    """Combine existing Overflow and off-reference entries, each shared index's
+    rows resolved by Admission's duplicate rule (`collapse_duplicates`, D5).
+
+    Two raw keys the fold resolves to one ALID -- an insertion and a deletion,
+    `A:G` and `G:A` -- or an off-reference entry reaching an index the column
+    already holds, are rows of one (variant, Analysis). Rows that agree collapse
+    to the first, existing ones first; rows that disagree are dropped, unless
+    they are a reversed indel whose source declared the reference.
+    """
+    parts = [part for part in (ex, off) if part is not None]
+    if not parts or (off is None and not needs_remap):
+        return _FoldedOverflow(None, [], [], 0)
+    index, z, se, eaf, reference = (np.concatenate(arrays) for arrays in zip(*parts, strict=True))
+    found = collapse_duplicates(index, z, se, reference)
+    keep = found.keep
+    return _FoldedOverflow(
+        (index[keep], z[keep], se[keep], eaf[keep], reference[keep]),
+        index[found.dropped].tolist(),
+        index[found.reversed_indels].tolist(),
+        found.collapsed,
+    )
 
 
 def _load_existing_overflow(
     spill_dir: Path, col: int, old_to_new: np.ndarray | None
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+) -> _Overflow | None:
     """Load and re-index existing overflow spill if present."""
     ovf_path = spill_dir / f"{col}.ovf.npz"
     if not ovf_path.exists():
         return None
     with np.load(ovf_path) as data:
         raw_vi = data["variant_index"].astype(np.int64)
-        z, se, eaf = data["z"], data["se"], data["eaf"]
+        z, se, eaf, reference = data["z"], data["se"], data["eaf"], data["reference"]
     vi = old_to_new[raw_vi] if old_to_new is not None else raw_vi
-    return vi, z, se, eaf
+    return vi, z, se, eaf, reference
 
 
-def _load_fold_existing(
-    ctx: _FoldContext, spill_dir: Path, col: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+def _load_fold_existing(ctx: _FoldContext, spill_dir: Path, col: int) -> _Overflow | None:
     """Load existing overflow unless an empty fold leaves it unchanged."""
     if ctx.old_to_new is None and not len(ctx.table_keys):
         return None
     return _load_existing_overflow(spill_dir, col, ctx.old_to_new)
 
 
-def _load_off_reference(
-    ctx: _FoldContext, spill_dir: Path, col: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+def _load_off_reference(ctx: _FoldContext, spill_dir: Path, col: int) -> _Overflow | None:
     """Load, verify, and resolve off-reference associations with searchsorted."""
     unk_path = spill_dir / f"{col}.unk.npz"
     if not unk_path.exists():
         return None
     with np.load(unk_path) as data:
         keys = data["keys"]
-        u_z, u_se, u_eaf = data["z"], data["se"], data["eaf"]
+        u_z, u_se, u_eaf, u_reference = data["z"], data["se"], data["eaf"], data["reference"]
         hashed_index = data["hashed_index"]
     canonical = CanonicalRawKeys(ctx.canonical_values, ctx.canonical_raw)
     _verify_hashed_rows(spill_dir, col, keys, hashed_index, canonical)
     keep, shared = lookup_matched(ctx.table_keys, ctx.table_shared_index, keys)
     if not len(keep):
         return None
-    return shared, u_z[keep], u_se[keep], u_eaf[keep]
+    return shared, u_z[keep], u_se[keep], u_eaf[keep], u_reference[keep]
+
+
+def _record_fold(ctx: _FoldContext, col: int, folded: _FoldedOverflow) -> None:
+    """Write what the fold dropped of one column's admitted rows, by ALID, as
+    the Admission record's `fold` stage for that Analysis."""
+    alids = ctx.shared_alids
+    with ctx.record.stage(ctx.record.analyses[col], "fold") as gate:
+        gate.duplicates(
+            [alids[i] for i in folded.conflicting],
+            folded.collapsed,
+            [alids[i] for i in folded.reversed_indels],
+        )
 
 
 def _fold_column(col: int) -> int:
@@ -1383,10 +1418,11 @@ def _fold_column(col: int) -> int:
     Remaps existing overflow entries if an axis shift occurred (old_to_new),
     verifies hashed keys against canonical raw keys (failing loudly on hash collision),
     looks up off-reference keys in the key table using sorted searchsorted, drops
-    unresolved keys, and deduplicates duplicate Variant Indices last-wins with
-    off-reference entries winning over existing overflow entries (ticket #223).
-    Writes the overflow spill once atomically (temp file then rename), and unlinks
-    the off-reference spill only after the overflow spill is safely written.
+    unresolved keys, and resolves the rows that share a Variant Index by D5
+    (`_combine_overflow`). Records what it dropped in the Admission record's
+    `fold` stage, then writes the overflow spill once atomically (temp file then
+    rename), and unlinks the off-reference spill only after the overflow spill
+    is safely written.
     """
     assert _fold_context is not None
     ctx = _fold_context
@@ -1402,11 +1438,16 @@ def _fold_column(col: int) -> int:
         _mark_folded(ctx, col)
         return col
 
-    final = _combine_overflow(ex, off, ctx.old_to_new is not None)
+    folded = _combine_overflow(ex, off, ctx.old_to_new is not None)
+    _record_fold(ctx, col, folded)
+    final = folded.final
     if final is not None:
         tmp_ovf = spill_dir / f"{col}.ovf.tmp.npz"
         try:
-            np.savez(tmp_ovf, variant_index=final[0], z=final[1], se=final[2], eaf=final[3])
+            np.savez(
+                tmp_ovf, variant_index=final[0], z=final[1], se=final[2], eaf=final[3],
+                reference=final[4],
+            )
             tmp_ovf.replace(ovf_path)
         except BaseException:
             tmp_ovf.unlink(missing_ok=True)
@@ -1458,6 +1499,8 @@ def _fold_unknown_spills(
     old_to_new: np.ndarray | None,
     n_workers: int,
     *,
+    record: AdmissionRecord,
+    shared_alids: Sequence[str],
     marker_dir: Path | None = None,
     already_folded: frozenset[int] = frozenset(),
 ) -> None:
@@ -1476,19 +1519,15 @@ def _fold_unknown_spills(
     worker writes, and ``already_folded`` the columns a previous run wrote one
     for: the two together are what lets an interrupted fold resume on the
     columns it has left, rather than re-remapping entries it already rewrote.
+
+    Each column writes what it dropped to ``record``'s `fold` stage, naming a
+    row by its ALID on ``shared_alids``, the axis the fold folds onto.
     """
-    table_keys = table.keys
-    table_shared = table.shared_index
-    table_keys.flags.writeable = False
-    table_shared.flags.writeable = False
-
-    canonical_values = canonical.values
-    canonical_raw = canonical.raw
-    canonical_values.flags.writeable = False
-    canonical_raw.flags.writeable = False
-
-    if old_to_new is not None:
-        old_to_new.flags.writeable = False
+    table_keys, table_shared = table.keys, table.shared_index
+    canonical_values, canonical_raw = canonical.values, canonical.raw
+    shared = (table_keys, table_shared, canonical_values, canonical_raw)
+    for array in (*shared, *(() if old_to_new is None else (old_to_new,))):
+        array.flags.writeable = False
 
     global _fold_context
     _fold_context = _FoldContext(
@@ -1498,6 +1537,8 @@ def _fold_unknown_spills(
         canonical_values=canonical_values,
         canonical_raw=canonical_raw,
         old_to_new=old_to_new,
+        record=record,
+        shared_alids=shared_alids,
         marker_dir=marker_dir,
     )
     pending = [col for col in range(n_analyses) if col not in already_folded]
@@ -1689,6 +1730,7 @@ def _fold_under(
     run must leave the map its indices were built against rather than the
     pre-fold one `_prepare_build` may have re-written.
     """
+    record = _admission_record(prepared, options, resume=True)
     _fold_unknown_spills(
         prepared.spill_dir,
         prepared.n_analyses,
@@ -1696,9 +1738,13 @@ def _fold_under(
         fold.canonical,
         old_to_new=fold.old_to_new,
         n_workers=options.n_workers,
+        record=record,
+        shared_alids=fold.shared_sorted,
         marker_dir=_fold_marker_dir(state),
         already_folded=_folded_columns(state),
     )
+    # The fold's drops are each Analysis's too, so the summary is written again.
+    record.finish()
     np.save(dense_to_shared_path(prepared.staged.path), fold.dense_to_shared)
     return _update_partition(
         prepared, fold.off_panel, fold.shared_sorted, fold.dense_to_shared, fold.hg38_to_source

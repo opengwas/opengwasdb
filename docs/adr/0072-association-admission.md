@@ -84,11 +84,23 @@ name the decisions issue #357 took on the rules that differed.
 | `off_axis` | no axis of the Store holds its variant, and nothing will place it later | yes | D6 |
 
 The duplicate rule is Variant Routing's `collapse_duplicates`, applied after
-the rules above. Each builder uses it: the Dense VCF and Hybrid builds through
-routing (an axis's rows and the Hybrid's off-reference keys), and Ragged SSF and
-`build-dense` on their own rows. It replaces routing's last-wins, Ragged SSF's
-own rule and `build-dense`'s refusal. The fold's merge of an off-reference entry
-with an existing Overflow one still keeps the later (issue #223).
+the rules above, wherever two rows can reach one (variant, Analysis):
+- the Dense VCF and Hybrid builds, through routing: an axis's rows, and the
+  Hybrid's off-reference keys;
+- the Hybrid's fold, where two raw keys resolve to one ALID, or an
+  off-reference entry reaches an index the column already holds;
+- Ragged SSF and `build-dense`, on their own rows, and Ragged BESD, on a probe
+  that names one SNP twice;
+- Reference Completion, on a source Store's repeated cell and on a variant
+  two LD blocks fill.
+
+It replaces routing's last-wins, the fold's later-wins (issue #223), Ragged
+SSF's own rule, BESD's keeping both rows, completion's last-written map entry
+and `build-dense`'s refusal. The fold runs after Pass 2's gates have written
+their parts, so it writes its own: `parts/<index>.fold.json` and
+`dropped/<index>.fold.tsv.gz`, added to the Analysis when the record is
+finished. A fold run again for a column replaces them. A completion writes no
+record, so it logs a source Store's duplicates and the fills it drops.
 
 Two conflicting rows can be two variants. An insertion and a deletion at one
 position share an ALID, because the ALID sorts its alleles: BMI_IRN's
