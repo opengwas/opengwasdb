@@ -8,8 +8,8 @@ row-admission rule this generalises, and ADR 0053's checkpoint record.
 ## Context
 
 Every builder decided for itself which source rows to store, and each decided
-differently. The inventory (`reports/357-proposal.md` §1) found 19 rules, nine
-of which behaved differently by layout:
+differently. Issue #357's inventory found 19 rules, nine of which behaved
+differently by layout:
 
 - an unusable SE was substituted by one reader, dropped silently by three,
   stored as NaN or `inf` by the VCF reader and raised on by `build-dense`;
@@ -24,7 +24,8 @@ one of them with the opposite sign, with no record of either.
 
 ## Decision
 
-**Association Admission is one module, `opengwasdb.admission`.**
+**Association Admission is one module, `opengwasdb.admission`.** D1 to D8 below
+name the decisions issue #357 took on the rules that differed.
 
 - **The rule set** (`rules.py`) judges a batch of an Analysis's rows and gives
   each dropped row exactly one `Reason`. First the rules that decide whether a row
@@ -70,7 +71,7 @@ one of them with the opposite sign, with no record of either.
 | Reason | A row is dropped when | Logged | Since |
 |---|---|---|---|
 | `chromosome_missing` | its chromosome is an empty cell or a missing-value token (`.`, `NA`, `NaN`, `None`) | yes | #365 |
-| `allele_invalid` | an allele is empty or holds a character other than A, C, G or T | yes | #365 |
+| `allele_invalid` | an allele, upper-cased (ADR 0075), is empty or holds a character other than A, C, G or T | yes | #365 |
 | `se_unusable` | its reported SE is missing, not positive or not finite | yes | slice 4 (Ragged), D3 (every reader) |
 | `effect_missing` | it has a usable SE but no effect | yes | slice 5 |
 | `z_nonfinite` | its z is infinite, beside a usable SE | yes | D4 |
@@ -118,8 +119,8 @@ the Source Reader read, so it can say how much of a source's frequency column
 the Store does not hold. A `.esi` frequency is a variant's, which every probe
 shares, so `build-ragged-besd` logs the file's count once instead.
 
-`admission.json`'s `"rules"` names the rule set's version, and each decision
-below that changes what a rule admits moves it.
+`admission.json`'s `"rules"` names the rule set's version, `admission/9`. A
+change to what a rule admits, or to what the record counts, moves it.
 
 ## Consequences
 
