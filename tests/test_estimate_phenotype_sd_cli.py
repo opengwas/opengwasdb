@@ -401,12 +401,18 @@ def test_a_row_with_no_effect_is_not_evidence_for_any_tier():
     from opengwasdb.build.phenotype_sd_pipeline import _gather_evidence
     from opengwasdb.model.enums import StoredEffectScale
     from opengwasdb.readers.fake import FakeReader
-    from opengwasdb.readers.interface import ReaderAssociation
+    from opengwasdb.readers.interface import ReaderAssociation, ReferenceAllele
 
     reader = FakeReader(
         associations=[
-            ReaderAssociation("1", 100, "A", "G", 2.0, 0.1, StoredEffectScale.SD, eaf=0.3),
-            ReaderAssociation("1", 200, "A", "G", math.nan, 0.2, StoredEffectScale.SD, eaf=0.4),
+            ReaderAssociation(
+                "1", 100, "A", "G", 2.0, 0.1, StoredEffectScale.SD, eaf=0.3,
+                reference=ReferenceAllele.UNDECLARED,
+            ),
+            ReaderAssociation(
+                "1", 200, "A", "G", math.nan, 0.2, StoredEffectScale.SD, eaf=0.4,
+                reference=ReferenceAllele.UNDECLARED,
+            ),
         ]
     )
 

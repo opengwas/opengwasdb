@@ -41,8 +41,8 @@ def ragged_store_path(tmp_path):
     manifest.write_text(
         "analysis_index\tanalysis_id\ttrait_id\t"
         "analysis_label\ttrait_ontology_id\ttrait_ontology_label\ttrait_chr\ttrait_bp\t"
-        "n\ttissue\tcontext\tmhc\tfiltered_file\n"
-        "0\tt1\tT1\tGENE1\tENSEMBL:ENSG1\tEnsembl\t1\t150\t1000\tBlood\t\tFALSE\tt1.tsv.gz\n",
+        "n\ttissue\tcontext\tmhc\tfiltered_file\tsource_genome_build\n"
+        "0\tt1\tT1\tGENE1\tENSEMBL:ENSG1\tEnsembl\t1\t150\t1000\tBlood\t\tFALSE\tt1.tsv.gz\tGRCh38\n",
         encoding="utf-8",
     )
     store_path = tmp_path / "ragged.opengwasdb"

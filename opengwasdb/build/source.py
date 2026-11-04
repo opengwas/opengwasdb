@@ -11,6 +11,7 @@ from pathlib import Path
 
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.model.maf_policy import MafPolicy, parse_maf_policy
+from opengwasdb.readers.orientation import swap_one
 from opengwasdb.variants import CanonicalVariant, VariantNormalisationError, orient_to_canonical
 from opengwasdb.variants.normalise import IdentityFaults, MalformedIdentity, identity_fault
 
@@ -150,11 +151,7 @@ def _normalise_row(row: dict[str, str], row_number: int) -> NormalisedAssociatio
 
     eaf_text = field("eaf", "effect_allele_frequency", required=False)
     eaf = _parse_float(eaf_text, row_number, "eaf") if eaf_text is not None else None
-    if eaf is not None and orientation.flipped:
-        eaf = 1.0 - eaf
-
-    if orientation.flipped:
-        z = -z
+    z, eaf = swap_one(orientation.flipped, z, eaf)
 
     scale_text = field("stored_effect_scale", "effect_scale", required=False)
     try:

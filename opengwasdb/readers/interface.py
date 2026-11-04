@@ -1,23 +1,22 @@
-"""The Source Reader interface (issue #19; extended by issues #20 and #21).
+"""The Source Reader interface (issues #19, #20, #21, #56).
 
 `opengwasdb-stores` declares one `source_reader_capability` string per Source
 Collection (ADR-0009, e.g. `"opengwasdb.gwas-vcf"`). This module defines the
-interface that string resolves to (see `opengwasdb.readers.registry`): the
-things the pipeline needs from source data -- streaming every variant
-(issue #20, a builder's union-variant pass), streaming associations for the
-build, and extracting allele frequency and standard error at a requested set
-of sites for annotation (ancestry assignment, phenotype-SD estimation --
-issue #21).
+interface that string resolves to (see `opengwasdb.readers.registry`): every
+projection of a source the pipeline reads, each in the source's declared
+assembly unless the reader was opened aligned to another:
 
-The interface is structural (`typing.Protocol`), not an ABC -- this package
-has no abstract-base-class precedent elsewhere, and Protocol lets
-`GwasVcfReader` and `FakeReader` satisfy it without a shared base class,
-consistent with the codebase's existing preference for dataclasses and duck
-typing over inheritance.
+- `stream_variants`, every variant, for a builder's union-variant pass;
+- `stream_associations`, one association per row, for Variant Routing's Pass 2;
+- `stream_batches`, the same associations as columns, for a Ragged build;
+- `stream_metric_chunks`, identity and statistics in blocks, for the resolver;
+- `extract_at_sites`, A1 frequency and SE at requested sites, for ancestry
+  assignment and phenotype-SD estimation.
 
-The dense and hybrid builders (issue #20) and ancestry assignment / phenotype-SD
-estimation (issue #21) now resolve a reader through this interface instead of
-importing a source module directly.
+Every reader presents them from its rows through `opengwasdb.readers.rows`, so
+each is oriented to A1 by one rule. The interface is structural
+(`typing.Protocol`), not an ABC: every reader and `FakeReader` satisfy it
+without a shared base class.
 """
 
 from __future__ import annotations
@@ -25,13 +24,20 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Protocol
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.stats import FrequencyTally
 from opengwasdb.variants.normalise import IdentityFaults
+
+if TYPE_CHECKING:
+    from opengwasdb.readers.rows import MetricsChunk, ReaderBatch
+
+#: A ``CHROM POS`` file of the sites an extraction asks for, or none.
+RegionsFile = str | Path | None
 
 
 class ImputationScoreStatus(StrEnum):
@@ -124,6 +130,11 @@ class ReferenceAllele(StrEnum):
     REF = "ref"
     ALT = "alt"
 
+    @property
+    def declared(self) -> bool:
+        """Whether the format names either allele the genome's reference."""
+        return self is not ReferenceAllele.UNDECLARED
+
 
 @dataclass(frozen=True)
 class ReaderAssociation:
@@ -146,7 +157,8 @@ class ReaderAssociation:
     receives from its caller (ultimately the build manifest, validated
     against issue #16's schema) and attaches to every association it yields.
     `reference` says which of `ref` and `alt` the source declares to be the
-    reference allele, if it declares one.
+    reference allele, if it declares one. It is keyword-only and has no
+    default: every reader states its format's declaration.
     """
 
     chromosome: str
@@ -159,7 +171,7 @@ class ReaderAssociation:
     eaf: float | None = None
     # Present only with an independent provider-backed declaration (#175).
     imputation_score: ImputationScore = ImputationScore()
-    reference: ReferenceAllele = ReferenceAllele.UNDECLARED
+    reference: ReferenceAllele = field(kw_only=True)
 
     def __post_init__(self) -> None:
         # An unusable `se` (NaN, not positive, not finite) is the source's, as
@@ -222,8 +234,7 @@ class StreamTally:
 
 
 class SourceReader(Protocol):
-    """One Source Format's reader: association streaming plus per-site AF/SE
-    lookup for annotation."""
+    """One Source Format's reader: every projection of one source."""
 
     def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
         """Yield every association in the source, oriented per ReaderAssociation.
@@ -247,11 +258,36 @@ class SourceReader(Protocol):
         """
         ...
 
-    def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
+    def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
+        """`stream_associations`' rows as columns, in blocks, in the same order.
+
+        The same z, SE and frequency on A1, with each row's ALID, its place in
+        the source and its rsid; ``tally`` as `stream_associations` fills it.
+        """
+        ...
+
+    def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
+        """Every row naming a variant, with its statistics, a block at a time.
+
+        The resolver's projection: a row is kept with whatever statistics it
+        has, so ancestry assignment and phenotype-SD estimation each apply
+        their own eligibility rule.
+        """
+        ...
+
+    def extract_at_sites(
+        self, alids: Iterable[str], *, region: str | None = None, regions_file: RegionsFile = None
+    ) -> dict[str, SiteMetrics]:
         """Return `{canonical_alid: SiteMetrics}` for the requested sites found
         in the source. A requested alid absent from the result was not found
         or was dropped (palindromic, unparseable AF/SE, ...) -- callers must
         not assume every requested alid comes back.
+
+        ``region`` restricts the extraction to one chromosome of the source, as
+        the source names it. ``regions_file`` is a ``CHROM POS`` file of the
+        requested sites' positions, built once by a caller extracting from many
+        sources: a reader that can seek by position reads only those, and any
+        other reads the whole source, with the same answer.
         """
         ...
 

@@ -98,8 +98,8 @@ def statistics_swap(source: SourceVariantKey, row: LiftedRow) -> bool:
     """Whether the lift swapped which allele is canonical, so z and EAF must follow.
 
     A source reader signs a statistic against the source-assembly canonical A1
-    (``min`` of the upper-cased ``ref`` and ``alt``, see `stream_vcf_associations`
-    and `identity_allele`). A reverse-strand block
+    (``min`` of the upper-cased ``ref`` and ``alt``, see `identity_allele`), by
+    `opengwasdb.readers.orientation`'s rule. A reverse-strand block
     complements both alleles, and a complement reverses their alphabetical
     order -- or, for a palindromic pair, maps A1 onto A2 -- so the projected
     alleles a Dense or Hybrid build stores may call the *other* allele A1. The

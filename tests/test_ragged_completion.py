@@ -478,8 +478,8 @@ class TestCompletionFiles:
             fh.write("1\t1100000\tC\tT\t-0.2\t0.03\t0.45\n")
         manifest = tmp_path / "ssf_manifest.tsv"
         manifest.write_text(
-            "analysis_index\tanalysis_id\tfiltered_file\tn\tassigned_ancestry\n"
-            "0\tanalysis_a\ta.tsv.gz\t1000\tEUR\n",
+            "analysis_index\tanalysis_id\tfiltered_file\tn\tassigned_ancestry\tsource_genome_build\n"
+            "0\tanalysis_a\ta.tsv.gz\t1000\tEUR\tGRCh38\n",
             encoding="utf-8",
         )
         observed = tmp_path / "ssf_obs.opengwasdb"
@@ -663,7 +663,7 @@ def _write_ssf_manifest(path: Path, rows: list[dict]) -> None:
         "analysis_index", "analysis_id", "trait_id",
         "analysis_label", "trait_ontology_id", "trait_ontology_label",
         "trait_chr", "trait_bp", "n", "tissue", "context", "mhc", "filtered_file",
-        "assigned_ancestry",
+        "assigned_ancestry", "source_genome_build",
     ]
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\t".join(header) + "\n")
@@ -800,7 +800,8 @@ class TestCompletedStoreKeepsObservedStatistics:
         _write_ssf_manifest(manifest, [
             {"analysis_index": 0, "analysis_id": "analysis_a", "trait_id": "T1",
              "trait_chr": "1", "trait_bp": 975_000, "n": 5000, "mhc": "FALSE",
-             "filtered_file": "analysis_a.tsv.gz", "assigned_ancestry": "EUR"},
+             "filtered_file": "analysis_a.tsv.gz", "assigned_ancestry": "EUR",
+             "source_genome_build": "GRCh38"},
         ])
 
         observed = tmp_path / "obs.opengwasdb"
@@ -898,10 +899,12 @@ class TestAncestryMatchedRaggedCompletion:
         _write_ssf_manifest(manifest, [
             {"analysis_index": 0, "analysis_id": "eur_trait", "trait_id": "T1",
              "trait_chr": "1", "trait_bp": 975_000, "n": 5000, "mhc": "FALSE",
-             "filtered_file": "eur_trait.tsv.gz", "assigned_ancestry": "EUR"},
+             "filtered_file": "eur_trait.tsv.gz", "assigned_ancestry": "EUR",
+             "source_genome_build": "GRCh38"},
             {"analysis_index": 1, "analysis_id": "afr_trait", "trait_id": "T2",
              "trait_chr": "1", "trait_bp": 975_000, "n": 5000, "mhc": "FALSE",
-             "filtered_file": "afr_trait.tsv.gz", "assigned_ancestry": "AFR"},
+             "filtered_file": "afr_trait.tsv.gz", "assigned_ancestry": "AFR",
+             "source_genome_build": "GRCh38"},
         ])
 
         observed_store = tmp_path / "obs.opengwasdb"

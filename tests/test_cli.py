@@ -349,8 +349,8 @@ def test_cli_info_and_validate_format_json(tmp_path, source_path):
 
     warn_manifest = tmp_path / "warn_manifest.tsv"
     warn_manifest.write_text(
-        "analysis_index\tanalysis_id\tsample_size\tsource_file\n"
-        "0\ttrait_warn\t1000\ttrait_warn.tsv.gz\n",
+        "analysis_index\tanalysis_id\tsample_size\tsource_file\tsource_genome_build\n"
+        "0\ttrait_warn\t1000\ttrait_warn.tsv.gz\tGRCh38\n",
         encoding="utf-8",
     )
     warn_store_path = tmp_path / "warn-store.opengwasdb"

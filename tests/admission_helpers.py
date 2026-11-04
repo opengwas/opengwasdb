@@ -48,8 +48,8 @@ def ragged_ssf_store(
     floor = ("", "") if maf_threshold is None else ("\tmaf_threshold", f"\t{maf_threshold}")
     manifest = tmp_path / "manifest.tsv"
     manifest.write_text(
-        f"analysis_index\tanalysis_id\tfiltered_file{floor[0]}\n"
-        f"0\ttrait_a\ttrait_a.tsv.gz{floor[1]}\n",
+        f"analysis_index\tanalysis_id\tfiltered_file\tsource_genome_build{floor[0]}\n"
+        f"0\ttrait_a\ttrait_a.tsv.gz\tGRCh38{floor[1]}\n",
         encoding="utf-8",
     )
     store = tmp_path / "ssf.opengwasdb"

@@ -286,14 +286,14 @@ def _ssf_fixture(tmp_path: Path) -> tuple[Path, Path]:
     columns = [
         "analysis_index", "analysis_id", "trait_id", "analysis_label",
         "trait_ontology_id", "trait_ontology_label", "trait_chr", "trait_bp",
-        "n", "tissue", "context", "mhc", "filtered_file",
+        "n", "tissue", "context", "mhc", "filtered_file", "source_genome_build",
     ]
     row = {
         "analysis_index": 0, "analysis_id": "trait_a", "trait_id": "T1",
         "analysis_label": "GENE1", "trait_ontology_id": "ENSEMBL:ENSG00001",
         "trait_ontology_label": "Ensembl", "trait_chr": "1", "trait_bp": 150_000,
         "n": 5000, "tissue": "Liver", "context": "", "mhc": "FALSE",
-        "filtered_file": "trait_a.tsv.gz",
+        "filtered_file": "trait_a.tsv.gz", "source_genome_build": "GRCh38",
     }
     manifest.write_text(
         "\t".join(columns) + "\n" + "\t".join(str(row[c]) for c in columns) + "\n",

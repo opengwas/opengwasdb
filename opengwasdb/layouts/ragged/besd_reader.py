@@ -251,10 +251,11 @@ def read_besd_probe(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """One probe's ``(snp_indices, betas, ses)``, read by seeking, not by loading.
 
-    :class:`BESDReader` holds the whole matrix in memory, which a build that
-    visits every probe wants. A resolver visits one probe per Analysis, in
-    worker processes, and eQTLGen's `.besd` is 2 GB (issue #282): each call
-    here reads the header, two column offsets and the probe's own slices.
+    :class:`BESDReader` holds the whole matrix in memory. The BESD Source
+    Reader reads one probe per Analysis -- in a resolver's worker processes,
+    and once per probe in a build -- and eQTLGen's `.besd` is 2 GB (issue
+    #282): each call here reads the header, two column offsets and the
+    probe's own slices.
     The arrays are exactly :meth:`BESDReader.get_probe_associations`' for the
     same probe. A probe index outside the file, corrupt column offsets (a
     negative start, or an SE block before the beta block), or a slice the file

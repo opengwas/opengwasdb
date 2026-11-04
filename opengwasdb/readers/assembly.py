@@ -13,12 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from opengwasdb.build.liftover import normalise_build
-from opengwasdb.readers.besd import BESD_CAPABILITY
-from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
-
-#: Readers with an allele-aware hg19->hg38 projection. BESD aligns its `.esi`
-#: rows through the GWAS-VCF projection itself (issue #282).
-_LIFTOVER_CAPABILITIES = frozenset({GWAS_VCF_CAPABILITY, BESD_CAPABILITY})
+from opengwasdb.readers.registry import lifting_capabilities
 
 
 class UnsupportedAssemblyConfiguration(ValueError):
@@ -44,7 +39,9 @@ def _optional_build(value: str | None) -> str | None:
     return normalise_build(value)
 
 
-def _declared_aliases(row: Mapping[str, str], context: str) -> str | None:
+def declared_build(row: Mapping[str, str], context: str) -> str | None:
+    """The build a row declares, under either spelling, normalised; None where
+    it declares none. Two spellings declaring different builds raise."""
     genome_build = _optional_build(row.get("source_genome_build"))
     assembly_alias = _optional_build(row.get("source_assembly"))
     if genome_build is not None and assembly_alias is not None and genome_build != assembly_alias:
@@ -59,7 +56,7 @@ def declared_source_build(
     row: Mapping[str, str], *, default: str | None, context: str
 ) -> str:
     """Resolve one row's authoritative build without guessing (issue #277)."""
-    resolved = _declared_aliases(row, context)
+    resolved = declared_build(row, context)
     if resolved is not None:
         return resolved
     fallback = _optional_build(default)
@@ -83,7 +80,7 @@ def assembly_plan(
     reference = normalise_build(reference_build)
     if source == reference:
         return AssemblyPlan(source, reference)
-    if capability not in _LIFTOVER_CAPABILITIES:
+    if capability not in lifting_capabilities():
         raise UnsupportedAssemblyConfiguration(
             f"unsupported cross-build configuration for {capability!r}: "
             f"{source}->{reference}; this reader has no liftover seam"

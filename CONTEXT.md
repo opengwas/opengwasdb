@@ -214,6 +214,14 @@ The source-reported imputation quality or information score for a variant associ
 **INFO Scope**:
 Where an Imputation INFO value applies: Variant when one value is shared for a Store variant, Association when values may differ by Analysis-variant association, or Absent when INFO is not stored.
 
+**Source Reader**:
+What reads one Analysis's source for the pipeline, whatever its Source Format. It parses the source into rows, each oriented to the canonical A1 in the source's declared assembly, and presents every projection a build or annotation stage reads from those rows: its variants, its associations one by one (Variant Routing's Pass 2) or as columns (a Ragged build's batches), its statistics in blocks (the resolver), and its frequency and SE at requested sites (ancestry assignment, phenotype-SD estimation). Opened lifted, it presents the last two on the reference build; a lift that makes the other allele A1 re-orients a row by the same rule. Every caller opens one through the registry by its Source Reader Capability, never by its class.
+_Avoid_: parser, loader, adapter (an adapter is one Source Format's half of a reader).
+
+**Source Reader Capability**:
+The string a Source Collection declares for how its sources are read (`opengwasdb.gwas-vcf`, `opengwasdb.gwas-ssf`, `opengwasdb.finngen-r13`, `opengwasdb.column-map`, `opengwasdb.besd`), which the registry resolves to a Source Reader. It also says what the source needs to be read: a Column Map for `opengwasdb.column-map`, the `.epi` probe an Analysis is for `opengwasdb.besd`, and whether the reader can be lifted onto the reference build (GWAS-VCF and BESD can).
+_Avoid_: format, reader type.
+
 **Column Map**:
 A data file that says how one Source Collection's tabular summary statistics are read: the provider column holding each field, and the collection's conventions. The conventions cover missing-value tokens, which allele the effect and frequency refer to, how positions and chromosomes are written, and the genome build. A collection is read through one when its Analyses declare the `opengwasdb.column-map` Source Reader Capability; the caller names the map by path or by a built-in's name (`gwas-ssf`, `finngen-r13`). Every convention is declared, and nothing is defaulted. A value the reader cannot honour is refused, and the map's checksum is part of every Resolution Record read through it (ADR 0063). A dedicated reader remains only for a format a map cannot describe (GWAS-VCF, BESD).
 _Avoid_: reader config, schema, converter — a map replaces the converter; it is not one.
