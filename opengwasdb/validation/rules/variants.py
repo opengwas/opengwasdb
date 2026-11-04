@@ -119,7 +119,7 @@ def _adjacent_repeats(path: Path) -> int:
     """How many keys of the sorted ALID index equal the key before them.
 
     Read a window at a time, each window mapped and released on its own, so the
-    index -- 369 MB on OGS-00006 -- is never held whole; one key of overlap carries
+    index -- 387 MB on OGS-00006 -- is never held whole; one key of overlap carries
     the comparison across a window boundary.
     """
     n_keys = len(np.load(path, mmap_mode="r"))
