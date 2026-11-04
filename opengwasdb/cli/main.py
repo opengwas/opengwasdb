@@ -651,13 +651,12 @@ def check_observed_view_command(
     pair: it is refused (exit 2), not ignored.
 
     Exits 0 when everything agrees and 1 when anything does not; the verdict is
-    written to --output either way; a Ragged pair also exits 1 on se_mismatch when
-    SE is residual-coded, because complete-ragged refits it (#301). Exits 2 without
-    a verdict when the pair cannot be checked: a mixed-layout pair, or a layout the
-    check does not support (it checks Dense, Hybrid and Ragged pairs), a source
-    that is not Observed-Only, a target that is not Reference-Completed, a Store
-    whose arrays cannot be opened or decoded, or, for a Ragged pair, no --ld-panel,
-    or a panel or ancestry the target does not record.
+    written to --output either way. Exits 2 without a verdict when the pair
+    cannot be checked: a mixed-layout pair, or a layout the check does not
+    support (it checks Dense, Hybrid and Ragged pairs), a source that is not
+    Observed-Only, a target that is not Reference-Completed, a Store whose arrays
+    cannot be opened or decoded, or, for a Ragged pair, no --ld-panel, or a panel
+    or ancestry the target does not record.
     """
     from opengwasdb.validation.observed_view import ObservedViewRefused, check_observed_view
 

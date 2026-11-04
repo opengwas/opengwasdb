@@ -66,17 +66,18 @@ from opengwasdb.completion.regions import (
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
     EAF_BASELINE,
+    SE_EXCEPTION,
+    SE_EXCEPTION_BUDGET,
+    SE_MISSING,
     AssociationCodec,
     CellValues,
     Placement,
-    SeEncoding,
     StoreEncoding,
-    fit_se,
     storable,
     write_eaf_reference,
 )
 from opengwasdb.encoding.association_codec import log_se_out_of_range
-from opengwasdb.encoding.planes import write_encoded_planes
+from opengwasdb.encoding.planes import SE_COEFFICIENTS, write_encoded_planes
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import (
@@ -116,7 +117,6 @@ from opengwasdb.variants.routing import Duplicates, collapse_duplicates
 log = logging.getLogger(__name__)
 
 _COMPRESSOR = store_arrays.compressor()
-_ASSOC_CHUNK = store_arrays.ASSOCIATION_SEQUENCE_CHUNK
 
 _LD_PANEL_ID = "eur-hg38-gpm"
 
@@ -524,11 +524,13 @@ class _CompletedCsr:
 class _EncodePlan:
     """The completed release's encoding (ADR 0038 §4) and the per-variant EAF
     data it adds: the panel reference for imputed cells and the carried
-    baseline for observed ones (ADR 0037 §2/§4)."""
+    baseline for observed ones (ADR 0037 §2/§4). A residual SE plane carries
+    its source's `se_coefficients` too, never a refit (issue #301)."""
 
     encoding: StoreEncoding
     eaf_reference: np.ndarray | None
     out_baseline: np.ndarray | None
+    se_coefficients: np.ndarray | None
 
 
 @dataclass
@@ -1178,11 +1180,13 @@ def _encode_plan(
     ancestry: str,
     manifest: StoreManifest,
     axis: _MergedAxis,
+    n_analyses: int,
 ) -> _EncodePlan:
     """The completed release's encoding: its source's plan, since completion
     writes into the source's arrays (ADR 0038 §4) -- with `eaf_reference`
-    added when the panel has frequencies (ADR 0037 §4, issue #113) and the
-    source's EAF baseline carried across the variant remap (ADR 0037 §2)."""
+    added when the panel has frequencies (ADR 0037 §4, issue #113), the
+    source's EAF baseline carried across the variant remap (ADR 0037 §2) and,
+    under a residual SE plan, the source's SE model (issue #301)."""
     # Asked for whatever the source declares, `absent` included: a release
     # whose Analyses reported no frequency still gains imputed cells, and
     # those cells have the panel's frequency (issue #113). It gets an
@@ -1195,7 +1199,14 @@ def _encode_plan(
     if src_baseline is not None:
         out_baseline = np.full(len(axis.variants), np.nan, dtype=np.float32)
         out_baseline[np.asarray(axis.src_idx_remap, dtype=np.int64)] = src_baseline
-    return _EncodePlan(encoding=encoding, eaf_reference=eaf_reference, out_baseline=out_baseline)
+    return _EncodePlan(
+        encoding=encoding,
+        eaf_reference=eaf_reference,
+        out_baseline=out_baseline,
+        se_coefficients=(
+            _source_se_coefficients(src, n_analyses) if encoding.se.is_residual else None
+        ),
+    )
 
 
 def _flatten_csr(csr: _CompletedCsr) -> _FlatCsr:
@@ -1268,10 +1279,10 @@ def _write_csr_id_arrays(root: Any, flat: _FlatCsr) -> None:
 
 
 def _write_statistic_planes(
-    root: Any, encode_plan: _EncodePlan, flat: _FlatCsr, n_analyses: int
-) -> None:
+    root: Any, encode_plan: _EncodePlan, flat: _FlatCsr, analysis_ids: list[str]
+) -> dict[str, Any] | None:
     """The z, EAF and SE planes, encoded together under the source's plan, and
-    the release attrs.
+    the release attrs; returns the SE exception record under a residual plan.
 
     Completion writes into the source's arrays, so it encodes with the
     source's plan (ADR 0038 §4); the one addition is `eaf_reference`. Observed
@@ -1279,32 +1290,28 @@ def _write_statistic_planes(
     per variant and applied on read (ADR 0037 §4); an observed cell whose
     source reported none stays absent. The per-variant baseline travels with
     the values across the variant remap rather than being recomputed from them,
-    so a value decoded from the source re-encodes to the same code. A residual
-    SE model is fitted on the frequencies a reader decodes, the panel's on an
-    imputed cell.
+    so a value decoded from the source re-encodes to the same code.
+
+    A residual SE plane is coded against the source's `se_coefficients`, never
+    a refit (issue #301): a refit re-points every observed cell's code at a new
+    model, which moved all 135,596 observed SEs of three Chen 2023 Analyses.
+    Each observed cell is `carried`, so it decodes to exactly its source value,
+    and an imputed cell outside the range is an exact exception. That may take
+    an Analysis past the 2% budget; it is recorded and named, never met by a
+    refit or a `float16` plane, either of which would move observed values.
     """
-    encoding = encode_plan.encoding
+    encoding, n_analyses = encode_plan.encoding, len(analysis_ids)
     analysis_index = np.searchsorted(flat.offsets[1:], np.arange(len(flat.se)), side="right")
     cells = CellValues(
         flat.z, flat.se, None if encoding.eaf.is_absent else flat.eaf, imputed=flat.imp
     )
     at = Placement.sequence(0, flat.vi, analysis_index, n_analyses)
-    eaf = {"eaf_baseline": encode_plan.out_baseline, "eaf_reference": encode_plan.eaf_reference}
-    coefficients = None
-    if encoding.se.is_residual:
-        preliminary = AssociationCodec(encoding.with_se(SeEncoding("float16")), **eaf)
-        decoded_eaf = preliminary.round_trip(cells, at, where="complete-ragged").eaf
-        coefficients = fit_se(
-            flat.se,
-            decoded_eaf,
-            analysis_index,
-            n_analyses=n_analyses,
-            compressor=_COMPRESSOR,
-            chunks=_ASSOC_CHUNK,
-        )[0]
-    encoded = AssociationCodec(encoding, se_coefficients=coefficients, **eaf).encode(
-        cells, at, where="complete-ragged"
-    )
+    encoded = AssociationCodec(
+        encoding,
+        eaf_baseline=encode_plan.out_baseline,
+        eaf_reference=encode_plan.eaf_reference,
+        se_coefficients=encode_plan.se_coefficients,
+    ).encode(cells, at, where="complete-ragged", carried=flat.imp == 0)
     write_encoded_planes(
         root,
         encoding,
@@ -1312,7 +1319,7 @@ def _write_statistic_planes(
         role=ArrayRole.ASSOCIATION_SEQUENCE,
         compressor=_COMPRESSOR,
         eaf_baseline=encode_plan.out_baseline,
-        se_coefficients=coefficients,
+        se_coefficients=encode_plan.se_coefficients,
     )
     if encode_plan.eaf_reference is not None:
         write_eaf_reference(
@@ -1325,6 +1332,80 @@ def _write_statistic_planes(
     root.attrs["completion_state"] = "reference_completed"
     root.attrs["n_analyses"] = n_analyses
     root.attrs["n_associations"] = len(flat.se)
+    if not encoding.se.is_residual:
+        return None
+    return _se_exception_record(encoded.se, analysis_index, flat.imp, analysis_ids)
+
+
+def _se_exception_record(
+    codes: np.ndarray, analysis_index: np.ndarray, imputed: np.ndarray, analysis_ids: list[str]
+) -> dict[str, Any]:
+    """Each Analysis's share of SEs held as exact exceptions, in `analyses.tsv`
+    order, and the Analyses above the 2% budget (spec §6a, issue #301).
+
+    The budget is a build's criterion for choosing a residual range. Completion
+    keeps its source's range and model, so it measures the share it produced
+    rather than enforcing it: the record and `_report_se_exceptions` are how a
+    breach by imputed cells becomes visible. An Analysis with no SE has no
+    share, recorded as null rather than 0.
+    """
+    held, exceptional = codes != SE_MISSING, codes == SE_EXCEPTION
+    is_imputed = np.asarray(imputed) == 1
+
+    def per_analysis(mask: np.ndarray) -> list[int]:
+        return [int(n) for n in np.bincount(analysis_index[mask], minlength=len(analysis_ids))]
+
+    n_se, n_exceptions = per_analysis(held), per_analysis(exceptional)
+    n_imputed_se = per_analysis(held & is_imputed)
+    n_imputed_exceptions = per_analysis(exceptional & is_imputed)
+    rates = [
+        exact / n if n else None for exact, n in zip(n_exceptions, n_se, strict=True)
+    ]
+    analyses = [
+        {
+            "analysis_id": analysis_id,
+            "n_se": n_se[i],
+            "n_exceptions": n_exceptions[i],
+            "n_imputed_se": n_imputed_se[i],
+            "n_imputed_exceptions": n_imputed_exceptions[i],
+            "exception_rate": rates[i],
+        }
+        for i, analysis_id in enumerate(analysis_ids)
+    ]
+    over = [
+        analysis_id
+        for analysis_id, rate in zip(analysis_ids, rates, strict=True)
+        if rate is not None and rate > SE_EXCEPTION_BUDGET
+    ]
+    return {"budget": SE_EXCEPTION_BUDGET, "analyses": analyses, "over_budget": over}
+
+
+def _report_se_exceptions(record: dict[str, Any]) -> None:
+    """The exception tally on the console, and each Analysis over budget by name."""
+    analyses = record["analyses"]
+    total = sum(entry["n_exceptions"] for entry in analyses)
+    imputed = sum(entry["n_imputed_exceptions"] for entry in analyses)
+    cells = sum(entry["n_se"] for entry in analyses)
+    print(
+        f"SE exceptions: {total:,} of {cells:,} SEs ({imputed:,} on imputed cells); "
+        f"{len(record['over_budget']):,} Analyses over the {record['budget']:.0%} budget"
+    )
+    over = [entry for entry in analyses if entry["analysis_id"] in set(record["over_budget"])]
+    if not over:
+        return
+    log.warning(
+        "complete-ragged: %s Analyses hold more than %s of their SEs as exact exceptions, "
+        "the residual budget (spec §6a); the source's SE model and range are kept, never "
+        "refitted or narrowed to float16 (issue #301): %s",
+        f"{len(over):,}",
+        f"{record['budget']:.0%}",
+        "; ".join(
+            f"{entry['analysis_id']}: {entry['exception_rate']:.2%} "
+            f"({entry['n_exceptions']:,} of {entry['n_se']:,}, "
+            f"{entry['n_imputed_exceptions']:,} imputed)"
+            for entry in over
+        ),
+    )
 
 
 def _write_completed_zarr(
@@ -1333,21 +1414,26 @@ def _write_completed_zarr(
     csr: _CompletedCsr,
     analyses: list[Analysis],
     n_variants: int,
-) -> None:
+) -> dict[str, Any] | None:
     """Phase 4: write the completed CSR as the store's ragged zarr group, then
     its variant-centric index (ADR 0060). The index is rebuilt from the
     completed planes, never carried over from the observed source: the
     completion remaps the variant axis and adds imputed cells, so a copied
-    index would answer with the source's rows."""
+    index would answer with the source's rows. Returns the SE exception record
+    of a residual plane, reported here (issue #301)."""
     print("Writing zarr CSR...")
     ragged_path = staged.path / RAGGED_ZARR_PATH
     ragged_path.mkdir(parents=True, exist_ok=True)
     root = store_arrays.open_group_for_write(ragged_path, "w")
-    flat = _stored_flat(_flatten_csr(csr), [analysis.analysis_id for analysis in analyses])
+    analysis_ids = [analysis.analysis_id for analysis in analyses]
+    flat = _stored_flat(_flatten_csr(csr), analysis_ids)
     _write_csr_id_arrays(root, flat)
-    _write_statistic_planes(root, encode_plan, flat, len(analyses))
+    se_exceptions = _write_statistic_planes(root, encode_plan, flat, analysis_ids)
+    if se_exceptions is not None:
+        _report_se_exceptions(se_exceptions)
     print("Building variant-centric index...")
     build_variant_index(staged.path, n_axis=n_variants)
+    return se_exceptions
 
 
 def _write_top_hits_and_analyses(
@@ -1407,9 +1493,11 @@ def _completed_manifest(
     axis: _MergedAxis,
     csr: _CompletedCsr,
     encode_plan: _EncodePlan,
+    se_exceptions: dict[str, Any] | None,
 ) -> StoreManifest:
     """Phase 6 finalization: the completed release's manifest, with its
-    provenance recording what completion added to its source."""
+    provenance recording what completion added to its source -- and, for a
+    residual SE plane, each Analysis's exception share (issue #301)."""
     return completed_release_manifest(
         manifest,
         encoding=encode_plan.encoding,
@@ -1425,6 +1513,7 @@ def _completed_manifest(
             cis_window_bp=cis_window_bp,
             n_imputed=csr.total_imputed,
             n_missing=csr.total_missing,
+            **({} if se_exceptions is None else {"se_exceptions": se_exceptions}),
         ),
         by_variant=recorded_provenance(staged.path),
     )
@@ -1450,8 +1539,8 @@ def _completion_result(
 
 
 def _run_completion(
-    source_path: Path,
-    dest_path: Path,
+    src: Path,
+    dst: Path,
     ld_dir: Path,
     *,
     ancestry: str,
@@ -1468,8 +1557,6 @@ def _run_completion(
     """The shared core: block discovery, checkpointed LD-block completion and
     CSR assembly, encoding, metadata and manifest, sequenced inside the
     staging context that makes a completed release atomic."""
-    src = Path(source_path)
-    dst = Path(dest_path)
     manifest, source_format_version = _open_source(src)
 
     with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
@@ -1487,8 +1574,10 @@ def _run_completion(
             thresh=thresh,
             region_cap_bp=region_cap_bp,
         )
-        encode_plan = _encode_plan(src, ld_dir, ancestry, manifest, axis)
-        _write_completed_zarr(staged, encode_plan, csr, state.src_analyses, len(axis.variants))
+        encode_plan = _encode_plan(src, ld_dir, ancestry, manifest, axis, state.n_analyses)
+        se_exceptions = _write_completed_zarr(
+            staged, encode_plan, csr, state.src_analyses, len(axis.variants)
+        )
         _write_top_hits_and_analyses(staged, state, encode_plan, ancestry=ancestry)
         staged.write_manifest(
             _completed_manifest(
@@ -1504,6 +1593,7 @@ def _run_completion(
                 axis=axis,
                 csr=csr,
                 encode_plan=encode_plan,
+                se_exceptions=se_exceptions,
             )
         )
         result = _completion_result(dst, state, axis, csr)
@@ -1523,3 +1613,26 @@ def _source_eaf_baseline(source_path: Path) -> np.ndarray | None:
     if EAF_BASELINE not in group:
         return None
     return np.asarray(group[EAF_BASELINE][:], dtype=np.float32)
+
+
+def _source_se_coefficients(source_path: Path, n_analyses: int) -> np.ndarray:
+    """The observed release's `se_coefficients`, which every completed cell is
+    coded against (issue #301).
+
+    Read, like the EAF baseline, rather than refitted: a model fitted to the
+    completed rows decodes every observed code to a value its source never
+    held. A residual source without a finite `(n_analyses, 2)` model cannot be
+    completed in its own encoding (ADR 0038 §4), so it is refused here.
+    """
+    group = store_arrays.open_group(Path(source_path) / RAGGED_ZARR_PATH)
+    if SE_COEFFICIENTS not in group:
+        raise ValueError(
+            f"{source_path}: its se plane is int8_residual but it holds no se_coefficients"
+        )
+    coefficients = np.asarray(group[SE_COEFFICIENTS][:], dtype=np.float32)
+    if coefficients.shape != (n_analyses, 2) or not np.all(np.isfinite(coefficients)):
+        raise ValueError(
+            f"{source_path}: se_coefficients must be finite with shape ({n_analyses}, 2), "
+            f"not {coefficients.shape}"
+        )
+    return coefficients

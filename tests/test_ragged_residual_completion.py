@@ -6,9 +6,8 @@ observed cells must round-trip under the completed plan and imputed cells --
 whose frequencies are the LD panel's -- must decode to a finite EAF and a
 finite, positive physical SE. The Dense and Hybrid layouts each have an
 end-to-end test that completes a residual source against a panel; Ragged had
-none, even though `complete.py` refits `se_coefficients` against the
-post-completion decoded EAF (imputed cells included) and re-encodes the CSR
-from scratch -- a path no fixture exercised (issue #140 AC5/AC9).
+none, even though `complete.py` re-encodes the CSR from scratch -- a path no
+fixture exercised (issue #140 AC5/AC9).
 
 The fixture below is meaningful on three axes:
 
@@ -27,11 +26,11 @@ The fixture below is meaningful on three axes:
   `validate_store`'s sampled check.
 
 `format_version` is the source's; completion writes into the source's arrays
-and therefore its encoding (ADR 0038 §4). Ragged completion differs from Dense
-completion in one respect the assertions below deliberately exercise: it
-*re-fits* coefficients over the completed association list (observed plus
-imputed) rather than reusing the source's, so the round-trip tolerance is
-against the source's own decoded values, not a reused model.
+and therefore its encoding (ADR 0038 §4). Like Dense completion, Ragged
+completion codes every cell against the source's own `se_coefficients` rather
+than refitting them over the completed rows, so an observed cell reads back
+exactly the value the source decodes (issue #301, whose own tests are in
+`test_ragged_completion_keeps_observed_se.py`).
 """
 
 from __future__ import annotations
@@ -340,9 +339,9 @@ def test_completion_preserves_the_residual_plan_and_side_arrays(scenario) -> Non
 
 
 def test_observed_cells_round_trip_through_the_completed_plan(scenario) -> None:
-    """Every observed cell decodes back within the residual contract, and the
-    two exact-exception cells come back bit-for-bit (their values are held in
-    the exception table, not approximated)."""
+    """Every observed cell decodes back exactly as the source decodes it (issue
+    #301), and the two exact-exception cells stay exceptions (their values are
+    held in the exception table, not approximated)."""
     expected = scenario.expected_observed()
     root = _completed_root(scenario)
     assert len(root["se_exception_index"][:]) == len(_EXACT_EXCEPTION), (
@@ -362,18 +361,9 @@ def test_observed_cells_round_trip_through_the_completed_plan(scenario) -> None:
                 if alid not in expected[analysis_id]:
                     continue  # a panel-added row, checked by the imputed test
                 exp_se, exp_eaf = expected[analysis_id][alid]
-                if _is_exact_exception(analysis_id, alid):
-                    assert float(se) == exp_se, f"{alid}: exception cell must stay exact"
-                else:
-                    assert exp_se > 0
-                    rel = abs(float(se) - exp_se) / exp_se
-                    assert rel <= 0.01, f"{alid}: observed se round-trip off by {rel:.4f}"
+                assert exp_se > 0
+                assert float(se) == exp_se, f"{alid}: observed se {se} is not the source's {exp_se}"
                 np.testing.assert_allclose(float(eaf), exp_eaf, rtol=1e-6, err_msg=alid)
-
-
-def _is_exact_exception(analysis_id: str, alid: str) -> bool:
-    k = _EXACT_EXCEPTION[analysis_id]
-    return alid == f"1:{_source_bp(k)}:A:G"
 
 
 def test_imputed_cells_decode_panel_eaf_and_finite_positive_se(scenario) -> None:
@@ -447,12 +437,15 @@ def test_top_hit_index_is_consistent_with_the_decoded_plane_even_when_stale(
     """An index holding pre-quantisation source values -- the stale-index
     defect class issue #163 closed for Hybrid -- fails the exhaustive
     index-vs-plane comparison above, which checks every returned row where
-    `validate_store` samples only a bounded subset of each tier."""
+    `validate_store` samples only a bounded subset of each tier.
+
+    The stale values are the SEs the source rows carry, before the source's
+    own quantisation: since issue #301 the source's *decoded* values are what
+    the completed plane decodes, so they could not differ from it."""
     from opengwasdb.top_hits import threshold_key
 
     stale_store = tmp_path / "stale.opengwasdb"
     shutil.copytree(scenario.completed, stale_store)
-    source_expected = scenario.expected_observed()
 
     root = open_store(stale_store).arrays(mode="r+")
     group = root[f"top_hits/{threshold_key(5e-8)}"]
@@ -467,7 +460,8 @@ def test_top_hit_index_is_consistent_with_the_decoded_plane_even_when_stale(
         pos = np.searchsorted(slice_variants, v)
         assert slice_variants[pos] == v
         alid = _variant_alid(stale_store, int(slice_variants[pos]))
-        stale[i] = source_expected["a" if a == 0 else "b"][alid][0]
+        source_row = (int(alid.split(":")[1]) - _BP_FIRST) // _BP_STEP
+        stale[i] = scenario.expected_se["a" if a == 0 else "b"][source_row]
     decoded = group["se"][:].astype(np.float32)
     assert not np.array_equal(stale, decoded), (
         "fixture must differ from the plane to test the check"
@@ -559,11 +553,7 @@ def test_phewas_lookup_and_range_by_analysis_read_decoded_csr(scenario) -> None:
             if status != "observed":
                 continue  # imputed physical values are checked against the decoded CSR above
             exp_se, exp_eaf = expected[analysis_id][alid]
-            if alid == f"1:{_source_bp(_EXACT_EXCEPTION[analysis_id])}:A:G":
-                assert float(se) == exp_se, f"{alid}: exact-exception cell must stay exact"
-            else:
-                rel = abs(float(se) - exp_se) / exp_se
-                assert rel <= 0.01, f"{alid}: observed se off by {rel:.4f}"
+            assert float(se) == exp_se, f"{alid}: observed se is not the source's (#301)"
 
     observed_alid = f"1:{_source_bp(5)}:A:G"
     # Analysis `b` leaves the k=36 position unobserved; the panel imputes it.
