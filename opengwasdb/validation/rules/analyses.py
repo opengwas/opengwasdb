@@ -95,17 +95,18 @@ def analysis_id(target: Target) -> Iterator[str]:
 
 
 def completion_declared(target: Target) -> Iterator[str]:
-    """An Analysis completed against no ancestry gained no imputed cells.
+    """Every count is an integer, and an Analysis completed against no ancestry
+    gained no imputed cells.
 
     The two columns are written by different steps -- `completed_against` from the
     ancestry-match filter, `completion_n_imputed_total` from the per-block quality
     rollup -- so their disagreement is what a filter applied to one and not the
     other looks like from outside (ADR 0028). It is also what `eaf_scope` is
     derived from, which is why it is checked here rather than left to the reader.
+    A count that is not an integer is reported on every row, completed or not: the
+    rule holding the count to the mask cannot read it, and leaves it to this one.
     """
     for row in target.analyses.rows:
-        if row.get("completed_against", ""):
-            continue
         try:
             n_imputed = int(row.get("completion_n_imputed_total", "") or 0)
         except ValueError:
@@ -113,6 +114,8 @@ def completion_declared(target: Target) -> Iterator[str]:
                 f"analyses.tsv row {row.get('analysis_id', '')!r} has a non-integer "
                 f"completion_n_imputed_total {row.get('completion_n_imputed_total', '')!r}"
             )
+            continue
+        if row.get("completed_against", ""):
             continue
         if n_imputed:
             yield (

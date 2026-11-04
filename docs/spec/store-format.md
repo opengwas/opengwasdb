@@ -1853,7 +1853,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `analyses.retired_columns` | release | check | no retired column is present |
 | `analyses.analysis_index` | release | check | one row per `analysis_index`, covering exactly `0..n-1` |
 | `analyses.analysis_id` | release | check | no `analysis_id` names two rows |
-| `analyses.completion_declared` | release | check | an Analysis completed against no ancestry declares no imputed cells |
+| `analyses.completion_declared` | release | check | every `completion_n_imputed_total` is an integer, and an Analysis completed against no ancestry declares no imputed cells |
 | `analyses.vocabularies` | release | check | each controlled column holds only its vocabulary's values |
 | `analyses.top_hit_count_columns` | release | check | the Top-Hit Count columns are present and non-negative integers |
 | `csr.arrays` | sequence | check | `offsets`, `variant_index`, `z` and `se` are present |

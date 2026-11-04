@@ -180,6 +180,30 @@ def test_a_sequence_whose_metadata_denies_its_imputed_cells_fails(
     )
 
 
+def test_a_completed_analysis_whose_count_is_not_an_integer_fails(
+    completed_ragged: Path,
+) -> None:
+    """A count the declaration rule cannot read is reported, not passed over.
+
+    An Analysis completed against an ancestry is the one the declaration is held to
+    the mask for, so its count is the one that must be legible.
+    """
+    store = completed_ragged
+    table = read_analyses(store / "analyses.tsv")
+    row = next(r for r in table.rows if r["completed_against"])
+    assert int(row["completion_n_imputed_total"] or 0), "the row must declare imputed cells"
+    row["completion_n_imputed_total"] = "not-an-integer"
+    write_analyses(store / "analyses.tsv", table)
+
+    result = validate_store(store)
+
+    assert result.failed() == {"analyses.completion_declared"}, result.errors
+    assert result.errors == [
+        f"analyses.tsv row {row['analysis_id']!r} has a non-integer "
+        "completion_n_imputed_total 'not-an-integer'"
+    ]
+
+
 def test_a_sequence_without_its_missing_counts_fails(completed_ragged: Path) -> None:
     """A completed sequence records how many cells completion left missing, as a grid does."""
     store = completed_ragged

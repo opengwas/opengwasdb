@@ -146,7 +146,7 @@ def declaration_matches_mask(
             index = int(row.get("analysis_index", ""))
             declared = int(row.get("completion_n_imputed_total", "") or 0)
         except ValueError:
-            continue  # reported by the analyses rules
+            continue  # analyses.completion_declared and analyses.analysis_index report it
         if 0 <= index < len(imputed_per_analysis):
             message = _disagreement(row, declared, int(imputed_per_analysis[index]), label)
             if message is not None:
