@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from opengwasdb.readers.gwas_ssf import _METRICS_COLUMNS
-from opengwasdb.readers.gwas_vcf import is_palindromic
+from opengwasdb.readers.orientation import is_palindromic
 from opengwasdb.readers.tabular import (
     MetricsChunk,
     stream_projected_metric_chunks,

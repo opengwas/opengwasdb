@@ -236,6 +236,43 @@ def orient_to_canonical(
     return Orientation(variant=variant, flipped=(effect != a1))
 
 
+def oriented_alid(
+    chromosome: str, position: int, effect: str, other: str
+) -> tuple[str, bool] | None:
+    """`orient_to_canonical`'s ALID and flip, for a row whose identity is already judged.
+
+    For a reader's per-row hot path: ``chromosome`` is `normalise_chromosome`'s
+    and ``position`` positive, and both alleles have passed `allele_fault`, so
+    `identity_allele` spells them as `normalise_allele` would. ``None`` where
+    the two are one allele, which `orient_to_canonical` refuses. A contract
+    test holds the two to one answer.
+    """
+    snv = _SNV_ORIENTATION.get((effect, other))
+    if snv is not None:
+        first, second, flipped = snv
+        return f"{chromosome}:{position}:{first}:{second}", flipped
+    first, second = identity_allele(effect), identity_allele(other)
+    if first == second:
+        return None
+    if first < second:
+        return f"{chromosome}:{position}:{first}:{second}", False
+    return f"{chromosome}:{position}:{second}:{first}", True
+
+
+#: `oriented_alid`'s answer for every pair of distinct one-base alleles, in
+#: either case: ``(A1, A2, flipped)``, formed by `identity_allele`.
+_SNV_ORIENTATION: dict[tuple[str, str], tuple[str, str, bool]] = {
+    (effect, other): (
+        min(identity_allele(effect), identity_allele(other)),
+        max(identity_allele(effect), identity_allele(other)),
+        identity_allele(effect) > identity_allele(other),
+    )
+    for effect in _ONE_BASE
+    for other in _ONE_BASE
+    if identity_allele(effect) != identity_allele(other)
+}
+
+
 def orient_or_drop(
     chromosome: str | None,
     position: int | str | None,

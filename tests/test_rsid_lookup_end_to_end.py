@@ -70,7 +70,8 @@ def _build(tmp_path: Path, layout: str) -> Path:
     if layout == "ragged":
         manifest = tmp_path / "ragged_manifest.tsv"
         manifest.write_text(
-            "analysis_index\tanalysis_id\tfiltered_file\tn\n0\tstudy1\tstudy1.tsv.gz\t10000\n",
+            "analysis_index\tanalysis_id\tfiltered_file\tn\tsource_genome_build\n"
+            "0\tstudy1\tstudy1.tsv.gz\t10000\tGRCh38\n",
             encoding="utf-8",
         )
         build_ragged_from_ssf(

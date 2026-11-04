@@ -32,6 +32,7 @@ from opengwasdb.readers import (
     GwasSsfReader,
     GwasVcfReader,
     ReaderAssociation,
+    ReferenceAllele,
     SiteMetrics,
     UnsignedZScoreError,
     af_only,
@@ -40,6 +41,7 @@ from opengwasdb.readers import (
     resolve_reader,
     site_metrics_arrays,
 )
+from opengwasdb.readers.besd import BESD_CAPABILITY
 
 
 def _write_vcf(path: Path, body: str, study_type: str = "Continuous") -> None:
@@ -149,7 +151,8 @@ def test_known_capabilities_returns_sorted_registered_set():
     caps = known_capabilities()
     assert isinstance(caps, tuple)
     assert caps == (
-        COLUMN_MAP_CAPABILITY, FINNGEN_R13_CAPABILITY, GWAS_SSF_CAPABILITY, GWAS_VCF_CAPABILITY
+        BESD_CAPABILITY, COLUMN_MAP_CAPABILITY, FINNGEN_R13_CAPABILITY, GWAS_SSF_CAPABILITY,
+        GWAS_VCF_CAPABILITY,
     )
 
 
@@ -158,7 +161,7 @@ def test_resolve_reader_rejects_unknown_capability(tmp_path):
         ValueError,
         match=(
             r"unknown source reader capability '.*'; "
-            r"known: opengwasdb\.column-map, opengwasdb\.finngen-r13, "
+            r"known: opengwasdb\.besd, opengwasdb\.column-map, opengwasdb\.finngen-r13, "
             r"opengwasdb\.gwas-ssf, opengwasdb\.gwas-vcf"
         ),
     ):
@@ -218,6 +221,7 @@ def _fake_reader() -> FakeReader:
                 z=-2.0,
                 se=0.5,
                 stored_effect_scale=StoredEffectScale.SD,
+                reference=ReferenceAllele.UNDECLARED,
             ),
             ReaderAssociation(
                 chromosome="1",
@@ -227,6 +231,7 @@ def _fake_reader() -> FakeReader:
                 z=2.0,
                 se=0.5,
                 stored_effect_scale=StoredEffectScale.SD,
+                reference=ReferenceAllele.UNDECLARED,
             ),
         ],
         sites={
@@ -272,6 +277,7 @@ def _malformed_fake_reader() -> FakeReader:
                 se=0.5,
                 stored_effect_scale=StoredEffectScale.SD,
                 eaf=1.5,
+                reference=ReferenceAllele.UNDECLARED,
             )
         ]
     )
@@ -938,6 +944,7 @@ def test_fake_reader_needs_no_bcftools_or_fixture_vcf():
                 z=1.0,
                 se=0.1,
                 stored_effect_scale=StoredEffectScale.SD,
+                reference=ReferenceAllele.UNDECLARED,
             )
         ]
     )

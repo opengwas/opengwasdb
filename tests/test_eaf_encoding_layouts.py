@@ -142,10 +142,11 @@ def _vcf_manifest(tmp_path: Path) -> Path:
     return path
 
 
-def _ssf(tmp_path: Path) -> tuple[Path, Path]:
-    filtered = tmp_path / "ssf"
+def _write_ssf_sources(filtered: Path, manifest: Path, *, frequencies: bool) -> Path:
+    """One GWAS-SSF file per Analysis under ``filtered``, each with its `_EAF`
+    frequencies or with none, and the manifest naming them."""
     filtered.mkdir()
-    manifest_rows = ["analysis_index\tanalysis_id\tfiltered_file\tn"]
+    manifest_rows = ["analysis_index\tanalysis_id\tfiltered_file\tn\tsource_genome_build"]
     for index, analysis in enumerate(_ANALYSES):
         with gzip.open(filtered / f"{analysis}.tsv.gz", "wt", encoding="utf-8") as fh:
             fh.write(
@@ -153,15 +154,20 @@ def _ssf(tmp_path: Path) -> tuple[Path, Path]:
                 "beta\tstandard_error\teffect_allele_frequency\n"
             )
             for pos in _POSITIONS:
-                eaf = _EAF[analysis][pos]
+                eaf = _EAF[analysis][pos] if frequencies else np.nan
                 fh.write(
                     f"1\t{pos}\tA\tG\t{_z_for(analysis, pos) * 0.3:.6f}\t0.3\t"
                     + ("" if np.isnan(eaf) else f"{eaf:.6f}")
                     + "\n"
                 )
-        manifest_rows.append(f"{index}\t{analysis}\t{analysis}.tsv.gz\t10000")
-    manifest = tmp_path / "ssf_manifest.tsv"
+        manifest_rows.append(f"{index}\t{analysis}\t{analysis}.tsv.gz\t10000\tGRCh38")
     manifest.write_text("\n".join(manifest_rows) + "\n", encoding="utf-8")
+    return manifest
+
+
+def _ssf(tmp_path: Path) -> tuple[Path, Path]:
+    filtered = tmp_path / "ssf"
+    manifest = _write_ssf_sources(filtered, tmp_path / "ssf_manifest.tsv", frequencies=True)
     return manifest, filtered
 
 
@@ -877,19 +883,9 @@ def _ragged_store_with_no_frequencies_seed(
     """Build the no-frequency CSR seed once; tests still receive private copies."""
     seed_path = tmp_path_factory.mktemp("eaf-ragged-no-frequency-store")
     filtered = seed_path / "ssf-nofreq"
-    filtered.mkdir()
-    manifest_rows = ["analysis_index\tanalysis_id\tfiltered_file\tn"]
-    for index, analysis in enumerate(_ANALYSES):
-        with gzip.open(filtered / f"{analysis}.tsv.gz", "wt", encoding="utf-8") as fh:
-            fh.write(
-                "chromosome\tbase_pair_location\teffect_allele\tother_allele\t"
-                "beta\tstandard_error\teffect_allele_frequency\n"
-            )
-            for pos in _POSITIONS:
-                fh.write(f"1\t{pos}\tA\tG\t{_z_for(analysis, pos) * 0.3:.6f}\t0.3\t\n")
-        manifest_rows.append(f"{index}\t{analysis}\t{analysis}.tsv.gz\t10000")
-    manifest = seed_path / "ssf_nofreq_manifest.tsv"
-    manifest.write_text("\n".join(manifest_rows) + "\n", encoding="utf-8")
+    manifest = _write_ssf_sources(
+        filtered, seed_path / "ssf_nofreq_manifest.tsv", frequencies=False
+    )
     out = seed_path / "ragged-nofreq.opengwasdb"
     build_ragged_from_ssf(
         manifest, filtered, out, store_id="nofreq", release_id="v1", allow_unverified_eaf=True,

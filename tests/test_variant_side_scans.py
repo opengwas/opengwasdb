@@ -425,9 +425,10 @@ def _write_wide_ssf(path: Path, *, offset: int) -> None:
 def _write_store_manifest(path: Path) -> None:
     """The two-Analysis overview manifest the chunked fixtures share."""
     path.write_text(
-        "analysis_index\tanalysis_id\ttrait_id\ttrait_chr\ttrait_bp\tn\tfiltered_file\n"
-        "0\ta\tT0\t1\t1000\t1000\ta.tsv.gz\n"
-        "1\tb\tT1\t1\t2000\t1000\tb.tsv.gz\n",
+        "analysis_index\tanalysis_id\ttrait_id\ttrait_chr\ttrait_bp\tn\tfiltered_file\t"
+        "source_genome_build\n"
+        "0\ta\tT0\t1\t1000\t1000\ta.tsv.gz\tGRCh38\n"
+        "1\tb\tT1\t1\t2000\t1000\tb.tsv.gz\tGRCh38\n",
         encoding="utf-8",
     )
 
@@ -634,9 +635,10 @@ def _tiny_ragged(tmp_path: Path) -> Path:
                 fh.write(f"1\t{bp}\tA\tG\t0.3\t0.3\n")
     manifest = tmp_path / "manifest.tsv"
     manifest.write_text(
-        "analysis_index\tanalysis_id\ttrait_id\ttrait_chr\ttrait_bp\tn\tfiltered_file\n"
-        "0\ta\tT0\t1\t1000\t1000\ta.tsv.gz\n"
-        "1\tb\tT1\t1\t2000\t1000\tb.tsv.gz\n",
+        "analysis_index\tanalysis_id\ttrait_id\ttrait_chr\ttrait_bp\tn\tfiltered_file\t"
+        "source_genome_build\n"
+        "0\ta\tT0\t1\t1000\t1000\ta.tsv.gz\tGRCh38\n"
+        "1\tb\tT1\t1\t2000\t1000\tb.tsv.gz\tGRCh38\n",
         encoding="utf-8",
     )
     store = tmp_path / "tiny.opengwasdb"

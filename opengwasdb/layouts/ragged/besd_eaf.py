@@ -23,7 +23,6 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import NamedTuple
 
 import numpy as np
 
@@ -35,9 +34,7 @@ from opengwasdb.build.eaf_orientation import (
     load_eaf_reference,
     select_sites,
 )
-from opengwasdb.layouts.ragged.besd_reader import SnpRecord
 from opengwasdb.model.enums import EafOrientationMethod, EafOrientationOutcome
-from opengwasdb.stats import parse_af
 from opengwasdb.variants import CanonicalVariant
 
 #: The key the one `.esi` check is run under, before it is copied to each probe.
@@ -46,45 +43,6 @@ _ESI_KEY = ".esi"
 #: Every probe's evidence carries this, so a reader of one record knows it is a
 #: file-level measurement and not that probe's own window.
 SHARED_NOTE = "measured once over the .esi frequencies, which every probe shares (ADR 0067)"
-
-
-class EsiFrequencies(NamedTuple):
-    """What a `.esi`'s frequency column gives a build that stores it.
-
-    ``stored`` is each ESI row's frequency of the *stored* effect allele, or
-    `None` when no row has one. ``made_absent`` marks each ESI row that reported
-    a frequency the Store holds as absent (D7): a probe counts its rows at those
-    ESI rows in its Admission record, as every reader counts the frequencies of
-    the rows it reads.
-    """
-
-    stored: np.ndarray | None
-    made_absent: np.ndarray
-
-
-def stored_esi_frequencies(
-    snps: Sequence[SnpRecord], esi_to_variant: dict[int, tuple[int, bool]]
-) -> EsiFrequencies:
-    """Each ESI row's stored-allele frequency, and which reported ones are absent.
-
-    Indexed by ESI row; NaN for a row that reaches no variant or reports no
-    usable frequency (`parse_af`: missing, out of range, exactly 0 or 1, not
-    finite). A flipped row holds `1 - f`, the same rule `z`'s sign follows.
-    ``stored`` is `None` when no row reaches the axis with a frequency, so a
-    `.esi` without one builds the release it built before frequencies were
-    stored.
-    """
-    out = np.full(len(snps), np.nan, dtype=np.float32)
-    made_absent = np.zeros(len(snps), dtype=bool)
-    for snp in snps:
-        frequency = parse_af(snp.freq)
-        if frequency is None:
-            made_absent[snp.row_idx] = snp.freq is not None
-            continue
-        mapping = esi_to_variant.get(snp.row_idx)
-        if mapping is not None:
-            out[snp.row_idx] = 1.0 - frequency if mapping[1] else frequency
-    return EsiFrequencies(out if bool(np.isfinite(out).any()) else None, made_absent)
 
 
 def verify_esi_orientation(

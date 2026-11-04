@@ -1,17 +1,15 @@
-"""GWAS-SSF SourceReader (issue #84).
+"""GWAS-SSF SourceReader (issues #84, #56).
 
-Adapts the orientation and beta/se -> z parsing already proven by
-`opengwasdb.layouts.ragged.build_ssf._read_filtered` to the `SourceReader`
-interface (issue #19), so a filtered/harmonised GWAS-Catalog-SSF file can
-route through `opengwasdb.readers.registry.resolve_reader` into the Dense
-and Hybrid builders (issue #20), not only the Ragged-only path that module
-serves. `stream_associations` and `extract_at_sites` share the full row parser;
+Reads a filtered/harmonised GWAS-Catalog-SSF file for every builder that
+stores one -- Dense, Hybrid and, since issue #56, Ragged SSF -- through
+`opengwasdb.readers.registry`. `stream_associations`, `stream_batches` and
+`extract_at_sites` share the full row parser;
 `stream_variants` has a projection-aware path that reads only identity and
 alias columns while using the same normalization rules (issue #179).
-`rsid`/`variant_id` are read into each `SourceVariant` (issue #109) so a Dense
-or Hybrid store built through this reader is queryable by rsid, exactly as the
-Ragged path already was; `ReaderAssociation` still has no rsid field -- an
-rsid names a variant, not an association.
+`rsid`/`variant_id` are read into each `SourceVariant` and each batch row
+(issue #109), so every store built through this reader is queryable by rsid;
+`ReaderAssociation` has no rsid field -- an rsid names a variant, not an
+association.
 
 `ref`/`alt` on each `ReaderAssociation`/`stream_variants` tuple are the
 source's own `other_allele`/`effect_allele` labelling (mirroring GWAS-VCF's
@@ -85,21 +83,24 @@ from opengwasdb.readers.effect_source import (
     row_statistics,
 )
 from opengwasdb.readers.interface import (
+    ImputationScore,
     ImputationScoreDeclaration,
     ReaderAssociation,
     ReferenceAllele,
+    RegionsFile,
     SiteMetrics,
     SourceVariant,
     StreamTally,
     parse_imputation_score,
 )
+from opengwasdb.readers.rows import ReaderBatch, stream_batches
 from opengwasdb.readers.tabular import (
     DEFAULT_CHUNK_ROWS,
     MetricsChunk,
     MetricsProjectionColumns,
     SourcePath,
+    SourceRow,
     TabularMetricsRow,
-    TabularRow,
     TabularSource,
     VariantProjectionColumns,
     extract_at_sites,
@@ -115,10 +116,15 @@ from opengwasdb.readers.tabular import (
     stream_variants,
 )
 from opengwasdb.stats import FrequencyTally
-from opengwasdb.variants.normalise import IdentityFaults, orient_or_drop
+from opengwasdb.variants.normalise import IdentityFaults, Orientation, orient_or_drop
 from opengwasdb.variants.rsid import normalise_rsid
 
 GWAS_SSF_CAPABILITY = "opengwasdb.gwas-ssf"
+#: GWAS-SSF names an effect and an other allele and declares neither the
+#: genome's reference, harmonised or not.
+_REFERENCE = ReferenceAllele.UNDECLARED
+#: A row of an Analysis that declares no imputation score (#175).
+_UNDECLARED_SCORE = ImputationScore()
 #: GWAS-SSF's identity and alias columns, the variant projection's declaration.
 #: Public because a Column Map's translation is read in these columns (#281).
 VARIANT_COLUMNS = VariantProjectionColumns(
@@ -150,8 +156,7 @@ def _rsid(rsid: str | None, variant_id: str | None) -> str:
     """The row's rs identifier, or "" if it names none.
 
     Harmonised GWAS-SSF carries a dedicated `rsid` column; `variant_id` is the
-    harmonised (usually non-rs) identifier and is only a fallback, mirroring
-    `opengwasdb.layouts.ragged.build_ssf._read_filtered`. Anything that is not
+    harmonised (usually non-rs) identifier and is only a fallback. Anything that is not
     an rs identifier is dropped: it is not something a user can look the
     variant up by (issue #109). A compound or listed id is read through
     `normalise_rsid`, exactly as the variant projection reads it (issue #306).
@@ -172,24 +177,50 @@ def _row_cells(
     frequency of the effect allele, and `ci_lower`/`ci_upper` are the 95%
     interval's bounds. The second effect column is looked up by the spelling
     `resolve_effect_source` matched, padding included.
+
+    A cell is parsed only where `row_statistics` reads it: the second effect
+    column for a beta the row does not give, the interval and p-value for an
+    SE it does not give, and the frequency and sample size for a signed z.
+    The rest are left unread, which is what `row_statistics` makes of them.
     """
-    fallback_column = None if source is None else source.fallback_column_name
+    standard_error = parse_finite_float(row.get("standard_error"))
+    if source is None:
+        return RowCells(standard_error=standard_error)
+    effect = parse_finite_float(row.get(source.column_name))
+    if source.kind is EffectSourceKind.Z_SCORE:
+        return _z_score_cells(row, effect, standard_error, sample_size_column)
+    fallback_column = source.fallback_column_name
+    odds_ratio = (
+        parse_finite_float(row.get(fallback_column))
+        if fallback_column and effect is None and source.kind is EffectSourceKind.BETA
+        else None
+    )
+    if standard_error is not None and standard_error > 0.0:
+        return RowCells(effect=effect, odds_ratio=odds_ratio, standard_error=standard_error)
     return RowCells(
-        effect=(
-            None if source is None else parse_finite_float(row.get(source.column_name))
-        ),
-        odds_ratio=(
-            parse_finite_float(row.get(fallback_column)) if fallback_column else None
-        ),
-        standard_error=parse_finite_float(row.get("standard_error")),
+        effect=effect,
+        odds_ratio=odds_ratio,
+        standard_error=standard_error,
         ci_lower=parse_finite_float(row.get("ci_lower")),
         ci_upper=parse_finite_float(row.get("ci_upper")),
         p_value=parse_finite_float(row.get("p_value")),
+    )
+
+
+def _z_score_cells(
+    row: dict[str, str],
+    z: float | None,
+    standard_error: float | None,
+    sample_size_column: str | None,
+) -> RowCells:
+    """A signed z's row: its z, frequency and sample size, from which `row_statistics`
+    derives the effect and SE (#215)."""
+    return RowCells(
+        effect=z,
+        standard_error=standard_error,
         frequency=parse_af(row.get("effect_allele_frequency")),
         sample_size=(
-            parse_finite_float(row.get(sample_size_column))
-            if sample_size_column
-            else None
+            parse_finite_float(row.get(sample_size_column)) if sample_size_column else None
         ),
     )
 
@@ -214,8 +245,8 @@ def _tabular_row(
     frequencies: FrequencyTally | None = None,
     faults: IdentityFaults | None = None,
     infinite_effects: bool = False,
-) -> TabularRow | None:
-    """One source row as a `TabularRow`, or `None` when it names no canonical variant.
+) -> SourceRow | None:
+    """One source row as a `SourceRow`, or `None` when it names no canonical variant.
 
     A row whose chromosome, position or allele pair cannot be represented is
     dropped from every stream; a row with a valid identity but an unusable
@@ -242,25 +273,63 @@ def _tabular_row(
     beta, from_fallback = statistics.beta, statistics.effect_from_odds_ratio_fallback
     if infinite_effects:
         beta, from_fallback = _reported_effect(row, source, beta, from_fallback)
-    return TabularRow(
-        chromosome=ori.variant.chromosome,
-        position=ori.variant.position,
-        alid=ori.variant.alid,
-        ref=other_allele,
-        alt=effect_allele,
-        flipped=ori.flipped,
-        beta=beta,
-        se=statistics.se,
-        af_alt=parse_af(row.get("effect_allele_frequency"), frequencies),
-        rsid=_rsid(row.get("rsid"), row.get("variant_id")),
-        imputation_score=parse_imputation_score(
-            row.get(score_column) if score_column is not None else None,
-            declared=score_column is not None,
+    return _built_row(
+        ori,
+        (other_allele, effect_allele),
+        statistics,
+        beta,
+        from_fallback,
+        parse_af(row.get("effect_allele_frequency"), frequencies),
+        (
+            _UNDECLARED_SCORE
+            if score_column is None
+            else parse_imputation_score(row.get(score_column), declared=True)
         ),
-        effect_from_odds_ratio_fallback=from_fallback,
-        se_from_ci=statistics.se_from_ci,
-        se_from_p_value=statistics.se_from_p_value,
+        _rsid(row.get("rsid"), row.get("variant_id")),
     )
+
+
+def _built_row(
+    ori: Orientation,
+    alleles: tuple[str, str],
+    statistics: RowStatistics,
+    beta: float | None,
+    from_fallback: bool,
+    af: float | None,
+    score: ImputationScore,
+    rsid: str,
+) -> SourceRow:
+    """One parsed row's `SourceRow`, built without its frozen ``__init__``.
+
+    Every value is parsed and checked already, and a genome-wide file builds
+    millions of these, so one dictionary update sets exactly the values the
+    ``__init__`` would. ``alleles`` is the row's ``(other, effect)``.
+    """
+    variant = ori.variant
+    built = object.__new__(SourceRow)
+    object.__setattr__(
+        built,
+        "__dict__",
+        {
+            "chromosome": variant.chromosome,
+            "position": variant.position,
+            "ref": alleles[0],
+            "alt": alleles[1],
+            "alid": variant.alid,
+            "flipped": ori.flipped,
+            "af_alt": af,
+            "beta": beta,
+            "se": statistics.se,
+            "imputation_score": score,
+            "effect_from_odds_ratio_fallback": from_fallback,
+            "se_from_ci": statistics.se_from_ci,
+            "se_from_p_value": statistics.se_from_p_value,
+            "rsid": rsid,
+            "z": None,
+            "source_id": "",
+        },
+    )
+    return built
 
 
 def _reported_effect(
@@ -343,7 +412,7 @@ def _iter_rows(
     score_column: str | None = None,
     tally: StreamTally | None = None,
     infinite_effects: bool = False,
-) -> Iterator[TabularRow]:
+) -> Iterator[SourceRow]:
     """Parse each row of a filtered/harmonised GWAS-SSF file once.
 
     `effect_source` is the caller's resolution for this file, so the property
@@ -412,7 +481,7 @@ def stream_full_row_metrics(path: str | Path) -> Iterator[TabularMetricsRow]:
     Kept so the projection `stream_metrics` replaces can be compared against it
     field for field on the same file -- the arrangement
     `stream_full_row_variants` provides for the variant projection. A
-    `TabularRow` *is* a `TabularMetricsRow`; it adds only the identifier this
+    `SourceRow` *is* a `TabularMetricsRow`; it adds only the identifier this
     seam never reads. It reads an infinite effect as the projections do, absent
     or recovered from the odds ratio; only the association stream keeps it (D4).
     """
@@ -437,18 +506,23 @@ class GwasSsfReader:
     translation of a provider file into these columns (issue #281), which is
     how the generic tabular reader reads every mapped collection by this
     reader's rules.
-
-    `reference` is which allele the rows declare the genome's reference.
-    GWAS-SSF names an effect and an other allele and declares neither, so a
-    GWAS-SSF file is `UNDECLARED`, harmonised or not; a Column Map whose
-    `other_allele` is a `ref` column declares it (`REF`).
     """
 
     path: SourcePath
     stored_effect_scale: StoredEffectScale = StoredEffectScale.SD
     chunk_rows: int = DEFAULT_CHUNK_ROWS
     imputation_score_declaration: ImputationScoreDeclaration | None = None
-    reference: ReferenceAllele = ReferenceAllele.UNDECLARED
+
+    @property
+    def reference(self) -> ReferenceAllele:
+        """Which allele the rows declare the genome's reference.
+
+        A GWAS-SSF file's is `_REFERENCE`. A Column Map's translation declares
+        its own: one whose `other_allele` is a `ref` column declares it (`REF`).
+        """
+        if isinstance(self.path, TabularSource):
+            return self.path.reference
+        return _REFERENCE
 
     @property
     def imputation_score_column(self) -> str | None:
@@ -474,7 +548,8 @@ class GwasSsfReader:
         """
         return resolve_effect_source(_header(self.path))
 
-    def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
+    def _association_rows(self, tally: StreamTally | None) -> Iterator[SourceRow]:
+        """The rows both association projections read, an infinite effect kept."""
         source = self.effect_source
         # A z-score source is derived, not read: refuse it on a case-control
         # scale and refuse an unsigned column before yielding any row (#215).
@@ -483,16 +558,22 @@ class GwasSsfReader:
             # A file naming no effect column holds no associations at all, and
             # yields none, rather than one row with no effect per source row.
             return
+        yield from _iter_rows(
+            self.path,
+            effect_source=source,
+            score_column=self.imputation_score_column,
+            tally=tally,
+            infinite_effects=True,
+        )
+
+    def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
         yield from stream_associations(
-            _iter_rows(
-                self.path,
-                effect_source=source,
-                score_column=self.imputation_score_column,
-                tally=tally,
-                infinite_effects=True,
-            ),
-            self.stored_effect_scale,
-            self.reference,
+            self._association_rows(tally), self.stored_effect_scale, self.reference
+        )
+
+    def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
+        yield from stream_batches(
+            self._association_rows(tally), self.reference, chunk_rows=self.chunk_rows
         )
 
     def stream_variants(self) -> Iterator[SourceVariant]:
@@ -530,5 +611,7 @@ class GwasSsfReader:
             score_column=self.imputation_score_column,
         )
 
-    def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
-        return extract_at_sites(_iter_rows(self.path), alids)
+    def extract_at_sites(
+        self, alids: Iterable[str], *, region: str | None = None, regions_file: RegionsFile = None
+    ) -> dict[str, SiteMetrics]:
+        return extract_at_sites(_iter_rows(self.path), alids, region=region)

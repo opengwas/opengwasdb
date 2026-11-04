@@ -48,9 +48,11 @@ from opengwasdb.readers.gwas_ssf import VARIANT_COLUMNS, GwasSsfReader
 from opengwasdb.readers.interface import (
     ImputationScoreDeclaration,
     ReaderAssociation,
+    RegionsFile,
     SiteMetrics,
     SourceVariant,
 )
+from opengwasdb.readers.rows import ReaderBatch
 from opengwasdb.readers.tabular import (
     DEFAULT_CHUNK_ROWS,
     MetricsChunk,
@@ -60,7 +62,7 @@ from opengwasdb.readers.tabular import (
 )
 
 if TYPE_CHECKING:
-    from opengwasdb.readers.interface import StreamTally
+    from opengwasdb.readers.interface import ReferenceAllele, StreamTally
 
 __all__ = ["ColumnMapReader", "MappedSource"]
 
@@ -139,6 +141,11 @@ class MappedSource:
 
     def __str__(self) -> str:
         return str(self.path)
+
+    @property
+    def reference(self) -> ReferenceAllele:
+        """What the map's allele convention declares of every row."""
+        return self.column_map.conventions.alleles.reference
 
     def open_binary(self) -> IO[bytes]:
         raw = open_binary(self.path)
@@ -464,7 +471,6 @@ class ColumnMapReader:
             self.stored_effect_scale,
             self.chunk_rows,
             self.imputation_score_declaration,
-            self.column_map.conventions.alleles.reference,
         )
 
     @property
@@ -479,6 +485,9 @@ class ColumnMapReader:
     def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
         yield from self._delegate.stream_associations(tally)
 
+    def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
+        yield from self._delegate.stream_batches(tally)
+
     def stream_variants(self) -> Iterator[SourceVariant]:
         separator = self.column_map.conventions.rsid_separator
         columns = replace(VARIANT_COLUMNS, alias_separator=separator)
@@ -490,6 +499,8 @@ class ColumnMapReader:
     def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
         yield from self._delegate.stream_metric_chunks()
 
-    def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
-        return self._delegate.extract_at_sites(alids)
+    def extract_at_sites(
+        self, alids: Iterable[str], *, region: str | None = None, regions_file: RegionsFile = None
+    ) -> dict[str, SiteMetrics]:
+        return self._delegate.extract_at_sites(alids, region=region, regions_file=regions_file)
 

@@ -173,7 +173,11 @@ def resolve_besd_analysis(
     assert measurement.source is not None
     return resolve_analysis(
         request,
-        reader=BesdProbeReader(measurement.source, probe_id),
+        # The resolver reads only the probe's metric blocks, which come from the
+        # file set as measured: on the reference build.
+        reader=BesdProbeReader(
+            measurement.source.prefix, probe_id, aligned=measurement.source
+        ),
         reference=reference,
         gates=gates,
         af_references=af_references,

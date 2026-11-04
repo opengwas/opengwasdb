@@ -378,9 +378,11 @@ def test_a_reader_association_keeps_the_se_its_source_gave():
     """An unusable SE is the source's, as read: Admission, not the reader's
     record type, decides the row is not an association."""
     from opengwasdb.model.enums import StoredEffectScale
-    from opengwasdb.readers.interface import ReaderAssociation
+    from opengwasdb.readers.interface import ReaderAssociation, ReferenceAllele
 
-    association = ReaderAssociation("1", 100, "A", "G", 1.0, -0.5, StoredEffectScale.SD)
+    association = ReaderAssociation(
+        "1", 100, "A", "G", 1.0, -0.5, StoredEffectScale.SD, reference=ReferenceAllele.UNDECLARED
+    )
     assert association.se == -0.5
 
 
@@ -593,12 +595,18 @@ def test_a_hybrid_drops_an_unmatched_row_only_where_nothing_folds_it(
     from opengwasdb.layouts.hybrid import build as hybrid_build
     from opengwasdb.model.enums import StoredEffectScale
     from opengwasdb.readers.fake import FakeReader
-    from opengwasdb.readers.interface import ReaderAssociation
+    from opengwasdb.readers.interface import ReaderAssociation, ReferenceAllele
     from opengwasdb.variants.routing import RouteTable
 
     rows = [
-        ReaderAssociation("1", 100, "A", "G", 2.0, 0.1, StoredEffectScale.SD),
-        ReaderAssociation("1", 900, "C", "T", 1.0, 0.1, StoredEffectScale.SD),
+        ReaderAssociation(
+            "1", 100, "A", "G", 2.0, 0.1, StoredEffectScale.SD,
+            reference=ReferenceAllele.UNDECLARED,
+        ),
+        ReaderAssociation(
+            "1", 900, "C", "T", 1.0, 0.1, StoredEffectScale.SD,
+            reference=ReferenceAllele.UNDECLARED,
+        ),
     ]
     monkeypatch.setattr(
         hybrid_build, "open_source", lambda *args, **kwargs: FakeReader(associations=rows)

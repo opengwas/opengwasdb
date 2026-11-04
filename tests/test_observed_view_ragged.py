@@ -101,7 +101,7 @@ def _build_source(
             "analysis_index": i, "analysis_id": a["analysis_id"], "trait_id": f"T{i}",
             "trait_chr": a.get("trait_chr", ""), "trait_bp": a.get("trait_bp", ""),
             "n": 5000, "mhc": "FALSE", "filtered_file": f"{a['analysis_id']}.tsv.gz",
-            "assigned_ancestry": a["ancestry"],
+            "assigned_ancestry": a["ancestry"], "source_genome_build": "GRCh38",
         }
         for i, a in enumerate(analyses)
     ])

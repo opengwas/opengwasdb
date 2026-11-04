@@ -55,7 +55,7 @@ from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
 from opengwasdb.readers.gwas_vcf import (
     GWAS_VCF_CAPABILITY,
     GwasVcfReader,
-    _finish_metric_query,
+    _finish_query,
 )
 from opengwasdb.readers.tabular import DEFAULT_CHUNK_ROWS, MetricsChunk
 
@@ -996,7 +996,7 @@ def test_gwas_vcf_nonzero_query_is_controlled_not_false_eof(tmp_path, panel, mon
     class _FailedQuery:
         def __init__(self, _command, *, stdout, stderr, text):
             del stdout, text
-            self.stdout = io.StringIO("1\t1000\tC\tA\t1\t0.2\t0.1\t0.3\n")
+            self.stdout = io.StringIO("1\t1000\t.\tC\tA\t1\t0.2\t0.1\t0.3\n")
             stderr.write("synthetic bcftools failure")
 
         def poll(self):
@@ -1029,8 +1029,8 @@ def test_gwas_vcf_early_close_preserves_already_failed_query(tmp_path, panel, mo
         def __init__(self, _command, *, stdout, stderr, text):
             del stdout, text
             self.stdout = io.StringIO(
-                "1\t1000\tC\tA\t1\t0.2\t0.1\t0.3\n"
-                "1\t1001\tC\tA\t1\t0.2\t0.1\t0.3\n"
+                "1\t1000\t.\tC\tA\t1\t0.2\t0.1\t0.3\n"
+                "1\t1001\t.\tC\tA\t1\t0.2\t0.1\t0.3\n"
             )
             stderr.write("failed before resolver cap")
 
@@ -1073,8 +1073,8 @@ def test_gwas_vcf_capped_close_terminates_then_kills_and_reaps(tmp_path, panel, 
         def __init__(self, _command, *, stdout, stderr, text):
             del stdout, stderr, text
             self.stdout = _TrackedOutput(
-                "1\t1000\tC\tA\t1\t0.2\t0.1\t0.3\n"
-                "1\t1001\tC\tA\t1\t0.2\t0.1\t0.3\n"
+                "1\t1000\t.\tC\tA\t1\t0.2\t0.1\t0.3\n"
+                "1\t1001\t.\tC\tA\t1\t0.2\t0.1\t0.3\n"
             )
 
         def poll(self):
@@ -1109,7 +1109,7 @@ def test_gwas_vcf_capped_close_terminates_then_kills_and_reaps(tmp_path, panel, 
     ]
 
 
-def test_finish_metric_query_cancels_real_writer_before_closing_pipe():
+def test_finish_query_cancels_real_writer_before_closing_pipe():
     command = [
         sys.executable,
         "-c",
@@ -1134,12 +1134,12 @@ def test_finish_metric_query_cancels_real_writer_before_closing_pipe():
                 proc.wait(timeout=2.0)
 
         proc.stdout = cast(TextIO, _CloseThenScheduleChild())
-        _finish_metric_query(proc, errors, completed=False)
+        _finish_query(proc, errors, completed=False)
 
     assert proc.returncode == -signal.SIGTERM
 
 
-def test_finish_metric_query_accepts_term_winning_kill_escalation_race():
+def test_finish_query_accepts_term_winning_kill_escalation_race():
     class _TermExitsAfterKill:
         def __init__(self):
             self.stdout = io.StringIO("unread output")
@@ -1163,12 +1163,12 @@ def test_finish_metric_query_accepts_term_winning_kill_escalation_race():
 
     proc = cast(subprocess.Popen[str], _TermExitsAfterKill())
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
-        _finish_metric_query(proc, errors, completed=False)
+        _finish_query(proc, errors, completed=False)
 
     assert cast(_TermExitsAfterKill, proc).killed is True
 
 
-def test_finish_metric_query_does_not_hide_unexpected_signal():
+def test_finish_query_does_not_hide_unexpected_signal():
     class _CrashesWhileBeingCancelled:
         def __init__(self):
             self.stdout = io.StringIO("unread output")
@@ -1186,7 +1186,7 @@ def test_finish_metric_query_does_not_hide_unexpected_signal():
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
         with pytest.raises(OSError, match=r"query failed \(-11\)"):
             proc = cast(subprocess.Popen[str], _CrashesWhileBeingCancelled())
-            _finish_metric_query(proc, errors, completed=False)
+            _finish_query(proc, errors, completed=False)
 
 
 def test_gwas_vcf_chunks_bound_rows_independently_of_file_size(tmp_path, panel):

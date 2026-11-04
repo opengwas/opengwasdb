@@ -1567,7 +1567,9 @@ def build_ragged_ssf_command(
     MANIFEST_PATH is a TSV with columns: analysis_index, analysis_id (or
     legacy trait_id), analysis_label (or legacy trait_name), trait_ontology_id,
     trait_ontology_label, trait_chr, trait_bp, sample_size (or legacy n),
-    tissue, context, mhc, source_file (or legacy filtered_file).
+    tissue, context, mhc, source_file (or legacy filtered_file), and
+    source_genome_build (or source_assembly). Every row must declare
+    source_genome_build, and declare GRCh38: the build lifts nothing.
 
     FILTERED_DIR holds one filtered GWAS-SSF ``.tsv.gz`` per analysis (as
     produced by the opengwasdb-stores download+filter step). Relative

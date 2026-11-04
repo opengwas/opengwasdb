@@ -18,13 +18,21 @@ from pathlib import Path
 import opengwasdb.readers.interface as interface
 import opengwasdb.readers.tabular as tabular
 from opengwasdb.model.enums import StoredEffectScale
-from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
+from opengwasdb.readers.interface import (
+    ReaderAssociation,
+    RegionsFile,
+    SiteMetrics,
+    SourceVariant,
+)
+from opengwasdb.readers.rows import ReaderBatch, stream_batches
 from opengwasdb.variants.normalise import (
     normalise_chromosome,
     orient_or_drop,
 )
 
 FINNGEN_R13_CAPABILITY = "opengwasdb.finngen-r13"
+#: FinnGen's `ref` is the GRCh38 reference allele, on every row.
+_REFERENCE = interface.ReferenceAllele.REF
 _FINNGEN_CHROMOSOMES = {
     str(chromosome).encode(): normalise_chromosome(str(chromosome))
     for chromosome in range(1, 24)
@@ -50,8 +58,15 @@ def _first_rsid(value: str | None) -> str:
 
 
 def _iter_rows(
-    path: str | Path, tally: interface.StreamTally | None = None
-) -> Iterator[tabular.TabularRow]:
+    path: str | Path,
+    tally: interface.StreamTally | None = None,
+    *,
+    infinite_effects: bool = True,
+) -> Iterator[tabular.SourceRow]:
+    """Every row naming a variant. ``infinite_effects`` keeps an infinite
+    `beta` as the row's effect, for Association Admission to drop (D4); the
+    metrics projection reads it as absent, as every metrics projection does."""
+    parse_beta = tabular.parse_effect if infinite_effects else tabular.parse_finite_float
     tally = tally or interface.StreamTally()
     faults, frequencies = tally.faults, tally.frequencies
     opener = gzip.open if str(path).endswith((".gz", ".bgz")) else open
@@ -68,14 +83,14 @@ def _iter_rows(
             orientation = orient_or_drop(chromosome, row.get("pos"), alt, ref, faults)
             if orientation is None or ref is None or alt is None:
                 continue
-            yield tabular.TabularRow(
+            yield tabular.SourceRow(
                 chromosome=orientation.variant.chromosome,
                 position=orientation.variant.position,
                 ref=ref,
                 alt=alt,
                 alid=orientation.variant.alid,
                 flipped=orientation.flipped,
-                beta=tabular.parse_effect(row.get("beta")),
+                beta=parse_beta(row.get("beta")),
                 se=tabular.parse_positive_float(row.get("sebeta")),
                 af_alt=tabular.parse_af(row.get("af_alt"), frequencies),
                 rsid=_first_rsid(row.get("rsids")),
@@ -219,14 +234,24 @@ class FinnGenR13Reader:
     def stream_associations(
         self, tally: interface.StreamTally | None = None
     ) -> Iterator[ReaderAssociation]:
-        rows = _iter_rows(self.path, tally)
-        # FinnGen's `ref` is the GRCh38 reference allele.
         yield from tabular.stream_associations(
-            rows, self.stored_effect_scale, interface.ReferenceAllele.REF
+            _iter_rows(self.path, tally), self.stored_effect_scale, _REFERENCE
+        )
+
+    def stream_batches(self, tally: interface.StreamTally | None = None) -> Iterator[ReaderBatch]:
+        yield from stream_batches(_iter_rows(self.path, tally), _REFERENCE)
+
+    def stream_metric_chunks(self) -> Iterator[tabular.MetricsChunk]:
+        """The resolver's blocks, from the full-row parser: FinnGen has no
+        column-projected scan, and its rows read the same."""
+        yield from tabular.metrics_chunks_from_rows(
+            _iter_rows(self.path, infinite_effects=False)
         )
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         yield from _iter_variants(self.path)
 
-    def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
-        return tabular.extract_at_sites(_iter_rows(self.path), alids)
+    def extract_at_sites(
+        self, alids: Iterable[str], *, region: str | None = None, regions_file: RegionsFile = None
+    ) -> dict[str, SiteMetrics]:
+        return tabular.extract_at_sites(_iter_rows(self.path), alids, region=region)
