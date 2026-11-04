@@ -10,13 +10,16 @@
     - refusal of a manifest row that declares a `source_genome_build` other
       than GRCh38, since the build lifts nothing.
 
+    A manifest row that declares no `source_genome_build` is refused too,
+    where it used to be read as GRCh38: a Ragged SSF Store is one build, and
+    every source declares its own. The refusal names the Analysis. No
+    published manifest omits the build, but `opengwasdb-stores`' own test
+    fixtures do (#429).
+
     None of the 58,257,233 rows of OGS-00006's and OGS-00007's sources reads
     differently, and none of their 1,410 files is refused. Reading a row the
     reader's way costs more: 11.3 µs against 7.6 µs, so OGS-00006 took 1,045 s
-    to build where it took 774 s. A row whose manifest declares no
-    `source_genome_build` is still read as GRCh38; `build_ragged_from_ssf`
-    names that default (`undeclared_source_build`), and `None` refuses such a
-    row.
+    to build where it took 774 s.
   - `build-ragged-besd` reads each probe with the BESD reader. It orients each
     row in the file set's declared assembly and re-orients it where its own
     lift makes the other allele A1, as the Dense and Hybrid builders do. It

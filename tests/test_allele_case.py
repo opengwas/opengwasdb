@@ -238,8 +238,8 @@ def test_ragged_stores_a_lower_case_source_under_the_upper_case_alid(tmp_path):
     assert _alleles(filtered / "lower.tsv.gz") == [("g", "a")]
     manifest = tmp_path / "ragged.tsv"
     manifest.write_text(
-        "analysis_index\tanalysis_id\ttrait_id\tanalysis_label\tn\tfiltered_file\n"
-        "0\tlower\tlower\tlower\t1000\tlower.tsv.gz\n",
+        "analysis_index\tanalysis_id\ttrait_id\tanalysis_label\tn\tfiltered_file\tsource_genome_build\n"
+        "0\tlower\tlower\tlower\t1000\tlower.tsv.gz\tGRCh38\n",
         encoding="utf-8",
     )
     store = tmp_path / "ragged.opengwasdb"

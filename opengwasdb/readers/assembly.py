@@ -39,7 +39,9 @@ def _optional_build(value: str | None) -> str | None:
     return normalise_build(value)
 
 
-def _declared_aliases(row: Mapping[str, str], context: str) -> str | None:
+def declared_build(row: Mapping[str, str], context: str) -> str | None:
+    """The build a row declares, under either spelling, normalised; None where
+    it declares none. Two spellings declaring different builds raise."""
     genome_build = _optional_build(row.get("source_genome_build"))
     assembly_alias = _optional_build(row.get("source_assembly"))
     if genome_build is not None and assembly_alias is not None and genome_build != assembly_alias:
@@ -54,7 +56,7 @@ def declared_source_build(
     row: Mapping[str, str], *, default: str | None, context: str
 ) -> str:
     """Resolve one row's authoritative build without guessing (issue #277)."""
-    resolved = _declared_aliases(row, context)
+    resolved = declared_build(row, context)
     if resolved is not None:
         return resolved
     fallback = _optional_build(default)

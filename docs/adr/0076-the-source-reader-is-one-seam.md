@@ -98,10 +98,11 @@ The owner's rulings on the unifications, issue #56:
 |---|---|---|
 | O1 | Ragged SSF takes the GWAS-SSF reader's rsid rule: the first of `rsid` and `variant_id` that is an rs identifier | OGS-00006 gains 21 rsids; none is lost or replaced. OGS-00007 is unchanged |
 | O2 | Ragged SSF takes the reader's effect and SE rules (`odds_ratio`, signed z, CI and p recovery) and its refusals | 0 of OGS-00006's and -07's 58,257,233 rows change; 0 of their 1,410 files are refused |
-| O3 | Ragged SSF refuses a declared build other than GRCh38; it lifts nothing | 0 of 1,410 manifest rows |
+| O3 | Ragged SSF refuses a declared build other than GRCh38; it lifts nothing (the lift is #386) | 0 of 1,410 manifest rows |
 | O4 | Ragged BESD orients in the declared assembly and re-orients after the lift | 0 bytes |
 | O5 | The two `.esi` lifts stay until routing owns them | none |
 | O6 | GWAS-VCF orients by the identity rule, as every format does | 0 rows (#360's census) |
+| O7 | Ragged SSF refuses a row that declares no build, where it read one as GRCh38: a Ragged SSF Store is one build, and every source declares its own | 0 of the 4,453 rows of the published manifests of OGS-00006, -07, -24, -25 and -26, and 0 of the 1,410 rows of OGS-00006's and -07's build manifests. `opengwasdb-stores`' test fixtures declare none (#429) |
 
 ## Consequences
 

@@ -49,7 +49,6 @@ from opengwasdb.layouts.dense.rho import (
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import HybridBuildResult, build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
-from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
@@ -1568,7 +1567,9 @@ def build_ragged_ssf_command(
     MANIFEST_PATH is a TSV with columns: analysis_index, analysis_id (or
     legacy trait_id), analysis_label (or legacy trait_name), trait_ontology_id,
     trait_ontology_label, trait_chr, trait_bp, sample_size (or legacy n),
-    tissue, context, mhc, source_file (or legacy filtered_file).
+    tissue, context, mhc, source_file (or legacy filtered_file), and
+    source_genome_build (or source_assembly). Every row must declare
+    source_genome_build, and declare GRCh38: the build lifts nothing.
 
     FILTERED_DIR holds one filtered GWAS-SSF ``.tsv.gz`` per analysis (as
     produced by the opengwasdb-stores download+filter step). Relative
@@ -1592,9 +1593,6 @@ def build_ragged_ssf_command(
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
         admission_record=admission_record,
-        # A manifest row declaring no source_genome_build is read as GRCh38, as
-        # this command always read one (issue #56 measured who relies on it).
-        undeclared_source_build=RAGGED_REFERENCE_ASSEMBLY,
     )
     typer.echo(
         json.dumps(
