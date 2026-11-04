@@ -313,7 +313,7 @@ class _DenseGrid:
         self.reference = (
             per_variant(target, "eaf_reference") if "eaf_reference" in group else None
         )
-        self.decodes_eaf = self.eaf_array is not None or bool(encoding.eaf.reference)
+        self.decodes_eaf = holds_frequencies(target)
         self.eaf_codec = StoreCodec(encoding, eaf_exceptions=EafExceptionTable.open(group))
         self.se_codec = StoreCodec(encoding, se_exceptions=SeExceptionTable.open(group))
         self.z_codec = StoreCodec(encoding, z_overflow=ZOverflowTable.open(group))
@@ -399,6 +399,11 @@ def _dense_band_se(
         return plane.band(r0, r1, eaf=eaf)
     except ValueError as exc:
         raise Undecodable(f"cannot decode se: {exc}") from exc
+
+
+def holds_frequencies(target: Target) -> bool:
+    """Whether the component has frequencies to decode: an `eaf` plane, or a panel's."""
+    return "eaf" in target.group or bool(target.encoding.eaf.reference)
 
 
 def completed(target: Target) -> bool:
@@ -499,7 +504,7 @@ class _Sequence:
         self.z, self.se_array, self.variant_index = group["z"], group["se"], group["variant_index"]
         self.imputed = _parallel(group, "imputed", self.n_cells)
         self.n_array = _parallel(group, "n", self.n_cells) if encoding.n is not None else None
-        self.decodes_eaf = "eaf" in group or bool(encoding.eaf.reference)
+        self.decodes_eaf = holds_frequencies(target)
         self.eaf_array = group["eaf"] if "eaf" in group else None
         self.baseline = _held(target, EAF_BASELINE)
         self.reference = _held(target, EAF_REFERENCE)

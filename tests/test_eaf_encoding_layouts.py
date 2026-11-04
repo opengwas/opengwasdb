@@ -636,6 +636,29 @@ def test_an_overflow_exception_table_that_lost_a_cell_is_rejected(hybrid_store: 
     )
 
 
+def test_a_plane_that_cannot_be_decoded_is_skipped_by_the_range_rule(hybrid_store: Path):
+    """An undecodable plane has no frequencies to range-check, and none passed.
+
+    The range rule is skipped behind the exception-table rule, which says which cell
+    cannot be decoded and why; selected alone, it reports the plane itself.
+    """
+    overflow = zarr.open_group(str(hybrid_store / "data.zarr" / "ragged"), mode="a")
+    assert overflow[EAF_EXCEPTION_INDEX].shape[0] >= 1, "the Overflow must hold an exception"
+    replace_exception_table(overflow, EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE)
+
+    result = validate_store(hybrid_store)
+
+    assert result.failed() == {"side_tables.eaf_exceptions"}, result.errors
+    assert result.skipped["associations.eaf_range"] == ("side_tables.eaf_exceptions",)
+
+    alone = validate_store(hybrid_store, rules=["associations.eaf_range"])
+
+    assert alone.failed() == {"associations.eaf_range"}, alone.errors
+    assert [f.message for f in alone.of("associations.eaf_range")] == [
+        "Ragged Overflow eaf cannot be decoded under the declared plan"
+    ]
+
+
 def test_a_store_whose_eaf_scope_contradicts_its_plan_is_rejected(dense_store: Path):
     """`eaf_scope` (per Analysis) and the plan (per store) describe the same
     fact at two granularities; their disagreement is the defect that got

@@ -1825,7 +1825,8 @@ target:
 
 A rule may run after others. It is skipped, and recorded as skipped with the rules
 that blocked it, when one of those failed or was skipped on its target or a target it
-belongs to. A skip is not a pass. A *fold* is judged from one streamed read of its
+belongs to. A skip is not a pass. `fidelity.source`, which runs after every error rule
+before it, is stopped only by one that failed. A *fold* is judged from one streamed read of its
 target that every fold on it shares; a *check* reads what it needs.
 
 `validate_store(path, rules={...})` runs the named rules and the rules they run after,
@@ -1893,9 +1894,9 @@ change to this table, which the test suite holds to the registry, in its order.
 | `completion.imputed_present` | grid, sequence | fold | an imputed cell carries both Z and SE |
 | `completion.off_panel` | grid | fold | no off-panel row is imputed |
 | `completion.declaration` | grid, sequence | fold | each Analysis holds imputed cells exactly when it declares them |
-| `associations.eaf_range` | grid, sequence | fold | no decoded frequency falls outside `[0, 1]` |
+| `associations.eaf_range` | grid, sequence | fold | no decoded frequency falls outside `[0, 1]`; skipped on a component holding none, and behind `side_tables.eaf_exceptions` where the plane cannot be decoded |
 | `side_tables.z_overflow` | grid, sequence | fold | the `z` overflow table describes exactly the overflow cells |
-| `side_tables.eaf_exceptions` | grid, sequence | fold | the `eaf` exception table describes exactly the exception cells |
+| `side_tables.eaf_exceptions` | grid, sequence | fold | the `eaf` exception table describes exactly the exception cells, and a plane that cannot be decoded is reported |
 | `side_tables.se_exceptions` | grid, sequence | fold | the `se` exception table describes exactly the exception cells |
 | `sample_size.codes` | sequence | fold | every `n` code is a sample size or the missing code, and some cell holds a size |
 | `sample_size.scope` | sequence | fold | an Analysis holding per-association N declares `variant_level` scope |

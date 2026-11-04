@@ -23,7 +23,7 @@ import numpy as np
 from opengwasdb import top_hits
 from opengwasdb.top_hits import z_critical
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Target
-from opengwasdb.validation.rules.associations import VALUES_AFTER
+from opengwasdb.validation.rules.associations import VALUES_AFTER, frequencies
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.scans import ASSOCIATIONS, Block, CellIndex
 
@@ -191,16 +191,19 @@ def _imputed_disagrees(block: Block) -> Callable[[Tier, np.ndarray, np.ndarray],
     return count
 
 
-def _eaf_disagrees(block: Block) -> Callable[[Tier, np.ndarray, np.ndarray], int]:
+def _eaf_disagrees(
+    target: Target, block: Block
+) -> Callable[[Tier, np.ndarray, np.ndarray], int]:
     # The index's `eaf` is written from the decoded plane, panel frequency
     # included on imputed cells, so it is held to numpy's default tolerance.
     def count(tier: Tier, found: np.ndarray, flat: np.ndarray) -> int:
         if tier.eaf is None:
             return 0
-        if block.eaf is None:
+        eaf = frequencies(target, block)
+        if eaf is None:
             stored = np.full(len(flat), np.nan, dtype=np.float32)
         else:
-            stored = block.eaf.ravel()[flat]
+            stored = eaf.ravel()[flat]
         return int(np.count_nonzero(~np.isclose(stored, tier.eaf[found], equal_nan=True)))
 
     return count
@@ -229,7 +232,7 @@ def _measure_imputed(target: Target, block: Block) -> Counter[str]:
 
 
 def _measure_eaf(target: Target, block: Block) -> Counter[str]:
-    return _per_tier(target, block, _eaf_disagrees(block))
+    return _per_tier(target, block, _eaf_disagrees(target, block))
 
 
 def _measure_passing(target: Target, block: Block) -> Counter[str]:

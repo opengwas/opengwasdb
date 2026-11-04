@@ -232,10 +232,11 @@ def test_an_off_panel_row_with_an_imputed_cell_fails() -> None:
 def test_a_decoded_frequency_outside_0_1_fails() -> None:
     outside = Block.of(_PRESENT, _PRESENT, eaf=[[0.3, 1.4]])
     missing = Block.of(_PRESENT, _PRESENT, eaf=[[0.3, np.nan]])
-    assert _judged("associations.eaf_range", [outside]) == [
+    with_frequencies = _grid({"eaf": outside.eaf})
+    assert _judged("associations.eaf_range", [outside], with_frequencies) == [
         "data.zarr/eaf contains finite values outside [0, 1]"
     ]
-    assert _judged("associations.eaf_range", [missing]) == []
+    assert _judged("associations.eaf_range", [missing], with_frequencies) == []
 
 
 def _codes_block(codes: np.ndarray, offset: int) -> Block:
@@ -303,3 +304,16 @@ def test_a_tier_flag_is_held_to_a_stored_mask_whatever_the_completion_state(
         f"top-hit index {key} contains imputed value inconsistent with imputed array"
         for key in keys
     )
+
+
+def test_a_release_without_frequencies_records_the_range_rule_as_skipped(
+    dense_store_path: Path,
+) -> None:
+    """No frequency to judge is a skip, which a caller can tell from a range that held."""
+    store = open_store(dense_store_path)
+    assert "eaf" not in store.arrays(mode="r") and not store.manifest.encoding.eaf.reference
+
+    result = validate_store(dense_store_path)
+
+    assert result.ok, result.errors
+    assert result.skipped["associations.eaf_range"] == ("no frequencies",)

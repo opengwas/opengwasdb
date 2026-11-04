@@ -22,16 +22,19 @@ from opengwasdb.associations import State, Tally
 from opengwasdb.encoding import EAF_BASELINE, EAF_REFERENCE
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.store.arrays import array_length
-from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Severity, Target
+from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Severity, Skip, Target
 from opengwasdb.validation.rules.csr import ARRAYS, LENGTHS, OBSERVED_ONLY, prefix
 from opengwasdb.validation.rules.encoding import PLAN, plane_label
 from opengwasdb.validation.rules.release import REQUIRED
-from opengwasdb.validation.scans import ASSOCIATIONS, Block
+from opengwasdb.validation.scans import ASSOCIATIONS, Block, Undecodable, holds_frequencies
 
 #: The rule every value rule runs after for a grid's planes to span its axes.
 GRID_PLANES = "grid.planes"
 #: The rule a read that fails part-way is reported by.
 DECODABLE = "associations.decodable"
+#: The rule that says why a frequency plane cannot be decoded: which exception cell
+#: lacks its table entry. A rule reading frequencies is skipped behind it.
+EAF_EXCEPTIONS = "side_tables.eaf_exceptions"
 #: The targets the value rules judge.
 VALUE_KINDS = Kind.GRID | Kind.CSR
 #: What every value rule runs after: the plan its planes decode under, planes that
@@ -218,10 +221,25 @@ def _judge_canonical(target: Target, total: Tally) -> Iterator[str]:
         )
 
 
-def _eaf_out_of_range(_target: Target, block: Block) -> int:
-    if block.eaf is None:
+def frequencies(target: Target, block: Block) -> np.ndarray | None:
+    """The block's decoded frequencies; None where the component holds none.
+
+    A plane the declared plan cannot decode here is `Unreadable`, reported by
+    `side_tables.eaf_exceptions`, which names the cell and why. A rule reading it
+    is skipped behind that rule, never handed "no frequencies" to pass on.
+    """
+    if block.eaf_undecodable:
+        raise Undecodable(
+            f"{plane_label(target, 'eaf')} cannot be decoded under the declared plan",
+            reported_by=EAF_EXCEPTIONS,
+        )
+    return block.eaf
+
+
+def _eaf_out_of_range(target: Target, block: Block) -> int:
+    eaf = frequencies(target, block)
+    if eaf is None:
         return 0
-    eaf = block.eaf
     return int(np.count_nonzero(np.isfinite(eaf) & ((eaf < 0.0) | (eaf > 1.0))))
 
 
@@ -230,8 +248,11 @@ def _judge_eaf_range(target: Target, n: int) -> Iterator[str]:
 
     Decoded, not raw: an `int8` residual plane's bytes are codes, and checking those
     for "in [0, 1]" would pass every store while saying nothing about the
-    frequencies a query returns.
+    frequencies a query returns. A component with no frequencies has none to
+    judge, which is a skip, not a pass.
     """
+    if not holds_frequencies(target):
+        raise Skip("no frequencies")
     if n:
         yield f"{plane_label(target, 'eaf')} contains finite values outside [0, 1]"
 

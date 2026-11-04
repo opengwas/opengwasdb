@@ -241,6 +241,37 @@ def test_a_plane_that_cannot_be_decoded_blocks_only_the_folds_that_read_it() -> 
     assert result.skipped == {"later": ("first",)}
 
 
+def test_a_plane_that_names_its_reporter_is_skipped_behind_it_or_reported_alone() -> None:
+    """A rule that already says why the plane cannot be decoded reports it, however
+    late it is registered; without that rule, the reader reports it."""
+
+    def read(target: Target) -> Iterator[int]:
+        yield from (1, 2, 3)
+
+    scan = Scan("numbers", read, lambda target, exc: f"cannot decode numbers: {exc}")
+
+    def decoded(target: Target, block: int) -> int:
+        raise Undecodable("bad codes", reported_by="explains")
+
+    reader = Fold(
+        name="reader",
+        kinds=Kind.RELEASE,
+        scan=scan,
+        zero=0,
+        measure=decoded,
+        judge=lambda target, total: [],
+    )
+    explains = _sum_fold("explains", scan, 0)
+
+    result = evaluate([reader, explains], [RELEASE])
+    assert result.errors == ["explains: total 6"]
+    assert result.skipped == {"reader": ("explains",)}
+
+    alone = evaluate([reader, explains], [RELEASE], selection={"reader"})
+    assert alone.errors == ["cannot decode numbers: bad codes"]
+    assert alone.skipped == {}
+
+
 def test_a_rule_that_cannot_judge_its_target_is_skipped_with_its_reason() -> None:
     def run(target: Target) -> Iterable[str]:
         raise Skip("nothing to check")
@@ -249,6 +280,27 @@ def test_a_rule_that_cannot_judge_its_target_is_skipped_with_its_reason() -> Non
     result = evaluate(rules, [RELEASE])
     assert result.ok
     assert result.skipped == {"a": ("nothing to check",), "b": ("a",)}
+
+
+def test_a_rule_stopped_only_by_failures_runs_past_a_skip_and_not_past_a_failure() -> None:
+    def nothing(target: Target) -> Iterable[str]:
+        raise Skip("nothing to check")
+
+    def last(name: str, after: tuple[str, ...]) -> Check:
+        return Check(
+            name=name,
+            kinds=Kind.RELEASE,
+            after=after,
+            only_failures_block=True,
+            run=lambda target: [f"{name} ran"],
+        )
+
+    skipped = Check(name="skipped", kinds=Kind.RELEASE, run=nothing)
+    rules = [skipped, _check("failed", "bad"), last("past_skip", ("skipped",))]
+    rules.append(last("past_failure", ("skipped", "failed")))
+    result = evaluate(rules, [RELEASE])
+    assert result.errors == ["failed: bad on .", "past_skip ran"]
+    assert result.skipped == {"skipped": ("nothing to check",), "past_failure": ("failed",)}
 
 
 def test_the_registry_refuses_a_fold_after_a_rule_registered_after_its_scan_starts() -> None:

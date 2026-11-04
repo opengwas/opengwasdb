@@ -25,7 +25,7 @@ from opengwasdb.encoding import (
     ZOverflowTable,
 )
 from opengwasdb.validation.rule import Fold, Rule, Target
-from opengwasdb.validation.rules.associations import VALUE_KINDS, VALUES_AFTER
+from opengwasdb.validation.rules.associations import EAF_EXCEPTIONS, VALUE_KINDS, VALUES_AFTER
 from opengwasdb.validation.rules.encoding import plane_label
 from opengwasdb.validation.scans import ASSOCIATIONS, Block
 
@@ -110,11 +110,15 @@ def _judge_eaf_exceptions(target: Target, marked: Marked) -> Iterator[str]:
     An undecodable band is only reported once the positions have been reconciled:
     a table that disagrees with the plane is the *reason* the plane cannot be
     decoded, and saying "cannot decode" before naming that reason would hide it.
+    The rules reading frequencies are skipped behind this one, so it reports every
+    plane that cannot be decoded, with an exception table or without.
     """
+    label = plane_label(target, "eaf")
     if not target.encoding.eaf.is_residual or "eaf" not in target.group:
+        if marked.undecodable:
+            yield f"{label} cannot be decoded under the declared plan"
         return
     errors: list[str] = []
-    label = plane_label(target, "eaf")
     positions_match(
         label,
         marked.positions,
@@ -161,7 +165,7 @@ RULES: tuple[Rule, ...] = (
         judge=_judge_z_overflow,
     ),
     Fold(
-        name="side_tables.eaf_exceptions",
+        name=EAF_EXCEPTIONS,
         kinds=VALUE_KINDS,
         after=VALUES_AFTER,
         scan=ASSOCIATIONS,

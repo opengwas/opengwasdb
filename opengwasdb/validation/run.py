@@ -113,7 +113,7 @@ class _Run:
             while owner is not None:
                 state = self.states.get((name, self.position.get(id(owner), -1)))
                 if state is not None:
-                    if state != _PASSED:
+                    if _blocks(rule, state):
                         found.append(name)
                     break
                 owner = owner.parent
@@ -159,6 +159,13 @@ class _Run:
         return chosen and rule.applies_to(target)
 
 
+def _blocks(rule: Rule, state: str) -> bool:
+    """Whether a prerequisite that ended in `state` stops `rule`."""
+    if rule.only_failures_block:
+        return state == _FAILED
+    return state != _PASSED
+
+
 class _Pass:
     """One pass of a scan for its ready folds: each fold's total, failure or blocker.
 
@@ -166,7 +173,8 @@ class _Pass:
     fails part-way is reported by the first fold still measuring, and blocks the
     others, since a part of the data says nothing about the whole. A plane that
     cannot be decoded (`Unreadable`) is reported by the first fold that reads it
-    and blocks only the folds that read it after.
+    and blocks only the folds that read it after; one that names the rule reporting
+    it is skipped behind that rule, which reads the plane's codes, not its values.
     """
 
     def __init__(self, scan: Scan[Any], target: Target, folds: list[Fold[Any, Any]]) -> None:
@@ -197,13 +205,27 @@ class _Pass:
         try:
             self.totals[fold.name] = self.totals[fold.name] + fold.measure(self.target, block)
         except Unreadable as exc:
-            if self.unreadable_by is None:
-                self.unreadable_by = fold.name
-                self.report(fold, exc)
-            else:
-                self.blocked[fold.name] = self.unreadable_by
+            self.unreadable(fold, exc)
         except Exception as exc:  # this fold's failure, and no other's
             self.failures[fold.name] = _failure(fold, self.target, exc)
+
+    def unreadable(self, fold: Fold[Any, Any], exc: Unreadable) -> None:
+        """Skip `fold` behind the rule that reports the plane, or report it once here.
+
+        A named reporter that is not measuring in this pass reports nothing, so the
+        plane is reported here instead: an undecodable plane is never only a skip.
+        """
+        if exc.reported_by is not None and exc.reported_by in self.reporting():
+            self.blocked[fold.name] = exc.reported_by
+        elif self.unreadable_by is None:
+            self.unreadable_by = fold.name
+            self.report(fold, exc)
+        else:
+            self.blocked[fold.name] = self.unreadable_by
+
+    def reporting(self) -> set[str]:
+        """The folds of this pass that are still measuring, or have failed: they report."""
+        return {fold.name for fold in self.folds if fold.name not in self.blocked}
 
     def report(self, fold: Fold[Any, Any], exc: Exception) -> None:
         message = self.scan.failure(self.target, exc)

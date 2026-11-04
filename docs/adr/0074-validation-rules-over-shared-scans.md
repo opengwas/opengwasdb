@@ -64,7 +64,17 @@ every target each applies to:
   that fails part-way is reported by the first fold still measuring, and the others
   are skipped. A plane decoded lazily that cannot be decoded (`Unreadable`) is
   reported by the first fold that reads it, and blocks only the folds that read it
-  after. So an undecodable SE no longer hides the side table that explains it.
+  after. So an undecodable SE no longer hides the side table that explains it. A
+  plane whose reason another fold on the scan already reports names that fold, and
+  its readers are skipped behind it: an undecodable EAF is reported by
+  `side_tables.eaf_exceptions`, which names the cell, and `associations.eaf_range`
+  is skipped behind it. Selected without that fold, the reader reports the plane.
+- A rule with nothing to judge raises `Skip`: `associations.eaf_range` on a
+  component holding no frequencies records "no frequencies", not a pass.
+- `fidelity.source` runs after every error rule before it, and is stopped only by
+  one that failed (`only_failures_block`), as source fidelity ran only on a release
+  with no error before. Each skip among its prerequisites stands behind a failure
+  that is also one, or behind nothing to judge.
 
 **Three scans** stream what the value rules judge:
 - `ASSOCIATIONS` reads a Dense grid in row bands and a sequence in windows of

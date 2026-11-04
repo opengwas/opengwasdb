@@ -183,6 +183,9 @@ class Rule:
     `after` names the rules that must pass on the same target, or on a target it
     belongs to, before this one runs; a rule that failed or was skipped there skips
     this one. A prerequisite that does not apply to the target constrains nothing.
+    A rule with `only_failures_block` is skipped only by a prerequisite that failed:
+    one that waits on every rule before it names each failure a skip stands behind,
+    and a rule skipped for having nothing to judge says nothing against it.
 
     `witnesses` marks a rule that judges, after the fact, what Association
     Admission guarantees of every cell it admits (ADR 0072): the Admission
@@ -196,6 +199,7 @@ class Rule:
     when: Callable[[Target], bool] = _always
     severity: Severity = Severity.ERROR
     witnesses: tuple[str, ...] | None = None
+    only_failures_block: bool = False
 
     def __post_init__(self) -> None:
         unknown = sorted(set(self.witnesses or ()) - ADMISSION_REASONS)
@@ -238,8 +242,14 @@ class Unreadable(Exception):
 
     Raised from a block's lazily decoded plane, so it reaches only the folds that
     read that plane: the first to meet it reports it, the others that meet it are
-    skipped, and a fold that never reads the plane still sees every block.
+    skipped, and a fold that never reads the plane still sees every block. When a
+    rule on the same scan already says why the plane cannot be decoded, the plane
+    names it in `reported_by`, and every fold that meets it is skipped behind it.
     """
+
+    def __init__(self, message: str, *, reported_by: str | None = None) -> None:
+        super().__init__(message)
+        self.reported_by = reported_by
 
 
 class Skip(Exception):
