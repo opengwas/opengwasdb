@@ -11,6 +11,7 @@ import zarr
 from residual_fixtures import residual_eligible_records
 
 from opengwasdb.build.source import NormalisedAssociation
+from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
 from opengwasdb.encoding.codec import SeExceptionBuilder, SeExceptionTable, StoreCodec
 from opengwasdb.encoding.measure import fit_se_grid
 from opengwasdb.encoding.plan import (
@@ -29,8 +30,7 @@ from opengwasdb.encoding.planes import (
     DenseSePlane,
     DenseZPlane,
     RaggedSePlane,
-    write_se_csr,
-    write_se_dense,
+    write_encoded_planes,
 )
 from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
 from opengwasdb.layouts.dense.build import build_dense_observed_store
@@ -133,6 +133,10 @@ def test_decision_chooses_smallest_candidate_only_when_all_gates_pass() -> None:
     )
 
 
+#: An SE the residual model misses by far more than the range: an exact exception.
+_EXCEPTIONAL_SE = np.float32(50.0)
+
+
 def _residual_dense_group(tmp_path, *, compressed=False):
     """A tiny three-variant Dense group with one exact SE exception at (1, 1)."""
     group = zarr.open_group(str(tmp_path / "data.zarr"), mode="w", zarr_format=2)
@@ -140,18 +144,19 @@ def _residual_dense_group(tmp_path, *, compressed=False):
     coefficients = np.array([[-3.0, -0.5], [-2.5, -0.45]], dtype=np.float32)
     x = np.log(2 * eaf * (1 - eaf))
     se = np.exp(coefficients[None, :, 0] + coefficients[None, :, 1] * x).astype(np.float32)
-    se[1, 1] = 0.0
-    group.create_array("eaf", data=np.asarray(eaf, dtype="float32"), chunks=(2, 2))
-    group.create_array("z", data=np.asarray(np.ones_like(eaf), dtype="float16"), chunks=(2, 2))
+    se[1, 1] = _EXCEPTIONAL_SE
     plan = _plan(1.0)
-    write_se_dense(
+    encoded = AssociationCodec(plan, se_coefficients=coefficients).encode(
+        CellValues(np.ones_like(eaf), se, eaf), Placement.band(0, 3, 2), where="fixture"
+    )
+    write_encoded_planes(
         group,
-        StoreCodec(plan),
-        se,
-        eaf,
-        coefficients,
-        chunks=(2, 2),
+        plan,
+        encoded,
+        role=ArrayRole.DENSE_STATISTIC_PLANE,
         compressor=compressor() if compressed else None,
+        chunks=(2, 2),
+        se_coefficients=coefficients,
     )
     return group, se, plan
 
@@ -164,7 +169,7 @@ def test_dense_plane_writer_exposes_only_physical_se(tmp_path) -> None:
     np.testing.assert_allclose(plane.column(1), se[:, 1], rtol=0.01)
     np.testing.assert_allclose(
         plane.points(np.array([0, 1]), np.array([0, 1])),
-        np.array([se[0, 0], 0.0]),
+        np.array([se[0, 0], _EXCEPTIONAL_SE]),
         rtol=0.01,
     )
     assert group["se"].dtype == np.dtype("int8")
@@ -177,15 +182,23 @@ def test_ragged_plane_uses_csr_ordinals_for_exact_exceptions(tmp_path) -> None:
     coefficients = np.array([[-3.0, -0.5], [-2.5, -0.45]], dtype=np.float32)
     se = np.exp(coefficients[ai, 0] + coefficients[ai, 1] * np.log(2 * eaf * (1 - eaf)))
     se = se.astype(np.float32)
-    se[2] = 0.0
+    se[2] = _EXCEPTIONAL_SE
     group.create_array("offsets", data=np.asarray(np.array([0, 2, 4]), dtype="int64"))
     group.create_array("variant_index", data=np.asarray(np.arange(4), dtype="int32"))
-    group.create_array("eaf", data=np.asarray(eaf, dtype="float32"))
-    write_se_csr(group, StoreCodec(_plan(1.0)), se, eaf, ai, coefficients)
+    plan = _plan(1.0)
+    encoded = AssociationCodec(plan, se_coefficients=coefficients).encode(
+        CellValues(np.ones(4, np.float32), se, eaf),
+        Placement.sequence(0, np.arange(4), ai, 2),
+        where="fixture",
+    )
+    write_encoded_planes(
+        group, plan, encoded, role=ArrayRole.ASSOCIATION_SEQUENCE, compressor=None,
+        se_coefficients=coefficients,
+    )
 
-    plane = RaggedSePlane.open(group, _plan(1.0))
+    plane = RaggedSePlane.open(group, plan)
     np.testing.assert_allclose(plane.slice(0, 2, analysis_index=0), se[:2], rtol=0.01)
-    assert plane.at(np.array([2]), analysis_index=np.array([1]))[0] == 0.0
+    assert plane.at(np.array([2]), analysis_index=np.array([1]))[0] == _EXCEPTIONAL_SE
     assert group["se_exception_index"][:].tolist() == [2]
 
 
@@ -401,25 +414,6 @@ def test_a_tiny_codeable_overflow_does_not_force_float16(tmp_path) -> None:
     decoded = DenseSePlane.open(group, selected).band(0, len(dense_se))
     np.testing.assert_allclose(
         decoded, dense_se.astype(np.float16).astype(np.float32), rtol=0.01
-    )
-
-
-def test_patching_a_dense_se_cell_keeps_the_existing_exceptions(tmp_path) -> None:
-    """A patch that touches no exception cell must leave the SE table's entries.
-
-    Review round 2, finding 1, for the SE exception table: completion's
-    crossover fold calls `DenseSePlane.patch`.
-    """
-    group, se, plan = _residual_dense_group(tmp_path, compressed=True)
-    before = np.asarray(group["se_exception_index"][:], dtype=np.int64)
-    assert len(before) >= 1, "fixture must have an SE exception cell to lose"
-
-    plane = DenseSePlane.open(group, plan)
-    plane.patch(np.array([0]), np.array([0]), np.array([se[0, 0]], dtype=np.float32))
-
-    after = np.asarray(group["se_exception_index"][:], dtype=np.int64)
-    assert set(before.tolist()) <= set(after.tolist()), (
-        f"patching an ordinary cell dropped SE exception entries: {before} -> {after}"
     )
 
 

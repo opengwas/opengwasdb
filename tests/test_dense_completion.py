@@ -1138,12 +1138,12 @@ class TestCompletedBandWriter:
         out_to_src: np.ndarray,
         records: np.ndarray,
         impute_mask: np.ndarray | None,
-    ) -> tuple[Path, StoreEncoding, int, tuple[np.ndarray, int, int]]:
+    ) -> tuple[Path, StoreEncoding, int, tuple[np.ndarray, int, int, np.ndarray]]:
         """Build a staged completed-zarr target, write one fill shard for the
         single band every small store maps to, run the writer, and return
         ``(dst, encoding, n_analyses, counters)`` where counters are the
         writer's ``(n_missing_off_panel, n_missing_imputation_failed,
-        total_imputed)``. The destination is left staged (committed by the
+        total_imputed, se_out_of_range)``. The destination is left staged (committed by the
         context manager), so the returned ``dst`` holds ``data.zarr`` ready
         to open.
         """
@@ -1180,7 +1180,12 @@ class TestCompletedBandWriter:
                 encoding,
                 impute_mask=impute_mask,
             )
-        return dst, encoding, n_analyses, counters
+        return dst, encoding, n_analyses, (
+            counters.n_missing_off_panel,
+            counters.n_missing_imputation_failed,
+            counters.total_imputed,
+            counters.se_out_of_range,
+        )
 
     def test_exact_counters_and_cell_accounting(self, tmp_path, signal_observed_store):
         """The writer fills only cells the source left missing, never overwrites
@@ -1210,7 +1215,7 @@ class TestCompletedBandWriter:
         records["z"] = [7.5, -2.5, 0.25]
         records["se"] = [0.11, 0.22, 0.30]
 
-        dst, encoding, n_analyses, (miss_off, miss_failed, n_imputed) = self._call_writer(
+        dst, encoding, n_analyses, (miss_off, miss_failed, n_imputed, _) = self._call_writer(
             tmp_path, signal_observed_store, n_variants, on_panel, out_to_src,
             records, impute_mask=None,
         )
@@ -1256,6 +1261,40 @@ class TestCompletedBandWriter:
                 tmp_path, observed_store, n_variants, on_panel, out_to_src,
                 records, impute_mask=np.array([True, False]),
             )
+
+
+    def _fill_one_missing_cell(self, tmp_path, store, z: float, se: float):
+        """Fill the signal fixture's one cell nobody observed (row 6, Analysis 0)."""
+        n_variants = 12
+        out_to_src = np.full(n_variants, -1, dtype=np.int64)
+        observed = [i for i in range(n_variants) if i != _SIGNAL_MISSING_IDX]
+        out_to_src[observed] = np.arange(len(observed))
+        records = np.zeros(1, dtype=complete_module._FILL_RECORD_DTYPE)
+        records["row"], records["ai"], records["z"], records["se"] = [6], [0], [z], [se]
+        return self._call_writer(
+            tmp_path, store, n_variants, np.ones(n_variants, dtype=bool), out_to_src,
+            records, impute_mask=None,
+        )
+
+    def test_a_fill_admission_would_not_admit_is_refused(self, tmp_path, signal_observed_store):
+        """A fill with a Z and no SE would be stored as a half-missing pair (spec §15).
+
+        Each band is judged whole before any plane holds it, so the write
+        refuses with Association Admission's rule rather than storing it.
+        """
+        from opengwasdb.admission.cells import NotAdmitted
+
+        with pytest.raises(NotAdmitted, match=r"complete-dense, rows 0 to 12: .*one of z and SE"):
+            self._fill_one_missing_cell(tmp_path, signal_observed_store, 5.0, np.nan)
+
+    def test_an_se_above_float16s_range_is_counted_for_its_analysis(
+        self, tmp_path, signal_observed_store
+    ):
+        *_, (_, _, n_imputed, se_out_of_range) = self._fill_one_missing_cell(
+            tmp_path, signal_observed_store, 5.0, 70_000.0
+        )
+        assert n_imputed == 1
+        assert se_out_of_range.tolist() == [1]
 
 
 class TestCompletedStoreCounters:

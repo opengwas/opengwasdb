@@ -66,16 +66,17 @@ from opengwasdb.completion.regions import (
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
     EAF_BASELINE,
-    RaggedEafPlane,
-    StoreCodec,
+    AssociationCodec,
+    CellValues,
+    Placement,
+    SeEncoding,
     StoreEncoding,
-    ZOverflowBuilder,
     fit_se,
-    positions_flat,
-    write_eaf_csr,
+    storable,
     write_eaf_reference,
-    write_se_csr,
 )
+from opengwasdb.encoding.association_codec import log_se_out_of_range
+from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import (
@@ -526,7 +527,6 @@ class _EncodePlan:
     baseline for observed ones (ADR 0037 §2/§4)."""
 
     encoding: StoreEncoding
-    codec: StoreCodec
     eaf_reference: np.ndarray | None
     out_baseline: np.ndarray | None
 
@@ -1190,15 +1190,12 @@ def _encode_plan(
     # cell, the panel's value on every imputed one.
     eaf_reference = panel_reference_eaf(ld_dir, ancestry, axis.variants)
     encoding = manifest.encoding.with_eaf_reference(eaf_reference is not None)
-    codec = StoreCodec(encoding)
     src_baseline = _source_eaf_baseline(src)
     out_baseline = None
     if src_baseline is not None:
         out_baseline = np.full(len(axis.variants), np.nan, dtype=np.float32)
         out_baseline[np.asarray(axis.src_idx_remap, dtype=np.int64)] = src_baseline
-    return _EncodePlan(
-        encoding=encoding, codec=codec, eaf_reference=eaf_reference, out_baseline=out_baseline
-    )
+    return _EncodePlan(encoding=encoding, eaf_reference=eaf_reference, out_baseline=out_baseline)
 
 
 def _flatten_csr(csr: _CompletedCsr) -> _FlatCsr:
@@ -1213,9 +1210,37 @@ def _flatten_csr(csr: _CompletedCsr) -> _FlatCsr:
     )
 
 
-def _write_csr_id_arrays(root: Any, flat: _FlatCsr, codec: StoreCodec) -> None:
-    """The CSR's index planes plus z: offsets, variant_index, the fixed-point
-    z plane with its overflow table (ADR 0037 §1), and the imputed mask."""
+def _stored_flat(flat: _FlatCsr, analysis_ids: list[str]) -> _FlatCsr:
+    """The completed associations `storable` stores, with the values it returns.
+
+    A CSR holds rows, so a row it does not store is left out, its frequency and
+    imputed flag with it. Each Analysis's SEs above `float16`'s range are
+    logged here, once: the encode that follows judges the same rows again and
+    logs nothing.
+    """
+    n_analyses = len(analysis_ids)
+    analysis_index = np.searchsorted(flat.offsets[1:], np.arange(len(flat.se)), side="right")
+    kept = storable(
+        CellValues(flat.z, flat.se, flat.eaf, imputed=flat.imp),
+        analysis_index,
+        n_analyses,
+        where="complete-ragged",
+    )
+    log_se_out_of_range(kept.se_out_of_range, analysis_ids, where="complete-ragged")
+    rows, cells = kept.stored, kept.cells
+    per_analysis = np.bincount(analysis_index[rows], minlength=n_analyses)
+    return _FlatCsr(
+        offsets=np.concatenate([[0], np.cumsum(per_analysis)]).astype(np.int64),
+        vi=flat.vi[rows],
+        z=np.asarray(cells.z)[rows],
+        se=np.asarray(cells.se)[rows],
+        eaf=np.asarray(cells.eaf)[rows],
+        imp=np.asarray(cells.imputed)[rows],
+    )
+
+
+def _write_csr_id_arrays(root: Any, flat: _FlatCsr) -> None:
+    """The CSR's index planes: offsets, variant_index and the imputed mask."""
     store_arrays.create_array(
         root,
         "offsets",
@@ -1232,21 +1257,6 @@ def _write_csr_id_arrays(root: Any, flat: _FlatCsr, codec: StoreCodec) -> None:
         dtype=np.int32,
         compressor=_COMPRESSOR,
     )
-    # Completion writes into the source's arrays, so it encodes with the
-    # source's plan (ADR 0038 §4) -- the overflow table travels with the
-    # plane it belongs to. The one addition is `eaf_reference`, which
-    # records a physical fact about this release rather than reinterpreting
-    # its source's bytes.
-    z_overflow = ZOverflowBuilder()
-    store_arrays.create_array(
-        root,
-        "z",
-        ArrayRole.ASSOCIATION_SEQUENCE,
-        data=codec.encode_z(flat.z, positions=positions_flat(0), overflow=z_overflow),
-        dtype=codec.z_dtype,
-        compressor=_COMPRESSOR,
-    )
-    z_overflow.table().write(root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
     store_arrays.create_array(
         root,
         "imputed",
@@ -1257,37 +1267,34 @@ def _write_csr_id_arrays(root: Any, flat: _FlatCsr, codec: StoreCodec) -> None:
     )
 
 
-def _write_eaf_and_se_arrays(
+def _write_statistic_planes(
     root: Any, encode_plan: _EncodePlan, flat: _FlatCsr, n_analyses: int
 ) -> None:
-    """The EAF and SE planes plus the release attrs. Observed frequencies
-    only: an imputed cell's frequency is the panel's, stored once per variant
-    in `eaf_reference` and applied on read (ADR 0037 §4); an observed cell
-    whose source reported none stays absent. The per-variant baseline travels
-    with the values across the variant remap rather than being recomputed from
-    them, so a value decoded from the source re-encodes to the same code."""
-    if not encode_plan.encoding.eaf.is_absent:
-        write_eaf_csr(
-            root,
-            encode_plan.codec,
-            flat.vi,
-            flat.eaf,
-            baseline=encode_plan.out_baseline,
-            compressor=_COMPRESSOR,
-        )
-    if encode_plan.eaf_reference is not None:
-        write_eaf_reference(
-            root,
-            encode_plan.eaf_reference,
-            compressor=_COMPRESSOR,
-            role=ArrayRole.RAGGED_PER_VARIANT,
-        )
-    decoded_eaf = RaggedEafPlane.open(root, encode_plan.encoding, imputed=root["imputed"]).slice(
-        0, len(flat.se)
-    )
+    """The z, EAF and SE planes, encoded together under the source's plan, and
+    the release attrs.
+
+    Completion writes into the source's arrays, so it encodes with the
+    source's plan (ADR 0038 §4); the one addition is `eaf_reference`. Observed
+    frequencies only: an imputed cell's frequency is the panel's, stored once
+    per variant and applied on read (ADR 0037 §4); an observed cell whose
+    source reported none stays absent. The per-variant baseline travels with
+    the values across the variant remap rather than being recomputed from them,
+    so a value decoded from the source re-encodes to the same code. A residual
+    SE model is fitted on the frequencies a reader decodes, the panel's on an
+    imputed cell.
+    """
+    encoding = encode_plan.encoding
     analysis_index = np.searchsorted(flat.offsets[1:], np.arange(len(flat.se)), side="right")
-    se_coefficients = (
-        fit_se(
+    cells = CellValues(
+        flat.z, flat.se, None if encoding.eaf.is_absent else flat.eaf, imputed=flat.imp
+    )
+    at = Placement.sequence(0, flat.vi, analysis_index, n_analyses)
+    eaf = {"eaf_baseline": encode_plan.out_baseline, "eaf_reference": encode_plan.eaf_reference}
+    coefficients = None
+    if encoding.se.is_residual:
+        preliminary = AssociationCodec(encoding.with_se(SeEncoding("float16")), **eaf)
+        decoded_eaf = preliminary.round_trip(cells, at, where="complete-ragged").eaf
+        coefficients = fit_se(
             flat.se,
             decoded_eaf,
             analysis_index,
@@ -1295,18 +1302,25 @@ def _write_eaf_and_se_arrays(
             compressor=_COMPRESSOR,
             chunks=_ASSOC_CHUNK,
         )[0]
-        if encode_plan.encoding.se.is_residual
-        else None
+    encoded = AssociationCodec(encoding, se_coefficients=coefficients, **eaf).encode(
+        cells, at, where="complete-ragged"
     )
-    write_se_csr(
+    write_encoded_planes(
         root,
-        encode_plan.codec,
-        flat.se,
-        decoded_eaf,
-        analysis_index,
-        se_coefficients,
+        encoding,
+        encoded,
+        role=ArrayRole.ASSOCIATION_SEQUENCE,
         compressor=_COMPRESSOR,
+        eaf_baseline=encode_plan.out_baseline,
+        se_coefficients=coefficients,
     )
+    if encode_plan.eaf_reference is not None:
+        write_eaf_reference(
+            root,
+            encode_plan.eaf_reference,
+            compressor=_COMPRESSOR,
+            role=ArrayRole.RAGGED_PER_VARIANT,
+        )
     root.attrs["layout"] = "ragged"
     root.attrs["completion_state"] = "reference_completed"
     root.attrs["n_analyses"] = n_analyses
@@ -1317,7 +1331,7 @@ def _write_completed_zarr(
     staged: StagedRelease,
     encode_plan: _EncodePlan,
     csr: _CompletedCsr,
-    n_analyses: int,
+    analyses: list[Analysis],
     n_variants: int,
 ) -> None:
     """Phase 4: write the completed CSR as the store's ragged zarr group, then
@@ -1329,9 +1343,9 @@ def _write_completed_zarr(
     ragged_path = staged.path / RAGGED_ZARR_PATH
     ragged_path.mkdir(parents=True, exist_ok=True)
     root = store_arrays.open_group_for_write(ragged_path, "w")
-    flat = _flatten_csr(csr)
-    _write_csr_id_arrays(root, flat, encode_plan.codec)
-    _write_eaf_and_se_arrays(root, encode_plan, flat, n_analyses)
+    flat = _stored_flat(_flatten_csr(csr), [analysis.analysis_id for analysis in analyses])
+    _write_csr_id_arrays(root, flat)
+    _write_statistic_planes(root, encode_plan, flat, len(analyses))
     print("Building variant-centric index...")
     build_variant_index(staged.path, n_axis=n_variants)
 
@@ -1474,7 +1488,7 @@ def _run_completion(
             region_cap_bp=region_cap_bp,
         )
         encode_plan = _encode_plan(src, ld_dir, ancestry, manifest, axis)
-        _write_completed_zarr(staged, encode_plan, csr, state.n_analyses, len(axis.variants))
+        _write_completed_zarr(staged, encode_plan, csr, state.src_analyses, len(axis.variants))
         _write_top_hits_and_analyses(staged, state, encode_plan, ancestry=ancestry)
         staged.write_manifest(
             _completed_manifest(

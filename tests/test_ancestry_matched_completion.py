@@ -20,8 +20,8 @@ import io
 from pathlib import Path
 
 import numpy as np
+from test_hybrid_completion import build_over_panel
 
-from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.query import query_store
@@ -115,14 +115,7 @@ def _build_source(tmp_path: Path, ancestry: dict[str, str]) -> Path:
     for name, anc in ancestry.items():
         lines.append(f"{name}\t{vcfs[name]}\t{name}\t1000\tsd\tdeclared_standardised\t{anc}")
     manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    panel = tmp_path / "panel.txt"
-    panel.write_text("\n".join(PANEL_ALIDS) + "\n", encoding="utf-8")
-
-    src = tmp_path / "src.opengwasdb"
-    build_hybrid_from_vcf_manifest(
-        manifest, src, reference_panel=panel, store_id="hyb", release_id="v1"
-    )
-    return src
+    return build_over_panel(tmp_path, manifest, PANEL_ALIDS)
 
 
 def test_mixed_store_imputes_only_matching_ancestry(tmp_path):

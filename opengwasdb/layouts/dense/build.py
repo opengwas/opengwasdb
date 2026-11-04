@@ -5,26 +5,25 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
 from opengwasdb import admission
 from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding import (
-    DenseEafPlane,
-    EafExceptionBuilder,
     EncodingMeasurements,
-    StoreCodec,
     StoreEncoding,
-    ZOverflowBuilder,
     eaf_baseline_from_grid,
     fit_se_grid,
     measure_eaf_grid,
-    positions_row_band,
-    write_eaf_baseline,
-    write_se_dense,
 )
+from opengwasdb.encoding.association_codec import (
+    AssociationCodec,
+    CellValues,
+    Placement,
+    log_se_out_of_range,
+)
+from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
@@ -46,7 +45,7 @@ from opengwasdb.model.enums import (
 from opengwasdb.model.maf_policy import MafPolicy
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.stats import FrequencyTally, parse_af
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import ArrayRole, compressor
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts
 from opengwasdb.variants import (
@@ -129,7 +128,7 @@ def build_dense_observed_store(
 
         # The encoding plan is decided once, here, and read back from the
         # manifest by everything downstream (ADR 0037, issue #119).
-        encoding, coefficients = _decide_encoding(eaf, se, chunk_shape)
+        encoding, coefficients = _decide_encoding(z, se, eaf, chunk_shape)
         rsid_by_alid = _first_rsids_by_alid(records)
         _write_manifest(
             staged,
@@ -145,7 +144,7 @@ def build_dense_observed_store(
         )
         write_variant_axis(staged.path, variants, rsid_by_alid)
         _write_index(staged, variants, analyses, records, chunk_shape)
-        _write_zarr(staged, z, se, eaf, coefficients, chunk_shape, dtype, encoding)
+        _write_zarr(staged, (z, se, eaf), coefficients, chunk_shape, encoding, analyses)
         build_top_hit_indexes(staged.path, encoding=encoding)
         write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
         return DenseBuildResult(output_path=out, n_variants=len(variants), n_analyses=len(analyses))
@@ -279,12 +278,11 @@ def _scatter_records(
         se[row, col] = record.se
         if record.eaf is not None:
             eaf[row, col] = record.eaf
-    admission.require_admitted(z, se, where="build-dense")
     return z, se, eaf
 
 
 def _decide_encoding(
-    eaf: np.ndarray, se: np.ndarray, chunk_shape: tuple[int, int]
+    z: np.ndarray, se: np.ndarray, eaf: np.ndarray, chunk_shape: tuple[int, int]
 ) -> tuple[StoreEncoding, np.ndarray]:
     """Measure both planes and settle the store's plan, in the required order.
 
@@ -297,7 +295,12 @@ def _decide_encoding(
     preliminary = StoreEncoding.decide(
         EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measured)
     )
-    decoded_eaf = _round_trip_eaf(eaf, preliminary)
+    baseline = eaf_baseline_from_grid(eaf) if preliminary.eaf.is_residual else None
+    decoded_eaf = (
+        AssociationCodec(preliminary, eaf_baseline=baseline)
+        .round_trip(CellValues(z, se, eaf), Placement.band(0, *eaf.shape), where="build-dense")
+        .eaf
+    )
     coefficients, se_measured = fit_se_grid(
         se,
         decoded_eaf,
@@ -309,25 +312,6 @@ def _decide_encoding(
             EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measured, se=se_measured)
         ),
         coefficients,
-    )
-
-
-def _round_trip_eaf(eaf: np.ndarray, encoding: StoreEncoding) -> np.ndarray:
-    """The frequencies a reader gets back from this plan, cell for cell."""
-    if encoding.eaf.is_absent:
-        return np.full(eaf.shape, np.nan, dtype=np.float32)
-    n_analyses = eaf.shape[1]
-    baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
-    per_cell = None if baseline is None else np.repeat(baseline[:, None], n_analyses, axis=1)
-    exceptions = EafExceptionBuilder()
-    raw = StoreCodec(encoding).encode_eaf(
-        eaf,
-        baseline=per_cell,
-        positions=positions_row_band(0, n_analyses),
-        exceptions=exceptions,
-    )
-    return StoreCodec(encoding, eaf_exceptions=exceptions.table()).decode_eaf(
-        raw, baseline=per_cell, positions=positions_row_band(0, n_analyses)
     )
 
 
@@ -501,85 +485,41 @@ def _first_rsids_by_alid(records: list[NormalisedAssociation]) -> dict[str, str]
     return rsid_by_alid
 
 
-def _write_dense_eaf(
-    root: Any,
-    codec: StoreCodec,
-    eaf: np.ndarray,
-    encoding: StoreEncoding,
-    comp: Any,
-    chunks: tuple[int, ...],
-) -> None:
-    """Encode and write the Dense `eaf` plane, baseline and exception table.
-
-    The whole block is one unit because the three arrays are one artifact: a
-    store with an `eaf` plane but no baseline for its residual coding is not
-    readable.
-    """
-    baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
-    if encoding.eaf.is_absent:
-        return
-    exceptions = EafExceptionBuilder()
-    raw = codec.encode_eaf(
-        eaf,
-        baseline=None if baseline is None else np.repeat(baseline[:, None], eaf.shape[1], axis=1),
-        positions=positions_row_band(0, eaf.shape[1]),
-        exceptions=exceptions,
-    )
-    create_array(
-        root,
-        "eaf",
-        ArrayRole.DENSE_STATISTIC_PLANE,
-        data=raw,
-        dtype=codec.eaf_dtype,
-        compressor=comp,
-        hint=chunks,
-    )
-    if baseline is not None:
-        write_eaf_baseline(root, baseline, compressor=comp)
-        exceptions.table().write(root)
-
-
 def _write_zarr(
     staged: StagedRelease,
-    z: np.ndarray,
-    se: np.ndarray,
-    eaf: np.ndarray,
+    grids: tuple[np.ndarray, np.ndarray, np.ndarray],
     se_coefficients: np.ndarray,
     chunk_shape: tuple[int, int],
-    dtype: str,
     encoding: StoreEncoding,
+    analyses: list[Analysis],
 ) -> None:
-    comp = compressor()
+    """Encode the `(z, se, eaf)` grid once, write each plane with its side
+    arrays, and log each Analysis's SEs above `float16`'s range."""
+    z, se, eaf = grids
     root = staged.arrays(mode="w")
-    codec = StoreCodec(encoding)
-    # Flat C-order position is exactly `flatnonzero` over the whole grid, which
-    # is what the overflow table keys on.
-    overflow = ZOverflowBuilder()
-    codes = codec.encode_z(z, positions=np.flatnonzero, overflow=overflow)
-    z_array = create_array(
-        root,
-        "z",
-        ArrayRole.DENSE_STATISTIC_PLANE,
-        data=codes,
-        dtype=codec.z_dtype,
-        compressor=comp,
-        hint=chunk_shape,
+    baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
+    coefficients = se_coefficients if encoding.se.is_residual else None
+    codec = AssociationCodec(encoding, eaf_baseline=baseline, se_coefficients=coefficients)
+    encoded = codec.encode(
+        CellValues(z, se, None if encoding.eaf.is_absent else eaf),
+        Placement.band(0, *z.shape),
+        where="build-dense",
     )
-    # Chunk shape is clipped to the array dimensions (ADR 0021) by the role's
-    # layout policy; read back what was written rather than clipping again.
-    effective_chunks = tuple(int(size) for size in z_array.chunks)
-    _write_dense_eaf(root, codec, eaf, encoding, comp, effective_chunks)
-    physical_eaf = DenseEafPlane.open(root, encoding).band(0, eaf.shape[0])
-    write_se_dense(
+    write_encoded_planes(
         root,
-        codec,
-        se,
-        physical_eaf,
-        se_coefficients,
-        compressor=comp,
-        chunks=effective_chunks,
+        encoding,
+        encoded,
+        role=ArrayRole.DENSE_STATISTIC_PLANE,
+        compressor=compressor(),
+        chunks=chunk_shape,
+        eaf_baseline=baseline,
+        se_coefficients=coefficients,
     )
-    overflow.table().write(root)
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "observed_only"
     root.attrs.update(dense_layout_records(z.shape, hint=chunk_shape))
+    log_se_out_of_range(
+        encoded.storable.se_out_of_range,
+        [analysis.analysis_id for analysis in analyses],
+        where="build-dense",
+    )

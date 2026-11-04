@@ -299,7 +299,6 @@ def test_a_hybrid_completion_patches_whole_shards(
     import test_hybrid_completion as thc
 
     import opengwasdb.encoding.planes as planes_module
-    import opengwasdb.layouts.hybrid.complete as hybrid_complete_module
     from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 
     bands: list[int] = []
@@ -320,7 +319,6 @@ def test_a_hybrid_completion_patches_whole_shards(
 
     original = planes_module.write_shard_cells
     monkeypatch.setattr(planes_module, "write_shard_cells", counting)
-    monkeypatch.setattr(hybrid_complete_module, "write_shard_cells", counting)
 
     src = thc._build_source(tmp_path)
     ld = thc._make_ld_panel_with_crossover(tmp_path)

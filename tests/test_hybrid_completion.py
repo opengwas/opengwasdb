@@ -14,6 +14,7 @@ import shutil as file_ops
 from pathlib import Path
 
 import numpy as np
+import plane_edits
 import pytest
 import zarr
 from residual_fixtures import write_gwas_vcf_with_eaf
@@ -33,13 +34,14 @@ PANEL_ALIDS = ["1:100000:A:G", "1:814620:A:G", "1:1064620:A:G", "1:1564620:A:G"]
 OFF_PANEL_ALID = "1:2068561:A:G"
 
 
-def _vcf(tmp_path, name, rows):
+def _vcf(tmp_path, name, rows, *, with_af: bool = False):
     header = (
         "##fileformat=VCFv4.2\n"
         "##FORMAT=<ID=ES,Number=A,Type=Float,Description=\"Effect size\">\n"
         "##FORMAT=<ID=SE,Number=A,Type=Float,Description=\"Standard error\">\n"
         "##FORMAT=<ID=EZ,Number=A,Type=Float,Description=\"Z-score\">\n"
-        "##SAMPLE=<ID=S,StudyType=Continuous>\n"
+        + ("##FORMAT=<ID=AF,Number=A,Type=Float,Description=\"Frequency\">\n" if with_af else "")
+        + "##SAMPLE=<ID=S,StudyType=Continuous>\n"
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS\n"
     )
     p = tmp_path / f"{name}.vcf"
@@ -94,37 +96,53 @@ def write_manifest(tmp_path: Path, sources: list[tuple[Path, str, str]]) -> Path
     return manifest
 
 
-def _build_source(tmp_path: Path) -> Path:
-    trait_a = _vcf(
-        tmp_path, "trait_a",
-        [
-            "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
-            "1\t750000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.4\n",
-            "1\t1000000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
-            "1\t1500000\t.\tA\tG\t.\tPASS\t.\tES:SE\t0.6:0.2\n",
-            "1\t2000000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.2:0.3\n",  # OFF-PANEL overflow
-        ],
-    )
-    trait_c = _vcf(
-        tmp_path, "trait_c",
-        [
-            "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.2:0.5\n",
-            "1\t750000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.1:0.4\n",
-            "1\t1000000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.6:0.3\n",
-            # NOTE: 1:1500000 missing → 1:1564620 is an imputation target for trait_c
-        ],
-    )
+def build_two_trait_source(
+    tmp_path: Path, rows: dict[str, list[tuple[int, str]]], fields: str = "ES:SE"
+) -> Path:
+    """A Hybrid source over `PANEL_ALIDS` holding trait_a and trait_c. Each row
+    is `(hg19 position, values)`: an A/G variant on chromosome 1, with `values`
+    in `fields`."""
+    vcfs = {
+        name: _vcf(
+            tmp_path,
+            name,
+            [f"1\t{pos}\t.\tA\tG\t.\tPASS\t.\t{fields}\t{values}\n" for pos, values in held],
+            with_af="AF" in fields.split(":"),
+        )
+        for name, held in rows.items()
+    }
     manifest = write_manifest(
-        tmp_path, [(trait_a, "trait_a", "Trait A"), (trait_c, "trait_c", "Trait C")]
+        tmp_path, [(vcfs["trait_a"], "trait_a", "Trait A"), (vcfs["trait_c"], "trait_c", "Trait C")]
     )
-    panel = tmp_path / "panel.txt"
-    panel.write_text("\n".join(PANEL_ALIDS) + "\n", encoding="utf-8")
+    return build_over_panel(tmp_path, manifest, PANEL_ALIDS)
 
+
+def build_over_panel(tmp_path: Path, manifest: Path, panel_alids: list[str]) -> Path:
+    """Build `manifest` as a Hybrid source whose Dense panel is `panel_alids`."""
+    panel = tmp_path / "panel.txt"
+    panel.write_text("\n".join(panel_alids) + "\n", encoding="utf-8")
     src = tmp_path / "src.opengwasdb"
     build_hybrid_from_vcf_manifest(
         manifest, src, reference_panel=panel, store_id="hyb", release_id="v1"
     )
     return src
+
+
+def _build_source(tmp_path: Path) -> Path:
+    return build_two_trait_source(
+        tmp_path,
+        {
+            "trait_a": [
+                (100_000, "2.0:0.5"),
+                (750_000, "1.0:0.4"),
+                (1_000_000, "1.5:0.3"),
+                (1_500_000, "0.6:0.2"),
+                (2_000_000, "1.2:0.3"),  # OFF-PANEL overflow
+            ],
+            # NOTE: 1:1500000 missing → 1:1564620 is an imputation target for trait_c
+            "trait_c": [(100_000, "2.2:0.5"), (750_000, "1.1:0.4"), (1_000_000, "1.6:0.3")],
+        },
+    )
 
 
 @pytest.fixture(scope="module")
@@ -651,8 +669,8 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
     344,510/4,916,057-variant repro actually hit. Forcing a real ElasticNetCV
     fit to succeed deterministically on a fixture this small isn't reliable
     (test_dense_completion.py notes the same fragility for its own iid-random
-    LD blocks), so this exercises `_fold_panel_crossovers`'s `was_imputed`
-    branch directly against a synthetic completed-dense zarr array instead of
+    LD blocks), so this exercises `_fold_panel_crossovers`'s count of reclaimed
+    imputed cells directly against a synthetic completed-dense zarr array instead of
     routing through a real completion run."""
     from opengwasdb.encoding import (
         DenseZPlane,
@@ -674,7 +692,7 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
 
     # Row 1 / analysis column 0: dense completion already wrote an LD-imputed
     # guess here before the fold runs.
-    DenseZPlane.open(root, encoding).patch(np.array([1]), np.array([0]), np.array([1.23]))
+    plane_edits.patch(root, encoding, DenseZPlane, np.array([1]), np.array([0]), np.array([1.23]))
     root["se"][1, 0] = 0.5
     root["imputed"][1, 0] = 1
 
@@ -688,7 +706,7 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
 
     n_reclaimed = _fold_panel_crossovers(
         dense_dir, dense_alid_to_row, offsets, src_z, src_se, src_eaf,
-        overflow_alids, is_crossover, encoding=encoding, dense_encoding=encoding,
+        overflow_alids, is_crossover, dense_encoding=encoding,
     )
 
     assert n_reclaimed == 1

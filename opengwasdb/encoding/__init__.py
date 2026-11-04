@@ -3,8 +3,16 @@
 ADR 0037 / issue #119. `StoreEncoding` is decided once at build time from
 measured properties of the data and recorded in `manifest.json`; `StoreCodec`
 is the only place a store's stored bytes become physical values.
+`AssociationCodec` is how a component stores associations: what it may hold
+(`storable`) and every plane's codes from one call (ADR 0077).
 """
 
+from opengwasdb.encoding.association_codec import (
+    AssociationCodec,
+    CellValues,
+    Placement,
+    storable,
+)
 from opengwasdb.encoding.codec import (
     DEFAULT_BASELINE_CELL_BUDGET,
     EAF_BASELINE,
@@ -77,11 +85,10 @@ from opengwasdb.encoding.planes import (
     EafRead,
     RaggedEafPlane,
     RaggedSePlane,
+    write_dense_cells,
     write_eaf_baseline,
-    write_eaf_csr,
     write_eaf_reference,
-    write_se_csr,
-    write_se_dense,
+    write_encoded_planes,
 )
 from opengwasdb.encoding.se import (
     OverflowCellBatches,
@@ -98,6 +105,12 @@ from opengwasdb.store.arrays import (
 )
 
 __all__ = [
+    "AssociationCodec",
+    "CellValues",
+    "Placement",
+    "storable",
+    "write_dense_cells",
+    "write_encoded_planes",
     "DEFAULT_BASELINE_CELL_BUDGET",
     "DEFAULT_PER_VARIANT_CHUNK",
     "component_chunk_size",
@@ -170,10 +183,7 @@ __all__ = [
     "positions_rows_cols",
     "per_variant_chunk_size",
     "write_eaf_baseline",
-    "write_eaf_csr",
     "write_eaf_reference",
-    "write_se_dense",
-    "write_se_csr",
     "optimise_dense_se",
     "optimise_dense_se_joint",
     "rewrite_dense_se",
