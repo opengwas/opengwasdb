@@ -1,6 +1,7 @@
 """Tests for zarr CSR ragged storage (issue 035)."""
 
 import numpy as np
+import pytest
 
 from opengwasdb.encoding import (
     EafEncoding,
@@ -137,6 +138,65 @@ def test_n_associations_counter(tmp_path):
 
     reader = RaggedCSRReader(tmp_path, ENCODING)
     assert reader.n_associations == 5
+
+
+# One Analysis's arrays, all three associations long. `eaf` and `n` are the
+# optional planes (ADR 0036, ADR 0067), so a caller passes None for either.
+_PARALLEL_ARRAYS = {
+    "variant_index": np.array([3, 5, 9], dtype=np.int32),
+    "z": np.array([0.5, -1.5, 2.5], dtype=np.float32),
+    "se": np.array([0.1, 0.2, 0.3], dtype=np.float32),
+    "eaf": np.array([0.2, 0.4, 0.6], dtype=np.float32),
+    "n": np.array([1_000, 2_000, 3_000], dtype=np.int32),
+}
+
+
+def _add(writer: RaggedCSRWriter, arrays: dict[str, np.ndarray]) -> None:
+    writer.add_analysis(
+        arrays["variant_index"],
+        arrays["z"],
+        arrays["se"],
+        arrays["eaf"],
+        arrays["n"],
+    )
+
+
+@pytest.mark.parametrize("shortened", list(_PARALLEL_ARRAYS))
+def test_an_array_that_is_not_parallel_is_refused_and_writes_nothing(shortened):
+    """Every array of an Analysis must be as long as every other one (#364).
+
+    The writer took the cells' length from one array and indexed the rest with
+    it, so a length-1 SE beside three variants stored three associations
+    carrying that one SE's value and the write succeeded (#357). The refusal
+    names every array's length, so it points at the array that was wrong.
+    """
+    arrays = dict(_PARALLEL_ARRAYS)
+    writer = RaggedCSRWriter(_N_VARIANTS)
+    _add(writer, arrays)
+    assert writer.n_associations == 3
+
+    arrays[shortened] = arrays[shortened][:1]
+    with pytest.raises(ValueError) as refusal:
+        _add(writer, arrays)
+
+    message = str(refusal.value)
+    for name in _PARALLEL_ARRAYS:
+        assert f"{name} of length {1 if name == shortened else 3}" in message
+    assert writer.n_associations == 3
+    assert writer.n_analyses == 1
+
+
+def test_the_reproduced_length_one_se_is_refused_before_it_broadcasts():
+    """The case #357 reproduced, without the optional planes (#364)."""
+    writer = RaggedCSRWriter(_N_VARIANTS)
+    with pytest.raises(ValueError, match=r"se of length 1"):
+        writer.add_analysis(
+            np.array([1, 2, 3], dtype=np.int32),
+            np.array([1.0, 2.0, 3.0], dtype=np.float32),
+            np.array([0.1], dtype=np.float32),
+        )
+    assert writer.n_associations == 0
+    assert writer.n_analyses == 0
 
 
 # The Dense and Ragged per-variant shard policies differ above 1,000,000

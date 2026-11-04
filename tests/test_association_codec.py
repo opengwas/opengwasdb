@@ -88,6 +88,24 @@ def test_an_se_narrowed_to_infinity_is_a_stored_value_and_counted() -> None:
     assert kept.se_out_of_range.tolist() == [1]
 
 
+@pytest.mark.parametrize(
+    ("cells", "named"),
+    [
+        (CellValues(_f32(1.0, 2.0), _f32(0.1)), "se of length 1"),
+        (CellValues(_f32(1.0, 2.0), _f32(0.1, 0.2), _f32(0.3)), "eaf of length 1"),
+        (
+            CellValues(_f32(1.0, 2.0), _f32(0.1, 0.2), imputed=np.array([1], dtype=np.uint8)),
+            "imputed of length 1",
+        ),
+    ],
+    ids=["se", "eaf", "imputed"],
+)
+def test_a_batch_whose_arrays_are_not_parallel_is_refused(cells, named) -> None:
+    """One shape for every array of a batch, and the refusal names each length."""
+    with pytest.raises(ValueError, match=f"{named}.*must be parallel"):
+        storable(cells, 0, 1, where="complete-x")
+
+
 def test_the_count_starts_just_above_float16s_largest_value() -> None:
     se = np.array([SE_FLOAT16_MAX, np.nextafter(SE_FLOAT16_MAX, np.inf), 70_000.0, np.inf, 0.5])
     kept = storable(CellValues(np.ones(5), se), np.array([0, 0, 1, 2, 2]), 4, where="x")

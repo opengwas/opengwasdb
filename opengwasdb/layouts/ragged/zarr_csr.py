@@ -37,6 +37,7 @@ from opengwasdb.encoding.association_codec import (
     CellValues,
     Placement,
     log_se_out_of_range,
+    require_parallel,
     storable,
 )
 from opengwasdb.encoding.codec import se_float16
@@ -207,14 +208,18 @@ class RaggedCSRWriter:
         0067). It is encoded as it arrives, so a malformed N fails at the
         Analysis that carries it; the plane is written only when the plan
         declares one.
+
+        Every array must be as long as every other one, checked here before
+        anything is cast, judged or stored: an array of another length would
+        otherwise be broadcast to `z`'s cells -- one value stored under three
+        variants -- or indexed with a mask of the wrong length (issue #364).
         """
         where = where or f"the Ragged writer, analysis_index {self.n_analyses}"
+        require_parallel(
+            (("variant_index", variant_index), ("z", z), ("se", se), ("eaf", eaf), ("n", n)),
+            where=where,
+        )
         vi = _sorted_variant_indices(variant_index)
-        if n is not None and len(n) != len(vi):
-            raise ValueError(
-                f"an Analysis's n has {len(n)} entries for {len(vi)} associations; the "
-                "per-association sample size must be parallel to variant_index"
-            )
         # Held as float32 and quantised once, by the codec, at flush -- never
         # pre-rounded into a stored dtype here.
         kept = storable(_float32_cells(z, se, eaf, len(vi)), 0, 1, where=where)
