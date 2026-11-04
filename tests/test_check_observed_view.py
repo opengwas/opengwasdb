@@ -14,6 +14,7 @@ from pathlib import Path
 from shutil import copytree
 
 import numpy as np
+import plane_edits
 import pytest
 import test_dense_completion as tdc
 from cli_output import normalize_cli_output
@@ -94,6 +95,12 @@ def _plane(store: Path, cls):
     return cls.open(opened.arrays(mode="r+"), opened.manifest.encoding)
 
 
+def _patch(store: Path, cls, rows, cols, values) -> None:
+    """One plane's cells overwritten: a state no writer produces (`plane_edits`)."""
+    opened = open_store(store)
+    plane_edits.patch(opened.arrays(mode="r+"), opened.manifest.encoding, cls, rows, cols, values)
+
+
 def _row_of(store: Path, alid: str) -> int:
     from opengwasdb.variants import VariantAxis
 
@@ -155,19 +162,19 @@ def test_a_completed_fixture_pair_passes_with_hand_counted_totals(tmp_path, pair
 def _perturb_z(store: Path) -> None:
     rows, cols = _cell(store, "1:1000000:A:G", "a1")
     plane = _plane(store, DenseZPlane)
-    plane.patch(rows, cols, plane.points(rows, cols) + 1.0)
+    _patch(store, DenseZPlane, rows, cols, plane.points(rows, cols) + 1.0)
 
 
 def _perturb_se(store: Path) -> None:
     rows, cols = _cell(store, "1:1000000:A:G", "a1")
     plane = _plane(store, DenseSePlane)
-    plane.patch(rows, cols, plane.points(rows, cols) * 2.0)
+    _patch(store, DenseSePlane, rows, cols, plane.points(rows, cols) * 2.0)
 
 
 def _perturb_eaf(store: Path) -> None:
     rows, cols = _cell(store, "1:1000000:A:G", "a1")
     plane = _plane(store, DenseEafPlane)
-    plane.patch(rows, cols, plane.points(rows, cols) * 0.5)
+    _patch(store, DenseEafPlane, rows, cols, plane.points(rows, cols) * 0.5)
 
 
 def _flag_observed_cell_imputed(store: Path) -> None:
@@ -177,22 +184,22 @@ def _flag_observed_cell_imputed(store: Path) -> None:
 
 def _blank_observed_cell(store: Path) -> None:
     rows, cols = _cell(store, "1:1000000:A:G", "a1")
-    _plane(store, DenseZPlane).patch(rows, cols, np.array([np.nan], dtype=np.float32))
+    _patch(store, DenseZPlane, rows, cols, np.array([np.nan], dtype=np.float32))
 
 
 def _observe_a_missing_cell(store: Path) -> None:
     # a2 observes only 1:1000000, so 1:900000 is a source-missing cell in a2.
     rows, cols = np.array([_row_of(store, "1:900000:A:G")]), np.array([1])
-    _plane(store, DenseZPlane).patch(rows, cols, np.array([2.5], dtype=np.float32))
-    _plane(store, DenseSePlane).patch(rows, cols, np.array([0.3], dtype=np.float32))
+    _patch(store, DenseZPlane, rows, cols, np.array([2.5], dtype=np.float32))
+    _patch(store, DenseSePlane, rows, cols, np.array([0.3], dtype=np.float32))
 
 
 def _observe_an_inserted_row(store: Path) -> None:
     # The panel-only row 1:1050000:C:T sits inside the sampled span, and a2 is never
     # imputed, so this cell is missing and unflagged until it is patched.
     rows, cols = np.array([_row_of(store, "1:1050000:C:T")]), np.array([1])
-    _plane(store, DenseZPlane).patch(rows, cols, np.array([2.5], dtype=np.float32))
-    _plane(store, DenseSePlane).patch(rows, cols, np.array([0.3], dtype=np.float32))
+    _patch(store, DenseZPlane, rows, cols, np.array([2.5], dtype=np.float32))
+    _patch(store, DenseSePlane, rows, cols, np.array([0.3], dtype=np.float32))
 
 
 def _write_invalid_imputed(store: Path) -> None:
@@ -201,12 +208,12 @@ def _write_invalid_imputed(store: Path) -> None:
 
 def _z_without_se_on_a_missing_cell(store: Path) -> None:
     rows, cols = np.array([_row_of(store, "1:900000:A:G")]), np.array([1])
-    _plane(store, DenseZPlane).patch(rows, cols, np.array([2.5], dtype=np.float32))
+    _patch(store, DenseZPlane, rows, cols, np.array([2.5], dtype=np.float32))
 
 
 def _z_without_se_on_an_inserted_row(store: Path) -> None:
     rows, cols = np.array([_row_of(store, "1:1050000:C:T")]), np.array([1])
-    _plane(store, DenseZPlane).patch(rows, cols, np.array([2.5], dtype=np.float32))
+    _patch(store, DenseZPlane, rows, cols, np.array([2.5], dtype=np.float32))
 
 
 @pytest.mark.parametrize(
@@ -484,7 +491,7 @@ def test_an_infinite_se_copied_identically_passes_and_is_counted(tmp_path, infin
 def test_an_infinite_se_the_target_holds_differently_fails(tmp_path, infinite_se_pair):
     observed, completed = infinite_se_pair
     rows, cols = np.array([_row_of(completed, INFINITE_SE_ALID)]), np.array([0])
-    _plane(completed, DenseSePlane).patch(rows, cols, np.array([0.15], dtype=np.float32))
+    _patch(completed, DenseSePlane, rows, cols, np.array([0.15], dtype=np.float32))
     out = tmp_path / "verdict.json"
 
     result = _run(observed, completed, out)
@@ -670,8 +677,8 @@ def leading_gap_pair(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[P
 
 def _observe_child_row(store: Path, row: int) -> None:
     rows, cols = np.array([row]), np.array([0])
-    _plane(store, DenseZPlane).patch(rows, cols, np.array([2.5], dtype=np.float32))
-    _plane(store, DenseSePlane).patch(rows, cols, np.array([0.3], dtype=np.float32))
+    _patch(store, DenseZPlane, rows, cols, np.array([2.5], dtype=np.float32))
+    _patch(store, DenseSePlane, rows, cols, np.array([0.3], dtype=np.float32))
 
 
 # Child rows 3, 9, 12, 15, 16 are inserted. Chunk-rows of two source rows put 9 and 12 between

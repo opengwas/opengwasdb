@@ -268,6 +268,17 @@ def test_a_completion_candidate_is_admissible_only_with_finite_z_and_positive_se
     assert admissible(z, se).tolist() == [True, False, False, False, False, False]
 
 
+def test_an_se_a_float16_plane_narrowed_to_infinity_is_admissible_only_when_said_so():
+    """What `storable` asks of a cell read back or re-encoded from a Store (#337)."""
+    from opengwasdb.admission.cells import admissible
+
+    z = np.array([1.0, 1.0, 1.0, np.inf])
+    se = np.array([np.inf, -np.inf, 0.1, np.inf])
+
+    assert admissible(z, se).tolist() == [False, False, True, False]
+    assert admissible(z, se, narrowed_se=True).tolist() == [True, False, True, False]
+
+
 def test_require_admitted_accepts_what_admission_stores():
     from opengwasdb.admission import require_admitted
 

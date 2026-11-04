@@ -33,7 +33,6 @@ from opengwasdb.admission import (
     Reason,
     SourceRows,
     admission_record_for,
-    require_admitted,
 )
 from opengwasdb.admission.declared import declared_rules
 from opengwasdb.build.eaf_orientation import EafOrientationReport, apply_orientation_evidence
@@ -960,7 +959,7 @@ def _add_empty_analysis(csr: RaggedCSRWriter) -> None:
     csr.add_analysis(
         np.empty(0, dtype=np.int32),
         np.empty(0, dtype=np.float32),
-        np.empty(0, dtype=np.float16),
+        np.empty(0, dtype=np.float32),
     )
 
 
@@ -1156,8 +1155,14 @@ def _ingest_probe(
     eaf = rows.eaf[order] if stores_frequencies else None
     n = None if sample_sizes is None else _pair_sample_sizes(esi, axis, sample_sizes, sizes)
     z, se = rows.z.astype(np.float32)[order], rows.se.astype(np.float32)[order]
-    require_admitted(z, se, where=f"build-ragged-besd, probe {probe.probe_id}")
-    csr.add_analysis(rows.variant_index.astype(np.int32)[order], z, se, eaf=eaf, n=n)
+    csr.add_analysis(
+        rows.variant_index.astype(np.int32)[order],
+        z,
+        se,
+        eaf=eaf,
+        n=n,
+        where=f"build-ragged-besd, probe {probe.probe_id}",
+    )
     return _ProbeScopes.of(eaf, n), False
 
 

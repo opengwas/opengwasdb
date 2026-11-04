@@ -26,7 +26,8 @@ from opengwasdb.validation.validate import validate_store
 def _write_esi(path: Path, snps: list[dict]) -> None:
     with open(path, "w") as fh:
         for s in snps:
-            fh.write(f"{s['chr']}\t{s['snp_id']}\t0\t{s['bp']}\t{s['a1']}\t{s['a2']}\tNA\n")
+            freq = s.get("freq", "NA")
+            fh.write(f"{s['chr']}\t{s['snp_id']}\t0\t{s['bp']}\t{s['a1']}\t{s['a2']}\t{freq}\n")
 
 
 def _write_epi(path: Path, probes: list[dict]) -> None:
@@ -57,19 +58,29 @@ def _write_besd_sparse_3f(path: Path, n_probes: int, probe_assocs: list[list[tup
         fh.write(struct.pack(f"<{len(val)}f", *val))
 
 
-def _make_besd_fixture(tmp_path: Path) -> Path:
+def _make_besd_fixture(
+    tmp_path: Path,
+    freqs: tuple[float, ...] | None = None,
+    probe_assocs: list[list[tuple]] | None = None,
+) -> Path:
+    """Two probes over three variants. `freqs`, one per variant, fills the
+    `.esi`'s frequency column, which is otherwise `NA`; `probe_assocs`, one
+    `(snp, beta, se)` list per probe, replaces the default associations."""
     fixture = tmp_path / "fixture"
     fixture.mkdir()
-    snps = [
+    snps: list[dict] = [
         {"chr": "1", "snp_id": "rs1001", "bp": 1_000_000, "a1": "A", "a2": "G"},
         {"chr": "1", "snp_id": "rs1002", "bp": 1_100_000, "a1": "C", "a2": "T"},
         {"chr": "1", "snp_id": "rs1003", "bp": 1_200_000, "a1": "A", "a2": "C"},
     ]
+    if freqs is not None:
+        for snp, freq in zip(snps, freqs, strict=True):
+            snp["freq"] = freq
     probes = [
         {"chr": "1", "probe_id": "ENSG00000000001", "bp": 1_050_000, "gene": "GENE1"},
         {"chr": "1", "probe_id": "ENSG00000000002", "bp": 1_150_000, "gene": "GENE2"},
     ]
-    probe_assocs = [
+    probe_assocs = probe_assocs or [
         [(0, 0.1, 0.02), (1, -0.2, 0.03)],
         [(1, 0.5, 0.05), (2, -0.15, 0.025)],
     ]

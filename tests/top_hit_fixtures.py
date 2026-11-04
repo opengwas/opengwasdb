@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import plane_edits
 import residual_stores
 import test_hybrid_build as hb
 import zarr
@@ -70,8 +71,8 @@ def build_completed_dense(tmp_path: Path) -> Path:
     encoding = StoreManifest.load(out).encoding
     root = zarr.open_group(str(out / "data.zarr"), mode="r+", zarr_format=3)
     rows, cols = np.where(np.asarray(root["imputed"][:], dtype=bool))
-    DenseZPlane.open(root, encoding).patch(
-        rows[:1].astype("int64"), cols[:1].astype("int64"), np.array([8.0], dtype=np.float32)
+    plane_edits.patch(
+        root, encoding, DenseZPlane, rows[:1], cols[:1], np.array([8.0], dtype=np.float32)
     )
     build_top_hit_indexes(out)
     return out

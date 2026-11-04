@@ -630,7 +630,7 @@ def _encode_ssf_csr(
 def _add_empty_analysis(csr: RaggedCSRWriter) -> None:
     """An analysis with no associations still occupies its CSR slot."""
     csr.add_analysis(
-        np.empty(0, np.int32), np.empty(0, np.float32), np.empty(0, np.float16)
+        np.empty(0, np.int32), np.empty(0, np.float32), np.empty(0, np.float32)
     )
 
 
@@ -649,13 +649,13 @@ def _add_ssf_associations(
     eaf_arr = np.fromiter(
         (np.nan if r.eaf is None else r.eaf for r in recs), dtype=np.float32, count=len(recs)
     )
-    admission.require_admitted(z_arr, se_arr, where=f"build-ragged-ssf, analysis_index {index}")
+    where = f"build-ragged-ssf, analysis_index {index}"
     order = np.argsort(vi, kind="stable")
     has_eaf = bool(np.isfinite(eaf_arr).any())
     if has_eaf:
-        csr.add_analysis(vi[order], z_arr[order], se_arr[order], eaf=eaf_arr[order])
+        csr.add_analysis(vi[order], z_arr[order], se_arr[order], eaf=eaf_arr[order], where=where)
         return EafScope.ASSOCIATION.value
-    csr.add_analysis(vi[order], z_arr[order], se_arr[order])
+    csr.add_analysis(vi[order], z_arr[order], se_arr[order], where=where)
     return EafScope.ABSENT.value
 
 

@@ -102,19 +102,29 @@ def _write_dense(path: Path, table: tuple[Cell, ...]) -> zarr.Group:
 
 
 def _write_csr(path: Path, table: tuple[Cell, ...]) -> Path:
+    """The table as an association sequence. The writer refuses a cell with one
+    of z and SE missing, so such a cell is written with a stand-in SE and its
+    SE planted as missing afterwards."""
     writer = RaggedCSRWriter(N_VARIANTS)
     flags: list[int] = []
+    unpaired: list[int] = []
     for analysis in range(N_ANALYSES):
         rows = sorted((c for c in table if c.analysis == analysis), key=lambda c: c.variant)
+        se = np.array([c.se for c in rows], np.float32)
+        z = np.array([c.z for c in rows], np.float32)
+        half = np.isnan(se) & ~np.isnan(z)
+        unpaired.extend((np.flatnonzero(half) + len(flags)).tolist())
         writer.add_analysis(
             np.array([c.variant for c in rows], np.int32),
-            np.array([c.z for c in rows], np.float32),
-            np.array([c.se for c in rows], np.float32),
+            z,
+            np.where(half, np.float32(1.0), se),
             eaf=np.array([c.eaf for c in rows], np.float32),
         )
         flags.extend(c.flag for c in rows)
     writer.flush(path, ENCODING)
     ragged = zarr.open_group(path / RAGGED_ZARR_PATH, mode="a")
+    for position in unpaired:
+        ragged["se"][position] = np.float16(np.nan)
     ragged.create_array("imputed", data=np.array(flags, np.uint8))
     build_variant_index(path, n_axis=N_VARIANTS)
     return path
