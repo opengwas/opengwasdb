@@ -950,6 +950,24 @@ class StoreCodec:
                 dtype=np.float64,
             )
 
+    @staticmethod
+    def _se_from_codes(prediction: np.ndarray, codes: np.ndarray, step: float) -> np.ndarray:
+        """The SE an ordinary residual code decodes to: the one expression the
+        decode and the exact rule in `encode_se` share, so the two agree bit for bit."""
+        with np.errstate(over="ignore", invalid="ignore"):
+            return np.exp(prediction + codes.astype(np.float64) * step).astype(np.float32)
+
+    def _not_exact(
+        self, v: np.ndarray, codes: np.ndarray, exceptional: np.ndarray,
+        prediction: np.ndarray, exact: np.ndarray,
+    ) -> np.ndarray:
+        """Cells that must decode to exactly their value and whose code would not."""
+        held = np.broadcast_to(np.asarray(exact, dtype=bool), v.shape) & ~exceptional & ~np.isnan(v)
+        drifts = np.zeros(v.shape, dtype=bool)
+        reread = self._se_from_codes(prediction[held], codes[held], self.encoding.se.step)
+        drifts[held] = reread != v[held].astype(np.float32)
+        return drifts
+
     def encode_se(
         self,
         values: np.ndarray,
@@ -959,7 +977,15 @@ class StoreCodec:
         coefficients: np.ndarray,
         positions: PositionSource = None,
         exceptions: SeExceptionBuilder | None = None,
+        exact: np.ndarray | None = None,
     ) -> np.ndarray:
+        """Code standard errors under the plan; `float16`, or residuals with exceptions.
+
+        `exact` marks cells whose value must decode to exactly itself -- a value
+        decoded from another Store and carried into this one (issue #301). Under
+        a residual plan such a cell whose code would decode to anything else is
+        an exact exception; a cell already on a code's value keeps the code.
+        """
         v = np.asarray(values, dtype=np.float64)
         if not self.encoding.se.is_residual:
             return se_float16(v)
@@ -984,6 +1010,9 @@ class StoreCodec:
         with np.errstate(divide="ignore", invalid="ignore"):
             residual = np.log(v) - prediction
         out, exceptional = se_residual_codes(v, residual, self.encoding.se.step)
+        if exact is not None:
+            exceptional |= self._not_exact(v, out, exceptional, prediction, exact)
+            out[exceptional] = SE_EXCEPTION
         if np.any(exceptional):
             if exceptions is None:
                 raise ValueError("se exceptions need a SeExceptionBuilder")
@@ -1030,10 +1059,7 @@ class StoreCodec:
             )
         predicted = present & ~exceptional
         prediction = self._se_prediction(f, analysis_index, coefficients)
-        with np.errstate(over="ignore", invalid="ignore"):
-            out = np.exp(prediction + codes.astype(np.float64) * self.encoding.se.step).astype(
-                np.float32
-            )
+        out = self._se_from_codes(prediction, codes, self.encoding.se.step)
         out[codes == SE_MISSING] = np.nan
         if np.any(exceptional):
             if self.se_exceptions is None:
