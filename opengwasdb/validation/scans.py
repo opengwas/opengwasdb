@@ -346,14 +346,8 @@ class _DenseGrid:
         return Block(
             offset=r0 * self.shape[1],
             n_analyses=self.shape[1],
-            z_codes=z_codes,
             se_codes=se_codes,
-            z_missing=self.missing(z_codes),
-            eaf_codes=eaf_codes,
-            eaf=eaf,
-            eaf_undecodable=failure is not None,
-            imputed=imputed if self.completed else None,
-            mask=imputed,
+            **_read_planes(self, z_codes, eaf_codes, (eaf, failure), imputed),
             on_panel=None if self.on_panel is None else self.on_panel[r0:r1],
             z_decoder=partial(self._z, r0, r1),
             se_decoder=partial(_dense_band_se, self, eaf=eaf, eaf_failure=failure, r0=r0, r1=r1),
@@ -385,6 +379,30 @@ class _DenseGrid:
             return plane.band(r0, r1), None
         except ValueError as exc:
             return None, exc
+
+
+def _read_planes(
+    source: _DenseGrid | _Sequence,
+    z_codes: np.ndarray,
+    eaf_codes: np.ndarray | None,
+    decoded_eaf: tuple[np.ndarray | None, Exception | None],
+    imputed: np.ndarray | None,
+) -> dict[str, Any]:
+    """The `Block` fields a band and a window fill alike, from the planes they read.
+
+    The mask is kept as stored, and as the cells flagged imputed only where the
+    component is Reference-Completed.
+    """
+    eaf, failure = decoded_eaf
+    return {
+        "z_codes": z_codes,
+        "z_missing": source.missing(z_codes),
+        "eaf_codes": eaf_codes,
+        "eaf": eaf,
+        "eaf_undecodable": failure is not None,
+        "imputed": imputed if source.completed else None,
+        "mask": imputed,
+    }
 
 
 def _dense_band_se(
@@ -564,14 +582,8 @@ class _Sequence:
         return Block(
             offset=lo,
             n_analyses=self.n_analyses,
-            z_codes=z_codes,
             se_codes=np.asarray(self.se_array[lo:hi]),
-            z_missing=self.missing(z_codes),
-            eaf_codes=eaf_codes,
-            eaf=eaf,
-            eaf_undecodable=failure is not None,
-            imputed=imputed if self.completed else None,
-            mask=imputed,
+            **_read_planes(self, z_codes, eaf_codes, (eaf, failure), imputed),
             analysis=analysis,
             variant=variant,
             previous=previous,

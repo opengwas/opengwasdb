@@ -12,8 +12,8 @@ corrupt (test_validation.py, test_validate_presence.py, test_dense_completion.py
 
 from __future__ import annotations
 
+import pathlib
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -282,7 +282,7 @@ def test_cells_held_in_row_order_are_located_without_a_second_order() -> None:
 
 
 def test_a_validation_reads_each_tier_array_once_and_holds_the_tiers_by_row(
-    dense_store_path: Path, monkeypatch: pytest.MonkeyPatch
+    dense_store_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The structure rules run after the band scan has released the tiers, from what
     they learned in the same load; the scan holds each tier sorted by row."""
@@ -312,7 +312,7 @@ def test_a_band_locates_the_cells_it_holds_by_their_grid_coordinates() -> None:
 
 
 def test_a_tier_flag_is_held_to_a_stored_mask_whatever_the_completion_state(
-    dense_store_path: Path,
+    dense_store_path: pathlib.Path,
 ) -> None:
     """An Observed-Only grid's mask flags no imputed cell, but a tier copies the mask
     as stored, so a tier flag of 0 against a stored 1 is still a wrong flag."""
@@ -340,7 +340,7 @@ def test_a_tier_flag_is_held_to_a_stored_mask_whatever_the_completion_state(
 
 
 def test_a_release_without_frequencies_records_the_range_rule_as_skipped(
-    dense_store_path: Path,
+    dense_store_path: pathlib.Path,
 ) -> None:
     """No frequency to judge is a skip, which a caller can tell from a range that held."""
     store = open_store(dense_store_path)
