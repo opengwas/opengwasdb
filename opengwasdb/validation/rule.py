@@ -206,8 +206,12 @@ class Rule:
         if unknown:
             raise ValueError(f"rule {self.name!r} witnesses no Admission Reason {unknown}")
 
+    def judges(self, target: Target) -> bool:
+        """Whether the target is of a kind this rule judges; reads nothing."""
+        return bool(target.kind & self.kinds)
+
     def applies_to(self, target: Target) -> bool:
-        return bool(target.kind & self.kinds) and self.when(target)
+        return self.judges(target) and self.when(target)
 
     def findings(self, target: Target) -> Iterator[Finding]:
         """Judge `target`; raising is a failure of this rule, reported as one."""

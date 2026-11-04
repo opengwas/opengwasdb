@@ -1825,7 +1825,8 @@ target:
 
 A rule may run after others. It is skipped, and recorded as skipped with the rules
 that blocked it, when one of those failed or was skipped on its target or a target it
-belongs to. A skip is not a pass. `fidelity.source`, which runs after every error rule
+belongs to. A skip is not a pass. Whether a rule applies to a target is asked only
+after its prerequisites passed. `fidelity.source`, which runs after every error rule
 before it, is stopped only by one that failed. A *fold* is judged from one streamed read of its
 target that every fold on it shares; a *check* reads what it needs.
 

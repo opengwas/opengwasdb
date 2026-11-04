@@ -58,7 +58,10 @@ every target each applies to:
   blocked it. A selection runs the named rules and their prerequisites, and an
   unknown name is refused before anything is read.
 - An exception fails the rule that raised it, as `validation failed: …`, after
-  whatever it found. It fails no other rule.
+  whatever it found. It fails no other rule. That holds for a rule's `when` too,
+  which is asked only once the rule's prerequisites passed: it may read what a
+  failed prerequisite found broken. A rule blocked there is recorded as skipped,
+  whether or not its `when` would have accepted the target.
 - Findings come out in rule order, then target order.
 - A scan is read once per target, for every fold on it that can run there. A read
   that fails part-way is reported by the first fold still measuring, and the others

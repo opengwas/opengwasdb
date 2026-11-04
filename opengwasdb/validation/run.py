@@ -2,9 +2,11 @@
 
 `evaluate` runs rules in registration order on every target each applies to. A
 rule whose prerequisite failed or was skipped on the target, or on a target it
-belongs to, is skipped and recorded, not reported. A fold is judged from its
-scan, which is read once per target for every fold on it that can run. An
-exception fails the one rule that raised it; findings it made before are kept.
+belongs to, is skipped and recorded, not reported; its `when` is not asked, since
+it may read what the prerequisite found broken. A fold is judged from its scan,
+which is read once per target for every fold on it that can run. An exception,
+from a rule or from its `when`, fails the one rule that raised it; findings it
+made before are kept.
 """
 
 from __future__ import annotations
@@ -73,6 +75,8 @@ class _Run:
         self.chosen = chosen
         self.position = {id(target): i for i, target in enumerate(targets)}
         self.states: dict[tuple[str, int], str] = {}
+        #: The rules whose `when` declined a target: decided, and constraining nothing.
+        self.declined: set[tuple[str, int]] = set()
         self.found: dict[tuple[str, int], list[Finding]] = {}
         self.skipped: dict[str, list[str]] = {}
 
@@ -89,14 +93,26 @@ class _Run:
 
     def judge(self, rule: Rule) -> None:
         for i, target in enumerate(self.targets):
-            if (rule.name, i) in self.states or not rule.applies_to(target):
-                continue
-            if not self.ready(rule, i, target):
+            if self.decided(rule, i) or not rule.judges(target):
                 continue
             if isinstance(rule, Fold):
                 self.scan(rule.scan, i, target)
-            else:
+            elif self.ready(rule, i, target) and self.applies(rule, i, target):
                 self.settle(rule, i, _contained(rule, target, partial(rule.findings, target)))
+
+    def decided(self, rule: Rule, i: int) -> bool:
+        return (rule.name, i) in self.states or (rule.name, i) in self.declined
+
+    def applies(self, rule: Rule, i: int, target: Target) -> bool:
+        """Whether `rule`'s `when` accepts target `i`; a `when` that raises fails the rule."""
+        try:
+            accepted = rule.when(target)
+        except Exception as exc:  # this rule's failure, and no other's
+            self.settle(rule, i, [_failure(rule, target, exc)])
+            return False
+        if not accepted:
+            self.declined.add((rule.name, i))
+        return accepted
 
     def ready(self, rule: Rule, i: int, target: Target) -> bool:
         """Whether `rule` may run on target `i`; if not, record it as skipped."""
@@ -134,7 +150,13 @@ class _Run:
 
     def scan(self, scan: Scan[Any], i: int, target: Target) -> None:
         """Read `scan` once on target `i` for every fold on it that can run there."""
-        ready = [fold for fold in self.folds_on(scan, i, target) if self.ready(fold, i, target)]
+        ready = [
+            fold
+            for fold in self.folds_on(scan, i, target)
+            if self.ready(fold, i, target) and self.applies(fold, i, target)
+        ]
+        if not ready:
+            return  # nothing to measure, so nothing to read
         done = _Pass(scan, target, ready)
         done.drive()
         for fold in ready:
@@ -155,8 +177,7 @@ class _Run:
         ]
 
     def undecided(self, rule: Rule, i: int, target: Target) -> bool:
-        chosen = rule.name in self.chosen and (rule.name, i) not in self.states
-        return chosen and rule.applies_to(target)
+        return rule.name in self.chosen and not self.decided(rule, i) and rule.judges(target)
 
 
 def _blocks(rule: Rule, state: str) -> bool:

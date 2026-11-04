@@ -20,6 +20,7 @@ from opengwasdb.validation.rule import (
     Finding,
     Fold,
     Kind,
+    Rule,
     Scan,
     Severity,
     Skip,
@@ -270,6 +271,49 @@ def test_a_plane_that_names_its_reporter_is_skipped_behind_it_or_reported_alone(
     alone = evaluate([reader, explains], [RELEASE], selection={"reader"})
     assert alone.errors == ["cannot decode numbers: bad codes"]
     assert alone.skipped == {}
+
+
+def test_a_when_that_raises_fails_its_own_rule_and_no_other() -> None:
+    def broken(target: Target) -> bool:
+        raise FileNotFoundError("data.zarr")
+
+    rules = [
+        Check(name="a", kinds=Kind.RELEASE, when=broken, run=lambda target: ["ran"]),
+        _check("b", "ran"),
+    ]
+    result = evaluate(rules, [RELEASE])
+    assert result.of("a") == [
+        Finding("a", Severity.ERROR, "validation failed: data.zarr", ".")
+    ]
+    assert result.errors == ["validation failed: data.zarr", "b: ran on ."]
+
+
+def test_a_when_is_not_asked_behind_a_failed_prerequisite() -> None:
+    """The prerequisite found what `when` would read broken; asking would only repeat it."""
+    asked: list[str] = []
+
+    def reads(target: Target) -> bool:
+        asked.append(target.label)
+        return True
+
+    scan = _counting_scan([1], [])
+    rules: list[Rule] = [
+        _check("a", "broken"),
+        Check(name="b", kinds=Kind.RELEASE, after=("a",), when=reads, run=lambda t: ["ran"]),
+        Fold(
+            name="c",
+            kinds=Kind.RELEASE,
+            after=("a",),
+            when=reads,
+            scan=scan,
+            zero=0,
+            measure=lambda target, block: block,
+            judge=lambda target, total: ["ran"],
+        ),
+    ]
+    result = evaluate(rules, [RELEASE])
+    assert asked == []
+    assert result.skipped == {"b": ("a",), "c": ("a",)}
 
 
 def test_a_rule_that_cannot_judge_its_target_is_skipped_with_its_reason() -> None:

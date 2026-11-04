@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -92,6 +93,17 @@ def test_validator_rejects_missing_required_array(dense_store_path):
 
     assert not result.ok
     assert "missing data.zarr/se" in result.errors
+
+
+def test_a_release_without_its_data_directory_reports_it_rather_than_raising(dense_store_path):
+    """`top_hits.arrays` asks whether there is an index by opening `data.zarr`; that is
+    not asked once the envelope rule has found `data.zarr` missing."""
+    shutil.rmtree(dense_store_path / "data.zarr")
+
+    result = validate_store(dense_store_path)
+
+    assert result.failed() == {"envelope.required"}
+    assert result.errors == ["missing data.zarr"]
 
 
 def test_validator_rejects_misshaped_z_plane(dense_store_path):
