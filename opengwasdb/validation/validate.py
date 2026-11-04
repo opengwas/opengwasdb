@@ -251,8 +251,9 @@ RULES: tuple[Rule, ...] = check_registry(
             name="fidelity.source",
             kinds=Kind.GRID,
             when=lambda target: _source_given(target) and _top_level_dense_grid(target),
-            # As before rules: it runs on a release with no error. A rule skipped for
-            # having nothing to judge, such as a range check with no frequencies, is none.
+            # Source fidelity has always run only on a release with no error, so only a
+            # failed prerequisite stops it. A rule skipped for having nothing to judge,
+            # such as a range check on a component holding no frequencies, is no error.
             after=tuple(r.name for r in _BEFORE_FIDELITY if r.severity is Severity.ERROR),
             only_failures_block=True,
             run=_source_fidelity,
