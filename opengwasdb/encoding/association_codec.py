@@ -52,6 +52,7 @@ __all__ = [
     "Placement",
     "Storable",
     "log_se_out_of_range",
+    "require_parallel",
     "storable",
 ]
 
@@ -408,14 +409,47 @@ def log_se_out_of_range(
     )
 
 
+def require_parallel(named: Sequence[tuple[str, Any]], *, where: str) -> None:
+    """Refuse arrays that are not parallel, naming each one's length.
+
+    Parallel means one shape: the arrays are alternative readings of the same
+    cells, so an index into one is an index into all of them. `named` is
+    `(name, array)` pairs in the order the refusal should name them, `None`
+    where a plane is absent.
+
+    One rule for every writer, because the failure it prevents is the same
+    everywhere: an array shorter (or longer) than the cells it describes is
+    either broadcast to the cells' length, which stores one cell's value
+    under another's variant, or indexed with a mask of the wrong length, which
+    crashes after the planes are open. Neither says which array was wrong.
+    """
+    present = [(name, np.asarray(array)) for name, array in named if array is not None]
+    if not present:
+        return
+    _, first = present[0]
+    if all(array.shape == first.shape for _, array in present):
+        return
+    raise ValueError(f"{where}: {_lengths(present)} must be parallel")
+
+
+def _lengths(named: Sequence[tuple[str, np.ndarray]]) -> str:
+    """`named` as a readable list, a sequence's length or an array's shape."""
+    described = [
+        f"{name} of length {array.shape[0]}"
+        if array.ndim == 1
+        else f"{name} of shape {array.shape}"
+        for name, array in named
+    ]
+    if len(described) == 1:
+        return described[0]
+    return ", ".join(described[:-1]) + " and " + described[-1]
+
+
 def _parallel(cells: CellValues, where: str) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     z, se = np.asarray(cells.z), np.asarray(cells.se)
+    eaf = None if cells.eaf is None else np.asarray(cells.eaf)
     imputed = None if cells.imputed is None else np.asarray(cells.imputed)
-    if se.shape != z.shape or (imputed is not None and imputed.shape != z.shape):
-        raise ValueError(
-            f"{where}: z {z.shape}, se {se.shape} and imputed "
-            f"{None if imputed is None else imputed.shape} must be parallel"
-        )
+    require_parallel((("z", z), ("se", se), ("eaf", eaf), ("imputed", imputed)), where=where)
     return z, se, imputed
 
 
