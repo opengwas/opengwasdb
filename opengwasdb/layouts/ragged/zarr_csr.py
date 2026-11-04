@@ -103,6 +103,20 @@ class AnalysisAssociations(NamedTuple):
     eaf: np.ndarray  # float32, all-NaN when the store carries no EAF
 
 
+def _float32_cells(
+    z: np.ndarray, se: np.ndarray, eaf: np.ndarray | None, n_rows: int
+) -> CellValues:
+    """One Analysis's statistics as float32, with an all-NaN frequency for none."""
+    frequencies = (
+        np.full(n_rows, np.nan, dtype=np.float32)
+        if eaf is None
+        else np.asarray(eaf, dtype=np.float32)
+    )
+    return CellValues(
+        np.asarray(z, dtype=np.float32), np.asarray(se, dtype=np.float32), frequencies
+    )
+
+
 def _sorted_variant_indices(variant_index: np.ndarray) -> np.ndarray:
     """One Analysis's variant indices, refused unless ascending.
 
@@ -179,8 +193,9 @@ class RaggedCSRWriter:
         Its associations are judged whole first (`storable`): one Association
         Admission would not admit refuses the build, named by `where` (the
         builder and the Analysis; this writer's Analysis index by default),
-        and an SE above `float16`'s range is logged, since that is what it
-        becomes in a `float16` plane.
+        and an SE above `float16`'s range is logged. The writer then holds
+        what `storable` returns: the rows it stores, with their values, and
+        so a row it does not store leaves its frequency and its N behind.
 
         `eaf` is optional (ADR 0036): an Analysis whose source reports no
         frequency passes None and contributes all-NaN, so the flat array stays
@@ -194,25 +209,23 @@ class RaggedCSRWriter:
         declares one.
         """
         where = where or f"the Ragged writer, analysis_index {self.n_analyses}"
-        kept = storable(CellValues(np.asarray(z), np.asarray(se)), 0, 1, where=where)
-        log_se_out_of_range(kept.se_out_of_range, where=where)
         vi = _sorted_variant_indices(variant_index)
-        self._variant_indices.append(vi)
-        # Held as float32 and quantised once, by the codec, at flush -- never
-        # pre-rounded into a stored dtype here.
-        self._zscores.append(np.asarray(z, dtype=np.float32))
-        self._ses.append(np.asarray(se, dtype=np.float32))
-        if eaf is None:
-            self._eafs.append(np.full(len(vi), np.nan, dtype=np.float32))
-        else:
-            self._eafs.append(np.asarray(eaf, dtype=np.float32))
         if n is not None and len(n) != len(vi):
             raise ValueError(
                 f"an Analysis's n has {len(n)} entries for {len(vi)} associations; the "
                 "per-association sample size must be parallel to variant_index"
             )
-        self._ns.append(None if n is None else encode_sample_sizes(n))
-        self._offsets.append(self._offsets[-1] + len(vi))
+        # Held as float32 and quantised once, by the codec, at flush -- never
+        # pre-rounded into a stored dtype here.
+        kept = storable(_float32_cells(z, se, eaf, len(vi)), 0, 1, where=where)
+        log_se_out_of_range(kept.se_out_of_range, where=where)
+        rows = kept.stored
+        self._variant_indices.append(vi[rows])
+        self._zscores.append(np.asarray(kept.cells.z)[rows])
+        self._ses.append(np.asarray(kept.cells.se)[rows])
+        self._eafs.append(np.asarray(kept.cells.eaf)[rows])
+        self._ns.append(None if n is None else encode_sample_sizes(np.asarray(n)[rows]))
+        self._offsets.append(self._offsets[-1] + int(np.count_nonzero(rows)))
         # A baseline is a median over every cell at its variant, so a new cell
         # can move one: a held baseline must never outlive the cells it came
         # from. Only `add_analysis` changes those cells.

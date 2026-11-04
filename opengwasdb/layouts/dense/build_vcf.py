@@ -49,7 +49,12 @@ from opengwasdb.encoding import (
     positions_row_band,
     write_eaf_baseline,
 )
-from opengwasdb.encoding.association_codec import CellValues, log_se_out_of_range, storable
+from opengwasdb.encoding.association_codec import (
+    CellValues,
+    Storable,
+    log_se_out_of_range,
+    storable,
+)
 from opengwasdb.encoding.codec import se_float16
 from opengwasdb.encoding.timing import log_phase
 from opengwasdb.index import initialise_schema, set_metadata
@@ -480,10 +485,27 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
         gate.unplaced(Reason.OFF_AXIS, routed.unmatched.keys)
         se = apply_se_divisor(placed.se, row.se_divisor)
         where = f"build-dense-vcf, Analysis {row.trait_id}"
-        kept = storable(CellValues(placed.z, se), 0, 1, where=where)
+        kept = storable(CellValues(placed.z, se, placed.eaf), 0, 1, where=where)
         log_se_out_of_range(kept.se_out_of_range, where=where)
-        _spill_column(context.spill_dir, col_idx, placed.index, placed.z, se, placed.eaf)
+        _spill_stored(context.spill_dir, col_idx, placed.index, kept)
     return col_idx
+
+
+def _spill_stored(spill_dir: Path, col_idx: int, rows: np.ndarray, kept: Storable) -> None:
+    """Spill the column's rows `storable` keeps, with the values it returns.
+
+    A spill holds rows, so a row it does not keep is left out, and its cell in
+    the grid stays missing with no frequency.
+    """
+    stored, cells = kept.stored, kept.cells
+    _spill_column(
+        spill_dir,
+        col_idx,
+        rows[stored],
+        np.asarray(cells.z)[stored],
+        np.asarray(cells.se)[stored],
+        np.asarray(cells.eaf)[stored],
+    )
 
 
 def _spill_columns(

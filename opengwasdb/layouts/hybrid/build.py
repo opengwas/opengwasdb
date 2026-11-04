@@ -63,7 +63,12 @@ from opengwasdb.encoding import (
     combine_eaf_measurements,
     optimise_dense_se_joint,
 )
-from opengwasdb.encoding.association_codec import CellValues, log_se_out_of_range, storable
+from opengwasdb.encoding.association_codec import (
+    CellValues,
+    Storable,
+    log_se_out_of_range,
+    storable,
+)
 from opengwasdb.encoding.timing import format_duration
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
@@ -436,16 +441,51 @@ def _route_column(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
         dense, overflow, off_reference = _resolve_column_hybrid(
             context.table, row, gate, context.axes, context.folds
         )
-        parts = (("Dense", dense), ("Overflow", overflow), ("off-reference", off_reference))
-        for name, part in parts:
-            where = f"build-hybrid {row.trait_id} {name}"
-            kept = storable(CellValues(part[1], part[2]), 0, 1, where=where)
-            if name == "Dense":
-                # The Overflow's and the off-reference rows' are logged by the
-                # Ragged writer they reach.
-                log_se_out_of_range(kept.se_out_of_range, where=where)
-        _spill_hybrid_column(context.spill_dir, col_idx, dense, overflow, off_reference)
+        _spill_hybrid_column(
+            context.spill_dir, col_idx, *_stored_parts(row.trait_id, dense, overflow, off_reference)
+        )
     return col_idx
+
+
+def _stored_parts(
+    trait_id: str, dense: _Component, overflow: _Overflow, off_reference: _OffReferenceSpill
+) -> tuple[_Component, _Overflow, _OffReferenceSpill]:
+    """Each part of one column as `storable` returns it: the rows it stores,
+    with their values. A spill holds rows, so a row not stored is left out, and
+    its frequency with it.
+
+    The Dense part's SEs above `float16`'s range are logged here; the
+    Overflow's and the off-reference rows' are logged by the Ragged writer
+    they reach.
+    """
+
+    def judged(name: str, z: np.ndarray, se: np.ndarray, eaf: np.ndarray) -> Storable:
+        where = f"build-hybrid {trait_id} {name}"
+        kept = storable(CellValues(z, se, eaf), 0, 1, where=where)
+        if name == "Dense":
+            log_se_out_of_range(kept.se_out_of_range, where=where)
+        return kept
+
+    def values(kept: Storable) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        cells, rows = kept.cells, kept.stored
+        return np.asarray(cells.z)[rows], np.asarray(cells.se)[rows], np.asarray(cells.eaf)[rows]
+
+    kept = judged("Dense", *dense[1:])
+    stored_dense = (dense[0][kept.stored], *values(kept))
+    kept = judged("Overflow", *overflow[1:4])
+    stored_overflow = (overflow[0][kept.stored], *values(kept), overflow[4][kept.stored])
+    kept = judged("off-reference", *off_reference[1:4])
+    keys, _, _, _, reference, hashed_index, hashed_raw = off_reference
+    stored, position = kept.stored, np.cumsum(kept.stored) - 1
+    hashed_kept = stored[hashed_index]
+    stored_off_reference = (
+        keys[stored],
+        *values(kept),
+        reference[stored],
+        position[hashed_index[hashed_kept]].astype(np.int64),
+        [raw for raw, keep in zip(hashed_raw, hashed_kept.tolist(), strict=True) if keep],
+    )
+    return stored_dense, stored_overflow, stored_off_reference
 
 
 @dataclass(frozen=True)

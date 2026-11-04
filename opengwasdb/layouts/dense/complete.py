@@ -22,7 +22,7 @@ import json
 import logging
 import shutil
 from collections.abc import Iterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -1307,6 +1307,14 @@ class _BandTallies:
     se_out_of_range: np.ndarray
     total_imputed: int = 0
     n_missing_imputation_failed: int = 0
+    #: Flat positions of the cells `storable` does not store, whose
+    #: frequencies the eaf pass must not carry.
+    not_stored: list[np.ndarray] = field(default_factory=list)
+
+    def not_stored_positions(self) -> np.ndarray:
+        if not self.not_stored:
+            return np.empty(0, dtype=np.int64)
+        return np.concatenate(self.not_stored)
 
 
 def _write_completed_statistic_bands(
@@ -1361,11 +1369,13 @@ def _write_completed_statistic_bands(
             where=f"complete-dense, rows {r0:,} to {r1:,}",
         )
         tallies.se_out_of_range += kept.se_out_of_range
+        if not kept.stored.all():
+            tallies.not_stored.append(np.flatnonzero(~kept.stored) + r0 * n_analyses)
         z_arr[r0:r1] = codec.encode_z(
-            zb, positions=positions_row_band(r0, n_analyses), overflow=overflow
+            kept.cells.z, positions=positions_row_band(r0, n_analyses), overflow=overflow
         )
-        imp_arr[r0:r1] = imp_band
-        se_arr[r0:r1] = sb
+        imp_arr[r0:r1] = kept.cells.imputed
+        se_arr[r0:r1] = kept.cells.se
     return tallies
 
 
@@ -1399,12 +1409,14 @@ def _write_completed_eaf_bands(
     n_variants: int,
     n_analyses: int,
     band_rows: int,
+    not_stored: np.ndarray,
 ) -> None:
     """Carry observed frequencies across the row remap, one row-band at a time.
 
     Observed cells keep their source value and nothing else: an imputed cell's
-    frequency is the panel's (stored once per variant and applied on read), and
-    an observed cell whose source reported none stays absent. The exception
+    frequency is the panel's (stored once per variant and applied on read), an
+    observed cell whose source reported none stays absent, and so does one the
+    statistic pass did not store (``not_stored``, flat positions). The exception
     side table is written only when the release carries a baseline -- a
     baseline-less eaf plane has no residual codes to make exceptions for.
     """
@@ -1424,6 +1436,8 @@ def _write_completed_eaf_bands(
                 np.repeat(out_to_src[r0:r1][valid], n_analyses),
                 np.tile(np.arange(n_analyses, dtype=np.int64), len(valid)),
             ).reshape(len(valid), n_analyses)
+        lo, hi = np.searchsorted(not_stored, [r0 * n_analyses, r1 * n_analyses])
+        eb.reshape(-1)[not_stored[lo:hi] - r0 * n_analyses] = np.nan
         band_baseline = (
             None
             if out_baseline is None
@@ -1517,6 +1531,7 @@ def _write_completed_bands(
             n_variants,
             n_analyses,
             band_rows,
+            np.sort(tallies.not_stored_positions()),
         )
 
     _rewrite_completed_residual_se(root, src_root, encoding)

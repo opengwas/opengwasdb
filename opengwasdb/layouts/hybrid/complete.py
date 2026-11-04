@@ -43,7 +43,12 @@ import numpy as np
 from opengwasdb import top_hits
 from opengwasdb.admission import require_paired
 from opengwasdb.encoding import EAF_BASELINE, StoreEncoding
-from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
+from opengwasdb.encoding.association_codec import (
+    AssociationCodec,
+    CellValues,
+    Placement,
+    log_se_out_of_range,
+)
 from opengwasdb.encoding.planes import write_dense_cells
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import write_index
@@ -575,8 +580,7 @@ def _fold_panel_crossovers(
     eaf_vals = src_eaf[crossover_idx].astype(np.float32)
 
     root = open_group_for_write(dense_dir / "data.zarr", "a")
-    was_imputed = np.asarray(root["imputed"].vindex[row_idx, col_idx])
-    n_reclaimed = int(was_imputed.sum())
+    n_reclaimed = int(np.asarray(root["imputed"].vindex[row_idx, col_idx]).sum())
     # One encode under the Dense Component's own plan, and every side table
     # rewritten with its plane. The crossed-over cell's EAF moves with its z/se
     # (ADR 0036): the fold writes one real observation, not two. It is coded
@@ -594,7 +598,20 @@ def _fold_panel_crossovers(
         where="complete-hybrid, a crossover fold",
     )
     write_dense_cells(root, dense_encoding, row_idx, col_idx, encoded)
+    _log_fold_tally(dense_dir, encoded.storable.se_out_of_range)
     return n_reclaimed
+
+
+def _log_fold_tally(dense_dir: Path, out_of_range: np.ndarray) -> None:
+    """Log the crossovers' SEs above `float16`'s range. Only the fold holds these
+    cells: Dense completion ran before they were folded in, and the rebuilt
+    Overflow leaves them out."""
+    if out_of_range.any():
+        log_se_out_of_range(
+            out_of_range,
+            [analysis.analysis_id for analysis in _read_analyses(dense_dir)],
+            where="complete-hybrid, the crossover fold",
+        )
 
 
 def _chunk_shape(manifest: StoreManifest) -> tuple[int, int]:

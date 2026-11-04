@@ -66,12 +66,16 @@ from opengwasdb.completion.regions import (
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
     EAF_BASELINE,
+    AssociationCodec,
+    CellValues,
+    Placement,
     SeEncoding,
     StoreEncoding,
     fit_se,
+    storable,
     write_eaf_reference,
 )
-from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
+from opengwasdb.encoding.association_codec import log_se_out_of_range
 from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -1206,6 +1210,35 @@ def _flatten_csr(csr: _CompletedCsr) -> _FlatCsr:
     )
 
 
+def _stored_flat(flat: _FlatCsr, analysis_ids: list[str]) -> _FlatCsr:
+    """The completed associations `storable` stores, with the values it returns.
+
+    A CSR holds rows, so a row it does not store is left out, its frequency and
+    imputed flag with it. Each Analysis's SEs above `float16`'s range are
+    logged here, once: the encode that follows judges the same rows again and
+    logs nothing.
+    """
+    n_analyses = len(analysis_ids)
+    analysis_index = np.searchsorted(flat.offsets[1:], np.arange(len(flat.se)), side="right")
+    kept = storable(
+        CellValues(flat.z, flat.se, flat.eaf, imputed=flat.imp),
+        analysis_index,
+        n_analyses,
+        where="complete-ragged",
+    )
+    log_se_out_of_range(kept.se_out_of_range, analysis_ids, where="complete-ragged")
+    rows, cells = kept.stored, kept.cells
+    per_analysis = np.bincount(analysis_index[rows], minlength=n_analyses)
+    return _FlatCsr(
+        offsets=np.concatenate([[0], np.cumsum(per_analysis)]).astype(np.int64),
+        vi=flat.vi[rows],
+        z=np.asarray(cells.z)[rows],
+        se=np.asarray(cells.se)[rows],
+        eaf=np.asarray(cells.eaf)[rows],
+        imp=np.asarray(cells.imputed)[rows],
+    )
+
+
 def _write_csr_id_arrays(root: Any, flat: _FlatCsr) -> None:
     """The CSR's index planes: offsets, variant_index and the imputed mask."""
     store_arrays.create_array(
@@ -1298,7 +1331,7 @@ def _write_completed_zarr(
     staged: StagedRelease,
     encode_plan: _EncodePlan,
     csr: _CompletedCsr,
-    n_analyses: int,
+    analyses: list[Analysis],
     n_variants: int,
 ) -> None:
     """Phase 4: write the completed CSR as the store's ragged zarr group, then
@@ -1310,9 +1343,9 @@ def _write_completed_zarr(
     ragged_path = staged.path / RAGGED_ZARR_PATH
     ragged_path.mkdir(parents=True, exist_ok=True)
     root = store_arrays.open_group_for_write(ragged_path, "w")
-    flat = _flatten_csr(csr)
+    flat = _stored_flat(_flatten_csr(csr), [analysis.analysis_id for analysis in analyses])
     _write_csr_id_arrays(root, flat)
-    _write_statistic_planes(root, encode_plan, flat, n_analyses)
+    _write_statistic_planes(root, encode_plan, flat, len(analyses))
     print("Building variant-centric index...")
     build_variant_index(staged.path, n_axis=n_variants)
 
@@ -1455,7 +1488,7 @@ def _run_completion(
             region_cap_bp=region_cap_bp,
         )
         encode_plan = _encode_plan(src, ld_dir, ancestry, manifest, axis)
-        _write_completed_zarr(staged, encode_plan, csr, state.n_analyses, len(axis.variants))
+        _write_completed_zarr(staged, encode_plan, csr, state.src_analyses, len(axis.variants))
         _write_top_hits_and_analyses(staged, state, encode_plan, ancestry=ancestry)
         staged.write_manifest(
             _completed_manifest(
