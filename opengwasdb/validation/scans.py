@@ -87,7 +87,13 @@ def per_variant(target: Target, name: str) -> np.ndarray:
     largest Store), so holding one whole costs less than reading it once to check
     it and again, a band at a time, to decode the plane.
     """
-    return target.remember(name, lambda: np.asarray(target.group[name][:], dtype=np.float32))
+    return target.remember(
+        name, lambda: np.asarray(target.group[name][:], dtype=np.float32), until=SCAN_NAME
+    )
+
+
+#: The association scan's name: what its folds alone read is held until its pass ends.
+SCAN_NAME = "associations"
 
 
 class Undecodable(Unreadable):
@@ -215,7 +221,7 @@ class Block:
         r0 = self.offset // self.n_analyses
         order, sorted_rows = cells.by_row
         lo, hi = np.searchsorted(sorted_rows, (r0, r0 + self.rows))
-        found = order[lo:hi]
+        found = np.arange(lo, hi, dtype=np.int64) if order is None else order[lo:hi]
         flat = (cells.rows[found].astype(np.int64) - r0) * self.n_analyses + cells.cols[found]
         return found, flat
 
@@ -272,10 +278,16 @@ class CellIndex:
         return _cell_keys(self.cols, self.rows)
 
     @cached_property
-    def by_row(self) -> tuple[np.ndarray, np.ndarray]:
-        """The cells' order by variant row, and their rows in that order."""
-        order = np.argsort(self.rows, kind="stable").astype(np.uint32)
-        return order, self.rows[order]
+    def by_row(self) -> tuple[np.ndarray | None, np.ndarray]:
+        """The cells' order by variant row, and their rows in that order.
+
+        The order is None for cells already held by row, which then need no copy.
+        """
+        rows = self.rows
+        if len(rows) < 2 or bool(np.all(rows[1:] >= rows[:-1])):
+            return None, rows
+        order = np.argsort(rows, kind="stable").astype(np.uint32)
+        return order, rows[order]
 
 
 class _RowWindow:
@@ -416,7 +428,9 @@ def dense_bands(target: Target) -> Iterator[Block]:
     group = target.group
     on_panel = None
     if "on_panel" in group:
-        on_panel = target.remember("on_panel", lambda: np.asarray(group["on_panel"][:]))
+        on_panel = target.remember(
+            "on_panel", lambda: np.asarray(group["on_panel"][:]), until=SCAN_NAME
+        )
     grid = _DenseGrid(target, on_panel, completed(target))
     n_variants, n_analyses = grid.shape
     for r0, r1 in band_limits(n_variants, n_analyses, inner_chunk_of(grid.z)[0]):
@@ -679,4 +693,4 @@ def _read_failure(_target: Target, exc: Exception) -> str:
     return f"validation failed: {exc}"
 
 
-ASSOCIATIONS: Scan[Block] = Scan("associations", _blocks, _read_failure)
+ASSOCIATIONS: Scan[Block] = Scan(SCAN_NAME, _blocks, _read_failure)

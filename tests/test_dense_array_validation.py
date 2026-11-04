@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pytest
 import zarr
+from store_reads import element_reads, times_read
 
 from opengwasdb import top_hits
 from opengwasdb.encoding import (
@@ -34,6 +36,7 @@ from opengwasdb.top_hits import slices_are_ordered
 from opengwasdb.validation import RULES, validate_store
 from opengwasdb.validation.rule import Fold, Kind, Target
 from opengwasdb.validation.rules import associations
+from opengwasdb.validation.rules import top_hits as top_hit_rules
 from opengwasdb.validation.run import evaluate
 from opengwasdb.validation.scans import BYTES_PER_CELL, Block, CellIndex, band_limits
 
@@ -264,6 +267,36 @@ def test_marked_cells_are_flat_plane_positions_in_block_order() -> None:
 
     assert total.positions.tolist() == [0, 3, 5, 6]
     assert fold.zero.positions.dtype == np.int64 and len(fold.zero.positions) == 0
+
+
+def test_cells_held_in_row_order_are_located_without_a_second_order() -> None:
+    zeros = np.zeros((2, 3), dtype=np.float32)
+    band = Block.of(zeros, zeros, offset=2 * 3)  # rows 2 and 3 of a three-Analysis grid
+    cells = CellIndex(np.array([1, 2, 3, 3, 4], dtype=np.uint32), np.array([0, 2, 0, 1, 0]))
+
+    found, flat = band.locate(cells)
+
+    assert cells.by_row[0] is None
+    assert found.tolist() == [1, 2, 3]
+    assert flat.tolist() == [2, 3, 4]
+
+
+def test_a_validation_reads_each_tier_array_once_and_holds_the_tiers_by_row(
+    dense_store_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The structure rules run after the band scan has released the tiers, from what
+    they learned in the same load; the scan holds each tier sorted by row."""
+    tiers = top_hits.index_group(open_store(dense_store_path).arrays(mode="r"))
+    arrays = [tiers[key][name] for key in tiers for name in ("variant_index", "z", "abs_z")]
+    assert all(array.size for array in arrays), "the fixture's tiers must hold cells"
+
+    with element_reads(monkeypatch) as reads:
+        result = validate_store(dense_store_path)
+
+    assert result.ok, result.errors
+    assert [times_read(reads, array) for array in arrays] == [1.0] * len(arrays)
+    grid = Target(Kind.GRID, "data.zarr", open_store(dense_store_path))
+    assert all(tier.cells.by_row[0] is None for tier in top_hit_rules.sound_tiers(grid))
 
 
 def test_a_band_locates_the_cells_it_holds_by_their_grid_coordinates() -> None:

@@ -107,6 +107,7 @@ class Target:
         self._group = group
         self._encoding = encoding
         self._read: dict[str, Any] = {}
+        self._until: dict[str, set[str]] = {}
         self.parent = parent
         self.children: list[Target] = []
         if parent is not None:
@@ -145,12 +146,27 @@ class Target:
             self._group = open_group(path / "ragged" if self.kind is Kind.CSR else path)
         return self._group
 
-    def remember(self, key: str, read: Callable[[], T]) -> T:
-        """`read()`, once per target: what two rules read about it is read once."""
+    def remember(self, key: str, read: Callable[[], T], *, until: str | None = None) -> T:
+        """`read()`, once per target: what two rules read about it is read once.
+
+        A value remembered `until` a scan is held for the folds on that scan, and
+        released when its pass over this target ends, not kept for the whole run.
+        """
         if key not in self._read:
             self._read[key] = read()
+        if until is not None:
+            self._until.setdefault(until, set()).add(key)
         value: T = self._read[key]
         return value
+
+    def forget(self, key: str) -> Any:
+        """Drop one remembered value and return it; None if none was remembered."""
+        return self._read.pop(key, None)
+
+    def release(self, scan: str) -> None:
+        """Drop what was remembered until `scan`'s pass over this target ended."""
+        for key in self._until.pop(scan, set()):
+            self._read.pop(key, None)
 
     @cached_property
     def analyses(self) -> AnalysesTable:

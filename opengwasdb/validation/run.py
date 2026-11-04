@@ -167,6 +167,7 @@ class _Run:
             else:
                 judged = partial(fold.judged, target, done.totals[fold.name])
                 self.settle(fold, i, _contained(fold, target, judged))
+        target.release(scan.name)
 
     def folds_on(self, scan: Scan[Any], i: int, target: Target) -> list[Fold[Any, Any]]:
         """The selected, undecided folds on `scan` that apply to target `i`."""

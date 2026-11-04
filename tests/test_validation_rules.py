@@ -316,6 +316,35 @@ def test_a_when_is_not_asked_behind_a_failed_prerequisite() -> None:
     assert result.skipped == {"b": ("a",), "c": ("a",)}
 
 
+def test_what_a_scan_held_for_its_folds_is_released_when_its_pass_ends() -> None:
+    """Held for the folds on the scan, not for the rest of the run: a rule after it
+    that wants the value reads it again."""
+    reads: list[str] = []
+    scan = _counting_scan([1, 2], [])
+
+    def held(target: Target) -> int:
+        def read() -> int:
+            reads.append("read")
+            return 10
+
+        return target.remember("held", read, until=scan.name)
+
+    fold = Fold(
+        name="a",
+        kinds=Kind.RELEASE,
+        scan=scan,
+        zero=0,
+        measure=lambda target, block: held(target) + block,
+        judge=lambda target, total: [f"a: total {total}"],
+    )
+    later = Check(name="b", kinds=Kind.RELEASE, run=lambda target: [f"b: {held(target)}"])
+
+    result = evaluate([fold, later], [RELEASE])
+
+    assert result.errors == ["a: total 23", "b: 10"]
+    assert reads == ["read", "read"]
+
+
 def test_a_rule_that_cannot_judge_its_target_is_skipped_with_its_reason() -> None:
     def run(target: Target) -> Iterable[str]:
         raise Skip("nothing to check")

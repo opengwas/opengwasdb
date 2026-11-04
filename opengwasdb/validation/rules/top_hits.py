@@ -43,8 +43,48 @@ def has_index(target: Target) -> bool:
 
 
 def _tier_arrays(target: Target, key: str) -> dict[str, Any]:
+    """A tier's arrays, loaded once; held only until the association scan ends.
+
+    What the structure rules learn from them is remembered apart, small, so a rule
+    registered after the scan does not load the tier a second time.
+    """
     group = top_hits.index_group(tier_root(target))[key]
-    return target.remember(f"top_hits/{key}", lambda: top_hits.load_tier_arrays(group))
+    return target.remember(
+        f"top_hits/{key}", lambda: top_hits.load_tier_arrays(group), until=ASSOCIATIONS.name
+    )
+
+
+def _problem(target: Target, key: str) -> str | None:
+    """What is structurally wrong with a complete tier, if anything; kept for the run."""
+    group = top_hits.index_group(tier_root(target))[key]
+    return target.remember(
+        f"top_hits/{key}/problem",
+        lambda: top_hits.structural_problem(
+            _tier_arrays(target, key), group, _n_analyses(target), _expects_imputed(target)
+        ),
+    )
+
+
+def _abs_z_agrees(target: Target, key: str) -> bool:
+    """Whether a sound tier's `abs_z` is its `z`'s magnitude; kept for the run."""
+
+    def agrees() -> bool:
+        loaded = _tier_arrays(target, key)
+        return bool(
+            np.allclose(loaded["abs_z"], np.abs(loaded["z_values"]), rtol=1e-3, atol=1e-3)
+        )
+
+    return target.remember(f"top_hits/{key}/abs_z", agrees)
+
+
+def _sound_keys(target: Target) -> list[str]:
+    """The tiers with every array and a sound structure, in index order."""
+    index = top_hits.index_group(tier_root(target))
+    return [
+        key
+        for key in _keys(target)
+        if not top_hits.missing_arrays(index[key]) and _problem(target, key) is None
+    ]
 
 
 def _keys(target: Target) -> list[str]:
@@ -76,9 +116,7 @@ def structure(target: Target) -> Iterator[str]:
     for key in _keys(target):
         if top_hits.missing_arrays(index[key]):
             continue
-        problem = top_hits.structural_problem(
-            _tier_arrays(target, key), index[key], _n_analyses(target), _expects_imputed(target)
-        )
+        problem = _problem(target, key)
         if problem is not None:
             yield f"top-hit index {key} {problem}"
 
@@ -103,29 +141,63 @@ def sound_tiers(target: Target) -> list[Tier]:
     and its cells are not compared, since a comparison against arrays that do not
     line up would only repeat that finding as a value one.
     """
-    return target.remember("top_hits/sound", lambda: list(_sound(target)))
+    return target.remember("top_hits/sound", lambda: _sound(target), until=ASSOCIATIONS.name)
 
 
-def _sound(target: Target) -> Iterator[Tier]:
+def _sound(target: Target) -> list[Tier]:
+    """The sound tiers in index order, built one at a time, the largest first.
+
+    One tier's load and sort are in hand at once, before the smaller tiers are held
+    beside them. What the structure rules need is remembered from the same load;
+    then the loaded set, `abs_z` and `offsets` with it, is dropped, and the tier
+    keeps what the planes are checked against.
+    """
     index = top_hits.index_group(tier_root(target))
-    for key in _keys(target):
-        group = index[key]
-        if top_hits.missing_arrays(group):
-            continue
-        loaded = _tier_arrays(target, key)
-        if top_hits.structural_problem(
-            loaded, group, _n_analyses(target), _expects_imputed(target)
-        ):
-            continue
-        yield Tier(
-            key=key,
-            z_crit=z_critical(top_hits.tier_threshold(key, group)),
-            cells=CellIndex(loaded["rows"], loaded["cols"]),
-            z=loaded["z_values"],
-            se=loaded["se_values"],
-            imputed=loaded["imputed_values"],
-            eaf=loaded["eaf_values"],
-        )
+    complete = [key for key in _keys(target) if not top_hits.missing_arrays(index[key])]
+    built: dict[str, Tier] = {}
+    for key in sorted(complete, key=lambda k: -int(index[k]["variant_index"].shape[0])):
+        tier = _built(target, key, index[key])
+        if tier is not None:
+            built[key] = tier
+    return [built[key] for key in complete if key in built]
+
+
+def _built(target: Target, key: str, group: Any) -> Tier | None:
+    """One complete tier, ready for the planes; None when it is unsound."""
+    unsound = _problem(target, key) is not None
+    if not unsound and target.kind is Kind.CSR:
+        _abs_z_agrees(target, key)
+    loaded = target.forget(f"top_hits/{key}")
+    if unsound:
+        return None
+    if target.kind is Kind.GRID:
+        loaded = _in_row_order(loaded)
+    return Tier(
+        key=key,
+        z_crit=z_critical(top_hits.tier_threshold(key, group)),
+        cells=CellIndex(loaded["rows"], loaded["cols"]),
+        z=loaded["z_values"],
+        se=loaded["se_values"],
+        imputed=loaded["imputed_values"],
+        eaf=loaded["eaf_values"],
+    )
+
+
+#: A tier's arrays parallel to its cells, that a check against the planes reads.
+_CELL_ARRAYS = ("rows", "cols", "z_values", "se_values", "imputed_values", "eaf_values")
+
+
+def _in_row_order(loaded: dict[str, Any]) -> dict[str, Any]:
+    """A grid tier's cell arrays rearranged by variant row, one array at a time.
+
+    A band finds its cells by binary search over their rows. Held in that order, a
+    tier needs no second, sorted copy of its rows, nor the order that maps back.
+    """
+    order = np.argsort(loaded["rows"], kind="stable")
+    return {
+        name: None if loaded[name] is None else loaded.pop(name)[order]
+        for name in _CELL_ARRAYS
+    }
 
 
 def _per_tier(
@@ -283,10 +355,9 @@ def _judge_held(target: Target, held: Counter[str]) -> Iterator[str]:
 
 def abs_z(target: Target) -> Iterator[str]:
     """Every tier's `abs_z` is its `z`'s magnitude: a query filters on it unread."""
-    for tier in sound_tiers(target):
-        stored = _tier_arrays(target, tier.key)["abs_z"]
-        if not np.allclose(stored, np.abs(tier.z), rtol=1e-3, atol=1e-3):
-            yield f"top-hit index {tier.key} abs_z inconsistent with z"
+    for key in _sound_keys(target):
+        if not _abs_z_agrees(target, key):
+            yield f"top-hit index {key} abs_z inconsistent with z"
 
 
 def _judge_complete(target: Target, passing: Counter[str]) -> Iterator[str]:
