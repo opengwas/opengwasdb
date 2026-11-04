@@ -918,7 +918,9 @@ def test_the_cli_builds_the_plane_and_query_output_shows_n(tmp_path: Path) -> No
         app,
         [
             "build-ragged-besd", str(_fixture(tmp_path / "fixture")), str(out),
-            "--association-coverage", "cis", "--store-id", "cli", "--release-id", "v1",
+            "--association-coverage", "cis",
+            "--admission-record", str(tmp_path / "admission"),
+            "--store-id", "cli", "--release-id", "v1",
             "--sample-size-table", str(_table(tmp_path)),
         ],
     )
@@ -957,6 +959,7 @@ def test_the_cli_stores_the_esi_frequency_only_with_its_flag(tmp_path: Path) -> 
     reference = _reference(tmp_path)
     base = [
         "build-ragged-besd", str(prefix), "--association-coverage", "cis",
+        "--admission-record", str(tmp_path / "admission"),
         "--store-id", "cli", "--release-id", "v1",
     ]
     runner = CliRunner()

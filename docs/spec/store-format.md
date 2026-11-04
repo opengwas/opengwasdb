@@ -194,6 +194,12 @@ negated, as `A`/`G` would be. A source's own spelling survives only as
 provenance — a Variant Reference's source keys — and in the rsid harvest
 below, which compares the names a site's spellings carry.
 
+A source row whose chromosome is missing (an empty cell, `.`, `NA`) or whose
+allele, upper-cased, holds a character other than A, C, G or T names no ALID.
+Every builder drops it, and logs it in the build's Admission record as
+`chromosome_missing` or `allele_invalid` (issue #365, ADR 0072). An alt, random
+or unplaced contig is a chromosome.
+
 A build that lifts a source variant from another Reference Assembly MUST project
 the variant onto the release's assembly using the chain block's orientation: on a
 reverse-strand block the alleles are complemented before the ALID is formed, so
@@ -392,6 +398,8 @@ Every association MUST be normalised to the Store's canonical allele orientation
 
 If the source effect allele is not canonical `A1`, the builder MUST swap orientation and negate signed statistics. Z is signed and carries effect direction. SE is non-negative.
 
+A source row is oriented in the source's declared assembly. When a lift onto the release's assembly makes the other allele `A1` (a reverse-strand chain block), the row is re-oriented by the same rule: its z is negated again and its effect-allele frequency complemented again. Every layout applies this one model.
+
 Derived beta is:
 
 ```text
@@ -487,9 +495,10 @@ Ragged sequence. The arrays are present whenever `z` is `int16_fixed`, even
 when empty. Every out-of-range cell MUST have an entry and the table MUST NOT
 describe any other cell (§20).
 
-A build MUST fail on a non-finite `z` that is not a recorded absence (±inf, or
-a malformed statistic): it is neither a value nor an absence, and no encoding
-of it is honest.
+A non-finite `z` that is not a recorded absence (±inf, or a malformed
+statistic) is neither a value nor an absence, and no encoding of it is honest.
+A build never stores one: Association Admission drops the source row and logs
+it (`z_nonfinite`, ADR 0072), and a writer handed one refuses it.
 
 **`se` — `float16` or `int8_residual`.** Residual coding predicts
 `log(SE) = intercept + slope × log(2 × EAF × (1 − EAF))` using decoded,
@@ -818,8 +827,9 @@ threshold, malformed thresholds, and a declaration alongside `NaN` are invalid.
 The declared source column must occur exactly once with the declared spelling;
 the GWAS-SSF reader rejects absent, padded, or ambiguous source header columns
 when it opens the file. These inputs define an ingestion policy, and a CORE
-build applies it: the Hybrid builder (issue #175) passes the declaration to the
-Source Reader and drops every association the policy excludes — a usable score
+build applies it: every builder (issue #175; since #357 not the Hybrid alone,
+ADR 0072) passes the declaration to the Source Reader and drops every
+association the policy excludes — a usable score
 strictly below a positive threshold, or a score that is missing, malformed,
 non-finite or out of `[0, 1]` — before Dense/Overflow routing, before the EAF
 orientation check and before the Top-Hit Counts, so nothing a declared
@@ -1641,7 +1651,7 @@ Invalid states:
 - imputed mask is true while Z or SE is missing;
 - a marker payload is non-canonical (for a float plane, a non-canonical NaN).
 
-Builders and validators MUST reject invalid states. Readers MUST refuse them: a query whose region holds an invalid cell fails, naming the component and the cell, rather than dropping it or reading it as missing (ADR 0070).
+Builders and validators MUST reject invalid states. A builder rejects them through Association Admission (ADR 0072): a source row becomes a cell only through an Analysis's gate, which admits a row only with both a usable Z and a usable SE, and a writer handed cells from anywhere else checks them with `require_admitted`. Readers MUST refuse them: a query whose region holds an invalid cell fails, naming the component and the cell, rather than dropping it or reading it as missing (ADR 0070).
 
 The imputed mask is:
 
@@ -2134,7 +2144,13 @@ replaces its Store under the same id, so this check gates the swap.
   counter, `parent_rows_unmapped > 0`, an order that is not preserved, and differing Analyses
   each fail the check (`failures` names `parent_rows_unmapped`, `order_not_preserved`,
   `analyses_mismatch`, or the counter). After an axis or Analyses failure the sample is skipped
-  (`bands_checked` is 0) and the verdict says why.
+  (`bands_checked` is 0) and the verdict says why. **A counter for cells nobody inspected is
+  `null`, never 0** (issue #375): in a skipped sample `totals`, `max_abs_diff` and
+  `bands_by_stratum` are `null` throughout, so no zero in a failed verdict stands in for a
+  clean census of an uncompared part. The keys stay, so a record's shape does not say
+  whether the sample ran; `bands_checked` is 0 because it counts the chunk-rows read, and
+  none were. A `null` tally neither fails a verdict nor passes one: the structural failure
+  is what fails it.
 - **Exit codes.** `0` pass; `1` the check ran and found a mismatch (the verdict is still
   written, and each failure is named on `stderr`); `2` refused: nothing was checked, so no
   verdict is written and the reason is on `stderr`. Refused are a mixed-layout pair, a layout
@@ -2198,7 +2214,11 @@ replaces its Store under the same id, so this check gates the swap.
   (`dense.inserted_observed_cells`, `overflow.observed_in_both`, `crossovers.z_mismatch`), and
   `dense.parent_rows_unmapped`, `dense.order_not_preserved`, the same two for `overflow.` (the
   shared axes), `overflow.child_dense_rows_not_on_shared_axis` and `analyses_mismatch`; after
-  any of these last the comparison is skipped. Also refused: a Dense Component that is not Dense
+  any of these last the comparison is skipped and every tally in all three parts — each
+  `totals`, `all_analyses`, `max_abs_diff`, `reencoding_max_abs_diff` and `bands_by_stratum` —
+  is `null`, as is `crossovers.n` and `rows` (issue #375). `dense.bands_checked` and
+  `overflow.analyses_checked` are 0, because they count what was read and nothing was. Also
+  refused: a Dense Component that is not Dense
   or not in its root's completion state, a `TARGET` Dense Component with no `imputed` mask, and
   an Overflow that cannot be opened or holds a variant index off its shared axis.
 
@@ -2253,7 +2273,9 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   state, not a `nan_rows` row — issue #373), `target_variants_unordered` (an Analysis's
   variant indices not strictly increasing) and `quality_blocks_not_in_regions`. `sample` lists
   each checked Analysis with its strata, admission, the ids of its retained `blocks` and counts, and `by_stratum` counts
-  them.
+  them. An unmapped variant or differing Analyses skip the sample: `sample.analyses_checked`
+  is 0, and `totals`, `max_abs_diff` and `sample.by_stratum` are `null` throughout rather than
+  0, since no cell was inspected (issue #375).
 - **Refused (exit 2)**: a mixed-layout pair, a Ragged pair without `--ld-panel`, an LD panel
   with no chromosomes for the ancestry, an ancestry other than the one recorded, a `TARGET`
   completed against an ancestry other than the panel's, a `TARGET` with no completion ancestry

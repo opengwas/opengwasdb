@@ -364,7 +364,8 @@ _FILTERED_HEADER = (
 )
 _MANIFEST_HEADER = (
     "analysis_index\tanalysis_id\ttrait_id\tanalysis_label\ttrait_ontology_id\t"
-    "trait_ontology_label\ttrait_chr\ttrait_bp\tn\ttissue\tcontext\tmhc\tfiltered_file"
+    "trait_ontology_label\ttrait_chr\ttrait_bp\tn\ttissue\tcontext\tmhc\tfiltered_file\t"
+    "source_genome_build"
 )
 
 
@@ -416,6 +417,7 @@ def _make_ssf_store(tmp_path: Path, *, with_eaf: bool) -> Path:
                 "n": 1000,
                 "mhc": "FALSE",
                 "filtered_file": f"a{analysis}.tsv.gz",
+                "source_genome_build": "GRCh38",
             }
         )
     manifest = tmp_path / "manifest.tsv"

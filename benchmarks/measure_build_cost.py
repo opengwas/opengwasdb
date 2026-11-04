@@ -20,7 +20,10 @@ not know or care how a checkout is entered:
       --output docs/benchmark-output/opengwasdb_build_cost_epic240_249.json
 
 `--pilot` is repeatable; `--order base,head` (default: alternate per pilot)
-decides which side runs first. The output is a JSON artifact recording every
+decides which side runs first. A builder from #357 on requires
+`--admission-record` and one from before it refuses the option, so each side is
+asked through its own `--help` and passed the flag, naming the record's default
+place beside the Store, only when it has it. The output is a JSON artifact recording every
 argv, cwd, wall second, peak RSS in **KiB** (as `/usr/bin/time -v` reports it)
 and GiB, the **guard environment** each step inherited, and the load window.
 `--merge` combines run artifacts (in run order) into one committed file, so the
@@ -91,6 +94,8 @@ _MAXRSS = re.compile(r"Maximum resident set size \(kbytes\):\s*(\d+)")
 #: The analyses manifests the registered releases were built from. Every one is
 #: read-only and outside this worktree.
 OGS = Path("/data/opengwasdb/stores")
+#: Required by every builder command from #357 on, unknown to every one before.
+ADMISSION_RECORD = "--admission-record"
 
 
 def _dense_argv(out: Path) -> list[str]:
@@ -280,8 +285,36 @@ def _checkout_revision(cwd: Path) -> str:
     return result.stdout.strip()
 
 
-def build_plan(args: argparse.Namespace) -> list[dict[str, Any]]:
-    """The (pilot, side, argv, cwd, store, log) steps, in the run order."""
+def takes_admission_record(prefix: list[str], cwd: Path, command: str) -> bool:
+    """Whether a side's builder ``command`` has `--admission-record`, by its own `--help`.
+
+    The registered argv predates the flag. A checkout from #357 on exits 2
+    without it, and one from before exits 2 with it, so the plan asks each side
+    rather than assume either.
+    """
+    environment = {**os.environ, "COLUMNS": "200", "NO_COLOR": "1"}
+    result = subprocess.run(
+        [*prefix, command, "--help"],
+        cwd=cwd, capture_output=True, text=True, check=False, env=environment,
+    )
+    if result.returncode != 0:
+        raise SystemExit(
+            f"`{shlex.join([*prefix, command, '--help'])}` exited {result.returncode} in "
+            f"{cwd}: {result.stderr.strip()[-500:]}"
+        )
+    return ADMISSION_RECORD in result.stdout
+
+
+def build_plan(
+    args: argparse.Namespace,
+    takes_flag: Callable[[list[str], Path, str], bool] = takes_admission_record,
+) -> list[dict[str, Any]]:
+    """The (pilot, side, argv, cwd, store, log) steps, in the run order.
+
+    A side whose builder takes `--admission-record` (``takes_flag``, asked once
+    per side and command) writes its record beside the Store, where a builder
+    from before the flag wrote it by default.
+    """
     sides = {
         "base": (args.base_cmd_list, args.base_cwd),
         "head": (args.head_cmd_list, args.head_cwd),
@@ -291,6 +324,7 @@ def build_plan(args: argparse.Namespace) -> list[dict[str, Any]]:
     if unknown or not order:
         raise SystemExit(f"--sides must name base and/or head once each, got {args.sides!r}")
     steps: list[dict[str, Any]] = []
+    asked: dict[tuple[str, str], bool] = {}
     for index, pilot in enumerate(args.pilot):
         if pilot not in PILOTS:
             raise SystemExit(f"unknown pilot {pilot!r}; choose from {sorted(PILOTS)}")
@@ -299,11 +333,17 @@ def build_plan(args: argparse.Namespace) -> list[dict[str, Any]]:
             prefix, cwd = sides[side]
             out = args.work / f"{pilot}-{side}{args.suffix}.opengwasdb"
             log_path = args.work / f"{pilot}-{side}{args.suffix}.log"
+            argv = PILOTS[pilot](out)
+            key = (side, argv[0])
+            if key not in asked:
+                asked[key] = takes_flag(prefix, cwd, argv[0])
+            if asked[key]:
+                argv = [*argv, ADMISSION_RECORD, f"{out}.admission"]
             steps.append(
                 {
                     "pilot": pilot,
                     "side": side,
-                    "command": [*prefix, *PILOTS[pilot](out)],
+                    "command": [*prefix, *argv],
                     "cwd": cwd,
                     "store": out,
                     "log": log_path,

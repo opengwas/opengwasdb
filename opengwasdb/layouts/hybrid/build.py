@@ -21,20 +21,30 @@ context, collision/provenance rules, the disjoint-partition layout).
 
 from __future__ import annotations
 
-import csv
 import logging
 import shutil
-import tempfile
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import mkdtemp
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from opengwasdb.admission import (
+    AdmissionCounts,
+    AdmissionRecord,
+    AnalysisRules,
+    Gate,
+    Reason,
+    admission_record_for,
+    require_admitted,
+)
+from opengwasdb.admission.declared import declared_rules
+from opengwasdb.admission.duplicates import record_duplicates
 from opengwasdb.build.eaf_orientation import (
     EafOrientationMethod,
     EafOrientationOutcome,
@@ -47,7 +57,6 @@ from opengwasdb.build.eaf_orientation import (
 from opengwasdb.build.info_score_filter import declared_score_state
 from opengwasdb.build.liftover import LiftoverFailureError
 from opengwasdb.build.ordered_pool import fork_each, ordered_map
-from opengwasdb.build.row_admission import AdmissionCounts, admit_rows
 from opengwasdb.encoding import (
     EafMeasurements,
     EncodingMeasurements,
@@ -88,7 +97,6 @@ from opengwasdb.layouts.hybrid.checkpoint import (
     AXIS_SHARED,
     FOLD_DIR,
     HITS,
-    INFO_COUNTS,
     ORIENTATION,
     PLAN,
     PROVENANCE_RSID,
@@ -145,6 +153,7 @@ from opengwasdb.layouts.hybrid.layout import (
 from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
     check_hash,
+    decode_packed,
     encode_key,
     encode_keys,
     is_hashed,
@@ -165,11 +174,11 @@ from opengwasdb.model.enums import (
 from opengwasdb.model.info_score_policy import (
     InfoScorePolicy,
     InfoScoreState,
-    parse_info_score_policy,
 )
-from opengwasdb.model.maf_policy import MafPolicy, MafState, parse_maf_policy
+from opengwasdb.model.maf_policy import MafPolicy, MafState
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.readers.column_map import ColumnMap, as_column_map, load_column_map
+from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import open_source
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import add_hit_counts
@@ -177,14 +186,13 @@ from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.axis import sorted_alids
 from opengwasdb.variants.reference import read_variant_reference
 from opengwasdb.variants.routing import (
-    AssociationBatch,
     FromReference,
     LiftedUnion,
     RoutedNames,
     RouteTable,
     Unmatched,
     VariantRouting,
-    last_wins,
+    collapse_duplicates,
     route_variants,
 )
 from opengwasdb.variants.rsid import RsidConflictPolicy, RsidConflicts
@@ -194,11 +202,15 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# One column's off-reference spill: encoded uint64 keys, z, se, eaf, and the
-# side-file half of the hashed keys (row positions plus their raw strings).
+# One column's off-reference spill: encoded uint64 keys, z, se, eaf, each row's
+# `REFERENCE_*` code, and the side-file half of the hashed keys (row positions
+# plus their raw strings).
 _OffReferenceSpill = tuple[
-    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]
 ]
+# One column's Overflow rows: Variant Index, z, se, eaf and `REFERENCE_*` code,
+# which the fold needs to resolve an off-reference row reaching the same index.
+_Overflow = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
 __all__ = [
     "build_hybrid_from_vcf_manifest",
@@ -266,45 +278,13 @@ def read_reference_panel_alids(panel_path: str | Path) -> set[str]:
 _Component = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
 
-def _dedup_last_wins(
-    target: np.ndarray, z: np.ndarray, se: np.ndarray, eaf: np.ndarray
-) -> _Component:
-    """Keep the last stream occurrence per index, as Variant Routing keeps a column's."""
-    if len(target) == 0:
-        return target, z, se, eaf
-    keep = last_wins(target)
-    return target[keep], z[keep], se[keep], eaf[keep]
-
-
-@dataclass
-class _Admission:
-    """One Analysis's declared INFO and MAF policies (stores #175, #176), judged
-    on each batch before it is matched, and the dispositions they produced.
-
-    A row either filter excludes reaches neither component, the EAF survey nor
-    the top-hit counts. The counts are of the associations the reader yielded,
-    not of canonical source rows.
-    """
-
-    info_score_policy: InfoScorePolicy
-    maf_policy: MafPolicy
-    counts: AdmissionCounts = field(default_factory=AdmissionCounts)
-
-    def __call__(self, batch: AssociationBatch) -> np.ndarray:
-        admission = admit_rows(
-            batch.imputation_score,
-            batch.imputation_status,
-            batch.eaf,
-            self.info_score_policy,
-            self.maf_policy,
-        )
-        self.counts += admission.counts
-        return admission.keep
-
-
-def _off_reference_spill(unmatched: Unmatched, se_divisor: float) -> _OffReferenceSpill:
+def _off_reference_spill(
+    unmatched: Unmatched, se_divisor: float, gate: Gate
+) -> _OffReferenceSpill:
     """The associations the route table does not hold, one uint64 key per raw
-    coordinate, deduplicated last-wins on that key.
+    coordinate, their duplicates on that key resolved as an axis's are
+    (`collapse_duplicates`): a conflicting key's rows are dropped and logged
+    by raw coordinate.
 
     The reference never named them, so their shared index is assigned only by
     the fold. Only the hashed survivors need a raw string in the side file;
@@ -316,48 +296,76 @@ def _off_reference_spill(unmatched: Unmatched, se_divisor: float) -> _OffReferen
             np.empty(0, dtype=np.float32),
             np.empty(0, dtype=np.float32),
             np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.int8),
             np.empty(0, dtype=np.int64),
             [],
         )
     encoded = encode_keys(unmatched.keys)
-    keys, z, se, eaf = _dedup_last_wins(encoded.values, unmatched.z, unmatched.se, unmatched.eaf)
+    # One raw key is one spelling of its alleles, so its rows are never a
+    # reversed indel; those meet only when the fold resolves two keys to one ALID.
+    found = collapse_duplicates(encoded.values, unmatched.z, unmatched.se)
+    gate.unplaced(
+        Reason.DUPLICATE_CONFLICTING, [unmatched.keys[i] for i in found.dropped.tolist()]
+    )
+    gate.collapsed(found.collapsed)
+    keep = found.keep
+    keys, z, se = encoded.values[keep], unmatched.z[keep], unmatched.se[keep]
+    eaf, reference = unmatched.eaf[keep], unmatched.reference[keep]
     lookup = encoded.hashed_lookup()
     hashed_index = np.flatnonzero(is_hashed(keys)).astype(np.int64)
     hashed_raw = [lookup[int(keys[position])] for position in hashed_index.tolist()]
-    return keys, z, apply_se_divisor(se, se_divisor), eaf, hashed_index, hashed_raw
+    return keys, z, apply_se_divisor(se, se_divisor), eaf, reference, hashed_index, hashed_raw
 
 
 def _resolve_column_hybrid(
     table: RouteTable,
     row: ManifestRow,
-    info_score_policy: InfoScorePolicy,
-    maf_policy: MafPolicy,
-) -> tuple[_Component, _Component, _OffReferenceSpill, AdmissionCounts]:
+    gate: Gate,
+    axes: tuple[Sequence[str], ...],
+    folds: bool,
+) -> tuple[_Component, _Overflow, _OffReferenceSpill]:
     """Stream one study once, routing each association to the dense fill
     (on-panel), the ragged overflow (off-panel), or -- when the route table does
     not hold its source coordinate at all -- an off-reference bucket keyed by
-    the raw coordinate. Returns ``(dense, overflow, off_reference, info_counts)``,
-    each ``(index/key, z f32, se f32, eaf f32)`` deduped last-wins; ``eaf`` is
-    NaN where the source reports no frequency (ADR 0036).
+    the raw coordinate. Returns ``(dense, overflow, off_reference)``,
+    each ``(index/key, z f32, se f32, eaf f32)`` with its duplicates resolved
+    (`collapse_duplicates`), the last two with each row's `REFERENCE_*` code;
+    ``eaf`` is NaN where the source reports no frequency (ADR 0036).
 
     The row's ``se_divisor`` divides every returned ``se``, dense and overflow
     alike (continuous-trait phenotype-SD standardisation, issue #18): a study's
     SD rescaling applies whichever component an association routes to. The
-    Analysis's imputation-score declaration reaches the reader, and both
-    declared policies judge each batch before it is matched.
+    Analysis's imputation-score declaration reaches the reader, and ``gate``
+    judges each batch before it is matched.
     """
-    admission = _Admission(info_score_policy, maf_policy)
     reader = open_source(
-        row.source, imputation_score_declaration=info_score_policy.imputation_score_declaration
+        row.source,
+        imputation_score_declaration=gate.rules.info.imputation_score_declaration,
     )
-    routed = table.route_column(reader.stream_associations(), admit=admission)
+    tally = StreamTally()
+    routed = table.route_column(
+        reader.stream_associations(tally),
+        admit=gate.admit,
+        imputation_scores=gate.reads_imputation_scores,
+    )
+    gate.streamed(tally)
     dense, overflow = routed.placed
+    for placed, alids in zip(routed.placed, axes, strict=True):
+        record_duplicates(gate, placed, alids)
+    unmatched = routed.unmatched
+    if not folds:
+        # A two-pass axis is the sources' whole union, so nothing folds an
+        # unmatched row onto it later: it is dropped here, and logged.
+        gate.unplaced(Reason.OFF_AXIS, unmatched.keys)
+        unmatched = Unmatched(
+            [], unmatched.z[:0], unmatched.se[:0], unmatched.eaf[:0], unmatched.reference[:0]
+        )
     divisor = row.se_divisor
+    overflow_se = apply_se_divisor(overflow.se, divisor)
     return (
         (dense.index, dense.z, apply_se_divisor(dense.se, divisor), dense.eaf),
-        (overflow.index, overflow.z, apply_se_divisor(overflow.se, divisor), overflow.eaf),
-        _off_reference_spill(routed.unmatched, divisor),
-        admission.counts,
+        (overflow.index, overflow.z, overflow_se, overflow.eaf, overflow.reference),
+        _off_reference_spill(unmatched, divisor, gate),
     )
 
 
@@ -365,30 +373,35 @@ def _spill_hybrid_column(
     spill_dir: Path,
     col_idx: int,
     dense: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    overflow: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    overflow: _Overflow,
     off_reference: _OffReferenceSpill,
 ) -> None:
     """Spill one resolved study column: dense rows to ``{col}.npz`` (the layout the
     dense band-writer consumes), overflow to ``{col}.ovf.npz``, and off-reference
     associations -- keyed by one uint64 per raw source coordinate -- to
     ``{col}.unk.npz`` with a ``{col}.unk.raw`` side file for any key the packed
-    encoding could not represent."""
+    encoding could not represent. Overflow and off-reference rows carry their
+    `REFERENCE_*` codes, which the fold resolves their duplicates by."""
     d_rows, d_z, d_se, d_eaf = dense
-    o_idx, o_z, o_se, o_eaf = overflow
+    o_idx, o_z, o_se, o_eaf, o_reference = overflow
     for suffix, arrs in (
         ("", {"rows": d_rows, "z": d_z, "se": d_se, "eaf": d_eaf}),
-        (".ovf", {"variant_index": o_idx, "z": o_z, "se": o_se, "eaf": o_eaf}),
+        (
+            ".ovf",
+            {"variant_index": o_idx, "z": o_z, "se": o_se, "eaf": o_eaf, "reference": o_reference},
+        ),
     ):
         final = spill_dir / f"{col_idx}{suffix}.npz"
         tmp = spill_dir / f"{col_idx}{suffix}.tmp.npz"
         np.savez(tmp, **arrs)
         tmp.replace(final)
-    u_keys, u_z, u_se, u_eaf, u_hashed_index, u_hashed_raw = off_reference
+    u_keys, u_z, u_se, u_eaf, u_reference, u_hashed_index, u_hashed_raw = off_reference
     if len(u_keys):
         final = spill_dir / f"{col_idx}.unk.npz"
         tmp = spill_dir / f"{col_idx}.unk.tmp.npz"
         np.savez(
-            tmp, keys=u_keys, z=u_z, se=u_se, eaf=u_eaf, hashed_index=u_hashed_index
+            tmp, keys=u_keys, z=u_z, se=u_se, eaf=u_eaf, reference=u_reference,
+            hashed_index=u_hashed_index,
         )
         tmp.replace(final)
         if len(u_hashed_index):
@@ -397,28 +410,37 @@ def _spill_hybrid_column(
 
 @dataclass(frozen=True)
 class _Pass2Context:
-    """What every Pass 2 worker reads: the route table, where to spill, and each
-    Analysis's declared INFO and MAF policies."""
+    """What every Pass 2 worker reads: the route table, where to spill, each
+    Analysis's declared INFO and MAF policies, and the Admission record its
+    gate writes to."""
 
     table: RouteTable
     spill_dir: Path
     info_score_policies: Mapping[str, InfoScorePolicy]
     maf_policies: Mapping[str, MafPolicy]
+    record: AdmissionRecord
+    axes: tuple[Sequence[str], ...]
+    folds: bool
 
 
-def _route_column(
-    context: _Pass2Context, task: tuple[int, ManifestRow]
-) -> tuple[int, AdmissionCounts]:
-    """Route one study and spill it; only its column and dispositions return."""
+def _route_column(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
+    """Route one study and spill it; its Admission part is written beside the
+    Store, and only its column returns."""
     col_idx, row = task
-    dense, overflow, off_reference, counts = _resolve_column_hybrid(
-        context.table,
-        row,
-        context.info_score_policies[row.trait_id],
-        context.maf_policies[row.trait_id],
+    rules = AnalysisRules(
+        row.trait_id,
+        info=context.info_score_policies[row.trait_id],
+        maf=context.maf_policies[row.trait_id],
     )
-    _spill_hybrid_column(context.spill_dir, col_idx, dense, overflow, off_reference)
-    return col_idx, counts
+    with context.record.gate(rules) as gate:
+        dense, overflow, off_reference = _resolve_column_hybrid(
+            context.table, row, gate, context.axes, context.folds
+        )
+        parts = (("Dense", dense), ("Overflow", overflow), ("off-reference", off_reference))
+        for name, part in parts:
+            require_admitted(part[1], part[2], where=f"build-hybrid {row.trait_id} {name}")
+        _spill_hybrid_column(context.spill_dir, col_idx, dense, overflow, off_reference)
+    return col_idx
 
 
 @dataclass(frozen=True)
@@ -532,6 +554,7 @@ class _BuildOptions:
     allow_unverified_eaf: bool
     on_rsid_conflict: RsidConflictPolicy
     association_coverage: AssociationCoverage
+    admission_record: Path
 
 
 @dataclass(frozen=True)
@@ -793,35 +816,16 @@ def _read_declared_policies(
     produced. The reader capability is the row's own resolved value, exactly as
     the manifest resolver parses the same row, so a CLI default applies to both.
     A partial or contradictory declaration is a manifest error naming its
-    Analysis, never a filter silently not applied.
+    Analysis, never a filter silently not applied. Every builder reads them
+    through `declared_rules`.
     """
-    with open(manifest_path, newline="", encoding="utf-8") as fh:
-        raw_rows = list(csv.DictReader(fh, delimiter="\t"))
-    if len(raw_rows) != len(rows):
-        raise ValueError(
-            f"manifest {manifest_path} changed while it was read: {len(rows)} rows parsed, "
-            f"{len(raw_rows)} re-read"
-        )
-    info: dict[str, InfoScorePolicy] = {}
-    maf: dict[str, MafPolicy] = {}
-    for row, raw in zip(rows, raw_rows, strict=True):
-        try:
-            info[row.trait_id] = parse_info_score_policy(
-                raw, reader_capability=row.source_reader_capability
-            )
-        except ValueError as exc:
-            raise ValueError(
-                f"manifest {manifest_path}: analysis {row.trait_id!r} has invalid INFO "
-                f"policy: {exc}"
-            ) from exc
-        try:
-            maf[row.trait_id] = parse_maf_policy(raw)
-        except ValueError as exc:
-            raise ValueError(
-                f"manifest {manifest_path}: analysis {row.trait_id!r} has invalid MAF "
-                f"policy: {exc}"
-            ) from exc
-    return DeclaredPolicies(info=info, maf=maf)
+    rules = declared_rules(
+        manifest_path, {row.trait_id: row.source_reader_capability for row in rows}
+    )
+    return DeclaredPolicies(
+        info={analysis_id: r.info for analysis_id, r in rules.items()},
+        maf={analysis_id: r.maf for analysis_id, r in rules.items()},
+    )
 
 
 def _route(
@@ -1255,12 +1259,17 @@ def _merge_unknown_provenance(
 
 @dataclass(frozen=True)
 class _FoldContext:
+    """What every fold worker reads. ``record`` and ``shared_alids`` are where
+    a column's fold-stage drops are written and the axis that names them."""
+
     spill_dir: Path
     table_keys: np.ndarray
     table_shared_index: np.ndarray
     canonical_values: np.ndarray
     canonical_raw: np.ndarray
     old_to_new: np.ndarray | None
+    record: AdmissionRecord
+    shared_alids: Sequence[str]
     marker_dir: Path | None = None
 
 
@@ -1314,43 +1323,61 @@ def _folded_columns(state: CheckpointState | None) -> frozenset[int]:
     return frozenset(int(path.stem) for path in marker_dir.glob("*.done"))
 
 
-def _combine_overflow(
-    ex: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None,
-    off: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None,
-    needs_remap: bool,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
-    """Combine existing overflow and off-reference entries with last-wins precedence.
+@dataclass(frozen=True)
+class _FoldedOverflow:
+    """One column's Overflow after the fold, and the duplicates it resolved.
 
-    Off-reference entries are concatenated after existing overflow entries, so
-    they always win on duplicate shared indices (issue #223).
+    ``final`` is ``None`` when the existing spill stands as it is. The dropped
+    rows are named by the shared Variant Index each reached.
     """
-    if ex is not None and off is not None:
-        comb = tuple(np.concatenate([e, o]) for e, o in zip(ex, off, strict=True))
-        return _dedup_last_wins(*comb)
-    if off is not None:
-        return _dedup_last_wins(*off)
-    if ex is not None and needs_remap:
-        return _dedup_last_wins(*ex)
-    return None
+
+    final: _Overflow | None
+    conflicting: list[int]
+    reversed_indels: list[int]
+    collapsed: int
+
+
+def _combine_overflow(
+    ex: _Overflow | None, off: _Overflow | None, needs_remap: bool
+) -> _FoldedOverflow:
+    """Combine existing Overflow and off-reference entries, each shared index's
+    rows resolved by Admission's duplicate rule (`collapse_duplicates`, D5).
+
+    Two raw keys the fold resolves to one ALID -- an insertion and a deletion,
+    `A:G` and `G:A` -- or an off-reference entry reaching an index the column
+    already holds, are rows of one (variant, Analysis). Rows that agree collapse
+    to the first, existing ones first; rows that disagree are dropped, unless
+    they are a reversed indel whose source declared the reference.
+    """
+    parts = [part for part in (ex, off) if part is not None]
+    if not parts or (off is None and not needs_remap):
+        return _FoldedOverflow(None, [], [], 0)
+    index, z, se, eaf, reference = (np.concatenate(arrays) for arrays in zip(*parts, strict=True))
+    found = collapse_duplicates(index, z, se, reference)
+    keep = found.keep
+    return _FoldedOverflow(
+        (index[keep], z[keep], se[keep], eaf[keep], reference[keep]),
+        index[found.dropped].tolist(),
+        index[found.reversed_indels].tolist(),
+        found.collapsed,
+    )
 
 
 def _load_existing_overflow(
     spill_dir: Path, col: int, old_to_new: np.ndarray | None
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+) -> _Overflow | None:
     """Load and re-index existing overflow spill if present."""
     ovf_path = spill_dir / f"{col}.ovf.npz"
     if not ovf_path.exists():
         return None
     with np.load(ovf_path) as data:
         raw_vi = data["variant_index"].astype(np.int64)
-        z, se, eaf = data["z"], data["se"], data["eaf"]
+        z, se, eaf, reference = data["z"], data["se"], data["eaf"], data["reference"]
     vi = old_to_new[raw_vi] if old_to_new is not None else raw_vi
-    return vi, z, se, eaf
+    return vi, z, se, eaf, reference
 
 
-def _load_fold_existing(
-    ctx: _FoldContext, spill_dir: Path, col: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+def _load_fold_existing(ctx: _FoldContext, spill_dir: Path, col: int) -> _Overflow | None:
     """Load existing overflow unless an empty fold leaves it unchanged."""
     if ctx.old_to_new is None and not len(ctx.table_keys):
         return None
@@ -1359,21 +1386,62 @@ def _load_fold_existing(
 
 def _load_off_reference(
     ctx: _FoldContext, spill_dir: Path, col: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
-    """Load, verify, and resolve off-reference associations with searchsorted."""
+) -> tuple[_Overflow | None, list[str]]:
+    """Load, verify, and resolve off-reference associations with searchsorted.
+
+    Returns the resolved rows, ``None`` when there are none, and the raw keys
+    of the rows no off-reference key resolved: a failed lift, or a key the
+    resolution dropped. Those rows reach no axis (D6).
+    """
     unk_path = spill_dir / f"{col}.unk.npz"
     if not unk_path.exists():
-        return None
+        return None, []
     with np.load(unk_path) as data:
         keys = data["keys"]
-        u_z, u_se, u_eaf = data["z"], data["se"], data["eaf"]
+        u_z, u_se, u_eaf, u_reference = data["z"], data["se"], data["eaf"], data["reference"]
         hashed_index = data["hashed_index"]
     canonical = CanonicalRawKeys(ctx.canonical_values, ctx.canonical_raw)
-    _verify_hashed_rows(spill_dir, col, keys, hashed_index, canonical)
+    raws = _verify_hashed_rows(spill_dir, col, keys, hashed_index, canonical)
     keep, shared = lookup_matched(ctx.table_keys, ctx.table_shared_index, keys)
+    unresolved = _unresolved_keys(keys, hashed_index, raws, keep)
     if not len(keep):
-        return None
-    return shared, u_z[keep], u_se[keep], u_eaf[keep]
+        return None, unresolved
+    return (shared, u_z[keep], u_se[keep], u_eaf[keep], u_reference[keep]), unresolved
+
+
+def _unresolved_keys(
+    keys: np.ndarray, hashed_index: np.ndarray, raws: list[str], keep: np.ndarray
+) -> list[str]:
+    """The raw keys of one column's rows outside ``keep``, in stream order: a
+    packed key decodes from its bits, a hashed one is its side-file string."""
+    missing = np.ones(len(keys), dtype=bool)
+    missing[keep] = False
+    at = np.flatnonzero(missing)
+    if not len(at):
+        return []
+    raw_at = dict(zip(hashed_index.tolist(), raws, strict=True))
+    hashed = is_hashed(keys[at])
+    packed = iter(decode_packed(keys[at][~hashed]))
+    return [
+        raw_at[position] if is_raw else next(packed)
+        for position, is_raw in zip(at.tolist(), hashed.tolist(), strict=True)
+    ]
+
+
+def _record_fold(
+    ctx: _FoldContext, col: int, folded: _FoldedOverflow, unresolved: list[str]
+) -> None:
+    """Write what the fold dropped of one column's admitted rows as the
+    Admission record's `fold` stage for that Analysis: its duplicates by ALID,
+    and the rows no key resolved, by raw key, as `off_axis` (D6)."""
+    alids = ctx.shared_alids
+    with ctx.record.stage(ctx.record.analyses[col], "fold") as gate:
+        gate.duplicates(
+            [alids[i] for i in folded.conflicting],
+            folded.collapsed,
+            [alids[i] for i in folded.reversed_indels],
+        )
+        gate.unplaced(Reason.OFF_AXIS, unresolved)
 
 
 def _fold_column(col: int) -> int:
@@ -1382,10 +1450,11 @@ def _fold_column(col: int) -> int:
     Remaps existing overflow entries if an axis shift occurred (old_to_new),
     verifies hashed keys against canonical raw keys (failing loudly on hash collision),
     looks up off-reference keys in the key table using sorted searchsorted, drops
-    unresolved keys, and deduplicates duplicate Variant Indices last-wins with
-    off-reference entries winning over existing overflow entries (ticket #223).
-    Writes the overflow spill once atomically (temp file then rename), and unlinks
-    the off-reference spill only after the overflow spill is safely written.
+    unresolved keys, and resolves the rows that share a Variant Index by D5
+    (`_combine_overflow`). Records what it dropped in the Admission record's
+    `fold` stage, then writes the overflow spill once atomically (temp file then
+    rename), and unlinks the off-reference spill only after the overflow spill
+    is safely written.
     """
     assert _fold_context is not None
     ctx = _fold_context
@@ -1396,16 +1465,21 @@ def _fold_column(col: int) -> int:
     # With no remap (the all-keys-drop path), the existing overflow spill is
     # already on the final axis and must remain untouched.  Avoid reading it.
     ex = _load_fold_existing(ctx, spill_dir, col)
-    off = _load_off_reference(ctx, spill_dir, col)
+    off, unresolved = _load_off_reference(ctx, spill_dir, col)
     if ex is None and off is None and not unk_path.exists():
         _mark_folded(ctx, col)
         return col
 
-    final = _combine_overflow(ex, off, ctx.old_to_new is not None)
+    folded = _combine_overflow(ex, off, ctx.old_to_new is not None)
+    _record_fold(ctx, col, folded, unresolved)
+    final = folded.final
     if final is not None:
         tmp_ovf = spill_dir / f"{col}.ovf.tmp.npz"
         try:
-            np.savez(tmp_ovf, variant_index=final[0], z=final[1], se=final[2], eaf=final[3])
+            np.savez(
+                tmp_ovf, variant_index=final[0], z=final[1], se=final[2], eaf=final[3],
+                reference=final[4],
+            )
             tmp_ovf.replace(ovf_path)
         except BaseException:
             tmp_ovf.unlink(missing_ok=True)
@@ -1436,8 +1510,9 @@ def _verify_hashed_rows(
     keys: np.ndarray,
     hashed_index: np.ndarray,
     canonical: CanonicalRawKeys,
-) -> None:
-    """Check each of one column's hashed rows carries its value's canonical raw key.
+) -> list[str]:
+    """Check each of one column's hashed rows carries its value's canonical raw
+    key, and return the side file's raw keys, in ``hashed_index``'s order.
 
     The exact half of the build-wide collision guarantee (#218, ticket #222
     review round 2): the merge's check hash only filters, and two keys can
@@ -1447,6 +1522,7 @@ def _verify_hashed_rows(
     raws = _read_unknown_side_file(spill_dir, col)
     values = placed_hashed_values(keys, hashed_index, raws)
     canonical.verify(col, values, np.array(raws, dtype=RAW_KEY_DTYPE))
+    return raws
 
 
 def _fold_unknown_spills(
@@ -1457,6 +1533,8 @@ def _fold_unknown_spills(
     old_to_new: np.ndarray | None,
     n_workers: int,
     *,
+    record: AdmissionRecord,
+    shared_alids: Sequence[str],
     marker_dir: Path | None = None,
     already_folded: frozenset[int] = frozenset(),
 ) -> None:
@@ -1475,19 +1553,15 @@ def _fold_unknown_spills(
     worker writes, and ``already_folded`` the columns a previous run wrote one
     for: the two together are what lets an interrupted fold resume on the
     columns it has left, rather than re-remapping entries it already rewrote.
+
+    Each column writes what it dropped to ``record``'s `fold` stage, naming a
+    row by its ALID on ``shared_alids``, the axis the fold folds onto.
     """
-    table_keys = table.keys
-    table_shared = table.shared_index
-    table_keys.flags.writeable = False
-    table_shared.flags.writeable = False
-
-    canonical_values = canonical.values
-    canonical_raw = canonical.raw
-    canonical_values.flags.writeable = False
-    canonical_raw.flags.writeable = False
-
-    if old_to_new is not None:
-        old_to_new.flags.writeable = False
+    table_keys, table_shared = table.keys, table.shared_index
+    canonical_values, canonical_raw = canonical.values, canonical.raw
+    shared = (table_keys, table_shared, canonical_values, canonical_raw)
+    for array in (*shared, *(() if old_to_new is None else (old_to_new,))):
+        array.flags.writeable = False
 
     global _fold_context
     _fold_context = _FoldContext(
@@ -1497,6 +1571,8 @@ def _fold_unknown_spills(
         canonical_values=canonical_values,
         canonical_raw=canonical_raw,
         old_to_new=old_to_new,
+        record=record,
+        shared_alids=shared_alids,
         marker_dir=marker_dir,
     )
     pending = [col for col in range(n_analyses) if col not in already_folded]
@@ -1519,6 +1595,22 @@ def _build_shared_key_table(
     table = KeyTable(keys=resolved.keys, shared_index=index.lookup(resolved.alids))
     old_to_new = index.lookup(prepared.partition.shared_sorted)
     return table, old_to_new, index, off_panel, shared_sorted
+
+
+def _refuse_off_reference_spills(spill_dir: Path) -> None:
+    """Refuse a two-pass build's ``.unk`` spill rather than delete it unread.
+
+    A two-pass axis is the sources' whole union, so Pass 2 drops and logs an
+    unmatched row (`off_axis`, D6) and nothing folds one. A spill found here
+    is rows no stage would count, so it is a defect.
+    """
+    stray = sorted(path.name for path in spill_dir.glob("*.unk.npz"))
+    if stray:
+        raise RuntimeError(
+            f"a two-pass Hybrid build found {len(stray)} off-reference spill(s) "
+            f"(first: {stray[0]}); Pass 2 drops and logs an unmatched row, so "
+            "nothing folds them and their rows would be lost unrecorded"
+        )
 
 
 def _finalise_reference_partition(
@@ -1547,6 +1639,7 @@ def _finalise_reference_partition(
     the recorded rsid map -- is written.
     """
     if options.variant_reference is None:
+        _refuse_off_reference_spills(prepared.spill_dir)
         _record_axis(state, prepared, None)
         return prepared
     recorded = _recorded_axis(state)
@@ -1688,6 +1781,7 @@ def _fold_under(
     run must leave the map its indices were built against rather than the
     pre-fold one `_prepare_build` may have re-written.
     """
+    record = _admission_record(prepared, options, resume=True)
     _fold_unknown_spills(
         prepared.spill_dir,
         prepared.n_analyses,
@@ -1695,9 +1789,13 @@ def _fold_under(
         fold.canonical,
         old_to_new=fold.old_to_new,
         n_workers=options.n_workers,
+        record=record,
+        shared_alids=fold.shared_sorted,
         marker_dir=_fold_marker_dir(state),
         already_folded=_folded_columns(state),
     )
+    # The fold's drops are each Analysis's too, so the summary is written again.
+    record.finish()
     np.save(dense_to_shared_path(prepared.staged.path), fold.dense_to_shared)
     return _update_partition(
         prepared, fold.off_panel, fold.shared_sorted, fold.dense_to_shared, fold.hg38_to_source
@@ -1861,17 +1959,35 @@ def _route_studies(
     n_analyses = len(rows)
     log.info("Pass 2: routing %d analyses (n_workers=%d)", n_analyses, options.n_workers)
     pass2_start = time.monotonic()
+    record = _admission_record(prepared, options, resume=False)
     context = _Pass2Context(
-        prepared.table, prepared.spill_dir, prepared.info_score_policies, prepared.maf_policies
+        prepared.table,
+        prepared.spill_dir,
+        prepared.info_score_policies,
+        prepared.maf_policies,
+        record,
+        (prepared.partition.panel_sorted, prepared.partition.shared_sorted),
+        folds=options.variant_reference is not None,
     )
     tasks = [(analysis_index[row.trait_id], row) for row in rows]
-    info_counts: dict[str, AdmissionCounts] = {}
     routed = fork_each(_route_column, context, tasks, options.n_workers)
-    for i, (col, counts) in enumerate(routed):
-        info_counts[id_by_col[col]] = counts
+    for i, col in enumerate(routed):
         log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {id_by_col[col]}", every=25)
     return _RoutedSpills(
-        id_by_col=id_by_col, pass2_start=pass2_start, info_counts=info_counts
+        id_by_col=id_by_col, pass2_start=pass2_start, info_counts=record.finish().counts
+    )
+
+
+def _admission_record(
+    prepared: _PreparedBuild, options: _BuildOptions, *, resume: bool
+) -> AdmissionRecord:
+    """The build's Admission record, opened for its Analyses in Manifest Row order."""
+    log.info("Admission record: %s", options.admission_record)
+    return AdmissionRecord.open(
+        options.admission_record,
+        [row.trait_id for row in prepared.manifest_rows],
+        command="build-hybrid",
+        resume=resume,
     )
 
 
@@ -2312,7 +2428,7 @@ def _prepare_build(
     )
     if spill_dir is None:
         spill_dir = Path(
-            tempfile.mkdtemp(
+            mkdtemp(
                 prefix=f".{options.out.name}.hybridspill.",
                 dir=staged.path.parent,
             )
@@ -2406,17 +2522,18 @@ def _pass2_phase(
 ) -> _RoutedSpills:
     """Phase - Pass 2: route each study once, or reload the recorded routing.
 
-    The recorded form is each Analysis's declared-score dispositions (stores
-    #175), which the shared manifest's `provenance.info_score` is written from
-    and which nothing else can recover: they are what the sources yielded, not
-    a function of the store.
+    What a resume reloads is each Analysis's Admission counts (stores #175),
+    which the shared manifest's `provenance.info_score` is written from and
+    which nothing else can recover: they are what the sources yielded, not a
+    function of the store. They are the Admission record's parts, which a
+    resumed run keeps.
     """
     if state is not None and state.has("pass2"):
-        return _recorded_routing(prepared, state)
+        return _recorded_routing(prepared, options)
     routed = _route_studies(prepared, options)
     _log_spill_bytes(prepared.spill_dir)
     if state is not None:
-        _record_pass2_product(state, prepared, routed)
+        _record_pass2_product(state)
     return routed
 
 
@@ -2430,36 +2547,24 @@ def _log_spill_bytes(spill_dir: Path) -> None:
     )
 
 
-def _record_pass2_product(
-    state: CheckpointState, prepared: _PreparedBuild, routed: _RoutedSpills
-) -> None:
-    """Record Pass 2's product: the dispositions its workers returned.
-
-    The plates are recorded too, with their sizes, so a resume can refuse a
-    spill directory that lost one rather than build a store short of the
-    associations it claims.
+def _record_pass2_product(state: CheckpointState) -> None:
+    """Record Pass 2's product: its plates, with their sizes, so a resume can
+    refuse a spill directory that lost one rather than build a store short of
+    the associations it claims. Its counts are the Admission record's.
     """
-    write_json(
-        state.path / INFO_COUNTS,
-        {
-            row.trait_id: routed.info_counts[row.trait_id].as_dict()
-            for row in prepared.manifest_rows
-        },
-    )
     record_plates(state.path, (path.name for path in state.spill_dir.iterdir()))
     mark_phase(state.path, "pass2")
 
 
-def _recorded_routing(prepared: _PreparedBuild, state: CheckpointState) -> _RoutedSpills:
-    """Rebuild the routing records a resumed run does not route again."""
-    recorded = read_json(state.path / INFO_COUNTS)
+def _recorded_routing(prepared: _PreparedBuild, options: _BuildOptions) -> _RoutedSpills:
+    """Rebuild the routing records a resumed run does not route again: the
+    counts are re-read from the Admission record's parts, and a record that
+    lost one is refused."""
+    record = _admission_record(prepared, options, resume=True)
     return _RoutedSpills(
         id_by_col={col: row.trait_id for col, row in enumerate(prepared.manifest_rows)},
         pass2_start=time.monotonic(),
-        info_counts={
-            row.trait_id: AdmissionCounts.from_dict(recorded[row.trait_id])
-            for row in prepared.manifest_rows
-        },
+        info_counts=record.finish().counts,
     )
 
 
@@ -2692,6 +2797,7 @@ def build_hybrid_from_vcf_manifest(
     source_assembly: str | None = None, checkpoint: bool = False, resume: bool = False,
     column_map: ColumnMap | str | Path | None = None, on_rsid_conflict: str = "refuse",
     association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
+    admission_record: str | Path | None = None,
 ) -> HybridBuildResult:
     """Build a Hybrid store from a manifest of GWAS-VCF files and a reference
     panel or precomputed variant reference. A thin orchestrator over three deep
@@ -2735,7 +2841,7 @@ def build_hybrid_from_vcf_manifest(
         chunk_shape=chunk_shape, dtype=dtype, n_workers=n_workers,
         eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf, association_coverage=association_coverage,
-        on_rsid_conflict=on_rsid_conflict,
+        on_rsid_conflict=on_rsid_conflict, admission_record=admission_record,
     )
     defaults = _ManifestDefaults(source_reader_capability, source_assembly,
                                  as_column_map(column_map))
@@ -2759,8 +2865,12 @@ def _new_build_options(
     allow_unverified_eaf: bool,
     association_coverage: AssociationCoverage | str,
     on_rsid_conflict: str,
+    admission_record: str | Path | None = None,
 ) -> _BuildOptions:
     """The build's options, refusing a coverage no Hybrid release can carry.
+
+    ``admission_record`` is the directory Association Admission writes its
+    record to, ``<output_path>.admission`` unless named (#357).
 
     The coverage is ``gwas`` or nothing (issue #298), refused here rather than at
     the first phase that needs it, and before a single Manifest Row is read (ADR
@@ -2786,6 +2896,7 @@ def _new_build_options(
         association_coverage=coverage_for_layout(
             association_coverage, PrimaryStorageLayout.HYBRID
         ),
+        admission_record=admission_record_for(output_path, admission_record),
     )
 
 
@@ -3223,6 +3334,7 @@ def _build_params(
         # Recorded so a resume cannot change what the release claims to retain
         # (#227, #298).
         "association_coverage": options.association_coverage.value,
+        "admission_record": str(options.admission_record.resolve()),
         "overwrite": bool(overwrite),
         "source_reader_capability": defaults.source_reader_capability,
         "source_assembly": defaults.source_assembly,
@@ -3263,6 +3375,7 @@ def _options_from_params(params: Mapping[str, Any], n_workers: int | None) -> _B
         allow_unverified_eaf=params["allow_unverified_eaf"],
         on_rsid_conflict=RsidConflictPolicy(params["on_rsid_conflict"]),
         association_coverage=AssociationCoverage(params["association_coverage"]),
+        admission_record=Path(params["admission_record"]),
     )
 
 

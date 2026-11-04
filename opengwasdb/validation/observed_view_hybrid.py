@@ -331,23 +331,29 @@ def _compare_both(
 
 
 def _unchecked() -> _Sides:
+    """All three parts, with every tally `null`: no cell was inspected, so none is zero.
+
+    `analyses_checked` and `bands_checked` are 0 because nothing was read; the counters,
+    the strata and the largest gaps are `null`, a value nobody measured (issue #375).
+    `crossovers.n` and `rows` are `null` too, because the crossovers are derived from the
+    axes that did not line up.
+    """
     overflow = {
         "analyses_checked": 0,
         "analyses": [],
         "analyses_with_mismatch": [],
-        "totals": dict.fromkeys((*_OVERFLOW_INFORMATIONAL, *OVERFLOW_FAILING), 0),
-        "max_abs_diff": dict.fromkeys(_DIFF_PLANES, 0.0),
-        "all_analyses": dict.fromkeys(_EVERY_ANALYSIS_FAILING, 0),
+        "totals": dict.fromkeys((*_OVERFLOW_INFORMATIONAL, *OVERFLOW_FAILING)),
+        "max_abs_diff": dict.fromkeys(_DIFF_PLANES),
+        "all_analyses": dict.fromkeys(_EVERY_ANALYSIS_FAILING),
     }
     dense = _unsampled_record()
-    dense["totals"]["crossover_cells"] = 0
-    # Not derived, so not reported as none.
-    unchecked = _crossover_tally()
+    dense["totals"]["crossover_cells"] = None
     crossovers = {
         "n": None,
         "rows": None,
-        **unchecked.record(),
-        "reencoding_max_abs_diff": unchecked.max_abs_diff,
+        "totals": dict.fromkeys(_CROSSOVER_KEYS),
+        "max_abs_diff": dict.fromkeys(_DIFF_PLANES),
+        "reencoding_max_abs_diff": dict.fromkeys(_DIFF_PLANES),
     }
     return _Sides(dense, overflow, crossovers)
 
@@ -467,10 +473,14 @@ class _Tally:
         return {"totals": self.totals, "max_abs_diff": self.max_abs_diff}
 
 
+# The crossover counters, which the crossover check and the unchecked record share.
+_CROSSOVER_KEYS = (*CROSSOVER_FAILING, "infinite_cells")
+
+
 def _crossover_tally() -> _Tally:
     # `infinite_cells` is informational: a crossover is compared as it is, and an
     # infinite value is a value (issue #337).
-    return _Tally((*CROSSOVER_FAILING, "infinite_cells"))
+    return _Tally(_CROSSOVER_KEYS)
 
 
 def _check_crossovers(pair: _HybridPair, crossovers: _Crossovers) -> dict[str, Any]:

@@ -88,9 +88,9 @@ from opengwasdb.readers.column_map import (
     mapped_row_build,
 )
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
-from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader, load_liftover
+from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, load_liftover
 from opengwasdb.readers.interface import SourceReader
-from opengwasdb.readers.registry import known_capabilities, resolve_reader
+from opengwasdb.readers.registry import known_capabilities, requires_probe_id, resolve_reader
 from opengwasdb.version import installed_version
 
 logger = logging.getLogger(__name__)
@@ -342,12 +342,12 @@ def _parse_probe_id(raw: dict[str, str], cap: str, analysis_id: str, path: Path)
     file, and a probe ID on its row would be silently meaningless.
     """
     probe = (raw.get("source_probe_id") or "").strip() or None
-    if cap == BESD_CAPABILITY and probe is None:
+    if requires_probe_id(cap) and probe is None:
         raise ValueError(
             f"analyses manifest {path}: BESD analysis {analysis_id!r} has no "
             f"source_probe_id naming its .epi probe"
         )
-    if cap != BESD_CAPABILITY and probe is not None:
+    if not requires_probe_id(cap) and probe is not None:
         raise ValueError(
             f"analyses manifest {path}: analysis {analysis_id!r} sets source_probe_id, "
             f"which only source_reader_capability {BESD_CAPABILITY!r} reads"
@@ -493,7 +493,7 @@ def read_resolve_manifest(
         )
 
     cols = resolve_manifest_columns(fieldnames, manifest_path)
-    known = (*known_capabilities(), BESD_CAPABILITY)
+    known = known_capabilities()
     seen_ids: set[str] = set()
     rows = [
         _parse_manifest_row(
@@ -946,26 +946,22 @@ def _resolved_reader(
 
     `column_map` is the map an `opengwasdb.column-map` row is read through (#281).
     """
-    reader = resolve_reader(
-        cap, req.source_file, req.stored_effect_scale,
-        imputation_score_declaration=req.info_score_policy.imputation_score_declaration,
-        column_map=column_map,
-    )
     plan = assembly_plan(
         capability=cap,
         source_build=source_build,
         reference_build=reference_build,
         chain_file=chain_file,
     )
-    if plan.requires_liftover:
-        assert isinstance(reader, GwasVcfReader)
-        reader = replace(
-            reader,
-            liftover=load_liftover(
-                plan.source_build, plan.reference_build, str(plan.chain_file)
-            ),
-        )
-    return reader
+    return resolve_reader(
+        cap, req.source_file, req.stored_effect_scale,
+        imputation_score_declaration=req.info_score_policy.imputation_score_declaration,
+        column_map=column_map,
+        liftover=(
+            load_liftover(plan.source_build, plan.reference_build, str(plan.chain_file))
+            if plan.requires_liftover
+            else None
+        ),
+    )
 
 
 def _outcome(res: AnalysisResolution) -> _Outcome:

@@ -185,7 +185,7 @@ RULES: tuple[Rule, ...] = (
     Fold(
         name="csr.segment_order",
         kinds=Kind.CSR,
-        witnesses=("duplicate_collapsed", "duplicate_conflicting"),
+        witnesses=("duplicate_collapsed", "duplicate_reversed_indel", "duplicate_conflicting"),
         after=_LAID_OUT,
         scan=ASSOCIATIONS,
         zero=FirstBreak(),

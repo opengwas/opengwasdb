@@ -1,35 +1,43 @@
-"""The Source Reader interface (issue #19; extended by issues #20 and #21).
+"""The Source Reader interface (issues #19, #20, #21, #56).
 
 `opengwasdb-stores` declares one `source_reader_capability` string per Source
 Collection (ADR-0009, e.g. `"opengwasdb.gwas-vcf"`). This module defines the
-interface that string resolves to (see `opengwasdb.readers.registry`): the
-things the pipeline needs from source data -- streaming every variant
-(issue #20, a builder's union-variant pass), streaming associations for the
-build, and extracting allele frequency and standard error at a requested set
-of sites for annotation (ancestry assignment, phenotype-SD estimation --
-issue #21).
+interface that string resolves to (see `opengwasdb.readers.registry`): every
+projection of a source the pipeline reads, each in the source's declared
+assembly unless the reader was opened aligned to another:
 
-The interface is structural (`typing.Protocol`), not an ABC -- this package
-has no abstract-base-class precedent elsewhere, and Protocol lets
-`GwasVcfReader` and `FakeReader` satisfy it without a shared base class,
-consistent with the codebase's existing preference for dataclasses and duck
-typing over inheritance.
+- `stream_variants`, every variant, for a builder's union-variant pass;
+- `stream_associations`, one association per row, for Variant Routing's Pass 2;
+- `stream_batches`, the same associations as columns, for a Ragged build;
+- `stream_metric_chunks`, identity and statistics in blocks, for the resolver;
+- `extract_at_sites`, A1 frequency and SE at requested sites, for ancestry
+  assignment and phenotype-SD estimation.
 
-The dense and hybrid builders (issue #20) and ancestry assignment / phenotype-SD
-estimation (issue #21) now resolve a reader through this interface instead of
-importing a source module directly.
+Every reader presents them from its rows through `opengwasdb.readers.rows`, so
+each is oriented to A1 by one rule. The interface is structural
+(`typing.Protocol`), not an ABC: every reader and `FakeReader` satisfy it
+without a shared base class.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Protocol
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 
 from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.stats import FrequencyTally
+from opengwasdb.variants.normalise import IdentityFaults
+
+if TYPE_CHECKING:
+    from opengwasdb.readers.rows import MetricsChunk, ReaderBatch
+
+#: A ``CHROM POS`` file of the sites an extraction asks for, or none.
+RegionsFile = str | Path | None
 
 
 class ImputationScoreStatus(StrEnum):
@@ -106,6 +114,28 @@ def parse_imputation_score(value: str | None, *, declared: bool) -> ImputationSc
     return ImputationScore(number, ImputationScoreStatus.OUT_OF_RANGE)
 
 
+class ReferenceAllele(StrEnum):
+    """Which of a row's two alleles its source declares to be the genome's reference.
+
+    Declared by the format, never inferred: GWAS-VCF's `REF` and FinnGen's
+    `ref` are the reference allele (`REF`, the row's own `ref`), while
+    GWAS-SSF, BESD and an effect/other Column Map name an effect allele and an
+    other one, which need not be the reference (`UNDECLARED`). `ALT` is a row
+    whose `alt` its source declares the reference. Association Admission reads
+    it only to tell the two alleles of an indel apart when an insertion and a
+    deletion share one ALID (issue #357).
+    """
+
+    UNDECLARED = "undeclared"
+    REF = "ref"
+    ALT = "alt"
+
+    @property
+    def declared(self) -> bool:
+        """Whether the format names either allele the genome's reference."""
+        return self is not ReferenceAllele.UNDECLARED
+
+
 @dataclass(frozen=True)
 class ReaderAssociation:
     """One source association's position, effect, and precision.
@@ -114,7 +144,9 @@ class ReaderAssociation:
     reordered to canonical A1/A2 -- `z` is already sign-corrected to the
     A1 = min(ref, alt) convention every reader in this package follows, the two
     compared upper-cased (`opengwasdb.variants.normalise.identity_allele`, spec
-    §4: a lower-case base is the same base). `eaf` follows `z`: it is
+    §4: a lower-case base is the same base). `z` is NaN for a source row that
+    reports no effect: such a row is not an association, and Association
+    Admission drops and logs it (`effect_missing`). `eaf` follows `z`: it is
     the frequency of the *stored* effect allele, so a reader that negated `z`
     also stores `1 - af` (ADR 0036). None where the source reports no usable
     frequency -- never fabricated, and never a substitute 0.5. There is no
@@ -124,6 +156,9 @@ class ReaderAssociation:
     source file itself (issue #17): it is Analytical Metadata a reader
     receives from its caller (ultimately the build manifest, validated
     against issue #16's schema) and attaches to every association it yields.
+    `reference` says which of `ref` and `alt` the source declares to be the
+    reference allele, if it declares one. It is keyword-only and has no
+    default: every reader states its format's declaration.
     """
 
     chromosome: str
@@ -136,10 +171,11 @@ class ReaderAssociation:
     eaf: float | None = None
     # Present only with an independent provider-backed declaration (#175).
     imputation_score: ImputationScore = ImputationScore()
+    reference: ReferenceAllele = field(kw_only=True)
 
     def __post_init__(self) -> None:
-        if self.se < 0:
-            raise ValueError(f"se must be non-negative, got {self.se!r}")
+        # An unusable `se` (NaN, not positive, not finite) is the source's, as
+        # read: Association Admission drops and logs the row.
         if self.eaf is not None and not 0.0 <= self.eaf <= 1.0:
             raise ValueError(f"eaf must be in [0, 1], got {self.eaf!r}")
 
@@ -186,12 +222,28 @@ class SiteMetrics:
             raise ValueError(f"se must be non-negative, got {self.se!r}")
 
 
-class SourceReader(Protocol):
-    """One Source Format's reader: association streaming plus per-site AF/SE
-    lookup for annotation."""
+@dataclass
+class StreamTally:
+    """What one Source Reader stream did to the rows it read, for Association
+    Admission to record (issue #357): the rows it dropped because no ALID can
+    spell their identity (#365), and the reported frequencies it made absent
+    (D7)."""
 
-    def stream_associations(self) -> Iterator[ReaderAssociation]:
-        """Yield every association in the source, oriented per ReaderAssociation."""
+    faults: IdentityFaults = field(default_factory=IdentityFaults)
+    frequencies: FrequencyTally = field(default_factory=FrequencyTally)
+
+
+class SourceReader(Protocol):
+    """One Source Format's reader: every projection of one source."""
+
+    def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
+        """Yield every association in the source, oriented per ReaderAssociation.
+
+        A row whose identity is malformed (a missing chromosome, an allele
+        outside A, C, G and T) is not yielded. ``tally``, given, names each
+        such row, and counts the reported frequencies the stream made absent
+        because they lie outside (0, 1) (issue #357: D7, #365).
+        """
         ...
 
     def stream_variants(self) -> Iterator[SourceVariant]:
@@ -206,11 +258,36 @@ class SourceReader(Protocol):
         """
         ...
 
-    def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
+    def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
+        """`stream_associations`' rows as columns, in blocks, in the same order.
+
+        The same z, SE and frequency on A1, with each row's ALID, its place in
+        the source and its rsid; ``tally`` as `stream_associations` fills it.
+        """
+        ...
+
+    def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
+        """Every row naming a variant, with its statistics, a block at a time.
+
+        The resolver's projection: a row is kept with whatever statistics it
+        has, so ancestry assignment and phenotype-SD estimation each apply
+        their own eligibility rule.
+        """
+        ...
+
+    def extract_at_sites(
+        self, alids: Iterable[str], *, region: str | None = None, regions_file: RegionsFile = None
+    ) -> dict[str, SiteMetrics]:
         """Return `{canonical_alid: SiteMetrics}` for the requested sites found
         in the source. A requested alid absent from the result was not found
         or was dropped (palindromic, unparseable AF/SE, ...) -- callers must
         not assume every requested alid comes back.
+
+        ``region`` restricts the extraction to one chromosome of the source, as
+        the source names it. ``regions_file`` is a ``CHROM POS`` file of the
+        requested sites' positions, built once by a caller extracting from many
+        sources: a reader that can seek by position reads only those, and any
+        other reads the whole source, with the same answer.
         """
         ...
 

@@ -45,14 +45,14 @@ from __future__ import annotations
 
 import heapq
 import math
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol, runtime_checkable
 
 import numpy as np
 
+from opengwasdb.admission import AdmissionCounts, AnalysisRules, SourceRows, counting_gate
 from opengwasdb.ancestry.mixture import AncestryAssignment, Gates, assign_ancestry
 from opengwasdb.ancestry.reference import AncestryReference
 from opengwasdb.build.eaf_orientation import site_hash
@@ -64,10 +64,10 @@ from opengwasdb.build.phenotype_sd import (
     has_usable_sample_size,
     se_scale_samples,
 )
-from opengwasdb.build.row_admission import Admission, AdmissionCounts, admit_rows
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.info_score_policy import InfoScorePolicy, InfoScoreState
 from opengwasdb.model.maf_policy import MafPolicy, MafState
+from opengwasdb.readers.interface import SourceReader
 from opengwasdb.readers.tabular import MetricsChunk
 
 __all__ = [
@@ -76,7 +76,6 @@ __all__ = [
     "AnalysisRequest",
     "AnalysisResolution",
     "DEFAULT_EVIDENCE_SAMPLE",
-    "MetricsReader",
     "PhenotypeSdResolution",
     "ScanDiagnostics",
     "ScanLimit",
@@ -372,21 +371,6 @@ class AnalysisResolution:
     error: str = ""
 
 
-@runtime_checkable
-class MetricsReader(Protocol):
-    """A source reader that can stream one row's identity and statistics.
-
-    Narrower than `SourceReader` on purpose. `stream_associations` cannot serve
-    this resolver: it carries a `z` rather than the beta behind it, and it drops
-    every row whose beta is unusable, which is a row ancestry assignment can
-    still read a frequency from. GWAS-SSF provides a projected tabular scan and
-    GWAS-VCF provides one bounded streaming ``bcftools query`` (issue #278).
-    Readers without either explicit metrics projection are refused loudly.
-    """
-
-    def stream_metric_chunks(self) -> Iterator[MetricsChunk]: ...
-
-
 @dataclass
 class _Scan:
     """One source scan's mutable state, readable even if the scan raises mid-file.
@@ -558,7 +542,7 @@ def _scan_diagnostics(
 
 
 def _scan(
-    reader: MetricsReader,
+    reader: SourceReader,
     panel: Collection[str],
     scan: _Scan,
     evidence: _EvidenceSample,
@@ -592,8 +576,9 @@ def _scan(
     both ancestry and phenotype SD.
     """
     stream = reader.stream_metric_chunks()
-    info_score_policy = info_score_policy or InfoScorePolicy()
-    maf_policy = maf_policy or MafPolicy()
+    rules = AnalysisRules(
+        "", info=info_score_policy or InfoScorePolicy(), maf=maf_policy or MafPolicy()
+    )
     # The ancestry bound stops the *physical* scan only when nothing whole-stream
     # was requested. It always stops ancestry accumulation.
     stops_physical_at_ancestry = not (needs_sd or whole_stream)
@@ -601,8 +586,8 @@ def _scan(
     try:
         for chunk in stream:
             observed = _bounded(chunk, scan, limit)
-            admission = _admit(observed, info_score_policy, maf_policy)
-            retained_indices = np.flatnonzero(admission.keep)
+            keep, counts = _admit(observed, rules)
+            retained_indices = np.flatnonzero(keep)
             block = _take(observed, retained_indices)
             stopped_physical: int | None = None
             if ancestry_active:
@@ -621,7 +606,7 @@ def _scan(
                         block = _slice(block, stopped + 1)
                         # Tally only the prefix actually read; the rule is
                         # row-wise, so the prefix's mask is unchanged.
-                        admission = _admit(observed, info_score_policy, maf_policy)
+                        _, counts = _admit(observed, rules)
                         scan.stop_reason = scan.ancestry_stop_reason
 
             ancestry_end = (
@@ -640,7 +625,7 @@ def _scan(
                     (scan.variant_reference_rows_matched or 0)
                     + sum(alid in variant_reference for alid in observed.alid)
                 )
-            scan.admission += admission.counts
+            scan.admission += counts
             _count_build_eligible(block, scan, variant_reference)
             evidence.admit(block)
             scan.rows_read += len(observed)
@@ -681,29 +666,25 @@ def _slice(chunk: MetricsChunk, rows: int) -> MetricsChunk:
     return _take(chunk, np.arange(rows))
 
 
-def _admit(
-    observed: MetricsChunk,
-    info_policy: InfoScorePolicy,
-    maf_policy: MafPolicy,
-) -> Admission:
-    """One block's admission by the shared rule, in the builder's orientation.
+def _admit(observed: MetricsChunk, rules: AnalysisRules) -> tuple[np.ndarray, AdmissionCounts]:
+    """One block's keep mask and counts, by Association Admission, in the builder's orientation.
 
-    The keep mask and the tally come from the same `admit_rows` call, so the
-    counts the record reports and the rows the scan keeps cannot disagree
-    (stores #176). The frequency is oriented exactly as `stream_associations`
-    orients the builder's `eaf` (`1.0 - af_alt` on a flipped row): MAF is
-    symmetric in exact arithmetic but not in floating point, so a row whose
-    MAF lies on the threshold would otherwise be kept by one and dropped by
-    the other.
+    Both come from one counting gate's judgement, so the counts the record
+    reports and the rows the scan keeps cannot disagree (stores #176). The
+    frequency is oriented exactly as `stream_associations` orients the
+    builder's `eaf` (`1.0 - af_alt` on a flipped row): MAF is symmetric in exact
+    arithmetic but not in floating point, so a row whose MAF lies on the
+    threshold would otherwise be kept by one and dropped by the other.
     """
-    af = np.where(observed.flipped, 1.0 - observed.af_alt, observed.af_alt)
-    return admit_rows(
-        observed.imputation_score,
-        observed.imputation_score_status,
-        af,
-        info_policy,
-        maf_policy,
+    gate = counting_gate(rules)
+    keep = gate.source_rows(
+        SourceRows(
+            eaf=observed.a1_frequency(),
+            imputation_score=observed.imputation_score,
+            imputation_status=observed.imputation_score_status,
+        )
     )
+    return keep, gate.counts
 
 
 def _count_build_eligible(
@@ -775,7 +756,7 @@ def _accumulate_ancestry(
     """
     usable = np.isfinite(chunk.se) & np.isfinite(chunk.af_alt) & ~chunk.palindromic
     rows = np.flatnonzero(usable)
-    frequencies = np.where(chunk.flipped[rows], 1.0 - chunk.af_alt[rows], chunk.af_alt[rows])
+    frequencies = chunk.a1_frequency()[rows]
     sites = limit.max_ancestry_sites if limit is not None else None
     return _record_panel_frequencies(
         rows, chunk.alid[rows], frequencies, panel, panel_af, sites
@@ -1065,7 +1046,7 @@ def _ancestry(
 def resolve_analysis(
     request: AnalysisRequest,
     *,
-    reader: MetricsReader,
+    reader: SourceReader,
     reference: AncestryReference,
     extraction_panel: Collection[str] | None = None,
     gates: Gates | None = None,
@@ -1120,11 +1101,6 @@ def resolve_analysis(
         )
     if scan_limit is not None:
         scan_limit.validate()
-    if not isinstance(reader, MetricsReader):
-        raise TypeError(
-            f"{type(reader).__name__} cannot stream source metrics; the one-pass resolver "
-            f"requires an explicit bounded metrics projection (issues #207, #278)"
-        )
     scan = _Scan()
     evidence = _EvidenceSample(k=evidence_sample, tier=request.original_sd_method)
     panel = _ancestry_panel(reference, extraction_panel, source_ancestry)

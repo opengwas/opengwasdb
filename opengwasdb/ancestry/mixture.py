@@ -28,7 +28,7 @@ Two things it buys, neither of which the residual gate delivers on its own:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -37,7 +37,7 @@ from scipy.optimize import nnls  # type: ignore[import-untyped]
 from opengwasdb.ancestry.reference import AncestryReference
 from opengwasdb.build.eaf_orientation import correlate_frequencies
 from opengwasdb.model.enums import EafOrientationOutcome, StoredEffectScale
-from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader
+from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.interface import af_only
 from opengwasdb.readers.registry import resolve_reader
 
@@ -195,14 +195,13 @@ def assign_from_source(
     frequency column sat behind that trust, unexaminable, until a store was
     built from it.
 
-    ``regions_file``/``region``/``liftover`` are GWAS-VCF's bcftools
-    optimisations and are applied only to that reader (a tabular reader scans
-    its file once regardless, so they would mean nothing there). ``liftover``
-    (a pyliftover ``LiftOver``) orients a study on a different assembly than
-    the reference (e.g. GRCh37 GWAS-VCF → GRCh38 reference); see
-    ``GwasVcfReader`` for why it disables the ``regions_file`` optimisation
-    when set. ``region`` (bcftools ``-r``) restricts the read to one
-    chromosome, in either mode.
+    ``liftover`` (a pyliftover ``LiftOver``) opens the reader lifted onto the
+    reference's assembly (e.g. GRCh37 GWAS-VCF → GRCh38 reference), which only
+    a capability that can lift accepts; see ``GwasVcfReader`` for why it
+    disables the ``regions_file`` optimisation when set. ``region`` restricts
+    the read to one chromosome, in either mode. ``regions_file`` is the
+    reference sites' positions, which a reader that can seek by position (a
+    GWAS-VCF, through bcftools) reads alone, and any other ignores.
 
     Two behaviours narrow slightly versus the pre-#21 AF-only extraction this
     replaces, both accepted as consequences of no longer maintaining two
@@ -216,12 +215,10 @@ def assign_from_source(
     """
     # `stored_effect_scale` is required by the reader interface but unread by
     # `extract_at_sites`, which returns frequencies and standard errors only.
-    reader = resolve_reader(capability, path, StoredEffectScale.SD)
-    if isinstance(reader, GwasVcfReader):
-        reader = replace(
-            reader, liftover=liftover, regions_file=regions_file, region=region
-        )
-    sites = reader.extract_at_sites(reference.index.keys())
+    reader = resolve_reader(capability, path, StoredEffectScale.SD, liftover=liftover)
+    sites = reader.extract_at_sites(
+        reference.index.keys(), region=region, regions_file=regions_file
+    )
     study_af = af_only(sites)
     return assign_ancestry(study_af, reference, gates)
 

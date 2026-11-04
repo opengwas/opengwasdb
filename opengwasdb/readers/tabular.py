@@ -1,4 +1,10 @@
-"""Shared mechanics for canonical tabular summary-statistics readers."""
+"""Shared mechanics for canonical tabular summary-statistics readers.
+
+How GWAS-SSF, FinnGen and a Column Map's translation are read: their header
+indexing, cell parsing and effect rules, and the column-projected scans the
+annotation stages and Pass 1 read. The rows they parse are presented by
+`opengwasdb.readers.rows`, re-exported here.
+"""
 
 from __future__ import annotations
 
@@ -7,15 +13,13 @@ import gzip
 import math
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 import numpy as np
 import pandas as pd
-from numpy.typing import DTypeLike
 
-from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.effect_source import (
     EffectSourceKind,
     RowCells,
@@ -25,14 +29,22 @@ from opengwasdb.readers.effect_source import (
     resolve_sample_size_column,
     row_statistics,
 )
-from opengwasdb.readers.gwas_vcf import is_palindromic
 from opengwasdb.readers.interface import (
     ImputationScore,
     ImputationScoreStatus,
-    ReaderAssociation,
-    SiteMetrics,
+    ReferenceAllele,
     SourceVariant,
     parse_imputation_score,
+)
+from opengwasdb.readers.rows import (
+    DEFAULT_CHUNK_ROWS,
+    MetricsChunk,
+    SourceRow,
+    TabularMetricsRow,
+    extract_at_sites,
+    metrics_chunks_from_rows,
+    stream_associations,
+    stream_variants,
 )
 from opengwasdb.stats import Z_975, inverse_normal_denominators, parse_af
 from opengwasdb.variants.normalise import (
@@ -65,6 +77,24 @@ def parse_finite_float(value: str | None) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
+def parse_effect(value: str | None) -> float | None:
+    """An effect cell: `parse_finite_float`'s value, or an infinite one.
+
+    `parse_finite_float` reads an infinite number as absent, which is right for
+    a statistic but not for an effect: an infinite effect is reported, and
+    Association Admission drops its row as `z_nonfinite` (D4), not as
+    `effect_missing`. Only a cell that is not a finite number is parsed twice.
+    """
+    finite = parse_finite_float(value)
+    if finite is not None or value is None:
+        return finite
+    try:
+        parsed = float(value)
+    except ValueError:
+        return None
+    return parsed if math.isinf(parsed) else None
+
+
 def parse_positive_float(value: str | None) -> float | None:
     parsed = parse_finite_float(value)
     return parsed if parsed is not None and parsed > 0.0 else None
@@ -74,8 +104,8 @@ __all__ = [
     "MetricsProjectionColumns",
     "SourcePath",
     "TabularSource",
+    "SourceRow",
     "TabularMetricsRow",
-    "TabularRow",
     "VariantProjectionColumns",
     "extract_at_sites",
     "open_binary",
@@ -104,7 +134,16 @@ class TabularSource(Protocol):
     A Column Map's translation of a provider file is one (issue #281): the
     projections below read the canonical columns it presents, exactly as they
     read a GWAS-SSF file from disk. `str()` names the source in every error.
+
+    `reference` is what the source's rows declare of their alleles. The source
+    is a translation of another format, so GWAS-SSF's own declaration does not
+    stand for it.
     """
+
+    @property
+    def reference(self) -> ReferenceAllele:
+        """Which allele the rows declare the genome's reference."""
+        ...
 
     def open_binary(self) -> IO[bytes]:
         """The source's bytes, decompressed, header first."""
@@ -174,41 +213,6 @@ class MetricsProjectionColumns:
     ci_lower: bytes | None = None
     ci_upper: bytes | None = None
     p_value: bytes | None = None
-
-
-@dataclass(frozen=True)
-class TabularMetricsRow:
-    """One source row's variant identity and the statistics both pre-build
-    annotation stages read (issue #207).
-
-    The parent of :class:`TabularRow`, which adds the source's own identifier for
-    the row and nothing else. The split is not cosmetic: the one-pass resolver
-    reads a genome-wide file per Analysis and never looks at an rsid, so the
-    metrics projection does not pay for the identifier columns or for decoding
-    them -- and a row shape that could not name an rsid is not a row shape
-    anything else should be handed.
-
-    ``af_alt`` is the source's own frequency for its own effect allele -- not
-    A1-oriented, which is why ``flipped`` travels beside it (ADR 0036). ``ref``
-    and ``alt`` are the source's own labels, verbatim.
-    """
-
-    chromosome: str
-    position: int
-    ref: str
-    alt: str
-    alid: str
-    flipped: bool
-    af_alt: float | None
-    beta: float | None
-    se: float | None
-    imputation_score: ImputationScore = ImputationScore()
-    #: Which columns the row's own values came from (stores #176), carried here
-    #: so the blocked projection built from `metrics_chunks_from_rows` reports
-    #: the same provenance the projections themselves do.
-    effect_from_odds_ratio_fallback: bool = False
-    se_from_ci: bool = False
-    se_from_p_value: bool = False
 
 
 @dataclass(frozen=True)
@@ -897,95 +901,6 @@ _STATISTIC_FIELDS = (
 _PROJECTED_FIELDS = ("chromosome", "position", "ref", "alt", *_STATISTIC_FIELDS, "imputation_score")
 _MISSING_TOKENS = sorted(_MISSING)
 
-#: Rows per block. Peak memory is a block's ALID strings rather than the whole
-#: source, so this is the knob that bounds a resolver worker's footprint: 50,000
-#: costs about 23 MB against a genome-wide source where 1,000,000 costs 359 MB,
-#: and measures fractionally *faster* for it (issue #209).
-DEFAULT_CHUNK_ROWS = 50_000
-
-
-@dataclass(frozen=True)
-class MetricsChunk:
-    """A block of projected source rows held as columns (issue #209).
-
-    The column-oriented counterpart of :class:`TabularMetricsRow`: the same
-    projection over many rows at once, so the resolver's per-row Python cost --
-    a frozen dataclass, an f-string ALID and six parse calls for every row of a
-    genome-wide file -- becomes a handful of array operations per block. Only
-    rows naming a usable canonical variant are present, which is exactly the set
-    `stream_projected_metrics` yields, in the same order.
-
-    `palindromic` travels instead of the source's own `ref`/`alt` labels because
-    deciding strand ambiguity is the only thing those labels are read for. It is
-    computed from the *verbatim* labels, as `is_palindromic` is given them
-    row-wise -- not from the normalised alleles, which differ for a
-    whitespace-padded cell. Matching the row-wise answer matters more than
-    matching the tidier one.
-
-    Absent statistics are `NaN`, never `0.0`. Each of `af_alt`, `beta` and `se`
-    carries the usability rule its row-wise `parse_*` counterpart applies, so a
-    value present here is one the row-wise path would also have reported.
-    """
-
-    alid: np.ndarray
-    flipped: np.ndarray
-    palindromic: np.ndarray
-    af_alt: np.ndarray
-    beta: np.ndarray
-    se: np.ndarray
-    imputation_score: np.ndarray = field(default_factory=lambda: np.array([], dtype="float64"))
-    imputation_score_status: np.ndarray = field(default_factory=lambda: np.array([], dtype=object))
-    #: Which column each row's effect and standard error came from (stores
-    #: #176), one flag per row: `effect_from_odds_ratio_fallback` is a row whose
-    #: `beta` was unusable and whose `odds_ratio` supplied the effect, and
-    #: `se_from_ci` / `se_from_p_value` are the two derived standard errors.
-    #: They are what the resolver's build-eligible counts report, so they cover
-    #: exactly the rows `beta`/`se` carry values for.
-    effect_from_odds_ratio_fallback: np.ndarray = field(
-        default_factory=lambda: np.array([], dtype=bool)
-    )
-    se_from_ci: np.ndarray = field(default_factory=lambda: np.array([], dtype=bool))
-    se_from_p_value: np.ndarray = field(default_factory=lambda: np.array([], dtype=bool))
-
-    def __post_init__(self) -> None:
-        _fill_default_arrays(self)
-
-    def __len__(self) -> int:
-        return int(self.alid.shape[0])
-
-
-#: Every `MetricsChunk` array a reader may leave out entirely, with the value it
-#: is filled with when absent. One list, so the default fill and the alignment
-#: check cannot cover different sets of arrays.
-_CHUNK_DEFAULTS: tuple[tuple[str, object, object], ...] = (
-    ("imputation_score", math.nan, None),
-    ("imputation_score_status", ImputationScoreStatus.UNDECLARED, object),
-    ("effect_from_odds_ratio_fallback", False, bool),
-    ("se_from_ci", False, bool),
-    ("se_from_p_value", False, bool),
-)
-
-
-def _fill_default_arrays(chunk: MetricsChunk) -> None:
-    """Fill each absent `MetricsChunk` array with its own "nothing to report" value.
-
-    A blocked reader built before a field existed leaves its array empty: the
-    score arrays (#175) and the effect/precision provenance (stores #176). What
-    fills them is an absence -- `NaN`, `UNDECLARED`, `False` -- never a
-    plausible measurement, so a reader that had nothing to say cannot be read as
-    having said something. Every array's length is checked here, because the
-    accumulation downstream indexes them against `alid`.
-    """
-    size = len(chunk.alid)
-    for name, fill, dtype in _CHUNK_DEFAULTS:
-        array = getattr(chunk, name)
-        if not array.size and size:
-            array = np.full(size, fill, dtype=dtype)
-            object.__setattr__(chunk, name, array)
-        if len(array) != size:
-            raise ValueError(f"{name} must align with MetricsChunk.alid")
-
-
 def _projected_column_names(
     header: list[bytes], projection: _ResolvedMetricsProjection
 ) -> dict[str, str]:
@@ -1412,130 +1327,5 @@ def stream_projected_metric_chunks(
             yield _projected_chunk(frame, names, projection.effect_source)
 
 
-def metrics_chunks_from_rows(
-    rows: Iterable[TabularMetricsRow], *, chunk_rows: int = DEFAULT_CHUNK_ROWS
-) -> Iterator[MetricsChunk]:
-    """Block a row-wise projection, for a reader that has no blocked one.
-
-    The resolver accumulates from :class:`MetricsChunk` and only that, so there
-    is one accumulation to get right rather than a fast one and a slow one that
-    can disagree. A reader that can only yield rows pays for the blocking and
-    gets the same answer (issue #209).
-    """
-    batch: list[TabularMetricsRow] = []
-    for row in rows:
-        batch.append(row)
-        if len(batch) >= chunk_rows:
-            yield _chunk_of_rows(batch)
-            batch = []
-    if batch:
-        yield _chunk_of_rows(batch)
-
-
-def _score_chunk_arrays(rows: list[TabularMetricsRow]) -> tuple[np.ndarray, np.ndarray]:
-    return (
-        _row_array(rows, lambda row: _or_nan(row.imputation_score.value), "float64"),
-        _row_array(rows, lambda row: row.imputation_score.status, object),
-    )
-
-
-def _row_array(
-    rows: list[TabularMetricsRow],
-    value: Callable[[TabularMetricsRow], object],
-    dtype: DTypeLike,
-) -> np.ndarray:
-    """One chunk array, from a row-wise projection's rows, in row order."""
-    return np.array([value(row) for row in rows], dtype=dtype)
-
-
-def _chunk_of_rows(rows: list[TabularMetricsRow]) -> MetricsChunk:
-    scores, statuses = _score_chunk_arrays(rows)
-    return MetricsChunk(
-        alid=_row_array(rows, lambda row: row.alid, object),
-        flipped=_row_array(rows, lambda row: row.flipped, bool),
-        palindromic=_row_array(rows, lambda row: is_palindromic(row.ref, row.alt), bool),
-        af_alt=_row_array(rows, lambda row: _or_nan(row.af_alt), "float64"),
-        beta=_row_array(rows, lambda row: _or_nan(row.beta), "float64"),
-        se=_row_array(rows, lambda row: _or_nan(row.se), "float64"),
-        imputation_score=scores,
-        imputation_score_status=statuses,
-        # The row's own provenance travels with it, so a reader that can only
-        # yield rows still reports the resolver's counts from the same values
-        # the blocked projection would (stores #176).
-        effect_from_odds_ratio_fallback=_row_array(
-            rows, lambda row: row.effect_from_odds_ratio_fallback, bool
-        ),
-        se_from_ci=_row_array(rows, lambda row: row.se_from_ci, bool),
-        se_from_p_value=_row_array(rows, lambda row: row.se_from_p_value, bool),
-    )
-
-
 def _or_nan(value: float | None) -> float:
     return math.nan if value is None else value
-
-
-@dataclass(frozen=True)
-class TabularRow(TabularMetricsRow):
-    """Format-neutral row after source-specific column mapping.
-
-    :class:`TabularMetricsRow` plus the source's own identifier for the row --
-    blank when the source records none, never fabricated.
-    """
-
-    rsid: str = ""
-
-
-def stream_associations(
-    rows: Iterable[TabularRow], stored_effect_scale: StoredEffectScale
-) -> Iterator[ReaderAssociation]:
-    for row in rows:
-        if row.beta is None or row.se is None:
-            continue
-        z = row.beta / row.se
-        eaf = row.af_alt
-        if row.flipped:
-            z = -z
-            # `af_alt` is the frequency of the source's alt allele; flipping
-            # swapped which allele is stored as the effect one (ADR 0036).
-            eaf = None if eaf is None else 1.0 - eaf
-        yield ReaderAssociation(
-            chromosome=row.chromosome,
-            position=row.position,
-            ref=row.ref,
-            alt=row.alt,
-            z=z,
-            se=row.se,
-            stored_effect_scale=stored_effect_scale,
-            eaf=eaf,
-            imputation_score=row.imputation_score,
-        )
-
-
-def stream_variants(rows: Iterable[TabularRow]) -> Iterator[SourceVariant]:
-    for row in rows:
-        yield SourceVariant(
-            chromosome=row.chromosome,
-            position=row.position,
-            ref=row.ref,
-            alt=row.alt,
-            rsid=row.rsid,
-        )
-
-
-def extract_at_sites(
-    rows: Iterable[TabularRow], alids: Iterable[str]
-) -> dict[str, SiteMetrics]:
-    wanted = alids if isinstance(alids, (set, frozenset, dict)) else set(alids)
-    if not wanted:
-        return {}
-    result: dict[str, SiteMetrics] = {}
-    for row in rows:
-        if row.alid not in wanted or row.af_alt is None or row.se is None:
-            continue
-        if is_palindromic(row.ref, row.alt):
-            continue
-        result[row.alid] = SiteMetrics(
-            af=(1.0 - row.af_alt) if row.flipped else row.af_alt,
-            se=row.se,
-        )
-    return result

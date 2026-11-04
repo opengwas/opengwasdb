@@ -259,7 +259,8 @@ def _gather_evidence(
     se_values: list[float] = []
     af_values: list[float] = []
     for association in reader.stream_associations():
-        if not math.isfinite(association.se):
+        # A row with no effect is not an association, whatever its SE.
+        if not (math.isfinite(association.se) and math.isfinite(association.z)):
             continue
         if method is OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF:
             frequency = association.eaf

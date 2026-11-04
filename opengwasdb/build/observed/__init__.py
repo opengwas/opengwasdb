@@ -5,6 +5,7 @@ from pathlib import Path
 from opengwasdb.build.source import read_normalised_associations, stream_normalised_associations
 from opengwasdb.layouts.dense import DenseBuildResult, build_dense_observed_store
 from opengwasdb.model.enums import AssociationCoverage
+from opengwasdb.variants.normalise import IdentityFaults
 
 
 def build_dense_observed_from_sources(
@@ -16,8 +17,10 @@ def build_dense_observed_from_sources(
     reference_assembly: str,
     overwrite: bool = False,
     association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
+    admission_record: str | Path | None = None,
 ) -> DenseBuildResult:
-    records = stream_normalised_associations(source_paths)
+    malformed: dict[str, IdentityFaults] = {}
+    records = stream_normalised_associations(source_paths, malformed)
     return build_dense_observed_store(
         records,
         output_path,
@@ -26,6 +29,8 @@ def build_dense_observed_from_sources(
         reference_assembly=reference_assembly,
         overwrite=overwrite,
         association_coverage=association_coverage,
+        admission_record=admission_record,
+        malformed=malformed,
     )
 
 

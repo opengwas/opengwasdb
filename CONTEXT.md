@@ -163,6 +163,12 @@ A compact Store-local reference to a row in the Store Variant Table. It has no i
 **Variant Routing**:
 Deciding which **Variant Index** each source coordinate of a build reaches, and what rs identifier the variant it reaches carries (`opengwasdb.variants.routing`, ADR 0071). The authority is either the build's own sources, read once and lifted from hg19 to GRCh38 (Pass 1), or a Variant Reference, a routing frozen as an artifact. Routing re-orients a statistic a reverse-strand lift swapped, keeps the last association when two reach one place, and refuses rather than guesses where two loci or two names collide. Distinct from routing an Analysis by its **Assigned Ancestry**, which decides which release it belongs to, not where its associations land.
 
+**Association Admission**:
+Deciding which of an Analysis's source rows a Store admits as associations, and why each of the rest was dropped (`opengwasdb.admission`, ADR 0072). One rule set, judged per Analysis by a gate before Variant Routing matches the row. First come the rules that decide whether a row is an association at all (an identity an ALID can spell, a usable SE, an effect), then the filters the Analysis declared (INFO, MAF). Each dropped row has exactly one reason. A build writes what each Analysis examined, admitted and dropped to its **Admission Record**. Distinct from the Analysis-level refusals of the resolver (ancestry, phenotype SD, effect consistency), which decide whether an Analysis is built at all, not which of its rows. _Avoid_: admission alone, for the INFO/MAF filter it once named.
+
+**Admission Record**:
+A build's record of Association Admission, written beside its Store Release and never inside it, so it moves no `format_version`: `admission.json` lists each Analysis's counts by reason, in Manifest Row order, and `dropped/<analysis_index>.tsv.gz` names, by source key, every row dropped for a reason other than a declared INFO or MAF filter. It is the same at any worker count.
+
 **Routing Key**:
 The spelling a build matches a source coordinate by, `chrom:pos:ref:alt`, the same for the names it harvests and the associations it routes. Its alleles are upper-cased, as **Variant Identity** spells them, and kept in the source's order, since case is not an orientation change; every build keys this way. Two coordinates one key spells — one site written in two cases — must route to one place, or the build refuses.
 
@@ -207,6 +213,14 @@ The source-reported imputation quality or information score for a variant associ
 
 **INFO Scope**:
 Where an Imputation INFO value applies: Variant when one value is shared for a Store variant, Association when values may differ by Analysis-variant association, or Absent when INFO is not stored.
+
+**Source Reader**:
+What reads one Analysis's source for the pipeline, whatever its Source Format. It parses the source into rows, each oriented to the canonical A1 in the source's declared assembly, and presents every projection a build or annotation stage reads from those rows: its variants, its associations one by one (Variant Routing's Pass 2) or as columns (a Ragged build's batches), its statistics in blocks (the resolver), and its frequency and SE at requested sites (ancestry assignment, phenotype-SD estimation). Opened lifted, it presents the last two on the reference build; a lift that makes the other allele A1 re-orients a row by the same rule. Every caller opens one through the registry by its Source Reader Capability, never by its class.
+_Avoid_: parser, loader, adapter (an adapter is one Source Format's half of a reader).
+
+**Source Reader Capability**:
+The string a Source Collection declares for how its sources are read (`opengwasdb.gwas-vcf`, `opengwasdb.gwas-ssf`, `opengwasdb.finngen-r13`, `opengwasdb.column-map`, `opengwasdb.besd`), which the registry resolves to a Source Reader. It also says what the source needs to be read: a Column Map for `opengwasdb.column-map`, the `.epi` probe an Analysis is for `opengwasdb.besd`, and whether the reader can be lifted onto the reference build (GWAS-VCF and BESD can).
+_Avoid_: format, reader type.
 
 **Column Map**:
 A data file that says how one Source Collection's tabular summary statistics are read: the provider column holding each field, and the collection's conventions. The conventions cover missing-value tokens, which allele the effect and frequency refer to, how positions and chromosomes are written, and the genome build. A collection is read through one when its Analyses declare the `opengwasdb.column-map` Source Reader Capability; the caller names the map by path or by a built-in's name (`gwas-ssf`, `finngen-r13`). Every convention is declared, and nothing is defaulted. A value the reader cannot honour is refused, and the map's checksum is part of every Resolution Record read through it (ADR 0063). A dedicated reader remains only for a format a map cannot describe (GWAS-VCF, BESD).

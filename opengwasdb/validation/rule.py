@@ -22,6 +22,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any, Generic, TypeVar
 
+from opengwasdb.admission.rules import Reason
 from opengwasdb.encoding import StoreEncoding
 from opengwasdb.model.analyses import AnalysesTable, read_analyses
 from opengwasdb.model.enums import PrimaryStorageLayout
@@ -237,24 +238,8 @@ class Rule:
         return Finding(self.name, severity or self.severity, message, target.label)
 
 
-#: Association Admission's `Reason` values (ADR 0072, #357), which a witness rule
-#: names. Copied from #357's `opengwasdb.admission.rules.Reason` until it merges;
-#: tests/test_admission_witnesses.py holds this copy to that enum once it does.
-ADMISSION_REASONS = frozenset(
-    {
-        "chromosome_missing",
-        "allele_invalid",
-        "se_unusable",
-        "effect_missing",
-        "z_nonfinite",
-        "info_below_threshold",
-        "maf_missing",
-        "maf_below_threshold",
-        "duplicate_collapsed",
-        "duplicate_conflicting",
-        "off_axis",
-    }
-)
+#: Association Admission's `Reason` values (ADR 0072), which a witness rule names.
+ADMISSION_REASONS = frozenset(reason.value for reason in Reason)
 
 
 class Unreadable(Exception):

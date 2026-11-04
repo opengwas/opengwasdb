@@ -85,7 +85,9 @@ def test_score_remains_on_row_with_unusable_effect(tmp_path: Path) -> None:
     path = _file(tmp_path / "bad_effect.tsv", "info", ["0.8"])
     path.write_text(path.read_text().replace("\t0.2\t0.1\t", "\tNA\t0.1\t"))
     reader = GwasSsfReader(path, imputation_score_declaration=_declared())
-    assert list(reader.stream_associations()) == []
+    (association,) = reader.stream_associations()
+    assert math.isnan(association.z)
+    assert association.imputation_score.value == 0.8
     row = next(reader.stream_metrics())
     assert row.imputation_score.value == 0.8
     assert next(reader.stream_metric_chunks()).imputation_score.tolist() == [0.8]

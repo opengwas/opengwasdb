@@ -167,6 +167,16 @@ def test_unpacking_a_hashed_value_is_refused() -> None:
         unpack_key(encode_key("1:5:A:AT"))
 
 
+_EMPTY_DENSE = (
+    np.empty(0, dtype=np.int64),
+    np.empty(0, dtype=np.float32),
+    np.empty(0, dtype=np.float32),
+    np.empty(0, dtype=np.float32),
+)
+#: An Overflow component also carries each row's `REFERENCE_*` code.
+_EMPTY_OVERFLOW = (*_EMPTY_DENSE, np.empty(0, dtype=np.int8))
+
+
 def test_spill_is_uint64_plus_float32_with_a_raw_side_file(tmp_path) -> None:
     """The on-disk spill is the new format: a uint64 key array, float32
     statistics, and a side file only for the hashed rows. It loads without
@@ -178,22 +188,17 @@ def test_spill_is_uint64_plus_float32_with_a_raw_side_file(tmp_path) -> None:
         "se": np.array([0.1, 0.2], dtype=np.float32),
         "eaf": np.array([0.3, np.nan], dtype=np.float32),
     }
-    dense = (
-        np.empty(0, dtype=np.int64),
-        np.empty(0, dtype=np.float32),
-        np.empty(0, dtype=np.float32),
-        np.empty(0, dtype=np.float32),
-    )
     _spill_hybrid_column(
         tmp_path,
         0,
-        dense,
-        dense,
+        _EMPTY_DENSE,
+        _EMPTY_OVERFLOW,
         (
             encoded.values,
             stats["z"],
             stats["se"],
             stats["eaf"],
+            np.zeros(len(keys), dtype=np.int8),
             encoded.hashed_index,
             encoded.hashed_raw,
         ),
@@ -204,6 +209,7 @@ def test_spill_is_uint64_plus_float32_with_a_raw_side_file(tmp_path) -> None:
         assert data["z"].dtype == np.float32
         assert data["se"].dtype == np.float32
         assert data["eaf"].dtype == np.float32
+        assert data["reference"].dtype == np.int8
         assert data["hashed_index"].tolist() == [1]
         assert decode_keys(
             data["keys"], data["hashed_index"], _read_unknown_side_file(tmp_path, 0)
@@ -213,19 +219,17 @@ def test_spill_is_uint64_plus_float32_with_a_raw_side_file(tmp_path) -> None:
 
 def test_a_fully_packed_spill_writes_no_side_file(tmp_path) -> None:
     encoded = encode_keys(["1:5:A:C"])
-    dense = (
-        np.empty(0, dtype=np.int64),
-        np.empty(0, dtype=np.float32),
-        np.empty(0, dtype=np.float32),
-        np.empty(0, dtype=np.float32),
-    )
     float_stats = np.array([1.0], dtype=np.float32)
+    reference = np.zeros(1, dtype=np.int8)
     _spill_hybrid_column(
         tmp_path,
         0,
-        dense,
-        dense,
-        (encoded.values, float_stats, float_stats, float_stats, encoded.hashed_index, []),
+        _EMPTY_DENSE,
+        _EMPTY_OVERFLOW,
+        (
+            encoded.values, float_stats, float_stats, float_stats, reference,
+            encoded.hashed_index, [],
+        ),
     )
     assert (tmp_path / "0.unk.npz").exists()
     assert not (tmp_path / "0.unk.raw").exists()

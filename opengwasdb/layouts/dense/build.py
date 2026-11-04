@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from opengwasdb import admission
 from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding import (
     DenseEafPlane,
@@ -41,6 +43,9 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
     coverage_for_layout,
 )
+from opengwasdb.model.maf_policy import MafPolicy
+from opengwasdb.readers.interface import StreamTally
+from opengwasdb.stats import FrequencyTally, parse_af
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts
@@ -53,6 +58,8 @@ from opengwasdb.variants import (
     chromosome_sort_key,
     write_variant_axis,
 )
+from opengwasdb.variants.normalise import IdentityFaults
+from opengwasdb.variants.routing import collapse_duplicates
 
 
 @dataclass(frozen=True)
@@ -94,13 +101,18 @@ def build_dense_observed_store(
     dtype: str = DEFAULT_DTYPE,
     overwrite: bool = False,
     association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
+    admission_record: str | Path | None = None,
+    malformed: Mapping[str, IdentityFaults] | None = None,
 ) -> DenseBuildResult:
     """Write a Dense Observed-Only Store Release from normalised associations.
 
     ``association_coverage`` is a build input (issue #298), and a Dense matrix can
     carry only ``gwas``: every cell it holds is a (variant, Analysis) the source
     either reported or did not, so a narrower coverage has no representation
-    here (`coverage_for_layout`, ADR 0064).
+    here (`coverage_for_layout`, ADR 0064). Each Analysis's records pass its
+    Admission gate, which writes ``admission_record`` (beside the Store unless
+    named, #357), and logs there the rows the reader left out under
+    ``malformed``, by Analysis (#365).
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.DENSE)
 
@@ -109,6 +121,8 @@ def build_dense_observed_store(
 
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
+        directory = admission.admission_record_for(out, admission_record)
+        records = _admitted_records(records, directory, malformed or {})
         variants = _collect_variants(records)
         analyses = _collect_analyses(records)
         z, se, eaf = _scatter_records(records, variants, analyses)
@@ -135,6 +149,105 @@ def build_dense_observed_store(
         build_top_hit_indexes(staged.path, encoding=encoding)
         write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
         return DenseBuildResult(output_path=out, n_variants=len(variants), n_analyses=len(analyses))
+
+
+def _admitted_records(
+    records: list[NormalisedAssociation],
+    directory: Path,
+    malformed: Mapping[str, IdentityFaults],
+) -> list[NormalisedAssociation]:
+    """The records each Analysis's Admission gate keeps, in source order.
+
+    Analyses are judged in the order they first appear, which is the order the
+    Store's columns take (`_collect_analyses`), each under the MAF filter its
+    records declare (D2). An Analysis's records for one variant resolve as
+    routing resolves an axis's (`collapse_duplicates`): agreeing ones collapse
+    to the first, conflicting ones are all dropped and logged.
+    """
+    by_analysis: dict[str, list[int]] = {}
+    for position, record in enumerate(records):
+        by_analysis.setdefault(record.analysis_id, []).append(position)
+    for analysis_id in malformed:  # an Analysis every row of which was malformed
+        by_analysis.setdefault(analysis_id, [])
+    record_ = admission.AdmissionRecord.open(directory, list(by_analysis), command="build-dense")
+    records = list(records)
+    keep = np.zeros(len(records), dtype=bool)
+    for analysis_id, positions in by_analysis.items():
+        tally = StreamTally(faults=malformed.get(analysis_id, IdentityFaults()))
+        _usable_frequencies(records, positions, tally.frequencies)
+        rules = admission.AnalysisRules(analysis_id, maf=_declared_maf(records, positions))
+        with record_.gate(rules) as gate:
+            gate.streamed(tally)
+            if positions:
+                keep[positions] = _admitted(records, positions, gate)
+    record_.finish()
+    return [record for record, kept in zip(records, keep.tolist(), strict=True) if kept]
+
+
+def _declared_maf(records: list[NormalisedAssociation], positions: list[int]) -> MafPolicy:
+    """The one MAF filter an Analysis's records declare, or none.
+
+    Rows of one Analysis declaring different thresholds are refused: which
+    of them applies is not the build's to choose.
+    """
+    policies = {records[i].maf_policy for i in positions}
+    if len(policies) > 1:
+        analysis_id = records[positions[0]].analysis_id
+        raise ValueError(
+            f"Analysis {analysis_id!r} declares {len(policies)} different MAF thresholds "
+            "across its records; one Analysis declares one"
+        )
+    return policies.pop() if policies else MafPolicy()
+
+
+def _usable_frequencies(
+    records: list[NormalisedAssociation], positions: list[int], tally: FrequencyTally
+) -> None:
+    """Make absent each frequency at ``positions`` outside (0, 1), in place, and
+    count it in ``tally`` (D7): the rule `parse_af` applies to every source."""
+    for i in positions:
+        eaf = records[i].eaf
+        if eaf is not None and parse_af(eaf, tally) is None:
+            records[i] = replace(records[i], eaf=None)
+
+
+def _admitted(
+    records: list[NormalisedAssociation], positions: list[int], gate: admission.Gate
+) -> np.ndarray:
+    """Which of one Analysis's records, at ``positions``, its gate and its
+    duplicates' resolution keep."""
+    keep = gate.source_rows(_source_rows([records[i] for i in positions]))
+    kept = [position for position, judged in zip(positions, keep.tolist(), strict=True) if judged]
+    keep[keep] = _resolved_duplicates([records[i] for i in kept], gate)
+    return keep
+
+
+def _resolved_duplicates(records: list[NormalisedAssociation], gate: admission.Gate) -> np.ndarray:
+    """Which of one Analysis's admitted records survive its duplicates' resolution."""
+    number: dict[str, int] = {}
+    codes = np.array(
+        [number.setdefault(r.variant.alid, len(number)) for r in records], dtype=np.int64
+    )
+    found = collapse_duplicates(
+        codes,
+        np.array([r.z for r in records], dtype=np.float64),
+        np.array([r.se for r in records], dtype=np.float64),
+    )
+    gate.duplicates([records[i].variant.alid for i in found.dropped.tolist()], found.collapsed)
+    keep = np.zeros(len(records), dtype=bool)
+    keep[found.keep] = True
+    return keep
+
+
+def _source_rows(records: list[NormalisedAssociation]) -> admission.SourceRows:
+    """One Analysis's records as the batch its gate judges, each named by its ALID."""
+    alids = [record.variant.alid for record in records]
+    return admission.SourceRows(
+        eaf=np.array([np.nan if r.eaf is None else r.eaf for r in records], dtype=np.float64),
+        se=np.array([r.se for r in records], dtype=np.float64),
+        z=np.array([r.z for r in records], dtype=np.float64),
+        keys_at=lambda at: [alids[i] for i in at.tolist()],
+    )
 
 
 def _scatter_records(
@@ -166,6 +279,7 @@ def _scatter_records(
         se[row, col] = record.se
         if record.eaf is not None:
             eaf[row, col] = record.eaf
+    admission.require_admitted(z, se, where="build-dense")
     return z, se, eaf
 
 

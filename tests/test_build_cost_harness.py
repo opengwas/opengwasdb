@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from benchmarks.measure_build_cost import (
+    ADMISSION_RECORD,
     GUARD_ENV,
     PILOTS,
     _hms,
@@ -21,6 +22,7 @@ from benchmarks.measure_build_cost import (
     merge_artifacts,
     parse_time_v,
     run_step,
+    takes_admission_record,
     wait_for_quiet_load,
 )
 
@@ -89,8 +91,48 @@ def _args(tmp_path: Path, order: str = "base,head", sides: str = "base,head", su
     return args
 
 
+def _NEITHER(prefix: list[str], cwd: Path, command: str) -> bool:
+    """No side's builder takes `--admission-record`: the plan's argv as registered."""
+    return False
+
+
+def test_build_plan_passes_the_record_flag_only_to_a_side_that_takes_it(tmp_path: Path) -> None:
+    """A builder from #357 on requires `--admission-record`, and one from before
+    refuses it, so the plan appends it -- the record beside the Store, where the
+    older builder wrote it -- only on the side whose builder has it. Each side's
+    builder command is asked once."""
+    asked: list[tuple[str, str]] = []
+
+    def head_only(prefix: list[str], cwd: Path, command: str) -> bool:
+        asked.append((cwd.name, command))
+        return cwd.name == "head"
+
+    args = _args(tmp_path)
+    args.pilot = ["dense", "dense"]
+    plan = build_plan(args, head_only)
+
+    assert sorted(set(asked)) == asked == [("base", "build-dense-vcf"), ("head", "build-dense-vcf")]
+    for step in plan:
+        tail = step["command"][-2:]
+        if step["side"] == "head":
+            assert tail == [ADMISSION_RECORD, f"{step['store']}.admission"]
+        else:
+            assert ADMISSION_RECORD not in step["command"]
+
+
+def test_a_side_s_builder_is_asked_through_its_own_help(tmp_path: Path) -> None:
+    script = 'test "$2" = --help && echo "Usage: $1 ... $FLAG DIR"'
+    with_flag = ["env", f"FLAG={ADMISSION_RECORD}", "sh", "-c", script, "side"]
+    without = ["env", "FLAG=--n-workers", "sh", "-c", script, "side"]
+
+    assert takes_admission_record(with_flag, tmp_path, "build-dense-vcf") is True
+    assert takes_admission_record(without, tmp_path, "build-dense-vcf") is False
+    with pytest.raises(SystemExit, match="exited 1"):
+        takes_admission_record(["sh", "-c", "exit 1", "side"], tmp_path, "build-dense-vcf")
+
+
 def test_build_plan_alternates_the_order_and_separates_the_stores(tmp_path: Path) -> None:
-    plan = build_plan(_args(tmp_path))
+    plan = build_plan(_args(tmp_path), _NEITHER)
     assert [step["side"] for step in plan] == ["base", "head", "head", "base"]
     assert [step["pilot"] for step in plan] == ["ragged-besd", "ragged-besd", "hybrid", "hybrid"]
     stores = {str(step["store"]) for step in plan}
@@ -103,7 +145,7 @@ def test_build_plan_alternates_the_order_and_separates_the_stores(tmp_path: Path
 
 def test_build_plan_can_run_only_the_head_side_with_a_suffix(tmp_path: Path) -> None:
     """The guard-on proof builds reuse the head argv but a separate store path."""
-    plan = build_plan(_args(tmp_path, sides="head", suffix="-guard"))
+    plan = build_plan(_args(tmp_path, sides="head", suffix="-guard"), _NEITHER)
     assert [step["side"] for step in plan] == ["head", "head"]
     for step in plan:
         assert str(step["store"]).endswith("-guard.opengwasdb")
@@ -112,12 +154,12 @@ def test_build_plan_can_run_only_the_head_side_with_a_suffix(tmp_path: Path) -> 
 
 def test_build_plan_refuses_an_unknown_side(tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="--sides"):
-        build_plan(_args(tmp_path, sides="middle"))
+        build_plan(_args(tmp_path, sides="middle"), _NEITHER)
 
 
 def test_build_plan_uses_the_registered_hybrid_argv(tmp_path: Path) -> None:
     """OGS-00004's registered argv: the two-pass `--reference-panel` form."""
-    plan = build_plan(_args(tmp_path))
+    plan = build_plan(_args(tmp_path), _NEITHER)
     hybrid = next(step for step in plan if step["pilot"] == "hybrid")
     argv = hybrid["command"]
     assert "build-hybrid" in argv

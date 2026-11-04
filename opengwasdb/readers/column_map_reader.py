@@ -33,7 +33,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 from functools import cached_property
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, TYPE_CHECKING, Any
 
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.column_map import (
@@ -48,9 +48,11 @@ from opengwasdb.readers.gwas_ssf import VARIANT_COLUMNS, GwasSsfReader
 from opengwasdb.readers.interface import (
     ImputationScoreDeclaration,
     ReaderAssociation,
+    RegionsFile,
     SiteMetrics,
     SourceVariant,
 )
+from opengwasdb.readers.rows import ReaderBatch
 from opengwasdb.readers.tabular import (
     DEFAULT_CHUNK_ROWS,
     MetricsChunk,
@@ -58,6 +60,9 @@ from opengwasdb.readers.tabular import (
     open_binary,
     stream_projected_variants,
 )
+
+if TYPE_CHECKING:
+    from opengwasdb.readers.interface import ReferenceAllele, StreamTally
 
 __all__ = ["ColumnMapReader", "MappedSource"]
 
@@ -136,6 +141,11 @@ class MappedSource:
 
     def __str__(self) -> str:
         return str(self.path)
+
+    @property
+    def reference(self) -> ReferenceAllele:
+        """What the map's allele convention declares of every row."""
+        return self.column_map.conventions.alleles.reference
 
     def open_binary(self) -> IO[bytes]:
         raw = open_binary(self.path)
@@ -472,8 +482,11 @@ class ColumnMapReader:
     def imputation_score_column(self) -> str | None:
         return self._delegate.imputation_score_column
 
-    def stream_associations(self) -> Iterator[ReaderAssociation]:
-        yield from self._delegate.stream_associations()
+    def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
+        yield from self._delegate.stream_associations(tally)
+
+    def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
+        yield from self._delegate.stream_batches(tally)
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         separator = self.column_map.conventions.rsid_separator
@@ -486,6 +499,8 @@ class ColumnMapReader:
     def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
         yield from self._delegate.stream_metric_chunks()
 
-    def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
-        return self._delegate.extract_at_sites(alids)
+    def extract_at_sites(
+        self, alids: Iterable[str], *, region: str | None = None, regions_file: RegionsFile = None
+    ) -> dict[str, SiteMetrics]:
+        return self._delegate.extract_at_sites(alids, region=region, regions_file=regions_file)
 

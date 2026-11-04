@@ -1,24 +1,34 @@
-"""Tests for opengwasdb.build.vcf_source.
+"""The GWAS-VCF reader's one record query and the rows it parses (#56).
 
-As of issue #17, this module carries no effect-scale information at all --
-`stored_effect_scale` is Analytical Metadata the build manifest supplies, not
-something derivable from a GWAS-VCF header. `study_type` remains a parameter
-of the shared `_write_vcf` fixture helper purely as harmless realism (a
-``##SAMPLE`` header some tests still include), not because anything here
-reads it.
+Every projection but the variant one reads the file through one streaming
+``bcftools query``, so these drive the reader itself: its z (`EZ`, else
+`ES/SE`), the flip onto A1, and what it refuses. `stored_effect_scale` is
+never read from the header (issue #17); `study_type` is in the fixture only as
+the realism of a ``##SAMPLE`` line.
 """
 
 from __future__ import annotations
 
+import itertools
+import math
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from opengwasdb.build.vcf_source import stream_vcf_associations, stream_vcf_variants
+from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.readers.gwas_vcf import GwasVcfReader, _record_rows
+from opengwasdb.readers.interface import ReferenceAllele, StreamTally
+from opengwasdb.variants.normalise import (
+    VariantNormalisationError,
+    orient_to_canonical,
+    oriented_alid,
+)
 
 
-def _write_vcf(path: Path, body: str, study_type: str = "Continuous") -> None:
+def _write_vcf(
+    path: Path, body: str, study_type: str = "Continuous", samples: str = "STUDY1"
+) -> None:
     """Write a minimal GWAS-VCF fixture to ``path``."""
     header = f"""\
 ##fileformat=VCFv4.2
@@ -27,147 +37,128 @@ def _write_vcf(path: Path, body: str, study_type: str = "Continuous") -> None:
 ##FORMAT=<ID=SE,Number=A,Type=Float,Description="Standard error of effect size">
 ##FORMAT=<ID=EZ,Number=A,Type=Float,Description="Z-score, if used to derive EFFECT/SE">
 ##SAMPLE=<ID=STUDY1,StudyType={study_type}>
-#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSTUDY1
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t{samples}
 """
     path.write_text(header + body, encoding="utf-8")
 
 
-def test_stream_vcf_variants_yields_biallelic_records(tmp_path):
+def _associations(vcf: Path) -> list:
+    return list(GwasVcfReader(vcf, StoredEffectScale.SD).stream_associations())
+
+
+def test_a_reported_ez_is_the_stored_z_bit_for_bit(tmp_path: Path) -> None:
+    # REF=A, ALT=G: the effect allele G is A2, so the stored z is -EZ, never
+    # rebuilt as ES/SE (5.0).
     vcf = tmp_path / "test.vcf"
-    _write_vcf(
-        vcf,
-        "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t0.5:0.1\n"
-        "1\t200\t.\tC\tT\t.\tPASS\t.\tES:SE\t0.3:0.15\n",
-    )
-
-    variants = list(stream_vcf_variants(vcf))
-
-    assert variants == [("1", 100, "A", "G", ""), ("1", 200, "C", "T", "")]
+    _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tEZ:ES:SE\t5.25:0.5:0.1\n")
+    (association,) = _associations(vcf)
+    assert association.z == -5.25
+    assert association.reference is ReferenceAllele.REF
 
 
-def test_stream_vcf_variants_skips_multi_allelic(tmp_path):
+@pytest.mark.parametrize(
+    ("ref", "alt", "z"), [("A", "G", -2.0), ("G", "A", 2.0), ("g", "A", 2.0)]
+)
+def test_es_over_se_is_signed_onto_a1(tmp_path: Path, ref: str, alt: str, z: float) -> None:
     vcf = tmp_path / "test.vcf"
-    _write_vcf(
-        vcf,
-        "1\t100\t.\tA\tG,T\t.\tPASS\t.\tES:SE\t0.5:0.1\n"
-        "1\t200\t.\tC\tT\t.\tPASS\t.\tES:SE\t0.3:0.15\n",
-    )
-
-    variants = list(stream_vcf_variants(vcf))
-
-    assert len(variants) == 1
-    assert variants[0] == ("1", 200, "C", "T", "")
+    _write_vcf(vcf, f"1\t100\t.\t{ref}\t{alt}\t.\tPASS\t.\tES:SE\t1.0:0.5\n")
+    (association,) = _associations(vcf)
+    assert association.z == z
+    assert association.se == 0.5
+    # The file's own spelling is kept.
+    assert (association.ref, association.alt) == (ref, alt)
 
 
-def test_stream_vcf_variants_normalises_chr_prefix(tmp_path):
-    vcf = tmp_path / "test.vcf"
-    header = """\
-##fileformat=VCFv4.2
-##FILTER=<ID=PASS,Description="All filters passed">
-##FORMAT=<ID=ES,Number=A,Type=Float,Description="Effect size">
-##FORMAT=<ID=SE,Number=A,Type=Float,Description="Standard error">
-##SAMPLE=<ID=STUDY1,StudyType=Continuous>
-#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSTUDY1
-"""
-    vcf.write_text(
-        header + "chr1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t0.5:0.1\n",
-        encoding="utf-8",
-    )
-
-    variants = list(stream_vcf_variants(vcf))
-
-    assert variants[0][0] == "1"
-
-
-def test_stream_vcf_associations_uses_ez_when_present(tmp_path):
-    vcf = tmp_path / "test.vcf"
-    # REF=A, ALT=G: ALT>REF → flip; EZ=5.0 → stored z=-5.0
-    _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tEZ:ES:SE\t5.0:0.5:0.1\n")
-
-    assocs = list(stream_vcf_associations(vcf))
-
-    assert len(assocs) == 1
-    chrom, pos, ref, alt, z, se, eaf = assocs[0]
-    assert z == pytest.approx(-5.0, rel=1e-4)
-
-
-def test_stream_vcf_associations_falls_back_to_es_over_se(tmp_path):
-    vcf = tmp_path / "test.vcf"
-    # EZ absent, fall back to ES/SE: ES=1.0/SE=0.5=2.0; REF=A,ALT=G→flip→-2.0
-    _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n")
-
-    assocs = list(stream_vcf_associations(vcf))
-
-    assert len(assocs) == 1
-    z = assocs[0][4]
-    assert z == pytest.approx(-2.0, rel=1e-4)
-
-
-def test_stream_vcf_associations_negates_z_when_alt_is_not_a1(tmp_path):
-    # ALT=G > REF=A → A is A1, G is A2 (effect allele not A1) → z negated
-    vcf = tmp_path / "test.vcf"
-    _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n")
-
-    assocs = list(stream_vcf_associations(vcf))
-    z = assocs[0][4]
-    # ALT=G > REF=A, so A is A1. Effect allele is G (A2), so z is negated.
-    assert z == pytest.approx(-2.0, rel=1e-4)
-
-
-def test_stream_vcf_associations_no_flip_when_alt_is_a1(tmp_path):
-    # ALT=A < REF=G → A is A1 (ALT is A1) → no flip
-    vcf = tmp_path / "test.vcf"
-    _write_vcf(vcf, "1\t100\t.\tG\tA\t.\tPASS\t.\tES:SE\t1.0:0.5\n")
-
-    assocs = list(stream_vcf_associations(vcf))
-    z = assocs[0][4]
-    assert z == pytest.approx(2.0, rel=1e-4)
-
-
-def test_stream_vcf_associations_se_unchanged_after_flip(tmp_path):
-    vcf = tmp_path / "test.vcf"
-    _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.25\n")
-
-    assocs = list(stream_vcf_associations(vcf))
-    se = assocs[0][5]
-    assert se == pytest.approx(0.25, rel=1e-4)
-
-
-def test_stream_vcf_associations_skips_zero_se(tmp_path):
+def test_an_unusable_se_leaves_no_z_and_no_se_for_admission(tmp_path: Path) -> None:
     vcf = tmp_path / "test.vcf"
     _write_vcf(
         vcf,
         "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.0\n"
         "1\t200\t.\tC\tT\t.\tPASS\t.\tES:SE\t0.5:0.1\n",
     )
+    first, second = _associations(vcf)
+    assert math.isnan(first.z) and math.isnan(first.se)
+    assert second.z == pytest.approx(-5.0)
+    assert first.eaf is None  # the file declares no AF
 
-    assocs = list(stream_vcf_associations(vcf))
-    assert len(assocs) == 1
-    assert assocs[0][1] == 200
 
-
-def test_stream_vcf_associations_yields_seven_element_tuples(tmp_path):
-    """No effect-scale element (issue #17): the tuple is exactly
-    (chrom, pos, ref, alt, z, se, eaf), regardless of the header's StudyType.
-    `eaf` joined it in ADR 0036 and is None for a file declaring no AF tag."""
+def test_multi_allelic_records_are_skipped_and_a_chr_prefix_normalised(tmp_path: Path) -> None:
     vcf = tmp_path / "test.vcf"
-    _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n", study_type="Unknown")
+    _write_vcf(
+        vcf,
+        "chr1\t100\trs1\tA\tG,T\t.\tPASS\t.\tES:SE\t0.5:0.1\n"
+        "chr1\t200\trs2\tC\tT\t.\tPASS\t.\tES:SE\t0.3:0.15\n",
+    )
+    reader = GwasVcfReader(vcf)
+    assert [(v.chromosome, v.position, v.rsid) for v in reader.stream_variants()] == [
+        ("1", 200, "rs2")
+    ]
+    assert [(a.chromosome, a.position) for a in reader.stream_associations()] == [("1", 200)]
 
-    assocs = list(stream_vcf_associations(vcf))
 
-    assert len(assocs) == 1
-    assert len(assocs[0]) == 7
-    assert assocs[0][6] is None
+def test_the_variant_query_yields_exactly_the_rows_records(tmp_path: Path) -> None:
+    """The fast variant projection and the record rows drop the same records."""
+    vcf = tmp_path / "test.vcf"
+    _write_vcf(
+        vcf,
+        "1\t100\trs1\tA\tG\t.\tPASS\t.\tES:SE\t0.5:0.1\n"
+        "1\t150\t.\tA\ta\t.\tPASS\t.\tES:SE\t0.5:0.1\n"  # one allele, two spellings
+        "1\t175\t.\tA\tN\t.\tPASS\t.\tES:SE\t0.5:0.1\n"  # malformed identity
+        "NA\t180\t.\tA\tG\t.\tPASS\t.\tES:SE\t0.5:0.1\n"  # missing chromosome
+        "2\t200\tfoo\tCT\tC\t.\tPASS\t.\tES:SE\t0.3:0.15\n",
+    )
+    variants = [v.site for v in GwasVcfReader(vcf).stream_variants()]
+    tally = StreamTally()
+    rows = list(_record_rows(vcf, tally=tally))
+    assert variants == [(r.chromosome, r.position, r.ref, r.alt) for r in rows]
+    assert variants == [("1", 100, "A", "G"), ("2", 200, "CT", "C")]
+    assert [row.source_id for row in rows] == ["rs1", "foo"]
+    assert [reason for _key, reason in tally.faults.rows] == [
+        "allele_invalid", "chromosome_missing"
+    ]
 
 
-def test_all_functions_raise_when_bcftools_not_on_path(tmp_path):
+def test_a_vcf_with_two_samples_is_refused(tmp_path: Path) -> None:
+    vcf = tmp_path / "test.vcf"
+    _write_vcf(
+        vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t0.5:0.1\t0.4:0.1\n", samples="S1\tS2"
+    )
+    with pytest.raises(ValueError, match="exactly one sample column, found 2"):
+        _associations(vcf)
+
+
+def test_a_failing_query_raises_rather_than_yield_a_short_stream(tmp_path: Path) -> None:
+    vcf = tmp_path / "test.vcf"
+    _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t0.5:0.1\n")
+    reader = GwasVcfReader(vcf)
+    with patch("opengwasdb.readers.gwas_vcf._format_tags", return_value={"ES", "SE", "XX"}):
+        with patch(
+            "opengwasdb.readers.gwas_vcf._record_query_format",
+            return_value="%CHROM\t%POS\t%ID\t%REF\t%ALT\t[%XX]\t.\t.\t.\n",
+        ):
+            with pytest.raises(OSError, match="bcftools record query failed"):
+                list(reader.stream_associations())
+
+
+def test_every_projection_needs_bcftools(tmp_path: Path) -> None:
     vcf = tmp_path / "test.vcf"
     _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n")
+    reader = GwasVcfReader(vcf)
+    for stream in (reader.stream_variants, reader.stream_associations):
+        with patch("shutil.which", return_value=None):
+            with pytest.raises(RuntimeError, match="bcftools"):
+                list(stream())
 
-    with patch("shutil.which", return_value=None):
-        with pytest.raises(RuntimeError, match="bcftools"):
-            list(stream_vcf_variants(vcf))
 
-    with patch("shutil.which", return_value=None):
-        with pytest.raises(RuntimeError, match="bcftools"):
-            list(stream_vcf_associations(vcf))
+def test_oriented_alid_is_orient_to_canonicals_answer() -> None:
+    """The VCF reader's fast orientation, against the rule it stands in for."""
+    alleles = ["A", "c", "G", "t", "AC", "Tg", "GGGGCC"]
+    for effect, other in itertools.product(alleles, repeat=2):
+        try:
+            expected = orient_to_canonical("1", 100, effect, other)
+        except VariantNormalisationError:
+            assert oriented_alid("1", 100, effect, other) is None
+            continue
+        assert oriented_alid("1", 100, effect, other) == (
+            expected.variant.alid, expected.flipped
+        )

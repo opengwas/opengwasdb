@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import struct
 from collections.abc import Iterator
 from pathlib import Path
@@ -89,7 +88,10 @@ def iter_esi(esi_path: str | Path) -> Iterator[SnpRecord]:
     a2) or 7 with a trailing frequency of ``a1``, the effect allele. Comment
     and blank lines are ignored. A missing frequency column and a literal
     ``NA`` frequency both mean the frequency is unknown and parse to ``None``
-    (issue #130: absence is not a number). Any other malformed data row raises
+    (issue #130: absence is not a number). Any other number is read as given,
+    an infinite one included: it is a frequency the file reports, which
+    `parse_af` makes absent and a build counts (D7). A frequency that is not a
+    number at all, and any other malformed data row, raises
     :class:`BESDMetadataError` naming the file and line — a silently
     skipped row would shift every later row index against the `.besd`
     association file.
@@ -121,11 +123,6 @@ def iter_esi(esi_path: str | Path) -> Iterator[SnpRecord]:
                     f"{esi_path}:{line_no}: ESI frequency column {fields[6]!r} "
                     f"is neither a number nor 'NA'"
                 ) from None
-            if not math.isfinite(freq):
-                raise BESDMetadataError(
-                    f"{esi_path}:{line_no}: ESI frequency column {fields[6]!r} "
-                    f"is not a finite number"
-                )
         yield SnpRecord(
             row_idx=row_idx,
             chromosome=fields[0],
@@ -254,10 +251,11 @@ def read_besd_probe(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """One probe's ``(snp_indices, betas, ses)``, read by seeking, not by loading.
 
-    :class:`BESDReader` holds the whole matrix in memory, which a build that
-    visits every probe wants. A resolver visits one probe per Analysis, in
-    worker processes, and eQTLGen's `.besd` is 2 GB (issue #282): each call
-    here reads the header, two column offsets and the probe's own slices.
+    :class:`BESDReader` holds the whole matrix in memory. The BESD Source
+    Reader reads one probe per Analysis -- in a resolver's worker processes,
+    and once per probe in a build -- and eQTLGen's `.besd` is 2 GB (issue
+    #282): each call here reads the header, two column offsets and the
+    probe's own slices.
     The arrays are exactly :meth:`BESDReader.get_probe_associations`' for the
     same probe. A probe index outside the file, corrupt column offsets (a
     negative start, or an SE block before the beta block), or a slice the file

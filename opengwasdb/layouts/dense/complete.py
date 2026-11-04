@@ -28,6 +28,7 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb.admission.cells import NotAdmitted
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
 from opengwasdb.completion.checkpoint import (
@@ -1270,9 +1271,40 @@ def _apply_fill_shard_records(
     return filled
 
 
+def _seed_paired_z_band(
+    band: np.ndarray,
+    src_plane: DenseZPlane,
+    src_se_plane: DenseSePlane,
+    out_to_src: np.ndarray,
+    r0: int,
+) -> None:
+    """Seed one z band from the source, refusing a cell with one of z and SE missing.
+
+    Both passes fill a cell exactly when it is missing, so they fill the same
+    cells only when z and SE are missing together; a half-missing source cell
+    (spec §15) would come out with an imputed z beside an observed SE, or the
+    reverse.
+    """
+    valid, rows = _band_source_rows(out_to_src, r0, r0 + len(band))
+    if not len(valid):
+        return
+    band[valid, :] = src_plane.rows(rows)
+    se_band = src_se_plane.rows(np.asarray(rows, dtype=np.int64))
+    unpaired = np.isnan(band[valid, :]) != np.isnan(se_band)
+    if unpaired.any():
+        row, analysis = (int(axis[0]) for axis in np.nonzero(unpaired))
+        raise NotAdmitted(
+            f"the source holds {int(unpaired.sum())} cell(s) with one of z and SE "
+            f"missing (first: source row {int(rows[row])}, analysis {analysis}); spec §15 "
+            "forbids a half-missing pair, and completing one would pair an imputed "
+            "value with an observed one"
+        )
+
+
 def _write_completed_z_bands(
     root: Any,
     src_plane: DenseZPlane,
+    src_se_plane: DenseSePlane,
     out_to_src: np.ndarray,
     on_panel: np.ndarray,
     fill_shard_dir: Path,
@@ -1292,6 +1324,8 @@ def _write_completed_z_bands(
     ``overflow`` builder's side table, which the caller writes once, after the
     whole pass, so the table is built by one codec plan.
 
+    Every source cell's z and SE must be missing together (`_seed_paired_z_band`).
+
     Returns ``(total_imputed, n_missing_imputation_failed)``.
     """
     z_arr, imp_arr = root["z"], root["imputed"]
@@ -1304,9 +1338,7 @@ def _write_completed_z_bands(
         zb[:] = np.nan
         imp_band = np.zeros((r1 - r0, n_analyses), dtype=np.uint8)
 
-        valid, srows = _band_source_rows(out_to_src, r0, r1)
-        if len(valid):
-            zb[valid, :] = src_plane.rows(srows)
+        _seed_paired_z_band(zb, src_plane, src_se_plane, out_to_src, r0)
 
         _count_band_off_panel_missing(n_missing_off_panel, zb, on_panel, r0, r1)
 
@@ -1341,8 +1373,9 @@ def _write_completed_se_bands(
     """Seed se from the source and apply the same fills pass 1 applied to z.
 
     No mask check and no counts here: pass 1 read the same shards (raising on
-    a disagreement) and accounted the outcomes, and this pass must fill exactly
-    the cells pass 1 filled for z and se to describe the same completed store.
+    a disagreement), checked that every source cell's z and SE are missing
+    together, and accounted the outcomes, so this pass fills exactly the cells
+    pass 1 filled for z and se to describe the same completed store.
     The scratch float32 se band is written as-is; the residual-SE rewrite
     finalises it afterwards.
     """
@@ -1501,7 +1534,7 @@ def _write_completed_bands(
 
     total_imputed, n_missing_imputation_failed = _write_completed_z_bands(
         root,
-        src_plane,
+        src_plane, src_se_plane,
         out_to_src,
         on_panel,
         fill_shard_dir,

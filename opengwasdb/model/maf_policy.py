@@ -4,8 +4,8 @@ Unlike the declared imputation score there is no declaration triple: the
 frequency is the reader's own `effect_allele_frequency`, a column every GWAS-SSF
 source the resolver and the Hybrid builder read already carries. This policy
 only parses the explicit manifest value; it does not inspect source data or
-apply the filter -- `opengwasdb.build.row_admission` is the one place that does,
-for both callers.
+apply the filter -- Association Admission (`opengwasdb.admission`) is the one
+place that does, for both callers.
 
 The tests the column has to pass are `NaN` (or an absent column) meaning no MAF
 filter, a finite value in [0, 0.5], and `0` disabling the filter. A value of

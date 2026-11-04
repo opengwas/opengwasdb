@@ -29,13 +29,18 @@ pixi run -e dev python -c "import opengwasdb; print(opengwasdb.__version__)"
 The tiny source file is `docs/examples/tiny-associations.tsv`. It has four observed associations across two Analyses and three variants. It is intentionally small; production Store Releases are normally built from GWAS-VCF, GWAS-SSF, BESD, or the `opengwasdb-stores` generators.
 
 ```bash
-rm -rf /tmp/opengwasdb-tiny.opengwasdb
+rm -rf /tmp/opengwasdb-tiny.opengwasdb /tmp/opengwasdb-tiny.admission
 pixi run -e dev opengwasdb build-dense \
   docs/examples/tiny-associations.tsv \
   /tmp/opengwasdb-tiny.opengwasdb \
   --store-id tiny \
-  --release-id observed-v1
+  --release-id observed-v1 \
+  --admission-record /tmp/opengwasdb-tiny.admission
 ```
+
+Every builder writes an Admission record -- what each Analysis examined,
+admitted and dropped, and why -- to the directory `--admission-record` names,
+beside the Store and never inside it (ADR 0072).
 
 Expected shape:
 

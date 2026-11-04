@@ -114,15 +114,14 @@ Admission `Reason`s whose drops keep a cell it would fail out of a Store
 - `associations.markers_canonical` and `completion.imputed_present`:
   `z_nonfinite` and `se_unusable`;
 - `associations.se_negative`: `se_unusable`;
-- `csr.segment_order`, its repeat case: `duplicate_collapsed` and
-  `duplicate_conflicting`;
+- `csr.segment_order`, its repeat case: `duplicate_collapsed`,
+  `duplicate_reversed_indel` and `duplicate_conflicting`;
 - `completion.mask_binary`: none. It witnesses the cell guard's flag rule, which
   no row's `Reason` names.
 
-A rule naming a reason Admission lacks is refused at import, and
-`tests/test_admission_witnesses.py` holds the two lists together. Until #357
-merges, the reasons are a copy of its `Reason` values, and the test compares the
-copy with the enum once it exists. The rules and Admission deliberately do not
+A rule naming a reason Admission lacks is refused at import: the reasons are read
+from Admission's `Reason` enum, and `tests/test_admission_witnesses.py` holds the
+witness list to it. The rules and Admission deliberately do not
 share predicates where Admission is stricter than published Stores. Admission
 requires SE > 0 and EAF in (0, 1); `validate` accepts SE ≥ 0, warns on `+inf`,
 and accepts EAF in [0, 1].

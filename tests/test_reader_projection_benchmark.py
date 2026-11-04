@@ -61,7 +61,8 @@ def test_reader_projection_benchmark_writes_all_comparable_measurements(tmp_path
         assert dataset["measurements"]["decompression_only"]["records"] == 2
         assert dataset["measurements"]["projected_variants"]["records"] == 2
         assert dataset["measurements"]["legacy_full_row_variants"]["records"] == 2
-        assert dataset["measurements"]["associations"]["records"] == 1
+        # The stream yields the row with no usable SE too, for Admission.
+        assert dataset["measurements"]["associations"]["records"] == 2
         for measurement in dataset["measurements"].values():
             assert measurement["median_seconds"] > 0
             assert measurement["input_mib_per_second"] > 0

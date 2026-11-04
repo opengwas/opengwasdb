@@ -296,9 +296,9 @@ def test_hybrid_build_records_passing_evidence(tmp_path, freqs, reference_path):
 
 
 def _ragged_manifest(path: Path, sources: dict[str, Path]) -> Path:
-    lines = ["analysis_index\tanalysis_id\tanalysis_label\tfiltered_file\tn"]
+    lines = ["analysis_index\tanalysis_id\tanalysis_label\tfiltered_file\tn\tsource_genome_build"]
     for index, (analysis_id, source) in enumerate(sources.items()):
-        lines.append(f"{index}\t{analysis_id}\t{analysis_id}\t{source.name}\t10000")
+        lines.append(f"{index}\t{analysis_id}\t{analysis_id}\t{source.name}\t10000\tGRCh38")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 

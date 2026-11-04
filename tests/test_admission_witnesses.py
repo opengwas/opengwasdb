@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import pytest
 
+from opengwasdb.admission.rules import Reason
 from opengwasdb.validation import RULES
-from opengwasdb.validation.rule import ADMISSION_REASONS, Check, Kind
+from opengwasdb.validation.rule import Check, Kind
 
 #: The rules that witness Admission's guarantees (#55 proposal §3).
 WITNESSES = {
@@ -26,23 +27,12 @@ WITNESSES = {
 }
 
 
-def _reasons() -> frozenset[str]:
-    """Admission's `Reason` values: the enum itself once #357 has merged."""
-    try:
-        from opengwasdb.admission.rules import Reason
-    except ModuleNotFoundError:
-        return ADMISSION_REASONS
-    live = frozenset(reason.value for reason in Reason)
-    assert live == ADMISSION_REASONS, "the copy in validation/rule.py must follow #357's Reason"
-    return live
-
-
 def test_the_witness_rules_are_the_ones_admission_guarantees() -> None:
     assert {rule.name for rule in RULES if rule.witnesses is not None} == WITNESSES
 
 
 def test_each_witness_names_reasons_admission_has() -> None:
-    reasons = _reasons()
+    reasons = {reason.value for reason in Reason}
     for rule in RULES:
         assert set(rule.witnesses or ()) <= reasons, rule.name
 
