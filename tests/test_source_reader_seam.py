@@ -31,6 +31,7 @@ from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader
 from opengwasdb.readers.interface import (
     ImputationScoreDeclaration,
     ImputationScoreKind,
+    ReaderAssociation,
     SourceReader,
     StreamTally,
 )
@@ -351,6 +352,9 @@ def _declared_readers(tmp_path: Path) -> dict[str, tuple[SourceReader, Reference
     ],
 )
 def test_every_reader_carries_its_one_reference_declaration(tmp_path: Path, name: str) -> None:
+    """Propagated, not defaulted: no carrier of the declaration has a default
+    (`test_nothing_that_carries_the_declaration_defaults_it`), so an adapter
+    that drops it raises here instead of passing `UNDECLARED`."""
     reader, declared = _declared_readers(tmp_path)[name]
     associations = list(reader.stream_associations())
     batches = list(reader.stream_batches())
@@ -359,13 +363,25 @@ def test_every_reader_carries_its_one_reference_declaration(tmp_path: Path, name
     assert {batch.reference for batch in batches} == {declared}
 
 
-def test_the_presenters_and_the_batch_take_the_declaration_without_a_default() -> None:
-    """A reader that forgot its declaration would otherwise pass the default's."""
+def test_nothing_that_carries_the_declaration_defaults_it() -> None:
+    """A reader that forgot its declaration would otherwise pass the default's.
+
+    With no default anywhere, an adapter that drops the argument raises, and an
+    association built without its ``__init__`` and missing the field has no
+    class attribute to fall back on.
+    """
     for presenter in (stream_associations, stream_batches):
         reference = inspect.signature(presenter).parameters["reference"]
         assert reference.default is inspect.Parameter.empty
-    (field,) = (f for f in dataclasses.fields(ReaderBatch) if f.name == "reference")
-    assert field.default is dataclasses.MISSING
+    for carrier in (ReaderBatch, ReaderAssociation):
+        (field,) = (f for f in dataclasses.fields(carrier) if f.name == "reference")
+        assert field.default is dataclasses.MISSING
+        assert not hasattr(carrier, "reference")
+    for reader in (
+        GwasVcfReader, GwasSsfReader, FinnGenR13Reader, BesdProbeReader, ColumnMapReader
+    ):
+        reference = inspect.signature(reader).parameters.get("reference")
+        assert reference is None or reference.default is inspect.Parameter.empty, reader
 
 
 def test_a_batch_declaring_a_reference_needs_each_rows_allele_order() -> None:
@@ -379,6 +395,30 @@ def test_a_batch_declaring_a_reference_needs_each_rows_allele_order() -> None:
     assert batch.reference_codes().tolist() == [REFERENCE_SECOND]
     with pytest.raises(ValueError, match="needs each row's ref_first"):
         replace(batch, ref_first=None)
+
+
+def _undeclared_insertion() -> ReaderBatch:
+    row = SourceRow(
+        chromosome="1", position=100, ref="A", alt="AT", alid="1:100:A:AT",
+        flipped=False, af_alt=None, beta=0.4, se=0.2,
+    )
+    (batch,) = stream_batches([row], ReferenceAllele.UNDECLARED)
+    assert batch.ref_first is None and batch.reference_codes().tolist() == [REFERENCE_UNKNOWN]
+    return batch
+
+
+def test_a_batch_declaring_no_reference_refuses_an_allele_order() -> None:
+    """An order would say which allele is the reference where the format says none."""
+    with pytest.raises(ValueError, match="declares no reference allele"):
+        replace(_undeclared_insertion(), ref_first=np.array([True]))
+
+
+def test_reference_codes_follow_the_declaration_not_the_allele_order() -> None:
+    """An order set past construction still names no reference: the codes
+    read the declaration first."""
+    batch = _undeclared_insertion()
+    object.__setattr__(batch, "ref_first", np.array([True]))
+    assert batch.reference_codes().tolist() == [REFERENCE_UNKNOWN]
 
 
 def test_a_besd_probe_refuses_a_column_map_and_a_score_declaration(tmp_path: Path) -> None:

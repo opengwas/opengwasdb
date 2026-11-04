@@ -692,12 +692,17 @@ def test_an_empty_route_table_routes_nothing_without_crashing():
     leaves the route table with no keys; it must report no matches rather than
     crash indexing an empty array (`np.searchsorted` on an empty array always
     returns 0, so the clipped index is -1 on a zero-length array)."""
-    from opengwasdb.readers.interface import ReaderAssociation
+    from opengwasdb.readers.interface import ReaderAssociation, ReferenceAllele
     from opengwasdb.variants.routing import RouteTable
 
     table = RouteTable.build({}, (), [["1:100:A:G"]], keep_unmatched=False)
     column = table.route_column(
-        [ReaderAssociation("1", 100, "A", "G", 1.0, 0.5, StoredEffectScale.SD)]
+        [
+            ReaderAssociation(
+                "1", 100, "A", "G", 1.0, 0.5, StoredEffectScale.SD,
+                reference=ReferenceAllele.UNDECLARED,
+            )
+        ]
     )
 
     placed = column.placed[0]
@@ -1394,7 +1399,7 @@ def test_build_honours_source_reader_capability_column(tmp_path, monkeypatch):
     the builder never assumes GWAS-VCF, it resolves whatever the manifest names."""
     from opengwasdb.readers import registry as readers_registry
     from opengwasdb.readers.fake import FakeReader
-    from opengwasdb.readers.interface import ReaderAssociation
+    from opengwasdb.readers.interface import ReaderAssociation, ReferenceAllele
 
     fake_capability = "opengwasdb.test-fake"
 
@@ -1409,6 +1414,7 @@ def test_build_honours_source_reader_capability_column(tmp_path, monkeypatch):
                     z=-2.0,
                     se=0.5,
                     stored_effect_scale=stored_effect_scale,
+                    reference=ReferenceAllele.UNDECLARED,
                 )
             ]
         )

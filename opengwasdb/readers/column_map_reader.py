@@ -62,7 +62,7 @@ from opengwasdb.readers.tabular import (
 )
 
 if TYPE_CHECKING:
-    from opengwasdb.readers.interface import StreamTally
+    from opengwasdb.readers.interface import ReferenceAllele, StreamTally
 
 __all__ = ["ColumnMapReader", "MappedSource"]
 
@@ -141,6 +141,11 @@ class MappedSource:
 
     def __str__(self) -> str:
         return str(self.path)
+
+    @property
+    def reference(self) -> ReferenceAllele:
+        """What the map's allele convention declares of every row."""
+        return self.column_map.conventions.alleles.reference
 
     def open_binary(self) -> IO[bytes]:
         raw = open_binary(self.path)
@@ -466,7 +471,6 @@ class ColumnMapReader:
             self.stored_effect_scale,
             self.chunk_rows,
             self.imputation_score_declaration,
-            self.column_map.conventions.alleles.reference,
         )
 
     @property

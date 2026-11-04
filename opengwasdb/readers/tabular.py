@@ -32,6 +32,7 @@ from opengwasdb.readers.effect_source import (
 from opengwasdb.readers.interface import (
     ImputationScore,
     ImputationScoreStatus,
+    ReferenceAllele,
     SourceVariant,
     parse_imputation_score,
 )
@@ -133,7 +134,16 @@ class TabularSource(Protocol):
     A Column Map's translation of a provider file is one (issue #281): the
     projections below read the canonical columns it presents, exactly as they
     read a GWAS-SSF file from disk. `str()` names the source in every error.
+
+    `reference` is what the source's rows declare of their alleles. The source
+    is a translation of another format, so GWAS-SSF's own declaration does not
+    stand for it.
     """
+
+    @property
+    def reference(self) -> ReferenceAllele:
+        """Which allele the rows declare the genome's reference."""
+        ...
 
     def open_binary(self) -> IO[bytes]:
         """The source's bytes, decompressed, header first."""

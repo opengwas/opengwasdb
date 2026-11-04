@@ -61,7 +61,10 @@ def _source(
 
 def _association(site: Site, z: float, *, eaf: float | None = None) -> ReaderAssociation:
     chrom, pos, ref, alt = site
-    return ReaderAssociation(chrom, pos, ref, alt, z, 0.1, StoredEffectScale.SD, eaf=eaf)
+    return ReaderAssociation(
+        chrom, pos, ref, alt, z, 0.1, StoredEffectScale.SD, eaf=eaf,
+        reference=ReferenceAllele.UNDECLARED,
+    )
 
 
 def _route(sources, authority, **kwargs):
@@ -720,6 +723,7 @@ def test_an_analysis_without_a_declared_score_hands_admit_no_scores():
     scored = ReaderAssociation(
         "1", 100, "A", "G", 1.0, 0.1, StoredEffectScale.SD,
         imputation_score=ImputationScore(0.9, ImputationScoreStatus.USABLE),
+        reference=ReferenceAllele.UNDECLARED,
     )
     seen: dict[bool, tuple[list[float], list[ImputationScoreStatus]]] = {}
     for collect in (True, False):

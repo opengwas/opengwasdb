@@ -120,6 +120,9 @@ from opengwasdb.variants.normalise import IdentityFaults, Orientation, orient_or
 from opengwasdb.variants.rsid import normalise_rsid
 
 GWAS_SSF_CAPABILITY = "opengwasdb.gwas-ssf"
+#: GWAS-SSF names an effect and an other allele and declares neither the
+#: genome's reference, harmonised or not.
+_REFERENCE = ReferenceAllele.UNDECLARED
 #: A row of an Analysis that declares no imputation score (#175).
 _UNDECLARED_SCORE = ImputationScore()
 #: GWAS-SSF's identity and alias columns, the variant projection's declaration.
@@ -503,18 +506,23 @@ class GwasSsfReader:
     translation of a provider file into these columns (issue #281), which is
     how the generic tabular reader reads every mapped collection by this
     reader's rules.
-
-    `reference` is which allele the rows declare the genome's reference.
-    GWAS-SSF names an effect and an other allele and declares neither, so a
-    GWAS-SSF file is `UNDECLARED`, harmonised or not; a Column Map whose
-    `other_allele` is a `ref` column declares it (`REF`).
     """
 
     path: SourcePath
     stored_effect_scale: StoredEffectScale = StoredEffectScale.SD
     chunk_rows: int = DEFAULT_CHUNK_ROWS
     imputation_score_declaration: ImputationScoreDeclaration | None = None
-    reference: ReferenceAllele = ReferenceAllele.UNDECLARED
+
+    @property
+    def reference(self) -> ReferenceAllele:
+        """Which allele the rows declare the genome's reference.
+
+        A GWAS-SSF file's is `_REFERENCE`. A Column Map's translation declares
+        its own: one whose `other_allele` is a `ref` column declares it (`REF`).
+        """
+        if isinstance(self.path, TabularSource):
+            return self.path.reference
+        return _REFERENCE
 
     @property
     def imputation_score_column(self) -> str | None:

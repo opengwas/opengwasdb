@@ -130,6 +130,11 @@ class ReferenceAllele(StrEnum):
     REF = "ref"
     ALT = "alt"
 
+    @property
+    def declared(self) -> bool:
+        """Whether the format names either allele the genome's reference."""
+        return self is not ReferenceAllele.UNDECLARED
+
 
 @dataclass(frozen=True)
 class ReaderAssociation:
@@ -152,7 +157,8 @@ class ReaderAssociation:
     receives from its caller (ultimately the build manifest, validated
     against issue #16's schema) and attaches to every association it yields.
     `reference` says which of `ref` and `alt` the source declares to be the
-    reference allele, if it declares one.
+    reference allele, if it declares one. It is keyword-only and has no
+    default: every reader states its format's declaration.
     """
 
     chromosome: str
@@ -165,7 +171,7 @@ class ReaderAssociation:
     eaf: float | None = None
     # Present only with an independent provider-backed declaration (#175).
     imputation_score: ImputationScore = ImputationScore()
-    reference: ReferenceAllele = ReferenceAllele.UNDECLARED
+    reference: ReferenceAllele = field(kw_only=True)
 
     def __post_init__(self) -> None:
         # An unusable `se` (NaN, not positive, not finite) is the source's, as

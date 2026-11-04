@@ -397,7 +397,7 @@ class ReaderBatch:
     - ``ref_first``: for each row, whether its `ref` is the allele its ALID
       spells first, as Variant Routing's `allele_order` reads it. Only
       ``reference`` gives it meaning: it is required where the format declares
-      a reference, and not computed where it declares none.
+      a reference, and refused where it declares none.
     - ``key_prefix``: how a dropped row is named in Admission's log: by ALID when
       empty, else ``key_prefix`` and its ``source_row`` (``esi:12``).
     """
@@ -416,11 +416,17 @@ class ReaderBatch:
     key_prefix: str = ""
 
     def __post_init__(self) -> None:
-        if self.reference is not ReferenceAllele.UNDECLARED and self.ref_first is None:
+        declared = self.reference.declared
+        if declared and self.ref_first is None:
             raise ValueError(
                 f"a batch whose reader declares {self.reference.value!r} the reference "
                 "allele needs each row's ref_first: without it a reversed indel could "
                 "not be told apart"
+            )
+        if not declared and self.ref_first is not None:
+            raise ValueError(
+                "a batch whose reader declares no reference allele takes no ref_first: "
+                "it would name a reference the source does not"
             )
         if self.ref_first is not None and len(self.ref_first) != len(self.alid):
             raise ValueError("ref_first must hold one value per row of the batch")
@@ -462,7 +468,7 @@ class ReaderBatch:
         )
 
         codes = np.full(len(self), REFERENCE_UNKNOWN, dtype=np.int8)
-        if self.ref_first is None:  # the format declares no reference (`__post_init__`)
+        if not self.reference.declared or self.ref_first is None:
             return codes
         first = self.ref_first if self.reference is ReferenceAllele.REF else ~self.ref_first
         indel = self._indel()
@@ -525,7 +531,7 @@ def _batch_of_rows(
         imputation_status=_row_array(rows, lambda row: row.imputation_score.status, object),
         rsid=_row_array(rows, lambda row: row.rsid, object),
         reference=reference,
-        ref_first=None if reference is ReferenceAllele.UNDECLARED else _ref_first(rows),
+        ref_first=_ref_first(rows) if reference.declared else None,
     )
 
 

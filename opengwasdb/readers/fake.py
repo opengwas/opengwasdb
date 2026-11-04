@@ -90,6 +90,7 @@ def _batch(rows: list[ReaderAssociation]) -> ReaderBatch:
     def column(value: Callable[[ReaderAssociation], object], dtype: DTypeLike) -> np.ndarray:
         return np.array([value(a) for a in rows], dtype=dtype)
 
+    reference = references.pop()
     return ReaderBatch(
         alid=column(lambda a: canonical_alid(a.chromosome, a.position, a.ref, a.alt), object),
         source_row=np.arange(len(rows), dtype=np.int64),
@@ -103,6 +104,8 @@ def _batch(rows: list[ReaderAssociation]) -> ReaderBatch:
         ),
         imputation_status=column(lambda a: a.imputation_score.status, object),
         rsid=np.full(len(rows), "", dtype=object),
-        reference=references.pop(),
-        ref_first=column(lambda a: identity_allele(a.ref) < identity_allele(a.alt), bool),
+        reference=reference,
+        ref_first=column(lambda a: identity_allele(a.ref) < identity_allele(a.alt), bool)
+        if reference.declared
+        else None,
     )
