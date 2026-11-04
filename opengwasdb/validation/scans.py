@@ -490,12 +490,18 @@ def _parallel(group: Any, name: str, n_cells: int) -> Any:
 
 
 class _Sequence:
-    """What every window of one association sequence shares: arrays, codecs, side vectors."""
+    """What every window of one association sequence shares: arrays, codecs, side vectors.
+
+    What the plan decodes with -- codecs, side tables, coefficients, per-variant
+    vectors -- is opened on first decode, not here. A rule that reads only
+    `offsets` and `variant_index` runs after fewer rules than one that reads values,
+    so a plan the value rules are skipped over must not stop the windows it reads.
+    """
 
     def __init__(self, target: Target) -> None:
         group = target.group
         encoding = target.encoding
-        self.group, self.encoding = group, encoding
+        self.target, self.group, self.encoding = target, group, encoding
         self.offsets = sequence_offsets(target)
         self.n_cells = int(self.offsets[-1]) if len(self.offsets) else 0
         self.n_analyses = max(len(self.offsets) - 1, 0)
@@ -506,15 +512,33 @@ class _Sequence:
         self.n_array = _parallel(group, "n", self.n_cells) if encoding.n is not None else None
         self.decodes_eaf = holds_frequencies(target)
         self.eaf_array = group["eaf"] if "eaf" in group else None
-        self.baseline = _held(target, EAF_BASELINE)
-        self.reference = _held(target, EAF_REFERENCE)
-        self.eaf_codec = StoreCodec(encoding, eaf_exceptions=EafExceptionTable.open(group))
-        self.se_codec = StoreCodec(encoding, se_exceptions=SeExceptionTable.open(group))
-        self.z_codec = StoreCodec(encoding, z_overflow=ZOverflowTable.open(group))
-        self.coefficients = _coefficients(target)
         self.missing = StoreCodec(encoding).missing_mask
         overflow = target.layout is PrimaryStorageLayout.HYBRID
         self.se_label = "Ragged Overflow se" if overflow else "data.zarr/ragged/se"
+
+    @cached_property
+    def baseline(self) -> _Held | None:
+        return _held(self.target, EAF_BASELINE)
+
+    @cached_property
+    def reference(self) -> _Held | None:
+        return _held(self.target, EAF_REFERENCE)
+
+    @cached_property
+    def eaf_codec(self) -> StoreCodec:
+        return StoreCodec(self.encoding, eaf_exceptions=EafExceptionTable.open(self.group))
+
+    @cached_property
+    def se_codec(self) -> StoreCodec:
+        return StoreCodec(self.encoding, se_exceptions=SeExceptionTable.open(self.group))
+
+    @cached_property
+    def z_codec(self) -> StoreCodec:
+        return StoreCodec(self.encoding, z_overflow=ZOverflowTable.open(self.group))
+
+    @cached_property
+    def coefficients(self) -> np.ndarray:
+        return _coefficients(self.target)
 
     def window(self, lo: int, hi: int, previous: tuple[int, int] | None) -> Block:
         z_codes = np.asarray(self.z[lo:hi])
@@ -563,7 +587,8 @@ class _Sequence:
 
         A mask whose length disagrees with `offsets` is not read, so a plan that
         substitutes the panel's frequency cannot be decoded either; the mask's own
-        rule says why.
+        rule says why. A side array the plan names and the group lacks is a plan
+        rule's finding, and leaves the window's frequencies undecodable here.
         """
         if not self.decodes_eaf:
             return None, None
@@ -578,7 +603,7 @@ class _Sequence:
                 group=self.group,
             )
             return plane.slice(lo, hi), None
-        except (ValueError, EafBaselineError) as exc:
+        except (ValueError, EafBaselineError, KeyError) as exc:
             return None, exc
 
 

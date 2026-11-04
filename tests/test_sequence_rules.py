@@ -338,6 +338,58 @@ def test_an_undecodable_se_does_not_hide_the_table_that_explains_it(fresh_ragged
     assert "csr.segment_order" not in result.skipped
 
 
+def _decrease_the_first_segment(group: zarr.Group) -> str:
+    """Swap the first segment's first two variants; the ordering rule's message for it."""
+    offsets = np.asarray(group["offsets"][:])
+    assert offsets[1] - offsets[0] >= 2, "the first segment must hold two cells"
+    first, second = (int(v) for v in group["variant_index"][0:2])
+    group["variant_index"][0:2] = np.array([second, first], dtype=group["variant_index"].dtype)
+    return (
+        "data.zarr/ragged/variant_index is not non-decreasing within Analysis 0's "
+        f"segment: offset 1 holds {first} after {second}"
+    )
+
+
+def test_an_undeclared_n_plane_does_not_hide_a_segment_out_of_order(fresh_ragged: Path) -> None:
+    """Ordering reads `offsets` and `variant_index`, not the plan the planes decode under.
+
+    Before, it ran after every plan rule, so an `n` plane the manifest does not
+    declare left a segment out of order unreported.
+    """
+    store = fresh_ragged
+    group = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="r+")
+    assert open_store(store).manifest.encoding.n is None and "n" not in group
+    # Laid out as the plane it sits beside, on both sides of the index, so the
+    # manifest not declaring it is the plane's one defect.
+    for side, length in ((group, group["z"]), (group["by_variant"], group["by_variant/z"])):
+        side.create_array(
+            "n", shape=length.shape, dtype="uint32", chunks=length.chunks, shards=length.shards
+        )[:] = 1000
+    order = _decrease_the_first_segment(group)
+
+    result = validate_store(store)
+
+    assert result.failed() == {"encoding.n", "csr.segment_order"}, result.errors
+    assert [f.message for f in result.of("csr.segment_order")] == [order]
+
+
+def test_a_plan_the_value_rules_wait_on_does_not_stop_the_windows_ordering_reads(
+    fresh_ragged: Path,
+) -> None:
+    """A residual `se` without its coefficients fails its plan rule; the windows still
+    read, so ordering judges them rather than failing on the decoder's setup."""
+    store = fresh_ragged
+    group = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="r+")
+    assert open_store(store).manifest.encoding.se.is_residual
+    del group["se_coefficients"]
+    order = _decrease_the_first_segment(group)
+
+    result = validate_store(store)
+
+    assert "encoding.se" in result.failed(), result.errors
+    assert [f.message for f in result.of("csr.segment_order")] == [order]
+
+
 def test_a_tier_missing_an_association_above_its_cutoff_is_incomplete(fresh_ragged: Path) -> None:
     """A tier holds every association that clears its cutoff, as a grid's does.
 

@@ -19,7 +19,6 @@ import numpy as np
 from opengwasdb.store.arrays import array_length
 from opengwasdb.validation.rule import Fold, Kind, Rule, Target
 from opengwasdb.validation.rules.csr import ARRAYS, LENGTHS, is_overflow
-from opengwasdb.validation.rules.encoding import PLAN
 from opengwasdb.validation.rules.hybrid import DENSE_TO_SHARED, dense_to_shared
 from opengwasdb.validation.scans import ASSOCIATIONS, Block, analyses_of, release_rows
 
@@ -176,7 +175,10 @@ def _judge_partition(_target: Target, n: int) -> Iterator[str]:
         )
 
 
-_LAID_OUT = (ARRAYS, LENGTHS, *PLAN)
+#: What a rule about where cells sit reads: `offsets` and `variant_index`, present,
+#: and the parallel arrays the windows are cut from one entry per association. The
+#: plan the planes decode under is the value rules' prerequisite, not these.
+_LAID_OUT = (ARRAYS, LENGTHS)
 
 RULES: tuple[Rule, ...] = (
     # Its repeat case: rows for one (variant, Analysis) collapse or are dropped.
