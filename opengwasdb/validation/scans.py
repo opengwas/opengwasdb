@@ -103,8 +103,10 @@ class Block:
     `previous`. `offset` is the flat position of the first cell, the key the
     exact-value side tables use. `eaf` is None where the component holds no
     frequency; `eaf_undecodable` says the plane could not be decoded here, which
-    the exception-table rule explains. `se`, `z` and `n_codes` are read or decoded
-    on first use.
+    the exception-table rule explains. `mask` is the stored `imputed` plane as
+    read, whatever the Completion State; `imputed` is the cells the release flags
+    imputed, which only a Reference-Completed component's mask does. `se`, `z`
+    and `n_codes` are read or decoded on first use.
     """
 
     offset: int
@@ -116,6 +118,7 @@ class Block:
     eaf: np.ndarray | None = None
     eaf_undecodable: bool = False
     imputed: np.ndarray | None = None
+    mask: np.ndarray | None = None
     on_panel: np.ndarray | None = None
     analysis: np.ndarray | None = None
     variant: np.ndarray | None = None
@@ -142,9 +145,13 @@ class Block:
         eaf: np.ndarray | None = None,
         on_panel: np.ndarray | None = None,
     ) -> Block:
-        """A band from decoded arrays, its codes the values themselves: for tests."""
+        """A band from decoded arrays, its codes the values themselves: for tests.
+
+        Its stored mask is `imputed`, as a completed component's is.
+        """
         z = np.asarray(z, dtype=np.float32)
         se = np.asarray(se, dtype=np.float32)
+        mask = None if imputed is None else np.asarray(imputed)
         return cls(
             offset=offset,
             n_analyses=int(z.shape[1]),
@@ -153,7 +160,8 @@ class Block:
             z_missing=np.isnan(z),
             eaf_codes=None if eaf is None else np.asarray(eaf, dtype=np.float32),
             eaf=None if eaf is None else np.asarray(eaf, dtype=np.float32),
-            imputed=None if imputed is None else np.asarray(imputed),
+            imputed=mask,
+            mask=mask,
             on_panel=None if on_panel is None else np.asarray(on_panel),
         )
 
@@ -333,6 +341,7 @@ class _DenseGrid:
             eaf=eaf,
             eaf_undecodable=failure is not None,
             imputed=imputed if self.completed else None,
+            mask=imputed,
             on_panel=None if self.on_panel is None else self.on_panel[r0:r1],
             z_decoder=partial(self._z, r0, r1),
             se_decoder=partial(_dense_band_se, self, eaf=eaf, eaf_failure=failure, r0=r0, r1=r1),
@@ -519,6 +528,7 @@ class _Sequence:
             eaf=eaf,
             eaf_undecodable=failure is not None,
             imputed=imputed if self.completed else None,
+            mask=imputed,
             analysis=analysis,
             variant=variant,
             previous=previous,

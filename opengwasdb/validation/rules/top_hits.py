@@ -180,10 +180,12 @@ def _se_disagrees(block: Block) -> Callable[[Tier, np.ndarray, np.ndarray], int]
 
 
 def _imputed_disagrees(block: Block) -> Callable[[Tier, np.ndarray, np.ndarray], int]:
+    # Against the stored mask whatever the Completion State: a tier copies the
+    # mask as written, and an Observed-Only grid that holds one is no exception.
     def count(tier: Tier, found: np.ndarray, flat: np.ndarray) -> int:
-        if tier.imputed is None or block.imputed is None:
+        if tier.imputed is None or block.mask is None:
             return 0
-        stored = block.imputed.ravel()[flat].astype(np.uint8)
+        stored = block.mask.ravel()[flat].astype(np.uint8)
         return int(np.count_nonzero(stored != tier.imputed[found]))
 
     return count

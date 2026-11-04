@@ -13,6 +13,7 @@ corrupt (test_validation.py, test_validate_presence.py, test_dense_completion.py
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -27,8 +28,10 @@ from opengwasdb.encoding import (
     StoreEncoding,
     ZEncoding,
 )
+from opengwasdb.model.enums import CompletionState
+from opengwasdb.store import open_store
 from opengwasdb.top_hits import slices_are_ordered
-from opengwasdb.validation import RULES
+from opengwasdb.validation import RULES, validate_store
 from opengwasdb.validation.rule import Fold, Kind, Target
 from opengwasdb.validation.rules import associations
 from opengwasdb.validation.run import evaluate
@@ -272,3 +275,31 @@ def test_a_band_locates_the_cells_it_holds_by_their_grid_coordinates() -> None:
 
     assert found.tolist() == [1, 2, 3]
     assert flat.tolist() == [2, 3, 4]
+
+
+def test_a_tier_flag_is_held_to_a_stored_mask_whatever_the_completion_state(
+    dense_store_path: Path,
+) -> None:
+    """An Observed-Only grid's mask flags no imputed cell, but a tier copies the mask
+    as stored, so a tier flag of 0 against a stored 1 is still a wrong flag."""
+    store = open_store(dense_store_path)
+    assert store.manifest.completion_state is CompletionState.OBSERVED_ONLY
+    root = store.arrays(mode="r+")
+    tiers = top_hits.index_group(root)
+    keys = list(tiers)
+    row, col = int(tiers[keys[0]]["variant_index"][0]), int(tiers[keys[0]]["analysis_index"][0])
+    mask = np.zeros(root["z"].shape, dtype=np.uint8)
+    mask[row, col] = 1
+    root.create_array("imputed", shape=mask.shape, dtype="uint8")[:] = mask
+    for key in keys:
+        n = int(tiers[key]["variant_index"].shape[0])
+        assert row in tiers[key]["variant_index"][:].tolist()
+        tiers[key].create_array("imputed", shape=(n,), dtype="uint8")[:] = 0
+
+    result = validate_store(dense_store_path, rules=["top_hits.imputed"])
+
+    assert "top_hits.imputed" not in result.skipped
+    assert sorted(f.message for f in result.of("top_hits.imputed")) == sorted(
+        f"top-hit index {key} contains imputed value inconsistent with imputed array"
+        for key in keys
+    )
