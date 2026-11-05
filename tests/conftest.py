@@ -3,8 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
-from opengwasdb.build.observed import build_dense_observed_from_sources
+from dense_sources import build_dense_fixture
 
 SOURCE_HEADER = "\t".join(
     [
@@ -45,7 +44,7 @@ def source_path(tmp_path: Path) -> Path:
 @pytest.fixture
 def dense_store_path(tmp_path: Path, source_path: Path) -> Path:
     store_path = tmp_path / "store.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source_path],
         store_path,
         store_id="fixture-store",

@@ -8,9 +8,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from dense_sources import build_dense_from_records
 from residual_fixtures import residual_eligible_records
 
-from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
 from opengwasdb.encoding.codec import SeExceptionBuilder, SeExceptionTable, StoreCodec
 from opengwasdb.encoding.measure import fit_se_grid
@@ -33,7 +33,7 @@ from opengwasdb.encoding.planes import (
     write_encoded_planes,
 )
 from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
-from opengwasdb.layouts.dense.build import build_dense_observed_store
+from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.model.manifest import StoreManifest
@@ -205,7 +205,7 @@ def test_ragged_plane_uses_csr_ordinals_for_exact_exceptions(tmp_path) -> None:
 def _build_residual_dense_store(tmp_path):
     records, expected = residual_eligible_records()
     store = tmp_path / "dense.opengwasdb"
-    build_dense_observed_store(
+    build_dense_from_records(
         records,
         store,
         store_id="s",
@@ -533,7 +533,7 @@ def _residual_source_and_panel(
             for row in range(n if analysis_id == "a" else n - 4)
         )
     source = tmp_path / "obs.opengwasdb"
-    build_dense_observed_store(
+    build_dense_from_records(
         records,
         source,
         store_id="s",

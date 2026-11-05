@@ -5,13 +5,12 @@ import shutil
 
 import numpy as np
 import pytest
+from dense_sources import build_dense_fixture, build_dense_from_records
 from typer.testing import CliRunner
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
-from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.cli.main import app
 from opengwasdb.encoding import DenseZPlane
-from opengwasdb.layouts.dense.build import build_dense_observed_store
+from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.rho import (
     build_dense_rho,
     estimate_rho_cml,
@@ -78,7 +77,7 @@ def _make_rho_source(tmp_path, seed: int = 0):
 def rho_store_path(tmp_path):
     source = _make_rho_source(tmp_path)
     store_path = tmp_path / "rho-store.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source],
         store_path,
         store_id="rho-fixture",
@@ -397,7 +396,7 @@ def _residual_rho_store(tmp_path):
             for row in range(n)
         )
     store_path = tmp_path / "residual-rho.opengwasdb"
-    build_dense_observed_store(
+    build_dense_from_records(
         records,
         store_path,
         store_id="residual-rho",

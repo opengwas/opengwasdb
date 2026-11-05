@@ -50,7 +50,7 @@ components:
     layer: 1
     stages: [resolve, build]
     summary: The Source Reader seam and Column Maps; GWAS-SSF, GWAS-VCF, FinnGen and BESD readers.
-    paths: [opengwasdb/readers/, opengwasdb/build/source.py, opengwasdb/layouts/ragged/besd_reader.py]
+    paths: [opengwasdb/readers/, opengwasdb/layouts/ragged/besd_reader.py]
   - id: admission
     name: Association Admission
     container: engine

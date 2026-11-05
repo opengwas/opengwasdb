@@ -20,9 +20,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from dense_sources import build_dense_fixture
 from store_assertions import replace_exception_table
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.encoding import (
     Z_OVERFLOW,
     Z_OVERFLOW_INDEX,
@@ -87,7 +87,7 @@ def dense_store(tmp_path: Path) -> Path:
     source = tmp_path / "associations.tsv"
     source.write_text(_SOURCE_HEADER + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
     out = tmp_path / "dense.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], out, store_id="enc", release_id="v1", reference_assembly="GRCh38"
     )
     return out

@@ -126,11 +126,17 @@ The owner's rulings on the unifications, issue #56:
   build. Each projection's z is therefore on the A1 of the alleles it reports.
   The resolver reads only the lifted metric blocks, and no builder opens a
   BESD reader lifted.
-- `build-dense`'s record reader (`build.source`) is not yet a registered
-  reader, though it orients through the module. It refuses an unreadable row
-  where every registered reader drops one, and it carries per-row Analysis
-  metadata. An adapter that keeps both is possible, but it is out of this
-  change's scope; a follow-up owns that second parse path.
+- `build-dense` reads through the registry (issue #385). Its association TSV was
+  deferred from this change: its own parser refused an unreadable row where
+  every registered reader drops one, and carried each Analysis's metadata on
+  every row, which a reader's associations have no field for. It is now
+  `opengwasdb.association-tsv`, an ordinary reader: one file per Analysis,
+  associations only, `ReferenceAllele.UNDECLARED`. What the rows once
+  repeated (the Analysis id, its label, Trait Ontology, attribution, effect
+  scale, and MAF and INFO filters) is the build manifest's, as for every other
+  builder, and a header that still names one of those columns is refused. An
+  unreadable row still refuses the run; a malformed identity is dropped and
+  logged, like any reader's (#365).
 - A Ragged SSF build costs more per row. The GWAS-SSF reader's row parser
   applies every rule the old Ragged parser skipped. It was timed on one of
   OGS-00006's 1,400 sources, GCST90199621.filtered.tsv.gz, with 77,825 rows

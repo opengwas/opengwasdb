@@ -2294,6 +2294,41 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   the pair is exact. The check stays strict (owner ruling, 2026-10-22): the re-quantisation is
   completion's defect, and opengwasdb#301 owns fixing the refit, not this check.
 
+### 20.5 Association TSV: building a Dense Store with `build-dense`
+
+`ogdb build-dense OUTPUT --manifest MANIFEST.tsv --store-id ID --release-id ID
+--admission-record DIR` builds a Dense Observed-Only Store from a build manifest
+(issue #385, ADR 0076). The manifest is the one every builder reads: a row per
+Analysis, with `analysis_id`, `source_file`, `stored_effect_scale` and
+`original_sd_method`, and optionally the label, Trait Ontology, attribution,
+`maf_threshold` and `info_score_threshold` columns. Each row's `source_file` is
+that Analysis's **association TSV**, read as `opengwasdb.association-tsv`,
+which a row that omits `source_reader_capability` takes. The Store's columns are
+the manifest's rows in order.
+
+- An association TSV holds associations only, one Analysis per file. It names
+  its columns as `chromosome`/`chrom`/`chr`, `position`/`pos`/`base_pair_location`,
+  `effect_allele`/`ea`/`a1`, `other_allele`/`oa`/`a2`/`non_effect_allele`,
+  `se`/`standard_error`, `z`/`zscore`/`z_score` or else
+  `beta`/`effect`/`effect_size`, and optionally `eaf`/`effect_allele_frequency` and
+  `rsid`/`variant_id`. A `.csv` file is comma-delimited; `.gz` is read
+  compressed. A header that names a column the manifest owns (an Analysis id,
+  label, Trait Ontology, attribution, effect scale, `maf_threshold` or
+  `info_score_threshold`) is refused.
+- The format declares no reference allele (§5): its effect and other alleles
+  need not be REF and ALT.
+- A row that cannot be read (a required field missing, a number that is not
+  one, equal alleles) refuses the run, naming the row. A row whose identity no
+  ALID can spell (§4) is dropped by Association Admission and logged.
+- `build-dense` does not lift. Each row's source assembly (`source_assembly`,
+  default `--reference-assembly`, which is `GRCh37` unless given) must be the
+  assembly the Store records, and a row in another is refused.
+- A row whose reader is not `opengwasdb.association-tsv`, a numeric INFO
+  threshold (an association carries no imputation score), and an
+  `original_sd_method` of `unavailable` are refused; an SD-rescaling method
+  divides the Analysis's standard errors by its `original_sd`, as in
+  `build-dense-vcf` (§7).
+
 ## 21. Compatibility
 
 `format_version` describes compatibility of the store representation. It does not describe biological data release version or source publication version. The **package version and `format_version` are independent**: a package release may change neither, one, or both. Which package reads and writes which format is recorded in the package's `CHANGELOG.md` compatibility table.

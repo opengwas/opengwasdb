@@ -17,7 +17,7 @@ from opengwasdb.ancestry.pipeline import annotate_catalogue, read_source_manifes
 from opengwasdb.ancestry.reference import load_reference
 from opengwasdb.build.eaf_orientation import DEFAULT_SAMPLE_SITES
 from opengwasdb.build.liftover import normalise_build
-from opengwasdb.build.observed import build_dense_observed_from_sources
+from opengwasdb.build.observed import build_dense_observed_from_manifest
 from opengwasdb.build.phenotype_sd_pipeline import (
     AfSource,
     estimate_manifest_phenotype_sd,
@@ -684,22 +684,33 @@ def check_observed_view_command(
 
 @app.command("build-dense")
 def build_dense_command(
-    source_path: Path,
     output_path: Path,
+    manifest: Path = typer.Option(
+        ..., help="Build manifest: one row per Analysis, naming its association TSV"
+    ),
     association_coverage: AssociationCoverage = GWAS_ONLY_COVERAGE_OPTION,
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
-    reference_assembly: str = typer.Option("GRCh37"),
+    reference_assembly: str = typer.Option(
+        "GRCh37",
+        help="The assembly the sources are in and the Store records; build-dense does not lift",
+    ),
     overwrite: bool = typer.Option(False),
     admission_record: Path = _ADMISSION_RECORD_OPTION,
 ) -> None:
-    """Build a Dense Observed-Only store from a tiny TSV/CSV source.
+    """Build a Dense Observed-Only store from a manifest of association TSVs.
+
+    --manifest is the build manifest every builder takes, one row per Analysis:
+    its source_file is that Analysis's association TSV (associations only, read as
+    opengwasdb.association-tsv), and the manifest declares its label, Trait
+    Ontology, attribution, effect scale and MAF filter. A row's source_assembly
+    must be --reference-assembly, which a row that omits the column takes.
 
     --admission-record names where Association Admission's record goes (#357).
     """
 
-    result = build_dense_observed_from_sources(
-        [source_path],
+    result = build_dense_observed_from_manifest(
+        manifest,
         output_path,
         store_id=store_id,
         release_id=release_id,

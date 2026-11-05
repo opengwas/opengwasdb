@@ -5,6 +5,7 @@ import math
 
 import pytest
 from cli_output import normalize_cli_output
+from dense_sources import write_dense_manifest
 from residual_fixtures import write_gwas_vcf_with_eaf
 from typer.testing import CliRunner
 
@@ -16,7 +17,7 @@ def _build_dense(source_path, store_path, *options: str):
     return CliRunner().invoke(
         app,
         [
-            "build-dense", str(source_path), str(store_path),
+            "build-dense", str(store_path), "--manifest", str(write_dense_manifest(source_path)),
             "--admission-record", f"{store_path}.admission", *options,
         ],
     )
@@ -408,7 +409,7 @@ def test_a_build_without_an_admission_record_is_refused_before_writing(tmp_path,
     result = CliRunner().invoke(
         app,
         [
-            "build-dense", str(source_path), str(store_path),
+            "build-dense", str(store_path), "--manifest", str(write_dense_manifest(source_path)),
             "--store-id", "cli-fixture", "--release-id", "observed-v1",
         ],
     )

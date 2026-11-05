@@ -32,6 +32,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from dense_sources import build_dense_from_records
 from test_dense_completion import (
     _SIGNAL_N,
     _SIGNAL_POSITIONS,
@@ -46,8 +47,7 @@ from test_indexed_subsets import (
     _index_group,
 )
 
-from opengwasdb.build.source import NormalisedAssociation
-from opengwasdb.layouts.dense.build import build_dense_observed_store
+from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.indexed_subsets import (
     IndexedSubsetError,
@@ -99,7 +99,7 @@ def _source_with_cohort_eaf(store: Path) -> Path:
         records.append(_record("a1", i, float(z), None if i == NO_COHORT_EAF else 0.2))
     records.append(_record("a2", IMPUTED, 2.0, 0.25))
     records.append(_record("a2", 0, 1.0, 0.15))
-    build_dense_observed_store(
+    build_dense_from_records(
         records,
         store,
         store_id="completion-fixture",
@@ -116,7 +116,7 @@ def _source_without_cohort_eaf(store: Path) -> Path:
         for i, z in enumerate(_SIGNAL_Z_TRUE)
         if i != IMPUTED
     ]
-    build_dense_observed_store(
+    build_dense_from_records(
         records,
         store,
         store_id="reference-only-fixture",
