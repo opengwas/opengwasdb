@@ -26,6 +26,7 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb.readers import orientation
 from opengwasdb.readers.interface import (
     ImputationScoreStatus,
     ReaderAssociation,
@@ -678,12 +679,14 @@ class RouteTable:
         declared: np.ndarray,
         collected: _Collected,
     ) -> None:
-        """Re-orient the matched rows a lift swapped, then split them by axis."""
+        """Re-orient the matched rows a lift swapped, then split them by axis.
+
+        A swap is signed by the Source Reader's own rule (`swap`, ADR 0076).
+        """
         z, se, eaf = statistics
         swapped = self._swaps[position]
         if swapped.any():
-            z = np.where(swapped, -z, z)
-            eaf = np.where(swapped, np.float32(1.0) - eaf, eaf)
+            z, eaf = orientation.swap(swapped, z, eaf)
         target = self._target[position].astype(np.int64)
         reference = reference_codes(declared, self._order[position])
         if self._axis is None:
