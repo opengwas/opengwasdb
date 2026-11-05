@@ -39,6 +39,9 @@ from .panel import STATUSES, Panel, match_to_panel, plink2
 from .rule import locus_leads
 
 ABS_Z_BINS = (0.0, 7.0, 10.0, 20.0, float("inf"))
+# Every tier row is in exactly one of these: the shared set, on the panel but
+# off the map, or off the panel for one reason.
+PARTITION = ("shared_set", "matched_no_cm", *(s for s in STATUSES if s != "matched"))
 
 
 @dataclass(frozen=True)
@@ -126,18 +129,31 @@ def build_shared_set(rows: TierRows, panel: Panel,
     cm = genetic_map.cm_at(rows.chromosome, rows.position)
     check_cm(rows.chromosome, rows.position, cm, genetic_map)
     no_cm = np.isnan(cm)
-    keep = (match.status == "matched") & ~no_cm
-    accounting: dict[str, Any] = {
-        "tier_rows": int(keep.size),
+    category = np.where(match.status == "matched",
+                        np.where(no_cm, "matched_no_cm", "shared_set"), match.status)
+    keep = category == "shared_set"
+    shared = SharedSet(rows.take(keep), match.panel_id[keep], cm[keep])
+    partition = {name: int(np.sum(category == name)) for name in PARTITION}
+    check_partition(partition, rows.chromosome.size, shared.rows.chromosome.size)
+    return shared, {
+        "tier_rows": int(rows.chromosome.size),
         "panel": match.counts(),
         "no_cm": int(no_cm.sum()),
         "no_cm_by_panel_status": {s: int(np.sum(no_cm & (match.status == s))) for s in STATUSES},
-        "shared_set": int(keep.sum()),
-        "shared_set_share": float(keep.mean()),
+        "shared_set": int(shared.rows.chromosome.size),
+        "shared_set_share": float(shared.rows.chromosome.size / rows.chromosome.size),
+        "partition": partition,
     }
-    if sum(accounting["panel"].values()) != keep.size:
-        raise ValueError("panel statuses do not account for every row")
-    return SharedSet(rows.take(keep), match.panel_id[keep], cm[keep]), accounting
+
+
+def check_partition(partition: dict[str, int], tier_rows: int, returned: int) -> None:
+    """Refuse a partition that misses a row, or a shared set other than the rows returned."""
+    if sum(partition.values()) != tier_rows:
+        raise ValueError(f"the partition counts {sum(partition.values()):,} of "
+                         f"{tier_rows:,} tier rows")
+    if partition["shared_set"] != returned:
+        raise ValueError(f"the partition's shared set holds {partition['shared_set']:,} rows "
+                         f"but {returned:,} were kept")
 
 
 def check_cm(chromosome: np.ndarray, position: np.ndarray, cm: np.ndarray,
