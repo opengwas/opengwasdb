@@ -20,6 +20,7 @@ import test_hybrid_build as hb
 import test_hybrid_completion as thc
 import test_ragged_completion as trc
 import zarr
+from stored_rows import stored_rows
 from test_dense_vcf_build import HG19_POS_1, HG19_POS_3, _make_manifest, _make_vcf
 
 from opengwasdb.build.observed import build_dense_observed_from_sources
@@ -43,7 +44,7 @@ from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged import complete as ragged_complete
 from opengwasdb.layouts.ragged import zarr_csr
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader, RaggedCSRWriter
+from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRWriter
 from opengwasdb.store.open import open_store
 from opengwasdb.variants import VariantAxis
 
@@ -206,8 +207,7 @@ def test_the_hybrid_spill_keeps_only_the_rows_it_stores(tmp_path, monkeypatch) -
         n_workers=1,
     )
 
-    overflow = RaggedCSRReader(store)
-    trait_a, trait_b = overflow.get_analysis(0), overflow.get_analysis(1)
+    trait_a, trait_b = stored_rows(store, 0), stored_rows(store, 1)
     assert len(trait_b.variant_index) == 1, "fixture: trait_b's off-panel row is stored"
     assert len(trait_a.variant_index) == 0
     assert _absent(_dense_cell(open_store(store).dense_component(), "1:100000:A:G", 0))
@@ -265,7 +265,7 @@ def test_ragged_completion_keeps_only_the_rows_it_stores(
         association_coverage="cis_and_signals", store_esi_eaf=True, allow_unverified_eaf=True,
     )
     assert open_store(observed).manifest.encoding.se.kind == se_kind, "fixture: the SE plan"
-    probe_observed = RaggedCSRReader(observed).get_analysis(1)
+    probe_observed = stored_rows(observed, 1)
     assert len(probe_observed.variant_index) == 3, "fixture: the probe observes three variants"
     assert np.isfinite(probe_observed.eaf).all(), "fixture: each carries a frequency"
     refused = np.isclose(probe_observed.se, 0.05, rtol=1e-3)
@@ -281,7 +281,7 @@ def test_ragged_completion_keeps_only_the_rows_it_stores(
 
     seen = _judged_at(judged, "complete-ragged", 0.05)
     assert seen and np.isfinite(seen).all(), "the gate judged rs1002, present, with its frequency"
-    probe = RaggedCSRReader(completed).get_analysis(1)
+    probe = stored_rows(completed, 1)
     completed_alid = VariantAxis(completed).by_indices(probe.variant_index.tolist())
     held = {
         completed_alid[int(v)].alid: eaf

@@ -68,6 +68,7 @@ name the decisions issue #357 took on the rules that differed.
     `NotAdmitted`. Both are `ValueError`s, but code that catches `NotAdmitted`
     no longer catches the refusal. The completions that read this way:
     - Hybrid, its source's Ragged Overflow (#391).
+    - Ragged, each source Analysis (#393).
 - **`require_admitted`** checks Admission's guarantee on cells a writer is handed.
   Every builder calls it on the z and SE it is about to store, so a half-missing
   pair (spec §15) or any other cell a gate should have dropped refuses the build,
