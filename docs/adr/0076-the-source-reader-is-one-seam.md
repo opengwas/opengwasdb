@@ -44,7 +44,11 @@ them.**
   projection, each oriented by that module:
   - associations;
   - `ReaderBatch`es: the associations as columns, with each row's ALID, its
-    place in the source, its flip and its rsid;
+    alleles as the source spells them (`ref` and `alt`, as its association
+    carries them), its place in the source, its flip and its rsid. The ALID
+    upper-cases the alleles (ADR 0075). The spelling is there so that a
+    builder's rsid harvest can compare the names a site's spellings carry, as
+    ADR 0066 requires of every harvest (#379);
   - variants;
   - the resolver's `MetricsChunk`s;
   - sites.

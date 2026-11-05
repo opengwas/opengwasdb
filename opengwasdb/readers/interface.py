@@ -261,8 +261,9 @@ class SourceReader(Protocol):
     def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
         """`stream_associations`' rows as columns, in blocks, in the same order.
 
-        The same z, SE and frequency on A1, with each row's ALID, its place in
-        the source and its rsid; ``tally`` as `stream_associations` fills it.
+        The same z, SE and frequency on A1, with each row's ALID, its alleles
+        as the source spells them, its place in the source and its rsid;
+        ``tally`` as `stream_associations` fills it.
         """
         ...
 

@@ -357,6 +357,8 @@ class BesdProbeReader:
             imputation_score=np.full(len(rows), np.nan),
             imputation_status=np.full(len(rows), _UNDECLARED_SCORE, dtype=object),
             rsid=np.array([s if s.startswith("rs") else "" for s in snp_ids], dtype=object),
+            ref=source.a2[rows],
+            alt=source.a1[rows],
             reference=_REFERENCE,
             key_prefix="esi:",
         )
