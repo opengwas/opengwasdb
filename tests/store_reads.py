@@ -14,10 +14,12 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+import numpy as np
 import pytest
+import zarr
 from zarr.storage import LocalStore
 
-from opengwasdb.layouts.dense.top_hits import DenseTopHitReader
+from opengwasdb.top_hits import TopHitTier
 
 #: Zarr keys that hold metadata, not chunk bytes; a metadata read is not a read
 #: of the array's data.
@@ -67,6 +69,50 @@ def chunk_reads(
     monkeypatch.undo()
 
 
+#: zarr's selection entry points. Every array read, `[...]`, `.oindex` and `.vindex`
+#: alike, goes through exactly one of them.
+_SELECTIONS = (
+    "get_basic_selection",
+    "get_orthogonal_selection",
+    "get_coordinate_selection",
+    "get_mask_selection",
+    "get_block_selection",
+)
+
+
+@contextmanager
+def element_reads(monkeypatch: pytest.MonkeyPatch) -> Iterator[Counter[str]]:
+    """Count the elements every array returns, keyed by the array's store path.
+
+    A sharded plane's inner chunks share one shard file, and zarr fetches a whole
+    shard without a byte range, so store keys cannot tell one read of a plane from
+    two. Elements returned can: a plane read once returns `plane.size` elements, and
+    `times_read` divides by it.
+    """
+    counts: Counter[str] = Counter()
+    for method in _SELECTIONS:
+        original = getattr(zarr.Array, method)
+
+        def wrapper(self: zarr.Array, *args: Any, _original: Any = original, **kwargs: Any) -> Any:
+            result = _original(self, *args, **kwargs)
+            counts[array_key(self)] += int(np.size(result))
+            return result
+
+        monkeypatch.setattr(zarr.Array, method, wrapper)
+    yield counts
+    monkeypatch.undo()
+
+
+def array_key(array: zarr.Array) -> str:
+    """The key `element_reads` files an array's reads under."""
+    return str(array.store_path)
+
+
+def times_read(counts: Counter[str], array: zarr.Array) -> float:
+    """How many times over `array`'s elements were returned while `counts` was counting."""
+    return counts[array_key(array)] / array.size
+
+
 @contextmanager
 def old_index_without_fields(
     monkeypatch: pytest.MonkeyPatch, names: tuple[str, ...]
@@ -78,14 +124,14 @@ def old_index_without_fields(
     #253 is about is the fallback for an index that predates those fields, so
     the reader is told it has none and the caller derives them from the planes.
     """
-    original = DenseTopHitReader.has
+    original = TopHitTier.has
 
-    def has(self: DenseTopHitReader, name: str) -> bool:
+    def has(self: TopHitTier, name: str) -> bool:
         if name in names or name == "se":
             return False
         return original(self, name)
 
-    monkeypatch.setattr(DenseTopHitReader, "has", has)
+    monkeypatch.setattr(TopHitTier, "has", has)
     yield
 
 

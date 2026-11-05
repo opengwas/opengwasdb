@@ -41,8 +41,15 @@ from pathlib import Path
 from shutil import copytree
 
 import numpy as np
+import plane_edits
 import pytest
 from cli_output import normalize_cli_output
+from presence_fixtures import (
+    DENSE_Z_GROUP,
+    RAGGED_Z_GROUP,
+    float_plane_z,
+    plant_payload_nan,
+)
 from residual_fixtures import write_gwas_vcf_with_eaf
 from test_check_observed_view import _assert_refused, _run, _verdict
 from test_hybrid_completion import _write_ld_block
@@ -57,6 +64,7 @@ from opengwasdb.encoding import (
     StoreCodec,
     positions_pairs,
 )
+from opengwasdb.encoding.plan import Z_MISSING
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged.by_variant import build_variant_index
@@ -199,6 +207,13 @@ def _dense_cell(store: Path, position: int, analysis: str) -> tuple[np.ndarray, 
 def _dense_plane(store: Path, cls):
     component = open_store(store).dense_component()
     return cls.open(component.arrays(mode="r+"), component.manifest.encoding)
+
+
+def _patch_dense(store: Path, cls, rows, cols, values) -> None:
+    """One Dense plane's cells overwritten: a state no writer produces (`plane_edits`)."""
+    component = open_store(store).dense_component()
+    group, encoding = component.arrays(mode="r+"), component.manifest.encoding
+    plane_edits.patch(group, encoding, cls, rows, cols, values)
 
 
 def _imputed(store: Path):
@@ -358,7 +373,7 @@ def test_a_crossover_coded_against_a_dense_baseline_passes_though_its_value_move
     root["eaf_baseline"][int(rows[0])] = 0.31
     values = [_lookup(observed, 101_000, analysis) for analysis in ("trait_a", "trait_b")]
     for cls, plane in ((DenseEafPlane, "eaf"), (DenseSePlane, "se")):
-        _dense_plane(completed, cls).patch(rows, cols, np.concatenate([v[plane] for v in values]))
+        _patch_dense(completed, cls, rows, cols, np.concatenate([v[plane] for v in values]))
     moved = _lookup(completed, 101_000, "trait_a")["eaf"]
     assert moved != values[0]["eaf"], "the fixture must move the crossover's EAF"
     out = tmp_path / "verdict.json"
@@ -375,7 +390,7 @@ def test_a_crossover_coded_against_a_dense_baseline_passes_though_its_value_move
 def _change_a_dense_observation(store: Path) -> None:
     rows, cols = _dense_cell(store, 3000, "trait_b")
     plane = _dense_plane(store, DenseZPlane)
-    plane.patch(rows, cols, plane.points(rows, cols) + 1.0)
+    _patch_dense(store, DenseZPlane, rows, cols, plane.points(rows, cols) + 1.0)
 
 
 def _change_an_overflow_observation(store: Path) -> None:
@@ -387,8 +402,8 @@ def _change_an_overflow_observation(store: Path) -> None:
 def _observe_a_dense_cell_that_is_no_crossover(store: Path) -> None:
     # 1:104000 is a crossover in trait_a only; trait_b never observed it anywhere.
     rows, cols = _dense_cell(store, 104_000, "trait_b")
-    _dense_plane(store, DenseZPlane).patch(rows, cols, np.array([2.5], dtype=np.float32))
-    _dense_plane(store, DenseSePlane).patch(rows, cols, np.array([0.06], dtype=np.float32))
+    _patch_dense(store, DenseZPlane, rows, cols, np.array([2.5], dtype=np.float32))
+    _patch_dense(store, DenseSePlane, rows, cols, np.array([0.06], dtype=np.float32))
 
 
 def _mark_an_overflow_association_imputed(store: Path) -> None:
@@ -403,7 +418,7 @@ def _mark_an_overflow_association_imputed(store: Path) -> None:
 def _alter_a_crossover(store: Path) -> None:
     rows, cols = _dense_cell(store, 101_000, "trait_b")
     plane = _dense_plane(store, DenseZPlane)
-    plane.patch(rows, cols, plane.points(rows, cols) * 1.5)
+    _patch_dense(store, DenseZPlane, rows, cols, plane.points(rows, cols) * 1.5)
 
 
 def _flag_a_crossover_imputed(store: Path) -> None:
@@ -413,7 +428,7 @@ def _flag_a_crossover_imputed(store: Path) -> None:
 
 def _blank_a_crossover(store: Path) -> None:
     rows, cols = _dense_cell(store, 101_000, "trait_a")
-    _dense_plane(store, DenseZPlane).patch(rows, cols, np.array([np.nan], dtype=np.float32))
+    _patch_dense(store, DenseZPlane, rows, cols, np.array([np.nan], dtype=np.float32))
 
 
 def _z_without_se_on_an_overflow_association(store: Path) -> None:
@@ -530,7 +545,7 @@ def _move_an_overflow_observation_onto_an_existing_dense_row(store: Path) -> Non
     rows, cols = _dense_cell(store, 11_000, "trait_c")
     _imputed(store)[int(rows[0]), int(cols[0])] = 0
     for cls, plane in ((DenseZPlane, "z"), (DenseEafPlane, "eaf"), (DenseSePlane, "se")):
-        _dense_plane(store, cls).patch(rows, cols, moved[plane])
+        _patch_dense(store, cls, rows, cols, moved[plane])
 
 
 def test_rewriting_the_overflow_unchanged_keeps_the_pair_passing(tmp_path, pair):
@@ -610,6 +625,64 @@ def test_an_overflow_observation_moved_onto_an_existing_dense_row_fails(tmp_path
         "dense.missing_became_observed": 1, "dense.inserted_observed_cells": 0,
         "overflow.observed_missing_in_child": 1, "overflow.analyses_count_mismatch": 1,
     }
+
+
+# --- a part that was not compared is unchecked, not zero (issue #375) ------
+
+
+def _rename_a_dense_alid(store: Path, alid: bytes, replacement: bytes) -> None:
+    """Give one Dense Component row a nearby position's ALID, which no other Store holds.
+
+    The caller moves a position by one base (`1:3000:A:G` -> `1:3001:A:G`), so that row
+    cannot be mapped. The new key sorts between the same neighbours as the old one, so
+    the component's index stays searchable and only that one row's identity moves.
+    """
+    path = store / "dense" / "variant_alid_bytes.npy"
+    alids = np.load(path)
+    at = int(np.flatnonzero(alids == alid)[0])
+    assert len(replacement) <= alids.dtype.itemsize
+    alids[at] = replacement
+    np.save(path, alids)
+
+
+def test_an_unmappable_axis_leaves_every_part_unchecked(tmp_path, pair):
+    """A part the axes cannot line up is unchecked in all three of a Hybrid verdict's parts.
+
+    One source Dense row is given an ALID the completed axis does not hold, so the Dense
+    axis cannot be mapped and no part of the pair is compared -- and the Z the Dense
+    sample would have counted is planted in it. A counter reading 0 would claim a clean
+    census of cells nobody read (issue #375).
+    """
+    observed, completed = pair
+    _change_a_dense_observation(completed)
+    assert not np.array_equal(
+        _lookup(observed, 3000, "trait_b")["z"], _lookup(completed, 3000, "trait_b")["z"]
+    ), "fixture must hold a Z the Dense sample would count"
+    _rename_a_dense_alid(observed, b"1:3000:A:G", b"1:3001:A:G")
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    assert verdict["failures"] == ["dense.parent_rows_unmapped"]
+    assert verdict["components"]["dense"]["axis"]["parent_rows_unmapped"] == 1
+    dense = verdict["components"]["dense"]
+    assert dense["bands_checked"] == 0
+    assert dense["bands_by_stratum"] == {
+        "random": None, "chrom_edge": None, "final_partial": None,
+        "writer_band_boundary": None,
+    }
+    assert dense["totals"]["z_mismatch"] is None
+    assert all(value is None for value in dense["totals"].values()), dense["totals"]
+    assert dense["max_abs_diff"] == {"z": None, "se": None, "eaf": None}
+    overflow = verdict["components"]["overflow"]
+    assert overflow["analyses_checked"] == 0
+    assert all(value is None for value in overflow["totals"].values()), overflow["totals"]
+    assert all(value is None for value in overflow["all_analyses"].values())
+    assert overflow["max_abs_diff"] == {"z": None, "se": None, "eaf": None}
+    crossovers = verdict["crossovers"]
+    assert (crossovers["n"], crossovers["rows"]) == (None, None)
+    assert all(value is None for value in crossovers["totals"].values()), crossovers["totals"]
+    assert crossovers["max_abs_diff"] == {"z": None, "se": None, "eaf": None}
+    assert crossovers["reencoding_max_abs_diff"] == {"z": None, "se": None, "eaf": None}
 
 
 # --- an infinite value is a value (issue #337) ------------------------------
@@ -692,13 +765,35 @@ def test_a_completed_crossover_with_se_and_no_z_fails_on_the_crossover_counter(t
     """
     observed, completed = pair
     rows, cols = _dense_cell(completed, *CROSSOVER_CELL)
-    _dense_plane(completed, DenseZPlane).patch(rows, cols, np.array([np.nan], np.float32))
+    _patch_dense(completed, DenseZPlane, rows, cols, np.array([np.nan], np.float32))
 
     verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
 
     assert verdict["crossovers"]["totals"]["z_se_missingness_mismatch"] == 1
     assert "crossovers.z_se_missingness_mismatch" in verdict["failures"]
     assert verdict["components"]["dense"]["totals"]["z_se_missingness_mismatch"] == 0
+
+
+def test_a_source_crossover_missing_both_statistics_is_compared_not_refused(tmp_path, pair):
+    """The source Overflow's crossover cell loses both Z and SE: a missing cell, not an
+    invalid one, so the check compares it with the completed Dense cell, which still
+    holds the observation, and returns its verdict.
+
+    Mutation that makes this fail: stand a Z in for every missing Z, not only one beside
+    an SE; the round trip is then handed a half-missing pair and raises `NotAdmitted`.
+    """
+    observed, completed = pair
+    overflow = _overflow(observed)
+    assert overflow["z"].dtype == np.int16, "fixture's Overflow Z is fixed point"
+    position = _overflow_position(observed, *CROSSOVER_CELL)
+    overflow["z"][position] = Z_MISSING
+    overflow["se"][position] = np.nan
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    totals = verdict["crossovers"]["totals"]
+    assert totals["z_se_missingness_mismatch"] == 0
+    assert (totals["z_mismatch"], totals["se_mismatch"]) == (1, 1)
 
 
 def test_an_infinite_crossover_se_copied_identically_passes_and_is_counted(tmp_path, pair):
@@ -711,7 +806,7 @@ def test_an_infinite_crossover_se_copied_identically_passes_and_is_counted(tmp_p
     observed, completed = pair
     _overflow(observed)["se"][_overflow_position(observed, *CROSSOVER_CELL)] = np.inf
     rows, cols = _dense_cell(completed, *CROSSOVER_CELL)
-    _dense_plane(completed, DenseSePlane).patch(rows, cols, np.array([np.inf], np.float32))
+    _patch_dense(completed, DenseSePlane, rows, cols, np.array([np.inf], np.float32))
     assert np.isinf(float(_dense_plane(completed, DenseSePlane).points(rows, cols)[0]))
     out = tmp_path / "verdict.json"
 
@@ -722,6 +817,67 @@ def test_an_infinite_crossover_se_copied_identically_passes_and_is_counted(tmp_p
     assert verdict["passed"] is True and verdict["failures"] == []
     assert verdict["crossovers"]["totals"]["infinite_cells"] == 2
     assert verdict["components"]["dense"]["totals"]["infinite_cells"] == 0
+
+
+# --- a non-canonical missing marker (spec §15, issue #373) ------------------
+#
+# A float16 NaN other than `np.nan`'s 0x7e00 is an invalid state, not a missing one, and
+# each part of a Hybrid pair reads cells of its own: the Dense Component (its own counters,
+# `dense.`), the Overflow's associations (`overflow.`) and a crossover cell, which the Dense
+# part sets aside for the crossover check (`crossovers.`).
+
+# 1:104000 in trait_b is inserted by completion and holds no cell at all.
+DENSE_ONLY_MISSING_CELL = (104_000, "trait_b")
+
+
+def test_a_non_canonical_z_in_the_completed_dense_component_fails(tmp_path, pair):
+    observed, completed = pair
+    # 1:104000 in trait_b is a row completion inserted, imputed in no Analysis and a
+    # crossover in no Analysis: missing, unflagged, and inside the sampled spans.
+    group = float_plane_z(completed / "dense", DENSE_Z_GROUP)
+    rows, cols = _dense_cell(completed, *DENSE_ONLY_MISSING_CELL)
+    cell = (int(rows[0]), int(cols[0]))
+    assert np.isnan(np.asarray(group["se"][cell], np.float32)), "a missing cell"
+    plant_payload_nan(group, cell)
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    assert verdict["components"]["dense"]["totals"]["non_canonical_marker"] == 1
+    assert "dense.non_canonical_marker" in verdict["failures"]
+
+
+def test_a_non_canonical_z_in_the_completed_overflow_fails(tmp_path, pair):
+    observed, completed = pair
+    # 102,000 in trait_a stays in the Overflow, so the Overflow's own sample reads it.
+    group = float_plane_z(completed, RAGGED_Z_GROUP)
+    plant_payload_nan(group, _overflow_position(completed, 102_000, "trait_a"))
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    assert verdict["components"]["overflow"]["totals"]["non_canonical_marker"] == 1
+    assert "overflow.non_canonical_marker" in verdict["failures"]
+    assert verdict["components"]["dense"]["totals"]["non_canonical_marker"] == 0
+
+
+def test_a_non_canonical_z_in_a_completed_crossover_fails(tmp_path, pair):
+    """The Dense part withholds a crossover cell, so only the crossover check can see it.
+
+    A crossover is an observed Dense cell, so its SE is a value: the marker that is
+    wrong here is Z's payload alone, and the cell is `NON_CANONICAL` rather than
+    `PARTIAL` because `states()` decides the payload last (spec §15).
+    """
+    observed, completed = pair
+    group = float_plane_z(completed / "dense", DENSE_Z_GROUP)
+    rows, cols = _dense_cell(completed, *CROSSOVER_CELL)
+    cell = (int(rows[0]), int(cols[0]))
+    assert not np.isnan(np.asarray(group["z"][cell], np.float32)), "the fixture's crossover"
+    plant_payload_nan(group, cell)
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    assert verdict["crossovers"]["totals"]["non_canonical_marker"] == 1
+    assert "crossovers.non_canonical_marker" in verdict["failures"]
+    assert verdict["components"]["dense"]["totals"]["non_canonical_marker"] == 0
 
 
 # --- seam 3: refusals --------------------------------------------------------

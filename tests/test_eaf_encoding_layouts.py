@@ -37,7 +37,7 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.complete import complete_dense_store
-from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, threshold_key
+from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
@@ -53,6 +53,7 @@ from opengwasdb.query import query_store
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import open_store
+from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 
 # Eight variants across four Analyses. The frequencies agree closely between
@@ -141,10 +142,11 @@ def _vcf_manifest(tmp_path: Path) -> Path:
     return path
 
 
-def _ssf(tmp_path: Path) -> tuple[Path, Path]:
-    filtered = tmp_path / "ssf"
+def _write_ssf_sources(filtered: Path, manifest: Path, *, frequencies: bool) -> Path:
+    """One GWAS-SSF file per Analysis under ``filtered``, each with its `_EAF`
+    frequencies or with none, and the manifest naming them."""
     filtered.mkdir()
-    manifest_rows = ["analysis_index\tanalysis_id\tfiltered_file\tn"]
+    manifest_rows = ["analysis_index\tanalysis_id\tfiltered_file\tn\tsource_genome_build"]
     for index, analysis in enumerate(_ANALYSES):
         with gzip.open(filtered / f"{analysis}.tsv.gz", "wt", encoding="utf-8") as fh:
             fh.write(
@@ -152,15 +154,20 @@ def _ssf(tmp_path: Path) -> tuple[Path, Path]:
                 "beta\tstandard_error\teffect_allele_frequency\n"
             )
             for pos in _POSITIONS:
-                eaf = _EAF[analysis][pos]
+                eaf = _EAF[analysis][pos] if frequencies else np.nan
                 fh.write(
                     f"1\t{pos}\tA\tG\t{_z_for(analysis, pos) * 0.3:.6f}\t0.3\t"
                     + ("" if np.isnan(eaf) else f"{eaf:.6f}")
                     + "\n"
                 )
-        manifest_rows.append(f"{index}\t{analysis}\t{analysis}.tsv.gz\t10000")
-    manifest = tmp_path / "ssf_manifest.tsv"
+        manifest_rows.append(f"{index}\t{analysis}\t{analysis}.tsv.gz\t10000\tGRCh38")
     manifest.write_text("\n".join(manifest_rows) + "\n", encoding="utf-8")
+    return manifest
+
+
+def _ssf(tmp_path: Path) -> tuple[Path, Path]:
+    filtered = tmp_path / "ssf"
+    manifest = _write_ssf_sources(filtered, tmp_path / "ssf_manifest.tsv", frequencies=True)
     return manifest, filtered
 
 
@@ -281,7 +288,7 @@ def test_rebuilt_top_hit_index_carries_decoded_frequency(
     with query_store(store) as query:
         expected = query.top_hits(threshold=1.0)["eaf"]
         if layout == "dense":
-            query._eaf_pairs = lambda *_: (_ for _ in ()).throw(AssertionError())
+            query._grid.inspect = lambda *_: (_ for _ in ()).throw(AssertionError())
         else:
             query._csr.eaf_pairs = lambda *_: (_ for _ in ()).throw(AssertionError())
         actual = query.top_hits(threshold=1.0)["eaf"]
@@ -395,7 +402,7 @@ def test_dense_range_phewas_decodes_frequency_as_a_row_band(dense_store: Path):
         def fail_points(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("range_phewas must not gather EAF pointwise")
 
-        query._eaf.points = fail_points
+        query._grid._eaf.points = fail_points
         result = query.range_phewas("1", 100, 800)
     assert len(result["eaf"]) == len(result["z"])
     assert np.any(np.isfinite(result["eaf"]))
@@ -416,8 +423,8 @@ def test_point_frequency_read_indexes_only_requested_baseline_rows(dense_store: 
             return self.array.oindex[key]
 
     with query_store(dense_store) as query:
-        spy = ReadSpy(query._eaf._baseline)
-        query._eaf._baseline = spy
+        spy = ReadSpy(query._grid._eaf._baseline)
+        query._grid._eaf._baseline = spy
         result = query.phewas("1:100:A:G")
     assert len(result["eaf"]) == len(_ANALYSES)
     assert spy.keys
@@ -459,26 +466,6 @@ def test_a_clipped_cell_resolves_to_its_exact_value_not_to_the_baseline(
     group = root["ragged"] if layout == "ragged" else root
     assert group[EAF_EXCEPTION_INDEX].shape[0] >= 1  # a3 at 1:600
     assert _observed(store)[(600, "a3")] == pytest.approx(0.85, abs=1e-6)
-
-
-def test_patching_a_dense_eaf_cell_keeps_the_existing_exceptions(dense_store: Path):
-    """A patch that touches no exception cell must leave the table's entries.
-
-    Review round 2, finding 1, for the EAF exception table.
-    """
-    root = open_store(dense_store).arrays(mode="a")
-    before = np.asarray(root[EAF_EXCEPTION_INDEX][:], dtype=np.int64)
-    assert len(before) >= 1, "fixture must have exception cells to lose"
-
-    from opengwasdb.encoding import DenseEafPlane
-
-    plane = DenseEafPlane.open(root, open_store(dense_store).manifest.encoding)
-    plane.patch(np.array([0]), np.array([0]), np.array([0.5], dtype=np.float32))
-
-    after = np.asarray(root[EAF_EXCEPTION_INDEX][:], dtype=np.int64)
-    assert set(before.tolist()) <= set(after.tolist()), (
-        f"patching an ordinary cell dropped EAF exception entries: {before} -> {after}"
-    )
 
 
 @pytest.mark.parametrize("layout", ["dense", "ragged"])
@@ -542,7 +529,7 @@ def test_an_eaf_plane_that_contradicts_the_manifest_is_rejected(dense_store: Pat
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_store(dense_store)
-    assert not result.ok
+    assert result.failed() == {"encoding.dtypes", "encoding.eaf"}, result.errors
     assert any("dtype int8" in error for error in result.errors), result.errors
 
 
@@ -563,7 +550,7 @@ def test_a_residual_plane_with_no_baseline_is_rejected(dense_store: Path):
     del root[EAF_BASELINE]
 
     result = validate_store(dense_store)
-    assert not result.ok
+    assert result.failed() == {"encoding.eaf"}, result.errors
     assert any(EAF_BASELINE in error for error in result.errors), result.errors
 
 
@@ -608,6 +595,54 @@ def test_an_exception_table_that_lost_a_cell_is_rejected(dense_store: Path):
     result = validate_store(dense_store)
     assert not result.ok
     assert any("no entry in the eaf exception table" in e for e in result.errors), result.errors
+
+
+def test_an_overflow_exception_table_that_lost_a_cell_is_rejected(hybrid_store: Path):
+    """An Overflow's frequencies are held to their table as the Dense Component's are.
+
+    Its `se` is `float16` here, so nothing but the frequency rules reads the plane:
+    a table that lost a cell would leave that cell's frequency to whatever the lookup
+    returned.
+    """
+    overflow = zarr.open_group(str(hybrid_store / "data.zarr" / "ragged"), mode="a")
+    encoding = open_store(hybrid_store).manifest.encoding
+    assert encoding.eaf.is_residual and not encoding.se.is_residual
+    assert overflow[EAF_EXCEPTION_INDEX].shape[0] >= 1, "the Overflow must hold an exception"
+    lost = int(overflow[EAF_EXCEPTION_INDEX][0])
+    replace_exception_table(overflow, EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE)
+
+    result = validate_store(hybrid_store)
+
+    assert result.failed() == {"side_tables.eaf_exceptions"}, result.errors
+    (finding,) = result.of("side_tables.eaf_exceptions")
+    assert finding.target == "data.zarr/ragged"
+    assert finding.message == (
+        "Ragged Overflow eaf: 1 eaf exception cell(s) have no entry in the eaf exception "
+        f"table (first at flat position {lost})"
+    )
+
+
+def test_a_plane_that_cannot_be_decoded_is_skipped_by_the_range_rule(hybrid_store: Path):
+    """An undecodable plane has no frequencies to range-check, and none passed.
+
+    The range rule is skipped behind the exception-table rule, which says which cell
+    cannot be decoded and why; selected alone, it reports the plane itself.
+    """
+    overflow = zarr.open_group(str(hybrid_store / "data.zarr" / "ragged"), mode="a")
+    assert overflow[EAF_EXCEPTION_INDEX].shape[0] >= 1, "the Overflow must hold an exception"
+    replace_exception_table(overflow, EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE)
+
+    result = validate_store(hybrid_store)
+
+    assert result.failed() == {"side_tables.eaf_exceptions"}, result.errors
+    assert result.skipped["associations.eaf_range"] == ("side_tables.eaf_exceptions",)
+
+    alone = validate_store(hybrid_store, rules=["associations.eaf_range"])
+
+    assert alone.failed() == {"associations.eaf_range"}, alone.errors
+    assert [f.message for f in alone.of("associations.eaf_range")] == [
+        "Ragged Overflow eaf cannot be decoded under the declared plan"
+    ]
 
 
 def test_a_store_whose_eaf_scope_contradicts_its_plan_is_rejected(dense_store: Path):
@@ -703,7 +738,7 @@ def test_top_hit_index_materialises_panel_frequency_for_imputed_cells(
     build_top_hit_indexes(completed_store, thresholds=(1.0,))
     with query_store(completed_store) as query:
         result = query.top_hits(threshold=1.0)
-        query._eaf_pairs = lambda *_: (_ for _ in ()).throw(AssertionError())
+        query._grid.inspect = lambda *_: (_ for _ in ()).throw(AssertionError())
         indexed = query.top_hits(threshold=1.0)
     imputed = indexed["association_status"] == "imputed"
     assert imputed.any(), "the fixture imputed nothing, so this test could not fail"
@@ -733,7 +768,7 @@ def test_a_reference_array_the_plan_does_not_declare_is_rejected(completed_store
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_store(completed_store)
-    assert not result.ok
+    assert result.failed() == {"encoding.eaf"}, result.errors
     assert any(EAF_REFERENCE in error for error in result.errors), result.errors
 
 
@@ -876,19 +911,9 @@ def _ragged_store_with_no_frequencies_seed(
     """Build the no-frequency CSR seed once; tests still receive private copies."""
     seed_path = tmp_path_factory.mktemp("eaf-ragged-no-frequency-store")
     filtered = seed_path / "ssf-nofreq"
-    filtered.mkdir()
-    manifest_rows = ["analysis_index\tanalysis_id\tfiltered_file\tn"]
-    for index, analysis in enumerate(_ANALYSES):
-        with gzip.open(filtered / f"{analysis}.tsv.gz", "wt", encoding="utf-8") as fh:
-            fh.write(
-                "chromosome\tbase_pair_location\teffect_allele\tother_allele\t"
-                "beta\tstandard_error\teffect_allele_frequency\n"
-            )
-            for pos in _POSITIONS:
-                fh.write(f"1\t{pos}\tA\tG\t{_z_for(analysis, pos) * 0.3:.6f}\t0.3\t\n")
-        manifest_rows.append(f"{index}\t{analysis}\t{analysis}.tsv.gz\t10000")
-    manifest = seed_path / "ssf_nofreq_manifest.tsv"
-    manifest.write_text("\n".join(manifest_rows) + "\n", encoding="utf-8")
+    manifest = _write_ssf_sources(
+        filtered, seed_path / "ssf_nofreq_manifest.tsv", frequencies=False
+    )
     out = seed_path / "ragged-nofreq.opengwasdb"
     build_ragged_from_ssf(
         manifest, filtered, out, store_id="nofreq", release_id="v1", allow_unverified_eaf=True,

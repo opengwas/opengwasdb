@@ -140,16 +140,85 @@ def test_n_associations_counter(tmp_path):
     assert reader.n_associations == 5
 
 
-def test_get_analyses_batch(tmp_path):
-    writer, expected = _make_writer(10)
-    writer.flush(tmp_path, ENCODING)
+# One Analysis's arrays, all three associations long. `eaf` and `n` are the
+# optional planes (ADR 0036, ADR 0067), so a caller passes None for either.
+_PARALLEL_ARRAYS = {
+    "variant_index": np.array([3, 5, 9], dtype=np.int32),
+    "z": np.array([0.5, -1.5, 2.5], dtype=np.float32),
+    "se": np.array([0.1, 0.2, 0.3], dtype=np.float32),
+    "eaf": np.array([0.2, 0.4, 0.6], dtype=np.float32),
+    "n": np.array([1_000, 2_000, 3_000], dtype=np.int32),
+}
 
-    reader = RaggedCSRReader(tmp_path, ENCODING)
-    results = reader.get_analyses([0, 5, 9])
-    assert len(results) == 3
-    for result, idx in zip(results, [0, 5, 9]):
-        vi, z, se = expected[idx]
-        np.testing.assert_array_equal(result.variant_index, vi)
+
+def _add(writer: RaggedCSRWriter, arrays: dict[str, np.ndarray]) -> None:
+    writer.add_analysis(
+        arrays["variant_index"],
+        arrays["z"],
+        arrays["se"],
+        arrays["eaf"],
+        arrays["n"],
+    )
+
+
+@pytest.mark.parametrize("shortened", list(_PARALLEL_ARRAYS))
+def test_an_array_that_is_not_parallel_is_refused_and_writes_nothing(shortened):
+    """Every array of an Analysis must be as long as every other one (#364).
+
+    The writer took the cells' length from one array and indexed the rest with
+    it, so a length-1 SE beside three variants stored three associations
+    carrying that one SE's value and the write succeeded (#357). The refusal
+    names every array's length, so it points at the array that was wrong.
+    """
+    arrays = dict(_PARALLEL_ARRAYS)
+    writer = RaggedCSRWriter(_N_VARIANTS)
+    _add(writer, arrays)
+    assert writer.n_associations == 3
+
+    arrays[shortened] = arrays[shortened][:1]
+    with pytest.raises(ValueError) as refusal:
+        _add(writer, arrays)
+
+    message = str(refusal.value)
+    for name in _PARALLEL_ARRAYS:
+        assert f"{name} of length {1 if name == shortened else 3}" in message
+    assert writer.n_associations == 3
+    assert writer.n_analyses == 1
+
+
+def test_the_reproduced_length_one_se_is_refused_before_it_broadcasts():
+    """The case #357 reproduced, without the optional planes (#364)."""
+    writer = RaggedCSRWriter(_N_VARIANTS)
+    with pytest.raises(ValueError, match=r"se of length 1"):
+        writer.add_analysis(
+            np.array([1, 2, 3], dtype=np.int32),
+            np.array([1.0, 2.0, 3.0], dtype=np.float32),
+            np.array([0.1], dtype=np.float32),
+        )
+    assert writer.n_associations == 0
+    assert writer.n_analyses == 0
+
+
+@pytest.mark.parametrize("plane", ["z", "se"])
+def test_a_marker_other_than_the_canonical_nan_is_refused_before_it_is_narrowed(plane):
+    """Spec §15: a missing marker is `np.nan`'s NaN, judged in the dtype the
+    caller hands over. Narrowed to float32 first, a float64 NaN with a payload
+    in its low bits came out canonical and was stored as a missing row."""
+    from opengwasdb.admission import NotAdmitted
+    from opengwasdb.associations import non_canonical
+
+    z = np.array([1.0, np.nan, 2.0])
+    se = np.array([0.1, np.nan, 0.2])
+    {"z": z, "se": se}[plane][1] = np.array([0x7FF8000000000001], np.uint64).view(np.float64)[0]
+    # Fixture first: missing in both planes, odd in float64, and canonical once narrowed.
+    assert np.isnan(z[1]) and np.isnan(se[1])
+    assert non_canonical({"z": z, "se": se}[plane]).tolist() == [False, True, False]
+    assert not non_canonical({"z": z, "se": se}[plane].astype(np.float32)).any()
+    writer = RaggedCSRWriter(_N_VARIANTS)
+
+    with pytest.raises(NotAdmitted, match="a missing marker other than the canonical NaN: 1"):
+        writer.add_analysis(np.array([1, 2, 3], dtype=np.int32), z, se, where="build-x")
+    assert writer.n_associations == 0
 
 
 # The Dense and Ragged per-variant shard policies differ above 1,000,000

@@ -40,15 +40,18 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.encoding import (
-    EAF_BASELINE,
-    DenseEafPlane,
-    DenseSePlane,
-    DenseZPlane,
-    StoreEncoding,
+from opengwasdb import top_hits
+from opengwasdb.admission import require_paired
+from opengwasdb.encoding import EAF_BASELINE, StoreEncoding
+from opengwasdb.encoding.association_codec import (
+    AssociationCodec,
+    CellValues,
+    Placement,
+    log_se_out_of_range,
 )
-from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
-from opengwasdb.layouts.dense.build_vcf import _sorted_alids, _write_index
+from opengwasdb.encoding.planes import write_dense_cells
+from opengwasdb.layouts.dense.build import write_analyses_tsv
+from opengwasdb.layouts.dense.build_vcf import write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import _write_variant_table
@@ -70,7 +73,7 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.arrays import open_group, open_group_for_write, write_shard_cells
+from opengwasdb.store.arrays import open_group, open_group_for_write
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     StagedRelease,
@@ -78,6 +81,7 @@ from opengwasdb.store.open import (
     open_store,
 )
 from opengwasdb.variants import VariantAxis, VariantRecord
+from opengwasdb.variants.axis import sorted_alids
 
 log = logging.getLogger(__name__)
 
@@ -210,7 +214,7 @@ def complete_hybrid_store(
         # Phase 2: read the source overflow once, fold panel crossovers into
         # the completed component, and rebuild the shared union axis.
         overflow = _read_source_overflow(src)
-        axis = _remap_shared_axis(dense, overflow, src_manifest.encoding)
+        axis = _remap_shared_axis(dense, overflow)
         # Phase 3: shared index/variant table/dense_to_shared map, then the
         # overflow CSR rebuilt on the remapped indices.
         analyses = _read_analyses(dense.dir)
@@ -295,6 +299,10 @@ def _read_source_overflow(src: Path) -> _SourceOverflow:
     variant_index = src_csr._variant_index[:]
     z = src_csr.z_all()
     se = src_csr.se_all()
+    # D1: the Overflow is carried across, so a cell the presence rule calls
+    # invalid is refused, as the Dense Component's completion refuses one of
+    # its own.
+    require_paired(z, se, where="complete-hybrid, the source's Ragged Overflow")
     eaf = src_csr.eaf_slice(0, len(variant_index))
 
     src_shared_axis = VariantAxis(src)
@@ -319,11 +327,7 @@ def _read_source_overflow(src: Path) -> _SourceOverflow:
     )
 
 
-def _remap_shared_axis(
-    dense: _CompletedDense,
-    overflow: _SourceOverflow,
-    source_encoding: StoreEncoding,
-) -> _SharedAxis:
+def _remap_shared_axis(dense: _CompletedDense, overflow: _SourceOverflow) -> _SharedAxis:
     """Fold panel crossovers into the completed Dense Component and rebuild
     the shared union axis (issue #99): an off-panel variant that became
     on-panel after completion has its real observed value folded in (marked
@@ -350,7 +354,6 @@ def _remap_shared_axis(
         overflow.eaf,
         overflow_alids,
         is_crossover,
-        encoding=source_encoding,
         dense_encoding=dense.encoding,
     )
     n_imputed = dense.n_imputed - n_reclaimed_imputed
@@ -367,7 +370,7 @@ def _remap_shared_axis(
         # narrow imprecision for the crossed-over cells' summary statistics).
         build_dense_top_hit_indexes(dense.dir, encoding=dense.encoding)
 
-    union = _sorted_alids(set(dense.alids) | set(overflow_alids.tolist()))
+    union = sorted_alids(set(dense.alids) | set(overflow_alids.tolist()))
     return _SharedAxis(
         alids=union,
         index={alid: i for i, alid in enumerate(union)},
@@ -405,7 +408,7 @@ def _write_shared_tables_and_overflow(
     """
     dense_layout = _dense_component_layout(staged.path)
     chunk = tuple(int(size) for size in dense_layout.get("chunk_shape", _chunk_shape(src_manifest)))
-    _write_index(staged, axis.alids, analyses, (chunk[0], chunk[1]))
+    write_index(staged, axis.alids, analyses, (chunk[0], chunk[1]))
     source_by_alid = {a: overflow.source_alid_by_alid.get(a) for a in axis.alids}
     _write_variant_table(staged.path, axis.alids, source_by_alid, overflow.rsid_by_alid)
     dense_to_shared = np.array([axis.index[a] for a in axis.dense_alids], dtype=np.int32)
@@ -448,7 +451,7 @@ def _remapped_analysis_arrays(
     empty: tuple[np.ndarray, np.ndarray, np.ndarray, None] = (
         np.empty(0, dtype=np.int32),
         np.empty(0, dtype=np.float32),
-        np.empty(0, dtype=np.float16),
+        np.empty(0, dtype=np.float32),
         None,
     )
     if e == s:
@@ -525,7 +528,7 @@ def _finalize_completed_hybrid(
     # complete_dense_store's already-completed output); add the Ragged
     # Overflow Component's counts on top -- the two partition an Analysis's
     # associations disjointly (ADR 0032).
-    write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
+    write_analyses_tsv(staged.path, top_hits.add_hit_counts(staged.path, analyses))
 
     log.info(
         "Hybrid completion complete: %d shared variants (%d panel + %d off-panel), "
@@ -547,7 +550,6 @@ def _fold_panel_crossovers(
     src_eaf: np.ndarray,
     overflow_alids: np.ndarray,
     is_crossover: np.ndarray,
-    encoding: StoreEncoding,
     dense_encoding: StoreEncoding,
 ) -> int:
     """Write every crossover association's real observed value into the
@@ -579,25 +581,38 @@ def _fold_panel_crossovers(
     eaf_vals = src_eaf[crossover_idx].astype(np.float32)
 
     root = open_group_for_write(dense_dir / "data.zarr", "a")
-    was_imputed = np.asarray(root["imputed"].vindex[row_idx, col_idx])
-    n_reclaimed = int(was_imputed.sum())
-    # Through the plane, so the Dense Component's overflow table moves with the
-    # cells being overwritten rather than being left describing their old values.
-    DenseZPlane.open(root, encoding).patch(row_idx, col_idx, z_vals)
-    write_shard_cells(
-        root["imputed"], row_idx, col_idx, np.zeros(len(row_idx), dtype=np.uint8)
+    n_reclaimed = int(np.asarray(root["imputed"].vindex[row_idx, col_idx]).sum())
+    # One encode under the Dense Component's own plan, and every side table
+    # rewritten with its plane. The crossed-over cell's EAF moves with its z/se
+    # (ADR 0036): the fold writes one real observation, not two. It is coded
+    # against the Dense Component's baseline, and its SE against that decoded
+    # EAF -- the observation's, since the cell is written as observed
+    # (`imputed=0`) and so the panel's frequency never stands in for it.
+    encoded = AssociationCodec.of_component(root, dense_encoding).encode(
+        CellValues(
+            z_vals,
+            se_vals,
+            eaf_vals if "eaf" in root else None,
+            imputed=np.zeros(len(row_idx), dtype=np.uint8),
+        ),
+        Placement.pairs(row_idx, col_idx, int(root["z"].shape[1])),
+        where="complete-hybrid, a crossover fold",
     )
-    # The crossed-over cell's EAF moves with its z/se (ADR 0036) -- the whole
-    # point of the fold is that this is one real observation, not two. Through
-    # the plane, so the cell is coded against the Dense Component's own
-    # baseline and its exception table moves with it. The Dense Component has
-    # already been completed at this point, so its plan carries reference EAF;
-    # the fold clears `imputed` above, which is what stops the panel value from
-    # standing in for the observation now being written.
-    if "eaf" in root:
-        DenseEafPlane.open(root, dense_encoding).patch(row_idx, col_idx, eaf_vals)
-    DenseSePlane.open(root, dense_encoding).patch(row_idx, col_idx, se_vals)
+    write_dense_cells(root, dense_encoding, row_idx, col_idx, encoded)
+    _log_fold_tally(dense_dir, encoded.storable.se_out_of_range)
     return n_reclaimed
+
+
+def _log_fold_tally(dense_dir: Path, out_of_range: np.ndarray) -> None:
+    """Log the crossovers' SEs above `float16`'s range. Only the fold holds these
+    cells: Dense completion ran before they were folded in, and the rebuilt
+    Overflow leaves them out."""
+    if out_of_range.any():
+        log_se_out_of_range(
+            out_of_range,
+            [analysis.analysis_id for analysis in _read_analyses(dense_dir)],
+            where="complete-hybrid, the crossover fold",
+        )
 
 
 def _chunk_shape(manifest: StoreManifest) -> tuple[int, int]:

@@ -164,15 +164,17 @@ agrees with `beta / sebeta` to the digits it prints. The threshold stands.
   It also gives the map ADR 0055's recovery, which amends that ADR's decision 5:
   a Column Map that declares `p_value` (now including `finngen-r13`) derives a
   standard error from it for a row whose `sebeta` is unusable, where the dedicated
-  `FinnGenR13Reader` does not and drops the row (such a row is excluded from the
-  check). Measured on real data the difference is inert: 0 such rows in 40 random
-  R13 endpoints at 1,000,000 rows each (40,000,000 rows), and 0 in 5 of them read
-  whole (106,632,171 rows).
+  `FinnGenR13Reader` does not, so the row has no usable SE and Association
+  Admission drops it (ADR 0072; such a row is excluded from the check). Measured
+  on real data the difference is inert: 0 such rows in 40 random R13 endpoints at
+  1,000,000 rows each (40,000,000 rows), and 0 in 5 of them read whole
+  (106,632,171 rows).
 - **ADR 0063's parity claim has one carve-out.** The built-in `finngen-r13` map
   and the dedicated `FinnGenR13Reader` no longer read every row identically: a
-  row with an unusable `sebeta` and a usable `pval` is read by the map and
-  dropped by the reader. 0 of 146.6M real rows are affected; ADR 0063 carries the
-  amendment, and `tests/test_column_map_reader.py` names the carve-out.
+  row with an unusable `sebeta` and a usable `pval` is read by the map, and
+  read by the reader with no usable SE, so Admission drops it. 0 of 146.6M real
+  rows are affected; ADR 0063 carries the amendment, and
+  `tests/test_column_map_reader.py` names the carve-out.
 - **GWAS-VCF and BESD are not checked yet.** Their records say
   `skip_reason = no_source_p_value`. Reading VCF `LP` is deferred, as is any
   check for BESD, whose per-probe statistics carry no p-value in the metrics

@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
+from opengwasdb.admission.cells import admissible
 from opengwasdb.completion.checkpoint import BlockCompletionResult, FillRow, QualityRow
 from opengwasdb.completion.impute import impute_z_block, scalar_n_se
 from opengwasdb.completion.ld_panel import (
@@ -140,10 +141,11 @@ def complete_block_for_analysis(
         obs_absz_s = np.abs(z_dense[obs_idx])[o_order]
 
     fills: list[tuple[int, float, float]] = []
-    for i in np.where(~obs_mask)[0]:
+    candidates = np.where(~obs_mask)[0]
+    # Only a cell Association Admission would store as present is a fill; the
+    # rest stay missing and are counted `n_missing`.
+    for i in candidates[admissible(z_imp_arr[candidates], se_all[candidates])].tolist():
         zv, sev = float(z_imp_arr[i]), float(se_all[i])
-        if not (np.isfinite(zv) and np.isfinite(sev)):
-            continue
         if region_cap_bp is not None:
             zv = _region_capped_z(zv, int(positions[i]), obs_pos_s, obs_absz_s, region_cap_bp)
         fills.append((int(i), zv, sev))
@@ -163,6 +165,10 @@ ObservedReader = Callable[[int], "tuple[np.ndarray, np.ndarray]"]
 # Analysis, since opening the source is the expensive part.
 BlockReaderFactory = Callable[[LDBlock, list[str | None]], "tuple[Iterable[int], ObservedReader]"]
 
+# The canonical ALIDs a block leaves to the block that follows it, for one
+# Analysis (`completion.ld_panel.shared_endpoints`).
+CededAlids = Callable[[int], "frozenset[str]"]
+
 
 def run_block(
     tsv_path: str | Path,
@@ -170,6 +176,7 @@ def run_block(
     min_cor: float,
     region_cap_bp: int | None,
     make_reader: BlockReaderFactory,
+    ceded: CededAlids | None = None,
 ) -> BlockCompletionResult | None:
     """Complete one LD block for every Analysis its caller assigns to it.
 
@@ -178,6 +185,10 @@ def run_block(
     eigendecomposition cannot be loaded, returns an empty result (still
     checkpoint-worthy, so a later run doesn't keep retrying an unreadable
     block).
+
+    ``ceded`` names, per Analysis, the variants at this block's end that the
+    block starting there owns (ADR 0072). This block neither fills nor counts
+    them, so each such cell is filled, and counted, once.
     """
     block = load_block(tsv_path)
     if block is None:
@@ -200,21 +211,62 @@ def run_block(
 
     quality_rows: list[QualityRow] = []
     fills: list[FillRow] = []
+    ceded_mask = _ceded_masks(canonical_alids, ceded)
     for ai in analysis_indices:
         z_dense, se_dense = read_observed(ai)
         block_result = complete_block_for_analysis(
             z_dense, se_dense, eaf, positions, eigenvectors, eigenvalues,
             min_cor=min_cor, region_cap_bp=region_cap_bp,
         )
-        n_missing = block_result.n_missing
-        n_filled = 0
-        for local_idx, zv, sev in block_result.fills:
-            alid = canonical_alids[local_idx]
-            if alid is None:
-                n_missing += 1
-                continue
-            fills.append(FillRow(alid, ai, zv, sev))
-            n_filled += 1
-        quality_rows.append(QualityRow(ai, block_result.pearson_r, n_filled, n_missing))
+        analysis_fills, quality = _owned_rows(
+            ai, block_result, canonical_alids, ceded_mask(ai), np.isnan(z_dense)
+        )
+        fills.extend(analysis_fills)
+        quality_rows.append(quality)
 
     return BlockCompletionResult(block_id=block.block_id, quality_rows=quality_rows, fills=fills)
+
+
+def _ceded_masks(
+    canonical_alids: list[str | None], ceded: CededAlids | None
+) -> Callable[[int], np.ndarray | None]:
+    """Per Analysis, which block positions it cedes; None where it cedes none.
+
+    Built once per distinct set: a Dense block cedes the same for every Analysis.
+    """
+    masks: dict[frozenset[str], np.ndarray | None] = {frozenset(): None}
+
+    def mask(analysis: int) -> np.ndarray | None:
+        left = frozenset() if ceded is None else ceded(analysis)
+        if left not in masks:
+            masks[left] = np.array([alid in left for alid in canonical_alids])
+        return masks[left]
+
+    return mask
+
+
+def _owned_rows(
+    ai: int,
+    result: BlockAnalysisResult,
+    canonical_alids: list[str | None],
+    ceded: np.ndarray | None,
+    missing: np.ndarray,
+) -> tuple[list[FillRow], QualityRow]:
+    """One Analysis's fills and quality row, leaving out what the block cedes.
+
+    A ceded position is neither a fill nor missing here: the next block counts
+    it. A fill at a position no ALID names is missing.
+    """
+    n_missing = result.n_missing
+    if ceded is not None:
+        n_missing -= int((ceded & missing).sum())
+    fills: list[FillRow] = []
+    for local_idx, zv, sev in result.fills:
+        alid = canonical_alids[local_idx]
+        if ceded is not None and ceded[local_idx]:
+            n_missing += 1  # counted out with the ceded positions above
+        elif alid is None:
+            n_missing += 1
+        else:
+            fills.append(FillRow(alid, ai, zv, sev))
+    return fills, QualityRow(ai, result.pearson_r, len(fills), n_missing)

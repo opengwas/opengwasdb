@@ -4,7 +4,8 @@
 > in one respect: the built-in `finngen-r13` map no longer gives the dedicated
 > reader's rows "byte for byte" (see "Built-ins"). It now maps `pval`, and a row
 > with an unusable `sebeta` and a usable `pval` gets a standard error derived
-> from the p-value (ADR 0055), where `FinnGenR13Reader` drops it. Measured on real
+> from the p-value (ADR 0055), where `FinnGenR13Reader` reads no usable SE and
+> Association Admission drops the row (ADR 0072). Measured on real
 > data: 0 such rows of 146.6M scanned. Every other row reads identically.
 
 opengwasdb-stores ADR 0036 makes Manifest Generation one pipeline that every

@@ -151,32 +151,6 @@ def test_dense_holds_only_the_out_of_range_cells_in_the_overflow_table(dense_sto
     assert np.array_equal(np.asarray(root[Z_OVERFLOW_INDEX][:]), expected)
 
 
-def test_patching_a_dense_z_cell_keeps_the_existing_overflow_entries(dense_store):
-    """A patch that touches no overflow cell must leave the table's entries.
-
-    Review round 2, finding 1: the planes read their table through a
-    `WindowedExactTable`, whose in-memory arrays are empty, and `patch` merged
-    that emptiness with the patched cells and rewrote the table -- dropping
-    every existing entry.  This patches an ordinary cell and asserts the three
-    out-of-range cells survive.
-    """
-    opened = open_store(dense_store)
-    root = opened.arrays(mode="a")
-    before = np.asarray(root[Z_OVERFLOW_INDEX][:], dtype=np.int64)
-    assert len(before) == 3, "fixture must have out-of-range cells to lose"
-
-    plane = DenseZPlane.open(root, opened.manifest.encoding)
-    # Cell (row 0, col 0) is variant 1:100, analysis a1 -- ORDINARY_Z, not an
-    # overflow cell, so nothing legitimate changes in the table.
-    plane.patch(np.array([0]), np.array([0]), np.array([ORDINARY_Z], dtype=np.float32))
-
-    after = np.asarray(root[Z_OVERFLOW_INDEX][:], dtype=np.int64)
-    assert set(before.tolist()) <= set(after.tolist()), (
-        f"patching an ordinary cell dropped overflow entries: {before} -> {after}"
-    )
-    assert validate_store(dense_store).ok
-
-
 def test_dense_top_hit_index_agrees_with_the_stored_plane(dense_store):
     """The index holds decoded float32 z (ADR 0037), and it must equal what a
     query reads back -- including for the cells held in the overflow table."""
@@ -197,7 +171,7 @@ def test_a_z_plane_that_contradicts_the_manifest_is_rejected(dense_store):
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_store(dense_store)
-    assert not result.ok
+    assert result.failed() == {"encoding.dtypes", "encoding.z"}, result.errors
     assert any("dtype int16" in error for error in result.errors), result.errors
 
 
@@ -248,7 +222,7 @@ def test_a_reader_meeting_an_unknown_encoding_kind_rejects_the_release(dense_sto
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_store(dense_store)
-    assert not result.ok
+    assert result.failed() == {"manifest.loads"}
     assert any("int12_fixed" in error for error in result.errors), result.errors
 
 
@@ -312,14 +286,14 @@ def _ssf_fixture(tmp_path: Path) -> tuple[Path, Path]:
     columns = [
         "analysis_index", "analysis_id", "trait_id", "analysis_label",
         "trait_ontology_id", "trait_ontology_label", "trait_chr", "trait_bp",
-        "n", "tissue", "context", "mhc", "filtered_file",
+        "n", "tissue", "context", "mhc", "filtered_file", "source_genome_build",
     ]
     row = {
         "analysis_index": 0, "analysis_id": "trait_a", "trait_id": "T1",
         "analysis_label": "GENE1", "trait_ontology_id": "ENSEMBL:ENSG00001",
         "trait_ontology_label": "Ensembl", "trait_chr": "1", "trait_bp": 150_000,
         "n": 5000, "tissue": "Liver", "context": "", "mhc": "FALSE",
-        "filtered_file": "trait_a.tsv.gz",
+        "filtered_file": "trait_a.tsv.gz", "source_genome_build": "GRCh38",
     }
     manifest.write_text(
         "\t".join(columns) + "\n" + "\t".join(str(row[c]) for c in columns) + "\n",

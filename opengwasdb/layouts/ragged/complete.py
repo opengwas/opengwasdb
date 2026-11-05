@@ -28,16 +28,20 @@ import json
 import logging
 import shutil
 import sqlite3
-from dataclasses import dataclass, replace
+from collections.abc import Iterable
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from opengwasdb import top_hits
+from opengwasdb.admission import require_paired
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
 from opengwasdb.completion.checkpoint import (
     BlockCompletionResult,
+    checkpoint_blocks_dir,
     checkpoint_dir_for,
     read_block_checkpoint,
     require_fresh_destination,
@@ -46,8 +50,10 @@ from opengwasdb.completion.checkpoint import (
 )
 from opengwasdb.completion.ld_panel import (
     LDBlock,
+    SharedEndpoint,
     canonical_panel_alid,
     check_panel_has_chromosomes,
+    shared_endpoints,
 )
 from opengwasdb.completion.manifest import (
     build_completion_provenance,
@@ -63,20 +69,24 @@ from opengwasdb.completion.regions import (
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
     EAF_BASELINE,
-    RaggedEafPlane,
-    StoreCodec,
+    AssociationCodec,
+    CellValues,
+    Placement,
+    SeEncoding,
     StoreEncoding,
-    ZOverflowBuilder,
     fit_se,
-    positions_flat,
-    write_eaf_csr,
+    storable,
     write_eaf_reference,
-    write_se_csr,
 )
-from opengwasdb.layouts.dense.build import add_hit_counts
+from opengwasdb.encoding.association_codec import log_se_out_of_range
+from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
+from opengwasdb.layouts.ragged.zarr_csr import (
+    RAGGED_ZARR_PATH,
+    AnalysisAssociations,
+    RaggedCSRReader,
+)
 from opengwasdb.model.analyses import (
     Analysis,
     ancestry_impute_mask,
@@ -104,6 +114,7 @@ from opengwasdb.variants.normalise import (
     chromosome_sort_key,
     orient_to_canonical,
 )
+from opengwasdb.variants.routing import Duplicates, collapse_duplicates
 
 log = logging.getLogger(__name__)
 
@@ -135,6 +146,8 @@ class _BlockTask:
     thresh: float
     region_cap_bp: int | None
     checkpoint_path: Path
+    #: Per Analysis, the variants at this block's end the next block owns.
+    ceded: dict[int, frozenset[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -154,12 +167,72 @@ class _ObservedAlidMaps:
     eaf_by_alid: dict[str, float]
 
 
-def _observed_alid_maps(obs: Any, src_alids: list[str]) -> _ObservedAlidMaps:
+def _admitted_observed(
+    obs: AnalysisAssociations,
+) -> tuple[AnalysisAssociations, Duplicates]:
+    """One Analysis's observed rows, each variant's duplicates resolved by
+    Association Admission's rule (`collapse_duplicates`, D5).
+
+    A Store holds a (variant, Analysis) once, but a Store a builder wrote
+    before D5 can hold one twice (a BESD probe naming a SNP twice). Rows that
+    agree are one association, collapsed to the first; rows that disagree are
+    all dropped, so the cell is missing and completion may impute it, rather
+    than whichever row a map wrote last.
+    """
+    found = collapse_duplicates(obs.variant_index, obs.z, obs.se)
+    if len(found.keep) == len(obs.variant_index):
+        return obs, found
+    keep = found.keep
+    return AnalysisAssociations(*(column[keep] for column in obs)), found
+
+
+def _log_dropped(ai: int, what: str, rows: Iterable[tuple[str, float, float]]) -> None:
+    """Log every row completion drops, one line each (D8): its Analysis, its
+    variant, its z and SE, and the reason.
+
+    D8 logs each row dropped for a reason other than a declared filter, and a
+    completion writes no Admission record (ADR 0072), so its log is where those
+    rows are named, all of them.
+    """
+    for alid, z, se in rows:
+        log.warning(
+            "Analysis %d: dropped %s %s (z=%r, se=%r): duplicate_conflicting",
+            ai, what, alid, z, se,
+        )
+
+
+def _warn_observed_duplicates(
+    ai: int, obs: AnalysisAssociations, found: Duplicates, src_alids: list[str]
+) -> None:
+    """Say what `_admitted_observed` dropped or collapsed of one Analysis's
+    rows, ``obs``: a count, and a line for every dropped row."""
+    if len(found.dropped):
+        first = [src_alids[int(i)] for i in found.conflicting[:5]]
+        log.warning(
+            "Analysis %d: %d observed row(s) at %d variant(s) disagree, so none is "
+            "carried (duplicate_conflicting); first: %s",
+            ai, len(found.dropped), len(found.conflicting), first,
+        )
+        _log_dropped(ai, "observed row", (
+            (src_alids[int(obs.variant_index[i])], float(obs.z[i]), float(obs.se[i]))
+            for i in found.dropped.tolist()
+        ))
+    if found.collapsed:
+        log.warning(
+            "Analysis %d: %d observed row(s) repeat an agreeing row and are collapsed "
+            "into it (duplicate_collapsed)",
+            ai, found.collapsed,
+        )
+
+
+def _observed_alid_maps(obs: AnalysisAssociations, src_alids: list[str]) -> _ObservedAlidMaps:
     """Map one Analysis's observed CSR rows onto ``{alid: z/se/eaf}``. Observed
     EAF is carried across the rebuild (ADR 0036): Reference Completion adds
     panel rows to an Analysis; it does not change what the source reported for
     the rows it already had. Both the block reader and Phase 3's assembly fold
-    the same observed rows this way."""
+    the same observed rows this way, each variant's duplicates resolved by D5
+    (`_admitted_observed`)."""
+    obs, _ = _admitted_observed(obs)
     obs_alid_to_z: dict[str, float] = {}
     obs_alid_to_se: dict[str, float] = {}
     obs_alid_to_eaf: dict[str, float] = {}
@@ -224,7 +297,8 @@ def _make_reader(task: _BlockTask):
 def _run_block(task: _BlockTask) -> BlockCompletionResult | None:
     """Complete one LD block for the Analyses whose cis window touches it."""
     result = run_block(
-        task.tsv_path, task.thresh, task.min_cor, task.region_cap_bp, _make_reader(task)
+        task.tsv_path, task.thresh, task.min_cor, task.region_cap_bp, _make_reader(task),
+        ceded=lambda analysis: task.ceded.get(analysis, frozenset()),
     )
     if result is None:
         return None
@@ -398,6 +472,25 @@ class _BlockPlan:
     block_to_analyses: dict[str, list[int]]
     block_canonical_alids: dict[str, list[str | None]]
     new_alids: set[str]
+    #: Each block's end another planned block starts at (`shared_endpoints`).
+    endpoints: dict[str, SharedEndpoint] = field(default_factory=dict)
+
+    def ceded(self, block_id: str) -> dict[int, frozenset[str]]:
+        """Per Analysis, the variants at ``block_id``'s end the next block owns.
+
+        The block that starts at a shared endpoint owns it for an Analysis
+        completed against both blocks. One completed against this block alone
+        has no block after it there, so this block keeps its end, as a
+        chromosome's last block does.
+        """
+        endpoint = self.endpoints.get(block_id)
+        if endpoint is None:
+            return {}
+        return {
+            analysis: endpoint.alids
+            for analysis in self.block_to_analyses[block_id]
+            if endpoint.following in self.analysis_to_blocks[analysis]
+        }
 
 
 @dataclass
@@ -459,7 +552,6 @@ class _EncodePlan:
     baseline for observed ones (ADR 0037 §2/§4)."""
 
     encoding: StoreEncoding
-    codec: StoreCodec
     eaf_reference: np.ndarray | None
     out_baseline: np.ndarray | None
 
@@ -621,6 +713,7 @@ def _scan_block_maps(
     block_to_analyses: dict[str, list[int]] = {}
     block_canonical_alids: dict[str, list[str | None]] = {}
     analysis_to_blocks: dict[int, list[str]] = {}
+    planned: list[LDBlock] = []
 
     for i, a in _imputable_analyses(state):
         blocks = blocks_for_analysis(
@@ -633,6 +726,7 @@ def _scan_block_maps(
                 continue
             block_to_tsv[block.block_id] = block.tsv_path
             block_canonical_alids[block.block_id] = _canonical_alids(block)
+            planned.append(block)
             new_alids.update(_new_panel_alids(block_canonical_alids[block.block_id], source_alids))
         if (i + 1) % 1000 == 0:
             print(
@@ -649,6 +743,7 @@ def _scan_block_maps(
         block_to_analyses=block_to_analyses,
         block_canonical_alids=block_canonical_alids,
         new_alids=new_alids,
+        endpoints=shared_endpoints(planned),
     )
 
 
@@ -752,8 +847,7 @@ def _run_pending_blocks(
         f"Running reference completion across {len(plan.block_to_tsv):,} LD blocks "
         f"(n_workers={n_workers})..."
     )
-    blocks_dir = checkpoint_dir / "blocks"
-    blocks_dir.mkdir(parents=True, exist_ok=True)
+    blocks_dir = checkpoint_blocks_dir(checkpoint_dir)
 
     pending: list[_BlockTask] = []
     n_existing = 0
@@ -771,6 +865,7 @@ def _run_pending_blocks(
                     thresh=thresh,
                     region_cap_bp=region_cap_bp,
                     checkpoint_path=ckpt_path,
+                    ceded=plan.ceded(block_id),
                 )
             )
 
@@ -787,7 +882,7 @@ def _merge_checkpoint_rows(
     resumed from disk -- into `completion_quality` rows (batched) and the
     per-Analysis fill maps the CSR assembly layers onto the observed rows."""
     print("Merging block results from checkpoints...")
-    fills_by_analysis: dict[int, dict[str, tuple[float, float]]] = {}
+    fills: dict[int, _Fills] = {}
     quality_batch: list[tuple[int, str, float | None, int, int]] = []
     quality_batch_size = 100_000
     quality_count = 0
@@ -812,10 +907,53 @@ def _merge_checkpoint_rows(
             if len(quality_batch) >= quality_batch_size:
                 _flush_quality()
         for alid, ai, z, se in block_result.fills:
-            fills_by_analysis.setdefault(ai, {})[alid] = (z, se)
+            fills.setdefault(ai, _Fills()).add(alid, z, se)
     _flush_quality()
     print(f"Wrote {quality_count:,} completion quality rows")
+    fills_by_analysis = {ai: fills.pop(ai).resolved(ai) for ai in sorted(fills)}
     return fills_by_analysis, quality_count
+
+
+class _Fills:
+    """One Analysis's imputed cells, as the block checkpoints give them.
+
+    Two blocks can fill one variant: `_reference_alids` lists a variant once
+    however many blocks hold it. `resolved` keeps each variant once by
+    Association Admission's duplicate rule (D5): fills that agree are one, and
+    fills that disagree are all dropped, leaving the cell missing, rather than
+    keeping whichever block's checkpoint sorted last. Each dropped fill is
+    logged (`_log_dropped`).
+    """
+
+    def __init__(self) -> None:
+        self.alids: list[str] = []
+        self.z: list[float] = []
+        self.se: list[float] = []
+
+    def add(self, alid: str, z: float, se: float) -> None:
+        self.alids.append(alid)
+        self.z.append(z)
+        self.se.append(se)
+
+    def resolved(self, ai: int) -> dict[str, tuple[float, float]]:
+        number: dict[str, int] = {}
+        codes = np.fromiter(
+            (number.setdefault(alid, len(number)) for alid in self.alids),
+            dtype=np.int64,
+            count=len(self.alids),
+        )
+        found = collapse_duplicates(codes, np.asarray(self.z), np.asarray(self.se))
+        if len(found.dropped):
+            log.warning(
+                "Analysis %d: %d fill(s) at %d variant(s) disagree across LD blocks, "
+                "so none is kept (duplicate_conflicting); first: %s",
+                ai, len(found.dropped), len(found.conflicting),
+                [self.alids[int(i)] for i in found.dropped[:5]],
+            )
+            _log_dropped(ai, "fill", (
+                (self.alids[i], self.z[i], self.se[i]) for i in found.dropped.tolist()
+            ))
+        return {self.alids[i]: (self.z[i], self.se[i]) for i in found.keep.tolist()}
 
 
 def _checkpoint_and_assemble(
@@ -871,7 +1009,9 @@ def _reference_alids(
     return unique_ref_alids
 
 
-def _passthrough_analysis(obs: Any, src_idx_remap: list[int]) -> _AnalysisCompleted:
+def _passthrough_analysis(
+    obs: AnalysisAssociations, src_idx_remap: list[int]
+) -> _AnalysisCompleted:
     """An Analysis no completable block touches: its source association list
     remapped onto the merged axis, every row marked observed."""
     vi = np.array([src_idx_remap[v] for v in obs.variant_index.tolist()], dtype=np.int32)
@@ -981,7 +1121,12 @@ def _completed_analysis(
     0036), block fills as imputed, block positions neither produced as
     missing -- or, when no completable block touches the Analysis, its source
     association list untouched."""
-    obs = src_csr.get_analysis(ai)
+    source = src_csr.get_analysis(ai)
+    # D1: a source cell the presence rule calls invalid is refused, whatever
+    # completes the Analysis.
+    require_paired(source.z, source.se, where=f"complete-ragged, Analysis {ai}")
+    obs, found = _admitted_observed(source)
+    _warn_observed_duplicates(ai, source, found, src_alids)
     if not block_ids:
         return _passthrough_analysis(obs, src_idx_remap)
     observed = _observed_alid_maps(obs, src_alids)
@@ -1074,15 +1219,12 @@ def _encode_plan(
     # cell, the panel's value on every imputed one.
     eaf_reference = panel_reference_eaf(ld_dir, ancestry, axis.variants)
     encoding = manifest.encoding.with_eaf_reference(eaf_reference is not None)
-    codec = StoreCodec(encoding)
     src_baseline = _source_eaf_baseline(src)
     out_baseline = None
     if src_baseline is not None:
         out_baseline = np.full(len(axis.variants), np.nan, dtype=np.float32)
         out_baseline[np.asarray(axis.src_idx_remap, dtype=np.int64)] = src_baseline
-    return _EncodePlan(
-        encoding=encoding, codec=codec, eaf_reference=eaf_reference, out_baseline=out_baseline
-    )
+    return _EncodePlan(encoding=encoding, eaf_reference=eaf_reference, out_baseline=out_baseline)
 
 
 def _flatten_csr(csr: _CompletedCsr) -> _FlatCsr:
@@ -1097,9 +1239,37 @@ def _flatten_csr(csr: _CompletedCsr) -> _FlatCsr:
     )
 
 
-def _write_csr_id_arrays(root: Any, flat: _FlatCsr, codec: StoreCodec) -> None:
-    """The CSR's index planes plus z: offsets, variant_index, the fixed-point
-    z plane with its overflow table (ADR 0037 §1), and the imputed mask."""
+def _stored_flat(flat: _FlatCsr, analysis_ids: list[str]) -> _FlatCsr:
+    """The completed associations `storable` stores, with the values it returns.
+
+    A CSR holds rows, so a row it does not store is left out, its frequency and
+    imputed flag with it. Each Analysis's SEs above `float16`'s range are
+    logged here, once: the encode that follows judges the same rows again and
+    logs nothing.
+    """
+    n_analyses = len(analysis_ids)
+    analysis_index = np.searchsorted(flat.offsets[1:], np.arange(len(flat.se)), side="right")
+    kept = storable(
+        CellValues(flat.z, flat.se, flat.eaf, imputed=flat.imp),
+        analysis_index,
+        n_analyses,
+        where="complete-ragged",
+    )
+    log_se_out_of_range(kept.se_out_of_range, analysis_ids, where="complete-ragged")
+    rows, cells = kept.stored, kept.cells
+    per_analysis = np.bincount(analysis_index[rows], minlength=n_analyses)
+    return _FlatCsr(
+        offsets=np.concatenate([[0], np.cumsum(per_analysis)]).astype(np.int64),
+        vi=flat.vi[rows],
+        z=np.asarray(cells.z)[rows],
+        se=np.asarray(cells.se)[rows],
+        eaf=np.asarray(cells.eaf)[rows],
+        imp=np.asarray(cells.imputed)[rows],
+    )
+
+
+def _write_csr_id_arrays(root: Any, flat: _FlatCsr) -> None:
+    """The CSR's index planes: offsets, variant_index and the imputed mask."""
     store_arrays.create_array(
         root,
         "offsets",
@@ -1116,21 +1286,6 @@ def _write_csr_id_arrays(root: Any, flat: _FlatCsr, codec: StoreCodec) -> None:
         dtype=np.int32,
         compressor=_COMPRESSOR,
     )
-    # Completion writes into the source's arrays, so it encodes with the
-    # source's plan (ADR 0038 §4) -- the overflow table travels with the
-    # plane it belongs to. The one addition is `eaf_reference`, which
-    # records a physical fact about this release rather than reinterpreting
-    # its source's bytes.
-    z_overflow = ZOverflowBuilder()
-    store_arrays.create_array(
-        root,
-        "z",
-        ArrayRole.ASSOCIATION_SEQUENCE,
-        data=codec.encode_z(flat.z, positions=positions_flat(0), overflow=z_overflow),
-        dtype=codec.z_dtype,
-        compressor=_COMPRESSOR,
-    )
-    z_overflow.table().write(root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
     store_arrays.create_array(
         root,
         "imputed",
@@ -1141,37 +1296,34 @@ def _write_csr_id_arrays(root: Any, flat: _FlatCsr, codec: StoreCodec) -> None:
     )
 
 
-def _write_eaf_and_se_arrays(
+def _write_statistic_planes(
     root: Any, encode_plan: _EncodePlan, flat: _FlatCsr, n_analyses: int
 ) -> None:
-    """The EAF and SE planes plus the release attrs. Observed frequencies
-    only: an imputed cell's frequency is the panel's, stored once per variant
-    in `eaf_reference` and applied on read (ADR 0037 §4); an observed cell
-    whose source reported none stays absent. The per-variant baseline travels
-    with the values across the variant remap rather than being recomputed from
-    them, so a value decoded from the source re-encodes to the same code."""
-    if not encode_plan.encoding.eaf.is_absent:
-        write_eaf_csr(
-            root,
-            encode_plan.codec,
-            flat.vi,
-            flat.eaf,
-            baseline=encode_plan.out_baseline,
-            compressor=_COMPRESSOR,
-        )
-    if encode_plan.eaf_reference is not None:
-        write_eaf_reference(
-            root,
-            encode_plan.eaf_reference,
-            compressor=_COMPRESSOR,
-            role=ArrayRole.RAGGED_PER_VARIANT,
-        )
-    decoded_eaf = RaggedEafPlane.open(root, encode_plan.encoding, imputed=root["imputed"]).slice(
-        0, len(flat.se)
-    )
+    """The z, EAF and SE planes, encoded together under the source's plan, and
+    the release attrs.
+
+    Completion writes into the source's arrays, so it encodes with the
+    source's plan (ADR 0038 §4); the one addition is `eaf_reference`. Observed
+    frequencies only: an imputed cell's frequency is the panel's, stored once
+    per variant and applied on read (ADR 0037 §4); an observed cell whose
+    source reported none stays absent. The per-variant baseline travels with
+    the values across the variant remap rather than being recomputed from them,
+    so a value decoded from the source re-encodes to the same code. A residual
+    SE model is fitted on the frequencies a reader decodes, the panel's on an
+    imputed cell.
+    """
+    encoding = encode_plan.encoding
     analysis_index = np.searchsorted(flat.offsets[1:], np.arange(len(flat.se)), side="right")
-    se_coefficients = (
-        fit_se(
+    cells = CellValues(
+        flat.z, flat.se, None if encoding.eaf.is_absent else flat.eaf, imputed=flat.imp
+    )
+    at = Placement.sequence(0, flat.vi, analysis_index, n_analyses)
+    eaf = {"eaf_baseline": encode_plan.out_baseline, "eaf_reference": encode_plan.eaf_reference}
+    coefficients = None
+    if encoding.se.is_residual:
+        preliminary = AssociationCodec(encoding.with_se(SeEncoding("float16")), **eaf)
+        decoded_eaf = preliminary.round_trip(cells, at, where="complete-ragged").eaf
+        coefficients = fit_se(
             flat.se,
             decoded_eaf,
             analysis_index,
@@ -1179,18 +1331,25 @@ def _write_eaf_and_se_arrays(
             compressor=_COMPRESSOR,
             chunks=_ASSOC_CHUNK,
         )[0]
-        if encode_plan.encoding.se.is_residual
-        else None
+    encoded = AssociationCodec(encoding, se_coefficients=coefficients, **eaf).encode(
+        cells, at, where="complete-ragged"
     )
-    write_se_csr(
+    write_encoded_planes(
         root,
-        encode_plan.codec,
-        flat.se,
-        decoded_eaf,
-        analysis_index,
-        se_coefficients,
+        encoding,
+        encoded,
+        role=ArrayRole.ASSOCIATION_SEQUENCE,
         compressor=_COMPRESSOR,
+        eaf_baseline=encode_plan.out_baseline,
+        se_coefficients=coefficients,
     )
+    if encode_plan.eaf_reference is not None:
+        write_eaf_reference(
+            root,
+            encode_plan.eaf_reference,
+            compressor=_COMPRESSOR,
+            role=ArrayRole.RAGGED_PER_VARIANT,
+        )
     root.attrs["layout"] = "ragged"
     root.attrs["completion_state"] = "reference_completed"
     root.attrs["n_analyses"] = n_analyses
@@ -1201,7 +1360,7 @@ def _write_completed_zarr(
     staged: StagedRelease,
     encode_plan: _EncodePlan,
     csr: _CompletedCsr,
-    n_analyses: int,
+    analyses: list[Analysis],
     n_variants: int,
 ) -> None:
     """Phase 4: write the completed CSR as the store's ragged zarr group, then
@@ -1213,9 +1372,9 @@ def _write_completed_zarr(
     ragged_path = staged.path / RAGGED_ZARR_PATH
     ragged_path.mkdir(parents=True, exist_ok=True)
     root = store_arrays.open_group_for_write(ragged_path, "w")
-    flat = _flatten_csr(csr)
-    _write_csr_id_arrays(root, flat, encode_plan.codec)
-    _write_eaf_and_se_arrays(root, encode_plan, flat, n_analyses)
+    flat = _stored_flat(_flatten_csr(csr), [analysis.analysis_id for analysis in analyses])
+    _write_csr_id_arrays(root, flat)
+    _write_statistic_planes(root, encode_plan, flat, len(analyses))
     print("Building variant-centric index...")
     build_variant_index(staged.path, n_axis=n_variants)
 
@@ -1259,7 +1418,7 @@ def _write_top_hits_and_analyses(
         ]
     )
     write_analysis_records(
-        staged.path / "analyses.tsv", add_hit_counts(staged.path, dst_analyses)
+        staged.path / "analyses.tsv", top_hits.add_hit_counts(staged.path, dst_analyses)
     )
 
 
@@ -1358,7 +1517,7 @@ def _run_completion(
             region_cap_bp=region_cap_bp,
         )
         encode_plan = _encode_plan(src, ld_dir, ancestry, manifest, axis)
-        _write_completed_zarr(staged, encode_plan, csr, state.n_analyses, len(axis.variants))
+        _write_completed_zarr(staged, encode_plan, csr, state.src_analyses, len(axis.variants))
         _write_top_hits_and_analyses(staged, state, encode_plan, ancestry=ancestry)
         staged.write_manifest(
             _completed_manifest(

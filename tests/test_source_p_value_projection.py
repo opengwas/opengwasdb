@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from opengwasdb.readers.gwas_ssf import _METRICS_COLUMNS
+from opengwasdb.readers.gwas_ssf import _METRICS_COLUMNS, stream_full_row_metrics
 from opengwasdb.readers.tabular import (
     metrics_chunks_from_rows,
     stream_projected_metric_chunks,
@@ -62,3 +62,17 @@ def test_row_wise_and_blocked_projections_give_identical_p_values(tmp_path: Path
     )
     assert _nan_to_none(blocked) == row_wise
     assert _nan_to_none(via_rows) == row_wise
+
+
+def test_the_full_row_parser_carries_the_projections_p_values(tmp_path: Path):
+    """The GWAS-SSF row parser reads `p_value` on every row, not only on a row
+    whose standard error it must recover: every fixture row has a usable SE, so
+    a parser that read the cell only for recovery would report none."""
+    path = _file(tmp_path)
+    projected = [r.p_value for r in stream_projected_metrics(path, _METRICS_COLUMNS)]
+    full_rows = list(stream_full_row_metrics(path))
+    assert all(r.se is not None for r in full_rows)
+
+    assert [r.p_value for r in full_rows] == projected
+    via_rows = np.concatenate([c.p_value for c in metrics_chunks_from_rows(iter(full_rows))])
+    assert _nan_to_none(via_rows) == projected

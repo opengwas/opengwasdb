@@ -10,7 +10,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -18,6 +18,17 @@ import numpy as np
 # byte-string dtype avoids the overhead of an object array in a checkpoint
 # that may hold millions of fill rows.
 ALID_DTYPE = "S64"
+
+#: The format a block checkpoint records (``format`` in its ``.npz``). A resume
+#: refuses a directory holding a checkpoint without it, or under another number:
+#: it may not reinterpret what its writer did not mean.
+#:
+#: **2** (ADR 0072): a block leaves the variant at its end that the next block
+#: owns out of its fills and counts. A checkpoint written before (by a package
+#: that wrote no format) fills and counts it, so resumed beside the next
+#: block's it puts two fills on one cell and counts both. Nothing in it says
+#: which rule wrote it, so it is refused, and the completion starts again.
+CHECKPOINT_FORMAT = 2
 
 
 def checkpoint_dir_for(dest_path: Path) -> Path:
@@ -53,6 +64,42 @@ def require_fresh_destination(
         shutil.rmtree(checkpoint_dir)
 
 
+def checkpoint_blocks_dir(checkpoint_dir: Path) -> Path:
+    """The directory a completion's block checkpoints live in, created, and
+    the checkpoints a resumed run would keep checked (`require_current_checkpoints`)."""
+    blocks_dir = Path(checkpoint_dir) / "blocks"
+    blocks_dir.mkdir(parents=True, exist_ok=True)
+    require_current_checkpoints(checkpoint_dir)
+    return blocks_dir
+
+
+def require_current_checkpoints(checkpoint_dir: Path) -> None:
+    """Refuse to resume from block checkpoints another format wrote.
+
+    Called before a resumed completion schedules its blocks, so neither the
+    checkpoints nor the blocks still to run are touched. The refusal names the
+    directory and both ways out, as `require_fresh_destination` does.
+    """
+    written = sorted((Path(checkpoint_dir) / "blocks").glob("*.npz"))
+    stale = [path for path in written if _format_of(path) != CHECKPOINT_FORMAT]
+    if stale:
+        raise ValueError(
+            f"The checkpoint directory {checkpoint_dir} holds {len(stale):,} of "
+            f"{len(written):,} block checkpoint(s) not written in format "
+            f"{CHECKPOINT_FORMAT} (first {stale[0].name}): an older package wrote them, "
+            "before a variant two LD blocks share had one owner (ADR 0072), and they "
+            "cannot be resumed. To start the completion again, delete it, or rerun the "
+            "completion with --overwrite (overwrite=True) to discard it."
+        )
+
+
+def _format_of(path: Path) -> int | None:
+    with np.load(path, allow_pickle=False) as checkpoint:
+        if "format" not in checkpoint.files:
+            return None
+        return int(checkpoint["format"][0])
+
+
 def sanitize_block_id(block_id: str) -> str:
     return block_id.replace("/", "__")
 
@@ -86,27 +133,38 @@ class BlockCompletionResult:
 
 
 def write_block_checkpoint(path: Path, result: BlockCompletionResult) -> None:
-    q_ai = np.array([r.analysis_index for r in result.quality_rows], dtype=np.int32)
-    q_pearson = np.array(
-        [r.pearson_r if r.pearson_r is not None else np.nan for r in result.quality_rows],
-        dtype=np.float64,
-    )
-    q_nimp = np.array([r.n_imputed for r in result.quality_rows], dtype=np.int32)
-    q_nmiss = np.array([r.n_missing for r in result.quality_rows], dtype=np.int32)
-    f_alid = np.array([r.alid.encode("ascii") for r in result.fills], dtype=ALID_DTYPE)
-    f_ai = np.array([r.analysis_index for r in result.fills], dtype=np.int32)
-    f_z = np.array([r.z for r in result.fills], dtype=np.float32)
-    f_se = np.array([r.se for r in result.fills], dtype=np.float32)
-
+    """Write one block's result to ``path`` atomically, in `CHECKPOINT_FORMAT`."""
+    # Typed `Any` because `savez` takes `allow_pickle` beside the named arrays.
+    arrays: dict[str, Any] = {
+        "format": np.array([CHECKPOINT_FORMAT], dtype=np.int32),
+        "block_id": np.array([result.block_id]),
+        **_quality_arrays(result.quality_rows),
+        **_fill_arrays(result.fills),
+    }
     tmp_path = path.with_name(path.name + ".tmp")
     with open(tmp_path, "wb") as fh:
-        np.savez(
-            fh,
-            block_id=np.array([result.block_id]),
-            q_ai=q_ai, q_pearson=q_pearson, q_nimp=q_nimp, q_nmiss=q_nmiss,
-            f_alid=f_alid, f_ai=f_ai, f_z=f_z, f_se=f_se,
-        )
+        np.savez(fh, **arrays)
     os.replace(tmp_path, path)
+
+
+def _quality_arrays(rows: list[QualityRow]) -> dict[str, np.ndarray]:
+    return {
+        "q_ai": np.array([r.analysis_index for r in rows], dtype=np.int32),
+        "q_pearson": np.array(
+            [r.pearson_r if r.pearson_r is not None else np.nan for r in rows], dtype=np.float64
+        ),
+        "q_nimp": np.array([r.n_imputed for r in rows], dtype=np.int32),
+        "q_nmiss": np.array([r.n_missing for r in rows], dtype=np.int32),
+    }
+
+
+def _fill_arrays(fills: list[FillRow]) -> dict[str, np.ndarray]:
+    return {
+        "f_alid": np.array([r.alid.encode("ascii") for r in fills], dtype=ALID_DTYPE),
+        "f_ai": np.array([r.analysis_index for r in fills], dtype=np.int32),
+        "f_z": np.array([r.z for r in fills], dtype=np.float32),
+        "f_se": np.array([r.se for r in fills], dtype=np.float32),
+    }
 
 
 def read_block_checkpoint(path: Path) -> BlockCompletionResult:

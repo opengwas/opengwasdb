@@ -42,18 +42,11 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from opengwasdb.encoding import (
-    EAF_BASELINE,
-    EafExceptionBuilder,
-    SeExceptionBuilder,
-    StoreCodec,
-    ZOverflowBuilder,
-    positions_pairs,
-)
-from opengwasdb.encoding.planes import SE_COEFFICIENTS
+from opengwasdb.associations import Cells, CsrReader, State
+from opengwasdb.encoding import StoreCodec
+from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
 from opengwasdb.layouts.dense.complete import completion_band_rows
 from opengwasdb.layouts.hybrid.layout import dense_component_path
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store.arrays import inner_chunk_of
 from opengwasdb.store.open import OpenGWASDBStore
@@ -77,7 +70,6 @@ from opengwasdb.validation.observed_view import (
     _shard_rows,
     _unsampled_record,
     count_infinite_cells,
-    count_partial_cells,
 )
 from opengwasdb.variants import VariantAxis
 
@@ -91,6 +83,7 @@ OVERFLOW_FAILING = (
     "observed_missing_in_child",
     "missing_became_observed",
     "z_se_missingness_mismatch",
+    "non_canonical_marker",
 )
 _OVERFLOW_INFORMATIONAL = (
     "parent_associations",
@@ -106,6 +99,7 @@ CROSSOVER_FAILING = (
     "observed_marked_imputed",
     "observed_missing_in_child",
     "z_se_missingness_mismatch",
+    "non_canonical_marker",
 )
 
 
@@ -124,8 +118,8 @@ def check_hybrid(
         analyses["n_parent"]
     )
     axes = _HybridAxes.map(pair)
-    chunk_rows = int(inner_chunk_of(pair.dense.parent.z.array)[0])
-    band_rows = completion_band_rows(_shard_rows(pair.dense.child.z.array))
+    chunk_rows = int(inner_chunk_of(pair.dense.parent.z_array)[0])
+    band_rows = completion_band_rows(_shard_rows(pair.dense.child.z_array))
     geometry = (chunk_rows, band_rows)
     record = _header_record(pair.dense, seed, n_random, analyses, axes.dense, geometry)
     dense = {"axis": record.pop("axis"), "geometry": record.pop("geometry")}
@@ -154,7 +148,7 @@ def check_hybrid(
 class _Overflow:
     """One Store's Ragged Overflow and the shared axis its variant indices point into."""
 
-    reader: RaggedCSRReader
+    reader: CsrReader
     offsets: np.ndarray
     imputed: Any  # the zarr array, or None: an Overflow is observed-only (ADR 0026)
     n_shared: int
@@ -164,7 +158,7 @@ class _Overflow:
 
     def variant_indices(self, analysis: int, role: str) -> np.ndarray:
         """One Analysis's shared-axis indices, refused if any falls off the axis."""
-        indices = np.asarray(self.reader.variant_indices(analysis), dtype=np.int64)
+        indices = np.asarray(self.reader.structure.variant_indices(analysis), dtype=np.int64)
         if indices.size and (indices.min() < 0 or indices.max() >= self.n_shared):
             raise ObservedViewRefused(
                 f"the {role} store's Overflow holds a variant index outside its "
@@ -207,7 +201,7 @@ def _open_hybrid_pair(source_path: Path, target_path: Path) -> _HybridPair:
     child = _Planes(child_component)
     _refuse_if_incoherent(dense_component_path(source_path), parent, "source Dense Component")
     _refuse_if_incoherent(dense_component_path(target_path), child, "target Dense Component")
-    if child.imputed is None:
+    if not child.has_imputed:
         raise ObservedViewRefused(
             f"the Dense Component of target store {target_path} has no `imputed` mask to check"
         )
@@ -232,7 +226,13 @@ def _open_component(store: OpenGWASDBStore, role: str, wanted: CompletionState) 
 
 def _open_overflow(store: OpenGWASDBStore, role: str) -> _Overflow:
     try:
-        reader = RaggedCSRReader(store.path, store.manifest.encoding)
+        # Observed by construction (ADR 0026): an Overflow never carries an imputed mask.
+        reader = CsrReader.open(
+            store.path,
+            store.manifest.encoding,
+            source=f"the Overflow of {role} store {store.path}",
+            requires_mask=False,
+        )
         group = store.arrays(mode="r")["ragged"]
     except (OSError, ValueError, KeyError) as exc:
         raise ObservedViewRefused(
@@ -324,23 +324,29 @@ def _compare_both(
 
 
 def _unchecked() -> _Sides:
+    """All three parts, with every tally `null`: no cell was inspected, so none is zero.
+
+    `analyses_checked` and `bands_checked` are 0 because nothing was read; the counters,
+    the strata and the largest gaps are `null`, a value nobody measured (issue #375).
+    `crossovers.n` and `rows` are `null` too, because the crossovers are derived from the
+    axes that did not line up.
+    """
     overflow = {
         "analyses_checked": 0,
         "analyses": [],
         "analyses_with_mismatch": [],
-        "totals": dict.fromkeys((*_OVERFLOW_INFORMATIONAL, *OVERFLOW_FAILING), 0),
-        "max_abs_diff": dict.fromkeys(_DIFF_PLANES, 0.0),
-        "all_analyses": dict.fromkeys(_EVERY_ANALYSIS_FAILING, 0),
+        "totals": dict.fromkeys((*_OVERFLOW_INFORMATIONAL, *OVERFLOW_FAILING)),
+        "max_abs_diff": dict.fromkeys(_DIFF_PLANES),
+        "all_analyses": dict.fromkeys(_EVERY_ANALYSIS_FAILING),
     }
     dense = _unsampled_record()
-    dense["totals"]["crossover_cells"] = 0
-    # Not derived, so not reported as none.
-    unchecked = _crossover_tally()
+    dense["totals"]["crossover_cells"] = None
     crossovers = {
         "n": None,
         "rows": None,
-        **unchecked.record(),
-        "reencoding_max_abs_diff": unchecked.max_abs_diff,
+        "totals": dict.fromkeys(_CROSSOVER_KEYS),
+        "max_abs_diff": dict.fromkeys(_DIFF_PLANES),
+        "reencoding_max_abs_diff": dict.fromkeys(_DIFF_PLANES),
     }
     return _Sides(dense, overflow, crossovers)
 
@@ -410,9 +416,9 @@ def _scan_overflows(pair: _HybridPair, axes: _HybridAxes) -> tuple[_Crossovers, 
     return _gather_crossovers(found), counts
 
 
-def _values_at(reader: RaggedCSRReader, positions: np.ndarray) -> _Cells:
-    eaf = reader.eaf_at(positions)
-    return _Cells(reader.z_at(positions), reader.se_at(positions, eaf=eaf), eaf)
+def _values_at(reader: CsrReader, positions: np.ndarray) -> _Cells:
+    found = reader.inspect(Cells.positions(positions))
+    return _Cells(found.z, found.se, found.eaf)
 
 
 def _imputed_in(overflow: _Overflow, analysis: int) -> int:
@@ -460,10 +466,14 @@ class _Tally:
         return {"totals": self.totals, "max_abs_diff": self.max_abs_diff}
 
 
+# The crossover counters, which the crossover check and the unchecked record share.
+_CROSSOVER_KEYS = (*CROSSOVER_FAILING, "infinite_cells")
+
+
 def _crossover_tally() -> _Tally:
     # `infinite_cells` is informational: a crossover is compared as it is, and an
     # infinite value is a value (issue #337).
-    return _Tally((*CROSSOVER_FAILING, "infinite_cells"))
+    return _Tally(_CROSSOVER_KEYS)
 
 
 def _check_crossovers(pair: _HybridPair, crossovers: _Crossovers) -> dict[str, Any]:
@@ -474,25 +484,29 @@ def _check_crossovers(pair: _HybridPair, crossovers: _Crossovers) -> dict[str, A
     source values; it is informational, as moving them is what the codec does.
     """
     child = pair.dense.child
-    codec = _DenseCodec(pair.child_component)
+    codec = _DenseCodec.of(pair.child_component)
     tally, shift = _crossover_tally(), _crossover_tally()
-    for lo, hi in _runs_by_chunk_row(crossovers.rows, int(inner_chunk_of(child.z.array)[0])):
+    for lo, hi in _runs_by_chunk_row(crossovers.rows, int(inner_chunk_of(child.z_array)[0])):
         rows, cols = crossovers.rows[lo:hi], crossovers.cols[lo:hi]
         source = _Cells(*(getattr(crossovers.source, p)[lo:hi] for p in _DIFF_PLANES))
         r0, r1 = int(rows[0]), int(rows[-1]) + 1
         band = child.read(r0, r1)
-        assert child.imputed is not None  # refused when the pair was opened
-        imputed = np.asarray(child.imputed[r0:r1])[rows - r0, cols]
+        assert band.flags is not None  # refused when the pair was opened
+        imputed = band.flags[rows - r0, cols]
         found = _Cells(*(getattr(band, p)[rows - r0, cols] for p in _DIFF_PLANES))
         expected = codec.round_trip(rows, cols, source)
         tally.totals["observed_missing_in_child"] += int((~_observed(found)).sum())
         tally.totals["observed_marked_imputed"] += int((imputed != 0).sum())
         tally.totals["infinite_cells"] += count_infinite_cells(source) + count_infinite_cells(found)
         # A crossover is the one kind of cell the Dense part cannot check: it is set
-        # aside there (`_CrossoversSetAside`), so the paired-marker rule is enforced
-        # here or nowhere (issue #337, spec §15).
+        # aside there (`_CrossoversSetAside`), so the paired-marker rule and the marker
+        # payloads are enforced here or nowhere (issue #337, issue #373, spec §15).
+        source_markers, found_markers = source.marker_tally(), found.marker_tally()
         tally.totals["z_se_missingness_mismatch"] += (
-            count_partial_cells(source) + count_partial_cells(found)
+            source_markers.count(State.PARTIAL) + found_markers.count(State.PARTIAL)
+        )
+        tally.totals["non_canonical_marker"] += (
+            source_markers.count(State.NON_CANONICAL) + found_markers.count(State.NON_CANONICAL)
         )
         tally.add_planes(expected, found)
         shift.add_planes(source, expected)
@@ -514,56 +528,48 @@ def _runs_by_chunk_row(rows: np.ndarray, chunk_rows: int) -> Iterator[tuple[int,
     yield from zip(starts.tolist(), ends.tolist(), strict=True)
 
 
-class _DenseCodec:
+class _DenseCodec(NamedTuple):
     """What a completed Dense Component stores for a value: encoded, then decoded.
 
-    The crossover fold writes each value through the Dense planes (`patch`):
-    Z, then EAF against that row's `eaf_baseline`, then SE against the EAF the
-    cell now decodes to. This does the same arithmetic without writing.
+    The crossover fold writes each value through the Dense Component's
+    `AssociationCodec`; this asks the same codec, without writing.
     """
 
-    def __init__(self, component: OpenGWASDBStore) -> None:
+    codec: AssociationCodec
+    n_analyses: int
+
+    @classmethod
+    def of(cls, component: OpenGWASDBStore) -> _DenseCodec:
         root = component.arrays(mode="r")
-        self._encoding = component.manifest.encoding
-        self._n_analyses = int(root["z"].shape[1])
-        self._baseline = (
-            np.asarray(root[EAF_BASELINE][:], dtype=np.float32) if EAF_BASELINE in root else None
-        )
-        self._coefficients = (
-            np.asarray(root[SE_COEFFICIENTS][:], dtype=np.float32)
-            if self._encoding.se.is_residual
-            else np.empty((0, 2), dtype=np.float32)
-        )
+        encoding = component.manifest.encoding
+        return cls(AssociationCodec.of_component(root, encoding), int(root["z"].shape[1]))
 
     def round_trip(self, rows: np.ndarray, cols: np.ndarray, values: _Cells) -> _Cells:
-        positions = positions_pairs(rows, cols, self._n_analyses)
-        encoder = StoreCodec(self._encoding)
-        z_overflow, eaf_exceptions, se_exceptions = (
-            ZOverflowBuilder(), EafExceptionBuilder(), SeExceptionBuilder()
+        """Each crossover's source value as the Dense Component reads it back.
+
+        A crossover with one of Z and SE missing is one the fold refuses and the
+        tally counts (spec §15). It is still compared statistic by statistic: its
+        Z as the plane holds it, and its SE beside a stand-in Z. A crossover with
+        both missing is a missing cell, and round-trips as one.
+        """
+        z_gone, se_gone = np.isnan(values.z), np.isnan(values.se)
+        z_only, se_only = se_gone & ~z_gone, z_gone & ~se_gone
+        paired = CellValues(
+            np.where(z_only, np.nan, np.where(se_only, np.float32(0.0), values.z)),
+            values.se,
+            values.eaf,
         )
-        baseline = None if self._baseline is None else self._baseline[rows]
-        z_codes = encoder.encode_z(values.z, positions=positions, overflow=z_overflow)
-        eaf_codes = encoder.encode_eaf(
-            values.eaf, baseline=baseline, positions=positions, exceptions=eaf_exceptions
+        back = self.codec.round_trip(
+            paired,
+            Placement.pairs(rows, cols, self.n_analyses),
+            where="check-observed-view, a crossover",
         )
-        decoder = StoreCodec(
-            self._encoding, z_overflow=z_overflow.table(), eaf_exceptions=eaf_exceptions.table()
-        )
-        # An observed cell: the panel's frequency never stands in for it.
-        eaf = decoder.decode_eaf(
-            eaf_codes, baseline=baseline, positions=positions,
-            imputed=np.zeros(len(rows), dtype=np.uint8),
-            reference=np.full(len(rows), np.nan, dtype=np.float32),
-        )
-        se_codes = encoder.encode_se(
-            values.se, eaf=eaf, analysis_index=cols, coefficients=self._coefficients,
-            positions=positions, exceptions=se_exceptions,
-        )
-        se = StoreCodec(self._encoding, se_exceptions=se_exceptions.table()).decode_se(
-            se_codes, eaf=eaf, analysis_index=cols, coefficients=self._coefficients,
-            positions=positions,
-        )
-        return _Cells(decoder.decode_z(z_codes, positions=positions), se, eaf)
+        z = np.where(
+            z_only,
+            StoreCodec(self.codec.plan).quantise_z(values.z),
+            np.where(z_gone, np.float32(np.nan), back.z),
+        ).astype(np.float32)
+        return _Cells(z, back.se, back.eaf)
 
 
 class _CrossoversSetAside(_Planes):
@@ -584,7 +590,7 @@ class _CrossoversSetAside(_Planes):
         cells = super().read(r0, r1)
         lo, hi = np.searchsorted(self._rows, [r0, r1])
         local = (self._rows[lo:hi] - r0, self._cols[lo:hi])
-        for plane in cells:
+        for plane in (cells.z, cells.se, cells.eaf):
             plane[local] = np.nan
         self.set_aside += int(hi - lo)
         return cells
@@ -629,6 +635,7 @@ def _compare_analysis(pair: _HybridPair, axes: _HybridAxes, analysis: int, tally
     off_dense = np.flatnonzero(axes.dense_row_of_shared[child.variant_index] < 0)
     p, c = _match(keys[kept], child.variant_index[off_dense])
     p, c = kept[p], off_dense[c]
+    parent_markers, child_markers = parent.cells.marker_tally(), child.cells.marker_tally()
     counts = {
         "parent_associations": len(keys),
         "crossovers": int(crossing.sum()),
@@ -636,7 +643,11 @@ def _compare_analysis(pair: _HybridPair, axes: _HybridAxes, analysis: int, tally
         "observed_missing_in_child": len(kept) - len(p),
         "missing_became_observed": len(off_dense) - len(c),
         "z_se_missingness_mismatch": (
-            count_partial_cells(parent.cells) + count_partial_cells(child.cells)
+            parent_markers.count(State.PARTIAL) + child_markers.count(State.PARTIAL)
+        ),
+        "non_canonical_marker": (
+            parent_markers.count(State.NON_CANONICAL)
+            + child_markers.count(State.NON_CANONICAL)
         ),
         # Present-but-infinite cells on both sides: reported, never a failure (issue #337).
         "infinite_cells": count_infinite_cells(parent.cells) + count_infinite_cells(child.cells),
@@ -653,7 +664,7 @@ class _Segment(NamedTuple):
 
 
 def _segment(overflow: _Overflow, analysis: int) -> _Segment:
-    found = overflow.reader.get_analysis(analysis)
+    found = overflow.reader.inspect(Cells.analysis(analysis))
     return _Segment(
         np.asarray(found.variant_index, dtype=np.int64), _Cells(found.z, found.se, found.eaf)
     )

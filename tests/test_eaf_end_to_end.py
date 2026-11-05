@@ -85,7 +85,8 @@ def _ssf(tmp_path: Path, *, with_af: bool = True) -> tuple[Path, Path]:
         fh.write("\t".join(row) + "\n")
     manifest = tmp_path / f"{filtered_dir.name}_manifest.tsv"
     manifest.write_text(
-        "analysis_index\tanalysis_id\tfiltered_file\tn\n0\tstudy1\tstudy1.tsv.gz\t10000\n",
+        "analysis_index\tanalysis_id\tfiltered_file\tn\tsource_genome_build\n"
+        "0\tstudy1\tstudy1.tsv.gz\t10000\tGRCh38\n",
         encoding="utf-8",
     )
     return manifest, filtered_dir

@@ -61,9 +61,9 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.index.sqlite import connect, get_metadata, set_metadata
-from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.manifest import normalise_coverage
+from opengwasdb.overview import write_overview_html
 from opengwasdb.store.arrays import (
     COMPRESSOR_RECORD,
     DENSE_CHUNK_SHAPE,

@@ -26,6 +26,7 @@ from typing import Any
 
 from opengwasdb.readers.gwas_vcf import project_lifted_alleles
 from opengwasdb.variants.axis import parse_canonical_alid
+from opengwasdb.variants.normalise import canonical_alid, identity_allele
 
 log = logging.getLogger(__name__)
 
@@ -90,15 +91,15 @@ class LiftedRow:
 
     @property
     def alid(self) -> str:
-        a1, a2 = sorted((self.effect_allele, self.other_allele))
-        return f"{self.chromosome}:{self.position}:{a1}:{a2}"
+        return canonical_alid(self.chromosome, self.position, self.effect_allele, self.other_allele)
 
 
 def statistics_swap(source: SourceVariantKey, row: LiftedRow) -> bool:
     """Whether the lift swapped which allele is canonical, so z and EAF must follow.
 
     A source reader signs a statistic against the source-assembly canonical A1
-    (``min(ref, alt)``, see `stream_vcf_associations`). A reverse-strand block
+    (``min`` of the upper-cased ``ref`` and ``alt``, see `identity_allele`), by
+    `opengwasdb.readers.orientation`'s rule. A reverse-strand block
     complements both alleles, and a complement reverses their alphabetical
     order -- or, for a palindromic pair, maps A1 onto A2 -- so the projected
     alleles a Dense or Hybrid build stores may call the *other* allele A1. The
@@ -108,10 +109,10 @@ def statistics_swap(source: SourceVariantKey, row: LiftedRow) -> bool:
     Computed from the row's projected alleles in source order, so it is exact
     for an indel too rather than assuming complement always reverses order.
     """
-    ref, alt = source[2], source[3]
-    source_first = min(ref, alt)
-    projected_first = row.effect_allele if source_first == ref else row.other_allele
-    return projected_first != min(row.effect_allele, row.other_allele)
+    ref, alt = identity_allele(source[2]), identity_allele(source[3])
+    effect, other = identity_allele(row.effect_allele), identity_allele(row.other_allele)
+    projected_first = effect if min(ref, alt) == ref else other
+    return projected_first != min(effect, other)
 
 
 def build_liftover_lookup(

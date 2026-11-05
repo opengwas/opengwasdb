@@ -197,7 +197,7 @@ def test_a_dense_vcf_build_writes_whole_shards(
     A 16-variant × 4-Analysis fixture with the decided shard replaced by
     `(8, 4)` has two shards on the variant axis and one on the Analysis axis, so
     the production band width (the shard's 4 Analyses) differs from the inner
-    chunk's 2.  With the guard on, reverting `_write_dense_bands` to the inner
+    chunk's 2.  With the guard on, reverting `write_dense_bands` to the inner
     chunk makes the first band write fail, and reverting the row-block writer
     (`_row_block_of`, in the SE narrowing) does the same; this test would pass
     either way without the guard.
@@ -299,7 +299,6 @@ def test_a_hybrid_completion_patches_whole_shards(
     import test_hybrid_completion as thc
 
     import opengwasdb.encoding.planes as planes_module
-    import opengwasdb.layouts.hybrid.complete as hybrid_complete_module
     from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 
     bands: list[int] = []
@@ -320,7 +319,6 @@ def test_a_hybrid_completion_patches_whole_shards(
 
     original = planes_module.write_shard_cells
     monkeypatch.setattr(planes_module, "write_shard_cells", counting)
-    monkeypatch.setattr(hybrid_complete_module, "write_shard_cells", counting)
 
     src = thc._build_source(tmp_path)
     ld = thc._make_ld_panel_with_crossover(tmp_path)

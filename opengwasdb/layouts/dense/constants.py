@@ -21,7 +21,6 @@ DEFAULT_CHUNK_SHAPE = DENSE_CHUNK_SHAPE
 #: the `sharding_indexed` codec, and the published record must name that codec.
 DEFAULT_COMPRESSOR = SHARDED_COMPRESSOR_RECORD
 DEFAULT_DTYPE = "float16"
-TOP_HIT_THRESHOLDS = (5e-8, 5e-6, 5e-4)
 
 
 def dense_layout_records(

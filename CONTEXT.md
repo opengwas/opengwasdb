@@ -152,13 +152,25 @@ The correlation between two Analyses' association statistics under the null — 
 A release-level derived structure for a Dense Store giving Rho between every pair of Analyses. It is optional provenance-bearing metadata (which variants and null threshold produced it), not part of the association data, and shares the Store's Analysis identity and query concepts.
 
 **Variant Identity**:
-The canonical within-Store variant key is ALID, `chr:pos:A1:A2`, where A1 is alphabetically first and A2 is the other allele after trimming and left alignment. Cross-Store identity is the pair (**Reference Assembly**, ALID).
+The canonical within-Store variant key is ALID, `chr:pos:A1:A2`, where A1 is alphabetically first and A2 is the other allele after upper-casing, trimming and left alignment. A lower-case base is the same base, so `a`/`g` and `A`/`G` are one variant on every layout, and a statistic is signed against the upper-cased pair's A1 (issue #360). Cross-Store identity is the pair (**Reference Assembly**, ALID).
 
 **Store Variant Table**:
 The Store-wide union of canonical variants referenced by its Analyses. Each variant occurs once in a Store Release, independently of how many Analyses report it.
 
 **Variant Index**:
 A compact Store-local reference to a row in the Store Variant Table. It has no identity or stability guarantee outside its Store Release.
+
+**Variant Routing**:
+Deciding which **Variant Index** each source coordinate of a build reaches, and what rs identifier the variant it reaches carries (`opengwasdb.variants.routing`, ADR 0071). The authority is either the build's own sources, read once and lifted from hg19 to GRCh38 (Pass 1), or a Variant Reference, a routing frozen as an artifact. Routing re-orients a statistic a reverse-strand lift swapped, resolves associations that reach one place by Association Admission's duplicate rule (agreeing ones collapse, conflicting ones are dropped; ADR 0072), and refuses rather than guesses where two loci or two names collide. Distinct from routing an Analysis by its **Assigned Ancestry**, which decides which release it belongs to, not where its associations land.
+
+**Association Admission**:
+Deciding which of an Analysis's source rows a Store admits as associations, and why each of the rest was dropped (`opengwasdb.admission`, ADR 0072). One rule set, judged per Analysis by a gate before Variant Routing matches the row. First come the rules that decide whether a row is an association at all (an identity an ALID can spell, a usable SE, an effect), then the filters the Analysis declared (INFO, MAF). Each dropped row has exactly one reason. A build writes what each Analysis examined, admitted and dropped to its **Admission Record**. Distinct from the Analysis-level refusals of the resolver (ancestry, phenotype SD, effect consistency), which decide whether an Analysis is built at all, not which of its rows. _Avoid_: admission alone, for the INFO/MAF filter it once named.
+
+**Admission Record**:
+A build's record of Association Admission, written beside its Store Release and never inside it, so it moves no `format_version`: `admission.json` lists each Analysis's counts by reason, in Manifest Row order, and `dropped/<analysis_index>.tsv.gz` names, by source key, every row dropped, except those a declared INFO or MAF filter dropped and those collapsed into an agreeing duplicate, which it only counts (ADR 0072, D8). It is the same at any worker count.
+
+**Routing Key**:
+The spelling a build matches a source coordinate by, `chrom:pos:ref:alt`, the same for the names it harvests and the associations it routes. Its alleles are upper-cased, as **Variant Identity** spells them, and kept in the source's order, since case is not an orientation change; every build keys this way. Two coordinates one key spells — one site written in two cases — must route to one place, or the build refuses.
 
 **By-Variant Index**:
 An optional, additive structure inside a Ragged component (`ragged/by_variant/`, ADR 0060): a `(variant index, Analysis)`-ordered duplicate of the component's cell-keyed arrays that makes a by-variant PheWAS or region query proportional to the answer. Distinct from the **Variant Index** (a row reference); the name is deliberately different. It does not change `format_version`, and a release without it answers every query through the scan it replaces.
@@ -202,9 +214,25 @@ The source-reported imputation quality or information score for a variant associ
 **INFO Scope**:
 Where an Imputation INFO value applies: Variant when one value is shared for a Store variant, Association when values may differ by Analysis-variant association, or Absent when INFO is not stored.
 
+**Source Reader**:
+What reads one Analysis's source for the pipeline, whatever its Source Format. It parses the source into rows, each oriented to the canonical A1 in the source's declared assembly, and presents every projection a build or annotation stage reads from those rows: its variants, its associations one by one (Variant Routing's Pass 2) or as columns (a Ragged build's batches), its statistics in blocks (the resolver), and its frequency and SE at requested sites (ancestry assignment, phenotype-SD estimation). Opened lifted, it presents the last two on the reference build; a lift that makes the other allele A1 re-orients a row by the same rule. Every caller opens one through the registry by its Source Reader Capability, never by its class.
+_Avoid_: parser, loader, adapter (an adapter is one Source Format's half of a reader).
+
+**Source Reader Capability**:
+The string a Source Collection declares for how its sources are read (`opengwasdb.gwas-vcf`, `opengwasdb.gwas-ssf`, `opengwasdb.finngen-r13`, `opengwasdb.column-map`, `opengwasdb.besd`), which the registry resolves to a Source Reader. It also says what the source needs to be read: a Column Map for `opengwasdb.column-map`, the `.epi` probe an Analysis is for `opengwasdb.besd`, and whether the reader can be lifted onto the reference build (GWAS-VCF and BESD can).
+_Avoid_: format, reader type.
+
 **Column Map**:
 A data file that says how one Source Collection's tabular summary statistics are read: the provider column holding each field, and the collection's conventions. The conventions cover missing-value tokens, which allele the effect and frequency refer to, how positions and chromosomes are written, and the genome build. A collection is read through one when its Analyses declare the `opengwasdb.column-map` Source Reader Capability; the caller names the map by path or by a built-in's name (`gwas-ssf`, `finngen-r13`). Every convention is declared, and nothing is defaulted. A value the reader cannot honour is refused, and the map's checksum is part of every Resolution Record read through it (ADR 0063). A dedicated reader remains only for a format a map cannot describe (GWAS-VCF, BESD).
 _Avoid_: reader config, schema, converter — a map replaces the converter; it is not one.
+
+**Validation Rule**:
+One named judgement `validate` makes of a Store Release, such as `associations.se_negative` or `csr.segment_order`. A rule judges one kind of target: a release (a Dense Component's included), a Dense grid, or an association sequence (a Ragged release's or an Overflow). It runs after the rules it depends on, and is skipped, not passed, when one of them failed. Its name is stable and listed in spec §20.0, and `validate_store(path, rules=...)` runs it alone (ADR 0074).
+_Avoid_: check, validator, seam — a rule is the unit a caller names and a test asserts on.
+
+**Finding**:
+What one Validation Rule reports about one target: the rule's name, an error or a warning, the message, and the target it judged. A release fails when any rule reports an error; a warning names something a reader should know about a valid release, such as an infinite SE.
+_Avoid_: error string — a finding carries the rule that found it.
 
 ## Example dialogue
 

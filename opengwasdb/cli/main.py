@@ -27,6 +27,7 @@ from opengwasdb.build.phenotype_sd_pipeline import (
 )
 from opengwasdb.build.resolve import DEFAULT_EVIDENCE_SAMPLE
 from opengwasdb.build.resolve_manifest import resolve_analyses_manifest
+from opengwasdb.layouts.build_manifest import read_manifest
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.complete import (
     complete_dense_store,
@@ -39,7 +40,6 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     OverflowOnlyPolicy,
     build_indexed_subset,
 )
-from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.rho import (
     DEFAULT_RHO_MIN_NULLS,
     DEFAULT_RHO_WINDOW_BP,
@@ -60,13 +60,19 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.overview import write_overview_html
 from opengwasdb.query import query_store
 from opengwasdb.query.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
 from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.validation import validate_store
-from opengwasdb.variants.reference import extract_variant_reference
+from opengwasdb.variants.routing import (
+    EmptyReferenceError,
+    UnionOptions,
+    VariantReferenceExtraction,
+    extract_variant_reference,
+)
 from opengwasdb.variants.rsid import RsidConflictPolicy
 from opengwasdb.variants.windows import (
     DEFAULT_MAP_SPILL_RECORDS,
@@ -232,6 +238,18 @@ _SOURCE_ASSEMBLY_OPTION = Annotated[
 _ON_RSID_CONFLICT_OPTION = Annotated[
     RsidConflictPolicy, typer.Option(help=_ON_RSID_CONFLICT_HELP)
 ]
+#: Required, with no default (#357): a default beside OUTPUT_PATH would follow a
+#: staging name such as `store.opengwasdb.partial`, and a release workflow that
+#: renames the Store into place would leave the record behind under that name.
+_ADMISSION_RECORD_OPTION: Any = typer.Option(
+    ...,
+    "--admission-record",
+    help=(
+        "Directory for the build's Association Admission record: what each Analysis "
+        "examined, admitted and dropped, by reason, and the rows it logged. Required. "
+        "Name it for the Store's final path (e.g. STORE.admission), not a staging one."
+    ),
+)
 
 
 _REFERENCE_BUILD_OPTION = Annotated[
@@ -673,8 +691,12 @@ def build_dense_command(
     release_id: str = typer.Option(...),
     reference_assembly: str = typer.Option("GRCh37"),
     overwrite: bool = typer.Option(False),
+    admission_record: Path = _ADMISSION_RECORD_OPTION,
 ) -> None:
-    """Build a Dense Observed-Only store from a tiny TSV/CSV source."""
+    """Build a Dense Observed-Only store from a tiny TSV/CSV source.
+
+    --admission-record names where Association Admission's record goes (#357).
+    """
 
     result = build_dense_observed_from_sources(
         [source_path],
@@ -683,6 +705,7 @@ def build_dense_command(
         release_id=release_id,
         reference_assembly=reference_assembly,
         overwrite=overwrite,
+        admission_record=admission_record,
         association_coverage=association_coverage,
     )
     typer.echo(
@@ -696,6 +719,39 @@ def build_dense_command(
             sort_keys=True,
         )
     )
+
+
+def _extract_manifest_reference(
+    manifest_path: Path,
+    output_path: Path,
+    *,
+    defaults: tuple[str | None, str | None, str | None],
+    chain_file: Path | None,
+    failure_threshold: float,
+    n_workers: int,
+    union: UnionOptions,
+) -> VariantReferenceExtraction:
+    """Extract the Variant Reference of a manifest's sources, naming the manifest
+    when there is none.
+
+    ``defaults`` are the reader capability, source assembly and Column Map the
+    manifest's rows default to. Routing reads sources, not manifests, so the
+    manifest's path is put back into its refusal here, where it is known.
+    """
+    capability, assembly, column_map = defaults
+    rows = read_manifest(
+        manifest_path, default_source_reader_capability=capability,
+        default_source_assembly=assembly, column_map=column_map,
+    )
+    if not rows:
+        raise ValueError(f"manifest {manifest_path} contains no rows to extract a reference from")
+    try:
+        return extract_variant_reference(
+            [row.source for row in rows], output_path, chain_file=chain_file,
+            failure_threshold=failure_threshold, n_workers=n_workers, union=union,
+        )
+    except EmptyReferenceError as exc:
+        raise ValueError(f"manifest {manifest_path} yielded no hg38 variants to reference") from exc
 
 
 @app.command("extract-variant-reference")
@@ -743,12 +799,11 @@ def extract_variant_reference_command(
     genomic tree-reduce (issue #188) and never change the artifact.
     --map-spill-records bounds a worker's peak memory (issue #194).
     """
-    result = extract_variant_reference(
-        manifest_path, output_path, chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold, n_workers=n_workers,
-        source_reader_capability=source_reader_capability, source_assembly=source_assembly,
-        window_size_mb=window_size_mb, reduction_batch_size=reduction_batch_size,
-        map_spill_records=map_spill_records, column_map=column_map,
+    result = _extract_manifest_reference(
+        manifest_path, output_path,
+        defaults=(source_reader_capability, source_assembly, column_map),
+        chain_file=chain_file, failure_threshold=liftover_failure_threshold, n_workers=n_workers,
+        union=UnionOptions(window_size_mb, reduction_batch_size, map_spill_records),
     )
     _echo_summary(
         {
@@ -782,6 +837,7 @@ def build_dense_vcf_command(
     ),
     variant_reference: Annotated[Path | None, typer.Option(help=_VARIANT_REFERENCE_HELP)] = None,
     column_map: _COLUMN_MAP_OPTION = None,
+    admission_record: Path = _ADMISSION_RECORD_OPTION,
 ) -> None:
     """Build a Dense Observed-Only store from a manifest of GWAS-VCF files.
 
@@ -793,7 +849,8 @@ def build_dense_vcf_command(
     a reference that names no rsids runs Pass 1's harvest for them (#255).
     --column-map reads opengwasdb.column-map rows through a Column Map (#281).
     --association-coverage states what the release retains: a Dense release can
-    carry only `gwas`, its default (issue #298).
+    carry only `gwas`, its default (issue #298). --admission-record names where
+    Association Admission's record goes (#357).
     """
     result = build_dense_from_vcf_manifest(
         manifest_path, output_path, store_id=store_id, release_id=release_id,
@@ -803,6 +860,7 @@ def build_dense_vcf_command(
         allow_unverified_eaf=allow_unverified_eaf,
         source_reader_capability=source_reader_capability, source_assembly=source_assembly,
         variant_reference=variant_reference, column_map=column_map,
+        admission_record=admission_record,
     )
     _echo_summary({
         "output_path": str(result.output_path),
@@ -834,6 +892,7 @@ def build_hybrid_command(
     assembly: _SOURCE_ASSEMBLY_OPTION = None,
     column_map: _COLUMN_MAP_OPTION = None,
     on_rsid_conflict: _ON_RSID_CONFLICT_OPTION = RsidConflictPolicy.REFUSE,
+    admission_record: Path = _ADMISSION_RECORD_OPTION,
 ) -> None:
     """Build a Hybrid store (Dense Component + Ragged Overflow) from a VCF manifest.
 
@@ -849,7 +908,8 @@ def build_hybrid_command(
     --column-map reads opengwasdb.column-map rows through a Column Map (#281).
     --on-rsid-conflict decides a variant its sources name differently (#306).
     --association-coverage states what the release retains: a Hybrid release can
-    carry only `gwas`, its default (issue #298).
+    carry only `gwas`, its default (issue #298). --admission-record names where
+    Association Admission's record goes (#357).
     """
     res = build_hybrid_from_vcf_manifest(
         manifest_path, output_path, reference_panel=reference_panel,
@@ -859,7 +919,7 @@ def build_hybrid_command(
         eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,
         source_reader_capability=capability, source_assembly=assembly,
         checkpoint=checkpoint, resume=resume, column_map=column_map,
-        on_rsid_conflict=on_rsid_conflict,
+        on_rsid_conflict=on_rsid_conflict, admission_record=admission_record,
     )
     _echo_hybrid_result(res)
 
@@ -915,6 +975,7 @@ def build_hybrid_from_catalogue_command(
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
     column_map: _COLUMN_MAP_OPTION = None,
+    admission_record: Path = _ADMISSION_RECORD_OPTION,
 ) -> None:
     """Subset the Catalogue to one ancestry and build a Hybrid store from it.
 
@@ -933,7 +994,7 @@ def build_hybrid_from_catalogue_command(
         n_workers=n_workers, chunk_shape=(chunk_variants, chunk_analyses),
         eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf, column_map=column_map,
-        association_coverage=association_coverage,
+        association_coverage=association_coverage, admission_record=admission_record,
     )
     typer.echo(
         json.dumps(
@@ -1443,6 +1504,7 @@ def build_ragged_besd_command(
     eaf_reference: _BESD_EAF_REFERENCE_OPTION = None,
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
+    admission_record: Path = _ADMISSION_RECORD_OPTION,
 ) -> None:
     """Build a Ragged Observed-Only store from BESD files.
 
@@ -1452,7 +1514,8 @@ def build_ragged_besd_command(
     --association-coverage is required: the file set says nothing about which of
     its associations were retained (issue #298).
     --store-esi-eaf stores the .esi frequency per association, checked once
-    against --eaf-reference (ADR 0067).
+    against --eaf-reference (ADR 0067). --admission-record names where
+    Association Admission's record goes (#357).
     """
     result = build_ragged_from_besd(
         besd_prefix,
@@ -1471,6 +1534,7 @@ def build_ragged_besd_command(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
+        admission_record=admission_record,
     )
     _echo_summary(
         {
@@ -1496,13 +1560,16 @@ def build_ragged_ssf_command(
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
+    admission_record: Path = _ADMISSION_RECORD_OPTION,
 ) -> None:
     """Build a Ragged Observed-Only store from filtered GWAS-SSF files.
 
     MANIFEST_PATH is a TSV with columns: analysis_index, analysis_id (or
     legacy trait_id), analysis_label (or legacy trait_name), trait_ontology_id,
     trait_ontology_label, trait_chr, trait_bp, sample_size (or legacy n),
-    tissue, context, mhc, source_file (or legacy filtered_file).
+    tissue, context, mhc, source_file (or legacy filtered_file), and
+    source_genome_build (or source_assembly). Every row must declare
+    source_genome_build, and declare GRCh38: the build lifts nothing.
 
     FILTERED_DIR holds one filtered GWAS-SSF ``.tsv.gz`` per analysis (as
     produced by the opengwasdb-stores download+filter step). Relative
@@ -1511,6 +1578,7 @@ def build_ragged_ssf_command(
 
     --association-coverage is required: the filter that produced FILTERED_DIR
     decided what the release retains, and the manifest cannot recover it (#298).
+    --admission-record names where Association Admission's record goes (#357).
     """
     result = build_ragged_from_ssf(
         manifest_path,
@@ -1524,6 +1592,7 @@ def build_ragged_ssf_command(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
+        admission_record=admission_record,
     )
     typer.echo(
         json.dumps(

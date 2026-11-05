@@ -21,18 +21,20 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from collections.abc import Iterator
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from opengwasdb.admission.cells import require_paired
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
 from opengwasdb.completion.checkpoint import (
     ALID_DTYPE,
     BlockCompletionResult,
+    checkpoint_blocks_dir,
     checkpoint_dir_for,
     require_fresh_destination,
     sanitize_block_id,
@@ -42,6 +44,7 @@ from opengwasdb.completion.ld_panel import (
     canonical_panel_alid as _canonical_panel_alid,
 )
 from opengwasdb.completion.ld_panel import (
+    ceded_at_end,
     check_panel_has_chromosomes,
     list_all_blocks,
     list_chromosomes,
@@ -67,8 +70,9 @@ from opengwasdb.encoding import (
     write_eaf_baseline,
     write_eaf_reference,
 )
+from opengwasdb.encoding.association_codec import CellValues, log_se_out_of_range, storable
 from opengwasdb.index import initialise_schema, set_metadata
-from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
+from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
     DEFAULT_DTYPE,
@@ -95,6 +99,7 @@ from opengwasdb.store.open import (
     check_writable_format_version,
     open_store,
 )
+from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
     CanonicalVariant,
     VariantAxis,
@@ -105,6 +110,7 @@ from opengwasdb.variants import (
     parse_canonical_alid,
     write_variant_axis,
 )
+from opengwasdb.variants.routing import collapse_duplicates
 
 log = logging.getLogger(__name__)
 
@@ -132,6 +138,8 @@ class _BlockTask:
     min_cor: float
     thresh: float
     checkpoint_path: Path
+    #: The variants at this block's end the next block owns (`shared_endpoints`).
+    ceded: frozenset[str] = frozenset()
 
 
 def _source_row_for(src_axis: VariantAxis, alid: str | None) -> int | None:
@@ -191,8 +199,15 @@ def _make_reader(task: _BlockTask):
 
 
 def _run_block(task: _BlockTask) -> BlockCompletionResult | None:
-    """Complete one LD block for every Analysis. Runs inside a worker process."""
-    result = run_block(task.tsv_path, task.thresh, task.min_cor, REGION_CAP_BP, _make_reader(task))
+    """Complete one LD block for every Analysis. Runs inside a worker process.
+
+    Every Analysis is completed against every block, so a block cedes the same
+    variants for each.
+    """
+    result = run_block(
+        task.tsv_path, task.thresh, task.min_cor, REGION_CAP_BP, _make_reader(task),
+        ceded=lambda _analysis: task.ceded,
+    )
     if result is None:
         return None
     write_block_checkpoint(task.checkpoint_path, result)
@@ -350,6 +365,8 @@ class _UnionAxis:
     on_panel: np.ndarray
     out_to_src: np.ndarray
     tsv_paths: list[Path]
+    #: Per block's TSV, the variants at its end the next block owns.
+    ceded: dict[Path, frozenset[str]]
 
 
 @dataclass(frozen=True)
@@ -390,22 +407,41 @@ def _read_source_axis(src: Path, impute_analysis_ids: set[str] | None) -> _Sourc
     return _SourceAxis(src_variants, src_analyses, src_alid_to_idx, n_analyses, impute_mask)
 
 
-def _enumerate_panel(ld_dir: Path, ancestry: str) -> tuple[list[Path], set[str]]:
+@dataclass(frozen=True)
+class _Panel:
+    """What Phase 1 reads of the LD panel: the block paths Phase 2 schedules,
+    the canonical ALIDs the union axis must hold (ADR 0022), and, per block,
+    the variants at its end the next block owns."""
+
+    tsv_paths: list[Path]
+    alids: set[str]
+    ceded: dict[Path, frozenset[str]]
+
+
+def _enumerate_panel(ld_dir: Path, ancestry: str) -> _Panel:
     """Walk every LD block's TSV in chromosome order, collecting the block
-    paths Phase 2 schedules and the canonical panel ALIDs the union axis must
-    hold (ADR 0022)."""
+    paths, the panel's canonical ALIDs and its shared endpoints."""
     print("Enumerating genome-wide LD blocks...")
     tsv_paths: list[Path] = []
     panel_alids: set[str] = set()
+    ceded: dict[Path, frozenset[str]] = {}
     for chrom in list_chromosomes(ld_dir, ancestry):
-        for block in list_all_blocks(ld_dir, ancestry, chrom):
+        blocks = list_all_blocks(ld_dir, ancestry, chrom)
+        for block in blocks:
             tsv_paths.append(block.tsv_path)
             for snp_id in block.snp_ids:
                 ca = _canonical_panel_alid(snp_id)
                 if ca is not None:
                     panel_alids.add(ca)
-    print(f"LD panel: {len(tsv_paths):,} blocks, {len(panel_alids):,} panel variants")
-    return tsv_paths, panel_alids
+        at_end = ceded_at_end(blocks)
+        ceded.update(
+            (block.tsv_path, at_end[block.block_id]) for block in blocks if block.block_id in at_end
+        )
+    print(
+        f"LD panel: {len(tsv_paths):,} blocks, {len(panel_alids):,} panel variants, "
+        f"{sum(map(len, ceded.values())):,} at an endpoint two blocks share"
+    )
+    return _Panel(tsv_paths, panel_alids, ceded)
 
 
 def _orient_panel_alid(alid: str) -> CanonicalVariant | None:
@@ -517,7 +553,8 @@ def _build_union_axis(
     variants it lacks, and seed the staged store's variant tables from the
     merged axis."""
     source_axis = _read_source_axis(src, impute_analysis_ids)
-    panel_paths, panel_alids = _enumerate_panel(ld_dir, ancestry)
+    panel = _enumerate_panel(ld_dir, ancestry)
+    panel_alids = panel.alids
     merged_variants, new_canonical, new_alid_to_idx = _union_variant_table(
         source_axis.src_variants, source_axis.src_alid_to_idx, panel_alids
     )
@@ -540,7 +577,8 @@ def _build_union_axis(
         new_alid_to_idx=new_alid_to_idx,
         on_panel=on_panel,
         out_to_src=out_to_src,
-        tsv_paths=panel_paths,
+        tsv_paths=panel.tsv_paths,
+        ceded=panel.ceded,
     )
 
 
@@ -561,8 +599,7 @@ def _complete_pending_blocks(
         f"Running reference completion across {len(axis.tsv_paths):,} LD blocks "
         f"(n_workers={n_workers})..."
     )
-    blocks_dir = checkpoint_dir / "blocks"
-    blocks_dir.mkdir(parents=True, exist_ok=True)
+    blocks_dir = checkpoint_blocks_dir(checkpoint_dir)
 
     pending: list[_BlockTask] = []
     n_existing = 0
@@ -579,6 +616,7 @@ def _complete_pending_blocks(
                     min_cor=min_cor,
                     thresh=thresh,
                     checkpoint_path=ckpt_path,
+                    ceded=axis.ceded.get(tsv_path, frozenset()),
                 )
             )
 
@@ -669,7 +707,7 @@ def _stream_completed_arrays(
         staged, axis, blocks_dir, ld_dir, ancestry, source_encoding
     )
     print("Writing data.zarr (band-streamed)...")
-    n_missing_off_panel, n_missing_imputation_failed, total_imputed = _write_completed_bands(
+    tallies = _write_completed_bands(
         staged,
         src_root,
         axis.out_to_src,
@@ -681,8 +719,17 @@ def _stream_completed_arrays(
         source_encoding,
         encoding,
         impute_mask=axis.impute_mask,
+        name_row=lambda row: axis.merged_variants[row].alid,
     )
     shutil.rmtree(fill_shard_dir, ignore_errors=True)
+    log_se_out_of_range(
+        tallies.se_out_of_range,
+        [analysis.analysis_id for analysis in axis.src_analyses],
+        where="complete-dense",
+    )
+    n_missing_off_panel = tallies.n_missing_off_panel
+    n_missing_imputation_failed = tallies.n_missing_imputation_failed
+    total_imputed = tallies.total_imputed
     n_missing_off_panel_total = int(n_missing_off_panel.sum())
     print(
         f"Completion done: {total_imputed:,} imputed, "
@@ -1172,13 +1219,12 @@ def _create_completed_zarr(
 # ── completed-band writer phases ─────────────────────────────────────────
 #
 # `_write_completed_bands` splits the write into cohesive phases so each stays
-# small enough to hold in the head at once: a z pass (seed + fills + missingness
-# counters + overflow/imputed side tables), an se pass that fills exactly the
-# same cells (source z/se missingness is consistent -- a validated store
-# invariant), an eaf pass that carries observed frequencies across the row
-# remap, and the residual-SE rewrite that finalises the scratch se plane.
-# Every pass streams through its own float32 band buffer, so peak memory is ~one
-# band rather than z + se + imputed held together (issue 044).
+# small enough to hold in the head at once: a statistic pass (seed z and SE,
+# fill both, judge each band's cells whole, count missingness, write z with its
+# overflow table, the imputed mask and the scratch SE), an eaf pass that carries
+# observed frequencies across the row remap, and the residual-SE rewrite that
+# finalises the scratch se plane. Every pass streams row bands, so peak memory
+# is two float32 bands rather than the whole grid (issue 044).
 
 
 def _band_source_rows(
@@ -1218,149 +1264,255 @@ def _count_band_imputation_failed(
     return 0
 
 
+#: The imputed-band value of a cell two fills disagree on, until the band's
+#: fills are all applied and the cell is left missing.
+_CONFLICTED = 2
+
+
 def _apply_fill_shard_records(
-    band: np.ndarray,
-    imputed_band: np.ndarray | None,
+    zb: np.ndarray,
+    sb: np.ndarray,
+    imputed_band: np.ndarray,
     shard_path: Path,
     r0: int,
-    value_field: str,
     *,
     impute_mask: np.ndarray | None = None,
-    validate_mask: bool = False,
+    name_row: Callable[[int], str] = str,
 ) -> int:
-    """Stream one band's fill-shard records into a NaN-seeded band buffer.
+    """Stream one band's fill-shard records into its NaN-seeded z and SE bands.
 
-    A record lands only in a cell the band still holds missing -- it never
-    overwrites an observed value -- and marks the cell imputed when
-    ``imputed_band`` is given (the z pass); the count of cells actually filled
-    is returned. The se pass passes the same shard with ``imputed_band=None``,
-    and deliberately no mask check: pass 1 read the same shards and would have
-    raised, so a second filter is a second chance for the two passes to fill
-    different cells (the missingness-consistency invariant).
+    A record lands only in a cell the source left missing -- it never
+    overwrites an observed value -- and fills z and SE together and marks the
+    cell imputed; the count of cells filled is returned.
 
-    ``validate_mask=True`` (the z pass) enforces the ancestry-match filter: a
-    nonmatching Analysis reaching the write means the filter applied at
-    checkpoint resolution and the one applied here disagree -- the
-    disagreement that let ``completion_quality`` count cells the release did
-    not hold -- so it is said, not silently re-filtered.
+    A cell two records fill is resolved by Association Admission's duplicate
+    rule (D5): fills that agree on z and SE are one, and fills that disagree
+    are all dropped, leaving the cell missing, each logged by its variant
+    (``name_row``), z and SE (D8). The block that starts at a shared endpoint
+    alone fills it (`shared_endpoints`), so two fills reach a cell only where
+    two blocks overlap elsewhere.
+
+    It enforces the ancestry-match filter: a nonmatching Analysis reaching the
+    write means the filter applied at checkpoint resolution and the one applied
+    here disagree -- the disagreement that let ``completion_quality`` count
+    cells the release did not hold -- so it is said, not silently re-filtered.
     """
     filled = 0
     for records in _iter_fill_records(shard_path):
         lr = records["row"] - r0
         ai = records["ai"]
-        if (
-            validate_mask
-            and impute_mask is not None
-            and len(ai)
-            and not impute_mask[ai].all()
-        ):
+        if impute_mask is not None and len(ai) and not impute_mask[ai].all():
             raise ValueError(
                 "fill shard contains analyses excluded by the ancestry-match filter "
                 f"(first {int(ai[~impute_mask[ai]][0])}); the filter applied at "
                 "checkpoint resolution and the one applied here disagree"
             )
-        fillable = ~np.isfinite(band[lr, ai])
-        if fillable.any():
-            lrm, aim = lr[fillable], ai[fillable]
-            band[lrm, aim] = records[value_field][fillable]
-            if imputed_band is not None:
-                imputed_band[lrm, aim] = 1
-            filled += int(fillable.sum())
+        filled += _apply_fill_batch(zb, sb, imputed_band, lr, ai, records["z"], records["se"])
+    conflicted = imputed_band == _CONFLICTED
+    if conflicted.any():
+        _log_conflicting_fills(shard_path, conflicted, r0, name_row)
+        zb[conflicted] = np.nan
+        sb[conflicted] = np.nan
+        imputed_band[conflicted] = 0
     return filled
 
 
-def _write_completed_z_bands(
+def _apply_fill_batch(
+    zb: np.ndarray,
+    sb: np.ndarray,
+    imputed_band: np.ndarray,
+    lr: np.ndarray,
+    ai: np.ndarray,
+    z: np.ndarray,
+    se: np.ndarray,
+) -> int:
+    """Apply one batch of fill records; returns the net count of cells filled.
+
+    A cell is a target while the source leaves it missing: unfilled, filled
+    by an earlier record, or already in conflict. The batch's own repeats are
+    resolved first; a kept fill then fills an open cell, or is compared with
+    the fill the cell holds.
+    """
+    state = imputed_band[lr, ai]
+    target = (state > 0) | ~np.isfinite(zb[lr, ai])
+    lr, ai, z, se, state = lr[target], ai[target], z[target], se[target], state[target]
+    if not len(lr):
+        return 0
+    found = collapse_duplicates(lr.astype(np.int64) * zb.shape[1] + ai, z, se)
+    filled = -_mark_conflicted(imputed_band, lr[found.dropped], ai[found.dropped])
+    k = found.keep
+    lr, ai, z, se, state = lr[k], ai[k], z[k], se[k], state[k]
+    open_ = state == 0
+    zb[lr[open_], ai[open_]] = z[open_]
+    sb[lr[open_], ai[open_]] = se[open_]
+    imputed_band[lr[open_], ai[open_]] = 1
+    filled += int(open_.sum())
+    held = state == 1
+    disagree = held & ((zb[lr, ai] != z) | (sb[lr, ai] != se))
+    return filled - _mark_conflicted(imputed_band, lr[disagree], ai[disagree])
+
+
+def _mark_conflicted(imputed_band: np.ndarray, lr: np.ndarray, ai: np.ndarray) -> int:
+    """Mark these cells conflicted; returns how many had been counted filled."""
+    if not len(lr):
+        return 0
+    n_analyses = imputed_band.shape[1]
+    rows, cols = np.divmod(np.unique(lr.astype(np.int64) * n_analyses + ai), n_analyses)
+    was_filled = int((imputed_band[rows, cols] == 1).sum())
+    imputed_band[rows, cols] = _CONFLICTED
+    return was_filled
+
+
+def _log_conflicting_fills(
+    shard_path: Path, conflicted: np.ndarray, r0: int, name_row: Callable[[int], str]
+) -> None:
+    """Log every fill record at a conflicted cell, one line each (D8).
+
+    A completion writes no Admission Record (ADR 0072), so its log is where
+    the fills it drops are named, all of them.
+    """
+    n_cells = int(conflicted.sum())
+    n_rows = 0
+    for records in _iter_fill_records(shard_path):
+        lr = records["row"] - r0
+        at = conflicted[lr, records["ai"]]
+        for row, analysis, z, se in zip(
+            records["row"][at].tolist(), records["ai"][at].tolist(),
+            records["z"][at].tolist(), records["se"][at].tolist(), strict=True,
+        ):
+            log.warning(
+                "Analysis %d: dropped fill %s (z=%r, se=%r): duplicate_conflicting",
+                analysis, name_row(row), z, se,
+            )
+            n_rows += 1
+    log.warning(
+        "complete-dense: %d fill(s) at %d cell(s) disagree, so none is kept "
+        "(duplicate_conflicting)",
+        n_rows, n_cells,
+    )
+
+
+def _seed_paired_bands(
+    zb: np.ndarray,
+    sb: np.ndarray,
+    src_plane: DenseZPlane,
+    src_se_plane: DenseSePlane,
+    out_to_src: np.ndarray,
+    r0: int,
+) -> None:
+    """Seed one band of z and SE from the source, refusing a source cell the
+    presence rule calls invalid (`require_paired`).
+
+    A fill lands where z is missing, so a half-missing source cell (spec §15)
+    would come out with an imputed z beside an observed SE, or with its SE
+    replaced by an imputed one. A missing marker other than the canonical NaN
+    would be read as missing and, where nothing fills the cell, written into
+    the completed planes as itself.
+
+    The band is judged whole, before any fill: a row no source cell maps to
+    holds the canonical NaN it was filled with, so it passes.
+    """
+    valid, rows = _band_source_rows(out_to_src, r0, r0 + len(zb))
+    if not len(valid):
+        return
+    zb[valid, :] = src_plane.rows(rows)
+    sb[valid, :] = src_se_plane.rows(np.asarray(rows, dtype=np.int64))
+    require_paired(
+        zb, sb, where=f"complete-dense, the source's cells in rows {r0:,} to {r0 + len(zb):,}"
+    )
+
+
+@dataclass
+class _BandTallies:
+    """What the band pass counts as it writes, per Analysis or in total."""
+
+    n_missing_off_panel: np.ndarray
+    se_out_of_range: np.ndarray
+    total_imputed: int = 0
+    n_missing_imputation_failed: int = 0
+    #: Flat positions of the cells `storable` does not store, whose
+    #: frequencies the eaf pass must not carry.
+    not_stored: list[np.ndarray] = field(default_factory=list)
+
+    def not_stored_positions(self) -> np.ndarray:
+        if not self.not_stored:
+            return np.empty(0, dtype=np.int64)
+        return np.concatenate(self.not_stored)
+
+
+def _write_completed_statistic_bands(
     root: Any,
     src_plane: DenseZPlane,
+    src_se_plane: DenseSePlane,
     out_to_src: np.ndarray,
     on_panel: np.ndarray,
     fill_shard_dir: Path,
     codec: StoreCodec,
     overflow: ZOverflowBuilder,
-    n_variants: int,
-    n_analyses: int,
     band_rows: int,
-    n_missing_off_panel: np.ndarray,
     impute_mask: np.ndarray | None,
-) -> tuple[int, int]:
-    """Seed z from the source, apply the fills, and write the z + imputed
-    bands, one row-band at a time. Missingness is accounted here, in the pass
-    that sees the fills land: per-Analysis off-panel missing accumulates into
-    ``n_missing_off_panel`` (in place), and on-panel cells still NaN after the
-    fills are the imputation failures. Out-of-range z cells go into the
-    ``overflow`` builder's side table, which the caller writes once, after the
-    whole pass, so the table is built by one codec plan.
+    name_row: Callable[[int], str] = str,
+) -> _BandTallies:
+    """Seed z and SE from the source, apply the fills, and write z, the
+    imputed mask and the scratch float32 SE, one row-band at a time.
 
-    Returns ``(total_imputed, n_missing_imputation_failed)``.
+    One pass, so each completed cell is judged whole (`storable`) before any
+    plane holds it, and the fills land in z and SE together. Missingness is
+    accounted in the pass that sees the fills land: per-Analysis off-panel
+    missing, and on-panel cells still missing after the fills (the imputation
+    failures). Out-of-range z cells go into ``overflow``, which the caller
+    writes once, after the whole pass. The SE band is written as-is; the
+    residual-SE rewrite finalises it afterwards.
     """
-    z_arr, imp_arr = root["z"], root["imputed"]
-    band = np.empty((band_rows, n_analyses), dtype=np.float32)
-    total_imputed = 0
-    n_missing_imputation_failed = 0
+    n_variants, n_analyses = (int(size) for size in root["z"].shape)
+    tallies = _BandTallies(
+        n_missing_off_panel=np.zeros(n_analyses, dtype=np.int64),
+        se_out_of_range=np.zeros(n_analyses, dtype=np.int64),
+    )
+    z_band = np.empty((band_rows, n_analyses), dtype=np.float32)
+    se_band = np.empty((band_rows, n_analyses), dtype=np.float32)
     for band_index, r0 in enumerate(range(0, n_variants, band_rows)):
         r1 = min(r0 + band_rows, n_variants)
-        zb = band[: r1 - r0]
+        zb, sb = z_band[: r1 - r0], se_band[: r1 - r0]
         zb[:] = np.nan
-        imp_band = np.zeros((r1 - r0, n_analyses), dtype=np.uint8)
-
-        valid, srows = _band_source_rows(out_to_src, r0, r1)
-        if len(valid):
-            zb[valid, :] = src_plane.rows(srows)
-
-        _count_band_off_panel_missing(n_missing_off_panel, zb, on_panel, r0, r1)
-
-        total_imputed += _apply_fill_shard_records(
-            zb,
-            imp_band,
-            _fill_shard_path(fill_shard_dir, band_index),
-            r0,
-            "z",
-            impute_mask=impute_mask,
-            validate_mask=True,
-        )
-
-        n_missing_imputation_failed += _count_band_imputation_failed(zb, on_panel, r0, r1)
-
-        z_arr[r0:r1] = codec.encode_z(
-            zb, positions=positions_row_band(r0, n_analyses), overflow=overflow
-        )
-        imp_arr[r0:r1] = imp_band
-    return total_imputed, n_missing_imputation_failed
-
-
-def _write_completed_se_bands(
-    root: Any,
-    src_se_plane: DenseSePlane,
-    out_to_src: np.ndarray,
-    fill_shard_dir: Path,
-    n_variants: int,
-    n_analyses: int,
-    band_rows: int,
-) -> None:
-    """Seed se from the source and apply the same fills pass 1 applied to z.
-
-    No mask check and no counts here: pass 1 read the same shards (raising on
-    a disagreement) and accounted the outcomes, and this pass must fill exactly
-    the cells pass 1 filled for z and se to describe the same completed store.
-    The scratch float32 se band is written as-is; the residual-SE rewrite
-    finalises it afterwards.
-    """
-    se_arr = root["se"]
-    band = np.empty((band_rows, n_analyses), dtype=np.float32)
-    for band_index, r0 in enumerate(range(0, n_variants, band_rows)):
-        r1 = min(r0 + band_rows, n_variants)
-        sb = band[: r1 - r0]
         sb[:] = np.nan
-
-        valid, srows = _band_source_rows(out_to_src, r0, r1)
-        if len(valid):
-            sb[valid, :] = src_se_plane.rows(np.asarray(srows, dtype=np.int64))
-
-        _apply_fill_shard_records(
-            sb, None, _fill_shard_path(fill_shard_dir, band_index), r0, "se"
+        imp_band = np.zeros((r1 - r0, n_analyses), dtype=np.uint8)
+        _seed_paired_bands(zb, sb, src_plane, src_se_plane, out_to_src, r0)
+        _count_band_off_panel_missing(tallies.n_missing_off_panel, zb, on_panel, r0, r1)
+        tallies.total_imputed += _apply_fill_shard_records(
+            zb, sb, imp_band, _fill_shard_path(fill_shard_dir, band_index), r0,
+            impute_mask=impute_mask, name_row=name_row,
         )
+        tallies.n_missing_imputation_failed += _count_band_imputation_failed(
+            zb, on_panel, r0, r1
+        )
+        _write_judged_band(root, CellValues(zb, sb, imputed=imp_band), r0, codec, overflow, tallies)
+    return tallies
 
-        se_arr[r0:r1] = sb
+
+def _write_judged_band(
+    root: Any,
+    band: CellValues,
+    r0: int,
+    codec: StoreCodec,
+    overflow: ZOverflowBuilder,
+    tallies: _BandTallies,
+) -> None:
+    """Judge one completed band whole (`storable`), then write z, the imputed
+    mask and the scratch SE from what it keeps, counting what it does not."""
+    n_analyses = int(root["z"].shape[1])
+    r1 = r0 + len(band.z)
+    kept = storable(
+        band, np.arange(n_analyses), n_analyses, where=f"complete-dense, rows {r0:,} to {r1:,}"
+    )
+    tallies.se_out_of_range += kept.se_out_of_range
+    if not kept.stored.all():
+        tallies.not_stored.append(np.flatnonzero(~kept.stored) + r0 * n_analyses)
+    root["z"][r0:r1] = codec.encode_z(
+        kept.cells.z, positions=positions_row_band(r0, n_analyses), overflow=overflow
+    )
+    root["imputed"][r0:r1] = kept.cells.imputed
+    root["se"][r0:r1] = kept.cells.se
 
 
 def _carried_eaf_baseline(
@@ -1393,12 +1545,14 @@ def _write_completed_eaf_bands(
     n_variants: int,
     n_analyses: int,
     band_rows: int,
+    not_stored: np.ndarray,
 ) -> None:
     """Carry observed frequencies across the row remap, one row-band at a time.
 
     Observed cells keep their source value and nothing else: an imputed cell's
-    frequency is the panel's (stored once per variant and applied on read), and
-    an observed cell whose source reported none stays absent. The exception
+    frequency is the panel's (stored once per variant and applied on read), an
+    observed cell whose source reported none stays absent, and so does one the
+    statistic pass did not store (``not_stored``, flat positions). The exception
     side table is written only when the release carries a baseline -- a
     baseline-less eaf plane has no residual codes to make exceptions for.
     """
@@ -1418,6 +1572,8 @@ def _write_completed_eaf_bands(
                 np.repeat(out_to_src[r0:r1][valid], n_analyses),
                 np.tile(np.arange(n_analyses, dtype=np.int64), len(valid)),
             ).reshape(len(valid), n_analyses)
+        lo, hi = np.searchsorted(not_stored, [r0 * n_analyses, r1 * n_analyses])
+        eb.reshape(-1)[not_stored[lo:hi] - r0 * n_analyses] = np.nan
         band_baseline = (
             None
             if out_baseline is None
@@ -1464,20 +1620,17 @@ def _write_completed_bands(
     source_encoding: StoreEncoding,
     encoding: StoreEncoding,
     impute_mask: np.ndarray | None = None,
-) -> tuple[np.ndarray, int, int]:
+    name_row: Callable[[int], str] = str,
+) -> _BandTallies:
     """Seed z/se from the source, apply the imputed fills, and write
-    z/se/imputed one row-band at a time, in cohesive phases: the z pass seeds
-    from the source and applies the fills while accounting missingness and
-    validating the fill shards against the ancestry-match filter; the se pass
-    fills exactly the same cells (source z/se missingness is consistent -- a
-    validated store invariant); the eaf pass carries observed frequencies
-    across the row remap; and the residual-SE rewrite finalises the scratch
-    float32 se plane. Each phase streams through its own float32 band buffer,
-    so peak memory is ~one band rather than z + se + imputed held together,
-    and each reads only its own source array once. Returns
-    ``(n_missing_off_panel[n_analyses], n_missing_imputation_failed,
-    total_imputed)``. Fill records are read from per-band shard files in
-    bounded chunks.
+    z/se/imputed one row-band at a time, in cohesive phases: the statistic
+    pass seeds z and SE from the source, applies the fills to both, judges
+    each band's cells whole, and accounts missingness while validating the
+    fill shards against the ancestry-match filter; the eaf pass carries
+    observed frequencies across the row remap; and the residual-SE rewrite
+    finalises the scratch float32 se plane. The statistic pass holds a z and
+    an SE band, the others one band each. Fill records are read from
+    per-band shard files in bounded chunks.
 
     ``impute_mask`` (bool per analysis; ``None`` = impute all) is the
     per-Analysis ancestry-match filter (ADR 0028): a masked-out analysis stays
@@ -1487,36 +1640,24 @@ def _write_completed_bands(
     same act; this function only checks that the shards it reads honour it.
     """
     root = staged.arrays(mode="a")
-    codec = StoreCodec(encoding)
     overflow = ZOverflowBuilder()
     band_rows = completion_band_rows(_dense_shard_rows(staged, effective_chunks))
-
-    n_missing_off_panel = np.zeros(n_analyses, dtype=np.int64)
-
-    src_se_plane = DenseSePlane.open(src_root, source_encoding)
     # Source z is read decoded and written re-encoded, through the same plan --
     # completion moves values between two planes, it does not reinterpret them.
-    src_plane = DenseZPlane.open(src_root, source_encoding)
-
-    total_imputed, n_missing_imputation_failed = _write_completed_z_bands(
+    tallies = _write_completed_statistic_bands(
         root,
-        src_plane,
+        DenseZPlane.open(src_root, source_encoding),
+        DenseSePlane.open(src_root, source_encoding),
         out_to_src,
         on_panel,
         fill_shard_dir,
-        codec,
+        StoreCodec(encoding),
         overflow,
-        n_variants,
-        n_analyses,
         band_rows,
-        n_missing_off_panel,
         impute_mask,
+        name_row,
     )
     overflow.table().write(root)
-
-    _write_completed_se_bands(
-        root, src_se_plane, out_to_src, fill_shard_dir, n_variants, n_analyses, band_rows
-    )
 
     if "eaf" in root and "eaf" in src_root:
         _write_completed_eaf_bands(
@@ -1528,8 +1669,9 @@ def _write_completed_bands(
             n_variants,
             n_analyses,
             band_rows,
+            np.sort(tallies.not_stored_positions()),
         )
 
     _rewrite_completed_residual_se(root, src_root, encoding)
 
-    return n_missing_off_panel, n_missing_imputation_failed, total_imputed
+    return tallies

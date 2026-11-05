@@ -30,8 +30,9 @@ import zarr
 from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._rss import run_probe
-from opengwasdb.layouts.dense.top_hits import threshold_key, write_top_hit_indexes
+from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes
 from opengwasdb.query import query_store
+from opengwasdb.top_hits import threshold_key
 
 STORE = Path("/local-scratch/data/opengwas/opengwasdb/ukb-b.opengwasdb")
 MANIFEST = Path("/home/gh13047/repo/opengwasdb/data/ukb-b/manifest.tsv")

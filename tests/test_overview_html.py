@@ -1,20 +1,39 @@
-"""Tests for opengwasdb/layouts/dense/overview.py's house-style redesign (issue #36)."""
+"""Tests for opengwasdb/overview.py -- overview.html's house-style redesign
+(issue #36) and its gather/render split (issue #57)."""
 
 from __future__ import annotations
 
+import builtins
 import hashlib
 import json
 import math
 import shutil
+import subprocess
+import sys
 from pathlib import Path
+from typing import NoReturn
 
 import numpy as np
+import pytest
+import zarr
 
+from opengwasdb import overview as overview_module
 from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
-from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.rho import build_dense_rho, write_rho_group
 from opengwasdb.model.analyses import AnalysesTable, read_analyses
+from opengwasdb.overview import (
+    FileGuideEntry,
+    RhoHeatmap,
+    RhoHistogram,
+    RhoOverview,
+    RhoPairRow,
+    RhoTraitRow,
+    StoreOverview,
+    gather_store_overview,
+    render_overview_html,
+    write_overview_html,
+)
 
 
 def _table() -> AnalysesTable:
@@ -259,6 +278,244 @@ def _rho_section(content: str) -> str:
     return content.split('id="tab-rho"')[1].split('id="tab-guide"')[0]
 
 
+# ── The renderer takes a value, not a store (issue #57) ─────────────────────
+
+
+def _hand_built_rho() -> RhoOverview:
+    """A Rho tab's data built as literals -- no store, no rho estimation.
+
+    Shapes and numbers are hand-chosen so the renderer's output can be
+    asserted against them: four bins spanning the whole [-1, 1] domain, one
+    strongly positive pair, one negative pair whose label is blank, a 3 x 3
+    clustered submatrix carrying a NaN pair, and a trait row with no finite
+    partner beside one that has.
+    """
+    return RhoOverview(
+        summary=(
+            ("Method", "pleiodb-cml"),
+            ("Analyses", "3"),
+            ("Analysis pairs", "3"),
+            ("Pairs below min_nulls (NaN)", "1"),
+            ("z_thresh", "1.0"),
+            ("min_nulls", "7"),
+            ("window_bp", "50"),
+            ("Variants used (thinned)", "30"),
+            ("Observed only", "False"),
+        ),
+        n_analyses=3,
+        histogram=RhoHistogram(
+            counts=(1, 2, 30, 4),
+            edges=(-1.0, -0.5, 0.0, 0.5, 1.0),
+            n_finite_pairs=37,
+        ),
+        top_positive=(RhoPairRow("a0", "Trait 0", "a1", "Trait 1", 0.6123, 30),),
+        top_negative=(RhoPairRow("a2", "", "a0", "Trait 0", -0.4321, 5),),
+        heatmap=RhoHeatmap(
+            k=3,
+            labels=("Trait 1", "Trait 0", "a2"),
+            rho=(1.0, 0.6123, None, 0.6123, 1.0, None, None, None, 1.0),
+            n_null=(0, 30, 0, 30, 0, 0, 0, 0, 0),
+        ),
+        traits=(
+            RhoTraitRow("a0", "Trait 0", 0.5123, 0.6123, "a1", "Trait 1", 30),
+            RhoTraitRow("a2", "", None, None, None, "", None),
+        ),
+    )
+
+
+def _hand_built_overview(*, rho: RhoOverview | None = None) -> StoreOverview:
+    return StoreOverview(
+        store_id="fixture-store",
+        release_id="v1",
+        completion_state="observed_only",
+        table=_table(),
+        files=(
+            FileGuideEntry("analyses.tsv", "human", "Analytical Metadata."),
+            FileGuideEntry("data.zarr", "internal", "Association statistics."),
+            FileGuideEntry("overview.html", "human", "This page."),
+        ),
+        rho=rho,
+    )
+
+
+def test_render_overview_html_renders_a_hand_built_value_without_reading_a_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole page from a value, with every read path booby-trapped.
+
+    `StoreOverview` carries no store path, so this is also the check that the
+    renderer's signature cannot quietly start needing one.
+    """
+
+    def forbidden(*_args: object, **_kwargs: object) -> NoReturn:
+        raise AssertionError("render_overview_html must not read the store")
+
+    monkeypatch.setattr(Path, "iterdir", forbidden)
+    monkeypatch.setattr(Path, "read_text", forbidden)
+    monkeypatch.setattr(Path, "open", forbidden)
+    monkeypatch.setattr(builtins, "open", forbidden)
+    monkeypatch.setattr(overview_module, "open_group", forbidden)
+    monkeypatch.setattr(overview_module.json, "loads", forbidden)
+
+    content = render_overview_html(_hand_built_overview(rho=_hand_built_rho()))
+
+    assert content.startswith("<!doctype html>")
+    assert "fixture-store" in content
+    assert "release v1" in content
+    assert "observed_only" in content
+    assert "2 Analyses" in content
+    for tab in ("analyses", "ancestry", "rho", "guide"):
+        assert f'data-tab="{tab}"' in content
+
+
+def test_rho_histogram_draws_one_bar_per_gathered_bin():
+    content = render_overview_html(_hand_built_overview(rho=_hand_built_rho()))
+    svg = _rho_section(content).split("<svg")[1].split("</svg>")[0]
+
+    assert svg.count("<rect") == 4
+    # The tallest bin (30 of 30 pairs) spans the full plot height, 190 - 12 - 34.
+    assert 'y="12.0"' in svg and 'height="144.0"' in svg
+    # The bar's tooltip carries the bin's own edges and count, not a recomputed one.
+    assert "-1.00 to -0.50: 1 pairs" in svg
+    assert "0.00 to 0.50: 30 pairs" in svg
+    assert "Distribution of 37 finite rho values" in svg
+
+
+def test_rho_histogram_has_labelled_axes():
+    content = render_overview_html(_hand_built_overview(rho=_hand_built_rho()))
+    svg = _rho_section(content).split("<svg")[1].split("</svg>")[0]
+
+    # Axis titles.
+    assert ">rho</text>" in svg
+    assert ">Analysis pairs</text>" in svg
+    # X-axis ticks span the full [-1, 1] domain, not just the observed range.
+    for tick in ("-1", "-0.5", "0", "0.5", "1"):
+        assert f">{tick}</text>" in svg
+    # Y-axis ticks: 0 and the tallest bar's count.
+    assert ">0</text>" in svg
+    assert ">30</text>" in svg
+
+
+def test_rho_heatmap_renders_the_payload_the_gather_step_prepared():
+    content = render_overview_html(_hand_built_overview(rho=_hand_built_rho()))
+    section = _rho_section(content)
+
+    payload = json.loads(section.split('class="rho-heatmap-data">')[1].split("</script>")[0])
+    # Order and NaN-as-null come from the value; the renderer neither clusters
+    # nor re-derives them.
+    assert payload["k"] == 3
+    assert payload["labels"] == ["Trait 1", "Trait 0", "a2"]
+    assert payload["rho"][2] is None
+    assert payload["n_null"][1] == 30
+    assert "300" not in section
+
+
+def test_rho_pair_and_trait_tables_render_a_hand_built_value():
+    content = render_overview_html(_hand_built_overview(rho=_hand_built_rho()))
+    section = _rho_section(content)
+
+    top_pos = section.split('id="rho-top-pos"')[1].split("</table>")[0]
+    assert "0.6123" in top_pos and "Trait 1" in top_pos and ">30<" in top_pos
+    top_neg = section.split('id="rho-top-neg"')[1].split("</table>")[0]
+    assert "-0.4321" in top_neg
+    # A2 has no label, so the label cell is the muted blank rather than a
+    # repeated analysis id.
+    assert '<td class="blank">—</td>' in top_neg
+
+    traits = section.split('id="rho-trait-summary"')[1].split("</table>")[0]
+    assert "0.5123" in traits and "0.6123" in traits
+    assert "a1 (Trait 1)" in traits
+    # The Analysis with no finite partner gets a row of blanks, not zeros.
+    assert '<td class="blank">—</td>' in traits
+
+
+def test_the_overview_module_imports_in_a_fresh_interpreter(tmp_path):
+    """`opengwasdb.overview` must import without a cycle.
+
+    It reads Rho and Indexed Variant Subsets through `layouts.dense`, whose
+    `__init__` imports the builder that writes this page -- so importing the
+    overview first, as `ogdb` and the converters do, used to raise
+    `ImportError: cannot import name 'write_overview_html' from partially
+    initialized module` (issue #57). The suite imports the builder first, which
+    is exactly why it never saw that.
+    """
+    completed = subprocess.run(
+        [sys.executable, "-c", "import opengwasdb.overview"],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+# ── The gather step (issue #57) ─────────────────────────────────────────────
+
+
+def test_gather_store_overview_carries_a_missing_rho_group_as_none(tmp_path):
+    _write_manifest(tmp_path)
+
+    value = gather_store_overview(tmp_path, _table())
+
+    assert value.store_id == "fixture-store"
+    assert value.release_id == "v1"
+    assert value.completion_state == "observed_only"
+    assert value.rho is None
+    assert value.indexed_subsets is None
+    assert [entry.name for entry in value.files] == ["manifest.json", "overview.html"]
+
+
+def test_gather_store_overview_carries_a_corrupt_manifest_as_blanks(tmp_path):
+    (tmp_path / "manifest.json").write_text("{not json", encoding="utf-8")
+
+    value = gather_store_overview(tmp_path, _table())
+
+    assert (value.store_id, value.release_id, value.completion_state) == ("", "", "")
+
+
+def test_gather_store_overview_lets_an_unexpected_failure_propagate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only failures an absent or damaged artifact raises are degraded.
+
+    A failure the gather step has no account of -- here opening `data.zarr`
+    raising `RuntimeError` -- must abort the gather rather than be read as "this
+    release has no Rho Matrix", which is how a store that cannot be read gets
+    rendered as a page that looks complete (issue #57; CONTRIBUTING, "fail
+    loudly over degrading quietly"). A broad `except Exception` in the probe
+    turns this red.
+    """
+    _write_manifest(tmp_path)
+    (tmp_path / "data.zarr").mkdir()
+
+    def explode(*_args: object, **_kwargs: object) -> NoReturn:
+        raise RuntimeError("the zarr stack is broken")
+
+    monkeypatch.setattr(overview_module, "open_group", explode)
+
+    with pytest.raises(RuntimeError, match="the zarr stack is broken"):
+        gather_store_overview(tmp_path, _table())
+
+
+def test_gather_store_overview_precomputes_the_rho_bins_and_clustering(tmp_path):
+    """The Rho tab's statistics are the gather step's, not the renderer's."""
+    store = _build_rho_store(tmp_path)
+
+    value = gather_store_overview(store, read_analyses(store / "analyses.tsv"))
+
+    assert value.rho is not None
+    histogram = value.rho.histogram
+    assert len(histogram.counts) == 201  # the histogram's bin count, decided here
+    assert len(histogram.edges) == 202
+    assert sum(histogram.counts) == histogram.n_finite_pairs
+    assert value.rho.n_analyses == 6
+    assert value.rho.heatmap is not None
+    assert value.rho.heatmap.k == 6  # min(300, 6)
+    assert len(value.rho.heatmap.rho) == 36
+    assert value.rho.top_positive[0].n_null >= 5
+    assert len(value.rho.traits) == 6
+
+
 def test_overview_html_omits_rho_tab_without_rho_group(tmp_path):
     _write_manifest(tmp_path)
     out = write_overview_html(tmp_path, _table())
@@ -315,23 +572,6 @@ def test_rho_tab_histogram_is_inline_svg_no_external_assets(tmp_path):
     assert "<rect" in section
     # Self-contained store artifact (module docstring): no network, no CDN.
     assert "http://" not in content and "https://" not in content
-
-
-def test_rho_tab_histogram_has_labelled_axes(tmp_path):
-    store = _build_rho_store(tmp_path)
-    table = read_analyses(store / "analyses.tsv")
-    content = write_overview_html(store, table).read_text(encoding="utf-8")
-    section = _rho_section(content)
-    svg = section.split("<svg")[1].split("</svg>")[0]
-
-    # Axis titles.
-    assert ">rho</text>" in svg
-    assert ">Analysis pairs</text>" in svg
-    # X-axis ticks span the full [-1, 1] domain, not just the observed range.
-    for tick in ("-1", "-0.5", "0", "0.5", "1"):
-        assert f">{tick}</text>" in svg
-    # Y-axis ticks: 0 and the tallest bar's count.
-    assert ">0</text>" in svg
 
 
 def test_rho_tab_top_pairs_tables_reuse_existing_search_sort_and_find_the_correlated_pair(
@@ -491,6 +731,15 @@ def _indexed_subsets_section(content: str) -> str:
     return content.split('id="tab-indexed-subsets"')[1].split('id="tab-guide"')[0]
 
 
+def _drop_overflow_only_record(store: Path, name: str = "hm3") -> None:
+    """Make a published group the shape of one built before the option existed."""
+    group = zarr.open_group(
+        str(store / "data.zarr" / "indexed_subsets" / name), mode="r+"
+    )
+    del group.attrs["overflow_only_count"]
+    del group.attrs["overflow_only_sample"]
+
+
 def test_overview_html_omits_indexed_subsets_tab_without_namespace(tmp_path):
     _write_manifest(tmp_path)
     content = write_overview_html(tmp_path, _table()).read_text(encoding="utf-8")
@@ -639,7 +888,7 @@ def test_indexed_subsets_physical_size_matches_du(tmp_path):
     """
     import subprocess
 
-    from opengwasdb.layouts.dense.overview import _physical_bytes
+    from opengwasdb.overview import _physical_bytes
 
     (tmp_path / "z").mkdir()
     (tmp_path / "z" / "chunk").write_bytes(b"x" * 10)
@@ -655,6 +904,41 @@ def test_indexed_subsets_physical_size_matches_du(tmp_path):
     assert _physical_bytes(tmp_path) == du
 
 
+def test_indexed_subsets_tab_renders_a_group_built_before_overflow_only_count(
+    tmp_path: Path,
+) -> None:
+    """A group predating the Overflow-only record reads as zero, not a crash.
+
+    ADR 0065: the builder that wrote such a group could only refuse an
+    Overflow-only ALID, so the count it lacks is zero by construction, and the
+    page shows the fact the read seam shows rather than an absent cell.
+    """
+    store = _build_indexed_subset_store(tmp_path)
+    _drop_overflow_only_record(store)
+    table = read_analyses(store / "analyses.tsv")
+
+    content = write_overview_html(store, table).read_text(encoding="utf-8")
+    section = _indexed_subsets_section(content)
+    subsets = gather_store_overview(store, table).indexed_subsets
+
+    assert ">hm3<" in section
+    assert "<th>Overflow-only</th>" in section
+    assert subsets is not None
+    assert subsets.problems == ()
+    assert subsets.rows[0]["Overflow-only"] == "0"
+
+
+def test_indexed_subset_value_leaves_an_absence_no_decision_defines_blank() -> None:
+    """Only an attribute a decision gives a meaning to is filled in.
+
+    The rest read blank, how the page shows every other unrecorded value, rather
+    than as an invented number or a crash.
+    """
+    assert overview_module._indexed_subset_value({}, "overflow_only_count") == "0"
+    assert overview_module._indexed_subset_value({}, "absent_count") == ""
+    assert overview_module._indexed_subset_value({}, "created_at") == ""
+
+
 def test_indexed_subsets_total_counts_each_traversal_once(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -663,21 +947,22 @@ def test_indexed_subsets_total_counts_each_traversal_once(
     Counting the `_physical_bytes` calls makes the double traversal fail rather
     than merely cost time: two published subsets must be walked once each.
     """
-    from opengwasdb.layouts.dense import overview
-
     store = _build_two_subset_store(tmp_path)
 
-    real = overview._physical_bytes
+    real = overview_module._physical_bytes
     seen: list[Path] = []
 
     def counting(path: Path) -> int:
         seen.append(path)
         return real(path)
 
-    monkeypatch.setattr(overview, "_physical_bytes", counting)
-    rows, total, problems = overview._collect_indexed_subsets(store)
+    monkeypatch.setattr(overview_module, "_physical_bytes", counting)
+    subsets = gather_store_overview(store, read_analyses(store / "analyses.tsv")).indexed_subsets
 
-    assert problems == []
+    assert subsets is not None
+    assert subsets.problems == ()
     assert sorted(path.name for path in seen) == ["hm3", "panel"]
-    assert total == sum(real(path) for path in overview._published_subset_paths(store))
-    assert len(rows) == 2
+    assert subsets.total_bytes == sum(
+        real(path) for path in overview_module._published_subset_paths(store)
+    )
+    assert len(subsets.rows) == 2

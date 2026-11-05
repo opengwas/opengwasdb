@@ -1,5 +1,11 @@
 # Query facade stays three adapters behind one documented contract
 
+> **Partly superseded by [ADR 0070](0070-one-presence-rule-for-every-reader.md).**
+> §7 (finiteness differs by layout) is replaced by one presence rule for every
+> layout; §8 is withdrawn, since `top_hits()` applies the same rule; §1's result
+> type is an `Associations` record read as this mapping; and `lookup()` is
+> Analysis-major on every adapter. The rest stands.
+
 Supersedes nothing; amends ADR-0006 the same way ADR-0020 does.
 
 ## Context
@@ -39,7 +45,9 @@ one implements explicit rather than implicit:
 2. **`top_hits()` ordering is genomic order** — sorted by
    `(analysis_index, variant_index)` — on every adapter and every internal
    path, matching the `group.attrs["order"]` the top-hit index itself is
-   built with (`layouts/dense/top_hits.py`, `layouts/ragged/top_hits.py`).
+   built with (`opengwasdb/top_hits.py`, which every layout's builder writes
+   through; it was `layouts/dense/top_hits.py` and `layouts/ragged/top_hits.py`
+   until issue #53).
    The Ragged full-scan fallback previously sorted by descending `|z|` and
    ignored `analysis_id`; both are fixed in `facade.py` so the same call
    returns the same shape of answer regardless of which physical path served

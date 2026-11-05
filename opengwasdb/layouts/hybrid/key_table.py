@@ -31,7 +31,6 @@ from typing import cast
 
 import numpy as np
 
-from opengwasdb.build.liftover import LiftedRow, lift_hg19_to_hg38, statistics_swap
 from opengwasdb.layouts.hybrid.key_runs import HG19, HG38
 from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
@@ -39,6 +38,8 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
     packed_alids,
     packed_fields,
 )
+from opengwasdb.variants.normalise import canonical_alid
+from opengwasdb.variants.routing import SitePlacement, place_sites
 
 __all__ = [
     "HG19",
@@ -295,10 +296,9 @@ def _string_hashes(strings: Sequence[str]) -> np.ndarray:
 
 
 def _canonical_source_key(key: str) -> str:
-    """The ALID a source key names before any liftover (alleles sorted)."""
+    """The ALID a source key names before any liftover (`canonical_alid`)."""
     chrom, position, ref, alt = key.split(":")
-    a1, a2 = sorted((ref, alt))
-    return f"{chrom}:{int(position)}:{a1}:{a2}"
+    return canonical_alid(chrom, int(position), ref, alt)
 
 
 def _hashed_raw_list(queries: np.ndarray, merged: DistinctKeys) -> list[str]:
@@ -388,16 +388,13 @@ def _lift_hg19(
     )
     if not tuples:
         return
-    lifted = lift_hg19_to_hg38(
-        tuples,
-        chain_file=chain_file,
-        failure_threshold=liftover_failure_threshold,
+    placement = place_sites(
+        {"hg19": tuples}, chain_file=chain_file, failure_threshold=liftover_failure_threshold
     )
-    _require_oriented(lifted)
+    _require_oriented(tuples, placement)
     lift_positions = np.concatenate([packed_positions, hashed_positions])
     for position, tup in zip(lift_positions.tolist(), tuples, strict=True):
-        row = lifted.get(tup)
-        alids[position] = None if row is None else row.alid
+        alids[position] = placement.alid.get(tup)
 
 
 class UnorientedOffReferenceLiftError(ValueError):
@@ -413,16 +410,19 @@ class UnorientedOffReferenceLiftError(ValueError):
     """
 
 
-def _require_oriented(lifted: dict[tuple[str, int, str, str], LiftedRow]) -> None:
-    """Refuse a fold whose lift re-oriented any variant's statistics."""
-    reoriented = [key for key, row in lifted.items() if statistics_swap(key, row)]
+def _require_oriented(
+    tuples: list[tuple[str, int, str, str]], placement: SitePlacement
+) -> None:
+    """Refuse a fold whose lift re-oriented any variant's statistics, naming the
+    first such key in the order the keys were lifted."""
+    reoriented = [key for key in tuples if key in placement.reoriented]
     if not reoriented:
         return
     first = reoriented[0]
     raise UnorientedOffReferenceLiftError(
         f"{len(reoriented)} off-reference variant(s) lift onto the reverse strand, "
         f"which re-orients their statistics (first: hg19 "
-        f"{first[0]}:{first[1]}:{first[2]}:{first[3]} -> {lifted[first].alid}); this "
+        f"{first[0]}:{first[1]}:{first[2]}:{first[3]} -> {placement.alid[first]}); this "
         f"single-pass build's fold cannot carry that orientation, so it would store "
         f"a wrong sign. Build this source two-pass (a --reference-panel axis, or no "
         f"--variant-reference) so the lift happens in Pass 1 (issue #284)."

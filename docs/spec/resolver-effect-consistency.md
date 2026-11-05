@@ -80,3 +80,5 @@ The p-value reaches the check through the metrics projection:
 `MetricsChunk.p_value` / `TabularMetricsRow.p_value`, the finite source value or
 `NaN`/`None`, with no range rule, identical in the row-wise and blocked
 projections. Column-map collections supply it through their `p_value` column (`gwas-ssf`: `p_value`; `finngen-r13`: `pval`).
+The FinnGen reader (`opengwasdb.finngen-r13`) reads `pval` too, for the check
+only: it never derives a standard error from it.

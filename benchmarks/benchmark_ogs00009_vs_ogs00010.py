@@ -662,22 +662,25 @@ def read_cells(q: Any, rows: np.ndarray, cols: np.ndarray) -> Cells:
     """Decode z, SE, EAF and the imputed mask for `rows` x every Analysis.
 
     A contiguous run reads as a band; a scattered set by orthogonal index. A
-    cell is observed exactly as the query facade labels it: finite z and SE,
-    imputed flag 0.
+    cell is observed exactly as the query facade labels it: present (neither
+    marker set) with imputed flag 0 (ADR 0070).
     """
+    from opengwasdb.associations import Cells as Region
+    from opengwasdb.associations import DenseGridReader, State
+
     rows = np.asarray(rows, dtype=np.int64)
-    z = q._z.rows(rows)
-    eaf = q._eaf.read_rows(rows, want_imputed=True)
-    if eaf.imputed is None:
+    grid = DenseGridReader.open(q.store.arrays(mode="r"), q.store.manifest.encoding)
+    found = grid.inspect(Region.variants(rows))
+    if found.flags is None:
         raise SystemExit("a Reference-Completed Store returned no imputed mask")
-    se = q._se.rows(rows, eaf=eaf.values)
-    observed = np.isfinite(z) & np.isfinite(se) & (eaf.imputed == 0)
+    shape = (len(rows), -1)
+    z, se, eaf = (found.z.reshape(shape), found.se.reshape(shape), found.eaf.reshape(shape))
+    observed = (found.state == State.OBSERVED).reshape(shape)
     ident = q._variant_axis.identity_by_indices(rows)
     if ident is None:
         raise SystemExit("no mmap'd ALID index; refusing per-row identity seeks")
     return Cells(
-        ident["alid"].astype(str), z[:, cols], se[:, cols], np.asarray(eaf.values)[:, cols],
-        observed[:, cols],
+        ident["alid"].astype(str), z[:, cols], se[:, cols], eaf[:, cols], observed[:, cols],
     )
 
 

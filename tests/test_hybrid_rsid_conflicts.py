@@ -120,6 +120,7 @@ def _cli(manifest: Path, reference: Path, store: Path, *extra: str):
         [
             "build-hybrid", str(manifest), str(store),
             "--variant-reference", str(reference),
+            "--admission-record", f"{store}.admission",
             "--store-id", "s", "--release-id", "r", *extra,
         ],
     )

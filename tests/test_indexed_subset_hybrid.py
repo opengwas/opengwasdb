@@ -64,11 +64,11 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     remove_indexed_subset,
     resolve_variant_list,
 )
-from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.model.analyses import read_analyses
+from opengwasdb.overview import write_overview_html
 from opengwasdb.query import query_store
 from opengwasdb.validation import validate_store
 
@@ -526,9 +526,9 @@ def test_hybrid_indexed_query_never_reads_the_primary_planes_or_the_overflow(
     monkeypatch.setattr(DenseZPlane, "column", boom)
     monkeypatch.setattr(DenseSePlane, "column", boom)
     monkeypatch.setattr(DenseEafPlane, "read_column", boom)
-    from opengwasdb.query.facade import HybridStoreQuery
+    from opengwasdb.associations import CsrReader
 
-    monkeypatch.setattr(HybridStoreQuery, "_overflow_for_analysis", boom)
+    monkeypatch.setattr(CsrReader, "read", boom)
     result = _analyse(indexed_root, "trait_a", indexed_subset="hm3")
     assert len(result["z"]) > 0, "the fixture must return rows for this to prove anything"
 

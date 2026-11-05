@@ -28,7 +28,6 @@ import pytest
 from test_resolve_manifest import _write_panel
 
 from opengwasdb.build.resolve import AnalysisRequest, resolve_analysis
-from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
@@ -36,6 +35,8 @@ from opengwasdb.model.info_score_policy import InfoScorePolicy, InfoScoreState
 from opengwasdb.query import query_store
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
 from opengwasdb.readers.interface import ImputationScoreDeclaration, ImputationScoreKind
+from opengwasdb.variants.routing import AssociationBatch
+from opengwasdb.variants.routing import table as route_table
 
 DECLARATION = ImputationScoreDeclaration(
     "quality_metric", ImputationScoreKind.IMPUTATION_INFO, "Provider Table 2 INFO"
@@ -63,7 +64,7 @@ SCORED_ROWS: tuple[tuple[int, float, float, str], ...] = (
 #: sees its (usable) score.
 NO_EFFECT_ROW = (3000, "NA", "0.1", "0.9")
 
-#: Associations grouped into flushes by the test that patches `_RESOLVE_BATCH`
+#: Associations grouped into flushes by the test that patches the routing batch
 #: down to 3, so each comment below is one flush. Two flushes in a row drop every
 #: association they hold -- the case where a buffer left holding the previous
 #: batch filters one batch's rows against another's.
@@ -227,13 +228,27 @@ def _stored_arrays(store: Path, alids: Sequence[str]) -> dict[str, np.ndarray]:
 
 
 def test_score_buffers_out_of_step_with_the_batch_fail_loudly():
-    """Nine buffers hold one batch. A score buffer left holding an earlier batch
-    would filter one batch's rows against another's mask -- the state that made
-    the first version of this filter raise IndexError or keep the wrong rows -- so
-    it is refused rather than routed (stores #175)."""
-    with pytest.raises(ValueError, match="hold 2 row"):
-        hybrid_build._require_one_batch([0.9, 0.7], [1.0])
-    hybrid_build._require_one_batch([0.9], [1.0])
+    """One batch's columns hold its rows. A score column left holding an earlier
+    batch would filter one batch's rows against another's mask -- the state that
+    made the first version of this filter raise IndexError or keep the wrong rows
+    -- so it is refused rather than routed (stores #175)."""
+
+    def batch(scores: list[float]) -> AssociationBatch:
+        return AssociationBatch(
+            chromosome=["1"],
+            position=[1000],
+            ref=["A"],
+            alt=["G"],
+            z=np.array([1.0]),
+            se=np.array([0.5]),
+            eaf=np.array([np.nan]),
+            imputation_score=np.array(scores),
+            imputation_status=np.array(["usable"] * len(scores), dtype=object),
+        )
+
+    with pytest.raises(ValueError, match=r"hold \[1, 2\] row"):
+        batch([0.9, 0.7])
+    assert len(batch([0.9])) == 1
 
 
 @pytest.mark.parametrize("policy", sorted(MULTI_BATCH_EXPECTED))
@@ -241,7 +256,7 @@ def test_score_buffers_out_of_step_with_the_batch_fail_loudly():
 def test_multi_batch_streaming_counts_each_association_once(
     tmp_path, n_workers, policy, monkeypatch
 ):
-    """More associations than one `_RESOLVE_BATCH`: every flush must begin and end
+    """More associations than one routing batch: every flush must begin and end
     with the same empty buffers. A score buffer left holding the previous batch
     made the retention mask longer than the statistic lists, so `_retain_rows`
     either raised IndexError or silently kept another batch's rows -- and every
@@ -255,7 +270,7 @@ def test_multi_batch_streaming_counts_each_association_once(
         panel=MULTI_BATCH_PANEL,
         n_workers=n_workers,
     )
-    monkeypatch.setattr(hybrid_build, "_RESOLVE_BATCH", 3)
+    monkeypatch.setattr(route_table, "_RESOLVE_BATCH", 3)
     batched = _build(
         tmp_path / "batched",
         policy,

@@ -63,7 +63,7 @@ def subset_catalogue(
 
     Writes the filtered rows verbatim (all Catalogue columns), plus
     ``stored_effect_scale`` and ``original_sd_method``/``original_sd`` stamped
-    onto every row -- the columns `opengwasdb.layouts.dense.build_vcf._read_manifest`
+    onto every row -- the columns `opengwasdb.layouts.build_manifest.read_manifest`
     now requires that the Catalogue itself never carries (issues #17, #18).
     ``original_sd`` applies uniformly to every kept Analysis, like
     ``stored_effect_scale``; leave it ``None`` for ``original_sd_method``
@@ -160,6 +160,7 @@ def build_hybrid_from_catalogue(
     allow_unverified_eaf: bool = False,
     column_map: ColumnMap | str | Path | None = None,
     association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
+    admission_record: str | Path | None = None,
 ) -> SubsetResult:
     """Subset the Catalogue to ``ancestry`` and build a Hybrid store from it.
 
@@ -198,16 +199,15 @@ def build_hybrid_from_catalogue(
         subset.manifest_path,
         output_path,
         reference_panel=reference_panel,
-        store_id=store_id,
-        release_id=release_id,
-        overwrite=overwrite,
-        n_workers=n_workers,
+        store_id=store_id, release_id=release_id,
+        overwrite=overwrite, n_workers=n_workers,
         chunk_shape=chunk_shape or DEFAULT_CHUNK_SHAPE,
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
         column_map=column_map,
         association_coverage=association_coverage,
+        admission_record=admission_record,  # beside the Store unless named (#357)
     )
     record_catalogue_provenance(output_path, subset)
     return subset

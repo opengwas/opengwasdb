@@ -17,9 +17,11 @@
 # Each entry is the importing file and the name it imports, as the source writes it
 # (a relative import resolved against its package). Not a count: a count would let a
 # new import from a module already listed hide behind a fixed one, which is exactly
-# how the nine private names below from the Dense VCF builder would go unnoticed.
+# how the nine private names Variant Reference extraction took from the Dense VCF
+# builder would have gone unnoticed.
 #
-# Measured on `orch/416/359`: 23 imports over 9 component edges in 7 files.
+# Measured on `orch/416/359`: 23 imports over 9 component edges in 7 files. Variant
+# Routing (#352) removed Variant Reference extraction's ten: 13 over 8 edges in 6 files.
 allowed:
   # Ancestry Assignment (layer 2) -> Dense Layout and Hybrid Layout (layer 3):
   # subset routing asks a layout to build a subset and to name a chunk shape.
@@ -60,28 +62,3 @@ allowed:
     name: opengwasdb.query.facade.StoreQuery
   - file: opengwasdb/store/open.py
     name: opengwasdb.query.facade.query_store
-  # Variant Identity (layer 0) -> Dense Layout (layer 3): reference extraction reuses
-  # the Dense VCF builder's Pass 1 machinery. Ten of the 23 come from this one file,
-  # and the nine private names are the first place to tighten.
-  - file: opengwasdb/variants/reference.py
-    name: opengwasdb.layouts.dense.build_vcf._ManifestRow
-  - file: opengwasdb/variants/reference.py
-    name: opengwasdb.layouts.dense.build_vcf._Pass1Stats
-  - file: opengwasdb/variants/reference.py
-    name: opengwasdb.layouts.dense.build_vcf._ShardSpec
-  - file: opengwasdb/variants/reference.py
-    name: opengwasdb.layouts.dense.build_vcf._WindowShards
-  - file: opengwasdb/variants/reference.py
-    name: opengwasdb.layouts.dense.build_vcf._alid_sort_key
-  - file: opengwasdb/variants/reference.py
-    name: opengwasdb.layouts.dense.build_vcf._consume_manifest_shards
-  - file: opengwasdb/variants/reference.py
-    name: opengwasdb.layouts.dense.build_vcf._fork_pool
-  - file: opengwasdb/variants/reference.py
-    name: opengwasdb.layouts.dense.build_vcf._iter_pass1_shard
-  - file: opengwasdb/variants/reference.py
-    name: opengwasdb.layouts.dense.build_vcf._read_manifest
-  # Variant Identity (layer 0) -> Source Readers (layer 1): reference extraction
-  # reads source columns through a Column Map.
-  - file: opengwasdb/variants/reference.py
-    name: opengwasdb.readers.column_map.ColumnMap

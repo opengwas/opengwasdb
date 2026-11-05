@@ -1,0 +1,10 @@
+- **The Top-Hit Index's published names moved to `opengwasdb.top_hits` (issue #53).** Importing any of the old locations now fails; the values, the signatures that carry over and the on-disk Top-Hit Index are unchanged. `opengwasdb-stores` imports none of these names.
+  - `TOP_HIT_THRESHOLDS`: from `opengwasdb.layouts.dense` and `opengwasdb.layouts.dense.constants` to `opengwasdb.top_hits`.
+  - `threshold_key`, `z_critical`, `read_top_hit_counts`: from `opengwasdb.layouts.dense.top_hits` to `opengwasdb.top_hits` (`threshold_key` and `z_critical` also left `opengwasdb.layouts.ragged.top_hits`, and `read_top_hit_counts` left `opengwasdb.layouts.dense.build`).
+  - `TOP_HIT_CHUNK_SIZE`: from `opengwasdb.layouts.ragged.top_hits` to `opengwasdb.top_hits`.
+  - `TOP_HIT_COUNT_COLUMNS`: no longer re-exported by `opengwasdb.layouts.dense.top_hits`; import it from `opengwasdb.model.analyses`.
+  - `add_hit_counts`: now defined in `opengwasdb.top_hits`; it is no longer importable from `opengwasdb.layouts.hybrid.complete` or `opengwasdb.layouts.ragged.complete`.
+  - `DenseTopHitReader` (from `opengwasdb.layouts.dense.top_hits`, and `opengwasdb.query.facade`) is `opengwasdb.top_hits.TopHitTier`. Its `read(name, bounds, dtype)`, `read_or`, `bounds` and `has` pass-throughs are replaced by `TopHitTier.read(analysis_index)`, which returns a `TierRows`; `has` stays.
+  - `TopHitTiers`: from `opengwasdb.layouts.dense.top_hits` to `opengwasdb.top_hits`, with `reader()` renamed `tier()`.
+  - `write_threshold_tier` (in both `opengwasdb.layouts.dense.top_hits` and `opengwasdb.layouts.ragged.top_hits`) is removed in favour of `opengwasdb.top_hits.write_index(root, columns, thresholds, n_analyses)`, which takes the Store's data group and writes every tier.
+  - `TOP_HIT_TIER_ARRAYS`: from `opengwasdb.validation.validate` to `opengwasdb.top_hits`.

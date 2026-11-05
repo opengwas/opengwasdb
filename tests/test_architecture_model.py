@@ -271,7 +271,7 @@ def test_this_repositorys_model_claims_every_engine_source_file() -> None:
     assert check_model(load_model(MODEL_PATH), tracked) == []
 
 
-def test_the_model_holds_the_engines_fifteen_components() -> None:
+def test_the_model_holds_the_engines_seventeen_components() -> None:
     model = load_model(MODEL_PATH)
 
     assert [(entry["layer"], entry["name"]) for entry in model["layers"]] == [
@@ -284,9 +284,11 @@ def test_the_model_holds_the_engines_fifteen_components() -> None:
     ]
     assert [component["id"] for component in model["components"]] == [
         "readers",
+        "admission",
         "resolution",
         "ancestry",
         "variants",
+        "routing",
         "dense",
         "ragged",
         "hybrid",
@@ -315,4 +317,19 @@ def test_the_model_holds_the_engines_fifteen_components() -> None:
     ],
 )
 def test_a_moved_claim_sits_on_the_component_decision_8_moved_it_to(path: str, owner: str) -> None:
+    assert component_for_path(claims(load_model(MODEL_PATH)), path) == owner
+
+
+@pytest.mark.parametrize(
+    ("path", "owner"),
+    [
+        ("opengwasdb/admission/gate.py", "admission"),
+        ("opengwasdb/build/info_score_filter.py", "admission"),
+        ("opengwasdb/build/resolve.py", "resolution"),
+        # The longer prefix wins: routing sits inside Variant Identity's directory.
+        ("opengwasdb/variants/routing/route.py", "routing"),
+        ("opengwasdb/variants/normalise.py", "variants"),
+    ],
+)
+def test_admission_and_routing_are_components_of_their_own(path: str, owner: str) -> None:
     assert component_for_path(claims(load_model(MODEL_PATH)), path) == owner

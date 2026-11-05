@@ -2,27 +2,28 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
+from opengwasdb import admission
 from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding import (
-    DenseEafPlane,
-    EafExceptionBuilder,
     EncodingMeasurements,
-    StoreCodec,
     StoreEncoding,
-    ZOverflowBuilder,
     eaf_baseline_from_grid,
     fit_se_grid,
     measure_eaf_grid,
-    positions_row_band,
-    write_eaf_baseline,
-    write_se_dense,
 )
+from opengwasdb.encoding.association_codec import (
+    AssociationCodec,
+    CellValues,
+    Placement,
+    log_se_out_of_range,
+)
+from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
@@ -31,8 +32,7 @@ from opengwasdb.layouts.dense.constants import (
     dense_layout_records,
     dense_provenance_block,
 )
-from opengwasdb.layouts.dense.overview import write_overview_html
-from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, read_top_hit_counts
+from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, analyses_table_from_records, write_analyses
 from opengwasdb.model.enums import (
@@ -42,8 +42,12 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
     coverage_for_layout,
 )
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.model.maf_policy import MafPolicy
+from opengwasdb.readers.interface import StreamTally
+from opengwasdb.stats import FrequencyTally, parse_af
+from opengwasdb.store.arrays import ArrayRole, compressor
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
+from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts
 from opengwasdb.variants import (
     VARIANT_AXIS_FORMAT,
     VARIANT_OFFSETS_FILENAME,
@@ -53,6 +57,8 @@ from opengwasdb.variants import (
     chromosome_sort_key,
     write_variant_axis,
 )
+from opengwasdb.variants.normalise import IdentityFaults
+from opengwasdb.variants.routing import collapse_duplicates
 
 
 @dataclass(frozen=True)
@@ -64,28 +70,6 @@ class DenseBuildResult:
     n_analyses: int
 
 
-def add_hit_counts(store_path: str | Path, analyses: list[Analysis]) -> list[Analysis]:
-    """Add per-Analysis Top-Hit Counts from ``store_path``'s already-built
-    top-hit index onto whatever each ``Analysis`` already carries (ADR 0032).
-
-    Blank ``n_hits_*`` fields act as zero, so this both sets counts from
-    scratch (a fresh build's analyses start blank) and accumulates a Hybrid
-    store's Dense Component and Ragged Overflow Component contributions onto
-    the same Analysis when called once per component -- the two partition an
-    Analysis's associations disjointly (CONTEXT.md, Query Component).
-    """
-    counts = read_top_hit_counts(store_path, len(analyses))
-    return [
-        replace(
-            a,
-            n_hits_5e8=str(int(a.n_hits_5e8 or 0) + counts["n_hits_5e8"][i]),
-            n_hits_5e6=str(int(a.n_hits_5e6 or 0) + counts["n_hits_5e6"][i]),
-            n_hits_5e4=str(int(a.n_hits_5e4 or 0) + counts["n_hits_5e4"][i]),
-        )
-        for i, a in enumerate(analyses)
-    ]
-
-
 def write_analyses_tsv(output_path: Path, analyses: list[Analysis]) -> Path:
     """Write ``analyses.tsv`` + ``overview.html`` -- the sole source of truth
     for Analytical Metadata (ADR 0030, issue #22; unified schema, ADR 0034),
@@ -95,6 +79,12 @@ def write_analyses_tsv(output_path: Path, analyses: list[Analysis]) -> Path:
     output_path = Path(output_path)
     table = analyses_table_from_records(analyses)
     path = write_analyses(output_path / "analyses.tsv", table)
+    # Imported here rather than at module scope: `opengwasdb.overview` reads
+    # Indexed Variant Subsets through `layouts.dense.indexed_subsets`, which
+    # runs this package's `__init__`, which imports this module -- a
+    # module-scope import of `write_overview_html` closes that cycle (#57).
+    from opengwasdb.overview import write_overview_html
+
     write_overview_html(output_path, table)
     return path
 
@@ -110,13 +100,18 @@ def build_dense_observed_store(
     dtype: str = DEFAULT_DTYPE,
     overwrite: bool = False,
     association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
+    admission_record: str | Path | None = None,
+    malformed: Mapping[str, IdentityFaults] | None = None,
 ) -> DenseBuildResult:
     """Write a Dense Observed-Only Store Release from normalised associations.
 
     ``association_coverage`` is a build input (issue #298), and a Dense matrix can
     carry only ``gwas``: every cell it holds is a (variant, Analysis) the source
     either reported or did not, so a narrower coverage has no representation
-    here (`coverage_for_layout`, ADR 0064).
+    here (`coverage_for_layout`, ADR 0064). Each Analysis's records pass its
+    Admission gate, which writes ``admission_record`` (beside the Store unless
+    named, #357), and logs there the rows the reader left out under
+    ``malformed``, by Analysis (#365).
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.DENSE)
 
@@ -125,13 +120,15 @@ def build_dense_observed_store(
 
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
+        directory = admission.admission_record_for(out, admission_record)
+        records = _admitted_records(records, directory, malformed or {})
         variants = _collect_variants(records)
         analyses = _collect_analyses(records)
         z, se, eaf = _scatter_records(records, variants, analyses)
 
         # The encoding plan is decided once, here, and read back from the
         # manifest by everything downstream (ADR 0037, issue #119).
-        encoding, coefficients = _decide_encoding(eaf, se, chunk_shape)
+        encoding, coefficients = _decide_encoding(z, se, eaf, chunk_shape)
         rsid_by_alid = _first_rsids_by_alid(records)
         _write_manifest(
             staged,
@@ -147,10 +144,109 @@ def build_dense_observed_store(
         )
         write_variant_axis(staged.path, variants, rsid_by_alid)
         _write_index(staged, variants, analyses, records, chunk_shape)
-        _write_zarr(staged, z, se, eaf, coefficients, chunk_shape, dtype, encoding)
+        _write_zarr(staged, (z, se, eaf), coefficients, chunk_shape, encoding, analyses)
         build_top_hit_indexes(staged.path, encoding=encoding)
         write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
         return DenseBuildResult(output_path=out, n_variants=len(variants), n_analyses=len(analyses))
+
+
+def _admitted_records(
+    records: list[NormalisedAssociation],
+    directory: Path,
+    malformed: Mapping[str, IdentityFaults],
+) -> list[NormalisedAssociation]:
+    """The records each Analysis's Admission gate keeps, in source order.
+
+    Analyses are judged in the order they first appear, which is the order the
+    Store's columns take (`_collect_analyses`), each under the MAF filter its
+    records declare (D2). An Analysis's records for one variant resolve as
+    routing resolves an axis's (`collapse_duplicates`): agreeing ones collapse
+    to the first, conflicting ones are all dropped and logged.
+    """
+    by_analysis: dict[str, list[int]] = {}
+    for position, record in enumerate(records):
+        by_analysis.setdefault(record.analysis_id, []).append(position)
+    for analysis_id in malformed:  # an Analysis every row of which was malformed
+        by_analysis.setdefault(analysis_id, [])
+    record_ = admission.AdmissionRecord.open(directory, list(by_analysis), command="build-dense")
+    records = list(records)
+    keep = np.zeros(len(records), dtype=bool)
+    for analysis_id, positions in by_analysis.items():
+        tally = StreamTally(faults=malformed.get(analysis_id, IdentityFaults()))
+        _usable_frequencies(records, positions, tally.frequencies)
+        rules = admission.AnalysisRules(analysis_id, maf=_declared_maf(records, positions))
+        with record_.gate(rules) as gate:
+            gate.streamed(tally)
+            if positions:
+                keep[positions] = _admitted(records, positions, gate)
+    record_.finish()
+    return [record for record, kept in zip(records, keep.tolist(), strict=True) if kept]
+
+
+def _declared_maf(records: list[NormalisedAssociation], positions: list[int]) -> MafPolicy:
+    """The one MAF filter an Analysis's records declare, or none.
+
+    Rows of one Analysis declaring different thresholds are refused: which
+    of them applies is not the build's to choose.
+    """
+    policies = {records[i].maf_policy for i in positions}
+    if len(policies) > 1:
+        analysis_id = records[positions[0]].analysis_id
+        raise ValueError(
+            f"Analysis {analysis_id!r} declares {len(policies)} different MAF thresholds "
+            "across its records; one Analysis declares one"
+        )
+    return policies.pop() if policies else MafPolicy()
+
+
+def _usable_frequencies(
+    records: list[NormalisedAssociation], positions: list[int], tally: FrequencyTally
+) -> None:
+    """Make absent each frequency at ``positions`` outside (0, 1), in place, and
+    count it in ``tally`` (D7): the rule `parse_af` applies to every source."""
+    for i in positions:
+        eaf = records[i].eaf
+        if eaf is not None and parse_af(eaf, tally) is None:
+            records[i] = replace(records[i], eaf=None)
+
+
+def _admitted(
+    records: list[NormalisedAssociation], positions: list[int], gate: admission.Gate
+) -> np.ndarray:
+    """Which of one Analysis's records, at ``positions``, its gate and its
+    duplicates' resolution keep."""
+    keep = gate.source_rows(_source_rows([records[i] for i in positions]))
+    kept = [position for position, judged in zip(positions, keep.tolist(), strict=True) if judged]
+    keep[keep] = _resolved_duplicates([records[i] for i in kept], gate)
+    return keep
+
+
+def _resolved_duplicates(records: list[NormalisedAssociation], gate: admission.Gate) -> np.ndarray:
+    """Which of one Analysis's admitted records survive its duplicates' resolution."""
+    number: dict[str, int] = {}
+    codes = np.array(
+        [number.setdefault(r.variant.alid, len(number)) for r in records], dtype=np.int64
+    )
+    found = collapse_duplicates(
+        codes,
+        np.array([r.z for r in records], dtype=np.float64),
+        np.array([r.se for r in records], dtype=np.float64),
+    )
+    gate.duplicates([records[i].variant.alid for i in found.dropped.tolist()], found.collapsed)
+    keep = np.zeros(len(records), dtype=bool)
+    keep[found.keep] = True
+    return keep
+
+
+def _source_rows(records: list[NormalisedAssociation]) -> admission.SourceRows:
+    """One Analysis's records as the batch its gate judges, each named by its ALID."""
+    alids = [record.variant.alid for record in records]
+    return admission.SourceRows(
+        eaf=np.array([np.nan if r.eaf is None else r.eaf for r in records], dtype=np.float64),
+        se=np.array([r.se for r in records], dtype=np.float64),
+        z=np.array([r.z for r in records], dtype=np.float64),
+        keys_at=lambda at: [alids[i] for i in at.tolist()],
+    )
 
 
 def _scatter_records(
@@ -186,7 +282,7 @@ def _scatter_records(
 
 
 def _decide_encoding(
-    eaf: np.ndarray, se: np.ndarray, chunk_shape: tuple[int, int]
+    z: np.ndarray, se: np.ndarray, eaf: np.ndarray, chunk_shape: tuple[int, int]
 ) -> tuple[StoreEncoding, np.ndarray]:
     """Measure both planes and settle the store's plan, in the required order.
 
@@ -199,7 +295,12 @@ def _decide_encoding(
     preliminary = StoreEncoding.decide(
         EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measured)
     )
-    decoded_eaf = _round_trip_eaf(eaf, preliminary)
+    baseline = eaf_baseline_from_grid(eaf) if preliminary.eaf.is_residual else None
+    decoded_eaf = (
+        AssociationCodec(preliminary, eaf_baseline=baseline)
+        .round_trip(CellValues(z, se, eaf), Placement.band(0, *eaf.shape), where="build-dense")
+        .eaf
+    )
     coefficients, se_measured = fit_se_grid(
         se,
         decoded_eaf,
@@ -211,25 +312,6 @@ def _decide_encoding(
             EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measured, se=se_measured)
         ),
         coefficients,
-    )
-
-
-def _round_trip_eaf(eaf: np.ndarray, encoding: StoreEncoding) -> np.ndarray:
-    """The frequencies a reader gets back from this plan, cell for cell."""
-    if encoding.eaf.is_absent:
-        return np.full(eaf.shape, np.nan, dtype=np.float32)
-    n_analyses = eaf.shape[1]
-    baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
-    per_cell = None if baseline is None else np.repeat(baseline[:, None], n_analyses, axis=1)
-    exceptions = EafExceptionBuilder()
-    raw = StoreCodec(encoding).encode_eaf(
-        eaf,
-        baseline=per_cell,
-        positions=positions_row_band(0, n_analyses),
-        exceptions=exceptions,
-    )
-    return StoreCodec(encoding, eaf_exceptions=exceptions.table()).decode_eaf(
-        raw, baseline=per_cell, positions=positions_row_band(0, n_analyses)
     )
 
 
@@ -339,7 +421,7 @@ def _write_manifest(
             },
             "dense": {
                 **dense_provenance_block(shape, hint=chunk_shape, se_dtype=encoding.se.dtype),
-                "top_hit_thresholds": [5e-8, 5e-6, 5e-4],
+                "top_hit_thresholds": list(TOP_HIT_THRESHOLDS),
                 "variant_axis": {
                     "format": VARIANT_AXIS_FORMAT,
                     "table": VARIANT_TABLE_FILENAME,
@@ -403,85 +485,41 @@ def _first_rsids_by_alid(records: list[NormalisedAssociation]) -> dict[str, str]
     return rsid_by_alid
 
 
-def _write_dense_eaf(
-    root: Any,
-    codec: StoreCodec,
-    eaf: np.ndarray,
-    encoding: StoreEncoding,
-    comp: Any,
-    chunks: tuple[int, ...],
-) -> None:
-    """Encode and write the Dense `eaf` plane, baseline and exception table.
-
-    The whole block is one unit because the three arrays are one artifact: a
-    store with an `eaf` plane but no baseline for its residual coding is not
-    readable.
-    """
-    baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
-    if encoding.eaf.is_absent:
-        return
-    exceptions = EafExceptionBuilder()
-    raw = codec.encode_eaf(
-        eaf,
-        baseline=None if baseline is None else np.repeat(baseline[:, None], eaf.shape[1], axis=1),
-        positions=positions_row_band(0, eaf.shape[1]),
-        exceptions=exceptions,
-    )
-    create_array(
-        root,
-        "eaf",
-        ArrayRole.DENSE_STATISTIC_PLANE,
-        data=raw,
-        dtype=codec.eaf_dtype,
-        compressor=comp,
-        hint=chunks,
-    )
-    if baseline is not None:
-        write_eaf_baseline(root, baseline, compressor=comp)
-        exceptions.table().write(root)
-
-
 def _write_zarr(
     staged: StagedRelease,
-    z: np.ndarray,
-    se: np.ndarray,
-    eaf: np.ndarray,
+    grids: tuple[np.ndarray, np.ndarray, np.ndarray],
     se_coefficients: np.ndarray,
     chunk_shape: tuple[int, int],
-    dtype: str,
     encoding: StoreEncoding,
+    analyses: list[Analysis],
 ) -> None:
-    comp = compressor()
+    """Encode the `(z, se, eaf)` grid once, write each plane with its side
+    arrays, and log each Analysis's SEs above `float16`'s range."""
+    z, se, eaf = grids
     root = staged.arrays(mode="w")
-    codec = StoreCodec(encoding)
-    # Flat C-order position is exactly `flatnonzero` over the whole grid, which
-    # is what the overflow table keys on.
-    overflow = ZOverflowBuilder()
-    codes = codec.encode_z(z, positions=np.flatnonzero, overflow=overflow)
-    z_array = create_array(
-        root,
-        "z",
-        ArrayRole.DENSE_STATISTIC_PLANE,
-        data=codes,
-        dtype=codec.z_dtype,
-        compressor=comp,
-        hint=chunk_shape,
+    baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
+    coefficients = se_coefficients if encoding.se.is_residual else None
+    codec = AssociationCodec(encoding, eaf_baseline=baseline, se_coefficients=coefficients)
+    encoded = codec.encode(
+        CellValues(z, se, None if encoding.eaf.is_absent else eaf),
+        Placement.band(0, *z.shape),
+        where="build-dense",
     )
-    # Chunk shape is clipped to the array dimensions (ADR 0021) by the role's
-    # layout policy; read back what was written rather than clipping again.
-    effective_chunks = tuple(int(size) for size in z_array.chunks)
-    _write_dense_eaf(root, codec, eaf, encoding, comp, effective_chunks)
-    physical_eaf = DenseEafPlane.open(root, encoding).band(0, eaf.shape[0])
-    write_se_dense(
+    write_encoded_planes(
         root,
-        codec,
-        se,
-        physical_eaf,
-        se_coefficients,
-        compressor=comp,
-        chunks=effective_chunks,
+        encoding,
+        encoded,
+        role=ArrayRole.DENSE_STATISTIC_PLANE,
+        compressor=compressor(),
+        chunks=chunk_shape,
+        eaf_baseline=baseline,
+        se_coefficients=coefficients,
     )
-    overflow.table().write(root)
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "observed_only"
     root.attrs.update(dense_layout_records(z.shape, hint=chunk_shape))
+    log_se_out_of_range(
+        encoded.storable.se_out_of_range,
+        [analysis.analysis_id for analysis in analyses],
+        where="build-dense",
+    )

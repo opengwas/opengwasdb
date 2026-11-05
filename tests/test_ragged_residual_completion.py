@@ -118,9 +118,10 @@ def _write_filtered_ssf(path: Path, rows: list[tuple[int, float, float, float]])
 
 def _write_source_manifest(path: Path) -> None:
     path.write_text(
-        "analysis_index\tanalysis_id\ttrait_id\ttrait_chr\ttrait_bp\tn\tfiltered_file\n"
-        f"0\ta\tT1\t1\t{_TRAIT_BP}\t50000\ta.tsv.gz\n"
-        f"1\tb\tT2\t1\t{_TRAIT_BP}\t50000\tb.tsv.gz\n",
+        "analysis_index\tanalysis_id\ttrait_id\ttrait_chr\ttrait_bp\tn\tfiltered_file\t"
+        "source_genome_build\n"
+        f"0\ta\tT1\t1\t{_TRAIT_BP}\t50000\ta.tsv.gz\tGRCh38\n"
+        f"1\tb\tT2\t1\t{_TRAIT_BP}\t50000\tb.tsv.gz\tGRCh38\n",
         encoding="utf-8",
     )
 
@@ -447,7 +448,7 @@ def test_top_hit_index_is_consistent_with_the_decoded_plane_even_when_stale(
     defect class issue #163 closed for Hybrid -- fails the exhaustive
     index-vs-plane comparison above, which checks every returned row where
     `validate_store` samples only a bounded subset of each tier."""
-    from opengwasdb.layouts.dense.top_hits import threshold_key
+    from opengwasdb.top_hits import threshold_key
 
     stale_store = tmp_path / "stale.opengwasdb"
     shutil.copytree(scenario.completed, stale_store)

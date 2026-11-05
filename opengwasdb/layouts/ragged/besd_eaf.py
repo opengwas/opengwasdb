@@ -34,9 +34,7 @@ from opengwasdb.build.eaf_orientation import (
     load_eaf_reference,
     select_sites,
 )
-from opengwasdb.layouts.ragged.besd_reader import SnpRecord
 from opengwasdb.model.enums import EafOrientationMethod, EafOrientationOutcome
-from opengwasdb.stats import parse_af
 from opengwasdb.variants import CanonicalVariant
 
 #: The key the one `.esi` check is run under, before it is copied to each probe.
@@ -45,27 +43,6 @@ _ESI_KEY = ".esi"
 #: Every probe's evidence carries this, so a reader of one record knows it is a
 #: file-level measurement and not that probe's own window.
 SHARED_NOTE = "measured once over the .esi frequencies, which every probe shares (ADR 0067)"
-
-
-def stored_esi_frequencies(
-    snps: Sequence[SnpRecord], esi_to_variant: dict[int, tuple[int, bool]]
-) -> np.ndarray | None:
-    """Each ESI row's frequency of the *stored* effect allele, or `None`.
-
-    Indexed by ESI row; NaN for a row that reaches no variant or reports no
-    usable frequency (`parse_af`: missing, out of range, exactly 0 or 1). A
-    flipped row holds `1 - f`, the same rule `z`'s sign follows. `None` when no
-    row reaches the axis with a frequency, so a `.esi` without one builds the
-    release it built before frequencies were stored.
-    """
-    out = np.full(len(snps), np.nan, dtype=np.float32)
-    for snp in snps:
-        mapping = esi_to_variant.get(snp.row_idx)
-        frequency = parse_af(snp.freq)
-        if mapping is None or frequency is None:
-            continue
-        out[snp.row_idx] = 1.0 - frequency if mapping[1] else frequency
-    return out if bool(np.isfinite(out).any()) else None
 
 
 def verify_esi_orientation(

@@ -23,6 +23,7 @@ from opengwasdb.encoding.codec import (
     eaf_baseline_from_grid,
     eaf_baseline_from_pairs,
     logit,
+    se_float16,
     se_residual_codes,
 )
 from opengwasdb.encoding.plan import (
@@ -290,7 +291,7 @@ def fit_se(
         worst_relative_error=errors,
         compressed_bytes=sizes,
         float16_compressed_bytes=_packed_chunks(
-            compressor, s.astype(np.float16).reshape(se_shape), chunks, _ZARR_DEFAULT_FILL
+            compressor, se_float16(s).reshape(se_shape), chunks, _ZARR_DEFAULT_FILL
         ),
     )
 

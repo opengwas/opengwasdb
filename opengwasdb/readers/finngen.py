@@ -1,9 +1,10 @@
 """FinnGen R13 tabular summary-statistics SourceReader.
 
 FinnGen publishes one tab-delimited, bgzip-compressed file per endpoint on
-GRCh38.  ``alt`` is the effect allele; the reader therefore converts
-``beta / sebeta`` to the package-wide canonical A1 orientation while leaving
-the source REF/ALT labels intact on streamed records.
+GRCh38.  ``ref`` is the reference allele and ``alt`` the effect allele; the
+reader therefore converts ``beta / sebeta`` to the package-wide canonical A1
+orientation while leaving the source REF/ALT labels intact on streamed
+records, each declaring ``ref`` the reference.
 """
 
 from __future__ import annotations
@@ -14,16 +15,24 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import opengwasdb.readers.interface as interface
 import opengwasdb.readers.tabular as tabular
 from opengwasdb.model.enums import StoredEffectScale
-from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
+from opengwasdb.readers.interface import (
+    ReaderAssociation,
+    RegionsFile,
+    SiteMetrics,
+    SourceVariant,
+)
+from opengwasdb.readers.rows import ReaderBatch, stream_batches
 from opengwasdb.variants.normalise import (
-    VariantNormalisationError,
     normalise_chromosome,
-    orient_to_canonical,
+    orient_or_drop,
 )
 
 FINNGEN_R13_CAPABILITY = "opengwasdb.finngen-r13"
+#: FinnGen's `ref` is the GRCh38 reference allele, on every row.
+_REFERENCE = interface.ReferenceAllele.REF
 _FINNGEN_CHROMOSOMES = {
     str(chromosome).encode(): normalise_chromosome(str(chromosome))
     for chromosome in range(1, 24)
@@ -48,33 +57,46 @@ def _first_rsid(value: str | None) -> str:
     return first if first.startswith("rs") else ""
 
 
-def _iter_rows(path: str | Path) -> Iterator[tabular.TabularRow]:
+def _iter_rows(
+    path: str | Path,
+    tally: interface.StreamTally | None = None,
+    *,
+    infinite_effects: bool = True,
+) -> Iterator[tabular.SourceRow]:
+    """Every row naming a variant. ``infinite_effects`` keeps an infinite
+    `beta` as the row's effect, for Association Admission to drop (D4); the
+    metrics projection reads it as absent, as every metrics projection does."""
+    parse_beta = tabular.parse_effect if infinite_effects else tabular.parse_finite_float
+    tally = tally or interface.StreamTally()
+    faults, frequencies = tally.faults, tally.frequencies
     opener = gzip.open if str(path).endswith((".gz", ".bgz")) else open
     with opener(path, "rt", encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
         for row in reader:
             # R13 uses #chrom. Accepting chrom as well preserves compatibility
             # with older captured FinnGen releases without changing semantics.
-            chromosome = row.get("#chrom", row.get("chrom", ""))
+            chromosome = row.get("#chrom", row.get("chrom"))
             ref = row.get("ref")
             alt = row.get("alt")
-            if ref is None or alt is None:
+            # A row too short to reach an allele has a missing one, which
+            # `faults` names (#365); the None checks are the type checker's.
+            orientation = orient_or_drop(chromosome, row.get("pos"), alt, ref, faults)
+            if orientation is None or ref is None or alt is None:
                 continue
-            try:
-                orientation = orient_to_canonical(chromosome, row.get("pos", ""), alt, ref)
-            except VariantNormalisationError:
-                continue
-            yield tabular.TabularRow(
+            yield tabular.SourceRow(
                 chromosome=orientation.variant.chromosome,
                 position=orientation.variant.position,
                 ref=ref,
                 alt=alt,
                 alid=orientation.variant.alid,
                 flipped=orientation.flipped,
-                beta=tabular.parse_finite_float(row.get("beta")),
+                beta=parse_beta(row.get("beta")),
                 se=tabular.parse_positive_float(row.get("sebeta")),
-                af_alt=tabular.parse_af(row.get("af_alt")),
+                af_alt=tabular.parse_af(row.get("af_alt"), frequencies),
                 rsid=_first_rsid(row.get("rsids")),
+                # SAIGE's two-sided p, for the resolver's effect check (ADR 0069).
+                # It never stands in for an unusable `sebeta` here.
+                p_value=tabular.parse_finite_float(row.get("pval")),
             )
 
 
@@ -212,11 +234,27 @@ class FinnGenR13Reader:
     path: str | Path
     stored_effect_scale: StoredEffectScale = StoredEffectScale.LOG_OR
 
-    def stream_associations(self) -> Iterator[ReaderAssociation]:
-        yield from tabular.stream_associations(_iter_rows(self.path), self.stored_effect_scale)
+    def stream_associations(
+        self, tally: interface.StreamTally | None = None
+    ) -> Iterator[ReaderAssociation]:
+        yield from tabular.stream_associations(
+            _iter_rows(self.path, tally), self.stored_effect_scale, _REFERENCE
+        )
+
+    def stream_batches(self, tally: interface.StreamTally | None = None) -> Iterator[ReaderBatch]:
+        yield from stream_batches(_iter_rows(self.path, tally), _REFERENCE)
+
+    def stream_metric_chunks(self) -> Iterator[tabular.MetricsChunk]:
+        """The resolver's blocks, from the full-row parser: FinnGen has no
+        column-projected scan, and its rows read the same."""
+        yield from tabular.metrics_chunks_from_rows(
+            _iter_rows(self.path, infinite_effects=False)
+        )
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         yield from _iter_variants(self.path)
 
-    def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
-        return tabular.extract_at_sites(_iter_rows(self.path), alids)
+    def extract_at_sites(
+        self, alids: Iterable[str], *, region: str | None = None, regions_file: RegionsFile = None
+    ) -> dict[str, SiteMetrics]:
+        return tabular.extract_at_sites(_iter_rows(self.path), alids, region=region)

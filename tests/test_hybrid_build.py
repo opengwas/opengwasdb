@@ -17,11 +17,12 @@ import json
 import shutil
 import weakref
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
 import zarr
+from admission_helpers import logged, record_analyses
 from cli_output import normalize_cli_output
 from liftover_fixtures import (
     STRAND_ROWS,
@@ -31,10 +32,10 @@ from liftover_fixtures import (
 )
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
+from opengwasdb.admission import admission_record_for
 from opengwasdb.ancestry.reference import AncestryReference
 from opengwasdb.build.resolve import AnalysisRequest, resolve_analysis
 from opengwasdb.build.resolve_manifest import load_variant_reference
-from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.key_runs import HG38, KeyRun, column_run, read_run
@@ -52,6 +53,7 @@ from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import open_store
+from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 
 HG19_POS_1 = 100_000
@@ -422,7 +424,7 @@ def test_top_hits_reads_both_component_frequencies_from_indexes(hybrid_store):
     def fail_overflow(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("Overflow top hits should use indexed frequencies")
 
-    q._dense._eaf_pairs = fail_dense
+    q._dense._grid.inspect = fail_dense
     q._csr.eaf_pairs = fail_overflow
     result = q.top_hits(threshold=5e-4)
     np.testing.assert_array_equal(result["eaf"], expected)
@@ -1112,7 +1114,7 @@ def test_cli_invalid_options_fail_at_parse_time_hybrid(tmp_path):
         str(tmp_path / "out.opengwasdb"),
         "--reference-panel",
         panel,
-        "--store-id",
+        "--admission-record", str(tmp_path / "admission"), "--store-id",
         "s",
         "--release-id",
         "r",
@@ -1122,59 +1124,14 @@ def test_cli_invalid_options_fail_at_parse_time_hybrid(tmp_path):
     assert res_cap.exit_code != 0
     clean_cap_output = normalize_cli_output(res_cap.output)
     assert "unknown source reader capability 'unknown_capability'" in clean_cap_output
-    assert "known: opengwasdb.column-map, opengwasdb.finngen-r13" in clean_cap_output
+    known = "known: opengwasdb.besd, opengwasdb.column-map, opengwasdb.finngen-r13"
+    assert known in clean_cap_output
 
     res_ass = runner.invoke(app, [*args, "--source-assembly", "unknown_build"])
     assert res_ass.exit_code != 0
     clean_ass_output = normalize_cli_output(res_ass.output)
     assert "unknown genome build 'unknown_build'" in clean_ass_output.lower()
     assert "use hg19/hg38 or aliases grch37/grch38" in clean_ass_output.lower()
-
-
-def test_build_routing_index_long_keys_sorted_and_searchable():
-    """The Hybrid routing index keeps variable-length bytes keys (no 300-byte
-    padding) while remaining sorted and binary-searchable."""
-    from opengwasdb.layouts.hybrid.build import _build_routing_index
-
-    long_alt = "A" * 300
-    source_lookup = {
-        ("1", 10, "A", "G"): "1:10:A:G",
-        ("2", 5, "C", "T"): "2:5:C:T",
-        ("1", 10, "A", long_alt): f"1:10:A:{long_alt}",
-        ("1", 20, "G", "C"): "1:20:C:G",
-    }
-    dense_row = {"1:10:A:G": 0, "2:5:C:T": 1}
-    shared_index = {f"1:10:A:{long_alt}": 0, "1:20:C:G": 1}
-
-    keys, targets, ispanel, swaps = _build_routing_index(
-        source_lookup, dense_row, shared_index
-    )
-
-    assert keys.dtype == object
-    assert list(keys) == sorted(keys)
-
-    expected = []
-    for (chrom, pos, ref, alt), alid in source_lookup.items():
-        row = dense_row.get(alid)
-        if row is not None:
-            expected.append((f"{chrom}:{pos}:{ref}:{alt}".encode(), row, True))
-        else:
-            sidx = shared_index.get(alid)
-            if sidx is not None:
-                expected.append((f"{chrom}:{pos}:{ref}:{alt}".encode(), sidx, False))
-    expected.sort(key=lambda kv: kv[0])
-
-    assert list(keys) == [key for key, _, _ in expected]
-    assert targets.tolist() == [target for _, target, _ in expected]
-    assert ispanel.tolist() == [panel for _, _, panel in expected]
-    assert not swaps.any(), "this fixture lifts no reverse-strand variant"
-
-    long_key = b"1:10:A:" + long_alt.encode()
-    missing_key = b"22:9:C:T"
-    query = np.array([b"1:10:A:G", long_key, missing_key], dtype="S")
-    hits = keys[np.minimum(np.searchsorted(keys, query), len(keys) - 1)] == query
-    assert hits.tolist() == [True, True, False]
-
 
 
 # ── single-pass builds from a precomputed variant reference (issue #186) ─────
@@ -1209,31 +1166,27 @@ def _write_reference_artifact(
 ) -> Path:
     """Write the artifact the inline two-pass Pass 1 would recompute.
 
-    ``panel_only`` drops the off-panel source key so the artifact is a genuine
-    external panel: only the Dense axis is named, and the off-panel hg19 source
-    can only be resolved during Pass 2.
+    Extracted from the manifest, by the build's own union, lift and naming
+    rules. ``panel_only`` then drops the off-panel source key so the artifact
+    is a genuine external panel: only the Dense axis is named, and the
+    off-panel hg19 source can only be resolved during Pass 2.
     """
-    from opengwasdb.layouts.dense.build_vcf import (
-        _lift_manifest_variants,
-        _read_manifest,
-        _sorted_alids,
-    )
-    from opengwasdb.variants.reference import write_variant_reference
+    from extraction_fixtures import extract_from_manifest
 
-    rows = _read_manifest(manifest)
-    source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
-        rows, chain_file=None, liftover_failure_threshold=0.01
-    )
-    if panel_only:
-        panel = {HG38_ALID_1, HG38_ALID_3}
-        alids = _sorted_alids(panel)
-        source_lookup = {key: alid for key, alid in source_lookup.items() if alid in panel}
-    else:
-        alids = _sorted_alids(source_lookup.values())
-    path = tmp_path / (
-        "panel-only.variant-ref.tsv.gz" if panel_only else "union.variant-ref.tsv.gz"
-    )
-    write_variant_reference(path, alids, source_lookup, rsid_by_alid)
+    from opengwasdb.variants.axis import sorted_alids
+    from opengwasdb.variants.reference import read_variant_reference, write_variant_reference
+
+    union = tmp_path / "union.variant-ref.tsv.gz"
+    extract_from_manifest(manifest, union)
+    if not panel_only:
+        return union
+    extracted = read_variant_reference(union)
+    panel = {HG38_ALID_1, HG38_ALID_3}
+    source_lookup = {
+        key: alid for key, alid in extracted.source_lookup.items() if alid in panel
+    }
+    path = tmp_path / "panel-only.variant-ref.tsv.gz"
+    write_variant_reference(path, sorted_alids(panel), source_lookup, extracted.rsid_by_alid)
     return path
 
 
@@ -1400,13 +1353,22 @@ def test_resolver_overlap_routes_lowercase_ssf_to_dense(tmp_path, artifact_keys)
         assert overflow["z"][0] == pytest.approx(2.0, rel=5e-3)
 
 
-def test_hybrid_casefolded_reference_keys_refuse_conflicting_targets():
-    with pytest.raises(ValueError, match="conflicting variants after case folding"):
-        hybrid_build._build_routing_index(
-            {("1", 100, "a", "g"): "1:100:A:G", ("1", 100, "A", "G"): "1:100:A:T"},
-            {"1:100:A:G": 0, "1:100:A:T": 1},
-            {"1:100:A:G": 0, "1:100:A:T": 1},
-        )
+def _route_only_by_reference(monkeypatch: pytest.MonkeyPatch, hybrid_build: ModuleType) -> None:
+    """Make the build refuse to route by Pass 1's union.
+
+    A reference that names no rsids still has its sources read once, for the
+    names (issue #255), so it is the routing authority this pins, not the read.
+    """
+    from opengwasdb.variants.routing import FromReference
+
+    real_route = hybrid_build.route_variants
+
+    def _by_reference(sources, authority, **kwargs):
+        if not isinstance(authority, FromReference):
+            raise AssertionError("Pass 1's union routed despite --variant-reference")
+        return real_route(sources, authority, **kwargs)
+
+    monkeypatch.setattr(hybrid_build, "route_variants", _by_reference)
 
 
 class TestVariantReference:
@@ -1431,7 +1393,7 @@ class TestVariantReference:
     def test_reference_plus_panel_partitions_and_matches_two_pass(self, tmp_path, monkeypatch):
         """A full-union reference plus a subset ``--reference-panel`` routes the
         off-panel variant to the Overflow and reproduces the legacy two-pass
-        store exactly, without ever running Pass 1."""
+        store exactly, routed by the reference rather than Pass 1's union."""
         import opengwasdb.layouts.hybrid.build as hybrid_build
 
         manifest = _hybrid_manifest(tmp_path)
@@ -1443,10 +1405,7 @@ class TestVariantReference:
             manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
         )
 
-        def _no_pass1(*_args: object, **_kwargs: object) -> None:
-            raise AssertionError("Pass 1 ran despite --variant-reference")
-
-        monkeypatch.setattr(hybrid_build, "_lift_manifest_variants", _no_pass1)
+        _route_only_by_reference(monkeypatch, hybrid_build)
 
         single_pass = tmp_path / "single-pass.opengwasdb"
         result = build_hybrid_from_vcf_manifest(
@@ -1473,10 +1432,7 @@ class TestVariantReference:
             manifest, two_pass, reference_panel=_panel(tmp_path), store_id="s", release_id="r"
         )
 
-        def _no_pass1(*_args: object, **_kwargs: object) -> None:
-            raise AssertionError("Pass 1 ran despite --variant-reference")
-
-        monkeypatch.setattr(hybrid_build, "_lift_manifest_variants", _no_pass1)
+        _route_only_by_reference(monkeypatch, hybrid_build)
 
         single_pass = tmp_path / "single-pass.opengwasdb"
         result = build_hybrid_from_vcf_manifest(
@@ -1591,6 +1547,7 @@ class TestVariantReference:
             [
                 "build-hybrid", str(manifest), str(store),
                 "--variant-reference", str(reference),
+                "--admission-record", str(tmp_path / "admission"),
                 "--store-id", "s", "--release-id", "r",
             ],
         )
@@ -1898,10 +1855,12 @@ class TestVariantReference:
         assert set(rows) == {HG38_ALID_1, HG38_ALID_2, HG38_ALID_3}
         assert rows[HG38_ALID_2].source_alid is None
 
-    def test_two_raw_keys_in_same_analysis_join_one_variant_last_wins(self, tmp_path):
-        """Issue #223 AC4: when two different raw keys within the SAME Analysis
-        map to the same Variant Index (e.g. A:G and G:A both canonicalising to
-        A:G), the later stream occurrence must win (last-wins deduplication)."""
+    def test_two_raw_keys_in_same_analysis_that_disagree_are_both_dropped(self, tmp_path):
+        """D5 (issue #357) in the fold: two raw keys of one Analysis that the
+        fold resolves to one Variant Index (A:G and G:A, both A:G) and that
+        disagree are both dropped and logged, where the later used to win
+        (issue #223). Two SNV rows are one variant read from opposite alleles,
+        so the source's declared reference does not choose between them."""
         reference = _write_reference_artifact(
             tmp_path, _hybrid_manifest(tmp_path), panel_only=True
         )
@@ -1927,16 +1886,53 @@ class TestVariantReference:
 
         assert result.n_panel == 2
         assert result.n_off_panel == 1, "both raw keys resolve to one variant"
-        assert result.n_overflow == 1, "deduplicated to exactly 1 association in overflow"
+        assert result.n_overflow == 0, "neither of two disagreeing rows is stored"
 
         validation = validate_store(store)
         assert validation.ok, validation.errors
+        (analysis,) = record_analyses(store)
+        assert analysis["dropped"] == {"duplicate_conflicting": 2}
+        assert logged(admission_record_for(store), 0, "fold")[1:] == [
+            ["1:500000:A:G", "duplicate_conflicting"]
+        ] * 2
 
+    @pytest.mark.parametrize("deletion_first", [True, False], ids=["deletion", "insertion"])
+    def test_a_reversed_indel_the_fold_resolves_keeps_its_insertion(
+        self, tmp_path, deletion_first
+    ):
+        """D5 for a reversed indel no reference names (issue #357): the fold
+        resolves `G>GGGGCC` and `GGGGCC>G` to one ALID, and GWAS-VCF declares
+        `REF` the reference, so the insertion is kept wherever it falls and the
+        deletion is logged."""
+        reference = _write_reference_artifact(
+            tmp_path, _hybrid_manifest(tmp_path), panel_only=True
+        )
+        rows = [
+            "1\t827587\t.\tG\tGGGGCC\t.\tPASS\t.\tES:SE\t-0.00115727:0.0135908\n",
+            "1\t827587\t.\tGGGGCC\tG\t.\tPASS\t.\tES:SE\t0.0226233:0.05058\n",
+        ]
+        vcf = _make_vcf(tmp_path, "bmi_irn", rows[::-1] if deletion_first else rows)
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("bmi_irn", vcf, "BMI_IRN", "hg38")]
+        )
+        store = tmp_path / "reversed.opengwasdb"
+
+        result = build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=reference, store_id="s", release_id="r",
+            n_workers=2,
+        )
+
+        assert (result.n_off_panel, result.n_overflow) == (1, 1)
         with query_store(store) as q:
-            res = q.lookup(["1:500000:A:G"], ["trait_same"])
-            assert len(res["z"]) == 1
-            # Row 2 (z = 4.0) must win over Row 1 (z = -2.0)
-            assert res["z"][0] == pytest.approx(4.0, rel=5e-3)
+            res = q.lookup(["1:827587:G:GGGGCC"], ["bmi_irn"])
+        # The insertion's z, its effect allele sorting second: within the z
+        # code's resolution of +0.0852, where the deletion's would be 0.447.
+        assert res["z"].tolist() == pytest.approx([0.00115727 / 0.0135908], abs=1e-3)
+        (analysis,) = record_analyses(store)
+        assert analysis["dropped"] == {"duplicate_reversed_indel": 1}
+        assert logged(admission_record_for(store), 0, "fold")[1:] == [
+            ["1:827587:G:GGGGCC", "duplicate_reversed_indel"]
+        ]
 
     def test_manifest_records_the_variant_reference(self, tmp_path):
         manifest = _hybrid_manifest(tmp_path)
@@ -2282,7 +2278,7 @@ class TestVariantReferenceRsids:
     def test_lowercase_on_reference_row_keeps_its_name(self, tmp_path):
         """Issue #255, round 3: the Hybrid routing case-folds, so a lowercase
         source row lands on the upper-case reference ALID. Its name must land
-        there too -- the candidates are keyed with the same `_routed_site_key`
+        there too -- the candidates are keyed with the same case-folded key
         the association routing keys with, so the rekey and the oracle see the
         keys the association uses."""
         vcf = _make_vcf(
@@ -2309,7 +2305,7 @@ class TestVariantReferenceRsids:
 
     def test_lowercase_off_reference_row_keeps_its_name(self, tmp_path):
         """The off-reference half of the same case-fold: the fold encodes an
-        unknown key upper-cased (`_routed_site_key`), so a lowercase source row
+        unknown key upper-cased (`routing_key`), so a lowercase source row
         becomes an Overflow variant whose name must be stored with it."""
         vcf = _make_vcf(
             tmp_path,
@@ -2382,25 +2378,35 @@ class TestVariantReferenceRsids:
         assert validate_store(two_pass).ok
         assert validate_store(single_pass).ok
 
-    def test_cross_assembly_tuple_is_not_named_from_the_other_locus(self, tmp_path):
-        """Issue #255, round 4: a raw tuple declared under both assemblies is two
+    @pytest.mark.parametrize(
+        ("hg38_alleles", "hg19_alleles"),
+        [(("C", "T"), ("C", "T")), (("c", "t"), ("C", "T")), (("C", "T"), ("c", "t"))],
+        ids=["same-tuple", "hg38-lower", "hg19-lower"],
+    )
+    def test_cross_assembly_tuple_is_not_named_from_the_other_locus(
+        self, tmp_path, hg38_alleles, hg19_alleles
+    ):
+        """Issue #255, round 4: an identity declared under both assemblies is two
         physical loci, and the two-pass build drops it from both. The harvest's
         candidates must drop it too, or an hg38 row's name lands on the ALID the
-        hg19 row's association was lifted to."""
+        hg19 row's association was lifted to. Alleles are upper-cased before
+        identity (issue #360), so a pair whose case differs is that identity
+        too, and is dropped alike rather than refused."""
+        (ref38, alt38), (ref19, alt19) = hg38_alleles, hg19_alleles
         hg38 = _make_vcf(
             tmp_path,
             "hg38_named",
             [
                 "1\t100000\trsPANEL\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
                 # hg38 1:1000000 C/T is named but has no usable association.
-                "1\t1000000\trsHG38_LOCUS\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0\n",
+                f"1\t1000000\trsHG38_LOCUS\t{ref38}\t{alt38}\t.\tPASS\t.\tES:SE\t1.0:0\n",
             ],
         )
         hg19 = _make_vcf(
             tmp_path,
             "hg19_unnamed",
-            # The same raw tuple, lifted to a different locus and unnamed.
-            ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
+            # The same identity, lifted to a different locus and unnamed.
+            [f"1\t1000000\t.\t{ref19}\t{alt19}\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
         )
         manifest = _manifest_with_source_assembly(
             tmp_path, [("a38", hg38, "A hg38", "hg38"), ("b19", hg19, "B hg19", "hg19")]
@@ -2425,11 +2431,14 @@ class TestVariantReferenceRsids:
         assert validate_store(single_pass).ok
 
     @pytest.mark.parametrize("assembly", ["hg38", "hg19"], ids=["reference", "fold"])
-    def test_mixed_case_conflicting_names_refuse_the_build(self, tmp_path, assembly):
-        """Issue #255, round 4: two raw sites that case-fold to one routing key
-        but name it differently cannot be resolved honestly. The two-pass build
-        refuses such an input; the single-pass build must too, on the reference
-        path (hg38) and the fold path (hg19) alike -- not silently keep one."""
+    def test_mixed_case_conflicting_names(self, tmp_path, assembly):
+        """Two raw sites spelt in different case are one variant (issue #360),
+        so the two-pass build stores both associations on it and names it as
+        it names any variant two sources name differently: the first non-empty
+        name in `(rank, site)` order. The single-pass harvest compares the
+        names a routing key's spellings carry and, under `refuse`, refuses
+        them, on the reference path (hg38) and the fold path (hg19) alike --
+        not silently keep one (issue #255, round 4)."""
         first = _make_vcf(
             tmp_path, "first", ["1\t1000000\trsUPPER\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
         )
@@ -2442,11 +2451,14 @@ class TestVariantReferenceRsids:
         panel = tmp_path / "case-panel.txt"
         panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
 
-        with pytest.raises(ValueError, match="case.?fold"):
-            build_hybrid_from_vcf_manifest(
-                manifest, tmp_path / "case.opengwasdb", reference_panel=panel,
-                store_id="s", release_id="r",
-            )
+        two_pass = tmp_path / "case.opengwasdb"
+        build_hybrid_from_vcf_manifest(
+            manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
+        )
+        alid = "1:1000000:C:T" if assembly == "hg38" else HG38_ALID_2
+        assert _hybrid_axis_rsids(two_pass)[alid] == "rsUPPER"
+        with query_store(two_pass) as query:
+            assert len(query.lookup([alid], ["first", "second"])["z"]) == 2
         with pytest.raises(ValueError, match="case.?fold"):
             build_hybrid_from_vcf_manifest(
                 manifest, tmp_path / "case-one.opengwasdb", variant_reference=panel,
@@ -2508,50 +2520,6 @@ class TestVariantReferenceRsids:
         assert "names 1 of its 2 ALIDs and leaves 1 blank" in caplog.text
         assert "off-reference (Overflow) variant(s)" in caplog.text
 
-    @pytest.mark.parametrize(
-        ("hg38_row", "hg19_row"),
-        [
-            (
-                "1\t1000000\trsHG38_LOCUS\tc\tt\t.\tPASS\t.\tES:SE\t1.0:0\n",
-                "1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
-            ),
-            (
-                "1\t1000000\trsHG38_LOCUS\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0\n",
-                "1\t1000000\t.\tc\tt\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
-            ),
-        ],
-        ids=["hg38-lower", "hg19-lower"],
-    )
-    def test_case_folded_cross_assembly_collision_refuses(self, tmp_path, hg38_row, hg19_row):
-        """Issue #255, round 5: the both-assembly drop must be computed on the
-        build's routing key, and the Hybrid routing case-folds. Two *different*
-        raw tuples declared under different assemblies then collide on one key,
-        so the hg38 locus's name would land on the hg19 locus's lifted ALID.
-        The two-pass build refuses that input; this build refuses it too, in
-        both case orientations."""
-        hg38 = _make_vcf(
-            tmp_path,
-            "hg38_named",
-            ["1\t100000\trsPANEL\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n", hg38_row],
-        )
-        hg19 = _make_vcf(tmp_path, "hg19_unnamed", [hg19_row])
-        manifest = _manifest_with_source_assembly(
-            tmp_path, [("a38", hg38, "A hg38", "hg38"), ("b19", hg19, "B hg19", "hg19")]
-        )
-        panel = tmp_path / "case-cross-panel.txt"
-        panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
-
-        with pytest.raises(ValueError, match="case.?fold"):
-            build_hybrid_from_vcf_manifest(
-                manifest, tmp_path / "case-cross-two.opengwasdb", reference_panel=panel,
-                store_id="s", release_id="r",
-            )
-        with pytest.raises(ValueError, match="declared under both hg38 and hg19"):
-            build_hybrid_from_vcf_manifest(
-                manifest, tmp_path / "case-cross-one.opengwasdb", variant_reference=panel,
-                store_id="s", release_id="r",
-            )
-
     def test_admission_rejected_row_still_names_its_variant(self, tmp_path):
         """Hybrid admission (a MAF threshold here) runs inside Pass 2, after the
         reader. A row it drops still names its variant, so the harvest -- taken
@@ -2575,23 +2543,28 @@ class TestVariantReferenceRsids:
         """The rule cannot miss an Overflow-only loss: the oracle walks every
         routed candidate, off-reference ones included, so a rekey that drops
         just an off-reference ALID fails the build."""
-        import opengwasdb.layouts.dense.build_vcf as build_vcf
+        from opengwasdb.variants.routing import names
 
         manifest = _rsid_hybrid_manifest(tmp_path)
         panel = _panel_file(tmp_path)
-        real_rekey = build_vcf._rekey_rsids_to_alids
+        real_rekey = names._rekey_rsids_to_alids
+        dropped: list[str] = []
 
         def _drop_the_overflow_entry(source_lookup, rsid_by_site):
             rekeyed = real_rekey(source_lookup, rsid_by_site)
-            rekeyed.pop(HG38_ALID_2)  # an off-panel (Overflow) variant's name
+            # An off-panel (Overflow) variant's name, present only once the fold
+            # has routed it.
+            if rekeyed.pop(HG38_ALID_2, None) is not None:
+                dropped.append(HG38_ALID_2)
             return rekeyed
 
-        monkeypatch.setattr(build_vcf, "_rekey_rsids_to_alids", _drop_the_overflow_entry)
+        monkeypatch.setattr(names, "_rekey_rsids_to_alids", _drop_the_overflow_entry)
         with pytest.raises(ValueError, match="disagrees with the routed harvest"):
             build_hybrid_from_vcf_manifest(
                 manifest, tmp_path / "lost.opengwasdb", variant_reference=panel,
                 store_id="s", release_id="r",
             )
+        assert dropped == [HG38_ALID_2], "the fault never reached the Overflow name"
 
     def test_written_shared_table_disagreeing_with_the_map_fails_the_build(
         self, tmp_path, monkeypatch
@@ -2768,3 +2741,26 @@ def test_single_pass_off_reference_lift_refuses_to_store_unoriented_statistics(t
         )
 
     assert not store_path.exists(), "a failed build must not leave a release behind"
+
+
+def test_a_two_pass_build_refuses_an_off_reference_spill(tmp_path, monkeypatch):
+    """D6 (issue #357): a two-pass axis is the sources' whole union, so Pass 2
+    drops and logs an unmatched row and nothing folds a `.unk` spill. One that
+    appears all the same is refused, where it used to be deleted unread."""
+    from opengwasdb.layouts.hybrid.unknown_keys import encode_keys
+
+    real_spill = hybrid_build._off_reference_spill
+
+    def _spill_a_row(unmatched, se_divisor, gate):
+        spill = real_spill(unmatched, se_divisor, gate)
+        assert not len(spill[0]), "a two-pass Pass 2 spills nothing of its own"
+        one = np.ones(1, dtype=np.float32)
+        keys = encode_keys(["1:5:A:G"])
+        return keys.values, one, one, one, np.zeros(1, dtype=np.int8), keys.hashed_index, []
+
+    monkeypatch.setattr(hybrid_build, "_off_reference_spill", _spill_a_row)
+    with pytest.raises(RuntimeError, match=r"two-pass Hybrid build found \d+ off-reference"):
+        build_hybrid_from_vcf_manifest(
+            _hybrid_manifest(tmp_path), tmp_path / "store.opengwasdb",
+            reference_panel=_panel(tmp_path), store_id="s", release_id="r",
+        )

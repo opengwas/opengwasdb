@@ -64,6 +64,8 @@ Times are UTC on 4 October 2026 unless stated.
 | `observed-failing-{before,1c,fork-guard}.log`, `pytest-final.log` | pytest, on the committed tests | `708d179`; `8cc6ba1`; code without `max_workers`; `79e4858` | 09:04, 09:52, 09:20, 10:25 | one each | n/a |
 | `encode_scope.out` | `zarr3_encode_scope.py` (was `scripts/encode_scope.py`) | zarr and numcodecs only | 09:02 | one per label | smoke-run on 2,000 rows: sizes equal threaded and not |
 | `se_plan_check.out`, `se_plan_check_fused.out` | `zarr3_se_plan.py` (was `scripts/se_plan_check.py`) | the `1c27e64` / `8cc6ba1` changes | 09:13 / 09:28 | one per label and worker count | smoke-run on 2,000 rows |
+| `se_plan_check-format020.out` | `zarr3_se_plan.py` (#374): `off 1`, `on 1`, `on 4`, `off 4` | `4f903ba` | 2 Nov 22:14–22:19 | one per label and worker count | n/a: the transcript is the run |
+| `se_plan_check_fused-format020.out` | `zarr3_se_plan.py` (#374): `asis 1`, `asis 4` | `4f903ba` | 2 Nov 22:19–22:21 | one per label and worker count | n/a: the transcript is the run |
 | `compare-split-bt-n1.txt`, `compare-split-fused.txt`, `chunk-diff-decode-fused-default.json` | `zarr3_compare_trees.py` (was `scripts/compare_split.py`, `scripts/chunk_diff_decode.py`), on trees from #243's `build_stores.py` | trees at `708d179`, the `1c27e64` and `8cc6ba1` changes, and 2.18 | 09:09–09:27 | one | smoke-run at `0c54ab3` against 2.18: 0 of 466 chunk files differ. The trees now come from `zarr3_fixture_trees.py`, which adds Hybrid Reference Completion, so the counts are higher than these outputs' |
 | `spot-base-OGS-*.json` | `zarr3_spot_queries.py record` (was `/tmp/epic240/244/spot_queries.py`) | `745796c` | 1 Oct 23:01 | one | n/a |
 | `spot-step1-OGS-*.json`, `spot-step1-compare.txt` | `zarr3_spot_queries.py record`, `compare` (was `spot_queries.py`, `scripts/compare_spot.py`) | the `79e4858` changes | 10:01 | one | smoke-run at `0c54ab3`: the OGS-00001 record is byte-identical to `spot-step1-OGS-00001.json` |
@@ -76,6 +78,22 @@ Times are UTC on 4 October 2026 unless stated.
 | `eaf/eaf_semantics_check.json` | `eaf_semantics_check.py` (was `eaf/eaf_semantics_check.py`) | `d1c6c41` | 17:24 | one | re-run at `0c54ab3`: byte-identical |
 | `blosc_decode_1.json`, `blosc_decode_2.json` | `zarr3_blosc_decode.py`, **re-run for this commit** (the original `decode.py`'s output was not kept) | `9b0be2c` (recorded) | 22:18 and 22:19 (recorded) | 2 processes | n/a: these are its own outputs |
 | `RESULTS-step1.md` | the #244 worker's report of these runs | | | | its citations point here |
+
+### The format-0.2.0 SE plan runs
+
+The two `-format020` transcripts above were made by
+
+```bash
+nice -n 10 pixi run -e dev python benchmarks/zarr3_se_plan.py <label> <n_workers> \
+    --store /data/opengwasdb/stores/OGS-00009/store.opengwasdb --scratch <scratch>
+```
+
+with `label` and `n_workers` as each row lists them, against that Store as it
+stood on 2 November 2026: format 0.2.0, `chunk_shape [1000, 64]`,
+`shard_shape [100000, 1024]`, 11,191,070 Variants and 2,514 Analyses. The #244
+transcripts beside them measured a 2,024-Analysis OGS-00009 whose scratch planes
+were unsharded; these are the current format's, and the shard the run stages is
+`[50000, 1024]` -- the format's shard clipped to the 50,000-row slice.
 
 ## Not committed
 

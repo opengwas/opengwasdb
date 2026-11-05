@@ -14,9 +14,11 @@ from pathlib import Path
 from shutil import copytree
 
 import numpy as np
+import plane_edits
 import pytest
 import test_dense_completion as tdc
 from cli_output import normalize_cli_output
+from presence_fixtures import float_plane_z, plant_payload_nan
 from typer.testing import CliRunner
 
 from opengwasdb.build.observed import build_dense_observed_from_sources
@@ -93,6 +95,12 @@ def _plane(store: Path, cls):
     return cls.open(opened.arrays(mode="r+"), opened.manifest.encoding)
 
 
+def _patch(store: Path, cls, rows, cols, values) -> None:
+    """One plane's cells overwritten: a state no writer produces (`plane_edits`)."""
+    opened = open_store(store)
+    plane_edits.patch(opened.arrays(mode="r+"), opened.manifest.encoding, cls, rows, cols, values)
+
+
 def _row_of(store: Path, alid: str) -> int:
     from opengwasdb.variants import VariantAxis
 
@@ -154,19 +162,19 @@ def test_a_completed_fixture_pair_passes_with_hand_counted_totals(tmp_path, pair
 def _perturb_z(store: Path) -> None:
     rows, cols = _cell(store, "1:1000000:A:G", "a1")
     plane = _plane(store, DenseZPlane)
-    plane.patch(rows, cols, plane.points(rows, cols) + 1.0)
+    _patch(store, DenseZPlane, rows, cols, plane.points(rows, cols) + 1.0)
 
 
 def _perturb_se(store: Path) -> None:
     rows, cols = _cell(store, "1:1000000:A:G", "a1")
     plane = _plane(store, DenseSePlane)
-    plane.patch(rows, cols, plane.points(rows, cols) * 2.0)
+    _patch(store, DenseSePlane, rows, cols, plane.points(rows, cols) * 2.0)
 
 
 def _perturb_eaf(store: Path) -> None:
     rows, cols = _cell(store, "1:1000000:A:G", "a1")
     plane = _plane(store, DenseEafPlane)
-    plane.patch(rows, cols, plane.points(rows, cols) * 0.5)
+    _patch(store, DenseEafPlane, rows, cols, plane.points(rows, cols) * 0.5)
 
 
 def _flag_observed_cell_imputed(store: Path) -> None:
@@ -176,22 +184,22 @@ def _flag_observed_cell_imputed(store: Path) -> None:
 
 def _blank_observed_cell(store: Path) -> None:
     rows, cols = _cell(store, "1:1000000:A:G", "a1")
-    _plane(store, DenseZPlane).patch(rows, cols, np.array([np.nan], dtype=np.float32))
+    _patch(store, DenseZPlane, rows, cols, np.array([np.nan], dtype=np.float32))
 
 
 def _observe_a_missing_cell(store: Path) -> None:
     # a2 observes only 1:1000000, so 1:900000 is a source-missing cell in a2.
     rows, cols = np.array([_row_of(store, "1:900000:A:G")]), np.array([1])
-    _plane(store, DenseZPlane).patch(rows, cols, np.array([2.5], dtype=np.float32))
-    _plane(store, DenseSePlane).patch(rows, cols, np.array([0.3], dtype=np.float32))
+    _patch(store, DenseZPlane, rows, cols, np.array([2.5], dtype=np.float32))
+    _patch(store, DenseSePlane, rows, cols, np.array([0.3], dtype=np.float32))
 
 
 def _observe_an_inserted_row(store: Path) -> None:
     # The panel-only row 1:1050000:C:T sits inside the sampled span, and a2 is never
     # imputed, so this cell is missing and unflagged until it is patched.
     rows, cols = np.array([_row_of(store, "1:1050000:C:T")]), np.array([1])
-    _plane(store, DenseZPlane).patch(rows, cols, np.array([2.5], dtype=np.float32))
-    _plane(store, DenseSePlane).patch(rows, cols, np.array([0.3], dtype=np.float32))
+    _patch(store, DenseZPlane, rows, cols, np.array([2.5], dtype=np.float32))
+    _patch(store, DenseSePlane, rows, cols, np.array([0.3], dtype=np.float32))
 
 
 def _write_invalid_imputed(store: Path) -> None:
@@ -200,12 +208,12 @@ def _write_invalid_imputed(store: Path) -> None:
 
 def _z_without_se_on_a_missing_cell(store: Path) -> None:
     rows, cols = np.array([_row_of(store, "1:900000:A:G")]), np.array([1])
-    _plane(store, DenseZPlane).patch(rows, cols, np.array([2.5], dtype=np.float32))
+    _patch(store, DenseZPlane, rows, cols, np.array([2.5], dtype=np.float32))
 
 
 def _z_without_se_on_an_inserted_row(store: Path) -> None:
     rows, cols = np.array([_row_of(store, "1:1050000:C:T")]), np.array([1])
-    _plane(store, DenseZPlane).patch(rows, cols, np.array([2.5], dtype=np.float32))
+    _patch(store, DenseZPlane, rows, cols, np.array([2.5], dtype=np.float32))
 
 
 @pytest.mark.parametrize(
@@ -295,6 +303,58 @@ def test_a_misaligned_axis_fails_and_still_writes_a_verdict(tmp_path, pair):
     assert verdict["bands_checked"] == 0  # rows that do not line up are not compared
 
 
+# --- a part that was not compared is unchecked, not zero (issue #375) ------
+
+
+def _rename_an_alid(store: Path, alid: bytes, replacement: bytes) -> None:
+    """Give one indexed row a nearby position's ALID, which no other Store holds.
+
+    The caller moves a position by one base (`1:1100000:A:C` -> `1:1100001:A:C`), so the
+    source row finds nothing to map to. The new key sorts between the same neighbours as
+    the old one, so the index stays searchable and only that one row's identity moves.
+    """
+    path = store / "variant_alid_bytes.npy"
+    alids = np.load(path)
+    at = int(np.flatnonzero(alids == alid)[0])
+    assert len(replacement) <= alids.dtype.itemsize
+    alids[at] = replacement
+    np.save(path, alids)
+
+
+def test_an_unmappable_axis_reports_the_uncompared_counters_as_unchecked(tmp_path, pair):
+    """No cell was inspected, so no counter may read as a measured zero (issue #375).
+
+    The completed axis no longer holds one source ALID, so the check cannot line the
+    two up and never compares a cell -- and the SE it would have counted is planted
+    in exactly that uncompared part. The verdict still fails on the structural count.
+    """
+    observed, completed = pair
+    _perturb_se(completed)
+    rows, cols = _cell(observed, "1:1000000:A:G", "a1")
+    assert not np.array_equal(
+        _plane(observed, DenseSePlane).points(rows, cols),
+        _plane(completed, DenseSePlane).points(rows, cols),
+    ), "fixture must hold an SE the sample would count"
+    _rename_an_alid(completed, b"1:1100000:A:C", b"1:1100001:A:C")
+    out = tmp_path / "verdict.json"
+
+    result = _run(observed, completed, out)
+
+    assert result.exit_code == 1, result.output
+    verdict = _verdict(result, out)
+    assert verdict["passed"] is False
+    assert verdict["failures"] == ["parent_rows_unmapped"]
+    assert verdict["axis"]["parent_rows_unmapped"] == 1
+    assert verdict["bands_checked"] == 0
+    assert verdict["bands_by_stratum"] == {
+        "random": None, "chrom_edge": None, "final_partial": None,
+        "writer_band_boundary": None,
+    }
+    assert verdict["totals"]["se_mismatch"] is None
+    assert all(value is None for value in verdict["totals"].values()), verdict["totals"]
+    assert verdict["max_abs_diff"] == {"z": None, "se": None, "eaf": None}
+
+
 def test_a_row_map_shifted_by_an_inserted_row_fails_on_the_cells(tmp_path, pair):
     # Order is preserved here -- the source row is simply mapped onto the panel row after it --
     # so only the cell comparison can see it (the ADR's shift-by-one negative control).
@@ -311,6 +371,42 @@ def test_a_row_map_shifted_by_an_inserted_row_fails_on_the_cells(tmp_path, pair)
     assert verdict["totals"]["observed_missing_in_child"] > 0
 
 
+# --- a non-canonical missing marker (spec §15, issue #373) -------------------
+
+# A float16 NaN other than `np.nan`'s 0x7e00 is not a missing marker a reader
+# accepts: it is an invalid state (spec §15), and `isnan` alone cannot tell the two
+# apart. `1:900000:A:G` is a cell a2 does not observe in either Store, so planting
+# Z's payload there changes the marker's bits and nothing else.
+PAYLOAD_CELL = ("1:900000:A:G", 1)
+
+
+def _plant_a_payload_nan(store: Path) -> None:
+    alid, analysis = PAYLOAD_CELL
+    group = float_plane_z(store)
+    row = _row_of(store, alid)
+    assert np.isnan(np.asarray(group["se"][row, analysis], dtype=np.float32))
+    plant_payload_nan(group, (row, analysis))
+
+
+@pytest.mark.parametrize("side", ["target", "source"])
+def test_a_non_canonical_z_is_counted_and_fails(tmp_path, pair, side):
+    """A marker whose payload is not `np.nan`'s is invalid, whichever Store holds it.
+
+    `isnan` reads such a cell as missing, so a check counting by markers alone would
+    pass a Store whose cells no query accepts (spec §15, issue #373).
+    """
+    observed, completed = pair
+    _plant_a_payload_nan({"target": completed, "source": observed}[side])
+    out = tmp_path / "verdict.json"
+
+    result = _run(observed, completed, out)
+
+    assert result.exit_code == 1, result.output
+    verdict = _verdict(result, out)
+    assert verdict["totals"]["non_canonical_marker"] == 1
+    assert "non_canonical_marker" in verdict["failures"]
+
+
 def test_a_different_analyses_order_fails(tmp_path, pair):
     observed, completed = pair
     path = completed / "analyses.tsv"
@@ -325,6 +421,8 @@ def test_a_different_analyses_order_fails(tmp_path, pair):
     verdict = _verdict(result, out)
     assert verdict["analyses"]["identical"] is False
     assert verdict["failures"] == ["analyses_mismatch"]
+    assert verdict["totals"]["se_mismatch"] is None
+    assert all(value is None for value in verdict["totals"].values()), verdict["totals"]
 
 
 # --- an infinite value is a value (issue #337) -----------------------------
@@ -393,7 +491,7 @@ def test_an_infinite_se_copied_identically_passes_and_is_counted(tmp_path, infin
 def test_an_infinite_se_the_target_holds_differently_fails(tmp_path, infinite_se_pair):
     observed, completed = infinite_se_pair
     rows, cols = np.array([_row_of(completed, INFINITE_SE_ALID)]), np.array([0])
-    _plane(completed, DenseSePlane).patch(rows, cols, np.array([0.15], dtype=np.float32))
+    _patch(completed, DenseSePlane, rows, cols, np.array([0.15], dtype=np.float32))
     out = tmp_path / "verdict.json"
 
     result = _run(observed, completed, out)
@@ -579,8 +677,8 @@ def leading_gap_pair(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[P
 
 def _observe_child_row(store: Path, row: int) -> None:
     rows, cols = np.array([row]), np.array([0])
-    _plane(store, DenseZPlane).patch(rows, cols, np.array([2.5], dtype=np.float32))
-    _plane(store, DenseSePlane).patch(rows, cols, np.array([0.3], dtype=np.float32))
+    _patch(store, DenseZPlane, rows, cols, np.array([2.5], dtype=np.float32))
+    _patch(store, DenseSePlane, rows, cols, np.array([0.3], dtype=np.float32))
 
 
 # Child rows 3, 9, 12, 15, 16 are inserted. Chunk-rows of two source rows put 9 and 12 between

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import io
+import re
 from pathlib import Path
 from shutil import copytree
 
@@ -14,9 +15,12 @@ from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.completion.ld_panel import (
     LdPanelNotFoundError,
+    SharedEndpoint,
     canonical_panel_alid,
+    list_all_blocks,
     load_block,
     load_ld_eigenvectors,
+    shared_endpoints,
     snp_position,
 )
 from opengwasdb.encoding import (
@@ -35,7 +39,28 @@ from opengwasdb.query import query_store
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.validation.validate import validate_store
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants import VariantAxis, parse_canonical_alid
+
+
+def assert_a_resume_refuses_an_older_checkpoint(dst: Path, resume) -> None:
+    """Rewrite the one block checkpoint an interrupted completion of ``dst``
+    left without its format mark, as a package before endpoint ownership wrote
+    every one, and require ``resume`` to refuse it, naming the directory and
+    both ways out, and discarding nothing."""
+    checkpoint_dir = checkpoint_dir_for(dst)
+    (written,) = (checkpoint_dir / "blocks").glob("*.npz")
+    with np.load(written, allow_pickle=False) as checkpoint:
+        arrays = {name: checkpoint[name] for name in checkpoint.files if name != "format"}
+    with open(written, "wb") as fh:
+        np.savez(fh, **arrays)
+    with np.load(written, allow_pickle=False) as rewritten:
+        assert "format" not in rewritten.files and "f_alid" in rewritten.files
+
+    with pytest.raises(
+        ValueError, match=rf"{re.escape(str(checkpoint_dir))}.*delete it.*--overwrite"
+    ):
+        resume(checkpoint_dir)
+    assert written.exists() and not dst.exists()
 
 
 def _crash_on_the_second_block(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -346,8 +371,8 @@ class TestCompletionFiles:
         # (ADR 0032) must reflect *this* store's post-completion top-hit
         # index, not be carried forward (or double-counted) from the
         # pre-completion source's counts.
-        from opengwasdb.layouts.dense.top_hits import read_top_hit_counts
         from opengwasdb.model.analyses import read_analyses
+        from opengwasdb.top_hits import read_top_hit_counts
 
         rows = sorted(
             read_analyses(completed_store / "analyses.tsv").rows,
@@ -365,7 +390,7 @@ class TestCompletionFiles:
         added onto -- completion recomputes each Top-Hit Count from the
         completed store's own top-hit index (ADR 0032), which is the mirror
         of the Ragged overwrite test for the same seam."""
-        from opengwasdb.layouts.dense.top_hits import read_top_hit_counts
+        from opengwasdb.top_hits import read_top_hit_counts
 
         analyses_path = observed_store / "analyses.tsv"
         table = read_analyses(analyses_path)
@@ -574,6 +599,30 @@ class TestValidation:
             "imputed=1 cells have NaN se values" in e for e in result.errors
         ), result.errors
 
+    def test_an_imputed_cell_with_an_infinite_se_is_warned_not_failed(self, completed_store):
+        # An infinite value is a value (spec §15, ADR 0070): an imputed cell with a
+        # present Z and SE = +inf is a valid imputed association, so the band pass
+        # warns about the infinity (#337) instead of reading it as a missing SE.
+        # The fixture imputed nothing, so one present on-panel cell is flagged, as
+        # `test_corrupt_imputed_nan_se_fails` does; the completion-count rules that
+        # flag disagrees with are not what this test is about.
+        root = open_store(completed_store).arrays(mode="r+")
+        on_panel_rows = np.where(root["on_panel"][:] == 1)[0]
+        se = root["se"][:]
+        present = np.argwhere(~np.isnan(se[on_panel_rows]))
+        assert len(present) > 0  # the fixture must hold a present on-panel cell
+        r, c = int(on_panel_rows[present[0][0]]), int(present[0][1])
+        imputed = root["imputed"][:]
+        imputed[r, c] = 1
+        root["imputed"][:] = imputed
+        se[r, c] = np.inf
+        root["se"][:] = se
+
+        result = validate_store(completed_store)
+
+        assert not any("NaN se values" in e for e in result.errors), result.errors
+        assert any("infinite se" in w for w in result.warnings), result.warnings
+
     def test_corrupt_eaf_reference_length_fails(self, completed_store):
         # issue #113's shape for a Reference-Completed release with no plane:
         # every imputed cell reads eaf_reference, so a short one hands some
@@ -630,7 +679,7 @@ class TestValidation:
         assert any("missing z" in e for e in result.errors), result.errors
 
     def test_corrupt_top_hit_imputed_index_fails(self, completed_store):
-        from opengwasdb.layouts.dense.top_hits import threshold_key
+        from opengwasdb.top_hits import threshold_key
 
         root = open_store(completed_store).arrays(mode="r+")
         group = root[f"top_hits/{threshold_key(5e-4)}"]
@@ -817,10 +866,10 @@ class TestQuery:
         global_result = q.top_hits(threshold=5e-4)
         expected = global_result["analysis_index"] == 0
 
-        def fail_imputed_pairs(rows, cols):  # noqa: ARG001
+        def fail_imputed_pairs(*_args: object) -> None:
             raise AssertionError("selected top hits must use indexed imputed flags")
 
-        q._imputed_pairs = fail_imputed_pairs
+        q._grid.inspect = fail_imputed_pairs
         selected = q.top_hits(analysis_id="a1", threshold=5e-4)
         observed = q.top_hits(analysis_id="a1", threshold=5e-4, observed_only=True)
 
@@ -830,7 +879,7 @@ class TestQuery:
         q.close()
 
     def test_top_hit_index_stores_imputed_flags(self, completed_store):
-        from opengwasdb.layouts.dense.top_hits import threshold_key
+        from opengwasdb.top_hits import threshold_key
 
         root = open_store(completed_store).arrays(mode="r")
         group = root[f"top_hits/{threshold_key(5e-4)}"]
@@ -849,10 +898,10 @@ class TestQuery:
     def test_top_hits_uses_indexed_imputed_flags(self, completed_store):
         q = query_store(completed_store)
 
-        def fail_imputed_pairs(rows, cols):  # noqa: ARG001
+        def fail_imputed_pairs(*_args: object) -> None:
             raise AssertionError("top_hits should read indexed imputed flags")
 
-        q._imputed_pairs = fail_imputed_pairs
+        q._grid.inspect = fail_imputed_pairs
         result = q.top_hits(threshold=5e-4)
         assert len(result["association_status"]) == len(result["z"])
         q.close()
@@ -864,7 +913,7 @@ class TestQuery:
         def fail_eaf_pairs(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("top_hits should read indexed frequencies")
 
-        q._eaf_pairs = fail_eaf_pairs
+        q._grid.inspect = fail_eaf_pairs
         result = q.top_hits(threshold=5e-4)
         np.testing.assert_array_equal(result["eaf"], expected)
         q.close()
@@ -888,17 +937,17 @@ class TestQuery:
 
         q = query_store(completed_store)
 
-        def fail_imputed_pairs(rows, cols):  # noqa: ARG001
+        def fail_imputed_pairs(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("range_phewas should read imputed flags as a block")
 
-        q._imputed_pairs = fail_imputed_pairs
+        q._grid._eaf.read_points = fail_imputed_pairs
         result = q.range_phewas("1", 900_000, 1_100_000)
         assert len(result["association_status"]) == len(result["z"])
         assert "imputed" in set(result["association_status"].tolist())
         q.close()
 
     def test_top_hits_falls_back_without_indexed_imputed_flags(self, completed_store):
-        from opengwasdb.layouts.dense.top_hits import threshold_key
+        from opengwasdb.top_hits import threshold_key
 
         q = query_store(completed_store)
         indexed = q.top_hits(threshold=5e-4)
@@ -915,7 +964,7 @@ class TestQuery:
             np.testing.assert_array_equal(indexed[name], fallback[name])
 
     def test_top_hits_falls_back_without_indexed_frequency(self, completed_store):
-        from opengwasdb.layouts.dense.top_hits import threshold_key
+        from opengwasdb.top_hits import threshold_key
 
         q = query_store(completed_store)
         indexed = q.top_hits(threshold=5e-4)
@@ -997,6 +1046,22 @@ class TestResume:
         assert result.n_variants > 0
 
         assert validate_store(dst).ok
+
+    def test_a_resume_refuses_a_block_checkpoint_an_older_package_wrote(
+        self, tmp_path, observed_store, ld_panel, monkeypatch
+    ):
+        """Before endpoint ownership (ADR 0072) a block filled and counted the
+        variant at its end that the next block owns, and its checkpoint says
+        nothing of which rule wrote it. Resumed beside the next block's, both
+        fills would reach one cell, so the resume refuses the directory,
+        naming it and the two ways out, and discards nothing."""
+        dst = tmp_path / "resumed.opengwasdb"
+        _crash_on_the_second_block(monkeypatch)
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            complete_dense_store(observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0)
+        monkeypatch.undo()
+
+        assert_a_resume_refuses_an_older_checkpoint(dst, resume_dense_completion)
 
     def test_resume_with_no_checkpointed_block_matches_fresh_run(
         self, tmp_path, observed_store, ld_panel, monkeypatch
@@ -1114,12 +1179,12 @@ class TestCompletedBandWriter:
         out_to_src: np.ndarray,
         records: np.ndarray,
         impute_mask: np.ndarray | None,
-    ) -> tuple[Path, StoreEncoding, int, tuple[np.ndarray, int, int]]:
+    ) -> tuple[Path, StoreEncoding, int, tuple[np.ndarray, int, int, np.ndarray]]:
         """Build a staged completed-zarr target, write one fill shard for the
         single band every small store maps to, run the writer, and return
         ``(dst, encoding, n_analyses, counters)`` where counters are the
         writer's ``(n_missing_off_panel, n_missing_imputation_failed,
-        total_imputed)``. The destination is left staged (committed by the
+        total_imputed, se_out_of_range)``. The destination is left staged (committed by the
         context manager), so the returned ``dst`` holds ``data.zarr`` ready
         to open.
         """
@@ -1156,7 +1221,12 @@ class TestCompletedBandWriter:
                 encoding,
                 impute_mask=impute_mask,
             )
-        return dst, encoding, n_analyses, counters
+        return dst, encoding, n_analyses, (
+            counters.n_missing_off_panel,
+            counters.n_missing_imputation_failed,
+            counters.total_imputed,
+            counters.se_out_of_range,
+        )
 
     def test_exact_counters_and_cell_accounting(self, tmp_path, signal_observed_store):
         """The writer fills only cells the source left missing, never overwrites
@@ -1186,7 +1256,7 @@ class TestCompletedBandWriter:
         records["z"] = [7.5, -2.5, 0.25]
         records["se"] = [0.11, 0.22, 0.30]
 
-        dst, encoding, n_analyses, (miss_off, miss_failed, n_imputed) = self._call_writer(
+        dst, encoding, n_analyses, (miss_off, miss_failed, n_imputed, _) = self._call_writer(
             tmp_path, signal_observed_store, n_variants, on_panel, out_to_src,
             records, impute_mask=None,
         )
@@ -1232,6 +1302,40 @@ class TestCompletedBandWriter:
                 tmp_path, observed_store, n_variants, on_panel, out_to_src,
                 records, impute_mask=np.array([True, False]),
             )
+
+
+    def _fill_one_missing_cell(self, tmp_path, store, z: float, se: float):
+        """Fill the signal fixture's one cell nobody observed (row 6, Analysis 0)."""
+        n_variants = 12
+        out_to_src = np.full(n_variants, -1, dtype=np.int64)
+        observed = [i for i in range(n_variants) if i != _SIGNAL_MISSING_IDX]
+        out_to_src[observed] = np.arange(len(observed))
+        records = np.zeros(1, dtype=complete_module._FILL_RECORD_DTYPE)
+        records["row"], records["ai"], records["z"], records["se"] = [6], [0], [z], [se]
+        return self._call_writer(
+            tmp_path, store, n_variants, np.ones(n_variants, dtype=bool), out_to_src,
+            records, impute_mask=None,
+        )
+
+    def test_a_fill_admission_would_not_admit_is_refused(self, tmp_path, signal_observed_store):
+        """A fill with a Z and no SE would be stored as a half-missing pair (spec §15).
+
+        Each band is judged whole before any plane holds it, so the write
+        refuses with Association Admission's rule rather than storing it.
+        """
+        from opengwasdb.admission.cells import NotAdmitted
+
+        with pytest.raises(NotAdmitted, match=r"complete-dense, rows 0 to 12: .*one of z and SE"):
+            self._fill_one_missing_cell(tmp_path, signal_observed_store, 5.0, np.nan)
+
+    def test_an_se_above_float16s_range_is_counted_for_its_analysis(
+        self, tmp_path, signal_observed_store
+    ):
+        *_, (_, _, n_imputed, se_out_of_range) = self._fill_one_missing_cell(
+            tmp_path, signal_observed_store, 5.0, 70_000.0
+        )
+        assert n_imputed == 1
+        assert se_out_of_range.tolist() == [1]
 
 
 class TestCompletedStoreCounters:
@@ -1715,3 +1819,315 @@ class TestReaderSeam:
             assert not np.isfinite(se_col[1]).any()
             assert not np.isfinite(z_col[2]).any()
             assert not np.isfinite(se_col[2]).any()
+
+
+@pytest.mark.parametrize("plane", ["se", "z"])
+def test_a_source_cell_with_one_of_z_and_se_missing_is_refused(
+    tmp_path: Path,
+    observed_store: Path,
+    ld_panel: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plane: str,
+):
+    """Spec §15 forbids a half-missing pair. Completing one would pair an imputed
+    value with an observed one, so completion refuses the source instead; the
+    source's first present cell is read back with one of its two values missing."""
+    from opengwasdb.admission.cells import NotAdmitted
+    from opengwasdb.encoding.planes import DenseSePlane, DenseZPlane
+
+    cls = DenseSePlane if plane == "se" else DenseZPlane
+    original = cls.rows
+
+    def rows(self, *args, **kwargs):
+        out = np.array(original(self, *args, **kwargs), dtype=np.float32, copy=True)
+        present = np.flatnonzero(np.isfinite(out))
+        # Fixture first: the band holds a present cell to break.
+        assert present.size
+        out.flat[present[0]] = np.nan
+        return out
+
+    monkeypatch.setattr(cls, "rows", rows)
+    with pytest.raises(NotAdmitted, match="one of z and SE missing"):
+        complete_dense_store(
+            observed_store, tmp_path / "comp.opengwasdb", ld_panel,
+            ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+        )
+    assert not (tmp_path / "comp.opengwasdb").exists()
+
+
+def _seed_unjudged(zb, sb, src_plane, src_se_plane, out_to_src, r0):
+    """Seed a band from the source as completion does, judging none of its cells."""
+    valid, rows = complete_module._band_source_rows(out_to_src, r0, r0 + len(zb))
+    if len(valid):
+        zb[valid, :] = src_plane.rows(rows)
+        sb[valid, :] = src_se_plane.rows(np.asarray(rows, dtype=np.int64))
+
+
+@pytest.mark.parametrize(
+    ("judged_by", "where"),
+    [
+        ("the source read", r"complete-dense, the source's cells"),
+        ("the writer", "complete-dense, rows"),
+    ],
+)
+def test_a_source_marker_other_than_the_canonical_nan_is_refused(
+    tmp_path: Path,
+    observed_store: Path,
+    ld_panel: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    judged_by: str,
+    where: str,
+):
+    """Spec §15 forbids a missing marker other than `np.nan`'s NaN (ADR 0070).
+
+    a2 is missing at chr1:900,000 in both planes, and no LD block fills it: a2
+    has one observation, too few to impute from. Its SE marker is planted as
+    the `float16` NaN 0x7e01. Read as missing, the cell's payload was carried
+    into the completed `float16` plane, which `validate` then failed. The source
+    read refuses the cell, and the writer's own check refuses it when nothing
+    has judged it before.
+    """
+    import zarr
+
+    from opengwasdb.admission import NotAdmitted
+
+    group = zarr.open_group(observed_store / "data.zarr", mode="r+")
+    encoding = open_store(observed_store).manifest.encoding
+    row, a2 = 0, 1
+    # Fixture first: a float16 SE plane, and a2 missing at row 0 in both planes.
+    assert group["se"].dtype == np.float16
+    assert VariantAxis(observed_store).by_index(row).alid == "1:900000:A:G"
+    assert np.isnan(DenseZPlane.open(group, encoding).rows(np.array([row]))[0, a2])
+    assert np.isnan(DenseSePlane.open(group, encoding).rows(np.array([row]))[0, a2])
+    group["se"][row, a2] = np.array([0x7E01], np.uint16).view(np.float16)[0]
+    assert int(np.asarray(group["se"][row, a2]).view(np.uint16)) == 0x7E01
+    if judged_by == "the writer":
+        monkeypatch.setattr(complete_module, "_seed_paired_bands", _seed_unjudged)
+
+    with pytest.raises(NotAdmitted, match=f"{where}.*missing marker other than the canonical NaN"):
+        complete_dense_store(
+            observed_store, tmp_path / "comp.opengwasdb", ld_panel,
+            ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+        )
+    assert not (tmp_path / "comp.opengwasdb").exists()
+
+
+# ── a variant two LD blocks hold (ADR 0072) ────────────────────────────────
+
+#: What each stubbed block imputes for every candidate, by its size: the two
+#: fills the review found completion storing one of.
+_FILL_BY_BLOCK_SIZE = {5: 2.949039, 4: 2.949039, 3: 1.767842}
+
+#: chr1 cut at 1,050,000, which both blocks hold, as the panels completion
+#: reads hold each shared endpoint (their blocks were cut with an inclusive end).
+_ENDING_AT = [
+    ("1:900000:A:G", 0.35, 900_000),
+    ("1:950000:A:C", 0.32, 950_000),
+    ("1:1000000:A:G", 0.30, 1_000_000),
+    ("1:1050000:C:T", 0.40, 1_050_000),
+]
+_STARTING_AT = [
+    ("1:1050000:C:T", 0.40, 1_050_000),
+    ("1:1100000:A:C", 0.45, 1_100_000),
+    ("1:1200000:A:G", 0.30, 1_200_000),
+]
+
+
+def _stub_fits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every block's fit pass and impute each candidate its block's value."""
+    from opengwasdb.completion import block
+
+    def fit(z_dense, eigenvectors, eigenvalues, *, min_cor):
+        return np.full(len(z_dense), _FILL_BY_BLOCK_SIZE[len(z_dense)]), 0.9
+
+    monkeypatch.setattr(block, "impute_z_block", fit)
+
+
+def _boundary_panel(root: Path, ending: str, starting: str) -> Path:
+    _write_ld_block(root / "EUR" / "1", ending, _ENDING_AT, seed=0)
+    _write_ld_block(root / "EUR" / "1", starting, _STARTING_AT, seed=1)
+    return root
+
+
+def _cell(store: Path, alid: str, analysis: int) -> tuple[float, int]:
+    """One cell's decoded z and imputed flag."""
+    axis = VariantAxis(store)
+    try:
+        row = axis.by_alid(parse_canonical_alid(alid)).variant_index
+    finally:
+        axis.close()
+    opened = open_store(store)
+    root = opened.arrays(mode="r")
+    z = DenseZPlane.open(root, opened.manifest.encoding).rows(np.array([row]))[0, analysis]
+    return float(z), int(root["imputed"][row, analysis])
+
+
+def _imputed_by_block(store: Path, analysis: int) -> dict[str, int]:
+    import sqlite3
+
+    with sqlite3.connect(str(store / "index.sqlite")) as conn:
+        return dict(
+            conn.execute(
+                "SELECT block_id, n_imputed FROM completion_quality WHERE analysis_index = ?",
+                (analysis,),
+            )
+        )
+
+
+def test_shared_endpoints_name_the_block_that_starts_there(tmp_path: Path):
+    panel = _boundary_panel(tmp_path, "900000-1050000", "1050000-1200000")
+    _write_ld_block(panel / "EUR" / "2", "1-500000", [("2:100000:A:G", 0.2, 100_000)])
+
+    endpoints = shared_endpoints(
+        list_all_blocks(panel, "EUR", "1") + list_all_blocks(panel, "EUR", "2")
+    )
+
+    assert endpoints == {
+        "1/900000-1050000": SharedEndpoint("1/1050000-1200000", frozenset({"1:1050000:C:T"}))
+    }
+
+
+def test_a_block_neither_fills_nor_counts_what_it_cedes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The kernel both layouts run: a block leaves a ceded variant to the next
+    block, for the Analyses it cedes it for, and counts it neither filled nor
+    missing there. Its observation still informs the fit."""
+    from opengwasdb.completion.block import run_block
+
+    _stub_fits(monkeypatch)
+    panel = _boundary_panel(tmp_path, "900000-1050000", "1050000-1200000")
+    observed = {"1:900000:A:G": 1.0, "1:950000:A:C": 1.8, "1:1000000:A:G": 2.0}
+
+    def make_reader(block, alids):
+        z = np.array([observed.get(a, np.nan) for a in alids])
+        return [0, 1], lambda analysis: (z, np.where(np.isnan(z), np.nan, 0.15))
+
+    tsv = panel / "EUR" / "1" / "900000-1050000.tsv"
+    endpoint = frozenset({"1:1050000:C:T"})
+    result = run_block(
+        tsv, 0.9, 0.0, None, make_reader,
+        ceded=lambda analysis: endpoint if analysis == 0 else frozenset(),
+    )
+
+    assert [(f.alid, f.analysis_index) for f in result.fills] == [("1:1050000:C:T", 1)]
+    assert [(q.analysis_index, q.n_imputed, q.n_missing) for q in result.quality_rows] == [
+        (0, 0, 0),
+        (1, 1, 0),
+    ]
+
+
+def test_a_shared_endpoint_is_filled_by_the_block_that_starts_there_and_counted_once(
+    tmp_path: Path, observed_store: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Blocks are half-open (ADR 0072): 1,050,000 belongs to the block that
+    starts there, which alone fills it. The block that ends there neither
+    fills nor counts it, so a1's one imputed cell is counted once."""
+    _stub_fits(monkeypatch)
+    panel = _boundary_panel(tmp_path / "panel", "900000-1050000", "1050000-1200000")
+    dst = tmp_path / "comp.opengwasdb"
+    # Fixture first: a1 is missing at the endpoint, and each block can fill it.
+    assert "1:1050000:C:T" not in {v.alid for v in VariantAxis(observed_store).all()}
+    assert {len(_ENDING_AT), len(_STARTING_AT)} <= set(_FILL_BY_BLOCK_SIZE)
+
+    result = complete_dense_store(
+        observed_store, dst, panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+    )
+
+    z, imputed = _cell(dst, "1:1050000:C:T", 0)
+    assert imputed == 1
+    assert z == pytest.approx(_FILL_BY_BLOCK_SIZE[len(_STARTING_AT)], abs=1e-3)
+    assert _imputed_by_block(dst, 0) == {"1/900000-1050000": 0, "1/1050000-1200000": 1}
+    assert result.n_imputed == 1
+    a1 = next(r for r in read_analyses(dst / "analyses.tsv").rows if r["analysis_id"] == "a1")
+    assert a1["completion_n_imputed_total"] == "1"
+
+
+def test_a_shared_endpoint_does_not_depend_on_block_order(
+    tmp_path: Path, observed_store: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The same two blocks, named so their checkpoints sort the other way
+    round, complete to the same cells."""
+    _stub_fits(monkeypatch)
+    stores = []
+    for ending in ("900000-1050000", "0900000-1050000"):
+        panel = _boundary_panel(tmp_path / ending / "panel", ending, "1050000-1200000")
+        dst = tmp_path / ending / "comp.opengwasdb"
+        complete_dense_store(
+            observed_store, dst, panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+        )
+        stores.append(dst)
+    # Fixture first: the two names sort on either side of the starting block's.
+    assert sorted(["900000-1050000", "1050000-1200000"])[0] == "1050000-1200000"
+    assert sorted(["0900000-1050000", "1050000-1200000"])[0] == "0900000-1050000"
+
+    _assert_stores_identical(*stores)
+
+
+def test_two_overlapping_blocks_filling_one_cell_leave_it_missing_and_log_both(
+    tmp_path: Path,
+    observed_store: Path,
+    ld_panel: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """The review's reproduction: a second block overlaps the fixture's chr1
+    block, and both fill a1 at 1:1050000:C:T, with z 2.949039 and 1.767842.
+    1,050,000 is no endpoint of either, so no block owns it, and the fills
+    disagree: Association Admission's duplicate rule (D5) keeps neither, and
+    the log names both (D8). Completion used to store the last."""
+    import logging
+
+    _stub_fits(monkeypatch)
+    overlapping = [
+        ("1:1000000:A:G", 0.30, 1_000_000),
+        ("1:1050000:C:T", 0.40, 1_050_000),
+        ("1:1100000:A:C", 0.45, 1_100_000),
+    ]
+    _write_ld_block(ld_panel / "EUR" / "1", "1000000-1100000", overlapping, seed=2)
+    # Fixture first: both blocks hold the cell's variant, at no shared endpoint.
+    blocks = list_all_blocks(ld_panel, "EUR", "1")
+    assert [len(b.snp_ids) for b in blocks] == [3, 5]
+    assert all("1:1050000:C:T" in b.snp_ids for b in blocks)
+    assert shared_endpoints(blocks) == {}
+    caplog.set_level(logging.WARNING, logger="opengwasdb.layouts.dense.complete")
+    dst = tmp_path / "comp.opengwasdb"
+
+    complete_dense_store(
+        observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+    )
+
+    z, imputed = _cell(dst, "1:1050000:C:T", 0)
+    assert np.isnan(z) and imputed == 0
+    dropped = [
+        record.getMessage()
+        for record in caplog.records
+        if "dropped fill 1:1050000:C:T" in record.getMessage()
+    ]
+    assert len(dropped) == 2 and all(m.endswith("duplicate_conflicting") for m in dropped)
+    assert sorted(round(float(m.split("z=")[1].split(",")[0]), 6) for m in dropped) == [
+        1.767842,
+        2.949039,
+    ]
+
+
+def test_a_candidate_with_no_usable_se_is_not_a_fill(monkeypatch: pytest.MonkeyPatch):
+    """A panel frequency of 0 gives a candidate no SE: it is not stored as a
+    fill, and it is counted missing, as every candidate Admission would not
+    store is. The imputation itself is stubbed, so only that rule decides."""
+    from opengwasdb.completion import block
+
+    imputed = np.array([2.0, 1.5, 0.8, 0.6])
+    monkeypatch.setattr(block, "impute_z_block", lambda *args, **kwargs: (imputed, 0.9))
+    z = np.array([2.0, 1.5, np.nan, np.nan])
+    se = np.array([0.1, 0.12, np.nan, np.nan])
+    eaf = np.array([0.3, 0.4, 0.2, 0.0])
+
+    result = block.complete_block_for_analysis(
+        z, se, eaf, np.arange(4) * 1000, np.eye(4), np.ones(4),
+        min_cor=0.0, region_cap_bp=None,
+    )
+
+    assert result.pearson_r == 0.9
+    assert [fill[0] for fill in result.fills] == [2]
+    assert result.n_missing == 1

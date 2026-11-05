@@ -75,6 +75,7 @@ from typing import Any
 import numpy as np
 import zarr
 
+from opengwasdb.associations.record import State, Tally
 from opengwasdb.build.liftover import normalise_build
 from opengwasdb.encoding import (
     EAF_BASELINE,
@@ -2478,8 +2479,12 @@ def validate_indexed_subsets(
     if not isinstance(namespace, zarr.Group):
         errors.append(f"data.zarr/{INDEXED_SUBSETS_GROUP} is not a group")
         return
+    # Each entry is judged on its own findings: a defect in one subset says
+    # nothing about another, so it must not stop that one's value comparison.
     for entry in _namespace_entries(context.namespace_dir):
-        _validate_namespace_entry(context, namespace, entry, errors, exhaustive=exhaustive)
+        found: list[str] = []
+        _validate_namespace_entry(context, namespace, entry, found, exhaustive=exhaustive)
+        errors.extend(found)
 
 
 def _report_absent_namespace(namespace_dir: Path, errors: list[str]) -> None:
@@ -3467,13 +3472,13 @@ def _imputed_mask_message(
     the primary labels observed cells imputed and vice versa, and a non-0/1
     value is not a mask at all.  Each is refused rather than decoded.
     """
-    if not np.all((index_imputed == 0) | (index_imputed == 1)):
-        return f"indexed subset {name!r} imputed mask contains values other than 0 and 1"
     se_missing = (
         index_se_raw == SE_MISSING if encoding.se.is_residual else np.isnan(index_se_raw)
     )
-    missing = context.codec.missing_mask(index_z_raw) | se_missing
-    if np.any(index_imputed.astype(bool) & missing):
+    tally = Tally.of(context.codec.missing_mask(index_z_raw), se_missing, index_imputed)
+    if tally.flags_not_binary:
+        return f"indexed subset {name!r} imputed mask contains values other than 0 and 1"
+    if tally.imputed_z_missing or tally.imputed_se_missing:
         return f"indexed subset {name!r} marks a missing Z/SE cell imputed"
     if primary_cells is None:
         return f"indexed subset {name!r} carries an imputed mask but the release has none"
@@ -3518,7 +3523,7 @@ def _missingness_error(
         if encoding.se.is_residual
         else np.isnan(index_se_raw)
     )
-    if not np.array_equal(context.codec.missing_mask(index_z_raw), se_missing):
+    if Tally.of(context.codec.missing_mask(index_z_raw), se_missing).count(State.PARTIAL):
         return f"indexed subset {name!r} Z/SE missingness disagrees within the index"
     return None
 

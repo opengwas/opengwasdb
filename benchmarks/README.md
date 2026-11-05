@@ -934,7 +934,11 @@ time.
 `benchmarks/check_store_segment_order.py` runs only that one validation rule
 (the `variant_index` sorted-segment invariant, spec §11/§20), not the whole of
 `validate_store`, and reads the array in 1,000,000-cell windows so its peak
-memory is bounded. `pixi run -e dev python
+memory is bounded. The windows run over the whole sequence, not one Analysis's
+segment at a time: a window spans segments, and each cell's Analysis is read
+from the offsets. So `entries_checked` is every entry on an ordered Store, and
+on a Store with a break, the entries up to the end of the window holding the
+first one. `pixi run -e dev python
 benchmarks/check_store_segment_order.py --root /data/opengwasdb/stores` is the
 command that produced the artifact above.
 
@@ -1147,13 +1151,18 @@ outputs. The shapes themselves are `_query_shapes.common_query_patterns`.
 | `zarr3_fixture_trees.py` | one fixture store per builder path, with a given checkout's code | (trees, not committed) |
 | `zarr3_compare_trees.py` | two such trees: chunk bytes apart from metadata, and whether differing chunks decode equal | `compare-split-*.txt`, `chunk-diff-decode-fused-default.json` |
 | `zarr3_encode_scope.py` | compressed tile sizes and band-write time per lever, on real OGS-00009 | `encode_scope.out` |
-| `zarr3_se_plan.py` | the SE encoding plan chosen on a real OGS-00009 slice, per lever and worker count | `se_plan_check*.out` |
+| `zarr3_se_plan.py` | the SE encoding plan chosen on a real OGS-00009 slice, per lever and worker count | `se_plan_check*.out` (see below) |
 | `zarr3_spot_queries.py` | spot queries with every returned array hashed, and the comparison of two records | `spot-*.json`, `spot-step1-compare.txt` |
 | `shape_slice.py` | a 100,000-variant slice of OGS-00009 `z` in candidate shapes; its raw reads; per-plane decode times | `slice/slice_read_*.jsonl`, `slice/round1/`, `slice/decode_by_plane.jsonl`, `slice_build.out` |
 | `shape_harness_geometry.py` | the arrays and chunks each harness shape reads, re-expressed per candidate chunk | `slice/harness_geometry.json` |
 | `shape_screen.py` | the read cost model, the shape screen, the expected 0.2.0 times, the model's rank check, the slice table | `slice/{cost_model,screen,expected_020,screen_rank_check}.{json,out}` |
 | `eaf_read_split.py` | each query's time inside the EAF reads, split by caller (#253) | `eaf/eaf_split_{1,2}.json` |
 | `eaf_semantics_check.py` | which EAF residual SE decodes against on a Reference-Completed release (#253) | `eaf/eaf_semantics_check.json` |
+
+`zarr3_se_plan.py`'s output is committed twice: the `1c27e64`/`8cc6ba1`
+transcripts (#244), and `se_plan_check-format020.out` with
+`se_plan_check_fused-format020.out`, the same six runs on a format 0.2.0 store,
+whose command and date `PROVENANCE.md` records.
 
 The #242 harness made the paired 2.18 / zarr 3 runs (`stage-a*`) and the
 peak-memory runs (`rss-*`), each environment running its own checkout's copy:
@@ -1263,6 +1272,30 @@ conversion as `v3-c64` with `--top-hit-shard-chunks 1`, so the artifact's
 `dataset.layout` says which top-hit shard each store holds.
 
 ---
+
+### `routing_fixture_trees.py` (#352)
+
+The characterisation instrument for moving Variant Routing into its own module.
+It builds one small Store, Variant Reference artifact or refusal per routing
+path from fixed inputs, with whichever checkout `--repo` names, and compares two
+such trees file by file. `inputs` writes the inputs once, with the base
+checkout; `build` builds the 28 cases; `seed` fails the two checkpointed cases
+after `pass2` and after `fold` and archives each checkpoint; `resume` resumes
+those archives with another checkout. `compare` compares raw bytes, except that
+a manifest is compared without its `created_at` and a gzip file decompressed;
+with `--resumed`, against a resumed tree, an SQLite file is compared by its
+dump, because a resume writes the index metadata a second time. The script's
+docstring lists the paths and the commands.
+
+Two cases, extraction's refusal of a reverse-strand lift, record an outcome that
+arrived with #354's guard (98a6e7a), after the inputs' base (6415be4). Build
+them with `--cases since` at that commit or later, build the base with
+`--cases base`, and compare each part under the same `--cases`.
+
+At 6415be4, two builds of the 26 base cases compare equal (1,906 files), and
+each seeded checkpoint resumed at that commit equals the fresh checkpointed
+build. Each case checks it reached its path (the ALIDs it must hold or lack, the
+refusal it must raise, the dispute it must meet) before anything compares it.
 
 ## Comparison document
 

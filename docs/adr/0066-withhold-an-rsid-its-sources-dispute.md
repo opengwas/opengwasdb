@@ -9,7 +9,7 @@ and the reader rule that removes the disagreements that were never real
 
 ## Context
 
-A Hybrid routing key upper-cases alleles (`_routed_site_key`), because case is
+A Hybrid routing key upper-cases alleles (`RoutingKey.CASE_FOLDED`), because case is
 not an orientation change: a source writing `c`/`t` reports the same variant as
 one writing `C`/`T`. The single-pass rsid harvest keys every source site the
 same way, so two spellings of one site meet on one key. When their sources name

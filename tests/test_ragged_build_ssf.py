@@ -56,6 +56,7 @@ _MANIFEST_HEADER = [
     "context",
     "mhc",
     "filtered_file",
+    "source_genome_build",
 ]
 
 
@@ -192,6 +193,7 @@ def _make_fixture(tmp_path: Path) -> tuple[Path, Path]:
                 "context": "",
                 "mhc": "FALSE",
                 "filtered_file": "trait_a.tsv.gz",
+                "source_genome_build": "GRCh38",
             },
             {
                 "analysis_index": 1,
@@ -207,6 +209,7 @@ def _make_fixture(tmp_path: Path) -> tuple[Path, Path]:
                 "context": "",
                 "mhc": "FALSE",
                 "filtered_file": "trait_b.tsv.gz",
+                "source_genome_build": "GRCh38",
             },
         ],
     )
@@ -273,6 +276,7 @@ def test_ssf_build_queries_and_validates_residual_se(tmp_path):
                 "n": 1000,
                 "mhc": "FALSE",
                 "filtered_file": "trait.tsv.gz",
+                "source_genome_build": "GRCh38",
             }
         ],
     )
@@ -507,18 +511,10 @@ def test_non_dense_analysis_index_fails_loudly(tmp_path):
     _write_manifest(
         manifest,
         [
-            {
-                "analysis_index": 0,
-                "analysis_id": "trait_a",
-                "trait_id": "T1",
-                "filtered_file": "trait_a.tsv.gz",
-            },
-            {
-                "analysis_index": 2,
-                "analysis_id": "trait_b",
-                "trait_id": "T2",
-                "filtered_file": "trait_a.tsv.gz",
-            },
+            {"analysis_index": 0, "analysis_id": "trait_a", "trait_id": "T1",
+             "filtered_file": "trait_a.tsv.gz", "source_genome_build": "GRCh38"},
+            {"analysis_index": 2, "analysis_id": "trait_b", "trait_id": "T2",
+             "filtered_file": "trait_a.tsv.gz", "source_genome_build": "GRCh38"},
         ],
     )
     out = tmp_path / "out.opengwasdb"
@@ -551,6 +547,7 @@ def test_manifest_without_trait_id_builds(tmp_path):
             "analysis_id": "metabolite_a",
             "analysis_label": "Metabolite A",
             "filtered_file": "trait_a.tsv.gz",
+            "source_genome_build": "GRCh38",
         }
         fh.write("\t".join(str(row.get(col, "")) for col in header) + "\n")
     out = tmp_path / "out.opengwasdb"
@@ -637,6 +634,7 @@ def test_duplicate_canonical_variant_within_analysis_is_resolved(tmp_path):
                 "analysis_id": "trait_a",
                 "trait_id": "T1",
                 "filtered_file": "trait_a.tsv.gz",
+                "source_genome_build": "GRCh38",
             },
         ],
     )
@@ -657,6 +655,22 @@ def test_duplicate_canonical_variant_within_analysis_is_resolved(tmp_path):
     surviving_alids = {alid_by_index[int(i)] for i in a0.variant_index}
     assert surviving_alids == {"1:100000:A:G", "1:300000:A:G"}
 
+    # The Admission record counts the collapsed row and logs both conflicting ones.
+    import gzip
+    import json
+
+    from opengwasdb.admission import admission_record_for
+
+    record = admission_record_for(out)
+    (analysis,) = json.loads((record / "admission.json").read_text(encoding="utf-8"))["analyses"]
+    assert analysis["dropped"] == {"duplicate_collapsed": 1, "duplicate_conflicting": 2}
+    assert (analysis["examined"], analysis["admitted"]) == (5, 2)
+    with gzip.open(record / "dropped" / "0.tsv.gz", "rt", encoding="utf-8") as fh:
+        assert fh.read().splitlines()[1:] == [
+            "1:200000:A:G\tduplicate_conflicting",
+            "1:200000:A:G\tduplicate_conflicting",
+        ]
+
     from opengwasdb.validation import validate_store
 
     assert validate_store(out).ok
@@ -675,6 +689,7 @@ def _invoke_cli_build(manifest, filtered_dir, out, *extra: str):
             str(manifest),
             str(filtered_dir),
             str(out),
+            "--admission-record", f"{out}.admission",
             "--store-id", "cli-test",
             "--release-id", "v1",
             *extra,
@@ -785,9 +800,9 @@ def test_emptied_analysis_keeps_its_slot_and_scope(tmp_path):
         manifest,
         [
             {"analysis_index": 0, "analysis_id": "conflict_trait",
-             "filtered_file": "conflict.tsv.gz"},
+             "filtered_file": "conflict.tsv.gz", "source_genome_build": "GRCh38"},
             {"analysis_index": 1, "analysis_id": "healthy_trait",
-             "filtered_file": "healthy.tsv.gz"},
+             "filtered_file": "healthy.tsv.gz", "source_genome_build": "GRCh38"},
         ],
     )
     out = tmp_path / "out.opengwasdb"
@@ -818,15 +833,15 @@ def test_canonical_analyses_tsv_columns_build_identical_to_legacy(tmp_path):
 
     legacy_manifest = tmp_path / "legacy_manifest.tsv"
     legacy_manifest.write_text(
-        "analysis_index\tanalysis_id\tanalysis_label\tn\tfiltered_file\n"
-        "0\ttrait_a\tTrait A\t1000\ttrait_a.tsv.gz\n",
+        "analysis_index\tanalysis_id\tanalysis_label\tn\tfiltered_file\tsource_genome_build\n"
+        "0\ttrait_a\tTrait A\t1000\ttrait_a.tsv.gz\tGRCh38\n",
         encoding="utf-8",
     )
 
     canonical_manifest = tmp_path / "canonical_manifest.tsv"
     canonical_manifest.write_text(
-        "analysis_index\tanalysis_id\tanalysis_label\tsample_size\tsource_file\n"
-        "0\ttrait_a\tTrait A\t1000\ttrait_a.tsv.gz\n",
+        "analysis_index\tanalysis_id\tanalysis_label\tsample_size\tsource_file\tsource_genome_build\n"
+        "0\ttrait_a\tTrait A\t1000\ttrait_a.tsv.gz\tGRCh38\n",
         encoding="utf-8",
     )
 
@@ -858,8 +873,8 @@ def test_canonical_sample_size_wins_over_legacy_n(tmp_path):
 
     manifest = tmp_path / "manifest.tsv"
     manifest.write_text(
-        "analysis_index\tanalysis_id\tsample_size\tn\tsource_file\n"
-        "0\ttrait_a\t5000\t1000\ttrait_a.tsv.gz\n",
+        "analysis_index\tanalysis_id\tsample_size\tn\tsource_file\tsource_genome_build\n"
+        "0\ttrait_a\t5000\t1000\ttrait_a.tsv.gz\tGRCh38\n",
         encoding="utf-8",
     )
 
@@ -884,8 +899,8 @@ def test_absolute_source_file_used_as_is(tmp_path):
 
     manifest = tmp_path / "manifest.tsv"
     manifest.write_text(
-        "analysis_index\tanalysis_id\tsample_size\tsource_file\n"
-        f"0\ttrait_ext\t2500\t{abs_source}\n",
+        "analysis_index\tanalysis_id\tsample_size\tsource_file\tsource_genome_build\n"
+        f"0\ttrait_ext\t2500\t{abs_source}\tGRCh38\n",
         encoding="utf-8",
     )
 
@@ -919,8 +934,8 @@ def test_legacy_file_path_column_builds_successfully(tmp_path):
 
     manifest = tmp_path / "manifest_file_path.tsv"
     manifest.write_text(
-        "analysis_index\tanalysis_id\tsample_size\tfile_path\n"
-        "0\ttrait_fp\t1500\ttrait_fp.tsv.gz\n",
+        "analysis_index\tanalysis_id\tsample_size\tfile_path\tsource_genome_build\n"
+        "0\ttrait_fp\t1500\ttrait_fp.tsv.gz\tGRCh38\n",
         encoding="utf-8",
     )
 
@@ -973,8 +988,8 @@ def test_source_file_alias_precedence_deterministic(tmp_path):
     # 1. file_path wins over filtered_file when both legacy spellings are present
     manifest_legacy = tmp_path / "manifest_legacy.tsv"
     manifest_legacy.write_text(
-        "analysis_index\tanalysis_id\tfile_path\tfiltered_file\n"
-        "0\ttrait_legacy\tfile_path.tsv.gz\tfile_filtered.tsv.gz\n",
+        "analysis_index\tanalysis_id\tfile_path\tfiltered_file\tsource_genome_build\n"
+        "0\ttrait_legacy\tfile_path.tsv.gz\tfile_filtered.tsv.gz\tGRCh38\n",
         encoding="utf-8",
     )
     out_legacy = tmp_path / "out_legacy.opengwasdb"
@@ -992,8 +1007,8 @@ def test_source_file_alias_precedence_deterministic(tmp_path):
     # 2. canonical source_file wins over both file_path and filtered_file
     manifest_all = tmp_path / "manifest_all.tsv"
     manifest_all.write_text(
-        "analysis_index\tanalysis_id\tsource_file\tfile_path\tfiltered_file\n"
-        "0\ttrait_all\tfile_canonical.tsv.gz\tfile_path.tsv.gz\tfile_filtered.tsv.gz\n",
+        "analysis_index\tanalysis_id\tsource_file\tfile_path\tfiltered_file\tsource_genome_build\n"
+        "0\ttrait_all\tfile_canonical.tsv.gz\tfile_path.tsv.gz\tfile_filtered.tsv.gz\tGRCh38\n",
         encoding="utf-8",
     )
     out_all = tmp_path / "out_all.opengwasdb"
@@ -1009,3 +1024,91 @@ def test_source_file_alias_precedence_deterministic(tmp_path):
         assert rows_all[0]["z"] == pytest.approx(2.0, rel=1e-3)
 
 
+
+
+def _one_analysis(tmp_path: Path, rows: list[dict], **manifest: str) -> tuple[Path, Path]:
+    """A one-Analysis build input: ``rows`` in one filtered file, and its manifest."""
+    filtered_dir = tmp_path / "filtered"
+    filtered_dir.mkdir()
+    _write_filtered(filtered_dir / "trait.tsv.gz", rows)
+    header = ["analysis_index", "analysis_id", "filtered_file", *manifest]
+    path = tmp_path / "manifest.tsv"
+    path.write_text(
+        "\t".join(header) + "\n" + "\t".join(["0", "trait", "trait.tsv.gz", *manifest.values()])
+        + "\n",
+        encoding="utf-8",
+    )
+    return path, filtered_dir
+
+
+def test_a_non_rs_rsid_cell_falls_back_to_the_variant_ids_rs_identifier(tmp_path):
+    """The GWAS-SSF reader's rsid rule: the first of `rsid` and `variant_id`
+    that is an rs identifier. A harmonised file can hold a provider token in
+    `rsid` and the rs id in `variant_id` (110 rows of OGS-00006's sources)."""
+    manifest, filtered_dir = _one_analysis(tmp_path, [{
+        "chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
+        "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
+        "rsid": "TMP_ESP_1_100000", "variant_id": "rs77",
+    }], source_genome_build="GRCh38")
+    out = tmp_path / "out.opengwasdb"
+    build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="t", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
+    assert {v.alid: v.rsid for v in VariantAxis(out).all()} == {"1:100000:A:G": "rs77"}
+
+
+def test_a_declared_build_other_than_grch38_is_refused(tmp_path):
+    manifest, filtered_dir = _one_analysis(tmp_path, [{
+        "chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
+        "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
+    }], source_genome_build="GRCh37")
+    with pytest.raises(ValueError, match="declares source_genome_build hg19"):
+        build_ragged_from_ssf(
+            manifest, filtered_dir, tmp_path / "out.opengwasdb", store_id="t",
+            release_id="v1", association_coverage="cis_and_signals",
+        )
+
+
+def test_an_odds_ratio_is_read_as_its_log_by_the_gwas_ssf_rule(tmp_path):
+    """A file reporting `odds_ratio` and no `beta` is read by the GWAS-SSF
+    reader's effect rule, `log(odds_ratio)`, rather than as rows with no effect."""
+    filtered_dir = tmp_path / "filtered"
+    filtered_dir.mkdir()
+    with gzip.open(filtered_dir / "trait.tsv.gz", "wt", encoding="utf-8") as fh:
+        fh.write(
+            "chromosome\tbase_pair_location\teffect_allele\tother_allele\todds_ratio\t"
+            "standard_error\n1\t100000\tA\tG\t2.0\t0.5\n"
+        )
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "analysis_index\tanalysis_id\tfiltered_file\tsource_genome_build\n"
+        "0\ttrait\ttrait.tsv.gz\tGRCh38\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out.opengwasdb"
+    build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="t", release_id="v1",
+        association_coverage="cis_and_signals", stored_effect_scale="log_or",
+    )
+    stored = RaggedCSRReader(out).get_analysis(0)
+    assert len(stored.variant_index) == 1
+    # A is A1 and the effect allele, so the z is the odds ratio's own.
+    assert float(stored.z[0]) == pytest.approx(np.log(2.0) / 0.5, rel=5e-3)
+
+
+@pytest.mark.parametrize("declared", [{}, {"source_genome_build": ""}], ids=["no column", "blank"])
+def test_a_row_declaring_no_build_is_refused_naming_its_analysis(tmp_path, declared):
+    """A Ragged SSF Store is one build, and every source declares its own: a
+    row with no `source_genome_build` is refused, not read as GRCh38."""
+    manifest, filtered_dir = _one_analysis(tmp_path, [{
+        "chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
+        "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
+    }], **declared)
+    out = tmp_path / "out.opengwasdb"
+    with pytest.raises(ValueError, match="analysis 'trait' declares no source_genome_build"):
+        build_ragged_from_ssf(
+            manifest, filtered_dir, out,
+            store_id="t", release_id="v1", association_coverage="cis_and_signals",
+        )
+    assert not out.exists()

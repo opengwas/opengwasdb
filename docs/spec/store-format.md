@@ -181,9 +181,24 @@ where:
 - chromosome labels use canonical `X`, `Y`, and `MT`; source labels `23`, `24`,
   and `25`/`26`/`M` respectively MUST be normalised to those labels before
   identity assignment (ADR 0052);
-- alleles are trimmed and left-aligned before identity assignment;
+- alleles are upper-cased, trimmed and left-aligned before identity
+  assignment. VCF and GWAS-SSF bases are case-insensitive, so a lower-case
+  base is the same base: a source spelling `a`/`g` and one spelling `A`/`G`
+  name one variant, on every build path and in extraction (issue #360);
 - `A1` is alphabetically first;
 - `A2` is the other allele.
+
+A signed statistic is oriented on the same upper-cased alleles: it is stored
+for `A1`, so a source allele pair `a`/`G` whose effect allele is `G` is
+negated, as `A`/`G` would be. A source's own spelling survives only as
+provenance — a Variant Reference's source keys — and in the rsid harvest
+below, which compares the names a site's spellings carry.
+
+A source row whose chromosome is missing (an empty cell, `.`, `NA`) or whose
+allele, upper-cased, holds a character other than A, C, G or T names no ALID.
+Every builder drops it, and logs it in the build's Admission record as
+`chromosome_missing` or `allele_invalid` (issue #365, ADR 0072). An alt, random
+or unplaced contig is a chromosome.
 
 A build that lifts a source variant from another Reference Assembly MUST project
 the variant onto the release's assembly using the chain block's orientation: on a
@@ -249,8 +264,8 @@ is part of the contract (issue #255):
   or empty cell names nothing and never clears an earlier name. Several source
   coordinates that canonicalise to one ALID therefore take the answer of the
   one that sorts first, not of the one that appears first in a file. The one
-  exception is a Hybrid build's routing key that its sources name differently,
-  below.
+  exception is a single-pass build's routing key that its sources name
+  differently, below.
 - A GWAS-SSF source, read directly or through a Column Map, names a variant by
   the first of its `rsid` and `variant_id` cells that names an rs identifier,
   normalised before any name is compared (issue #306): a `;`-separated list
@@ -261,11 +276,14 @@ is part of the contract (issue #255):
   the same variant — and the normalisation makes them one name. The GWAS-VCF
   reader's `ID` and the FinnGen reader's first comma-separated `rsids` item are
   read as before.
-- A Hybrid routing key upper-cases alleles, so source coordinates spelt in
-  different case are one stored variant. When their sources name it with
-  different (normalised) rsids, nothing in the sources says which is right, and
-  `build-hybrid --on-rsid-conflict` decides (issue #306). `refuse`, the default,
-  fails the build and names the routing key and both names. `drop` gives **no
+- A routing key spells a coordinate's alleles upper-cased, as identity does
+  (above), so source coordinates spelt in different case are one stored
+  variant on every build. A single-pass build that harvests compares the
+  names those spellings carry: when their sources name it with different
+  (normalised) rsids, nothing in the sources says which is right, and
+  `build-hybrid --on-rsid-conflict` decides (issue #306); `build-dense-vcf`
+  has no such option and always refuses. Under `build-hybrid`, `refuse`, the
+  default, fails the build and names the routing key and both names. `drop` gives **no
   rsid** to every stored variant such a key routes to, over the build's final
   combined routing — even when a second routing key reaches the same variant
   with a name of its own (the same site reported in the other allele order),
@@ -290,16 +308,15 @@ is part of the contract (issue #255):
   the other policy is refused. A resume past the fold does not harvest again, so
   one whose recorded counts are missing is refused too, unless its checkpoint
   predates the option (records no `on_rsid_conflict`); its counts are then
-  `null`. A Dense routing key is the source's own spelling,
-  so two source coordinates never share one and a Dense build never meets this
-  case.
+  `null`. A two-pass build compares no names across sources, so it names such
+  a variant by the first-non-empty rule above.
 - A single-pass build given `--variant-reference` MUST NOT write a `rsid`
   column blank simply because the reference it was given is a plain ALID list.
   When the reference names none of its variants, the build runs the same Pass 1
   harvest the two-pass build runs for its candidates and their `(rank, site)`
   order, keys those candidates with **exactly the key normalisation the build's
-  own association routing uses** (upper-cased alleles for a Hybrid routing,
-  the source's own spelling for a Dense one, allele order kept), and then rekeys
+  own association routing uses** (alleles upper-cased, allele order kept),
+  and then rekeys
   them **once** over **one combined site → ALID routing** — the reference's own
   source keys, plus a Hybrid build's fold for off-reference rows — so a name
   always lands on the ALID its association lands on and the global first
@@ -380,6 +397,8 @@ Reference-Completed releases MUST expose Reference Panel Membership as variant m
 Every association MUST be normalised to the Store's canonical allele orientation.
 
 If the source effect allele is not canonical `A1`, the builder MUST swap orientation and negate signed statistics. Z is signed and carries effect direction. SE is non-negative.
+
+A source row is oriented in the source's declared assembly. When a lift onto the release's assembly makes the other allele `A1` (a reverse-strand chain block), the row is re-oriented by the same rule: its z is negated again and its effect-allele frequency complemented again. Every layout applies this one model.
 
 Derived beta is:
 
@@ -476,9 +495,10 @@ Ragged sequence. The arrays are present whenever `z` is `int16_fixed`, even
 when empty. Every out-of-range cell MUST have an entry and the table MUST NOT
 describe any other cell (§20).
 
-A build MUST fail on a non-finite `z` that is not a recorded absence (±inf, or
-a malformed statistic): it is neither a value nor an absence, and no encoding
-of it is honest.
+A non-finite `z` that is not a recorded absence (±inf, or a malformed
+statistic) is neither a value nor an absence, and no encoding of it is honest.
+A build never stores one: Association Admission drops the source row and logs
+it (`z_nonfinite`, ADR 0072), and a writer handed one refuses it.
 
 **`se` — `float16` or `int8_residual`.** Residual coding predicts
 `log(SE) = intercept + slope × log(2 × EAF × (1 − EAF))` using decoded,
@@ -807,8 +827,9 @@ threshold, malformed thresholds, and a declaration alongside `NaN` are invalid.
 The declared source column must occur exactly once with the declared spelling;
 the GWAS-SSF reader rejects absent, padded, or ambiguous source header columns
 when it opens the file. These inputs define an ingestion policy, and a CORE
-build applies it: the Hybrid builder (issue #175) passes the declaration to the
-Source Reader and drops every association the policy excludes — a usable score
+build applies it: every builder (issue #175; since #357 not the Hybrid alone,
+ADR 0072) passes the declaration to the Source Reader and drops every
+association the policy excludes — a usable score
 strictly below a positive threshold, or a score that is missing, malformed,
 non-finite or out of `[0, 1]` — before Dense/Overflow routing, before the EAF
 orientation check and before the Top-Hit Counts, so nothing a declared
@@ -1614,6 +1635,8 @@ Reference-Completed Stores encode Association Status using a per-plane **missing
 
 Each statistic plane's missing marker is defined by that plane's declared encoding, not by its dtype: a floating-point plane marks a missing cell with NaN, and an integer plane with the reserved sentinel its codec declares. Every release declares an encoding (§6a), so there is no plane whose marker has to be inferred. Stating it in terms of the codec rather than of NaN is what lets an integer `z` plane, which cannot hold NaN, express the same contract (ADR 0037, ADR 0038 §6).
 
+A cell is **present** exactly when neither its Z nor its SE carries its plane's missing marker. Finiteness plays no part: **an infinite value is a value.** An SE above a `float16` plane's range is stored `+inf` beside a finite Z (issue #338), and that cell is present, `observed` or `imputed` by its mask, in every reader of every layout (ADR 0070).
+
 State derivation:
 
 | Z | SE | imputed mask | Association Status |
@@ -1628,7 +1651,7 @@ Invalid states:
 - imputed mask is true while Z or SE is missing;
 - a marker payload is non-canonical (for a float plane, a non-canonical NaN).
 
-Builders and validators MUST reject invalid states.
+Builders and validators MUST reject invalid states. A builder rejects them through Association Admission (ADR 0072): a source row becomes a cell only through an Analysis's gate, which admits a row only with both a usable Z and a usable SE, and a writer handed cells from anywhere else checks them with `require_admitted`. Readers MUST refuse them: a query whose region holds an invalid cell fails, naming the component and the cell, rather than dropping it or reading it as missing (ADR 0070).
 
 The imputed mask is:
 
@@ -1725,6 +1748,13 @@ Top-hit results from Reference-Completed releases include imputed associations b
 
 ## 19. Query result contract
 
+A query returns an association record (`opengwasdb.associations.Associations`):
+parallel arrays read as a mapping, keyed `variant_index`, `analysis_index`, `z`,
+`se`, `eaf`, `n` (below) and `association_status` (ADR 0020, ADR 0070). A
+Dense grid stores no association at a missing cell, so a Dense result omits
+them; a Ragged sequence stores a row for every attempted pair, so a Ragged or
+Ragged Overflow result returns such a row as `missing` (§15).
+
 Query results SHOULD expose:
 
 | Field | Required when |
@@ -1781,7 +1811,7 @@ Validators MUST check at least:
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
-- `variant_index` is **strictly increasing within every Analysis's segment** in a standalone Ragged or a Hybrid Overflow CSR (§11): an out-of-order segment makes the variant-side binary search answer with a plausible, wrong row, and a repeated one is a second association at a variant that Analysis already holds. It is checked on every release, not only on ones this build wrote. The check MUST be bounded and MUST NOT materialise the array: it reads the sequence in windows (1,000,000 int32, 4 MB), carries the preceding value across a window boundary and resets at each Analysis boundary, so peak memory is the window, its comparison bool and the per-Analysis offsets (`O(n_analyses)`), independent of the association count. The error names the first offending Analysis and says which of the two it found — a decrease, or a repeat;
+- `variant_index` is **strictly increasing within every Analysis's segment** in a standalone Ragged or a Hybrid Overflow CSR (§11): an out-of-order segment makes the variant-side binary search answer with a plausible, wrong row, and a repeated one is a second association at a variant that Analysis already holds. It is checked on every release, not only on ones this build wrote. The check MUST be bounded and MUST NOT materialise the array: it reads the sequence in windows, the association scan's (§20.0, within one 1 GiB decoded budget), carries the preceding cell across a window boundary and resets at each Analysis boundary, so peak memory is the window and the per-Analysis offsets (`O(n_analyses)`), independent of the association count. The error names the first offending Analysis and says which of the two it found — a decrease, or a repeat;
 - the variant-centric index MUST be present on every Ragged component (a Ragged Store Release or a Hybrid Overflow) in `format_version` 0.2.0, agrees with the Analysis-sorted component and is recorded in `provenance.ragged.by_variant`: its `offsets` array is `n_axis + 1` direct offsets spanning `[0, N)`, each variant holds exactly as many index rows as the component holds at that variant, `analysis_index` is non-decreasing within each variant's block and names a real Analysis, `eaf`/`imputed`/`n` are present on both sides or neither, and the cell contents match the Analysis-sorted planes (§11.1, ADR 0060);
 - the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it, carries an imputed mask, holds one entry per variant of its axis, and holds only frequencies in `[0, 1]`;
 - the `n` plane is present exactly when the `encoding` block declares one, in the declared dtype, and only beside a `float16` `se` plane; its length equals the CSR's; every code is a count from 1 to `2³² − 2` or the missing code; the plane holds at least one N, since an all-missing plane reads exactly like a release without one; every Analysis holding an N declares `sample_size_scope=variant_level`; and the by-variant copy is present on both sides or neither and its sampled cells equal the CSR's (§6a, §11, ADR 0067). The read is windowed, never the whole plane;
@@ -1794,6 +1824,122 @@ Validators MUST check at least:
 - the recorded layout matches the arrays: the Dense planes' `chunk_shape` and `shard_shape` in `manifest.json` `provenance.dense`, in the `index.sqlite` `dense` blob and in the `data.zarr` root attributes each clip to the plane's dimensions to equal the plane's actual **inner** chunk, and name its actual shard, and the three compressors agree. A manifest that describes one shape over arrays of another is a silent failure class (§10a);
 - the per-variant chunking rule applies to the **inner** chunk of a sharded array, not to the shard (§6, §10a);
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).
+
+### 20.0 Validation Rules
+
+Every check above is a named **Validation Rule** (ADR 0074). A rule judges one kind of
+target:
+- *release*: a Store Release, a Hybrid's outer release, or its nested Dense Component;
+- *grid*: a Dense grid, a Dense Component's included;
+- *sequence*: a Ragged release's association sequence, or a Hybrid's Ragged Overflow.
+
+A rule may run after others. It is skipped, and recorded as skipped with the rules
+that blocked it, when one of those failed or was skipped on its target or a target it
+belongs to. A skip is not a pass. Whether a rule applies to a target is asked only
+after its prerequisites passed. `fidelity.source`, which runs after every error rule
+before it, is stopped only by one that failed. A *fold* is judged from one streamed read of its
+target that every fold on it shares; a *check* reads what it needs. A fold may run after an
+earlier fold on the same read: that prerequisite is decided when the read ends, the
+folds are judged in this table's order, and whether the later fold applies is asked
+before the read.
+
+`validate_store(path, rules={...})` runs the named rules and the rules they run after,
+and refuses a name this table does not list. `ValidationResult.failed()` names the
+rules that reported an error. `validate --format json` reports the findings' messages,
+not their rules' names. The names are stable: a rule is renamed or removed only by a
+change to this table, which the test suite holds to the registry, in its order.
+
+| Rule | Judges | Kind | What it checks |
+|---|---|---|---|
+| `manifest.loads` | release | check | `manifest.json` loads, in a format this build reads; nothing else runs without it |
+| `zarr.format` | release | check | the Zarr tree is in the on-disk format `format_version` names |
+| `envelope.required` | release | check | every entry the layout requires is present |
+| `envelope.closed` | release | check | no entry the layout does not produce is present |
+| `manifest.coverage` | release | check | the declared association coverage is one the layout can carry |
+| `sqlite.analyses_table` | release | check | `index.sqlite` holds no `analyses` table |
+| `variant_table.rows` | release | fold | the Store Variant Table has as many rows as its offset sidecar |
+| `variant_table.alid_index` | release | fold | the ALID search index covers exactly the indexable ALIDs, collision-free |
+| `variant_table.rsid_index` | release | fold | every rsid in the table resolves through the rsid search index |
+| `variant_table.sequence` | release | fold | rows are in `variant_index` order, one per canonical variant |
+| `variant_table.representatives` | release | fold | the offset sidecar and the tabix index find the rows the table holds |
+| `sqlite.variant_aliases` | release | check | every alias names a variant the table holds; skipped where there is no alias table |
+| `analyses.readable` | release | check | `analyses.tsv` parses |
+| `analyses.retired_columns` | release | check | no retired column is present |
+| `analyses.analysis_index` | release | check | one row per `analysis_index`, covering exactly `0..n-1` |
+| `analyses.analysis_id` | release | check | no `analysis_id` names two rows |
+| `analyses.completion_declared` | release | check | every `completion_n_imputed_total` is an integer, and an Analysis completed against no ancestry declares no imputed cells |
+| `analyses.vocabularies` | release | check | each controlled column holds only its vocabulary's values |
+| `analyses.top_hit_count_columns` | release | check | the Top-Hit Count columns are present and non-negative integers |
+| `csr.arrays` | sequence | check | `offsets`, `variant_index`, `z` and `se` are present |
+| `csr.lengths` | sequence | check | each parallel array, `eaf` included, holds one entry per association |
+| `csr.analyses` | sequence | check | `analyses.tsv` has one row per segment `offsets` bounds |
+| `csr.observed_only` | sequence | check | an Overflow holds no imputed array |
+| `hybrid.dense_to_shared` | release | check | `dense_to_shared` names distinct rows of the shared variant table |
+| `hybrid.component` | release | check | the Dense Component opens, as a Dense release |
+| `hybrid.plan` | release | check | both components declare one statistic encoding |
+| `hybrid.coverage` | release | check | each Dense Component row's shared row holds its variant |
+| `encoding.dtypes` | grid, sequence | check | each plane has the dtype its declared encoding stores |
+| `encoding.per_variant_chunks` | grid, sequence | check | no per-variant array is chunked as one block |
+| `encoding.eaf` | grid, sequence | check | the `eaf` plane, baseline, exception table and reference match the plan |
+| `encoding.n` | grid, sequence | check | the `n` plane is present exactly when declared, in its dtype, beside a `float16` `se` |
+| `encoding.se` | grid, sequence | check | the `se` plane's coefficients and exception table match the plan |
+| `encoding.z` | grid, sequence | check | the `z` plane's overflow table matches the plan |
+| `sample_size.length` | sequence | check | the `n` plane holds one code per association |
+| `by_variant.present` | sequence | check | the variant-centric index is present in format 0.2.0; skipped in 0.1.0 without one |
+| `by_variant.provenance` | sequence | check | the manifest records the index, and describes the index present |
+| `by_variant.offsets` | sequence | check | the index's runs span `[0, N)` over the variant axis, and each column is `N` long |
+| `by_variant.members` | sequence | check | `eaf`, `imputed` and `n` are on both sides or neither |
+| `by_variant.layout` | sequence | check | each index array has its role's inner chunk and shard |
+| `by_variant.analyses` | sequence | fold | every index row names one of the component's Analyses |
+| `by_variant.order` | sequence | fold | within each variant's run, the rows' Analyses are non-decreasing |
+| `grid.planes` | grid | check | `z` and `se` are present, and every plane spans the grid's axes |
+| `grid.eaf_side_lengths` | grid | check | the per-variant `eaf` side arrays are the variant axis's length |
+| `completion.mask` | grid, sequence | check | a completed component carries a mask of its shape, and a grid binary panel flags |
+| `csr.segment_order` | sequence | fold | `variant_index` strictly increases within every Analysis's segment |
+| `csr.shared_rows` | sequence | fold | an Overflow's `variant_index` addresses rows of the shared variant table |
+| `hybrid.partition` | sequence | fold | no Overflow association is at a Dense Component variant |
+| `by_variant.counts` | sequence | fold | each variant holds as many index rows as the sequence holds cells |
+| `associations.decodable` | grid, sequence | fold | every block's SE decodes under the declared plan |
+| `associations.se_infinite` | grid, sequence | fold, warning | names the cells of a `float16` `se` plane holding `+inf` |
+| `associations.se_negative` | grid, sequence | fold | no finite SE is negative |
+| `associations.markers_paired` | grid, sequence | fold | Z and SE are missing in exactly the same cells |
+| `associations.markers_canonical` | grid, sequence | fold | every missing marker is the canonical one |
+| `completion.mask_binary` | grid, sequence | fold | the imputed mask holds only 0 and 1 |
+| `completion.imputed_present` | grid, sequence | fold | an imputed cell carries both Z and SE |
+| `completion.off_panel` | grid | fold | no off-panel row is imputed |
+| `completion.declaration` | grid, sequence | fold | each Analysis holds imputed cells exactly when it declares them |
+| `associations.eaf_range` | grid, sequence | fold | no decoded frequency falls outside `[0, 1]`; skipped on a component holding none, and behind `side_tables.eaf_exceptions` where the plane cannot be decoded |
+| `side_tables.z_overflow` | grid, sequence | fold | the `z` overflow table describes exactly the overflow cells |
+| `side_tables.eaf_exceptions` | grid, sequence | fold | the `eaf` exception table describes exactly the exception cells, and a plane that cannot be decoded is reported |
+| `side_tables.se_exceptions` | grid, sequence | fold | the `se` exception table describes exactly the exception cells |
+| `sample_size.codes` | sequence | fold | every `n` code is a sample size or the missing code, and some cell holds a size |
+| `sample_size.scope` | sequence | fold | an Analysis holding per-association N declares `variant_level` scope |
+| `top_hits.arrays` | grid, sequence | check | every tier carries the arrays a tier is made of |
+| `top_hits.structure` | grid, sequence | check | every tier has parallel arrays, sound offsets and ordered slices |
+| `top_hits.abs_z` | sequence | check | every tier's `abs_z` is its `z`'s magnitude |
+| `top_hits.held` | sequence | fold | every tier cell is an association the sequence holds |
+| `top_hits.z` | grid, sequence | fold | every tier cell's Z agrees with the decoded plane and clears the cutoff |
+| `top_hits.se` | grid, sequence | fold | every tier cell's SE equals the decoded plane's |
+| `top_hits.imputed` | grid, sequence | fold | every tier cell's imputed flag equals the mask's |
+| `top_hits.eaf` | grid, sequence | fold | every tier cell's EAF equals the decoded plane's |
+| `top_hits.complete` | grid, sequence | fold | a tier holds every cell whose \|z\| clears its cutoff |
+| `by_variant.sample` | sequence | check | sampled index cells hold the codes and exact values the sequence holds |
+| `completion.quality_table` | grid, sequence | check | the `completion_quality` table is complete and names real Analyses |
+| `completion.n_missing_column` | grid, sequence | check | `analyses.tsv` carries `completion_n_missing_total` |
+| `rho.members` | grid | check | a Rho Matrix records its provenance and carries its arrays |
+| `rho.analyses` | grid | check | the matrix was estimated over the release's Analyses |
+| `rho.lengths` | grid | check | `rho` and `n_null` hold one entry per pair of Analyses |
+| `rho.values` | grid | check | rho is finite exactly where it has null support, and in `[-1, 1]` |
+| `rho.variants` | grid | check | `variant_index` holds the variants the estimate used |
+| `layout.recorded` | grid | check | the three layout recordings describe the planes |
+| `hybrid.recordings` | release | check | a Hybrid's outer recordings describe its Dense Component's planes |
+| `subsets.indexed` | grid | check | every Indexed Variant Subset is self-consistent and value-equal |
+| `eaf_orientation.readable` | release | check | the table the orientation rules read can be read |
+| `eaf_scope.plan` | release | check | `eaf_scope` and the plan's `eaf` kind agree |
+| `eaf_orientation.evidence` | release | check | every Analysis storing EAF carries orientation evidence, recorded alike twice |
+| `eaf_orientation.unverified` | release | check, warning | names each Analysis whose orientation is `unverified` |
+| `fidelity.unsupported` | release | check | a source is given only for a Dense release |
+| `fidelity.source` | grid | check | sampled source associations equal the stored ones |
 
 ### 20.1 Validation and inspection CLI interface
 
@@ -1993,13 +2139,21 @@ replaces its Store under the same id, so this check gates the swap.
     (a source-missing cell observed with `imputed == 0`); `inserted_observed_cells`;
     `imputed_mask_invalid` (an `imputed` value outside 0 and 1);
     `z_se_missingness_mismatch` (a cell, in `SOURCE` or `TARGET`, with only one of Z and SE
-    missing).
+    missing); `non_canonical_marker` (a cell, in `SOURCE` or `TARGET` or on an inserted row,
+    whose Z or SE holds a NaN other than the plane's canonical one, §15: an invalid state a
+    reader refuses, and one `isnan` alone cannot tell from a missing cell — issue #373).
 
   A nonzero failing
   counter, `parent_rows_unmapped > 0`, an order that is not preserved, and differing Analyses
   each fail the check (`failures` names `parent_rows_unmapped`, `order_not_preserved`,
   `analyses_mismatch`, or the counter). After an axis or Analyses failure the sample is skipped
-  (`bands_checked` is 0) and the verdict says why.
+  (`bands_checked` is 0) and the verdict says why. **A counter for cells nobody inspected is
+  `null`, never 0** (issue #375): in a skipped sample `totals`, `max_abs_diff` and
+  `bands_by_stratum` are `null` throughout, so no zero in a failed verdict stands in for a
+  clean census of an uncompared part. The keys stay, so a record's shape does not say
+  whether the sample ran; `bands_checked` is 0 because it counts the chunk-rows read, and
+  none were. A `null` tally neither fails a verdict nor passes one: the structural failure
+  is what fails it.
 - **Exit codes.** `0` pass; `1` the check ran and found a mismatch (the verdict is still
   written, and each failure is named on `stderr`); `2` refused: nothing was checked, so no
   verdict is written and the reason is on `stderr`. Refused are a mixed-layout pair, a layout
@@ -2049,20 +2203,25 @@ replaces its Store under the same id, so this check gates the swap.
   `infinite_cells` are informational; `z_mismatch`, `se_mismatch`,
   `eaf_mismatch` (a matched association whose decoded value differs, NaN equal to NaN),
   `observed_missing_in_child` (a `SOURCE` association that `TARGET`'s Overflow lacks),
-  `missing_became_observed` (a `TARGET` association that `SOURCE` lacks) and
-  `z_se_missingness_mismatch` fail. `components.overflow.all_analyses` covers every Analysis and
-  all fail: `observed_in_both`, `imputed_cells`, and `analyses_count_mismatch` (Analyses whose
-  count is not `SOURCE`'s less its crossovers). `crossovers.totals` counts `infinite_cells`
-  (informational) and the rest all fail: `z_mismatch`,
-  `se_mismatch`, `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_child` and
-  `z_se_missingness_mismatch` (a crossover cell, in the `SOURCE` Overflow or the `TARGET` Dense
-  Component, with only one of Z and SE missing — the Dense part cannot see it, because a
-  crossover is set aside there).
+  `missing_became_observed` (a `TARGET` association that `SOURCE` lacks),
+  `z_se_missingness_mismatch` and `non_canonical_marker` fail. `components.overflow.all_analyses`
+  covers every Analysis and all fail: `observed_in_both`, `imputed_cells`, and
+  `analyses_count_mismatch` (Analyses whose count is not `SOURCE`'s less its crossovers).
+  `crossovers.totals` counts `infinite_cells` (informational) and the rest all fail:
+  `z_mismatch`, `se_mismatch`, `eaf_mismatch`, `observed_marked_imputed`,
+  `observed_missing_in_child`, `z_se_missingness_mismatch` (a crossover cell, in the `SOURCE`
+  Overflow or the `TARGET` Dense Component, with only one of Z and SE missing — the Dense part
+  cannot see it, because a crossover is set aside there) and `non_canonical_marker` (likewise
+  counted on both sides, and here or nowhere, for the same reason).
   `failures` names each nonzero failing counter with the part that counted it
   (`dense.inserted_observed_cells`, `overflow.observed_in_both`, `crossovers.z_mismatch`), and
   `dense.parent_rows_unmapped`, `dense.order_not_preserved`, the same two for `overflow.` (the
   shared axes), `overflow.child_dense_rows_not_on_shared_axis` and `analyses_mismatch`; after
-  any of these last the comparison is skipped. Also refused: a Dense Component that is not Dense
+  any of these last the comparison is skipped and every tally in all three parts — each
+  `totals`, `all_analyses`, `max_abs_diff`, `reencoding_max_abs_diff` and `bands_by_stratum` —
+  is `null`, as is `crossovers.n` and `rows` (issue #375). `dense.bands_checked` and
+  `overflow.analyses_checked` are 0, because they count what was read and nothing was. Also
+  refused: a Dense Component that is not Dense
   or not in its root's completion state, a `TARGET` Dense Component with no `imputed` mask, and
   an Overflow that cannot be opened or holds a variant index off its shared axis.
 
@@ -2112,10 +2271,14 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   `TARGET`, which never fail the check) are informational. Failing: `z_mismatch`, `se_mismatch`,
   `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_target`,
   `target_observed_not_in_source`, `imputed_outside_retained`, `imputed_in_non_admitted`,
-  `imputed_mask_invalid`, `z_se_missingness_mismatch`, `target_variants_unordered` (an Analysis's
+  `imputed_mask_invalid`, `z_se_missingness_mismatch`, `non_canonical_marker` (a cell, in
+  `SOURCE` or `TARGET`, whose Z or SE holds a NaN other than the canonical one: an invalid
+  state, not a `nan_rows` row — issue #373), `target_variants_unordered` (an Analysis's
   variant indices not strictly increasing) and `quality_blocks_not_in_regions`. `sample` lists
   each checked Analysis with its strata, admission, the ids of its retained `blocks` and counts, and `by_stratum` counts
-  them.
+  them. An unmapped variant or differing Analyses skip the sample: `sample.analyses_checked`
+  is 0, and `totals`, `max_abs_diff` and `sample.by_stratum` are `null` throughout rather than
+  0, since no cell was inspected (issue #375).
 - **Refused (exit 2)**: a mixed-layout pair, a Ragged pair without `--ld-panel`, an LD panel
   with no chromosomes for the ancestry, an ancestry other than the one recorded, a `TARGET`
   completed against an ancestry other than the panel's, a `TARGET` with no completion ancestry

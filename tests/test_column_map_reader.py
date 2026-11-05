@@ -10,10 +10,12 @@ readers' own tests already found worth covering.
 from __future__ import annotations
 
 import gzip
+import math
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from admission_helpers import admitted
 from column_map_fixtures import ssf_streams
 from test_effect_recovery import _beta_file, _odds_ratio_file
 from test_imputation_score_reader import _declared
@@ -164,9 +166,10 @@ def _finngen_crafted(tmp_path: Path) -> Path:
             "chrom\tpos\tref\talt\trsids\tnearest_genes\tpval\tmlogp\tbeta\tsebeta\taf_alt\n"
             "1\t100\tG\tA\trs100,rs101\tGENE1\t0.1\t1\t0.5\t0.2\t0.3\n"
             "1\t200\ta\tg\t.\tGENE2\t0.1\t1\t-0.5\t0.2\t0.6\n"
-            # An unusable standard error and no p-value: the dedicated reader drops
-            # the row, and so does the map. With a usable `pval` the map recovers
-            # a standard error from it (ADR 0055); see the test below.
+            # An unusable standard error and no p-value: neither the dedicated
+            # reader nor the map recovers one, so Admission drops the row. With a
+            # usable `pval` the map recovers a standard error from it (ADR 0055);
+            # see the test below.
             "23\t300\tA\tC\trs300\tGENEX\tNA\t1\t0.1\t0\t0.1\n"
             "1\t400\tA\tC\trs400\tG\t0.1\t1\tNA\t0.5\tNA\n"
             "1\tbad\tA\tG\trs500\tG\t0.1\t1\t1.0\t0.5\t0.2\n"
@@ -228,7 +231,9 @@ def test_the_finngen_map_recovers_a_standard_error_from_pval_where_sebeta_is_unu
     (row,) = mapped.stream_associations()
 
     assert row.se == pytest.approx(0.5 / 1.959964, rel=1e-5)
-    assert list(FinnGenR13Reader(path).stream_associations()) == []
+    (unrecovered,) = FinnGenR13Reader(path).stream_associations()
+    assert math.isnan(unrecovered.se)
+    assert admitted([unrecovered]) == []
 
 
 def test_the_finngen_map_takes_the_first_of_several_rsids(tmp_path: Path) -> None:

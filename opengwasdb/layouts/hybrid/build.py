@@ -1,15 +1,15 @@
 """Integrated Hybrid build — one read per study, routing on-panel → dense fill,
 off-panel → ragged overflow (ADR 0026, PRD "Generation").
 
-This is a **thin integration layer** (PRD "Component reuse"): it composes the
-dense two-pass builder's liftover, key-lookup, disk-spill, band-write and
-fork-pool machinery (``opengwasdb.layouts.dense.build_vcf``) and the ragged
-``RaggedCSRWriter`` — the only new logic is per-variant on-panel/off-panel
-routing in the single Pass 2 read that both components share.
+This is a **thin integration layer** (PRD "Component reuse"): Variant Routing
+(``opengwasdb.variants.routing``) places every source coordinate on the panel
+or the shared axis, the dense builder's disk-spill and band-write machinery
+(``opengwasdb.layouts.dense.build_vcf``) writes the Dense Component, and the
+ragged ``RaggedCSRWriter`` the Overflow. What is the Hybrid's own is the
+partition, the off-reference fold and its checkpoint.
 
-Like the dense builder, association streaming and the union-variant pass go
-through a ``SourceReader`` resolved from each row's ``source_reader_capability``
-(issue #20) rather than importing ``opengwasdb.build.vcf_source`` directly.
+Like the dense builder, every source is read through a ``SourceReader``
+resolved from its row's ``source_reader_capability`` (issue #20).
 
 ``build_hybrid_from_vcf_manifest`` is a thin orchestrator over the deep phase
 helpers below (issue #130) - lifting (the shared Pass 1), partition/routing,
@@ -21,20 +21,29 @@ context, collision/provenance rules, the disjoint-partition layout).
 
 from __future__ import annotations
 
-import csv
 import logging
 import shutil
-import tempfile
 import time
-from collections.abc import Collection, Iterator, Mapping, Sequence
-from concurrent.futures import as_completed
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import mkdtemp
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from opengwasdb.admission import (
+    AdmissionCounts,
+    AdmissionRecord,
+    AnalysisRules,
+    Gate,
+    Reason,
+    admission_record_for,
+)
+from opengwasdb.admission.declared import declared_rules
+from opengwasdb.admission.duplicates import record_duplicates
 from opengwasdb.build.eaf_orientation import (
     EafOrientationMethod,
     EafOrientationOutcome,
@@ -46,8 +55,7 @@ from opengwasdb.build.eaf_orientation import (
 )
 from opengwasdb.build.info_score_filter import declared_score_state
 from opengwasdb.build.liftover import LiftoverFailureError
-from opengwasdb.build.ordered_pool import ordered_map
-from opengwasdb.build.row_admission import AdmissionCounts, admit_rows
+from opengwasdb.build.ordered_pool import fork_each, ordered_map
 from opengwasdb.encoding import (
     EafMeasurements,
     EncodingMeasurements,
@@ -55,34 +63,29 @@ from opengwasdb.encoding import (
     combine_eaf_measurements,
     optimise_dense_se_joint,
 )
+from opengwasdb.encoding.association_codec import (
+    CellValues,
+    Storable,
+    log_se_out_of_range,
+    storable,
+)
 from opengwasdb.encoding.timing import format_duration
-from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
-from opengwasdb.layouts.dense.build_vcf import (
-    _RESOLVE_BATCH,
-    EafSpillSurvey,
-    Pass2Task,
-    _apply_eaf_scope,
-    _apply_se_divisor,
-    _candidates_by_routing_key,
-    _create_dense_zarr,
-    _encode_variant_keys,
-    _fork_pool,
-    _harvest_manifest_variants,
-    _lift_manifest_variants,
-    _log_progress,
-    _log_routing_disagreements,
-    _manifest_row_to_analysis,
-    _ManifestRow,
-    _pass2_worker_tasks,
-    _read_manifest,
-    _rekey_and_verify,
-    _rekey_rsids_to_alids,
-    _routing_lookup,
-    _sorted_alids,
-    _write_dense_bands,
-    _write_index,
+from opengwasdb.layouts.build_manifest import (
+    ManifestRow,
     column_map_provenance,
+    manifest_row_to_analysis,
+    read_manifest,
+)
+from opengwasdb.layouts.dense.build import write_analyses_tsv
+from opengwasdb.layouts.dense.build_vcf import (
+    EafSpillSurvey,
+    apply_eaf_scope,
+    apply_se_divisor,
+    create_dense_zarr,
+    log_progress,
     survey_eaf_spills,
+    write_dense_bands,
+    write_index,
 )
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
@@ -99,7 +102,6 @@ from opengwasdb.layouts.hybrid.checkpoint import (
     AXIS_SHARED,
     FOLD_DIR,
     HITS,
-    INFO_COUNTS,
     ORIENTATION,
     PLAN,
     PROVENANCE_RSID,
@@ -156,6 +158,7 @@ from opengwasdb.layouts.hybrid.layout import (
 from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
     check_hash,
+    decode_packed,
     encode_key,
     encode_keys,
     is_hashed,
@@ -171,40 +174,48 @@ from opengwasdb.model.enums import (
     AssociationCoverage,
     CompletionState,
     PrimaryStorageLayout,
-    StoredEffectScale,
     coverage_for_layout,
 )
 from opengwasdb.model.info_score_policy import (
     InfoScorePolicy,
     InfoScoreState,
-    parse_info_score_policy,
 )
-from opengwasdb.model.maf_policy import MafPolicy, MafState, parse_maf_policy
+from opengwasdb.model.maf_policy import MafPolicy, MafState
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.readers.column_map import ColumnMap, as_column_map, load_column_map
-from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
-from opengwasdb.readers.interface import ImputationScoreStatus
-from opengwasdb.readers.registry import resolve_reader
+from opengwasdb.readers.interface import StreamTally
+from opengwasdb.readers.registry import open_source
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
+from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
-from opengwasdb.variants.reference import (
-    SourceKey,
-    read_variant_reference,
-    require_written_rsids_match,
-    warn_reference_left_rows_blank,
+from opengwasdb.variants.axis import sorted_alids
+from opengwasdb.variants.reference import read_variant_reference
+from opengwasdb.variants.routing import (
+    FromReference,
+    LiftedUnion,
+    RoutedNames,
+    RouteTable,
+    Unmatched,
+    VariantRouting,
+    collapse_duplicates,
+    route_variants,
 )
-from opengwasdb.variants.rsid import RsidConflictPolicy, RsidConflicts, withhold_disputed
+from opengwasdb.variants.rsid import RsidConflictPolicy, RsidConflicts
 
 if TYPE_CHECKING:
     from opengwasdb.variants.reference import VariantReference
 
 log = logging.getLogger(__name__)
 
-# One column's off-reference spill: encoded uint64 keys, z, se, eaf, and the
-# side-file half of the hashed keys (row positions plus their raw strings).
+# One column's off-reference spill: encoded uint64 keys, z, se, eaf, each row's
+# `REFERENCE_*` code, and the side-file half of the hashed keys (row positions
+# plus their raw strings).
 _OffReferenceSpill = tuple[
-    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]
 ]
+# One column's Overflow rows: Variant Index, z, se, eaf and `REFERENCE_*` code,
+# which the fold needs to resolve an off-reference row reaching the same index.
+_Overflow = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
 __all__ = [
     "build_hybrid_from_vcf_manifest",
@@ -269,397 +280,97 @@ def read_reference_panel_alids(panel_path: str | Path) -> set[str]:
                 alids.add(token)
     return alids
 
-
-# ── Pass 2 fork-inherited routing lookup (see dense.build_vcf for the rationale) ─
-_pass2_keys_sorted: np.ndarray | None = None
-_pass2_targets_sorted: np.ndarray | None = None  # int64: dense row (panel) or shared idx (off)
-_pass2_ispanel_sorted: np.ndarray | None = None  # bool: True = on-panel target
-_pass2_swaps_sorted: np.ndarray | None = None  # bool: the lift re-oriented this key
-_pass2_spill_dir: Path | None = None
-# Column index -> that Analysis's declared INFO policy (stores #175), so a
-# worker applies the policy of the row its task came from without the task
-# tuple growing a sixth element the Dense builder does not share.
-_pass2_info_policies: Mapping[int, InfoScorePolicy] | None = None
-# Column index -> that Analysis's declared MAF policy (stores #176), carried the
-# same way as the INFO policy above.
-_pass2_maf_policies: Mapping[int, MafPolicy] | None = None
+_Component = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
 
-def _routed_site_key(site: SourceKey) -> str:
-    """A source coordinate in the exact string form the Hybrid routing keys it by.
+def _off_reference_spill(
+    unmatched: Unmatched, se_divisor: float, gate: Gate
+) -> _OffReferenceSpill:
+    """The associations the route table does not hold, one uint64 key per raw
+    coordinate, their duplicates on that key resolved as an axis's are
+    (`collapse_duplicates`): a conflicting key's rows are dropped and logged
+    by raw coordinate.
 
-    `_build_routing_index` writes this key, `_match_hybrid_batch` queries it,
-    and Pass 2 encodes an off-reference key the same way, so a harvested
-    candidate looked up with this function is looked up exactly as its
-    association is routed (issue #255). SourceReaders retain the source's allele
-    spelling while ALIDs are upper-case, and case is not an orientation change:
-    upper-case the alleles, keep their order.
+    The reference never named them, so their shared index is assigned only by
+    the fold. Only the hashed survivors need a raw string in the side file;
+    packed keys decode from their own bits.
     """
-    chrom, pos, ref, alt = site
-    return f"{chrom}:{pos}:{ref.upper()}:{alt.upper()}"
-
-
-def _build_routing_index(
-    source_lookup: dict[tuple[str, int, str, str], str],
-    dense_row: dict[str, int],
-    shared_index: dict[str, int],
-    swapped: Collection[tuple[str, int, str, str]] = (),
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Compose the liftover + partition into a single fork-safe sorted lookup.
-
-    Returns ``(keys_sorted, targets_sorted, ispanel_sorted, swaps_sorted)``: for
-    every source variant that resolves to a stored variant, its byte key, the
-    target index (dense row when on-panel, shared variant_index when off-panel),
-    whether it is on-panel, and whether a reverse-strand lift re-oriented its
-    statistics (issue #284). Workers binary-search this once per association.
-    """
-    keys_list: list[bytes] = []
-    targets: list[int] = []
-    ispanel: list[bool] = []
-    swaps: list[bool] = []
-    for site, alid in source_lookup.items():
-        row = dense_row.get(alid)
-        if row is not None:
-            targets.append(row)
-            ispanel.append(True)
-        else:
-            sidx = shared_index.get(alid)
-            if sidx is None:
-                continue
-            targets.append(sidx)
-            ispanel.append(False)
-        keys_list.append(_routed_site_key(site).encode())
-        swaps.append(site in swapped)
-    keys = np.array(keys_list, dtype=object)
-    del keys_list
-    targets_arr = np.array(targets, dtype=np.int64)
-    ispanel_arr = np.array(ispanel, dtype=bool)
-    swaps_arr = np.array(swaps, dtype=bool)
-    del swaps
-    order = np.argsort(keys, kind="stable")
-    sorted_keys = keys[order]
-    sorted_targets = targets_arr[order]
-    sorted_panel = ispanel_arr[order]
-    sorted_swaps = swaps_arr[order]
-    # Two artifact keys differing only in case must not route to different
-    # stored variants after folding: that would make searchsorted's choice
-    # dependent on insertion order and silently misplace an association.
-    duplicate = sorted_keys[1:] == sorted_keys[:-1]
-    conflicting = duplicate & (
-        (sorted_targets[1:] != sorted_targets[:-1])
-        | (sorted_panel[1:] != sorted_panel[:-1])
-    )
-    if np.any(conflicting):
-        key = sorted_keys[1:][conflicting][0]
-        raise ValueError(f"source key {key!r} maps to conflicting variants after case folding")
-    return sorted_keys, sorted_targets, sorted_panel, sorted_swaps
-
-
-def _dedup_last_wins(
-    target: np.ndarray, z: np.ndarray, se: np.ndarray, eaf: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Keep the last stream occurrence per target index (matches dense semantics)."""
-    if len(target) == 0:
-        return target, z, se, eaf
-    _, first_in_rev = np.unique(target[::-1], return_index=True)
-    keep = np.sort(len(target) - 1 - first_in_rev)
-    return target[keep], z[keep], se[keep], eaf[keep]
-
-
-def _match_hybrid_batch(
-    chroms: list[str],
-    keys_sorted: np.ndarray,
-    poss: list[int],
-    targets_sorted: np.ndarray,
-    refs: list[str],
-    ispanel_sorted: np.ndarray,
-    alts: list[str],
-    zs: list[float],
-    ses: list[float],
-    eafs: list[float],
-    swaps_sorted: np.ndarray | None = None,
-) -> tuple[
-    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-]:
-    """Resolve one batch to ``(dense, overflow, off_reference)`` arrays.
-
-    Dense and overflow entries carry their pre-assigned target index. An
-    off-reference entry -- a source coordinate the routing index does not hold
-    -- carries its raw ``chrom:pos:ref:alt`` key instead: the reference never
-    named it, so its shared index is only assigned after Pass 2. Order
-    preserving within each result.
-    """
-    z_arr = np.array(zs, dtype=np.float32)
-    se_arr = np.array(ses, dtype=np.float32)
-    eaf_arr = np.array(eafs, dtype=np.float32)
-    empty = (
-        np.empty(0, dtype=np.int64),
-        np.empty(0, dtype=np.float32),
-        np.empty(0, dtype=np.float32),
-        np.empty(0, dtype=np.float32),
-    )
-    if len(keys_sorted) == 0:
-        keys = np.array(
-            [
-                _routed_site_key((c, p, r, a))
-                for c, p, r, a in zip(chroms, poss, refs, alts, strict=True)
-            ],
-            dtype=object,
+    if not unmatched.keys:
+        return (
+            np.empty(0, dtype=np.uint64),
+            np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.int8),
+            np.empty(0, dtype=np.int64),
+            [],
         )
-        return empty, empty, (keys, z_arr, se_arr, eaf_arr)
-    query = _encode_variant_keys(
-        chroms, poss, [ref.upper() for ref in refs], [alt.upper() for alt in alts]
+    encoded = encode_keys(unmatched.keys)
+    # One raw key is one spelling of its alleles, so its rows are never a
+    # reversed indel; those meet only when the fold resolves two keys to one ALID.
+    found = collapse_duplicates(encoded.values, unmatched.z, unmatched.se)
+    gate.unplaced(
+        Reason.DUPLICATE_CONFLICTING, [unmatched.keys[i] for i in found.dropped.tolist()]
     )
-    idx = np.searchsorted(keys_sorted, query)
-    idx_clip = np.minimum(idx, len(keys_sorted) - 1)
-    matched = keys_sorted[idx_clip] == query
-    panel = ispanel_sorted[idx_clip[matched]]
-    tgt = targets_sorted[idx_clip[matched]]
-    z_m, se_m, eaf_m = z_arr[matched], se_arr[matched], eaf_arr[matched]
-    if swaps_sorted is not None:
-        # A reverse-strand lift stored the projected allele pair, so a matched
-        # variant's z and EAF follow it, not the source's (issue #284). Applied
-        # before the on-panel/off-panel split so both components agree.
-        swapped = swaps_sorted[idx_clip[matched]]
-        if swapped.any():
-            z_m = np.where(swapped, -z_m, z_m)
-            eaf_m = np.where(swapped, np.float32(1.0) - eaf_m, eaf_m)
-    unmatched = ~matched
-    keys = np.array(
-        [
-            _routed_site_key((chroms[j], poss[j], refs[j], alts[j]))
-            for j in np.flatnonzero(unmatched)
-        ],
-        dtype=object,
-    )
-    return (
-        (tgt[panel], z_m[panel], se_m[panel], eaf_m[panel]),
-        (tgt[~panel], z_m[~panel], se_m[~panel], eaf_m[~panel]),
-        (keys, z_arr[unmatched], se_arr[unmatched], eaf_arr[unmatched]),
-    )
-
-
-def _extend(accumulators: tuple[list[np.ndarray], ...], parts: tuple[np.ndarray, ...]) -> None:
-    """Append each non-empty part of ``parts`` to its accumulator."""
-    for accumulator, part in zip(accumulators, parts, strict=True):
-        if len(part):
-            accumulator.append(part)
-
-
-def _require_one_batch(scores: Sequence[float | None], zs: Sequence[float]) -> None:
-    """Fail loudly unless the INFO score buffers are the association batch's rows.
-
-    Nine buffers hold one batch -- the INFO filter reads the two score ones and
-    routes the seven statistic ones. One left holding an earlier batch would
-    filter one batch's rows against another's mask, which either raises or, worse,
-    silently keeps the wrong rows, so it is refused here rather than routed
-    (stores #175).
-    """
-    if len(scores) != len(zs):
-        raise ValueError(
-            f"INFO score buffers hold {len(scores)} row(s) for {len(zs)} association(s)"
-        )
-
-
-def _retain_rows(lists: tuple[list[Any], ...], keep: np.ndarray) -> None:
-    """Keep `keep`'s rows in every positionally parallel batch list, in place.
-
-    The batch lists are one buffer shared with the caller's own loop, so a
-    dropped row must leave all of them together -- a filter that kept a
-    coordinate and dropped its z would route an association the policy
-    excluded.
-    """
-    if bool(keep.all()):
-        return
-    indices = np.flatnonzero(keep).tolist()
-    for values in lists:
-        values[:] = [values[index] for index in indices]
+    gate.collapsed(found.collapsed)
+    keep = found.keep
+    keys, z, se = encoded.values[keep], unmatched.z[keep], unmatched.se[keep]
+    eaf, reference = unmatched.eaf[keep], unmatched.reference[keep]
+    lookup = encoded.hashed_lookup()
+    hashed_index = np.flatnonzero(is_hashed(keys)).astype(np.int64)
+    hashed_raw = [lookup[int(keys[position])] for position in hashed_index.tolist()]
+    return keys, z, apply_se_divisor(se, se_divisor), eaf, reference, hashed_index, hashed_raw
 
 
 def _resolve_column_hybrid(
-    file_path: str,
-    keys_sorted: np.ndarray,
-    targets_sorted: np.ndarray,
-    ispanel_sorted: np.ndarray,
-    se_divisor: float = 1.0,
-    swaps_sorted: np.ndarray | None = None,
-    *,
-    capability: str = GWAS_VCF_CAPABILITY,
-    stored_effect_scale: str = StoredEffectScale.SD.value,
-    info_score_policy: InfoScorePolicy | None = None,
-    maf_policy: MafPolicy | None = None,
-    column_map: ColumnMap | None = None,
-) -> tuple[
-    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    _OffReferenceSpill,
-    AdmissionCounts,
-]:
-    """Stream one study once, routing each association to the dense fill (on-panel),
-    the ragged overflow (off-panel/reference), or -- when the routing index does
-    not hold its source coordinate at all -- an off-reference bucket keyed by the
-    raw coordinate. Returns ``(dense, overflow, off_reference, info_counts)``
-    where each is ``(index/key, z f32, se f32, eaf f32)`` deduped last-wins; `eaf`
-    is NaN where the source reports no frequency (ADR 0036).
+    table: RouteTable,
+    row: ManifestRow,
+    gate: Gate,
+    axes: tuple[Sequence[str], ...],
+    folds: bool,
+) -> tuple[_Component, _Overflow, _OffReferenceSpill]:
+    """Stream one study once, routing each association to the dense fill
+    (on-panel), the ragged overflow (off-panel), or -- when the route table does
+    not hold its source coordinate at all -- an off-reference bucket keyed by
+    the raw coordinate. Returns ``(dense, overflow, off_reference)``,
+    each ``(index/key, z f32, se f32, eaf f32)`` with its duplicates resolved
+    (`collapse_duplicates`), the last two with each row's `REFERENCE_*` code;
+    ``eaf`` is NaN where the source reports no frequency (ADR 0036).
 
-    ``capability`` resolves a ``SourceReader`` (issue #20) rather than this
-    module streaming a VCF itself; ``stored_effect_scale`` is required to
-    construct one (see ``dense.build_vcf._resolve_column``).
-
-    ``se_divisor`` divides every returned ``se`` value, dense and overflow alike
-    (continuous-trait phenotype-SD standardisation, issue #18): a study's SD
-    rescaling applies uniformly regardless of which component an association
-    routes to. Defaults to 1.0 (no-op).
-
-    ``info_score_policy``/``maf_policy`` are this Analysis's declared
-    imputation-score and MAF policies (stores #175, #176). Its declaration
-    reaches the reader, and the one shared ``admit_rows`` rule is applied to
-    each batch *before* the batch is matched, so a row either filter excludes
-    reaches neither component, the EAF survey nor the top-hit counts.
-    ``counts`` reports the dispositions behind that filter: the associations
-    this reader yielded, not canonical source rows.
+    The row's ``se_divisor`` divides every returned ``se``, dense and overflow
+    alike (continuous-trait phenotype-SD standardisation, issue #18): a study's
+    SD rescaling applies whichever component an association routes to. The
+    Analysis's imputation-score declaration reaches the reader, and ``gate``
+    judges each batch before it is matched.
     """
-    info_score_policy = info_score_policy or InfoScorePolicy()
-    maf_policy = maf_policy or MafPolicy()
-    reader = resolve_reader(
-        capability,
-        file_path,
-        StoredEffectScale(stored_effect_scale),
-        imputation_score_declaration=info_score_policy.imputation_score_declaration,
-        column_map=column_map,
+    reader = open_source(
+        row.source,
+        imputation_score_declaration=gate.rules.info.imputation_score_declaration,
     )
-    d_idx: list[np.ndarray] = []
-    d_z: list[np.ndarray] = []
-    d_se: list[np.ndarray] = []
-    d_eaf: list[np.ndarray] = []
-    o_idx: list[np.ndarray] = []
-    o_z: list[np.ndarray] = []
-    o_se: list[np.ndarray] = []
-    o_eaf: list[np.ndarray] = []
-    u_keys: list[str] = []
-    u_z: list[np.ndarray] = []
-    u_se: list[np.ndarray] = []
-    u_eaf: list[np.ndarray] = []
-
-    chroms: list[str] = []
-    poss: list[int] = []
-    refs: list[str] = []
-    alts: list[str] = []
-    zs: list[float] = []
-    ses: list[float] = []
-    eafs: list[float] = []
-    scores: list[float | None] = []
-    statuses: list[ImputationScoreStatus] = []
-    counts = AdmissionCounts()
-
-    def _flush() -> None:
-        nonlocal counts
-        _require_one_batch(scores, zs)
-        if not zs:
-            return
-        block_scores = np.asarray(scores, dtype=np.float64)
-        block_statuses = np.asarray(statuses, dtype=object)
-        block_af = np.asarray(eafs, dtype=np.float64)
-        # The nine buffers are consumed into arrays above and routed below: all
-        # of them are emptied on every exit path, so no batch is filtered or
-        # counted against another batch's rows.
-        scores.clear()
-        statuses.clear()
-        admission = admit_rows(
-            block_scores, block_statuses, block_af, info_score_policy, maf_policy
+    tally = StreamTally()
+    routed = table.route_column(
+        reader.stream_associations(tally),
+        admit=gate.admit,
+        imputation_scores=gate.reads_imputation_scores,
+    )
+    gate.streamed(tally)
+    dense, overflow = routed.placed
+    for placed, alids in zip(routed.placed, axes, strict=True):
+        record_duplicates(gate, placed, alids)
+    unmatched = routed.unmatched
+    if not folds:
+        # A two-pass axis is the sources' whole union, so nothing folds an
+        # unmatched row onto it later: it is dropped here, and logged.
+        gate.unplaced(Reason.OFF_AXIS, unmatched.keys)
+        unmatched = Unmatched(
+            [], unmatched.z[:0], unmatched.se[:0], unmatched.eaf[:0], unmatched.reference[:0]
         )
-        counts += admission.counts
-        _retain_rows(
-            (chroms, poss, refs, alts, zs, ses, eafs),
-            admission.keep,
-        )
-        try:
-            if not zs:
-                return
-            dense, overflow, unknown = _match_hybrid_batch(
-                chroms,
-                keys_sorted,
-                poss,
-                targets_sorted,
-                refs,
-                ispanel_sorted,
-                alts,
-                zs,
-                ses,
-                eafs,
-                swaps_sorted,
-            )
-            _extend((d_idx, d_z, d_se, d_eaf), dense)
-            _extend((o_idx, o_z, o_se, o_eaf), overflow)
-            if len(unknown[0]):
-                u_keys.extend(str(key) for key in unknown[0])
-                _extend((u_z, u_se, u_eaf), unknown[1:])
-        finally:
-            for lst in (chroms, poss, refs, alts, zs, ses, eafs):
-                lst.clear()
-
-    for assoc in reader.stream_associations():
-        chroms.append(assoc.chromosome)
-        poss.append(assoc.position)
-        refs.append(assoc.ref)
-        alts.append(assoc.alt)
-        zs.append(assoc.z)
-        ses.append(assoc.se)
-        eafs.append(float("nan") if assoc.eaf is None else assoc.eaf)
-        scores.append(assoc.imputation_score.value)
-        statuses.append(assoc.imputation_score.status)
-        if len(zs) >= _RESOLVE_BATCH:
-            _flush()
-    _flush()
-
-    def _assemble(
-        parts_i: list[np.ndarray],
-        parts_z: list[np.ndarray],
-        parts_se: list[np.ndarray],
-        parts_eaf: list[np.ndarray],
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        if not parts_i:
-            return (
-                np.empty(0, dtype=np.int64),
-                np.empty(0, dtype=np.float32),
-                np.empty(0, dtype=np.float32),
-                np.empty(0, dtype=np.float32),
-            )
-        idx, z, se, eaf = _dedup_last_wins(
-            np.concatenate(parts_i),
-            np.concatenate(parts_z),
-            np.concatenate(parts_se),
-            np.concatenate(parts_eaf),
-        )
-        return idx, z, _apply_se_divisor(se, se_divisor), eaf
-
-    def _assemble_unknown() -> _OffReferenceSpill:
-        if not u_keys:
-            return (
-                np.empty(0, dtype=np.uint64),
-                np.empty(0, dtype=np.float32),
-                np.empty(0, dtype=np.float32),
-                np.empty(0, dtype=np.float32),
-                np.empty(0, dtype=np.int64),
-                [],
-            )
-        encoded = encode_keys(u_keys)
-        z, se, eaf = np.concatenate(u_z), np.concatenate(u_se), np.concatenate(u_eaf)
-        keys, z, se, eaf = _dedup_last_wins(encoded.values, z, se, eaf)
-        # Only the hashed survivors need a raw string in the side file; packed
-        # keys decode from their own bits.
-        lookup = encoded.hashed_lookup()
-        hashed_index = np.flatnonzero(is_hashed(keys)).astype(np.int64)
-        hashed_raw = [lookup[int(keys[position])] for position in hashed_index.tolist()]
-        return keys, z, _apply_se_divisor(se, se_divisor), eaf, hashed_index, hashed_raw
-
+    divisor = row.se_divisor
+    overflow_se = apply_se_divisor(overflow.se, divisor)
     return (
-        _assemble(d_idx, d_z, d_se, d_eaf),
-        _assemble(o_idx, o_z, o_se, o_eaf),
-        _assemble_unknown(),
-        counts,
+        (dense.index, dense.z, apply_se_divisor(dense.se, divisor), dense.eaf),
+        (overflow.index, overflow.z, overflow_se, overflow.eaf, overflow.reference),
+        _off_reference_spill(unmatched, divisor, gate),
     )
 
 
@@ -667,60 +378,114 @@ def _spill_hybrid_column(
     spill_dir: Path,
     col_idx: int,
     dense: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    overflow: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    overflow: _Overflow,
     off_reference: _OffReferenceSpill,
 ) -> None:
     """Spill one resolved study column: dense rows to ``{col}.npz`` (the layout the
     dense band-writer consumes), overflow to ``{col}.ovf.npz``, and off-reference
     associations -- keyed by one uint64 per raw source coordinate -- to
     ``{col}.unk.npz`` with a ``{col}.unk.raw`` side file for any key the packed
-    encoding could not represent."""
+    encoding could not represent. Overflow and off-reference rows carry their
+    `REFERENCE_*` codes, which the fold resolves their duplicates by."""
     d_rows, d_z, d_se, d_eaf = dense
-    o_idx, o_z, o_se, o_eaf = overflow
+    o_idx, o_z, o_se, o_eaf, o_reference = overflow
     for suffix, arrs in (
         ("", {"rows": d_rows, "z": d_z, "se": d_se, "eaf": d_eaf}),
-        (".ovf", {"variant_index": o_idx, "z": o_z, "se": o_se, "eaf": o_eaf}),
+        (
+            ".ovf",
+            {"variant_index": o_idx, "z": o_z, "se": o_se, "eaf": o_eaf, "reference": o_reference},
+        ),
     ):
         final = spill_dir / f"{col_idx}{suffix}.npz"
         tmp = spill_dir / f"{col_idx}{suffix}.tmp.npz"
         np.savez(tmp, **arrs)
         tmp.replace(final)
-    u_keys, u_z, u_se, u_eaf, u_hashed_index, u_hashed_raw = off_reference
+    u_keys, u_z, u_se, u_eaf, u_reference, u_hashed_index, u_hashed_raw = off_reference
     if len(u_keys):
         final = spill_dir / f"{col_idx}.unk.npz"
         tmp = spill_dir / f"{col_idx}.unk.tmp.npz"
         np.savez(
-            tmp, keys=u_keys, z=u_z, se=u_se, eaf=u_eaf, hashed_index=u_hashed_index
+            tmp, keys=u_keys, z=u_z, se=u_se, eaf=u_eaf, reference=u_reference,
+            hashed_index=u_hashed_index,
         )
         tmp.replace(final)
         if len(u_hashed_index):
             _write_unknown_side_file(spill_dir, col_idx, u_hashed_raw)
 
 
-def _pass2_worker(task: Pass2Task) -> tuple[int, AdmissionCounts]:
-    assert _pass2_keys_sorted is not None
-    assert _pass2_targets_sorted is not None
-    assert _pass2_ispanel_sorted is not None
-    assert _pass2_swaps_sorted is not None
-    assert _pass2_spill_dir is not None
-    assert _pass2_info_policies is not None
-    assert _pass2_maf_policies is not None
-    col_idx, file_path, se_divisor, capability, stored_effect_scale, column_map = task
-    dense, overflow, off_reference, counts = _resolve_column_hybrid(
-        file_path,
-        _pass2_keys_sorted,
-        _pass2_targets_sorted,
-        _pass2_ispanel_sorted,
-        se_divisor,
-        _pass2_swaps_sorted,
-        capability=capability,
-        stored_effect_scale=stored_effect_scale,
-        info_score_policy=_pass2_info_policies[col_idx],
-        maf_policy=_pass2_maf_policies[col_idx],
-        column_map=column_map,
+@dataclass(frozen=True)
+class _Pass2Context:
+    """What every Pass 2 worker reads: the route table, where to spill, each
+    Analysis's declared INFO and MAF policies, and the Admission record its
+    gate writes to."""
+
+    table: RouteTable
+    spill_dir: Path
+    info_score_policies: Mapping[str, InfoScorePolicy]
+    maf_policies: Mapping[str, MafPolicy]
+    record: AdmissionRecord
+    axes: tuple[Sequence[str], ...]
+    folds: bool
+
+
+def _route_column(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
+    """Route one study and spill it; its Admission part is written beside the
+    Store, and only its column returns."""
+    col_idx, row = task
+    rules = AnalysisRules(
+        row.trait_id,
+        info=context.info_score_policies[row.trait_id],
+        maf=context.maf_policies[row.trait_id],
     )
-    _spill_hybrid_column(_pass2_spill_dir, col_idx, dense, overflow, off_reference)
-    return col_idx, counts
+    with context.record.gate(rules) as gate:
+        dense, overflow, off_reference = _resolve_column_hybrid(
+            context.table, row, gate, context.axes, context.folds
+        )
+        _spill_hybrid_column(
+            context.spill_dir, col_idx, *_stored_parts(row.trait_id, dense, overflow, off_reference)
+        )
+    return col_idx
+
+
+def _stored_parts(
+    trait_id: str, dense: _Component, overflow: _Overflow, off_reference: _OffReferenceSpill
+) -> tuple[_Component, _Overflow, _OffReferenceSpill]:
+    """Each part of one column as `storable` returns it: the rows it stores,
+    with their values. A spill holds rows, so a row not stored is left out, and
+    its frequency with it.
+
+    The Dense part's SEs above `float16`'s range are logged here; the
+    Overflow's and the off-reference rows' are logged by the Ragged writer
+    they reach.
+    """
+
+    def judged(name: str, z: np.ndarray, se: np.ndarray, eaf: np.ndarray) -> Storable:
+        where = f"build-hybrid {trait_id} {name}"
+        kept = storable(CellValues(z, se, eaf), 0, 1, where=where)
+        if name == "Dense":
+            log_se_out_of_range(kept.se_out_of_range, where=where)
+        return kept
+
+    def values(kept: Storable) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        cells, rows = kept.cells, kept.stored
+        return np.asarray(cells.z)[rows], np.asarray(cells.se)[rows], np.asarray(cells.eaf)[rows]
+
+    kept = judged("Dense", *dense[1:])
+    stored_dense = (dense[0][kept.stored], *values(kept))
+    kept = judged("Overflow", *overflow[1:4])
+    stored_overflow = (overflow[0][kept.stored], *values(kept), overflow[4][kept.stored])
+    kept = judged("off-reference", *off_reference[1:4])
+    keys, _, _, _, reference, hashed_index, hashed_raw = off_reference
+    stored, position = kept.stored, np.cumsum(kept.stored) - 1
+    hashed_kept = stored[hashed_index]
+    stored_off_reference = (
+        keys[stored],
+        *values(kept),
+        reference[stored],
+        position[hashed_index[hashed_kept]].astype(np.int64),
+        [raw for raw, keep in zip(hashed_raw, hashed_kept.tolist(), strict=True) if keep],
+    )
+    return stored_dense, stored_overflow, stored_off_reference
 
 
 @dataclass(frozen=True)
@@ -834,6 +599,7 @@ class _BuildOptions:
     allow_unverified_eaf: bool
     on_rsid_conflict: RsidConflictPolicy
     association_coverage: AssociationCoverage
+    admission_record: Path
 
 
 @dataclass(frozen=True)
@@ -861,27 +627,8 @@ class _VariantPartition:
 
 
 @dataclass(frozen=True)
-class _RsidHarvest:
-    """Where the axis's rsids come from, as `_axis_source` resolves them.
-
-    ``rsid_by_alid`` is what the Dense skeleton is written with. The raw
-    candidates and their on-reference routing travel on for the fold to finish
-    rekeying (issue #255), and are empty unless the build harvested;
-    ``reference_named`` says the reference named its own variants and no
-    source was read; ``conflicts`` is what the harvest found named differently
-    (issue #306).
-    """
-
-    rsid_by_alid: dict[str, str]
-    rsid_by_site: dict[SourceKey, str]
-    candidate_routing: dict[str, str]
-    reference_named: bool
-    conflicts: RsidConflicts
-
-
-@dataclass(frozen=True)
 class _SourceAxis:
-    """The lifted union axis: every phase between Pass 1 and the Dense
+    """The routed union axis: every phase between Pass 1 and the Dense
     skeleton consumes this and nothing else."""
 
     dense_dir: Path
@@ -889,56 +636,39 @@ class _SourceAxis:
     partition: _VariantPartition
     analyses: list[Analysis]
     hg38_to_source: dict[str, str | None]
-    rsid_by_alid: dict[str, str]
-    #: The harvest's raw candidates and their on-reference routing, keyed
-    #: exactly as this build's routing keys an association (`_routed_site_key`)
-    #: and empty unless the reference named no rsids and the fold still has
-    #: off-reference variants to route (issue #255).
-    rsid_by_site: dict[SourceKey, str]
-    candidate_routing: dict[str, str]
-    reference_named_rsids: bool
-    rsid_conflicts: RsidConflicts
-    keys_sorted: np.ndarray
-    targets_sorted: np.ndarray
-    ispanel_sorted: np.ndarray
-    #: Whether a reverse-strand lift re-oriented that key's statistics, parallel
-    #: to ``keys_sorted`` (issue #284).
-    swaps_sorted: np.ndarray
+    #: The names routing resolved; pending when a reference that names none was
+    #: harvested and the fold still has off-reference keys to route (issue #255).
+    names: RoutedNames
+    table: RouteTable
 
 
 @dataclass(frozen=True)
 class _PreparedBuild:
     """Everything the build knows before Pass 2 spills exist: the staged
     paths, the partition/provenance maps, the Dense skeleton's
-    ``dense_to_shared`` sidecar, the routing arrays and the spill directory
+    ``dense_to_shared`` sidecar, the route table and the spill directory
     Pass 2 writes through."""
 
     staged: StagedRelease
     dense_dir: Path
     dense_staged: StagedRelease
     partition: _VariantPartition
-    manifest_rows: list[_ManifestRow]
+    manifest_rows: list[ManifestRow]
     info_score_policies: Mapping[str, InfoScorePolicy]
     maf_policies: Mapping[str, MafPolicy]
     analyses: list[Analysis]
     hg38_to_source: dict[str, str | None]
-    rsid_by_alid: dict[str, str]
-    #: The single-pass harvest's raw candidates and their on-reference routing,
-    #: when the reference named no rsids and the fold still has off-reference
-    #: variants to route; empty on every other path (issue #255).
-    #: `reference_named_rsids` says the reference supplied its own names and the
-    #: sources were not read, so the build only warns about what it leaves blank.
-    rsid_by_site: dict[SourceKey, str]
-    candidate_routing: dict[str, str]
-    reference_named_rsids: bool
-    #: What the harvest found named differently across sources (issue #306).
-    rsid_conflicts: RsidConflicts
+    #: The routed names and what the sources disputed (issue #306). Pending,
+    #: from a single-pass harvest, until the fold routes the off-reference keys
+    #: (issue #255); `reference_named` says the reference supplied its own
+    #: names and the sources were not read, so the build only warns about what
+    #: it leaves blank.
+    names: RoutedNames
     dense_to_shared: np.ndarray
     spill_dir: Path
-    keys_sorted: np.ndarray
-    targets_sorted: np.ndarray
-    ispanel_sorted: np.ndarray
-    swaps_sorted: np.ndarray
+    #: None when a resume re-enters after the fold, by which point Pass 2 -- the
+    #: table's only reader -- is done.
+    table: RouteTable | None
     n_analyses: int
 
 
@@ -1041,7 +771,7 @@ def _resolve_reference_panel(options: _BuildOptions, reference: VariantReference
     if options.reference_panel is None:
         return reference_alids
     panel_alids = _panel_alids(options)
-    unknown = _sorted_alids(panel_alids - reference_alids)
+    unknown = sorted_alids(panel_alids - reference_alids)
     if unknown:
         log.warning(
             "--reference-panel lists %d ALID(s) absent from variant reference %s "
@@ -1055,20 +785,19 @@ def _resolve_reference_panel(options: _BuildOptions, reference: VariantReference
 
 
 def _partition_variants(
-    source_lookup: dict[tuple[str, int, str, str], str],
+    observed_alids: AbstractSet[str],
     panel_alids: set[str],
     n_analyses: int,
 ) -> _VariantPartition:
-    """Partition the observed hg38 ALIDs (every source row's lifted or
-    passthrough position, Pass 1's union) into the on-panel set the Dense
-    Component stores and the off-panel set the Ragged Overflow stores (ADR
-    0026). Nothing observed is dropped, so an off-panel variant is always on
-    the shared root axis."""
-    observed_alids = set(source_lookup.values())
+    """Partition the observed hg38 ALIDs (every routed source coordinate's
+    lifted or passthrough position) into the on-panel set the Dense Component
+    stores and the off-panel set the Ragged Overflow stores (ADR 0026).
+    Nothing observed is dropped, so an off-panel variant is always on the
+    shared root axis."""
     off_panel_set = observed_alids - panel_alids
-    off_panel_alids = _sorted_alids(off_panel_set)
-    panel_sorted = _sorted_alids(panel_alids)
-    shared_sorted = _sorted_alids(panel_alids | off_panel_set)
+    off_panel_alids = sorted_alids(off_panel_set)
+    panel_sorted = sorted_alids(panel_alids)
+    shared_sorted = sorted_alids(panel_alids | off_panel_set)
     log.info(
         "Partition: %d panel (dense), %d off-panel (overflow), %d shared variants, %d analyses",
         len(panel_sorted),
@@ -1084,28 +813,6 @@ def _partition_variants(
         n_off_panel=len(off_panel_alids),
         n_shared=len(shared_sorted),
     )
-
-
-def _source_origin_map(
-    source_lookup: dict[tuple[str, int, str, str], str],
-) -> dict[str, str | None]:
-    """Map each hg38 ALID to the source-build ALID its row was resolved from
-    -- the Store Variant Table's ``source_alid`` provenance column. Several
-    source sites can resolve onto one hg38 ALID (two manifest rows landing on
-    one variant from different assemblies, say); when their origins differ
-    the provenance is genuinely ambiguous and the map records ``None`` rather
-    than guessing which source owns the stored row (issue #85) -- a store
-    must not misattribute one row's association to another's variant.
-    """
-    hg38_to_source: dict[str, str | None] = {}
-    for (chrom, pos, ref, alt), hg38_alid in source_lookup.items():
-        a1, a2 = sorted((ref.upper(), alt.upper()))
-        origin = f"{chrom}:{pos}:{a1}:{a2}"
-        if hg38_alid not in hg38_to_source:
-            hg38_to_source[hg38_alid] = origin
-        elif hg38_to_source[hg38_alid] != origin:
-            hg38_to_source[hg38_alid] = None
-    return hg38_to_source
 
 
 @dataclass(frozen=True)
@@ -1127,12 +834,12 @@ def _load_manifest(
     default_source_reader_capability: str | None = None,
     default_source_assembly: str | None = None,
     column_map: ColumnMap | None = None,
-) -> tuple[list[_ManifestRow], DeclaredPolicies]:
+) -> tuple[list[ManifestRow], DeclaredPolicies]:
     """Read the build manifest, failing loudly on an empty one rather than
     building a store with no Analyses (a plausible empty answer), alongside each
     row's declared INFO and MAF policies (`_read_declared_policies`).
     """
-    manifest_rows = _read_manifest(
+    manifest_rows = read_manifest(
         manifest_path,
         default_source_reader_capability=default_source_reader_capability,
         default_source_assembly=default_source_assembly,
@@ -1144,217 +851,102 @@ def _load_manifest(
 
 
 def _read_declared_policies(
-    manifest_path: str | Path, rows: list[_ManifestRow]
+    manifest_path: str | Path, rows: list[ManifestRow]
 ) -> DeclaredPolicies:
     """Parse each Analysis's declared INFO and MAF policies (stores #175, #176).
 
-    `_ManifestRow` carries the columns this builder routes with, not the policy
+    `ManifestRow` carries the columns this builder routes with, not the policy
     columns, so the manifest is read once more here -- it lists Analyses, not
-    associations -- and matched row for row against the rows `_read_manifest`
+    associations -- and matched row for row against the rows `read_manifest`
     produced. The reader capability is the row's own resolved value, exactly as
     the manifest resolver parses the same row, so a CLI default applies to both.
     A partial or contradictory declaration is a manifest error naming its
-    Analysis, never a filter silently not applied.
+    Analysis, never a filter silently not applied. Every builder reads them
+    through `declared_rules`.
     """
-    with open(manifest_path, newline="", encoding="utf-8") as fh:
-        raw_rows = list(csv.DictReader(fh, delimiter="\t"))
-    if len(raw_rows) != len(rows):
-        raise ValueError(
-            f"manifest {manifest_path} changed while it was read: {len(rows)} rows parsed, "
-            f"{len(raw_rows)} re-read"
-        )
-    info: dict[str, InfoScorePolicy] = {}
-    maf: dict[str, MafPolicy] = {}
-    for row, raw in zip(rows, raw_rows, strict=True):
-        try:
-            info[row.trait_id] = parse_info_score_policy(
-                raw, reader_capability=row.source_reader_capability
-            )
-        except ValueError as exc:
-            raise ValueError(
-                f"manifest {manifest_path}: analysis {row.trait_id!r} has invalid INFO "
-                f"policy: {exc}"
-            ) from exc
-        try:
-            maf[row.trait_id] = parse_maf_policy(raw)
-        except ValueError as exc:
-            raise ValueError(
-                f"manifest {manifest_path}: analysis {row.trait_id!r} has invalid MAF "
-                f"policy: {exc}"
-            ) from exc
-    return DeclaredPolicies(info=info, maf=maf)
+    rules = declared_rules(
+        manifest_path, {row.trait_id: row.source_reader_capability for row in rows}
+    )
+    return DeclaredPolicies(
+        info={analysis_id: r.info for analysis_id, r in rules.items()},
+        maf={analysis_id: r.maf for analysis_id, r in rules.items()},
+    )
 
 
-def _axis_source(
-    staged: StagedRelease, manifest_rows: list[_ManifestRow], options: _BuildOptions
-) -> tuple[
-    Path,
-    StagedRelease,
-    dict[tuple[str, int, str, str], str],
-    set[str],
-    _RsidHarvest,
-    Collection[SourceKey],
-]:
-    """Open the Dense staging dir and resolve the source-coordinate routing.
+def _route(
+    manifest_rows: list[ManifestRow], options: _BuildOptions
+) -> tuple[VariantRouting, set[str]]:
+    """Route the sources, and the Dense panel the routing is partitioned by.
 
-    With ``--variant-reference`` the reference replaces Pass 1 entirely: its
-    ``source_lookup`` is the routing and its ALIDs define the Dense axis. Without
-    one, the legacy Pass 1 reads every source once and lifts hg19 rows.
-
-    The harvest carries the candidates (keyed as the routing keys them) and
-    their on-reference routing when the reference names no rsids: the fold
-    finishes the routing and the rekey happens once, globally
-    (`_merge_off_reference_rsids`, issue #255). Empty on every other path.
+    With ``--variant-reference`` the reference replaces Pass 1's union: its
+    source keys route, its ALIDs define the Dense axis, and Pass 1 runs only
+    to harvest the names a reference lacks. Without one, Pass 1 reads every
+    source once and lifts hg19 rows. Either way the build routes by the
+    case-folded key, since a Source Reader keeps the source's allele spelling
+    and an ALID is upper-case.
     """
-    dense_dir, dense_staged = _open_dense_component(staged)
+    authority: LiftedUnion | FromReference
     if options.variant_reference is not None:
         reference = read_variant_reference(options.variant_reference)
         panel_alids = _resolve_reference_panel(options, reference)
-        harvest = _single_pass_rsids(reference, manifest_rows, options)
         log.info(
             "Single-pass build: variant axis loaded from %s (%d panel variants); "
             "Pass 1 variant discovery bypassed",
             options.variant_reference,
             len(panel_alids),
         )
-        return dense_dir, dense_staged, reference.source_lookup, panel_alids, harvest, ()
-    panel_alids = _panel_alids(options)
-    source_lookup, rsid_by_alid, swapped = _lift_manifest_variants(
-        manifest_rows,
-        chain_file=options.chain_file,
-        liftover_failure_threshold=options.liftover_failure_threshold,
+        authority = FromReference(
+            reference, options.chain_file, options.liftover_failure_threshold
+        )
+    else:
+        panel_alids = _panel_alids(options)
+        authority = LiftedUnion(options.chain_file, options.liftover_failure_threshold)
+    routing = route_variants(
+        [row.source for row in manifest_rows],
+        authority,
+        on_rsid_conflict=options.on_rsid_conflict,
         n_workers=options.n_workers,
-    )
-    # The two-pass build compares no names across sources: it keeps the first.
-    harvest = _RsidHarvest(
-        rsid_by_alid, {}, {}, False, RsidConflicts(options.on_rsid_conflict, None)
-    )
-    return dense_dir, dense_staged, source_lookup, panel_alids, harvest, swapped
-
-
-def _single_pass_rsids(
-    reference: VariantReference, manifest_rows: list[_ManifestRow], options: _BuildOptions
-) -> _RsidHarvest:
-    """The on-reference rsids the Dense skeleton needs, and what the fold will
-    finish rekeying (issue #255).
-
-    A reference that carries rsids is its own authority and nothing is read.
-    Otherwise the build runs Pass 1's harvest for the candidate rows and their
-    ``(rank, site)`` order and rekeys the on-reference subset once for the Dense
-    skeleton. The raw candidates travel on -- not a keyed copy -- so the global
-    oracle can walk them through the build's key function itself after the fold.
-    A key its sources name differently is refused or stored unnamed, as
-    ``--on-rsid-conflict`` says, and counted either way (issue #306).
-    """
-    if reference.rsid_by_alid:
-        # A reference that names rsids is used as-is (out of #255's scope); warn
-        # about the axis rows it leaves blank, split by where they came from
-        # (issue #255 round 4, finding 3).
-        warn_reference_left_rows_blank(reference)
-        unchecked = RsidConflicts(options.on_rsid_conflict, None)
-        return _RsidHarvest(dict(reference.rsid_by_alid), {}, {}, True, unchecked)
-    pass1_lookup, rsid_by_site, _rsid_by_alid, _swapped = _harvest_manifest_variants(
-        manifest_rows,
-        chain_file=options.chain_file,
-        liftover_failure_threshold=options.liftover_failure_threshold,
-        n_workers=options.n_workers,
-        # This build routes by the case-folded key, so the both-assembly drop and
-        # any cross-assembly collision are computed on that key too.
-        site_key=_routed_site_key,
-        refuse_cross_assembly_conflicts=True,
-    )
-    candidates, conflicts = _candidates_by_routing_key(
-        rsid_by_site,
-        _routed_site_key,
-        label="Hybrid single-pass build",
-        on_conflict=options.on_rsid_conflict,
-    )
-    reference_routing = _routing_lookup(reference.source_lookup, _routed_site_key)
-    candidate_routing = {
-        site: alid for site, alid in reference_routing.items() if site in candidates
-    }
-    _log_routing_disagreements(
-        candidates,
-        reference_routing,
-        pass1_lookup,
-        _routed_site_key,
         label="Hybrid single-pass build",
     )
-    on_reference = _rekey_rsids_to_alids(candidate_routing, candidates)
-    # The Dense skeleton's names; the combined rekey after the fold finishes this.
-    withhold_disputed(on_reference, candidate_routing, conflicts)
-    log.info(
-        "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d "
-        "on-reference rsid(s)",
-        len(on_reference),
-    )
-    found = RsidConflicts.found(options.on_rsid_conflict, conflicts)
-    return _RsidHarvest(on_reference, rsid_by_site, candidate_routing, False, found)
-
-
-def _log_dropped_rsids(conflicts: RsidConflicts) -> None:
-    """Say how many variants were left unnamed because their sources disagree."""
-    if not conflicts.n_keys:
-        return
-    first = conflicts.sample[0]
-    log.warning(
-        "Hybrid single-pass build: %d routing key(s) are named differently by their "
-        "sources, and the %d stored variant(s) they reach have no rsid "
-        "(--on-rsid-conflict drop), e.g. %s named %s",
-        conflicts.n_keys,
-        conflicts.n_variants,
-        first.key,
-        " and ".join(first.names),
-    )
+    return routing, panel_alids
 
 
 def _lift_and_partition(
     staged: StagedRelease,
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     options: _BuildOptions,
 ) -> _SourceAxis:
-    """Phase - axis source and partition/routing: open the Dense staging dir,
-    resolve the Dense panel and the source-coordinate routing, partition the
-    known variants into on-panel/off-panel, derive the provenance map and the
-    Analyses, and compose the fork-safe routing index.
+    """Phase - routing and partition: open the Dense staging dir, route the
+    sources, partition the routed variants into on-panel/off-panel, derive the
+    provenance map and the Analyses, and build the fork-safe route table.
 
     Source coordinates the reference does not hold are not known until Pass 2;
-    ``_finalise_reference_partition`` adds them to the shared axis there.
+    ``_finalise_reference_partition`` adds them to the shared axis there, so
+    the table keeps every association it cannot place.
     """
-    dense_dir, dense_staged, source_lookup, panel_alids, harvest, swapped = _axis_source(
-        staged, manifest_rows, options
+    dense_dir, dense_staged = _open_dense_component(staged)
+    routing, panel_alids = _route(manifest_rows, options)
+    if routing.names.pending:
+        log.info(
+            "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d "
+            "on-reference rsid(s)",
+            len(routing.names.rsid_by_alid),
+        )
+    hg38_to_source = routing.source_alids()
+    partition = _partition_variants(hg38_to_source.keys(), panel_alids, len(manifest_rows))
+    analyses: list[Analysis] = [manifest_row_to_analysis(row) for row in manifest_rows]
+    # Building the table consumes the routing's site map, which is freed before Pass 2.
+    table = routing.table(
+        [partition.panel_sorted, partition.shared_sorted], keep_unmatched=True
     )
-    partition = _partition_variants(
-        source_lookup,
-        panel_alids,
-        len(manifest_rows),
-    )
-    analyses: list[Analysis] = [_manifest_row_to_analysis(row) for row in manifest_rows]
-    hg38_to_source = _source_origin_map(source_lookup)
-    keys_sorted, targets_sorted, ispanel_sorted, swaps_sorted = _build_routing_index(
-        source_lookup,
-        {alid: i for i, alid in enumerate(partition.panel_sorted)},
-        {alid: i for i, alid in enumerate(partition.shared_sorted)},
-        swapped,
-    )
-    # The routing index is built: the source union (and the ALID -> index
-    # dicts, which lived only for that call) are freed before Pass 2.
-    del source_lookup
     return _SourceAxis(
         dense_dir=dense_dir,
         dense_staged=dense_staged,
         partition=partition,
         analyses=analyses,
         hg38_to_source=hg38_to_source,
-        rsid_by_alid=harvest.rsid_by_alid,
-        rsid_by_site=harvest.rsid_by_site,
-        candidate_routing=harvest.candidate_routing,
-        reference_named_rsids=harvest.reference_named,
-        rsid_conflicts=harvest.conflicts,
-        keys_sorted=keys_sorted,
-        targets_sorted=targets_sorted,
-        ispanel_sorted=ispanel_sorted,
-        swaps_sorted=swaps_sorted,
+        names=routing.names,
+        table=table,
     )
 
 
@@ -1367,12 +959,12 @@ def _write_dense_component_skeleton(
     Table and the dense row -> shared variant_index sidecar. ``dense_to_shared``
     is returned because the EAF survey samples both components on the shared
     axis through it and the query facade reads it back."""
-    _write_index(axis.dense_staged, axis.partition.panel_sorted, axis.analyses, chunk_shape)
+    write_index(axis.dense_staged, axis.partition.panel_sorted, axis.analyses, chunk_shape)
     _write_variant_table(
         axis.dense_dir,
         axis.partition.panel_sorted,
         axis.hg38_to_source,
-        axis.rsid_by_alid,
+        axis.names.rsid_by_alid,
     )
     # Ascending: the panel keeps genomic order, so dense row i is shared row
     # dense_to_shared[i] -- the mapping validation checks against.
@@ -1712,12 +1304,17 @@ def _merge_unknown_provenance(
 
 @dataclass(frozen=True)
 class _FoldContext:
+    """What every fold worker reads. ``record`` and ``shared_alids`` are where
+    a column's fold-stage drops are written and the axis that names them."""
+
     spill_dir: Path
     table_keys: np.ndarray
     table_shared_index: np.ndarray
     canonical_values: np.ndarray
     canonical_raw: np.ndarray
     old_to_new: np.ndarray | None
+    record: AdmissionRecord
+    shared_alids: Sequence[str]
     marker_dir: Path | None = None
 
 
@@ -1731,16 +1328,6 @@ _EMPTY_KEY_TABLE = KeyTable(
 )
 _EMPTY_CANONICAL = CanonicalRawKeys(
     values=np.empty(0, dtype=np.uint64), raw=np.empty(0, dtype=RAW_KEY_DTYPE)
-)
-
-#: Empty routing arrays. They are a resume's only: Pass 2 and the fold are the
-#: two readers of the routing index, and a resumed run that reaches either of
-#: them re-derives it from the recorded inputs in `_prepare_build` instead.
-_NO_ROUTING = (
-    np.empty(0, dtype=object),
-    np.empty(0, dtype=np.int64),
-    np.empty(0, dtype=bool),
-    np.empty(0, dtype=bool),
 )
 
 
@@ -1781,43 +1368,61 @@ def _folded_columns(state: CheckpointState | None) -> frozenset[int]:
     return frozenset(int(path.stem) for path in marker_dir.glob("*.done"))
 
 
-def _combine_overflow(
-    ex: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None,
-    off: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None,
-    needs_remap: bool,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
-    """Combine existing overflow and off-reference entries with last-wins precedence.
+@dataclass(frozen=True)
+class _FoldedOverflow:
+    """One column's Overflow after the fold, and the duplicates it resolved.
 
-    Off-reference entries are concatenated after existing overflow entries, so
-    they always win on duplicate shared indices (issue #223).
+    ``final`` is ``None`` when the existing spill stands as it is. The dropped
+    rows are named by the shared Variant Index each reached.
     """
-    if ex is not None and off is not None:
-        comb = tuple(np.concatenate([e, o]) for e, o in zip(ex, off, strict=True))
-        return _dedup_last_wins(*comb)
-    if off is not None:
-        return _dedup_last_wins(*off)
-    if ex is not None and needs_remap:
-        return _dedup_last_wins(*ex)
-    return None
+
+    final: _Overflow | None
+    conflicting: list[int]
+    reversed_indels: list[int]
+    collapsed: int
+
+
+def _combine_overflow(
+    ex: _Overflow | None, off: _Overflow | None, needs_remap: bool
+) -> _FoldedOverflow:
+    """Combine existing Overflow and off-reference entries, each shared index's
+    rows resolved by Admission's duplicate rule (`collapse_duplicates`, D5).
+
+    Two raw keys the fold resolves to one ALID -- an insertion and a deletion,
+    `A:G` and `G:A` -- or an off-reference entry reaching an index the column
+    already holds, are rows of one (variant, Analysis). Rows that agree collapse
+    to the first, existing ones first; rows that disagree are dropped, unless
+    they are a reversed indel whose source declared the reference.
+    """
+    parts = [part for part in (ex, off) if part is not None]
+    if not parts or (off is None and not needs_remap):
+        return _FoldedOverflow(None, [], [], 0)
+    index, z, se, eaf, reference = (np.concatenate(arrays) for arrays in zip(*parts, strict=True))
+    found = collapse_duplicates(index, z, se, reference)
+    keep = found.keep
+    return _FoldedOverflow(
+        (index[keep], z[keep], se[keep], eaf[keep], reference[keep]),
+        index[found.dropped].tolist(),
+        index[found.reversed_indels].tolist(),
+        found.collapsed,
+    )
 
 
 def _load_existing_overflow(
     spill_dir: Path, col: int, old_to_new: np.ndarray | None
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+) -> _Overflow | None:
     """Load and re-index existing overflow spill if present."""
     ovf_path = spill_dir / f"{col}.ovf.npz"
     if not ovf_path.exists():
         return None
     with np.load(ovf_path) as data:
         raw_vi = data["variant_index"].astype(np.int64)
-        z, se, eaf = data["z"], data["se"], data["eaf"]
+        z, se, eaf, reference = data["z"], data["se"], data["eaf"], data["reference"]
     vi = old_to_new[raw_vi] if old_to_new is not None else raw_vi
-    return vi, z, se, eaf
+    return vi, z, se, eaf, reference
 
 
-def _load_fold_existing(
-    ctx: _FoldContext, spill_dir: Path, col: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+def _load_fold_existing(ctx: _FoldContext, spill_dir: Path, col: int) -> _Overflow | None:
     """Load existing overflow unless an empty fold leaves it unchanged."""
     if ctx.old_to_new is None and not len(ctx.table_keys):
         return None
@@ -1826,21 +1431,62 @@ def _load_fold_existing(
 
 def _load_off_reference(
     ctx: _FoldContext, spill_dir: Path, col: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
-    """Load, verify, and resolve off-reference associations with searchsorted."""
+) -> tuple[_Overflow | None, list[str]]:
+    """Load, verify, and resolve off-reference associations with searchsorted.
+
+    Returns the resolved rows, ``None`` when there are none, and the raw keys
+    of the rows no off-reference key resolved: a failed lift, or a key the
+    resolution dropped. Those rows reach no axis (D6).
+    """
     unk_path = spill_dir / f"{col}.unk.npz"
     if not unk_path.exists():
-        return None
+        return None, []
     with np.load(unk_path) as data:
         keys = data["keys"]
-        u_z, u_se, u_eaf = data["z"], data["se"], data["eaf"]
+        u_z, u_se, u_eaf, u_reference = data["z"], data["se"], data["eaf"], data["reference"]
         hashed_index = data["hashed_index"]
     canonical = CanonicalRawKeys(ctx.canonical_values, ctx.canonical_raw)
-    _verify_hashed_rows(spill_dir, col, keys, hashed_index, canonical)
+    raws = _verify_hashed_rows(spill_dir, col, keys, hashed_index, canonical)
     keep, shared = lookup_matched(ctx.table_keys, ctx.table_shared_index, keys)
+    unresolved = _unresolved_keys(keys, hashed_index, raws, keep)
     if not len(keep):
-        return None
-    return shared, u_z[keep], u_se[keep], u_eaf[keep]
+        return None, unresolved
+    return (shared, u_z[keep], u_se[keep], u_eaf[keep], u_reference[keep]), unresolved
+
+
+def _unresolved_keys(
+    keys: np.ndarray, hashed_index: np.ndarray, raws: list[str], keep: np.ndarray
+) -> list[str]:
+    """The raw keys of one column's rows outside ``keep``, in stream order: a
+    packed key decodes from its bits, a hashed one is its side-file string."""
+    missing = np.ones(len(keys), dtype=bool)
+    missing[keep] = False
+    at = np.flatnonzero(missing)
+    if not len(at):
+        return []
+    raw_at = dict(zip(hashed_index.tolist(), raws, strict=True))
+    hashed = is_hashed(keys[at])
+    packed = iter(decode_packed(keys[at][~hashed]))
+    return [
+        raw_at[position] if is_raw else next(packed)
+        for position, is_raw in zip(at.tolist(), hashed.tolist(), strict=True)
+    ]
+
+
+def _record_fold(
+    ctx: _FoldContext, col: int, folded: _FoldedOverflow, unresolved: list[str]
+) -> None:
+    """Write what the fold dropped of one column's admitted rows as the
+    Admission record's `fold` stage for that Analysis: its duplicates by ALID,
+    and the rows no key resolved, by raw key, as `off_axis` (D6)."""
+    alids = ctx.shared_alids
+    with ctx.record.stage(ctx.record.analyses[col], "fold") as gate:
+        gate.duplicates(
+            [alids[i] for i in folded.conflicting],
+            folded.collapsed,
+            [alids[i] for i in folded.reversed_indels],
+        )
+        gate.unplaced(Reason.OFF_AXIS, unresolved)
 
 
 def _fold_column(col: int) -> int:
@@ -1849,10 +1495,11 @@ def _fold_column(col: int) -> int:
     Remaps existing overflow entries if an axis shift occurred (old_to_new),
     verifies hashed keys against canonical raw keys (failing loudly on hash collision),
     looks up off-reference keys in the key table using sorted searchsorted, drops
-    unresolved keys, and deduplicates duplicate Variant Indices last-wins with
-    off-reference entries winning over existing overflow entries (ticket #223).
-    Writes the overflow spill once atomically (temp file then rename), and unlinks
-    the off-reference spill only after the overflow spill is safely written.
+    unresolved keys, and resolves the rows that share a Variant Index by D5
+    (`_combine_overflow`). Records what it dropped in the Admission record's
+    `fold` stage, then writes the overflow spill once atomically (temp file then
+    rename), and unlinks the off-reference spill only after the overflow spill
+    is safely written.
     """
     assert _fold_context is not None
     ctx = _fold_context
@@ -1863,16 +1510,21 @@ def _fold_column(col: int) -> int:
     # With no remap (the all-keys-drop path), the existing overflow spill is
     # already on the final axis and must remain untouched.  Avoid reading it.
     ex = _load_fold_existing(ctx, spill_dir, col)
-    off = _load_off_reference(ctx, spill_dir, col)
+    off, unresolved = _load_off_reference(ctx, spill_dir, col)
     if ex is None and off is None and not unk_path.exists():
         _mark_folded(ctx, col)
         return col
 
-    final = _combine_overflow(ex, off, ctx.old_to_new is not None)
+    folded = _combine_overflow(ex, off, ctx.old_to_new is not None)
+    _record_fold(ctx, col, folded, unresolved)
+    final = folded.final
     if final is not None:
         tmp_ovf = spill_dir / f"{col}.ovf.tmp.npz"
         try:
-            np.savez(tmp_ovf, variant_index=final[0], z=final[1], se=final[2], eaf=final[3])
+            np.savez(
+                tmp_ovf, variant_index=final[0], z=final[1], se=final[2], eaf=final[3],
+                reference=final[4],
+            )
             tmp_ovf.replace(ovf_path)
         except BaseException:
             tmp_ovf.unlink(missing_ok=True)
@@ -1903,8 +1555,9 @@ def _verify_hashed_rows(
     keys: np.ndarray,
     hashed_index: np.ndarray,
     canonical: CanonicalRawKeys,
-) -> None:
-    """Check each of one column's hashed rows carries its value's canonical raw key.
+) -> list[str]:
+    """Check each of one column's hashed rows carries its value's canonical raw
+    key, and return the side file's raw keys, in ``hashed_index``'s order.
 
     The exact half of the build-wide collision guarantee (#218, ticket #222
     review round 2): the merge's check hash only filters, and two keys can
@@ -1914,6 +1567,7 @@ def _verify_hashed_rows(
     raws = _read_unknown_side_file(spill_dir, col)
     values = placed_hashed_values(keys, hashed_index, raws)
     canonical.verify(col, values, np.array(raws, dtype=RAW_KEY_DTYPE))
+    return raws
 
 
 def _fold_unknown_spills(
@@ -1924,6 +1578,8 @@ def _fold_unknown_spills(
     old_to_new: np.ndarray | None,
     n_workers: int,
     *,
+    record: AdmissionRecord,
+    shared_alids: Sequence[str],
     marker_dir: Path | None = None,
     already_folded: frozenset[int] = frozenset(),
 ) -> None:
@@ -1942,19 +1598,15 @@ def _fold_unknown_spills(
     worker writes, and ``already_folded`` the columns a previous run wrote one
     for: the two together are what lets an interrupted fold resume on the
     columns it has left, rather than re-remapping entries it already rewrote.
+
+    Each column writes what it dropped to ``record``'s `fold` stage, naming a
+    row by its ALID on ``shared_alids``, the axis the fold folds onto.
     """
-    table_keys = table.keys
-    table_shared = table.shared_index
-    table_keys.flags.writeable = False
-    table_shared.flags.writeable = False
-
-    canonical_values = canonical.values
-    canonical_raw = canonical.raw
-    canonical_values.flags.writeable = False
-    canonical_raw.flags.writeable = False
-
-    if old_to_new is not None:
-        old_to_new.flags.writeable = False
+    table_keys, table_shared = table.keys, table.shared_index
+    canonical_values, canonical_raw = canonical.values, canonical.raw
+    shared = (table_keys, table_shared, canonical_values, canonical_raw)
+    for array in (*shared, *(() if old_to_new is None else (old_to_new,))):
+        array.flags.writeable = False
 
     global _fold_context
     _fold_context = _FoldContext(
@@ -1964,6 +1616,8 @@ def _fold_unknown_spills(
         canonical_values=canonical_values,
         canonical_raw=canonical_raw,
         old_to_new=old_to_new,
+        record=record,
+        shared_alids=shared_alids,
         marker_dir=marker_dir,
     )
     pending = [col for col in range(n_analyses) if col not in already_folded]
@@ -1979,13 +1633,29 @@ def _build_shared_key_table(
 ) -> tuple[KeyTable, np.ndarray, AlidIndex, list[str], list[str]]:
     """Build key table and axis remapping index for resolved off-reference variants."""
     unknown_alids = set(resolved.alids)
-    off_panel = _sorted_alids(set(prepared.partition.off_panel_alids) | unknown_alids)
+    off_panel = sorted_alids(set(prepared.partition.off_panel_alids) | unknown_alids)
     panel = prepared.partition.panel_sorted
-    shared_sorted = _sorted_alids(set(panel) | set(off_panel))
+    shared_sorted = sorted_alids(set(panel) | set(off_panel))
     index = AlidIndex(shared_sorted)
     table = KeyTable(keys=resolved.keys, shared_index=index.lookup(resolved.alids))
     old_to_new = index.lookup(prepared.partition.shared_sorted)
     return table, old_to_new, index, off_panel, shared_sorted
+
+
+def _refuse_off_reference_spills(spill_dir: Path) -> None:
+    """Refuse a two-pass build's ``.unk`` spill rather than delete it unread.
+
+    A two-pass axis is the sources' whole union, so Pass 2 drops and logs an
+    unmatched row (`off_axis`, D6) and nothing folds one. A spill found here
+    is rows no stage would count, so it is a defect.
+    """
+    stray = sorted(path.name for path in spill_dir.glob("*.unk.npz"))
+    if stray:
+        raise RuntimeError(
+            f"a two-pass Hybrid build found {len(stray)} off-reference spill(s) "
+            f"(first: {stray[0]}); Pass 2 drops and logs an unmatched row, so "
+            "nothing folds them and their rows would be lost unrecorded"
+        )
 
 
 def _finalise_reference_partition(
@@ -2014,6 +1684,7 @@ def _finalise_reference_partition(
     the recorded rsid map -- is written.
     """
     if options.variant_reference is None:
+        _refuse_off_reference_spills(prepared.spill_dir)
         _record_axis(state, prepared, None)
         return prepared
     recorded = _recorded_axis(state)
@@ -2027,18 +1698,16 @@ def _finalise_reference_partition(
     return _fold_under(prepared, options, state, fold)
 
 
-def _fold_routing_for_candidates(
-    prepared: _PreparedBuild, fold: _FoldInputs | None
-) -> dict[str, str]:
-    """The ALID the fold resolved for every candidate the reference did not route.
+def _fold_route(fold: _FoldInputs | None) -> Callable[[str], str | None] | None:
+    """The ALID the fold resolved for an off-reference routing key, if any.
 
-    Keyed exactly as the candidates are (`_routed_site_key`), so the combined
-    routing and the rekey speak the same key form the association routing uses.
-    A named off-reference row with no usable association is not folded at all,
-    so it has no entry and its name stays unspent (issue #255).
+    The fold's key table is keyed by the encoded routing key, so a candidate is
+    looked up exactly as its association was folded. ``None`` when nothing was
+    folded. A named off-reference row with no usable association is not folded
+    at all, so it has no entry and its name stays unspent (issue #255).
     """
     if fold is None or not len(fold.table.keys):
-        return {}
+        return None
     shared_sorted = fold.shared_sorted
     alid_by_encoded = {
         int(value): shared_sorted[int(index)]
@@ -2046,30 +1715,24 @@ def _fold_routing_for_candidates(
             fold.table.keys.tolist(), fold.table.shared_index.tolist(), strict=True
         )
     }
-    routing: dict[str, str] = {}
-    for site in prepared.rsid_by_site:
-        key = _routed_site_key(site)
-        if key in prepared.candidate_routing:
-            continue
-        alid = alid_by_encoded.get(encode_key(key))
-        if alid is not None:
-            routing[key] = alid
-    return routing
+
+    def route(key: str) -> str | None:
+        return alid_by_encoded.get(encode_key(key))
+
+    return route
 
 
 def _merge_off_reference_rsids(
     prepared: _PreparedBuild, fold: _FoldInputs | None
 ) -> _PreparedBuild:
-    """Rekey the raw harvested candidates once, over the final combined routing.
+    """Finish the harvested names over the final combined routing.
 
-    The candidates are keyed by `_rekey_and_verify` with exactly the function
-    this build routes an association by (`_routed_site_key`), and its oracle
-    walks the raw candidates through that function itself. The routing is the
-    reference's for on-reference sites plus the fold's resolution for
-    off-reference ones -- ONE map, ONE rekey in global `(rank, site)` order, ONE
-    exact oracle over the merged result. That is what keeps a fold-routed name
-    that sorts earlier from losing to a reference-routed one that sorts later
-    (issue #255).
+    The routing is the reference's for on-reference sites plus the fold's
+    resolution for off-reference ones -- ONE map, ONE rekey in global
+    `(rank, site)` order, ONE exact oracle over the merged result
+    (`RoutedNames.finish`). That is what keeps a fold-routed name that sorts
+    earlier from losing to a reference-routed one that sorts later (issue
+    #255).
 
     A named off-reference row with no usable association anywhere is never
     folded, so its name is dropped with its variant: the single-pass axis is
@@ -2077,29 +1740,15 @@ def _merge_off_reference_rsids(
     keeps every source variant. The names are identical for every variant both
     axes carry (spec §4).
     """
-    if not prepared.rsid_by_site:
+    names = prepared.names
+    if not names.pending:
         _warn_fold_left_rows_blank(prepared, fold)
         return prepared
-    combined = {**prepared.candidate_routing, **_fold_routing_for_candidates(prepared, fold)}
-    merged, withheld = _rekey_and_verify(
-        prepared.rsid_by_site,
-        combined,
-        key=_routed_site_key,
-        label="Hybrid single-pass build",
-        on_conflict=prepared.rsid_conflicts.policy,
-    )
-    # Only the combined routing says which stored variant each disputed key reaches.
-    prepared = replace(prepared, rsid_conflicts=prepared.rsid_conflicts.reaching(len(withheld)))
-    _log_dropped_rsids(prepared.rsid_conflicts)
-    if merged == prepared.rsid_by_alid:
-        return prepared
-    log.info(
-        "Single-pass build: %d named candidate(s) rekeyed against the combined "
-        "reference/fold routing",
-        len(combined),
-    )
-    _rewrite_dense_table_if_needed(prepared, merged)
-    return replace(prepared, rsid_by_alid=merged)
+    finished = names.finish(_fold_route(fold))
+    if finished.rsid_by_alid == names.rsid_by_alid:
+        return replace(prepared, names=finished)
+    _rewrite_dense_table_if_needed(prepared, finished.rsid_by_alid)
+    return replace(prepared, names=finished)
 
 
 def _warn_fold_left_rows_blank(
@@ -2112,10 +1761,10 @@ def _warn_fold_left_rows_blank(
     each variant the fold discovers off the reference is stored with no rsid
     even when its source names one. Out of #255's scope; logged with a count.
     """
-    if not prepared.reference_named_rsids or fold is None:
+    if not prepared.names.reference_named or fold is None:
         return
     discovered = set(fold.off_panel) - set(prepared.partition.off_panel_alids)
-    unnamed = sum(1 for alid in discovered if not prepared.rsid_by_alid.get(alid))
+    unnamed = sum(1 for alid in discovered if not prepared.names.rsid_by_alid.get(alid))
     if not unnamed:
         return
     log.warning(
@@ -2138,7 +1787,8 @@ def _rewrite_dense_table_if_needed(
     name and the shared table another (issue #255).
     """
     panel = prepared.partition.panel_sorted
-    if all(merged.get(alid, "") == prepared.rsid_by_alid.get(alid, "") for alid in panel):
+    written = prepared.names.rsid_by_alid
+    if all(merged.get(alid, "") == written.get(alid, "") for alid in panel):
         return
     log.warning(
         "Single-pass build: the global rsid rekey moved a Dense Component name; "
@@ -2176,6 +1826,7 @@ def _fold_under(
     run must leave the map its indices were built against rather than the
     pre-fold one `_prepare_build` may have re-written.
     """
+    record = _admission_record(prepared, options, resume=True)
     _fold_unknown_spills(
         prepared.spill_dir,
         prepared.n_analyses,
@@ -2183,9 +1834,13 @@ def _fold_under(
         fold.canonical,
         old_to_new=fold.old_to_new,
         n_workers=options.n_workers,
+        record=record,
+        shared_alids=fold.shared_sorted,
         marker_dir=_fold_marker_dir(state),
         already_folded=_folded_columns(state),
     )
+    # The fold's drops are each Analysis's too, so the summary is written again.
+    record.finish()
     np.save(dense_to_shared_path(prepared.staged.path), fold.dense_to_shared)
     return _update_partition(
         prepared, fold.off_panel, fold.shared_sorted, fold.dense_to_shared, fold.hg38_to_source
@@ -2283,9 +1938,9 @@ def _record_axis(
     write_lines(state.path / AXIS_OFF_PANEL, inputs.off_panel)
     write_lines(state.path / AXIS_SHARED, inputs.shared_sorted)
     write_str_map(state.path / PROVENANCE_SOURCE, inputs.hg38_to_source)
-    write_str_map(state.path / PROVENANCE_RSID, prepared.rsid_by_alid)
+    write_str_map(state.path / PROVENANCE_RSID, prepared.names.rsid_by_alid)
     # A run resumed after the fold harvests nothing, so the count is kept here.
-    write_json(state.path / RSID_CONFLICTS, prepared.rsid_conflicts.as_dict())
+    write_json(state.path / RSID_CONFLICTS, prepared.names.conflicts.as_dict())
 
 
 def _recorded_axis(state: CheckpointState | None) -> _FoldInputs | None:
@@ -2331,123 +1986,53 @@ def _update_partition(
     )
 
 
-def _route_serial(
-    prepared: _PreparedBuild,
-    analysis_index: dict[str, int],
-    n_analyses: int,
-    pass2_start: float,
-) -> dict[str, AdmissionCounts]:
-    """Route each study once, in this process, spilling the dense rows and the
-    overflow associations it resolves (last-wins dedup per target index).
-    Returns each Analysis's admitted-row dispositions (stores #175, #176)."""
-    info_counts: dict[str, AdmissionCounts] = {}
-    for i, row in enumerate(prepared.manifest_rows):
-        dense, overflow, off_reference, counts = _resolve_column_hybrid(
-            row.file_path,
-            prepared.keys_sorted,
-            prepared.targets_sorted,
-            prepared.ispanel_sorted,
-            row.se_divisor,
-            prepared.swaps_sorted,
-            capability=row.source_reader_capability,
-            stored_effect_scale=row.stored_effect_scale,
-            info_score_policy=prepared.info_score_policies[row.trait_id],
-            maf_policy=prepared.maf_policies[row.trait_id],
-            column_map=row.column_map,
-        )
-        info_counts[row.trait_id] = counts
-        _spill_hybrid_column(
-            prepared.spill_dir, analysis_index[row.trait_id], dense, overflow, off_reference
-        )
-        _log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {row.trait_id}", every=25)
-    return info_counts
-
-
-def _route_parallel(
-    prepared: _PreparedBuild,
-    analysis_index: dict[str, int],
-    id_by_col: dict[int, str],
-    n_analyses: int,
-    options: _BuildOptions,
-    pass2_start: float,
-) -> dict[str, AdmissionCounts]:
-    """Route each study through the fork pool. Workers read the routing arrays
-    through the module-level globals below rather than as arguments: they are
-    inherited by fork, which is what keeps a genome-scale lookup out of the
-    per-column pickling the pool would otherwise do (dense.build_vcf's
-    rationale). Each worker also applies its own Analysis's declared INFO and MAF
-    policies (stores #175, #176) and returns its dispositions for the shared
-    manifest."""
-    global _pass2_keys_sorted, _pass2_targets_sorted, _pass2_ispanel_sorted
-    global _pass2_swaps_sorted, _pass2_spill_dir, _pass2_info_policies, _pass2_maf_policies
-    _pass2_keys_sorted = prepared.keys_sorted
-    _pass2_targets_sorted = prepared.targets_sorted
-    _pass2_ispanel_sorted = prepared.ispanel_sorted
-    _pass2_swaps_sorted = prepared.swaps_sorted
-    _pass2_spill_dir = prepared.spill_dir
-    _pass2_info_policies = {
-        column: prepared.info_score_policies[row.trait_id]
-        for column, row in enumerate(prepared.manifest_rows)
-    }
-    _pass2_maf_policies = {
-        column: prepared.maf_policies[row.trait_id]
-        for column, row in enumerate(prepared.manifest_rows)
-    }
-    info_counts: dict[str, AdmissionCounts] = {}
-    try:
-        with _fork_pool(options.n_workers) as pool:
-            tasks = _pass2_worker_tasks(prepared.manifest_rows, analysis_index)
-            futures = [pool.submit(_pass2_worker, task) for task in tasks]
-            for i, future in enumerate(as_completed(futures)):
-                col, counts = future.result()
-                info_counts[id_by_col[col]] = counts
-                _log_progress(
-                    "Pass 2", i + 1, n_analyses, pass2_start, f"last: {id_by_col[col]}", every=25
-                )
-    finally:
-        _pass2_keys_sorted = None
-        _pass2_targets_sorted = None
-        _pass2_ispanel_sorted = None
-        _pass2_swaps_sorted = None
-        _pass2_spill_dir = None
-        _pass2_info_policies = None
-        _pass2_maf_policies = None
-    return info_counts
-
-
 def _route_studies(
     prepared: _PreparedBuild,
     options: _BuildOptions,
 ) -> _RoutedSpills:
     """Phase - Pass 2: read each study once and route every association into
-    the dense spill or the overflow spill (fork pool when n_workers > 1).
-    Returns the {column: analysis_id} map the EAF survey keys, the pass start
-    time the band writer's progress reports from, and each Analysis's declared-
-    score dispositions for the shared manifest (stores #175)."""
+    the dense spill or the overflow spill, here or in a fork pool whose workers
+    inherit the route table (`fork_each`). Returns the {column: analysis_id}
+    map the EAF survey keys, the pass start time the band writer's progress
+    reports from, and each Analysis's declared-score dispositions for the shared
+    manifest (stores #175)."""
+    if prepared.table is None:
+        raise ValueError("Pass 2 needs the route table, which a resume past the fold drops")
     rows = prepared.manifest_rows
     analysis_index = {row.trait_id: i for i, row in enumerate(rows)}
     id_by_col = {i: row.trait_id for i, row in enumerate(rows)}
     n_analyses = len(rows)
     log.info("Pass 2: routing %d analyses (n_workers=%d)", n_analyses, options.n_workers)
     pass2_start = time.monotonic()
-    if options.n_workers <= 1:
-        info_counts = _route_serial(
-            prepared,
-            analysis_index,
-            n_analyses,
-            pass2_start,
-        )
-    else:
-        info_counts = _route_parallel(
-            prepared,
-            analysis_index,
-            id_by_col,
-            n_analyses,
-            options,
-            pass2_start,
-        )
+    record = _admission_record(prepared, options, resume=False)
+    context = _Pass2Context(
+        prepared.table,
+        prepared.spill_dir,
+        prepared.info_score_policies,
+        prepared.maf_policies,
+        record,
+        (prepared.partition.panel_sorted, prepared.partition.shared_sorted),
+        folds=options.variant_reference is not None,
+    )
+    tasks = [(analysis_index[row.trait_id], row) for row in rows]
+    routed = fork_each(_route_column, context, tasks, options.n_workers)
+    for i, col in enumerate(routed):
+        log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {id_by_col[col]}", every=25)
     return _RoutedSpills(
-        id_by_col=id_by_col, pass2_start=pass2_start, info_counts=info_counts
+        id_by_col=id_by_col, pass2_start=pass2_start, info_counts=record.finish().counts
+    )
+
+
+def _admission_record(
+    prepared: _PreparedBuild, options: _BuildOptions, *, resume: bool
+) -> AdmissionRecord:
+    """The build's Admission record, opened for its Analyses in Manifest Row order."""
+    log.info("Admission record: %s", options.admission_record)
+    return AdmissionRecord.open(
+        options.admission_record,
+        [row.trait_id for row in prepared.manifest_rows],
+        command="build-hybrid",
+        resume=resume,
     )
 
 
@@ -2517,7 +2102,7 @@ def _plan_joint_encoding(
         )
     )
     log.info("Encoding plan: %s", encoding.to_manifest())
-    effective_chunks = _create_dense_zarr(
+    effective_chunks = create_dense_zarr(
         prepared.dense_staged,
         prepared.partition.n_panel,
         prepared.n_analyses,
@@ -2560,7 +2145,7 @@ def _write_dense_component_bands(
 ) -> _DenseWritten:
     """Phase - the Dense band write, reusing the dense builder's band-streamer
     and top-hit harvest."""
-    all_rows, all_cols, all_z, all_se, column_has_eaf = _write_dense_bands(
+    all_rows, all_cols, all_z, all_se, column_has_eaf = write_dense_bands(
         prepared.dense_staged,
         prepared.spill_dir,
         prepared.partition.n_panel,
@@ -2609,7 +2194,7 @@ def _stamp_analyses(
     eaf_scope is the union of what the two components stored, so neither
     analyses.tsv may be written until both have been read."""
     return apply_orientation_evidence(
-        _apply_eaf_scope(prepared.analyses, dense.column_has_eaf | overflow.overflow_has_eaf),
+        apply_eaf_scope(prepared.analyses, dense.column_has_eaf | overflow.overflow_has_eaf),
         evidence.report,
     )
 
@@ -2842,7 +2427,7 @@ def _write_shared_metadata(
     )
     dense_counted = add_hit_counts(prepared.dense_dir, components.analyses)
     shared_analyses = add_hit_counts(prepared.staged.path, dense_counted)
-    _write_index(
+    write_index(
         prepared.staged,
         prepared.partition.shared_sorted,
         components.analyses,
@@ -2853,7 +2438,7 @@ def _write_shared_metadata(
         prepared.staged.path,
         prepared.partition.shared_sorted,
         prepared.hg38_to_source,
-        prepared.rsid_by_alid,
+        prepared.names.rsid_by_alid,
     )
     # The tables just written must be the tables the resolved map describes: a
     # partial harvest loss, an off-reference row dropped from the write, or a
@@ -2861,17 +2446,13 @@ def _write_shared_metadata(
     # rather than being trusted from the map that produced them (issue #255).
     # Root first, then the Dense Component -- its table was written before
     # Pass 2 and must carry the same identifiers as the shared table.
-    require_written_rsids_match(
-        prepared.staged.path, prepared.partition.shared_sorted, prepared.rsid_by_alid
-    )
-    require_written_rsids_match(
-        prepared.dense_dir, prepared.partition.panel_sorted, prepared.rsid_by_alid
-    )
+    prepared.names.require_written(prepared.staged.path, prepared.partition.shared_sorted)
+    prepared.names.require_written(prepared.dense_dir, prepared.partition.panel_sorted)
 
 
 def _prepare_build(
     staged: StagedRelease,
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     policies: DeclaredPolicies,
     options: _BuildOptions,
     spill_dir: Path | None = None,
@@ -2892,7 +2473,7 @@ def _prepare_build(
     )
     if spill_dir is None:
         spill_dir = Path(
-            tempfile.mkdtemp(
+            mkdtemp(
                 prefix=f".{options.out.name}.hybridspill.",
                 dir=staged.path.parent,
             )
@@ -2909,17 +2490,10 @@ def _prepare_build(
         maf_policies=policies.maf,
         analyses=axis.analyses,
         hg38_to_source=axis.hg38_to_source,
-        rsid_by_alid=axis.rsid_by_alid,
-        rsid_by_site=axis.rsid_by_site,
-        candidate_routing=axis.candidate_routing,
-        reference_named_rsids=axis.reference_named_rsids,
-        rsid_conflicts=axis.rsid_conflicts,
+        names=axis.names,
         dense_to_shared=dense_to_shared,
         spill_dir=spill_dir,
-        keys_sorted=axis.keys_sorted,
-        targets_sorted=axis.targets_sorted,
-        ispanel_sorted=axis.ispanel_sorted,
-        swaps_sorted=axis.swaps_sorted,
+        table=axis.table,
         n_analyses=len(manifest_rows),
     )
 
@@ -2993,17 +2567,18 @@ def _pass2_phase(
 ) -> _RoutedSpills:
     """Phase - Pass 2: route each study once, or reload the recorded routing.
 
-    The recorded form is each Analysis's declared-score dispositions (stores
-    #175), which the shared manifest's `provenance.info_score` is written from
-    and which nothing else can recover: they are what the sources yielded, not
-    a function of the store.
+    What a resume reloads is each Analysis's Admission counts (stores #175),
+    which the shared manifest's `provenance.info_score` is written from and
+    which nothing else can recover: they are what the sources yielded, not a
+    function of the store. They are the Admission record's parts, which a
+    resumed run keeps.
     """
     if state is not None and state.has("pass2"):
-        return _recorded_routing(prepared, state)
+        return _recorded_routing(prepared, options)
     routed = _route_studies(prepared, options)
     _log_spill_bytes(prepared.spill_dir)
     if state is not None:
-        _record_pass2_product(state, prepared, routed)
+        _record_pass2_product(state)
     return routed
 
 
@@ -3017,36 +2592,24 @@ def _log_spill_bytes(spill_dir: Path) -> None:
     )
 
 
-def _record_pass2_product(
-    state: CheckpointState, prepared: _PreparedBuild, routed: _RoutedSpills
-) -> None:
-    """Record Pass 2's product: the dispositions its workers returned.
-
-    The plates are recorded too, with their sizes, so a resume can refuse a
-    spill directory that lost one rather than build a store short of the
-    associations it claims.
+def _record_pass2_product(state: CheckpointState) -> None:
+    """Record Pass 2's product: its plates, with their sizes, so a resume can
+    refuse a spill directory that lost one rather than build a store short of
+    the associations it claims. Its counts are the Admission record's.
     """
-    write_json(
-        state.path / INFO_COUNTS,
-        {
-            row.trait_id: routed.info_counts[row.trait_id].as_dict()
-            for row in prepared.manifest_rows
-        },
-    )
     record_plates(state.path, (path.name for path in state.spill_dir.iterdir()))
     mark_phase(state.path, "pass2")
 
 
-def _recorded_routing(prepared: _PreparedBuild, state: CheckpointState) -> _RoutedSpills:
-    """Rebuild the routing records a resumed run does not route again."""
-    recorded = read_json(state.path / INFO_COUNTS)
+def _recorded_routing(prepared: _PreparedBuild, options: _BuildOptions) -> _RoutedSpills:
+    """Rebuild the routing records a resumed run does not route again: the
+    counts are re-read from the Admission record's parts, and a record that
+    lost one is refused."""
+    record = _admission_record(prepared, options, resume=True)
     return _RoutedSpills(
         id_by_col={col: row.trait_id for col, row in enumerate(prepared.manifest_rows)},
         pass2_start=time.monotonic(),
-        info_counts={
-            row.trait_id: AdmissionCounts.from_dict(recorded[row.trait_id])
-            for row in prepared.manifest_rows
-        },
+        info_counts=record.finish().counts,
     )
 
 
@@ -3261,7 +2824,7 @@ def _finalise_store(
         n_panel=prepared.partition.n_panel,
         n_off_panel=prepared.partition.n_off_panel,
         n_overflow=n_overflow,
-        rsid_conflicts=prepared.rsid_conflicts,
+        rsid_conflicts=prepared.names.conflicts,
     )
 
 
@@ -3279,6 +2842,7 @@ def build_hybrid_from_vcf_manifest(
     source_assembly: str | None = None, checkpoint: bool = False, resume: bool = False,
     column_map: ColumnMap | str | Path | None = None, on_rsid_conflict: str = "refuse",
     association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
+    admission_record: str | Path | None = None,
 ) -> HybridBuildResult:
     """Build a Hybrid store from a manifest of GWAS-VCF files and a reference
     panel or precomputed variant reference. A thin orchestrator over three deep
@@ -3298,7 +2862,7 @@ def build_hybrid_from_vcf_manifest(
     Pass 2. With only ``reference_panel``, the legacy two-pass build reads every
     source once and lifts hg19 rows. A reference that names no rsids runs Pass 1's
     harvest, rekeyed through this build's routing, so its names match the two-pass
-    build's for every variant both axes carry (`_single_pass_rsids`, #255); rows
+    build's for every variant both axes carry (`RoutedNames.finish`, #255); rows
     are assumed hg19 and lifted inline unless the manifest declares
     ``source_assembly=hg38`` (#85); ``source_reader_capability`` supplies the
     per-release default (#174), and ``eaf_reference`` drives the orientation check.
@@ -3322,7 +2886,7 @@ def build_hybrid_from_vcf_manifest(
         chunk_shape=chunk_shape, dtype=dtype, n_workers=n_workers,
         eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf, association_coverage=association_coverage,
-        on_rsid_conflict=on_rsid_conflict,
+        on_rsid_conflict=on_rsid_conflict, admission_record=admission_record,
     )
     defaults = _ManifestDefaults(source_reader_capability, source_assembly,
                                  as_column_map(column_map))
@@ -3346,8 +2910,12 @@ def _new_build_options(
     allow_unverified_eaf: bool,
     association_coverage: AssociationCoverage | str,
     on_rsid_conflict: str,
+    admission_record: str | Path | None = None,
 ) -> _BuildOptions:
     """The build's options, refusing a coverage no Hybrid release can carry.
+
+    ``admission_record`` is the directory Association Admission writes its
+    record to, ``<output_path>.admission`` unless named (#357).
 
     The coverage is ``gwas`` or nothing (issue #298), refused here rather than at
     the first phase that needs it, and before a single Manifest Row is read (ADR
@@ -3373,6 +2941,7 @@ def _new_build_options(
         association_coverage=coverage_for_layout(
             association_coverage, PrimaryStorageLayout.HYBRID
         ),
+        admission_record=admission_record_for(output_path, admission_record),
     )
 
 
@@ -3595,7 +3164,7 @@ def _read_params(checkpoint_dir: Path) -> dict[str, Any]:
 
 def _resume_prepared(
     staged: StagedRelease,
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     policies: DeclaredPolicies,
     options: _BuildOptions,
     state: CheckpointState,
@@ -3615,7 +3184,7 @@ def _resume_prepared(
 
 def _recorded_prepared(
     staged: StagedRelease,
-    manifest_rows: list[_ManifestRow],
+    manifest_rows: list[ManifestRow],
     policies: DeclaredPolicies,
     state: CheckpointState,
 ) -> _PreparedBuild:
@@ -3650,25 +3219,21 @@ def _recorded_prepared(
         manifest_rows=manifest_rows,
         info_score_policies=policies.info,
         maf_policies=policies.maf,
-        analyses=[_manifest_row_to_analysis(row) for row in manifest_rows],
+        analyses=[manifest_row_to_analysis(row) for row in manifest_rows],
         hg38_to_source=read_str_map(state.path / PROVENANCE_SOURCE),
-        rsid_by_alid={
-            alid: rsid
-            for alid, rsid in read_str_map(state.path / PROVENANCE_RSID).items()
-            if rsid
-        },
         # The recorded map is already the routed one; the fold phase is not
-        # re-entered on this path, so no candidates travel with it (issue #255).
-        rsid_by_site={},
-        candidate_routing={},
-        reference_named_rsids=False,
-        rsid_conflicts=_recorded_rsid_conflicts(state),
+        # re-entered on this path, so the names are final (issue #255).
+        names=RoutedNames(
+            {
+                alid: rsid
+                for alid, rsid in read_str_map(state.path / PROVENANCE_RSID).items()
+                if rsid
+            },
+            _recorded_rsid_conflicts(state),
+        ),
         dense_to_shared=dense_to_shared,
         spill_dir=state.spill_dir,
-        keys_sorted=_NO_ROUTING[0],
-        targets_sorted=_NO_ROUTING[1],
-        ispanel_sorted=_NO_ROUTING[2],
-        swaps_sorted=_NO_ROUTING[3],
+        table=None,
         n_analyses=len(manifest_rows),
     )
 
@@ -3814,6 +3379,7 @@ def _build_params(
         # Recorded so a resume cannot change what the release claims to retain
         # (#227, #298).
         "association_coverage": options.association_coverage.value,
+        "admission_record": str(options.admission_record.resolve()),
         "overwrite": bool(overwrite),
         "source_reader_capability": defaults.source_reader_capability,
         "source_assembly": defaults.source_assembly,
@@ -3854,6 +3420,7 @@ def _options_from_params(params: Mapping[str, Any], n_workers: int | None) -> _B
         allow_unverified_eaf=params["allow_unverified_eaf"],
         on_rsid_conflict=RsidConflictPolicy(params["on_rsid_conflict"]),
         association_coverage=AssociationCoverage(params["association_coverage"]),
+        admission_record=Path(params["admission_record"]),
     )
 
 

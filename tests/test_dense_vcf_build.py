@@ -27,11 +27,12 @@ from residual_fixtures import write_gwas_vcf_with_eaf
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
-from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.model.analyses import read_analyses
+from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.store.open import open_store
+from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.reference import read_variant_reference, write_variant_reference
 
@@ -467,59 +468,47 @@ def test_liftover_failure_above_threshold_raises(tmp_path):
 
 
 def test_read_manifest_defaults_source_assembly_to_hg19(tmp_path):
-    from opengwasdb.layouts.dense.build_vcf import _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
 
     vcf = _make_vcf(
         tmp_path, "trait_a", [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
     )
     manifest = _make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
 
-    rows = _read_manifest(manifest)
+    rows = read_manifest(manifest)
 
     assert rows[0].source_assembly == "hg19"
 
 
 def test_read_manifest_normalises_source_assembly_aliases(tmp_path):
-    from opengwasdb.layouts.dense.build_vcf import _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
 
     vcf = _make_vcf(
         tmp_path, "trait_a", [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
     )
-    manifest = tmp_path / "manifest.tsv"
-    manifest.write_text(
-        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
-        "\toriginal_sd_method\toriginal_sd\tsource_assembly\n"
-        f"trait_a\t{vcf}\tTrait A\t1000\tsd\tdeclared_standardised\t\tGRCh38\n",
-        encoding="utf-8",
-    )
+    manifest = _manifest_with_source_assembly(tmp_path, [("trait_a", vcf, "Trait A", "GRCh38")])
 
-    rows = _read_manifest(manifest)
+    rows = read_manifest(manifest)
 
     assert rows[0].source_assembly == "hg38"
 
 
 def test_read_manifest_rejects_invalid_source_assembly(tmp_path):
-    from opengwasdb.layouts.dense.build_vcf import _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
 
     vcf = _make_vcf(
         tmp_path, "trait_a", [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
     )
-    manifest = tmp_path / "manifest.tsv"
-    manifest.write_text(
-        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
-        "\toriginal_sd_method\toriginal_sd\tsource_assembly\n"
-        f"trait_a\t{vcf}\tTrait A\t1000\tsd\tdeclared_standardised\t\thg17\n",
-        encoding="utf-8",
-    )
+    manifest = _manifest_with_source_assembly(tmp_path, [("trait_a", vcf, "Trait A", "hg17")])
 
     with pytest.raises(ValueError, match="source_assembly"):
-        _read_manifest(manifest)
+        read_manifest(manifest)
 
 
 def test_canonical_analyses_tsv_columns_build_cleanly(tmp_path):
     """Issue #170: the registry's canonical ``analyses.tsv`` column names are
     accepted directly -- no ``analysis_id``->``trait_id`` rename needed."""
-    from opengwasdb.layouts.dense.build_vcf import _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
 
     vcf = _make_vcf(
         tmp_path, "trait_a", [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
@@ -533,7 +522,7 @@ def test_canonical_analyses_tsv_columns_build_cleanly(tmp_path):
     )
 
     # The reader maps every canonical name onto the builder's own row fields.
-    rows = _read_manifest(manifest)
+    rows = read_manifest(manifest)
     assert len(rows) == 1
     assert rows[0].trait_id == "trait_a"
     assert rows[0].file_path == str(vcf)
@@ -697,30 +686,34 @@ def test_cross_assembly_tuple_collision_is_dropped_not_misattributed(tmp_path, c
     assert len(ssf_result["z"]) == 0
 
 
-def test_match_batch_handles_an_empty_lookup_without_crashing():
+def test_an_empty_route_table_routes_nothing_without_crashing():
     """issue #85 code review follow-up: a manifest whose entire variant set is
     dropped (e.g. every variant is an ambiguous cross-assembly collision)
-    leaves `keys_sorted` empty; `_match_batch` must report no matches rather
-    than crash indexing an empty array (`np.searchsorted` on an empty array
-    always returns 0, so `keys_sorted[len(keys_sorted) - 1]` -> `keys_sorted[-1]`
-    on a zero-length array raised IndexError before this guard)."""
-    from opengwasdb.layouts.dense.build_vcf import _match_batch
+    leaves the route table with no keys; it must report no matches rather than
+    crash indexing an empty array (`np.searchsorted` on an empty array always
+    returns 0, so the clipped index is -1 on a zero-length array)."""
+    from opengwasdb.readers.interface import ReaderAssociation, ReferenceAllele
+    from opengwasdb.variants.routing import RouteTable
 
-    rows, z, se, eaf = _match_batch(
-        ["1"], [100], ["A"], ["G"], [1.0], [0.5], [float("nan")],
-        keys_sorted=np.empty(0, dtype="S1"), rows_sorted=np.empty(0, dtype=np.int32),
+    table = RouteTable.build({}, (), [["1:100:A:G"]], keep_unmatched=False)
+    column = table.route_column(
+        [
+            ReaderAssociation(
+                "1", 100, "A", "G", 1.0, 0.5, StoredEffectScale.SD,
+                reference=ReferenceAllele.UNDECLARED,
+            )
+        ]
     )
 
-    assert len(rows) == 0
-    assert len(z) == 0
-    assert len(se) == 0
-    assert len(eaf) == 0
+    placed = column.placed[0]
+    assert len(placed.index) == len(placed.z) == len(placed.se) == len(placed.eaf) == 0
+    assert column.n_unmatched == 1
 
 
 def test_liftover_failure_threshold_scoped_to_hg19_group_not_diluted_by_hg38_rows(tmp_path):
     """issue #85: liftover_failure_threshold is computed over the hg19 group's
-    own denominator (`_lift_manifest_variants` calls `build_liftover_lookup`
-    with only that group's tuples), not the whole manifest -- otherwise a
+    own denominator (Variant Routing lifts only that group's tuples), not the
+    whole manifest -- otherwise a
     large hg38-sourced (e.g. GWAS-SSF) manifest could mask a genuinely broken
     hg19 source. 2/2 hg19 variants fail liftover (100%, over threshold) here,
     but 2/302 against the *whole* manifest (300 hg38 passthrough rows added)
@@ -852,10 +845,8 @@ class TestPass1Parallel:
     """
 
     def test_pass1_parallel_union_and_rsids_match_serial(self, tmp_path):
-        from opengwasdb.layouts.dense.build_vcf import (
-            _collect_manifest_variant_sites,
-            _read_manifest,
-        )
+        from opengwasdb.layouts.build_manifest import read_manifest
+        from opengwasdb.variants.routing import LiftedUnion, route_variants
 
         vcf1 = _make_vcf(
             tmp_path,
@@ -878,26 +869,22 @@ class TestPass1Parallel:
         manifest = _make_manifest(
             tmp_path, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")]
         )
-        rows = _read_manifest(manifest)
+        sources = [row.source for row in read_manifest(manifest)]
 
-        serial = _collect_manifest_variant_sites(rows, n_workers=1)
-        parallel = _collect_manifest_variant_sites(rows, n_workers=2)
+        serial = route_variants(sources, LiftedUnion(), n_workers=1)
+        parallel = route_variants(sources, LiftedUnion(), n_workers=2)
 
-        assert serial == parallel
-        tuples_by_assembly, rsid_by_site = parallel
-        assert tuples_by_assembly == {
-            "hg19": {
-                ("1", HG19_POS_1, "A", "G"),
-                ("1", HG19_POS_2, "C", "T"),
-                ("1", HG19_POS_3, "G", "A"),
-                ("1", 2_000_000, "G", "A"),
-            }
-        }
+        assert serial.alids == parallel.alids
+        assert serial.source_alids() == parallel.source_alids()
+        assert serial.names.rsid_by_alid == parallel.names.rsid_by_alid
+        assert len(parallel.alids) == 4
+        assert parallel.source_alids()[HG38_ALID_2] == f"1:{HG19_POS_2}:C:T"
         # First named rsid wins across shards -- and by manifest order, not
         # rsid-string order ("rsZ" sorts after "rsA" but came first).
-        assert rsid_by_site[("1", HG19_POS_1, "A", "G")] == "rsZ"
-        assert rsid_by_site[("1", HG19_POS_2, "C", "T")] == "rs200"
-        assert rsid_by_site[("1", HG19_POS_3, "G", "A")] == "rs300"
+        names = parallel.names.rsid_by_alid
+        assert names[HG38_ALID_1] == "rsZ"
+        assert names[HG38_ALID_2] == "rs200"
+        assert names[HG38_ALID_3] == "rs300"
 
     def test_parallel_stage1_store_matches_serial_variant_axis_and_arrays(self, tmp_path):
         """Parallel Pass 1 produces the same union, ALIDs, rsids, and dense
@@ -1040,10 +1027,8 @@ class TestTopHitHarvest:
 
     def test_harvest_matches_full_scan(self, tmp_path):
         """Top hits harvested during Pass 2 must equal a full-matrix rescan."""
-        from opengwasdb.layouts.dense.top_hits import (
-            build_top_hit_indexes,
-            threshold_key,
-        )
+        from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
+        from opengwasdb.top_hits import threshold_key
 
         # trait z-scores: 4.0 and 5.0 clear the loosest tier; 3.0 does not.
         vcf1 = _make_vcf(
@@ -1087,7 +1072,7 @@ class TestTopHitHarvest:
         exactly -- as decoded through the store's own encoding (ADR 0037) --
         so the index agrees with what a query reads from `z`, and the store
         validates cleanly."""
-        from opengwasdb.layouts.dense.top_hits import threshold_key
+        from opengwasdb.top_hits import threshold_key
 
         vcf = _make_vcf(
             tmp_path,
@@ -1288,18 +1273,25 @@ class TestParallelBandWrite:
             self._build(self._manifest(tmp_path), tmp_path / "store.opengwasdb", 2)
 
 
-class TestForkSafeLookup:
-    def test_last_wins_dedup_on_collision(self, tmp_path):
-        """Two source variants mapping to the same row (as a liftover collision
-        would) resolve to one row, keeping the last stream occurrence."""
-        from opengwasdb.layouts.dense.build_vcf import (
-            _build_variant_key_index,
-            _resolve_column,
-        )
+def _route_vcf(vcf: Path, site_alid: dict, axis: list[str]):
+    """One VCF's column routed onto ``axis`` through a route table of ``site_alid``."""
+    from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
+    from opengwasdb.readers.registry import SourceSpec, open_source
+    from opengwasdb.variants.routing import RouteTable
 
+    table = RouteTable.build(site_alid, (), [axis], keep_unmatched=False)
+    spec = SourceSpec("t", str(vcf), GWAS_VCF_CAPABILITY, "hg19", StoredEffectScale.SD)
+    placed = table.route_column(open_source(spec).stream_associations()).placed[0]
+    return placed.index, placed.z, placed.se, placed.eaf
+
+
+class TestForkSafeLookup:
+    def test_conflicting_rows_for_one_row_are_all_dropped(self, tmp_path):
+        """Two source variants mapping to the same row (as a liftover collision
+        would) with different statistics leave the row empty: nothing says
+        which is right."""
         # Both hg19 keys map to the same hg38 ALID → same row 0.
         hg19_lookup = {("1", 100, "A", "G"): "1:100:A:G", ("1", 200, "A", "G"): "1:100:A:G"}
-        keys, rows, _swaps = _build_variant_key_index(hg19_lookup, {"1:100:A:G": 0})
 
         vcf = _make_vcf(
             tmp_path,
@@ -1309,21 +1301,12 @@ class TestForkSafeLookup:
                 "1\t200\t.\tA\tG\t.\tPASS\t.\tES:SE\t3.0:0.5\n",  # z=6.0, flip → -6.0 (later)
             ],
         )
-        r, z, _se, _eaf = _resolve_column(str(vcf), keys, rows)
-        assert r.tolist() == [0]
-        assert z[0] == pytest.approx(-6.0, rel=5e-3)  # last occurrence wins
+        r, _z, _se, _eaf = _route_vcf(vcf, hg19_lookup, ["1:100:A:G"])
+        assert r.tolist() == []
 
     def test_absent_variant_not_mismapped(self, tmp_path):
         """A variant not in the panel must be dropped, not snapped to a neighbour."""
-        from opengwasdb.layouts.dense.build_vcf import (
-            _build_variant_key_index,
-            _resolve_column,
-        )
-
         hg19_lookup = {("1", 100, "A", "G"): "1:100:A:G", ("1", 300, "A", "G"): "1:300:A:G"}
-        keys, rows, _swaps = _build_variant_key_index(
-            hg19_lookup, {"1:100:A:G": 0, "1:300:A:G": 1}
-        )
         vcf = _make_vcf(
             tmp_path,
             "t",
@@ -1332,13 +1315,13 @@ class TestForkSafeLookup:
                 "1\t200\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",  # ABSENT → dropped
             ],
         )
-        r, _z, _se, _eaf = _resolve_column(str(vcf), keys, rows)
+        r, _z, _se, _eaf = _route_vcf(vcf, hg19_lookup, ["1:100:A:G", "1:300:A:G"])
         assert r.tolist() == [0]  # only the in-panel variant, no mis-map to row 1
 
     def test_batched_matches_whole_file(self, tmp_path, monkeypatch):
         """A tiny batch size (many batches + a cross-batch collision) resolves to
         the same column as processing the whole file at once."""
-        import opengwasdb.layouts.dense.build_vcf as bv
+        from opengwasdb.variants.routing import table as route_table
 
         # pos 100 and 200 collide onto row 0; pos 300 -> row 1.
         hg19_lookup = {
@@ -1346,35 +1329,32 @@ class TestForkSafeLookup:
             ("1", 200, "A", "G"): "1:100:A:G",
             ("1", 300, "C", "T"): "1:300:C:T",
         }
-        keys, rows, swaps = bv._build_variant_key_index(
-            hg19_lookup, {"1:100:A:G": 0, "1:300:C:T": 1}
-        )
-        assert not swaps.any(), "this fixture lifts no reverse-strand variant"
+        axis = ["1:100:A:G", "1:300:C:T"]
         vcf = _make_vcf(
             tmp_path,
             "t",
             [
                 "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n",  # row 0
                 "1\t300\t.\tC\tT\t.\tPASS\t.\tES:SE\t2.0:0.5\n",  # row 1
-                "1\t200\t.\tA\tG\t.\tPASS\t.\tES:SE\t3.0:0.5\n",  # row 0 again, last wins
+                "1\t200\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n",  # row 0 again, agreeing
             ],
         )
-        whole = bv._resolve_column(str(vcf), keys, rows)
-        monkeypatch.setattr(bv, "_RESOLVE_BATCH", 1)  # one association per batch
-        batched = bv._resolve_column(str(vcf), keys, rows)
+        whole = _route_vcf(vcf, hg19_lookup, axis)
+        monkeypatch.setattr(route_table, "_RESOLVE_BATCH", 1)  # one association per batch
+        batched = _route_vcf(vcf, hg19_lookup, axis)
 
         for a, b in zip(whole, batched, strict=True):
             np.testing.assert_array_equal(a, b)
         r, z, _se, _eaf = batched
         assert sorted(r.tolist()) == [0, 1]
-        # row 0 kept the later (pos 200) occurrence: z=6.0 flipped to -6.0
-        assert z[r.tolist().index(0)] == pytest.approx(-6.0, rel=5e-3)
+        # row 0's two rows agree, so they are one association: z=2.0 flipped
+        assert z[r.tolist().index(0)] == pytest.approx(-2.0, rel=5e-3)
 
 
 def test_sorted_alids_matches_reference_with_long_keys():
-    """`_sorted_alids` preserves `_alid_sort_key` order even when a rare
+    """`sorted_alids` preserves `alid_sort_key` order even when a rare
     long indel would have padded a fixed-width numpy string array to 200+ bytes."""
-    from opengwasdb.layouts.dense.build_vcf import _alid_sort_key, _sorted_alids
+    from opengwasdb.variants.axis import alid_sort_key, sorted_alids
 
     long_a = "A" * 200
     long_c = "C" * 150
@@ -1392,93 +1372,7 @@ def test_sorted_alids_matches_reference_with_long_keys():
         f"1:10:C:{long_a}",
     }
 
-    assert _sorted_alids(alids) == sorted(alids, key=_alid_sort_key)
-
-
-def test_axis_metadata_long_keys_match_reference_sort():
-    """`_axis_metadata` sorts the variant axis exactly like the scalar
-    `sorted(..., key=_alid_sort_key)` reference, including >100-byte alleles."""
-    from opengwasdb.layouts.dense.build_vcf import (
-        _alid_sort_key,
-        _axis_metadata,
-        _ManifestRow,
-    )
-
-    long_a = "A" * 200
-    source_lookup = {
-        ("1", 10, "A", "G"): "1:10:A:G",
-        ("2", 5, "C", "T"): "2:5:C:T",
-        ("1", 10, "A", long_a): f"1:10:A:{long_a}",
-        ("X", 5, "A", "C"): "X:5:A:C",
-        ("10", 2, "G", "C"): "10:2:C:G",
-    }
-    row = _ManifestRow(
-        trait_id="t",
-        file_path="unused",
-        trait_name="Trait",
-        n=1000,
-        stored_effect_scale="sd",
-        se_divisor=1.0,
-        source_reader_capability="opengwasdb.gwas-vcf",
-        source_assembly="hg38",
-        original_sd="",
-        assigned_ancestry="",
-    )
-
-    axis, variant_index = _axis_metadata(source_lookup, [row])
-    expected = sorted(set(source_lookup.values()), key=_alid_sort_key)
-
-    assert axis.alids == expected
-    assert variant_index == {alid: i for i, alid in enumerate(expected)}
-
-
-def test_build_variant_key_index_long_keys_sorted_and_searchable():
-    """The Pass 2 key index stays sorted in ASCII byte order and binary-searchable
-    when a 300-byte allele is present, without padding every key to that width."""
-    from opengwasdb.layouts.dense.build_vcf import _build_variant_key_index
-
-    long_alt = "A" * 300
-    long_alt_c = "C" * 250
-    source_lookup = {
-        ("1", 10, "A", "G"): "1:10:A:G",
-        ("2", 5, "C", "T"): "2:5:C:T",
-        ("1", 10, "A", long_alt): f"1:10:A:{long_alt}",
-        ("1", 10, "A", long_alt_c): f"1:10:A:{long_alt_c}",
-        ("1", 20, "G", "C"): "1:20:C:G",
-    }
-    variant_index = {
-        "1:10:A:G": 0,
-        "2:5:C:T": 1,
-        f"1:10:A:{long_alt}": 2,
-        f"1:10:A:{long_alt_c}": 3,
-        "1:20:C:G": 4,
-    }
-
-    keys, rows, _swaps = _build_variant_key_index(source_lookup, variant_index)
-
-    # Variable-length Python bytes, not an S array padded to the 300-byte max.
-    assert keys.dtype == object
-    assert list(keys) == sorted(keys)
-
-    expected = sorted(
-        (
-            (f"{chrom}:{pos}:{ref}:{alt}".encode(), variant_index[alid])
-            for (chrom, pos, ref, alt), alid in source_lookup.items()
-        ),
-        key=lambda kv: kv[0],
-    )
-    assert list(keys) == [key for key, _ in expected]
-    assert rows.tolist() == [row for _, row in expected]
-
-    # `np.searchsorted` must find the long and short keys and not snap a missing
-    # key to a neighbour.
-    query = np.array(
-        [b"1:10:A:G", b"1:10:A:" + long_alt.encode(), b"9:9:A:G"],
-        dtype="S",
-    )
-    idx = np.searchsorted(keys, query)
-    idx_clip = np.minimum(idx, len(keys) - 1)
-    assert (keys[idx_clip] == query).tolist() == [True, True, False]
+    assert sorted_alids(alids) == sorted(alids, key=alid_sort_key)
 
 
 def test_ez_preferred_over_es_se(tmp_path):
@@ -1505,7 +1399,7 @@ def test_build_honours_source_reader_capability_column(tmp_path, monkeypatch):
     the builder never assumes GWAS-VCF, it resolves whatever the manifest names."""
     from opengwasdb.readers import registry as readers_registry
     from opengwasdb.readers.fake import FakeReader
-    from opengwasdb.readers.interface import ReaderAssociation
+    from opengwasdb.readers.interface import ReaderAssociation, ReferenceAllele
 
     fake_capability = "opengwasdb.test-fake"
 
@@ -1520,6 +1414,7 @@ def test_build_honours_source_reader_capability_column(tmp_path, monkeypatch):
                     z=-2.0,
                     se=0.5,
                     stored_effect_scale=stored_effect_scale,
+                    reference=ReferenceAllele.UNDECLARED,
                 )
             ]
         )
@@ -1681,31 +1576,6 @@ def test_axis_source_alids_record_the_prelift_hg19_coordinate(tmp_path):
     assert records[HG38_ALID_1].source_alid == HG38_ALID_1
     # genuine translation: the source ALID is the hg19 coordinate, not hg38's.
     assert records[HG38_ALID_2].source_alid == f"1:{HG19_POS_2}:C:T"
-
-
-def test_source_alids_blank_an_ambiguous_liftover_collision():
-    """A stored row that several source variants resolved to is ambiguous, so
-    its source_alid provenance is blank rather than guessed -- unless the
-    source variants are one physical locus (same position, ref/alt reported
-    either way round), whose identical canonical origin is safe to record.
-    """
-    from opengwasdb.layouts.dense.build_vcf import _source_alids_by_alid
-
-    # Two distinct source positions lift onto one stored row -> ambiguous.
-    # Single-source rows are recorded verbatim; a second file reporting the
-    # same position with ref/alt swapped records the same origin, not None.
-    source_lookup = {
-        ("1", 100, "A", "G"): "1:100:A:G",  # row 0
-        ("1", 200, "A", "G"): "1:100:A:G",  # distinct origin -> ambiguous
-        ("1", 300, "C", "T"): "1:300:C:T",  # row 1, single origin
-        ("1", 400, "A", "G"): "1:400:A:G",  # row 2
-        ("1", 400, "G", "A"): "1:400:A:G",  # same locus, flipped report
-    }
-    assert _source_alids_by_alid(source_lookup, ["1:100:A:G", "1:300:C:T", "1:400:A:G"]) == [
-        None,
-        "1:300:C:T",
-        "1:400:A:G",
-    ]
 
 
 def test_standalone_gwas_vcf_build_codes_residual_se_and_falls_back_without_eaf(tmp_path):
@@ -1919,7 +1789,7 @@ def test_cli_invalid_options_fail_at_parse_time_dense(tmp_path):
         "build-dense-vcf",
         str(tmp_path / "manifest.tsv"),
         str(tmp_path / "out.opengwasdb"),
-        "--store-id", "s",
+        "--admission-record", str(tmp_path / "admission"), "--store-id", "s",
         "--release-id", "r",
     ]
 
@@ -1927,7 +1797,8 @@ def test_cli_invalid_options_fail_at_parse_time_dense(tmp_path):
     assert res_cap.exit_code != 0
     clean_cap_output = normalize_cli_output(res_cap.output)
     assert "unknown source reader capability 'unknown_capability'" in clean_cap_output
-    assert "known: opengwasdb.column-map, opengwasdb.finngen-r13" in clean_cap_output
+    known = "known: opengwasdb.besd, opengwasdb.column-map, opengwasdb.finngen-r13"
+    assert known in clean_cap_output
 
     res_ass = runner.invoke(app, [*args_base, "--source-assembly", "unknown_build"])
     assert res_ass.exit_code != 0
@@ -1969,23 +1840,13 @@ def _write_reference_from_manifest(
 ) -> Path:
     """Write the artifact the inline two-pass Pass 1 would recompute.
 
-    Uses the builder's own Pass 1 (union + liftover + first-named rsid) so the
-    reference genuinely matches the manifest's variant union.
+    Extracted from the manifest (union + liftover + first-named rsid, the
+    build's own rules), so the reference genuinely matches its variant union.
     """
-    from opengwasdb.layouts.dense.build_vcf import (
-        _lift_manifest_variants,
-        _read_manifest,
-        _sorted_alids,
-    )
+    from extraction_fixtures import extract_from_manifest
 
-    rows = _read_manifest(manifest)
-    source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
-        rows, chain_file=None, liftover_failure_threshold=0.01
-    )
     path = tmp_path / name
-    write_variant_reference(
-        path, _sorted_alids(source_lookup.values()), source_lookup, rsid_by_alid
-    )
+    extract_from_manifest(manifest, path)
     return path
 
 
@@ -1997,7 +1858,7 @@ def _assert_dense_stores_data_identical(reference: Path, candidate: Path) -> Non
     """
     import gzip
 
-    from opengwasdb.layouts.dense.top_hits import threshold_key
+    from opengwasdb.top_hits import threshold_key
     from opengwasdb.variants.axis import iter_variant_records
 
     with gzip.open(reference / "variants.tsv.gz", "rt", encoding="utf-8") as a:
@@ -2083,15 +1944,16 @@ class TestVariantReferenceSinglePass:
     def test_single_pass_never_runs_the_union_pass(self, tmp_path, monkeypatch):
         """The reference supplies the axis, so the Pass 1 variant-union read is
         never invoked -- proven by making it raise."""
-        import opengwasdb.layouts.dense.build_vcf as build_vcf
+        from opengwasdb.variants.routing import route
 
         manifest = self._mixed_manifest(tmp_path)
         reference = _write_reference_from_manifest(tmp_path, manifest)
+        assert read_variant_reference(reference).rsid_by_alid, "a named reference reads nothing"
 
         def _boom(*_args, **_kwargs):
             raise AssertionError("Pass 1 ran despite a supplied variant reference")
 
-        monkeypatch.setattr(build_vcf, "_collect_manifest_variant_sites", _boom)
+        monkeypatch.setattr(route, "consume_shards", _boom)
         store = tmp_path / "union-bypassed.opengwasdb"
         build_dense_from_vcf_manifest(
             manifest, store, store_id="s", release_id="r", variant_reference=reference
@@ -2378,6 +2240,7 @@ def test_cli_variant_reference_builds_single_pass(tmp_path):
         app,
         [
             "build-dense-vcf", str(manifest), str(store),
+            "--admission-record", str(tmp_path / "admission"),
             "--store-id", "s", "--release-id", "r",
             "--variant-reference", str(reference),
         ],
@@ -2477,24 +2340,18 @@ def _capability_manifest(tmp_path: Path, capability: str) -> Path:
     return source
 
 
-def _source_union_lookup(manifest: Path) -> tuple[dict, list[str]]:
-    """The manifest's Pass 1 union lookup and its sorted ALIDs."""
-    from opengwasdb.layouts.dense.build_vcf import (
-        _lift_manifest_variants,
-        _read_manifest,
-        _sorted_alids,
-    )
+def _source_union_alids(manifest: Path) -> list[str]:
+    """The ALIDs the manifest's Pass 1 union routes to, in genomic order."""
+    from opengwasdb.layouts.build_manifest import read_manifest
+    from opengwasdb.variants.routing import LiftedUnion, route_variants
 
-    rows = _read_manifest(manifest)
-    source_lookup, _rsid_by_alid, _swapped = _lift_manifest_variants(
-        rows, chain_file=None, liftover_failure_threshold=0.01
-    )
-    return source_lookup, _sorted_alids(source_lookup.values())
+    sources = [row.source for row in read_manifest(manifest)]
+    return route_variants(sources, LiftedUnion()).alids
 
 
 def _plain_alid_list(tmp_path: Path, manifest: Path, name: str = "plain.alids") -> Path:
     """The manifest's own variant union as a plain ALID list (no rsids)."""
-    _lookup, alids = _source_union_lookup(manifest)
+    alids = _source_union_alids(manifest)
     path = tmp_path / name
     path.write_text("\n".join(alids) + "\n", encoding="utf-8")
     return path
@@ -2520,18 +2377,18 @@ def _build_pair(tmp_path: Path, manifest: Path, plain: Path) -> tuple[Path, Path
 def _rsid_fault_target(
     tmp_path: Path,
 ) -> tuple[Path, Path, object]:
-    """A manifest, its plain-ALID reference, and the build module to wrap.
+    """A manifest, its plain-ALID reference, and the routing module to wrap.
 
     The shape the partial-loss and wrong-value fault tests share: a named
     GWAS-VCF source whose plain ALID list makes the single-pass path harvest.
     """
-    import opengwasdb.layouts.dense.build_vcf as build_vcf
+    from opengwasdb.variants.routing import names
 
     source = _capability_manifest(tmp_path, "opengwasdb.gwas-vcf")
     manifest = _manifest_with_capability(
         tmp_path, [("capability", source, "Capability", "opengwasdb.gwas-vcf", "hg38")]
     )
-    return manifest, _plain_alid_list(tmp_path, manifest), build_vcf
+    return manifest, _plain_alid_list(tmp_path, manifest), names
 
 
 class TestPlainAlidReferenceRsids:
@@ -2609,15 +2466,15 @@ class TestPlainAlidReferenceRsids:
         against an independent oracle built from the candidates and the routing,
         so a rekey that drops one entry fails the build rather than blanking a
         row."""
-        manifest, plain, build_vcf = _rsid_fault_target(tmp_path)
-        real_rekey = build_vcf._rekey_rsids_to_alids
+        manifest, plain, names = _rsid_fault_target(tmp_path)
+        real_rekey = names._rekey_rsids_to_alids
 
         def _drop_one(source_lookup, rsid_by_site):
             rekeyed = real_rekey(source_lookup, rsid_by_site)
             rekeyed.pop(next(iter(sorted(rekeyed))))
             return rekeyed
 
-        monkeypatch.setattr(build_vcf, "_rekey_rsids_to_alids", _drop_one)
+        monkeypatch.setattr(names, "_rekey_rsids_to_alids", _drop_one)
         with pytest.raises(ValueError, match="disagrees with the routed harvest"):
             build_dense_from_vcf_manifest(
                 manifest, tmp_path / "lost.opengwasdb", store_id="s", release_id="r",
@@ -2628,8 +2485,8 @@ class TestPlainAlidReferenceRsids:
         """The oracle is value-sensitive (issue #255, round 2): a map that keeps
         every key but gives one of them the wrong non-empty name disagrees with
         the routed expectation, which a set-membership check could not see."""
-        manifest, plain, build_vcf = _rsid_fault_target(tmp_path)
-        real_rekey = build_vcf._rekey_rsids_to_alids
+        manifest, plain, names = _rsid_fault_target(tmp_path)
+        real_rekey = names._rekey_rsids_to_alids
 
         def _wrong_value(source_lookup, rsid_by_site):
             rekeyed = real_rekey(source_lookup, rsid_by_site)
@@ -2637,7 +2494,7 @@ class TestPlainAlidReferenceRsids:
                 rekeyed[next(iter(sorted(rekeyed)))] = "rsWRONG"
             return rekeyed
 
-        monkeypatch.setattr(build_vcf, "_rekey_rsids_to_alids", _wrong_value)
+        monkeypatch.setattr(names, "_rekey_rsids_to_alids", _wrong_value)
         with pytest.raises(ValueError, match="disagrees with the routed harvest"):
             build_dense_from_vcf_manifest(
                 manifest, tmp_path / "wrong.opengwasdb", store_id="s", release_id="r",

@@ -32,6 +32,7 @@ import test_dense_completion as tdc
 import test_ragged_completion as trc
 import zarr
 from cli_output import normalize_cli_output
+from presence_fixtures import RAGGED_Z_GROUP, float_plane_z, plant_payload_nan
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
@@ -100,7 +101,7 @@ def _build_source(
             "analysis_index": i, "analysis_id": a["analysis_id"], "trait_id": f"T{i}",
             "trait_chr": a.get("trait_chr", ""), "trait_bp": a.get("trait_bp", ""),
             "n": 5000, "mhc": "FALSE", "filtered_file": f"{a['analysis_id']}.tsv.gz",
-            "assigned_ancestry": a["ancestry"],
+            "assigned_ancestry": a["ancestry"], "source_genome_build": "GRCh38",
         }
         for i, a in enumerate(analyses)
     ])
@@ -186,7 +187,7 @@ def _flat(store: Path, analysis_index: int, alid: str) -> int:
     finally:
         axis.close()
     reader = RaggedCSRReader(store)
-    start, _ = reader._span(analysis_index)
+    start, _ = reader.span(analysis_index)
     row = reader.variant_indices(analysis_index).tolist().index(index)
     return start + row
 
@@ -370,6 +371,70 @@ def test_an_infinite_ragged_se_copied_identically_passes_and_is_counted(tmp_path
     assert result.exit_code == 0, result.output
     assert verdict["passed"] is True and verdict["failures"] == []
     assert verdict["totals"]["infinite_cells"] == 2
+
+
+# --- a non-canonical missing marker (spec §15, issue #373) -----------------
+
+
+def _plant_a_payload_nan(store: Path, analysis_index: int) -> None:
+    """Give one of an Analysis's `nan_rows` Z's non-canonical marker, SE left canonical."""
+    group = float_plane_z(store, RAGGED_Z_GROUP)
+    reader = RaggedCSRReader(store)
+    start, _ = reader.span(analysis_index)
+    missing = np.flatnonzero(np.isnan(reader.get_analysis(analysis_index).z))
+    assert missing.size, "the fixture must hold a missing association to plant in"
+    position = start + int(missing[0])
+    assert np.isnan(np.asarray(group["se"][position], dtype=np.float32))
+    plant_payload_nan(group, position)
+
+
+def test_a_non_canonical_z_in_the_target_is_counted_and_fails(tmp_path, pair):
+    _, completed, _ = pair
+    _plant_a_payload_nan(completed, 1)  # `eur_sparse`, whose four block rows are NaN
+
+    result, verdict = _check(pair, tmp_path)
+
+    assert result.exit_code == 1, result.output
+    assert verdict["totals"]["non_canonical_marker"] == 1
+    assert "non_canonical_marker" in verdict["failures"]
+
+
+# --- a part that was not compared is unchecked, not zero (issue #375) ------
+
+
+def test_differing_analyses_report_the_uncompared_counters_as_unchecked(tmp_path, pair):
+    """Analyses the two Stores do not list alike are not compared, cell by cell (issue #375).
+
+    The planted Z is in the part the sample would have compared, so a counter reading
+    0 would claim a clean census of a cell nobody looked at. The verdict still fails on
+    the Analyses, which is the structural count.
+    """
+    _, completed, _ = pair
+    position = _flat(completed, 0, "1:900000:A:G")
+    before = RaggedCSRReader(completed).get_analysis(0).z.copy()
+    _target_group(completed)["z"][position] += 1
+    assert not np.array_equal(RaggedCSRReader(completed).get_analysis(0).z, before)
+    path = completed / "analyses.tsv"
+    header, *lines = path.read_text().splitlines()
+    assert len(lines) == N_ANALYSES
+    renamed = lines[0].replace("eur_rich", "eur_rich_renamed")
+    assert renamed != lines[0], "fixture must hold the Analysis this test renames"
+    path.write_text("\n".join([header, renamed, *lines[1:]]) + "\n", encoding="utf-8")
+
+    result, verdict = _check(pair, tmp_path)
+
+    assert result.exit_code == 1, result.output
+    assert verdict["passed"] is False
+    assert verdict["analyses"]["identical"] is False
+    assert verdict["failures"] == ["analyses_mismatch"]
+    assert verdict["sample"]["analyses_checked"] == 0
+    assert verdict["sample"]["by_stratum"] == {
+        "random": None, "non_admitted": None, "largest": None, "empty": None,
+        "trait_less": None,
+    }
+    assert verdict["totals"]["z_mismatch"] is None
+    assert all(value is None for value in verdict["totals"].values()), verdict["totals"]
+    assert verdict["max_abs_diff"] == {"z": None, "se": None, "eaf": None}
 
 
 # --- seam 3: refusals ------------------------------------------------------

@@ -17,6 +17,7 @@ from opengwasdb.encoding import (
     OverflowCells,
     RaggedEafPlane,
     RaggedSePlane,
+    SeEncoding,
     SeExceptionBuilder,
     SeMeasurements,
     StoreCodec,
@@ -31,6 +32,15 @@ from opengwasdb.encoding import (
     positions_flat,
     write_eaf_baseline,
 )
+from opengwasdb.encoding.association_codec import (
+    AssociationCodec,
+    CellValues,
+    Placement,
+    log_se_out_of_range,
+    require_parallel,
+    storable,
+)
+from opengwasdb.encoding.codec import se_float16
 from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.model.manifest import StoreManifest
@@ -94,6 +104,42 @@ class AnalysisAssociations(NamedTuple):
     eaf: np.ndarray  # float32, all-NaN when the store carries no EAF
 
 
+def _float32_cells(
+    z: np.ndarray, se: np.ndarray, eaf: np.ndarray | None, n_rows: int
+) -> CellValues:
+    """One Analysis's statistics as float32, with an all-NaN frequency for none."""
+    frequencies = (
+        np.full(n_rows, np.nan, dtype=np.float32)
+        if eaf is None
+        else np.asarray(eaf, dtype=np.float32)
+    )
+    return CellValues(
+        np.asarray(z, dtype=np.float32), np.asarray(se, dtype=np.float32), frequencies
+    )
+
+
+def _sorted_variant_indices(variant_index: np.ndarray) -> np.ndarray:
+    """One Analysis's variant indices, refused unless ascending.
+
+    Every builder sorts an Analysis's associations by variant_index before
+    adding them (build_besd, build_ssf, Hybrid's `_assemble_overflow_column`
+    and completion's `_remapped_analysis_arrays` all argsort). The variant-
+    side queries rely on it: `lookup` and the Hybrid overflow lookup
+    binary-search each Analysis's segment instead of scanning the store
+    (#252). An unsorted segment would make those searches return a
+    plausible, wrong row, so it is refused here rather than assumed.
+    """
+    vi = np.asarray(variant_index, dtype=np.int32)
+    if vi.size > 1 and bool(np.any(vi[1:] < vi[:-1])):
+        offset = int(np.argmax(vi[1:] < vi[:-1])) + 1
+        raise ValueError(
+            "an Analysis's associations must be sorted ascending by variant_index "
+            f"(decrease at offset {offset}); the variant-side queries binary-search "
+            "each Analysis's CSR segment and cannot be correct on unsorted rows (#252)"
+        )
+    return vi
+
+
 class RaggedCSRWriter:
     """Accumulate per-analysis associations and flush to zarr CSR arrays.
 
@@ -140,8 +186,17 @@ class RaggedCSRWriter:
         se: np.ndarray,
         eaf: np.ndarray | None = None,
         n: np.ndarray | None = None,
+        *,
+        where: str | None = None,
     ) -> None:
         """Append one analysis. Arrays must be parallel and the same length.
+
+        Its associations are judged whole first (`storable`): one Association
+        Admission would not admit refuses the build, named by `where` (the
+        builder and the Analysis; this writer's Analysis index by default),
+        and an SE above `float16`'s range is logged. The writer then holds
+        what `storable` returns: the rows it stores, with their values, and
+        so a row it does not store leaves its frequency and its N behind.
 
         `eaf` is optional (ADR 0036): an Analysis whose source reports no
         frequency passes None and contributes all-NaN, so the flat array stays
@@ -153,38 +208,31 @@ class RaggedCSRWriter:
         0067). It is encoded as it arrives, so a malformed N fails at the
         Analysis that carries it; the plane is written only when the plan
         declares one.
+
+        Every array must be as long as every other one, checked here before
+        anything is cast, judged or stored: an array of another length would
+        otherwise be broadcast to `z`'s cells -- one value stored under three
+        variants -- or indexed with a mask of the wrong length (issue #364).
         """
-        vi = np.asarray(variant_index, dtype=np.int32)
-        # Every builder sorts an Analysis's associations by variant_index before
-        # adding them (build_besd, build_ssf, Hybrid's `_assemble_overflow_column`
-        # and completion's `_remapped_analysis_arrays` all argsort). The variant-
-        # side queries rely on it: `lookup` and the Hybrid overflow lookup
-        # binary-search each Analysis's segment instead of scanning the store
-        # (#252). An unsorted segment would make those searches return a
-        # plausible, wrong row, so it is refused here rather than assumed.
-        if vi.size > 1 and bool(np.any(vi[1:] < vi[:-1])):
-            offset = int(np.argmax(vi[1:] < vi[:-1])) + 1
-            raise ValueError(
-                "an Analysis's associations must be sorted ascending by variant_index "
-                f"(decrease at offset {offset}); the variant-side queries binary-search "
-                "each Analysis's CSR segment and cannot be correct on unsorted rows (#252)"
-            )
-        self._variant_indices.append(vi)
-        # Held as float32 and quantised once, by the codec, at flush -- never
-        # pre-rounded into a stored dtype here.
-        self._zscores.append(np.asarray(z, dtype=np.float32))
-        self._ses.append(np.asarray(se, dtype=np.float32))
-        if eaf is None:
-            self._eafs.append(np.full(len(vi), np.nan, dtype=np.float32))
-        else:
-            self._eafs.append(np.asarray(eaf, dtype=np.float32))
-        if n is not None and len(n) != len(vi):
-            raise ValueError(
-                f"an Analysis's n has {len(n)} entries for {len(vi)} associations; the "
-                "per-association sample size must be parallel to variant_index"
-            )
-        self._ns.append(None if n is None else encode_sample_sizes(n))
-        self._offsets.append(self._offsets[-1] + len(vi))
+        where = where or f"the Ragged writer, analysis_index {self.n_analyses}"
+        require_parallel(
+            (("variant_index", variant_index), ("z", z), ("se", se), ("eaf", eaf), ("n", n)),
+            where=where,
+        )
+        vi = _sorted_variant_indices(variant_index)
+        # Judged as handed over, so a missing marker is judged before a cast
+        # could make it canonical; then held as float32 and quantised once, by
+        # the codec, at flush -- never pre-rounded into a stored dtype here.
+        kept = storable(CellValues(np.asarray(z), np.asarray(se), eaf), 0, 1, where=where)
+        log_se_out_of_range(kept.se_out_of_range, where=where)
+        rows = kept.stored
+        cells = _float32_cells(kept.cells.z, kept.cells.se, kept.cells.eaf, len(vi))
+        self._variant_indices.append(vi[rows])
+        self._zscores.append(np.asarray(cells.z)[rows])
+        self._ses.append(np.asarray(cells.se)[rows])
+        self._eafs.append(np.asarray(cells.eaf)[rows])
+        self._ns.append(None if n is None else encode_sample_sizes(np.asarray(n)[rows]))
+        self._offsets.append(self._offsets[-1] + int(np.count_nonzero(rows)))
         # A baseline is a median over every cell at its variant, so a new cell
         # can move one: a held baseline must never outlive the cells it came
         # from. Only `add_analysis` changes those cells.
@@ -386,60 +434,32 @@ class RaggedCSRWriter:
             self._derived_baseline = self._derive_eaf_baseline()
         return self._derived_baseline
 
-    def _decode_round_trip(
-        self,
-        encoding: StoreEncoding,
-        eaf: np.ndarray,
-        baseline: np.ndarray | None,
-        vi: np.ndarray,
-    ) -> np.ndarray:
-        """The frequencies a reader gets back for these cells.
-
-        The SE model has to predict from what is stored, not from the source
-        (ADR 0037), so the fit and the measurement both see the round trip.
-        """
-        if encoding.eaf.is_absent:
-            return np.full(eaf.shape, np.nan, dtype=np.float32)
-        gathered = None if baseline is None else baseline[vi]
-        exceptions = EafExceptionBuilder()
-        raw = StoreCodec(encoding).encode_eaf(
-            eaf, baseline=gathered, positions=positions_flat(0), exceptions=exceptions
-        )
-        return StoreCodec(encoding, eaf_exceptions=exceptions.table()).decode_eaf(
-            raw, baseline=gathered, positions=positions_flat(0)
-        )
-
     def se_fit_inputs(self, encoding: StoreEncoding) -> OverflowCells:
-        """Named `(se, decoded_eaf, analysis_index)` for a shared plan."""
+        """Named `(se, decoded_eaf, analysis_index)` for a shared plan.
+
+        The frequencies are what a reader decodes, not the source's: the SE
+        model has to predict from what is stored (ADR 0037). SE is round-tripped
+        as `float16`, since its model is what these cells are about to fit.
+        """
         vi, eaf = self._flat()
-        se = (
-            np.concatenate(self._ses).astype(np.float32)
+        z, se = (
+            (np.concatenate(values).astype(np.float32) for values in (self._zscores, self._ses))
             if self.n_associations
-            else np.empty(0, dtype=np.float32)
-        )
-        baseline = self._eaf_baseline(encoding)
-        codec = StoreCodec(encoding)
-        exceptions = EafExceptionBuilder()
-        raw = codec.encode_eaf(
-            eaf,
-            baseline=None if baseline is None else baseline[vi],
-            positions=positions_flat(0),
-            exceptions=exceptions,
-        )
-        decoded = (
-            StoreCodec(encoding, eaf_exceptions=exceptions.table()).decode_eaf(
-                raw,
-                baseline=None if baseline is None else baseline[vi],
-                positions=positions_flat(0),
-            )
-            if not encoding.eaf.is_absent
-            else np.full(eaf.shape, np.nan, dtype=np.float32)
+            else (np.empty(0, dtype=np.float32) for _ in range(2))
         )
         offsets = np.asarray(self._offsets, dtype=np.int64)
         ai = np.searchsorted(offsets[1:], np.arange(len(se)), side="right")
+        codec = AssociationCodec(
+            encoding.with_se(SeEncoding("float16")), eaf_baseline=self._eaf_baseline(encoding)
+        )
+        back = codec.round_trip(
+            CellValues(z, se, eaf),
+            Placement.sequence(0, vi, ai, self.n_analyses),
+            where="the Ragged writer's SE fit",
+        )
         return OverflowCells(
             se_values=se,
-            eaf_values=decoded,
+            eaf_values=back.eaf,
             analysis_indices=ai,
             n_analyses=self.n_analyses,
         )
@@ -548,7 +568,7 @@ class RaggedCSRWriter:
         plane = self._plane(root, "se", total, encoding.se.dtype)
         if not encoding.se.is_residual:
             for lo, hi in self._flat_regions(total, region_cells):
-                plane[lo:hi] = self._gather_region(offsets, lo, hi)[2].astype(np.float16)
+                plane[lo:hi] = se_float16(self._gather_region(offsets, lo, hi)[2])
             return
         coefficients = (
             se_coefficients
@@ -811,6 +831,7 @@ class RaggedCSRReader:
         path = Path(store_path) / RAGGED_ZARR_PATH
         self._root = store_arrays.open_group(path)
         self._offsets: zarr.Array = self._root["offsets"]
+        self._offsets_cache: np.ndarray | None = None
         self._variant_index: zarr.Array = self._root["variant_index"]
         self._z: zarr.Array = self._root["z"]
         self._se: zarr.Array = self._root["se"]  # shape metadata only; values use se_* below
@@ -824,10 +845,13 @@ class RaggedCSRReader:
         # baseline (and, on a Reference-Completed release, the panel frequency
         # for imputed cells) onto the cells being read. Absent on stores whose
         # sources report no frequency at all -- those read back as all-NaN.
+        # Opened once: a membership test or `root[name]` reads the array's
+        # metadata from the store every time (#244).
+        self._imputed_array: zarr.Array | None = (
+            self._root["imputed"] if "imputed" in self._root else None
+        )
         self._eaf_plane = RaggedEafPlane.open(
-            self._root,
-            encoding,
-            imputed=self._root["imputed"] if "imputed" in self._root else None,
+            self._root, encoding, imputed=self._imputed_array
         )
         self._se_plane = RaggedSePlane.open(self._root, encoding, self._eaf_plane)
         # The plan, not the array's presence, says whether there is a plane: one
@@ -847,14 +871,65 @@ class RaggedCSRReader:
     def n_associations(self) -> int:
         return int(self._root.attrs.get("n_associations", array_length(self._variant_index)))
 
-    def _span(self, analysis_index: int) -> tuple[int, int]:
+    # ── structure: where the associations sit, for code that walks the sequence ──
+
+    @property
+    def offsets(self) -> np.ndarray:
+        """Every Analysis's start in the flat sequence, plus its end (int64).
+
+        One entry per Analysis, not per association, so it is the one array a
+        caller may hold whole; read once and kept.
+        """
+        if self._offsets_cache is None:
+            self._offsets_cache = np.asarray(self._offsets[:], dtype=np.int64)
+        return self._offsets_cache
+
+    @property
+    def sequence_length(self) -> int:
+        """How many rows the flat association arrays hold."""
+        return array_length(self._variant_index)
+
+    def span(self, analysis_index: int) -> tuple[int, int]:
         """The `[start, end)` slice of the flat arrays one Analysis occupies."""
         offsets = self._offsets[analysis_index : analysis_index + 2]
         return int(offsets[0]), int(offsets[1])
 
+    def variant_index(self, start: int, end: int) -> np.ndarray:
+        """`variant_index[start:end]`, as int32."""
+        return np.asarray(self._variant_index[int(start) : int(end)], dtype=np.int32)
+
+    def analysis_index_at(self, positions: np.ndarray) -> np.ndarray:
+        """The Analysis each flat position belongs to, from the offsets."""
+        positions = np.asarray(positions, dtype=np.int64)
+        return np.searchsorted(self.offsets[1:], positions, side="right").astype(np.int32)
+
+    @property
+    def has_imputed(self) -> bool:
+        """Whether the sequence carries an imputed mask."""
+        return self._imputed_array is not None
+
+    def imputed(self, start: int, end: int) -> np.ndarray:
+        """The imputed mask `[start, end)` as stored (uint8)."""
+        return np.asarray(self._require_imputed()[int(start) : int(end)], dtype=np.uint8)
+
+    def imputed_at(self, positions: np.ndarray) -> np.ndarray:
+        """The imputed mask at flat positions, as stored (uint8)."""
+        positions = np.asarray(positions, dtype=np.int64)
+        return np.asarray(self._require_imputed().oindex[positions], dtype=np.uint8)
+
+    def _require_imputed(self) -> zarr.Array:
+        if self._imputed_array is None:
+            raise ValueError("this sequence carries no imputed mask; ask has_imputed first")
+        return self._imputed_array
+
+    @property
+    def can_report_frequencies(self) -> bool:
+        """Whether an EAF read can return anything but NaN (issue #113)."""
+        return self._eaf_plane.can_report_frequencies
+
     def get_analysis(self, analysis_index: int) -> AnalysisAssociations:
         """Return (variant_index, z, se, eaf) arrays for one analysis. O(1) zarr reads."""
-        start, end = self._span(analysis_index)
+        start, end = self.span(analysis_index)
         if start == end:
             return AnalysisAssociations(
                 variant_index=np.empty(0, dtype=np.int32),
@@ -883,7 +958,7 @@ class RaggedCSRReader:
         Family with no gene target (issue #102) -- should not decode its
         statistics to find it.
         """
-        start, end = self._span(analysis_index)
+        start, end = self.span(analysis_index)
         if start == end:
             return np.empty(0, dtype=np.int32)
         return np.asarray(self._variant_index[start:end], dtype=np.int32)
@@ -956,41 +1031,6 @@ class RaggedCSRReader:
         if len(positions) == 0:
             return np.empty(0, dtype=np.int32)
         return np.asarray(self._variant_index.oindex[positions], dtype=np.int32)
-
-    def variant_positions(self, wanted: np.ndarray) -> np.ndarray:
-        """Flat CSR positions whose variant is in `wanted`, ascending.
-
-        A windowed scan of every Analysis's segment, used where every Analysis
-        may hold the variant and there is no index (#252). The window is a few
-        inner chunks, so peak memory is a window and not the component. A
-        lookup that knows its Analyses must use `segment_positions` instead,
-        which searches the requested segment in O(log) chunk reads rather than
-        scanning it.
-        """
-        wanted = np.unique(np.asarray(wanted, dtype=np.int32))
-        if len(wanted) == 0:
-            return np.empty(0, dtype=np.int64)
-        lo, hi = 0, self.n_associations
-        window = self.scan_window
-        parts: list[np.ndarray] = []
-        single = int(wanted[0]) if len(wanted) == 1 else None
-        for start in range(lo, hi, window):
-            stop = min(start + window, hi)
-            vi = np.asarray(self._variant_index[start:stop], dtype=np.int32)
-            if single is not None:
-                # One wanted variant is the common off-axis PheWAS case, and a
-                # direct compare is 16x fewer operations than a searchsorted.
-                hit = vi == single
-            else:
-                pos = np.searchsorted(wanted, vi)
-                in_bounds = pos < len(wanted)
-                hit = np.zeros(len(vi), dtype=bool)
-                hit[in_bounds] = wanted[pos[in_bounds]] == vi[in_bounds]
-            if hit.any():
-                parts.append(np.where(hit)[0].astype(np.int64) + start)
-        if not parts:
-            return np.empty(0, dtype=np.int64)
-        return np.concatenate(parts)
 
     def _scan_chunk(self, chunk: int, cache: dict[int, np.ndarray], total: int) -> np.ndarray:
         """One inner chunk of `variant_index`, read once and kept for the search.
@@ -1079,7 +1119,7 @@ class RaggedCSRReader:
         wanted = np.unique(np.asarray(wanted, dtype=np.int32))
         if len(wanted) == 0:
             return np.empty(0, dtype=np.int64)
-        lo, hi = self._span(analysis_index)
+        lo, hi = self.span(analysis_index)
         if lo >= hi:
             return np.empty(0, dtype=np.int64)
         size = self.association_chunk
@@ -1144,7 +1184,7 @@ class RaggedCSRReader:
         All-NaN when this component stores no `eaf` array -- built before ADR
         0036, or from sources reporting no frequency. A pair whose variant is
         absent from that Analysis stays NaN rather than silently taking a
-        neighbour's frequency (`_pair_positions`).
+        neighbour's frequency (`pair_positions`).
         """
         out = np.full(len(variant_index), np.nan, dtype=np.float32)
         # The plane's own answer, not `has_eaf`: a release carrying only the
@@ -1155,7 +1195,7 @@ class RaggedCSRReader:
         # Resolve every pair to a flat CSR position first, then decode once:
         # the plane needs the position to resolve an exception cell, and a
         # per-Analysis decode would gather the baseline slice by slice.
-        slots, positions = self._pair_positions(variant_index, analysis_index)
+        slots, positions = self.pair_positions(variant_index, analysis_index)
         if len(slots):
             out[slots] = self.eaf_at(positions)
         return out
@@ -1193,12 +1233,12 @@ class RaggedCSRReader:
         """
         self._require_n()
         out = np.full(len(variant_index), np.nan, dtype=np.float64)
-        slots, positions = self._pair_positions(variant_index, analysis_index)
+        slots, positions = self.pair_positions(variant_index, analysis_index)
         if len(slots):
             out[slots] = self.n_at(positions)
         return out
 
-    def _pair_positions(
+    def pair_positions(
         self, variant_index: np.ndarray, analysis_index: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
         """`(slots, flat positions)` for the pairs this component holds.
@@ -1232,7 +1272,3 @@ class RaggedCSRReader:
         if not slots:
             return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
         return np.concatenate(slots), np.concatenate(found)
-
-    def get_analyses(self, analysis_indices: list[int]) -> list[AnalysisAssociations]:
-        """Return associations for multiple analyses."""
-        return [self.get_analysis(i) for i in analysis_indices]

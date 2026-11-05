@@ -45,6 +45,7 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb.associations import Cells, CsrReader, Inspection, State, Tally
 from opengwasdb.completion.ld_panel import (
     LDBlock,
     LdPanelNotFoundError,
@@ -56,7 +57,7 @@ from opengwasdb.completion.regions import (
     has_trait_position,
     trait_less_blocks,
 )
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
+from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
 from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.model.enums import CompletionState
 from opengwasdb.store import arrays as store_arrays
@@ -73,7 +74,6 @@ from opengwasdb.validation.observed_view import (
     _plane_difference,
     _store_record,
     count_infinite_cells,
-    count_partial_cells,
 )
 from opengwasdb.variants import VariantAxis, is_indexable_alid
 
@@ -96,6 +96,7 @@ FAILING_COUNTERS = (
     "imputed_in_non_admitted",
     "imputed_mask_invalid",
     "z_se_missingness_mismatch",
+    "non_canonical_marker",
     "target_variants_unordered",
     "quality_blocks_not_in_regions",
 )
@@ -168,8 +169,8 @@ class _Pair:
     target_path: Path
     source: OpenGWASDBStore
     target: OpenGWASDBStore
-    source_reader: RaggedCSRReader
-    target_reader: RaggedCSRReader
+    source_reader: CsrReader
+    target_reader: CsrReader
     n_source_rows: int
     n_target_rows: int
 
@@ -199,10 +200,10 @@ def _open_group(path: Path, role: str) -> Any:
         raise ObservedViewRefused(f"{role} store {path} cannot be opened: {exc!r}") from exc
 
 
-def _reader(path: Path, role: str) -> RaggedCSRReader:
+def _reader(path: Path, role: str) -> CsrReader:
     """The reader, which opens every array and decodes the encoding's side tables."""
     try:
-        return RaggedCSRReader(path)
+        return CsrReader.open(path, source=f"{role} store {path}")
     except Exception as exc:
         raise ObservedViewRefused(f"{role} store {path} cannot be opened: {exc!r}") from exc
 
@@ -363,7 +364,7 @@ def _held_associations(
     pair: _Pair, indices: Sequence[int]
 ) -> dict[int, list[tuple[str, str]]]:
     """The `(ALID, chromosome)` of every source association of the given Analyses."""
-    rows = {i: pair.source_reader.variant_indices(i) for i in indices}
+    rows = {i: pair.source_reader.structure.variant_indices(i) for i in indices}
     wanted = sorted({int(v) for r in rows.values() for v in r})
     with closing(VariantAxis(pair.source_path)) as axis:
         records = axis.by_indices(wanted)
@@ -506,13 +507,19 @@ def _listing_entry(
 
 
 def _unsampled_record() -> dict[str, Any]:
+    """The sample was skipped, so nothing it would have counted is zero (issue #375).
+
+    `analyses_checked` is 0 because no Analysis was read; the strata, `totals` and
+    `max_abs_diff` are `null`, a value nobody measured rather than a measured zero. The
+    keys stay, so a record's shape does not depend on whether the sample ran.
+    """
     return {
         "sample": {
             "analyses_checked": 0, "non_admitted": 0,
-            "by_stratum": dict.fromkeys(STRATA, 0), "analyses": [],
+            "by_stratum": dict.fromkeys(STRATA), "analyses": [],
         },
-        "totals": dict.fromkeys(_TOTAL_KEYS, 0),
-        "max_abs_diff": dict.fromkeys(_DIFF_PLANES, 0.0),
+        "totals": dict.fromkeys(_TOTAL_KEYS),
+        "max_abs_diff": dict.fromkeys(_DIFF_PLANES),
     }
 
 
@@ -526,10 +533,11 @@ def _failures(record: dict[str, Any], axis: _AxisMap) -> list[str]:
     return failures
 
 
-def _decoded(reader: RaggedCSRReader, analysis: int, path: Path) -> Any:
-    """An Analysis's decoded cells; one that cannot be decoded cannot be compared."""
+def _decoded(reader: CsrReader, analysis: int, path: Path) -> Inspection:
+    """An Analysis's decoded cells, invalid ones included; one that cannot be decoded
+    cannot be compared."""
     try:
-        return reader.get_analysis(analysis)
+        return reader.inspect(Cells.analysis(analysis))
     except Exception as exc:
         raise ObservedViewRefused(
             f"store {path} analysis {analysis} cannot be decoded: {exc}"
@@ -586,18 +594,16 @@ def _check_analysis(
     both = source_observed & present
     matched = np.zeros(len(target_vi), dtype=bool)
     matched[at[both]] = True
-    clean = (raw_imputed == 0) & target_observed
+    # The target's States and counts are the readers' own (spec §15, ADR 0070).
+    source_tally, target_tally = src.tally(), tgt.tally()
+    clean = tgt.state == State.OBSERVED
     is_imputed = raw_imputed == 1
     counts = {
         "observed_in_source": int(source_observed.sum()),
         "imputed": int(is_imputed.sum()),
-        # Neither z nor se present and not imputed: NaN, read through each plane's
-        # missing marker (spec §15), so an infinite value is not counted as an empty row.
-        "nan_rows": int((np.isnan(tgt.z) & np.isnan(tgt.se) & (raw_imputed == 0)).sum()),
-        "imputed_mask_invalid": int(((raw_imputed != 0) & (raw_imputed != 1)).sum()),
-        "z_se_missingness_mismatch": (
-            count_partial_cells(source_cells) + count_partial_cells(target_cells)
-        ),
+        "nan_rows": target_tally.count(State.MISSING),
+        "imputed_mask_invalid": target_tally.flags_not_binary,
+        **_marker_counts(source_tally, target_tally),
         # Present-but-infinite cells on both sides: reported, never a failure (issue #337).
         "infinite_cells": count_infinite_cells(source_cells) + count_infinite_cells(target_cells),
         "target_variants_unordered": int((np.diff(target_vi) <= 0).sum()),
@@ -617,3 +623,21 @@ def _check_analysis(
             getattr(source_cells, plane)[both], getattr(target_cells, plane)[at[both]]
         )
     return counts, diffs
+
+
+def _marker_counts(source: Tally, target: Tally) -> dict[str, int]:
+    """The counters both sides' markers decide, over an Analysis's whole sequence.
+
+    A cell with one of Z and SE missing rather than both is `PARTIAL`; one whose marker
+    is a NaN other than the canonical one is `NON_CANONICAL`, an invalid state no reader
+    accepts. `isnan` alone reads the second as missing, which is why it has its own
+    counter rather than falling into `nan_rows` (spec §15, issue #373).
+    """
+    return {
+        "z_se_missingness_mismatch": (
+            source.count(State.PARTIAL) + target.count(State.PARTIAL)
+        ),
+        "non_canonical_marker": (
+            source.count(State.NON_CANONICAL) + target.count(State.NON_CANONICAL)
+        ),
+    }

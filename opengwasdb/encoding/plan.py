@@ -24,7 +24,7 @@ representation.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 #: `z` is missing. Decodes to NaN, and the paired `se` must be NaN too
@@ -446,6 +446,14 @@ class StoreEncoding:
             eaf=_decide_eaf(measurements.eaf),
             n=NEncoding() if measurements.n_plane else None,
         )
+
+    def with_se(self, se: SeEncoding) -> StoreEncoding:
+        """This plan with `se` replaced, and every other part kept.
+
+        SE is decided after the planes are written, from the plane itself
+        (`opengwasdb.encoding.se`), so it is the one part a build replaces.
+        """
+        return replace(self, se=se)
 
     def with_eaf_reference(self, present: bool) -> StoreEncoding:
         """This plan, with the component's `eaf_reference` presence set.

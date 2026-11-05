@@ -18,19 +18,19 @@ from pathlib import Path
 import numpy as np
 import pytest
 from cli_output import normalize_cli_output
+from extraction_fixtures import extract_from_manifest
+from liftover_fixtures import strand_vcf_rows, write_two_strand_chain
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
-from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.store.open import open_store
+from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation import validate_store
-from opengwasdb.variants.reference import (
-    extract_variant_reference,
-    read_variant_reference,
-)
+from opengwasdb.variants.reference import read_variant_reference
+from opengwasdb.variants.routing import ReverseStrandLiftError, extract_variant_reference
 
 # Known hg19 -> hg38 translations (see test_dense_vcf_build.py's docstring).
 HG19_POS_1 = 100_000   # identity -> 1:100000, REF=A ALT=G
@@ -131,7 +131,7 @@ def test_artifact_has_the_declared_columns_and_lifts_hg19(tmp_path):
     manifest = _make_manifest(tmp_path, [("trait_a", vcf, "", "")])
     artifact = tmp_path / "trait_a.variant-ref.tsv.gz"
 
-    result = extract_variant_reference(manifest, artifact)
+    result = extract_from_manifest(manifest, artifact)
 
     assert result.output_path == artifact
     assert result.n_variants == 2
@@ -174,8 +174,8 @@ def test_artifact_is_byte_identical_between_serial_and_parallel(tmp_path):
     serial = tmp_path / "serial.variant-ref.tsv.gz"
     parallel = tmp_path / "parallel.variant-ref.tsv.gz"
 
-    extract_variant_reference(manifest, serial, n_workers=1)
-    extract_variant_reference(manifest, parallel, n_workers=2)
+    extract_from_manifest(manifest, serial, n_workers=1)
+    extract_from_manifest(manifest, parallel, n_workers=2)
 
     assert _artifact_text(serial) == _artifact_text(parallel)
 
@@ -199,7 +199,7 @@ def test_first_named_rsid_wins_in_manifest_order(tmp_path):
     )
     for n_workers in (1, 2):
         artifact = tmp_path / f"names-{n_workers}.variant-ref.tsv.gz"
-        extract_variant_reference(manifest, artifact, n_workers=n_workers)
+        extract_from_manifest(manifest, artifact, n_workers=n_workers)
         assert read_variant_reference(artifact).rsid_by_alid == {HG38_ALID_1: "rsFIRST"}
 
 
@@ -231,7 +231,7 @@ def test_rsid_for_a_colliding_alid_is_the_smallest_site(tmp_path, n_workers):
     site -- ("1", 100000, "A", "G") -- wins."""
     manifest = _swapped_allele_manifest(tmp_path)
     artifact = tmp_path / f"swapped-{n_workers}.variant-ref.tsv.gz"
-    extract_variant_reference(manifest, artifact, n_workers=n_workers)
+    extract_from_manifest(manifest, artifact, n_workers=n_workers)
     assert read_variant_reference(artifact).rsid_by_alid == {HG38_ALID_1: "rsAG"}
 
 
@@ -244,10 +244,11 @@ def test_rsid_selection_is_stable_across_python_hash_seeds(tmp_path):
     script = (
         "import sys\n"
         "from pathlib import Path\n"
-        "from opengwasdb.variants.reference import extract_variant_reference\n"
+        f"sys.path.insert(0, {str(Path(__file__).parent)!r})\n"
+        "from extraction_fixtures import extract_from_manifest\n"
         "manifest, output = Path(sys.argv[1]), Path(sys.argv[2])\n"
         "for workers in (1, 2):\n"
-        "    extract_variant_reference(\n"
+        "    extract_from_manifest(\n"
         "        manifest, output / f'{workers}.variant-ref.tsv.gz', n_workers=workers\n"
         "    )\n"
     )
@@ -290,7 +291,7 @@ def test_extracts_across_gwas_vcf_gwas_ssf_and_finngen(tmp_path):
     )
     artifact = tmp_path / "union.variant-ref.tsv.gz"
 
-    result = extract_variant_reference(manifest, artifact)
+    result = extract_from_manifest(manifest, artifact)
 
     assert result.n_variants == 3
     reference = read_variant_reference(artifact)
@@ -315,8 +316,14 @@ def test_manifest_with_no_rows_fails_loudly(tmp_path):
         "\toriginal_sd_method\toriginal_sd\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="contains no rows"):
-        extract_variant_reference(manifest, tmp_path / "out.variant-ref.tsv.gz")
+    result = CliRunner().invoke(
+        app,
+        ["extract-variant-reference", str(manifest), "--output-path", str(tmp_path / "o.gz")],
+    )
+    assert isinstance(result.exception, ValueError)
+    assert "contains no rows" in str(result.exception)
+    with pytest.raises(ValueError, match="no sources"):
+        extract_variant_reference([], tmp_path / "out.variant-ref.tsv.gz")
 
 
 def test_manifest_whose_sources_resolve_no_variants_fails_loudly(tmp_path):
@@ -326,8 +333,25 @@ def test_manifest_whose_sources_resolve_no_variants_fails_loudly(tmp_path):
     out = tmp_path / "out.variant-ref.tsv.gz"
 
     with pytest.raises(ValueError, match="yielded no hg38 variants"):
-        extract_variant_reference(manifest, out)
+        extract_from_manifest(manifest, out)
     assert not out.exists(), "a failed extraction must not leave a partial artifact"
+
+
+def test_the_command_names_the_manifest_whose_sources_resolve_no_variants(tmp_path):
+    """The command, not routing, knows the manifest, so it names it."""
+    vcf = _make_vcf(tmp_path, "trait_empty", [])
+    manifest = _make_manifest(tmp_path, [("trait_empty", vcf, "", "")])
+    out = tmp_path / "out.variant-ref.tsv.gz"
+
+    result = CliRunner().invoke(
+        app, ["extract-variant-reference", str(manifest), "--output-path", str(out)]
+    )
+
+    assert isinstance(result.exception, ValueError)
+    assert str(result.exception) == (
+        f"manifest {manifest} yielded no hg38 variants to reference"
+    )
+    assert not out.exists()
 
 
 def test_liftover_failure_above_threshold_raises(tmp_path):
@@ -344,7 +368,7 @@ def test_liftover_failure_above_threshold_raises(tmp_path):
     manifest = _make_manifest(tmp_path, [("trait_bad", vcf, "", "")])
 
     with pytest.raises(LiftoverFailureError):
-        extract_variant_reference(
+        extract_from_manifest(
             manifest,
             tmp_path / "out.variant-ref.tsv.gz",
             liftover_failure_threshold=0.01,
@@ -468,7 +492,7 @@ def _extract_with_spill(
     A single wide window keeps every variant in one window buffer, so a low
     threshold is guaranteed to force spills -- the shape the spill tests need.
     """
-    extract_variant_reference(
+    extract_from_manifest(
         manifest,
         artifact,
         n_workers=n_workers,
@@ -486,11 +510,9 @@ def _pass1_spill_records(
     test can assert both the rank ordering and that no spill oversized the
     buffer (issue #194).
     """
-    from opengwasdb.layouts.dense.build_vcf import (
-        _iter_pass1_shard,
-        _pass1_worker,
-        _read_manifest,
-    )
+    from opengwasdb.layouts.build_manifest import read_manifest
+    from opengwasdb.readers.registry import open_source
+    from opengwasdb.variants.routing.union import _pass1_worker, iter_shard
     from opengwasdb.variants.windows import window_size_bp
 
     vcf = _make_vcf(
@@ -502,13 +524,16 @@ def _pass1_spill_records(
         ],
     )
     manifest = _make_manifest(tmp_path, [("bounded", vcf, "", "hg38")])
-    rows = _read_manifest(manifest)
+    rows = read_manifest(manifest)
     shard_dir = tmp_path / "shards"
     shard_dir.mkdir()
-    specs = _pass1_worker((0, rows, str(shard_dir), window_size_bp(200.0), threshold))
+    sources = [row.source for row in rows]
+    specs = _pass1_worker(
+        (0, sources, str(shard_dir), window_size_bp(200.0), threshold, open_source)
+    )
     records_by_spill: Counter[tuple[int, int]] = Counter()
     for spec in specs:
-        records_by_spill[spec.rank] += sum(1 for _ in _iter_pass1_shard(spec.path))
+        records_by_spill[spec.rank] += sum(1 for _ in iter_shard(spec.path))
     return specs, records_by_spill
 
 
@@ -596,7 +621,7 @@ def test_artifact_is_invariant_across_window_and_batch_configurations(tmp_path, 
     baseline: str | None = None
     for window_size_mb, batch in ((1, 2), (5, 3), (20, 16)):
         artifact = tmp_path / f"inv-{n_workers}-{window_size_mb}-{batch}.variant-ref.tsv.gz"
-        extract_variant_reference(
+        extract_from_manifest(
             manifest,
             artifact,
             n_workers=n_workers,
@@ -647,7 +672,7 @@ def test_chromosomes_sharing_a_sort_rank_do_not_collide(tmp_path):
 
     for n_workers in (1, 2):
         artifact = tmp_path / f"ranks-{n_workers}.variant-ref.tsv.gz"
-        extract_variant_reference(manifest, artifact, n_workers=n_workers)
+        extract_from_manifest(manifest, artifact, n_workers=n_workers)
         alids = {line.split("\t")[0] for line in _artifact_text(artifact).splitlines()[1:]}
         assert alids == expected, n_workers
 
@@ -655,13 +680,13 @@ def test_chromosomes_sharing_a_sort_rank_do_not_collide(tmp_path):
 def test_artifact_rows_are_in_genomic_order_after_windowed_assembly(tmp_path):
     """Window outputs concatenate in order, so the whole artifact is sorted
     without a global re-sort."""
-    from opengwasdb.layouts.dense.build_vcf import _alid_sort_key
+    from opengwasdb.variants.axis import alid_sort_key
 
     manifest = _wide_manifest(tmp_path)
     artifact = tmp_path / "ordered.variant-ref.tsv.gz"
-    extract_variant_reference(manifest, artifact, n_workers=2, window_size_mb=5)
+    extract_from_manifest(manifest, artifact, n_workers=2, window_size_mb=5)
     alids = [line.split("\t")[0] for line in _artifact_text(artifact).splitlines()[1:]]
-    assert alids == sorted(alids, key=_alid_sort_key)
+    assert alids == sorted(alids, key=alid_sort_key)
     assert len(alids) > 10, "fixture must span enough variants to be meaningful"
 
 
@@ -681,7 +706,7 @@ def test_extraction_reports_phase_timings_and_window_shards(tmp_path):
         entries.append((f"overlap_{file_idx}", source, GWAS_SSF_CAPABILITY, "hg38"))
     manifest = _make_manifest(tmp_path, entries, name="overlap.tsv")
 
-    result = extract_variant_reference(
+    result = extract_from_manifest(
         manifest, tmp_path / "out.variant-ref.tsv.gz", n_workers=2
     )
 
@@ -697,7 +722,7 @@ def test_serial_extraction_reports_no_reduce_split(tmp_path):
     """The serial read has no windowed split: it reports map and write times but
     zero windows, so a caller cannot mistake it for a tree reduce."""
     manifest = _wide_manifest(tmp_path)
-    result = extract_variant_reference(manifest, tmp_path / "serial.variant-ref.tsv.gz")
+    result = extract_from_manifest(manifest, tmp_path / "serial.variant-ref.tsv.gz")
     assert result.map_seconds > 0
     assert result.write_seconds > 0
     assert result.reduce_seconds == 0
@@ -708,7 +733,7 @@ def test_serial_extraction_reports_no_reduce_split(tmp_path):
 def test_reduction_batch_size_below_two_fails_loudly(tmp_path):
     manifest = _wide_manifest(tmp_path)
     with pytest.raises(ValueError, match="reduction batch size must be at least 2"):
-        extract_variant_reference(
+        extract_from_manifest(
             manifest,
             tmp_path / "out.variant-ref.tsv.gz",
             n_workers=2,
@@ -720,7 +745,7 @@ def test_cli_accepts_window_and_batch_options(tmp_path):
     manifest = _wide_manifest(tmp_path)
     default = tmp_path / "default.variant-ref.tsv.gz"
     sharded = tmp_path / "sharded.variant-ref.tsv.gz"
-    extract_variant_reference(manifest, default, n_workers=2)
+    extract_from_manifest(manifest, default, n_workers=2)
 
     result = CliRunner().invoke(
         app,
@@ -741,7 +766,7 @@ def test_map_spill_records_defaults_to_five_million(tmp_path):
 
     assert DEFAULT_MAP_SPILL_RECORDS == 5_000_000
     manifest = _many_variant_manifest(tmp_path, per_file=8)
-    result = extract_variant_reference(manifest, tmp_path / "default.variant-ref.tsv.gz")
+    result = extract_from_manifest(manifest, tmp_path / "default.variant-ref.tsv.gz")
     assert result.reduce_levels == 0
 
 
@@ -751,14 +776,14 @@ def test_map_spill_records_must_be_positive(tmp_path):
     manifest = _many_variant_manifest(tmp_path, per_file=8)
     for n_workers in (1, 2):
         with pytest.raises(ValueError, match="map spill record count must be at least 1"):
-            extract_variant_reference(
+            extract_from_manifest(
                 manifest,
                 tmp_path / f"zero-{n_workers}.variant-ref.tsv.gz",
                 n_workers=n_workers,
                 map_spill_records=0,
             )
     with pytest.raises(ValueError, match="map spill record count must be at least 1"):
-        extract_variant_reference(
+        extract_from_manifest(
             manifest, tmp_path / "negative.variant-ref.tsv.gz", map_spill_records=-5
         )
 
@@ -804,7 +829,7 @@ def test_cli_accepts_a_spill_threshold_and_writes_the_same_artifact(tmp_path):
     manifest = _many_variant_manifest(tmp_path)
     default = tmp_path / "default.variant-ref.tsv.gz"
     spilled = tmp_path / "spilled.variant-ref.tsv.gz"
-    extract_variant_reference(manifest, default, n_workers=2, window_size_mb=200.0)
+    extract_from_manifest(manifest, default, n_workers=2, window_size_mb=200.0)
 
     result = CliRunner().invoke(
         app,
@@ -877,7 +902,7 @@ def test_reduction_runs_more_than_one_level_when_spills_exceed_batch(tmp_path, n
     than ``reduction_batch_size``, so the tree reduce descends more than one
     level. ``reduce_levels`` records that descent."""
     manifest = _many_variant_manifest(tmp_path)
-    result = extract_variant_reference(
+    result = extract_from_manifest(
         manifest,
         tmp_path / f"levels-{n_workers}.variant-ref.tsv.gz",
         n_workers=n_workers,
@@ -896,20 +921,20 @@ def test_artifact_is_independent_of_task_completion_order(tmp_path, monkeypatch)
     """Issue #195 AC: chunk rank is fixed at split time, so the order results
     arrive in cannot change the artifact. Reversing the futures ``as_completed``
     yields exercises the opposite completion order directly, with no timing."""
-    import opengwasdb.layouts.dense.build_vcf as build_vcf
+    from opengwasdb.variants.routing import union
 
     manifest = _imbalanced_manifest(tmp_path)
     forward = tmp_path / "forward.variant-ref.tsv.gz"
     reverse = tmp_path / "reverse.variant-ref.tsv.gz"
-    extract_variant_reference(manifest, forward, n_workers=2, window_size_mb=200.0)
+    extract_from_manifest(manifest, forward, n_workers=2, window_size_mb=200.0)
 
-    real_as_completed = build_vcf.as_completed
+    real_as_completed = union.as_completed
 
     def reversed_completion(futures, timeout=None):
         return reversed(list(real_as_completed(futures, timeout)))
 
-    monkeypatch.setattr(build_vcf, "as_completed", reversed_completion)
-    extract_variant_reference(manifest, reverse, n_workers=2, window_size_mb=200.0)
+    monkeypatch.setattr(union, "as_completed", reversed_completion)
+    extract_from_manifest(manifest, reverse, n_workers=2, window_size_mb=200.0)
 
     # The fixture really has cross-chunk rsid conflicts, so the comparison is
     # meaningful: a completion-order rank would move these winners.
@@ -924,7 +949,7 @@ def test_imbalanced_manifest_artifact_is_identical_across_worker_counts(tmp_path
     baseline: str | None = None
     for n_workers in (1, 2, 3, 5, 8):
         artifact = tmp_path / f"imbalanced-{n_workers}.variant-ref.tsv.gz"
-        extract_variant_reference(
+        extract_from_manifest(
             manifest, artifact, n_workers=n_workers, window_size_mb=200.0
         )
         text = _artifact_text(artifact)
@@ -942,10 +967,48 @@ def _streaming_writer_output(
     tmp_path: Path, manifest: Path, *, n_workers: int = 2, window_size_mb: float = 5.0
 ) -> str:
     artifact = tmp_path / "streamed.variant-ref.tsv.gz"
-    extract_variant_reference(
+    extract_from_manifest(
         manifest, artifact, n_workers=n_workers, window_size_mb=window_size_mb
     )
     return _artifact_text(artifact)
+
+
+def _materialised_union(
+    manifest: Path,
+    *,
+    n_workers: int,
+    window_size_mb: float,
+    reduction_batch_size: int = 16,
+    map_spill_records: int = 5_000_000,
+    liftover_failure_threshold: float = 0.01,
+) -> tuple[dict, dict[str, str]]:
+    """Pass 1's union held whole in memory, lifted: its site map and names.
+
+    The names are the independent oracle the build checks its rekey against
+    (`expected_rsids_by_routing`), so this needs no private rekey.
+    """
+    from opengwasdb.layouts.build_manifest import read_manifest
+    from opengwasdb.variants.reference import expected_rsids_by_routing
+    from opengwasdb.variants.routing.lift import place_union
+    from opengwasdb.variants.routing.union import (
+        UnionOptions,
+        consume_shards,
+        materialize_site_union,
+    )
+
+    tuples_by_assembly, rsid_by_site = consume_shards(
+        [row.source for row in read_manifest(manifest)],
+        materialize_site_union,
+        n_workers=n_workers,
+        options=UnionOptions(window_size_mb, reduction_batch_size, map_spill_records),
+        stats=None,
+    )
+    source_lookup, _reoriented, _dropped = place_union(
+        tuples_by_assembly,
+        chain_file=None,
+        failure_threshold=liftover_failure_threshold,
+    )
+    return source_lookup, expected_rsids_by_routing(rsid_by_site, source_lookup)
 
 
 def _materialising_writer_output(
@@ -958,18 +1021,15 @@ def _materialising_writer_output(
     liftover_failure_threshold: float = 0.01,
 ) -> str:
     """The retired materialising path's artifact text, from the same manifest."""
-    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants, _read_manifest
     from opengwasdb.variants.reference import write_variant_reference
 
-    rows = _read_manifest(manifest)
-    source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
-        rows,
-        chain_file=None,
-        liftover_failure_threshold=liftover_failure_threshold,
+    source_lookup, rsid_by_alid = _materialised_union(
+        manifest,
         n_workers=n_workers,
         window_size_mb=window_size_mb,
         reduction_batch_size=reduction_batch_size,
         map_spill_records=map_spill_records,
+        liftover_failure_threshold=liftover_failure_threshold,
     )
     out = Path(manifest).parent / "materialised.variant-ref.tsv.gz"
     write_variant_reference(
@@ -988,13 +1048,10 @@ def test_all_hg38_streaming_matches_the_materialising_writer(tmp_path, window_si
     byte-identical to the materialising writer's, for every window and batch
     configuration (and both use the same first-named-rsid rule)."""
     manifest = _wide_manifest(tmp_path)
-    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants, _read_manifest
     from opengwasdb.variants.reference import write_variant_reference
 
-    rows = _read_manifest(manifest)
-    source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
-        rows, chain_file=None, liftover_failure_threshold=0.01,
-        n_workers=2, window_size_mb=window_size_mb, reduction_batch_size=batch,
+    source_lookup, rsid_by_alid = _materialised_union(
+        manifest, n_workers=2, window_size_mb=window_size_mb, reduction_batch_size=batch
     )
     expected = tmp_path / f"expected-{window_size_mb}-{batch}.variant-ref.tsv.gz"
     write_variant_reference(
@@ -1002,7 +1059,7 @@ def test_all_hg38_streaming_matches_the_materialising_writer(tmp_path, window_si
         window_size_mb=window_size_mb,
     )
     actual = tmp_path / f"actual-{window_size_mb}-{batch}.variant-ref.tsv.gz"
-    extract_variant_reference(
+    extract_from_manifest(
         manifest, actual, n_workers=2, window_size_mb=window_size_mb,
         reduction_batch_size=batch,
     )
@@ -1030,7 +1087,7 @@ def test_all_hg38_streaming_writes_concatenated_gzip_members(tmp_path):
     window, and reads back as ordinary gzip."""
     manifest = _wide_manifest(tmp_path)
     artifact = tmp_path / "members.variant-ref.tsv.gz"
-    result = extract_variant_reference(manifest, artifact, n_workers=2, window_size_mb=5)
+    result = extract_from_manifest(manifest, artifact, n_workers=2, window_size_mb=5)
 
     raw = artifact.read_bytes()
     assert raw.count(b"\x1f\x8b\x08") >= 1 + result.n_windows
@@ -1043,17 +1100,17 @@ def test_all_hg38_streaming_writes_concatenated_gzip_members(tmp_path):
 def _forbid_materialising(monkeypatch):
     """Patch the retired materialising consumers to fail loudly if called.
 
-    Returns the mocked ``_materialize_site_union`` so a test can assert it was
+    Returns the mocked ``materialize_site_union`` so a test can assert it was
     never invoked; a fork child that did invoke it would raise through the
     worker future (issues #196/#197).
     """
     from unittest.mock import Mock
 
-    import opengwasdb.layouts.dense.build_vcf as build_vcf
     import opengwasdb.variants.reference as reference
+    from opengwasdb.variants.routing import route
 
     materialise = Mock(side_effect=AssertionError("materialising consumer used"))
-    monkeypatch.setattr(build_vcf, "_materialize_site_union", materialise)
+    monkeypatch.setattr(route, "materialize_site_union", materialise)
     monkeypatch.setattr(
         reference,
         "write_variant_reference",
@@ -1067,13 +1124,13 @@ def test_all_hg38_streaming_never_materialises_the_union(tmp_path, monkeypatch):
     or the in-memory writer -- the parent holds no global site set or lookup.
 
     This is the test that fails against the pre-#196 code, where the all-hg38
-    extraction went through ``_materialize_site_union``.
+    extraction went through ``materialize_site_union``.
     """
     materialise = _forbid_materialising(monkeypatch)
     manifest = _wide_manifest(tmp_path)
     artifact = tmp_path / "streamed.variant-ref.tsv.gz"
 
-    result = extract_variant_reference(manifest, artifact, n_workers=2, window_size_mb=5)
+    result = extract_from_manifest(manifest, artifact, n_workers=2, window_size_mb=5)
 
     assert not materialise.called
     assert result.n_variants > 0
@@ -1084,7 +1141,7 @@ def test_hg19_and_mixed_manifests_stream_without_materialising(tmp_path, monkeyp
     materialising consumer or the in-memory writer, even for hg19/mixed rows.
 
     Observed to fail against the pre-#197 code, where the hg19 and mixed paths
-    went through ``_materialize_site_union`` and ``write_variant_reference``.
+    went through ``materialize_site_union`` and ``write_variant_reference``.
     """
     materialise = _forbid_materialising(monkeypatch)
     hg19 = _two_variant_vcf(tmp_path)
@@ -1101,7 +1158,7 @@ def test_hg19_and_mixed_manifests_stream_without_materialising(tmp_path, monkeyp
 
     for label, manifest in cases.items():
         artifact = tmp_path / f"{label}.variant-ref.tsv.gz"
-        result = extract_variant_reference(manifest, artifact, n_workers=2)
+        result = extract_from_manifest(manifest, artifact, n_workers=2)
         assert result.n_variants > 0, label
     assert not materialise.called
 
@@ -1114,7 +1171,7 @@ def test_all_hg38_manifest_with_no_variants_fails_loudly(tmp_path):
     out = tmp_path / "empty.variant-ref.tsv.gz"
 
     with pytest.raises(ValueError, match="yielded no hg38 variants"):
-        extract_variant_reference(manifest, out)
+        extract_from_manifest(manifest, out)
     assert not out.exists(), "a failed streaming extraction must not leave a partial artifact"
 
 
@@ -1154,7 +1211,7 @@ def test_window_local_ambiguity_drops_exactly_the_global_intersection(tmp_path, 
     artifact = tmp_path / "collide.variant-ref.tsv.gz"
 
     with caplog.at_level(logging.WARNING):
-        result = extract_variant_reference(manifest, artifact, n_workers=2, window_size_mb=1.0)
+        result = extract_from_manifest(manifest, artifact, n_workers=2, window_size_mb=1.0)
 
     reference = read_variant_reference(artifact)
     assert set(reference.alids) == {"1:100000:A:G"}
@@ -1187,7 +1244,7 @@ def test_all_dropped_lifted_manifest_fails_without_a_partial_artifact(tmp_path):
     out = tmp_path / "all_collide.variant-ref.tsv.gz"
 
     with pytest.raises(ValueError, match="yielded no hg38 variants"):
-        extract_variant_reference(manifest, out, n_workers=2, window_size_mb=1.0)
+        extract_from_manifest(manifest, out, n_workers=2, window_size_mb=1.0)
     assert not out.exists(), "an all-dropped extraction must leave no partial artifact"
 
 
@@ -1237,7 +1294,7 @@ def test_hg19_and_mixed_streaming_matches_the_materialising_writer(
     )
     actual = tmp_path / f"hg19-{n_workers}-{window_size_mb}-{batch}-{spill}.variant-ref.tsv.gz"
 
-    extract_variant_reference(
+    extract_from_manifest(
         manifest,
         actual,
         n_workers=n_workers,
@@ -1263,7 +1320,7 @@ def test_hg19_variant_is_re_windowed_to_its_post_lift_position(tmp_path):
     manifest = _make_manifest(tmp_path, [("shift", vcf, "", "")])
     artifact = tmp_path / "shift.variant-ref.tsv.gz"
 
-    result = extract_variant_reference(manifest, artifact, n_workers=2, window_size_mb=0.05)
+    result = extract_from_manifest(manifest, artifact, n_workers=2, window_size_mb=0.05)
 
     reference = read_variant_reference(artifact)
     assert result.n_variants == 1
@@ -1272,6 +1329,63 @@ def test_hg19_variant_is_re_windowed_to_its_post_lift_position(tmp_path):
     assert _artifact_text(artifact) == _materialising_writer_output(
         manifest, n_workers=2, window_size_mb=0.05
     )
+
+
+def test_extraction_refuses_a_reverse_strand_lift(tmp_path):
+    """Issue #354: a reverse-strand block complements the alleles, and the
+    artifact's ``source_keys`` column carries the source's own pre-lift ones, so
+    the artifact would name the wrong ALID (and, for a palindromic pair, keep the
+    right one under the wrong sign). Extraction stops before writing it."""
+    chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
+    vcf = _make_vcf(tmp_path, "strand_rows", strand_vcf_rows())
+    manifest = _make_manifest(tmp_path, [("strand", vcf, "", "")])
+    out = tmp_path / "strand.variant-ref.tsv.gz"
+
+    with pytest.raises(ReverseStrandLiftError) as refused:
+        extract_from_manifest(
+            manifest, out, chain_file=chain, n_workers=2, window_size_mb=0.05
+        )
+
+    assert "2 source key(s)" in str(refused.value)
+    assert "2:1000:G:A" in str(refused.value)
+    assert not out.exists(), "a refused extraction must leave no artifact"
+
+
+def test_extraction_refuses_a_reverse_strand_indel(tmp_path):
+    """Issue #354: a reverse-strand indel's complement can keep the alleles in
+    their original order, so it swaps no statistic and only the chain block says
+    it was complemented. Its ALID differs all the same -- hg19 2:1000:A:AT lifts
+    to 2:999001:T:TA -- so the refusal follows the strand, not the swap."""
+    chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
+    vcf = _make_vcf(
+        tmp_path, "reverse_indel", ["2\t1000\t.\tA\tAT\t.\tPASS\t.\tES:SE:AF\t0.2:0.1:0.2\n"]
+    )
+    manifest = _make_manifest(tmp_path, [("indel", vcf, "", "")])
+    out = tmp_path / "indel.variant-ref.tsv.gz"
+
+    with pytest.raises(ReverseStrandLiftError) as refused:
+        extract_from_manifest(manifest, out, chain_file=chain, n_workers=2)
+
+    assert "1 source key(s)" in str(refused.value)
+    assert "2:1000:A:AT" in str(refused.value)
+    assert not out.exists(), "a refused extraction must leave no artifact"
+
+
+def test_extraction_writes_the_artifact_when_no_lift_reorients(tmp_path):
+    """The refusal is about orientation, not liftover: the same fixture's
+    forward-strand chromosome extracts as it did (issue #354)."""
+    chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
+    forward_rows = [row for row in strand_vcf_rows() if row.startswith("3\t")]
+    vcf = _make_vcf(tmp_path, "forward_rows", forward_rows)
+    manifest = _make_manifest(tmp_path, [("forward", vcf, "", "")])
+    artifact = tmp_path / "forward.variant-ref.tsv.gz"
+
+    result = extract_from_manifest(manifest, artifact, chain_file=chain, n_workers=2)
+
+    reference = read_variant_reference(artifact)
+    assert result.n_variants == 1
+    assert reference.alids == ["3:1000:A:G"]
+    assert reference.source_lookup[("3", 1_000, "G", "A")] == "3:1000:A:G"
 
 
 def test_liftover_failure_threshold_aggregates_across_windows_and_writes_nothing(tmp_path):
@@ -1292,7 +1406,7 @@ def test_liftover_failure_threshold_aggregates_across_windows_and_writes_nothing
     out = tmp_path / "bad.variant-ref.tsv.gz"
 
     with pytest.raises(LiftoverFailureError, match="exceeds threshold"):
-        extract_variant_reference(
+        extract_from_manifest(
             manifest, out, n_workers=2, window_size_mb=0.05, liftover_failure_threshold=0.5
         )
     assert not out.exists(), "a threshold breach must leave no partial artifact"
@@ -1312,7 +1426,7 @@ def test_liftover_failures_under_threshold_write_the_survivors(tmp_path):
     manifest = _make_manifest(tmp_path, [("ok", vcf, "", "")])
     artifact = tmp_path / "ok.variant-ref.tsv.gz"
 
-    result = extract_variant_reference(
+    result = extract_from_manifest(
         manifest, artifact, n_workers=2, window_size_mb=1.0, liftover_failure_threshold=0.9
     )
 
@@ -1325,7 +1439,7 @@ def _extraction_peak_bytes(manifest: Path, artifact: Path) -> int:
 
     tracemalloc.start()
     tracemalloc.reset_peak()
-    extract_variant_reference(manifest, artifact, n_workers=2, window_size_mb=20)
+    extract_from_manifest(manifest, artifact, n_workers=2, window_size_mb=20)
     _current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     return peak
@@ -1335,17 +1449,21 @@ def _materialising_peak_bytes(manifest: Path) -> int:
     """The pre-#196 parent peak: the whole union is materialised in-process."""
     import tracemalloc
 
-    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants, _read_manifest
+    from opengwasdb.layouts.build_manifest import read_manifest
+    from opengwasdb.variants.routing import (
+        LiftedUnion,
+        UnionOptions,
+        route_variants,
+    )
 
-    rows = _read_manifest(manifest)
+    sources = [row.source for row in read_manifest(manifest)]
     tracemalloc.start()
     tracemalloc.reset_peak()
-    _lift_manifest_variants(
-        rows,
-        chain_file=None,
-        liftover_failure_threshold=0.01,
+    route_variants(
+        sources,
+        LiftedUnion(),
         n_workers=2,
-        window_size_mb=20,
+        union=UnionOptions(window_size_mb=20),
     )
     _current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
@@ -1437,7 +1555,7 @@ def test_two_stage_build_matches_the_one_command_two_pass_store(tmp_path):
     build_dense_from_vcf_manifest(
         manifest, two_pass, store_id="s", release_id="r", n_workers=2
     )
-    extract_variant_reference(manifest, artifact, n_workers=2)
+    extract_from_manifest(manifest, artifact, n_workers=2)
     build_dense_from_vcf_manifest(
         manifest,
         single_pass,
