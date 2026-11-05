@@ -34,11 +34,12 @@ from opengwasdb.model.enums import CompletionState
 from opengwasdb.store import open_store
 from opengwasdb.top_hits import slices_are_ordered
 from opengwasdb.validation import RULES, validate_store
-from opengwasdb.validation.rule import Fold, Kind, Target
+from opengwasdb.validation.rule import Fold, Kind, Target, ValidationOptions
 from opengwasdb.validation.rules import associations
 from opengwasdb.validation.rules import top_hits as top_hit_rules
 from opengwasdb.validation.run import evaluate
 from opengwasdb.validation.scans import BYTES_PER_CELL, Block, CellIndex, band_limits
+from opengwasdb.validation.validate import release_targets
 
 FOLDS: dict[str, Fold[Any, Any]] = {rule.name: rule for rule in RULES if isinstance(rule, Fold)}
 
@@ -297,6 +298,57 @@ def test_a_validation_reads_each_tier_array_once_and_holds_the_tiers_by_row(
     assert [times_read(reads, array) for array in arrays] == [1.0] * len(arrays)
     grid = Target(Kind.GRID, "data.zarr", open_store(dense_store_path))
     assert all(tier.cells.by_row[0] is None for tier in top_hit_rules.sound_tiers(grid))
+
+
+def _top_hit_holdings(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Target, str]]:
+    """Every `top_hits/…` value a target is asked to hold that is more than a fact.
+
+    The structure rules' small facts (a tier's problem, whether its `abs_z` agrees)
+    are kept for the run; what the association scan reads to check the planes
+    against, the tiers' arrays, is not.
+    """
+    held: list[tuple[Target, str]] = []
+    remember = Target.remember
+
+    def recording(self: Target, key: str, read: Any, *, until: str | None = None) -> Any:
+        value = remember(self, key, read, until=until)
+        if key.startswith("top_hits/") and not isinstance(value, (bool, str, type(None))):
+            held.append((self, key))
+        return value
+
+    monkeypatch.setattr(Target, "remember", recording)
+    return held
+
+
+@pytest.mark.parametrize("interrupted", [False, True], ids=["finished", "interrupted"])
+def test_the_association_scan_holds_the_top_hit_tiers_only_for_its_pass(
+    dense_store_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, interrupted: bool
+) -> None:
+    """The real Dense scan, through `evaluate`: the tiers it held for its folds do not
+    outlive its pass, whether the pass ends or is interrupted part-way. An
+    interruption is no rule's failure: it reaches the caller."""
+    store = open_store(dense_store_path)
+    keys = list(top_hits.index_group(store.arrays(mode="r")))
+    assert keys, "the fixture's grid must carry a Top-Hit Index"
+    targets = release_targets(store, ValidationOptions())
+    held = _top_hit_holdings(monkeypatch)
+    located: list[int] = []
+    if interrupted:
+
+        def interrupt(self: Block, cells: CellIndex) -> tuple[np.ndarray, np.ndarray]:
+            located.append(len(cells.rows))
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(Block, "locate", interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            evaluate(RULES, targets)
+        assert located, "the interruption must come from inside the scan's pass"
+    else:
+        result = evaluate(RULES, targets)
+        assert result.ok, result.errors
+
+    assert {key for _, key in held} >= {"top_hits/sound", *(f"top_hits/{key}" for key in keys)}
+    assert [key for target, key in held if target.forget(key) is not None] == []
 
 
 def test_a_band_locates_the_cells_it_holds_by_their_grid_coordinates() -> None:

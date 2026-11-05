@@ -158,8 +158,15 @@ class _Run:
         if not ready:
             return  # nothing to measure, so nothing to read
         done = _Pass(scan, target, ready)
-        done.drive()
-        for fold in ready:
+        try:
+            done.drive()
+            self.conclude(done, i, target)
+        finally:  # an interruption still ends the pass, and what it held goes with it
+            target.release(scan.name)
+
+    def conclude(self, done: _Pass, i: int, target: Target) -> None:
+        """Each fold of a finished pass: failed, skipped behind its blocker, or judged."""
+        for fold in done.folds:
             if fold.name in done.failures:
                 self.settle(fold, i, [done.failures[fold.name]])
             elif fold.name in done.blocked:
@@ -167,7 +174,6 @@ class _Run:
             else:
                 judged = partial(fold.judged, target, done.totals[fold.name])
                 self.settle(fold, i, _contained(fold, target, judged))
-        target.release(scan.name)
 
     def folds_on(self, scan: Scan[Any], i: int, target: Target) -> list[Fold[Any, Any]]:
         """The selected, undecided folds on `scan` that apply to target `i`."""
