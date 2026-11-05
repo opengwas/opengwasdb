@@ -14,7 +14,7 @@ ieu-a-7 fix), and nothing here reads ``##SAMPLE``'s `StudyType`.
 `stream_variants` keeps a faster query of the identity columns alone, the
 superset the dense and hybrid builders' union-variant pass needs (issue #20).
 
-`write_regions_file`, `_parse_af` and the liftover helpers live here, since
+`write_regions_file` and the liftover helpers live here, since
 they are GWAS-VCF/bcftools-specific, not ancestry-specific.
 """
 
@@ -192,19 +192,6 @@ def oriented_variant(
         return orient_to_canonical(chrom, pos, effect, other)
     except VariantNormalisationError:
         return None
-
-
-def _parse_af(value: str) -> float | None:
-    """A usable `AF` from one bcftools `%AF` cell, by the package's one frequency rule.
-
-    Delegated to `opengwasdb.stats.parse_af` rather than re-spelled: a second
-    copy of "what is a frequency" is a second answer to it, and the copy here
-    disagreed with the shared rule about exactly `0.0` and exactly `1.0` -- the
-    values a monomorphic site reports and the placeholder a broken source
-    reports on every row (stores #176). bcftools prints a genuinely missing
-    value as `.`, which the shared rule already treats as missing.
-    """
-    return parse_af(value)
 
 
 def _parse_positive_float(value: str) -> float | None:

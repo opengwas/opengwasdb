@@ -191,18 +191,6 @@ class RoutedColumn:
     n_unmatched: int
 
 
-def last_wins(index: np.ndarray) -> np.ndarray:
-    """The positions to keep: each index's last occurrence, in stream order.
-
-    ``np.unique`` over the reversed indices returns the first position in
-    reversed order, which is the last occurrence in stream order.
-    """
-    if len(index) == 0:
-        return np.empty(0, dtype=np.intp)
-    _, first_in_reverse = np.unique(index[::-1], return_index=True)
-    return np.sort(len(index) - 1 - first_in_reverse)
-
-
 @dataclass(frozen=True)
 class Duplicates:
     """How one stream's rows for repeated places resolve.
