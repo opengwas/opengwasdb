@@ -29,7 +29,7 @@ from pathlib import Path
 
 import numpy as np
 
-from opengwasdb.build.ordered_pool import fork_each
+from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.build.phenotype_sd import ESTIMATION_METHODS, estimate_phenotype_sd
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.manifest_columns import require_columns, resolve_manifest_columns
@@ -213,7 +213,7 @@ def load_af_reference(
 class _EstimationContext:
     """What every worker reads: where the ADR-0029 estimate's frequency comes from.
 
-    ``fork_each`` hands this to each forked worker by inheritance, so a
+    ``ordered_map`` hands this to each forked worker by inheritance, so a
     reference frequency table is not pickled once per Analysis (issue #395).
     """
 
@@ -297,14 +297,9 @@ def _check_af_source(row: SdManifestRow, af_source: AfSource) -> None:
 
 
 def _estimate_one(
-    context: _EstimationContext, task: tuple[int, SdManifestRow]
-) -> tuple[int, PhenotypeSdRow]:
-    """Worker: read one Analysis's source and estimate its phenotype SD.
-
-    The task's index comes back beside its estimate because ``fork_each``
-    yields in completion order and the TSV is written in input order (§20.2).
-    """
-    index, row = task
+    context: _EstimationContext, row: SdManifestRow
+) -> PhenotypeSdRow:
+    """Worker: read one Analysis's source and estimate its phenotype SD."""
     _check_af_source(row, context.af_source)
     try:
         reader = resolve_reader(
@@ -321,7 +316,7 @@ def _estimate_one(
         )
     except ValueError as exc:
         raise ValueError(f"analysis {row.analysis_id!r}: {exc}") from exc
-    return index, PhenotypeSdRow(
+    return PhenotypeSdRow(
         analysis_id=row.analysis_id,
         original_sd=_format_float(estimate.sd),
         original_sd_method=estimate.method.value,
@@ -347,9 +342,8 @@ def estimate_manifest_phenotype_sd(
     """Estimate every row's phenotype SD, preserving input order.
 
     ``af_reference`` is required for :attr:`AfSource.reference` and must be the
-    mapping `load_af_reference` returns. ``fork_each`` hands the frequency
-    source to forked workers by inheritance and yields in completion order, so
-    the estimates are put back in input order before they are returned: the
+    mapping `load_af_reference` returns. ``ordered_map`` hands the frequency
+    source to forked workers by inheritance and yields in input order, so the
     output does not depend on worker count or completion order (spec §20.2,
     matching `opengwasdb.ancestry.pipeline.annotate_catalogue`).
     """
@@ -358,9 +352,7 @@ def estimate_manifest_phenotype_sd(
             "--af-source reference requires a reference AF table; none was supplied"
         )
     context = _EstimationContext(af_source, af_reference)
-    indexed = fork_each(_estimate_one, context, enumerate(rows), n_workers)
-    # `fork_each` yields in completion order; restore input order by index.
-    return [estimate for _index, estimate in sorted(indexed)]
+    return list(ordered_map(_estimate_one, rows, n_workers, shared=context))
 
 
 def write_sd_estimates(path: str | Path, rows: list[PhenotypeSdRow]) -> None:

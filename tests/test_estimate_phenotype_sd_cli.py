@@ -260,12 +260,12 @@ _ESTIMATE_ORDER = CompletionOrder(len(_SD_IDS))
 _REAL_ESTIMATE_ONE = phenotype_sd_pipeline._estimate_one
 
 
-def _estimate_one_finishing_last(context: Any, task: Any) -> Any:
+def _estimate_one_finishing_last(context: Any, row: Any) -> Any:
     """The pipeline's own worker, held so the first Analysis finishes last."""
-    index, _row = task
+    index = _SD_IDS.index(row.analysis_id)
     if index == 0:
         _ESTIMATE_ORDER.wait_for_the_rest()
-    result = _REAL_ESTIMATE_ONE(context, task)
+    result = _REAL_ESTIMATE_ONE(context, row)
     _ESTIMATE_ORDER.claim(index)
     return result
 

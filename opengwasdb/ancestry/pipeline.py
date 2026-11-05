@@ -19,7 +19,7 @@ from pathlib import Path
 from opengwasdb.ancestry.catalogue import CatalogueRow, write_catalogue
 from opengwasdb.ancestry.mixture import AncestryAssignment, Gates, assign_from_source
 from opengwasdb.ancestry.reference import AncestryReference
-from opengwasdb.build.ordered_pool import fork_each
+from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.model.manifest_columns import (
     manifest_n,
     manifest_trait_name,
@@ -101,8 +101,8 @@ def read_source_manifest(
 class _AnnotationContext:
     """What every worker reads: the Ancestry Reference Panel and the run's inputs.
 
-    ``fork_each`` hands this to each forked worker by inheritance, so the panel
-    (~1 GB) crosses no pickle boundary once per Analysis (issue #395).
+    ``ordered_map`` hands this to each forked worker by inheritance, so the
+    panel (~1 GB) crosses no pickle boundary once per Analysis (issue #395).
     """
 
     reference: AncestryReference
@@ -112,15 +112,11 @@ class _AnnotationContext:
 
 
 def _annotate_one(
-    context: _AnnotationContext, task: tuple[int, str, str, str]
-) -> tuple[int, AncestryAssignment]:
-    """Worker: extract AF at reference sites and assign ancestry for one source.
-
-    The task's index comes back beside its assignment because ``fork_each``
-    yields in completion order and the Catalogue is written in input order.
-    """
-    index, file_path, capability, source_build = task
-    return index, assign_from_source(
+    context: _AnnotationContext, task: tuple[str, str, str]
+) -> AncestryAssignment:
+    """Worker: extract AF at reference sites and assign ancestry for one source."""
+    file_path, capability, source_build = task
+    return assign_from_source(
         file_path,
         context.reference,
         context.gates,
@@ -190,10 +186,9 @@ def annotate_catalogue(
     supplied) so each same-build study is read targeted, not full-scanned. A
     supported cross-build GWAS-VCF uses the explicitly configured chain and a
     full source-coordinate scan; every other mismatch is refused before any
-    source is read (issue #277). ``fork_each`` hands the Ancestry Reference
-    Panel to forked workers by inheritance and yields in completion order, so
-    the assignments are put back in input order before the Catalogue is
-    written: it does not depend on worker count or completion order.
+    source is read (issue #277). ``ordered_map`` hands the Ancestry Reference
+    Panel to forked workers by inheritance, and yields in input order, so the
+    Catalogue does not depend on worker count or completion order.
     """
     out_path = Path(out_path)
     if regions_file is None:
@@ -209,15 +204,10 @@ def annotate_catalogue(
 
     t0 = time.monotonic()
     tasks = [
-        (index, row.file_path, row.source_reader_capability, row.source_genome_build)
-        for index, row in enumerate(source_rows)
+        (row.file_path, row.source_reader_capability, row.source_genome_build)
+        for row in source_rows
     ]
-    # `fork_each` yields in completion order; restore input order by the index
-    # each task carries, before anything is written.
-    assignments = [
-        assignment
-        for _index, assignment in sorted(fork_each(_annotate_one, context, tasks, n_workers))
-    ]
+    assignments = list(ordered_map(_annotate_one, tasks, n_workers, shared=context))
 
     rows = _catalogue_rows(source_rows, assignments)
 

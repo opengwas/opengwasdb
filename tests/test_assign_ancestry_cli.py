@@ -157,14 +157,18 @@ def test_catalogue_independent_of_worker_count(scenario):
 _SCENARIO_IDS = ["eur1", "afr1", "mix1"]
 _SCENARIO_ORDER = CompletionOrder(len(_SCENARIO_IDS))
 _REAL_ANNOTATE_ONE = ancestry_pipeline._annotate_one
+#: Set by the test, so the worker below can recognise its Analysis: the pool
+#: hands it the task, and the task carries no index of its own.
+_INDEX_BY_SOURCE: dict[str, int] = {}
 
 
-def _annotate_one_finishing_last(context: Any, task: tuple[int, str, str, str]) -> Any:
+def _annotate_one_finishing_last(context: Any, task: tuple[str, str, str]) -> Any:
     """The pipeline's own worker, held so the first Analysis finishes last."""
-    if task[0] == 0:
+    index = _INDEX_BY_SOURCE[task[0]]
+    if index == 0:
         _SCENARIO_ORDER.wait_for_the_rest()
     result = _REAL_ANNOTATE_ONE(context, task)
-    _SCENARIO_ORDER.claim(task[0])
+    _SCENARIO_ORDER.claim(index)
     return result
 
 
@@ -182,6 +186,7 @@ def test_catalogue_keeps_input_order_when_the_first_analysis_finishes_last(
     src = read_source_manifest(manifest)
     assert [row.trait_id for row in src] == _SCENARIO_IDS
     _SCENARIO_ORDER.reset()
+    _INDEX_BY_SOURCE.update({row.file_path: i for i, row in enumerate(src)})
     monkeypatch.setattr(ancestry_pipeline, "_annotate_one", _annotate_one_finishing_last)
 
     rows = annotate_catalogue(
