@@ -1,64 +1,71 @@
-"""Seam tests for the split Dense array-validation pass (issue 130).
+"""Seam tests for the Dense value rules and the band scan they fold over (issues 130, #55).
 
-The row-band validation of a Dense store was one 59-cyclomatic, 185-line
-function (``_validate_dense_arrays``). It is now a set of guard, latch and
-report seams around a ``_DenseBandState``, so each independent flag and each
-side-table position list has one function that owns it. These tests pin each
-seam to the malformed-input diagnostic it exists to produce, so a future merge
-that folds two seams back together -- or drops one -- fails here rather than
-passing review as "simpler". The store-level companions live beside the store
-fixtures they corrupt (``TestValidation`` in test_dense_completion.py and the
-shape/side-length tests in test_validation.py / test_eaf_encoding_layouts.py).
+The row-band validation of a Dense store was one 59-cyclomatic, 185-line function,
+then a set of latch and report seams around a band state. Each check is now a
+Validation Rule (ADR 0074): a fold measures every band and is judged on the total,
+and the band scan reads each plane once for all of them. These tests hold each rule
+to the malformed input it exists to report, measured on bands built from arrays
+(`Block.of`) and judged as the runner would add them up, and the scan to its
+memory budget. The store-level companions live beside the store fixtures they
+corrupt (test_validation.py, test_validate_presence.py, test_dense_completion.py).
 """
 
 from __future__ import annotations
 
-import numpy as np
-import zarr
+import pathlib
+from collections.abc import Sequence
+from typing import Any
 
-import opengwasdb.validation.validate as validation_module
+import numpy as np
+import pytest
+import zarr
+from store_reads import element_reads, times_read
+
+from opengwasdb import top_hits
 from opengwasdb.encoding import (
     EAF_BASELINE,
     EAF_REFERENCE,
-    EafEncoding,
+    Z_OVERFLOW,
     SeEncoding,
-    StoreCodec,
     StoreEncoding,
     ZEncoding,
 )
+from opengwasdb.model.enums import CompletionState
+from opengwasdb.store import open_store
 from opengwasdb.top_hits import slices_are_ordered
-from opengwasdb.validation.validate import (
-    _band_marked_positions,
-    _count_dense_imputed,
-    _decode_top_hit_band,
-    _dense_eaf_side_lengths,
-    _dense_plane_shape_errors,
-    _dense_required_planes,
-    _DenseBandState,
-    _flatten_band_positions,
-    _latch_dense_eaf_range,
-    _latch_dense_off_panel_imputed,
-    _latch_dense_states,
-    _latch_negative_se,
-    _read_top_hit_arrays,
-    _report_dense_band_flags,
-    _report_dense_eaf_range,
-    _validate_dense_arrays,
-    _validate_dense_band,
-)
+from opengwasdb.validation import RULES, validate_store
+from opengwasdb.validation.rule import Fold, Kind, Target, ValidationOptions
+from opengwasdb.validation.rules import associations
+from opengwasdb.validation.rules import top_hits as top_hit_rules
+from opengwasdb.validation.run import evaluate
+from opengwasdb.validation.scans import BYTES_PER_CELL, Block, CellIndex, band_limits
+from opengwasdb.validation.validate import release_targets
+
+FOLDS: dict[str, Fold[Any, Any]] = {rule.name: rule for rule in RULES if isinstance(rule, Fold)}
+
+FLOAT16 = StoreEncoding(z=ZEncoding(kind="float16"), se=SeEncoding(kind="float16"))
 
 
-def _band_state(n_analyses: int = 2) -> _DenseBandState:
-    return _DenseBandState(n_analyses=n_analyses)
+def _grid(group: Any = None, n_variants: int = 3, n_analyses: int = 2) -> Target:
+    target = Target(Kind.GRID, "data.zarr", group=group, encoding=FLOAT16)
+    target.remember("n_variants", lambda: n_variants)
+    target.remember("n_analyses", lambda: n_analyses)
+    return target
 
 
-class _LogicalDenseArray:
-    """A matrix with a real shape but no allocated cells."""
+def _judged(name: str, blocks: Sequence[Block], target: Target | None = None) -> list[str]:
+    """What rule `name` reports on `blocks`, added up from its zero as the runner does."""
+    fold = FOLDS[name]
+    target = target if target is not None else _grid()
+    total = fold.zero
+    for block in blocks:
+        total = total + fold.measure(target, block)
+    return [finding.message for finding in fold.judged(target, total)]
 
-    def __init__(self, shape: tuple[int, int]) -> None:
-        self.shape = shape
-        self.dtype = np.dtype("float16")
-        self.chunks = (1_000, 64)
+
+def _checked(name: str, target: Target) -> list[str]:
+    rule = next(rule for rule in associations.CHECKS if rule.name == name)
+    return [finding.message for finding in evaluate([rule], [target]).findings]
 
 
 def test_top_hit_arrays_remain_in_their_compact_contract_dtypes() -> None:
@@ -77,9 +84,8 @@ def test_top_hit_arrays_remain_in_their_compact_contract_dtypes() -> None:
     for name, values in arrays.items():
         group.create_array(name, data=values)
 
-    loaded = _read_top_hit_arrays("p_5e_08", group, [])
+    loaded = top_hits.load_tier_arrays(group)
 
-    assert loaded is not None
     assert loaded["rows"].dtype == np.uint32
     assert loaded["cols"].dtype == np.uint32
     assert loaded["offsets"].dtype == np.uint64
@@ -101,403 +107,298 @@ def test_strict_top_hit_slice_order_proves_cell_keys_are_unique() -> None:
     )
 
 
-def test_dense_array_pass_never_hands_a_band_over_the_memory_budget(monkeypatch) -> None:
-    """Exercise the real loop while replacing only the expensive band body.
-
-    The pre-#254 fixed 250,000-row loop handed the spy 506 million cells and
-    failed this one-GiB assertion; the logical fixture allocates none of them.
-    """
+def test_a_band_never_exceeds_the_decoded_memory_budget() -> None:
+    """The pre-#254 fixed 250,000-row band handed a wide store 506 million cells."""
     n_variants, n_analyses = 250_001, 2_024
-    root = {
-        "z": _LogicalDenseArray((n_variants, n_analyses)),
-        "se": _LogicalDenseArray((n_variants, n_analyses)),
-    }
-    encoding = StoreEncoding(
-        z=ZEncoding(kind="float16"),
-        se=SeEncoding(kind="float16"),
-    )
-    decoded_cells: list[int] = []
-
-    def record_band(*args) -> bool:
-        r0, r1 = args[-3], args[-2]
-        decoded_cells.append((r1 - r0) * n_analyses)
-        return True
-
-    monkeypatch.setattr(validation_module, "_validate_dense_band", record_band)
-    errors: list[str] = []
-    _validate_dense_arrays(root, n_variants, n_analyses, errors, encoding)
-
-    assert decoded_cells, "fixture must reach the Dense array pass"
-    assert errors == []
-    assert max(decoded_cells) * 96 <= 1024**3
+    bands = list(band_limits(n_variants, n_analyses, 1_000))
+    assert bands[0][0] == 0 and bands[-1][1] == n_variants, "every row must be covered"
+    assert all(b[0] == a[1] for a, b in zip(bands, bands[1:], strict=False))
+    assert max((r1 - r0) * n_analyses for r0, r1 in bands) * BYTES_PER_CELL <= 1024**3
 
 
-# ── Guard seams: presence, shapes, per-variant side lengths ───────────────
+# ── The grid's planes: presence, shapes, per-variant side lengths ─────────
 
 
-def test_required_planes_names_every_missing_plane():
+def test_grid_planes_name_every_missing_plane_z_first() -> None:
+    assert _checked("grid.planes", _grid(zarr.group())) == [
+        "missing data.zarr/z",
+        "missing data.zarr/se",
+    ]
     root = zarr.group()
     root.create_array("z", data=np.zeros((3, 2), dtype="float16"))
-    errors: list[str] = []
-
-    planes = _dense_required_planes(root, errors)
-
-    assert planes is None
-    assert errors == ["missing data.zarr/se"]
+    assert _checked("grid.planes", _grid(root)) == ["missing data.zarr/se"]
 
 
-def test_required_planes_reports_z_before_se_and_stops_the_pass():
+def test_grid_planes_record_every_misshaped_plane_in_order() -> None:
     root = zarr.group()
-    errors: list[str] = []
-
-    planes = _dense_required_planes(root, errors)
-
-    assert planes is None
-    assert errors == ["missing data.zarr/z", "missing data.zarr/se"]
-
-
-def test_required_planes_hands_back_present_planes():
-    root = zarr.group()
-    z = root.create_array("z", data=np.zeros((3, 2), dtype="float16"))
-    se = root.create_array("se", data=np.zeros((3, 2), dtype="float16"))
-
-    planes = _dense_required_planes(root, [])
-
-    assert planes is not None
-    z_arr, se_arr = planes
-    assert z_arr.shape == z.shape
-    assert se_arr.shape == se.shape
-
-
-def test_plane_shape_errors_record_every_misshaped_plane_in_order():
-    root = zarr.group()
-    z = root.create_array("z", data=np.zeros((3, 2), dtype="int16"))
-    se = root.create_array("se", data=np.zeros((2, 2), dtype="float16"))
+    root.create_array("z", data=np.zeros((3, 2), dtype="int16"))
+    root.create_array("se", data=np.zeros((2, 2), dtype="float16"))
     root.create_array("eaf", data=np.zeros((2, 2), dtype="float32"))
-    errors: list[str] = []
-
-    eaf_arr = _dense_plane_shape_errors(root, z, se, 3, 2, errors)
-
-    assert eaf_arr is None  # the mis-shaped eaf plane must not reach a decode seam
-    assert errors == [
+    assert _checked("grid.planes", _grid(root)) == [
         "se shape (2, 2) does not match (3, 2)",
         "eaf shape (2, 2) does not match (3, 2)",
     ]
 
 
-def test_plane_shape_errors_keep_an_aligned_eaf_plane():
+def test_grid_planes_pass_an_aligned_eaf_plane() -> None:
     root = zarr.group()
-    z = root.create_array("z", data=np.zeros((3, 2), dtype="int16"))
-    se = root.create_array("se", data=np.zeros((3, 2), dtype="float16"))
-    eaf = root.create_array("eaf", data=np.zeros((3, 2), dtype="float32"))
-
-    eaf_arr = _dense_plane_shape_errors(root, z, se, 3, 2, [])
-
-    assert eaf_arr is not None
-    assert eaf_arr.shape == eaf.shape
+    for name, dtype in (("z", "int16"), ("se", "float16"), ("eaf", "float32")):
+        root.create_array(name, data=np.zeros((3, 2), dtype=dtype))
+    assert _checked("grid.planes", _grid(root)) == []
 
 
-def test_eaf_side_lengths_reject_short_per_variant_side_arrays():
+def test_eaf_side_lengths_reject_short_per_variant_side_arrays() -> None:
     root = zarr.group()
     root.create_array(EAF_BASELINE, data=np.zeros(4, dtype="float32"))
     root.create_array(EAF_REFERENCE, data=np.zeros(5, dtype="float32"))
-    errors: list[str] = []
-
-    _dense_eaf_side_lengths(root, 6, errors)
-
-    assert errors == [
+    assert _checked("grid.eaf_side_lengths", _grid(root, n_variants=6)) == [
         f"{EAF_BASELINE} has 4 entries but the variant axis has 6",
         f"{EAF_REFERENCE} has 5 entries but the variant axis has 6",
     ]
 
 
-# ── Latch seams: one seam owns one independent flag ───────────────────────
-
-
-def test_negative_se_latch_fires_on_one_bad_band():
-    findings = _band_state()
-    _latch_negative_se(findings, np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32))
-    assert findings.neg_se is False
-
-    _latch_negative_se(
-        findings, np.array([[0.1, -0.2], [np.nan, 0.4]], dtype=np.float32)
-    )
-
-    assert findings.neg_se is True
-
-
-def test_state_latch_needs_z_and_se_to_agree_cell_by_cell():
-    se = np.array([[1.0, np.nan], [np.nan, 2.0]], dtype=np.float32)
-    z_missing = np.array([[True, False], [False, True]])
-    findings = _band_state()
-
-    _latch_dense_states(findings, z_missing, se, None)
-
-    assert findings.missingness is True
-
-    consistent = _band_state()
-    se_ok = np.array([[np.nan, 1.0], [2.0, np.nan]], dtype=np.float32)
-    _latch_dense_states(consistent, z_missing, se_ok, None)
-    assert consistent.missingness is False
-
-
-def test_state_latch_flags_a_mask_value_other_than_0_or_1_wherever_it_sits():
-    """A 2 beside a partial cell still latches the mask's own finding."""
-    findings = _band_state()
-    z_missing = np.array([[False, True]])
-    se = np.array([[1.0, 1.0]], dtype=np.float32)
-
-    _latch_dense_states(findings, z_missing, se, np.array([[0, 2]], dtype=np.uint8))
-
-    assert findings.imp_not_binary is True
-    assert findings.missingness is True
-
-
-def test_imputed_counts_accumulate_across_bands():
-    findings = _band_state()
-    first = _count_dense_imputed(findings, np.array([[1, 0]], dtype=np.uint8))
-    _count_dense_imputed(findings, np.array([[0, 1]], dtype=np.uint8))
-
-    assert findings.imputed_per_analysis.tolist() == [1, 1]
-    assert first is not None and first.tolist() == [[True, False]]
-    assert _count_dense_imputed(findings, None) is None
-
-
-def test_state_latch_reads_missing_z_or_missing_se_on_imputed_cells():
-    findings = _band_state()
-    flags = np.array([[1, 1]], dtype=np.uint8)
-    z_missing = np.array([[True, False]])
-    se = np.array([[np.nan, np.nan]], dtype=np.float32)
-
-    _latch_dense_states(findings, z_missing, se, flags)
-
-    assert findings.imp_nan_z is True
-    assert findings.imp_nan_se is True
-
-    clean = _band_state()
-    se_ok = np.array([[1.0, 2.0]], dtype=np.float32)
-    z_present = np.array([[False, False]])
-    _latch_dense_states(clean, z_present, se_ok, flags)
-    assert clean.imp_nan_z is False
-    assert clean.imp_nan_se is False
-
-
-def test_state_latch_reads_an_infinite_imputed_se_as_present():
-    """An infinite value is a value (spec §15, ADR 0070); the warning counts it."""
-    findings = _band_state()
-
-    _latch_dense_states(
-        findings,
-        np.array([[False]]),
-        np.array([[np.inf]], dtype=np.float32),
-        np.array([[1]], dtype=np.uint8),
-    )
-
-    assert (findings.imp_nan_se, findings.imp_nan_z, findings.missingness) == (
-        False,
-        False,
-        False,
-    )
-
-
-def test_off_panel_latch_requires_an_off_panel_row_with_an_imputed_cell():
-    findings = _band_state()
-    on_panel = np.array([1, 0], dtype=np.uint8)
-    imp_mask = np.array([[False, False], [True, True]])
-
-    _latch_dense_off_panel_imputed(findings, on_panel, imp_mask, 0, 2)
-
-    assert findings.off_panel_imputed is True
-
-    fine = _band_state()
-    imp_on_panel_only = np.array([[True, True], [False, False]])
-    _latch_dense_off_panel_imputed(fine, on_panel, imp_on_panel_only, 0, 2)
-    assert fine.off_panel_imputed is False
-
-
-class _FakeEafPlane:
-    """A plane stub: decodes a band, or raises, and counts decode attempts."""
-
-    def __init__(self, values: np.ndarray | None = None, raises: bool = False) -> None:
-        self.values = values
-        self.raises = raises
-        self.calls = 0
-
-    def band(self, r0: int, r1: int) -> np.ndarray:
-        self.calls += 1
-        if self.raises:
-            raise ValueError("no table entry for an exception cell")
-        assert self.values is not None
-        return self.values
-
-
-def test_eaf_range_latch_marks_out_of_range_decoded_value():
-    findings = _band_state()
-    plane = _FakeEafPlane(values=np.array([[0.3, 1.4]], dtype=np.float32))
-
-    _latch_dense_eaf_range(findings, plane, 0, 1)
-
-    assert findings.eaf_out_of_range is True
-    assert findings.eaf_undecodable is False
-
-
-def test_eaf_range_latch_stops_decoding_once_a_flag_latches():
-    findings = _band_state()
-    plane = _FakeEafPlane(values=np.array([[0.3, 1.4]], dtype=np.float32))
-
-    _latch_dense_eaf_range(findings, plane, 0, 1)
-    _latch_dense_eaf_range(findings, plane, 1, 2)
-
-    assert plane.calls == 1  # later bands skip the decode entirely
-
-
-def test_eaf_range_latch_marks_undecodable_and_stops_further_decodes():
-    findings = _band_state()
-    plane = _FakeEafPlane(raises=True)
-
-    _latch_dense_eaf_range(findings, plane, 0, 1)
-    _latch_dense_eaf_range(findings, plane, 1, 2)
-
-    assert findings.eaf_undecodable is True
-    assert findings.eaf_out_of_range is False
-    assert plane.calls == 1
-
-
-class _FakeSePlane:
-    def __init__(self, expected_eaf: np.ndarray) -> None:
-        self.expected_eaf = expected_eaf
-
-    def band(self, r0: int, r1: int, *, eaf: np.ndarray | None = None) -> np.ndarray:
-        assert (r0, r1) == (0, 2)
-        assert eaf is self.expected_eaf
-        return np.ones_like(self.expected_eaf)
-
-
-class _FakeZPlane:
-    def band(self, r0: int, r1: int) -> np.ndarray:
-        assert (r0, r1) == (0, 2)
-        return np.full((2, 2), -7.0, dtype=np.float32)
-
-
-def _residual_eaf_encoding() -> StoreEncoding:
-    return StoreEncoding(
-        z=ZEncoding(kind="float16"),
-        se=SeEncoding(kind="int8_residual", residual_range=1.0),
-        eaf=EafEncoding(kind="float32"),
-    )
-
-
-def test_top_hit_band_reuses_its_one_eaf_decode_for_se() -> None:
-    values = np.full((2, 2), 0.4, dtype=np.float32)
-    eaf_plane = _FakeEafPlane(values=values)
-    encoding = _residual_eaf_encoding()
-
-    z, se, absolute_z, cached_eaf = _decode_top_hit_band(
-        _FakeZPlane(), _FakeSePlane(values), eaf_plane, encoding, 0, 2
-    )
-
-    assert np.array_equal(absolute_z, np.abs(z))
-    assert se.shape == z.shape
-    assert len(cached_eaf) == 1
-    assert cached_eaf[0] is values
-    assert eaf_plane.calls == 1
-
-
-def test_dense_band_reuses_its_one_eaf_decode_for_se() -> None:
-    values = np.full((2, 2), 0.4, dtype=np.float32)
-    eaf_plane = _FakeEafPlane(values=values)
-    encoding = _residual_eaf_encoding()
-    errors: list[str] = []
-
-    completed = _validate_dense_band(
-        np.ones((2, 2), dtype=np.float16),
-        np.ones((2, 2), dtype=np.float16),
-        values,
-        _FakeSePlane(values),
-        StoreCodec(encoding),
-        encoding,
-        eaf_plane,
-        None,
-        None,
-        _band_state(),
-        2,
-        0,
-        2,
-        errors,
-    )
-
-    assert completed is True
-    assert errors == []
-    assert eaf_plane.calls == 1
-
-
-# ── Report seams: fixed diagnostic order, one seam per concern ─────────────
-
-
-def test_band_flag_reporter_emits_latched_flags_in_fixed_order():
-    findings = _band_state()
-    findings.neg_se = True
-    findings.missingness = True
-    findings.imp_not_binary = True
-    findings.imp_nan_z = True
-    findings.imp_nan_se = True
-    findings.off_panel_imputed = True
-    errors: list[str] = []
-
-    _report_dense_band_flags(errors, findings, None, None, "data.zarr/se")
-
-    assert errors == [
-        "se contains negative finite values",
-        "z and se missingness is inconsistent",
-        "data.zarr/imputed contains values other than 0 and 1",
-        "imputed=1 cells have missing z-scores",
-        "imputed=1 cells have NaN se values",
-        "off-panel (on_panel=0) rows have imputed=1 cells — off-panel is never imputable",
+# ── Value rules: one fold, one finding ─────────────────────────────────────
+
+_PRESENT = np.ones((1, 2), dtype=np.float32)
+
+
+def test_one_band_with_a_negative_se_fails_the_rule() -> None:
+    clean = Block.of(_PRESENT, [[0.1, 0.2]])
+    bad = Block.of(_PRESENT, [[0.1, -0.2]], offset=2)
+    assert _judged("associations.se_negative", [clean]) == []
+    assert _judged("associations.se_negative", [clean, bad]) == [
+        "se contains negative finite values"
+    ]
+    infinite_and_missing = Block.of(_PRESENT, [[-np.inf, np.nan]])
+    assert _judged("associations.se_negative", [infinite_and_missing]) == []
+
+
+def test_z_and_se_markers_must_agree_cell_by_cell() -> None:
+    z = np.array([[np.nan, 1.0], [1.0, np.nan]], dtype=np.float32)
+    crossed = Block.of(z, [[1.0, np.nan], [np.nan, 2.0]])
+    agreeing = Block.of(z, [[np.nan, 1.0], [2.0, np.nan]])
+    assert _judged("associations.markers_paired", [crossed]) == [
+        "z and se missingness is inconsistent"
+    ]
+    assert _judged("associations.markers_paired", [agreeing]) == []
+
+
+def test_a_mask_value_other_than_0_or_1_fails_wherever_it_sits() -> None:
+    """A 2 beside a partial cell still reports the mask's own finding."""
+    flags = np.array([[0, 2]], dtype=np.uint8)
+    block = Block.of([[1.0, np.nan]], [[1.0, 1.0]], imputed=flags)
+    assert _judged("completion.mask_binary", [block]) == [
+        "data.zarr/imputed contains values other than 0 and 1"
+    ]
+    assert _judged("associations.markers_paired", [block]) == [
+        "z and se missingness is inconsistent"
     ]
 
 
-def test_band_flag_reporter_warns_about_an_infinite_se_rather_than_failing():
-    """The one band-pass finding a release may keep is a warning, not an error (issue #337).
+def test_an_imputed_cell_missing_z_or_se_is_reported_by_each() -> None:
+    flags = np.array([[1, 1]], dtype=np.uint8)
+    bad = Block.of([[np.nan, 1.0]], [[np.nan, np.nan]], imputed=flags)
+    assert _judged("completion.imputed_present", [bad]) == [
+        "imputed=1 cells have missing z-scores",
+        "imputed=1 cells have NaN se values",
+    ]
+    present = Block.of(_PRESENT, [[1.0, 2.0]], imputed=flags)
+    assert _judged("completion.imputed_present", [present]) == []
 
-    Mutation that makes this fail: report the count as an error, never report it, or
-    count it anywhere but the band the pass already decoded.
+
+def test_an_infinite_imputed_se_is_present() -> None:
+    """An infinite value is a value (spec §15, ADR 0070); the warning counts it."""
+    block = Block.of([[1.0]], [[np.inf]], imputed=np.array([[1]], dtype=np.uint8))
+    assert _judged("completion.imputed_present", [block]) == []
+    assert _judged("associations.markers_paired", [block]) == []
+
+
+def test_imputed_cells_are_counted_per_analysis_across_bands() -> None:
+    fold = FOLDS["completion.declaration"]
+    first = Block.of(_PRESENT, _PRESENT, imputed=np.array([[1, 0]], dtype=np.uint8))
+    second = Block.of(_PRESENT, _PRESENT, imputed=np.array([[0, 1]], dtype=np.uint8), offset=2)
+    total = fold.zero + fold.measure(_grid(), first) + fold.measure(_grid(), second)
+    assert total.tolist() == [1, 1]
+
+
+def test_an_off_panel_row_with_an_imputed_cell_fails() -> None:
+    imputed = np.array([[0, 0], [1, 1]], dtype=np.uint8)
+    on_panel = np.array([1, 0], dtype=np.uint8)
+    z = np.ones((2, 2), dtype=np.float32)
+    off_panel = Block.of(z, z, imputed=imputed, on_panel=on_panel)
+    assert _judged("completion.off_panel", [off_panel]) == [
+        "off-panel (on_panel=0) rows have imputed=1 cells — off-panel is never imputable"
+    ]
+    on_panel_only = Block.of(z, z, imputed=imputed[::-1].copy(), on_panel=on_panel)
+    assert _judged("completion.off_panel", [on_panel_only]) == []
+
+
+def test_a_decoded_frequency_outside_0_1_fails() -> None:
+    outside = Block.of(_PRESENT, _PRESENT, eaf=[[0.3, 1.4]])
+    missing = Block.of(_PRESENT, _PRESENT, eaf=[[0.3, np.nan]])
+    with_frequencies = _grid({"eaf": outside.eaf})
+    assert _judged("associations.eaf_range", [outside], with_frequencies) == [
+        "data.zarr/eaf contains finite values outside [0, 1]"
+    ]
+    assert _judged("associations.eaf_range", [missing], with_frequencies) == []
+
+
+def _codes_block(codes: np.ndarray, offset: int) -> Block:
+    zeros = np.zeros(codes.shape, dtype=np.float32)
+    return Block(
+        offset=offset,
+        n_analyses=int(codes.shape[1]),
+        z_codes=codes,
+        se_codes=zeros,
+        z_missing=np.zeros(codes.shape, dtype=bool),
+    )
+
+
+def test_marked_cells_are_flat_plane_positions_in_block_order() -> None:
+    fold = FOLDS["side_tables.z_overflow"]
+    fixed = StoreEncoding(
+        z=ZEncoding(kind="int16_fixed", scale=1024), se=SeEncoding(kind="float16")
+    )
+    target = Target(Kind.GRID, "data.zarr", encoding=fixed)
+    codes = np.array([[Z_OVERFLOW, 0], [0, Z_OVERFLOW]], dtype=np.int16)
+
+    total = fold.zero
+    for block in (_codes_block(codes, 0), _codes_block(codes[::-1].copy(), 4)):
+        total = total + fold.measure(target, block)
+
+    assert total.positions.tolist() == [0, 3, 5, 6]
+    assert fold.zero.positions.dtype == np.int64 and len(fold.zero.positions) == 0
+
+
+def test_cells_held_in_row_order_are_located_without_a_second_order() -> None:
+    zeros = np.zeros((2, 3), dtype=np.float32)
+    band = Block.of(zeros, zeros, offset=2 * 3)  # rows 2 and 3 of a three-Analysis grid
+    cells = CellIndex(np.array([1, 2, 3, 3, 4], dtype=np.uint32), np.array([0, 2, 0, 1, 0]))
+
+    found, flat = band.locate(cells)
+
+    assert cells.by_row[0] is None
+    assert found.tolist() == [1, 2, 3]
+    assert flat.tolist() == [2, 3, 4]
+
+
+def test_a_validation_reads_each_tier_array_once_and_holds_the_tiers_by_row(
+    dense_store_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The structure rules run after the band scan has released the tiers, from what
+    they learned in the same load; the scan holds each tier sorted by row."""
+    tiers = top_hits.index_group(open_store(dense_store_path).arrays(mode="r"))
+    arrays = [tiers[key][name] for key in tiers for name in ("variant_index", "z", "abs_z")]
+    assert all(array.size for array in arrays), "the fixture's tiers must hold cells"
+
+    with element_reads(monkeypatch) as reads:
+        result = validate_store(dense_store_path)
+
+    assert result.ok, result.errors
+    assert [times_read(reads, array) for array in arrays] == [1.0] * len(arrays)
+    grid = Target(Kind.GRID, "data.zarr", open_store(dense_store_path))
+    assert all(tier.cells.by_row[0] is None for tier in top_hit_rules.sound_tiers(grid))
+
+
+def _top_hit_holdings(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Target, str]]:
+    """Every `top_hits/…` value a target is asked to hold that is more than a fact.
+
+    The structure rules' small facts (a tier's problem, whether its `abs_z` agrees)
+    are kept for the run; what the association scan reads to check the planes
+    against, the tiers' arrays, is not.
     """
-    findings = _band_state()
-    findings.infinite_se_per_analysis[0] = 2
-    errors: list[str] = []
-    warnings: list[str] = []
+    held: list[tuple[Target, str]] = []
+    remember = Target.remember
 
-    _report_dense_band_flags(errors, findings, warnings, None, "data.zarr/se")
+    def recording(self: Target, key: str, read: Any, *, until: str | None = None) -> Any:
+        value = remember(self, key, read, until=until)
+        if key.startswith("top_hits/") and not isinstance(value, (bool, str, type(None))):
+            held.append((self, key))
+        return value
 
-    assert errors == []
-    assert len(warnings) == 1, warnings
-    assert warnings[0].startswith("2 cell(s) of data.zarr/se hold an infinite se")
-
-
-def test_eaf_range_reporter_is_a_separate_seam_from_the_band_flags():
-    findings = _band_state()
-    findings.eaf_out_of_range = True
-    errors: list[str] = []
-
-    _report_dense_eaf_range(errors, findings)
-
-    assert errors == ["data.zarr/eaf contains finite values outside [0, 1]"]
+    monkeypatch.setattr(Target, "remember", recording)
+    return held
 
 
-# ── Position seams: the side-table lists every report seam reconciles ──────
+@pytest.mark.parametrize("interrupted", [False, True], ids=["finished", "interrupted"])
+def test_the_association_scan_holds_the_top_hit_tiers_only_for_its_pass(
+    dense_store_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, interrupted: bool
+) -> None:
+    """The real Dense scan, through `evaluate`: the tiers it held for its folds do not
+    outlive its pass, whether the pass ends or is interrupted part-way. An
+    interruption is no rule's failure: it reaches the caller."""
+    store = open_store(dense_store_path)
+    keys = list(top_hits.index_group(store.arrays(mode="r")))
+    assert keys, "the fixture's grid must carry a Top-Hit Index"
+    targets = release_targets(store, ValidationOptions())
+    held = _top_hit_holdings(monkeypatch)
+    located: list[int] = []
+    if interrupted:
+
+        def interrupt(self: Block, cells: CellIndex) -> tuple[np.ndarray, np.ndarray]:
+            located.append(len(cells.rows))
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(Block, "locate", interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            evaluate(RULES, targets)
+        assert located, "the interruption must come from inside the scan's pass"
+    else:
+        result = evaluate(RULES, targets)
+        assert result.ok, result.errors
+
+    assert {key for _, key in held} >= {"top_hits/sound", *(f"top_hits/{key}" for key in keys)}
+    assert [key for target, key in held if target.forget(key) is not None] == []
 
 
-def test_band_marked_positions_are_flat_plane_offsets():
-    raw = np.array([[1, -127, 1], [-127, 1, 1]], dtype=np.int8)
+def test_a_band_locates_the_cells_it_holds_by_their_grid_coordinates() -> None:
+    zeros = np.zeros((2, 3), dtype=np.float32)
+    band = Block.of(zeros, zeros, offset=2 * 3)  # rows 2 and 3 of a three-Analysis grid
+    rows = np.array([1, 2, 3, 3, 4], dtype=np.uint32)
+    cols = np.array([0, 2, 0, 1, 0], dtype=np.uint32)
 
-    positions = _band_marked_positions(raw, -127, r0=2, n_analyses=3)
+    found, flat = band.locate(CellIndex(rows, cols))
 
-    assert positions.tolist() == [2 * 3 + 1, 2 * 3 + 3]
+    assert found.tolist() == [1, 2, 3]
+    assert flat.tolist() == [2, 3, 4]
 
 
-def test_flatten_band_positions_concatenates_in_band_order_or_returns_empty():
-    assert _flatten_band_positions([]).tolist() == []
+def test_a_tier_flag_is_held_to_a_stored_mask_whatever_the_completion_state(
+    dense_store_path: pathlib.Path,
+) -> None:
+    """An Observed-Only grid's mask flags no imputed cell, but a tier copies the mask
+    as stored, so a tier flag of 0 against a stored 1 is still a wrong flag."""
+    store = open_store(dense_store_path)
+    assert store.manifest.completion_state is CompletionState.OBSERVED_ONLY
+    root = store.arrays(mode="r+")
+    tiers = top_hits.index_group(root)
+    keys = list(tiers)
+    row, col = int(tiers[keys[0]]["variant_index"][0]), int(tiers[keys[0]]["analysis_index"][0])
+    mask = np.zeros(root["z"].shape, dtype=np.uint8)
+    mask[row, col] = 1
+    root.create_array("imputed", shape=mask.shape, dtype="uint8")[:] = mask
+    for key in keys:
+        n = int(tiers[key]["variant_index"].shape[0])
+        assert row in tiers[key]["variant_index"][:].tolist()
+        tiers[key].create_array("imputed", shape=(n,), dtype="uint8")[:] = 0
 
-    combined = _flatten_band_positions([np.array([2]), np.array([5, 6])])
+    result = validate_store(dense_store_path, rules=["top_hits.imputed"])
 
-    assert combined.tolist() == [2, 5, 6]
+    assert "top_hits.imputed" not in result.skipped
+    assert sorted(f.message for f in result.of("top_hits.imputed")) == sorted(
+        f"top-hit index {key} contains imputed value inconsistent with imputed array"
+        for key in keys
+    )
+
+
+def test_a_release_without_frequencies_records_the_range_rule_as_skipped(
+    dense_store_path: pathlib.Path,
+) -> None:
+    """No frequency to judge is a skip, which a caller can tell from a range that held."""
+    store = open_store(dense_store_path)
+    assert "eaf" not in store.arrays(mode="r") and not store.manifest.encoding.eaf.reference
+
+    result = validate_store(dense_store_path)
+
+    assert result.ok, result.errors
+    assert result.skipped["associations.eaf_range"] == ("no frequencies",)

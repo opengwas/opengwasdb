@@ -934,7 +934,11 @@ time.
 `benchmarks/check_store_segment_order.py` runs only that one validation rule
 (the `variant_index` sorted-segment invariant, spec §11/§20), not the whole of
 `validate_store`, and reads the array in 1,000,000-cell windows so its peak
-memory is bounded. `pixi run -e dev python
+memory is bounded. The windows run over the whole sequence, not one Analysis's
+segment at a time: a window spans segments, and each cell's Analysis is read
+from the offsets. So `entries_checked` is every entry on an ordered Store, and
+on a Store with a break, the entries up to the end of the window holding the
+first one. `pixi run -e dev python
 benchmarks/check_store_segment_order.py --root /data/opengwasdb/stores` is the
 command that produced the artifact above.
 

@@ -77,8 +77,9 @@ def test_a_non_canonical_dense_marker_fails(stores, tmp_path) -> None:
     grid = zarr.open_group(store / "data.zarr", mode="r+")
     assert np.isnan(np.asarray(grid["se"][2, 0], dtype=np.float32))  # a missing cell
     grid["se"][2, 0] = PAYLOAD_NAN
-    errors = validate_store(store).errors
-    assert any("non-canonical missing marker" in e for e in errors), errors
+    result = validate_store(store)
+    assert result.failed() == {"associations.markers_canonical"}, result.errors
+    assert any("non-canonical missing marker" in e for e in result.errors)
 
 
 @pytest.mark.parametrize("case", CSR_CASES)

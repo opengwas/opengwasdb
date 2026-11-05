@@ -7,6 +7,7 @@ imputed cells, actually decide what SE and EAF read back.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -86,3 +87,8 @@ def hybrid_completed(tmp_path: Path) -> Path:
     dst = tmp_path / "comp.opengwasdb"
     complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
     return dst
+
+
+def copied(store: Path, directory: Path) -> Path:
+    """A private copy of a built store, for a test that writes into it."""
+    return Path(shutil.copytree(store, directory / store.name))

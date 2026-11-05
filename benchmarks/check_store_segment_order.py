@@ -32,7 +32,7 @@ from benchmarks._rss import RssSampler, rss_mb
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.arrays import array_length, open_group
-from opengwasdb.validation.validate import _segment_order_errors
+from opengwasdb.validation.rules.sequence import segment_order_errors
 
 
 def _loads() -> list[float]:
@@ -87,7 +87,7 @@ def _check_one(store: Path) -> dict[str, object]:
             )
             checked = 0
         else:
-            checked = _segment_order_errors(root, offsets, n_assoc, errors, "data.zarr/ragged")
+            checked = segment_order_errors(root, offsets, n_assoc, errors, "data.zarr/ragged")
         elapsed = time.perf_counter() - started
     return {
         "segments_checked": max(len(offsets) - 1, 0),
@@ -138,10 +138,13 @@ def main() -> None:
         "note": (
             "Runs only the segment-ordering rule, not the whole of validate_store. "
             "Peak RSS is the process peak while the rule ran, including opening the "
-            "store's offsets; the array is read in 1,000,000-cell windows and never "
-            "materialised. `entries_checked` is the count the scan actually read; "
-            "`entries_expected` is the offset-implied total, and the two agree only "
-            "when the array length matches the offsets."
+            "store's offsets. The array is read in 1,000,000-cell windows over the "
+            "whole sequence and never materialised; a window spans Analyses' "
+            "segments, and each cell's Analysis is read from the offsets. "
+            "`entries_checked` is the count the scan read: every entry on an ordered "
+            "Store, or the entries up to the end of the window holding the first "
+            "break. `entries_expected` is the offset-implied total; nothing is read "
+            "when the array length disagrees with the offsets."
         ),
         "stores": {},
         "load_start": _loads(),
