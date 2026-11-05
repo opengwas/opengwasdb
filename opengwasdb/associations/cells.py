@@ -106,3 +106,45 @@ class Cells:
         """The one Analysis of an `analysis` region."""
         assert self.ai is not None and self.kind == "analysis"
         return int(self.ai[0])
+
+
+def require_within(cells: Cells, n_analyses: int, source: str) -> None:
+    """Refuse a region that names an Analysis outside `[0, n_analyses)`.
+
+    Neither answer a reader would give is an error of its own. Analysis -1 reads the
+    last Analysis's cells, numbered -1, as numpy counts from the end. An Analysis past
+    the end can read as no associations, which a scan takes for no hits.
+    """
+    ai = cells.ai
+    if ai is None or not len(ai):
+        return
+    outside = (ai < 0) | (ai >= n_analyses)
+    if outside.any():
+        raise IndexError(
+            f"{source}: Analysis index {int(ai[outside][0])} is outside "
+            f"[0, {n_analyses}), the Analyses this component holds"
+        )
+
+
+def window_region(
+    cells: Cells | None,
+    max_cells: int | None,
+    *,
+    default: int,
+    n_analyses: int,
+    source: str,
+) -> tuple[Cells, int]:
+    """The region a reader's `windows` cuts, and the cells each window holds, checked.
+
+    Every reader checks the same things before it cuts a window: that a window
+    holds at least one cell, that the region names Analyses (none means all of
+    them), and that each of those Analyses is one the component holds.
+    """
+    step = default if max_cells is None else int(max_cells)
+    if step < 1:
+        raise ValueError(f"a window holds at least one cell, not {max_cells}")
+    region = Cells.analyses(0, n_analyses) if cells is None else cells
+    if region.kind not in ("analysis", "analyses"):
+        raise TypeError(f"windows cut Analyses, not a {region.kind!r} region")
+    require_within(region, n_analyses, source)
+    return region, step

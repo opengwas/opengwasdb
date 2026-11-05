@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.associations import record
-from opengwasdb.associations.cells import Cells
+from opengwasdb.associations.cells import Cells, require_within, window_region
 from opengwasdb.associations.record import Associations, Inspection, InvalidAssociations, State
 from opengwasdb.encoding import StoreEncoding
 from opengwasdb.layouts.ragged.by_variant import (
@@ -155,13 +155,20 @@ class CsrReader:
         once: each row of the region comes once, in the region's order, so the
         windows' reads joined are the region's read. A window may run on from one
         Analysis into the next. `max_cells` defaults to the scan window, eight of
-        the sequence's inner chunks (#252).
+        the sequence's inner chunks (#252). The region is checked when this is
+        called, before any window is cut (`window_region`).
         """
-        step = self.structure.scan_window if max_cells is None else int(max_cells)
-        if step < 1:
-            raise ValueError(f"a window holds at least one row, not {max_cells}")
-        whole = Cells.analyses(0, self.n_analyses)
-        for start, stop in self._runs(whole if cells is None else cells):
+        region, step = window_region(
+            cells,
+            max_cells,
+            default=self.structure.scan_window,
+            n_analyses=self.n_analyses,
+            source=self._source,
+        )
+        return self._windows(region, step)
+
+    def _windows(self, region: Cells, step: int) -> Iterator[Cells]:
+        for start, stop in self._runs(region):
             for lo in range(start, stop, step):
                 yield Cells.positions(np.arange(lo, min(lo + step, stop), dtype=np.int64))
 
@@ -196,7 +203,9 @@ class CsrReader:
         return self.inspect(cells).associations(self._source).observed_only(observed_only)
 
     def inspect(self, cells: Cells) -> Inspection:
-        """Every row of the region, decoded and classified; never raises on one."""
+        """Every row of the region, decoded and classified; never raises on one.
+        A region naming an Analysis the component does not hold is refused."""
+        require_within(cells, self.n_analyses, self._source)
         decode = {
             "analysis": self._analyses,
             "analyses": self._analyses,
@@ -217,8 +226,7 @@ class CsrReader:
     def _runs(self, cells: Cells) -> list[tuple[int, int]]:
         """The flat `[start, stop)` runs an `analysis` or `analyses` region's rows sit
         in, in its order: one for a span of Analyses, else one per Analysis."""
-        if cells.kind not in ("analysis", "analyses") or cells.ai is None:
-            raise TypeError(f"windows cut Analyses, not a {cells.kind!r} region")
+        assert cells.ai is not None
         offsets = self.structure.offsets
         span = cells.span
         bounds = [span] if span is not None else [(int(a), int(a) + 1) for a in cells.ai]

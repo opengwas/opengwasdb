@@ -17,7 +17,11 @@ Admission contract ([#357](https://github.com/opengwas/opengwasdb/issues/357)).
 > grid's are `cross` regions, each a run of one Analysis's variants: a grid
 > region is variants × Analyses, so it cannot hold the end of one Analysis and
 > the start of the next. An Indexed Variant Subset reads one whole Analysis and
-> nothing smaller, so it has no windows. The query facade's top-hit scan and
+> nothing smaller, so it has no windows. Every read, and `windows` before it
+> cuts one, refuses a region naming an Analysis outside `[0, n_analyses)`
+> with an `IndexError` naming the index (`require_within`): a grid read
+> Analysis -1 as its last Analysis, and a CSR's windows of it were empty.
+> The query facade's top-hit scan and
 > Hybrid Reference Completion's read of its source's Overflow
 > ([#391](https://github.com/opengwas/opengwasdb/issues/391)) read through
 > them, so no completion reaches `RaggedCSRReader`'s underscore attributes.

@@ -373,6 +373,52 @@ def test_windows_refuse_an_empty_window(readers, layout) -> None:
         list(readers[layout].windows(max_cells=0))
 
 
+#: Regions naming an Analysis outside the fixture's three, and the first such index.
+OUTSIDE = {
+    "analysis -1": (Cells.analysis(-1), -1),
+    "analysis n": (Cells.analysis(N_ANALYSES), N_ANALYSES),
+    "a span past the end": (Cells.analyses(2, N_ANALYSES + 1), N_ANALYSES),
+    "a list holding -1": (Cells.analyses([0, -1]), -1),
+}
+
+#: The other regions that name Analyses.
+OUTSIDE_PAIRED = {
+    "cross with -1": (Cells.cross([5], [-1]), -1),
+    "cross with n": (Cells.cross([5], [N_ANALYSES]), N_ANALYSES),
+    "pairs with -1": (Cells.pairs(np.array([5]), np.array([-1])), -1),
+}
+
+
+def _outside(index: int) -> str:
+    return rf"Analysis index {index} is outside \[0, {N_ANALYSES}\)"
+
+
+@pytest.mark.parametrize("region", sorted(OUTSIDE))
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_windows_refuse_an_analysis_outside_the_axis(readers, layout, region) -> None:
+    """Asked for, Analysis -1 would read the last Analysis's cells as its own, and an
+    empty scan reads as "no hits": the refusal comes before any window does."""
+    cells, index = OUTSIDE[region]
+    with pytest.raises(IndexError, match=_outside(index)):
+        readers[layout].windows(cells, max_cells=3)
+
+
+@pytest.mark.parametrize("region", sorted(OUTSIDE | OUTSIDE_PAIRED))
+@pytest.mark.parametrize("call", ["read", "inspect"])
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_a_region_naming_an_analysis_outside_the_axis_is_refused(
+    readers, layout, call, region
+) -> None:
+    cells, index = (OUTSIDE | OUTSIDE_PAIRED)[region]
+    with pytest.raises(IndexError, match=_outside(index)):
+        getattr(readers[layout], call)(cells)
+
+
+def test_a_dense_window_s_z_refuses_an_analysis_outside_the_axis(readers) -> None:
+    with pytest.raises(IndexError, match=_outside(-1)):
+        readers["dense"].z(Cells.cross([5], [-1]))
+
+
 @pytest.mark.parametrize("layout", ["dense", "csr"])
 def test_windows_refuse_a_region_that_is_not_analyses(readers, layout) -> None:
     with pytest.raises(TypeError, match="Analyses"):

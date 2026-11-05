@@ -7,7 +7,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from opengwasdb.associations.cells import Cells
+from opengwasdb.associations.cells import Cells, require_within, window_region
 from opengwasdb.associations.record import (
     Associations,
     Inspection,
@@ -128,19 +128,23 @@ class DenseGridReader:
         region comes once, in the region's order, so the windows' reads joined are
         the region's read. A window is a run of one Analysis's variants, since a
         grid region is variants × Analyses and cannot hold the end of one Analysis
-        and the start of the next. `max_cells` defaults to `scan_window`.
+        and the start of the next. `max_cells` defaults to `scan_window`. The
+        region is checked when this is called, before any window is cut
+        (`window_region`).
         """
-        step = self.scan_window if max_cells is None else int(max_cells)
-        if step < 1:
-            raise ValueError(f"a window holds at least one cell, not {max_cells}")
-        if cells is None:
-            analyses = np.arange(self.n_analyses)
-        elif cells.kind in ("analysis", "analyses") and cells.ai is not None:
-            analyses = cells.ai
-        else:
-            raise TypeError(f"windows cut Analyses, not a {cells.kind!r} region")
+        region, step = window_region(
+            cells,
+            max_cells,
+            default=self.scan_window,
+            n_analyses=self.n_analyses,
+            source=self._source,
+        )
+        return self._windows(region, step)
+
+    def _windows(self, region: Cells, step: int) -> Iterator[Cells]:
+        assert region.ai is not None
         n = self.n_variants
-        for analysis in analyses:
+        for analysis in region.ai:
             for lo in range(0, n, step):
                 rows = np.arange(lo, min(lo + step, n), dtype=np.int64)
                 yield Cells.cross(rows, [int(analysis)])
@@ -154,6 +158,7 @@ class DenseGridReader:
         """
         if cells.kind != "cross" or cells.vi is None or cells.ai is None:
             raise TypeError(f"Z alone is read for a window, not a {cells.kind!r} region")
+        require_within(cells, self.n_analyses, self._source)
         rows, cols = cells.vi, cells.ai
         if len(rows) == 0 or len(cols) == 0:
             return np.empty(0, dtype=np.float32)
@@ -206,6 +211,7 @@ class DenseGridReader:
     # ── decoding ────────────────────────────────────────────────────────────
 
     def _decode(self, cells: Cells) -> _Grid:
+        require_within(cells, self.n_analyses, self._source)
         decode = {
             "analysis": self._analysis,
             "analyses": self._analyses,
