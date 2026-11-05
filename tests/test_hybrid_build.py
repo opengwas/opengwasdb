@@ -2573,12 +2573,12 @@ class TestVariantReferenceRsids:
         resolved one fails before publication, on the bytes."""
         manifest = _rsid_hybrid_manifest(tmp_path)
         panel = _panel_file(tmp_path)
-        real_write = hybrid_build._write_variant_table
+        real_write = hybrid_build.write_variant_table
 
         def _blank_rsids(store_path, alids, hg38_to_source, rsid_by_alid):
             real_write(store_path, alids, hg38_to_source, {})
 
-        monkeypatch.setattr(hybrid_build, "_write_variant_table", _blank_rsids)
+        monkeypatch.setattr(hybrid_build, "write_variant_table", _blank_rsids)
         with pytest.raises(ValueError, match="carries rsid"):
             build_hybrid_from_vcf_manifest(
                 manifest, tmp_path / "blanked.opengwasdb", variant_reference=panel,

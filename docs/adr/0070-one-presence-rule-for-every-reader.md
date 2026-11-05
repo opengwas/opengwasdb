@@ -12,7 +12,10 @@ Admission contract ([#357](https://github.com/opengwas/opengwasdb/issues/357)).
 > of its sequence. `CsrReader.windows(region, max_cells=…)` cuts an `analysis`
 > or `analyses` region, or the whole sequence, into `positions` regions of at
 > most `max_cells` rows, which `read`, `inspect` and the Z-only `z` read as
-> slices. The query facade's top-hit scan reads through them.
+> slices. The query facade's top-hit scan and Hybrid Reference Completion's
+> read of its source's Overflow
+> ([#391](https://github.com/opengwas/opengwasdb/issues/391)) read through
+> them, so no completion reaches `RaggedCSRReader`'s underscore attributes.
 
 ## Context
 

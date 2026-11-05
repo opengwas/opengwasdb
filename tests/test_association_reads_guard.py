@@ -25,12 +25,18 @@ ROOT = Path(__file__).resolve().parents[1] / "opengwasdb"
 
 #: Modules that read associations only through `opengwasdb.associations`.
 READERS = (
+    "layouts/hybrid/complete.py",
     "query/facade.py",
     "query/resolve.py",
     "validation/observed_view.py",
     "validation/observed_view_ragged.py",
     "validation/observed_view_hybrid.py",
 )
+
+#: Modules that use no other module's private names: Hybrid Reference Completion
+#: read the Overflow's private arrays and imported the Hybrid builder's table
+#: writer by its private name (#391).
+OWN_NAMES_ONLY = ("layouts/hybrid/complete.py",)
 
 #: The one SE decode in a reader module: it reads no plane, but re-encodes the
 #: source's crossover cells and decodes them, to predict what completion stored.
@@ -222,3 +228,26 @@ def test_only_the_reviewed_decodes_remain(module: str) -> None:
     reviewed = {owner for owner, _ in se_decodes(source)}
     stale = {owner for (path, owner) in ALLOWED if path == module} - reviewed
     assert not stale, f"allowed decodes that no longer exist: {sorted(stale)}"
+
+
+def private_reaches(source: str) -> list[str]:
+    """Each private name `source` imports from a module, or reads off another object."""
+    found = []
+    for _, node in _in_functions(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom):
+            found += [f"imports {a.name}" for a in node.names if a.name.startswith("_")]
+        elif isinstance(node, ast.Attribute) and node.attr.startswith("_"):
+            owner = ast.unparse(node.value)
+            if not node.attr.startswith("__") and owner not in ("self", "cls"):
+                found.append(f"reads {owner}.{node.attr} at line {node.lineno}")
+    return found
+
+
+def test_the_guard_sees_a_private_name_imported_or_read() -> None:
+    source = "from m import _hidden\ndef f(csr):\n    return csr._offsets[:]\n"
+    assert private_reaches(source) == ["imports _hidden", "reads csr._offsets at line 3"]
+
+
+@pytest.mark.parametrize("module", OWN_NAMES_ONLY)
+def test_a_module_uses_no_other_module_s_private_names(module: str) -> None:
+    assert private_reaches((ROOT / module).read_text(encoding="utf-8")) == []
