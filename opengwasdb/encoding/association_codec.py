@@ -205,13 +205,21 @@ class Placement:
         analysis_index: np.ndarray | int,
         n_analyses: int,
     ) -> Placement:
-        """A run of an association sequence from flat position `start`."""
-        return cls(
-            np.asarray(variant_index, dtype=np.int64),
-            np.asarray(analysis_index, dtype=np.int64),
-            positions_flat(start),
-            n_analyses,
-        )
+        """A run of an association sequence from flat position `start`.
+
+        `analysis_index` is each cell's Analysis: one per cell, or the one
+        Analysis the whole run belongs to, which broadcasts by design. An array
+        that is not parallel to `variant_index` is refused, because the two
+        describe the same cells (issue #392).
+        """
+        variant_index = np.asarray(variant_index, dtype=np.int64)
+        analyses = np.asarray(analysis_index, dtype=np.int64)
+        if analyses.ndim:
+            require_parallel(
+                (("variant_index", variant_index), ("analysis_index", analyses)),
+                where="Placement.sequence",
+            )
+        return cls(variant_index, analyses, positions_flat(start), n_analyses)
 
 
 @dataclass(frozen=True)

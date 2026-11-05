@@ -188,6 +188,28 @@ def test_the_count_is_logged_once_naming_each_analysis(caplog) -> None:
     ]
 
 
+# ── Placement: where a batch sits ────────────────────────────────────────────
+
+
+def test_a_sequence_whose_analysis_index_is_not_parallel_is_refused() -> None:
+    """The run's variant index and its Analysis index describe the same cells."""
+    with pytest.raises(
+        ValueError,
+        match="Placement.sequence: variant_index of length 3 and analysis_index of length 2 "
+        "must be parallel",
+    ):
+        Placement.sequence(0, np.arange(3), np.array([0, 1]), 2)
+
+
+def test_one_analysis_index_of_a_sequence_stands_for_every_cell() -> None:
+    """A scalar broadcasts by design: the whole run belongs to that Analysis."""
+    at = Placement.sequence(0, np.arange(3), 1, 2)
+    kept = storable(
+        CellValues(_f32(1.0, 1.0, 1.0), _f32(0.5, np.inf, 0.5)), at.analyses, 2, where="x"
+    )
+    assert kept.se_out_of_range.tolist() == [0, 1]
+
+
 # ── AssociationCodec: one encode, in the order the planes allow ──────────────
 
 _RESIDUAL = StoreEncoding(
