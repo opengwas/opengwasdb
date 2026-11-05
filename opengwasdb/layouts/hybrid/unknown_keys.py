@@ -217,8 +217,9 @@ def encode_keys(
 ) -> EncodedKeys:
     """Encode one column's raw keys, refusing any hash collision.
 
-    The collision check is per column because the spill's last-wins dedup is:
-    two distinct raw keys sharing a value would otherwise collapse into one
+    The collision check is per column because the spill resolves a column's
+    repeated values as one association's duplicates (ADR 0072, D5): two
+    distinct raw keys sharing a value would otherwise be judged as one
     association without a trace.
     """
     resolved = _resolve_hash_fn(hash_fn)
