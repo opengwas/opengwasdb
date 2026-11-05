@@ -1,0 +1,8444 @@
+{
+ "schema": 1,
+ "provenance": {
+  "commit": "e8d91ad",
+  "measured_at": "2026-11-05T22:24:38+00:00",
+  "machine": {
+   "hostname": "app-dc3-ogws-p0.services.bris.ac.uk",
+   "cpu_model": "Intel(R) Xeon(R) Platinum 8480+",
+   "cores": 224,
+   "physical_cores": 112,
+   "memory_gb": 1006.9,
+   "platform": "Linux-4.18.0-553.177.1.el8_10.x86_64-x86_64-with-glibc2.28"
+  },
+  "sources": {
+   "__init__.py": "6db8d96be4bdd1b8",
+   "__main__.py": "36536f58f7e294f2",
+   "clump.py": "dfdc225bfca25afa",
+   "compare.py": "8fba6b06c852fc62",
+   "cost.py": "298e148e49645183",
+   "eur_map.py": "254d2c3284f56ec7",
+   "genetic_map.py": "2f1a8df62cd4c0b4",
+   "panel.py": "001227021db075cc",
+   "rule.py": "a4d0185e11b9731d",
+   "run.py": "c7185a0aa7fc3930"
+  },
+  "environment": {
+   "python": "3.12.14",
+   "numpy": "2.3.5",
+   "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-62/worktrees/406/opengwasdb",
+   "plink2": "PLINK v2.0.0-a.6.9LM 64-bit Intel (29 Jan 2025)"
+  }
+ },
+ "parameters": {
+  "d_cm": 0.5,
+  "w_bp": 1000000,
+  "r2": 0.01,
+  "clump_kb": 10000,
+  "repeats": 3,
+  "threads": 4,
+  "plink2_memory_mib": 4096,
+  "panel": "/data/opengwasdb/reference/hgdp1kgp-hg38/pgen/EUR",
+  "genetic_map": "/data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR.tsv.gz",
+  "store_root": "/data/opengwasdb/stores",
+  "budget": {
+   "quantity": "the default Top-Hit Query's own wall time for the same slice, imputed rows included",
+   "judged": "pruning runs per query when its stages cost no more than the query they follow (fast_ratio <= 1), so the reader waits at most twice as long"
+  }
+ },
+ "genetic_map_load": {
+  "load_map": {
+   "samples_s": [
+    2.7327,
+    2.2294,
+    2.2219
+   ],
+   "median_s": 2.2294,
+   "min_s": 2.2219,
+   "max_s": 2.7327,
+   "peak_mb": 553.3,
+   "peak_source": "process",
+   "child": null,
+   "load": {
+    "one": 3.49,
+    "five": 5.39,
+    "fifteen": 4.34
+   }
+  }
+ },
+ "selection": {
+  "largest_tiers": {
+   "5e-08": [
+    {
+     "store": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+     "store_id": "OGS-00011",
+     "analysis_id": "GCST004461",
+     "threshold": 5e-08,
+     "rows": 9503233
+    },
+    {
+     "store": "/data/opengwasdb/stores/OGS-00005/store.opengwasdb",
+     "store_id": "OGS-00005",
+     "analysis_id": "GCST002047",
+     "threshold": 5e-08,
+     "rows": 2314363
+    },
+    {
+     "store": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+     "store_id": "OGS-00011",
+     "analysis_id": "GCST002047",
+     "threshold": 5e-08,
+     "rows": 2313655
+    },
+    {
+     "store": "/data/opengwasdb/stores/OGS-00012/store.opengwasdb",
+     "store_id": "OGS-00012",
+     "analysis_id": "GCST90475362",
+     "threshold": 5e-08,
+     "rows": 927929
+    },
+    {
+     "store": "/data/opengwasdb/stores/OGS-00012/store.opengwasdb",
+     "store_id": "OGS-00012",
+     "analysis_id": "GCST90475359",
+     "threshold": 5e-08,
+     "rows": 873723
+    }
+   ],
+   "5e-04": [
+    {
+     "store": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+     "store_id": "OGS-00011",
+     "analysis_id": "GCST004461",
+     "threshold": 0.0005,
+     "rows": 10106246
+    },
+    {
+     "store": "/data/opengwasdb/stores/OGS-00012/store.opengwasdb",
+     "store_id": "OGS-00012",
+     "analysis_id": "GCST90475362",
+     "threshold": 0.0005,
+     "rows": 2755733
+    },
+    {
+     "store": "/data/opengwasdb/stores/OGS-00012/store.opengwasdb",
+     "store_id": "OGS-00012",
+     "analysis_id": "GCST90475359",
+     "threshold": 0.0005,
+     "rows": 2631806
+    },
+    {
+     "store": "/data/opengwasdb/stores/OGS-00012/store.opengwasdb",
+     "store_id": "OGS-00012",
+     "analysis_id": "GCST90475365",
+     "threshold": 0.0005,
+     "rows": 2443730
+    },
+    {
+     "store": "/data/opengwasdb/stores/OGS-00005/store.opengwasdb",
+     "store_id": "OGS-00005",
+     "analysis_id": "GCST002047",
+     "threshold": 0.0005,
+     "rows": 2314363
+    }
+   ]
+  },
+  "slices": [
+   {
+    "name": "largest_5e-08",
+    "store": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+    "analysis_id": "GCST004461",
+    "threshold": 5e-08,
+    "why": "the largest single-Analysis 5e-08 tier under /data/opengwasdb/stores"
+   },
+   {
+    "name": "largest_5e-04",
+    "store": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+    "analysis_id": "GCST004461",
+    "threshold": 0.0005,
+    "why": "the largest single-Analysis 5e-04 tier under /data/opengwasdb/stores"
+   },
+   {
+    "name": "mvp_5e-4",
+    "store": "/data/opengwasdb/stores/OGS-00012/store.opengwasdb",
+    "analysis_id": "GCST90475362",
+    "threshold": 0.0005,
+    "why": "the largest 5e-4 tier outside OGS-00011"
+   },
+   {
+    "name": "mvp_5e-8",
+    "store": "/data/opengwasdb/stores/OGS-00012/store.opengwasdb",
+    "analysis_id": "GCST90475362",
+    "threshold": 5e-08,
+    "why": "a Dense Reference-Completed tier an eighth the size"
+   },
+   {
+    "name": "height_5e-8",
+    "store": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+    "analysis_id": "GCST90245992",
+    "threshold": 5e-08,
+    "why": "a Hybrid tier most of whose rows are imputed"
+   },
+   {
+    "name": "observed_only_5e-8",
+    "store": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+    "analysis_id": "GCST002047",
+    "threshold": 5e-08,
+    "why": "the largest Observed-Only tier: no imputed rows at all"
+   },
+   {
+    "name": "tracer",
+    "store": "/data/opengwasdb/stores/OGS-00003/store.opengwasdb",
+    "analysis_id": "finngen-r13-BMI_IRN",
+    "threshold": 5e-08,
+    "why": "#402's tracer Analysis"
+   }
+  ]
+ },
+ "per_variant_cm": [
+  {
+   "stages": {
+    "read_variant_table": {
+     "samples_s": [
+      22.7612,
+      22.1681,
+      21.5646
+     ],
+     "median_s": 22.1681,
+     "min_s": 21.5646,
+     "max_s": 22.7612,
+     "peak_mb": 2387.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.25,
+      "five": 5.07,
+      "fifteen": 4.28
+     }
+    },
+    "interpolate": {
+     "samples_s": [
+      9.3305,
+      9.352,
+      9.4635
+     ],
+     "median_s": 9.352,
+     "min_s": 9.3305,
+     "max_s": 9.4635,
+     "peak_mb": 2459.5,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.0,
+      "five": 4.78,
+      "fifteen": 4.22
+     }
+    }
+   },
+   "variants": 48069918,
+   "off_map_variants": 1525683,
+   "off_map_chromosomes": [
+    "MT",
+    "X",
+    "Y"
+   ],
+   "mapped_bytes": 432629262,
+   "cm_dtype": "float32",
+   "store": {
+    "path": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+    "store_id": "OGS-00011",
+    "release_id": "OGS-00011-completed",
+    "format_version": "0.2.0",
+    "primary_layout": "hybrid",
+    "completion_state": "reference_completed",
+    "reference_assembly": "GRCh38"
+   },
+   "genetic_map": {
+    "map": "EUR.tsv.gz",
+    "sha256": "146989362889d686c5d52346bce2c0ad9b52d4eb687b1c165666fd680cfd4329",
+    "assembly": "GRCh38",
+    "archive": {
+     "path": "original/hg38_maps.tar.gz",
+     "md5": "45ebb10c4acf939ea03a3932c483f638",
+     "record": "https://zenodo.org/records/11437540"
+    },
+    "populations": {
+     "CEU": 0.2,
+     "GBR": 0.2,
+     "FIN": 0.2,
+     "TSI": 0.2,
+     "IBS": 0.2
+    },
+    "averaging": "equal-weight mean of the population maps' cM, each interpolated (linear between its points, flat beyond its ends) at the union of their positions",
+    "interpolation": "linear between map points; flat beyond a chromosome's ends; NaN off the map",
+    "points_per_chromosome": {
+     "1": 286994,
+     "2": 310234,
+     "3": 255893,
+     "4": 285375,
+     "5": 229473,
+     "6": 242808,
+     "7": 219149,
+     "8": 199628,
+     "9": 160587,
+     "10": 189827,
+     "11": 176996,
+     "12": 173011,
+     "13": 138712,
+     "14": 116622,
+     "15": 106470,
+     "16": 119511,
+     "17": 106789,
+     "18": 100741,
+     "19": 94112,
+     "20": 86473,
+     "21": 57594,
+     "22": 54300
+    },
+    "path": "/data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR.tsv.gz"
+   }
+  },
+  {
+   "stages": {
+    "read_variant_table": {
+     "samples_s": [
+      7.6364,
+      7.645,
+      8.0293
+     ],
+     "median_s": 7.645,
+     "min_s": 7.6364,
+     "max_s": 8.0293,
+     "peak_mb": 1597.6,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.7,
+      "five": 4.5,
+      "fifteen": 4.14
+     }
+    },
+    "interpolate": {
+     "samples_s": [
+      3.9525,
+      3.9716,
+      3.9397
+     ],
+     "median_s": 3.9525,
+     "min_s": 3.9397,
+     "max_s": 3.9716,
+     "peak_mb": 1750.6,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.63,
+      "five": 4.39,
+      "fifteen": 4.11
+     }
+    }
+   },
+   "variants": 20548967,
+   "off_map_variants": 0,
+   "off_map_chromosomes": [],
+   "mapped_bytes": 184940703,
+   "cm_dtype": "float32",
+   "store": {
+    "path": "/data/opengwasdb/stores/OGS-00012/store.opengwasdb",
+    "store_id": "OGS-00012",
+    "release_id": "OGS-00012-completed",
+    "format_version": "0.2.0",
+    "primary_layout": "dense",
+    "completion_state": "reference_completed",
+    "reference_assembly": "GRCh38"
+   },
+   "genetic_map": {
+    "map": "EUR.tsv.gz",
+    "sha256": "146989362889d686c5d52346bce2c0ad9b52d4eb687b1c165666fd680cfd4329",
+    "assembly": "GRCh38",
+    "archive": {
+     "path": "original/hg38_maps.tar.gz",
+     "md5": "45ebb10c4acf939ea03a3932c483f638",
+     "record": "https://zenodo.org/records/11437540"
+    },
+    "populations": {
+     "CEU": 0.2,
+     "GBR": 0.2,
+     "FIN": 0.2,
+     "TSI": 0.2,
+     "IBS": 0.2
+    },
+    "averaging": "equal-weight mean of the population maps' cM, each interpolated (linear between its points, flat beyond its ends) at the union of their positions",
+    "interpolation": "linear between map points; flat beyond a chromosome's ends; NaN off the map",
+    "points_per_chromosome": {
+     "1": 286994,
+     "2": 310234,
+     "3": 255893,
+     "4": 285375,
+     "5": 229473,
+     "6": 242808,
+     "7": 219149,
+     "8": 199628,
+     "9": 160587,
+     "10": 189827,
+     "11": 176996,
+     "12": 173011,
+     "13": 138712,
+     "14": 116622,
+     "15": 106470,
+     "16": 119511,
+     "17": 106789,
+     "18": 100741,
+     "19": 94112,
+     "20": 86473,
+     "21": 57594,
+     "22": 54300
+    },
+    "path": "/data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR.tsv.gz"
+   }
+  },
+  {
+   "stages": {
+    "read_variant_table": {
+     "samples_s": [
+      9.5519,
+      9.3903,
+      9.2771
+     ],
+     "median_s": 9.3903,
+     "min_s": 9.2771,
+     "max_s": 9.5519,
+     "peak_mb": 1803.4,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.75,
+      "five": 4.28,
+      "fifteen": 4.08
+     }
+    },
+    "interpolate": {
+     "samples_s": [
+      4.0334,
+      4.0425,
+      4.0552
+     ],
+     "median_s": 4.0425,
+     "min_s": 4.0334,
+     "max_s": 4.0552,
+     "peak_mb": 1803.6,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.61,
+      "five": 4.15,
+      "fifteen": 4.04
+     }
+    }
+   },
+   "variants": 21230615,
+   "off_map_variants": 832273,
+   "off_map_chromosomes": [
+    "X"
+   ],
+   "mapped_bytes": 191075535,
+   "cm_dtype": "float32",
+   "store": {
+    "path": "/data/opengwasdb/stores/OGS-00003/store.opengwasdb",
+    "store_id": "OGS-00003",
+    "release_id": "OGS-00003",
+    "format_version": "0.1.0",
+    "primary_layout": "dense",
+    "completion_state": "observed_only",
+    "reference_assembly": "GRCh38"
+   },
+   "genetic_map": {
+    "map": "EUR.tsv.gz",
+    "sha256": "146989362889d686c5d52346bce2c0ad9b52d4eb687b1c165666fd680cfd4329",
+    "assembly": "GRCh38",
+    "archive": {
+     "path": "original/hg38_maps.tar.gz",
+     "md5": "45ebb10c4acf939ea03a3932c483f638",
+     "record": "https://zenodo.org/records/11437540"
+    },
+    "populations": {
+     "CEU": 0.2,
+     "GBR": 0.2,
+     "FIN": 0.2,
+     "TSI": 0.2,
+     "IBS": 0.2
+    },
+    "averaging": "equal-weight mean of the population maps' cM, each interpolated (linear between its points, flat beyond its ends) at the union of their positions",
+    "interpolation": "linear between map points; flat beyond a chromosome's ends; NaN off the map",
+    "points_per_chromosome": {
+     "1": 286994,
+     "2": 310234,
+     "3": 255893,
+     "4": 285375,
+     "5": 229473,
+     "6": 242808,
+     "7": 219149,
+     "8": 199628,
+     "9": 160587,
+     "10": 189827,
+     "11": 176996,
+     "12": 173011,
+     "13": 138712,
+     "14": 116622,
+     "15": 106470,
+     "16": 119511,
+     "17": 106789,
+     "18": 100741,
+     "19": 94112,
+     "20": 86473,
+     "21": 57594,
+     "22": 54300
+    },
+    "path": "/data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR.tsv.gz"
+   }
+  }
+ ],
+ "slices": [
+  {
+   "name": "largest_5e-08",
+   "why": "the largest single-Analysis 5e-08 tier under /data/opengwasdb/stores",
+   "store": {
+    "path": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+    "store_id": "OGS-00011",
+    "release_id": "OGS-00011-completed",
+    "format_version": "0.2.0",
+    "primary_layout": "hybrid",
+    "completion_state": "reference_completed",
+    "reference_assembly": "GRCh38"
+   },
+   "analysis_id": "GCST004461",
+   "threshold": 5e-08,
+   "rows": {
+    "tier": 9429671,
+    "observed": 5055022,
+    "imputed": 4224216,
+    "finite_cm": 9279238,
+    "off_map": 150433,
+    "ranked": 9279238,
+    "off_map_chromosomes": [
+     "X",
+     "Y"
+    ],
+    "max_abs_z": 359.4563,
+    "rows_abs_z_over_38": 3652412
+   },
+   "stages": {
+    "tier": {
+     "samples_s": [
+      2.4576,
+      1.8654,
+      1.7756
+     ],
+     "median_s": 1.8654,
+     "min_s": 1.7756,
+     "max_s": 2.4576,
+     "peak_mb": 2775.8,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.59,
+      "five": 4.09,
+      "fifteen": 4.03
+     }
+    },
+    "positions": {
+     "samples_s": [
+      13.3299,
+      13.6203,
+      13.0884
+     ],
+     "median_s": 13.3299,
+     "min_s": 13.0884,
+     "max_s": 13.6203,
+     "peak_mb": 7758.6,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.42,
+      "five": 3.91,
+      "fifteen": 3.97
+     }
+    },
+    "positions_array": {
+     "samples_s": [
+      0.1184,
+      0.1153,
+      0.0957
+     ],
+     "median_s": 0.1153,
+     "min_s": 0.0957,
+     "max_s": 0.1184,
+     "peak_mb": 2277.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.63,
+      "five": 3.88,
+      "fifteen": 3.96
+     }
+    },
+    "cm": {
+     "samples_s": [
+      0.024,
+      0.0237,
+      0.0231
+     ],
+     "median_s": 0.0237,
+     "min_s": 0.0231,
+     "max_s": 0.024,
+     "peak_mb": 2139.2,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.63,
+      "five": 3.88,
+      "fifteen": 3.96
+     }
+    },
+    "sort": {
+     "samples_s": [
+      1.0872,
+      1.0589,
+      1.0842
+     ],
+     "median_s": 1.0842,
+     "min_s": 1.0589,
+     "max_s": 1.0872,
+     "peak_mb": 2322.2,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.63,
+      "five": 3.88,
+      "fifteen": 3.96
+     }
+    },
+    "rule": {
+     "samples_s": [
+      15.2678,
+      15.0652,
+      14.9568
+     ],
+     "median_s": 15.0652,
+     "min_s": 14.9568,
+     "max_s": 15.2678,
+     "peak_mb": 2736.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.44,
+      "five": 3.71,
+      "fifteen": 3.9
+     }
+    },
+    "rule_fast": {
+     "samples_s": [
+      3.8253,
+      3.8213,
+      3.8059
+     ],
+     "median_s": 3.8213,
+     "min_s": 3.8059,
+     "max_s": 3.8253,
+     "peak_mb": 2877.3,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.49,
+      "five": 3.62,
+      "fifteen": 3.86
+     }
+    },
+    "read_tier": {
+     "samples_s": [
+      29.8077,
+      30.1214,
+      29.1839
+     ],
+     "median_s": 29.8077,
+     "min_s": 29.1839,
+     "max_s": 30.1214,
+     "peak_mb": 19454.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.76,
+      "five": 3.48,
+      "fifteen": 3.8
+     }
+    }
+   },
+   "budget": {
+    "definition": "the default Top-Hit Query's own wall time for the same slice, imputed rows included",
+    "judged": "pruning runs per query when its stages cost no more than the query they follow (fast_ratio <= 1), so the reader waits at most twice as long",
+    "query_s": 1.8654,
+    "pruning_s": 29.503,
+    "ratio": 15.8159,
+    "within_budget_as_written": false,
+    "fast_pruning_s": 5.0445,
+    "fast_ratio": 2.7042,
+    "within_budget": false
+   },
+   "leads": {
+    "rule": 3745,
+    "identical_fast_rule": true
+   },
+   "clumping": {
+    "shared_rows": 3527954,
+    "shared_set_accounting": {
+     "tier_rows": 5205455,
+     "panel": {
+      "matched": 3527954,
+      "off_panel_chromosome": 150433,
+      "absent_at_position": 1490249,
+      "allele_mismatch": 33582,
+      "ambiguous": 3237
+     },
+     "no_cm": 150433,
+     "no_cm_by_panel_status": {
+      "matched": 0,
+      "off_panel_chromosome": 150433,
+      "absent_at_position": 0,
+      "allele_mismatch": 0,
+      "ambiguous": 0
+     },
+     "shared_set": 3527954,
+     "shared_set_share": 0.6777417151814779,
+     "partition": {
+      "shared_set": 3527954,
+      "matched_no_cm": 0,
+      "off_panel_chromosome": 150433,
+      "absent_at_position": 1490249,
+      "allele_mismatch": 33582,
+      "ambiguous": 3237
+     }
+    },
+    "stages": {
+     "shared_set": {
+      "samples_s": [
+       32.8083,
+       34.4464,
+       37.15
+      ],
+      "median_s": 34.4464,
+      "min_s": 32.8083,
+      "max_s": 37.15,
+      "peak_mb": 16076.5,
+      "peak_source": "process",
+      "child": null,
+      "load": {
+       "one": 2.82,
+       "five": 3.34,
+       "fifteen": 3.71
+      }
+     },
+     "ranked": {
+      "samples_s": [
+       0.6777,
+       0.636,
+       0.6511
+      ],
+      "median_s": 0.6511,
+      "min_s": 0.636,
+      "max_s": 0.6777,
+      "peak_mb": 12491.6,
+      "peak_source": "process",
+      "child": null,
+      "load": {
+       "one": 15.73,
+       "five": 6.16,
+       "fifteen": 4.62
+      }
+     },
+     "chr1": {
+      "samples_s": [
+       0.897,
+       0.8887,
+       1.0469
+      ],
+      "median_s": 0.897,
+      "min_s": 0.8887,
+      "max_s": 1.0469,
+      "peak_mb": 204.7,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 15.73,
+       "five": 6.16,
+       "fifteen": 4.62
+      }
+     },
+     "chr2": {
+      "samples_s": [
+       1.0395,
+       0.9259,
+       1.0842
+      ],
+      "median_s": 1.0395,
+      "min_s": 0.9259,
+      "max_s": 1.0842,
+      "peak_mb": 215.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 14.79,
+       "five": 6.12,
+       "fifteen": 4.62
+      }
+     },
+     "chr3": {
+      "samples_s": [
+       1.2151,
+       1.4269,
+       1.4663
+      ],
+      "median_s": 1.4269,
+      "min_s": 1.2151,
+      "max_s": 1.4663,
+      "peak_mb": 188.9,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 25.78,
+       "five": 8.54,
+       "fifteen": 5.41
+      }
+     },
+     "chr4": {
+      "samples_s": [
+       1.3338,
+       0.9983,
+       0.9852
+      ],
+      "median_s": 0.9983,
+      "min_s": 0.9852,
+      "max_s": 1.3338,
+      "peak_mb": 188.7,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 25.78,
+       "five": 8.54,
+       "fifteen": 5.41
+      }
+     },
+     "chr5": {
+      "samples_s": [
+       0.9176,
+       0.8032,
+       0.7849
+      ],
+      "median_s": 0.8032,
+      "min_s": 0.7849,
+      "max_s": 0.9176,
+      "peak_mb": 168.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 28.76,
+       "five": 9.45,
+       "fifteen": 5.72
+      }
+     },
+     "chr6": {
+      "samples_s": [
+       0.8303,
+       0.8327,
+       0.7914
+      ],
+      "median_s": 0.8303,
+      "min_s": 0.7914,
+      "max_s": 0.8327,
+      "peak_mb": 183.7,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 28.76,
+       "five": 9.45,
+       "fifteen": 5.72
+      }
+     },
+     "chr7": {
+      "samples_s": [
+       0.7701,
+       0.7575,
+       0.7588
+      ],
+      "median_s": 0.7588,
+      "min_s": 0.7575,
+      "max_s": 0.7701,
+      "peak_mb": 161.8,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 31.18,
+       "five": 10.27,
+       "fifteen": 6.01
+      }
+     },
+     "chr8": {
+      "samples_s": [
+       0.7572,
+       0.6528,
+       0.6514
+      ],
+      "median_s": 0.6528,
+      "min_s": 0.6514,
+      "max_s": 0.7572,
+      "peak_mb": 149.9,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 31.18,
+       "five": 10.27,
+       "fifteen": 6.01
+      }
+     },
+     "chr9": {
+      "samples_s": [
+       0.5336,
+       0.539,
+       0.6043
+      ],
+      "median_s": 0.539,
+      "min_s": 0.5336,
+      "max_s": 0.6043,
+      "peak_mb": 127.5,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 33.49,
+       "five": 11.1,
+       "fifteen": 6.3
+      }
+     },
+     "chr10": {
+      "samples_s": [
+       0.7994,
+       0.6622,
+       0.6815
+      ],
+      "median_s": 0.6815,
+      "min_s": 0.6622,
+      "max_s": 0.7994,
+      "peak_mb": 143.6,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 33.49,
+       "five": 11.1,
+       "fifteen": 6.3
+      }
+     },
+     "chr11": {
+      "samples_s": [
+       0.6362,
+       0.7318,
+       0.6039
+      ],
+      "median_s": 0.6362,
+      "min_s": 0.6039,
+      "max_s": 0.7318,
+      "peak_mb": 138.8,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 33.49,
+       "five": 11.1,
+       "fifteen": 6.3
+      }
+     },
+     "chr12": {
+      "samples_s": [
+       0.6542,
+       0.6806,
+       0.7761
+      ],
+      "median_s": 0.6806,
+      "min_s": 0.6542,
+      "max_s": 0.7761,
+      "peak_mb": 138.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 36.5,
+       "five": 12.09,
+       "fifteen": 6.65
+      }
+     },
+     "chr13": {
+      "samples_s": [
+       0.5792,
+       0.5064,
+       0.4814
+      ],
+      "median_s": 0.5064,
+      "min_s": 0.4814,
+      "max_s": 0.5792,
+      "peak_mb": 107.9,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 36.5,
+       "five": 12.09,
+       "fifteen": 6.65
+      }
+     },
+     "chr14": {
+      "samples_s": [
+       0.4542,
+       0.4225,
+       0.4412
+      ],
+      "median_s": 0.4412,
+      "min_s": 0.4225,
+      "max_s": 0.4542,
+      "peak_mb": 101.0,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 39.18,
+       "five": 13.05,
+       "fifteen": 6.99
+      }
+     },
+     "chr15": {
+      "samples_s": [
+       0.3941,
+       0.3839,
+       0.4082
+      ],
+      "median_s": 0.3941,
+      "min_s": 0.3839,
+      "max_s": 0.4082,
+      "peak_mb": 91.9,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 39.18,
+       "five": 13.05,
+       "fifteen": 6.99
+      }
+     },
+     "chr16": {
+      "samples_s": [
+       0.4018,
+       0.3938,
+       0.3988
+      ],
+      "median_s": 0.3988,
+      "min_s": 0.3938,
+      "max_s": 0.4018,
+      "peak_mb": 95.2,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 39.18,
+       "five": 13.05,
+       "fifteen": 6.99
+      }
+     },
+     "chr17": {
+      "samples_s": [
+       0.3587,
+       0.4023,
+       0.3718
+      ],
+      "median_s": 0.3718,
+      "min_s": 0.3587,
+      "max_s": 0.4023,
+      "peak_mb": 92.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 39.18,
+       "five": 13.05,
+       "fifteen": 6.99
+      }
+     },
+     "chr18": {
+      "samples_s": [
+       0.3597,
+       0.3537,
+       0.3515
+      ],
+      "median_s": 0.3537,
+      "min_s": 0.3515,
+      "max_s": 0.3597,
+      "peak_mb": 91.1,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 39.18,
+       "five": 13.05,
+       "fifteen": 6.99
+      }
+     },
+     "chr19": {
+      "samples_s": [
+       0.3093,
+       0.339,
+       0.3012
+      ],
+      "median_s": 0.3093,
+      "min_s": 0.3012,
+      "max_s": 0.339,
+      "peak_mb": 83.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 40.61,
+       "five": 13.78,
+       "fifteen": 7.25
+      }
+     },
+     "chr20": {
+      "samples_s": [
+       0.3164,
+       0.2895,
+       0.2778
+      ],
+      "median_s": 0.2895,
+      "min_s": 0.2778,
+      "max_s": 0.3164,
+      "peak_mb": 76.1,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 40.61,
+       "five": 13.78,
+       "fifteen": 7.25
+      }
+     },
+     "chr21": {
+      "samples_s": [
+       0.1958,
+       0.2158,
+       0.2033
+      ],
+      "median_s": 0.2033,
+      "min_s": 0.1958,
+      "max_s": 0.2158,
+      "peak_mb": 59.7,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 40.61,
+       "five": 13.78,
+       "fifteen": 7.25
+      }
+     },
+     "chr22": {
+      "samples_s": [
+       0.1844,
+       0.2055,
+       0.2056
+      ],
+      "median_s": 0.2055,
+      "min_s": 0.1844,
+      "max_s": 0.2056,
+      "peak_mb": 61.6,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 40.61,
+       "five": 13.78,
+       "fifteen": 7.25
+      }
+     }
+    },
+    "per_chromosome": [
+     {
+      "chromosome": "1",
+      "rows": 270910,
+      "index_variants": 1977,
+      "samples_s": [
+       0.897,
+       0.8887,
+       1.0469
+      ],
+      "median_s": 0.897,
+      "min_s": 0.8887,
+      "max_s": 1.0469,
+      "peak_mb": 204.7,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 15.73,
+       "five": 6.16,
+       "fifteen": 4.62
+      }
+     },
+     {
+      "chromosome": "2",
+      "rows": 293603,
+      "index_variants": 1956,
+      "samples_s": [
+       1.0395,
+       0.9259,
+       1.0842
+      ],
+      "median_s": 1.0395,
+      "min_s": 0.9259,
+      "max_s": 1.0842,
+      "peak_mb": 215.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 14.79,
+       "five": 6.12,
+       "fifteen": 4.62
+      }
+     },
+     {
+      "chromosome": "3",
+      "rows": 255330,
+      "index_variants": 1652,
+      "samples_s": [
+       1.2151,
+       1.4269,
+       1.4663
+      ],
+      "median_s": 1.4269,
+      "min_s": 1.2151,
+      "max_s": 1.4663,
+      "peak_mb": 188.9,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 25.78,
+       "five": 8.54,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "4",
+      "rows": 257513,
+      "index_variants": 1596,
+      "samples_s": [
+       1.3338,
+       0.9983,
+       0.9852
+      ],
+      "median_s": 0.9983,
+      "min_s": 0.9852,
+      "max_s": 1.3338,
+      "peak_mb": 188.7,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 25.78,
+       "five": 8.54,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "5",
+      "rows": 219693,
+      "index_variants": 1508,
+      "samples_s": [
+       0.9176,
+       0.8032,
+       0.7849
+      ],
+      "median_s": 0.8032,
+      "min_s": 0.7849,
+      "max_s": 0.9176,
+      "peak_mb": 168.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 28.76,
+       "five": 9.45,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "6",
+      "rows": 243702,
+      "index_variants": 1442,
+      "samples_s": [
+       0.8303,
+       0.8327,
+       0.7914
+      ],
+      "median_s": 0.8303,
+      "min_s": 0.7914,
+      "max_s": 0.8327,
+      "peak_mb": 183.7,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 28.76,
+       "five": 9.45,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "7",
+      "rows": 208748,
+      "index_variants": 1385,
+      "samples_s": [
+       0.7701,
+       0.7575,
+       0.7588
+      ],
+      "median_s": 0.7588,
+      "min_s": 0.7575,
+      "max_s": 0.7701,
+      "peak_mb": 161.8,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 31.18,
+       "five": 10.27,
+       "fifteen": 6.01
+      }
+     },
+     {
+      "chromosome": "8",
+      "rows": 191705,
+      "index_variants": 1242,
+      "samples_s": [
+       0.7572,
+       0.6528,
+       0.6514
+      ],
+      "median_s": 0.6528,
+      "min_s": 0.6514,
+      "max_s": 0.7572,
+      "peak_mb": 149.9,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 31.18,
+       "five": 10.27,
+       "fifteen": 6.01
+      }
+     },
+     {
+      "chromosome": "9",
+      "rows": 151702,
+      "index_variants": 1136,
+      "samples_s": [
+       0.5336,
+       0.539,
+       0.6043
+      ],
+      "median_s": 0.539,
+      "min_s": 0.5336,
+      "max_s": 0.6043,
+      "peak_mb": 127.5,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 33.49,
+       "five": 11.1,
+       "fifteen": 6.3
+      }
+     },
+     {
+      "chromosome": "10",
+      "rows": 175307,
+      "index_variants": 1238,
+      "samples_s": [
+       0.7994,
+       0.6622,
+       0.6815
+      ],
+      "median_s": 0.6815,
+      "min_s": 0.6622,
+      "max_s": 0.7994,
+      "peak_mb": 143.6,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 33.49,
+       "five": 11.1,
+       "fifteen": 6.3
+      }
+     },
+     {
+      "chromosome": "11",
+      "rows": 175183,
+      "index_variants": 1153,
+      "samples_s": [
+       0.6362,
+       0.7318,
+       0.6039
+      ],
+      "median_s": 0.6362,
+      "min_s": 0.6039,
+      "max_s": 0.7318,
+      "peak_mb": 138.8,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 33.49,
+       "five": 11.1,
+       "fifteen": 6.3
+      }
+     },
+     {
+      "chromosome": "12",
+      "rows": 173458,
+      "index_variants": 1201,
+      "samples_s": [
+       0.6542,
+       0.6806,
+       0.7761
+      ],
+      "median_s": 0.6806,
+      "min_s": 0.6542,
+      "max_s": 0.7761,
+      "peak_mb": 138.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 36.5,
+       "five": 12.09,
+       "fifteen": 6.65
+      }
+     },
+     {
+      "chromosome": "13",
+      "rows": 129096,
+      "index_variants": 910,
+      "samples_s": [
+       0.5792,
+       0.5064,
+       0.4814
+      ],
+      "median_s": 0.5064,
+      "min_s": 0.4814,
+      "max_s": 0.5792,
+      "peak_mb": 107.9,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 36.5,
+       "five": 12.09,
+       "fifteen": 6.65
+      }
+     },
+     {
+      "chromosome": "14",
+      "rows": 115710,
+      "index_variants": 840,
+      "samples_s": [
+       0.4542,
+       0.4225,
+       0.4412
+      ],
+      "median_s": 0.4412,
+      "min_s": 0.4225,
+      "max_s": 0.4542,
+      "peak_mb": 101.0,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 39.18,
+       "five": 13.05,
+       "fifteen": 6.99
+      }
+     },
+     {
+      "chromosome": "15",
+      "rows": 98298,
+      "index_variants": 814,
+      "samples_s": [
+       0.3941,
+       0.3839,
+       0.4082
+      ],
+      "median_s": 0.3941,
+      "min_s": 0.3839,
+      "max_s": 0.4082,
+      "peak_mb": 91.9,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 39.18,
+       "five": 13.05,
+       "fifteen": 6.99
+      }
+     },
+     {
+      "chromosome": "16",
+      "rows": 110080,
+      "index_variants": 887,
+      "samples_s": [
+       0.4018,
+       0.3938,
+       0.3988
+      ],
+      "median_s": 0.3988,
+      "min_s": 0.3938,
+      "max_s": 0.4018,
+      "peak_mb": 95.2,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 39.18,
+       "five": 13.05,
+       "fifteen": 6.99
+      }
+     },
+     {
+      "chromosome": "17",
+      "rows": 97208,
+      "index_variants": 869,
+      "samples_s": [
+       0.3587,
+       0.4023,
+       0.3718
+      ],
+      "median_s": 0.3718,
+      "min_s": 0.3587,
+      "max_s": 0.4023,
+      "peak_mb": 92.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 39.18,
+       "five": 13.05,
+       "fifteen": 6.99
+      }
+     },
+     {
+      "chromosome": "18",
+      "rows": 101752,
+      "index_variants": 780,
+      "samples_s": [
+       0.3597,
+       0.3537,
+       0.3515
+      ],
+      "median_s": 0.3537,
+      "min_s": 0.3515,
+      "max_s": 0.3597,
+      "peak_mb": 91.1,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 39.18,
+       "five": 13.05,
+       "fifteen": 6.99
+      }
+     },
+     {
+      "chromosome": "19",
+      "rows": 82913,
+      "index_variants": 740,
+      "samples_s": [
+       0.3093,
+       0.339,
+       0.3012
+      ],
+      "median_s": 0.3093,
+      "min_s": 0.3012,
+      "max_s": 0.339,
+      "peak_mb": 83.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 40.61,
+       "five": 13.78,
+       "fifteen": 7.25
+      }
+     },
+     {
+      "chromosome": "20",
+      "rows": 78650,
+      "index_variants": 704,
+      "samples_s": [
+       0.3164,
+       0.2895,
+       0.2778
+      ],
+      "median_s": 0.2895,
+      "min_s": 0.2778,
+      "max_s": 0.3164,
+      "peak_mb": 76.1,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 40.61,
+       "five": 13.78,
+       "fifteen": 7.25
+      }
+     },
+     {
+      "chromosome": "21",
+      "rows": 49109,
+      "index_variants": 407,
+      "samples_s": [
+       0.1958,
+       0.2158,
+       0.2033
+      ],
+      "median_s": 0.2033,
+      "min_s": 0.1958,
+      "max_s": 0.2158,
+      "peak_mb": 59.7,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 40.61,
+       "five": 13.78,
+       "fifteen": 7.25
+      }
+     },
+     {
+      "chromosome": "22",
+      "rows": 48284,
+      "index_variants": 441,
+      "samples_s": [
+       0.1844,
+       0.2055,
+       0.2056
+      ],
+      "median_s": 0.2055,
+      "min_s": 0.1844,
+      "max_s": 0.2056,
+      "peak_mb": 61.6,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 40.61,
+       "five": 13.78,
+       "fifteen": 7.25
+      }
+     }
+    ],
+    "index_variants": 24878,
+    "members": 3527954,
+    "clump_s": 13.4177,
+    "order_followed": true,
+    "r2": 0.01,
+    "clump_kb": 10000,
+    "total_s": 48.5152,
+    "rows": 3527954
+   },
+   "ratio": {
+    "rows": 3527954,
+    "pruning_s": 6.7998,
+    "clumping_s": 48.5152,
+    "value": 0.1402,
+    "fast_pruning_s": 2.4924,
+    "fast_value": 0.0514,
+    "definition": "pruning (cM lookup, sort, rule) over clumping (shared set, ranking, plink2 with genotypes) on the shared set of the same Analysis"
+   }
+  },
+  {
+   "name": "largest_5e-04",
+   "why": "the largest single-Analysis 5e-04 tier under /data/opengwasdb/stores",
+   "store": {
+    "path": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+    "store_id": "OGS-00011",
+    "release_id": "OGS-00011-completed",
+    "format_version": "0.2.0",
+    "primary_layout": "hybrid",
+    "completion_state": "reference_completed",
+    "reference_assembly": "GRCh38"
+   },
+   "analysis_id": "GCST004461",
+   "threshold": 0.0005,
+   "rows": {
+    "tier": 10087639,
+    "observed": 5352976,
+    "imputed": 4570875,
+    "finite_cm": 9923851,
+    "off_map": 163788,
+    "ranked": 9923851,
+    "off_map_chromosomes": [
+     "X",
+     "Y"
+    ],
+    "max_abs_z": 359.4563,
+    "rows_abs_z_over_38": 3652412
+   },
+   "stages": {
+    "tier": {
+     "samples_s": [
+      1.9591,
+      1.9684,
+      1.9635
+     ],
+     "median_s": 1.9635,
+     "min_s": 1.9591,
+     "max_s": 1.9684,
+     "peak_mb": 3532.5,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 33.59,
+      "five": 15.24,
+      "fifteen": 8.0
+     }
+    },
+    "positions": {
+     "samples_s": [
+      17.4945,
+      14.3777,
+      14.5043
+     ],
+     "median_s": 14.5043,
+     "min_s": 14.3777,
+     "max_s": 17.4945,
+     "peak_mb": 8275.0,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 24.12,
+      "five": 14.72,
+      "fifteen": 8.06
+     }
+    },
+    "positions_array": {
+     "samples_s": [
+      0.1193,
+      0.1259,
+      0.0985
+     ],
+     "median_s": 0.1193,
+     "min_s": 0.0985,
+     "max_s": 0.1259,
+     "peak_mb": 2941.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 20.23,
+      "five": 14.32,
+      "fifteen": 8.04
+     }
+    },
+    "cm": {
+     "samples_s": [
+      0.0249,
+      0.024,
+      0.0238
+     ],
+     "median_s": 0.024,
+     "min_s": 0.0238,
+     "max_s": 0.0249,
+     "peak_mb": 2783.3,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 20.23,
+      "five": 14.32,
+      "fifteen": 8.04
+     }
+    },
+    "sort": {
+     "samples_s": [
+      1.159,
+      1.1756,
+      1.1434
+     ],
+     "median_s": 1.159,
+     "min_s": 1.1434,
+     "max_s": 1.1756,
+     "peak_mb": 2977.3,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 19.01,
+      "five": 14.17,
+      "fifteen": 8.02
+     }
+    },
+    "rule": {
+     "samples_s": [
+      16.3854,
+      16.4726,
+      17.2874
+     ],
+     "median_s": 16.4726,
+     "min_s": 16.3854,
+     "max_s": 17.2874,
+     "peak_mb": 3447.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 11.99,
+      "five": 12.95,
+      "fifteen": 7.84
+     }
+    },
+    "rule_fast": {
+     "samples_s": [
+      4.058,
+      4.4958,
+      4.1373
+     ],
+     "median_s": 4.1373,
+     "min_s": 4.058,
+     "max_s": 4.4958,
+     "peak_mb": 3597.5,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 9.14,
+      "five": 12.2,
+      "fifteen": 7.72
+     }
+    },
+    "read_tier": {
+     "samples_s": [
+      31.3832,
+      32.3639,
+      32.353
+     ],
+     "median_s": 32.353,
+     "min_s": 31.3832,
+     "max_s": 32.3639,
+     "peak_mb": 20597.7,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 5.6,
+      "five": 10.63,
+      "fifteen": 7.49
+     }
+    }
+   },
+   "budget": {
+    "definition": "the default Top-Hit Query's own wall time for the same slice, imputed rows included",
+    "judged": "pruning runs per query when its stages cost no more than the query they follow (fast_ratio <= 1), so the reader waits at most twice as long",
+    "query_s": 1.9635,
+    "pruning_s": 32.1599,
+    "ratio": 16.3789,
+    "within_budget_as_written": false,
+    "fast_pruning_s": 5.4396,
+    "fast_ratio": 2.7704,
+    "within_budget": false
+   },
+   "leads": {
+    "rule": 3745,
+    "identical_fast_rule": true
+   },
+   "clumping": {
+    "shared_rows": 3529871,
+    "shared_set_accounting": {
+     "tier_rows": 5516764,
+     "panel": {
+      "matched": 3529871,
+      "off_panel_chromosome": 163788,
+      "absent_at_position": 1784275,
+      "allele_mismatch": 35588,
+      "ambiguous": 3242
+     },
+     "no_cm": 163788,
+     "no_cm_by_panel_status": {
+      "matched": 0,
+      "off_panel_chromosome": 163788,
+      "absent_at_position": 0,
+      "allele_mismatch": 0,
+      "ambiguous": 0
+     },
+     "shared_set": 3529871,
+     "shared_set_share": 0.6398444812937439,
+     "partition": {
+      "shared_set": 3529871,
+      "matched_no_cm": 0,
+      "off_panel_chromosome": 163788,
+      "absent_at_position": 1784275,
+      "allele_mismatch": 35588,
+      "ambiguous": 3242
+     }
+    },
+    "stages": {
+     "shared_set": {
+      "samples_s": [
+       34.573,
+       34.307,
+       38.1413
+      ],
+      "median_s": 34.573,
+      "min_s": 34.307,
+      "max_s": 38.1413,
+      "peak_mb": 16571.8,
+      "peak_source": "process",
+      "child": null,
+      "load": {
+       "one": 3.35,
+       "five": 8.39,
+       "fifteen": 7.02
+      }
+     },
+     "ranked": {
+      "samples_s": [
+       0.6141,
+       0.6072,
+       0.6151
+      ],
+      "median_s": 0.6141,
+      "min_s": 0.6072,
+      "max_s": 0.6151,
+      "peak_mb": 13082.5,
+      "peak_source": "process",
+      "child": null,
+      "load": {
+       "one": 2.99,
+       "five": 7.67,
+       "fifteen": 6.83
+      }
+     },
+     "chr1": {
+      "samples_s": [
+       0.9037,
+       0.8789,
+       1.0145
+      ],
+      "median_s": 0.9037,
+      "min_s": 0.8789,
+      "max_s": 1.0145,
+      "peak_mb": 204.8,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.99,
+       "five": 7.67,
+       "fifteen": 6.83
+      }
+     },
+     "chr2": {
+      "samples_s": [
+       1.1044,
+       1.0992,
+       1.0996
+      ],
+      "median_s": 1.0996,
+      "min_s": 1.0992,
+      "max_s": 1.1044,
+      "peak_mb": 215.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.99,
+       "five": 7.59,
+       "fifteen": 6.81
+      }
+     },
+     "chr3": {
+      "samples_s": [
+       1.1019,
+       0.9766,
+       0.9648
+      ],
+      "median_s": 0.9766,
+      "min_s": 0.9648,
+      "max_s": 1.1019,
+      "peak_mb": 189.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.99,
+       "five": 7.59,
+       "fifteen": 6.81
+      }
+     },
+     "chr4": {
+      "samples_s": [
+       0.9752,
+       0.9647,
+       1.0085
+      ],
+      "median_s": 0.9752,
+      "min_s": 0.9647,
+      "max_s": 1.0085,
+      "peak_mb": 191.0,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.0,
+       "five": 7.51,
+       "fifteen": 6.79
+      }
+     },
+     "chr5": {
+      "samples_s": [
+       0.8287,
+       0.8314,
+       0.8444
+      ],
+      "median_s": 0.8314,
+      "min_s": 0.8287,
+      "max_s": 0.8444,
+      "peak_mb": 168.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.0,
+       "five": 7.51,
+       "fifteen": 6.79
+      }
+     },
+     "chr6": {
+      "samples_s": [
+       0.9376,
+       0.9075,
+       0.9024
+      ],
+      "median_s": 0.9075,
+      "min_s": 0.9024,
+      "max_s": 0.9376,
+      "peak_mb": 183.7,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.0,
+       "five": 7.44,
+       "fifteen": 6.77
+      }
+     },
+     "chr7": {
+      "samples_s": [
+       0.8033,
+       1.2796,
+       1.147
+      ],
+      "median_s": 1.147,
+      "min_s": 0.8033,
+      "max_s": 1.2796,
+      "peak_mb": 164.1,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.0,
+       "five": 7.36,
+       "fifteen": 6.75
+      }
+     },
+     "chr8": {
+      "samples_s": [
+       0.8393,
+       1.1274,
+       1.1626
+      ],
+      "median_s": 1.1274,
+      "min_s": 0.8393,
+      "max_s": 1.1626,
+      "peak_mb": 150.8,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.0,
+       "five": 7.36,
+       "fifteen": 6.75
+      }
+     },
+     "chr9": {
+      "samples_s": [
+       0.6648,
+       0.6598,
+       1.0137
+      ],
+      "median_s": 0.6648,
+      "min_s": 0.6598,
+      "max_s": 1.0137,
+      "peak_mb": 129.5,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.92,
+       "five": 7.27,
+       "fifteen": 6.72
+      }
+     },
+     "chr10": {
+      "samples_s": [
+       0.7744,
+       0.7328,
+       1.0154
+      ],
+      "median_s": 0.7744,
+      "min_s": 0.7328,
+      "max_s": 1.0154,
+      "peak_mb": 145.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.92,
+       "five": 7.27,
+       "fifteen": 6.72
+      }
+     },
+     "chr11": {
+      "samples_s": [
+       0.7899,
+       1.089,
+       1.0929
+      ],
+      "median_s": 1.089,
+      "min_s": 0.7899,
+      "max_s": 1.0929,
+      "peak_mb": 141.2,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.84,
+       "five": 7.19,
+       "fifteen": 6.7
+      }
+     },
+     "chr12": {
+      "samples_s": [
+       0.764,
+       1.0786,
+       1.1042
+      ],
+      "median_s": 1.0786,
+      "min_s": 0.764,
+      "max_s": 1.1042,
+      "peak_mb": 139.7,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.84,
+       "five": 7.19,
+       "fifteen": 6.7
+      }
+     },
+     "chr13": {
+      "samples_s": [
+       0.8644,
+       0.5345,
+       0.5433
+      ],
+      "median_s": 0.5433,
+      "min_s": 0.5345,
+      "max_s": 0.8644,
+      "peak_mb": 108.6,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.02,
+       "five": 7.15,
+       "fifteen": 6.69
+      }
+     },
+     "chr14": {
+      "samples_s": [
+       0.7553,
+       0.4623,
+       0.4625
+      ],
+      "median_s": 0.4625,
+      "min_s": 0.4623,
+      "max_s": 0.7553,
+      "peak_mb": 101.7,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.02,
+       "five": 7.15,
+       "fifteen": 6.69
+      }
+     },
+     "chr15": {
+      "samples_s": [
+       0.4075,
+       0.4194,
+       0.4058
+      ],
+      "median_s": 0.4075,
+      "min_s": 0.4058,
+      "max_s": 0.4194,
+      "peak_mb": 91.8,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.02,
+       "five": 7.15,
+       "fifteen": 6.69
+      }
+     },
+     "chr16": {
+      "samples_s": [
+       0.4641,
+       0.4638,
+       0.4634
+      ],
+      "median_s": 0.4638,
+      "min_s": 0.4634,
+      "max_s": 0.4641,
+      "peak_mb": 97.2,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.01,
+       "five": 7.08,
+       "fifteen": 6.67
+      }
+     },
+     "chr17": {
+      "samples_s": [
+       0.4074,
+       0.4061,
+       0.405
+      ],
+      "median_s": 0.4061,
+      "min_s": 0.405,
+      "max_s": 0.4074,
+      "peak_mb": 92.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.01,
+       "five": 7.08,
+       "fifteen": 6.67
+      }
+     },
+     "chr18": {
+      "samples_s": [
+       0.4156,
+       0.4246,
+       0.4165
+      ],
+      "median_s": 0.4165,
+      "min_s": 0.4156,
+      "max_s": 0.4246,
+      "peak_mb": 90.8,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.01,
+       "five": 7.08,
+       "fifteen": 6.67
+      }
+     },
+     "chr19": {
+      "samples_s": [
+       0.3643,
+       0.3686,
+       0.3762
+      ],
+      "median_s": 0.3686,
+      "min_s": 0.3643,
+      "max_s": 0.3762,
+      "peak_mb": 83.1,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.01,
+       "five": 7.08,
+       "fifteen": 6.67
+      }
+     },
+     "chr20": {
+      "samples_s": [
+       0.3359,
+       0.3343,
+       0.3336
+      ],
+      "median_s": 0.3343,
+      "min_s": 0.3336,
+      "max_s": 0.3359,
+      "peak_mb": 77.0,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.93,
+       "five": 7.0,
+       "fifteen": 6.64
+      }
+     },
+     "chr21": {
+      "samples_s": [
+       0.2279,
+       0.2248,
+       0.2293
+      ],
+      "median_s": 0.2279,
+      "min_s": 0.2248,
+      "max_s": 0.2293,
+      "peak_mb": 61.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.93,
+       "five": 7.0,
+       "fifteen": 6.64
+      }
+     },
+     "chr22": {
+      "samples_s": [
+       0.2249,
+       0.2315,
+       0.2228
+      ],
+      "median_s": 0.2249,
+      "min_s": 0.2228,
+      "max_s": 0.2315,
+      "peak_mb": 62.8,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.93,
+       "five": 7.0,
+       "fifteen": 6.64
+      }
+     }
+    },
+    "per_chromosome": [
+     {
+      "chromosome": "1",
+      "rows": 271061,
+      "index_variants": 1983,
+      "samples_s": [
+       0.9037,
+       0.8789,
+       1.0145
+      ],
+      "median_s": 0.9037,
+      "min_s": 0.8789,
+      "max_s": 1.0145,
+      "peak_mb": 204.8,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.99,
+       "five": 7.67,
+       "fifteen": 6.83
+      }
+     },
+     {
+      "chromosome": "2",
+      "rows": 293758,
+      "index_variants": 1957,
+      "samples_s": [
+       1.1044,
+       1.0992,
+       1.0996
+      ],
+      "median_s": 1.0996,
+      "min_s": 1.0992,
+      "max_s": 1.1044,
+      "peak_mb": 215.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.99,
+       "five": 7.59,
+       "fifteen": 6.81
+      }
+     },
+     {
+      "chromosome": "3",
+      "rows": 255551,
+      "index_variants": 1655,
+      "samples_s": [
+       1.1019,
+       0.9766,
+       0.9648
+      ],
+      "median_s": 0.9766,
+      "min_s": 0.9648,
+      "max_s": 1.1019,
+      "peak_mb": 189.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.99,
+       "five": 7.59,
+       "fifteen": 6.81
+      }
+     },
+     {
+      "chromosome": "4",
+      "rows": 257625,
+      "index_variants": 1598,
+      "samples_s": [
+       0.9752,
+       0.9647,
+       1.0085
+      ],
+      "median_s": 0.9752,
+      "min_s": 0.9647,
+      "max_s": 1.0085,
+      "peak_mb": 191.0,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.0,
+       "five": 7.51,
+       "fifteen": 6.79
+      }
+     },
+     {
+      "chromosome": "5",
+      "rows": 219786,
+      "index_variants": 1511,
+      "samples_s": [
+       0.8287,
+       0.8314,
+       0.8444
+      ],
+      "median_s": 0.8314,
+      "min_s": 0.8287,
+      "max_s": 0.8444,
+      "peak_mb": 168.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.0,
+       "five": 7.51,
+       "fifteen": 6.79
+      }
+     },
+     {
+      "chromosome": "6",
+      "rows": 243795,
+      "index_variants": 1443,
+      "samples_s": [
+       0.9376,
+       0.9075,
+       0.9024
+      ],
+      "median_s": 0.9075,
+      "min_s": 0.9024,
+      "max_s": 0.9376,
+      "peak_mb": 183.7,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.0,
+       "five": 7.44,
+       "fifteen": 6.77
+      }
+     },
+     {
+      "chromosome": "7",
+      "rows": 208878,
+      "index_variants": 1388,
+      "samples_s": [
+       0.8033,
+       1.2796,
+       1.147
+      ],
+      "median_s": 1.147,
+      "min_s": 0.8033,
+      "max_s": 1.2796,
+      "peak_mb": 164.1,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.0,
+       "five": 7.36,
+       "fifteen": 6.75
+      }
+     },
+     {
+      "chromosome": "8",
+      "rows": 191793,
+      "index_variants": 1243,
+      "samples_s": [
+       0.8393,
+       1.1274,
+       1.1626
+      ],
+      "median_s": 1.1274,
+      "min_s": 0.8393,
+      "max_s": 1.1626,
+      "peak_mb": 150.8,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.0,
+       "five": 7.36,
+       "fifteen": 6.75
+      }
+     },
+     {
+      "chromosome": "9",
+      "rows": 151769,
+      "index_variants": 1137,
+      "samples_s": [
+       0.6648,
+       0.6598,
+       1.0137
+      ],
+      "median_s": 0.6648,
+      "min_s": 0.6598,
+      "max_s": 1.0137,
+      "peak_mb": 129.5,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.92,
+       "five": 7.27,
+       "fifteen": 6.72
+      }
+     },
+     {
+      "chromosome": "10",
+      "rows": 175385,
+      "index_variants": 1241,
+      "samples_s": [
+       0.7744,
+       0.7328,
+       1.0154
+      ],
+      "median_s": 0.7744,
+      "min_s": 0.7328,
+      "max_s": 1.0154,
+      "peak_mb": 145.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.92,
+       "five": 7.27,
+       "fifteen": 6.72
+      }
+     },
+     {
+      "chromosome": "11",
+      "rows": 175249,
+      "index_variants": 1154,
+      "samples_s": [
+       0.7899,
+       1.089,
+       1.0929
+      ],
+      "median_s": 1.089,
+      "min_s": 0.7899,
+      "max_s": 1.0929,
+      "peak_mb": 141.2,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.84,
+       "five": 7.19,
+       "fifteen": 6.7
+      }
+     },
+     {
+      "chromosome": "12",
+      "rows": 173522,
+      "index_variants": 1202,
+      "samples_s": [
+       0.764,
+       1.0786,
+       1.1042
+      ],
+      "median_s": 1.0786,
+      "min_s": 0.764,
+      "max_s": 1.1042,
+      "peak_mb": 139.7,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.84,
+       "five": 7.19,
+       "fifteen": 6.7
+      }
+     },
+     {
+      "chromosome": "13",
+      "rows": 129146,
+      "index_variants": 911,
+      "samples_s": [
+       0.8644,
+       0.5345,
+       0.5433
+      ],
+      "median_s": 0.5433,
+      "min_s": 0.5345,
+      "max_s": 0.8644,
+      "peak_mb": 108.6,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.02,
+       "five": 7.15,
+       "fifteen": 6.69
+      }
+     },
+     {
+      "chromosome": "14",
+      "rows": 115792,
+      "index_variants": 841,
+      "samples_s": [
+       0.7553,
+       0.4623,
+       0.4625
+      ],
+      "median_s": 0.4625,
+      "min_s": 0.4623,
+      "max_s": 0.7553,
+      "peak_mb": 101.7,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.02,
+       "five": 7.15,
+       "fifteen": 6.69
+      }
+     },
+     {
+      "chromosome": "15",
+      "rows": 98353,
+      "index_variants": 815,
+      "samples_s": [
+       0.4075,
+       0.4194,
+       0.4058
+      ],
+      "median_s": 0.4075,
+      "min_s": 0.4058,
+      "max_s": 0.4194,
+      "peak_mb": 91.8,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.02,
+       "five": 7.15,
+       "fifteen": 6.69
+      }
+     },
+     {
+      "chromosome": "16",
+      "rows": 110165,
+      "index_variants": 890,
+      "samples_s": [
+       0.4641,
+       0.4638,
+       0.4634
+      ],
+      "median_s": 0.4638,
+      "min_s": 0.4634,
+      "max_s": 0.4641,
+      "peak_mb": 97.2,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.01,
+       "five": 7.08,
+       "fifteen": 6.67
+      }
+     },
+     {
+      "chromosome": "17",
+      "rows": 97279,
+      "index_variants": 870,
+      "samples_s": [
+       0.4074,
+       0.4061,
+       0.405
+      ],
+      "median_s": 0.4061,
+      "min_s": 0.405,
+      "max_s": 0.4074,
+      "peak_mb": 92.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.01,
+       "five": 7.08,
+       "fifteen": 6.67
+      }
+     },
+     {
+      "chromosome": "18",
+      "rows": 101802,
+      "index_variants": 781,
+      "samples_s": [
+       0.4156,
+       0.4246,
+       0.4165
+      ],
+      "median_s": 0.4165,
+      "min_s": 0.4156,
+      "max_s": 0.4246,
+      "peak_mb": 90.8,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.01,
+       "five": 7.08,
+       "fifteen": 6.67
+      }
+     },
+     {
+      "chromosome": "19",
+      "rows": 82990,
+      "index_variants": 740,
+      "samples_s": [
+       0.3643,
+       0.3686,
+       0.3762
+      ],
+      "median_s": 0.3686,
+      "min_s": 0.3643,
+      "max_s": 0.3762,
+      "peak_mb": 83.1,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.01,
+       "five": 7.08,
+       "fifteen": 6.67
+      }
+     },
+     {
+      "chromosome": "20",
+      "rows": 78686,
+      "index_variants": 704,
+      "samples_s": [
+       0.3359,
+       0.3343,
+       0.3336
+      ],
+      "median_s": 0.3343,
+      "min_s": 0.3336,
+      "max_s": 0.3359,
+      "peak_mb": 77.0,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.93,
+       "five": 7.0,
+       "fifteen": 6.64
+      }
+     },
+     {
+      "chromosome": "21",
+      "rows": 49147,
+      "index_variants": 407,
+      "samples_s": [
+       0.2279,
+       0.2248,
+       0.2293
+      ],
+      "median_s": 0.2279,
+      "min_s": 0.2248,
+      "max_s": 0.2293,
+      "peak_mb": 61.3,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.93,
+       "five": 7.0,
+       "fifteen": 6.64
+      }
+     },
+     {
+      "chromosome": "22",
+      "rows": 48339,
+      "index_variants": 442,
+      "samples_s": [
+       0.2249,
+       0.2315,
+       0.2228
+      ],
+      "median_s": 0.2249,
+      "min_s": 0.2228,
+      "max_s": 0.2315,
+      "peak_mb": 62.8,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.93,
+       "five": 7.0,
+       "fifteen": 6.64
+      }
+     }
+    ],
+    "index_variants": 24913,
+    "members": 3529871,
+    "clump_s": 15.4306,
+    "order_followed": true,
+    "r2": 0.01,
+    "clump_kb": 10000,
+    "total_s": 50.6177,
+    "rows": 3529871
+   },
+   "ratio": {
+    "rows": 3529871,
+    "pruning_s": 6.1009,
+    "clumping_s": 50.6177,
+    "value": 0.1205,
+    "fast_pruning_s": 2.3526,
+    "fast_value": 0.0465,
+    "definition": "pruning (cM lookup, sort, rule) over clumping (shared set, ranking, plink2 with genotypes) on the shared set of the same Analysis"
+   }
+  },
+  {
+   "name": "mvp_5e-4",
+   "why": "the largest 5e-4 tier outside OGS-00011",
+   "store": {
+    "path": "/data/opengwasdb/stores/OGS-00012/store.opengwasdb",
+    "store_id": "OGS-00012",
+    "release_id": "OGS-00012-completed",
+    "format_version": "0.2.0",
+    "primary_layout": "dense",
+    "completion_state": "reference_completed",
+    "reference_assembly": "GRCh38"
+   },
+   "analysis_id": "GCST90475362",
+   "threshold": 0.0005,
+   "rows": {
+    "tier": 2755733,
+    "observed": 2689440,
+    "imputed": 66293,
+    "finite_cm": 2755733,
+    "off_map": 0,
+    "ranked": 2755733,
+    "off_map_chromosomes": [],
+    "max_abs_z": 64.8043,
+    "rows_abs_z_over_38": 1962
+   },
+   "stages": {
+    "tier": {
+     "samples_s": [
+      0.4911,
+      0.472,
+      0.4776
+     ],
+     "median_s": 0.4776,
+     "min_s": 0.472,
+     "max_s": 0.4911,
+     "peak_mb": 2723.7,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.01,
+      "five": 6.69,
+      "fifteen": 6.55
+     }
+    },
+    "positions": {
+     "samples_s": [
+      4.493,
+      3.7505,
+      3.9212
+     ],
+     "median_s": 3.9212,
+     "min_s": 3.7505,
+     "max_s": 4.493,
+     "peak_mb": 3803.7,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.0,
+      "five": 6.57,
+      "fifteen": 6.51
+     }
+    },
+    "positions_array": {
+     "samples_s": [
+      0.0254,
+      0.0353,
+      0.0286
+     ],
+     "median_s": 0.0286,
+     "min_s": 0.0254,
+     "max_s": 0.0353,
+     "peak_mb": 2386.9,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.08,
+      "five": 6.52,
+      "fifteen": 6.5
+     }
+    },
+    "cm": {
+     "samples_s": [
+      0.0226,
+      0.0106,
+      0.0075
+     ],
+     "median_s": 0.0106,
+     "min_s": 0.0075,
+     "max_s": 0.0226,
+     "peak_mb": 2384.9,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.08,
+      "five": 6.52,
+      "fifteen": 6.5
+     }
+    },
+    "sort": {
+     "samples_s": [
+      0.2238,
+      0.2123,
+      0.2113
+     ],
+     "median_s": 0.2123,
+     "min_s": 0.2113,
+     "max_s": 0.2238,
+     "peak_mb": 2384.9,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.08,
+      "five": 6.52,
+      "fifteen": 6.5
+     }
+    },
+    "rule": {
+     "samples_s": [
+      4.0687,
+      3.8845,
+      3.8647
+     ],
+     "median_s": 3.8845,
+     "min_s": 3.8647,
+     "max_s": 4.0687,
+     "peak_mb": 2401.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.07,
+      "five": 6.41,
+      "fifteen": 6.46
+     }
+    },
+    "rule_fast": {
+     "samples_s": [
+      1.7756,
+      1.7764,
+      1.7616
+     ],
+     "median_s": 1.7756,
+     "min_s": 1.7616,
+     "max_s": 1.7764,
+     "peak_mb": 2462.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.98,
+      "five": 6.33,
+      "fifteen": 6.43
+     }
+    },
+    "read_tier": {
+     "samples_s": [
+      14.6615,
+      13.7076,
+      14.3377
+     ],
+     "median_s": 14.3377,
+     "min_s": 13.7076,
+     "max_s": 14.6615,
+     "peak_mb": 8269.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.81,
+      "five": 5.98,
+      "fifteen": 6.31
+     }
+    }
+   },
+   "budget": {
+    "definition": "the default Top-Hit Query's own wall time for the same slice, imputed rows included",
+    "judged": "pruning runs per query when its stages cost no more than the query they follow (fast_ratio <= 1), so the reader waits at most twice as long",
+    "query_s": 0.4776,
+    "pruning_s": 8.0286,
+    "ratio": 16.8103,
+    "within_budget_as_written": false,
+    "fast_pruning_s": 2.0271,
+    "fast_ratio": 4.2443,
+    "within_budget": false
+   },
+   "leads": {
+    "rule": 3652,
+    "identical_fast_rule": true
+   },
+   "clumping": {
+    "shared_rows": 1735661,
+    "shared_set_accounting": {
+     "tier_rows": 2689440,
+     "panel": {
+      "matched": 1735661,
+      "off_panel_chromosome": 0,
+      "absent_at_position": 940641,
+      "allele_mismatch": 9473,
+      "ambiguous": 3665
+     },
+     "no_cm": 0,
+     "no_cm_by_panel_status": {
+      "matched": 0,
+      "off_panel_chromosome": 0,
+      "absent_at_position": 0,
+      "allele_mismatch": 0,
+      "ambiguous": 0
+     },
+     "shared_set": 1735661,
+     "shared_set_share": 0.6453614878933904,
+     "partition": {
+      "shared_set": 1735661,
+      "matched_no_cm": 0,
+      "off_panel_chromosome": 0,
+      "absent_at_position": 940641,
+      "allele_mismatch": 9473,
+      "ambiguous": 3665
+     }
+    },
+    "stages": {
+     "shared_set": {
+      "samples_s": [
+       26.9495,
+       26.7248,
+       28.5754
+      ],
+      "median_s": 26.9495,
+      "min_s": 26.7248,
+      "max_s": 28.5754,
+      "peak_mb": 6949.9,
+      "peak_source": "process",
+      "child": null,
+      "load": {
+       "one": 4.34,
+       "five": 5.92,
+       "fifteen": 6.27
+      }
+     },
+     "ranked": {
+      "samples_s": [
+       0.2323,
+       0.2277,
+       0.2231
+      ],
+      "median_s": 0.2277,
+      "min_s": 0.2231,
+      "max_s": 0.2323,
+      "peak_mb": 5802.5,
+      "peak_source": "process",
+      "child": null,
+      "load": {
+       "one": 3.68,
+       "five": 5.64,
+       "fifteen": 6.17
+      }
+     },
+     "chr1": {
+      "samples_s": [
+       0.4503,
+       0.4374,
+       0.3973
+      ],
+      "median_s": 0.4374,
+      "min_s": 0.3973,
+      "max_s": 0.4503,
+      "peak_mb": 160.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.55,
+       "five": 5.58,
+       "fifteen": 6.15
+      }
+     },
+     "chr2": {
+      "samples_s": [
+       0.4846,
+       0.4281,
+       0.4775
+      ],
+      "median_s": 0.4775,
+      "min_s": 0.4281,
+      "max_s": 0.4846,
+      "peak_mb": 170.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.55,
+       "five": 5.58,
+       "fifteen": 6.15
+      }
+     },
+     "chr3": {
+      "samples_s": [
+       0.3516,
+       0.394,
+       0.36
+      ],
+      "median_s": 0.36,
+      "min_s": 0.3516,
+      "max_s": 0.394,
+      "peak_mb": 144.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.55,
+       "five": 5.58,
+       "fifteen": 6.15
+      }
+     },
+     "chr4": {
+      "samples_s": [
+       0.3679,
+       0.324,
+       0.3686
+      ],
+      "median_s": 0.3679,
+      "min_s": 0.324,
+      "max_s": 0.3686,
+      "peak_mb": 142.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.55,
+       "five": 5.58,
+       "fifteen": 6.15
+      }
+     },
+     "chr5": {
+      "samples_s": [
+       0.3718,
+       0.3704,
+       0.4106
+      ],
+      "median_s": 0.3718,
+      "min_s": 0.3704,
+      "max_s": 0.4106,
+      "peak_mb": 134.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.34,
+       "five": 5.5,
+       "fifteen": 6.12
+      }
+     },
+     "chr6": {
+      "samples_s": [
+       0.443,
+       0.4372,
+       0.3909
+      ],
+      "median_s": 0.4372,
+      "min_s": 0.3909,
+      "max_s": 0.443,
+      "peak_mb": 154.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.34,
+       "five": 5.5,
+       "fifteen": 6.12
+      }
+     },
+     "chr7": {
+      "samples_s": [
+       0.3406,
+       0.3521,
+       0.3894
+      ],
+      "median_s": 0.3521,
+      "min_s": 0.3406,
+      "max_s": 0.3894,
+      "peak_mb": 130.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.34,
+       "five": 5.5,
+       "fifteen": 6.12
+      }
+     },
+     "chr8": {
+      "samples_s": [
+       0.3246,
+       0.3264,
+       0.3062
+      ],
+      "median_s": 0.3246,
+      "min_s": 0.3062,
+      "max_s": 0.3264,
+      "peak_mb": 114.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.34,
+       "five": 5.5,
+       "fifteen": 6.12
+      }
+     },
+     "chr9": {
+      "samples_s": [
+       0.2589,
+       0.2608,
+       0.2566
+      ],
+      "median_s": 0.2589,
+      "min_s": 0.2566,
+      "max_s": 0.2608,
+      "peak_mb": 106.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.34,
+       "five": 5.5,
+       "fifteen": 6.12
+      }
+     },
+     "chr10": {
+      "samples_s": [
+       0.2867,
+       0.3266,
+       0.3355
+      ],
+      "median_s": 0.3266,
+      "min_s": 0.2867,
+      "max_s": 0.3355,
+      "peak_mb": 114.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.39,
+       "five": 5.47,
+       "fifteen": 6.11
+      }
+     },
+     "chr11": {
+      "samples_s": [
+       0.3308,
+       0.3148,
+       0.2729
+      ],
+      "median_s": 0.3148,
+      "min_s": 0.2729,
+      "max_s": 0.3308,
+      "peak_mb": 114.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.39,
+       "five": 5.47,
+       "fifteen": 6.11
+      }
+     },
+     "chr12": {
+      "samples_s": [
+       0.2869,
+       0.2978,
+       0.3219
+      ],
+      "median_s": 0.2978,
+      "min_s": 0.2869,
+      "max_s": 0.3219,
+      "peak_mb": 112.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.39,
+       "five": 5.47,
+       "fifteen": 6.11
+      }
+     },
+     "chr13": {
+      "samples_s": [
+       0.2209,
+       0.2219,
+       0.2183
+      ],
+      "median_s": 0.2209,
+      "min_s": 0.2183,
+      "max_s": 0.2219,
+      "peak_mb": 88.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.39,
+       "five": 5.47,
+       "fifteen": 6.11
+      }
+     },
+     "chr14": {
+      "samples_s": [
+       0.2132,
+       0.2108,
+       0.2143
+      ],
+      "median_s": 0.2132,
+      "min_s": 0.2108,
+      "max_s": 0.2143,
+      "peak_mb": 84.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.39,
+       "five": 5.47,
+       "fifteen": 6.11
+      }
+     },
+     "chr15": {
+      "samples_s": [
+       0.2144,
+       0.2072,
+       0.2267
+      ],
+      "median_s": 0.2144,
+      "min_s": 0.2072,
+      "max_s": 0.2267,
+      "peak_mb": 82.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.39,
+       "five": 5.47,
+       "fifteen": 6.11
+      }
+     },
+     "chr16": {
+      "samples_s": [
+       0.2175,
+       0.2222,
+       0.2161
+      ],
+      "median_s": 0.2175,
+      "min_s": 0.2161,
+      "max_s": 0.2222,
+      "peak_mb": 80.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.36,
+       "five": 5.43,
+       "fifteen": 6.09
+      }
+     },
+     "chr17": {
+      "samples_s": [
+       0.2363,
+       0.2359,
+       0.2358
+      ],
+      "median_s": 0.2359,
+      "min_s": 0.2358,
+      "max_s": 0.2363,
+      "peak_mb": 86.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.36,
+       "five": 5.43,
+       "fifteen": 6.09
+      }
+     },
+     "chr18": {
+      "samples_s": [
+       0.1728,
+       0.1735,
+       0.1728
+      ],
+      "median_s": 0.1728,
+      "min_s": 0.1728,
+      "max_s": 0.1735,
+      "peak_mb": 74.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.36,
+       "five": 5.43,
+       "fifteen": 6.09
+      }
+     },
+     "chr19": {
+      "samples_s": [
+       0.1843,
+       0.1826,
+       0.1809
+      ],
+      "median_s": 0.1826,
+      "min_s": 0.1809,
+      "max_s": 0.1843,
+      "peak_mb": 74.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.36,
+       "five": 5.43,
+       "fifteen": 6.09
+      }
+     },
+     "chr20": {
+      "samples_s": [
+       0.1744,
+       0.1688,
+       0.1706
+      ],
+      "median_s": 0.1706,
+      "min_s": 0.1688,
+      "max_s": 0.1744,
+      "peak_mb": 74.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.36,
+       "five": 5.43,
+       "fifteen": 6.09
+      }
+     },
+     "chr21": {
+      "samples_s": [
+       0.0988,
+       0.0964,
+       0.0985
+      ],
+      "median_s": 0.0985,
+      "min_s": 0.0964,
+      "max_s": 0.0988,
+      "peak_mb": 56.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.36,
+       "five": 5.43,
+       "fifteen": 6.09
+      }
+     },
+     "chr22": {
+      "samples_s": [
+       0.1183,
+       0.1182,
+       0.1158
+      ],
+      "median_s": 0.1182,
+      "min_s": 0.1158,
+      "max_s": 0.1183,
+      "peak_mb": 60.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.36,
+       "five": 5.43,
+       "fifteen": 6.09
+      }
+     }
+    },
+    "per_chromosome": [
+     {
+      "chromosome": "1",
+      "rows": 138740,
+      "index_variants": 1315,
+      "samples_s": [
+       0.4503,
+       0.4374,
+       0.3973
+      ],
+      "median_s": 0.4374,
+      "min_s": 0.3973,
+      "max_s": 0.4503,
+      "peak_mb": 160.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.55,
+       "five": 5.58,
+       "fifteen": 6.15
+      }
+     },
+     {
+      "chromosome": "2",
+      "rows": 155827,
+      "index_variants": 1312,
+      "samples_s": [
+       0.4846,
+       0.4281,
+       0.4775
+      ],
+      "median_s": 0.4775,
+      "min_s": 0.4281,
+      "max_s": 0.4846,
+      "peak_mb": 170.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.55,
+       "five": 5.58,
+       "fifteen": 6.15
+      }
+     },
+     {
+      "chromosome": "3",
+      "rows": 124540,
+      "index_variants": 1074,
+      "samples_s": [
+       0.3516,
+       0.394,
+       0.36
+      ],
+      "median_s": 0.36,
+      "min_s": 0.3516,
+      "max_s": 0.394,
+      "peak_mb": 144.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.55,
+       "five": 5.58,
+       "fifteen": 6.15
+      }
+     },
+     {
+      "chromosome": "4",
+      "rows": 114599,
+      "index_variants": 982,
+      "samples_s": [
+       0.3679,
+       0.324,
+       0.3686
+      ],
+      "median_s": 0.3679,
+      "min_s": 0.324,
+      "max_s": 0.3686,
+      "peak_mb": 142.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.55,
+       "five": 5.58,
+       "fifteen": 6.15
+      }
+     },
+     {
+      "chromosome": "5",
+      "rows": 113773,
+      "index_variants": 1025,
+      "samples_s": [
+       0.3718,
+       0.3704,
+       0.4106
+      ],
+      "median_s": 0.3718,
+      "min_s": 0.3704,
+      "max_s": 0.4106,
+      "peak_mb": 134.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.34,
+       "five": 5.5,
+       "fifteen": 6.12
+      }
+     },
+     {
+      "chromosome": "6",
+      "rows": 150115,
+      "index_variants": 1014,
+      "samples_s": [
+       0.443,
+       0.4372,
+       0.3909
+      ],
+      "median_s": 0.4372,
+      "min_s": 0.3909,
+      "max_s": 0.443,
+      "peak_mb": 154.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.34,
+       "five": 5.5,
+       "fifteen": 6.12
+      }
+     },
+     {
+      "chromosome": "7",
+      "rows": 101136,
+      "index_variants": 938,
+      "samples_s": [
+       0.3406,
+       0.3521,
+       0.3894
+      ],
+      "median_s": 0.3521,
+      "min_s": 0.3406,
+      "max_s": 0.3894,
+      "peak_mb": 130.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.34,
+       "five": 5.5,
+       "fifteen": 6.12
+      }
+     },
+     {
+      "chromosome": "8",
+      "rows": 83228,
+      "index_variants": 825,
+      "samples_s": [
+       0.3246,
+       0.3264,
+       0.3062
+      ],
+      "median_s": 0.3246,
+      "min_s": 0.3062,
+      "max_s": 0.3264,
+      "peak_mb": 114.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.34,
+       "five": 5.5,
+       "fifteen": 6.12
+      }
+     },
+     {
+      "chromosome": "9",
+      "rows": 74867,
+      "index_variants": 757,
+      "samples_s": [
+       0.2589,
+       0.2608,
+       0.2566
+      ],
+      "median_s": 0.2589,
+      "min_s": 0.2566,
+      "max_s": 0.2608,
+      "peak_mb": 106.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.34,
+       "five": 5.5,
+       "fifteen": 6.12
+      }
+     },
+     {
+      "chromosome": "10",
+      "rows": 83717,
+      "index_variants": 783,
+      "samples_s": [
+       0.2867,
+       0.3266,
+       0.3355
+      ],
+      "median_s": 0.3266,
+      "min_s": 0.2867,
+      "max_s": 0.3355,
+      "peak_mb": 114.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.39,
+       "five": 5.47,
+       "fifteen": 6.11
+      }
+     },
+     {
+      "chromosome": "11",
+      "rows": 87398,
+      "index_variants": 765,
+      "samples_s": [
+       0.3308,
+       0.3148,
+       0.2729
+      ],
+      "median_s": 0.3148,
+      "min_s": 0.2729,
+      "max_s": 0.3308,
+      "peak_mb": 114.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.39,
+       "five": 5.47,
+       "fifteen": 6.11
+      }
+     },
+     {
+      "chromosome": "12",
+      "rows": 86252,
+      "index_variants": 817,
+      "samples_s": [
+       0.2869,
+       0.2978,
+       0.3219
+      ],
+      "median_s": 0.2978,
+      "min_s": 0.2869,
+      "max_s": 0.3219,
+      "peak_mb": 112.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.39,
+       "five": 5.47,
+       "fifteen": 6.11
+      }
+     },
+     {
+      "chromosome": "13",
+      "rows": 52241,
+      "index_variants": 521,
+      "samples_s": [
+       0.2209,
+       0.2219,
+       0.2183
+      ],
+      "median_s": 0.2209,
+      "min_s": 0.2183,
+      "max_s": 0.2219,
+      "peak_mb": 88.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.39,
+       "five": 5.47,
+       "fifteen": 6.11
+      }
+     },
+     {
+      "chromosome": "14",
+      "rows": 50217,
+      "index_variants": 544,
+      "samples_s": [
+       0.2132,
+       0.2108,
+       0.2143
+      ],
+      "median_s": 0.2132,
+      "min_s": 0.2108,
+      "max_s": 0.2143,
+      "peak_mb": 84.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.39,
+       "five": 5.47,
+       "fifteen": 6.11
+      }
+     },
+     {
+      "chromosome": "15",
+      "rows": 55140,
+      "index_variants": 555,
+      "samples_s": [
+       0.2144,
+       0.2072,
+       0.2267
+      ],
+      "median_s": 0.2144,
+      "min_s": 0.2072,
+      "max_s": 0.2267,
+      "peak_mb": 82.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.39,
+       "five": 5.47,
+       "fifteen": 6.11
+      }
+     },
+     {
+      "chromosome": "16",
+      "rows": 51267,
+      "index_variants": 577,
+      "samples_s": [
+       0.2175,
+       0.2222,
+       0.2161
+      ],
+      "median_s": 0.2175,
+      "min_s": 0.2161,
+      "max_s": 0.2222,
+      "peak_mb": 80.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.36,
+       "five": 5.43,
+       "fifteen": 6.09
+      }
+     },
+     {
+      "chromosome": "17",
+      "rows": 59011,
+      "index_variants": 589,
+      "samples_s": [
+       0.2363,
+       0.2359,
+       0.2358
+      ],
+      "median_s": 0.2359,
+      "min_s": 0.2358,
+      "max_s": 0.2363,
+      "peak_mb": 86.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.36,
+       "five": 5.43,
+       "fifteen": 6.09
+      }
+     },
+     {
+      "chromosome": "18",
+      "rows": 37186,
+      "index_variants": 490,
+      "samples_s": [
+       0.1728,
+       0.1735,
+       0.1728
+      ],
+      "median_s": 0.1728,
+      "min_s": 0.1728,
+      "max_s": 0.1735,
+      "peak_mb": 74.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.36,
+       "five": 5.43,
+       "fifteen": 6.09
+      }
+     },
+     {
+      "chromosome": "19",
+      "rows": 38550,
+      "index_variants": 464,
+      "samples_s": [
+       0.1843,
+       0.1826,
+       0.1809
+      ],
+      "median_s": 0.1826,
+      "min_s": 0.1809,
+      "max_s": 0.1843,
+      "peak_mb": 74.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.36,
+       "five": 5.43,
+       "fifteen": 6.09
+      }
+     },
+     {
+      "chromosome": "20",
+      "rows": 39263,
+      "index_variants": 433,
+      "samples_s": [
+       0.1744,
+       0.1688,
+       0.1706
+      ],
+      "median_s": 0.1706,
+      "min_s": 0.1688,
+      "max_s": 0.1744,
+      "peak_mb": 74.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.36,
+       "five": 5.43,
+       "fifteen": 6.09
+      }
+     },
+     {
+      "chromosome": "21",
+      "rows": 15639,
+      "index_variants": 220,
+      "samples_s": [
+       0.0988,
+       0.0964,
+       0.0985
+      ],
+      "median_s": 0.0985,
+      "min_s": 0.0964,
+      "max_s": 0.0988,
+      "peak_mb": 56.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.36,
+       "five": 5.43,
+       "fifteen": 6.09
+      }
+     },
+     {
+      "chromosome": "22",
+      "rows": 22955,
+      "index_variants": 268,
+      "samples_s": [
+       0.1183,
+       0.1182,
+       0.1158
+      ],
+      "median_s": 0.1182,
+      "min_s": 0.1158,
+      "max_s": 0.1183,
+      "peak_mb": 60.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.36,
+       "five": 5.43,
+       "fifteen": 6.09
+      }
+     }
+    ],
+    "index_variants": 16268,
+    "members": 1735661,
+    "clump_s": 6.1712,
+    "order_followed": true,
+    "r2": 0.01,
+    "clump_kb": 10000,
+    "total_s": 33.3484,
+    "rows": 1735661
+   },
+   "ratio": {
+    "rows": 1735661,
+    "pruning_s": 3.0072,
+    "clumping_s": 33.3484,
+    "value": 0.0902,
+    "fast_pruning_s": 1.7783,
+    "fast_value": 0.0533,
+    "definition": "pruning (cM lookup, sort, rule) over clumping (shared set, ranking, plink2 with genotypes) on the shared set of the same Analysis"
+   }
+  },
+  {
+   "name": "mvp_5e-8",
+   "why": "a Dense Reference-Completed tier an eighth the size",
+   "store": {
+    "path": "/data/opengwasdb/stores/OGS-00012/store.opengwasdb",
+    "store_id": "OGS-00012",
+    "release_id": "OGS-00012-completed",
+    "format_version": "0.2.0",
+    "primary_layout": "dense",
+    "completion_state": "reference_completed",
+    "reference_assembly": "GRCh38"
+   },
+   "analysis_id": "GCST90475362",
+   "threshold": 5e-08,
+   "rows": {
+    "tier": 927929,
+    "observed": 901989,
+    "imputed": 25940,
+    "finite_cm": 927929,
+    "off_map": 0,
+    "ranked": 927929,
+    "off_map_chromosomes": [],
+    "max_abs_z": 64.8043,
+    "rows_abs_z_over_38": 1962
+   },
+   "stages": {
+    "tier": {
+     "samples_s": [
+      0.2594,
+      0.2613,
+      0.2499
+     ],
+     "median_s": 0.2594,
+     "min_s": 0.2499,
+     "max_s": 0.2613,
+     "peak_mb": 2678.0,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.14,
+      "five": 5.28,
+      "fifteen": 6.03
+     }
+    },
+    "positions": {
+     "samples_s": [
+      1.4781,
+      1.3377,
+      1.3756
+     ],
+     "median_s": 1.3756,
+     "min_s": 1.3377,
+     "max_s": 1.4781,
+     "peak_mb": 3496.4,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.13,
+      "five": 5.24,
+      "fifteen": 6.01
+     }
+    },
+    "positions_array": {
+     "samples_s": [
+      0.0101,
+      0.009,
+      0.0067
+     ],
+     "median_s": 0.009,
+     "min_s": 0.0067,
+     "max_s": 0.0101,
+     "peak_mb": 2451.4,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.13,
+      "five": 5.24,
+      "fifteen": 6.01
+     }
+    },
+    "cm": {
+     "samples_s": [
+      0.0034,
+      0.0031,
+      0.0019
+     ],
+     "median_s": 0.0031,
+     "min_s": 0.0019,
+     "max_s": 0.0034,
+     "peak_mb": 2451.4,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.13,
+      "five": 5.24,
+      "fifteen": 6.01
+     }
+    },
+    "sort": {
+     "samples_s": [
+      0.0642,
+      0.0638,
+      0.0644
+     ],
+     "median_s": 0.0642,
+     "min_s": 0.0638,
+     "max_s": 0.0644,
+     "peak_mb": 2451.4,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.13,
+      "five": 5.24,
+      "fifteen": 6.01
+     }
+    },
+    "rule": {
+     "samples_s": [
+      1.2122,
+      1.2015,
+      1.1908
+     ],
+     "median_s": 1.2015,
+     "min_s": 1.1908,
+     "max_s": 1.2122,
+     "peak_mb": 2451.4,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.04,
+      "five": 5.19,
+      "fifteen": 5.99
+     }
+    },
+    "rule_fast": {
+     "samples_s": [
+      1.1485,
+      1.1443,
+      1.1467
+     ],
+     "median_s": 1.1467,
+     "min_s": 1.1443,
+     "max_s": 1.1485,
+     "peak_mb": 2450.4,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.04,
+      "five": 5.19,
+      "fifteen": 5.99
+     }
+    },
+    "read_tier": {
+     "samples_s": [
+      4.8096,
+      5.0225,
+      4.6465
+     ],
+     "median_s": 4.8096,
+     "min_s": 4.6465,
+     "max_s": 5.0225,
+     "peak_mb": 4232.8,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.96,
+      "five": 5.1,
+      "fifteen": 5.95
+     }
+    }
+   },
+   "budget": {
+    "definition": "the default Top-Hit Query's own wall time for the same slice, imputed rows included",
+    "judged": "pruning runs per query when its stages cost no more than the query they follow (fast_ratio <= 1), so the reader waits at most twice as long",
+    "query_s": 0.2594,
+    "pruning_s": 2.6444,
+    "ratio": 10.1943,
+    "within_budget_as_written": false,
+    "fast_pruning_s": 1.223,
+    "fast_ratio": 4.7147,
+    "within_budget": false
+   },
+   "leads": {
+    "rule": 3307,
+    "identical_fast_rule": true
+   },
+   "clumping": {
+    "shared_rows": 763450,
+    "shared_set_accounting": {
+     "tier_rows": 901989,
+     "panel": {
+      "matched": 763450,
+      "off_panel_chromosome": 0,
+      "absent_at_position": 133928,
+      "allele_mismatch": 2964,
+      "ambiguous": 1647
+     },
+     "no_cm": 0,
+     "no_cm_by_panel_status": {
+      "matched": 0,
+      "off_panel_chromosome": 0,
+      "absent_at_position": 0,
+      "allele_mismatch": 0,
+      "ambiguous": 0
+     },
+     "shared_set": 763450,
+     "shared_set_share": 0.8464072178263815,
+     "partition": {
+      "shared_set": 763450,
+      "matched_no_cm": 0,
+      "off_panel_chromosome": 0,
+      "absent_at_position": 133928,
+      "allele_mismatch": 2964,
+      "ambiguous": 1647
+     }
+    },
+    "stages": {
+     "shared_set": {
+      "samples_s": [
+       23.5876,
+       25.0356,
+       26.1561
+      ],
+      "median_s": 25.0356,
+      "min_s": 23.5876,
+      "max_s": 26.1561,
+      "peak_mb": 3917.4,
+      "peak_source": "process",
+      "child": null,
+      "load": {
+       "one": 2.81,
+       "five": 4.7,
+       "fifteen": 5.77
+      }
+     },
+     "ranked": {
+      "samples_s": [
+       0.1014,
+       0.0915,
+       0.0915
+      ],
+      "median_s": 0.0915,
+      "min_s": 0.0915,
+      "max_s": 0.1014,
+      "peak_mb": 3474.1,
+      "peak_source": "process",
+      "child": null,
+      "load": {
+       "one": 3.4,
+       "five": 4.7,
+       "fifteen": 5.74
+      }
+     },
+     "chr1": {
+      "samples_s": [
+       0.2479,
+       0.249,
+       0.2584
+      ],
+      "median_s": 0.249,
+      "min_s": 0.2479,
+      "max_s": 0.2584,
+      "peak_mb": 132.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     "chr2": {
+      "samples_s": [
+       0.3031,
+       0.3077,
+       0.2897
+      ],
+      "median_s": 0.3031,
+      "min_s": 0.2897,
+      "max_s": 0.3077,
+      "peak_mb": 138.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     "chr3": {
+      "samples_s": [
+       0.2134,
+       0.2127,
+       0.2198
+      ],
+      "median_s": 0.2134,
+      "min_s": 0.2127,
+      "max_s": 0.2198,
+      "peak_mb": 118.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     "chr4": {
+      "samples_s": [
+       0.2,
+       0.2264,
+       0.2263
+      ],
+      "median_s": 0.2263,
+      "min_s": 0.2,
+      "max_s": 0.2264,
+      "peak_mb": 118.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     "chr5": {
+      "samples_s": [
+       0.2283,
+       0.2038,
+       0.2282
+      ],
+      "median_s": 0.2282,
+      "min_s": 0.2038,
+      "max_s": 0.2283,
+      "peak_mb": 112.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     "chr6": {
+      "samples_s": [
+       0.2575,
+       0.2539,
+       0.254
+      ],
+      "median_s": 0.254,
+      "min_s": 0.2539,
+      "max_s": 0.2575,
+      "peak_mb": 128.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     "chr7": {
+      "samples_s": [
+       0.184,
+       0.1819,
+       0.1834
+      ],
+      "median_s": 0.1834,
+      "min_s": 0.1819,
+      "max_s": 0.184,
+      "peak_mb": 108.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     "chr8": {
+      "samples_s": [
+       0.1496,
+       0.1498,
+       0.151
+      ],
+      "median_s": 0.1498,
+      "min_s": 0.1496,
+      "max_s": 0.151,
+      "peak_mb": 92.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     "chr9": {
+      "samples_s": [
+       0.1527,
+       0.1588,
+       0.1703
+      ],
+      "median_s": 0.1588,
+      "min_s": 0.1527,
+      "max_s": 0.1703,
+      "peak_mb": 92.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     "chr10": {
+      "samples_s": [
+       0.1612,
+       0.1812,
+       0.1599
+      ],
+      "median_s": 0.1612,
+      "min_s": 0.1599,
+      "max_s": 0.1812,
+      "peak_mb": 96.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     "chr11": {
+      "samples_s": [
+       0.1827,
+       0.1791,
+       0.1609
+      ],
+      "median_s": 0.1791,
+      "min_s": 0.1609,
+      "max_s": 0.1827,
+      "peak_mb": 94.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     "chr12": {
+      "samples_s": [
+       0.188,
+       0.1668,
+       0.1852
+      ],
+      "median_s": 0.1852,
+      "min_s": 0.1668,
+      "max_s": 0.188,
+      "peak_mb": 94.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     "chr13": {
+      "samples_s": [
+       0.1032,
+       0.1125,
+       0.0996
+      ],
+      "median_s": 0.1032,
+      "min_s": 0.0996,
+      "max_s": 0.1125,
+      "peak_mb": 72.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     "chr14": {
+      "samples_s": [
+       0.1172,
+       0.1162,
+       0.1019
+      ],
+      "median_s": 0.1162,
+      "min_s": 0.1019,
+      "max_s": 0.1172,
+      "peak_mb": 74.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     "chr15": {
+      "samples_s": [
+       0.1323,
+       0.13,
+       0.1114
+      ],
+      "median_s": 0.13,
+      "min_s": 0.1114,
+      "max_s": 0.1323,
+      "peak_mb": 72.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     "chr16": {
+      "samples_s": [
+       0.1106,
+       0.1113,
+       0.107
+      ],
+      "median_s": 0.1106,
+      "min_s": 0.107,
+      "max_s": 0.1113,
+      "peak_mb": 68.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     "chr17": {
+      "samples_s": [
+       0.1274,
+       0.1324,
+       0.1462
+      ],
+      "median_s": 0.1324,
+      "min_s": 0.1274,
+      "max_s": 0.1462,
+      "peak_mb": 76.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     "chr18": {
+      "samples_s": [
+       0.0907,
+       0.0794,
+       0.0897
+      ],
+      "median_s": 0.0897,
+      "min_s": 0.0794,
+      "max_s": 0.0907,
+      "peak_mb": 64.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     "chr19": {
+      "samples_s": [
+       0.0944,
+       0.1047,
+       0.0932
+      ],
+      "median_s": 0.0944,
+      "min_s": 0.0932,
+      "max_s": 0.1047,
+      "peak_mb": 66.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     "chr20": {
+      "samples_s": [
+       0.1006,
+       0.0948,
+       0.1025
+      ],
+      "median_s": 0.1006,
+      "min_s": 0.0948,
+      "max_s": 0.1025,
+      "peak_mb": 64.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     "chr21": {
+      "samples_s": [
+       0.0602,
+       0.0542,
+       0.0596
+      ],
+      "median_s": 0.0596,
+      "min_s": 0.0542,
+      "max_s": 0.0602,
+      "peak_mb": 48.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     "chr22": {
+      "samples_s": [
+       0.0758,
+       0.0752,
+       0.0762
+      ],
+      "median_s": 0.0758,
+      "min_s": 0.0752,
+      "max_s": 0.0762,
+      "peak_mb": 54.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     }
+    },
+    "per_chromosome": [
+     {
+      "chromosome": "1",
+      "rows": 63946,
+      "index_variants": 607,
+      "samples_s": [
+       0.2479,
+       0.249,
+       0.2584
+      ],
+      "median_s": 0.249,
+      "min_s": 0.2479,
+      "max_s": 0.2584,
+      "peak_mb": 132.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     {
+      "chromosome": "2",
+      "rows": 69480,
+      "index_variants": 611,
+      "samples_s": [
+       0.3031,
+       0.3077,
+       0.2897
+      ],
+      "median_s": 0.3031,
+      "min_s": 0.2897,
+      "max_s": 0.3077,
+      "peak_mb": 138.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     {
+      "chromosome": "3",
+      "rows": 52751,
+      "index_variants": 488,
+      "samples_s": [
+       0.2134,
+       0.2127,
+       0.2198
+      ],
+      "median_s": 0.2134,
+      "min_s": 0.2127,
+      "max_s": 0.2198,
+      "peak_mb": 118.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     {
+      "chromosome": "4",
+      "rows": 47440,
+      "index_variants": 402,
+      "samples_s": [
+       0.2,
+       0.2264,
+       0.2263
+      ],
+      "median_s": 0.2263,
+      "min_s": 0.2,
+      "max_s": 0.2264,
+      "peak_mb": 118.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     {
+      "chromosome": "5",
+      "rows": 51160,
+      "index_variants": 466,
+      "samples_s": [
+       0.2283,
+       0.2038,
+       0.2282
+      ],
+      "median_s": 0.2282,
+      "min_s": 0.2038,
+      "max_s": 0.2283,
+      "peak_mb": 112.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     {
+      "chromosome": "6",
+      "rows": 76505,
+      "index_variants": 507,
+      "samples_s": [
+       0.2575,
+       0.2539,
+       0.254
+      ],
+      "median_s": 0.254,
+      "min_s": 0.2539,
+      "max_s": 0.2575,
+      "peak_mb": 128.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     {
+      "chromosome": "7",
+      "rows": 42083,
+      "index_variants": 438,
+      "samples_s": [
+       0.184,
+       0.1819,
+       0.1834
+      ],
+      "median_s": 0.1834,
+      "min_s": 0.1819,
+      "max_s": 0.184,
+      "peak_mb": 108.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     {
+      "chromosome": "8",
+      "rows": 31745,
+      "index_variants": 363,
+      "samples_s": [
+       0.1496,
+       0.1498,
+       0.151
+      ],
+      "median_s": 0.1498,
+      "min_s": 0.1496,
+      "max_s": 0.151,
+      "peak_mb": 92.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.53,
+       "five": 4.71,
+       "fifteen": 5.73
+      }
+     },
+     {
+      "chromosome": "9",
+      "rows": 35119,
+      "index_variants": 357,
+      "samples_s": [
+       0.1527,
+       0.1588,
+       0.1703
+      ],
+      "median_s": 0.1588,
+      "min_s": 0.1527,
+      "max_s": 0.1703,
+      "peak_mb": 92.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "10",
+      "rows": 35647,
+      "index_variants": 349,
+      "samples_s": [
+       0.1612,
+       0.1812,
+       0.1599
+      ],
+      "median_s": 0.1612,
+      "min_s": 0.1599,
+      "max_s": 0.1812,
+      "peak_mb": 96.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "11",
+      "rows": 38453,
+      "index_variants": 337,
+      "samples_s": [
+       0.1827,
+       0.1791,
+       0.1609
+      ],
+      "median_s": 0.1791,
+      "min_s": 0.1609,
+      "max_s": 0.1827,
+      "peak_mb": 94.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "12",
+      "rows": 39414,
+      "index_variants": 401,
+      "samples_s": [
+       0.188,
+       0.1668,
+       0.1852
+      ],
+      "median_s": 0.1852,
+      "min_s": 0.1668,
+      "max_s": 0.188,
+      "peak_mb": 94.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "13",
+      "rows": 18410,
+      "index_variants": 207,
+      "samples_s": [
+       0.1032,
+       0.1125,
+       0.0996
+      ],
+      "median_s": 0.1032,
+      "min_s": 0.0996,
+      "max_s": 0.1125,
+      "peak_mb": 72.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "14",
+      "rows": 19876,
+      "index_variants": 248,
+      "samples_s": [
+       0.1172,
+       0.1162,
+       0.1019
+      ],
+      "median_s": 0.1162,
+      "min_s": 0.1019,
+      "max_s": 0.1172,
+      "peak_mb": 74.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "15",
+      "rows": 25806,
+      "index_variants": 281,
+      "samples_s": [
+       0.1323,
+       0.13,
+       0.1114
+      ],
+      "median_s": 0.13,
+      "min_s": 0.1114,
+      "max_s": 0.1323,
+      "peak_mb": 72.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "16",
+      "rows": 22333,
+      "index_variants": 268,
+      "samples_s": [
+       0.1106,
+       0.1113,
+       0.107
+      ],
+      "median_s": 0.1106,
+      "min_s": 0.107,
+      "max_s": 0.1113,
+      "peak_mb": 68.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "17",
+      "rows": 31332,
+      "index_variants": 300,
+      "samples_s": [
+       0.1274,
+       0.1324,
+       0.1462
+      ],
+      "median_s": 0.1324,
+      "min_s": 0.1274,
+      "max_s": 0.1462,
+      "peak_mb": 76.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "18",
+      "rows": 12691,
+      "index_variants": 197,
+      "samples_s": [
+       0.0907,
+       0.0794,
+       0.0897
+      ],
+      "median_s": 0.0897,
+      "min_s": 0.0794,
+      "max_s": 0.0907,
+      "peak_mb": 64.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "19",
+      "rows": 16539,
+      "index_variants": 245,
+      "samples_s": [
+       0.0944,
+       0.1047,
+       0.0932
+      ],
+      "median_s": 0.0944,
+      "min_s": 0.0932,
+      "max_s": 0.1047,
+      "peak_mb": 66.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "20",
+      "rows": 17828,
+      "index_variants": 185,
+      "samples_s": [
+       0.1006,
+       0.0948,
+       0.1025
+      ],
+      "median_s": 0.1006,
+      "min_s": 0.0948,
+      "max_s": 0.1025,
+      "peak_mb": 64.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "21",
+      "rows": 5084,
+      "index_variants": 75,
+      "samples_s": [
+       0.0602,
+       0.0542,
+       0.0596
+      ],
+      "median_s": 0.0596,
+      "min_s": 0.0542,
+      "max_s": 0.0602,
+      "peak_mb": 48.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     },
+     {
+      "chromosome": "22",
+      "rows": 9808,
+      "index_variants": 116,
+      "samples_s": [
+       0.0758,
+       0.0752,
+       0.0762
+      ],
+      "median_s": 0.0758,
+      "min_s": 0.0752,
+      "max_s": 0.0762,
+      "peak_mb": 54.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.56,
+       "five": 4.69,
+       "fifteen": 5.72
+      }
+     }
+    ],
+    "index_variants": 7448,
+    "members": 763450,
+    "clump_s": 3.504,
+    "order_followed": true,
+    "r2": 0.01,
+    "clump_kb": 10000,
+    "total_s": 28.6311,
+    "rows": 763450
+   },
+   "ratio": {
+    "rows": 763450,
+    "pruning_s": 1.7142,
+    "clumping_s": 28.6311,
+    "value": 0.0599,
+    "fast_pruning_s": 1.1921,
+    "fast_value": 0.0416,
+    "definition": "pruning (cM lookup, sort, rule) over clumping (shared set, ranking, plink2 with genotypes) on the shared set of the same Analysis"
+   }
+  },
+  {
+   "name": "height_5e-8",
+   "why": "a Hybrid tier most of whose rows are imputed",
+   "store": {
+    "path": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+    "store_id": "OGS-00011",
+    "release_id": "OGS-00011-completed",
+    "format_version": "0.2.0",
+    "primary_layout": "hybrid",
+    "completion_state": "reference_completed",
+    "reference_assembly": "GRCh38"
+   },
+   "analysis_id": "GCST90245992",
+   "threshold": 5e-08,
+   "rows": {
+    "tier": 632889,
+    "observed": 115907,
+    "imputed": 516982,
+    "finite_cm": 632889,
+    "off_map": 0,
+    "ranked": 632889,
+    "off_map_chromosomes": [],
+    "max_abs_z": 72.6115,
+    "rows_abs_z_over_38": 1853
+   },
+   "stages": {
+    "tier": {
+     "samples_s": [
+      0.5412,
+      0.5353,
+      0.5251
+     ],
+     "median_s": 0.5353,
+     "min_s": 0.5251,
+     "max_s": 0.5412,
+     "peak_mb": 2622.4,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.45,
+      "five": 4.61,
+      "fifteen": 5.68
+     }
+    },
+    "positions": {
+     "samples_s": [
+      1.6183,
+      1.4056,
+      1.0994
+     ],
+     "median_s": 1.4056,
+     "min_s": 1.0994,
+     "max_s": 1.6183,
+     "peak_mb": 4342.0,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.45,
+      "five": 4.61,
+      "fifteen": 5.68
+     }
+    },
+    "positions_array": {
+     "samples_s": [
+      0.0208,
+      0.0082,
+      0.0058
+     ],
+     "median_s": 0.0082,
+     "min_s": 0.0058,
+     "max_s": 0.0208,
+     "peak_mb": 2541.9,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.33,
+      "five": 4.57,
+      "fifteen": 5.66
+     }
+    },
+    "cm": {
+     "samples_s": [
+      0.0036,
+      0.0034,
+      0.0018
+     ],
+     "median_s": 0.0034,
+     "min_s": 0.0018,
+     "max_s": 0.0036,
+     "peak_mb": 2541.9,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.33,
+      "five": 4.57,
+      "fifteen": 5.66
+     }
+    },
+    "sort": {
+     "samples_s": [
+      0.0442,
+      0.0425,
+      0.0412
+     ],
+     "median_s": 0.0425,
+     "min_s": 0.0412,
+     "max_s": 0.0442,
+     "peak_mb": 2541.9,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.33,
+      "five": 4.57,
+      "fifteen": 5.66
+     }
+    },
+    "rule": {
+     "samples_s": [
+      0.7749,
+      0.7655,
+      1.2888
+     ],
+     "median_s": 0.7749,
+     "min_s": 0.7655,
+     "max_s": 1.2888,
+     "peak_mb": 2541.9,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.33,
+      "five": 4.57,
+      "fifteen": 5.66
+     }
+    },
+    "rule_fast": {
+     "samples_s": [
+      0.9926,
+      0.992,
+      0.9854
+     ],
+     "median_s": 0.992,
+     "min_s": 0.9854,
+     "max_s": 0.9926,
+     "peak_mb": 2541.9,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.31,
+      "five": 4.54,
+      "fifteen": 5.65
+     }
+    },
+    "read_tier": {
+     "samples_s": [
+      1.3031,
+      1.3223,
+      1.3181
+     ],
+     "median_s": 1.3181,
+     "min_s": 1.3031,
+     "max_s": 1.3223,
+     "peak_mb": 4113.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.31,
+      "five": 4.54,
+      "fifteen": 5.65
+     }
+    }
+   },
+   "budget": {
+    "definition": "the default Top-Hit Query's own wall time for the same slice, imputed rows included",
+    "judged": "pruning runs per query when its stages cost no more than the query they follow (fast_ratio <= 1), so the reader waits at most twice as long",
+    "query_s": 0.5353,
+    "pruning_s": 2.2264,
+    "ratio": 4.1592,
+    "within_budget_as_written": false,
+    "fast_pruning_s": 1.0461,
+    "fast_ratio": 1.9542,
+    "within_budget": false
+   },
+   "leads": {
+    "rule": 1958,
+    "identical_fast_rule": true
+   },
+   "clumping": {
+    "shared_rows": 114148,
+    "shared_set_accounting": {
+     "tier_rows": 115907,
+     "panel": {
+      "matched": 114148,
+      "off_panel_chromosome": 0,
+      "absent_at_position": 1753,
+      "allele_mismatch": 6,
+      "ambiguous": 0
+     },
+     "no_cm": 0,
+     "no_cm_by_panel_status": {
+      "matched": 0,
+      "off_panel_chromosome": 0,
+      "absent_at_position": 0,
+      "allele_mismatch": 0,
+      "ambiguous": 0
+     },
+     "shared_set": 114148,
+     "shared_set_share": 0.9848240399630739,
+     "partition": {
+      "shared_set": 114148,
+      "matched_no_cm": 0,
+      "off_panel_chromosome": 0,
+      "absent_at_position": 1753,
+      "allele_mismatch": 6,
+      "ambiguous": 0
+     }
+    },
+    "stages": {
+     "shared_set": {
+      "samples_s": [
+       22.3034,
+       24.1594,
+       22.8838
+      ],
+      "median_s": 22.8838,
+      "min_s": 22.3034,
+      "max_s": 24.1594,
+      "peak_mb": 2620.2,
+      "peak_source": "process",
+      "child": null,
+      "load": {
+       "one": 2.94,
+       "five": 4.25,
+       "fifteen": 5.49
+      }
+     },
+     "ranked": {
+      "samples_s": [
+       0.0145,
+       0.0138,
+       0.0141
+      ],
+      "median_s": 0.0141,
+      "min_s": 0.0138,
+      "max_s": 0.0145,
+      "peak_mb": 2601.5,
+      "peak_source": "process",
+      "child": null,
+      "load": {
+       "one": 2.75,
+       "five": 4.12,
+       "fifteen": 5.42
+      }
+     },
+     "chr1": {
+      "samples_s": [
+       0.1276,
+       0.1515,
+       0.1457
+      ],
+      "median_s": 0.1457,
+      "min_s": 0.1276,
+      "max_s": 0.1515,
+      "peak_mb": 126.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.75,
+       "five": 4.12,
+       "fifteen": 5.42
+      }
+     },
+     "chr2": {
+      "samples_s": [
+       0.1535,
+       0.1554,
+       0.1543
+      ],
+      "median_s": 0.1543,
+      "min_s": 0.1535,
+      "max_s": 0.1554,
+      "peak_mb": 134.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr3": {
+      "samples_s": [
+       0.13,
+       0.1273,
+       0.1279
+      ],
+      "median_s": 0.1279,
+      "min_s": 0.1273,
+      "max_s": 0.13,
+      "peak_mb": 112.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr4": {
+      "samples_s": [
+       0.1195,
+       0.121,
+       0.1203
+      ],
+      "median_s": 0.1203,
+      "min_s": 0.1195,
+      "max_s": 0.121,
+      "peak_mb": 116.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr5": {
+      "samples_s": [
+       0.1171,
+       0.1188,
+       0.0969
+      ],
+      "median_s": 0.1171,
+      "min_s": 0.0969,
+      "max_s": 0.1188,
+      "peak_mb": 106.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr6": {
+      "samples_s": [
+       0.1346,
+       0.1395,
+       0.112
+      ],
+      "median_s": 0.1346,
+      "min_s": 0.112,
+      "max_s": 0.1395,
+      "peak_mb": 112.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr7": {
+      "samples_s": [
+       0.1119,
+       0.1109,
+       0.0945
+      ],
+      "median_s": 0.1109,
+      "min_s": 0.0945,
+      "max_s": 0.1119,
+      "peak_mb": 106.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr8": {
+      "samples_s": [
+       0.1006,
+       0.0863,
+       0.1002
+      ],
+      "median_s": 0.1002,
+      "min_s": 0.0863,
+      "max_s": 0.1006,
+      "peak_mb": 88.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr9": {
+      "samples_s": [
+       0.0963,
+       0.0936,
+       0.0941
+      ],
+      "median_s": 0.0941,
+      "min_s": 0.0936,
+      "max_s": 0.0963,
+      "peak_mb": 84.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr10": {
+      "samples_s": [
+       0.101,
+       0.1008,
+       0.1011
+      ],
+      "median_s": 0.101,
+      "min_s": 0.1008,
+      "max_s": 0.1011,
+      "peak_mb": 94.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr11": {
+      "samples_s": [
+       0.0971,
+       0.0993,
+       0.0964
+      ],
+      "median_s": 0.0971,
+      "min_s": 0.0964,
+      "max_s": 0.0993,
+      "peak_mb": 88.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr12": {
+      "samples_s": [
+       0.1001,
+       0.1002,
+       0.0992
+      ],
+      "median_s": 0.1001,
+      "min_s": 0.0992,
+      "max_s": 0.1002,
+      "peak_mb": 86.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr13": {
+      "samples_s": [
+       0.0718,
+       0.0706,
+       0.0719
+      ],
+      "median_s": 0.0718,
+      "min_s": 0.0706,
+      "max_s": 0.0719,
+      "peak_mb": 70.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr14": {
+      "samples_s": [
+       0.0709,
+       0.0711,
+       0.0717
+      ],
+      "median_s": 0.0711,
+      "min_s": 0.0709,
+      "max_s": 0.0717,
+      "peak_mb": 64.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr15": {
+      "samples_s": [
+       0.0726,
+       0.0747,
+       0.0731
+      ],
+      "median_s": 0.0731,
+      "min_s": 0.0726,
+      "max_s": 0.0747,
+      "peak_mb": 64.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr16": {
+      "samples_s": [
+       0.07,
+       0.0717,
+       0.0705
+      ],
+      "median_s": 0.0705,
+      "min_s": 0.07,
+      "max_s": 0.0717,
+      "peak_mb": 62.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr17": {
+      "samples_s": [
+       0.0742,
+       0.0748,
+       0.0743
+      ],
+      "median_s": 0.0743,
+      "min_s": 0.0742,
+      "max_s": 0.0748,
+      "peak_mb": 66.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr18": {
+      "samples_s": [
+       0.0513,
+       0.0604,
+       0.0502
+      ],
+      "median_s": 0.0513,
+      "min_s": 0.0502,
+      "max_s": 0.0604,
+      "peak_mb": 58.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr19": {
+      "samples_s": [
+       0.063,
+       0.0639,
+       0.0542
+      ],
+      "median_s": 0.063,
+      "min_s": 0.0542,
+      "max_s": 0.0639,
+      "peak_mb": 60.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     "chr20": {
+      "samples_s": [
+       0.0627,
+       0.0544,
+       0.0627
+      ],
+      "median_s": 0.0627,
+      "min_s": 0.0544,
+      "max_s": 0.0627,
+      "peak_mb": 60.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.03,
+       "five": 4.14,
+       "fifteen": 5.41
+      }
+     },
+     "chr21": {
+      "samples_s": [
+       0.0459,
+       0.0474,
+       0.0444
+      ],
+      "median_s": 0.0459,
+      "min_s": 0.0444,
+      "max_s": 0.0474,
+      "peak_mb": 46.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.03,
+       "five": 4.14,
+       "fifteen": 5.41
+      }
+     },
+     "chr22": {
+      "samples_s": [
+       0.0501,
+       0.0513,
+       0.05
+      ],
+      "median_s": 0.0501,
+      "min_s": 0.05,
+      "max_s": 0.0513,
+      "peak_mb": 48.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.03,
+       "five": 4.14,
+       "fifteen": 5.41
+      }
+     }
+    },
+    "per_chromosome": [
+     {
+      "chromosome": "1",
+      "rows": 9635,
+      "index_variants": 335,
+      "samples_s": [
+       0.1276,
+       0.1515,
+       0.1457
+      ],
+      "median_s": 0.1457,
+      "min_s": 0.1276,
+      "max_s": 0.1515,
+      "peak_mb": 126.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.75,
+       "five": 4.12,
+       "fifteen": 5.42
+      }
+     },
+     {
+      "chromosome": "2",
+      "rows": 10333,
+      "index_variants": 350,
+      "samples_s": [
+       0.1535,
+       0.1554,
+       0.1543
+      ],
+      "median_s": 0.1543,
+      "min_s": 0.1535,
+      "max_s": 0.1554,
+      "peak_mb": 134.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "3",
+      "rows": 7751,
+      "index_variants": 258,
+      "samples_s": [
+       0.13,
+       0.1273,
+       0.1279
+      ],
+      "median_s": 0.1279,
+      "min_s": 0.1273,
+      "max_s": 0.13,
+      "peak_mb": 112.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "4",
+      "rows": 5086,
+      "index_variants": 180,
+      "samples_s": [
+       0.1195,
+       0.121,
+       0.1203
+      ],
+      "median_s": 0.1203,
+      "min_s": 0.1195,
+      "max_s": 0.121,
+      "peak_mb": 116.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "5",
+      "rows": 7369,
+      "index_variants": 236,
+      "samples_s": [
+       0.1171,
+       0.1188,
+       0.0969
+      ],
+      "median_s": 0.1171,
+      "min_s": 0.0969,
+      "max_s": 0.1188,
+      "peak_mb": 106.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "6",
+      "rows": 11601,
+      "index_variants": 267,
+      "samples_s": [
+       0.1346,
+       0.1395,
+       0.112
+      ],
+      "median_s": 0.1346,
+      "min_s": 0.112,
+      "max_s": 0.1395,
+      "peak_mb": 112.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "7",
+      "rows": 5767,
+      "index_variants": 234,
+      "samples_s": [
+       0.1119,
+       0.1109,
+       0.0945
+      ],
+      "median_s": 0.1109,
+      "min_s": 0.0945,
+      "max_s": 0.1119,
+      "peak_mb": 106.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "8",
+      "rows": 5632,
+      "index_variants": 190,
+      "samples_s": [
+       0.1006,
+       0.0863,
+       0.1002
+      ],
+      "median_s": 0.1002,
+      "min_s": 0.0863,
+      "max_s": 0.1006,
+      "peak_mb": 88.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "9",
+      "rows": 5728,
+      "index_variants": 195,
+      "samples_s": [
+       0.0963,
+       0.0936,
+       0.0941
+      ],
+      "median_s": 0.0941,
+      "min_s": 0.0936,
+      "max_s": 0.0963,
+      "peak_mb": 84.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "10",
+      "rows": 5267,
+      "index_variants": 197,
+      "samples_s": [
+       0.101,
+       0.1008,
+       0.1011
+      ],
+      "median_s": 0.101,
+      "min_s": 0.1008,
+      "max_s": 0.1011,
+      "peak_mb": 94.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "11",
+      "rows": 5646,
+      "index_variants": 193,
+      "samples_s": [
+       0.0971,
+       0.0993,
+       0.0964
+      ],
+      "median_s": 0.0971,
+      "min_s": 0.0964,
+      "max_s": 0.0993,
+      "peak_mb": 88.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "12",
+      "rows": 6042,
+      "index_variants": 231,
+      "samples_s": [
+       0.1001,
+       0.1002,
+       0.0992
+      ],
+      "median_s": 0.1001,
+      "min_s": 0.0992,
+      "max_s": 0.1002,
+      "peak_mb": 86.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "13",
+      "rows": 2629,
+      "index_variants": 100,
+      "samples_s": [
+       0.0718,
+       0.0706,
+       0.0719
+      ],
+      "median_s": 0.0718,
+      "min_s": 0.0706,
+      "max_s": 0.0719,
+      "peak_mb": 70.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "14",
+      "rows": 3224,
+      "index_variants": 122,
+      "samples_s": [
+       0.0709,
+       0.0711,
+       0.0717
+      ],
+      "median_s": 0.0711,
+      "min_s": 0.0709,
+      "max_s": 0.0717,
+      "peak_mb": 64.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "15",
+      "rows": 4413,
+      "index_variants": 161,
+      "samples_s": [
+       0.0726,
+       0.0747,
+       0.0731
+      ],
+      "median_s": 0.0731,
+      "min_s": 0.0726,
+      "max_s": 0.0747,
+      "peak_mb": 64.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "16",
+      "rows": 3282,
+      "index_variants": 139,
+      "samples_s": [
+       0.07,
+       0.0717,
+       0.0705
+      ],
+      "median_s": 0.0705,
+      "min_s": 0.07,
+      "max_s": 0.0717,
+      "peak_mb": 62.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "17",
+      "rows": 4656,
+      "index_variants": 167,
+      "samples_s": [
+       0.0742,
+       0.0748,
+       0.0743
+      ],
+      "median_s": 0.0743,
+      "min_s": 0.0742,
+      "max_s": 0.0748,
+      "peak_mb": 66.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "18",
+      "rows": 1965,
+      "index_variants": 91,
+      "samples_s": [
+       0.0513,
+       0.0604,
+       0.0502
+      ],
+      "median_s": 0.0513,
+      "min_s": 0.0502,
+      "max_s": 0.0604,
+      "peak_mb": 58.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "19",
+      "rows": 2269,
+      "index_variants": 131,
+      "samples_s": [
+       0.063,
+       0.0639,
+       0.0542
+      ],
+      "median_s": 0.063,
+      "min_s": 0.0542,
+      "max_s": 0.0639,
+      "peak_mb": 60.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.77,
+       "five": 4.1,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "20",
+      "rows": 3423,
+      "index_variants": 124,
+      "samples_s": [
+       0.0627,
+       0.0544,
+       0.0627
+      ],
+      "median_s": 0.0627,
+      "min_s": 0.0544,
+      "max_s": 0.0627,
+      "peak_mb": 60.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.03,
+       "five": 4.14,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "21",
+      "rows": 759,
+      "index_variants": 39,
+      "samples_s": [
+       0.0459,
+       0.0474,
+       0.0444
+      ],
+      "median_s": 0.0459,
+      "min_s": 0.0444,
+      "max_s": 0.0474,
+      "peak_mb": 46.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.03,
+       "five": 4.14,
+       "fifteen": 5.41
+      }
+     },
+     {
+      "chromosome": "22",
+      "rows": 1671,
+      "index_variants": 60,
+      "samples_s": [
+       0.0501,
+       0.0513,
+       0.05
+      ],
+      "median_s": 0.0501,
+      "min_s": 0.05,
+      "max_s": 0.0513,
+      "peak_mb": 48.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 3.03,
+       "five": 4.14,
+       "fifteen": 5.41
+      }
+     }
+    ],
+    "index_variants": 4000,
+    "members": 114148,
+    "clump_s": 2.0371,
+    "order_followed": true,
+    "r2": 0.01,
+    "clump_kb": 10000,
+    "total_s": 24.935,
+    "rows": 114148
+   },
+   "ratio": {
+    "rows": 114148,
+    "pruning_s": 0.1469,
+    "clumping_s": 24.935,
+    "value": 0.0059,
+    "fast_pruning_s": 0.4568,
+    "fast_value": 0.0183,
+    "definition": "pruning (cM lookup, sort, rule) over clumping (shared set, ranking, plink2 with genotypes) on the shared set of the same Analysis"
+   }
+  },
+  {
+   "name": "observed_only_5e-8",
+   "why": "the largest Observed-Only tier: no imputed rows at all",
+   "store": {
+    "path": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+    "store_id": "OGS-00011",
+    "release_id": "OGS-00011-completed",
+    "format_version": "0.2.0",
+    "primary_layout": "hybrid",
+    "completion_state": "reference_completed",
+    "reference_assembly": "GRCh38"
+   },
+   "analysis_id": "GCST002047",
+   "threshold": 5e-08,
+   "rows": {
+    "tier": 2314363,
+    "observed": 2314359,
+    "imputed": 0,
+    "finite_cm": 2314359,
+    "off_map": 4,
+    "ranked": 2314359,
+    "off_map_chromosomes": [
+     "X"
+    ],
+    "max_abs_z": 111.2222,
+    "rows_abs_z_over_38": 2223172
+   },
+   "stages": {
+    "tier": {
+     "samples_s": [
+      0.639,
+      0.6317,
+      0.6218
+     ],
+     "median_s": 0.6317,
+     "min_s": 0.6218,
+     "max_s": 0.639,
+     "peak_mb": 2678.0,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 3.03,
+      "five": 4.14,
+      "fifteen": 5.41
+     }
+    },
+    "positions": {
+     "samples_s": [
+      3.2066,
+      3.0325,
+      2.7954
+     ],
+     "median_s": 3.0325,
+     "min_s": 2.7954,
+     "max_s": 3.2066,
+     "peak_mb": 4979.2,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.95,
+      "five": 4.08,
+      "fifteen": 5.38
+     }
+    },
+    "positions_array": {
+     "samples_s": [
+      0.0634,
+      0.0321,
+      0.0313
+     ],
+     "median_s": 0.0321,
+     "min_s": 0.0313,
+     "max_s": 0.0634,
+     "peak_mb": 2568.8,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.95,
+      "five": 4.08,
+      "fifteen": 5.38
+     }
+    },
+    "cm": {
+     "samples_s": [
+      0.0142,
+      0.0138,
+      0.0134
+     ],
+     "median_s": 0.0138,
+     "min_s": 0.0134,
+     "max_s": 0.0142,
+     "peak_mb": 2568.8,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.95,
+      "five": 4.08,
+      "fifteen": 5.38
+     }
+    },
+    "sort": {
+     "samples_s": [
+      0.1468,
+      0.1444,
+      0.1421
+     ],
+     "median_s": 0.1444,
+     "min_s": 0.1421,
+     "max_s": 0.1468,
+     "peak_mb": 2568.8,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.95,
+      "five": 4.08,
+      "fifteen": 5.38
+     }
+    },
+    "rule": {
+     "samples_s": [
+      3.2043,
+      3.1612,
+      3.2028
+     ],
+     "median_s": 3.2028,
+     "min_s": 3.1612,
+     "max_s": 3.2043,
+     "peak_mb": 2568.8,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.95,
+      "five": 4.05,
+      "fifteen": 5.35
+     }
+    },
+    "rule_fast": {
+     "samples_s": [
+      1.1314,
+      1.1466,
+      1.1338
+     ],
+     "median_s": 1.1338,
+     "min_s": 1.1314,
+     "max_s": 1.1466,
+     "peak_mb": 2580.2,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.87,
+      "five": 4.01,
+      "fifteen": 5.33
+     }
+    },
+    "read_tier": {
+     "samples_s": [
+      11.9592,
+      11.9999,
+      12.1882
+     ],
+     "median_s": 11.9999,
+     "min_s": 11.9592,
+     "max_s": 12.1882,
+     "peak_mb": 6123.2,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.99,
+      "five": 3.95,
+      "fifteen": 5.28
+     }
+    }
+   },
+   "budget": {
+    "definition": "the default Top-Hit Query's own wall time for the same slice, imputed rows included",
+    "judged": "pruning runs per query when its stages cost no more than the query they follow (fast_ratio <= 1), so the reader waits at most twice as long",
+    "query_s": 0.6317,
+    "pruning_s": 6.3935,
+    "ratio": 10.1211,
+    "within_budget_as_written": false,
+    "fast_pruning_s": 1.3241,
+    "fast_ratio": 2.0961,
+    "within_budget": false
+   },
+   "leads": {
+    "rule": 3590,
+    "identical_fast_rule": true
+   },
+   "clumping": {
+    "shared_rows": 2245120,
+    "shared_set_accounting": {
+     "tier_rows": 2314363,
+     "panel": {
+      "matched": 2245120,
+      "off_panel_chromosome": 4,
+      "absent_at_position": 68846,
+      "allele_mismatch": 393,
+      "ambiguous": 0
+     },
+     "no_cm": 4,
+     "no_cm_by_panel_status": {
+      "matched": 0,
+      "off_panel_chromosome": 4,
+      "absent_at_position": 0,
+      "allele_mismatch": 0,
+      "ambiguous": 0
+     },
+     "shared_set": 2245120,
+     "shared_set_share": 0.9700811843258814,
+     "partition": {
+      "shared_set": 2245120,
+      "matched_no_cm": 0,
+      "off_panel_chromosome": 4,
+      "absent_at_position": 68846,
+      "allele_mismatch": 393,
+      "ambiguous": 0
+     }
+    },
+    "stages": {
+     "shared_set": {
+      "samples_s": [
+       26.7991,
+       25.6232,
+       26.3889
+      ],
+      "median_s": 26.3889,
+      "min_s": 25.6232,
+      "max_s": 26.7991,
+      "peak_mb": 3625.9,
+      "peak_source": "process",
+      "child": null,
+      "load": {
+       "one": 2.78,
+       "five": 3.69,
+       "fifteen": 5.09
+      }
+     },
+     "ranked": {
+      "samples_s": [
+       0.2731,
+       0.2624,
+       0.2656
+      ],
+      "median_s": 0.2656,
+      "min_s": 0.2624,
+      "max_s": 0.2731,
+      "peak_mb": 3406.2,
+      "peak_source": "process",
+      "child": null,
+      "load": {
+       "one": 2.57,
+       "five": 3.57,
+       "fifteen": 5.02
+      }
+     },
+     "chr1": {
+      "samples_s": [
+       0.5641,
+       0.5568,
+       0.5586
+      ],
+      "median_s": 0.5586,
+      "min_s": 0.5568,
+      "max_s": 0.5641,
+      "peak_mb": 174.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.57,
+       "five": 3.57,
+       "fifteen": 5.02
+      }
+     },
+     "chr2": {
+      "samples_s": [
+       0.6115,
+       0.6145,
+       0.6118
+      ],
+      "median_s": 0.6118,
+      "min_s": 0.6115,
+      "max_s": 0.6145,
+      "peak_mb": 186.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.69,
+       "five": 3.57,
+       "fifteen": 5.01
+      }
+     },
+     "chr3": {
+      "samples_s": [
+       0.5045,
+       0.5026,
+       0.5013
+      ],
+      "median_s": 0.5026,
+      "min_s": 0.5013,
+      "max_s": 0.5045,
+      "peak_mb": 158.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.69,
+       "five": 3.57,
+       "fifteen": 5.01
+      }
+     },
+     "chr4": {
+      "samples_s": [
+       0.4859,
+       0.4764,
+       0.4364
+      ],
+      "median_s": 0.4764,
+      "min_s": 0.4364,
+      "max_s": 0.4859,
+      "peak_mb": 154.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.69,
+       "five": 3.57,
+       "fifteen": 5.01
+      }
+     },
+     "chr5": {
+      "samples_s": [
+       0.4855,
+       0.4759,
+       0.4781
+      ],
+      "median_s": 0.4781,
+      "min_s": 0.4759,
+      "max_s": 0.4855,
+      "peak_mb": 152.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.95,
+       "five": 3.61,
+       "fifteen": 5.01
+      }
+     },
+     "chr6": {
+      "samples_s": [
+       0.5134,
+       0.5059,
+       0.5058
+      ],
+      "median_s": 0.5059,
+      "min_s": 0.5058,
+      "max_s": 0.5134,
+      "peak_mb": 162.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.95,
+       "five": 3.61,
+       "fifteen": 5.01
+      }
+     },
+     "chr7": {
+      "samples_s": [
+       0.4326,
+       0.4218,
+       0.4251
+      ],
+      "median_s": 0.4251,
+      "min_s": 0.4218,
+      "max_s": 0.4326,
+      "peak_mb": 138.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.95,
+       "five": 3.61,
+       "fifteen": 5.01
+      }
+     },
+     "chr8": {
+      "samples_s": [
+       0.4241,
+       0.4164,
+       0.4142
+      ],
+      "median_s": 0.4164,
+      "min_s": 0.4142,
+      "max_s": 0.4241,
+      "peak_mb": 134.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.95,
+       "five": 3.61,
+       "fifteen": 5.01
+      }
+     },
+     "chr9": {
+      "samples_s": [
+       0.3647,
+       0.3652,
+       0.3734
+      ],
+      "median_s": 0.3652,
+      "min_s": 0.3647,
+      "max_s": 0.3734,
+      "peak_mb": 120.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.88,
+       "five": 3.59,
+       "fifteen": 5.0
+      }
+     },
+     "chr10": {
+      "samples_s": [
+       0.4154,
+       0.4092,
+       0.409
+      ],
+      "median_s": 0.4092,
+      "min_s": 0.409,
+      "max_s": 0.4154,
+      "peak_mb": 130.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.88,
+       "five": 3.59,
+       "fifteen": 5.0
+      }
+     },
+     "chr11": {
+      "samples_s": [
+       0.3874,
+       0.3838,
+       0.3836
+      ],
+      "median_s": 0.3838,
+      "min_s": 0.3836,
+      "max_s": 0.3874,
+      "peak_mb": 124.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.88,
+       "five": 3.59,
+       "fifteen": 5.0
+      }
+     },
+     "chr12": {
+      "samples_s": [
+       0.3758,
+       0.3673,
+       0.365
+      ],
+      "median_s": 0.3673,
+      "min_s": 0.365,
+      "max_s": 0.3758,
+      "peak_mb": 122.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.88,
+       "five": 3.59,
+       "fifteen": 5.0
+      }
+     },
+     "chr13": {
+      "samples_s": [
+       0.311,
+       0.3068,
+       0.3169
+      ],
+      "median_s": 0.311,
+      "min_s": 0.3068,
+      "max_s": 0.3169,
+      "peak_mb": 104.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.88,
+       "five": 3.59,
+       "fifteen": 5.0
+      }
+     },
+     "chr14": {
+      "samples_s": [
+       0.268,
+       0.2641,
+       0.2631
+      ],
+      "median_s": 0.2641,
+      "min_s": 0.2631,
+      "max_s": 0.268,
+      "peak_mb": 94.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.58,
+       "fifteen": 4.99
+      }
+     },
+     "chr15": {
+      "samples_s": [
+       0.2401,
+       0.2276,
+       0.2298
+      ],
+      "median_s": 0.2298,
+      "min_s": 0.2276,
+      "max_s": 0.2401,
+      "peak_mb": 86.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.58,
+       "fifteen": 4.99
+      }
+     },
+     "chr16": {
+      "samples_s": [
+       0.234,
+       0.2354,
+       0.2319
+      ],
+      "median_s": 0.234,
+      "min_s": 0.2319,
+      "max_s": 0.2354,
+      "peak_mb": 84.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.58,
+       "fifteen": 4.99
+      }
+     },
+     "chr17": {
+      "samples_s": [
+       0.2104,
+       0.2014,
+       0.2006
+      ],
+      "median_s": 0.2014,
+      "min_s": 0.2006,
+      "max_s": 0.2104,
+      "peak_mb": 80.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.58,
+       "fifteen": 4.99
+      }
+     },
+     "chr18": {
+      "samples_s": [
+       0.241,
+       0.242,
+       0.2401
+      ],
+      "median_s": 0.241,
+      "min_s": 0.2401,
+      "max_s": 0.242,
+      "peak_mb": 86.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.58,
+       "fifteen": 4.99
+      }
+     },
+     "chr19": {
+      "samples_s": [
+       0.1464,
+       0.1449,
+       0.1452
+      ],
+      "median_s": 0.1452,
+      "min_s": 0.1449,
+      "max_s": 0.1464,
+      "peak_mb": 70.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.58,
+       "fifteen": 4.99
+      }
+     },
+     "chr20": {
+      "samples_s": [
+       0.207,
+       0.2033,
+       0.2031
+      ],
+      "median_s": 0.2033,
+      "min_s": 0.2031,
+      "max_s": 0.207,
+      "peak_mb": 76.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.58,
+       "fifteen": 4.99
+      }
+     },
+     "chr21": {
+      "samples_s": [
+       0.1366,
+       0.1323,
+       0.1355
+      ],
+      "median_s": 0.1355,
+      "min_s": 0.1323,
+      "max_s": 0.1366,
+      "peak_mb": 60.6,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.57,
+       "fifteen": 4.98
+      }
+     },
+     "chr22": {
+      "samples_s": [
+       0.1287,
+       0.131,
+       0.1263
+      ],
+      "median_s": 0.1287,
+      "min_s": 0.1263,
+      "max_s": 0.131,
+      "peak_mb": 62.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.57,
+       "fifteen": 4.98
+      }
+     }
+    },
+    "per_chromosome": [
+     {
+      "chromosome": "1",
+      "rows": 169578,
+      "index_variants": 1649,
+      "samples_s": [
+       0.5641,
+       0.5568,
+       0.5586
+      ],
+      "median_s": 0.5586,
+      "min_s": 0.5568,
+      "max_s": 0.5641,
+      "peak_mb": 174.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.57,
+       "five": 3.57,
+       "fifteen": 5.02
+      }
+     },
+     {
+      "chromosome": "2",
+      "rows": 196503,
+      "index_variants": 1635,
+      "samples_s": [
+       0.6115,
+       0.6145,
+       0.6118
+      ],
+      "median_s": 0.6118,
+      "min_s": 0.6115,
+      "max_s": 0.6145,
+      "peak_mb": 186.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.69,
+       "five": 3.57,
+       "fifteen": 5.01
+      }
+     },
+     {
+      "chromosome": "3",
+      "rows": 155398,
+      "index_variants": 1390,
+      "samples_s": [
+       0.5045,
+       0.5026,
+       0.5013
+      ],
+      "median_s": 0.5026,
+      "min_s": 0.5013,
+      "max_s": 0.5045,
+      "peak_mb": 158.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.69,
+       "five": 3.57,
+       "fifteen": 5.01
+      }
+     },
+     {
+      "chromosome": "4",
+      "rows": 144278,
+      "index_variants": 1294,
+      "samples_s": [
+       0.4859,
+       0.4764,
+       0.4364
+      ],
+      "median_s": 0.4764,
+      "min_s": 0.4364,
+      "max_s": 0.4859,
+      "peak_mb": 154.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.69,
+       "five": 3.57,
+       "fifteen": 5.01
+      }
+     },
+     {
+      "chromosome": "5",
+      "rows": 150435,
+      "index_variants": 1282,
+      "samples_s": [
+       0.4855,
+       0.4759,
+       0.4781
+      ],
+      "median_s": 0.4781,
+      "min_s": 0.4759,
+      "max_s": 0.4855,
+      "peak_mb": 152.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.95,
+       "five": 3.61,
+       "fifteen": 5.01
+      }
+     },
+     {
+      "chromosome": "6",
+      "rows": 161617,
+      "index_variants": 1215,
+      "samples_s": [
+       0.5134,
+       0.5059,
+       0.5058
+      ],
+      "median_s": 0.5059,
+      "min_s": 0.5058,
+      "max_s": 0.5134,
+      "peak_mb": 162.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.95,
+       "five": 3.61,
+       "fifteen": 5.01
+      }
+     },
+     {
+      "chromosome": "7",
+      "rows": 126816,
+      "index_variants": 1123,
+      "samples_s": [
+       0.4326,
+       0.4218,
+       0.4251
+      ],
+      "median_s": 0.4251,
+      "min_s": 0.4218,
+      "max_s": 0.4326,
+      "peak_mb": 138.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.95,
+       "five": 3.61,
+       "fifteen": 5.01
+      }
+     },
+     {
+      "chromosome": "8",
+      "rows": 132524,
+      "index_variants": 1057,
+      "samples_s": [
+       0.4241,
+       0.4164,
+       0.4142
+      ],
+      "median_s": 0.4164,
+      "min_s": 0.4142,
+      "max_s": 0.4241,
+      "peak_mb": 134.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.95,
+       "five": 3.61,
+       "fifteen": 5.01
+      }
+     },
+     {
+      "chromosome": "9",
+      "rows": 108261,
+      "index_variants": 969,
+      "samples_s": [
+       0.3647,
+       0.3652,
+       0.3734
+      ],
+      "median_s": 0.3652,
+      "min_s": 0.3647,
+      "max_s": 0.3734,
+      "peak_mb": 120.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.88,
+       "five": 3.59,
+       "fifteen": 5.0
+      }
+     },
+     {
+      "chromosome": "10",
+      "rows": 122257,
+      "index_variants": 1038,
+      "samples_s": [
+       0.4154,
+       0.4092,
+       0.409
+      ],
+      "median_s": 0.4092,
+      "min_s": 0.409,
+      "max_s": 0.4154,
+      "peak_mb": 130.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.88,
+       "five": 3.59,
+       "fifteen": 5.0
+      }
+     },
+     {
+      "chromosome": "11",
+      "rows": 115549,
+      "index_variants": 1010,
+      "samples_s": [
+       0.3874,
+       0.3838,
+       0.3836
+      ],
+      "median_s": 0.3838,
+      "min_s": 0.3836,
+      "max_s": 0.3874,
+      "peak_mb": 124.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.88,
+       "five": 3.59,
+       "fifteen": 5.0
+      }
+     },
+     {
+      "chromosome": "12",
+      "rows": 109498,
+      "index_variants": 1002,
+      "samples_s": [
+       0.3758,
+       0.3673,
+       0.365
+      ],
+      "median_s": 0.3673,
+      "min_s": 0.365,
+      "max_s": 0.3758,
+      "peak_mb": 122.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.88,
+       "five": 3.59,
+       "fifteen": 5.0
+      }
+     },
+     {
+      "chromosome": "13",
+      "rows": 91053,
+      "index_variants": 780,
+      "samples_s": [
+       0.311,
+       0.3068,
+       0.3169
+      ],
+      "median_s": 0.311,
+      "min_s": 0.3068,
+      "max_s": 0.3169,
+      "peak_mb": 104.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.88,
+       "five": 3.59,
+       "fifteen": 5.0
+      }
+     },
+     {
+      "chromosome": "14",
+      "rows": 74083,
+      "index_variants": 722,
+      "samples_s": [
+       0.268,
+       0.2641,
+       0.2631
+      ],
+      "median_s": 0.2641,
+      "min_s": 0.2631,
+      "max_s": 0.268,
+      "peak_mb": 94.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.58,
+       "fifteen": 4.99
+      }
+     },
+     {
+      "chromosome": "15",
+      "rows": 62913,
+      "index_variants": 689,
+      "samples_s": [
+       0.2401,
+       0.2276,
+       0.2298
+      ],
+      "median_s": 0.2298,
+      "min_s": 0.2276,
+      "max_s": 0.2401,
+      "peak_mb": 86.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.58,
+       "fifteen": 4.99
+      }
+     },
+     {
+      "chromosome": "16",
+      "rows": 62113,
+      "index_variants": 713,
+      "samples_s": [
+       0.234,
+       0.2354,
+       0.2319
+      ],
+      "median_s": 0.234,
+      "min_s": 0.2319,
+      "max_s": 0.2354,
+      "peak_mb": 84.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.58,
+       "fifteen": 4.99
+      }
+     },
+     {
+      "chromosome": "17",
+      "rows": 50652,
+      "index_variants": 675,
+      "samples_s": [
+       0.2104,
+       0.2014,
+       0.2006
+      ],
+      "median_s": 0.2014,
+      "min_s": 0.2006,
+      "max_s": 0.2104,
+      "peak_mb": 80.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.58,
+       "fifteen": 4.99
+      }
+     },
+     {
+      "chromosome": "18",
+      "rows": 67486,
+      "index_variants": 692,
+      "samples_s": [
+       0.241,
+       0.242,
+       0.2401
+      ],
+      "median_s": 0.241,
+      "min_s": 0.2401,
+      "max_s": 0.242,
+      "peak_mb": 86.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.58,
+       "fifteen": 4.99
+      }
+     },
+     {
+      "chromosome": "19",
+      "rows": 30440,
+      "index_variants": 529,
+      "samples_s": [
+       0.1464,
+       0.1449,
+       0.1452
+      ],
+      "median_s": 0.1452,
+      "min_s": 0.1449,
+      "max_s": 0.1464,
+      "peak_mb": 70.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.58,
+       "fifteen": 4.99
+      }
+     },
+     {
+      "chromosome": "20",
+      "rows": 55371,
+      "index_variants": 581,
+      "samples_s": [
+       0.207,
+       0.2033,
+       0.2031
+      ],
+      "median_s": 0.2033,
+      "min_s": 0.2031,
+      "max_s": 0.207,
+      "peak_mb": 76.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.58,
+       "fifteen": 4.99
+      }
+     },
+     {
+      "chromosome": "21",
+      "rows": 29922,
+      "index_variants": 344,
+      "samples_s": [
+       0.1366,
+       0.1323,
+       0.1355
+      ],
+      "median_s": 0.1355,
+      "min_s": 0.1323,
+      "max_s": 0.1366,
+      "peak_mb": 60.6,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.57,
+       "fifteen": 4.98
+      }
+     },
+     {
+      "chromosome": "22",
+      "rows": 28373,
+      "index_variants": 370,
+      "samples_s": [
+       0.1287,
+       0.131,
+       0.1263
+      ],
+      "median_s": 0.1287,
+      "min_s": 0.1263,
+      "max_s": 0.131,
+      "peak_mb": 62.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.89,
+       "five": 3.57,
+       "fifteen": 4.98
+      }
+     }
+    ],
+    "index_variants": 20759,
+    "members": 2245120,
+    "clump_s": 7.5944,
+    "order_followed": true,
+    "r2": 0.01,
+    "clump_kb": 10000,
+    "total_s": 34.2489,
+    "rows": 2245120
+   },
+   "ratio": {
+    "rows": 2245120,
+    "pruning_s": 3.2044,
+    "clumping_s": 34.2489,
+    "value": 0.0936,
+    "fast_pruning_s": 1.2594,
+    "fast_value": 0.0368,
+    "definition": "pruning (cM lookup, sort, rule) over clumping (shared set, ranking, plink2 with genotypes) on the shared set of the same Analysis"
+   }
+  },
+  {
+   "name": "tracer",
+   "why": "#402's tracer Analysis",
+   "store": {
+    "path": "/data/opengwasdb/stores/OGS-00003/store.opengwasdb",
+    "store_id": "OGS-00003",
+    "release_id": "OGS-00003",
+    "format_version": "0.1.0",
+    "primary_layout": "dense",
+    "completion_state": "observed_only",
+    "reference_assembly": "GRCh38"
+   },
+   "analysis_id": "finngen-r13-BMI_IRN",
+   "threshold": 5e-08,
+   "rows": {
+    "tier": 55460,
+    "observed": 51836,
+    "imputed": 0,
+    "finite_cm": 51836,
+    "off_map": 3624,
+    "ranked": 51836,
+    "off_map_chromosomes": [
+     "X"
+    ],
+    "max_abs_z": 38.3124,
+    "rows_abs_z_over_38": 26
+   },
+   "stages": {
+    "tier": {
+     "samples_s": [
+      0.1153,
+      0.1023,
+      0.1042
+     ],
+     "median_s": 0.1042,
+     "min_s": 0.1023,
+     "max_s": 0.1153,
+     "peak_mb": 2787.6,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.83,
+      "five": 3.53,
+      "fifteen": 4.95
+     }
+    },
+    "positions": {
+     "samples_s": [
+      0.2341,
+      0.2815,
+      0.2303
+     ],
+     "median_s": 0.2341,
+     "min_s": 0.2303,
+     "max_s": 0.2815,
+     "peak_mb": 3351.9,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.83,
+      "five": 3.53,
+      "fifteen": 4.95
+     }
+    },
+    "positions_array": {
+     "samples_s": [
+      0.0028,
+      0.0007,
+      0.0005
+     ],
+     "median_s": 0.0007,
+     "min_s": 0.0005,
+     "max_s": 0.0028,
+     "peak_mb": 2667.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.92,
+      "five": 3.54,
+      "fifteen": 4.94
+     }
+    },
+    "cm": {
+     "samples_s": [
+      0.0018,
+      0.0002,
+      0.0001
+     ],
+     "median_s": 0.0002,
+     "min_s": 0.0001,
+     "max_s": 0.0018,
+     "peak_mb": 2667.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.92,
+      "five": 3.54,
+      "fifteen": 4.94
+     }
+    },
+    "sort": {
+     "samples_s": [
+      0.0028,
+      0.0028,
+      0.0028
+     ],
+     "median_s": 0.0028,
+     "min_s": 0.0028,
+     "max_s": 0.0028,
+     "peak_mb": 2667.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.92,
+      "five": 3.54,
+      "fifteen": 4.94
+     }
+    },
+    "rule": {
+     "samples_s": [
+      0.0574,
+      0.0571,
+      0.057
+     ],
+     "median_s": 0.0571,
+     "min_s": 0.057,
+     "max_s": 0.0574,
+     "peak_mb": 2667.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.92,
+      "five": 3.54,
+      "fifteen": 4.94
+     }
+    },
+    "rule_fast": {
+     "samples_s": [
+      0.2373,
+      0.2382,
+      0.2377
+     ],
+     "median_s": 0.2377,
+     "min_s": 0.2373,
+     "max_s": 0.2382,
+     "peak_mb": 2667.1,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.92,
+      "five": 3.54,
+      "fifteen": 4.94
+     }
+    },
+    "read_tier": {
+     "samples_s": [
+      0.5416,
+      0.549,
+      0.5446
+     ],
+     "median_s": 0.5446,
+     "min_s": 0.5416,
+     "max_s": 0.549,
+     "peak_mb": 3232.3,
+     "peak_source": "process",
+     "child": null,
+     "load": {
+      "one": 2.92,
+      "five": 3.54,
+      "fifteen": 4.94
+     }
+    }
+   },
+   "budget": {
+    "definition": "the default Top-Hit Query's own wall time for the same slice, imputed rows included",
+    "judged": "pruning runs per query when its stages cost no more than the query they follow (fast_ratio <= 1), so the reader waits at most twice as long",
+    "query_s": 0.1042,
+    "pruning_s": 0.2942,
+    "ratio": 2.8234,
+    "within_budget_as_written": false,
+    "fast_pruning_s": 0.2414,
+    "fast_ratio": 2.3167,
+    "within_budget": false
+   },
+   "leads": {
+    "rule": 651,
+    "identical_fast_rule": true
+   },
+   "clumping": {
+    "shared_rows": 47457,
+    "shared_set_accounting": {
+     "tier_rows": 55460,
+     "panel": {
+      "matched": 47457,
+      "off_panel_chromosome": 3624,
+      "absent_at_position": 4226,
+      "allele_mismatch": 55,
+      "ambiguous": 98
+     },
+     "no_cm": 3624,
+     "no_cm_by_panel_status": {
+      "matched": 0,
+      "off_panel_chromosome": 3624,
+      "absent_at_position": 0,
+      "allele_mismatch": 0,
+      "ambiguous": 0
+     },
+     "shared_set": 47457,
+     "shared_set_share": 0.8556978002163722,
+     "partition": {
+      "shared_set": 47457,
+      "matched_no_cm": 0,
+      "off_panel_chromosome": 3624,
+      "absent_at_position": 4226,
+      "allele_mismatch": 55,
+      "ambiguous": 98
+     }
+    },
+    "stages": {
+     "shared_set": {
+      "samples_s": [
+       22.8853,
+       23.4318,
+       24.0857
+      ],
+      "median_s": 23.4318,
+      "min_s": 22.8853,
+      "max_s": 24.0857,
+      "peak_mb": 2666.2,
+      "peak_source": "process",
+      "child": null,
+      "load": {
+       "one": 2.69,
+       "five": 3.38,
+       "fifteen": 4.82
+      }
+     },
+     "ranked": {
+      "samples_s": [
+       0.0051,
+       0.0048,
+       0.0047
+      ],
+      "median_s": 0.0048,
+      "min_s": 0.0047,
+      "max_s": 0.0051,
+      "peak_mb": 2650.4,
+      "peak_source": "process",
+      "child": null,
+      "load": {
+       "one": 2.73,
+       "five": 3.34,
+       "fifteen": 4.77
+      }
+     },
+     "chr1": {
+      "samples_s": [
+       0.1182,
+       0.1193,
+       0.119
+      ],
+      "median_s": 0.119,
+      "min_s": 0.1182,
+      "max_s": 0.1193,
+      "peak_mb": 124.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.73,
+       "five": 3.34,
+       "fifteen": 4.77
+      }
+     },
+     "chr2": {
+      "samples_s": [
+       0.1256,
+       0.1269,
+       0.1258
+      ],
+      "median_s": 0.1258,
+      "min_s": 0.1256,
+      "max_s": 0.1269,
+      "peak_mb": 132.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.73,
+       "five": 3.34,
+       "fifteen": 4.77
+      }
+     },
+     "chr3": {
+      "samples_s": [
+       0.1111,
+       0.1112,
+       0.1119
+      ],
+      "median_s": 0.1112,
+      "min_s": 0.1111,
+      "max_s": 0.1119,
+      "peak_mb": 114.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.73,
+       "five": 3.34,
+       "fifteen": 4.77
+      }
+     },
+     "chr4": {
+      "samples_s": [
+       0.1031,
+       0.102,
+       0.1017
+      ],
+      "median_s": 0.102,
+      "min_s": 0.1017,
+      "max_s": 0.1031,
+      "peak_mb": 114.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.73,
+       "five": 3.34,
+       "fifteen": 4.77
+      }
+     },
+     "chr5": {
+      "samples_s": [
+       0.0962,
+       0.0955,
+       0.096
+      ],
+      "median_s": 0.096,
+      "min_s": 0.0955,
+      "max_s": 0.0962,
+      "peak_mb": 102.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.73,
+       "five": 3.34,
+       "fifteen": 4.77
+      }
+     },
+     "chr6": {
+      "samples_s": [
+       0.1072,
+       0.1071,
+       0.1062
+      ],
+      "median_s": 0.1071,
+      "min_s": 0.1062,
+      "max_s": 0.1072,
+      "peak_mb": 108.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.73,
+       "five": 3.34,
+       "fifteen": 4.77
+      }
+     },
+     "chr7": {
+      "samples_s": [
+       0.0928,
+       0.095,
+       0.0973
+      ],
+      "median_s": 0.095,
+      "min_s": 0.0928,
+      "max_s": 0.0973,
+      "peak_mb": 102.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr8": {
+      "samples_s": [
+       0.0845,
+       0.0836,
+       0.081
+      ],
+      "median_s": 0.0836,
+      "min_s": 0.081,
+      "max_s": 0.0845,
+      "peak_mb": 90.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr9": {
+      "samples_s": [
+       0.0784,
+       0.0799,
+       0.0789
+      ],
+      "median_s": 0.0789,
+      "min_s": 0.0784,
+      "max_s": 0.0799,
+      "peak_mb": 84.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr10": {
+      "samples_s": [
+       0.0826,
+       0.0836,
+       0.0833
+      ],
+      "median_s": 0.0833,
+      "min_s": 0.0826,
+      "max_s": 0.0836,
+      "peak_mb": 94.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr11": {
+      "samples_s": [
+       0.0799,
+       0.0801,
+       0.0801
+      ],
+      "median_s": 0.0801,
+      "min_s": 0.0799,
+      "max_s": 0.0801,
+      "peak_mb": 86.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr12": {
+      "samples_s": [
+       0.0764,
+       0.0809,
+       0.0771
+      ],
+      "median_s": 0.0771,
+      "min_s": 0.0764,
+      "max_s": 0.0809,
+      "peak_mb": 84.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr13": {
+      "samples_s": [
+       0.0641,
+       0.0653,
+       0.0653
+      ],
+      "median_s": 0.0653,
+      "min_s": 0.0641,
+      "max_s": 0.0653,
+      "peak_mb": 68.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr14": {
+      "samples_s": [
+       0.0594,
+       0.0611,
+       0.0596
+      ],
+      "median_s": 0.0596,
+      "min_s": 0.0594,
+      "max_s": 0.0611,
+      "peak_mb": 62.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr15": {
+      "samples_s": [
+       0.0545,
+       0.0557,
+       0.0543
+      ],
+      "median_s": 0.0545,
+      "min_s": 0.0543,
+      "max_s": 0.0557,
+      "peak_mb": 62.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr16": {
+      "samples_s": [
+       0.0664,
+       0.0644,
+       0.065
+      ],
+      "median_s": 0.065,
+      "min_s": 0.0644,
+      "max_s": 0.0664,
+      "peak_mb": 60.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr17": {
+      "samples_s": [
+       0.0564,
+       0.057,
+       0.0583
+      ],
+      "median_s": 0.057,
+      "min_s": 0.0564,
+      "max_s": 0.0583,
+      "peak_mb": 62.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr18": {
+      "samples_s": [
+       0.0567,
+       0.0593,
+       0.0568
+      ],
+      "median_s": 0.0568,
+      "min_s": 0.0567,
+      "max_s": 0.0593,
+      "peak_mb": 62.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr19": {
+      "samples_s": [
+       0.0517,
+       0.0525,
+       0.0521
+      ],
+      "median_s": 0.0521,
+      "min_s": 0.0517,
+      "max_s": 0.0525,
+      "peak_mb": 56.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr20": {
+      "samples_s": [
+       0.0517,
+       0.0534,
+       0.0537
+      ],
+      "median_s": 0.0534,
+      "min_s": 0.0517,
+      "max_s": 0.0537,
+      "peak_mb": 56.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr21": {
+      "samples_s": [
+       0.0419,
+       0.0388,
+       0.0404
+      ],
+      "median_s": 0.0404,
+      "min_s": 0.0388,
+      "max_s": 0.0419,
+      "peak_mb": 42.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     "chr22": {
+      "samples_s": [
+       0.0381,
+       0.0385,
+       0.0453
+      ],
+      "median_s": 0.0385,
+      "min_s": 0.0381,
+      "max_s": 0.0453,
+      "peak_mb": 42.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     }
+    },
+    "per_chromosome": [
+     {
+      "chromosome": "1",
+      "rows": 4176,
+      "index_variants": 50,
+      "samples_s": [
+       0.1182,
+       0.1193,
+       0.119
+      ],
+      "median_s": 0.119,
+      "min_s": 0.1182,
+      "max_s": 0.1193,
+      "peak_mb": 124.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.73,
+       "five": 3.34,
+       "fifteen": 4.77
+      }
+     },
+     {
+      "chromosome": "2",
+      "rows": 5117,
+      "index_variants": 67,
+      "samples_s": [
+       0.1256,
+       0.1269,
+       0.1258
+      ],
+      "median_s": 0.1258,
+      "min_s": 0.1256,
+      "max_s": 0.1269,
+      "peak_mb": 132.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.73,
+       "five": 3.34,
+       "fifteen": 4.77
+      }
+     },
+     {
+      "chromosome": "3",
+      "rows": 4960,
+      "index_variants": 70,
+      "samples_s": [
+       0.1111,
+       0.1112,
+       0.1119
+      ],
+      "median_s": 0.1112,
+      "min_s": 0.1111,
+      "max_s": 0.1119,
+      "peak_mb": 114.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.73,
+       "five": 3.34,
+       "fifteen": 4.77
+      }
+     },
+     {
+      "chromosome": "4",
+      "rows": 1435,
+      "index_variants": 33,
+      "samples_s": [
+       0.1031,
+       0.102,
+       0.1017
+      ],
+      "median_s": 0.102,
+      "min_s": 0.1017,
+      "max_s": 0.1031,
+      "peak_mb": 114.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.73,
+       "five": 3.34,
+       "fifteen": 4.77
+      }
+     },
+     {
+      "chromosome": "5",
+      "rows": 2758,
+      "index_variants": 48,
+      "samples_s": [
+       0.0962,
+       0.0955,
+       0.096
+      ],
+      "median_s": 0.096,
+      "min_s": 0.0955,
+      "max_s": 0.0962,
+      "peak_mb": 102.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.73,
+       "five": 3.34,
+       "fifteen": 4.77
+      }
+     },
+     {
+      "chromosome": "6",
+      "rows": 4696,
+      "index_variants": 58,
+      "samples_s": [
+       0.1072,
+       0.1071,
+       0.1062
+      ],
+      "median_s": 0.1071,
+      "min_s": 0.1062,
+      "max_s": 0.1072,
+      "peak_mb": 108.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.73,
+       "five": 3.34,
+       "fifteen": 4.77
+      }
+     },
+     {
+      "chromosome": "7",
+      "rows": 2283,
+      "index_variants": 37,
+      "samples_s": [
+       0.0928,
+       0.095,
+       0.0973
+      ],
+      "median_s": 0.095,
+      "min_s": 0.0928,
+      "max_s": 0.0973,
+      "peak_mb": 102.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "8",
+      "rows": 1982,
+      "index_variants": 26,
+      "samples_s": [
+       0.0845,
+       0.0836,
+       0.081
+      ],
+      "median_s": 0.0836,
+      "min_s": 0.081,
+      "max_s": 0.0845,
+      "peak_mb": 90.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "9",
+      "rows": 2554,
+      "index_variants": 42,
+      "samples_s": [
+       0.0784,
+       0.0799,
+       0.0789
+      ],
+      "median_s": 0.0789,
+      "min_s": 0.0784,
+      "max_s": 0.0799,
+      "peak_mb": 84.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "10",
+      "rows": 1329,
+      "index_variants": 26,
+      "samples_s": [
+       0.0826,
+       0.0836,
+       0.0833
+      ],
+      "median_s": 0.0833,
+      "min_s": 0.0826,
+      "max_s": 0.0836,
+      "peak_mb": 94.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "11",
+      "rows": 2014,
+      "index_variants": 41,
+      "samples_s": [
+       0.0799,
+       0.0801,
+       0.0801
+      ],
+      "median_s": 0.0801,
+      "min_s": 0.0799,
+      "max_s": 0.0801,
+      "peak_mb": 86.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "12",
+      "rows": 1162,
+      "index_variants": 25,
+      "samples_s": [
+       0.0764,
+       0.0809,
+       0.0771
+      ],
+      "median_s": 0.0771,
+      "min_s": 0.0764,
+      "max_s": 0.0809,
+      "peak_mb": 84.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "13",
+      "rows": 1770,
+      "index_variants": 29,
+      "samples_s": [
+       0.0641,
+       0.0653,
+       0.0653
+      ],
+      "median_s": 0.0653,
+      "min_s": 0.0641,
+      "max_s": 0.0653,
+      "peak_mb": 68.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "14",
+      "rows": 1559,
+      "index_variants": 26,
+      "samples_s": [
+       0.0594,
+       0.0611,
+       0.0596
+      ],
+      "median_s": 0.0596,
+      "min_s": 0.0594,
+      "max_s": 0.0611,
+      "peak_mb": 62.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "15",
+      "rows": 413,
+      "index_variants": 17,
+      "samples_s": [
+       0.0545,
+       0.0557,
+       0.0543
+      ],
+      "median_s": 0.0545,
+      "min_s": 0.0543,
+      "max_s": 0.0557,
+      "peak_mb": 62.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "16",
+      "rows": 2874,
+      "index_variants": 49,
+      "samples_s": [
+       0.0664,
+       0.0644,
+       0.065
+      ],
+      "median_s": 0.065,
+      "min_s": 0.0644,
+      "max_s": 0.0664,
+      "peak_mb": 60.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "17",
+      "rows": 1408,
+      "index_variants": 21,
+      "samples_s": [
+       0.0564,
+       0.057,
+       0.0583
+      ],
+      "median_s": 0.057,
+      "min_s": 0.0564,
+      "max_s": 0.0583,
+      "peak_mb": 62.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "18",
+      "rows": 1927,
+      "index_variants": 24,
+      "samples_s": [
+       0.0567,
+       0.0593,
+       0.0568
+      ],
+      "median_s": 0.0568,
+      "min_s": 0.0567,
+      "max_s": 0.0593,
+      "peak_mb": 62.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "19",
+      "rows": 606,
+      "index_variants": 19,
+      "samples_s": [
+       0.0517,
+       0.0525,
+       0.0521
+      ],
+      "median_s": 0.0521,
+      "min_s": 0.0517,
+      "max_s": 0.0525,
+      "peak_mb": 56.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "20",
+      "rows": 1854,
+      "index_variants": 20,
+      "samples_s": [
+       0.0517,
+       0.0534,
+       0.0537
+      ],
+      "median_s": 0.0534,
+      "min_s": 0.0517,
+      "max_s": 0.0537,
+      "peak_mb": 56.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "21",
+      "rows": 133,
+      "index_variants": 4,
+      "samples_s": [
+       0.0419,
+       0.0388,
+       0.0404
+      ],
+      "median_s": 0.0404,
+      "min_s": 0.0388,
+      "max_s": 0.0419,
+      "peak_mb": 42.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     },
+     {
+      "chromosome": "22",
+      "rows": 447,
+      "index_variants": 10,
+      "samples_s": [
+       0.0381,
+       0.0385,
+       0.0453
+      ],
+      "median_s": 0.0385,
+      "min_s": 0.0381,
+      "max_s": 0.0453,
+      "peak_mb": 42.4,
+      "peak_source": "children",
+      "child": "plink2",
+      "load": {
+       "one": 2.67,
+       "five": 3.31,
+       "fifteen": 4.75
+      }
+     }
+    ],
+    "index_variants": 742,
+    "members": 47457,
+    "clump_s": 1.7017,
+    "order_followed": true,
+    "r2": 0.01,
+    "clump_kb": 10000,
+    "total_s": 25.1383,
+    "rows": 47457
+   },
+   "ratio": {
+    "rows": 47457,
+    "pruning_s": 0.1019,
+    "clumping_s": 25.1383,
+    "value": 0.0041,
+    "fast_pruning_s": 0.2248,
+    "fast_value": 0.0089,
+    "definition": "pruning (cM lookup, sort, rule) over clumping (shared set, ranking, plink2 with genotypes) on the shared set of the same Analysis"
+   }
+  }
+ ],
+ "run_seconds": 1623.9
+}

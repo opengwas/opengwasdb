@@ -1,0 +1,423 @@
+---
+title: "What genetic-distance pruning costs"
+subtitle: "Locus Leads against plink2 clumping, measured on OGS-00003, OGS-00011 and OGS-00012"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    theme: cosmo
+jupyter: python3
+---
+
+```{python}
+#| echo: false
+import json
+from pathlib import Path
+
+from IPython.display import Markdown
+
+HERE = Path(".")
+if not (HERE / "cost.json").exists():
+    HERE = Path("docs/benchmark-output/locus_leads")
+ARTIFACT = HERE / "cost.json"
+b = json.loads(ARTIFACT.read_text())
+
+provenance = b["provenance"]
+machine = provenance["machine"]
+environment = provenance["environment"]
+parameters = b["parameters"]
+budget_definition = parameters["budget"]
+axes = b["per_variant_cm"]
+slices = b["slices"]
+map_load = b["genetic_map_load"]["load_map"]
+
+STAGES = ("tier", "positions", "positions_array", "cm", "sort", "rule", "rule_fast", "read_tier")
+LABELS = {
+    "tier": "Top-Hit Query (the tier)",
+    "positions": "positions, from the Variant Table",
+    "positions_array": "positions, from a per-variant array",
+    "cm": "cM lookup",
+    "sort": "sort (the rule's order)",
+    "rule": "rule as #402 wrote it",
+    "rule_fast": "rule, block-at-a-time",
+    "read_tier": "read_tier (Observed-Only, resolved)",
+}
+
+
+def md_table(headers, rows):
+    heading = "| " + " | ".join(headers) + " |"
+    separator = "|" + "|".join(["---"] * len(headers)) + "|"
+    body = "\n".join("| " + " | ".join(str(cell) for cell in row) + " |" for row in rows)
+    return f"{heading}\n{separator}\n{body}"
+
+
+def seconds(value):
+    return f"{value:,.1f} s" if value >= 1 else f"{value * 1000:,.0f} ms"
+
+
+def timed(entry):
+    return f"{seconds(entry['median_s'])} ({seconds(entry['min_s'])}–{seconds(entry['max_s'])})"
+
+
+def micros(entry, rows):
+    return f"{entry['median_s'] * 1e6 / rows:,.2f}"
+
+
+def by_rows():
+    return sorted(slices, key=lambda s: s["rows"]["tier"])
+
+
+largest = max(slices, key=lambda s: s["rows"]["tier"])
+largest_wide = max((s for s in slices if s["threshold"] == 5e-8), key=lambda s: s["rows"]["tier"])
+peak_load = max(entry["load"]["five"] for s in slices for entry in s["stages"].values())
+```
+
+## What was measured
+
+```{python}
+#| echo: false
+Markdown(f"""
+Three measurements, on one node on one date, from `{ARTIFACT.name}`:
+
+1. **The per-variant cM array** over each Store's whole Variant Table — what an
+   augment step would pay, and what a Store would then carry.
+2. **Query-time pruning** of the largest single-Analysis Top-Hit tiers, stage by
+   stage, as the default Top-Hit Query returns them: imputed rows included.
+3. **plink2 clumping** of the same Analyses' shared set, at r² {parameters['r2']:g}
+   over {parameters['clump_kb']:,} kb, genotypes included.
+
+The rule is D = {parameters['d_cm']} cM and W = {parameters['w_bp']:,} bp, the
+parameters #402 settled on. Every stage is timed {parameters['repeats']} times; the
+median is reported with its range.
+
+{md_table(["", ""], [
+    ["measured", provenance["measured_at"]],
+    ["commit", f"`{provenance['commit']}`"],
+    ["node", machine["hostname"]],
+    ["CPU", f"{machine['cpu_model']}, {machine['physical_cores']} cores, "
+            f"{machine['cores']} threads"],
+    ["memory", f"{machine['memory_gb']:,} GB"],
+    ["plink2", f"{environment['plink2']}; --threads {parameters['threads']}, "
+               f"--memory {parameters['plink2_memory_mib']} MiB"],
+    ["panel", f"`{parameters['panel']}`"],
+    ["genetic map", f"`{parameters['genetic_map']}`"],
+    ["map load", timed(map_load)],
+])}
+
+The node is shared: the highest 5-minute load average recorded at any stage in
+this run was {peak_load:,.1f}. Every stage's own load average is in the JSON beside
+its timing, and these are warm-cache numbers — the same files are read once per
+repeat.
+""")
+```
+
+## The per-variant cM array
+
+```{python}
+#| echo: false
+Markdown(f"""
+Reading chromosome and position from the Store Variant Table, then interpolating
+cM at every variant. The array is `float32`, one value per Store Variant Index:
+what an augment step would write, and what the pruning stages below look up.
+
+{md_table(
+    ["Store", "variants", "read Variant Table", "interpolate", "off the map", "array bytes"],
+    [
+        [
+            f"{axis['store']['store_id']} ({axis['store']['primary_layout']})",
+            f"{axis['variants']:,}",
+            timed(axis["stages"]["read_variant_table"]),
+            timed(axis["stages"]["interpolate"]),
+            f"{axis['off_map_variants']:,} ({', '.join(axis['off_map_chromosomes']) or 'none'})",
+            f"{axis['mapped_bytes'] / 1e6:,.0f} MB",
+        ]
+        for axis in axes
+    ],
+)}
+
+Interpolation holds the map flat beyond each chromosome's ends, as
+`genetic_map.py` specifies, and gives NaN where the map has no chromosome — the EUR
+map covers 1–22, so every variant on another chromosome is NaN rather than given a
+substituted value.
+""")
+```
+
+## Pruning a tier, stage by stage
+
+```{python}
+#| echo: false
+Markdown(f"""
+{md_table(
+    ["slice", "Analysis", "tier", "rows", "observed", "imputed", "with cM",
+     "off the map", "max abs(z)", "abs(z) > 38"],
+    [
+        [
+            s["name"], f"`{s['analysis_id']}`", f"{s['threshold']:g}",
+            f"{s['rows']['tier']:,}", f"{s['rows']['observed']:,}",
+            f"{s['rows']['imputed']:,}", f"{s['rows']['ranked']:,}",
+            f"{s['rows']['off_map']:,} ({', '.join(s['rows']['off_map_chromosomes']) or 'none'})",
+            f"{s['rows']['max_abs_z']:,.1f}", f"{s['rows']['rows_abs_z_over_38']:,}",
+        ]
+        for s in by_rows()
+    ],
+)}
+
+Rows past |z| 38 matter twice: a float64 two-sided p is 0 from |z| 38.5, which is
+why the rule ranks on abs(z), and they are where an LD panel and a genetic map are
+least alike.
+
+{md_table(
+    ["slice", *[LABELS[name] for name in STAGES]],
+    [[s["name"], *[timed(s["stages"][name]) for name in STAGES]] for s in by_rows()],
+)}
+
+`positions` reads the tier's Store Variant Indices from the Variant Table — the path
+#62 asks whether is the bottleneck — and `positions_array` is the same read from the
+per-variant array built above. `read_tier` is #402's own reader, the Observed-Only
+query with every row resolved: what a client asking for positions and ALIDs waits for.
+""")
+```
+
+## Cost against row count
+
+```{python}
+#| echo: false
+fast_pruning = ("positions_array", "cm", "sort", "rule_fast")
+rule_us = [s["stages"]["rule"]["median_s"] * 1e6 / s["rows"]["ranked"] for s in slices]
+fast_us = [s["stages"]["rule_fast"]["median_s"] * 1e6 / s["rows"]["ranked"] for s in slices]
+wins = [s for s in slices if s["stages"]["rule_fast"]["median_s"] < s["stages"]["rule"]["median_s"]]
+losses = [s for s in slices if s not in wins]
+if wins and losses:
+    worst = max(losses, key=lambda s: s["rows"]["ranked"])
+    crossover = (
+        f"The block-at-a-time rule is the cheaper of the two from "
+        f"{min(s['rows']['ranked'] for s in wins):,} rows upward, and the dearer below "
+        f"that: at {worst['rows']['ranked']:,} rows it takes "
+        f"{worst['stages']['rule_fast']['median_s'] / worst['stages']['rule']['median_s']:,.1f}× "
+        f"the rule's time, because the work it does per chromosome does not shrink with "
+        f"the rows.")
+elif wins:
+    crossover = "The block-at-a-time rule is cheaper than the rule at every size measured."
+else:
+    crossover = "The block-at-a-time rule was dearer than the rule at every size measured."
+Markdown(f"""
+{md_table(
+    ["tier rows", "slice", "Top-Hit Query", "sort", "rule", "µs/row", "rule, blocks",
+     "µs/row", "pruning, fastest path"],
+    [
+        [
+            f"{s['rows']['tier']:,}", s["name"],
+            seconds(s["stages"]["tier"]["median_s"]),
+            seconds(s["stages"]["sort"]["median_s"]),
+            seconds(s["stages"]["rule"]["median_s"]),
+            micros(s["stages"]["rule"], s["rows"]["ranked"]),
+            seconds(s["stages"]["rule_fast"]["median_s"]),
+            micros(s["stages"]["rule_fast"], s["rows"]["ranked"]),
+            seconds(sum(s["stages"][name]["median_s"] for name in fast_pruning)),
+        ]
+        for s in by_rows()
+    ],
+)}
+
+The rule as #402 wrote it costs {min(rule_us):,.2f}–{max(rule_us):,.2f} µs a row on
+these slices: the cost is the row count times a constant, not a curve. {crossover}
+What is not constant is the position read — it is charged per row against the Variant
+Table and per lookup against a per-variant array.
+""")
+```
+
+## Is pruning fast enough to run per query?
+
+```{python}
+#| echo: false
+Markdown(f"""
+The budget was fixed before measuring, and is recorded in the artifact. What is
+measured is **{budget_definition['quantity']}**, and {budget_definition['judged']}.
+
+{md_table(
+    ["slice", "Top-Hit Query", "pruning as written", "× query", "pruning, blocks",
+     "× query", "within budget"],
+    [
+        [
+            s["name"], seconds(s["budget"]["query_s"]), seconds(s["budget"]["pruning_s"]),
+            f"{s['budget']['ratio']:,.1f}×", seconds(s["budget"]["fast_pruning_s"]),
+            f"{s['budget']['fast_ratio']:,.1f}×",
+            "yes" if s["budget"]["within_budget"] else "no",
+        ]
+        for s in by_rows()
+    ],
+)}
+
+A reader usually asks for more than the bare tier: the resolved query (`read_tier`)
+returns positions and ALIDs. Against that, the fastest pruning path costs:
+
+{md_table(
+    ["slice", "pruning, blocks", "resolved Top-Hit Query", "× resolved"],
+    [[s["name"], seconds(s["budget"]["fast_pruning_s"]),
+      seconds(s["stages"]["read_tier"]["median_s"]),
+      f"{s['budget']['fast_pruning_s'] / s['stages']['read_tier']['median_s']:,.2f}×"]
+     for s in by_rows()],
+)}
+""")
+```
+
+```{python}
+#| echo: false
+wide = largest_wide["budget"]
+resolved_s = largest_wide["stages"]["read_tier"]["median_s"]
+verdict = ("fast enough to run per query" if wide["within_budget"]
+           else "not fast enough to run per query against the bare tier read alone")
+caveat = ("" if wide["within_budget"] else
+          " A per-query option is defensible only with both per-variant arrays in the "
+          "Store, and only against the resolved query; without them it costs an order "
+          "of magnitude more than the query itself.")
+Markdown(f"""
+The largest 5e-8 slice — `{largest_wide['analysis_id']}`, {largest_wide['rows']['tier']:,}
+rows — is the one the question turns on. The rule as #402 wrote it, with positions
+from the Variant Table, costs {wide['pruning_s']:,.1f} s there, {wide['ratio']:,.1f}×
+the {wide['query_s']:,.1f} s the Top-Hit Query itself takes: it cannot run per query
+as written. The block-at-a-time rule, with the per-variant position and cM arrays,
+costs {wide['fast_pruning_s']:,.1f} s: {wide['fast_ratio']:,.1f}× the bare tier read,
+and {wide['fast_pruning_s'] / resolved_s:,.2f}× the resolved query ({resolved_s:,.1f} s).
+
+Judged against the budget recorded above, query-time pruning of that slice is
+**{verdict}**.{caveat}
+
+The build-time answer is cheap by comparison and is needed anyway: `n_loci_*` are
+Analytical Metadata, so the counts belong in `analyses.tsv` whether or not a reader
+can prune, and the per-variant cM array that makes them cheap is a one-off write.
+""")
+```
+
+## Clumping the same rows
+
+```{python}
+#| echo: false
+Markdown(f"""
+plink2 on the shared set: the rows both methods can see, named in
+`build_shared_set`. The shared set's own cost — matching rows to the panel's
+variants and interpolating their cM — is charged to clumping, because a clumping run
+cannot start without it.
+
+{md_table(
+    ["slice", "shared rows", "of the tier", "shared set", "rank", "plink2, per chromosome",
+     "clumping total", "index variants", "order followed"],
+    [
+        [
+            s["name"], f"{s['clumping']['shared_rows']:,}",
+            f"{s['clumping']['shared_rows'] / s['rows']['tier']:.1%}",
+            timed(s["clumping"]["stages"]["shared_set"]),
+            timed(s["clumping"]["stages"]["ranked"]),
+            seconds(s["clumping"]["clump_s"]),
+            seconds(s["clumping"]["total_s"]),
+            f"{s['clumping']['index_variants']:,}",
+            "yes" if s["clumping"]["order_followed"] else "no",
+        ]
+        for s in by_rows()
+    ],
+)}
+
+Each chromosome is one `plink2 --clump` run, which is what `clump_rows` does
+internally, so the plink2 column is the sum of the per-chromosome medians. "Order
+followed" is `clump.check_clumps_follow_rule_order`: every clump's index variant must
+come first in the rule's order, or plink2 ranked differently from the rule and the
+clumps are not the rule's.
+""")
+```
+
+```{python}
+#| echo: false
+widest = max(slices, key=lambda s: s["clumping"]["shared_rows"])
+Markdown(f"""
+`{widest['name']}`, the widest shared set measured, chromosome by chromosome:
+
+{md_table(
+    ["chromosome", "rows", "plink2", "peak RSS (plink2)", "index variants"],
+    [
+        [row["chromosome"], f"{row['rows']:,}", timed(row), f"{row['peak_mb']:,.0f} MB",
+         f"{row['index_variants']:,}"]
+        for row in widest["clumping"]["per_chromosome"]
+    ],
+)}
+
+Peak memory is sampled from `/proc/<pid>/statm`: the child's while plink2 runs, this
+process's otherwise. `ru_maxrss` is not used — under `pixi run` it starts near 2 GiB
+and never comes down — and neither is `/usr/bin/time`.
+""")
+```
+
+## Pruning against clumping
+
+```{python}
+#| echo: false
+values = [s["ratio"]["value"] for s in slices]
+fast_values = [s["ratio"]["fast_value"] for s in slices]
+Markdown(f"""
+The ratio is pruning over clumping on the identical rows — the shared set — with no
+panel, no genotypes and no position lookup on either side of it: the cM lookup, the
+sort and the rule against the shared set's construction, its ranking and plink2.
+
+{md_table(
+    ["slice", "rows", "pruning", "clumping", "pruning / clumping", "pruning, blocks",
+     "ratio"],
+    [
+        [
+            s["name"], f"{s['ratio']['rows']:,}", seconds(s["ratio"]["pruning_s"]),
+            seconds(s["ratio"]["clumping_s"]), f"{s['ratio']['value']:,.3f}",
+            seconds(s["ratio"]["fast_pruning_s"]), f"{s['ratio']['fast_value']:,.3f}",
+        ]
+        for s in by_rows()
+    ],
+)}
+
+Pruning costs between {1 / max(values):,.0f}× and {1 / min(values):,.0f}×
+less than clumping of the same rows as #402 wrote it, and between
+{1 / max(fast_values):,.0f}× and {1 / min(fast_values):,.0f}× less with the
+block-at-a-time rule. Clumping pays for the panel whatever the row count — its
+shared set alone takes
+{min(s['clumping']['stages']['shared_set']['median_s'] for s in slices):,.1f}–
+{max(s['clumping']['stages']['shared_set']['median_s'] for s in slices):,.1f} s across
+these slices — and pruning pays nothing for it.
+
+What clumping buys for that price is the genotypes themselves: an r² that follows LD,
+a recombination hotspot and a cold stretch alike.
+""")
+```
+
+## What these numbers do and do not say
+
+```{python}
+#| echo: false
+positions_note = (
+    f"Reading the positions of the largest 5e-8 tier's "
+    f"{largest_wide['rows']['tier']:,} rows from the Variant Table costs "
+    f"{largest_wide['stages']['positions']['median_s']:,.1f} s, against "
+    f"{largest_wide['stages']['positions_array']['median_s']:,.2f} s from a per-variant "
+    f"array, while its sort and rule cost "
+    f"{largest_wide['stages']['sort']['median_s'] + largest_wide['stages']['rule']['median_s']:,.1f} s "
+    f"as written and "
+    f"{largest_wide['stages']['sort']['median_s'] + largest_wide['stages']['rule_fast']['median_s']:,.1f} s "
+    f"block at a time.")
+Markdown(f"""
+- **Both rules were run, and agreed.** Every slice asserts that
+  `cost.fast_locus_leads` returns exactly `rule.locus_leads`'s leads before any figure
+  is written; a disagreement fails the run.
+- **The largest tiers are not the most representative.** The largest 5e-8 tier —
+  `{largest_wide['analysis_id']}`, {largest_wide['rows']['tier']:,} rows — holds
+  {largest_wide['rows']['rows_abs_z_over_38']:,} rows past |z| 38, where a float64 p
+  is 0 and the Analysis's own provenance is in doubt (#402 recorded this one as an
+  artefact). It is the right tier for a cost measurement and the wrong one for a
+  biological conclusion, which is why the mid-size slices are measured beside it.
+- **Nothing here says the leads are right.** That is #402's comparison and #403's
+  sweep; this measures what a query would pay, not which loci it would find.
+- **The map, not the rule, decides the ceiling.** {positions_note} The two position
+  reads above are the whole difference, and the reason #62's follow-up — a
+  per-variant position array beside the cM one — should be measured before either is
+  built.
+
+> Measured at `{provenance['commit']}` on {provenance['measured_at']}; the whole run
+> took {b['run_seconds']:,.0f} s. Artifact: `{ARTIFACT.name}`, rendered from it.
+""")
+```
