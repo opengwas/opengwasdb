@@ -60,6 +60,7 @@ from opengwasdb.encoding.timing import format_duration, log_phase
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
+    apply_se_divisor,
     column_map_provenance,
     manifest_row_to_analysis,
     read_manifest,
@@ -113,16 +114,6 @@ __all__ = ["build_dense_from_vcf_manifest", "LiftoverFailureError"]
 # for every finite cell). Each column emits only the cells clearing the loosest
 # threshold's |z| cutoff; the band-write phase accumulates them for the index.
 _TOP_HIT_Z_CRIT = z_critical(max(TOP_HIT_THRESHOLDS))
-
-
-def apply_se_divisor(se: np.ndarray, se_divisor: float) -> np.ndarray:
-    """Continuous-trait phenotype-SD standardisation (issue #18):
-    ``stored_se = original_se / sd``. Shared by the dense and hybrid builders,
-    both of which resolve an association stream to ``(index, z, se)`` and need
-    the same no-op-when-1.0 divide applied to ``se`` before spilling."""
-    if se_divisor == 1.0:
-        return se
-    return se / np.float32(se_divisor)
 
 
 def _spill_column(

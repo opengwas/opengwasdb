@@ -21,6 +21,7 @@ from opengwasdb.encoding import (
     StoreCodec,
 )
 from opengwasdb.encoding.codec import se_float16
+from opengwasdb.layouts.build_manifest import apply_se_divisor
 from opengwasdb.layouts.dense.indexed_subsets import validate_indexed_subsets
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.analyses import (
@@ -403,7 +404,6 @@ def _unnamed_units(
 
 def _stream_unit(unit: _Unit) -> Iterator[tuple[str, str, int, str, str, float, float]]:
     """Yield canonical (analysis_id, chrom, pos, a1, a2, z, se) from one source."""
-    from opengwasdb.layouts.dense.build_vcf import apply_se_divisor
     from opengwasdb.model.enums import StoredEffectScale
     from opengwasdb.readers.association_tsv import ASSOCIATION_TSV_CAPABILITY
     from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY

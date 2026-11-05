@@ -71,6 +71,7 @@ from opengwasdb.encoding.association_codec import (
 )
 from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.encoding.timing import format_duration
+from opengwasdb.layouts import build_manifest
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
     column_map_provenance,
@@ -81,7 +82,6 @@ from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
     EafSpillSurvey,
     apply_eaf_scope,
-    apply_se_divisor,
     create_dense_zarr,
     log_progress,
     survey_eaf_spills,
@@ -320,7 +320,8 @@ def _off_reference_spill(
     lookup = encoded.hashed_lookup()
     hashed_index = np.flatnonzero(is_hashed(keys)).astype(np.int64)
     hashed_raw = [lookup[int(keys[position])] for position in hashed_index.tolist()]
-    return keys, z, apply_se_divisor(se, se_divisor), eaf, reference, hashed_index, hashed_raw
+    se = build_manifest.apply_se_divisor(se, se_divisor)
+    return keys, z, se, eaf, reference, hashed_index, hashed_raw
 
 
 def _resolve_column_hybrid(
@@ -367,9 +368,9 @@ def _resolve_column_hybrid(
             [], unmatched.z[:0], unmatched.se[:0], unmatched.eaf[:0], unmatched.reference[:0]
         )
     divisor = row.se_divisor
-    overflow_se = apply_se_divisor(overflow.se, divisor)
+    overflow_se = build_manifest.apply_se_divisor(overflow.se, divisor)
     return (
-        (dense.index, dense.z, apply_se_divisor(dense.se, divisor), dense.eaf),
+        (dense.index, dense.z, build_manifest.apply_se_divisor(dense.se, divisor), dense.eaf),
         (overflow.index, overflow.z, overflow_se, overflow.eaf, overflow.reference),
         _off_reference_spill(unmatched, divisor, gate),
     )

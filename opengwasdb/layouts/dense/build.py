@@ -25,6 +25,7 @@ from opengwasdb.encoding.association_codec import (
 )
 from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.index import initialise_schema, set_metadata
+from opengwasdb.layouts.build_manifest import apply_se_divisor
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
     DEFAULT_DTYPE,
@@ -255,9 +256,6 @@ def _standardised(
     records: list[NormalisedAssociation], sources: Sequence[AnalysisSource]
 ) -> list[NormalisedAssociation]:
     """``records`` with each Analysis's standard errors divided by its phenotype SD (#18)."""
-    # Imported here: the VCF builder imports this module.
-    from opengwasdb.layouts.dense.build_vcf import apply_se_divisor
-
     divisor = {s.analysis.analysis_id: s.se_divisor for s in sources}
     return [
         record if divisor[record.analysis_id] == 1.0
