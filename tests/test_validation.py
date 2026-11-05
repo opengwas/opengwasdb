@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import os
 import shutil
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.model.analyses import read_analyses, write_analyses
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import open_store
-from opengwasdb.validation import validate_store
+from opengwasdb.validation import Severity, validate_store
 
 
 @pytest.fixture
@@ -194,6 +195,34 @@ def test_validator_rejects_invalid_top_hit_offsets(dense_store_path):
 
     assert result.failed() == {"top_hits.structure"}
     assert any("invalid analysis offsets" in error for error in result.errors)
+
+
+def test_the_zarr_format_rule_reports_nodes_in_name_order(
+    dense_store_path, monkeypatch: pytest.MonkeyPatch
+):
+    """A walk of the array tree is sorted, so the two nodes come out in one order.
+
+    The rule reads the filesystem rather than zarr, and a directory listing's order
+    is the filesystem's: a half-converted release used to name its nodes in whichever
+    order the walk reached them (#378 review 2).
+    """
+    for name in ("z", "se"):
+        (dense_store_path / "data.zarr" / name / ".zarray").write_text("{}", encoding="utf-8")
+    walked = os.walk
+    monkeypatch.setattr(
+        os,
+        "walk",
+        lambda top, *a, **k: reversed(sorted(walked(top, *a, **k), key=lambda node: node[0])),
+    )
+
+    result = validate_store(dense_store_path)
+
+    assert result.failed() == {"zarr.format"}
+    assert result.errors == [
+        f"data.zarr/{node}: Zarr v2 metadata ['.zarray'] under format_version 0.2.0; a "
+        "0.2.0 release is Zarr v3, and a half-converted release is invalid (issue #245)"
+        for node in ("se", "z")
+    ]
 
 
 def test_validator_rejects_missing_variant_axis_file(dense_store_path):
@@ -396,7 +425,11 @@ def test_validator_warns_about_an_infinite_dense_se(dense_store_path):
 
     assert result.ok, result.errors
     warnings = _infinite_se_warnings(result)
-    assert [f.rule for f in result.findings] == ["associations.se_infinite"]
+    # The fixture holds no `eaf` plane, so the frequency rule is skipped beside it.
+    assert [f.rule for f in result.findings if f.severity is Severity.WARNING] == [
+        "associations.se_infinite"
+    ]
+    assert result.errors == []
     assert "1 cell(s) of data.zarr/se" in warnings[0]
     assert "'a1'" in warnings[0]
 

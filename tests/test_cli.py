@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 
+import numpy as np
 import pytest
 from cli_output import normalize_cli_output
 from residual_fixtures import write_gwas_vcf_with_eaf
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import _format_p, app
+from opengwasdb.store.open import open_store
 
 
 def _build_dense(source_path, store_path, *options: str):
@@ -338,7 +341,10 @@ def test_cli_info_and_validate_format_json(tmp_path, source_path):
     assert val_json.exit_code == 0, val_json.output
     assert val_json.stderr == ""
     val_data = json.loads(val_json.output)
-    assert val_data == {"ok": True, "errors": [], "warnings": []}
+    assert set(val_data) == {"ok", "errors", "warnings", "findings"}
+    assert {key: val_data[key] for key in ("ok", "errors", "warnings")} == {
+        "ok": True, "errors": [], "warnings": []
+    }
 
     # 3. validate --format json on store with warnings
     warn_filtered_dir = tmp_path / "warn_filtered"
@@ -379,6 +385,92 @@ def test_cli_info_and_validate_format_json(tmp_path, source_path):
     assert bad_data["ok"] is False
     assert len(bad_data["errors"]) > 0
     assert isinstance(bad_data["warnings"], list)
+
+
+# `dense_store_path`'s source reports no frequency, so `encoding.eaf` is absent and
+# the frequency rule has nothing to judge.
+NO_FREQUENCY_SKIP = {
+    "rule": "associations.eaf_range",
+    "severity": "skip",
+    "target": "data.zarr",
+    "message": "no frequencies",
+}
+
+#: What `00e91b1` printed in `warnings` for `dense_store_path` with one `+inf` se.
+INFINITE_SE_WARNING = (
+    "1 cell(s) of data.zarr/se hold an infinite se: a source standard error above the "
+    "plane's range is stored as +inf, so beta = z * se reads as infinity although the "
+    "source value was finite (issue #338). The first Analyses holding one: 'a1'"
+)
+
+
+def _validate_json(store_path) -> tuple[int, dict, str]:
+    """`validate --format json`'s exit code, payload and stderr."""
+    out = CliRunner().invoke(app, ["validate", str(store_path), "--format", "json"])
+    return out.exit_code, json.loads(out.output), out.stderr
+
+
+#: The three keys `validate --format json` printed before #378 added `findings`.
+_BEFORE_378 = ("ok", "errors", "warnings")
+
+
+def test_validate_format_json_names_the_rule_behind_each_failure(dense_store_path):
+    """#378: a finding carries the rule that made it beside the message it always had."""
+    se = open_store(dense_store_path).arrays(mode="a")["se"]
+    assert se.dtype == np.dtype("float16"), "the fixture must reach the float16 se branch"
+    se[0, 0] = np.float16(-0.1)  # associations.se_negative
+
+    code, payload, _ = _validate_json(dense_store_path)
+
+    assert code == 1
+    assert payload["errors"] == ["se contains negative finite values"]
+    assert [f for f in payload["findings"] if f["severity"] == "error"] == [
+        {
+            "rule": "associations.se_negative",
+            "severity": "error",
+            "target": "data.zarr",
+            "message": payload["errors"][0],
+        }
+    ]
+
+
+def test_validate_format_json_lists_a_skipped_rule_with_its_reason(dense_store_path):
+    """#378: a release whose rule had nothing to judge no longer reads as a pass.
+
+    A release with no `eaf` plane is valid, and the frequency rule is skipped rather
+    than passed: `ok`, `errors` and `warnings` cannot tell the two apart.
+    """
+    encoding = open_store(dense_store_path).manifest.encoding
+    assert encoding.eaf.is_absent, "the fixture must reach the no-eaf-plane branch"
+
+    code, payload, stderr = _validate_json(dense_store_path)
+
+    assert (code, stderr) == (0, "")
+    assert (payload["ok"], payload["errors"], payload["warnings"]) == (True, [], [])
+    assert payload["findings"] == [NO_FREQUENCY_SKIP]
+
+
+def test_validate_format_json_reports_ok_errors_and_warnings_as_before(
+    dense_store_path, tmp_path
+):
+    """#378 adds a key: the three it had say exactly what `00e91b1` printed."""
+    failing = tmp_path / "failing.opengwasdb"
+    shutil.copytree(dense_store_path, failing)
+    open_store(failing).arrays(mode="a")["se"][0, 0] = np.float16(-0.1)
+    warning = tmp_path / "warning.opengwasdb"
+    shutil.copytree(dense_store_path, warning)
+    open_store(warning).arrays(mode="a")["se"][0, 0] = float("inf")
+
+    def before_378(store_path) -> dict:
+        payload = _validate_json(store_path)[1]
+        assert set(payload) == {*_BEFORE_378, "findings"}
+        return {key: value for key, value in payload.items() if key in _BEFORE_378}
+
+    assert before_378(dense_store_path) == {"ok": True, "errors": [], "warnings": []}
+    assert before_378(failing) == {
+        "ok": False, "errors": ["se contains negative finite values"], "warnings": []
+    }
+    assert before_378(warning) == {"ok": True, "errors": [], "warnings": [INFINITE_SE_WARNING]}
 
 
 
