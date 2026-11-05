@@ -5,6 +5,5 @@
   a boolean mask instead, after the source rows had been read. The writer now
   applies the Association Codec's one rule for "parallel" — `require_parallel` —
   at its entry, before any array is cast or stored, naming `variant_index`, z,
-  SE, `eaf` and `n` with their lengths. `storable` applies the same rule, which
-  now covers `eaf` where it covered only z, SE and `imputed`. No build reaches
-  it: every builder reads an Analysis's arrays from one row set.
+  SE, `eaf` and `n` with their lengths. No build reaches it: every builder
+  reads an Analysis's arrays from one row set.

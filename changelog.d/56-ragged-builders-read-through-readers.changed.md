@@ -6,15 +6,7 @@
     - an SE recovered from a 95% interval or a p-value where the file reports
       none;
     - refusal of a duplicated effect column, a case-control z-score and an
-      unsigned one;
-    - refusal of a manifest row that declares a `source_genome_build` other
-      than GRCh38, since the build lifts nothing.
-
-    A manifest row that declares no `source_genome_build` is refused too,
-    where it used to be read as GRCh38: a Ragged SSF Store is one build, and
-    every source declares its own. The refusal names the Analysis. No
-    published manifest omits the build, but `opengwasdb-stores`' own test
-    fixtures do (#429).
+      unsigned one.
 
     None of the 58,257,233 rows of OGS-00006's and OGS-00007's sources reads
     differently, and none of their 1,410 files is refused. Reading a row the

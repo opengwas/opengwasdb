@@ -10,5 +10,3 @@
   `allele_invalid`, ahead of every other rule. An alt, random or unplaced contig such as
   `11_KI270927v1_alt` is still a chromosome. No published Store holds such an
   ALID (a census of every release), so no published release changes.
-  `SourceReader.stream_associations` takes a `StreamTally` in place of D7's
-  `FrequencyTally`.
