@@ -29,7 +29,7 @@ import logging
 import shutil
 import sqlite3
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -49,8 +49,10 @@ from opengwasdb.completion.checkpoint import (
 )
 from opengwasdb.completion.ld_panel import (
     LDBlock,
+    SharedEndpoint,
     canonical_panel_alid,
     check_panel_has_chromosomes,
+    shared_endpoints,
 )
 from opengwasdb.completion.manifest import (
     build_completion_provenance,
@@ -143,6 +145,8 @@ class _BlockTask:
     thresh: float
     region_cap_bp: int | None
     checkpoint_path: Path
+    #: Per Analysis, the variants at this block's end the next block owns.
+    ceded: dict[int, frozenset[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -292,7 +296,8 @@ def _make_reader(task: _BlockTask):
 def _run_block(task: _BlockTask) -> BlockCompletionResult | None:
     """Complete one LD block for the Analyses whose cis window touches it."""
     result = run_block(
-        task.tsv_path, task.thresh, task.min_cor, task.region_cap_bp, _make_reader(task)
+        task.tsv_path, task.thresh, task.min_cor, task.region_cap_bp, _make_reader(task),
+        ceded=lambda analysis: task.ceded.get(analysis, frozenset()),
     )
     if result is None:
         return None
@@ -466,6 +471,25 @@ class _BlockPlan:
     block_to_analyses: dict[str, list[int]]
     block_canonical_alids: dict[str, list[str | None]]
     new_alids: set[str]
+    #: Each block's end another planned block starts at (`shared_endpoints`).
+    endpoints: dict[str, SharedEndpoint] = field(default_factory=dict)
+
+    def ceded(self, block_id: str) -> dict[int, frozenset[str]]:
+        """Per Analysis, the variants at ``block_id``'s end the next block owns.
+
+        The block that starts at a shared endpoint owns it for an Analysis
+        completed against both blocks. One completed against this block alone
+        has no block after it there, so this block keeps its end, as a
+        chromosome's last block does.
+        """
+        endpoint = self.endpoints.get(block_id)
+        if endpoint is None:
+            return {}
+        return {
+            analysis: endpoint.alids
+            for analysis in self.block_to_analyses[block_id]
+            if endpoint.following in self.analysis_to_blocks[analysis]
+        }
 
 
 @dataclass
@@ -688,6 +712,7 @@ def _scan_block_maps(
     block_to_analyses: dict[str, list[int]] = {}
     block_canonical_alids: dict[str, list[str | None]] = {}
     analysis_to_blocks: dict[int, list[str]] = {}
+    planned: list[LDBlock] = []
 
     for i, a in _imputable_analyses(state):
         blocks = blocks_for_analysis(
@@ -700,6 +725,7 @@ def _scan_block_maps(
                 continue
             block_to_tsv[block.block_id] = block.tsv_path
             block_canonical_alids[block.block_id] = _canonical_alids(block)
+            planned.append(block)
             new_alids.update(_new_panel_alids(block_canonical_alids[block.block_id], source_alids))
         if (i + 1) % 1000 == 0:
             print(
@@ -716,6 +742,7 @@ def _scan_block_maps(
         block_to_analyses=block_to_analyses,
         block_canonical_alids=block_canonical_alids,
         new_alids=new_alids,
+        endpoints=shared_endpoints(planned),
     )
 
 
@@ -838,6 +865,7 @@ def _run_pending_blocks(
                     thresh=thresh,
                     region_cap_bp=region_cap_bp,
                     checkpoint_path=ckpt_path,
+                    ceded=plan.ceded(block_id),
                 )
             )
 

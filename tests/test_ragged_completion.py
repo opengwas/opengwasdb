@@ -1887,6 +1887,30 @@ def test_a_half_missing_source_cell_is_refused_even_where_no_block_completes(mon
 _SIX = [f"1:{100 * (i + 1)}:A:G" for i in range(6)]
 
 
+def test_a_block_cedes_its_end_only_for_an_analysis_completed_against_the_next():
+    """Blocks are half-open (ADR 0072): the block that starts at a shared
+    endpoint owns it for an Analysis completed against both blocks. One
+    completed against the ending block alone has no block after it there, so
+    that block keeps its end, as a chromosome's last block does."""
+    from opengwasdb.completion.ld_panel import SharedEndpoint
+    from opengwasdb.layouts.ragged.complete import _BlockPlan
+
+    endpoint = frozenset({"1:200:A:G"})
+    plan = _BlockPlan(
+        src_csr=None,
+        state=None,
+        analysis_to_blocks={0: ["1/100-200", "1/200-300"], 1: ["1/100-200"]},
+        block_to_tsv={},
+        block_to_analyses={"1/100-200": [0, 1], "1/200-300": [0]},
+        block_canonical_alids={},
+        new_alids=set(),
+        endpoints={"1/100-200": SharedEndpoint("1/200-300", endpoint)},
+    )
+
+    assert plan.ceded("1/100-200") == {0: endpoint}
+    assert plan.ceded("1/200-300") == {}
+
+
 def _logged_drops(caplog) -> list[tuple[str, str]]:
     """Each row completion logged as dropped: its variant and the reason."""
     drops = []

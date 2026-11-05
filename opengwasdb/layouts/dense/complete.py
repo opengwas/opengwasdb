@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -43,6 +43,7 @@ from opengwasdb.completion.ld_panel import (
     canonical_panel_alid as _canonical_panel_alid,
 )
 from opengwasdb.completion.ld_panel import (
+    ceded_at_end,
     check_panel_has_chromosomes,
     list_all_blocks,
     list_chromosomes,
@@ -108,6 +109,7 @@ from opengwasdb.variants import (
     parse_canonical_alid,
     write_variant_axis,
 )
+from opengwasdb.variants.routing import collapse_duplicates
 
 log = logging.getLogger(__name__)
 
@@ -135,6 +137,8 @@ class _BlockTask:
     min_cor: float
     thresh: float
     checkpoint_path: Path
+    #: The variants at this block's end the next block owns (`shared_endpoints`).
+    ceded: frozenset[str] = frozenset()
 
 
 def _source_row_for(src_axis: VariantAxis, alid: str | None) -> int | None:
@@ -194,8 +198,15 @@ def _make_reader(task: _BlockTask):
 
 
 def _run_block(task: _BlockTask) -> BlockCompletionResult | None:
-    """Complete one LD block for every Analysis. Runs inside a worker process."""
-    result = run_block(task.tsv_path, task.thresh, task.min_cor, REGION_CAP_BP, _make_reader(task))
+    """Complete one LD block for every Analysis. Runs inside a worker process.
+
+    Every Analysis is completed against every block, so a block cedes the same
+    variants for each.
+    """
+    result = run_block(
+        task.tsv_path, task.thresh, task.min_cor, REGION_CAP_BP, _make_reader(task),
+        ceded=lambda _analysis: task.ceded,
+    )
     if result is None:
         return None
     write_block_checkpoint(task.checkpoint_path, result)
@@ -353,6 +364,8 @@ class _UnionAxis:
     on_panel: np.ndarray
     out_to_src: np.ndarray
     tsv_paths: list[Path]
+    #: Per block's TSV, the variants at its end the next block owns.
+    ceded: dict[Path, frozenset[str]]
 
 
 @dataclass(frozen=True)
@@ -393,22 +406,41 @@ def _read_source_axis(src: Path, impute_analysis_ids: set[str] | None) -> _Sourc
     return _SourceAxis(src_variants, src_analyses, src_alid_to_idx, n_analyses, impute_mask)
 
 
-def _enumerate_panel(ld_dir: Path, ancestry: str) -> tuple[list[Path], set[str]]:
+@dataclass(frozen=True)
+class _Panel:
+    """What Phase 1 reads of the LD panel: the block paths Phase 2 schedules,
+    the canonical ALIDs the union axis must hold (ADR 0022), and, per block,
+    the variants at its end the next block owns."""
+
+    tsv_paths: list[Path]
+    alids: set[str]
+    ceded: dict[Path, frozenset[str]]
+
+
+def _enumerate_panel(ld_dir: Path, ancestry: str) -> _Panel:
     """Walk every LD block's TSV in chromosome order, collecting the block
-    paths Phase 2 schedules and the canonical panel ALIDs the union axis must
-    hold (ADR 0022)."""
+    paths, the panel's canonical ALIDs and its shared endpoints."""
     print("Enumerating genome-wide LD blocks...")
     tsv_paths: list[Path] = []
     panel_alids: set[str] = set()
+    ceded: dict[Path, frozenset[str]] = {}
     for chrom in list_chromosomes(ld_dir, ancestry):
-        for block in list_all_blocks(ld_dir, ancestry, chrom):
+        blocks = list_all_blocks(ld_dir, ancestry, chrom)
+        for block in blocks:
             tsv_paths.append(block.tsv_path)
             for snp_id in block.snp_ids:
                 ca = _canonical_panel_alid(snp_id)
                 if ca is not None:
                     panel_alids.add(ca)
-    print(f"LD panel: {len(tsv_paths):,} blocks, {len(panel_alids):,} panel variants")
-    return tsv_paths, panel_alids
+        at_end = ceded_at_end(blocks)
+        ceded.update(
+            (block.tsv_path, at_end[block.block_id]) for block in blocks if block.block_id in at_end
+        )
+    print(
+        f"LD panel: {len(tsv_paths):,} blocks, {len(panel_alids):,} panel variants, "
+        f"{sum(map(len, ceded.values())):,} at an endpoint two blocks share"
+    )
+    return _Panel(tsv_paths, panel_alids, ceded)
 
 
 def _orient_panel_alid(alid: str) -> CanonicalVariant | None:
@@ -520,7 +552,8 @@ def _build_union_axis(
     variants it lacks, and seed the staged store's variant tables from the
     merged axis."""
     source_axis = _read_source_axis(src, impute_analysis_ids)
-    panel_paths, panel_alids = _enumerate_panel(ld_dir, ancestry)
+    panel = _enumerate_panel(ld_dir, ancestry)
+    panel_alids = panel.alids
     merged_variants, new_canonical, new_alid_to_idx = _union_variant_table(
         source_axis.src_variants, source_axis.src_alid_to_idx, panel_alids
     )
@@ -543,7 +576,8 @@ def _build_union_axis(
         new_alid_to_idx=new_alid_to_idx,
         on_panel=on_panel,
         out_to_src=out_to_src,
-        tsv_paths=panel_paths,
+        tsv_paths=panel.tsv_paths,
+        ceded=panel.ceded,
     )
 
 
@@ -582,6 +616,7 @@ def _complete_pending_blocks(
                     min_cor=min_cor,
                     thresh=thresh,
                     checkpoint_path=ckpt_path,
+                    ceded=axis.ceded.get(tsv_path, frozenset()),
                 )
             )
 
@@ -684,6 +719,7 @@ def _stream_completed_arrays(
         source_encoding,
         encoding,
         impute_mask=axis.impute_mask,
+        name_row=lambda row: axis.merged_variants[row].alid,
     )
     shutil.rmtree(fill_shard_dir, ignore_errors=True)
     log_se_out_of_range(
@@ -1228,6 +1264,11 @@ def _count_band_imputation_failed(
     return 0
 
 
+#: The imputed-band value of a cell two fills disagree on, until the band's
+#: fills are all applied and the cell is left missing.
+_CONFLICTED = 2
+
+
 def _apply_fill_shard_records(
     zb: np.ndarray,
     sb: np.ndarray,
@@ -1236,12 +1277,20 @@ def _apply_fill_shard_records(
     r0: int,
     *,
     impute_mask: np.ndarray | None = None,
+    name_row: Callable[[int], str] = str,
 ) -> int:
     """Stream one band's fill-shard records into its NaN-seeded z and SE bands.
 
-    A record lands only in a cell the band still holds missing -- it never
+    A record lands only in a cell the source left missing -- it never
     overwrites an observed value -- and fills z and SE together and marks the
-    cell imputed; the count of cells actually filled is returned.
+    cell imputed; the count of cells filled is returned.
+
+    A cell two records fill is resolved by Association Admission's duplicate
+    rule (D5): fills that agree on z and SE are one, and fills that disagree
+    are all dropped, leaving the cell missing, each logged by its variant
+    (``name_row``), z and SE (D8). The block that starts at a shared endpoint
+    alone fills it (`shared_endpoints`), so two fills reach a cell only where
+    two blocks overlap elsewhere.
 
     It enforces the ancestry-match filter: a nonmatching Analysis reaching the
     write means the filter applied at checkpoint resolution and the one applied
@@ -1258,14 +1307,89 @@ def _apply_fill_shard_records(
                 f"(first {int(ai[~impute_mask[ai]][0])}); the filter applied at "
                 "checkpoint resolution and the one applied here disagree"
             )
-        fillable = ~np.isfinite(zb[lr, ai])
-        if fillable.any():
-            lrm, aim = lr[fillable], ai[fillable]
-            zb[lrm, aim] = records["z"][fillable]
-            sb[lrm, aim] = records["se"][fillable]
-            imputed_band[lrm, aim] = 1
-            filled += int(fillable.sum())
+        filled += _apply_fill_batch(zb, sb, imputed_band, lr, ai, records["z"], records["se"])
+    conflicted = imputed_band == _CONFLICTED
+    if conflicted.any():
+        _log_conflicting_fills(shard_path, conflicted, r0, name_row)
+        zb[conflicted] = np.nan
+        sb[conflicted] = np.nan
+        imputed_band[conflicted] = 0
     return filled
+
+
+def _apply_fill_batch(
+    zb: np.ndarray,
+    sb: np.ndarray,
+    imputed_band: np.ndarray,
+    lr: np.ndarray,
+    ai: np.ndarray,
+    z: np.ndarray,
+    se: np.ndarray,
+) -> int:
+    """Apply one batch of fill records; returns the net count of cells filled.
+
+    A cell is a target while the source leaves it missing: unfilled, filled
+    by an earlier record, or already in conflict. The batch's own repeats are
+    resolved first; a kept fill then fills an open cell, or is compared with
+    the fill the cell holds.
+    """
+    state = imputed_band[lr, ai]
+    target = (state > 0) | ~np.isfinite(zb[lr, ai])
+    lr, ai, z, se, state = lr[target], ai[target], z[target], se[target], state[target]
+    if not len(lr):
+        return 0
+    found = collapse_duplicates(lr.astype(np.int64) * zb.shape[1] + ai, z, se)
+    filled = -_mark_conflicted(imputed_band, lr[found.dropped], ai[found.dropped])
+    k = found.keep
+    lr, ai, z, se, state = lr[k], ai[k], z[k], se[k], state[k]
+    open_ = state == 0
+    zb[lr[open_], ai[open_]] = z[open_]
+    sb[lr[open_], ai[open_]] = se[open_]
+    imputed_band[lr[open_], ai[open_]] = 1
+    filled += int(open_.sum())
+    held = state == 1
+    disagree = held & ((zb[lr, ai] != z) | (sb[lr, ai] != se))
+    return filled - _mark_conflicted(imputed_band, lr[disagree], ai[disagree])
+
+
+def _mark_conflicted(imputed_band: np.ndarray, lr: np.ndarray, ai: np.ndarray) -> int:
+    """Mark these cells conflicted; returns how many had been counted filled."""
+    if not len(lr):
+        return 0
+    n_analyses = imputed_band.shape[1]
+    rows, cols = np.divmod(np.unique(lr.astype(np.int64) * n_analyses + ai), n_analyses)
+    was_filled = int((imputed_band[rows, cols] == 1).sum())
+    imputed_band[rows, cols] = _CONFLICTED
+    return was_filled
+
+
+def _log_conflicting_fills(
+    shard_path: Path, conflicted: np.ndarray, r0: int, name_row: Callable[[int], str]
+) -> None:
+    """Log every fill record at a conflicted cell, one line each (D8).
+
+    A completion writes no Admission Record (ADR 0072), so its log is where
+    the fills it drops are named, all of them.
+    """
+    n_cells = int(conflicted.sum())
+    n_rows = 0
+    for records in _iter_fill_records(shard_path):
+        lr = records["row"] - r0
+        at = conflicted[lr, records["ai"]]
+        for row, analysis, z, se in zip(
+            records["row"][at].tolist(), records["ai"][at].tolist(),
+            records["z"][at].tolist(), records["se"][at].tolist(), strict=True,
+        ):
+            log.warning(
+                "Analysis %d: dropped fill %s (z=%r, se=%r): duplicate_conflicting",
+                analysis, name_row(row), z, se,
+            )
+            n_rows += 1
+    log.warning(
+        "complete-dense: %d fill(s) at %d cell(s) disagree, so none is kept "
+        "(duplicate_conflicting)",
+        n_rows, n_cells,
+    )
 
 
 def _seed_paired_bands(
@@ -1327,6 +1451,7 @@ def _write_completed_statistic_bands(
     overflow: ZOverflowBuilder,
     band_rows: int,
     impute_mask: np.ndarray | None,
+    name_row: Callable[[int], str] = str,
 ) -> _BandTallies:
     """Seed z and SE from the source, apply the fills, and write z, the
     imputed mask and the scratch float32 SE, one row-band at a time.
@@ -1340,14 +1465,12 @@ def _write_completed_statistic_bands(
     residual-SE rewrite finalises it afterwards.
     """
     n_variants, n_analyses = (int(size) for size in root["z"].shape)
-    z_arr, se_arr, imp_arr = root["z"], root["se"], root["imputed"]
     tallies = _BandTallies(
         n_missing_off_panel=np.zeros(n_analyses, dtype=np.int64),
         se_out_of_range=np.zeros(n_analyses, dtype=np.int64),
     )
     z_band = np.empty((band_rows, n_analyses), dtype=np.float32)
     se_band = np.empty((band_rows, n_analyses), dtype=np.float32)
-    analyses = np.arange(n_analyses)
     for band_index, r0 in enumerate(range(0, n_variants, band_rows)):
         r1 = min(r0 + band_rows, n_variants)
         zb, sb = z_band[: r1 - r0], se_band[: r1 - r0]
@@ -1358,24 +1481,38 @@ def _write_completed_statistic_bands(
         _count_band_off_panel_missing(tallies.n_missing_off_panel, zb, on_panel, r0, r1)
         tallies.total_imputed += _apply_fill_shard_records(
             zb, sb, imp_band, _fill_shard_path(fill_shard_dir, band_index), r0,
-            impute_mask=impute_mask,
+            impute_mask=impute_mask, name_row=name_row,
         )
         tallies.n_missing_imputation_failed += _count_band_imputation_failed(
             zb, on_panel, r0, r1
         )
-        kept = storable(
-            CellValues(zb, sb, imputed=imp_band), analyses, n_analyses,
-            where=f"complete-dense, rows {r0:,} to {r1:,}",
-        )
-        tallies.se_out_of_range += kept.se_out_of_range
-        if not kept.stored.all():
-            tallies.not_stored.append(np.flatnonzero(~kept.stored) + r0 * n_analyses)
-        z_arr[r0:r1] = codec.encode_z(
-            kept.cells.z, positions=positions_row_band(r0, n_analyses), overflow=overflow
-        )
-        imp_arr[r0:r1] = kept.cells.imputed
-        se_arr[r0:r1] = kept.cells.se
+        _write_judged_band(root, CellValues(zb, sb, imputed=imp_band), r0, codec, overflow, tallies)
     return tallies
+
+
+def _write_judged_band(
+    root: Any,
+    band: CellValues,
+    r0: int,
+    codec: StoreCodec,
+    overflow: ZOverflowBuilder,
+    tallies: _BandTallies,
+) -> None:
+    """Judge one completed band whole (`storable`), then write z, the imputed
+    mask and the scratch SE from what it keeps, counting what it does not."""
+    n_analyses = int(root["z"].shape[1])
+    r1 = r0 + len(band.z)
+    kept = storable(
+        band, np.arange(n_analyses), n_analyses, where=f"complete-dense, rows {r0:,} to {r1:,}"
+    )
+    tallies.se_out_of_range += kept.se_out_of_range
+    if not kept.stored.all():
+        tallies.not_stored.append(np.flatnonzero(~kept.stored) + r0 * n_analyses)
+    root["z"][r0:r1] = codec.encode_z(
+        kept.cells.z, positions=positions_row_band(r0, n_analyses), overflow=overflow
+    )
+    root["imputed"][r0:r1] = kept.cells.imputed
+    root["se"][r0:r1] = kept.cells.se
 
 
 def _carried_eaf_baseline(
@@ -1483,6 +1620,7 @@ def _write_completed_bands(
     source_encoding: StoreEncoding,
     encoding: StoreEncoding,
     impute_mask: np.ndarray | None = None,
+    name_row: Callable[[int], str] = str,
 ) -> _BandTallies:
     """Seed z/se from the source, apply the imputed fills, and write
     z/se/imputed one row-band at a time, in cohesive phases: the statistic
@@ -1517,6 +1655,7 @@ def _write_completed_bands(
         overflow,
         band_rows,
         impute_mask,
+        name_row,
     )
     overflow.table().write(root)
 
