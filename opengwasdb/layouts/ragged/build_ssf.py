@@ -73,7 +73,8 @@ from opengwasdb.variants.normalise import (
     CanonicalVariant,
     chromosome_sort_key,
 )
-from opengwasdb.variants.routing import collapse_duplicates
+from opengwasdb.variants.routing import SourceKey, collapse_duplicates, union_names
+from opengwasdb.variants.rsid import RsidConflictPolicy
 
 _MISSING = {"", ".", "NA", "NaN", "nan", "None"}
 
@@ -473,42 +474,89 @@ def _ingest_ssf_sources(
     One pass per analysis: canonicalise each source row, admit it through the
     Analysis's gate, deduplicate rows that canonicalise to the same variant
     (issue #101), and collect the global canonical-variant set plus each
-    variant's first-seen rsid. The printed per-analysis count is the fail-loud
-    record of what survived: a row Admission drops never reaches this point and
-    is in ``record``, and a conflicting duplicate pair is dropped for that cell
-    entirely rather than one of them silently kept.
+    variant's rsid, after comparing its spellings' names (`_Harvest`). The
+    printed per-analysis count is the fail-loud record of what survived: a row
+    Admission drops never reaches this point and is in ``record``, and a
+    conflicting duplicate pair is dropped for that cell entirely rather than
+    one of them silently kept.
     """
     scale = StoredEffectScale(request.stored_effect_scale)
     per_analysis: list[list[_Assoc]] = []
-    alid_variant: dict[str, CanonicalVariant] = {}
-    rsid_by_alid: dict[str, str] = {}
+    harvest = _Harvest()
     for a in analytes:
         with record.gate(rules[a.analysis_id]) as gate:
             batches = _admitted_batches(a, gate, scale)
             for batch in batches:
-                _first_seen(batch, alid_variant, rsid_by_alid)
+                harvest.add(batch)
             recs, n_consistent, n_conflicting = _dedupe_per_analysis(batches, gate)
         per_analysis.append(recs)
         _print_ingest_summary(a, recs, n_consistent, n_conflicting)
     record.finish()
-    return per_analysis, alid_variant, rsid_by_alid
+    return per_analysis, harvest.alid_variant, harvest.names()
 
 
-def _first_seen(
-    batch: ReaderBatch,
-    alid_variant: dict[str, CanonicalVariant],
-    rsid_by_alid: dict[str, str],
-) -> None:
-    """Register each admitted row's variant the first time any Analysis names it,
-    with the rsid its row names (the GWAS-SSF reader's rule: `rsid`, else
-    `variant_id`, whichever is an rs identifier)."""
-    for alid, rsid in zip(batch.alid.tolist(), batch.rsid.tolist(), strict=True):
-        if alid in alid_variant:
-            continue
-        chromosome, position, a1, a2 = alid.split(":")
-        alid_variant[alid] = CanonicalVariant(chromosome, int(position), a1, a2)
-        if rsid:
-            rsid_by_alid[alid] = rsid
+#: What the harvest's refusal calls this build (ADR 0066).
+HARVEST_LABEL = "Ragged SSF build"
+
+
+@dataclass
+class _Harvest:
+    """The variants a build's admitted rows reach, and the names they carry.
+
+    Rows are added in Manifest Row order and file order. Each row is read
+    with the GWAS-SSF reader's rsid rule: `rsid`, else `variant_id`,
+    whichever is an rs identifier.
+
+    - ``alid_variant``: each variant, registered at its first admitted row.
+    - ``rsid_by_site`` and ``site_alid``: each raw site's first non-empty
+      rsid, and its ALID. The site is spelt as the source spells it, as Pass
+      1's union keeps it, so `names` can compare a site's spellings.
+    - ``first_named``: the ALIDs whose first admitted row names them.
+    """
+
+    alid_variant: dict[str, CanonicalVariant] = field(default_factory=dict)
+    rsid_by_site: dict[SourceKey, str] = field(default_factory=dict)
+    site_alid: dict[SourceKey, str] = field(default_factory=dict)
+    first_named: set[str] = field(default_factory=set)
+
+    def add(self, batch: ReaderBatch) -> None:
+        """Register each of ``batch``'s rows, a batch of admitted rows."""
+        for alid, ref, alt, rsid in zip(
+            batch.alid.tolist(), batch.ref.tolist(), batch.alt.tolist(), batch.rsid.tolist(),
+            strict=True,
+        ):
+            chromosome, position, a1, a2 = alid.split(":")
+            if alid not in self.alid_variant:
+                self.alid_variant[alid] = CanonicalVariant(chromosome, int(position), a1, a2)
+                if rsid:
+                    self.first_named.add(alid)
+            if rsid:
+                site = (chromosome, int(position), ref, alt)
+                if site not in self.rsid_by_site:
+                    self.rsid_by_site[site] = rsid
+                    self.site_alid[site] = alid
+
+    def names(self) -> dict[str, str]:
+        """Each variant's rsid, after comparing the names a site's spellings carry.
+
+        The harvest goes through `union_names`, the test every harvest applies
+        (ADR 0066, #379). `build-ragged-ssf` has no `--on-rsid-conflict`, so a
+        Routing Key its sources name two ways is refused, naming both names.
+
+        With nothing disputed, `union_names` gives a variant whose first
+        admitted row names it that row's name. The builder names only the
+        variants in ``first_named``, so a variant whose first admitted row
+        names nothing stays unnamed, even if a later row names it. That is the
+        builder's rule. Aligning it with spec §4's first-non-empty rule is a
+        separate ticket.
+        """
+        routed = union_names(
+            self.rsid_by_site, self.site_alid,
+            policy=RsidConflictPolicy.REFUSE, label=HARVEST_LABEL,
+        )
+        return {
+            alid: rsid for alid, rsid in routed.rsid_by_alid.items() if alid in self.first_named
+        }
 
 
 def _print_ingest_summary(

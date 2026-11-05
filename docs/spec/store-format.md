@@ -280,9 +280,10 @@ is part of the contract (issue #255):
   variant on every build. Every build that harvests — a two-pass build, or a
   single-pass build whose reference names no variants — compares the names
   those spellings carry, by one rule, and so does Variant Reference extraction
-  (issue #379): when their sources name it with different (normalised) rsids,
-  nothing in the sources says which is right, and `build-hybrid
-  --on-rsid-conflict` decides (issue #306); `build-dense-vcf` and
+  (issue #379), and so does `build-ragged-ssf` over the rows it admits: when
+  their sources name it with different (normalised) rsids, nothing in the
+  sources says which is right, and `build-hybrid --on-rsid-conflict` decides
+  (issue #306); `build-dense-vcf`, `build-ragged-ssf` and
   `extract-variant-reference` have no such option and always refuse. Which
   source is listed first therefore never decides such a name. Under
   `build-hybrid`, `refuse`, the
@@ -310,14 +311,21 @@ is part of the contract (issue #255):
   one whose recorded counts are missing is refused too, unless its checkpoint
   predates the option (records no `on_rsid_conflict`); its counts are then
   `null`.
-- `build-dense` and `build-ragged-ssf` compare no names, because the rows
-  they read carry the upper-cased ALID and not the source's spelling, so a
-  site's two spellings cannot be told apart there (issue #379): `build-dense`
-  takes the first non-empty rsid among the rows it admits for a variant, and
-  `build-ragged-ssf` the rsid of the first row it admits for a variant. A
-  `build-ragged-besd` file set lists a variant once, and two of its rows that
-  canonicalise to one variant are both dropped, with their associations, so
-  no two names ever meet there.
+- `build-ragged-ssf` names a variant from the first row it admits for it. A
+  variant whose first admitted row names nothing stays unnamed, even if a
+  later row names it. This differs from the first-non-empty rule above.
+  Aligning the two is a separate ticket. Comparing spellings changes no name
+  it gives: with nothing disputed, the first admitted row's site holds the
+  first name its key carries.
+- `build-dense` does not yet compare names. It takes the first non-empty rsid
+  among the rows it admits for a variant. The rows it reads carry the
+  upper-cased ALID and not the source's spelling, so it cannot tell a site's
+  two spellings apart. Its reader is to be replaced (issue #385), and the
+  comparison is to follow that reader, as it followed the Ragged builders'
+  `ReaderBatch` (issue #379).
+- A `build-ragged-besd` file set lists a variant once, and two of its rows
+  that canonicalise to one variant are both dropped, with their associations,
+  so no two names ever meet there.
 - A single-pass build given `--variant-reference` MUST NOT write a `rsid`
   column blank simply because the reference it was given is a plain ALID list.
   When the reference names none of its variants, the build runs the same Pass 1

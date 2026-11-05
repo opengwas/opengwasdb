@@ -11,10 +11,13 @@
 > build now accepts `drop` and reports `n_keys` and `n_variants` instead of
 > `null`; only a reference that names its own variants reports `null`.
 > Variant Reference extraction has no policy and refuses, so an artifact a
-> build uses as given never carries a disputed name. `build-dense` and
-> `build-ragged-ssf` still compare no names, because the rows they read carry
-> no source spelling, and a `build-ragged-besd` file set lists each variant
-> once. The Consequence "A Dense build never meets this" stopped holding with
+> build uses as given never carries a disputed name. `build-ragged-ssf`
+> compares the rows it admits, now that a `ReaderBatch` carries each row's
+> spelling (ADR 0076). It has no policy, so it refuses. It still names a
+> variant from its first admitted row, which is a separate question.
+> `build-dense` does not compare yet, because the rows it reads carry no
+> source spelling, and its reader waits on #385. A `build-ragged-besd` file
+> set lists each variant once. The Consequence "A Dense build never meets this" stopped holding with
 > ADR 0075, which upper-cases a Dense routing key too.
 
 A Hybrid build's rsid harvest refuses a routing key whose sources name it with

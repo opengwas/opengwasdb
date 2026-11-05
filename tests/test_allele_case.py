@@ -231,25 +231,83 @@ def test_a_lifted_extraction_names_a_lower_case_source_by_the_upper_case_alid(tm
     assert _artifact_rows(artifact)[0][6] == "3:1000:g:a"
 
 
+def _ragged_manifest(tmp_path: Path, analyses: list[str]) -> Path:
+    """A Ragged SSF manifest of ``analyses``, in that order, each read from
+    ``<analysis>.tsv.gz`` in the filtered directory."""
+    lines = ["analysis_index\tanalysis_id\ttrait_id\tanalysis_label\tn\tfiltered_file"
+             "\tsource_genome_build"]
+    lines += [f"{i}\t{a}\t{a}\t{a}\t1000\t{a}.tsv.gz\tGRCh38" for i, a in enumerate(analyses)]
+    manifest = tmp_path / "ragged.tsv"
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return manifest
+
+
+def _ragged_build(manifest: Path, filtered: Path, store: Path) -> None:
+    build_ragged_from_ssf(
+        manifest, filtered, store, store_id="s", release_id="r", association_coverage="gwas"
+    )
+
+
 def test_ragged_stores_a_lower_case_source_under_the_upper_case_alid(tmp_path):
     filtered = tmp_path / "filtered"
     filtered.mkdir()
     _ssf(filtered / "lower.tsv.gz", "g", "a", 2.0, 0.5, rsid="rs1")
     assert _alleles(filtered / "lower.tsv.gz") == [("g", "a")]
-    manifest = tmp_path / "ragged.tsv"
-    manifest.write_text(
-        "analysis_index\tanalysis_id\ttrait_id\tanalysis_label\tn\tfiltered_file\tsource_genome_build\n"
-        "0\tlower\tlower\tlower\t1000\tlower.tsv.gz\tGRCh38\n",
-        encoding="utf-8",
-    )
     store = tmp_path / "ragged.opengwasdb"
 
-    build_ragged_from_ssf(
-        manifest, filtered, store, store_id="s", release_id="r", association_coverage="gwas"
-    )
+    _ragged_build(_ragged_manifest(tmp_path, ["lower"]), filtered, store)
 
     assert _axis(store) == [ALID]
     assert _z_by_alid(store, "lower") == {ALID: pytest.approx(-4.0, rel=5e-3)}
+
+
+def _ragged_spellings(tmp_path: Path, lower_rsid: str, upper_rsid: str) -> Path:
+    """Two Ragged Analyses, ``lower`` and ``upper``, each spelling the one site
+    in its own case and naming it as given."""
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    _ssf(filtered / "lower.tsv.gz", "g", "a", 2.0, 0.5, rsid=lower_rsid)
+    _ssf(filtered / "upper.tsv.gz", "G", "A", 1.0, 0.5, rsid=upper_rsid)
+    assert _alleles(filtered / "lower.tsv.gz") == [("g", "a")]
+    assert _alleles(filtered / "upper.tsv.gz") == [("G", "A")]
+    return filtered
+
+
+@pytest.mark.parametrize("lower_first", [False, True], ids=["upper-first", "lower-first"])
+def test_a_ragged_ssf_build_refuses_two_spellings_named_differently(tmp_path, lower_first):
+    """A Ragged SSF build compares a site's spellings as every other harvest
+    does (issue #379). `build-ragged-ssf` has no `--on-rsid-conflict`, so it
+    refuses whichever Analysis is listed first, and publishes nothing."""
+    filtered = _ragged_spellings(tmp_path, lower_rsid="rs2", upper_rsid="rs1")
+    analyses = ["upper", "lower"]
+    manifest = _ragged_manifest(tmp_path, analyses[::-1] if lower_first else analyses)
+    store = tmp_path / "ragged.opengwasdb"
+
+    with pytest.raises(ValueError, match="Ragged SSF build: .* one routing key '1:100000:A:G'"):
+        _ragged_build(manifest, filtered, store)
+    assert not store.exists()
+
+
+@pytest.mark.parametrize(
+    ("lower_first", "expected"), [(False, "rs1"), (True, None)], ids=["named-first", "blank-first"]
+)
+def test_comparing_spellings_keeps_a_ragged_ssf_builds_first_row_rule(
+    tmp_path, lower_first, expected
+):
+    """Comparing spellings changes no name a Ragged SSF build gives when nothing
+    is disputed. The builder names a variant from its first admitted row, even
+    when that row names nothing, though a later spelling names it. Spec §4 asks
+    for the first non-empty name instead. Aligning the two is its own ticket,
+    by the owner's ruling on #379, and that ticket flips ``blank-first``."""
+    filtered = _ragged_spellings(tmp_path, lower_rsid="", upper_rsid="rs1")
+    analyses = ["upper", "lower"]
+    manifest = _ragged_manifest(tmp_path, analyses[::-1] if lower_first else analyses)
+    store = tmp_path / "ragged.opengwasdb"
+
+    _ragged_build(manifest, filtered, store)
+
+    (variant,) = VariantAxis(store).all()
+    assert (variant.alid, variant.rsid) == (ALID, expected)
 
 
 def test_a_dense_build_from_an_alid_list_routes_a_lower_case_source(tmp_path):
