@@ -26,9 +26,11 @@ pixi run -e dev python -m prototypes.locus_leads compare \
     --output docs/benchmark-output/locus_leads/OGS-00003_finngen-r13-BMI_IRN.json
 ```
 
-The comparison uses Observed Associations only, and only the rows both methods
-can see: matched to the panel by chromosome, position and allele set, and with
-finite cM. Every other row is counted under the reason it was left out. plink2
+The Store, the map and the panel must be on one reference assembly, or the run
+stops. The comparison uses Observed Associations only, and only the rows both
+methods can see: matched to the panel by chromosome, position and allele set,
+and with finite cM. Every other row falls in exactly one category under the
+reason it was left out, and the counts must add up to the tier. plink2
 is given -log10 p computed from z, with equal values separated in the rule's
 order, so the two methods rank rows identically; a clump whose index variant
 comes after one of its members in that order fails the run.

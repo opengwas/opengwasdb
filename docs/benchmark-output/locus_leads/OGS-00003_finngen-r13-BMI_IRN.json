@@ -93,6 +93,7 @@
    "22"
   ],
   "samples": 771,
+  "assembly": "gnomAD_GRCh38",
   "plink2": "PLINK v2.0.0-a.6.9LM 64-bit Intel (29 Jan 2025)"
  },
  "parameters": {
@@ -125,7 +126,15 @@
    "ambiguous": 0
   },
   "shared_set": 47457,
-  "shared_set_share": 0.8556978002163722
+  "shared_set_share": 0.8556978002163722,
+  "partition": {
+   "shared_set": 47457,
+   "matched_no_cm": 0,
+   "off_panel_chromosome": 3624,
+   "absent_at_position": 4226,
+   "allele_mismatch": 55,
+   "ambiguous": 98
+  }
  },
  "ranking": {
   "order": "abs_z descending, then Store Variant Index ascending",
