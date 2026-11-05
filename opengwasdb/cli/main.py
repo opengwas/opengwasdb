@@ -514,10 +514,14 @@ def validate_command(
 
     result = validate_store(store_path)
     if output_format is ReportFormat.json:
+        # `findings` names the rule behind each record, and the skips beside the
+        # failures and warnings: a rule that had nothing to judge is not a pass, and
+        # the three keys that predate it cannot say so (spec §20.1, issue #378).
         payload = {
             "ok": result.ok,
             "errors": result.errors,
             "warnings": result.warnings,
+            "findings": [finding.as_dict() for finding in result.findings],
         }
         typer.echo(json.dumps(payload, sort_keys=True))
         if not result.ok:

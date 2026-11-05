@@ -13,6 +13,7 @@ a plane a second time, and none samples.
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -78,7 +79,7 @@ def _abs_z_agrees(target: Target, key: str) -> bool:
 
 
 def _sound_keys(target: Target) -> list[str]:
-    """The tiers with every array and a sound structure, in index order."""
+    """The tiers with every array and a sound structure, in listing order."""
     index = top_hits.index_group(tier_root(target))
     return [
         key
@@ -88,7 +89,33 @@ def _sound_keys(target: Target) -> list[str]:
 
 
 def _keys(target: Target) -> list[str]:
-    return list(top_hits.index_group(tier_root(target)))
+    """The component's tiers, in a fixed order: threshold, then name.
+
+    The thresholds are `TOP_HIT_THRESHOLDS`', which is also the order of the
+    `analyses.tsv` Top-Hit Count columns. A Zarr group lists its keys in its store's
+    order and promises nothing about it, so a rule that reported the tiers in that
+    order named the same failing ones in a different order from run to run.
+    """
+    index = top_hits.index_group(tier_root(target))
+    return sorted(index, key=lambda key: _tier_order(key, index[key]))
+
+
+def _tier_order(key: str, group: Any) -> tuple[int, float, str]:
+    """Where a tier sits in the listing: those with a threshold first, then the rest.
+
+    The name breaks a tie, so two tiers written for one threshold are still ordered,
+    and a tier whose threshold will not parse is never compared with one that
+    parses: it sorts after every well-formed tier, by name, because the listing has
+    to reach it for `top_hits.arrays` and `top_hits.structure` to say what is wrong
+    with it.
+    """
+    try:
+        threshold = top_hits.tier_threshold(key, group)
+    except (TypeError, ValueError):
+        return (1, 0.0, key)
+    if not math.isfinite(threshold):
+        return (1, 0.0, key)
+    return (0, threshold, key)
 
 
 def arrays(target: Target) -> Iterator[str]:
@@ -145,7 +172,7 @@ def sound_tiers(target: Target) -> list[Tier]:
 
 
 def _sound(target: Target) -> list[Tier]:
-    """The sound tiers in index order, built one at a time, the largest first.
+    """The sound tiers in listing order, built one at a time, the largest first.
 
     One tier's load and sort are in hand at once, before the smaller tiers are held
     beside them. What the structure rules need is remembered from the same load;

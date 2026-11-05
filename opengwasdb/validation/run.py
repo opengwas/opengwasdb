@@ -81,7 +81,8 @@ class _Run:
         #: The rules whose `when` declined a target: decided, and constraining nothing.
         self.declined: set[tuple[str, int]] = set()
         self.found: dict[tuple[str, int], list[Finding]] = {}
-        self.skipped: dict[str, list[str]] = {}
+        #: The skips recorded on each target, in the order the run recorded them.
+        self.skipped: dict[tuple[str, int], list[Finding]] = {}
         #: Each scan's folds, by name: a prerequisite among them is decided by the pass.
         self.on_scan: dict[str, set[str]] = {}
         for rule in rules:
@@ -89,15 +90,13 @@ class _Run:
                 self.on_scan.setdefault(rule.scan.name, set()).add(rule.name)
 
     def result(self) -> ValidationResult:
-        """The findings in rule order, then target order, and the skips."""
-        ordered = [
-            finding
-            for rule in self.rules
-            for i in range(len(self.targets))
-            for finding in self.found.get((rule.name, i), ())
-        ]
-        skipped = {name: tuple(why) for name, why in self.skipped.items()}
-        return ValidationResult(tuple(ordered), skipped)
+        """What the run recorded, in the order it judged: rule order, then target order."""
+        ordered: list[Finding] = []
+        for rule in self.rules:
+            for i in range(len(self.targets)):
+                ordered.extend(self.found.get((rule.name, i), ()))
+                ordered.extend(self.skipped.get((rule.name, i), ()))
+        return ValidationResult(tuple(ordered))
 
     def judge(self, rule: Rule) -> None:
         for i, target in enumerate(self.targets):
@@ -160,9 +159,22 @@ class _Run:
         self.states[(rule.name, i)] = _FAILED if failed else _PASSED
 
     def skip(self, name: str, i: int, why: list[str]) -> None:
+        """Record that `name` could not judge target `i`, and every reason it gave.
+
+        One record per rule and target: the reasons are named in its message, in the
+        order they were recorded, and kept apart in `reasons` so `skipped` reads them
+        one by one.
+        """
         self.states[(name, i)] = _SKIPPED
-        held = self.skipped.setdefault(name, [])
-        held.extend(reason for reason in why if reason not in held)
+        existing = self.skipped.get((name, i))
+        reasons = list(existing[0].reasons) if existing else []
+        for reason in why:
+            if reason not in reasons:
+                reasons.append(reason)
+        record = Finding(
+            name, Severity.SKIP, ", ".join(reasons), self.targets[i].label, tuple(reasons)
+        )
+        self.skipped[(name, i)] = [record]
 
     def scan(self, scan: Scan[Any], i: int, target: Target) -> None:
         """Read `scan` once on target `i` for every fold on it that can run there."""

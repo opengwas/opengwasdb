@@ -1845,8 +1845,9 @@ before the read.
 
 `validate_store(path, rules={...})` runs the named rules and the rules they run after,
 and refuses a name this table does not list. `ValidationResult.failed()` names the
-rules that reported an error. `validate --format json` reports the findings' messages,
-not their rules' names. The names are stable: a rule is renamed or removed only by a
+rules that reported an error. `validate --format json` reports each finding's rule,
+severity and target beside its message, skips included (§20.1). The names are
+stable: a rule is renamed or removed only by a
 change to this table, which the test suite holds to the registry, in its order.
 
 | Rule | Judges | Kind | What it checks |
@@ -1947,9 +1948,32 @@ Command-line validation (`ogdb validate`) and inspection (`ogdb info`) provide b
 
 - `ogdb validate <store> --format json` outputs a single JSON object on `stdout`:
   ```json
-  {"ok": true, "errors": [], "warnings": []}
+  {"ok": true, "errors": [], "warnings": [], "findings": []}
   ```
   On failure (`ok=false`), it outputs the JSON object containing the recorded error strings on `stdout` and exits with a non-zero exit code. On success, `stderr` is empty.
+  `findings` names the rule behind every record (§20.0, ADR 0074, issue #378): each
+  item is an object of exactly `rule`, `severity`, `target` and `message`, all
+  strings, where `severity` is `error`, `warning` or `skip`, `rule` is a name from
+  §20.0's table, `target` is the part of the release the rule judged — `.` for the
+  release, `data.zarr` for a Dense grid, `data.zarr/ragged` for an association
+  sequence, `dense` and `dense/data.zarr` for a Hybrid's Dense Component — and
+  `message` is the same string the rule's entry in `errors` or `warnings` holds,
+  or, for a skip, the reason ADR 0074 records for it: the rules that blocked it, or
+  the rule's own reason for having nothing to judge. A skipped rule appears once per
+  target it could not judge, one record whose message names every rule that blocked
+  it in the order it looks them up, so a release where a rule never ran is not
+  indistinguishable from one where every rule passed. The order is deterministic:
+  rule order, as §20.0's table lists the rules, then target order; a rule's failures
+  and warnings on a target come before its skip of that target, and a rule is one or
+  the other, never both. A rule that enumerates something the store holds unordered
+  — a Zarr group's members above all — sorts it, so the tiers of a Top-Hit Index are
+  named by threshold and then by name, strictest first (`p_5e_08`, `p_5e_06`,
+  `p_5e_04`), a tier whose threshold will not parse last; and the nodes
+  `zarr.format` walks are named by path. `ok`, `errors` and `warnings` carry the
+  messages and the verdict they carried before this key, and `errors` and `warnings`
+  remain the `message`s of the `error` and `warning` records in that order. Order is
+  the one thing that changed: a release that named the same defects in a different
+  order on each run names them in one.
 - `ogdb info <store> --format json` outputs a single JSON object on `stdout` representing the store release manifest with decomposed structured encoding:
   ```json
   {
