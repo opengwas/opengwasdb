@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import locus_leads_panel
@@ -72,6 +73,7 @@ def test_every_config_is_compared_on_the_same_rows_and_pairs_carry_their_r2(
     assert histogram["[0.5,inf)"] == 2
     chance = record["chance_ld"]
     assert (chance["variants"], chance["pairs"]) == (2, 0)  # both index variants on chr1
+    json.dumps(record, allow_nan=False)  # the cache writes it; no numpy scalar may remain
 
 
 def test_an_analysis_with_too_few_rows_in_the_shared_set_is_refused_with_its_breakdown(

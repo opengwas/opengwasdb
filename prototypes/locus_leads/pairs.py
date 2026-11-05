@@ -86,7 +86,7 @@ def _histogram(r2: np.ndarray) -> dict[str, int]:
 
 
 def _band_counts(members: list[Pair]) -> dict[str, int]:
-    return {"n": len(members), "r2_undefined": sum(np.isnan(p.r2) for p in members)} | {
+    return {"n": len(members), "r2_undefined": int(sum(np.isnan(p.r2) for p in members))} | {
         f"r2_ge_{t:g}": sum(p.r2 >= t for p in members if not np.isnan(p.r2))
         for t in R2_THRESHOLDS}
 
