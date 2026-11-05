@@ -14,7 +14,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
+from dense_sources import build_dense_fixture
+
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 
@@ -33,7 +34,7 @@ def dense_fixture_store(root: Path) -> Path:
     source = root / "associations.tsv"
     source.write_text(SOURCE_HEADER + "\n" + "\n".join(SOURCE_ROWS) + "\n", encoding="utf-8")
     store = root / "store.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source],
         store,
         store_id="fixture-store",

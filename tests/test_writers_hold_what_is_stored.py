@@ -20,9 +20,9 @@ import test_hybrid_build as hb
 import test_hybrid_completion as thc
 import test_ragged_completion as trc
 import zarr
+from dense_sources import build_dense_fixture
 from test_dense_vcf_build import HG19_POS_1, HG19_POS_3, _make_manifest, _make_vcf
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.encoding import (
     DenseEafPlane,
     DenseSePlane,
@@ -226,7 +226,7 @@ def test_dense_completion_writes_only_what_it_stores(tmp_path, monkeypatch) -> N
         encoding="utf-8",
     )
     observed = tmp_path / "obs.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], observed, store_id="t", release_id="obs", reference_assembly="GRCh38"
     )
     assert "eaf" in open_store(observed).arrays(mode="r"), "fixture carries frequencies"
@@ -304,7 +304,7 @@ def test_build_dense_writes_only_what_it_stores(tmp_path, monkeypatch) -> None:
     )
     _inject(monkeypatch, _se_is(REFUSED_SE), association_codec)
     store = tmp_path / "obs.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], store, store_id="t", release_id="obs", reference_assembly="GRCh38"
     )
 

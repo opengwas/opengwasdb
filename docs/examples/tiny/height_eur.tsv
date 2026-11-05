@@ -1,0 +1,3 @@
+chromosome	position	effect_allele	other_allele	z	se	rsid
+1	100	A	G	2.0	0.10	rs111
+1	200	T	C	6.0	0.12	rs222

@@ -26,13 +26,13 @@ pixi run -e dev python -c "import opengwasdb; print(opengwasdb.__version__)"
 
 ## Build a tiny Dense Store Release
 
-The tiny source file is `docs/examples/tiny-associations.tsv`. It has four observed associations across two Analyses and three variants. It is intentionally small; production Store Releases are normally built from GWAS-VCF, GWAS-SSF, BESD, or the `opengwasdb-stores` generators.
+The tiny source is `docs/examples/tiny/`. Its build manifest, `manifest.tsv`, has one row per Analysis; each row names that Analysis's association TSV (`height_eur.tsv`, `ldl_eur.tsv`), which holds associations only. Together they have four observed associations across two Analyses and three variants. It is intentionally small; production Store Releases are normally built from GWAS-VCF, GWAS-SSF, BESD, or the `opengwasdb-stores` generators.
 
 ```bash
 rm -rf /tmp/opengwasdb-tiny.opengwasdb /tmp/opengwasdb-tiny.admission
 pixi run -e dev opengwasdb build-dense \
-  docs/examples/tiny-associations.tsv \
   /tmp/opengwasdb-tiny.opengwasdb \
+  --manifest docs/examples/tiny/manifest.tsv \
   --store-id tiny \
   --release-id observed-v1 \
   --admission-record /tmp/opengwasdb-tiny.admission
@@ -45,7 +45,7 @@ beside the Store and never inside it (ADR 0072).
 Expected shape:
 
 ```json
-{"n_analyses": 2, "n_variants": 3, "output_path": "/tmp/opengwasdb-tiny.opengwasdb"}
+{"association_coverage": "gwas", "n_analyses": 2, "n_variants": 3, "output_path": "/tmp/opengwasdb-tiny.opengwasdb"}
 ```
 
 ## Validate and inspect the Store Release

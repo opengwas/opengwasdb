@@ -1124,7 +1124,7 @@ def test_cli_invalid_options_fail_at_parse_time_hybrid(tmp_path):
     assert res_cap.exit_code != 0
     clean_cap_output = normalize_cli_output(res_cap.output)
     assert "unknown source reader capability 'unknown_capability'" in clean_cap_output
-    known = "known: opengwasdb.besd, opengwasdb.column-map, opengwasdb.finngen-r13"
+    known = "known: opengwasdb.association-tsv, opengwasdb.besd, opengwasdb.column-map"
     assert known in clean_cap_output
 
     res_ass = runner.invoke(app, [*args, "--source-assembly", "unknown_build"])

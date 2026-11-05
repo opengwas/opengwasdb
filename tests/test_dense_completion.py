@@ -10,8 +10,8 @@ from shutil import copytree
 
 import numpy as np
 import pytest
+from dense_sources import build_dense_fixture, write_dense_manifest
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.completion.ld_panel import (
     LdPanelNotFoundError,
@@ -210,7 +210,7 @@ def _observed_store_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     source = root / "associations.tsv"
     source.write_text(SOURCE_HEADER + "\n" + "\n".join(SOURCE_ROWS) + "\n", encoding="utf-8")
     out = root / "obs.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], out,
         store_id="test", release_id="obs-v1", reference_assembly="GRCh38",
     )
@@ -512,12 +512,11 @@ class TestValidation:
         """
         import json
 
-        from opengwasdb.build.source import read_normalised_associations
-        from opengwasdb.layouts.dense import build_dense_observed_store
+        from dense_sources import build_dense_fixture
 
         observed = tmp_path / "obs-small-chunk.opengwasdb"
-        build_dense_observed_store(
-            read_normalised_associations(source_path),
+        build_dense_fixture(
+        [source_path],
             observed,
             store_id="test",
             release_id="obs-small",
@@ -702,7 +701,7 @@ class TestSourceFidelity:
     """
 
     def test_fidelity_passes_against_source(self, observed_store, source_path):
-        result = validate_store(observed_store, source=source_path)
+        result = validate_store(observed_store, source=write_dense_manifest(source_path))
         assert result.ok, result.errors
 
     def test_fidelity_detects_sign_flip(self, observed_store, source_path):
@@ -719,7 +718,7 @@ class TestSourceFidelity:
         root["z"][:] = z
 
         assert validate_store(observed_store).ok  # internal checks still pass
-        result = validate_store(observed_store, source=source_path)
+        result = validate_store(observed_store, source=write_dense_manifest(source_path))
         assert not result.ok
         assert any("source-fidelity" in e for e in result.errors), result.errors
 
@@ -729,8 +728,9 @@ class TestSourceFidelity:
         # A wrong source must fail loudly, naming both unmatched kinds: an Analysis
         # the store does not hold and a variant row it does not carry. A check that
         # quietly matched nothing would look exactly like "no association".
-        assert validate_store(observed_store, source=source_path).ok, validate_store(
-            observed_store, source=source_path
+        manifest = write_dense_manifest(source_path)
+        assert validate_store(observed_store, source=manifest).ok, validate_store(
+            observed_store, source=manifest
         ).errors
         wrong = tmp_path / "wrong-source.tsv"
         wrong.write_text(
@@ -741,7 +741,7 @@ class TestSourceFidelity:
             encoding="utf-8",
         )
 
-        result = validate_store(observed_store, source=wrong)
+        result = validate_store(observed_store, source=write_dense_manifest(wrong))
 
         assert not result.ok
         assert any(
@@ -756,10 +756,18 @@ class TestSourceFidelity:
     def test_fidelity_reports_source_with_no_readable_associations(self, observed_store, tmp_path):
         # A header-only source yields no associations; the check must say so rather
         # than treating an unreadable source as a store that agrees with nothing.
-        empty = tmp_path / "empty-source.tsv"
-        empty.write_text(SOURCE_HEADER + "\n", encoding="utf-8")
+        named = tmp_path / "named-source.tsv"
+        named.write_text(
+            SOURCE_HEADER + "\n"
+            + "a1\tp1\tHeight\tHeight primary\t1\t900000\tA\tG\t1.0\t0.15\trsX\tsd\n",
+            encoding="utf-8",
+        )
+        manifest = write_dense_manifest(named)
+        (manifest.parent / "a1.tsv").write_text(
+            "chromosome\tposition\teffect_allele\tother_allele\tz\tse\n", encoding="utf-8"
+        )
 
-        result = validate_store(observed_store, source=empty)
+        result = validate_store(observed_store, source=manifest)
 
         assert not result.ok
         assert any(
@@ -785,7 +793,8 @@ class TestSourceFidelity:
                 f"\t{z_src}\t{se_src}\trsX\tsd"
             )
         src.write_text(SOURCE_HEADER + "\n" + "\n".join(lines) + "\n", encoding="utf-8")
-        assert validate_store(observed_store, source=src).ok  # matches before the drop
+        manifest = write_dense_manifest(src)
+        assert validate_store(observed_store, source=manifest).ok  # matches before the drop
 
         va = VariantAxis(observed_store)
         row_by_alid = {}
@@ -817,7 +826,7 @@ class TestSourceFidelity:
         root["se"][:] = se
 
         assert validate_store(observed_store).ok
-        result = validate_store(observed_store, source=src)
+        result = validate_store(observed_store, source=manifest)
         assert not result.ok
         assert any(
             "source-fidelity: matched 5 source associations but the store held no "
@@ -1552,7 +1561,7 @@ def signal_source_path(tmp_path: Path) -> Path:
 @pytest.fixture
 def signal_observed_store(tmp_path: Path, signal_source_path: Path) -> Path:
     out = tmp_path / "signal_obs.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [signal_source_path], out,
         store_id="test", release_id="obs-v1", reference_assembly="GRCh38",
     )

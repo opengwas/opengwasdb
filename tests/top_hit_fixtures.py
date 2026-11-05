@@ -17,9 +17,9 @@ import residual_stores
 import test_hybrid_build as hb
 import zarr
 from conftest import SOURCE_HEADER, SOURCE_ROWS
+from dense_sources import build_dense_fixture
 from test_ragged_build_besd import _build_store as _build_ragged_store
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.encoding import DenseZPlane
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
@@ -46,7 +46,7 @@ def build_dense(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     out = tmp_path / "dense.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], out, store_id="fixture-store", release_id="observed-v1",
         reference_assembly="GRCh37",
     )

@@ -41,6 +41,7 @@ from opengwasdb.readers import (
     resolve_reader,
     site_metrics_arrays,
 )
+from opengwasdb.readers.association_tsv import ASSOCIATION_TSV_CAPABILITY
 from opengwasdb.readers.besd import BESD_CAPABILITY
 
 
@@ -151,8 +152,8 @@ def test_known_capabilities_returns_sorted_registered_set():
     caps = known_capabilities()
     assert isinstance(caps, tuple)
     assert caps == (
-        BESD_CAPABILITY, COLUMN_MAP_CAPABILITY, FINNGEN_R13_CAPABILITY, GWAS_SSF_CAPABILITY,
-        GWAS_VCF_CAPABILITY,
+        ASSOCIATION_TSV_CAPABILITY, BESD_CAPABILITY, COLUMN_MAP_CAPABILITY,
+        FINNGEN_R13_CAPABILITY, GWAS_SSF_CAPABILITY, GWAS_VCF_CAPABILITY,
     )
 
 
@@ -161,7 +162,8 @@ def test_resolve_reader_rejects_unknown_capability(tmp_path):
         ValueError,
         match=(
             r"unknown source reader capability '.*'; "
-            r"known: opengwasdb\.besd, opengwasdb\.column-map, opengwasdb\.finngen-r13, "
+            r"known: opengwasdb\.association-tsv, opengwasdb\.besd, opengwasdb\.column-map, "
+            r"opengwasdb\.finngen-r13, "
             r"opengwasdb\.gwas-ssf, opengwasdb\.gwas-vcf"
         ),
     ):

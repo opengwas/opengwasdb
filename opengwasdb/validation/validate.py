@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Iterator, Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -20,6 +21,7 @@ from opengwasdb.encoding import (
     StoreCodec,
 )
 from opengwasdb.encoding.codec import se_float16
+from opengwasdb.layouts.build_manifest import apply_se_divisor
 from opengwasdb.layouts.dense.indexed_subsets import validate_indexed_subsets
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.analyses import (
@@ -317,82 +319,118 @@ def _is_vcf_path(path: Path) -> bool:
     return s.endswith((".vcf", ".vcf.gz", ".vcf.bgz", ".bcf"))
 
 
+class _Unit(NamedTuple):
+    """One source file: its Analysis (``None`` where nothing names it), whether it
+    is a VCF, and the SD its manifest row declares (1 where it declares none)."""
+
+    analysis_id: str | None
+    path: Path
+    is_vcf: bool
+    se_divisor: float = 1.0
+
+
 def _source_units(
     source: str | Path | Sequence[str | Path], errors: list[str]
-) -> list[tuple[str | None, Path, bool]]:
+) -> list[_Unit]:
     """Resolve ``source`` into (analysis_id_or_None, path, is_vcf) units.
 
-    A single TSV whose header carries ``trait_id``/``file_path`` is treated as a
-    build manifest (one analysis per file, analysis_id from ``trait_id``);
-    otherwise each path is a self-describing source file (analysis_id per row).
+    A single TSV whose header carries an analysis id and a source file column is
+    treated as a build manifest (one analysis per file); any other path is a
+    source file that names no Analysis.
     """
-    import csv
-
     if isinstance(source, (str, Path)):
         p = Path(source)
         if not p.exists():
             errors.append(f"source path does not exist: {p}")
             return []
-        header = None
-        if not _is_vcf_path(p) and not str(p).lower().endswith(".gz"):
-            try:
-                with open(p, encoding="utf-8") as fh:
-                    header = fh.readline()
-            except (OSError, UnicodeDecodeError):
-                header = None
-        if header is not None and "file_path" in header and "trait_id" in header:
-            units: list[tuple[str | None, Path, bool]] = []
-            with open(p, newline="", encoding="utf-8") as fh:
-                for row in csv.DictReader(fh, delimiter="\t"):
-                    fp = Path(row["file_path"])
-                    units.append((row["trait_id"], fp, _is_vcf_path(fp)))
-            return units
-        return [(None, p, _is_vcf_path(p))]
-    return [(None, Path(item), _is_vcf_path(Path(item))) for item in source]
+        try:
+            manifest = _manifest_units(p)
+        except ValueError as exc:
+            errors.append(f"source-fidelity: {exc}")
+            return []
+        return manifest if manifest is not None else _unnamed_units([p], errors)
+    return _unnamed_units([Path(item) for item in source], errors)
 
 
-def _stream_unit(
-    analysis_id: str | None, path: Path, is_vcf: bool
-) -> Iterator[tuple[str, str, int, str, str, float, float]]:
+def _header_columns(path: Path) -> list[str]:
+    """The tab-separated header of a plain-text file, or none if it is not one."""
+    if _is_vcf_path(path) or str(path).lower().endswith(".gz"):
+        return []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.readline().rstrip("\r\n").split("\t")
+    except (OSError, UnicodeDecodeError):
+        return []
+
+
+def _manifest_columns(path: Path) -> tuple[str, str] | None:
+    """The (analysis id, source file) columns of a build manifest's header, or
+    ``None`` if ``path`` is not one."""
+    columns = _header_columns(path)
+    id_column = next((c for c in ("analysis_id", "trait_id") if c in columns), None)
+    file_column = next((c for c in ("source_file", "file_path") if c in columns), None)
+    return None if id_column is None or file_column is None else (id_column, file_column)
+
+
+def _manifest_units(path: Path) -> list[_Unit] | None:
+    """The units of a build manifest, or ``None`` if ``path`` is not one.
+
+    Each carries the SD its row declares, which the build divided the Analysis's
+    standard errors by (#18), so the source is compared as the build stored it.
+    """
+    from opengwasdb.layouts.build_manifest import read_manifest
+
+    if _manifest_columns(path) is None:
+        return None
+    return [
+        _Unit(row.trait_id, Path(row.file_path), _is_vcf_path(Path(row.file_path)), row.se_divisor)
+        for row in read_manifest(path)
+    ]
+
+
+def _unnamed_units(
+    paths: Sequence[Path], errors: list[str]
+) -> list[_Unit]:
+    """Units for sources no manifest names. An association TSV holds one Analysis
+    and does not say which, so it is refused rather than sampled under none."""
+    for path in paths:
+        if not _is_vcf_path(path):
+            errors.append(
+                f"source-fidelity: {path} is an association TSV, which names no Analysis; "
+                "give the build manifest that lists it"
+            )
+    return [_Unit(None, path, _is_vcf_path(path)) for path in paths]
+
+
+def _stream_unit(unit: _Unit) -> Iterator[tuple[str, str, int, str, str, float, float]]:
     """Yield canonical (analysis_id, chrom, pos, a1, a2, z, se) from one source."""
-    if is_vcf:
-        from opengwasdb.model.enums import StoredEffectScale
-        from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
-        from opengwasdb.readers.registry import resolve_reader
-        from opengwasdb.variants.normalise import canonical_alid
+    from opengwasdb.model.enums import StoredEffectScale
+    from opengwasdb.readers.association_tsv import ASSOCIATION_TSV_CAPABILITY
+    from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
+    from opengwasdb.readers.interface import StreamTally
+    from opengwasdb.readers.registry import resolve_reader
+    from opengwasdb.variants.normalise import canonical_alid
 
-        if analysis_id is None:
-            return  # a VCF carries no analysis_id; it needs a manifest trait_id
-        # The scale is never read: this check compares stored z/se against the
-        # source, and neither the scale nor the EAF plays a part in that.
-        reader = resolve_reader(GWAS_VCF_CAPABILITY, path, StoredEffectScale.SD)
-        for association in reader.stream_associations():
-            _chrom, _pos, a1, a2 = canonical_alid(
-                association.chromosome, association.position, association.ref, association.alt
-            ).split(":")
-            yield (
-                analysis_id, association.chromosome, association.position, a1, a2,
-                association.z, association.se,
-            )
-    else:
-        from opengwasdb.build.source import read_normalised_associations
-
-        for assoc in read_normalised_associations(path, malformed={}):
-            v = assoc.variant
-            a1, a2 = sorted((v.effect_allele, v.other_allele))
-            yield (
-                assoc.analysis_id,
-                v.chromosome,
-                int(v.position),
-                a1,
-                a2,
-                float(assoc.z),
-                float(assoc.se),
-            )
+    analysis_id, path, is_vcf, se_divisor = unit
+    if analysis_id is None:
+        return  # a source that names no Analysis has been refused by `_source_units`
+    # The scale is never read: this check compares stored z/se against the
+    # source, and neither the scale nor the EAF plays a part in that.
+    capability = GWAS_VCF_CAPABILITY if is_vcf else ASSOCIATION_TSV_CAPABILITY
+    reader = resolve_reader(capability, path, StoredEffectScale.SD)
+    # Read as the build reads it: a row it dropped as malformed is not a failure.
+    for association in reader.stream_associations(StreamTally()):
+        _chrom, _pos, a1, a2 = canonical_alid(
+            association.chromosome, association.position, association.ref, association.alt
+        ).split(":")
+        se = association.se
+        if se_divisor != 1.0:
+            se = float(apply_se_divisor(np.array([se], dtype=np.float32), se_divisor)[0])
+        yield (analysis_id, association.chromosome, association.position, a1, a2, association.z, se)
 
 
 def _sample_sources(
-    units: list[tuple[str | None, Path, bool]], n_samples: int, rng: np.random.Generator
+    units: list[_Unit], n_samples: int, rng: np.random.Generator
 ) -> list[tuple[str, str, int, str, str, float, float]]:
     """Reservoir-sample up to ``n_samples`` associations across a random subset
     of source files (scan-capped per file so cost stays bounded)."""
@@ -402,9 +440,8 @@ def _sample_sources(
     reservoir: list[tuple[str, str, int, str, str, float, float]] = []
     seen = 0
     for u in order:
-        analysis_id, path, is_vcf = units[int(u)]
         scanned = 0
-        for item in _stream_unit(analysis_id, path, is_vcf):
+        for item in _stream_unit(units[int(u)]):
             seen += 1
             scanned += 1
             if len(reservoir) < n_samples:
@@ -458,6 +495,8 @@ def _draw_fidelity_samples(
     (missing path) or no associations could be read from it.
     """
     units = _source_units(source, errors)
+    if not units and not errors:
+        errors.append("source-fidelity: the source names no Analysis to check the store against")
     if errors or not units:
         return None
     samples = _sample_sources(units, n_samples, np.random.default_rng(seed))
