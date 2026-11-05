@@ -50,14 +50,14 @@ components:
     layer: 1
     stages: [resolve, build]
     summary: The Source Reader seam and Column Maps; GWAS-SSF, GWAS-VCF, FinnGen and BESD readers.
-    paths: [opengwasdb/readers/, opengwasdb/build/source.py, opengwasdb/build/vcf_source.py, opengwasdb/layouts/ragged/besd_reader.py]
+    paths: [opengwasdb/readers/, opengwasdb/build/source.py, opengwasdb/layouts/ragged/besd_reader.py]
   - id: resolution
     name: Analysis Resolution
     container: engine
     layer: 2
     stages: [resolve]
     summary: One scan per Analysis to its Analytical Metadata and Resolution Record; row admission, INFO, SD and effect consistency.
-    paths: [opengwasdb/build/resolve.py, opengwasdb/build/resolve_manifest.py, opengwasdb/build/resolve_besd.py, opengwasdb/build/row_admission.py, opengwasdb/build/info_score_filter.py, opengwasdb/build/phenotype_sd.py, opengwasdb/build/phenotype_sd_pipeline.py, opengwasdb/build/eaf_orientation.py, opengwasdb/build/effect_consistency.py, opengwasdb/build/hash_sample.py]
+    paths: [opengwasdb/build/resolve.py, opengwasdb/build/resolve_manifest.py, opengwasdb/build/resolve_besd.py, opengwasdb/admission/, opengwasdb/build/info_score_filter.py, opengwasdb/build/phenotype_sd.py, opengwasdb/build/phenotype_sd_pipeline.py, opengwasdb/build/eaf_orientation.py, opengwasdb/build/effect_consistency.py, opengwasdb/build/hash_sample.py]
   - id: ancestry
     name: Ancestry Assignment
     container: engine
@@ -77,8 +77,8 @@ components:
     container: engine
     layer: 3
     stages: [build]
-    summary: Dense Observed-Only builders (tabular and GWAS-VCF), top hits, Indexed Variant Subsets, Rho.
-    paths: [opengwasdb/layouts/dense/, opengwasdb/build/observed/, opengwasdb/build/__init__.py]
+    summary: Dense Observed-Only builders (tabular and GWAS-VCF) and the build manifest they read; top hits, Indexed Variant Subsets, Rho and overview.html.
+    paths: [opengwasdb/layouts/dense/, opengwasdb/layouts/build_manifest.py, opengwasdb/overview.py, opengwasdb/build/observed/, opengwasdb/build/__init__.py]
   - id: ragged
     name: Ragged Layout
     container: engine
@@ -105,8 +105,8 @@ components:
     container: engine
     layer: 1
     stages: [build, publish]
-    summary: Paths, manifest, format versions, the array-creation seam, conversion, SQLite indexes.
-    paths: [opengwasdb/store/, opengwasdb/index/, opengwasdb/layouts/release_manifest.py, opengwasdb/layouts/__init__.py]
+    summary: Paths, manifest, format versions, the array-creation seam, conversion, SQLite indexes, the Top-Hit Index format.
+    paths: [opengwasdb/store/, opengwasdb/index/, opengwasdb/top_hits.py, opengwasdb/layouts/release_manifest.py, opengwasdb/layouts/__init__.py]
   - id: completion
     name: Reference Completion
     container: engine
@@ -126,15 +126,15 @@ components:
     container: engine
     layer: 4
     stages: [query]
-    summary: The layout-independent query facade and result resolution.
-    paths: [opengwasdb/query/]
+    summary: The layout-independent query facade, result resolution and association reads.
+    paths: [opengwasdb/query/, opengwasdb/associations/]
   - id: model
     name: Store contract model
     container: engine
     layer: 0
     stages: [cross]
-    summary: analyses.tsv, manifest and enum contracts; statistic helpers shared by builders, validators and queries.
-    paths: [opengwasdb/model/, opengwasdb/stats.py, opengwasdb/version.py, opengwasdb/build/ordered_pool.py]
+    summary: analyses.tsv, manifest and enum contracts; the presence rule and statistic helpers shared by builders, validators and queries.
+    paths: [opengwasdb/model/, opengwasdb/associations/record.py, opengwasdb/stats.py, opengwasdb/version.py, opengwasdb/build/ordered_pool.py]
   - id: maintenance
     name: Repair and re-encode
     container: engine
