@@ -12,15 +12,14 @@ from __future__ import annotations
 
 import csv
 import logging
-import multiprocessing
 import time
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
 from opengwasdb.ancestry.catalogue import CatalogueRow, write_catalogue
 from opengwasdb.ancestry.mixture import AncestryAssignment, Gates, assign_from_source
 from opengwasdb.ancestry.reference import AncestryReference
+from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.model.manifest_columns import (
     manifest_n,
     manifest_trait_name,
@@ -98,30 +97,32 @@ def read_source_manifest(
     return rows
 
 
-# Fork-inherited worker state, set in the parent immediately before the pool is
-# created. The reference (~1 GB) is inherited by fork rather than pickled per task.
-_WORKER_REFERENCE: AncestryReference | None = None
-_WORKER_GATES: Gates | None = None
-_WORKER_REGIONS: Path | None = None
-_WORKER_LIFTOVERS: dict[str, object] = {}
+@dataclass(frozen=True)
+class _AnnotationContext:
+    """What every worker reads: the Ancestry Reference Panel and the run's inputs.
+
+    ``ordered_map`` hands this to each forked worker by inheritance, so the
+    panel (~1 GB) crosses no pickle boundary once per Analysis (issue #395).
+    """
+
+    reference: AncestryReference
+    gates: Gates
+    regions_file: Path
+    liftovers: dict[str, object]
 
 
-def _fork_pool(n_workers: int) -> ProcessPoolExecutor:
-    fork_ctx = multiprocessing.get_context("fork")
-    return ProcessPoolExecutor(max_workers=n_workers, mp_context=fork_ctx)
-
-
-def _annotate_one(task: tuple[str, str, str]) -> AncestryAssignment:
+def _annotate_one(
+    context: _AnnotationContext, task: tuple[str, str, str]
+) -> AncestryAssignment:
     """Worker: extract AF at reference sites and assign ancestry for one source."""
-    assert _WORKER_REFERENCE is not None and _WORKER_GATES is not None
     file_path, capability, source_build = task
     return assign_from_source(
         file_path,
-        _WORKER_REFERENCE,
-        _WORKER_GATES,
+        context.reference,
+        context.gates,
         capability=capability,
-        regions_file=_WORKER_REGIONS,
-        liftover=_WORKER_LIFTOVERS.get(source_build),
+        regions_file=context.regions_file,
+        liftover=context.liftovers.get(source_build),
     )
 
 
@@ -185,35 +186,28 @@ def annotate_catalogue(
     supplied) so each same-build study is read targeted, not full-scanned. A
     supported cross-build GWAS-VCF uses the explicitly configured chain and a
     full source-coordinate scan; every other mismatch is refused before any
-    source is read (issue #277). Assignments are gathered back into input order,
-    so the Catalogue does not depend on worker count or completion order.
+    source is read (issue #277). ``ordered_map`` hands the Ancestry Reference
+    Panel to forked workers by inheritance, and yields in input order, so the
+    Catalogue does not depend on worker count or completion order.
     """
-    global _WORKER_REFERENCE, _WORKER_GATES, _WORKER_REGIONS, _WORKER_LIFTOVERS
-
-    _WORKER_LIFTOVERS = _configured_liftovers(source_rows, reference_build, chain_file)
-
     out_path = Path(out_path)
     if regions_file is None:
         regions_file = write_regions_file(
             reference.index.keys(), out_path.with_suffix(".regions.txt")
         )
-    regions_file = Path(regions_file)
-
-    _WORKER_REFERENCE = reference
-    _WORKER_GATES = gates
-    _WORKER_REGIONS = regions_file
+    context = _AnnotationContext(
+        reference,
+        gates,
+        Path(regions_file),
+        _configured_liftovers(source_rows, reference_build, chain_file),
+    )
 
     t0 = time.monotonic()
     tasks = [
         (row.file_path, row.source_reader_capability, row.source_genome_build)
         for row in source_rows
     ]
-    if n_workers <= 1:
-        assignments = [_annotate_one(t) for t in tasks]
-    else:
-        with _fork_pool(n_workers) as pool:
-            # executor.map preserves input order regardless of completion order.
-            assignments = list(pool.map(_annotate_one, tasks))
+    assignments = list(ordered_map(_annotate_one, tasks, n_workers, shared=context))
 
     rows = _catalogue_rows(source_rows, assignments)
 
