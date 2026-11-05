@@ -1,0 +1,6833 @@
+{
+ "store": {
+  "path": "/data/opengwasdb/stores/OGS-00003/store.opengwasdb",
+  "store_id": "OGS-00003",
+  "release_id": "OGS-00003",
+  "format_version": "0.1.0",
+  "primary_layout": "dense",
+  "completion_state": "observed_only",
+  "reference_assembly": "GRCh38"
+ },
+ "analysis": {
+  "analysis_id": "finngen-r13-BMI_IRN",
+  "analysis_label": "Body mass index, inverse-rank normalized",
+  "assigned_ancestry": "EUR",
+  "sample_size": "362216"
+ },
+ "query": {
+  "threshold": 5e-08,
+  "observed_only": true,
+  "rows": 55460,
+  "observed": 55460,
+  "imputed": 0,
+  "n_hits_5e8": "55460"
+ },
+ "genetic_map": {
+  "map": "EUR.tsv.gz",
+  "sha256": "146989362889d686c5d52346bce2c0ad9b52d4eb687b1c165666fd680cfd4329",
+  "assembly": "GRCh38",
+  "archive": {
+   "path": "original/hg38_maps.tar.gz",
+   "md5": "45ebb10c4acf939ea03a3932c483f638",
+   "record": "https://zenodo.org/records/11437540"
+  },
+  "populations": {
+   "CEU": 0.2,
+   "GBR": 0.2,
+   "FIN": 0.2,
+   "TSI": 0.2,
+   "IBS": 0.2
+  },
+  "averaging": "equal-weight mean of the population maps' cM, each interpolated (linear between its points, flat beyond its ends) at the union of their positions",
+  "interpolation": "linear between map points; flat beyond a chromosome's ends; NaN off the map",
+  "points_per_chromosome": {
+   "1": 286994,
+   "2": 310234,
+   "3": 255893,
+   "4": 285375,
+   "5": 229473,
+   "6": 242808,
+   "7": 219149,
+   "8": 199628,
+   "9": 160587,
+   "10": 189827,
+   "11": 176996,
+   "12": 173011,
+   "13": 138712,
+   "14": 116622,
+   "15": 106470,
+   "16": 119511,
+   "17": 106789,
+   "18": 100741,
+   "19": 94112,
+   "20": 86473,
+   "21": 57594,
+   "22": 54300
+  },
+  "path": "/data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR.tsv.gz"
+ },
+ "panel": {
+  "path": "/data/opengwasdb/reference/hgdp1kgp-hg38/pgen/EUR",
+  "chromosomes": [
+   "1",
+   "2",
+   "3",
+   "4",
+   "5",
+   "6",
+   "7",
+   "8",
+   "9",
+   "10",
+   "11",
+   "12",
+   "13",
+   "14",
+   "15",
+   "16",
+   "17",
+   "18",
+   "19",
+   "20",
+   "21",
+   "22"
+  ],
+  "samples": 771,
+  "plink2": "PLINK v2.0.0-a.6.9LM 64-bit Intel (29 Jan 2025)"
+ },
+ "parameters": {
+  "d_cm": 0.5,
+  "w_bp": 1000000,
+  "r2": [
+   0.01,
+   0.001
+  ],
+  "clump_kb": 10000,
+  "clump_p1": 5e-08,
+  "clump_p2": 5e-08,
+  "clump_r2": "unphased"
+ },
+ "rows": {
+  "tier_rows": 55460,
+  "panel": {
+   "matched": 47457,
+   "off_panel_chromosome": 3624,
+   "absent_at_position": 4226,
+   "allele_mismatch": 55,
+   "ambiguous": 98
+  },
+  "no_cm": 3624,
+  "no_cm_by_panel_status": {
+   "matched": 0,
+   "off_panel_chromosome": 3624,
+   "absent_at_position": 0,
+   "allele_mismatch": 0,
+   "ambiguous": 0
+  },
+  "shared_set": 47457,
+  "shared_set_share": 0.8556978002163722
+ },
+ "ranking": {
+  "order": "abs_z descending, then Store Variant Index ascending",
+  "plink2_input": "-log10 p from z (log10_p_two_sided), --clump-log10 input-only",
+  "plink2_tie_order": "panel order, whatever the input order",
+  "tie_separation": "within each run of equal -log10 p, each row 16 ulps (np.spacing) below the one before it in the rule's order",
+  "tied_rows": 45816,
+  "tied_groups": 4055,
+  "largest_tied_group": 116,
+  "largest_shift": 1.2050804798491299e-11,
+  "rows_abs_z_over_38": 26,
+  "rows_p_zero_in_float64": 0,
+  "rows_p_subnormal_in_float64": 74
+ },
+ "definitions": {
+  "spurious_split": "a Locus Lead that plink2 places inside a stronger index variant's clump",
+  "lost_signal": "a plink2 index variant that the rule merges into a stronger Locus Lead",
+  "spurious_split_rate": "spurious splits / Locus Leads",
+  "lost_signal_rate": "lost signals / plink2 index variants"
+ },
+ "comparison": {
+  "d_cm": 0.5,
+  "w_bp": 1000000,
+  "locus_leads": 569,
+  "by_r2": {
+   "0.01": {
+    "rows": 47457,
+    "locus_leads": 569,
+    "index_variants": 742,
+    "agreed": 512,
+    "spurious_splits": 57,
+    "lost_signals": 230,
+    "spurious_split_rate": 0.10017574692442882,
+    "lost_signal_rate": 0.30997304582210244,
+    "by_abs_z": {
+     "[0,7)": {
+      "locus_leads": 415,
+      "spurious_splits": 52,
+      "index_variants": 552,
+      "lost_signals": 189
+     },
+     "[7,10)": {
+      "locus_leads": 123,
+      "spurious_splits": 5,
+      "index_variants": 157,
+      "lost_signals": 39
+     },
+     "[10,20)": {
+      "locus_leads": 29,
+      "spurious_splits": 0,
+      "index_variants": 31,
+      "lost_signals": 2
+     },
+     "[20,inf)": {
+      "locus_leads": 2,
+      "spurious_splits": 0,
+      "index_variants": 2,
+      "lost_signals": 0
+     }
+    },
+    "spurious_split_pairs": [
+     {
+      "chromosome": "1",
+      "alid": "1:50039981:C:T",
+      "abs_z": 7.216796875,
+      "stronger_alid": "1:48984636:C:T",
+      "stronger_abs_z": 7.8525390625,
+      "distance_bp": 1055345,
+      "distance_cm": 0.06954137004766636
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:73516504:C:T",
+      "abs_z": 5.4560546875,
+      "stronger_alid": "1:72285451:C:T",
+      "stronger_abs_z": 11.267578125,
+      "distance_bp": 1231053,
+      "distance_cm": 0.2088996539338126
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:92196325:C:T",
+      "abs_z": 5.6416015625,
+      "stronger_alid": "1:98664569:C:T",
+      "stronger_abs_z": 6.1123046875,
+      "distance_bp": 6468244,
+      "distance_cm": 3.098223543876486
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:10209616:C:CGT",
+      "abs_z": 5.880859375,
+      "stronger_alid": "2:1947564:G:T",
+      "stronger_abs_z": 6.494140625,
+      "distance_bp": 8262052,
+      "distance_cm": 12.373724053762489
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:57734467:C:G",
+      "abs_z": 6.3486328125,
+      "stronger_alid": "2:58982904:A:G",
+      "stronger_abs_z": 7.8154296875,
+      "distance_bp": 1248437,
+      "distance_cm": 0.4474763007108322
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:59329331:A:G",
+      "abs_z": 7.0615234375,
+      "stronger_alid": "2:59073799:A:G",
+      "stronger_abs_z": 9.35546875,
+      "distance_bp": 255532,
+      "distance_cm": 0.10774345200653812
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:60672327:C:T",
+      "abs_z": 6.2451171875,
+      "stronger_alid": "2:61808494:A:G",
+      "stronger_abs_z": 6.6064453125,
+      "distance_bp": 1136167,
+      "distance_cm": 0.37161672546099567
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:135014404:C:G",
+      "abs_z": 7.1962890625,
+      "stronger_alid": "2:136031689:A:G",
+      "stronger_abs_z": 10.248046875,
+      "distance_bp": 1017285,
+      "distance_cm": 0.11667782743857913
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:136872929:A:T",
+      "abs_z": 6.0048828125,
+      "stronger_alid": "2:136031689:A:G",
+      "stronger_abs_z": 10.248046875,
+      "distance_bp": 841240,
+      "distance_cm": 0.5367022587843167
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:142760431:A:G",
+      "abs_z": 5.6845703125,
+      "stronger_alid": "2:136031689:A:G",
+      "stronger_abs_z": 10.248046875,
+      "distance_bp": 6728742,
+      "distance_cm": 3.8646376981661064
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:18176279:C:T",
+      "abs_z": 6.138671875,
+      "stronger_alid": "3:16943780:C:T",
+      "stronger_abs_z": 6.15234375,
+      "distance_bp": 1232499,
+      "distance_cm": 0.3802730796744527
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:30008131:A:AT",
+      "abs_z": 5.66015625,
+      "stronger_alid": "3:34549774:A:G",
+      "stronger_abs_z": 5.802734375,
+      "distance_bp": 4541643,
+      "distance_cm": 3.7576830006151667
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:34608566:T:TG",
+      "abs_z": 6.3857421875,
+      "stronger_alid": "3:35018559:C:T",
+      "stronger_abs_z": 7.095703125,
+      "distance_bp": 409993,
+      "distance_cm": 0.20597137258158682
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:47133704:A:G",
+      "abs_z": 5.873046875,
+      "stronger_alid": "3:50137139:C:T",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 3003435,
+      "distance_cm": 0.2829328027276503
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:49135764:C:T",
+      "abs_z": 5.755859375,
+      "stronger_alid": "3:50137139:C:T",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 1001375,
+      "distance_cm": 0.07979722280601464
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:51422580:C:G",
+      "abs_z": 5.9765625,
+      "stronger_alid": "3:50137139:C:T",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 1285441,
+      "distance_cm": 0.11951990465940554
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:61264086:C:T",
+      "abs_z": 6.958984375,
+      "stronger_alid": "3:62496961:C:T",
+      "stronger_abs_z": 7.6162109375,
+      "distance_bp": 1232875,
+      "distance_cm": 1.481123024927527
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:69358602:C:G",
+      "abs_z": 5.52734375,
+      "stronger_alid": "3:60068974:C:T",
+      "stronger_abs_z": 6.0634765625,
+      "distance_bp": 9289628,
+      "distance_cm": 10.203429499566148
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:84352181:A:G",
+      "abs_z": 7.1044921875,
+      "stronger_alid": "3:85741335:G:GA",
+      "stronger_abs_z": 9.3779296875,
+      "distance_bp": 1389154,
+      "distance_cm": 0.24558502616444855
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:90525467:A:T",
+      "abs_z": 6.994140625,
+      "stronger_alid": "3:94332553:C:T",
+      "stronger_abs_z": 7.5654296875,
+      "distance_bp": 3807086,
+      "distance_cm": 0.5236308299675159
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:139307597:C:G",
+      "abs_z": 5.9287109375,
+      "stronger_alid": "3:138375924:A:G",
+      "stronger_abs_z": 6.75390625,
+      "distance_bp": 931673,
+      "distance_cm": 0.30382207174784526
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:168451509:A:T",
+      "abs_z": 5.66015625,
+      "stronger_alid": "3:173395117:C:T",
+      "stronger_abs_z": 6.767578125,
+      "distance_bp": 4943608,
+      "distance_cm": 4.560111489614371
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:46237987:A:G",
+      "abs_z": 5.744140625,
+      "stronger_alid": "4:45163633:A:ATTC",
+      "stronger_abs_z": 16.1796875,
+      "distance_bp": 1074354,
+      "distance_cm": 0.23816642488255013
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:41882534:C:G",
+      "abs_z": 5.990234375,
+      "stronger_alid": "5:43161249:A:G",
+      "stronger_abs_z": 9.1416015625,
+      "distance_bp": 1278715,
+      "distance_cm": 0.23580146656300371
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:44176948:A:G",
+      "abs_z": 5.4892578125,
+      "stronger_alid": "5:44132041:C:T",
+      "stronger_abs_z": 6.2294921875,
+      "distance_bp": 44907,
+      "distance_cm": 0.013217118209261969
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:31296684:A:C",
+      "abs_z": 5.5263671875,
+      "stronger_alid": "6:32706117:C:T",
+      "stronger_abs_z": 7.55859375,
+      "distance_bp": 1409433,
+      "distance_cm": 4.716659098355564
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:32438468:C:CA",
+      "abs_z": 6.5498046875,
+      "stronger_alid": "6:32706117:C:T",
+      "stronger_abs_z": 7.55859375,
+      "distance_bp": 267649,
+      "distance_cm": 3.3840147871333386
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:32558619:A:G",
+      "abs_z": 5.6171875,
+      "stronger_alid": "6:32706117:C:T",
+      "stronger_abs_z": 7.55859375,
+      "distance_bp": 147498,
+      "distance_cm": 2.345110325254552
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:32619215:G:T",
+      "abs_z": 6.3193359375,
+      "stronger_alid": "6:32706117:C:T",
+      "stronger_abs_z": 7.55859375,
+      "distance_bp": 86902,
+      "distance_cm": 1.3920980364222046
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:32659305:A:G",
+      "abs_z": 6.3271484375,
+      "stronger_alid": "6:32706117:C:T",
+      "stronger_abs_z": 7.55859375,
+      "distance_bp": 46812,
+      "distance_cm": 0.6421083468000077
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:34792126:T:TGGCGGCGGCGGCGGCGGCGGC",
+      "abs_z": 6.6259765625,
+      "stronger_alid": "6:40396089:T:TAAG",
+      "stronger_abs_z": 12.3017578125,
+      "distance_bp": 5603963,
+      "distance_cm": 4.13311329577153
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:57427138:A:G",
+      "abs_z": 5.5908203125,
+      "stronger_alid": "6:63048809:A:G",
+      "stronger_abs_z": 6.20703125,
+      "distance_bp": 5621671,
+      "distance_cm": 3.471233428755376
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:84201618:C:T",
+      "abs_z": 5.5107421875,
+      "stronger_alid": "6:86564148:C:T",
+      "stronger_abs_z": 5.849609375,
+      "distance_bp": 2362530,
+      "distance_cm": 0.8124354000572112
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:75855136:A:ACCTT",
+      "abs_z": 7.48046875,
+      "stronger_alid": "7:76962759:C:T",
+      "stronger_abs_z": 14.380859375,
+      "distance_bp": 1107623,
+      "distance_cm": 0.5931985539194926
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:8450156:A:G",
+      "abs_z": 6.263671875,
+      "stronger_alid": "8:10947355:C:G",
+      "stronger_abs_z": 7.693359375,
+      "distance_bp": 2497199,
+      "distance_cm": 2.5018628722753355
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:9030032:T:TAAC",
+      "abs_z": 6.36328125,
+      "stronger_alid": "8:10947355:C:G",
+      "stronger_abs_z": 7.693359375,
+      "distance_bp": 1917323,
+      "distance_cm": 1.8483172789427975
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:9940736:A:T",
+      "abs_z": 6.8095703125,
+      "stronger_alid": "8:10947355:C:G",
+      "stronger_abs_z": 7.693359375,
+      "distance_bp": 1006619,
+      "distance_cm": 1.0243259221358763
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:10464371:A:G",
+      "abs_z": 5.669921875,
+      "stronger_alid": "8:10947355:C:G",
+      "stronger_abs_z": 7.693359375,
+      "distance_bp": 482984,
+      "distance_cm": 0.5135894923709081
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:11660206:C:G",
+      "abs_z": 5.552734375,
+      "stronger_alid": "8:10947355:C:G",
+      "stronger_abs_z": 7.693359375,
+      "distance_bp": 712851,
+      "distance_cm": 0.7011416513159574
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:84923351:A:T",
+      "abs_z": 6.361328125,
+      "stronger_alid": "8:83878634:A:G",
+      "stronger_abs_z": 6.7939453125,
+      "distance_bp": 1044717,
+      "distance_cm": 0.3876231496043516
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:137900077:A:G",
+      "abs_z": 5.4775390625,
+      "stronger_alid": "8:143228733:C:T",
+      "stronger_abs_z": 6.54296875,
+      "distance_bp": 5328656,
+      "distance_cm": 7.360982418194922
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:48920425:A:C",
+      "abs_z": 6.74609375,
+      "stronger_alid": "11:47410415:C:T",
+      "stronger_abs_z": 8.6982421875,
+      "distance_bp": 1510010,
+      "distance_cm": 0.2700544703739638
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:50073472:A:T",
+      "abs_z": 6.0078125,
+      "stronger_alid": "11:56199428:T:TTA",
+      "stronger_abs_z": 6.4853515625,
+      "distance_bp": 6125956,
+      "distance_cm": 2.174320832864943
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:55545943:C:CTTT",
+      "abs_z": 6.3037109375,
+      "stronger_alid": "11:56199428:T:TTA",
+      "stronger_abs_z": 6.4853515625,
+      "distance_bp": 653485,
+      "distance_cm": 0.05334519947875549
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:85730018:A:G",
+      "abs_z": 5.677734375,
+      "stronger_alid": "11:84628088:A:G",
+      "stronger_abs_z": 5.99609375,
+      "distance_bp": 1101930,
+      "distance_cm": 0.5136025102691377
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:116129077:A:C",
+      "abs_z": 5.5234375,
+      "stronger_alid": "11:115804621:C:T",
+      "stronger_abs_z": 5.5712890625,
+      "distance_bp": 324456,
+      "distance_cm": 0.1996504128338188
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:34679674:A:G",
+      "abs_z": 5.642578125,
+      "stronger_alid": "12:39030560:A:G",
+      "stronger_abs_z": 6.615234375,
+      "distance_bp": 4350886,
+      "distance_cm": 0.8704725344028788
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:56215838:A:AGTGTGT",
+      "abs_z": 6.1923828125,
+      "stronger_alid": "13:56934344:A:T",
+      "stronger_abs_z": 6.28125,
+      "distance_bp": 718506,
+      "distance_cm": 0.09760654298057858
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:59658176:C:T",
+      "abs_z": 5.705078125,
+      "stronger_alid": "13:66015139:A:G",
+      "stronger_abs_z": 6.306640625,
+      "distance_bp": 6356963,
+      "distance_cm": 2.5421094142956875
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:100777824:A:T",
+      "abs_z": 5.50390625,
+      "stronger_alid": "14:102895680:A:C",
+      "stronger_abs_z": 7.6328125,
+      "distance_bp": 2117856,
+      "distance_cm": 2.7425821961048484
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:7886457:C:T",
+      "abs_z": 5.64453125,
+      "stronger_alid": "17:5379957:A:G",
+      "stronger_abs_z": 7.396484375,
+      "distance_bp": 2506500,
+      "distance_cm": 4.006855301636181
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:18113919:C:T",
+      "abs_z": 6.0634765625,
+      "stronger_alid": "19:18133419:G:T",
+      "stronger_abs_z": 7.1083984375,
+      "distance_bp": 19500,
+      "distance_cm": 0.0054452959187045735
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:50639416:A:ATTT",
+      "abs_z": 5.7470703125,
+      "stronger_alid": "19:49860328:C:CAG",
+      "stronger_abs_z": 7.82421875,
+      "distance_bp": 779088,
+      "distance_cm": 1.0982687198369092
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:15294892:A:G",
+      "abs_z": 6.091796875,
+      "stronger_alid": "20:17215963:C:T",
+      "stronger_abs_z": 6.5478515625,
+      "distance_bp": 1921071,
+      "distance_cm": 2.852973572103906
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:30733834:C:T",
+      "abs_z": 6.3203125,
+      "stronger_alid": "20:25210141:C:T",
+      "stronger_abs_z": 7.2587890625,
+      "distance_bp": 5523693,
+      "distance_cm": 1.338159832909028
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:59440114:A:G",
+      "abs_z": 6.1474609375,
+      "stronger_alid": "20:58814582:C:G",
+      "stronger_abs_z": 6.9052734375,
+      "distance_bp": 625532,
+      "distance_cm": 0.86813716511449
+     },
+     {
+      "chromosome": "22",
+      "alid": "22:40283195:C:T",
+      "abs_z": 6.923828125,
+      "stronger_alid": "22:41488950:A:G",
+      "stronger_abs_z": 7.552734375,
+      "distance_bp": 1205755,
+      "distance_cm": 0.2334986887260797
+     }
+    ],
+    "lost_signal_pairs": [
+     {
+      "chromosome": "1",
+      "alid": "1:65513597:C:T",
+      "abs_z": 5.478515625,
+      "stronger_alid": "1:66013157:G:T",
+      "stronger_abs_z": 5.8447265625,
+      "distance_bp": 499560,
+      "distance_cm": 0.1737722975561482
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:71995102:A:G",
+      "abs_z": 6.533203125,
+      "stronger_alid": "1:72285451:C:T",
+      "stronger_abs_z": 11.267578125,
+      "distance_bp": 290349,
+      "distance_cm": 0.11819689012308743
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:74670615:A:G",
+      "abs_z": 7.0087890625,
+      "stronger_alid": "1:74527379:C:T",
+      "stronger_abs_z": 9.64453125,
+      "distance_bp": 143236,
+      "distance_cm": 0.13444916334169932
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:95494658:C:T",
+      "abs_z": 5.7861328125,
+      "stronger_alid": "1:96426660:C:T",
+      "stronger_abs_z": 6.9794921875,
+      "distance_bp": 932002,
+      "distance_cm": 0.4076523818379201
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:107157687:A:G",
+      "abs_z": 5.72265625,
+      "stronger_alid": "1:107419706:A:G",
+      "stronger_abs_z": 8.0322265625,
+      "distance_bp": 262019,
+      "distance_cm": 0.4794344511158073
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:107656722:A:T",
+      "abs_z": 5.861328125,
+      "stronger_alid": "1:107419706:A:G",
+      "stronger_abs_z": 8.0322265625,
+      "distance_bp": 237016,
+      "distance_cm": 0.24651850979500978
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:107866458:A:G",
+      "abs_z": 6.0546875,
+      "stronger_alid": "1:107419706:A:G",
+      "stronger_abs_z": 8.0322265625,
+      "distance_bp": 446752,
+      "distance_cm": 0.3752475554939281
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:109805397:A:G",
+      "abs_z": 5.888671875,
+      "stronger_alid": "1:109515712:A:AT",
+      "stronger_abs_z": 12.91015625,
+      "distance_bp": 289685,
+      "distance_cm": 0.4540055534165077
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:110463071:A:ACTGTGCACTCTGCAGT",
+      "abs_z": 6.001953125,
+      "stronger_alid": "1:110449500:C:T",
+      "stronger_abs_z": 6.0390625,
+      "distance_bp": 13571,
+      "distance_cm": 0.037024408764821715
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:111897935:A:G",
+      "abs_z": 5.48828125,
+      "stronger_alid": "1:111737759:A:G",
+      "stronger_abs_z": 7.455078125,
+      "distance_bp": 160176,
+      "distance_cm": 0.17122420966947516
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:112020406:A:G",
+      "abs_z": 5.9716796875,
+      "stronger_alid": "1:111737759:A:G",
+      "stronger_abs_z": 7.455078125,
+      "distance_bp": 282647,
+      "distance_cm": 0.353214641543957
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:150477225:C:T",
+      "abs_z": 5.8046875,
+      "stronger_alid": "1:151040811:A:G",
+      "stronger_abs_z": 8.486328125,
+      "distance_bp": 563586,
+      "distance_cm": 0.14912749762737576
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:151384426:A:G",
+      "abs_z": 5.5849609375,
+      "stronger_alid": "1:151040811:A:G",
+      "stronger_abs_z": 8.486328125,
+      "distance_bp": 343615,
+      "distance_cm": 0.09899758991900853
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:154814660:C:T",
+      "abs_z": 5.8837890625,
+      "stronger_alid": "1:155013615:C:T",
+      "stronger_abs_z": 8.1982421875,
+      "distance_bp": 198955,
+      "distance_cm": 0.17568843091635244
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:155070410:G:T",
+      "abs_z": 5.8017578125,
+      "stronger_alid": "1:156041653:C:T",
+      "stronger_abs_z": 10.2451171875,
+      "distance_bp": 971243,
+      "distance_cm": 0.14067028541666105
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:156321235:C:T",
+      "abs_z": 7.3828125,
+      "stronger_alid": "1:156041653:C:T",
+      "stronger_abs_z": 10.2451171875,
+      "distance_bp": 279582,
+      "distance_cm": 0.17943810818630368
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:156437907:G:GGTGTGTGTGTGT",
+      "abs_z": 7.390625,
+      "stronger_alid": "1:156041653:C:T",
+      "stronger_abs_z": 10.2451171875,
+      "distance_bp": 396254,
+      "distance_cm": 0.3496764660105214
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:177704354:G:T",
+      "abs_z": 5.88671875,
+      "stronger_alid": "1:177925456:G:T",
+      "stronger_abs_z": 16.2158203125,
+      "distance_bp": 221102,
+      "distance_cm": 0.24481723354010398
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:267863:A:T",
+      "abs_z": 6.1875,
+      "stronger_alid": "2:86338:A:G",
+      "stronger_abs_z": 6.7783203125,
+      "distance_bp": 181525,
+      "distance_cm": 0.05162545419003081
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:401184:C:T",
+      "abs_z": 7.8447265625,
+      "stronger_alid": "2:625347:C:T",
+      "stronger_abs_z": 21.7822265625,
+      "distance_bp": 224163,
+      "distance_cm": 0.20997588818984536
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:422144:C:T",
+      "abs_z": 13.0751953125,
+      "stronger_alid": "2:625347:C:T",
+      "stronger_abs_z": 21.7822265625,
+      "distance_bp": 203203,
+      "distance_cm": 0.20370283134859618
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:681412:C:CA",
+      "abs_z": 7.283203125,
+      "stronger_alid": "2:625347:C:T",
+      "stronger_abs_z": 21.7822265625,
+      "distance_bp": 56065,
+      "distance_cm": 0.07355941565459911
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:885560:A:G",
+      "abs_z": 5.6591796875,
+      "stronger_alid": "2:625347:C:T",
+      "stronger_abs_z": 21.7822265625,
+      "distance_bp": 260213,
+      "distance_cm": 0.2331027898066642
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:1104776:C:T",
+      "abs_z": 5.71875,
+      "stronger_alid": "2:625347:C:T",
+      "stronger_abs_z": 21.7822265625,
+      "distance_bp": 479429,
+      "distance_cm": 0.38076373757201887
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:1633759:A:G",
+      "abs_z": 5.59765625,
+      "stronger_alid": "2:1947564:G:T",
+      "stronger_abs_z": 6.494140625,
+      "distance_bp": 313805,
+      "distance_cm": 0.4555060435545646
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:2359765:G:T",
+      "abs_z": 5.8984375,
+      "stronger_alid": "2:1947564:G:T",
+      "stronger_abs_z": 6.494140625,
+      "distance_bp": 412201,
+      "distance_cm": 0.44592738002763443
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:24540940:A:G",
+      "abs_z": 6.8408203125,
+      "stronger_alid": "2:24888093:A:G",
+      "stronger_abs_z": 12.6708984375,
+      "distance_bp": 347153,
+      "distance_cm": 0.09412967073416922
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:25264592:C:G",
+      "abs_z": 6.3408203125,
+      "stronger_alid": "2:24888093:A:G",
+      "stronger_abs_z": 12.6708984375,
+      "distance_bp": 376499,
+      "distance_cm": 0.10082574080254147
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:25936094:A:C",
+      "abs_z": 6.185546875,
+      "stronger_alid": "2:26680253:C:CTG",
+      "stronger_abs_z": 6.865234375,
+      "distance_bp": 744159,
+      "distance_cm": 0.4116841549325265
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:56060828:A:G",
+      "abs_z": 6.5458984375,
+      "stronger_alid": "2:56518805:A:G",
+      "stronger_abs_z": 6.63671875,
+      "distance_bp": 457977,
+      "distance_cm": 0.43090226096832396
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:57723211:A:G",
+      "abs_z": 6.28125,
+      "stronger_alid": "2:57734467:C:G",
+      "stronger_abs_z": 6.3486328125,
+      "distance_bp": 11256,
+      "distance_cm": 0.0020040173002868755
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:58982904:A:G",
+      "abs_z": 7.8154296875,
+      "stronger_alid": "2:58742862:C:G",
+      "stronger_abs_z": 10.306640625,
+      "distance_bp": 240042,
+      "distance_cm": 0.2033650314852693
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:59073799:A:G",
+      "abs_z": 9.35546875,
+      "stronger_alid": "2:58742862:C:G",
+      "stronger_abs_z": 10.306640625,
+      "distance_bp": 330937,
+      "distance_cm": 0.3983143299478513
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:59638081:C:G",
+      "abs_z": 5.7314453125,
+      "stronger_alid": "2:59329331:A:G",
+      "stronger_abs_z": 7.0615234375,
+      "distance_bp": 308750,
+      "distance_cm": 0.2615164787366595
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:60688761:A:C",
+      "abs_z": 6.1435546875,
+      "stronger_alid": "2:60672327:C:T",
+      "stronger_abs_z": 6.2451171875,
+      "distance_bp": 16434,
+      "distance_cm": 0.025404955792140527
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:62421208:A:C",
+      "abs_z": 5.4912109375,
+      "stronger_alid": "2:62611801:A:G",
+      "stronger_abs_z": 7.69140625,
+      "distance_bp": 190593,
+      "distance_cm": 0.1741768624342015
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:62469332:A:G",
+      "abs_z": 5.6376953125,
+      "stronger_alid": "2:62611801:A:G",
+      "stronger_abs_z": 7.69140625,
+      "distance_bp": 142469,
+      "distance_cm": 0.12261045015455352
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:67755059:C:T",
+      "abs_z": 5.7421875,
+      "stronger_alid": "2:67547059:A:C",
+      "stronger_abs_z": 6.8408203125,
+      "distance_bp": 208000,
+      "distance_cm": 0.20249045762493978
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:180019768:A:G",
+      "abs_z": 5.8798828125,
+      "stronger_alid": "2:180637211:C:T",
+      "stronger_abs_z": 8.0654296875,
+      "distance_bp": 617443,
+      "distance_cm": 0.2754608608047704
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:211062590:G:T",
+      "abs_z": 6.8955078125,
+      "stronger_alid": "2:210853547:G:T",
+      "stronger_abs_z": 7.2529296875,
+      "distance_bp": 209043,
+      "distance_cm": 0.232257099159483
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:16523563:C:T",
+      "abs_z": 5.5458984375,
+      "stronger_alid": "3:16943780:C:T",
+      "stronger_abs_z": 6.15234375,
+      "distance_bp": 420217,
+      "distance_cm": 0.3223572836908488
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:18181950:A:G",
+      "abs_z": 6.0,
+      "stronger_alid": "3:18176279:C:T",
+      "stronger_abs_z": 6.138671875,
+      "distance_bp": 5671,
+      "distance_cm": 0.0007547310366717852
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:18758024:A:G",
+      "abs_z": 5.810546875,
+      "stronger_alid": "3:18176279:C:T",
+      "stronger_abs_z": 6.138671875,
+      "distance_bp": 581745,
+      "distance_cm": 0.33112919131829344
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:25307923:C:T",
+      "abs_z": 6.830078125,
+      "stronger_alid": "3:25068924:A:T",
+      "stronger_abs_z": 8.8173828125,
+      "distance_bp": 238999,
+      "distance_cm": 0.16991764058444403
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:34549774:A:G",
+      "abs_z": 5.802734375,
+      "stronger_alid": "3:34608566:T:TG",
+      "stronger_abs_z": 6.3857421875,
+      "distance_bp": 58792,
+      "distance_cm": 0.01752171454857887
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:34937781:A:G",
+      "abs_z": 7.208984375,
+      "stronger_alid": "3:35795247:G:T",
+      "stronger_abs_z": 7.4736328125,
+      "distance_bp": 857466,
+      "distance_cm": 0.316108311194931
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:35018559:C:T",
+      "abs_z": 7.095703125,
+      "stronger_alid": "3:35795247:G:T",
+      "stronger_abs_z": 7.4736328125,
+      "distance_bp": 776688,
+      "distance_cm": 0.2890021387937409
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:38334066:A:G",
+      "abs_z": 5.5458984375,
+      "stronger_alid": "3:38549568:A:G",
+      "stronger_abs_z": 6.0517578125,
+      "distance_bp": 215502,
+      "distance_cm": 0.06796605816309409
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:42455017:C:T",
+      "abs_z": 5.9970703125,
+      "stronger_alid": "3:42829066:C:G",
+      "stronger_abs_z": 7.45703125,
+      "distance_bp": 374049,
+      "distance_cm": 0.16995852187982763
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:43552697:G:GATAT",
+      "abs_z": 5.724609375,
+      "stronger_alid": "3:42829066:C:G",
+      "stronger_abs_z": 7.45703125,
+      "distance_bp": 723631,
+      "distance_cm": 0.29040282816891505
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:44865838:C:T",
+      "abs_z": 5.59765625,
+      "stronger_alid": "3:44842479:A:G",
+      "stronger_abs_z": 6.001953125,
+      "distance_bp": 23359,
+      "distance_cm": 0.0014410305823844283
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:60068974:C:T",
+      "abs_z": 6.0634765625,
+      "stronger_alid": "3:59871341:A:G",
+      "stronger_abs_z": 6.064453125,
+      "distance_bp": 197633,
+      "distance_cm": 0.4069154768969838
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:61257097:T:TTTG",
+      "abs_z": 6.53515625,
+      "stronger_alid": "3:61264086:C:T",
+      "stronger_abs_z": 6.958984375,
+      "distance_bp": 6989,
+      "distance_cm": 0.0013374460978070601
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:62702071:A:T",
+      "abs_z": 7.01171875,
+      "stronger_alid": "3:62496961:C:T",
+      "stronger_abs_z": 7.6162109375,
+      "distance_bp": 205110,
+      "distance_cm": 0.4247164192405606
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:69352935:A:G",
+      "abs_z": 5.5244140625,
+      "stronger_alid": "3:69358602:C:G",
+      "stronger_abs_z": 5.52734375,
+      "distance_bp": 5667,
+      "distance_cm": 0.0015978485124747976
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:77307583:C:T",
+      "abs_z": 5.5859375,
+      "stronger_alid": "3:77622570:A:C",
+      "stronger_abs_z": 5.6337890625,
+      "distance_bp": 314987,
+      "distance_cm": 0.21229555283179025
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:85070988:C:CAATA",
+      "abs_z": 7.6298828125,
+      "stronger_alid": "3:85741335:G:GA",
+      "stronger_abs_z": 9.3779296875,
+      "distance_bp": 670347,
+      "distance_cm": 0.11055454540361609
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:86200251:A:G",
+      "abs_z": 6.0595703125,
+      "stronger_alid": "3:85741335:G:GA",
+      "stronger_abs_z": 9.3779296875,
+      "distance_bp": 458916,
+      "distance_cm": 0.06104267285805065
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:132458334:A:G",
+      "abs_z": 5.7353515625,
+      "stronger_alid": "3:131818190:A:T",
+      "stronger_abs_z": 8.27734375,
+      "distance_bp": 640144,
+      "distance_cm": 0.41537625346414586
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:138375924:A:G",
+      "abs_z": 6.75390625,
+      "stronger_alid": "3:137848439:C:T",
+      "stronger_abs_z": 6.841796875,
+      "distance_bp": 527485,
+      "distance_cm": 0.20019756851534964
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:139309880:C:T",
+      "abs_z": 5.873046875,
+      "stronger_alid": "3:139307597:C:G",
+      "stronger_abs_z": 5.9287109375,
+      "distance_bp": 2283,
+      "distance_cm": 0.0015733416310013126
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:168466091:C:T",
+      "abs_z": 5.49609375,
+      "stronger_alid": "3:168451509:A:T",
+      "stronger_abs_z": 5.66015625,
+      "distance_bp": 14582,
+      "distance_cm": 0.011877051681494777
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:184339552:C:T",
+      "abs_z": 5.7236328125,
+      "stronger_alid": "3:184258315:C:T",
+      "stronger_abs_z": 7.46875,
+      "distance_bp": 81237,
+      "distance_cm": 0.032932627811334214
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:186029574:A:C",
+      "abs_z": 6.208984375,
+      "stronger_alid": "3:186116501:C:T",
+      "stronger_abs_z": 10.8896484375,
+      "distance_bp": 86927,
+      "distance_cm": 0.017323933411887538
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:31956333:C:T",
+      "abs_z": 5.8349609375,
+      "stronger_alid": "4:32252748:A:C",
+      "stronger_abs_z": 6.0361328125,
+      "distance_bp": 296415,
+      "distance_cm": 0.07374531236045812
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:38365235:C:T",
+      "abs_z": 5.6044921875,
+      "stronger_alid": "4:38675390:T:TC",
+      "stronger_abs_z": 5.908203125,
+      "distance_bp": 310155,
+      "distance_cm": 0.2152874706675192
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:44242130:A:T",
+      "abs_z": 6.2587890625,
+      "stronger_alid": "4:45163633:A:ATTC",
+      "stronger_abs_z": 16.1796875,
+      "distance_bp": 921503,
+      "distance_cm": 0.27592427212682225
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:44580470:A:G",
+      "abs_z": 8.1162109375,
+      "stronger_alid": "4:45163633:A:ATTC",
+      "stronger_abs_z": 16.1796875,
+      "distance_bp": 583163,
+      "distance_cm": 0.16501004683868814
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:45018152:A:G",
+      "abs_z": 8.412109375,
+      "stronger_alid": "4:45163633:A:ATTC",
+      "stronger_abs_z": 16.1796875,
+      "distance_bp": 145481,
+      "distance_cm": 0.045080348886457955
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:45724285:C:T",
+      "abs_z": 9.17578125,
+      "stronger_alid": "4:45163633:A:ATTC",
+      "stronger_abs_z": 16.1796875,
+      "distance_bp": 560652,
+      "distance_cm": 0.13786797228885916
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:45759281:G:GTATCTATC",
+      "abs_z": 5.8349609375,
+      "stronger_alid": "4:45163633:A:ATTC",
+      "stronger_abs_z": 16.1796875,
+      "distance_bp": 595648,
+      "distance_cm": 0.14159133499602206
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:60932954:C:G",
+      "abs_z": 5.4990234375,
+      "stronger_alid": "4:60322242:G:GA",
+      "stronger_abs_z": 5.8720703125,
+      "distance_bp": 610712,
+      "distance_cm": 0.2674414223973258
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:44132041:C:T",
+      "abs_z": 6.2294921875,
+      "stronger_alid": "5:43161249:A:G",
+      "stronger_abs_z": 9.1416015625,
+      "distance_bp": 970792,
+      "distance_cm": 0.1634919836237927
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:63776308:C:CT",
+      "abs_z": 5.5888671875,
+      "stronger_alid": "5:64644673:C:CA",
+      "stronger_abs_z": 6.2939453125,
+      "distance_bp": 868365,
+      "distance_cm": 0.29177171471047103
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:64370457:C:T",
+      "abs_z": 6.0380859375,
+      "stronger_alid": "5:64644673:C:CA",
+      "stronger_abs_z": 6.2939453125,
+      "distance_bp": 274216,
+      "distance_cm": 0.1364417453018092
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:86835243:A:G",
+      "abs_z": 5.4609375,
+      "stronger_alid": "5:86988502:A:G",
+      "stronger_abs_z": 6.5869140625,
+      "distance_bp": 153259,
+      "distance_cm": 0.11096902476451476
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:87189513:C:T",
+      "abs_z": 5.6796875,
+      "stronger_alid": "5:86988502:A:G",
+      "stronger_abs_z": 6.5869140625,
+      "distance_bp": 201011,
+      "distance_cm": 0.07004350598663223
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:87440266:A:T",
+      "abs_z": 8.271484375,
+      "stronger_alid": "5:88407282:C:G",
+      "stronger_abs_z": 9.1650390625,
+      "distance_bp": 967016,
+      "distance_cm": 0.17954587225013086
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:88667943:A:G",
+      "abs_z": 6.5693359375,
+      "stronger_alid": "5:88407282:C:G",
+      "stronger_abs_z": 9.1650390625,
+      "distance_bp": 260661,
+      "distance_cm": 0.029348343208781102
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:89171277:A:T",
+      "abs_z": 5.5126953125,
+      "stronger_alid": "5:88407282:C:G",
+      "stronger_abs_z": 9.1650390625,
+      "distance_bp": 763995,
+      "distance_cm": 0.08939007628468687
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:90565166:A:G",
+      "abs_z": 6.0478515625,
+      "stronger_alid": "5:89573320:A:G",
+      "stronger_abs_z": 6.4287109375,
+      "distance_bp": 991846,
+      "distance_cm": 0.495257666528488
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:96393270:C:G",
+      "abs_z": 7.2216796875,
+      "stronger_alid": "5:96513883:C:T",
+      "stronger_abs_z": 8.60546875,
+      "distance_bp": 120613,
+      "distance_cm": 0.1552640631172011
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:96827736:A:C",
+      "abs_z": 6.4267578125,
+      "stronger_alid": "5:96513883:C:T",
+      "stronger_abs_z": 8.60546875,
+      "distance_bp": 313853,
+      "distance_cm": 0.18496999127383162
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:97164026:A:G",
+      "abs_z": 5.5087890625,
+      "stronger_alid": "5:96513883:C:T",
+      "stronger_abs_z": 8.60546875,
+      "distance_bp": 650143,
+      "distance_cm": 0.442499335939587
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:123089357:A:G",
+      "abs_z": 6.1240234375,
+      "stronger_alid": "5:123363504:C:CTA",
+      "stronger_abs_z": 9.6376953125,
+      "distance_bp": 274147,
+      "distance_cm": 0.21258306188694576
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:153418825:C:T",
+      "abs_z": 5.8916015625,
+      "stronger_alid": "5:154130036:C:T",
+      "stronger_abs_z": 7.4091796875,
+      "distance_bp": 711211,
+      "distance_cm": 0.3554853380712757
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:166406628:A:G",
+      "abs_z": 6.6572265625,
+      "stronger_alid": "5:166682011:A:G",
+      "stronger_abs_z": 8.140625,
+      "distance_bp": 275383,
+      "distance_cm": 0.30836794992438854
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:34738581:A:G",
+      "abs_z": 6.4873046875,
+      "stronger_alid": "6:34792126:T:TGGCGGCGGCGGCGGCGGCGGC",
+      "stronger_abs_z": 6.6259765625,
+      "distance_bp": 53545,
+      "distance_cm": 0.004626052085157539
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:39450093:A:G",
+      "abs_z": 5.4638671875,
+      "stronger_alid": "6:39308062:A:C",
+      "stronger_abs_z": 6.2998046875,
+      "distance_bp": 142031,
+      "distance_cm": 0.20514729850618352
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:47757304:C:T",
+      "abs_z": 5.7900390625,
+      "stronger_alid": "6:48408857:A:C",
+      "stronger_abs_z": 6.490234375,
+      "distance_bp": 651553,
+      "distance_cm": 0.18103226254688565
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:50423115:A:G",
+      "abs_z": 6.83203125,
+      "stronger_alid": "6:50963135:A:T",
+      "stronger_abs_z": 15.8251953125,
+      "distance_bp": 540020,
+      "distance_cm": 0.08415583696030637
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:50465916:C:CT",
+      "abs_z": 7.9140625,
+      "stronger_alid": "6:50963135:A:T",
+      "stronger_abs_z": 15.8251953125,
+      "distance_bp": 497219,
+      "distance_cm": 0.06319558046149609
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:51313013:A:G",
+      "abs_z": 7.6787109375,
+      "stronger_alid": "6:50963135:A:T",
+      "stronger_abs_z": 15.8251953125,
+      "distance_bp": 349878,
+      "distance_cm": 0.08851179144655674
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:51594979:A:G",
+      "abs_z": 8.77734375,
+      "stronger_alid": "6:50963135:A:T",
+      "stronger_abs_z": 15.8251953125,
+      "distance_bp": 631844,
+      "distance_cm": 0.1309380339406161
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:51891712:A:AACAC",
+      "abs_z": 8.14453125,
+      "stronger_alid": "6:50963135:A:T",
+      "stronger_abs_z": 15.8251953125,
+      "distance_bp": 928577,
+      "distance_cm": 0.2325856112111282
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:52134768:C:T",
+      "abs_z": 5.56640625,
+      "stronger_alid": "6:52243888:G:T",
+      "stronger_abs_z": 6.2353515625,
+      "distance_bp": 109120,
+      "distance_cm": 0.11399793544170933
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:53773517:C:T",
+      "abs_z": 5.587890625,
+      "stronger_alid": "6:54121145:C:T",
+      "stronger_abs_z": 7.212890625,
+      "distance_bp": 347628,
+      "distance_cm": 0.1707195334693239
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:55766964:A:G",
+      "abs_z": 5.8984375,
+      "stronger_alid": "6:55145701:C:T",
+      "stronger_abs_z": 9.2431640625,
+      "distance_bp": 621263,
+      "distance_cm": 0.3559396607663743
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:126170015:C:T",
+      "abs_z": 5.8564453125,
+      "stronger_alid": "6:125724414:C:G",
+      "stronger_abs_z": 6.02734375,
+      "distance_bp": 445601,
+      "distance_cm": 0.19213199724876517
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:130784683:C:T",
+      "abs_z": 5.521484375,
+      "stronger_alid": "6:131629261:C:T",
+      "stronger_abs_z": 7.2958984375,
+      "distance_bp": 844578,
+      "distance_cm": 0.4579983117380948
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:137552587:A:G",
+      "abs_z": 5.671875,
+      "stronger_alid": "6:137343265:A:C",
+      "stronger_abs_z": 6.5625,
+      "distance_bp": 209322,
+      "distance_cm": 0.20887373091451877
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:165884022:A:G",
+      "abs_z": 5.5615234375,
+      "stronger_alid": "6:166154665:A:G",
+      "stronger_abs_z": 5.966796875,
+      "distance_bp": 270643,
+      "distance_cm": 0.20384201405521196
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:169604392:A:G",
+      "abs_z": 5.8115234375,
+      "stronger_alid": "6:169962169:A:T",
+      "stronger_abs_z": 6.0107421875,
+      "distance_bp": 357777,
+      "distance_cm": 0.3200692773869207
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:74568826:A:AGAGG",
+      "abs_z": 6.359375,
+      "stronger_alid": "7:75058325:A:G",
+      "stronger_abs_z": 10.4453125,
+      "distance_bp": 489499,
+      "distance_cm": 0.30763931786224674
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:75642203:A:G",
+      "abs_z": 6.5537109375,
+      "stronger_alid": "7:75855136:A:ACCTT",
+      "stronger_abs_z": 7.48046875,
+      "distance_bp": 212933,
+      "distance_cm": 0.2575492952847185
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:75797289:C:T",
+      "abs_z": 5.6982421875,
+      "stronger_alid": "7:75855136:A:ACCTT",
+      "stronger_abs_z": 7.48046875,
+      "distance_bp": 57847,
+      "distance_cm": 0.05978541698060269
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:76395203:C:T",
+      "abs_z": 7.5693359375,
+      "stronger_alid": "7:76962759:C:T",
+      "stronger_abs_z": 14.380859375,
+      "distance_bp": 567556,
+      "distance_cm": 0.3903885763215982
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:76654476:A:T",
+      "abs_z": 9.4814453125,
+      "stronger_alid": "7:76962759:C:T",
+      "stronger_abs_z": 14.380859375,
+      "distance_bp": 308283,
+      "distance_cm": 0.19050499225480166
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:77193314:C:T",
+      "abs_z": 7.1904296875,
+      "stronger_alid": "7:76962759:C:T",
+      "stronger_abs_z": 14.380859375,
+      "distance_bp": 230555,
+      "distance_cm": 0.15004518789359622
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:77621051:C:CAT",
+      "abs_z": 6.07421875,
+      "stronger_alid": "7:76962759:C:T",
+      "stronger_abs_z": 14.380859375,
+      "distance_bp": 658292,
+      "distance_cm": 0.47052665539496275
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:78097255:C:T",
+      "abs_z": 6.00390625,
+      "stronger_alid": "7:78197747:G:GA",
+      "stronger_abs_z": 7.5078125,
+      "distance_bp": 100492,
+      "distance_cm": 0.07722190639252347
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:78430119:C:T",
+      "abs_z": 5.5849609375,
+      "stronger_alid": "7:78197747:G:GA",
+      "stronger_abs_z": 7.5078125,
+      "distance_bp": 232372,
+      "distance_cm": 0.3235235193864838
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:120723974:C:T",
+      "abs_z": 5.4560546875,
+      "stronger_alid": "7:120515216:C:T",
+      "stronger_abs_z": 5.7265625,
+      "distance_bp": 208758,
+      "distance_cm": 0.07370149397175396
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:122139948:T:TCAAA",
+      "abs_z": 5.4658203125,
+      "stronger_alid": "7:122480476:A:G",
+      "stronger_abs_z": 6.2080078125,
+      "distance_bp": 340528,
+      "distance_cm": 0.2552852834888455
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:9836871:A:G",
+      "abs_z": 5.6435546875,
+      "stronger_alid": "8:9940736:A:T",
+      "stronger_abs_z": 6.8095703125,
+      "distance_bp": 103865,
+      "distance_cm": 0.05126459641383008
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:76604707:C:G",
+      "abs_z": 5.9912109375,
+      "stronger_alid": "8:75788830:A:G",
+      "stronger_abs_z": 7.6416015625,
+      "distance_bp": 815877,
+      "distance_cm": 0.2687611825776628
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:116575094:A:T",
+      "abs_z": 6.2265625,
+      "stronger_alid": "8:115948504:A:G",
+      "stronger_abs_z": 7.3896484375,
+      "distance_bp": 626590,
+      "distance_cm": 0.34483215646261556
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:117539603:C:T",
+      "abs_z": 5.537109375,
+      "stronger_alid": "8:117850822:C:T",
+      "stronger_abs_z": 8.3701171875,
+      "distance_bp": 311219,
+      "distance_cm": 0.19585336324932712
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:2197987:A:G",
+      "abs_z": 5.48046875,
+      "stronger_alid": "9:2279511:A:G",
+      "stronger_abs_z": 5.73046875,
+      "distance_bp": 81524,
+      "distance_cm": 0.1787079838907344
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:20260552:C:G",
+      "abs_z": 5.5146484375,
+      "stronger_alid": "9:20108399:G:T",
+      "stronger_abs_z": 5.845703125,
+      "distance_bp": 152153,
+      "distance_cm": 0.22008595244933105
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:27601572:A:C",
+      "abs_z": 5.8017578125,
+      "stronger_alid": "9:27795270:C:T",
+      "stronger_abs_z": 8.525390625,
+      "distance_bp": 193698,
+      "distance_cm": 0.435910481530577
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:27618759:C:T",
+      "abs_z": 6.498046875,
+      "stronger_alid": "9:27795270:C:T",
+      "stronger_abs_z": 8.525390625,
+      "distance_bp": 176511,
+      "distance_cm": 0.3383333739880996
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:34130437:A:G",
+      "abs_z": 6.201171875,
+      "stronger_alid": "9:34532754:G:T",
+      "stronger_abs_z": 7.431640625,
+      "distance_bp": 402317,
+      "distance_cm": 0.08599944892634426
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:98559975:A:AAC",
+      "abs_z": 6.3193359375,
+      "stronger_alid": "9:98803363:C:T",
+      "stronger_abs_z": 6.4775390625,
+      "distance_bp": 243388,
+      "distance_cm": 0.21715890208145083
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:99001195:C:T",
+      "abs_z": 7.162109375,
+      "stronger_alid": "9:99328828:A:G",
+      "stronger_abs_z": 8.51171875,
+      "distance_bp": 327633,
+      "distance_cm": 0.21559971437733338
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:101116682:A:G",
+      "abs_z": 5.90234375,
+      "stronger_alid": "9:100344513:C:CGAA",
+      "stronger_abs_z": 6.9892578125,
+      "distance_bp": 772169,
+      "distance_cm": 0.3436184342806001
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:117186184:A:T",
+      "abs_z": 5.505859375,
+      "stronger_alid": "9:117599140:C:G",
+      "stronger_abs_z": 8.212890625,
+      "distance_bp": 412956,
+      "distance_cm": 0.2878991138795186
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:118411599:A:G",
+      "abs_z": 5.9853515625,
+      "stronger_alid": "9:117599140:C:G",
+      "stronger_abs_z": 8.212890625,
+      "distance_bp": 812459,
+      "distance_cm": 0.4828566725294081
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:118643392:C:T",
+      "abs_z": 5.609375,
+      "stronger_alid": "9:118772451:C:T",
+      "stronger_abs_z": 7.0859375,
+      "distance_bp": 129059,
+      "distance_cm": 0.15637825374633962
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:118932854:A:G",
+      "abs_z": 6.4267578125,
+      "stronger_alid": "9:118772451:C:T",
+      "stronger_abs_z": 7.0859375,
+      "distance_bp": 160403,
+      "distance_cm": 0.09667072528969811
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:123323686:A:T",
+      "abs_z": 5.681640625,
+      "stronger_alid": "9:123887901:A:C",
+      "stronger_abs_z": 5.8544921875,
+      "distance_bp": 564215,
+      "distance_cm": 0.2669962389097975
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:126621621:A:G",
+      "abs_z": 6.2412109375,
+      "stronger_alid": "9:126703046:A:G",
+      "stronger_abs_z": 9.05859375,
+      "distance_bp": 81425,
+      "distance_cm": 0.09554117522989714
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:65291075:C:T",
+      "abs_z": 5.796875,
+      "stronger_alid": "10:64758680:A:G",
+      "stronger_abs_z": 6.0615234375,
+      "distance_bp": 532395,
+      "distance_cm": 0.12400800364753195
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:65671126:C:G",
+      "abs_z": 5.5546875,
+      "stronger_alid": "10:66224941:A:G",
+      "stronger_abs_z": 6.12890625,
+      "distance_bp": 553815,
+      "distance_cm": 0.39081481412901553
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:66840924:C:T",
+      "abs_z": 5.5224609375,
+      "stronger_alid": "10:66224941:A:G",
+      "stronger_abs_z": 6.12890625,
+      "distance_bp": 615983,
+      "distance_cm": 0.42445990384356946
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:74976721:C:CAG",
+      "abs_z": 5.5283203125,
+      "stronger_alid": "10:75450433:C:T",
+      "stronger_abs_z": 6.505859375,
+      "distance_bp": 473712,
+      "distance_cm": 0.17559280650611697
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:75144207:A:AT",
+      "abs_z": 6.1416015625,
+      "stronger_alid": "10:75450433:C:T",
+      "stronger_abs_z": 6.505859375,
+      "distance_bp": 306226,
+      "distance_cm": 0.12193803782793111
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:86232970:C:T",
+      "abs_z": 6.1982421875,
+      "stronger_alid": "10:86351168:C:G",
+      "stronger_abs_z": 7.9326171875,
+      "distance_bp": 118198,
+      "distance_cm": 0.08553210764684138
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:102632823:C:T",
+      "abs_z": 5.5078125,
+      "stronger_alid": "10:102876519:C:T",
+      "stronger_abs_z": 5.986328125,
+      "distance_bp": 243696,
+      "distance_cm": 0.07371153791055463
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:26985746:C:T",
+      "abs_z": 7.3017578125,
+      "stronger_alid": "11:27627033:A:T",
+      "stronger_abs_z": 14.0712890625,
+      "distance_bp": 641287,
+      "distance_cm": 0.3183647489343713
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:27504558:C:T",
+      "abs_z": 5.927734375,
+      "stronger_alid": "11:27627033:A:T",
+      "stronger_abs_z": 14.0712890625,
+      "distance_bp": 122475,
+      "distance_cm": 0.016983846054099416
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:27817461:A:G",
+      "abs_z": 6.9384765625,
+      "stronger_alid": "11:27627033:A:T",
+      "stronger_abs_z": 14.0712890625,
+      "distance_bp": 190428,
+      "distance_cm": 0.15614632882317636
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:28832239:G:T",
+      "abs_z": 6.0517578125,
+      "stronger_alid": "11:28740888:G:GA",
+      "stronger_abs_z": 6.3095703125,
+      "distance_bp": 91351,
+      "distance_cm": 0.014651487665076957
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:43699950:C:T",
+      "abs_z": 5.7255859375,
+      "stronger_alid": "11:43924069:A:G",
+      "stronger_abs_z": 5.990234375,
+      "distance_bp": 224119,
+      "distance_cm": 0.1278883502082735
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:45579028:C:T",
+      "abs_z": 6.9462890625,
+      "stronger_alid": "11:46246938:C:T",
+      "stronger_abs_z": 7.150390625,
+      "distance_bp": 667910,
+      "distance_cm": 0.26536205831102677
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:46286819:A:AAAGAAAGAAAG",
+      "abs_z": 5.462890625,
+      "stronger_alid": "11:46246938:C:T",
+      "stronger_abs_z": 7.150390625,
+      "distance_bp": 39881,
+      "distance_cm": 0.04484198636029646
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:56199428:T:TTA",
+      "abs_z": 6.4853515625,
+      "stronger_alid": "11:57141837:A:G",
+      "stronger_abs_z": 6.5283203125,
+      "distance_bp": 942409,
+      "distance_cm": 0.15610633659581907
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:115804621:C:T",
+      "abs_z": 5.5712890625,
+      "stronger_alid": "11:115223397:C:T",
+      "stronger_abs_z": 8.5791015625,
+      "distance_bp": 581224,
+      "distance_cm": 0.3147886806136171
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:119515763:C:T",
+      "abs_z": 5.763671875,
+      "stronger_alid": "11:119059491:A:G",
+      "stronger_abs_z": 6.3115234375,
+      "distance_bp": 456272,
+      "distance_cm": 0.32616262295221077
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:133630953:A:T",
+      "abs_z": 6.03125,
+      "stronger_alid": "11:133348384:A:G",
+      "stronger_abs_z": 6.8173828125,
+      "distance_bp": 282569,
+      "distance_cm": 0.32272986688720096
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:133658084:A:C",
+      "abs_z": 5.9873046875,
+      "stronger_alid": "11:133348384:A:G",
+      "stronger_abs_z": 6.8173828125,
+      "distance_bp": 309700,
+      "distance_cm": 0.43399751309402745
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:16899384:A:G",
+      "abs_z": 5.5478515625,
+      "stronger_alid": "12:16514237:A:G",
+      "stronger_abs_z": 5.7451171875,
+      "distance_bp": 385147,
+      "distance_cm": 0.24761303665440693
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:38396625:T:TATAGATAG",
+      "abs_z": 5.4521484375,
+      "stronger_alid": "12:39030560:A:G",
+      "stronger_abs_z": 6.615234375,
+      "distance_bp": 633935,
+      "distance_cm": 0.09191973112490359
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:56883518:A:G",
+      "abs_z": 7.6845703125,
+      "stronger_alid": "12:57206198:A:C",
+      "stronger_abs_z": 8.2197265625,
+      "distance_bp": 322680,
+      "distance_cm": 0.11994571702513213
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:57582335:A:G",
+      "abs_z": 6.80859375,
+      "stronger_alid": "12:57206198:A:C",
+      "stronger_abs_z": 8.2197265625,
+      "distance_bp": 376137,
+      "distance_cm": 0.07692771892273953
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:122129840:G:T",
+      "abs_z": 5.74609375,
+      "stronger_alid": "12:122458684:C:T",
+      "stronger_abs_z": 7.736328125,
+      "distance_bp": 328844,
+      "distance_cm": 0.11845430555224823
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:122795315:C:T",
+      "abs_z": 5.5634765625,
+      "stronger_alid": "12:122458684:C:T",
+      "stronger_abs_z": 7.736328125,
+      "distance_bp": 336631,
+      "distance_cm": 0.1250513816322325
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:26958027:C:T",
+      "abs_z": 5.8359375,
+      "stronger_alid": "13:27446043:A:G",
+      "stronger_abs_z": 8.0009765625,
+      "distance_bp": 488016,
+      "distance_cm": 0.42103313780194895
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:27425574:C:G",
+      "abs_z": 6.9755859375,
+      "stronger_alid": "13:27446043:A:G",
+      "stronger_abs_z": 8.0009765625,
+      "distance_bp": 20469,
+      "distance_cm": 0.009173998775711567
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:28242141:A:G",
+      "abs_z": 6.3193359375,
+      "stronger_alid": "13:28074931:C:G",
+      "stronger_abs_z": 6.8125,
+      "distance_bp": 167210,
+      "distance_cm": 0.1481943761521638
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:54391856:A:G",
+      "abs_z": 5.8037109375,
+      "stronger_alid": "13:53517624:C:T",
+      "stronger_abs_z": 10.236328125,
+      "distance_bp": 874232,
+      "distance_cm": 0.3119807443655276
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:56934344:A:T",
+      "abs_z": 6.28125,
+      "stronger_alid": "13:57724277:A:G",
+      "stronger_abs_z": 8.7880859375,
+      "distance_bp": 789933,
+      "distance_cm": 0.24586925127364623
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:59263924:C:T",
+      "abs_z": 6.9462890625,
+      "stronger_alid": "13:58873266:A:ATCT",
+      "stronger_abs_z": 7.7421875,
+      "distance_bp": 390658,
+      "distance_cm": 0.38671095810075684
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:59744885:C:T",
+      "abs_z": 5.6572265625,
+      "stronger_alid": "13:59658176:C:T",
+      "stronger_abs_z": 5.705078125,
+      "distance_bp": 86709,
+      "distance_cm": 0.017672622085100897
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:66015139:A:G",
+      "abs_z": 6.306640625,
+      "stronger_alid": "13:65634346:C:T",
+      "stronger_abs_z": 9.833984375,
+      "distance_bp": 380793,
+      "distance_cm": 0.1563248715142933
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:71922488:C:T",
+      "abs_z": 5.6865234375,
+      "stronger_alid": "13:71798884:C:T",
+      "stronger_abs_z": 6.3857421875,
+      "distance_bp": 123604,
+      "distance_cm": 0.20720877564222207
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:78661409:A:G",
+      "abs_z": 5.775390625,
+      "stronger_alid": "13:78989614:A:C",
+      "stronger_abs_z": 7.7021484375,
+      "distance_bp": 328205,
+      "distance_cm": 0.2466180752707956
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:79665148:C:T",
+      "abs_z": 6.1826171875,
+      "stronger_alid": "13:78989614:A:C",
+      "stronger_abs_z": 7.7021484375,
+      "distance_bp": 675534,
+      "distance_cm": 0.3481797084924452
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:29620016:A:G",
+      "abs_z": 5.5029296875,
+      "stronger_alid": "14:29274555:A:T",
+      "stronger_abs_z": 10.6748046875,
+      "distance_bp": 345461,
+      "distance_cm": 0.48293914005814287
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:32598959:A:G",
+      "abs_z": 5.6513671875,
+      "stronger_alid": "14:32829525:C:CA",
+      "stronger_abs_z": 11.40625,
+      "distance_bp": 230566,
+      "distance_cm": 0.3541961050267872
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:72928977:A:AG",
+      "abs_z": 6.138671875,
+      "stronger_alid": "14:73661240:A:G",
+      "stronger_abs_z": 7.900390625,
+      "distance_bp": 732263,
+      "distance_cm": 0.3063840020227815
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:79033660:C:T",
+      "abs_z": 8.279296875,
+      "stronger_alid": "14:79457324:A:G",
+      "stronger_abs_z": 10.1416015625,
+      "distance_bp": 423664,
+      "distance_cm": 0.18140937683644154
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:90820265:C:G",
+      "abs_z": 5.82421875,
+      "stronger_alid": "14:91065498:G:T",
+      "stronger_abs_z": 6.3388671875,
+      "distance_bp": 245233,
+      "distance_cm": 0.11531796311254539
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:102221519:C:T",
+      "abs_z": 5.7314453125,
+      "stronger_alid": "14:102895680:A:C",
+      "stronger_abs_z": 7.6328125,
+      "distance_bp": 674161,
+      "distance_cm": 0.3162488760095954
+     },
+     {
+      "chromosome": "15",
+      "alid": "15:66073316:G:T",
+      "abs_z": 5.4638671875,
+      "stronger_alid": "15:65605796:A:T",
+      "stronger_abs_z": 5.79296875,
+      "distance_bp": 467520,
+      "distance_cm": 0.20301604298119003
+     },
+     {
+      "chromosome": "15",
+      "alid": "15:66977656:A:G",
+      "abs_z": 7.2822265625,
+      "stronger_alid": "15:67793217:A:G",
+      "stronger_abs_z": 9.7900390625,
+      "distance_bp": 815561,
+      "distance_cm": 0.34612586927331535
+     },
+     {
+      "chromosome": "15",
+      "alid": "15:67141603:A:T",
+      "abs_z": 5.65625,
+      "stronger_alid": "15:67793217:A:G",
+      "stronger_abs_z": 9.7900390625,
+      "distance_bp": 651614,
+      "distance_cm": 0.1736429253883145
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:355416:A:G",
+      "abs_z": 5.5537109375,
+      "stronger_alid": "16:283017:G:T",
+      "stronger_abs_z": 10.556640625,
+      "distance_bp": 72399,
+      "distance_cm": 0.07836731445634437
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:3661655:A:G",
+      "abs_z": 7.09765625,
+      "stronger_alid": "16:3964281:C:G",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 302626,
+      "distance_cm": 0.3117385675350315
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:20132318:C:T",
+      "abs_z": 9.2353515625,
+      "stronger_alid": "16:19908624:C:T",
+      "stronger_abs_z": 12.1455078125,
+      "distance_bp": 223694,
+      "distance_cm": 0.19729123422179384
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:20241980:C:CAA",
+      "abs_z": 9.4033203125,
+      "stronger_alid": "16:19908624:C:T",
+      "stronger_abs_z": 12.1455078125,
+      "distance_bp": 333356,
+      "distance_cm": 0.41606032838179985
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:28261052:C:T",
+      "abs_z": 5.583984375,
+      "stronger_alid": "16:28806716:C:T",
+      "stronger_abs_z": 13.8564453125,
+      "distance_bp": 545664,
+      "distance_cm": 0.28136169600199423
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:29028589:A:T",
+      "abs_z": 5.7587890625,
+      "stronger_alid": "16:28806716:C:T",
+      "stronger_abs_z": 13.8564453125,
+      "distance_bp": 221873,
+      "distance_cm": 0.1151289998535674
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:52619945:C:T",
+      "abs_z": 5.7998046875,
+      "stronger_alid": "16:53013310:A:G",
+      "stronger_abs_z": 7.6416015625,
+      "distance_bp": 393365,
+      "distance_cm": 0.39626647238335266
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:52764848:C:T",
+      "abs_z": 6.220703125,
+      "stronger_alid": "16:53013310:A:G",
+      "stronger_abs_z": 7.6416015625,
+      "distance_bp": 248462,
+      "distance_cm": 0.20803151847123047
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:52775517:A:C",
+      "abs_z": 5.5078125,
+      "stronger_alid": "16:53013310:A:G",
+      "stronger_abs_z": 7.6416015625,
+      "distance_bp": 237793,
+      "distance_cm": 0.1831713102994712
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:53342547:A:G",
+      "abs_z": 8.87109375,
+      "stronger_alid": "16:53768582:C:T",
+      "stronger_abs_z": 38.3123893737793,
+      "distance_bp": 426035,
+      "distance_cm": 0.3137114266919099
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:53345919:A:G",
+      "abs_z": 5.6455078125,
+      "stronger_alid": "16:53768582:C:T",
+      "stronger_abs_z": 38.3123893737793,
+      "distance_bp": 422663,
+      "distance_cm": 0.2651426601591922
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:53385025:C:T",
+      "abs_z": 5.669921875,
+      "stronger_alid": "16:53768582:C:T",
+      "stronger_abs_z": 38.3123893737793,
+      "distance_bp": 383557,
+      "distance_cm": 0.2041120217686725
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:53529415:C:T",
+      "abs_z": 11.208984375,
+      "stronger_alid": "16:53768582:C:T",
+      "stronger_abs_z": 38.3123893737793,
+      "distance_bp": 239167,
+      "distance_cm": 0.12073745859900242
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:53834404:G:T",
+      "abs_z": 7.1982421875,
+      "stronger_alid": "16:53768582:C:T",
+      "stronger_abs_z": 38.3123893737793,
+      "distance_bp": 65822,
+      "distance_cm": 0.11717817305667921
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:53882086:G:GA",
+      "abs_z": 5.71484375,
+      "stronger_alid": "16:53768582:C:T",
+      "stronger_abs_z": 38.3123893737793,
+      "distance_bp": 113504,
+      "distance_cm": 0.14859469815602466
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:54008704:C:G",
+      "abs_z": 9.220703125,
+      "stronger_alid": "16:53768582:C:T",
+      "stronger_abs_z": 38.3123893737793,
+      "distance_bp": 240122,
+      "distance_cm": 0.4673102586144182
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:54121774:A:G",
+      "abs_z": 7.3955078125,
+      "stronger_alid": "16:54210842:C:T",
+      "stronger_abs_z": 8.0947265625,
+      "distance_bp": 89068,
+      "distance_cm": 0.1502660826560387
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:54288407:G:T",
+      "abs_z": 5.943359375,
+      "stronger_alid": "16:54210842:C:T",
+      "stronger_abs_z": 8.0947265625,
+      "distance_bp": 77565,
+      "distance_cm": 0.049354092829766216
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:54576160:A:G",
+      "abs_z": 5.6552734375,
+      "stronger_alid": "16:54930715:C:G",
+      "stronger_abs_z": 6.09765625,
+      "distance_bp": 354555,
+      "distance_cm": 0.4586041582085585
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:72867975:A:T",
+      "abs_z": 6.130859375,
+      "stronger_alid": "16:72116695:C:CTT",
+      "stronger_abs_z": 8.60546875,
+      "distance_bp": 751280,
+      "distance_cm": 0.19888995814882549
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:4852129:A:G",
+      "abs_z": 6.27734375,
+      "stronger_alid": "17:5379957:A:G",
+      "stronger_abs_z": 7.396484375,
+      "distance_bp": 527828,
+      "distance_cm": 0.18207967304219252
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:7655719:C:T",
+      "abs_z": 5.48828125,
+      "stronger_alid": "17:7886457:C:T",
+      "stronger_abs_z": 5.64453125,
+      "distance_bp": 230738,
+      "distance_cm": 0.26899453397050443
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:31573581:A:G",
+      "abs_z": 5.5166015625,
+      "stronger_alid": "17:31001791:C:T",
+      "stronger_abs_z": 6.375,
+      "distance_bp": 571790,
+      "distance_cm": 0.285617164780291
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:41115169:G:GT",
+      "abs_z": 5.5712890625,
+      "stronger_alid": "17:41106668:A:ATG",
+      "stronger_abs_z": 5.6240234375,
+      "distance_bp": 8501,
+      "distance_cm": 0.001005411078139673
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:47456380:A:AT",
+      "abs_z": 6.615234375,
+      "stronger_alid": "17:48116902:C:T",
+      "stronger_abs_z": 7.6474609375,
+      "distance_bp": 660522,
+      "distance_cm": 0.2379388973417349
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:81261988:C:T",
+      "abs_z": 5.541015625,
+      "stronger_alid": "17:81110567:A:G",
+      "stronger_abs_z": 8.2451171875,
+      "distance_bp": 151421,
+      "distance_cm": 0.18423438249004676
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:932568:A:G",
+      "abs_z": 6.1005859375,
+      "stronger_alid": "18:871950:C:T",
+      "stronger_abs_z": 6.4130859375,
+      "distance_bp": 60618,
+      "distance_cm": 0.30127220035359104
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:26145188:G:T",
+      "abs_z": 6.1943359375,
+      "stronger_alid": "18:25430848:C:CA",
+      "stronger_abs_z": 6.517578125,
+      "distance_bp": 714340,
+      "distance_cm": 0.3705449033301278
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:32402540:A:T",
+      "abs_z": 5.470703125,
+      "stronger_alid": "18:32711995:A:G",
+      "stronger_abs_z": 5.5419921875,
+      "distance_bp": 309455,
+      "distance_cm": 0.2766513551571421
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:43504429:A:G",
+      "abs_z": 5.89453125,
+      "stronger_alid": "18:42522153:C:T",
+      "stronger_abs_z": 8.62109375,
+      "distance_bp": 982276,
+      "distance_cm": 0.4038695245636461
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:55159523:A:G",
+      "abs_z": 5.607421875,
+      "stronger_alid": "18:54793274:C:T",
+      "stronger_abs_z": 6.2646484375,
+      "distance_bp": 366249,
+      "distance_cm": 0.23299929367368577
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:59845073:A:T",
+      "abs_z": 5.8408203125,
+      "stronger_alid": "18:60181298:C:T",
+      "stronger_abs_z": 19.0302734375,
+      "distance_bp": 336225,
+      "distance_cm": 0.2982981209332536
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:60212394:C:T",
+      "abs_z": 6.478515625,
+      "stronger_alid": "18:60181298:C:T",
+      "stronger_abs_z": 19.0302734375,
+      "distance_bp": 31096,
+      "distance_cm": 0.010980051393133294
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:60414949:A:C",
+      "abs_z": 8.486328125,
+      "stronger_alid": "18:60181298:C:T",
+      "stronger_abs_z": 19.0302734375,
+      "distance_bp": 233651,
+      "distance_cm": 0.11846173318431852
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:61027270:A:ATATG",
+      "abs_z": 5.6396484375,
+      "stronger_alid": "18:60181298:C:T",
+      "stronger_abs_z": 19.0302734375,
+      "distance_bp": 845972,
+      "distance_cm": 0.4896130706895718
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:18133419:G:T",
+      "abs_z": 7.1083984375,
+      "stronger_alid": "19:18723704:C:T",
+      "stronger_abs_z": 8.177734375,
+      "distance_bp": 590285,
+      "distance_cm": 0.49545172230281054
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:18360800:A:C",
+      "abs_z": 7.0830078125,
+      "stronger_alid": "19:18723704:C:T",
+      "stronger_abs_z": 8.177734375,
+      "distance_bp": 362904,
+      "distance_cm": 0.2743484557920439
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:18392384:C:T",
+      "abs_z": 7.1025390625,
+      "stronger_alid": "19:18723704:C:T",
+      "stronger_abs_z": 8.177734375,
+      "distance_bp": 331320,
+      "distance_cm": 0.19332762231272937
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:30199031:A:C",
+      "abs_z": 5.818359375,
+      "stronger_alid": "19:30495172:C:G",
+      "stronger_abs_z": 6.572265625,
+      "distance_bp": 296141,
+      "distance_cm": 0.44095302693468597
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:50627652:A:G",
+      "abs_z": 5.59765625,
+      "stronger_alid": "19:50639416:A:ATTT",
+      "stronger_abs_z": 5.7470703125,
+      "distance_bp": 11764,
+      "distance_cm": 0.012525501194630806
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:51132488:C:T",
+      "abs_z": 6.17578125,
+      "stronger_alid": "19:51312271:C:G",
+      "stronger_abs_z": 6.2958984375,
+      "distance_bp": 179783,
+      "distance_cm": 0.16896656721604586
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:15281905:C:T",
+      "abs_z": 6.07421875,
+      "stronger_alid": "20:15294892:A:G",
+      "stronger_abs_z": 6.091796875,
+      "distance_bp": 12987,
+      "distance_cm": 0.005964956245346542
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:17455828:G:T",
+      "abs_z": 5.6376953125,
+      "stronger_alid": "20:17215963:C:T",
+      "stronger_abs_z": 6.5478515625,
+      "distance_bp": 239865,
+      "distance_cm": 0.16802930509871672
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:31856919:A:G",
+      "abs_z": 5.4619140625,
+      "stronger_alid": "20:32640856:C:G",
+      "stronger_abs_z": 6.0244140625,
+      "distance_bp": 783937,
+      "distance_cm": 0.3054054638898407
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:55654362:G:T",
+      "abs_z": 5.75,
+      "stronger_alid": "20:55809160:A:C",
+      "stronger_abs_z": 6.0302734375,
+      "distance_bp": 154798,
+      "distance_cm": 0.2733316359246487
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:58520990:C:T",
+      "abs_z": 5.6787109375,
+      "stronger_alid": "20:58580383:A:G",
+      "stronger_abs_z": 7.7919921875,
+      "distance_bp": 59393,
+      "distance_cm": 0.1398286446100272
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:58814582:C:G",
+      "abs_z": 6.9052734375,
+      "stronger_alid": "20:59222235:C:T",
+      "stronger_abs_z": 8.1953125,
+      "distance_bp": 407653,
+      "distance_cm": 0.3230059783579122
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:58955006:C:T",
+      "abs_z": 6.9521484375,
+      "stronger_alid": "20:59222235:C:T",
+      "stronger_abs_z": 8.1953125,
+      "distance_bp": 267229,
+      "distance_cm": 0.18441026592417842
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:58999761:C:G",
+      "abs_z": 6.9091796875,
+      "stronger_alid": "20:59222235:C:T",
+      "stronger_abs_z": 8.1953125,
+      "distance_bp": 222474,
+      "distance_cm": 0.10448654986633699
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:59303536:G:T",
+      "abs_z": 6.8291015625,
+      "stronger_alid": "20:59222235:C:T",
+      "stronger_abs_z": 8.1953125,
+      "distance_bp": 81301,
+      "distance_cm": 0.09585071753124907
+     },
+     {
+      "chromosome": "22",
+      "alid": "22:38287631:C:G",
+      "abs_z": 5.556640625,
+      "stronger_alid": "22:37815947:A:G",
+      "stronger_abs_z": 6.0888671875,
+      "distance_bp": 471684,
+      "distance_cm": 0.22603659940088505
+     },
+     {
+      "chromosome": "22",
+      "alid": "22:40247868:C:T",
+      "abs_z": 6.5126953125,
+      "stronger_alid": "22:40283195:C:T",
+      "stronger_abs_z": 6.923828125,
+      "distance_bp": 35327,
+      "distance_cm": 0.0024141225243212716
+     },
+     {
+      "chromosome": "22",
+      "alid": "22:42360491:C:T",
+      "abs_z": 5.576171875,
+      "stronger_alid": "22:41488950:A:G",
+      "stronger_abs_z": 7.552734375,
+      "distance_bp": 871541,
+      "distance_cm": 0.24110834129208314
+     }
+    ]
+   },
+   "0.001": {
+    "rows": 47457,
+    "locus_leads": 569,
+    "index_variants": 415,
+    "agreed": 269,
+    "spurious_splits": 300,
+    "lost_signals": 146,
+    "spurious_split_rate": 0.5272407732864675,
+    "lost_signal_rate": 0.35180722891566263,
+    "by_abs_z": {
+     "[0,7)": {
+      "locus_leads": 415,
+      "spurious_splits": 262,
+      "index_variants": 271,
+      "lost_signals": 118
+     },
+     "[7,10)": {
+      "locus_leads": 123,
+      "spurious_splits": 38,
+      "index_variants": 111,
+      "lost_signals": 26
+     },
+     "[10,20)": {
+      "locus_leads": 29,
+      "spurious_splits": 0,
+      "index_variants": 31,
+      "lost_signals": 2
+     },
+     "[20,inf)": {
+      "locus_leads": 2,
+      "spurious_splits": 0,
+      "index_variants": 2,
+      "lost_signals": 0
+     }
+    },
+    "spurious_split_pairs": [
+     {
+      "chromosome": "1",
+      "alid": "1:2635982:C:T",
+      "abs_z": 6.484375,
+      "stronger_alid": "1:1659060:A:G",
+      "stronger_abs_z": 7.322265625,
+      "distance_bp": 976922,
+      "distance_cm": 1.377035767212511
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:41598806:G:GTTAT",
+      "abs_z": 5.69140625,
+      "stronger_alid": "1:39534682:C:T",
+      "stronger_abs_z": 6.3671875,
+      "distance_bp": 2064124,
+      "distance_cm": 1.6148039862105819
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:50039981:C:T",
+      "abs_z": 7.216796875,
+      "stronger_alid": "1:48984636:C:T",
+      "stronger_abs_z": 7.8525390625,
+      "distance_bp": 1055345,
+      "distance_cm": 0.06954137004766636
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:54234763:A:T",
+      "abs_z": 5.9111328125,
+      "stronger_alid": "1:62114219:G:T",
+      "stronger_abs_z": 10.501953125,
+      "distance_bp": 7879456,
+      "distance_cm": 7.553771413211948
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:57378459:A:G",
+      "abs_z": 5.748046875,
+      "stronger_alid": "1:62114219:G:T",
+      "stronger_abs_z": 10.501953125,
+      "distance_bp": 4735760,
+      "distance_cm": 4.129834759783613
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:66013157:G:T",
+      "abs_z": 5.8447265625,
+      "stronger_alid": "1:72285451:C:T",
+      "stronger_abs_z": 11.267578125,
+      "distance_bp": 6272294,
+      "distance_cm": 3.615763412539394
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:73516504:C:T",
+      "abs_z": 5.4560546875,
+      "stronger_alid": "1:72285451:C:T",
+      "stronger_abs_z": 11.267578125,
+      "distance_bp": 1231053,
+      "distance_cm": 0.2088996539338126
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:74527379:C:T",
+      "abs_z": 9.64453125,
+      "stronger_alid": "1:72285451:C:T",
+      "stronger_abs_z": 11.267578125,
+      "distance_bp": 2241928,
+      "distance_cm": 0.6557520429999215
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:77979080:C:CGGCCG",
+      "abs_z": 8.884765625,
+      "stronger_alid": "1:72285451:C:T",
+      "stronger_abs_z": 11.267578125,
+      "distance_bp": 5693629,
+      "distance_cm": 2.5612519787619163
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:92196325:C:T",
+      "abs_z": 5.6416015625,
+      "stronger_alid": "1:96426660:C:T",
+      "stronger_abs_z": 6.9794921875,
+      "distance_bp": 4230335,
+      "distance_cm": 1.8917222163790655
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:94621862:G:T",
+      "abs_z": 5.9296875,
+      "stronger_alid": "1:96426660:C:T",
+      "stronger_abs_z": 6.9794921875,
+      "distance_bp": 1804798,
+      "distance_cm": 1.0107774045717832
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:98664569:C:T",
+      "abs_z": 6.1123046875,
+      "stronger_alid": "1:107415735:G:T",
+      "stronger_abs_z": 7.94140625,
+      "distance_bp": 8751166,
+      "distance_cm": 5.080686954785321
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:107419706:A:G",
+      "abs_z": 8.0322265625,
+      "stronger_alid": "1:109515712:A:AT",
+      "stronger_abs_z": 12.91015625,
+      "distance_bp": 2096006,
+      "distance_cm": 1.4033925042498367
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:110449500:C:T",
+      "abs_z": 6.0390625,
+      "stronger_alid": "1:109515712:A:AT",
+      "stronger_abs_z": 12.91015625,
+      "distance_bp": 933788,
+      "distance_cm": 1.1814905906016122
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:119004219:C:T",
+      "abs_z": 6.08984375,
+      "stronger_alid": "1:109515712:A:AT",
+      "stronger_abs_z": 12.91015625,
+      "distance_bp": 9488507,
+      "distance_cm": 7.578190006640199
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:155013615:C:T",
+      "abs_z": 8.1982421875,
+      "stronger_alid": "1:156041653:C:T",
+      "stronger_abs_z": 10.2451171875,
+      "distance_bp": 1028038,
+      "distance_cm": 0.1715287541458963
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:175857796:C:G",
+      "abs_z": 5.5439453125,
+      "stronger_alid": "1:177925456:G:T",
+      "stronger_abs_z": 16.2158203125,
+      "distance_bp": 2067660,
+      "distance_cm": 0.9411746959401626
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:181326367:A:G",
+      "abs_z": 5.5380859375,
+      "stronger_alid": "1:190408858:C:T",
+      "stronger_abs_z": 6.8388671875,
+      "distance_bp": 9082491,
+      "distance_cm": 4.643071783563357
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:198357724:C:CA",
+      "abs_z": 5.6513671875,
+      "stronger_alid": "1:201832256:C:CTT",
+      "stronger_abs_z": 7.703125,
+      "distance_bp": 3474532,
+      "distance_cm": 2.75895585042079
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:86338:A:G",
+      "abs_z": 6.7783203125,
+      "stronger_alid": "2:422144:C:T",
+      "stronger_abs_z": 13.0751953125,
+      "distance_bp": 335806,
+      "distance_cm": 0.3480649910004172
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:1947564:G:T",
+      "abs_z": 6.494140625,
+      "stronger_alid": "2:422144:C:T",
+      "stronger_abs_z": 13.0751953125,
+      "distance_bp": 1525420,
+      "distance_cm": 1.6350292745453816
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:6021755:G:T",
+      "abs_z": 8.759765625,
+      "stronger_alid": "2:422144:C:T",
+      "stronger_abs_z": 13.0751953125,
+      "distance_bp": 5599611,
+      "distance_cm": 7.785886061106249
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:9613603:A:C",
+      "abs_z": 5.55859375,
+      "stronger_alid": "2:422144:C:T",
+      "stronger_abs_z": 13.0751953125,
+      "distance_bp": 9191459,
+      "distance_cm": 12.907138062269045
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:10209616:C:CGT",
+      "abs_z": 5.880859375,
+      "stronger_alid": "2:625347:C:T",
+      "stronger_abs_z": 21.7822265625,
+      "distance_bp": 9584269,
+      "distance_cm": 13.805050496959273
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:23380221:C:T",
+      "abs_z": 5.962890625,
+      "stronger_alid": "2:24888093:A:G",
+      "stronger_abs_z": 12.6708984375,
+      "distance_bp": 1507872,
+      "distance_cm": 0.8113326208345129
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:26680253:C:CTG",
+      "abs_z": 6.865234375,
+      "stronger_alid": "2:24888093:A:G",
+      "stronger_abs_z": 12.6708984375,
+      "distance_bp": 1792160,
+      "distance_cm": 0.8316496335584809
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:28688483:C:T",
+      "abs_z": 5.646484375,
+      "stronger_alid": "2:24888093:A:G",
+      "stronger_abs_z": 12.6708984375,
+      "distance_bp": 3800390,
+      "distance_cm": 2.111327513805577
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:44887913:A:G",
+      "abs_z": 5.5751953125,
+      "stronger_alid": "2:41560092:G:T",
+      "stronger_abs_z": 5.763671875,
+      "distance_bp": 3327821,
+      "distance_cm": 2.9574075619201636
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:46818182:A:G",
+      "abs_z": 6.376953125,
+      "stronger_alid": "2:56060828:A:G",
+      "stronger_abs_z": 6.5458984375,
+      "distance_bp": 9242646,
+      "distance_cm": 7.236518853424201
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:54195244:A:G",
+      "abs_z": 6.1083984375,
+      "stronger_alid": "2:61808494:A:G",
+      "stronger_abs_z": 6.6064453125,
+      "distance_bp": 7613250,
+      "distance_cm": 4.324209744745119
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:55937352:A:AC",
+      "abs_z": 6.32421875,
+      "stronger_alid": "2:58742862:C:G",
+      "stronger_abs_z": 10.306640625,
+      "distance_bp": 2805510,
+      "distance_cm": 1.3839740707357322
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:56518805:A:G",
+      "abs_z": 6.63671875,
+      "stronger_alid": "2:58742862:C:G",
+      "stronger_abs_z": 10.306640625,
+      "distance_bp": 2224057,
+      "distance_cm": 0.843048740819988
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:57734467:C:G",
+      "abs_z": 6.3486328125,
+      "stronger_alid": "2:58742862:C:G",
+      "stronger_abs_z": 10.306640625,
+      "distance_bp": 1008395,
+      "distance_cm": 0.24411126922556292
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:59329331:A:G",
+      "abs_z": 7.0615234375,
+      "stronger_alid": "2:58742862:C:G",
+      "stronger_abs_z": 10.306640625,
+      "distance_bp": 586469,
+      "distance_cm": 0.5060577819543894
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:60060845:C:T",
+      "abs_z": 6.7080078125,
+      "stronger_alid": "2:58742862:C:G",
+      "stronger_abs_z": 10.306640625,
+      "distance_bp": 1317983,
+      "distance_cm": 1.031810102283444
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:60672327:C:T",
+      "abs_z": 6.2451171875,
+      "stronger_alid": "2:58742862:C:G",
+      "stronger_abs_z": 10.306640625,
+      "distance_bp": 1929465,
+      "distance_cm": 1.615114966343505
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:62611801:A:G",
+      "abs_z": 7.69140625,
+      "stronger_alid": "2:58742862:C:G",
+      "stronger_abs_z": 10.306640625,
+      "distance_bp": 3868939,
+      "distance_cm": 2.538097876886688
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:76964999:G:GATC",
+      "abs_z": 5.7197265625,
+      "stronger_alid": "2:86582107:A:G",
+      "stronger_abs_z": 6.7919921875,
+      "distance_bp": 9617108,
+      "distance_cm": 5.738414319952511
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:95507869:T:TA",
+      "abs_z": 6.2138671875,
+      "stronger_alid": "2:100300252:A:AT",
+      "stronger_abs_z": 8.29296875,
+      "distance_bp": 4792383,
+      "distance_cm": 1.0859553697073068
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:104142661:A:C",
+      "abs_z": 5.900390625,
+      "stronger_alid": "2:100300252:A:AT",
+      "stronger_abs_z": 8.29296875,
+      "distance_bp": 3842409,
+      "distance_cm": 1.8735175349596034
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:135014404:C:G",
+      "abs_z": 7.1962890625,
+      "stronger_alid": "2:136031689:A:G",
+      "stronger_abs_z": 10.248046875,
+      "distance_bp": 1017285,
+      "distance_cm": 0.11667782743857913
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:136872929:A:T",
+      "abs_z": 6.0048828125,
+      "stronger_alid": "2:136031689:A:G",
+      "stronger_abs_z": 10.248046875,
+      "distance_bp": 841240,
+      "distance_cm": 0.5367022587843167
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:140482645:A:G",
+      "abs_z": 5.7529296875,
+      "stronger_alid": "2:136031689:A:G",
+      "stronger_abs_z": 10.248046875,
+      "distance_bp": 4450956,
+      "distance_cm": 2.3390971006516565
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:142760431:A:G",
+      "abs_z": 5.6845703125,
+      "stronger_alid": "2:136031689:A:G",
+      "stronger_abs_z": 10.248046875,
+      "distance_bp": 6728742,
+      "distance_cm": 3.8646376981661064
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:158005608:A:G",
+      "abs_z": 5.7041015625,
+      "stronger_alid": "2:162916814:G:T",
+      "stronger_abs_z": 7.56640625,
+      "distance_bp": 4911206,
+      "distance_cm": 1.9928436884813863
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:160524377:A:G",
+      "abs_z": 6.779296875,
+      "stronger_alid": "2:162916814:G:T",
+      "stronger_abs_z": 7.56640625,
+      "distance_bp": 2392437,
+      "distance_cm": 0.8190145042502905
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:161711158:A:G",
+      "abs_z": 6.4091796875,
+      "stronger_alid": "2:162916814:G:T",
+      "stronger_abs_z": 7.56640625,
+      "distance_bp": 1205656,
+      "distance_cm": 0.48242874014050585
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:187256640:G:T",
+      "abs_z": 5.568359375,
+      "stronger_alid": "2:180637211:C:T",
+      "stronger_abs_z": 8.0654296875,
+      "distance_bp": 6619429,
+      "distance_cm": 2.3415564969834577
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:197972053:A:G",
+      "abs_z": 5.6044921875,
+      "stronger_alid": "2:204509514:A:C",
+      "stronger_abs_z": 6.587890625,
+      "distance_bp": 6537461,
+      "distance_cm": 3.276021824833691
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:199142134:C:T",
+      "abs_z": 6.3408203125,
+      "stronger_alid": "2:204509514:A:C",
+      "stronger_abs_z": 6.587890625,
+      "distance_bp": 5367380,
+      "distance_cm": 2.6284736027676843
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:200223448:A:G",
+      "abs_z": 5.6162109375,
+      "stronger_alid": "2:207364440:A:G",
+      "stronger_abs_z": 6.6982421875,
+      "distance_bp": 7140992,
+      "distance_cm": 4.933542445360558
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:206364284:A:G",
+      "abs_z": 5.755859375,
+      "stronger_alid": "2:212548507:A:G",
+      "stronger_abs_z": 7.6865234375,
+      "distance_bp": 6184223,
+      "distance_cm": 4.068593026381876
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:207363632:A:C",
+      "abs_z": 6.869140625,
+      "stronger_alid": "2:212548507:A:G",
+      "stronger_abs_z": 7.6865234375,
+      "distance_bp": 5184875,
+      "distance_cm": 3.336366729973747
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:211822748:A:G",
+      "abs_z": 5.7958984375,
+      "stronger_alid": "2:210853547:G:T",
+      "stronger_abs_z": 7.2529296875,
+      "distance_bp": 969201,
+      "distance_cm": 1.0379413347841364
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:216498338:A:G",
+      "abs_z": 5.4794921875,
+      "stronger_alid": "2:207364440:A:G",
+      "stronger_abs_z": 6.6982421875,
+      "distance_bp": 9133898,
+      "distance_cm": 6.270352597314286
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:16943780:C:T",
+      "abs_z": 6.15234375,
+      "stronger_alid": "3:25068924:A:T",
+      "stronger_abs_z": 8.8173828125,
+      "distance_bp": 8125144,
+      "distance_cm": 6.478090743912194
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:18176279:C:T",
+      "abs_z": 6.138671875,
+      "stronger_alid": "3:25068924:A:T",
+      "stronger_abs_z": 8.8173828125,
+      "distance_bp": 6892645,
+      "distance_cm": 6.097817664237741
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:19397549:A:G",
+      "abs_z": 5.52734375,
+      "stronger_alid": "3:20466416:C:G",
+      "stronger_abs_z": 6.12890625,
+      "distance_bp": 1068867,
+      "distance_cm": 0.4495234381157758
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:20589806:A:G",
+      "abs_z": 6.7626953125,
+      "stronger_alid": "3:25068924:A:T",
+      "stronger_abs_z": 8.8173828125,
+      "distance_bp": 4479118,
+      "distance_cm": 4.840677756028228
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:30008131:A:AT",
+      "abs_z": 5.66015625,
+      "stronger_alid": "3:35795247:G:T",
+      "stronger_abs_z": 7.4736328125,
+      "distance_bp": 5787116,
+      "distance_cm": 4.270178226539073
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:34608566:T:TG",
+      "abs_z": 6.3857421875,
+      "stronger_alid": "3:35012772:A:G",
+      "stronger_abs_z": 7.1015625,
+      "distance_bp": 404206,
+      "distance_cm": 0.20516065796348215
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:38549568:A:G",
+      "abs_z": 6.0517578125,
+      "stronger_alid": "3:35795247:G:T",
+      "stronger_abs_z": 7.4736328125,
+      "distance_bp": 2754321,
+      "distance_cm": 1.71872373718643
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:42829066:C:G",
+      "abs_z": 7.45703125,
+      "stronger_alid": "3:50137139:C:T",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 7308073,
+      "distance_cm": 2.270228838125
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:44842479:A:G",
+      "abs_z": 6.001953125,
+      "stronger_alid": "3:50137139:C:T",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 5294660,
+      "distance_cm": 1.5161063470152456
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:47133704:A:G",
+      "abs_z": 5.873046875,
+      "stronger_alid": "3:50137139:C:T",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 3003435,
+      "distance_cm": 0.2829328027276503
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:49135764:C:T",
+      "abs_z": 5.755859375,
+      "stronger_alid": "3:50137139:C:T",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 1001375,
+      "distance_cm": 0.07979722280601464
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:51422580:C:G",
+      "abs_z": 5.9765625,
+      "stronger_alid": "3:50137139:C:T",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 1285441,
+      "distance_cm": 0.11951990465940554
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:52968134:A:G",
+      "abs_z": 6.578125,
+      "stronger_alid": "3:50137139:C:T",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 2830995,
+      "distance_cm": 0.4657795538048646
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:53806638:A:G",
+      "abs_z": 6.212890625,
+      "stronger_alid": "3:50137139:C:T",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 3669499,
+      "distance_cm": 1.0758968452230633
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:59871341:A:G",
+      "abs_z": 6.064453125,
+      "stronger_alid": "3:50137139:C:T",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 9734202,
+      "distance_cm": 6.117330841234676
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:61264086:C:T",
+      "abs_z": 6.958984375,
+      "stronger_alid": "3:62496961:C:T",
+      "stronger_abs_z": 7.6162109375,
+      "distance_bp": 1232875,
+      "distance_cm": 1.481123024927527
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:61792590:G:T",
+      "abs_z": 5.7216796875,
+      "stronger_alid": "3:62496961:C:T",
+      "stronger_abs_z": 7.6162109375,
+      "distance_bp": 704371,
+      "distance_cm": 0.8672172961736777
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:64991301:C:T",
+      "abs_z": 5.6279296875,
+      "stronger_alid": "3:61172717:T:TCTAAAATTCACTGACACTGGAGCTTAAATCCACGTGCCTAGAATGCTC",
+      "stronger_abs_z": 6.0517578125,
+      "distance_bp": 3818584,
+      "distance_cm": 4.726640316455082
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:69358602:C:G",
+      "abs_z": 5.52734375,
+      "stronger_alid": "3:59853509:C:G",
+      "stronger_abs_z": 5.9912109375,
+      "distance_bp": 9505093,
+      "distance_cm": 10.616573154671663
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:82532681:A:ATATT",
+      "abs_z": 6.236328125,
+      "stronger_alid": "3:85741335:G:GA",
+      "stronger_abs_z": 9.3779296875,
+      "distance_bp": 3208654,
+      "distance_cm": 0.526118026024406
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:84352181:A:G",
+      "abs_z": 7.1044921875,
+      "stronger_alid": "3:85741335:G:GA",
+      "stronger_abs_z": 9.3779296875,
+      "distance_bp": 1389154,
+      "distance_cm": 0.24558502616444855
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:87038887:C:G",
+      "abs_z": 5.59375,
+      "stronger_alid": "3:85741335:G:GA",
+      "stronger_abs_z": 9.3779296875,
+      "distance_bp": 1297552,
+      "distance_cm": 0.21684802723547136
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:88150035:T:TC",
+      "abs_z": 5.6826171875,
+      "stronger_alid": "3:85884891:A:AT",
+      "stronger_abs_z": 5.697265625,
+      "distance_bp": 2265144,
+      "distance_cm": 0.5266384109180251
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:90525467:A:T",
+      "abs_z": 6.994140625,
+      "stronger_alid": "3:94332553:C:T",
+      "stronger_abs_z": 7.5654296875,
+      "distance_bp": 3807086,
+      "distance_cm": 0.5236308299675159
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:102447658:A:T",
+      "abs_z": 6.2001953125,
+      "stronger_alid": "3:104899129:G:T",
+      "stronger_abs_z": 6.63671875,
+      "distance_bp": 2451471,
+      "distance_cm": 0.9524722362358062
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:108305118:A:G",
+      "abs_z": 5.9833984375,
+      "stronger_alid": "3:104899129:G:T",
+      "stronger_abs_z": 6.63671875,
+      "distance_bp": 3405989,
+      "distance_cm": 2.343406653364127
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:123630644:A:G",
+      "abs_z": 5.4794921875,
+      "stronger_alid": "3:131818190:A:T",
+      "stronger_abs_z": 8.27734375,
+      "distance_bp": 8187546,
+      "distance_cm": 5.0253493138935
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:137848439:C:T",
+      "abs_z": 6.841796875,
+      "stronger_alid": "3:131818190:A:T",
+      "stronger_abs_z": 8.27734375,
+      "distance_bp": 6030249,
+      "distance_cm": 3.2989877123630436
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:139307597:C:G",
+      "abs_z": 5.9287109375,
+      "stronger_alid": "3:131818190:A:T",
+      "stronger_abs_z": 8.27734375,
+      "distance_bp": 7489407,
+      "distance_cm": 3.8030073526262385
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:155522849:A:C",
+      "abs_z": 5.7880859375,
+      "stronger_alid": "3:161712488:C:T",
+      "stronger_abs_z": 5.814453125,
+      "distance_bp": 6189639,
+      "distance_cm": 2.271725005891369
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:158413645:G:GA",
+      "abs_z": 5.6103515625,
+      "stronger_alid": "3:161712488:C:T",
+      "stronger_abs_z": 5.814453125,
+      "distance_bp": 3298843,
+      "distance_cm": 1.2485931917361341
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:168451509:A:T",
+      "abs_z": 5.66015625,
+      "stronger_alid": "3:173395117:C:T",
+      "stronger_abs_z": 6.767578125,
+      "distance_bp": 4943608,
+      "distance_cm": 4.560111489614371
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:171016649:A:G",
+      "abs_z": 5.9150390625,
+      "stronger_alid": "3:173395117:C:T",
+      "stronger_abs_z": 6.767578125,
+      "distance_bp": 2378468,
+      "distance_cm": 2.8702656159489806
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:174955059:C:T",
+      "abs_z": 5.66015625,
+      "stronger_alid": "3:184258315:C:T",
+      "stronger_abs_z": 7.46875,
+      "distance_bp": 9303256,
+      "distance_cm": 7.187708723634117
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:177186889:A:G",
+      "abs_z": 5.685546875,
+      "stronger_alid": "3:186031923:A:G",
+      "stronger_abs_z": 6.203125,
+      "distance_bp": 8845034,
+      "distance_cm": 6.1412325784286566
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:183153333:A:C",
+      "abs_z": 6.12109375,
+      "stronger_alid": "3:186116501:C:T",
+      "stronger_abs_z": 10.8896484375,
+      "distance_bp": 2963168,
+      "distance_cm": 2.235174001328531
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:184636311:A:C",
+      "abs_z": 5.8115234375,
+      "stronger_alid": "3:186116501:C:T",
+      "stronger_abs_z": 10.8896484375,
+      "distance_bp": 1480190,
+      "distance_cm": 0.9381480860173781
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:32252748:A:C",
+      "abs_z": 6.0361328125,
+      "stronger_alid": "4:25407216:A:G",
+      "stronger_abs_z": 9.4267578125,
+      "distance_bp": 6845532,
+      "distance_cm": 5.372824072937178
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:38675390:T:TC",
+      "abs_z": 5.908203125,
+      "stronger_alid": "4:45163633:A:ATTC",
+      "stronger_abs_z": 16.1796875,
+      "distance_bp": 6488243,
+      "distance_cm": 4.849590536813409
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:46237987:A:G",
+      "abs_z": 5.744140625,
+      "stronger_alid": "4:45163633:A:ATTC",
+      "stronger_abs_z": 16.1796875,
+      "distance_bp": 1074354,
+      "distance_cm": 0.23816642488255013
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:47320365:A:G",
+      "abs_z": 6.76953125,
+      "stronger_alid": "4:45163633:A:ATTC",
+      "stronger_abs_z": 16.1796875,
+      "distance_bp": 2156732,
+      "distance_cm": 0.4770897025139007
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:60322242:G:GA",
+      "abs_z": 5.8720703125,
+      "stronger_alid": "4:67242440:C:T",
+      "stronger_abs_z": 6.15234375,
+      "distance_bp": 6920198,
+      "distance_cm": 3.509710932552707
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:65046655:C:T",
+      "abs_z": 5.6884765625,
+      "stronger_alid": "4:67242440:C:T",
+      "stronger_abs_z": 6.15234375,
+      "distance_bp": 2195785,
+      "distance_cm": 1.1894560496678253
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:68626834:A:G",
+      "abs_z": 5.525390625,
+      "stronger_alid": "4:67242440:C:T",
+      "stronger_abs_z": 6.15234375,
+      "distance_bp": 1384394,
+      "distance_cm": 0.7915823793963881
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:90321322:C:T",
+      "abs_z": 5.6572265625,
+      "stronger_alid": "4:94085140:A:G",
+      "stronger_abs_z": 6.3427734375,
+      "distance_bp": 3763818,
+      "distance_cm": 1.6015341897402635
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:110645721:A:C",
+      "abs_z": 5.4892578125,
+      "stronger_alid": "4:111799913:C:T",
+      "stronger_abs_z": 6.0927734375,
+      "distance_bp": 1154192,
+      "distance_cm": 0.7579385887088534
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:151869476:A:G",
+      "abs_z": 5.490234375,
+      "stronger_alid": "4:142746682:A:C",
+      "stronger_abs_z": 5.6162109375,
+      "distance_bp": 9122794,
+      "distance_cm": 3.650571264642821
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:178417592:G:T",
+      "abs_z": 5.4921875,
+      "stronger_alid": "4:174790749:A:G",
+      "stronger_abs_z": 5.650390625,
+      "distance_bp": 3626843,
+      "distance_cm": 3.3084676886315663
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:37279380:C:T",
+      "abs_z": 5.490234375,
+      "stronger_alid": "5:43161249:A:G",
+      "stronger_abs_z": 9.1416015625,
+      "distance_bp": 5881869,
+      "distance_cm": 3.2030293551965485
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:41882534:C:G",
+      "abs_z": 5.990234375,
+      "stronger_alid": "5:43161249:A:G",
+      "stronger_abs_z": 9.1416015625,
+      "distance_bp": 1278715,
+      "distance_cm": 0.23580146656300371
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:44176948:A:G",
+      "abs_z": 5.4892578125,
+      "stronger_alid": "5:44132041:C:T",
+      "stronger_abs_z": 6.2294921875,
+      "distance_bp": 44907,
+      "distance_cm": 0.013217118209261969
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:51552782:A:T",
+      "abs_z": 5.923828125,
+      "stronger_alid": "5:53994222:A:T",
+      "stronger_abs_z": 6.169921875,
+      "distance_bp": 2441440,
+      "distance_cm": 1.1651302301421325
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:61531129:A:G",
+      "abs_z": 5.6669921875,
+      "stronger_alid": "5:64644673:C:CA",
+      "stronger_abs_z": 6.2939453125,
+      "distance_bp": 3113544,
+      "distance_cm": 1.4548104863001612
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:66877990:A:T",
+      "abs_z": 7.2880859375,
+      "stronger_alid": "5:75676547:C:CG",
+      "stronger_abs_z": 8.72265625,
+      "distance_bp": 8798557,
+      "distance_cm": 5.932435201563138
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:81554273:A:C",
+      "abs_z": 6.0078125,
+      "stronger_alid": "5:88407282:C:G",
+      "stronger_abs_z": 9.1650390625,
+      "distance_bp": 6853009,
+      "distance_cm": 3.6199071726715673
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:86988502:A:G",
+      "abs_z": 6.5869140625,
+      "stronger_alid": "5:88407282:C:G",
+      "stronger_abs_z": 9.1650390625,
+      "distance_bp": 1418780,
+      "distance_cm": 0.28626247765376434
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:89573320:A:G",
+      "abs_z": 6.4287109375,
+      "stronger_alid": "5:93174618:A:G",
+      "stronger_abs_z": 8.12109375,
+      "distance_bp": 3601298,
+      "distance_cm": 1.4596811142749573
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:96513883:C:T",
+      "abs_z": 8.60546875,
+      "stronger_alid": "5:88407282:C:G",
+      "stronger_abs_z": 9.1650390625,
+      "distance_bp": 8106601,
+      "distance_cm": 3.172517551860878
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:104461542:A:G",
+      "abs_z": 5.9638671875,
+      "stronger_alid": "5:109316599:C:G",
+      "stronger_abs_z": 6.689453125,
+      "distance_bp": 4855057,
+      "distance_cm": 2.943845056975661
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:107482386:C:G",
+      "abs_z": 5.8515625,
+      "stronger_alid": "5:109316599:C:G",
+      "stronger_abs_z": 6.689453125,
+      "distance_bp": 1834213,
+      "distance_cm": 1.4914046924295548
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:108028662:C:T",
+      "abs_z": 5.474609375,
+      "stronger_alid": "5:107483705:C:T",
+      "stronger_abs_z": 5.6669921875,
+      "distance_bp": 544957,
+      "distance_cm": 0.7297916427134936
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:113571156:C:T",
+      "abs_z": 5.9609375,
+      "stronger_alid": "5:123363504:C:CTA",
+      "stronger_abs_z": 9.6376953125,
+      "distance_bp": 9792348,
+      "distance_cm": 7.328317845913276
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:143500149:C:CT",
+      "abs_z": 5.9990234375,
+      "stronger_alid": "5:142311806:A:C",
+      "stronger_abs_z": 6.279296875,
+      "distance_bp": 1188343,
+      "distance_cm": 1.6019558578954758
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:159003179:C:G",
+      "abs_z": 6.009765625,
+      "stronger_alid": "5:154130036:C:T",
+      "stronger_abs_z": 7.4091796875,
+      "distance_bp": 4873143,
+      "distance_cm": 2.9139928858657242
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:168156635:A:G",
+      "abs_z": 5.984375,
+      "stronger_alid": "5:166682011:A:G",
+      "stronger_abs_z": 8.140625,
+      "distance_bp": 1474624,
+      "distance_cm": 1.5966275410265638
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:171311832:A:G",
+      "abs_z": 7.00390625,
+      "stronger_alid": "5:166682011:A:G",
+      "stronger_abs_z": 8.140625,
+      "distance_bp": 4629821,
+      "distance_cm": 5.846803694758776
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:12142584:A:G",
+      "abs_z": 5.9150390625,
+      "stronger_alid": "6:19776824:A:G",
+      "stronger_abs_z": 6.0517578125,
+      "distance_bp": 7634240,
+      "distance_cm": 7.101418398004778
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:18525952:A:G",
+      "abs_z": 5.744140625,
+      "stronger_alid": "6:20637778:C:G",
+      "stronger_abs_z": 6.3662109375,
+      "distance_bp": 2111826,
+      "distance_cm": 1.8474900072275382
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:22765159:C:T",
+      "abs_z": 5.478515625,
+      "stronger_alid": "6:20637778:C:G",
+      "stronger_abs_z": 6.3662109375,
+      "distance_bp": 2127381,
+      "distance_cm": 2.3811994412459434
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:31296684:A:C",
+      "abs_z": 5.5263671875,
+      "stronger_alid": "6:40396089:T:TAAG",
+      "stronger_abs_z": 12.3017578125,
+      "distance_bp": 9099405,
+      "distance_cm": 10.975529041789628
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:32438468:C:CA",
+      "abs_z": 6.5498046875,
+      "stronger_alid": "6:24189047:A:G",
+      "stronger_abs_z": 6.5673828125,
+      "distance_bp": 8249421,
+      "distance_cm": 4.746742611047271
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:32558619:A:G",
+      "abs_z": 5.6171875,
+      "stronger_alid": "6:26540455:C:T",
+      "stronger_abs_z": 8.572265625,
+      "distance_bp": 6018164,
+      "distance_cm": 4.275489297664397
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:32619215:G:T",
+      "abs_z": 6.3193359375,
+      "stronger_alid": "6:40396089:T:TAAG",
+      "stronger_abs_z": 12.3017578125,
+      "distance_bp": 7776874,
+      "distance_cm": 7.650967979856269
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:32659305:A:G",
+      "abs_z": 6.3271484375,
+      "stronger_alid": "6:35272469:C:CTGTGTGTGTGTGTGTGTGTG",
+      "stronger_abs_z": 6.34375,
+      "distance_bp": 2613164,
+      "distance_cm": 2.8698478520909063
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:32706117:C:T",
+      "abs_z": 7.55859375,
+      "stronger_alid": "6:40396089:T:TAAG",
+      "stronger_abs_z": 12.3017578125,
+      "distance_bp": 7689972,
+      "distance_cm": 6.258869943434064
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:34792126:T:TGGCGGCGGCGGCGGCGGCGGC",
+      "abs_z": 6.6259765625,
+      "stronger_alid": "6:40396089:T:TAAG",
+      "stronger_abs_z": 12.3017578125,
+      "distance_bp": 5603963,
+      "distance_cm": 4.13311329577153
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:36668303:C:T",
+      "abs_z": 5.7060546875,
+      "stronger_alid": "6:39324539:G:T",
+      "stronger_abs_z": 6.23046875,
+      "distance_bp": 2656236,
+      "distance_cm": 2.449546841038547
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:37692341:A:G",
+      "abs_z": 5.78125,
+      "stronger_alid": "6:40396089:T:TAAG",
+      "stronger_abs_z": 12.3017578125,
+      "distance_bp": 2703748,
+      "distance_cm": 1.8914122353494207
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:39308062:A:C",
+      "abs_z": 6.2998046875,
+      "stronger_alid": "6:35272469:C:CTGTGTGTGTGTGTGTGTGTG",
+      "stronger_abs_z": 6.34375,
+      "distance_bp": 4035593,
+      "distance_cm": 3.266557005701131
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:45147650:C:T",
+      "abs_z": 6.529296875,
+      "stronger_alid": "6:50963135:A:T",
+      "stronger_abs_z": 15.8251953125,
+      "distance_bp": 5815485,
+      "distance_cm": 2.434279888595057
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:48408857:A:C",
+      "abs_z": 6.490234375,
+      "stronger_alid": "6:55145701:C:T",
+      "stronger_abs_z": 9.2431640625,
+      "distance_bp": 6736844,
+      "distance_cm": 3.175620584311261
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:49490122:A:G",
+      "abs_z": 5.7705078125,
+      "stronger_alid": "6:50963135:A:T",
+      "stronger_abs_z": 15.8251953125,
+      "distance_bp": 1473013,
+      "distance_cm": 0.3115233100160353
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:52243888:G:T",
+      "abs_z": 6.2353515625,
+      "stronger_alid": "6:50963135:A:T",
+      "stronger_abs_z": 15.8251953125,
+      "distance_bp": 1280753,
+      "distance_cm": 0.46198380512193893
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:53465558:C:T",
+      "abs_z": 6.654296875,
+      "stronger_alid": "6:51659605:A:G",
+      "stronger_abs_z": 7.4345703125,
+      "distance_bp": 1805953,
+      "distance_cm": 1.5027479317257928
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:54121145:C:T",
+      "abs_z": 7.212890625,
+      "stronger_alid": "6:50963135:A:T",
+      "stronger_abs_z": 15.8251953125,
+      "distance_bp": 3158010,
+      "distance_cm": 2.3759426282836102
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:57427138:A:G",
+      "abs_z": 5.5908203125,
+      "stronger_alid": "6:63048809:A:G",
+      "stronger_abs_z": 6.20703125,
+      "distance_bp": 5621671,
+      "distance_cm": 3.471233428755376
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:72954022:G:T",
+      "abs_z": 5.6220703125,
+      "stronger_alid": "6:63048809:A:G",
+      "stronger_abs_z": 6.20703125,
+      "distance_bp": 9905213,
+      "distance_cm": 4.4295139374807775
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:84201618:C:T",
+      "abs_z": 5.5107421875,
+      "stronger_alid": "6:86564148:C:T",
+      "stronger_abs_z": 5.849609375,
+      "distance_bp": 2362530,
+      "distance_cm": 0.8124354000572112
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:101545946:A:AT",
+      "abs_z": 6.38671875,
+      "stronger_alid": "6:108672958:A:G",
+      "stronger_abs_z": 10.0234375,
+      "distance_bp": 7127012,
+      "distance_cm": 5.069446584293814
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:118312460:C:T",
+      "abs_z": 5.478515625,
+      "stronger_alid": "6:108672958:A:G",
+      "stronger_abs_z": 10.0234375,
+      "distance_bp": 9639502,
+      "distance_cm": 4.228589594687946
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:160358102:A:G",
+      "abs_z": 5.7724609375,
+      "stronger_alid": "6:169962169:A:T",
+      "stronger_abs_z": 6.0107421875,
+      "distance_bp": 9604067,
+      "distance_cm": 13.895344686515827
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:162675028:T:TTTTA",
+      "abs_z": 5.95703125,
+      "stronger_alid": "6:152795902:A:G",
+      "stronger_abs_z": 6.7802734375,
+      "distance_bp": 9879126,
+      "distance_cm": 10.309538197833291
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:170463092:A:C",
+      "abs_z": 5.53515625,
+      "stronger_alid": "6:169962169:A:T",
+      "stronger_abs_z": 6.0107421875,
+      "distance_bp": 500923,
+      "distance_cm": 0.7473355699256388
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:6719307:C:T",
+      "abs_z": 5.8515625,
+      "stronger_alid": "7:4073761:A:G",
+      "stronger_abs_z": 6.3359375,
+      "distance_bp": 2645546,
+      "distance_cm": 3.6443532878639973
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:12216922:C:T",
+      "abs_z": 5.6474609375,
+      "stronger_alid": "7:4073761:A:G",
+      "stronger_abs_z": 6.3359375,
+      "distance_bp": 8143161,
+      "distance_cm": 11.42914335471131
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:24225982:A:G",
+      "abs_z": 6.1533203125,
+      "stronger_alid": "7:21430918:A:T",
+      "stronger_abs_z": 6.7861328125,
+      "distance_bp": 2795064,
+      "distance_cm": 2.9096537492286885
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:41353612:T:TAGA",
+      "abs_z": 5.6865234375,
+      "stronger_alid": "7:49576607:A:G",
+      "stronger_abs_z": 6.8408203125,
+      "distance_bp": 8222995,
+      "distance_cm": 6.271581574782616
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:75855136:A:ACCTT",
+      "abs_z": 7.48046875,
+      "stronger_alid": "7:76962759:C:T",
+      "stronger_abs_z": 14.380859375,
+      "distance_bp": 1107623,
+      "distance_cm": 0.5931985539194926
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:78197747:G:GA",
+      "abs_z": 7.5078125,
+      "stronger_alid": "7:76962759:C:T",
+      "stronger_abs_z": 14.380859375,
+      "distance_bp": 1234988,
+      "distance_cm": 0.9111486552356354
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:78524178:G:T",
+      "abs_z": 6.498046875,
+      "stronger_alid": "7:76962759:C:T",
+      "stronger_abs_z": 14.380859375,
+      "distance_bp": 1561419,
+      "distance_cm": 1.5865223098351606
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:114986825:C:T",
+      "abs_z": 5.705078125,
+      "stronger_alid": "7:122480476:A:G",
+      "stronger_abs_z": 6.2080078125,
+      "distance_bp": 7493651,
+      "distance_cm": 2.6728206794116858
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:124590876:C:T",
+      "abs_z": 5.7587890625,
+      "stronger_alid": "7:122480476:A:G",
+      "stronger_abs_z": 6.2080078125,
+      "distance_bp": 2110400,
+      "distance_cm": 0.7671934484509677
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:137763350:A:G",
+      "abs_z": 6.3583984375,
+      "stronger_alid": "7:139190225:T:TTTG",
+      "stronger_abs_z": 6.974609375,
+      "distance_bp": 1426875,
+      "distance_cm": 2.1617055019167424
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:148387540:G:T",
+      "abs_z": 5.4833984375,
+      "stronger_alid": "7:139190225:T:TTTG",
+      "stronger_abs_z": 6.974609375,
+      "distance_bp": 9197315,
+      "distance_cm": 7.107803726618229
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:8450156:A:G",
+      "abs_z": 6.263671875,
+      "stronger_alid": "8:10947355:C:G",
+      "stronger_abs_z": 7.693359375,
+      "distance_bp": 2497199,
+      "distance_cm": 2.5018628722753355
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:9030032:T:TAAC",
+      "abs_z": 6.36328125,
+      "stronger_alid": "8:10947355:C:G",
+      "stronger_abs_z": 7.693359375,
+      "distance_bp": 1917323,
+      "distance_cm": 1.8483172789427975
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:9940736:A:T",
+      "abs_z": 6.8095703125,
+      "stronger_alid": "8:10947355:C:G",
+      "stronger_abs_z": 7.693359375,
+      "distance_bp": 1006619,
+      "distance_cm": 1.0243259221358763
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:10464371:A:G",
+      "abs_z": 5.669921875,
+      "stronger_alid": "8:10947355:C:G",
+      "stronger_abs_z": 7.693359375,
+      "distance_bp": 482984,
+      "distance_cm": 0.5135894923709081
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:11660206:C:G",
+      "abs_z": 5.552734375,
+      "stronger_alid": "8:10947355:C:G",
+      "stronger_abs_z": 7.693359375,
+      "distance_bp": 712851,
+      "distance_cm": 0.7011416513159574
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:17143624:C:G",
+      "abs_z": 6.28125,
+      "stronger_alid": "8:10947355:C:G",
+      "stronger_abs_z": 7.693359375,
+      "distance_bp": 6196269,
+      "distance_cm": 9.055586150923784
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:20778090:G:GA",
+      "abs_z": 5.65234375,
+      "stronger_alid": "8:28164252:G:T",
+      "stronger_abs_z": 8.09765625,
+      "distance_bp": 7386162,
+      "distance_cm": 7.4524808323519025
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:30996517:A:G",
+      "abs_z": 5.5146484375,
+      "stronger_alid": "8:25910465:G:T",
+      "stronger_abs_z": 5.880859375,
+      "distance_bp": 5086052,
+      "distance_cm": 4.723093654618211
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:80463222:C:T",
+      "abs_z": 7.1806640625,
+      "stronger_alid": "8:75788830:A:G",
+      "stronger_abs_z": 7.6416015625,
+      "distance_bp": 4674392,
+      "distance_cm": 1.932550776966977
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:84923351:A:T",
+      "abs_z": 6.361328125,
+      "stronger_alid": "8:83878634:A:G",
+      "stronger_abs_z": 6.7939453125,
+      "distance_bp": 1044717,
+      "distance_cm": 0.3876231496043516
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:86365089:A:G",
+      "abs_z": 6.0185546875,
+      "stronger_alid": "8:94721035:C:T",
+      "stronger_abs_z": 7.572265625,
+      "distance_bp": 8355946,
+      "distance_cm": 3.490021541820994
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:87524513:C:T",
+      "abs_z": 5.5283203125,
+      "stronger_alid": "8:83878634:A:G",
+      "stronger_abs_z": 6.7939453125,
+      "distance_bp": 3645879,
+      "distance_cm": 1.1865633346461095
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:91736719:A:G",
+      "abs_z": 5.6435546875,
+      "stronger_alid": "8:94721035:C:T",
+      "stronger_abs_z": 7.572265625,
+      "distance_bp": 2984316,
+      "distance_cm": 1.7686146886124874
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:100958185:C:T",
+      "abs_z": 6.3134765625,
+      "stronger_alid": "8:94721035:C:T",
+      "stronger_abs_z": 7.572265625,
+      "distance_bp": 6237150,
+      "distance_cm": 4.553940245108606
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:136896943:A:G",
+      "abs_z": 5.9140625,
+      "stronger_alid": "8:143228733:C:T",
+      "stronger_abs_z": 6.54296875,
+      "distance_bp": 6331790,
+      "distance_cm": 8.10996901232275
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:137900077:A:G",
+      "abs_z": 5.4775390625,
+      "stronger_alid": "8:143228733:C:T",
+      "stronger_abs_z": 6.54296875,
+      "distance_bp": 5328656,
+      "distance_cm": 7.360982418194922
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:20108399:G:T",
+      "abs_z": 5.845703125,
+      "stronger_alid": "9:27795270:C:T",
+      "stronger_abs_z": 8.525390625,
+      "distance_bp": 7686871,
+      "distance_cm": 8.096799368835583
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:27597893:C:T",
+      "abs_z": 5.96484375,
+      "stronger_alid": "9:28411951:G:T",
+      "stronger_abs_z": 10.5693359375,
+      "distance_bp": 814058,
+      "distance_cm": 1.290996278584494
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:31623116:A:G",
+      "abs_z": 5.962890625,
+      "stronger_alid": "9:28411951:G:T",
+      "stronger_abs_z": 10.5693359375,
+      "distance_bp": 3211165,
+      "distance_cm": 1.5985247533928657
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:34532754:G:T",
+      "abs_z": 7.431640625,
+      "stronger_alid": "9:28411951:G:T",
+      "stronger_abs_z": 10.5693359375,
+      "distance_bp": 6120803,
+      "distance_cm": 3.445508026522994
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:76706955:C:T",
+      "abs_z": 5.759765625,
+      "stronger_alid": "9:71280959:G:T",
+      "stronger_abs_z": 5.8759765625,
+      "distance_bp": 5425996,
+      "distance_cm": 4.995958050989472
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:93675283:C:T",
+      "abs_z": 6.689453125,
+      "stronger_alid": "9:99328828:A:G",
+      "stronger_abs_z": 8.51171875,
+      "distance_bp": 5653545,
+      "distance_cm": 3.536549346827101
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:98803363:C:T",
+      "abs_z": 6.4775390625,
+      "stronger_alid": "9:101556777:C:T",
+      "stronger_abs_z": 6.6044921875,
+      "distance_bp": 2753414,
+      "distance_cm": 1.4688368579440976
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:106307786:A:T",
+      "abs_z": 5.599609375,
+      "stronger_alid": "9:100344513:C:CGAA",
+      "stronger_abs_z": 6.9892578125,
+      "distance_bp": 5963273,
+      "distance_cm": 3.9495018444172274
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:115534793:C:T",
+      "abs_z": 5.6015625,
+      "stronger_alid": "9:117599140:C:G",
+      "stronger_abs_z": 8.212890625,
+      "distance_bp": 2064347,
+      "distance_cm": 1.55737712003733
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:118772451:C:T",
+      "abs_z": 7.0859375,
+      "stronger_alid": "9:126703046:A:G",
+      "stronger_abs_z": 9.05859375,
+      "distance_bp": 7930595,
+      "distance_cm": 5.271368604120568
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:121874252:A:G",
+      "abs_z": 6.4794921875,
+      "stronger_alid": "9:117599140:C:G",
+      "stronger_abs_z": 8.212890625,
+      "distance_bp": 4275112,
+      "distance_cm": 3.130982286402201
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:123887901:A:C",
+      "abs_z": 5.8544921875,
+      "stronger_alid": "9:117599140:C:G",
+      "stronger_abs_z": 8.212890625,
+      "distance_bp": 6288761,
+      "distance_cm": 4.494322932847751
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:125354538:A:G",
+      "abs_z": 6.42578125,
+      "stronger_alid": "9:117599140:C:G",
+      "stronger_abs_z": 8.212890625,
+      "distance_bp": 7755398,
+      "distance_cm": 5.324283296733427
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:128309443:A:T",
+      "abs_z": 6.78515625,
+      "stronger_alid": "9:126703046:A:G",
+      "stronger_abs_z": 9.05859375,
+      "distance_bp": 1606397,
+      "distance_cm": 0.9390436074880597
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:130911838:A:G",
+      "abs_z": 7.4365234375,
+      "stronger_alid": "9:126703046:A:G",
+      "stronger_abs_z": 9.05859375,
+      "distance_bp": 4208792,
+      "distance_cm": 4.071530016061871
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:25453175:A:G",
+      "abs_z": 5.455078125,
+      "stronger_alid": "10:18310656:A:C",
+      "stronger_abs_z": 6.3408203125,
+      "distance_bp": 7142519,
+      "distance_cm": 5.187659750528834
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:27963710:A:T",
+      "abs_z": 5.9267578125,
+      "stronger_alid": "10:18310656:A:C",
+      "stronger_abs_z": 6.3408203125,
+      "distance_bp": 9653054,
+      "distance_cm": 6.948708638954589
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:64758680:A:G",
+      "abs_z": 6.0615234375,
+      "stronger_alid": "10:66224941:A:G",
+      "stronger_abs_z": 6.12890625,
+      "distance_bp": 1466261,
+      "distance_cm": 0.6717418819901013
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:85606046:A:C",
+      "abs_z": 7.255859375,
+      "stronger_alid": "10:86351168:C:G",
+      "stronger_abs_z": 7.9326171875,
+      "distance_bp": 745122,
+      "distance_cm": 0.5550968252857444
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:101572027:A:G",
+      "abs_z": 6.00390625,
+      "stronger_alid": "10:92206799:C:T",
+      "stronger_abs_z": 6.8359375,
+      "distance_bp": 9365228,
+      "distance_cm": 6.330118643811375
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:102876519:C:T",
+      "abs_z": 5.986328125,
+      "stronger_alid": "10:105814328:C:T",
+      "stronger_abs_z": 6.271484375,
+      "distance_bp": 2937809,
+      "distance_cm": 1.1008600367673438
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:112998590:C:T",
+      "abs_z": 7.126953125,
+      "stronger_alid": "10:117017860:C:T",
+      "stronger_abs_z": 7.138671875,
+      "distance_bp": 4019270,
+      "distance_cm": 2.9747790058341366
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:133259891:A:G",
+      "abs_z": 5.5224609375,
+      "stronger_alid": "10:132201318:C:T",
+      "stronger_abs_z": 5.7392578125,
+      "distance_bp": 1058573,
+      "distance_cm": 1.3879042743321577
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:16566033:C:T",
+      "abs_z": 6.3203125,
+      "stronger_alid": "11:8632981:C:T",
+      "stronger_abs_z": 6.8798828125,
+      "distance_bp": 7933052,
+      "distance_cm": 7.527480781465066
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:28740888:G:GA",
+      "abs_z": 6.3095703125,
+      "stronger_alid": "11:27627033:A:T",
+      "stronger_abs_z": 14.0712890625,
+      "distance_bp": 1113855,
+      "distance_cm": 0.3184250692351469
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:30408784:C:T",
+      "abs_z": 6.4228515625,
+      "stronger_alid": "11:27627033:A:T",
+      "stronger_abs_z": 14.0712890625,
+      "distance_bp": 2781751,
+      "distance_cm": 0.9064474005335015
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:43924069:A:G",
+      "abs_z": 5.990234375,
+      "stronger_alid": "11:47410415:C:T",
+      "stronger_abs_z": 8.6982421875,
+      "distance_bp": 3486346,
+      "distance_cm": 2.6565886130730263
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:48920425:A:C",
+      "abs_z": 6.74609375,
+      "stronger_alid": "11:47410415:C:T",
+      "stronger_abs_z": 8.6982421875,
+      "distance_bp": 1510010,
+      "distance_cm": 0.2700544703739638
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:50073472:A:T",
+      "abs_z": 6.0078125,
+      "stronger_alid": "11:47410415:C:T",
+      "stronger_abs_z": 8.6982421875,
+      "distance_bp": 2663057,
+      "distance_cm": 0.43664521981820315
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:55545943:C:CTTT",
+      "abs_z": 6.3037109375,
+      "stronger_alid": "11:47410415:C:T",
+      "stronger_abs_z": 8.6982421875,
+      "distance_bp": 8135528,
+      "distance_cm": 2.5576208532043907
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:57141837:A:G",
+      "abs_z": 6.5283203125,
+      "stronger_alid": "11:47410415:C:T",
+      "stronger_abs_z": 8.6982421875,
+      "distance_bp": 9731422,
+      "distance_cm": 2.7670723892789653
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:64689243:A:AT",
+      "abs_z": 7.2666015625,
+      "stronger_alid": "11:58417863:A:G",
+      "stronger_abs_z": 7.4306640625,
+      "distance_bp": 6271380,
+      "distance_cm": 3.286954401870382
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:72763526:C:G",
+      "abs_z": 5.591796875,
+      "stronger_alid": "11:69492629:A:C",
+      "stronger_abs_z": 6.841796875,
+      "distance_bp": 3270897,
+      "distance_cm": 2.937685606106278
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:76304147:A:G",
+      "abs_z": 5.4541015625,
+      "stronger_alid": "11:84628088:A:G",
+      "stronger_abs_z": 5.99609375,
+      "distance_bp": 8323941,
+      "distance_cm": 6.275863894754856
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:78209817:A:C",
+      "abs_z": 5.6689453125,
+      "stronger_alid": "11:69492629:A:C",
+      "stronger_abs_z": 6.841796875,
+      "distance_bp": 8717188,
+      "distance_cm": 6.037720083131873
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:85730018:A:G",
+      "abs_z": 5.677734375,
+      "stronger_alid": "11:84628088:A:G",
+      "stronger_abs_z": 5.99609375,
+      "distance_bp": 1101930,
+      "distance_cm": 0.5136025102691377
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:113426463:C:T",
+      "abs_z": 6.4873046875,
+      "stronger_alid": "11:115223397:C:T",
+      "stronger_abs_z": 8.5791015625,
+      "distance_bp": 1796934,
+      "distance_cm": 1.7332205038629098
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:119059491:A:G",
+      "abs_z": 6.3115234375,
+      "stronger_alid": "11:115223397:C:T",
+      "stronger_abs_z": 8.5791015625,
+      "distance_bp": 3836094,
+      "distance_cm": 3.5685991265724226
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:119969733:C:T",
+      "abs_z": 6.2099609375,
+      "stronger_alid": "11:115223397:C:T",
+      "stronger_abs_z": 8.5791015625,
+      "distance_bp": 4746336,
+      "distance_cm": 4.3014851294128675
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:133754307:C:G",
+      "abs_z": 6.576171875,
+      "stronger_alid": "11:130996195:G:T",
+      "stronger_abs_z": 6.802734375,
+      "distance_bp": 2758112,
+      "distance_cm": 4.777034925290323
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:134732038:A:G",
+      "abs_z": 6.166015625,
+      "stronger_alid": "11:133348384:A:G",
+      "stronger_abs_z": 6.8173828125,
+      "distance_bp": 1383654,
+      "distance_cm": 2.00685902210229
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:19104350:C:T",
+      "abs_z": 6.109375,
+      "stronger_alid": "12:17935499:T:TA",
+      "stronger_abs_z": 6.5927734375,
+      "distance_bp": 1168851,
+      "distance_cm": 0.607541829311149
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:33218914:C:T",
+      "abs_z": 6.3466796875,
+      "stronger_alid": "12:39030560:A:G",
+      "stronger_abs_z": 6.615234375,
+      "distance_bp": 5811646,
+      "distance_cm": 1.1106274873534048
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:34679674:A:G",
+      "abs_z": 5.642578125,
+      "stronger_alid": "12:39030560:A:G",
+      "stronger_abs_z": 6.615234375,
+      "distance_bp": 4350886,
+      "distance_cm": 0.8704725344028788
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:41412603:C:G",
+      "abs_z": 5.7783203125,
+      "stronger_alid": "12:39030560:A:G",
+      "stronger_abs_z": 6.615234375,
+      "distance_bp": 2382043,
+      "distance_cm": 0.8647891002574966
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:57206198:A:C",
+      "abs_z": 8.2197265625,
+      "stronger_alid": "12:49869365:A:G",
+      "stronger_abs_z": 12.5048828125,
+      "distance_bp": 7336833,
+      "distance_cm": 4.719347304861309
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:58209465:G:T",
+      "abs_z": 7.2578125,
+      "stronger_alid": "12:49869365:A:G",
+      "stronger_abs_z": 12.5048828125,
+      "distance_bp": 8340100,
+      "distance_cm": 4.9751734781773465
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:28074931:C:G",
+      "abs_z": 6.8125,
+      "stronger_alid": "13:27446043:A:G",
+      "stronger_abs_z": 8.0009765625,
+      "distance_bp": 628888,
+      "distance_cm": 0.8723459826996951
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:35009995:A:G",
+      "abs_z": 5.5166015625,
+      "stronger_alid": "13:27446043:A:G",
+      "stronger_abs_z": 8.0009765625,
+      "distance_bp": 7563952,
+      "distance_cm": 8.153455650795594
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:35895744:C:CA",
+      "abs_z": 5.693359375,
+      "stronger_alid": "13:27446043:A:G",
+      "stronger_abs_z": 8.0009765625,
+      "distance_bp": 8449701,
+      "distance_cm": 8.892849705500575
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:49936063:A:C",
+      "abs_z": 5.826171875,
+      "stronger_alid": "13:53517624:C:T",
+      "stronger_abs_z": 10.236328125,
+      "distance_bp": 3581561,
+      "distance_cm": 2.1633101243819937
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:56215838:A:AGTGTGT",
+      "abs_z": 6.1923828125,
+      "stronger_alid": "13:53517624:C:T",
+      "stronger_abs_z": 10.236328125,
+      "distance_bp": 2698214,
+      "distance_cm": 0.7662697315205875
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:58873266:A:ATCT",
+      "abs_z": 7.7421875,
+      "stronger_alid": "13:57724277:A:G",
+      "stronger_abs_z": 8.7880859375,
+      "distance_bp": 1148989,
+      "distance_cm": 0.2940929351525128
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:59658176:C:T",
+      "abs_z": 5.705078125,
+      "stronger_alid": "13:53517624:C:T",
+      "stronger_abs_z": 10.236328125,
+      "distance_bp": 6140552,
+      "distance_cm": 2.1428422610430715
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:68463485:C:CAGATAGAT",
+      "abs_z": 5.638671875,
+      "stronger_alid": "13:67013182:C:T",
+      "stronger_abs_z": 7.2421875,
+      "distance_bp": 1450303,
+      "distance_cm": 0.6276180533861933
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:71798884:C:T",
+      "abs_z": 6.3857421875,
+      "stronger_alid": "13:67013182:C:T",
+      "stronger_abs_z": 7.2421875,
+      "distance_bp": 4785702,
+      "distance_cm": 2.8189037218521236
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:96294969:A:T",
+      "abs_z": 6.0146484375,
+      "stronger_alid": "13:98470944:C:T",
+      "stronger_abs_z": 6.083984375,
+      "distance_bp": 2175975,
+      "distance_cm": 2.1203813244968828
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:23291885:C:T",
+      "abs_z": 5.779296875,
+      "stronger_alid": "14:29274555:A:T",
+      "stronger_abs_z": 10.6748046875,
+      "distance_bp": 5982670,
+      "distance_cm": 5.902935230642738
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:25479661:C:T",
+      "abs_z": 9.5947265625,
+      "stronger_alid": "14:32829525:C:CA",
+      "stronger_abs_z": 11.40625,
+      "distance_bp": 7349864,
+      "distance_cm": 6.559084101320996
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:27169741:A:G",
+      "abs_z": 6.2001953125,
+      "stronger_alid": "14:29274555:A:T",
+      "stronger_abs_z": 10.6748046875,
+      "distance_bp": 2104814,
+      "distance_cm": 1.0723258673402842
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:40761820:A:G",
+      "abs_z": 5.6943359375,
+      "stronger_alid": "14:32829525:C:CA",
+      "stronger_abs_z": 11.40625,
+      "distance_bp": 7932295,
+      "distance_cm": 7.81134241590259
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:71990320:A:T",
+      "abs_z": 5.5087890625,
+      "stronger_alid": "14:73661240:A:G",
+      "stronger_abs_z": 7.900390625,
+      "distance_bp": 1670920,
+      "distance_cm": 1.3291849262097841
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:72631653:C:G",
+      "abs_z": 5.6171875,
+      "stronger_alid": "14:79457324:A:G",
+      "stronger_abs_z": 10.1416015625,
+      "distance_bp": 6825671,
+      "distance_cm": 5.33912670859592
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:81715523:C:G",
+      "abs_z": 5.806640625,
+      "stronger_alid": "14:79457324:A:G",
+      "stronger_abs_z": 10.1416015625,
+      "distance_bp": 2258199,
+      "distance_cm": 1.3080014563867763
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:92384185:C:T",
+      "abs_z": 6.8720703125,
+      "stronger_alid": "14:93316254:C:CTTTT",
+      "stronger_abs_z": 7.146484375,
+      "distance_bp": 932069,
+      "distance_cm": 1.220760456673787
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:100777824:A:T",
+      "abs_z": 5.50390625,
+      "stronger_alid": "14:102895680:A:C",
+      "stronger_abs_z": 7.6328125,
+      "distance_bp": 2117856,
+      "distance_cm": 2.7425821961048484
+     },
+     {
+      "chromosome": "15",
+      "alid": "15:41756980:G:GAT",
+      "abs_z": 6.046875,
+      "stronger_alid": "15:46199750:G:T",
+      "stronger_abs_z": 6.34765625,
+      "distance_bp": 4442770,
+      "distance_cm": 1.4365844272505974
+     },
+     {
+      "chromosome": "15",
+      "alid": "15:43518224:C:G",
+      "abs_z": 5.4892578125,
+      "stronger_alid": "15:46199750:G:T",
+      "stronger_abs_z": 6.34765625,
+      "distance_bp": 2681526,
+      "distance_cm": 0.7348237612076076
+     },
+     {
+      "chromosome": "15",
+      "alid": "15:62017510:A:C",
+      "abs_z": 5.75390625,
+      "stronger_alid": "15:67793217:A:G",
+      "stronger_abs_z": 9.7900390625,
+      "distance_bp": 5775707,
+      "distance_cm": 4.051741940286526
+     },
+     {
+      "chromosome": "15",
+      "alid": "15:63808124:C:CA",
+      "abs_z": 5.6591796875,
+      "stronger_alid": "15:65605796:A:T",
+      "stronger_abs_z": 5.79296875,
+      "distance_bp": 1797672,
+      "distance_cm": 0.6925094779319778
+     },
+     {
+      "chromosome": "15",
+      "alid": "15:72788390:C:T",
+      "abs_z": 5.9228515625,
+      "stronger_alid": "15:67793217:A:G",
+      "stronger_abs_z": 9.7900390625,
+      "distance_bp": 4995173,
+      "distance_cm": 4.815321024342097
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:2560545:C:T",
+      "abs_z": 5.4658203125,
+      "stronger_alid": "16:283017:G:T",
+      "stronger_abs_z": 10.556640625,
+      "distance_bp": 2277528,
+      "distance_cm": 3.5066810656237957
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:6449401:C:T",
+      "abs_z": 5.72265625,
+      "stronger_alid": "16:3964281:C:G",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 2485120,
+      "distance_cm": 5.037300259188554
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:8233438:A:G",
+      "abs_z": 5.4658203125,
+      "stronger_alid": "16:3964281:C:G",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 4269157,
+      "distance_cm": 8.767923176698048
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:23206159:A:AG",
+      "abs_z": 5.84375,
+      "stronger_alid": "16:30114519:C:G",
+      "stronger_abs_z": 10.5673828125,
+      "distance_bp": 6908360,
+      "distance_cm": 7.429510691453945
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:23903258:A:AGTGT",
+      "abs_z": 5.9716796875,
+      "stronger_alid": "16:28806716:C:T",
+      "stronger_abs_z": 13.8564453125,
+      "distance_bp": 4903458,
+      "distance_cm": 6.227821126386548
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:31142825:A:G",
+      "abs_z": 6.2177734375,
+      "stronger_alid": "16:28806716:C:T",
+      "stronger_abs_z": 13.8564453125,
+      "distance_bp": 2336109,
+      "distance_cm": 0.7442183298712166
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:49014033:G:T",
+      "abs_z": 6.8076171875,
+      "stronger_alid": "16:53768582:C:T",
+      "stronger_abs_z": 38.3123893737793,
+      "distance_bp": 4754549,
+      "distance_cm": 4.453864925149404
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:52186834:C:T",
+      "abs_z": 6.1328125,
+      "stronger_alid": "16:53768582:C:T",
+      "stronger_abs_z": 38.3123893737793,
+      "distance_bp": 1581748,
+      "distance_cm": 1.3515373420722412
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:53013310:A:G",
+      "abs_z": 7.6416015625,
+      "stronger_alid": "16:53768582:C:T",
+      "stronger_abs_z": 38.3123893737793,
+      "distance_bp": 755272,
+      "distance_cm": 0.5498775505820959
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:54210842:C:T",
+      "abs_z": 8.0947265625,
+      "stronger_alid": "16:53634741:C:T",
+      "stronger_abs_z": 11.103515625,
+      "distance_bp": 576101,
+      "distance_cm": 0.8354720572856635
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:54930715:C:G",
+      "abs_z": 6.09765625,
+      "stronger_alid": "16:53768582:C:T",
+      "stronger_abs_z": 38.3123893737793,
+      "distance_bp": 1162133,
+      "distance_cm": 2.1429255338127646
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:55427501:C:T",
+      "abs_z": 6.810546875,
+      "stronger_alid": "16:53012222:C:T",
+      "stronger_abs_z": 7.220703125,
+      "distance_bp": 2415279,
+      "distance_cm": 3.528846167512768
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:58630161:G:T",
+      "abs_z": 6.4912109375,
+      "stronger_alid": "16:53634741:C:T",
+      "stronger_abs_z": 11.103515625,
+      "distance_bp": 4995420,
+      "distance_cm": 6.828637188667912
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:68397853:C:T",
+      "abs_z": 5.6142578125,
+      "stronger_alid": "16:69547451:C:T",
+      "stronger_abs_z": 6.4345703125,
+      "distance_bp": 1149598,
+      "distance_cm": 0.5201913036273851
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:73340510:C:T",
+      "abs_z": 5.6220703125,
+      "stronger_alid": "16:81553782:G:GA",
+      "stronger_abs_z": 5.9853515625,
+      "distance_bp": 8213272,
+      "distance_cm": 12.228331449475178
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:73699511:C:T",
+      "abs_z": 5.8359375,
+      "stronger_alid": "16:69547451:C:T",
+      "stronger_abs_z": 6.4345703125,
+      "distance_bp": 4152060,
+      "distance_cm": 2.406300432429134
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:81273345:C:G",
+      "abs_z": 5.806640625,
+      "stronger_alid": "16:72116695:C:CTT",
+      "stronger_abs_z": 8.60546875,
+      "distance_bp": 9156650,
+      "distance_cm": 12.69193278096887
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:89586388:C:G",
+      "abs_z": 5.4892578125,
+      "stronger_alid": "16:81553782:G:GA",
+      "stronger_abs_z": 5.9853515625,
+      "distance_bp": 8032606,
+      "distance_cm": 18.891920703750273
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:7886457:C:T",
+      "abs_z": 5.64453125,
+      "stronger_alid": "17:5379957:A:G",
+      "stronger_abs_z": 7.396484375,
+      "distance_bp": 2506500,
+      "distance_cm": 4.006855301636181
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:29635548:G:GCGC",
+      "abs_z": 6.146484375,
+      "stronger_alid": "17:31001791:C:T",
+      "stronger_abs_z": 6.375,
+      "distance_bp": 1366243,
+      "distance_cm": 0.16379663225619367
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:45991126:A:G",
+      "abs_z": 7.3349609375,
+      "stronger_alid": "17:36513312:A:G",
+      "stronger_abs_z": 8.7900390625,
+      "distance_bp": 9477814,
+      "distance_cm": 5.457812743231713
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:74999317:C:G",
+      "abs_z": 5.5361328125,
+      "stronger_alid": "17:80638234:C:T",
+      "stronger_abs_z": 7.6650390625,
+      "distance_bp": 5638917,
+      "distance_cm": 10.056888792180288
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:78831798:A:G",
+      "abs_z": 6.076171875,
+      "stronger_alid": "17:80638234:C:T",
+      "stronger_abs_z": 7.6650390625,
+      "distance_bp": 1806436,
+      "distance_cm": 4.337096716251523
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:80783826:A:G",
+      "abs_z": 7.8359375,
+      "stronger_alid": "17:81110567:A:G",
+      "stronger_abs_z": 8.2451171875,
+      "distance_bp": 326741,
+      "distance_cm": 0.579866576395176
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:871950:C:T",
+      "abs_z": 6.4130859375,
+      "stronger_alid": "18:1839338:C:T",
+      "stronger_abs_z": 8.650390625,
+      "distance_bp": 967388,
+      "distance_cm": 1.16697258291086
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:32711995:A:G",
+      "abs_z": 5.5419921875,
+      "stronger_alid": "18:25430848:C:CA",
+      "stronger_abs_z": 6.517578125,
+      "distance_bp": 7281147,
+      "distance_cm": 4.694641943642722
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:59209610:C:T",
+      "abs_z": 6.677734375,
+      "stronger_alid": "18:60181298:C:T",
+      "stronger_abs_z": 19.0302734375,
+      "distance_bp": 971688,
+      "distance_cm": 1.5866724155461753
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:78027875:C:T",
+      "abs_z": 5.80859375,
+      "stronger_alid": "18:78992263:A:C",
+      "stronger_abs_z": 6.033203125,
+      "distance_bp": 964388,
+      "distance_cm": 1.7880551276198275
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:12765464:A:C",
+      "abs_z": 5.4833984375,
+      "stronger_alid": "19:18723704:C:T",
+      "stronger_abs_z": 8.177734375,
+      "distance_bp": 5958240,
+      "distance_cm": 8.069111270909193
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:18113919:C:T",
+      "abs_z": 6.0634765625,
+      "stronger_alid": "19:18133419:G:T",
+      "stronger_abs_z": 7.1083984375,
+      "distance_bp": 19500,
+      "distance_cm": 0.0054452959187045735
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:19699241:A:G",
+      "abs_z": 6.080078125,
+      "stronger_alid": "19:18723704:C:T",
+      "stronger_abs_z": 8.177734375,
+      "distance_bp": 975537,
+      "distance_cm": 0.6184429027277005
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:30495172:C:G",
+      "abs_z": 6.572265625,
+      "stronger_alid": "19:33808946:A:G",
+      "stronger_abs_z": 8.2568359375,
+      "distance_bp": 3313774,
+      "distance_cm": 3.100581887574414
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:44908684:C:T",
+      "abs_z": 8.1103515625,
+      "stronger_alid": "19:47065746:A:G",
+      "stronger_abs_z": 8.716796875,
+      "distance_bp": 2157062,
+      "distance_cm": 2.433400088439214
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:49860328:C:CAG",
+      "abs_z": 7.82421875,
+      "stronger_alid": "19:47065746:A:G",
+      "stronger_abs_z": 8.716796875,
+      "distance_bp": 2794582,
+      "distance_cm": 3.273523443455005
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:50639416:A:ATTT",
+      "abs_z": 5.7470703125,
+      "stronger_alid": "19:45677156:G:T",
+      "stronger_abs_z": 8.6376953125,
+      "distance_bp": 4962260,
+      "distance_cm": 5.924272529079914
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:51312271:C:G",
+      "abs_z": 6.2958984375,
+      "stronger_alid": "19:47065746:A:G",
+      "stronger_abs_z": 8.716796875,
+      "distance_bp": 4246525,
+      "distance_cm": 6.6310054468319635
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:9848180:C:T",
+      "abs_z": 5.7412109375,
+      "stronger_alid": "20:15830031:C:T",
+      "stronger_abs_z": 6.48828125,
+      "distance_bp": 5981851,
+      "distance_cm": 6.6453146217270955
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:15294892:A:G",
+      "abs_z": 6.091796875,
+      "stronger_alid": "20:15830031:C:T",
+      "stronger_abs_z": 6.48828125,
+      "distance_bp": 535139,
+      "distance_cm": 1.16502847219677
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:15826175:C:T",
+      "abs_z": 6.9873046875,
+      "stronger_alid": "20:25211286:G:T",
+      "stronger_abs_z": 7.2587890625,
+      "distance_bp": 9385111,
+      "distance_cm": 8.221145659490702
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:17215963:C:T",
+      "abs_z": 6.5478515625,
+      "stronger_alid": "20:25211286:G:T",
+      "stronger_abs_z": 7.2587890625,
+      "distance_bp": 7995323,
+      "distance_cm": 6.527135192117502
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:25210141:C:T",
+      "abs_z": 7.2587890625,
+      "stronger_alid": "20:34900276:C:T",
+      "stronger_abs_z": 7.8203125,
+      "distance_bp": 9690135,
+      "distance_cm": 2.6780460106046036
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:30733834:C:T",
+      "abs_z": 6.3203125,
+      "stronger_alid": "20:34900276:C:T",
+      "stronger_abs_z": 7.8203125,
+      "distance_bp": 4166442,
+      "distance_cm": 1.3398861776955755
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:32640856:C:G",
+      "abs_z": 6.0244140625,
+      "stronger_alid": "20:25211286:G:T",
+      "stronger_abs_z": 7.2587890625,
+      "distance_bp": 7429570,
+      "distance_cm": 1.836989307281435
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:55809160:A:C",
+      "abs_z": 6.0302734375,
+      "stronger_alid": "20:52403172:G:T",
+      "stronger_abs_z": 8.908203125,
+      "distance_bp": 3405988,
+      "distance_cm": 4.467461565472455
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:58580383:A:G",
+      "abs_z": 7.7919921875,
+      "stronger_alid": "20:52403172:G:T",
+      "stronger_abs_z": 8.908203125,
+      "distance_bp": 6177211,
+      "distance_cm": 9.6541235184243
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:59440114:A:G",
+      "abs_z": 6.1474609375,
+      "stronger_alid": "20:59222235:C:T",
+      "stronger_abs_z": 8.1953125,
+      "distance_bp": 217879,
+      "distance_cm": 0.5451311867565778
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:63745805:C:G",
+      "abs_z": 5.498046875,
+      "stronger_alid": "20:58963120:A:G",
+      "stronger_abs_z": 5.880859375,
+      "distance_bp": 4782685,
+      "distance_cm": 9.030553053867514
+     },
+     {
+      "chromosome": "21",
+      "alid": "21:37482611:A:G",
+      "abs_z": 5.705078125,
+      "stronger_alid": "21:41272041:C:T",
+      "stronger_abs_z": 5.8154296875,
+      "distance_bp": 3789430,
+      "distance_cm": 5.822216283953701
+     },
+     {
+      "chromosome": "21",
+      "alid": "21:38938666:G:GT",
+      "abs_z": 8.46875,
+      "stronger_alid": "21:45210975:A:T",
+      "stronger_abs_z": 8.701171875,
+      "distance_bp": 6272309,
+      "distance_cm": 11.054276109785924
+     },
+     {
+      "chromosome": "21",
+      "alid": "21:41258677:A:AT",
+      "abs_z": 6.443359375,
+      "stronger_alid": "21:45210975:A:T",
+      "stronger_abs_z": 8.701171875,
+      "distance_bp": 3952298,
+      "distance_cm": 6.975267794704003
+     },
+     {
+      "chromosome": "22",
+      "alid": "22:37815947:A:G",
+      "abs_z": 6.0888671875,
+      "stronger_alid": "22:37202360:C:G",
+      "stronger_abs_z": 6.333984375,
+      "distance_bp": 613587,
+      "distance_cm": 0.9991360953182067
+     },
+     {
+      "chromosome": "22",
+      "alid": "22:39091714:C:T",
+      "abs_z": 5.6279296875,
+      "stronger_alid": "22:41488950:A:G",
+      "stronger_abs_z": 7.552734375,
+      "distance_bp": 2397236,
+      "distance_cm": 1.1248282132521794
+     },
+     {
+      "chromosome": "22",
+      "alid": "22:40283195:C:T",
+      "abs_z": 6.923828125,
+      "stronger_alid": "22:41488950:A:G",
+      "stronger_abs_z": 7.552734375,
+      "distance_bp": 1205755,
+      "distance_cm": 0.2334986887260797
+     },
+     {
+      "chromosome": "22",
+      "alid": "22:43941309:C:T",
+      "abs_z": 5.86328125,
+      "stronger_alid": "22:37202360:C:G",
+      "stronger_abs_z": 6.333984375,
+      "distance_bp": 6738949,
+      "distance_cm": 4.980194177089238
+     }
+    ],
+    "lost_signal_pairs": [
+     {
+      "chromosome": "1",
+      "alid": "1:2572795:A:C",
+      "abs_z": 5.89453125,
+      "stronger_alid": "1:2635982:C:T",
+      "stronger_abs_z": 6.484375,
+      "distance_bp": 63187,
+      "distance_cm": 0.009985526809367151
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:74546953:A:G",
+      "abs_z": 9.2158203125,
+      "stronger_alid": "1:74527379:C:T",
+      "stronger_abs_z": 9.64453125,
+      "distance_bp": 19574,
+      "distance_cm": 0.003990336710330666
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:77501822:A:T",
+      "abs_z": 7.484375,
+      "stronger_alid": "1:77979080:C:CGGCCG",
+      "stronger_abs_z": 8.884765625,
+      "distance_bp": 477258,
+      "distance_cm": 0.10129638343207148
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:95494658:C:T",
+      "abs_z": 5.7861328125,
+      "stronger_alid": "1:96426660:C:T",
+      "stronger_abs_z": 6.9794921875,
+      "distance_bp": 932002,
+      "distance_cm": 0.4076523818379201
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:107415735:G:T",
+      "abs_z": 7.94140625,
+      "stronger_alid": "1:107419706:A:G",
+      "stronger_abs_z": 8.0322265625,
+      "distance_bp": 3971,
+      "distance_cm": 0.000926471812462637
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:107750136:C:T",
+      "abs_z": 5.7060546875,
+      "stronger_alid": "1:107419706:A:G",
+      "stronger_abs_z": 8.0322265625,
+      "distance_bp": 330430,
+      "distance_cm": 0.315110986129838
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:110463071:A:ACTGTGCACTCTGCAGT",
+      "abs_z": 6.001953125,
+      "stronger_alid": "1:110449500:C:T",
+      "stronger_abs_z": 6.0390625,
+      "distance_bp": 13571,
+      "distance_cm": 0.037024408764821715
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:154814660:C:T",
+      "abs_z": 5.8837890625,
+      "stronger_alid": "1:155013615:C:T",
+      "stronger_abs_z": 8.1982421875,
+      "distance_bp": 198955,
+      "distance_cm": 0.17568843091635244
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:155002143:A:G",
+      "abs_z": 6.7705078125,
+      "stronger_alid": "1:155013615:C:T",
+      "stronger_abs_z": 8.1982421875,
+      "distance_bp": 11472,
+      "distance_cm": 0.009741307037955949
+     },
+     {
+      "chromosome": "1",
+      "alid": "1:156321235:C:T",
+      "abs_z": 7.3828125,
+      "stronger_alid": "1:156041653:C:T",
+      "stronger_abs_z": 10.2451171875,
+      "distance_bp": 279582,
+      "distance_cm": 0.17943810818630368
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:422144:C:T",
+      "abs_z": 13.0751953125,
+      "stronger_alid": "2:625347:C:T",
+      "stronger_abs_z": 21.7822265625,
+      "distance_bp": 203203,
+      "distance_cm": 0.20370283134859618
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:1104776:C:T",
+      "abs_z": 5.71875,
+      "stronger_alid": "2:625347:C:T",
+      "stronger_abs_z": 21.7822265625,
+      "distance_bp": 479429,
+      "distance_cm": 0.38076373757201887
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:2193741:G:T",
+      "abs_z": 5.5625,
+      "stronger_alid": "2:1947564:G:T",
+      "stronger_abs_z": 6.494140625,
+      "distance_bp": 246177,
+      "distance_cm": 0.12479205841959162
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:6010646:A:G",
+      "abs_z": 8.4267578125,
+      "stronger_alid": "2:6021755:G:T",
+      "stronger_abs_z": 8.759765625,
+      "distance_bp": 11109,
+      "distance_cm": 0.003295987667483402
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:24540940:A:G",
+      "abs_z": 6.8408203125,
+      "stronger_alid": "2:24888093:A:G",
+      "stronger_abs_z": 12.6708984375,
+      "distance_bp": 347153,
+      "distance_cm": 0.09412967073416922
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:26681997:A:G",
+      "abs_z": 6.1455078125,
+      "stronger_alid": "2:26680253:C:CTG",
+      "stronger_abs_z": 6.865234375,
+      "distance_bp": 1744,
+      "distance_cm": 0.0016132462145534987
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:44512424:A:T",
+      "abs_z": 5.5322265625,
+      "stronger_alid": "2:44887913:A:G",
+      "stronger_abs_z": 5.5751953125,
+      "distance_bp": 375489,
+      "distance_cm": 0.23807783735652777
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:44899154:C:G",
+      "abs_z": 5.494140625,
+      "stronger_alid": "2:44887913:A:G",
+      "stronger_abs_z": 5.5751953125,
+      "distance_bp": 11241,
+      "distance_cm": 0.013133576877123687
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:46503351:A:G",
+      "abs_z": 5.5166015625,
+      "stronger_alid": "2:46818182:A:G",
+      "stronger_abs_z": 6.376953125,
+      "distance_bp": 314831,
+      "distance_cm": 0.22563485029083097
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:56060828:A:G",
+      "abs_z": 6.5458984375,
+      "stronger_alid": "2:56518805:A:G",
+      "stronger_abs_z": 6.63671875,
+      "distance_bp": 457977,
+      "distance_cm": 0.43090226096832396
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:59073799:A:G",
+      "abs_z": 9.35546875,
+      "stronger_alid": "2:58742862:C:G",
+      "stronger_abs_z": 10.306640625,
+      "distance_bp": 330937,
+      "distance_cm": 0.3983143299478513
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:60688761:A:C",
+      "abs_z": 6.1435546875,
+      "stronger_alid": "2:60672327:C:T",
+      "stronger_abs_z": 6.2451171875,
+      "distance_bp": 16434,
+      "distance_cm": 0.025404955792140527
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:76944171:C:T",
+      "abs_z": 5.6318359375,
+      "stronger_alid": "2:76964999:G:GATC",
+      "stronger_abs_z": 5.7197265625,
+      "distance_bp": 20828,
+      "distance_cm": 0.003977124133697885
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:96385839:A:AG",
+      "abs_z": 5.8681640625,
+      "stronger_alid": "2:95507869:T:TA",
+      "stronger_abs_z": 6.2138671875,
+      "distance_bp": 877970,
+      "distance_cm": 0.1351062545387549
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:104137020:C:T",
+      "abs_z": 5.482421875,
+      "stronger_alid": "2:104142661:A:C",
+      "stronger_abs_z": 5.900390625,
+      "distance_bp": 5641,
+      "distance_cm": 0.0007547893271322437
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:140366311:A:G",
+      "abs_z": 5.4755859375,
+      "stronger_alid": "2:140482645:A:G",
+      "stronger_abs_z": 5.7529296875,
+      "distance_bp": 116334,
+      "distance_cm": 0.033697422060257054
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:160519315:A:AT",
+      "abs_z": 6.712890625,
+      "stronger_alid": "2:160524377:A:G",
+      "stronger_abs_z": 6.779296875,
+      "distance_bp": 5062,
+      "distance_cm": 0.0010418986654343598
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:180019768:A:G",
+      "abs_z": 5.8798828125,
+      "stronger_alid": "2:180637211:C:T",
+      "stronger_abs_z": 8.0654296875,
+      "distance_bp": 617443,
+      "distance_cm": 0.2754608608047704
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:199228066:A:G",
+      "abs_z": 6.162109375,
+      "stronger_alid": "2:199142134:C:T",
+      "stronger_abs_z": 6.3408203125,
+      "distance_bp": 85932,
+      "distance_cm": 0.006607600778096412
+     },
+     {
+      "chromosome": "2",
+      "alid": "2:207364440:A:G",
+      "abs_z": 6.6982421875,
+      "stronger_alid": "2:207363632:A:C",
+      "stronger_abs_z": 6.869140625,
+      "distance_bp": 808,
+      "distance_cm": 0.0007647020018737294
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:18229567:A:C",
+      "abs_z": 5.5341796875,
+      "stronger_alid": "3:18176279:C:T",
+      "stronger_abs_z": 6.138671875,
+      "distance_bp": 53288,
+      "distance_cm": 0.007180024431800547
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:20466416:C:G",
+      "abs_z": 6.12890625,
+      "stronger_alid": "3:20589806:A:G",
+      "stronger_abs_z": 6.7626953125,
+      "distance_bp": 123390,
+      "distance_cm": 0.058477621523273626
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:35012772:A:G",
+      "abs_z": 7.1015625,
+      "stronger_alid": "3:35795247:G:T",
+      "stronger_abs_z": 7.4736328125,
+      "distance_bp": 782475,
+      "distance_cm": 0.2898128534118456
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:42451795:A:G",
+      "abs_z": 5.7490234375,
+      "stronger_alid": "3:42829066:C:G",
+      "stronger_abs_z": 7.45703125,
+      "distance_bp": 377271,
+      "distance_cm": 0.1708530900943117
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:42990449:A:G",
+      "abs_z": 5.5703125,
+      "stronger_alid": "3:42829066:C:G",
+      "stronger_abs_z": 7.45703125,
+      "distance_bp": 161383,
+      "distance_cm": 0.04541115450467714
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:44878632:A:G",
+      "abs_z": 5.5869140625,
+      "stronger_alid": "3:44842479:A:G",
+      "stronger_abs_z": 6.001953125,
+      "distance_bp": 36153,
+      "distance_cm": 0.008737112931932245
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:59853509:C:G",
+      "abs_z": 5.9912109375,
+      "stronger_alid": "3:59871341:A:G",
+      "stronger_abs_z": 6.064453125,
+      "distance_bp": 17832,
+      "distance_cm": 0.006228178208530721
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:61172717:T:TCTAAAATTCACTGACACTGGAGCTTAAATCCACGTGCCTAGAATGCTC",
+      "abs_z": 6.0517578125,
+      "stronger_alid": "3:61264086:C:T",
+      "stronger_abs_z": 6.958984375,
+      "distance_bp": 91369,
+      "distance_cm": 0.034110933752060646
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:62702071:A:T",
+      "abs_z": 7.01171875,
+      "stronger_alid": "3:62496961:C:T",
+      "stronger_abs_z": 7.6162109375,
+      "distance_bp": 205110,
+      "distance_cm": 0.4247164192405606
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:85884891:A:AT",
+      "abs_z": 5.697265625,
+      "stronger_alid": "3:85741335:G:GA",
+      "stronger_abs_z": 9.3779296875,
+      "distance_bp": 143556,
+      "distance_cm": 0.016066148749544595
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:102469960:A:G",
+      "abs_z": 5.78125,
+      "stronger_alid": "3:102447658:A:T",
+      "stronger_abs_z": 6.2001953125,
+      "distance_bp": 22302,
+      "distance_cm": 0.0039515903909830286
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:137837456:A:G",
+      "abs_z": 6.6689453125,
+      "stronger_alid": "3:137848439:C:T",
+      "stronger_abs_z": 6.841796875,
+      "distance_bp": 10983,
+      "distance_cm": 0.003052752271557324
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:157966624:C:T",
+      "abs_z": 5.5869140625,
+      "stronger_alid": "3:158413645:G:GA",
+      "stronger_abs_z": 5.6103515625,
+      "distance_bp": 447021,
+      "distance_cm": 0.03493633457657097
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:170810673:A:T",
+      "abs_z": 5.5634765625,
+      "stronger_alid": "3:171016649:A:G",
+      "stronger_abs_z": 5.9150390625,
+      "distance_bp": 205976,
+      "distance_cm": 0.08225193297876388
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:183156364:A:AAACAAC",
+      "abs_z": 5.8388671875,
+      "stronger_alid": "3:183153333:A:C",
+      "stronger_abs_z": 6.12109375,
+      "distance_bp": 3031,
+      "distance_cm": 0.0019792588742149064
+     },
+     {
+      "chromosome": "3",
+      "alid": "3:186031923:A:G",
+      "abs_z": 6.203125,
+      "stronger_alid": "3:186116501:C:T",
+      "stronger_abs_z": 10.8896484375,
+      "distance_bp": 84578,
+      "distance_cm": 0.01663763089987924
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:38347193:C:T",
+      "abs_z": 5.5302734375,
+      "stronger_alid": "4:38675390:T:TC",
+      "stronger_abs_z": 5.908203125,
+      "distance_bp": 328197,
+      "distance_cm": 0.2223717239393892
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:44953471:A:G",
+      "abs_z": 6.9248046875,
+      "stronger_alid": "4:45163633:A:ATTC",
+      "stronger_abs_z": 16.1796875,
+      "distance_bp": 210162,
+      "distance_cm": 0.09302322987461764
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:45724285:C:T",
+      "abs_z": 9.17578125,
+      "stronger_alid": "4:45163633:A:ATTC",
+      "stronger_abs_z": 16.1796875,
+      "distance_bp": 560652,
+      "distance_cm": 0.13786797228885916
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:46957281:C:CA",
+      "abs_z": 6.1865234375,
+      "stronger_alid": "4:47320365:A:G",
+      "stronger_abs_z": 6.76953125,
+      "distance_bp": 363084,
+      "distance_cm": 0.1368566845884871
+     },
+     {
+      "chromosome": "4",
+      "alid": "4:65034446:C:G",
+      "abs_z": 5.6787109375,
+      "stronger_alid": "4:65046655:C:T",
+      "stronger_abs_z": 5.6884765625,
+      "distance_bp": 12209,
+      "distance_cm": 0.009172383726564703
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:44132041:C:T",
+      "abs_z": 6.2294921875,
+      "stronger_alid": "5:43161249:A:G",
+      "stronger_abs_z": 9.1416015625,
+      "distance_bp": 970792,
+      "distance_cm": 0.1634919836237927
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:61573776:A:G",
+      "abs_z": 5.6015625,
+      "stronger_alid": "5:61531129:A:G",
+      "stronger_abs_z": 5.6669921875,
+      "distance_bp": 42647,
+      "distance_cm": 0.05396431928761558
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:86900096:A:G",
+      "abs_z": 6.46875,
+      "stronger_alid": "5:86988502:A:G",
+      "stronger_abs_z": 6.5869140625,
+      "distance_bp": 88406,
+      "distance_cm": 0.020291847808920238
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:90565166:A:G",
+      "abs_z": 6.0478515625,
+      "stronger_alid": "5:89573320:A:G",
+      "stronger_abs_z": 6.4287109375,
+      "distance_bp": 991846,
+      "distance_cm": 0.495257666528488
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:92304050:C:T",
+      "abs_z": 5.7529296875,
+      "stronger_alid": "5:93174618:A:G",
+      "stronger_abs_z": 8.12109375,
+      "distance_bp": 870568,
+      "distance_cm": 0.326447625388667
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:96501629:A:G",
+      "abs_z": 7.2626953125,
+      "stronger_alid": "5:96513883:C:T",
+      "stronger_abs_z": 8.60546875,
+      "distance_bp": 12254,
+      "distance_cm": 0.003320730902302671
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:104379256:C:T",
+      "abs_z": 5.7216796875,
+      "stronger_alid": "5:104461542:A:G",
+      "stronger_abs_z": 5.9638671875,
+      "distance_bp": 82286,
+      "distance_cm": 0.020434784463375877
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:107483705:C:T",
+      "abs_z": 5.6669921875,
+      "stronger_alid": "5:107482386:C:G",
+      "stronger_abs_z": 5.8515625,
+      "distance_bp": 1319,
+      "distance_cm": 0.001190527134497188
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:143592780:A:G",
+      "abs_z": 5.4619140625,
+      "stronger_alid": "5:143500149:C:CT",
+      "stronger_abs_z": 5.9990234375,
+      "distance_bp": 92631,
+      "distance_cm": 0.03823793235015671
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:166408345:A:G",
+      "abs_z": 6.009765625,
+      "stronger_alid": "5:166682011:A:G",
+      "stronger_abs_z": 8.140625,
+      "distance_bp": 273666,
+      "distance_cm": 0.30783944592366197
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:168148623:C:T",
+      "abs_z": 5.7919921875,
+      "stronger_alid": "5:168156635:A:G",
+      "stronger_abs_z": 5.984375,
+      "distance_bp": 8012,
+      "distance_cm": 0.005134512988632878
+     },
+     {
+      "chromosome": "5",
+      "alid": "5:171313724:C:G",
+      "abs_z": 5.8115234375,
+      "stronger_alid": "5:171311832:A:G",
+      "stronger_abs_z": 7.00390625,
+      "distance_bp": 1892,
+      "distance_cm": 0.0003397594407630322
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:32712345:A:G",
+      "abs_z": 5.6806640625,
+      "stronger_alid": "6:32706117:C:T",
+      "stronger_abs_z": 7.55859375,
+      "distance_bp": 6228,
+      "distance_cm": 0.012322628699998006
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:35272469:C:CTGTGTGTGTGTGTGTGTGTG",
+      "abs_z": 6.34375,
+      "stronger_alid": "6:34792126:T:TGGCGGCGGCGGCGGCGGCGGC",
+      "stronger_abs_z": 6.6259765625,
+      "distance_bp": 480343,
+      "distance_cm": 0.10198285762836434
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:39324539:G:T",
+      "abs_z": 6.23046875,
+      "stronger_alid": "6:39308062:A:C",
+      "stronger_abs_z": 6.2998046875,
+      "distance_bp": 16477,
+      "distance_cm": 0.03951846479333199
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:50465916:C:CT",
+      "abs_z": 7.9140625,
+      "stronger_alid": "6:50963135:A:T",
+      "stronger_abs_z": 15.8251953125,
+      "distance_bp": 497219,
+      "distance_cm": 0.06319558046149609
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:51659605:A:G",
+      "abs_z": 7.4345703125,
+      "stronger_alid": "6:50963135:A:T",
+      "stronger_abs_z": 15.8251953125,
+      "distance_bp": 696470,
+      "distance_cm": 0.1380150811696268
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:51891712:A:AACAC",
+      "abs_z": 8.14453125,
+      "stronger_alid": "6:50963135:A:T",
+      "stronger_abs_z": 15.8251953125,
+      "distance_bp": 928577,
+      "distance_cm": 0.2325856112111282
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:53799084:C:T",
+      "abs_z": 5.5615234375,
+      "stronger_alid": "6:54121145:C:T",
+      "stronger_abs_z": 7.212890625,
+      "distance_bp": 322061,
+      "distance_cm": 0.16714008549750758
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:100730298:G:GAAAACAAAAC",
+      "abs_z": 6.2763671875,
+      "stronger_alid": "6:100152221:C:T",
+      "stronger_abs_z": 6.56640625,
+      "distance_bp": 578077,
+      "distance_cm": 0.3402479534711915
+     },
+     {
+      "chromosome": "6",
+      "alid": "6:169419852:A:G",
+      "abs_z": 5.64453125,
+      "stronger_alid": "6:169962169:A:T",
+      "stronger_abs_z": 6.0107421875,
+      "distance_bp": 542317,
+      "distance_cm": 0.3564407363862472
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:24229742:A:G",
+      "abs_z": 5.96875,
+      "stronger_alid": "7:24225982:A:G",
+      "stronger_abs_z": 6.1533203125,
+      "distance_bp": 3760,
+      "distance_cm": 0.01030146779059038
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:76716788:A:G",
+      "abs_z": 7.775390625,
+      "stronger_alid": "7:76962759:C:T",
+      "stronger_abs_z": 14.380859375,
+      "distance_bp": 245971,
+      "distance_cm": 0.16689286454905528
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:78207406:G:T",
+      "abs_z": 6.662109375,
+      "stronger_alid": "7:78197747:G:GA",
+      "stronger_abs_z": 7.5078125,
+      "distance_bp": 9659,
+      "distance_cm": 0.008945570177473883
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:114727999:G:T",
+      "abs_z": 5.6640625,
+      "stronger_alid": "7:113817250:C:G",
+      "stronger_abs_z": 6.013671875,
+      "distance_bp": 910749,
+      "distance_cm": 0.1906210915486497
+     },
+     {
+      "chromosome": "7",
+      "alid": "7:137765797:A:G",
+      "abs_z": 6.0576171875,
+      "stronger_alid": "7:137763350:A:G",
+      "stronger_abs_z": 6.3583984375,
+      "distance_bp": 2447,
+      "distance_cm": 0.0018018728024173924
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:17345227:C:T",
+      "abs_z": 5.513671875,
+      "stronger_alid": "8:17143624:C:G",
+      "stronger_abs_z": 6.28125,
+      "distance_bp": 201603,
+      "distance_cm": 0.17507068930569147
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:80485033:A:G",
+      "abs_z": 6.263671875,
+      "stronger_alid": "8:80463222:C:T",
+      "stronger_abs_z": 7.1806640625,
+      "distance_bp": 21811,
+      "distance_cm": 0.004082943473548539
+     },
+     {
+      "chromosome": "8",
+      "alid": "8:116486041:C:G",
+      "abs_z": 6.1865234375,
+      "stronger_alid": "8:115948504:A:G",
+      "stronger_abs_z": 7.3896484375,
+      "distance_bp": 537537,
+      "distance_cm": 0.3208274044715722
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:2197987:A:G",
+      "abs_z": 5.48046875,
+      "stronger_alid": "9:2279511:A:G",
+      "stronger_abs_z": 5.73046875,
+      "distance_bp": 81524,
+      "distance_cm": 0.1787079838907344
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:27601572:A:C",
+      "abs_z": 5.8017578125,
+      "stronger_alid": "9:27795270:C:T",
+      "stronger_abs_z": 8.525390625,
+      "distance_bp": 193698,
+      "distance_cm": 0.435910481530577
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:34559503:C:T",
+      "abs_z": 6.673828125,
+      "stronger_alid": "9:34532754:G:T",
+      "stronger_abs_z": 7.431640625,
+      "distance_bp": 26749,
+      "distance_cm": 0.03406574431474496
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:93632939:G:GCTGT",
+      "abs_z": 6.5546875,
+      "stronger_alid": "9:93675283:C:T",
+      "stronger_abs_z": 6.689453125,
+      "distance_bp": 42344,
+      "distance_cm": 0.007995679975451253
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:99005679:C:T",
+      "abs_z": 5.5234375,
+      "stronger_alid": "9:99328828:A:G",
+      "stronger_abs_z": 8.51171875,
+      "distance_bp": 323149,
+      "distance_cm": 0.21216375218226347
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:121832060:C:T",
+      "abs_z": 6.451171875,
+      "stronger_alid": "9:121874252:A:G",
+      "stronger_abs_z": 6.4794921875,
+      "distance_bp": 42192,
+      "distance_cm": 0.02140626072480245
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:123324814:A:G",
+      "abs_z": 5.6728515625,
+      "stronger_alid": "9:123887901:A:C",
+      "stronger_abs_z": 5.8544921875,
+      "distance_bp": 563087,
+      "distance_cm": 0.26538082038419475
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:124818572:C:T",
+      "abs_z": 5.4775390625,
+      "stronger_alid": "9:125354538:A:G",
+      "stronger_abs_z": 6.42578125,
+      "distance_bp": 535966,
+      "distance_cm": 0.0905168772991658
+     },
+     {
+      "chromosome": "9",
+      "alid": "9:130906489:C:T",
+      "abs_z": 5.4775390625,
+      "stronger_alid": "9:130911838:A:G",
+      "stronger_abs_z": 7.4365234375,
+      "distance_bp": 5349,
+      "distance_cm": 0.0034076573048196224
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:27943038:C:G",
+      "abs_z": 5.70703125,
+      "stronger_alid": "10:27963710:A:T",
+      "stronger_abs_z": 5.9267578125,
+      "distance_bp": 20672,
+      "distance_cm": 0.00233366051872963
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:65291075:C:T",
+      "abs_z": 5.796875,
+      "stronger_alid": "10:64758680:A:G",
+      "stronger_abs_z": 6.0615234375,
+      "distance_bp": 532395,
+      "distance_cm": 0.12400800364753195
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:85785189:A:G",
+      "abs_z": 6.693359375,
+      "stronger_alid": "10:85606046:A:C",
+      "stronger_abs_z": 7.255859375,
+      "distance_bp": 179143,
+      "distance_cm": 0.02531743075240911
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:102631277:C:T",
+      "abs_z": 5.697265625,
+      "stronger_alid": "10:102876519:C:T",
+      "stronger_abs_z": 5.986328125,
+      "distance_bp": 245242,
+      "distance_cm": 0.0739037782283134
+     },
+     {
+      "chromosome": "10",
+      "alid": "10:112962375:C:CT",
+      "abs_z": 6.5205078125,
+      "stronger_alid": "10:112998590:C:T",
+      "stronger_abs_z": 7.126953125,
+      "distance_bp": 36215,
+      "distance_cm": 0.06389548267934231
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:26985746:C:T",
+      "abs_z": 7.3017578125,
+      "stronger_alid": "11:27627033:A:T",
+      "stronger_abs_z": 14.0712890625,
+      "distance_bp": 641287,
+      "distance_cm": 0.3183647489343713
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:28837971:C:T",
+      "abs_z": 5.7265625,
+      "stronger_alid": "11:28740888:G:GA",
+      "stronger_abs_z": 6.3095703125,
+      "distance_bp": 97083,
+      "distance_cm": 0.015085431202081168
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:43699950:C:T",
+      "abs_z": 5.7255859375,
+      "stronger_alid": "11:43924069:A:G",
+      "stronger_abs_z": 5.990234375,
+      "distance_bp": 224119,
+      "distance_cm": 0.1278883502082735
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:45579028:C:T",
+      "abs_z": 6.9462890625,
+      "stronger_alid": "11:46246938:C:T",
+      "stronger_abs_z": 7.150390625,
+      "distance_bp": 667910,
+      "distance_cm": 0.26536205831102677
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:57179716:C:T",
+      "abs_z": 5.5380859375,
+      "stronger_alid": "11:57141837:A:G",
+      "stronger_abs_z": 6.5283203125,
+      "distance_bp": 37879,
+      "distance_cm": 0.013585114183115365
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:64598471:C:T",
+      "abs_z": 6.5390625,
+      "stronger_alid": "11:64689243:A:AT",
+      "stronger_abs_z": 7.2666015625,
+      "distance_bp": 90772,
+      "distance_cm": 0.010692218389323216
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:113421026:A:T",
+      "abs_z": 6.0166015625,
+      "stronger_alid": "11:113426463:C:T",
+      "stronger_abs_z": 6.4873046875,
+      "distance_bp": 5437,
+      "distance_cm": 0.0007632186793102846
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:119078621:C:T",
+      "abs_z": 5.73046875,
+      "stronger_alid": "11:119059491:A:G",
+      "stronger_abs_z": 6.3115234375,
+      "distance_bp": 19130,
+      "distance_cm": 0.0032455929251256066
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:119513368:C:T",
+      "abs_z": 5.5556640625,
+      "stronger_alid": "11:119059491:A:G",
+      "stronger_abs_z": 6.3115234375,
+      "distance_bp": 453877,
+      "distance_cm": 0.31442491117724103
+     },
+     {
+      "chromosome": "11",
+      "alid": "11:133776831:C:T",
+      "abs_z": 6.4013671875,
+      "stronger_alid": "11:133754307:C:G",
+      "stronger_abs_z": 6.576171875,
+      "distance_bp": 22524,
+      "distance_cm": 0.006191020483484522
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:16899384:A:G",
+      "abs_z": 5.5478515625,
+      "stronger_alid": "12:16514237:A:G",
+      "stronger_abs_z": 5.7451171875,
+      "distance_bp": 385147,
+      "distance_cm": 0.24761303665440693
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:33412391:T:TA",
+      "abs_z": 6.10546875,
+      "stronger_alid": "12:33218914:C:T",
+      "stronger_abs_z": 6.3466796875,
+      "distance_bp": 193477,
+      "distance_cm": 0.08859081794345514
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:41472915:A:G",
+      "abs_z": 5.7421875,
+      "stronger_alid": "12:41412603:C:G",
+      "stronger_abs_z": 5.7783203125,
+      "distance_bp": 60312,
+      "distance_cm": 0.0054353520369971875
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:56883518:A:G",
+      "abs_z": 7.6845703125,
+      "stronger_alid": "12:57206198:A:C",
+      "stronger_abs_z": 8.2197265625,
+      "distance_bp": 322680,
+      "distance_cm": 0.11994571702513213
+     },
+     {
+      "chromosome": "12",
+      "alid": "12:57254861:C:T",
+      "abs_z": 6.1064453125,
+      "stronger_alid": "12:57206198:A:C",
+      "stronger_abs_z": 8.2197265625,
+      "distance_bp": 48663,
+      "distance_cm": 0.015004632686469677
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:26959505:A:G",
+      "abs_z": 5.7958984375,
+      "stronger_alid": "13:27446043:A:G",
+      "stronger_abs_z": 8.0009765625,
+      "distance_bp": 486538,
+      "distance_cm": 0.4197732190775145
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:28242141:A:G",
+      "abs_z": 6.3193359375,
+      "stronger_alid": "13:28074931:C:G",
+      "stronger_abs_z": 6.8125,
+      "distance_bp": 167210,
+      "distance_cm": 0.1481943761521638
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:50178554:A:G",
+      "abs_z": 5.4794921875,
+      "stronger_alid": "13:49936063:A:C",
+      "stronger_abs_z": 5.826171875,
+      "distance_bp": 242491,
+      "distance_cm": 0.07788946579225353
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:58811042:A:ATTT",
+      "abs_z": 6.3701171875,
+      "stronger_alid": "13:58873266:A:ATCT",
+      "stronger_abs_z": 7.7421875,
+      "distance_bp": 62224,
+      "distance_cm": 0.011662722072287579
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:59263924:C:T",
+      "abs_z": 6.9462890625,
+      "stronger_alid": "13:58873266:A:ATCT",
+      "stronger_abs_z": 7.7421875,
+      "distance_bp": 390658,
+      "distance_cm": 0.38671095810075684
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:79665148:C:T",
+      "abs_z": 6.1826171875,
+      "stronger_alid": "13:78989614:A:C",
+      "stronger_abs_z": 7.7021484375,
+      "distance_bp": 675534,
+      "distance_cm": 0.3481797084924452
+     },
+     {
+      "chromosome": "13",
+      "alid": "13:96303946:A:C",
+      "abs_z": 6.001953125,
+      "stronger_alid": "13:96294969:A:T",
+      "stronger_abs_z": 6.0146484375,
+      "distance_bp": 8977,
+      "distance_cm": 0.001074974964083708
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:25466252:A:T",
+      "abs_z": 6.650390625,
+      "stronger_alid": "14:25479661:C:T",
+      "stronger_abs_z": 9.5947265625,
+      "distance_bp": 13409,
+      "distance_cm": 0.002940453245463104
+     },
+     {
+      "chromosome": "14",
+      "alid": "14:29607527:A:G",
+      "abs_z": 5.4609375,
+      "stronger_alid": "14:29274555:A:T",
+      "stronger_abs_z": 10.6748046875,
+      "distance_bp": 332972,
+      "distance_cm": 0.48093784198854195
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:3661655:A:G",
+      "abs_z": 7.09765625,
+      "stronger_alid": "16:3964281:C:G",
+      "stronger_abs_z": 10.09765625,
+      "distance_bp": 302626,
+      "distance_cm": 0.3117385675350315
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:20233961:C:T",
+      "abs_z": 9.2998046875,
+      "stronger_alid": "16:19908624:C:T",
+      "stronger_abs_z": 12.1455078125,
+      "distance_bp": 325337,
+      "distance_cm": 0.413895635285634
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:22950410:C:T",
+      "abs_z": 5.47265625,
+      "stronger_alid": "16:23206159:A:AG",
+      "stronger_abs_z": 5.84375,
+      "distance_bp": 255749,
+      "distance_cm": 0.08668926335561622
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:49125466:C:G",
+      "abs_z": 5.66796875,
+      "stronger_alid": "16:49014033:G:T",
+      "stronger_abs_z": 6.8076171875,
+      "distance_bp": 111433,
+      "distance_cm": 0.06916121048805479
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:53012222:C:T",
+      "abs_z": 7.220703125,
+      "stronger_alid": "16:53013310:A:G",
+      "stronger_abs_z": 7.6416015625,
+      "distance_bp": 1088,
+      "distance_cm": 0.001966533154906358
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:53634741:C:T",
+      "abs_z": 11.103515625,
+      "stronger_alid": "16:53768582:C:T",
+      "stronger_abs_z": 38.3123893737793,
+      "distance_bp": 133841,
+      "distance_cm": 0.0979424481477551
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:53834404:G:T",
+      "abs_z": 7.1982421875,
+      "stronger_alid": "16:53768582:C:T",
+      "stronger_abs_z": 38.3123893737793,
+      "distance_bp": 65822,
+      "distance_cm": 0.11717817305667921
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:54009095:A:G",
+      "abs_z": 6.2109375,
+      "stronger_alid": "16:53768582:C:T",
+      "stronger_abs_z": 38.3123893737793,
+      "distance_bp": 240513,
+      "distance_cm": 0.46747062849826904
+     },
+     {
+      "chromosome": "16",
+      "alid": "16:54096036:A:G",
+      "abs_z": 7.5986328125,
+      "stronger_alid": "16:54210842:C:T",
+      "stronger_abs_z": 8.0947265625,
+      "distance_bp": 114806,
+      "distance_cm": 0.16484033094351958
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:7655719:C:T",
+      "abs_z": 5.48828125,
+      "stronger_alid": "17:7886457:C:T",
+      "stronger_abs_z": 5.64453125,
+      "distance_bp": 230738,
+      "distance_cm": 0.26899453397050443
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:47456380:A:AT",
+      "abs_z": 6.615234375,
+      "stronger_alid": "17:48116902:C:T",
+      "stronger_abs_z": 7.6474609375,
+      "distance_bp": 660522,
+      "distance_cm": 0.2379388973417349
+     },
+     {
+      "chromosome": "17",
+      "alid": "17:80638234:C:T",
+      "abs_z": 7.6650390625,
+      "stronger_alid": "17:80783826:A:G",
+      "stronger_abs_z": 7.8359375,
+      "distance_bp": 145592,
+      "distance_cm": 0.09779395489530884
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:873949:A:G",
+      "abs_z": 6.314453125,
+      "stronger_alid": "18:871950:C:T",
+      "stronger_abs_z": 6.4130859375,
+      "distance_bp": 1999,
+      "distance_cm": 0.0024045369946430473
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:43504429:A:G",
+      "abs_z": 5.89453125,
+      "stronger_alid": "18:42522153:C:T",
+      "stronger_abs_z": 8.62109375,
+      "distance_bp": 982276,
+      "distance_cm": 0.4038695245636461
+     },
+     {
+      "chromosome": "18",
+      "alid": "18:60474274:A:G",
+      "abs_z": 5.736328125,
+      "stronger_alid": "18:60181298:C:T",
+      "stronger_abs_z": 19.0302734375,
+      "distance_bp": 292976,
+      "distance_cm": 0.27718504084998585
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:18133419:G:T",
+      "abs_z": 7.1083984375,
+      "stronger_alid": "19:18723704:C:T",
+      "stronger_abs_z": 8.177734375,
+      "distance_bp": 590285,
+      "distance_cm": 0.49545172230281054
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:18356030:C:T",
+      "abs_z": 7.015625,
+      "stronger_alid": "19:18723704:C:T",
+      "stronger_abs_z": 8.177734375,
+      "distance_bp": 367674,
+      "distance_cm": 0.27732933633960144
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:30190099:A:G",
+      "abs_z": 5.6015625,
+      "stronger_alid": "19:30495172:C:G",
+      "stronger_abs_z": 6.572265625,
+      "distance_bp": 305073,
+      "distance_cm": 0.44219379336011855
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:30515509:A:G",
+      "abs_z": 5.9189453125,
+      "stronger_alid": "19:30495172:C:G",
+      "stronger_abs_z": 6.572265625,
+      "distance_bp": 20337,
+      "distance_cm": 0.00565133773897486
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:44903416:A:G",
+      "abs_z": 5.61328125,
+      "stronger_alid": "19:44908684:C:T",
+      "stronger_abs_z": 8.1103515625,
+      "distance_bp": 5268,
+      "distance_cm": 0.00512894191496116
+     },
+     {
+      "chromosome": "19",
+      "alid": "19:51132488:C:T",
+      "abs_z": 6.17578125,
+      "stronger_alid": "19:51312271:C:G",
+      "stronger_abs_z": 6.2958984375,
+      "distance_bp": 179783,
+      "distance_cm": 0.16896656721604586
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:15830031:C:T",
+      "abs_z": 6.48828125,
+      "stronger_alid": "20:15826175:C:T",
+      "stronger_abs_z": 6.9873046875,
+      "distance_bp": 3856,
+      "distance_cm": 0.006065367466064231
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:17213530:A:G",
+      "abs_z": 6.2744140625,
+      "stronger_alid": "20:17215963:C:T",
+      "stronger_abs_z": 6.5478515625,
+      "distance_bp": 2433,
+      "distance_cm": 0.0003661180977623246
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:25211286:G:T",
+      "abs_z": 7.2587890625,
+      "stronger_alid": "20:25210141:C:T",
+      "stronger_abs_z": 7.2587890625,
+      "distance_bp": 1145,
+      "distance_cm": 0.0001964554516362682
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:58963120:A:G",
+      "abs_z": 5.880859375,
+      "stronger_alid": "20:59222235:C:T",
+      "stronger_abs_z": 8.1953125,
+      "distance_bp": 259115,
+      "distance_cm": 0.15328674245088791
+     },
+     {
+      "chromosome": "20",
+      "alid": "20:59303536:G:T",
+      "abs_z": 6.8291015625,
+      "stronger_alid": "20:59222235:C:T",
+      "stronger_abs_z": 8.1953125,
+      "distance_bp": 81301,
+      "distance_cm": 0.09585071753124907
+     },
+     {
+      "chromosome": "21",
+      "alid": "21:38939569:G:T",
+      "abs_z": 8.322265625,
+      "stronger_alid": "21:38938666:G:GT",
+      "stronger_abs_z": 8.46875,
+      "distance_bp": 903,
+      "distance_cm": 0.000768431062624586
+     },
+     {
+      "chromosome": "21",
+      "alid": "21:41272041:C:T",
+      "abs_z": 5.8154296875,
+      "stronger_alid": "21:41258677:A:AT",
+      "stronger_abs_z": 6.443359375,
+      "distance_bp": 13364,
+      "distance_cm": 0.007123105518445527
+     }
+    ]
+   }
+  }
+ }
+}
