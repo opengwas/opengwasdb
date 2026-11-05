@@ -220,15 +220,17 @@ class RaggedCSRWriter:
             where=where,
         )
         vi = _sorted_variant_indices(variant_index)
-        # Held as float32 and quantised once, by the codec, at flush -- never
-        # pre-rounded into a stored dtype here.
-        kept = storable(_float32_cells(z, se, eaf, len(vi)), 0, 1, where=where)
+        # Judged as handed over, so a missing marker is judged before a cast
+        # could make it canonical; then held as float32 and quantised once, by
+        # the codec, at flush -- never pre-rounded into a stored dtype here.
+        kept = storable(CellValues(np.asarray(z), np.asarray(se), eaf), 0, 1, where=where)
         log_se_out_of_range(kept.se_out_of_range, where=where)
         rows = kept.stored
+        cells = _float32_cells(kept.cells.z, kept.cells.se, kept.cells.eaf, len(vi))
         self._variant_indices.append(vi[rows])
-        self._zscores.append(np.asarray(kept.cells.z)[rows])
-        self._ses.append(np.asarray(kept.cells.se)[rows])
-        self._eafs.append(np.asarray(kept.cells.eaf)[rows])
+        self._zscores.append(np.asarray(cells.z)[rows])
+        self._ses.append(np.asarray(cells.se)[rows])
+        self._eafs.append(np.asarray(cells.eaf)[rows])
         self._ns.append(None if n is None else encode_sample_sizes(np.asarray(n)[rows]))
         self._offsets.append(self._offsets[-1] + int(np.count_nonzero(rows)))
         # A baseline is a median over every cell at its variant, so a new cell

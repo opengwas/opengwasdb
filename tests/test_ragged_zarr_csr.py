@@ -199,6 +199,28 @@ def test_the_reproduced_length_one_se_is_refused_before_it_broadcasts():
     assert writer.n_analyses == 0
 
 
+@pytest.mark.parametrize("plane", ["z", "se"])
+def test_a_marker_other_than_the_canonical_nan_is_refused_before_it_is_narrowed(plane):
+    """Spec §15: a missing marker is `np.nan`'s NaN, judged in the dtype the
+    caller hands over. Narrowed to float32 first, a float64 NaN with a payload
+    in its low bits came out canonical and was stored as a missing row."""
+    from opengwasdb.admission import NotAdmitted
+    from opengwasdb.associations import non_canonical
+
+    z = np.array([1.0, np.nan, 2.0])
+    se = np.array([0.1, np.nan, 0.2])
+    {"z": z, "se": se}[plane][1] = np.array([0x7FF8000000000001], np.uint64).view(np.float64)[0]
+    # Fixture first: missing in both planes, odd in float64, and canonical once narrowed.
+    assert np.isnan(z[1]) and np.isnan(se[1])
+    assert non_canonical({"z": z, "se": se}[plane]).tolist() == [False, True, False]
+    assert not non_canonical({"z": z, "se": se}[plane].astype(np.float32)).any()
+    writer = RaggedCSRWriter(_N_VARIANTS)
+
+    with pytest.raises(NotAdmitted, match="a missing marker other than the canonical NaN: 1"):
+        writer.add_analysis(np.array([1, 2, 3], dtype=np.int32), z, se, where="build-x")
+    assert writer.n_associations == 0
+
+
 # The Dense and Ragged per-variant shard policies differ above 1,000,000
 # elements: `PER_VARIANT` caps a shard at 1,000,000 and `RAGGED_PER_VARIANT` at
 # 10,000,000 (ADR 0059). 2,000,000 variants is the smallest length where a
