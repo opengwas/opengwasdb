@@ -7,6 +7,7 @@ chromosome built by plink2, so matching and clumping run for real.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import locus_leads_panel
 import numpy as np
@@ -64,3 +65,54 @@ def test_every_tier_row_falls_in_exactly_one_category_and_the_shared_rows_are_re
     assert sum(accounting["partition"].values()) == accounting["tier_rows"] == 9
     assert list(shared.rows.position) == [1_000, 2_000, 3_000, 4_000]
     assert list(shared.panel_id) == ["1:1000:A:G", "1:2000:C:T", "1:3000:G:A", "1:4000:T:C"]
+
+
+MAP_IDENTITY = {
+    "map": "EUR.tsv.gz", "sha256": "ab" * 32, "assembly": "GRCh38",
+    "archive": {"path": "original/hg38_maps.tar.gz", "md5": "45ebb10c4acf939ea03a3932c483f638"},
+}
+
+
+def _identity(store_assembly: str = "GRCh38") -> dict[str, dict[str, Any]]:
+    return {
+        "store": {"store_id": "OGS-TEST", "reference_assembly": store_assembly},
+        "analysis": {"analysis_id": "synthetic-analysis"},
+        "query": {"threshold": 5e-8, "observed_only": True, "rows": 9, "observed": 9,
+                  "imputed": 0},
+    }
+
+
+def _record(panel_directory: Path, work_dir: Path, store_assembly: str = "GRCh38",
+            map_assembly: str = "GRCh38") -> dict[str, Any]:
+    loaded = genetic_map.LoadedMap(MAP, MAP_IDENTITY | {"assembly": map_assembly})
+    record: dict[str, Any] = run.compare_tier(
+        ROWS, _identity(store_assembly), loaded, panel.Panel(panel_directory), d_cm=0.5,
+        w_bp=1_000_000, r2_values=[0.01], work_dir=work_dir,
+    )
+    return record
+
+
+def test_the_record_names_its_inputs_parameters_partition_and_rates(
+    panel_dir: Path, tmp_path: Path
+) -> None:
+    record = _record(panel_dir, tmp_path)
+
+    assert record["store"] == _identity()["store"]
+    assert record["analysis"] == {"analysis_id": "synthetic-analysis"}
+    assert record["genetic_map"]["sha256"] == "ab" * 32
+    assert record["genetic_map"]["archive"]["md5"] == "45ebb10c4acf939ea03a3932c483f638"
+    assert record["parameters"] == {
+        "d_cm": 0.5, "w_bp": 1_000_000, "r2": [0.01], "clump_kb": 10_000,
+        "clump_p1": 5e-8, "clump_p2": 5e-8, "clump_r2": "unphased",
+    }
+    partition = record["rows"]["partition"]
+    assert sum(partition.values()) == record["query"]["observed"] == 9
+    # The rule keeps one lead, 2,000 (|z| 41.25); plink2 also indexes 4,000,
+    # which is unlinked to it, so 4,000 is a lost signal and nothing is split.
+    at_r2 = record["comparison"]["by_r2"]["0.01"]
+    assert {key: at_r2[key] for key in ("rows", "locus_leads", "index_variants", "agreed",
+                                        "spurious_splits", "lost_signals")} == {
+        "rows": partition["shared_set"], "locus_leads": 1, "index_variants": 2, "agreed": 1,
+        "spurious_splits": 0, "lost_signals": 1,
+    }
+    assert (at_r2["spurious_split_rate"], at_r2["lost_signal_rate"]) == (0.0, 0.5)

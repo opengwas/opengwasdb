@@ -204,10 +204,24 @@ def run(store: Path, analysis_id: str, genetic_map: LoadedMap, panel_dir: Path, 
         w_bp: int, r2_values: list[float], work_dir: Path, threads: int = 4,
         threshold: float = INDEX_P) -> dict[str, Any]:
     tier, identity = read_tier(store, analysis_id, threshold)
-    panel = Panel(panel_dir)
+    return compare_tier(tier, identity, genetic_map, Panel(panel_dir), d_cm=d_cm, w_bp=w_bp,
+                        r2_values=r2_values, work_dir=work_dir, threads=threads)
+
+
+def compare_tier(tier: TierRows, identity: dict[str, Any], genetic_map: LoadedMap, panel: Panel,
+                 *, d_cm: float, w_bp: int, r2_values: list[float], work_dir: Path,
+                 threads: int = 1) -> dict[str, Any]:
+    """The comparison's record, from a tier's rows and `read_tier`'s identity onward.
+
+    The tier's threshold is read from the identity, so the clumping thresholds
+    recorded are the tier the rows came from.
+    """
+    if identity["query"]["observed"] != tier.chromosome.size:
+        raise ValueError(f"{tier.chromosome.size:,} rows, but the query recorded "
+                         f"{identity['query']['observed']:,} observed")
     shared, accounting = build_shared_set(tier, panel, genetic_map.map)
-    clumps = clump_shared_set(shared, panel, r2_values, threshold=threshold, work_dir=work_dir,
-                              threads=threads)
+    clumps = clump_shared_set(shared, panel, r2_values, threshold=identity["query"]["threshold"],
+                              work_dir=work_dir, threads=threads)
     return identity | {
         "genetic_map": genetic_map.identity,
         "panel": _panel_identity(panel),
