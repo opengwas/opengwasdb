@@ -28,7 +28,7 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.admission.cells import NotAdmitted
+from opengwasdb.admission.cells import require_paired
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
 from opengwasdb.completion.checkpoint import (
@@ -1276,27 +1276,26 @@ def _seed_paired_bands(
     out_to_src: np.ndarray,
     r0: int,
 ) -> None:
-    """Seed one band of z and SE from the source, refusing a source cell with
-    one of z and SE missing.
+    """Seed one band of z and SE from the source, refusing a source cell the
+    presence rule calls invalid (`require_paired`).
 
     A fill lands where z is missing, so a half-missing source cell (spec §15)
     would come out with an imputed z beside an observed SE, or with its SE
-    replaced by an imputed one.
+    replaced by an imputed one. A missing marker other than the canonical NaN
+    would be read as missing and, where nothing fills the cell, written into
+    the completed planes as itself.
+
+    The band is judged whole, before any fill: a row no source cell maps to
+    holds the canonical NaN it was filled with, so it passes.
     """
     valid, rows = _band_source_rows(out_to_src, r0, r0 + len(zb))
     if not len(valid):
         return
     zb[valid, :] = src_plane.rows(rows)
     sb[valid, :] = src_se_plane.rows(np.asarray(rows, dtype=np.int64))
-    unpaired = np.isnan(zb[valid, :]) != np.isnan(sb[valid, :])
-    if unpaired.any():
-        row, analysis = (int(axis[0]) for axis in np.nonzero(unpaired))
-        raise NotAdmitted(
-            f"the source holds {int(unpaired.sum())} cell(s) with one of z and SE "
-            f"missing (first: source row {int(rows[row])}, analysis {analysis}); spec §15 "
-            "forbids a half-missing pair, and completing one would pair an imputed "
-            "value with an observed one"
-        )
+    require_paired(
+        zb, sb, where=f"complete-dense, the source's cells in rows {r0:,} to {r0 + len(zb):,}"
+    )
 
 
 @dataclass

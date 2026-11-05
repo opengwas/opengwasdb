@@ -1094,7 +1094,8 @@ def _completed_analysis(
     missing -- or, when no completable block touches the Analysis, its source
     association list untouched."""
     source = src_csr.get_analysis(ai)
-    # D1: a half-missing source cell is refused, whatever completes the Analysis.
+    # D1: a source cell the presence rule calls invalid is refused, whatever
+    # completes the Analysis.
     require_paired(source.z, source.se, where=f"complete-ragged, Analysis {ai}")
     obs, found = _admitted_observed(source)
     _warn_observed_duplicates(ai, source, found, src_alids)

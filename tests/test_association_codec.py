@@ -82,6 +82,39 @@ def test_a_present_cell_admission_would_not_admit_is_refused(z, se) -> None:
         storable(CellValues(z, se), 0, 1, where="complete-x")
 
 
+#: float16 NaNs other than `np.nan`'s 0x7e00: a payload, a sign and a signalling NaN.
+ODD_MARKERS = {"payload": 0x7E01, "negative": 0xFE00, "signalling": 0x7C01}
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+@pytest.mark.parametrize("bits", ODD_MARKERS.values(), ids=ODD_MARKERS.keys())
+@pytest.mark.parametrize("plane", ["z", "se"])
+def test_a_missing_marker_other_than_the_canonical_nan_is_refused(plane, bits, dtype) -> None:
+    """Spec §15: a float plane's missing marker is `np.nan`'s NaN, and a builder
+    rejects any other. A decoded `float16` plane carries a payload into
+    `float32`, and a `float16` plane would store it again as itself."""
+    from opengwasdb.associations import non_canonical
+
+    z = np.array([1.0, np.nan], dtype=dtype)
+    se = np.array([0.1, np.nan], dtype=dtype)
+    {"z": z, "se": se}[plane][1] = np.array([bits], np.uint16).view(np.float16)[0]
+    # Fixture first: the cell is missing in both planes, and its marker is odd.
+    assert np.isnan(z[1]) and np.isnan(se[1])
+    assert non_canonical({"z": z, "se": se}[plane]).tolist() == [False, True]
+    with pytest.raises(
+        NotAdmitted,
+        match=r"complete-x: .*a missing marker other than the canonical NaN: 1\); first .* "
+        r"at \(1,\)",
+    ):
+        storable(CellValues(z, se), 0, 1, where="complete-x")
+
+
+def test_the_canonical_marker_is_stored() -> None:
+    z, se = np.array([1.0, np.nan], np.float16), np.array([0.1, np.nan], np.float16)
+    assert int(se[1:].view(np.uint16)[0]) == 0x7E00
+    assert storable(CellValues(z, se), 0, 1, where="x").stored.tolist() == [True, True]
+
+
 def test_an_se_narrowed_to_infinity_is_a_stored_value_and_counted() -> None:
     kept = storable(CellValues(_f32(1.0, NAN), _f32(np.inf, NAN)), 0, 1, where="x")
     assert kept.stored.tolist() == [True, True]

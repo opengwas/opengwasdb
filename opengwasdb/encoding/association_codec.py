@@ -2,8 +2,9 @@
 
 `storable` is the one judgement a writer makes before any plane is written:
 every cell must be one Association Admission would admit (ADR 0072), judged by
-Admission's own check, and an SE above the largest a `float16` plane holds is
-counted per Analysis. Admission guarantees the first for every source row, so
+Admission's own check, every missing marker must be the canonical NaN (spec
+§15), and an SE above the largest a `float16` plane holds is counted per
+Analysis. Admission guarantees the first for every source row, so
 a cell that breaks it here was produced after admission -- a completion fill,
 a merged pass, a re-encode -- and the write is refused. A writer writes what
 `storable` returns; today that is every cell it was handed, unchanged.
@@ -122,24 +123,47 @@ def storable(
     would not admit, by Admission's own check (`require_admitted`): one of z and
     SE missing, an infinite z, an SE not positive, an imputed flag that is not
     0/1 or sits on a missing cell. An SE of `+inf` is not refused: it is what a
-    `float16` plane holds for an SE of 65,520 or more.
+    `float16` plane holds for an SE of 65,520 or more. It raises `NotAdmitted`
+    too for a missing z or SE whose NaN is not the canonical marker (spec §15,
+    ADR 0070), judged in the dtype the writer hands it: a `float16` plane would
+    store that NaN as itself.
     """
     # Imported here: Admission's package imports the association readers, whose
     # Ragged adapter imports the writer that imports this module, and importing
-    # any module of the package runs its `__init__` first.
+    # any module of either package runs its `__init__` first.
     from opengwasdb.admission.cells import require_admitted
 
     z, se, imputed = _parallel(cells, where)
     owner = np.broadcast_to(np.asarray(analyses, dtype=np.int64), z.shape)
     over = np.zeros(n_analyses, dtype=np.int64)
     for window in _windows(z.shape):
-        se_w, imputed_w = se[window], None if imputed is None else imputed[window]
-        require_admitted(
-            z[window], se_w, imputed=imputed_w, where=_where(where, window, z.shape),
-            narrowed_se=True,
-        )
+        z_w, se_w = z[window], se[window]
+        at = _where(where, window, z.shape)
+        imputed_w = None if imputed is None else imputed[window]
+        require_admitted(z_w, se_w, imputed=imputed_w, where=at, narrowed_se=True)
+        _refuse_odd_markers(z_w, se_w, where=at)
         over += _out_of_range(se_w, owner[window], n_analyses)
     return Storable(cells=cells, stored=np.ones(z.shape, dtype=bool), se_out_of_range=over)
+
+
+def _refuse_odd_markers(z: np.ndarray, se: np.ndarray, *, where: str) -> None:
+    """Refuse a missing z or SE whose NaN is not the canonical marker (spec §15).
+
+    The presence rule's own test (`non_canonical`), so a writer refuses exactly
+    the markers a reader and `validate` refuse.
+    """
+    from opengwasdb.admission.cells import NotAdmitted
+    from opengwasdb.associations.record import non_canonical
+
+    odd = non_canonical(z) | non_canonical(se)
+    if not odd.any():
+        return
+    first = tuple(int(axis[0]) for axis in np.nonzero(odd))
+    raise NotAdmitted(
+        f"{where}: cells no plane may hold (a missing marker other than the canonical "
+        f"NaN: {int(odd.sum()):,}); first a missing marker other than the canonical NaN "
+        f"at {first}"
+    )
 
 
 @dataclass(frozen=True)

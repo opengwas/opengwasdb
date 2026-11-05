@@ -1814,6 +1814,63 @@ def test_a_source_cell_with_one_of_z_and_se_missing_is_refused(
     assert not (tmp_path / "comp.opengwasdb").exists()
 
 
+def _seed_unjudged(zb, sb, src_plane, src_se_plane, out_to_src, r0):
+    """Seed a band from the source as completion does, judging none of its cells."""
+    valid, rows = complete_module._band_source_rows(out_to_src, r0, r0 + len(zb))
+    if len(valid):
+        zb[valid, :] = src_plane.rows(rows)
+        sb[valid, :] = src_se_plane.rows(np.asarray(rows, dtype=np.int64))
+
+
+@pytest.mark.parametrize(
+    ("judged_by", "where"),
+    [
+        ("the source read", r"complete-dense, the source's cells"),
+        ("the writer", "complete-dense, rows"),
+    ],
+)
+def test_a_source_marker_other_than_the_canonical_nan_is_refused(
+    tmp_path: Path,
+    observed_store: Path,
+    ld_panel: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    judged_by: str,
+    where: str,
+):
+    """Spec §15 forbids a missing marker other than `np.nan`'s NaN (ADR 0070).
+
+    a2 is missing at chr1:900,000 in both planes, and no LD block fills it: a2
+    has one observation, too few to impute from. Its SE marker is planted as
+    the `float16` NaN 0x7e01. Read as missing, the cell's payload was carried
+    into the completed `float16` plane, which `validate` then failed. The source
+    read refuses the cell, and the writer's own check refuses it when nothing
+    has judged it before.
+    """
+    import zarr
+
+    from opengwasdb.admission import NotAdmitted
+
+    group = zarr.open_group(observed_store / "data.zarr", mode="r+")
+    encoding = open_store(observed_store).manifest.encoding
+    row, a2 = 0, 1
+    # Fixture first: a float16 SE plane, and a2 missing at row 0 in both planes.
+    assert group["se"].dtype == np.float16
+    assert VariantAxis(observed_store).by_index(row).alid == "1:900000:A:G"
+    assert np.isnan(DenseZPlane.open(group, encoding).rows(np.array([row]))[0, a2])
+    assert np.isnan(DenseSePlane.open(group, encoding).rows(np.array([row]))[0, a2])
+    group["se"][row, a2] = np.array([0x7E01], np.uint16).view(np.float16)[0]
+    assert int(np.asarray(group["se"][row, a2]).view(np.uint16)) == 0x7E01
+    if judged_by == "the writer":
+        monkeypatch.setattr(complete_module, "_seed_paired_bands", _seed_unjudged)
+
+    with pytest.raises(NotAdmitted, match=f"{where}.*missing marker other than the canonical NaN"):
+        complete_dense_store(
+            observed_store, tmp_path / "comp.opengwasdb", ld_panel,
+            ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+        )
+    assert not (tmp_path / "comp.opengwasdb").exists()
+
+
 def test_a_candidate_with_no_usable_se_is_not_a_fill(monkeypatch: pytest.MonkeyPatch):
     """A panel frequency of 0 gives a candidate no SE: it is not stored as a
     fill, and it is counted missing, as every candidate Admission would not

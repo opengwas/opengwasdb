@@ -48,6 +48,13 @@ associations.**
   `narrowed_se` for `storable`.
   - It accepts an SE of `+inf`, which is what a `float16` plane holds for an
     SE of 65,520 or more (spec §15, issue #337).
+  - It refuses a missing z or SE whose NaN is not the canonical marker (spec
+    §15), by the presence rule's own test (`non_canonical`, ADR 0070), judged
+    in the dtype the writer hands it. Admission's check reads values, not
+    markers, and a `float16` plane would store such a NaN as itself, which
+    `validate` then fails (`associations.markers_canonical`). A completion's
+    reads of its source Store refuse such a cell too (`require_paired`),
+    rather than read it as missing and carry it.
   - It writes nothing to the Admission Record.
   - Admission guarantees the rule for every source row, so a refusal means a
     value produced after admission: a completion fill, a merged band or a
