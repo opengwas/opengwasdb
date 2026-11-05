@@ -5,6 +5,46 @@ Issue [#351](https://github.com/opengwas/opengwasdb/issues/351), part of epic
 its §1 (result type) and §8 (top hits). The read side of the Association
 Admission contract ([#357](https://github.com/opengwas/opengwasdb/issues/357)).
 
+> **Amended by [#393](https://github.com/opengwas/opengwasdb/issues/393)
+> (5 Nov 2026).** The two region reads deferred below exist.
+> `Cells.analyses(first, stop)` names a span of Analyses: a Dense grid reads it
+> as each Analysis in turn, with one read of each plane, and a CSR as one slice
+> of its sequence. `windows(region, max_cells=…)` cuts an `analysis` or
+> `analyses` region, or the whole component, into windows of at most
+> `max_cells` cells, each cell once and in the region's order, which `read`,
+> `inspect` and a Z-only `z` read. A CSR's windows are `positions` regions,
+> read as slices, and may run on from one Analysis into the next. A Dense
+> grid's are `cross` regions, each a run of one Analysis's variants: a grid
+> region is variants × Analyses, so it cannot hold the end of one Analysis and
+> the start of the next. An Indexed Variant Subset reads one whole Analysis and
+> nothing smaller, so it has no windows. Every read, and `windows` before it
+> cuts one, refuses a region naming an index outside its axis with an
+> `IndexError` naming the index and the range (`require_within`): an Analysis
+> outside `[0, n_analyses)`, a variant outside `[0, n_variants)`, or a CSR
+> position outside its rows. A grid read index -1 as its last Analysis or
+> variant, and a CSR read an index past the end as nothing. A CSR records no
+> variant axis, so it reads `variants`, `cross` and `pairs` only once
+> `open_variant_index` has given it one.
+> The query facade's top-hit scan and
+> Hybrid Reference Completion's read of its source's Overflow
+> ([#391](https://github.com/opengwas/opengwasdb/issues/391)) read through
+> them, so no completion reaches `RaggedCSRReader`'s underscore attributes.
+> Ragged Reference Completion reads each source Analysis through `CsrReader`,
+> and Dense Reference Completion its source's bands and each LD block's rows
+> through `inspect(Cells.variants(…))`. The Dense Top-Hit Index build and the
+> Rho Matrix still read row bands from the planes, for the reason the Ragged
+> Top-Hit harvest below keeps its decodes.
+> `RaggedCSRReader` keeps structure public, and its decode members (`z_slice`
+> among them) serve `CsrReader` and one other caller: `get_analysis()`,
+> `variant_indices()`, `z_all()`, `se_all()`, `eaf_slice()`, `imputed()` and
+> `AnalysisAssociations` are gone. That caller is the Ragged Top-Hit harvest,
+> which still scans with `z_slice` and gathers its candidates with `se_at`,
+> `eaf_at` and `imputed_at`: it is a Layout (layer 3 in
+> `docs/architecture/components.yaml`) that the builders call, and the
+> Association Reader belongs to Query (layer 4), so reading through it would
+> be an upward import. The reads guard fails any other module that calls a
+> decode member.
+
 ## Context
 
 Spec §15 defines Association Status by each plane's missing marker plus the

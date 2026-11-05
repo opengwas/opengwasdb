@@ -54,7 +54,10 @@ associations.**
     markers, and a `float16` plane would store such a NaN as itself, which
     `validate` then fails (`associations.markers_canonical`). A completion's
     reads of its source Store refuse such a cell too (`require_paired`),
-    rather than read it as missing and carry it.
+    rather than read it as missing and carry it. *Clarified 5 Nov 2026:* a
+    completion that reads its source through the Association Reader refuses
+    it by the reader's presence rule, with `InvalidAssociations` (ADR 0072's
+    clarification of D1 names which).
   - It writes nothing to the Admission Record.
   - Admission guarantees the rule for every source row, so a refusal means a
     value produced after admission: a completion fill, a merged band or a

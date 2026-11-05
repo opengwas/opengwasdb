@@ -12,6 +12,8 @@ import numpy as np
 import pytest
 from dense_sources import build_dense_fixture, write_dense_manifest
 
+from opengwasdb.admission import NotAdmitted
+from opengwasdb.associations import Cells, InvalidAssociations
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.completion.ld_panel import (
     LdPanelNotFoundError,
@@ -29,6 +31,7 @@ from opengwasdb.encoding import (
     StoreCodec,
     StoreEncoding,
 )
+from opengwasdb.encoding.codec import Z_MISSING
 from opengwasdb.layouts.dense import complete as complete_module
 from opengwasdb.layouts.dense.complete import (
     complete_dense_store,
@@ -1835,28 +1838,31 @@ def test_a_source_cell_with_one_of_z_and_se_missing_is_refused(
     tmp_path: Path,
     observed_store: Path,
     ld_panel: Path,
-    monkeypatch: pytest.MonkeyPatch,
     plane: str,
 ):
     """Spec §15 forbids a half-missing pair. Completing one would pair an imputed
-    value with an observed one, so completion refuses the source instead; the
-    source's first present cell is read back with one of its two values missing."""
-    from opengwasdb.admission.cells import NotAdmitted
-    from opengwasdb.encoding.planes import DenseSePlane, DenseZPlane
+    value with an observed one, so completion refuses the source instead: the
+    Association Reader's presence rule refuses the cell as the source is read
+    (ADR 0070). The source's first present cell loses one of its two values."""
+    import zarr
 
-    cls = DenseSePlane if plane == "se" else DenseZPlane
-    original = cls.rows
+    group = zarr.open_group(observed_store / "data.zarr", mode="r+")
+    encoding = open_store(observed_store).manifest.encoding
+    z = DenseZPlane.open(group, encoding).band(0, int(group["z"].shape[0]))
+    row, analysis = (int(axis[0]) for axis in np.nonzero(np.isfinite(z)))
+    # Fixture first: an int16 Z plane and a float16 SE plane, and the cell present in both.
+    assert group["z"].dtype == np.int16 and group["se"].dtype == np.float16
+    assert np.isfinite(np.asarray(group["se"][row, analysis], dtype=np.float32))
+    if plane == "se":
+        group["se"][row, analysis] = np.float16(np.nan)
+    else:
+        group["z"][row, analysis] = Z_MISSING
 
-    def rows(self, *args, **kwargs):
-        out = np.array(original(self, *args, **kwargs), dtype=np.float32, copy=True)
-        present = np.flatnonzero(np.isfinite(out))
-        # Fixture first: the band holds a present cell to break.
-        assert present.size
-        out.flat[present[0]] = np.nan
-        return out
-
-    monkeypatch.setattr(cls, "rows", rows)
-    with pytest.raises(NotAdmitted, match="one of z and SE missing"):
+    with pytest.raises(
+        InvalidAssociations,
+        match=rf"source's Dense grid: 1 .*\(partial 1\); first: \(variant {row}, "
+        rf"analysis {analysis}: partial\)",
+    ):
         complete_dense_store(
             observed_store, tmp_path / "comp.opengwasdb", ld_panel,
             ancestry="EUR", min_cor=0.0, release_id="comp-v1",
@@ -1864,19 +1870,24 @@ def test_a_source_cell_with_one_of_z_and_se_missing_is_refused(
     assert not (tmp_path / "comp.opengwasdb").exists()
 
 
-def _seed_unjudged(zb, sb, src_plane, src_se_plane, out_to_src, r0):
+def _seed_unjudged(zb, sb, source, out_to_src, r0):
     """Seed a band from the source as completion does, judging none of its cells."""
     valid, rows = complete_module._band_source_rows(out_to_src, r0, r0 + len(zb))
     if len(valid):
-        zb[valid, :] = src_plane.rows(rows)
-        sb[valid, :] = src_se_plane.rows(np.asarray(rows, dtype=np.int64))
+        cells = source.inspect(Cells.variants(rows))
+        zb[valid, :] = cells.z.reshape(len(rows), -1)
+        sb[valid, :] = cells.se.reshape(len(rows), -1)
 
 
 @pytest.mark.parametrize(
-    ("judged_by", "where"),
+    ("judged_by", "refusal", "where"),
     [
-        ("the source read", r"complete-dense, the source's cells"),
-        ("the writer", "complete-dense, rows"),
+        ("the source read", InvalidAssociations, r"source's Dense grid: 1 .*non_canonical 1"),
+        (
+            "the writer",
+            NotAdmitted,
+            "complete-dense, rows.*missing marker other than the canonical NaN",
+        ),
     ],
 )
 def test_a_source_marker_other_than_the_canonical_nan_is_refused(
@@ -1885,6 +1896,7 @@ def test_a_source_marker_other_than_the_canonical_nan_is_refused(
     ld_panel: Path,
     monkeypatch: pytest.MonkeyPatch,
     judged_by: str,
+    refusal: type[ValueError],
     where: str,
 ):
     """Spec §15 forbids a missing marker other than `np.nan`'s NaN (ADR 0070).
@@ -1897,8 +1909,6 @@ def test_a_source_marker_other_than_the_canonical_nan_is_refused(
     has judged it before.
     """
     import zarr
-
-    from opengwasdb.admission import NotAdmitted
 
     group = zarr.open_group(observed_store / "data.zarr", mode="r+")
     encoding = open_store(observed_store).manifest.encoding
@@ -1913,7 +1923,7 @@ def test_a_source_marker_other_than_the_canonical_nan_is_refused(
     if judged_by == "the writer":
         monkeypatch.setattr(complete_module, "_seed_paired_bands", _seed_unjudged)
 
-    with pytest.raises(NotAdmitted, match=f"{where}.*missing marker other than the canonical NaN"):
+    with pytest.raises(refusal, match=where):
         complete_dense_store(
             observed_store, tmp_path / "comp.opengwasdb", ld_panel,
             ancestry="EUR", min_cor=0.0, release_id="comp-v1",

@@ -57,40 +57,6 @@ def _slice_analysis_indices(offsets: np.ndarray, lo: int, hi: int) -> np.ndarray
     return np.concatenate(parts) if parts else np.empty(0, dtype=np.int32)
 
 
-def _read_ragged_columns(
-    store_path: Path, encoding: StoreEncoding | None
-) -> tuple[dict[str, np.ndarray], int]:
-    """Decode every CSR association into the dense builder's parallel columns.
-
-    The materialising reference the streamed path must agree with: this is what
-    the top-hit phase did before issue #233, and what the equivalence tests in
-    ``tests/test_ragged_top_hits_streaming.py`` compare the slices against. The
-    build no longer calls it -- holding these columns costs 24 bytes a cell,
-    and decoding ``se``/``eaf`` for them adds whole-plane temporaries that took
-    the measured peak to 46.6 bytes a cell at 46,192,414 cells and 83.1 bytes a
-    cell at 523,060,451 cells.
-    """
-    csr = RaggedCSRReader(store_path, encoding)
-    offsets = csr.offsets
-    vi_all = csr.variant_index(0, csr.sequence_length)
-    z_all = csr.z_all()
-    se_all = csr.se_all()
-    n_analyses = len(offsets) - 1
-    positions = np.arange(len(vi_all), dtype=np.int64)
-    analysis_indices = np.searchsorted(offsets[1:], positions, side="right").astype(np.int32)
-    columns: dict[str, np.ndarray] = {
-        "variant_index": vi_all,
-        "analysis_index": analysis_indices,
-        "z": z_all,
-        "se": se_all,
-    }
-    if csr.has_imputed:
-        columns["imputed"] = csr.imputed(0, csr.sequence_length)
-    if csr.can_report_frequencies:
-        columns["eaf"] = csr.eaf_at(np.arange(len(vi_all), dtype=np.int64))
-    return columns, n_analyses
-
-
 def _gather_slice_candidates(
     csr: RaggedCSRReader,
     offsets: np.ndarray,

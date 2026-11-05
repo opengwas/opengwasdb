@@ -23,6 +23,7 @@ import zarr
 from dense_sources import build_dense_fixture
 from store_assertions import replace_exception_table
 
+from opengwasdb.associations import Cells, CsrReader
 from opengwasdb.encoding import (
     Z_OVERFLOW,
     Z_OVERFLOW_INDEX,
@@ -37,7 +38,6 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.query import query_store
 from opengwasdb.stats import log10_p_two_sided
 from opengwasdb.store.open import (
@@ -342,10 +342,9 @@ def test_ragged_declares_its_encoding_and_validates_against_it(ragged_store):
 
 
 def test_ragged_top_hit_index_agrees_with_the_stored_csr(ragged_store):
-    csr = RaggedCSRReader(ragged_store)
-    z_all = csr.z_all()
-    offsets = csr._offsets[:]
-    vi_all = csr._variant_index[:]
+    reader = CsrReader.open(ragged_store, requires_mask=False)
+    whole = reader.inspect(Cells.analyses(0, reader.n_analyses))
+    z_all, vi_all, offsets = whole.z, whole.variant_index, reader.structure.offsets
     root = zarr.open_group(str(ragged_store / "data.zarr"), mode="r")
     for key in root["top_hits"]:
         group = root["top_hits"][key]

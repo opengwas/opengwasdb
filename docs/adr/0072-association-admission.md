@@ -61,6 +61,16 @@ name the decisions issue #357 took on the rules that differed.
   touches), and the Hybrid's Ragged Overflow. What it leaves unimputed is
   already counted in each Store's `completion_quality`, so a completion writes
   no record.
+  - *Clarified 5 Nov 2026.* A completion that reads its source through the
+    Association Reader (ADR 0070) refuses such a cell by the reader's presence
+    rule instead, and a missing marker other than the canonical NaN with it:
+    `InvalidAssociations` names the source, where `require_paired` raised
+    `NotAdmitted`. Both are `ValueError`s, but code that catches `NotAdmitted`
+    no longer catches the refusal. The completions that read this way:
+    - Hybrid, its source's Ragged Overflow (#391).
+    - Ragged, each source Analysis (#393).
+    - Dense, its source's bands and each LD block's rows (#393). With that,
+      no completion calls `require_paired`, and it is removed.
 - **`require_admitted`** checks Admission's guarantee on cells a writer is handed.
   Every builder calls it on the z and SE it is about to store, so a half-missing
   pair (spec §15) or any other cell a gate should have dropped refuses the build,

@@ -19,6 +19,7 @@ import pytest
 import zarr
 from residual_fixtures import write_gwas_vcf_with_eaf
 
+from opengwasdb.associations import InvalidAssociations
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import HybridCompletionResult, complete_hybrid_store
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
@@ -734,24 +735,21 @@ def test_rho_delegates_to_dense_component(completed_hybrid) -> None:
     assert q.rho_matrix(["trait_a", "trait_b"])["rho"].shape == (0, 0)
 
 
-def test_a_half_missing_overflow_cell_is_refused(tmp_path: Path, monkeypatch) -> None:
+def test_a_half_missing_overflow_cell_is_refused(tmp_path: Path) -> None:
     """D1 (issue #357): the source's Ragged Overflow is carried across, so a
     cell with one of z and SE missing is refused, as the Dense Component's
-    completion refuses one of its own (spec §15)."""
-    from opengwasdb.admission import NotAdmitted
-
+    completion refuses one of its own (spec §15). The Association Reader the
+    Overflow is read through refuses it."""
     src = _build_source(tmp_path)
-    original = RaggedCSRReader.se_all
+    assert StoreManifest.load(src).encoding.se.kind == "float16"
+    se = zarr.open_group(src / "data.zarr" / "ragged", mode="r+")["se"]
+    present = np.flatnonzero(np.isfinite(np.asarray(se[:])))
+    assert len(present), "the Overflow must hold a present cell to break"
+    se[int(present[0])] = np.float16(np.nan)
 
-    def se_all(self):
-        se = np.array(original(self), dtype=np.float32, copy=True)
-        # Fixture first: the Overflow holds a present cell to break.
-        assert np.isfinite(se).any()
-        se[np.flatnonzero(np.isfinite(se))[0]] = np.nan
-        return se
-
-    monkeypatch.setattr(RaggedCSRReader, "se_all", se_all)
-    with pytest.raises(NotAdmitted, match="Ragged Overflow: .*one of z and SE missing: 1"):
+    with pytest.raises(
+        InvalidAssociations, match=r"source's Ragged Overflow: 1 association cell.*partial 1"
+    ):
         complete_hybrid_store(
             src, tmp_path / "dst.opengwasdb", _make_ld_panel(tmp_path), min_cor=0.0, thresh=0.9
         )

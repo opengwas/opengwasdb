@@ -1012,7 +1012,7 @@ def _write_dense_component_skeleton(
     is returned because the EAF survey samples both components on the shared
     axis through it and the query facade reads it back."""
     write_index(axis.dense_staged, axis.partition.panel_sorted, axis.analyses, chunk_shape)
-    _write_variant_table(
+    write_variant_table(
         axis.dense_dir,
         axis.partition.panel_sorted,
         axis.hg38_to_source,
@@ -1846,7 +1846,7 @@ def _rewrite_dense_table_if_needed(
         "Single-pass build: the global rsid rekey moved a Dense Component name; "
         "rewriting the component's variant table"
     )
-    _write_variant_table(prepared.dense_dir, panel, prepared.hg38_to_source, dict(merged))
+    write_variant_table(prepared.dense_dir, panel, prepared.hg38_to_source, dict(merged))
 
 
 def _fold_recorded_axis(
@@ -2486,7 +2486,7 @@ def _write_shared_metadata(
         options.chunk_shape,
     )
     write_analyses_tsv(prepared.staged.path, shared_analyses)
-    _write_variant_table(
+    write_variant_table(
         prepared.staged.path,
         prepared.partition.shared_sorted,
         prepared.hg38_to_source,
@@ -3547,7 +3547,7 @@ def _report_from_payload(payload: Mapping[str, Any]) -> EafOrientationReport:
     )
 
 
-def _write_variant_table(
+def write_variant_table(
     store_path: Path,
     alids: list[str],
     hg38_to_source: dict[str, str | None],

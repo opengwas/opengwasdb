@@ -43,6 +43,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from stored_rows import stored_rows
 
 from opengwasdb import StoreManifest, open_store
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
@@ -238,13 +239,12 @@ class RaggedResidualScenario:
         `eaf` the source store itself reads back (fixture source values after
         the source's own quantisation).
         """
-        src = RaggedCSRReader(self.source)
         axis = VariantAxis(self.source)
         alid_by_index = {v.variant_index: v.alid for v in axis.all()}
         axis.close()
         out: dict[str, dict[str, tuple[float, float]]] = {}
         for ai, analysis_id in enumerate(("a", "b")):
-            row = src.get_analysis(ai)
+            row = stored_rows(self.source, ai)
             out[analysis_id] = {
                 alid_by_index[int(vi)]: (float(se), float(eaf))
                 for vi, se, eaf in zip(row.variant_index, row.se, row.eaf, strict=True)
@@ -295,8 +295,7 @@ def test_source_is_residual_codable_and_leaves_panel_cells_unobserved(scenario) 
     # assertions will pin after completion; they must be exceptions already.
     assert len(root["se_exception_index"][:]) == len(_EXACT_EXCEPTION)
 
-    src = RaggedCSRReader(scenario.source)
-    rows_a, rows_b = src.get_analysis(0), src.get_analysis(1)
+    rows_a, rows_b = stored_rows(scenario.source, 0), stored_rows(scenario.source, 1)
     assert len(rows_a.variant_index) == N_SOURCE
     assert len(rows_b.variant_index) == N_SOURCE - len(_B_MISSING)
     axis = VariantAxis(scenario.source)

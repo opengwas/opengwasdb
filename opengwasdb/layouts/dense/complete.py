@@ -28,7 +28,7 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.admission.cells import require_paired
+from opengwasdb.associations import Cells, DenseGridReader
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
 from opengwasdb.completion.checkpoint import (
@@ -59,8 +59,6 @@ from opengwasdb.completion.schema import completion_quality_rollup, create_compl
 from opengwasdb.encoding import (
     EAF_BASELINE,
     DenseEafPlane,
-    DenseSePlane,
-    DenseZPlane,
     EafExceptionBuilder,
     StoreCodec,
     StoreEncoding,
@@ -117,6 +115,9 @@ log = logging.getLogger(__name__)
 _COMPRESSOR = compressor()
 _LD_PANEL_ID = "eur-hg38-gpm"
 
+#: What the Association Reader names the source in a refusal.
+_SOURCE = "complete-dense, the source's Dense grid"
+
 
 @dataclass(frozen=True)
 class CompletionResult:
@@ -149,6 +150,11 @@ def _source_row_for(src_axis: VariantAxis, alid: str | None) -> int | None:
     return rec.variant_index if rec is not None else None
 
 
+def _by_row(values: np.ndarray, n_analyses: int) -> np.ndarray:
+    """A `variants` region's cells, read variant-major, as rows × Analyses."""
+    return values.reshape(-1, n_analyses)
+
+
 def _match_source_rows(
     source_path: str | Path, canonical_alids: list[str | None]
 ) -> tuple[list[int], list[int]]:
@@ -173,22 +179,26 @@ def _make_reader(task: _BlockTask):
     z/se at a block's positions as one matrix slice, opening the source store
     and LD panel itself so no payload beyond a lightweight block descriptor
     needs to be pickled into the worker process.
+
+    The cells are read through the Association Reader unjudged (`inspect`): the
+    band pass judges every source cell before any completed cell is stored.
     """
 
     def make_reader(block, canonical_alids: list[str | None]):
         src_store = open_store(task.source_path)
-        src_root = src_store.arrays(mode="r")
-        src_plane = DenseZPlane.open(src_root, src_store.manifest.encoding)
-        src_se_plane = DenseSePlane.open(src_root, src_store.manifest.encoding)
-        n_analyses = src_plane.n_analyses
+        source = DenseGridReader.open(
+            src_store.arrays(mode="r"), src_store.manifest.encoding, source=_SOURCE
+        )
+        n_analyses = source.n_analyses
 
         matched_local, matched_src = _match_source_rows(task.source_path, canonical_alids)
 
         z_obs = np.full((len(canonical_alids), n_analyses), np.nan, dtype=np.float64)
         se_obs = np.full((len(canonical_alids), n_analyses), np.nan, dtype=np.float64)
         if matched_local:
-            z_obs[matched_local, :] = src_plane.rows(np.asarray(matched_src))
-            se_obs[matched_local, :] = src_se_plane.rows(np.asarray(matched_src))
+            cells = source.inspect(Cells.variants(matched_src))
+            z_obs[matched_local, :] = _by_row(cells.z, n_analyses)
+            se_obs[matched_local, :] = _by_row(cells.se, n_analyses)
 
         def read(ai: int) -> tuple[np.ndarray, np.ndarray]:
             return z_obs[:, ai], se_obs[:, ai]
@@ -1395,13 +1405,12 @@ def _log_conflicting_fills(
 def _seed_paired_bands(
     zb: np.ndarray,
     sb: np.ndarray,
-    src_plane: DenseZPlane,
-    src_se_plane: DenseSePlane,
+    source: DenseGridReader,
     out_to_src: np.ndarray,
     r0: int,
 ) -> None:
     """Seed one band of z and SE from the source, refusing a source cell the
-    presence rule calls invalid (`require_paired`).
+    presence rule calls invalid (`InvalidAssociations`, ADR 0070).
 
     A fill lands where z is missing, so a half-missing source cell (spec §15)
     would come out with an imputed z beside an observed SE, or with its SE
@@ -1409,17 +1418,15 @@ def _seed_paired_bands(
     would be read as missing and, where nothing fills the cell, written into
     the completed planes as itself.
 
-    The band is judged whole, before any fill: a row no source cell maps to
-    holds the canonical NaN it was filled with, so it passes.
+    The source's cells are judged as they are read, before any fill; a row no
+    source cell maps to keeps the canonical NaN it was filled with.
     """
     valid, rows = _band_source_rows(out_to_src, r0, r0 + len(zb))
     if not len(valid):
         return
-    zb[valid, :] = src_plane.rows(rows)
-    sb[valid, :] = src_se_plane.rows(np.asarray(rows, dtype=np.int64))
-    require_paired(
-        zb, sb, where=f"complete-dense, the source's cells in rows {r0:,} to {r0 + len(zb):,}"
-    )
+    cells = source.inspect(Cells.variants(rows)).associations(_SOURCE)
+    zb[valid, :] = _by_row(cells.z, source.n_analyses)
+    sb[valid, :] = _by_row(cells.se, source.n_analyses)
 
 
 @dataclass
@@ -1442,8 +1449,7 @@ class _BandTallies:
 
 def _write_completed_statistic_bands(
     root: Any,
-    src_plane: DenseZPlane,
-    src_se_plane: DenseSePlane,
+    source: DenseGridReader,
     out_to_src: np.ndarray,
     on_panel: np.ndarray,
     fill_shard_dir: Path,
@@ -1477,7 +1483,7 @@ def _write_completed_statistic_bands(
         zb[:] = np.nan
         sb[:] = np.nan
         imp_band = np.zeros((r1 - r0, n_analyses), dtype=np.uint8)
-        _seed_paired_bands(zb, sb, src_plane, src_se_plane, out_to_src, r0)
+        _seed_paired_bands(zb, sb, source, out_to_src, r0)
         _count_band_off_panel_missing(tallies.n_missing_off_panel, zb, on_panel, r0, r1)
         tallies.total_imputed += _apply_fill_shard_records(
             zb, sb, imp_band, _fill_shard_path(fill_shard_dir, band_index), r0,
@@ -1646,8 +1652,7 @@ def _write_completed_bands(
     # completion moves values between two planes, it does not reinterpret them.
     tallies = _write_completed_statistic_bands(
         root,
-        DenseZPlane.open(src_root, source_encoding),
-        DenseSePlane.open(src_root, source_encoding),
+        DenseGridReader.open(src_root, source_encoding, source=_SOURCE),
         out_to_src,
         on_panel,
         fill_shard_dir,
