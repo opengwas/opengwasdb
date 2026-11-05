@@ -211,6 +211,33 @@ def test_one_analysis_index_of_a_sequence_stands_for_every_cell() -> None:
     assert kept.se_out_of_range.tolist() == [0, 1]
 
 
+def test_a_sequence_of_variants_that_does_not_match_its_statistics_is_refused() -> None:
+    """The run's variant index addresses the same cells as z, SE and EAF: one of
+    another length would be broadcast across them, or refused by numpy from
+    inside the encode (issue #392)."""
+    cells = CellValues(_f32(1.0, 2.0, 3.0), _f32(0.1, 0.2, 0.3), _f32(0.3, 0.4, 0.5))
+    at = Placement.sequence(0, np.arange(2), 0, _N_ANALYSES)
+    with pytest.raises(
+        ValueError,
+        match=r"complete-ragged: z of length 3, se of length 3, eaf of length 3 "
+        r"and variant_index of length 2 must be parallel",
+    ):
+        _codec().encode(cells, at, where="complete-ragged")
+
+
+def test_a_cell_lists_rows_and_cols_are_held_to_the_statistics_they_address() -> None:
+    """`Placement.pairs` addresses one cell per entry too, so a list of another
+    length is no more parallel to the batch than a sequence's index is."""
+    cells = CellValues(_f32(1.0, 2.0, 3.0), _f32(0.1, 0.2, 0.3))
+    at = Placement.pairs(np.array([0, 1]), np.array([0, 1]), _N_ANALYSES)
+    with pytest.raises(
+        ValueError,
+        match=r"complete-hybrid: z of length 3, se of length 3, rows of length 2 "
+        r"and cols of length 2 must be parallel",
+    ):
+        _codec().encode(cells, at, where="complete-hybrid")
+
+
 # ── AssociationCodec: one encode, in the order the planes allow ──────────────
 
 _RESIDUAL = StoreEncoding(

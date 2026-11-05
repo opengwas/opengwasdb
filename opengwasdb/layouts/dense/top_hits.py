@@ -15,6 +15,7 @@ import numpy as np
 from opengwasdb import top_hits
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
+from opengwasdb.encoding.association_codec import require_parallel
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
@@ -258,7 +259,16 @@ def write_top_hit_indexes_for_store(
     together is what stops a build writing tiers with no `eaf` array. The two
     gathers and the tier write are each logged with their elapsed time, and the
     gathers spread their row chunks across ``n_workers`` (issue #221).
+
+    ``rows``, ``cols``, ``z`` and ``se`` describe the same candidate cells, and
+    one of another length is refused here, before anything is gathered: a
+    residual plan discards the caller's ``se`` for the plane's, so a short one
+    would otherwise be dropped without a word (issue #392).
     """
+    require_parallel(
+        (("rows", rows), ("cols", cols), ("z", z), ("se", se)),
+        where="write_top_hit_indexes_for_store",
+    )
     log.info("Collecting top-hit EAF in variant-row order for %d candidate cells", len(rows))
     with log_phase(log, "Top-hit EAF gather"):
         eaf = _collect_top_hit_eaf(store_path, rows, cols, encoding, n_workers)

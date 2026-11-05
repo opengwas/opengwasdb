@@ -53,6 +53,7 @@ from opengwasdb.encoding.association_codec import (
     CellValues,
     Storable,
     log_se_out_of_range,
+    require_parallel,
     storable,
 )
 from opengwasdb.encoding.codec import se_float16
@@ -139,7 +140,16 @@ def _spill_column(
 
     Top hits are NOT harvested here — they are harvested during the band-write
     phase from the *stored* float16 values, so the index matches exactly what a
-    query reads back from the ``z`` array (issue 046)."""
+    query reads back from the ``z`` array (issue 046).
+
+    ``rows``, ``z``, ``se`` and ``eaf`` are one entry per cell of the column, and
+    one of another length is refused before the spill file exists: the
+    band-write phase reads the four back as one column, so a short one would put
+    a cell's statistic under another's variant (issue #392)."""
+    require_parallel(
+        (("rows", rows), ("z", z), ("se", se), ("eaf", eaf)),
+        where=f"dense-vcf spill, analysis_index {col_idx}",
+    )
     final = spill_dir / f"{col_idx}.npz"
     tmp = spill_dir / f"{col_idx}.tmp.npz"
     np.savez(tmp, rows=rows, z=z, se=se, eaf=eaf)

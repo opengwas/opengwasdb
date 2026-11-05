@@ -29,6 +29,7 @@ import numpy as np
 from opengwasdb.encoding.codec import (
     EAF_BASELINE,
     EAF_REFERENCE,
+    SE_COEFFICIENTS,
     EafExceptionBuilder,
     PositionSource,
     SeExceptionBuilder,
@@ -40,7 +41,6 @@ from opengwasdb.encoding.codec import (
     positions_row_band,
 )
 from opengwasdb.encoding.plan import StoreEncoding
-from opengwasdb.encoding.planes import SE_COEFFICIENTS
 
 log = logging.getLogger(__name__)
 
@@ -172,6 +172,10 @@ class Placement:
 
     `rows` and `analyses` broadcast against the batch's shape; `positions` is
     each cell's flat position, which keys every side table (spec §6a).
+    `per_cell` is what the batch must match one for one (issue #392): the
+    indices that address a single cell each, named as the caller that built the
+    placement names them. A grid's are not among them -- `band`'s rows and
+    Analyses broadcast by design, so an array of theirs is not an accident.
     """
 
     #: Each cell's variant row: what gathers its EAF baseline and panel EAF.
@@ -180,6 +184,8 @@ class Placement:
     analyses: np.ndarray
     positions: PositionSource
     n_analyses: int
+    #: The placement's own indices, `(name, array)` pairs, one entry per cell.
+    per_cell: tuple[tuple[str, np.ndarray], ...] = ()
 
     @classmethod
     def band(cls, r0: int, r1: int, n_analyses: int) -> Placement:
@@ -195,7 +201,13 @@ class Placement:
     def pairs(cls, rows: np.ndarray, cols: np.ndarray, n_analyses: int) -> Placement:
         """The Dense cells `(rows[i], cols[i])`, as `Cells.pairs` names them."""
         rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
-        return cls(rows, cols, positions_pairs(rows, cols, n_analyses), n_analyses)
+        return cls(
+            rows,
+            cols,
+            positions_pairs(rows, cols, n_analyses),
+            n_analyses,
+            (("rows", rows), ("cols", cols)),
+        )
 
     @classmethod
     def sequence(
@@ -212,14 +224,16 @@ class Placement:
         that is not parallel to `variant_index` is refused, because the two
         describe the same cells (issue #392).
         """
-        variant_index = np.asarray(variant_index, dtype=np.int64)
+        variants = np.asarray(variant_index, dtype=np.int64)
         analyses = np.asarray(analysis_index, dtype=np.int64)
+        per_cell: tuple[tuple[str, np.ndarray], ...] = (("variant_index", variants),)
         if analyses.ndim:
             require_parallel(
-                (("variant_index", variant_index), ("analysis_index", analyses)),
+                (("variant_index", variants), ("analysis_index", analyses)),
                 where="Placement.sequence",
             )
-        return cls(variant_index, analyses, positions_flat(start), n_analyses)
+            per_cell += (("analysis_index", analyses),)
+        return cls(variants, analyses, positions_flat(start), n_analyses, per_cell)
 
 
 @dataclass(frozen=True)
@@ -281,8 +295,11 @@ class AssociationCodec:
         `EafBaselineError` (a residual EAF plan with no baseline), and
         `ValueError` for what the plan cannot hold: a frequency outside
         [0, 1], a frequency where the plan declares no EAF plane, or a
-        residual SE with no model or no decoded frequency (issue #159).
+        residual SE with no model or no decoded frequency (issue #159). It
+        raises `ValueError` too for a placement that does not address one cell
+        per cell of the batch (issue #392).
         """
+        require_parallel((*_cell_arrays(cells), *at.per_cell), where=where)
         kept = storable(cells, at.analyses, at.n_analyses, where=where)
         values = kept.cells
         z_overflow = ZOverflowBuilder()
@@ -477,11 +494,20 @@ def _lengths(named: Sequence[tuple[str, np.ndarray]]) -> str:
     return ", ".join(described[:-1]) + " and " + described[-1]
 
 
+def _cell_arrays(cells: CellValues) -> tuple[tuple[str, Any], ...]:
+    """A batch's own arrays, as `require_parallel` names them."""
+    return (
+        ("z", cells.z),
+        ("se", cells.se),
+        ("eaf", cells.eaf),
+        ("imputed", cells.imputed),
+    )
+
+
 def _parallel(cells: CellValues, where: str) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    require_parallel(_cell_arrays(cells), where=where)
     z, se = np.asarray(cells.z), np.asarray(cells.se)
-    eaf = None if cells.eaf is None else np.asarray(cells.eaf)
     imputed = None if cells.imputed is None else np.asarray(cells.imputed)
-    require_parallel((("z", z), ("se", se), ("eaf", eaf), ("imputed", imputed)), where=where)
     return z, se, imputed
 
 

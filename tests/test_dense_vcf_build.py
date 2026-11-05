@@ -26,7 +26,7 @@ from liftover_fixtures import (
 from residual_fixtures import write_gwas_vcf_with_eaf
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
-from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
+from opengwasdb.layouts.dense.build_vcf import _spill_column, build_dense_from_vcf_manifest
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.query import query_store
@@ -303,6 +303,25 @@ def test_ontology_and_attribution_columns_populated_from_manifest(tmp_path):
     assert row["consortium"] == "GIANT"
     assert row["first_author"] == "J. Smith"
     assert row["analysis_label"] == "Trait A"
+
+
+def test_a_spilled_column_whose_arrays_are_not_parallel_is_refused_and_writes_nothing(
+    tmp_path,
+) -> None:
+    """A spilled column's rows, z, SE and EAF are one cell each: one of another
+    length would put a cell's statistic under another's variant in the spill the
+    band-write phase reads back (issue #392)."""
+    spill_dir = tmp_path / "spill"
+    spill_dir.mkdir()
+    rows = np.array([0, 1, 2], dtype=np.int64)
+    values = np.full(3, 0.1, dtype=np.float32)
+    with pytest.raises(
+        ValueError,
+        match=r"dense-vcf spill, analysis_index 0: rows of length 3, z of length 2, "
+        r"se of length 3 and eaf of length 3 must be parallel",
+    ):
+        _spill_column(spill_dir, 0, rows, values[:2], values, values)
+    assert list(spill_dir.iterdir()) == []
 
 
 def test_missing_required_manifest_field_fails_the_build_loudly(tmp_path):

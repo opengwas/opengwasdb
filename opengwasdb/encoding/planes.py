@@ -22,9 +22,11 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
 
+from opengwasdb.encoding.association_codec import require_parallel
 from opengwasdb.encoding.codec import (
     EAF_BASELINE,
     EAF_REFERENCE,
+    SE_COEFFICIENTS,
     EafExceptionBuilder,
     EafExceptionTable,
     SeExceptionBuilder,
@@ -49,9 +51,6 @@ from opengwasdb.store.arrays import (
 
 if TYPE_CHECKING:
     from opengwasdb.encoding.association_codec import Encoded
-
-SE_COEFFICIENTS = "se_coefficients"
-
 
 class EafRead(NamedTuple):
     """One region's decoded frequencies, and the imputed mask read with them.
@@ -1002,7 +1001,7 @@ def write_encoded_planes(
     and a plane written from it holds one cell's statistic under another's
     variant.
     """
-    _require_parallel(_batch_arrays(encoded), where="write_encoded_planes")
+    require_parallel(_batch_arrays(encoded), where="write_encoded_planes")
     z_array = create_array(
         group, "z", role, data=encoded.z, dtype=plan.z.dtype, compressor=compressor, hint=chunks
     )
@@ -1046,7 +1045,7 @@ def write_dense_cells(
     arrays disagree is refused before the grid is touched (issue #392).
     """
     rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
-    _require_parallel(
+    require_parallel(
         (("rows", rows), ("cols", cols), *_batch_arrays(encoded)), where="write_dense_cells"
     )
     if len(rows) == 0:
@@ -1087,18 +1086,6 @@ def _batch_arrays(encoded: Encoded) -> tuple[tuple[str, Any], ...]:
         ("eaf", encoded.eaf),
         ("imputed", encoded.imputed),
     )
-
-
-def _require_parallel(named: Sequence[tuple[str, Any]], *, where: str) -> None:
-    """Refuse arrays that are not parallel, by the codec's one rule (issue #392).
-
-    Imported inside the function because `association_codec` imports
-    `SE_COEFFICIENTS` from this module, so a top-level import would close the
-    cycle.
-    """
-    from opengwasdb.encoding.association_codec import require_parallel
-
-    require_parallel(named, where=where)
 
 
 _Table = ZOverflowTable | EafExceptionTable | SeExceptionTable

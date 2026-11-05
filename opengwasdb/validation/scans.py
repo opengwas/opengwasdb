@@ -28,6 +28,7 @@ from opengwasdb.associations import Tally, non_canonical
 from opengwasdb.encoding.codec import (
     EAF_BASELINE,
     EAF_REFERENCE,
+    SE_COEFFICIENTS,
     EafExceptionTable,
     SeExceptionTable,
     StoreCodec,
@@ -36,7 +37,6 @@ from opengwasdb.encoding.codec import (
 )
 from opengwasdb.encoding.plan import EafBaselineError
 from opengwasdb.encoding.planes import (
-    SE_COEFFICIENTS,
     DenseEafPlane,
     DenseSePlane,
     DenseZPlane,

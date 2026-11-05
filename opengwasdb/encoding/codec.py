@@ -63,6 +63,11 @@ from opengwasdb.store.arrays import (
 SE_EXCEPTION_INDEX = "se_exception_index"
 SE_EXCEPTION_VALUE = "se_exception_value"
 
+#: A residual `se` plane's per-Analysis fit, in the same zarr group as the plane.
+#: It is a side array of the `se` plane, not of the association, so the name sits
+#: with the other side arrays' rather than in the module that writes the planes.
+SE_COEFFICIENTS = "se_coefficients"
+
 # Sparse tables can still contain millions of exact values at the accepted
 # 2% ceiling.  Keep their physical chunks bounded so both the writer and the
 # compressed-size decision can stream them.  This *is* the seam's

@@ -52,12 +52,12 @@ from opengwasdb.encoding.codec import (
     EAF_EXCEPTION_INDEX,
     EAF_EXCEPTION_VALUE,
     EAF_REFERENCE,
+    SE_COEFFICIENTS,
     SE_EXCEPTION_INDEX,
     SE_EXCEPTION_VALUE,
     Z_OVERFLOW_INDEX,
     Z_OVERFLOW_VALUE,
 )
-from opengwasdb.encoding.planes import SE_COEFFICIENTS
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
 from opengwasdb.model.manifest import StoreManifest, normalise_coverage
 from opengwasdb.store import arrays as store_arrays
