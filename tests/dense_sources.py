@@ -161,6 +161,9 @@ def _batch(rows: Sequence[NormalisedAssociation]) -> ReaderBatch:
         imputation_score=np.full(n, np.nan),
         imputation_status=np.full(n, ImputationScoreStatus.UNDECLARED, dtype=object),
         rsid=np.array([r.rsid or "" for r in rows], dtype=object),
+        # Unflipped, so the effect allele is the row's alt, as a source spells it.
+        ref=np.array([r.variant.other_allele for r in rows], dtype=object),
+        alt=np.array([r.variant.effect_allele for r in rows], dtype=object),
         reference=ReferenceAllele.UNDECLARED,
     )
 
