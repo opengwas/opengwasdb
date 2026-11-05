@@ -24,6 +24,7 @@ import numpy as np
 from .genetic_map import LoadedMap
 from .ld import export_dosages, pair_r2
 from .pairs import (
+    R2_THRESHOLDS,
     Pair,
     Spike,
     chance_ld,
@@ -109,6 +110,33 @@ def pool(records: list[dict[str, int]]) -> dict[str, Any]:
     }
 
 
+def pool_pairs(summaries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Sum `summarise` records over Analyses."""
+    def total(get: Any) -> Any:
+        return sum(get(s) for s in summaries)
+    first = summaries[0]
+    return {
+        "n": total(lambda s: s["n"]), "r2_undefined": total(lambda s: s["r2_undefined"]),
+        "straddling_a_spike": total(lambda s: s["straddling_a_spike"]),
+        "straddling": {k: total(lambda s, k=k: s["straddling"][k]) for k in first["straddling"]},
+        "r2_histogram": {k: total(lambda s, k=k: s["r2_histogram"][k])
+                         for k in first["r2_histogram"]},
+        "by_distance_band": {band: {k: total(lambda s, b=band, k=k: s["by_distance_band"][b][k])
+                                    for k in counts}
+                             for band, counts in first["by_distance_band"].items()},
+    }
+
+
+def pool_chance(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Cross-chromosome pairs pooled over Analyses, with the share reaching each r^2."""
+    pairs = sum(r["pairs"] for r in records)
+    reached = {f"pairs_r2_ge_{t:g}": sum(r[f"pairs_r2_ge_{t:g}"] for r in records)
+               for t in R2_THRESHOLDS}
+    return {"analyses": len(records), "pairs": pairs, "r2_undefined":
+            sum(r["r2_undefined"] for r in records), **reached,
+            **{k.replace("pairs_", "share_"): v / pairs for k, v in reached.items()}}
+
+
 def within_tolerance(pooled: dict[str, Any], prefix: str = "") -> bool:
     return bool(pooled[f"{prefix}spurious_split_rate"] <= CRITERIA["spurious_split_rate_max"]
                 and pooled[f"{prefix}lost_signal_rate"] <= CRITERIA["lost_signal_rate_max"])
@@ -136,7 +164,8 @@ def evaluate(analyses: list[dict[str, Any]]) -> dict[str, Any]:
     rows = []
     for (d_cm, w_bp), by_r2 in by_config.items():
         row: dict[str, Any] = {"d_cm": d_cm, "w_bp": w_bp,
-                               "by_r2": {r2: pool(records) for r2, records in by_r2.items()}}
+                               "by_r2": {r2: pool(records) | _pooled_detail(records)
+                                         for r2, records in by_r2.items()}}
         if d_cm != "bp_only":
             better = clearly_better(by_r2[PRIMARY_R2], by_config[("bp_only", w_bp)][PRIMARY_R2])
             primary = row["by_r2"][PRIMARY_R2]
@@ -145,6 +174,16 @@ def evaluate(analyses: list[dict[str, Any]]) -> dict[str, Any]:
             row["qualifies_median"] = better and within_tolerance(primary, "median_")
         rows.append(row)
     return {"criteria": CRITERIA, "configs": rows, "best": _best(rows)}
+
+
+def _pooled_detail(records: list[dict[str, Any]]) -> dict[str, Any]:
+    zbands = records[0]["by_abs_z"]
+    return {
+        "by_abs_z": {band: {k: sum(r["by_abs_z"][band][k] for r in records) for k in counts}
+                     for band, counts in zbands.items()},
+        "spurious_split_pairs": pool_pairs([r["spurious_split_pairs"] for r in records]),
+        "lost_signal_pairs": pool_pairs([r["lost_signal_pairs"] for r in records]),
+    }
 
 
 def _best(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -280,6 +319,7 @@ def sweep(selection: dict[str, Any], stores_dir: Path, genetic_map: LoadedMap, p
                  "r2": R2_VALUES, "tier": 5e-8, "observed_only": True},
         "spikes": [{"chromosome": s.chromosome, "position": s.position, "population": s.name}
                    for s in spikes],
+        "chance_ld": pool_chance([a["chance_ld"] for a in analyses]),
         "evaluation": evaluate(analyses),
         "analyses": analyses,
     }

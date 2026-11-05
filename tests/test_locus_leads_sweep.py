@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 from prototype_modules import load_prototype
@@ -91,3 +93,27 @@ def test_a_config_qualifies_only_when_both_rates_are_within_ten_percent_and_it_b
     bad = {"locus_leads": 100, "index_variants": 100, "spurious_splits": 11, "lost_signals": 10}
     assert sweep.within_tolerance(sweep.pool([good]))
     assert not sweep.within_tolerance(sweep.pool([bad]))
+
+
+def _summary(n: int, near: int, straddling: int) -> dict[str, Any]:
+    band = {"n": n, "r2_ge_0.01": near, "r2_ge_0.001": near}
+    return {"n": n, "r2_undefined": 0, "r2_histogram": {"[0,0.001)": 0, "[0.001,0.01)": n - near},
+            "by_distance_band": {"<=1Mb": band, "1-2.5Mb": {"n": 0, "r2_ge_0.01": 0,
+                                                            "r2_ge_0.001": 0}},
+            "straddling_a_spike": straddling, "straddling": {"TSI": straddling}}
+
+
+def test_pairs_pool_by_summing_counts_across_analyses() -> None:
+    pooled = sweep.pool_pairs([_summary(4, 3, 1), _summary(6, 1, 0)])
+    assert pooled["n"] == 10 and pooled["straddling_a_spike"] == 1
+    assert pooled["by_distance_band"]["<=1Mb"] == {"n": 10, "r2_ge_0.01": 4, "r2_ge_0.001": 4}
+    assert pooled["r2_histogram"]["[0.001,0.01)"] == 6
+
+
+def test_chance_ld_pools_pairs_and_reports_the_share_at_each_threshold() -> None:
+    pooled = sweep.pool_chance([
+        {"pairs": 100, "pairs_r2_ge_0.01": 3, "pairs_r2_ge_0.001": 20, "r2_undefined": 0},
+        {"pairs": 300, "pairs_r2_ge_0.01": 5, "pairs_r2_ge_0.001": 40, "r2_undefined": 0}])
+    assert pooled["pairs"] == 400
+    assert pooled["share_r2_ge_0.01"] == pytest.approx(8 / 400)
+    assert pooled["share_r2_ge_0.001"] == pytest.approx(60 / 400)
