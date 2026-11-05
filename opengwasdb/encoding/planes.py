@@ -940,6 +940,43 @@ def _write_se_arrays(
 # ── Writing an encoded batch ────────────────────────────────────────────────
 
 
+def _write_eaf_arrays(
+    group: Any,
+    plan: StoreEncoding,
+    encoded: Encoded,
+    *,
+    role: ArrayRole,
+    compressor: Any,
+    chunks: tuple[int, ...] | None,
+    eaf_baseline: np.ndarray | None,
+) -> None:
+    """Replace the `eaf` plane and, for a residual plan, its baseline and exception table.
+
+    The plane, its baseline and its exception table are one artifact in three
+    arrays, exactly as `_write_se_arrays` treats the SE plan's: writing them
+    from one place is what stops a builder producing two of the three. A batch
+    with no frequency plane writes none of them.
+    """
+    if encoded.eaf is None:
+        return
+    create_array(
+        group,
+        "eaf",
+        role,
+        data=encoded.eaf,
+        dtype=plan.eaf.dtype,
+        compressor=compressor,
+        hint=chunks,
+        overwrite=True,
+    )
+    if not plan.eaf.is_residual:
+        return
+    if eaf_baseline is None:
+        raise EafBaselineError("a residual eaf plane is written with its eaf_baseline")
+    write_eaf_baseline(group, eaf_baseline, compressor=compressor, role=_per_variant_role(role))
+    encoded.tables.eaf_exceptions.write(group, role=_side_table_role(role))
+
+
 def write_encoded_planes(
     group: Any,
     plan: StoreEncoding,
@@ -973,24 +1010,15 @@ def write_encoded_planes(
     if plan.z.is_fixed_point:
         # A float plane has no overflow table, and must not acquire an empty one.
         encoded.tables.z_overflow.write(group, role=_side_table_role(role))
-    if encoded.eaf is not None:
-        create_array(
-            group,
-            "eaf",
-            role,
-            data=encoded.eaf,
-            dtype=plan.eaf.dtype,
-            compressor=compressor,
-            hint=resolved,
-            overwrite=True,
-        )
-        if plan.eaf.is_residual:
-            if eaf_baseline is None:
-                raise EafBaselineError("a residual eaf plane is written with its eaf_baseline")
-            write_eaf_baseline(
-                group, eaf_baseline, compressor=compressor, role=_per_variant_role(role)
-            )
-            encoded.tables.eaf_exceptions.write(group, role=_side_table_role(role))
+    _write_eaf_arrays(
+        group,
+        plan,
+        encoded,
+        role=role,
+        compressor=compressor,
+        chunks=resolved,
+        eaf_baseline=eaf_baseline,
+    )
     _write_se_arrays(
         group,
         StoreCodec(plan),

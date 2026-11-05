@@ -58,6 +58,61 @@ def test_an_index_reads_back_the_rows_it_was_written_from(tmp_path, with_optiona
         assert rows.imputed is None and rows.eaf is None
 
 
+@pytest.mark.parametrize(
+    ("short", "refusal"),
+    [
+        (
+            "variant_index",
+            "variant_index of length 5, analysis_index of length 6, z of length 6, "
+            "se of length 6, imputed of length 6 and eaf of length 6",
+        ),
+        (
+            "analysis_index",
+            "variant_index of length 6, analysis_index of length 5, z of length 6, "
+            "se of length 6, imputed of length 6 and eaf of length 6",
+        ),
+        (
+            "z",
+            "variant_index of length 6, analysis_index of length 6, z of length 5, "
+            "se of length 6, imputed of length 6 and eaf of length 6",
+        ),
+        (
+            "se",
+            "variant_index of length 6, analysis_index of length 6, z of length 6, "
+            "se of length 5, imputed of length 6 and eaf of length 6",
+        ),
+        (
+            "imputed",
+            "variant_index of length 6, analysis_index of length 6, z of length 6, "
+            "se of length 6, imputed of length 5 and eaf of length 6",
+        ),
+        (
+            "eaf",
+            "variant_index of length 6, analysis_index of length 6, z of length 6, "
+            "se of length 6, imputed of length 6 and eaf of length 5",
+        ),
+    ],
+)
+def test_an_index_whose_columns_are_not_parallel_is_refused_and_writes_nothing(
+    tmp_path, short, refusal
+) -> None:
+    """Every column of one candidate set describes the same cells: a set that says
+    otherwise is refused before the index group is created, naming every column's
+    length."""
+    columns = _columns(imputed=True, eaf=True)
+    columns[short] = columns[short][:-1]
+    root = store_arrays.open_group_for_write(tmp_path / "data.zarr", "a")
+    before = _files(tmp_path / "data.zarr")
+    with pytest.raises(ValueError, match=f"write_index: {refusal} must be parallel"):
+        top_hits.write_index(root, columns, (5e-8, 5e-6, 5e-4), n_analyses=3)
+    assert _files(tmp_path / "data.zarr") == before
+
+
+def _files(path) -> dict[str, bytes]:
+    """Every file of a written tree, so a refused write shows as no change."""
+    return {str(p.relative_to(path)): p.read_bytes() for p in path.rglob("*") if p.is_file()}
+
+
 def test_an_analysis_addressed_read_is_that_analysis_slice(tmp_path):
     tiers = top_hits.TopHitTiers(_write(tmp_path, _columns()))
     tier = tiers.tier(5e-4)
