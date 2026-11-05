@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1] / "opengwasdb"
 
 #: Modules that read associations only through `opengwasdb.associations`.
 READERS = (
+    "layouts/dense/complete.py",
     "layouts/hybrid/complete.py",
     "layouts/ragged/complete.py",
     "query/facade.py",
@@ -38,6 +39,13 @@ READERS = (
 #: read the Overflow's private arrays and imported the Hybrid builder's table
 #: writer by its private name (#391).
 OWN_NAMES_ONLY = ("layouts/hybrid/complete.py",)
+
+#: The planes a reader module reaches that hold no association, and why.
+READER_PLANES = {
+    ("layouts/dense/complete.py", "imports DenseEafPlane"):
+        "the frequency pass carries each observed cell's stored frequency across the "
+        "row remap, after the statistic pass has read and judged the cell through the reader",
+}
 
 #: The one SE decode in a reader module: it reads no plane, but re-encodes the
 #: source's crossover cells and decodes them, to predict what completion stored.
@@ -232,7 +240,13 @@ def test_every_validation_module_is_a_reader_or_checked() -> None:
 
 @pytest.mark.parametrize("module", READERS)
 def test_readers_reach_no_plane(module: str) -> None:
-    assert plane_reads((ROOT / module).read_text(encoding="utf-8"), module) == []
+    found = plane_reads((ROOT / module).read_text(encoding="utf-8"), module)
+    assert [read for read in found if (module, read) not in READER_PLANES] == []
+
+
+@pytest.mark.parametrize(("module", "read"), sorted(READER_PLANES))
+def test_each_reviewed_reader_plane_is_still_reached(module: str, read: str) -> None:
+    assert read in plane_reads((ROOT / module).read_text(encoding="utf-8"), module)
 
 
 @pytest.mark.parametrize("module", CHECKED)

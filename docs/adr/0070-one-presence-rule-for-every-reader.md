@@ -21,7 +21,11 @@ Admission contract ([#357](https://github.com/opengwas/opengwasdb/issues/357)).
 > Hybrid Reference Completion's read of its source's Overflow
 > ([#391](https://github.com/opengwas/opengwasdb/issues/391)) read through
 > them, so no completion reaches `RaggedCSRReader`'s underscore attributes.
-> Ragged Reference Completion reads each source Analysis through `CsrReader`.
+> Ragged Reference Completion reads each source Analysis through `CsrReader`,
+> and Dense Reference Completion its source's bands and each LD block's rows
+> through `inspect(Cells.variants(…))`. The Dense Top-Hit Index build and the
+> Rho Matrix still read row bands from the planes, for the reason the Ragged
+> Top-Hit harvest below keeps its decodes.
 > `RaggedCSRReader` keeps structure public, and its decode members (`z_slice`
 > among them) serve `CsrReader` and one other caller: `get_analysis()`,
 > `variant_indices()`, `z_all()`, `se_all()`, `eaf_slice()`, `imputed()` and
