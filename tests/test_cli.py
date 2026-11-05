@@ -4,6 +4,7 @@ import json
 import math
 
 import pytest
+from cli_output import normalize_cli_output
 from residual_fixtures import write_gwas_vcf_with_eaf
 from typer.testing import CliRunner
 
@@ -211,8 +212,6 @@ def test_cli_build_dense_refuses_a_coverage_a_dense_matrix_cannot_hold(tmp_path,
     """Issue #298: `--association-coverage cis` is refused before any build runs,
     as a CLI error naming the option rather than a traceback out of the builder.
     """
-    from cli_output import normalize_cli_output
-
     store_path = tmp_path / "refused.opengwasdb"
 
     build = _build_dense(
@@ -415,6 +414,6 @@ def test_a_build_without_an_admission_record_is_refused_before_writing(tmp_path,
     )
 
     assert result.exit_code == 2
-    assert "--admission-record" in result.output
+    assert "--admission-record" in normalize_cli_output(result.output)
     assert not store_path.exists()
     assert not (tmp_path / "cli-store.opengwasdb.admission").exists()
