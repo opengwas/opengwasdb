@@ -37,10 +37,9 @@ from opengwasdb.encoding.association_codec import (
     CellValues,
     Placement,
     log_se_out_of_range,
-    require_parallel,
     storable,
 )
-from opengwasdb.encoding.codec import se_float16
+from opengwasdb.encoding.codec import require_parallel, se_float16
 from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.model.manifest import StoreManifest

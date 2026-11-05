@@ -253,8 +253,9 @@ class RaggedResidualScenario:
 
 
 @pytest.fixture(scope="module")
-def scenario(tmp_path_factory: pytest.TempPathFactory) -> RaggedResidualScenario:
-    return RaggedResidualScenario(tmp_path_factory)
+def scenario(residual_ragged_scenario: RaggedResidualScenario) -> RaggedResidualScenario:
+    """`shared_releases.residual_ragged`, built once per session and read here."""
+    return residual_ragged_scenario
 
 
 def _completed_root(scenario: RaggedResidualScenario):

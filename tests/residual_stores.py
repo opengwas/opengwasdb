@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import zarr
+from dense_sources import build_dense_from_records
 from residual_fixtures import residual_eligible_records
 from test_hybrid_completion import (
     _residual_hybrid_crossover_source,
@@ -19,7 +20,6 @@ from test_hybrid_completion import (
 )
 from test_se_residual_encoding import _residual_source_and_panel
 
-from opengwasdb.layouts.dense.build import build_dense_observed_store
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 
@@ -67,7 +67,7 @@ def dense_observed_missing(tmp_path: Path) -> Path:
     ]
     assert len(kept) == len(records) - 1, "the fixture must drop exactly one cell"
     store = tmp_path / "obs.opengwasdb"
-    build_dense_observed_store(
+    build_dense_from_records(
         kept,
         store,
         store_id="s",

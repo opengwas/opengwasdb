@@ -16,13 +16,13 @@ import csv
 import gzip
 import json
 import shutil
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.index import connect
 from opengwasdb.query import query_store
 from opengwasdb.validation import validate_store
@@ -65,8 +65,13 @@ def main() -> None:
     if args.rebuild and store_path.exists():
         shutil.rmtree(store_path)
     if args.rebuild or not store_path.exists():
+        # The fixture builder is the tests': it splits the combined source into the
+        # manifest and per-Analysis files `build-dense` reads.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+        from dense_sources import build_dense_fixture
+
         start = time.perf_counter()
-        build_dense_observed_from_sources(
+        build_dense_fixture(
             [combined_source],
             store_path,
             store_id="38714679-stage1",

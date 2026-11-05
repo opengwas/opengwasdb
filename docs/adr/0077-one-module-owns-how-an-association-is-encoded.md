@@ -163,6 +163,28 @@ harvested.
 - One place answers "how is this association stored". The deletion test is
   six writers and two round trips re-implementing the order, and nine
   narrowing casts.
+- **Every entry that takes parallel arrays refuses arrays that are not
+  parallel, before it writes anything**, by `require_parallel` (issue #392),
+  which lives in `encoding.codec` because every writer imports that module and
+  an upward import would close a cycle. It judges, in `encoding`: a batch's z,
+  SE, EAF and imputed mask (`storable`, `write_encoded_planes`,
+  `write_dense_cells`); a placement's indices against those statistics
+  (`Placement.pairs`, `Placement.sequence`, `AssociationCodec.encode`); an
+  exact-value table's positions against its values; and the SE rewrite's two
+  exception arrays. In the layouts: a Dense cell list and the batch written over
+  it, the Dense VCF and Hybrid column spills, the Top-Hit Index's candidate
+  columns and the inline writer that feeds it, the Ragged by-variant tables'
+  positions against their values, the Rho Matrix's `rho` against `n_null`, and a
+  Hybrid key run's values against its assembly bits.
+
+  An array of another length was otherwise broadcast onto the cells --
+  `storable`'s failure class, one cell's statistic stored under another's
+  variant -- or the planes were written at unequal lengths, or numpy refused it
+  from inside a write, after the planes or a tier's group existed and naming no
+  array. Three placements are exempt because broadcasting is their contract and
+  not an accident: a scalar `analysis_index`, `Placement.band`'s `(n, 1)` rows
+  against `(1, m)` Analyses, and a table's entries against the component's cell
+  count (a table holds the exceptions, not the cells).
 - Every Store this package builds is byte-identical to the one it built
   before. Evidence:
   - the fixture trees of every builder path (22 stores);

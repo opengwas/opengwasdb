@@ -246,11 +246,10 @@ def test_a_dense_completion_writes_whole_shards(
     code writes `z[r0:r0+6]`, which the guard refuses.
     """
     import test_dense_completion as tdc
+    from dense_sources import build_dense_fixture
 
     import opengwasdb.layouts.dense.complete as complete_module
     import opengwasdb.store.arrays as arrays_module
-    from opengwasdb.build.source import stream_normalised_associations
-    from opengwasdb.layouts.dense.build import build_dense_observed_store
     from opengwasdb.layouts.dense.complete import complete_dense_store
 
     monkeypatch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (4, 2))
@@ -265,8 +264,8 @@ def test_a_dense_completion_writes_whole_shards(
     source = tmp_path / "associations.tsv"
     source.write_text(tdc.SOURCE_HEADER + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
     observed = tmp_path / "obs.opengwasdb"
-    build_dense_observed_store(
-        stream_normalised_associations([source]),
+    build_dense_fixture(
+        [source],
         observed,
         store_id="s",
         release_id="obs",
@@ -345,12 +344,11 @@ def test_builder_and_converter_agree_on_a_tail_shard(
     relayout of the built release and is converted with the same shapes, so
     every array's chunk and shard must match.
     """
+    from dense_sources import build_dense_fixture
     from legacy_fixtures import relayout_as_0_1_0
 
     import opengwasdb.store.arrays as arrays_module
     import opengwasdb.store.convert as convert_module
-    from opengwasdb.build.source import stream_normalised_associations
-    from opengwasdb.layouts.dense.build import build_dense_observed_store
     from opengwasdb.store.convert import convert_release
 
     monkeypatch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (2, 1))
@@ -370,8 +368,8 @@ def test_builder_and_converter_agree_on_a_tail_shard(
     source = tmp_path / "associations.tsv"
     source.write_text(header + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
     built = tmp_path / "built.opengwasdb"
-    build_dense_observed_store(
-        stream_normalised_associations([source]),
+    build_dense_fixture(
+        [source],
         built,
         store_id="s",
         release_id="r",

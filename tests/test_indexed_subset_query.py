@@ -564,15 +564,11 @@ def test_cli_help_does_not_misstate_indexed_subset_support() -> None:
 
 
 def test_cli_json_schema_is_unchanged_with_the_selector(indexed_store: Path) -> None:
+    """A selector changes which rows come back, never the shape of a row."""
     without = _json_rows(indexed_store, "a0")
     with_selector = _json_rows(indexed_store, "a0", "--indexed-subset", "hm3")
     assert without and with_selector
-    assert set(without[0]) == set(with_selector[0]) == {
-        "variant_index",
-        "analysis_index",
-        "z",
-        "se",
-    }
+    assert set(without[0]) == set(with_selector[0]), "the selector must not change a row's keys"
     indexed_variants = {row["variant_index"] for row in with_selector}
     assert indexed_variants.issubset({row["variant_index"] for row in without})
     ordinary_by_variant = {row["variant_index"]: row for row in without}

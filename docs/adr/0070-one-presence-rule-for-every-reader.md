@@ -172,9 +172,11 @@ same way, the Dense Component's before the Overflow's within each Analysis.
   underscore attributes except Reference Completion, whose reads, with
   `get_analysis()`, change in the builders' rework (#352); `validate`'s Top-Hit
   check and the Top-Hit harvest still call its public decode members.
-- The CLI's `--format json` output still omits `eaf` and `association_status`;
-  the record makes adding them a one-line change, which waits on the
-  documentation in `opengwasdb-stores`.
+- The CLI's `--format json` output emits the record whole, `eaf` and
+  `association_status` with the rest, as RFC 8259 JSON: `null` where a cell is
+  not there and `"Infinity"`/`"-Infinity"` where it is infinite (issue #394).
+  It omitted both while the record was new, which waited on the documentation
+  in `opengwasdb-stores`.
 
 ## Alternatives considered
 

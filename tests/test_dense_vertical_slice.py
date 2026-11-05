@@ -21,12 +21,12 @@ def test_dense_observed_build_declares_gwas_coverage(dense_store_path):
 
 def test_dense_observed_build_refuses_a_coverage_it_cannot_hold(tmp_path, source_path):
     """Issue #298: the library refuses, not only the CLI."""
-    from opengwasdb.build.observed import build_dense_observed_from_sources
+    from dense_sources import build_dense_fixture
 
     out = tmp_path / "refused.opengwasdb"
 
     with pytest.raises(ValueError, match="cannot carry association_coverage=cis_and_signals"):
-        build_dense_observed_from_sources(
+        build_dense_fixture(
             [source_path],
             out,
             store_id="fixture-store",

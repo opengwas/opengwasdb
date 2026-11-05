@@ -14,9 +14,9 @@ from shutil import copytree
 import numpy as np
 import zarr
 from conftest import SOURCE_HEADER, SOURCE_ROWS
+from dense_sources import build_dense_fixture
 from test_query_metadata_reads import _BUILDERS
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.encoding.planes import DenseZPlane
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
@@ -39,7 +39,7 @@ def build_stores(base: Path) -> dict[str, Path]:
     source = base / "associations.tsv"
     source.write_text(SOURCE_HEADER + "\n" + "\n".join(SOURCE_ROWS) + "\n", encoding="utf-8")
     dense = base / "store.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], dense, store_id="f", release_id="v", reference_assembly="GRCh37"
     )
     built = {}
