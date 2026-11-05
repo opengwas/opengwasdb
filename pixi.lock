@@ -104,6 +104,7 @@ environments:
       linux-64:
       - conda: https://conda.anaconda.org/bioconda/linux-64/bcftools-1.24-h118bc1c_2.conda
       - conda: https://conda.anaconda.org/bioconda/linux-64/htslib-1.24-ha79157c_0.conda
+      - conda: https://conda.anaconda.org/bioconda/linux-64/plink2-2.0.0a.6.9-h9948957_0.tar.bz2
       - conda: https://conda.anaconda.org/bioconda/noarch/pyliftover-0.4.1-pyh7e72e81_0.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/ast-serialize-0.8.0-py310hd8a072f_0.conda
@@ -463,6 +464,19 @@ packages:
     - htslib >=1.24,<1.25.0a0
   size: 1166222
   timestamp: 1783611817902
+- conda: https://conda.anaconda.org/bioconda/linux-64/plink2-2.0.0a.6.9-h9948957_0.tar.bz2
+  sha256: 8f9b2415a5035b5019ef83d2db6f6af2b9739796186a3e558a7baf69c14b0b6b
+  md5: b9e94cb7fa3bb4353c68e4c553690245
+  depends:
+  - libgcc >=13
+  - libstdcxx >=13
+  license: GPL-3
+  purls: []
+  run_exports:
+    weak:
+    - plink2 >=2.0.0a.6.9
+  size: 7612061
+  timestamp: 1744207773346
 - conda: https://conda.anaconda.org/bioconda/noarch/pyliftover-0.4.1-pyh7e72e81_0.tar.bz2
   sha256: 9f3c1752c84dcee46c5908f334a64533870d4258a880920f9cca8ede589e7b54
   md5: 4afdc52d5338226d1f61012ad2cd30b5
