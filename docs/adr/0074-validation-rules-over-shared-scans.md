@@ -148,17 +148,25 @@ and accepts EAF in [0, 1].
   read `z`, `se` and `eaf` 2.17 times, `imputed` 3.17 times and `eaf_baseline`
   3 times, and now reads them 1.17, 1.17 and 1.0 times. The remainder is
   `by_variant.sample`'s cells.
-- **Time and memory**, measured against the release before, with RSS sampled:
-  - OGS-00006, a Ragged release, back to back: 74–82 s against 76–81 s, and
-    peak RSS from 3.9–4.0 GiB to 1.6–1.8 GiB. Its new variant-table rules cost
-    about 40 s. The single decode, and `by_variant.sample` reading each column
-    once rather than a cell at a time, saved as much.
-  - OGS-00008, a Dense release, back to back: 59 s against 89–91 s, and peak
-    RSS from 0.79 GiB to 0.56–0.57 GiB.
+- **Time and memory**, measured against the release before. RSS is read from
+  the validating process alone. Wall times are from a shared node.
+  - OGS-00006, a Ragged release, two runs each, alternating: 52–53 s against
+    55 s, and peak RSS from 3.8 GiB to 1.6 GiB.
+  - OGS-00008, a Dense release, two runs each, alternating: 41–44 s against
+    72 s, and peak RSS from 0.76–0.80 GiB to 0.56 GiB.
   - OGS-00011, a Hybrid release, side by side and without the Indexed Variant
-    Subset check, which did not change: 13,962 s against 14,192 s, and peak
-    RSS from 110 GiB to 48 GiB. That check is 30,209 s of an instrumented
-    45,132 s run. A full run still peaks at 113 GiB, in that check.
+    Subset check, which did not change: 13,821 s against 13,230 s, and peak
+    RSS from 113.8 GiB to 46.0 GiB. That check is 30,209 s of an instrumented
+    45,132 s run. A full run's peak is not measured here.
+  - OGS-00016, a Dense release, full runs side by side, with the kernel's
+    exact high-water mark read as each phase starts and ends: 16,826 s against
+    18,814 s, and peak RSS from 14.56 GiB to 14.32 GiB. The Indexed Variant
+    Subset check sets the peak in both, starting from 3.07 GiB and 2.38 GiB.
+    Before it, the highest point rose from 9.42 GiB to 10.52 GiB. Both are the
+    same whole read of the eaf exception table, 6.4 GiB above where it starts.
+    It starts higher, 4.11 GiB against 3.02 GiB, because the association
+    scan's folds are judged before the 1.6 GiB the scan holds, chiefly the
+    Top-Hit Index's tiers, is released.
 - **SE decoding.** ADR 0070's list of `validate`'s own SE decodes is now two:
   `_dense_band_se` and `_sequence_window_se` in `validation/scans.py`, one decode
   per block, shared by every rule. The whole-sequence Ragged decode is gone. The
