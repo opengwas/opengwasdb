@@ -51,13 +51,20 @@ components:
     stages: [resolve, build]
     summary: The Source Reader seam and Column Maps; GWAS-SSF, GWAS-VCF, FinnGen and BESD readers.
     paths: [opengwasdb/readers/, opengwasdb/build/source.py, opengwasdb/layouts/ragged/besd_reader.py]
+  - id: admission
+    name: Association Admission
+    container: engine
+    layer: 1
+    stages: [resolve, build, complete]
+    summary: One rule set, one gate, one record; which of an Analysis's source rows a Store admits, the INFO and MAF filters, and the Admission Record of what was dropped and why.
+    paths: [opengwasdb/admission/, opengwasdb/build/info_score_filter.py]
   - id: resolution
     name: Analysis Resolution
     container: engine
     layer: 2
     stages: [resolve]
-    summary: One scan per Analysis to its Analytical Metadata and Resolution Record; row admission, INFO, SD and effect consistency.
-    paths: [opengwasdb/build/resolve.py, opengwasdb/build/resolve_manifest.py, opengwasdb/build/resolve_besd.py, opengwasdb/admission/, opengwasdb/build/info_score_filter.py, opengwasdb/build/phenotype_sd.py, opengwasdb/build/phenotype_sd_pipeline.py, opengwasdb/build/eaf_orientation.py, opengwasdb/build/effect_consistency.py, opengwasdb/build/hash_sample.py]
+    summary: One scan per Analysis to its Analytical Metadata and Resolution Record; SD, EAF orientation and effect consistency.
+    paths: [opengwasdb/build/resolve.py, opengwasdb/build/resolve_manifest.py, opengwasdb/build/resolve_besd.py, opengwasdb/build/phenotype_sd.py, opengwasdb/build/phenotype_sd_pipeline.py, opengwasdb/build/eaf_orientation.py, opengwasdb/build/effect_consistency.py, opengwasdb/build/hash_sample.py]
   - id: ancestry
     name: Ancestry Assignment
     container: engine
@@ -72,6 +79,13 @@ components:
     stages: [build, query]
     summary: Canonical variant identity, orientation, rsids, the Store Variant Axis and liftover.
     paths: [opengwasdb/variants/, opengwasdb/build/liftover.py]
+  - id: routing
+    name: Variant Routing
+    container: engine
+    layer: 1
+    stages: [build, complete]
+    summary: Where each source coordinate goes; the lifted union, the route table, the rsid harvest, the duplicate rule and Variant Reference extraction.
+    paths: [opengwasdb/variants/routing/]
   - id: dense
     name: Dense Layout
     container: engine

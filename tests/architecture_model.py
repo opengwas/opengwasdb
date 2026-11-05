@@ -395,7 +395,7 @@ def load_model(path: Path) -> dict[str, Any]:
     """Read a model file and hold it to the shape #418 and #359 rely on.
 
     Names the component in the message: the person fixing it is looking at a YAML
-    file of fifteen of them, and "a component is missing a key" would send them
+    file of seventeen of them, and "a component is missing a key" would send them
     hunting.
     """
     model = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
