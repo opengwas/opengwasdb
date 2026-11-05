@@ -726,6 +726,7 @@ def _project_metrics_row(
         effect_from_odds_ratio_fallback=effect.effect_from_odds_ratio_fallback,
         se_from_ci=effect.se_from_ci,
         se_from_p_value=effect.se_from_p_value,
+        p_value=_metrics_float(_metrics_cell(row, projection.p_value), parse_finite_float),
     )
 
 
@@ -1252,6 +1253,7 @@ def _projected_chunk(
         effect_from_odds_ratio_fallback=effect.effect_from_odds_ratio_fallback[keep],
         se_from_ci=effect.se_from_ci[keep],
         se_from_p_value=effect.se_from_p_value[keep],
+        p_value=_statistic_array(frame, names.get("p_value"), np.isfinite)[keep],
     )
 
 
