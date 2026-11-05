@@ -4,7 +4,8 @@ The authority decides. Under `LiftedUnion` the sources themselves are the
 axis: Pass 1 reads each once, lifts the hg19 group to GRCh38 and names each
 ALID by its first-named rsid. Under `FromReference` a Variant Reference is
 the axis and its source keys the routing; Pass 1 runs only to harvest names
-the reference lacks, and only when it names none.
+the reference lacks, and only when it names none. Either harvest compares the
+names a site's spellings carry, by one rule (issue #379).
 """
 
 from __future__ import annotations
@@ -19,8 +20,6 @@ from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.variants.axis import sorted_alids
 from opengwasdb.variants.reference import (
     VariantReference,
-    expected_rsids_by_routing,
-    require_rsids_match_expected,
     warn_reference_left_rows_blank,
 )
 from opengwasdb.variants.routing.keys import SourceKey, routing_key, source_alid
@@ -28,8 +27,8 @@ from opengwasdb.variants.routing.lift import place_union
 from opengwasdb.variants.routing.names import (
     HARVEST_LABEL,
     RoutedNames,
-    _rekey_rsids_to_alids,
     harvested_names,
+    union_names,
 )
 from opengwasdb.variants.routing.table import RouteTable
 from opengwasdb.variants.routing.union import (
@@ -42,6 +41,10 @@ from opengwasdb.variants.routing.union import (
 from opengwasdb.variants.rsid import RsidConflictPolicy, RsidConflicts
 
 log = logging.getLogger(__name__)
+
+#: What a refusal or a warning calls a build routed by its sources' own
+#: union, unless the build says otherwise.
+UNION_LABEL = "Two-pass build"
 
 
 @dataclass(frozen=True)
@@ -148,14 +151,15 @@ def route_variants(
     n_workers: int = 1,
     union: UnionOptions | None = None,
     readers: ReaderFactory = open_source,
-    label: str = HARVEST_LABEL,
+    label: str | None = None,
 ) -> VariantRouting:
     """Route every source coordinate to the Variant Index, and name what it reaches.
 
     Every coordinate is matched by its routing key (spec §4). ``n_workers`` and
     ``union`` shape Pass 1's parallel union and never change its result.
     ``readers`` opens a source; a test passes a fake. ``label`` is what a
-    harvest's refusals and warnings call the build.
+    harvest's refusals and warnings call the build: by default a two-pass
+    build under `LiftedUnion` and a single-pass one under `FromReference`.
 
     Raises `LiftoverFailureError` when more of the hg19 group fails the lift
     than the threshold allows, and ``ValueError`` when one routing key spells
@@ -167,23 +171,38 @@ def route_variants(
         sources, n_workers, union if union is not None else UnionOptions(), Pass1Stats(), readers
     )
     if isinstance(authority, FromReference):
-        return _route_by_reference(union_pass, authority, on_rsid_conflict, label)
+        return _route_by_reference(
+            union_pass, authority, on_rsid_conflict, label or HARVEST_LABEL
+        )
     tuples_by_assembly, rsid_by_site = union_pass.sites()
-    site_alid, reoriented, _dropped = place_union(
+    site_alid, reoriented, dropped = place_union(
         tuples_by_assembly,
         chain_file=authority.chain_file,
         failure_threshold=authority.failure_threshold,
     )
-    rsid_by_alid = _rekey_rsids_to_alids(site_alid, rsid_by_site)
-    # The rekey's own output must equal the map an independent walk of the
-    # candidates over this same lookup produces, so a value the rekey attaches
-    # to the wrong ALID fails here (issue #255).
-    require_rsids_match_expected(rsid_by_alid, expected_rsids_by_routing(rsid_by_site, site_alid))
-    # The two-pass build compares no names across sources: it keeps the first.
-    names = RoutedNames(rsid_by_alid, RsidConflicts(on_rsid_conflict, None))
+    names = union_names(
+        _undropped(rsid_by_site, dropped),
+        site_alid,
+        policy=on_rsid_conflict,
+        label=label or UNION_LABEL,
+    )
     return VariantRouting(
         site_alid, reoriented, axis=None, names=names, stats=union_pass.stats
     )
+
+
+def _undropped(
+    rsid_by_site: dict[SourceKey, str], dropped: Collection[str]
+) -> dict[SourceKey, str]:
+    """The named sites but those whose key both assemblies declare.
+
+    Such a key is two loci and is placed nowhere (issue #255 rounds 4-5), so
+    its sites name nothing; comparing their names would count, or refuse, a
+    dispute no stored variant has.
+    """
+    if not dropped:
+        return rsid_by_site
+    return {site: rsid for site, rsid in rsid_by_site.items() if routing_key(site) not in dropped}
 
 
 @dataclass(frozen=True)
@@ -239,13 +258,7 @@ def _route_by_reference(
         # A tuple declared under both assemblies is two loci; naming the lifted
         # one from the other's row would attach an rsid to a variant a different
         # association owns.
-        candidates = rsid_by_site
-        if dropped:
-            candidates = {
-                site: rsid
-                for site, rsid in rsid_by_site.items()
-                if routing_key(site) not in dropped
-            }
+        candidates = _undropped(rsid_by_site, dropped)
         del rsid_by_site
         names = harvested_names(
             candidates, reference.source_lookup, pass1_lookup, policy=policy, label=label

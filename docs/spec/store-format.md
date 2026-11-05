@@ -264,8 +264,7 @@ is part of the contract (issue #255):
   or empty cell names nothing and never clears an earlier name. Several source
   coordinates that canonicalise to one ALID therefore take the answer of the
   one that sorts first, not of the one that appears first in a file. The one
-  exception is a single-pass build's routing key that its sources name
-  differently, below.
+  exception is a routing key that its sources name differently, below.
 - A GWAS-SSF source, read directly or through a Column Map, names a variant by
   the first of its `rsid` and `variant_id` cells that names an rs identifier,
   normalised before any name is compared (issue #306): a `;`-separated list
@@ -278,11 +277,15 @@ is part of the contract (issue #255):
   read as before.
 - A routing key spells a coordinate's alleles upper-cased, as identity does
   (above), so source coordinates spelt in different case are one stored
-  variant on every build. A single-pass build that harvests compares the
-  names those spellings carry: when their sources name it with different
-  (normalised) rsids, nothing in the sources says which is right, and
-  `build-hybrid --on-rsid-conflict` decides (issue #306); `build-dense-vcf`
-  has no such option and always refuses. Under `build-hybrid`, `refuse`, the
+  variant on every build. Every build that harvests — a two-pass build, or a
+  single-pass build whose reference names no variants — compares the names
+  those spellings carry, by one rule, and so does Variant Reference extraction
+  (issue #379): when their sources name it with different (normalised) rsids,
+  nothing in the sources says which is right, and `build-hybrid
+  --on-rsid-conflict` decides (issue #306); `build-dense-vcf` and
+  `extract-variant-reference` have no such option and always refuse. Which
+  source is listed first therefore never decides such a name. Under
+  `build-hybrid`, `refuse`, the
   default, fails the build and names the routing key and both names. `drop` gives **no
   rsid** to every stored variant such a key routes to, over the build's final
   combined routing — even when a second routing key reaches the same variant
@@ -301,15 +304,20 @@ is part of the contract (issue #255):
   its distinct names in `(rank, site)` order. A build that compared names and
   found none disputed — even one whose sources name nothing — reports `0` and
   `0`. `n_keys` and `n_variants` are `null`, never `0`, for a build that
-  compared no names across sources — a
-  `--reference-panel` build, or one whose reference names its variants — and a
-  build with no `--variant-reference` refuses `drop`, which it could not apply. A
+  compared no names across sources: one whose reference names its variants. A
   checkpointed build records the policy and the counts, and resuming it under
   the other policy is refused. A resume past the fold does not harvest again, so
   one whose recorded counts are missing is refused too, unless its checkpoint
   predates the option (records no `on_rsid_conflict`); its counts are then
-  `null`. A two-pass build compares no names across sources, so it names such
-  a variant by the first-non-empty rule above.
+  `null`.
+- `build-dense` and `build-ragged-ssf` compare no names, because the rows
+  they read carry the upper-cased ALID and not the source's spelling, so a
+  site's two spellings cannot be told apart there (issue #379): `build-dense`
+  takes the first non-empty rsid among the rows it admits for a variant, and
+  `build-ragged-ssf` the rsid of the first row it admits for a variant. A
+  `build-ragged-besd` file set lists a variant once, and two of its rows that
+  canonicalise to one variant are both dropped, with their associations, so
+  no two names ever meet there.
 - A single-pass build given `--variant-reference` MUST NOT write a `rsid`
   column blank simply because the reference it was given is a plain ALID list.
   When the reference names none of its variants, the build runs the same Pass 1

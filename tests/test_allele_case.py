@@ -269,24 +269,53 @@ def test_a_dense_build_from_an_alid_list_routes_a_lower_case_source(tmp_path):
     assert _z_by_alid(store, "lower") == {ALID: pytest.approx(-4.0, rel=5e-3)}
 
 
-def test_a_dense_harvest_refuses_two_spellings_named_differently(tmp_path):
-    """One site in two cases is one routing key, so a single-pass harvest
-    compares the names its spellings carry; `build-dense-vcf` has no
-    `--on-rsid-conflict`, and refuses them (spec §4)."""
+@pytest.mark.parametrize("lower_first", [False, True], ids=["upper-first", "lower-first"])
+@pytest.mark.parametrize("mode", ["single-pass", "two-pass"])
+def test_a_dense_harvest_refuses_two_spellings_named_differently(tmp_path, mode, lower_first):
+    """One site in two cases is one routing key, so a harvest compares the
+    names its spellings carry, from a reference naming none or from the
+    sources' own union alike (issue #379); `build-dense-vcf` has no
+    `--on-rsid-conflict`, and refuses them whichever source is listed first
+    (spec §4). The refusal names the build the way it was run."""
     lower = _vcf(tmp_path / "lower.vcf", "a", "g", 2.0, 0.5, rsid="rs2")
     upper = _vcf(tmp_path / "upper.vcf", "A", "G", 1.0, 0.5, rsid="rs1")
     assert _alleles(lower) == [("a", "g")] and _alleles(upper) == [("A", "G")]
-    manifest = _manifest(
-        tmp_path, [("upper", upper, GWAS_VCF_CAPABILITY), ("lower", lower, GWAS_VCF_CAPABILITY)]
-    )
+    rows = [("upper", upper, GWAS_VCF_CAPABILITY), ("lower", lower, GWAS_VCF_CAPABILITY)]
+    manifest = _manifest(tmp_path, rows[::-1] if lower_first else rows)
     panel = tmp_path / "panel.txt"
     panel.write_text(f"{ALID}\n", encoding="utf-8")
+    reference = {"single-pass": panel, "two-pass": None}[mode]
+    label = {"single-pass": "Single-pass build", "two-pass": "Two-pass build"}[mode]
 
-    with pytest.raises(ValueError, match="case-fold to one routing key '1:100000:A:G'"):
+    with pytest.raises(ValueError, match=f"{label}: .* one routing key '1:100000:A:G'"):
         build_dense_from_vcf_manifest(
-            manifest, tmp_path / "s.opengwasdb", variant_reference=panel,
+            manifest, tmp_path / "s.opengwasdb", variant_reference=reference,
             store_id="s", release_id="r",
         )
+
+
+@pytest.mark.parametrize("lower_first", [False, True], ids=["upper-first", "lower-first"])
+@pytest.mark.parametrize("assembly", ["hg38", "hg19"], ids=["hg38", "lifted"])
+def test_extraction_refuses_two_spellings_named_differently(tmp_path, assembly, lower_first):
+    """A Variant Reference is the union frozen, so its window writers compare
+    a site's spellings as the union does (issue #379). Extraction has no
+    `--on-rsid-conflict`: it refuses, in either order, rather than freeze the
+    first source's name for a single-pass build to use as given. chr3's
+    identity chain keeps the lifted site at `3:1000`."""
+    site = ("3", 1_000)
+    lower = _vcf(tmp_path / "lower.vcf", "a", "g", 2.0, 0.5, rsid="rs2", site=site)
+    upper = _vcf(tmp_path / "upper.vcf", "A", "G", 1.0, 0.5, rsid="rs1", site=site)
+    assert _alleles(lower) == [("a", "g")] and _alleles(upper) == [("A", "G")]
+    rows = [("upper", upper, GWAS_VCF_CAPABILITY), ("lower", lower, GWAS_VCF_CAPABILITY)]
+    manifest = _manifest(tmp_path, rows[::-1] if lower_first else rows, assembly=assembly)
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    artifact = tmp_path / "ref.variant-ref.tsv.gz"
+
+    with pytest.raises(
+        ValueError, match="Variant Reference extraction: .* one routing key '3:1000:A:G'"
+    ):
+        extract_from_manifest(manifest, artifact, chain_file=chain)
+    assert not artifact.exists()
 
 
 def _both_assemblies(

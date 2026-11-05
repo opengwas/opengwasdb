@@ -23,6 +23,7 @@ from opengwasdb.variants.routing import (
     AssociationBatch,
     FromReference,
     LiftedUnion,
+    RoutedNames,
     RouteTable,
     extract_variant_reference,
     place_sites,
@@ -259,28 +260,91 @@ def _disputed_sources() -> list[SourceSpec]:
     ]
 
 
-def test_a_key_named_two_ways_is_refused_naming_both():
-    reference = _reference({("1", 100, "A", "G"): "1:100:A:G", ("1", 100, "G", "A"): "1:100:A:G"})
-    with pytest.raises(ValueError, match="'rs1' but .* names 'rs2'"):
-        _route(_disputed_sources(), FromReference(reference))
+def _authority(kind: str) -> LiftedUnion | FromReference:
+    """The sources' own union, or a reference naming none of its variants that
+    routes every site these tests' sources declare where the union does."""
+    if kind == "union":
+        return LiftedUnion()
+    return FromReference(
+        _reference(
+            {
+                ("1", 100, "A", "G"): "1:100:A:G",
+                ("1", 100, "G", "A"): "1:100:A:G",
+                ("1", 300, "C", "T"): "1:300:C:T",
+            }
+        )
+    )
 
 
-def test_drop_unnames_the_variant_even_through_the_other_allele_order():
+def _final(names: RoutedNames) -> RoutedNames:
+    """The names once every key is routed: a reference's harvest has nothing
+    else to place here."""
+    return names.finish() if names.pending else names
+
+
+#: Both harvests compare the names a site's spellings carry (issue #379).
+AUTHORITIES = ["union", "reference"]
+
+
+@pytest.mark.parametrize("authority", AUTHORITIES)
+def test_a_key_named_two_ways_is_refused_naming_both(authority):
+    with pytest.raises(ValueError, match="'1:100:A:G' with different rsids: .*'rs1' but .* 'rs2'"):
+        _route(_disputed_sources(), _authority(authority))
+
+
+@pytest.mark.parametrize("authority", AUTHORITIES)
+def test_drop_unnames_the_variant_even_through_the_other_allele_order(authority):
     """Under ``drop`` the disputed key's variant stores no name, although the
     other allele order -- a different key -- names it undisputed (issue #306)."""
-    reference = _reference({("1", 100, "A", "G"): "1:100:A:G", ("1", 100, "G", "A"): "1:100:A:G"})
-
     routing = _route(
-        _disputed_sources(),
-        FromReference(reference),
-        on_rsid_conflict=RsidConflictPolicy.DROP,
+        _disputed_sources(), _authority(authority), on_rsid_conflict=RsidConflictPolicy.DROP
     )
-    names = routing.names.finish()
+    names = _final(routing.names)
 
+    assert "1:100:A:G" in routing.alids
     assert names.rsid_by_alid == {}
     assert names.conflicts.n_keys == 1
     assert names.conflicts.n_variants == 1
     assert names.conflicts.sample[0].names == ("rs1", "rs2")
+
+
+@pytest.mark.parametrize("authority", AUTHORITIES)
+def test_an_undisputed_harvest_reports_zero(authority):
+    """A harvest compared every name and found none disputed: 0 and 0, not
+    the null of a comparison never made, whichever authority routes."""
+    sources = [
+        _source("a", "hg38", [("1", 100, "A", "G", "rs1")]),
+        _source("b", "hg38", [("1", 100, "a", "g", "rs1")]),
+    ]
+
+    names = _final(_route(sources, _authority(authority)).names)
+
+    assert names.rsid_by_alid == {"1:100:A:G": "rs1"}
+    assert (names.conflicts.n_keys, names.conflicts.n_variants) == (0, 0)
+
+
+@pytest.mark.parametrize("policy", list(RsidConflictPolicy))
+@pytest.mark.parametrize("authority", AUTHORITIES)
+def test_swapping_the_sources_changes_no_name(authority, policy):
+    """A site's two spellings, named two ways, then a variant both name alike.
+    In either order the disputed variant is refused or left unnamed, and the
+    other keeps its name: no name depends on which source is listed first."""
+    upper = [("1", 100, "A", "G", "rsUPPER"), ("1", 300, "C", "T", "rsBOTH")]
+    lower = [("1", 100, "a", "g", "rsLOWER"), ("1", 300, "c", "t", "rsBOTH")]
+    outcomes = []
+    for order in ((upper, lower), (lower, upper)):
+        _SOURCES.clear()
+        sources = [_source(name, "hg38", rows) for name, rows in zip("ab", order, strict=True)]
+        try:
+            routing = _route(sources, _authority(authority), on_rsid_conflict=policy)
+        except ValueError as refusal:
+            assert "'1:100:A:G' with different rsids" in str(refusal)
+            outcomes.append(None)
+            continue
+        outcomes.append(_final(routing.names).rsid_by_alid)
+
+    expected = None if policy is RsidConflictPolicy.REFUSE else {"1:300:C:T": "rsBOTH"}
+    assert outcomes == [expected, expected]
 
 
 def test_source_alids_blank_an_ambiguous_liftover_collision(tmp_path):

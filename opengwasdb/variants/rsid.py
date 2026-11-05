@@ -2,8 +2,8 @@
 
 Two rules live here because no one reader or builder owns them: how a source's
 identifier cell becomes the one rs identifier a Store Variant Table records,
-and what a Hybrid build does -- and reports -- when its sources name one stored
-variant with different rs identifiers.
+and what a build does -- and reports -- when its sources name one stored
+variant with different rs identifiers, whichever harvest found it (issue #379).
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def normalise_rsid(cell: str) -> str:
 
 
 class RsidConflictPolicy(StrEnum):
-    """What a Hybrid build does with a routing key its sources name differently.
+    """What a build does with a routing key its sources name differently.
 
     ``refuse`` fails the build, naming the key and both names (issue #255).
     ``drop`` stores every variant such a key reaches with no rsid -- even when
@@ -74,8 +74,8 @@ class RsidConflicts:
     ``n_keys`` counts the routing keys whose sources name them differently and
     ``n_variants`` the stored variants those keys reach, which ``drop`` leaves
     unnamed. Both are ``None`` when the build compared no source names -- a
-    ``--reference-panel`` build, or a reference that names its own variants --
-    so a count that was never taken cannot be read as a count of zero.
+    reference that names its own variants is used as given -- so a count that
+    was never taken cannot be read as a count of zero.
     ``n_variants`` is known only once the fold has routed every key, unless
     there is no disputed key, which reaches no variant.
     """

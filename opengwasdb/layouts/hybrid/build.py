@@ -883,9 +883,11 @@ def _route(
     to harvest the names a reference lacks. Without one, Pass 1 reads every
     source once and lifts hg19 rows. Either way the build routes by the
     case-folded key, since a Source Reader keeps the source's allele spelling
-    and an ALID is upper-case.
+    and an ALID is upper-case, and a harvest compares the names a site's
+    spellings carry under ``--on-rsid-conflict`` (issue #379).
     """
     authority: LiftedUnion | FromReference
+    label = "Hybrid single-pass build"
     if options.variant_reference is not None:
         reference = read_variant_reference(options.variant_reference)
         panel_alids = _resolve_reference_panel(options, reference)
@@ -901,12 +903,13 @@ def _route(
     else:
         panel_alids = _panel_alids(options)
         authority = LiftedUnion(options.chain_file, options.liftover_failure_threshold)
+        label = "Hybrid two-pass build"
     routing = route_variants(
         [row.source for row in manifest_rows],
         authority,
         on_rsid_conflict=options.on_rsid_conflict,
         n_workers=options.n_workers,
-        label="Hybrid single-pass build",
+        label=label,
     )
     return routing, panel_alids
 
@@ -2920,8 +2923,7 @@ def _new_build_options(
     The coverage is ``gwas`` or nothing (issue #298), refused here rather than at
     the first phase that needs it, and before a single Manifest Row is read (ADR
     0064). The axis source is `_require_axis_source`'s to check: it runs at
-    dispatch, which is also before any row is read, and it is there that a
-    ``drop`` a ``--reference-panel`` build would ignore is refused (issue #306).
+    dispatch, which is also before any row is read.
     """
     return _BuildOptions(
         out=Path(output_path),
@@ -2946,20 +2948,14 @@ def _new_build_options(
 
 
 def _require_axis_source(options: _BuildOptions) -> None:
-    """Refuse a build with no axis source, or a policy its axis source ignores.
+    """Refuse a build with no axis source.
 
-    Only the single-pass harvest compares names across sources; a
-    ``--reference-panel`` build keeps the first name per variant and refuses
-    mixed-case sources in its routing index, so a ``drop`` it would ignore is
-    refused rather than accepted in silence (issue #306).
+    Either source harvests names, so ``--on-rsid-conflict`` governs both
+    (issue #379); a reference that names its own variants is used as given
+    and has no dispute for the policy to decide.
     """
     if options.reference_panel is None and options.variant_reference is None:
         raise ValueError("build-hybrid needs --reference-panel or --variant-reference")
-    if options.variant_reference is None and options.on_rsid_conflict is RsidConflictPolicy.DROP:
-        raise ValueError(
-            "--on-rsid-conflict drop applies to the rsid harvest of a --variant-reference "
-            "build; a --reference-panel build compares no names across sources"
-        )
 
 
 def _dispatch_build(
