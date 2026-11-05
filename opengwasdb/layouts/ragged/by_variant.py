@@ -56,12 +56,12 @@ from opengwasdb.encoding.codec import (
     SE_EXCEPTION_VALUE,
     Z_OVERFLOW_INDEX,
     Z_OVERFLOW_VALUE,
+    require_parallel,
 )
-from opengwasdb.encoding.planes import SE_COEFFICIENTS
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
 from opengwasdb.model.manifest import StoreManifest, normalise_coverage
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.arrays import ArrayRole, array_length
+from opengwasdb.store.arrays import SE_COEFFICIENTS, ArrayRole, array_length
 
 log = logging.getLogger(__name__)
 
@@ -430,7 +430,13 @@ def _write_rekeyed_tables(
     rekeyed_index: list[list[np.ndarray]],
     rekeyed_value: list[list[np.ndarray]],
 ) -> None:
-    """Write the re-keyed exception tables, uncompressed, beside the copied codes."""
+    """Write the re-keyed exception tables, uncompressed, beside the copied codes.
+
+    A table's positions and values are one exact value each, so the two are
+    judged parallel before the sort can quietly keep only as many values as
+    there are positions. They need not match the component's cell count: a
+    table holds the exceptions, not the cells (issue #392).
+    """
     for (_label, index_name, value_name, _index, _value), index_parts, value_parts in zip(
         source_tables, rekeyed_index, rekeyed_value, strict=True
     ):
@@ -439,6 +445,10 @@ def _write_rekeyed_tables(
         )
         values = (
             np.concatenate(value_parts) if value_parts else np.empty(0, dtype=np.float32)
+        )
+        require_parallel(
+            (("positions", positions), ("values", values)),
+            where=f"re-keyed exception table at {index_name}",
         )
         order = np.argsort(positions, kind="stable")
         positions, values = positions[order], values[order]
