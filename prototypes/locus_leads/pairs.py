@@ -20,6 +20,7 @@ from typing import Any
 
 import numpy as np
 
+from .genetic_map import GeneticMap
 from .ld import r2_matrix
 
 # (upper bound in bp inclusive, name): the bands a disagreement's distance falls in.
@@ -49,6 +50,28 @@ class Pair:
     @property
     def distance_bp(self) -> int:
         return abs(self.position[0] - self.position[1])
+
+
+def spike_record(spike: Spike, population_map: GeneticMap, mean_map: GeneticMap) -> dict[str, Any]:
+    """How big a spike is: the jump from its map point to the next, in its own population's map.
+
+    The mean map's cM across the same interval is what the spike leaves after averaging.
+    """
+    position, cm = population_map.points(spike.chromosome)
+    at = int(np.searchsorted(position, spike.position))
+    if at >= position.size or position[at] != spike.position:
+        raise ValueError(f"{spike.name} chr{spike.chromosome}:{spike.position:,} is not a point "
+                         f"of the {spike.name} map")
+    if at + 1 >= position.size:
+        raise ValueError(f"{spike.name} chr{spike.chromosome}:{spike.position:,} is the map's "
+                         "last point, so no interval follows it")
+    end = int(position[at + 1])
+    chromosome = np.array([spike.chromosome, spike.chromosome])
+    mean_cm = mean_map.cm_at(chromosome, np.array([spike.position, end]))
+    return {"chromosome": spike.chromosome, "position": spike.position,
+            "population": spike.name, "interval_end": end, "interval_bp": end - spike.position,
+            "population_cm": float(cm[at + 1] - cm[at]),
+            "mean_map_cm": float(mean_cm[1] - mean_cm[0])}
 
 
 def distance_band(distance_bp: int) -> str:

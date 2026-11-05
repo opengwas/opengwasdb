@@ -45,8 +45,9 @@ def inputs(tmp_path: Path) -> dict[str, Any]:
 def _fingerprint(inputs: dict[str, Any], **changes: Any) -> dict[str, Any]:
     settings = {**inputs, **changes}
     fingerprint: dict[str, Any] = sweep.input_fingerprint(
-        settings["chosen"], settings["stores_dir"], settings["map"], settings["panel"],
-        settings["hm3"], CODE)
+        settings["chosen"], settings["stores_dir"], settings["map"],
+        sweep.panel_content_digests(settings["panel"]), settings["hm3"], CODE,
+        settings.get("spikes", sweep.EUR_SPIKES))
     return fingerprint
 
 
@@ -72,6 +73,43 @@ def test_a_changed_map_a_changed_manifest_or_changed_code_changes_the_fingerprin
     assert _fingerprint(inputs)["manifest_sha256"] != base["manifest_sha256"]
     inputs["hm3"].write_text("1:200:A:G\n")
     assert _fingerprint(inputs)["hm3_sha256"] != base["hm3_sha256"]
+
+
+def test_the_panel_is_fingerprinted_by_the_content_of_each_file_not_its_size(
+    inputs: dict[str, Any],
+) -> None:
+    base = _fingerprint(inputs)
+    directory = inputs["panel"].directory
+    for suffix in (".pgen", ".psam"):
+        target = directory / f"chr1{suffix}"
+        original = target.read_bytes()
+        changed = bytearray(original)
+        changed[-1] ^= 0xFF  # one byte flipped: the size is unchanged
+        target.write_bytes(bytes(changed))
+        try:
+            assert target.stat().st_size == len(original)
+            assert _fingerprint(inputs)["panel"] != base["panel"], suffix
+        finally:
+            target.write_bytes(original)
+    assert _fingerprint(inputs) == base
+
+
+def test_a_panel_with_other_variants_has_another_pvar_digest(
+    inputs: dict[str, Any], tmp_path: Path,
+) -> None:
+    other = tmp_path / "other_panel"
+    other.mkdir()
+    locus_leads_panel.write_panel(other, "1", [(100, "A", "C"), (200, "A", "G")],
+                                  [["0/0", "1/1"] * 4, ["0/0", "1/1"] * 4])
+    changed = sweep.panel_content_digests(panel.Panel(other))["sha256"]["1"]
+    assert changed[".pvar.zst"] != sweep.panel_content_digests(inputs["panel"])["sha256"]["1"][
+        ".pvar.zst"]
+
+
+def test_the_fingerprint_holds_the_spikes_the_computation_used(inputs: dict[str, Any]) -> None:
+    assert _fingerprint(inputs, spikes=())["spikes"] == []
+    assert _fingerprint(inputs)["spikes"] == [["7", 131_782_269, "TSI"], ["1", 235_056_161, "GBR"]]
+    assert _fingerprint(inputs, spikes=())["spikes"] != _fingerprint(inputs)["spikes"]
 
 
 def test_a_cached_record_is_reused_for_the_same_fingerprint(tmp_path: Path) -> None:
@@ -149,7 +187,7 @@ def test_a_sweep_rerun_with_another_map_is_refused_rather_than_relabelled(
         {"store": "OGS-1", "analysis_id": "a", "observed_rows": 10, "max_abs_z": 9.0}]}
     work = tmp_path / "work"
     options = {"hm3_path": inputs["hm3"], "pairs_path": tmp_path / "pairs.tsv.gz", "threads": 1,
-               "code": CODE}
+               "code": CODE, "spike_sizes": lambda spikes, loaded: []}
     panel_dir = inputs["panel"].directory
     sweep.sweep(selection, inputs["stores_dir"], inputs["map"], panel_dir, work, **options)
     sweep.sweep(selection, inputs["stores_dir"], inputs["map"], panel_dir, work, **options)
@@ -157,3 +195,32 @@ def test_a_sweep_rerun_with_another_map_is_refused_rather_than_relabelled(
     with pytest.raises(sweep.CacheMismatch, match="genetic_map_sha256"):
         sweep.sweep(selection, inputs["stores_dir"], _map("b" * 64), panel_dir, work, **options)
     assert calls == ["analyse"]
+    with pytest.raises(sweep.CacheMismatch, match="spikes"):
+        sweep.sweep(selection, inputs["stores_dir"], inputs["map"], panel_dir, work,
+                    spikes=(), **options)
+    assert calls == ["analyse"]
+
+
+def test_the_panel_is_digested_once_per_sweep_not_once_per_analysis(
+    inputs: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    digested: list[int] = []
+    real_digests = sweep.panel_content_digests
+    def counting(panel: Any) -> dict[str, Any]:
+        digested.append(1)
+        result: dict[str, Any] = real_digests(panel)
+        return result
+
+    monkeypatch.setattr(sweep, "panel_content_digests", counting)
+    monkeypatch.setattr(sweep, "read_tier", lambda *a: (None, None))
+    monkeypatch.setattr(sweep, "analyse", lambda *a, **k: {"pair_records": [], "chance_ld": {},
+                                                           "configs": []})
+    for name in ("evaluate", "evaluate_counts", "pool_chance"):
+        monkeypatch.setattr(sweep, name, lambda x: {})
+    chosen = [{"store": "OGS-1", "analysis_id": name, "observed_rows": 10, "max_abs_z": 9.0}
+              for name in ("a", "b", "c")]
+    sweep.sweep({"rule": {"seed": 1}, "chosen": chosen}, inputs["stores_dir"], inputs["map"],
+                inputs["panel"].directory, tmp_path / "work", hm3_path=inputs["hm3"],
+                pairs_path=tmp_path / "pairs.tsv.gz", threads=1, code=CODE,
+                spike_sizes=lambda spikes, loaded: [])
+    assert len(digested) == 1

@@ -19,12 +19,15 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from sys import stderr
+from time import monotonic
 from typing import Any
 
 import numpy as np
 
 from .counts import evaluate_counts
-from .genetic_map import LoadedMap, file_digest
+from .eur_map import read_population_maps
+from .genetic_map import LoadedMap, file_digest, verify_archive
 from .ld import export_dosages, pair_r2
 from .pairs import (
     R2_THRESHOLDS,
@@ -32,6 +35,7 @@ from .pairs import (
     Spike,
     chance_ld,
     check_pairs_follow_threshold,
+    spike_record,
     summarise,
     write_pair_records,
 )
@@ -384,21 +388,22 @@ def code_identity() -> dict[str, str]:
     return {"sha256": digest.hexdigest(), "commit": commit}
 
 
-def _panel_fingerprint(panel: Panel) -> dict[str, Any]:
-    """The panel's directory, assembly, sample list and each file's size."""
-    files = {}
-    for chromosome in panel.chromosomes:
-        stem = panel.pfile(chromosome)
-        files[chromosome] = [stem.with_suffix(suffix).stat().st_size
-                             for suffix in (".pgen", ".psam", ".pvar.zst")]
-    samples = hashlib.sha256(b"".join(panel.pfile(c).with_suffix(".psam").read_bytes()
-                                      for c in panel.chromosomes)).hexdigest()
-    return {"path": str(panel.directory), "assembly": panel.assembly(), "psam_sha256": samples,
-            "file_sizes_pgen_psam_pvar": files}
+def panel_content_digests(panel: Panel) -> dict[str, Any]:
+    """The panel's directory and assembly, and the sha256 of each chromosome's pgen, pvar, psam.
+
+    By content, not size: a panel rebuilt to the same size with other genotypes must not
+    match. Reading it is slow, so a sweep does it once.
+    """
+    files = {chromosome: {suffix: file_digest(panel.pfile(chromosome).with_suffix(suffix),
+                                              "sha256")
+                          for suffix in (".pgen", ".pvar.zst", ".psam")}
+             for chromosome in panel.chromosomes}
+    return {"path": str(panel.directory), "assembly": panel.assembly(), "sha256": files}
 
 
 def input_fingerprint(chosen: dict[str, Any], stores_dir: Path, genetic_map: LoadedMap,
-                      panel: Panel, hm3: Path, code: dict[str, str]) -> dict[str, Any]:
+                      panel: dict[str, Any], hm3: Path, code: dict[str, str],
+                      spikes: tuple[Spike, ...]) -> dict[str, Any]:
     """Everything one Analysis's record is a function of."""
     store = stores_dir / chosen["store"] / "store.opengwasdb"
     return {
@@ -406,10 +411,10 @@ def input_fingerprint(chosen: dict[str, Any], stores_dir: Path, genetic_map: Loa
         "manifest_sha256": file_digest(store / "manifest.json", "sha256"),
         "genetic_map_sha256": genetic_map.identity["sha256"],
         "genetic_map_assembly": genetic_map.identity["assembly"],
-        "panel": _panel_fingerprint(panel), "hm3_sha256": file_digest(hm3, "sha256"),
+        "panel": panel, "hm3_sha256": file_digest(hm3, "sha256"),
         "tier": TIER, "r2": R2_VALUES, "grid": [c.label() for c in grid_configs()],
         "pair_record_configs": [Config(d, w).label() for d, w in PAIR_RECORD_CONFIGS],
-        "spikes": [[s.chromosome, s.position, s.name] for s in EUR_SPIKES],
+        "spikes": [[s.chromosome, s.position, s.name] for s in spikes],
         "null_max_variants": NULL_MAX_VARIANTS, "min_shared_set_share": MIN_SHARED_SET_SHARE,
         "code_sha256": code["sha256"], "code_commit": code["commit"],
     }
@@ -453,10 +458,23 @@ def _selection_bands(chosen: dict[str, Any]) -> dict[str, Any]:
             "rows_band": rows_band, "z_band": z_band}
 
 
+def measure_spikes(spikes: tuple[Spike, ...], genetic_map: LoadedMap) -> list[dict[str, Any]]:
+    """Each spike's size, from its population's map in the archive the mean map was built from."""
+    if not spikes:
+        return []
+    archive = Path(genetic_map.identity["path"]).parent / genetic_map.identity["archive"]["path"]
+    verify_archive(archive, genetic_map.identity["archive"]["md5"])
+    names = tuple(dict.fromkeys(s.name for s in spikes))
+    populations = read_population_maps(archive, names)
+    return [spike_record(s, populations[s.name], genetic_map.map) for s in spikes]
+
+
 def sweep(selection: dict[str, Any], stores_dir: Path, genetic_map: LoadedMap, panel_dir: Path,
           work_dir: Path, *, hm3_path: Path, pairs_path: Path, threads: int,
           spikes: tuple[Spike, ...] = EUR_SPIKES, only: int | None = None,
-          code: dict[str, str] | None = None) -> dict[str, Any]:
+          code: dict[str, str] | None = None,
+          spike_sizes: Callable[[tuple[Spike, ...], LoadedMap], list[dict[str, Any]]]
+          = measure_spikes) -> dict[str, Any]:
     """Every chosen Analysis, each cached under `work_dir` so an interrupted sweep resumes.
 
     A cached record is reused only when its inputs' fingerprint matches. Each pair of
@@ -464,6 +482,9 @@ def sweep(selection: dict[str, Any], stores_dir: Path, genetic_map: LoadedMap, p
     """
     panel, hm3 = Panel(panel_dir), read_hm3(hm3_path)
     code = code or code_identity()
+    started = monotonic()
+    panel_digests = panel_content_digests(panel)
+    print(f"panel digested in {monotonic() - started:.1f} s", file=stderr)
     analyses, below_floor, pair_rows = [], [], []
     for chosen in selection["chosen"][:only]:
         name = f"{chosen['store']}_{chosen['analysis_id']}"
@@ -476,8 +497,9 @@ def sweep(selection: dict[str, Any], stores_dir: Path, genetic_map: LoadedMap, p
 
         try:
             record = cached_record(work_dir / "results" / f"{name}.json",
-                                   input_fingerprint(chosen, stores_dir, genetic_map, panel,
-                                                     hm3_path, code), compute)
+                                   input_fingerprint(chosen, stores_dir, genetic_map,
+                                                     panel_digests, hm3_path, code, spikes),
+                                   compute)
         except SharedSetTooSmall as small:
             below_floor.append(small.record | {"store": chosen["store"]})
             continue
@@ -493,8 +515,7 @@ def sweep(selection: dict[str, Any], stores_dir: Path, genetic_map: LoadedMap, p
                 "alids": len(hm3)},
         "grid": {"d_cm": list(D_GRID), "w_bp": list(W_GRID), "bp_only": "D = infinity",
                  "r2": R2_VALUES, "tier": TIER, "observed_only": True},
-        "spikes": [{"chromosome": s.chromosome, "position": s.position, "population": s.name}
-                   for s in spikes],
+        "spikes": spike_sizes(spikes, genetic_map),
         "left_out_below_shared_set_floor": {"floor": MIN_SHARED_SET_SHARE,
                                             "analyses": below_floor},
         "pair_records": write_pair_records(pair_rows, pairs_path) | {

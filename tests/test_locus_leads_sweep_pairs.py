@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pytest
 from prototype_modules import load_prototype
 
+genetic_map = load_prototype("locus_leads", "genetic_map")
 pairs = load_prototype("locus_leads", "pairs")
 sweep = load_prototype("locus_leads", "sweep")
 
@@ -49,3 +51,25 @@ def test_each_distance_band_counts_its_undefined_pairs() -> None:
     members = [pairs.Pair("1", (100, 200), 0.1, 0.5), pairs.Pair("1", (100, 300), 0.2, math.nan)]
     band = pairs.summarise(members, ())["by_distance_band"]["<=1Mb"]
     assert (band["n"], band["r2_undefined"], band["r2_ge_0.01"]) == (2, 1, 1)
+
+
+def _map(positions: list[int], cm: list[float]) -> object:
+    return genetic_map.GeneticMap({"7": (np.array(positions), np.array(cm))})
+
+
+def test_a_spikes_size_is_the_jump_from_its_point_to_the_next_in_its_population_map() -> None:
+    population = _map([1000, 2000, 2444, 5000], [0.0, 1.0, 93.7, 94.0])
+    mean = _map([1000, 2000, 2444, 5000], [0.0, 0.5, 19.1, 19.4])
+    record = pairs.spike_record(pairs.Spike("7", 2000, "TSI"), population, mean)
+    assert record["interval_bp"] == 444 and record["interval_end"] == 2444
+    assert record["population_cm"] == pytest.approx(92.7)
+    assert record["mean_map_cm"] == pytest.approx(18.6)
+    assert (record["chromosome"], record["position"], record["population"]) == ("7", 2000, "TSI")
+
+
+def test_a_spike_that_is_not_a_point_of_its_population_map_is_refused() -> None:
+    population = _map([1000, 2000, 5000], [0.0, 1.0, 2.0])
+    with pytest.raises(ValueError, match="not a point"):
+        pairs.spike_record(pairs.Spike("7", 2001, "TSI"), population, population)
+    with pytest.raises(ValueError, match="last point"):
+        pairs.spike_record(pairs.Spike("7", 5000, "TSI"), population, population)
