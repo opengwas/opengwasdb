@@ -8,9 +8,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from click.testing import Result
 from dense_sources import write_dense_manifest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from opengwasdb.cli.main import app
 from opengwasdb.model.enums import StoredEffectScale
