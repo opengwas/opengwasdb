@@ -2795,7 +2795,7 @@ vertical-align: -.125em;
 </tr>
 </tbody>
 </table>
-<div id="5288b7da" class="cell" data-execution_count="6">
+<div id="a097aeaf" class="cell" data-execution_count="6">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
@@ -3868,7 +3868,7 @@ vertical-align: -.125em;
 <section id="spurious-splits-against-lost-signals" class="level3">
 <h3 class="anchored" data-anchor-id="spurious-splits-against-lost-signals">Spurious splits against lost signals</h3>
 <p>One line per W. Its circles are the D values, labelled in cM, and its open square is the bp-only rule. A smaller D means fewer lost signals and more spurious splits. In the r² 0.01 panel the shaded bands mark the 10% limits, and their overlap is the working region.</p>
-<div id="646c86e3" class="cell" data-execution_count="13">
+<div id="c46febe7" class="cell" data-execution_count="13">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
@@ -4079,7 +4079,35 @@ vertical-align: -.125em;
 </section>
 <section id="the-maps-two-spikes" class="level3">
 <h3 class="anchored" data-anchor-id="the-maps-two-spikes">The map’s two spikes</h3>
-<p>The mean map carries two single-population jumps found in #402: TSI at chr7:131,782,269 (18.6 cM in 444 bp) and GBR at chr1:235,056,161 (6.76 cM). Disagreements whose pair spans either:</p>
+<p>The mean map carries two single-population jumps found in #402. Each spike’s size is measured in <code>eur_sweep.json</code> from its population’s map: the jump from its map point to the next, and what the mean map keeps across the same interval.</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>population</th>
+<th>position</th>
+<th>interval</th>
+<th>population map</th>
+<th>mean map keeps</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>TSI</td>
+<td>chr7:131,782,269</td>
+<td>444 bp</td>
+<td>92.7 cM</td>
+<td>18.60 cM</td>
+</tr>
+<tr class="even">
+<td>GBR</td>
+<td>chr1:235,056,161</td>
+<td>23,295 bp</td>
+<td>33.6 cM</td>
+<td>6.76 cM</td>
+</tr>
+</tbody>
+</table>
+<p>Disagreements whose pair spans either:</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 14%">

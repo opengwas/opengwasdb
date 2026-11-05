@@ -450,8 +450,19 @@ show("Spurious splits by their pair's r²: " + ", ".join(f"{k}: {v:,}" for k, v 
 
 ### The map's two spikes
 
-The mean map carries two single-population jumps found in #402: TSI at chr7:131,782,269
-(18.6 cM in 444 bp) and GBR at chr1:235,056,161 (6.76 cM). Disagreements whose pair spans either:
+The mean map carries two single-population jumps found in #402. Each spike's size is measured in
+`eur_sweep.json` from its population's map: the jump from its map point to the next, and what the
+mean map keeps across the same interval.
+
+```{python}
+#| echo: false
+#| output: asis
+show(md_table(["population", "position", "interval", "population map", "mean map keeps"], [
+    [k["population"], f"chr{k['chromosome']}:{k['position']:,}", f"{k['interval_bp']:,} bp",
+     f"{k['population_cm']:.1f} cM", f"{k['mean_map_cm']:.2f} cM"] for k in sweep["spikes"]]))
+```
+
+Disagreements whose pair spans either:
 
 ```{python}
 #| echo: false

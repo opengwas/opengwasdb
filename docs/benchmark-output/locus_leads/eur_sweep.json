@@ -83,12 +83,20 @@
   {
    "chromosome": "7",
    "position": 131782269,
-   "population": "TSI"
+   "population": "TSI",
+   "interval_end": 131782713,
+   "interval_bp": 444,
+   "population_cm": 92.68389072449999,
+   "mean_map_cm": 18.600650648
   },
   {
    "chromosome": "1",
    "position": 235056161,
-   "population": "GBR"
+   "population": "GBR",
+   "interval_end": 235079456,
+   "interval_bp": 23295,
+   "population_cm": 33.58243592699998,
+   "mean_map_cm": 6.761886051000005
   }
  ],
  "left_out_below_shared_set_floor": {
