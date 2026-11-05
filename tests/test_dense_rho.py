@@ -15,6 +15,7 @@ from opengwasdb.layouts.dense.rho import (
     build_dense_rho,
     estimate_rho_cml,
     select_thinned_variants,
+    write_rho_group,
 )
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -459,3 +460,23 @@ def test_build_dense_rho_on_a_residual_store_reads_decoded_z(tmp_path):
     # The add-in-place Rho group leaves the residual se plane queryable and
     # still residual-coded -- nothing about building Rho rewrites se.
     assert StoreManifest.load(store_path).encoding.se.is_residual
+
+
+def test_a_rho_group_whose_arrays_do_not_pair_up_is_refused_and_writes_nothing(tmp_path) -> None:
+    """The packed rho values are one group's cell list: three of them against
+    two null counts is not a Rho Matrix (issue #392)."""
+    with pytest.raises(
+        ValueError,
+        match=r"rho group: rho of length 3 and n_null of length 2 must be parallel",
+    ):
+        write_rho_group(
+            tmp_path,
+            np.zeros(3, dtype=np.float16),
+            np.zeros(2, dtype=np.int32),
+            np.arange(1, dtype=np.int32),
+            z_thresh=0.5,
+            min_nulls=10,
+            window_bp=1_000,
+            n_analyses=1,
+        )
+    assert list(tmp_path.iterdir()) == []

@@ -445,6 +445,37 @@ def test_inline_top_hit_index_carries_plane_decoded_se(tmp_path) -> None:
     np.testing.assert_array_equal(top["se"][:].astype(np.float32), plane_se)
 
 
+def test_an_inline_index_refuses_a_candidate_array_that_is_not_parallel(tmp_path) -> None:
+    """A residual plan replaces the caller's `se` with the plane's, so a short one
+    was silently ignored rather than refused: the entry judges its arrays before
+    it gathers anything (issue #392)."""
+    store, expected = _build_residual_dense_store(tmp_path)
+    encoding = StoreManifest.load(store).encoding
+    # A residual plan replaces the caller's SE with the plane's, which is what
+    # makes a short one disappear rather than be written.
+    assert encoding.se.is_residual, "fixture is meaningful only under a residual plan"
+    index = store / "data.zarr" / "top_hits"
+    before = _tree_bytes(index)
+    assert before, "fixture is meaningful only if the store already has an index"
+    rows = np.array([0, 100, 200, 300], dtype=np.int64)
+    cols = np.zeros(len(rows), dtype=np.int64)
+    source_se = expected["a"][rows]
+    with pytest.raises(
+        ValueError,
+        match=r"write_top_hit_indexes_for_store: rows of length 4, cols of length 4, "
+        r"z of length 4 and se of length 3 must be parallel",
+    ):
+        write_top_hit_indexes_for_store(
+            store, rows, cols, np.full(len(rows), 8.0, dtype=np.float32), source_se[:3], encoding
+        )
+    assert _tree_bytes(index) == before
+
+
+def _tree_bytes(path: Path) -> dict[str, bytes]:
+    """Every file of a written tree, so a refused write shows as no change."""
+    return {str(p.relative_to(path)): p.read_bytes() for p in path.rglob("*") if p.is_file()}
+
+
 def test_one_badly_fitting_analysis_reverts_the_whole_plane() -> None:
     """#118: the plane reverts when *any* Analysis fits worse than the threshold.
 
