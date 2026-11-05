@@ -62,8 +62,11 @@ def test_cli_build_validate_info_and_query_workflow(tmp_path, source_path):
     assert phewas.exit_code == 0, phewas.output
     phewas_rows = json.loads(phewas.output)
     assert sorted(r["analysis_index"] for r in phewas_rows) == [0, 1]
-    # json format is unchanged -- no resolved/human-readable fields.
-    assert set(phewas_rows[0]) == {"variant_index", "analysis_index", "z", "se"}
+    # json is the record keyed by index -- no resolved/human-readable fields,
+    # and `eaf`/`association_status` with them (issue #394).
+    assert set(phewas_rows[0]) == {
+        "variant_index", "analysis_index", "z", "se", "eaf", "association_status",
+    }
 
     range_query = runner.invoke(app, ["query-range-phewas", str(store_path), "1", "150", "350",
                                        "--format", "json"])

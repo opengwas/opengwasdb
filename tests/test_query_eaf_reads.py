@@ -38,8 +38,11 @@ _EAF_ARRAYS = ("eaf", "eaf_baseline", "imputed")
 
 
 @pytest.fixture(scope="module")
-def ragged_completed(tmp_path_factory: pytest.TempPathFactory) -> RaggedResidualScenario:
-    return RaggedResidualScenario(tmp_path_factory)
+def ragged_completed(
+    residual_ragged_scenario: RaggedResidualScenario,
+) -> RaggedResidualScenario:
+    """`shared_releases.residual_ragged`, built once per session and read here."""
+    return residual_ragged_scenario
 
 
 @pytest.fixture(scope="module")
