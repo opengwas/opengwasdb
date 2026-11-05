@@ -15,13 +15,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from .genetic_map import LoadedMap
+from .counts import evaluate_counts
+from .genetic_map import LoadedMap, file_digest
 from .ld import export_dosages, pair_r2
 from .pairs import (
     R2_THRESHOLDS,
@@ -30,17 +33,20 @@ from .pairs import (
     chance_ld,
     check_pairs_follow_threshold,
     summarise,
+    write_pair_records,
 )
 from .panel import Panel
+from .rule import locus_leads
 from .run import (
     SharedSet,
     TierRows,
     build_shared_set,
-    check_assemblies,
+    check_tier,
     clump_shared_set,
     compare_leads,
     read_tier,
 )
+from .select import stratum
 
 D_GRID = (0.1, 0.25, 0.5, 1.0, 2.5)
 W_GRID = (250_000, 1_000_000, 2_500_000, 10_000_000)
@@ -51,6 +57,11 @@ BP_ONLY = float("inf")
 EUR_SPIKES = (Spike("7", 131_782_269, "TSI"), Spike("1", 235_056_161, "GBR"))
 NULL_MAX_VARIANTS = 3_000
 MIN_SHARED_SET_SHARE = 0.70
+TIER = 5e-8
+# The configurations whose every disagreeing pair is kept, at r^2 0.01: the nearest point to
+# qualifying, the cM point the #402 pilots used, and the bp-only windows beside them.
+PAIR_RECORD_CONFIGS = ((0.1, 2_500_000), (0.5, 1_000_000), (BP_ONLY, 1_000_000),
+                       (BP_ONLY, 2_500_000))
 
 # Written down before the sweep was run, and unchanged since.
 CRITERIA: dict[str, Any] = {
@@ -223,14 +234,16 @@ class SharedSetTooSmall(ValueError):
 
 
 def analyse(tier: TierRows, identity: dict[str, Any], genetic_map: LoadedMap, panel: Panel,
-            *, work_dir: Path, threads: int, spikes: tuple[Spike, ...],
-            configs: list[Config]) -> dict[str, Any]:
-    """One Analysis, every config: the compact record the sweep keeps."""
-    check_assemblies(identity["store"]["reference_assembly"], genetic_map.identity["assembly"],
-                     panel.assembly())
-    if identity["query"]["observed"] != tier.chromosome.size:
-        raise ValueError(f"{tier.chromosome.size:,} rows, but the query recorded "
-                         f"{identity['query']['observed']:,} observed")
+            *, work_dir: Path, threads: int, spikes: tuple[Spike, ...], configs: list[Config],
+            hm3: frozenset[str],
+            pair_configs: tuple[tuple[float, int], ...] = PAIR_RECORD_CONFIGS) -> dict[str, Any]:
+    """One Analysis, every config: the compact record the sweep keeps.
+
+    `pair_records` holds each disagreeing pair at r^2 0.01 for `pair_configs`; the sweep
+    writes them to their own file. `hm3` restricts the shared set, with no re-clumping,
+    to count the leads that survive a sparse genotyping density.
+    """
+    check_tier(tier, identity, genetic_map, panel)
     work_dir.mkdir(parents=True, exist_ok=True)
     shared, accounting = build_shared_set(tier, panel, genetic_map.map)
     if accounting["shared_set_share"] < MIN_SHARED_SET_SHARE:
@@ -240,27 +253,73 @@ def analyse(tier: TierRows, identity: dict[str, Any], genetic_map: LoadedMap, pa
     compared = {c: compare_leads(shared, clumps, d_cm=c.d_cm, w_bp=c.w_bp) for c in configs}
     ld = _PairLD(shared, panel, work_dir, threads)
     ld.load(_needed_rows(shared, clumps.index_of[R2_VALUES[0]], compared))
+    in_hm3 = np.fromiter((a in hm3 for a in shared.rows.alid.tolist()), dtype=bool,
+                         count=shared.rows.alid.size)
+    out: list[dict[str, Any]] = []
+    pair_records: list[dict[str, Any]] = []
+    for c in configs:
+        by_r2, details = _config_record(ld, compared[c], spikes)
+        if (c.d_cm, c.w_bp) in pair_configs:
+            pair_records += [{"analysis": identity["analysis"]["analysis_id"],
+                              "store": identity["store"]["store_id"], **c.label(), **d}
+                             for d in details]
+        out.append(c.label() | {"density": _lead_density(shared, in_hm3, c,
+                                                          compared[c]["locus_leads"]),
+                                "by_r2": by_r2})
     return {
         "analysis": identity["analysis"], "store": identity["store"]["store_id"],
         "query": identity["query"], "rows": accounting,
+        "density": {"rows_full": int(in_hm3.size), "rows_hm3": int(in_hm3.sum())},
         "chance_ld": ld.chance(clumps.index_of[R2_VALUES[0]], NULL_MAX_VARIANTS),
-        "configs": [c.label() | {"by_r2": {
-            r2: _record(shared, ld, result, spikes, float(r2))
-            for r2, result in compared[c]["by_r2"].items()}} for c in configs],
+        "configs": out, "pair_records": pair_records,
     }
 
 
-def _record(shared: SharedSet, ld: _PairLD, result: dict[str, Any], spikes: tuple[Spike, ...],
-            threshold: float) -> dict[str, Any]:
+def _config_record(ld: _PairLD, compared: dict[str, Any], spikes: tuple[Spike, ...],
+                   ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """A config's summary at each r^2, and its pairs at the primary r^2."""
+    by_r2, primary_pairs = {}, []
+    for r2, result in compared["by_r2"].items():
+        by_r2[r2], details = _record(ld, result, spikes, float(r2))
+        if r2 == PRIMARY_R2:
+            primary_pairs = details
+    return by_r2, primary_pairs
+
+
+def _lead_density(shared: SharedSet, in_hm3: np.ndarray, config: Config,
+                  leads_full: int) -> dict[str, int]:
+    """Locus Leads in the whole shared set, and among the HapMap3 rows alone."""
+    rows = shared.rows
+    if not in_hm3.any():
+        return {"leads_full": leads_full, "leads_hm3": 0}
+    lead_of = locus_leads(rows.chromosome[in_hm3], rows.position[in_hm3], shared.cm[in_hm3],
+                          rows.abs_z[in_hm3], rows.variant_index[in_hm3], d_cm=config.d_cm,
+                          w_bp=config.w_bp)
+    return {"leads_full": leads_full, "leads_hm3": int(np.sum(lead_of == np.arange(lead_of.size)))}
+
+
+def _record(ld: _PairLD, result: dict[str, Any], spikes: tuple[Spike, ...],
+            threshold: float) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """A config's summary at one r^2, and each disagreeing pair on its own."""
     split = ld.pairs(result["spurious_split_pairs"])
     lost = ld.pairs(result["lost_signal_pairs"])
     check_pairs_follow_threshold(split, threshold)
-    return {key: result[key] for key in ("rows", "locus_leads", "index_variants", "agreed",
-                                         "spurious_splits", "lost_signals",
-                                         "spurious_split_rate", "lost_signal_rate",
-                                         "by_abs_z")} | {
+    summary = {key: result[key] for key in ("rows", "locus_leads", "index_variants", "agreed",
+                                            "spurious_splits", "lost_signals",
+                                            "spurious_split_rate", "lost_signal_rate",
+                                            "by_abs_z")} | {
         "spurious_split_pairs": summarise(split, spikes),
         "lost_signal_pairs": summarise(lost, spikes)}
+    details = (_details("spurious_split", result["spurious_split_pairs"], split)
+               + _details("lost_signal", result["lost_signal_pairs"], lost))
+    return summary, details
+
+
+def _details(kind: str, found: list[dict[str, Any]], made: list[Pair]) -> list[dict[str, Any]]:
+    return [{"kind": kind, "alid": f["alid"], "stronger_alid": f["stronger_alid"],
+             "abs_z": f["abs_z"], "stronger_abs_z": f["stronger_abs_z"],
+             "r2": None if np.isnan(p.r2) else float(p.r2), "distance_bp": f["distance_bp"],
+             "distance_cm": f["distance_cm"]} for f, p in zip(found, made, strict=True)]
 
 
 def _needed_rows(shared: SharedSet, index_of: np.ndarray,
@@ -310,41 +369,138 @@ class _PairLD:
                          seed=int(index.size))
 
 
+class CacheMismatch(ValueError):
+    """A cached record was made from other inputs than the ones asked for."""
+
+
+def code_identity() -> dict[str, str]:
+    """The prototype's source, by digest and by the commit it is checked out at."""
+    package = Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    for source in sorted(package.glob("*.py")):
+        digest.update(source.name.encode() + b"\0" + source.read_bytes() + b"\0")
+    commit = subprocess.run(["git", "-C", str(package), "rev-parse", "HEAD"], check=True,
+                            capture_output=True, text=True).stdout.strip()
+    return {"sha256": digest.hexdigest(), "commit": commit}
+
+
+def _panel_fingerprint(panel: Panel) -> dict[str, Any]:
+    """The panel's directory, assembly, sample list and each file's size."""
+    files = {}
+    for chromosome in panel.chromosomes:
+        stem = panel.pfile(chromosome)
+        files[chromosome] = [stem.with_suffix(suffix).stat().st_size
+                             for suffix in (".pgen", ".psam", ".pvar.zst")]
+    samples = hashlib.sha256(b"".join(panel.pfile(c).with_suffix(".psam").read_bytes()
+                                      for c in panel.chromosomes)).hexdigest()
+    return {"path": str(panel.directory), "assembly": panel.assembly(), "psam_sha256": samples,
+            "file_sizes_pgen_psam_pvar": files}
+
+
+def input_fingerprint(chosen: dict[str, Any], stores_dir: Path, genetic_map: LoadedMap,
+                      panel: Panel, hm3: Path, code: dict[str, str]) -> dict[str, Any]:
+    """Everything one Analysis's record is a function of."""
+    store = stores_dir / chosen["store"] / "store.opengwasdb"
+    return {
+        "store": str(store), "store_id": chosen["store"], "analysis_id": chosen["analysis_id"],
+        "manifest_sha256": file_digest(store / "manifest.json", "sha256"),
+        "genetic_map_sha256": genetic_map.identity["sha256"],
+        "genetic_map_assembly": genetic_map.identity["assembly"],
+        "panel": _panel_fingerprint(panel), "hm3_sha256": file_digest(hm3, "sha256"),
+        "tier": TIER, "r2": R2_VALUES, "grid": [c.label() for c in grid_configs()],
+        "pair_record_configs": [Config(d, w).label() for d, w in PAIR_RECORD_CONFIGS],
+        "spikes": [[s.chromosome, s.position, s.name] for s in EUR_SPIKES],
+        "null_max_variants": NULL_MAX_VARIANTS, "min_shared_set_share": MIN_SHARED_SET_SHARE,
+        "code_sha256": code["sha256"], "code_commit": code["commit"],
+    }
+
+
+def cached_record(cache: Path, fingerprint: dict[str, Any],
+                  compute: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """The record cached at `cache` if made from `fingerprint`'s inputs, else compute and keep it.
+
+    A cached record made from other inputs is refused, naming what differs: reusing it
+    would put one input's measurement under another's name.
+    """
+    if cache.exists():
+        kept = json.loads(cache.read_text())
+        then = kept.get("fingerprint")
+        if then is None:
+            raise CacheMismatch(f"{cache}: the cached record has no fingerprint; remove it to "
+                                "recompute")
+        differs = [k for k in dict.fromkeys([*then, *fingerprint])
+                   if then.get(k) != fingerprint.get(k)]
+        if differs:
+            raise CacheMismatch(f"{cache}: the cached record was made with other inputs "
+                                f"({', '.join(differs)} differ); use another work directory or "
+                                "remove it")
+        record: dict[str, Any] = kept["record"]
+        return record
+    record = compute()
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"fingerprint": fingerprint, "record": record}, allow_nan=False))
+    return record
+
+
+def read_hm3(path: Path) -> frozenset[str]:
+    """The canonical ALIDs in the HapMap3 list, one per line."""
+    return frozenset(line for line in path.read_text().split("\n") if line)
+
+
+def _selection_bands(chosen: dict[str, Any]) -> dict[str, Any]:
+    rows_band, z_band = stratum(chosen["observed_rows"], chosen["max_abs_z"])
+    return {"observed_rows": chosen["observed_rows"], "max_abs_z": chosen["max_abs_z"],
+            "rows_band": rows_band, "z_band": z_band}
+
+
 def sweep(selection: dict[str, Any], stores_dir: Path, genetic_map: LoadedMap, panel_dir: Path,
-          work_dir: Path, *, threads: int, spikes: tuple[Spike, ...] = EUR_SPIKES,
-          only: int | None = None) -> dict[str, Any]:
-    """Every chosen Analysis, each cached under `work_dir` so an interrupted sweep resumes."""
-    panel = Panel(panel_dir)
-    analyses, below_floor = [], []
+          work_dir: Path, *, hm3_path: Path, pairs_path: Path, threads: int,
+          spikes: tuple[Spike, ...] = EUR_SPIKES, only: int | None = None,
+          code: dict[str, str] | None = None) -> dict[str, Any]:
+    """Every chosen Analysis, each cached under `work_dir` so an interrupted sweep resumes.
+
+    A cached record is reused only when its inputs' fingerprint matches. Each pair of
+    `PAIR_RECORD_CONFIGS` goes to `pairs_path`, not into the returned record.
+    """
+    panel, hm3 = Panel(panel_dir), read_hm3(hm3_path)
+    code = code or code_identity()
+    analyses, below_floor, pair_rows = [], [], []
     for chosen in selection["chosen"][:only]:
-        cache = work_dir / "results" / f"{chosen['store']}_{chosen['analysis_id']}.json"
-        if not cache.exists():
-            store = stores_dir / chosen["store"] / "store.opengwasdb"
-            tier, identity = read_tier(store, chosen["analysis_id"], 5e-8)
-            try:
-                record = analyse(tier, identity, genetic_map, panel, work_dir=work_dir / "work" /
-                                 f"{chosen['store']}_{chosen['analysis_id']}", threads=threads,
-                                 spikes=spikes, configs=grid_configs())
-            except SharedSetTooSmall as small:
-                below_floor.append(small.record | {"store": chosen["store"]})
-                continue
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(json.dumps(record, allow_nan=False))
-        analyses.append(json.loads(cache.read_text()))
+        name = f"{chosen['store']}_{chosen['analysis_id']}"
+
+        def compute(chosen: dict[str, Any] = chosen, name: str = name) -> dict[str, Any]:
+            tier, identity = read_tier(stores_dir / chosen["store"] / "store.opengwasdb",
+                                       chosen["analysis_id"], TIER)
+            return analyse(tier, identity, genetic_map, panel, work_dir=work_dir / "work" / name,
+                           threads=threads, spikes=spikes, configs=grid_configs(), hm3=hm3)
+
+        try:
+            record = cached_record(work_dir / "results" / f"{name}.json",
+                                   input_fingerprint(chosen, stores_dir, genetic_map, panel,
+                                                     hm3_path, code), compute)
+        except SharedSetTooSmall as small:
+            below_floor.append(small.record | {"store": chosen["store"]})
+            continue
+        pair_rows += record.pop("pair_records")
+        analyses.append(record | {"selection": _selection_bands(chosen)})
     return {
         "selection": {"seed": selection["rule"]["seed"], "analyses": len(analyses),
                       "sha256": hashlib.sha256(json.dumps(selection, sort_keys=True).encode()
                                                ).hexdigest()},
         "genetic_map": genetic_map.identity,
         "panel": {"path": str(panel_dir), "assembly": panel.assembly()},
+        "hm3": {"path": str(hm3_path), "sha256": file_digest(hm3_path, "sha256"),
+                "alids": len(hm3)},
         "grid": {"d_cm": list(D_GRID), "w_bp": list(W_GRID), "bp_only": "D = infinity",
-                 "r2": R2_VALUES, "tier": 5e-8, "observed_only": True},
+                 "r2": R2_VALUES, "tier": TIER, "observed_only": True},
         "spikes": [{"chromosome": s.chromosome, "position": s.position, "population": s.name}
                    for s in spikes],
         "left_out_below_shared_set_floor": {"floor": MIN_SHARED_SET_SHARE,
                                             "analyses": below_floor},
+        "pair_records": write_pair_records(pair_rows, pairs_path) | {
+            "at_r2": PRIMARY_R2, "configs": [Config(d, w).label() for d, w in PAIR_RECORD_CONFIGS]},
         "chance_ld": pool_chance([a["chance_ld"] for a in analyses]),
         "evaluation": evaluate(analyses),
+        "counts": evaluate_counts(analyses),
         "analyses": analyses,
     }
-

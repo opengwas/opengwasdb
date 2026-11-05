@@ -44,6 +44,12 @@ def _first(analyses: list[dict[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _each_hm3(leads: list[tuple[int, int]]) -> list[dict[str, Any]]:
+    """One Analysis per (full, HapMap3) lead count, at bp-only."""
+    return [_analysis(f"a{i}", rows=(1000, 100), index=INDEX[i], at={("bp_only", W): pair})
+            for i, pair in enumerate(leads)]
+
+
 def test_spearman_is_the_pearson_of_average_ranks() -> None:
     assert counts.spearman([1, 2, 3, 4], [1, 3, 2, 4]) == pytest.approx(0.8)
     assert counts.spearman([1, 1, 2], [1, 2, 3]) == pytest.approx(1.5 / math.sqrt(3))
@@ -78,17 +84,14 @@ def test_c2_needs_the_median_ratio_in_range_and_less_log_distance_than_half_the_
 
 
 def test_the_median_is_over_analyses_and_the_ratio_is_hm3_over_full() -> None:
-    analyses = [_analysis(f"a{i}", rows=(1000, 100), index=INDEX[i], at={("bp_only", W): (full, hm3)})
-                for i, (full, hm3) in enumerate([(100, 90), (200, 200), (300, 330), (400, 480),
-                                                 (500, 50)])]
+    analyses = _each_hm3([(100, 90), (200, 200), (300, 330), (400, 480), (500, 50)])
     result = _first(analyses)
     assert result["median_ratio"] == pytest.approx(1.0)
     assert result["median_abs_log2"] == pytest.approx(abs(math.log2(0.9)))
 
 
 def test_an_analysis_with_no_hm3_lead_is_an_infinite_log_distance_not_a_dropped_one() -> None:
-    analyses = [_analysis(f"a{i}", rows=(1000, 100), index=INDEX[i], at={("bp_only", W): (full, hm3)})
-                for i, (full, hm3) in enumerate([(100, 0), (200, 0), (300, 300)])]
+    analyses = _each_hm3([(100, 0), (200, 0), (300, 300)])
     result = _first(analyses)
     assert result["analyses_without_hm3_leads"] == 2
     assert result["median_ratio"] == 0.0
@@ -136,7 +139,7 @@ def test_c3_fails_when_rho_is_worse_by_more_than_point_01_even_if_density_improv
     assert not _c3((CM_LEADS, 1.3), (BP_LEADS, 1.0))["holds"]
 
 
-def test_the_named_point_is_the_one_meeting_c1_and_c2_that_loses_the_fewest_leads_to_density() -> None:
+def test_the_named_point_meets_c1_and_c2_and_loses_the_fewest_leads_to_density() -> None:
     both = counts.evaluate_counts(_by_ratio({"bp_only": CM_LEADS, 0.5: CM_LEADS},
                                             {"bp_only": 0.9, 0.5: 0.95}))
     assert both["named"]["d_cm"] == 0.5

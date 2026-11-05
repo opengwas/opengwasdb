@@ -12,7 +12,10 @@ r^2 >= a threshold is the share a pair at any distance reaches by chance.
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -114,3 +117,29 @@ def chance_ld(dosage: np.ndarray, chromosome: np.ndarray, *, max_variants: int,
     return {"variants": int(keep.size), "variants_available": int(chromosome.size),
             "pairs": int(values.size), "r2_undefined": int(values.size - called.size),
             **{f"pairs_r2_ge_{t:g}": int(np.sum(called >= t)) for t in R2_THRESHOLDS}}
+
+
+PAIR_COLUMNS = ["analysis", "store", "d_cm", "w_bp", "kind", "alid", "stronger_alid", "abs_z",
+                "stronger_abs_z", "r2", "distance_bp", "distance_cm"]
+
+
+def _cell(value: Any) -> str:
+    """One TSV cell: an undefined r^2 is NA, never a number."""
+    return "NA" if value is None else repr(value) if isinstance(value, float) else str(value)
+
+
+def write_pair_records(rows: list[dict[str, Any]], path: Path) -> dict[str, Any]:
+    """Each disagreeing pair as a gzipped TSV (no timestamp, so the bytes are reproducible).
+
+    `alid` is the Locus Lead (a spurious split) or the plink2 index variant (a lost
+    signal); `stronger_alid` is the index variant whose clump holds the first, or the
+    Locus Lead the second merged into.
+    """
+    text = "\n".join("\t".join(row_cells) for row_cells in [
+        PAIR_COLUMNS, *([_cell(row[c]) for c in PAIR_COLUMNS] for row in rows)]) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as handle, gzip.GzipFile(filename="", mode="wb", fileobj=handle,
+                                                  mtime=0) as zipped:
+        zipped.write(text.encode())
+    return {"file": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "rows": len(rows), "columns": PAIR_COLUMNS}

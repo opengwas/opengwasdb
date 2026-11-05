@@ -68,7 +68,7 @@ def spearman(x: Any, y: Any) -> float:
 
 def _abs_log2(ratio: np.ndarray) -> np.ndarray:
     with np.errstate(divide="ignore"):
-        return np.abs(np.log2(ratio))
+        return np.asarray(np.abs(np.log2(ratio)))
 
 
 def _finite_or_none(value: float) -> float | None:
@@ -77,6 +77,13 @@ def _finite_or_none(value: float) -> float | None:
 
 def _median_or_inf(values: np.ndarray) -> float:
     return float(np.median(values))
+
+
+def _density_holds(median_ratio: float, median_log: float, rows_median_log: float) -> bool:
+    """C2: the median ratio is in range and its |log2| at most half the rows' own."""
+    low, high = COUNT_CRITERIA["ratio_range"]
+    share = COUNT_CRITERIA["log2_at_most_this_share_of_rows"]
+    return bool(low <= median_ratio <= high and median_log <= share * rows_median_log)
 
 
 def _config_counts(analyses: list[dict[str, Any]], key: tuple[Any, int],
@@ -97,10 +104,7 @@ def _config_counts(analyses: list[dict[str, Any]], key: tuple[Any, int],
         "median_abs_log2": _finite_or_none(median_log),
         "rows_median_abs_log2": rows_median_abs_log2,
         "analyses_without_hm3_leads": int((hm3 == 0).sum()),
-        "c2": bool(COUNT_CRITERIA["ratio_range"][0] <= np.median(ratio)
-                   <= COUNT_CRITERIA["ratio_range"][1]
-                   and median_log <= COUNT_CRITERIA["log2_at_most_this_share_of_rows"]
-                   * rows_median_abs_log2),
+        "c2": _density_holds(float(np.median(ratio)), median_log, rows_median_abs_log2),
         "leads_full": int(full.sum()), "leads_hm3": int(hm3.sum()),
         "share_of_leads_lost_to_density": float(np.maximum(full - hm3, 0).sum() / full.sum()),
     }
@@ -111,25 +115,27 @@ def _abs_log2_of(row: dict[str, Any]) -> float:
     return math.inf if value is None else float(value)
 
 
+def _adds_value(cm: dict[str, Any], bp: dict[str, Any]) -> bool:
+    """C3 for one D: better than bp-only by a margin on one count, worse on neither."""
+    d_rho = cm["rho"] - bp["rho"]
+    # Positive is better; two infinite distances are no change.
+    d_log = 0.0 if _abs_log2_of(cm) == _abs_log2_of(bp) else _abs_log2_of(bp) - _abs_log2_of(cm)
+    m_rho, m_log = COUNT_CRITERIA["c3_margin_rho"], COUNT_CRITERIA["c3_margin_abs_log2"]
+    eps = 1e-9
+    return bool((d_rho >= m_rho - eps or d_log >= m_log - eps)
+                and d_rho >= -m_rho - eps and d_log >= -m_log - eps)
+
+
+def _c3_at(at_w: list[dict[str, Any]]) -> dict[str, Any]:
+    bp = next(r for r in at_w if r["d_cm"] == BP_ONLY)
+    holding = [r["d_cm"] for r in at_w if r["d_cm"] != BP_ONLY and _adds_value(r, bp)]
+    return {"w_bp": bp["w_bp"], "holds": bool(holding), "d_cm_that_holds": holding,
+            "bp_only_rho": bp["rho"], "bp_only_median_abs_log2": bp["median_abs_log2"]}
+
+
 def _c3(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    out = []
-    for w in dict.fromkeys(r["w_bp"] for r in rows):
-        at_w = [r for r in rows if r["w_bp"] == w]
-        bp = next(r for r in at_w if r["d_cm"] == BP_ONLY)
-        holding = []
-        for r in (r for r in at_w if r["d_cm"] != BP_ONLY):
-            d_rho = r["rho"] - bp["rho"]
-            # Positive is better; two infinite distances are no change.
-            d_log = 0.0 if _abs_log2_of(r) == _abs_log2_of(bp) else (
-                _abs_log2_of(bp) - _abs_log2_of(r))
-            m_rho, m_log = COUNT_CRITERIA["c3_margin_rho"], COUNT_CRITERIA["c3_margin_abs_log2"]
-            eps = 1e-9
-            if ((d_rho >= m_rho - eps or d_log >= m_log - eps)
-                    and d_rho >= -m_rho - eps and d_log >= -m_log - eps):
-                holding.append(r["d_cm"])
-        out.append({"w_bp": w, "holds": bool(holding), "d_cm_that_holds": holding,
-                    "bp_only_rho": bp["rho"], "bp_only_median_abs_log2": bp["median_abs_log2"]})
-    return out
+    return [_c3_at([r for r in rows if r["w_bp"] == w])
+            for w in dict.fromkeys(r["w_bp"] for r in rows)]
 
 
 def _named(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -155,22 +161,30 @@ def leads_per_index_variant(analyses: list[dict[str, Any]]) -> list[dict[str, An
                 total["analyses"] += 1
                 total["locus_leads"] += entry["by_r2"][PRIMARY_R2]["locus_leads"]
                 total["index_variants"] += entry["by_r2"][PRIMARY_R2]["index_variants"]
-            row[name] = {band_name: total | {"ratio": total["locus_leads"] / total["index_variants"]}
-                         for band_name, total in groups.items()}
+            row[name] = {
+                band_name: total | {"ratio": total["locus_leads"] / total["index_variants"]}
+                for band_name, total in groups.items()}
         table.append(row)
     return table
 
 
-def evaluate_counts(analyses: list[dict[str, Any]]) -> dict[str, Any]:
-    """C1-C3 at every (D, W), the point they name, and the lead / index-variant ratios."""
+def _row_density(analyses: list[dict[str, Any]]) -> tuple[np.ndarray, np.ndarray, np.ndarray,
+                                                          float]:
+    """Shared-set rows in full and on HapMap3, their ratio, and its median |log2|."""
     rows_full = np.array([a["density"]["rows_full"] for a in analyses], dtype="float64")
     rows_hm3 = np.array([a["density"]["rows_hm3"] for a in analyses], dtype="float64")
     if (rows_full <= 0).any():
         raise ValueError("an Analysis has no rows in its shared set")
-    rows_ratio = rows_hm3 / rows_full
-    rows_log = _median_or_inf(_abs_log2(rows_ratio))
-    if math.isinf(rows_log):
+    ratio = rows_hm3 / rows_full
+    median_log = _median_or_inf(_abs_log2(ratio))
+    if math.isinf(median_log):
         raise ValueError("more than half of the Analyses have no HapMap3 row")
+    return rows_full, rows_hm3, ratio, median_log
+
+
+def evaluate_counts(analyses: list[dict[str, Any]]) -> dict[str, Any]:
+    """C1-C3 at every (D, W), the point they name, and the lead / index-variant ratios."""
+    rows_full, rows_hm3, rows_ratio, rows_log = _row_density(analyses)
     keys = [(c["d_cm"], c["w_bp"]) for c in analyses[0]["configs"]]
     rows = [_config_counts(analyses, key, rows_log) for key in keys]
     cm_only = [r for r in rows if r["d_cm"] != BP_ONLY]

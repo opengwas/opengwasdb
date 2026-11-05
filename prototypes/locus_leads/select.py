@@ -65,10 +65,6 @@ def draw(pool: list[PoolEntry], rule: SelectionRule) -> Selection:
     ordered = sorted(pool, key=lambda e: (e.store, e.analysis_id))
     excluded = [e for e in ordered if e.observed_rows > rule.max_rows]
     eligible = [e for e in ordered if 0 < e.observed_rows <= rule.max_rows]
-    counts: dict[str, int] = {}
-    for e in eligible:
-        key = " x ".join(stratum(e.observed_rows, e.max_abs_z))
-        counts[key] = counts.get(key, 0) + 1
     rng = random.Random(rule.seed)
     chosen: list[PoolEntry] = []
     _take(chosen, eligible, rng, rule.min_z100, lambda e: e.max_abs_z >= 100.0, "|z| >= 100")
@@ -79,7 +75,15 @@ def draw(pool: list[PoolEntry], rule: SelectionRule) -> Selection:
                          f"the pool has {len(eligible)}")
     _fill(chosen, eligible, rng, rule.target)
     return Selection(sorted(chosen, key=lambda e: (e.store, e.analysis_id)), excluded,
-                     dict(sorted(counts.items())), [e for e in ordered if e.observed_rows == 0])
+                     _stratum_counts(eligible), [e for e in ordered if e.observed_rows == 0])
+
+
+def _stratum_counts(eligible: list[PoolEntry]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for e in eligible:
+        key = " x ".join(stratum(e.observed_rows, e.max_abs_z))
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _take(chosen: list[PoolEntry], eligible: list[PoolEntry], rng: random.Random, quota: int,

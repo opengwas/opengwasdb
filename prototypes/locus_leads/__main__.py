@@ -48,8 +48,10 @@ def main(argv: list[str] | None = None) -> None:
 def _sweep(args: argparse.Namespace) -> None:
     started = time.monotonic()
     selection = json.loads(args.selection.read_text())
+    pairs_path = args.output.with_name(args.output.stem + "_pairs.tsv.gz")
     result = sweep(selection, args.stores_dir, load_map(args.genetic_map), args.panel,
-                   args.work_dir, threads=args.threads, only=args.only)
+                   args.work_dir, hm3_path=args.hm3, pairs_path=pairs_path, threads=args.threads,
+                   only=args.only)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=1, allow_nan=False) + "\n")
     print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
@@ -76,6 +78,8 @@ def _parser() -> argparse.ArgumentParser:
     run_sweep.add_argument("--panel", type=Path, required=True, help="directory of chr<N>.pgen")
     run_sweep.add_argument("--work-dir", type=Path, required=True, help="plink2's files and "
                            "each Analysis's cached record")
+    run_sweep.add_argument("--hm3", type=Path, required=True,
+                           help="HapMap3 canonical ALIDs, one per line")
     run_sweep.add_argument("--threads", type=int, default=4)
     run_sweep.add_argument("--only", type=int, help="the first N chosen Analyses only")
     run_sweep.add_argument("--output", type=Path, required=True)
