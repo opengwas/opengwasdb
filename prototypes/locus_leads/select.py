@@ -51,7 +51,7 @@ class Selection:
     chosen: list[PoolEntry]
     excluded: list[PoolEntry]
     pool_by_stratum: dict[str, int]
-    empty: int  # Analyses with no observed row at the tier: nothing to compare
+    empty: list[PoolEntry]  # Analyses with no observed row at the tier: nothing to compare
 
 
 def stratum(observed_rows: int, max_abs_z: float) -> tuple[str, str]:
@@ -79,7 +79,7 @@ def draw(pool: list[PoolEntry], rule: SelectionRule) -> Selection:
                          f"the pool has {len(eligible)}")
     _fill(chosen, eligible, rng, rule.target)
     return Selection(sorted(chosen, key=lambda e: (e.store, e.analysis_id)), excluded,
-                     dict(sorted(counts.items())), sum(e.observed_rows == 0 for e in ordered))
+                     dict(sorted(counts.items())), [e for e in ordered if e.observed_rows == 0])
 
 
 def _take(chosen: list[PoolEntry], eligible: list[PoolEntry], rng: random.Random, quota: int,
@@ -152,7 +152,12 @@ def build_selection(stores_dir: Path, rule: SelectionRule) -> dict[str, Any]:
         pool += found
         if not found:
             left_out.append({"store": store_id, "reason": "no Analysis assigned EUR"})
-    result = draw(pool, rule)
+    return selection_record(rule, left_out, pool, draw(pool, rule))
+
+
+def selection_record(rule: SelectionRule, left_out: list[dict[str, str]], pool: list[PoolEntry],
+                     result: Selection) -> dict[str, Any]:
+    """Everything the draw saw and did, each exclusion by Store and Analysis with its reason."""
     return {
         "rule": {"seed": rule.seed, "target": rule.target, "min_abs_z_100": rule.min_z100,
                  "min_p_zero": rule.min_p0, "max_observed_rows": rule.max_rows,
@@ -164,7 +169,11 @@ def build_selection(stores_dir: Path, rule: SelectionRule) -> dict[str, Any]:
         "stores_left_out": left_out,
         "pool_size": len(pool),
         "pool_by_stratum": result.pool_by_stratum,
-        "analyses_without_observed_rows": result.empty,
+        "n_analyses_without_observed_rows": len(result.empty),
+        "analyses_without_observed_rows": [
+            {"store": e.store, "analysis_id": e.analysis_id, "observed_rows": e.observed_rows,
+             "reason": "no Observed Association at 5e-8, so nothing to compare"}
+            for e in result.empty],
         "excluded_over_max_rows": [_entry(e) for e in result.excluded],
         "chosen": [_entry(e) for e in result.chosen],
     }

@@ -52,7 +52,7 @@ def test_the_quotas_are_met_and_the_exclusion_is_recorded() -> None:
 def test_analyses_with_no_observed_rows_are_counted_and_never_drawn() -> None:
     pool = [*_pool(), select.PoolEntry("OGS-X", "empty", 0, 0.0)]
     result = select.draw(pool, _rule())
-    assert result.empty == 1
+    assert [(e.store, e.analysis_id) for e in result.empty] == [("OGS-X", "empty")]
     assert "empty" not in {e.analysis_id for e in result.chosen}
     assert sum(result.pool_by_stratum.values()) == 36
 
@@ -62,3 +62,16 @@ def test_a_quota_that_cannot_be_met_refuses_rather_than_drawing_fewer() -> None:
         select.draw(_pool(), _rule(min_z100=7))
     with pytest.raises(select.QuotaUnmet, match="target"):
         select.draw(_pool(), _rule(target=100))
+
+
+def test_the_record_names_each_analysis_with_no_observed_rows_and_why() -> None:
+    pool = [*_pool(), select.PoolEntry("OGS-Y", "empty", 0, 0.0),
+            select.PoolEntry("OGS-X", "empty2", 0, 0.0)]
+    result = select.draw(pool, _rule())
+    record = select.selection_record(_rule(), [], pool, result)
+    assert record["analyses_without_observed_rows"] == [
+        {"store": "OGS-X", "analysis_id": "empty2", "observed_rows": 0,
+         "reason": "no Observed Association at 5e-8, so nothing to compare"},
+        {"store": "OGS-Y", "analysis_id": "empty", "observed_rows": 0,
+         "reason": "no Observed Association at 5e-8, so nothing to compare"}]
+    assert record["n_analyses_without_observed_rows"] == 2
