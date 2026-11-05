@@ -91,8 +91,11 @@ def test_clearly_better_needs_a_ten_percent_cut_and_two_thirds_of_the_analyses()
 def test_a_config_qualifies_only_when_both_rates_are_within_ten_percent_and_it_beats_bp() -> None:
     good = {"locus_leads": 100, "index_variants": 100, "spurious_splits": 10, "lost_signals": 10}
     bad = {"locus_leads": 100, "index_variants": 100, "spurious_splits": 11, "lost_signals": 10}
+    lost_bad = {"locus_leads": 100, "index_variants": 100, "spurious_splits": 10,
+                "lost_signals": 11}
     assert sweep.within_tolerance(sweep.pool([good]))
     assert not sweep.within_tolerance(sweep.pool([bad]))
+    assert not sweep.within_tolerance(sweep.pool([lost_bad]))
 
 
 def _summary(n: int, near: int, straddling: int) -> dict[str, Any]:
