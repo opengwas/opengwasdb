@@ -1,0 +1,324 @@
+---
+title: "Locus Leads against plink2 clumping across EUR Analyses (#403)"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    theme: cosmo
+jupyter: python3
+---
+
+```{python}
+#| echo: false
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+from IPython.display import Markdown, display
+
+HERE = Path(".")
+sweep = json.loads((HERE / "eur_sweep.json").read_text())
+selection = json.loads((HERE / "eur_sweep_selection.json").read_text())
+evaluation = sweep["evaluation"]
+criteria = evaluation["criteria"]
+configs = {(c["d_cm"], c["w_bp"]): c for c in evaluation["configs"]}
+PRIMARY = criteria["at_r2"]
+W_VALUES = sweep["grid"]["w_bp"]
+D_VALUES = sweep["grid"]["d_cm"]
+BEST = evaluation["best"]
+KEY = ((BEST["d_cm"], BEST["w_bp"]) if BEST["qualifies"]
+       else (BEST["nearest_d_cm"], BEST["nearest_w_bp"]))
+
+
+def show(text):
+    display(Markdown(text))
+
+
+def md_table(headers, rows):
+    head = "| " + " | ".join(headers) + " |\n|" + "|".join(["---"] * len(headers)) + "|\n"
+    return head + "\n".join("| " + " | ".join(str(c) for c in row) + " |" for row in rows)
+
+
+def pct(value):
+    return f"{100 * value:.1f}%"
+
+
+def w_label(w):
+    return f"{w / 1e6:g} Mb"
+
+
+def d_label(d):
+    return "bp only" if d == "bp_only" else f"{d:g} cM"
+
+
+def rates(config, r2=PRIMARY):
+    return config["by_r2"][r2]
+
+
+def yes(flag):
+    return "yes" if flag else "no"
+```
+
+## The question
+
+Does genetic-distance pruning work for EUR? Is there a D and a W at which the
+Locus Lead rule matches plink2 clumping on the HGDP+1kGP EUR panel (r² 0.01,
+within 10 Mb), and does a genetic-distance condition do better than a plain
+base-pair window of the same W? Only Observed Associations at the 5×10⁻⁸ tier
+are used, on the rows both methods can see: on the panel, with finite cM.
+Genetic distances come from the five-population mean pyrho map. Its two
+single-population spikes are counted below, not removed.
+
+## The Analyses
+
+```{python}
+#| echo: false
+#| output: asis
+rule = selection["rule"]
+chosen = selection["chosen"]
+show(f"""
+{len(chosen)} Analyses were drawn with seed {rule['seed']} from a pool of
+{selection['pool_size']:,} EUR (Assigned Ancestry) Analyses in the genome-wide
+Stores. {sum(c['max_abs_z'] >= 100 for c in chosen)} have a largest |z| of at
+least 100 and {sum(c['max_abs_z'] >= 38.5 for c in chosen)} of at least 38.5,
+where a float64 p is 0. The draw is in `eur_sweep_selection.json`, written
+before any clumping ran.
+""")
+row_bands = ["<1k", "1k-10k", "10k-100k", ">=100k"]
+z_bands = ["<38.5", "38.5-100", ">=100"]
+pool = selection["pool_by_stratum"]
+took = {}
+for c in chosen:
+    took[c["stratum"]] = took.get(c["stratum"], 0) + 1
+show("Analyses by observed 5×10⁻⁸ rows (down) and largest |z| (across): in the pool, and drawn.\n\n" +
+     md_table(["rows", *z_bands], [
+         [r, *[f"{pool.get(f'{r} x {z}', 0):,} / {took.get(f'{r} x {z}', 0)}" for z in z_bands]]
+         for r in row_bands]))
+show("**Stores left out of the pool**\n\n" + md_table(["Store", "why"], [
+    [s["store"], s["reason"][:170]] for s in selection["stores_left_out"]]))
+show(f"{selection['analyses_without_observed_rows']:,} pool Analyses have no Observed "
+     "Association at 5×10⁻⁸ and cannot be drawn.")
+show(f"**Left out for more than {rule['max_observed_rows']:,} observed rows**\n\n" +
+     md_table(["Store", "Analysis", "observed rows", "largest |z|"], [
+         [e["store"], e["analysis_id"], f"{e['observed_rows']:,}", f"{e['max_abs_z']:.1f}"]
+         for e in selection["excluded_over_max_rows"]]))
+below = sweep["left_out_below_shared_set_floor"]
+if below["analyses"]:
+    show(f"**Drawn, but under {pct(below['floor'])} of rows in the shared set, so not swept**\n\n" +
+         md_table(["Store", "Analysis", "tier rows", "shared", "rows absent from the panel"], [
+             [b["store"], b["analysis"]["analysis_id"], b["tier_rows"], pct(b["shared_set_share"]),
+              b["partition"]["absent_at_position"]] for b in below["analyses"]]))
+analyses = sweep["analyses"]
+tier = sum(a["rows"]["tier_rows"] for a in analyses)
+shared = sum(a["rows"]["shared_set"] for a in analyses)
+show(f"The sweep ran on {len(analyses)} Analyses: {tier:,} Observed Associations at the tier, "
+     f"{shared:,} ({pct(shared / tier)}) of them in the shared set both methods rank. Their tiers "
+     f"also hold {sum(a['query']['imputed'] for a in analyses):,} imputed rows, which are not used.")
+```
+
+## The working criteria
+
+Written into the sweep's code before it was run, and unchanged.
+
+```{python}
+#| echo: false
+#| output: asis
+better = criteria["clearly_better"]
+show(f"""
+- At r² {criteria['at_r2']}: spurious splits ≤ {pct(criteria['spurious_split_rate_max'])} of Locus Leads
+  **and** lost signals ≤ {pct(criteria['lost_signal_rate_max'])} of plink2's index variants.
+- Clearly better than the bp-only rule at the same W, on the same Analyses: {better['measure']}.
+  The pooled rate is at most {better['pooled_rate_at_most']:.0%} of the bp-only rate, and lower in at
+  least {better['analyses_lower_at_least']:.0%} of the Analyses where the two differ.
+- A (D, W) qualifies when {criteria['qualifies']}.
+- Best: {criteria['best']}.
+- Pooled rates are the sum of counts over the sum of denominators across Analyses.
+""")
+```
+
+## Verdict
+
+```{python}
+#| echo: false
+#| output: asis
+if BEST["qualifies"]:
+    best = configs[KEY]
+    plain = configs[("bp_only", KEY[1])]
+    show(f"**D = {KEY[0]:g} cM, W = {w_label(KEY[1])} qualifies on the pooled rates**: spurious splits "
+         f"{pct(rates(best)['spurious_split_rate'])}, lost signals {pct(rates(best)['lost_signal_rate'])}, "
+         f"against {pct(rates(plain)['spurious_split_rate'])} and {pct(rates(plain)['lost_signal_rate'])} "
+         f"for the plain {w_label(KEY[1])} window.")
+else:
+    near = configs[KEY]
+    plain = configs[("bp_only", KEY[1])]
+    show(f"**No (D, W) in the grid meets the working criteria on the pooled rates.** The nearest, by the "
+         f"larger of its two rates, is D = {KEY[0]:g} cM, W = {w_label(KEY[1])}: spurious splits "
+         f"{pct(rates(near)['spurious_split_rate'])}, lost signals {pct(rates(near)['lost_signal_rate'])}; "
+         f"the plain {w_label(KEY[1])} window gives {pct(rates(plain)['spurious_split_rate'])} and "
+         f"{pct(rates(plain)['lost_signal_rate'])}.")
+named = lambda keys: ", ".join(f"D {d:g} cM / W {w_label(w)}" for d, w in keys) or "none"
+show(f"Qualifying on the pooled rates: {named(k for k, c in configs.items() if c.get('qualifies_pooled'))}. "
+     f"Qualifying on the per-Analysis medians: {named(k for k, c in configs.items() if c.get('qualifies_median'))}.")
+```
+
+### Every (D, W) at r² 0.01
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for w in W_VALUES:
+    for d in ["bp_only", *D_VALUES]:
+        c = configs[(d, w)]
+        r = rates(c)
+        flags = ["", "", ""] if d == "bp_only" else [
+            yes(c["clearly_better_than_bp_only"]), yes(c["qualifies_pooled"]), yes(c["qualifies_median"])]
+        rows.append([w_label(w), d_label(d), f"{r['locus_leads']:,}", f"{r['index_variants']:,}",
+                     pct(r["spurious_split_rate"]), pct(r["lost_signal_rate"]),
+                     pct(r["disagreement_rate"]), pct(r["median_spurious_split_rate"]),
+                     pct(r["median_lost_signal_rate"]), *flags])
+show(md_table(["W", "D", "Locus Leads", "index variants", "spurious", "lost", "disagreement",
+               "median spurious", "median lost", "clearly better", "qualifies (pooled)",
+               "qualifies (median)"], rows))
+```
+
+### Every (D, W) at r² 0.001
+
+For comparison with legacy OpenGWAS. The criteria are judged at r² 0.01 only.
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for w in W_VALUES:
+    for d in ["bp_only", *D_VALUES]:
+        r = rates(configs[(d, w)], "0.001")
+        rows.append([w_label(w), d_label(d), f"{r['locus_leads']:,}", f"{r['index_variants']:,}",
+                     pct(r["spurious_split_rate"]), pct(r["lost_signal_rate"]),
+                     pct(r["median_spurious_split_rate"]), pct(r["median_lost_signal_rate"])])
+show(md_table(["W", "D", "Locus Leads", "index variants", "spurious", "lost", "median spurious",
+               "median lost"], rows))
+```
+
+## Spurious splits against lost signals
+
+One line per W. Its circles are the D values, labelled in cM, and its open square is the
+bp-only rule. A smaller D means fewer lost signals and more spurious splits. In the
+r² 0.01 panel the shaded bands mark the 10% limits, and their overlap is the working region.
+
+```{python}
+#| echo: false
+fig, axes = plt.subplots(1, 2, figsize=(11, 4.6))
+for ax, r2 in zip(axes, ["0.01", "0.001"]):
+    for w, colour in zip(W_VALUES, ["#1b9e77", "#d95f02", "#7570b3", "#e7298a"]):
+        cm = [rates(configs[(d, w)], r2) for d in D_VALUES]
+        bp = rates(configs[("bp_only", w)], r2)
+        ax.plot([r["lost_signal_rate"] for r in cm], [r["spurious_split_rate"] for r in cm],
+                "-o", color=colour, label=f"W {w_label(w)}")
+        ax.plot([bp["lost_signal_rate"]], [bp["spurious_split_rate"]], "s", color=colour,
+                markersize=9, markerfacecolor="none")
+        for d, r in zip(D_VALUES, cm):
+            ax.annotate(f"{d:g}", (r["lost_signal_rate"], r["spurious_split_rate"]),
+                        textcoords="offset points", xytext=(4, 4), fontsize=7, color=colour)
+    if r2 == PRIMARY:
+        ax.axhspan(0, criteria["spurious_split_rate_max"], color="0.85", alpha=0.6, zorder=0)
+        ax.axvspan(0, criteria["lost_signal_rate_max"], color="0.85", alpha=0.6, zorder=0)
+    ax.set_xlabel("lost signals / index variants (pooled)")
+    ax.set_ylabel("spurious splits / Locus Leads (pooled)")
+    ax.set_title(f"r² {r2}")
+    ax.set_xlim(left=0)
+    ax.set_ylim(bottom=0)
+    ax.legend(fontsize=8)
+fig.tight_layout()
+plt.show()
+```
+
+## Spurious splits by the lead's |z|
+
+Extra leads on the flanks of very strong peaks show up as spurious splits at high |z|. At the
+verdict's configuration against its plain window, r² 0.01:
+
+```{python}
+#| echo: false
+#| output: asis
+cm, plain = configs[KEY], configs[("bp_only", KEY[1])]
+rows = []
+for band, counts in rates(cm)["by_abs_z"].items():
+    other = rates(plain)["by_abs_z"][band]
+    ratio = lambda c: pct(c["spurious_splits"] / c["locus_leads"]) if c["locus_leads"] else "-"
+    rows.append([band, f"{counts['locus_leads']:,}", f"{counts['spurious_splits']:,}", ratio(counts),
+                 f"{other['locus_leads']:,}", f"{other['spurious_splits']:,}", ratio(other)])
+show(f"D = {KEY[0]:g} cM, W = {w_label(KEY[1])}, and the {w_label(KEY[1])} window.\n\n" +
+     md_table(["lead's |z|", "Locus Leads", "spurious", "rate", "window: Locus Leads",
+               "window: spurious", "window: rate"], rows))
+```
+
+## Chance LD at n = 771
+
+```{python}
+#| echo: false
+#| output: asis
+null = sweep["chance_ld"]
+show(f"""
+Index variants on different chromosomes are unlinked, so the share of such pairs whose r² reaches a
+threshold is what chance gives at n = 771. Over {null['analyses']} Analyses (at most 3,000 index
+variants each, chosen by a fixed seed) there are {null['pairs']:,} such pairs, {null['r2_undefined']:,}
+with an undefined r² because a variant is constant in the panel.
+
+""" + md_table(["r² at least", "pairs", "share"], [
+    [t, f"{null[f'pairs_r2_ge_{t}']:,}", f"{100 * null[f'share_r2_ge_{t}']:.2f}%"]
+    for t in ["0.001", "0.01", "0.05", "0.1"]]))
+```
+
+A spurious split's pair has r² at or above the clumping threshold by construction. What
+matters is how many of the long ones sit near the threshold, as chance pairs do. The
+verdict's configuration at r² 0.01, pooled over the Analyses, by the pair's distance:
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for kind, name in [("spurious_split_pairs", "spurious splits"), ("lost_signal_pairs", "lost signals")]:
+    for band, counts in rates(cm)[kind]["by_distance_band"].items():
+        rows.append([name, band, f"{counts['n']:,}", f"{counts['r2_ge_0.001']:,}",
+                     f"{counts['r2_ge_0.01']:,}", f"{counts['r2_ge_0.05']:,}", f"{counts['r2_ge_0.1']:,}"])
+show(md_table(["kind", "distance", "pairs", "r² ≥ 0.001", "r² ≥ 0.01", "r² ≥ 0.05", "r² ≥ 0.1"], rows))
+hist = rates(cm)["spurious_split_pairs"]["r2_histogram"]
+show("Spurious splits by their pair's r²: " + ", ".join(f"{k}: {v:,}" for k, v in hist.items()) + ".")
+```
+
+## The map's two spikes
+
+The mean map carries two single-population jumps found in #402: TSI at chr7:131,782,269
+(18.6 cM in 444 bp) and GBR at chr1:235,056,161 (6.76 cM). Disagreements whose pair spans either:
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for d, w in [KEY, ("bp_only", KEY[1])]:
+    for kind, name in [("spurious_split_pairs", "spurious splits"), ("lost_signal_pairs", "lost signals")]:
+        pairs = rates(configs[(d, w)])[kind]
+        rows.append([d_label(d), w_label(w), name, f"{pairs['n']:,}", f"{pairs['straddling_a_spike']:,}",
+                     *[f"{v:,}" for v in pairs["straddling"].values()]])
+show(md_table(["D", "W", "kind", "pairs", "spanning either",
+               *[f"spanning {k}" for k in rates(cm)["spurious_split_pairs"]["straddling"]]], rows))
+```
+
+The comparison with a median map belongs to #404.
+
+## Reproduce
+
+```bash
+pixi run -e dev python -m prototypes.locus_leads select --stores /data/opengwasdb/stores \
+    --seed 403 --output docs/benchmark-output/locus_leads/eur_sweep_selection.json
+pixi run -e dev python -m prototypes.locus_leads sweep \
+    --selection docs/benchmark-output/locus_leads/eur_sweep_selection.json \
+    --stores-dir /data/opengwasdb/stores \
+    --genetic-map /data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR.tsv.gz \
+    --panel /data/opengwasdb/reference/hgdp1kgp-hg38/pgen/EUR \
+    --work-dir <scratch directory> --output docs/benchmark-output/locus_leads/eur_sweep.json
+pixi run -e report quarto render docs/benchmark-output/locus_leads/eur_sweep.qmd
+```

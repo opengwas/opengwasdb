@@ -112,8 +112,11 @@ def test_pairs_pool_by_summing_counts_across_analyses() -> None:
 
 def test_chance_ld_pools_pairs_and_reports_the_share_at_each_threshold() -> None:
     pooled = sweep.pool_chance([
-        {"pairs": 100, "pairs_r2_ge_0.01": 3, "pairs_r2_ge_0.001": 20, "r2_undefined": 0},
-        {"pairs": 300, "pairs_r2_ge_0.01": 5, "pairs_r2_ge_0.001": 40, "r2_undefined": 0}])
+        {"pairs": 100, "pairs_r2_ge_0.01": 3, "pairs_r2_ge_0.001": 20, "pairs_r2_ge_0.05": 1,
+         "pairs_r2_ge_0.1": 0, "r2_undefined": 0},
+        {"pairs": 300, "pairs_r2_ge_0.01": 5, "pairs_r2_ge_0.001": 40, "pairs_r2_ge_0.05": 2,
+         "pairs_r2_ge_0.1": 1, "r2_undefined": 0}])
     assert pooled["pairs"] == 400
     assert pooled["share_r2_ge_0.01"] == pytest.approx(8 / 400)
     assert pooled["share_r2_ge_0.001"] == pytest.approx(60 / 400)
+    assert pooled["share_r2_ge_0.1"] == pytest.approx(1 / 400)

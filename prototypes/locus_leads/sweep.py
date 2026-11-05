@@ -53,7 +53,7 @@ NULL_MAX_VARIANTS = 3_000
 MIN_SHARED_SET_SHARE = 0.70
 
 # Written down before the sweep was run, and unchanged since.
-CRITERIA = {
+CRITERIA: dict[str, Any] = {
     "spurious_split_rate_max": 0.10,
     "lost_signal_rate_max": 0.10,
     "at_r2": PRIMARY_R2,
@@ -161,19 +161,23 @@ def evaluate(analyses: list[dict[str, Any]]) -> dict[str, Any]:
             key = (entry["d_cm"], entry["w_bp"])
             for r2, record in entry["by_r2"].items():
                 by_config.setdefault(key, {}).setdefault(r2, []).append(record)
-    rows = []
-    for (d_cm, w_bp), by_r2 in by_config.items():
-        row: dict[str, Any] = {"d_cm": d_cm, "w_bp": w_bp,
-                               "by_r2": {r2: pool(records) | _pooled_detail(records)
-                                         for r2, records in by_r2.items()}}
-        if d_cm != "bp_only":
-            better = clearly_better(by_r2[PRIMARY_R2], by_config[("bp_only", w_bp)][PRIMARY_R2])
-            primary = row["by_r2"][PRIMARY_R2]
-            row["clearly_better_than_bp_only"] = better
-            row["qualifies_pooled"] = better and within_tolerance(primary)
-            row["qualifies_median"] = better and within_tolerance(primary, "median_")
-        rows.append(row)
+    rows = [_config_row(d_cm, w_bp, by_r2, by_config[("bp_only", w_bp)])
+            for (d_cm, w_bp), by_r2 in by_config.items()]
     return {"criteria": CRITERIA, "configs": rows, "best": _best(rows)}
+
+
+def _config_row(d_cm: Any, w_bp: int, by_r2: dict[str, list[dict[str, Any]]],
+                bp_only: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    row: dict[str, Any] = {"d_cm": d_cm, "w_bp": w_bp,
+                           "by_r2": {r2: pool(records) | _pooled_detail(records)
+                                     for r2, records in by_r2.items()}}
+    if d_cm != "bp_only":
+        better = clearly_better(by_r2[PRIMARY_R2], bp_only[PRIMARY_R2])
+        primary = row["by_r2"][PRIMARY_R2]
+        row["clearly_better_than_bp_only"] = better
+        row["qualifies_pooled"] = better and within_tolerance(primary)
+        row["qualifies_median"] = better and within_tolerance(primary, "median_")
+    return row
 
 
 def _pooled_detail(records: list[dict[str, Any]]) -> dict[str, Any]:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import locus_leads_panel
 import numpy as np
@@ -11,9 +10,9 @@ import pytest
 from prototype_modules import load_prototype
 
 genetic_map = load_prototype("locus_leads", "genetic_map")
+sweep = load_prototype("locus_leads", "sweep")
 panel = load_prototype("locus_leads", "panel")
 run = load_prototype("locus_leads", "run")
-sweep = load_prototype("locus_leads", "sweep")
 
 MAP = genetic_map.LoadedMap(
     genetic_map.GeneticMap({"1": (np.array([1, 10_000_000]), np.array([0.0, 100.0]))}),
@@ -23,7 +22,7 @@ SIGNAL = ["0/0", "1/1", "0/0", "1/1"] * 10
 OTHER = ["0/0", "0/0", "1/1", "1/1"] * 10  # r^2 = 0 with SIGNAL
 
 
-def _tier(positions: list[int], abs_z: list[float]) -> Any:
+def _tier(positions: list[int], abs_z: list[float]) -> object:
     n = len(positions)
     return run.TierRows(
         np.array(["1"] * n), np.array(positions),
@@ -31,7 +30,7 @@ def _tier(positions: list[int], abs_z: list[float]) -> Any:
         np.array(abs_z), np.arange(n))
 
 
-def _identity(rows: int) -> dict[str, Any]:
+def _identity(rows: int) -> dict:
     return {"store": {"reference_assembly": "GRCh38", "store_id": "S"},
             "analysis": {"analysis_id": "a"}, "query": {"threshold": 5e-8, "observed": rows}}
 
@@ -45,7 +44,7 @@ def panel_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return directory
 
 
-def _analyse(directory: Path, tier: Any, work: Path) -> dict[str, Any]:
+def _analyse(directory: Path, tier: object, work: Path) -> dict:
     return sweep.analyse(tier, _identity(tier.chromosome.size), MAP, panel.Panel(directory),
                          work_dir=work, threads=1, spikes=sweep.EUR_SPIKES,
                          configs=sweep.grid_configs())
@@ -67,7 +66,8 @@ def test_every_config_is_compared_on_the_same_rows_and_pairs_carry_their_r2(
     assert cm["by_r2"]["0.01"]["spurious_splits"] == 2
     histogram = cm["by_r2"]["0.01"]["spurious_split_pairs"]["r2_histogram"]
     assert histogram["[0.5,inf)"] == 2
-    assert (record["chance_ld"]["variants"], record["chance_ld"]["pairs"]) == (2, 0)  # one chromosome
+    chance = record["chance_ld"]
+    assert (chance["variants"], chance["pairs"]) == (2, 0)  # both index variants on chr1
 
 
 def test_an_analysis_with_too_few_rows_in_the_shared_set_is_refused_with_its_breakdown(

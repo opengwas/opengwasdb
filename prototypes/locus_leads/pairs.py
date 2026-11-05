@@ -22,7 +22,7 @@ from .ld import r2_matrix
 # (upper bound in bp inclusive, name): the bands a disagreement's distance falls in.
 DISTANCE_BANDS = ((1_000_000, "<=1Mb"), (2_500_000, "1-2.5Mb"), (10_000_000, "2.5-10Mb"),
                   (float("inf"), ">10Mb"))
-R2_THRESHOLDS = (0.01, 0.001)
+R2_THRESHOLDS = (0.001, 0.01, 0.05, 0.1)
 R2_EDGES = (0.0, 0.001, 0.01, 0.02, 0.05, 0.1, 0.5, float("inf"))
 R2_TOLERANCE = 1e-4  # plink2 and numpy agree to this on a pair's r^2
 
@@ -59,24 +59,33 @@ def straddles(pair: Pair, spike: Spike) -> bool:
 
 def summarise(pairs: list[Pair], spikes: tuple[Spike, ...]) -> dict[str, Any]:
     """Counts of a kind of disagreement by distance band, r^2, and spike straddled."""
-    defined = [p for p in pairs if not np.isnan(p.r2)]
-    r2 = np.array([p.r2 for p in defined])
-    histogram = np.histogram(r2, bins=[*R2_EDGES[:-1], np.inf])[0] if r2.size else \
-        np.zeros(len(R2_EDGES) - 1, dtype=int)
-    bands = {name: [p for p in pairs if distance_band(p.distance_bp) == name]
-             for _, name in DISTANCE_BANDS}
+    r2 = np.array([p.r2 for p in pairs if not np.isnan(p.r2)])
     return {
         "n": len(pairs),
-        "r2_undefined": len(pairs) - len(defined),
-        "r2_histogram": {f"[{lo:g},{hi:g})": int(count) for (lo, hi), count in zip(
-            zip(R2_EDGES[:-1], R2_EDGES[1:], strict=True), histogram, strict=True)},
-        "by_distance_band": {name: {"n": len(members)} | {
-            f"r2_ge_{t:g}": sum(p.r2 >= t for p in members if not np.isnan(p.r2))
-            for t in R2_THRESHOLDS} for name, members in bands.items()},
-        "straddling_a_spike": sum(any(straddles(p, s) for s in spikes) for p in pairs),
-        "straddling": {f"{s.name} chr{s.chromosome}:{s.position:,}":
-                       sum(straddles(p, s) for p in pairs) for s in spikes},
-    }
+        "r2_undefined": len(pairs) - r2.size,
+        "r2_histogram": _histogram(r2),
+        "by_distance_band": {name: _band_counts([
+            p for p in pairs if distance_band(p.distance_bp) == name])
+            for _, name in DISTANCE_BANDS},
+    } | _straddling(pairs, spikes)
+
+
+def _straddling(pairs: list[Pair], spikes: tuple[Spike, ...]) -> dict[str, Any]:
+    return {"straddling_a_spike": sum(any(straddles(p, s) for s in spikes) for p in pairs),
+            "straddling": {f"{s.name} chr{s.chromosome}:{s.position:,}":
+                           sum(straddles(p, s) for p in pairs) for s in spikes}}
+
+
+def _histogram(r2: np.ndarray) -> dict[str, int]:
+    counts = np.histogram(r2, bins=[*R2_EDGES[:-1], np.inf])[0]
+    return {f"[{lo:g},{hi:g})": int(count) for (lo, hi), count in zip(
+        zip(R2_EDGES[:-1], R2_EDGES[1:], strict=True), counts, strict=True)}
+
+
+def _band_counts(members: list[Pair]) -> dict[str, int]:
+    return {"n": len(members)} | {
+        f"r2_ge_{t:g}": sum(p.r2 >= t for p in members if not np.isnan(p.r2))
+        for t in R2_THRESHOLDS}
 
 
 def check_pairs_follow_threshold(pairs: list[Pair], threshold: float) -> None:

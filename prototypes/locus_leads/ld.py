@@ -38,7 +38,8 @@ def export_dosages(panel: Panel, chromosome: str, variant_ids: list[str], work_d
         raise ValueError(f"chr{chromosome}: plink2 exported {len(named)} of "
                          f"{len(set(variant_ids))} variants asked for")
     matrix = counts.to_numpy(dtype="float64").T
-    return matrix[[named[name] for name in variant_ids]]
+    ordered: np.ndarray = matrix[[named[name] for name in variant_ids]]
+    return ordered
 
 
 def pair_r2(first: np.ndarray, second: np.ndarray) -> float:
@@ -62,4 +63,4 @@ def r2_matrix(dosage: np.ndarray) -> np.ndarray:
         covariance = sxy - sx * sx.T / n
         variance = sxx - sx * sx / n
         result = covariance ** 2 / (variance * variance.T)
-    return result
+    return np.asarray(result)
