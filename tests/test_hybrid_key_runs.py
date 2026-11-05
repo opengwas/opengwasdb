@@ -225,3 +225,23 @@ def test_sorted_distinct_matches_np_unique() -> None:
 def test_sorted_distinct_of_distinct_values_sorts_them() -> None:
     values = np.array([9, 3, 7, 1], dtype=np.uint64)
     np.testing.assert_array_equal(key_runs.sorted_distinct(values), [1, 3, 7, 9])
+
+
+def test_run_spill_refuses_arrays_that_do_not_pair_up_at_write(tmp_path) -> None:
+    """A key run's values and assembly bits are one key each: writing them
+    unpaired leaves a spill the merge then has to refuse (issue #392)."""
+    path = tmp_path / "keyrun.bad.npz"
+    run = key_runs.KeyRun(
+        values=np.array([1, 2, 3], dtype=np.uint64),
+        assembly_bits=np.array([HG38, HG19], dtype=np.int8),
+        hashed_values=np.empty(0, dtype=np.uint64),
+        hashed_check=np.empty(0, dtype=np.uint64),
+        hashed_origin=np.empty(0, dtype=np.int32),
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"key run spill: values of length 3 and assembly_bits of length 2 "
+        r"must be parallel",
+    ):
+        key_runs.write_run(run, path)
+    assert not path.exists()

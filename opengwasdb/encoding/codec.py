@@ -63,11 +63,6 @@ from opengwasdb.store.arrays import (
 SE_EXCEPTION_INDEX = "se_exception_index"
 SE_EXCEPTION_VALUE = "se_exception_value"
 
-#: A residual `se` plane's per-Analysis fit, in the same zarr group as the plane.
-#: It is a side array of the `se` plane, not of the association, so the name sits
-#: with the other side arrays' rather than in the module that writes the planes.
-SE_COEFFICIENTS = "se_coefficients"
-
 # Sparse tables can still contain millions of exact values at the accepted
 # 2% ceiling.  Keep their physical chunks bounded so both the writer and the
 # compressed-size decision can stream them.  This *is* the seam's
@@ -157,6 +152,45 @@ def se_residual_codes(
     raw[exceptional] = SE_EXCEPTION
     raw[ordinary] = codes[ordinary].astype(np.int8)
     return raw, exceptional
+
+
+def require_parallel(named: Sequence[tuple[str, Any]], *, where: str) -> None:
+    """Refuse arrays that are not parallel, naming each one's length.
+
+    Parallel means one shape: the arrays are alternative readings of the same
+    cells, so an index into one is an index into all of them. `named` is
+    `(name, array)` pairs in the order the refusal should name them, `None`
+    where a plane is absent.
+
+    One rule for every writer, because the failure it prevents is the same
+    everywhere: an array shorter (or longer) than the cells it describes is
+    either broadcast to the cells' length, which stores one cell's value
+    under another's variant, or indexed with a mask of the wrong length, which
+    crashes after the planes are open. Neither says which array was wrong.
+    It lives here, below the codecs and the plane writers that all import
+    this module, so every one of them can apply it without an upward import.
+    """
+    present = [(name, np.asarray(array)) for name, array in named if array is not None]
+    if not present:
+        return
+    _, first = present[0]
+    if all(array.shape == first.shape for _, array in present):
+        return
+    raise ValueError(f"{where}: {_lengths(present)} must be parallel")
+
+
+def _lengths(named: Sequence[tuple[str, np.ndarray]]) -> str:
+    """`named` as a readable list, a sequence's length or an array's shape."""
+    described = [
+        f"{name} of length {array.shape[0]}"
+        if array.ndim == 1
+        else f"{name} of shape {array.shape}"
+        for name, array in named
+    ]
+    if len(described) == 1:
+        return described[0]
+    return ", ".join(described[:-1]) + " and " + described[-1]
+
 
 
 @dataclass(frozen=True)
@@ -564,6 +598,17 @@ class SparseExactBuilder:
         self._value: list[np.ndarray] = []
 
     def add(self, positions: np.ndarray, values: np.ndarray) -> None:
+        """Accumulate one batch: one exact value per flat position.
+
+        Judged parallel here, where a table is handed the cells it holds,
+        because `table()` sorts the values by the positions: a short value array
+        would leave entries without a value, or values without an entry, in the
+        table a reader decodes a cell from (issue #392).
+        """
+        require_parallel(
+            (("positions", positions), ("values", values)),
+            where=f"the {self.table_type.what} table",
+        )
         self._index.append(np.asarray(positions, dtype=np.int64))
         self._value.append(np.asarray(values, dtype=np.float32))
 

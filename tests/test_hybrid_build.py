@@ -2764,3 +2764,38 @@ def test_a_two_pass_build_refuses_an_off_reference_spill(tmp_path, monkeypatch):
             _hybrid_manifest(tmp_path), tmp_path / "store.opengwasdb",
             reference_panel=_panel(tmp_path), store_id="s", release_id="r",
         )
+
+
+def test_a_hybrid_spilled_column_whose_arrays_are_not_parallel_is_refused_and_writes_nothing(
+    tmp_path,
+) -> None:
+    """The Hybrid's spill is its Dense VCF twin's: one cell per entry in each
+    spill it writes, or the band-write phase reads a column the source never
+    had (issue #392)."""
+    spill_dir = tmp_path / "spill"
+    spill_dir.mkdir()
+    empty_f32 = np.empty(0, dtype=np.float32)
+    empty_i64 = np.empty(0, dtype=np.int64)
+    dense = (
+        np.arange(3, dtype=np.int64),
+        np.ones(3, dtype=np.float32),
+        np.full(2, 0.1, dtype=np.float32),
+        np.full(3, 0.3, dtype=np.float32),
+    )
+    overflow = (empty_i64, empty_f32, empty_f32, empty_f32, empty_f32)
+    off_reference = (
+        np.empty(0, dtype=np.uint64),
+        empty_f32,
+        empty_f32,
+        empty_f32,
+        empty_f32,
+        empty_i64,
+        [],
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"hybrid spill, analysis_index 0: rows of length 3, z of length 3, "
+        r"se of length 2 and eaf of length 3 must be parallel",
+    ):
+        hybrid_build._spill_hybrid_column(spill_dir, 0, dense, overflow, off_reference)
+    assert list(spill_dir.iterdir()) == []

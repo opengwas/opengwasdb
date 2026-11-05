@@ -225,6 +225,17 @@ def test_a_sequence_of_variants_that_does_not_match_its_statistics_is_refused() 
         _codec().encode(cells, at, where="complete-ragged")
 
 
+def test_a_cell_list_whose_rows_and_cols_disagree_is_refused_where_it_is_built() -> None:
+    """`Placement.pairs` cannot address a cell per entry from two lists of
+    different lengths, so it refuses the pair itself rather than letting
+    `positions_pairs` raise numpy's unnamed broadcast error (issue #392)."""
+    with pytest.raises(
+        ValueError,
+        match="Placement.pairs: rows of length 2 and cols of length 3 must be parallel",
+    ):
+        Placement.pairs(np.arange(2), np.arange(3), 2)
+
+
 def test_a_cell_lists_rows_and_cols_are_held_to_the_statistics_they_address() -> None:
     """`Placement.pairs` addresses one cell per entry too, so a list of another
     length is no more parallel to the batch than a sequence's index is."""
@@ -463,6 +474,8 @@ def test_a_planes_batch_whose_arrays_are_not_parallel_is_refused_and_writes_noth
     encoded = codec.encode(cells, at, where="x")
     group = zarr.open_group(str(tmp_path / "grid.zarr"), mode="w", zarr_format=3)
     before = _files(tmp_path / "grid.zarr")
+    assert set(before) == {"zarr.json"}, "fixture must be an empty group, not a missing one"
+    assert list(group.array_keys()) == [], "fixture must hold no array for this to mean anything"
     with pytest.raises(ValueError, match=f"write_encoded_planes: {refusal} must be parallel"):
         write_encoded_planes(
             group,

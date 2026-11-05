@@ -32,6 +32,7 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.layouts.hybrid.unknown_keys import UnknownKeyEncodingError
 
 __all__ = [
@@ -264,7 +265,16 @@ def write_run(run: KeyRun, path: Path) -> None:
     Returning the arrays would pickle them in the worker and park the
     unpickled copy in the parent until ``ordered_map`` yields it -- up to its
     whole in-flight window of results at once.
+
+    A run's values and assembly bits are one key each, and ``read_run`` refuses
+    a spill where they disagree; the write refuses it first, so the spill a
+    later step reads is never the unequal one. The hashed arrays are the hashed
+    subset's axis, not the run's (issue #392).
     """
+    require_parallel(
+        (("values", run.values), ("assembly_bits", run.assembly_bits)),
+        where="key run spill",
+    )
     np.savez(
         path,
         values=run.values,

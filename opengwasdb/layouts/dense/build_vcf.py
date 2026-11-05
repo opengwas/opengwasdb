@@ -53,10 +53,9 @@ from opengwasdb.encoding.association_codec import (
     CellValues,
     Storable,
     log_se_out_of_range,
-    require_parallel,
     storable,
 )
-from opengwasdb.encoding.codec import se_float16
+from opengwasdb.encoding.codec import require_parallel, se_float16
 from opengwasdb.encoding.timing import format_duration, log_phase
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.build_manifest import (

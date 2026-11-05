@@ -15,7 +15,7 @@ import numpy as np
 from opengwasdb import top_hits
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
-from opengwasdb.encoding.association_codec import require_parallel
+from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays

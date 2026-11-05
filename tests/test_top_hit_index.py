@@ -103,6 +103,8 @@ def test_an_index_whose_columns_are_not_parallel_is_refused_and_writes_nothing(
     columns[short] = columns[short][:-1]
     root = store_arrays.open_group_for_write(tmp_path / "data.zarr", "a")
     before = _files(tmp_path / "data.zarr")
+    assert set(before) == {"zarr.json"}, "fixture must be an empty store, not a missing one"
+    assert not top_hits.has_index(root), "fixture already has an index, so a rewrite would show"
     with pytest.raises(ValueError, match=f"write_index: {refusal} must be parallel"):
         top_hits.write_index(root, columns, (5e-8, 5e-6, 5e-4), n_analyses=3)
     assert _files(tmp_path / "data.zarr") == before

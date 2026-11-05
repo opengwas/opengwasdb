@@ -451,6 +451,9 @@ def test_an_inline_index_refuses_a_candidate_array_that_is_not_parallel(tmp_path
     it gathers anything (issue #392)."""
     store, expected = _build_residual_dense_store(tmp_path)
     encoding = StoreManifest.load(store).encoding
+    # A residual plan replaces the caller's SE with the plane's, which is what
+    # makes a short one disappear rather than be written.
+    assert encoding.se.is_residual, "fixture is meaningful only under a residual plan"
     index = store / "data.zarr" / "top_hits"
     before = _tree_bytes(index)
     assert before, "fixture is meaningful only if the store already has an index"

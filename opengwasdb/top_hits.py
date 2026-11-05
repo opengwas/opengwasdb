@@ -28,7 +28,7 @@ import numpy as np
 import zarr
 from numcodecs import Blosc
 
-from opengwasdb.encoding.association_codec import require_parallel
+from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.encoding.timing import log_phase
 from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS, Analysis
 from opengwasdb.store import arrays as store_arrays
@@ -142,9 +142,10 @@ def write_index(
     others.
 
     The arrays are judged parallel before the index group is created (issue
-    #392). One of another length was refused by numpy from inside the first
-    tier's hit mask (`values[keep]`), so the group existed, the tiers written
-    before it stayed, and no array was named.
+    #392). One of another length was refused by numpy inside the first tier's
+    hit mask (`values[keep]`), after that tier's group had been created: the
+    call wrote no tier's arrays, and the tiers a refused call leaves behind are
+    the ones an earlier call wrote. No array was named.
     """
     require_parallel(tuple(columns.items()), where="write_index")
     top = store_arrays.require_group(root, TOP_HIT_GROUP)

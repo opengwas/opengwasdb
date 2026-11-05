@@ -22,11 +22,9 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
 
-from opengwasdb.encoding.association_codec import require_parallel
 from opengwasdb.encoding.codec import (
     EAF_BASELINE,
     EAF_REFERENCE,
-    SE_COEFFICIENTS,
     EafExceptionBuilder,
     EafExceptionTable,
     SeExceptionBuilder,
@@ -39,9 +37,11 @@ from opengwasdb.encoding.codec import (
     positions_pairs,
     positions_row_band,
     positions_rows_cols,
+    require_parallel,
 )
 from opengwasdb.encoding.plan import EafBaselineError, StoreEncoding
 from opengwasdb.store.arrays import (
+    SE_COEFFICIENTS,
     ArrayRole,
     component_variant_chunk,
     compressor,

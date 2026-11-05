@@ -28,7 +28,6 @@ from opengwasdb.associations import Tally, non_canonical
 from opengwasdb.encoding.codec import (
     EAF_BASELINE,
     EAF_REFERENCE,
-    SE_COEFFICIENTS,
     EafExceptionTable,
     SeExceptionTable,
     StoreCodec,
@@ -43,7 +42,7 @@ from opengwasdb.encoding.planes import (
     RaggedEafPlane,
 )
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
-from opengwasdb.store.arrays import array_length, inner_chunk_of
+from opengwasdb.store.arrays import SE_COEFFICIENTS, array_length, inner_chunk_of
 from opengwasdb.validation.rule import Kind, Scan, Target, Unreadable
 
 # Dense validation decodes several raw, float32/float64 and boolean views of a
