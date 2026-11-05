@@ -9,11 +9,13 @@
   rows with a line on stdout. The Hybrid's fold kept the later of two rows its
   off-reference keys brought to one variant, `build-ragged-besd` stored both
   rows of a probe that names one SNP twice, and `complete-ragged` kept the last
-  of a source Store's repeated cell and of two LD blocks' fills for one
-  variant. Each now applies the rule: the fold records its drops in the
-  Admission record (`parts/<index>.fold.json`), and a completion, which writes
-  no record, logs every row it drops, one line each. The rule is Variant Routing's `collapse_duplicates`;
-  `Placed` reports what it collapsed and dropped.
+  of a source Store's repeated cell. Each now applies the rule: the fold
+  records its drops in the Admission record (`parts/<index>.fold.json`), and a
+  completion, which writes no record, logs every row it drops, one line each.
+  A variant two LD blocks share is filled by the block that owns it, and the
+  rule guards any fill that still reaches a filled cell. The rule is Variant
+  Routing's `collapse_duplicates`; `Placed` reports what it collapsed and
+  dropped.
 - **An insertion and a deletion that share an ALID keep the insertion, where
   the source declares the reference allele.** The ALID sorts its alleles, so
   FinnGen's `1:827587` `G>GGGGCC` and `GGGGCC>G` are both `1:827587:G:GGGGCC`:
@@ -36,5 +38,6 @@
   store one z code). OGS-00004 (1,085 conflicting rows at 542 places),
   OGS-00005 (132 at 66), OGS-00008 (154 at 77) and seven Analyses of
   OGS-00011 (265 at 132) hold no reversed indel, so those cells are absent.
-  `complete-ragged` of OGS-00001 (OGS-00002's argv) leaves two cells missing
-  that two LD blocks imputed differently, of 106,653 fills.
+  `complete-ragged` of OGS-00001 (OGS-00002's argv) holds 106,652 imputed
+  cells against OGS-00002's 106,653. The one it leaves missing is at a variant
+  two LD blocks share, and only the block that does not own it imputed it.
