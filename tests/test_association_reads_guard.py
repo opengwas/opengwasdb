@@ -85,7 +85,8 @@ PLANES = frozenset(
     {"DenseZPlane", "DenseSePlane", "DenseEafPlane", "RaggedSePlane", "RaggedEafPlane", "EafRead"}
 )
 
-#: The CSR reader's decode members, which only `CsrReader` calls.
+#: The CSR reader's decode members, which only `CsrReader` and the modules named
+#: below call.
 CSR_DECODES = frozenset(
     {
         "z_slice",

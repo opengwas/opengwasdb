@@ -823,8 +823,10 @@ class RaggedCSRReader:
     What is public is structure, for code that walks the sequence itself: the
     offsets and spans, the variant index, the imputed mask and the pair search.
     Associations are read through `opengwasdb.associations.CsrReader`, which
-    applies the presence rule (ADR 0070); the decode members here are its, and
-    nothing else calls them.
+    applies the presence rule (ADR 0070). The decode members here serve it and
+    one other caller, the Ragged Top-Hit harvest (`layouts/ragged/top_hits.py`):
+    a Layout the builders call, which cannot import the reader, a Query module,
+    without an upward import.
     """
 
     def __init__(self, store_path: str | Path, encoding: StoreEncoding | None = None):
