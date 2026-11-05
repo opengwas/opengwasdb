@@ -10,5 +10,10 @@
   Analyses are the manifest's rows in order, not sorted by id, and
   `analyses.tsv` now records the manifest's `original_sd_method`. `build-dense`
   does not lift: a row's `source_assembly` must be `--reference-assembly`. The
-  `validate --source` fidelity check names an association TSV through the same
-  manifest. No Store Release or `opengwasdb-stores` step calls `build-dense`.
+  `validate_store(source=...)`, the Python API's source-fidelity check, takes a
+  build manifest, not a TSV: it compares each sampled source association with
+  the Store after the manifest row's declared SD standardisation, reads a source
+  as the build does (a row the build dropped as malformed is not a failure), and
+  refuses a bare association TSV or a manifest with no rows (`fidelity.source`).
+  A caller that passed a combined TSV now passes the manifest. No Store Release
+  or `opengwasdb-stores` step calls `build-dense`.

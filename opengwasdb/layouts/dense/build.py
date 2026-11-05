@@ -255,10 +255,20 @@ def _standardised(
     records: list[NormalisedAssociation], sources: Sequence[AnalysisSource]
 ) -> list[NormalisedAssociation]:
     """``records`` with each Analysis's standard errors divided by its phenotype SD (#18)."""
-    divisor = {s.analysis.analysis_id: np.float32(s.se_divisor) for s in sources}
+    # Imported here: the VCF builder imports this module.
+    from opengwasdb.layouts.dense.build_vcf import apply_se_divisor
+
+    divisor = {s.analysis.analysis_id: s.se_divisor for s in sources}
     return [
         record if divisor[record.analysis_id] == 1.0
-        else replace(record, se=float(np.float32(record.se) / divisor[record.analysis_id]))
+        else replace(
+            record,
+            se=float(
+                apply_se_divisor(
+                    np.array([record.se], dtype=np.float32), divisor[record.analysis_id]
+                )[0]
+            ),
+        )
         for record in records
     ]
 

@@ -2328,6 +2328,12 @@ the manifest's rows in order.
   `original_sd_method` of `unavailable` are refused; an SD-rescaling method
   divides the Analysis's standard errors by its `original_sd`, as in
   `build-dense-vcf` (§7).
+- The Python API's source-fidelity check, `validate_store(store, source=...)`
+  (§20.0), takes the same build manifest. It compares each sampled source
+  association with the Store after that standardisation, reads a source as the
+  build does (a row the build dropped as malformed is not a failure), and
+  reports `fidelity.source` for a bare association TSV, which names no Analysis,
+  or a manifest with no rows.
 
 ## 21. Compatibility
 

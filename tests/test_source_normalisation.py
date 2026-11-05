@@ -79,24 +79,8 @@ def test_source_reader_rejects_invalid_rows(tmp_path):
         _batches(source)
 
 
-def _build(tmp_path: Path, manifest_rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:
-    """The `analyses.tsv` rows, by Analysis, of a Store built from these manifest rows."""
-    from opengwasdb.build.observed import build_dense_observed_from_manifest
-
-    columns = list({key for row in manifest_rows for key in row})
-    manifest = tmp_path / "manifest.tsv"
-    manifest.write_text(
-        "\t".join(columns) + "\n"
-        + "".join("\t".join(row.get(c, "") for c in columns) + "\n" for row in manifest_rows),
-        encoding="utf-8",
-    )
-    store = tmp_path / "store.opengwasdb"
-    build_dense_observed_from_manifest(manifest, store, store_id="s", release_id="r")
-    return {row["analysis_id"]: row for row in read_analyses(store / "analyses.tsv").rows}
-
-
-def _analysis_file(tmp_path: Path, name: str) -> str:
-    path = tmp_path / f"{name}.tsv"
+def _analysis_file(directory: Path, name: str) -> str:
+    path = directory / f"{name}.tsv"
     path.write_text(
         "chromosome\tposition\teffect_allele\tother_allele\tz\tse\n1\t10\tA\tG\t2\t0.5\n",
         encoding="utf-8",
@@ -112,52 +96,54 @@ _ATTRIBUTION = {
 }
 
 
-def test_trait_ontology_and_attribution_columns_resolved_when_present(tmp_path):
-    by_id = _build(
-        tmp_path,
-        [
-            {
-                "analysis_id": "a1", "source_file": _analysis_file(tmp_path, "a1"),
-                "original_sd_method": "declared_standardised", "stored_effect_scale": "sd",
-                **_ATTRIBUTION,
-            }
-        ],
+@pytest.fixture(scope="module")
+def analyses(tmp_path_factory) -> dict[str, dict[str, str]]:
+    """The `analyses.tsv` rows, by Analysis, of one Store built from a manifest whose
+    rows declare everything (`full`), nothing (`bare`) and another effect scale."""
+    from opengwasdb.build.observed import build_dense_observed_from_manifest
+
+    directory = tmp_path_factory.mktemp("metadata")
+    rows = [
+        {"analysis_id": "full", "stored_effect_scale": "sd", **_ATTRIBUTION},
+        {"analysis_id": "bare", "stored_effect_scale": "sd"},
+        {"analysis_id": "binary", "stored_effect_scale": "log_or"},
+    ]
+    columns = list({key for row in rows for key in row} | {"source_file", "original_sd_method"})
+    manifest = directory / "manifest.tsv"
+    manifest.write_text(
+        "\t".join(columns) + "\n"
+        + "".join(
+            "\t".join(
+                {
+                    **row,
+                    "source_file": _analysis_file(directory, row["analysis_id"]),
+                    "original_sd_method": "declared_standardised",
+                }.get(c, "")
+                for c in columns
+            )
+            + "\n"
+            for row in rows
+        ),
+        encoding="utf-8",
     )
+    store = directory / "store.opengwasdb"
+    build_dense_observed_from_manifest(manifest, store, store_id="s", release_id="r")
+    return {row["analysis_id"]: row for row in read_analyses(store / "analyses.tsv").rows}
 
-    assert {key: by_id["a1"][key] for key in _ATTRIBUTION} == _ATTRIBUTION
+
+def test_trait_ontology_and_attribution_columns_resolved_when_present(analyses):
+    assert {key: analyses["full"][key] for key in _ATTRIBUTION} == _ATTRIBUTION
 
 
-def test_trait_ontology_and_attribution_columns_blank_when_absent(tmp_path):
-    by_id = _build(
-        tmp_path,
-        [
-            {
-                "analysis_id": "a1", "source_file": _analysis_file(tmp_path, "a1"),
-                "original_sd_method": "declared_standardised", "stored_effect_scale": "sd",
-            }
-        ],
-    )
-
-    row = by_id["a1"]
+def test_trait_ontology_and_attribution_columns_blank_when_absent(analyses):
     for column in (
         "trait_ontology_id", "trait_ontology_label", "license", "publication_doi",
         "publication_pmid", "consortium", "first_author",
     ):
-        assert row[column] == ""
+        assert analyses["bare"][column] == ""
 
 
-def test_each_analysis_has_the_effect_scale_its_manifest_row_declares(tmp_path):
-    by_id = _build(
-        tmp_path,
-        [
-            {
-                "analysis_id": name, "source_file": _analysis_file(tmp_path, name),
-                "original_sd_method": "declared_standardised", "stored_effect_scale": scale,
-            }
-            for name, scale in (("a1", "sd"), ("a2", "log_or"))
-        ],
-    )
-
-    assert {name: row["stored_effect_scale"] for name, row in by_id.items()} == {
-        "a1": "sd", "a2": "log_or",
+def test_each_analysis_has_the_effect_scale_its_manifest_row_declares(analyses):
+    assert {name: row["stored_effect_scale"] for name, row in analyses.items()} == {
+        "full": "sd", "bare": "sd", "binary": "log_or",
     }

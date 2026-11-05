@@ -12,6 +12,7 @@ from opengwasdb.layouts.dense import AnalysisSource, build_dense_observed_store
 from opengwasdb.model.analyses import Analysis, read_analyses
 from opengwasdb.query import query_store
 from opengwasdb.readers.interface import StreamTally
+from opengwasdb.validation import validate_store
 
 _HEADER = "chromosome\tposition\teffect_allele\tother_allele\tz\tse\n"
 _ROW = "1\t100\tA\tG\t2.0\t0.2\n"
@@ -83,10 +84,12 @@ def test_a_row_naming_another_reader_is_refused(tmp_path: Path) -> None:
         _build(tmp_path, row)
 
 
-def test_a_manifest_naming_an_analysis_twice_is_refused(tmp_path: Path) -> None:
+def test_a_manifest_naming_an_analysis_twice_is_refused_naming_it_and_its_rows(
+    tmp_path: Path,
+) -> None:
     row = _analysis(tmp_path, "a")
-    with pytest.raises(ValueError, match="manifest .*Analyses are not the 1 the build parsed"):
-        _build(tmp_path, row, row)
+    with pytest.raises(ValueError, match=r"analysis 'a' is named by rows 2 and 3"):
+        _build(tmp_path, row, row, _analysis(tmp_path, "z"))
 
 
 def test_the_writer_refuses_an_analysis_named_twice(tmp_path: Path) -> None:
@@ -104,3 +107,60 @@ def test_the_writer_refuses_an_analysis_named_twice(tmp_path: Path) -> None:
 def test_an_analysis_whose_file_holds_no_association_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="analysis 'empty'.*holds no associations"):
         _build(tmp_path, _analysis(tmp_path, "empty", body=""))
+
+
+def test_fidelity_compares_the_source_after_the_declared_standardisation(tmp_path: Path) -> None:
+    """A Store built from a manifest declaring SD 2 holds SE 0.1 of a source SE of 0.2,
+    and validates against that manifest."""
+    rescaled = {
+        **_analysis(tmp_path, "rescaled"),
+        "original_sd_method": "source_provided", "original_sd": "2",
+    }
+    store = _build(tmp_path, rescaled)
+
+    result = validate_store(store, source=tmp_path / "manifest.tsv")
+
+    assert result.ok, result.errors
+
+
+def test_fidelity_does_not_fail_a_row_the_build_dropped_as_malformed(tmp_path: Path) -> None:
+    """The build logs a row whose allele no ALID can spell and leaves it out; it
+    is not a source association the Store failed to keep."""
+    store = _build(
+        tmp_path, _analysis(tmp_path, "a", body=_ROW + "1\t200\tA\tN\t2.0\t0.2\n")
+    )
+
+    result = validate_store(store, source=tmp_path / "manifest.tsv")
+
+    assert result.ok, result.errors
+
+
+def test_fidelity_refuses_a_bare_association_tsv(tmp_path: Path) -> None:
+    store = _build(tmp_path, _analysis(tmp_path, "a"))
+
+    result = validate_store(store, source=tmp_path / "a.tsv")
+
+    assert result.failed() == {"fidelity.source"}
+    assert "names no Analysis" in result.errors[0]
+
+
+def test_fidelity_refuses_a_manifest_with_no_rows(tmp_path: Path) -> None:
+    store = _build(tmp_path, _analysis(tmp_path, "a"))
+    empty = tmp_path / "empty-manifest.tsv"
+    empty.write_text(
+        "analysis_id\tsource_file\tstored_effect_scale\toriginal_sd_method\n", encoding="utf-8"
+    )
+
+    result = validate_store(store, source=empty)
+
+    assert result.failed() == {"fidelity.source"}
+    assert "contains no rows" in result.errors[0]
+
+
+def test_fidelity_refuses_a_source_that_names_nothing_to_check(tmp_path: Path) -> None:
+    store = _build(tmp_path, _analysis(tmp_path, "a"))
+
+    result = validate_store(store, source=[])
+
+    assert result.failed() == {"fidelity.source"}
+    assert "names no Analysis to check" in result.errors[0]
