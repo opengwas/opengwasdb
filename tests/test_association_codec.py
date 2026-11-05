@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -404,11 +405,115 @@ def _read_band(group: Any, n_rows: int) -> tuple[np.ndarray, np.ndarray, np.ndar
     return DenseZPlane.open(group, _RESIDUAL).band(0, n_rows), se, eaf
 
 
+def _files(path: Any) -> dict[str, bytes]:
+    """Every file of a written tree, so a refused write shows as no change."""
+    return {str(p.relative_to(path)): p.read_bytes() for p in path.rglob("*") if p.is_file()}
+
+
+@pytest.mark.parametrize(
+    ("short", "refusal"),
+    [
+        ("z", "z of length 2, se of length 4, eaf of length 4 and imputed of length 4"),
+        ("se", "z of length 4, se of length 2, eaf of length 4 and imputed of length 4"),
+        ("eaf", "z of length 4, se of length 4, eaf of length 2 and imputed of length 4"),
+        ("imputed", "z of length 4, se of length 4, eaf of length 4 and imputed of length 2"),
+    ],
+)
+def test_a_planes_batch_whose_arrays_are_not_parallel_is_refused_and_writes_nothing(
+    tmp_path, short, refusal
+) -> None:
+    """One batch's z, se, eaf and imputed describe the same cells: a batch that
+    says otherwise is refused before the first plane is created, naming every
+    array's length."""
+    cells = CellValues(
+        _f32(1.0, 2.0, 3.0, 4.0),
+        _f32(0.1, 0.2, 0.3, 0.4),
+        _f32(0.3, 0.4, 0.5, 0.6),
+        imputed=np.zeros(4, dtype=np.uint8),
+    )
+    at = Placement.sequence(0, np.arange(4), np.array([0, 0, 1, 1]), _N_ANALYSES)
+    codec = _codec()
+    encoded = codec.encode(cells, at, where="x")
+    group = zarr.open_group(str(tmp_path / "grid.zarr"), mode="w", zarr_format=3)
+    before = _files(tmp_path / "grid.zarr")
+    with pytest.raises(ValueError, match=f"write_encoded_planes: {refusal} must be parallel"):
+        write_encoded_planes(
+            group,
+            _RESIDUAL,
+            replace(encoded, **{short: getattr(encoded, short)[:2]}),
+            role=ArrayRole.ASSOCIATION_SEQUENCE,
+            compressor=compressor(),
+            eaf_baseline=codec._baseline,
+            se_coefficients=codec._model(),
+        )
+    assert _files(tmp_path / "grid.zarr") == before
+
+
 def test_a_written_grid_reads_back_as_the_codec_round_trips_it(tmp_path) -> None:
     group, codec, cells = _written_band(tmp_path)
     expected = codec.round_trip(cells, Placement.band(0, 8, _N_ANALYSES), where="x")
     for found, want in zip(_read_band(group, 8), expected, strict=True):
         np.testing.assert_array_equal(found, want)
+
+
+@pytest.mark.parametrize(
+    ("short", "refusal"),
+    [
+        (
+            "rows",
+            "rows of length 1, cols of length 2, z of length 2, se of length 2, "
+            "eaf of length 2 and imputed of length 2",
+        ),
+        (
+            "cols",
+            "rows of length 2, cols of length 1, z of length 2, se of length 2, "
+            "eaf of length 2 and imputed of length 2",
+        ),
+        (
+            "z",
+            "rows of length 2, cols of length 2, z of length 1, se of length 2, "
+            "eaf of length 2 and imputed of length 2",
+        ),
+        (
+            "se",
+            "rows of length 2, cols of length 2, z of length 2, se of length 1, "
+            "eaf of length 2 and imputed of length 2",
+        ),
+        (
+            "eaf",
+            "rows of length 2, cols of length 2, z of length 2, se of length 2, "
+            "eaf of length 1 and imputed of length 2",
+        ),
+        (
+            "imputed",
+            "rows of length 2, cols of length 2, z of length 2, se of length 2, "
+            "eaf of length 2 and imputed of length 1",
+        ),
+    ],
+)
+def test_dense_cells_whose_arrays_are_not_parallel_are_refused_and_write_nothing(
+    tmp_path, short, refusal
+) -> None:
+    """`rows`, `cols` and the batch all address the same cells: a call that says
+    otherwise is refused before the first shard is written, naming every array's
+    length."""
+    group, codec, _ = _written_band(tmp_path)
+    group.create_array("imputed", data=np.zeros((8, _N_ANALYSES), dtype=np.uint8))
+    before = _files(tmp_path / "grid.zarr")
+    rows, cols = np.array([0, 2]), np.array([1, 3])
+    batch = CellValues(
+        _f32(1.5, 2.5), _f32(0.05, 0.06), _f32(0.4, 0.5), imputed=np.zeros(2, dtype=np.uint8)
+    )
+    encoded = codec.encode(batch, Placement.pairs(rows, cols, _N_ANALYSES), where="x")
+    if short == "rows":
+        rows = rows[:1]
+    elif short == "cols":
+        cols = cols[:1]
+    else:
+        encoded = replace(encoded, **{short: getattr(encoded, short)[:1]})
+    with pytest.raises(ValueError, match=f"write_dense_cells: {refusal} must be parallel"):
+        write_dense_cells(group, _RESIDUAL, rows, cols, encoded)
+    assert _files(tmp_path / "grid.zarr") == before
 
 
 def test_writing_cells_moves_each_cells_table_entries_and_keeps_the_rest(tmp_path) -> None:

@@ -959,7 +959,13 @@ def write_encoded_planes(
     or an association sequence's) and decides the side arrays' roles. The `z`
     plane takes `chunks` as a hint and the others take the chunks it resolved
     to, so the three planes are chunked alike.
+
+    The batch's arrays are judged parallel before the first plane is created
+    (issue #392): one that is not describes cells the component does not have,
+    and a plane written from it holds one cell's statistic under another's
+    variant.
     """
+    _require_parallel(_batch_arrays(encoded), where="write_encoded_planes")
     z_array = create_array(
         group, "z", role, data=encoded.z, dtype=plan.z.dtype, compressor=compressor, hint=chunks
     )
@@ -1007,8 +1013,14 @@ def write_dense_cells(
     Each side table is rewritten with its plane, not after it: a cell can
     enter or leave a table, and a table left describing the value a cell used
     to have is the stale-by-one-call-site defect the codec exists to prevent.
+
+    `rows`, `cols` and the batch address the same cells, and a call whose
+    arrays disagree is refused before the grid is touched (issue #392).
     """
     rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
+    _require_parallel(
+        (("rows", rows), ("cols", cols), *_batch_arrays(encoded)), where="write_dense_cells"
+    )
     if len(rows) == 0:
         return
     positions = positions_pairs(rows, cols, int(group["z"].shape[1]))
@@ -1033,6 +1045,32 @@ def write_dense_cells(
         se_table = SeExceptionTable.read(group)
         merged = _merged(se_table, positions, tables.se_exceptions, SeExceptionBuilder())
         merged.write(group, compressor=compressor())
+
+
+def _batch_arrays(encoded: Encoded) -> tuple[tuple[str, Any], ...]:
+    """An encoded batch's own arrays: every one of them describes the same cells.
+
+    The tables are not among them -- they hold an entry per exceptional cell,
+    not per cell -- so `require_parallel` judges only the batch.
+    """
+    return (
+        ("z", encoded.z),
+        ("se", encoded.se),
+        ("eaf", encoded.eaf),
+        ("imputed", encoded.imputed),
+    )
+
+
+def _require_parallel(named: Sequence[tuple[str, Any]], *, where: str) -> None:
+    """Refuse arrays that are not parallel, by the codec's one rule (issue #392).
+
+    Imported inside the function because `association_codec` imports
+    `SE_COEFFICIENTS` from this module, so a top-level import would close the
+    cycle.
+    """
+    from opengwasdb.encoding.association_codec import require_parallel
+
+    require_parallel(named, where=where)
 
 
 _Table = ZOverflowTable | EafExceptionTable | SeExceptionTable
