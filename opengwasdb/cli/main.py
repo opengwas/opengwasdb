@@ -241,6 +241,9 @@ _ON_RSID_CONFLICT_OPTION = Annotated[
 #: Required, with no default (#357): a default beside OUTPUT_PATH would follow a
 #: staging name such as `store.opengwasdb.partial`, and a release workflow that
 #: renames the Store into place would leave the record behind under that name.
+_BUILD_DENSE_MANIFEST_OPTION: Any = typer.Option(
+    ..., help="Build manifest: one row per Analysis, naming its association TSV"
+)
 _ADMISSION_RECORD_OPTION: Any = typer.Option(
     ...,
     "--admission-record",
@@ -689,9 +692,7 @@ def check_observed_view_command(
 @app.command("build-dense")
 def build_dense_command(
     output_path: Path,
-    manifest: Path = typer.Option(
-        ..., help="Build manifest: one row per Analysis, naming its association TSV"
-    ),
+    manifest: Path = _BUILD_DENSE_MANIFEST_OPTION,
     association_coverage: AssociationCoverage = GWAS_ONLY_COVERAGE_OPTION,
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
