@@ -56,7 +56,7 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import se_float16
-from opengwasdb.encoding.timing import log_phase
+from opengwasdb.encoding.timing import format_duration, log_phase
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
@@ -150,7 +150,12 @@ def _spill_column(
 def log_progress(
     label: str, completed: int, total: int, start_time: float, extra: str, every: int
 ) -> None:
-    """Log a phase's progress, elapsed time and ETA every ``every`` items and at the end."""
+    """Log a phase's progress, elapsed time and ETA every ``every`` items and at the end.
+
+    The Dense VCF and Hybrid builds' own line, ``N/M done (extra)``; the encoding
+    passes log through `opengwasdb.encoding.timing.log_progress`, whose line has
+    no ``done``.
+    """
     if completed % every != 0 and completed != total:
         return
     elapsed = time.monotonic() - start_time
@@ -161,8 +166,8 @@ def log_progress(
         completed,
         total,
         extra,
-        _fmt_duration(elapsed),
-        _fmt_duration(eta),
+        format_duration(elapsed),
+        format_duration(eta),
     )
 
 
@@ -738,17 +743,6 @@ def _finalize_store(
         apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report
     )
     write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
-
-
-def _fmt_duration(seconds: float) -> str:
-    total = int(seconds)
-    h, rem = divmod(total, 3600)
-    m, s = divmod(rem, 60)
-    if h:
-        return f"{h}h{m:02d}m"
-    if m:
-        return f"{m}m{s:02d}s"
-    return f"{s}s"
 
 
 def write_index(
