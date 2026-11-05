@@ -202,6 +202,13 @@ def _best(rows: list[dict[str, Any]]) -> dict[str, Any]:
 class SharedSetTooSmall(ValueError):
     """Too many of an Analysis's rows fall outside the rows both methods can see."""
 
+    def __init__(self, analysis: dict[str, Any], accounting: dict[str, Any]) -> None:
+        share = accounting["shared_set_share"]
+        super().__init__(f"{analysis['analysis_id']}: only {share:.1%} of rows are in the "
+                         f"shared set (floor {MIN_SHARED_SET_SHARE:.0%})")
+        self.record = {"analysis": analysis, "tier_rows": accounting["tier_rows"],
+                       "shared_set_share": share, "partition": accounting["partition"]}
+
 
 def analyse(tier: TierRows, identity: dict[str, Any], genetic_map: LoadedMap, panel: Panel,
             *, work_dir: Path, threads: int, spikes: tuple[Spike, ...],
@@ -215,8 +222,7 @@ def analyse(tier: TierRows, identity: dict[str, Any], genetic_map: LoadedMap, pa
     work_dir.mkdir(parents=True, exist_ok=True)
     shared, accounting = build_shared_set(tier, panel, genetic_map.map)
     if accounting["shared_set_share"] < MIN_SHARED_SET_SHARE:
-        raise SharedSetTooSmall(f"{identity['analysis']['analysis_id']}: only "
-                                f"{accounting['shared_set_share']:.1%} of rows are shared")
+        raise SharedSetTooSmall(identity["analysis"], accounting)
     clumps = clump_shared_set(shared, panel, R2_VALUES, threshold=identity["query"]["threshold"],
                               work_dir=work_dir, threads=threads)
     compared = {c: compare_leads(shared, clumps, d_cm=c.d_cm, w_bp=c.w_bp) for c in configs}
@@ -297,15 +303,19 @@ def sweep(selection: dict[str, Any], stores_dir: Path, genetic_map: LoadedMap, p
           only: int | None = None) -> dict[str, Any]:
     """Every chosen Analysis, each cached under `work_dir` so an interrupted sweep resumes."""
     panel = Panel(panel_dir)
-    analyses = []
+    analyses, below_floor = [], []
     for chosen in selection["chosen"][:only]:
         cache = work_dir / "results" / f"{chosen['store']}_{chosen['analysis_id']}.json"
         if not cache.exists():
             store = stores_dir / chosen["store"] / "store.opengwasdb"
             tier, identity = read_tier(store, chosen["analysis_id"], 5e-8)
-            record = analyse(tier, identity, genetic_map, panel, work_dir=work_dir / "work" /
-                             f"{chosen['store']}_{chosen['analysis_id']}", threads=threads,
-                             spikes=spikes, configs=grid_configs())
+            try:
+                record = analyse(tier, identity, genetic_map, panel, work_dir=work_dir / "work" /
+                                 f"{chosen['store']}_{chosen['analysis_id']}", threads=threads,
+                                 spikes=spikes, configs=grid_configs())
+            except SharedSetTooSmall as small:
+                below_floor.append(small.record | {"store": chosen["store"]})
+                continue
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps(record, allow_nan=False))
         analyses.append(json.loads(cache.read_text()))
@@ -319,6 +329,8 @@ def sweep(selection: dict[str, Any], stores_dir: Path, genetic_map: LoadedMap, p
                  "r2": R2_VALUES, "tier": 5e-8, "observed_only": True},
         "spikes": [{"chromosome": s.chromosome, "position": s.position, "population": s.name}
                    for s in spikes],
+        "left_out_below_shared_set_floor": {"floor": MIN_SHARED_SET_SHARE,
+                                            "analyses": below_floor},
         "chance_ld": pool_chance([a["chance_ld"] for a in analyses]),
         "evaluation": evaluate(analyses),
         "analyses": analyses,
