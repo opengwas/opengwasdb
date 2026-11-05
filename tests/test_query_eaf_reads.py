@@ -7,8 +7,8 @@ together -- are properties of each reader, and live in the contract suite
 (`test_association_readers.py`), region by region and adapter by adapter.
 
 What stays here is composition: a residual Hybrid's one-Analysis answer joins two
-components, each decoding its own EAF, and Reference Completion still reads a
-whole Analysis through `RaggedCSRReader.get_analysis`.
+components, each decoding its own EAF. Reference Completion reads a whole Analysis
+through the CSR reader's `analysis` region, which the contract suite covers.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from store_reads import chunk_reads, duplicate_chunk_keys
 from test_hybrid_shared_se_plan_e2e import (
     N_OFF_PANEL,
     N_PANEL,
@@ -27,19 +26,9 @@ from test_hybrid_shared_se_plan_e2e import (
     overflow_alid,
     panel_alid,
 )
-from test_ragged_residual_completion import RaggedResidualScenario
 
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
-
-#: The arrays whose duplicate reads #253 removes.
-_EAF_ARRAYS = ("eaf", "eaf_baseline", "imputed")
-
-
-@pytest.fixture(scope="module")
-def ragged_completed(tmp_path_factory: pytest.TempPathFactory) -> RaggedResidualScenario:
-    return RaggedResidualScenario(tmp_path_factory)
 
 
 @pytest.fixture(scope="module")
@@ -55,21 +44,6 @@ def test_hybrid_fixture_is_residual_in_both_components(hybrid_residual: Path) ->
         dense = query.lookup([panel_alid(50)], ["trait_0"])
         overflow = query.lookup([overflow_alid(50)], ["trait_0"])
     assert len(dense["z"]) == 1 and len(overflow["z"]) == 1
-
-
-def test_ragged_get_analysis_reads_each_eaf_array_once(
-    ragged_completed: RaggedResidualScenario, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`RaggedCSRReader.get_analysis` reads one slice's EAF once, not twice."""
-    reader = RaggedCSRReader(ragged_completed.completed)
-    with chunk_reads(monkeypatch, _EAF_ARRAYS) as reads:
-        row = reader.get_analysis(0)
-    assert len(row.z) > 0, "the Analysis must return rows for this to mean anything"
-    duplicates = duplicate_chunk_keys(reads)
-    assert duplicates == {}, f"get_analysis re-read EAF chunks: {duplicates}"
-    assert reads["eaf"] and reads["eaf_baseline"] and reads["imputed"], (
-        "get_analysis must read all three arrays for this to mean anything"
-    )
 
 
 def test_hybrid_query_answers_match_the_model(hybrid_residual: Path) -> None:

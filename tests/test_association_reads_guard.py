@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1] / "opengwasdb"
 #: Modules that read associations only through `opengwasdb.associations`.
 READERS = (
     "layouts/hybrid/complete.py",
+    "layouts/ragged/complete.py",
     "query/facade.py",
     "query/resolve.py",
     "validation/observed_view.py",
@@ -87,16 +88,28 @@ PLANES = frozenset(
 #: The CSR reader's decode members, which only `CsrReader` calls.
 CSR_DECODES = frozenset(
     {
-        "get_analysis",
+        "z_slice",
+        "z_at",
         "se_slice",
         "se_at",
         "eaf_slice_read",
         "eaf_at_read",
-        "z_at",
+        "eaf_at",
         "n_slice",
         "n_at",
     }
 )
+
+#: The modules that may call them, and why.
+CSR_DECODE_CALLERS = {
+    "associations/csr.py": "the CSR adapter",
+    "layouts/ragged/zarr_csr.py": "the reader that defines them",
+    "layouts/ragged/top_hits.py": (
+        "the Top-Hit harvest, a Layout (layer 3) the builders call, which cannot import "
+        "the Association Reader (Query, layer 4) without an upward import "
+        "(docs/architecture/components.yaml)"
+    ),
+}
 
 #: The SE plane types: naming one is how a function comes to decode SE.
 SE_PLANES = frozenset({"DenseSePlane", "RaggedSePlane"})
@@ -251,3 +264,26 @@ def test_the_guard_sees_a_private_name_imported_or_read() -> None:
 @pytest.mark.parametrize("module", OWN_NAMES_ONLY)
 def test_a_module_uses_no_other_module_s_private_names(module: str) -> None:
     assert private_reaches((ROOT / module).read_text(encoding="utf-8")) == []
+
+
+def csr_decode_calls(source: str) -> list[str]:
+    """Each call `source` makes to a CSR decode member, by name."""
+    return [
+        f"calls .{node.func.attr}() at line {node.lineno}"
+        for _, node in _in_functions(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in CSR_DECODES
+    ]
+
+
+def test_only_the_csr_adapter_calls_the_csr_decodes() -> None:
+    """A sequence's associations are read through `CsrReader`, which applies the
+    presence rule, so no module in the package but those named decodes one itself."""
+    found = {
+        module: calls
+        for path in sorted(ROOT.rglob("*.py"))
+        if (module := str(path.relative_to(ROOT))) not in CSR_DECODE_CALLERS
+        and (calls := csr_decode_calls(path.read_text(encoding="utf-8")))
+    }
+    assert found == {}

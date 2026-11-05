@@ -16,6 +16,17 @@ Admission contract ([#357](https://github.com/opengwas/opengwasdb/issues/357)).
 > read of its source's Overflow
 > ([#391](https://github.com/opengwas/opengwasdb/issues/391)) read through
 > them, so no completion reaches `RaggedCSRReader`'s underscore attributes.
+> Ragged Reference Completion reads each source Analysis through `CsrReader`.
+> `RaggedCSRReader` keeps structure public, and its decode members (`z_slice`
+> among them) serve `CsrReader` and one other caller: `get_analysis()`,
+> `variant_indices()`, `z_all()`, `se_all()`, `eaf_slice()`, `imputed()` and
+> `AnalysisAssociations` are gone. That caller is the Ragged Top-Hit harvest,
+> which still scans with `z_slice` and gathers its candidates with `se_at`,
+> `eaf_at` and `imputed_at`: it is a Layout (layer 3 in
+> `docs/architecture/components.yaml`) that the builders call, and the
+> Association Reader belongs to Query (layer 4), so reading through it would
+> be an upward import. The reads guard fails any other module that calls a
+> decode member.
 
 ## Context
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any
 
 import numpy as np
 import zarr
@@ -95,13 +95,6 @@ def sequence_region_step(total: int, region_cells: int) -> int:
     )
     shards_per_region = max(1, -(-max(1, int(region_cells)) // shard))
     return shards_per_region * shard
-
-
-class AnalysisAssociations(NamedTuple):
-    variant_index: np.ndarray  # int32
-    z: np.ndarray  # float32, decoded from the plane's own encoding
-    se: np.ndarray  # decoded float32
-    eaf: np.ndarray  # float32, all-NaN when the store carries no EAF
 
 
 def _float32_cells(
@@ -825,7 +818,14 @@ class RaggedCSRWriter:
 
 
 class RaggedCSRReader:
-    """Read per-analysis associations from zarr CSR arrays."""
+    """An association sequence's structure (§11), and the plane decodes beneath it.
+
+    What is public is structure, for code that walks the sequence itself: the
+    offsets and spans, the variant index, the imputed mask and the pair search.
+    Associations are read through `opengwasdb.associations.CsrReader`, which
+    applies the presence rule (ADR 0070); the decode members here are its, and
+    nothing else calls them.
+    """
 
     def __init__(self, store_path: str | Path, encoding: StoreEncoding | None = None):
         path = Path(store_path) / RAGGED_ZARR_PATH
@@ -834,7 +834,6 @@ class RaggedCSRReader:
         self._offsets_cache: np.ndarray | None = None
         self._variant_index: zarr.Array = self._root["variant_index"]
         self._z: zarr.Array = self._root["z"]
-        self._se: zarr.Array = self._root["se"]  # shape metadata only; values use se_* below
         # The plan is read from the release's manifest, never inferred from the
         # array's dtype: a store that disagrees with its own manifest must fail
         # validation, not decode as whatever the bytes happen to look like.
@@ -908,10 +907,6 @@ class RaggedCSRReader:
         """Whether the sequence carries an imputed mask."""
         return self._imputed_array is not None
 
-    def imputed(self, start: int, end: int) -> np.ndarray:
-        """The imputed mask `[start, end)` as stored (uint8)."""
-        return np.asarray(self._require_imputed()[int(start) : int(end)], dtype=np.uint8)
-
     def imputed_at(self, positions: np.ndarray) -> np.ndarray:
         """The imputed mask at flat positions, as stored (uint8)."""
         positions = np.asarray(positions, dtype=np.int64)
@@ -927,44 +922,8 @@ class RaggedCSRReader:
         """Whether an EAF read can return anything but NaN (issue #113)."""
         return self._eaf_plane.can_report_frequencies
 
-    def get_analysis(self, analysis_index: int) -> AnalysisAssociations:
-        """Return (variant_index, z, se, eaf) arrays for one analysis. O(1) zarr reads."""
-        start, end = self.span(analysis_index)
-        if start == end:
-            return AnalysisAssociations(
-                variant_index=np.empty(0, dtype=np.int32),
-                z=np.empty(0, dtype=np.float32),
-                se=np.empty(0, dtype=np.float32),
-                eaf=np.empty(0, dtype=np.float32),
-            )
-        # One read of the frequency region, shared by SE decoding and the
-        # returned `eaf` column (#253), rather than `se_slice` reading the
-        # plane and `eaf_slice` reading it again.
-        eaf_read = self._eaf_plane.read_slice(start, end)
-        return AnalysisAssociations(
-            variant_index=self._variant_index[start:end],
-            z=self.z_slice(start, end),
-            se=self._se_plane.slice(
-                start, end, analysis_index=analysis_index, eaf=eaf_read.values
-            ),
-            eaf=eaf_read.values,
-        )
-
-    def variant_indices(self, analysis_index: int) -> np.ndarray:
-        """The variant indices one Analysis holds associations at.
-
-        Separate from `get_analysis` because the callers that need only the
-        Analysis's genomic footprint -- LD-block enumeration for a Store
-        Family with no gene target (issue #102) -- should not decode its
-        statistics to find it.
-        """
-        start, end = self.span(analysis_index)
-        if start == end:
-            return np.empty(0, dtype=np.int32)
-        return np.asarray(self._variant_index[start:end], dtype=np.int32)
-
     def z_slice(self, start: int, end: int) -> np.ndarray:
-        """Decoded `z[start:end]` -- the only way a caller gets z-scores."""
+        """Decoded `z[start:end]`, as `CsrReader` reads it."""
         return self._codec.decode_z(self._z[start:end], positions=positions_flat(int(start)))
 
     def z_at(self, positions: np.ndarray) -> np.ndarray:
@@ -982,10 +941,6 @@ class RaggedCSRReader:
         return self._codec.decode_z(
             np.asarray(self._z.oindex[positions]), positions=positions_at(positions)
         )
-
-    def z_all(self) -> np.ndarray:
-        """Every decoded z, in flat CSR order."""
-        return self.z_slice(0, array_length(self._z))
 
     def se_slice(
         self,
@@ -1005,9 +960,6 @@ class RaggedCSRReader:
         offsets = np.asarray(self._offsets[:], dtype=np.int64)
         analyses = np.searchsorted(offsets[1:], positions, side="right").astype(np.int64)
         return self._se_plane.at(positions, analysis_index=analyses, eaf=eaf)
-
-    def se_all(self) -> np.ndarray:
-        return self.se_slice(0, array_length(self._se))
 
     @property
     def association_chunk(self) -> int:
@@ -1153,10 +1105,6 @@ class RaggedCSRReader:
     def eaf_slice_read(self, start: int, end: int, *, want_imputed: bool = False) -> EafRead:
         """`eaf[start:end]` and the imputed mask, in one read (#253)."""
         return self._eaf_plane.read_slice(start, end, want_imputed=want_imputed)
-
-    def eaf_slice(self, start: int, end: int) -> np.ndarray:
-        """Decoded `eaf[start:end]`, or all-NaN when this store carries none."""
-        return self.eaf_slice_read(start, end).values
 
     def eaf_at(self, positions: np.ndarray) -> np.ndarray:
         """EAF at arbitrary flat CSR positions; all-NaN when there is no array.
