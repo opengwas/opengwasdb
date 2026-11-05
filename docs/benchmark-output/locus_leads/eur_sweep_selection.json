@@ -1,0 +1,376 @@
+{
+ "rule": {
+  "seed": 403,
+  "target": 40,
+  "min_abs_z_100": 5,
+  "min_p_zero": 5,
+  "max_observed_rows": 1000000,
+  "strata": "observed 5e-8 rows [<1k, 1k-10k, 10k-100k, >=100k] x max |z| [<38.5, 38.5-100, >=100]",
+  "draw": "quota Analyses first (|z| >= 100, then |z| >= 38.5), then round-robin over the strata in sorted order; seeded random.Random",
+  "pool": "assigned_ancestry == EUR in genome-wide Stores; observed rows at 5e-8"
+ },
+ "stores_left_out": [
+  {
+   "store": "OGS-00001",
+   "reason": "association coverage is cis"
+  },
+  {
+   "store": "OGS-00002",
+   "reason": "association coverage is cis"
+  },
+  {
+   "store": "OGS-00004",
+   "reason": "VariantIndexError: Store at /data/opengwasdb/stores/OGS-00004/store.opengwasdb carries no variant index (ragged/by_variant); build it with 'ogdb build-variant-index /data/opengwasdb/stores/OGS-00004/store.opengwasdb'"
+  },
+  {
+   "store": "OGS-00005",
+   "reason": "VariantIndexError: Store at /data/opengwasdb/stores/OGS-00005/store.opengwasdb carries no variant index (ragged/by_variant); build it with 'ogdb build-variant-index /data/opengwasdb/stores/OGS-00005/store.opengwasdb'"
+  },
+  {
+   "store": "OGS-00006",
+   "reason": "association coverage is signals_only"
+  },
+  {
+   "store": "OGS-00007",
+   "reason": "association coverage is cis_and_signals"
+  },
+  {
+   "store": "OGS-00013",
+   "reason": "no Analysis assigned EUR"
+  },
+  {
+   "store": "OGS-00014",
+   "reason": "no Analysis assigned EUR"
+  },
+  {
+   "store": "OGS-00015",
+   "reason": "no Analysis assigned EUR"
+  },
+  {
+   "store": "OGS-00016",
+   "reason": "no Analysis assigned EUR"
+  },
+  {
+   "store": "OGS-00017",
+   "reason": "no Analysis assigned EUR"
+  },
+  {
+   "store": "OGS-00027",
+   "reason": "association coverage is cis"
+  }
+ ],
+ "pool_size": 7372,
+ "pool_by_stratum": {
+  "10k-100k x 38.5-100": 216,
+  "10k-100k x <38.5": 368,
+  "10k-100k x >=100": 29,
+  "1k-10k x 38.5-100": 107,
+  "1k-10k x <38.5": 1045,
+  "1k-10k x >=100": 21,
+  "<1k x 38.5-100": 28,
+  "<1k x <38.5": 3448,
+  "<1k x >=100": 3,
+  ">=100k x 38.5-100": 78,
+  ">=100k x <38.5": 11,
+  ">=100k x >=100": 17
+ },
+ "analyses_without_observed_rows": 1999,
+ "excluded_over_max_rows": [
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST002047",
+   "observed_rows": 2314363,
+   "max_abs_z": 111.22222137451172,
+   "stratum": ">=100k x >=100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST004461",
+   "observed_rows": 5205455,
+   "max_abs_z": 359.4563293457031,
+   "stratum": ">=100k x >=100"
+  }
+ ],
+ "chosen": [
+  {
+   "store": "OGS-00009",
+   "analysis_id": "ukb-b-16489",
+   "observed_rows": 25954,
+   "max_abs_z": 14.7802734375,
+   "stratum": "10k-100k x <38.5"
+  },
+  {
+   "store": "OGS-00009",
+   "analysis_id": "ukb-b-4171",
+   "observed_rows": 622,
+   "max_abs_z": 11.8935546875,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00009",
+   "analysis_id": "ukb-b-9685",
+   "observed_rows": 109744,
+   "max_abs_z": 28.9404296875,
+   "stratum": ">=100k x <38.5"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90000025",
+   "observed_rows": 201377,
+   "max_abs_z": 38.157894134521484,
+   "stratum": ">=100k x <38.5"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90002401",
+   "observed_rows": 116389,
+   "max_abs_z": 111.03060913085938,
+   "stratum": ">=100k x >=100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90012057",
+   "observed_rows": 425,
+   "max_abs_z": 42.55644989013672,
+   "stratum": "<1k x 38.5-100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90012107",
+   "observed_rows": 30367,
+   "max_abs_z": 80.55887603759766,
+   "stratum": "10k-100k x 38.5-100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90012111",
+   "observed_rows": 86446,
+   "max_abs_z": 111.84388732910156,
+   "stratum": "10k-100k x >=100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90025947",
+   "observed_rows": 8643,
+   "max_abs_z": 136.00877380371094,
+   "stratum": "1k-10k x >=100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90025960",
+   "observed_rows": 15862,
+   "max_abs_z": 126.00717163085938,
+   "stratum": "10k-100k x >=100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90025965",
+   "observed_rows": 6415,
+   "max_abs_z": 167.84771728515625,
+   "stratum": "1k-10k x >=100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90025973",
+   "observed_rows": 3033,
+   "max_abs_z": 342.7267761230469,
+   "stratum": "1k-10k x >=100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90025993",
+   "observed_rows": 626,
+   "max_abs_z": 278.97784423828125,
+   "stratum": "<1k x >=100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90025996",
+   "observed_rows": 3257,
+   "max_abs_z": 30.6748046875,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90029004",
+   "observed_rows": 122361,
+   "max_abs_z": 89.83718872070312,
+   "stratum": ">=100k x 38.5-100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90029011",
+   "observed_rows": 59461,
+   "max_abs_z": 22.71875,
+   "stratum": "10k-100k x <38.5"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90029025",
+   "observed_rows": 110470,
+   "max_abs_z": 33.249855041503906,
+   "stratum": ">=100k x <38.5"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90134590",
+   "observed_rows": 7,
+   "max_abs_z": 5.9287109375,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90162563",
+   "observed_rows": 4135,
+   "max_abs_z": 182.6499481201172,
+   "stratum": "1k-10k x >=100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90239658",
+   "observed_rows": 94463,
+   "max_abs_z": 196.7732391357422,
+   "stratum": "10k-100k x >=100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90239826",
+   "observed_rows": 11935,
+   "max_abs_z": 32.636505126953125,
+   "stratum": "10k-100k x <38.5"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90271559",
+   "observed_rows": 7831,
+   "max_abs_z": 57.31097412109375,
+   "stratum": "1k-10k x 38.5-100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90274804",
+   "observed_rows": 2313,
+   "max_abs_z": 67.69166564941406,
+   "stratum": "1k-10k x 38.5-100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90319610",
+   "observed_rows": 4624,
+   "max_abs_z": 211.31161499023438,
+   "stratum": "1k-10k x >=100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90319613",
+   "observed_rows": 15301,
+   "max_abs_z": 57.057899475097656,
+   "stratum": "10k-100k x 38.5-100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90319621",
+   "observed_rows": 9035,
+   "max_abs_z": 274.1923522949219,
+   "stratum": "1k-10k x >=100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90319631",
+   "observed_rows": 17043,
+   "max_abs_z": 120.96846771240234,
+   "stratum": "10k-100k x >=100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90559267",
+   "observed_rows": 621,
+   "max_abs_z": 50.432273864746094,
+   "stratum": "<1k x 38.5-100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90704619",
+   "observed_rows": 1788,
+   "max_abs_z": 23.7861328125,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90704633",
+   "observed_rows": 89,
+   "max_abs_z": 122.28070068359375,
+   "stratum": "<1k x >=100"
+  },
+  {
+   "store": "OGS-00011",
+   "analysis_id": "GCST90704637",
+   "observed_rows": 667,
+   "max_abs_z": 128.0823516845703,
+   "stratum": "<1k x >=100"
+  },
+  {
+   "store": "OGS-00012",
+   "analysis_id": "GCST90475442",
+   "observed_rows": 209821,
+   "max_abs_z": 107.9637451171875,
+   "stratum": ">=100k x >=100"
+  },
+  {
+   "store": "OGS-00012",
+   "analysis_id": "GCST90475446",
+   "observed_rows": 213827,
+   "max_abs_z": 110.82720947265625,
+   "stratum": ">=100k x >=100"
+  },
+  {
+   "store": "OGS-00012",
+   "analysis_id": "GCST90475523",
+   "observed_rows": 106603,
+   "max_abs_z": 84.62770080566406,
+   "stratum": ">=100k x 38.5-100"
+  },
+  {
+   "store": "OGS-00012",
+   "analysis_id": "GCST90475532",
+   "observed_rows": 39950,
+   "max_abs_z": 44.80181884765625,
+   "stratum": "10k-100k x 38.5-100"
+  },
+  {
+   "store": "OGS-00012",
+   "analysis_id": "GCST90475609",
+   "observed_rows": 775,
+   "max_abs_z": 50.1822509765625,
+   "stratum": "<1k x 38.5-100"
+  },
+  {
+   "store": "OGS-00012",
+   "analysis_id": "GCST90475852",
+   "observed_rows": 4696,
+   "max_abs_z": 43.89533233642578,
+   "stratum": "1k-10k x 38.5-100"
+  },
+  {
+   "store": "OGS-00012",
+   "analysis_id": "GCST90476249",
+   "observed_rows": 3785,
+   "max_abs_z": 8.66015625,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00012",
+   "analysis_id": "GCST90476460",
+   "observed_rows": 314699,
+   "max_abs_z": 61.93480682373047,
+   "stratum": ">=100k x 38.5-100"
+  },
+  {
+   "store": "OGS-00012",
+   "analysis_id": "GCST90477870",
+   "observed_rows": 377,
+   "max_abs_z": 8.005859375,
+   "stratum": "<1k x <38.5"
+  }
+ ]
+}
