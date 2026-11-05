@@ -22,15 +22,14 @@ from __future__ import annotations
 import csv
 import logging
 import math
-import multiprocessing
 from collections.abc import Mapping
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 import numpy as np
 
+from opengwasdb.build.ordered_pool import fork_each
 from opengwasdb.build.phenotype_sd import ESTIMATION_METHODS, estimate_phenotype_sd
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.manifest_columns import require_columns, resolve_manifest_columns
@@ -210,17 +209,16 @@ def load_af_reference(
     return dict(iter_eaf_reference(path, ancestry=ancestry))
 
 
-# Fork-inherited worker state, set in the parent immediately before the pool is
-# created, exactly as `opengwasdb.ancestry.pipeline` does for its reference: the
-# reference frequency mapping is read-only and pickling it per task would copy
-# a genome-scale table once per Analysis.
-_WORKER_AF_SOURCE: AfSource | None = None
-_WORKER_AF_REFERENCE: Mapping[str, float] | None = None
+@dataclass(frozen=True)
+class _EstimationContext:
+    """What every worker reads: where the ADR-0029 estimate's frequency comes from.
 
+    ``fork_each`` hands this to each forked worker by inheritance, so a
+    reference frequency table is not pickled once per Analysis (issue #395).
+    """
 
-def _fork_pool(n_workers: int) -> ProcessPoolExecutor:
-    fork_ctx = multiprocessing.get_context("fork")
-    return ProcessPoolExecutor(max_workers=n_workers, mp_context=fork_ctx)
+    af_source: AfSource
+    af_reference: Mapping[str, float] | None
 
 
 def _canonical_alid(association: ReaderAssociation) -> str:
@@ -298,15 +296,21 @@ def _check_af_source(row: SdManifestRow, af_source: AfSource) -> None:
         )
 
 
-def _estimate_one(row: SdManifestRow) -> PhenotypeSdRow:
-    """Worker: read one Analysis's source and estimate its phenotype SD."""
-    assert _WORKER_AF_SOURCE is not None
-    _check_af_source(row, _WORKER_AF_SOURCE)
+def _estimate_one(
+    context: _EstimationContext, task: tuple[int, SdManifestRow]
+) -> tuple[int, PhenotypeSdRow]:
+    """Worker: read one Analysis's source and estimate its phenotype SD.
+
+    The task's index comes back beside its estimate because ``fork_each``
+    yields in completion order and the TSV is written in input order (§20.2).
+    """
+    index, row = task
+    _check_af_source(row, context.af_source)
     try:
         reader = resolve_reader(
             row.source_reader_capability, row.source_file, StoredEffectScale.SD
         )
-        se, af, beta = _gather_evidence(reader, row.method, _WORKER_AF_REFERENCE)
+        se, af, beta = _gather_evidence(reader, row.method, context.af_reference)
     except OSError as exc:
         raise ValueError(
             f"analysis {row.analysis_id!r} source {row.source_file!r} could not be read: {exc}"
@@ -317,7 +321,7 @@ def _estimate_one(row: SdManifestRow) -> PhenotypeSdRow:
         )
     except ValueError as exc:
         raise ValueError(f"analysis {row.analysis_id!r}: {exc}") from exc
-    return PhenotypeSdRow(
+    return index, PhenotypeSdRow(
         analysis_id=row.analysis_id,
         original_sd=_format_float(estimate.sd),
         original_sd_method=estimate.method.value,
@@ -343,22 +347,20 @@ def estimate_manifest_phenotype_sd(
     """Estimate every row's phenotype SD, preserving input order.
 
     ``af_reference`` is required for :attr:`AfSource.reference` and must be the
-    mapping `load_af_reference` returns. Results are gathered back into input
-    order, so the output does not depend on worker count or completion order
-    (matching `opengwasdb.ancestry.pipeline.annotate_catalogue`).
+    mapping `load_af_reference` returns. ``fork_each`` hands the frequency
+    source to forked workers by inheritance and yields in completion order, so
+    the estimates are put back in input order before they are returned: the
+    output does not depend on worker count or completion order (spec §20.2,
+    matching `opengwasdb.ancestry.pipeline.annotate_catalogue`).
     """
-    global _WORKER_AF_SOURCE, _WORKER_AF_REFERENCE
     if af_source is AfSource.reference and af_reference is None:
         raise ValueError(
             "--af-source reference requires a reference AF table; none was supplied"
         )
-    _WORKER_AF_SOURCE = af_source
-    _WORKER_AF_REFERENCE = af_reference
-    if n_workers <= 1:
-        return [_estimate_one(row) for row in rows]
-    with _fork_pool(n_workers) as pool:
-        # executor.map preserves input order regardless of completion order.
-        return list(pool.map(_estimate_one, rows))
+    context = _EstimationContext(af_source, af_reference)
+    indexed = fork_each(_estimate_one, context, enumerate(rows), n_workers)
+    # `fork_each` yields in completion order; restore input order by index.
+    return [estimate for _index, estimate in sorted(indexed)]
 
 
 def write_sd_estimates(path: str | Path, rows: list[PhenotypeSdRow]) -> None:

@@ -16,8 +16,10 @@ from typing import Any
 import numpy as np
 import pytest
 from cli_output import normalize_cli_output
+from fork_order import CompletionOrder
 from typer.testing import CliRunner
 
+from opengwasdb.build import phenotype_sd_pipeline
 from opengwasdb.build.phenotype_sd_pipeline import SD_OUTPUT_COLUMNS
 from opengwasdb.cli.main import app
 from opengwasdb.model.enums import OriginalSdMethod
@@ -248,6 +250,65 @@ def test_result_is_independent_of_worker_count(tmp_path):
     # Input order, not completion order.
     assert [r["analysis_id"] for r in rows] == ["b_second", "a_first"]
     assert float(rows[0]["original_sd"]) == pytest.approx(1.3, rel=1e-6)
+
+
+# One Analysis per true SD, so a row carrying another Analysis's estimate is
+# visible in the value, not only in the order.
+_SD_IDS = ["first", "second", "third"]
+_SD_TRUTHS = [1.5, _SD_TRUE, 3.5]
+_ESTIMATE_ORDER = CompletionOrder(len(_SD_IDS))
+_REAL_ESTIMATE_ONE = phenotype_sd_pipeline._estimate_one
+
+
+def _estimate_one_finishing_last(context: Any, task: Any) -> Any:
+    """The pipeline's own worker, held so the first Analysis finishes last."""
+    index, _row = task
+    if index == 0:
+        _ESTIMATE_ORDER.wait_for_the_rest()
+    result = _REAL_ESTIMATE_ONE(context, task)
+    _ESTIMATE_ORDER.claim(index)
+    return result
+
+
+def test_estimates_are_written_in_input_order_when_the_first_finishes_last(
+    tmp_path, monkeypatch
+):
+    """`fork_each` yields in completion order (#395): the TSV must not follow it.
+
+    Spec §20.2 keys the estimates by `analysis_id` in input order, so a caller
+    merges the column back by position or by key and gets each Analysis's own
+    SD. The first Analysis is held until the other two have finished, which is
+    the order a pipeline that wrote the pool's results directly would produce.
+    """
+    af = _af_series()
+    sources = []
+    for analysis_id, sd_true in zip(_SD_IDS, _SD_TRUTHS, strict=True):
+        source = tmp_path / f"{analysis_id}.tsv.gz"
+        _write_ssf(source, af, _se_for(af, sd_true))
+        sources.append(source)
+    manifest = tmp_path / "analyses.tsv"
+    _write_manifest(
+        manifest,
+        [
+            (analysis_id, source, GWAS_SSF_CAPABILITY, "20000", "estimated_from_source_maf")
+            for analysis_id, source in zip(_SD_IDS, sources, strict=True)
+        ],
+    )
+    out = tmp_path / "sd.tsv"
+    _ESTIMATE_ORDER.reset()
+    monkeypatch.setattr(phenotype_sd_pipeline, "_estimate_one", _estimate_one_finishing_last)
+
+    result = _run(manifest, out, "--n-workers", str(len(_SD_IDS)))
+
+    assert result.exit_code == 0, result.output
+    _header, rows = _read_tsv(out)
+    assert [r["analysis_id"] for r in rows] == _SD_IDS
+    assert [float(r["original_sd"]) for r in rows] == pytest.approx(_SD_TRUTHS, rel=1e-6)
+    # Meaningful only if the pool really finished in another order: the
+    # Analysis input order demands first is the one that finished last.
+    finished = _ESTIMATE_ORDER.order()
+    assert sorted(finished) == list(range(len(_SD_IDS)))
+    assert finished[-1] == 0
 
 
 def test_reference_af_source_recovers_known_sd(tmp_path):
