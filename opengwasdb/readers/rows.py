@@ -87,6 +87,11 @@ class TabularMetricsRow:
     effect_from_odds_ratio_fallback: bool = False
     se_from_ci: bool = False
     se_from_p_value: bool = False
+    #: The source's own two-sided p-value for the row, as the file wrote it:
+    #: finite or `None`, with no range rule applied (a `0` and a `1.5` are both
+    #: reported). The resolver compares it with the z-score a build would store
+    #: (#345), so a reader that has no p-value reports `None`, never a stand-in.
+    p_value: float | None = None
 
 
 #: Rows per block. Peak memory is a block's ALID strings rather than the whole
@@ -142,6 +147,9 @@ class MetricsChunk:
     )
     se_from_ci: np.ndarray = field(default_factory=lambda: np.array([], dtype=bool))
     se_from_p_value: np.ndarray = field(default_factory=lambda: np.array([], dtype=bool))
+    #: The source's own p-value per row, `NaN` where the file has none or the
+    #: cell is not a finite number; no range rule is applied here (#345).
+    p_value: np.ndarray = field(default_factory=lambda: np.array([], dtype="float64"))
 
     def __post_init__(self) -> None:
         _fill_default_arrays(self)
@@ -163,6 +171,7 @@ _CHUNK_DEFAULTS: tuple[tuple[str, object, object], ...] = (
     ("effect_from_odds_ratio_fallback", False, bool),
     ("se_from_ci", False, bool),
     ("se_from_p_value", False, bool),
+    ("p_value", math.nan, None),
 )
 
 
@@ -241,6 +250,7 @@ def _chunk_of_rows(rows: list[TabularMetricsRow]) -> MetricsChunk:
         ),
         se_from_ci=_row_array(rows, lambda row: row.se_from_ci, bool),
         se_from_p_value=_row_array(rows, lambda row: row.se_from_p_value, bool),
+        p_value=_row_array(rows, lambda row: _or_nan(row.p_value), "float64"),
     )
 
 

@@ -43,7 +43,6 @@ variant hash rather than by position or arrival order.
 
 from __future__ import annotations
 
-import heapq
 import math
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
@@ -55,7 +54,14 @@ import numpy as np
 from opengwasdb.admission import AdmissionCounts, AnalysisRules, SourceRows, counting_gate
 from opengwasdb.ancestry.mixture import AncestryAssignment, Gates, assign_ancestry
 from opengwasdb.ancestry.reference import AncestryReference
-from opengwasdb.build.eaf_orientation import site_hash
+from opengwasdb.build.effect_consistency import (
+    DEFAULT_EFFECT_CONSISTENCY_POLICY,
+    ConsistencySample,
+    EffectConsistency,
+    EffectConsistencyPolicy,
+    check_sample_bound,
+)
+from opengwasdb.build.hash_sample import HashSample
 from opengwasdb.build.info_score_filter import declared_score_state
 from opengwasdb.build.phenotype_sd import (
     ESTIMATION_METHODS,
@@ -237,6 +243,9 @@ class AnalysisRequest:
     stored_effect_scale: StoredEffectScale = StoredEffectScale.SD
     info_score_policy: InfoScorePolicy = InfoScorePolicy()
     maf_policy: MafPolicy = MafPolicy()
+    #: When the stored z-score contradicts the source's own p-value badly enough
+    #: to refuse the Analysis (ADR 0069). Bound into the record's fingerprint.
+    effect_consistency_policy: EffectConsistencyPolicy = DEFAULT_EFFECT_CONSISTENCY_POLICY
 
 
 @dataclass(frozen=True)
@@ -294,6 +303,10 @@ class ScanDiagnostics:
     build_eligible_rows_effect_from_odds_ratio_fallback: int = 0
     build_eligible_rows_se_from_ci: int = 0
     build_eligible_rows_se_from_p_value: int = 0
+    #: The stored z-score measured against the source's own p-value (ADR 0069),
+    #: or `None` where no scan happened. A skip is a measurement too: it carries
+    #: its reason.
+    effect_consistency: EffectConsistency | None = None
     #: Whether the `ancestry_*` counts above describe this Analysis's own scan
     #: or a measurement of its whole source file (issue #282). For
     #: `source_file`, `rows_read` and every other count stay the Analysis's own.
@@ -394,6 +407,9 @@ class _Scan:
     build_eligible_rows_effect_from_odds_ratio_fallback: int = 0
     build_eligible_rows_se_from_ci: int = 0
     build_eligible_rows_se_from_p_value: int = 0
+    consistency: ConsistencySample = field(
+        default_factory=lambda: ConsistencySample(DEFAULT_EVIDENCE_SAMPLE)
+    )
 
 
 @dataclass
@@ -416,11 +432,10 @@ class _EvidenceSample:
     k: int
     tier: OriginalSdMethod
     considered: int = 0
-    _sequence: int = 0
-    # `(-hash, sequence, se, af_alt, beta, alid)`. The sequence is unique, so the
-    # heap never compares the payloads -- which is why a repeated ALID (same
-    # hash) still gets two entries rather than one.
-    _heap: list[tuple[int, int, float, float, float, str]] = field(default_factory=list)
+    _sample: HashSample[tuple[float, float, float, str]] = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._sample = HashSample(self.k)
 
     def admit(self, chunk: MetricsChunk) -> None:
         """Offer one block; each qualifying row is retained if it outranks the heap.
@@ -434,26 +449,19 @@ class _EvidenceSample:
         self.considered += int(qualifying.size)
         for index in qualifying.tolist():
             alid = chunk.alid[index]
-            self._sequence += 1
-            entry = (
-                -site_hash(alid),
-                self._sequence,
-                float(chunk.se[index]),
-                float(chunk.af_alt[index]),
-                float(chunk.beta[index]),
+            self._sample.offer(
                 alid,
+                (
+                    float(chunk.se[index]),
+                    float(chunk.af_alt[index]),
+                    float(chunk.beta[index]),
+                    alid,
+                ),
             )
-            if len(self._heap) < self.k:
-                heapq.heappush(self._heap, entry)
-            elif entry > self._heap[0]:
-                heapq.heapreplace(self._heap, entry)
 
     def retained(self) -> list[tuple[float, float, float, str]]:
         """`(se, af_alt, beta, alid)` per retained row, in source row order."""
-        return [
-            (se, af, beta, alid)
-            for _hash, _sequence, se, af, beta, alid in sorted(self._heap, key=_entry_sequence)
-        ]
+        return self._sample.retained()
 
     def _qualifies(self, chunk: MetricsChunk) -> np.ndarray:
         """The row rule both stages share: `stream_associations`' own admission.
@@ -474,17 +482,26 @@ class _EvidenceSample:
         return qualifying
 
 
-def _entry_sequence(entry: tuple[int, int, float, float, float, str]) -> int:
-    return entry[1]
-
-
 def _diagnostics(
-    request: AnalysisRequest, scan: _Scan, source_ancestry: SourceAncestryMeasurement | None = None
+    request: AnalysisRequest,
+    scan: _Scan,
+    source_ancestry: SourceAncestryMeasurement | None = None,
+    *,
+    scanned: bool = True,
 ) -> ScanDiagnostics:
+    """The scan's diagnostics; `scanned=False` when the scan did not complete.
+
+    A source that was never read has no effect-consistency measurement at all
+    (`None`): an empty sample would otherwise read as a measured absence of
+    p-values (`no_source_p_value`), which is a fact about a readable file.
+    """
     ancestry_rows = (
         scan.ancestry_rows_read if scan.ancestry_rows_read > 0 else scan.rows_read
     )
-    return _with_source_ancestry(_scan_diagnostics(request, scan, ancestry_rows), source_ancestry)
+    diagnostics = _scan_diagnostics(request, scan, ancestry_rows)
+    if not scanned:
+        diagnostics = replace(diagnostics, effect_consistency=None)
+    return _with_source_ancestry(diagnostics, source_ancestry)
 
 
 def _with_source_ancestry(
@@ -538,6 +555,7 @@ def _scan_diagnostics(
         ),
         build_eligible_rows_se_from_ci=scan.build_eligible_rows_se_from_ci,
         build_eligible_rows_se_from_p_value=scan.build_eligible_rows_se_from_p_value,
+        effect_consistency=scan.consistency.measure(request.effect_consistency_policy),
     )
 
 
@@ -628,6 +646,7 @@ def _scan(
             scan.admission += counts
             _count_build_eligible(block, scan, variant_reference)
             evidence.admit(block)
+            scan.consistency.admit(block)
             scan.rows_read += len(observed)
             if not ancestry_active and stops_physical_at_ancestry:
                 break
@@ -656,6 +675,7 @@ def _take(chunk: MetricsChunk, indices: np.ndarray) -> MetricsChunk:
         effect_from_odds_ratio_fallback=chunk.effect_from_odds_ratio_fallback[indices],
         se_from_ci=chunk.se_from_ci[indices],
         se_from_p_value=chunk.se_from_p_value[indices],
+        p_value=chunk.p_value[indices],
     )
 
 
@@ -1043,6 +1063,25 @@ def _ancestry(
     return assign_ancestry(scan.panel_af, reference, gates)
 
 
+def _consistency_refusal(measured: EffectConsistency | None, request: AnalysisRequest) -> str:
+    """The controlled failure for a source that contradicts its own p-value, or "".
+
+    A fact about the file, like a duplicated effect column (ADR 0049): the
+    resolution fails and the record keeps the measurement (ADR 0069).
+    """
+    if measured is None or not measured.refused:
+        return ""
+    policy = request.effect_consistency_policy
+    return (
+        "effect contradicts the source's own p-value: the median "
+        f"|log10 p implied by beta/se - log10 p reported| is {measured.median_abs_delta:.3g} "
+        f"(median signed {measured.median_delta:.3g}) over {measured.n_rows_compared} "
+        f"rows, above the threshold {policy.max_median_abs_delta:g}. The source's effect "
+        "column is probably on another scale (an odds ratio in `beta`, or log-odds "
+        "in `odds_ratio`) or its standard error is not this effect's."
+    )
+
+
 def resolve_analysis(
     request: AnalysisRequest,
     *,
@@ -1099,9 +1138,10 @@ def resolve_analysis(
         raise ValueError(
             f"evidence_sample must be a positive row count, got {evidence_sample!r}"
         )
+    check_sample_bound(evidence_sample, request.effect_consistency_policy)
     if scan_limit is not None:
         scan_limit.validate()
-    scan = _Scan()
+    scan = _Scan(consistency=ConsistencySample(evidence_sample))
     evidence = _EvidenceSample(k=evidence_sample, tier=request.original_sd_method)
     panel = _ancestry_panel(reference, extraction_panel, source_ancestry)
     needs_sd = _skip_reason(request) is None
@@ -1120,14 +1160,23 @@ def resolve_analysis(
     except (OSError, EOFError, ValueError) as exc:
         return AnalysisResolution(
             analysis_id=request.analysis_id,
-            diagnostics=_diagnostics(request, scan, source_ancestry),
+            diagnostics=_diagnostics(request, scan, source_ancestry, scanned=False),
             ancestry=None if source_ancestry is None else source_ancestry.assignment,
             error=f"{type(exc).__name__}: {exc}",
+        )
+    diagnostics = _diagnostics(request, scan, source_ancestry)
+    refusal = _consistency_refusal(diagnostics.effect_consistency, request)
+    if refusal:
+        return AnalysisResolution(
+            analysis_id=request.analysis_id,
+            diagnostics=diagnostics,
+            ancestry=None if source_ancestry is None else source_ancestry.assignment,
+            error=refusal,
         )
     ancestry = _ancestry(scan, reference, gates, source_ancestry)
     return AnalysisResolution(
         analysis_id=request.analysis_id,
-        diagnostics=_diagnostics(request, scan, source_ancestry),
+        diagnostics=diagnostics,
         ancestry=ancestry,
         phenotype_sd=_resolve_phenotype_sd(request, ancestry, evidence, af_references or {}),
     )

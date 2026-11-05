@@ -169,7 +169,10 @@ def _rsid(rsid: str | None, variant_id: str | None) -> str:
 
 
 def _row_cells(
-    row: dict[str, str], source: EffectSource | None, sample_size_column: str | None
+    row: dict[str, str],
+    source: EffectSource | None,
+    sample_size_column: str | None,
+    p_value: float | None,
 ) -> RowCells:
     """One row's candidate effect and precision cells, parsed by the shared rules.
 
@@ -182,6 +185,8 @@ def _row_cells(
     column for a beta the row does not give, the interval and p-value for an
     SE it does not give, and the frequency and sample size for a signed z.
     The rest are left unread, which is what `row_statistics` makes of them.
+    ``p_value`` is the row's `p_value` cell, which the caller parses for every
+    row because the row carries it.
     """
     standard_error = parse_finite_float(row.get("standard_error"))
     if source is None:
@@ -203,7 +208,7 @@ def _row_cells(
         standard_error=standard_error,
         ci_lower=parse_finite_float(row.get("ci_lower")),
         ci_upper=parse_finite_float(row.get("ci_upper")),
-        p_value=parse_finite_float(row.get("p_value")),
+        p_value=p_value,
     )
 
 
@@ -223,18 +228,6 @@ def _z_score_cells(
             parse_finite_float(row.get(sample_size_column)) if sample_size_column else None
         ),
     )
-
-
-def _row_statistics(
-    row: dict[str, str], effect_source: EffectSource | None, sample_size_column: str | None
-) -> RowStatistics:
-    """One row's ``(beta, se)`` from whichever of the row's own columns carry them.
-
-    The rule itself is `opengwasdb.readers.effect_source.row_statistics`; this
-    is only the GWAS-SSF dict-row reading of it, so the full-row parser and the
-    two projections cannot answer differently about the same row (stores #176).
-    """
-    return row_statistics(effect_source, _row_cells(row, effect_source, sample_size_column))
 
 
 def _tabular_row(
@@ -269,7 +262,10 @@ def _tabular_row(
     # only say so to the type checker.
     if ori is None or effect_allele is None or other_allele is None:
         return None
-    statistics = _row_statistics(row, source, sample_size_column)
+    # The p-value is read on every row, so the row says what the source says
+    # (#345); a row with no usable SE recovers its SE from the same parse.
+    p_value = parse_finite_float(row.get("p_value"))
+    statistics = row_statistics(source, _row_cells(row, source, sample_size_column, p_value))
     beta, from_fallback = statistics.beta, statistics.effect_from_odds_ratio_fallback
     if infinite_effects:
         beta, from_fallback = _reported_effect(row, source, beta, from_fallback)
@@ -286,6 +282,7 @@ def _tabular_row(
             else parse_imputation_score(row.get(score_column), declared=True)
         ),
         _rsid(row.get("rsid"), row.get("variant_id")),
+        p_value,
     )
 
 
@@ -298,6 +295,7 @@ def _built_row(
     af: float | None,
     score: ImputationScore,
     rsid: str,
+    p_value: float | None,
 ) -> SourceRow:
     """One parsed row's `SourceRow`, built without its frozen ``__init__``.
 
@@ -324,6 +322,7 @@ def _built_row(
             "effect_from_odds_ratio_fallback": from_fallback,
             "se_from_ci": statistics.se_from_ci,
             "se_from_p_value": statistics.se_from_p_value,
+            "p_value": p_value,
             "rsid": rsid,
             "z": None,
             "source_id": "",

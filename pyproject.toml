@@ -37,6 +37,11 @@ dev = [
   "ruff>=0.6",
   "mypy>=1.10",
   "lizard>=1.17",
+  # Same list as [tool.pixi.feature.dev.dependencies], which is how a contributor
+  # gets this environment; `pip install -e .[dev]` is the other way in, and it
+  # must not be a way in that lacks the one dependency the architecture model's
+  # check reads (docs/architecture/components.yaml, issue #358).
+  "pyyaml>=6",
 ]
 
 [project.scripts]
@@ -179,6 +184,11 @@ ruff = ">=0.6"
 mypy = ">=1.10"
 lizard = ">=1.17"
 pytest-xdist = ">=3.6"
+# tests/architecture_model.py reads docs/architecture/components.yaml (issue #358).
+# PyYAML reaches the dev environment today only as somebody else's dependency, so
+# the model's check would break on a resolution that drops it, and the fix would
+# look like it belonged to that other package.
+pyyaml = "*"
 
 # Separate from dev: rendering docs/benchmark-output/*.qmd needs Quarto's
 # Jupyter engine (pyyaml, a Jupyter kernel) and matplotlib for the plotting
