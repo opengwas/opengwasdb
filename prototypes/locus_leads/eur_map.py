@@ -51,7 +51,12 @@ def read_population_maps(archive: Path, populations: tuple[str, ...]) -> dict[st
     missing = [f"{p} chr{c}" for p in populations for c in AUTOSOMES if c not in points[p]]
     if missing:
         raise GeneticMapError(f"{archive}: no map for {', '.join(missing)}")
-    return {population: GeneticMap(points[population]) for population in populations}
+    return {population: _in_autosome_order(points[population]) for population in populations}
+
+
+def _in_autosome_order(points: dict[str, tuple[np.ndarray, np.ndarray]]) -> GeneticMap:
+    """Chromosomes 1 to 22 in order, whatever order the archive held them in."""
+    return GeneticMap({chromosome: points[chromosome] for chromosome in AUTOSOMES})
 
 
 def _population_files(
@@ -72,9 +77,17 @@ def _population_files(
 
 
 def average_maps(maps: Mapping[str, GeneticMap]) -> GeneticMap:
-    """The equal-weight mean of `maps`, on the union of their positions."""
+    """The equal-weight mean of `maps`, on the union of their positions.
+
+    The maps must cover the same chromosomes: a chromosome some lack would be
+    averaged over fewer populations without saying so.
+    """
+    covered = {name: sorted(genetic_map.chromosomes) for name, genetic_map in maps.items()}
+    chromosomes = next(iter(maps.values())).chromosomes
+    if any(labels != sorted(chromosomes) for labels in covered.values()):
+        raise GeneticMapError(f"population maps cover different chromosomes: {covered}")
     averaged = {}
-    for chromosome in AUTOSOMES:
+    for chromosome in chromosomes:
         each = [genetic_map.points(chromosome) for genetic_map in maps.values()]
         union = np.unique(np.concatenate([position for position, _ in each]))
         cm = np.mean([np.interp(union, position, cm) for position, cm in each], axis=0)

@@ -54,3 +54,27 @@ def test_a_map_whose_source_archive_differs_from_the_record_fails_the_run(tmp_pa
     loaded = genetic_map.load_map(map_path, archive_md5="900150983cd24fb0d6963f7d28e17f72")
     assert loaded.map.cm_at(np.array(["1"]), np.array([150]))[0] == 1.5
     assert genetic_map.ARCHIVE_MD5 == "45ebb10c4acf939ea03a3932c483f638"
+
+
+def test_the_eur_map_averages_population_maps_at_the_union_of_their_positions() -> None:
+    eur_map = load_prototype("locus_leads", "eur_map")
+    # Three population maps on chromosome 1 with different knots: the second
+    # adds one at 200 and runs on to 400, the third starts late (150) and ends
+    # early (250). Each is flat beyond its own ends.
+    maps = {
+        "P1": genetic_map.GeneticMap({"1": (np.array([100, 300]), np.array([0.0, 2.0]))}),
+        "P2": genetic_map.GeneticMap({"1": (np.array([100, 200, 400]), np.array([0.0, 0.5, 1.5]))}),
+        "P3": genetic_map.GeneticMap({"1": (np.array([150, 250]), np.array([0.0, 1.0]))}),
+    }
+
+    position, cm = eur_map.average_maps(maps).points("1")
+
+    # Worked by hand, at each union position (P1, P2, P3 -> mean):
+    #   100: 0,    0,    0   (P3 flat before 150)  -> 0
+    #   150: 0.5,  0.25, 0                         -> 0.75/3 = 1/4
+    #   200: 1.0,  0.5,  0.5                       -> 2/3
+    #   250: 1.5,  0.75, 1.0                       -> 3.25/3 = 13/12
+    #   300: 2.0,  1.0,  1.0 (P3 flat after 250)   -> 4/3
+    #   400: 2.0 (P1 flat after 300), 1.5, 1.0     -> 3/2
+    np.testing.assert_array_equal(position, [100, 150, 200, 250, 300, 400])
+    np.testing.assert_allclose(cm, [0.0, 1 / 4, 2 / 3, 13 / 12, 4 / 3, 3 / 2], rtol=0, atol=1e-12)
