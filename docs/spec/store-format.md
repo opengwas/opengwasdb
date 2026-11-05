@@ -1779,6 +1779,21 @@ read alike. A release without the plane never has the key. The CLI's resolved
 output prints an `n` column immediately before `association_status` (`.` where
 missing) only for such a release (ADR 0067).
 
+`query --format json` prints that record, one JSON object per association, as
+an array: `variant_index`, `analysis_index`, `z`, `se`, `eaf`,
+`association_status`, and `n` when the release carries it in its integer form.
+The output is RFC 8259 JSON, so it never holds `NaN` or `Infinity` as a bare
+token. A cell that is not there is `null`, and ±inf is the string `"Infinity"`
+or `"-Infinity"`, because an infinite value is a value (§15) and a `null`
+would be indistinguishable from the missing cell beside it (issue #394).
+
+A `null` `eaf` therefore says the frequency is not available, not that the
+association is: `association_status` says the association is `missing`. An
+`eaf` is `null` wherever the cell holds no frequency -- on every cell of a
+release with no association-frequency plane, except an imputed one, whose
+`eaf` is the LD Reference Panel's where the release carries Reference EAF
+(§9, ADR 0036).
+
 Reference-Completed queries include imputed associations by default. Query APIs MUST provide an Observed-Only mode that excludes imputed associations.
 
 Detailed Reference Completion Quality is not joined onto every imputed association by default. Query APIs MAY expose it when requested.

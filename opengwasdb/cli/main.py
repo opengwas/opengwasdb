@@ -1909,7 +1909,11 @@ def regenerate_overview_command(store_path: Path) -> None:
 _FORMAT_OPTION = typer.Option(
     OutputFormat.tsv,
     "--format",
-    help="tsv (default): resolved, human-readable rows. json: the raw index-keyed result.",
+    help=(
+        "tsv (default): resolved, human-readable rows. json: the same result keyed by "
+        'index, with null for a cell that is not there and "Infinity"/"-Infinity" '
+        "for an infinite value."
+    ),
 )
 _VARIANT_INFO_OPTION = typer.Option(
     False,
@@ -2033,19 +2037,45 @@ def _emit(
         _emit_tsv(query, result, include_variant_info)
 
 
+def _json_cell(value: float) -> object:
+    """One decoded cell as a JSON value (issue #394).
+
+    A cell that is not there is `null`, and `association_status` is what says so
+    -- a Ragged sequence stores a row for every attempted pair, and its missing
+    one holds the same markers as a cell that is absent. ±inf is a value (§15:
+    an SE above a `float16` plane's range is stored `+inf` beside a finite Z),
+    and RFC 8259 has no token for it, so it is a string: `null` would read as the
+    missing cell beside it.
+    """
+    if math.isnan(value):
+        return None
+    if math.isinf(value):
+        return "Infinity" if value > 0 else "-Infinity"
+    return float(value)
+
+
 def _emit_json(result: dict[str, np.ndarray]) -> None:
+    """The result as one JSON object per association, keyed by index (spec §19).
+
+    `allow_nan=False`: a value `_json_cell` did not turn into `null` or a string
+    stops the command instead of printing a token no JSON parser reads.
+    """
     rows: list[dict[str, object]] = [
         {
             "variant_index": int(vi),
             "analysis_index": int(ai),
-            "z": float(z),
-            "se": float(se),
+            "z": _json_cell(z),
+            "se": _json_cell(se),
+            "eaf": _json_cell(eaf),
+            "association_status": str(status),
         }
-        for vi, ai, z, se in zip(
+        for vi, ai, z, se, eaf, status in zip(
             result["variant_index"],
             result["analysis_index"],
             result["z"],
             result["se"],
+            result["eaf"],
+            result["association_status"],
             strict=True,
         )
     ]
@@ -2054,7 +2084,7 @@ def _emit_json(result: dict[str, np.ndarray]) -> None:
     if "n" in result:
         for row, n in zip(rows, result["n"], strict=True):
             row["n"] = int(n) if math.isfinite(float(n)) else None
-    typer.echo(json.dumps(rows, sort_keys=True))
+    typer.echo(json.dumps(rows, sort_keys=True, allow_nan=False))
 
 
 _TSV_COLUMNS = (
