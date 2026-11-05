@@ -33,6 +33,7 @@ from opengwasdb.build.resolve import AnalysisRequest, AnalysisResolution, resolv
 from opengwasdb.build.resolve_manifest import resolve_analyses_manifest
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.readers.column_map import COLUMN_MAP_CAPABILITY, as_column_map
+from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY
 from opengwasdb.readers.gwas_ssf import _METRICS_COLUMNS, GwasSsfReader
 from opengwasdb.readers.registry import resolve_reader
 from opengwasdb.readers.tabular import MetricsChunk, stream_projected_metric_chunks
@@ -304,7 +305,7 @@ def test_implied_p_survives_a_z_where_the_naive_form_underflows(tmp_path: Path, 
     assert measured.median_delta == pytest.approx(-3754.56, abs=0.1)
 
 
-# --- a FinnGen-mapped source ---------------------------------------------------
+# --- a FinnGen source, through its map and through its reader -----------------
 
 
 def _finngen_file(tmp_path: Path, *, beta_holds: str = "beta") -> Path:
@@ -322,28 +323,41 @@ def _finngen_file(tmp_path: Path, *, beta_holds: str = "beta") -> Path:
     return path
 
 
-def _resolve_finngen(path: Path, panel: AncestryReference) -> AnalysisResolution:
+#: The two ways a FinnGen R13 Analysis is read: the built-in Column Map, and the
+#: FinnGen reader's own capability. Each must carry `pval` to the check.
+_FINNGEN_READERS = ("finngen-r13 map", "FinnGen reader")
+
+
+def _resolve_finngen(path: Path, panel: AncestryReference, read_by: str) -> AnalysisResolution:
     request = AnalysisRequest(
         "FG1", path, 20_000.0, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF, StoredEffectScale.SD
     )
-    reader = resolve_reader(
-        COLUMN_MAP_CAPABILITY, path, StoredEffectScale.SD, column_map=as_column_map("finngen-r13")
-    )
+    if read_by == "FinnGen reader":
+        reader = resolve_reader(FINNGEN_R13_CAPABILITY, path, StoredEffectScale.SD)
+    else:
+        reader = resolve_reader(
+            COLUMN_MAP_CAPABILITY, path, StoredEffectScale.SD,
+            column_map=as_column_map("finngen-r13"),
+        )
     return resolve_analysis(request, reader=reader, reference=panel, gates=_GATES)
 
 
-def test_a_finngen_source_with_a_mislabelled_effect_is_refused(tmp_path: Path, panel):
+@pytest.mark.parametrize("read_by", _FINNGEN_READERS)
+def test_a_finngen_source_with_a_mislabelled_effect_is_refused(
+    tmp_path: Path, panel, read_by: str
+):
     path = _finngen_file(tmp_path, beta_holds="odds_ratio")
-    result = _resolve_finngen(path, panel)
+    result = _resolve_finngen(path, panel, read_by)
 
     measured = result.diagnostics.effect_consistency
     assert measured is not None
-    assert measured.skip_reason is None, "the FinnGen map must carry `pval` to the check"
+    assert measured.skip_reason is None, f"the {read_by} must carry `pval` to the check"
     assert measured.refused and result.error
 
 
-def test_a_clean_finngen_source_is_compared_and_passes(tmp_path: Path, panel):
-    result = _resolve_finngen(_finngen_file(tmp_path), panel)
+@pytest.mark.parametrize("read_by", _FINNGEN_READERS)
+def test_a_clean_finngen_source_is_compared_and_passes(tmp_path: Path, panel, read_by: str):
+    result = _resolve_finngen(_finngen_file(tmp_path), panel, read_by)
 
     assert result.error == ""
     measured = result.diagnostics.effect_consistency
