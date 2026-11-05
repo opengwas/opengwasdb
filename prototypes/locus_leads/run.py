@@ -66,8 +66,17 @@ class SharedSet:
 
 @dataclass(frozen=True)
 class ClumpRuns:
+    """plink2's clumps at each r^2, with the thresholds it was actually run at."""
+
     ranked: RankedScores
     index_of: dict[float, np.ndarray]
+    p1: float
+    p2: float
+    kb: int
+
+    def parameters(self) -> dict[str, Any]:
+        return {"r2": list(self.index_of), "clump_kb": self.kb, "clump_p1": self.p1,
+                "clump_p2": self.p2, "clump_r2": "unphased"}
 
 
 def read_tier(store: Path, analysis_id: str, threshold: float) -> tuple[TierRows, dict[str, Any]]:
@@ -145,16 +154,21 @@ def check_cm(chromosome: np.ndarray, position: np.ndarray, cm: np.ndarray,
 
 
 def clump_shared_set(shared: SharedSet, panel: Panel, r2_values: list[float], *,
-                     work_dir: Path, threads: int) -> ClumpRuns:
-    """plink2's clumps at each r^2, ranked as the rule ranks; independent of D and W."""
+                     threshold: float, work_dir: Path, threads: int) -> ClumpRuns:
+    """plink2's clumps at each r^2, ranked as the rule ranks; independent of D and W.
+
+    The tier's threshold is both p1 and p2: every row is in the tier, so every
+    row may be an index variant or a member.
+    """
     rows = shared.rows
     ranked = ranked_neg_log10_p(rows.abs_z, rows.variant_index)
     index_of = {}
     for r2 in r2_values:
         index_of[r2] = clump_rows(panel, rows.chromosome, shared.panel_id, ranked.neg_log10_p,
-                                  r2=r2, work_dir=work_dir, threads=threads)
+                                  r2=r2, work_dir=work_dir, kb=CLUMP_KB, p1=threshold,
+                                  p2=threshold, threads=threads)
         check_clumps_follow_rule_order(index_of[r2], rows.abs_z, rows.variant_index)
-    return ClumpRuns(ranked, index_of)
+    return ClumpRuns(ranked, index_of, p1=threshold, p2=threshold, kb=CLUMP_KB)
 
 
 def compare_leads(shared: SharedSet, clumps: ClumpRuns, *, d_cm: float,
@@ -176,12 +190,12 @@ def run(store: Path, analysis_id: str, genetic_map: LoadedMap, panel_dir: Path, 
     tier, identity = read_tier(store, analysis_id, threshold)
     panel = Panel(panel_dir)
     shared, accounting = build_shared_set(tier, panel, genetic_map.map)
-    clumps = clump_shared_set(shared, panel, r2_values, work_dir=work_dir, threads=threads)
+    clumps = clump_shared_set(shared, panel, r2_values, threshold=threshold, work_dir=work_dir,
+                              threads=threads)
     return identity | {
         "genetic_map": genetic_map.identity,
         "panel": _panel_identity(panel),
-        "parameters": {"d_cm": d_cm, "w_bp": w_bp, "r2": r2_values, "clump_kb": CLUMP_KB,
-                       "clump_p1": threshold, "clump_p2": threshold, "clump_r2": "unphased"},
+        "parameters": {"d_cm": d_cm, "w_bp": w_bp} | clumps.parameters(),
         "rows": accounting,
         "ranking": _ranking(shared, clumps.ranked),
         "definitions": DEFINITIONS,

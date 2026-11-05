@@ -8,11 +8,11 @@ the rule's order before plink2 sees them.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import numpy as np
 import pytest
+from locus_leads_panel import write_panel
 from prototype_modules import load_prototype
 
 from opengwasdb.stats import p_value_from_z
@@ -30,18 +30,9 @@ VARIANT_INDEX = np.array([12, 5, 9])
 def tiny_panel(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Three variants on chromosome 1 with identical genotypes in 40 samples (r^2 = 1)."""
     directory = tmp_path_factory.mktemp("panel")
-    genotypes = np.random.default_rng(402).choice(["0/0", "0/1", "1/1"], size=40)
-    samples = [f"S{i}" for i in range(40)]
-    lines = ["##fileformat=VCFv4.2", "##contig=<ID=1,length=10000>",
-             '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
-             "\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO",
-                        "FORMAT", *samples])]
-    for position, (ref, alt) in zip(POSITION, [("A", "G"), ("C", "T"), ("G", "A")], strict=True):
-        lines.append("\t".join(["1", str(position), f"1:{position}:{ref}:{alt}", ref, alt,
-                                ".", "PASS", ".", "GT", *genotypes]))
-    (directory / "tiny.vcf").write_text("\n".join(lines) + "\n")
-    subprocess.run([panel.plink2(), "--vcf", str(directory / "tiny.vcf"), "--make-pgen", "vzs",
-                    "--out", str(directory / "chr1")], check=True, capture_output=True)
+    genotypes = list(np.random.default_rng(402).choice(["0/0", "0/1", "1/1"], size=40))
+    write_panel(directory, "1", [(1_000, "A", "G"), (2_000, "C", "T"), (3_000, "G", "A")],
+                [genotypes] * 3)
     return directory
 
 
@@ -105,3 +96,20 @@ def test_plink2_breaks_equal_values_by_panel_order_so_ties_are_separated_in_rule
     assert list(equal) == [ids[0]]
     assert list(separated) == [ids[1]]
     assert ranked.tied_rows == 3 and ranked.tied_groups == 1
+
+
+def test_a_non_default_tier_is_clumped_with_p1_and_p2_at_that_tier(
+    tiny_panel: Path, tmp_path: Path
+) -> None:
+    run = load_prototype("locus_leads", "run")
+    abs_z = np.array([5.0, 5.2, 5.1])
+    assert all(5e-8 < p_value_from_z(z) < 5e-6 for z in abs_z), "rows must be in 5e-6 alone"
+    ids = _panel_ids(tiny_panel)
+    rows = run.TierRows(np.array(["1"] * 3), POSITION, ids, np.array(["A", "C", "A"]),
+                        np.array(["G", "T", "G"]), abs_z, VARIANT_INDEX)
+
+    clumps = run.clump_shared_set(run.SharedSet(rows, ids, np.zeros(3)), panel.Panel(tiny_panel),
+                                  [0.01], threshold=5e-6, work_dir=tmp_path, threads=1)
+
+    assert (clumps.p1, clumps.p2) == (5e-6, 5e-6)
+    np.testing.assert_array_equal(clumps.index_of[0.01], [1, 1, 1])
