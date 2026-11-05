@@ -108,6 +108,45 @@ record, so its log names every row it drops, a source Store's duplicate cells
 and the fills two blocks disagree on, one line each with the row's variant, z,
 SE and reason (D8).
 
+**Clarified 5 Nov 2026 (epic #58's final review): a variant two LD blocks fill
+has an owner.**
+
+- **The rule.** Blocks are half-open, `[start, end)`. A variant at a position
+  one block ends at and the next starts at belongs to the block that starts
+  there, and only that block fills it. It stays in both blocks' LD context
+  (`completion.ld_panel.shared_endpoints`). A block that no other block follows
+  keeps its end: a chromosome's last block, or, in a Ragged completion, a
+  block whose successor does not complete that Analysis. Each such cell is
+  filled once, and counted once in `completion_quality`. Where the owner's fit
+  fails for an Analysis, the cell stays missing, even where the other block's
+  fit passes. Of the published Stores, OGS-00015 held 254 such cells, OGS-00017
+  10 and OGS-00002 8.
+- **The guard.** The duplicate rule stays in the writer of every completion.
+  A fill that still reaches a cell another block filled is resolved by it, and
+  each dropped fill is logged. That happens where two blocks overlap away from
+  an endpoint, and no panel completion reads has such an overlap. The dropped
+  fill stays counted in its block's `completion_quality` row.
+- **The cause.** `opengwasdb-stores`' panel builder (`construct_block.py`)
+  cuts each block with plink2's inclusive `--from-bp`/`--to-bp`. Adjacent rows
+  of its region table share an endpoint, so every boundary variant is in both
+  blocks. Measured from the block files, the variants two blocks hold, each
+  at an endpoint the two share, are:
+
+  | Panel | Variants |
+  |---|---|
+  | `reference/ld` EUR | 1,022 |
+  | `hgdp1kgp-hg38` EUR | 985 |
+  | `hgdp1kgp-hg38` AFR | 1,330 |
+  | `hgdp1kgp-hg38` EAS | 866 |
+  | `hgdp1kgp-hg38-amr` AMR | 1,198 |
+
+  No block holds a variant twice.
+- **What was published.** The completed Store Releases published by 5 Nov
+  2026 hold 1,500,055 cells that both blocks filled, 798,831 of them in
+  OGS-00009, and each stores whichever fill completion wrote last. In 16
+  recomputed cells the two fills differed in both z and SE, and 7 differed in
+  sign. Issue #396 repairs the Stores.
+
 Two conflicting rows can be two variants. An insertion and a deletion at one
 position share an ALID, because the ALID sorts its alleles: BMI_IRN's
 `1:827587` `G>GGGGCC` (alt frequency 0.83%) and `GGGGCC>G` (0.05%) are both
