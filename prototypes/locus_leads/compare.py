@@ -2,7 +2,8 @@
 
 Both methods partition the same rows: the rule assigns each row to a Locus
 Lead, plink2 to the index variant whose clump holds it, and each assigns a row
-only to a stronger one. A row both make a lead agrees. Otherwise:
+to itself or to a stronger row. A row both make a lead agrees; the two ways to disagree
+are defined in `DEFINITIONS`, which every run writes into its output.
 """
 
 from __future__ import annotations

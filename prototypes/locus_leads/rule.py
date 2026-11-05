@@ -6,8 +6,9 @@ chromosome lies within W bp *and* D cM of it. D splits signals across a
 recombination hotspot that a bp window would merge; W stops cM that barely
 moves over megabases (centromeres, inversions) from merging both arms.
 
-Ranking is on abs_z and never on p: a float64 two-sided p is 0 from |z| near
-38, which would tie the strongest rows of a big locus.
+Ranking is on abs_z and never on p: a float64 two-sided p loses precision from
+|z| 37.54, where it turns subnormal, and is 0 from 38.50, which would tie the
+strongest rows of a big locus.
 """
 
 from __future__ import annotations

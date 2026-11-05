@@ -1,7 +1,8 @@
 """plink2 clumping of a Top-Hit Query's rows on the genotype panel.
 
-plink2 ranks on p, and a float64 two-sided p is 0 past |z| near 39, so it is
-given -log10 p computed from z (`--clump-log10 input-only`), which stays finite.
+plink2 ranks on p, and a float64 two-sided p is 0 from |z| 38.50 (`p_value_from_z`),
+so it is given -log10 p computed from z (`--clump-log10 input-only`), which
+stays finite.
 
 Equal values are the harder problem. Stored z is quantised, so most rows of a
 real Analysis share their abs_z with another (53,760 of 55,460 for
@@ -34,6 +35,8 @@ from .rule import rule_order
 TIE_STEP_ULPS = 16
 CLUMP_KB = 10_000
 INDEX_P = 5e-8
+# Left to itself plink2 reserves half the node's RAM (515 GB here) for every run.
+PLINK2_MEMORY_MIB = 4096
 
 
 class ClumpError(RuntimeError):
@@ -124,7 +127,8 @@ def run_clump(
     command = [plink2(), "--pfile", str(pfile), "vzs", "--clump", str(source),
                "--clump-id-field", "ID", "--clump-p-field", field, "--clump-p1", f"{p1:g}",
                "--clump-p2", f"{p2:g}", "--clump-r2", f"{r2:g}", "--clump-kb", str(kb),
-               "--clump-unphased", "--threads", str(threads), "--out", str(out)]
+               "--clump-unphased", "--threads", str(threads), "--memory", str(PLINK2_MEMORY_MIB),
+               "--out", str(out)]
     if log10:
         command += ["--clump-log10", "input-only"]
     subprocess.run(command, check=True, capture_output=True)

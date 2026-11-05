@@ -1,6 +1,6 @@
 """plink2 clumping against the Locus Lead rule (prototypes/locus_leads, #402).
 
-A float64 p is 0 past |z| near 39, so plink2 is given -log10 p computed from z.
+A float64 p is 0 from |z| 38.50, so plink2 is given -log10 p computed from z.
 Stored z is quantised and equal values are common, and plink2 breaks a tie by
 panel order whatever order its input is in; so equal values are separated in
 the rule's order before plink2 sees them.
