@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from opengwasdb.validation import RULES, validate_store
+from opengwasdb.validation import RULES, Finding, Severity, validate_store
 
 ROOT = Path(__file__).resolve().parents[1] / "opengwasdb"
 
@@ -79,6 +79,23 @@ def _raising() -> set[tuple[str, str]]:
 
 def test_only_the_reviewed_rules_raise_skip() -> None:
     assert _raising() == set(RAISED)
+
+
+def test_every_recorded_skip_names_the_target_and_the_reason(
+    dense_store_path: pathlib.Path,
+) -> None:
+    """A skip says what it could not judge and why, so a reader outside Python can
+    tell it from a pass (#378); the fixture holds no `eaf` plane to judge."""
+    result = validate_store(dense_store_path)
+
+    assert [f.rule for f in result.skips] == ["associations.eaf_range"]
+    assert result.skips == (
+        Finding(
+            "associations.eaf_range", Severity.SKIP, "no frequencies", "data.zarr",
+            ("no frequencies",),
+        ),
+    )
+    assert result.skipped == {"associations.eaf_range": ("no frequencies",)}
 
 
 def test_a_skip_stops_only_the_rules_that_have_nothing_left_to_judge() -> None:

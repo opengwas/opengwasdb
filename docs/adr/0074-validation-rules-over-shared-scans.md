@@ -110,15 +110,32 @@ order it runs, and `tests/test_validation_registry.py` holds the two together.
 `validate_store(path, rules=…)` and `ValidationResult.failed()`, `of()` and
 `skipped` reach the names from Python.
 
-**`validate --format json` does not change (D1).** Its keys stay `ok`,
-`errors` and `warnings`, and its messages stay byte-identical: opengwasdb-stores'
-`register.validate_verdict` refuses any other key. Emitting rule names there is a
+**`validate --format json` did not change (D1).** Its keys stayed `ok`,
+`errors` and `warnings`, and its messages stayed byte-identical: opengwasdb-stores'
+`register.validate_verdict` refuses any other key. Emitting rule names there was a
 two-repository follow-up: `register` first accepts an optional `findings` key,
-then this package emits it.
+then this package emits it. That is #378, below.
 
-**Clarification: the CLI does not list skips yet, and its "valid" stays
-truthful.** `validate` prints `ok`, `errors` and `warnings`, and no skips;
-listing them is a follow-up. In a full run, the only run the CLI makes, a rule
+**The follow-up (#378) is this repository's half of a two-repository change.**
+`validate --format json` emits a fourth key, `findings`, naming each record's rule,
+its severity (`error`, `warning` or `skip`), the target the rule judged, and the
+message it always had — or, for a skip, the reason recorded above. `ok`, `errors`
+and `warnings` still say what they said. `ValidationResult` keeps one ordered record
+list with `errors`, `warnings`, `skips` and `skipped` as projections, so what the CLI
+prints and what Python sees cannot drift apart. Spec §20.1 fixes the shape.
+
+**The stores half is a dependency, not a fact here.** opengwasdb-stores'
+`register.validate_verdict` accepts exactly `ok`, `errors` and `warnings` at the
+revision this landed, so it refuses a record an engine with this change writes. It
+must gain `findings` — accepting a record with or without the key, and checking the
+key's items and their agreement with `errors` and `warnings` when it is present —
+before such an engine is pinned there. The two halves are ordered: the reader first,
+then the pin. Until then, this package's own readers are the only ones that see the
+key.
+
+**Clarification: the CLI did not list skips until #378, and its "valid" stays
+truthful.** `validate` printed `ok`, `errors` and `warnings`, and no skips; listing
+them was a follow-up, and #378 lists them. In a full run, the only run the CLI makes, a rule
 is skipped with no error recorded only where it has nothing to judge. A skip is
 recorded in these places:
 - `_Run.ready`, behind a prerequisite, and `_Run.conclude`, behind one on the
@@ -169,8 +186,10 @@ and accepts EAF in [0, 1].
 ## Consequences
 
 - **Rules run after unrelated failures (D4).** Only failing Stores change.
-  Every published Store's `validate --format json` is byte-identical across the
-  change, except #380's three 0.1.0 releases (below).
+  Every published Store's `validate --format json` was byte-identical across #55's
+  change, except #380's three 0.1.0 releases (below). #378's key is a later change,
+  and the JSON object gained a key there: the three keys #55 left alone still say
+  what they said, and a reader that enumerates the keys must accept `findings`.
 - **Coverage gained (D3).** These checks held on one layout only, and now hold
   on all:
   - a Ragged release's Store Variant Table;

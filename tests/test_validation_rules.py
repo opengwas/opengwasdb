@@ -67,6 +67,49 @@ def test_a_rule_after_a_failed_rule_is_skipped_and_not_reported() -> None:
     assert result.errors == ["a: broken on ."]
 
 
+def test_a_skip_is_a_finding_of_its_rule_with_the_target_and_the_reason() -> None:
+    """The skip `skipped` reads as a mapping is a record in its own right: the rule,
+    the severity that says it is not a pass, the target it could not judge, why."""
+    result = evaluate([_check("a", "broken"), _check("b", "noise", after=("a",))], [RELEASE])
+    assert result.skips == (Finding("b", Severity.SKIP, "a", ".", ("a",)),)
+    assert result.skipped == {"b": ("a",)}
+
+
+def test_the_findings_hold_the_skips_where_their_rule_runs() -> None:
+    both = Kind.RELEASE | Kind.GRID
+    rules = [
+        _check("a", "broken", kinds=both),
+        _check("b", "noise", kinds=both, after=("a",)),
+        _check("c", "later", kinds=both, after=("b",)),
+    ]
+    result = evaluate(rules, [RELEASE, GRID])
+    assert [(f.rule, f.severity, f.target) for f in result.findings] == [
+        ("a", Severity.ERROR, "."),
+        ("a", Severity.ERROR, "data.zarr"),
+        ("b", Severity.SKIP, "."),
+        ("b", Severity.SKIP, "data.zarr"),
+        ("c", Severity.SKIP, "."),
+        ("c", Severity.SKIP, "data.zarr"),
+    ]
+
+
+def test_a_skip_names_every_blocker_in_one_record() -> None:
+    """One record per (rule, target): two blockers make one skip, not two records.
+
+    The message names both in the order the rule looks them up, and the legacy
+    `skipped` mapping still reads the reasons apart (#378).
+    """
+    rules = [
+        _check("a", "broken"),
+        _check("b", "broken"),
+        _check("c", "noise", after=("a", "b")),
+    ]
+    result = evaluate(rules, [RELEASE])
+
+    assert result.skips == (Finding("c", Severity.SKIP, "a, b", ".", ("a", "b")),)
+    assert result.skipped == {"c": ("a", "b")}
+
+
 def test_a_prerequisite_on_the_release_gates_its_grid() -> None:
     rules = [_check("a", "broken"), _check("b", "noise", kinds=Kind.GRID, after=("a",))]
     result = evaluate(rules, [RELEASE, GRID])
