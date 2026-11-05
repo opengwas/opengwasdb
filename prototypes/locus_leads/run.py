@@ -44,6 +44,10 @@ ABS_Z_BINS = (0.0, 7.0, 10.0, 20.0, float("inf"))
 PARTITION = ("shared_set", "matched_no_cm", *(s for s in STATUSES if s != "matched"))
 
 
+class AssemblyMismatch(ValueError):
+    """The Store, the genetic map and the panel are not on one reference assembly."""
+
+
 @dataclass(frozen=True)
 class TierRows:
     """One Analysis's rows at one tier, resolved to coordinates; arrays of equal length."""
@@ -156,6 +160,22 @@ def check_partition(partition: dict[str, int], tier_rows: int, returned: int) ->
                          f"but {returned:,} were kept")
 
 
+def check_assemblies(store: str, genetic_map: str, panel: str) -> None:
+    """Refuse a run whose positions would be read against another assembly's map or panel.
+
+    Labels are compared after dropping a source prefix (the panels' pvars say
+    `gnomAD_GRCh38`) and reading hg38 as GRCh38 and hg19 as GRCh37.
+    """
+    if len({_assembly(store), _assembly(genetic_map), _assembly(panel)}) != 1:
+        raise AssemblyMismatch(f"assemblies disagree: Store {store}, genetic map {genetic_map}, "
+                               f"panel {panel}")
+
+
+def _assembly(label: str) -> str:
+    name = label.rsplit("_", 1)[-1]
+    return {"hg38": "GRCh38", "hg19": "GRCh37"}.get(name, name)
+
+
 def check_cm(chromosome: np.ndarray, position: np.ndarray, cm: np.ndarray,
              genetic_map: GeneticMap) -> None:
     """Refuse cM that is NaN anywhere but off the map, or falls with position on a chromosome."""
@@ -216,6 +236,8 @@ def compare_tier(tier: TierRows, identity: dict[str, Any], genetic_map: LoadedMa
     The tier's threshold is read from the identity, so the clumping thresholds
     recorded are the tier the rows came from.
     """
+    check_assemblies(identity["store"]["reference_assembly"], genetic_map.identity["assembly"],
+                     panel.assembly())
     if identity["query"]["observed"] != tier.chromosome.size:
         raise ValueError(f"{tier.chromosome.size:,} rows, but the query recorded "
                          f"{identity['query']['observed']:,} observed")
@@ -244,7 +266,8 @@ def _panel_identity(panel: Panel) -> dict[str, Any]:
     psam = panel.pfile(panel.chromosomes[0]).with_suffix(".psam").read_text().splitlines()
     version = subprocess.run([plink2(), "--version"], check=True, capture_output=True, text=True)
     return {"path": str(panel.directory), "chromosomes": panel.chromosomes,
-            "samples": len(psam) - 1, "plink2": version.stdout.strip()}
+            "samples": len(psam) - 1, "assembly": panel.assembly(),
+            "plink2": version.stdout.strip()}
 
 
 def _ranking(shared: SharedSet, ranked: RankedScores) -> dict[str, Any]:

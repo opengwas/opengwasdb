@@ -15,6 +15,7 @@ so is one whose panel ID is not unique, which plink2 could not address.
 from __future__ import annotations
 
 import io
+import re
 import shutil
 import subprocess
 from collections.abc import Mapping
@@ -24,6 +25,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+_ASSEMBLY = re.compile(r"^##contig=<.*\bassembly=([^,>]+)", re.MULTILINE)
 STATUSES = ("matched", "off_panel_chromosome", "absent_at_position", "allele_mismatch",
             "ambiguous")
 
@@ -75,6 +77,20 @@ class Panel:
     def variants(self, chromosome: str) -> PanelVariants:
         return read_pvar(self.directory / f"chr{chromosome}.pvar.zst", chromosome)
 
+    def assembly(self) -> str:
+        """The assembly every chromosome's pvar declares on its ##contig line."""
+        declared: dict[str, list[str]] = {
+            chromosome: _ASSEMBLY.findall(
+                "\n".join(pvar_header(self.directory / f"chr{chromosome}.pvar.zst")))
+            for chromosome in self.chromosomes
+        }
+        labels = {label for found in declared.values() for label in found}
+        if len(labels) != 1 or not all(declared.values()):
+            raise ValueError(f"{self.directory}: the pvars do not declare one assembly: "
+                             f"{declared}")
+        label: str = labels.pop()
+        return label
+
 
 def match_to_panel(
     chromosome: np.ndarray, position: np.ndarray, allele_1: np.ndarray, allele_2: np.ndarray,
@@ -105,6 +121,21 @@ def read_pvar(path: Path, chromosome: str) -> PanelVariants:
                          f"not {chromosome} alone")
     return PanelVariants(frame["POS"].astype("int64").to_numpy(), frame["ID"].to_numpy(),
                          frame["REF"].to_numpy(), frame["ALT"].to_numpy())
+
+
+def pvar_header(path: Path) -> list[str]:
+    """A .pvar.zst's ## lines, read without decompressing the rest of it."""
+    header = []
+    with subprocess.Popen([plink2(), "--zst-decompress", str(path)], stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL) as process:
+        assert process.stdout is not None
+        for raw in process.stdout:
+            line = raw.decode().rstrip("\n")
+            if not line.startswith("##"):
+                break
+            header.append(line)
+        process.kill()
+    return header
 
 
 def plink2() -> str:

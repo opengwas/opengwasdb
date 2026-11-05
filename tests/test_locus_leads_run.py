@@ -6,6 +6,7 @@ chromosome built by plink2, so matching and clumping run for real.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -34,10 +35,10 @@ ROWS = run.TierRows(
 )
 
 
-def _panel_directory(directory: Path, assembly: str = "GRCh38") -> Path:
+def _panel_directory(directory: Path, assembly: str = "gnomAD_GRCh38") -> Path:
     """chr1: three variants with identical genotypes, one (4,000) uncorrelated with
     them (r^2 = 0 by construction), and an insertion and a deletion sharing one allele
-    set (6,000); chr2: one variant."""
+    set (6,000); chr2: one variant. The default assembly label is the real panels'."""
     linked = ["0/0", "1/1", "0/0", "1/1"] * 10
     unlinked = ["0/0", "0/0", "1/1", "1/1"] * 10
     chr1 = [(1_000, "A", "G"), (2_000, "C", "T"), (3_000, "G", "A"), (4_000, "T", "C"),
@@ -116,3 +117,19 @@ def test_the_record_names_its_inputs_parameters_partition_and_rates(
         "spurious_splits": 0, "lost_signals": 1,
     }
     assert (at_r2["spurious_split_rate"], at_r2["lost_signal_rate"]) == (0.0, 0.5)
+
+
+@pytest.mark.parametrize(("store", "map_", "panel_label"), [
+    ("GRCh37", "GRCh38", "gnomAD_GRCh38"),
+    ("GRCh38", "GRCh37", "gnomAD_GRCh38"),
+    ("GRCh38", "GRCh38", "hg19"),
+])
+def test_a_run_whose_store_map_and_panel_disagree_on_assembly_is_refused(
+    store: str, map_: str, panel_label: str, tmp_path: Path
+) -> None:
+    (tmp_path / "panel").mkdir()
+    directory = _panel_directory(tmp_path / "panel", assembly=panel_label)
+
+    named = f"Store {store}, genetic map {map_}, panel {panel_label}"
+    with pytest.raises(run.AssemblyMismatch, match=re.escape(named)):
+        _record(directory, tmp_path, store_assembly=store, map_assembly=map_)
