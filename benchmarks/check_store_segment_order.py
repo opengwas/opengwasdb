@@ -138,10 +138,13 @@ def main() -> None:
         "note": (
             "Runs only the segment-ordering rule, not the whole of validate_store. "
             "Peak RSS is the process peak while the rule ran, including opening the "
-            "store's offsets; the array is read in 1,000,000-cell windows and never "
-            "materialised. `entries_checked` is the count the scan actually read; "
-            "`entries_expected` is the offset-implied total, and the two agree only "
-            "when the array length matches the offsets."
+            "store's offsets. The array is read in 1,000,000-cell windows over the "
+            "whole sequence and never materialised; a window spans Analyses' "
+            "segments, and each cell's Analysis is read from the offsets. "
+            "`entries_checked` is the count the scan read: every entry on an ordered "
+            "Store, or the entries up to the end of the window holding the first "
+            "break. `entries_expected` is the offset-implied total; nothing is read "
+            "when the array length disagrees with the offsets."
         ),
         "stores": {},
         "load_start": _loads(),
