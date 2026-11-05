@@ -31,8 +31,17 @@ def _manifest(path: Path) -> StoreManifest | None:
 
 
 def _run(positions: np.ndarray) -> tuple[int, int] | None:
-    """`[start, stop)` when `positions` is one ascending run, which reads as a slice."""
-    if not len(positions) or not bool(np.all(np.diff(positions) == 1)):
+    """`[start, stop)` when `positions` is one ascending run, which reads as a slice.
+
+    Positions whose ends are not `len - 1` apart are refused at once, as a scan's
+    hits are; positions that are, a window among them, are a run exactly when
+    each exceeds the one before. Neither test builds a copy of the positions: a
+    scan asks this of every window, and of every hit it then reads.
+    """
+    n = len(positions)
+    if not n or int(positions[-1]) - int(positions[0]) != n - 1:
+        return None
+    if not bool(np.all(positions[1:] > positions[:-1])):
         return None
     return int(positions[0]), int(positions[-1]) + 1
 

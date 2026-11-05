@@ -242,6 +242,24 @@ def test_a_csr_reads_flat_positions_in_the_order_given(readers) -> None:
 # ── region reads: a span of Analyses, and an Analysis a window at a time ─────
 
 
+@pytest.mark.parametrize(
+    ("positions", "run"),
+    [
+        ([5, 6, 7], (5, 8)),
+        ([3], (3, 4)),
+        ([], None),
+        ([0, 2, 1, 3], None),  # the right ends and length, out of order
+        ([0, 1, 1, 3], None),  # the right ends and length, with a repeat
+        ([0, 1, 3], None),
+        ([2, 1, 0], None),
+    ],
+)
+def test_positions_read_as_a_slice_only_when_they_are_one_ascending_run(positions, run) -> None:
+    from opengwasdb.associations.csr import _run
+
+    assert _run(np.array(positions, dtype=np.int64)) == run
+
+
 def _in_order(analyses: range) -> list[Cell]:
     return sorted(
         (c for c in TABLE if c.analysis in analyses), key=lambda c: (c.analysis, c.variant)
