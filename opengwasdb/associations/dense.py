@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -15,6 +16,7 @@ from opengwasdb.associations.record import (
     Status,
     classify,
     mask_required,
+    non_canonical,
     require_mask,
 )
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
@@ -107,7 +109,64 @@ class DenseGridReader:
             self._eaf_plane = DenseEafPlane.open(self._group, self._encoding)
         return self._eaf_plane
 
+    @property
+    def scan_window(self) -> int:
+        """Cells one window holds unless a scan says: a shard's rows of the Z plane
+        (a chunk's, unsharded), so each window reads one shard of each plane."""
+        array = self._z.array
+        return int((getattr(array, "shards", None) or array.chunks)[0])
+
     # ── the interface ───────────────────────────────────────────────────────
+
+    def windows(
+        self, cells: Cells | None = None, *, max_cells: int | None = None
+    ) -> Iterator[Cells]:
+        """An `analysis` or `analyses` region -- or, with none, the whole grid -- as
+        consecutive `cross` regions of at most `max_cells` cells each.
+
+        For a scan that must not hold a whole Analysis at once: each cell of the
+        region comes once, in the region's order, so the windows' reads joined are
+        the region's read. A window is a run of one Analysis's variants, since a
+        grid region is variants × Analyses and cannot hold the end of one Analysis
+        and the start of the next. `max_cells` defaults to `scan_window`.
+        """
+        step = self.scan_window if max_cells is None else int(max_cells)
+        if step < 1:
+            raise ValueError(f"a window holds at least one cell, not {max_cells}")
+        if cells is None:
+            analyses = np.arange(self.n_analyses)
+        elif cells.kind in ("analysis", "analyses") and cells.ai is not None:
+            analyses = cells.ai
+        else:
+            raise TypeError(f"windows cut Analyses, not a {cells.kind!r} region")
+        n = self.n_variants
+        for analysis in analyses:
+            for lo in range(0, n, step):
+                rows = np.arange(lo, min(lo + step, n), dtype=np.int64)
+                yield Cells.cross(rows, [int(analysis)])
+
+    def z(self, cells: Cells) -> np.ndarray:
+        """Decoded Z of a `cross` region -- a window -- for a scan that thresholds Z
+        alone: every cell, a missing one as NaN, in the region's order.
+
+        A non-canonical marker is refused here, as every read refuses one (spec §15):
+        a NaN clears no cutoff, so a scan that compared it would drop the cell.
+        """
+        if cells.kind != "cross" or cells.vi is None or cells.ai is None:
+            raise TypeError(f"Z alone is read for a window, not a {cells.kind!r} region")
+        rows, cols = cells.vi, cells.ai
+        if len(rows) == 0 or len(cols) == 0:
+            return np.empty(0, dtype=np.float32)
+        z: np.ndarray = np.asarray(self._z.block(rows.tolist(), cols.tolist())).T.ravel()
+        odd = non_canonical(z)
+        if odd.any():
+            raise InvalidAssociations(
+                self._source,
+                np.tile(rows, len(cols))[odd],
+                np.repeat(cols, len(rows))[odd],
+                np.full(int(odd.sum()), State.NON_CANONICAL, dtype=np.int8),
+            )
+        return z
 
     def read(self, cells: Cells, *, observed_only: bool = False) -> Associations:
         """The region's associations; raises `InvalidAssociations` on a §15-invalid cell."""

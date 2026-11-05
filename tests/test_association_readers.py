@@ -83,8 +83,10 @@ INVALID = {
 }
 
 
-def _write_dense(path: Path, table: tuple[Cell, ...]) -> zarr.Group:
-    codec = StoreCodec(ENCODING)
+def _write_dense(
+    path: Path, table: tuple[Cell, ...], encoding: StoreEncoding = ENCODING
+) -> zarr.Group:
+    codec = StoreCodec(encoding)
     z = np.full((N_VARIANTS, N_ANALYSES), NAN, np.float32)
     se = np.full_like(z, NAN)
     eaf = np.full_like(z, NAN)
@@ -102,7 +104,7 @@ def _write_dense(path: Path, table: tuple[Cell, ...]) -> zarr.Group:
     return group
 
 
-def _write_csr(path: Path, table: tuple[Cell, ...]) -> Path:
+def _write_csr(path: Path, table: tuple[Cell, ...], encoding: StoreEncoding = ENCODING) -> Path:
     """The table as an association sequence. The writer refuses a cell with one
     of z and SE missing, so such a cell is written with a stand-in SE and its
     SE planted as missing afterwards."""
@@ -122,7 +124,7 @@ def _write_csr(path: Path, table: tuple[Cell, ...]) -> Path:
             eaf=np.array([c.eaf for c in rows], np.float32),
         )
         flags.extend(c.flag for c in rows)
-    writer.flush(path, ENCODING)
+    writer.flush(path, encoding)
     ragged = zarr.open_group(path / RAGGED_ZARR_PATH, mode="a")
     for position in unpaired:
         ragged["se"][position] = np.float16(np.nan)
@@ -131,12 +133,16 @@ def _write_csr(path: Path, table: tuple[Cell, ...]) -> Path:
     return path
 
 
-def _readers(tmp_path: Path, table: tuple[Cell, ...]) -> dict[str, DenseGridReader | CsrReader]:
+def _readers(
+    tmp_path: Path, table: tuple[Cell, ...], encoding: StoreEncoding = ENCODING
+) -> dict[str, DenseGridReader | CsrReader]:
     # A bare grid or sequence records no completion state; this one carries a mask.
     dense = DenseGridReader.open(
-        _write_dense(tmp_path / "grid.zarr", table), ENCODING, requires_mask=True
+        _write_dense(tmp_path / "grid.zarr", table, encoding), encoding, requires_mask=True
     )
-    csr = CsrReader.open(_write_csr(tmp_path / "csr", table), ENCODING, requires_mask=True)
+    csr = CsrReader.open(
+        _write_csr(tmp_path / "csr", table, encoding), encoding, requires_mask=True
+    )
     csr.open_variant_index(N_VARIANTS)
     return {"dense": dense, "csr": csr}
 
@@ -264,47 +270,106 @@ def test_a_dense_span_reads_each_plane_once(dense_residual, monkeypatch) -> None
         assert np.array_equal(found[key], joined, equal_nan=joined.dtype.kind == "f"), key
 
 
+def _size(window: Cells) -> int:
+    """The cells a window names: its flat positions, or its variants × Analyses."""
+    if window.kind == "positions":
+        assert window.pos is not None
+        return len(window.pos)
+    assert window.kind == "cross" and window.vi is not None and window.ai is not None
+    return len(window.vi) * len(window.ai)
+
+
 @pytest.mark.parametrize("max_cells", [1, 2, 3, 4, 100])
 @pytest.mark.parametrize("analysis", [0, 1, 2])
+@pytest.mark.parametrize("layout", ["dense", "csr"])
 def test_windows_read_an_analysis_once_in_order_within_max_cells(
-    readers, analysis, max_cells
+    readers, layout, analysis, max_cells
 ) -> None:
-    csr = readers["csr"]
-    windows = list(csr.windows(Cells.analysis(analysis), max_cells=max_cells))
-    assert windows and all(0 < len(window.pos) <= max_cells for window in windows)
+    reader = readers[layout]
+    windows = list(reader.windows(Cells.analysis(analysis), max_cells=max_cells))
+    assert windows and all(0 < _size(window) <= max_cells for window in windows)
     _assert_rows(
-        Associations.concat([csr.read(window) for window in windows]),
-        _in_order(range(analysis, analysis + 1)),
+        Associations.concat([reader.read(window) for window in windows]),
+        _stored(layout, _in_order(range(analysis, analysis + 1))),
     )
 
 
 @pytest.mark.parametrize("max_cells", [1, 3, 5, 100])
-def test_windows_with_no_region_read_the_whole_component(readers, max_cells) -> None:
-    csr = readers["csr"]
-    windows = list(csr.windows(max_cells=max_cells))
-    assert all(0 < len(window.pos) <= max_cells for window in windows)
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_windows_with_no_region_read_the_whole_component(readers, layout, max_cells) -> None:
+    reader = readers[layout]
+    windows = list(reader.windows(max_cells=max_cells))
+    assert all(0 < _size(window) <= max_cells for window in windows)
     _assert_rows(
-        Associations.concat([csr.read(window) for window in windows]),
-        _in_order(range(N_ANALYSES)),
+        Associations.concat([reader.read(window) for window in windows]),
+        _stored(layout, _in_order(range(N_ANALYSES))),
     )
 
 
-def test_a_window_s_z_is_the_z_its_read_returns(readers) -> None:
-    csr = readers["csr"]
-    windows = list(csr.windows(max_cells=3))
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_windows_keep_the_order_a_list_of_analyses_names(readers, layout) -> None:
+    reader = readers[layout]
+    windows = list(reader.windows(Cells.analyses([2, 0]), max_cells=2))
+    expected = _in_order(range(2, 3)) + _in_order(range(0, 1))
+    _assert_rows(
+        Associations.concat([reader.read(window) for window in windows]),
+        _stored(layout, expected),
+    )
+
+
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_a_window_s_z_is_the_z_of_its_cells(readers, layout) -> None:
+    reader = readers[layout]
+    windows = list(reader.windows(max_cells=3))
     assert len(windows) > 1
     for window in windows:
-        assert np.array_equal(csr.z(window), csr.read(window).z, equal_nan=True)
+        assert np.array_equal(reader.z(window), reader.inspect(window).z, equal_nan=True)
 
 
-def test_windows_refuse_an_empty_window(readers) -> None:
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_a_window_s_z_refuses_a_non_canonical_marker(tmp_path, layout) -> None:
+    """A scan thresholds Z, and a NaN clears no cutoff, so a window's Z refuses the
+    marker every read refuses rather than let the comparison drop the cell (spec §15)."""
+    float_z = StoreEncoding(z=ZEncoding(kind="float16"), se=ENCODING.se, eaf=ENCODING.eaf)
+    reader = _readers(tmp_path, (*TABLE, Cell(6, 2, NAN, NAN, NAN, 0)), float_z)[layout]
+    if layout == "dense":
+        _plant_payload(zarr.open_group(tmp_path / "grid.zarr", mode="r+")["z"], (6, 2))
+    else:
+        ragged = zarr.open_group(tmp_path / "csr" / RAGGED_ZARR_PATH, mode="r+")
+        start = int(np.asarray(ragged["offsets"][2]))
+        _plant_payload(ragged["z"], (start + 1,))  # Analysis 2 holds variants 5 and 6
+    windows = list(reader.windows(Cells.analysis(2), max_cells=1))
+    held = [reader.inspect(window).variant_index.tolist() for window in windows]
+    assert [6] in held, "a window must hold the planted cell"
+    for window, variants in zip(windows, held, strict=True):
+        if variants == [6]:
+            with pytest.raises(InvalidAssociations, match=r"variant 6, analysis 2: non_canonical"):
+                reader.z(window)
+        else:
+            assert np.array_equal(reader.z(window), reader.inspect(window).z, equal_nan=True)
+
+
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_windows_refuse_an_empty_window(readers, layout) -> None:
     with pytest.raises(ValueError, match="at least one"):
-        list(readers["csr"].windows(max_cells=0))
+        list(readers[layout].windows(max_cells=0))
 
 
-def test_windows_refuse_a_region_that_is_not_analyses(readers) -> None:
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_windows_refuse_a_region_that_is_not_analyses(readers, layout) -> None:
     with pytest.raises(TypeError, match="Analyses"):
-        list(readers["csr"].windows(Cells.variants([1])))
+        list(readers[layout].windows(Cells.variants([1])))
+
+
+def _assert_windows_join_to_reads(
+    reader: DenseGridReader | CsrReader, region: Cells | None, whole, max_cells: int
+) -> None:
+    """`region`'s windows, read and joined, are `whole`, its own read."""
+    windows = list(reader.windows(region, max_cells=max_cells))
+    assert len(windows) > 1 and all(_size(window) <= max_cells for window in windows)
+    joined = Associations.concat([reader.read(window) for window in windows])
+    for key in whole:
+        assert np.array_equal(joined[key], whole[key], equal_nan=key in ("z", "se", "eaf")), key
 
 
 def test_windows_read_a_hybrid_overflow_as_its_whole_analyses(hybrid_residual) -> None:
@@ -312,15 +377,22 @@ def test_windows_read_a_hybrid_overflow_as_its_whole_analyses(hybrid_residual) -
     sizes = np.diff(overflow.structure.offsets)
     busiest = int(np.argmax(sizes))
     assert sizes[busiest] > 2, "an Analysis must span several windows to mean anything"
-    for region, whole in (
-        (Cells.analysis(busiest), overflow.read(Cells.analysis(busiest))),
-        (None, overflow.read(Cells.analyses(range(overflow.n_analyses)))),
-    ):
-        windows = list(overflow.windows(region, max_cells=2))
-        assert len(windows) > 1 and all(len(window.pos) <= 2 for window in windows)
-        joined = Associations.concat([overflow.read(window) for window in windows])
-        for key in whole:
-            assert np.array_equal(joined[key], whole[key], equal_nan=key in ("z", "se", "eaf")), key
+    region = Cells.analysis(busiest)
+    _assert_windows_join_to_reads(overflow, region, overflow.read(region), max_cells=2)
+    every = overflow.read(Cells.analyses(range(overflow.n_analyses)))
+    _assert_windows_join_to_reads(overflow, None, every, max_cells=2)
+
+
+def test_windows_read_a_built_dense_release_as_its_whole_analyses(dense_residual) -> None:
+    """Windows of 37 variants, the last one short, meet imputed cells: each one's
+    frequency is the panel's, and its SE is decoded from that frequency."""
+    release, _observed, _panel, imputed = dense_residual
+    grid = _grid(release.store)
+    assert grid.n_variants % 37 and imputed[:, 1].any()
+    region = Cells.analysis(1)
+    _assert_windows_join_to_reads(grid, region, grid.read(region), max_cells=37)
+    every = grid.read(Cells.analyses(0, grid.n_analyses))
+    _assert_windows_join_to_reads(grid, None, every, max_cells=37)
 
 
 @pytest.mark.parametrize("bad", sorted(INVALID))

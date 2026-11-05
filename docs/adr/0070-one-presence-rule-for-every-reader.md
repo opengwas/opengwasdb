@@ -9,11 +9,16 @@ Admission contract ([#357](https://github.com/opengwas/opengwasdb/issues/357)).
 > (5 Nov 2026).** The two region reads deferred below exist.
 > `Cells.analyses(first, stop)` names a span of Analyses: a Dense grid reads it
 > as each Analysis in turn, with one read of each plane, and a CSR as one slice
-> of its sequence. `CsrReader.windows(region, max_cells=…)` cuts an `analysis`
-> or `analyses` region, or the whole sequence, into `positions` regions of at
-> most `max_cells` rows, which `read`, `inspect` and the Z-only `z` read as
-> slices. The query facade's top-hit scan and Hybrid Reference Completion's
-> read of its source's Overflow
+> of its sequence. `windows(region, max_cells=…)` cuts an `analysis` or
+> `analyses` region, or the whole component, into windows of at most
+> `max_cells` cells, each cell once and in the region's order, which `read`,
+> `inspect` and a Z-only `z` read. A CSR's windows are `positions` regions,
+> read as slices, and may run on from one Analysis into the next. A Dense
+> grid's are `cross` regions, each a run of one Analysis's variants: a grid
+> region is variants × Analyses, so it cannot hold the end of one Analysis and
+> the start of the next. An Indexed Variant Subset reads one whole Analysis and
+> nothing smaller, so it has no windows. The query facade's top-hit scan and
+> Hybrid Reference Completion's read of its source's Overflow
 > ([#391](https://github.com/opengwas/opengwasdb/issues/391)) read through
 > them, so no completion reaches `RaggedCSRReader`'s underscore attributes.
 > Ragged Reference Completion reads each source Analysis through `CsrReader`.

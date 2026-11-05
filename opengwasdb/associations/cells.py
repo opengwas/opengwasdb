@@ -26,7 +26,8 @@ class Cells:
       Dense grid, the by-variant index's order on a CSR (ADR 0060).
     * `cross(v…, a…)`: those variants × those Analyses, Analysis-major in the
       order given; within each, a grid keeps the variants' order given and a
-      CSR its stored, ascending order.
+      CSR its stored, ascending order. `DenseGridReader.windows` cuts a scan
+      into these, a run of one Analysis's variants each.
     * `pairs(v…, a…)`: the cells `(v[i], a[i])`, in request order, one row each.
     * `positions(p…)`: flat sequence positions -- a CSR's own address space, and
       what `CsrReader.windows` cuts a scan into; no other reader accepts it.
