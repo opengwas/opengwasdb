@@ -7,6 +7,12 @@
 > resolver measures it once, and `--sample-size-table` stores each pair's
 > sample size. Without either flag the builder stores what it always did. The
 > resolution decisions below are unchanged.
+>
+> **Amended by [ADR 0072](0072-association-admission.md)** (issue #357). The
+> Dense VCF build no longer keeps the last stream occurrence at a row, as the
+> comparison with Dense below says it does. Two associations at one (variant,
+> Analysis) are resolved by Association Admission's duplicate rule: agreeing
+> ones collapse, and conflicting ones are all dropped and logged.
 
 Every Analysis is resolved; there is no declared-only path (stores ADR 0036).
 A BESD file set is the one Source Format with many Analyses in one source:

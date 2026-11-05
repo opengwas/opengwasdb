@@ -637,6 +637,34 @@ def test_a_reverse_strand_lift_orients_a_mixed_case_site_on_its_upper_cased_alle
     assert placed.eaf.tolist() == pytest.approx([0.8])
 
 
+def test_a_reverse_strand_lift_signs_statistics_by_the_source_readers_rule(
+    tmp_path, monkeypatch
+):
+    """`readers.orientation` is the only code that signs a statistic by an
+    allele swap (ADR 0076), and a lift's re-orientation is one: routing hands
+    each batch's swapped rows to its `swap`."""
+    from opengwasdb.readers import orientation
+
+    real, judged = orientation.swap, []
+
+    def spy(flipped, z, eaf):
+        judged.append(np.asarray(flipped).tolist())
+        return real(flipped, z, eaf)
+
+    monkeypatch.setattr(orientation, "swap", spy)
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    sites = [("2", 1_000, "G", "A"), ("3", 1_000, "G", "A")]
+    routing = _route([_source("a", "hg19", [(*site, "") for site in sites])], LiftedUnion(chain))
+    table = routing.table([routing.alids])
+
+    placed = table.route_column([_association(site, 2.0, eaf=0.2) for site in sites]).placed[0]
+
+    # Fixture first: the reverse block re-orients the first site, not the second.
+    assert placed.z.tolist() == pytest.approx([-2.0, 2.0])
+    assert placed.eaf.tolist() == pytest.approx([0.8, 0.2])
+    assert judged == [[True, False]]
+
+
 def test_two_spellings_reaching_one_variant_oriented_two_ways_are_refused():
     """Both spellings of a site share one routing key; were only one of them
     re-oriented, a lookup would sign an association by whichever it found

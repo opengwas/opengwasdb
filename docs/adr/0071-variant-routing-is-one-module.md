@@ -4,6 +4,13 @@
 > The module stands. What no longer holds is `RoutingKey`: alleles are
 > upper-cased before identity assignment on every build, so its two modes
 > became one and it is removed, and routing's functions take no `key`.
+>
+> **Amended by [ADR 0072](0072-association-admission.md)** (issue #357).
+> `route_column` no longer keeps the last occurrence of an index. An axis's
+> repeated rows are resolved by Association Admission's duplicate rule
+> (`collapse_duplicates`): rows that agree collapse to the first, and rows that
+> conflict are all dropped and logged, but for a reversed indel's (D5).
+> `last_wins` is removed.
 
 Issue [#352](https://github.com/opengwas/opengwasdb/issues/352), part of epic
 #58. Records how the Dense and Hybrid builders, Variant Reference extraction

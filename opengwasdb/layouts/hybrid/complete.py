@@ -299,8 +299,9 @@ def _read_source_overflow(src: Path) -> _SourceOverflow:
     variant_index = src_csr._variant_index[:]
     z = src_csr.z_all()
     se = src_csr.se_all()
-    # D1: the Overflow is carried across, so a half-missing cell is refused,
-    # as the Dense Component's completion refuses one of its own.
+    # D1: the Overflow is carried across, so a cell the presence rule calls
+    # invalid is refused, as the Dense Component's completion refuses one of
+    # its own.
     require_paired(z, se, where="complete-hybrid, the source's Ragged Overflow")
     eaf = src_csr.eaf_slice(0, len(variant_index))
 

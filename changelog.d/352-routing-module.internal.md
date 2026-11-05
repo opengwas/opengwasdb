@@ -1,7 +1,7 @@
 - **The Dense and Hybrid builders route through `opengwasdb.variants.routing`
   (issue #352).** Pass 1's windowed union, the lift and both-assembly drop, the
   rsid harvest with its dispute policy and oracle, and the Pass 2 key table
-  with its batching, re-orientation and last-wins now exist once; the two
+  with its batching and re-orientation now exist once; the two
   builders' copies and the private names the Hybrid builder imported from the
   Dense one are gone. Each Pass 2 worker inherits one shared value through
   `opengwasdb.build.ordered_pool.fork_each` instead of module globals, and
