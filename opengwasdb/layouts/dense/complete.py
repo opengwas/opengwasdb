@@ -34,6 +34,7 @@ from opengwasdb.completion.block import REGION_CAP_BP, run_block
 from opengwasdb.completion.checkpoint import (
     ALID_DTYPE,
     BlockCompletionResult,
+    checkpoint_blocks_dir,
     checkpoint_dir_for,
     require_fresh_destination,
     sanitize_block_id,
@@ -598,8 +599,7 @@ def _complete_pending_blocks(
         f"Running reference completion across {len(axis.tsv_paths):,} LD blocks "
         f"(n_workers={n_workers})..."
     )
-    blocks_dir = checkpoint_dir / "blocks"
-    blocks_dir.mkdir(parents=True, exist_ok=True)
+    blocks_dir = checkpoint_blocks_dir(checkpoint_dir)
 
     pending: list[_BlockTask] = []
     n_existing = 0

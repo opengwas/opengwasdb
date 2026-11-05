@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import io
+import re
 from pathlib import Path
 from shutil import copytree
 
@@ -39,6 +40,27 @@ from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.validation.validate import validate_store
 from opengwasdb.variants import VariantAxis, parse_canonical_alid
+
+
+def assert_a_resume_refuses_an_older_checkpoint(dst: Path, resume) -> None:
+    """Rewrite the one block checkpoint an interrupted completion of ``dst``
+    left without its format mark, as a package before endpoint ownership wrote
+    every one, and require ``resume`` to refuse it, naming the directory and
+    both ways out, and discarding nothing."""
+    checkpoint_dir = checkpoint_dir_for(dst)
+    (written,) = (checkpoint_dir / "blocks").glob("*.npz")
+    with np.load(written, allow_pickle=False) as checkpoint:
+        arrays = {name: checkpoint[name] for name in checkpoint.files if name != "format"}
+    with open(written, "wb") as fh:
+        np.savez(fh, **arrays)
+    with np.load(written, allow_pickle=False) as rewritten:
+        assert "format" not in rewritten.files and "f_alid" in rewritten.files
+
+    with pytest.raises(
+        ValueError, match=rf"{re.escape(str(checkpoint_dir))}.*delete it.*--overwrite"
+    ):
+        resume(checkpoint_dir)
+    assert written.exists() and not dst.exists()
 
 
 def _crash_on_the_second_block(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1024,6 +1046,22 @@ class TestResume:
         assert result.n_variants > 0
 
         assert validate_store(dst).ok
+
+    def test_a_resume_refuses_a_block_checkpoint_an_older_package_wrote(
+        self, tmp_path, observed_store, ld_panel, monkeypatch
+    ):
+        """Before endpoint ownership (ADR 0072) a block filled and counted the
+        variant at its end that the next block owns, and its checkpoint says
+        nothing of which rule wrote it. Resumed beside the next block's, both
+        fills would reach one cell, so the resume refuses the directory,
+        naming it and the two ways out, and discards nothing."""
+        dst = tmp_path / "resumed.opengwasdb"
+        _crash_on_the_second_block(monkeypatch)
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            complete_dense_store(observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0)
+        monkeypatch.undo()
+
+        assert_a_resume_refuses_an_older_checkpoint(dst, resume_dense_completion)
 
     def test_resume_with_no_checkpointed_block_matches_fresh_run(
         self, tmp_path, observed_store, ld_panel, monkeypatch

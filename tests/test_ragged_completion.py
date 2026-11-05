@@ -1041,6 +1041,35 @@ class TestParallelAndResume:
         _assert_completed_stores_equal(resumable_dst, fresh_dst)
 
 
+    def test_a_resume_refuses_a_block_checkpoint_an_older_package_wrote(
+        self, tmp_path, observed_store, ld_panel, monkeypatch
+    ):
+        """As for Dense: a block checkpoint written before endpoint ownership
+        (ADR 0072) may count a fill the next block now owns, so a resume
+        refuses it rather than mix it with checkpoints written since."""
+        from test_dense_completion import assert_a_resume_refuses_an_older_checkpoint
+
+        from opengwasdb.layouts.ragged import complete as ragged_module
+        from opengwasdb.layouts.ragged.complete import resume_ragged_completion
+
+        real_run_block = ragged_module._run_block
+
+        def crash_after_the_block(task):
+            real_run_block(task)
+            raise RuntimeError("simulated crash")
+
+        monkeypatch.setattr(ragged_module, "_run_block", crash_after_the_block)
+        dst = tmp_path / "resumed.opengwasdb"
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            complete_ragged_store(
+                observed_store, dst, ld_panel,
+                ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+            )
+        monkeypatch.undo()
+
+        assert_a_resume_refuses_an_older_checkpoint(dst, resume_ragged_completion)
+
+
 class TestValidation:
     def test_valid_completed_store_passes(self, completed_store):
         result = validate_store(completed_store)
