@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from stored_rows import stored_rows
 
 from opengwasdb.encoding import (
     EafEncoding,
@@ -48,7 +49,7 @@ def test_round_trip_small(tmp_path):
     assert reader.n_analyses == 20
 
     for i, (vi, z, se) in enumerate(expected):
-        result = reader.get_analysis(i)
+        result = stored_rows(tmp_path, i, ENCODING)
         np.testing.assert_array_equal(result.variant_index, vi)
         np.testing.assert_allclose(result.z, z, atol=Z_TOL)
         np.testing.assert_array_equal(result.se, se)
@@ -65,7 +66,7 @@ def test_round_trip_large(tmp_path):
     # Spot-check a few analyses
     for i in [0, 1, 500, 999]:
         vi, z, se = expected[i]
-        result = reader.get_analysis(i)
+        result = stored_rows(tmp_path, i, ENCODING)
         np.testing.assert_array_equal(result.variant_index, vi)
         np.testing.assert_allclose(result.z, z, atol=Z_TOL)
         np.testing.assert_array_equal(result.se, se)
@@ -93,12 +94,12 @@ def test_empty_analysis(tmp_path):
     reader = RaggedCSRReader(tmp_path, ENCODING)
     assert reader.n_analyses == 3
 
-    empty = reader.get_analysis(1)
+    empty = stored_rows(tmp_path, 1, ENCODING)
     assert len(empty.variant_index) == 0
     assert len(empty.z) == 0
     assert len(empty.se) == 0
 
-    last = reader.get_analysis(2)
+    last = stored_rows(tmp_path, 2, ENCODING)
     assert len(last.variant_index) == 1
     assert int(last.variant_index[0]) == 100
 
@@ -117,7 +118,7 @@ def test_all_empty_analyses(tmp_path):
     assert reader.n_analyses == 5
     assert reader.n_associations == 0
     for i in range(5):
-        result = reader.get_analysis(i)
+        result = stored_rows(tmp_path, i, ENCODING)
         assert len(result.variant_index) == 0
 
 

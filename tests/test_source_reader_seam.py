@@ -22,6 +22,7 @@ import pytest
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers import ReferenceAllele
 from opengwasdb.readers.assembly import AssemblyPlan, assembly_plan
+from opengwasdb.readers.association_tsv import ASSOCIATION_TSV_CAPABILITY, AssociationTsvReader
 from opengwasdb.readers.besd import BESD_CAPABILITY, BesdProbeReader, load_besd_source
 from opengwasdb.readers.column_map import COLUMN_MAP_CAPABILITY, load_column_map
 from opengwasdb.readers.column_map_reader import ColumnMapReader
@@ -86,6 +87,19 @@ def _ssf(tmp_path: Path, *, lower: bool = False) -> Path:
     return path
 
 
+def _association_tsv(tmp_path: Path, *, lower: bool = False) -> Path:
+    other, effect = _first(lower)
+    path = tmp_path / "associations.tsv"
+    path.write_text(
+        "chromosome\tposition\teffect_allele\tother_allele\tbeta\tse\teaf\trsid\n"
+        f"1\t100\t{effect}\t{other}\t0.5\t0.1\t0.2\trs1\n"
+        "1\t200\tG\tGGGGCC\t-0.3\t0.15\t0.4\trs2\n"
+        "2\t300\tC\tT\t0.2\t0\t0.6\t.\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def _finngen(tmp_path: Path, *, lower: bool = False) -> Path:
     ref, alt = _first(lower)
     path = tmp_path / "finngen.tsv.gz"
@@ -118,6 +132,10 @@ def _readers(
             FinnGenR13Reader(_finngen(tmp_path, lower=lower)),
             ReferenceAllele.REF,
         ),
+        "association-tsv": (
+            AssociationTsvReader(_association_tsv(tmp_path, lower=lower), StoredEffectScale.SD),
+            ReferenceAllele.UNDECLARED,
+        ),
         "column-map": (
             ColumnMapReader(_finngen(tmp_path, lower=lower), load_column_map("finngen-r13")),
             ReferenceAllele.REF,
@@ -125,7 +143,9 @@ def _readers(
     }
 
 
-@pytest.mark.parametrize("name", ["gwas-vcf", "gwas-ssf", "finngen-r13", "column-map"])
+@pytest.mark.parametrize(
+    "name", ["gwas-vcf", "gwas-ssf", "finngen-r13", "association-tsv", "column-map"]
+)
 def test_a_readers_batches_are_its_associations_as_columns(tmp_path: Path, name: str) -> None:
     reader, _reference = _readers(tmp_path)[name]
     associations = list(reader.stream_associations())
@@ -141,7 +161,9 @@ def test_a_readers_batches_are_its_associations_as_columns(tmp_path: Path, name:
     assert alids == ["1:100:A:G", "1:200:G:GGGGCC", "2:300:C:T"]
 
 
-@pytest.mark.parametrize("name", ["gwas-vcf", "gwas-ssf", "finngen-r13", "column-map", "besd"])
+@pytest.mark.parametrize(
+    "name", ["gwas-vcf", "gwas-ssf", "finngen-r13", "association-tsv", "column-map", "besd"]
+)
 def test_a_batch_spells_each_rows_alleles_as_its_source_does(tmp_path: Path, name: str) -> None:
     """The rsid harvest compares the names a site's spellings carry (#379), so a
     batch keeps each row's ref and alt as its associations do (ADR 0075), while
@@ -160,7 +182,9 @@ def test_a_batch_spells_each_rows_alleles_as_its_source_does(tmp_path: Path, nam
     assert (kept.ref.tolist(), kept.alt.tolist()) == ([associations[1].ref], [associations[1].alt])
 
 
-@pytest.mark.parametrize("name", ["gwas-vcf", "gwas-ssf", "finngen-r13", "column-map"])
+@pytest.mark.parametrize(
+    "name", ["gwas-vcf", "gwas-ssf", "finngen-r13", "association-tsv", "column-map"]
+)
 def test_every_projection_carries_the_formats_reference_declaration(
     tmp_path: Path, name: str
 ) -> None:
@@ -350,6 +374,10 @@ def _declared_readers(tmp_path: Path) -> dict[str, tuple[SourceReader, Reference
         "finngen-r13": (
             resolve_reader(FINNGEN_R13_CAPABILITY, _finngen(tmp_path), scale), ReferenceAllele.REF
         ),
+        "association-tsv": (
+            resolve_reader(ASSOCIATION_TSV_CAPABILITY, _association_tsv(tmp_path), scale),
+            ReferenceAllele.UNDECLARED,
+        ),
         "besd": (
             resolve_reader(BESD_CAPABILITY, _besd(tmp_path), scale, probe_id="P1"),
             ReferenceAllele.UNDECLARED,
@@ -380,7 +408,7 @@ def _declared_readers(tmp_path: Path) -> dict[str, tuple[SourceReader, Reference
 @pytest.mark.parametrize(
     "name",
     [
-        "gwas-vcf", "gwas-ssf", "finngen-r13", "besd", "column-map gwas-ssf",
+        "gwas-vcf", "gwas-ssf", "finngen-r13", "association-tsv", "besd", "column-map gwas-ssf",
         "column-map finngen-r13", "column-map mvp-gia",
     ],
 )

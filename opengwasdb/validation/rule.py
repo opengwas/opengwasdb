@@ -16,7 +16,7 @@ target of its kinds, which is what replaces the per-layout copies of a check.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Flag, StrEnum, auto
 from functools import cached_property
 from pathlib import Path
@@ -39,20 +39,41 @@ T = TypeVar("T")
 
 
 class Severity(StrEnum):
-    """An error fails the release; a warning is reported and does not."""
+    """An error fails the release; a warning is reported and does not.
+
+    A skip is neither: the rule could not judge the target, which is not a pass
+    (ADR 0074), so it is reported as its own severity rather than as silence.
+    """
 
     ERROR = "error"
     WARNING = "warning"
+    SKIP = "skip"
 
 
 @dataclass(frozen=True)
 class Finding:
-    """One thing one rule found about one target."""
+    """One thing one rule said about one target: a failure, a warning, or a skip.
+
+    `reasons` is what a skip names: the rules that blocked it, or its own reason for
+    having nothing to judge, one entry each and in the order they were recorded.
+    `message` joins them, which is what every record says to a reader. A failure or a
+    warning names none: its message is its whole reason.
+    """
 
     rule: str
     severity: Severity
     message: str
     target: str
+    reasons: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, str]:
+        """This finding as the object `validate --format json` prints (spec §20.1)."""
+        return {
+            "rule": self.rule,
+            "severity": self.severity.value,
+            "target": self.target,
+            "message": self.message,
+        }
 
 
 class Kind(Flag):
@@ -318,15 +339,17 @@ class Fold(Rule, Generic[B, M]):
 
 @dataclass(frozen=True)
 class ValidationResult:
-    """A run's findings, in rule order, and the rules it skipped.
+    """What a run recorded, in the order it judged it: rule order, then target order.
 
-    `skipped` maps each skipped rule to why: the prerequisites that failed or were
-    skipped before it, or the reason the rule gave. `errors`, `warnings` and `ok`
-    read as they always have.
+    A rule says one thing about one target in a `Finding`: it failed, it warned, or
+    it could not judge the target and was skipped, with the reason ADR 0074 records
+    for that. `errors`, `warnings` and `ok` read the failures and warnings as they
+    always have; `skips` and `skipped` read the skips, the second the way it always
+    did. A skip alone does not fail the release, and says what the release was not
+    judged on rather than reading like a pass.
     """
 
     findings: tuple[Finding, ...] = ()
-    skipped: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def errors(self) -> list[str]:
@@ -345,8 +368,24 @@ class ValidationResult:
         return frozenset(f.rule for f in self.findings if f.severity is Severity.ERROR)
 
     def of(self, rule: str) -> list[Finding]:
-        """Every finding `rule` reported."""
+        """Every finding `rule` recorded, a skip included."""
         return [f for f in self.findings if f.rule == rule]
+
+    @property
+    def skips(self) -> tuple[Finding, ...]:
+        """The skips: each a rule, the target it could not judge, and the reason."""
+        return tuple(f for f in self.findings if f.severity is Severity.SKIP)
+
+    @property
+    def skipped(self) -> Mapping[str, tuple[str, ...]]:
+        """Each skipped rule and why, the reasons in the order the run recorded them."""
+        reasons: dict[str, list[str]] = {}
+        for finding in self.skips:
+            held = reasons.setdefault(finding.rule, [])
+            for reason in finding.reasons or (finding.message,):
+                if reason not in held:
+                    held.append(reason)
+        return {rule: tuple(why) for rule, why in reasons.items()}
 
 
 def check_registry(rules: Sequence[Rule]) -> tuple[Rule, ...]:

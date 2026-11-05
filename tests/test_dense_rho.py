@@ -5,17 +5,17 @@ import shutil
 
 import numpy as np
 import pytest
+from dense_sources import build_dense_fixture, build_dense_from_records
 from typer.testing import CliRunner
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
-from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.cli.main import app
 from opengwasdb.encoding import DenseZPlane
-from opengwasdb.layouts.dense.build import build_dense_observed_store
+from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.rho import (
     build_dense_rho,
     estimate_rho_cml,
     select_thinned_variants,
+    write_rho_group,
 )
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -78,7 +78,7 @@ def _make_rho_source(tmp_path, seed: int = 0):
 def rho_store_path(tmp_path):
     source = _make_rho_source(tmp_path)
     store_path = tmp_path / "rho-store.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source],
         store_path,
         store_id="rho-fixture",
@@ -397,7 +397,7 @@ def _residual_rho_store(tmp_path):
             for row in range(n)
         )
     store_path = tmp_path / "residual-rho.opengwasdb"
-    build_dense_observed_store(
+    build_dense_from_records(
         records,
         store_path,
         store_id="residual-rho",
@@ -460,3 +460,23 @@ def test_build_dense_rho_on_a_residual_store_reads_decoded_z(tmp_path):
     # The add-in-place Rho group leaves the residual se plane queryable and
     # still residual-coded -- nothing about building Rho rewrites se.
     assert StoreManifest.load(store_path).encoding.se.is_residual
+
+
+def test_a_rho_group_whose_arrays_do_not_pair_up_is_refused_and_writes_nothing(tmp_path) -> None:
+    """The packed rho values are one group's cell list: three of them against
+    two null counts is not a Rho Matrix (issue #392)."""
+    with pytest.raises(
+        ValueError,
+        match=r"rho group: rho of length 3 and n_null of length 2 must be parallel",
+    ):
+        write_rho_group(
+            tmp_path,
+            np.zeros(3, dtype=np.float16),
+            np.zeros(2, dtype=np.int32),
+            np.arange(1, dtype=np.int32),
+            z_thresh=0.5,
+            min_nulls=10,
+            window_bp=1_000,
+            n_analyses=1,
+        )
+    assert list(tmp_path.iterdir()) == []

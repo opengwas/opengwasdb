@@ -25,12 +25,27 @@ ROOT = Path(__file__).resolve().parents[1] / "opengwasdb"
 
 #: Modules that read associations only through `opengwasdb.associations`.
 READERS = (
+    "layouts/dense/complete.py",
+    "layouts/hybrid/complete.py",
+    "layouts/ragged/complete.py",
     "query/facade.py",
     "query/resolve.py",
     "validation/observed_view.py",
     "validation/observed_view_ragged.py",
     "validation/observed_view_hybrid.py",
 )
+
+#: Modules that use no other module's private names: Hybrid Reference Completion
+#: read the Overflow's private arrays and imported the Hybrid builder's table
+#: writer by its private name (#391).
+OWN_NAMES_ONLY = ("layouts/hybrid/complete.py",)
+
+#: The planes a reader module reaches that hold no association, and why.
+READER_PLANES = {
+    ("layouts/dense/complete.py", "imports DenseEafPlane"):
+        "the frequency pass carries each observed cell's stored frequency across the "
+        "row remap, after the statistic pass has read and judged the cell through the reader",
+}
 
 #: The one SE decode in a reader module: it reads no plane, but re-encodes the
 #: source's crossover cells and decodes them, to predict what completion stored.
@@ -78,19 +93,32 @@ PLANES = frozenset(
     {"DenseZPlane", "DenseSePlane", "DenseEafPlane", "RaggedSePlane", "RaggedEafPlane", "EafRead"}
 )
 
-#: The CSR reader's decode members, which only `CsrReader` calls.
+#: The CSR reader's decode members, which only `CsrReader` and the modules named
+#: below call.
 CSR_DECODES = frozenset(
     {
-        "get_analysis",
+        "z_slice",
+        "z_at",
         "se_slice",
         "se_at",
         "eaf_slice_read",
         "eaf_at_read",
-        "z_at",
+        "eaf_at",
         "n_slice",
         "n_at",
     }
 )
+
+#: The modules that may call them, and why.
+CSR_DECODE_CALLERS = {
+    "associations/csr.py": "the CSR adapter",
+    "layouts/ragged/zarr_csr.py": "the reader that defines them",
+    "layouts/ragged/top_hits.py": (
+        "the Top-Hit harvest, a Layout (layer 3) the builders call, which cannot import "
+        "the Association Reader (Query, layer 4) without an upward import "
+        "(docs/architecture/components.yaml)"
+    ),
+}
 
 #: The SE plane types: naming one is how a function comes to decode SE.
 SE_PLANES = frozenset({"DenseSePlane", "RaggedSePlane"})
@@ -212,7 +240,13 @@ def test_every_validation_module_is_a_reader_or_checked() -> None:
 
 @pytest.mark.parametrize("module", READERS)
 def test_readers_reach_no_plane(module: str) -> None:
-    assert plane_reads((ROOT / module).read_text(encoding="utf-8"), module) == []
+    found = plane_reads((ROOT / module).read_text(encoding="utf-8"), module)
+    assert [read for read in found if (module, read) not in READER_PLANES] == []
+
+
+@pytest.mark.parametrize(("module", "read"), sorted(READER_PLANES))
+def test_each_reviewed_reader_plane_is_still_reached(module: str, read: str) -> None:
+    assert read in plane_reads((ROOT / module).read_text(encoding="utf-8"), module)
 
 
 @pytest.mark.parametrize("module", CHECKED)
@@ -222,3 +256,49 @@ def test_only_the_reviewed_decodes_remain(module: str) -> None:
     reviewed = {owner for owner, _ in se_decodes(source)}
     stale = {owner for (path, owner) in ALLOWED if path == module} - reviewed
     assert not stale, f"allowed decodes that no longer exist: {sorted(stale)}"
+
+
+def private_reaches(source: str) -> list[str]:
+    """Each private name `source` imports from a module, or reads off another object."""
+    found = []
+    for _, node in _in_functions(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom):
+            found += [f"imports {a.name}" for a in node.names if a.name.startswith("_")]
+        elif isinstance(node, ast.Attribute) and node.attr.startswith("_"):
+            owner = ast.unparse(node.value)
+            if not node.attr.startswith("__") and owner not in ("self", "cls"):
+                found.append(f"reads {owner}.{node.attr} at line {node.lineno}")
+    return found
+
+
+def test_the_guard_sees_a_private_name_imported_or_read() -> None:
+    source = "from m import _hidden\ndef f(csr):\n    return csr._offsets[:]\n"
+    assert private_reaches(source) == ["imports _hidden", "reads csr._offsets at line 3"]
+
+
+@pytest.mark.parametrize("module", OWN_NAMES_ONLY)
+def test_a_module_uses_no_other_module_s_private_names(module: str) -> None:
+    assert private_reaches((ROOT / module).read_text(encoding="utf-8")) == []
+
+
+def csr_decode_calls(source: str) -> list[str]:
+    """Each call `source` makes to a CSR decode member, by name."""
+    return [
+        f"calls .{node.func.attr}() at line {node.lineno}"
+        for _, node in _in_functions(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in CSR_DECODES
+    ]
+
+
+def test_only_the_csr_adapter_calls_the_csr_decodes() -> None:
+    """A sequence's associations are read through `CsrReader`, which applies the
+    presence rule, so no module in the package but those named decodes one itself."""
+    found = {
+        module: calls
+        for path in sorted(ROOT.rglob("*.py"))
+        if (module := str(path.relative_to(ROOT))) not in CSR_DECODE_CALLERS
+        and (calls := csr_decode_calls(path.read_text(encoding="utf-8")))
+    }
+    assert found == {}

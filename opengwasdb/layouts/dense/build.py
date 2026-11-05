@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
 
 from opengwasdb import admission
-from opengwasdb.build.source import NormalisedAssociation
+from opengwasdb.admission.rules import AnalysisRules
 from opengwasdb.encoding import (
     EncodingMeasurements,
     StoreEncoding,
@@ -25,6 +25,7 @@ from opengwasdb.encoding.association_codec import (
 )
 from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.index import initialise_schema, set_metadata
+from opengwasdb.layouts.build_manifest import apply_se_divisor
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
     DEFAULT_DTYPE,
@@ -42,9 +43,8 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
     coverage_for_layout,
 )
-from opengwasdb.model.maf_policy import MafPolicy
 from opengwasdb.readers.interface import StreamTally
-from opengwasdb.stats import FrequencyTally, parse_af
+from opengwasdb.readers.rows import ReaderBatch
 from opengwasdb.store.arrays import ArrayRole, compressor
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts
@@ -57,7 +57,6 @@ from opengwasdb.variants import (
     chromosome_sort_key,
     write_variant_axis,
 )
-from opengwasdb.variants.normalise import IdentityFaults
 from opengwasdb.variants.routing import collapse_duplicates
 
 
@@ -89,8 +88,39 @@ def write_analyses_tsv(output_path: Path, analyses: list[Analysis]) -> Path:
     return path
 
 
+@dataclass(frozen=True)
+class NormalisedAssociation:
+    """One association of one Analysis, as the build holds it between reading and
+    writing: the canonical variant, and the statistics on its A1."""
+
+    analysis_id: str
+    variant: CanonicalVariant
+    z: float
+    se: float
+    rsid: str | None = None
+    eaf: float | None = None
+
+
+@dataclass(frozen=True)
+class AnalysisSource:
+    """One Analysis as a build reads it: what its manifest row declares, and what
+    its Source Reader yielded.
+
+    ``analysis`` is the row's Analytical and Attribution Metadata, ``rules`` its
+    declared INFO and MAF filters (D2), and ``se_divisor`` the phenotype SD that
+    standardises its standard errors (#18). ``tally`` names the rows the reader
+    left out as malformed (#365) and the frequencies it made absent (D7).
+    """
+
+    analysis: Analysis
+    rules: AnalysisRules
+    se_divisor: float
+    batches: Sequence[ReaderBatch]
+    tally: StreamTally
+
+
 def build_dense_observed_store(
-    records: list[NormalisedAssociation],
+    sources: Sequence[AnalysisSource],
     output_path: str | Path,
     *,
     store_id: str,
@@ -101,29 +131,28 @@ def build_dense_observed_store(
     overwrite: bool = False,
     association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
     admission_record: str | Path | None = None,
-    malformed: Mapping[str, IdentityFaults] | None = None,
 ) -> DenseBuildResult:
-    """Write a Dense Observed-Only Store Release from normalised associations.
+    """Write a Dense Observed-Only Store Release from its Analyses' associations.
 
-    ``association_coverage`` is a build input (issue #298), and a Dense matrix can
-    carry only ``gwas``: every cell it holds is a (variant, Analysis) the source
-    either reported or did not, so a narrower coverage has no representation
-    here (`coverage_for_layout`, ADR 0064). Each Analysis's records pass its
+    The Store's columns are the ``sources``, in order. ``association_coverage``
+    is a build input (issue #298), and a Dense matrix can carry only ``gwas``:
+    every cell it holds is a (variant, Analysis) the source either reported or
+    did not, so a narrower coverage has no representation here
+    (`coverage_for_layout`, ADR 0064). Each Analysis's records pass its
     Admission gate, which writes ``admission_record`` (beside the Store unless
-    named, #357), and logs there the rows the reader left out under
-    ``malformed``, by Analysis (#365).
+    named, #357), and logs there the rows its reader left out as malformed
+    (#365).
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.DENSE)
 
-    if not records:
-        raise ValueError("cannot build a store with no association records")
+    _refuse_unbuildable(sources)
 
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         directory = admission.admission_record_for(out, admission_record)
-        records = _admitted_records(records, directory, malformed or {})
+        records = _admitted_records(sources, directory)
         variants = _collect_variants(records)
-        analyses = _collect_analyses(records)
+        analyses = _collect_analyses(records, sources)
         z, se, eaf = _scatter_records(records, variants, analyses)
 
         # The encoding plan is decided once, here, and read back from the
@@ -150,64 +179,96 @@ def build_dense_observed_store(
         return DenseBuildResult(output_path=out, n_variants=len(variants), n_analyses=len(analyses))
 
 
-def _admitted_records(
-    records: list[NormalisedAssociation],
-    directory: Path,
-    malformed: Mapping[str, IdentityFaults],
-) -> list[NormalisedAssociation]:
-    """The records each Analysis's Admission gate keeps, in source order.
+def _refuse_unbuildable(sources: Sequence[AnalysisSource]) -> None:
+    """Refuse an Analysis named twice, and a build with no association at all."""
+    ids = [source.analysis.analysis_id for source in sources]
+    if len(set(ids)) != len(ids):
+        repeated = sorted({i for i in ids if ids.count(i) > 1})
+        raise ValueError(f"Analyses named more than once: {', '.join(repeated)}")
+    if not any(batch for source in sources for batch in source.batches):
+        raise ValueError("cannot build a store with no association records")
 
-    Analyses are judged in the order they first appear, which is the order the
-    Store's columns take (`_collect_analyses`), each under the MAF filter its
-    records declare (D2). An Analysis's records for one variant resolve as
+
+def _records_of(source: AnalysisSource) -> list[NormalisedAssociation]:
+    """One Analysis's associations, in the order its reader yielded them."""
+    analysis_id = source.analysis.analysis_id
+    records = []
+    for batch in source.batches:
+        for alid, z, se, eaf, rsid in zip(
+            batch.alid.tolist(), batch.z.tolist(), batch.se.tolist(),
+            batch.eaf.tolist(), batch.rsid.tolist(), strict=True,
+        ):
+            chromosome, position, a1, a2 = alid.split(":")
+            records.append(
+                NormalisedAssociation(
+                    analysis_id=analysis_id,
+                    variant=CanonicalVariant(chromosome, int(position), a1, a2),
+                    z=z,
+                    se=se,
+                    rsid=rsid or None,
+                    eaf=None if np.isnan(eaf) else eaf,
+                )
+            )
+    return records
+
+
+def _admitted_records(
+    sources: Sequence[AnalysisSource], directory: Path
+) -> list[NormalisedAssociation]:
+    """The records each Analysis's Admission gate keeps, in source order, with
+    each Analysis's standard errors standardised (#18).
+
+    Analyses are judged in the order of ``sources``, which is the order the
+    Store's columns take (`_collect_analyses`), each under the filters its
+    manifest row declares (D2). An Analysis's records for one variant resolve as
     routing resolves an axis's (`collapse_duplicates`): agreeing ones collapse
     to the first, conflicting ones are all dropped and logged.
     """
-    by_analysis: dict[str, list[int]] = {}
-    for position, record in enumerate(records):
-        by_analysis.setdefault(record.analysis_id, []).append(position)
-    for analysis_id in malformed:  # an Analysis every row of which was malformed
-        by_analysis.setdefault(analysis_id, [])
-    record_ = admission.AdmissionRecord.open(directory, list(by_analysis), command="build-dense")
-    records = list(records)
+    records, positions = _gathered(sources)
+    record_ = admission.AdmissionRecord.open(
+        directory, [source.analysis.analysis_id for source in sources], command="build-dense"
+    )
     keep = np.zeros(len(records), dtype=bool)
-    for analysis_id, positions in by_analysis.items():
-        tally = StreamTally(faults=malformed.get(analysis_id, IdentityFaults()))
-        _usable_frequencies(records, positions, tally.frequencies)
-        rules = admission.AnalysisRules(analysis_id, maf=_declared_maf(records, positions))
-        with record_.gate(rules) as gate:
-            gate.streamed(tally)
-            if positions:
-                keep[positions] = _admitted(records, positions, gate)
+    for source, at in zip(sources, positions, strict=True):
+        with record_.gate(source.rules) as gate:
+            gate.streamed(source.tally)
+            if at:
+                keep[at] = _admitted(records, at, gate)
     record_.finish()
-    return [record for record, kept in zip(records, keep.tolist(), strict=True) if kept]
+    kept = [record for record, judged in zip(records, keep.tolist(), strict=True) if judged]
+    return _standardised(kept, sources)
 
 
-def _declared_maf(records: list[NormalisedAssociation], positions: list[int]) -> MafPolicy:
-    """The one MAF filter an Analysis's records declare, or none.
+def _gathered(
+    sources: Sequence[AnalysisSource],
+) -> tuple[list[NormalisedAssociation], list[list[int]]]:
+    """Every Analysis's records in ``sources`` order, and where each Analysis's are."""
+    records: list[NormalisedAssociation] = []
+    positions: list[list[int]] = []
+    for source in sources:
+        own = _records_of(source)
+        positions.append(list(range(len(records), len(records) + len(own))))
+        records.extend(own)
+    return records, positions
 
-    Rows of one Analysis declaring different thresholds are refused: which
-    of them applies is not the build's to choose.
-    """
-    policies = {records[i].maf_policy for i in positions}
-    if len(policies) > 1:
-        analysis_id = records[positions[0]].analysis_id
-        raise ValueError(
-            f"Analysis {analysis_id!r} declares {len(policies)} different MAF thresholds "
-            "across its records; one Analysis declares one"
+
+def _standardised(
+    records: list[NormalisedAssociation], sources: Sequence[AnalysisSource]
+) -> list[NormalisedAssociation]:
+    """``records`` with each Analysis's standard errors divided by its phenotype SD (#18)."""
+    divisor = {s.analysis.analysis_id: s.se_divisor for s in sources}
+    return [
+        record if divisor[record.analysis_id] == 1.0
+        else replace(
+            record,
+            se=float(
+                apply_se_divisor(
+                    np.array([record.se], dtype=np.float32), divisor[record.analysis_id]
+                )[0]
+            ),
         )
-    return policies.pop() if policies else MafPolicy()
-
-
-def _usable_frequencies(
-    records: list[NormalisedAssociation], positions: list[int], tally: FrequencyTally
-) -> None:
-    """Make absent each frequency at ``positions`` outside (0, 1), in place, and
-    count it in ``tally`` (D7): the rule `parse_af` applies to every source."""
-    for i in positions:
-        eaf = records[i].eaf
-        if eaf is not None and parse_af(eaf, tally) is None:
-            records[i] = replace(records[i], eaf=None)
+        for record in records
+    ]
 
 
 def _admitted(
@@ -341,48 +402,22 @@ def _eaf_columns(reports_frequencies: bool) -> tuple[str, str]:
     return EafScope.ASSOCIATION.value, EafOrientationOutcome.UNVERIFIED.value
 
 
-def _blank_or(value: str | None) -> str:
-    """Attribution Metadata blanks stay blank: ``None`` becomes ``""``."""
-    return value or ""
-
-
-def _analysis_from_record(
-    record: NormalisedAssociation, eaf_scope: str, eaf_orientation: str
-) -> Analysis:
-    """The Analytical Metadata one record defines, blanked per the contract.
-
-    Optional attribution columns are written as ``""`` when the source left
-    them empty -- never replaced with a fabricated value.
-    """
-    return Analysis(
-        analysis_id=record.analysis_id,
-        analysis_label=_blank_or(record.analysis_label),
-        trait_ontology_id=_blank_or(record.trait_ontology_id),
-        trait_ontology_label=_blank_or(record.trait_ontology_label),
-        license=_blank_or(record.license),
-        publication_doi=_blank_or(record.publication_doi),
-        publication_pmid=_blank_or(record.publication_pmid),
-        consortium=_blank_or(record.consortium),
-        first_author=_blank_or(record.first_author),
-        stored_effect_scale=record.stored_effect_scale.value,
-        eaf_scope=eaf_scope,
-        eaf_orientation=eaf_orientation,
-    )
-
-
-def _collect_analyses(records: list[NormalisedAssociation]) -> list[Analysis]:
-    by_id: dict[str, Analysis] = {}
+def _collect_analyses(
+    records: list[NormalisedAssociation], sources: Sequence[AnalysisSource]
+) -> list[Analysis]:
+    """The Analyses with a kept record, in ``sources`` order, each with the
+    frequency scope of its records."""
     with_eaf = {record.analysis_id for record in records if record.eaf is not None}
-    for record in records:
-        eaf_scope, eaf_orientation = _eaf_columns(record.analysis_id in with_eaf)
-        current = _analysis_from_record(record, eaf_scope, eaf_orientation)
-        existing = by_id.get(record.analysis_id)
-        if existing is None:
-            by_id[record.analysis_id] = current
-            continue
-        if existing.stored_effect_scale != current.stored_effect_scale:
-            raise ValueError(f"analysis {record.analysis_id} has mixed stored_effect_scale values")
-    return [by_id[key] for key in sorted(by_id)]
+    kept = {record.analysis_id for record in records}
+    analyses = []
+    for source in sources:
+        analysis_id = source.analysis.analysis_id
+        if analysis_id in kept:
+            eaf_scope, eaf_orientation = _eaf_columns(analysis_id in with_eaf)
+            analyses.append(
+                replace(source.analysis, eaf_scope=eaf_scope, eaf_orientation=eaf_orientation)
+            )
+    return analyses
 
 
 def _write_manifest(

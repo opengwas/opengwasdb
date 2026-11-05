@@ -16,9 +16,9 @@ from typing import NoReturn
 import numpy as np
 import pytest
 import zarr
+from dense_sources import build_dense_fixture
 
 from opengwasdb import overview as overview_module
-from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
 from opengwasdb.layouts.dense.rho import build_dense_rho, write_rho_group
 from opengwasdb.model.analyses import AnalysesTable, read_analyses
@@ -267,7 +267,7 @@ def _build_rho_store(
     source.write_text(_RHO_SOURCE_HEADER + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
 
     store = tmp_path / "rho-store.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], store, store_id="rho-fixture", release_id="v1", reference_assembly="GRCh37"
     )
     build_dense_rho(store, window_bp=50, z_thresh=1.0, min_nulls=min_nulls, n_workers=1)
@@ -699,7 +699,7 @@ def _build_indexed_subset_store(
     source = tmp_path / "idx_source.tsv"
     source.write_text(_RHO_SOURCE_HEADER + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
     store = tmp_path / f"{subset_name}-store.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source],
         store,
         store_id="idx-fixture",

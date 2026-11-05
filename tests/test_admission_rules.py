@@ -318,29 +318,6 @@ def test_require_admitted_refuses_each_broken_rule(z, se, eaf, imputed, rule):
         )
 
 
-@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
-@pytest.mark.parametrize("plane", ["z", "se"])
-def test_a_source_cell_whose_marker_is_not_the_canonical_nan_is_refused(plane, dtype):
-    """A completion reads a source Store's cells by the presence rule (ADR 0070):
-    a missing marker other than `np.nan`'s is an invalid cell, not a missing one,
-    and carrying it would write its payload into the completed Store."""
-    from opengwasdb.admission import NotAdmitted, require_paired
-    from opengwasdb.associations import non_canonical
-
-    z = np.array([1.0, np.nan], dtype=dtype)
-    se = np.array([0.1, np.nan], dtype=dtype)
-    require_paired(z, se, where="complete-x")  # the canonical marker is a missing cell
-    {"z": z, "se": se}[plane][1] = np.array([0x7E01], np.uint16).view(np.float16)[0]
-    # Fixture first: the cell is still missing in both planes, and its marker is odd.
-    assert np.isnan(z[1]) and np.isnan(se[1])
-    assert non_canonical({"z": z, "se": se}[plane]).tolist() == [False, True]
-    with pytest.raises(
-        NotAdmitted,
-        match=r"complete-x: .*\(a missing marker other than the canonical NaN: 1\)",
-    ):
-        require_paired(z, se, where="complete-x")
-
-
 def test_an_infinite_z_is_its_own_reason_after_the_effect_rule():
     keys = ["a", "b", "c"]
     rows = SourceRows(

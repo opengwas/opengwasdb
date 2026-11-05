@@ -188,6 +188,7 @@ __all__ = [
     "RAGGED_SEQUENCE_SHARD_ELEMENTS",
     "RAGGED_SIDE_SHARD_ELEMENTS",
     "RHO_CHUNK_ROWS",
+    "SE_COEFFICIENTS",
     "SE_COEFFICIENTS_ROWS",
     "PartialShardWriteError",
     "SHARDED_COMPRESSOR_RECORD",
@@ -1442,6 +1443,12 @@ if os.environ.get(_ENFORCE_WHOLE_SHARD_WRITES_ENV) == "1":
     _install_shard_write_guard()
 
 
+#: The array a residual `se` plan's per-Analysis fit lives in, as its path
+#: spells it. `ArrayRole.SE_COEFFICIENTS` is the role; this is the key, and the
+#: one place the string is spelled: the role maps below and `encoding.codec`
+#: (lower-level modules cannot define it without an upward import) read it.
+SE_COEFFICIENTS = ArrayRole.SE_COEFFICIENTS.value
+
 #: The Dense roles, by array path, for a Dense Observed-Only or
 #: Reference-Completed `data.zarr`.  The converter walks the source tree and
 #: refuses any array this cannot name a role for; the two Dense-only completion
@@ -1456,7 +1463,7 @@ _DENSE_ROLES_BY_NAME: Mapping[str, ArrayRole] = MappingProxyType(
         "on_panel": ArrayRole.DENSE_ON_PANEL,
         "eaf_baseline": ArrayRole.PER_VARIANT,
         "eaf_reference": ArrayRole.PER_VARIANT,
-        "se_coefficients": ArrayRole.SE_COEFFICIENTS,
+        SE_COEFFICIENTS: ArrayRole.SE_COEFFICIENTS,
         "se_exception_index": ArrayRole.EXCEPTION_TABLE,
         "se_exception_value": ArrayRole.EXCEPTION_TABLE,
         "z_overflow_index": ArrayRole.EXCEPTION_TABLE,
@@ -1485,7 +1492,7 @@ _RAGGED_ROLES_BY_NAME: Mapping[str, ArrayRole] = MappingProxyType(
         "offsets": ArrayRole.ASSOCIATION_OFFSETS,
         "eaf_baseline": ArrayRole.RAGGED_PER_VARIANT,
         "eaf_reference": ArrayRole.RAGGED_PER_VARIANT,
-        "se_coefficients": ArrayRole.SE_COEFFICIENTS,
+        SE_COEFFICIENTS: ArrayRole.SE_COEFFICIENTS,
         "se_exception_index": ArrayRole.RAGGED_EXCEPTION_TABLE,
         "se_exception_value": ArrayRole.RAGGED_EXCEPTION_TABLE,
         "z_overflow_index": ArrayRole.RAGGED_EXCEPTION_TABLE,

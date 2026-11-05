@@ -316,11 +316,11 @@ is part of the contract (issue #255):
   the rule above (issue #400). A row that names nothing gives way to a later
   row that names the variant, whichever spelling either row uses.
 - `build-dense` does not yet compare names. It takes the first non-empty rsid
-  among the rows it admits for a variant. The rows it reads carry the
-  upper-cased ALID and not the source's spelling, so it cannot tell a site's
-  two spellings apart. Its reader is to be replaced (issue #385), and the
-  comparison is to follow that reader, as it followed the Ragged builders'
-  `ReaderBatch` (issue #379).
+  among the rows it admits for a variant, so of two spellings of a site named
+  differently, the first one read names the variant. Since issue #385 it reads
+  its association TSVs as `ReaderBatch`es, which carry each row's spelling
+  (issue #379), so the comparison can follow, as it did for
+  `build-ragged-ssf`.
 - A `build-ragged-besd` file set lists a variant once, and two of its rows
   that canonicalise to one variant are both dropped, with their associations,
   so no two names ever meet there.
@@ -1793,6 +1793,21 @@ read alike. A release without the plane never has the key. The CLI's resolved
 output prints an `n` column immediately before `association_status` (`.` where
 missing) only for such a release (ADR 0067).
 
+`query --format json` prints that record, one JSON object per association, as
+an array: `variant_index`, `analysis_index`, `z`, `se`, `eaf`,
+`association_status`, and `n` when the release carries it in its integer form.
+The output is RFC 8259 JSON, so it never holds `NaN` or `Infinity` as a bare
+token. A cell that is not there is `null`, and ±inf is the string `"Infinity"`
+or `"-Infinity"`, because an infinite value is a value (§15) and a `null`
+would be indistinguishable from the missing cell beside it (issue #394).
+
+A `null` `eaf` therefore says the frequency is not available, not that the
+association is: `association_status` says the association is `missing`. An
+`eaf` is `null` wherever the cell holds no frequency -- on every cell of a
+release with no association-frequency plane, except an imputed one, whose
+`eaf` is the LD Reference Panel's where the release carries Reference EAF
+(§9, ADR 0036).
+
 Reference-Completed queries include imputed associations by default. Query APIs MUST provide an Observed-Only mode that excludes imputed associations.
 
 Detailed Reference Completion Quality is not joined onto every imputed association by default. Query APIs MAY expose it when requested.
@@ -1859,8 +1874,9 @@ before the read.
 
 `validate_store(path, rules={...})` runs the named rules and the rules they run after,
 and refuses a name this table does not list. `ValidationResult.failed()` names the
-rules that reported an error. `validate --format json` reports the findings' messages,
-not their rules' names. The names are stable: a rule is renamed or removed only by a
+rules that reported an error. `validate --format json` reports each finding's rule,
+severity and target beside its message, skips included (§20.1). The names are
+stable: a rule is renamed or removed only by a
 change to this table, which the test suite holds to the registry, in its order.
 
 | Rule | Judges | Kind | What it checks |
@@ -1961,9 +1977,32 @@ Command-line validation (`ogdb validate`) and inspection (`ogdb info`) provide b
 
 - `ogdb validate <store> --format json` outputs a single JSON object on `stdout`:
   ```json
-  {"ok": true, "errors": [], "warnings": []}
+  {"ok": true, "errors": [], "warnings": [], "findings": []}
   ```
   On failure (`ok=false`), it outputs the JSON object containing the recorded error strings on `stdout` and exits with a non-zero exit code. On success, `stderr` is empty.
+  `findings` names the rule behind every record (§20.0, ADR 0074, issue #378): each
+  item is an object of exactly `rule`, `severity`, `target` and `message`, all
+  strings, where `severity` is `error`, `warning` or `skip`, `rule` is a name from
+  §20.0's table, `target` is the part of the release the rule judged — `.` for the
+  release, `data.zarr` for a Dense grid, `data.zarr/ragged` for an association
+  sequence, `dense` and `dense/data.zarr` for a Hybrid's Dense Component — and
+  `message` is the same string the rule's entry in `errors` or `warnings` holds,
+  or, for a skip, the reason ADR 0074 records for it: the rules that blocked it, or
+  the rule's own reason for having nothing to judge. A skipped rule appears once per
+  target it could not judge, one record whose message names every rule that blocked
+  it in the order it looks them up, so a release where a rule never ran is not
+  indistinguishable from one where every rule passed. The order is deterministic:
+  rule order, as §20.0's table lists the rules, then target order; a rule's failures
+  and warnings on a target come before its skip of that target, and a rule is one or
+  the other, never both. A rule that enumerates something the store holds unordered
+  — a Zarr group's members above all — sorts it, so the tiers of a Top-Hit Index are
+  named by threshold and then by name, strictest first (`p_5e_08`, `p_5e_06`,
+  `p_5e_04`), a tier whose threshold will not parse last; and the nodes
+  `zarr.format` walks are named by path. `ok`, `errors` and `warnings` carry the
+  messages and the verdict they carried before this key, and `errors` and `warnings`
+  remain the `message`s of the `error` and `warning` records in that order. Order is
+  the one thing that changed: a release that named the same defects in a different
+  order on each run names them in one.
 - `ogdb info <store> --format json` outputs a single JSON object on `stdout` representing the store release manifest with decomposed structured encoding:
   ```json
   {
@@ -2307,6 +2346,47 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   0.14%, with Z and EAF identical); such a pair fails with `se_mismatch`. Where SE is `float16`
   the pair is exact. The check stays strict (owner ruling, 2026-10-22): the re-quantisation is
   completion's defect, and opengwasdb#301 owns fixing the refit, not this check.
+
+### 20.5 Association TSV: building a Dense Store with `build-dense`
+
+`ogdb build-dense OUTPUT --manifest MANIFEST.tsv --store-id ID --release-id ID
+--admission-record DIR` builds a Dense Observed-Only Store from a build manifest
+(issue #385, ADR 0076). The manifest is the one every builder reads: a row per
+Analysis, with `analysis_id`, `source_file`, `stored_effect_scale` and
+`original_sd_method`, and optionally the label, Trait Ontology, attribution,
+`maf_threshold` and `info_score_threshold` columns. Each row's `source_file` is
+that Analysis's **association TSV**, read as `opengwasdb.association-tsv`,
+which a row that omits `source_reader_capability` takes. The Store's columns are
+the manifest's rows in order.
+
+- An association TSV holds associations only, one Analysis per file. It names
+  its columns as `chromosome`/`chrom`/`chr`, `position`/`pos`/`base_pair_location`,
+  `effect_allele`/`ea`/`a1`, `other_allele`/`oa`/`a2`/`non_effect_allele`,
+  `se`/`standard_error`, `z`/`zscore`/`z_score` or else
+  `beta`/`effect`/`effect_size`, and optionally `eaf`/`effect_allele_frequency` and
+  `rsid`/`variant_id`. A `.csv` file is comma-delimited; `.gz` is read
+  compressed. A header that names a column the manifest owns (an Analysis id,
+  label, Trait Ontology, attribution, effect scale, `maf_threshold` or
+  `info_score_threshold`) is refused.
+- The format declares no reference allele (§5): its effect and other alleles
+  need not be REF and ALT.
+- A row that cannot be read (a required field missing, a number that is not
+  one, equal alleles) refuses the run, naming the row. A row whose identity no
+  ALID can spell (§4) is dropped by Association Admission and logged.
+- `build-dense` does not lift. Each row's source assembly (`source_assembly`,
+  default `--reference-assembly`, which is `GRCh37` unless given) must be the
+  assembly the Store records, and a row in another is refused.
+- A row whose reader is not `opengwasdb.association-tsv`, a numeric INFO
+  threshold (an association carries no imputation score), and an
+  `original_sd_method` of `unavailable` are refused; an SD-rescaling method
+  divides the Analysis's standard errors by its `original_sd`, as in
+  `build-dense-vcf` (§7).
+- The Python API's source-fidelity check, `validate_store(store, source=...)`
+  (§20.0), takes the same build manifest. It compares each sampled source
+  association with the Store after that standardisation, reads a source as the
+  build does (a row the build dropped as malformed is not a failure), and
+  reports `fidelity.source` for a bare association TSV, which names no Analysis,
+  or a manifest with no rows.
 
 ## 21. Compatibility
 

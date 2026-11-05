@@ -25,6 +25,7 @@ from test_indexed_subsets import _build, alid, build_rich_store
 from test_ragged_residual_completion import RaggedResidualScenario
 
 from opengwasdb.associations import (
+    Associations,
     Cells,
     CsrReader,
     DenseGridReader,
@@ -82,8 +83,10 @@ INVALID = {
 }
 
 
-def _write_dense(path: Path, table: tuple[Cell, ...]) -> zarr.Group:
-    codec = StoreCodec(ENCODING)
+def _write_dense(
+    path: Path, table: tuple[Cell, ...], encoding: StoreEncoding = ENCODING
+) -> zarr.Group:
+    codec = StoreCodec(encoding)
     z = np.full((N_VARIANTS, N_ANALYSES), NAN, np.float32)
     se = np.full_like(z, NAN)
     eaf = np.full_like(z, NAN)
@@ -101,7 +104,7 @@ def _write_dense(path: Path, table: tuple[Cell, ...]) -> zarr.Group:
     return group
 
 
-def _write_csr(path: Path, table: tuple[Cell, ...]) -> Path:
+def _write_csr(path: Path, table: tuple[Cell, ...], encoding: StoreEncoding = ENCODING) -> Path:
     """The table as an association sequence. The writer refuses a cell with one
     of z and SE missing, so such a cell is written with a stand-in SE and its
     SE planted as missing afterwards."""
@@ -121,7 +124,7 @@ def _write_csr(path: Path, table: tuple[Cell, ...]) -> Path:
             eaf=np.array([c.eaf for c in rows], np.float32),
         )
         flags.extend(c.flag for c in rows)
-    writer.flush(path, ENCODING)
+    writer.flush(path, encoding)
     ragged = zarr.open_group(path / RAGGED_ZARR_PATH, mode="a")
     for position in unpaired:
         ragged["se"][position] = np.float16(np.nan)
@@ -130,12 +133,16 @@ def _write_csr(path: Path, table: tuple[Cell, ...]) -> Path:
     return path
 
 
-def _readers(tmp_path: Path, table: tuple[Cell, ...]) -> dict[str, DenseGridReader | CsrReader]:
+def _readers(
+    tmp_path: Path, table: tuple[Cell, ...], encoding: StoreEncoding = ENCODING
+) -> dict[str, DenseGridReader | CsrReader]:
     # A bare grid or sequence records no completion state; this one carries a mask.
     dense = DenseGridReader.open(
-        _write_dense(tmp_path / "grid.zarr", table), ENCODING, requires_mask=True
+        _write_dense(tmp_path / "grid.zarr", table, encoding), encoding, requires_mask=True
     )
-    csr = CsrReader.open(_write_csr(tmp_path / "csr", table), ENCODING, requires_mask=True)
+    csr = CsrReader.open(
+        _write_csr(tmp_path / "csr", table, encoding), encoding, requires_mask=True
+    )
     csr.open_variant_index(N_VARIANTS)
     return {"dense": dense, "csr": csr}
 
@@ -230,6 +237,290 @@ def test_a_csr_reads_flat_positions_in_the_order_given(readers) -> None:
     rows = sorted(TABLE, key=lambda c: (c.analysis, c.variant))
     found = readers["csr"].read(Cells.positions(np.array([3, 0, 3])))
     _assert_rows(found, [rows[3], rows[0], rows[3]])
+
+
+# ── region reads: a span of Analyses, and an Analysis a window at a time ─────
+
+
+@pytest.mark.parametrize(
+    ("positions", "run"),
+    [
+        ([5, 6, 7], (5, 8)),
+        ([3], (3, 4)),
+        ([], None),
+        ([0, 2, 1, 3], None),  # the right ends and length, out of order
+        ([0, 1, 1, 3], None),  # the right ends and length, with a repeat
+        ([0, 1, 3], None),
+        ([2, 1, 0], None),
+    ],
+)
+def test_positions_read_as_a_slice_only_when_they_are_one_ascending_run(positions, run) -> None:
+    from opengwasdb.associations.csr import _run
+
+    assert _run(np.array(positions, dtype=np.int64)) == run
+
+
+def _in_order(analyses: range) -> list[Cell]:
+    return sorted(
+        (c for c in TABLE if c.analysis in analyses), key=lambda c: (c.analysis, c.variant)
+    )
+
+
+@pytest.mark.parametrize("span", [(0, 3), (1, 3), (2, 3), (0, 1), (1, 1), (3, 3)])
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_a_span_of_analyses_reads_as_each_analysis_in_turn(readers, layout, span) -> None:
+    first, stop = span
+    found = readers[layout].read(Cells.analyses(first, stop))
+    _assert_rows(found, _stored(layout, _in_order(range(first, stop))))
+
+
+def test_a_dense_span_reads_each_plane_once(dense_residual, monkeypatch) -> None:
+    release, _observed, _panel, _imputed = dense_residual
+    grid = _grid(release.store)
+    assert grid.n_analyses >= 2, "the span must hold more than one Analysis to mean anything"
+    with chunk_reads(monkeypatch, _EAF_ARRAYS) as reads:
+        found = grid.read(Cells.analyses(0, grid.n_analyses))
+    _assert_read_once(reads, "span")
+    each = [grid.read(Cells.analysis(a)) for a in range(grid.n_analyses)]
+    assert found.count == sum(part.count for part in each) > 0
+    for key in found:
+        joined = np.concatenate([part[key] for part in each])
+        assert np.array_equal(found[key], joined, equal_nan=joined.dtype.kind == "f"), key
+
+
+def _size(window: Cells) -> int:
+    """The cells a window names: its flat positions, or its variants × Analyses."""
+    if window.kind == "positions":
+        assert window.pos is not None
+        return len(window.pos)
+    assert window.kind == "cross" and window.vi is not None and window.ai is not None
+    return len(window.vi) * len(window.ai)
+
+
+@pytest.mark.parametrize("max_cells", [1, 2, 3, 4, 100])
+@pytest.mark.parametrize("analysis", [0, 1, 2])
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_windows_read_an_analysis_once_in_order_within_max_cells(
+    readers, layout, analysis, max_cells
+) -> None:
+    reader = readers[layout]
+    windows = list(reader.windows(Cells.analysis(analysis), max_cells=max_cells))
+    assert windows and all(0 < _size(window) <= max_cells for window in windows)
+    _assert_rows(
+        Associations.concat([reader.read(window) for window in windows]),
+        _stored(layout, _in_order(range(analysis, analysis + 1))),
+    )
+
+
+@pytest.mark.parametrize("max_cells", [1, 3, 5, 100])
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_windows_with_no_region_read_the_whole_component(readers, layout, max_cells) -> None:
+    reader = readers[layout]
+    windows = list(reader.windows(max_cells=max_cells))
+    assert all(0 < _size(window) <= max_cells for window in windows)
+    _assert_rows(
+        Associations.concat([reader.read(window) for window in windows]),
+        _stored(layout, _in_order(range(N_ANALYSES))),
+    )
+
+
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_windows_keep_the_order_a_list_of_analyses_names(readers, layout) -> None:
+    reader = readers[layout]
+    windows = list(reader.windows(Cells.analyses([2, 0]), max_cells=2))
+    expected = _in_order(range(2, 3)) + _in_order(range(0, 1))
+    _assert_rows(
+        Associations.concat([reader.read(window) for window in windows]),
+        _stored(layout, expected),
+    )
+
+
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_a_window_s_z_is_the_z_of_its_cells(readers, layout) -> None:
+    reader = readers[layout]
+    windows = list(reader.windows(max_cells=3))
+    assert len(windows) > 1
+    for window in windows:
+        assert np.array_equal(reader.z(window), reader.inspect(window).z, equal_nan=True)
+
+
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_a_window_s_z_refuses_a_non_canonical_marker(tmp_path, layout) -> None:
+    """A scan thresholds Z, and a NaN clears no cutoff, so a window's Z refuses the
+    marker every read refuses rather than let the comparison drop the cell (spec §15)."""
+    float_z = StoreEncoding(z=ZEncoding(kind="float16"), se=ENCODING.se, eaf=ENCODING.eaf)
+    reader = _readers(tmp_path, (*TABLE, Cell(6, 2, NAN, NAN, NAN, 0)), float_z)[layout]
+    if layout == "dense":
+        _plant_payload(zarr.open_group(tmp_path / "grid.zarr", mode="r+")["z"], (6, 2))
+    else:
+        ragged = zarr.open_group(tmp_path / "csr" / RAGGED_ZARR_PATH, mode="r+")
+        start = int(np.asarray(ragged["offsets"][2]))
+        _plant_payload(ragged["z"], (start + 1,))  # Analysis 2 holds variants 5 and 6
+    windows = list(reader.windows(Cells.analysis(2), max_cells=1))
+    held = [reader.inspect(window).variant_index.tolist() for window in windows]
+    assert [6] in held, "a window must hold the planted cell"
+    for window, variants in zip(windows, held, strict=True):
+        if variants == [6]:
+            with pytest.raises(InvalidAssociations, match=r"variant 6, analysis 2: non_canonical"):
+                reader.z(window)
+        else:
+            assert np.array_equal(reader.z(window), reader.inspect(window).z, equal_nan=True)
+
+
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_windows_refuse_an_empty_window(readers, layout) -> None:
+    with pytest.raises(ValueError, match="at least one"):
+        list(readers[layout].windows(max_cells=0))
+
+
+#: Regions naming an Analysis outside the fixture's three, and the first such index.
+OUTSIDE = {
+    "analysis -1": (Cells.analysis(-1), -1),
+    "analysis n": (Cells.analysis(N_ANALYSES), N_ANALYSES),
+    "a span past the end": (Cells.analyses(2, N_ANALYSES + 1), N_ANALYSES),
+    "a list holding -1": (Cells.analyses([0, -1]), -1),
+}
+
+#: The other regions that name Analyses.
+OUTSIDE_PAIRED = {
+    "cross with -1": (Cells.cross([5], [-1]), -1),
+    "cross with n": (Cells.cross([5], [N_ANALYSES]), N_ANALYSES),
+    "pairs with -1": (Cells.pairs(np.array([5]), np.array([-1])), -1),
+}
+
+
+def _outside(index: int) -> str:
+    return rf"Analysis index {index} is outside \[0, {N_ANALYSES}\)"
+
+
+@pytest.mark.parametrize("region", sorted(OUTSIDE))
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_windows_refuse_an_analysis_outside_the_axis(readers, layout, region) -> None:
+    """Asked for, Analysis -1 would read the last Analysis's cells as its own, and an
+    empty scan reads as "no hits": the refusal comes before any window does."""
+    cells, index = OUTSIDE[region]
+    with pytest.raises(IndexError, match=_outside(index)):
+        readers[layout].windows(cells, max_cells=3)
+
+
+@pytest.mark.parametrize("region", sorted(OUTSIDE | OUTSIDE_PAIRED))
+@pytest.mark.parametrize("call", ["read", "inspect"])
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_a_region_naming_an_analysis_outside_the_axis_is_refused(
+    readers, layout, call, region
+) -> None:
+    cells, index = (OUTSIDE | OUTSIDE_PAIRED)[region]
+    with pytest.raises(IndexError, match=_outside(index)):
+        getattr(readers[layout], call)(cells)
+
+
+def test_a_dense_window_s_z_refuses_an_analysis_outside_the_axis(readers) -> None:
+    with pytest.raises(IndexError, match=_outside(-1)):
+        readers["dense"].z(Cells.cross([5], [-1]))
+
+
+#: Regions naming a variant outside the fixture's eight, and the first such index.
+OUTSIDE_VARIANTS = {
+    "variants -1": (Cells.variants([-1]), -1),
+    "variants n": (Cells.variants([N_VARIANTS]), N_VARIANTS),
+    "variants past the end": (Cells.variants(np.arange(6, N_VARIANTS + 2)), N_VARIANTS),
+    "cross with variant -1": (Cells.cross([-1, 1], [0]), -1),
+    "cross with variant n": (Cells.cross([1, N_VARIANTS], [0]), N_VARIANTS),
+    "pairs with variant -1": (Cells.pairs(np.array([-1]), np.array([0])), -1),
+    "pairs with variant n": (Cells.pairs(np.array([N_VARIANTS]), np.array([0])), N_VARIANTS),
+}
+
+#: The CSR's rows, one for each attempted cell.
+N_ROWS = len(TABLE)
+
+#: Positions regions outside the CSR's rows, and the first such position.
+OUTSIDE_POSITIONS = {
+    "position -1": (Cells.positions(np.array([-1])), -1),
+    "position n": (Cells.positions(np.array([N_ROWS])), N_ROWS),
+    "a run past the end": (Cells.positions(np.arange(N_ROWS - 2, N_ROWS + 1)), N_ROWS),
+    "scattered, one past the end": (Cells.positions(np.array([3, N_ROWS + 4, 0])), N_ROWS + 4),
+}
+
+
+@pytest.mark.parametrize("region", sorted(OUTSIDE_VARIANTS))
+@pytest.mark.parametrize("call", ["read", "inspect"])
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_a_region_naming_a_variant_outside_the_axis_is_refused(
+    readers, layout, call, region
+) -> None:
+    """Variant -1 would read the last variant's cells as its own on a grid, and on a
+    CSR read as a variant with no associations."""
+    cells, index = OUTSIDE_VARIANTS[region]
+    with pytest.raises(IndexError, match=rf"variant index {index} is outside \[0, {N_VARIANTS}\)"):
+        getattr(readers[layout], call)(cells)
+
+
+@pytest.mark.parametrize("region", sorted(OUTSIDE_POSITIONS))
+@pytest.mark.parametrize("call", ["read", "inspect", "z"])
+def test_a_csr_refuses_a_position_outside_its_rows(readers, call, region) -> None:
+    cells, index = OUTSIDE_POSITIONS[region]
+    with pytest.raises(IndexError, match=rf"position {index} is outside \[0, {N_ROWS}\)"):
+        getattr(readers["csr"], call)(cells)
+
+
+def test_a_dense_window_s_z_refuses_a_variant_outside_the_axis(readers) -> None:
+    with pytest.raises(IndexError, match=rf"variant index -1 is outside \[0, {N_VARIANTS}\)"):
+        readers["dense"].z(Cells.cross([-1], [0]))
+
+
+@pytest.mark.parametrize(
+    "cells",
+    [Cells.cross([1], [0]), Cells.pairs(np.array([1]), np.array([0]))],
+    ids=["cross", "pairs"],
+)
+def test_a_csr_reads_variants_only_on_the_axis_its_index_gives(tmp_path, cells) -> None:
+    """A CSR holds no record of its variant axis, so a region naming variants is
+    checked against the one `open_variant_index` is given, and refused without it."""
+    csr = CsrReader.open(_write_csr(tmp_path / "csr", TABLE), ENCODING, requires_mask=True)
+    with pytest.raises(VariantIndexError, match="open the variant index"):
+        csr.read(cells)
+    csr.open_variant_index(N_VARIANTS)
+    assert csr.read(cells).count == 1
+
+
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_windows_refuse_a_region_that_is_not_analyses(readers, layout) -> None:
+    with pytest.raises(TypeError, match="Analyses"):
+        list(readers[layout].windows(Cells.variants([1])))
+
+
+def _assert_windows_join_to_reads(
+    reader: DenseGridReader | CsrReader, region: Cells | None, whole, max_cells: int
+) -> None:
+    """`region`'s windows, read and joined, are `whole`, its own read."""
+    windows = list(reader.windows(region, max_cells=max_cells))
+    assert len(windows) > 1 and all(_size(window) <= max_cells for window in windows)
+    joined = Associations.concat([reader.read(window) for window in windows])
+    for key in whole:
+        assert np.array_equal(joined[key], whole[key], equal_nan=key in ("z", "se", "eaf")), key
+
+
+def test_windows_read_a_hybrid_overflow_as_its_whole_analyses(hybrid_residual) -> None:
+    overflow = _sequence(hybrid_residual, requires_mask=False)
+    sizes = np.diff(overflow.structure.offsets)
+    busiest = int(np.argmax(sizes))
+    assert sizes[busiest] > 2, "an Analysis must span several windows to mean anything"
+    region = Cells.analysis(busiest)
+    _assert_windows_join_to_reads(overflow, region, overflow.read(region), max_cells=2)
+    every = overflow.read(Cells.analyses(range(overflow.n_analyses)))
+    _assert_windows_join_to_reads(overflow, None, every, max_cells=2)
+
+
+def test_windows_read_a_built_dense_release_as_its_whole_analyses(dense_residual) -> None:
+    """Windows of 37 variants, the last one short, meet imputed cells: each one's
+    frequency is the panel's, and its SE is decoded from that frequency."""
+    release, _observed, _panel, imputed = dense_residual
+    grid = _grid(release.store)
+    assert grid.n_variants % 37 and imputed[:, 1].any()
+    region = Cells.analysis(1)
+    _assert_windows_join_to_reads(grid, region, grid.read(region), max_cells=37)
+    every = grid.read(Cells.analyses(0, grid.n_analyses))
+    _assert_windows_join_to_reads(grid, None, every, max_cells=37)
 
 
 @pytest.mark.parametrize("bad", sorted(INVALID))

@@ -6,16 +6,17 @@ NaN or inside (0, 1); and a cell is flagged imputed only when it is present.
 A builder's rows reach a Store through a `Gate`, which admits only such
 cells; completion's candidates are checked by `admissible`, and a writer
 handed cells from anywhere else checks them with `require_admitted`. A
-completion reads its source Store's cells through `require_paired`.
+completion reads its source Store's cells through the Association Reader, whose
+presence rule refuses an invalid one with `InvalidAssociations` (ADR 0070).
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from opengwasdb.associations.record import State, non_canonical, states
+from opengwasdb.associations.record import State, states
 
-__all__ = ["NotAdmitted", "admissible", "require_admitted", "require_paired"]
+__all__ = ["NotAdmitted", "admissible", "require_admitted"]
 
 
 class NotAdmitted(ValueError):
@@ -67,33 +68,6 @@ def require_admitted(
         with np.errstate(invalid="ignore"):
             broken["frequency outside (0, 1)"] = ~np.isnan(eaf) & ~((eaf > 0) & (eaf < 1))
     _raise_if_broken(broken, where)
-
-
-def require_paired(z: np.ndarray, se: np.ndarray, *, where: str) -> None:
-    """Refuse source cells the presence rule calls invalid (spec §15, ADR 0070),
-    naming ``where``.
-
-    What a completion checks of the cells it reads from a source Store, before
-    it carries or completes any of them:
-    - one of z and SE missing (D1): it would be stored beside an imputed
-      partner, or carried as a cell no reader can use;
-    - a missing marker other than the canonical NaN: a reader refuses the cell,
-      and carrying it as missing would write its payload into the new Store.
-
-    ``z`` and ``se`` are judged in the dtype they were read in, as a reader
-    judges them: a decoded ``float16`` plane carries its payload into ``float32``.
-    """
-    z, se = np.asarray(z), np.asarray(se)
-    z_missing, se_missing = np.isnan(z), np.isnan(se)
-    odd = non_canonical(z, z_missing) | non_canonical(se, se_missing)
-    state = states(z_missing, se_missing, None, odd)
-    _raise_if_broken(
-        {
-            "one of z and SE missing": state == State.PARTIAL,
-            "a missing marker other than the canonical NaN": state == State.NON_CANONICAL,
-        },
-        where,
-    )
 
 
 def _raise_if_broken(broken: dict[str, np.ndarray], where: str) -> None:

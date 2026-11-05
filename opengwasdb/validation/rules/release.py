@@ -148,16 +148,20 @@ _V3_NODE_METADATA = "zarr.json"
 
 
 def _zarr_nodes(directory: Path) -> Iterator[tuple[Path, set[str]]]:
-    """Every Zarr node directory under `directory`, with its metadata filenames.
+    """Every Zarr node directory under `directory`, in path order, with its metadata.
 
     Read from the filesystem, not through zarr: the check is precisely that the
     stored metadata and the manifest agree, and asking zarr would let it hide a
-    node behind a consolidated record or an auto-detected format.
+    node behind a consolidated record or an auto-detected format. The walk's order is
+    the filesystem's, so the nodes are sorted once it ends: a tree with two bad nodes
+    reports them in the same order on every run.
     """
+    found: list[tuple[Path, set[str]]] = []
     for dirpath, _dirnames, filenames in os.walk(directory):
         present = {name for name in filenames if name in (*_V2_NODE_METADATA, _V3_NODE_METADATA)}
         if present:
-            yield Path(dirpath), present
+            found.append((Path(dirpath), present))
+    yield from sorted(found, key=lambda node: str(node[0]))
 
 
 def _rebuild_alid_index(name: str) -> str:

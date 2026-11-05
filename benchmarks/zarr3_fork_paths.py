@@ -87,8 +87,8 @@ def count_gathers() -> None:
 
 def dense_completion_n2(out: Path) -> None:
     import test_dense_completion as tdc
+    from dense_sources import build_dense_fixture
 
-    from opengwasdb.build.observed import build_dense_observed_from_sources
     from opengwasdb.layouts.dense.complete import complete_dense_store
 
     d = out / "dense-completion-n2"
@@ -96,7 +96,7 @@ def dense_completion_n2(out: Path) -> None:
     src = d / "associations.tsv"
     src.write_text("\n".join([tdc.SOURCE_HEADER, *tdc.SOURCE_ROWS]) + "\n", encoding="utf-8")
     observed = d / "obs.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [src], observed, store_id="test", release_id="obs-v1", reference_assembly="GRCh38"
     )
     panel = tdc._make_ld_panel(d)

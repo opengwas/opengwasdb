@@ -4,8 +4,8 @@ import math
 
 import numpy as np
 import pytest
+from dense_sources import build_dense_fixture
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.query import log10_p_two_sided, query_store
 
 
@@ -95,7 +95,7 @@ def rsid_gap_store_path(tmp_path):
     source = tmp_path / "no_rsid.tsv"
     source.write_text(header + "\n" + row + "\n", encoding="utf-8")
     store_path = tmp_path / "no-rsid.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], store_path, store_id="no-rsid", release_id="v1", reference_assembly="GRCh37"
     )
     return store_path

@@ -69,7 +69,9 @@ from opengwasdb.encoding.association_codec import (
     log_se_out_of_range,
     storable,
 )
+from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.encoding.timing import format_duration
+from opengwasdb.layouts import build_manifest
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
     column_map_provenance,
@@ -80,7 +82,6 @@ from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
     EafSpillSurvey,
     apply_eaf_scope,
-    apply_se_divisor,
     create_dense_zarr,
     log_progress,
     survey_eaf_spills,
@@ -319,7 +320,8 @@ def _off_reference_spill(
     lookup = encoded.hashed_lookup()
     hashed_index = np.flatnonzero(is_hashed(keys)).astype(np.int64)
     hashed_raw = [lookup[int(keys[position])] for position in hashed_index.tolist()]
-    return keys, z, apply_se_divisor(se, se_divisor), eaf, reference, hashed_index, hashed_raw
+    se = build_manifest.apply_se_divisor(se, se_divisor)
+    return keys, z, se, eaf, reference, hashed_index, hashed_raw
 
 
 def _resolve_column_hybrid(
@@ -366,9 +368,9 @@ def _resolve_column_hybrid(
             [], unmatched.z[:0], unmatched.se[:0], unmatched.eaf[:0], unmatched.reference[:0]
         )
     divisor = row.se_divisor
-    overflow_se = apply_se_divisor(overflow.se, divisor)
+    overflow_se = build_manifest.apply_se_divisor(overflow.se, divisor)
     return (
-        (dense.index, dense.z, apply_se_divisor(dense.se, divisor), dense.eaf),
+        (dense.index, dense.z, build_manifest.apply_se_divisor(dense.se, divisor), dense.eaf),
         (overflow.index, overflow.z, overflow_se, overflow.eaf, overflow.reference),
         _off_reference_spill(unmatched, divisor, gate),
     )
@@ -386,7 +388,14 @@ def _spill_hybrid_column(
     associations -- keyed by one uint64 per raw source coordinate -- to
     ``{col}.unk.npz`` with a ``{col}.unk.raw`` side file for any key the packed
     encoding could not represent. Overflow and off-reference rows carry their
-    `REFERENCE_*` codes, which the fold resolves their duplicates by."""
+    `REFERENCE_*` codes, which the fold resolves their duplicates by.
+
+    Each spill is one cell per entry, and a column whose arrays disagree is
+    refused before a file exists: the band-write phase reads each spill back as
+    one column, so a short array would put a cell's statistic under another's
+    variant (issue #392). The hashed arrays are the hashed subset's axis, not
+    the column's."""
+    _refuse_unpaired_spills(col_idx, dense, overflow, off_reference)
     d_rows, d_z, d_se, d_eaf = dense
     o_idx, o_z, o_se, o_eaf, o_reference = overflow
     for suffix, arrs in (
@@ -400,17 +409,60 @@ def _spill_hybrid_column(
         tmp = spill_dir / f"{col_idx}{suffix}.tmp.npz"
         np.savez(tmp, **arrs)
         tmp.replace(final)
+    _spill_off_reference(spill_dir, col_idx, off_reference)
+
+
+def _refuse_unpaired_spills(
+    col_idx: int,
+    dense: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    overflow: _Overflow,
+    off_reference: _OffReferenceSpill,
+) -> None:
+    """Refuse a column whose spills hold arrays of different lengths (issue #392).
+
+    The band-write phase reads each spill back as one column, so a short array
+    would put a cell's statistic under another's variant. The hashed arrays are
+    the hashed subset's axis, not the column's, and are not judged here.
+    """
+    d_rows, d_z, d_se, d_eaf = dense
+    o_idx, o_z, o_se, o_eaf, o_reference = overflow
+    u_keys, u_z, u_se, u_eaf, u_reference = off_reference[:5]
+    require_parallel(
+        (("rows", d_rows), ("z", d_z), ("se", d_se), ("eaf", d_eaf)),
+        where=f"hybrid spill, analysis_index {col_idx}",
+    )
+    require_parallel(
+        (
+            ("variant_index", o_idx),
+            ("z", o_z),
+            ("se", o_se),
+            ("eaf", o_eaf),
+            ("reference", o_reference),
+        ),
+        where=f"hybrid overflow spill, analysis_index {col_idx}",
+    )
+    require_parallel(
+        (("keys", u_keys), ("z", u_z), ("se", u_se), ("eaf", u_eaf), ("reference", u_reference)),
+        where=f"hybrid off-reference spill, analysis_index {col_idx}",
+    )
+
+
+def _spill_off_reference(
+    spill_dir: Path, col_idx: int, off_reference: _OffReferenceSpill
+) -> None:
+    """Spill the off-reference keys, if the column has any."""
     u_keys, u_z, u_se, u_eaf, u_reference, u_hashed_index, u_hashed_raw = off_reference
-    if len(u_keys):
-        final = spill_dir / f"{col_idx}.unk.npz"
-        tmp = spill_dir / f"{col_idx}.unk.tmp.npz"
-        np.savez(
-            tmp, keys=u_keys, z=u_z, se=u_se, eaf=u_eaf, reference=u_reference,
-            hashed_index=u_hashed_index,
-        )
-        tmp.replace(final)
-        if len(u_hashed_index):
-            _write_unknown_side_file(spill_dir, col_idx, u_hashed_raw)
+    if not len(u_keys):
+        return
+    final = spill_dir / f"{col_idx}.unk.npz"
+    tmp = spill_dir / f"{col_idx}.unk.tmp.npz"
+    np.savez(
+        tmp, keys=u_keys, z=u_z, se=u_se, eaf=u_eaf, reference=u_reference,
+        hashed_index=u_hashed_index,
+    )
+    tmp.replace(final)
+    if len(u_hashed_index):
+        _write_unknown_side_file(spill_dir, col_idx, u_hashed_raw)
 
 
 @dataclass(frozen=True)
@@ -963,7 +1015,7 @@ def _write_dense_component_skeleton(
     is returned because the EAF survey samples both components on the shared
     axis through it and the query facade reads it back."""
     write_index(axis.dense_staged, axis.partition.panel_sorted, axis.analyses, chunk_shape)
-    _write_variant_table(
+    write_variant_table(
         axis.dense_dir,
         axis.partition.panel_sorted,
         axis.hg38_to_source,
@@ -1797,7 +1849,7 @@ def _rewrite_dense_table_if_needed(
         "Single-pass build: the global rsid rekey moved a Dense Component name; "
         "rewriting the component's variant table"
     )
-    _write_variant_table(prepared.dense_dir, panel, prepared.hg38_to_source, dict(merged))
+    write_variant_table(prepared.dense_dir, panel, prepared.hg38_to_source, dict(merged))
 
 
 def _fold_recorded_axis(
@@ -2437,7 +2489,7 @@ def _write_shared_metadata(
         options.chunk_shape,
     )
     write_analyses_tsv(prepared.staged.path, shared_analyses)
-    _write_variant_table(
+    write_variant_table(
         prepared.staged.path,
         prepared.partition.shared_sorted,
         prepared.hg38_to_source,
@@ -3491,7 +3543,7 @@ def _report_from_payload(payload: Mapping[str, Any]) -> EafOrientationReport:
     )
 
 
-def _write_variant_table(
+def write_variant_table(
     store_path: Path,
     alids: list[str],
     hg38_to_source: dict[str, str | None],

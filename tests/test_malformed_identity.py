@@ -193,7 +193,7 @@ def test_a_ragged_ssf_build_logs_a_malformed_identity(tmp_path: Path):
 
 def test_a_dense_build_drops_a_malformed_row_rather_than_refusing_its_source(tmp_path: Path):
     """`build-dense` used to refuse the whole source over one such row."""
-    from opengwasdb.build.observed import build_dense_observed_from_sources
+    from dense_sources import build_dense_fixture
 
     source = tmp_path / "records.tsv"
     source.write_text(
@@ -202,7 +202,7 @@ def test_a_dense_build_drops_a_malformed_row_rather_than_refusing_its_source(tmp
         encoding="utf-8",
     )
     store = tmp_path / "dense.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], store, store_id="s", release_id="r", reference_assembly="GRCh38"
     )
 

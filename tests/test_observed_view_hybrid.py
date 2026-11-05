@@ -39,6 +39,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 from shutil import copytree
+from typing import NamedTuple
 
 import numpy as np
 import plane_edits
@@ -51,6 +52,7 @@ from presence_fixtures import (
     plant_payload_nan,
 )
 from residual_fixtures import write_gwas_vcf_with_eaf
+from stored_rows import stored_rows
 from test_check_observed_view import _assert_refused, _run, _verdict
 from test_hybrid_completion import _write_ld_block
 
@@ -68,11 +70,7 @@ from opengwasdb.encoding.plan import Z_MISSING
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged.by_variant import build_variant_index
-from opengwasdb.layouts.ragged.zarr_csr import (
-    AnalysisAssociations,
-    RaggedCSRReader,
-    RaggedCSRWriter,
-)
+from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.validation.observed_view import check_observed_view
@@ -472,9 +470,16 @@ def test_a_perturbed_completed_hybrid_fails_on_the_right_counter(
     assert _counter(verdict, failure) == 1
 
 
-def _rewrite_overflow(
-    store: Path, edit: Callable[[str, AnalysisAssociations], AnalysisAssociations]
-) -> None:
+class _Rows(NamedTuple):
+    """One Analysis's Overflow rows, in the order the Ragged writer takes them."""
+
+    variant_index: np.ndarray
+    z: np.ndarray
+    se: np.ndarray
+    eaf: np.ndarray
+
+
+def _rewrite_overflow(store: Path, edit: Callable[[str, _Rows], _Rows]) -> None:
     """Rewrite `store`'s Overflow through the Ragged writer, each Analysis edited first.
 
     Every association is encoded again from its decoded value, under the Store's own
@@ -482,8 +487,11 @@ def _rewrite_overflow(
     (`test_rewriting_the_overflow_unchanged_keeps_the_pair_passing`). The variant index
     is rebuilt, as completion builds it, so the Store can still be queried.
     """
-    reader = RaggedCSRReader(store)
-    edited = [edit(name, reader.get_analysis(i)) for i, name in enumerate(ANALYSES)]
+    held = [stored_rows(store, i) for i in range(len(ANALYSES))]
+    edited = [
+        edit(name, _Rows(rows.variant_index, rows.z, rows.se, rows.eaf))
+        for name, rows in zip(ANALYSES, held, strict=True)
+    ]
     baseline = np.asarray(_overflow(store)["eaf_baseline"][:], dtype=np.float32)
     writer = RaggedCSRWriter(_n_shared(store))
     for rows in edited:
@@ -494,22 +502,22 @@ def _rewrite_overflow(
 
 
 def _without(analysis: str, shared_row: int):
-    def edit(name: str, rows: AnalysisAssociations) -> AnalysisAssociations:
+    def edit(name: str, rows: _Rows) -> _Rows:
         if name != analysis:
             return rows
         keep = np.asarray(rows.variant_index) != shared_row
-        return AnalysisAssociations(*(np.asarray(column)[keep] for column in rows))
+        return _Rows(*(np.asarray(column)[keep] for column in rows))
 
     return edit
 
 
 def _with(added: dict[str, list[tuple[int, dict[str, np.ndarray]]]]):
-    def edit(name: str, rows: AnalysisAssociations) -> AnalysisAssociations:
+    def edit(name: str, rows: _Rows) -> _Rows:
         if name not in added:
             return rows
         shared = np.array([row for row, _ in added[name]], dtype=np.int32)
         values = [value for _, value in added[name]]
-        return AnalysisAssociations(
+        return _Rows(
             np.r_[rows.variant_index, shared],
             *(np.r_[getattr(rows, p), [v[p][0] for v in values]] for p in ("z", "se", "eaf")),
         )

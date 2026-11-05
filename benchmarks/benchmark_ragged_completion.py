@@ -61,16 +61,11 @@ def _choose_queries(completed_path: Path) -> dict:
         key=lambda a: int(a.analysis_index),
     )
 
-    # Find the analysis with the most associations
-    best_ai, best_n = 0, 0
-    for i in range(csr.n_analyses):
-        assoc = csr.get_analysis(i)
-        if len(assoc.z) > best_n:
-            best_n = len(assoc.z)
-            best_ai = i
+    # The Analysis with the most associations, from the offsets alone: its
+    # length needs no decode.
+    best_ai = int(np.argmax(np.diff(csr.offsets)))
 
     rec = analyses[best_ai]
-    csr.close()
 
     trait_bp = int(rec.trait_bp) if rec.trait_bp else 1_000_000
     return {
@@ -261,8 +256,6 @@ def main() -> None:
         "n_imputed": c_info.get("n_imputed"),
         "n_missing": c_info.get("n_missing"),
     }
-    csr_obs.close()
-    csr_comp.close()
     va_obs.close()
     va_comp.close()
 

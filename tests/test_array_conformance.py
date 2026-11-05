@@ -112,8 +112,8 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
     import test_ragged_build_besd as trb
     import test_ragged_build_ssf as trs
     import test_ragged_completion as trc
+    from dense_sources import build_dense_fixture
 
-    from opengwasdb.build.observed import build_dense_observed_from_sources
     from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
     from opengwasdb.layouts.dense.complete import complete_dense_store
     from opengwasdb.layouts.dense.rho import build_dense_rho
@@ -130,7 +130,7 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
         tdc.SOURCE_HEADER + "\n" + "\n".join(tdc.SOURCE_ROWS) + "\n", encoding="utf-8"
     )
     dense = d / "store.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source],
         dense,
         store_id="fixture-store",
@@ -183,7 +183,7 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
         tdc.SOURCE_HEADER + "\n" + "\n".join(tdc.SOURCE_ROWS) + "\n", encoding="utf-8"
     )
     observed = d / "obs.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], observed, store_id="test", release_id="obs-v1", reference_assembly="GRCh38"
     )
     completed = d / "comp.opengwasdb"
@@ -310,7 +310,7 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
     d = root / "dense-rho"
     d.mkdir()
     store = d / "store.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [tdr._make_rho_source(d)],
         store,
         store_id="rho-fixture",

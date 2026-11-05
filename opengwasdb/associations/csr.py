@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from operator import itemgetter
 from pathlib import Path
 
 import numpy as np
 
 from opengwasdb.associations import record
-from opengwasdb.associations.cells import Cells
+from opengwasdb.associations.cells import (
+    Cells,
+    require_run_within,
+    require_within,
+    window_region,
+)
 from opengwasdb.associations.record import Associations, Inspection, InvalidAssociations, State
 from opengwasdb.encoding import StoreEncoding
 from opengwasdb.layouts.ragged.by_variant import (
@@ -27,6 +33,31 @@ _block_columns = itemgetter("variant_index", "analysis_index", "z", "se", "eaf",
 def _manifest(path: Path) -> StoreManifest | None:
     """The release manifest beside a sequence, or None for a bare sequence."""
     return StoreManifest.load(path) if (path / "manifest.json").exists() else None
+
+
+def _run(positions: np.ndarray) -> tuple[int, int] | None:
+    """`[start, stop)` when `positions` is one ascending run, which reads as a slice.
+
+    Positions whose ends are not `len - 1` apart are refused at once, as a scan's
+    hits are; positions that are, a window among them, are a run exactly when
+    each exceeds the one before. Neither test builds a copy of the positions: a
+    scan asks this of every window, and of every hit it then reads.
+    """
+    n = len(positions)
+    if not n or int(positions[-1]) - int(positions[0]) != n - 1:
+        return None
+    if not bool(np.all(positions[1:] > positions[:-1])):
+        return None
+    return int(positions[0]), int(positions[-1]) + 1
+
+
+def _run_analyses(offsets: np.ndarray, start: int, stop: int) -> np.ndarray:
+    """The Analysis of each row of the flat run `[start, stop)`, repeated over the
+    spans it crosses: the cost is the Analyses touched, not a search per row."""
+    first = int(np.searchsorted(offsets, start, side="right")) - 1
+    last = int(np.searchsorted(offsets, stop, side="left"))
+    rows = np.diff(np.clip(offsets[first : last + 1], start, stop))
+    return np.repeat(np.arange(first, first + len(rows), dtype=np.int32), rows)
 
 
 class CsrReader:
@@ -69,6 +100,8 @@ class CsrReader:
         )
         self.structure = RaggedCSRReader(store_path, encoding)
         self._by_variant: ByVariantReader | None = None
+        #: The variant axis `open_variant_index` was given; a CSR records none itself.
+        self._n_variants: int | None = None
         self._offsets: np.ndarray | None = None
 
     @classmethod
@@ -116,19 +149,55 @@ class CsrReader:
                 f"build it with 'ogdb build-variant-index {self._path}'"
             )
         self._by_variant = ByVariantReader(self._path, self._encoding, n_axis=n_variants)
+        self._n_variants = int(n_variants)
 
     # ── the interface ───────────────────────────────────────────────────────
 
-    def z(self, start: int, stop: int) -> np.ndarray:
-        """Decoded Z of the flat rows `[start, stop)`, for a scan that thresholds Z alone.
+    def windows(
+        self, cells: Cells | None = None, *, max_cells: int | None = None
+    ) -> Iterator[Cells]:
+        """An `analysis` or `analyses` region -- or, with none, the whole component --
+        as consecutive `positions` regions of at most `max_cells` rows each.
+
+        For a scan that must not hold a whole Analysis, or a whole sequence, at
+        once: each row of the region comes once, in the region's order, so the
+        windows' reads joined are the region's read. A window may run on from one
+        Analysis into the next. `max_cells` defaults to the scan window, eight of
+        the sequence's inner chunks (#252). The region is checked when this is
+        called, before any window is cut (`window_region`).
+        """
+        region, step = window_region(
+            cells,
+            max_cells,
+            default=self.structure.scan_window,
+            n_analyses=self.n_analyses,
+            source=self._source,
+        )
+        return self._windows(region, step)
+
+    def _windows(self, region: Cells, step: int) -> Iterator[Cells]:
+        for start, stop in self._runs(region):
+            for lo in range(start, stop, step):
+                yield Cells.positions(np.arange(lo, min(lo + step, stop), dtype=np.int64))
+
+    def z(self, cells: Cells) -> np.ndarray:
+        """Decoded Z of a `positions` region -- a window -- for a scan that thresholds
+        Z alone, in the region's order.
 
         A non-canonical marker is refused here, as every read refuses one (spec §15):
         a NaN clears no cutoff, so a scan that compared it would drop the row.
         """
-        z = self.structure.z_slice(start, stop)
+        if cells.kind != "positions" or cells.pos is None:
+            raise TypeError(f"Z alone is read for positions, not a {cells.kind!r} region")
+        run = self._rows_of(cells)
+        if run is not None:
+            z = self.structure.z_slice(*run)
+        else:
+            unique, back = np.unique(cells.pos, return_inverse=True)
+            z = self.structure.z_at(unique)[back]
         odd = record.non_canonical(z)
         if odd.any():
-            rows = np.flatnonzero(odd).astype(np.int64) + int(start)
+            rows = cells.pos[odd]
             raise InvalidAssociations(
                 self._source,
                 self.structure.variant_index_at(rows),
@@ -137,13 +206,26 @@ class CsrReader:
             )
         return z
 
-
     def read(self, cells: Cells, *, observed_only: bool = False) -> Associations:
         """The region's rows; raises `InvalidAssociations` on a §15-invalid one."""
         return self.inspect(cells).associations(self._source).observed_only(observed_only)
 
     def inspect(self, cells: Cells) -> Inspection:
-        """Every row of the region, decoded and classified; never raises on one."""
+        """Every row of the region, decoded and classified; never raises on one.
+
+        A region naming an index outside its axis is refused (`require_within`).
+        A CSR records no variant axis of its own, so a region naming variants is
+        read only once `open_variant_index` has given it one.
+        """
+        if cells.vi is not None and self._n_variants is None:
+            raise VariantIndexError(
+                f"{self._source}: a region naming variants is checked against the "
+                "variant axis the by-variant index is opened on; open the variant "
+                "index first"
+            )
+        require_within(
+            cells, self._source, n_analyses=self.n_analyses, n_variants=self._n_variants
+        )
         decode = {
             "analysis": self._analyses,
             "analyses": self._analyses,
@@ -161,10 +243,39 @@ class CsrReader:
     def _empty(self) -> Inspection:
         return Inspection.concat([], with_n=self.carries_n)
 
+    def _runs(self, cells: Cells) -> list[tuple[int, int]]:
+        """The flat `[start, stop)` runs an `analysis` or `analyses` region's rows sit
+        in, in its order: one for a span of Analyses, else one per Analysis."""
+        assert cells.ai is not None
+        offsets = self.structure.offsets
+        span = cells.span
+        bounds = [span] if span is not None else [(int(a), int(a) + 1) for a in cells.ai]
+        return [(int(offsets[first]), int(offsets[stop])) for first, stop in bounds]
+
     def _analyses(self, cells: Cells) -> Inspection:
         assert cells.ai is not None
+        span = cells.span
+        if span is not None and span[1] - span[0] > 1:
+            [(start, stop)] = self._runs(cells)
+            return self._rows(start, stop)
         found = [self._analysis(int(a)) for a in cells.ai]
         return found[0] if len(found) == 1 else Inspection.concat(found, with_n=self.carries_n)
+
+    def _rows(self, start: int, stop: int) -> Inspection:
+        """The rows of the flat run `[start, stop)`, each plane read as one slice."""
+        if start == stop:
+            return self._empty()
+        csr = self.structure
+        eaf = csr.eaf_slice_read(start, stop, want_imputed=True)
+        return Inspection.of(
+            csr.variant_index(start, stop),
+            _run_analyses(csr.offsets, start, stop),
+            csr.z_slice(start, stop),
+            csr.se_slice(start, stop, eaf=eaf.values),
+            eaf.values,
+            eaf.imputed,
+            csr.n_slice(start, stop) if self.carries_n else None,
+        )
 
     def _analysis(self, analysis_index: int) -> Inspection:
         csr = self.structure
@@ -188,11 +299,7 @@ class CsrReader:
         """The by-variant index's rows for the region's variants: the block spanning
         the least and greatest, less the rows of variants between them it did not name."""
         wanted = cells.vi
-        assert wanted is not None
-        if self._by_variant is None:
-            raise VariantIndexError(
-                f"{self._source}: a variant region needs the by-variant index; open it first"
-            )
+        assert wanted is not None and self._by_variant is not None
         if len(wanted) == 0:
             return self._empty()
         low, high = int(wanted.min()), int(wanted.max())
@@ -221,7 +328,20 @@ class CsrReader:
 
     def _positions(self, cells: Cells) -> Inspection:
         assert cells.pos is not None
-        return self._at(cells.pos)
+        run = self._rows_of(cells)
+        return self._at(cells.pos) if run is None else self._rows(*run)
+
+    def _rows_of(self, cells: Cells) -> tuple[int, int] | None:
+        """A `positions` region's run, when it is one, its positions checked against
+        the sequence's rows: a run from its ends, any other from every position."""
+        assert cells.pos is not None
+        run = _run(cells.pos)
+        n_rows = self.structure.sequence_length
+        if run is None:
+            require_within(cells, self._source, n_analyses=self.n_analyses, n_rows=n_rows)
+        else:
+            require_run_within(*run, n_rows, self._source)
+        return run
 
     def _cross_positions(self, variants: np.ndarray, analyses: np.ndarray) -> np.ndarray:
         wanted = np.unique(variants).astype(np.int32)

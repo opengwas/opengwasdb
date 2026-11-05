@@ -17,7 +17,6 @@ from opengwasdb.admission.cells import (
     NotAdmitted,
     admissible,
     require_admitted,
-    require_paired,
 )
 from opengwasdb.admission.gate import Gate, RoutedBatch, counting_gate
 from opengwasdb.admission.record import (
@@ -45,5 +44,4 @@ __all__ = [
     "admission_record_for",
     "counting_gate",
     "require_admitted",
-    "require_paired",
 ]

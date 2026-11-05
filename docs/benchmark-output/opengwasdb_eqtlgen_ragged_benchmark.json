@@ -1,6 +1,6 @@
 {
   "build": {
-    "build_seconds": 635.74,
+    "build_seconds": null,
     "liftover_failure_count": 0,
     "store_path": "/data/opengwasdb/work/epic252/eqtlgen-cis.opengwasdb"
   },
@@ -10,17 +10,17 @@
     "n_variants": 8932843
   },
   "provenance": {
-    "commit": "a0a38a5",
+    "commit": "ef9e550",
     "harness": "benchmark_ragged_besd.py",
-    "harness_sha256": "2e414ba88fe8ebbdaeee526044d6fc4a76ac3748816000cc9ad554407e2dea55",
+    "harness_sha256": "08a0aaf612f5a27041a6f1ee723c5bd1ca6740cebb8e37813e03e68bf00d5ee3",
     "loadavg_at_write": [
-      2.49,
-      3.04,
-      4.3
+      11.92,
+      11.41,
+      10.66
     ],
-    "measured_at": "2026-10-09T02:18:49.091903+00:00",
-    "opengwasdb_fingerprint": "d9ec968e180c889d770ce2fce54e3d7a3323fa2b66d672c6406cd858abb5b7da",
-    "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-index/opengwasdb"
+    "measured_at": "2026-11-05T20:22:27.775423+00:00",
+    "opengwasdb_fingerprint": "446ffdb95d05a768fe9aff9ce721b0ad5b9f8e3dbbecab0c490902dce22b1f71",
+    "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-58-r2/worktrees/393/opengwasdb"
   },
   "selection": {
     "analysis_probe_id": "ENSG00000204394",
@@ -154,38 +154,38 @@
   },
   "timings": [
     {
-      "median_ms": 17.347,
-      "p95_ms": 18.218,
+      "median_ms": 12.366,
+      "p95_ms": 13.103,
       "query": "analysis",
       "result_count": 33741
     },
     {
-      "median_ms": 1643.934,
-      "p95_ms": 1834.178,
+      "median_ms": 132.1,
+      "p95_ms": 141.07,
       "query": "range_by_analysis",
       "result_count": 2072773
     },
     {
-      "median_ms": 486.269,
-      "p95_ms": 513.06,
+      "median_ms": 160.051,
+      "p95_ms": 165.444,
       "query": "range_phewas",
       "result_count": 2646239
     },
     {
-      "median_ms": 22.613,
-      "p95_ms": 23.179,
+      "median_ms": 10.822,
+      "p95_ms": 11.56,
       "query": "phewas",
       "result_count": 111
     },
     {
-      "median_ms": 21.548,
-      "p95_ms": 21.679,
+      "median_ms": 11.338,
+      "p95_ms": 12.591,
       "query": "tophits",
       "result_count": 10
     },
     {
-      "median_ms": 144.004,
-      "p95_ms": 145.388,
+      "median_ms": 82.635,
+      "p95_ms": 84.194,
       "query": "random_lookup",
       "result_count": 0
     }

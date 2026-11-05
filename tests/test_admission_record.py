@@ -298,8 +298,8 @@ def test_a_vcf_record_with_no_effect_is_logged_by_its_source_coordinate(tmp_path
 
 
 def test_a_dense_build_from_records_writes_its_record(tmp_path: Path):
-    """Each Analysis's records pass its gate, in the order the Analyses first
-    appear, which is the order of the Store's columns."""
+    """Each Analysis's records pass its gate, in the order of the manifest, which
+    is the order of the Store's columns."""
 
     source = tmp_path / "records.tsv"
     source.write_text(
@@ -316,8 +316,8 @@ def test_a_dense_build_from_records_writes_its_record(tmp_path: Path):
     )
     assert written["command"] == "build-dense"
     assert [(a["analysis_id"], a["examined"], a["admitted"]) for a in written["analyses"]] == [
-        ("B", 2, 2),
         ("A", 1, 1),
+        ("B", 2, 2),
     ]
 
 
@@ -402,7 +402,9 @@ def test_source_fidelity_compares_only_the_rows_admission_stored(tmp_path: Path)
     )
     store, _ = _dense_from_records(tmp_path, source)
 
-    result = validate_store(store, source=source)
+    from dense_sources import write_dense_manifest
+
+    result = validate_store(store, source=write_dense_manifest(source))
     assert result.ok, result.errors
 
 
@@ -441,8 +443,9 @@ def test_a_writer_refuses_a_half_missing_pair_that_passed_its_gate(
     """D1: spec §15 forbids a cell with one of z and SE missing. A source row
     cannot become one through a working gate, so one at the writer is a defect
     and refused, naming where."""
+    from dense_sources import build_dense_fixture
+
     from opengwasdb.admission import NotAdmitted
-    from opengwasdb.build.observed import build_dense_observed_from_sources
 
     source = tmp_path / "records.tsv"
     source.write_text(
@@ -453,7 +456,7 @@ def test_a_writer_refuses_a_half_missing_pair_that_passed_its_gate(
     _gate_admitting_everything(monkeypatch)
 
     with pytest.raises(NotAdmitted, match=r"build-dense: .*one of z and SE missing: 1"):
-        build_dense_observed_from_sources(
+        build_dense_fixture(
             [source], tmp_path / "dense.opengwasdb", store_id="s", release_id="r",
             reference_assembly="GRCh38",
         )
@@ -549,10 +552,10 @@ def _one_vcf_analysis(tmp_path: Path, rows: list[str]) -> Path:
 
 def _dense_from_records(tmp_path: Path, source: Path) -> tuple[Path, DenseBuildResult]:
     """A `build-dense` Store from one records file, and the build's result."""
-    from opengwasdb.build.observed import build_dense_observed_from_sources
+    from dense_sources import build_dense_fixture
 
     store = tmp_path / "dense.opengwasdb"
-    result = build_dense_observed_from_sources(
+    result = build_dense_fixture(
         [source], store, store_id="s", release_id="r", reference_assembly="GRCh38"
     )
     return store, result
@@ -889,26 +892,13 @@ def test_a_dense_build_applies_the_maf_filter_its_records_declare(tmp_path: Path
     assert (b["analysis_id"], b["admitted"], b["dropped"]) == ("B", 1, {})
 
 
-def test_a_dense_build_refuses_a_filter_its_records_cannot_be_judged_by(tmp_path: Path):
-    """A record carries no imputation score, so an INFO threshold is refused; and
-    one Analysis's records declaring two MAF thresholds are refused, since
-    which applies is not the build's to choose."""
-    from opengwasdb.build.source import SourceRowError
-
+def test_a_dense_build_refuses_an_info_filter_it_cannot_judge(tmp_path: Path):
+    """An association TSV carries no imputation score, so an Analysis whose
+    manifest row declares an INFO threshold is refused, not left unfiltered."""
     info = tmp_path / "info.tsv"
     info.write_text(
         f"{_RECORDS_HEADER}\tinfo_score_threshold\nA\t1\t100\tA\tG\t2.0\t0.1\t0.3\t0.8\n",
         encoding="utf-8",
     )
-    with pytest.raises(SourceRowError, match="row 2: "):
+    with pytest.raises(ValueError, match="analysis 'A' has invalid INFO policy"):
         _dense_from_records(tmp_path, info)
-
-    two = tmp_path / "two.tsv"
-    two.write_text(
-        f"{_RECORDS_HEADER}\tmaf_threshold\n"
-        "A\t1\t100\tA\tG\t2.0\t0.1\t0.3\t0.05\n"
-        "A\t1\t200\tA\tG\t1.0\t0.1\t0.3\t0.01\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="'A' declares 2 different MAF thresholds"):
-        _dense_from_records(tmp_path, two)

@@ -14,9 +14,10 @@ This module pins the two properties the change must hold:
   `lookup`, and the Hybrid off-panel paths) must return the same six arrays as
   an oracle built from the Analysis-side `analysis` and Overflow reads
   decode -- the slice path #253 owns -- with and without `observed_only`.
-* **bounded reads.** No variant-side query decodes a whole plane: `z_all` and
-  `se_all` are never called, and a query whose answer touches one chunk of `z`
-  reads one chunk, not every chunk, even when the array holds more than one.
+* **bounded reads.** No variant-side query decodes a whole plane: no slice of
+  `z` or `se` is wider than a scan window, and a query whose answer touches one
+  chunk of `z` reads one chunk, not every chunk, even when the array holds more
+  than one.
 
 The wrong version lives in the test that monkeypatches it: a dropped imputed
 mask, asserted to make the identity check fail, so the identity check is known
@@ -377,20 +378,30 @@ def test_identity_catches_a_dropped_imputed_mask(
 # ── bounded reads ───────────────────────────────────────────────────────────
 
 
-def _no_whole_plane(name: str):
-    def _boom(*_args, **_kwargs):
-        raise AssertionError(f"{name} must not be called by the variant-side scan")
+def _slice_widths(monkeypatch: pytest.MonkeyPatch, names: tuple[str, ...]) -> list[int]:
+    """The width of every slice the CSR's `names` decode from here on."""
+    widths: list[int] = []
+    for name in names:
+        real = getattr(RaggedCSRReader, name)
 
-    return _boom
+        def counted(self, start, end, *args, _real=real, **kwargs):
+            widths.append(int(end) - int(start))
+            return _real(self, start, end, *args, **kwargs)
+
+        monkeypatch.setattr(RaggedCSRReader, name, counted)
+    return widths
 
 
 def test_variant_shapes_never_decode_whole_planes(
     ragged_residual: RaggedResidualScenario, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No variant-side shape may call the whole-plane `z_all`/`se_all` decoders."""
-    monkeypatch.setattr(RaggedCSRReader, "z_all", _no_whole_plane("z_all"))
-    monkeypatch.setattr(RaggedCSRReader, "se_all", _no_whole_plane("se_all"))
+    """No variant-side shape decodes a whole plane: no Z or SE slice is wider than a
+    scan window, here made narrower than the sequence."""
+    window = 64
+    monkeypatch.setattr(RaggedCSRReader, "scan_window", property(lambda _self: window))
+    widths = _slice_widths(monkeypatch, ("z_slice", "se_slice"))
     with query_store(ragged_residual.completed) as query:
+        assert query._csr.sequence_length > window, "the sequence must outrun a window"
         alid = _any_alid(query)
         query.phewas(alid)
         query.range_phewas("1", 900_000, 1_600_000)
@@ -399,6 +410,7 @@ def test_variant_shapes_never_decode_whole_planes(
         # fallback is the variant-side path this test is about, so call it
         # directly rather than depend on the fixture having no index.
         query._top_hits_by_scan(analysis_id=None, threshold=5e-8, limit=None, observed_only=False)
+    assert widths and max(widths) <= window, f"widest slice {max(widths, default=0)}"
 
 
 # ── a genuinely multi-chunk store: reads are bounded by the answer ──────────

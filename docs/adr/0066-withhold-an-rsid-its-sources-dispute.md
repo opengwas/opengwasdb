@@ -17,9 +17,10 @@
 > first non-empty rsid among a variant's admitted rows (#400). It used to take
 > the first admitted row's, even a blank one, and the change renames no
 > published variant.
-> `build-dense` does not compare yet, because the rows it reads carry no
-> source spelling, and its reader waits on #385. A `build-ragged-besd` file
-> set lists each variant once. The Consequence "A Dense build never meets this" stopped holding with
+> `build-dense` does not compare yet: it keeps a variant's first non-empty
+> name. Since #385 it reads `ReaderBatch`es, which carry the spelling, so the
+> comparison can follow. A `build-ragged-besd` file set lists each variant
+> once. The Consequence "A Dense build never meets this" stopped holding with
 > ADR 0075, which upper-cases a Dense routing key too.
 
 A Hybrid build's rsid harvest refuses a routing key whose sources name it with

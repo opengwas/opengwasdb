@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import pathlib
 from collections.abc import Sequence
+from itertools import permutations
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -90,6 +92,88 @@ def test_top_hit_arrays_remain_in_their_compact_contract_dtypes() -> None:
     assert loaded["cols"].dtype == np.uint32
     assert loaded["offsets"].dtype == np.uint64
     assert sum(value.nbytes for value in loaded.values() if value is not None) == 74
+
+
+def test_the_tiers_are_enumerated_in_threshold_order_not_store_order() -> None:
+    """A Zarr group hands its keys back in its store's order, and that order is not
+    stable: the same release listed its three tiers in three orders over six runs.
+    Every `top_hits.*` rule enumerates them through the one listing, which sorts them
+    by threshold, as `TOP_HIT_THRESHOLDS` does (#378).
+    """
+
+    def tier(threshold: float) -> Any:
+        return SimpleNamespace(attrs={"threshold": threshold})
+
+    # Held in the store's order, which is neither the threshold's nor the key's.
+    index = {top_hits.threshold_key(t): tier(t) for t in (5e-4, 5e-8, 5e-6)}
+
+    assert top_hit_rules._keys(_grid({"top_hits": index})) == [
+        "p_5e_08",
+        "p_5e_06",
+        "p_5e_04",
+    ]
+
+
+def test_the_tier_listing_does_not_depend_on_the_order_the_tiers_are_in() -> None:
+    """Every order the group could list its keys in gives the one listing.
+
+    A Zarr group lists its keys in its store's order and promises nothing about it,
+    so what a rule reports must not follow it. Two tiers written for one threshold
+    are ordered by name, and a tier with no threshold to read sorts after every tier
+    that has one, by name (#378).
+    """
+
+    def tier(threshold: float | None) -> Any:
+        return SimpleNamespace(attrs={} if threshold is None else {"threshold": threshold})
+
+    tiers = {
+        "p_5e_08": tier(5e-8),
+        "p_5e_06": tier(5e-8),  # a tie with p_5e_08, for the name to break
+        "p_5e_04": tier(5e-4),
+        "broken_a": tier(None),  # no threshold, and no key that spells one
+        "broken_b": tier(None),
+    }
+    listed = ["p_5e_06", "p_5e_08", "p_5e_04", "broken_a", "broken_b"]
+
+    for order in permutations(tiers):
+        index = {key: tiers[key] for key in order}
+        assert top_hit_rules._keys(_grid({"top_hits": index})) == listed, order
+
+
+def test_malformed_tiers_are_diagnosed_and_listed_after_the_well_formed_ones(
+    dense_store_path: pathlib.Path,
+) -> None:
+    """A tier whose `threshold` will not parse must not stop the rules that report it.
+
+    `broken_a` and `broken_b` carry no arrays, so `top_hits.arrays` says what each is
+    missing and the value rules go on to diagnose the tiers that do hold cells. A
+    listing that parsed every threshold to sort spent the whole rule set on a float
+    conversion instead (#378 review 2).
+    """
+    root = open_store(dense_store_path).arrays(mode="a")
+    root["se"][0, 0] = np.float16(-0.1)
+    root["se"][0, 1] = np.nan
+    for name in ("broken_a", "broken_b"):
+        root["top_hits"].create_group(name)
+
+    result = validate_store(dense_store_path)
+
+    missing = "abs_z, analysis_index, analysis_offsets, p_value, se, variant_index, z"
+    assert result.failed() == {
+        "associations.se_negative",
+        "associations.markers_paired",
+        "top_hits.arrays",
+        "top_hits.se",
+    }
+    assert result.errors == [
+        "se contains negative finite values",
+        "z and se missingness is inconsistent",
+        f"top-hit index broken_a is missing {missing}",
+        f"top-hit index broken_b is missing {missing}",
+        "top-hit index p_5e_08 contains se value inconsistent with decoded se plane",
+        "top-hit index p_5e_06 contains se value inconsistent with decoded se plane",
+        "top-hit index p_5e_04 contains se value inconsistent with decoded se plane",
+    ]
 
 
 def test_strict_top_hit_slice_order_proves_cell_keys_are_unique() -> None:
@@ -389,6 +473,29 @@ def test_a_tier_flag_is_held_to_a_stored_mask_whatever_the_completion_state(
         f"top-hit index {key} contains imputed value inconsistent with imputed array"
         for key in keys
     )
+
+
+def test_a_top_hit_rule_lists_its_tiers_in_threshold_order(
+    dense_store_path: pathlib.Path,
+) -> None:
+    """The same three failing tiers come out in one order, every run.
+
+    A Zarr group's key order is its store's, which a store does not promise: this
+    release reported its three tiers in three orders over six runs, so `errors`
+    did too (#378).
+    """
+    root = open_store(dense_store_path).arrays(mode="a")
+    root["se"][0, 0] = np.float16(-0.1)
+    root["se"][0, 1] = np.nan
+    tiers = top_hits.index_group(open_store(dense_store_path).arrays(mode="r"))
+    assert sorted(tiers) == ["p_5e_04", "p_5e_06", "p_5e_08"], "three tiers to fail"
+
+    result = validate_store(dense_store_path)
+
+    assert [f.message for f in result.of("top_hits.se")] == [
+        f"top-hit index {key} contains se value inconsistent with decoded se plane"
+        for key in ("p_5e_08", "p_5e_06", "p_5e_04")
+    ]
 
 
 def test_a_release_without_frequencies_records_the_range_rule_as_skipped(

@@ -231,8 +231,8 @@ One named judgement `validate` makes of a Store Release, such as `associations.s
 _Avoid_: check, validator, seam — a rule is the unit a caller names and a test asserts on.
 
 **Finding**:
-What one Validation Rule reports about one target: the rule's name, an error or a warning, the message, and the target it judged. A release fails when any rule reports an error; a warning names something a reader should know about a valid release, such as an infinite SE.
-_Avoid_: error string — a finding carries the rule that found it.
+What one Validation Rule reports about one target: the rule's name, an error, a warning or a skip, the message, and the target it judged. A release fails when any rule reports an error; a warning names something a reader should know about a valid release, such as an infinite SE; a skip says the rule could not judge that target and names why — the rules that blocked it, or that it had nothing to judge — so a skip never reads as a pass. `validate --format json` prints every finding, skips included, and `errors`, `warnings` and `skipped` project the same records (spec §20.1).
+_Avoid_: error string, pass — a finding carries the rule that found it, and a skip is not a finding that everything was well.
 
 ## Example dialogue
 

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.readers.association_tsv import ASSOCIATION_TSV_CAPABILITY, AssociationTsvReader
 from opengwasdb.readers.besd import BESD_CAPABILITY, BesdProbeReader, load_besd_source
 from opengwasdb.readers.column_map import COLUMN_MAP_CAPABILITY, ColumnMap
 from opengwasdb.readers.column_map_reader import ColumnMapReader
@@ -46,6 +47,7 @@ def _needs_probe_id(path: str | Path, _scale: StoredEffectScale) -> SourceReader
 
 
 _READERS: dict[str, Callable[[str | Path, StoredEffectScale], SourceReader]] = {
+    ASSOCIATION_TSV_CAPABILITY: AssociationTsvReader,
     BESD_CAPABILITY: _needs_probe_id,
     COLUMN_MAP_CAPABILITY: _needs_column_map,
     FINNGEN_R13_CAPABILITY: FinnGenR13Reader,

@@ -18,10 +18,10 @@ import plane_edits
 import pytest
 import test_dense_completion as tdc
 from cli_output import normalize_cli_output
+from dense_sources import build_dense_fixture
 from presence_fixtures import float_plane_z, plant_payload_nan
 from typer.testing import CliRunner
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.cli.main import app
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.layouts.dense.complete import complete_dense_store
@@ -44,7 +44,7 @@ def _build_pair(root: Path, rows: list[str], panel: Path) -> tuple[Path, Path]:
     source = root / "associations.tsv"
     source.write_text(HEADER + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
     observed, completed = root / "obs.opengwasdb", root / "comp.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], observed, store_id="test", release_id="obs-v1", reference_assembly="GRCh38"
     )
     complete_dense_store(
@@ -586,10 +586,10 @@ def _small_chunked_pair(
     6 rows, so the writer band is one 4-row shard. The check reads that off the child, so
     the patch must still be in place when it runs.
     """
+    from dense_sources import build_dense_fixture
+
     import opengwasdb.layouts.dense.complete as complete_module
     import opengwasdb.store.arrays as arrays_module
-    from opengwasdb.build.source import stream_normalised_associations
-    from opengwasdb.layouts.dense.build import build_dense_observed_store
 
     monkeypatch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (4, 2))
     monkeypatch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (2, 1))
@@ -602,8 +602,8 @@ def _small_chunked_pair(
     source = tmp_path / "associations.tsv"
     source.write_text(HEADER + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
     observed, completed = tmp_path / "obs.opengwasdb", tmp_path / "comp.opengwasdb"
-    build_dense_observed_store(
-        stream_normalised_associations([source]), observed, store_id="s", release_id="obs",
+    build_dense_fixture(
+        [source], observed, store_id="s", release_id="obs",
         reference_assembly="GRCh38", chunk_shape=(2, 1),
     )
     complete_dense_store(
