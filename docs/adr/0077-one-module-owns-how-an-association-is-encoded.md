@@ -160,6 +160,21 @@ harvested.
 - One place answers "how is this association stored". The deletion test is
   six writers and two round trips re-implementing the order, and nine
   narrowing casts.
+- **Every entry that takes parallel arrays refuses arrays that are not
+  parallel, before it writes anything**, by `require_parallel` (issue #392):
+  `Placement.sequence` (its variant index against its Analysis index, and both
+  against the batch's statistics), `write_encoded_planes` and
+  `write_dense_cells` (a batch's z, SE, EAF and imputed mask, and a cell list's
+  rows and columns beside them), the Top-Hit Index's `write_index` (every
+  candidate column), and the Dense build's inline index writer and column
+  spill. An array of another length was otherwise broadcast onto the cells --
+  `storable`'s failure class, one cell's statistic stored under another's
+  variant -- or the planes were written at unequal lengths, or numpy refused it
+  from inside a write. Each happened after the planes or the index group
+  existed, and none named the array. Two placements are exempt because
+  broadcasting is their contract and not an accident: a scalar
+  `analysis_index`, and `Placement.band`'s `(n, 1)` rows against `(1, m)`
+  Analyses.
 - Every Store this package builds is byte-identical to the one it built
   before. Evidence:
   - the fixture trees of every builder path (22 stores);
