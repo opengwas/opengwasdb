@@ -106,6 +106,37 @@ order it runs, and `tests/test_validation_registry.py` holds the two together.
 two-repository follow-up: `register` first accepts an optional `findings` key,
 then this package emits it.
 
+**Clarification: the CLI does not list skips yet, and its "valid" stays
+truthful.** `validate` prints `ok`, `errors` and `warnings`, and no skips;
+listing them is a follow-up. In a full run, the only run the CLI makes, a rule
+is skipped with no error recorded only where it has nothing to judge. A skip is
+recorded in four places:
+- `_Run.ready`, behind a prerequisite. A prerequisite that failed recorded an
+  error. One that was skipped is one of these cases in turn.
+- `_Pass.drive`, behind a read that failed part-way. The first fold still
+  measuring reports that read as an error.
+- `_Pass.unreadable`, behind the fold that reports an undecodable plane as an
+  error. That fold is the first reader, or `side_tables.eaf_exceptions`, which
+  reports every band it measured that could not be decoded.
+- `_contained`, where a rule raises `Skip` before reporting anything. Four do:
+  - `associations.eaf_range`, "no frequencies": the component has no `eaf`
+    plane and no reference panel.
+  - `by_variant.present`: a format 0.1.0 Ragged component without the
+    variant-centric index, which spec §11.1 permits. The eight `by_variant.*`
+    rules after it are skipped with it; there is no index for them to judge.
+  - `sqlite.variant_aliases`: an `index.sqlite` with no alias table, which
+    spec §20 lists as a skip.
+  - `variant_table.representatives`: the offset sidecar and the table hold
+    different numbers of rows. This is the one with a defect behind it, and
+    `variant_table.rows`, on the same scan, reports it as an error.
+
+A `when` that declines a target records no skip: the target is not one the rule
+judges. `fidelity.source` is stopped only by a failure, not by a skip. A
+selection judges only what it names. So `variant_table.representatives`,
+selected without `variant_table.rows`, is skipped over a mismatch that nothing
+reports; the CLI selects nothing. `tests/test_validation_skips.py` holds the
+rules that raise `Skip`, and the rules their skips stop, to this list.
+
 **Admission's witnesses.** Six rules check, after the fact, what Association
 Admission (ADR 0072) guarantees of every cell it admits. Each records the
 Admission `Reason`s whose drops keep a cell it would fail out of a Store
