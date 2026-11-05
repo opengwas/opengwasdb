@@ -508,29 +508,49 @@ class _Harvest:
     whichever is an rs identifier.
 
     - ``alid_variant``: each variant, registered at its first admitted row.
-    - ``rsid_by_site`` and ``site_alid``: each raw site's first non-empty
-      rsid, and its ALID. The site is spelt as the source spells it, as Pass
-      1's union keeps it, so `names` can compare a site's spellings.
+    - ``named``: each raw site's first non-empty rsid, in the order sites are
+      first named. A site is its ALID and its alleles as the source spells
+      them, as Pass 1's union keeps a site, so `names` can compare a site's
+      spellings.
+    - ``unnamed``: the sites whose admitted rows have named nothing so far.
+
+    The cost is kept to what the first-seen check before #379 paid
+    (OGS-00006 admits 58M rows for 12M sites):
+    - A row of a site already named costs one lookup.
+    - The ALID holds the site's chromosome and position, so it is split once
+      per variant here and once per site at naming, not once per row.
+    - A site is keyed as one string, ``alid<TAB>ref<TAB>alt``. A map of
+      strings holds nothing the cyclic garbage collector tracks, so it adds
+      nothing to each of the build's collections. Tuple keys added 12M
+      entries to every collection.
     """
 
     alid_variant: dict[str, CanonicalVariant] = field(default_factory=dict)
-    rsid_by_site: dict[SourceKey, str] = field(default_factory=dict)
-    site_alid: dict[SourceKey, str] = field(default_factory=dict)
+    named: dict[str, str] = field(default_factory=dict)
+    unnamed: set[str] = field(default_factory=set)
 
     def add(self, batch: ReaderBatch) -> None:
         """Register each of ``batch``'s rows, a batch of admitted rows."""
+        alid_variant, named, unnamed = self.alid_variant, self.named, self.unnamed
         for alid, ref, alt, rsid in zip(
             batch.alid.tolist(), batch.ref.tolist(), batch.alt.tolist(), batch.rsid.tolist(),
             strict=True,
         ):
-            chromosome, position, a1, a2 = alid.split(":")
-            if alid not in self.alid_variant:
-                self.alid_variant[alid] = CanonicalVariant(chromosome, int(position), a1, a2)
+            site = f"{alid}\t{ref}\t{alt}"
+            if site in named:
+                continue
+            if site in unnamed:
+                if rsid:
+                    unnamed.discard(site)
+                    named[site] = rsid
+                continue
+            if alid not in alid_variant:
+                chromosome, position, a1, a2 = alid.split(":")
+                alid_variant[alid] = CanonicalVariant(chromosome, int(position), a1, a2)
             if rsid:
-                site = (chromosome, int(position), ref, alt)
-                if site not in self.rsid_by_site:
-                    self.rsid_by_site[site] = rsid
-                    self.site_alid[site] = alid
+                named[site] = rsid
+            else:
+                unnamed.add(site)
 
     def names(self) -> dict[str, str]:
         """Each variant's rsid, after comparing the names a site's spellings carry.
@@ -541,9 +561,16 @@ class _Harvest:
         Otherwise a variant takes the first non-empty rsid among its admitted
         rows, as spec §4 says, whichever spelling carries it (#400).
         """
+        rsid_by_site: dict[SourceKey, str] = {}
+        site_alid: dict[SourceKey, str] = {}
+        for key, rsid in self.named.items():
+            alid, ref, alt = key.split("\t")
+            chromosome, position, _a1, _a2 = alid.split(":")
+            site = (chromosome, int(position), ref, alt)
+            rsid_by_site[site] = rsid
+            site_alid[site] = alid
         return union_names(
-            self.rsid_by_site, self.site_alid,
-            policy=RsidConflictPolicy.REFUSE, label=HARVEST_LABEL,
+            rsid_by_site, site_alid, policy=RsidConflictPolicy.REFUSE, label=HARVEST_LABEL
         ).rsid_by_alid
 
 

@@ -247,10 +247,15 @@ def require_rsids_match_expected(
     A source that names nothing builds an empty expectation and passes: "the
     sources name none" and "every named variant is present" stay different
     answers, but only the second is required.
+
+    Equal maps return at once: only a disagreement sorts every ALID to name
+    the first that differs, which over a Store's 12M names took 20 s (#379).
     """
+    if resolved_by_alid == expected_by_alid:
+        return
     wrong = sorted(
         alid
-        for alid in sorted(set(resolved_by_alid) | set(expected_by_alid))
+        for alid in set(resolved_by_alid) | set(expected_by_alid)
         if resolved_by_alid.get(alid) != expected_by_alid.get(alid)
     )
     if not wrong:
