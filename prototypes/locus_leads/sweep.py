@@ -128,13 +128,21 @@ def pool_pairs(summaries: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def pool_chance(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Cross-chromosome pairs pooled over Analyses, with the share reaching each r^2."""
+    """Cross-chromosome pairs pooled over Analyses, with the share reaching each r^2.
+
+    The share is of pairs whose r^2 is defined; the undefined ones are counted beside it.
+    """
     pairs = sum(r["pairs"] for r in records)
+    undefined = sum(r["r2_undefined"] for r in records)
+    evaluable = pairs - undefined
+    if evaluable <= 0:
+        raise ValueError(f"no pair with a defined r^2 among {pairs:,} cross-chromosome pairs, "
+                         "so the chance share is not defined")
     reached = {f"pairs_r2_ge_{t:g}": sum(r[f"pairs_r2_ge_{t:g}"] for r in records)
                for t in R2_THRESHOLDS}
-    return {"analyses": len(records), "pairs": pairs, "r2_undefined":
-            sum(r["r2_undefined"] for r in records), **reached,
-            **{k.replace("pairs_", "share_"): v / pairs for k, v in reached.items()}}
+    return {"analyses": len(records), "pairs": pairs, "r2_undefined": undefined,
+            "pairs_evaluable": evaluable, **reached,
+            **{k.replace("pairs_", "share_"): v / evaluable for k, v in reached.items()}}
 
 
 def within_tolerance(pooled: dict[str, Any], prefix: str = "") -> bool:

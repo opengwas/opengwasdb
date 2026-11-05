@@ -83,13 +83,17 @@ def _histogram(r2: np.ndarray) -> dict[str, int]:
 
 
 def _band_counts(members: list[Pair]) -> dict[str, int]:
-    return {"n": len(members)} | {
+    return {"n": len(members), "r2_undefined": sum(np.isnan(p.r2) for p in members)} | {
         f"r2_ge_{t:g}": sum(p.r2 >= t for p in members if not np.isnan(p.r2))
         for t in R2_THRESHOLDS}
 
 
 def check_pairs_follow_threshold(pairs: list[Pair], threshold: float) -> None:
     """A clump member's r^2 with its index variant is at least the clump's threshold."""
+    undefined = [p for p in pairs if np.isnan(p.r2)]
+    if undefined:
+        raise ValueError(f"{len(undefined)} clump members have an undefined r^2 with their index "
+                         f"variant, e.g. {undefined[0]}; plink2 placed them in its clump")
     short = [p for p in pairs if p.r2 < threshold - R2_TOLERANCE]
     if short:
         raise ValueError(f"{len(short)} clump members have r^2 below {threshold:g} with their "
