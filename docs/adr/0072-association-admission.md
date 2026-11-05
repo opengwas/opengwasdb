@@ -119,8 +119,12 @@ has an owner.**
   block whose successor does not complete that Analysis. Each such cell is
   filled once, and counted once in `completion_quality`. Where the owner's fit
   fails for an Analysis, the cell stays missing, even where the other block's
-  fit passes. Of the published Stores, OGS-00015 held 254 such cells, OGS-00017
-  10 and OGS-00002 8.
+  fit passes. Of the published Stores, the Dense OGS-00015 holds 254 cells
+  only the other block filled, and OGS-00017 10; the rule leaves each missing.
+  The Ragged OGS-00002 holds 8, but leaves 1 missing: for the other 7 the
+  owning block does not complete that Analysis, so the ending block keeps its
+  end. Completed again from OGS-00001, it holds 106,652 imputed cells against
+  106,653.
 - **The guard.** The duplicate rule stays in the writer of every completion.
   A fill that still reaches a cell another block filled is resolved by it, and
   each dropped fill is logged. That happens where two blocks overlap away from
