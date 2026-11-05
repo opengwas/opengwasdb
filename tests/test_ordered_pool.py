@@ -21,6 +21,18 @@ _completion_order = _fork.Array("i", _ITEMS)
 
 
 def _reverse_completion(i: int) -> tuple[int, int]:
+    _claim_completion(i)
+    return i, os.getpid()
+
+
+def _reverse_completion_shared(shared: dict[str, Any], i: int) -> tuple[int, int, int]:
+    """`_reverse_completion` beside the shared value's tag and the process id."""
+    _claim_completion(i)
+    return i, shared["tag"], os.getpid()
+
+
+def _claim_completion(i: int) -> None:
+    """Item 0 waits for every other item; each then records its position."""
     if i == 0:
         while True:
             with _completed.get_lock():
@@ -31,7 +43,6 @@ def _reverse_completion(i: int) -> tuple[int, int]:
         position = _completed.value
         _completed.value += 1
     _completion_order[position] = i
-    return i, os.getpid()
 
 
 def _identity(i: int) -> tuple[int, int]:
@@ -91,6 +102,56 @@ def test_worker_error_propagates(n_workers: int) -> None:
         list(ordered_map(_fail_on_three, range(10), n_workers=n_workers))
 
 
+# ── ordered_map with one shared value (#395) ────────────────────────────────
+
+
+def test_shared_value_keeps_input_order_under_a_slow_item() -> None:
+    """A shared value does not cost ``ordered_map`` its ordering (issue #395).
+
+    The same rendezvous as the order test above: item 0 finishes only after
+    every later item, so a map that yielded as results completed would return
+    it last.
+    """
+    _reset_completion()
+    results = list(
+        ordered_map(
+            _reverse_completion_shared,
+            range(_ITEMS),
+            n_workers=4,
+            max_in_flight=_ITEMS,
+            shared={"tag": 11},
+        )
+    )
+    assert [i for i, _tag, _pid in results] == list(range(_ITEMS))
+    assert {tag for _i, tag, _pid in results} == {11}
+    # Meaningful only if the work really left the parent process and completion
+    # order really differed from input order: item 0 completed last.
+    assert os.getpid() not in {pid for _i, _tag, pid in results}
+    assert list(_completion_order)[-1] == 0
+
+
+def test_shared_value_reaches_forked_workers_unpickled() -> None:
+    """The shared value is inherited by fork, not sent with each item.
+
+    A lock cannot be pickled, so a value carried across the pool's pipe would
+    fail to arrive rather than arrive late.
+    """
+    import threading
+
+    shared = {"tag": 7, "lock": threading.Lock()}
+    results = list(ordered_map(_read_shared, range(8), n_workers=3, shared=shared))
+
+    assert [item for item, _tag, _pid in results] == list(range(8))
+    assert {tag for _item, tag, _pid in results} == {7}
+    assert os.getpid() not in {pid for _item, _tag, pid in results}
+
+
+def test_shared_value_runs_in_process_when_serial() -> None:
+    results = list(ordered_map(_read_shared, [3, 1, 2], n_workers=1, shared={"tag": 1}))
+
+    assert results == [(3, 1, os.getpid()), (1, 1, os.getpid()), (2, 1, os.getpid())]
+
+
 # ── fork_each: one shared value, results in completion order ─────────────────
 
 
@@ -138,7 +199,7 @@ def test_fork_each_refuses_a_second_share_while_one_is_open_and_clears_after() -
     pool closes, whether or not the work succeeded."""
     from opengwasdb.build import ordered_pool
 
-    with pytest.raises(RuntimeError, match="already sharing"):
+    with pytest.raises(RuntimeError, match="already with an open pool"):
         list(ordered_pool.fork_each(_nested, {"tag": 0}, [1], n_workers=2))
     assert ordered_pool._shared is None
     assert not ordered_pool._sharing
