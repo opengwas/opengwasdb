@@ -48,19 +48,23 @@ from opengwasdb.query.facade import query_store
 from opengwasdb.variants.axis import VariantAxis
 
 from . import clump, rule
+from . import run as run_mod
 from .genetic_map import LoadedMap, load_map
 from .panel import Panel, plink2
 from .run import SharedSet, TierRows, build_shared_set, read_tier
 
 STAGES = ("tier", "positions", "cm", "sort", "rule")
-# The pruning stages are the four that follow the tier read. `positions_array`
-# is the same read from a per-variant array — the follow-up #62 names if the
-# Variant Table proves the bottleneck.
-PRUNE_STAGES = ("positions", "cm", "sort", "rule")
-FAST_PRUNE_STAGES = ("positions_array", "cm", "sort", "rule_fast")
+# What a budget or a ratio adds up. `positions_array` is the same read from a
+# per-variant array — the follow-up #62 names if the Variant Table proves the
+# bottleneck. `sort` is absent deliberately: it is timed for information, and
+# both rules sort inside their own time, so charging it would charge a sort twice.
+PRUNE_STAGES = ("positions", "cm", "rule")
+FAST_PRUNE_STAGES = ("positions_array", "cm", "rule_fast")
+SORT_NOTE = ("the `sort` stage is timed for information only: both rules sort inside their "
+             "own time, so no total, budget or ratio adds the separate stage")
 BUDGET = {
     "quantity": "the default Top-Hit Query's own wall time for the same slice, "
-                "imputed rows included",
+                "imputed rows included, and the same query resolved",
     "judged": "pruning runs per query when its stages cost no more than the query they "
               "follow (fast_ratio <= 1), so the reader waits at most twice as long",
 }
@@ -125,7 +129,7 @@ def own_rss() -> float:
     return rss_mb(os.getpid()) or 0.0
 
 
-def child_rss(expected: str) -> float:
+def child_rss(expected: str) -> float | None:
     """The highest RSS among this process's children running the `expected` executable.
 
     A child counts only once it has executed that program. Between `fork` and
@@ -133,9 +137,14 @@ def child_rss(expected: str) -> float:
     process's, several gigabytes on a large shared set that plink2 has not
     touched. That clone is recognised by a command line identical to this
     process's own, which `exec` replaces.
+
+    None when no such child was alive at a poll. A short-lived child can start and
+    finish between polls, and a peak nobody observed is missing evidence — never 0
+    MB, which would read as "it used no memory".
     """
-    return max((rss_mb(pid) or 0.0 for pid in child_pids(os.getpid())
-                if _runs(pid, expected)), default=0.0)
+    seen = [value for value in (rss_mb(pid) for pid in child_pids(os.getpid())
+                                if _runs(pid, expected)) if value is not None]
+    return max(seen) if seen else None
 
 
 def _runs(pid: int, expected: str) -> bool:
@@ -151,75 +160,102 @@ def _runs(pid: int, expected: str) -> bool:
 
 
 class PeakRss:
-    """Poll RSS on a background thread and keep the maximum seen.
+    """Poll RSS on a background thread and keep the maximum seen, and how often it was seen.
 
     Current RSS from /proc/<pid>/statm, never `ru_maxrss`: under `pixi run` the
     high-water mark starts near 2 GiB and cannot be reset, and a query's
     intermediate buffers are freed before it returns, so a before-and-after read
     misses the peak entirely.
+
+    `peak_mb` is None until a poll observes something, and stays None if none
+    does; `observations` counts the polls that did, so a missing peak is
+    distinguishable from a small one.
     """
 
-    def __init__(self, reader: Callable[[], float], interval: float = _INTERVAL) -> None:
+    def __init__(self, reader: Callable[[], float | None], interval: float = _INTERVAL) -> None:
         self._reader = reader
         self._interval = interval
         self._stop = threading.Event()
-        self.peak_mb = 0.0
+        self.peak_mb: float | None = None
+        self.observations = 0
 
     def __enter__(self) -> PeakRss:
-        self.peak_mb = self._reader()
+        self._observe()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         return self
 
+    def _observe(self) -> None:
+        value = self._reader()
+        if value is not None:
+            self.observations += 1
+            self.peak_mb = value if self.peak_mb is None else max(self.peak_mb, value)
+
     def _run(self) -> None:
         while not self._stop.is_set():
-            self.peak_mb = max(self.peak_mb, self._reader())
+            self._observe()
             self._stop.wait(self._interval)
 
     def __exit__(self, *exc: object) -> None:
         self._stop.set()
         self._thread.join(timeout=2.0)
-        self.peak_mb = max(self.peak_mb, self._reader())
+        self._observe()
 
 
-def peak_child_rss(argv: Sequence[str], interval: float = _INTERVAL) -> float:
-    """The highest RSS a child running `argv` reaches while it runs."""
+def peak_child_rss(argv: Sequence[str], interval: float = _INTERVAL) -> dict[str, Any]:
+    """The highest RSS a child running `argv` reaches, and how many polls saw it."""
     with PeakRss(lambda: child_rss(Path(argv[0]).name), interval) as sampler:
         subprocess.run(list(argv), check=True)
-    return sampler.peak_mb
+    return {"peak_mb": sampler.peak_mb, "observations": sampler.observations,
+            "interval_s": interval}
 
 
 def time_stages(stages: Mapping[str, Callable[[], object]], *, repeats: int,
                 child: str | None = None) -> dict[str, Any]:
-    """Each stage timed `repeats` times in order, with its load and its peak RSS.
+    """Each stage timed `repeats` times in order, with its loads and its peak RSS.
 
     `child` names an executable whose child processes carry the peak to sample —
     plink2's, when clumping, is not this process's. Without it the peak is this
     process's own.
     """
     reader = (lambda: child_rss(child)) if child else own_rss
-    record: dict[str, Any] = {}
-    for name, stage in stages.items():
-        samples: list[float] = []
-        peak, load = 0.0, load_average()
-        for _ in range(repeats):
-            load = load_average()
-            with PeakRss(reader) as sampler:
-                started = time.perf_counter()
-                stage()
-                samples.append(time.perf_counter() - started)
-            peak = max(peak, sampler.peak_mb)
-        record[name] = {
-            "samples_s": [round(value, 4) for value in samples],
-            "median_s": round(float(statistics.median(samples)), 4),
-            "min_s": round(min(samples), 4),
-            "max_s": round(max(samples), 4),
-            "peak_mb": round(peak, 1),
-            "peak_source": "children" if child else "process",
-            "child": child,
-            "load": load,
-        }
-    return record
+    return {name: _timed_stage(stage, repeats=repeats, reader=reader, child=child)
+            for name, stage in stages.items()}
+
+
+def _timed_stage(stage: Callable[[], object], *, repeats: int,
+                 reader: Callable[[], float | None], child: str | None) -> dict[str, Any]:
+    """One stage's repeats: every sample, every load, and the highest peak observed."""
+    samples: list[float] = []
+    loads: list[dict[str, float]] = []
+    peak: float | None = None
+    observations = 0
+    for _ in range(repeats):
+        loads.append(load_average())
+        with PeakRss(reader) as sampler:
+            started = time.perf_counter()
+            stage()
+            samples.append(time.perf_counter() - started)
+        observations += sampler.observations
+        peak = _higher(peak, sampler.peak_mb)
+    return {
+        "samples_s": [round(value, 4) for value in samples],
+        "median_s": round(float(statistics.median(samples)), 4),
+        "min_s": round(min(samples), 4),
+        "max_s": round(max(samples), 4),
+        "peak_mb": None if peak is None else round(peak, 1),
+        "rss_observations": observations,
+        "peak_source": "children" if child else "process",
+        "child": child,
+        "loads": loads,
+    }
+
+
+def _higher(peak: float | None, observed: float | None) -> float | None:
+    """The higher of two peaks; an unobserved one never displaces an observed one."""
+    if observed is None:
+        return peak
+    return observed if peak is None else max(peak, observed)
 
 
 # ----------------------------------------------------------------- provenance
@@ -294,19 +330,29 @@ def _median(stages: Mapping[str, Mapping[str, Any]], name: str) -> float:
 
 
 def budget_record(stages: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
-    """What pruning costs against the Top-Hit Query it follows, from the medians."""
+    """What pruning costs against the Top-Hit Query it follows, from the medians.
+
+    Two baselines: the tier's own query, and the same query resolved — the
+    workload a reader waits for when it wants positions and ALIDs, which is what
+    pruning needs. `sort` is charged to neither total (see `SORT_NOTE`).
+    """
     query = _median(stages, "tier")
+    resolved = _median(stages, "resolved_query")
     pruning = sum(_median(stages, name) for name in PRUNE_STAGES)
     fast = sum(_median(stages, name) for name in FAST_PRUNE_STAGES)
     return {
         "definition": BUDGET["quantity"],
         "judged": BUDGET["judged"],
+        "sort_note": SORT_NOTE,
+        "charged": {"as_written": list(PRUNE_STAGES), "fast": list(FAST_PRUNE_STAGES)},
         "query_s": round(query, 4),
+        "resolved_query_s": round(resolved, 4),
         "pruning_s": round(pruning, 4),
         "ratio": round(pruning / query, 4) if query else None,
         "within_budget_as_written": bool(query) and pruning <= query,
         "fast_pruning_s": round(fast, 4),
         "fast_ratio": round(fast / query, 4) if query else None,
+        "fast_ratio_of_resolved": round(fast / resolved, 4) if resolved else None,
         "within_budget": bool(query) and fast <= query,
     }
 
@@ -617,7 +663,8 @@ def measure_slice(spec: SliceSpec, *, genetic_map: LoadedMap, panel: Panel, axis
         spec.store, spec.analysis_id, spec.threshold))
     timed = time_stages(stages, repeats=repeats)
     rows, leads = _tier_record(held, timed, axis)
-    clumping = _clump_measurement(held["prototype"], genetic_map=genetic_map, axis=axis,
+    clumping = _clump_measurement(held["prototype"], genetic_map=genetic_map, panel=panel,
+                                  axis=axis,
                                   parameters=_ClumpParameters(panel=panel, work_dir=work_dir,
                                                               repeats=repeats, threads=threads,
                                                               r2=r2, threshold=spec.threshold),
@@ -626,8 +673,7 @@ def measure_slice(spec: SliceSpec, *, genetic_map: LoadedMap, panel: Panel, axis
         "name": spec.name, "why": spec.why, "store": store_identity(spec.store),
         "analysis_id": spec.analysis_id, "threshold": spec.threshold,
         "rows": rows, "stages": timed, "budget": budget_record(timed), "leads": leads,
-        "clumping": clumping, "ratio": _ratio_record(clumping.pop("pruning"),
-                                                     clumping["total_s"], clumping["rows"]),
+        "clumping": clumping, "ratio": clumping["ratio"],
     }
 
 
@@ -644,6 +690,9 @@ def _tier_stages(spec: SliceSpec, axis: CmAxis, held: dict[str, Any], *, d_cm: f
                                                           held["hits"]["variant_index"])),
         "rule": lambda: held.update(leads=_leads(held, rule.locus_leads, d_cm=d_cm, w_bp=w_bp)),
         "rule_fast": lambda: held.update(fast=_leads(held, fast_locus_leads, d_cm=d_cm, w_bp=w_bp)),
+        # The baseline a reader actually waits for when it needs positions and
+        # ALIDs: the same default query, every row resolved, imputed included.
+        "resolved_query": lambda: held.update(resolved=_read_resolved(spec)),
     }
 
 
@@ -657,6 +706,20 @@ def _read_hits(spec: SliceSpec) -> dict[str, np.ndarray]:
                 "status": np.asarray(hits["association_status"]).astype(str)}
     finally:
         query.close()
+
+
+def _read_resolved(spec: SliceSpec) -> int:
+    """The default Top-Hit Query with every row resolved, as `run.read_tier` does for observed."""
+    query = query_store(spec.store)
+    try:
+        hits = query.top_hits(analysis_id=spec.analysis_id, threshold=spec.threshold)
+        resolved = list(query.resolve(hits))
+    finally:
+        query.close()
+    if len(resolved) != hits.count:
+        raise ValueError(f"{spec.analysis_id}: {len(resolved):,} rows resolved of "
+                         f"{hits.count:,} in the tier")
+    return len(resolved)
 
 
 def _positions_from_table(store: Path, hits: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -724,37 +787,57 @@ def _off_map_labels(axis: CmAxis, index: np.ndarray) -> list[str]:
 
 
 def _clump_measurement(prototype: tuple[TierRows, dict[str, Any]], *, genetic_map: LoadedMap,
-                       axis: CmAxis, parameters: _ClumpParameters, d_cm: float,
+                       panel: Panel, axis: CmAxis, parameters: _ClumpParameters, d_cm: float,
                        w_bp: int) -> dict[str, Any]:
-    """plink2's clumping of the shared set, per chromosome, and pruning of the same rows."""
+    """plink2's clumping of the shared set, per chromosome, and pruning of the same rows.
+
+    The shared set is timed whole — what a Store run pays — and its panel match
+    and its cM interpolation are timed apart from it, because clumping needs the
+    match and not the cM work. The ratio is taken against all three.
+    """
     tier, _ = prototype
     held: dict[str, Any] = {}
     stages: dict[str, Callable[[], object]] = {
         "shared_set": lambda: held.update(shared=build_shared_set(
             tier, parameters.panel, genetic_map.map)),
+        "matching": lambda: held.update(match=run_mod.match_rows(tier, panel)),
+        "shared_cm": lambda: held.update(shared_cm=_shared_cm(tier, genetic_map)),
     }
     stages["ranked"] = lambda: held.update(ranked=clump.ranked_neg_log10_p(
         held["shared"][0].rows.abs_z, held["shared"][0].rows.variant_index))
     timed = time_stages(stages, repeats=parameters.repeats)
     shared = held["shared"][0]
-    clumping = _clump_by_chromosome(shared, held["ranked"], parameters)
+    clumped = _clump_by_chromosome(shared, held["ranked"], parameters)
     pruning = _shared_pruning(shared, axis, repeats=parameters.repeats, d_cm=d_cm, w_bp=w_bp)
+    bills = {"matching_s": timed["matching"]["median_s"],
+             "shared_cm_s": timed["shared_cm"]["median_s"],
+             "shared_set_s": timed["shared_set"]["median_s"],
+             "ranked_s": timed["ranked"]["median_s"],
+             "plink2_s": clumped["clump_s"]}
     return {
         "shared_rows": int(shared.rows.chromosome.size),
         "shared_set_accounting": held["shared"][1],
-        "stages": timed | clumping["stages"],
-        "per_chromosome": clumping["per_chromosome"],
-        "index_variants": clumping["index_variants"],
-        "members": clumping["members"],
-        "clump_s": clumping["clump_s"],
-        "order_followed": clumping["order_followed"],
-        "r2": clumping["r2"],
-        "clump_kb": clumping["clump_kb"],
+        "stages": timed | clumped["stages"],
+        "per_chromosome": clumped["per_chromosome"],
+        "index_variants": clumped["index_variants"],
+        "members": clumped["members"],
+        "clump_s": clumped["clump_s"],
+        "order_followed": clumped["order_followed"],
+        "r2": clumped["r2"],
+        "clump_kb": clumped["clump_kb"],
         "total_s": round(timed["shared_set"]["median_s"] + timed["ranked"]["median_s"]
-                         + clumping["clump_s"], 4),
+                         + clumped["clump_s"], 4),
         "rows": int(shared.rows.chromosome.size),
-        "pruning": pruning,
+        "shared_pruning": pruning,
+        "ratio": ratio_record(pruning, bills, int(shared.rows.chromosome.size)),
     }
+
+
+def _shared_cm(rows: TierRows, genetic_map: LoadedMap) -> np.ndarray:
+    """The shared set's cM interpolation and its check, which only pruning needs."""
+    cm = genetic_map.map.cm_at(rows.chromosome, rows.position)
+    run_mod.check_cm(rows.chromosome, rows.position, cm, genetic_map.map)
+    return cm
 
 
 def _clump_by_chromosome(shared: SharedSet, ranked: clump.RankedScores,
@@ -834,20 +917,41 @@ def _leads_at(rows: TierRows, cm: np.ndarray, leads_at: Callable[..., np.ndarray
                     d_cm=d_cm, w_bp=w_bp)
 
 
-def _ratio_record(pruning: Mapping[str, Mapping[str, Any]], clumping_s: float,
-                  rows: int) -> dict[str, Any]:
-    """Pruning time over clumping time, on the identical rows both were given."""
-    pruning_s = sum(_median(pruning, name) for name in ("cm", "sort", "rule"))
-    fast_pruning_s = sum(_median(pruning, name) for name in ("cm", "sort", "rule_fast"))
-    if not clumping_s:
-        raise ValueError("clumping was not timed, so there is no ratio to report")
+def _bill(name: str) -> str:
+    """A clumping bill's ratio key: `plink2_s` is `plink2_only`, the rest lose the unit."""
+    return "plink2_only" if name == "plink2_s" else name.removesuffix("_s")
+
+
+def ratio_record(pruning: Mapping[str, Mapping[str, Any]],
+                 clumping: Mapping[str, float], rows: int) -> dict[str, Any]:
+    """Pruning over clumping on the identical rows, against three clumping bills.
+
+    `plink2_s` is plink2 alone, genotypes and all. `matched_s` adds the panel
+    matching clumping cannot start without — the rows have to be named on the
+    panel before they can be clumped. `end_to_end_s` adds what a Store run pays
+    to build the shared set, which includes the cM interpolation and check that
+    only pruning needs. The sort is charged to neither side (see `SORT_NOTE`).
+    """
+    pruning_s = sum(_median(pruning, name) for name in ("cm", "rule"))
+    fast_pruning_s = sum(_median(pruning, name) for name in ("cm", "rule_fast"))
+    matched_s = clumping["matching_s"] + clumping["ranked_s"] + clumping["plink2_s"]
+    shared_set_s = clumping.get("shared_set_s",
+                                clumping["matching_s"] + clumping["shared_cm_s"])
+    bills = {"plink2_s": round(clumping["plink2_s"], 4), "matched_s": round(matched_s, 4),
+             "end_to_end_s": round(shared_set_s + clumping["ranked_s"] + clumping["plink2_s"], 4)}
     return {
-        "rows": rows, "pruning_s": round(pruning_s, 4), "clumping_s": round(clumping_s, 4),
-        "value": round(pruning_s / clumping_s, 4),
+        "rows": rows,
+        "pruning_s": round(pruning_s, 4),
         "fast_pruning_s": round(fast_pruning_s, 4),
-        "fast_value": round(fast_pruning_s / clumping_s, 4),
-        "definition": "pruning (cM lookup, sort, rule) over clumping (shared set, ranking, "
-                      "plink2 with genotypes) on the shared set of the same Analysis",
+        "clumping": bills,
+        "shared_set_split_s": round(clumping["matching_s"] + clumping["shared_cm_s"], 4),
+        "ratios": {_bill(name): round(pruning_s / total, 4) for name, total in bills.items()},
+        "ratios_fast": {_bill(name): round(fast_pruning_s / total, 4)
+                        for name, total in bills.items()},
+        "sort_note": SORT_NOTE,
+        "definition": "pruning (cM lookup, rule) over clumping on the shared set of the same "
+                      "Analysis: plink2 alone, plink2 with the panel matching, and the whole "
+                      "shared set",
     }
 
 

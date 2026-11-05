@@ -1,9 +1,12 @@
 """What genetic-distance pruning costs (#406).
 
-Three things are held here directly: that a slice's timed record names every
-stage the measurement asks for and carries the machine, date, commit and load
-it was taken under; that a child process's peak RSS is seen (plink2's, when
-clumping); and that the faster rule gives the same leads as `rule.locus_leads`.
+Held here directly: that a slice's timed record names every stage the
+measurement asks for and carries the machine, date, commit and load it was taken
+under, with one load record per repeat; that a child process's peak RSS is seen
+and a peak nobody observed is missing rather than zero; that no total charges a
+sort the rule already does; that pruning is divided by three different clumping
+bills; and that the faster rule gives the same leads as `rule.locus_leads`,
+including where a lead from one block owns rows in the next.
 """
 
 from __future__ import annotations
@@ -49,9 +52,12 @@ def test_the_timer_reports_every_stage_and_the_record_carries_its_provenance() -
         assert len(entry["samples_s"]) == 2
         assert entry["min_s"] <= entry["median_s"] <= entry["max_s"]
         assert isinstance(entry["median_s"], float)
-        assert set(entry["load"]) == {"one", "five", "fifteen"}
+        assert len(entry["loads"]) == 2, "one load record per repeat, not one per stage"
+        for load in entry["loads"]:
+            assert set(load) == {"one", "five", "fifteen"}
         assert entry["peak_source"] in {"process", "children"}
         assert isinstance(entry["peak_mb"], float) and entry["peak_mb"] > 0
+        assert entry["rss_observations"] >= 1
 
     provenance = cost.provenance()
     assert re.fullmatch(r"[0-9a-f]{7,40}", provenance["commit"])
@@ -65,12 +71,24 @@ def test_the_timer_reports_every_stage_and_the_record_carries_its_provenance() -
     assert provenance["environment"]["plink2"], "plink2's version is part of the record"
 
 
-def test_the_child_rss_sampler_sees_a_childs_peak_and_not_a_small_childs() -> None:
+def test_the_child_rss_sampler_sees_a_childs_peak_and_not_a_fork_clones() -> None:
     small = cost.peak_child_rss([sys.executable, "-c", _SPIN])
     big = cost.peak_child_rss([sys.executable, "-c", _ALLOCATE_AND_SPIN])
 
-    assert small < 100.0, f"a child that allocates nothing peaked at {small:.1f} MB"
-    assert 190.0 <= big <= 330.0, f"a child holding 200 MB peaked at {big:.1f} MB"
+    assert small["peak_mb"] < 100.0, (
+        f"a child that allocates nothing peaked at {small['peak_mb']:.1f} MB")
+    assert 190.0 <= big["peak_mb"] <= 330.0, (
+        f"a child holding 200 MB peaked at {big['peak_mb']:.1f} MB")
+    assert big["observations"] > 0
+
+
+def test_a_child_nobody_polled_is_a_missing_peak_rather_than_a_zero() -> None:
+    # The poll interval is longer than the child's life, so no poll can see it.
+    unobserved = cost.peak_child_rss([sys.executable, "-c", "pass"], interval=10.0)
+
+    assert unobserved["peak_mb"] is None, "no observation is not 0 MB"
+    assert unobserved["observations"] == 0
+    assert unobserved["interval_s"] == 10.0
 
 
 def test_the_faster_rule_gives_the_same_leads_on_ties_a_hotspot_and_several_chromosomes() -> None:
@@ -106,6 +124,34 @@ def test_the_faster_rule_gives_the_same_leads_on_clustered_rows_with_many_ties(s
         "the fixture must both keep leads and merge rows"
 
 
+def test_the_faster_rule_carries_a_leads_ownership_across_block_boundaries() -> None:
+    # Thirty clusters 3 Mb apart, so each is its own lead and W = 1 Mb keeps them
+    # apart. Every row shares abs_z, so the rule's order is by Store Variant Index,
+    # which interleaves the clusters: the 30 leads are accepted inside the first
+    # block and own rows in every block after it.
+    clusters, width = 30, 400
+    position = np.concatenate([k * 3_000_000 + np.arange(width) for k in range(clusters)])
+    chromosome = np.repeat("1", position.size)
+    cm = position / 10_000_000
+    variant_index = np.concatenate([np.arange(width) * clusters + k for k in range(clusters)])
+    assert position.size > cost.BLOCK_MIN, "the fixture must span more than one block"
+    assert np.all(np.diff(cm) >= 0), "fixture cM must be monotone"
+
+    leads = _leads(chromosome=chromosome.tolist(), position=position.tolist(),
+                   cm=cm.tolist(), abs_z=[40.0] * position.size,
+                   variant_index=variant_index.tolist())
+
+    kept = leads.tolist()
+    lead_rows = [row for row in range(len(kept)) if kept[row] == row]
+    assert len(lead_rows) == clusters, "one lead per cluster"
+    owned_beyond_the_first_block = [
+        row for row in range(cost.BLOCK_MIN, len(kept))
+        if kept[row] != row and kept[row] in lead_rows
+    ]
+    assert len(owned_beyond_the_first_block) > cost.BLOCK_MIN, (
+        "rows after the first block must be owned by a lead accepted before it")
+
+
 def _clustered_rows(rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Three chromosomes of dense clusters, with a hotspot on chromosome 2."""
     labels, positions = [], []
@@ -131,26 +177,58 @@ def test_a_map_whose_cm_falls_is_refused_rather_than_silently_reordered() -> Non
                variant_index=[0, 1])
 
 
-def test_the_budget_divides_the_pruning_stages_by_the_query_they_follow() -> None:
+def test_the_budget_does_not_charge_a_sort_the_rule_already_does() -> None:
     record = cost.budget_record({
-        "tier": {"median_s": 10.0}, "positions": {"median_s": 4.0},
-        "positions_array": {"median_s": 0.1}, "cm": {"median_s": 0.5},
-        "sort": {"median_s": 1.0}, "rule": {"median_s": 8.0}, "rule_fast": {"median_s": 1.0},
+        "tier": {"median_s": 10.0}, "resolved_query": {"median_s": 20.0},
+        "positions": {"median_s": 4.0}, "positions_array": {"median_s": 0.1},
+        "cm": {"median_s": 0.5}, "sort": {"median_s": 1.0}, "rule": {"median_s": 8.0},
+        "rule_fast": {"median_s": 1.0},
     })
 
     assert record["query_s"] == 10.0
-    assert record["pruning_s"] == pytest.approx(13.5)
-    assert record["ratio"] == pytest.approx(1.35)
-    assert record["fast_pruning_s"] == pytest.approx(2.6)
-    assert record["fast_ratio"] == pytest.approx(0.26)
-    assert record["within_budget"] is True, "2.6 s of pruning on a 10 s query"
+    assert record["resolved_query_s"] == 20.0
+    # The separate sort stage is not added: both rules sort inside their own time.
+    assert record["pruning_s"] == pytest.approx(12.5)
+    assert record["ratio"] == pytest.approx(1.25)
+    assert record["fast_pruning_s"] == pytest.approx(1.6)
+    assert record["fast_ratio"] == pytest.approx(0.16)
+    assert record["fast_ratio_of_resolved"] == pytest.approx(0.08)
+    assert record["charged"]["as_written"] == ["positions", "cm", "rule"]
+    assert record["charged"]["fast"] == ["positions_array", "cm", "rule_fast"]
+    assert "sort" in record["sort_note"]
+    assert record["within_budget"] is True, "1.6 s of pruning on a 10 s query"
 
     too_slow = cost.budget_record({
-        "tier": {"median_s": 10.0}, "positions": {"median_s": 16.0},
-        "positions_array": {"median_s": 0.1}, "cm": {"median_s": 0.1},
-        "sort": {"median_s": 0.6}, "rule": {"median_s": 15.0}, "rule_fast": {"median_s": 1.5},
+        "tier": {"median_s": 10.0}, "resolved_query": {"median_s": 20.0},
+        "positions": {"median_s": 16.0}, "positions_array": {"median_s": 0.1},
+        "cm": {"median_s": 0.1}, "sort": {"median_s": 0.6}, "rule": {"median_s": 15.0},
+        "rule_fast": {"median_s": 1.5},
     })
     assert too_slow["ratio"] > 1.0 and too_slow["fast_ratio"] < 1.0
+
+
+def test_the_ratio_reports_clumping_end_to_end_matched_and_plink2_alone() -> None:
+    record = cost.ratio_record(
+        pruning={"cm": {"median_s": 0.5}, "sort": {"median_s": 0.25},
+                 "rule": {"median_s": 4.0}, "rule_fast": {"median_s": 1.0}},
+        clumping={"matching_s": 3.0, "shared_cm_s": 2.0, "ranked_s": 0.5, "plink2_s": 10.0},
+        rows=1_000,
+    )
+
+    assert record["rows"] == 1_000
+    # The sort is not charged: the rule's own time already includes one.
+    assert record["pruning_s"] == pytest.approx(4.5)
+    assert record["fast_pruning_s"] == pytest.approx(1.5)
+    assert record["clumping"] == {
+        "plink2_s": 10.0, "matched_s": 13.5, "end_to_end_s": 15.5,
+    }
+    assert record["shared_set_split_s"] == pytest.approx(5.0)
+    # Ratios are rounded to four places, as every timed figure in the artifact is.
+    assert record["ratios"] == pytest.approx(
+        {"plink2_only": 0.45, "matched": 0.3333, "end_to_end": 0.2903})
+    assert record["ratios_fast"] == pytest.approx(
+        {"plink2_only": 0.15, "matched": 0.1111, "end_to_end": 0.0968})
+    assert "sort" in record["sort_note"]
 
 
 class _Leads:
