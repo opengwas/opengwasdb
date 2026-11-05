@@ -108,22 +108,57 @@ class Cells:
         return int(self.ai[0])
 
 
-def require_within(cells: Cells, n_analyses: int, source: str) -> None:
-    """Refuse a region that names an Analysis outside `[0, n_analyses)`.
+#: What each axis a region can name holds, for a refusal's message.
+_AXES = {
+    "Analysis index": "the Analyses this component holds",
+    "variant index": "the variants on this component's axis",
+    "position": "the rows this sequence holds",
+}
 
-    Neither answer a reader would give is an error of its own. Analysis -1 reads the
-    last Analysis's cells, numbered -1, as numpy counts from the end. An Analysis past
-    the end can read as no associations, which a scan takes for no hits.
+
+def require_within(
+    cells: Cells,
+    source: str,
+    *,
+    n_analyses: int,
+    n_variants: int | None = None,
+    n_rows: int | None = None,
+) -> None:
+    """Refuse a region that names an index outside its axis: an Analysis outside
+    `[0, n_analyses)`, a variant outside `[0, n_variants)`, or a flat position
+    outside `[0, n_rows)`. A reader passes each axis its regions can name.
+
+    Neither answer a reader would give is an error of its own. Index -1 reads the
+    last Analysis's or variant's cells, numbered -1, as numpy counts from the end.
+    An index past the end can read as no associations, which a scan takes for no
+    hits.
     """
-    ai = cells.ai
-    if ai is None or not len(ai):
+    _refuse_outside(cells.ai, n_analyses, "Analysis index", source)
+    if n_variants is not None:
+        _refuse_outside(cells.vi, n_variants, "variant index", source)
+    if n_rows is not None:
+        _refuse_outside(cells.pos, n_rows, "position", source)
+
+
+def require_run_within(start: int, stop: int, n_rows: int, source: str) -> None:
+    """`require_within` for the flat run of positions `[start, stop)`, judged from
+    its two ends: a scan asks it of every window, which the full check reads whole."""
+    if stop > start and (start < 0 or stop > n_rows):
+        first = start if start < 0 else max(start, n_rows)
+        raise IndexError(_outside(source, "position", first, n_rows))
+
+
+def _refuse_outside(values: np.ndarray | None, n: int, name: str, source: str) -> None:
+    if values is None or not len(values):
         return
-    outside = (ai < 0) | (ai >= n_analyses)
-    if outside.any():
-        raise IndexError(
-            f"{source}: Analysis index {int(ai[outside][0])} is outside "
-            f"[0, {n_analyses}), the Analyses this component holds"
-        )
+    if int(values.min()) >= 0 and int(values.max()) < n:
+        return
+    first = int(values[(values < 0) | (values >= n)][0])
+    raise IndexError(_outside(source, name, first, n))
+
+
+def _outside(source: str, name: str, index: int, n: int) -> str:
+    return f"{source}: {name} {index} is outside [0, {n}), {_AXES[name]}"
 
 
 def window_region(
@@ -146,5 +181,5 @@ def window_region(
     region = Cells.analyses(0, n_analyses) if cells is None else cells
     if region.kind not in ("analysis", "analyses"):
         raise TypeError(f"windows cut Analyses, not a {region.kind!r} region")
-    require_within(region, n_analyses, source)
+    require_within(region, source, n_analyses=n_analyses)
     return region, step

@@ -9,7 +9,12 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.associations import record
-from opengwasdb.associations.cells import Cells, require_within, window_region
+from opengwasdb.associations.cells import (
+    Cells,
+    require_run_within,
+    require_within,
+    window_region,
+)
 from opengwasdb.associations.record import Associations, Inspection, InvalidAssociations, State
 from opengwasdb.encoding import StoreEncoding
 from opengwasdb.layouts.ragged.by_variant import (
@@ -95,6 +100,8 @@ class CsrReader:
         )
         self.structure = RaggedCSRReader(store_path, encoding)
         self._by_variant: ByVariantReader | None = None
+        #: The variant axis `open_variant_index` was given; a CSR records none itself.
+        self._n_variants: int | None = None
         self._offsets: np.ndarray | None = None
 
     @classmethod
@@ -142,6 +149,7 @@ class CsrReader:
                 f"build it with 'ogdb build-variant-index {self._path}'"
             )
         self._by_variant = ByVariantReader(self._path, self._encoding, n_axis=n_variants)
+        self._n_variants = int(n_variants)
 
     # ── the interface ───────────────────────────────────────────────────────
 
@@ -181,7 +189,7 @@ class CsrReader:
         """
         if cells.kind != "positions" or cells.pos is None:
             raise TypeError(f"Z alone is read for positions, not a {cells.kind!r} region")
-        run = _run(cells.pos)
+        run = self._rows_of(cells)
         if run is not None:
             z = self.structure.z_slice(*run)
         else:
@@ -204,8 +212,20 @@ class CsrReader:
 
     def inspect(self, cells: Cells) -> Inspection:
         """Every row of the region, decoded and classified; never raises on one.
-        A region naming an Analysis the component does not hold is refused."""
-        require_within(cells, self.n_analyses, self._source)
+
+        A region naming an index outside its axis is refused (`require_within`).
+        A CSR records no variant axis of its own, so a region naming variants is
+        read only once `open_variant_index` has given it one.
+        """
+        if cells.vi is not None and self._n_variants is None:
+            raise VariantIndexError(
+                f"{self._source}: a region naming variants is checked against the "
+                "variant axis the by-variant index is opened on; open the variant "
+                "index first"
+            )
+        require_within(
+            cells, self._source, n_analyses=self.n_analyses, n_variants=self._n_variants
+        )
         decode = {
             "analysis": self._analyses,
             "analyses": self._analyses,
@@ -279,11 +299,7 @@ class CsrReader:
         """The by-variant index's rows for the region's variants: the block spanning
         the least and greatest, less the rows of variants between them it did not name."""
         wanted = cells.vi
-        assert wanted is not None
-        if self._by_variant is None:
-            raise VariantIndexError(
-                f"{self._source}: a variant region needs the by-variant index; open it first"
-            )
+        assert wanted is not None and self._by_variant is not None
         if len(wanted) == 0:
             return self._empty()
         low, high = int(wanted.min()), int(wanted.max())
@@ -312,8 +328,20 @@ class CsrReader:
 
     def _positions(self, cells: Cells) -> Inspection:
         assert cells.pos is not None
-        run = _run(cells.pos)
+        run = self._rows_of(cells)
         return self._at(cells.pos) if run is None else self._rows(*run)
+
+    def _rows_of(self, cells: Cells) -> tuple[int, int] | None:
+        """A `positions` region's run, when it is one, its positions checked against
+        the sequence's rows: a run from its ends, any other from every position."""
+        assert cells.pos is not None
+        run = _run(cells.pos)
+        n_rows = self.structure.sequence_length
+        if run is None:
+            require_within(cells, self._source, n_analyses=self.n_analyses, n_rows=n_rows)
+        else:
+            require_run_within(*run, n_rows, self._source)
+        return run
 
     def _cross_positions(self, variants: np.ndarray, analyses: np.ndarray) -> np.ndarray:
         wanted = np.unique(variants).astype(np.int32)

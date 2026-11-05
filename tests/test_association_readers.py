@@ -419,6 +419,70 @@ def test_a_dense_window_s_z_refuses_an_analysis_outside_the_axis(readers) -> Non
         readers["dense"].z(Cells.cross([5], [-1]))
 
 
+#: Regions naming a variant outside the fixture's eight, and the first such index.
+OUTSIDE_VARIANTS = {
+    "variants -1": (Cells.variants([-1]), -1),
+    "variants n": (Cells.variants([N_VARIANTS]), N_VARIANTS),
+    "variants past the end": (Cells.variants(np.arange(6, N_VARIANTS + 2)), N_VARIANTS),
+    "cross with variant -1": (Cells.cross([-1, 1], [0]), -1),
+    "cross with variant n": (Cells.cross([1, N_VARIANTS], [0]), N_VARIANTS),
+    "pairs with variant -1": (Cells.pairs(np.array([-1]), np.array([0])), -1),
+    "pairs with variant n": (Cells.pairs(np.array([N_VARIANTS]), np.array([0])), N_VARIANTS),
+}
+
+#: The CSR's rows, one for each attempted cell.
+N_ROWS = len(TABLE)
+
+#: Positions regions outside the CSR's rows, and the first such position.
+OUTSIDE_POSITIONS = {
+    "position -1": (Cells.positions(np.array([-1])), -1),
+    "position n": (Cells.positions(np.array([N_ROWS])), N_ROWS),
+    "a run past the end": (Cells.positions(np.arange(N_ROWS - 2, N_ROWS + 1)), N_ROWS),
+    "scattered, one past the end": (Cells.positions(np.array([3, N_ROWS + 4, 0])), N_ROWS + 4),
+}
+
+
+@pytest.mark.parametrize("region", sorted(OUTSIDE_VARIANTS))
+@pytest.mark.parametrize("call", ["read", "inspect"])
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_a_region_naming_a_variant_outside_the_axis_is_refused(
+    readers, layout, call, region
+) -> None:
+    """Variant -1 would read the last variant's cells as its own on a grid, and on a
+    CSR read as a variant with no associations."""
+    cells, index = OUTSIDE_VARIANTS[region]
+    with pytest.raises(IndexError, match=rf"variant index {index} is outside \[0, {N_VARIANTS}\)"):
+        getattr(readers[layout], call)(cells)
+
+
+@pytest.mark.parametrize("region", sorted(OUTSIDE_POSITIONS))
+@pytest.mark.parametrize("call", ["read", "inspect", "z"])
+def test_a_csr_refuses_a_position_outside_its_rows(readers, call, region) -> None:
+    cells, index = OUTSIDE_POSITIONS[region]
+    with pytest.raises(IndexError, match=rf"position {index} is outside \[0, {N_ROWS}\)"):
+        getattr(readers["csr"], call)(cells)
+
+
+def test_a_dense_window_s_z_refuses_a_variant_outside_the_axis(readers) -> None:
+    with pytest.raises(IndexError, match=rf"variant index -1 is outside \[0, {N_VARIANTS}\)"):
+        readers["dense"].z(Cells.cross([-1], [0]))
+
+
+@pytest.mark.parametrize(
+    "cells",
+    [Cells.cross([1], [0]), Cells.pairs(np.array([1]), np.array([0]))],
+    ids=["cross", "pairs"],
+)
+def test_a_csr_reads_variants_only_on_the_axis_its_index_gives(tmp_path, cells) -> None:
+    """A CSR holds no record of its variant axis, so a region naming variants is
+    checked against the one `open_variant_index` is given, and refused without it."""
+    csr = CsrReader.open(_write_csr(tmp_path / "csr", TABLE), ENCODING, requires_mask=True)
+    with pytest.raises(VariantIndexError, match="open the variant index"):
+        csr.read(cells)
+    csr.open_variant_index(N_VARIANTS)
+    assert csr.read(cells).count == 1
+
+
 @pytest.mark.parametrize("layout", ["dense", "csr"])
 def test_windows_refuse_a_region_that_is_not_analyses(readers, layout) -> None:
     with pytest.raises(TypeError, match="Analyses"):

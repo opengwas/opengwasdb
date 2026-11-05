@@ -158,7 +158,9 @@ class DenseGridReader:
         """
         if cells.kind != "cross" or cells.vi is None or cells.ai is None:
             raise TypeError(f"Z alone is read for a window, not a {cells.kind!r} region")
-        require_within(cells, self.n_analyses, self._source)
+        require_within(
+            cells, self._source, n_analyses=self.n_analyses, n_variants=self.n_variants
+        )
         rows, cols = cells.vi, cells.ai
         if len(rows) == 0 or len(cols) == 0:
             return np.empty(0, dtype=np.float32)
@@ -211,7 +213,9 @@ class DenseGridReader:
     # ── decoding ────────────────────────────────────────────────────────────
 
     def _decode(self, cells: Cells) -> _Grid:
-        require_within(cells, self.n_analyses, self._source)
+        require_within(
+            cells, self._source, n_analyses=self.n_analyses, n_variants=self.n_variants
+        )
         decode = {
             "analysis": self._analysis,
             "analyses": self._analyses,
