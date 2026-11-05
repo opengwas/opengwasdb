@@ -13,8 +13,10 @@
 > Variant Reference extraction has no policy and refuses, so an artifact a
 > build uses as given never carries a disputed name. `build-ragged-ssf`
 > compares the rows it admits, now that a `ReaderBatch` carries each row's
-> spelling (ADR 0076). It has no policy, so it refuses. It still names a
-> variant from its first admitted row, which is a separate question.
+> spelling (ADR 0076). It has no policy, so it refuses. It now takes the
+> first non-empty rsid among a variant's admitted rows (#400). It used to take
+> the first admitted row's, even a blank one, and the change renames no
+> published variant.
 > `build-dense` does not compare yet, because the rows it reads carry no
 > source spelling, and its reader waits on #385. A `build-ragged-besd` file
 > set lists each variant once. The Consequence "A Dense build never meets this" stopped holding with

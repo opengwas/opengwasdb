@@ -511,13 +511,11 @@ class _Harvest:
     - ``rsid_by_site`` and ``site_alid``: each raw site's first non-empty
       rsid, and its ALID. The site is spelt as the source spells it, as Pass
       1's union keeps it, so `names` can compare a site's spellings.
-    - ``first_named``: the ALIDs whose first admitted row names them.
     """
 
     alid_variant: dict[str, CanonicalVariant] = field(default_factory=dict)
     rsid_by_site: dict[SourceKey, str] = field(default_factory=dict)
     site_alid: dict[SourceKey, str] = field(default_factory=dict)
-    first_named: set[str] = field(default_factory=set)
 
     def add(self, batch: ReaderBatch) -> None:
         """Register each of ``batch``'s rows, a batch of admitted rows."""
@@ -528,8 +526,6 @@ class _Harvest:
             chromosome, position, a1, a2 = alid.split(":")
             if alid not in self.alid_variant:
                 self.alid_variant[alid] = CanonicalVariant(chromosome, int(position), a1, a2)
-                if rsid:
-                    self.first_named.add(alid)
             if rsid:
                 site = (chromosome, int(position), ref, alt)
                 if site not in self.rsid_by_site:
@@ -542,21 +538,13 @@ class _Harvest:
         The harvest goes through `union_names`, the test every harvest applies
         (ADR 0066, #379). `build-ragged-ssf` has no `--on-rsid-conflict`, so a
         Routing Key its sources name two ways is refused, naming both names.
-
-        With nothing disputed, `union_names` gives a variant whose first
-        admitted row names it that row's name. The builder names only the
-        variants in ``first_named``, so a variant whose first admitted row
-        names nothing stays unnamed, even if a later row names it. That is the
-        builder's rule. Aligning it with spec §4's first-non-empty rule is a
-        separate ticket.
+        Otherwise a variant takes the first non-empty rsid among its admitted
+        rows, as spec §4 says, whichever spelling carries it (#400).
         """
-        routed = union_names(
+        return union_names(
             self.rsid_by_site, self.site_alid,
             policy=RsidConflictPolicy.REFUSE, label=HARVEST_LABEL,
-        )
-        return {
-            alid: rsid for alid, rsid in routed.rsid_by_alid.items() if alid in self.first_named
-        }
+        ).rsid_by_alid
 
 
 def _print_ingest_summary(

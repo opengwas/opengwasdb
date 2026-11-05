@@ -311,12 +311,10 @@ is part of the contract (issue #255):
   one whose recorded counts are missing is refused too, unless its checkpoint
   predates the option (records no `on_rsid_conflict`); its counts are then
   `null`.
-- `build-ragged-ssf` names a variant from the first row it admits for it. A
-  variant whose first admitted row names nothing stays unnamed, even if a
-  later row names it. This differs from the first-non-empty rule above.
-  Aligning the two is a separate ticket. Comparing spellings changes no name
-  it gives: with nothing disputed, the first admitted row's site holds the
-  first name its key carries.
+- `build-ragged-ssf` harvests only the rows it admits, in Manifest Row order
+  and file order, and gives a variant the first non-empty rsid among them, by
+  the rule above (issue #400). A row that names nothing gives way to a later
+  row that names the variant, whichever spelling either row uses.
 - `build-dense` does not yet compare names. It takes the first non-empty rsid
   among the rows it admits for a variant. The rows it reads carry the
   upper-cased ALID and not the source's spelling, so it cannot tell a site's

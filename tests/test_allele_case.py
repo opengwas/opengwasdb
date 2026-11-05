@@ -288,26 +288,29 @@ def test_a_ragged_ssf_build_refuses_two_spellings_named_differently(tmp_path, lo
     assert not store.exists()
 
 
-@pytest.mark.parametrize(
-    ("lower_first", "expected"), [(False, "rs1"), (True, None)], ids=["named-first", "blank-first"]
-)
-def test_comparing_spellings_keeps_a_ragged_ssf_builds_first_row_rule(
-    tmp_path, lower_first, expected
+@pytest.mark.parametrize("blank_case", ["lower", "upper"], ids=["other-spelling", "same-spelling"])
+@pytest.mark.parametrize("blank_first", [False, True], ids=["named-first", "blank-first"])
+def test_a_ragged_ssf_build_names_a_variant_by_its_first_non_empty_rsid(
+    tmp_path, blank_case, blank_first
 ):
-    """Comparing spellings changes no name a Ragged SSF build gives when nothing
-    is disputed. The builder names a variant from its first admitted row, even
-    when that row names nothing, though a later spelling names it. Spec §4 asks
-    for the first non-empty name instead. Aligning the two is its own ticket,
-    by the owner's ruling on #379, and that ticket flips ``blank-first``."""
-    filtered = _ragged_spellings(tmp_path, lower_rsid="", upper_rsid="rs1")
-    analyses = ["upper", "lower"]
-    manifest = _ragged_manifest(tmp_path, analyses[::-1] if lower_first else analyses)
+    """Spec §4: a variant takes the first non-empty rsid among the rows a build
+    admits for it (#400). A row that names nothing gives way to a later one,
+    whether that row spells the site the same way or the other way, and
+    whichever Analysis is listed first."""
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    blank_alleles = ("g", "a") if blank_case == "lower" else ("G", "A")
+    _ssf(filtered / "blank.tsv.gz", *blank_alleles, 2.0, 0.5, rsid="")
+    _ssf(filtered / "named.tsv.gz", "G", "A", 1.0, 0.5, rsid="rs1")
+    assert _alleles(filtered / "blank.tsv.gz") == [blank_alleles]
+    analyses = ["named", "blank"]
+    manifest = _ragged_manifest(tmp_path, analyses[::-1] if blank_first else analyses)
     store = tmp_path / "ragged.opengwasdb"
 
     _ragged_build(manifest, filtered, store)
 
     (variant,) = VariantAxis(store).all()
-    assert (variant.alid, variant.rsid) == (ALID, expected)
+    assert (variant.alid, variant.rsid) == (ALID, "rs1")
 
 
 def test_a_dense_build_from_an_alid_list_routes_a_lower_case_source(tmp_path):
