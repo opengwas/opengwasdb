@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -95,6 +96,17 @@ def test_validator_rejects_missing_required_array(dense_store_path):
     assert "missing data.zarr/se" in result.errors
 
 
+def test_a_release_without_its_data_directory_reports_it_rather_than_raising(dense_store_path):
+    """`top_hits.arrays` asks whether there is an index by opening `data.zarr`; that is
+    not asked once the envelope rule has found `data.zarr` missing."""
+    shutil.rmtree(dense_store_path / "data.zarr")
+
+    result = validate_store(dense_store_path)
+
+    assert result.failed() == {"envelope.required"}
+    assert result.errors == ["missing data.zarr"]
+
+
 def test_validator_rejects_misshaped_z_plane(dense_store_path):
     # The z/se/eaf planes are parallel (n_variants, n_analyses) matrices; a
     # release whose z plane does not span the variant axis cannot be read
@@ -118,7 +130,7 @@ def test_validator_rejects_negative_se(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"associations.se_negative"}
     assert "se contains negative finite values" in result.errors
 
 
@@ -128,7 +140,7 @@ def test_validator_rejects_inconsistent_missingness(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"associations.markers_paired"}
     assert "z and se missingness is inconsistent" in result.errors
 
 
@@ -142,7 +154,7 @@ def test_validator_rejects_invalid_stored_effect_scale(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"analyses.vocabularies"}
     assert any("invalid stored_effect_scale" in error for error in result.errors)
 
 
@@ -152,8 +164,24 @@ def test_validator_rejects_inconsistent_top_hit_index(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
-    assert any("top-hit index p_5e_08" in error for error in result.errors)
+    assert result.failed() == {"top_hits.z"}
+    assert result.errors == ["top-hit index p_5e_08 contains z value inconsistent with z array"]
+
+
+def test_a_bad_variant_offset_and_a_bad_top_hit_tier_are_both_reported(dense_store_path):
+    # Issue #55's acceptance case: two independent defects in one release. The
+    # Top-Hit Index was checked only when nothing else had failed, so the offset
+    # error hid the tier's.
+    offsets_path = dense_store_path / "variant_offsets.npy"
+    offsets = np.load(offsets_path)
+    offsets[1] = offsets[0]
+    np.save(offsets_path, offsets)
+    root = open_store(dense_store_path).arrays(mode="a")
+    root["top_hits"]["p_5e_08"]["z"][0] = 0.0
+
+    result = validate_store(dense_store_path)
+
+    assert result.failed() == {"variant_table.representatives", "top_hits.z"}
 
 
 def test_validator_rejects_invalid_top_hit_offsets(dense_store_path):
@@ -164,7 +192,7 @@ def test_validator_rejects_invalid_top_hit_offsets(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"top_hits.structure"}
     assert any("invalid analysis offsets" in error for error in result.errors)
 
 
@@ -173,7 +201,7 @@ def test_validator_rejects_missing_variant_axis_file(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"envelope.required"}
     assert "missing variants.tsv.gz" in result.errors
 
 
@@ -183,7 +211,7 @@ def test_validator_rejects_missing_alid_index_file_for_dense(dense_store_path, n
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"envelope.required"}
     assert any(
         error == f"missing {name} — rebuild the store to generate the ALID search index"
         for error in result.errors
@@ -198,7 +226,7 @@ def test_validator_rejects_bad_variant_offset(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"variant_table.representatives"}
     assert any("variant offset for row 1" in error for error in result.errors)
 
 
@@ -216,8 +244,7 @@ def test_validator_rejects_leftover_sqlite_analyses_table(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
-    assert any("still contains an analyses table" in error for error in result.errors)
+    assert result.failed() == {"sqlite.analyses_table"}
 
 
 def test_validator_accepts_store_without_sqlite_analyses_table(dense_store_path):
@@ -239,8 +266,30 @@ def test_validator_rejects_leftover_sqlite_analyses_table_ragged(ragged_store_pa
 
     result = validate_store(ragged_store_path)
 
-    assert not result.ok
-    assert any("still contains an analyses table" in error for error in result.errors)
+    assert result.failed() == {"sqlite.analyses_table"}
+
+
+def test_a_ragged_release_has_its_variant_table_checked(ragged_store_path):
+    # Issue #55: the variant-table rules ran on Dense and Hybrid releases only; a
+    # Ragged release's offset sidecar could point at the wrong row unremarked.
+    offsets_path = ragged_store_path / "variant_offsets.npy"
+    offsets = np.load(offsets_path)
+    assert len(offsets) >= 2, "the fixture must have a second row to misdirect"
+    offsets[1] = offsets[0]
+    np.save(offsets_path, offsets)
+
+    result = validate_store(ragged_store_path)
+
+    assert result.failed() == {"variant_table.representatives"}
+
+
+def test_a_ragged_release_has_no_alias_table_and_is_not_said_to_pass_it(ragged_store_path):
+    result = validate_store(ragged_store_path)
+
+    assert result.ok, result.errors
+    assert result.skipped["sqlite.variant_aliases"] == (
+        "index.sqlite has no variant_aliases table",
+    )
 
 
 def test_validator_rejects_missing_ragged_csr_array(ragged_store_path):
@@ -254,7 +303,7 @@ def test_validator_rejects_missing_ragged_csr_array(ragged_store_path):
 
     result = validate_store(ragged_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"csr.arrays"}
     assert "missing data.zarr/ragged/se" in result.errors
 
 
@@ -302,7 +351,7 @@ def test_validator_rejects_ragged_csr_array_outside_declared_plan(ragged_store_p
 
     result = validate_store(ragged_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"encoding.dtypes"}
     assert any(
         "data.zarr/ragged/z has dtype float32 but the manifest declares int16_fixed"
         in error
@@ -336,8 +385,8 @@ def test_validator_warns_about_an_infinite_dense_se(dense_store_path):
     so the release stays valid and the warning names the count and the Analysis
     (issue #337).
 
-    Mutation that makes this fail: drop `_latch_infinite_se` from `_validate_dense_band`
-    (no warning is counted), or stop reporting the band pass's warning.
+    Mutation that makes this fail: count nothing in `associations.se_infinite`'s
+    measure, or stop judging its total.
     """
     root = open_store(dense_store_path).arrays(mode="a")
     assert root["se"].dtype == np.dtype("float16")  # fixture sanity
@@ -347,7 +396,7 @@ def test_validator_warns_about_an_infinite_dense_se(dense_store_path):
 
     assert result.ok, result.errors
     warnings = _infinite_se_warnings(result)
-    assert len(warnings) == 1, result.warnings
+    assert [f.rule for f in result.findings] == ["associations.se_infinite"]
     assert "1 cell(s) of data.zarr/se" in warnings[0]
     assert "'a1'" in warnings[0]
 
@@ -411,10 +460,9 @@ def test_validator_warns_about_an_infinite_se_in_both_hybrid_components(tmp_path
     """One infinite SE cell in each component: two warnings, each naming its own plane.
 
     Mutation that makes this fail: dropping the Overflow plane from
-    `_ragged_se_planes` (one warning), dropping the band-pass latch from
-    `_validate_dense_band` or the component's warnings from the Hybrid's result (one
-    warning), yielding or reporting a plane twice (three), or labelling both planes
-    alike (the label assertions).
+    `_ragged_se_planes` (one warning), dropping the Dense Component's grid from the
+    Hybrid's targets (one warning), yielding or reporting a plane twice (three), or
+    labelling both planes alike (the label assertions).
     """
     store = _hybrid_store_with_both_components(tmp_path)
     component = open_store(store).dense_component()
@@ -505,8 +553,8 @@ def test_validator_rejects_leftover_sqlite_analyses_table_hybrid(hybrid_store_pa
 
     result = validate_store(hybrid_store_path)
 
-    assert not result.ok
-    assert any("still contains an analyses table" in error for error in result.errors)
+    assert result.failed() == {"sqlite.analyses_table"}
+    assert [f.target for f in result.of("sqlite.analyses_table")] == ["dense"]
 
 
 def test_validator_rejects_duplicate_analysis_id_hybrid(hybrid_store_path):
@@ -519,8 +567,8 @@ def test_validator_rejects_duplicate_analysis_id_hybrid(hybrid_store_path):
 
     result = validate_store(hybrid_store_path)
 
-    assert not result.ok
-    assert any("more than one row for analysis_id" in error for error in result.errors)
+    assert result.failed() == {"analyses.analysis_id"}
+    assert [f.target for f in result.of("analyses.analysis_id")] == ["dense"]
 
 
 def test_validator_rejects_duplicate_analysis_id(dense_store_path):
@@ -534,8 +582,7 @@ def test_validator_rejects_duplicate_analysis_id(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
-    assert any("more than one row for analysis_id" in error for error in result.errors)
+    assert result.failed() == {"analyses.analysis_id"}
 
 
 def test_validator_rejects_stray_file_in_dense_store(dense_store_path):
@@ -546,7 +593,7 @@ def test_validator_rejects_stray_file_in_dense_store(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"envelope.closed"}
     assert any(
         "unexpected store entry" in error and "traits.tsv.gz" in error
         for error in result.errors
@@ -558,7 +605,7 @@ def test_validator_rejects_stray_directory_in_ragged_store(ragged_store_path):
 
     result = validate_store(ragged_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"envelope.closed"}
     assert any(
         "unexpected store entry" in error and "extra_dir" in error for error in result.errors
     )
@@ -569,7 +616,7 @@ def test_validator_rejects_stray_file_at_hybrid_top_level(hybrid_store_path):
 
     result = validate_store(hybrid_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"envelope.closed"}
     assert any(
         "unexpected store entry" in error and "traits.tsv.gz" in error
         for error in result.errors
@@ -583,7 +630,7 @@ def test_validator_rejects_stray_file_in_hybrid_dense_component(hybrid_store_pat
 
     result = validate_store(hybrid_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"envelope.closed"}
     assert any(
         "unexpected store entry" in error and "stray.txt" in error for error in result.errors
     )
@@ -607,7 +654,7 @@ def test_validator_rejects_coverage_the_layout_cannot_carry(
 
         result = validate_store(store_path)
 
-        assert not result.ok
+        assert result.failed() == {"manifest.coverage"}, result.errors
         assert any(
             "cannot carry association_coverage=cis" in error
             and layout in error
@@ -701,8 +748,53 @@ def test_validator_rejects_retired_gene_id_column(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"analyses.retired_columns"}
     assert any("retired column" in error and "gene_id" in error for error in result.errors)
+
+
+def _give_every_analysis_an_invalid_effect_scale(store_path: Path) -> None:
+    """An `analyses.tsv` defect no plane rule reads: the unrelated error beside another."""
+    analyses_path = store_path / "analyses.tsv"
+    table = read_analyses(analyses_path)
+    for row in table.rows:
+        row["stored_effect_scale"] = "kg"
+    write_analyses(analyses_path, table)
+
+
+def test_a_stray_file_no_longer_hides_an_invalid_vocabulary(dense_store_path):
+    # Issue #55: a stray entry stopped every Dense check, so a release with two
+    # independent defects reported one. Each rule now runs unless a rule it reads
+    # after failed, and nothing reads a stray file.
+    (dense_store_path / "traits.tsv.gz").write_bytes(b"stray")
+    _give_every_analysis_an_invalid_effect_scale(dense_store_path)
+
+    result = validate_store(dense_store_path)
+
+    assert result.failed() == {"envelope.closed", "analyses.vocabularies"}
+
+
+def test_a_z_overflow_table_defect_is_reported_beside_an_unrelated_error(dense_store_path):
+    # Issue #55: the fixed-point z plan was checked only when no error of any kind
+    # had been found before it, so an overflow table holding a non-finite exact
+    # value hid behind any other defect. It needs only `z` and its plan.
+    root = open_store(dense_store_path).arrays(mode="a")
+    for name in ("z_overflow_index", "z_overflow_value"):
+        if name in root:
+            del root[name]
+    create_array(
+        root, "z_overflow_index", ArrayRole.EXCEPTION_TABLE,
+        data=np.array([3, 5], dtype=np.int64), compressor=compressor(),
+    )
+    create_array(
+        root, "z_overflow_value", ArrayRole.EXCEPTION_TABLE,
+        data=np.array([np.nan, 41.0], dtype=np.float32), compressor=compressor(),
+    )
+    _give_every_analysis_an_invalid_effect_scale(dense_store_path)
+
+    result = validate_store(dense_store_path)
+
+    assert result.failed() == {"encoding.z", "analyses.vocabularies"}
+    assert "data.zarr z overflow table contains non-finite values" in result.errors
 
 
 def test_validator_accepts_duplicate_trait_ontology_id(dense_store_path):
@@ -728,7 +820,7 @@ def test_validator_rejects_invalid_original_sd_method(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"analyses.vocabularies"}
     assert any("invalid original_sd_method" in error for error in result.errors)
 
 
@@ -754,7 +846,7 @@ def test_validator_rejects_invalid_ancestry_assignment_method(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"analyses.vocabularies"}
     assert any("invalid ancestry_assignment_method" in error for error in result.errors)
 
 
@@ -785,7 +877,7 @@ def test_validator_rejects_analyses_tsv_missing_referenced_analysis_index(dense_
 
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert "analyses.analysis_index" in result.failed()
     assert any(
         "analysis_index values are not exactly the range" in error for error in result.errors
     )

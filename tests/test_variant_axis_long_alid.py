@@ -11,6 +11,10 @@ by more than one variant, 342 variants answering to another's name.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
+import pytest
+
 from opengwasdb.variants import VariantAxis
 from opengwasdb.variants.axis import _ALID_WIDTH, is_indexable_alid, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant
@@ -100,7 +104,17 @@ def test_the_batched_lookup_path_resolves_long_indels_too(tmp_path):
         va.close()
 
 
-def test_validation_rejects_an_index_that_truncated_two_variants_together(tmp_path):
+#: The rules that stream the Store Variant Table.
+_TABLE_RULES = {
+    "variant_table.rows",
+    "variant_table.alid_index",
+    "variant_table.rsid_index",
+    "variant_table.sequence",
+    "variant_table.representatives",
+}
+
+
+def test_validation_rejects_an_index_that_truncated_two_variants_together(dense_store_path):
     """The detection rule for stores built before the guard (issue #128).
 
     A store carrying the old truncated index answers one variant's lookup with
@@ -110,33 +124,29 @@ def test_validation_rejects_an_index_that_truncated_two_variants_together(tmp_pa
     """
     import numpy as np
 
+    from opengwasdb.validation import validate_store
     from opengwasdb.variants.axis import variant_alid_bytes_path, variant_alid_rows_path
 
     short, long_ = _shared_prefix_pair()
-    write_variant_axis(tmp_path, [short, long_], {})
+    write_variant_axis(dense_store_path, [short, long_], {})
 
     # Rebuild the index the old way: both wide ALIDs cast in, and so truncated
     # to the same key -- exactly what the published finngen-r13 release holds.
     keys = np.array([short.alid, long_.alid], dtype=f"|S{_ALID_WIDTH}")
-    np.save(variant_alid_bytes_path(tmp_path), keys)
-    np.save(variant_alid_rows_path(tmp_path), np.array([0, 1], dtype="int32"))
+    np.save(variant_alid_bytes_path(dense_store_path), keys)
+    np.save(variant_alid_rows_path(dense_store_path), np.array([0, 1], dtype="int32"))
     assert keys[0] == keys[1], "fixture must actually collide, or nothing is under test"
 
-    from opengwasdb.validation.validate import _validate_variant_axis
+    result = validate_store(dense_store_path, rules=_TABLE_RULES)
 
-    va = VariantAxis(tmp_path)
-    errors: list[str] = []
-    try:
-        _validate_variant_axis(va, errors)
-    finally:
-        va.close()
-    assert any("shared by more than one variant" in e for e in errors), errors
+    assert result.failed() == {"variant_table.alid_index"}
+    assert any("shared by more than one variant" in e for e in result.errors), result.errors
 
 
 def test_validation_streams_the_variant_table_instead_of_materialising_it(
-    tmp_path, monkeypatch
+    dense_store_path, monkeypatch
 ):
-    """`_validate_variant_axis` must not build `VariantAxis.all()`'s list (issue #254).
+    """The variant-table rules must not build `VariantAxis.all()`'s list (issue #254).
 
     Materialising one `VariantRecord` object per row was the dominant remaining
     source of the `validate` peak once the Dense band was bounded. `.all()` is
@@ -144,20 +154,78 @@ def test_validation_streams_the_variant_table_instead_of_materialising_it(
     on the pre-#254 code this raises, because validation began with
     ``records = variant_axis.all()``.
     """
-    from opengwasdb.validation.validate import _validate_variant_axis
+    from opengwasdb.validation import validate_store
 
     short, long_ = _shared_prefix_pair()
-    write_variant_axis(tmp_path, [short, long_], {})
-    va = VariantAxis(tmp_path)
-    try:
-        monkeypatch.setattr(
-            va,
-            "all",
-            lambda: (_ for _ in ()).throw(AssertionError("must not materialise the table")),
-        )
-        errors: list[str] = []
-        n_rows = _validate_variant_axis(va, errors)
-    finally:
-        va.close()
-    assert n_rows == 2
-    assert errors == []
+    write_variant_axis(dense_store_path, [short, long_], {})
+    monkeypatch.setattr(
+        VariantAxis,
+        "all",
+        lambda self: (_ for _ in ()).throw(AssertionError("must not materialise the table")),
+    )
+
+    result = validate_store(dense_store_path, rules=_TABLE_RULES)
+
+    assert result.ok, result.errors
+    assert result.skipped == {}
+
+
+def test_validation_streams_the_variant_table_once(dense_store_path, monkeypatch):
+    """Every variant-table rule reads one stream of the table (issue #55).
+
+    The representative offset and tabix checks used to stream it a second time to
+    reach their last row; on OGS-00008 the two streams were 39 s of a 70 s
+    `validate`. Random access by offset reads one line at a time and is not a
+    stream, so only lines iterated are counted.
+    """
+    import pysam
+
+    from opengwasdb.validation import validate_store
+
+    n_rows = 5_000  # more than the 1,000 rows every row of which is a representative
+    positions = range(10_000, 10_000 + n_rows)
+    write_variant_axis(dense_store_path, [_variant("1", pos, "A", "G") for pos in positions], {})
+    streamed: list[bytes] = []
+    real = pysam.BGZFile
+
+    class CountingBGZFile:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self._handle = real(*args, **kwargs)
+
+        def __enter__(self) -> CountingBGZFile:
+            self._handle.__enter__()
+            return self
+
+        def __exit__(self, *exc: object) -> object:
+            return self._handle.__exit__(*exc)
+
+        def __iter__(self) -> Iterator[bytes]:
+            for line in self._handle:
+                streamed.append(line)
+                yield line
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._handle, name)
+
+    monkeypatch.setattr(pysam, "BGZFile", CountingBGZFile)
+
+    result = validate_store(dense_store_path, rules=_TABLE_RULES)
+
+    assert result.ok, result.errors
+    rows = [line for line in streamed if not line.startswith(b"#")]
+    assert len(rows) == n_rows
+
+
+@pytest.mark.parametrize("window", [1, 2, 3, 1_000_000])
+def test_repeated_index_keys_are_counted_across_window_boundaries(tmp_path, monkeypatch, window):
+    """The collision count reads the index a window at a time; a repeat straddling
+    two windows must still be counted, and a key compared with itself must not be."""
+    import numpy as np
+
+    from opengwasdb.validation.rules import variants
+
+    keys = np.array([b"a", b"b", b"b", b"c", b"d", b"d", b"d"], dtype="|S4")
+    path = tmp_path / "variant_alid_bytes.npy"
+    np.save(path, keys)
+    monkeypatch.setattr(variants, "_KEY_WINDOW", window)
+    assert variants._adjacent_repeats(path) == 3

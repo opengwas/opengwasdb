@@ -226,6 +226,14 @@ _Avoid_: format, reader type.
 A data file that says how one Source Collection's tabular summary statistics are read: the provider column holding each field, and the collection's conventions. The conventions cover missing-value tokens, which allele the effect and frequency refer to, how positions and chromosomes are written, and the genome build. A collection is read through one when its Analyses declare the `opengwasdb.column-map` Source Reader Capability; the caller names the map by path or by a built-in's name (`gwas-ssf`, `finngen-r13`). Every convention is declared, and nothing is defaulted. A value the reader cannot honour is refused, and the map's checksum is part of every Resolution Record read through it (ADR 0063). A dedicated reader remains only for a format a map cannot describe (GWAS-VCF, BESD).
 _Avoid_: reader config, schema, converter — a map replaces the converter; it is not one.
 
+**Validation Rule**:
+One named judgement `validate` makes of a Store Release, such as `associations.se_negative` or `csr.segment_order`. A rule judges one kind of target: a release (a Dense Component's included), a Dense grid, or an association sequence (a Ragged release's or an Overflow). It runs after the rules it depends on, and is skipped, not passed, when one of them failed. Its name is stable and listed in spec §20.0, and `validate_store(path, rules=...)` runs it alone (ADR 0074).
+_Avoid_: check, validator, seam — a rule is the unit a caller names and a test asserts on.
+
+**Finding**:
+What one Validation Rule reports about one target: the rule's name, an error or a warning, the message, and the target it judged. A release fails when any rule reports an error; a warning names something a reader should know about a valid release, such as an infinite SE.
+_Avoid_: error string — a finding carries the rule that found it.
+
 ## Example dialogue
 
 Developer: "This UK Biobank biomarker batch has 1,000 Analyses sharing a variant axis. Should it be Dense?"

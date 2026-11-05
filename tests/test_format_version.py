@@ -165,7 +165,7 @@ def test_validation_reports_a_pre_reset_release_as_an_error_not_a_crash(dense_st
     _set_version(dense_store_path, "2.0")
     result = validate_store(dense_store_path)
 
-    assert not result.ok
+    assert result.failed() == {"manifest.loads"}
     assert any("2.0" in error and "Rebuild" in error for error in result.errors)
 
 

@@ -1210,6 +1210,27 @@ def test_validation_rejects_a_corrupted_value(indexed_store: Path) -> None:
     assert any("z values" in error for error in errors), errors
 
 
+def test_a_defect_in_one_subset_does_not_hide_another_subsets(
+    indexed_store: Path, variant_list: Path
+) -> None:
+    """Each published subset is judged on its own findings (issue #55).
+
+    `a1` sorts before `hm3`; a missing attribute on it used to stop `hm3`'s
+    value comparison, so `hm3`'s corrupted value went unreported.
+    """
+    store = _build(indexed_store, "a1", variant_list)
+    del _index_group(store, "a1").attrs["input_sha256"]
+    group = _index_group(store, "hm3")
+    values = np.asarray(group["z"][:])
+    values[0, 0] = values[0, 0] + 1
+    group["z"][:] = values
+
+    errors = _errors_for(store)
+
+    assert any("indexed subset 'a1'" in error for error in errors), errors
+    assert any("'hm3'" in error and "z values" in error for error in errors), errors
+
+
 def test_validation_rejects_a_missing_overflow_table(indexed_store: Path) -> None:
     store = indexed_store
     group = _index_group(store, "hm3")
