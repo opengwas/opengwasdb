@@ -44,6 +44,30 @@ comes after one of its members in that order fails the run.
 | `clump.py` | -log10 p, tie separation, plink2 clumping |
 | `compare.py` | spurious splits and lost signals |
 | `run.py` | one run, end to end; clumping is independent of D and W, so a sweep reuses it |
+| `cost.py` | what pruning costs against clumping (#406): the per-variant cM array, the pruning stages of a tier, plink2's clumping, and the ratio |
+
+## What pruning costs (#406)
+
+```bash
+pixi run -e dev python -m prototypes.locus_leads cost \
+    --genetic-map /data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR.tsv.gz \
+    --panel /data/opengwasdb/reference/hgdp1kgp-hg38/pgen/EUR \
+    --work-dir <scratch directory for the cM arrays and plink2's files> \
+    --repeats 3 --output docs/benchmark-output/locus_leads/cost.json
+```
+
+The run builds a per-variant cM array over each Store's whole Variant Table, then
+for each slice times the Top-Hit Query, the positions, the cM lookup, the sort and
+the rule, and times plink2's clumping of the same Analysis's shared set, one
+chromosome at a time. Each stage is timed `--repeats` times and reported as a
+median with its range, its load average and its peak RSS — the child process's for
+plink2, this process's otherwise, from `/proc/<pid>/statm` rather than `ru_maxrss`.
+The report beside the JSON is rendered from it; `cost.qmd` computes every figure
+on the page from the committed JSON.
+
+`cost.fast_locus_leads` is the same rule by another route: it asks a block of rows
+at once whether the accepted leads already exclude them, and gives identical
+leads. The run refuses to publish if the two disagree.
 
 The map itself, its source and checksums are described in
 `/data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/README.md`.
