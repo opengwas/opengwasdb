@@ -1838,7 +1838,10 @@ that blocked it, when one of those failed or was skipped on its target or a targ
 belongs to. A skip is not a pass. Whether a rule applies to a target is asked only
 after its prerequisites passed. `fidelity.source`, which runs after every error rule
 before it, is stopped only by one that failed. A *fold* is judged from one streamed read of its
-target that every fold on it shares; a *check* reads what it needs.
+target that every fold on it shares; a *check* reads what it needs. A fold may run after an
+earlier fold on the same read: that prerequisite is decided when the read ends, the
+folds are judged in this table's order, and whether the later fold applies is asked
+before the read.
 
 `validate_store(path, rules={...})` runs the named rules and the rules they run after,
 and refuses a name this table does not list. `ValidationResult.failed()` names the

@@ -10,6 +10,7 @@ runs after.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -382,3 +383,52 @@ def test_the_registry_refuses_a_fold_after_a_rule_registered_after_its_scan_star
         check_registry(
             [_sum_fold("a", scan, 0), _check("c"), _sum_fold("b", scan, 0, after=("c",))]
         )
+
+
+def test_the_registry_takes_a_fold_after_an_earlier_fold_on_its_scan_not_a_later_one() -> None:
+    scan = _counting_scan([1], [])
+    earlier, later = _sum_fold("a", scan, 0), _sum_fold("b", scan, 0, after=("a",))
+    assert check_registry([earlier, later]) == (earlier, later)
+    with pytest.raises(ValueError, match=r"'b' runs after \['a'\], which are not registered"):
+        check_registry([later, earlier])
+
+
+def _judging(
+    name: str, scan: Scan[int], says: str, judged: list[str], after: tuple[str, ...] = ()
+) -> Fold[int, int]:
+    """A summing fold that records being judged, then passes, fails or skips as `says`."""
+
+    def judge(target: Target, total: int) -> Iterable[str]:
+        judged.append(name)
+        if says == "skip":
+            raise Skip("nothing to judge")
+        return [f"{name}: total {total}"] if says == "fail" else []
+
+    return replace(_sum_fold(name, scan, 0, after), judge=judge)
+
+
+@pytest.mark.parametrize("says", ["pass", "fail", "skip"])
+def test_a_fold_after_an_earlier_fold_on_its_scan_is_judged_only_once_that_one_passed(
+    says: str,
+) -> None:
+    """Both measure in the one read. The earlier fold is judged first; the later one
+    is judged only if it passed, and is skipped behind it otherwise, as behind any
+    prerequisite."""
+    reads: list[int] = []
+    judged: list[str] = []
+    scan = _counting_scan([1, 2], reads)
+    rules = [
+        _judging("a", scan, says, judged),
+        _judging("b", scan, "fail", judged, after=("a",)),
+    ]
+
+    result = evaluate(rules, [RELEASE])
+
+    assert reads == [1, 2]
+    if says == "pass":
+        assert judged == ["a", "b"]
+        assert (result.errors, result.skipped) == (["b: total 3"], {})
+    else:
+        assert judged == ["a"]
+        assert result.skipped["b"] == ("a",)
+        assert result.errors == (["a: total 3"] if says == "fail" else [])

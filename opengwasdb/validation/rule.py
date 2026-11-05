@@ -354,13 +354,17 @@ def check_registry(rules: Sequence[Rule]) -> tuple[Rule, ...]:
 
     Running in registration order then decides every prerequisite before the rule
     that names it. A scan runs when its first fold is reached, so every fold on it
-    must run after rules registered before that first fold.
+    must run after rules registered before that first fold, or after an earlier fold
+    on the same scan: that one is decided when the pass ends, before this is judged.
     """
     seen: set[str] = set()
     first_fold: dict[str, set[str]] = {}
+    on_scan: dict[str, set[str]] = {}
     for rule in rules:
         if isinstance(rule, Fold):
-            _check_fold_order(rule, first_fold.setdefault(rule.scan.name, set(seen)))
+            earlier = on_scan.setdefault(rule.scan.name, set())
+            _check_fold_order(rule, first_fold.setdefault(rule.scan.name, set(seen)) | earlier)
+            earlier.add(rule.name)
         if rule.name in seen:
             raise ValueError(f"validation rule {rule.name!r} is registered twice")
         _check_order(rule, seen, "registered before it")
@@ -368,8 +372,12 @@ def check_registry(rules: Sequence[Rule]) -> tuple[Rule, ...]:
     return tuple(rules)
 
 
-def _check_fold_order(fold: Fold[Any, Any], before_scan: set[str]) -> None:
-    _check_order(fold, before_scan, f"registered before the first fold on {fold.scan.name!r}")
+def _check_fold_order(fold: Fold[Any, Any], before: set[str]) -> None:
+    _check_order(
+        fold,
+        before,
+        f"registered before the first fold on {fold.scan.name!r} or earlier folds on it",
+    )
 
 
 def _check_order(rule: Rule, before: set[str], where: str) -> None:

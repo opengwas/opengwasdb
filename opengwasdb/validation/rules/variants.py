@@ -213,13 +213,12 @@ def representative_variant_indices(n_variants: int) -> tuple[int, ...]:
 
 @dataclass(frozen=True)
 class _Picked:
-    """The table's records at the representative rows, and how many rows were read."""
+    """The table's records at the representative rows."""
 
     records: dict[int, VariantRecord] = field(default_factory=dict)
-    rows: int = 0
 
     def __add__(self, other: _Picked) -> _Picked:
-        return _Picked({**self.records, **other.records}, self.rows + other.rows)
+        return _Picked({**self.records, **other.records})
 
 
 def _pick(target: Target, block: TableBlock) -> _Picked:
@@ -227,19 +226,17 @@ def _pick(target: Target, block: TableBlock) -> _Picked:
     lo = int(np.searchsorted(wanted, block.start))
     hi = int(np.searchsorted(wanted, block.start + len(block.records)))
     picked = {index: block.records[index - block.start] for index in wanted[lo:hi]}
-    return _Picked(picked, len(block.records))
+    return _Picked(picked)
 
 
 def _judge_representatives(target: Target, picked: _Picked) -> Iterator[str]:
     """The offset sidecar and the tabix index each find the row the table holds.
 
     The rows are chosen from the offsets, so the check means something only when
-    the table holds the same number of rows; when it does not, `variant_table.rows`
-    says so and this has nothing to stand on.
+    the table holds the same number of rows. It runs after `variant_table.rows`,
+    which judged that from the same read, so a mismatch skips it behind that rule.
     """
     axis = target.variant_axis
-    if picked.rows != axis.n_variants:
-        raise Skip("variant_offsets.npy and variants.tsv.gz hold different numbers of rows")
     for index in representative_variant_indices(axis.n_variants):
         record = picked.records[index]
         try:
@@ -314,7 +311,7 @@ RULES: tuple[Rule, ...] = (
     Fold(
         name="variant_table.representatives",
         kinds=Kind.RELEASE,
-        after=(REQUIRED,),
+        after=(REQUIRED, ROWS),
         scan=VARIANT_TABLE,
         zero=_Picked(),
         measure=_pick,

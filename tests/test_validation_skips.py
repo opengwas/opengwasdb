@@ -17,6 +17,7 @@ import pathlib
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from opengwasdb.validation import RULES, validate_store
 
@@ -27,7 +28,6 @@ RAISED = {
     ("validation/rules/associations.py", "_judge_eaf_range"): "associations.eaf_range",
     ("validation/rules/by_variant.py", "present"): "by_variant.present",
     ("validation/rules/variants.py", "variant_aliases"): "sqlite.variant_aliases",
-    ("validation/rules/variants.py", "_judge_representatives"): "variant_table.representatives",
 }
 
 #: The rules a skip of one of those stops: the index rules after `by_variant.present`,
@@ -95,21 +95,28 @@ def test_a_skip_stops_only_the_rules_that_have_nothing_left_to_judge() -> None:
     assert stopped == STOPPED
 
 
-def test_the_representatives_are_skipped_only_beside_the_row_count_failure(
-    dense_store_path: pathlib.Path,
+@pytest.mark.parametrize(
+    "rules", [None, ("variant_table.representatives",)], ids=["every rule", "selected"]
+)
+def test_a_row_count_mismatch_fails_the_rows_rule_the_representatives_stand_on(
+    dense_store_path: pathlib.Path, rules: tuple[str, ...] | None
 ) -> None:
-    """The one raised skip with something wrong behind it: `variant_table.rows`,
-    on the same scan, reports the mismatch that leaves the representatives nothing
-    to stand on."""
+    """The representatives are chosen from the offsets, so they stand on the row
+    count, `variant_table.rows`, an earlier fold on the same read. Selected alone, they
+    bring it with them: the mismatch is reported, not left behind a skip."""
     offsets_path = dense_store_path / "variant_offsets.npy"
     offsets = np.load(offsets_path)
     assert len(offsets) >= 2, "the fixture must have a row to drop"
     np.save(offsets_path, offsets[:-1])
 
-    result = validate_store(dense_store_path)
+    result = validate_store(dense_store_path, rules=rules)
 
     assert not result.ok
     assert "variant_table.rows" in result.failed()
-    assert result.skipped["variant_table.representatives"] == (
-        "variant_offsets.npy and variants.tsv.gz hold different numbers of rows",
-    )
+    if rules is not None:
+        assert result.failed() == {"variant_table.rows"}
+    assert any(
+        error.startswith("variant_offsets.npy has ") and "but variants.tsv.gz has" in error
+        for error in result.errors
+    ), result.errors
+    assert result.skipped["variant_table.representatives"] == ("variant_table.rows",)

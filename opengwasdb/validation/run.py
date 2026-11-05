@@ -4,7 +4,10 @@
 rule whose prerequisite failed or was skipped on the target, or on a target it
 belongs to, is skipped and recorded, not reported; its `when` is not asked, since
 it may read what the prerequisite found broken. A fold is judged from its scan,
-which is read once per target for every fold on it that can run. An exception,
+which is read once per target for every fold on it that can run. A fold's
+prerequisite may be an earlier fold on the same scan: it is decided when the pass
+ends, and the folds are judged in registration order, so the fold is judged after
+it or skipped behind it. Its `when` is asked before the read. An exception,
 from a rule or from its `when`, fails the one rule that raised it; findings it
 made before are kept.
 """
@@ -79,6 +82,11 @@ class _Run:
         self.declined: set[tuple[str, int]] = set()
         self.found: dict[tuple[str, int], list[Finding]] = {}
         self.skipped: dict[str, list[str]] = {}
+        #: Each scan's folds, by name: a prerequisite among them is decided by the pass.
+        self.on_scan: dict[str, set[str]] = {}
+        for rule in rules:
+            if isinstance(rule, Fold):
+                self.on_scan.setdefault(rule.scan.name, set()).add(rule.name)
 
     def result(self) -> ValidationResult:
         """The findings in rule order, then target order, and the skips."""
@@ -114,17 +122,25 @@ class _Run:
             self.declined.add((rule.name, i))
         return accepted
 
-    def ready(self, rule: Rule, i: int, target: Target) -> bool:
-        """Whether `rule` may run on target `i`; if not, record it as skipped."""
-        blockers = self.blockers(rule, target)
+    def ready(
+        self, rule: Rule, i: int, target: Target, prerequisites: Iterable[str] | None = None
+    ) -> bool:
+        """Whether `rule` may run on target `i`; if not, record it as skipped.
+
+        `prerequisites` limits which of the rule's prerequisites are looked at;
+        by default, all of them.
+        """
+        blockers = self.blockers(rule, target, prerequisites)
         if blockers:
             self.skip(rule.name, i, blockers)
         return not blockers
 
-    def blockers(self, rule: Rule, target: Target) -> list[str]:
+    def blockers(
+        self, rule: Rule, target: Target, prerequisites: Iterable[str] | None = None
+    ) -> list[str]:
         """The prerequisites of `rule` that did not pass on `target` or a target it belongs to."""
         found = []
-        for name in rule.after:
+        for name in rule.after if prerequisites is None else prerequisites:
             owner: Target | None = target
             while owner is not None:
                 state = self.states.get((name, self.position.get(id(owner), -1)))
@@ -153,7 +169,7 @@ class _Run:
         ready = [
             fold
             for fold in self.folds_on(scan, i, target)
-            if self.ready(fold, i, target) and self.applies(fold, i, target)
+            if self.ready(fold, i, target, self.before_read(fold)) and self.applies(fold, i, target)
         ]
         if not ready:
             return  # nothing to measure, so nothing to read
@@ -164,10 +180,25 @@ class _Run:
         finally:  # an interruption still ends the pass, and what it held goes with it
             target.release(scan.name)
 
+    def before_read(self, fold: Fold[Any, Any]) -> list[str]:
+        """`fold`'s prerequisites decided before its scan is read: those not on the scan."""
+        return [name for name in fold.after if name not in self.on_scan[fold.scan.name]]
+
+    def on_its_scan(self, fold: Fold[Any, Any]) -> list[str]:
+        """`fold`'s prerequisites on its own scan, decided when the pass ends."""
+        return [name for name in fold.after if name in self.on_scan[fold.scan.name]]
+
     def conclude(self, done: _Pass, i: int, target: Target) -> None:
-        """Each fold of a finished pass: failed, skipped behind its blocker, or judged."""
+        """Each fold of a finished pass, in registration order: skipped behind a
+        prerequisite on the scan that did not pass, failed, skipped behind its blocker,
+        or judged. A prerequisite on the scan is registered earlier, so it is decided
+        here first; standing on it, the fold is not judged, as behind any other.
+        """
         for fold in done.folds:
-            if fold.name in done.failures:
+            behind = self.blockers(fold, target, self.on_its_scan(fold))
+            if behind:
+                self.skip(fold.name, i, behind)
+            elif fold.name in done.failures:
                 self.settle(fold, i, [done.failures[fold.name]])
             elif fold.name in done.blocked:
                 self.skip(fold.name, i, [done.blocked[fold.name]])

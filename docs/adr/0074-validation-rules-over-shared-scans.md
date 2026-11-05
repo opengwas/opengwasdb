@@ -61,7 +61,9 @@ every target each applies to:
   whatever it found. It fails no other rule. That holds for a rule's `when` too,
   which is asked only once the rule's prerequisites passed: it may read what a
   failed prerequisite found broken. A rule blocked there is recorded as skipped,
-  whether or not its `when` would have accepted the target.
+  whether or not its `when` would have accepted the target. A prerequisite on a
+  fold's own scan is the exception, below: it is decided after the read, and the
+  fold's `when` is asked before it.
 - Findings come out in rule order, then target order.
 - A scan is read once per target, for every fold on it that can run there. A read
   that fails part-way is reported by the first fold still measuring, and the others
@@ -72,6 +74,14 @@ every target each applies to:
   its readers are skipped behind it: an undecodable EAF is reported by
   `side_tables.eaf_exceptions`, which names the cell, and `associations.eaf_range`
   is skipped behind it. Selected without that fold, the reader reports the plane.
+- A fold's `after` may name an earlier fold on the same scan, and the registry
+  refuses a later one. That prerequisite is decided when the pass ends. Every fold
+  measures in the one read; then the folds are judged in registration order, and
+  one standing on a fold that failed or was skipped is skipped behind it, its
+  `judge` not called. So a prerequisite means one thing everywhere: a selection
+  takes it, and its failure skips what stands on it.
+  `variant_table.representatives` runs after `variant_table.rows` this way: its
+  rows are chosen from the offsets, so it stands on the row count.
 - A rule with nothing to judge raises `Skip`: `associations.eaf_range` on a
   component holding no frequencies records "no frequencies", not a pass.
 - `fidelity.source` runs after every error rule before it, and is stopped only by
@@ -110,15 +120,16 @@ then this package emits it.
 truthful.** `validate` prints `ok`, `errors` and `warnings`, and no skips;
 listing them is a follow-up. In a full run, the only run the CLI makes, a rule
 is skipped with no error recorded only where it has nothing to judge. A skip is
-recorded in four places:
-- `_Run.ready`, behind a prerequisite. A prerequisite that failed recorded an
-  error. One that was skipped is one of these cases in turn.
+recorded in these places:
+- `_Run.ready`, behind a prerequisite, and `_Run.conclude`, behind one on the
+  fold's own scan. A prerequisite that failed recorded an error. One that was
+  skipped is one of these cases in turn.
 - `_Pass.drive`, behind a read that failed part-way. The first fold still
   measuring reports that read as an error.
 - `_Pass.unreadable`, behind the fold that reports an undecodable plane as an
   error. That fold is the first reader, or `side_tables.eaf_exceptions`, which
   reports every band it measured that could not be decoded.
-- `_contained`, where a rule raises `Skip` before reporting anything. Four do:
+- `_contained`, where a rule raises `Skip` before reporting anything. Three do:
   - `associations.eaf_range`, "no frequencies": the component has no `eaf`
     plane and no reference panel.
   - `by_variant.present`: a format 0.1.0 Ragged component without the
@@ -126,16 +137,14 @@ recorded in four places:
     rules after it are skipped with it; there is no index for them to judge.
   - `sqlite.variant_aliases`: an `index.sqlite` with no alias table, which
     spec §20 lists as a skip.
-  - `variant_table.representatives`: the offset sidecar and the table hold
-    different numbers of rows. This is the one with a defect behind it, and
-    `variant_table.rows`, on the same scan, reports it as an error.
 
 A `when` that declines a target records no skip: the target is not one the rule
 judges. `fidelity.source` is stopped only by a failure, not by a skip. A
-selection judges only what it names. So `variant_table.representatives`,
-selected without `variant_table.rows`, is skipped over a mismatch that nothing
-reports; the CLI selects nothing. `tests/test_validation_skips.py` holds the
-rules that raise `Skip`, and the rules their skips stop, to this list.
+selection takes every prerequisite of what it names, so the same holds for a
+selection: `variant_table.representatives`, selected alone, brings
+`variant_table.rows`, which reports a row-count mismatch and skips it.
+`tests/test_validation_skips.py` holds the rules that raise `Skip`, and the
+rules their skips stop, to this list.
 
 **Admission's witnesses.** Six rules check, after the fact, what Association
 Admission (ADR 0072) guarantees of every cell it admits. Each records the
