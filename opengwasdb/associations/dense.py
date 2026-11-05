@@ -149,15 +149,13 @@ class DenseGridReader:
     def _decode(self, cells: Cells) -> _Grid:
         decode = {
             "analysis": self._analysis,
+            "analyses": self._analyses,
             "variants": self._variants,
             "cross": self._cross,
             "pairs": self._pairs,
         }.get(cells.kind)
         if decode is None:
-            raise TypeError(
-                f"a Dense grid cannot read a {cells.kind!r} region"
-                + ("; read each `analysis`" if cells.kind == "analyses" else "")
-            )
+            raise TypeError(f"a Dense grid cannot read a {cells.kind!r} region")
         return decode(cells)
 
     def _analysis(self, cells: Cells) -> _Grid:
@@ -176,6 +174,13 @@ class DenseGridReader:
             analysis_major=True,
             elementwise=False,
         )
+
+    def _analyses(self, cells: Cells) -> _Grid:
+        """Every variant of each Analysis named, Analysis-major, in one read of each
+        plane: an `analysis` region apiece would read every chunk the Analyses
+        share once per Analysis."""
+        assert cells.ai is not None
+        return self._cross(Cells.cross(np.arange(self.n_variants), cells.ai))
 
     def _variants(self, cells: Cells) -> _Grid:
         """Whole rows, variant-major; one row reads as a row, several as a band or block."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from operator import itemgetter
 from pathlib import Path
 
@@ -27,6 +28,22 @@ _block_columns = itemgetter("variant_index", "analysis_index", "z", "se", "eaf",
 def _manifest(path: Path) -> StoreManifest | None:
     """The release manifest beside a sequence, or None for a bare sequence."""
     return StoreManifest.load(path) if (path / "manifest.json").exists() else None
+
+
+def _run(positions: np.ndarray) -> tuple[int, int] | None:
+    """`[start, stop)` when `positions` is one ascending run, which reads as a slice."""
+    if not len(positions) or not bool(np.all(np.diff(positions) == 1)):
+        return None
+    return int(positions[0]), int(positions[-1]) + 1
+
+
+def _run_analyses(offsets: np.ndarray, start: int, stop: int) -> np.ndarray:
+    """The Analysis of each row of the flat run `[start, stop)`, repeated over the
+    spans it crosses: the cost is the Analyses touched, not a search per row."""
+    first = int(np.searchsorted(offsets, start, side="right")) - 1
+    last = int(np.searchsorted(offsets, stop, side="left"))
+    rows = np.diff(np.clip(offsets[first : last + 1], start, stop))
+    return np.repeat(np.arange(first, first + len(rows), dtype=np.int32), rows)
 
 
 class CsrReader:
@@ -119,16 +136,44 @@ class CsrReader:
 
     # ── the interface ───────────────────────────────────────────────────────
 
-    def z(self, start: int, stop: int) -> np.ndarray:
-        """Decoded Z of the flat rows `[start, stop)`, for a scan that thresholds Z alone.
+    def windows(
+        self, cells: Cells | None = None, *, max_cells: int | None = None
+    ) -> Iterator[Cells]:
+        """An `analysis` or `analyses` region -- or, with none, the whole component --
+        as consecutive `positions` regions of at most `max_cells` rows each.
+
+        For a scan that must not hold a whole Analysis, or a whole sequence, at
+        once: each row of the region comes once, in the region's order, so the
+        windows' reads joined are the region's read. A window may run on from one
+        Analysis into the next. `max_cells` defaults to the scan window, eight of
+        the sequence's inner chunks (#252).
+        """
+        step = self.structure.scan_window if max_cells is None else int(max_cells)
+        if step < 1:
+            raise ValueError(f"a window holds at least one row, not {max_cells}")
+        whole = Cells.analyses(0, self.n_analyses)
+        for start, stop in self._runs(whole if cells is None else cells):
+            for lo in range(start, stop, step):
+                yield Cells.positions(np.arange(lo, min(lo + step, stop), dtype=np.int64))
+
+    def z(self, cells: Cells) -> np.ndarray:
+        """Decoded Z of a `positions` region -- a window -- for a scan that thresholds
+        Z alone, in the region's order.
 
         A non-canonical marker is refused here, as every read refuses one (spec §15):
         a NaN clears no cutoff, so a scan that compared it would drop the row.
         """
-        z = self.structure.z_slice(start, stop)
+        if cells.kind != "positions" or cells.pos is None:
+            raise TypeError(f"Z alone is read for positions, not a {cells.kind!r} region")
+        run = _run(cells.pos)
+        if run is not None:
+            z = self.structure.z_slice(*run)
+        else:
+            unique, back = np.unique(cells.pos, return_inverse=True)
+            z = self.structure.z_at(unique)[back]
         odd = record.non_canonical(z)
         if odd.any():
-            rows = np.flatnonzero(odd).astype(np.int64) + int(start)
+            rows = cells.pos[odd]
             raise InvalidAssociations(
                 self._source,
                 self.structure.variant_index_at(rows),
@@ -136,7 +181,6 @@ class CsrReader:
                 np.full(len(rows), State.NON_CANONICAL, dtype=np.int8),
             )
         return z
-
 
     def read(self, cells: Cells, *, observed_only: bool = False) -> Associations:
         """The region's rows; raises `InvalidAssociations` on a §15-invalid one."""
@@ -161,10 +205,40 @@ class CsrReader:
     def _empty(self) -> Inspection:
         return Inspection.concat([], with_n=self.carries_n)
 
+    def _runs(self, cells: Cells) -> list[tuple[int, int]]:
+        """The flat `[start, stop)` runs an `analysis` or `analyses` region's rows sit
+        in, in its order: one for a span of Analyses, else one per Analysis."""
+        if cells.kind not in ("analysis", "analyses") or cells.ai is None:
+            raise TypeError(f"windows cut Analyses, not a {cells.kind!r} region")
+        offsets = self.structure.offsets
+        span = cells.span
+        bounds = [span] if span is not None else [(int(a), int(a) + 1) for a in cells.ai]
+        return [(int(offsets[first]), int(offsets[stop])) for first, stop in bounds]
+
     def _analyses(self, cells: Cells) -> Inspection:
         assert cells.ai is not None
+        span = cells.span
+        if span is not None and span[1] - span[0] > 1:
+            [(start, stop)] = self._runs(cells)
+            return self._rows(start, stop)
         found = [self._analysis(int(a)) for a in cells.ai]
         return found[0] if len(found) == 1 else Inspection.concat(found, with_n=self.carries_n)
+
+    def _rows(self, start: int, stop: int) -> Inspection:
+        """The rows of the flat run `[start, stop)`, each plane read as one slice."""
+        if start == stop:
+            return self._empty()
+        csr = self.structure
+        eaf = csr.eaf_slice_read(start, stop, want_imputed=True)
+        return Inspection.of(
+            csr.variant_index(start, stop),
+            _run_analyses(csr.offsets, start, stop),
+            csr.z_slice(start, stop),
+            csr.se_slice(start, stop, eaf=eaf.values),
+            eaf.values,
+            eaf.imputed,
+            csr.n_slice(start, stop) if self.carries_n else None,
+        )
 
     def _analysis(self, analysis_index: int) -> Inspection:
         csr = self.structure
@@ -221,7 +295,8 @@ class CsrReader:
 
     def _positions(self, cells: Cells) -> Inspection:
         assert cells.pos is not None
-        return self._at(cells.pos)
+        run = _run(cells.pos)
+        return self._at(cells.pos) if run is None else self._rows(*run)
 
     def _cross_positions(self, variants: np.ndarray, analyses: np.ndarray) -> np.ndarray:
         wanted = np.unique(variants).astype(np.int32)

@@ -25,6 +25,7 @@ from test_indexed_subsets import _build, alid, build_rich_store
 from test_ragged_residual_completion import RaggedResidualScenario
 
 from opengwasdb.associations import (
+    Associations,
     Cells,
     CsrReader,
     DenseGridReader,
@@ -230,6 +231,96 @@ def test_a_csr_reads_flat_positions_in_the_order_given(readers) -> None:
     rows = sorted(TABLE, key=lambda c: (c.analysis, c.variant))
     found = readers["csr"].read(Cells.positions(np.array([3, 0, 3])))
     _assert_rows(found, [rows[3], rows[0], rows[3]])
+
+
+# ── region reads: a span of Analyses, and an Analysis a window at a time ─────
+
+
+def _in_order(analyses: range) -> list[Cell]:
+    return sorted(
+        (c for c in TABLE if c.analysis in analyses), key=lambda c: (c.analysis, c.variant)
+    )
+
+
+@pytest.mark.parametrize("span", [(0, 3), (1, 3), (2, 3), (0, 1), (1, 1), (3, 3)])
+@pytest.mark.parametrize("layout", ["dense", "csr"])
+def test_a_span_of_analyses_reads_as_each_analysis_in_turn(readers, layout, span) -> None:
+    first, stop = span
+    found = readers[layout].read(Cells.analyses(first, stop))
+    _assert_rows(found, _stored(layout, _in_order(range(first, stop))))
+
+
+def test_a_dense_span_reads_each_plane_once(dense_residual, monkeypatch) -> None:
+    release, _observed, _panel, _imputed = dense_residual
+    grid = _grid(release.store)
+    assert grid.n_analyses >= 2, "the span must hold more than one Analysis to mean anything"
+    with chunk_reads(monkeypatch, _EAF_ARRAYS) as reads:
+        found = grid.read(Cells.analyses(0, grid.n_analyses))
+    _assert_read_once(reads, "span")
+    each = [grid.read(Cells.analysis(a)) for a in range(grid.n_analyses)]
+    assert found.count == sum(part.count for part in each) > 0
+    for key in found:
+        joined = np.concatenate([part[key] for part in each])
+        assert np.array_equal(found[key], joined, equal_nan=joined.dtype.kind == "f"), key
+
+
+@pytest.mark.parametrize("max_cells", [1, 2, 3, 4, 100])
+@pytest.mark.parametrize("analysis", [0, 1, 2])
+def test_windows_read_an_analysis_once_in_order_within_max_cells(
+    readers, analysis, max_cells
+) -> None:
+    csr = readers["csr"]
+    windows = list(csr.windows(Cells.analysis(analysis), max_cells=max_cells))
+    assert windows and all(0 < len(window.pos) <= max_cells for window in windows)
+    _assert_rows(
+        Associations.concat([csr.read(window) for window in windows]),
+        _in_order(range(analysis, analysis + 1)),
+    )
+
+
+@pytest.mark.parametrize("max_cells", [1, 3, 5, 100])
+def test_windows_with_no_region_read_the_whole_component(readers, max_cells) -> None:
+    csr = readers["csr"]
+    windows = list(csr.windows(max_cells=max_cells))
+    assert all(0 < len(window.pos) <= max_cells for window in windows)
+    _assert_rows(
+        Associations.concat([csr.read(window) for window in windows]),
+        _in_order(range(N_ANALYSES)),
+    )
+
+
+def test_a_window_s_z_is_the_z_its_read_returns(readers) -> None:
+    csr = readers["csr"]
+    windows = list(csr.windows(max_cells=3))
+    assert len(windows) > 1
+    for window in windows:
+        assert np.array_equal(csr.z(window), csr.read(window).z, equal_nan=True)
+
+
+def test_windows_refuse_an_empty_window(readers) -> None:
+    with pytest.raises(ValueError, match="at least one"):
+        list(readers["csr"].windows(max_cells=0))
+
+
+def test_windows_refuse_a_region_that_is_not_analyses(readers) -> None:
+    with pytest.raises(TypeError, match="Analyses"):
+        list(readers["csr"].windows(Cells.variants([1])))
+
+
+def test_windows_read_a_hybrid_overflow_as_its_whole_analyses(hybrid_residual) -> None:
+    overflow = _sequence(hybrid_residual, requires_mask=False)
+    sizes = np.diff(overflow.structure.offsets)
+    busiest = int(np.argmax(sizes))
+    assert sizes[busiest] > 2, "an Analysis must span several windows to mean anything"
+    for region, whole in (
+        (Cells.analysis(busiest), overflow.read(Cells.analysis(busiest))),
+        (None, overflow.read(Cells.analyses(range(overflow.n_analyses)))),
+    ):
+        windows = list(overflow.windows(region, max_cells=2))
+        assert len(windows) > 1 and all(len(window.pos) <= 2 for window in windows)
+        joined = Associations.concat([overflow.read(window) for window in windows])
+        for key in whole:
+            assert np.array_equal(joined[key], whole[key], equal_nan=key in ("z", "se", "eaf")), key
 
 
 @pytest.mark.parametrize("bad", sorted(INVALID))

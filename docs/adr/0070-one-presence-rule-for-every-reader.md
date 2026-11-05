@@ -5,6 +5,15 @@ Issue [#351](https://github.com/opengwas/opengwasdb/issues/351), part of epic
 its §1 (result type) and §8 (top hits). The read side of the Association
 Admission contract ([#357](https://github.com/opengwas/opengwasdb/issues/357)).
 
+> **Amended by [#393](https://github.com/opengwas/opengwasdb/issues/393)
+> (5 Nov 2026).** The two region reads deferred below exist.
+> `Cells.analyses(first, stop)` names a span of Analyses: a Dense grid reads it
+> as each Analysis in turn, with one read of each plane, and a CSR as one slice
+> of its sequence. `CsrReader.windows(region, max_cells=…)` cuts an `analysis`
+> or `analyses` region, or the whole sequence, into `positions` regions of at
+> most `max_cells` rows, which `read`, `inspect` and the Z-only `z` read as
+> slices. The query facade's top-hit scan reads through them.
+
 ## Context
 
 Spec §15 defines Association Status by each plane's missing marker plus the

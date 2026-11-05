@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, overload
 
 import numpy as np
 
@@ -20,15 +20,16 @@ class Cells:
     """What a reader is asked for. Each region names its rows' order.
 
     * `analysis(a)`: one Analysis, variants ascending.
-    * `analyses(a…)`: those Analyses in the order given, each as `analysis`.
+    * `analyses(first, stop)`: the span of Analyses `[first, stop)`, each as
+      `analysis`; `analyses(a…)`: those Analyses in the order given, likewise.
     * `variants(v…)`: every Analysis at those variants -- variant-major on a
       Dense grid, the by-variant index's order on a CSR (ADR 0060).
     * `cross(v…, a…)`: those variants × those Analyses, Analysis-major in the
       order given; within each, a grid keeps the variants' order given and a
       CSR its stored, ascending order.
     * `pairs(v…, a…)`: the cells `(v[i], a[i])`, in request order, one row each.
-    * `positions(p…)`: flat sequence positions -- a CSR's own address space, for
-      code that scans the sequence itself; no other reader accepts it.
+    * `positions(p…)`: flat sequence positions -- a CSR's own address space, and
+      what `CsrReader.windows` cuts a scan into; no other reader accepts it.
     """
 
     kind: Kind
@@ -43,9 +44,21 @@ class Cells:
     def analysis(cls, analysis_index: int) -> Cells:
         return cls("analysis", ai=_indices(int(analysis_index)))
 
+    @overload
     @classmethod
-    def analyses(cls, analysis_indices: Iterable[int] | np.ndarray) -> Cells:
-        return cls("analyses", ai=_indices(analysis_indices))
+    def analyses(cls, first: int, stop: int) -> Cells: ...
+
+    @overload
+    @classmethod
+    def analyses(cls, first: Iterable[int] | np.ndarray) -> Cells: ...
+
+    @classmethod
+    def analyses(cls, first: int | Iterable[int] | np.ndarray, stop: int | None = None) -> Cells:
+        if stop is None:
+            return cls("analyses", ai=_indices(first))
+        if not isinstance(first, (int, np.integer)) or not 0 <= first <= stop:
+            raise ValueError(f"a span of Analyses runs forward from 0, not [{first}, {stop})")
+        return cls("analyses", ai=np.arange(first, stop, dtype=np.int64))
 
     @classmethod
     def variants(cls, variant_indices: Iterable[int] | np.ndarray) -> Cells:
@@ -73,6 +86,19 @@ class Cells:
     @classmethod
     def positions(cls, positions: np.ndarray) -> Cells:
         return cls("positions", pos=_indices(positions))
+
+    @property
+    def span(self) -> tuple[int, int] | None:
+        """The `[first, stop)` an `analysis` or `analyses` region's Analyses run over,
+        when they are one ascending run; None for any other region."""
+        ai = self.ai
+        if self.kind not in ("analysis", "analyses") or ai is None:
+            return None
+        if len(ai) == 0:
+            return 0, 0
+        if not bool(np.all(np.diff(ai) == 1)):
+            return None
+        return int(ai[0]), int(ai[-1]) + 1
 
     @property
     def analysis_index(self) -> int:
