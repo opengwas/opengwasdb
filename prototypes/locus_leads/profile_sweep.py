@@ -146,12 +146,12 @@ def check_same_shared_set(mine: dict[str, Any], reference: dict[str, Any]) -> No
                                 f"{reference['sha256'][:12]})")
 
 
-def reference_shared_set(store: Path, store_id: str, analysis_id: str, committed: dict[str, Any],
-                         genetic_map: LoadedMap, panel: Panel) -> dict[str, Any]:
-    """#403's shared set, rebuilt from the 5e-8 tier as #403 built it, and checked against the
-    accounting #403 committed."""
-    tier, _ = read_tier(store, analysis_id, TIER)
-    shared, accounting = build_shared_set(tier, panel, genetic_map.map)
+def reference_shared_set(reference: TierRows, store_id: str, analysis_id: str,
+                         committed: dict[str, Any], genetic_map: LoadedMap,
+                         panel: Panel) -> dict[str, Any]:
+    """The shared set of the 5e-8 tier, built as #403 built it, after its accounting is checked
+    against the accounting #403 committed."""
+    shared, accounting = build_shared_set(reference, panel, genetic_map.map)
     if accounting != committed["rows"]:
         raise SharedSetMismatch(f"{analysis_id}: the 5e-8 shared set rebuilt now differs from "
                                 "#403's committed accounting")
@@ -241,14 +241,27 @@ def rule_record(rule: Rule, shared: SharedSet, full: Candidates, sparse: Candida
 def analyse_profile(store: Path, store_id: str, committed: dict[str, Any],
                     genetic_map: LoadedMap, panel: Panel, blocks: Blocks, hm3: frozenset[str],
                     *, work_dir: Path, threads: int) -> dict[str, Any]:
-    """One Analysis: its shared set checked against #403's, clumped, every rule scored."""
+    """One Analysis: its 5e-4 tier and its 5e-8 tier read from the Store, then scored."""
     analysis_id = committed["analysis"]["analysis_id"]
     tier, identity = read_tier(store, analysis_id, PROFILE_TIER)
+    reference, _ = read_tier(store, analysis_id, TIER)
+    return score_profile(tier, identity, reference, committed, genetic_map, panel, blocks, hm3,
+                         store_id=store_id, work_dir=work_dir, threads=threads)
+
+
+def score_profile(tier: TierRows, identity: dict[str, Any], reference: TierRows,
+                  committed: dict[str, Any], genetic_map: LoadedMap, panel: Panel,
+                  blocks: Blocks, hm3: frozenset[str], *, store_id: str, work_dir: Path,
+                  threads: int) -> dict[str, Any]:
+    """One Analysis's 5e-4 tier scored: its candidates' shared set checked against the 5e-8
+    tier's and #403's committed summaries, clumped, #403's distance rules reproduced, and every
+    rule scored at full density and on HapMap3 alone."""
+    analysis_id = committed["analysis"]["analysis_id"]
     check_tier(tier, identity, genetic_map, panel)
     at_tier = tier.abs_z >= z_critical(TIER)
     shared, accounting = build_shared_set(tier.take(at_tier), panel, genetic_map.map)
     mine = shared_set_identity(store_id, analysis_id, shared.rows.variant_index)
-    check_same_shared_set(mine, reference_shared_set(store, store_id, analysis_id, committed,
+    check_same_shared_set(mine, reference_shared_set(reference, store_id, analysis_id, committed,
                                                      genetic_map, panel))
     if accounting != committed["rows"]:
         raise SharedSetMismatch(f"{analysis_id}: the candidates' accounting differs from #403's")
@@ -271,7 +284,7 @@ def analyse_profile(store: Path, store_id: str, committed: dict[str, Any],
                     "at_5e8_outside_shared_set": int(at_tier.sum()) - int(shared.rows.abs_z.size),
                     "below_5e8": int((~at_tier).sum()),
                     "on_hm3": int(sparse.profile.abs_z.size)},
-        "rows": accounting, "shared_set": mine | {"equals_403": True},
+        "rows": accounting, "shared_set": mine | {"matches_403_summaries": True},
         "density": density,
         "index_variants": _n_leads(index_of), "baselines_equal_403": baselines,
         "rules": [record for record, _ in scored],
