@@ -10,7 +10,8 @@ of the package and will be deleted once the epic's decisions are made.
 Run from the repository root:
 
 ```bash
-# once: average the pyrho EUR population maps into one file
+# once: average the pyrho EUR population maps into one file (--ancestry AFR, EAS
+# or AMR writes that ancestry's map beside EUR's)
 pixi run -e dev python -m prototypes.locus_leads build-map \
     --archive /data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/original/hg38_maps.tar.gz \
     --output /data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR.tsv.gz
@@ -39,14 +40,16 @@ comes after one of its members in that order fails the run.
 |---|---|
 | `rule.py` | the Locus Lead rule |
 | `genetic_map.py` | interpolation, the map file and its identity, the archive check |
-| `eur_map.py` | the EUR map, averaged from the pyrho population maps |
+| `eur_map.py` | a map averaged from the pyrho population maps, EUR's by default |
+| `ancestries.py` | which pyrho populations each ancestry's map is averaged from |
 | `panel.py` | the genotype panel, and matching Store rows to it |
 | `clump.py` | -log10 p, tie separation, plink2 clumping |
 | `compare.py` | spurious splits and lost signals |
 | `run.py` | one run, end to end; clumping is independent of D and W, so a sweep reuses it |
-| `select.py` | the seeded, stratified draw of Analyses, and its record |
+| `select.py` | the seeded, stratified draw of Analyses for one ancestry, and its record |
 | `sweep.py` | every (D, W) and the bp-only baseline over the drawn Analyses; pooled rates and the working criteria |
 | `pairs.py` | each disagreeing pair's r², distance band and spike, chance LD between chromosomes, and the pair file |
+| `panel_chance.py` | chance LD at a panel's own sample size, from the swept Analyses' shared sets |
 | `counts.py` | the count criteria C1-C3: rank, density against HapMap3, cM against bp-only |
 | `maps.py` | the comparison maps (HapMap II lifted, the pyrho median), and the shared-set check |
 | `ld.py` | r² between panel variants, from dosages plink2 exports |
@@ -67,6 +70,23 @@ pixi run -e dev python -m prototypes.locus_leads sweep \
     --stores-dir /data/opengwasdb/stores --genetic-map <map>.tsv.gz --panel <panel directory> \
     --hm3 /data/opengwasdb/reference/hapmap3-hg38/hm3.grch38.alid.txt \
     --work-dir <scratch directory> --output docs/benchmark-output/locus_leads/eur_sweep.json
+```
+
+Another ancestry is the same two commands with `--ancestry AFR`, `EAS` or `AMR` on
+`select`, that ancestry's map and panel on `sweep`, and `--spikes none` because the
+spike sets #402 found are the EUR map's. The |z| quotas and the target floor at
+what the pool holds; the record keeps how many Analyses each stratum holds.
+
+A panel's own chance LD is a property of its sample size, not of any Analysis's hit count,
+so it is measured once per ancestry over the shared sets the sweeps used, and the four
+entries share one file:
+
+```bash
+pixi run -e dev python -m prototypes.locus_leads chance-ld --ancestry AFR \
+    --sweep docs/benchmark-output/locus_leads/ancestries_afr_sweep.json \
+    --stores-dir /data/opengwasdb/stores --genetic-map <map>.tsv.gz --panel <panel directory> \
+    --work-dir <scratch directory> \
+    --output docs/benchmark-output/locus_leads/ancestries_chance_ld.json
 ```
 
 The sweep also writes `eur_sweep_pairs.tsv.gz` beside its JSON: every disagreeing pair at

@@ -1,10 +1,12 @@
 """Command line for the Locus Lead prototype (#402, and the maps of #404).
 
-    python -m prototypes.locus_leads build-map --archive A --output M.tsv.gz
+    python -m prototypes.locus_leads build-map --archive A --output M.tsv.gz [--ancestry AFR]
     python -m prototypes.locus_leads compare --store S --analysis A --genetic-map M \\
         --panel P --d-cm 0.5 --w-bp 1000000 --r2 0.01 --r2 0.001 --work-dir D --output O.json
     python -m prototypes.locus_leads cost --genetic-map M --panel P --work-dir D \\
         --output docs/benchmark-output/locus_leads/cost.json
+    python -m prototypes.locus_leads chance-ld --ancestry AFR --sweep S.json \\
+        --genetic-map M --panel P --work-dir D --output ancestries_chance_ld.json
     python -m prototypes.locus_leads profile-sweep --selection S --sweep W --stores-dir D \\
         --genetic-map M --panel P --hm3 H --blocks B --work-dir D --output O.json
     python -m prototypes.locus_leads build-hapmap2-map --original O --output M.tsv.gz
@@ -25,9 +27,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .ancestries import populations
 from .cost import measure
-from .eur_map import build_eur_map
-from .genetic_map import load_map
+from .eur_map import build_eur_map, build_population_map
+from .genetic_map import file_digest, load_map
 from .maps import (
     MapSharedSet,
     build_hapmap2_map,
@@ -37,6 +40,7 @@ from .maps import (
     measure_shared_sets,
     selection_digest,
 )
+from .panel_chance import SEED as CHANCE_SEED, merge_chance, panel_chance
 from .profile_sweep import profile_sweep
 from .run import run
 from .select import SelectionRule, build_selection
@@ -48,8 +52,12 @@ def main(argv: list[str] | None = None) -> None:
     _HANDLERS[args.command](args)
 
 
-def _build_mean(args: argparse.Namespace) -> None:
-    print(json.dumps(build_eur_map(args.archive, args.output), indent=2))
+def _build_map(args: argparse.Namespace) -> None:
+    """Write the map `--ancestry` names, EUR through the function #403 documented."""
+    identity = (build_eur_map(args.archive, args.output) if args.ancestry == "EUR"
+                else build_population_map(args.archive, args.output,
+                                          populations(args.ancestry)))
+    print(json.dumps(identity, indent=2))
 
 
 def _build_hapmap2(args: argparse.Namespace) -> None:
@@ -72,7 +80,8 @@ def _cost(args: argparse.Namespace) -> None:
 
 
 def _select(args: argparse.Namespace) -> None:
-    rule = SelectionRule(args.seed, args.target, args.min_z100, args.min_p0, args.max_rows)
+    rule = SelectionRule(args.seed, args.target, args.min_z100, args.min_p0, args.max_rows,
+                         args.ancestry)
     _write(args, build_selection(args.stores, rule))
 
 
@@ -84,6 +93,21 @@ def _compare(args: argparse.Namespace) -> None:
                  work_dir=args.work_dir, threads=args.threads, threshold=args.threshold)
     # The comparison's JSON carries no timings, so a re-run reproduces it byte for byte.
     _write(args, result)
+    print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
+
+
+def _chance_ld(args: argparse.Namespace) -> None:
+    """Add one ancestry's panel-level chance LD to the file, or start it (#405)."""
+    started = time.monotonic()
+    entry = panel_chance(json.loads(args.sweep.read_text()), args.stores_dir,
+                         load_map(args.genetic_map), args.panel, args.work_dir,
+                         threads=args.threads, seed=args.seed)
+    entry |= {"sweep": {"path": str(args.sweep),
+                        "sha256": file_digest(args.sweep, "sha256")}}
+    existing = json.loads(args.output.read_text()) if args.output.exists() else None
+    record = merge_chance(existing, args.ancestry, entry, args.seed)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(record, indent=1, sort_keys=True, allow_nan=False) + "\n")
     print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
 
 
@@ -160,10 +184,11 @@ def _write(args: argparse.Namespace, result: dict) -> None:
 
 
 _HANDLERS: dict[str, Callable[[argparse.Namespace], None]] = {
-    "build-map": _build_mean, "build-hapmap2-map": _build_hapmap2,
+    "build-map": _build_map, "build-hapmap2-map": _build_hapmap2,
     "build-median-map": _build_median, "select": _select, "sweep": _sweep,
     "profile-sweep": _profile, "map-shared-sets": _map_shared_sets,
     "compare-maps": _compare_maps, "compare": _compare, "cost": _cost,
+    "chance-ld": _chance_ld,
 }
 
 
@@ -177,9 +202,12 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _map_parsers(commands: Any) -> None:
-    build = commands.add_parser("build-map", help="average the pyrho EUR maps into one file")
+    build = commands.add_parser("build-map",
+                                help="average the pyrho population maps into one file")
     build.add_argument("--archive", type=Path, required=True, help="hg38_maps.tar.gz")
     build.add_argument("--output", type=Path, required=True, help="<name>.tsv.gz to write")
+    build.add_argument("--ancestry", default="EUR", help="which populations to average (EUR, "
+                        "AFR, EAS or AMR)")
     hapmap = commands.add_parser("build-hapmap2-map",
                                  help="normalise HapMap II lifted to GRCh38 (#404)")
     hapmap.add_argument("--original", type=Path, required=True,
@@ -201,9 +229,11 @@ def _map_parsers(commands: Any) -> None:
 
 
 def _sweep_parsers(commands: Any) -> None:
-    pick = commands.add_parser("select", help="draw the sweep's EUR Analyses (#403)")
+    pick = commands.add_parser("select",
+                               help="draw the sweep's Analyses for one ancestry (#403, #405)")
     pick.add_argument("--stores", type=Path, required=True, help="directory of OGS-* Stores")
     pick.add_argument("--seed", type=int, required=True)
+    pick.add_argument("--ancestry", default="EUR", help="the Assigned Ancestry to draw from")
     pick.add_argument("--target", type=int, default=40)
     pick.add_argument("--min-z100", type=int, default=5, help="Analyses with |z| >= 100")
     pick.add_argument("--min-p0", type=int, default=5, help="Analyses with |z| >= 38.5")
@@ -219,19 +249,25 @@ def _sweep_parsers(commands: Any) -> None:
     run_sweep.add_argument("--hm3", type=Path, required=True,
                            help="HapMap3 canonical ALIDs, one per line")
     run_sweep.add_argument("--threads", type=int, default=4)
-    run_sweep.add_argument("--only", type=int, help="the first N chosen Analyses only")
     run_sweep.add_argument("--spikes", choices=("mean", "none"), default="mean",
                            help="measure the mean map's two single-population spikes (#402); "
                                 "another map's run passes `none`")
+    run_sweep.add_argument("--only", type=int, help="the first N chosen Analyses only")
     run_sweep.add_argument("--output", type=Path, required=True)
+    chance = commands.add_parser("chance-ld",
+                                 help="a panel's chance LD at its own sample size (#405); one "
+                                      "ancestry per run, merged into --output")
+    chance.add_argument("--ancestry", required=True, help="the name the entry is filed under")
+    chance.add_argument("--sweep", type=Path, required=True,
+                        help="the ancestry's sweep JSON, for its swept Analyses")
+    chance.add_argument("--stores-dir", type=Path, required=True)
+    chance.add_argument("--genetic-map", type=Path, required=True, help="the map the sweep used")
+    chance.add_argument("--panel", type=Path, required=True, help="directory of chr<N>.pgen")
+    chance.add_argument("--work-dir", type=Path, required=True, help="for plink2's exports")
+    chance.add_argument("--threads", type=int, default=4, help="plink2 threads")
+    chance.add_argument("--seed", type=int, default=CHANCE_SEED)
+    chance.add_argument("--output", type=Path, required=True)
     _add_profile_sweep(commands)
-    compare_maps = commands.add_parser("compare-maps",
-                                       help="each map's count criteria, side by side (#404)")
-    compare_maps.add_argument("--selection", type=Path, required=True)
-    compare_maps.add_argument("--shared-sets", type=Path, required=True)
-    compare_maps.add_argument("--genetic-map", action="append", required=True, metavar="NAME=JSON",
-                              help="each map's sweep JSON, under the name its map had")
-    compare_maps.add_argument("--output", type=Path, required=True)
 
 
 def _add_profile_sweep(commands: Any) -> None:
@@ -265,6 +301,13 @@ def _compare_parser(commands: Any) -> None:
     compare.add_argument("--work-dir", type=Path, required=True, help="for plink2's files")
     compare.add_argument("--threads", type=int, default=4, help="plink2 threads")
     compare.add_argument("--output", type=Path, required=True)
+    compare_maps = commands.add_parser("compare-maps",
+                                       help="each map's count criteria, side by side (#404)")
+    compare_maps.add_argument("--selection", type=Path, required=True)
+    compare_maps.add_argument("--shared-sets", type=Path, required=True)
+    compare_maps.add_argument("--genetic-map", action="append", required=True, metavar="NAME=JSON",
+                              help="each map's sweep JSON, under the name its map had")
+    compare_maps.add_argument("--output", type=Path, required=True)
     cost = commands.add_parser("cost", help="time pruning against plink2 clumping (#406)")
     cost.add_argument("--store-root", type=Path, default=Path("/data/opengwasdb/stores"))
     cost.add_argument("--genetic-map", type=Path, required=True, help="<name>.tsv.gz")

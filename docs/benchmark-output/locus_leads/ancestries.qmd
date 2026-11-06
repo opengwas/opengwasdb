@@ -1,0 +1,488 @@
+---
+title: "Locus Leads on the AFR, EAS and AMR Stores (#405)"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    theme: cosmo
+jupyter: python3
+---
+
+```{python}
+#| echo: false
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+from IPython.display import Markdown, display
+
+HERE = Path(".")
+ANCESTRIES = ("EUR", "AFR", "EAS", "AMR")
+# The EUR sweep and its selection are #403's committed outputs; the other three
+# are #405's. Nothing below is typed: every number is read from those files, or
+# from the panel's own membership record for the sample count.
+STEM = {a: "eur_sweep" if a == "EUR" else f"ancestries_{a.lower()}_sweep" for a in ANCESTRIES}
+PICKED = {a: "eur_sweep_selection" if a == "EUR" else f"ancestries_{a.lower()}_selection"
+          for a in ANCESTRIES}
+sweeps = {a: json.loads((HERE / f"{STEM[a]}.json").read_text()) for a in ANCESTRIES}
+selections = {a: json.loads((HERE / f"{PICKED[a]}.json").read_text()) for a in ANCESTRIES}
+membership = {a: json.loads((Path(sweeps[a]["panel"]["path"]).parent.parent / "members"
+                             / "membership.json").read_text()) for a in ANCESTRIES}
+SAMPLES = {a: membership[a][a] for a in ANCESTRIES}
+# The panel's own chance LD (#405 fix round 1), one file filled by one command per ancestry.
+PANEL_CHANCE = json.loads((HERE / "ancestries_chance_ld.json").read_text())["ancestries"]
+W_VALUES = sweeps["EUR"]["grid"]["w_bp"]
+D_VALUES = sweeps["EUR"]["grid"]["d_cm"]
+R2 = "0.01"
+
+
+def show(text):
+    display(Markdown(text))
+
+
+def md_table(headers, rows):
+    head = "| " + " | ".join(headers) + " |\n|" + "|".join(["---"] * len(headers)) + "|\n"
+    return head + "\n".join("| " + " | ".join(str(c) for c in row) + " |" for row in rows)
+
+
+def pct(value):
+    return f"{100 * value:.1f}%"
+
+
+def w_label(w):
+    return f"{w / 1e6:g} Mb"
+
+
+def d_label(d):
+    return "bp only" if d == "bp_only" else f"{d:g} cM"
+
+
+def yes(flag):
+    return "yes" if flag else "no"
+
+
+def counts(ancestry):
+    return sweeps[ancestry]["counts"]
+
+
+def count_row(ancestry, key):
+    return next(c for c in counts(ancestry)["configs"]
+                if (c["d_cm"], c["w_bp"]) == key)
+
+
+def config(ancestry, key):
+    return next(c for c in sweeps[ancestry]["evaluation"]["configs"]
+                if (c["d_cm"], c["w_bp"]) == key)
+
+
+def nearest(ancestry):
+    best = sweeps[ancestry]["evaluation"]["best"]
+    if best["qualifies"]:
+        return best["d_cm"], best["w_bp"]
+    return best["nearest_d_cm"], best["nearest_w_bp"]
+
+
+def named(ancestry):
+    point = counts(ancestry)["named"]
+    return None if point is None else (point["d_cm"], point["w_bp"])
+
+
+def names(keys):
+    return ", ".join(f"{d_label(d)} / {w_label(w)}" for d, w in keys) or "none"
+```
+
+## The question
+
+The EUR sweep (#403) found no (D, W) at which Locus Leads agree with plink2 r² 0.01
+clumping closely enough per lead, and its owner's decision was to judge `n_loci_*` — a
+per-Analysis count — **by counts**: C1 rank, C2 density against HapMap3, C3 cM against
+bp-only, written into `counts.criteria` before they were computed. This runs the same
+sweep on the other ancestries we have a Store and a genotype panel for, each against its
+own panel and its own map, and answers two predictions of #62's revision:
+
+1. **Does AFR need a smaller D than EUR?** LD decays faster per cM where effective
+   population size is larger, so one cM leaves less LD in AFR.
+2. **Is the AMR map usable?** Admixture creates long-range LD that LD-based maps read as
+   low recombination, so AMR is the least trustworthy map.
+
+The count criteria below are the ones that judge the count; the per-lead rates stay in as
+diagnostics, as #403 kept them. Each ancestry was swept one after another, on the same
+grid and the same 1,000,000-row cap, with seed 405 where the EUR sweep used 403.
+
+## The draws
+
+Each draw takes the Analyses a Store assigns that ancestry and measures each one's
+Observed Associations at the 5×10⁻⁸ tier. The |z| ≥ 100 and |z| ≥ 38.5 quotas are floors:
+where the pool has fewer, the draw takes what there is and the record says so
+(`quota_floors`). Analyses with no Observed Association at the tier cannot be drawn, and
+an Analysis whose rows are mostly outside the panel is recorded rather than swept.
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for a in ANCESTRIES:
+    sel, sw = selections[a], sweeps[a]
+    rule = sel["rule"]
+    eligible = sum(sel["pool_by_stratum"].values())
+    below = sw["left_out_below_shared_set_floor"]["analyses"]
+    tier = sum(x["rows"]["tier_rows"] for x in sw["analyses"])
+    shared = sum(x["rows"]["shared_set"] for x in sw["analyses"])
+    store = ", ".join(sorted({c["store"] for c in sel["chosen"]}))
+    rows.append([a, store, f"{sel['pool_size']:,}", f"{sel['n_analyses_without_observed_rows']:,}",
+                 f"{eligible:,}", len(sel["chosen"]), len(sw["analyses"]), len(below),
+                 f"{tier:,}", pct(shared / tier) if tier else "-", SAMPLES[a]])
+show(md_table(["ancestry", "Store", "pool", "no 5e-8 row", "eligible", "drawn", "swept",
+               "below the shared-set floor", "tier rows swept", "shared set", "samples"],
+              rows))
+show("\nThe pools, by observed 5×10⁻⁸ rows and largest |z|, and what each quota asked for "
+     "against what the pool held:\n\n" + md_table(
+         ["ancestry", "target, asked / in pool", "z >= 100, asked / in pool",
+          "z >= 38.5, asked / in pool", "the pool by stratum"],
+         [[a, f"{sel['quota_floors']['target']['asked']} / {sel['quota_floors']['target']['in_pool']}",
+           f"{sel['quota_floors']['min_abs_z_100']['asked']} / {sel['quota_floors']['min_abs_z_100']['in_pool']}",
+           f"{sel['quota_floors']['min_p_zero']['asked']} / {sel['quota_floors']['min_p_zero']['in_pool']}",
+           "; ".join(f"{k}: {v}" for k, v in sel["pool_by_stratum"].items())]
+          for a in ANCESTRIES[1:] for sel in [selections[a]]]))
+show("\n(EUR's own record is #403's and does not carry the floors; its pool held "
+     f"{selections['EUR']['pool_size']:,} Analyses and it drew {len(selections['EUR']['chosen'])}.)")
+```
+
+## The count criteria
+
+C1, C2 and C3 are #403's, unchanged; their wording is in each sweep's `counts.criteria`.
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for a in ANCESTRIES:
+    cnt = counts(a)
+    configs = cnt["configs"]
+    rho = [c["rho"] for c in configs]
+    holds = [c for c in cnt["c3"] if c["holds"]]
+    rows.append([a, f"{sum(c['c1'] for c in configs)} of {len(configs)}",
+                 f"{min(rho):.3f} to {max(rho):.3f}",
+                 f"{sum(c['c2'] for c in configs)} of {len(configs)}",
+                 f"{sum(c['c1'] and c['c2'] for c in configs)} of {len(configs)}",
+                 names([(cnt["named"]["d_cm"], cnt["named"]["w_bp"])]) if cnt["named"] else "none",
+                 names([(cnt["named_cm"]["d_cm"], cnt["named_cm"]["w_bp"])])
+                 if cnt["named_cm"] else "none",
+                 ", ".join(w_label(c["w_bp"]) for c in holds) or "no W"])
+show(md_table(["ancestry", "C1 held at", "rho range", "C2 held at", "C1 and C2",
+               "the point named", "the best cM point", "C3 holds at"], rows))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for a in ANCESTRIES:
+    cnt = counts(a)
+    for point, label in [(cnt["named"], "named"), (cnt["named_cm"], "best cM")]:
+        if point is None:
+            continue
+        row = count_row(a, (point["d_cm"], point["w_bp"]))
+        rows.append([a, label, d_label(point["d_cm"]), w_label(point["w_bp"]),
+                     f"{row['rho']:.3f}", f"{row['median_ratio']:.3f}",
+                     f"{row['median_abs_log2']:.3f}" if row["median_abs_log2"] is not None else "inf",
+                     pct(row["share_of_leads_lost_to_density"])])
+show("\nThe named points, and what each costs in leads lost to variant density:\n\n" +
+     md_table(["ancestry", "point", "D", "W", "rho", "median ratio", "median |log2|",
+               "leads lost to density"], rows))
+```
+
+```{python}
+#| echo: false
+fig, axes = plt.subplots(2, 2, figsize=(11, 9))
+for ax, a in zip(axes.ravel(), ANCESTRIES):
+    cnt = counts(a)
+    cc = cnt["criteria"]
+    rows = {(c["d_cm"], c["w_bp"]): c for c in cnt["configs"]}
+    for w, colour in zip(W_VALUES, ["#1b9e77", "#d95f02", "#7570b3", "#e7298a"]):
+        points = [rows[(d, w)] for d in D_VALUES]
+        ax.plot([c["median_ratio"] for c in points], [c["rho"] for c in points], "-o",
+                color=colour, label=f"W {w_label(w)}", markersize=4)
+        bp = rows[("bp_only", w)]
+        ax.plot([bp["median_ratio"]], [bp["rho"]], "s", color=colour, markersize=8,
+                markerfacecolor="none")
+    ax.axhline(cc["rho_min"], color="0.4", lw=1)
+    ax.axvspan(*cc["ratio_range"], color="0.85", alpha=0.6, zorder=0)
+    ax.set_title(f"{a}, {SAMPLES[a]} samples", fontsize=10)
+    ax.set_xlabel("median density ratio, leads(HM3) / leads(full)", fontsize=8)
+    ax.set_ylabel("Spearman rho", fontsize=8)
+    ax.tick_params(labelsize=8)
+axes[0, 0].legend(fontsize=7)
+fig.suptitle("C1 is above the line, C2 inside the band (open squares: bp only)")
+fig.tight_layout()
+plt.show()
+```
+
+### C3: does cM beat the same W's bp-only window?
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for a in ANCESTRIES:
+    cnt = counts(a)
+    cc = cnt["criteria"]
+    for c3 in cnt["c3"]:
+        bp = count_row(a, ("bp_only", c3["w_bp"]))
+        deltas = []
+        for d in D_VALUES:
+            row = count_row(a, (d, c3["w_bp"]))
+            d_log = (None if row["median_abs_log2"] is None or bp["median_abs_log2"] is None
+                     else bp["median_abs_log2"] - row["median_abs_log2"])
+            deltas.append(f"{d:g}: {row['rho'] - bp['rho']:+.3f}/{d_log if d_log is None else format(d_log, '+.3f')}")
+        rows.append([a, w_label(c3["w_bp"]), yes(c3["holds"]),
+                     ", ".join(f"{d:g}" for d in c3["d_cm_that_holds"]) or "-",
+                     f"{bp['rho']:.3f}", "; ".join(deltas)])
+show("\nEach cell is the cM point's Δrho and Δ|log2| against bp-only at the same W, positive "
+     "being better; the margins are " + f"{cc['c3_margin_rho']} and "
+     f"{cc['c3_margin_abs_log2']}.\n\n" + md_table(
+         ["ancestry", "W", "C3 holds", "D that hold", "bp-only rho", "Δrho/Δ|log2| by D"], rows))
+```
+
+## Per-lead diagnostics and chance LD
+
+Kept because #403 kept them, and because they say *where* the two methods disagree. No
+ancestry's nearest point meets both tolerances either.
+
+Whether a disagreement straddles a narrow jump in the map is **not assessed** for these
+three ancestries: the spike sets #402 found are single populations of the EUR mean map, so
+the sweeps recorded none (`spikes: []`). That key means the question was not put to this
+data, not that no pair straddles anything — the EAS map keeps two such jumps, listed in the
+map directory's README.
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for a in ANCESTRIES:
+    near = nearest(a)
+    cm = config(a, near)["by_r2"][R2]
+    plain = config(a, ("bp_only", near[1]))["by_r2"][R2]
+    null = sweeps[a]["chance_ld"]
+    rows.append([a, d_label(near[0]), w_label(near[1]),
+                 f"{cm['locus_leads']:,}", f"{cm['index_variants']:,}",
+                 pct(cm["spurious_split_rate"]), pct(cm["lost_signal_rate"]),
+                 pct(plain["spurious_split_rate"]), pct(plain["lost_signal_rate"]),
+                 pct(null["share_r2_ge_0.01"]), f"{null['pairs']:,}"])
+show("\nThe nearest (D, W) by the larger of its two rates, its r² 0.01 rates, the bp-only "
+     "window beside it, and the chance share of its **within-Analysis index pairs** "
+     "reaching r² 0.01 — pairs among each Analysis's clump index variants, so the share "
+     "moves with how many hits an ancestry has.\n\n" + md_table(
+         ["ancestry", "nearest D", "W", "Locus Leads", "index variants", "spurious", "lost",
+          "bp-only spurious", "bp-only lost", "chance r2 >= 0.01 (within-Analysis index pairs)",
+          "such pairs"], rows))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for a in ANCESTRIES:
+    null = sweeps[a]["chance_ld"]
+    rows.append([a, SAMPLES[a], f"{null['pairs']:,}", f"{null['r2_undefined']:,}",
+                 *[f"{100 * null[f'share_r2_ge_{t}']:.2f}%" for t in ("0.001", "0.01", "0.05", "0.1")]])
+show("\n**Within-Analysis index pairs.** Index variants on different chromosomes are "
+     "unlinked, so the share of such pairs reaching each r² is a chance share — but it is "
+     "taken among each Analysis's own clump index variants, so it depends on how many hits "
+     "that Analysis has. The share is of pairs with a defined r²; EAS's rests on "
+     f"{sweeps['EAS']['chance_ld']['pairs']:,} pairs.\n\n" + md_table(
+         ["ancestry", "samples", "pairs", "r2 undefined", "r2 >= 0.001", "r2 >= 0.01",
+          "r2 >= 0.05", "r2 >= 0.1"], rows))
+
+rows = []
+for a in ANCESTRIES:
+    entry = PANEL_CHANCE[a]
+    rows.append([a, entry["panel"]["samples"], f"{entry['pool']['variants']:,}",
+                 f"{entry['variants']['used']:,}", f"{entry['pairs_sampled']:,}",
+                 f"{entry['r2_undefined']:,}",
+                 *[f"{100 * entry[f'share_r2_ge_{t}']:.2f}%" for t in ("0.001", "0.01", "0.05", "0.1")]])
+show("\n**The panel's own chance LD** (`ancestries_chance_ld.json`): the variant pool is the "
+     "union of the swept Analyses' shared sets — the panel as the sweeps used it — and both "
+     f"the variants (at most {PANEL_CHANCE['EUR']['max_variants']:,} of them) and the "
+     f"cross-chromosome pairs ({PANEL_CHANCE['EUR']['pair_sample']:,}) are drawn with seed "
+     f"{PANEL_CHANCE['EUR']['seed']}. This is a property of the panel's sample size, not of "
+     "any Analysis's hit count.\n\n" + md_table(
+         ["ancestry", "samples", "pooled variants", "variants used", "pairs drawn",
+          "r2 undefined", "r2 >= 0.001", "r2 >= 0.01", "r2 >= 0.05", "r2 >= 0.1"], rows))
+```
+
+## The two predictions
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for a in ANCESTRIES:
+    near, point = nearest(a), named(a)
+    rows.append([a, d_label(near[0]), names([point]) if point else "none"])
+show("D is read at the nearest per-lead point and at the point the counts name:\n\n" + md_table(
+    ["ancestry", "D at the nearest per-lead point", "D at the named count point"], rows))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+W = 1_000_000
+by_d = {a: count_row(a, (0.1, W))["rho"] for a in ANCESTRIES}
+by_bp = {a: count_row(a, ("bp_only", W))["rho"] for a in ANCESTRIES}
+eur_named = counts("EUR")["named_cm"]
+show(
+    "\n**1. Does AFR need a smaller D than EUR? The counts cannot answer it.** AFR names no "
+    f"(D, W) at all: C1 holds at {sum(c['c1'] for c in counts('AFR')['configs'])} of "
+    f"{len(counts('AFR')['configs'])} points and C2 at "
+    f"{sum(c['c2'] for c in counts('AFR')['configs'])}, so nothing is named, and both "
+    "ancestries' nearest per-lead point is the smallest D the grid holds, "
+    f"{d_label(min(D_VALUES))} — a measured D for AFR would be at or below the floor, where "
+    "the grid cannot look. What is observed beside that: at W " f"{w_label(W)}, rho is "
+    f"{by_d['AFR']:.3f} for AFR at D {d_label(min(D_VALUES))} and {by_bp['AFR']:.3f} with "
+    f"bp only, against {by_d['EUR']:.3f} and {by_bp['EUR']:.3f} for EUR, so AFR's rank "
+    "agreement is far more sensitive to D than EUR's, and C3 holds at "
+    f"{sum(c['holds'] for c in counts('AFR')['c3'])} of {len(counts('AFR')['c3'])} W's for "
+    f"AFR and {sum(c['holds'] for c in counts('EUR')['c3'])} for EUR. EUR's own named point "
+    f"is {names([named('EUR')])} and its best cM point "
+    f"{d_label(eur_named['d_cm'])} at {w_label(eur_named['w_bp'])}; AFR's density ratio "
+    "peaks at "
+    f"{count_row('AFR', ('bp_only', W_VALUES[-1]))['median_ratio']:.3f} against EUR's "
+    f"{count_row('EUR', ('bp_only', W_VALUES[-1]))['median_ratio']:.3f} at the same W. That "
+    "AFR's counts are more D-sensitive is consistent with the prediction; a smaller "
+    f"calibrated D is not shown, and a grid below {d_label(min(D_VALUES))} is the owner's "
+    "call.")
+for a in ("AFR", "EAS", "AMR", "EUR"):
+    cnt = counts(a)
+    c3 = [c for c in cnt["c3"] if c["holds"]]
+    near = nearest(a)
+    cm = config(a, near)["by_r2"][R2]
+    show(f"- **{a}**: C1 at {sum(c['c1'] for c in cnt['configs'])} of {len(cnt['configs'])} "
+         f"points, C2 at {sum(c['c2'] for c in cnt['configs'])}, C3 at {len(c3)} of "
+         f"{len(cnt['c3'])} W's. Nearest per-lead point {names([near])}: "
+         f"{pct(cm['spurious_split_rate'])} spurious, {pct(cm['lost_signal_rate'])} lost. "
+         "Within-Analysis index pairs reach r² 0.01 in "
+         f"{pct(sweeps[a]['chance_ld']['share_r2_ge_0.01'])} of pairs at {SAMPLES[a]} "
+         f"samples; the panel's own chance LD is {pct(PANEL_CHANCE[a]['share_r2_ge_0.01'])}.")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+def far_shares(ancestry):
+    """Share of an ancestry's spurious splits beyond 1 Mb, and with r² >= 0.05."""
+    pairs = config(ancestry, nearest(ancestry))["by_r2"][R2]["spurious_split_pairs"]
+    bands = pairs["by_distance_band"]
+    beyond = sum(counts["n"] for band, counts in bands.items() if band != "<=1Mb")
+    return beyond / pairs["n"], sum(counts["r2_ge_0.05"] for counts in bands.values()) / pairs["n"]
+
+
+FAR = {a: far_shares(a) for a in ANCESTRIES}
+show(
+    "**2. Is the AMR map usable?** For the count it is as good as any other: C1 holds at "
+    f"{sum(c['c1'] for c in counts('AMR')['configs'])} of "
+    f"{len(counts('AMR')['configs'])} points, and rho runs "
+    f"{min(c['rho'] for c in counts('AMR')['configs']):.3f} to "
+    f"{max(c['rho'] for c in counts('AMR')['configs']):.3f}. What it cannot do is decide D: "
+    f"C2 fails at every point (the density ratio never reaches "
+    f"{counts('AMR')['criteria']['ratio_range'][0]}), C3 holds at "
+    f"{sum(c['holds'] for c in counts('AMR')['c3'])} of {len(counts('AMR')['c3'])} W's, and the "
+    "ground truth itself is weak here — at "
+    f"{SAMPLES['AMR']} samples, {pct(PANEL_CHANCE['AMR']['share_r2_ge_0.01'])} of unlinked "
+    "pairs reach r² 0.01 by chance in the panel's own pool, against "
+    f"{pct(PANEL_CHANCE['AFR']['share_r2_ge_0.01'])} at {SAMPLES['AFR']}, "
+    f"{pct(PANEL_CHANCE['EAS']['share_r2_ge_0.01'])} at {SAMPLES['EAS']} and "
+    f"{pct(PANEL_CHANCE['EUR']['share_r2_ge_0.01'])} at {SAMPLES['EUR']}. A clump count at "
+    "r² 0.01 is then partly a chance-LD count, so neither the per-lead rates ("
+    f"{pct(config('AMR', nearest('AMR'))['by_r2'][R2]['spurious_split_rate'])} spurious, "
+    f"{pct(config('AMR', nearest('AMR'))['by_r2'][R2]['lost_signal_rate'])} lost) nor a D "
+    "chosen from it can be trusted. What the splits themselves show is admixture's long "
+    f"LD: at AMR's nearest point, {pct(FAR['AMR'][0])} of its spurious splits lie beyond "
+    f"1 Mb and {pct(FAR['AMR'][1])} have r² over 0.05, where chance gives "
+    f"{pct(PANEL_CHANCE['AMR']['share_r2_ge_0.05'])}; for AFR the two shares are "
+    f"{pct(FAR['AFR'][0])} and {pct(FAR['AFR'][1])}, and for EUR {pct(FAR['EUR'][0])} and "
+    f"{pct(FAR['EUR'][1])}. No cM distance inside W separates a pair like that. Usable as a "
+    "rank-preserving count; not usable to calibrate D until there is a ground truth that is "
+    "not chance LD at that sample size and a rule that sees past W.")
+```
+
+## The disagreeing pairs
+
+Each sweep writes its both-kinds pair file beside its JSON, with its sha256 in the JSON.
+Checked here against the JSON's own summaries:
+
+```{python}
+#| echo: false
+#| output: asis
+import csv
+import gzip
+import hashlib
+
+rows = []
+for a in ANCESTRIES[1:]:
+    record = sweeps[a]["pair_records"]
+    path = HERE / record["file"]
+    raw = path.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == record["sha256"], f"{path} is not the file named"
+    with gzip.open(path, "rt") as handle:
+        found = list(csv.DictReader(handle, delimiter="\t"))
+    assert len(found) == record["rows"], f"{path} holds {len(found)} rows, not {record['rows']}"
+    for c in record["configs"]:
+        for kind in ("spurious_split", "lost_signal"):
+            here = [r for r in found if (r["d_cm"], r["w_bp"], r["kind"]) ==
+                    (str(c["d_cm"]), str(c["w_bp"]), kind)]
+            summary = config(a, (c["d_cm"], c["w_bp"]))["by_r2"][R2][f"{kind}_pairs"]
+            assert len(here) == summary["n"], f"{a} {c} {kind}: file and summary disagree"
+    rows.append([a, record["file"], f"{record['rows']:,}", f"{record['sha256'][:16]}..."])
+show(md_table(["ancestry", "pair file", "rows", "sha256"], rows))
+```
+
+## What limits the comparison
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for a in ANCESTRIES:
+    sw = sweeps[a]
+    shares = sorted(x["rows"]["shared_set_share"] for x in sw["analyses"])
+    tier = sum(x["rows"]["tier_rows"] for x in sw["analyses"])
+    rows.append([a, len(sw["analyses"]), len(sw["left_out_below_shared_set_floor"]["analyses"]),
+                 f"{shares[0]:.3f}", f"{shares[len(shares) // 2]:.3f}", f"{shares[-1]:.3f}",
+                 f"{tier:,}", f"{sw['chance_ld']['pairs']:,}"])
+show(md_table(["ancestry", "swept", "below the floor", "min shared share", "median",
+               "max", "tier rows swept", "chance pairs"], rows))
+show("\nA drawn Analysis whose rows are mostly absent from its panel is recorded in the "
+     "sweep's `left_out_below_shared_set_floor` and not swept. The floor is 70%; an "
+     "Analysis just under it loses about a third of its tier rows to variants the panel "
+     "does not hold.")
+```
+
+## Reproduce
+
+Each ancestry's map, selection and sweep, from the repository root:
+
+```bash
+for a in AFR EAS AMR; do
+  pixi run -e dev python -m prototypes.locus_leads build-map \
+      --archive /data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/original/hg38_maps.tar.gz \
+      --ancestry $a --output /data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/$a.tsv.gz
+done
+pixi run -e dev python -m prototypes.locus_leads select --stores /data/opengwasdb/stores \
+    --seed 405 --ancestry AFR --output docs/benchmark-output/locus_leads/ancestries_afr_selection.json
+pixi run -e dev python -m prototypes.locus_leads sweep \
+    --selection docs/benchmark-output/locus_leads/ancestries_afr_selection.json \
+    --stores-dir /data/opengwasdb/stores \
+    --genetic-map /data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/AFR.tsv.gz \
+    --panel /data/opengwasdb/reference/hgdp1kgp-hg38/pgen/AFR \
+    --hm3 /data/opengwasdb/reference/hapmap3-hg38/hm3.grch38.alid.txt \
+    --spikes none --work-dir <scratch directory> \
+    --output docs/benchmark-output/locus_leads/ancestries_afr_sweep.json
+```
+
+EAS and AMR repeat the last two commands with their own name, map and panel: EAS uses
+`/data/opengwasdb/reference/hgdp1kgp-hg38/pgen/EAS` and AMR
+`/data/opengwasdb/reference/hgdp1kgp-hg38-amr/pgen/AMR`. The EUR sweep and its
+selection are #403's; `eur_sweep.qmd` renders them.
