@@ -49,6 +49,7 @@ from opengwasdb.layouts.dense.rho import (
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import HybridBuildResult, build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
+from opengwasdb.layouts.ragged import RaggedBuildResult
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
@@ -285,6 +286,9 @@ _CHAIN_FILE_OPTION = Annotated[
         help="Chain file required for supported cross-build source/reference alignment",
     ),
 ]
+_LIFTOVER_FAILURE_THRESHOLD_OPTION = Annotated[
+    float, typer.Option(help="Maximum hg19 liftover failure rate")
+]
 _LIFT_VARIANT_REFERENCE_HELP = (
     "A Variant Reference on the target assembly -- a plain ALID list, a "
     "*.variant-ref.tsv.gz artifact, or a Store Variant Table -- that every lifted "
@@ -441,6 +445,19 @@ _MAX_ROWS_OPTION = typer.Option(
 
 def _echo_summary(payload: dict[str, Any]) -> None:
     typer.echo(json.dumps(payload, sort_keys=True))
+
+
+def _echo_ragged_summary(result: RaggedBuildResult) -> None:
+    """A Ragged build's stdout JSON: where it wrote, its counts, and its coverage."""
+    _echo_summary(
+        {
+            "output_path": str(result.output_path),
+            "n_variants": result.n_variants,
+            "n_analyses": result.n_analyses,
+            "n_associations": result.n_associations,
+            "association_coverage": _written_association_coverage(result.output_path),
+        }
+    )
 
 
 def _written_association_coverage(store_path: Path) -> str:
@@ -1553,15 +1570,7 @@ def build_ragged_besd_command(
         allow_unverified_eaf=allow_unverified_eaf,
         admission_record=admission_record,
     )
-    _echo_summary(
-        {
-            "output_path": str(result.output_path),
-            "n_variants": result.n_variants,
-            "n_analyses": result.n_analyses,
-            "n_associations": result.n_associations,
-            "association_coverage": _written_association_coverage(result.output_path),
-        }
-    )
+    _echo_ragged_summary(result)
 
 
 @app.command("build-ragged-ssf")
@@ -1578,6 +1587,8 @@ def build_ragged_ssf_command(
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
     admission_record: Path = _ADMISSION_RECORD_OPTION,
+    chain_file: _CHAIN_FILE_OPTION = None,
+    liftover_failure_threshold: _LIFTOVER_FAILURE_THRESHOLD_OPTION = 0.01,
 ) -> None:
     """Build a Ragged Observed-Only store from filtered GWAS-SSF files.
 
@@ -1586,7 +1597,12 @@ def build_ragged_ssf_command(
     trait_ontology_label, trait_chr, trait_bp, sample_size (or legacy n),
     tissue, context, mhc, source_file (or legacy filtered_file), and
     source_genome_build (or source_assembly). Every row must declare
-    source_genome_build, and declare GRCh38: the build lifts nothing.
+    source_genome_build. The Store is GRCh38: a GRCh37 (hg19) row is lifted to
+    it by --chain-file, which it requires. The build fails when more than
+    --liftover-failure-threshold of the lifted sites have no place on the
+    chain; the Admission record counts them (`lift_unmapped`, `lift_ambiguous`).
+    A build with any such row holds every Analysis's admitted rows in memory
+    until the lift has placed them; a GRCh38-only build reads one at a time.
 
     FILTERED_DIR holds one filtered GWAS-SSF ``.tsv.gz`` per analysis (as
     produced by the opengwasdb-stores download+filter step). Relative
@@ -1610,19 +1626,10 @@ def build_ragged_ssf_command(
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
         admission_record=admission_record,
+        chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold,
     )
-    typer.echo(
-        json.dumps(
-            {
-                "output_path": str(result.output_path),
-                "n_variants": result.n_variants,
-                "n_analyses": result.n_analyses,
-                "n_associations": result.n_associations,
-                "association_coverage": _written_association_coverage(result.output_path),
-            },
-            sort_keys=True,
-        )
-    )
+    _echo_ragged_summary(result)
 
 
 @app.command("complete-ragged")

@@ -96,6 +96,13 @@ name the decisions issue #357 took on the rules that differed.
 | `duplicate_reversed_indel` | it is an indel whose declared reference allele its ALID spells second, at a (variant, Analysis) whose distinct rows, once agreeing copies collapse, are this one and one spelling it first, which is kept | yes | D5, reversed indels |
 | `duplicate_conflicting` | the rows for its (variant, Analysis) disagree on z or SE: all are dropped | yes | D5 |
 | `off_axis` | no axis of the Store holds its variant, and nothing will place it later | yes | D6 |
+| `lift_unmapped` | its source is lifted onto the Store's assembly and the chain places its site nowhere | yes | #386 |
+| `lift_ambiguous` | its Routing Key is declared by a lifted source and by a source already on the Store's assembly: two loci sharing a string, so no row of it is placed | yes | #386 |
+
+`build-ragged-ssf` lifts a source declaring another build, and counts what the
+lift drops under its own two reasons rather than `off_axis`: a record then says
+the chain, not an axis, lost the row. Records written before #386 hold neither
+reason and read as before. The rule set's version moved to `admission/11`.
 
 The duplicate rule is Variant Routing's `collapse_duplicates`, applied after
 the rules above, wherever two rows can reach one (variant, Analysis):
@@ -234,7 +241,7 @@ whose reported frequency is absent, when the build stores the frequency. An
 infinite `.esi` frequency is one of them; the `.esi` reader used to refuse
 the file for it.
 
-`admission.json`'s `"rules"` names the rule set's version, `admission/10`. A
+`admission.json`'s `"rules"` names the rule set's version, `admission/11`. A
 change to what a rule admits, or to what the record counts, moves it.
 
 ## Consequences

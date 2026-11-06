@@ -264,6 +264,29 @@ their statistics from it, but they do not perform this allele check and record
 no `provenance.lift`; nothing in this section requires them to until one is
 added deliberately.
 
+`build-ragged-ssf` lifts too (issue #386). A Ragged SSF Store is one build,
+GRCh38, and every manifest row declares its source's build: a row that declares
+none is refused. A source on hg19 (GRCh37) is read oriented in its own build,
+lifted by `--chain-file`, which any such row requires and which is refused before
+any source is read when it is missing, and re-oriented by the rule above. Its
+sites are placed together, through the placement Variant Routing uses
+(`place_sites`), once every Analysis's rows have been admitted: the failure rate
+`--liftover-failure-threshold` bounds (default 0.01) is the lifted group's, as in
+the Dense and Hybrid builds. Two drops are counted in the Admission record, per
+Analysis, as `lift_unmapped` (the chain places the site nowhere) and
+`lift_ambiguous` (a Routing Key that a lifted source and a source already on
+GRCh38 both declare: two loci that share a string, dropped from the Analyses of
+both, as Pass 1's union drops it). Two source sites that lift onto one variant
+are one Analysis's duplicate rows, and the duplicate rule resolves them. A
+lifted Store records `provenance.lift` as `build-ragged-besd` does, with
+`n_unmapped` and `n_ambiguous` (Routing Keys) beside `n_lifted`, and
+`reference: null`: the lift is not checked against a Variant Reference. A Store
+whose sources are all on GRCh38 records no `provenance.lift`. A build with any
+non-GRCh38 source holds every Analysis's admitted rows in memory until the lift
+has placed them; a GRCh38-only build reads one Analysis at a time. A lift that
+leaves no variant refuses the build, naming each Analysis's `lift_unmapped` and
+`lift_ambiguous` counts, after the Admission record is finished.
+
 Cross-Store identity is:
 
 ```text
