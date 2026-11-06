@@ -713,6 +713,10 @@ def build_dense_command(
     must be --reference-assembly, which a row that omits the column takes.
 
     --admission-record names where Association Admission's record goes (#357).
+
+    A variant whose sources spell it in different case and name it with different
+    rsids is stored with no rsid (#379); the summary's rsid_conflicts counts such
+    keys and variants and names the first 20 keys.
     """
 
     result = build_dense_observed_from_manifest(
@@ -731,6 +735,7 @@ def build_dense_command(
                 "output_path": str(result.output_path),
                 "n_variants": result.n_variants,
                 "n_analyses": result.n_analyses,
+                "rsid_conflicts": result.rsid_conflicts.as_dict(),
                 "association_coverage": _written_association_coverage(result.output_path),
             },
             sort_keys=True,

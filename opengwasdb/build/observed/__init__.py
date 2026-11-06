@@ -9,7 +9,7 @@ from opengwasdb.layouts.build_manifest import ManifestRow, manifest_row_to_analy
 from opengwasdb.layouts.dense import (
     DEFAULT_CHUNK_SHAPE,
     AnalysisSource,
-    DenseBuildResult,
+    DenseObservedBuildResult,
     build_dense_observed_store,
 )
 from opengwasdb.model.enums import AssociationCoverage
@@ -29,7 +29,7 @@ def build_dense_observed_from_manifest(
     overwrite: bool = False,
     association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
     admission_record: str | Path | None = None,
-) -> DenseBuildResult:
+) -> DenseObservedBuildResult:
     """Build a Dense Observed-Only Store from a build manifest of association TSVs.
 
     The manifest is the one every builder takes (`read_manifest`): a row per

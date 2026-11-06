@@ -57,7 +57,16 @@ from opengwasdb.variants import (
     chromosome_sort_key,
     write_variant_axis,
 )
-from opengwasdb.variants.routing import collapse_duplicates
+from opengwasdb.variants.routing import (
+    RoutedNames,
+    SourceKey,
+    collapse_duplicates,
+    union_names,
+)
+from opengwasdb.variants.rsid import RsidConflictPolicy, RsidConflicts
+
+#: What the rsid harvest calls this build when it withholds a name (ADR 0066).
+HARVEST_LABEL = "Dense build"
 
 
 @dataclass(frozen=True)
@@ -67,6 +76,15 @@ class DenseBuildResult:
     output_path: Path
     n_variants: int
     n_analyses: int
+
+
+@dataclass(frozen=True)
+class DenseObservedBuildResult(DenseBuildResult):
+    """A `build-dense` Store's paths and dimensions, and what its rsid harvest
+    found: the routing keys its sources name differently, and the variants it
+    left unnamed for them (#379)."""
+
+    rsid_conflicts: RsidConflicts
 
 
 def write_analyses_tsv(output_path: Path, analyses: list[Analysis]) -> Path:
@@ -131,7 +149,7 @@ def build_dense_observed_store(
     overwrite: bool = False,
     association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
     admission_record: str | Path | None = None,
-) -> DenseBuildResult:
+) -> DenseObservedBuildResult:
     """Write a Dense Observed-Only Store Release from its Analyses' associations.
 
     The Store's columns are the ``sources``, in order. ``association_coverage``
@@ -150,7 +168,7 @@ def build_dense_observed_store(
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         directory = admission.admission_record_for(out, admission_record)
-        records = _admitted_records(sources, directory)
+        records, names = _admitted_records(sources, directory)
         variants = _collect_variants(records)
         analyses = _collect_analyses(records, sources)
         z, se, eaf = _scatter_records(records, variants, analyses)
@@ -158,7 +176,7 @@ def build_dense_observed_store(
         # The encoding plan is decided once, here, and read back from the
         # manifest by everything downstream (ADR 0037, issue #119).
         encoding, coefficients = _decide_encoding(z, se, eaf, chunk_shape)
-        rsid_by_alid = _first_rsids_by_alid(records)
+        rsid_by_alid = names.rsid_by_alid
         _write_manifest(
             staged,
             store_id,
@@ -172,11 +190,11 @@ def build_dense_observed_store(
             coverage,
         )
         write_variant_axis(staged.path, variants, rsid_by_alid)
-        _write_index(staged, variants, analyses, records, chunk_shape)
+        _write_index(staged, variants, analyses, records, chunk_shape, rsid_by_alid)
         _write_zarr(staged, (z, se, eaf), coefficients, chunk_shape, encoding, analyses)
         build_top_hit_indexes(staged.path, encoding=encoding)
         write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
-        return DenseBuildResult(output_path=out, n_variants=len(variants), n_analyses=len(analyses))
+        return DenseObservedBuildResult(out, len(variants), len(analyses), names.conflicts)
 
 
 def _refuse_unbuildable(sources: Sequence[AnalysisSource]) -> None:
@@ -214,9 +232,10 @@ def _records_of(source: AnalysisSource) -> list[NormalisedAssociation]:
 
 def _admitted_records(
     sources: Sequence[AnalysisSource], directory: Path
-) -> list[NormalisedAssociation]:
+) -> tuple[list[NormalisedAssociation], RoutedNames]:
     """The records each Analysis's Admission gate keeps, in source order, with
-    each Analysis's standard errors standardised (#18).
+    each Analysis's standard errors standardised (#18), and the names those
+    records give their variants (`_harvested_names`).
 
     Analyses are judged in the order of ``sources``, which is the order the
     Store's columns take (`_collect_analyses`), each under the filters its
@@ -235,8 +254,46 @@ def _admitted_records(
             if at:
                 keep[at] = _admitted(records, at, gate)
     record_.finish()
-    kept = [record for record, judged in zip(records, keep.tolist(), strict=True) if judged]
-    return _standardised(kept, sources)
+    kept_at = np.flatnonzero(keep).tolist()
+    names = _harvested_names(sources, records, kept_at)
+    return _standardised([records[i] for i in kept_at], sources), names
+
+
+def _harvested_names(
+    sources: Sequence[AnalysisSource], records: list[NormalisedAssociation], kept_at: list[int]
+) -> RoutedNames:
+    """Each variant's rsid from the records at ``kept_at``, after comparing the
+    names a site's spellings carry (ADR 0066, #379).
+
+    ``records`` are every Analysis's, in ``sources`` order (`_gathered`), and a
+    record's site is its variant's chromosome and position with the alleles its
+    row spells (`ReaderBatch.ref`, `.alt`). Each site keeps its first non-empty
+    rsid, as Pass 1's union does, and `union_names` compares the sites one
+    Routing Key reaches. A variant otherwise takes the first non-empty rsid
+    among its records, whichever spelling carries it. `build-dense` has no
+    `--on-rsid-conflict`: a name its sources dispute is withheld (``drop``),
+    so no name depends on the order of the manifest's rows.
+    """
+    spelt = [
+        spelling
+        for source in sources
+        for batch in source.batches
+        for spelling in zip(batch.ref.tolist(), batch.alt.tolist(), strict=True)
+    ]
+    if len(spelt) != len(records):
+        raise ValueError(f"{len(spelt)} source spellings for {len(records)} records")
+    rsid_by_site: dict[SourceKey, str] = {}
+    site_alid: dict[SourceKey, str] = {}
+    for i in kept_at:
+        record = records[i]
+        if record.rsid:
+            variant = record.variant
+            site = (variant.chromosome, variant.position, *spelt[i])
+            rsid_by_site.setdefault(site, record.rsid)
+            site_alid.setdefault(site, variant.alid)
+    return union_names(
+        rsid_by_site, site_alid, policy=RsidConflictPolicy.DROP, label=HARVEST_LABEL
+    )
 
 
 def _gathered(
@@ -475,6 +532,7 @@ def _write_index(
     analyses: list[Analysis],
     records: list[NormalisedAssociation],
     chunk_shape: tuple[int, int],
+    rsid_by_alid: dict[str, str],
 ) -> None:
     with staged.index_connection() as connection:
         initialise_schema(connection)
@@ -499,25 +557,19 @@ def _write_index(
         # writes an rsid search index every layout shares (issue #109), and
         # `VariantAxis.by_identifier` consults that first. The table is still written
         # here, and still read as a fallback, so stores built before that index keep
-        # resolving rsids; nothing new depends on it.
+        # resolving rsids; nothing new depends on it. A variant whose name is
+        # withheld (#379) gets no alias either: `by_identifier` falls back to this
+        # table, and would otherwise still find it by a disputed name.
         variant_indices = {variant.alid: i for i, variant in enumerate(variants)}
         aliases: set[tuple[str, int]] = set()
         for record in records:
-            if record.rsid:
+            if record.rsid and record.variant.alid in rsid_by_alid:
                 aliases.add((record.rsid, variant_indices[record.variant.alid]))
         connection.executemany(
             "INSERT OR IGNORE INTO variant_aliases(alias, variant_index) VALUES (?, ?)",
             sorted(aliases),
         )
         connection.commit()
-
-
-def _first_rsids_by_alid(records: list[NormalisedAssociation]) -> dict[str, str]:
-    rsid_by_alid: dict[str, str] = {}
-    for record in records:
-        if record.rsid:
-            rsid_by_alid.setdefault(record.variant.alid, record.rsid)
-    return rsid_by_alid
 
 
 def _write_zarr(

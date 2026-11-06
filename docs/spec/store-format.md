@@ -280,11 +280,14 @@ is part of the contract (issue #255):
   variant on every build. Every build that harvests — a two-pass build, or a
   single-pass build whose reference names no variants — compares the names
   those spellings carry, by one rule, and so does Variant Reference extraction
-  (issue #379), and so does `build-ragged-ssf` over the rows it admits: when
+  (issue #379), and so do `build-ragged-ssf` and `build-dense` over the rows
+  they admit: when
   their sources name it with different (normalised) rsids, nothing in the
   sources says which is right, and `build-hybrid --on-rsid-conflict` decides
   (issue #306); `build-dense-vcf`, `build-ragged-ssf` and
-  `extract-variant-reference` have no such option and always refuse. Which
+  `extract-variant-reference` have no such option and always refuse, and
+  `build-dense` has none either and always withholds the name, as `drop` does
+  below. Which
   source is listed first therefore never decides such a name. Under
   `build-hybrid`, `refuse`, the
   default, fails the build and names the routing key and both names. `drop` gives **no
@@ -315,12 +318,13 @@ is part of the contract (issue #255):
   and file order, and gives a variant the first non-empty rsid among them, by
   the rule above (issue #400). A row that names nothing gives way to a later
   row that names the variant, whichever spelling either row uses.
-- `build-dense` does not yet compare names. It takes the first non-empty rsid
-  among the rows it admits for a variant, so of two spellings of a site named
-  differently, the first one read names the variant. Since issue #385 it reads
-  its association TSVs as `ReaderBatch`es, which carry each row's spelling
-  (issue #379), so the comparison can follow, as it did for
-  `build-ragged-ssf`.
+- `build-dense` harvests only the rows Association Admission keeps, in
+  manifest row order and file order, and gives a variant the first non-empty
+  rsid among them, by the rule above (issue #379). It compares the spellings
+  each row's `ReaderBatch` carries. A name its sources dispute is withheld as
+  `drop` withholds it: the variant is written with `rsid` `.`, and neither the
+  rsid search index nor `index.sqlite`'s `variant_aliases` holds any of its
+  names. Its JSON summary carries `rsid_conflicts`, with `policy` `drop`.
 - A `build-ragged-besd` file set lists a variant once, and two of its rows
   that canonicalise to one variant are both dropped, with their associations,
   so no two names ever meet there.
@@ -2373,6 +2377,9 @@ the manifest's rows in order.
 - A row that cannot be read (a required field missing, a number that is not
   one, equal alleles) refuses the run, naming the row. A row whose identity no
   ALID can spell (§4) is dropped by Association Admission and logged.
+- A variant whose sources spell it in different case and name it with
+  different rsids is stored with no rsid, and the JSON summary's
+  `rsid_conflicts` counts it (§4, issue #379).
 - `build-dense` does not lift. Each row's source assembly (`source_assembly`,
   default `--reference-assembly`, which is `GRCh37` unless given) must be the
   assembly the Store records, and a row in another is refused.
