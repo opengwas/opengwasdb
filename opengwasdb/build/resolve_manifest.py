@@ -97,6 +97,7 @@ from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, load_liftover
 from opengwasdb.readers.interface import SourceReader
 from opengwasdb.readers.registry import known_capabilities, requires_probe_id, resolve_reader
+from opengwasdb.variants.reference import refuse_unmarked_artifact
 from opengwasdb.version import installed_version
 
 logger = logging.getLogger(__name__)
@@ -185,8 +186,16 @@ def compute_fingerprint_digest(fp: dict[str, Any]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _parse_panel_header(first_line: str) -> tuple[int, str | None]:
+def _parse_panel_header(first_line: str, path: Path) -> tuple[int, str | None]:
+    """The column a panel names its variants in, and the first line's variant
+    when the line is not a header.
+
+    A Variant Reference artifact from before issue #354 is refused: its ALIDs
+    may name a reverse-strand variant on the source's strand
+    (`refuse_unmarked_artifact`).
+    """
     tokens = first_line.split()
+    refuse_unmarked_artifact([tok.lstrip("#").strip() for tok in tokens], path)
     lower_tokens = [tok.strip().lower() for tok in tokens]
     for target in ("alid", "variant_id", "id"):
         if target in lower_tokens:
@@ -219,7 +228,7 @@ def load_extraction_panel(path: Path | str) -> set[str]:
         first_line = fh.readline()
         if not first_line:
             raise ValueError(f"empty extraction panel file: {panel_path}")
-        col_idx, initial_var = _parse_panel_header(first_line)
+        col_idx, initial_var = _parse_panel_header(first_line, panel_path)
         variants = _read_panel_lines(fh, col_idx, initial_var)
     if not variants:
         raise ValueError(f"no valid variants found in extraction panel: {panel_path}")
@@ -236,7 +245,7 @@ def load_variant_reference(path: Path | str) -> set[str]:
         first = fh.readline()
         if not first:
             raise ValueError(f"empty variant reference: {axis}")
-        column, initial = _parse_panel_header(first)
+        column, initial = _parse_panel_header(first, axis)
         variants = _read_panel_lines(fh, column, initial)
     if not variants:
         raise ValueError(f"no valid variants in variant reference: {axis}")

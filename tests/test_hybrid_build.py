@@ -24,6 +24,7 @@ import pytest
 import zarr
 from admission_helpers import logged, record_analyses
 from cli_output import normalize_cli_output
+from extraction_fixtures import write_hg38_artifact
 from liftover_fixtures import (
     STRAND_ROWS,
     assert_strand_statistics,
@@ -1186,7 +1187,13 @@ def _write_reference_artifact(
         key: alid for key, alid in extracted.source_lookup.items() if alid in panel
     }
     path = tmp_path / "panel-only.variant-ref.tsv.gz"
-    write_variant_reference(path, sorted_alids(panel), source_lookup, extracted.rsid_by_alid)
+    write_variant_reference(
+        path,
+        sorted_alids(panel),
+        source_lookup,
+        extracted.rsid_by_alid,
+        reoriented=extracted.reoriented & source_lookup.keys(),
+    )
     return path
 
 
@@ -1272,6 +1279,7 @@ def _cross_analysis_collision_fixture(tmp_path: Path) -> tuple[Path, Path]:
             ("1", HG19_POS_1, "A", "G"): HG38_ALID_1,
             ("1", HG19_POS_3, "G", "A"): HG38_ALID_3,
         },
+        reoriented=(),
     )
     return manifest, reference
 
@@ -1301,6 +1309,7 @@ def test_resolver_overlap_routes_lowercase_ssf_to_dense(tmp_path, artifact_keys)
                 ("1", 100000, "a", "g"): "1:100000:A:G",
                 ("1", 100001, "g", "a"): "1:100001:A:G",
             },
+            reoriented=(),
         )
     else:
         axis.write_text("1:100000:A:G\n1:100001:A:G\n", encoding="utf-8")
@@ -1592,7 +1601,8 @@ class TestVariantReference:
         manifest = _make_manifest(tmp_path, [("trait_mixed", vcf, "Trait mixed")])
         reference = tmp_path / "panel-only.variant-ref.tsv.gz"
         write_variant_reference(
-            reference, [HG38_ALID_1], {("1", HG19_POS_1, "A", "G"): HG38_ALID_1}
+            reference, [HG38_ALID_1], {("1", HG19_POS_1, "A", "G"): HG38_ALID_1},
+            reoriented=()
         )
         store = tmp_path / "failed-lift.opengwasdb"
 
@@ -1627,7 +1637,8 @@ class TestVariantReference:
         manifest = _make_manifest(tmp_path, [("trait_collide", vcf, "Trait collide")])
         reference = tmp_path / "panel-only.variant-ref.tsv.gz"
         write_variant_reference(
-            reference, [HG38_ALID_1], {("1", HG19_POS_1, "A", "G"): HG38_ALID_1}
+            reference, [HG38_ALID_1], {("1", HG19_POS_1, "A", "G"): HG38_ALID_1},
+            reoriented=()
         )
         monkeypatch.setattr(unknown_keys, "_stable_hash", lambda key: 99)
 
@@ -1725,6 +1736,7 @@ class TestVariantReference:
                 ("1", HG19_POS_1, "A", "G"): HG38_ALID_1,
                 ("1", 1564620, "A", "G"): HG38_ALID_3,
             },
+            reoriented=(),
         )
         monkeypatch.setattr(unknown_keys, "_stable_hash", lambda key: 99)
         monkeypatch.setattr(unknown_keys, "check_hash", lambda key: 7)
@@ -2362,6 +2374,7 @@ class TestVariantReferenceRsids:
             reference,
             ["1:1064619:A:G", "1:1064620:C:T"],
             {("1", 1064620, "C", "T"): "1:1064620:C:T"},
+            reoriented=(),
         )
         two_pass = tmp_path / "prec-two.opengwasdb"
         single_pass = tmp_path / "prec-one.opengwasdb"
@@ -2475,8 +2488,6 @@ class TestVariantReferenceRsids:
         counts on both; the two-pass build names them."""
         import logging
 
-        from opengwasdb.variants.reference import write_variant_reference
-
         vcf = _make_vcf(
             tmp_path,
             "named",
@@ -2490,12 +2501,7 @@ class TestVariantReferenceRsids:
         panel = tmp_path / "named-panel.txt"
         panel.write_text(f"{HG38_ALID_1}\n{HG38_ALID_3}\n", encoding="utf-8")
         reference = tmp_path / "named.variant-ref.tsv.gz"
-        write_variant_reference(
-            reference,
-            [HG38_ALID_1, HG38_ALID_3],
-            {("1", 100000, "A", "G"): HG38_ALID_1, ("1", 1564620, "A", "G"): HG38_ALID_3},
-            {HG38_ALID_1: "rsPANEL"},
-        )
+        write_hg38_artifact(reference, [HG38_ALID_1, HG38_ALID_3], {HG38_ALID_1: "rsPANEL"})
         two_pass = tmp_path / "named-two.opengwasdb"
         single_pass = tmp_path / "named-one.opengwasdb"
         build_hybrid_from_vcf_manifest(
@@ -2607,6 +2613,7 @@ class TestVariantReferenceRsids:
             [HG38_ALID_1],
             {("1", 100000, "A", "G"): HG38_ALID_1},
             {HG38_ALID_1: "rsCURATED"},
+            reoriented=(),
         )
         store = tmp_path / "named.opengwasdb"
         with caplog.at_level(logging.INFO):
@@ -2713,6 +2720,31 @@ def test_hybrid_build_reorients_statistics_a_reverse_strand_lift_renames(
             f"{case}: {name} ({alid}) routed to {components.get(alid)}, expected {expected}"
         )
 
+    with query_store(store_path) as query:
+        assert_strand_statistics(query, "trait")
+
+
+def test_single_pass_build_from_an_extracted_artifact_reorients_as_two_pass(tmp_path):
+    """issue #354: an artifact extracted over a reverse-strand lift records the
+    keys it re-oriented, so a Hybrid build routed by it stores each strand row
+    under the two-pass ALID with the two-pass sign. Every row is on the
+    reference, so none reaches the fold's lift."""
+    from extraction_fixtures import extract_from_manifest
+    from residual_fixtures import write_gwas_vcf_with_eaf
+
+    chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
+    vcf = write_gwas_vcf_with_eaf(tmp_path / "strand.vcf", strand_vcf_rows())
+    manifest = _make_manifest(tmp_path, [("trait", vcf, "Trait")])
+    artifact = tmp_path / "strand.variant-ref.tsv.gz"
+    extract_from_manifest(manifest, artifact, chain_file=chain)
+    store_path = tmp_path / "store.opengwasdb"
+
+    build_hybrid_from_vcf_manifest(
+        manifest, store_path, variant_reference=artifact,
+        store_id="hybrid-strand-artifact", release_id="v1", chain_file=chain,
+    )
+
+    assert set(_components_by_alid(store_path).values()) == {"dense"}
     with query_store(store_path) as query:
         assert_strand_statistics(query, "trait")
 

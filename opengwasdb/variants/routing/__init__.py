@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from opengwasdb.variants.routing.extract import (
     EmptyReferenceError,
-    ReverseStrandLiftError,
     VariantReferenceExtraction,
     extract_variant_reference,
 )
@@ -49,7 +48,6 @@ __all__ = [
     "LiftedUnion",
     "Pass1Stats",
     "Placed",
-    "ReverseStrandLiftError",
     "RouteTable",
     "RoutedColumn",
     "RoutedNames",

@@ -75,7 +75,9 @@ def _route(sources, authority, **kwargs):
 def _reference(source_lookup: dict[Site, str]) -> VariantReference:
     """A reference that names no rsids, routing exactly ``source_lookup``."""
     alids = sorted(set(source_lookup.values()))
-    return VariantReference(alids, source_lookup, {}, explicit_source_keys=True)
+    return VariantReference(
+        alids, source_lookup, {}, explicit_source_keys=True, reoriented=frozenset()
+    )
 
 
 # ── route_variants and RoutedNames ───────────────────────────────────────────
@@ -215,7 +217,11 @@ def test_a_harvested_name_follows_the_reference_routing_not_the_lift(tmp_path):
 
 def test_a_named_reference_is_used_as_given_and_nothing_is_read():
     reference = VariantReference(
-        ["1:100:A:G"], {("1", 100, "A", "G"): "1:100:A:G"}, {"1:100:A:G": "rsREF"}, True
+        ["1:100:A:G"],
+        {("1", 100, "A", "G"): "1:100:A:G"},
+        {"1:100:A:G": "rsREF"},
+        True,
+        frozenset(),
     )
 
     def _no_read(_spec: SourceSpec) -> FakeReader:
@@ -769,6 +775,7 @@ def test_a_reference_sending_one_routing_key_two_ways_is_refused():
         {("1", 100, "a", "g"): "1:100:A:G", ("1", 100, "A", "G"): "1:200:A:G"},
         {"1:100:A:G": "rs1"},
         explicit_source_keys=True,
+        reoriented=frozenset(),
     )
     routing = _route([_source("a", "hg38", [("1", 100, "A", "G", "")])], FromReference(reference))
 

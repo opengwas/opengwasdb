@@ -208,6 +208,32 @@ source's allele string at a moved coordinate. Signed statistics follow the
 projected alleles, so a lift that swaps which allele is `A1` flips them
 (§5).
 
+A Variant Reference artifact (`*.variant-ref.tsv.gz`, which
+`extract-variant-reference` writes) records such a lift, so that a single-pass
+build routed by it stores what the two-pass build stores. Its columns are
+`alid`, `chromosome`, `position`, `a1`, `a2`, `rsid`, `routed_source_keys` and
+`reoriented_keys`. A row's ALID is formed from the projected alleles;
+`routed_source_keys` lists, `;`-separated, the source keys
+(`chrom:pos:ref:alt`, as each source spells them) that route to it; and
+`reoriented_keys` lists those of them whose lift makes the other allele `A1`,
+whose statistics a build routed by the artifact re-orients (§5). A
+reverse-strand key whose `A1` does not change, such as an indel the complement
+leaves in order, is in `routed_source_keys` alone, under its projected ALID.
+An empty cell lists no keys. A list with an empty element or a key named twice
+is refused, naming the row, and so is a re-oriented key its row does not route.
+
+Every extraction before issue #354 named the routing column `source_keys` and
+recorded no re-orientation. Such an artifact cannot say which keys were
+re-oriented, and may name a reverse-strand key's ALID on the source's strand,
+so every reader of a Variant Reference MUST refuse one whose header names
+`source_keys`, rather than read it as re-orienting nothing or check a lift
+against its ALIDs: the single-pass builds, `build-ragged-besd`'s lift check
+and `resolve-analyses --variant-reference` all do. It is extracted again. The
+column was renamed for the converse: an engine before issue #354 requires
+`source_keys`, so it refuses a new artifact rather than route it without its
+re-orientation. A plain ALID list and a Store Variant Table name no such column
+and are read as before.
+
 The BESD builder (`build-ragged-besd`) checks its lift, and records that it
 did. Given `--variant-reference`, a reverse-strand lifted variant whose alleles
 the reference spells on the other strand fails the build naming the variant; a
