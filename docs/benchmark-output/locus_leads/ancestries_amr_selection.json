@@ -1,0 +1,611 @@
+{
+ "rule": {
+  "seed": 405,
+  "target": 40,
+  "min_abs_z_100": 0,
+  "min_p_zero": 2,
+  "max_observed_rows": 1000000,
+  "strata": "observed 5e-8 rows [<1k, 1k-10k, 10k-100k, >=100k] x max |z| [<38.5, 38.5-100, >=100]",
+  "draw": "quota Analyses first (|z| >= 100, then |z| >= 38.5), then round-robin over the strata in sorted order; seeded random.Random",
+  "pool": "assigned_ancestry == AMR in genome-wide Stores; observed rows at 5e-8"
+ },
+ "stores_left_out": [
+  {
+   "store": "OGS-00001",
+   "reason": "association coverage is cis"
+  },
+  {
+   "store": "OGS-00002",
+   "reason": "association coverage is cis"
+  },
+  {
+   "store": "OGS-00003",
+   "reason": "no Analysis assigned AMR"
+  },
+  {
+   "store": "OGS-00004",
+   "reason": "VariantIndexError: Store at /data/opengwasdb/stores/OGS-00004/store.opengwasdb carries no variant index (ragged/by_variant); build it with 'ogdb build-variant-index /data/opengwasdb/stores/OGS-00004/store.opengwasdb'"
+  },
+  {
+   "store": "OGS-00005",
+   "reason": "VariantIndexError: Store at /data/opengwasdb/stores/OGS-00005/store.opengwasdb carries no variant index (ragged/by_variant); build it with 'ogdb build-variant-index /data/opengwasdb/stores/OGS-00005/store.opengwasdb'"
+  },
+  {
+   "store": "OGS-00006",
+   "reason": "association coverage is signals_only"
+  },
+  {
+   "store": "OGS-00007",
+   "reason": "association coverage is cis_and_signals"
+  },
+  {
+   "store": "OGS-00008",
+   "reason": "no Analysis assigned AMR"
+  },
+  {
+   "store": "OGS-00009",
+   "reason": "no Analysis assigned AMR"
+  },
+  {
+   "store": "OGS-00011",
+   "reason": "no Analysis assigned AMR"
+  },
+  {
+   "store": "OGS-00012",
+   "reason": "no Analysis assigned AMR"
+  },
+  {
+   "store": "OGS-00013",
+   "reason": "no Analysis assigned AMR"
+  },
+  {
+   "store": "OGS-00015",
+   "reason": "no Analysis assigned AMR"
+  },
+  {
+   "store": "OGS-00016",
+   "reason": "no Analysis assigned AMR"
+  },
+  {
+   "store": "OGS-00017",
+   "reason": "no Analysis assigned AMR"
+  },
+  {
+   "store": "OGS-00027",
+   "reason": "association coverage is cis"
+  }
+ ],
+ "pool_size": 850,
+ "pool_by_stratum": {
+  "10k-100k x <38.5": 7,
+  "1k-10k x 38.5-100": 2,
+  "1k-10k x <38.5": 59,
+  "<1k x <38.5": 745
+ },
+ "n_analyses_without_observed_rows": 37,
+ "analyses_without_observed_rows": [
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90476784",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477103",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477106",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477109",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477478",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477488",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477491",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477524",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477671",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477681",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477685",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477754",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477824",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477884",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477904",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478073",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478191",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478273",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478311",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478314",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478590",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478609",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478641",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478680",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478683",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478703",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478707",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478710",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478725",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478899",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478929",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478944",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90479061",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90479095",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90479145",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90479233",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90479304",
+   "observed_rows": 0,
+   "reason": "no Observed Association at 5e-8, so nothing to compare"
+  }
+ ],
+ "excluded_over_max_rows": [],
+ "chosen": [
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475137",
+   "observed_rows": 3155,
+   "max_abs_z": 31.0703125,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475345",
+   "observed_rows": 4335,
+   "max_abs_z": 38.53424072265625,
+   "stratum": "1k-10k x 38.5-100"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475349",
+   "observed_rows": 4984,
+   "max_abs_z": 40.024879455566406,
+   "stratum": "1k-10k x 38.5-100"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475357",
+   "observed_rows": 20733,
+   "max_abs_z": 15.08203125,
+   "stratum": "10k-100k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475360",
+   "observed_rows": 23162,
+   "max_abs_z": 15.6630859375,
+   "stratum": "10k-100k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475363",
+   "observed_rows": 18782,
+   "max_abs_z": 14.7451171875,
+   "stratum": "10k-100k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475439",
+   "observed_rows": 11947,
+   "max_abs_z": 28.625,
+   "stratum": "10k-100k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475443",
+   "observed_rows": 12010,
+   "max_abs_z": 28.9677734375,
+   "stratum": "10k-100k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475447",
+   "observed_rows": 9468,
+   "max_abs_z": 27.3994140625,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475463",
+   "observed_rows": 10324,
+   "max_abs_z": 23.904296875,
+   "stratum": "10k-100k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475467",
+   "observed_rows": 11394,
+   "max_abs_z": 23.7392578125,
+   "stratum": "10k-100k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475471",
+   "observed_rows": 9784,
+   "max_abs_z": 21.7392578125,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475539",
+   "observed_rows": 3173,
+   "max_abs_z": 18.7578125,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475722",
+   "observed_rows": 1240,
+   "max_abs_z": 18.578125,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475728",
+   "observed_rows": 1302,
+   "max_abs_z": 19.87890625,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90475732",
+   "observed_rows": 1389,
+   "max_abs_z": 20.6572265625,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90476201",
+   "observed_rows": 132,
+   "max_abs_z": 12.7978515625,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90476203",
+   "observed_rows": 931,
+   "max_abs_z": 18.958984375,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90476294",
+   "observed_rows": 4636,
+   "max_abs_z": 16.521484375,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90476297",
+   "observed_rows": 7053,
+   "max_abs_z": 19.1279296875,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90476300",
+   "observed_rows": 4855,
+   "max_abs_z": 18.2265625,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90476335",
+   "observed_rows": 2068,
+   "max_abs_z": 12.50390625,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90476342",
+   "observed_rows": 4516,
+   "max_abs_z": 18.9228515625,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90476346",
+   "observed_rows": 3219,
+   "max_abs_z": 17.5732421875,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90476401",
+   "observed_rows": 1000,
+   "max_abs_z": 8.306640625,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90476458",
+   "observed_rows": 1740,
+   "max_abs_z": 15.0087890625,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90476464",
+   "observed_rows": 1370,
+   "max_abs_z": 12.814453125,
+   "stratum": "1k-10k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477408",
+   "observed_rows": 51,
+   "max_abs_z": 6.5693359375,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90477693",
+   "observed_rows": 11,
+   "max_abs_z": 5.7080078125,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478081",
+   "observed_rows": 24,
+   "max_abs_z": 6.1435546875,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478290",
+   "observed_rows": 168,
+   "max_abs_z": 7.17578125,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478634",
+   "observed_rows": 285,
+   "max_abs_z": 7.197265625,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478742",
+   "observed_rows": 15,
+   "max_abs_z": 5.91015625,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478802",
+   "observed_rows": 97,
+   "max_abs_z": 6.8251953125,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90478862",
+   "observed_rows": 272,
+   "max_abs_z": 7.599609375,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90479078",
+   "observed_rows": 230,
+   "max_abs_z": 7.5341796875,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90479107",
+   "observed_rows": 121,
+   "max_abs_z": 6.1181640625,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90479182",
+   "observed_rows": 76,
+   "max_abs_z": 6.2587890625,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90479262",
+   "observed_rows": 84,
+   "max_abs_z": 6.2802734375,
+   "stratum": "<1k x <38.5"
+  },
+  {
+   "store": "OGS-00014",
+   "analysis_id": "GCST90479331",
+   "observed_rows": 190,
+   "max_abs_z": 7.138671875,
+   "stratum": "<1k x <38.5"
+  }
+ ],
+ "ancestry": "AMR",
+ "quota_floors": {
+  "target": {
+   "asked": 40,
+   "in_pool": 813,
+   "floor": 40
+  },
+  "min_abs_z_100": {
+   "asked": 5,
+   "in_pool": 0,
+   "floor": 0
+  },
+  "min_p_zero": {
+   "asked": 5,
+   "in_pool": 2,
+   "floor": 2
+  }
+ }
+}

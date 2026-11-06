@@ -189,6 +189,10 @@ pytest-xdist = ">=3.6"
 # the model's check would break on a resolution that drops it, and the fix would
 # look like it belonged to that other package.
 pyyaml = "*"
+# prototypes/locus_leads clumps against the HGDP+1kGP genotype panels (#402).
+# Pinned to the build that made those panels, v2.0.0-a.6.9LM (29 Jan 2025), so
+# clumping reads them with the code that wrote them.
+plink2 = "==2.0.0a.6.9"
 
 # Separate from dev: rendering docs/benchmark-output/*.qmd needs Quarto's
 # Jupyter engine (pyyaml, a Jupyter kernel) and matplotlib for the plotting
