@@ -43,8 +43,14 @@ def show(text):
 
 
 def md_table(headers, rows):
-    head = "| " + " | ".join(headers) + " |\n|" + "|".join(["---"] * len(headers)) + "|\n"
-    return head + "\n".join("| " + " | ".join(str(c) for c in row) + " |" for row in rows)
+    # A cell may carry a pipe of its own (|log2|), which would end the cell early
+    # and shift every column after it (#404 review).
+    def cell(value):
+        return str(value).replace("|", "\\|")
+
+    head = "| " + " | ".join(cell(h) for h in headers) + " |\n|" + "|".join(["---"] * len(headers)) + "|\n"
+    # A trailing blank line, so the next table is not read as this one's rows.
+    return head + "\n".join("| " + " | ".join(cell(c) for c in row) + " |" for row in rows) + "\n"
 
 
 def pct(value):

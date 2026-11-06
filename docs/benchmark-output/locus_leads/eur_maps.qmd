@@ -133,6 +133,17 @@ show("What each map gains across #402's two spike intervals, measured from the m
                         for s in MEASURED[name]["spike_intervals"]]] for name in NAMES]))
 ```
 
+## The map left out
+
+deCODE 2019 is left out because its file and terms are unreachable from this node: the
+supplement URL answers `HTTP/2 403` with `cf-mitigated: challenge`, and the article page the same;
+Europe PMC reports `isOpenAccess: N`, `hasSuppl: N` and availability "Subscription required";
+Unpaywall gives `oa_status: "closed"` and `license: null`; Crossref gives `license: null`. No terms
+accompany any copy the node can obtain, so none are quoted and no copy is used, and no number on
+this page depends on one. What that costs the comparison: HapMap II lifted stands in as the
+LD-based comparator the epic names, and **a pedigree-based comparator remains untested** — nothing
+here measured one, so whether a pedigree map would make C3 hold is open.
+
 ## The same rows
 
 A comparison between maps is only a measurement if each map ranks the same rows.

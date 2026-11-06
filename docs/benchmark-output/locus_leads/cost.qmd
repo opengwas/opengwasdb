@@ -54,10 +54,16 @@ BILLS = {
 
 
 def md_table(headers, rows):
-    heading = "| " + " | ".join(headers) + " |"
+    # A cell may carry a pipe of its own (|log2|), which would end the cell early
+    # and shift every column after it (#404 review).
+    def cell(value):
+        return str(value).replace("|", "\\|")
+
+    heading = "| " + " | ".join(cell(h) for h in headers) + " |"
     separator = "|" + "|".join(["---"] * len(headers)) + "|"
-    body = "\n".join("| " + " | ".join(str(cell) for cell in row) + " |" for row in rows)
-    return f"{heading}\n{separator}\n{body}"
+    body = "\n".join("| " + " | ".join(cell(c) for c in row) + " |" for row in rows)
+    # A trailing blank line, so the next table is not read as this one's rows.
+    return f"{heading}\n{separator}\n{body}\n"
 
 
 def seconds(value):

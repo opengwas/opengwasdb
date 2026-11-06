@@ -166,6 +166,15 @@ the sources, retrieval dates, checksums and licences.
 `compare-maps` puts each sweep's count criteria side by side, and refuses to
 write when the maps' shared sets differ.
 
+A shared set's digest is a lane's own encoding, not a shared one: `maps.variant_index_digest`
+hashes the Store and the Analysis with a tab and a newline between and after them, then the
+sorted Store Variant Indices as `<i8`, while `profile_sweep.shared_set_identity` hashes the
+same two strings NUL-terminated and the indices as `int64`. The same rows therefore give
+different sha256s in the two lanes, and their digests cannot be compared with each other.
+Compare a digest only with records the same function wrote — `compare-maps --reference`
+checks rows and digest within `maps.variant_index_digest`, and the profile sweep's own check
+within `profile_sweep.shared_set_identity`.
+
 The prominence and LD-block rules (#409) run on #403's selection, sweep JSON, map, panel and
 HapMap3 list, which they check against #403's records, and on the LD-block file:
 

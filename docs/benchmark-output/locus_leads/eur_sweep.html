@@ -6,7 +6,7 @@
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
-<meta name="dcterms.date" content="2026-11-05">
+<meta name="dcterms.date" content="2026-11-06">
 
 <title>Locus Leads against plink2 clumping across EUR Analyses (#403)</title>
 <style>
@@ -2246,7 +2246,7 @@ vertical-align: -.125em;
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">November 5, 2026</p>
+      <p class="date">November 6, 2026</p>
     </div>
   </div>
   
@@ -2372,7 +2372,7 @@ vertical-align: -.125em;
 <th>Store</th>
 <th>Analysis</th>
 <th>observed rows</th>
-<th>largest</th>
+<th>largest |z|</th>
 </tr>
 </thead>
 <tbody>
@@ -2472,12 +2472,12 @@ vertical-align: -.125em;
 <th>ρ</th>
 <th>C1</th>
 <th>median ratio</th>
-<th>median</th>
-<th>log2</th>
-<th></th>
+<th>median |log2|</th>
 <th>C2</th>
 <th>Analyses with no HM3 lead</th>
 <th>leads (full)</th>
+<th>leads (HM3)</th>
+<th>lost to density</th>
 </tr>
 </thead>
 <tbody>
@@ -2795,7 +2795,7 @@ vertical-align: -.125em;
 </tr>
 </tbody>
 </table>
-<div id="a097aeaf" class="cell" data-execution_count="6">
+<div id="1f5f37a7" class="cell" data-execution_count="6">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
@@ -3868,7 +3868,7 @@ vertical-align: -.125em;
 <section id="spurious-splits-against-lost-signals" class="level3">
 <h3 class="anchored" data-anchor-id="spurious-splits-against-lost-signals">Spurious splits against lost signals</h3>
 <p>One line per W. Its circles are the D values, labelled in cM, and its open square is the bp-only rule. A smaller D means fewer lost signals and more spurious splits. In the r² 0.01 panel the shaded bands mark the 10% limits, and their overlap is the working region.</p>
-<div id="c46febe7" class="cell" data-execution_count="13">
+<div id="0cfe77d8" class="cell" data-execution_count="13">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
@@ -3883,15 +3883,24 @@ vertical-align: -.125em;
 <p>Extra leads on the flanks of very strong peaks show up as spurious splits at high |z|. At the verdict’s configuration against its plain window, r² 0.01:</p>
 <p>D = 0.1 cM, W = 2.5 Mb, and the 2.5 Mb window.</p>
 <table class="caption-top table">
+<colgroup>
+<col style="width: 14%">
+<col style="width: 14%">
+<col style="width: 14%">
+<col style="width: 14%">
+<col style="width: 14%">
+<col style="width: 14%">
+<col style="width: 14%">
+</colgroup>
 <thead>
 <tr class="header">
-<th>lead’s</th>
-<th>z</th>
-<th></th>
+<th>lead’s |z|</th>
 <th>Locus Leads</th>
 <th>spurious</th>
 <th>rate</th>
 <th>window: Locus Leads</th>
+<th>window: spurious</th>
+<th>window: rate</th>
 </tr>
 </thead>
 <tbody>
@@ -3936,7 +3945,7 @@ vertical-align: -.125em;
 </section>
 <section id="chance-ld-at-n-771" class="level3">
 <h3 class="anchored" data-anchor-id="chance-ld-at-n-771">Chance LD at n = 771</h3>
-<p>Index variants on different chromosomes are unlinked, so the share of such pairs whose r² reaches a threshold is what chance gives at n = 771. Over 37 Analyses (at most 3,000 index variants each, chosen by a fixed seed) there are 13,823,613 such pairs, 9,139 with an undefined r² because a variant is constant in the panel. The share is of the 13,814,474 pairs with a defined r².</p>
+<p>Index variants on different chromosomes are unlinked, so the share of such pairs whose r² reaches a threshold is what chance gives at n = 771. These are within-Analysis pairs: two of one Analysis’s own index variants, never two variants drawn from the panel at large. Over 37 Analyses (at most 3,000 index variants each, chosen by a fixed seed) there are 13,823,613 such pairs, 9,139 with an undefined r² because a variant is constant in the panel. The share is of the 13,814,474 pairs with a defined r².</p>
 <table class="caption-top table">
 <thead>
 <tr class="header">
@@ -3968,6 +3977,7 @@ vertical-align: -.125em;
 </tr>
 </tbody>
 </table>
+<p>The panel’s own chance LD comes from the panel’s variants at large, not from one Analysis’s index variants among themselves. At r² 0.01 it is 1.16% for EUR, over 200,000 drawn pairs (<code>ancestries_chance_ld.json</code>, #405), against the 1.24% above. The two measure different pools, so they need not match.</p>
 <p>A spurious split’s pair has r² at or above the clumping threshold by construction. What matters is how many of the long ones sit near the threshold, as chance pairs do. The verdict’s configuration at r² 0.01, pooled over the Analyses, by the pair’s distance:</p>
 <table class="caption-top table">
 <colgroup>
@@ -4168,7 +4178,8 @@ vertical-align: -.125em;
 </tr>
 </tbody>
 </table>
-<p>The comparison with a median map belongs to #404.</p>
+<p>The comparison with a median map is #404’s, and it has been made:</p>
+<p><code>eur_maps</code> (#404) rebuilds the map as the median of the five populations’ rates and repeats this sweep on it. Across the two intervals above the median gains 0.084 cM on chr7 and 0.058 cM on chr1, where the mean gains 18.60 and 6.76: both spikes go; and it changes no verdict — C1 at 24 of 24, C2 at 20 of 24, C3 at no W on the median against C1 at 24 of 24, C2 at 20 of 24, C3 at no W on the mean (<code>eur_maps.json</code>).</p>
 </section>
 </section>
 <section id="the-disagreeing-pairs" class="level2">

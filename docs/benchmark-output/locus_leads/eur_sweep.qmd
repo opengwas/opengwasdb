@@ -21,6 +21,12 @@ from IPython.display import Markdown, display
 HERE = Path(".")
 sweep = json.loads((HERE / "eur_sweep.json").read_text())
 selection = json.loads((HERE / "eur_sweep_selection.json").read_text())
+# #405's panel-pool chance LD and #404's three maps, read where this report compares them.
+PANEL_CHANCE = json.loads((HERE / "ancestries_chance_ld.json").read_text())["ancestries"]["EUR"]
+MAPS = json.loads((HERE / "eur_maps.json").read_text())
+MEDIAN = MAPS["maps"]["pyrho-median"]
+MEDIAN_SPIKES = MAPS["map_measurements"]["pyrho-median"]["spike_intervals"]
+MEAN_SPIKES = MAPS["map_measurements"]["pyrho-mean"]["spike_intervals"]
 evaluation = sweep["evaluation"]
 criteria = evaluation["criteria"]
 configs = {(c["d_cm"], c["w_bp"]): c for c in evaluation["configs"]}
@@ -37,8 +43,14 @@ def show(text):
 
 
 def md_table(headers, rows):
-    head = "| " + " | ".join(headers) + " |\n|" + "|".join(["---"] * len(headers)) + "|\n"
-    return head + "\n".join("| " + " | ".join(str(c) for c in row) + " |" for row in rows)
+    # A cell may carry a pipe of its own (|log2|), which would end the cell early
+    # and shift every column after it (#404 review).
+    def cell(value):
+        return str(value).replace("|", "\\|")
+
+    head = "| " + " | ".join(cell(h) for h in headers) + " |\n|" + "|".join(["---"] * len(headers)) + "|\n"
+    # A trailing blank line, so the next table is not read as this one's rows.
+    return head + "\n".join("| " + " | ".join(cell(c) for c in row) + " |" for row in rows) + "\n"
 
 
 def pct(value):
@@ -421,14 +433,22 @@ show(f"D = {KEY[0]:g} cM, W = {w_label(KEY[1])}, and the {w_label(KEY[1])} windo
 null = sweep["chance_ld"]
 show(f"""
 Index variants on different chromosomes are unlinked, so the share of such pairs whose r² reaches a
-threshold is what chance gives at n = 771. Over {null['analyses']} Analyses (at most 3,000 index
-variants each, chosen by a fixed seed) there are {null['pairs']:,} such pairs, {null['r2_undefined']:,}
-with an undefined r² because a variant is constant in the panel. The share is of the
-{null['pairs_evaluable']:,} pairs with a defined r².
+threshold is what chance gives at n = 771. These are within-Analysis pairs: two of one Analysis's own
+index variants, never two variants drawn from the panel at large. Over {null['analyses']} Analyses (at
+most 3,000 index variants each, chosen by a fixed seed) there are {null['pairs']:,} such pairs,
+{null['r2_undefined']:,} with an undefined r² because a variant is constant in the panel. The share
+is of the {null['pairs_evaluable']:,} pairs with a defined r².
 
 """ + md_table(["r² at least", "pairs", "share of defined pairs"], [
     [t, f"{null[f'pairs_r2_ge_{t}']:,}", f"{100 * null[f'share_r2_ge_{t}']:.2f}%"]
     for t in ["0.001", "0.01", "0.05", "0.1"]]))
+show(f"""
+The panel's own chance LD comes from the panel's variants at large, not from one Analysis's index
+variants among themselves. At r² 0.01 it is
+{100 * PANEL_CHANCE['share_r2_ge_0.01']:.2f}% for EUR, over {PANEL_CHANCE['pairs_evaluable']:,}
+drawn pairs (`ancestries_chance_ld.json`, #405), against the {100 * null['share_r2_ge_0.01']:.2f}%
+above. The two measure different pools, so they need not match.
+""")
 ```
 
 A spurious split's pair has r² at or above the clumping threshold by construction. What
@@ -477,7 +497,26 @@ show(md_table(["D", "W", "kind", "pairs", "spanning either",
                *[f"spanning {k}" for k in rates(cm)["spurious_split_pairs"]["straddling"]]], rows))
 ```
 
-The comparison with a median map belongs to #404.
+The comparison with a median map is #404's, and it has been made:
+
+```{python}
+#| echo: false
+#| output: asis
+def verdict(counts):
+    return (f"C1 at {sum(c['c1'] for c in counts['configs'])} of {len(counts['configs'])}, "
+            f"C2 at {sum(c['c2'] for c in counts['configs'])} of {len(counts['configs'])}, "
+            f"C3 at {'some W' if any(c['holds'] for c in counts['c3']) else 'no W'}")
+
+show(f"""
+`eur_maps` (#404) rebuilds the map as the median of the five populations' rates and repeats this
+sweep on it. Across the two intervals above the median gains
+{MEDIAN_SPIKES[0]['cm_gain']:.3f} cM on chr{MEDIAN_SPIKES[0]['chromosome']} and
+{MEDIAN_SPIKES[1]['cm_gain']:.3f} cM on chr{MEDIAN_SPIKES[1]['chromosome']}, where the mean gains
+{MEAN_SPIKES[0]['cm_gain']:.2f} and {MEAN_SPIKES[1]['cm_gain']:.2f}: both spikes go; and it changes
+no verdict — {verdict(MEDIAN['counts'])} on the median against
+{verdict(MAPS['maps']['pyrho-mean']['counts'])} on the mean (`eur_maps.json`).
+""")
+```
 
 ## The disagreeing pairs
 
