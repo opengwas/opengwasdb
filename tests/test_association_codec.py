@@ -574,3 +574,10 @@ def test_writing_cells_moves_each_cells_table_entries_and_keeps_the_rest(tmp_pat
     np.testing.assert_array_equal(se[rows, cols], expected.se)
     np.testing.assert_array_equal(eaf[rows, cols], expected.eaf)
     assert z[5, 1] == np.float32(300.0) and se[5, 1] == np.float32(4000.0)
+
+
+def test_the_wildcard_import_still_provides_require_parallel() -> None:
+    """`require_parallel` was a published name of this module (issue #392)."""
+    namespace: dict[str, Any] = {}
+    exec("from opengwasdb.encoding.association_codec import *", namespace)  # noqa: S102
+    assert "require_parallel" in namespace

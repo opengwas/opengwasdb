@@ -54,6 +54,7 @@ __all__ = [
     "Placement",
     "Storable",
     "log_se_out_of_range",
+    "require_parallel",
     "storable",
 ]
 
