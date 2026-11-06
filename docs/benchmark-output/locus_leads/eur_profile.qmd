@@ -48,7 +48,8 @@ def cell(value):
 def md_table(headers, rows):
     head = ("| " + " | ".join(cell(h) for h in headers) + " |\n|"
             + "|".join(["---"] * len(headers)) + "|\n")
-    return head + "\n".join("| " + " | ".join(cell(c) for c in row) + " |" for row in rows)
+    # A trailing blank line, so the next table is not read as this one's rows.
+    return head + "\n".join("| " + " | ".join(cell(c) for c in row) + " |" for row in rows) + "\n"
 
 
 def tier(p):

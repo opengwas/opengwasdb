@@ -2215,7 +2215,7 @@ vertical-align: -.125em;
 
 <section id="what-was-measured" class="level2">
 <h2 class="anchored" data-anchor-id="what-was-measured">What was measured</h2>
-<div id="f2ef5c27" class="cell" data-execution_count="2">
+<div id="5c32c4bc" class="cell" data-execution_count="2">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="2">
 <p>Three measurements, on one node on one date, from <code>cost.json</code>:</p>
 <ol type="1">
@@ -2274,7 +2274,7 @@ vertical-align: -.125em;
 </section>
 <section id="the-per-variant-cm-array" class="level2">
 <h2 class="anchored" data-anchor-id="the-per-variant-cm-array">The per-variant cM array</h2>
-<div id="1e16ddd9" class="cell" data-execution_count="3">
+<div id="f5a0bd4d" class="cell" data-execution_count="3">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="3">
 <p>Reading chromosome and position from the Store Variant Table, then interpolating cM at every variant. The array is <code>float32</code>, one value per Store Variant Index: what an augment step would write, and what the pruning stages below look up.</p>
 <table class="caption-top table table-sm table-striped small">
@@ -2339,7 +2339,7 @@ vertical-align: -.125em;
 </section>
 <section id="pruning-a-tier-stage-by-stage" class="level2">
 <h2 class="anchored" data-anchor-id="pruning-a-tier-stage-by-stage">Pruning a tier, stage by stage</h2>
-<div id="a21e8ff7" class="cell" data-execution_count="4">
+<div id="ed6b0b67" class="cell" data-execution_count="4">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="4">
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
@@ -2577,7 +2577,7 @@ vertical-align: -.125em;
 </section>
 <section id="cost-against-row-count" class="level2">
 <h2 class="anchored" data-anchor-id="cost-against-row-count">Cost against row count</h2>
-<div id="e32ad9c0" class="cell" data-execution_count="5">
+<div id="bc8de0ce" class="cell" data-execution_count="5">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="5">
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
@@ -2681,7 +2681,7 @@ vertical-align: -.125em;
 </section>
 <section id="is-pruning-fast-enough-to-run-per-query" class="level2">
 <h2 class="anchored" data-anchor-id="is-pruning-fast-enough-to-run-per-query">Is pruning fast enough to run per query?</h2>
-<div id="3cfc3abf" class="cell" data-execution_count="6">
+<div id="ed9335e0" class="cell" data-execution_count="6">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="6">
 <p>The budget was fixed before measuring, and is recorded in the artifact. What is measured is <strong>the default Top-Hit Query’s own wall time for the same slice, imputed rows included, and the same query resolved</strong>, and pruning runs per query when its stages cost no more than the query they follow (fast_ratio &lt;= 1), so the reader waits at most twice as long.</p>
 <table class="caption-top table table-sm table-striped small">
@@ -2792,7 +2792,7 @@ vertical-align: -.125em;
 <p>Neither pruning total charges the separate sort stage: both rules sort inside their own time, so a total that added it would charge a sort twice. The two baselines are the tier’s own query and the same query resolved — the workload a reader waits for when it needs positions and ALIDs, which is what pruning needs.</p>
 </div>
 </div>
-<div id="de7fde13" class="cell" data-execution_count="7">
+<div id="509a0bbf" class="cell" data-execution_count="7">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="7">
 <p>The largest 5e-8 slice — <code>GCST004461</code>, 9,429,671 rows — is the one the question turns on. The rule as #402 wrote it, with positions from the Variant Table, costs 29.7 s there, 11.2× the 2.6 s the Top-Hit Query itself takes: it cannot run per query as written. The block-at-a-time rule, with the per-variant position and cM arrays, costs 4.1 s: 1.6× the bare tier read, and 0.10× the resolved query (42.8 s).</p>
 <p>Judged against the budget recorded above, query-time pruning of that slice is <strong>not fast enough to run per query against the bare tier read alone</strong>. A per-query option is defensible only with both per-variant arrays in the Store, and only against the resolved query; without them it costs an order of magnitude more than the query itself.</p>
@@ -2802,7 +2802,7 @@ vertical-align: -.125em;
 </section>
 <section id="peak-memory" class="level2">
 <h2 class="anchored" data-anchor-id="peak-memory">Peak memory</h2>
-<div id="14b1f503" class="cell" data-execution_count="8">
+<div id="bfcfeb37" class="cell" data-execution_count="8">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="8">
 <p>Peak RSS for every stage, on every slice, sampled from <code>/proc/&lt;pid&gt;/statm</code>: this process’s for the pruning stages, plink2’s own child for the clumping rows below. <code>ru_maxrss</code> is not used — under <code>pixi run</code> it starts near 2 GiB and never comes down — and neither is <code>/usr/bin/time</code>. A peak no poll observed is reported as missing, with the number of polls that did observe one; a missing peak is not 0 MB.</p>
 <p>Each cell is <strong>peak (from the RSS already resident when the stage began)</strong>. The slices share one process, so a peak is an envelope: it carries what earlier stages and slices retained and the allocator did not hand back, and only the number in the brackets says what that stage itself added.</p>
@@ -2994,7 +2994,7 @@ vertical-align: -.125em;
 </section>
 <section id="clumping-the-same-rows" class="level2">
 <h2 class="anchored" data-anchor-id="clumping-the-same-rows">Clumping the same rows</h2>
-<div id="bb8da425" class="cell" data-execution_count="9">
+<div id="bcd3c3cd" class="cell" data-execution_count="9">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="9">
 <p>plink2 on the shared set: the rows both methods can see, named in <code>build_shared_set</code>. Three bills are reported, because “clumping” can mean three things: plink2 alone; plink2 with the panel match it cannot start without; and the whole shared set, which also interpolates and checks the cM that only pruning needs.</p>
 <table class="caption-top table table-sm table-striped small">
@@ -3114,7 +3114,7 @@ vertical-align: -.125em;
 <p>The matching and cM columns are timed separately from the shared set they belong to, so they sum to about it rather than being its parts by construction. Each chromosome is one <code>plink2 --clump</code> run, which is what <code>clump_rows</code> does internally, so the plink2 column is the sum of the per-chromosome medians. “Order followed” is <code>clump.check_clumps_follow_rule_order</code>: every clump’s index variant must come first in the rule’s order, or plink2 ranked differently from the rule and the clumps are not the rule’s.</p>
 </div>
 </div>
-<div id="e7146a50" class="cell" data-execution_count="10">
+<div id="017737fe" class="cell" data-execution_count="10">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="10">
 <p><code>largest_5e-04</code>, the widest shared set measured, chromosome by chromosome:</p>
 <table class="caption-top table table-sm table-striped small">
@@ -3289,7 +3289,7 @@ vertical-align: -.125em;
 </section>
 <section id="pruning-against-clumping" class="level2">
 <h2 class="anchored" data-anchor-id="pruning-against-clumping">Pruning against clumping</h2>
-<div id="b9745ada" class="cell" data-execution_count="11">
+<div id="14457737" class="cell" data-execution_count="11">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="11">
 <p>The ratio is pruning over clumping on the identical rows — the shared set — with no panel and no genotypes on the pruning side of it: the cM lookup and the rule against each of the three clumping bills. The sort is charged to neither, and each rule’s own time includes its own sort.</p>
 <p><strong>End to end</strong> — pruning against the whole shared set:</p>
@@ -3474,7 +3474,7 @@ vertical-align: -.125em;
 </section>
 <section id="what-these-numbers-do-and-do-not-say" class="level2">
 <h2 class="anchored" data-anchor-id="what-these-numbers-do-and-do-not-say">What these numbers do and do not say</h2>
-<div id="cc1a0ac1" class="cell" data-execution_count="12">
+<div id="b30b2955" class="cell" data-execution_count="12">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="12">
 <ul>
 <li><strong>Both rules were run, and agreed.</strong> Every slice asserts that <code>cost.fast_locus_leads</code> returns exactly <code>rule.locus_leads</code>’s leads before any figure is written; a disagreement fails the run.</li>
