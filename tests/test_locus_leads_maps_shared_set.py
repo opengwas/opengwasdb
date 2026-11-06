@@ -113,3 +113,39 @@ def test_the_same_shared_set_on_another_map_is_accepted() -> None:
 
     assert both["mean"].analyses[KEY]["sha256"] == both["median"].analyses[KEY]["sha256"]
     assert both["mean"].digest() == both["median"].digest()
+
+
+def _sweep(name, directory) -> tuple:
+    """A sweep's JSON, cut down to the parts the comparison reads."""
+    row = {"store": "OGS-00001", "analysis": {"analysis_id": "a"}}
+    config = {"d_cm": "bp_only", "w_bp": 1_000_000, "clearly_better_than_bp_only": None,
+              "by_r2": {"0.01": {key: 0.0 for key in maps.PER_LEAD_KEYS}}}
+    path = directory / f"{name}.json"
+    path.write_text("{}")
+    return path, {
+        "analyses": [row], "grid": {"d_cm": [], "w_bp": []},
+        "genetic_map": {"sha256": "0"},
+        "counts": {"analyses": 1, "criteria": {"C1": "rank"},
+                   "configs": [{"d_cm": "bp_only", "w_bp": 1_000_000}],
+                   "c3": [], "named": None},
+        "evaluation": {"best": {}, "configs": [config]},
+        "left_out_below_shared_set_floor": {"floor": 0.7, "analyses": []},
+    }
+
+
+def test_the_comparison_speaks_about_the_swept_Analyses_and_records_what_was_checked(
+        tmp_path) -> None:
+    tier = _fields(["1", "1", "2"], [100, 200, 100], [7, 8, 9])
+    matched = maps.match_tiers({KEY: tier, "OGS-00002/b": tier}, _two_chromosomes())
+    both = {name: maps.shared_set_of(matched, _map("1", "2"), name=name)
+            for name in ("mean", "median")}
+    sweeps = {"mean": _sweep("mean", tmp_path), "median": _sweep("median", tmp_path)}
+
+    record = maps.comparison_record({"chosen": [{"store": "OGS-00001",
+                                                "analysis_id": "a"}]},
+                                    sweeps, both, reference="mean")
+
+    assert set(record["maps"]["mean"]["shared_set"]["analyses"]) == {KEY}
+    assert record["maps"]["mean"]["shared_set"]["shared_set_rows"] == 3
+    assert record["maps"]["mean"]["shared_set_checked"]["analyses"] == 2
+    assert record["shared_sets_equal"] is True

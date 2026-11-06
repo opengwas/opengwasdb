@@ -477,23 +477,8 @@ def comparison_record(selection: Mapping[str, Any], sweeps: Mapping[str, tuple[P
     """
     check_same_shared_set(shared_sets[reference], {name: found for name, found
                                                   in shared_sets.items() if name != reference})
-    maps_record = {}
-    for name, (path, sweep) in sweeps.items():
-        maps_record[name] = {
-            "sweep": str(path), "sweep_sha256": file_digest(path, "sha256"),
-            "analyses": sweep["counts"]["analyses"],
-            "grid": sweep["grid"], "genetic_map": sweep["genetic_map"],
-            "spikes": sweep.get("spikes", []),
-            "criteria": sweep["counts"]["criteria"],
-            "counts": sweep["counts"],
-            "best_by_per_lead": sweep["evaluation"]["best"],
-            "per_lead": per_lead_rows(sweep["evaluation"]),
-            "below_shared_set_floor": {
-                "floor": sweep["left_out_below_shared_set_floor"]["floor"],
-                "analyses": [f"{b['store']}/{b['analysis']['analysis_id']}" for b in
-                             sweep["left_out_below_shared_set_floor"]["analyses"]]},
-            "shared_set": shared_sets[name].record(),
-        }
+    maps_record = {name: _map_record(name, path, sweep, shared_sets[name])
+                   for name, (path, sweep) in sweeps.items()}
     return {
         "selection": {"sha256": selection_digest(selection),
                       "chosen": len(selection["chosen"]),
@@ -503,4 +488,32 @@ def comparison_record(selection: Mapping[str, Any], sweeps: Mapping[str, tuple[P
         "shared_sets_equal": True,
         "map_measurements": dict(measurements or {}),
         "maps": maps_record,
+    }
+
+
+def _map_record(name: str, path: Path, sweep: dict[str, Any],
+                whole: MapSharedSet) -> dict[str, Any]:
+    """One map's counts and diagnostics, and the rows the maps are checked on."""
+    if name != whole.name:
+        raise SharedSetMismatch(f"{name}: the shared sets are {whole.name}'s")
+    swept = {f"{a['store']}/{a['analysis']['analysis_id']}" for a in sweep["analyses"]}
+    below = sweep["left_out_below_shared_set_floor"]
+    return {
+        "sweep": str(path), "sweep_sha256": file_digest(path, "sha256"),
+        "analyses": sweep["counts"]["analyses"],
+        "grid": sweep["grid"], "genetic_map": sweep["genetic_map"],
+        "spikes": sweep.get("spikes", []),
+        "criteria": sweep["counts"]["criteria"],
+        "counts": sweep["counts"],
+        "best_by_per_lead": sweep["evaluation"]["best"],
+        "per_lead": per_lead_rows(sweep["evaluation"]),
+        "below_shared_set_floor": {
+            "floor": below["floor"],
+            "analyses": [f"{b['store']}/{b['analysis']['analysis_id']}"
+                         for b in below["analyses"]]},
+        # The swept Analyses' rows, and the digest the equality check ran on,
+        # which covers every drawn Analysis, the ones below the floor included.
+        "shared_set": MapSharedSet(name, {key: rows for key, rows in whole.analyses.items()
+                                          if key in swept}).record(),
+        "shared_set_checked": {"analyses": len(whole.analyses), "sha256": whole.digest()},
     }
