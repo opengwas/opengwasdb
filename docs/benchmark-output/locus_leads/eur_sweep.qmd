@@ -443,11 +443,11 @@ is of the {null['pairs_evaluable']:,} pairs with a defined r².
     [t, f"{null[f'pairs_r2_ge_{t}']:,}", f"{100 * null[f'share_r2_ge_{t}']:.2f}%"]
     for t in ["0.001", "0.01", "0.05", "0.1"]]))
 show(f"""
-The panel's own chance LD measures a different pool: pairs drawn from the panel's variants at large,
-not one Analysis's index variants among themselves. At r² 0.01 it is
+The panel's own chance LD comes from the panel's variants at large, not from one Analysis's index
+variants among themselves. At r² 0.01 it is
 {100 * PANEL_CHANCE['share_r2_ge_0.01']:.2f}% for EUR, over {PANEL_CHANCE['pairs_evaluable']:,}
 drawn pairs (`ancestries_chance_ld.json`, #405), against the {100 * null['share_r2_ge_0.01']:.2f}%
-above. The two agree closely and measure different things; neither contradicts the other.
+above. The two measure different pools, so they need not match.
 """)
 ```
 
