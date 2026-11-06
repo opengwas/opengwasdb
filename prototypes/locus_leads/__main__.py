@@ -3,6 +3,8 @@
     python -m prototypes.locus_leads build-map --archive A --output M.tsv.gz [--ancestry AFR]
     python -m prototypes.locus_leads compare --store S --analysis A --genetic-map M \\
         --panel P --d-cm 0.5 --w-bp 1000000 --r2 0.01 --r2 0.001 --work-dir D --output O.json
+    python -m prototypes.locus_leads cost --genetic-map M --panel P --work-dir D \\
+        --output docs/benchmark-output/locus_leads/cost.json
 """
 
 from __future__ import annotations
@@ -12,10 +14,13 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from .ancestries import populations
+from .cost import measure
 from .eur_map import build_eur_map, build_population_map
 from .genetic_map import load_map
+from .profile_sweep import profile_sweep
 from .run import run
 from .select import SelectionRule, build_selection
 from .sweep import EUR_SPIKES, sweep
@@ -31,6 +36,12 @@ def main(argv: list[str] | None = None) -> None:
                                               populations(args.ancestry)))
         print(json.dumps(identity, indent=2))
         return
+    if args.command == "cost":
+        _write(args, measure(store_root=args.store_root, genetic_map_path=args.genetic_map,
+                             panel_dir=args.panel, work_dir=args.work_dir, repeats=args.repeats,
+                             threads=args.threads, d_cm=args.d_cm, w_bp=args.w_bp,
+                             r2=(args.r2 or [0.01])[0]))
+        return
     if args.command == "select":
         rule = SelectionRule(args.seed, args.target, args.min_z100, args.min_p0, args.max_rows,
                              args.ancestry)
@@ -41,15 +52,23 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "sweep":
         _sweep(args)
         return
+    if args.command == "profile-sweep":
+        _profile_sweep(args)
+        return
     started = time.monotonic()
     args.work_dir.mkdir(parents=True, exist_ok=True)
     result = run(args.store, args.analysis, load_map(args.genetic_map), args.panel,
                  d_cm=args.d_cm, w_bp=args.w_bp, r2_values=args.r2 or [0.01, 0.001],
                  work_dir=args.work_dir, threads=args.threads, threshold=args.threshold)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    # Timings stay out of the JSON, so a re-run reproduces it byte for byte.
-    args.output.write_text(json.dumps(result, indent=1, allow_nan=False) + "\n")
+    # The comparison's JSON carries no timings, so a re-run reproduces it byte for byte.
+    _write(args, result)
     print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
+
+
+def _write(args: argparse.Namespace, result: dict) -> None:
+    """Write `result` to `args.output`, making its directory."""
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(result, indent=1, allow_nan=False) + "\n")
 
 
 def _sweep(args: argparse.Namespace) -> None:
@@ -62,6 +81,34 @@ def _sweep(args: argparse.Namespace) -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=1, allow_nan=False) + "\n")
     print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
+
+
+def _profile_sweep(args: argparse.Namespace) -> None:
+    started = time.monotonic()
+    result = profile_sweep(json.loads(args.selection.read_text()),
+                           json.loads(args.sweep.read_text()), args.sweep, args.stores_dir,
+                           load_map(args.genetic_map), args.panel, args.work_dir,
+                           hm3_path=args.hm3, blocks_path=args.blocks, threads=args.threads,
+                           only=args.only)
+    _write(args, result)
+    print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
+
+
+def _add_profile_sweep(commands: Any) -> None:
+    command = commands.add_parser("profile-sweep", help="the prominence and LD-block rules on "
+                                  "#403's Analyses, shared set and clumps (#409)")
+    command.add_argument("--selection", type=Path, required=True, help="#403's selection JSON")
+    command.add_argument("--sweep", type=Path, required=True, help="#403's sweep JSON")
+    command.add_argument("--stores-dir", type=Path, required=True)
+    command.add_argument("--genetic-map", type=Path, required=True, help="#403's map")
+    command.add_argument("--panel", type=Path, required=True, help="directory of chr<N>.pgen")
+    command.add_argument("--hm3", type=Path, required=True, help="#403's HapMap3 ALIDs")
+    command.add_argument("--blocks", type=Path, required=True, help="ld_regions_hg38.tsv")
+    command.add_argument("--work-dir", type=Path, required=True, help="plink2's files and "
+                         "each Analysis's cached record")
+    command.add_argument("--threads", type=int, default=4)
+    command.add_argument("--only", type=int, help="the first N chosen Analyses only")
+    command.add_argument("--output", type=Path, required=True)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -95,6 +142,7 @@ def _parser() -> argparse.ArgumentParser:
                            help="the spike set to record and measure (default: the EUR map's)")
     run_sweep.add_argument("--only", type=int, help="the first N chosen Analyses only")
     run_sweep.add_argument("--output", type=Path, required=True)
+    _add_profile_sweep(commands)
     compare = commands.add_parser("compare", help="compare Locus Leads with plink2 clumping")
     compare.add_argument("--store", type=Path, required=True)
     compare.add_argument("--analysis", required=True, help="analysis_id")
@@ -108,6 +156,18 @@ def _parser() -> argparse.ArgumentParser:
     compare.add_argument("--work-dir", type=Path, required=True, help="for plink2's files")
     compare.add_argument("--threads", type=int, default=4, help="plink2 threads")
     compare.add_argument("--output", type=Path, required=True)
+    cost = commands.add_parser("cost", help="time pruning against plink2 clumping (#406)")
+    cost.add_argument("--store-root", type=Path, default=Path("/data/opengwasdb/stores"))
+    cost.add_argument("--genetic-map", type=Path, required=True, help="<name>.tsv.gz")
+    cost.add_argument("--panel", type=Path, required=True, help="directory of chr<N>.pgen")
+    cost.add_argument("--d-cm", type=float, default=0.5)
+    cost.add_argument("--w-bp", type=int, default=1_000_000)
+    cost.add_argument("--r2", type=float, action="append", default=None,
+                      help="clumping r^2 (default 0.01)")
+    cost.add_argument("--repeats", type=int, default=3, help="timings per stage")
+    cost.add_argument("--threads", type=int, default=4, help="plink2 threads")
+    cost.add_argument("--work-dir", type=Path, required=True, help="for the cM arrays and plink2")
+    cost.add_argument("--output", type=Path, required=True)
     return parser
 
 
