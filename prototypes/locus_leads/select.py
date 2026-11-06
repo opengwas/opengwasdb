@@ -4,9 +4,11 @@ The pool is every Analysis a Store assigns one ancestry, measured by its
 Observed Associations at the 5e-8 tier: the row count and the largest |z|.
 Strata cross the row count with the largest |z|, so weak and strong Analyses,
 and the ones whose p underflows to 0 (|z| >= 38.5), are all represented. The
-draw is reproducible from its seed. The |z| quotas and the target floor at what
-the pool holds, and the record keeps what each stratum holds, so a small pool
-is measured rather than refused (#405).
+draw is reproducible from its seed. For an ancestry other than EUR the |z|
+quotas and the target floor at what the pool holds, and the record keeps what
+each stratum holds, so a small pool is measured rather than refused (#405);
+EUR's draw keeps #403's refusal, because a relaxation presented as the rule is
+the silent default this project rules out.
 """
 
 from __future__ import annotations
@@ -81,6 +83,21 @@ def draw(pool: list[PoolEntry], rule: SelectionRule) -> Selection:
     _fill(chosen, eligible, rng, rule.target)
     return Selection(sorted(chosen, key=lambda e: (e.store, e.analysis_id)), excluded,
                      _stratum_counts(eligible), [e for e in ordered if e.observed_rows == 0])
+
+
+def draw_with_floors(pool: list[PoolEntry], rule: SelectionRule,
+                     ) -> tuple[SelectionRule, Selection, dict[str, Any] | None]:
+    """The draw, flooring its quotas for an ancestry other than EUR and never for EUR.
+
+    #403's EUR draw refuses a quota its pool cannot meet, and keeps doing so: a
+    draw that quietly turned (40, 5, 5) into (1, 0, 0) would present its own
+    relaxation as the rule. Another ancestry's pool is smaller than its quotas by
+    nature, so it floors at what it holds and the floors go into the record.
+    """
+    if rule.ancestry == DEFAULT_ANCESTRY:
+        return rule, draw(pool, rule), None
+    floored, floors = with_floors(pool, rule)
+    return floored, draw(pool, floored), floors
 
 
 def _of_ancestry(pool: list[PoolEntry], ancestry: str) -> list[PoolEntry]:
@@ -191,8 +208,8 @@ def build_selection(stores_dir: Path, rule: SelectionRule) -> dict[str, Any]:
         if not found:
             left_out.append({"store": store_id,
                              "reason": f"no Analysis assigned {rule.ancestry}"})
-    floored, floors = with_floors(pool, rule)
-    return selection_record(floored, left_out, pool, draw(pool, floored), floors=floors)
+    drawn_by, result, floors = draw_with_floors(pool, rule)
+    return selection_record(drawn_by, left_out, pool, result, floors=floors)
 
 
 def selection_record(rule: SelectionRule, left_out: list[dict[str, str]], pool: list[PoolEntry],

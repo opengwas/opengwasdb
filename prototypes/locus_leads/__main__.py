@@ -5,6 +5,8 @@
         --panel P --d-cm 0.5 --w-bp 1000000 --r2 0.01 --r2 0.001 --work-dir D --output O.json
     python -m prototypes.locus_leads cost --genetic-map M --panel P --work-dir D \\
         --output docs/benchmark-output/locus_leads/cost.json
+    python -m prototypes.locus_leads chance-ld --ancestry AFR --sweep S.json \\
+        --genetic-map M --panel P --work-dir D --output ancestries_chance_ld.json
 """
 
 from __future__ import annotations
@@ -19,7 +21,8 @@ from typing import Any
 from .ancestries import populations
 from .cost import measure
 from .eur_map import build_eur_map, build_population_map
-from .genetic_map import load_map
+from .genetic_map import file_digest, load_map
+from .panel_chance import SEED as CHANCE_SEED, merge_chance, panel_chance
 from .profile_sweep import profile_sweep
 from .run import run
 from .select import SelectionRule, build_selection
@@ -36,6 +39,9 @@ def main(argv: list[str] | None = None) -> None:
                              panel_dir=args.panel, work_dir=args.work_dir, repeats=args.repeats,
                              threads=args.threads, d_cm=args.d_cm, w_bp=args.w_bp,
                              r2=(args.r2 or [0.01])[0]))
+        return
+    if args.command == "chance-ld":
+        _chance_ld(args)
         return
     if args.command == "select":
         rule = SelectionRule(args.seed, args.target, args.min_z100, args.min_p0, args.max_rows,
@@ -72,6 +78,21 @@ def _build_map(args: argparse.Namespace) -> None:
                 else build_population_map(args.archive, args.output,
                                           populations(args.ancestry)))
     print(json.dumps(identity, indent=2))
+
+
+def _chance_ld(args: argparse.Namespace) -> None:
+    """Add one ancestry's panel-level chance LD to the file, or start it (#405)."""
+    started = time.monotonic()
+    entry = panel_chance(json.loads(args.sweep.read_text()), args.stores_dir,
+                         load_map(args.genetic_map), args.panel, args.work_dir,
+                         threads=args.threads, seed=args.seed)
+    entry |= {"sweep": {"path": str(args.sweep),
+                        "sha256": file_digest(args.sweep, "sha256")}}
+    existing = json.loads(args.output.read_text()) if args.output.exists() else None
+    record = merge_chance(existing, args.ancestry, entry, args.seed)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(record, indent=1, sort_keys=True, allow_nan=False) + "\n")
+    print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
 
 
 def _sweep(args: argparse.Namespace) -> None:
@@ -146,6 +167,20 @@ def _parser() -> argparse.ArgumentParser:
     run_sweep.add_argument("--only", type=int, help="the first N chosen Analyses only")
     run_sweep.add_argument("--output", type=Path, required=True)
     _add_profile_sweep(commands)
+    chance = commands.add_parser("chance-ld", help="a panel's chance LD at its own sample size "
+                                                  "(#405); one ancestry per run, merged into "
+                                                  "--output")
+    chance.add_argument("--ancestry", required=True, help="the name the entry is filed under")
+    chance.add_argument("--sweep", type=Path, required=True,
+                        help="the ancestry's sweep JSON, for its swept Analyses")
+    chance.add_argument("--stores-dir", type=Path, required=True)
+    chance.add_argument("--genetic-map", type=Path, required=True,
+                        help="the map the sweep used")
+    chance.add_argument("--panel", type=Path, required=True, help="directory of chr<N>.pgen")
+    chance.add_argument("--work-dir", type=Path, required=True, help="for plink2's exports")
+    chance.add_argument("--threads", type=int, default=4, help="plink2 threads")
+    chance.add_argument("--seed", type=int, default=CHANCE_SEED)
+    chance.add_argument("--output", type=Path, required=True)
     compare = commands.add_parser("compare", help="compare Locus Leads with plink2 clumping")
     compare.add_argument("--store", type=Path, required=True)
     compare.add_argument("--analysis", required=True, help="analysis_id")

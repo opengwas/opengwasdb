@@ -49,6 +49,7 @@ comes after one of its members in that order fails the run.
 | `select.py` | the seeded, stratified draw of Analyses for one ancestry, and its record |
 | `sweep.py` | every (D, W) and the bp-only baseline over the drawn Analyses; pooled rates and the working criteria |
 | `pairs.py` | each disagreeing pair's r², distance band and spike, chance LD between chromosomes, and the pair file |
+| `panel_chance.py` | chance LD at a panel's own sample size, from the swept Analyses' shared sets |
 | `counts.py` | the count criteria C1-C3: rank, density against HapMap3, cM against bp-only |
 | `ld.py` | r² between panel variants, from dosages plink2 exports |
 | `profile.py` | the prominence rule: locus boundaries from valleys in the 5e-4 tier's \|z\| envelope (#409) |
@@ -74,6 +75,18 @@ Another ancestry is the same two commands with `--ancestry AFR`, `EAS` or `AMR` 
 `select`, that ancestry's map and panel on `sweep`, and `--spikes none` because the
 spike sets #402 found are the EUR map's. The |z| quotas and the target floor at
 what the pool holds; the record keeps how many Analyses each stratum holds.
+
+A panel's own chance LD is a property of its sample size, not of any Analysis's hit count,
+so it is measured once per ancestry over the shared sets the sweeps used, and the four
+entries share one file:
+
+```bash
+pixi run -e dev python -m prototypes.locus_leads chance-ld --ancestry AFR \
+    --sweep docs/benchmark-output/locus_leads/ancestries_afr_sweep.json \
+    --stores-dir /data/opengwasdb/stores --genetic-map <map>.tsv.gz --panel <panel directory> \
+    --work-dir <scratch directory> \
+    --output docs/benchmark-output/locus_leads/ancestries_chance_ld.json
+```
 
 The sweep also writes `eur_sweep_pairs.tsv.gz` beside its JSON: every disagreeing pair at
 r² 0.01 for four configurations, with its sha256 in the JSON. Each Analysis's record is cached
