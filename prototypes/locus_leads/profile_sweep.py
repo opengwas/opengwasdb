@@ -85,8 +85,8 @@ class _KeptVariants(PanelVariants):
 class ReadOncePanel(Panel):
     """The panel, each chromosome's variants read once for the whole sweep.
 
-    Each Analysis matches two shared sets to the panel (its own and #403's, rebuilt); reading
-    the pvars once instead of twice per Analysis takes about 25 s off each.
+    Each Analysis matches two shared sets to the panel (its own and #403's, rebuilt), and the
+    pvars and their allele-set tables dominate that time, so they are built once.
     """
 
     def __init__(self, directory: Path) -> None:
@@ -275,9 +275,17 @@ def analyse_profile(store: Path, store_id: str, committed: dict[str, Any],
         "density": density,
         "index_variants": _n_leads(index_of), "baselines_equal_403": baselines,
         "rules": [record for record, _ in scored],
-        "no_row_valleys": {f"{rule.bin_bp}": valleys for rule, (_, valleys)
-                           in zip(rule_grid(), scored, strict=True) if valleys},
+        "no_row_valleys": _no_row_valleys(rule_grid(), [valleys for _, valleys in scored]),
     }
+
+
+def _no_row_valleys(rules: list[Rule], valleys: list[list[list[Any]]]) -> dict[str, list[Any]]:
+    """The distinct (chromosome, bin) no-row valleys of every prominence rule, per bin width."""
+    found: dict[str, set[tuple[str, int]]] = {}
+    for rule, each in zip(rules, valleys, strict=True):
+        if rule.bin_bp is not None:
+            found.setdefault(f"{rule.bin_bp}", set()).update((c, b) for c, b in each)
+    return {b: [list(v) for v in sorted(bins)] for b, bins in found.items()}
 
 
 def profile_fingerprint(store: Path, analysis_id: str, genetic_map: LoadedMap,
