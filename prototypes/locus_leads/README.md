@@ -44,6 +44,28 @@ comes after one of its members in that order fails the run.
 | `clump.py` | -log10 p, tie separation, plink2 clumping |
 | `compare.py` | spurious splits and lost signals |
 | `run.py` | one run, end to end; clumping is independent of D and W, so a sweep reuses it |
+| `select.py` | the seeded, stratified draw of Analyses, and its record |
+| `sweep.py` | every (D, W) and the bp-only baseline over the drawn Analyses; pooled rates and the working criteria |
+| `pairs.py` | each disagreeing pair's r², distance band and spike, chance LD between chromosomes, and the pair file |
+| `counts.py` | the count criteria C1-C3: rank, density against HapMap3, cM against bp-only |
+| `ld.py` | r² between panel variants, from dosages plink2 exports |
+
+A sweep takes the selection, the map and the panel directory as inputs:
+
+```bash
+pixi run -e dev python -m prototypes.locus_leads select --stores /data/opengwasdb/stores \
+    --seed 403 --output docs/benchmark-output/locus_leads/eur_sweep_selection.json
+pixi run -e dev python -m prototypes.locus_leads sweep \
+    --selection docs/benchmark-output/locus_leads/eur_sweep_selection.json \
+    --stores-dir /data/opengwasdb/stores --genetic-map <map>.tsv.gz --panel <panel directory> \
+    --hm3 /data/opengwasdb/reference/hapmap3-hg38/hm3.grch38.alid.txt \
+    --work-dir <scratch directory> --output docs/benchmark-output/locus_leads/eur_sweep.json
+```
+
+The sweep also writes `eur_sweep_pairs.tsv.gz` beside its JSON: every disagreeing pair at
+r² 0.01 for four configurations, with its sha256 in the JSON. Each Analysis's record is cached
+under the work directory with a fingerprint of its inputs; a cache made with other inputs is
+refused, not reused.
 
 The map itself, its source and checksums are described in
 `/data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/README.md`.
