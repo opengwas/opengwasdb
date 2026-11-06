@@ -395,6 +395,20 @@ def _analyse_each(selection: dict[str, Any], committed: dict[str, Any], given: S
     return analyses, valleys, not_swept
 
 
+def conclude(analyses: list[dict[str, Any]], committed: dict[str, Any],
+             valleys: dict[str, Any],
+             judge: Callable[..., dict[str, Any]] = judge) -> dict[str, Any]:
+    """The rules' judgement, or why it is withheld: when more than half of a sample's no-row
+    valleys are gaps in coverage, the profile cannot tell a valley from a gap, and the rules
+    are not judged."""
+    tripped = [name for name, sample in valleys.items() if sample["stop_rule_trips"]]
+    if tripped:
+        return {"judgement": None, "judgement_withheld": (
+            f"the coverage stop rule tripped for the {', '.join(tripped)} valley sample(s): more "
+            "than half of their no-row valleys are gaps in coverage, not low |z|")}
+    return {"judgement": judge(analyses, committed, rule_grid())}
+
+
 def profile_sweep(selection: dict[str, Any], committed: dict[str, Any], committed_path: Path,
                   stores_dir: Path, genetic_map: LoadedMap, panel_dir: Path, work_dir: Path, *,
                   hm3_path: Path, blocks_path: Path, threads: int, only: int | None = None,
@@ -413,13 +427,14 @@ def profile_sweep(selection: dict[str, Any], committed: dict[str, Any], committe
     analyses, valleys, not_swept = _analyse_each(selection, committed, given, work_dir,
                                                  threads, only)
     cells = read_cells(stores_dir, sample_valleys(valleys))
+    summary = summarise_valley_cells(cells)
     return {
         "inputs": _inputs(committed, committed_path, genetic_map, blocks_path, blocks),
         "definitions": _definitions(),
         "grid": _grid(),
         "not_swept_by_403": not_swept,
-        "valley_cells": {"sample": cells, "summary": summarise_valley_cells(cells),
+        "valley_cells": {"sample": cells, "summary": summary,
                          "no_row_valleys": len(set(valleys))},
-        "judgement": judge(analyses, committed, rule_grid()),
+        **conclude(analyses, committed, summary),
         "analyses": analyses,
     }
