@@ -408,21 +408,24 @@ def measure_shared_sets(selection: dict[str, Any], stores_dir: Path, panel_dir: 
 
 
 def interval_jump(genetic_map: GeneticMap, chromosome: str, position: int) -> dict[str, Any]:
-    """The map's interval across `position`, and the cM it gains there.
+    """The map's interval around `position`, and the cM it gains there.
 
-    #402's two spikes are exactly this: a single interval narrower than a window
-    that gains more cM than the rule's D can cross. Measured from the map so a
-    report never types it.
+    #402's two spikes are exactly this: one interval narrower than a window that
+    gains more cM than the rule's D can cross. On a map with a point at
+    `position` that is the jump from the point to the next; on a map with its own
+    points, HapMap II's for one, it is the interval that contains the position.
+    Measured from the map, so no report types it.
     """
     points, cm = genetic_map.points(chromosome)
     at = int(np.searchsorted(points, position))
-    if at >= points.size or int(points[at]) != position:
-        raise MapBuildError(f"chr{chromosome}:{position:,} is not a map point")
-    if at + 1 == points.size:
-        raise MapBuildError(f"chr{chromosome}:{position:,} is the map's last point")
+    start = at if at < points.size and int(points[at]) == position else at - 1
+    if start < 0 or start + 1 >= points.size:
+        raise MapBuildError(f"chr{chromosome}:{position:,} has no interval after it on the map")
     return {"chromosome": chromosome, "position": position,
-            "interval_bp": int(points[at + 1] - points[at]),
-            "cm_gain": float(cm[at + 1] - cm[at])}
+            "interval_start": int(points[start]), "interval_end": int(points[start + 1]),
+            "interval_bp": int(points[start + 1] - points[start]),
+            "cm_gain": float(cm[start + 1] - cm[start]),
+            "at_a_map_point": int(points[start]) == position}
 
 
 def map_measurements(loaded: Mapping[str, LoadedMap],
