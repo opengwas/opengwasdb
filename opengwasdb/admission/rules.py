@@ -48,7 +48,10 @@ which allele is the reference, and the place's distinct rows (agreeing copies
 collapsed) are one spelling it first and one second, the first is kept and the
 second dropped (`duplicate_reversed_indel`). A row whose
 variant no axis of the Store holds is dropped too (`off_axis`), where a build
-has nowhere else to put it.
+has nowhere else to put it. A build that lifts a source onto the Store's
+assembly drops the rows of a site its chain places nowhere (`lift_unmapped`),
+and of a Routing Key that both a lifted source and a source already on the
+Store's assembly declare (`lift_ambiguous`).
 
 A row dropped by a declared filter, or collapsed into its first, is counted
 only; a row dropped for any other reason is also logged, by its source key,
@@ -111,6 +114,12 @@ class Reason(StrEnum):
     DUPLICATE_CONFLICTING = "duplicate_conflicting"
     #: A row whose variant no axis of the Store holds, so routing places it nowhere.
     OFF_AXIS = "off_axis"
+    #: A row of a source lifted onto the Store's assembly whose site the chain
+    #: places nowhere (#386).
+    LIFT_UNMAPPED = "lift_unmapped"
+    #: A row whose Routing Key a source on the Store's assembly and a lifted source
+    #: both declare: two loci that share a string, so no row of it is placed (#386).
+    LIFT_AMBIGUOUS = "lift_ambiguous"
 
 
 #: The reasons whose rows are logged by source key, not only counted. A declared
@@ -126,6 +135,8 @@ LOGGED: frozenset[Reason] = frozenset(
         Reason.DUPLICATE_REVERSED_INDEL,
         Reason.DUPLICATE_CONFLICTING,
         Reason.OFF_AXIS,
+        Reason.LIFT_UNMAPPED,
+        Reason.LIFT_AMBIGUOUS,
     }
 )
 

@@ -1058,12 +1058,15 @@ def test_a_non_rs_rsid_cell_falls_back_to_the_variant_ids_rs_identifier(tmp_path
     assert {v.alid: v.rsid for v in VariantAxis(out).all()} == {"1:100000:A:G": "rs77"}
 
 
-def test_a_declared_build_other_than_grch38_is_refused(tmp_path):
+def test_a_declared_build_other_than_grch38_is_refused_without_a_chain_file(tmp_path):
+    """A GRCh37 source is lifted (#386), by a chain the build must be given."""
     manifest, filtered_dir = _one_analysis(tmp_path, [{
         "chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
         "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
     }], source_genome_build="GRCh37")
-    with pytest.raises(ValueError, match="declares source_genome_build hg19"):
+    with pytest.raises(
+        ValueError, match=r"analysis 'trait' declares source_genome_build hg19.*--chain-file"
+    ):
         build_ragged_from_ssf(
             manifest, filtered_dir, tmp_path / "out.opengwasdb", store_id="t",
             release_id="v1", association_coverage="cis_and_signals",
