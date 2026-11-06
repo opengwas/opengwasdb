@@ -9,7 +9,6 @@ import pytest
 from cli_output import normalize_cli_output
 from dense_sources import write_dense_manifest
 from residual_fixtures import write_gwas_vcf_with_eaf
-from test_allele_case import dense_manifest, dense_spellings
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import _format_p, app
@@ -497,30 +496,6 @@ def test_every_builder_requires_its_admission_record_path(command: str):
     params = {param.name: param for param in get_command(app).commands[command].params}
     assert params["admission_record"].opts == ["--admission-record"]
     assert params["admission_record"].required
-
-
-def test_build_dense_reports_a_withheld_name_in_its_summary(tmp_path):
-    """A name two spellings dispute is withheld (#379), and the JSON summary
-    carries `rsid_conflicts`, as `build-hybrid`'s does."""
-    dense_spellings(tmp_path, lower_rsid="rs2", upper_rsid="rs1")
-    manifest = dense_manifest(tmp_path, ["upper", "lower"])
-    store = tmp_path / "cli.opengwasdb"
-
-    run = CliRunner().invoke(
-        app,
-        [
-            "build-dense", str(store), "--manifest", str(manifest), "--store-id", "s",
-            "--release-id", "r", "--admission-record", f"{store}.admission",
-        ],
-    )
-
-    assert run.exit_code == 0, run.output
-    summary = json.loads(run.stdout.strip().splitlines()[-1])
-    # The association-TSV reader's ref is the other allele, and the key keeps it.
-    assert summary["rsid_conflicts"] == {
-        "policy": "drop", "n_keys": 1, "n_variants": 1,
-        "sample": [{"key": "1:100000:A:G", "names": ["rs1", "rs2"]}],
-    }
 
 
 def test_a_build_without_an_admission_record_is_refused_before_writing(tmp_path, source_path):

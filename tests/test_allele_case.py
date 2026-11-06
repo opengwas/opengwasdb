@@ -21,7 +21,6 @@ from extraction_fixtures import extract_from_manifest
 from liftover_fixtures import write_collision_chain, write_two_strand_chain
 
 from opengwasdb.build.observed import build_dense_observed_from_manifest
-from opengwasdb.layouts.dense import DenseObservedBuildResult
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
@@ -346,7 +345,7 @@ def _association_tsv(path: Path, effect: str, other: str, rsid: str) -> Path:
     return path
 
 
-def dense_manifest(tmp_path: Path, analyses: list[str], name: str = "dense") -> Path:
+def _dense_manifest(tmp_path: Path, analyses: list[str], name: str) -> Path:
     """A `build-dense` manifest of ``analyses``, in that order, each read from
     ``sources/<analysis>.tsv``."""
     manifest = tmp_path / f"{name}.manifest.tsv"
@@ -361,19 +360,17 @@ def dense_manifest(tmp_path: Path, analyses: list[str], name: str = "dense") -> 
     return manifest
 
 
-def _dense_build(
-    tmp_path: Path, analyses: list[str], name: str = "dense"
-) -> tuple[Path, DenseObservedBuildResult]:
+def _dense_build(tmp_path: Path, analyses: list[str], name: str = "dense") -> Path:
     """A `build-dense` Store of ``analyses``, in that manifest order."""
     store = tmp_path / f"{name}.opengwasdb"
-    result = build_dense_observed_from_manifest(
-        dense_manifest(tmp_path, analyses, name), store, store_id="s", release_id="r",
+    build_dense_observed_from_manifest(
+        _dense_manifest(tmp_path, analyses, name), store, store_id="s", release_id="r",
         admission_record=tmp_path / f"{name}.admission",
     )
-    return store, result
+    return store
 
 
-def dense_spellings(tmp_path: Path, lower_rsid: str, upper_rsid: str) -> None:
+def _dense_spellings(tmp_path: Path, lower_rsid: str, upper_rsid: str) -> None:
     """Two Analyses' TSVs, ``lower`` and ``upper``, each spelling the one site
     in its own case and naming it as given."""
     sources = tmp_path / "sources"
@@ -384,37 +381,41 @@ def dense_spellings(tmp_path: Path, lower_rsid: str, upper_rsid: str) -> None:
     assert _alleles(sources / "upper.tsv") == [("G", "A")]
 
 
+def _dense_refusal(tmp_path: Path, analyses: list[str], name: str = "dense") -> str:
+    """The message `build-dense` refuses ``analyses`` with; nothing is published."""
+    refusal = "Dense build: .* one routing key '1:100000:A:G'"
+    with pytest.raises(ValueError, match=refusal) as caught:
+        _dense_build(tmp_path, analyses, name)
+    assert not (tmp_path / f"{name}.opengwasdb").exists()
+    return str(caught.value)
+
+
 @pytest.mark.parametrize("lower_first", [False, True], ids=["upper-first", "lower-first"])
-def test_a_dense_build_withholds_a_name_two_spellings_dispute(tmp_path, lower_first):
+def test_a_dense_build_refuses_two_spellings_named_differently(tmp_path, lower_first):
     """`build-dense` compares a site's spellings as every other harvest does
-    (issue #379). It withholds the name its sources dispute, whichever is listed
-    first: no lookup by either name finds the variant, and the build reports
-    the key."""
-    dense_spellings(tmp_path, lower_rsid="rs2", upper_rsid="rs1")
+    (issue #379). Like `build-dense-vcf` it has no `--on-rsid-conflict`, so it
+    refuses, naming the routing key and both rsids, whichever Analysis is
+    listed first."""
+    _dense_spellings(tmp_path, lower_rsid="rs2", upper_rsid="rs1")
     analyses = ["upper", "lower"]
 
-    store, result = _dense_build(tmp_path, analyses[::-1] if lower_first else analyses)
+    message = _dense_refusal(tmp_path, analyses[::-1] if lower_first else analyses)
 
-    (variant,) = VariantAxis(store).all()
-    assert (variant.alid, variant.rsid) == (ALID, None)
-    with query_store(store) as query:
-        assert len(query.lookup([ALID], ["lower", "upper"])["z"]) == 2
-        assert len(query.lookup(["rs1", "rs2"], ["lower", "upper"])["z"]) == 0
-    conflicts = result.rsid_conflicts
-    assert (conflicts.policy.value, conflicts.n_keys, conflicts.n_variants) == ("drop", 1, 1)
-    (disputed,) = conflicts.sample
-    assert (disputed.key, sorted(disputed.names)) == ("1:100000:A:G", ["rs1", "rs2"])
+    assert "'rs1'" in message and "'rs2'" in message
 
 
 def test_a_dense_builds_names_do_not_follow_its_manifest_order(tmp_path):
-    """Swapping the manifest's rows changes no name (issue #379)."""
-    dense_spellings(tmp_path, lower_rsid="rs2", upper_rsid="rs1")
+    """Swapping the manifest's rows changes no name (issue #379): either order
+    refuses the one disputed key, so neither publishes its first source's name."""
+    _dense_spellings(tmp_path, lower_rsid="rs2", upper_rsid="rs1")
 
-    first, _ = _dense_build(tmp_path, ["upper", "lower"], name="first")
-    swapped, _ = _dense_build(tmp_path, ["lower", "upper"], name="swapped")
+    refusals = [
+        _dense_refusal(tmp_path, order, name)
+        for name, order in (("first", ["upper", "lower"]), ("swapped", ["lower", "upper"]))
+    ]
 
-    names = [[(v.alid, v.rsid) for v in VariantAxis(store).all()] for store in (first, swapped)]
-    assert names[0] == names[1]
+    names = [{n for n in ("rs1", "rs2") if repr(n) in message} for message in refusals]
+    assert names == [{"rs1", "rs2"}, {"rs1", "rs2"}]
 
 
 @pytest.mark.parametrize("blank_case", ["lower", "upper"], ids=["other-spelling", "same-spelling"])
@@ -428,11 +429,10 @@ def test_a_dense_build_names_a_variant_by_its_first_non_empty_rsid(tmp_path, bla
     _association_tsv(sources / "named.tsv", "G", "A", "rs1")
     assert _alleles(sources / "blank.tsv") == [blank_alleles]
 
-    store, result = _dense_build(tmp_path, ["blank", "named"])
+    store = _dense_build(tmp_path, ["blank", "named"])
 
     (variant,) = VariantAxis(store).all()
     assert (variant.alid, variant.rsid) == (ALID, "rs1")
-    assert (result.rsid_conflicts.n_keys, result.rsid_conflicts.n_variants) == (0, 0)
 
 
 def test_a_dense_build_from_an_alid_list_routes_a_lower_case_source(tmp_path):

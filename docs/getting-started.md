@@ -45,7 +45,7 @@ beside the Store and never inside it (ADR 0072).
 Expected shape:
 
 ```json
-{"association_coverage": "gwas", "n_analyses": 2, "n_variants": 3, "output_path": "/tmp/opengwasdb-tiny.opengwasdb", "rsid_conflicts": {"n_keys": 0, "n_variants": 0, "policy": "drop", "sample": []}}
+{"association_coverage": "gwas", "n_analyses": 2, "n_variants": 3, "output_path": "/tmp/opengwasdb-tiny.opengwasdb"}
 ```
 
 ## Validate and inspect the Store Release

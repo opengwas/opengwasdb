@@ -18,9 +18,9 @@
 > the first admitted row's, even a blank one, and the change renames no
 > published variant.
 > `build-dense` compares the rows it admits too, through the spellings its
-> `ReaderBatch`es carry. It has no policy either, and withholds a disputed
-> name as `drop` does, reporting it under `rsid_conflicts`. A
-> `build-ragged-besd` file set lists each variant once. The Consequence "A Dense build never meets this" stopped holding with
+> `ReaderBatch`es carry. It has no policy either, so it refuses, as
+> `build-dense-vcf` does. A `build-ragged-besd` file set lists each variant
+> once. The Consequence "A Dense build never meets this" stopped holding with
 > ADR 0075, which upper-cases a Dense routing key too.
 
 A Hybrid build's rsid harvest refuses a routing key whose sources name it with
