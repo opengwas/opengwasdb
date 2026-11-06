@@ -93,7 +93,7 @@
    "share_gap": "(missing_cells + no_variant) / sampled valleys",
    "stop_rule": "more than half of a sample's valleys are gaps: the profile cannot tell a valley from a gap in coverage"
   },
-  "shared_set": "the candidates' shared set must equal #403's: the 5e-8 tier rebuilt with #403's read_tier and build_shared_set, its accounting equal to #403's committed record, and the same row count and sha256 of Store, Analysis and sorted Store Variant Indices"
+  "shared_set": "the candidates' shared set must equal the shared set of the 5e-8 tier, read now with #403's read_tier and built with its build_shared_set: the same row count and sha256 of Store, Analysis and sorted Store Variant Indices. Both must reproduce #403's committed summaries: its accounting, its HapMap3 row counts and its distance rules' records. #403 committed no digest, so the digest published is of the current reads, and matches_403_summaries says only that the summaries are reproduced"
  },
  "grid": {
   "bin_bp": [
@@ -6145,7 +6145,7 @@
    "shared_set": {
     "rows": 25682,
     "sha256": "8d44f244bc2e52832d1edb763078c4c6d73ed9245d7eee26c20c13d70de9dca8",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 25682,
@@ -6763,7 +6763,7 @@
    "shared_set": {
     "rows": 610,
     "sha256": "0b1e0f9268022c39d5935b375245a4513b9bcfcf54e4bdfde43a02e94a8cc3cb",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 610,
@@ -7381,7 +7381,7 @@
    "shared_set": {
     "rows": 106173,
     "sha256": "ea365b1958b1e1b9002f685e6937419fbb8b115e0f4c785db3e427e5f991edee",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 106173,
@@ -7999,7 +7999,7 @@
    "shared_set": {
     "rows": 190255,
     "sha256": "02dd933d4fc97cbbba007f579e874856f4f2880d8419177d146af1a2ee8170ad",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 190255,
@@ -8617,7 +8617,7 @@
    "shared_set": {
     "rows": 104303,
     "sha256": "c0ad4193ad4d3a1aeccf64efde61dd88c1b3b6d3e1a6634a0b2c1ec045ada8a4",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 104303,
@@ -9235,7 +9235,7 @@
    "shared_set": {
     "rows": 364,
     "sha256": "41c1460337e2af373dd541d7e02c830b52421c8817f8cd809497b058173c83ec",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 364,
@@ -9853,7 +9853,7 @@
    "shared_set": {
     "rows": 28112,
     "sha256": "31de5ed9e23cbd406963590f119bf24857a6ad9b7dbbdb595b295444a1934cf4",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 28112,
@@ -10471,7 +10471,7 @@
    "shared_set": {
     "rows": 78043,
     "sha256": "d650c388e56c71b3df06fc255471d6a5b713fda682164c1a1659c35023378c71",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 78043,
@@ -11089,7 +11089,7 @@
    "shared_set": {
     "rows": 7816,
     "sha256": "7b35901478d6a8fc72986f851c77825ff703f2d8000b0bfbb1a9794b37f11c51",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 7816,
@@ -11707,7 +11707,7 @@
    "shared_set": {
     "rows": 13959,
     "sha256": "54b70bf7e1a5c93f0cd6572515ca1c7320a07e9f3720953ac8c0e5d713338b3a",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 13959,
@@ -12325,7 +12325,7 @@
    "shared_set": {
     "rows": 5872,
     "sha256": "c97a50f4e67e2e9005330304b781e227ce541a9055c1d115e408dc9dfd747b3f",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 5872,
@@ -12943,7 +12943,7 @@
    "shared_set": {
     "rows": 2753,
     "sha256": "f4639da61ed33ca12d4d29ecf910d001dd1b13c76f46fa661b571642d18f95f8",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 2753,
@@ -13561,7 +13561,7 @@
    "shared_set": {
     "rows": 447,
     "sha256": "d028133b1e342f7198bcb43cae9ee710386b3006f5f4415f2e08b3f6af508370",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 447,
@@ -14179,7 +14179,7 @@
    "shared_set": {
     "rows": 3104,
     "sha256": "519b273327b3fb92ec247b98a8778b6e414f5bea2c4b0a3d17af9bc97a98d4d8",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 3104,
@@ -14797,7 +14797,7 @@
    "shared_set": {
     "rows": 115448,
     "sha256": "d45ca9f474e2d983d46a461d9d539a3eae238ed2c89385ba60884e1029e49bf6",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 115448,
@@ -15415,7 +15415,7 @@
    "shared_set": {
     "rows": 57976,
     "sha256": "09f9822c63dda26b026e70650594cd72c2ccaefb86b6ee627fd3969eb0bfdb65",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 57976,
@@ -16033,7 +16033,7 @@
    "shared_set": {
     "rows": 107372,
     "sha256": "d703005451b4cd996d9d6a3a63c4de413de18fb3ea94054924cdaade1f630959",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 107372,
@@ -16651,7 +16651,7 @@
    "shared_set": {
     "rows": 7,
     "sha256": "3bba850f0b8879acf207ad53baf198d864158221c11f9c8a7818feeadf16ef8a",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 7,
@@ -17269,7 +17269,7 @@
    "shared_set": {
     "rows": 3432,
     "sha256": "6c61bc943464cd0b4824af0533b042fe80ba4b52f1289cabbc35104c3958a7f2",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 3432,
@@ -17887,7 +17887,7 @@
    "shared_set": {
     "rows": 86679,
     "sha256": "3391524c7130dc3cb7c908bad9319a5e7e9b3c63631a8cf221a95f528f4ab46e",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 86679,
@@ -18505,7 +18505,7 @@
    "shared_set": {
     "rows": 11015,
     "sha256": "7bb90817f1ee0dd78b8111f87bded9cbd642b5e2d75d80344651279993ad0fe9",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 11015,
@@ -19123,7 +19123,7 @@
    "shared_set": {
     "rows": 7511,
     "sha256": "ab7e276a7acf331caaa689a75d8a4e2cb2c5f1bbd24a54e6e0b48e72c7d9ec05",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 7511,
@@ -19741,7 +19741,7 @@
    "shared_set": {
     "rows": 1973,
     "sha256": "c24855e9b9c08960e4db72c8b117ec59e36783ee8ba45a298e3cb93fe593e0c1",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 1973,
@@ -20359,7 +20359,7 @@
    "shared_set": {
     "rows": 4158,
     "sha256": "c0a367eda45654e5f5f334043211d1aed89e7c045de1eaa573235e3975ddf0c8",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 4158,
@@ -20977,7 +20977,7 @@
    "shared_set": {
     "rows": 14846,
     "sha256": "6b21b030803b0096b7a5e7978c1aadb831d383090ee1ce91f97deafcb2c68dbe",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 14846,
@@ -21595,7 +21595,7 @@
    "shared_set": {
     "rows": 8423,
     "sha256": "3ec1c4b1c2ae2470c495bebfcc5d752d14cfc2e6abff144b4ccef8ab97a2488d",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 8423,
@@ -22213,7 +22213,7 @@
    "shared_set": {
     "rows": 15959,
     "sha256": "72a04b6400aff6b5a720753323727ab1b48370e32663334ac95a193f43b16efa",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 15959,
@@ -22831,7 +22831,7 @@
    "shared_set": {
     "rows": 581,
     "sha256": "2bb917c6404936b239388b316375e693bc7f0613ea8deff41d1f8d61488f50e1",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 581,
@@ -23449,7 +23449,7 @@
    "shared_set": {
     "rows": 1651,
     "sha256": "e41f580c0f3cd79d9657f602d3768058993a3047736c36c5ead3a42fa95ba194",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 1651,
@@ -24067,7 +24067,7 @@
    "shared_set": {
     "rows": 644,
     "sha256": "694c2c8be9d5257ca49c06985c8095f006953dd674d0a0a0b0d314df814d6019",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 644,
@@ -24685,7 +24685,7 @@
    "shared_set": {
     "rows": 182076,
     "sha256": "5cd47f48a33cff4bf014f58c5ea166e2525f48f8554bb33967da941c42e9d4fd",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 182076,
@@ -25303,7 +25303,7 @@
    "shared_set": {
     "rows": 185649,
     "sha256": "6158e385154a4bd4d999a8e87795dd9c1639e61d9896a8d95916d6f4ee874904",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 185649,
@@ -25921,7 +25921,7 @@
    "shared_set": {
     "rows": 96428,
     "sha256": "117804a421e294eaee6c291b391e8e6afe7b79d431c563f5151ff381bb4f239d",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 96428,
@@ -26539,7 +26539,7 @@
    "shared_set": {
     "rows": 37300,
     "sha256": "11bda71a61312d44715c3eac8e507a2d5e42dfb7abbe412221d107602210ca89",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 37300,
@@ -27157,7 +27157,7 @@
    "shared_set": {
     "rows": 3916,
     "sha256": "c14a66930b6d4ece532849fe95005090f21949cd6453567445435d2bb686bf0f",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 3916,
@@ -27775,7 +27775,7 @@
    "shared_set": {
     "rows": 3729,
     "sha256": "52174bc56ce2e53068da11e84a0c0873e6a4d7cfb067302366b9dab23cfa44a4",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 3729,
@@ -28393,7 +28393,7 @@
    "shared_set": {
     "rows": 291996,
     "sha256": "9506608e3b60435b53d0f09adebe2aed5cfe2efd7ce9443978fd2f8939bdac38",
-    "equals_403": true
+    "matches_403_summaries": true
    },
    "density": {
     "rows_full": 291996,

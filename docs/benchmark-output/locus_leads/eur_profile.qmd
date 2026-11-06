@@ -21,6 +21,8 @@ from IPython.display import Markdown, display
 HERE = Path(".")
 result = json.loads((HERE / "eur_profile.json").read_text())
 sweep = json.loads((HERE / "eur_sweep.json").read_text())
+# A sweep whose valleys trip the coverage stop rule carries no judgement to report.
+assert result["judgement"] is not None, result.get("judgement_withheld")
 judgement = result["judgement"]
 criteria = judgement["criteria"]
 rules = judgement["rules"]
@@ -152,7 +154,7 @@ blocks of `{Path(result['inputs']['blocks']['path']).name}`).
 """)
 ```
 
-## The inputs, and that they are #403's
+## The inputs, checked against #403's
 
 ```{python}
 #| echo: false
@@ -162,7 +164,7 @@ largest = max(analyses, key=lambda a: a["profile"]["rows"])
 candidates = sum(a["profile"]["candidates"] for a in analyses)
 outside = sum(a["profile"]["at_5e8_outside_shared_set"] for a in analyses)
 below = sum(a["profile"]["below_5e8"] for a in analyses)
-equal = sum(a["shared_set"]["equals_403"] for a in analyses)
+equal = sum(a["shared_set"]["matches_403_summaries"] for a in analyses)
 checked = [b for b in result["grid"]["baselines"]
            if all(b in a["baselines_equal_403"] for a in analyses)]
 not_swept = result["not_swept_by_403"]
@@ -171,8 +173,10 @@ The {len(analyses)} Analyses #403 swept, from its selection (sha256
 `{result['inputs']['selection_sha256'][:12]}`); the {len(not_swept)} it left out below its
 shared-set floor are left out here too ({', '.join(e['analysis_id'] for e in not_swept)}).
 
-- **Profile.** One Top-Hit Query per Analysis at {tier(result['inputs']['profile_tier'])}, observed
-  rows only: {profile_rows:,} rows in all, at most {largest['profile']['rows']:,}
+- **Profile.** Two Top-Hit Queries per Analysis at {tier(result['inputs']['profile_tier'])}: the
+  observed-only one, which is the profile, and an unrestricted one that counts the imputed rows,
+  so the read is checked complete. The profile holds {profile_rows:,} observed rows in all, at
+  most {largest['profile']['rows']:,}
   ({largest['analysis']['analysis_id']}). Every Analysis's tier was read and used. Of these rows,
   {candidates:,} are candidates (at {tier(result['inputs']['tier'])}, in the shared set),
   {outside:,} are at {tier(result['inputs']['tier'])} but outside the shared set (off the panel,

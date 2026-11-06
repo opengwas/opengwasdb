@@ -2211,7 +2211,7 @@ vertical-align: -.125em;
   <li><a href="#the-question" id="toc-the-question" class="nav-link active" data-scroll-target="#the-question">The question</a></li>
   <li><a href="#result" id="toc-result" class="nav-link" data-scroll-target="#result">Result</a></li>
   <li><a href="#the-rules" id="toc-the-rules" class="nav-link" data-scroll-target="#the-rules">The rules</a></li>
-  <li><a href="#the-inputs-and-that-they-are-403s" id="toc-the-inputs-and-that-they-are-403s" class="nav-link" data-scroll-target="#the-inputs-and-that-they-are-403s">The inputs, and that they are #403’s</a></li>
+  <li><a href="#the-inputs-checked-against-403s" id="toc-the-inputs-checked-against-403s" class="nav-link" data-scroll-target="#the-inputs-checked-against-403s">The inputs, checked against #403’s</a></li>
   <li><a href="#are-the-empty-valleys-low-z-or-gaps-in-coverage" id="toc-are-the-empty-valleys-low-z-or-gaps-in-coverage" class="nav-link" data-scroll-target="#are-the-empty-valleys-low-z-or-gaps-in-coverage">Are the empty valleys low |z|, or gaps in coverage?</a></li>
   <li><a href="#count-criteria" id="toc-count-criteria" class="nav-link" data-scroll-target="#count-criteria">Count criteria</a>
   <ul class="collapse">
@@ -2292,12 +2292,12 @@ vertical-align: -.125em;
 <li>Outside every block: a row outside every block belongs to the stretch between blocks it falls in (before a chromosome’s first block, between two, after its last, or the whole of a chromosome without blocks); each stretch holds one lead, and those rows and stretches are counted.</li>
 </ul>
 </section>
-<section id="the-inputs-and-that-they-are-403s" class="level2">
-<h2 class="anchored" data-anchor-id="the-inputs-and-that-they-are-403s">The inputs, and that they are #403’s</h2>
+<section id="the-inputs-checked-against-403s" class="level2">
+<h2 class="anchored" data-anchor-id="the-inputs-checked-against-403s">The inputs, checked against #403’s</h2>
 <p>The 37 Analyses #403 swept, from its selection (sha256 <code>04b0d3c03933</code>); the 3 it left out below its shared-set floor are left out here too (GCST90704633, GCST90475609, GCST90477870).</p>
 <ul>
-<li><strong>Profile.</strong> One Top-Hit Query per Analysis at 5e-4, observed rows only: 7,951,637 rows in all, at most 1,376,991 (GCST90476460). Every Analysis’s tier was read and used. Of these rows, 1,806,262 are candidates (at 5e-8, in the shared set), 158,334 are at 5e-8 but outside the shared set (off the panel, for example), and 5,987,041 are below it. All of them shape the profile.</li>
-<li><strong>Shared set.</strong> The rule: the candidates’ shared set must equal #403’s: the 5e-8 tier rebuilt with #403’s read_tier and build_shared_set, its accounting equal to #403’s committed record, and the same row count and sha256 of Store, Analysis and sorted Store Variant Indices. It held for 37 of 37 Analyses; the sweep stops on any other.</li>
+<li><strong>Profile.</strong> Two Top-Hit Queries per Analysis at 5e-4: the observed-only one, which is the profile, and an unrestricted one that counts the imputed rows, so the read is checked complete. The profile holds 7,951,637 observed rows in all, at most 1,376,991 (GCST90476460). Every Analysis’s tier was read and used. Of these rows, 1,806,262 are candidates (at 5e-8, in the shared set), 158,334 are at 5e-8 but outside the shared set (off the panel, for example), and 5,987,041 are below it. All of them shape the profile.</li>
+<li><strong>Shared set.</strong> The rule: the candidates’ shared set must equal the shared set of the 5e-8 tier, read now with #403’s read_tier and built with its build_shared_set: the same row count and sha256 of Store, Analysis and sorted Store Variant Indices. Both must reproduce #403’s committed summaries: its accounting, its HapMap3 row counts and its distance rules’ records. #403 committed no digest, so the digest published is of the current reads, and matches_403_summaries says only that the summaries are reproduced. It held for 37 of 37 Analyses; the sweep stops on any other.</li>
 <li><strong>Clumps and distance rules.</strong> plink2 at r² 0.01 on that shared set. #403’s distance rules (bp only, W 0.25 Mb; bp only, W 1 Mb; bp only, W 2.5 Mb; bp only, W 10 Mb; D 0.5 cM, W 1 Mb) were recomputed on it and matched #403’s committed per-Analysis records exactly, leads, splits, lost signals, |z| bands and HapMap3 leads alike, before any new rule was scored.</li>
 </ul>
 </section>
@@ -2685,7 +2685,7 @@ vertical-align: -.125em;
 </tr>
 </tbody>
 </table>
-<div id="5ef0f8d2" class="cell" data-execution_count="8">
+<div id="06116b57" class="cell" data-execution_count="8">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
