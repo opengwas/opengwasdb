@@ -1,9 +1,11 @@
-"""The EUR genetic map, averaged from the published pyrho population maps.
+"""A genetic map averaged from the published pyrho population maps.
 
 The pyrho GRCh38 maps (Spence & Song 2019) cover the 26 1000 Genomes
-populations. EUR is the equal-weight average of its five: CEU, GBR, FIN, TSI
-and IBS (#62's ancestry-specific revision). Their points sit at different
-positions, so each is interpolated at the union of all five's positions, by the
+populations. Each map is the equal-weight average of the populations an
+ancestry holds there: EUR of its five, CEU, GBR, FIN, TSI and IBS (#62's
+ancestry-specific revision), and every other ancestry of the list
+`ancestries.populations` records (#405). Their points sit at different
+positions, so each is interpolated at the union of all their positions, by the
 same rule a Store position is, and the cM values are averaged there.
 """
 
@@ -19,7 +21,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .genetic_map import GeneticMap, GeneticMapError, verify_archive, write_map
+from .genetic_map import ARCHIVE_MD5, GeneticMap, GeneticMapError, verify_archive, write_map
 
 EUR_POPULATIONS = ("CEU", "GBR", "FIN", "TSI", "IBS")
 AUTOSOMES = tuple(str(number) for number in range(1, 23))
@@ -34,10 +36,21 @@ _MEMBER = re.compile(
 )
 
 
-def build_eur_map(archive: Path, map_path: Path) -> dict[str, Any]:
+def build_eur_map(archive: Path, map_path: Path,
+                  expected_md5: str = ARCHIVE_MD5) -> dict[str, Any]:
     """Check the archive, average its EUR population maps, and write the result."""
-    verify_archive(archive)
-    maps = read_population_maps(archive, EUR_POPULATIONS)
+    return build_population_map(archive, map_path, EUR_POPULATIONS, expected_md5=expected_md5)
+
+
+def build_population_map(archive: Path, map_path: Path, populations: tuple[str, ...],
+                         expected_md5: str = ARCHIVE_MD5) -> dict[str, Any]:
+    """Check the archive, average the named population maps at equal weights, and write it.
+
+    The weights go into the map's identity, so a map says which populations it
+    was averaged from and how, and a missing one stops the build by name.
+    """
+    verify_archive(archive, expected_md5)
+    maps = read_population_maps(archive, populations)
     weights = {population: 1 / len(maps) for population in maps}
     return write_map(average_maps(maps), map_path, archive=archive, populations=weights,
                      averaging=AVERAGING)
@@ -48,6 +61,9 @@ def read_population_maps(archive: Path, populations: tuple[str, ...]) -> dict[st
     points: dict[str, dict[str, tuple[np.ndarray, np.ndarray]]] = {p: {} for p in populations}
     for population, chromosome, map_points in _population_files(archive, populations):
         points[population][chromosome] = map_points
+    absent = [p for p in populations if not points[p]]
+    if absent:
+        raise GeneticMapError(f"{archive}: no map for population {', '.join(absent)}")
     missing = [f"{p} chr{c}" for p in populations for c in AUTOSOMES if c not in points[p]]
     if missing:
         raise GeneticMapError(f"{archive}: no map for {', '.join(missing)}")
