@@ -46,9 +46,10 @@ def _bp_window_leads(position: list[int], abs_z: list[float]) -> np.ndarray:
 
 def _envelope_between(tier: Any, start: int, end: int) -> list[float]:
     """The envelope of each bin from `start`'s to `end`'s, worked out row by row."""
-    bins = range(start // BIN_BP, end // BIN_BP + 1)
-    return [max((z for p, z in zip(tier.position, tier.abs_z, strict=True)
-                 if p // BIN_BP == b), default=0.0) for b in bins]
+    top: dict[int, float] = {}
+    for position, abs_z in zip(tier.position.tolist(), tier.abs_z.tolist(), strict=True):
+        top[position // BIN_BP] = max(top.get(position // BIN_BP, 0.0), abs_z)
+    return [top.get(b, 0.0) for b in range(start // BIN_BP, end // BIN_BP + 1)]
 
 
 def test_a_strong_peaks_shoulder_15_mb_out_stays_in_its_locus_where_a_1_mb_window_splits_it(
