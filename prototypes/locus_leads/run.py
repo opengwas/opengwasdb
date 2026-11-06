@@ -35,7 +35,7 @@ from .clump import (
 )
 from .compare import DEFINITIONS, Classification, classify
 from .genetic_map import GeneticMap, LoadedMap
-from .panel import STATUSES, Panel, match_to_panel, plink2
+from .panel import STATUSES, Panel, PanelMatch, match_to_panel, plink2
 from .rule import locus_leads
 
 ABS_Z_BINS = (0.0, 7.0, 10.0, 20.0, float("inf"))
@@ -124,12 +124,21 @@ def read_tier(store: Path, analysis_id: str, threshold: float) -> tuple[TierRows
     return rows, identity
 
 
+def match_rows(rows: TierRows, panel: Panel) -> PanelMatch:
+    """The rows matched to the panel's variants by chromosome, position and allele set.
+
+    Separate from `build_shared_set` so a caller can time the panel read on its
+    own: clumping needs the match but not the cM interpolation beside it.
+    """
+    present = set(rows.chromosome.tolist())
+    return match_to_panel(rows.chromosome, rows.position, rows.allele_1, rows.allele_2,
+                          {c: panel.variants(c) for c in panel.chromosomes if c in present})
+
+
 def build_shared_set(rows: TierRows, panel: Panel,
                      genetic_map: GeneticMap) -> tuple[SharedSet, dict[str, Any]]:
     """The rows on the panel with finite cM, and a count of every other row by reason."""
-    present = set(rows.chromosome.tolist())
-    match = match_to_panel(rows.chromosome, rows.position, rows.allele_1, rows.allele_2,
-                           {c: panel.variants(c) for c in panel.chromosomes if c in present})
+    match = match_rows(rows, panel)
     cm = genetic_map.cm_at(rows.chromosome, rows.position)
     check_cm(rows.chromosome, rows.position, cm, genetic_map)
     no_cm = np.isnan(cm)

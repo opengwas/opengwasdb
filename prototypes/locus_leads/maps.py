@@ -248,6 +248,7 @@ def write_source_map(points: Mapping[str, tuple[np.ndarray, np.ndarray]], map_pa
     the identity, so a dropped point can never be found only in a report prose.
     """
     genetic_map, dropped = build_genetic_map(points)
+    map_path.parent.mkdir(parents=True, exist_ok=True)
     identity = {
         "map": map_path.name,
         "sha256": write_points(genetic_map, map_path),

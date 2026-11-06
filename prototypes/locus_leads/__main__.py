@@ -3,6 +3,8 @@
     python -m prototypes.locus_leads build-map --archive A --output M.tsv.gz
     python -m prototypes.locus_leads compare --store S --analysis A --genetic-map M \\
         --panel P --d-cm 0.5 --w-bp 1000000 --r2 0.01 --r2 0.001 --work-dir D --output O.json
+    python -m prototypes.locus_leads cost --genetic-map M --panel P --work-dir D \\
+        --output docs/benchmark-output/locus_leads/cost.json
     python -m prototypes.locus_leads build-hapmap2-map --original O --output M.tsv.gz
     python -m prototypes.locus_leads build-median-map --archive A --output M.tsv.gz
     python -m prototypes.locus_leads map-shared-sets --selection S --stores-dir D \\
@@ -21,6 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .cost import measure
 from .eur_map import build_eur_map
 from .genetic_map import load_map
 from .maps import (
@@ -47,13 +50,22 @@ def _build_mean(args: argparse.Namespace) -> None:
 
 
 def _build_hapmap2(args: argparse.Namespace) -> None:
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    print(json.dumps(build_hapmap2_map(args.original, args.output), indent=2))
+    _print_identity(build_hapmap2_map(args.original, args.output))
 
 
 def _build_median(args: argparse.Namespace) -> None:
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    print(json.dumps(build_median_map(args.archive, args.output), indent=2))
+    _print_identity(build_median_map(args.archive, args.output))
+
+
+def _print_identity(identity: dict[str, Any]) -> None:
+    print(json.dumps(identity, indent=2))
+
+
+def _cost(args: argparse.Namespace) -> None:
+    _write(args, measure(store_root=args.store_root, genetic_map_path=args.genetic_map,
+                         panel_dir=args.panel, work_dir=args.work_dir, repeats=args.repeats,
+                         threads=args.threads, d_cm=args.d_cm, w_bp=args.w_bp,
+                         r2=(args.r2 or [0.01])[0]))
 
 
 def _select(args: argparse.Namespace) -> None:
@@ -69,9 +81,8 @@ def _compare(args: argparse.Namespace) -> None:
     result = run(args.store, args.analysis, load_map(args.genetic_map), args.panel,
                  d_cm=args.d_cm, w_bp=args.w_bp, r2_values=args.r2 or [0.01, 0.001],
                  work_dir=args.work_dir, threads=args.threads, threshold=args.threshold)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    # Timings stay out of the JSON, so a re-run reproduces it byte for byte.
-    args.output.write_text(json.dumps(result, indent=1, allow_nan=False) + "\n")
+    # The comparison's JSON carries no timings, so a re-run reproduces it byte for byte.
+    _write(args, result)
     print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
 
 
@@ -120,6 +131,12 @@ def _compare_maps(args: argparse.Namespace) -> None:
     args.output.write_text(json.dumps(record, indent=1, allow_nan=False) + "\n")
 
 
+def _write(args: argparse.Namespace, result: dict) -> None:
+    """Write `result` to `args.output`, making its directory."""
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(result, indent=1, allow_nan=False) + "\n")
+
+
 def _sweep(args: argparse.Namespace) -> None:
     started = time.monotonic()
     selection = json.loads(args.selection.read_text())
@@ -136,6 +153,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], None]] = {
     "build-map": _build_mean, "build-hapmap2-map": _build_hapmap2,
     "build-median-map": _build_median, "select": _select, "sweep": _sweep,
     "map-shared-sets": _map_shared_sets, "compare-maps": _compare_maps, "compare": _compare,
+    "cost": _cost,
 }
 
 
@@ -219,6 +237,18 @@ def _compare_parser(commands: Any) -> None:
     compare.add_argument("--work-dir", type=Path, required=True, help="for plink2's files")
     compare.add_argument("--threads", type=int, default=4, help="plink2 threads")
     compare.add_argument("--output", type=Path, required=True)
+    cost = commands.add_parser("cost", help="time pruning against plink2 clumping (#406)")
+    cost.add_argument("--store-root", type=Path, default=Path("/data/opengwasdb/stores"))
+    cost.add_argument("--genetic-map", type=Path, required=True, help="<name>.tsv.gz")
+    cost.add_argument("--panel", type=Path, required=True, help="directory of chr<N>.pgen")
+    cost.add_argument("--d-cm", type=float, default=0.5)
+    cost.add_argument("--w-bp", type=int, default=1_000_000)
+    cost.add_argument("--r2", type=float, action="append", default=None,
+                      help="clumping r^2 (default 0.01)")
+    cost.add_argument("--repeats", type=int, default=3, help="timings per stage")
+    cost.add_argument("--threads", type=int, default=4, help="plink2 threads")
+    cost.add_argument("--work-dir", type=Path, required=True, help="for the cM arrays and plink2")
+    cost.add_argument("--output", type=Path, required=True)
 
 
 if __name__ == "__main__":
