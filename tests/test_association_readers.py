@@ -606,6 +606,18 @@ def test_a_subset_reads_one_analysis_only(subset_store: Path) -> None:
         SubsetReader.open(subset_store, "few").read(Cells.variants([3]))
 
 
+@pytest.mark.parametrize("method", ["read", "inspect"])
+@pytest.mark.parametrize("bad", [-1, "n_analyses"])
+def test_a_subset_refuses_an_analysis_outside_its_axis_with_index_error(
+    subset_store: Path, method: str, bad: int | str
+) -> None:
+    """The same `IndexError` every other reader raises (issue #393)."""
+    subset = SubsetReader.open(subset_store, "few")
+    index = subset._subset.n_analyses if bad == "n_analyses" else bad
+    with pytest.raises(IndexError, match="Analysis index"):
+        getattr(subset, method)(Cells.analysis(index))
+
+
 def test_a_completed_component_without_its_mask_is_refused(tmp_path) -> None:
     """Its mask says which rows are imputed; without one every row would pass for observed."""
     group = _write_dense(tmp_path / "grid.zarr", TABLE)
