@@ -474,6 +474,23 @@ def test_a_batch_declaring_no_reference_refuses_an_allele_order() -> None:
         replace(_undeclared_insertion(), ref_first=np.array([True]))
 
 
+@pytest.mark.parametrize("short", ["ref", "alt", "alid"])
+def test_a_batch_refuses_alleles_that_do_not_line_up_with_its_rows(short: str) -> None:
+    """The rsid harvest pairs each row's ALID with its ref and alt (#379). A
+    column one row short would hand every later row its neighbour's spelling."""
+    rows = [
+        SourceRow(
+            chromosome="1", position=position, ref="A", alt="G", alid=f"1:{position}:A:G",
+            flipped=False, af_alt=None, beta=0.4, se=0.2,
+        )
+        for position in (100, 200)
+    ]
+    (batch,) = stream_batches(rows, ReferenceAllele.UNDECLARED)
+    assert len(batch) == len(batch.ref) == len(batch.alt) == 2
+    with pytest.raises(ValueError, match="ref and alt must each hold one allele per row"):
+        replace(batch, **{short: getattr(batch, short)[:-1]})
+
+
 def test_reference_codes_follow_the_declaration_not_the_allele_order() -> None:
     """An order set past construction still names no reference: the codes
     read the declaration first."""
