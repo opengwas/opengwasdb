@@ -342,6 +342,17 @@ for a in ("AFR", "EAS", "AMR", "EUR"):
 #| echo: false
 #| output: asis
 amr, afr, eas = (sweeps[a] for a in ("AMR", "AFR", "EAS"))
+
+
+def far_shares(ancestry):
+    """Share of an ancestry's spurious splits beyond 1 Mb, and with r² >= 0.05."""
+    pairs = config(ancestry, nearest(ancestry))["by_r2"][R2]["spurious_split_pairs"]
+    bands = pairs["by_distance_band"]
+    beyond = sum(counts["n"] for band, counts in bands.items() if band != "<=1Mb")
+    return beyond / pairs["n"], sum(counts["r2_ge_0.05"] for counts in bands.values()) / pairs["n"]
+
+
+FAR = {a: far_shares(a) for a in ANCESTRIES}
 show(
     "**2. Is the AMR map usable?** For the count it is as good as any other: C1 holds at "
     f"{sum(c['c1'] for c in counts('AMR')['configs'])} of "
@@ -359,8 +370,14 @@ show(
     "r² 0.01 is then partly a chance-LD count, so neither the per-lead rates ("
     f"{pct(config('AMR', nearest('AMR'))['by_r2'][R2]['spurious_split_rate'])} spurious, "
     f"{pct(config('AMR', nearest('AMR'))['by_r2'][R2]['lost_signal_rate'])} lost) nor a D "
-    "chosen from it can be trusted. Usable as a rank-preserving count; not usable to "
-    "calibrate D until there is a ground truth that is not chance LD at that sample size.")
+    "chosen from it can be trusted. What the splits themselves show is admixture's long "
+    f"LD: at AMR's nearest point, {pct(FAR['AMR'][0])} of its spurious splits lie beyond "
+    f"1 Mb and {pct(FAR['AMR'][1])} have r² over 0.05, where chance gives "
+    f"{pct(amr['chance_ld']['share_r2_ge_0.05'])}; for AFR the two shares are "
+    f"{pct(FAR['AFR'][0])} and {pct(FAR['AFR'][1])}, and for EUR {pct(FAR['EUR'][0])} and "
+    f"{pct(FAR['EUR'][1])}. No cM distance inside W separates a pair like that. Usable as a "
+    "rank-preserving count; not usable to calibrate D until there is a ground truth that is "
+    "not chance LD at that sample size and a rule that sees past W.")
 ```
 
 ## The disagreeing pairs
