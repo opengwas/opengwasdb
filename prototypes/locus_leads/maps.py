@@ -43,9 +43,10 @@ from .genetic_map import (
     verify_archive,
     write_points,
 )
-from .panel import Panel, PanelVariants, match_to_panel
+from .pairs import Spike
+from .panel import Panel, PanelMatch, PanelVariants, match_to_panel
 from .run import TierRows, read_tier
-from .sweep import TIER
+from .sweep import EUR_SPIKES, TIER
 
 if TYPE_CHECKING:
     from .genetic_map import LoadedMap
@@ -291,6 +292,22 @@ def build_median_map(archive: Path, map_path: Path) -> dict[str, Any]:
         excluded={})
 
 
+@dataclass(frozen=True)
+class MatchedTier:
+    """One Analysis's tier rows, and each row's panel match, which every map shares."""
+
+    rows: TierRows
+    match: PanelMatch
+
+
+def match_tiers(tiers: Mapping[str, TierRows],
+                variants: Mapping[str, PanelVariants]) -> dict[str, MatchedTier]:
+    """Match each tier's rows to the panel once, so three maps cost one match."""
+    return {key: MatchedTier(tier, match_to_panel(tier.chromosome, tier.position, tier.allele_1,
+                                                  tier.allele_2, variants))
+            for key, tier in tiers.items()}
+
+
 def shared_set_rows(tier: TierRows, variants: Mapping[str, PanelVariants],
                     genetic_map: GeneticMap) -> np.ndarray:
     """The tier's rows this map can judge: matched to the panel, with a finite cM.
@@ -300,9 +317,13 @@ def shared_set_rows(tier: TierRows, variants: Mapping[str, PanelVariants],
     expensive half. `test_the_shared_set_spells_out_the_rule_build_shared_set_applies`
     holds the two together.
     """
-    match = match_to_panel(tier.chromosome, tier.position, tier.allele_1, tier.allele_2, variants)
-    cm = genetic_map.cm_at(tier.chromosome, tier.position)
-    return np.asarray((match.status == "matched") & ~np.isnan(cm), dtype=bool)
+    return _kept(MatchedTier(tier, match_to_panel(tier.chromosome, tier.position, tier.allele_1,
+                                                  tier.allele_2, variants)), genetic_map)
+
+
+def _kept(matched: MatchedTier, genetic_map: GeneticMap) -> np.ndarray:
+    cm = genetic_map.cm_at(matched.rows.chromosome, matched.rows.position)
+    return np.asarray((matched.match.status == "matched") & ~np.isnan(cm), dtype=bool)
 
 
 def variant_index_digest(store_id: str, analysis_id: str, variant_index: np.ndarray) -> str:
@@ -332,14 +353,15 @@ class MapSharedSet:
                 "tier_rows": sum(r["rows"] for r in self.analyses.values())}
 
 
-def shared_set_of(tiers: Mapping[str, TierRows], variants: Mapping[str, PanelVariants],
-                  genetic_map: GeneticMap, *, name: str) -> MapSharedSet:
+def shared_set_of(matched: Mapping[str, MatchedTier], genetic_map: GeneticMap, *,
+                  name: str) -> MapSharedSet:
     """Each Analysis's shared-set size and digest on one map, keyed `STORE/analysis`."""
     analyses = {}
-    for key, tier in tiers.items():
+    for key, one in matched.items():
         store_id, analysis_id = key.split("/", 1)
-        index = tier.variant_index[shared_set_rows(tier, variants, genetic_map)]
-        analyses[key] = {"rows": int(tier.variant_index.size), "shared_set": int(index.size),
+        index = one.rows.variant_index[_kept(one, genetic_map)]
+        analyses[key] = {"rows": int(one.rows.variant_index.size),
+                         "shared_set": int(index.size),
                          "sha256": variant_index_digest(store_id, analysis_id, index)}
     return MapSharedSet(name, analyses)
 
@@ -374,10 +396,110 @@ def measure_shared_sets(selection: dict[str, Any], stores_dir: Path, panel_dir: 
     """
     panel = Panel(panel_dir)
     variants = {chromosome: panel.variants(chromosome) for chromosome in panel.chromosomes}
-    tiers = {}
+    matched: dict[str, MatchedTier] = {}
     for chosen in selection["chosen"][:only]:
         key = f"{chosen['store']}/{chosen['analysis_id']}"
         store = stores_dir / chosen["store"] / "store.opengwasdb"
-        tiers[key], _ = read_tier(store, chosen["analysis_id"], tier)
-    return {name: shared_set_of(tiers, variants, loaded.map, name=name)
+        rows, _ = read_tier(store, chosen["analysis_id"], tier)
+        matched |= match_tiers({key: rows}, variants)
+    return {name: shared_set_of(matched, loaded.map, name=name)
             for name, loaded in maps_by_name.items()}
+
+
+def interval_jump(genetic_map: GeneticMap, chromosome: str, position: int) -> dict[str, Any]:
+    """The map's interval across `position`, and the cM it gains there.
+
+    #402's two spikes are exactly this: a single interval narrower than a window
+    that gains more cM than the rule's D can cross. Measured from the map so a
+    report never types it.
+    """
+    points, cm = genetic_map.points(chromosome)
+    at = int(np.searchsorted(points, position))
+    if at >= points.size or int(points[at]) != position:
+        raise MapBuildError(f"chr{chromosome}:{position:,} is not a map point")
+    if at + 1 == points.size:
+        raise MapBuildError(f"chr{chromosome}:{position:,} is the map's last point")
+    return {"chromosome": chromosome, "position": position,
+            "interval_bp": int(points[at + 1] - points[at]),
+            "cm_gain": float(cm[at + 1] - cm[at])}
+
+
+def map_measurements(loaded: Mapping[str, LoadedMap],
+                     spikes: tuple[Spike, ...] = EUR_SPIKES) -> dict[str, dict[str, Any]]:
+    """Each map's coverage, genetic length, and what it gains across each spike interval."""
+    measured = {}
+    for name, one in loaded.items():
+        measured[name] = {
+            "chromosomes": len(one.map.chromosomes),
+            "points": sum(int(one.map.points(c)[0].size) for c in one.map.chromosomes),
+            "total_cM": sum(float(one.map.points(c)[1][-1]) for c in one.map.chromosomes),
+            "spike_intervals": [interval_jump(one.map, s.chromosome, s.position)
+                                for s in spikes],
+        }
+    return measured
+
+
+PER_LEAD_KEYS = ("locus_leads", "index_variants", "spurious_splits", "lost_signals",
+                 "spurious_split_rate", "lost_signal_rate", "disagreement_rate",
+                 "median_spurious_split_rate", "median_lost_signal_rate")
+
+
+def per_lead_rows(evaluation: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Each (D, W)'s pooled per-lead rates at each r^2, from a sweep's evaluation block.
+
+    The rates are diagnostics since #403's owner decision; they are kept because
+    a map that wins on counts by losing half the signals has to be visible.
+    """
+    return [{"d_cm": config["d_cm"], "w_bp": config["w_bp"],
+             "by_r2": {r2: {key: pooled[key] for key in PER_LEAD_KEYS}
+                       for r2, pooled in config["by_r2"].items()},
+             "clearly_better_than_bp_only": config.get("clearly_better_than_bp_only"),
+             "qualifies_pooled": config.get("qualifies_pooled")}
+            for config in evaluation["configs"]]
+
+
+def selection_digest(selection: Mapping[str, Any]) -> str:
+    """sha256 of a selection record, as the sweep and the map comparison spell it."""
+    return hashlib.sha256(json.dumps(selection, sort_keys=True).encode()).hexdigest()
+
+
+def comparison_record(selection: Mapping[str, Any], sweeps: Mapping[str, tuple[Path, dict]],
+                      shared_sets: Mapping[str, MapSharedSet], *,
+                      reference: str,
+                      measurements: Mapping[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+    """The maps' count criteria side by side, with the shared-set check beside them.
+
+    Each sweep is passed with its path, so the record names the file its numbers
+    came from and that file's sha256. The shared sets are checked here, before
+    anything is written: two maps measured on different rows are not comparable,
+    and a report over them would be a plausible wrong answer.
+    """
+    check_same_shared_set(shared_sets[reference], {name: found for name, found
+                                                  in shared_sets.items() if name != reference})
+    maps_record = {}
+    for name, (path, sweep) in sweeps.items():
+        maps_record[name] = {
+            "sweep": str(path), "sweep_sha256": file_digest(path, "sha256"),
+            "analyses": sweep["counts"]["analyses"],
+            "grid": sweep["grid"], "genetic_map": sweep["genetic_map"],
+            "spikes": sweep.get("spikes", []),
+            "criteria": sweep["counts"]["criteria"],
+            "counts": sweep["counts"],
+            "best_by_per_lead": sweep["evaluation"]["best"],
+            "per_lead": per_lead_rows(sweep["evaluation"]),
+            "below_shared_set_floor": {
+                "floor": sweep["left_out_below_shared_set_floor"]["floor"],
+                "analyses": [f"{b['store']}/{b['analysis']['analysis_id']}" for b in
+                             sweep["left_out_below_shared_set_floor"]["analyses"]]},
+            "shared_set": shared_sets[name].record(),
+        }
+    return {
+        "selection": {"sha256": selection_digest(selection),
+                      "chosen": len(selection["chosen"]),
+                      "swept": {name: record["analyses"]
+                                for name, record in maps_record.items()}},
+        "reference_map": reference,
+        "shared_sets_equal": True,
+        "map_measurements": dict(measurements or {}),
+        "maps": maps_record,
+    }

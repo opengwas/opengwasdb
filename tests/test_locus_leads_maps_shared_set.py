@@ -81,19 +81,22 @@ def test_the_shared_set_spells_out_the_rule_build_shared_set_applies(tmp_path) -
 
 def test_a_map_that_loses_one_row_is_refused_and_the_counts_are_named() -> None:
     tier = _fields(["1", "1", "2"], [100, 200, 100], [7, 8, 9])
-    reference = maps.shared_set_of({KEY: tier}, _two_chromosomes(), _map("1", "2"), name="mean")
+    reference = maps.shared_set_of(maps.match_tiers({KEY: tier}, _two_chromosomes()),
+                                   _map("1", "2"), name="mean")
     assert reference.analyses[KEY]["shared_set"] == 3
 
     with pytest.raises(maps.SharedSetMismatch, match=f"{KEY}: 3 rows.*2 rows"):
         maps.check_same_shared_set(reference, {"lifted": maps.shared_set_of(
-            {KEY: tier}, _two_chromosomes(), _map("1"), name="lifted")})
+            maps.match_tiers({KEY: tier}, _two_chromosomes()), _map("1"), name="lifted")})
 
 
 def test_the_digest_separates_shared_sets_that_share_a_count() -> None:
-    one = maps.shared_set_of({KEY: _fields(["1", "1", "2"], [100, 200, 100], [7, 8, 9])},
-                             _two_chromosomes(), _map("1", "2"), name="mean")
-    other_row = maps.shared_set_of({KEY: _fields(["1", "1", "2"], [100, 200, 100], [7, 8, 10])},
-                                   _two_chromosomes(), _map("1", "2"), name="moved")
+    one = maps.shared_set_of(
+        maps.match_tiers({KEY: _fields(["1", "1", "2"], [100, 200, 100], [7, 8, 9])},
+                         _two_chromosomes()), _map("1", "2"), name="mean")
+    other_row = maps.shared_set_of(
+        maps.match_tiers({KEY: _fields(["1", "1", "2"], [100, 200, 100], [7, 8, 10])},
+                         _two_chromosomes()), _map("1", "2"), name="moved")
 
     assert one.analyses[KEY]["shared_set"] == other_row.analyses[KEY]["shared_set"] == 3
     with pytest.raises(maps.SharedSetMismatch, match="sha256"):
@@ -102,7 +105,8 @@ def test_the_digest_separates_shared_sets_that_share_a_count() -> None:
 
 def test_the_same_shared_set_on_another_map_is_accepted() -> None:
     tier = _fields(["1", "1", "2"], [100, 200, 100], [7, 8, 9])
-    both = {name: maps.shared_set_of({KEY: tier}, _two_chromosomes(), _map("1", "2"), name=name)
+    matched = maps.match_tiers({KEY: tier}, _two_chromosomes())
+    both = {name: maps.shared_set_of(matched, _map("1", "2"), name=name)
             for name in ("mean", "median")}
 
     maps.check_same_shared_set(both["mean"], {"median": both["median"]})

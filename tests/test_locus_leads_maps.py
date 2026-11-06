@@ -98,6 +98,10 @@ def test_a_chromosome_that_would_lose_more_than_a_tenth_of_a_percent_is_refused(
     assert dropped.counts() == {"1": 1} and built.points("1")[0].size == 999
 
 
+def _loaded(one: object) -> object:
+    return genetic_map.LoadedMap(one, {"sha256": "0", "assembly": "GRCh38"})
+
+
 def _population(positions: list[int], cms: list[float]) -> object:
     return genetic_map.GeneticMap({"1": (np.array(positions), np.array(cms))})
 
@@ -170,3 +174,16 @@ def test_a_source_map_round_trips_through_its_sidecar_and_source_checksum(tmp_pa
     original.write_text(EAGLE_TEXT.replace("0.410292036939447", "0.410292036939448"))
     with pytest.raises(genetic_map.SourceChecksumError, match="sha256"):
         genetic_map.load_map(map_path)
+
+
+def test_a_spike_interval_is_measured_from_the_map_and_a_position_off_it_refuses() -> None:
+    one = genetic_map.GeneticMap({"7": (np.array([100, 200, 300]), np.array([0.0, 1.0, 3.0]))})
+
+    assert maps.interval_jump(one, "7", 200) == {"chromosome": "7", "position": 200,
+                                                 "interval_bp": 100, "cm_gain": 2.0}
+    assert maps.map_measurements({"one": _loaded(one)}, spikes=())["one"] == {
+        "chromosomes": 1, "points": 3, "total_cM": 3.0, "spike_intervals": []}
+    with pytest.raises(maps.MapBuildError, match="not a map point"):
+        maps.interval_jump(one, "7", 250)
+    with pytest.raises(maps.MapBuildError, match="last point"):
+        maps.interval_jump(one, "7", 300)
