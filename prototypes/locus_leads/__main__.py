@@ -14,10 +14,12 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from .cost import measure
 from .eur_map import build_eur_map
 from .genetic_map import load_map
+from .profile_sweep import profile_sweep
 from .run import run
 from .select import SelectionRule, build_selection
 from .sweep import sweep
@@ -42,6 +44,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "sweep":
         _sweep(args)
+        return
+    if args.command == "profile-sweep":
+        _profile_sweep(args)
         return
     started = time.monotonic()
     args.work_dir.mkdir(parents=True, exist_ok=True)
@@ -71,6 +76,34 @@ def _sweep(args: argparse.Namespace) -> None:
     print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
 
 
+def _profile_sweep(args: argparse.Namespace) -> None:
+    started = time.monotonic()
+    result = profile_sweep(json.loads(args.selection.read_text()),
+                           json.loads(args.sweep.read_text()), args.sweep, args.stores_dir,
+                           load_map(args.genetic_map), args.panel, args.work_dir,
+                           hm3_path=args.hm3, blocks_path=args.blocks, threads=args.threads,
+                           only=args.only)
+    _write(args, result)
+    print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
+
+
+def _add_profile_sweep(commands: Any) -> None:
+    command = commands.add_parser("profile-sweep", help="the prominence and LD-block rules on "
+                                  "#403's Analyses, shared set and clumps (#409)")
+    command.add_argument("--selection", type=Path, required=True, help="#403's selection JSON")
+    command.add_argument("--sweep", type=Path, required=True, help="#403's sweep JSON")
+    command.add_argument("--stores-dir", type=Path, required=True)
+    command.add_argument("--genetic-map", type=Path, required=True, help="#403's map")
+    command.add_argument("--panel", type=Path, required=True, help="directory of chr<N>.pgen")
+    command.add_argument("--hm3", type=Path, required=True, help="#403's HapMap3 ALIDs")
+    command.add_argument("--blocks", type=Path, required=True, help="ld_regions_hg38.tsv")
+    command.add_argument("--work-dir", type=Path, required=True, help="plink2's files and "
+                         "each Analysis's cached record")
+    command.add_argument("--threads", type=int, default=4)
+    command.add_argument("--only", type=int, help="the first N chosen Analyses only")
+    command.add_argument("--output", type=Path, required=True)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m prototypes.locus_leads")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -97,6 +130,7 @@ def _parser() -> argparse.ArgumentParser:
     run_sweep.add_argument("--threads", type=int, default=4)
     run_sweep.add_argument("--only", type=int, help="the first N chosen Analyses only")
     run_sweep.add_argument("--output", type=Path, required=True)
+    _add_profile_sweep(commands)
     compare = commands.add_parser("compare", help="compare Locus Leads with plink2 clumping")
     compare.add_argument("--store", type=Path, required=True)
     compare.add_argument("--analysis", required=True, help="analysis_id")
