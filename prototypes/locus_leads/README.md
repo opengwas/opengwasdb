@@ -51,6 +51,7 @@ comes after one of its members in that order fails the run.
 | `pairs.py` | each disagreeing pair's r², distance band and spike, chance LD between chromosomes, and the pair file |
 | `panel_chance.py` | chance LD at a panel's own sample size, from the swept Analyses' shared sets |
 | `counts.py` | the count criteria C1-C3: rank, density against HapMap3, cM against bp-only |
+| `maps.py` | the comparison maps (HapMap II lifted, the pyrho median), and the shared-set check |
 | `ld.py` | r² between panel variants, from dosages plink2 exports |
 | `profile.py` | the prominence rule: locus boundaries from valleys in the 5e-4 tier's \|z\| envelope (#409) |
 | `blocks.py` | one lead per LD block, half-open, rows outside blocks counted (#409) |
@@ -122,6 +123,48 @@ leads. The run refuses to publish if the two disagree.
 
 The map itself, its source and checksums are described in
 `/data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/README.md`.
+
+## Other genetic maps (#404)
+
+The same sweep runs on any map in the layout above. Three are compared:
+
+```bash
+# the median of the five pyrho EUR maps, the alternative to their mean's two spikes
+pixi run -e dev python -m prototypes.locus_leads build-median-map \
+    --archive /data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/original/hg38_maps.tar.gz \
+    --output /data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR-median.tsv.gz
+
+# HapMap II lifted to GRCh38, as Eagle ships it, normalised and checked
+pixi run -e dev python -m prototypes.locus_leads build-hapmap2-map \
+    --original /data/opengwasdb/reference/genetic-map/eagle-hapmap2-hg38/original/genetic_map_hg38_withX.txt.gz \
+    --output /data/opengwasdb/reference/genetic-map/eagle-hapmap2-hg38/HapMap2.tsv.gz
+
+# every map must leave the same shared set, row for row, before its counts mean anything
+pixi run -e dev python -m prototypes.locus_leads map-shared-sets \
+    --selection docs/benchmark-output/locus_leads/eur_sweep_selection.json \
+    --stores-dir /data/opengwasdb/stores \
+    --panel /data/opengwasdb/reference/hgdp1kgp-hg38/pgen/EUR \
+    --genetic-map pyrho-mean=/data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR.tsv.gz \
+    --genetic-map pyrho-median=/data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR-median.tsv.gz \
+    --genetic-map hapmap2=/data/opengwasdb/reference/genetic-map/eagle-hapmap2-hg38/HapMap2.tsv.gz \
+    --reference pyrho-mean \
+    --output docs/benchmark-output/locus_leads/eur_maps_shared_set.json
+```
+
+`build-median-map` and `build-hapmap2-map` write a sidecar beside the map naming
+what it came from — the archive's md5, or the download's url and sha256 — and
+`load_map` checks it on every run. A map built from a download rather than the
+pyrho archive records the download's sha256 in place of the archive's md5.
+
+A map in another layout is refused, not read by column number; a map missing a
+chromosome is refused, not left to give NaN cM; and cM that falls with position
+costs the points that break the running maximum, the build refusing a chromosome
+that would lose more than 0.1% of its points to it. `HapMap2.json` and
+`EUR-median.json` record what each map lost, and the READMEs beside them quote
+the sources, retrieval dates, checksums and licences.
+
+`compare-maps` puts each sweep's count criteria side by side, and refuses to
+write when the maps' shared sets differ.
 
 The prominence and LD-block rules (#409) run on #403's selection, sweep JSON, map, panel and
 HapMap3 list, which they check against #403's records, and on the LD-block file:

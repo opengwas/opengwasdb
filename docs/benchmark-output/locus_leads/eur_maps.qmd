@@ -1,0 +1,421 @@
+---
+title: "The pyrho EUR map against HapMap II lifted and the pyrho median (#404)"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    theme: cosmo
+jupyter: python3
+---
+
+```{python}
+#| echo: false
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+from IPython.display import Markdown, display
+
+HERE = Path(".")
+record = json.loads((HERE / "eur_maps.json").read_text())
+maps = record["maps"]
+MEAN = "pyrho-mean"
+NAMES = list(maps)
+MEASURED = record["map_measurements"]
+W_VALUES = maps[MEAN]["grid"]["w_bp"]
+D_VALUES = maps[MEAN]["grid"]["d_cm"]
+PRIMARY = "0.01"
+CRITERIA = maps[MEAN]["counts"]["criteria"]
+
+
+def show(text):
+    display(Markdown(text))
+
+
+def md_table(headers, rows):
+    # A cell may carry a pipe of its own (|log2|), which would end the cell early
+    # and shift every column after it (#404 review).
+    def cell(value):
+        return str(value).replace("|", "\\|")
+
+    head = "| " + " | ".join(cell(h) for h in headers) + " |\n|" + "|".join(["---"] * len(headers)) + "|\n"
+    # A trailing blank line, so the next table is not read as this one's rows.
+    return head + "\n".join("| " + " | ".join(cell(c) for c in row) + " |" for row in rows) + "\n"
+
+
+def pct(value):
+    return f"{100 * value:.1f}%"
+
+
+def w_label(w):
+    return f"{w / 1e6:g} Mb"
+
+
+def d_label(d):
+    return "bp only" if d == "bp_only" else f"{d:g} cM"
+
+
+def point(d, w):
+    return f"{d_label(d)} / W {w_label(w)}"
+
+
+def count_rows(name):
+    return {(c["d_cm"], c["w_bp"]): c for c in maps[name]["counts"]["configs"]}
+
+
+def per_lead_rows(name):
+    return {(c["d_cm"], c["w_bp"]): c for c in maps[name]["per_lead"]}
+
+
+def named(name):
+    return maps[name]["counts"]["named"]
+
+
+def named_key(name):
+    """The point a map names, or the mean's when it names none, so each table has a row."""
+    found = named(name) or named(MEAN)
+    return found["d_cm"], found["w_bp"]
+
+
+def yes(flag):
+    return "yes" if flag else "no"
+```
+
+## The question
+
+Is the published pyrho EUR map — the equal-weight mean of the five population
+maps — adequate for `n_loci_*`, or does another genetic map do better? #403 swept
+D and W on the 37 EUR Analyses it drew and found that **C1 holds everywhere, C2
+at all but D 0.1 cM, and C3 nowhere**: no cM point beat the plain bp window at
+the same W. This repeats that sweep unchanged, on the same Analyses and the same
+rows, with two other maps:
+
+- **HapMap II combined, lifted to GRCh38**, as Eagle ships it (LD-based, the
+  comparator #62's revision names);
+- **the median of the same five pyrho maps**, the alternative to the two
+  single-population spikes #402 found in the mean.
+
+The question C3 asks is whether genetic distance earns its keep at all, so a map
+that makes C3 hold would change the epic's decision; a map that only shifts the
+rates does not.
+
+## The maps
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for name in NAMES:
+    measured = MEASURED[name]
+    identity = maps[name]["genetic_map"]
+    source = identity.get("source", {}).get("url") or identity.get("archive", {}).get("record", "")
+    # The pyrho mean was built before the drop rule existed; its cM could only
+    # be non-decreasing, since the map refuses a fall instead of repairing it.
+    dropped = identity.get("dropped_to_a_non_decreasing_cM", {}).get("points_dropped")
+    rows.append([name, f"{measured['chromosomes']}", f"{measured['points']:,}",
+                 f"{measured['total_cM']:.1f}",
+                 "not recorded" if dropped is None else f"{sum(dropped.values()):,}",
+                 f"`{identity['sha256'][:12]}…`", source])
+show(md_table(["map", "chromosomes", "points", "genetic length (cM)", "points dropped",
+               "sha256", "source"], rows))
+show(f"""
+Every map covers the same 22 autosomes. The pyrho mean and median share one set of
+{MEASURED[MEAN]['points']:,} positions; HapMap II lifted has its own. The three maps do not
+agree on genetic length, so the same D is a different amount of recombination on each:
+read the count tables below with that in mind.
+""")
+spikes = MEASURED[MEAN]["spike_intervals"]
+show("What each map gains across #402's two spike intervals, measured from the map:\n\n" +
+     md_table(["map", *[f"chr{s['chromosome']}:{s['position']:,}" for s in spikes]],
+              [[name, *[f"{s['cm_gain']:.2f} cM / {s['interval_bp']:,} bp"
+                        for s in MEASURED[name]["spike_intervals"]]] for name in NAMES]))
+```
+
+## The same rows
+
+A comparison between maps is only a measurement if each map ranks the same rows.
+The shared set of every map was asserted equal to the pyrho mean's, row for row,
+by count and by a digest of (Store, Analysis, Store Variant Index) — and the run
+stops if any differs.
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for name in NAMES:
+    shared = maps[name]["shared_set"]
+    checked = maps[name]["shared_set_checked"]
+    rows.append([name, maps[name]["analyses"], f"{shared['tier_rows']:,}",
+                 f"{shared['shared_set_rows']:,}",
+                 pct(shared["shared_set_rows"] / shared["tier_rows"]),
+                 f"{checked['analyses']}", f"`{checked['sha256'][:16]}…`"])
+show(md_table(["map", "Analyses swept", "tier rows", "shared-set rows", "share",
+               "Analyses checked", "digest checked"], rows))
+same = len({maps[name]["shared_set_checked"]["sha256"] for name in NAMES}) == 1
+below = {name: maps[name]["below_shared_set_floor"] for name in NAMES}
+same_below = all(b["analyses"] == below[MEAN]["analyses"] for b in below.values())
+clamped = {name: maps[name]["shared_set"]["clamped"] for name in NAMES}
+show(md_table(["map", "rows clamped before the first knot", "after the last knot", "rows"],
+              [[name, f"{c['before_first_knot']:,}", f"{c['after_last_knot']:,}", f"{c['rows']:,}"]
+               for name, c in clamped.items()]))
+show("Equal rows do not mean equal knots: outside a map's ends the cM is held flat at the end knot, "
+     "so a row there is judged by the map's edge rather than by an interpolation of it.")
+show(f"The digests are {'identical' if same else 'not identical'} across the maps, as the check "
+     "requires; `eur_maps_shared_set.json` holds each Analysis's own digest and count. "
+     f"{len(below[MEAN]['analyses'])} drawn Analyses fall under the "
+     f"{pct(below[MEAN]['floor'])} shared-set floor and are left out of every map "
+     f"alike ({'the same ones' if same_below else 'NOT the same ones'}): "
+     + ", ".join(f"`{a}`" for a in below[MEAN]["analyses"]) + ".")
+```
+
+## The count criteria
+
+The criteria are #403's, word for word, and they are in every sweep's JSON with
+this wording. Only the map differs.
+
+```{python}
+#| echo: false
+#| output: asis
+show(f"""
+- **C1, {CRITERIA['C1']}**
+- **C2, {CRITERIA['C2']}**
+- **C3, {CRITERIA['C3']}**
+- Reading of C3: {CRITERIA['c3_reading']}
+- The point named: {CRITERIA['named']}
+- Index variants: {CRITERIA['index_variants']}. HapMap3: {CRITERIA['hm3']}.
+""")
+```
+
+### Result
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for name in NAMES:
+    cnt = maps[name]["counts"]
+    configs = count_rows(name)
+    c1 = [k for k, c in configs.items() if c["c1"]]
+    c2 = [k for k, c in configs.items() if c["c2"]]
+    holds = [c for c in cnt["c3"] if c["holds"]]
+    n = named(name)
+    rows.append([name, f"{len(c1)}/{len(configs)}", f"{len(c2)}/{len(configs)}",
+                 f"{len(holds)}/{len(cnt['c3'])}",
+                 "-" if n is None else point(n["d_cm"], n["w_bp"]),
+                 "-" if n is None else pct(n["share_of_leads_lost_to_density"]),
+                 f"{min(c['rho'] for c in cnt['configs']):.3f}–"
+                 f"{max(c['rho'] for c in cnt['configs']):.3f}"])
+show(md_table(["map", "C1 met", "C2 met", "C3 at W", "named point", "leads lost to density",
+               "ρ range"], rows))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+text = []
+for name in NAMES:
+    cnt = maps[name]["counts"]
+    holds = [c for c in cnt["c3"] if c["holds"]]
+    def delta(d, w):
+        config, bp = count_rows(name)[(d, w)], configs[("bp_only", w)]
+        return (config["rho"] - bp["rho"],
+                (bp["median_abs_log2"] or 0) - (config["median_abs_log2"] or 0))
+
+    gains = [(*delta(d, w), d, w) for w in W_VALUES for d in D_VALUES]
+    best_rho, best_log, rho_d, rho_w = max(gains)
+    _, at_rho_log, _, _ = max((g for g in gains if (g[2], g[3]) == (rho_d, rho_w)))
+    best_log, log_d, log_w = max((g[1], g[2], g[3]) for g in gains)
+    at_log_rho = next(g[0] for g in gains if (g[2], g[3]) == (log_d, log_w))
+    if holds:
+        text.append(f"- **{name}: C3 holds at " + ", ".join(
+            f"W {w_label(c['w_bp'])} (D {', '.join(f'{d:g}' for d in c['d_cm_that_holds'])} cM)"
+            for c in holds) + ".**")
+    else:
+        text.append(
+            f"- {name}: C3 holds at no W. The largest gain in ρ is {best_rho:+.4f} "
+            f"({point(rho_d, rho_w)}), and at that same point the median |log2| ratio is "
+            f"{at_rho_log:+.3f}; the largest gain in |log2| is {best_log:+.3f} "
+            f"({point(log_d, log_w)}), and there ρ moves {at_log_rho:+.4f}. C3's margins are "
+            f"{CRITERIA['c3_margin_rho']:+.2f} in ρ and {CRITERIA['c3_margin_abs_log2']:+.2f} in "
+            "|log2|, and it takes one of them without giving up more than the other.")
+show("\n".join(text))
+show(f"""
+The point named is bp-only on all three maps, and there the map is not read at all: a bp
+window never asks for a cM. So the map can only change the answer at a cM point, and
+whether a cM point is worth anything is exactly what C3 asks.
+""")
+```
+
+### The named point, map by map
+
+The point each map names by C1 and C2, with the per-lead rates there as
+diagnostics, and the bp-only window at the same W beside it.
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for name in NAMES:
+    d, w = named_key(name)
+    cm = count_rows(name)[(d, w)]
+    bp = count_rows(name)[("bp_only", w)]
+    cm_lead = per_lead_rows(name)[(d, w)]["by_r2"][PRIMARY]
+    bp_lead = per_lead_rows(name)[("bp_only", w)]["by_r2"][PRIMARY]
+    rows.append([name, point(d, w), f"{cm['rho']:.3f}", f"{cm['median_ratio']:.3f}",
+                 pct(cm["share_of_leads_lost_to_density"]),
+                 f"{pct(cm_lead['spurious_split_rate'])} / {pct(cm_lead['lost_signal_rate'])}",
+                 f"{pct(bp_lead['spurious_split_rate'])} / {pct(bp_lead['lost_signal_rate'])}"])
+show(md_table(["map", "named point", "ρ", "median ratio", "leads lost to density",
+               "spurious / lost (named)", "spurious / lost (bp only, same W)"], rows))
+show("C1 and C2 at every (D, W) for every map:\n\n" + md_table(
+    ["map", "W", "D", "ρ", "C1", "median ratio", "median |log2|", "C2", "leads lost to density"],
+    [[name, w_label(w), d_label(d), f"{count_rows(name)[(d, w)]['rho']:.3f}",
+      yes(count_rows(name)[(d, w)]["c1"]), f"{count_rows(name)[(d, w)]['median_ratio']:.3f}",
+      "inf" if count_rows(name)[(d, w)]["median_abs_log2"] is None
+      else f"{count_rows(name)[(d, w)]['median_abs_log2']:.3f}",
+      yes(count_rows(name)[(d, w)]["c2"]),
+      pct(count_rows(name)[(d, w)]["share_of_leads_lost_to_density"])]
+     for name in NAMES for w in W_VALUES for d in ["bp_only", *D_VALUES]]))
+```
+
+### C3: does cM earn its keep?
+
+Δρ is the cM point's ρ minus bp-only's at the same W; Δ|log2| is bp-only's median
+|log2| density ratio minus the cM point's, so positive is better on both. C3 holds
+when some D is ahead by a margin on one and behind by no more than its margin on
+the other.
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for name in NAMES:
+    cnt = maps[name]["counts"]
+    configs = count_rows(name)
+    for w in W_VALUES:
+        bp = configs[("bp_only", w)]
+        c3 = next(c for c in cnt["c3"] if c["w_bp"] == w)
+        for d in D_VALUES:
+            c = configs[(d, w)]
+            d_log = (0.0 if c["median_abs_log2"] is None or bp["median_abs_log2"] is None
+                     else bp["median_abs_log2"] - c["median_abs_log2"])
+            rows.append([name, w_label(w), d_label(d), f"{c['rho'] - bp['rho']:+.3f}",
+                         f"{d_log:+.3f}", yes(d in c3["d_cm_that_holds"])])
+show(md_table(["map", "W", "D", "Δρ", "Δ|log2|", "C3 holds"], rows))
+```
+
+```{python}
+#| echo: false
+fig, axes = plt.subplots(1, len(NAMES), figsize=(4.4 * len(NAMES), 4.4), sharey=True)
+for ax, name in zip(axes, NAMES):
+    configs = count_rows(name)
+    for w, colour in zip(W_VALUES, ["#1b9e77", "#d95f02", "#7570b3", "#e7298a"]):
+        pts = [configs[(d, w)] for d in D_VALUES]
+        ax.plot([c["median_ratio"] for c in pts], [c["rho"] for c in pts], "-o", color=colour,
+                label=f"W {w_label(w)}")
+        bp = configs[("bp_only", w)]
+        ax.plot([bp["median_ratio"]], [bp["rho"]], "s", color=colour, markersize=9,
+                markerfacecolor="none")
+    ax.axhline(CRITERIA["rho_min"], color="0.4", lw=1)
+    ax.axvspan(*CRITERIA["ratio_range"], color="0.85", alpha=0.6, zorder=0)
+    ax.set_title(name)
+    ax.set_xlabel("median density ratio")
+    ax.legend(fontsize=7)
+axes[0].set_ylabel("Spearman ρ")
+fig.suptitle("C1 is above the line, C2 inside the band; open squares are bp only")
+fig.tight_layout()
+plt.show()
+```
+
+### Leads per index variant
+
+Locus Leads over plink2's r² 0.01 index variants, pooled over the Analyses in a
+band, for each map's named point.
+
+```{python}
+#| echo: false
+#| output: asis
+Z_BANDS = ["<38.5", "38.5-100", ">=100"]
+ROW_BANDS = ["<1k", "1k-10k", "10k-100k", ">=100k"]
+
+
+def ratio(entry, kind, band):
+    found = entry[kind].get(band)
+    return "-" if found is None else f"{found['ratio']:.2f}"
+
+
+rows = []
+for name in NAMES:
+    d, w = named_key(name)
+    entry = next(e for e in maps[name]["counts"]["leads_per_index_variant"]
+                 if (e["d_cm"], e["w_bp"]) == (d, w))
+    rows.append([name, point(d, w), *[ratio(entry, "z", b) for b in Z_BANDS],
+                 *[ratio(entry, "rows", b) for b in ROW_BANDS]])
+show(md_table(["map", "named point", "|z| < 38.5", "|z| 38.5–100", "|z| ≥ 100",
+               "rows < 1k", "1k–10k", "10k–100k", "rows ≥ 100k"], rows))
+```
+
+## Per-lead diagnostics
+
+These are #403's diagnostics, unchanged: the per-lead rates say where Locus Leads
+and plink2's index variants disagree one by one. They are not the criterion.
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for name in NAMES:
+    for d, w in sorted({(c["d_cm"], c["w_bp"]) for c in maps[name]["per_lead"]},
+                       key=lambda k: (k[1], str(k[0]))):
+        rates = per_lead_rows(name)[(d, w)]["by_r2"][PRIMARY]
+        rows.append([name, point(d, w), f"{rates['locus_leads']:,}",
+                     f"{rates['index_variants']:,}", pct(rates["spurious_split_rate"]),
+                     pct(rates["lost_signal_rate"]), pct(rates["disagreement_rate"])])
+show(md_table(["map", "point", "Locus Leads", "index variants", "spurious", "lost",
+               "disagreement"], rows))
+```
+
+## Reproduce
+
+```bash
+# the two maps (their READMEs record the downloads and checksums)
+pixi run -e dev python -m prototypes.locus_leads build-hapmap2-map \
+    --original /data/opengwasdb/reference/genetic-map/eagle-hapmap2-hg38/original/genetic_map_hg38_withX.txt.gz \
+    --output /data/opengwasdb/reference/genetic-map/eagle-hapmap2-hg38/HapMap2.tsv.gz
+pixi run -e dev python -m prototypes.locus_leads build-median-map \
+    --archive /data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/original/hg38_maps.tar.gz \
+    --output /data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR-median.tsv.gz
+
+# one sweep per map, on #403's selection; the mean's sweep is eur_sweep.json
+pixi run -e dev python -m prototypes.locus_leads sweep \
+    --selection docs/benchmark-output/locus_leads/eur_sweep_selection.json \
+    --stores-dir /data/opengwasdb/stores \
+    --genetic-map /data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR-median.tsv.gz \
+    --panel /data/opengwasdb/reference/hgdp1kgp-hg38/pgen/EUR \
+    --hm3 /data/opengwasdb/reference/hapmap3-hg38/hm3.grch38.alid.txt \
+    --work-dir <scratch> --spikes none --threads 8 \
+    --output docs/benchmark-output/locus_leads/eur_maps_pyrho_median.json
+# ... and the same with --genetic-map .../eagle-hapmap2-hg38/HapMap2.tsv.gz \
+#     --output docs/benchmark-output/locus_leads/eur_maps_hapmap2.json
+
+# the shared-set check, then the three sweeps side by side
+pixi run -e dev python -m prototypes.locus_leads map-shared-sets \
+    --selection docs/benchmark-output/locus_leads/eur_sweep_selection.json \
+    --stores-dir /data/opengwasdb/stores \
+    --panel /data/opengwasdb/reference/hgdp1kgp-hg38/pgen/EUR \
+    --genetic-map pyrho-mean=/data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR.tsv.gz \
+    --genetic-map pyrho-median=/data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR-median.tsv.gz \
+    --genetic-map hapmap2=/data/opengwasdb/reference/genetic-map/eagle-hapmap2-hg38/HapMap2.tsv.gz \
+    --reference pyrho-mean \
+    --output docs/benchmark-output/locus_leads/eur_maps_shared_set.json
+pixi run -e dev python -m prototypes.locus_leads compare-maps \
+    --selection docs/benchmark-output/locus_leads/eur_sweep_selection.json \
+    --shared-sets docs/benchmark-output/locus_leads/eur_maps_shared_set.json \
+    --genetic-map pyrho-mean=docs/benchmark-output/locus_leads/eur_sweep.json \
+    --genetic-map pyrho-median=docs/benchmark-output/locus_leads/eur_maps_pyrho_median.json \
+    --genetic-map hapmap2=docs/benchmark-output/locus_leads/eur_maps_hapmap2.json \
+    --output docs/benchmark-output/locus_leads/eur_maps.json
+pixi run -e report quarto render docs/benchmark-output/locus_leads/eur_maps.qmd
+```
