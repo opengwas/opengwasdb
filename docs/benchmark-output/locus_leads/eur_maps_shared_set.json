@@ -1,0 +1,651 @@
+{
+ "selection": {
+  "sha256": "04b0d3c03933674e69429c0b61e04dbf96f5b1ef4caf4c46c6f41efbd8989c00",
+  "chosen": 40
+ },
+ "reference_map": "pyrho-mean",
+ "maps": {
+  "pyrho-mean": {
+   "map": "pyrho-mean",
+   "map_sha256": "146989362889d686c5d52346bce2c0ad9b52d4eb687b1c165666fd680cfd4329",
+   "analyses": {
+    "OGS-00009/ukb-b-16489": {
+     "rows": 25954,
+     "shared_set": 25682,
+     "sha256": "18c6e6a2cae9c9e64098000ab284dafad9b29a61d85914af3be5ad5198d8783f"
+    },
+    "OGS-00009/ukb-b-4171": {
+     "rows": 622,
+     "shared_set": 610,
+     "sha256": "1a89a04ef6260f844ad30f536755917c188b56ead9ab5caf702082f3f2e6c818"
+    },
+    "OGS-00009/ukb-b-9685": {
+     "rows": 109744,
+     "shared_set": 106173,
+     "sha256": "496a67f085d4b355d7454468d83c72573b8e58048e7eb452f205e2ad206bfaef"
+    },
+    "OGS-00011/GCST90000025": {
+     "rows": 201377,
+     "shared_set": 190255,
+     "sha256": "863a2d9d0fefe292ef1f970bb97332ed4e6b243cb456b099e4809a226640bb40"
+    },
+    "OGS-00011/GCST90002401": {
+     "rows": 116389,
+     "shared_set": 104303,
+     "sha256": "74125357d7fca30a351413384d6246e98f9c0eccee1b9e4d6ae9953bed7f0927"
+    },
+    "OGS-00011/GCST90012057": {
+     "rows": 425,
+     "shared_set": 364,
+     "sha256": "64dc5486dec1d723703813ef691473b90638256f6405e500e7a39ab09080105b"
+    },
+    "OGS-00011/GCST90012107": {
+     "rows": 30367,
+     "shared_set": 28112,
+     "sha256": "eeaac3d12f91e6115ec123ae3263592c64238ec4ca7643105b1327e6ae5a8862"
+    },
+    "OGS-00011/GCST90012111": {
+     "rows": 86446,
+     "shared_set": 78043,
+     "sha256": "c84db79a9c472a68412f0c2b0abf29ccc75a2384900f9603cd0c2eb73b4c0ab6"
+    },
+    "OGS-00011/GCST90025947": {
+     "rows": 8643,
+     "shared_set": 7816,
+     "sha256": "e3e0e963977369a09354373dd16fdecf0bd92a4491e92c829e3d78ff552b9da5"
+    },
+    "OGS-00011/GCST90025960": {
+     "rows": 15862,
+     "shared_set": 13959,
+     "sha256": "8628684a4017a1bf36d9abd6739e220fa05b167e1d4f65d36666dd5f3d0a0638"
+    },
+    "OGS-00011/GCST90025965": {
+     "rows": 6415,
+     "shared_set": 5872,
+     "sha256": "3046e85b3b699378689342df67794eaff3092cae5aaa2c72a2e05b8c77e39612"
+    },
+    "OGS-00011/GCST90025973": {
+     "rows": 3033,
+     "shared_set": 2753,
+     "sha256": "3e5890b7b091b03e47552697f4e80c277960b3f3a87b1b3b10d72aac39ebce3d"
+    },
+    "OGS-00011/GCST90025993": {
+     "rows": 626,
+     "shared_set": 447,
+     "sha256": "8047a06958bbe9541ea344a0b691b641fec5c2e87552f912bc6f0c5d8660caf2"
+    },
+    "OGS-00011/GCST90025996": {
+     "rows": 3257,
+     "shared_set": 3104,
+     "sha256": "4e368c8828dc4f424c5b9db02504670497eb313480493fba377d162a400f3ae3"
+    },
+    "OGS-00011/GCST90029004": {
+     "rows": 122361,
+     "shared_set": 115448,
+     "sha256": "49950f0ba297af92dbe5370bb146c6edd0215705e72a6317737210a82e533742"
+    },
+    "OGS-00011/GCST90029011": {
+     "rows": 59461,
+     "shared_set": 57976,
+     "sha256": "15fff635c3ce31ddae86f20c761eb4032f3059840152aed09fce4ce3da8d1b05"
+    },
+    "OGS-00011/GCST90029025": {
+     "rows": 110470,
+     "shared_set": 107372,
+     "sha256": "e202a8b8e665c4f7f369c27e79261a4c45f70d50a433c909e3fb335cdaca5ce1"
+    },
+    "OGS-00011/GCST90134590": {
+     "rows": 7,
+     "shared_set": 7,
+     "sha256": "985bb665f12206e352c731f7e8195f5751aa6e9b674cc15caf9dfa3a76799e94"
+    },
+    "OGS-00011/GCST90162563": {
+     "rows": 4135,
+     "shared_set": 3432,
+     "sha256": "15abf1ffd779baca5896e3818110d1845531bddb5791647d2cc0164bab89633a"
+    },
+    "OGS-00011/GCST90239658": {
+     "rows": 94463,
+     "shared_set": 86679,
+     "sha256": "cf862ff1b8dee018cc26eb606a6bbb4da36baf66788819ce38c78bf57511085b"
+    },
+    "OGS-00011/GCST90239826": {
+     "rows": 11935,
+     "shared_set": 11015,
+     "sha256": "3b676f4de2992d03a32a81c0da4b361317fd210645895a9ff10f284ac440f15f"
+    },
+    "OGS-00011/GCST90271559": {
+     "rows": 7831,
+     "shared_set": 7511,
+     "sha256": "1a0e075d4b070e5beb5856268212eb578fda802c57475a50beffb93417e066e1"
+    },
+    "OGS-00011/GCST90274804": {
+     "rows": 2313,
+     "shared_set": 1973,
+     "sha256": "87ddcd290de15cc31b0f25df419d93ff24d84696bdf5f4b10e44d374ea025772"
+    },
+    "OGS-00011/GCST90319610": {
+     "rows": 4624,
+     "shared_set": 4158,
+     "sha256": "90ade085b8e106aee3ec9113281b8b4d2bcc7dfd72acd3957d4a377ef59372ae"
+    },
+    "OGS-00011/GCST90319613": {
+     "rows": 15301,
+     "shared_set": 14846,
+     "sha256": "1388f0856ba1ea6527ae14712d5fe768252c7078af8befe9cf695db8e20b7260"
+    },
+    "OGS-00011/GCST90319621": {
+     "rows": 9035,
+     "shared_set": 8423,
+     "sha256": "c08b050a5b0624d41a4aae96ca357cc79e92d5c802155c216c1ba59da1c08c28"
+    },
+    "OGS-00011/GCST90319631": {
+     "rows": 17043,
+     "shared_set": 15959,
+     "sha256": "87f4d18d5c7c3f16e391cfd579d0e8bc9d724d956c856343a59777950c18e7cb"
+    },
+    "OGS-00011/GCST90559267": {
+     "rows": 621,
+     "shared_set": 581,
+     "sha256": "9c27b8b650fbf4b0a7339beafd3b0d89c2a193e35e10dbbc380414d1baa40a81"
+    },
+    "OGS-00011/GCST90704619": {
+     "rows": 1788,
+     "shared_set": 1651,
+     "sha256": "302f9b5ede8cee6d8b3bffaf102608500d3f903807acc14e26895e2f820aa64d"
+    },
+    "OGS-00011/GCST90704633": {
+     "rows": 89,
+     "shared_set": 60,
+     "sha256": "a29b30c05cdc9ae69849659b9ff2f5ed8de11ab3a6d9a3f400a2040263220645"
+    },
+    "OGS-00011/GCST90704637": {
+     "rows": 667,
+     "shared_set": 644,
+     "sha256": "d417803cf7c6919916d93245d2ca5e65199162777446ee3263a1657788cf072f"
+    },
+    "OGS-00012/GCST90475442": {
+     "rows": 209821,
+     "shared_set": 182076,
+     "sha256": "da1acfe86d8c94cf7113a1112d469e4644b95c8f69056b63b3c8ee7ad3223569"
+    },
+    "OGS-00012/GCST90475446": {
+     "rows": 213827,
+     "shared_set": 185649,
+     "sha256": "4cb85c7866146d652ea81645478a0bc6561067c801c86d1c6a525e5273b4af2e"
+    },
+    "OGS-00012/GCST90475523": {
+     "rows": 106603,
+     "shared_set": 96428,
+     "sha256": "495a234583fec16aeb29a1d5ff67e6fa27477f23e9882bfcd60ab3a5d61f2572"
+    },
+    "OGS-00012/GCST90475532": {
+     "rows": 39950,
+     "shared_set": 37300,
+     "sha256": "b2034e46ab2894ae86a211a590ef995e8e1c09577116732647641d79ab36252d"
+    },
+    "OGS-00012/GCST90475609": {
+     "rows": 775,
+     "shared_set": 478,
+     "sha256": "d53e4fc7a14bfbb63c8160149cc61a8c0b04cf53e55b9e7868c3d99b1f987783"
+    },
+    "OGS-00012/GCST90475852": {
+     "rows": 4696,
+     "shared_set": 3916,
+     "sha256": "c210a9205fca9714522f44902ae79f8bb83988b8c2c6a891573389c696a5566f"
+    },
+    "OGS-00012/GCST90476249": {
+     "rows": 3785,
+     "shared_set": 3729,
+     "sha256": "8966672ca0a77bb12a98e972878d6cf9ddc0f578d834f0e4ce7f95bad699a925"
+    },
+    "OGS-00012/GCST90476460": {
+     "rows": 314699,
+     "shared_set": 291996,
+     "sha256": "7b6556c073bc9e14d5d62ea66d5f1e25102e122f71ff2ab40bef9403262cf8b0"
+    },
+    "OGS-00012/GCST90477870": {
+     "rows": 377,
+     "shared_set": 0,
+     "sha256": "c9f1c954ef425288254d0d1fd591776ea788c3e64a52c1581e4bd3dd5abd3d32"
+    }
+   },
+   "sha256": "1aa16180d634b4892ee9cc1e817f7e763bcd841f6bce0fb4f38b918f2f8db504",
+   "clamped": {
+    "before_first_knot": 0,
+    "after_last_knot": 1,
+    "rows": 1
+   },
+   "shared_set_rows": 1806800,
+   "tier_rows": 1965837
+  },
+  "pyrho-median": {
+   "map": "pyrho-median",
+   "map_sha256": "ad07d38ce253893ae9d3e2d6de6233867412f3698f46d1abe72dc76070fffb7a",
+   "analyses": {
+    "OGS-00009/ukb-b-16489": {
+     "rows": 25954,
+     "shared_set": 25682,
+     "sha256": "18c6e6a2cae9c9e64098000ab284dafad9b29a61d85914af3be5ad5198d8783f"
+    },
+    "OGS-00009/ukb-b-4171": {
+     "rows": 622,
+     "shared_set": 610,
+     "sha256": "1a89a04ef6260f844ad30f536755917c188b56ead9ab5caf702082f3f2e6c818"
+    },
+    "OGS-00009/ukb-b-9685": {
+     "rows": 109744,
+     "shared_set": 106173,
+     "sha256": "496a67f085d4b355d7454468d83c72573b8e58048e7eb452f205e2ad206bfaef"
+    },
+    "OGS-00011/GCST90000025": {
+     "rows": 201377,
+     "shared_set": 190255,
+     "sha256": "863a2d9d0fefe292ef1f970bb97332ed4e6b243cb456b099e4809a226640bb40"
+    },
+    "OGS-00011/GCST90002401": {
+     "rows": 116389,
+     "shared_set": 104303,
+     "sha256": "74125357d7fca30a351413384d6246e98f9c0eccee1b9e4d6ae9953bed7f0927"
+    },
+    "OGS-00011/GCST90012057": {
+     "rows": 425,
+     "shared_set": 364,
+     "sha256": "64dc5486dec1d723703813ef691473b90638256f6405e500e7a39ab09080105b"
+    },
+    "OGS-00011/GCST90012107": {
+     "rows": 30367,
+     "shared_set": 28112,
+     "sha256": "eeaac3d12f91e6115ec123ae3263592c64238ec4ca7643105b1327e6ae5a8862"
+    },
+    "OGS-00011/GCST90012111": {
+     "rows": 86446,
+     "shared_set": 78043,
+     "sha256": "c84db79a9c472a68412f0c2b0abf29ccc75a2384900f9603cd0c2eb73b4c0ab6"
+    },
+    "OGS-00011/GCST90025947": {
+     "rows": 8643,
+     "shared_set": 7816,
+     "sha256": "e3e0e963977369a09354373dd16fdecf0bd92a4491e92c829e3d78ff552b9da5"
+    },
+    "OGS-00011/GCST90025960": {
+     "rows": 15862,
+     "shared_set": 13959,
+     "sha256": "8628684a4017a1bf36d9abd6739e220fa05b167e1d4f65d36666dd5f3d0a0638"
+    },
+    "OGS-00011/GCST90025965": {
+     "rows": 6415,
+     "shared_set": 5872,
+     "sha256": "3046e85b3b699378689342df67794eaff3092cae5aaa2c72a2e05b8c77e39612"
+    },
+    "OGS-00011/GCST90025973": {
+     "rows": 3033,
+     "shared_set": 2753,
+     "sha256": "3e5890b7b091b03e47552697f4e80c277960b3f3a87b1b3b10d72aac39ebce3d"
+    },
+    "OGS-00011/GCST90025993": {
+     "rows": 626,
+     "shared_set": 447,
+     "sha256": "8047a06958bbe9541ea344a0b691b641fec5c2e87552f912bc6f0c5d8660caf2"
+    },
+    "OGS-00011/GCST90025996": {
+     "rows": 3257,
+     "shared_set": 3104,
+     "sha256": "4e368c8828dc4f424c5b9db02504670497eb313480493fba377d162a400f3ae3"
+    },
+    "OGS-00011/GCST90029004": {
+     "rows": 122361,
+     "shared_set": 115448,
+     "sha256": "49950f0ba297af92dbe5370bb146c6edd0215705e72a6317737210a82e533742"
+    },
+    "OGS-00011/GCST90029011": {
+     "rows": 59461,
+     "shared_set": 57976,
+     "sha256": "15fff635c3ce31ddae86f20c761eb4032f3059840152aed09fce4ce3da8d1b05"
+    },
+    "OGS-00011/GCST90029025": {
+     "rows": 110470,
+     "shared_set": 107372,
+     "sha256": "e202a8b8e665c4f7f369c27e79261a4c45f70d50a433c909e3fb335cdaca5ce1"
+    },
+    "OGS-00011/GCST90134590": {
+     "rows": 7,
+     "shared_set": 7,
+     "sha256": "985bb665f12206e352c731f7e8195f5751aa6e9b674cc15caf9dfa3a76799e94"
+    },
+    "OGS-00011/GCST90162563": {
+     "rows": 4135,
+     "shared_set": 3432,
+     "sha256": "15abf1ffd779baca5896e3818110d1845531bddb5791647d2cc0164bab89633a"
+    },
+    "OGS-00011/GCST90239658": {
+     "rows": 94463,
+     "shared_set": 86679,
+     "sha256": "cf862ff1b8dee018cc26eb606a6bbb4da36baf66788819ce38c78bf57511085b"
+    },
+    "OGS-00011/GCST90239826": {
+     "rows": 11935,
+     "shared_set": 11015,
+     "sha256": "3b676f4de2992d03a32a81c0da4b361317fd210645895a9ff10f284ac440f15f"
+    },
+    "OGS-00011/GCST90271559": {
+     "rows": 7831,
+     "shared_set": 7511,
+     "sha256": "1a0e075d4b070e5beb5856268212eb578fda802c57475a50beffb93417e066e1"
+    },
+    "OGS-00011/GCST90274804": {
+     "rows": 2313,
+     "shared_set": 1973,
+     "sha256": "87ddcd290de15cc31b0f25df419d93ff24d84696bdf5f4b10e44d374ea025772"
+    },
+    "OGS-00011/GCST90319610": {
+     "rows": 4624,
+     "shared_set": 4158,
+     "sha256": "90ade085b8e106aee3ec9113281b8b4d2bcc7dfd72acd3957d4a377ef59372ae"
+    },
+    "OGS-00011/GCST90319613": {
+     "rows": 15301,
+     "shared_set": 14846,
+     "sha256": "1388f0856ba1ea6527ae14712d5fe768252c7078af8befe9cf695db8e20b7260"
+    },
+    "OGS-00011/GCST90319621": {
+     "rows": 9035,
+     "shared_set": 8423,
+     "sha256": "c08b050a5b0624d41a4aae96ca357cc79e92d5c802155c216c1ba59da1c08c28"
+    },
+    "OGS-00011/GCST90319631": {
+     "rows": 17043,
+     "shared_set": 15959,
+     "sha256": "87f4d18d5c7c3f16e391cfd579d0e8bc9d724d956c856343a59777950c18e7cb"
+    },
+    "OGS-00011/GCST90559267": {
+     "rows": 621,
+     "shared_set": 581,
+     "sha256": "9c27b8b650fbf4b0a7339beafd3b0d89c2a193e35e10dbbc380414d1baa40a81"
+    },
+    "OGS-00011/GCST90704619": {
+     "rows": 1788,
+     "shared_set": 1651,
+     "sha256": "302f9b5ede8cee6d8b3bffaf102608500d3f903807acc14e26895e2f820aa64d"
+    },
+    "OGS-00011/GCST90704633": {
+     "rows": 89,
+     "shared_set": 60,
+     "sha256": "a29b30c05cdc9ae69849659b9ff2f5ed8de11ab3a6d9a3f400a2040263220645"
+    },
+    "OGS-00011/GCST90704637": {
+     "rows": 667,
+     "shared_set": 644,
+     "sha256": "d417803cf7c6919916d93245d2ca5e65199162777446ee3263a1657788cf072f"
+    },
+    "OGS-00012/GCST90475442": {
+     "rows": 209821,
+     "shared_set": 182076,
+     "sha256": "da1acfe86d8c94cf7113a1112d469e4644b95c8f69056b63b3c8ee7ad3223569"
+    },
+    "OGS-00012/GCST90475446": {
+     "rows": 213827,
+     "shared_set": 185649,
+     "sha256": "4cb85c7866146d652ea81645478a0bc6561067c801c86d1c6a525e5273b4af2e"
+    },
+    "OGS-00012/GCST90475523": {
+     "rows": 106603,
+     "shared_set": 96428,
+     "sha256": "495a234583fec16aeb29a1d5ff67e6fa27477f23e9882bfcd60ab3a5d61f2572"
+    },
+    "OGS-00012/GCST90475532": {
+     "rows": 39950,
+     "shared_set": 37300,
+     "sha256": "b2034e46ab2894ae86a211a590ef995e8e1c09577116732647641d79ab36252d"
+    },
+    "OGS-00012/GCST90475609": {
+     "rows": 775,
+     "shared_set": 478,
+     "sha256": "d53e4fc7a14bfbb63c8160149cc61a8c0b04cf53e55b9e7868c3d99b1f987783"
+    },
+    "OGS-00012/GCST90475852": {
+     "rows": 4696,
+     "shared_set": 3916,
+     "sha256": "c210a9205fca9714522f44902ae79f8bb83988b8c2c6a891573389c696a5566f"
+    },
+    "OGS-00012/GCST90476249": {
+     "rows": 3785,
+     "shared_set": 3729,
+     "sha256": "8966672ca0a77bb12a98e972878d6cf9ddc0f578d834f0e4ce7f95bad699a925"
+    },
+    "OGS-00012/GCST90476460": {
+     "rows": 314699,
+     "shared_set": 291996,
+     "sha256": "7b6556c073bc9e14d5d62ea66d5f1e25102e122f71ff2ab40bef9403262cf8b0"
+    },
+    "OGS-00012/GCST90477870": {
+     "rows": 377,
+     "shared_set": 0,
+     "sha256": "c9f1c954ef425288254d0d1fd591776ea788c3e64a52c1581e4bd3dd5abd3d32"
+    }
+   },
+   "sha256": "1aa16180d634b4892ee9cc1e817f7e763bcd841f6bce0fb4f38b918f2f8db504",
+   "clamped": {
+    "before_first_knot": 0,
+    "after_last_knot": 1,
+    "rows": 1
+   },
+   "shared_set_rows": 1806800,
+   "tier_rows": 1965837
+  },
+  "hapmap2": {
+   "map": "hapmap2",
+   "map_sha256": "cb4964a181ea10ed6125b76598f9b4ca250c8812439156186acd4d21e9a91046",
+   "analyses": {
+    "OGS-00009/ukb-b-16489": {
+     "rows": 25954,
+     "shared_set": 25682,
+     "sha256": "18c6e6a2cae9c9e64098000ab284dafad9b29a61d85914af3be5ad5198d8783f"
+    },
+    "OGS-00009/ukb-b-4171": {
+     "rows": 622,
+     "shared_set": 610,
+     "sha256": "1a89a04ef6260f844ad30f536755917c188b56ead9ab5caf702082f3f2e6c818"
+    },
+    "OGS-00009/ukb-b-9685": {
+     "rows": 109744,
+     "shared_set": 106173,
+     "sha256": "496a67f085d4b355d7454468d83c72573b8e58048e7eb452f205e2ad206bfaef"
+    },
+    "OGS-00011/GCST90000025": {
+     "rows": 201377,
+     "shared_set": 190255,
+     "sha256": "863a2d9d0fefe292ef1f970bb97332ed4e6b243cb456b099e4809a226640bb40"
+    },
+    "OGS-00011/GCST90002401": {
+     "rows": 116389,
+     "shared_set": 104303,
+     "sha256": "74125357d7fca30a351413384d6246e98f9c0eccee1b9e4d6ae9953bed7f0927"
+    },
+    "OGS-00011/GCST90012057": {
+     "rows": 425,
+     "shared_set": 364,
+     "sha256": "64dc5486dec1d723703813ef691473b90638256f6405e500e7a39ab09080105b"
+    },
+    "OGS-00011/GCST90012107": {
+     "rows": 30367,
+     "shared_set": 28112,
+     "sha256": "eeaac3d12f91e6115ec123ae3263592c64238ec4ca7643105b1327e6ae5a8862"
+    },
+    "OGS-00011/GCST90012111": {
+     "rows": 86446,
+     "shared_set": 78043,
+     "sha256": "c84db79a9c472a68412f0c2b0abf29ccc75a2384900f9603cd0c2eb73b4c0ab6"
+    },
+    "OGS-00011/GCST90025947": {
+     "rows": 8643,
+     "shared_set": 7816,
+     "sha256": "e3e0e963977369a09354373dd16fdecf0bd92a4491e92c829e3d78ff552b9da5"
+    },
+    "OGS-00011/GCST90025960": {
+     "rows": 15862,
+     "shared_set": 13959,
+     "sha256": "8628684a4017a1bf36d9abd6739e220fa05b167e1d4f65d36666dd5f3d0a0638"
+    },
+    "OGS-00011/GCST90025965": {
+     "rows": 6415,
+     "shared_set": 5872,
+     "sha256": "3046e85b3b699378689342df67794eaff3092cae5aaa2c72a2e05b8c77e39612"
+    },
+    "OGS-00011/GCST90025973": {
+     "rows": 3033,
+     "shared_set": 2753,
+     "sha256": "3e5890b7b091b03e47552697f4e80c277960b3f3a87b1b3b10d72aac39ebce3d"
+    },
+    "OGS-00011/GCST90025993": {
+     "rows": 626,
+     "shared_set": 447,
+     "sha256": "8047a06958bbe9541ea344a0b691b641fec5c2e87552f912bc6f0c5d8660caf2"
+    },
+    "OGS-00011/GCST90025996": {
+     "rows": 3257,
+     "shared_set": 3104,
+     "sha256": "4e368c8828dc4f424c5b9db02504670497eb313480493fba377d162a400f3ae3"
+    },
+    "OGS-00011/GCST90029004": {
+     "rows": 122361,
+     "shared_set": 115448,
+     "sha256": "49950f0ba297af92dbe5370bb146c6edd0215705e72a6317737210a82e533742"
+    },
+    "OGS-00011/GCST90029011": {
+     "rows": 59461,
+     "shared_set": 57976,
+     "sha256": "15fff635c3ce31ddae86f20c761eb4032f3059840152aed09fce4ce3da8d1b05"
+    },
+    "OGS-00011/GCST90029025": {
+     "rows": 110470,
+     "shared_set": 107372,
+     "sha256": "e202a8b8e665c4f7f369c27e79261a4c45f70d50a433c909e3fb335cdaca5ce1"
+    },
+    "OGS-00011/GCST90134590": {
+     "rows": 7,
+     "shared_set": 7,
+     "sha256": "985bb665f12206e352c731f7e8195f5751aa6e9b674cc15caf9dfa3a76799e94"
+    },
+    "OGS-00011/GCST90162563": {
+     "rows": 4135,
+     "shared_set": 3432,
+     "sha256": "15abf1ffd779baca5896e3818110d1845531bddb5791647d2cc0164bab89633a"
+    },
+    "OGS-00011/GCST90239658": {
+     "rows": 94463,
+     "shared_set": 86679,
+     "sha256": "cf862ff1b8dee018cc26eb606a6bbb4da36baf66788819ce38c78bf57511085b"
+    },
+    "OGS-00011/GCST90239826": {
+     "rows": 11935,
+     "shared_set": 11015,
+     "sha256": "3b676f4de2992d03a32a81c0da4b361317fd210645895a9ff10f284ac440f15f"
+    },
+    "OGS-00011/GCST90271559": {
+     "rows": 7831,
+     "shared_set": 7511,
+     "sha256": "1a0e075d4b070e5beb5856268212eb578fda802c57475a50beffb93417e066e1"
+    },
+    "OGS-00011/GCST90274804": {
+     "rows": 2313,
+     "shared_set": 1973,
+     "sha256": "87ddcd290de15cc31b0f25df419d93ff24d84696bdf5f4b10e44d374ea025772"
+    },
+    "OGS-00011/GCST90319610": {
+     "rows": 4624,
+     "shared_set": 4158,
+     "sha256": "90ade085b8e106aee3ec9113281b8b4d2bcc7dfd72acd3957d4a377ef59372ae"
+    },
+    "OGS-00011/GCST90319613": {
+     "rows": 15301,
+     "shared_set": 14846,
+     "sha256": "1388f0856ba1ea6527ae14712d5fe768252c7078af8befe9cf695db8e20b7260"
+    },
+    "OGS-00011/GCST90319621": {
+     "rows": 9035,
+     "shared_set": 8423,
+     "sha256": "c08b050a5b0624d41a4aae96ca357cc79e92d5c802155c216c1ba59da1c08c28"
+    },
+    "OGS-00011/GCST90319631": {
+     "rows": 17043,
+     "shared_set": 15959,
+     "sha256": "87f4d18d5c7c3f16e391cfd579d0e8bc9d724d956c856343a59777950c18e7cb"
+    },
+    "OGS-00011/GCST90559267": {
+     "rows": 621,
+     "shared_set": 581,
+     "sha256": "9c27b8b650fbf4b0a7339beafd3b0d89c2a193e35e10dbbc380414d1baa40a81"
+    },
+    "OGS-00011/GCST90704619": {
+     "rows": 1788,
+     "shared_set": 1651,
+     "sha256": "302f9b5ede8cee6d8b3bffaf102608500d3f903807acc14e26895e2f820aa64d"
+    },
+    "OGS-00011/GCST90704633": {
+     "rows": 89,
+     "shared_set": 60,
+     "sha256": "a29b30c05cdc9ae69849659b9ff2f5ed8de11ab3a6d9a3f400a2040263220645"
+    },
+    "OGS-00011/GCST90704637": {
+     "rows": 667,
+     "shared_set": 644,
+     "sha256": "d417803cf7c6919916d93245d2ca5e65199162777446ee3263a1657788cf072f"
+    },
+    "OGS-00012/GCST90475442": {
+     "rows": 209821,
+     "shared_set": 182076,
+     "sha256": "da1acfe86d8c94cf7113a1112d469e4644b95c8f69056b63b3c8ee7ad3223569"
+    },
+    "OGS-00012/GCST90475446": {
+     "rows": 213827,
+     "shared_set": 185649,
+     "sha256": "4cb85c7866146d652ea81645478a0bc6561067c801c86d1c6a525e5273b4af2e"
+    },
+    "OGS-00012/GCST90475523": {
+     "rows": 106603,
+     "shared_set": 96428,
+     "sha256": "495a234583fec16aeb29a1d5ff67e6fa27477f23e9882bfcd60ab3a5d61f2572"
+    },
+    "OGS-00012/GCST90475532": {
+     "rows": 39950,
+     "shared_set": 37300,
+     "sha256": "b2034e46ab2894ae86a211a590ef995e8e1c09577116732647641d79ab36252d"
+    },
+    "OGS-00012/GCST90475609": {
+     "rows": 775,
+     "shared_set": 478,
+     "sha256": "d53e4fc7a14bfbb63c8160149cc61a8c0b04cf53e55b9e7868c3d99b1f987783"
+    },
+    "OGS-00012/GCST90475852": {
+     "rows": 4696,
+     "shared_set": 3916,
+     "sha256": "c210a9205fca9714522f44902ae79f8bb83988b8c2c6a891573389c696a5566f"
+    },
+    "OGS-00012/GCST90476249": {
+     "rows": 3785,
+     "shared_set": 3729,
+     "sha256": "8966672ca0a77bb12a98e972878d6cf9ddc0f578d834f0e4ce7f95bad699a925"
+    },
+    "OGS-00012/GCST90476460": {
+     "rows": 314699,
+     "shared_set": 291996,
+     "sha256": "7b6556c073bc9e14d5d62ea66d5f1e25102e122f71ff2ab40bef9403262cf8b0"
+    },
+    "OGS-00012/GCST90477870": {
+     "rows": 377,
+     "shared_set": 0,
+     "sha256": "c9f1c954ef425288254d0d1fd591776ea788c3e64a52c1581e4bd3dd5abd3d32"
+    }
+   },
+   "sha256": "1aa16180d634b4892ee9cc1e817f7e763bcd841f6bce0fb4f38b918f2f8db504",
+   "clamped": {
+    "before_first_knot": 155,
+    "after_last_knot": 170,
+    "rows": 325
+   },
+   "shared_set_rows": 1806800,
+   "tier_rows": 1965837
+  }
+ }
+}

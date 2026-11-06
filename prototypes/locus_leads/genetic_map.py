@@ -34,6 +34,10 @@ class ArchiveChecksumError(RuntimeError):
     """The map's source archive is not the one the record names."""
 
 
+class SourceChecksumError(RuntimeError):
+    """A map's original download is not the one its identity file names."""
+
+
 class GeneticMap:
     """Per chromosome, strictly increasing positions and non-decreasing cM."""
 
@@ -101,15 +105,29 @@ def verify_archive(archive: Path, expected_md5: str = ARCHIVE_MD5) -> str:
     return md5
 
 
+def verify_source(path: Path, expected_sha256: str) -> str:
+    """The download's sha256, after refusing one the identity file does not name.
+
+    A map built from a download rather than from the pyrho archive records that
+    download's sha256 instead of the archive's md5 (#404).
+    """
+    sha256 = file_digest(path, "sha256")
+    if sha256 != expected_sha256:
+        raise SourceChecksumError(
+            f"{path}: sha256 {sha256} differs from the {expected_sha256} its map's identity file "
+            "records"
+        )
+    return sha256
+
+
 def sidecar_path(map_path: Path) -> Path:
     if not map_path.name.endswith(".tsv.gz"):
         raise GeneticMapError(f"{map_path}: a map file is named <name>.tsv.gz")
     return map_path.with_name(map_path.name.removesuffix(".tsv.gz") + ".json")
 
 
-def write_map(genetic_map: GeneticMap, map_path: Path, *, archive: Path,
-              populations: Mapping[str, float], averaging: str = "") -> dict[str, Any]:
-    """Write `<name>.tsv.gz` (chromosome, position, cM) and its `<name>.json` identity.
+def write_points(genetic_map: GeneticMap, map_path: Path) -> str:
+    """Write `<name>.tsv.gz` (chromosome, position, cM) and return its sha256.
 
     The gzip header carries no time or name, so the same map gives the same
     bytes and the same sha256 on every build.
@@ -123,9 +141,15 @@ def write_map(genetic_map: GeneticMap, map_path: Path, *, archive: Path,
     with map_path.open("wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", mtime=0,
                                                     filename="") as handle:
         handle.write(frame.to_csv(sep="\t", index=False, float_format="%.9f").encode())
+    return file_digest(map_path, "sha256")
+
+
+def write_map(genetic_map: GeneticMap, map_path: Path, *, archive: Path,
+              populations: Mapping[str, float], averaging: str = "") -> dict[str, Any]:
+    """Write `<name>.tsv.gz` and its `<name>.json` identity."""
     identity = {
         "map": map_path.name,
-        "sha256": file_digest(map_path, "sha256"),
+        "sha256": write_points(genetic_map, map_path),
         "assembly": "GRCh38",
         "archive": {"path": str(archive.relative_to(map_path.parent)),
                     "md5": file_digest(archive, "md5"), "record": ARCHIVE_RECORD},
@@ -140,9 +164,23 @@ def write_map(genetic_map: GeneticMap, map_path: Path, *, archive: Path,
 
 
 def load_map(map_path: Path, *, archive_md5: str = ARCHIVE_MD5) -> LoadedMap:
-    """The map at `map_path`, once its source archive and its own bytes check out."""
+    """The map at `map_path`, once its source and its own bytes check out.
+
+    A map built from the pyrho archive records the archive's md5; one built from
+    another download records that download's sha256 (#404). Either is checked
+    before a cM is read, and the map's own sha256 always is.
+    """
     identity: dict[str, Any] = json.loads(sidecar_path(map_path).read_text())
-    verify_archive(map_path.parent / identity["archive"]["path"], archive_md5)
+    sources = [key for key in ("archive", "source") if key in identity]
+    if len(sources) != 1:
+        raise GeneticMapError(
+            f"{map_path}: its identity names {sources or 'no source'}, where exactly one of "
+            "'archive' or 'source' is required; a map nobody can trace is not a map")
+    if "archive" in identity:
+        verify_archive(map_path.parent / identity["archive"]["path"], archive_md5)
+    else:
+        verify_source(map_path.parent / identity["source"]["path"],
+                      identity["source"]["sha256"])
     sha256 = file_digest(map_path, "sha256")
     if sha256 != identity["sha256"]:
         raise GeneticMapError(
