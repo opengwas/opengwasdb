@@ -44,7 +44,29 @@ comes after one of its members in that order fails the run.
 | `clump.py` | -log10 p, tie separation, plink2 clumping |
 | `compare.py` | spurious splits and lost signals |
 | `run.py` | one run, end to end; clumping is independent of D and W, so a sweep reuses it |
+| `select.py` | the seeded, stratified draw of Analyses, and its record |
+| `sweep.py` | every (D, W) and the bp-only baseline over the drawn Analyses; pooled rates and the working criteria |
+| `pairs.py` | each disagreeing pair's r², distance band and spike, chance LD between chromosomes, and the pair file |
+| `counts.py` | the count criteria C1-C3: rank, density against HapMap3, cM against bp-only |
+| `ld.py` | r² between panel variants, from dosages plink2 exports |
 | `cost.py` | what pruning costs against clumping (#406): the per-variant cM array, the pruning stages of a tier, plink2's clumping, and the ratio |
+
+A sweep takes the selection, the map and the panel directory as inputs:
+
+```bash
+pixi run -e dev python -m prototypes.locus_leads select --stores /data/opengwasdb/stores \
+    --seed 403 --output docs/benchmark-output/locus_leads/eur_sweep_selection.json
+pixi run -e dev python -m prototypes.locus_leads sweep \
+    --selection docs/benchmark-output/locus_leads/eur_sweep_selection.json \
+    --stores-dir /data/opengwasdb/stores --genetic-map <map>.tsv.gz --panel <panel directory> \
+    --hm3 /data/opengwasdb/reference/hapmap3-hg38/hm3.grch38.alid.txt \
+    --work-dir <scratch directory> --output docs/benchmark-output/locus_leads/eur_sweep.json
+```
+
+The sweep also writes `eur_sweep_pairs.tsv.gz` beside its JSON: every disagreeing pair at
+r² 0.01 for four configurations, with its sha256 in the JSON. Each Analysis's record is cached
+under the work directory with a fingerprint of its inputs; a cache made with other inputs is
+refused, not reused.
 
 ## What pruning costs (#406)
 
@@ -57,13 +79,17 @@ pixi run -e dev python -m prototypes.locus_leads cost \
 ```
 
 The run builds a per-variant cM array over each Store's whole Variant Table, then
-for each slice times the Top-Hit Query, the positions, the cM lookup, the sort and
-the rule, and times plink2's clumping of the same Analysis's shared set, one
-chromosome at a time. Each stage is timed `--repeats` times and reported as a
-median with its range, its load average and its peak RSS — the child process's for
-plink2, this process's otherwise, from `/proc/<pid>/statm` rather than `ru_maxrss`.
-The report beside the JSON is rendered from it; `cost.qmd` computes every figure
-on the page from the committed JSON.
+for each slice times the tier's own query and the same query resolved, the
+positions, the cM lookup, the sort, and both rules, and times plink2's clumping of
+the same Analysis's shared set, one chromosome at a time. Each stage is timed
+`--repeats` times and reported as a median with its range, a load record per
+repeat, and its peak RSS with the RSS already resident when it began — the child
+process's for plink2, this process's otherwise, from `/proc/<pid>/statm` rather
+than `ru_maxrss`; a peak nobody observed is recorded as missing, never as zero.
+The sort is reported for information only: both rules sort inside their own time,
+so no total charges it. Pruning is divided by three clumping bills — plink2 alone,
+plink2 with the panel match it needs, and the whole shared set. `cost.qmd`
+computes every figure on the page from the committed JSON.
 
 `cost.fast_locus_leads` is the same rule by another route: it asks a block of rows
 at once whether the accepted leads already exclude them, and gives identical

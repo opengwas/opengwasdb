@@ -245,11 +245,7 @@ def compare_tier(tier: TierRows, identity: dict[str, Any], genetic_map: LoadedMa
     The tier's threshold is read from the identity, so the clumping thresholds
     recorded are the tier the rows came from.
     """
-    check_assemblies(identity["store"]["reference_assembly"], genetic_map.identity["assembly"],
-                     panel.assembly())
-    if identity["query"]["observed"] != tier.chromosome.size:
-        raise ValueError(f"{tier.chromosome.size:,} rows, but the query recorded "
-                         f"{identity['query']['observed']:,} observed")
+    check_tier(tier, identity, genetic_map, panel)
     shared, accounting = build_shared_set(tier, panel, genetic_map.map)
     clumps = clump_shared_set(shared, panel, r2_values, threshold=identity["query"]["threshold"],
                               work_dir=work_dir, threads=threads)
@@ -262,6 +258,16 @@ def compare_tier(tier: TierRows, identity: dict[str, Any], genetic_map: LoadedMa
         "definitions": DEFINITIONS,
         "comparison": compare_leads(shared, clumps, d_cm=d_cm, w_bp=w_bp),
     }
+
+
+def check_tier(tier: TierRows, identity: dict[str, Any], genetic_map: LoadedMap,
+               panel: Panel) -> None:
+    """Refuse rows from another assembly than the map and panel, or fewer than the query found."""
+    check_assemblies(identity["store"]["reference_assembly"], genetic_map.identity["assembly"],
+                     panel.assembly())
+    if identity["query"]["observed"] != tier.chromosome.size:
+        raise ValueError(f"{tier.chromosome.size:,} rows, but the query recorded "
+                         f"{identity['query']['observed']:,} observed")
 
 
 def _analysis_record(table: dict[int, dict[str, Any]], analysis_id: str) -> dict[str, Any]:
