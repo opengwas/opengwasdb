@@ -35,8 +35,14 @@ def show(text):
 
 
 def md_table(headers, rows):
-    head = "| " + " | ".join(headers) + " |\n|" + "|".join(["---"] * len(headers)) + "|\n"
-    return head + "\n".join("| " + " | ".join(str(c) for c in row) + " |" for row in rows)
+    # A cell may carry a pipe of its own (|log2|), which would end the cell early
+    # and shift every column after it (#404 review).
+    def cell(value):
+        return str(value).replace("|", "\\|")
+
+    head = "| " + " | ".join(cell(h) for h in headers) + " |\n|" + "|".join(["---"] * len(headers)) + "|\n"
+    # A trailing blank line, so the next table is not read as this one's rows.
+    return head + "\n".join("| " + " | ".join(cell(c) for c in row) + " |" for row in rows) + "\n"
 
 
 def pct(value):
@@ -150,6 +156,12 @@ show(md_table(["map", "Analyses swept", "tier rows", "shared-set rows", "share",
 same = len({maps[name]["shared_set_checked"]["sha256"] for name in NAMES}) == 1
 below = {name: maps[name]["below_shared_set_floor"] for name in NAMES}
 same_below = all(b["analyses"] == below[MEAN]["analyses"] for b in below.values())
+clamped = {name: maps[name]["shared_set"]["clamped"] for name in NAMES}
+show(md_table(["map", "rows clamped before the first knot", "after the last knot", "rows"],
+              [[name, f"{c['before_first_knot']:,}", f"{c['after_last_knot']:,}", f"{c['rows']:,}"]
+               for name, c in clamped.items()]))
+show("Equal rows do not mean equal knots: outside a map's ends the cM is held flat at the end knot, "
+     "so a row there is judged by the map's edge rather than by an interpolation of it.")
 show(f"The digests are {'identical' if same else 'not identical'} across the maps, as the check "
      "requires; `eur_maps_shared_set.json` holds each Analysis's own digest and count. "
      f"{len(below[MEAN]['analyses'])} drawn Analyses fall under the "

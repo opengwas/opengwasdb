@@ -7,6 +7,7 @@
  "maps": {
   "pyrho-mean": {
    "map": "pyrho-mean",
+   "map_sha256": "146989362889d686c5d52346bce2c0ad9b52d4eb687b1c165666fd680cfd4329",
    "analyses": {
     "OGS-00009/ukb-b-16489": {
      "rows": 25954,
@@ -210,11 +211,17 @@
     }
    },
    "sha256": "1aa16180d634b4892ee9cc1e817f7e763bcd841f6bce0fb4f38b918f2f8db504",
+   "clamped": {
+    "before_first_knot": 0,
+    "after_last_knot": 1,
+    "rows": 1
+   },
    "shared_set_rows": 1806800,
    "tier_rows": 1965837
   },
   "pyrho-median": {
    "map": "pyrho-median",
+   "map_sha256": "ad07d38ce253893ae9d3e2d6de6233867412f3698f46d1abe72dc76070fffb7a",
    "analyses": {
     "OGS-00009/ukb-b-16489": {
      "rows": 25954,
@@ -418,11 +425,17 @@
     }
    },
    "sha256": "1aa16180d634b4892ee9cc1e817f7e763bcd841f6bce0fb4f38b918f2f8db504",
+   "clamped": {
+    "before_first_knot": 0,
+    "after_last_knot": 1,
+    "rows": 1
+   },
    "shared_set_rows": 1806800,
    "tier_rows": 1965837
   },
   "hapmap2": {
    "map": "hapmap2",
+   "map_sha256": "cb4964a181ea10ed6125b76598f9b4ca250c8812439156186acd4d21e9a91046",
    "analyses": {
     "OGS-00009/ukb-b-16489": {
      "rows": 25954,
@@ -626,6 +639,11 @@
     }
    },
    "sha256": "1aa16180d634b4892ee9cc1e817f7e763bcd841f6bce0fb4f38b918f2f8db504",
+   "clamped": {
+    "before_first_knot": 155,
+    "after_last_knot": 170,
+    "rows": 325
+   },
    "shared_set_rows": 1806800,
    "tier_rows": 1965837
   }
