@@ -73,7 +73,8 @@ from opengwasdb.variants.normalise import (
     CanonicalVariant,
     chromosome_sort_key,
 )
-from opengwasdb.variants.routing import collapse_duplicates
+from opengwasdb.variants.routing import SourceKey, collapse_duplicates, union_names
+from opengwasdb.variants.rsid import RsidConflictPolicy
 
 _MISSING = {"", ".", "NA", "NaN", "nan", "None"}
 
@@ -473,42 +474,119 @@ def _ingest_ssf_sources(
     One pass per analysis: canonicalise each source row, admit it through the
     Analysis's gate, deduplicate rows that canonicalise to the same variant
     (issue #101), and collect the global canonical-variant set plus each
-    variant's first-seen rsid. The printed per-analysis count is the fail-loud
-    record of what survived: a row Admission drops never reaches this point and
-    is in ``record``, and a conflicting duplicate pair is dropped for that cell
-    entirely rather than one of them silently kept.
+    variant's rsid, after comparing its spellings' names (`_Harvest`). The
+    printed per-analysis count is the fail-loud record of what survived: a row
+    Admission drops never reaches this point and is in ``record``, and a
+    conflicting duplicate pair is dropped for that cell entirely rather than
+    one of them silently kept.
     """
     scale = StoredEffectScale(request.stored_effect_scale)
     per_analysis: list[list[_Assoc]] = []
-    alid_variant: dict[str, CanonicalVariant] = {}
-    rsid_by_alid: dict[str, str] = {}
+    harvest = _Harvest()
     for a in analytes:
         with record.gate(rules[a.analysis_id]) as gate:
             batches = _admitted_batches(a, gate, scale)
             for batch in batches:
-                _first_seen(batch, alid_variant, rsid_by_alid)
+                harvest.add(batch)
             recs, n_consistent, n_conflicting = _dedupe_per_analysis(batches, gate)
         per_analysis.append(recs)
         _print_ingest_summary(a, recs, n_consistent, n_conflicting)
     record.finish()
-    return per_analysis, alid_variant, rsid_by_alid
+    return per_analysis, harvest.alid_variant, harvest.names()
 
 
-def _first_seen(
-    batch: ReaderBatch,
-    alid_variant: dict[str, CanonicalVariant],
-    rsid_by_alid: dict[str, str],
-) -> None:
-    """Register each admitted row's variant the first time any Analysis names it,
-    with the rsid its row names (the GWAS-SSF reader's rule: `rsid`, else
-    `variant_id`, whichever is an rs identifier)."""
-    for alid, rsid in zip(batch.alid.tolist(), batch.rsid.tolist(), strict=True):
-        if alid in alid_variant:
-            continue
-        chromosome, position, a1, a2 = alid.split(":")
-        alid_variant[alid] = CanonicalVariant(chromosome, int(position), a1, a2)
-        if rsid:
-            rsid_by_alid[alid] = rsid
+#: What the harvest's refusal calls this build (ADR 0066).
+HARVEST_LABEL = "Ragged SSF build"
+
+
+@dataclass
+class _Harvest:
+    """The variants a build's admitted rows reach, and the names they carry.
+
+    Rows are added in Manifest Row order and file order. Each row is read
+    with the GWAS-SSF reader's rsid rule: `rsid`, else `variant_id`,
+    whichever is an rs identifier.
+
+    - ``alid_variant``: each variant, registered at its first admitted row.
+    - ``named``: each raw site's first non-empty rsid, in the order sites are
+      first named. A site is its ALID and its alleles as the source spells
+      them, as Pass 1's union keeps a site, so `names` can compare a site's
+      spellings.
+    - ``unnamed``: the sites whose admitted rows have named nothing so far.
+
+    The cost is kept to what the first-seen check before #379 paid
+    (OGS-00006 admits 58M rows for 12M sites):
+    - A row of a site already named costs one lookup.
+    - The ALID holds the site's chromosome and position, so it is split once
+      per variant here and once per site at naming, not once per row.
+    - A site is keyed as one string, ``alid<TAB>ref<TAB>alt``. A map of
+      strings holds nothing the cyclic garbage collector tracks, so it adds
+      nothing to each of the build's collections. Tuple keys added 12M
+      entries to every collection. A source allele holding a TAB would make
+      two spellings one key, so `names` refuses it.
+    """
+
+    alid_variant: dict[str, CanonicalVariant] = field(default_factory=dict)
+    named: dict[str, str] = field(default_factory=dict)
+    unnamed: set[str] = field(default_factory=set)
+
+    def add(self, batch: ReaderBatch) -> None:
+        """Register each of ``batch``'s rows, a batch of admitted rows."""
+        alid_variant, named, unnamed = self.alid_variant, self.named, self.unnamed
+        for alid, ref, alt, rsid in zip(
+            batch.alid.tolist(), batch.ref.tolist(), batch.alt.tolist(), batch.rsid.tolist(),
+            strict=True,
+        ):
+            site = f"{alid}\t{ref}\t{alt}"
+            if site in named:
+                continue
+            if site in unnamed:
+                if rsid:
+                    unnamed.discard(site)
+                    named[site] = rsid
+                continue
+            if alid not in alid_variant:
+                chromosome, position, a1, a2 = alid.split(":")
+                alid_variant[alid] = CanonicalVariant(chromosome, int(position), a1, a2)
+            if rsid:
+                named[site] = rsid
+            else:
+                unnamed.add(site)
+
+    def names(self) -> dict[str, str]:
+        """Each variant's rsid, after comparing the names a site's spellings carry.
+
+        The harvest goes through `union_names`, the test every harvest applies
+        (ADR 0066, #379). `build-ragged-ssf` has no `--on-rsid-conflict`, so a
+        Routing Key its sources name two ways is refused, naming both names.
+        Otherwise a variant takes the first non-empty rsid among its admitted
+        rows, as spec §4 says, whichever spelling carries it (#400).
+        """
+        alid_variant = self.alid_variant
+        # The ALIDs the names are keyed by are the registered ones, not the
+        # copies a key's split makes. Copies made here would outlive the
+        # naming in the build's variant table and pin the memory freed around
+        # them: on OGS-00006 that kept the peak 2 GB higher.
+        registered = {alid: alid for alid in alid_variant}
+        rsid_by_site: dict[SourceKey, str] = {}
+        site_alid: dict[SourceKey, str] = {}
+        for key, rsid in self.named.items():
+            fields = key.split("\t")
+            if len(fields) != 3:
+                # Checked here, once per named site, not on every row added.
+                raise ValueError(
+                    f"{HARVEST_LABEL}: a source allele of {fields[0]} holds a TAB, which "
+                    "the build's site key cannot tell apart from another spelling"
+                )
+            alid, ref, alt = fields
+            variant = alid_variant[alid]
+            site = (variant.chromosome, variant.position, ref, alt)
+            rsid_by_site[site] = rsid
+            site_alid[site] = registered[alid]
+        del registered
+        return union_names(
+            rsid_by_site, site_alid, policy=RsidConflictPolicy.REFUSE, label=HARVEST_LABEL
+        ).rsid_by_alid
 
 
 def _print_ingest_summary(

@@ -1,4 +1,4 @@
-"""Sources that name one stored variant differently (issue #306).
+"""Sources that name one stored variant differently (issues #306, #379).
 
 A Hybrid routing key upper-cases alleles, so a source written in lower case
 lands on the same stored variant as an upper-case one. When the two name that
@@ -6,6 +6,8 @@ variant with different rsids, the build cannot tell which name is right. Its
 default is to refuse (issue #255 round 4); `--on-rsid-conflict drop` instead
 stores the variant with no rsid, so it is found by ALID and position but never
 answers to a name its sources disagree on, and says how many keys it dropped.
+A single-pass build (`--variant-reference`) and a two-pass one
+(`--reference-panel`) follow the one rule.
 
 The fixtures mirror the GWAS Catalog shape that forced the choice (stores
 #225): an upper-case harmonised GWAS-SSF file listed first, a lower-case one
@@ -20,6 +22,7 @@ import json
 from pathlib import Path
 
 import pytest
+from extraction_fixtures import extract_from_manifest
 from test_hybrid_build import _assert_hybrid_stores_match, _hybrid_axis_rsids
 from test_hybrid_checkpoint import _assert_manifests_match
 from typer.testing import CliRunner
@@ -38,6 +41,7 @@ from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.reference import read_variant_reference
 
 #: On the reference: the variant the two sources name differently.
 CONFLICT_ON = "1:100000:A:G"
@@ -114,12 +118,20 @@ def _conflict_fixture(tmp_path: Path, conflict: str) -> tuple[Path, Path]:
     return _manifest(tmp_path, [("upper", upper), ("lower", lower)]), _reference(tmp_path)
 
 
-def _cli(manifest: Path, reference: Path, store: Path, *extra: str):
+#: How each Hybrid mode is given its axis: a reference naming none of its
+#: variants routes a single-pass build, and the same ALID list as a Dense panel
+#: partitions a two-pass build's own union.
+MODES = {"single-pass": "--variant-reference", "two-pass": "--reference-panel"}
+
+
+def _cli(
+    manifest: Path, reference: Path, store: Path, *extra: str, mode: str = "single-pass"
+):
     return CliRunner().invoke(
         app,
         [
             "build-hybrid", str(manifest), str(store),
-            "--variant-reference", str(reference),
+            MODES[mode], str(reference),
             "--admission-record", f"{store}.admission",
             "--store-id", "s", "--release-id", "r", *extra,
         ],
@@ -163,13 +175,16 @@ def _assert_one_variant_unnamed(
     assert len(hit["z"]) == 2
 
 
+@pytest.mark.parametrize("mode", list(MODES))
 @pytest.mark.parametrize("conflict", [CONFLICT_ON, CONFLICT_OFF], ids=["reference", "fold"])
 class TestConflictingNames:
-    def test_refuse_is_the_default_and_names_the_key_and_both_rsids(self, tmp_path, conflict):
+    def test_refuse_is_the_default_and_names_the_key_and_both_rsids(
+        self, tmp_path, conflict, mode
+    ):
         manifest, reference = _conflict_fixture(tmp_path, conflict)
         store = tmp_path / "refused.opengwasdb"
 
-        result = _cli(manifest, reference, store)
+        result = _cli(manifest, reference, store, mode=mode)
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -178,11 +193,11 @@ class TestConflictingNames:
         assert repr(UPPER_NAME) in message and repr(LOWER_NAME) in message
         assert not store.exists()
 
-    def test_drop_stores_the_variant_with_no_rsid_and_reports_it(self, tmp_path, conflict):
+    def test_drop_stores_the_variant_with_no_rsid_and_reports_it(self, tmp_path, conflict, mode):
         manifest, reference = _conflict_fixture(tmp_path, conflict)
         store = tmp_path / "dropped.opengwasdb"
 
-        result = _cli(manifest, reference, store, "--on-rsid-conflict", "drop")
+        result = _cli(manifest, reference, store, "--on-rsid-conflict", "drop", mode=mode)
 
         _assert_one_variant_unnamed(result, store, conflict, (UPPER_NAME, LOWER_NAME), conflict)
         # The fixture is meaningful: the agreed variant keeps its name, so the
@@ -348,28 +363,49 @@ def test_harvest_that_finds_no_names_counts_zero(tmp_path, policy):
     assert _hybrid_axis_rsids(store) == {CONFLICT_ON: "", AGREED: ""}
 
 
-def test_reference_panel_build_refuses_drop(tmp_path):
-    """The legacy two-pass build has no harvest for the policy to govern, so
-    asking it to drop is refused rather than silently ignored."""
-    manifest, reference = _agreeing_fixture(tmp_path)
+@pytest.mark.parametrize("policy", ["refuse", "drop"])
+@pytest.mark.parametrize("mode", list(MODES))
+def test_swapping_the_sources_changes_no_name(tmp_path, mode, policy):
+    """The disputed variant is refused or left unnamed whichever source is
+    listed first, and the variant both name alike keeps its name: no name
+    depends on the manifest's order (issue #379)."""
+    manifest, reference = _conflict_fixture(tmp_path, CONFLICT_ON)
+    lines = manifest.read_text(encoding="utf-8").splitlines()
+    swapped = tmp_path / "swapped.tsv"
+    swapped.write_text("\n".join([lines[0], lines[2], lines[1]]) + "\n", encoding="utf-8")
+    assert [line.split("\t")[0] for line in swapped.read_text().splitlines()[1:]] == [
+        "lower", "upper"
+    ]
 
-    with pytest.raises(ValueError, match="--on-rsid-conflict drop"):
-        build_hybrid_from_vcf_manifest(
-            manifest, tmp_path / "panel.opengwasdb", reference_panel=reference,
-            store_id="s", release_id="r", on_rsid_conflict="drop",
-        )
+    outcomes = []
+    for name, ordered in (("listed", manifest), ("swapped", swapped)):
+        store = tmp_path / f"{name}.opengwasdb"
+        result = _cli(ordered, reference, store, "--on-rsid-conflict", policy, mode=mode)
+        if result.exit_code != 0:
+            assert f"one routing key {CONFLICT_ON!r} with different rsids" in str(
+                result.exception
+            )
+            outcomes.append(None)
+            continue
+        report = _summary(result.output)["rsid_conflicts"]
+        outcomes.append((_hybrid_axis_rsids(store), report["n_keys"], report["n_variants"]))
+
+    expected = None if policy == "refuse" else ({CONFLICT_ON: "", AGREED: "rs3"}, 1, 1)
+    assert outcomes == [expected, expected]
 
 
 def test_build_that_reads_no_source_names_reports_no_count(tmp_path):
-    """Without a harvest nothing was compared, so the count is unknown (null),
-    not zero. (A two-pass build refuses mixed-case sources outright, so this
-    one source is upper case.)"""
+    """A reference that names its variants is used as given and no source
+    name is compared, so the count is unknown (null), not zero."""
     source = _write_ssf(tmp_path / "upper.tsv.gz", [("1", 100000, "A", "G", 0.5, 0.1, "rs1")])
     manifest = _manifest(tmp_path, [("upper", source)])
-    store = tmp_path / "panel.opengwasdb"
+    named = tmp_path / "named.variant-ref.tsv.gz"
+    extract_from_manifest(manifest, named)
+    assert read_variant_reference(named).rsid_by_alid == {CONFLICT_ON: "rs1"}
+    store = tmp_path / "named.opengwasdb"
 
     result = build_hybrid_from_vcf_manifest(
-        manifest, store, reference_panel=_reference(tmp_path), store_id="s", release_id="r"
+        manifest, store, variant_reference=named, store_id="s", release_id="r"
     )
 
     assert _hybrid_axis_rsids(store)[CONFLICT_ON] == "rs1"

@@ -10,6 +10,11 @@ pre-lift window is lifted in a worker, re-bucketed by post-lift window, merged
 and compressed (issue #197). The members concatenate in genomic order behind
 one header member.
 
+Each window writer compares the names a site's spellings carry as the union's
+harvest does, and refuses a key its sources name two ways: an artifact a
+build uses as given must not freeze the name of whichever source came first
+(issue #379).
+
 The lift here is the window's own, so the failure threshold applies to the
 whole union and the reverse-strand guard sees every key before anything is
 written (issue #354). It moves onto `place_sites` when the artifact can record
@@ -38,6 +43,7 @@ from opengwasdb.variants.normalise import canonical_alid, chromosome_sort_key
 from opengwasdb.variants.reference import ARTIFACT_HEADER, artifact_line
 from opengwasdb.variants.routing.keys import SourceKey, routing_key
 from opengwasdb.variants.routing.lift import cross_assembly_collisions, log_cross_assembly_drop
+from opengwasdb.variants.routing.names import refuse_disputed_names
 from opengwasdb.variants.routing.union import (
     Pass1Stats,
     ReaderFactory,
@@ -50,6 +56,9 @@ from opengwasdb.variants.routing.union import (
 from opengwasdb.variants.windows import WindowKey, window_key, window_size_bp
 
 log = logging.getLogger(__name__)
+
+#: What extraction's refusal of a disputed name calls it.
+EXTRACTION_LABEL = "Variant Reference extraction"
 
 
 class ReverseStrandLiftError(ValueError):
@@ -312,13 +321,16 @@ def _stream_window_artifact(task: tuple[WindowKey, str, str]) -> _WindowArtifact
     window, shard_path, member_path = task
     rsid_by_alid: dict[str, str] = {}
     source_keys_by_alid: dict[str, list[str]] = {}
+    named: dict[SourceKey, str] = {}
     n_source_keys = 0
     for (chrom, pos, ref, alt), rsid in iter_shard(Path(shard_path)):
         alid = canonical_alid(chrom, pos, ref, alt)
-        if rsid and alid not in rsid_by_alid:
-            rsid_by_alid[alid] = rsid
+        if rsid:
+            named[(chrom, pos, ref, alt)] = rsid
+            rsid_by_alid.setdefault(alid, rsid)
         source_keys_by_alid.setdefault(alid, []).append(f"{chrom}:{pos}:{ref}:{alt}")
         n_source_keys += 1
+    refuse_disputed_names(named, label=EXTRACTION_LABEL)
     _write_member(member_path, rsid_by_alid, source_keys_by_alid)
     return _WindowArtifact(
         window, Path(member_path), len(source_keys_by_alid), n_source_keys, len(rsid_by_alid)
@@ -579,13 +591,16 @@ def _compress_lifted_window(task: _LiftMergeTask) -> _WindowArtifact:
     records.sort(key=lambda record: record[:6])
     rsid_by_alid: dict[str, str] = {}
     source_keys_by_alid: dict[str, list[str]] = {}
+    named: dict[SourceKey, str] = {}
     for _chunk, _spill, pre_chrom, pre_pos, pre_ref, pre_alt, post_chrom, post_pos, rsid in records:
         alid = canonical_alid(post_chrom, post_pos, pre_ref, pre_alt)
-        if rsid and alid not in rsid_by_alid:
-            rsid_by_alid[alid] = rsid
+        if rsid:
+            named.setdefault((pre_chrom, pre_pos, pre_ref, pre_alt), rsid)
+            rsid_by_alid.setdefault(alid, rsid)
         source_keys_by_alid.setdefault(alid, []).append(
             f"{pre_chrom}:{pre_pos}:{pre_ref}:{pre_alt}"
         )
+    refuse_disputed_names(named, label=EXTRACTION_LABEL)
     _write_member(task.member_path, rsid_by_alid, source_keys_by_alid)
     return _WindowArtifact(
         task.window,

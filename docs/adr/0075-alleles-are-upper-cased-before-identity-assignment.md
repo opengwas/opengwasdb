@@ -1,5 +1,12 @@
 # Alleles are upper-cased before identity assignment
 
+> **Amended by [ADR 0066](0066-withhold-an-rsid-its-sources-dispute.md)'s
+> clarification of 5 November 2026** (issue #379). The question the rsid
+> Consequence below leaves open is decided: names are compared everywhere. A
+> two-pass build no longer keeps the first name for a site's two spellings
+> named differently; it refuses or withholds it, as a single-pass build does,
+> and Variant Reference extraction refuses it.
+>
 > **Amended by [ADR 0072](0072-association-admission.md)** (issue #357). Where
 > one Analysis gives both spellings of a site, routing no longer keeps the
 > later. The two are resolved as any two associations on one index are, by

@@ -2433,12 +2433,12 @@ class TestVariantReferenceRsids:
     @pytest.mark.parametrize("assembly", ["hg38", "hg19"], ids=["reference", "fold"])
     def test_mixed_case_conflicting_names(self, tmp_path, assembly):
         """Two raw sites spelt in different case are one variant (issue #360),
-        so the two-pass build stores both associations on it and names it as
-        it names any variant two sources name differently: the first non-empty
-        name in `(rank, site)` order. The single-pass harvest compares the
-        names a routing key's spellings carry and, under `refuse`, refuses
-        them, on the reference path (hg38) and the fold path (hg19) alike --
-        not silently keep one (issue #255, round 4)."""
+        and both harvests compare the names a routing key's spellings carry
+        (issue #379): under `refuse` the two-pass and the single-pass build
+        refuse them, on the reference path (hg38) and the fold path (hg19)
+        alike, rather than silently keep one (issue #255, round 4). Under
+        `drop` the two-pass build stores both associations on the variant and
+        names it nothing."""
         first = _make_vcf(
             tmp_path, "first", ["1\t1000000\trsUPPER\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
         )
@@ -2451,19 +2451,21 @@ class TestVariantReferenceRsids:
         panel = tmp_path / "case-panel.txt"
         panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
 
+        for axis in ("reference_panel", "variant_reference"):
+            with pytest.raises(ValueError, match="case.?fold"):
+                build_hybrid_from_vcf_manifest(
+                    manifest, tmp_path / f"case-{axis}.opengwasdb", store_id="s",
+                    release_id="r", **{axis: panel},
+                )
         two_pass = tmp_path / "case.opengwasdb"
         build_hybrid_from_vcf_manifest(
-            manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
+            manifest, two_pass, reference_panel=panel, store_id="s", release_id="r",
+            on_rsid_conflict="drop",
         )
         alid = "1:1000000:C:T" if assembly == "hg38" else HG38_ALID_2
-        assert _hybrid_axis_rsids(two_pass)[alid] == "rsUPPER"
+        assert _hybrid_axis_rsids(two_pass)[alid] == ""
         with query_store(two_pass) as query:
             assert len(query.lookup([alid], ["first", "second"])["z"]) == 2
-        with pytest.raises(ValueError, match="case.?fold"):
-            build_hybrid_from_vcf_manifest(
-                manifest, tmp_path / "case-one.opengwasdb", variant_reference=panel,
-                store_id="s", release_id="r",
-            )
 
     def test_named_reference_leaves_unnamed_variants_blank(self, tmp_path, caplog):
         """Issue #255, round 4 finding 3, a scope ruling rather than a fix: a

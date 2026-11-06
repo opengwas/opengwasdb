@@ -104,6 +104,8 @@ def _batch(rows: list[ReaderAssociation]) -> ReaderBatch:
         ),
         imputation_status=column(lambda a: a.imputation_score.status, object),
         rsid=np.full(len(rows), "", dtype=object),
+        ref=column(lambda a: a.ref, object),
+        alt=column(lambda a: a.alt, object),
         reference=reference,
         ref_first=column(lambda a: identity_allele(a.ref) < identity_allele(a.alt), bool)
         if reference.declared

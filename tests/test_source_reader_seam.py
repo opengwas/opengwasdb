@@ -55,11 +55,17 @@ _VCF_HEADER = """\
 """
 
 
-def _vcf(tmp_path: Path) -> Path:
+def _first(lower: bool) -> tuple[str, str]:
+    """The first row's ref and alt, spelt in lower case when ``lower``."""
+    return ("a", "g") if lower else ("A", "G")
+
+
+def _vcf(tmp_path: Path, *, lower: bool = False) -> Path:
+    ref, alt = _first(lower)
     path = tmp_path / "study.vcf"
     path.write_text(
         _VCF_HEADER
-        + "1\t100\trs1\tA\tG\t.\tPASS\t.\tES:SE:AF\t0.5:0.1:0.2\n"
+        + f"1\t100\trs1\t{ref}\t{alt}\t.\tPASS\t.\tES:SE:AF\t0.5:0.1:0.2\n"
         + "1\t200\trs2\tGGGGCC\tG\t.\tPASS\t.\tES:SE:AF\t-0.3:0.15:0.4\n"
         + "2\t300\t.\tT\tC\t.\tPASS\t.\tES:SE:AF\t0.2:0.0:0.6\n",
         encoding="utf-8",
@@ -67,24 +73,26 @@ def _vcf(tmp_path: Path) -> Path:
     return path
 
 
-def _ssf(tmp_path: Path) -> Path:
+def _ssf(tmp_path: Path, *, lower: bool = False) -> Path:
+    other, effect = _first(lower)
     path = tmp_path / "study.tsv.gz"
     with gzip.open(path, "wt", encoding="utf-8") as fh:
         fh.write(
             "chromosome\tbase_pair_location\teffect_allele\tother_allele\tbeta\t"
             "standard_error\teffect_allele_frequency\trsid\n"
-            "1\t100\tG\tA\t0.5\t0.1\t0.2\trs1\n"
+            f"1\t100\t{effect}\t{other}\t0.5\t0.1\t0.2\trs1\n"
             "1\t200\tG\tGGGGCC\t-0.3\t0.15\t0.4\trs2\n"
             "2\t300\tC\tT\t0.2\t0\t0.6\t.\n"
         )
     return path
 
 
-def _association_tsv(tmp_path: Path) -> Path:
+def _association_tsv(tmp_path: Path, *, lower: bool = False) -> Path:
+    other, effect = _first(lower)
     path = tmp_path / "associations.tsv"
     path.write_text(
         "chromosome\tposition\teffect_allele\tother_allele\tbeta\tse\teaf\trsid\n"
-        "1\t100\tG\tA\t0.5\t0.1\t0.2\trs1\n"
+        f"1\t100\t{effect}\t{other}\t0.5\t0.1\t0.2\trs1\n"
         "1\t200\tG\tGGGGCC\t-0.3\t0.15\t0.4\trs2\n"
         "2\t300\tC\tT\t0.2\t0\t0.6\t.\n",
         encoding="utf-8",
@@ -92,12 +100,13 @@ def _association_tsv(tmp_path: Path) -> Path:
     return path
 
 
-def _finngen(tmp_path: Path) -> Path:
+def _finngen(tmp_path: Path, *, lower: bool = False) -> Path:
+    ref, alt = _first(lower)
     path = tmp_path / "finngen.tsv.gz"
     with gzip.open(path, "wt", encoding="utf-8") as fh:
         fh.write(
             "#chrom\tpos\tref\talt\trsids\tbeta\tsebeta\taf_alt\n"
-            "1\t100\tA\tG\trs1\t0.5\t0.1\t0.2\n"
+            f"1\t100\t{ref}\t{alt}\trs1\t0.5\t0.1\t0.2\n"
             "1\t200\tGGGGCC\tG\trs2\t-0.3\t0.15\t0.4\n"
             "2\t300\tT\tC\t\tinf\t0.2\t0.6\n"
         )
@@ -113,17 +122,22 @@ def _indexed(vcf: Path) -> Path:
     return out
 
 
-def _readers(tmp_path: Path) -> dict[str, tuple[SourceReader, ReferenceAllele]]:
+def _readers(
+    tmp_path: Path, *, lower: bool = False
+) -> dict[str, tuple[SourceReader, ReferenceAllele]]:
     return {
-        "gwas-vcf": (GwasVcfReader(_indexed(_vcf(tmp_path))), ReferenceAllele.REF),
-        "gwas-ssf": (GwasSsfReader(_ssf(tmp_path)), ReferenceAllele.UNDECLARED),
-        "finngen-r13": (FinnGenR13Reader(_finngen(tmp_path)), ReferenceAllele.REF),
+        "gwas-vcf": (GwasVcfReader(_indexed(_vcf(tmp_path, lower=lower))), ReferenceAllele.REF),
+        "gwas-ssf": (GwasSsfReader(_ssf(tmp_path, lower=lower)), ReferenceAllele.UNDECLARED),
+        "finngen-r13": (
+            FinnGenR13Reader(_finngen(tmp_path, lower=lower)),
+            ReferenceAllele.REF,
+        ),
         "association-tsv": (
-            AssociationTsvReader(_association_tsv(tmp_path), StoredEffectScale.SD),
+            AssociationTsvReader(_association_tsv(tmp_path, lower=lower), StoredEffectScale.SD),
             ReferenceAllele.UNDECLARED,
         ),
         "column-map": (
-            ColumnMapReader(_finngen(tmp_path), load_column_map("finngen-r13")),
+            ColumnMapReader(_finngen(tmp_path, lower=lower), load_column_map("finngen-r13")),
             ReferenceAllele.REF,
         ),
     }
@@ -145,6 +159,27 @@ def test_a_readers_batches_are_its_associations_as_columns(tmp_path: Path, name:
     np.testing.assert_array_equal(eaf, [np.nan if a.eaf is None else a.eaf for a in associations])
     alids = np.concatenate([b.alid for b in batches]).tolist()
     assert alids == ["1:100:A:G", "1:200:G:GGGGCC", "2:300:C:T"]
+
+
+@pytest.mark.parametrize(
+    "name", ["gwas-vcf", "gwas-ssf", "finngen-r13", "association-tsv", "column-map", "besd"]
+)
+def test_a_batch_spells_each_rows_alleles_as_its_source_does(tmp_path: Path, name: str) -> None:
+    """The rsid harvest compares the names a site's spellings carry (#379), so a
+    batch keeps each row's ref and alt as its associations do (ADR 0075), while
+    its ALID is spelt as identity is assigned."""
+    if name == "besd":
+        reader = open_source(_besd_spec(_besd(tmp_path, lower=True), "P1"))
+    else:
+        reader = _readers(tmp_path, lower=True)[name][0]
+    associations = list(reader.stream_associations())
+    (batch,) = reader.stream_batches()
+    assert sorted((associations[0].ref, associations[0].alt)) == ["a", "g"]
+    assert batch.alid.tolist()[0] == "1:100:A:G"
+    assert batch.ref.tolist() == [a.ref for a in associations]
+    assert batch.alt.tolist() == [a.alt for a in associations]
+    kept = batch.take(np.array([False, True] + [False] * (len(batch) - 2)))
+    assert (kept.ref.tolist(), kept.alt.tolist()) == ([associations[1].ref], [associations[1].alt])
 
 
 @pytest.mark.parametrize(
@@ -214,12 +249,13 @@ def test_open_source_lifts_by_the_alignment_and_only_when_it_requires(tmp_path: 
     assert AssemblyPlan("hg19", "hg38", tmp_path / "x.chain").requires_liftover
 
 
-def _besd(tmp_path: Path) -> Path:
+def _besd(tmp_path: Path, *, lower: bool = False) -> Path:
+    a2, a1 = _first(lower)
     prefix = tmp_path / "eqtl"
     write_esi(
         Path(f"{prefix}.esi"),
         [
-            {"chr": "1", "snp_id": "rs1", "bp": 100, "a1": "G", "a2": "A", "freq": "0.2"},
+            {"chr": "1", "snp_id": "rs1", "bp": 100, "a1": a1, "a2": a2, "freq": "0.2"},
             {"chr": "NA", "snp_id": "rs2", "bp": 200, "a1": "C", "a2": "T", "freq": "0.4"},
             {"chr": "2", "snp_id": "2:300", "bp": 300, "a1": "C", "a2": "T", "freq": "1"},
         ],
@@ -436,6 +472,23 @@ def test_a_batch_declaring_no_reference_refuses_an_allele_order() -> None:
     """An order would say which allele is the reference where the format says none."""
     with pytest.raises(ValueError, match="declares no reference allele"):
         replace(_undeclared_insertion(), ref_first=np.array([True]))
+
+
+@pytest.mark.parametrize("short", ["ref", "alt", "alid"])
+def test_a_batch_refuses_alleles_that_do_not_line_up_with_its_rows(short: str) -> None:
+    """The rsid harvest pairs each row's ALID with its ref and alt (#379). A
+    column one row short would hand every later row its neighbour's spelling."""
+    rows = [
+        SourceRow(
+            chromosome="1", position=position, ref="A", alt="G", alid=f"1:{position}:A:G",
+            flipped=False, af_alt=None, beta=0.4, se=0.2,
+        )
+        for position in (100, 200)
+    ]
+    (batch,) = stream_batches(rows, ReferenceAllele.UNDECLARED)
+    assert len(batch) == len(batch.ref) == len(batch.alt) == 2
+    with pytest.raises(ValueError, match="ref and alt must each hold one allele per row"):
+        replace(batch, **{short: getattr(batch, short)[:-1]})
 
 
 def test_reference_codes_follow_the_declaration_not_the_allele_order() -> None:
