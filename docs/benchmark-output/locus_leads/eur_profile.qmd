@@ -1,0 +1,461 @@
+---
+title: "Locus boundaries from the association profile or LD blocks, against distance (#409)"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    theme: cosmo
+jupyter: python3
+---
+
+```{python}
+#| echo: false
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+from IPython.display import Markdown, display
+
+HERE = Path(".")
+result = json.loads((HERE / "eur_profile.json").read_text())
+sweep = json.loads((HERE / "eur_sweep.json").read_text())
+judgement = result["judgement"]
+criteria = judgement["criteria"]
+rules = judgement["rules"]
+beside = judgement["set_beside"]
+bp_only = {row["w_bp"]: row for row in judgement["bp_only"]}
+analyses = result["analyses"]
+definitions = result["definitions"]
+W_VALUES = sweep["grid"]["w_bp"]
+NAMED_W = max(W_VALUES)
+Z_BANDS = ["<38.5", "38.5-100", ">=100"]
+LEAD_BANDS = list(rules[0]["per_lead"]["by_abs_z"])
+STRONG = LEAD_BANDS[-1]
+
+
+def show(text):
+    display(Markdown("\n\n" + text + "\n\n"))
+
+
+def cell(value):
+    return str(value).replace("|", "\\|")
+
+
+def md_table(headers, rows):
+    head = ("| " + " | ".join(cell(h) for h in headers) + " |\n|"
+            + "|".join(["---"] * len(headers)) + "|\n")
+    return head + "\n".join("| " + " | ".join(cell(c) for c in row) + " |" for row in rows)
+
+
+def tier(p):
+    return f"{p:.0e}".replace("e-0", "e-")
+
+
+def pct(value):
+    return "-" if value is None else f"{100 * value:.1f}%"
+
+
+def w_label(w):
+    return f"{w / 1e6:g} Mb"
+
+
+def distance_label(row):
+    if row["d_cm"] == "bp_only":
+        return f"bp only, W {w_label(row['w_bp'])}"
+    return f"D {row['d_cm']:g} cM, W {w_label(row['w_bp'])}"
+
+
+def yes(flag):
+    return "yes" if flag else "no"
+
+
+def log2(value):
+    return "inf" if value is None else f"{value:.3f}"
+
+
+def band_rate(band, part, whole):
+    return pct(band[part] / band[whole]) if band[whole] else "-"
+
+
+def disagreement(band):
+    whole = band["locus_leads"] + band["index_variants"]
+    return (band["spurious_splits"] + band["lost_signals"]) / whole if whole else None
+
+
+def named(labels):
+    return "; ".join(labels) or "none"
+```
+
+## The question
+
+#403 found that distance pruning (cM or bp) tracks per-Analysis clump counts (C1) and is far
+less density-sensitive than raw hit counts (C2), but that a genetic map adds nothing over a bp
+window (C3). Its per-lead disagreement with r² 0.01 clumping concentrates at strong peaks. This
+report tests two rules that take their locus boundaries from the data rather than from a fixed
+distance, on #403's Analyses, shared set and clumps, judged by the same count criteria:
+
+- **Peak prominence on the association profile.** Two 5×10⁻⁸ rows belong to one locus unless
+  the |z| profile between them falls into a valley.
+- **One lead per LD block.** The lead is the strongest row in each EUR LD block.
+
+## Result
+
+```{python}
+#| echo: false
+#| output: asis
+def c3_at(r, w):
+    return next(m for m in r["c3"] if m["w_bp"] == w)["c3"]
+
+both = [r["label"] for r in rules if r["c1"] and r["c2"]]
+gaps = result["valley_cells"]["summary"]
+show(f"""
+- **C1 and C2.** Met by {named(both)}. C1 alone fails for
+  {named([r['label'] for r in rules if not r['c1']])}; C2 fails for
+  {named([r['label'] for r in rules if not r['c2']])}.
+- **C3 against bp-only.** At W {w_label(NAMED_W)}, #403's named point:
+  {named([r['label'] for r in rules if c3_at(r, NAMED_W)])}. At any W:
+  {named([f"{r['label']} at W {w_label(m['w_bp'])}" for r in rules for m in r['c3'] if m['c3']])}.
+- **Valleys.** Of the sampled no-row valleys, """ + "; ".join(
+    f"{pct(g['share_gap'])} {'pooled' if n == 'pooled' else f'at B {int(n) // 1000} kb'}"
+    for n, g in gaps.items()) + """ are gaps in coverage rather than low |z|; the stop rule
+  trips for """ + named([n for n, g in gaps.items() if g["stop_rule_trips"]]) + ".")
+```
+
+## The rules
+
+```{python}
+#| echo: false
+#| output: asis
+prom = definitions["prominence"]
+blocks = definitions["ld_blocks"]
+grid = result["grid"]
+show(f"""
+**Prominence.**
+
+- Profile: {prom['profile']}.
+- Envelope: {prom['envelope']}.
+- Col: {prom['col']}.
+- Order: {prom['order']}.
+- Join: {prom['join']}.
+- Thresholds: relative, {prom['relative']}; fixed, {prom['fixed']}.
+- Grid: B in {', '.join(f'{b // 1000} kb' for b in grid['bin_bp'])}; thresholds
+  {', '.join(grid['thresholds'])}.
+
+**LD blocks** ({result['inputs']['blocks']['blocks']:,} {result['inputs']['blocks']['ancestry']}
+blocks of `{Path(result['inputs']['blocks']['path']).name}`).
+
+- Blocks: {blocks['blocks']}.
+- Lead: {blocks['lead']}.
+- Outside every block: {blocks['outside']}.
+""")
+```
+
+## The inputs, and that they are #403's
+
+```{python}
+#| echo: false
+#| output: asis
+profile_rows = sum(a["profile"]["rows"] for a in analyses)
+largest = max(analyses, key=lambda a: a["profile"]["rows"])
+candidates = sum(a["profile"]["candidates"] for a in analyses)
+outside = sum(a["profile"]["at_5e8_outside_shared_set"] for a in analyses)
+below = sum(a["profile"]["below_5e8"] for a in analyses)
+equal = sum(a["shared_set"]["equals_403"] for a in analyses)
+checked = [b for b in result["grid"]["baselines"]
+           if all(b in a["baselines_equal_403"] for a in analyses)]
+not_swept = result["not_swept_by_403"]
+show(f"""
+The {len(analyses)} Analyses #403 swept, from its selection (sha256
+`{result['inputs']['selection_sha256'][:12]}`); the {len(not_swept)} it left out below its
+shared-set floor are left out here too ({', '.join(e['analysis_id'] for e in not_swept)}).
+
+- **Profile.** One Top-Hit Query per Analysis at {tier(result['inputs']['profile_tier'])}, observed
+  rows only: {profile_rows:,} rows in all, at most {largest['profile']['rows']:,}
+  ({largest['analysis']['analysis_id']}). Every Analysis's tier was read and used. Of these rows,
+  {candidates:,} are candidates (at {tier(result['inputs']['tier'])}, in the shared set),
+  {outside:,} are at {tier(result['inputs']['tier'])} but outside the shared set (off the panel,
+  for example), and {below:,} are below it. All of them shape the profile.
+- **Shared set.** The rule: {definitions['shared_set']}. It held for {equal} of {len(analyses)}
+  Analyses; the sweep stops on any other.
+- **Clumps and distance rules.** plink2 at r² {result['inputs']['r2']} on that shared set. #403's
+  distance rules ({'; '.join(distance_label(b) for b in checked)}) were recomputed on it and matched #403's committed per-Analysis records exactly, leads, splits,
+  lost signals, |z| bands and HapMap3 leads alike, before any new rule was scored.
+""")
+```
+
+## Are the empty valleys low |z|, or gaps in coverage?
+
+A bin with no tier row has envelope 0 whether the Analysis's |z| there is below the tier's floor
+or its cells are missing. Every split the prominence rule makes is classed by its valley bin.
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for r in rules:
+    if r["rule"] != "prominence":
+        continue
+    v, h = r["valleys"], r["valleys_hm3"]
+    rows.append([r["label"], f"{v['splits']:,}", f"{v['no_row']:,}", f"{v['low_z']:,}",
+                 f"{h['splits']:,}", f"{h['no_row']:,}", f"{h['low_z']:,}"])
+show("Splits pooled over the Analyses, by their valley, in the full profile and on HapMap3 alone.\n\n" +
+     md_table(["rule", "splits", "no tier row", "low |z|", "HapMap3: splits", "no tier row",
+               "low |z|"], rows))
+vd = definitions["valleys"]
+summary = result["valley_cells"]["summary"]
+show(f"""
+The no-row valleys were then checked against the Store's Z values. Sample: {vd['sample']}
+({result['valley_cells']['no_row_valleys']:,} distinct no-row valleys in all). Cells: {vd['cells']}.
+A valley is *low |z|* when {vd['low_z']}; it is a gap when {vd['missing_cells']}, or when
+{vd['no_variant']}.
+""")
+rows = []
+for name, s in summary.items():
+    label = "pooled" if name == "pooled" else f"B {int(name) // 1000} kb"
+    c = s["cells"]
+    rows.append([label, s["valleys"], s["low_z"], s["missing_cells"], s["no_variant"],
+                 pct(s["share_gap"]), yes(s["stop_rule_trips"]), f"{c['variants']:,}",
+                 f"{c['observed']:,}", f"{c['imputed']:,}", f"{c['missing']:,}"])
+show(md_table(["sample", "valleys", "low |z|", "missing cells", "no variant", "share gap",
+               "stop rule trips", "cells", "observed", "imputed", "missing"], rows))
+pooled = summary["pooled"]["cells"]
+show(f"Most cells in the sampled bins are missing for their Analysis: {pooled['missing']:,} of "
+     f"{pooled['variants']:,} ({pct(pooled['missing'] / pooled['variants'])}), with "
+     f"{pooled['observed']:,} observed and {pooled['imputed']:,} imputed. A valley counts as low "
+     "|z| on one observed cell, so a bin read mostly from missing cells still counts.")
+trips = [n for n, s in summary.items() if s["stop_rule_trips"]]
+show(f"Stop rule: {vd['stop_rule']}. " + (
+    f"**It trips for {', '.join(trips)}.**" if trips else
+    "It trips for no sample: the profile's empty valleys are low |z|, not gaps in coverage."))
+```
+
+## Count criteria
+
+The criteria are #403's, with its wording; C3 is read against the bp-only window at each W.
+
+```{python}
+#| echo: false
+#| output: asis
+show(f"""
+- **C1, {criteria['C1']}**
+- **C2, {criteria['C2']}** Here {criteria['c2_profile']}.
+- **C3, {criteria['C3']}** Reading: {criteria['c3_reading']}.
+""")
+```
+
+### C1 and C2
+
+```{python}
+#| echo: false
+#| output: asis
+def count_cells(row):
+    return [f"{row['rho']:.3f}", yes(row["c1"]), f"{row['median_ratio']:.3f}",
+            log2(row["median_abs_log2"]), yes(row["c2"]), row["analyses_without_hm3_leads"],
+            f"{row['leads_full']:,}", f"{row['leads_hm3']:,}",
+            pct(row["share_of_leads_lost_to_density"])]
+
+rows = [[r["label"], *count_cells(r)] for r in rules]
+rows += [[f"#403: {distance_label(b)}", *count_cells(b)] for b in beside]
+rows += [[f"#403: bp only, W {w_label(w)}", *count_cells(bp_only[w])]
+         for w in W_VALUES if w != NAMED_W]
+show(f"The raw rows keep a median {judgement['rows']['median_abs_log2']:.3f} in |log2| on HapMap3, "
+     f"so C2 asks the leads' median |log2| to be at most "
+     f"{judgement['rows']['median_abs_log2'] / 2:.3f}.\n\n" +
+     md_table(["rule", "ρ", "C1", "median ratio", "median |log2|", "C2",
+               "Analyses with no HapMap3 lead", "leads (full)", "leads (HapMap3)",
+               "lost to density"], rows))
+```
+
+```{python}
+#| echo: false
+fig, ax = plt.subplots(figsize=(7.5, 5))
+markers = {10_000: "o", 50_000: "s"}
+for r in rules:
+    if r["rule"] == "prominence":
+        ax.plot(r["median_ratio"], r["rho"], markers[r["bin_bp"]], color="#1b9e77",
+                markerfacecolor="none" if r["threshold"] == "fixed" else "#1b9e77")
+        ax.annotate(r["label"].split(", ")[1], (r["median_ratio"], r["rho"]),
+                    textcoords="offset points",
+                    xytext=(4, -9) if r["threshold"] == "fixed" else (4, 3), fontsize=7)
+    else:
+        ax.plot(r["median_ratio"], r["rho"], "D", color="#d95f02", label=r["label"])
+for w in W_VALUES:
+    ax.plot(bp_only[w]["median_ratio"], bp_only[w]["rho"], "x", color="#7570b3")
+    ax.annotate(f"bp {w_label(w)}", (bp_only[w]["median_ratio"], bp_only[w]["rho"]),
+                textcoords="offset points", xytext=(4, -9), fontsize=7, color="#7570b3")
+ax.plot([], [], "o", color="#1b9e77", label="prominence, B 10 kb")
+ax.plot([], [], "s", color="#1b9e77", label="prominence, B 50 kb")
+ax.axhline(criteria["rho_min"], color="0.4", lw=1)
+ax.axvspan(*criteria["ratio_range"], color="0.85", alpha=0.6, zorder=0)
+ax.set_xlabel("median density ratio, leads(HapMap3) / leads(full)")
+ax.set_ylabel("Spearman ρ, Locus Leads vs index variants")
+ax.set_title("C1 above the line, C2 inside the band (open marks: fixed threshold)")
+ax.legend(fontsize=8)
+fig.tight_layout()
+plt.show()
+```
+
+### C3: against bp-only at each W
+
+Δρ is the rule's ρ minus bp-only's; Δ|log2| is bp-only's median |log2| minus the rule's, so
+positive is better for both.
+
+```{python}
+#| echo: false
+#| output: asis
+show(f"The margins are {criteria['c3_margin_rho']} on ρ and {criteria['c3_margin_abs_log2']} on "
+     f"|log2|. W {w_label(NAMED_W)} is #403's named point.")
+rows = []
+for r in rules:
+    for m in r["c3"]:
+        rows.append([r["label"], w_label(m["w_bp"]), f"{m['delta_rho']:+.3f}",
+                     "n/a" if m["delta_abs_log2"] is None else f"{m['delta_abs_log2']:+.3f}",
+                     yes(m["c3"])])
+show(md_table(["rule", "W", "Δρ", "Δ|log2|", "C3 holds"], rows))
+```
+
+## Does either rule beat distance pruning, and where?
+
+```{python}
+#| echo: false
+#| output: asis
+b = criteria["beats"]
+show(f"""
+Written before the sweep ran:
+
+- **Overall**: {b['overall']}.
+- **Under the HapMap3 restriction**: {b['hapmap3']}.
+- **At strong peaks**: {b['strong_peaks']}.
+""")
+
+
+def at_named(r, key):
+    return next(m for m in r["c3"] if m["w_bp"] == NAMED_W)[key]
+
+
+def at_any(r, key):
+    return [w_label(m["w_bp"]) for m in r["c3"] if m[key]]
+
+
+rows = []
+for r in rules:
+    rows.append([r["label"], yes(at_named(r, "c3")), named(at_any(r, "c3")),
+                 yes(at_named(r, "beats_overall")), named(at_any(r, "beats_overall")),
+                 yes(at_named(r, "beats_hapmap3")), named(at_any(r, "beats_hapmap3")),
+                 *[yes(v) for v in r["beats_strong_peaks"].values()]])
+show(md_table(["rule", f"C3 at W {w_label(NAMED_W)}", "C3 at W", "overall at 10 Mb",
+               "overall at W", "HapMap3 at 10 Mb", "HapMap3 at W",
+               *[f"strong peaks vs {distance_label(x)}" for x in beside]], rows))
+
+def holders(test):
+    return [r["label"] for r in rules if test(r)]
+
+overall = holders(lambda r: at_named(r, "beats_overall"))
+hm3 = holders(lambda r: at_named(r, "beats_hapmap3"))
+c3 = holders(lambda r: at_named(r, "c3"))
+anywhere = [f"{r['label']} (W {', '.join(at_any(r, 'c3'))})" for r in rules if at_any(r, "c3")]
+strong = [f"against {distance_label(x)}: "
+          + named(holders(lambda r, k=k: r["beats_strong_peaks"][k]))
+          for k, x in zip(rules[0]["beats_strong_peaks"], beside)]
+show(f"""
+At W {w_label(NAMED_W)}, #403's named point, C3 holds for {named(c3)}; at any W, for
+{named(anywhere)}.
+
+- Overall (rank), at W {w_label(NAMED_W)}: {named(overall)}.
+- Under the HapMap3 restriction (density), at W {w_label(NAMED_W)}: {named(hm3)}.
+- At strong peaks, {'; '.join(strong)}.
+""")
+```
+
+## Per-lead diagnostics
+
+### Spurious splits and lost signals by the lead's |z|
+
+A spurious split is a Locus Lead plink2 places inside a stronger index variant's clump; a lost
+signal is an index variant the rule merges into a stronger Locus Lead. Each is binned by its own
+|z|. Pooled over the Analyses, at r² 0.01, beside #403's rules.
+
+```{python}
+#| echo: false
+#| output: asis
+def per_lead_cells(per_lead):
+    cells = [f"{per_lead['locus_leads']:,}", pct(per_lead["spurious_split_rate"]),
+             pct(per_lead["lost_signal_rate"])]
+    for band in LEAD_BANDS:
+        c = per_lead["by_abs_z"][band]
+        cells.append(f"{band_rate(c, 'spurious_splits', 'locus_leads')} / "
+                     f"{band_rate(c, 'lost_signals', 'index_variants')}")
+    cells.append(pct(disagreement(per_lead["by_abs_z"][STRONG])))
+    return cells
+
+rows = [[r["label"], *per_lead_cells(r["per_lead"])] for r in rules]
+rows += [[f"#403: {distance_label(x)}", *per_lead_cells(x["per_lead"])] for x in beside]
+index_total = rules[0]["per_lead"]["index_variants"]
+show(f"{index_total:,} index variants. Each |z| cell is spurious / lost.\n\n" +
+     md_table(["rule", "Locus Leads", "spurious", "lost", *[f"|z| {b}" for b in LEAD_BANDS],
+               f"disagreement at |z| {STRONG}"], rows))
+counts = rules[0]["per_lead"]["by_abs_z"]
+show("Index variants by |z| band: " + ", ".join(
+    f"{b}: {counts[b]['index_variants']:,}" for b in LEAD_BANDS) + ".")
+```
+
+### Leads per index variant, by the Analysis's largest |z|
+
+```{python}
+#| echo: false
+#| output: asis
+def ratio_cells(table):
+    return ["-" if table.get(b) is None else f"{table[b]['ratio']:.2f}" for b in Z_BANDS]
+
+sizes = {b: sum(a["selection"]["z_band"] == b for a in analyses) for b in Z_BANDS}
+rows = [[r["label"], *ratio_cells(r["leads_per_index_variant"])] for r in rules]
+rows += [[f"#403: {distance_label(x)}", *ratio_cells(x["leads_per_index_variant"])]
+         for x in beside]
+show("Analyses per band: " + ", ".join(f"{b}: {sizes[b]}" for b in Z_BANDS) + ". Below 1 the "
+     "rule finds fewer loci than clumping; above 1, more.\n\n" +
+     md_table(["rule", *Z_BANDS], rows))
+```
+
+### A strong peak
+
+```{python}
+#| echo: false
+#| output: asis
+n = judgement["named_analysis"]
+rows = [[f"#403: {distance_label(x)}", x["locus_leads"], "", ""] for x in n["set_beside"]]
+rows += [[r["label"], r["locus_leads"], r["spurious_splits"], r["lost_signals"]]
+         for r in n["rules"]]
+show(f"{n['analysis_id']}: largest |z| {n['max_abs_z']:.1f}; plink2 keeps {n['index_variants']} "
+     "index variants at "
+     "r² 0.01.\n\n" + md_table(["rule", "Locus Leads", "spurious splits", "lost signals"], rows))
+```
+
+### Rows outside every LD block
+
+```{python}
+#| echo: false
+#| output: asis
+for r in rules:
+    if r["rule"] == "ld_blocks":
+        o, h = r["outside"], r["outside_hm3"]
+        show(f"{o['rows']:,} candidate rows fall outside every block, in {o['stretches']:,} "
+             f"stretches between blocks; on HapMap3 alone, {h['rows']:,} in "
+             f"{h['stretches']:,}.")
+```
+
+## Reproduce
+
+```bash
+pixi run -e dev python -m prototypes.locus_leads profile-sweep \
+    --selection docs/benchmark-output/locus_leads/eur_sweep_selection.json \
+    --sweep docs/benchmark-output/locus_leads/eur_sweep.json \
+    --stores-dir /data/opengwasdb/stores \
+    --genetic-map /data/opengwasdb/reference/genetic-map/pyrho-1kg-hg38/EUR.tsv.gz \
+    --panel /data/opengwasdb/reference/hgdp1kgp-hg38/pgen/EUR \
+    --hm3 /data/opengwasdb/reference/hapmap3-hg38/hm3.grch38.alid.txt \
+    --blocks /data/opengwasdb/reference/hgdp1kgp-hg38/ld_regions_hg38.tsv \
+    --work-dir <scratch directory> --output docs/benchmark-output/locus_leads/eur_profile.json
+pixi run -e report quarto render docs/benchmark-output/locus_leads/eur_profile.qmd
+```
