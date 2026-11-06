@@ -6,7 +6,7 @@
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
-<meta name="dcterms.date" content="2026-11-05">
+<meta name="dcterms.date" content="2026-11-06">
 
 <title>What genetic-distance pruning costs</title>
 <style>
@@ -2178,6 +2178,7 @@ vertical-align: -.125em;
   <li><a href="#pruning-a-tier-stage-by-stage" id="toc-pruning-a-tier-stage-by-stage" class="nav-link" data-scroll-target="#pruning-a-tier-stage-by-stage">Pruning a tier, stage by stage</a></li>
   <li><a href="#cost-against-row-count" id="toc-cost-against-row-count" class="nav-link" data-scroll-target="#cost-against-row-count">Cost against row count</a></li>
   <li><a href="#is-pruning-fast-enough-to-run-per-query" id="toc-is-pruning-fast-enough-to-run-per-query" class="nav-link" data-scroll-target="#is-pruning-fast-enough-to-run-per-query">Is pruning fast enough to run per query?</a></li>
+  <li><a href="#peak-memory" id="toc-peak-memory" class="nav-link" data-scroll-target="#peak-memory">Peak memory</a></li>
   <li><a href="#clumping-the-same-rows" id="toc-clumping-the-same-rows" class="nav-link" data-scroll-target="#clumping-the-same-rows">Clumping the same rows</a></li>
   <li><a href="#pruning-against-clumping" id="toc-pruning-against-clumping" class="nav-link" data-scroll-target="#pruning-against-clumping">Pruning against clumping</a></li>
   <li><a href="#what-these-numbers-do-and-do-not-say" id="toc-what-these-numbers-do-and-do-not-say" class="nav-link" data-scroll-target="#what-these-numbers-do-and-do-not-say">What these numbers do and do not say</a></li>
@@ -2200,7 +2201,7 @@ vertical-align: -.125em;
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">November 5, 2026</p>
+      <p class="date">November 6, 2026</p>
     </div>
   </div>
   
@@ -2214,7 +2215,7 @@ vertical-align: -.125em;
 
 <section id="what-was-measured" class="level2">
 <h2 class="anchored" data-anchor-id="what-was-measured">What was measured</h2>
-<div id="c6ecd9be" class="cell" data-execution_count="2">
+<div id="f2ef5c27" class="cell" data-execution_count="2">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="2">
 <p>Three measurements, on one node on one date, from <code>cost.json</code>:</p>
 <ol type="1">
@@ -2231,11 +2232,11 @@ vertical-align: -.125em;
 <tbody>
 <tr class="odd">
 <td>measured</td>
-<td>2026-11-05T22:24:38+00:00</td>
+<td>2026-11-06T00:00:09+00:00</td>
 </tr>
 <tr class="even">
 <td>commit</td>
-<td><code>e8d91ad</code></td>
+<td><code>421433f</code></td>
 </tr>
 <tr class="odd">
 <td>node</td>
@@ -2263,34 +2264,38 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td>map load</td>
-<td>2.2 s (2.2 s–2.7 s)</td>
+<td>2.9 s (2.3 s–3.3 s)</td>
 </tr>
 </tbody>
 </table>
-<p>The node is shared: the highest 5-minute load average recorded at any stage in this run was 15.2. Every stage’s own load average is in the JSON beside its timing, and these are warm-cache numbers — the same files are read once per repeat.</p>
+<p>The node is shared: the highest 5-minute load average recorded at any repeat of any stage in this run was 22.5. Each stage keeps one load record per repeat in the JSON beside its timings, and these are warm-cache numbers — the same files are read once per repeat.</p>
 </div>
 </div>
 </section>
 <section id="the-per-variant-cm-array" class="level2">
 <h2 class="anchored" data-anchor-id="the-per-variant-cm-array">The per-variant cM array</h2>
-<div id="031cd67f" class="cell" data-execution_count="3">
+<div id="1e16ddd9" class="cell" data-execution_count="3">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="3">
 <p>Reading chromosome and position from the Store Variant Table, then interpolating cM at every variant. The array is <code>float32</code>, one value per Store Variant Index: what an augment step would write, and what the pruning stages below look up.</p>
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
-<col style="width: 16%">
-<col style="width: 16%">
-<col style="width: 16%">
-<col style="width: 16%">
-<col style="width: 16%">
-<col style="width: 16%">
+<col style="width: 12%">
+<col style="width: 12%">
+<col style="width: 12%">
+<col style="width: 12%">
+<col style="width: 12%">
+<col style="width: 12%">
+<col style="width: 12%">
+<col style="width: 12%">
 </colgroup>
 <thead>
 <tr class="header">
 <th>Store</th>
 <th>variants</th>
 <th>read Variant Table</th>
+<th>peak RSS</th>
 <th>interpolate</th>
+<th>peak RSS</th>
 <th>off the map</th>
 <th>array bytes</th>
 </tr>
@@ -2299,24 +2304,30 @@ vertical-align: -.125em;
 <tr class="odd">
 <td>OGS-00011 (hybrid)</td>
 <td>48,069,918</td>
-<td>22.2 s (21.6 s–22.8 s)</td>
-<td>9.4 s (9.3 s–9.5 s)</td>
+<td>21.7 s (21.6 s–22.4 s)</td>
+<td>2,583 MB (from 502)</td>
+<td>9.3 s (9.3 s–9.3 s)</td>
+<td>2,950 MB (from 1,483)</td>
 <td>1,525,683 (MT, X, Y)</td>
 <td>433 MB</td>
 </tr>
 <tr class="even">
 <td>OGS-00012 (dense)</td>
 <td>20,548,967</td>
-<td>7.6 s (7.6 s–8.0 s)</td>
-<td>4.0 s (3.9 s–4.0 s)</td>
+<td>7.6 s (7.6 s–7.6 s)</td>
+<td>1,718 MB (from 1,483)</td>
+<td>4.0 s (4.0 s–4.1 s)</td>
+<td>1,796 MB (from 1,483)</td>
 <td>0 (none)</td>
 <td>185 MB</td>
 </tr>
 <tr class="odd">
 <td>OGS-00003 (dense)</td>
 <td>21,230,615</td>
-<td>9.4 s (9.3 s–9.6 s)</td>
-<td>4.0 s (4.0 s–4.1 s)</td>
+<td>9.3 s (9.3 s–9.5 s)</td>
+<td>1,969 MB (from 1,483)</td>
+<td>4.1 s (4.1 s–4.4 s)</td>
+<td>1,969 MB (from 1,483)</td>
 <td>832,273 (X)</td>
 <td>191 MB</td>
 </tr>
@@ -2328,7 +2339,7 @@ vertical-align: -.125em;
 </section>
 <section id="pruning-a-tier-stage-by-stage" class="level2">
 <h2 class="anchored" data-anchor-id="pruning-a-tier-stage-by-stage">Pruning a tier, stage by stage</h2>
-<div id="c56e3351" class="cell" data-execution_count="4">
+<div id="a21e8ff7" class="cell" data-execution_count="4">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="4">
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
@@ -2447,6 +2458,356 @@ vertical-align: -.125em;
 <p>Rows past |z| 38 matter twice: a float64 two-sided p is 0 from |z| 38.5, which is why the rule ranks on abs(z), and they are where an LD panel and a genetic map are least alike.</p>
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>slice</th>
+<th>Top-Hit Query (the tier)</th>
+<th>positions, from the Variant Table</th>
+<th>positions, from a per-variant array</th>
+<th>cM lookup</th>
+<th>sort (information only; the rules sort inside their own time)</th>
+<th>rule as #402 wrote it</th>
+<th>rule, block-at-a-time</th>
+<th>read_tier, #402’s Observed-Only reader</th>
+<th>default query, every row resolved</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>tracer</td>
+<td>118 ms (109 ms–135 ms)</td>
+<td>299 ms (237 ms–324 ms)</td>
+<td>1 ms (1 ms–10 ms)</td>
+<td>0 ms (0 ms–8 ms)</td>
+<td>3 ms (3 ms–3 ms)</td>
+<td>58 ms (58 ms–58 ms)</td>
+<td>240 ms (238 ms–241 ms)</td>
+<td>560 ms (554 ms–590 ms)</td>
+<td>502 ms (470 ms–526 ms)</td>
+</tr>
+<tr class="even">
+<td>height_5e-8</td>
+<td>405 ms (405 ms–406 ms)</td>
+<td>1.1 s (1.0 s–1.3 s)</td>
+<td>8 ms (6 ms–12 ms)</td>
+<td>3 ms (2 ms–13 ms)</td>
+<td>42 ms (42 ms–43 ms)</td>
+<td>922 ms (915 ms–1.0 s)</td>
+<td>1.1 s (1.1 s–1.1 s)</td>
+<td>1.4 s (1.3 s–1.4 s)</td>
+<td>3.4 s (3.3 s–3.4 s)</td>
+</tr>
+<tr class="odd">
+<td>mvp_5e-8</td>
+<td>347 ms (334 ms–348 ms)</td>
+<td>1.5 s (1.3 s–2.0 s)</td>
+<td>11 ms (10 ms–22 ms)</td>
+<td>3 ms (2 ms–4 ms)</td>
+<td>73 ms (69 ms–80 ms)</td>
+<td>1.3 s (1.2 s–1.3 s)</td>
+<td>1.2 s (1.2 s–1.2 s)</td>
+<td>5.0 s (4.8 s–5.5 s)</td>
+<td>4.1 s (4.0 s–4.2 s)</td>
+</tr>
+<tr class="even">
+<td>observed_only_5e-8</td>
+<td>875 ms (871 ms–892 ms)</td>
+<td>3.3 s (2.9 s–4.0 s)</td>
+<td>34 ms (32 ms–41 ms)</td>
+<td>15 ms (14 ms–37 ms)</td>
+<td>153 ms (151 ms–159 ms)</td>
+<td>3.4 s (3.4 s–3.7 s)</td>
+<td>1.2 s (1.1 s–1.2 s)</td>
+<td>12.9 s (12.0 s–13.0 s)</td>
+<td>11.2 s (10.5 s–12.1 s)</td>
+</tr>
+<tr class="odd">
+<td>mvp_5e-4</td>
+<td>499 ms (489 ms–521 ms)</td>
+<td>4.2 s (4.0 s–4.4 s)</td>
+<td>29 ms (28 ms–87 ms)</td>
+<td>9 ms (8 ms–40 ms)</td>
+<td>222 ms (221 ms–225 ms)</td>
+<td>4.3 s (4.3 s–5.4 s)</td>
+<td>1.8 s (1.8 s–1.9 s)</td>
+<td>15.4 s (14.3 s–15.7 s)</td>
+<td>14.8 s (13.1 s–17.0 s)</td>
+</tr>
+<tr class="even">
+<td>largest_5e-08</td>
+<td>2.6 s (2.5 s–2.7 s)</td>
+<td>13.7 s (13.4 s–14.6 s)</td>
+<td>97 ms (96 ms–97 ms)</td>
+<td>24 ms (24 ms–52 ms)</td>
+<td>1.1 s (1.1 s–1.1 s)</td>
+<td>16.0 s (15.9 s–16.2 s)</td>
+<td>4.0 s (4.0 s–4.1 s)</td>
+<td>31.2 s (30.8 s–32.1 s)</td>
+<td>42.8 s (42.8 s–43.7 s)</td>
+</tr>
+<tr class="odd">
+<td>largest_5e-04</td>
+<td>2.4 s (2.3 s–3.0 s)</td>
+<td>18.4 s (17.4 s–22.9 s)</td>
+<td>139 ms (116 ms–172 ms)</td>
+<td>26 ms (26 ms–64 ms)</td>
+<td>1.4 s (1.3 s–1.4 s)</td>
+<td>16.9 s (16.9 s–19.1 s)</td>
+<td>4.4 s (4.2 s–5.9 s)</td>
+<td>34.5 s (31.3 s–37.0 s)</td>
+<td>47.5 s (45.9 s–47.6 s)</td>
+</tr>
+</tbody>
+</table>
+<p><code>positions</code> reads the tier’s Store Variant Indices from the Variant Table — the path #62 asks whether is the bottleneck — and <code>positions_array</code> is the same read from the per-variant array built above. <code>resolved_query</code> is the baseline a reader waits for: the same default query with every row resolved. <code>read_tier</code> is #402’s own reader, which runs two queries and resolves the observed rows only, so it is not that baseline and its time is reported for information.</p>
+<p>The <code>sort</code> row is informational: both rules sort inside their own time, so no total below adds it.</p>
+</div>
+</div>
+</section>
+<section id="cost-against-row-count" class="level2">
+<h2 class="anchored" data-anchor-id="cost-against-row-count">Cost against row count</h2>
+<div id="e32ad9c0" class="cell" data-execution_count="5">
+<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="5">
+<table class="caption-top table table-sm table-striped small">
+<colgroup>
+<col style="width: 12%">
+<col style="width: 12%">
+<col style="width: 12%">
+<col style="width: 12%">
+<col style="width: 12%">
+<col style="width: 12%">
+<col style="width: 12%">
+<col style="width: 12%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>tier rows</th>
+<th>slice</th>
+<th>Top-Hit Query</th>
+<th>rule</th>
+<th>µs/row</th>
+<th>rule, blocks</th>
+<th>µs/row</th>
+<th>pruning, fastest path</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>55,460</td>
+<td>tracer</td>
+<td>118 ms</td>
+<td>58 ms</td>
+<td>1.12</td>
+<td>240 ms</td>
+<td>4.64</td>
+<td>242 ms</td>
+</tr>
+<tr class="even">
+<td>632,889</td>
+<td>height_5e-8</td>
+<td>405 ms</td>
+<td>922 ms</td>
+<td>1.46</td>
+<td>1.1 s</td>
+<td>1.77</td>
+<td>1.1 s</td>
+</tr>
+<tr class="odd">
+<td>927,929</td>
+<td>mvp_5e-8</td>
+<td>347 ms</td>
+<td>1.3 s</td>
+<td>1.36</td>
+<td>1.2 s</td>
+<td>1.24</td>
+<td>1.2 s</td>
+</tr>
+<tr class="even">
+<td>2,314,363</td>
+<td>observed_only_5e-8</td>
+<td>875 ms</td>
+<td>3.4 s</td>
+<td>1.48</td>
+<td>1.2 s</td>
+<td>0.50</td>
+<td>1.2 s</td>
+</tr>
+<tr class="odd">
+<td>2,755,733</td>
+<td>mvp_5e-4</td>
+<td>499 ms</td>
+<td>4.3 s</td>
+<td>1.57</td>
+<td>1.8 s</td>
+<td>0.66</td>
+<td>1.9 s</td>
+</tr>
+<tr class="even">
+<td>9,429,671</td>
+<td>largest_5e-08</td>
+<td>2.6 s</td>
+<td>16.0 s</td>
+<td>1.72</td>
+<td>4.0 s</td>
+<td>0.43</td>
+<td>4.1 s</td>
+</tr>
+<tr class="odd">
+<td>10,087,639</td>
+<td>largest_5e-04</td>
+<td>2.4 s</td>
+<td>16.9 s</td>
+<td>1.71</td>
+<td>4.4 s</td>
+<td>0.45</td>
+<td>4.6 s</td>
+</tr>
+</tbody>
+</table>
+<p>The rule as #402 wrote it costs 1.12–1.72 µs a row on these slices: the cost is the row count times a constant, not a curve. The block-at-a-time rule is the cheaper of the two from 927,929 rows upward, and the dearer below that: at 632,889 rows it takes 1.2× the rule’s time, because the work it does per chromosome does not shrink with the rows. The last column is the position-array lookup, the cM lookup and the block-at-a-time rule, which is the cheapest pruning path measured.</p>
+</div>
+</div>
+</section>
+<section id="is-pruning-fast-enough-to-run-per-query" class="level2">
+<h2 class="anchored" data-anchor-id="is-pruning-fast-enough-to-run-per-query">Is pruning fast enough to run per query?</h2>
+<div id="3cfc3abf" class="cell" data-execution_count="6">
+<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="6">
+<p>The budget was fixed before measuring, and is recorded in the artifact. What is measured is <strong>the default Top-Hit Query’s own wall time for the same slice, imputed rows included, and the same query resolved</strong>, and pruning runs per query when its stages cost no more than the query they follow (fast_ratio &lt;= 1), so the reader waits at most twice as long.</p>
+<table class="caption-top table table-sm table-striped small">
+<colgroup>
+<col style="width: 11%">
+<col style="width: 11%">
+<col style="width: 11%">
+<col style="width: 11%">
+<col style="width: 11%">
+<col style="width: 11%">
+<col style="width: 11%">
+<col style="width: 11%">
+<col style="width: 11%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>slice</th>
+<th>Top-Hit Query</th>
+<th>resolved query</th>
+<th>pruning as written</th>
+<th>× bare</th>
+<th>pruning, blocks</th>
+<th>× bare</th>
+<th>× resolved</th>
+<th>within budget</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>tracer</td>
+<td>118 ms</td>
+<td>502 ms</td>
+<td>358 ms</td>
+<td>3.0×</td>
+<td>242 ms</td>
+<td>2.1×</td>
+<td>0.48×</td>
+<td>no</td>
+</tr>
+<tr class="even">
+<td>height_5e-8</td>
+<td>405 ms</td>
+<td>3.4 s</td>
+<td>2.0 s</td>
+<td>4.9×</td>
+<td>1.1 s</td>
+<td>2.8×</td>
+<td>0.34×</td>
+<td>no</td>
+</tr>
+<tr class="odd">
+<td>mvp_5e-8</td>
+<td>347 ms</td>
+<td>4.1 s</td>
+<td>2.7 s</td>
+<td>7.9×</td>
+<td>1.2 s</td>
+<td>3.4×</td>
+<td>0.29×</td>
+<td>no</td>
+</tr>
+<tr class="even">
+<td>observed_only_5e-8</td>
+<td>875 ms</td>
+<td>11.2 s</td>
+<td>6.7 s</td>
+<td>7.6×</td>
+<td>1.2 s</td>
+<td>1.4×</td>
+<td>0.11×</td>
+<td>no</td>
+</tr>
+<tr class="odd">
+<td>mvp_5e-4</td>
+<td>499 ms</td>
+<td>14.8 s</td>
+<td>8.5 s</td>
+<td>17.0×</td>
+<td>1.9 s</td>
+<td>3.7×</td>
+<td>0.13×</td>
+<td>no</td>
+</tr>
+<tr class="even">
+<td>largest_5e-08</td>
+<td>2.6 s</td>
+<td>42.8 s</td>
+<td>29.7 s</td>
+<td>11.2×</td>
+<td>4.1 s</td>
+<td>1.6×</td>
+<td>0.10×</td>
+<td>no</td>
+</tr>
+<tr class="odd">
+<td>largest_5e-04</td>
+<td>2.4 s</td>
+<td>47.5 s</td>
+<td>35.4 s</td>
+<td>14.8×</td>
+<td>4.6 s</td>
+<td>1.9×</td>
+<td>0.10×</td>
+<td>no</td>
+</tr>
+</tbody>
+</table>
+<p>Neither pruning total charges the separate sort stage: both rules sort inside their own time, so a total that added it would charge a sort twice. The two baselines are the tier’s own query and the same query resolved — the workload a reader waits for when it needs positions and ALIDs, which is what pruning needs.</p>
+</div>
+</div>
+<div id="de7fde13" class="cell" data-execution_count="7">
+<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="7">
+<p>The largest 5e-8 slice — <code>GCST004461</code>, 9,429,671 rows — is the one the question turns on. The rule as #402 wrote it, with positions from the Variant Table, costs 29.7 s there, 11.2× the 2.6 s the Top-Hit Query itself takes: it cannot run per query as written. The block-at-a-time rule, with the per-variant position and cM arrays, costs 4.1 s: 1.6× the bare tier read, and 0.10× the resolved query (42.8 s).</p>
+<p>Judged against the budget recorded above, query-time pruning of that slice is <strong>not fast enough to run per query against the bare tier read alone</strong>. A per-query option is defensible only with both per-variant arrays in the Store, and only against the resolved query; without them it costs an order of magnitude more than the query itself.</p>
+<p>The build-time answer is cheap by comparison and is needed anyway: <code>n_loci_*</code> are Analytical Metadata, so the counts belong in <code>analyses.tsv</code> whether or not a reader can prune, and the per-variant cM array that makes them cheap is a one-off write.</p>
+</div>
+</div>
+</section>
+<section id="peak-memory" class="level2">
+<h2 class="anchored" data-anchor-id="peak-memory">Peak memory</h2>
+<div id="14b1f503" class="cell" data-execution_count="8">
+<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="8">
+<p>Peak RSS for every stage, on every slice, sampled from <code>/proc/&lt;pid&gt;/statm</code>: this process’s for the pruning stages, plink2’s own child for the clumping rows below. <code>ru_maxrss</code> is not used — under <code>pixi run</code> it starts near 2 GiB and never comes down — and neither is <code>/usr/bin/time</code>. A peak no poll observed is reported as missing, with the number of polls that did observe one; a missing peak is not 0 MB.</p>
+<p>Each cell is <strong>peak (from the RSS already resident when the stage began)</strong>. The slices share one process, so a peak is an envelope: it carries what earlier stages and slices retained and the allocator did not hand back, and only the number in the brackets says what that stage itself added.</p>
+<table class="caption-top table table-sm table-striped small">
+<colgroup>
 <col style="width: 11%">
 <col style="width: 11%">
 <col style="width: 11%">
@@ -2464,382 +2825,190 @@ vertical-align: -.125em;
 <th>positions, from the Variant Table</th>
 <th>positions, from a per-variant array</th>
 <th>cM lookup</th>
-<th>sort (the rule’s order)</th>
 <th>rule as #402 wrote it</th>
 <th>rule, block-at-a-time</th>
-<th>read_tier (Observed-Only, resolved)</th>
+<th>default query, every row resolved</th>
+<th>read_tier, #402’s Observed-Only reader</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
 <td>tracer</td>
-<td>104 ms (102 ms–115 ms)</td>
-<td>234 ms (230 ms–282 ms)</td>
-<td>1 ms (0 ms–3 ms)</td>
-<td>0 ms (0 ms–2 ms)</td>
-<td>3 ms (3 ms–3 ms)</td>
-<td>57 ms (57 ms–57 ms)</td>
-<td>238 ms (237 ms–238 ms)</td>
-<td>545 ms (542 ms–549 ms)</td>
+<td>3,095 MB (from 3,095)</td>
+<td>3,654 MB (from 3,088)</td>
+<td>3,087 MB (from 3,087)</td>
+<td>3,087 MB (from 3,087)</td>
+<td>3,087 MB (from 3,087)</td>
+<td>3,087 MB (from 3,087)</td>
+<td>3,653 MB (from 3,087)</td>
+<td>3,536 MB (from 2,970)</td>
 </tr>
 <tr class="even">
 <td>height_5e-8</td>
-<td>535 ms (525 ms–541 ms)</td>
-<td>1.4 s (1.1 s–1.6 s)</td>
-<td>8 ms (6 ms–21 ms)</td>
-<td>3 ms (2 ms–4 ms)</td>
-<td>42 ms (41 ms–44 ms)</td>
-<td>775 ms (766 ms–1.3 s)</td>
-<td>992 ms (985 ms–993 ms)</td>
-<td>1.3 s (1.3 s–1.3 s)</td>
+<td>2,961 MB (from 2,961)</td>
+<td>4,681 MB (from 2,957)</td>
+<td>2,897 MB (from 2,897)</td>
+<td>2,897 MB (from 2,897)</td>
+<td>2,897 MB (from 2,897)</td>
+<td>2,897 MB (from 2,897)</td>
+<td>4,620 MB (from 2,897)</td>
+<td>4,460 MB (from 2,893)</td>
 </tr>
 <tr class="odd">
 <td>mvp_5e-8</td>
-<td>259 ms (250 ms–261 ms)</td>
-<td>1.4 s (1.3 s–1.5 s)</td>
-<td>9 ms (7 ms–10 ms)</td>
-<td>3 ms (2 ms–3 ms)</td>
-<td>64 ms (64 ms–64 ms)</td>
-<td>1.2 s (1.2 s–1.2 s)</td>
-<td>1.1 s (1.1 s–1.1 s)</td>
-<td>4.8 s (4.6 s–5.0 s)</td>
+<td>3,088 MB (from 3,088)</td>
+<td>3,942 MB (from 3,079)</td>
+<td>2,933 MB (from 2,933)</td>
+<td>2,933 MB (from 2,933)</td>
+<td>2,932 MB (from 2,932)</td>
+<td>2,931 MB (from 2,931)</td>
+<td>3,795 MB (from 2,931)</td>
+<td>4,663 MB (from 2,928)</td>
 </tr>
 <tr class="even">
 <td>observed_only_5e-8</td>
-<td>632 ms (622 ms–639 ms)</td>
-<td>3.0 s (2.8 s–3.2 s)</td>
-<td>32 ms (31 ms–63 ms)</td>
-<td>14 ms (13 ms–14 ms)</td>
-<td>144 ms (142 ms–147 ms)</td>
-<td>3.2 s (3.2 s–3.2 s)</td>
-<td>1.1 s (1.1 s–1.1 s)</td>
-<td>12.0 s (12.0 s–12.2 s)</td>
+<td>2,882 MB (from 2,879)</td>
+<td>5,199 MB (from 2,882)</td>
+<td>2,868 MB (from 2,868)</td>
+<td>2,868 MB (from 2,868)</td>
+<td>2,868 MB (from 2,868)</td>
+<td>2,868 MB (from 2,868)</td>
+<td>5,855 MB (from 2,868)</td>
+<td>6,231 MB (from 2,887)</td>
 </tr>
 <tr class="odd">
 <td>mvp_5e-4</td>
-<td>478 ms (472 ms–491 ms)</td>
-<td>3.9 s (3.8 s–4.5 s)</td>
-<td>29 ms (25 ms–35 ms)</td>
-<td>11 ms (8 ms–23 ms)</td>
-<td>212 ms (211 ms–224 ms)</td>
-<td>3.9 s (3.9 s–4.1 s)</td>
-<td>1.8 s (1.8 s–1.8 s)</td>
-<td>14.3 s (13.7 s–14.7 s)</td>
+<td>3,042 MB (from 2,953)</td>
+<td>4,092 MB (from 2,955)</td>
+<td>2,653 MB (from 2,653)</td>
+<td>2,653 MB (from 2,653)</td>
+<td>2,813 MB (from 2,671)</td>
+<td>2,875 MB (from 2,749)</td>
+<td>5,103 MB (from 2,749)</td>
+<td>8,382 MB (from 2,779)</td>
 </tr>
 <tr class="even">
 <td>largest_5e-08</td>
-<td>1.9 s (1.8 s–2.5 s)</td>
-<td>13.3 s (13.1 s–13.6 s)</td>
-<td>115 ms (96 ms–118 ms)</td>
-<td>24 ms (23 ms–24 ms)</td>
-<td>1.1 s (1.1 s–1.1 s)</td>
-<td>15.1 s (15.0 s–15.3 s)</td>
-<td>3.8 s (3.8 s–3.8 s)</td>
-<td>29.8 s (29.2 s–30.1 s)</td>
+<td>2,648 MB (from 1,483)</td>
+<td>7,892 MB (from 2,504)</td>
+<td>2,442 MB (from 2,275)</td>
+<td>2,334 MB (from 2,334)</td>
+<td>2,912 MB (from 2,318)</td>
+<td>3,052 MB (from 2,381)</td>
+<td>12,737 MB (from 2,451)</td>
+<td>19,671 MB (from 2,955)</td>
 </tr>
 <tr class="odd">
 <td>largest_5e-04</td>
-<td>2.0 s (2.0 s–2.0 s)</td>
-<td>14.5 s (14.4 s–17.5 s)</td>
-<td>119 ms (98 ms–126 ms)</td>
-<td>24 ms (24 ms–25 ms)</td>
-<td>1.2 s (1.1 s–1.2 s)</td>
-<td>16.5 s (16.4 s–17.3 s)</td>
-<td>4.1 s (4.1 s–4.5 s)</td>
-<td>32.4 s (31.4 s–32.4 s)</td>
+<td>3,898 MB (from 2,672)</td>
+<td>8,351 MB (from 3,744)</td>
+<td>3,142 MB (from 2,948)</td>
+<td>3,007 MB (from 3,007)</td>
+<td>3,667 MB (from 2,987)</td>
+<td>3,816 MB (from 3,059)</td>
+<td>13,473 MB (from 3,135)</td>
+<td>20,757 MB (from 3,549)</td>
 </tr>
 </tbody>
 </table>
-<p><code>positions</code> reads the tier’s Store Variant Indices from the Variant Table — the path #62 asks whether is the bottleneck — and <code>positions_array</code> is the same read from the per-variant array built above. <code>read_tier</code> is #402’s own reader, the Observed-Only query with every row resolved: what a client asking for positions and ALIDs waits for.</p>
-</div>
-</div>
-</section>
-<section id="cost-against-row-count" class="level2">
-<h2 class="anchored" data-anchor-id="cost-against-row-count">Cost against row count</h2>
-<div id="2ad05808" class="cell" data-execution_count="5">
-<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="5">
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>tier rows</th>
-<th>slice</th>
-<th>Top-Hit Query</th>
-<th>sort</th>
-<th>rule</th>
-<th>µs/row</th>
-<th>rule, blocks</th>
-<th>µs/row</th>
-<th>pruning, fastest path</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>55,460</td>
-<td>tracer</td>
-<td>104 ms</td>
-<td>3 ms</td>
-<td>57 ms</td>
-<td>1.10</td>
-<td>238 ms</td>
-<td>4.59</td>
-<td>241 ms</td>
-</tr>
-<tr class="even">
-<td>632,889</td>
-<td>height_5e-8</td>
-<td>535 ms</td>
-<td>42 ms</td>
-<td>775 ms</td>
-<td>1.22</td>
-<td>992 ms</td>
-<td>1.57</td>
-<td>1.0 s</td>
-</tr>
-<tr class="odd">
-<td>927,929</td>
-<td>mvp_5e-8</td>
-<td>259 ms</td>
-<td>64 ms</td>
-<td>1.2 s</td>
-<td>1.29</td>
-<td>1.1 s</td>
-<td>1.24</td>
-<td>1.2 s</td>
-</tr>
-<tr class="even">
-<td>2,314,363</td>
-<td>observed_only_5e-8</td>
-<td>632 ms</td>
-<td>144 ms</td>
-<td>3.2 s</td>
-<td>1.38</td>
-<td>1.1 s</td>
-<td>0.49</td>
-<td>1.3 s</td>
-</tr>
-<tr class="odd">
-<td>2,755,733</td>
-<td>mvp_5e-4</td>
-<td>478 ms</td>
-<td>212 ms</td>
-<td>3.9 s</td>
-<td>1.41</td>
-<td>1.8 s</td>
-<td>0.64</td>
-<td>2.0 s</td>
-</tr>
-<tr class="even">
-<td>9,429,671</td>
-<td>largest_5e-08</td>
-<td>1.9 s</td>
-<td>1.1 s</td>
-<td>15.1 s</td>
-<td>1.62</td>
-<td>3.8 s</td>
-<td>0.41</td>
-<td>5.0 s</td>
-</tr>
-<tr class="odd">
-<td>10,087,639</td>
-<td>largest_5e-04</td>
-<td>2.0 s</td>
-<td>1.2 s</td>
-<td>16.5 s</td>
-<td>1.66</td>
-<td>4.1 s</td>
-<td>0.42</td>
-<td>5.4 s</td>
-</tr>
-</tbody>
-</table>
-<p>The rule as #402 wrote it costs 1.10–1.66 µs a row on these slices: the cost is the row count times a constant, not a curve. The block-at-a-time rule is the cheaper of the two from 927,929 rows upward, and the dearer below that: at 632,889 rows it takes 1.3× the rule’s time, because the work it does per chromosome does not shrink with the rows. What is not constant is the position read — it is charged per row against the Variant Table and per lookup against a per-variant array.</p>
-</div>
-</div>
-</section>
-<section id="is-pruning-fast-enough-to-run-per-query" class="level2">
-<h2 class="anchored" data-anchor-id="is-pruning-fast-enough-to-run-per-query">Is pruning fast enough to run per query?</h2>
-<div id="8fb10896" class="cell" data-execution_count="6">
-<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="6">
-<p>The budget was fixed before measuring, and is recorded in the artifact. What is measured is <strong>the default Top-Hit Query’s own wall time for the same slice, imputed rows included</strong>, and pruning runs per query when its stages cost no more than the query they follow (fast_ratio &lt;= 1), so the reader waits at most twice as long.</p>
-<table class="caption-top table table-sm table-striped small">
-<colgroup>
-<col style="width: 14%">
-<col style="width: 14%">
-<col style="width: 14%">
-<col style="width: 14%">
-<col style="width: 14%">
-<col style="width: 14%">
-<col style="width: 14%">
+<col style="width: 16%">
+<col style="width: 16%">
+<col style="width: 16%">
+<col style="width: 16%">
+<col style="width: 16%">
+<col style="width: 16%">
 </colgroup>
 <thead>
 <tr class="header">
 <th>slice</th>
-<th>Top-Hit Query</th>
-<th>pruning as written</th>
-<th>× query</th>
-<th>pruning, blocks</th>
-<th>× query</th>
-<th>within budget</th>
+<th>shared set</th>
+<th>matching</th>
+<th>cM + check</th>
+<th>ranking</th>
+<th>plink2 (child, max of chromosomes)</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
 <td>tracer</td>
-<td>104 ms</td>
-<td>294 ms</td>
-<td>2.8×</td>
-<td>241 ms</td>
-<td>2.3×</td>
-<td>no</td>
+<td>2,972 MB (from 2,970)</td>
+<td>2,948 MB (from 2,948)</td>
+<td>2,937 MB (from 2,937)</td>
+<td>2,936 MB (from 2,936)</td>
+<td>132 MB</td>
 </tr>
 <tr class="even">
 <td>height_5e-8</td>
-<td>535 ms</td>
-<td>2.2 s</td>
-<td>4.2×</td>
-<td>1.0 s</td>
-<td>2.0×</td>
-<td>no</td>
+<td>2,893 MB (from 2,893)</td>
+<td>2,889 MB (from 2,889)</td>
+<td>2,888 MB (from 2,888)</td>
+<td>2,888 MB (from 2,888)</td>
+<td>134 MB</td>
 </tr>
 <tr class="odd">
 <td>mvp_5e-8</td>
-<td>259 ms</td>
-<td>2.6 s</td>
-<td>10.2×</td>
-<td>1.2 s</td>
-<td>4.7×</td>
-<td>no</td>
+<td>4,176 MB (from 3,368)</td>
+<td>3,829 MB (from 3,731)</td>
+<td>3,799 MB (from 3,799)</td>
+<td>3,799 MB (from 3,799)</td>
+<td>138 MB</td>
 </tr>
 <tr class="even">
 <td>observed_only_5e-8</td>
-<td>632 ms</td>
-<td>6.4 s</td>
-<td>10.1×</td>
-<td>1.3 s</td>
-<td>2.1×</td>
-<td>no</td>
+<td>3,684 MB (from 3,194)</td>
+<td>3,961 MB (from 3,597)</td>
+<td>3,854 MB (from 3,854)</td>
+<td>3,853 MB (from 3,853)</td>
+<td>186 MB</td>
 </tr>
 <tr class="odd">
 <td>mvp_5e-4</td>
-<td>478 ms</td>
-<td>8.0 s</td>
-<td>16.8×</td>
-<td>2.0 s</td>
-<td>4.2×</td>
-<td>no</td>
+<td>7,042 MB (from 4,637)</td>
+<td>6,474 MB (from 5,822)</td>
+<td>6,168 MB (from 6,168)</td>
+<td>6,168 MB (from 6,168)</td>
+<td>170 MB</td>
 </tr>
 <tr class="even">
 <td>largest_5e-08</td>
-<td>1.9 s</td>
-<td>29.5 s</td>
-<td>15.8×</td>
-<td>5.0 s</td>
-<td>2.7×</td>
-<td>no</td>
+<td>16,158 MB (from 8,180)</td>
+<td>13,677 MB (from 12,477)</td>
+<td>13,129 MB (from 13,129)</td>
+<td>13,155 MB (from 13,129)</td>
+<td>222 MB</td>
 </tr>
 <tr class="odd">
 <td>largest_5e-04</td>
-<td>2.0 s</td>
-<td>32.2 s</td>
-<td>16.4×</td>
-<td>5.4 s</td>
-<td>2.8×</td>
-<td>no</td>
+<td>16,688 MB (from 9,072)</td>
+<td>14,258 MB (from 13,199)</td>
+<td>13,751 MB (from 13,751)</td>
+<td>13,751 MB (from 13,751)</td>
+<td>226 MB</td>
 </tr>
 </tbody>
 </table>
-<p>A reader usually asks for more than the bare tier: the resolved query (<code>read_tier</code>) returns positions and ALIDs. Against that, the fastest pruning path costs:</p>
-<table class="caption-top table table-sm table-striped small">
-<thead>
-<tr class="header">
-<th>slice</th>
-<th>pruning, blocks</th>
-<th>resolved Top-Hit Query</th>
-<th>× resolved</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>tracer</td>
-<td>241 ms</td>
-<td>545 ms</td>
-<td>0.44×</td>
-</tr>
-<tr class="even">
-<td>height_5e-8</td>
-<td>1.0 s</td>
-<td>1.3 s</td>
-<td>0.79×</td>
-</tr>
-<tr class="odd">
-<td>mvp_5e-8</td>
-<td>1.2 s</td>
-<td>4.8 s</td>
-<td>0.25×</td>
-</tr>
-<tr class="even">
-<td>observed_only_5e-8</td>
-<td>1.3 s</td>
-<td>12.0 s</td>
-<td>0.11×</td>
-</tr>
-<tr class="odd">
-<td>mvp_5e-4</td>
-<td>2.0 s</td>
-<td>14.3 s</td>
-<td>0.14×</td>
-</tr>
-<tr class="even">
-<td>largest_5e-08</td>
-<td>5.0 s</td>
-<td>29.8 s</td>
-<td>0.17×</td>
-</tr>
-<tr class="odd">
-<td>largest_5e-04</td>
-<td>5.4 s</td>
-<td>32.4 s</td>
-<td>0.17×</td>
-</tr>
-</tbody>
-</table>
-</div>
-</div>
-<div id="e781fe9a" class="cell" data-execution_count="7">
-<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="7">
-<p>The largest 5e-8 slice — <code>GCST004461</code>, 9,429,671 rows — is the one the question turns on. The rule as #402 wrote it, with positions from the Variant Table, costs 29.5 s there, 15.8× the 1.9 s the Top-Hit Query itself takes: it cannot run per query as written. The block-at-a-time rule, with the per-variant position and cM arrays, costs 5.0 s: 2.7× the bare tier read, and 0.17× the resolved query (29.8 s).</p>
-<p>Judged against the budget recorded above, query-time pruning of that slice is <strong>not fast enough to run per query against the bare tier read alone</strong>. A per-query option is defensible only with both per-variant arrays in the Store, and only against the resolved query; without them it costs an order of magnitude more than the query itself.</p>
-<p>The build-time answer is cheap by comparison and is needed anyway: <code>n_loci_*</code> are Analytical Metadata, so the counts belong in <code>analyses.tsv</code> whether or not a reader can prune, and the per-variant cM array that makes them cheap is a one-off write.</p>
 </div>
 </div>
 </section>
 <section id="clumping-the-same-rows" class="level2">
 <h2 class="anchored" data-anchor-id="clumping-the-same-rows">Clumping the same rows</h2>
-<div id="d02ee93b" class="cell" data-execution_count="8">
-<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="8">
-<p>plink2 on the shared set: the rows both methods can see, named in <code>build_shared_set</code>. The shared set’s own cost — matching rows to the panel’s variants and interpolating their cM — is charged to clumping, because a clumping run cannot start without it.</p>
+<div id="bb8da425" class="cell" data-execution_count="9">
+<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="9">
+<p>plink2 on the shared set: the rows both methods can see, named in <code>build_shared_set</code>. Three bills are reported, because “clumping” can mean three things: plink2 alone; plink2 with the panel match it cannot start without; and the whole shared set, which also interpolates and checks the cM that only pruning needs.</p>
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
 </colgroup>
 <thead>
 <tr class="header">
@@ -2847,9 +3016,10 @@ vertical-align: -.125em;
 <th>shared rows</th>
 <th>of the tier</th>
 <th>shared set</th>
-<th>rank</th>
-<th>plink2, per chromosome</th>
-<th>clumping total</th>
+<th>of which matching</th>
+<th>of which cM</th>
+<th>ranking</th>
+<th>plink2</th>
 <th>index variants</th>
 <th>order followed</th>
 </tr>
@@ -2859,10 +3029,11 @@ vertical-align: -.125em;
 <td>tracer</td>
 <td>47,457</td>
 <td>85.6%</td>
-<td>23.4 s (22.9 s–24.1 s)</td>
+<td>29.6 s (26.7 s–33.4 s)</td>
+<td>29.5 s (29.2 s–30.6 s)</td>
+<td>17 ms (16 ms–19 ms)</td>
 <td>5 ms (5 ms–5 ms)</td>
-<td>1.7 s</td>
-<td>25.1 s</td>
+<td>1.8 s</td>
 <td>742</td>
 <td>yes</td>
 </tr>
@@ -2870,10 +3041,11 @@ vertical-align: -.125em;
 <td>height_5e-8</td>
 <td>114,148</td>
 <td>18.0%</td>
-<td>22.9 s (22.3 s–24.2 s)</td>
+<td>23.4 s (23.2 s–23.6 s)</td>
+<td>26.5 s (26.0 s–29.4 s)</td>
+<td>27 ms (27 ms–30 ms)</td>
 <td>14 ms (14 ms–14 ms)</td>
-<td>2.0 s</td>
-<td>24.9 s</td>
+<td>2.1 s</td>
 <td>4,000</td>
 <td>yes</td>
 </tr>
@@ -2881,10 +3053,11 @@ vertical-align: -.125em;
 <td>mvp_5e-8</td>
 <td>763,450</td>
 <td>82.3%</td>
-<td>25.0 s (23.6 s–26.2 s)</td>
-<td>92 ms (92 ms–101 ms)</td>
-<td>3.5 s</td>
-<td>28.6 s</td>
+<td>31.8 s (28.8 s–32.6 s)</td>
+<td>28.8 s (27.8 s–29.2 s)</td>
+<td>161 ms (159 ms–162 ms)</td>
+<td>98 ms (97 ms–102 ms)</td>
+<td>3.4 s</td>
 <td>7,448</td>
 <td>yes</td>
 </tr>
@@ -2892,10 +3065,11 @@ vertical-align: -.125em;
 <td>observed_only_5e-8</td>
 <td>2,245,120</td>
 <td>97.0%</td>
-<td>26.4 s (25.6 s–26.8 s)</td>
-<td>266 ms (262 ms–273 ms)</td>
-<td>7.6 s</td>
-<td>34.2 s</td>
+<td>29.7 s (29.6 s–30.7 s)</td>
+<td>27.7 s (26.8 s–30.8 s)</td>
+<td>404 ms (399 ms–409 ms)</td>
+<td>277 ms (274 ms–284 ms)</td>
+<td>8.1 s</td>
 <td>20,759</td>
 <td>yes</td>
 </tr>
@@ -2903,10 +3077,11 @@ vertical-align: -.125em;
 <td>mvp_5e-4</td>
 <td>1,735,661</td>
 <td>63.0%</td>
-<td>26.9 s (26.7 s–28.6 s)</td>
-<td>228 ms (223 ms–232 ms)</td>
-<td>6.2 s</td>
-<td>33.3 s</td>
+<td>32.4 s (29.3 s–37.0 s)</td>
+<td>28.0 s (27.7 s–29.8 s)</td>
+<td>461 ms (459 ms–462 ms)</td>
+<td>244 ms (242 ms–247 ms)</td>
+<td>6.3 s</td>
 <td>16,268</td>
 <td>yes</td>
 </tr>
@@ -2914,10 +3089,11 @@ vertical-align: -.125em;
 <td>largest_5e-08</td>
 <td>3,527,954</td>
 <td>37.4%</td>
-<td>34.4 s (32.8 s–37.1 s)</td>
-<td>651 ms (636 ms–678 ms)</td>
-<td>13.4 s</td>
-<td>48.5 s</td>
+<td>36.4 s (34.9 s–44.5 s)</td>
+<td>40.9 s (35.1 s–44.4 s)</td>
+<td>898 ms (893 ms–908 ms)</td>
+<td>642 ms (632 ms–656 ms)</td>
+<td>11.3 s</td>
 <td>24,878</td>
 <td>yes</td>
 </tr>
@@ -2925,20 +3101,21 @@ vertical-align: -.125em;
 <td>largest_5e-04</td>
 <td>3,529,871</td>
 <td>35.0%</td>
-<td>34.6 s (34.3 s–38.1 s)</td>
-<td>614 ms (607 ms–615 ms)</td>
-<td>15.4 s</td>
-<td>50.6 s</td>
+<td>38.4 s (37.2 s–42.2 s)</td>
+<td>33.9 s (33.2 s–34.0 s)</td>
+<td>971 ms (945 ms–985 ms)</td>
+<td>658 ms (651 ms–664 ms)</td>
+<td>12.6 s</td>
 <td>24,913</td>
 <td>yes</td>
 </tr>
 </tbody>
 </table>
-<p>Each chromosome is one <code>plink2 --clump</code> run, which is what <code>clump_rows</code> does internally, so the plink2 column is the sum of the per-chromosome medians. “Order followed” is <code>clump.check_clumps_follow_rule_order</code>: every clump’s index variant must come first in the rule’s order, or plink2 ranked differently from the rule and the clumps are not the rule’s.</p>
+<p>The matching and cM columns are timed separately from the shared set they belong to, so they sum to about it rather than being its parts by construction. Each chromosome is one <code>plink2 --clump</code> run, which is what <code>clump_rows</code> does internally, so the plink2 column is the sum of the per-chromosome medians. “Order followed” is <code>clump.check_clumps_follow_rule_order</code>: every clump’s index variant must come first in the rule’s order, or plink2 ranked differently from the rule and the clumps are not the rule’s.</p>
 </div>
 </div>
-<div id="d3e409e3" class="cell" data-execution_count="9">
-<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="9">
+<div id="e7146a50" class="cell" data-execution_count="10">
+<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="10">
 <p><code>largest_5e-04</code>, the widest shared set measured, chromosome by chromosome:</p>
 <table class="caption-top table table-sm table-striped small">
 <thead>
@@ -2954,168 +3131,168 @@ vertical-align: -.125em;
 <tr class="odd">
 <td>1</td>
 <td>271,061</td>
-<td>904 ms (879 ms–1.0 s)</td>
-<td>205 MB</td>
+<td>846 ms (797 ms–873 ms)</td>
+<td>214 MB</td>
 <td>1,983</td>
 </tr>
 <tr class="even">
 <td>2</td>
 <td>293,758</td>
-<td>1.1 s (1.1 s–1.1 s)</td>
-<td>215 MB</td>
+<td>995 ms (935 ms–1.1 s)</td>
+<td>226 MB</td>
 <td>1,957</td>
 </tr>
 <tr class="odd">
 <td>3</td>
 <td>255,551</td>
-<td>977 ms (965 ms–1.1 s)</td>
-<td>189 MB</td>
+<td>942 ms (825 ms–968 ms)</td>
+<td>196 MB</td>
 <td>1,655</td>
 </tr>
 <tr class="even">
 <td>4</td>
 <td>257,625</td>
-<td>975 ms (965 ms–1.0 s)</td>
-<td>191 MB</td>
+<td>973 ms (893 ms–983 ms)</td>
+<td>198 MB</td>
 <td>1,598</td>
 </tr>
 <tr class="odd">
 <td>5</td>
 <td>219,786</td>
-<td>831 ms (829 ms–844 ms)</td>
-<td>168 MB</td>
+<td>735 ms (681 ms–777 ms)</td>
+<td>176 MB</td>
 <td>1,511</td>
 </tr>
 <tr class="even">
 <td>6</td>
 <td>243,795</td>
-<td>908 ms (902 ms–938 ms)</td>
-<td>184 MB</td>
+<td>796 ms (733 ms–851 ms)</td>
+<td>194 MB</td>
 <td>1,443</td>
 </tr>
 <tr class="odd">
 <td>7</td>
 <td>208,878</td>
-<td>1.1 s (803 ms–1.3 s)</td>
-<td>164 MB</td>
+<td>648 ms (637 ms–651 ms)</td>
+<td>176 MB</td>
 <td>1,388</td>
 </tr>
 <tr class="even">
 <td>8</td>
 <td>191,793</td>
-<td>1.1 s (839 ms–1.2 s)</td>
-<td>151 MB</td>
+<td>588 ms (587 ms–608 ms)</td>
+<td>156 MB</td>
 <td>1,243</td>
 </tr>
 <tr class="odd">
 <td>9</td>
 <td>151,769</td>
-<td>665 ms (660 ms–1.0 s)</td>
-<td>130 MB</td>
+<td>590 ms (583 ms–592 ms)</td>
+<td>142 MB</td>
 <td>1,137</td>
 </tr>
 <tr class="even">
 <td>10</td>
 <td>175,385</td>
-<td>774 ms (733 ms–1.0 s)</td>
-<td>145 MB</td>
+<td>672 ms (651 ms–689 ms)</td>
+<td>156 MB</td>
 <td>1,241</td>
 </tr>
 <tr class="odd">
 <td>11</td>
 <td>175,249</td>
-<td>1.1 s (790 ms–1.1 s)</td>
-<td>141 MB</td>
+<td>674 ms (669 ms–674 ms)</td>
+<td>148 MB</td>
 <td>1,154</td>
 </tr>
 <tr class="even">
 <td>12</td>
 <td>173,522</td>
-<td>1.1 s (764 ms–1.1 s)</td>
-<td>140 MB</td>
+<td>665 ms (619 ms–684 ms)</td>
+<td>148 MB</td>
 <td>1,202</td>
 </tr>
 <tr class="odd">
 <td>13</td>
 <td>129,146</td>
-<td>543 ms (534 ms–864 ms)</td>
-<td>109 MB</td>
+<td>424 ms (422 ms–433 ms)</td>
+<td>116 MB</td>
 <td>911</td>
 </tr>
 <tr class="even">
 <td>14</td>
 <td>115,792</td>
-<td>462 ms (462 ms–755 ms)</td>
-<td>102 MB</td>
+<td>402 ms (380 ms–423 ms)</td>
+<td>108 MB</td>
 <td>841</td>
 </tr>
 <tr class="odd">
 <td>15</td>
 <td>98,353</td>
-<td>408 ms (406 ms–419 ms)</td>
-<td>92 MB</td>
+<td>385 ms (352 ms–387 ms)</td>
+<td>100 MB</td>
 <td>815</td>
 </tr>
 <tr class="even">
 <td>16</td>
 <td>110,165</td>
-<td>464 ms (463 ms–464 ms)</td>
-<td>97 MB</td>
+<td>447 ms (374 ms–451 ms)</td>
+<td>108 MB</td>
 <td>890</td>
 </tr>
 <tr class="odd">
 <td>17</td>
 <td>97,279</td>
-<td>406 ms (405 ms–407 ms)</td>
-<td>92 MB</td>
+<td>388 ms (387 ms–389 ms)</td>
+<td>100 MB</td>
 <td>870</td>
 </tr>
 <tr class="even">
 <td>18</td>
 <td>101,802</td>
-<td>416 ms (416 ms–425 ms)</td>
-<td>91 MB</td>
+<td>363 ms (347 ms–412 ms)</td>
+<td>100 MB</td>
 <td>781</td>
 </tr>
 <tr class="odd">
 <td>19</td>
 <td>82,990</td>
-<td>369 ms (364 ms–376 ms)</td>
-<td>83 MB</td>
+<td>298 ms (296 ms–299 ms)</td>
+<td>88 MB</td>
 <td>740</td>
 </tr>
 <tr class="even">
 <td>20</td>
 <td>78,686</td>
-<td>334 ms (334 ms–336 ms)</td>
-<td>77 MB</td>
+<td>281 ms (278 ms–286 ms)</td>
+<td>88 MB</td>
 <td>704</td>
 </tr>
 <tr class="odd">
 <td>21</td>
 <td>49,147</td>
-<td>228 ms (225 ms–229 ms)</td>
-<td>61 MB</td>
+<td>219 ms (204 ms–222 ms)</td>
+<td>68 MB</td>
 <td>407</td>
 </tr>
 <tr class="even">
 <td>22</td>
 <td>48,339</td>
-<td>225 ms (223 ms–232 ms)</td>
-<td>63 MB</td>
+<td>220 ms (220 ms–222 ms)</td>
+<td>70 MB</td>
 <td>442</td>
 </tr>
 </tbody>
 </table>
-<p>Peak memory is sampled from <code>/proc/&lt;pid&gt;/statm</code>: the child’s while plink2 runs, this process’s otherwise. <code>ru_maxrss</code> is not used — under <code>pixi run</code> it starts near 2 GiB and never comes down — and neither is <code>/usr/bin/time</code>.</p>
 </div>
 </div>
 </section>
 <section id="pruning-against-clumping" class="level2">
 <h2 class="anchored" data-anchor-id="pruning-against-clumping">Pruning against clumping</h2>
-<div id="67dffcb1" class="cell" data-execution_count="10">
-<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="10">
-<p>The ratio is pruning over clumping on the identical rows — the shared set — with no panel, no genotypes and no position lookup on either side of it: the cM lookup, the sort and the rule against the shared set’s construction, its ranking and plink2.</p>
+<div id="b9745ada" class="cell" data-execution_count="11">
+<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="11">
+<p>The ratio is pruning over clumping on the identical rows — the shared set — with no panel and no genotypes on the pruning side of it: the cM lookup and the rule against each of the three clumping bills. The sort is charged to neither, and each rule’s own time includes its own sort.</p>
+<p><strong>End to end</strong> — pruning against the whole shared set:</p>
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
 <col style="width: 14%">
@@ -3132,7 +3309,7 @@ vertical-align: -.125em;
 <th>rows</th>
 <th>pruning</th>
 <th>clumping</th>
-<th>pruning / clumping</th>
+<th>ratio</th>
 <th>pruning, blocks</th>
 <th>ratio</th>
 </tr>
@@ -3141,85 +3318,172 @@ vertical-align: -.125em;
 <tr class="odd">
 <td>tracer</td>
 <td>47,457</td>
-<td>102 ms</td>
-<td>25.1 s</td>
-<td>0.004</td>
-<td>225 ms</td>
-<td>0.009</td>
+<td>53 ms</td>
+<td>31.4 s</td>
+<td>0.002</td>
+<td>223 ms</td>
+<td>0.007</td>
 </tr>
 <tr class="even">
 <td>height_5e-8</td>
 <td>114,148</td>
-<td>147 ms</td>
-<td>24.9 s</td>
-<td>0.006</td>
-<td>457 ms</td>
-<td>0.018</td>
+<td>268 ms</td>
+<td>25.5 s</td>
+<td>0.011</td>
+<td>855 ms</td>
+<td>0.034</td>
 </tr>
 <tr class="odd">
 <td>mvp_5e-8</td>
 <td>763,450</td>
-<td>1.7 s</td>
-<td>28.6 s</td>
-<td>0.060</td>
-<td>1.2 s</td>
+<td>1.5 s</td>
+<td>35.3 s</td>
 <td>0.042</td>
+<td>1.1 s</td>
+<td>0.031</td>
 </tr>
 <tr class="even">
 <td>observed_only_5e-8</td>
 <td>2,245,120</td>
-<td>3.2 s</td>
-<td>34.2 s</td>
-<td>0.094</td>
-<td>1.3 s</td>
-<td>0.037</td>
+<td>3.6 s</td>
+<td>38.0 s</td>
+<td>0.096</td>
+<td>1.2 s</td>
+<td>0.031</td>
 </tr>
 <tr class="odd">
 <td>mvp_5e-4</td>
 <td>1,735,661</td>
-<td>3.0 s</td>
-<td>33.3 s</td>
-<td>0.090</td>
-<td>1.8 s</td>
-<td>0.053</td>
+<td>2.5 s</td>
+<td>38.9 s</td>
+<td>0.064</td>
+<td>1.6 s</td>
+<td>0.040</td>
 </tr>
 <tr class="even">
 <td>largest_5e-08</td>
 <td>3,527,954</td>
-<td>6.8 s</td>
-<td>48.5 s</td>
-<td>0.140</td>
-<td>2.5 s</td>
-<td>0.051</td>
+<td>7.6 s</td>
+<td>48.3 s</td>
+<td>0.157</td>
+<td>2.6 s</td>
+<td>0.054</td>
 </tr>
 <tr class="odd">
 <td>largest_5e-04</td>
 <td>3,529,871</td>
-<td>6.1 s</td>
-<td>50.6 s</td>
-<td>0.120</td>
-<td>2.4 s</td>
-<td>0.046</td>
+<td>5.9 s</td>
+<td>51.6 s</td>
+<td>0.115</td>
+<td>1.8 s</td>
+<td>0.034</td>
 </tr>
 </tbody>
 </table>
-<p>Pruning costs between 7× and 244× less than clumping of the same rows as #402 wrote it, and between 19× and 112× less with the block-at-a-time rule. Clumping pays for the panel whatever the row count — its shared set alone takes 22.9– 34.6 s across these slices — and pruning pays nothing for it.</p>
-<p>What clumping buys for that price is the genotypes themselves: an r² that follows LD, a recombination hotspot and a cold stretch alike.</p>
+<p><strong>Against plink2 with the panel match it needs, and against plink2 alone:</strong></p>
+<table class="caption-top table table-sm table-striped small">
+<colgroup>
+<col style="width: 14%">
+<col style="width: 14%">
+<col style="width: 14%">
+<col style="width: 14%">
+<col style="width: 14%">
+<col style="width: 14%">
+<col style="width: 14%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>slice</th>
+<th>ratio, matched</th>
+<th>ratio, blocks (matched)</th>
+<th>ratio, plink2 alone</th>
+<th>ratio, blocks (plink2 alone)</th>
+<th>plink2 alone</th>
+<th>plink2 + match</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>tracer</td>
+<td>0.002</td>
+<td>0.007</td>
+<td>0.030</td>
+<td>0.125</td>
+<td>1.8 s</td>
+<td>31.3 s</td>
+</tr>
+<tr class="even">
+<td>height_5e-8</td>
+<td>0.009</td>
+<td>0.030</td>
+<td>0.130</td>
+<td>0.415</td>
+<td>2.1 s</td>
+<td>28.6 s</td>
+</tr>
+<tr class="odd">
+<td>mvp_5e-8</td>
+<td>0.046</td>
+<td>0.034</td>
+<td>0.433</td>
+<td>0.319</td>
+<td>3.4 s</td>
+<td>32.3 s</td>
+</tr>
+<tr class="even">
+<td>observed_only_5e-8</td>
+<td>0.101</td>
+<td>0.033</td>
+<td>0.452</td>
+<td>0.147</td>
+<td>8.1 s</td>
+<td>36.0 s</td>
+</tr>
+<tr class="odd">
+<td>mvp_5e-4</td>
+<td>0.072</td>
+<td>0.045</td>
+<td>0.394</td>
+<td>0.248</td>
+<td>6.3 s</td>
+<td>34.6 s</td>
+</tr>
+<tr class="even">
+<td>largest_5e-08</td>
+<td>0.143</td>
+<td>0.049</td>
+<td>0.669</td>
+<td>0.229</td>
+<td>11.3 s</td>
+<td>52.9 s</td>
+</tr>
+<tr class="odd">
+<td>largest_5e-04</td>
+<td>0.126</td>
+<td>0.038</td>
+<td>0.473</td>
+<td>0.141</td>
+<td>12.6 s</td>
+<td>47.1 s</td>
+</tr>
+</tbody>
+</table>
+<p>Pruning costs between 6.4× and 588× less than the whole shared set as #402 wrote it, and between 1.5× and 34× less than plink2 alone; with the block-at-a-time rule the same comparisons are 19×– 141× and 2.4×– 8.0×. The largest ratio end to end is at <code>largest_5e-08</code> and the smallest at <code>tracer</code>, where a fixed panel read outweighs a small tier. What clumping buys for that price is the genotypes themselves: an r² that follows LD, a recombination hotspot and a cold stretch alike.</p>
 </div>
 </div>
 </section>
 <section id="what-these-numbers-do-and-do-not-say" class="level2">
 <h2 class="anchored" data-anchor-id="what-these-numbers-do-and-do-not-say">What these numbers do and do not say</h2>
-<div id="161d9a1e" class="cell" data-execution_count="11">
-<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="11">
+<div id="cc1a0ac1" class="cell" data-execution_count="12">
+<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="12">
 <ul>
 <li><strong>Both rules were run, and agreed.</strong> Every slice asserts that <code>cost.fast_locus_leads</code> returns exactly <code>rule.locus_leads</code>’s leads before any figure is written; a disagreement fails the run.</li>
 <li><strong>The largest tiers are not the most representative.</strong> The largest 5e-8 tier — <code>GCST004461</code>, 9,429,671 rows — holds 3,652,412 rows past |z| 38, where a float64 p is 0 and the Analysis’s own provenance is in doubt (#402 recorded this one as an artefact). It is the right tier for a cost measurement and the wrong one for a biological conclusion, which is why the mid-size slices are measured beside it.</li>
 <li><strong>Nothing here says the leads are right.</strong> That is #402’s comparison and #403’s sweep; this measures what a query would pay, not which loci it would find.</li>
-<li><strong>The map, not the rule, decides the ceiling.</strong> Reading the positions of the largest 5e-8 tier’s 9,429,671 rows from the Variant Table costs 13.3 s, against 0.12 s from a per-variant array, while its sort and rule cost 16.1 s as written and 4.9 s block at a time. The two position reads above are the whole difference, and the reason #62’s follow-up — a per-variant position array beside the cM one — should be measured before either is built.</li>
+<li><strong>The map, not the rule, decides the ceiling.</strong> Reading the positions of the largest 5e-8 tier’s 9,429,671 rows from the Variant Table costs 13.7 s, against 0.10 s from a per-variant array, while its rule costs 16.0 s as written and 4.0 s block at a time. The two position reads above are the whole difference, and the reason #62’s follow-up — a per-variant position array beside the cM one — should be measured before either is built.</li>
 </ul>
 <blockquote class="blockquote">
-<p>Measured at <code>e8d91ad</code> on 2026-11-05T22:24:38+00:00; the whole run took 1,624 s. Artifact: <code>cost.json</code>, rendered from it.</p>
+<p>Measured at <code>421433f</code> on 2026-11-06T00:00:09+00:00; the whole run took 2,790 s. Artifact: <code>cost.json</code>, rendered from it.</p>
 </blockquote>
 </div>
 </div>
