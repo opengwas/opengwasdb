@@ -5,7 +5,6 @@ from shutil import copytree
 from typing import TYPE_CHECKING
 
 import pytest
-
 import shared_releases
 
 if TYPE_CHECKING:
