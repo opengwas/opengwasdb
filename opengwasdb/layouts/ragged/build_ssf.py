@@ -522,7 +522,8 @@ class _Harvest:
     - A site is keyed as one string, ``alid<TAB>ref<TAB>alt``. A map of
       strings holds nothing the cyclic garbage collector tracks, so it adds
       nothing to each of the build's collections. Tuple keys added 12M
-      entries to every collection.
+      entries to every collection. A source allele holding a TAB would make
+      two spellings one key, so `names` refuses it.
     """
 
     alid_variant: dict[str, CanonicalVariant] = field(default_factory=dict)
@@ -570,7 +571,14 @@ class _Harvest:
         rsid_by_site: dict[SourceKey, str] = {}
         site_alid: dict[SourceKey, str] = {}
         for key, rsid in self.named.items():
-            alid, ref, alt = key.split("\t")
+            fields = key.split("\t")
+            if len(fields) != 3:
+                # Checked here, once per named site, not on every row added.
+                raise ValueError(
+                    f"{HARVEST_LABEL}: a source allele of {fields[0]} holds a TAB, which "
+                    "the build's site key cannot tell apart from another spelling"
+                )
+            alid, ref, alt = fields
             variant = alid_variant[alid]
             site = (variant.chromosome, variant.position, ref, alt)
             rsid_by_site[site] = rsid

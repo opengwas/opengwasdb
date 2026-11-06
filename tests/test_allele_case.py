@@ -24,7 +24,7 @@ from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.query import query_store
-from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
+from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.axis import VariantAxis
@@ -311,6 +311,26 @@ def test_a_ragged_ssf_build_names_a_variant_by_its_first_non_empty_rsid(
 
     (variant,) = VariantAxis(store).all()
     assert (variant.alid, variant.rsid) == (ALID, "rs1")
+
+
+def test_a_ragged_ssf_build_refuses_a_tab_in_a_source_allele(tmp_path):
+    """The harvest keys a site as ``alid<TAB>ref<TAB>alt`` (#379), and a quoted
+    GWAS-SSF cell can carry a TAB that the ALID's normalisation strips. Such a
+    site is refused by name, not keyed under another site's spelling."""
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    chrom, pos = SITE
+    with gzip.open(filtered / "tab.tsv.gz", "wt", encoding="utf-8") as fh:
+        fh.write("\t".join(_SSF_COLUMNS) + "\n")
+        fh.write(f'{chrom}\t{pos}\tG\t"A\t"\t1.0\t0.5\trs1\n')
+    (association,) = GwasSsfReader(filtered / "tab.tsv.gz").stream_associations()
+    assert {association.ref, association.alt} == {"A\t", "G"}
+    store = tmp_path / "ragged.opengwasdb"
+
+    refusal = f"Ragged SSF build: a source allele of {ALID} holds a TAB"
+    with pytest.raises(ValueError, match=refusal):
+        _ragged_build(_ragged_manifest(tmp_path, ["tab"]), filtered, store)
+    assert not store.exists()
 
 
 def test_a_dense_build_from_an_alid_list_routes_a_lower_case_source(tmp_path):
