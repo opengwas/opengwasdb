@@ -27,7 +27,8 @@ resolves after the lift, as it does in a Dense or Hybrid build.
 from __future__ import annotations
 
 import logging
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -150,7 +151,7 @@ def _sites(batch: ReaderBatch) -> list[SourceKey]:
 
 
 def _both_builds_declare(
-    grch38: Sequence[Sequence[ReaderBatch]], lifted: Collection[SourceKey]
+    grch38: Sequence[Sequence[ReaderBatch]], lifted: AbstractSet[SourceKey]
 ) -> set[str]:
     """The Routing Keys a GRCh38 source declares that a placed lifted site spells too.
 

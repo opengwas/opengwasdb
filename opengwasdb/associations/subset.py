@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from opengwasdb.associations.cells import Cells
+from opengwasdb.associations.cells import Cells, require_within
 from opengwasdb.associations.record import Associations, Inspection, Status
 
 if TYPE_CHECKING:
@@ -52,6 +52,7 @@ class SubsetReader:
         if cells.kind != "analysis":
             raise TypeError(f"an Indexed Variant Subset reads one Analysis, not {cells.kind!r}")
         col = cells.analysis_index
+        require_within(cells, self._source, n_analyses=self._subset.n_analyses)
         decoded = self._subset.decode_analysis(col)
         eaf = (
             np.full(len(decoded.z), np.nan, dtype=np.float32)

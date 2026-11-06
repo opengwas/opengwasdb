@@ -437,6 +437,9 @@ def _write_rekeyed_tables(
     there are positions. They need not match the component's cell count: a
     table holds the exceptions, not the cells (issue #392).
     """
+    # Every table is judged before any is written, so a malformed later one
+    # leaves no half-written index behind.
+    judged: list[tuple[str, str, np.ndarray, np.ndarray]] = []
     for (_label, index_name, value_name, _index, _value), index_parts, value_parts in zip(
         source_tables, rekeyed_index, rekeyed_value, strict=True
     ):
@@ -457,6 +460,8 @@ def _write_rekeyed_tables(
                 f"the re-keyed exception table at {index_name} holds a cell twice; the "
                 "source table is keyed by flat ordinal and cannot address one cell twice"
             )
+        judged.append((index_name, value_name, positions, values))
+    for index_name, value_name, positions, values in judged:
         store_arrays.create_array(
             index,
             index_name,

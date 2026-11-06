@@ -1126,3 +1126,22 @@ def test_a_rekeyed_exception_table_refuses_an_index_and_value_of_other_lengths(
             [[np.arange(3, dtype=np.float32)]],
         )
     assert list(index.array_keys()) == []
+
+
+def test_no_exception_table_is_written_when_a_later_one_is_malformed(tmp_path) -> None:
+    """A valid Z table ahead of a malformed SE table was written before the SE
+    table was refused, leaving half a re-keyed index behind (issue #392)."""
+    index = zarr.open_group(str(tmp_path / "by_variant.zarr"), mode="w", zarr_format=2)
+    empty = (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float32))
+    source = [
+        ("z", "z_overflow_index", "z_overflow_value", *empty),
+        ("se", "se_exception_index", "se_exception_value", *empty),
+    ]
+    with pytest.raises(ValueError, match=r"se_exception_index: positions of length 2"):
+        by_variant._write_rekeyed_tables(
+            index,
+            source,
+            [[np.arange(2, dtype=np.int64)], [np.arange(2, dtype=np.int64)]],
+            [[np.arange(2, dtype=np.float32)], [np.arange(1, dtype=np.float32)]],
+        )
+    assert list(index.array_keys()) == []
