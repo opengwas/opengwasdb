@@ -29,12 +29,7 @@ from .sweep import EUR_SPIKES, sweep
 def main(argv: list[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     if args.command == "build-map":
-        # EUR through `build_eur_map`, so the command #403 documents writes the
-        # map it wrote; any other ancestry through the generalised average.
-        identity = (build_eur_map(args.archive, args.output) if args.ancestry == "EUR"
-                    else build_population_map(args.archive, args.output,
-                                              populations(args.ancestry)))
-        print(json.dumps(identity, indent=2))
+        _build_map(args)
         return
     if args.command == "cost":
         _write(args, measure(store_root=args.store_root, genetic_map_path=args.genetic_map,
@@ -69,6 +64,14 @@ def _write(args: argparse.Namespace, result: dict) -> None:
     """Write `result` to `args.output`, making its directory."""
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=1, allow_nan=False) + "\n")
+
+
+def _build_map(args: argparse.Namespace) -> None:
+    """Write the map `--ancestry` names, EUR through the function #403 documented."""
+    identity = (build_eur_map(args.archive, args.output) if args.ancestry == "EUR"
+                else build_population_map(args.archive, args.output,
+                                          populations(args.ancestry)))
+    print(json.dumps(identity, indent=2))
 
 
 def _sweep(args: argparse.Namespace) -> None:

@@ -67,8 +67,7 @@ def stratum(observed_rows: int, max_abs_z: float) -> tuple[str, str]:
 
 def draw(pool: list[PoolEntry], rule: SelectionRule) -> Selection:
     """The quotas first (strongest |z| first), then round-robin over the strata."""
-    ordered = sorted((e for e in pool if e.ancestry == rule.ancestry),
-                     key=lambda e: (e.store, e.analysis_id))
+    ordered = sorted(_of_ancestry(pool, rule.ancestry), key=lambda e: (e.store, e.analysis_id))
     excluded = [e for e in ordered if e.observed_rows > rule.max_rows]
     eligible = [e for e in ordered if 0 < e.observed_rows <= rule.max_rows]
     rng = random.Random(rule.seed)
@@ -82,6 +81,11 @@ def draw(pool: list[PoolEntry], rule: SelectionRule) -> Selection:
     _fill(chosen, eligible, rng, rule.target)
     return Selection(sorted(chosen, key=lambda e: (e.store, e.analysis_id)), excluded,
                      _stratum_counts(eligible), [e for e in ordered if e.observed_rows == 0])
+
+
+def _of_ancestry(pool: list[PoolEntry], ancestry: str) -> list[PoolEntry]:
+    """The pool's Analyses assigned `ancestry`; the draw never mixes ancestries."""
+    return [e for e in pool if e.ancestry == ancestry]
 
 
 def with_floors(pool: list[PoolEntry], rule: SelectionRule) -> tuple[SelectionRule, dict[str, Any]]:

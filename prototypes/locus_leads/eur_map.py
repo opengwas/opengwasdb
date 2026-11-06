@@ -61,13 +61,19 @@ def read_population_maps(archive: Path, populations: tuple[str, ...]) -> dict[st
     points: dict[str, dict[str, tuple[np.ndarray, np.ndarray]]] = {p: {} for p in populations}
     for population, chromosome, map_points in _population_files(archive, populations):
         points[population][chromosome] = map_points
+    _check_covered(archive, points, populations)
+    return {population: _in_autosome_order(points[population]) for population in populations}
+
+
+def _check_covered(archive: Path, points: dict[str, dict[str, tuple[np.ndarray, np.ndarray]]],
+                   populations: tuple[str, ...]) -> None:
+    """Refuse an archive that lacks a population, or a chromosome of one, by name."""
     absent = [p for p in populations if not points[p]]
     if absent:
         raise GeneticMapError(f"{archive}: no map for population {', '.join(absent)}")
     missing = [f"{p} chr{c}" for p in populations for c in AUTOSOMES if c not in points[p]]
     if missing:
         raise GeneticMapError(f"{archive}: no map for {', '.join(missing)}")
-    return {population: _in_autosome_order(points[population]) for population in populations}
 
 
 def _in_autosome_order(points: dict[str, tuple[np.ndarray, np.ndarray]]) -> GeneticMap:
