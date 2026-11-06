@@ -7,10 +7,12 @@
 > does (spec §4). Extraction's window lift stays its own rather than moving onto
 > `place_sites`, so its failure threshold is still counted over the whole union,
 > but it forms each ALID and judges each re-orientation by the same rules
-> (`LiftedRow.alid`, `statistics_swap`). `ReverseStrandLiftError` is gone. An
-> artifact without the column predates the record and is refused
-> (`UnmarkedArtifactError`), since reading it as re-orienting nothing would
-> store a wrong sign that looks right.
+> (`LiftedRow.alid`, `statistics_swap`). `ReverseStrandLiftError` is gone. The
+> routing column is renamed `routed_source_keys`, so the format refuses both
+> ways: an artifact whose header still names `source_keys` predates the record
+> and every reader of a reference refuses it (`UnmarkedArtifactError`), and an
+> engine before #354, which requires `source_keys`, refuses a new artifact.
+> Either reading would otherwise store a wrong sign that looks right.
 >
 > **Partly superseded by [ADR 0075](0075-alleles-are-upper-cased-before-identity-assignment.md).**
 > The module stands. What no longer holds is `RoutingKey`: alleles are

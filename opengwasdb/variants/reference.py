@@ -12,12 +12,15 @@ Three inputs are accepted, distinguished by content rather than by suffix:
 
 * ``*.variant-ref.tsv.gz`` -- the artifact the standalone
   ``extract-variant-reference`` stage writes (issue #187). It carries explicit
-  ``source_keys``, so an hg19 source variant resolves to its lifted hg38 ALID
-  without re-running Pass 1, and ``reoriented_keys``, the source keys whose
-  statistics that lift re-oriented (issue #354). An artifact without the
-  second column predates it and is refused: it cannot say which keys the
-  lift re-oriented, and if it was written before extraction refused a
-  reverse-strand lift it may name their ALIDs on the source's strand.
+  ``routed_source_keys``, so an hg19 source variant resolves to its lifted
+  hg38 ALID without re-running Pass 1, and ``reoriented_keys``, the source
+  keys whose statistics that lift re-oriented (issue #354). An artifact whose
+  routing column is still ``source_keys`` predates that record and is refused
+  (`refuse_unmarked_artifact`): it cannot say which keys the lift re-oriented,
+  and if it was written before extraction refused a reverse-strand lift it may
+  name their ALIDs on the source's strand. The column was renamed so that an
+  engine before issue #354, which requires ``source_keys``, refuses this
+  format in turn rather than read it without its re-orientation.
 * a plain ALID list -- one canonical GRCh38 ALID per line. Source keys are the
   ALID's own coordinate in either allele order (identity).
 * a store ``variants.tsv.gz`` -- the Store Variant Table. Source keys are
@@ -54,6 +57,7 @@ __all__ = [
     "expected_rsids_by_routed_key",
     "expected_rsids_by_routing",
     "read_variant_reference",
+    "refuse_unmarked_artifact",
     "require_rsids_match_expected",
     "require_written_rsids_match",
     "warn_reference_left_rows_blank",
@@ -66,25 +70,52 @@ SourceKey = tuple[str, int, str, str]
 #: Columns the artifact writer emits; the reader requires every one but
 #: ``rsid`` (a source that named no rsid writes it blank).
 _ARTIFACT_COLUMNS = (
-    "alid", "chromosome", "position", "a1", "a2", "source_keys", "reoriented_keys"
+    "alid", "chromosome", "position", "a1", "a2", "routed_source_keys", "reoriented_keys"
 )
 
+#: The routing column of an artifact written before issue #354.
+_UNMARKED_ROUTING_COLUMN = "source_keys"
+
 #: The artifact's first line. The streaming extraction writes it as the first
-#: gzip member (issue #196). Its ``reoriented_keys`` column is what marks an
-#: artifact that records the lift's re-orientation (issue #354).
-ARTIFACT_HEADER = "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\treoriented_keys\n"
+#: gzip member (issue #196). ``routed_source_keys`` and ``reoriented_keys`` mark
+#: an artifact that records the lift's re-orientation (issue #354).
+ARTIFACT_HEADER = (
+    "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
+)
 
 
 class UnmarkedArtifactError(ValueError):
     """A Variant Reference artifact predates the record of the lift's re-orientation.
 
-    Such an artifact has a ``source_keys`` column and no ``reoriented_keys``.
-    Read as it stands, it would re-orient nothing, and a key whose statistics
-    the lift re-oriented would be stored with the source's sign; written before
-    extraction refused a reverse-strand lift, it may also name that key's ALID
-    on the source's strand. Nothing in the file says which, so it is refused,
-    and the remedy is to extract it again (issue #354).
+    Such an artifact names its routing column ``source_keys`` and carries no
+    ``reoriented_keys``. Read as it stands, it would re-orient nothing, and a
+    key whose statistics the lift re-oriented would be stored with the
+    source's sign; written before extraction refused a reverse-strand lift, it
+    may also name that key's ALID on the source's strand, so even its ALIDs
+    cannot be checked against. Nothing in the file says which, so every reader
+    of an artifact refuses it, and the remedy is to extract it again (issue
+    #354).
     """
+
+
+def refuse_unmarked_artifact(columns: Sequence[str], path: str | Path) -> None:
+    """Refuse a reference whose header names the pre-#354 routing column.
+
+    ``columns`` is the header's field names, without a leading ``#``. Every
+    reader of a reference calls this on the header alone, before any row, so
+    a streaming reader stays streaming; a plain ALID list and a Store Variant
+    Table name no such column and pass.
+    """
+    if _UNMARKED_ROUTING_COLUMN in columns:
+        raise UnmarkedArtifactError(
+            f"variant reference {path} is a Variant Reference artifact from an engine "
+            "before issue #354 (its routing column is source_keys, which the format "
+            "renamed when it added reoriented_keys): it cannot say which source keys "
+            "the lift re-oriented, and one written before extraction refused a "
+            "reverse-strand lift may name their ALIDs on the source's strand. Extract it "
+            "again with `opengwasdb extract-variant-reference` from the manifest it was "
+            "made from."
+        )
 
 
 @dataclass(frozen=True)
@@ -94,7 +125,7 @@ class VariantReference:
     ``source_lookup`` maps a source's raw ``(chrom, pos, ref, alt)`` (the exact
     tuple a ``SourceReader`` streams) to the canonical hg38 ALID whose row it
     populates. ``explicit_source_keys`` records whether that mapping came from
-    an artifact's ``source_keys`` column or was inferred by identity, so a
+    an artifact's ``routed_source_keys`` column or was inferred by identity, so a
     caller can tell a genuinely-hg38 panel from one carrying hg19 provenance.
     ``reoriented`` holds the source keys whose statistics the lift re-oriented
     (a reverse-strand chain block that made the other allele A1), which a
@@ -122,13 +153,14 @@ def read_variant_reference(path: str | Path) -> VariantReference:
     header, lines = _read_header_and_lines(reference_path)
     if header is None:
         return _reference_from_alid_lines(reference_path, lines)
-    if "source_keys" in header or ("a1" in header and "a2" in header):
+    refuse_unmarked_artifact(header, reference_path)
+    if "routed_source_keys" in header or ("a1" in header and "a2" in header):
         return _reference_from_artifact(reference_path, header, lines)
     if "alid" in header:
         return _reference_from_store_table(reference_path, header, lines)
     raise ValueError(
         f"variant reference {reference_path} has neither an 'alid' nor a "
-        "'source_keys' column"
+        "'routed_source_keys' column"
     )
 
 
@@ -556,15 +588,6 @@ def _reference_from_store_table(
 def _reference_from_artifact(
     path: Path, header: Sequence[str], lines: Sequence[str]
 ) -> VariantReference:
-    if "source_keys" in header and "reoriented_keys" not in header:
-        raise UnmarkedArtifactError(
-            f"variant reference {path} is a Variant Reference artifact with no "
-            "reoriented_keys column: an engine before issue #354 wrote it, so it cannot "
-            "say which source keys the lift re-oriented, and one written before "
-            "extraction refused a reverse-strand lift may name their ALIDs on the "
-            "source's strand. Extract it again with `opengwasdb extract-variant-reference` "
-            "from the manifest it was made from."
-        )
     missing = [name for name in _ARTIFACT_COLUMNS if name not in header]
     if missing:
         raise ValueError(
@@ -579,7 +602,7 @@ def _reference_from_artifact(
     for fields in _data_rows(lines):
         alid = _artifact_alid(path, header, fields)
         _append_alid(path, alid, seen, alids)
-        source_keys = _field(fields, header.index("source_keys"), path)
+        source_keys = _field(fields, header.index("routed_source_keys"), path)
         keys = _add_source_keys(path, source_keys, alid, source_lookup)
         reoriented_keys = _field(fields, header.index("reoriented_keys"), path)
         reoriented.update(_reoriented_keys(path, reoriented_keys, alid, keys))
@@ -614,7 +637,7 @@ def _add_source_keys(
     path: Path, raw_keys: str, alid: str, lookup: dict[SourceKey, str]
 ) -> list[SourceKey]:
     """Bind a row's source keys to its ALID, and return the keys it names."""
-    tokens = _tokens(raw_keys)
+    tokens = _key_list(path, raw_keys, alid, "routed_source_keys")
     if not tokens:
         # An external panel row carries no source mapping; identity is the only
         # honest reading (its sources are already on the reference build).
@@ -627,8 +650,29 @@ def _add_source_keys(
     return keys
 
 
-def _tokens(raw_keys: str) -> list[str]:
-    return [token.strip() for token in raw_keys.split(";") if token.strip()]
+def _key_list(path: Path, raw_keys: str, alid: str, column: str) -> list[str]:
+    """A cell's ``;``-separated keys, refused when the list is malformed.
+
+    An empty cell lists no keys. A list with an empty element (``;``,
+    ``key;;``) or a key named twice (``key;key``) is a corrupt artifact: read
+    leniently, it would be fewer keys, or for ``routed_source_keys`` an
+    identity routing, which is an answer the file never gave (issue #354).
+    """
+    if not raw_keys.strip():
+        return []
+    tokens = [token.strip() for token in raw_keys.split(";")]
+    if "" in tokens:
+        raise ValueError(
+            f"variant reference {path}: row {alid!r} has an empty element in its {column} "
+            f"list {raw_keys!r}"
+        )
+    if len(set(tokens)) != len(tokens):
+        twice = next(token for token in tokens if tokens.count(token) > 1)
+        raise ValueError(
+            f"variant reference {path}: row {alid!r} names {twice!r} twice in its {column} "
+            "list"
+        )
+    return tokens
 
 
 def _reoriented_keys(
@@ -639,7 +683,8 @@ def _reoriented_keys(
     A key the lift re-oriented is a key it placed on this row, so one the row
     does not route is a corrupt artifact, not a key to re-orient elsewhere.
     """
-    keys = [_parse_source_key(path, token) for token in _tokens(raw_keys)]
+    tokens = _key_list(path, raw_keys, alid, "reoriented_keys")
+    keys = [_parse_source_key(path, token) for token in tokens]
     stray = [key for key in keys if key not in source_keys]
     if stray:
         raise ValueError(

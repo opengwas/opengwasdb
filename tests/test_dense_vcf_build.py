@@ -2157,7 +2157,7 @@ class TestVariantReferenceErrors:
         header_only = tmp_path / "header-only.variant-ref.tsv.gz"
         with gzip.open(header_only, "wt", encoding="utf-8") as handle:
             handle.write(
-                "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\treoriented_keys\n"
+                "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
             )
         with pytest.raises(ValueError, match="contained no ALIDs"):
             build_dense_from_vcf_manifest(
@@ -2182,7 +2182,7 @@ class TestVariantReferenceErrors:
         bad = tmp_path / "mismatch.variant-ref.tsv.gz"
         with gzip.open(bad, "wt", encoding="utf-8") as handle:
             handle.write(
-                "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\treoriented_keys\n"
+                "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
             )
             handle.write("1:100000:A:G\t1\t999\tA\tG\t\t1:100000:A:G\t\n")
         with pytest.raises(ValueError, match="row columns describe"):
@@ -2197,7 +2197,7 @@ class TestVariantReferenceErrors:
         bad = tmp_path / "unknown.tsv.gz"
         with gzip.open(bad, "wt", encoding="utf-8") as handle:
             handle.write("foo\tbar\n1\t2\n")
-        with pytest.raises(ValueError, match="neither an 'alid' nor a 'source_keys' column"):
+        with pytest.raises(ValueError, match="neither an 'alid' nor a 'routed_source_keys' column"):
             read_variant_reference(bad)
 
     def test_variant_artifact_missing_required_column_fails_loudly(self, tmp_path):
@@ -2215,7 +2215,7 @@ class TestVariantReferenceErrors:
         bad = tmp_path / "conflict.variant-ref.tsv.gz"
         with gzip.open(bad, "wt", encoding="utf-8") as handle:
             handle.write(
-                "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\treoriented_keys\n"
+                "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
             )
             handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:200000:A:G\t\n")
             handle.write("1:100000:C:T\t1\t100000\tC\tT\t\t1:200000:A:G\t\n")
@@ -2228,7 +2228,7 @@ class TestVariantReferenceErrors:
         bad = tmp_path / "duplicate.variant-ref.tsv.gz"
         with gzip.open(bad, "wt", encoding="utf-8") as handle:
             handle.write(
-                "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\treoriented_keys\n"
+                "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
             )
             handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:100000:A:G\t\n")
             handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:100000:A:G\t\n")
@@ -2241,7 +2241,7 @@ class TestVariantReferenceErrors:
         bad = tmp_path / "bad-key.variant-ref.tsv.gz"
         with gzip.open(bad, "wt", encoding="utf-8") as handle:
             handle.write(
-                "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\treoriented_keys\n"
+                "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
             )
             handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:not-a-position:A:G\t\n")
         with pytest.raises(ValueError, match="invalid source key"):
@@ -2254,10 +2254,32 @@ class TestVariantReferenceErrors:
         bad = tmp_path / "stray.variant-ref.tsv.gz"
         with gzip.open(bad, "wt", encoding="utf-8") as handle:
             handle.write(
-                "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\treoriented_keys\n"
+                "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
             )
             handle.write("2:999001:C:T\t2\t999001\tC\tT\t\t2:1000:G:A\t2:2000:T:A\n")
         with pytest.raises(ValueError, match="not one of its source keys"):
+            read_variant_reference(bad)
+
+    @pytest.mark.parametrize("column", ["routed_source_keys", "reoriented_keys"])
+    @pytest.mark.parametrize(
+        "cell", [";", "2:1000:G:A;;", "2:1000:G:A;2:1000:G:A"], ids=["lone", "trailing", "twice"]
+    )
+    def test_a_malformed_key_list_fails_naming_its_row(self, tmp_path, column, cell):
+        """An empty cell lists no keys; a list with an empty element or a key
+        named twice is a corrupt artifact, not fewer keys (#354)."""
+        import gzip
+
+        cells = {"routed_source_keys": "2:1000:G:A", "reoriented_keys": "2:1000:G:A", column: cell}
+        bad = tmp_path / "malformed.variant-ref.tsv.gz"
+        with gzip.open(bad, "wt", encoding="utf-8") as handle:
+            handle.write(
+                "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
+            )
+            handle.write(
+                f"2:999001:C:T\t2\t999001\tC\tT\t\t{cells['routed_source_keys']}"
+                f"\t{cells['reoriented_keys']}\n"
+            )
+        with pytest.raises(ValueError, match=rf"row '2:999001:C:T'.*{column}"):
             read_variant_reference(bad)
 
     def test_writing_a_reoriented_key_that_routes_nowhere_fails_loudly(self, tmp_path):

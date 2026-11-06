@@ -37,8 +37,9 @@ hg19, with windows small enough to reduce, and over a reverse-strand lift,
 which it records. Every Dense path, Hybrid `drop` and extraction runs at one
 and two workers.
 
-Inputs written by a checkout before #354 hold artifacts without
-`reoriented_keys`, which a later checkout refuses; write them again with it.
+Inputs written by a checkout before #354 hold artifacts whose routing column
+is `source_keys`, which a later checkout refuses, as a checkout before #354
+refuses a later one's; write the inputs with the checkout that builds them.
 
 Build with `BLOSC_NTHREADS=1`: a chunk of two or more Blosc blocks compressed
 with threads writes its blocks in completion order (ADR 0056).

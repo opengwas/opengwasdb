@@ -140,7 +140,7 @@ def test_artifact_has_the_declared_columns_and_lifts_hg19(tmp_path):
 
     header, *rows = _artifact_text(artifact).splitlines()
     assert header == (
-        "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\treoriented_keys"
+        "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys"
     )
     by_alid = {row.split("\t")[0]: row.split("\t") for row in rows}
     assert set(by_alid) == {HG38_ALID_1, HG38_ALID_2}
@@ -1102,7 +1102,7 @@ def test_all_hg38_streaming_writes_concatenated_gzip_members(tmp_path):
     with gzip.open(artifact, "rt", encoding="utf-8") as handle:
         header, *rows = handle.read().splitlines()
     assert header == (
-        "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\treoriented_keys"
+        "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys"
     )
     assert len(rows) == result.n_variants
 
@@ -1315,7 +1315,7 @@ def test_hg19_and_mixed_streaming_matches_the_materialising_writer(
     )
 
     assert expected.splitlines()[0] == (
-        "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\treoriented_keys"
+        "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys"
     )
     assert len(expected.splitlines()) > 1
     assert _artifact_text(actual) == expected
@@ -1360,7 +1360,7 @@ def test_extraction_records_the_keys_a_reverse_strand_lift_reorients(tmp_path):
 
     assert result.n_variants == 3
     assert _artifact_text(out).splitlines() == [
-        "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\treoriented_keys",
+        "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys",
         "2:998001:A:T\t2\t998001\tA\tT\t\t2:2000:T:A\t2:2000:T:A",
         "2:999001:C:T\t2\t999001\tC\tT\t\t2:1000:G:A\t2:1000:G:A",
         "3:1000:A:G\t3\t1000\tA\tG\t\t3:1000:G:A\t",

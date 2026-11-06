@@ -13,7 +13,7 @@ from opengwasdb.build.liftover import (
     read_reference_alleles,
     require_lifted_alleles_match_reference,
 )
-from opengwasdb.variants.reference import read_variant_reference
+from opengwasdb.variants.reference import UnmarkedArtifactError, read_variant_reference
 
 # Known good positions: hg19 1:100000 → hg38 1:100000 (identity in this region)
 # hg19 1:1000000 → hg38 1:1064620
@@ -234,7 +234,7 @@ def test_read_reference_alleles_accepts_a_commented_store_table_header(tmp_path)
 def test_read_reference_alleles_accepts_an_artifact_header(tmp_path):
     reference = tmp_path / "axis.variant-ref.tsv"
     reference.write_text(
-        "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\treoriented_keys\n"
+        "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
         "2:999001:C:T\t2\t999001\tC\tT\trs1\t2:1000:A:G\t2:1000:A:G\n",
         encoding="utf-8",
     )
@@ -245,6 +245,24 @@ def test_read_reference_alleles_accepts_an_artifact_header(tmp_path):
     pairs = read_reference_alleles(reference, [_REFERENCE_POSITION])
 
     assert pairs == {_REFERENCE_POSITION: {frozenset({"C", "T"})}}
+
+
+def test_read_reference_alleles_refuses_an_unmarked_artifact_from_its_header(tmp_path):
+    """Issue #354: an artifact from an engine before the record of the lift's
+    re-orientation may name a reverse-strand variant on the source's strand
+    (`2:999001:A:G` here, where the lift stores `C:T`), so a lift checked
+    against it would be checked against the wrong thing. It is refused from its
+    header, before any row is read: the second row is not an ALID at all."""
+    reference = tmp_path / "old.variant-ref.tsv"
+    reference.write_text(
+        "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n"
+        "2:999001:A:G\t2\t999001\tA\tG\trs1\t2:1000:A:G\n"
+        "not-an-alid\t2\t999002\tA\tC\t\t2:999:A:C\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UnmarkedArtifactError, match="extract-variant-reference"):
+        read_reference_alleles(reference, [_REFERENCE_POSITION])
 
 
 def test_read_reference_alleles_accepts_a_plain_alid_list(tmp_path):
