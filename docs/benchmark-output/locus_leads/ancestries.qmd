@@ -31,6 +31,8 @@ selections = {a: json.loads((HERE / f"{PICKED[a]}.json").read_text()) for a in A
 membership = {a: json.loads((Path(sweeps[a]["panel"]["path"]).parent.parent / "members"
                              / "membership.json").read_text()) for a in ANCESTRIES}
 SAMPLES = {a: membership[a][a] for a in ANCESTRIES}
+# The panel's own chance LD (#405 fix round 1), one file filled by one command per ancestry.
+PANEL_CHANCE = json.loads((HERE / "ancestries_chance_ld.json").read_text())["ancestries"]
 W_VALUES = sweeps["EUR"]["grid"]["w_bp"]
 D_VALUES = sweeps["EUR"]["grid"]["d_cm"]
 R2 = "0.01"
@@ -107,7 +109,7 @@ own panel and its own map, and answers two predictions of #62's revision:
 
 The count criteria below are the ones that judge the count; the per-lead rates stay in as
 diagnostics, as #403 kept them. Each ancestry was swept one after another, on the same
-grid, the same 1,000,000-row cap and the same seed (405) as EUR.
+grid and the same 1,000,000-row cap, with seed 405 where the EUR sweep used 403.
 
 ## The draws
 
@@ -249,6 +251,12 @@ show("\nEach cell is the cM point's Δrho and Δ|log2| against bp-only at the sa
 Kept because #403 kept them, and because they say *where* the two methods disagree. No
 ancestry's nearest point meets both tolerances either.
 
+Whether a disagreement straddles a narrow jump in the map is **not assessed** for these
+three ancestries: the spike sets #402 found are single populations of the EUR mean map, so
+the sweeps recorded none (`spikes: []`). That key means the question was not put to this
+data, not that no pair straddles anything — the EAS map keeps two such jumps, listed in the
+map directory's README.
+
 ```{python}
 #| echo: false
 #| output: asis
@@ -264,10 +272,12 @@ for a in ANCESTRIES:
                  pct(plain["spurious_split_rate"]), pct(plain["lost_signal_rate"]),
                  pct(null["share_r2_ge_0.01"]), f"{null['pairs']:,}"])
 show("\nThe nearest (D, W) by the larger of its two rates, its r² 0.01 rates, the bp-only "
-     "window beside it, and the chance share of cross-chromosome pairs reaching r² 0.01 "
-     "in the same sweeps.\n\n" + md_table(
+     "window beside it, and the chance share of its **within-Analysis index pairs** "
+     "reaching r² 0.01 — pairs among each Analysis's clump index variants, so the share "
+     "moves with how many hits an ancestry has.\n\n" + md_table(
          ["ancestry", "nearest D", "W", "Locus Leads", "index variants", "spurious", "lost",
-          "bp-only spurious", "bp-only lost", "chance r2 >= 0.01", "chance pairs"], rows))
+          "bp-only spurious", "bp-only lost", "chance r2 >= 0.01 (within-Analysis index pairs)",
+          "such pairs"], rows))
 ```
 
 ```{python}
@@ -278,12 +288,29 @@ for a in ANCESTRIES:
     null = sweeps[a]["chance_ld"]
     rows.append([a, SAMPLES[a], f"{null['pairs']:,}", f"{null['r2_undefined']:,}",
                  *[f"{100 * null[f'share_r2_ge_{t}']:.2f}%" for t in ("0.001", "0.01", "0.05", "0.1")]])
-show("\nChance LD: index variants on different chromosomes are unlinked, so the share of such "
-     "pairs reaching each r² is what chance gives at that panel's sample size. The share is "
-     "of pairs with a defined r²; a panel with few cross-chromosome pairs gives a coarse "
-     "estimate.\n\n" + md_table(
+show("\n**Within-Analysis index pairs.** Index variants on different chromosomes are "
+     "unlinked, so the share of such pairs reaching each r² is a chance share — but it is "
+     "taken among each Analysis's own clump index variants, so it depends on how many hits "
+     "that Analysis has. The share is of pairs with a defined r²; EAS's rests on "
+     f"{sweeps['EAS']['chance_ld']['pairs']:,} pairs.\n\n" + md_table(
          ["ancestry", "samples", "pairs", "r2 undefined", "r2 >= 0.001", "r2 >= 0.01",
           "r2 >= 0.05", "r2 >= 0.1"], rows))
+
+rows = []
+for a in ANCESTRIES:
+    entry = PANEL_CHANCE[a]
+    rows.append([a, entry["panel"]["samples"], f"{entry['pool']['variants']:,}",
+                 f"{entry['variants']['used']:,}", f"{entry['pairs_sampled']:,}",
+                 f"{entry['r2_undefined']:,}",
+                 *[f"{100 * entry[f'share_r2_ge_{t}']:.2f}%" for t in ("0.001", "0.01", "0.05", "0.1")]])
+show("\n**The panel's own chance LD** (`ancestries_chance_ld.json`): the variant pool is the "
+     "union of the swept Analyses' shared sets — the panel as the sweeps used it — and both "
+     f"the variants (at most {PANEL_CHANCE['EUR']['max_variants']:,} of them) and the "
+     f"cross-chromosome pairs ({PANEL_CHANCE['EUR']['pair_sample']:,}) are drawn with seed "
+     f"{PANEL_CHANCE['EUR']['seed']}. This is a property of the panel's sample size, not of "
+     "any Analysis's hit count.\n\n" + md_table(
+         ["ancestry", "samples", "pooled variants", "variants used", "pairs drawn",
+          "r2 undefined", "r2 >= 0.001", "r2 >= 0.01", "r2 >= 0.05", "r2 >= 0.1"], rows))
 ```
 
 ## The two predictions
@@ -307,24 +334,26 @@ by_d = {a: count_row(a, (0.1, W))["rho"] for a in ANCESTRIES}
 by_bp = {a: count_row(a, ("bp_only", W))["rho"] for a in ANCESTRIES}
 eur_named = counts("EUR")["named_cm"]
 show(
-    "\n**1. Does AFR need a smaller D than EUR?** The direction holds and the size does not "
-    "come out of this grid. Both ancestries' nearest per-lead point is the smallest D on the "
-    "grid, " f"{d_label(min(D_VALUES))}, so neither can be told to need a smaller one; what "
-    "separates them is how the count agreement moves with D. At W " f"{w_label(W)}, rho is "
+    "\n**1. Does AFR need a smaller D than EUR? The counts cannot answer it.** AFR names no "
+    f"(D, W) at all: C1 holds at {sum(c['c1'] for c in counts('AFR')['configs'])} of "
+    f"{len(counts('AFR')['configs'])} points and C2 at "
+    f"{sum(c['c2'] for c in counts('AFR')['configs'])}, so nothing is named, and both "
+    "ancestries' nearest per-lead point is the smallest D the grid holds, "
+    f"{d_label(min(D_VALUES))} — a measured D for AFR would be at or below the floor, where "
+    "the grid cannot look. What is observed beside that: at W " f"{w_label(W)}, rho is "
     f"{by_d['AFR']:.3f} for AFR at D {d_label(min(D_VALUES))} and {by_bp['AFR']:.3f} with "
-    f"bp only, against {by_d['EUR']:.3f} and {by_bp['EUR']:.3f} for EUR: AFR's agreement "
-    "falls away steeply as D grows, EUR's barely moves. Neither names a cM point as the one "
-    f"to use — EUR's named point is {names([named('EUR')])} and AFR's is none — and the best "
-    f"cM point the same rule finds for EUR is {d_label(eur_named['d_cm'])} at "
-    f"{w_label(eur_named['w_bp'])}, where AFR has none because C2 fails at every D (its "
-    f"density ratio peaks at "
+    f"bp only, against {by_d['EUR']:.3f} and {by_bp['EUR']:.3f} for EUR, so AFR's rank "
+    "agreement is far more sensitive to D than EUR's, and C3 holds at "
+    f"{sum(c['holds'] for c in counts('AFR')['c3'])} of {len(counts('AFR')['c3'])} W's for "
+    f"AFR and {sum(c['holds'] for c in counts('EUR')['c3'])} for EUR. EUR's own named point "
+    f"is {names([named('EUR')])} and its best cM point "
+    f"{d_label(eur_named['d_cm'])} at {w_label(eur_named['w_bp'])}; AFR's density ratio "
+    "peaks at "
     f"{count_row('AFR', ('bp_only', W_VALUES[-1]))['median_ratio']:.3f} against EUR's "
-    f"{count_row('EUR', ('bp_only', W_VALUES[-1]))['median_ratio']:.3f} at the same W). C3, "
-    f"which asks whether cM beats bp-only, holds at "
-    f"{sum(c['holds'] for c in counts('AFR')['c3'])} W's for AFR and "
-    f"{sum(c['holds'] for c in counts('EUR')['c3'])} for EUR. So the counts put AFR where a "
-    "smaller D helps and cannot say how much smaller: the grid's own floor is "
-    f"{d_label(min(D_VALUES))}, and AFR sits on it.")
+    f"{count_row('EUR', ('bp_only', W_VALUES[-1]))['median_ratio']:.3f} at the same W. That "
+    "AFR's counts are more D-sensitive is consistent with the prediction; a smaller "
+    f"calibrated D is not shown, and a grid below {d_label(min(D_VALUES))} is the owner's "
+    "call.")
 for a in ("AFR", "EAS", "AMR", "EUR"):
     cnt = counts(a)
     c3 = [c for c in cnt["c3"] if c["holds"]]
@@ -334,16 +363,14 @@ for a in ("AFR", "EAS", "AMR", "EUR"):
          f"points, C2 at {sum(c['c2'] for c in cnt['configs'])}, C3 at {len(c3)} of "
          f"{len(cnt['c3'])} W's. Nearest per-lead point {names([near])}: "
          f"{pct(cm['spurious_split_rate'])} spurious, {pct(cm['lost_signal_rate'])} lost. "
-         f"Chance LD reaches r² 0.01 in {pct(sweeps[a]['chance_ld']['share_r2_ge_0.01'])} of "
-         f"cross-chromosome pairs at {SAMPLES[a]} samples.")
+         "Within-Analysis index pairs reach r² 0.01 in "
+         f"{pct(sweeps[a]['chance_ld']['share_r2_ge_0.01'])} of pairs at {SAMPLES[a]} "
+         f"samples; the panel's own chance LD is {pct(PANEL_CHANCE[a]['share_r2_ge_0.01'])}.")
 ```
 
 ```{python}
 #| echo: false
 #| output: asis
-amr, afr, eas = (sweeps[a] for a in ("AMR", "AFR", "EAS"))
-
-
 def far_shares(ancestry):
     """Share of an ancestry's spurious splits beyond 1 Mb, and with r² >= 0.05."""
     pairs = config(ancestry, nearest(ancestry))["by_r2"][R2]["spurious_split_pairs"]
@@ -363,17 +390,18 @@ show(
     f"{counts('AMR')['criteria']['ratio_range'][0]}), C3 holds at "
     f"{sum(c['holds'] for c in counts('AMR')['c3'])} of {len(counts('AMR')['c3'])} W's, and the "
     "ground truth itself is weak here — at "
-    f"{SAMPLES['AMR']} samples, {pct(amr['chance_ld']['share_r2_ge_0.01'])} of unlinked pairs "
-    "reach r² 0.01 by chance, against "
-    f"{pct(afr['chance_ld']['share_r2_ge_0.01'])} at {SAMPLES['AFR']} and "
-    f"{pct(eas['chance_ld']['share_r2_ge_0.01'])} at {SAMPLES['EAS']}. A clump count at "
+    f"{SAMPLES['AMR']} samples, {pct(PANEL_CHANCE['AMR']['share_r2_ge_0.01'])} of unlinked "
+    "pairs reach r² 0.01 by chance in the panel's own pool, against "
+    f"{pct(PANEL_CHANCE['AFR']['share_r2_ge_0.01'])} at {SAMPLES['AFR']}, "
+    f"{pct(PANEL_CHANCE['EAS']['share_r2_ge_0.01'])} at {SAMPLES['EAS']} and "
+    f"{pct(PANEL_CHANCE['EUR']['share_r2_ge_0.01'])} at {SAMPLES['EUR']}. A clump count at "
     "r² 0.01 is then partly a chance-LD count, so neither the per-lead rates ("
     f"{pct(config('AMR', nearest('AMR'))['by_r2'][R2]['spurious_split_rate'])} spurious, "
     f"{pct(config('AMR', nearest('AMR'))['by_r2'][R2]['lost_signal_rate'])} lost) nor a D "
     "chosen from it can be trusted. What the splits themselves show is admixture's long "
     f"LD: at AMR's nearest point, {pct(FAR['AMR'][0])} of its spurious splits lie beyond "
     f"1 Mb and {pct(FAR['AMR'][1])} have r² over 0.05, where chance gives "
-    f"{pct(amr['chance_ld']['share_r2_ge_0.05'])}; for AFR the two shares are "
+    f"{pct(PANEL_CHANCE['AMR']['share_r2_ge_0.05'])}; for AFR the two shares are "
     f"{pct(FAR['AFR'][0])} and {pct(FAR['AFR'][1])}, and for EUR {pct(FAR['EUR'][0])} and "
     f"{pct(FAR['EUR'][1])}. No cM distance inside W separates a pair like that. Usable as a "
     "rank-preserving count; not usable to calibrate D until there is a ground truth that is "

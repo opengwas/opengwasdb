@@ -2256,7 +2256,7 @@ vertical-align: -.125em;
 <li><strong>Does AFR need a smaller D than EUR?</strong> LD decays faster per cM where effective population size is larger, so one cM leaves less LD in AFR.</li>
 <li><strong>Is the AMR map usable?</strong> Admixture creates long-range LD that LD-based maps read as low recombination, so AMR is the least trustworthy map.</li>
 </ol>
-<p>The count criteria below are the ones that judge the count; the per-lead rates stay in as diagnostics, as #403 kept them. Each ancestry was swept one after another, on the same grid, the same 1,000,000-row cap and the same seed (405) as EUR.</p>
+<p>The count criteria below are the ones that judge the count; the per-lead rates stay in as diagnostics, as #403 kept them. Each ancestry was swept one after another, on the same grid and the same 1,000,000-row cap, with seed 405 where the EUR sweep used 403.</p>
 </section>
 <section id="the-draws" class="level2">
 <h2 class="anchored" data-anchor-id="the-draws">The draws</h2>
@@ -2515,7 +2515,7 @@ vertical-align: -.125em;
 </tr>
 </tbody>
 </table>
-<div id="2c7dc4b1" class="cell" data-execution_count="5">
+<div id="e56e0f6c" class="cell" data-execution_count="5">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
@@ -2682,7 +2682,8 @@ vertical-align: -.125em;
 <section id="per-lead-diagnostics-and-chance-ld" class="level2">
 <h2 class="anchored" data-anchor-id="per-lead-diagnostics-and-chance-ld">Per-lead diagnostics and chance LD</h2>
 <p>Kept because #403 kept them, and because they say <em>where</em> the two methods disagree. No ancestry’s nearest point meets both tolerances either.</p>
-<p>The nearest (D, W) by the larger of its two rates, its r² 0.01 rates, the bp-only window beside it, and the chance share of cross-chromosome pairs reaching r² 0.01 in the same sweeps.</p>
+<p>Whether a disagreement straddles a narrow jump in the map is <strong>not assessed</strong> for these three ancestries: the spike sets #402 found are single populations of the EUR mean map, so the sweeps recorded none (<code>spikes: []</code>). That key means the question was not put to this data, not that no pair straddles anything — the EAS map keeps two such jumps, listed in the map directory’s README.</p>
+<p>The nearest (D, W) by the larger of its two rates, its r² 0.01 rates, the bp-only window beside it, and the chance share of its <strong>within-Analysis index pairs</strong> reaching r² 0.01 — pairs among each Analysis’s clump index variants, so the share moves with how many hits an ancestry has.</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 9%">
@@ -2708,8 +2709,8 @@ vertical-align: -.125em;
 <th>lost</th>
 <th>bp-only spurious</th>
 <th>bp-only lost</th>
-<th>chance r2 &gt;= 0.01</th>
-<th>chance pairs</th>
+<th>chance r2 &gt;= 0.01 (within-Analysis index pairs)</th>
+<th>such pairs</th>
 </tr>
 </thead>
 <tbody>
@@ -2767,7 +2768,7 @@ vertical-align: -.125em;
 </tr>
 </tbody>
 </table>
-<p>Chance LD: index variants on different chromosomes are unlinked, so the share of such pairs reaching each r² is what chance gives at that panel’s sample size. The share is of pairs with a defined r²; a panel with few cross-chromosome pairs gives a coarse estimate.</p>
+<p><strong>Within-Analysis index pairs.</strong> Index variants on different chromosomes are unlinked, so the share of such pairs reaching each r² is a chance share — but it is taken among each Analysis’s own clump index variants, so it depends on how many hits that Analysis has. The share is of pairs with a defined r²; EAS’s rests on 92 pairs.</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 12%">
@@ -2834,6 +2835,85 @@ vertical-align: -.125em;
 </tr>
 </tbody>
 </table>
+<p><strong>The panel’s own chance LD</strong> (<code>ancestries_chance_ld.json</code>): the variant pool is the union of the swept Analyses’ shared sets — the panel as the sweeps used it — and both the variants (at most 3,000 of them) and the cross-chromosome pairs (200,000) are drawn with seed 405. This is a property of the panel’s sample size, not of any Analysis’s hit count.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>ancestry</th>
+<th>samples</th>
+<th>pooled variants</th>
+<th>variants used</th>
+<th>pairs drawn</th>
+<th>r2 undefined</th>
+<th>r2 &gt;= 0.001</th>
+<th>r2 &gt;= 0.01</th>
+<th>r2 &gt;= 0.05</th>
+<th>r2 &gt;= 0.1</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>EUR</td>
+<td>771</td>
+<td>950,809</td>
+<td>3,000</td>
+<td>200,000</td>
+<td>0</td>
+<td>42.00%</td>
+<td>1.16%</td>
+<td>0.00%</td>
+<td>0.00%</td>
+</tr>
+<tr class="even">
+<td>AFR</td>
+<td>804</td>
+<td>140,181</td>
+<td>3,000</td>
+<td>200,000</td>
+<td>0</td>
+<td>44.30%</td>
+<td>1.70%</td>
+<td>0.01%</td>
+<td>0.00%</td>
+</tr>
+<tr class="odd">
+<td>EAS</td>
+<td>817</td>
+<td>1,536</td>
+<td>1,536</td>
+<td>200,000</td>
+<td>0</td>
+<td>41.65%</td>
+<td>1.40%</td>
+<td>0.00%</td>
+<td>0.00%</td>
+</tr>
+<tr class="even">
+<td>AMR</td>
+<td>345</td>
+<td>65,168</td>
+<td>3,000</td>
+<td>200,000</td>
+<td>83</td>
+<td>66.67%</td>
+<td>18.73%</td>
+<td>1.04%</td>
+<td>0.10%</td>
+</tr>
+</tbody>
+</table>
 </section>
 <section id="the-two-predictions" class="level2">
 <h2 class="anchored" data-anchor-id="the-two-predictions">The two predictions</h2>
@@ -2874,8 +2954,8 @@ vertical-align: -.125em;
 </tr>
 </tbody>
 </table>
-<p><strong>1. Does AFR need a smaller D than EUR?</strong> The direction holds and the size does not come out of this grid. Both ancestries’ nearest per-lead point is the smallest D on the grid, 0.1 cM, so neither can be told to need a smaller one; what separates them is how the count agreement moves with D. At W 1 Mb, rho is 0.975 for AFR at D 0.1 cM and 0.820 with bp only, against 0.997 and 0.993 for EUR: AFR’s agreement falls away steeply as D grows, EUR’s barely moves. Neither names a cM point as the one to use — EUR’s named point is bp only / 10 Mb and AFR’s is none — and the best cM point the same rule finds for EUR is 2.5 cM at 10 Mb, where AFR has none because C2 fails at every D (its density ratio peaks at 0.760 against EUR’s 0.946 at the same W). C3, which asks whether cM beats bp-only, holds at 4 W’s for AFR and 0 for EUR. So the counts put AFR where a smaller D helps and cannot say how much smaller: the grid’s own floor is 0.1 cM, and AFR sits on it. - <strong>AFR</strong>: C1 at 4 of 24 points, C2 at 0, C3 at 4 of 4 W’s. Nearest per-lead point 0.1 cM / 0.25 Mb: 40.4% spurious, 46.7% lost. Chance LD reaches r² 0.01 in 1.5% of cross-chromosome pairs at 804 samples. - <strong>EAS</strong>: C1 at 24 of 24 points, C2 at 12, C3 at 0 of 4 W’s. Nearest per-lead point 0.25 cM / 0.25 Mb: 15.7% spurious, 15.7% lost. Chance LD reaches r² 0.01 in 2.2% of cross-chromosome pairs at 817 samples. - <strong>AMR</strong>: C1 at 24 of 24 points, C2 at 0, C3 at 1 of 4 W’s. Nearest per-lead point 0.5 cM / 1 Mb: 33.6% spurious, 39.0% lost. Chance LD reaches r² 0.01 in 12.3% of cross-chromosome pairs at 345 samples. - <strong>EUR</strong>: C1 at 24 of 24 points, C2 at 20, C3 at 0 of 4 W’s. Nearest per-lead point 0.1 cM / 2.5 Mb: 32.3% spurious, 27.6% lost. Chance LD reaches r² 0.01 in 1.2% of cross-chromosome pairs at 771 samples.</p>
-<p><strong>2. Is the AMR map usable?</strong> For the count it is as good as any other: C1 holds at 24 of 24 points, and rho runs 0.966 to 0.990. What it cannot do is decide D: C2 fails at every point (the density ratio never reaches 0.8), C3 holds at 1 of 4 W’s, and the ground truth itself is weak here — at 345 samples, 12.3% of unlinked pairs reach r² 0.01 by chance, against 1.5% at 804 and 2.2% at 817. A clump count at r² 0.01 is then partly a chance-LD count, so neither the per-lead rates (33.6% spurious, 39.0% lost) nor a D chosen from it can be trusted. What the splits themselves show is admixture’s long LD: at AMR’s nearest point, 86.0% of its spurious splits lie beyond 1 Mb and 45.7% have r² over 0.05, where chance gives 0.7%; for AFR the two shares are 42.2% and 26.3%, and for EUR 25.9% and 35.1%. No cM distance inside W separates a pair like that. Usable as a rank-preserving count; not usable to calibrate D until there is a ground truth that is not chance LD at that sample size and a rule that sees past W.</p>
+<p><strong>1. Does AFR need a smaller D than EUR? The counts cannot answer it.</strong> AFR names no (D, W) at all: C1 holds at 4 of 24 points and C2 at 0, so nothing is named, and both ancestries’ nearest per-lead point is the smallest D the grid holds, 0.1 cM — a measured D for AFR would be at or below the floor, where the grid cannot look. What is observed beside that: at W 1 Mb, rho is 0.975 for AFR at D 0.1 cM and 0.820 with bp only, against 0.997 and 0.993 for EUR, so AFR’s rank agreement is far more sensitive to D than EUR’s, and C3 holds at 4 of 4 W’s for AFR and 0 for EUR. EUR’s own named point is bp only / 10 Mb and its best cM point 2.5 cM at 10 Mb; AFR’s density ratio peaks at 0.760 against EUR’s 0.946 at the same W. That AFR’s counts are more D-sensitive is consistent with the prediction; a smaller calibrated D is not shown, and a grid below 0.1 cM is the owner’s call. - <strong>AFR</strong>: C1 at 4 of 24 points, C2 at 0, C3 at 4 of 4 W’s. Nearest per-lead point 0.1 cM / 0.25 Mb: 40.4% spurious, 46.7% lost. Within-Analysis index pairs reach r² 0.01 in 1.5% of pairs at 804 samples; the panel’s own chance LD is 1.7%. - <strong>EAS</strong>: C1 at 24 of 24 points, C2 at 12, C3 at 0 of 4 W’s. Nearest per-lead point 0.25 cM / 0.25 Mb: 15.7% spurious, 15.7% lost. Within-Analysis index pairs reach r² 0.01 in 2.2% of pairs at 817 samples; the panel’s own chance LD is 1.4%. - <strong>AMR</strong>: C1 at 24 of 24 points, C2 at 0, C3 at 1 of 4 W’s. Nearest per-lead point 0.5 cM / 1 Mb: 33.6% spurious, 39.0% lost. Within-Analysis index pairs reach r² 0.01 in 12.3% of pairs at 345 samples; the panel’s own chance LD is 18.7%. - <strong>EUR</strong>: C1 at 24 of 24 points, C2 at 20, C3 at 0 of 4 W’s. Nearest per-lead point 0.1 cM / 2.5 Mb: 32.3% spurious, 27.6% lost. Within-Analysis index pairs reach r² 0.01 in 1.2% of pairs at 771 samples; the panel’s own chance LD is 1.2%.</p>
+<p><strong>2. Is the AMR map usable?</strong> For the count it is as good as any other: C1 holds at 24 of 24 points, and rho runs 0.966 to 0.990. What it cannot do is decide D: C2 fails at every point (the density ratio never reaches 0.8), C3 holds at 1 of 4 W’s, and the ground truth itself is weak here — at 345 samples, 18.7% of unlinked pairs reach r² 0.01 by chance in the panel’s own pool, against 1.7% at 804, 1.4% at 817 and 1.2% at 771. A clump count at r² 0.01 is then partly a chance-LD count, so neither the per-lead rates (33.6% spurious, 39.0% lost) nor a D chosen from it can be trusted. What the splits themselves show is admixture’s long LD: at AMR’s nearest point, 86.0% of its spurious splits lie beyond 1 Mb and 45.7% have r² over 0.05, where chance gives 1.0%; for AFR the two shares are 42.2% and 26.3%, and for EUR 25.9% and 35.1%. No cM distance inside W separates a pair like that. Usable as a rank-preserving count; not usable to calibrate D until there is a ground truth that is not chance LD at that sample size and a rule that sees past W.</p>
 </section>
 <section id="the-disagreeing-pairs" class="level2">
 <h2 class="anchored" data-anchor-id="the-disagreeing-pairs">The disagreeing pairs</h2>
