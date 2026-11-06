@@ -143,7 +143,8 @@ def _compare_maps(args: argparse.Namespace) -> None:
     found = json.loads(args.shared_sets.read_text())
     names = _named_maps(args.genetic_map)
     sweeps = {name: (path, json.loads(path.read_text())) for name, path in names.items()}
-    shared = {name: MapSharedSet(name, record["analyses"])
+    shared = {name: MapSharedSet(name, record["analyses"], record["map_sha256"],
+                                 record["clamped"])
               for name, record in found["maps"].items()}
     loaded = {name: load_map(Path(sweep["genetic_map"]["path"]))
               for name, (_, sweep) in sweeps.items()}

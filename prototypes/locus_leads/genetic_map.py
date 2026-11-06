@@ -171,9 +171,14 @@ def load_map(map_path: Path, *, archive_md5: str = ARCHIVE_MD5) -> LoadedMap:
     before a cM is read, and the map's own sha256 always is.
     """
     identity: dict[str, Any] = json.loads(sidecar_path(map_path).read_text())
+    sources = [key for key in ("archive", "source") if key in identity]
+    if len(sources) != 1:
+        raise GeneticMapError(
+            f"{map_path}: its identity names {sources or 'no source'}, where exactly one of "
+            "'archive' or 'source' is required; a map nobody can trace is not a map")
     if "archive" in identity:
         verify_archive(map_path.parent / identity["archive"]["path"], archive_md5)
-    if "source" in identity:
+    else:
         verify_source(map_path.parent / identity["source"]["path"],
                       identity["source"]["sha256"])
     sha256 = file_digest(map_path, "sha256")

@@ -106,24 +106,49 @@ def _population(positions: list[int], cms: list[float]) -> object:
     return genetic_map.GeneticMap({"1": (np.array(positions), np.array(cms))})
 
 
-def test_the_median_map_takes_the_middle_population_at_the_union_of_their_points() -> None:
-    populations = {
-        "CEU": _population([100, 300], [0.0, 2.0]),
-        "GBR": _population([200, 400], [0.0, 4.0]),
-        "FIN": _population([100, 400], [0.0, 6.0]),
+def _one_spike_at_the_middle_knot() -> dict[str, object]:
+    """Four maps running to 40, 40, 20 and 20 cM, and one that jumps 40 cM midway."""
+    return {
+        "A": _population([100, 200], [0.0, 40.0]),
+        "B": _population([100, 200], [0.0, 40.0]),
+        "C": _population([100, 200], [0.0, 20.0]),
+        "D": _population([100, 200], [0.0, 20.0]),
+        "E": _population([100, 150, 200], [0.0, 40.0, 50.0]),
     }
+
+
+def test_the_median_map_is_the_median_rate_integrated_not_the_median_cM() -> None:
+    populations = _one_spike_at_the_middle_knot()
 
     median = maps.median_map(populations)
 
     position, cm = median.points("1")
-    np.testing.assert_array_equal(position, [100, 200, 300, 400])
-    # At each union position, the middle of the three interpolated cM values.
-    np.testing.assert_array_equal(cm, [0.0, 1.0, 2.0, 4.0])
-    mean = load_prototype("locus_leads", "eur_map").average_maps(populations)
-    np.testing.assert_allclose(mean.points("1")[1], [0.0, 1.0, 8 / 3, 4.0])
+    np.testing.assert_array_equal(position, [100, 150, 200])
+    # Each interval is 50 bp. In the second the five rates are 0.4, 0.4, 0.2, 0.2
+    # and 0.2 cM/bp, so the median rate is 0.2 and the interval gains 10 cM on
+    # the 20 the first gained.
+    np.testing.assert_allclose(cm, [0.0, 20.0, 30.0])
+    # The mutation: the median of cumulative cM ends at 40, because at the last
+    # knot the middle of {40, 40, 20, 20, 50} is A's or B's value — the middle
+    # winner changes at E's jump, and the step is a whole population's distance.
+    interpolated = np.array([np.interp(position, *map_points)
+                             for map_points in
+                             (populations[name].points("1") for name in populations)])
+    np.testing.assert_allclose(np.median(interpolated, axis=0), [0.0, 20.0, 40.0])
 
 
-def test_one_populations_spike_moves_the_mean_and_not_the_median() -> None:
+def test_the_median_map_starts_at_the_median_cM_of_the_first_knot() -> None:
+    populations = {"A": _population([100, 200], [1.0, 2.0]),
+                   "B": _population([100, 200], [2.0, 3.0]),
+                   "C": _population([100, 200], [3.0, 4.0])}
+
+    position, cm = maps.median_map(populations).points("1")
+
+    np.testing.assert_array_equal(position, [100, 200])
+    np.testing.assert_allclose(cm, [2.0, 3.0])
+
+
+def test_one_populations_spike_moves_the_mean_and_not_the_median_rate() -> None:
     flat = [([100, 200, 300], [0.0, 1.0, 2.0])] * 4
     spiked = ([100, 150, 200, 300], [0.0, 21.0, 22.0, 23.0])
     populations = {name: _population(*points) for name, points in
@@ -133,9 +158,9 @@ def test_one_populations_spike_moves_the_mean_and_not_the_median() -> None:
     mean = load_prototype("locus_leads", "eur_map").average_maps(populations).points("1")
 
     # The spike is one map of five: at 150 the other four interpolate to 0.5, so
-    # the mean carries a fifth of it and the median carries none of it.
+    # the mean carries a fifth of it and the median rate carries none of it.
     np.testing.assert_array_equal(median[0], [100, 150, 200, 300])
-    np.testing.assert_array_equal(median[1], [0.0, 0.5, 1.0, 2.0])
+    np.testing.assert_allclose(median[1], [0.0, 0.5, 1.0, 2.0])
     assert mean[1][1] == pytest.approx(0.5 + (21.0 - 0.5) / 5)
 
 
@@ -193,3 +218,30 @@ def test_a_spike_interval_is_measured_from_the_map_and_a_position_off_it_refuses
         maps.interval_jump(one, "7", 300)
     with pytest.raises(maps.MapBuildError, match="no interval after it"):
         maps.interval_jump(one, "7", 50)
+
+
+def test_a_map_whose_identity_names_no_source_is_refused(tmp_path: Path) -> None:
+    directory = tmp_path / "eagle-hapmap2-hg38"
+    original = directory / "original" / "genetic_map_hg38_withX.txt.gz"
+    original.parent.mkdir(parents=True)
+    original.write_text(EAGLE_TEXT)
+    map_path = directory / "HapMap2.tsv.gz"
+    points = {chromosome: (np.array([1_000, 2_000]), np.array([0.0, 1.0]))
+              for chromosome in maps.AUTOSOMES}
+    import json  # only this test writes a sidecar by hand
+
+    identity = maps.write_source_map(points, map_path, provenance={}, excluded={})
+    assert "source" not in identity and "archive" not in identity
+
+    with pytest.raises(genetic_map.GeneticMapError, match="exactly one of"):
+        genetic_map.load_map(map_path)
+    # Two sources is as unreadable as none: which one is the map's provenance?
+    identity["source"] = {"path": "original/genetic_map_hg38_withX.txt.gz",
+                          "sha256": hashlib.sha256(EAGLE_TEXT.encode()).hexdigest()}
+    identity["archive"] = identity["source"]
+    genetic_map.sidecar_path(map_path).write_text(json.dumps(identity))
+    with pytest.raises(genetic_map.GeneticMapError, match="exactly one of"):
+        genetic_map.load_map(map_path)
+    del identity["archive"]
+    genetic_map.sidecar_path(map_path).write_text(json.dumps(identity))
+    np.testing.assert_allclose(genetic_map.load_map(map_path).map.points("1")[1], [0.0, 1.0])

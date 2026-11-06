@@ -57,8 +57,9 @@ if TYPE_CHECKING:
 MAX_DROPPED_SHARE = 0.001
 
 MEDIAN_RULE = (
-    "the median of the five population maps' cM at the union of their positions, each "
-    "interpolated linearly between its points and held flat beyond its ends"
+    "each population map interpolated onto the union of their positions, each interval's rate "
+    "(cM/bp) taken for each population, the median rate per interval cumulated from the median "
+    "of the five cM at the first position"
 )
 
 EAGLE_HAPMAP2_URL = ("https://alkesgroup.broadinstitute.org/Eagle/downloads/tables/"
@@ -82,6 +83,10 @@ class MapBuildError(ValueError):
 
 class SharedSetMismatch(ValueError):
     """Two maps would judge different rows, so their counts are not comparable."""
+
+
+class ComparisonMismatch(ValueError):
+    """A sweep or a shared-set record is not the one the comparison is of."""
 
 
 @dataclass(frozen=True)
@@ -219,22 +224,39 @@ def _check_positions(chromosome: str, position: np.ndarray) -> None:
 
 
 def median_map(maps: Mapping[str, GeneticMap]) -> GeneticMap:
-    """The median of `maps`, at the union of their positions, per chromosome.
+    """The map whose rate is the median of `maps`' rates, integrated knot by knot.
 
-    The maps must cover the same chromosomes: a chromosome some lack would be a
-    median of fewer populations without saying so.
+    The **rate** is what has to be medians, not cumulative cM. A single
+    population's jump reorders the five for the rest of the chromosome, so the
+    median of cumulative cM hands the middle population's whole distance to the
+    result: #404's first median kept 5.09 cM of TSI's 92.68 cM spike in 444 bp of
+    chr7 (#404 review). The rate is local, so one population's jump loses the vote
+    interval by interval.
+
+    Each population is interpolated onto the union of the knots, each interval's
+    rate is taken for each, the median rate is taken per interval, and the result
+    is cumulated from the median of the five cM at the first knot. The maps must
+    cover the same chromosomes: a chromosome some lack would be a median of
+    fewer populations without saying so.
     """
     covered = {name: sorted(genetic_map.chromosomes) for name, genetic_map in maps.items()}
     chromosomes = next(iter(maps.values())).chromosomes
     if any(labels != sorted(chromosomes) for labels in covered.values()):
         raise GeneticMapError(f"population maps cover different chromosomes: {covered}")
-    median = {}
-    for chromosome in chromosomes:
-        each = [genetic_map.points(chromosome) for genetic_map in maps.values()]
-        union = np.unique(np.concatenate([position for position, _ in each]))
-        cm = np.median([np.interp(union, position, cm) for position, cm in each], axis=0)
-        median[chromosome] = (union, cm)
-    return GeneticMap(median)
+    return GeneticMap({chromosome: _median_rate_points(
+        [genetic_map.points(chromosome) for genetic_map in maps.values()])
+        for chromosome in chromosomes})
+
+
+def _median_rate_points(each: list[tuple[np.ndarray, np.ndarray]]
+                        ) -> tuple[np.ndarray, np.ndarray]:
+    """The union of the knots, and the median rate integrated from the median cM."""
+    union = np.unique(np.concatenate([position for position, _ in each]))
+    interpolated = np.array([np.interp(union, position, cm) for position, cm in each])
+    steps = np.diff(union)
+    rates = np.diff(interpolated, axis=1) / steps if steps.size else np.empty((len(each), 0))
+    start = float(np.median(interpolated[:, 0]))
+    return union, start + np.concatenate([[0.0], np.cumsum(np.median(rates, axis=0) * steps)])
 
 
 def write_source_map(points: Mapping[str, tuple[np.ndarray, np.ndarray]], map_path: Path, *,
@@ -337,10 +359,12 @@ def variant_index_digest(store_id: str, analysis_id: str, variant_index: np.ndar
 
 @dataclass(frozen=True)
 class MapSharedSet:
-    """One map's shared set per Analysis, and the digest over all of them."""
+    """One map's shared sets, the map they were measured on, and the digest over them."""
 
     name: str
     analyses: dict[str, dict[str, Any]]
+    map_sha256: str
+    clamped: dict[str, int]
 
     def digest(self) -> str:
         digest = hashlib.sha256()
@@ -349,22 +373,45 @@ class MapSharedSet:
         return digest.hexdigest()
 
     def record(self) -> dict[str, Any]:
-        return {"map": self.name, "analyses": self.analyses, "sha256": self.digest(),
+        return {"map": self.name, "map_sha256": self.map_sha256, "analyses": self.analyses,
+                "sha256": self.digest(), "clamped": self.clamped,
                 "shared_set_rows": sum(r["shared_set"] for r in self.analyses.values()),
                 "tier_rows": sum(r["rows"] for r in self.analyses.values())}
 
 
+def clamped_rows(matched: MatchedTier, kept: np.ndarray, genetic_map: GeneticMap,
+                 ) -> dict[str, int]:
+    """The kept rows whose position lies outside their chromosome's knots.
+
+    Their cM is a knot's, held flat, not an interpolation — which is why the maps'
+    shared sets can be equal even though their knots differ (#404 review).
+    """
+    rows = matched.rows
+    before = after = 0
+    for chromosome in np.unique(rows.chromosome[kept]):
+        on = kept & (rows.chromosome == chromosome)
+        position = rows.position[on]
+        knots = genetic_map.points(str(chromosome))[0]
+        before += int(np.sum(position < knots[0]))
+        after += int(np.sum(position > knots[-1]))
+    return {"before_first_knot": before, "after_last_knot": after, "rows": before + after}
+
+
 def shared_set_of(matched: Mapping[str, MatchedTier], genetic_map: GeneticMap, *,
-                  name: str) -> MapSharedSet:
+                  name: str, map_sha256: str) -> MapSharedSet:
     """Each Analysis's shared-set size and digest on one map, keyed `STORE/analysis`."""
     analyses = {}
+    clamped = {"before_first_knot": 0, "after_last_knot": 0, "rows": 0}
     for key, one in matched.items():
         store_id, analysis_id = key.split("/", 1)
-        index = one.rows.variant_index[_kept(one, genetic_map)]
+        kept = _kept(one, genetic_map)
+        index = one.rows.variant_index[kept]
         analyses[key] = {"rows": int(one.rows.variant_index.size),
                          "shared_set": int(index.size),
                          "sha256": variant_index_digest(store_id, analysis_id, index)}
-    return MapSharedSet(name, analyses)
+        for where, count in clamped_rows(one, kept, genetic_map).items():
+            clamped[where] += count
+    return MapSharedSet(name, analyses, map_sha256, clamped)
 
 
 def check_same_shared_set(reference: MapSharedSet,
@@ -403,7 +450,8 @@ def measure_shared_sets(selection: dict[str, Any], stores_dir: Path, panel_dir: 
         store = stores_dir / chosen["store"] / "store.opengwasdb"
         rows, _ = read_tier(store, chosen["analysis_id"], tier)
         matched |= match_tiers({key: rows}, variants)
-    return {name: shared_set_of(matched, loaded.map, name=name)
+    return {name: shared_set_of(matched, loaded.map, name=name,
+                                map_sha256=str(loaded.identity["sha256"]))
             for name, loaded in maps_by_name.items()}
 
 
@@ -480,6 +528,7 @@ def comparison_record(selection: Mapping[str, Any], sweeps: Mapping[str, tuple[P
     """
     check_same_shared_set(shared_sets[reference], {name: found for name, found
                                                   in shared_sets.items() if name != reference})
+    check_bound_to_sweeps(selection, sweeps, shared_sets)
     maps_record = {name: _map_record(name, path, sweep, shared_sets[name])
                    for name, (path, sweep) in sweeps.items()}
     return {
@@ -492,6 +541,46 @@ def comparison_record(selection: Mapping[str, Any], sweeps: Mapping[str, tuple[P
         "map_measurements": dict(measurements or {}),
         "maps": maps_record,
     }
+
+
+def _analysis_key(analysis: dict[str, Any]) -> str:
+    return f"{analysis['store']}/{analysis['analysis']['analysis_id']}"
+
+
+def check_bound_to_sweeps(selection: Mapping[str, Any],
+                          sweeps: Mapping[str, tuple[Path, dict]],
+                          shared_sets: Mapping[str, MapSharedSet]) -> None:
+    """Refuse a sweep that is not of this selection, this map, or these Analyses.
+
+    Three sweeps put side by side are only a comparison if each was drawn from this
+    selection, run on the map whose shared-set record names it, and measured over
+    the Analyses that record holds — otherwise the table puts one run's counts
+    beside another run's rows (#404 review).
+    """
+    digest = selection_digest(selection)
+    for name, (path, sweep) in sweeps.items():
+        found = sweep["selection"]["sha256"]
+        if found != digest:
+            raise ComparisonMismatch(
+                f"{path}: its selection digest {found[:12]}… is not this selection's "
+                f"{digest[:12]}…")
+        measured = sweep["genetic_map"]["sha256"]
+        recorded = shared_sets[name].map_sha256
+        if measured != recorded:
+            raise ComparisonMismatch(
+                f"{name}: the sweep ran on map {measured[:12]}… but its shared sets were measured "
+                f"on {recorded[:12]}…")
+        for analysis in sweep["analyses"]:
+            key = _analysis_key(analysis)
+            if key not in shared_sets[name].analyses:
+                raise ComparisonMismatch(f"{name}: {key} was swept but its shared set was not "
+                                         "measured, so nothing binds the sweep's rows to a digest")
+            measured_rows = analysis["rows"]["partition"]["shared_set"]
+            held = shared_sets[name].analyses[key]["shared_set"]
+            if measured_rows != held:
+                raise ComparisonMismatch(
+                    f"{name}: {key}: the sweep counts {measured_rows:,} shared-set rows but the "
+                    f"digest was taken over {held:,}")
 
 
 def _map_record(name: str, path: Path, sweep: dict[str, Any],
@@ -517,6 +606,7 @@ def _map_record(name: str, path: Path, sweep: dict[str, Any],
         # The swept Analyses' rows, and the digest the equality check ran on,
         # which covers every drawn Analysis, the ones below the floor included.
         "shared_set": MapSharedSet(name, {key: rows for key, rows in whole.analyses.items()
-                                          if key in swept}).record(),
+                                          if key in swept}, whole.map_sha256,
+                                   whole.clamped).record(),
         "shared_set_checked": {"analyses": len(whole.analyses), "sha256": whole.digest()},
     }
