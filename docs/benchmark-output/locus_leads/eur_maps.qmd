@@ -105,9 +105,12 @@ for name in NAMES:
     measured = MEASURED[name]
     identity = maps[name]["genetic_map"]
     source = identity.get("source", {}).get("url") or identity.get("archive", {}).get("record", "")
-    dropped = identity["dropped_to_a_non_decreasing_cM"]["points_dropped"]
+    # The pyrho mean was built before the drop rule existed; its cM could only
+    # be non-decreasing, since the map refuses a fall instead of repairing it.
+    dropped = identity.get("dropped_to_a_non_decreasing_cM", {}).get("points_dropped")
     rows.append([name, f"{measured['chromosomes']}", f"{measured['points']:,}",
-                 f"{measured['total_cM']:.1f}", f"{sum(dropped.values()):,}",
+                 f"{measured['total_cM']:.1f}",
+                 "not recorded" if dropped is None else f"{sum(dropped.values()):,}",
                  f"`{identity['sha256'][:12]}…`", source])
 show(md_table(["map", "chromosomes", "points", "genetic length (cM)", "points dropped",
                "sha256", "source"], rows))
@@ -137,13 +140,14 @@ stops if any differs.
 rows = []
 for name in NAMES:
     shared = maps[name]["shared_set"]
+    checked = maps[name]["shared_set_checked"]
     rows.append([name, maps[name]["analyses"], f"{shared['tier_rows']:,}",
                  f"{shared['shared_set_rows']:,}",
                  pct(shared["shared_set_rows"] / shared["tier_rows"]),
-                 f"`{shared['sha256'][:16]}…`"])
-show(md_table(["map", "Analyses", "tier rows", "shared-set rows", "share", "digest over Analyses"],
-              rows))
-same = len({maps[name]["shared_set"]["sha256"] for name in NAMES}) == 1
+                 f"{checked['analyses']}", f"`{checked['sha256'][:16]}…`"])
+show(md_table(["map", "Analyses swept", "tier rows", "shared-set rows", "share",
+               "Analyses checked", "digest checked"], rows))
+same = len({maps[name]["shared_set_checked"]["sha256"] for name in NAMES}) == 1
 below = {name: maps[name]["below_shared_set_floor"] for name in NAMES}
 same_below = all(b["analyses"] == below[MEAN]["analyses"] for b in below.values())
 show(f"The digests are {'identical' if same else 'not identical'} across the maps, as the check "
@@ -202,14 +206,34 @@ text = []
 for name in NAMES:
     cnt = maps[name]["counts"]
     holds = [c for c in cnt["c3"] if c["holds"]]
+    def delta(d, w):
+        config, bp = count_rows(name)[(d, w)], configs[("bp_only", w)]
+        return (config["rho"] - bp["rho"],
+                (bp["median_abs_log2"] or 0) - (config["median_abs_log2"] or 0))
+
+    gains = [(*delta(d, w), d, w) for w in W_VALUES for d in D_VALUES]
+    best_rho, best_log, rho_d, rho_w = max(gains)
+    _, at_rho_log, _, _ = max((g for g in gains if (g[2], g[3]) == (rho_d, rho_w)))
+    best_log, log_d, log_w = max((g[1], g[2], g[3]) for g in gains)
+    at_log_rho = next(g[0] for g in gains if (g[2], g[3]) == (log_d, log_w))
     if holds:
         text.append(f"- **{name}: C3 holds at " + ", ".join(
             f"W {w_label(c['w_bp'])} (D {', '.join(f'{d:g}' for d in c['d_cm_that_holds'])} cM)"
             for c in holds) + ".**")
     else:
-        text.append(f"- {name}: C3 holds at no W; the cM points at best move ρ and the density "
-                    "ratio by less than C3's margins.")
+        text.append(
+            f"- {name}: C3 holds at no W. The largest gain in ρ is {best_rho:+.4f} "
+            f"({point(rho_d, rho_w)}), and at that same point the median |log2| ratio is "
+            f"{at_rho_log:+.3f}; the largest gain in |log2| is {best_log:+.3f} "
+            f"({point(log_d, log_w)}), and there ρ moves {at_log_rho:+.4f}. C3's margins are "
+            f"{CRITERIA['c3_margin_rho']:+.2f} in ρ and {CRITERIA['c3_margin_abs_log2']:+.2f} in "
+            "|log2|, and it takes one of them without giving up more than the other.")
 show("\n".join(text))
+show(f"""
+The point named is bp-only on all three maps, and there the map is not read at all: a bp
+window never asks for a cM. So the map can only change the answer at a cM point, and
+whether a cM point is worth anything is exactly what C3 asks.
+""")
 ```
 
 ### The named point, map by map
