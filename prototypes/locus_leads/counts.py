@@ -125,8 +125,9 @@ def _abs_log2_of(row: dict[str, Any]) -> float:
     return math.inf if value is None else float(value)
 
 
-def _adds_value(cm: dict[str, Any], bp: dict[str, Any]) -> bool:
-    """C3 for one D: better than bp-only by a margin on one count, worse on neither."""
+def adds_value(cm: dict[str, Any], bp: dict[str, Any]) -> bool:
+    """C3 for one D, or any rule's count row (#409): better than bp-only at the same W by a
+    margin on one count, worse on neither."""
     d_rho = cm["rho"] - bp["rho"]
     # Positive is better; two infinite distances are no change.
     d_log = 0.0 if _abs_log2_of(cm) == _abs_log2_of(bp) else _abs_log2_of(bp) - _abs_log2_of(cm)
@@ -136,14 +137,9 @@ def _adds_value(cm: dict[str, Any], bp: dict[str, Any]) -> bool:
                 and d_rho >= -m_rho - eps and d_log >= -m_log - eps)
 
 
-def adds_value(row: dict[str, Any], bp_only: dict[str, Any]) -> bool:
-    """C3's test for any rule's count row against bp-only's at one W (#409)."""
-    return _adds_value(row, bp_only)
-
-
 def _c3_at(at_w: list[dict[str, Any]]) -> dict[str, Any]:
     bp = next(r for r in at_w if r["d_cm"] == BP_ONLY)
-    holding = [r["d_cm"] for r in at_w if r["d_cm"] != BP_ONLY and _adds_value(r, bp)]
+    holding = [r["d_cm"] for r in at_w if r["d_cm"] != BP_ONLY and adds_value(r, bp)]
     return {"w_bp": bp["w_bp"], "holds": bool(holding), "d_cm_that_holds": holding,
             "bp_only_rho": bp["rho"], "bp_only_median_abs_log2": bp["median_abs_log2"]}
 

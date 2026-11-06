@@ -51,7 +51,7 @@ comes after one of its members in that order fails the run.
 | `ld.py` | r² between panel variants, from dosages plink2 exports |
 | `profile.py` | the prominence rule: locus boundaries from valleys in the 5e-4 tier's \|z\| envelope (#409) |
 | `blocks.py` | one lead per LD block, half-open, rows outside blocks counted (#409) |
-| `profile_sweep.py` | both rules on #403's Analyses, shared set (checked row for row) and clumps (#409) |
+| `profile_sweep.py` | both rules on #403's Analyses and clumps, on a shared set that must reproduce #403's committed summaries (#409) |
 | `profile_judge.py` | the rules' C1-C3 against bp-only at each W, and per-lead rates beside #403's (#409) |
 | `profile_valleys.py` | a seeded sample of no-row valleys read from the Store: low \|z\| or missing cells (#409) |
 | `cost.py` | what pruning costs against clumping (#406): the per-variant cM array, the pruning stages of a tier, plink2's clumping, and the ratio |

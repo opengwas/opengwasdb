@@ -1,11 +1,14 @@
 """The prominence and LD-block rules over #403's Analyses, shared set and clumps (#409).
 
-Per Analysis: read the 5e-4 Top-Hit tier once (observed only). Its rows at the
-5e-8 cut are the candidates, and all of it is the profile. The candidates'
-shared set must equal #403's row for row, so the rules are compared on the
-rows #403's distance rules were. Clumping (plink2, r^2 0.01) runs on that
-shared set, and #403's baseline distance rules are recomputed on it and checked
-against #403's committed records before any new rule is scored.
+Per Analysis: read the 5e-4 Top-Hit tier, observed rows only. `run.read_tier`
+issues two Top-Hit Queries for it, the observed-only one the profile is made of
+and an unrestricted one that counts the imputed rows, so the read is checked
+complete. Its rows at the 5e-8 cut are the candidates, and all of it is the
+profile. The candidates' shared set must equal the shared set of the 5e-8 tier,
+read now and built as #403 built it, and both must reproduce #403's committed
+summaries: its accounting, its HapMap3 row counts, and its distance rules
+recomputed on the same clumps (plink2, r^2 0.01). #403 committed no digest of
+its rows, so the digest published is of the current reads.
 
 The map is used only for the shared set's cM, so the row sets are identical.
 For C2, the HapMap3 restriction applies to the candidates and the profile alike.
@@ -102,7 +105,7 @@ class ReadOncePanel(Panel):
 
 
 class SharedSetMismatch(ValueError):
-    """The rows this sweep ranks are not the rows #403 ranked."""
+    """The rows this sweep ranks do not reproduce the 5e-8 tier's, or #403's summaries."""
 
 
 class BaselineMismatch(ValueError):
@@ -142,7 +145,7 @@ def check_same_shared_set(mine: dict[str, Any], reference: dict[str, Any]) -> No
     """Refuse a shared set that is not the reference's, row for row."""
     if mine != reference:
         raise SharedSetMismatch(f"the shared set ({mine['rows']:,} rows, {mine['sha256'][:12]}) "
-                                f"differs from #403's ({reference['rows']:,} rows, "
+                                f"differs from the 5e-8 tier's ({reference['rows']:,} rows, "
                                 f"{reference['sha256'][:12]})")
 
 
@@ -338,10 +341,14 @@ def check_inputs(selection: dict[str, Any], committed: dict[str, Any], genetic_m
 def _definitions() -> dict[str, Any]:
     return {"prominence": PROFILE_DEFINITION, "ld_blocks": BLOCK_DEFINITION,
             "valleys": VALLEY_DEFINITION,
-            "shared_set": "the candidates' shared set must equal #403's: the 5e-8 tier rebuilt "
-                          "with #403's read_tier and build_shared_set, its accounting equal to "
-                          "#403's committed record, and the same row count and sha256 of Store, "
-                          "Analysis and sorted Store Variant Indices"}
+            "shared_set": "the candidates' shared set must equal the shared set of the 5e-8 "
+                          "tier, read now with #403's read_tier and built with its "
+                          "build_shared_set: the same row count and sha256 of Store, Analysis and "
+                          "sorted Store Variant Indices. Both must reproduce #403's committed "
+                          "summaries: its accounting, its HapMap3 row counts and its distance "
+                          "rules' records. #403 committed no digest, so the digest published is "
+                          "of the current reads, and matches_403_summaries says only that the "
+                          "summaries are reproduced"}
 
 
 def _inputs(committed: dict[str, Any], committed_path: Path, genetic_map: LoadedMap,
