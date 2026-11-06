@@ -50,6 +50,11 @@ comes after one of its members in that order fails the run.
 | `counts.py` | the count criteria C1-C3: rank, density against HapMap3, cM against bp-only |
 | `maps.py` | the comparison maps (HapMap II lifted, the pyrho median), and the shared-set check |
 | `ld.py` | r² between panel variants, from dosages plink2 exports |
+| `profile.py` | the prominence rule: locus boundaries from valleys in the 5e-4 tier's \|z\| envelope (#409) |
+| `blocks.py` | one lead per LD block, half-open, rows outside blocks counted (#409) |
+| `profile_sweep.py` | both rules on #403's Analyses and clumps, on a shared set that must reproduce #403's committed summaries (#409) |
+| `profile_judge.py` | the rules' C1-C3 against bp-only at each W, and per-lead rates beside #403's (#409) |
+| `profile_valleys.py` | a seeded sample of no-row valleys read from the Store: low \|z\| or missing cells (#409) |
 | `cost.py` | what pruning costs against clumping (#406): the per-variant cM array, the pruning stages of a tier, plink2's clumping, and the ratio |
 
 A sweep takes the selection, the map and the panel directory as inputs:
@@ -140,3 +145,16 @@ the sources, retrieval dates, checksums and licences.
 
 `compare-maps` puts each sweep's count criteria side by side, and refuses to
 write when the maps' shared sets differ.
+
+The prominence and LD-block rules (#409) run on #403's selection, sweep JSON, map, panel and
+HapMap3 list, which they check against #403's records, and on the LD-block file:
+
+```bash
+pixi run -e dev python -m prototypes.locus_leads profile-sweep \
+    --selection docs/benchmark-output/locus_leads/eur_sweep_selection.json \
+    --sweep docs/benchmark-output/locus_leads/eur_sweep.json \
+    --stores-dir /data/opengwasdb/stores --genetic-map <map>.tsv.gz --panel <panel directory> \
+    --hm3 /data/opengwasdb/reference/hapmap3-hg38/hm3.grch38.alid.txt \
+    --blocks /data/opengwasdb/reference/hgdp1kgp-hg38/ld_regions_hg38.tsv \
+    --work-dir <scratch directory> --output docs/benchmark-output/locus_leads/eur_profile.json
+```

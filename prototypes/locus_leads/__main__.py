@@ -5,6 +5,8 @@
         --panel P --d-cm 0.5 --w-bp 1000000 --r2 0.01 --r2 0.001 --work-dir D --output O.json
     python -m prototypes.locus_leads cost --genetic-map M --panel P --work-dir D \\
         --output docs/benchmark-output/locus_leads/cost.json
+    python -m prototypes.locus_leads profile-sweep --selection S --sweep W --stores-dir D \\
+        --genetic-map M --panel P --hm3 H --blocks B --work-dir D --output O.json
     python -m prototypes.locus_leads build-hapmap2-map --original O --output M.tsv.gz
     python -m prototypes.locus_leads build-median-map --archive A --output M.tsv.gz
     python -m prototypes.locus_leads map-shared-sets --selection S --stores-dir D \\
@@ -35,6 +37,7 @@ from .maps import (
     measure_shared_sets,
     selection_digest,
 )
+from .profile_sweep import profile_sweep
 from .run import run
 from .select import SelectionRule, build_selection
 from .sweep import EUR_SPIKES, sweep
@@ -70,9 +73,7 @@ def _cost(args: argparse.Namespace) -> None:
 
 def _select(args: argparse.Namespace) -> None:
     rule = SelectionRule(args.seed, args.target, args.min_z100, args.min_p0, args.max_rows)
-    record = build_selection(args.stores, rule)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(record, indent=1, allow_nan=False) + "\n")
+    _write(args, build_selection(args.stores, rule))
 
 
 def _compare(args: argparse.Namespace) -> None:
@@ -82,6 +83,28 @@ def _compare(args: argparse.Namespace) -> None:
                  d_cm=args.d_cm, w_bp=args.w_bp, r2_values=args.r2 or [0.01, 0.001],
                  work_dir=args.work_dir, threads=args.threads, threshold=args.threshold)
     # The comparison's JSON carries no timings, so a re-run reproduces it byte for byte.
+    _write(args, result)
+    print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
+
+
+def _sweep(args: argparse.Namespace) -> None:
+    started = time.monotonic()
+    selection = json.loads(args.selection.read_text())
+    pairs_path = args.output.with_name(args.output.stem + "_pairs.tsv.gz")
+    result = sweep(selection, args.stores_dir, load_map(args.genetic_map), args.panel,
+                   args.work_dir, hm3_path=args.hm3, pairs_path=pairs_path, threads=args.threads,
+                   only=args.only, spikes=EUR_SPIKES if args.spikes == "mean" else ())
+    _write(args, result)
+    print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
+
+
+def _profile(args: argparse.Namespace) -> None:
+    started = time.monotonic()
+    result = profile_sweep(json.loads(args.selection.read_text()),
+                           json.loads(args.sweep.read_text()), args.sweep, args.stores_dir,
+                           load_map(args.genetic_map), args.panel, args.work_dir,
+                           hm3_path=args.hm3, blocks_path=args.blocks, threads=args.threads,
+                           only=args.only)
     _write(args, result)
     print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
 
@@ -118,17 +141,15 @@ def _compare_maps(args: argparse.Namespace) -> None:
     """The maps' counts side by side, from their sweeps' JSON, with the shared sets checked."""
     selection = json.loads(args.selection.read_text())
     found = json.loads(args.shared_sets.read_text())
-    names = {name: Path(path) for name, path in _named_maps(args.genetic_map).items()}
+    names = _named_maps(args.genetic_map)
     sweeps = {name: (path, json.loads(path.read_text())) for name, path in names.items()}
-    shared = {}
-    for name, record in found["maps"].items():
-        shared[name] = MapSharedSet(name, record["analyses"])
+    shared = {name: MapSharedSet(name, record["analyses"])
+              for name, record in found["maps"].items()}
     loaded = {name: load_map(Path(sweep["genetic_map"]["path"]))
               for name, (_, sweep) in sweeps.items()}
     record = comparison_record(selection, sweeps, shared, reference=found["reference_map"],
                                measurements=map_measurements(loaded))
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(record, indent=1, allow_nan=False) + "\n")
+    _write(args, record)
 
 
 def _write(args: argparse.Namespace, result: dict) -> None:
@@ -137,23 +158,11 @@ def _write(args: argparse.Namespace, result: dict) -> None:
     args.output.write_text(json.dumps(result, indent=1, allow_nan=False) + "\n")
 
 
-def _sweep(args: argparse.Namespace) -> None:
-    started = time.monotonic()
-    selection = json.loads(args.selection.read_text())
-    pairs_path = args.output.with_name(args.output.stem + "_pairs.tsv.gz")
-    result = sweep(selection, args.stores_dir, load_map(args.genetic_map), args.panel,
-                   args.work_dir, hm3_path=args.hm3, pairs_path=pairs_path, threads=args.threads,
-                   only=args.only, spikes=EUR_SPIKES if args.spikes == "mean" else ())
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, indent=1, allow_nan=False) + "\n")
-    print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
-
-
 _HANDLERS: dict[str, Callable[[argparse.Namespace], None]] = {
     "build-map": _build_mean, "build-hapmap2-map": _build_hapmap2,
     "build-median-map": _build_median, "select": _select, "sweep": _sweep,
-    "map-shared-sets": _map_shared_sets, "compare-maps": _compare_maps, "compare": _compare,
-    "cost": _cost,
+    "profile-sweep": _profile, "map-shared-sets": _map_shared_sets,
+    "compare-maps": _compare_maps, "compare": _compare, "cost": _cost,
 }
 
 
@@ -214,6 +223,7 @@ def _sweep_parsers(commands: Any) -> None:
                            help="measure the mean map's two single-population spikes (#402); "
                                 "another map's run passes `none`")
     run_sweep.add_argument("--output", type=Path, required=True)
+    _add_profile_sweep(commands)
     compare_maps = commands.add_parser("compare-maps",
                                        help="each map's count criteria, side by side (#404)")
     compare_maps.add_argument("--selection", type=Path, required=True)
@@ -221,6 +231,23 @@ def _sweep_parsers(commands: Any) -> None:
     compare_maps.add_argument("--genetic-map", action="append", required=True, metavar="NAME=JSON",
                               help="each map's sweep JSON, under the name its map had")
     compare_maps.add_argument("--output", type=Path, required=True)
+
+
+def _add_profile_sweep(commands: Any) -> None:
+    command = commands.add_parser("profile-sweep", help="the prominence and LD-block rules on "
+                                  "#403's Analyses, shared set and clumps (#409)")
+    command.add_argument("--selection", type=Path, required=True, help="#403's selection JSON")
+    command.add_argument("--sweep", type=Path, required=True, help="#403's sweep JSON")
+    command.add_argument("--stores-dir", type=Path, required=True)
+    command.add_argument("--genetic-map", type=Path, required=True, help="#403's map")
+    command.add_argument("--panel", type=Path, required=True, help="directory of chr<N>.pgen")
+    command.add_argument("--hm3", type=Path, required=True, help="#403's HapMap3 ALIDs")
+    command.add_argument("--blocks", type=Path, required=True, help="ld_regions_hg38.tsv")
+    command.add_argument("--work-dir", type=Path, required=True, help="plink2's files and "
+                         "each Analysis's cached record")
+    command.add_argument("--threads", type=int, default=4)
+    command.add_argument("--only", type=int, help="the first N chosen Analyses only")
+    command.add_argument("--output", type=Path, required=True)
 
 
 def _compare_parser(commands: Any) -> None:
