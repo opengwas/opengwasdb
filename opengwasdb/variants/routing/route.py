@@ -63,9 +63,11 @@ class LiftedUnion:
 class FromReference:
     """A Variant Reference is the axis, and its source keys route.
 
-    Pass 1 runs only when the reference names no rsids, to harvest them; its
-    lift then uses ``chain_file`` and ``failure_threshold``, though it routes
-    nothing.
+    A key the reference records as re-oriented has its statistics re-signed
+    exactly as Pass 1's lift re-signs them, so a single-pass build stores what
+    the two-pass one does (issue #354). Pass 1 runs only when the reference
+    names no rsids, to harvest them; its lift then uses ``chain_file`` and
+    ``failure_threshold``, though it routes nothing.
     """
 
     reference: VariantReference
@@ -239,8 +241,9 @@ def _route_by_reference(
 
     A reference that names rsids is used as given, and nothing is read. One
     that names none is harvested: Pass 1's candidates, by routing key, minus
-    the tuples both assemblies declare (issue #255 rounds 4-5). Its source keys
-    are its own coordinates, so nothing is re-oriented.
+    the tuples both assemblies declare (issue #255 rounds 4-5). Either way the
+    reference routes, and the keys it records as re-oriented are the ones
+    re-oriented (issue #354).
     """
     reference = authority.reference
     if reference.rsid_by_alid:
@@ -265,7 +268,7 @@ def _route_by_reference(
         )
     return VariantRouting(
         reference.source_lookup,
-        (),
+        reference.reoriented,
         axis=reference.alids,
         names=names,
         stats=union_pass.stats,

@@ -234,8 +234,8 @@ def test_read_reference_alleles_accepts_a_commented_store_table_header(tmp_path)
 def test_read_reference_alleles_accepts_an_artifact_header(tmp_path):
     reference = tmp_path / "axis.variant-ref.tsv"
     reference.write_text(
-        "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n"
-        "2:999001:C:T\t2\t999001\tC\tT\trs1\t2:1000:A:G\n",
+        "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\treoriented_keys\n"
+        "2:999001:C:T\t2\t999001\tC\tT\trs1\t2:1000:A:G\t2:1000:A:G\n",
         encoding="utf-8",
     )
     assert read_variant_reference(reference).alids == ["2:999001:C:T"], (

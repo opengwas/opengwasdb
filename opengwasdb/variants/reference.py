@@ -13,7 +13,11 @@ Three inputs are accepted, distinguished by content rather than by suffix:
 * ``*.variant-ref.tsv.gz`` -- the artifact the standalone
   ``extract-variant-reference`` stage writes (issue #187). It carries explicit
   ``source_keys``, so an hg19 source variant resolves to its lifted hg38 ALID
-  without re-running Pass 1.
+  without re-running Pass 1, and ``reoriented_keys``, the source keys whose
+  statistics that lift re-oriented (issue #354). An artifact without the
+  second column predates it and is refused: it cannot say which keys the
+  lift re-oriented, and if it was written before extraction refused a
+  reverse-strand lift it may name their ALIDs on the source's strand.
 * a plain ALID list -- one canonical GRCh38 ALID per line. Source keys are the
   ALID's own coordinate in either allele order (identity).
 * a store ``variants.tsv.gz`` -- the Store Variant Table. Source keys are
@@ -29,7 +33,7 @@ from __future__ import annotations
 
 import gzip
 import logging
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, TypeVar
@@ -45,6 +49,7 @@ from opengwasdb.variants.windows import DEFAULT_WINDOW_SIZE_MB, window_key, wind
 log = logging.getLogger(__name__)
 
 __all__ = [
+    "UnmarkedArtifactError",
     "VariantReference",
     "expected_rsids_by_routed_key",
     "expected_rsids_by_routing",
@@ -60,11 +65,26 @@ SourceKey = tuple[str, int, str, str]
 
 #: Columns the artifact writer emits; the reader requires every one but
 #: ``rsid`` (a source that named no rsid writes it blank).
-_ARTIFACT_COLUMNS = ("alid", "chromosome", "position", "a1", "a2", "source_keys")
+_ARTIFACT_COLUMNS = (
+    "alid", "chromosome", "position", "a1", "a2", "source_keys", "reoriented_keys"
+)
 
 #: The artifact's first line. The streaming extraction writes it as the first
-#: gzip member (issue #196).
-ARTIFACT_HEADER = "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n"
+#: gzip member (issue #196). Its ``reoriented_keys`` column is what marks an
+#: artifact that records the lift's re-orientation (issue #354).
+ARTIFACT_HEADER = "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\treoriented_keys\n"
+
+
+class UnmarkedArtifactError(ValueError):
+    """A Variant Reference artifact predates the record of the lift's re-orientation.
+
+    Such an artifact has a ``source_keys`` column and no ``reoriented_keys``.
+    Read as it stands, it would re-orient nothing, and a key whose statistics
+    the lift re-oriented would be stored with the source's sign; written before
+    extraction refused a reverse-strand lift, it may also name that key's ALID
+    on the source's strand. Nothing in the file says which, so it is refused,
+    and the remedy is to extract it again (issue #354).
+    """
 
 
 @dataclass(frozen=True)
@@ -76,12 +96,17 @@ class VariantReference:
     populates. ``explicit_source_keys`` records whether that mapping came from
     an artifact's ``source_keys`` column or was inferred by identity, so a
     caller can tell a genuinely-hg38 panel from one carrying hg19 provenance.
+    ``reoriented`` holds the source keys whose statistics the lift re-oriented
+    (a reverse-strand chain block that made the other allele A1), which a
+    routing negates and complements as Pass 1 does; it is empty for an
+    identity reference, which nothing lifted (issue #354).
     """
 
     alids: list[str]
     source_lookup: dict[SourceKey, str]
     rsid_by_alid: dict[str, str]
     explicit_source_keys: bool
+    reoriented: frozenset[SourceKey]
 
 
 def read_variant_reference(path: str | Path) -> VariantReference:
@@ -321,39 +346,79 @@ def write_variant_reference(
     source_lookup: Mapping[SourceKey, str],
     rsid_by_alid: Mapping[str, str] | None = None,
     *,
+    reoriented: Collection[SourceKey],
     window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
 ) -> None:
     """Write the artifact the inline two-pass Pass 1 would otherwise recompute.
 
     ``source_lookup`` is exactly the ``(source coord) -> hg38 ALID`` map Pass
-    1's lifted union routes by, so a store built through a written
-    artifact is identical to one built from the same manifest in two passes.
+    1's lifted union routes by, and ``reoriented`` the source keys its lift
+    re-oriented, so a store built through a written artifact is identical to
+    one built from the same manifest in two passes. ``reoriented`` has no
+    default: an artifact says which keys the lift re-oriented, and a caller
+    that lifted nothing says so with an empty one (issue #354).
 
     Rows are assembled window by window (issue #188): each genomic window's
     ALIDs are sorted and the windows concatenate in genomic order, so the axis
     is never re-sorted as a whole -- only one window at a time.
     """
-    size_bp = window_size_bp(window_size_mb)
+    _require_routed(reoriented, source_lookup)
     keys_by_alid = _source_keys_by_alid(source_lookup)
+    reoriented_by_alid = _source_keys_by_alid(
+        {key: source_lookup[key] for key in reoriented}
+    )
     rsids = rsid_by_alid or {}
-    windows: dict[tuple[tuple[int, str], int], list[str]] = {}
-    for alid in set(alids):
-        chrom, position, _a1, _a2 = alid.split(":")
-        windows.setdefault(window_key(chrom, int(position), size_bp), []).append(alid)
+    # Ordered before the file is opened, so an ALID that cannot be placed in a
+    # window leaves no partial artifact behind.
+    ordered = list(_in_windowed_order(alids, window_size_bp(window_size_mb)))
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(out, "wt", encoding="utf-8") as handle:
         handle.write(ARTIFACT_HEADER)
-        for window in sorted(windows):
-            for alid in sorted(windows[window], key=alid_sort_key):
-                handle.write(artifact_line(alid, keys_by_alid.get(alid, ()), rsids.get(alid, "")))
+        for alid in ordered:
+            handle.write(
+                artifact_line(
+                    alid,
+                    keys_by_alid.get(alid, ()),
+                    rsids.get(alid, ""),
+                    reoriented_by_alid.get(alid, ()),
+                )
+            )
 
 
-def artifact_line(alid: str, source_keys: Sequence[str], rsid: str) -> str:
-    """One artifact row: the ALID, its coordinate, its rsid and its source keys."""
+def _require_routed(
+    reoriented: Collection[SourceKey], source_lookup: Mapping[SourceKey, str]
+) -> None:
+    """Refuse a re-oriented key the lookup does not route: a key the lift
+    re-oriented is one it placed."""
+    unrouted = [key for key in reoriented if key not in source_lookup]
+    if unrouted:
+        raise ValueError(
+            f"{len(unrouted)} re-oriented source key(s) route nowhere (first: "
+            f"{min(unrouted)!r}); a key the lift re-oriented is one it placed"
+        )
+
+
+def _in_windowed_order(alids: Sequence[str], size_bp: int) -> Iterator[str]:
+    """The unique ALIDs, each genomic window's sorted by ``alid_sort_key`` and
+    the windows in genomic order (issue #188)."""
+    windows: dict[tuple[tuple[int, str], int], list[str]] = {}
+    for alid in set(alids):
+        chrom, position, _a1, _a2 = alid.split(":")
+        windows.setdefault(window_key(chrom, int(position), size_bp), []).append(alid)
+    for window in sorted(windows):
+        yield from sorted(windows[window], key=alid_sort_key)
+
+
+def artifact_line(
+    alid: str, source_keys: Sequence[str], rsid: str, reoriented_keys: Sequence[str]
+) -> str:
+    """One artifact row: the ALID, its coordinate, its rsid, its source keys,
+    and those of them the lift re-oriented."""
     chrom, position, a1, a2 = alid.split(":")
     return (
-        f"{alid}\t{chrom}\t{position}\t{a1}\t{a2}\t{rsid}\t{';'.join(source_keys)}\n"
+        f"{alid}\t{chrom}\t{position}\t{a1}\t{a2}\t{rsid}\t{';'.join(source_keys)}"
+        f"\t{';'.join(reoriented_keys)}\n"
     )
 
 
@@ -420,6 +485,7 @@ def _reference_from_alid_lines(path: Path, lines: Sequence[str]) -> VariantRefer
         source_lookup=_identity_lookup(alids),
         rsid_by_alid={},
         explicit_source_keys=False,
+        reoriented=frozenset(),
     )
 
 
@@ -483,12 +549,22 @@ def _reference_from_store_table(
         source_lookup=_identity_lookup(alids),
         rsid_by_alid=rsid_by_alid,
         explicit_source_keys=False,
+        reoriented=frozenset(),
     )
 
 
 def _reference_from_artifact(
     path: Path, header: Sequence[str], lines: Sequence[str]
 ) -> VariantReference:
+    if "source_keys" in header and "reoriented_keys" not in header:
+        raise UnmarkedArtifactError(
+            f"variant reference {path} is a Variant Reference artifact with no "
+            "reoriented_keys column: an engine before issue #354 wrote it, so it cannot "
+            "say which source keys the lift re-oriented, and one written before "
+            "extraction refused a reverse-strand lift may name their ALIDs on the "
+            "source's strand. Extract it again with `opengwasdb extract-variant-reference` "
+            "from the manifest it was made from."
+        )
     missing = [name for name in _ARTIFACT_COLUMNS if name not in header]
     if missing:
         raise ValueError(
@@ -497,13 +573,16 @@ def _reference_from_artifact(
     alids: list[str] = []
     rsid_by_alid: dict[str, str] = {}
     source_lookup: dict[SourceKey, str] = {}
+    reoriented: set[SourceKey] = set()
     seen: set[str] = set()
     rsid_col = header.index("rsid") if "rsid" in header else None
     for fields in _data_rows(lines):
         alid = _artifact_alid(path, header, fields)
         _append_alid(path, alid, seen, alids)
         source_keys = _field(fields, header.index("source_keys"), path)
-        _add_source_keys(path, source_keys, alid, source_lookup)
+        keys = _add_source_keys(path, source_keys, alid, source_lookup)
+        reoriented_keys = _field(fields, header.index("reoriented_keys"), path)
+        reoriented.update(_reoriented_keys(path, reoriented_keys, alid, keys))
         _record_rsid(path, fields, rsid_col, alid, rsid_by_alid)
     _require_alids(alids, path)
     return VariantReference(
@@ -511,6 +590,7 @@ def _reference_from_artifact(
         source_lookup=source_lookup,
         rsid_by_alid=rsid_by_alid,
         explicit_source_keys=True,
+        reoriented=frozenset(reoriented),
     )
 
 
@@ -532,16 +612,41 @@ def _artifact_alid(path: Path, header: Sequence[str], fields: Sequence[str]) -> 
 
 def _add_source_keys(
     path: Path, raw_keys: str, alid: str, lookup: dict[SourceKey, str]
-) -> None:
-    tokens = [token.strip() for token in raw_keys.split(";") if token.strip()]
+) -> list[SourceKey]:
+    """Bind a row's source keys to its ALID, and return the keys it names."""
+    tokens = _tokens(raw_keys)
     if not tokens:
         # An external panel row carries no source mapping; identity is the only
         # honest reading (its sources are already on the reference build).
         for key in _identity_keys(alid):
             _bind_source_key(path, key, alid, lookup)
-        return
-    for token in tokens:
-        _bind_source_key(path, _parse_source_key(path, token), alid, lookup)
+        return []
+    keys = [_parse_source_key(path, token) for token in tokens]
+    for key in keys:
+        _bind_source_key(path, key, alid, lookup)
+    return keys
+
+
+def _tokens(raw_keys: str) -> list[str]:
+    return [token.strip() for token in raw_keys.split(";") if token.strip()]
+
+
+def _reoriented_keys(
+    path: Path, raw_keys: str, alid: str, source_keys: Sequence[SourceKey]
+) -> list[SourceKey]:
+    """A row's re-oriented keys, each one of the row's own source keys.
+
+    A key the lift re-oriented is a key it placed on this row, so one the row
+    does not route is a corrupt artifact, not a key to re-orient elsewhere.
+    """
+    keys = [_parse_source_key(path, token) for token in _tokens(raw_keys)]
+    stray = [key for key in keys if key not in source_keys]
+    if stray:
+        raise ValueError(
+            f"variant reference {path}: row {alid!r} names re-oriented key "
+            f"{':'.join(map(str, stray[0]))!r}, which is not one of its source keys"
+        )
+    return keys
 
 
 def _bind_source_key(path: Path, key: SourceKey, alid: str, lookup: dict[SourceKey, str]) -> None:

@@ -3,14 +3,18 @@
 `extract_variant_reference` takes sources, not a manifest: reading one is the
 build manifest's job. The tests that start from a manifest read it here, with
 the same per-release defaults the `extract-variant-reference` command passes.
+A test that needs an artifact no manifest yields writes one with
+`write_hg38_artifact`.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from opengwasdb.layouts.build_manifest import read_manifest
+from opengwasdb.variants.reference import write_variant_reference
 from opengwasdb.variants.routing import (
     UnionOptions,
     VariantReferenceExtraction,
@@ -47,3 +51,18 @@ def extract_from_manifest(
     return extract_variant_reference(
         sources, output, failure_threshold=liftover_failure_threshold, union=union, **options
     )
+
+
+def write_hg38_artifact(
+    path: Path, alids: Sequence[str], rsid_by_alid: Mapping[str, str]
+) -> Path:
+    """A Variant Reference artifact over GRCh38 sources: each ALID routed by its
+    own coordinate, in its own allele order, and nothing lifted or re-oriented.
+    ``rsid_by_alid`` names the ALIDs it holds a name for."""
+    source_lookup = {
+        (chrom, int(position), a1, a2): alid
+        for alid in alids
+        for chrom, position, a1, a2 in [alid.split(":")]
+    }
+    write_variant_reference(path, alids, source_lookup, rsid_by_alid, reoriented=())
+    return path

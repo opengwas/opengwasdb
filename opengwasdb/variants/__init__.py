@@ -32,6 +32,7 @@ from opengwasdb.variants.normalise import (
     orient_to_canonical,
 )
 from opengwasdb.variants.reference import (
+    UnmarkedArtifactError,
     VariantReference,
     read_variant_reference,
     write_variant_reference,
@@ -49,6 +50,7 @@ __all__ = [
     "VariantAxis",
     "VariantNormalisationError",
     "VariantRecord",
+    "UnmarkedArtifactError",
     "VariantReference",
     "chromosome_sort_key",
     "iter_variant_records",

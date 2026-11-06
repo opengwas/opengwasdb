@@ -208,6 +208,23 @@ source's allele string at a moved coordinate. Signed statistics follow the
 projected alleles, so a lift that swaps which allele is `A1` flips them
 (§5).
 
+A Variant Reference artifact (`*.variant-ref.tsv.gz`, which
+`extract-variant-reference` writes) records such a lift, so that a single-pass
+build routed by it stores what the two-pass build stores. Its columns are
+`alid`, `chromosome`, `position`, `a1`, `a2`, `rsid`, `source_keys` and
+`reoriented_keys`. A row's ALID is formed from the projected alleles;
+`source_keys` lists, `;`-separated, the source coordinates
+(`chrom:pos:ref:alt`, as each source spells them) that route to it; and
+`reoriented_keys` lists those of them whose lift makes the other allele `A1`,
+whose statistics a build routed by the artifact re-orients (§5). A
+reverse-strand key whose `A1` does not change, such as an indel the complement
+leaves in order, is in `source_keys` alone, under its projected ALID. The
+`reoriented_keys` column marks an artifact that records the lift. One without
+it, as every extraction before issue #354 wrote, cannot say which keys were
+re-oriented and may name a reverse-strand key's ALID on the source's strand, so
+a build MUST refuse it rather than read it as re-orienting nothing; it is
+extracted again.
+
 The BESD builder (`build-ragged-besd`) checks its lift, and records that it
 did. Given `--variant-reference`, a reverse-strand lifted variant whose alleles
 the reference spells on the other strand fails the build naming the variant; a

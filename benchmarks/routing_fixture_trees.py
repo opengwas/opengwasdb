@@ -33,9 +33,12 @@ agreeing names, under `refuse` with a dispute (a refusal), and under `drop`;
 Hybrid single-pass from an hg19 artifact whose off-reference rows the fold
 lifts, and one whose off-reference row the fold must refuse to re-orient; the
 checkpointed `drop` and hg19-artifact builds; and extraction over hg38 and
-hg19, with windows small enough to reduce, and its refusal of a reverse-strand
-lift. Every Dense path, Hybrid `drop` and extraction runs at one and two
-workers.
+hg19, with windows small enough to reduce, and over a reverse-strand lift,
+which it records. Every Dense path, Hybrid `drop` and extraction runs at one
+and two workers.
+
+Inputs written by a checkout before #354 hold artifacts without
+`reoriented_keys`, which a later checkout refuses; write them again with it.
 
 Build with `BLOSC_NTHREADS=1`: a chunk of two or more Blosc blocks compressed
 with threads writes its blocks in completion order (ADR 0056).
@@ -53,11 +56,11 @@ with threads writes its blocks in completion order (ADR 0056).
     $R compare $T/base $T/resumed/fold --resumed
 
 The inputs were written at 6415be4. A case whose expectation arrived later
-names that commit in `Case.since`: extraction's refusal of a reverse-strand
-lift came with #354's guard at 98a6e7a, and before it the same case wrote an
-artifact with the wrong ALIDs. Build an older base with `--cases base`, build
-those cases with `--cases since` at their commit or later, and compare a head
-tree with each, under the same `--cases`.
+names that commit in `Case.since`: extraction records a reverse-strand lift
+since #354, refused one from #354's guard at 98a6e7a until then, and before
+that wrote the case's artifact with the wrong ALIDs. Build an older base with
+`--cases base`, build those cases with `--cases since` at their commit or
+later, and compare a head tree with each, under the same `--cases`.
 
 `seed` patches two of the base's private phase functions to fail, so it runs
 only with a checkout that still has them; the archives it writes are what later
@@ -442,11 +445,12 @@ CASES = (
          expect_alids=("1:101000:A:G",), absent_alids=LOWER_CASE, since="#360"),
     *(Case(f"extract-hg19-n{n}", "extract", "fwd_off", {**LIFT, "n_workers": n, **SMALL_WINDOWS})
       for n in (1, 2)),
-    # R's 2:5000 lifts onto chr2's reverse chain, which an artifact cannot record.
-    # The refusal arrived with #354's guard, after the inputs' base.
+    # R's 2:5000 G/A lifts onto chr2's reverse chain: the artifact names it by its
+    # complemented alleles and records it as re-oriented (#354). Before the fix it
+    # was named by the source's own alleles at the lifted position.
     *(Case(f"extract-hg19-reverse-n{n}", "extract", "rev_off",
-           {**LIFT, "n_workers": n, **SMALL_WINDOWS}, expect_error="ReverseStrandLiftError",
-           since="98a6e7a") for n in (1, 2)),
+           {**LIFT, "n_workers": n, **SMALL_WINDOWS}, expect_alids=("2:995001:C:T",),
+           absent_alids=("2:995001:A:G",), since="#354") for n in (1, 2)),
 )
 
 #: Which cases `build --cases` builds: every one, only those whose expectation

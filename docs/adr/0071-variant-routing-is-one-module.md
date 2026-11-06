@@ -1,5 +1,17 @@
 # Variant Routing is one module
 
+> **Amended by issue #354 (part 2).** Extraction no longer refuses a
+> reverse-strand lift, and a Variant Reference now records the lift's
+> re-orientation: its new `reoriented_keys` column lists the source keys whose
+> lift makes the other allele A1, and `FromReference` routes them as Pass 1
+> does (spec §4). Extraction's window lift stays its own rather than moving onto
+> `place_sites`, so its failure threshold is still counted over the whole union,
+> but it forms each ALID and judges each re-orientation by the same rules
+> (`LiftedRow.alid`, `statistics_swap`). `ReverseStrandLiftError` is gone. An
+> artifact without the column predates the record and is refused
+> (`UnmarkedArtifactError`), since reading it as re-orienting nothing would
+> store a wrong sign that looks right.
+>
 > **Partly superseded by [ADR 0075](0075-alleles-are-upper-cased-before-identity-assignment.md).**
 > The module stands. What no longer holds is `RoutingKey`: alleles are
 > upper-cased before identity assignment on every build, so its two modes
