@@ -89,16 +89,26 @@ def _density_holds(median_ratio: float, median_log: float, rows_median_log: floa
 def _config_counts(analyses: list[dict[str, Any]], key: tuple[Any, int],
                    rows_median_abs_log2: float) -> dict[str, Any]:
     entries = [next(c for c in a["configs"] if (c["d_cm"], c["w_bp"]) == key) for a in analyses]
+    return {"d_cm": key[0], "w_bp": key[1]} | count_row(entries, rows_median_abs_log2, str(key))
+
+
+def count_row(entries: list[dict[str, Any]], rows_median_abs_log2: float,
+              label: str) -> dict[str, Any]:
+    """C1 and C2 for one rule, from each Analysis's `density` and r^2 0.01 `index_variants`.
+
+    Any rule's leads can be scored so, (D, W) or not (#409).
+    """
     full = np.array([e["density"]["leads_full"] for e in entries], dtype="float64")
     hm3 = np.array([e["density"]["leads_hm3"] for e in entries], dtype="float64")
     index = [e["by_r2"][PRIMARY_R2]["index_variants"] for e in entries]
     if (full <= 0).any():
-        raise ValueError(f"{key}: an Analysis has no Locus Lead, so its density ratio is undefined")
+        raise ValueError(f"{label}: an Analysis has no Locus Lead, so its density ratio is "
+                         "undefined")
     ratio = hm3 / full
     median_log = _median_or_inf(_abs_log2(ratio))
     rho = spearman(full, index)
     return {
-        "d_cm": key[0], "w_bp": key[1], "rho": rho,
+        "rho": rho,
         "c1": bool(rho >= COUNT_CRITERIA["rho_min"]),
         "median_ratio": float(np.median(ratio)),
         "median_abs_log2": _finite_or_none(median_log),
@@ -124,6 +134,11 @@ def _adds_value(cm: dict[str, Any], bp: dict[str, Any]) -> bool:
     eps = 1e-9
     return bool((d_rho >= m_rho - eps or d_log >= m_log - eps)
                 and d_rho >= -m_rho - eps and d_log >= -m_log - eps)
+
+
+def adds_value(row: dict[str, Any], bp_only: dict[str, Any]) -> bool:
+    """C3's test for any rule's count row against bp-only's at one W (#409)."""
+    return _adds_value(row, bp_only)
 
 
 def _c3_at(at_w: list[dict[str, Any]]) -> dict[str, Any]:
@@ -168,8 +183,8 @@ def leads_per_index_variant(analyses: list[dict[str, Any]]) -> list[dict[str, An
     return table
 
 
-def _row_density(analyses: list[dict[str, Any]]) -> tuple[np.ndarray, np.ndarray, np.ndarray,
-                                                          float]:
+def row_density(analyses: list[dict[str, Any]]) -> tuple[np.ndarray, np.ndarray, np.ndarray,
+                                                         float]:
     """Shared-set rows in full and on HapMap3, their ratio, and its median |log2|."""
     rows_full = np.array([a["density"]["rows_full"] for a in analyses], dtype="float64")
     rows_hm3 = np.array([a["density"]["rows_hm3"] for a in analyses], dtype="float64")
@@ -184,7 +199,7 @@ def _row_density(analyses: list[dict[str, Any]]) -> tuple[np.ndarray, np.ndarray
 
 def evaluate_counts(analyses: list[dict[str, Any]]) -> dict[str, Any]:
     """C1-C3 at every (D, W), the point they name, and the lead / index-variant ratios."""
-    rows_full, rows_hm3, rows_ratio, rows_log = _row_density(analyses)
+    rows_full, rows_hm3, rows_ratio, rows_log = row_density(analyses)
     keys = [(c["d_cm"], c["w_bp"]) for c in analyses[0]["configs"]]
     rows = [_config_counts(analyses, key, rows_log) for key in keys]
     cm_only = [r for r in rows if r["d_cm"] != BP_ONLY]
