@@ -561,14 +561,21 @@ class _Harvest:
         Otherwise a variant takes the first non-empty rsid among its admitted
         rows, as spec §4 says, whichever spelling carries it (#400).
         """
+        alid_variant = self.alid_variant
+        # The ALIDs the names are keyed by are the registered ones, not the
+        # copies a key's split makes. Copies made here would outlive the
+        # naming in the build's variant table and pin the memory freed around
+        # them: on OGS-00006 that kept the peak 2 GB higher.
+        registered = {alid: alid for alid in alid_variant}
         rsid_by_site: dict[SourceKey, str] = {}
         site_alid: dict[SourceKey, str] = {}
         for key, rsid in self.named.items():
             alid, ref, alt = key.split("\t")
-            chromosome, position, _a1, _a2 = alid.split(":")
-            site = (chromosome, int(position), ref, alt)
+            variant = alid_variant[alid]
+            site = (variant.chromosome, variant.position, ref, alt)
             rsid_by_site[site] = rsid
-            site_alid[site] = alid
+            site_alid[site] = registered[alid]
+        del registered
         return union_names(
             rsid_by_site, site_alid, policy=RsidConflictPolicy.REFUSE, label=HARVEST_LABEL
         ).rsid_by_alid
