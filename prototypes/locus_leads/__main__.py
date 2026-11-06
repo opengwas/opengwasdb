@@ -83,8 +83,7 @@ def _profile_sweep(args: argparse.Namespace) -> None:
                            load_map(args.genetic_map), args.panel, args.work_dir,
                            hm3_path=args.hm3, blocks_path=args.blocks, threads=args.threads,
                            only=args.only)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, indent=1, allow_nan=False) + "\n")
+    _write(args, result)
     print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
 
 
