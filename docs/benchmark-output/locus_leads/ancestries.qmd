@@ -105,9 +105,9 @@ own panel and its own map, and answers two predictions of #62's revision:
 2. **Is the AMR map usable?** Admixture creates long-range LD that LD-based maps read as
    low recombination, so AMR is the least trustworthy map.
 
-The per-lead rates stay in as diagnostics, and the next section is the one the criteria
-are judged on. Each ancestry was swept one after another, on the same grid, the same
-1,000,000-row cap and the same seed (405) as EUR.
+The count criteria below are the ones that judge the count; the per-lead rates stay in as
+diagnostics, as #403 kept them. Each ancestry was swept one after another, on the same
+grid, the same 1,000,000-row cap and the same seed (405) as EUR.
 
 ## The draws
 

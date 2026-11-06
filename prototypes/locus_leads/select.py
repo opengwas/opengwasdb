@@ -91,9 +91,10 @@ def _of_ancestry(pool: list[PoolEntry], ancestry: str) -> list[PoolEntry]:
 def with_floors(pool: list[PoolEntry], rule: SelectionRule) -> tuple[SelectionRule, dict[str, Any]]:
     """The rule with the target and the |z| quotas no larger than the pool can supply.
 
-    A quota is a gap to fill, not a fact about the pool: an ancestry with two
-    Analyses at |z| >= 100 is swept, and its record says so, rather than the
-    draw refusing. Both the rule asked for and the floor are returned.
+    A quota is a gap to fill, not a fact about the pool: an ancestry whose pool
+    holds nothing above |z| 38.5 is swept, and its record says which quotas were
+    cut, rather than the draw refusing. Both the asked rule and the floor are
+    returned.
     """
     eligible = [e for e in pool if e.ancestry == rule.ancestry
                 and 0 < e.observed_rows <= rule.max_rows]
