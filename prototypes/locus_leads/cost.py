@@ -177,6 +177,7 @@ class PeakRss:
         self._interval = interval
         self._stop = threading.Event()
         self.peak_mb: float | None = None
+        self.first_mb: float | None = None
         self.observations = 0
 
     def __enter__(self) -> PeakRss:
@@ -189,6 +190,7 @@ class PeakRss:
         value = self._reader()
         if value is not None:
             self.observations += 1
+            self.first_mb = value if self.first_mb is None else self.first_mb
             self.peak_mb = value if self.peak_mb is None else max(self.peak_mb, value)
 
     def _run(self) -> None:
@@ -229,6 +231,7 @@ def _timed_stage(stage: Callable[[], object], *, repeats: int,
     samples: list[float] = []
     loads: list[dict[str, float]] = []
     peak: float | None = None
+    start: float | None = None
     observations = 0
     for _ in range(repeats):
         loads.append(load_average())
@@ -238,12 +241,17 @@ def _timed_stage(stage: Callable[[], object], *, repeats: int,
             samples.append(time.perf_counter() - started)
         observations += sampler.observations
         peak = _higher(peak, sampler.peak_mb)
+        # What was already resident when the first repeat began: the slices share
+        # one process, so a peak is an envelope that carries what earlier stages
+        # and slices retained, and only means something beside this.
+        start = sampler.first_mb if start is None else start
     return {
         "samples_s": [round(value, 4) for value in samples],
         "median_s": round(float(statistics.median(samples)), 4),
         "min_s": round(min(samples), 4),
         "max_s": round(max(samples), 4),
         "peak_mb": None if peak is None else round(peak, 1),
+        "rss_start_mb": None if start is None else round(start, 1),
         "rss_observations": observations,
         "peak_source": "children" if child else "process",
         "child": child,

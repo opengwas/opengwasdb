@@ -57,6 +57,7 @@ def test_the_timer_reports_every_stage_and_the_record_carries_its_provenance() -
             assert set(load) == {"one", "five", "fifteen"}
         assert entry["peak_source"] in {"process", "children"}
         assert isinstance(entry["peak_mb"], float) and entry["peak_mb"] > 0
+        assert isinstance(entry["rss_start_mb"], float) and entry["rss_start_mb"] > 0
         assert entry["rss_observations"] >= 1
 
     provenance = cost.provenance()
