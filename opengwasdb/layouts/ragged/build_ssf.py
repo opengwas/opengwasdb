@@ -345,8 +345,13 @@ def build_ragged_from_ssf(
     ``admission_record`` is Association Admission's record (#357), beside the Store.
     Every manifest row must declare its `source_genome_build`. A Ragged SSF Store
     is one build, GRCh38: a source declaring another is lifted by ``chain_file``,
-    which it then requires, and a build that lifts more than
-    ``liftover_failure_threshold`` of its sites fails (`ssf_lift`).
+    which it then requires. The build fails when the chain cannot place more than
+    ``liftover_failure_threshold`` of the lifted group's sites, and when the lift
+    leaves no variant (`ssf_lift`).
+
+    Memory: a build with any non-GRCh38 source holds every Analysis's admitted
+    rows until the lift has placed them; a GRCh38-only build reads one Analysis
+    at a time.
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     _validate_stored_effect_scale(stored_effect_scale)
@@ -566,10 +571,26 @@ def _ingest_lifted(
             )
             per_analysis.append(recs)
             _print_ingest_summary(a, recs, n_consistent, n_conflicting)
-    record.finish()
+    summary = record.finish()
+    if not harvest.alid_variant:
+        raise ValueError(_nothing_placed(summary))
     return _Ingested(
         per_analysis, harvest.alid_variant, harvest.names(),
         placement.provenance(options.chain_file),
+    )
+
+
+def _nothing_placed(summary: admission.AdmissionSummary) -> str:
+    """The refusal of a lift that left no variant for the Store, naming each Analysis's drops."""
+    unmapped, ambiguous = admission.Reason.LIFT_UNMAPPED, admission.Reason.LIFT_AMBIGUOUS
+    per_analysis = "; ".join(
+        f"analysis {analysis_id!r}: {counts.dropped.get(unmapped, 0)} lift_unmapped, "
+        f"{counts.dropped.get(ambiguous, 0)} lift_ambiguous"
+        for analysis_id, counts in summary.counts.items()
+    )
+    return (
+        "build-ragged-ssf: the lift placed no variant, so the Store would hold none "
+        f"({per_analysis}); the Admission record names every dropped row"
     )
 
 

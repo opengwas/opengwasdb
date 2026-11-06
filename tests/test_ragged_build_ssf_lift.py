@@ -304,3 +304,32 @@ def test_the_cli_takes_a_chain_file_and_a_failure_threshold(tmp_path, chain):
     built = CliRunner().invoke(app, [*args, "--liftover-failure-threshold", "0.5"])
     assert built.exit_code == 0, built.output
     assert json.loads(built.output.strip().splitlines()[-1])["n_associations"] == 3
+
+
+def test_a_wholly_unmapped_lift_is_refused_naming_each_analysis(tmp_path, chain):
+    rows = [{**_GRCH37_ROWS[2], "chromosome": "4"}, {**_GRCH37_ROWS[0], "chromosome": "5"}]
+    manifest, source_dir = _stage(tmp_path, "in", [("a", "GRCh37", rows)])
+    with pytest.raises(
+        ValueError, match=r"placed no variant.*analysis 'a': 2 lift_unmapped, 0 lift_ambiguous"
+    ):
+        build_ragged_from_ssf(
+            manifest, source_dir, tmp_path / "out.opengwasdb", store_id="t", release_id="v1",
+            association_coverage="cis_and_signals", chain_file=chain,
+            liftover_failure_threshold=1.0,
+        )
+    assert _admission(tmp_path / "out.opengwasdb")[0]["dropped"] == {"lift_unmapped": 2}
+
+
+def test_a_wholly_ambiguous_lift_is_refused_naming_each_analysis(tmp_path, chain):
+    manifest, source_dir = _stage(
+        tmp_path, "in",
+        [("old", "GRCh37", [_GRCH37_ROWS[2]]), ("new", "GRCh38", [_GRCH37_ROWS[2]])],
+    )
+    with pytest.raises(ValueError) as refused:
+        build_ragged_from_ssf(
+            manifest, source_dir, tmp_path / "out.opengwasdb", store_id="t", release_id="v1",
+            association_coverage="cis_and_signals", chain_file=chain,
+        )
+    assert "placed no variant" in str(refused.value)
+    assert "analysis 'old': 0 lift_unmapped, 1 lift_ambiguous" in str(refused.value)
+    assert "analysis 'new': 0 lift_unmapped, 1 lift_ambiguous" in str(refused.value)

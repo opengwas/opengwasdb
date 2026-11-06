@@ -255,7 +255,11 @@ are one Analysis's duplicate rows, and the duplicate rule resolves them. A
 lifted Store records `provenance.lift` as `build-ragged-besd` does, with
 `n_unmapped` and `n_ambiguous` (Routing Keys) beside `n_lifted`, and
 `reference: null`: the lift is not checked against a Variant Reference. A Store
-whose sources are all on GRCh38 records no `provenance.lift`.
+whose sources are all on GRCh38 records no `provenance.lift`. A build with any
+non-GRCh38 source holds every Analysis's admitted rows in memory until the lift
+has placed them; a GRCh38-only build reads one Analysis at a time. A lift that
+leaves no variant refuses the build, naming each Analysis's `lift_unmapped` and
+`lift_ambiguous` counts, after the Admission record is finished.
 
 Cross-Store identity is:
 

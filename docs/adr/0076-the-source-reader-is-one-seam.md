@@ -135,7 +135,9 @@ The owner's rulings on the unifications, issue #56:
   Variant Routing's `place_sites`: the GWAS-SSF reader stays in its declared
   assembly and is not registered as a lifting reader, since the resolver and
   ancestry assignment, which would then open it lifted, have no use for one.
-  A row that declares no build is still refused (O7).
+  A row that declares no build is still refused (O7). A build with any
+  non-GRCh38 source holds every Analysis's admitted rows until the lift has
+  placed them; a GRCh38-only build reads one Analysis at a time.
 - `build-dense` reads through the registry (issue #385). Its association TSV was
   deferred from this change: its own parser refused an unreadable row where
   every registered reader drops one, and carried each Analysis's metadata on

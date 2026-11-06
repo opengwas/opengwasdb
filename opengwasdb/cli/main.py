@@ -1601,6 +1601,8 @@ def build_ragged_ssf_command(
     it by --chain-file, which it requires. The build fails when more than
     --liftover-failure-threshold of the lifted sites have no place on the
     chain; the Admission record counts them (`lift_unmapped`, `lift_ambiguous`).
+    A build with any such row holds every Analysis's admitted rows in memory
+    until the lift has placed them; a GRCh38-only build reads one at a time.
 
     FILTERED_DIR holds one filtered GWAS-SSF ``.tsv.gz`` per analysis (as
     produced by the opengwasdb-stores download+filter step). Relative
