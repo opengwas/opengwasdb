@@ -19,6 +19,7 @@ from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store.open import UnsupportedFormatVersion
 from opengwasdb.top_hits import TOP_HIT_CHUNK_SIZE, TOP_HIT_THRESHOLDS
 
 log = logging.getLogger(__name__)
@@ -188,6 +189,34 @@ def _write_scan_harvest(
             )
 
 
+def _refuse_legacy_data_layout(store_path: Path) -> None:
+    """Refuse a release whose `data.zarr` is a Zarr v2 group (issue #313).
+
+    A Top-Hit Index is Zarr v3 arrays written into the release's own data group.
+    Opening a 0.1.0 release's data group -- Zarr v2, so a `.zgroup` -- in a mode
+    that creates v3 metadata puts a `zarr.json` beside the `.zgroup`; zarr 3 then
+    reads the group as v3, every v2 array the release has stops being reachable
+    by name, and the pass dies part-way through leaving a release no reader can
+    open.
+
+    The **layout** decides, rather than `format_version`'s equality with
+    `CURRENT_FORMAT_VERSION`: a release stays indexable for as long as its arrays
+    are stored in the format the index is written in, whatever version its
+    series has reached (ADR 0057).
+    """
+    if not (store_path / "data.zarr" / ".zgroup").is_file():
+        return
+    version = StoreManifest.load(store_path).format_version
+    raise UnsupportedFormatVersion(
+        f"{store_path} declares format_version={version!r}, which is stored as a Zarr v2 "
+        "group, and a Top-Hit Index is written as Zarr v3 arrays into that same group: "
+        "writing one here would leave a zarr.json beside the release's .zgroup, hide every "
+        "array the release has and leave it unreadable. Convert the 0.1.0 release with "
+        "scripts/convert_store_to_0_2_0.py and build the index on the converted release; "
+        "or rebuild the release from source."
+    )
+
+
 def build_top_hit_indexes(
     store_path: str | Path,
     thresholds: tuple[float, ...] = TOP_HIT_THRESHOLDS,
@@ -209,6 +238,10 @@ def build_top_hit_indexes(
     ``encoding`` is the store's declared plan; when omitted it is read from the
     release's manifest, never re-derived from the arrays.
 
+    A release whose ``data.zarr`` is a Zarr v2 group is refused before anything
+    is scanned or written: the index is v3 arrays, so writing one there would
+    hide the release's own arrays (issue #313).
+
     A caller that passes a ``PhaseTimer`` gets the scan and the write charged
     separately, which is how the re-encoding passes of a store-wide rewrite are
     told apart from this one (issue #144): 63.5 s on the migrated FinnGen R13
@@ -216,6 +249,7 @@ def build_top_hit_indexes(
     """
     timer = timer or PhaseTimer()
     store_path = Path(store_path)
+    _refuse_legacy_data_layout(store_path)
     if encoding is None:
         encoding = StoreManifest.load(store_path).encoding
     root = store_arrays.open_group(store_path / "data.zarr")

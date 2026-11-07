@@ -67,6 +67,7 @@ from opengwasdb.query.facade import HybridStoreQuery, RaggedStoreQuery, StoreQue
 from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
+from opengwasdb.store.open import UnsupportedFormatVersion
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.routing import (
     EmptyReferenceError,
@@ -1787,9 +1788,22 @@ def build_ragged_top_hits_command(store_path: Path) -> None:
 
 
 @app.command("build-dense-top-hits")
-def build_dense_top_hits_command(store_path: Path) -> None:
-    """Build (or rebuild) the top-hit index for a Dense store."""
-    build_top_hit_indexes(store_path)
+def build_dense_top_hits_command(
+    store_path: Path, n_workers: int = _N_WORKERS_OPTION
+) -> None:
+    """Build (or rebuild) the top-hit index for a Dense store.
+
+    A release stored as Zarr v2 -- every `format_version` 0.1.0 release -- is
+    refused before anything is written: the index is Zarr v3 arrays written into
+    the release's own data group, and a v3 group beside its `.zgroup` would hide
+    every array it has. Convert it with `scripts/convert_store_to_0_2_0.py`
+    first, as completion requires.
+    """
+    try:
+        build_top_hit_indexes(store_path, n_workers=n_workers)
+    except UnsupportedFormatVersion as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
     typer.echo("done")
 
 
