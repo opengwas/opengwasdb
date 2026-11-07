@@ -58,6 +58,7 @@ comes after one of its members in that order fails the run.
 | `profile_sweep.py` | both rules on #403's Analyses and clumps, on a shared set that must reproduce #403's committed summaries (#409) |
 | `profile_judge.py` | the rules' C1-C3 against bp-only at each W, and per-lead rates beside #403's (#409) |
 | `profile_valleys.py` | a seeded sample of no-row valleys read from the Store: low \|z\| or missing cells (#409) |
+| `regions.py` | the data behind the report's region figures: a few regions' rows, clumps, leads per method, LD blocks and prominence profile, written only when every count matches #403's and #409's records (#409) |
 | `cost.py` | what pruning costs against clumping (#406): the per-variant cM array, the pruning stages of a tier, plink2's clumping, and the ratio |
 
 A sweep takes the selection, the map and the panel directory as inputs:
@@ -186,4 +187,23 @@ pixi run -e dev python -m prototypes.locus_leads profile-sweep \
     --hm3 /data/opengwasdb/reference/hapmap3-hg38/hm3.grch38.alid.txt \
     --blocks /data/opengwasdb/reference/hgdp1kgp-hg38/ld_regions_hg38.tsv \
     --work-dir <scratch directory> --output docs/benchmark-output/locus_leads/eur_profile.json
+```
+
+The report's region figures read `eur_regions.json`. It holds one region from each of three
+Analyses: the one #409's judgement names, and one from each other \|z\| band, drawn with
+seed 62 from those with at least as many index variants as the named one. Each region is
+the 10 Mb window, starting at one of the Analysis's index variants, that holds the most
+index variants. The command rebuilds each region's rows, clumps and leads with the
+functions above. It refuses to write when any count differs from `eur_sweep.json` or
+`eur_profile.json`, and the error names the field:
+
+```bash
+pixi run -e dev python -m prototypes.locus_leads regions \
+    --selection docs/benchmark-output/locus_leads/eur_sweep_selection.json \
+    --sweep docs/benchmark-output/locus_leads/eur_sweep.json \
+    --profile docs/benchmark-output/locus_leads/eur_profile.json \
+    --stores-dir /data/opengwasdb/stores --genetic-map <map>.tsv.gz --panel <panel directory> \
+    --hm3 /data/opengwasdb/reference/hapmap3-hg38/hm3.grch38.alid.txt \
+    --blocks /data/opengwasdb/reference/hgdp1kgp-hg38/ld_regions_hg38.tsv \
+    --work-dir <scratch directory> --output docs/benchmark-output/locus_leads/eur_regions.json
 ```
