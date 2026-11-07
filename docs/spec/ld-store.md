@@ -158,26 +158,31 @@ recorded in provenance, and validation recomputes it.
 Pair when that reaches the floor, and reads as the Bound when it does not. In true r², the cut
 between the two is ((`far_code_floor` − ½) / 32767)². That cut lies within about 2√t_far / 65534 of
 t_far, on either side. So a pair whose true r² is up to that much above t_far can read
-"r² < t_far" (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/t_far_edge.tsv`):
+"r² < t_far". The table uses the phased HGDP+1kGP v2 callset's sample counts, which the builds
+read (ADR 0002): EUR 771, AFR 801, EAS 816, SAS 782 and AMR 345. The method is the prototype's
+(`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/t_far_edge.tsv`, on the
+gnomAD v3.1.2 counts); `tests/test_format.py` holds the code to every row.
 
 | LD Store | k | t_far | √t_far × 32767 | far code floor | a pair at exactly t_far | true r² cut |
 |---|---|---|---|---|---|---|
 | UK Biobank EUR | 0 or 10 | 0.001 | 1036.18 → 1036 | 1037 | **the Bound** | 0.0010006 |
 | HGDP+1kGP EUR | 0 | 0.0270649 | 5390.64 → 5391 | 5391 | stored | 0.0270635 |
 | HGDP+1kGP EUR | 10 | 0.0274211 | 5425.99 → 5426 | 5426 | stored | 0.0274161 |
-| HGDP+1kGP AFR | 0 | 0.0259527 | 5278.71 → 5279 | 5279 | stored | 0.0259506 |
-| HGDP+1kGP AFR | 10 | 0.0262799 | 5311.89 → 5312 | 5312 | stored | 0.0262761 |
-| HGDP+1kGP EAS | 0 | 0.0255392 | 5236.49 → 5236 | 5237 | **the Bound** | 0.0255393 |
-| HGDP+1kGP EAS | 10 | 0.0258561 | 5268.88 → 5269 | 5269 | stored | 0.0258524 |
-| HGDP+1kGP SAS | 0 | 0.0266496 | 5349.12 → 5349 | 5350 | **the Bound** | 0.0266534 |
-| HGDP+1kGP SAS | 10 | 0.0269948 | 5383.65 → 5384 | 5384 | stored | 0.0269933 |
+| HGDP+1kGP AFR | 0 | 0.0260500 | 5288.60 → 5289 | 5289 | stored | 0.0260490 |
+| HGDP+1kGP AFR | 10 | 0.0263797 | 5321.96 → 5322 | 5322 | stored | 0.0263751 |
+| HGDP+1kGP EAS | 0 | 0.0255706 | 5239.70 → 5240 | 5240 | stored | 0.0255686 |
+| HGDP+1kGP EAS | 10 | 0.0258882 | 5272.15 → 5272 | 5273 | **the Bound** | 0.0258917 |
+| HGDP+1kGP SAS | 0 | 0.0266837 | 5352.54 → 5353 | 5353 | stored | 0.0266833 |
+| HGDP+1kGP SAS | 10 | 0.0270298 | 5387.14 → 5387 | 5388 | **the Bound** | 0.0270334 |
 | HGDP+1kGP AMR | 0 | 0.0605814 | 8065.04 → 8065 | 8066 | **the Bound** | 0.0605884 |
 | HGDP+1kGP AMR | 10 | 0.0623952 | 8184.88 → 8185 | 8185 | stored | 0.0623894 |
 
-At k = 10, the default, a pair at exactly t_far is a Far Pair on every HGDP+1kGP panel, and so
-is a pair a little below it, down to the cut. On UK Biobank EUR it reads as the Bound: a true r²
-up to 0.0010006 reads "r² < 0.001". The walkthrough "A pair at exactly t_far" in
-`proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html` steps through these cases.
+At k = 10, the default, a pair at exactly t_far is a Far Pair on HGDP+1kGP EUR, AFR and AMR, and
+so is a pair a little below it, down to the cut. On EAS and SAS it reads as the Bound: a true r²
+up to 0.0258917 on EAS, and 0.0270334 on SAS, reads "r² < t_far". So does one on UK Biobank EUR,
+up to 0.0010006. The walkthrough "A pair at exactly t_far" in
+`proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html` steps through these cases on
+the gnomAD v3.1.2 counts.
 
 **t_far's k counts covariates.** t_far = max(0.001, q / (n − k − 1)), where k is the number of
 covariates regressed out, named in `adjustment.covariates` (§7); the 1 is the intercept. For a
@@ -221,12 +226,13 @@ r reaches t_far (owner, 7 November 2026; §11):
   (AFR chr2, the same `proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/s08_meta.json`), far inside 2³¹.
 - **The Far Pairs are the index's entries more than `near_bp` apart.** A pair with
   `near_bp` < d ≤ `far_bp` is a Far Pair exactly when it is in the index. One that is not has
-  r̂² < t_far: its answer is the **Bound** (§8). So the store keeps the Far Pairs once, here, and
-  has no separate component for them (the recommended form; §11 gives the trade-off and the
-  owner's decision it awaits).
-- **Its entries within `near_bp` repeat Near Band codes,** thresholded at t_far. They are there so
-  `proxies` at r2 ≥ t_far reads one row, not the Near Band's column. Validation holds the two to
-  one code per pair (§12).
+  r̂² < t_far: its answer is the **Bound** (§8). So the store has no separate component for the
+  Far Pairs (the recommended form; §11 gives the trade-off and the owner's decision it awaits).
+- **Its entries within `near_bp` are copies of Near Band codes, by design,** thresholded at t_far
+  and transposed for each pair's later variant. They are how the index answers a variant's
+  upstream partners without the Near Band's column read, so `proxies` at r2 ≥ t_far reads one
+  row. `matrix` reads those pairs from the Near Band and `proxies` from the index, and
+  `index.near` holds the two to one code per pair (§12).
 
 At k = 0, 9.4×10⁻⁵ (EUR) to 2.3×10⁻³ (AMR) of chr22's 3–10 Mb pairs are Far Pairs
 (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/panel_sizes_inner262144.tsv`).
@@ -650,6 +656,8 @@ index: the symmetric band doubles every store, and the index costs 3.1–8.7%
 **The index subsumes the Far Pairs.** The index holds every pair within `far_bp` at r̂² ≥ t_far,
 in both directions. A Far Pair is exactly such a pair more than `near_bp` apart (§3), so the index
 holds every Far Pair, twice. A separate Far Pairs component would hold nothing the index does not.
+The index already copies the Near Band's pairs at r̂² ≥ t_far, by design, so merging does not make
+the store copy-free: it removes the second copy of each 3–10 Mb pair.
 This spec therefore writes the merged form as its recommended one: one dense Near Band and one
 sparse, symmetric, thresholded index (§1, §5). It changes no answer and no refusal:
 
@@ -671,9 +679,11 @@ The trade-off, on the prototype's numbers at k = 0:
 | a matrix's far pairs | the index rows of the listed variants, about 2.9 KB each raw for EUR | the Far Pairs rows, a few bytes each |
 
 The read costs differ by kilobytes against a Near Band read of hundreds of megabytes (§10), so
-reads do not decide it. What decides it is that two copies of one pair can disagree. A builder
-that wrote them differently would give one answer through `matrix` and another through `proxies`,
-and only a cross-component rule would catch it. The merged form has one copy of each Far Pair.
+reads do not decide it. Both forms keep copies that must agree: the index's pairs within
+`near_bp` repeat Near Band codes in either form, and `index.near` holds them equal. What merging
+saves is the second copy of each 3–10 Mb pair, the builder output that writes it, and the
+cross-component rules for 3–10 Mb: the four `far.*` rules and the one holding the Far Pairs equal
+to the index. One fewer copy is one fewer way for `matrix` and `proxies` to disagree.
 
 **The merge awaits the owner's decision (ogld#2).** If the owner keeps the Far Pairs as their own
 component, §1 regains `far/<chrom>/` (`indptr`, `partner`, `r`, upper triangle as in §4), §7 keeps

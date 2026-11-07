@@ -214,5 +214,12 @@ epic, and the format allows it now. Each store records its source kind (genotype
 LD matrix), every covariate it adjusted for by name, with t_far's k counting them, and the
 distances it measured: 3 Mb near, and at most 10 Mb far (`docs/spec/ld-store.md` §7).
 
+**Panel sizes** (the same later decisions). The phased v2 callset has fewer samples in three
+panels: AFR 801, EAS 816 and SAS 782, against decision 3's table's 804, 817 and 783 (EUR 771 and
+AMR 345 are unchanged). So their t_far at k = 10 are 0.0263797, 0.0258882 and 0.0270298, and the
+spec's §3 table uses these sizes. The consequence above that a pair at exactly t_far "is stored
+on every HGDP+1kGP panel at k = 10" no longer holds: on EAS and SAS it reads as the Bound. The
+table in decision 3 is left as it was decided.
+
 The format version stays `0.1.0`: no LD Store has been written in it yet.
 

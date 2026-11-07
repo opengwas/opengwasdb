@@ -106,31 +106,38 @@ def test_quantise_is_monotone(a: float, b: float) -> None:
 # ------------------------------------------------------------------ §3 t_far and its floor
 
 # (n, k, t_far as the spec's §3 table prints it, far code floor, code of a pair at exactly
-# t_far, whether that pair is stored). From docs/spec/ld-store.md §3 and
-# proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/t_far_edge.tsv.
+# t_far, whether that pair is stored, the true r² cut). From docs/spec/ld-store.md §3, on the
+# phased v2 callset's sample counts (EUR 771, AFR 801, EAS 816, SAS 782, AMR 345).
 T_FAR_TABLE = [
-    ("UK Biobank EUR", 49766, 0, 0.001, 1037, 1036, False),
-    ("UK Biobank EUR", 49766, 10, 0.001, 1037, 1036, False),
-    ("HGDP+1kGP EUR", 771, 0, 0.0270649, 5391, 5391, True),
-    ("HGDP+1kGP EUR", 771, 10, 0.0274211, 5426, 5426, True),
-    ("HGDP+1kGP AFR", 804, 0, 0.0259527, 5279, 5279, True),
-    ("HGDP+1kGP AFR", 804, 10, 0.0262799, 5312, 5312, True),
-    ("HGDP+1kGP EAS", 817, 0, 0.0255392, 5237, 5236, False),
-    ("HGDP+1kGP EAS", 817, 10, 0.0258561, 5269, 5269, True),
-    ("HGDP+1kGP SAS", 783, 0, 0.0266496, 5350, 5349, False),
-    ("HGDP+1kGP SAS", 783, 10, 0.0269948, 5384, 5384, True),
-    ("HGDP+1kGP AMR", 345, 0, 0.0605814, 8066, 8065, False),
-    ("HGDP+1kGP AMR", 345, 10, 0.0623952, 8185, 8185, True),
+    ("UK Biobank EUR", 49766, 0, 0.001, 1037, 1036, False, 0.0010006),
+    ("UK Biobank EUR", 49766, 10, 0.001, 1037, 1036, False, 0.0010006),
+    ("HGDP+1kGP EUR", 771, 0, 0.0270649, 5391, 5391, True, 0.0270635),
+    ("HGDP+1kGP EUR", 771, 10, 0.0274211, 5426, 5426, True, 0.0274161),
+    ("HGDP+1kGP AFR", 801, 0, 0.0260500, 5289, 5289, True, 0.0260490),
+    ("HGDP+1kGP AFR", 801, 10, 0.0263797, 5322, 5322, True, 0.0263751),
+    ("HGDP+1kGP EAS", 816, 0, 0.0255706, 5240, 5240, True, 0.0255686),
+    ("HGDP+1kGP EAS", 816, 10, 0.0258882, 5273, 5272, False, 0.0258917),
+    ("HGDP+1kGP SAS", 782, 0, 0.0266837, 5353, 5353, True, 0.0266833),
+    ("HGDP+1kGP SAS", 782, 10, 0.0270298, 5388, 5387, False, 0.0270334),
+    ("HGDP+1kGP AMR", 345, 0, 0.0605814, 8066, 8065, False, 0.0605884),
+    ("HGDP+1kGP AMR", 345, 10, 0.0623952, 8185, 8185, True, 0.0623894),
 ]
 
 
 @pytest.mark.parametrize(
-    ("panel", "n", "k", "printed", "floor", "exact_code", "stored"),
+    ("panel", "n", "k", "printed", "floor", "exact_code", "stored", "cut"),
     T_FAR_TABLE,
     ids=[f"{row[0]}-k{row[2]}" for row in T_FAR_TABLE],
 )
 def test_t_far_and_its_floor_match_the_spec_table(
-    panel: str, n: int, k: int, printed: float, floor: int, exact_code: int, stored: bool
+    panel: str,
+    n: int,
+    k: int,
+    printed: float,
+    floor: int,
+    exact_code: int,
+    stored: bool,
+    cut: float,
 ) -> None:
     del panel
     tf = fmt.t_far(n, k)
@@ -139,6 +146,9 @@ def test_t_far_and_its_floor_match_the_spec_table(
     exact = int(fmt.quantise(math.sqrt(tf)))
     assert exact == exact_code
     assert (exact >= floor) is stored
+    # A true r² just past the cut quantises to the floor; just short of it, one code below.
+    assert int(fmt.quantise(math.sqrt(cut + 5e-8))) >= floor
+    assert int(fmt.quantise(math.sqrt(cut - 5e-8))) < floor
 
 
 def test_the_epic_s_t_far_table_at_k_10() -> None:
@@ -158,7 +168,7 @@ def test_the_constants_of_t_far() -> None:
 
 @pytest.mark.parametrize(("n", "k"), [(21, 0), (31, 10), (10, 20), (771, -1), (0, 0)])
 def test_a_panel_too_small_for_t_far_below_one_is_refused(n: int, k: int) -> None:
-    # §12 far.threshold: n − k − 1 > q, so t_far < 1; and k counts covariates, so k ≥ 0.
+    # §12 provenance.threshold: n − k − 1 > q, so t_far < 1; and k counts covariates, so k ≥ 0.
     with pytest.raises(ValueError, match="n"):
         fmt.t_far(n, k)
 
