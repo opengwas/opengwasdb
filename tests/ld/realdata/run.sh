@@ -22,13 +22,15 @@ fi
 # plink2 is the independent reference; the IEU nodes keep one in opengwasdb-stores' environment.
 : "${OGLD_PLINK2:=$(command -v plink2 || echo "$HOME/repo/opengwasdb-stores/.pixi/envs/dev/bin/plink2")}"
 export OGLD_PLINK2
-# The phased HGDP+1kGP v2 EUR chr22 pgen fileset (no suffix), converted with variant IDs set, as
-# docs/spec/build-inputs.md says. A test that needs it and finds it unset fails, naming it.
-export OGLD_V2_EUR_CHR22="${OGLD_V2_EUR_CHR22:-}"
-# EUR's PC File from the recipe script; the k = 0 EUR LD Store; and #403's 37 Analyses with
-# plink2's leads (tests/realdata/test_query_panel.py says the layout). Each test that needs one
-# and finds it unset fails, naming it.
-export OGLD_EUR_PC_FILE="${OGLD_EUR_PC_FILE:-}"
+# The phased HGDP+1kGP v2 chr22 BCF and EUR's PC File, where docs/spec/build-inputs.md §10 puts
+# them on the IEU nodes (ogld#7 decides their permanent home). The suite converts its own slice
+# from the BCF with §3's flags.
+V2=/data/opengwasdb/work/ogld/phased_v2
+export OGLD_V2_EUR_CHR22="${OGLD_V2_EUR_CHR22:-$V2/hgdp1kgp_chr22.filtered.SNV_INDEL.phased.shapeit5.bcf}"
+export OGLD_EUR_PC_FILE="${OGLD_EUR_PC_FILE:-/data/opengwasdb/work/ogld/pcs/EUR.eigenvec}"
+# The k = 0 EUR LD Store and #403's 37 Analyses with plink2's leads, which ogld#6 makes
+# (tests/realdata/test_query_panel.py says the layout). A test that needs one and finds it
+# unset fails, naming it.
 export OGLD_EUR_K0_STORE="${OGLD_EUR_K0_STORE:-}"
 export OGLD_403_ANALYSES="${OGLD_403_ANALYSES:-}"
 

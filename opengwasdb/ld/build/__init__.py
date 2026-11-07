@@ -87,10 +87,11 @@ def build(inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1)
     """Build the LD Store of `inputs` at `out` and return its provenance (spec §7; ogld#5).
 
     Refuses an input with a missing call. Filters the Variant Set, then runs the PC
-    Check: a PC that one 4 Mb window explains ≥ 10% of, while the rest of the genome
-    explains it no better than chance, is local and is dropped. The covariates are the
-    first up to k PCs kept; with fewer than k, those that survive, and a refusal naming
-    how many when fewer than k_min do. It regresses them out of the standardised
+    Check (`docs/spec/build-inputs.md` §8): a PC is local, and dropped, when one 4 Mb
+    window explains ≥ 10% of it, that share beats the window-side null, and rest share /
+    window share ≤ 0.05. The covariates are the first up to k PCs kept; with fewer than k,
+    those that survive, and a refusal naming how many survived, and which were dropped,
+    when fewer than k_min do. It regresses them out of the standardised
     dosages, writes the
     Near Band exactly and the Proxy Index at t_far, and finishes through
     `StoreWriter.finish`, which validates the store. Provenance records the scan, the

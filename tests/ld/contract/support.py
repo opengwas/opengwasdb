@@ -61,10 +61,10 @@ class PanelPaths:
 
 #: The Test Panel's files, named without the loader so a build can be called before it.
 PANEL = PanelPaths(
-    pgen=TEST_PANEL / "test-panel.pgen",
-    pvar=TEST_PANEL / "test-panel.pvar",
-    psam=TEST_PANEL / "test-panel.psam",
-    keep=TEST_PANEL / "EUR.keep",
+    pgen=TEST_PANEL / "panel.pgen",
+    pvar=TEST_PANEL / "panel.pvar",
+    psam=TEST_PANEL / "panel.psam",
+    keep=TEST_PANEL / "panel.keep",
     pcs=TEST_PANEL / "pcs.eigenvec",
 )
 

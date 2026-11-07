@@ -54,36 +54,42 @@ class PcFile(TypedDict):
 
 
 class PcScan(TypedDict):
-    """One PC of the PC File, as the PC Check scanned it.
+    """One PC of the PC File, as the PC Check scanned it (`docs/spec/build-inputs.md` §8).
 
-    `window` is the 4 Mb window that explains most of the PC and `window_share` how much
-    of it; `rest_share` is how much the rest of the genome explains, and `rest_null` how
-    much it explains by chance. `local` is window_share ≥ min_share and rest_share ≤
-    rest_null: the PC is dropped. `docs/spec/build-inputs.md` defines the statistics.
+    `window` is the 4 Mb window that explains most of the PC, as `chrom:start-end`, and
+    `window_share` how much of it; `rest_share` is the mean share over every window that
+    does not overlap it, and `ratio` is rest_share / window_share. `window_null_q99` is the
+    99th percentile of the largest window share of the PC permuted across samples, the
+    threshold the window share is judged against; `rest_null_q99` is reported, and decides
+    nothing. `local` is the verdict: the PC is dropped.
     """
 
     pc: str
     window: str
     window_share: float
     rest_share: float
-    rest_null: float
+    ratio: float
     local: bool
+    window_null_q99: float
+    rest_null_q99: float
 
 
 class PcCheck(TypedDict):
-    """The PC Check's result (owner, 7 November 2026; ADR 0002).
+    """The PC Check's result: the local-PC rule (owner, 7 November 2026; ADR 0002).
 
-    A PC is local, and dropped from the covariates, when one `window_bp` window explains
-    at least `min_share` of it and the rest of the genome explains it no better than
-    chance (`PcScan.rest_null`); `null` records how chance was measured. `scan` holds every
-    PC of the PC File, in order. A build with fewer than k PCs kept is refused.
+    A PC is local, and dropped from the covariates, when all three hold: one `window_bp`
+    window explains at least `min_share` of it; that share beats `PcScan.window_null_q99`;
+    and `PcScan.ratio` ≤ `max_ratio`. `scan` holds every PC of the PC File, in order,
+    `dropped` the local ones, and `null` how chance was made (kind, permutations, seed,
+    quantile).
     """
 
     window_bp: int
     min_share: float
+    max_ratio: float
     scan: list[PcScan]
     dropped: list[str]
-    null: dict[str, float | str]
+    null: dict[str, float | int | str]
 
 
 class Adjustment(TypedDict):

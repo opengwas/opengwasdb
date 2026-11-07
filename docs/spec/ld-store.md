@@ -57,7 +57,9 @@ per (**Source Panel**, **Reference Assembly**) (ADR 0001, decision 1).
 ```
 
 `<chrom>` is the engine's canonical chromosome label (`1`–`22`, `X`, `Y`, `MT`, no `chr` prefix).
-Each chromosome of the Variant Set has its own `near/<chrom>` and `index/<chrom>` groups. Neither
+The format allows every one of them. For now a builder builds autosomes only and refuses a record
+on X, Y, a PAR or MT, because the diploid dosage model has no rule for a male's hemizygous
+genotypes (ADR 0002, decision 9, provisional with the owner). Each chromosome of the Variant Set has its own `near/<chrom>` and `index/<chrom>` groups. Neither
 component crosses a chromosome, so per-chromosome arrays lose nothing. They also let a builder
 write chromosomes in parallel: a Zarr shard is written whole, and no shard can then span two
 chromosomes.
@@ -408,7 +410,7 @@ ignores the ones it does not know. The types are `ogld.format.Provenance`, and
 | `adjustment.k_target` | int | the PCs a build aims to use: 10 by default (`BuildInputs.k`) |
 | `adjustment.k_min` | int | the fewest PCs a build may use: 5 by default (`BuildInputs.k_min`). With fewer surviving the PC Check, the build is refused |
 | `adjustment.pc_file` | object or null | the PC File (`docs/spec/build-inputs.md`): `sha256` and its declared `source`, such as the recipe script and release that made it; null when no PC File was read |
-| `adjustment.pc_check` | object or null | the PC Check's result: the rule's `window_bp` (4000000) and `min_share` (0.1); the `scan`, one entry per PC of the PC File with its best `window`, the `window_share` and `rest_share` explained, the `rest_null` the rest of the genome explains by chance, and whether it is `local` (`window_share` ≥ `min_share` and `rest_share` ≤ `rest_null`); the `dropped` PCs; and the `null` the rest of the genome was judged against (`docs/spec/build-inputs.md`). Null when no PC File was read |
+| `adjustment.pc_check` | object or null | the PC Check's result (`docs/spec/build-inputs.md` §8): the rule's `window_bp` (4000000), `min_share` (0.1) and `max_ratio` (0.05); the `scan`, one entry per PC of the PC File with its best `window`, its `window_share`, its `rest_share` (the mean share of every window that does not overlap that one), `ratio` (rest_share / window_share), `window_null_q99` (the threshold the window share must beat), `rest_null_q99` (a diagnostic) and whether it is `local` (`window_share` ≥ `min_share`, `window_share` > `window_null_q99` and `ratio` ≤ `max_ratio`); the `dropped` PCs; and the `null`, how chance was made (kind, permutations, seed, quantile). Null when no PC File was read |
 | `t_far` | float | max(0.001, q / (n − k − 1)) in float64, the value every reader uses |
 | `t_far_q` | float | 20.84: the χ²₁ upper quantile at p = 5×10⁻⁶ |
 | `far_code_floor` | int | §3 |
@@ -444,15 +446,18 @@ a format change later.
 **PCs are supplied, and the builder chooses among them** (owner, 7 November 2026; ADR 0002).
 ogld's library runs no PCA. The PCs are our own, made outside it by a recipe script that follows
 gnomAD's subcontinental method with the Long-Range LD Regions ±2 Mb excluded, and a build reads
-them from a PC File. The builder then runs the PC Check: a PC that one 4 Mb window explains
-≥ 10% of, while the rest of the genome explains it no better than chance, is local and is
-dropped. The covariates are the first up to 10 PCs kept, taken in order; if fewer than 10
+them from a PC File. The builder then runs the PC Check, the owner's local-PC rule: a PC is
+local, and dropped, when one 4 Mb window explains ≥ 10% of it, that share beats the window-side
+null, and the rest of the genome explains at most 0.05 of what that window does
+(`docs/spec/build-inputs.md` §8). The covariates are the first up to 10 PCs kept, taken in order; if fewer than 10
 survive, the build uses those that do, as long as at least 5 do, and refuses with fewer, naming
-how many survived (owner, 7 November 2026). t_far's k is the number used. So the provenance
+how many survived and which were dropped (owner, 7 November 2026). t_far's k is the number used. So the provenance
 records the target, the minimum and the k used, the PC File's
 hash and declared source and the whole scan, not a PCA method or LD pruning. A PC that tracks a
-region the rest of the genome also explains, such as EUR's north–south axis through LCT, is
-ancestry and is kept (ADR 0002 has the evidence).
+region the rest of the genome also explains, such as EUR's north–south axis through LCT (ratio
+0.104), is ancestry and is kept; an inversion's karyotype axis (ratio 0.007–0.019) is dropped
+(ADR 0002 has the evidence). The ratio cannot fall much below 5 / (n × window share), so the rule
+needs a few hundred samples: every HGDP+1kGP panel has n ≥ 345.
 
 **Genotypes are complete.** The builds read the phased HGDP+1kGP v2 callset, which has no missing
 calls, and a build refuses any input with one. So there is no imputation of missing calls and no

@@ -1,7 +1,8 @@
 """ogld#6's contract: proxies and clumping on the Test Store, with the refusals of spec §9.
 
 Expected proxies come from the Test Panel's reference r, quantised and judged on r̂² as the
-spec says. Expected clumps are plink2's leads at k = 0 (lane 2d's `clump_leads`), against a
+spec says. Expected clumps are plink2's leads at k = 0 (lane 2d's `clump_leads`), made with
+`--clump-unphased` and the settings `clump_params()` gives (p1 = p2 = 5e-8, 3,000 kb), against a
 k = 0 store the walking skeleton's `scripts/make_test_store.py` writes from `reference_r(0)`.
 """
 
@@ -21,9 +22,8 @@ from ogld.format import RefusalReason
 
 OGLD_6 = contract("ogld#6")
 
-#: The p-value threshold for an index variant in lane 2d's plink2 --clump run (--clump-p1).
-#: The 5e-8 tier, as in ogld#6; tests/data/test-panel/README.md is the authority.
-P1 = 5e-8
+#: plink2's unphased leads at r² 0.001 on the Test Panel (tests/data/test-panel/README.md).
+LEADS_R2_0_001 = {612, 421, 774, 353, 287, 703}
 
 
 @cache
@@ -162,9 +162,14 @@ def test_clump_leads_equal_plink2_s_at_k0(
 ) -> None:
     ogld.open(support.TEST_STORE)
     store = k0_store(tmp_path_factory)
-    names, score, _ = candidates(P1)
-    leads = set(store.clump(names, score, r2=r2, kb=3000).leads())
-    plink2 = set(alids(panel_data().clump_leads(r2)))
+    params = panel_data().clump_params()
+    assert params.p1 == params.p2, "with p2 = p1, plink2's leads depend only on the p1 set"
+    names, score, _ = candidates(params.p1)
+    leads = set(store.clump(names, score, r2=r2, kb=params.kb).leads())
+    golden = panel_data().clump_leads(r2)
+    if r2 == 0.001:
+        assert set(golden) == LEADS_R2_0_001, "the goldens are plink2's unphased leads"
+    plink2 = set(alids(golden))
     assert plink2, "plink2 must have found leads for this to mean anything"
     assert leads == plink2, (
         f"only ours: {sorted(leads - plink2)}; only plink2's: {sorted(plink2 - leads)}"
@@ -193,12 +198,12 @@ def test_every_member_reaches_its_lead_and_every_lead_leads_itself(
 def test_a_stricter_threshold_gives_a_prefix_of_the_leads(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    # ogld#6: the leads at p ≤ 5e-8 are the leads at p ≤ 1e-4 with p ≤ 5e-8, so the engine
+    # ogld#6: the leads at p ≤ p1 (5e-8) are the leads at p ≤ 1e-4 with p ≤ p1, so the engine
     # can store one clumping per configuration.
     ogld.open(support.TEST_STORE)
     store = k0_store(tmp_path_factory)
     loose_names, loose_score, _ = candidates(1e-4)
-    strict_names, strict_score, _ = candidates(P1)
+    strict_names, strict_score, _ = candidates(panel_data().clump_params().p1)
     assert len(loose_names) > len(strict_names), "the looser set must add variants to test"
     loose = store.clump(loose_names, loose_score, r2=0.01, kb=3000).leads()
     strict = store.clump(strict_names, strict_score, r2=0.01, kb=3000).leads()

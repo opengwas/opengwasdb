@@ -4,8 +4,9 @@
 > upstream half is settled as a Proxy Index; a matrix query returns NaN for an unstored pair and a
 > number only through the caller's `fill`; and the PC part of decision 4 is superseded by
 > [ADR 0002](./0002-build-inputs.md): the PCs are our own, computed outside ogld with the
-> Long-Range LD Regions excluded, and the builder drops local PCs. The decisions below stand as
-> written otherwise.
+> Long-Range LD Regions excluded, and the builder drops local PCs. Decision 5 holds for every
+> non-public panel; the public Test Panel slice is committed. The decisions below stand as written
+> otherwise.
 
 Issue [#2](https://github.com/opengwas/ogld/issues/2), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 This ADR records the owner's decisions of 7 November 2026 (epic #1, "Decisions already taken"),
@@ -196,8 +197,9 @@ t_far = 0.001, on UK Biobank EUR.
 the owner's later decisions the same day on lane 2d's measurements). ogld's library runs no PCA.
 The PCs are computed outside it by a recipe script that follows gnomAD's subcontinental method with
 the Long-Range LD Regions ±2 Mb excluded from the PCA, and a build reads them from a PC File. The
-builder's PC Check drops a local PC: one that a single 4 Mb window explains ≥ 10% of while the rest
-of the genome explains it no better than chance. The covariates are the first up to 10 PCs it
+builder's PC Check drops a local PC by the owner's rule: one 4 Mb window explains ≥ 10% of it,
+that share beats the window-side null, and the rest of the genome explains at most 0.05 of what
+that window does. The covariates are the first up to 10 PCs it
 keeps; if fewer survive, those that do, as long as at least 5 do, and the build is refused
 otherwise. t_far's k is the number used, and provenance records the target, the minimum, the k
 used, the scan, the dropped PCs and the null. Decision 4's "The PCs come from
@@ -215,6 +217,13 @@ imputation and no call-rate filter.
 epic, and the format allows it now. Each store records its source kind (genotypes or an imported
 LD matrix), every covariate it adjusted for by name, with t_far's k counting them, and the
 distances it measured: 3 Mb near, and at most 10 Mb far (`docs/spec/ld-store.md` §7).
+
+**Decision 5 and the Test Panel** (owner, 7 November 2026). The owner approved committing the
+Test Panel, a public slice of HGDP+1kGP v2 chr21 and chr22 for the 771 EUR samples, to this
+repository as test data. HGDP+1kGP's genotypes are already public under gnomAD's terms, so this
+does not touch decision 5, which still holds for every non-public Source Panel, such as UK
+Biobank: its genotypes never leave the host they are on. ADR 0002, decision 7, records the same
+from the build inputs' side.
 
 **Panel sizes** (the same later decisions). The phased v2 callset has fewer samples in three
 panels: AFR 801, EAS 816 and SAS 782, against decision 3's table's 804, 817 and 783 (EUR 771 and

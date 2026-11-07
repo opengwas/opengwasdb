@@ -5,9 +5,11 @@ against plink2's `--r-unphased` at k = 0 by tests/test_testdata.py. The builder 
 within the quantisation step: in the Near Band pair by pair, and in which pairs beyond 3 Mb
 it keeps, except where a pair's code lies on the far code floor's rounding edge.
 
-The builder also refuses an input with a missing call, and its PC Check drops a local PC,
-keeps one the rest of the genome explains, and uses the first up to 10 PCs kept, refusing
-with fewer than 5 (owner, 7 November 2026; ADR 0002).
+The builder also refuses an input with a missing call, and its PC Check (the owner's
+local-PC rule, `docs/spec/build-inputs.md` §8) drops a Local PC, keeps a PC with a strong
+window that the rest of the genome also explains, and uses the first up to 10 PCs kept,
+refusing with fewer than 5 (owner, 7 November 2026; ADR 0002). The hand-built PCs use the
+Test Panel's 771 samples: the ratio cannot drop any PC below about 100.
 
 Every test calls `ogld.build` before it reads the Test Panel: a build is given `PANEL`'s
 paths, which need no loader, and each k is built once per worker (`built`). The tests that
@@ -134,7 +136,7 @@ def test_the_provenance_records_what_was_built(tmp_path_factory: pytest.TempPath
     assert pc_file["source"]
     check = adjustment["pc_check"]
     assert check is not None
-    names, _, _ = read_pcs(PANEL.pcs)
+    names = list(panel_data().pcs().names)
     assert [scan["pc"] for scan in check["scan"]] == names
     kept = [name for name in names if name not in check["dropped"]]
     assert adjustment["covariates"] == kept[:10]
@@ -230,72 +232,70 @@ def write_pgen(genotypes: npt.NDArray[np.int8], prefix: Path) -> Path:
     return pgen
 
 
-def read_pcs(path: Path) -> tuple[list[str], list[str], npt.NDArray[np.float64]]:
-    """A PC File's PC names, each row's IID, and its values."""
-    lines = path.read_text().splitlines()
-    header = lines[0].lstrip("#").split()
-    n_id = sum(not column.startswith("PC") for column in header)
-    rows = [line.split() for line in lines[1:]]
-    values = np.array([[float(x) for x in row[n_id:]] for row in rows])
-    return header[n_id:], [row[n_id - 1] for row in rows], values
-
-
 def psam_iids(path: Path) -> list[str]:
     lines = path.read_text().splitlines()
     header = lines[0].lstrip("#").split()
     return [line.split()[header.index("IID")] for line in lines[1:]]
 
 
-def window_axes() -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """The genotype axis of chr22's densest 4 Mb window, and of chr21's, in PC File order.
+def standard(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    return (x - x.mean()) / x.std()
 
-    Each axis is the first principal component of its window's standardised genotypes.
+
+def local_axis() -> npt.NDArray[np.float64]:
+    """The genotype axis of chr22's densest 2 Mb stretch, in the PC File's sample order.
+
+    The first principal component of the stretch's standardised genotypes. A stretch of at
+    most 2 Mb lies wholly in one of the PC Check's windows (4 Mb stepped by 2 Mb), so that
+    window explains most of the axis and the rest of the genome about what chance does.
     """
     v = panel_data().variants()
-    genotypes = read_genotypes(PANEL.pgen).astype(np.float64)
-    order = [psam_iids(PANEL.psam).index(iid) for iid in read_pcs(PANEL.pcs)[1]]
-    axes = []
-    for chrom in ("22", "21"):
-        rows = passing_rows()[v.chrom[passing_rows()] == chrom]
-        pos = v.pos[rows].astype(np.int64)
-        counts = np.searchsorted(pos, pos + 4_000_000, side="left") - np.arange(len(pos))
-        start = int(np.argmax(counts))
-        window = rows[start : start + int(counts[start])]
-        assert len(window) >= 20, f"the Test Panel must hold a dense 4 Mb window on chr{chrom}"
-        z = genotypes[window].T
-        z = (z - z.mean(axis=0)) / z.std(axis=0)
-        axes.append(np.linalg.svd(z, full_matrices=False)[0][:, 0][order])
-    return axes[0], axes[1]
+    rows = passing_rows()[v.chrom[passing_rows()] == "22"]
+    pos = v.pos[rows]
+    counts = np.searchsorted(pos, pos + 2_000_000, side="left") - np.arange(len(pos))
+    start = int(np.argmax(counts))
+    stretch = rows[start : start + int(counts[start])]
+    assert len(stretch) >= 100, "the Test Panel must hold a dense 2 Mb stretch on chr22"
+    z = read_genotypes(PANEL.pgen)[stretch].astype(np.float64).T
+    z = (z - z.mean(axis=0)) / z.std(axis=0)
+    axis = np.linalg.svd(z, full_matrices=False)[0][:, 0]
+    order = [psam_iids(PANEL.psam).index(iid) for iid in panel_data().pcs().iids]
+    return standard(axis[order])
+
+
+def ancestry_pcs(count: int) -> list[npt.NDArray[np.float64]]:
+    """The Test Panel's own PC1…PC<count>, which its PC Check keeps (manifest `pc_check`)."""
+    values = panel_data().pcs().values
+    return [values[:, i] for i in range(count)]
 
 
 def pc_file(tmp_path: Path, columns: list[npt.NDArray[np.float64]]) -> Path:
     """A PC File of `columns`, PC1 first, for the Test Panel's samples."""
-    _, iids, _ = read_pcs(PANEL.pcs)
     out = tmp_path / "pcs.eigenvec"
-    header = ["#IID", *[f"PC{i}" for i in range(1, len(columns) + 1)]]
-    lines = ["\t".join(header)]
-    for row, iid in enumerate(iids):
+    lines = ["\t".join(["#IID", *[f"PC{i}" for i in range(1, len(columns) + 1)]])]
+    for row, iid in enumerate(panel_data().pcs().iids):
         lines.append("\t".join([iid, *(f"{column[row]:.8g}" for column in columns)]))
     out.write_text("\n".join(lines) + "\n")
     return out
 
 
-def ancestry_pcs(count: int) -> list[npt.NDArray[np.float64]]:
-    """The Test Panel's own PC1…PC<count>: ancestry PCs."""
-    _, _, values = read_pcs(PANEL.pcs)
-    return [values[:, i] for i in range(count)]
-
-
 def scan_of(provenance: ogld.Provenance) -> tuple[dict[str, dict[str, Any]], list[str]]:
-    """The PC Check's scan by PC, and its dropped PCs, each held to the rule."""
+    """The PC Check's scan by PC, and its dropped PCs, each held to the owner's rule."""
     check = provenance["adjustment"]["pc_check"]
     assert check is not None
-    assert (check["window_bp"], check["min_share"]) == (4_000_000, 0.1)
-    assert check["null"], "the null the rest of the genome was judged against is recorded"
+    rule = (check["window_bp"], check["min_share"], check["max_ratio"])
+    assert rule == (4_000_000, 0.1, 0.05)
+    assert check["null"], "how chance was made is recorded"
     for scan in check["scan"]:
-        rule = scan["window_share"] >= 0.1 and scan["rest_share"] <= scan["rest_null"]
-        assert scan["local"] is rule, f"{scan['pc']}: the scan disagrees with the rule"
+        assert scan["ratio"] == pytest.approx(scan["rest_share"] / scan["window_share"], rel=1e-9)
+        local = (
+            scan["window_share"] >= check["min_share"]
+            and scan["window_share"] > scan["window_null_q99"]
+            and scan["ratio"] <= check["max_ratio"]
+        )
+        assert scan["local"] is local, f"{scan['pc']}: the scan disagrees with the rule"
         assert (scan["pc"] in check["dropped"]) is scan["local"]
+        assert isinstance(scan["rest_null_q99"], float), "reported, deciding nothing"
     return {scan["pc"]: dict(scan) for scan in check["scan"]}, list(check["dropped"])
 
 
@@ -316,28 +316,36 @@ def test_an_input_with_a_missing_call_is_refused(
 
 
 @OGLD_5
-def test_a_local_pc_is_dropped_and_a_pc_the_rest_explains_is_kept(
+def test_a_local_pc_is_dropped_and_an_ancestry_pc_with_a_strong_window_is_kept(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
     built(10, tmp_path_factory)
-    chr22, chr21 = window_axes()
-    # PC1 is one window's axis: that window explains it and the rest only by chance.
-    # PC2 is two windows' axes on two chromosomes: one window explains about half of it,
-    # and so does the rest of the genome, as it would an ancestry PC.
-    two_regions = (chr22 / chr22.std() + chr21 / chr21.std()) / np.sqrt(2)
-    pcs = pc_file(tmp_path, [chr22, two_regions, *ancestry_pcs(20)])
+    axis = local_axis()
+    ancestry = standard(ancestry_pcs(1)[0])
+    # An SVD's sign is arbitrary, and the axis correlates about −0.2 with ancestry PC1, so
+    # fix its sign: the mix below then has the same shares on every implementation.
+    if np.corrcoef(axis, ancestry)[0, 1] > 0:
+        axis = -axis
+    # PC1 is one stretch's axis: its window explains most of it, the rest only by chance.
+    # PC2 is the Test Panel's ancestry PC1 with 30% of its variance from that axis, as EUR's
+    # PC2 carries LCT: one window explains much of it, and so does the rest of the genome.
+    # Lane 2d's reference scan (scripts/test_panel/pc_check.py) gives PC1 a window share of
+    # 0.999 at a ratio of 0.009, and PC2 0.203 at 0.142: each clear of its bar by about 2x.
+    mixed = np.sqrt(0.3) * axis + np.sqrt(0.7) * ancestry
+    pcs = pc_file(tmp_path, [axis, mixed, *ancestry_pcs(20)])
     provenance = ogld.build(inputs(10, pcs=pcs), tmp_path / "store")
     scans, dropped = scan_of(provenance)
     local, kept = scans["PC1"], scans["PC2"]
     assert local["window_share"] >= 0.1
-    assert local["rest_share"] <= local["rest_null"]
-    assert "PC1" in dropped
-    assert kept["window_share"] >= 0.1, "the second half of the rule must be what keeps PC2"
-    assert kept["rest_share"] > kept["rest_null"]
-    assert "PC2" not in dropped
+    assert local["window_share"] > local["window_null_q99"]
+    assert local["ratio"] <= 0.05
+    assert dropped == ["PC1"]
+    assert kept["window_share"] >= 0.1, "the first two conditions hold for PC2 too"
+    assert kept["window_share"] > kept["window_null_q99"]
+    assert kept["ratio"] > 0.05, "so the ratio is what keeps it"
     covariates = provenance["adjustment"]["covariates"]
-    assert covariates[:2] == ["PC2", "PC3"], "PC2 and the Test Panel's ancestry PC1 are kept"
-    assert provenance["adjustment"]["k"] == len(covariates) == 10
+    assert covariates == [f"PC{i}" for i in range(2, 12)]
+    assert provenance["adjustment"]["k"] == 10
 
 
 @OGLD_5
@@ -346,8 +354,7 @@ def test_seven_surviving_pcs_are_used_with_t_far_at_k7(
 ) -> None:
     # Owner, 7 November 2026: the first up to 10 PCs kept; fewer are used if at least 5 are.
     built(10, tmp_path_factory)
-    chr22, _ = window_axes()
-    pcs = pc_file(tmp_path, [chr22, *ancestry_pcs(7)])
+    pcs = pc_file(tmp_path, [local_axis(), *ancestry_pcs(7)])
     provenance = ogld.build(inputs(10, pcs=pcs), tmp_path / "store")
     _, dropped = scan_of(provenance)
     assert dropped == ["PC1"]
@@ -363,8 +370,9 @@ def test_fewer_than_five_surviving_pcs_are_refused(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
     built(10, tmp_path_factory)
-    chr22, _ = window_axes()
-    pcs = pc_file(tmp_path, [chr22, *ancestry_pcs(4)])
+    pcs = pc_file(tmp_path, [local_axis(), *ancestry_pcs(4)])
     with pytest.raises(ogld.InputError, match=r"\b4\b") as refused:
         ogld.build(inputs(10, pcs=pcs), tmp_path / "store")
-    assert "5" in str(refused.value), "it names the minimum it needed"
+    message = str(refused.value)
+    assert "5" in message, "it names the minimum it needed"
+    assert "PC1" in message, "it names the dropped PC"
