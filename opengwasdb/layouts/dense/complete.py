@@ -463,7 +463,9 @@ def _orient_panel_alid(alid: str) -> CanonicalVariant | None:
         return None
     chrom, pos_str, a1, a2 = parts
     try:
-        cv_result = orient_to_canonical(chrom, int(pos_str), a1, a2)
+        # A canonical ALID read back keeps its order: A1 is the reference of an
+        # indel (ADR 0079), and an SNV's pair is already sorted.
+        cv_result = orient_to_canonical(chrom, int(pos_str), a2, a1, other_is_reference=True)
     except (VariantNormalisationError, ValueError):
         return None
     return cv_result.variant

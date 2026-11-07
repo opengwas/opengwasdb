@@ -33,6 +33,7 @@ from opengwasdb.model.enums import (
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     UnsupportedFormatVersion,
+    indels_reference_first,
     open_store,
 )
 from opengwasdb.top_hits import threshold_key
@@ -402,8 +403,16 @@ def _unnamed_units(
     return [_Unit(None, path, _is_vcf_path(path)) for path in paths]
 
 
-def _stream_unit(unit: _Unit) -> Iterator[tuple[str, str, int, str, str, float, float]]:
-    """Yield canonical (analysis_id, chrom, pos, a1, a2, z, se) from one source."""
+def _stream_unit(
+    unit: _Unit, *, reference_first: bool
+) -> Iterator[tuple[str, str, int, str, str, float, float]]:
+    """Yield canonical (analysis_id, chrom, pos, a1, a2, z, se) from one source.
+
+    ``reference_first`` is whether the Store spells an indel's ALID reference
+    first (`indels_reference_first`, ADR 0079). A Store before it sorts an
+    indel's alleles, so a deletion is spelt, and its z signed, as that Store
+    spells it: alleles sorted, z negated with them.
+    """
     from opengwasdb.model.enums import StoredEffectScale
     from opengwasdb.readers.association_tsv import ASSOCIATION_TSV_CAPABILITY
     from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
@@ -423,14 +432,17 @@ def _stream_unit(unit: _Unit) -> Iterator[tuple[str, str, int, str, str, float, 
         _chrom, _pos, a1, a2 = canonical_alid(
             association.chromosome, association.position, association.ref, association.alt
         ).split(":")
+        z = association.z
+        if not reference_first and a2 < a1:
+            a1, a2, z = a2, a1, -z
         se = association.se
         if se_divisor != 1.0:
             se = float(apply_se_divisor(np.array([se], dtype=np.float32), se_divisor)[0])
-        yield (analysis_id, association.chromosome, association.position, a1, a2, association.z, se)
+        yield (analysis_id, association.chromosome, association.position, a1, a2, z, se)
 
 
 def _sample_sources(
-    units: list[_Unit], n_samples: int, rng: np.random.Generator
+    units: list[_Unit], n_samples: int, rng: np.random.Generator, *, reference_first: bool
 ) -> list[tuple[str, str, int, str, str, float, float]]:
     """Reservoir-sample up to ``n_samples`` associations across a random subset
     of source files (scan-capped per file so cost stays bounded)."""
@@ -441,7 +453,7 @@ def _sample_sources(
     seen = 0
     for u in order:
         scanned = 0
-        for item in _stream_unit(units[int(u)]):
+        for item in _stream_unit(units[int(u)], reference_first=reference_first):
             seen += 1
             scanned += 1
             if len(reservoir) < n_samples:
@@ -485,6 +497,7 @@ def _draw_fidelity_samples(
     *,
     n_samples: int,
     seed: int,
+    reference_first: bool,
 ) -> list[_FidelitySample] | None:
     """Sampling phase: deterministically reservoir-sample source associations.
 
@@ -499,7 +512,9 @@ def _draw_fidelity_samples(
         errors.append("source-fidelity: the source names no Analysis to check the store against")
     if errors or not units:
         return None
-    samples = _sample_sources(units, n_samples, np.random.default_rng(seed))
+    samples = _sample_sources(
+        units, n_samples, np.random.default_rng(seed), reference_first=reference_first
+    )
     if not samples:
         errors.append("source-fidelity: no associations could be read from the source")
         return None
@@ -694,7 +709,13 @@ def _validate_source_fidelity(
     resolution (assembly-dependent), Analysis matching, block comparison, and
     mismatch reporting -- each of which guards the read in front of it.
     """
-    samples = _draw_fidelity_samples(source, errors, n_samples=n_samples, seed=seed)
+    samples = _draw_fidelity_samples(
+        source,
+        errors,
+        n_samples=n_samples,
+        seed=seed,
+        reference_first=indels_reference_first(store.manifest.format_version),
+    )
     if samples is None:
         return
     store_asm = _normalise_assembly(store.manifest.reference_assembly)

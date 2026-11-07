@@ -6,9 +6,11 @@ an association a Store can hold at all, then the filters the Analysis declared:
 
 0. a malformed identity, which no ALID can spell: a missing chromosome
    (`chromosome_missing`: an empty cell, `.`, `NA`), then an allele outside
-   A, C, G and T (`allele_invalid`). The Source Reader finds these as it forms
-   the row's identity (`variants.normalise.MalformedIdentity`), drops the row
-   and reports it, the same on every reader;
+   A, C, G and T (`allele_invalid`), then an indel whose source declares no
+   reference allele (`indel_reference_undeclared`), since an indel's ALID
+   spells its reference first (ADR 0079). The Source Reader finds these as it
+   forms the row's identity (`variants.normalise.MalformedIdentity`), drops
+   the row and reports it, the same on every reader;
 1. an unusable reported SE (`se_unusable`): missing, not positive, or not
    finite;
 2. no effect (`effect_missing`): a usable SE beside a z the source gave no
@@ -42,11 +44,12 @@ After the rules, a row is judged against the other rows that reach its place
 on the Variant Index. Rows that agree on z and SE are one association and
 collapse to the first (`duplicate_collapsed`); rows that disagree are all
 dropped (`duplicate_conflicting`), since nothing says which is right. The one
-exception is a reversed indel: an insertion and a deletion at one position
-share an ALID, because the ALID sorts its alleles, so when the source declares
-which allele is the reference, and the place's distinct rows (agreeing copies
-collapsed) are one spelling it first and one second, the first is kept and the
-second dropped (`duplicate_reversed_indel`). A row whose
+exception, a reversed indel (`duplicate_reversed_indel`), kept the row whose
+declared reference allele a sorted ALID spelt first (#357). Now that an
+indel's ALID spells its reference first (ADR 0079), an insertion and a
+deletion at one position are two variants, and an indel no source declares a
+reference for never reaches a place, so no build drops a row for it; the
+reason stays readable in a record written before. A row whose
 variant no axis of the Store holds is dropped too (`off_axis`), where a build
 has nowhere else to put it. A build that lifts a source onto the Store's
 assembly drops the rows of a site its chain places nowhere (`lift_unmapped`),
@@ -78,7 +81,7 @@ from opengwasdb.build.info_score_filter import (
 )
 from opengwasdb.model.info_score_policy import InfoScorePolicy
 from opengwasdb.model.maf_policy import MafPolicy, MafState
-from opengwasdb.variants.normalise import InvalidAllele, MissingChromosome
+from opengwasdb.variants.normalise import InvalidAllele, MissingChromosome, UndeclaredReference
 
 __all__ = [
     "LOGGED",
@@ -98,6 +101,9 @@ class Reason(StrEnum):
     CHROMOSOME_MISSING = MissingChromosome.reason
     #: A row with an allele outside the ALID alphabet (#365).
     ALLELE_INVALID = InvalidAllele.reason
+    #: An indel whose source declares neither allele the genome's reference, so
+    #: no ALID can spell it reference first (#381, ADR 0079).
+    INDEL_REFERENCE_UNDECLARED = UndeclaredReference.reason
     SE_UNUSABLE = "se_unusable"
     EFFECT_MISSING = "effect_missing"
     Z_NONFINITE = "z_nonfinite"
@@ -129,6 +135,7 @@ LOGGED: frozenset[Reason] = frozenset(
     {
         Reason.CHROMOSOME_MISSING,
         Reason.ALLELE_INVALID,
+        Reason.INDEL_REFERENCE_UNDECLARED,
         Reason.SE_UNUSABLE,
         Reason.EFFECT_MISSING,
         Reason.Z_NONFINITE,

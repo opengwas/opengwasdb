@@ -18,16 +18,25 @@ from __future__ import annotations
 import gzip
 import math
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from opengwasdb.readers.gwas_ssf import _METRICS_COLUMNS
+from opengwasdb.readers.gwas_ssf import _METRICS_COLUMNS as _SSF_COLUMNS
 from opengwasdb.readers.orientation import is_palindromic
 from opengwasdb.readers.tabular import (
+    DeclaredReference,
     MetricsChunk,
     stream_projected_metric_chunks,
     stream_projected_metrics,
+)
+
+#: GWAS-SSF's columns, read with a per-row declaration of the reference: a row
+#: whose `hm_code` is 11 declares its `other_allele` the reference. Both paths
+#: must apply it alike, whichever rows a reader's declaration names (ADR 0079).
+_METRICS_COLUMNS = replace(
+    _SSF_COLUMNS, reference=DeclaredReference(column=b"hm_code", codes=frozenset({b"11"}))
 )
 
 _HEADER = (
@@ -93,25 +102,31 @@ def _assert_parity(path: Path, *, chunk_rows: int = 1_000_000, expected_rows: in
 
 
 def _ordinary_rows() -> list[list[str]]:
-    """Normalisation, orientation, missing values and dropped rows."""
+    """Normalisation, orientation, missing values and dropped rows, each with
+    its harmoniser code (`hm_code`)."""
     return [
-        ["1", "100", "A", "G", "0.2", "0.1", "0.05"],
-        ["chr2", "200", "C", "G", "0.3", "NA", "0.08"],  # palindromic, se absent
-        ["3", "300", "a", "c", "0.4", "0.2", "0.03"],  # lower case, flipped identity
-        ["4", "400", "AT", "A", "0.5", "0.3", "0.04"],  # indel via normalise_allele
-        ["5", "500", "G", "G", ".", "", "inf"],  # identical alleles: dropped
-        ["6", "0", "A", "C", "0.1", "0.1", "0.1"],  # non-positive position: dropped
-        ["X", "600", "T", "A", "0.6", "0.1", "0.02"],
-        ["7", "700", "N", "A", "0.1", "0.1", "0.1"],  # invalid allele: dropped
-        ["8", "800", "A", "C", "nan", "0.1", "0.0"],
-        ["8", "800", "A", "C", "0.25", "0.1", "0.0"],  # duplicate ALID
+        ["1", "100", "A", "G", "0.2", "0.1", "0.05", "10"],
+        ["chr2", "200", "C", "G", "0.3", "NA", "0.08", "10"],  # palindromic, se absent
+        ["3", "300", "a", "c", "0.4", "0.2", "0.03", "10"],  # lower case, flipped identity
+        ["4", "400", "AT", "A", "0.5", "0.3", "0.04", "11"],  # declared insertion
+        ["4", "450", "A", "AT", "0.5", "0.3", "0.04", "11"],  # declared deletion, ref first
+        ["4", "460", "AT", "A", "0.5", "0.3", "0.04", "10"],  # an undeclared indel: dropped
+        ["5", "500", "G", "G", ".", "", "inf", "10"],  # identical alleles: dropped
+        ["6", "0", "A", "C", "0.1", "0.1", "0.1", "10"],  # non-positive position: dropped
+        ["X", "600", "T", "A", "0.6", "0.1", "0.02", "10"],
+        ["7", "700", "N", "A", "0.1", "0.1", "0.1", "10"],  # invalid allele: dropped
+        ["8", "800", "A", "C", "nan", "0.1", "0.0", "10"],
+        ["8", "800", "A", "C", "0.25", "0.1", "0.0", "10"],  # duplicate ALID
     ]
 
 
 def test_ordinary_projection_parity(tmp_path: Path) -> None:
-    path = _write(tmp_path / "ordinary.tsv.gz", _HEADER, _ordinary_rows())
+    path = _write(tmp_path / "ordinary.tsv.gz", [*_HEADER, "hm_code"], _ordinary_rows())
 
-    _assert_parity(path, expected_rows=7)
+    _assert_parity(path, expected_rows=8)
+    alids = [row[0] for row in _row_wise(path)]
+    assert "4:400:A:AT" in alids and "4:450:AT:A" in alids
+    assert not any(alid.startswith("4:460:") for alid in alids)
 
 
 def test_odds_ratio_projection_parity(tmp_path: Path) -> None:
@@ -308,10 +323,10 @@ def test_block_size_does_not_change_the_projection(tmp_path: Path, chunk_rows: i
     wrong.
     """
     rows = [
-        [str(1 + index % 22), str(100 + index), allele, "C", "0.1", "0.05", "0.2"]
+        [str(1 + index % 22), str(100 + index), allele, "C", "0.1", "0.05", "0.2", "11"]
         for index, allele in enumerate(["A", "G", "T", "AT", "N", "a", "c"] * 3)
     ]
-    path = _write(tmp_path / "blocked.tsv.gz", _HEADER, rows)
+    path = _write(tmp_path / "blocked.tsv.gz", [*_HEADER, "hm_code"], rows)
 
     _assert_parity(path, chunk_rows=chunk_rows, expected_rows=15)
 

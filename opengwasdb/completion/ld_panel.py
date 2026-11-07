@@ -48,10 +48,17 @@ def canonical_panel_alid(snp_id: str) -> str | None:
     """Normalise an LD-panel SNP id to a canonical store ALID (``chr:pos:a1:a2``).
 
     Handles both the legacy ``[chr]CHR:POS_REF_ALT`` form (underscores, as in the
-    UKB EUR panel) and an already-colon-delimited ``CHR:POS:A1:A2`` form, orienting
-    alleles to the canonical A1 = min(ref, alt). Returns None for ids that don't
+    UKB EUR panel) and an already-colon-delimited ``CHR:POS:A1:A2`` form, sorting
+    the alleles of an SNV or a substitution. Returns None for ids that don't
     parse — callers treat that as "not matchable" rather than an error, so a panel
     carrying a stray malformed row does not fail a whole block.
+
+    An indel is None too. Its ALID spells the reference allele first (ADR 0079),
+    and no panel id says which allele that is: every panel on the host writes
+    the pair sorted, whatever the genome's reference (issue #381). Spelt
+    sorted, a panel deletion would be a second ALID beside a source's
+    reference-first one; spelt by a guess, a fill would be stored for the
+    wrong variant. So completion neither matches nor fills a panel indel.
     """
     s = _strip_chr(snp_id)
     parts = s.split(":")
@@ -63,7 +70,9 @@ def canonical_panel_alid(snp_id: str) -> str | None:
     else:
         return None
     try:
-        return orient_to_canonical(chrom, int(pos_s), ref, alt).variant.alid
+        return orient_to_canonical(
+            chrom, int(pos_s), alt, ref, other_is_reference=False
+        ).variant.alid
     except (VariantNormalisationError, ValueError):
         return None
 

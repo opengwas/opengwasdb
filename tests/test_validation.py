@@ -219,8 +219,8 @@ def test_the_zarr_format_rule_reports_nodes_in_name_order(
 
     assert result.failed() == {"zarr.format"}
     assert result.errors == [
-        f"data.zarr/{node}: Zarr v2 metadata ['.zarray'] under format_version 0.2.0; a "
-        "0.2.0 release is Zarr v3, and a half-converted release is invalid (issue #245)"
+        f"data.zarr/{node}: Zarr v2 metadata ['.zarray'] under format_version 0.2.1; a "
+        "0.2.1 release is Zarr v3, and a half-converted release is invalid (issue #245)"
         for node in ("se", "z")
     ]
 

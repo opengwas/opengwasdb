@@ -13,8 +13,10 @@ batches, so a worker never holds a genome-wide source as Python lists, and
 returns each axis's rows with each index's duplicates resolved
 (`collapse_duplicates`): rows that agree collapse to the first, and rows that
 disagree are all dropped, since no row says which is right -- unless they are
-an insertion and a deletion whose source declares which allele is the
-reference, when the row whose reference allele the ALID spells first is kept.
+a reversed indel (#357): an insertion and a deletion whose source declares
+which allele is the reference, when the row whose reference allele the ALID
+spells first is kept. An indel's ALID spells its reference first (ADR 0079),
+so no reader's rows meet that case any more.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ from opengwasdb.readers.interface import (
     ReaderAssociation,
     ReferenceAllele,
 )
-from opengwasdb.variants.normalise import identity_allele
+from opengwasdb.variants.normalise import ref_is_a1
 from opengwasdb.variants.routing.keys import SourceKey, encode_routing_keys, routing_key
 
 log = logging.getLogger(__name__)
@@ -47,8 +49,9 @@ _RESOLVE_BATCH = 250_000
 _Columns = tuple[list[str], list[int], list[str], list[str], list[float], list[float], list[float]]
 
 
-#: Where a row's declared reference allele sits among the sorted alleles of
-#: the ALID it reaches. `REFERENCE_UNKNOWN` when its source declares no
+#: Where a row's declared reference allele sits among the alleles of the ALID
+#: it reaches (`allele_order`): first, for every indel whose `ref` its source
+#: declares (ADR 0079). `REFERENCE_UNKNOWN` when its source declares no
 #: reference, or its two alleles are one length, so nothing tells two rows of
 #: the ALID apart; `REFERENCE_FIRST` when the ALID spells the reference allele
 #: first, which for an anchored indel is the insertion; `REFERENCE_SECOND`
@@ -74,16 +77,17 @@ def _empty_reference() -> np.ndarray:
 
 
 def allele_order(ref: str, alt: str) -> int:
-    """Where ``ref`` sits among the ALID's sorted alleles, for an indel.
+    """Where ``ref`` sits among the alleles of the ALID ``ref`` and ``alt`` form, for an indel.
 
     `REFERENCE_UNKNOWN` for alleles of one length (an SNV or MNV, where two
     rows at one ALID are one variant seen from opposite alleles); otherwise
-    `REFERENCE_FIRST` or `REFERENCE_SECOND`, by `canonical_alid`'s sort.
+    `REFERENCE_FIRST` or `REFERENCE_SECOND`, by `ref_is_a1`. An indel's ALID
+    spells its reference first (ADR 0079), so a row whose `ref` is its
+    declared reference is always `REFERENCE_FIRST`.
     """
     if len(ref) == len(alt):
         return REFERENCE_UNKNOWN
-    first = identity_allele(ref) < identity_allele(alt)
-    return REFERENCE_FIRST if first else REFERENCE_SECOND
+    return REFERENCE_FIRST if ref_is_a1(ref, alt) else REFERENCE_SECOND
 
 
 def reference_codes(declared: np.ndarray, order: np.ndarray) -> np.ndarray:
@@ -223,10 +227,12 @@ def collapse_duplicates(
     rows disagree keeps none of them, because nothing in the rows says which
     is right.
 
-    Except a reversed indel. An insertion and a deletion at one position share
-    an ALID, because the ALID sorts its alleles: `G>GGGGCC` and `GGGGCC>G` are
-    both `1:827587:G:GGGGCC`, two alleles of a repeat rather than one variant
-    seen from both sides. ``reference`` is each row's `REFERENCE_*` code.
+    Except a reversed indel. Before ADR 0079 an insertion and a deletion at one
+    position shared an ALID, because the ALID sorted its alleles: `G>GGGGCC`
+    and `GGGGCC>G` were both `1:827587:G:GGGGCC`, two alleles of a repeat
+    rather than one variant seen from both sides. Spelt reference first they
+    are two places, so no reader's rows meet this case; it stays for a row
+    whose codes say otherwise. ``reference`` is each row's `REFERENCE_*` code.
     Agreeing copies collapse first, so the rule judges a place's distinct
     rows: when every row declares its reference allele and the distinct rows
     are two, one spelling it first and one second, the first is kept, the

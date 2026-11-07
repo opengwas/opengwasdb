@@ -796,7 +796,10 @@ def _merged_axis(state: _SourceState, new_alids: set[str]) -> _MergedAxis:
             if len(parts) != 4:
                 continue
             chrom, pos_str, a1, a2 = parts
-            cv_result = orient_to_canonical(chrom, int(pos_str), a1, a2)
+            # A panel ALID keeps its order (ADR 0079), as the source's do.
+            cv_result = orient_to_canonical(
+                chrom, int(pos_str), a2, a1, other_is_reference=True
+            )
             if cv_result.variant.alid not in source_alids:
                 new_variants.append(cv_result.variant)
         except (VariantNormalisationError, ValueError):

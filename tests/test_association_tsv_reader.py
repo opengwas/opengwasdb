@@ -24,7 +24,8 @@ from opengwasdb.readers.registry import known_capabilities, resolve_reader
 
 #: Associations in each of the shapes the format reads: aliased columns, a flipped
 #: effect allele, an effect from beta, a missing, zero and unusable SE, lower-case
-#: alleles, an indel, and a frequency the source reports outside (0, 1).
+#: alleles, an indel, and a frequency the source reports outside (0, 1). The
+#: format declares no reference allele, so the indel names no ALID (ADR 0079).
 CASES = (
     "chrom\tpos\tea\toa\tz\tbeta\tstandard_error\teffect_allele_frequency\tvariant_id\n"
     "1\t100\tA\tG\t2.0\t\t0.1\t0.3\trs1\n"
@@ -42,7 +43,8 @@ CASES = (
 #: read through a Source Reader (00e91b1's `read_normalised_associations`) gave for
 #: `CASES`, with one difference in where a rule lives: that loop passed a
 #: frequency outside (0, 1) on and the build made it absent (D7), where the reader
-#: now makes it absent as every reader does.
+#: now makes it absent as every reader does; and since #381 the indel `4:700`,
+#: which the loop stored sorted as `4:700:A:AT`, is dropped and named.
 EXPECTED = (
     ("1:100:A:G", 2.0, 0.1, 0.3, "rs1"),
     ("1:200:C:T", -3.0, 0.2, 0.9, "rs2"),
@@ -50,7 +52,6 @@ EXPECTED = (
     ("2:400:C:T", -4.0, 0.1, None, "rs4"),
     ("3:500:A:G", 1.5, math.nan, None, ""),
     ("3:600:C:G", math.nan, 0.0, 0.5, "rs6"),
-    ("4:700:A:AT", 2.0, 0.3, None, "rs7"),
     ("X:800:G:T", 4.0, 0.5, None, "rs8"),
     ("5:900:C:G", math.inf, 0.5, 0.2, "rs9"),
 )
@@ -103,8 +104,10 @@ def test_the_reader_yields_what_the_combined_loop_yielded_field_for_field(cases:
         assert _same(float(batch.se[i]), se), (alid, batch.se[i], se)
         assert _same(None if np.isnan(batch.eaf[i]) else float(batch.eaf[i]), eaf), alid
         assert batch.rsid[i] == rsid
-    # The two frequencies it made absent are counted for the Admission record.
-    assert tally.frequencies.made_absent == 2
+    # The frequency it made absent is counted for the Admission record, and the
+    # indel is named, as Admission logs it.
+    assert tally.frequencies.made_absent == 1
+    assert tally.faults.rows == [("4:700:A:AT", "indel_reference_undeclared")]
 
     associations = list(reader.stream_associations())
     assert [(a.chromosome, a.position, a.ref, a.alt) for a in associations][:3] == [

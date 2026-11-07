@@ -53,6 +53,18 @@ class InvalidAllele(MalformedIdentity):
     reason = "allele_invalid"
 
 
+class UndeclaredReference(MalformedIdentity):
+    """An indel whose source declares neither allele the genome's reference.
+
+    An indel's ALID spells its reference allele first (issue #381, ADR 0079):
+    at a repeat, `G>GGGGCC` and `GGGGCC>G` are two variants, and only the
+    source's declaration tells them apart. Without one no ALID can be formed,
+    so the row is dropped and logged rather than stored under a guessed order.
+    """
+
+    reason = "indel_reference_undeclared"
+
+
 @dataclass
 class IdentityFaults:
     """The rows one stream dropped for a malformed identity: ``(source key, reason)``.
@@ -148,14 +160,40 @@ def identity_base(cell: bytes) -> str | None:
     return base if base in VALID_BASES else None
 
 
-def canonical_alid(chromosome: str, position: int | str, first: str, second: str) -> str:
-    """The ALID of the variant whose alleles are ``first`` and ``second``, either way round.
+def alid_alleles(ref: str, alt: str) -> tuple[str, str]:
+    """``(A1, A2)`` of the variant whose reference allele is ``ref`` (spec §4, ADR 0079).
 
-    ``chr:pos:A1:A2``: each allele spelt as `identity_allele` spells it, A1 the
-    alphabetically first. The one place an ALID is formed from raw alleles.
+    Each allele spelt as `identity_allele` spells it. Alleles of one length --
+    an SNV, or a multi-base substitution -- are sorted: the genome holds one
+    sequence there, so `A>G` and `G>A` are one variant seen from either allele.
+    An indel is written reference first: at a repeat, `G>GGGGCC` and
+    `GGGGCC>G` are two variants, and a sorted ALID spelt both as the insertion
+    (issue #381). The caller vouches that ``ref`` is the allele its source
+    declares the reference: a reader drops an indel whose source declares none
+    (`UndeclaredReference`), so no such row reaches an ALID.
     """
-    a1, a2 = sorted((identity_allele(first), identity_allele(second)))
+    ref, alt = identity_allele(ref), identity_allele(alt)
+    if len(ref) != len(alt) or ref < alt:
+        return ref, alt
+    return alt, ref
+
+
+def canonical_alid(chromosome: str, position: int | str, ref: str, alt: str) -> str:
+    """The ALID of the variant whose reference allele is ``ref`` and alternate ``alt``.
+
+    ``chr:pos:A1:A2``, by `alid_alleles`: an indel reference first, any other
+    pair sorted. The one place an ALID is formed from raw alleles. An ALID
+    read back -- a Variant Reference's, a variant list's -- is its own
+    reference-first spelling, so ``canonical_alid(chrom, pos, a1, a2)`` of a
+    parsed ALID is that ALID wherever it is canonical.
+    """
+    a1, a2 = alid_alleles(ref, alt)
     return f"{chromosome}:{position}:{a1}:{a2}"
+
+
+def ref_is_a1(ref: str, alt: str) -> bool:
+    """Whether the ALID formed from ``ref`` and ``alt`` spells ``ref`` first."""
+    return alid_alleles(ref, alt)[0] == identity_allele(ref)
 
 
 def normalise_allele(allele: str) -> str:
@@ -187,9 +225,30 @@ def allele_fault(*alleles: str | None) -> InvalidAllele | None:
     return None
 
 
-def identity_fault(chromosome: str, *alleles: str | None) -> MalformedIdentity | None:
+def undeclared_reference(
+    first: str, second: str, *, other_is_reference: bool
+) -> UndeclaredReference | None:
+    """`UndeclaredReference` for an indel whose source declares no reference, else ``None``.
+
+    ``first`` and ``second`` have passed `allele_fault`. ``other_is_reference``
+    is the source's declaration for the row: that its other allele -- its
+    `ref`, beside an effect allele that is its `alt` -- is the genome's
+    reference. Alleles of one length need none (`alid_alleles`).
+    """
+    if other_is_reference or len(first.strip()) == len(second.strip()):
+        return None
+    return UndeclaredReference(
+        f"indel {second.strip()!r}/{first.strip()!r} has no declared reference allele"
+    )
+
+
+def identity_fault(
+    chromosome: str, *alleles: str | None, other_is_reference: bool
+) -> MalformedIdentity | None:
     """Why a row's identity is malformed (#365), or ``None``, in
-    `orient_to_canonical`'s order: the chromosome, then the alleles.
+    `orient_to_canonical`'s order: the chromosome, the alleles, then, for an
+    effect and an other allele of different lengths, whether the source
+    declares the other allele the reference (`undeclared_reference`, #381).
 
     A chromosome refused for another reason (an unsupported number) is not this
     rule's, and neither are the row's alleles then: `orient_to_canonical`
@@ -201,7 +260,13 @@ def identity_fault(chromosome: str, *alleles: str | None) -> MalformedIdentity |
         return fault
     except VariantNormalisationError:
         return None
-    return allele_fault(*alleles)
+    invalid = allele_fault(*alleles)
+    if invalid is not None or len(alleles) != 2:
+        return invalid
+    effect, other = alleles
+    return undeclared_reference(
+        effect or "", other or "", other_is_reference=other_is_reference
+    )
 
 
 def orient_to_canonical(
@@ -209,8 +274,15 @@ def orient_to_canonical(
     position: int | str,
     source_effect_allele: str,
     source_other_allele: str,
+    *,
+    other_is_reference: bool,
 ) -> Orientation:
-    """Create an ALID with alphabetically first allele as canonical effect allele.
+    """The row's ALID (`alid_alleles`), and whether its effect allele is not A1.
+
+    ``other_is_reference`` is the source's declaration that the other allele
+    is the genome's reference (its `ref`, beside an `alt` effect allele). An
+    indel is placed only by it (ADR 0079): without one it raises
+    `UndeclaredReference`, which every reader drops and Admission logs.
 
     If the source effect allele is not the canonical A1, signed statistics must
     be negated by the caller.
@@ -230,33 +302,42 @@ def orient_to_canonical(
 
     if effect == other:
         raise VariantNormalisationError("effect and other alleles are identical")
+    undeclared = undeclared_reference(effect, other, other_is_reference=other_is_reference)
+    if undeclared is not None:
+        raise undeclared
 
-    a1, a2 = sorted((effect, other))
+    a1, a2 = alid_alleles(other, effect)
     variant = CanonicalVariant(chromosome=chrom, position=pos, effect_allele=a1, other_allele=a2)
     return Orientation(variant=variant, flipped=(effect != a1))
 
 
 def oriented_alid(
-    chromosome: str, position: int, effect: str, other: str
+    chromosome: str, position: int, effect: str, other: str, *, other_is_reference: bool
 ) -> tuple[str, bool] | None:
     """`orient_to_canonical`'s ALID and flip, for a row whose identity is already judged.
 
     For a reader's per-row hot path: ``chromosome`` is `normalise_chromosome`'s
     and ``position`` positive, and both alleles have passed `allele_fault`, so
     `identity_allele` spells them as `normalise_allele` would. ``None`` where
-    the two are one allele, which `orient_to_canonical` refuses. A contract
-    test holds the two to one answer.
+    `orient_to_canonical` refuses the pair: one allele spelt twice, or an
+    indel its source declares no reference for, which a reader judges first
+    (`undeclared_reference`) so it is logged. A contract test holds the two
+    to one answer.
     """
     snv = _SNV_ORIENTATION.get((effect, other))
     if snv is not None:
         first, second, flipped = snv
         return f"{chromosome}:{position}:{first}:{second}", flipped
-    first, second = identity_allele(effect), identity_allele(other)
-    if first == second:
+    effect, other = identity_allele(effect), identity_allele(other)
+    if effect == other:
         return None
-    if first < second:
-        return f"{chromosome}:{position}:{first}:{second}", False
-    return f"{chromosome}:{position}:{second}:{first}", True
+    if len(effect) != len(other):
+        if not other_is_reference:
+            return None
+        return f"{chromosome}:{position}:{other}:{effect}", True
+    if effect < other:
+        return f"{chromosome}:{position}:{effect}:{other}", False
+    return f"{chromosome}:{position}:{other}:{effect}", True
 
 
 #: `oriented_alid`'s answer for every pair of distinct one-base alleles, in
@@ -279,6 +360,8 @@ def orient_or_drop(
     source_effect_allele: str | None,
     source_other_allele: str | None,
     faults: IdentityFaults | None = None,
+    *,
+    other_is_reference: bool,
 ) -> Orientation | None:
     """`orient_to_canonical`, or ``None`` for a row that names no variant.
 
@@ -293,7 +376,11 @@ def orient_or_drop(
     source_other_allele = source_other_allele or ""
     try:
         return orient_to_canonical(
-            chromosome, position, source_effect_allele, source_other_allele
+            chromosome,
+            position,
+            source_effect_allele,
+            source_other_allele,
+            other_is_reference=other_is_reference,
         )
     except MalformedIdentity as fault:
         if faults is not None:

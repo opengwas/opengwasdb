@@ -82,10 +82,10 @@ def test_gwas_ssf_sources_with_alias_spellings_produce_the_same_alid(
 
     assert letter_spelling != numeric_spelling, "fixture must exercise distinct source spellings"
     letter_alid = orient_to_canonical(
-        letter.chromosome, letter.position, letter.alt, letter.ref
+        letter.chromosome, letter.position, letter.alt, letter.ref, other_is_reference=False
     ).variant.alid
     numeric_alid = orient_to_canonical(
-        numeric.chromosome, numeric.position, numeric.alt, numeric.ref
+        numeric.chromosome, numeric.position, numeric.alt, numeric.ref, other_is_reference=False
     ).variant.alid
     assert letter_alid == numeric_alid == expected_alid
     assert letter_variant.chromosome == numeric_variant.chromosome == expected_alid.split(":")[0]

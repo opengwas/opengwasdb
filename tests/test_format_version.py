@@ -101,10 +101,10 @@ def test_the_version_this_build_writes_is_one_it_can_read():
 
 
 def test_the_readable_formats_are_the_two_the_epic_carries():
-    """Format 0.2.0 is readable since #245 (Zarr v3 with sharding, the
-    converter's output), alongside 0.1.0 which every builder still writes.  A
+    """Two series: 0.1 (Zarr v2) and 0.2 (Zarr v3 with sharding, since #245),
+    whose remainder reaches 1 with #381 (indel ALIDs spelt reference first). A
     third entry is a decision, not an accident."""
-    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (0,)}
+    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (1,)}
 
 
 def test_each_readable_series_has_one_zarr_on_disk_format():
@@ -177,31 +177,42 @@ def test_the_current_version_is_writable():
     assert writable == CURRENT_FORMAT_VERSION
 
 
-def test_the_converter_writes_the_current_version_and_reads_0_1_0():
-    """#247 made the converter's target the builders' version: one constant.
+def test_the_converter_writes_0_2_0_and_the_builders_0_2_1():
+    """#247 made the converter's target the builders' version; #381 parts them.
 
-    The converter reads `SOURCE_FORMAT_VERSION` (0.1.0, Zarr v2) and writes
-    `CURRENT_FORMAT_VERSION` (0.2.0).  Anything else would let a built store and
-    a converted store declare different formats while both carry Zarr v3
-    sharding, which is exactly the identity #249 checks.
+    The converter reads `SOURCE_FORMAT_VERSION` (0.1.0, Zarr v2) and copies its
+    stored codes and ALIDs into Zarr v3. A 0.1.0 Store sorts an indel's alleles
+    and says nowhere which is the reference, so its copy is 0.2.0, whose ALIDs
+    are spelt the same way; the builders write 0.2.1, an indel reference first
+    (ADR 0079).
     """
     from opengwasdb.store import convert
 
-    assert convert.CURRENT_FORMAT_VERSION == store_open.CURRENT_FORMAT_VERSION == "0.2.0"
+    assert convert.TARGET_FORMAT_VERSION == "0.2.0"
+    assert store_open.CURRENT_FORMAT_VERSION == "0.2.1"
     assert convert.SOURCE_FORMAT_VERSION == "0.1.0"
 
 
-def test_0_1_0_is_readable_but_not_writable():
-    """The state #247 leaves: this build reads 0.1.0 and writes only 0.2.0.
+@pytest.mark.parametrize(
+    ("version", "reference_first"),
+    [("0.1.0", False), ("0.2.0", False), ("0.2.1", True), ("0.2.2", True)],
+)
+def test_a_store_spells_its_indels_reference_first_from_0_2_1(version, reference_first):
+    assert store_open.indels_reference_first(version) is reference_first
 
-    Completion writes into the source's arrays and keeps its format, so a 0.1.0
-    source is refused -- and the refusal names the conversion tool, because a
-    Dense 0.1.0 release whose values are right is converted rather than
-    rebuilt (ADR 0057 §3).
+
+@pytest.mark.parametrize("version", ["0.1.0", "0.2.0"])
+def test_a_store_that_sorts_its_indels_is_readable_but_not_writable(version):
+    """This build reads 0.1.0 and 0.2.0 and writes only 0.2.1.
+
+    Completion writes into the source's arrays and keeps its format, so either
+    source is refused. Both sort an indel's alleles, and a completion would add
+    panel ALIDs spelt reference first beside them, so the remedy is a rebuild:
+    a conversion keeps the sorted spelling (ADR 0079).
     """
-    store_open.check_format_version("0.1.0")
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="convert_store_to_0_2_0"):
-        store_open.check_writable_format_version("0.1.0", source="source release X")
+    store_open.check_format_version(version)
+    with pytest.raises(store_open.UnsupportedFormatVersion, match="Rebuild the release"):
+        store_open.check_writable_format_version(version, source="source release X")
 
 
 def test_a_readable_but_unwritable_version_is_refused(monkeypatch):
@@ -219,21 +230,19 @@ def test_a_readable_but_unwritable_version_is_refused(monkeypatch):
         store_open.check_writable_format_version("0.1.0", source="source release X")
 
 
-def test_completion_refuses_a_0_1_0_source_and_names_the_converter(
-    tmp_path, dense_store_path
-):
+@pytest.mark.parametrize("version", ["0.1.0", "0.2.0"])
+def test_completion_refuses_a_source_that_sorts_its_indels(tmp_path, dense_store_path, version):
     """The guard ADR 0038 §4 added for exactly this moment now fires.
 
-    A 0.1.0 source (Zarr v2) is readable but not writable by a build that writes
-    0.2.0, and completion preserves its source's format rather than re-encoding
-    it.  The refusal must name `scripts/convert_store_to_0_2_0.py`, because the
-    operator's remedy is to convert first -- converting after completion is
-    impossible, since completion writes into the source's arrays.
+    A 0.1.0 or 0.2.0 source is readable but not writable by a build that writes
+    0.2.1, and completion preserves its source's format rather than re-encoding
+    it. Its deletions are spelt like insertions, so the refusal names a rebuild
+    (ADR 0079).
     """
-    _set_version(dense_store_path, "0.1.0")
+    _set_version(dense_store_path, version)
     out = tmp_path / "completed.opengwasdb"
 
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="convert_store_to_0_2_0"):
+    with pytest.raises(store_open.UnsupportedFormatVersion, match="sorts an indel's alleles"):
         complete_dense_store(
             dense_store_path,
             out,

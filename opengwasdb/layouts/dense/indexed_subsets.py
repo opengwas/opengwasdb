@@ -112,6 +112,7 @@ from opengwasdb.store.open import (
     zarr_format_for_version,
 )
 from opengwasdb.variants import VariantAxis, parse_canonical_alid
+from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.version import installed_version
 
 log = logging.getLogger(__name__)
@@ -590,8 +591,11 @@ def _canonical_alid_or_none(candidate: str) -> str | None:
     parsed = parse_canonical_alid(candidate)
     if parsed is None:
         return None
-    effect, other = sorted((parsed.effect_allele, parsed.other_allele))
-    canonical = f"{parsed.chromosome}:{parsed.position}:{effect}:{other}"
+    # An indel's order is its meaning (its reference first, ADR 0079), so either
+    # order is canonical; alleles of one length must be sorted.
+    canonical = canonical_alid(
+        parsed.chromosome, parsed.position, parsed.effect_allele, parsed.other_allele
+    )
     return canonical if canonical == candidate else None
 
 

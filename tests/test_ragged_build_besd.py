@@ -780,7 +780,7 @@ def test_reverse_strand_hg19_snp_is_stored_as_the_resolver_orients_it(tmp_path):
     expected_z: dict[str, float] = {}
     for snp in (_REVERSE_SNP, _FORWARD_SNP):
         orientation = oriented_variant(
-            resolver, snp["chr"], str(snp["bp"]), snp["a1"], snp["a2"]
+            resolver, snp["chr"], str(snp["bp"]), snp["a1"], snp["a2"], other_is_reference=False
         )
         assert orientation is not None, "the fixture row must lift to be compared"
         assert orientation.variant.alid in stored, (

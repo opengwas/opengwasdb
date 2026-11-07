@@ -8,7 +8,8 @@ package release may move neither, one, or both numbers.
 | package | writes `format_version` | reads |
 |---|---|---|
 | 0.2.0 | 0.1 | 0.1 |
-| 0.3.0 and later (every merge to `main` is a version) | 0.2.0 from every builder and the converter | 0.1.0, 0.2.0 |
+| 0.3.0 up to #381's merge (every merge to `main` is a version) | 0.2.0 from every builder and the converter | 0.1.0, 0.2.0 |
+| from #381's merge | 0.2.1 from every builder; 0.2.0 from the converter | 0.1.0, 0.2.0, 0.2.1 |
 
 The two `format_version` values in that table are different formats despite
 reading alike: `0.1` is the pre-release format 0.2.0 wrote, and `0.1.0` is the
@@ -27,6 +28,19 @@ format from a 0.1.0 source, so a build and a conversion of the same release
 carry the same layout. `0.1.0` (Zarr v2) stays readable; a 0.1.0 source is no
 longer writable, which is why completion refuses it and names the converter.
 Deleting the v2 reader is a later decision (ADR 0057).
+
+**#381 moves `format_version` to 0.2.1 (ADR 0079).** An indel's ALID spells its
+reference allele first, so a deletion is `1:827587:GGGGCC:G` where 0.2.0 spelt
+it like the insertion, `1:827587:G:GGGGCC`, and its statistic is signed for the
+reference allele; SNVs, substitutions and insertions keep their spelling. The
+arrays and encodings are 0.2.0's, so it is the compatible remainder: a package
+that knows only 0.2.0 reads a 0.2.1 Store correctly and warns that it is newer.
+It must not complete one, since it would spell the panel's indels sorted beside
+the Store's own deletions. A 0.2.0 Store is read as before and never rewritten;
+this package refuses to complete it (rebuild it, then complete), and spells a
+source's indels sorted when it checks source fidelity against it. The converter
+writes 0.2.0 from a 0.1.0 Store, whose indels it cannot re-spell. #338's
+reference branch also used 0.2.1; if it lands after #381 it takes 0.2.2.
 
 **#298 renames one manifest value without moving `format_version`, under spec
 §21.0.** A release written since it says `association_coverage: gwas` where an
