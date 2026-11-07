@@ -302,9 +302,15 @@ def view_of(r: Rebuilt) -> tuple[Window, int, int]:
                             r.index_of == np.arange(r.index_of.size))
     inside = ((rows.chromosome == window.chromosome) & (rows.position >= window.start)
               & (rows.position < window.start + WINDOW_BP))
-    low, high = int(rows.position[inside].min()), int(rows.position[inside].max())
+    return window, *view_bounds(int(rows.position[inside].min()),
+                                int(rows.position[inside].max()))
+
+
+def view_bounds(low: int, high: int) -> tuple[int, int]:
+    """The view around rows from `low` to `high`: padded each side by a share of the span,
+    at least a minimum, and never below position 0."""
     pad = max(int(VIEW_PAD_SHARE * (high - low)), VIEW_PAD_MIN_BP)
-    return window, max(low - pad, 0), high + pad
+    return max(low - pad, 0), high + pad
 
 
 def region(r: Rebuilt, leads: dict[str, np.ndarray], blocks: Blocks) -> dict[str, Any]:

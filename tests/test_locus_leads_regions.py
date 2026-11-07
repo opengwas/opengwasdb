@@ -11,12 +11,16 @@ from typing import Any
 
 import numpy as np
 import pytest
+from conftest import SOURCE_HEADER, SOURCE_ROWS
 from locus_leads_panel import write_panel
 from prototype_modules import load_prototype
 
-blocks, genetic_map, panel, profile_sweep, regions, run, sweep = (
+from opengwasdb.build.observed import build_dense_observed_from_sources
+
+blocks, genetic_map, panel, profile_sweep, regions, rule, run, sweep = (
     load_prototype("locus_leads", name)
-    for name in ("blocks", "genetic_map", "panel", "profile_sweep", "regions", "run", "sweep"))
+    for name in ("blocks", "genetic_map", "panel", "profile_sweep", "regions", "rule", "run",
+                 "sweep"))
 
 SIGNAL = ["0/0", "1/1", "0/0", "1/1"] * 10
 OTHER = ["0/0", "0/0", "1/1", "1/1"] * 10  # r^2 = 0 with SIGNAL
@@ -84,32 +88,92 @@ def _tier(abs_z: dict[int, float]) -> Any:
                         np.fromiter(abs_z.values(), dtype="float64"), np.arange(at.size))
 
 
-def test_each_row_is_drawn_in_the_clump_plink2_puts_it_in_not_the_nearest(
-        tmp_path: Path) -> None:
-    # A and B carry one signal, D and E another, interleaved along the chromosome.
-    layout = {100_000: (20.0, SIGNAL), 150_000: (9.0, OTHER), 200_000: (15.0, SIGNAL),
-              250_000: (8.0, OTHER)}
-    write_panel(tmp_path, "1", [(p, "A", "G") for p in layout], [g for _, g in layout.values()])
-    tier = _tier({p: z for p, (z, _) in layout.items()})
+# Two signals interleaved along 1 Mb. The weaker one's index variant comes first by position,
+# and the row at 700 kb is in its clump though the stronger index variant is nearer.
+INTERLEAVED = {100_000: (9.0, OTHER), 500_000: (20.0, SIGNAL), 700_000: (8.0, OTHER),
+               1_100_000: (15.0, SIGNAL)}
 
-    rebuilt = regions.rebuild(tier, _map("GRCh38"), panel.Panel(tmp_path), frozenset(),
-                              work_dir=tmp_path / "work", threads=1)
-    position = rebuilt.shared.rows.position
-    assert position.tolist() == list(layout), "every row must be in the shared set"
-    index = position[rebuilt.index_of == np.arange(position.size)]
-    assert index.tolist() == [100_000, 150_000]
-    # B (200 kb) is nearer D (150 kb) than A (100 kb): a nearest-index rule would misplace it.
-    assert abs(200_000 - 150_000) < abs(200_000 - 100_000)
 
-    record = regions.region(rebuilt, {}, blocks.Blocks("EUR", {}, {}))
+@pytest.fixture(scope="module")
+def interleaved(tmp_path_factory: pytest.TempPathFactory) -> Any:
+    directory = tmp_path_factory.mktemp("interleaved")
+    write_panel(directory, "1", [(p, "A", "G") for p in INTERLEAVED],
+                [g for _, g in INTERLEAVED.values()])
+    tier = _tier({p: z for p, (z, _) in INTERLEAVED.items()})
+    rebuilt = regions.rebuild(tier, _map("GRCh38"), panel.Panel(directory), frozenset(),
+                              work_dir=directory / "work", threads=1)
+    assert rebuilt.shared.rows.position.tolist() == list(INTERLEAVED), \
+        "every row must be in the shared set"
+    return rebuilt
 
-    assert record["rows"] == {"position": list(layout), "abs_z": [20.0, 9.0, 15.0, 8.0],
-                              "clump": [1, 2, 1, 2], "index_variant": [True, True, False, False]}
+
+def _index_positions(rebuilt: Any) -> list[int]:
+    rows = rebuilt.shared.rows
+    return rows.position[rebuilt.index_of == np.arange(rows.position.size)].tolist()
+
+
+def test_each_row_is_drawn_in_the_clump_plink2_puts_it_in_numbered_by_strength(
+        interleaved: Any) -> None:
+    index = _index_positions(interleaved)
+    assert index == [100_000, 500_000], "two clumps, the weaker one first by position"
+    assert INTERLEAVED[100_000][0] < INTERLEAVED[500_000][0]
+    # 700 kb is nearer the 500 kb index variant: a nearest-index rule would misplace it.
+    assert abs(700_000 - 500_000) < abs(700_000 - 100_000)
+
+    record = regions.region(interleaved, {}, blocks.Blocks("EUR", {}, {}))
+
+    assert record["rows"] == {"position": list(INTERLEAVED), "abs_z": [9.0, 20.0, 8.0, 15.0],
+                              "clump": [2, 1, 2, 1], "index_variant": [True, True, False, False]}
     assert record["clumps"] == [
-        {"clump": 1, "index_position": 100_000, "index_abs_z": 20.0, "rows": 2,
-         "start": 100_000, "end": 200_000},
-        {"clump": 2, "index_position": 150_000, "index_abs_z": 9.0, "rows": 2,
-         "start": 150_000, "end": 250_000}]
+        {"clump": 1, "index_position": 500_000, "index_abs_z": 20.0, "rows": 2,
+         "start": 500_000, "end": 1_100_000},
+        {"clump": 2, "index_position": 100_000, "index_abs_z": 9.0, "rows": 2,
+         "start": 100_000, "end": 700_000}]
+
+
+def test_the_view_pads_its_rows_by_4_percent_at_least_20_kb_and_not_below_0(
+        interleaved: Any) -> None:
+    # The rows span 1 Mb, so 4% (40 kb) is more than the 20 kb floor.
+    record = regions.region(interleaved, {}, blocks.Blocks("EUR", {}, {}))
+
+    assert record["view"] == {"chromosome": "1", "start": 60_000, "end": 1_140_000}
+    assert regions.view_bounds(100_000, 250_000) == (80_000, 270_000)
+    assert regions.view_bounds(5_000, 10_000) == (0, 30_000)
+
+
+def test_a_profile_bin_without_a_5e4_row_is_null_not_zero(interleaved: Any) -> None:
+    record = regions.region(interleaved, {}, blocks.Blocks("EUR", {}, {}))
+
+    profile = record["profile"]
+    # The view's 50 kb bins run from bin 1 (60 kb) to bin 22 (1,140 kb); four hold a row.
+    expected: list[float | None] = [None] * 22
+    for position, (abs_z, _) in INTERLEAVED.items():
+        expected[position // 50_000 - 1] = abs_z
+    assert expected.count(None) == 18
+    assert profile == {"bin_bp": 50_000, "first_bin": 1, "max_abs_z": expected}
+
+
+def test_a_method_s_leads_are_agreed_or_split_and_its_merged_index_variants_lost(
+        interleaved: Any) -> None:
+    rows = interleaved.shared.rows
+
+    def leads_within(w_bp: int) -> np.ndarray:
+        found: np.ndarray = rule.locus_leads(rows.chromosome, rows.position, interleaved.shared.cm,
+                                             rows.abs_z, rows.variant_index,
+                                             d_cm=float("inf"), w_bp=w_bp)
+        return found
+
+    record = regions.region(interleaved, {"merged": leads_within(10_000_000),
+                                          "apart": leads_within(0)},
+                            blocks.Blocks("EUR", {}, {}))
+
+    assert record["leads"]["merged"] == {
+        "leads": [{"position": 500_000, "clump": 1, "kind": "agreed"}], "lost": 1}
+    assert record["leads"]["apart"] == {"leads": [
+        {"position": 100_000, "clump": 2, "kind": "agreed"},
+        {"position": 500_000, "clump": 1, "kind": "agreed"},
+        {"position": 700_000, "clump": 2, "kind": "spurious_split"},
+        {"position": 1_100_000, "clump": 1, "kind": "spurious_split"}], "lost": 0}
 
 
 HM3 = frozenset({"1:100:A:G"})
@@ -141,45 +205,53 @@ def _committed(store: Path, panel_dir: Path, work: Path) -> dict[str, Any]:
                         "analyses": [json.loads(json.dumps(record_409))]}}
 
 
-def _write_regions(committed: dict[str, Any], store: Path, panel_dir: Path, work: Path,
-                   output: Path) -> dict[str, Any]:
-    paths = {"sweep": work / "eur_sweep.json", "profile": work / "eur_profile.json",
-             "hm3": work / "hm3.txt", "blocks": work / "blocks.tsv"}
+def _write_regions(committed: dict[str, Any], built: dict[str, Any],
+                   out: Path) -> dict[str, Any]:
+    """`regions` on the conftest Store against `committed`, writing under `out`."""
+    committed = copy.deepcopy(committed)
+    paths = {"sweep": out / "eur_sweep.json", "profile": out / "eur_profile.json",
+             "hm3": built["work"] / "hm3.txt", "blocks": built["work"] / "blocks.tsv"}
     paths["sweep"].write_text(json.dumps(committed["sweep"]))
     committed["profile"]["inputs"] = {
         "sweep_403": {"sha256": genetic_map.file_digest(paths["sweep"], "sha256")},
         "blocks": {"sha256": genetic_map.file_digest(paths["blocks"], "sha256")}}
     paths["profile"].write_text(json.dumps(committed["profile"]))
-    given = regions.Inputs(store.parent.parent, _map("GRCh37"), panel.Panel(panel_dir),
-                           blocks.read_blocks(paths["blocks"], "EUR"), HM3, work / "regions", 1)
-    written: dict[str, Any] = regions.regions(paths, SELECTION, given, output)
+    given = regions.Inputs(built["store"].parent.parent, _map("GRCh37"),
+                           panel.Panel(built["panel"]), blocks.read_blocks(paths["blocks"], "EUR"),
+                           HM3, out / "regions", 1)
+    written: dict[str, Any] = regions.regions(paths, SELECTION, given, out / "eur_regions.json")
     return written
 
 
-@pytest.fixture
-def conftest_store(dense_store_path: Path, tmp_path_factory: pytest.TempPathFactory,
-                   ) -> dict[str, Any]:
-    """The conftest Store, a GRCh37 panel holding its two variants in LD, and the records."""
+@pytest.fixture(scope="module")
+def conftest_store(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    """The conftest Store, built once from its source rows, a GRCh37 panel holding its two
+    variants in LD, and #403's and #409's records of it."""
+    root = tmp_path_factory.mktemp("stores")
+    source = root / "associations.tsv"
+    source.write_text("\n".join([SOURCE_HEADER, *SOURCE_ROWS, ""]), encoding="utf-8")
+    store = root / "fixture" / "store.opengwasdb"
+    build_dense_observed_from_sources([source], store, store_id="fixture-store",
+                                      release_id="observed-v1", reference_assembly="GRCh37")
     panel_dir = tmp_path_factory.mktemp("panel")
     write_panel(panel_dir, "1", [(100, "A", "G"), (300, "A", "G")], [SIGNAL, SIGNAL],
                 assembly="GRCh37")
     work = tmp_path_factory.mktemp("work")
     (work / "hm3.txt").write_text("\n".join(sorted(HM3)) + "\n")
     (work / "blocks.tsv").write_text(BLOCKS)
-    return {"store": dense_store_path, "panel": panel_dir, "work": work,
-            "committed": _committed(dense_store_path, panel_dir, work)}
+    return {"store": store, "panel": panel_dir, "work": work,
+            "committed": _committed(store, panel_dir, work)}
 
 
-def test_records_that_match_are_written_with_the_region(conftest_store: dict[str, Any]) -> None:
+def test_records_that_match_are_written_with_the_region(conftest_store: dict[str, Any],
+                                                        tmp_path: Path) -> None:
     rows = conftest_store["committed"]["profile"]["analyses"][0]
     assert rows["shared_set"]["rows"] == 2 and rows["index_variants"] == 1, \
         "a2's two 5e-8 rows must be on the panel and in one clump"
-    output = conftest_store["work"] / "out" / "eur_regions.json"
 
-    written = _write_regions(conftest_store["committed"], conftest_store["store"],
-                             conftest_store["panel"], conftest_store["work"], output)
+    written = _write_regions(conftest_store["committed"], conftest_store, tmp_path)
 
-    assert json.loads(output.read_text()) == written
+    assert json.loads((tmp_path / "eur_regions.json").read_text()) == written
     (only,) = written["regions"]
     assert only["rows"]["clump"] == [1, 1] and only["rows"]["index_variant"] == [True, False]
     agreed = {"position": 100, "clump": 1, "kind": "agreed"}
@@ -198,14 +270,13 @@ def test_records_that_match_are_written_with_the_region(conftest_store: dict[str
     ("profile", lambda a: a["rules"][-1]["density"].update(leads_hm3=7), "leads_hm3"),
 ])
 def test_a_count_that_is_not_the_committed_one_refuses_to_write(
-        conftest_store: dict[str, Any], record: str, change: Any, field: str) -> None:
+        conftest_store: dict[str, Any], tmp_path: Path, record: str, change: Any,
+        field: str) -> None:
     committed = copy.deepcopy(conftest_store["committed"])
     change(committed[record]["analyses"][0])
     assert committed != conftest_store["committed"], "the change must reach the record"
-    output = conftest_store["work"] / "out" / "eur_regions.json"
 
     with pytest.raises(regions.RegionMismatch, match=rf"field \S*{field} differs"):
-        _write_regions(committed, conftest_store["store"], conftest_store["panel"],
-                       conftest_store["work"], output)
+        _write_regions(committed, conftest_store, tmp_path)
 
-    assert not output.exists()
+    assert not (tmp_path / "eur_regions.json").exists()
