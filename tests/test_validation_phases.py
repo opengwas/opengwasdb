@@ -221,7 +221,7 @@ def test_a_dense_band_loop_logs_progress_with_an_eta(
     # Two rows per Analysis: the budget a genome-wide Store's rows are banded by,
     # shrunk until a fixture's handful of rows spans more than one band.
     monkeypatch.setattr(
-        banding, "WORKING_BYTES", banding.BYTES_PER_CELL * _ROWS_PER_BAND * n_analyses
+        banding, "DECODED_BAND_BYTES", banding.BYTES_PER_CELL * _ROWS_PER_BAND * n_analyses
     )
     assert inner_chunk_of(grid)[0] > _ROWS_PER_BAND, "the budget must decide the band"
     total = -(-n_variants // _ROWS_PER_BAND)
@@ -240,7 +240,7 @@ def test_a_sequence_window_loop_logs_progress_with_an_eta(
 ) -> None:
     # One cell per window, for the same reason: the sequence's budget is the same
     # decoded-byte allowance, counted in cells.
-    monkeypatch.setattr(banding, "WORKING_BYTES", banding.BYTES_PER_CELL)
+    monkeypatch.setattr(banding, "DECODED_BAND_BYTES", banding.BYTES_PER_CELL)
     sequence = open_group(ragged_store_path / "data.zarr" / "ragged")
     n_cells = int(np.asarray(sequence["offsets"][:], dtype=np.int64)[-1])
     assert inner_chunk_of(sequence["z"])[0] > 1, "the budget must decide the window"

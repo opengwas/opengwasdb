@@ -11,16 +11,17 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
+import zarr
 
 from opengwasdb import top_hits
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
-from opengwasdb.encoding.banding import WORKING_BYTES, band_rows
+from opengwasdb.encoding.banding import band_rows, decoded_band_bytes
 from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.open import UnsupportedFormatVersion
+from opengwasdb.store.open import check_writable_zarr_layout
 from opengwasdb.top_hits import TOP_HIT_CHUNK_SIZE, TOP_HIT_THRESHOLDS
 
 log = logging.getLogger(__name__)
@@ -150,6 +151,13 @@ def _scan_candidates(
                 for name, values in band.items():
                     if len(values):
                         parts[name].append(values)
+                log.debug(
+                    "Top-hit scan: band %d of %d, %d rows from variant %d",
+                    index,
+                    n_bands,
+                    min(band_rows, n_variants - (index - 1) * band_rows),
+                    (index - 1) * band_rows,
+                )
                 log_progress(
                     log, "Top-hit scan", index, n_bands, started,
                     every=max(1, n_bands // 20),
@@ -190,32 +198,16 @@ def _write_scan_harvest(
             )
 
 
-def _refuse_legacy_data_layout(store_path: Path) -> None:
-    """Refuse a release whose `data.zarr` is a Zarr v2 group (issue #313).
+def _refuse_unwritable_layout(store_path: Path, version: str) -> None:
+    """Refuse a release whose Zarr layout this build cannot write (issue #313).
 
-    A Top-Hit Index is Zarr v3 arrays written into the release's own data group.
-    Opening a 0.1.0 release's data group -- Zarr v2, so a `.zgroup` -- in a mode
-    that creates v3 metadata puts a `zarr.json` beside the `.zgroup`; zarr 3 then
-    reads the group as v3, every v2 array the release has stops being reachable
-    by name, and the pass dies part-way through leaving a release no reader can
-    open.
-
-    The **layout** decides, rather than `format_version`'s equality with
-    `CURRENT_FORMAT_VERSION`: a release stays indexable for as long as its arrays
-    are stored in the format the index is written in, whatever version its
-    series has reached (ADR 0057).
+    The decision is `store.open.check_writable_zarr_layout`'s, from the release's
+    `format_version`, so this module holds no version-to-layout rule of its own
+    (ADR 0057, #264). A `0.1.0` release is Zarr v2 and is refused: the index is
+    v3 arrays written into that release's own data group, so writing them there
+    would leave a `zarr.json` beside its `.zgroup` and hide every array it has.
     """
-    if not (store_path / "data.zarr" / ".zgroup").is_file():
-        return
-    version = StoreManifest.load(store_path).format_version
-    raise UnsupportedFormatVersion(
-        f"{store_path} declares format_version={version!r}, which is stored as a Zarr v2 "
-        "group, and a Top-Hit Index is written as Zarr v3 arrays into that same group: "
-        "writing one here would leave a zarr.json beside the release's .zgroup, hide every "
-        "array the release has and leave it unreadable. Convert the 0.1.0 release with "
-        "scripts/convert_store_to_0_2_0.py and build the index on the converted release; "
-        "or rebuild the release from source."
-    )
+    check_writable_zarr_layout(version, source=f"release at {store_path}")
 
 
 class _ScanPlanes(NamedTuple):
@@ -223,7 +215,7 @@ class _ScanPlanes(NamedTuple):
 
     z: DenseZPlane
     se: DenseSePlane
-    imputed: Any
+    imputed: zarr.Array | None
     eaf: DenseEafPlane
 
 
@@ -237,21 +229,50 @@ def _open_scan_planes(store_path: Path, encoding: StoreEncoding) -> _ScanPlanes:
     )
 
 
+def _scan_band_rows(z_plane: DenseZPlane, working_bytes: int | None) -> int:
+    """The rows per band the scan will read, from the decoded-band budget."""
+    return band_rows(z_plane.n_analyses, int(z_plane.array.chunks[0]), working_bytes)
+
+
 def _log_scan_plan(
-    z_plane: DenseZPlane, n_workers: int, working_bytes: int
-) -> int:
-    """The rows per band the scan will read, logged with its width and budget."""
-    rows = band_rows(z_plane.n_analyses, int(z_plane.array.chunks[0]), working_bytes)
+    z_plane: DenseZPlane, band: int, n_workers: int, working_bytes: int | None
+) -> None:
+    """Say what the scan is about to read: its width, band and budget."""
     log.info(
         "Top-hit index: scanning %d variants over %d Analyses "
-        "(n_workers=%d, %d rows per band, %d-byte working-set budget per worker)",
+        "(n_workers=%d, %d rows per band, %d-byte decoded-band budget)",
         int(z_plane.array.shape[0]),
         z_plane.n_analyses,
         n_workers,
-        rows,
-        working_bytes,
+        band,
+        decoded_band_bytes(working_bytes),
     )
-    return rows
+
+
+def _run_scan(
+    store_path: Path,
+    planes: _ScanPlanes,
+    thresholds: tuple[float, ...],
+    n_workers: int,
+    working_bytes: int | None,
+    timer: PhaseTimer,
+) -> None:
+    """Scan the planes band by band, then write every tier from the harvest."""
+    n_variants = int(planes.z.array.shape[0])
+    band = _scan_band_rows(planes.z, working_bytes)
+    _log_scan_plan(planes.z, band, n_workers, working_bytes)
+    with timer.phase("top_hits.scan"):
+        parts = _scan_candidates(
+            planes.z,
+            planes.se,
+            planes.imputed,
+            planes.eaf,
+            n_variants,
+            band,
+            top_hits.z_critical(max(thresholds)),
+            n_workers,
+        )
+    _write_scan_harvest(store_path, parts, thresholds, planes.imputed, planes.eaf, timer)
 
 
 def build_top_hit_indexes(
@@ -260,7 +281,7 @@ def build_top_hit_indexes(
     encoding: StoreEncoding | None = None,
     timer: PhaseTimer | None = None,
     n_workers: int = 1,
-    working_bytes: int = WORKING_BYTES,
+    working_bytes: int | None = None,
 ) -> None:
     """(Re)build ranked top-hit arrays by scanning the stored dense matrix.
 
@@ -276,15 +297,17 @@ def build_top_hit_indexes(
     ``encoding`` is the store's declared plan; when omitted it is read from the
     release's manifest, never re-derived from the arrays.
 
-    A release whose ``data.zarr`` is a Zarr v2 group is refused before anything
-    is scanned or written: the index is v3 arrays, so writing one there would
-    hide the release's own arrays (issue #313).
+    A release whose ``format_version`` is not stored in the Zarr format this
+    build writes -- every `0.1.0`, which is Zarr v2 -- is refused before anything
+    is scanned or written (issue #313).
 
-    A band holds at most ``working_bytes`` decoded bytes, so a worker's memory
+    A band decodes at most ``working_bytes`` bytes, so a worker's working set
     does not grow with the release's number of Analyses: the row count comes from
-    `banding.band_rows` and its one-GiB policy, which the validation passes share
-    (issue #313). ``working_bytes`` is the knob a caller with a different budget
-    passes; the band it produces is logged with the scan.
+    `banding.band_rows`, whose budget the validation passes share. Left as
+    ``None`` the budget is `banding.DECODED_BAND_BYTES`, read at call time; the
+    band and the budget it came from are logged. What the budget bounds is one
+    band's decoded cells, not a whole worker process, which also carries its
+    interpreter, its fork's copy of the parent and zarr's buffers.
 
     A caller that passes a ``PhaseTimer`` gets the scan and the write charged
     separately, which is how the re-encoding passes of a store-wide rewrite are
@@ -293,24 +316,10 @@ def build_top_hit_indexes(
     """
     timer = timer or PhaseTimer()
     store_path = Path(store_path)
-    _refuse_legacy_data_layout(store_path)
-    if encoding is None:
-        encoding = StoreManifest.load(store_path).encoding
-    planes = _open_scan_planes(store_path, encoding)
-    n_variants = int(planes.z.array.shape[0])
-    band = _log_scan_plan(planes.z, n_workers, working_bytes)
-    with timer.phase("top_hits.scan"):
-        parts = _scan_candidates(
-            planes.z,
-            planes.se,
-            planes.imputed,
-            planes.eaf,
-            n_variants,
-            band,
-            top_hits.z_critical(max(thresholds)),
-            n_workers,
-        )
-    _write_scan_harvest(store_path, parts, thresholds, planes.imputed, planes.eaf, timer)
+    manifest = StoreManifest.load(store_path)
+    _refuse_unwritable_layout(store_path, manifest.format_version)
+    planes = _open_scan_planes(store_path, encoding or manifest.encoding)
+    _run_scan(store_path, planes, thresholds, n_workers, working_bytes, timer)
     log.info("Top-hit phase timings:\n%s", timer.format_report())
 
 

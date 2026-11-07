@@ -269,3 +269,20 @@ def test_completion_refuses_a_source_it_cannot_write_before_doing_any_work(
         )
 
     assert not out.exists()
+
+
+def test_a_writer_reads_the_layout_from_the_series_not_the_current_version():
+    """The layout a release is stored in is its series', not `CURRENT_FORMAT_VERSION`'s.
+
+    Adding arrays to a release's own data group needs the format that group is
+    in, so the decision is `ZARR_FORMAT_BY_SERIES`' (issue #313). `0.1.x` is Zarr
+    v2 and is refused; every `0.2.x` is Zarr v3 and is accepted -- including one
+    the constant has not reached yet, because `CURRENT_FORMAT_VERSION` moves
+    *within* a series (issue #381 takes it to `0.2.1`).
+    """
+    assert store_open.check_writable_zarr_layout("0.2.0") == 3
+    assert store_open.check_writable_zarr_layout("0.2.1") == 3
+    with pytest.raises(store_open.UnsupportedFormatVersion, match="convert_store_to_0_2_0"):
+        store_open.check_writable_zarr_layout("0.1.0", source="release at /tmp/x")
+    with pytest.raises(store_open.UnsupportedFormatVersion, match="Zarr format 2"):
+        store_open.check_writable_zarr_layout("0.1.7")

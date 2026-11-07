@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import zarr
+from dense_sources import write_release_manifest
 
 from opengwasdb.build import ordered_pool
 from opengwasdb.encoding import se as se_module
@@ -69,6 +70,8 @@ def _se_snapshot(group) -> dict[str, np.ndarray]:
 def _small_store(tmp_path: Path, name: str) -> Path:
     """A two-chunk-per-axis dense store with a handful of strong candidates."""
     store = tmp_path / name
+    store.mkdir()
+    write_release_manifest(store, store_id="small")
     root = zarr.open_group(str(store / "data.zarr"), mode="w", zarr_format=3)
     rng = np.random.default_rng(20250924)
     n_rows, n_analyses = 100, 3

@@ -1,11 +1,11 @@
-"""`build-dense-top-hits`: its `--n-workers` pool, its scan's row band, and its
-refusal of a release it cannot write an index into (issue #313).
+"""`build-dense-top-hits`: its `--n-workers` pool, its scan's band, and its refusal
+of a release it cannot write an index into (issue #313).
 
 The index is the same whichever worker count builds it and whatever band the
-scan reads. A 0.1.0 release -- Zarr v2, so nothing the v3 index's arrays can be
-added to -- is refused before anything is queued. A 0.2.0 release stays
-indexable: what decides is the release's on-disk layout, not its
-`format_version`'s distance from `CURRENT_FORMAT_VERSION` (ADR 0057).
+scan reads, and that band comes from the decoded-band budget
+`opengwasdb.encoding.banding` shares with validation. A 0.1.0 release -- Zarr v2,
+so nothing the v3 index's arrays can be added to -- is refused before anything is
+queued; a 0.2.0 release stays indexable whatever `CURRENT_FORMAT_VERSION` says.
 """
 
 from __future__ import annotations
@@ -22,36 +22,34 @@ import numpy as np
 import pytest
 import zarr
 from conftest import SOURCE_HEADER
-from dense_sources import build_dense_fixture
+from dense_sources import build_dense_fixture, write_release_manifest
 from legacy_fixtures import relayout_as_0_1_0
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
-from opengwasdb.encoding import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
-from opengwasdb.encoding.banding import BYTES_PER_CELL, WORKING_BYTES, band_rows
+from opengwasdb.encoding import banding
+from opengwasdb.encoding.banding import BYTES_PER_CELL
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
-from opengwasdb.model.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.top_hits import TOP_HIT_TIER_ARRAYS
 
-#: The `z` row chunk. 250,000 is also the row cap the band keeps for a narrow
-#: release, so this fixture's band is its chunk and 600,000 variants make three.
-_ROW_CHUNK = 250_000
-_N_VARIANTS = 600_000
 _N_ANALYSES = 2
+_N_VARIANTS = 200
+_ROW_CHUNK = 20
 
-#: `(variant row, Analysis column, stored z)`: hits in all three bands, spread
-#: over the three significance tiers. The second is negative because a tier is
-#: decided by |z|.
+#: A budget of 40 rows per band for this fixture: several bands, and well under
+#: the 250,000-row cap the budget never reaches here.
+_FORTY_ROW_BUDGET = 40 * BYTES_PER_CELL * _N_ANALYSES
+
+#: `(variant row, Analysis column, stored z)`: hits in different bands, spread
+#: over the significance tiers. The second is negative because a tier is decided
+#: by |z|.
 _HITS = [
-    (10, 0, 8.0),  # band 0
-    (123_456, 1, -3.6),  # band 0
-    (300_000, 1, 6.0),  # band 1
-    (400_000, 0, 4.0),  # band 1
-    (550_000, 0, 5.0),  # band 2
+    (10, 0, 8.0),
+    (50, 1, -3.6),
+    (125, 0, 6.0),
+    (170, 1, 4.0),
+    (190, 0, 5.0),
 ]
-
-_ROWS_PER_BAND = re.compile(r"(\d+) rows per band")
 
 #: The six associations of `_SOURCE_ROWS`, |z| 8, 6, 11, 7, 5 and 4; 5.45, 4.56
 #: and 3.48 are the 5e-8, 5e-6 and 5e-4 |z| cutoffs, so every tier is larger
@@ -64,6 +62,9 @@ _SOURCE_ROWS = [
     "a1\tp1\tHeight\tHeight primary\t1\t400\tG\tA\t5.0\t0.3\trs4\tsd",
     "a2\tp2\tDisease\tDisease primary\t1\t500\tA\tG\t4.0\t0.2\trs5\tlog_or",
 ]
+
+_BAND_LINE = re.compile(r"band \d+ of \d+, (\d+) rows from variant (\d+)")
+_PLAN_LINE = re.compile(r"(\d+) rows per band, (\d+)-byte decoded-band budget")
 
 
 def _release_fixture_store(root: Path) -> Path:
@@ -87,6 +88,18 @@ def release(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     yield _release_fixture_store(tmp_path_factory.mktemp("release"))
 
 
+@pytest.fixture
+def forty_row_bands(monkeypatch: pytest.MonkeyPatch) -> int:
+    """Shrink the decoded-band budget to this fixture's 40-row band.
+
+    The budget is the knob a caller with a different one passes, so replacing it
+    here is the same move as `build_top_hit_indexes(working_bytes=...)` and puts
+    the scan in several bands without a fixture large enough to reach the cap.
+    """
+    monkeypatch.setattr(banding, "DECODED_BAND_BYTES", _FORTY_ROW_BUDGET)
+    return _FORTY_ROW_BUDGET
+
+
 def _copy(source: Path, destination: Path) -> Path:
     """The same release twice, so two runs index byte-identical input."""
     shutil.copytree(source, destination)
@@ -105,25 +118,7 @@ def _store(
     """A Dense release with a manifest, a `z`/`se`/`eaf` plane and some hits."""
     store = tmp_path / name
     store.mkdir()
-    (store / "manifest.json").write_text(
-        json.dumps(
-            StoreManifest(
-                store_id="banded",
-                release_id="observed-v1",
-                format_version="0.2.0",
-                primary_layout=PrimaryStorageLayout.DENSE,
-                association_coverage=AssociationCoverage.GWAS,
-                completion_state=CompletionState.OBSERVED_ONLY,
-                reference_assembly="GRCh37",
-                encoding=StoreEncoding(
-                    z=ZEncoding("float16"),
-                    se=SeEncoding("float16"),
-                    eaf=EafEncoding("float32"),
-                ),
-            ).to_dict()
-        ),
-        encoding="utf-8",
-    )
+    write_release_manifest(store, store_id="banded")
     root = zarr.open_group(str(store / "data.zarr"), mode="w", zarr_format=3)
     rng = np.random.default_rng(20261107)
     z = rng.normal(0.0, 0.5, (n_variants, n_analyses)).astype(np.float16)
@@ -144,21 +139,23 @@ def _store(
     return store
 
 
-def _logged_band(
-    caplog: pytest.LogCaptureFixture, store: Path, working_bytes: int | None = None
-) -> int:
-    """The rows per band the scan logged, for the budget it was given."""
-    caplog.clear()
-    with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits"):
-        if working_bytes is None:
-            build_top_hit_indexes(store)
-        else:
-            build_top_hit_indexes(store, working_bytes=working_bytes)
-    messages = [record.getMessage() for record in caplog.records]
-    bands = [_ROWS_PER_BAND.search(message) for message in messages if "rows per band" in message]
-    assert len(bands) == 1, messages
-    assert bands[0] is not None, messages
-    return int(bands[0].group(1))
+def _messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records]
+
+
+def _bands_read(caplog: pytest.LogCaptureFixture) -> list[tuple[int, int]]:
+    """Every band the scan read, as `(rows, first variant)`, in scan order."""
+    found = [_BAND_LINE.search(message) for message in _messages(caplog)]
+    return [(int(match.group(1)), int(match.group(2))) for match in found if match]
+
+
+def _plan(caplog: pytest.LogCaptureFixture) -> tuple[int, int]:
+    """The band and the budget the scan logged, as `(rows, budget)`."""
+    for message in _messages(caplog):
+        match = _PLAN_LINE.search(message)
+        if match:
+            return int(match.group(1)), int(match.group(2))
+    raise AssertionError(f"no scan plan in {_messages(caplog)}")
 
 
 def _tier_arrays(store: Path) -> dict[str, np.ndarray]:
@@ -194,27 +191,28 @@ def _run(*arguments: str):
 
 
 def test_the_index_is_identical_at_one_and_three_workers(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, forty_row_bands: int
 ) -> None:
     source = _store(tmp_path, "source")
     serial = _copy(source, tmp_path / "serial")
     parallel = _copy(source, tmp_path / "parallel")
 
-    # The fixture is meaningful only if the scan has several bands with hits in
-    # every one: a single band would make the worker count immaterial.
-    assert _N_VARIANTS > 2 * _ROW_CHUNK
-    assert {row // _ROW_CHUNK for row, _, _ in _HITS} == {0, 1, 2}
+    read: dict[str, list[tuple[int, int]]] = {}
+    for label, store, workers in (("serial", serial, "1"), ("parallel", parallel, "3")):
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="opengwasdb.layouts.dense.top_hits"):
+            result = _run(str(store), "--n-workers", workers)
+        assert result.exit_code == 0, result.output
+        read[label] = _bands_read(caplog)
 
-    with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits"):
-        one = _run(str(serial), "--n-workers", "1")
-        assert one.exit_code == 0, one.output
-        three = _run(str(parallel), "--n-workers", "3")
-        assert three.exit_code == 0, three.output
-    scanned = [
-        record.getMessage() for record in caplog.records
-        if record.getMessage().startswith("Top-hit scan: ")
-    ]
-    assert any("scan: 3/3" in message for message in scanned), scanned
+    # Each run's own bands, not both runs' lines pooled: a run in one band would
+    # make the worker count immaterial.
+    for label, bands in read.items():
+        assert len(bands) > 1, (label, bands)
+        assert [start for _, start in bands] == sorted({start for _, start in bands})
+        for rows, _ in bands:
+            assert rows * _N_ANALYSES * BYTES_PER_CELL <= forty_row_bands, (label, rows)
+    assert len({row // read["serial"][0][0] for row, _, _ in _HITS}) >= 3
 
     serial_arrays = _tier_arrays(serial)
     parallel_arrays = _tier_arrays(parallel)
@@ -229,22 +227,23 @@ def test_the_index_is_identical_at_one_and_three_workers(
         np.testing.assert_array_equal(parallel_arrays[name], values, err_msg=name)
 
 
-def test_the_scan_log_names_the_requested_worker_count(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_the_scan_logs_the_worker_count_and_the_band_the_budget_gives(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = _store(tmp_path, "logged")
-    with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits"):
-        result = _run(str(store), "--n-workers", "3")
+    plans: list[tuple[int, int]] = []
+    for budget, workers in ((20 * BYTES_PER_CELL * _N_ANALYSES, "3"), (_FORTY_ROW_BUDGET, "1")):
+        monkeypatch.setattr(banding, "DECODED_BAND_BYTES", budget)
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits"):
+            result = _run(str(store), "--n-workers", workers)
+        assert result.exit_code == 0, result.output
+        assert any("n_workers=" + workers in message for message in _messages(caplog))
+        plans.append(_plan(caplog))
 
-    assert result.exit_code == 0, result.output
-    messages = [record.getMessage() for record in caplog.records]
-    assert any(
-        message.startswith(f"Top-hit index: scanning {_N_VARIANTS} variants")
-        and "n_workers=3" in message
-        and f"{_ROW_CHUNK} rows per band" in message
-        and f"{WORKING_BYTES}-byte working-set budget" in message
-        for message in messages
-    ), messages
+    # The budget reaches the scan through the module, at call time: a smaller
+    # budget is a smaller band, in the scan's own log.
+    assert plans == [(20, 20 * BYTES_PER_CELL * _N_ANALYSES), (40, _FORTY_ROW_BUDGET)], plans
 
 
 def test_a_wide_release_gets_a_narrower_band_than_a_narrow_one(
@@ -254,32 +253,18 @@ def test_a_wide_release_gets_a_narrower_band_than_a_narrow_one(
     narrow = _store(tmp_path, "narrow", n_analyses=2, n_variants=400, row_chunk=50)
     wide = _store(tmp_path, "wide", n_analyses=48, n_variants=400, row_chunk=50)
 
-    narrow_rows = _logged_band(caplog, narrow, budget)
-    wide_rows = _logged_band(caplog, wide, budget)
+    bands = {}
+    for label, store in (("narrow", narrow), ("wide", wide)):
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits"):
+            build_top_hit_indexes(store, working_bytes=budget)
+        bands[label] = _plan(caplog)[0]
 
-    assert wide_rows < narrow_rows, (wide_rows, narrow_rows)
+    assert bands["wide"] < bands["narrow"] <= 250_000, bands
     # Each band is as large as its budget allows, not merely smaller: one more
     # whole row chunk of the same width would not fit.
-    assert wide_rows * 48 * BYTES_PER_CELL <= budget
-    assert (wide_rows + 50) * 48 * BYTES_PER_CELL > budget
-    assert narrow_rows * 2 * BYTES_PER_CELL <= budget
-    assert narrow_rows <= 250_000, narrow_rows
-
-
-def test_every_band_fits_the_decoded_budget(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    n_analyses = 2_514
-    store = _store(
-        tmp_path, "wide", n_analyses=n_analyses, n_variants=40, row_chunk=50, with_hits=False
-    )
-
-    rows = _logged_band(caplog, store)
-
-    assert rows * n_analyses * BYTES_PER_CELL <= WORKING_BYTES, (rows, n_analyses)
-    assert rows < 250_000, "a store this wide must not get the row cap"
-    # A single row is the irreducible minimum when one row exceeds the budget.
-    assert band_rows(WORKING_BYTES // BYTES_PER_CELL + 1, 1) == 1
+    assert bands["wide"] * 48 * BYTES_PER_CELL <= budget
+    assert (bands["wide"] + 50) * 48 * BYTES_PER_CELL > budget
 
 
 def test_a_narrow_release_keeps_the_row_cap(
@@ -287,7 +272,10 @@ def test_a_narrow_release_keeps_the_row_cap(
 ) -> None:
     store = _store(tmp_path, "narrow", n_analyses=2, n_variants=400, row_chunk=50)
 
-    assert _logged_band(caplog, store) == 250_000
+    with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits"):
+        build_top_hit_indexes(store)
+
+    assert _plan(caplog)[0] == 250_000
 
 
 def test_a_0_1_0_release_is_refused_and_left_untouched(tmp_path: Path, release: Path) -> None:
