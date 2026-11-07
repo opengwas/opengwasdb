@@ -1640,6 +1640,7 @@ def complete_ragged_command(
     cis_window_bp: int = typer.Option(1_000_000),
     min_cor: float = typer.Option(0.7),
     release_id: str = typer.Option(None),
+    n_workers: int = typer.Option(1, help="LD-block process-pool size"),
     overwrite: bool = typer.Option(False),
 ) -> None:
     """Produce a Reference-Completed ragged store from an observed-only store."""
@@ -1653,23 +1654,20 @@ def complete_ragged_command(
         cis_window_bp=cis_window_bp,
         min_cor=min_cor,
         release_id=release_id or None,
+        n_workers=n_workers,
         overwrite=overwrite,
     )
-    elapsed = time.time() - t0
-    typer.echo(
-        json.dumps(
-            {
-                "output_path": str(result.output_path),
-                "n_variants": result.n_variants,
-                "n_analyses": result.n_analyses,
-                "n_associations": result.n_associations,
-                "n_imputed": result.n_imputed,
-                "n_missing": result.n_missing,
-                "association_coverage": _written_association_coverage(result.output_path),
-                "elapsed_s": round(elapsed, 1),
-            },
-            sort_keys=True,
-        )
+    _echo_summary(
+        {
+            "output_path": str(result.output_path),
+            "n_variants": result.n_variants,
+            "n_analyses": result.n_analyses,
+            "n_associations": result.n_associations,
+            "n_imputed": result.n_imputed,
+            "n_missing": result.n_missing,
+            "association_coverage": _written_association_coverage(result.output_path),
+            "elapsed_s": round(time.time() - t0, 1),
+        }
     )
 
 

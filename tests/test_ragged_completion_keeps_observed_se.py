@@ -15,7 +15,9 @@ One residual-coded source (`test_ragged_residual_completion`'s), completed three
 ways:
 
 * `in_range` -- that module's panel: the imputed cells sit near the source's SE
-  model, so they code as ordinary residuals.
+  model, so they code as ordinary residuals. That module's session fixture
+  builds this one, since its source, panel and completion arguments are the
+  same.
 * `nothing_imputed` -- no Analysis admitted. The refit moved observed SE even
   here, with no imputed cell, because it fitted decoded values rather than the
   source's own.
@@ -23,33 +25,36 @@ ways:
   tenth of the Store's, so the scalar-N SE it imputes sits about 1.1 log-units
   below the source's model, beyond the residual range. Only `b` is admitted, so
   `b` breaches the 2% budget and `a`, carried observed-only, does not.
+
+A fourth fixture copies the source and re-codes one observed cell as an exact
+exception whose value is half a code step off the grid: the drift the carry rule
+exists for, which a completion that forgot to carry its observed cells would
+re-quantise.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 import re
 from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
+from shutil import copytree
 
 import numpy as np
 import pytest
+from logged_warnings import logged_warnings
 from stored_rows import stored_rows
-from test_ragged_residual_completion import (
-    _FREQS,
-    _source_bp,
-    build_residual_ssf_source,
-    write_eaf_carrying_panel,
-)
+from test_ragged_residual_completion import _FREQS, RaggedResidualScenario, _source_bp
 
 from opengwasdb import StoreManifest, open_store
 from opengwasdb.completion.impute import scalar_n_se
 from opengwasdb.encoding import SE_EXCEPTION, SE_EXCEPTION_BUDGET, SE_MISSING
+from opengwasdb.encoding.codec import StoreCodec, se_residual_codes
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.model.analyses import read_analysis_records
+from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.observed_view import check_observed_view
 from opengwasdb.variants.axis import VariantAxis
@@ -88,6 +93,24 @@ class _Completions:
     runs: dict[str, _Completion]
 
 
+@dataclass(frozen=True)
+class _Pinned:
+    """A copy of the fixture source holding one exact SE exception whose value is
+    half a code step from the nearest code, and that copy's completion."""
+
+    source: Path
+    completed: _Completion
+    key: tuple[str, str]  # (Analysis id, ALID) of the patched cell
+    value: np.float32  # the value the source now holds for it
+
+
+#: How far from the nearest code the patched cell's residual sits, in steps. Half
+#: a step is the largest distance a code cannot express; well inside +-127.
+_OFF_GRID_STEPS = 20.5
+#: Analysis `a`'s source row to patch: observed, on the panel, not an exception.
+_PINNED_ROW = 20
+
+
 def _panel_eaf_text(value: float) -> str:
     return f"{value:.7g}"
 
@@ -115,44 +138,43 @@ def _skewed_panel_rows() -> list[tuple[str, float, int]]:
     return rows
 
 
-class _Warnings(logging.Handler):
-    def __init__(self) -> None:
-        super().__init__(logging.WARNING)
-        self.messages: list[str] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.messages.append(record.getMessage())
-
-
 def _complete(
     source: Path, root: Path, panel: Path, impute_analysis_ids: set[str] | None = None
 ) -> _Completion:
-    handler = _Warnings()
-    logger = logging.getLogger("opengwasdb")
-    logger.addHandler(handler)
-    try:
+    with logged_warnings() as warnings:
         result = complete_ragged_store(
             source, root / "comp.opengwasdb", panel, ancestry="EUR", cis_window_bp=1_000_000,
             min_cor=0.0, release_id="comp", impute_analysis_ids=impute_analysis_ids,
         )
-    finally:
-        logger.removeHandler(handler)
-    return _Completion(root / "comp.opengwasdb", panel, result.n_imputed, handler.messages)
+    return _Completion(root / "comp.opengwasdb", panel, result.n_imputed, warnings)
 
 
 @pytest.fixture(scope="module")
-def completions(tmp_path_factory: pytest.TempPathFactory) -> _Completions:
+def completions(
+    tmp_path_factory: pytest.TempPathFactory, residual_ragged_scenario: RaggedResidualScenario
+) -> _Completions:
+    """That module's completed release reused as `in_range`, whose source, panel and
+    completion arguments are the same (session-scoped, so it is built once), and
+    two more completions of the same source this module needs its own of.
+
+    `nothing_imputed` is the same completion with no Analysis admitted, which the
+    scenario's release cannot answer; `out_of_range` has its own panel.
+    """
     root = tmp_path_factory.mktemp("keeps_observed_se_301")
-    source, _ = build_residual_ssf_source(root / "source")
-    in_range = write_eaf_carrying_panel(root / "in_range" / "panel")
+    source, panel = residual_ragged_scenario.source, residual_ragged_scenario.panel
     skewed = root / "out_of_range" / "panel"
     _write_panel(skewed / "EUR" / "1", _skewed_panel_rows(), seed=301)
     return _Completions(
         source,
         {
-            "in_range": _complete(source, root / "in_range", in_range),
+            "in_range": _Completion(
+                residual_ragged_scenario.completed,
+                panel,
+                residual_ragged_scenario.result.n_imputed,
+                residual_ragged_scenario.warnings,
+            ),
             "nothing_imputed": _complete(
-                source, root / "nothing_imputed", in_range, impute_analysis_ids=set()
+                source, root / "nothing_imputed", panel, impute_analysis_ids=set()
             ),
             "out_of_range": _complete(
                 source, root / "out_of_range", skewed, impute_analysis_ids={"b"}
@@ -163,6 +185,65 @@ def completions(tmp_path_factory: pytest.TempPathFactory) -> _Completions:
 
 def _ragged(store: Path):
     return open_store(store).arrays(mode="r")["ragged"]
+
+
+def _alid_of(store: Path, variant_index: int) -> str:
+    with closing(VariantAxis(store)) as axis:
+        return next(v.alid for v in axis.all() if v.variant_index == variant_index)
+
+
+@pytest.fixture(scope="module")
+def off_grid(completions: _Completions, tmp_path_factory: pytest.TempPathFactory) -> _Pinned:
+    """The fixture source copied, with one observed cell re-coded as an exact
+    exception whose value is half a code step off the grid and in range -- the
+    drift ADR 0078's first case describes -- then completed.
+
+    A copy, so the module's own source keeps the two exceptions its tests assert.
+    The value comes from the codec's own prediction over the frequency the cell
+    decodes to, never from a hand-written model (issue #301).
+    """
+    root = tmp_path_factory.mktemp("off_grid_301")
+    source = Path(copytree(completions.source, root / "source.opengwasdb"))
+    group = open_store(source).arrays(mode="a")["ragged"]
+    encoding = StoreManifest.load(source).encoding
+    codec = StoreCodec(encoding)
+    ai, k = 0, _PINNED_ROW
+    offsets, variants = group["offsets"][:], group["variant_index"][:]
+    row = stored_rows(source, ai)
+    at = int(offsets[ai]) + k
+    assert int(variants[at]) == int(row.variant_index[k]), "fixture: row order is plane order"
+    prediction = codec._se_prediction(
+        np.asarray(row.eaf[k : k + 1], dtype=np.float32),
+        np.array([ai], np.int64),
+        group["se_coefficients"][:],
+    )
+    value = codec._se_from_codes(prediction, np.array([_OFF_GRID_STEPS]), encoding.se.step)[0]
+    residual = np.log(np.float64(value)) - prediction
+    steps = float(residual[0]) / encoding.se.step
+    assert abs(steps - _OFF_GRID_STEPS) < 0.1, f"fixture: {steps} is not half a step off grid"
+    assert abs(steps) < 127, f"fixture: {steps} must be inside the residual range"
+    _, exceptional = se_residual_codes(np.array([value]), residual, encoding.se.step)
+    assert not exceptional[0], "fixture: in range, so only the carry can hold this cell"
+
+    # Re-key the plane and its table the way the store keeps them: sorted by index.
+    group["se"][at] = SE_EXCEPTION
+    index = np.append(group["se_exception_index"][:], at)
+    values = np.append(group["se_exception_value"][:], value)
+    order = np.argsort(index, kind="stable")
+    for name, data in (("se_exception_index", index), ("se_exception_value", values)):
+        create_array(
+            group,
+            name,
+            ArrayRole.EXCEPTION_TABLE,
+            data=data[order],
+            compressor=compressor(),
+            overwrite=True,
+        )
+    key = ("a", _alid_of(source, int(row.variant_index[k])))
+    patched = _cells(source)[key]
+    assert patched.code == SE_EXCEPTION and patched.exact is not None, "fixture: held exactly"
+    completed = _complete(source, root, completions.runs["in_range"].panel)
+    return _Pinned(source, completed, key, np.float32(patched.exact))
 
 
 def _analysis_ids(store: Path) -> list[str]:
@@ -288,6 +369,19 @@ def test_observed_exceptions_are_carried_bit_for_bit(completions: _Completions, 
     for key, value in source_exceptions.items():
         assert value is not None and carried[key] is not None
         assert _bits(carried[key]) == _bits(value), key
+
+
+def test_an_observed_exception_off_the_code_grid_survives_completion(off_grid: _Pinned) -> None:
+    """An observed cell held as an exact exception whose value sits half a code step
+    from the nearest code reads back exactly only while it stays an exception:
+    coded, it would move by half a step. Completion carries every observed cell, so
+    the cell arrives in the completed Store as an exception holding its source value
+    bit for bit (ADR 0078, issue #301)."""
+    completed = _cells(off_grid.completed.path)[off_grid.key]
+    assert completed.code == SE_EXCEPTION, "a cell off the code grid must stay an exception"
+    assert _bits(completed.se) == _bits(off_grid.value), "the carried SE moved"
+    assert completed.exact is not None and _bits(completed.exact) == _bits(off_grid.value)
+    assert not completed.imputed
 
 
 # --- imputed cells are coded against the source's model -----------------------
