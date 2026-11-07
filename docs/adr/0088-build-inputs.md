@@ -96,27 +96,34 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    relateds projected; SNVs with AF 5–95%; LD-pruned at r² < 0.1 in 500 kb), excluding the
    Long-Range LD Regions of `docs/spec/long-range-ld-regions-grch38.tsv` ±2 Mb; 20 PCs.
 5. **The PC Check is the local-PC rule, and the builder runs it on every PC File.** A PC is
-   dropped from the covariates only if one 4 Mb window explains ≥ 10% of it **and** the rest of the
-   genome explains it no better than chance (the owner's shape). "Chance" is ours to define, and
-   is 200 permutations of the PC across samples. The window share must also beat the permutations'
-   99th percentile of the largest window share, and the rest share must not beat their 99th
-   percentile of the rest share. The covariates are the first up to `BuildInputs.k` = 10 PCs it
-   keeps; if fewer survive the builder uses those, as long as at least `BuildInputs.k_min` = 5 do,
-   and refuses below 5 (the owner's PC minimum, decided the same day). t_far's k is the number of
-   covariates actually used. Provenance records `k_target`, `k_min` and `k`, the scan, the dropped
-   PCs and the null.
+   local, and dropped from the covariates, when all three hold (the owner's rule, adopted
+   7 November 2026 at the review of #2):
+   - one 4 Mb window explains ≥ 10% of it;
+   - that share is above the window-side null, the 99th percentile of the largest window share
+     over 200 permutations of the PC across samples;
+   - rest share / window share ≤ 0.05.
 
-   On our v2 PCs it drops no PC in any of the five panels, so every build uses PC1–PC10. It keeps
-   EUR PC2: LCT's window explains 0.195 of it, but the rest of the genome explains 0.0204 against a
-   rest null of 0.0070 (`proto/1-build-inputs@5d0a93a:…/results/pc_check_v2_scan.tsv`).
+   The covariates are the first up to `BuildInputs.k` = 10 PCs it keeps; if fewer survive the
+   builder uses those, as long as at least `BuildInputs.k_min` = 5 do, and refuses below 5 (the
+   owner's PC minimum, decided the same day). t_far's k is the number of covariates actually used.
+   Provenance records `k_target`, `k_min` and `k`, the scan (with each PC's `ratio`,
+   `window_null_q99` and, as a diagnostic, `rest_null_q99`), the dropped PCs and the null.
 
-   **Its known weakness** (`proto/1-build-inputs@c1c1639:…/results/rule_power.tsv`). Karyotype-like
-   scores (an inversion region's top genotype PC, orthogonal to PC1–PC9) are dropped for 8p23.1 in
-   EUR and AMR and for 17q21.31 in AMR, but EUR's 17q21.31 score is kept: its window share is
-   0.934, but its rest share (0.0073) beats the rest null (0.0071), because H1/H2 frequency carries
-   a trace of ancestry. Rest share / window share separates all four karyotypes (0.007–0.019) from
-   every real EUR and AMR PC (≥ 0.104). Adopting it changes the rule beyond "chance", so it is
-   proposed and awaits the owner (epic #1).
+   **Why the ratio.** The owner first set the rule as "one window explains ≥ 10% and the rest of
+   the genome explains it no better than chance". Measured on karyotype-like scores, it kept EUR's
+   17q21.31 axis: 93% of that score lies in one window, but its rest share (0.0073) beat the rest
+   null (0.0071), because H1/H2 frequency carries a trace of ancestry
+   (`proto/1-build-inputs@c1c1639:…/results/rule_power.tsv`).
+   - The four karyotype scores (8p23.1 and 17q21.31, in EUR and AMR) have ratios of 0.007–0.019.
+   - Every real PC of EUR and AMR has ≥ 0.104, EUR PC2 lowest.
+   - AMR's noise-like PC5–PC20 have 0.19–0.27.
+
+   A bar of 0.05 separates them, so the owner adopted it. The window-side null was added in the
+   same review, because at n = 345 a random vector's best window reaches 0.08–0.10 by chance.
+
+   On our v2 PCs it drops no PC in any of the five panels: each keeps 20 of 20 and uses
+   PC1–PC10. The smallest ratio of any PC is EUR PC2's, 0.104, which LCT's window explains 0.195
+   of (`proto/1-build-inputs@8c25ab3:…/results/pc_check_v2_scan.tsv`).
 6. **Imported LD matrices (Pan-UKB) are a later epic.** This epic's provenance already records
    the source kind and every covariate adjusted for (epic #1 comment of 7 November 2026).
 7. **The test data is a committed real slice**, the Test Panel: v2 chr21 and chr22 for the 771
@@ -182,5 +189,6 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
 - **Clumping is held to plink2's unphased leads.** v2's pgen holds phase, and `plink2 --clump`
   uses phased r² unless told otherwise, so the Test Panel's clump goldens use `--clump-unphased`.
   Greedy clumping over the Test Panel's own unphased reference r gives the same leads.
-- **An inversion axis that carries ancestry can pass the PC Check** until the owner rules on the
-  rest statistic (decision 5).
+- **The ratio cannot drop a PC in a small panel.** By chance a window holds about 5 / n of any
+  vector's variance, so below about 100 samples no ratio reaches 0.05. Every HGDP+1kGP panel has
+  n ≥ 345; a smaller panel would need the rule revisited.
