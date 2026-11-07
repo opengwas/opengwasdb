@@ -239,7 +239,7 @@ def test_top_hit_z_values_match_csr(tmp_path):
     whole = CsrReader.open(out, requires_mask=False).inspect(Cells.analyses(0, csr.n_analyses))
     offsets, vi_all, z_all = csr.offsets, whole.variant_index, whole.z
 
-    for vi, ai, z_hit in zip(vis, ais, zs):
+    for vi, ai, z_hit in zip(vis, ais, zs, strict=True):
         start, end = int(offsets[ai]), int(offsets[ai + 1])
         pos = start + int(np.searchsorted(vi_all[start:end], vi))
         assert pos < end and int(vi_all[pos]) == vi

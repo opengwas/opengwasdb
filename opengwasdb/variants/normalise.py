@@ -233,8 +233,10 @@ def alid_allele_arrays(
     """`alid_alleles` of each pair, for a reader's vectorised path: ``(A1, A2,
     indel)``, where ``indel`` marks the pairs whose alleles differ in length.
 
-    Each allele spelt as `identity_allele` spells it. A contract test holds
-    the two to one answer.
+    Unlike `alid_alleles`, it spells nothing: every allele must already be
+    spelt as `identity_allele` spells it, upper-case, or the alphabetical
+    order it sorts by is not the ALID's. A contract test holds the two to one
+    answer.
     """
     indel = np.char.str_len(ref.astype(str)) != np.char.str_len(alt.astype(str))
     ref_first = indel | (ref < alt)

@@ -24,7 +24,7 @@ from opengwasdb.completion.ld_panel import (
     INDEL_REFERENCE_PROVENANCE,
     INDEL_REFERENCE_TABLE,
     IndelReferenceTableError,
-    PanelIndels,
+    PanelPlacement,
     load_block,
     panel_indel_frequencies,
 )
@@ -44,8 +44,12 @@ INSERTION = "1:2500:G:GGGGCC"
 DELETION = "1:2500:GGGGCC:G"
 #: An SNV in the indel's place, for a block whose `EA` there is its A2.
 SNV = "1:2500:G:T"
-#: `PanelIndels.record`'s unplaced rows when every row is placed.
-NONE_UNPLACED = {"no_reference": 0, "no_effect_allele": 0, "effect_allele_not_an_allele": 0}
+#: `PanelPlacement.record`'s unplaced indels, and SNVs, when every row is placed.
+NO_INDEL_UNPLACED = {
+    "no_reference": 0, "no_effect_allele": 0, "effect_allele_not_an_allele": 0,
+    "identity_invalid": 0,
+}
+NO_SNV_UNPLACED = {"no_effect_allele": 0, "effect_allele_not_an_allele": 0, "identity_invalid": 0}
 
 
 def _ld() -> np.ndarray:
@@ -62,19 +66,23 @@ def _write_block(
     with_ref_column: bool = False,
     effect: dict[str, str] | None = None,
     snps: list[tuple[str, int, float]] = SNPS,
+    with_ea_column: bool = True,
 ) -> Path:
     """One flat-layout block, `REF`/`ALT` columns written when asked. Each
     row's `EA` is its sorted-first allele, as the panels write it, unless
-    ``effect`` gives the row's `EA` cell."""
+    ``effect`` gives the row's `EA` cell; without ``with_ea_column`` the block
+    records no `OA` or `EA` at all."""
     block_dir = root / "EUR" / "1"
     block_dir.mkdir(parents=True)
-    header = "CHR\tSNP\tOA\tEA\tEAF\tBP" + ("\tREF\tALT" if with_ref_column else "")
+    alleles = "\tOA\tEA" if with_ea_column else ""
+    header = f"CHR\tSNP{alleles}\tEAF\tBP" + ("\tREF\tALT" if with_ref_column else "")
     lines = [header]
     for snp, bp, eaf in snps:
         _chrom, _pos, a1, a2 = snp.split(":")
         ea = (effect or {}).get(snp, a1)
         oa = a1 if ea == a2 else a2
-        row = f"1\t{snp}\t{oa}\t{ea}\t{eaf}\t{bp}"
+        cells = f"\t{oa}\t{ea}" if with_ea_column else ""
+        row = f"1\t{snp}{cells}\t{eaf}\t{bp}"
         if with_ref_column:
             ref = reference if snp == INSERTION and reference else a1
             alt = a2 if ref == a1 else a1
@@ -184,14 +192,52 @@ def test_a_panel_with_no_reference_places_no_indel(tmp_path: Path):
     assert block is not None
     assert block.alids[INDEL] is None
     assert (block.indel_reference, block.n_indels, block.n_indels_placed) == ("none", 1, 0)
-    assert _unplaced(block) == {**NONE_UNPLACED, "no_reference": 1}
+    assert _unplaced(block) == ({**NO_INDEL_UNPLACED, "no_reference": 1}, NO_SNV_UNPLACED)
     assert _fills(tsv) == {}
 
 
-def _unplaced(block) -> dict[str, int]:
-    indels = PanelIndels()
-    indels.add(block)
-    return indels.record()["unplaced_rows"]
+def _unplaced(block) -> tuple[dict[str, int], dict[str, int]]:
+    """The block's unplaced indels and SNVs by reason, as a completion records them."""
+    placement = PanelPlacement()
+    placement.add(block)
+    record = placement.record()
+    indels = record["panel_indels"]
+    assert sum(indels["unplaced"].values()) == indels["n_indels"] - indels["n_placed"]
+    return indels["unplaced"], record["panel_snvs_unplaced"]
+
+
+def test_a_block_with_no_ea_column_places_no_row(tmp_path: Path):
+    """Nothing says which allele any row's LD and EAF are for: an SNV is not
+    taken as coded on its A1, and an indel is not placed either."""
+    tsv = _write_block(tmp_path, reference="GGGGCC", with_ref_column=True, with_ea_column=False)
+
+    block = load_block(tsv)
+
+    assert block is not None
+    assert block.alids == [None] * len(SNPS)
+    assert _unplaced(block) == (
+        {**NO_INDEL_UNPLACED, "no_effect_allele": 1}, {**NO_SNV_UNPLACED, "no_effect_allele": 4},
+    )
+    assert _fills(tsv) == {}
+
+
+@pytest.mark.parametrize(
+    ("snp", "indel"), [("1:2500:G:GNNNCC", True), ("1:2500:G:N", False)], ids=["indel", "snv"]
+)
+def test_a_row_whose_id_no_alid_can_spell_is_counted(tmp_path: Path, snp: str, indel: bool):
+    """The indel's reference, `G`, is found, but its other allele is outside the
+    ALID alphabet."""
+    snps = [*SNPS[:INDEL], (snp, 2500, 0.9), *SNPS[INDEL + 1:]]
+    tsv = _write_block(tmp_path, with_ref_column=True, snps=snps)
+
+    block = load_block(tsv)
+
+    assert block is not None and block.alids[INDEL] is None
+    reason = {"identity_invalid": 1}
+    assert _unplaced(block) == (
+        ({**NO_INDEL_UNPLACED, **reason}, NO_SNV_UNPLACED) if indel
+        else (NO_INDEL_UNPLACED, {**NO_SNV_UNPLACED, **reason})
+    )
 
 
 def test_a_table_row_it_could_not_settle_places_nothing(tmp_path: Path):
@@ -273,7 +319,10 @@ def test_a_row_whose_ea_is_not_one_of_its_alleles_is_not_placed(
     index = [snp for snp, _bp, _eaf in SNPS].index(row)
     assert block.alids[index] is None
     assert not block.flipped[index]
-    assert _unplaced(block) == {**NONE_UNPLACED, reason: 1}
+    assert _unplaced(block) == (
+        ({**NO_INDEL_UNPLACED, reason: 1}, NO_SNV_UNPLACED) if row == INSERTION
+        else (NO_INDEL_UNPLACED, {**NO_SNV_UNPLACED, reason: 1})
+    )
 
 
 def test_a_table_without_its_provenance_is_refused(tmp_path: Path):
@@ -294,6 +343,25 @@ def test_a_table_its_provenance_does_not_checksum_is_refused(tmp_path: Path):
     path.write_text(json.dumps(provenance), encoding="utf-8")
 
     with pytest.raises(IndelReferenceTableError, match="table_sha256"):
+        load_block(tsv)
+
+
+@pytest.mark.parametrize("key", ["table_sha256", "counts", "revision"])
+@pytest.mark.parametrize("absent", ["missing", "null"])
+def test_a_provenance_that_records_no_key_completion_needs_is_refused(
+    tmp_path: Path, key: str, absent: str
+):
+    tsv = _write_block(tmp_path)
+    _write_table(tmp_path, "GGGGCC")
+    path = tmp_path / "EUR" / INDEL_REFERENCE_PROVENANCE
+    provenance = json.loads(path.read_text(encoding="utf-8"))
+    if absent == "missing":
+        del provenance[key]
+    else:
+        provenance[key] = None
+    path.write_text(json.dumps(provenance), encoding="utf-8")
+
+    with pytest.raises(IndelReferenceTableError, match=f"records no {key}"):
         load_block(tsv)
 
 

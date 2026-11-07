@@ -30,8 +30,10 @@
     re-signs a panel deletion's LD and frequency for its reference allele. A
     panel with neither places no indel, and its log and
     `provenance.completion.panel_indels` say so. A table is read only beside
-    its `indel_reference.json`, whose checksum it must match, and a panel row
-    whose `EA` is not one of its alleles is not placed (`unplaced_rows`). Completion **refuses a 0.2.0
+    its `indel_reference.json`, whose checksum it must match. A panel row with
+    no `EA`, in its cell or its block, or with an `EA` that is neither of its
+    alleles, is not placed, SNV or indel; `panel_indels.unplaced` and
+    `panel_snvs_unplaced` count them. Completion **refuses a 0.2.0
     or 0.1.0 source**: rebuild it, then complete it. The converter now writes
     0.2.0, not the current version.
   - **`validate` adds `variant_table.indel_order`**, which fails a Store from

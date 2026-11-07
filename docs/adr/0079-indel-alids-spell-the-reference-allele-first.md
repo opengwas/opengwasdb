@@ -140,10 +140,11 @@ neither column declares it. So:
   cannot read to its end. Completion reads a table only beside its
   provenance, and only while the table's sha256 is the `table_sha256` that
   provenance records; it refuses any other table. The script settles an indel
-  by the HGDP+1kGP pvars and FinnGen R13's declared `ref`, only where a source reads the key one way and
-  no source reads it otherwise; a key a source holds both ways (the insertion
-  and the deletion both exist), one the sources read differently, and one no
-  source holds are left unsettled, each counted.
+  by the HGDP+1kGP pvars and FinnGen R13's declared `ref`, only where a
+  source reads the key one way and no source reads it otherwise; a key a
+  source holds both ways (the insertion and the deletion both exist), one the
+  sources read differently, and one no source holds are left unsettled, each
+  counted.
 - **A panel with neither** places no indel, and says so in completion's log
   and its record.
 
@@ -159,11 +160,13 @@ HGDP+1kGP pvars and FinnGen R13 BMI_IRN, checksummed in each
 | HGDP+1kGP EUR | 2,265,931 | 1,629,969 (608,021 / 1,021,948 / 0) | 630,342 | 5,620 | 0 |
 | HGDP+1kGP SAS | 2,265,025 | 1,627,674 (608,971 / 1,018,703 / 0) | 631,677 | 5,674 | 0 |
 
-The HGDP+1kGP AMR panel needs no table: its `REF` column places all 2,660,493
-of its indels. Of UKB's settled indels, 409,287 are deletions; 367,799 of them
-are deletions OGS-00017 (FinnGen R13) observes, and a rebuild of it at 0.2.1
-spells each as the panel does, where completing its 0.2.0 Store with the
-sorted rule would have put 364,124 of them under a second spelling.
+The HGDP+1kGP AMR panel needs no table: its `REF` column places all of its
+indels, 2,660,493 unique keys (2,660,509 summed over LD blocks, as a completion
+record counts them; see below). Of UKB's settled indels, 409,287 are
+deletions; 367,799 of them are deletions OGS-00017 (FinnGen R13) observes, and
+a rebuild of it at 0.2.1 spells each as the panel does, where completing its
+0.2.0 Store with the sorted rule would have put 364,124 of them under a second
+spelling.
 
 `canonical_panel_alid` names an unsettled indel no ALID, so completion neither
 matches nor fills it: a fill there counts as missing, and an observed indel
@@ -172,14 +175,23 @@ stays observed. A panel codes its eigenvectors and `EAF` on each row's `EA`
 the ALID's `A1`, so a row whose `A1` is not its `EA` -- every settled panel
 deletion -- has its eigenvector row negated and its frequency complemented
 when its block is read (`LDBlock.flipped`). The same rule holds an SNV whose
-`EA` were not its `A1`; on the host's panels none is. A row whose `EA` is empty,
-or is neither of its alleles, names no ALID, since nothing says which allele
-its LD is for; none of the 64,785,257 rows of the six panels is such a row. A
-completion records how its panel's indels took their reference
-(`provenance.completion.panel_indels`: `reference_from`, each table read with
-its checksum, counts and revision, the indels read and placed, and, per reason,
-the rows not placed: `no_reference`, `no_effect_allele` or
-`effect_allele_not_an_allele`).
+`EA` were not its `A1`; on the host's panels none is. A row with no `EA` (an
+empty cell, or a block with no `EA` column), or with an `EA` that is neither of
+its alleles, names no ALID, SNV or indel, since nothing says which allele its
+LD is for. Every block of the six panels has an `EA` column, and none of their
+64,785,257 rows is such a row.
+
+A completion records how its panel placed its rows. In
+`provenance.completion.panel_indels`: `reference_from`, each table read with
+its checksum, counts and revision, the indels read and placed, and `unplaced`,
+the indels not placed by reason, which sum to the difference: `no_reference`,
+`no_effect_allele`, `effect_allele_not_an_allele`, and `identity_invalid` (an
+id no ALID can spell, once its reference is found). In
+`provenance.completion.panel_snvs_unplaced`: the SNVs and substitutions not
+placed, by the last three reasons. Every count is summed over LD blocks: an
+indel on a block boundary counts once per block. So AFR's record places
+2,388,315 indels where its table settles 2,388,309 keys, and AMR's counts
+2,660,509 where its panel holds 2,660,493.
 
 **7. GWAS-SSF declares its reference by layout and harmoniser code** (owner,
 7 Nov; it supersedes the 4 Nov rule for code 11). The reader tells the layout
@@ -240,6 +252,15 @@ complementing the frequency; the 58 copies are then regenerated. A rescued
 copy is then read like any other file of its layout, and the engine needs
 no signal and no guard.
 
+Until then the exposure is open. The 58 copies on disk are still swapped
+(each last written 23 Sep 2026). Until opengwasdb-stores#455 regenerates them,
+a build fed one spells each of its code-10 and code-11 indels as the other
+variant at its site -- a deletion as the insertion, its z unchanged -- counts
+them as kept (`indel_rows_kept_by_hm_code`), and nothing refuses it:
+`variant_table.indel_order` judges a table by its own columns, which agree.
+No build manifest names a rescued copy today. opengwasdb-stores#455 must land
+before anything rebuilds OGS-00011.
+
 **8. #357's reversed-indel rule no longer fires.** An insertion and a deletion
 at one position are two variants, and an indel whose source declares no
 reference never reaches a place, so no build drops a row as
@@ -291,6 +312,12 @@ until #316 removes them.
   indel rows of the 197 files checked.
 - A completion places a panel indel only by the panel's `REF` column or its
   indel-reference table, and fills nothing at the rest.
+- The 58 `swap_alleles` copies under `derived/ebi-gwas-catalog/` are still
+  swapped on disk. Until opengwasdb-stores#455 regenerates them, a build fed
+  one spells its code-10 and code-11 indels as the other variant at each site,
+  counts them as kept, and nothing refuses it. No build manifest names one
+  today, and opengwasdb-stores#455 must land before anything rebuilds
+  OGS-00011.
 - A package that knows only 0.2.0 reads a 0.2.1 Store correctly and warns that
   it is newer; a completion it ran would spell its panel's indels sorted beside
   the Store's reference-first deletions. Only a package that knows 0.2.1
@@ -299,6 +326,7 @@ until #316 removes them.
   its sorted spelling, which this build reads as the insertion: a source's
   deletion at that site is off the reference.
 - Breaking for Python callers: `orient_to_canonical`, `oriented_alid`,
-  `orient_or_drop`, `identity_fault`, `project_source_variant` and
-  `oriented_variant` take a required `other_is_reference`, and the tabular
+  `identity_fault`, `project_source_variant` and `oriented_variant` take a
+  required `other_is_reference`, `orient_or_drop` a required `declaration` and
+  `row`, and the tabular
   projection columns a required `reference`.

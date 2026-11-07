@@ -1740,13 +1740,17 @@ nor filled, and stays in its block's LD; a fill there counts as missing. A
 panel's eigenvectors and `EAF` are for each row's `EA`, and a Store's
 statistics for its ALID's `A1`, so a row whose `A1` is not its `EA` -- a settled
 panel deletion -- has its eigenvector row negated and its frequency complemented
-before completion uses them. A row whose `EA` is empty or is neither of its
-alleles names no ALID. A completed release records how its panel's indels
-took their reference in `provenance.completion.panel_indels`: `reference_from`
-(`ref_column`, `table`, `none` or `mixed`), each table read with its path,
-checksum, revision and counts by outcome, the indels read and placed, and
-`unplaced_rows`, the rows naming a variant that were not placed, by reason
-(`no_reference`, `no_effect_allele`, `effect_allele_not_an_allele`).
+before completion uses them. A row with no `EA` (an empty cell, or a block
+with no `EA` column), or whose `EA` is neither of its alleles, names no ALID.
+A completed release records how its panel placed its rows. In
+`provenance.completion.panel_indels`: `reference_from` (`ref_column`, `table`,
+`none` or `mixed`), each table read with its path, checksum, revision and
+counts by outcome, the indels read and placed, and `unplaced`, the indels not
+placed by reason (`no_reference`, `no_effect_allele`,
+`effect_allele_not_an_allele`, `identity_invalid`), which sum to the
+difference. In `provenance.completion.panel_snvs_unplaced`: the SNVs and
+substitutions not placed, by the last three reasons. Every count is summed
+over LD blocks: an indel on a block boundary counts once per block.
 
 ### 13.1 LD representation
 

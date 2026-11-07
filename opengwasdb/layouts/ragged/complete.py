@@ -50,7 +50,7 @@ from opengwasdb.completion.checkpoint import (
 )
 from opengwasdb.completion.ld_panel import (
     LDBlock,
-    PanelIndels,
+    PanelPlacement,
     SharedEndpoint,
     check_panel_has_chromosomes,
     panel_variant,
@@ -469,8 +469,9 @@ class _BlockPlan:
     block_to_analyses: dict[str, list[int]]
     block_canonical_alids: dict[str, list[str | None]]
     new_alids: set[str]
-    #: How the planned blocks' indels took their reference (`PanelIndels.record`).
-    panel_indels: dict[str, object]
+    #: How the planned blocks placed their rows: the completion record's
+    #: `panel_indels` and `panel_snvs_unplaced` (`PanelPlacement.record`).
+    panel_placement: dict[str, dict[str, object]]
     #: Each block's end another planned block starts at (`shared_endpoints`).
     endpoints: dict[str, SharedEndpoint] = field(default_factory=dict)
 
@@ -711,7 +712,7 @@ def _scan_block_maps(
     block_canonical_alids: dict[str, list[str | None]] = {}
     analysis_to_blocks: dict[int, list[str]] = {}
     planned: list[LDBlock] = []
-    indels = PanelIndels()
+    placement = PanelPlacement()
 
     for i, a in _imputable_analyses(state):
         blocks = blocks_for_analysis(
@@ -725,7 +726,7 @@ def _scan_block_maps(
             block_to_tsv[block.block_id] = block.tsv_path
             block_canonical_alids[block.block_id] = block.alids
             planned.append(block)
-            indels.add(block)
+            placement.add(block)
             new_alids.update(_new_panel_alids(block_canonical_alids[block.block_id], source_alids))
         if (i + 1) % 1000 == 0:
             print(
@@ -743,13 +744,15 @@ def _scan_block_maps(
         block_canonical_alids=block_canonical_alids,
         new_alids=new_alids,
         endpoints=shared_endpoints(planned),
-        panel_indels=_logged_indels(indels, ld_dir, ancestry),
+        panel_placement=_logged_placement(placement, ld_dir, ancestry),
     )
 
 
-def _logged_indels(indels: PanelIndels, ld_dir: Path, ancestry: str) -> dict[str, object]:
-    indels.log(ld_dir, ancestry)
-    return indels.record()
+def _logged_placement(
+    placement: PanelPlacement, ld_dir: Path, ancestry: str
+) -> dict[str, dict[str, object]]:
+    placement.log(ld_dir, ancestry)
+    return placement.record()
 
 
 def _plan_blocks(
@@ -1515,7 +1518,7 @@ def _completed_manifest(
     thresh: float,
     cis_window_bp: int,
     axis: _MergedAxis,
-    panel_indels: dict[str, object],
+    panel_placement: dict[str, dict[str, object]],
     csr: _CompletedCsr,
     encode_plan: _EncodePlan,
     se_exceptions: dict[str, Any] | None,
@@ -1538,7 +1541,7 @@ def _completed_manifest(
             cis_window_bp=cis_window_bp,
             n_imputed=csr.total_imputed,
             n_missing=csr.total_missing,
-            panel_indels=panel_indels,
+            **panel_placement,
             **({} if se_exceptions is None else {"se_exceptions": se_exceptions}),
         ),
         by_variant=recorded_provenance(staged.path),
@@ -1617,7 +1620,7 @@ def _run_completion(
                 thresh=thresh,
                 cis_window_bp=cis_window_bp,
                 axis=axis,
-                panel_indels=plan.panel_indels,
+                panel_placement=plan.panel_placement,
                 csr=csr,
                 encode_plan=encode_plan,
                 se_exceptions=se_exceptions,

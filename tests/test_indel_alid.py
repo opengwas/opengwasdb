@@ -367,11 +367,15 @@ def _alids_at_950000(store) -> list[str]:
     ]
 
 
-def _panel_indels_record(store) -> dict:
+def _completion_record(store) -> dict:
     import json
 
     manifest = json.loads((store / "manifest.json").read_text())
-    return manifest["provenance"]["completion"]["panel_indels"]
+    return manifest["provenance"]["completion"]
+
+
+def _panel_indels_record(store) -> dict:
+    return _completion_record(store)["panel_indels"]
 
 
 def test_completion_adds_no_second_spelling_of_an_observed_deletion(tmp_path, caplog) -> None:
@@ -397,9 +401,13 @@ def test_completion_adds_no_second_spelling_of_an_observed_deletion(tmp_path, ca
     assert completed_z == observed_z == pytest.approx([-3.0], abs=1e-3)
     assert _panel_indels_record(completed) == {
         "reference_from": "none", "tables": [], "n_indels": 1, "n_placed": 0,
-        "unplaced_rows": {
+        "unplaced": {
             "no_reference": 1, "no_effect_allele": 0, "effect_allele_not_an_allele": 0,
+            "identity_invalid": 0,
         },
+    }
+    assert _completion_record(completed)["panel_snvs_unplaced"] == {
+        "no_effect_allele": 0, "effect_allele_not_an_allele": 0, "identity_invalid": 0,
     }
     assert "names no indel's reference" in caplog.text
     result = validate_store(completed)

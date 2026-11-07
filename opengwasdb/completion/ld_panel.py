@@ -18,8 +18,8 @@ the panel's blocks (`ld_dir/{ancestry}/indel_reference.tsv.gz`, which
 `scripts/build_panel_indel_reference.py` writes from GRCh38 evidence, and which
 is read only beside a provenance its checksum matches). Every other indel names
 no ALID. A variant whose ALID's `A1` is not its `EA` is re-signed for its `A1`
-when its block is read (`LDBlock.flipped`); a row whose `EA` is neither of its
-alleles names none.
+when its block is read (`LDBlock.flipped`); a row with no `EA`, or whose `EA`
+is neither of its alleles, names none.
 """
 from __future__ import annotations
 
@@ -67,8 +67,10 @@ class LDBlock:
     indel_reference: str
     n_indels: int
     n_indels_placed: int
-    #: Per reason (`UNPLACED_REASONS`), the rows naming a variant it does not place.
-    unplaced: dict[str, int]
+    #: Per reason, the indels (`INDEL_UNPLACED_REASONS`) and the SNVs and
+    #: substitutions (`SNV_UNPLACED_REASONS`) it does not place.
+    unplaced_indels: dict[str, int]
+    unplaced_snvs: dict[str, int]
 
     def eaf_for_a1(self) -> np.ndarray:
         """Each row's frequency of its ALID's A1."""
@@ -227,7 +229,9 @@ def _open_indel_reference(path: str) -> _IndelReference:
             "what evidence settled its indels; completion does not read it (ADR 0079)"
         )
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
-    missing = [key for key in _PROVENANCE_KEYS if key not in provenance]
+    if not isinstance(provenance, dict):
+        raise IndelReferenceTableError(f"{provenance_path} is not a JSON object")
+    missing = [key for key in _PROVENANCE_KEYS if provenance.get(key) is None]
     if missing:
         raise IndelReferenceTableError(f"{provenance_path} records no {', '.join(missing)}")
     digest = _sha256(table)
@@ -256,13 +260,15 @@ def _table_references(
     return settled
 
 
-class PanelIndels:
-    """How a completion's panel blocks placed their indels, for its log and its
-    record (`provenance.completion.panel_indels`, ADR 0079).
+class PanelPlacement:
+    """How a completion's panel blocks placed their rows, for its log and its
+    record (`provenance.completion.panel_indels` and `panel_snvs_unplaced`,
+    ADR 0079).
 
     A panel with neither a `REF` column nor an indel-reference table places no
     indel; its blocks are still read, its indels count as missing where a fill
-    would land, and the record says why.
+    would land, and the record says why. Every count is summed over LD blocks:
+    an indel on a block boundary counts once per block.
     """
 
     def __init__(self) -> None:
@@ -270,7 +276,8 @@ class PanelIndels:
         self.tables: set[Path] = set()
         self.n_indels = 0
         self.n_placed = 0
-        self.unplaced: Counter[str] = Counter({reason: 0 for reason in UNPLACED_REASONS})
+        self.unplaced_indels = Counter({reason: 0 for reason in INDEL_UNPLACED_REASONS})
+        self.unplaced_snvs = Counter({reason: 0 for reason in SNV_UNPLACED_REASONS})
 
     def add(self, block: LDBlock) -> None:
         self.sources.add(block.indel_reference)
@@ -280,22 +287,27 @@ class PanelIndels:
                 self.tables.add(table)
         self.n_indels += block.n_indels
         self.n_placed += block.n_indels_placed
-        self.unplaced.update(block.unplaced)
+        self.unplaced_indels.update(block.unplaced_indels)
+        self.unplaced_snvs.update(block.unplaced_snvs)
 
-    def record(self) -> dict[str, object]:
-        """The completion record's entry: where the references came from, the
-        table (with its checksum and provenance) where one was read, the
-        indels read and placed, and, per reason, the rows naming a variant
-        (an SNV or an indel) that were not placed."""
+    def record(self) -> dict[str, dict[str, object]]:
+        """The completion record's two entries. ``panel_indels``: where the
+        references came from, each table read (with its checksum and
+        provenance), the indels read and placed, and, per reason, those not
+        placed, which sum to the difference. ``panel_snvs_unplaced``: per
+        reason, the SNVs and substitutions not placed."""
         source = next(iter(self.sources)) if len(self.sources) == 1 else (
             "mixed" if self.sources else "none"
         )
         return {
-            "reference_from": source,
-            "tables": [_table_record(table) for table in sorted(self.tables)],
-            "n_indels": self.n_indels,
-            "n_placed": self.n_placed,
-            "unplaced_rows": {reason: self.unplaced[reason] for reason in UNPLACED_REASONS},
+            "panel_indels": {
+                "reference_from": source,
+                "tables": [_table_record(table) for table in sorted(self.tables)],
+                "n_indels": self.n_indels,
+                "n_placed": self.n_placed,
+                "unplaced": dict(self.unplaced_indels),
+            },
+            "panel_snvs_unplaced": dict(self.unplaced_snvs),
         }
 
     def log(self, ld_dir: str | Path, ancestry: str) -> None:
@@ -310,14 +322,12 @@ class PanelIndels:
                 "LD panel %s/%s: %d of %d indels placed by %s",
                 ld_dir, ancestry, self.n_placed, self.n_indels, ", ".join(sorted(self.sources)),
             )
-        without_effect = self.unplaced["no_effect_allele"] + self.unplaced[
-            "effect_allele_not_an_allele"
-        ]
-        if without_effect:
+        unplaced_snvs = sum(self.unplaced_snvs.values())
+        if unplaced_snvs:
             log.warning(
-                "LD panel %s/%s: %d rows record no EA, or one that is neither of their "
-                "alleles, so nothing says which allele their LD is for; they are not placed",
-                ld_dir, ancestry, without_effect,
+                "LD panel %s/%s: %d SNV rows are not placed (%s): they record no EA, "
+                "one that is neither of their alleles, or an id no ALID can spell",
+                ld_dir, ancestry, unplaced_snvs, dict(self.unplaced_snvs),
             )
 
 
@@ -396,9 +406,14 @@ def _read_block_tsv(tsv_path: Path) -> _BlockTable:
 
 
 #: Why a panel row naming a variant is not placed: an indel the panel
-#: declares no reference for; a row whose `EA` is empty (or, for an indel, a
-#: block with no `EA` column); and a row whose `EA` is neither of its alleles.
-UNPLACED_REASONS = ("no_reference", "no_effect_allele", "effect_allele_not_an_allele")
+#: declares no reference for; a row whose `EA` is empty, or whose block has no
+#: `EA` column; a row whose `EA` is neither of its alleles; and a row whose id
+#: no ALID can spell (an allele outside the alphabet, say), once any
+#: reference it needs is found.
+INDEL_UNPLACED_REASONS = (
+    "no_reference", "no_effect_allele", "effect_allele_not_an_allele", "identity_invalid",
+)
+SNV_UNPLACED_REASONS = ("no_effect_allele", "effect_allele_not_an_allele", "identity_invalid")
 
 
 @dataclass(frozen=True)
@@ -408,7 +423,8 @@ class _BlockAlleles:
     source: str
     n_indels: int
     n_placed: int
-    unplaced: dict[str, int]
+    unplaced_indels: dict[str, int]
+    unplaced_snvs: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -434,20 +450,30 @@ def _block_alleles(
     settled: Mapping[IndelKey, str] = {}
     if source == "table" and indel_table is not None:
         settled = _table_references(indel_table, chrom, table.min_bp, table.max_bp)
-    alids: list[str | None] = []
-    flipped: list[bool] = []
-    unplaced = Counter({reason: 0 for reason in UNPLACED_REASONS})
+    return _tallied([_place_row(table, i, settled) for i in range(len(table.snp_ids))], source)
+
+
+def _tallied(rows: list[_Row], source: str) -> _BlockAlleles:
+    """A block's rows, with its indels counted and its unplaced rows tallied by
+    reason, indels apart from SNVs."""
+    unplaced = {
+        True: Counter({reason: 0 for reason in INDEL_UNPLACED_REASONS}),
+        False: Counter({reason: 0 for reason in SNV_UNPLACED_REASONS}),
+    }
     n_indels = n_placed = 0
-    for i in range(len(table.snp_ids)):
-        row = _place_row(table, i, settled)
-        alids.append(row.alid)
-        flipped.append(row.flipped)
+    for row in rows:
         n_indels += row.indel
         n_placed += row.indel and row.alid is not None
         if row.unplaced is not None:
-            unplaced[row.unplaced] += 1
+            unplaced[row.indel][row.unplaced] += 1
     return _BlockAlleles(
-        alids, np.array(flipped, dtype=bool), source, n_indels, n_placed, dict(unplaced)
+        alids=[row.alid for row in rows],
+        flipped=np.array([row.flipped for row in rows], dtype=bool),
+        source=source,
+        n_indels=n_indels,
+        n_placed=n_placed,
+        unplaced_indels=dict(unplaced[True]),
+        unplaced_snvs=dict(unplaced[False]),
     )
 
 
@@ -455,9 +481,9 @@ def _place_row(table: _BlockTable, row: int, settled: Mapping[IndelKey, str]) ->
     """One row's placement.
 
     A row is placed only where its `EA`, which its LD and `EAF` are coded on,
-    is one of its alleles (`_oriented_row`). A block with no `EA` column codes
-    an SNV on its ALID's A1, as completion always has, and places no indel,
-    since nothing says which allele an indel's LD is for.
+    is one of its alleles (`_oriented_row`). A row with no `EA` -- an empty
+    cell, or a block with no `EA` column -- places nothing, SNV or indel,
+    since nothing says which allele its LD is for.
     """
     snp_id = table.snp_ids[row]
     parts = panel_id_parts(snp_id)
@@ -465,7 +491,7 @@ def _place_row(table: _BlockTable, row: int, settled: Mapping[IndelKey, str]) ->
         return _Row(None, False, False, None)
     indel = len(parts[2]) != len(parts[3])
     effect = _effect_allele(table, row)
-    if effect == "" or (indel and effect is None):
+    if not effect:
         return _Row(None, False, indel, "no_effect_allele")
     if not indel:
         return _oriented_row(canonical_panel_alid(snp_id), effect, indel=False)
@@ -475,17 +501,18 @@ def _place_row(table: _BlockTable, row: int, settled: Mapping[IndelKey, str]) ->
     return _oriented_row(canonical_panel_alid(snp_id, reference), effect, indel=True)
 
 
-def _effect_allele(table: _BlockTable, row: int) -> str | None:
-    """A row's `EA` as identity spells it, ``""`` where its cell is empty, or
-    None where the block records none."""
-    return None if table.effect is None else identity_allele(table.effect[row].strip())
+def _effect_allele(table: _BlockTable, row: int) -> str:
+    """A row's `EA` as identity spells it, ``""`` where its cell is empty or
+    the block records none."""
+    return "" if table.effect is None else identity_allele(table.effect[row].strip())
 
 
-def _oriented_row(alid: str | None, effect: str | None, *, indel: bool) -> _Row:
-    """A named row, flipped where its `EA` is its ALID's A2, or not placed where
-    its `EA` is neither allele. With no `EA` (``None``), as it stands."""
-    if alid is None or effect is None:
-        return _Row(alid, False, indel, None)
+def _oriented_row(alid: str | None, effect: str, *, indel: bool) -> _Row:
+    """A row's placement once its id is read: not placed where no ALID can
+    spell it or its `EA` is neither allele, else flipped where its `EA` is its
+    ALID's A2."""
+    if alid is None:
+        return _Row(None, False, indel, "identity_invalid")
     a1, a2 = alid.split(":")[2:]
     if effect not in (a1, a2):
         return _Row(None, False, indel, "effect_allele_not_an_allele")
@@ -578,7 +605,8 @@ def load_block(tsv_path: Path) -> LDBlock | None:
         indel_reference=alleles.source,
         n_indels=alleles.n_indels,
         n_indels_placed=alleles.n_placed,
-        unplaced=alleles.unplaced,
+        unplaced_indels=alleles.unplaced_indels,
+        unplaced_snvs=alleles.unplaced_snvs,
     )
 
 

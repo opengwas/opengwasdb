@@ -238,8 +238,8 @@ class AdmissionCounts:
     frequencies outside (0, 1) the Store holds as absent, over every row read
     (D7); a row is never dropped for one. ``indel_rows_kept_by_hm_code`` counts
     the indel rows a GWAS-SSF harmoniser code of 10 or 11 placed, over every row
-    read and before duplicates are resolved, beside the ``indel_ssf_*`` drops, so a record says what the rule took and
-    what it left (#381).
+    read and before duplicates are resolved, beside the ``indel_ssf_*`` drops,
+    so a record says what the rule took and what it left (#381).
     """
 
     examined: int = 0

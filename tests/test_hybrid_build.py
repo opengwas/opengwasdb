@@ -606,7 +606,8 @@ def test_gwas_ssf_capability_builds_a_hybrid_store_alongside_gwas_vcf(tmp_path):
     manifest.write_text(
         "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
         "\toriginal_sd_method\toriginal_sd\tsource_reader_capability\n"
-        f"trait_ssf\t{ssf_path}\tTrait SSF\t1000\tsd\tdeclared_standardised\t\t{GWAS_SSF_CAPABILITY}\n"
+        f"trait_ssf\t{ssf_path}\tTrait SSF\t1000\tsd\tdeclared_standardised"
+        f"\t\t{GWAS_SSF_CAPABILITY}\n"
         f"trait_b\t{vcf_b}\tTrait B\t1000\tsd\tdeclared_standardised\t\t\n",
         encoding="utf-8",
     )
