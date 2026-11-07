@@ -15,6 +15,8 @@
         --panel P --genetic-map NAME=M --genetic-map NAME=M --output O.json
     python -m prototypes.locus_leads compare-maps --selection S --shared-sets H \\
         --genetic-map NAME=SWEEP.json --genetic-map NAME=SWEEP.json --output O.json
+    python -m prototypes.locus_leads regions --selection S --sweep W --profile P \\
+        --stores-dir D --genetic-map M --panel P --hm3 H --blocks B --work-dir D --output O.json
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ from .maps import (
 )
 from .panel_chance import SEED as CHANCE_SEED, merge_chance, panel_chance
 from .profile_sweep import profile_sweep
+from .regions import RegionMismatch, load_inputs, regions
 from .run import run
 from .select import SelectionRule, build_selection
 from .sweep import EUR_SPIKES, sweep
@@ -133,6 +136,20 @@ def _profile(args: argparse.Namespace) -> None:
     print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
 
 
+def _regions(args: argparse.Namespace) -> None:
+    """The region figures' data, written only when every rebuilt count is the committed one."""
+    started = time.monotonic()
+    paths = {"sweep": args.sweep, "profile": args.profile, "hm3": args.hm3,
+             "blocks": args.blocks}
+    given = load_inputs(args.stores_dir, load_map(args.genetic_map), args.panel, paths,
+                        args.work_dir, args.threads)
+    try:
+        regions(paths, json.loads(args.selection.read_text()), given, args.output)
+    except RegionMismatch as refused:
+        raise SystemExit(f"refused, {args.output} not written: {refused}") from refused
+    print(f"wrote {args.output} in {time.monotonic() - started:.1f} s", file=sys.stderr)
+
+
 def _named_maps(entries: list[str]) -> dict[str, Path]:
     """`NAME=PATH` arguments as a mapping, refusing a name given twice."""
     named: dict[str, Path] = {}
@@ -188,7 +205,7 @@ _HANDLERS: dict[str, Callable[[argparse.Namespace], None]] = {
     "build-median-map": _build_median, "select": _select, "sweep": _sweep,
     "profile-sweep": _profile, "map-shared-sets": _map_shared_sets,
     "compare-maps": _compare_maps, "compare": _compare, "cost": _cost,
-    "chance-ld": _chance_ld,
+    "chance-ld": _chance_ld, "regions": _regions,
 }
 
 
@@ -268,6 +285,19 @@ def _sweep_parsers(commands: Any) -> None:
     chance.add_argument("--seed", type=int, default=CHANCE_SEED)
     chance.add_argument("--output", type=Path, required=True)
     _add_profile_sweep(commands)
+    _add_regions(commands)
+
+
+def _add_regions(commands: Any) -> None:
+    command = commands.add_parser("regions", help="the data behind the report's region "
+                                  "figures, checked against #403's and #409's records (#409)")
+    for name, what in (("--selection", "#403's selection JSON"), ("--sweep", "#403's sweep JSON"),
+                       ("--profile", "#409's profile JSON"), ("--stores-dir", "OGS-* Stores"),
+                       ("--genetic-map", "#403's map"), ("--panel", "directory of chr<N>.pgen"),
+                       ("--hm3", "#403's HapMap3 ALIDs"), ("--blocks", "ld_regions_hg38.tsv"),
+                       ("--work-dir", "plink2's files"), ("--output", "eur_regions.json")):
+        command.add_argument(name, type=Path, required=True, help=what)
+    command.add_argument("--threads", type=int, default=4)
 
 
 def _add_profile_sweep(commands: Any) -> None:
