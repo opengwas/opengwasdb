@@ -1,8 +1,9 @@
 """The PC Check: the owner's local-PC rule (7 November 2026; ADR 0002), as a reference.
 
-A PC is **local**, and dropped from the covariates, only if one 4 Mb window explains at least 10%
-of it **and** the rest of the genome explains it no better than chance. The covariates are the
-first up to 10 PCs that are kept; fewer are used if fewer survive, as long as at least 5 do, and
+A PC is **local**, and dropped from the covariates, when one 4 Mb window explains at least 10% of
+it, more than a random vector's best window does, **and** the rest of the genome explains at most
+0.05 of what that window does (the owner's rule, 7 November 2026). The covariates are the first up
+to 10 PCs that are kept; fewer are used if fewer survive, as long as at least 5 do, and
 t_far's k is the number used (owner, 7 November 2026). `docs/spec/build-inputs.md` ("The PC
 Check") is the authority; this is the numpy implementation the scripts use, and ogld#5's builder
 is held to the same numbers.
@@ -15,13 +16,16 @@ is held to the same numbers.
 - **Share:** the share of a PC's centred variance in the span of a window's basis.
 - **Scan, per PC** (names as `ogld.format.PcScan`): `window`, the window with the largest share;
   `window_share`, that share; `rest_share`, the mean share over every window not overlapping it;
-  `local`, the verdict.
-- **Chance:** 200 permutations of the PC's values across samples (seed 405), which carry no
-  genotype structure. A PC is local only if its `window_share` is >= 0.10 **and** above the
-  permutations' 99th percentile of the largest window share (`window_null_q99`), **and** its
-  `rest_share` is at most their 99th percentile of the rest share (`rest_null_q99`). The window
-  null keeps a small panel's noise PC: at n = 345 a random vector's best window reaches about
-  0.08-0.10 by chance (proto/1-build-inputs@c1c1639, results/rule_power.tsv).
+  `ratio`, rest_share / window_share; `local`, the verdict.
+- **The window-side null:** 200 permutations of the PC's values across samples (seed 405), which
+  carry no genotype structure; `window_null_q99` is their 99th percentile of the largest window
+  share. At n = 345 a random vector's best window reaches about 0.08-0.10 by chance, so without it
+  a small panel's noise PC could be dropped (proto/1-build-inputs@c1c1639,
+  results/rule_power.tsv).
+- **The ratio** replaced "the rest of the genome explains it no better than chance": a karyotype
+  axis that carries a trace of ancestry beats that null (EUR's 17q21.31 score, rest share 0.0073
+  against 0.0071) but sits at a ratio of 0.008, while every real PC sits at >= 0.104. The rest
+  null's 99th percentile, `rest_null_q99`, is still reported, and decides nothing.
 """
 
 from __future__ import annotations
@@ -35,13 +39,14 @@ STEP_BP = 2_000_000
 MAX_VARIANTS = 5_000
 N_LOCAL = 5
 MIN_SHARE = 0.10
+MAX_RATIO = 0.05
 PERMUTATIONS = 200
 SEED = 405
 QUANTILE = 0.99
 K_TARGET = 10
 K_MIN = 5
 NULL = {"kind": "each PC's values permuted across samples: q99 of the largest window share "
-                "and of the rest share",
+                "(decides) and of the rest share (diagnostic)",
         "permutations": float(PERMUTATIONS), "seed": float(SEED), "quantile": QUANTILE}
 
 
@@ -93,6 +98,13 @@ def _scan(w: Windows, pcs: np.ndarray) -> list[dict[str, object]]:
     return [_scan_one(w, observed[:, k], pcs[:, k], k, rng) for k in range(pcs.shape[1])]
 
 
+def is_local(window_share: float, window_null_q99: float, rest_share: float) -> bool:
+    """The owner's rule: one window explains >= 10% of the PC, more than chance does, and the
+    rest of the genome at most 0.05 of what that window does."""
+    return (window_share >= MIN_SHARE and window_share > window_null_q99
+            and rest_share / window_share <= MAX_RATIO)
+
+
 def _scan_one(w: Windows, observed: np.ndarray, pc: np.ndarray, k: int,
               rng: np.random.Generator) -> dict[str, object]:
     best = int(np.argmax(observed))
@@ -103,9 +115,10 @@ def _scan_one(w: Windows, observed: np.ndarray, pc: np.ndarray, k: int,
     window_q99 = float(np.quantile(null.max(axis=0), QUANTILE))
     rest_q99 = float(np.quantile(null[rest].mean(axis=0), QUANTILE))
     window_share, rest_share = float(observed[best]), float(observed[rest].mean())
-    local = window_share >= MIN_SHARE and window_share > window_q99 and rest_share <= rest_q99
     return {"pc": f"PC{k + 1}", "window": f"{bc}:{bs}-{bs + WINDOW_BP - 1}",
-            "window_share": window_share, "rest_share": rest_share, "local": local,
+            "window_share": window_share, "rest_share": rest_share,
+            "ratio": rest_share / window_share,
+            "local": is_local(window_share, window_q99, rest_share),
             "window_null_q99": window_q99, "rest_null_q99": rest_q99}
 
 
@@ -120,6 +133,7 @@ def check(w: Windows, pcs: np.ndarray, k_target: int = K_TARGET,
         raise SystemExit(f"the PC Check keeps {len(kept)} PCs, fewer than the minimum {k_min}")
     covariates = kept[:k_target]
     return {"window_bp": WINDOW_BP, "step_bp": STEP_BP, "min_share": MIN_SHARE,
+            "max_ratio": MAX_RATIO,
             "windows": len(w.where), "scan": s, "dropped": [str(x["pc"]) for x in s if x["local"]],
             "null": NULL, "kept": len(kept), "covariates": covariates,
             "k_target": k_target, "k_min": k_min, "k": len(covariates)}
