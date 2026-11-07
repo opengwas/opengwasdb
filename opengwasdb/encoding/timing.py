@@ -29,6 +29,11 @@ def log_phase(logger: logging.Logger, label: str) -> Iterator[None]:
         logger.info("%s: done in %s", label, format_duration(time.monotonic() - started))
 
 
+def progress_every(total: int) -> int:
+    """How many items apart a loop of `total` reports: about twenty lines a run."""
+    return max(1, total // 20)
+
+
 def log_progress(
     logger: logging.Logger,
     label: str,
@@ -42,18 +47,47 @@ def log_progress(
     """One progress line per `every` items, and always on the last.
 
     Idle-cheap for the caller: it returns before reading the clock unless this
-    item is one to report, so a phase may call it after every row chunk.
+    item is one to report, so a phase may call it after every row chunk. `total`
+    is the loop's count, and it is taken as given: a read that passes it prints
+    `k/N` with `k` above `N`, which is how an overrun shows, and its ETA is held at
+    zero rather than counted backwards.
     """
     if completed % every and completed != total:
         return
     elapsed = time.monotonic() - started
-    eta = elapsed / completed * (total - completed) if completed else 0.0
+    eta = max(0.0, elapsed / completed * (total - completed)) if completed else 0.0
     suffix = f" ({extra})" if extra else ""
     logger.info(
         "%s: %d/%d%s — elapsed %s, ETA %s",
         label, completed, total, suffix,
         format_duration(elapsed), format_duration(eta),
     )
+
+#: Blocks apart a loop of unknown length reports: there is no count to divide.
+UNKNOWN_TOTAL_EVERY = 100
+
+
+def log_progress_unknown(
+    logger: logging.Logger,
+    label: str,
+    completed: int,
+    started: float,
+    *,
+    every: int = UNKNOWN_TOTAL_EVERY,
+) -> None:
+    """A progress line for a loop whose total could not be counted: done, and elapsed.
+
+    No ETA and no denominator: a pass whose count itself failed still has to say it is
+    moving, and inventing a total would be the plausible lie this project exists to
+    avoid (issue #308).
+    """
+    if completed % every:
+        return
+    logger.info(
+        "%s: %d done — elapsed %s",
+        label, completed, format_duration(time.monotonic() - started),
+    )
+
 
 class PhaseTimer:
     """Seconds accumulated per named phase, over a run that visits each many times.
@@ -80,7 +114,16 @@ class PhaseTimer:
         try:
             yield
         finally:
-            self.seconds[name] = self.seconds.get(name, 0.0) + (time.perf_counter() - started)
+            self.record(name, time.perf_counter() - started)
+
+    def record(self, name: str, seconds: float) -> None:
+        """Charge `seconds` to `name`, as `phase` does once the work has finished.
+
+        A caller that learns only afterwards what the work turned out to be -- a rule
+        that reports it judged nothing, and so has no phase -- charges here or not at
+        all (issue #308).
+        """
+        self.seconds[name] = self.seconds.get(name, 0.0) + seconds
 
     def total(self) -> float:
         return sum(self.seconds.values())
@@ -94,8 +137,17 @@ class PhaseTimer:
         ]
 
     def format_report(self) -> str:
+        """One line per phase, in the order `report` gives them, then the total.
+
+        The name column is wide enough for the longest phase in this run, so a
+        caller that names a phase after the rule and target it judged keeps its
+        columns aligned as the Dense build's short phase names do.
+        """
+        width = max((len(name) for name in self.seconds), default=0)
+        width = max(24, width)
         lines = [
-            f"  {name:<24} {seconds:9.1f}s  {share:5.1%}" for name, seconds, share in self.report()
+            f"  {name:<{width}} {seconds:9.1f}s  {share:5.1%}"
+            for name, seconds, share in self.report()
         ]
-        lines.append(f"  {'total accounted':<24} {self.total():9.1f}s")
+        lines.append(f"  {'total accounted':<{width}} {self.total():9.1f}s")
         return "\n".join(lines)

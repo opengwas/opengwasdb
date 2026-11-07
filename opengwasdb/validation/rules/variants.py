@@ -48,15 +48,46 @@ class TableBlock:
     previous: VariantRecord | None
 
 
+def _block_limits(n_rows: int | None) -> Iterator[tuple[int, int]]:
+    """Every block of a table, by row: the one place the size of one is set.
+
+    `n_rows` is how long the table claims to be, or None while the stream is the only
+    thing that knows. The count passes the offsets sidecar's length; the read passes
+    None, so a sidecar that is wrong -- or unreadable -- moves no block boundary and
+    changes nothing about what the folds measure (issue #308).
+    """
+    start = 0
+    while n_rows is None or start < n_rows:
+        stop = start + _BLOCK_ROWS if n_rows is None else min(start + _BLOCK_ROWS, n_rows)
+        yield start, stop
+        start = stop
+
+
+def _n_blocks(target: Target) -> int:
+    """How many blocks `_blocks` reads for a table as long as its offsets sidecar.
+
+    The count is the sidecar's, because how long the stream is is what the read is
+    finding out: a table that disagrees with the sidecar -- which
+    `variant_table.rows` reports -- runs past this count, and its progress line then
+    never reaches `n/N`. The alternative, counting rows first, would read the table
+    twice (issue #308).
+    """
+    return sum(1 for _ in _block_limits(target.variant_axis.n_variants))
+
+
 def _blocks(target: Target) -> Iterator[TableBlock]:
+    """Consecutive rows of the table, `_block_limits` at a time, until the stream ends."""
+    limits = _block_limits(None)
+    limit = next(limits)
     previous: VariantRecord | None = None
     start = 0
     records: list[VariantRecord] = []
     for record in iter_variant_records(variant_table_path(target.store.path)):
         records.append(record)
-        if len(records) == _BLOCK_ROWS:
+        if start + len(records) >= limit[1]:
             yield TableBlock(start, records, previous)
             previous, start, records = records[-1], start + len(records), []
+            limit = next(limits)
     if records:
         yield TableBlock(start, records, previous)
 
@@ -67,7 +98,7 @@ def _read_failure(target: Target, exc: Exception) -> str:
     return f"validation failed: {exc}"
 
 
-VARIANT_TABLE: Scan[TableBlock] = Scan("variant_table", _blocks, _read_failure)
+VARIANT_TABLE: Scan[TableBlock] = Scan("variant_table", _blocks, _read_failure, _n_blocks)
 
 
 def _rows(_target: Target, block: TableBlock) -> int:
