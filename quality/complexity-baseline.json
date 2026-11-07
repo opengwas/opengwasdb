@@ -6,34 +6,6 @@
  },
  "entries": [
   {
-   "file": "opengwasdb/validation/validate.py",
-   "text": "def _validate_ragged_top_hits(",
-   "line": 727,
-   "cc": 26,
-   "lines": 84
-  },
-  {
-   "file": "opengwasdb/validation/validate.py",
-   "text": "def _validate_eaf_plan(",
-   "line": 1442,
-   "cc": 26,
-   "lines": 86
-  },
-  {
-   "file": "opengwasdb/validation/validate.py",
-   "text": "def _validate_analyses_tsv(analyses_path: Path, errors: list[str]) -> int:",
-   "line": 1223,
-   "cc": 25,
-   "lines": 106
-  },
-  {
-   "file": "opengwasdb/validation/validate.py",
-   "text": "def _validate_eaf_orientation(",
-   "line": 1104,
-   "cc": 24,
-   "lines": 117
-  },
-  {
    "file": "scripts/build_ancestry_reference.py",
    "text": "def build_reference(",
    "line": 105,
@@ -48,16 +20,9 @@
    "lines": 64
   },
   {
-   "file": "opengwasdb/layouts/dense/build_vcf.py",
-   "text": "def _read_manifest(manifest_path: str | Path) -> list[_ManifestRow]:",
-   "line": 1093,
-   "cc": 20,
-   "lines": 135
-  },
-  {
    "file": "opengwasdb/variants/axis.py",
    "text": "def indices_by_identifiers(self, identifiers: Sequence[str]) -> np.ndarray:",
-   "line": 386,
+   "line": 450,
    "cc": 20,
    "lines": 64
   },
@@ -69,13 +34,6 @@
    "lines": 43
   },
   {
-   "file": "opengwasdb/readers/gwas_vcf.py",
-   "text": "def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:",
-   "line": 167,
-   "cc": 19,
-   "lines": 65
-  },
-  {
    "file": "opengwasdb/validation/eaf_audit.py",
    "text": "def audit_eaf_orientation(",
    "line": 97,
@@ -83,46 +41,18 @@
    "lines": 72
   },
   {
-   "file": "opengwasdb/validation/validate.py",
-   "text": "def _validate_rho(root: Any, n_analyses: int, errors: list[str]) -> None:",
-   "line": 2482,
-   "cc": 17,
-   "lines": 55
-  },
-  {
    "file": "opengwasdb/layouts/dense/complete.py",
    "text": "def _shard_checkpoint_fills_by_band(",
-   "line": 929,
+   "line": 1038,
    "cc": 15,
    "lines": 98
   },
   {
-   "file": "opengwasdb/validation/validate.py",
-   "text": "def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> ValidationResult:",
-   "line": 813,
-   "cc": 15,
-   "lines": 100
-  },
-  {
-   "file": "opengwasdb/validation/validate.py",
-   "text": "def _validate_variant_axis(variant_axis: VariantAxis, errors: list[str]) -> int:",
-   "line": 1369,
-   "cc": 15,
-   "lines": 55
-  },
-  {
    "file": "opengwasdb/ancestry/subset.py",
    "text": "def subset_catalogue(",
-   "line": 52,
+   "line": 53,
    "cc": 14,
    "lines": 71
-  },
-  {
-   "file": "opengwasdb/model/analyses.py",
-   "text": "def validate_analyses(table: AnalysesTable) -> list[str]:",
-   "line": 225,
-   "cc": 14,
-   "lines": 41
   },
   {
    "file": "scripts/build_ieu_manifest.py",
@@ -134,42 +64,14 @@
   {
    "file": "opengwasdb/layouts/hybrid/build.py",
    "text": "def read_reference_panel_alids(panel_path: str | Path) -> set[str]:",
-   "line": 118,
+   "line": 246,
    "cc": 13,
    "lines": 37
   },
   {
-   "file": "opengwasdb/layouts/dense/build_vcf.py",
-   "text": "def _resolve_column(",
-   "line": 284,
-   "cc": 6,
-   "lines": 93
-  },
-  {
-   "file": "opengwasdb/layouts/dense/build_vcf.py",
-   "text": "def _lift_manifest_variants(",
-   "line": 492,
-   "cc": 8,
-   "lines": 90
-  },
-  {
-   "file": "opengwasdb/layouts/ragged/build_ssf.py",
-   "text": "def _read_filtered(",
-   "line": 163,
-   "cc": 12,
-   "lines": 36
-  },
-  {
-   "file": "opengwasdb/validation/validate.py",
-   "text": "def _validate_hybrid_invariants(",
-   "line": 997,
-   "cc": 12,
-   "lines": 43
-  },
-  {
    "file": "opengwasdb/variants/axis.py",
    "text": "def write_variant_axis(",
-   "line": 184,
+   "line": 248,
    "cc": 12,
    "lines": 61
   },
@@ -181,44 +83,16 @@
    "lines": 17
   },
   {
-   "file": "opengwasdb/layouts/dense/overview.py",
-   "text": "def write_overview_html(",
-   "line": 725,
+   "file": "opengwasdb/model/analyses.py",
+   "text": "def validate_analyses(table: AnalysesTable) -> list[str]:",
+   "line": 250,
    "cc": 11,
-   "lines": 69
-  },
-  {
-   "file": "opengwasdb/validation/validate.py",
-   "text": "def _source_units(",
-   "line": 2575,
-   "cc": 11,
-   "lines": 32
-  },
-  {
-   "file": "opengwasdb/layouts/dense/complete.py",
-   "text": "def _write_completed_bands(",
-   "line": 1372,
-   "cc": 3,
-   "lines": 81
-  },
-  {
-   "file": "opengwasdb/cli/main.py",
-   "text": "def assign_ancestry_command(",
-   "line": 413,
-   "cc": 4,
-   "lines": 80
-  },
-  {
-   "file": "opengwasdb/layouts/ragged/zarr_csr.py",
-   "text": "def flush(",
-   "line": 211,
-   "cc": 5,
-   "lines": 79
+   "lines": 41
   },
   {
    "file": "opengwasdb/cli/main.py",
    "text": "def calibrate_ancestry_command(",
-   "line": 532,
+   "line": 1418,
    "cc": 10,
    "lines": 56
   },
@@ -228,13 +102,6 @@
    "line": 82,
    "cc": 10,
    "lines": 52
-  },
-  {
-   "file": "opengwasdb/completion/checkpoint.py",
-   "text": "def write_block_checkpoint(path: Path, result: BlockCompletionResult) -> None:",
-   "line": 80,
-   "cc": 10,
-   "lines": 22
   },
   {
    "file": "opengwasdb/completion/impute.py",
@@ -253,65 +120,23 @@
   {
    "file": "opengwasdb/encoding/measure.py",
    "text": "def combine_eaf_measurements(parts: list[EafMeasurements]) -> EafMeasurements:",
-   "line": 414,
+   "line": 415,
    "cc": 10,
    "lines": 26
-  },
-  {
-   "file": "opengwasdb/encoding/planes.py",
-   "text": "def __init__(",
-   "line": 324,
-   "cc": 10,
-   "lines": 37
-  },
-  {
-   "file": "opengwasdb/layouts/dense/overview.py",
-   "text": "def _render_row(",
-   "line": 385,
-   "cc": 10,
-   "lines": 22
   },
   {
    "file": "opengwasdb/layouts/ragged/analyses.py",
    "text": "def molecular_analysis(",
    "line": 23,
    "cc": 10,
-   "lines": 31
+   "lines": 26
   },
   {
    "file": "opengwasdb/layouts/ragged/complete.py",
    "text": "def complete_ragged_store(",
-   "line": 237,
+   "line": 315,
    "cc": 3,
    "lines": 75
-  },
-  {
-   "file": "opengwasdb/query/facade.py",
-   "text": "def _concat_results(parts: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:",
-   "line": 989,
-   "cc": 10,
-   "lines": 13
-  },
-  {
-   "file": "opengwasdb/query/facade.py",
-   "text": "def lookup(",
-   "line": 1164,
-   "cc": 10,
-   "lines": 31
-  },
-  {
-   "file": "opengwasdb/validation/validate.py",
-   "text": "def _imputed_declaration_matches_arrays(",
-   "line": 1790,
-   "cc": 10,
-   "lines": 42
-  },
-  {
-   "file": "opengwasdb/validation/validate.py",
-   "text": "def _validate_dense_arrays(",
-   "line": 1834,
-   "cc": 10,
-   "lines": 74
   },
   {
    "file": "scripts/compute_vcf_coverage.py",
@@ -321,32 +146,11 @@
    "lines": 23
   },
   {
-   "file": "opengwasdb/cli/main.py",
-   "text": "def build_hybrid_from_catalogue_command(",
-   "line": 336,
-   "cc": 1,
-   "lines": 74
-  },
-  {
-   "file": "opengwasdb/layouts/dense/build_vcf.py",
-   "text": "def _write_dense_bands(",
-   "line": 1649,
-   "cc": 6,
-   "lines": 74
-  },
-  {
    "file": "opengwasdb/layouts/dense/complete.py",
    "text": "def complete_dense_store(",
-   "line": 212,
+   "line": 234,
    "cc": 3,
    "lines": 74
-  },
-  {
-   "file": "opengwasdb/ancestry/pipeline.py",
-   "text": "def annotate_catalogue(",
-   "line": 95,
-   "cc": 8,
-   "lines": 72
   },
   {
    "file": "opengwasdb/ancestry/mixture.py",
@@ -358,72 +162,58 @@
   {
    "file": "opengwasdb/ancestry/subset.py",
    "text": "def build_hybrid_from_catalogue(",
-   "line": 142,
+   "line": 143,
    "cc": 3,
    "lines": 71
   },
   {
-   "file": "opengwasdb/completion/block.py",
-   "text": "def complete_block_for_analysis(",
-   "line": 97,
-   "cc": 9,
-   "lines": 57
+   "file": "opengwasdb/cli/main.py",
+   "text": "def build_hybrid_from_catalogue_command(",
+   "line": 978,
+   "cc": 1,
+   "lines": 69
   },
   {
-   "file": "opengwasdb/layouts/ragged/zarr_csr.py",
-   "text": "def eaf_pairs(self, variant_index: np.ndarray, analysis_index: np.ndarray) -> np.ndarray:",
-   "line": 411,
+   "file": "opengwasdb/encoding/planes.py",
+   "text": "def __init__(",
+   "line": 312,
    "cc": 9,
-   "lines": 41
+   "lines": 37
   },
   {
    "file": "opengwasdb/query/facade.py",
    "text": "def rho(self, *ids: str) -> dict[str, np.ndarray]:",
-   "line": 490,
+   "line": 382,
    "cc": 9,
    "lines": 34
   },
   {
-   "file": "opengwasdb/readers/tabular.py",
-   "text": "def extract_at_sites(",
-   "line": 98,
-   "cc": 9,
-   "lines": 17
-  },
-  {
-   "file": "opengwasdb/validation/validate.py",
-   "text": "def _validate_top_hits(root: Any, errors: list[str], encoding: StoreEncoding) -> None:",
-   "line": 2424,
-   "cc": 9,
-   "lines": 44
-  },
-  {
-   "file": "opengwasdb/query/resolve.py",
-   "text": "def resolve_rows(",
-   "line": 41,
-   "cc": 8,
-   "lines": 67
+   "file": "opengwasdb/layouts/dense/complete.py",
+   "text": "def _write_completed_bands(",
+   "line": 1617,
+   "cc": 3,
+   "lines": 66
   },
   {
    "file": "opengwasdb/encoding/codec.py",
    "text": "def encode_eaf(",
-   "line": 707,
+   "line": 1262,
    "cc": 7,
    "lines": 65
   },
   {
-   "file": "opengwasdb/layouts/dense/overview.py",
-   "text": "def _render_rho_section(output_path: Path, table: AnalysesTable) -> str | None:",
-   "line": 662,
-   "cc": 8,
-   "lines": 61
+   "file": "opengwasdb/ancestry/pipeline.py",
+   "text": "def annotate_catalogue(",
+   "line": 170,
+   "cc": 5,
+   "lines": 63
   },
   {
-   "file": "opengwasdb/layouts/dense/top_hits.py",
-   "text": "def build_top_hit_indexes(",
-   "line": 270,
-   "cc": 6,
-   "lines": 61
+   "file": "opengwasdb/cli/main.py",
+   "text": "def assign_ancestry_command(",
+   "line": 1050,
+   "cc": 1,
+   "lines": 63
   }
  ]
 }
