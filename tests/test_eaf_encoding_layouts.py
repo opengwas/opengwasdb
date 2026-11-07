@@ -529,7 +529,7 @@ def test_an_eaf_plane_that_contradicts_the_manifest_is_rejected(dense_store: Pat
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_store(dense_store)
-    assert not result.ok
+    assert result.failed() == {"encoding.dtypes", "encoding.eaf"}, result.errors
     assert any("dtype int8" in error for error in result.errors), result.errors
 
 
@@ -550,7 +550,7 @@ def test_a_residual_plane_with_no_baseline_is_rejected(dense_store: Path):
     del root[EAF_BASELINE]
 
     result = validate_store(dense_store)
-    assert not result.ok
+    assert result.failed() == {"encoding.eaf"}, result.errors
     assert any(EAF_BASELINE in error for error in result.errors), result.errors
 
 
@@ -595,6 +595,54 @@ def test_an_exception_table_that_lost_a_cell_is_rejected(dense_store: Path):
     result = validate_store(dense_store)
     assert not result.ok
     assert any("no entry in the eaf exception table" in e for e in result.errors), result.errors
+
+
+def test_an_overflow_exception_table_that_lost_a_cell_is_rejected(hybrid_store: Path):
+    """An Overflow's frequencies are held to their table as the Dense Component's are.
+
+    Its `se` is `float16` here, so nothing but the frequency rules reads the plane:
+    a table that lost a cell would leave that cell's frequency to whatever the lookup
+    returned.
+    """
+    overflow = zarr.open_group(str(hybrid_store / "data.zarr" / "ragged"), mode="a")
+    encoding = open_store(hybrid_store).manifest.encoding
+    assert encoding.eaf.is_residual and not encoding.se.is_residual
+    assert overflow[EAF_EXCEPTION_INDEX].shape[0] >= 1, "the Overflow must hold an exception"
+    lost = int(overflow[EAF_EXCEPTION_INDEX][0])
+    replace_exception_table(overflow, EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE)
+
+    result = validate_store(hybrid_store)
+
+    assert result.failed() == {"side_tables.eaf_exceptions"}, result.errors
+    (finding,) = result.of("side_tables.eaf_exceptions")
+    assert finding.target == "data.zarr/ragged"
+    assert finding.message == (
+        "Ragged Overflow eaf: 1 eaf exception cell(s) have no entry in the eaf exception "
+        f"table (first at flat position {lost})"
+    )
+
+
+def test_a_plane_that_cannot_be_decoded_is_skipped_by_the_range_rule(hybrid_store: Path):
+    """An undecodable plane has no frequencies to range-check, and none passed.
+
+    The range rule is skipped behind the exception-table rule, which says which cell
+    cannot be decoded and why; selected alone, it reports the plane itself.
+    """
+    overflow = zarr.open_group(str(hybrid_store / "data.zarr" / "ragged"), mode="a")
+    assert overflow[EAF_EXCEPTION_INDEX].shape[0] >= 1, "the Overflow must hold an exception"
+    replace_exception_table(overflow, EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE)
+
+    result = validate_store(hybrid_store)
+
+    assert result.failed() == {"side_tables.eaf_exceptions"}, result.errors
+    assert result.skipped["associations.eaf_range"] == ("side_tables.eaf_exceptions",)
+
+    alone = validate_store(hybrid_store, rules=["associations.eaf_range"])
+
+    assert alone.failed() == {"associations.eaf_range"}, alone.errors
+    assert [f.message for f in alone.of("associations.eaf_range")] == [
+        "Ragged Overflow eaf cannot be decoded under the declared plan"
+    ]
 
 
 def test_a_store_whose_eaf_scope_contradicts_its_plan_is_rejected(dense_store: Path):
@@ -720,7 +768,7 @@ def test_a_reference_array_the_plan_does_not_declare_is_rejected(completed_store
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_store(completed_store)
-    assert not result.ok
+    assert result.failed() == {"encoding.eaf"}, result.errors
     assert any(EAF_REFERENCE in error for error in result.errors), result.errors
 
 

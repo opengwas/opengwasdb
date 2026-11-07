@@ -20,9 +20,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from dense_sources import build_dense_fixture
 from store_assertions import replace_exception_table
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
+from opengwasdb.associations import Cells, CsrReader
 from opengwasdb.encoding import (
     Z_OVERFLOW,
     Z_OVERFLOW_INDEX,
@@ -37,7 +38,6 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.query import query_store
 from opengwasdb.stats import log10_p_two_sided
 from opengwasdb.store.open import (
@@ -87,7 +87,7 @@ def dense_store(tmp_path: Path) -> Path:
     source = tmp_path / "associations.tsv"
     source.write_text(_SOURCE_HEADER + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
     out = tmp_path / "dense.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], out, store_id="enc", release_id="v1", reference_assembly="GRCh38"
     )
     return out
@@ -171,7 +171,7 @@ def test_a_z_plane_that_contradicts_the_manifest_is_rejected(dense_store):
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_store(dense_store)
-    assert not result.ok
+    assert result.failed() == {"encoding.dtypes", "encoding.z"}, result.errors
     assert any("dtype int16" in error for error in result.errors), result.errors
 
 
@@ -222,7 +222,7 @@ def test_a_reader_meeting_an_unknown_encoding_kind_rejects_the_release(dense_sto
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = validate_store(dense_store)
-    assert not result.ok
+    assert result.failed() == {"manifest.loads"}
     assert any("int12_fixed" in error for error in result.errors), result.errors
 
 
@@ -342,10 +342,9 @@ def test_ragged_declares_its_encoding_and_validates_against_it(ragged_store):
 
 
 def test_ragged_top_hit_index_agrees_with_the_stored_csr(ragged_store):
-    csr = RaggedCSRReader(ragged_store)
-    z_all = csr.z_all()
-    offsets = csr._offsets[:]
-    vi_all = csr._variant_index[:]
+    reader = CsrReader.open(ragged_store, requires_mask=False)
+    whole = reader.inspect(Cells.analyses(0, reader.n_analyses))
+    z_all, vi_all, offsets = whole.z, whole.variant_index, reader.structure.offsets
     root = zarr.open_group(str(ragged_store / "data.zarr"), mode="r")
     for key in root["top_hits"]:
         group = root["top_hits"][key]

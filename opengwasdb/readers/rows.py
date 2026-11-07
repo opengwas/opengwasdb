@@ -87,6 +87,11 @@ class TabularMetricsRow:
     effect_from_odds_ratio_fallback: bool = False
     se_from_ci: bool = False
     se_from_p_value: bool = False
+    #: The source's own two-sided p-value for the row, as the file wrote it:
+    #: finite or `None`, with no range rule applied (a `0` and a `1.5` are both
+    #: reported). The resolver compares it with the z-score a build would store
+    #: (#345), so a reader that has no p-value reports `None`, never a stand-in.
+    p_value: float | None = None
 
 
 #: Rows per block. Peak memory is a block's ALID strings rather than the whole
@@ -142,6 +147,9 @@ class MetricsChunk:
     )
     se_from_ci: np.ndarray = field(default_factory=lambda: np.array([], dtype=bool))
     se_from_p_value: np.ndarray = field(default_factory=lambda: np.array([], dtype=bool))
+    #: The source's own p-value per row, `NaN` where the file has none or the
+    #: cell is not a finite number; no range rule is applied here (#345).
+    p_value: np.ndarray = field(default_factory=lambda: np.array([], dtype="float64"))
 
     def __post_init__(self) -> None:
         _fill_default_arrays(self)
@@ -163,6 +171,7 @@ _CHUNK_DEFAULTS: tuple[tuple[str, object, object], ...] = (
     ("effect_from_odds_ratio_fallback", False, bool),
     ("se_from_ci", False, bool),
     ("se_from_p_value", False, bool),
+    ("p_value", math.nan, None),
 )
 
 
@@ -241,6 +250,7 @@ def _chunk_of_rows(rows: list[TabularMetricsRow]) -> MetricsChunk:
         ),
         se_from_ci=_row_array(rows, lambda row: row.se_from_ci, bool),
         se_from_p_value=_row_array(rows, lambda row: row.se_from_p_value, bool),
+        p_value=_row_array(rows, lambda row: _or_nan(row.p_value), "float64"),
     )
 
 
@@ -392,6 +402,10 @@ class ReaderBatch:
     - ``imputation_score`` and ``imputation_status``: the declared score's parse,
       NaN and `UNDECLARED` where the Analysis declares none.
     - ``rsid``: the source's rs identifier for the row's variant, ``""`` where none.
+    - ``ref`` and ``alt``: the row's alleles as the source spells them, in its
+      order, as its association carries them (ADR 0075). The ALID upper-cases
+      them; the rsid harvest compares the names a site's spellings carry, so it
+      reads these (#379).
     - ``reference``: the format's declaration of which allele is the genome's
       reference, carried unchanged from the reader (`ReferenceAllele`).
     - ``ref_first``: for each row, whether its `ref` is the allele its ALID
@@ -411,6 +425,8 @@ class ReaderBatch:
     imputation_score: np.ndarray
     imputation_status: np.ndarray
     rsid: np.ndarray
+    ref: np.ndarray
+    alt: np.ndarray
     reference: ReferenceAllele
     ref_first: np.ndarray | None = None
     key_prefix: str = ""
@@ -430,6 +446,8 @@ class ReaderBatch:
             )
         if self.ref_first is not None and len(self.ref_first) != len(self.alid):
             raise ValueError("ref_first must hold one value per row of the batch")
+        if not len(self.ref) == len(self.alt) == len(self.alid):
+            raise ValueError("ref and alt must each hold one allele per row of the batch")
 
     def __len__(self) -> int:
         return int(self.alid.shape[0])
@@ -447,6 +465,8 @@ class ReaderBatch:
             imputation_score=self.imputation_score[keep],
             imputation_status=self.imputation_status[keep],
             rsid=self.rsid[keep],
+            ref=self.ref[keep],
+            alt=self.alt[keep],
             ref_first=None if self.ref_first is None else self.ref_first[keep],
         )
 
@@ -530,6 +550,8 @@ def _batch_of_rows(
         ),
         imputation_status=_row_array(rows, lambda row: row.imputation_score.status, object),
         rsid=_row_array(rows, lambda row: row.rsid, object),
+        ref=_row_array(rows, lambda row: row.ref, object),
+        alt=_row_array(rows, lambda row: row.alt, object),
         reference=reference,
         ref_first=_ref_first(rows) if reference.declared else None,
     )

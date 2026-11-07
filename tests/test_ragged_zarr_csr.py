@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from stored_rows import stored_rows
 
 from opengwasdb.encoding import (
     EafEncoding,
@@ -48,7 +49,7 @@ def test_round_trip_small(tmp_path):
     assert reader.n_analyses == 20
 
     for i, (vi, z, se) in enumerate(expected):
-        result = reader.get_analysis(i)
+        result = stored_rows(tmp_path, i, ENCODING)
         np.testing.assert_array_equal(result.variant_index, vi)
         np.testing.assert_allclose(result.z, z, atol=Z_TOL)
         np.testing.assert_array_equal(result.se, se)
@@ -65,7 +66,7 @@ def test_round_trip_large(tmp_path):
     # Spot-check a few analyses
     for i in [0, 1, 500, 999]:
         vi, z, se = expected[i]
-        result = reader.get_analysis(i)
+        result = stored_rows(tmp_path, i, ENCODING)
         np.testing.assert_array_equal(result.variant_index, vi)
         np.testing.assert_allclose(result.z, z, atol=Z_TOL)
         np.testing.assert_array_equal(result.se, se)
@@ -93,12 +94,12 @@ def test_empty_analysis(tmp_path):
     reader = RaggedCSRReader(tmp_path, ENCODING)
     assert reader.n_analyses == 3
 
-    empty = reader.get_analysis(1)
+    empty = stored_rows(tmp_path, 1, ENCODING)
     assert len(empty.variant_index) == 0
     assert len(empty.z) == 0
     assert len(empty.se) == 0
 
-    last = reader.get_analysis(2)
+    last = stored_rows(tmp_path, 2, ENCODING)
     assert len(last.variant_index) == 1
     assert int(last.variant_index[0]) == 100
 
@@ -117,7 +118,7 @@ def test_all_empty_analyses(tmp_path):
     assert reader.n_analyses == 5
     assert reader.n_associations == 0
     for i in range(5):
-        result = reader.get_analysis(i)
+        result = stored_rows(tmp_path, i, ENCODING)
         assert len(result.variant_index) == 0
 
 
@@ -197,6 +198,28 @@ def test_the_reproduced_length_one_se_is_refused_before_it_broadcasts():
         )
     assert writer.n_associations == 0
     assert writer.n_analyses == 0
+
+
+@pytest.mark.parametrize("plane", ["z", "se"])
+def test_a_marker_other_than_the_canonical_nan_is_refused_before_it_is_narrowed(plane):
+    """Spec §15: a missing marker is `np.nan`'s NaN, judged in the dtype the
+    caller hands over. Narrowed to float32 first, a float64 NaN with a payload
+    in its low bits came out canonical and was stored as a missing row."""
+    from opengwasdb.admission import NotAdmitted
+    from opengwasdb.associations import non_canonical
+
+    z = np.array([1.0, np.nan, 2.0])
+    se = np.array([0.1, np.nan, 0.2])
+    {"z": z, "se": se}[plane][1] = np.array([0x7FF8000000000001], np.uint64).view(np.float64)[0]
+    # Fixture first: missing in both planes, odd in float64, and canonical once narrowed.
+    assert np.isnan(z[1]) and np.isnan(se[1])
+    assert non_canonical({"z": z, "se": se}[plane]).tolist() == [False, True, False]
+    assert not non_canonical({"z": z, "se": se}[plane].astype(np.float32)).any()
+    writer = RaggedCSRWriter(_N_VARIANTS)
+
+    with pytest.raises(NotAdmitted, match="a missing marker other than the canonical NaN: 1"):
+        writer.add_analysis(np.array([1, 2, 3], dtype=np.int32), z, se, where="build-x")
+    assert writer.n_associations == 0
 
 
 # The Dense and Ragged per-variant shard policies differ above 1,000,000

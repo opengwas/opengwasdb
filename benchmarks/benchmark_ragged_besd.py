@@ -215,8 +215,7 @@ def _choose_queries(store_path: Path, q) -> dict:
     """
     # Probe with most associations — good for analysis query
     csr = RaggedCSRReader(store_path)
-    offsets = csr._offsets[:]
-    counts = np.diff(offsets.astype(np.int64))
+    counts = np.diff(csr.offsets)
     best_analysis_idx = int(np.argmax(counts))
 
     analyses = q.analyses_table()
@@ -235,7 +234,7 @@ def _choose_queries(store_path: Path, q) -> dict:
     region_end = region_centre + 1_000_000
 
     # Phewas: variant that appears in the most analyses
-    vi_all = csr._variant_index[:]
+    vi_all = csr.variant_index(0, csr.sequence_length)
     vi_counts = np.bincount(vi_all.astype(np.int64))
     phewas_vi = int(np.argmax(vi_counts))
     va = VariantAxis(store_path)

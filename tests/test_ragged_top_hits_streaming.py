@@ -21,16 +21,14 @@ import zarr
 from numcodecs import Blosc
 
 from opengwasdb import top_hits
+from opengwasdb.associations import Cells, CsrReader, Inspection
 from opengwasdb.encoding import (
     EncodingMeasurements,
     StoreEncoding,
     write_eaf_reference,
 )
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
-from opengwasdb.layouts.ragged.top_hits import (
-    _read_ragged_columns,
-    build_ragged_top_hit_indexes,
-)
+from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
 from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS
 from opengwasdb.top_hits import (
@@ -102,6 +100,29 @@ def _flush_store(
     return out
 
 
+def _whole_columns(store: Path, encoding: StoreEncoding) -> tuple[dict[str, np.ndarray], int]:
+    """Every association decoded at once, one whole Analysis after another: what
+    the top-hit phase held before issue #233, and the oracle the scan must equal.
+    The imputed column is the mask as stored; `eaf` rides only when the component
+    can report a frequency."""
+    reader = CsrReader.open(store, encoding)
+    every = Inspection.concat(
+        [reader.inspect(Cells.analysis(a)) for a in range(reader.n_analyses)], with_n=False
+    )
+    columns = {
+        "variant_index": every.variant_index,
+        "analysis_index": every.analysis_index,
+        "z": every.z,
+        "se": every.se,
+    }
+    if reader.structure.has_imputed:
+        assert every.flags is not None
+        columns["imputed"] = every.flags.astype(np.uint8)
+    if reader.structure.can_report_frequencies:
+        columns["eaf"] = every.eaf
+    return columns, reader.n_analyses
+
+
 def _reference_tiers(
     store: Path,
     encoding: StoreEncoding,
@@ -109,7 +130,7 @@ def _reference_tiers(
     scratch: Path,
 ) -> tuple[zarr.Group, int]:
     """The materialising pre-streaming path, written to a scratch group."""
-    columns, n_analyses = _read_ragged_columns(store, encoding)
+    columns, n_analyses = _whole_columns(store, encoding)
     root = zarr.open_group(str(scratch), mode="w", zarr_format=2)
     compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
     top_hits.write_index(root, columns, thresholds, n_analyses, compressor=compressor)
@@ -294,24 +315,30 @@ def test_reference_completed_imputed_tiers_match_materialising(tmp_path: Path):
 
 
 def test_builder_never_decodes_whole_planes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """The scan path must not call the reader's whole-plane decoders."""
+    """The scan reads Z a slice at a time, every row once, and no Z or SE slice
+    wider than one."""
     writer = _writer([600, 700], with_eaf=True)
     encoding = _encoding(writer, with_eaf=True)
     store = _flush_store(tmp_path, "store", writer, encoding)
+    z_rows: list[tuple[int, int]] = []
+    se_rows: list[int] = []
+    z_slice, se_slice = RaggedCSRReader.z_slice, RaggedCSRReader.se_slice
 
-    called: dict[str, bool] = {}
+    def counted_z(self, start, end):
+        z_rows.append((int(start), int(end)))
+        return z_slice(self, start, end)
 
-    def _forbidden(name: str):
-        def _boom(*_args, **_kwargs):
-            called[name] = True
-            raise AssertionError(f"{name} must not be called by the streamed scan")
+    def counted_se(self, start, end, **kwargs):
+        se_rows.append(int(end) - int(start))
+        return se_slice(self, start, end, **kwargs)
 
-        return _boom
-
-    monkeypatch.setattr(RaggedCSRReader, "z_all", _forbidden("z_all"))
-    monkeypatch.setattr(RaggedCSRReader, "se_all", _forbidden("se_all"))
-    build_ragged_top_hit_indexes(store, thresholds=(5e-4,), encoding=encoding)
-    assert not called, f"whole-plane decoders were called: {sorted(called)}"
+    monkeypatch.setattr(RaggedCSRReader, "z_slice", counted_z)
+    monkeypatch.setattr(RaggedCSRReader, "se_slice", counted_se)
+    build_ragged_top_hit_indexes(store, thresholds=(5e-4,), encoding=encoding, slice_cells=97)
+    assert len(z_rows) > 1 and max(end - start for start, end in z_rows) <= 97
+    covered = np.concatenate([np.arange(start, end) for start, end in z_rows])
+    assert np.array_equal(covered, np.arange(writer.n_associations))
+    assert max(se_rows, default=0) <= 97
 
 
 def _peak_bytes(work) -> int:

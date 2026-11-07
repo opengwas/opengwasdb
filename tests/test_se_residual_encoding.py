@@ -8,9 +8,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from dense_sources import build_dense_from_records
 from residual_fixtures import residual_eligible_records
 
-from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
 from opengwasdb.encoding.codec import SeExceptionBuilder, SeExceptionTable, StoreCodec
 from opengwasdb.encoding.measure import fit_se_grid
@@ -33,7 +33,7 @@ from opengwasdb.encoding.planes import (
     write_encoded_planes,
 )
 from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
-from opengwasdb.layouts.dense.build import build_dense_observed_store
+from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.model.manifest import StoreManifest
@@ -205,7 +205,7 @@ def test_ragged_plane_uses_csr_ordinals_for_exact_exceptions(tmp_path) -> None:
 def _build_residual_dense_store(tmp_path):
     records, expected = residual_eligible_records()
     store = tmp_path / "dense.opengwasdb"
-    build_dense_observed_store(
+    build_dense_from_records(
         records,
         store,
         store_id="s",
@@ -238,11 +238,11 @@ def test_validation_rejects_malformed_residual_se_side_arrays(tmp_path) -> None:
 
     path, group = malformed("missing-table")
     del group["se_exception_value"]
-    assert any("missing required arrays" in error for error in validate_store(path).errors)
+    assert validate_store(path).failed() == {"encoding.se"}
 
     path, group = malformed("bad-coefficients")
     group["se_coefficients"][0, 0] = np.nan
-    assert any("non-finite" in error for error in validate_store(path).errors)
+    assert validate_store(path).failed() == {"encoding.se"}
 
     path, group = malformed("stray-exception")
     del group["se_exception_index"]
@@ -268,7 +268,9 @@ def test_validation_rejects_malformed_residual_se_side_arrays(tmp_path) -> None:
         group, "se_exception_value", ArrayRole.EXCEPTION_TABLE,
         data=np.array([0.1, 0.1], dtype=np.float32), compressor=compressor(),
     )
-    assert any("duplicates" in error for error in validate_store(path).errors)
+    result = validate_store(path)
+    assert result.failed() == {"encoding.se"}
+    assert any("duplicates" in error for error in result.errors)
 
     path, group = malformed("dtype-disagreement")
     raw = np.asarray(group["se"][:], dtype=np.float16)
@@ -278,7 +280,9 @@ def test_validation_rejects_malformed_residual_se_side_arrays(tmp_path) -> None:
         group, "se", ArrayRole.DENSE_STATISTIC_PLANE,
         data=np.asarray(raw, dtype="float16"), compressor=compressor(), inner_chunk=chunks,
     )
-    assert any("dtype float16" in error for error in validate_store(path).errors)
+    result = validate_store(path)
+    assert result.failed() == {"encoding.dtypes"}
+    assert any("dtype float16" in error for error in result.errors)
 
 
 def test_hybrid_joint_selection_streams_dense_and_uses_one_fit(tmp_path) -> None:
@@ -441,6 +445,37 @@ def test_inline_top_hit_index_carries_plane_decoded_se(tmp_path) -> None:
     np.testing.assert_array_equal(top["se"][:].astype(np.float32), plane_se)
 
 
+def test_an_inline_index_refuses_a_candidate_array_that_is_not_parallel(tmp_path) -> None:
+    """A residual plan replaces the caller's `se` with the plane's, so a short one
+    was silently ignored rather than refused: the entry judges its arrays before
+    it gathers anything (issue #392)."""
+    store, expected = _build_residual_dense_store(tmp_path)
+    encoding = StoreManifest.load(store).encoding
+    # A residual plan replaces the caller's SE with the plane's, which is what
+    # makes a short one disappear rather than be written.
+    assert encoding.se.is_residual, "fixture is meaningful only under a residual plan"
+    index = store / "data.zarr" / "top_hits"
+    before = _tree_bytes(index)
+    assert before, "fixture is meaningful only if the store already has an index"
+    rows = np.array([0, 100, 200, 300], dtype=np.int64)
+    cols = np.zeros(len(rows), dtype=np.int64)
+    source_se = expected["a"][rows]
+    with pytest.raises(
+        ValueError,
+        match=r"write_top_hit_indexes_for_store: rows of length 4, cols of length 4, "
+        r"z of length 4 and se of length 3 must be parallel",
+    ):
+        write_top_hit_indexes_for_store(
+            store, rows, cols, np.full(len(rows), 8.0, dtype=np.float32), source_se[:3], encoding
+        )
+    assert _tree_bytes(index) == before
+
+
+def _tree_bytes(path: Path) -> dict[str, bytes]:
+    """Every file of a written tree, so a refused write shows as no change."""
+    return {str(p.relative_to(path)): p.read_bytes() for p in path.rglob("*") if p.is_file()}
+
+
 def test_one_badly_fitting_analysis_reverts_the_whole_plane() -> None:
     """#118: the plane reverts when *any* Analysis fits worse than the threshold.
 
@@ -529,7 +564,7 @@ def _residual_source_and_panel(
             for row in range(n if analysis_id == "a" else n - 4)
         )
     source = tmp_path / "obs.opengwasdb"
-    build_dense_observed_store(
+    build_dense_from_records(
         records,
         source,
         store_id="s",

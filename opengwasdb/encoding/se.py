@@ -21,6 +21,7 @@ from opengwasdb.encoding.codec import (
     StoreCodec,
     positions_flat,
     positions_row_band,
+    require_parallel,
     se_float16,
     se_residual_codes,
 )
@@ -868,6 +869,13 @@ def _write_exception_tables(
         )
     index = np.concatenate(index_parts) if index_parts else np.empty(0, dtype=np.int64)
     value = np.concatenate(value_parts) if value_parts else np.empty(0, dtype=np.float32)
+    # One position per exact value, before the assignment can broadcast: a short
+    # value array would write one cell's value into every entry beside it
+    # (issue #392).
+    require_parallel(
+        (("se_exception_index", index), ("se_exception_value", value)),
+        where="the SE rewrite's exception tables",
+    )
     with _optional_phase(sink.chunk_timer, "rewrite.exceptions"):
         sink.exception_index[0:cursor] = index
         sink.exception_value[0:cursor] = value

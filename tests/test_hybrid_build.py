@@ -24,6 +24,7 @@ import pytest
 import zarr
 from admission_helpers import logged, record_analyses
 from cli_output import normalize_cli_output
+from extraction_fixtures import write_hg38_artifact
 from liftover_fixtures import (
     STRAND_ROWS,
     assert_strand_statistics,
@@ -1124,7 +1125,7 @@ def test_cli_invalid_options_fail_at_parse_time_hybrid(tmp_path):
     assert res_cap.exit_code != 0
     clean_cap_output = normalize_cli_output(res_cap.output)
     assert "unknown source reader capability 'unknown_capability'" in clean_cap_output
-    known = "known: opengwasdb.besd, opengwasdb.column-map, opengwasdb.finngen-r13"
+    known = "known: opengwasdb.association-tsv, opengwasdb.besd, opengwasdb.column-map"
     assert known in clean_cap_output
 
     res_ass = runner.invoke(app, [*args, "--source-assembly", "unknown_build"])
@@ -1186,7 +1187,13 @@ def _write_reference_artifact(
         key: alid for key, alid in extracted.source_lookup.items() if alid in panel
     }
     path = tmp_path / "panel-only.variant-ref.tsv.gz"
-    write_variant_reference(path, sorted_alids(panel), source_lookup, extracted.rsid_by_alid)
+    write_variant_reference(
+        path,
+        sorted_alids(panel),
+        source_lookup,
+        extracted.rsid_by_alid,
+        reoriented=extracted.reoriented & source_lookup.keys(),
+    )
     return path
 
 
@@ -1272,6 +1279,7 @@ def _cross_analysis_collision_fixture(tmp_path: Path) -> tuple[Path, Path]:
             ("1", HG19_POS_1, "A", "G"): HG38_ALID_1,
             ("1", HG19_POS_3, "G", "A"): HG38_ALID_3,
         },
+        reoriented=(),
     )
     return manifest, reference
 
@@ -1301,6 +1309,7 @@ def test_resolver_overlap_routes_lowercase_ssf_to_dense(tmp_path, artifact_keys)
                 ("1", 100000, "a", "g"): "1:100000:A:G",
                 ("1", 100001, "g", "a"): "1:100001:A:G",
             },
+            reoriented=(),
         )
     else:
         axis.write_text("1:100000:A:G\n1:100001:A:G\n", encoding="utf-8")
@@ -1592,7 +1601,8 @@ class TestVariantReference:
         manifest = _make_manifest(tmp_path, [("trait_mixed", vcf, "Trait mixed")])
         reference = tmp_path / "panel-only.variant-ref.tsv.gz"
         write_variant_reference(
-            reference, [HG38_ALID_1], {("1", HG19_POS_1, "A", "G"): HG38_ALID_1}
+            reference, [HG38_ALID_1], {("1", HG19_POS_1, "A", "G"): HG38_ALID_1},
+            reoriented=()
         )
         store = tmp_path / "failed-lift.opengwasdb"
 
@@ -1627,7 +1637,8 @@ class TestVariantReference:
         manifest = _make_manifest(tmp_path, [("trait_collide", vcf, "Trait collide")])
         reference = tmp_path / "panel-only.variant-ref.tsv.gz"
         write_variant_reference(
-            reference, [HG38_ALID_1], {("1", HG19_POS_1, "A", "G"): HG38_ALID_1}
+            reference, [HG38_ALID_1], {("1", HG19_POS_1, "A", "G"): HG38_ALID_1},
+            reoriented=()
         )
         monkeypatch.setattr(unknown_keys, "_stable_hash", lambda key: 99)
 
@@ -1725,6 +1736,7 @@ class TestVariantReference:
                 ("1", HG19_POS_1, "A", "G"): HG38_ALID_1,
                 ("1", 1564620, "A", "G"): HG38_ALID_3,
             },
+            reoriented=(),
         )
         monkeypatch.setattr(unknown_keys, "_stable_hash", lambda key: 99)
         monkeypatch.setattr(unknown_keys, "check_hash", lambda key: 7)
@@ -2362,6 +2374,7 @@ class TestVariantReferenceRsids:
             reference,
             ["1:1064619:A:G", "1:1064620:C:T"],
             {("1", 1064620, "C", "T"): "1:1064620:C:T"},
+            reoriented=(),
         )
         two_pass = tmp_path / "prec-two.opengwasdb"
         single_pass = tmp_path / "prec-one.opengwasdb"
@@ -2433,12 +2446,12 @@ class TestVariantReferenceRsids:
     @pytest.mark.parametrize("assembly", ["hg38", "hg19"], ids=["reference", "fold"])
     def test_mixed_case_conflicting_names(self, tmp_path, assembly):
         """Two raw sites spelt in different case are one variant (issue #360),
-        so the two-pass build stores both associations on it and names it as
-        it names any variant two sources name differently: the first non-empty
-        name in `(rank, site)` order. The single-pass harvest compares the
-        names a routing key's spellings carry and, under `refuse`, refuses
-        them, on the reference path (hg38) and the fold path (hg19) alike --
-        not silently keep one (issue #255, round 4)."""
+        and both harvests compare the names a routing key's spellings carry
+        (issue #379): under `refuse` the two-pass and the single-pass build
+        refuse them, on the reference path (hg38) and the fold path (hg19)
+        alike, rather than silently keep one (issue #255, round 4). Under
+        `drop` the two-pass build stores both associations on the variant and
+        names it nothing."""
         first = _make_vcf(
             tmp_path, "first", ["1\t1000000\trsUPPER\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
         )
@@ -2451,19 +2464,21 @@ class TestVariantReferenceRsids:
         panel = tmp_path / "case-panel.txt"
         panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
 
+        for axis in ("reference_panel", "variant_reference"):
+            with pytest.raises(ValueError, match="case.?fold"):
+                build_hybrid_from_vcf_manifest(
+                    manifest, tmp_path / f"case-{axis}.opengwasdb", store_id="s",
+                    release_id="r", **{axis: panel},
+                )
         two_pass = tmp_path / "case.opengwasdb"
         build_hybrid_from_vcf_manifest(
-            manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
+            manifest, two_pass, reference_panel=panel, store_id="s", release_id="r",
+            on_rsid_conflict="drop",
         )
         alid = "1:1000000:C:T" if assembly == "hg38" else HG38_ALID_2
-        assert _hybrid_axis_rsids(two_pass)[alid] == "rsUPPER"
+        assert _hybrid_axis_rsids(two_pass)[alid] == ""
         with query_store(two_pass) as query:
             assert len(query.lookup([alid], ["first", "second"])["z"]) == 2
-        with pytest.raises(ValueError, match="case.?fold"):
-            build_hybrid_from_vcf_manifest(
-                manifest, tmp_path / "case-one.opengwasdb", variant_reference=panel,
-                store_id="s", release_id="r",
-            )
 
     def test_named_reference_leaves_unnamed_variants_blank(self, tmp_path, caplog):
         """Issue #255, round 4 finding 3, a scope ruling rather than a fix: a
@@ -2472,8 +2487,6 @@ class TestVariantReferenceRsids:
         rows and the fold-discovered Overflow rows alike. The build warns with
         counts on both; the two-pass build names them."""
         import logging
-
-        from opengwasdb.variants.reference import write_variant_reference
 
         vcf = _make_vcf(
             tmp_path,
@@ -2488,12 +2501,7 @@ class TestVariantReferenceRsids:
         panel = tmp_path / "named-panel.txt"
         panel.write_text(f"{HG38_ALID_1}\n{HG38_ALID_3}\n", encoding="utf-8")
         reference = tmp_path / "named.variant-ref.tsv.gz"
-        write_variant_reference(
-            reference,
-            [HG38_ALID_1, HG38_ALID_3],
-            {("1", 100000, "A", "G"): HG38_ALID_1, ("1", 1564620, "A", "G"): HG38_ALID_3},
-            {HG38_ALID_1: "rsPANEL"},
-        )
+        write_hg38_artifact(reference, [HG38_ALID_1, HG38_ALID_3], {HG38_ALID_1: "rsPANEL"})
         two_pass = tmp_path / "named-two.opengwasdb"
         single_pass = tmp_path / "named-one.opengwasdb"
         build_hybrid_from_vcf_manifest(
@@ -2573,12 +2581,12 @@ class TestVariantReferenceRsids:
         resolved one fails before publication, on the bytes."""
         manifest = _rsid_hybrid_manifest(tmp_path)
         panel = _panel_file(tmp_path)
-        real_write = hybrid_build._write_variant_table
+        real_write = hybrid_build.write_variant_table
 
         def _blank_rsids(store_path, alids, hg38_to_source, rsid_by_alid):
             real_write(store_path, alids, hg38_to_source, {})
 
-        monkeypatch.setattr(hybrid_build, "_write_variant_table", _blank_rsids)
+        monkeypatch.setattr(hybrid_build, "write_variant_table", _blank_rsids)
         with pytest.raises(ValueError, match="carries rsid"):
             build_hybrid_from_vcf_manifest(
                 manifest, tmp_path / "blanked.opengwasdb", variant_reference=panel,
@@ -2605,6 +2613,7 @@ class TestVariantReferenceRsids:
             [HG38_ALID_1],
             {("1", 100000, "A", "G"): HG38_ALID_1},
             {HG38_ALID_1: "rsCURATED"},
+            reoriented=(),
         )
         store = tmp_path / "named.opengwasdb"
         with caplog.at_level(logging.INFO):
@@ -2715,6 +2724,31 @@ def test_hybrid_build_reorients_statistics_a_reverse_strand_lift_renames(
         assert_strand_statistics(query, "trait")
 
 
+def test_single_pass_build_from_an_extracted_artifact_reorients_as_two_pass(tmp_path):
+    """issue #354: an artifact extracted over a reverse-strand lift records the
+    keys it re-oriented, so a Hybrid build routed by it stores each strand row
+    under the two-pass ALID with the two-pass sign. Every row is on the
+    reference, so none reaches the fold's lift."""
+    from extraction_fixtures import extract_from_manifest
+    from residual_fixtures import write_gwas_vcf_with_eaf
+
+    chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
+    vcf = write_gwas_vcf_with_eaf(tmp_path / "strand.vcf", strand_vcf_rows())
+    manifest = _make_manifest(tmp_path, [("trait", vcf, "Trait")])
+    artifact = tmp_path / "strand.variant-ref.tsv.gz"
+    extract_from_manifest(manifest, artifact, chain_file=chain)
+    store_path = tmp_path / "store.opengwasdb"
+
+    build_hybrid_from_vcf_manifest(
+        manifest, store_path, variant_reference=artifact,
+        store_id="hybrid-strand-artifact", release_id="v1", chain_file=chain,
+    )
+
+    assert set(_components_by_alid(store_path).values()) == {"dense"}
+    with query_store(store_path) as query:
+        assert_strand_statistics(query, "trait")
+
+
 def test_single_pass_off_reference_lift_refuses_to_store_unoriented_statistics(tmp_path):
     """issue #284: a single-pass build's off-reference variants are lifted during
     the fold, which carries no orientation, so a reverse-strand row there would be
@@ -2764,3 +2798,38 @@ def test_a_two_pass_build_refuses_an_off_reference_spill(tmp_path, monkeypatch):
             _hybrid_manifest(tmp_path), tmp_path / "store.opengwasdb",
             reference_panel=_panel(tmp_path), store_id="s", release_id="r",
         )
+
+
+def test_a_hybrid_spilled_column_whose_arrays_are_not_parallel_is_refused_and_writes_nothing(
+    tmp_path,
+) -> None:
+    """The Hybrid's spill is its Dense VCF twin's: one cell per entry in each
+    spill it writes, or the band-write phase reads a column the source never
+    had (issue #392)."""
+    spill_dir = tmp_path / "spill"
+    spill_dir.mkdir()
+    empty_f32 = np.empty(0, dtype=np.float32)
+    empty_i64 = np.empty(0, dtype=np.int64)
+    dense = (
+        np.arange(3, dtype=np.int64),
+        np.ones(3, dtype=np.float32),
+        np.full(2, 0.1, dtype=np.float32),
+        np.full(3, 0.3, dtype=np.float32),
+    )
+    overflow = (empty_i64, empty_f32, empty_f32, empty_f32, empty_f32)
+    off_reference = (
+        np.empty(0, dtype=np.uint64),
+        empty_f32,
+        empty_f32,
+        empty_f32,
+        empty_f32,
+        empty_i64,
+        [],
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"hybrid spill, analysis_index 0: rows of length 3, z of length 3, "
+        r"se of length 2 and eaf of length 3 must be parallel",
+    ):
+        hybrid_build._spill_hybrid_column(spill_dir, 0, dense, overflow, off_reference)
+    assert list(spill_dir.iterdir()) == []

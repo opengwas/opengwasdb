@@ -364,7 +364,8 @@ def _held_associations(
     pair: _Pair, indices: Sequence[int]
 ) -> dict[int, list[tuple[str, str]]]:
     """The `(ALID, chromosome)` of every source association of the given Analyses."""
-    rows = {i: pair.source_reader.structure.variant_indices(i) for i in indices}
+    sequence = pair.source_reader.structure
+    rows = {i: sequence.variant_index(*sequence.span(i)) for i in indices}
     wanted = sorted({int(v) for r in rows.values() for v in r})
     with closing(VariantAxis(pair.source_path)) as axis:
         records = axis.by_indices(wanted)
@@ -426,14 +427,12 @@ def _flat_offsets(path: Path) -> np.ndarray:
 
 @dataclass(frozen=True)
 class _Sample:
-    """What the per-Analysis comparison needs beyond the pair: regions and the mask."""
+    """What the per-Analysis comparison needs beyond the pair: the regions."""
 
     admitted: np.ndarray
     blocks: dict[int, list[LDBlock]]
     regions: _RegionRows
     quality: dict[int, set[str]]
-    target_offsets: np.ndarray
-    imputed: Any  # the completed Store's `imputed` array
 
 
 def _sample_and_compare(
@@ -445,14 +444,11 @@ def _sample_and_compare(
         source, np.diff(_flat_offsets(pair.source_path)), admitted, seed=seed, n_random=n_random
     )
     sampled = sorted(chosen)
-    target_group = store_arrays.open_group(pair.target_path / RAGGED_ZARR_PATH)
     sample = _Sample(
         admitted=admitted,
         blocks=_retained_blocks(pair, source, sampled, admitted, panel),
         regions=_RegionRows(_TargetRows(pair.target_path, pair.n_target_rows)),
         quality=_quality_blocks(pair.target),
-        target_offsets=_flat_offsets(pair.target_path),
-        imputed=target_group["imputed"],
     )
     totals = dict.fromkeys(_TOTAL_KEYS, 0)
     max_diff = dict.fromkeys(_DIFF_PLANES, 0.0)
@@ -482,9 +478,8 @@ def _compare_analysis(
     pair: _Pair, axis: _AxisMap, sample: _Sample, analysis: int
 ) -> tuple[dict[str, int], dict[str, float]]:
     retained = sample.blocks.get(analysis, [])
-    start, end = int(sample.target_offsets[analysis]), int(sample.target_offsets[analysis + 1])
     counts, diffs = _check_analysis(
-        pair, axis, analysis, np.asarray(sample.imputed[start:end]),
+        pair, axis, analysis,
         admitted=bool(sample.admitted[analysis]), region=sample.regions.of(retained),
     )
     counts["regions"] = len(retained)
@@ -570,14 +565,15 @@ def _check_analysis(
     pair: _Pair,
     axis: _AxisMap,
     analysis: int,
-    raw_imputed: np.ndarray,
     *,
     admitted: bool,
     region: np.ndarray,
 ) -> tuple[dict[str, int], dict[str, float]]:
-    """One Analysis's cells, compared by ALID through the exhaustive axis map."""
+    """One Analysis's cells, compared by ALID through the exhaustive axis map. The
+    target's imputed flags are its mask as stored, read with its cells."""
     src = _decoded(pair.source_reader, analysis, pair.source_path)
     tgt = _decoded(pair.target_reader, analysis, pair.target_path)
+    raw_imputed = np.zeros(0, dtype=np.uint8) if tgt.flags is None else tgt.flags
     if len(src.variant_index) and int(src.variant_index.max()) >= len(axis.source_to_target):
         raise ObservedViewRefused(
             f"source store {pair.source_path} holds a variant index past its axis"

@@ -17,7 +17,7 @@ from opengwasdb.ancestry.pipeline import annotate_catalogue, read_source_manifes
 from opengwasdb.ancestry.reference import load_reference
 from opengwasdb.build.eaf_orientation import DEFAULT_SAMPLE_SITES
 from opengwasdb.build.liftover import normalise_build
-from opengwasdb.build.observed import build_dense_observed_from_sources
+from opengwasdb.build.observed import build_dense_observed_from_manifest
 from opengwasdb.build.phenotype_sd_pipeline import (
     AfSource,
     estimate_manifest_phenotype_sd,
@@ -49,6 +49,7 @@ from opengwasdb.layouts.dense.rho import (
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import HybridBuildResult, build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
+from opengwasdb.layouts.ragged import RaggedBuildResult
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
@@ -120,11 +121,12 @@ _RESUME_HELP = (
 )
 _ON_RSID_CONFLICT_HELP = (
     "What to do when sources that spell one variant's alleles in different case name "
-    "it with different rsids, as the rsid harvest of a --variant-reference build "
-    "finds (#306): refuse fails the build, naming the variant; drop stores it with no "
-    "rsid, even where its other allele order names it, so it is found by ALID and "
-    "position but by no name. The counts of such keys and variants, and the first 20 "
-    "keys, are always printed under rsid_conflicts."
+    "it with different rsids, as the rsid harvest of a --reference-panel build or of a "
+    "--variant-reference that names no rsids finds (#306, #379): refuse fails the "
+    "build, naming the variant; drop stores it with no rsid, even where its other "
+    "allele order names it, so it is found by ALID and position but by no name. The "
+    "counts of such keys and variants, and the first 20 keys, are always printed "
+    "under rsid_conflicts."
 )
 _ALLOW_UNVERIFIED_HELP = (
     "Accept Analyses the supplied --eaf-reference could not verify (too little "
@@ -241,6 +243,9 @@ _ON_RSID_CONFLICT_OPTION = Annotated[
 #: Required, with no default (#357): a default beside OUTPUT_PATH would follow a
 #: staging name such as `store.opengwasdb.partial`, and a release workflow that
 #: renames the Store into place would leave the record behind under that name.
+_BUILD_DENSE_MANIFEST_OPTION: Any = typer.Option(
+    ..., help="Build manifest: one row per Analysis, naming its association TSV"
+)
 _ADMISSION_RECORD_OPTION: Any = typer.Option(
     ...,
     "--admission-record",
@@ -280,6 +285,9 @@ _CHAIN_FILE_OPTION = Annotated[
         readable=True,
         help="Chain file required for supported cross-build source/reference alignment",
     ),
+]
+_LIFTOVER_FAILURE_THRESHOLD_OPTION = Annotated[
+    float, typer.Option(help="Maximum hg19 liftover failure rate")
 ]
 _LIFT_VARIANT_REFERENCE_HELP = (
     "A Variant Reference on the target assembly -- a plain ALID list, a "
@@ -439,6 +447,19 @@ def _echo_summary(payload: dict[str, Any]) -> None:
     typer.echo(json.dumps(payload, sort_keys=True))
 
 
+def _echo_ragged_summary(result: RaggedBuildResult) -> None:
+    """A Ragged build's stdout JSON: where it wrote, its counts, and its coverage."""
+    _echo_summary(
+        {
+            "output_path": str(result.output_path),
+            "n_variants": result.n_variants,
+            "n_analyses": result.n_analyses,
+            "n_associations": result.n_associations,
+            "association_coverage": _written_association_coverage(result.output_path),
+        }
+    )
+
+
 def _written_association_coverage(store_path: Path) -> str:
     """The Association Coverage the release at ``store_path`` declares (#298).
 
@@ -514,10 +535,14 @@ def validate_command(
 
     result = validate_store(store_path)
     if output_format is ReportFormat.json:
+        # `findings` names the rule behind each record, and the skips beside the
+        # failures and warnings: a rule that had nothing to judge is not a pass, and
+        # the three keys that predate it cannot say so (spec §20.1, issue #378).
         payload = {
             "ok": result.ok,
             "errors": result.errors,
             "warnings": result.warnings,
+            "findings": [finding.as_dict() for finding in result.findings],
         }
         typer.echo(json.dumps(payload, sort_keys=True))
         if not result.ok:
@@ -683,22 +708,31 @@ def check_observed_view_command(
 
 @app.command("build-dense")
 def build_dense_command(
-    source_path: Path,
     output_path: Path,
+    manifest: Path = _BUILD_DENSE_MANIFEST_OPTION,
     association_coverage: AssociationCoverage = GWAS_ONLY_COVERAGE_OPTION,
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
-    reference_assembly: str = typer.Option("GRCh37"),
+    reference_assembly: str = typer.Option(
+        "GRCh37",
+        help="The assembly the sources are in and the Store records; build-dense does not lift",
+    ),
     overwrite: bool = typer.Option(False),
     admission_record: Path = _ADMISSION_RECORD_OPTION,
 ) -> None:
-    """Build a Dense Observed-Only store from a tiny TSV/CSV source.
+    """Build a Dense Observed-Only store from a manifest of association TSVs.
+
+    --manifest is the build manifest every builder takes, one row per Analysis:
+    its source_file is that Analysis's association TSV (associations only, read as
+    opengwasdb.association-tsv), and the manifest declares its label, Trait
+    Ontology, attribution, effect scale and MAF filter. A row's source_assembly
+    must be --reference-assembly, which a row that omits the column takes.
 
     --admission-record names where Association Admission's record goes (#357).
     """
 
-    result = build_dense_observed_from_sources(
-        [source_path],
+    result = build_dense_observed_from_manifest(
+        manifest,
         output_path,
         store_id=store_id,
         release_id=release_id,
@@ -1535,15 +1569,7 @@ def build_ragged_besd_command(
         allow_unverified_eaf=allow_unverified_eaf,
         admission_record=admission_record,
     )
-    _echo_summary(
-        {
-            "output_path": str(result.output_path),
-            "n_variants": result.n_variants,
-            "n_analyses": result.n_analyses,
-            "n_associations": result.n_associations,
-            "association_coverage": _written_association_coverage(result.output_path),
-        }
-    )
+    _echo_ragged_summary(result)
 
 
 @app.command("build-ragged-ssf")
@@ -1560,6 +1586,8 @@ def build_ragged_ssf_command(
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
     admission_record: Path = _ADMISSION_RECORD_OPTION,
+    chain_file: _CHAIN_FILE_OPTION = None,
+    liftover_failure_threshold: _LIFTOVER_FAILURE_THRESHOLD_OPTION = 0.01,
 ) -> None:
     """Build a Ragged Observed-Only store from filtered GWAS-SSF files.
 
@@ -1568,7 +1596,12 @@ def build_ragged_ssf_command(
     trait_ontology_label, trait_chr, trait_bp, sample_size (or legacy n),
     tissue, context, mhc, source_file (or legacy filtered_file), and
     source_genome_build (or source_assembly). Every row must declare
-    source_genome_build, and declare GRCh38: the build lifts nothing.
+    source_genome_build. The Store is GRCh38: a GRCh37 (hg19) row is lifted to
+    it by --chain-file, which it requires. The build fails when more than
+    --liftover-failure-threshold of the lifted sites have no place on the
+    chain; the Admission record counts them (`lift_unmapped`, `lift_ambiguous`).
+    A build with any such row holds every Analysis's admitted rows in memory
+    until the lift has placed them; a GRCh38-only build reads one at a time.
 
     FILTERED_DIR holds one filtered GWAS-SSF ``.tsv.gz`` per analysis (as
     produced by the opengwasdb-stores download+filter step). Relative
@@ -1592,19 +1625,10 @@ def build_ragged_ssf_command(
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
         admission_record=admission_record,
+        chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold,
     )
-    typer.echo(
-        json.dumps(
-            {
-                "output_path": str(result.output_path),
-                "n_variants": result.n_variants,
-                "n_analyses": result.n_analyses,
-                "n_associations": result.n_associations,
-                "association_coverage": _written_association_coverage(result.output_path),
-            },
-            sort_keys=True,
-        )
-    )
+    _echo_ragged_summary(result)
 
 
 @app.command("complete-ragged")
@@ -1908,7 +1932,11 @@ def regenerate_overview_command(store_path: Path) -> None:
 _FORMAT_OPTION = typer.Option(
     OutputFormat.tsv,
     "--format",
-    help="tsv (default): resolved, human-readable rows. json: the raw index-keyed result.",
+    help=(
+        "tsv (default): resolved, human-readable rows. json: the same result keyed by "
+        'index, with null for a cell that is not there and "Infinity"/"-Infinity" '
+        "for an infinite value."
+    ),
 )
 _VARIANT_INFO_OPTION = typer.Option(
     False,
@@ -2032,19 +2060,45 @@ def _emit(
         _emit_tsv(query, result, include_variant_info)
 
 
+def _json_cell(value: float) -> object:
+    """One decoded cell as a JSON value (issue #394).
+
+    A cell that is not there is `null`, and `association_status` is what says so
+    -- a Ragged sequence stores a row for every attempted pair, and its missing
+    one holds the same markers as a cell that is absent. ±inf is a value (§15:
+    an SE above a `float16` plane's range is stored `+inf` beside a finite Z),
+    and RFC 8259 has no token for it, so it is a string: `null` would read as the
+    missing cell beside it.
+    """
+    if math.isnan(value):
+        return None
+    if math.isinf(value):
+        return "Infinity" if value > 0 else "-Infinity"
+    return float(value)
+
+
 def _emit_json(result: dict[str, np.ndarray]) -> None:
+    """The result as one JSON object per association, keyed by index (spec §19).
+
+    `allow_nan=False`: a value `_json_cell` did not turn into `null` or a string
+    stops the command instead of printing a token no JSON parser reads.
+    """
     rows: list[dict[str, object]] = [
         {
             "variant_index": int(vi),
             "analysis_index": int(ai),
-            "z": float(z),
-            "se": float(se),
+            "z": _json_cell(z),
+            "se": _json_cell(se),
+            "eaf": _json_cell(eaf),
+            "association_status": str(status),
         }
-        for vi, ai, z, se in zip(
+        for vi, ai, z, se, eaf, status in zip(
             result["variant_index"],
             result["analysis_index"],
             result["z"],
             result["se"],
+            result["eaf"],
+            result["association_status"],
             strict=True,
         )
     ]
@@ -2053,7 +2107,7 @@ def _emit_json(result: dict[str, np.ndarray]) -> None:
     if "n" in result:
         for row, n in zip(rows, result["n"], strict=True):
             row["n"] = int(n) if math.isfinite(float(n)) else None
-    typer.echo(json.dumps(rows, sort_keys=True))
+    typer.echo(json.dumps(rows, sort_keys=True, allow_nan=False))
 
 
 _TSV_COLUMNS = (

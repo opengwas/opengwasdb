@@ -1,0 +1,165 @@
+# The engine's architecture model: the components and the code each one owns.
+#
+# Part of the living architecture map (epic opengwas/opengwasdb-stores#416). Each
+# repository claims the code it holds: this file claims the engine's, and
+# opengwasdb-stores' docs/architecture/components.yaml claims that repository's.
+# A site build combines the two. Nothing here is generated, and it is edited only
+# by the pull request that changes the structure.
+#
+# Read by:
+# - opengwas/opengwasdb-stores#418, which draws the map on the project site;
+# - opengwas/opengwasdb#359, which measures the engine's import graph against
+#   `layers` and fails on a new import that goes upward;
+# - tests/architecture_model.py here, which loads it and checks it against
+#   `git ls-files opengwasdb/`. CI fails on a source file no component claims, on
+#   a claim that matches no tracked file, and on a layer `layers` does not declare.
+# - tests/test_architecture_layering.py here, which places every import on the
+#   component that owns it, and holds the ones that go upward to
+#   docs/architecture/layering-baseline.yaml.
+#
+# How ownership is written:
+# - `layers` is the intended layering, top to bottom: a component may import from
+#   its own layer or below. It is a decision, not a measurement, which is why it is
+#   written by hand; the imports that go against it are measured, by #359.
+# - A path ending in `/` claims a directory; anything else claims one file. The
+#   longest claimed prefix wins, so every source file belongs to exactly one
+#   component. Claim directories by default.
+# - Claim a single file only where several components share a directory
+#   (`build/`, `layouts/*/complete.py`). A new file there should fail the test,
+#   because which component owns it is a real question and not a formality.
+# - `stages` are the pipeline stages. They are defined in opengwasdb-stores'
+#   model, where the pipeline is; the ids are not checked here.
+# - There is no `terms` key: ADRs are placed by the code they cite and by component
+#   names in their titles, so the glossary term lists the prototype carried went
+#   (decision 9 on opengwas/opengwasdb-stores#416).
+repo: opengwas/opengwasdb
+
+# The engine's intended layering, top to bottom.
+layers:
+  - {layer: 5, name: Entry}
+  - {layer: 4, name: Use and check}
+  - {layer: 3, name: Layouts}
+  - {layer: 2, name: Analysis}
+  - {layer: 1, name: Storage and input}
+  - {layer: 0, name: Foundations}
+
+components:
+  - id: readers
+    name: Source Readers
+    container: engine
+    layer: 1
+    stages: [resolve, build]
+    summary: The Source Reader seam and Column Maps; GWAS-SSF, GWAS-VCF, FinnGen and BESD readers.
+    paths: [opengwasdb/readers/, opengwasdb/layouts/ragged/besd_reader.py]
+  - id: admission
+    name: Association Admission
+    container: engine
+    layer: 1
+    stages: [resolve, build, complete]
+    summary: One rule set, one gate, one record; which of an Analysis's source rows a Store admits, the INFO and MAF filters, and the Admission Record of what was dropped and why.
+    paths: [opengwasdb/admission/, opengwasdb/build/info_score_filter.py]
+  - id: resolution
+    name: Analysis Resolution
+    container: engine
+    layer: 2
+    stages: [resolve]
+    summary: One scan per Analysis to its Analytical Metadata and Resolution Record; SD, EAF orientation and effect consistency.
+    paths: [opengwasdb/build/resolve.py, opengwasdb/build/resolve_manifest.py, opengwasdb/build/resolve_besd.py, opengwasdb/build/phenotype_sd.py, opengwasdb/build/phenotype_sd_pipeline.py, opengwasdb/build/eaf_orientation.py, opengwasdb/build/effect_consistency.py, opengwasdb/build/hash_sample.py]
+  - id: ancestry
+    name: Ancestry Assignment
+    container: engine
+    layer: 2
+    stages: [resolve]
+    summary: Assigned Ancestry from allele frequencies (NNLS mixture, admission gates) and store routing.
+    paths: [opengwasdb/ancestry/]
+  - id: variants
+    name: Variant Identity
+    container: engine
+    layer: 0
+    stages: [build, query]
+    summary: Canonical variant identity, orientation, rsids, the Store Variant Axis and liftover.
+    paths: [opengwasdb/variants/, opengwasdb/build/liftover.py]
+  - id: routing
+    name: Variant Routing
+    container: engine
+    layer: 1
+    stages: [build, complete]
+    summary: Where each source coordinate goes; the lifted union, the route table, the rsid harvest, the duplicate rule and Variant Reference extraction.
+    paths: [opengwasdb/variants/routing/]
+  - id: dense
+    name: Dense Layout
+    container: engine
+    layer: 3
+    stages: [build]
+    summary: Dense Observed-Only builders (tabular and GWAS-VCF) and the build manifest they read; top hits, Indexed Variant Subsets, Rho and overview.html.
+    paths: [opengwasdb/layouts/dense/, opengwasdb/layouts/build_manifest.py, opengwasdb/overview.py, opengwasdb/build/observed/, opengwasdb/build/__init__.py]
+  - id: ragged
+    name: Ragged Layout
+    container: engine
+    layer: 3
+    stages: [build]
+    summary: Ragged builders (GWAS-SSF, BESD), Zarr CSR storage, the By-Variant Index and top hits.
+    paths: [opengwasdb/layouts/ragged/]
+  - id: hybrid
+    name: Hybrid Layout
+    container: engine
+    layer: 3
+    stages: [build]
+    summary: One read per study, routed to the Dense Component or the Ragged Overflow Component; checkpointed.
+    paths: [opengwasdb/layouts/hybrid/]
+  - id: encoding
+    name: Store Encoding
+    container: engine
+    layer: 1
+    stages: [build, complete]
+    summary: The encoding plan, StoreCodec and decoded statistic planes (z, se, eaf, imputed).
+    paths: [opengwasdb/encoding/]
+  - id: store
+    name: Store Release envelope
+    container: engine
+    layer: 1
+    stages: [build, publish]
+    summary: Paths, manifest, format versions, the array-creation seam, conversion, SQLite indexes, the Top-Hit Index format.
+    paths: [opengwasdb/store/, opengwasdb/index/, opengwasdb/top_hits.py, opengwasdb/layouts/release_manifest.py, opengwasdb/layouts/__init__.py]
+  - id: completion
+    name: Reference Completion
+    container: engine
+    layer: 4
+    stages: [complete]
+    summary: The LD-block imputation kernel and the Dense, Ragged and Hybrid completion pipelines.
+    paths: [opengwasdb/completion/, opengwasdb/build/complete/, opengwasdb/layouts/dense/complete.py, opengwasdb/layouts/ragged/complete.py, opengwasdb/layouts/hybrid/complete.py]
+  - id: validation
+    name: Validation
+    container: engine
+    layer: 4
+    stages: [validate]
+    summary: Store validation, source fidelity, the EAF audit and the Observed-View Check.
+    paths: [opengwasdb/validation/]
+  - id: query
+    name: Query
+    container: engine
+    layer: 4
+    stages: [query]
+    summary: The layout-independent query facade, result resolution and association reads.
+    paths: [opengwasdb/query/, opengwasdb/associations/]
+  - id: model
+    name: Store contract model
+    container: engine
+    layer: 0
+    stages: [cross]
+    summary: analyses.tsv, manifest and enum contracts; the presence rule and statistic helpers shared by builders, validators and queries.
+    paths: [opengwasdb/model/, opengwasdb/associations/record.py, opengwasdb/stats.py, opengwasdb/version.py, opengwasdb/build/ordered_pool.py]
+  - id: maintenance
+    name: Repair and re-encode
+    container: engine
+    layer: 4
+    stages: [cross]
+    summary: Representation-only repairs, the SE re-encode of existing Store Releases, and layout conversion.
+    paths: [opengwasdb/repair.py, opengwasdb/reencode.py, opengwasdb/store/convert.py]
+  - id: cli
+    name: Engine CLI
+    container: engine
+    layer: 5
+    stages: [cross]
+    summary: The opengwasdb command line, the surface opengwasdb-stores and users call.
+    paths: [opengwasdb/cli/, opengwasdb/__init__.py]

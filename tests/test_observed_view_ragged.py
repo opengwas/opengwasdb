@@ -33,6 +33,7 @@ import test_ragged_completion as trc
 import zarr
 from cli_output import normalize_cli_output
 from presence_fixtures import RAGGED_Z_GROUP, float_plane_z, plant_payload_nan
+from stored_rows import stored_rows
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
@@ -187,22 +188,21 @@ def _flat(store: Path, analysis_index: int, alid: str) -> int:
     finally:
         axis.close()
     reader = RaggedCSRReader(store)
-    start, _ = reader.span(analysis_index)
-    row = reader.variant_indices(analysis_index).tolist().index(index)
+    start, end = reader.span(analysis_index)
+    row = reader.variant_index(start, end).tolist().index(index)
     return start + row
 
 
 def test_the_fixture_has_every_cell_class_the_check_distinguishes(_pair_seed):
     observed, completed, _ = _pair_seed
-    source_counts = [len(RaggedCSRReader(observed).variant_indices(i)) for i in range(N_ANALYSES)]
+    source_counts = np.diff(RaggedCSRReader(observed).offsets).tolist()
     assert source_counts == [6, 2, 5, 5]
     root = zarr.open_group(str(completed / RAGGED_ZARR_PATH), mode="r")
     imputed = root["imputed"][:]
     offsets = root["offsets"][:]
-    reader = RaggedCSRReader(completed)
     per_analysis = []
     for i in range(N_ANALYSES):
-        z = reader.get_analysis(i).z
+        z = stored_rows(completed, i).z
         flags = imputed[offsets[i]:offsets[i + 1]]
         per_analysis.append((int(flags.sum()), int(np.isnan(z).sum())))
     assert per_analysis == [(1, 0), (0, 4), (1, 0), (0, 0)]
@@ -261,9 +261,9 @@ def _failing(pair, tmp_path, counter: str, expected: int = 1):
 def test_a_changed_observed_z_fails(tmp_path, pair):
     _, completed, _ = pair
     position = _flat(completed, 0, "1:900000:A:G")
-    before = RaggedCSRReader(completed).get_analysis(0).z.copy()
+    before = stored_rows(completed, 0).z.copy()
     _target_group(completed)["z"][position] += 1
-    assert not np.array_equal(RaggedCSRReader(completed).get_analysis(0).z, before)
+    assert not np.array_equal(stored_rows(completed, 0).z, before)
 
     _failing(pair, tmp_path, "z_mismatch")
 
@@ -279,9 +279,9 @@ def test_a_ragged_z_without_an_se_fails(tmp_path, pair):
 def test_a_changed_observed_eaf_fails(tmp_path, pair):
     _, completed, _ = pair
     position = _flat(completed, 0, "1:900000:A:G")
-    before = RaggedCSRReader(completed).get_analysis(0).eaf.copy()
+    before = stored_rows(completed, 0).eaf.copy()
     _target_group(completed)["eaf"][position] += 1
-    assert not np.array_equal(RaggedCSRReader(completed).get_analysis(0).eaf, before)
+    assert not np.array_equal(stored_rows(completed, 0).eaf, before)
 
     _failing(pair, tmp_path, "eaf_mismatch")
 
@@ -379,9 +379,8 @@ def test_an_infinite_ragged_se_copied_identically_passes_and_is_counted(tmp_path
 def _plant_a_payload_nan(store: Path, analysis_index: int) -> None:
     """Give one of an Analysis's `nan_rows` Z's non-canonical marker, SE left canonical."""
     group = float_plane_z(store, RAGGED_Z_GROUP)
-    reader = RaggedCSRReader(store)
-    start, _ = reader.span(analysis_index)
-    missing = np.flatnonzero(np.isnan(reader.get_analysis(analysis_index).z))
+    start, _ = RaggedCSRReader(store).span(analysis_index)
+    missing = np.flatnonzero(np.isnan(stored_rows(store, analysis_index).z))
     assert missing.size, "the fixture must hold a missing association to plant in"
     position = start + int(missing[0])
     assert np.isnan(np.asarray(group["se"][position], dtype=np.float32))
@@ -411,9 +410,9 @@ def test_differing_analyses_report_the_uncompared_counters_as_unchecked(tmp_path
     """
     _, completed, _ = pair
     position = _flat(completed, 0, "1:900000:A:G")
-    before = RaggedCSRReader(completed).get_analysis(0).z.copy()
+    before = stored_rows(completed, 0).z.copy()
     _target_group(completed)["z"][position] += 1
-    assert not np.array_equal(RaggedCSRReader(completed).get_analysis(0).z, before)
+    assert not np.array_equal(stored_rows(completed, 0).z, before)
     path = completed / "analyses.tsv"
     header, *lines = path.read_text().splitlines()
     assert len(lines) == N_ANALYSES

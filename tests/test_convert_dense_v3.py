@@ -23,11 +23,11 @@ from typing import Any
 
 import numpy as np
 import pytest
+from dense_sources import build_dense_fixture
 from legacy_fixtures import relayout_dense_as_0_1_0
 
 from benchmarks import _query_shapes
 from benchmarks.benchmark_store_comparison import assert_identical, result_digests
-from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.query import query_store
 from opengwasdb.store import open as store_open
 from opengwasdb.store.arrays import (
@@ -124,7 +124,7 @@ def dense_conversion(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pa
     root = tmp_path_factory.mktemp("convert-dense")
     source = _write_source(root)
     built = root / "built-0.2.0.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source],
         built,
         store_id="fixture-dense",
@@ -195,7 +195,7 @@ def nan_fill_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("convert-dense-nan")
     source = _write_source(root, with_eaf=False)
     built = root / "built-0.2.0.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source],
         built,
         store_id="fixture-dense-nan",

@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from cli_output import normalize_cli_output
+from stored_rows import stored_rows
 
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
@@ -403,8 +404,8 @@ def test_zarr_csr_associations_and_z_values(tmp_path):
     assert csr.n_analyses == 2
     assert csr.n_associations == 4
 
-    a0 = csr.get_analysis(0)
-    a1 = csr.get_analysis(1)
+    a0 = stored_rows(out, 0)
+    a1 = stored_rows(out, 1)
     assert len(a0.variant_index) == 2  # the three malformed rows were dropped
     assert len(a1.variant_index) == 2
 
@@ -648,8 +649,7 @@ def test_duplicate_canonical_variant_within_analysis_is_resolved(tmp_path):
     # 1:100000 (collapsed) + 1:300000 (control) survive; 1:200000 (conflict) dropped.
     assert result.n_associations == 2
 
-    csr = RaggedCSRReader(out)
-    a0 = csr.get_analysis(0)
+    a0 = stored_rows(out, 0)
     variants = VariantAxis(out).all()
     alid_by_index = {v.variant_index: v.alid for v in variants}
     surviving_alids = {alid_by_index[int(i)] for i in a0.variant_index}
@@ -814,8 +814,8 @@ def test_emptied_analysis_keeps_its_slot_and_scope(tmp_path):
     assert result.n_associations == 1  # only the healthy analysis survives
     csr = RaggedCSRReader(out)
     assert csr.n_analyses == 2
-    assert len(csr.get_analysis(0).variant_index) == 0
-    a1 = csr.get_analysis(1)  # its rows must not have shifted onto slot 0
+    assert len(stored_rows(out, 0).variant_index) == 0
+    a1 = stored_rows(out, 1)  # its rows must not have shifted onto slot 0
     assert len(a1.variant_index) == 1
     assert a1.z[0] == pytest.approx(4.0, rel=5e-3)
     assert a1.eaf[0] == pytest.approx(0.25, rel=5e-3)
@@ -1058,12 +1058,15 @@ def test_a_non_rs_rsid_cell_falls_back_to_the_variant_ids_rs_identifier(tmp_path
     assert {v.alid: v.rsid for v in VariantAxis(out).all()} == {"1:100000:A:G": "rs77"}
 
 
-def test_a_declared_build_other_than_grch38_is_refused(tmp_path):
+def test_a_declared_build_other_than_grch38_is_refused_without_a_chain_file(tmp_path):
+    """A GRCh37 source is lifted (#386), by a chain the build must be given."""
     manifest, filtered_dir = _one_analysis(tmp_path, [{
         "chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
         "other_allele": "G", "beta": 1.0, "standard_error": 0.5,
     }], source_genome_build="GRCh37")
-    with pytest.raises(ValueError, match="declares source_genome_build hg19"):
+    with pytest.raises(
+        ValueError, match=r"analysis 'trait' declares source_genome_build hg19.*--chain-file"
+    ):
         build_ragged_from_ssf(
             manifest, filtered_dir, tmp_path / "out.opengwasdb", store_id="t",
             release_id="v1", association_coverage="cis_and_signals",
@@ -1091,7 +1094,7 @@ def test_an_odds_ratio_is_read_as_its_log_by_the_gwas_ssf_rule(tmp_path):
         manifest, filtered_dir, out, store_id="t", release_id="v1",
         association_coverage="cis_and_signals", stored_effect_scale="log_or",
     )
-    stored = RaggedCSRReader(out).get_analysis(0)
+    stored = stored_rows(out, 0)
     assert len(stored.variant_index) == 1
     # A is A1 and the effect allele, so the z is the odds ratio's own.
     assert float(stored.z[0]) == pytest.approx(np.log(2.0) / 0.5, rel=5e-3)

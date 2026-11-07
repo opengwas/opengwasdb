@@ -5,17 +5,17 @@ import shutil
 
 import numpy as np
 import pytest
+from dense_sources import build_dense_fixture, build_dense_from_records
 from typer.testing import CliRunner
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
-from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.cli.main import app
 from opengwasdb.encoding import DenseZPlane
-from opengwasdb.layouts.dense.build import build_dense_observed_store
+from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.rho import (
     build_dense_rho,
     estimate_rho_cml,
     select_thinned_variants,
+    write_rho_group,
 )
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -78,7 +78,7 @@ def _make_rho_source(tmp_path, seed: int = 0):
 def rho_store_path(tmp_path):
     source = _make_rho_source(tmp_path)
     store_path = tmp_path / "rho-store.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source],
         store_path,
         store_id="rho-fixture",
@@ -186,6 +186,26 @@ def test_build_dense_rho_round_trips_against_direct_estimation(rho_store_path):
     assert not math.isnan(stored_rho)
     # Rho itself is stored float16 (ADR 0025).
     assert stored_rho == pytest.approx(direct, abs=1e-2)
+
+
+def test_two_rho_defects_are_both_reported(rho_store_path):
+    """A Rho Matrix sized for the wrong Analyses and one that miscounts its variants
+    are two defects; the first no longer hides the second (issue #55)."""
+    build_dense_rho(rho_store_path, window_bp=50, z_thresh=1.0, min_nulls=20, n_workers=1)
+    assert validate_store(rho_store_path).ok
+    group = open_store(rho_store_path).arrays(mode="a")["rho"]
+    used = int(group.attrs["n_variants_used"])
+    group.attrs["n_analyses"] = N_ANALYSES + 1
+    group.attrs["n_variants_used"] = used + 1
+
+    result = validate_store(rho_store_path)
+
+    assert result.failed() == {"rho.analyses", "rho.variants"}
+    assert result.errors == [
+        f"rho group n_analyses attr {N_ANALYSES + 1} does not match "
+        f"analyses.tsv's {N_ANALYSES}",
+        f"rho variant_index has {used} entries but n_variants_used attr says {used + 1}",
+    ]
 
 
 def test_rho_is_nan_exactly_below_min_nulls(rho_store_path):
@@ -377,7 +397,7 @@ def _residual_rho_store(tmp_path):
             for row in range(n)
         )
     store_path = tmp_path / "residual-rho.opengwasdb"
-    build_dense_observed_store(
+    build_dense_from_records(
         records,
         store_path,
         store_id="residual-rho",
@@ -440,3 +460,23 @@ def test_build_dense_rho_on_a_residual_store_reads_decoded_z(tmp_path):
     # The add-in-place Rho group leaves the residual se plane queryable and
     # still residual-coded -- nothing about building Rho rewrites se.
     assert StoreManifest.load(store_path).encoding.se.is_residual
+
+
+def test_a_rho_group_whose_arrays_do_not_pair_up_is_refused_and_writes_nothing(tmp_path) -> None:
+    """The packed rho values are one group's cell list: three of them against
+    two null counts is not a Rho Matrix (issue #392)."""
+    with pytest.raises(
+        ValueError,
+        match=r"rho group: rho of length 3 and n_null of length 2 must be parallel",
+    ):
+        write_rho_group(
+            tmp_path,
+            np.zeros(3, dtype=np.float16),
+            np.zeros(2, dtype=np.int32),
+            np.arange(1, dtype=np.int32),
+            z_thresh=0.5,
+            min_nulls=10,
+            window_bp=1_000,
+            n_analyses=1,
+        )
+    assert list(tmp_path.iterdir()) == []

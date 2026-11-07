@@ -55,11 +55,12 @@ from opengwasdb.encoding.association_codec import (
     log_se_out_of_range,
     storable,
 )
-from opengwasdb.encoding.codec import se_float16
-from opengwasdb.encoding.timing import log_phase
+from opengwasdb.encoding.codec import require_parallel, se_float16
+from opengwasdb.encoding.timing import format_duration, log_phase
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
+    apply_se_divisor,
     column_map_provenance,
     manifest_row_to_analysis,
     read_manifest,
@@ -115,16 +116,6 @@ __all__ = ["build_dense_from_vcf_manifest", "LiftoverFailureError"]
 _TOP_HIT_Z_CRIT = z_critical(max(TOP_HIT_THRESHOLDS))
 
 
-def apply_se_divisor(se: np.ndarray, se_divisor: float) -> np.ndarray:
-    """Continuous-trait phenotype-SD standardisation (issue #18):
-    ``stored_se = original_se / sd``. Shared by the dense and hybrid builders,
-    both of which resolve an association stream to ``(index, z, se)`` and need
-    the same no-op-when-1.0 divide applied to ``se`` before spilling."""
-    if se_divisor == 1.0:
-        return se
-    return se / np.float32(se_divisor)
-
-
 def _spill_column(
     spill_dir: Path,
     col_idx: int,
@@ -139,7 +130,16 @@ def _spill_column(
 
     Top hits are NOT harvested here — they are harvested during the band-write
     phase from the *stored* float16 values, so the index matches exactly what a
-    query reads back from the ``z`` array (issue 046)."""
+    query reads back from the ``z`` array (issue 046).
+
+    ``rows``, ``z``, ``se`` and ``eaf`` are one entry per cell of the column, and
+    one of another length is refused before the spill file exists: the
+    band-write phase reads the four back as one column, so a short one would put
+    a cell's statistic under another's variant (issue #392)."""
+    require_parallel(
+        (("rows", rows), ("z", z), ("se", se), ("eaf", eaf)),
+        where=f"dense-vcf spill, analysis_index {col_idx}",
+    )
     final = spill_dir / f"{col_idx}.npz"
     tmp = spill_dir / f"{col_idx}.tmp.npz"
     np.savez(tmp, rows=rows, z=z, se=se, eaf=eaf)
@@ -150,7 +150,12 @@ def _spill_column(
 def log_progress(
     label: str, completed: int, total: int, start_time: float, extra: str, every: int
 ) -> None:
-    """Log a phase's progress, elapsed time and ETA every ``every`` items and at the end."""
+    """Log a phase's progress, elapsed time and ETA every ``every`` items and at the end.
+
+    The Dense VCF and Hybrid builds' own line, ``N/M done (extra)``; the encoding
+    passes log through `opengwasdb.encoding.timing.log_progress`, whose line has
+    no ``done``.
+    """
     if completed % every != 0 and completed != total:
         return
     elapsed = time.monotonic() - start_time
@@ -161,8 +166,8 @@ def log_progress(
         completed,
         total,
         extra,
-        _fmt_duration(elapsed),
-        _fmt_duration(eta),
+        format_duration(elapsed),
+        format_duration(eta),
     )
 
 
@@ -738,17 +743,6 @@ def _finalize_store(
         apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report
     )
     write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
-
-
-def _fmt_duration(seconds: float) -> str:
-    total = int(seconds)
-    h, rem = divmod(total, 3600)
-    m, s = divmod(rem, 60)
-    if h:
-        return f"{h}h{m:02d}m"
-    if m:
-        return f"{m}m{s:02d}s"
-    return f"{s}s"
 
 
 def write_index(

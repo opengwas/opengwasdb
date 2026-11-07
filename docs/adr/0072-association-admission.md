@@ -61,6 +61,16 @@ name the decisions issue #357 took on the rules that differed.
   touches), and the Hybrid's Ragged Overflow. What it leaves unimputed is
   already counted in each Store's `completion_quality`, so a completion writes
   no record.
+  - *Clarified 5 Nov 2026.* A completion that reads its source through the
+    Association Reader (ADR 0070) refuses such a cell by the reader's presence
+    rule instead, and a missing marker other than the canonical NaN with it:
+    `InvalidAssociations` names the source, where `require_paired` raised
+    `NotAdmitted`. Both are `ValueError`s, but code that catches `NotAdmitted`
+    no longer catches the refusal. The completions that read this way:
+    - Hybrid, its source's Ragged Overflow (#391).
+    - Ragged, each source Analysis (#393).
+    - Dense, its source's bands and each LD block's rows (#393). With that,
+      no completion calls `require_paired`, and it is removed.
 - **`require_admitted`** checks Admission's guarantee on cells a writer is handed.
   Every builder calls it on the z and SE it is about to store, so a half-missing
   pair (spec §15) or any other cell a gate should have dropped refuses the build,
@@ -86,6 +96,13 @@ name the decisions issue #357 took on the rules that differed.
 | `duplicate_reversed_indel` | it is an indel whose declared reference allele its ALID spells second, at a (variant, Analysis) whose distinct rows, once agreeing copies collapse, are this one and one spelling it first, which is kept | yes | D5, reversed indels |
 | `duplicate_conflicting` | the rows for its (variant, Analysis) disagree on z or SE: all are dropped | yes | D5 |
 | `off_axis` | no axis of the Store holds its variant, and nothing will place it later | yes | D6 |
+| `lift_unmapped` | its source is lifted onto the Store's assembly and the chain places its site nowhere | yes | #386 |
+| `lift_ambiguous` | its Routing Key is declared by a lifted source and by a source already on the Store's assembly: two loci sharing a string, so no row of it is placed | yes | #386 |
+
+`build-ragged-ssf` lifts a source declaring another build, and counts what the
+lift drops under its own two reasons rather than `off_axis`: a record then says
+the chain, not an axis, lost the row. Records written before #386 hold neither
+reason and read as before. The rule set's version moved to `admission/11`.
 
 The duplicate rule is Variant Routing's `collapse_duplicates`, applied after
 the rules above, wherever two rows can reach one (variant, Analysis):
@@ -107,6 +124,49 @@ finished. A fold run again for a column replaces them. A completion writes no
 record, so its log names every row it drops, a source Store's duplicate cells
 and the fills two blocks disagree on, one line each with the row's variant, z,
 SE and reason (D8).
+
+**Clarified 5 Nov 2026 (epic #58's final review): a variant two LD blocks fill
+has an owner.**
+
+- **The rule.** Blocks are half-open, `[start, end)`. A variant at a position
+  one block ends at and the next starts at belongs to the block that starts
+  there, and only that block fills it. It stays in both blocks' LD context
+  (`completion.ld_panel.shared_endpoints`). A block that no other block follows
+  keeps its end: a chromosome's last block, or, in a Ragged completion, a
+  block whose successor does not complete that Analysis. Each such cell is
+  filled once, and counted once in `completion_quality`. Where the owner's fit
+  fails for an Analysis, the cell stays missing, even where the other block's
+  fit passes. Of the published Stores, the Dense OGS-00015 holds 254 cells
+  only the other block filled, and OGS-00017 10; the rule leaves each missing.
+  The Ragged OGS-00002 holds 8, but leaves 1 missing: for the other 7 the
+  owning block does not complete that Analysis, so the ending block keeps its
+  end. Completed again from OGS-00001, it holds 106,652 imputed cells against
+  106,653.
+- **The guard.** The duplicate rule stays in the writer of every completion.
+  A fill that still reaches a cell another block filled is resolved by it, and
+  each dropped fill is logged. That happens where two blocks overlap away from
+  an endpoint, and no panel completion reads has such an overlap. The dropped
+  fill stays counted in its block's `completion_quality` row.
+- **The cause.** `opengwasdb-stores`' panel builder (`construct_block.py`)
+  cuts each block with plink2's inclusive `--from-bp`/`--to-bp`. Adjacent rows
+  of its region table share an endpoint, so every boundary variant is in both
+  blocks. Measured from the block files, the variants two blocks hold, each
+  at an endpoint the two share, are:
+
+  | Panel | Variants |
+  |---|---|
+  | `reference/ld` EUR | 1,022 |
+  | `hgdp1kgp-hg38` EUR | 985 |
+  | `hgdp1kgp-hg38` AFR | 1,330 |
+  | `hgdp1kgp-hg38` EAS | 866 |
+  | `hgdp1kgp-hg38-amr` AMR | 1,198 |
+
+  No block holds a variant twice.
+- **What was published.** The completed Store Releases published by 5 Nov
+  2026 hold 1,500,055 cells that both blocks filled, 798,831 of them in
+  OGS-00009, and each stores whichever fill completion wrote last. In 16
+  recomputed cells the two fills differed in both z and SE, and 7 differed in
+  sign. Issue #396 repairs the Stores.
 
 Two conflicting rows can be two variants. An insertion and a deletion at one
 position share an ALID, because the ALID sorts its alleles: BMI_IRN's
@@ -181,7 +241,7 @@ whose reported frequency is absent, when the build stores the frequency. An
 infinite `.esi` frequency is one of them; the `.esi` reader used to refuse
 the file for it.
 
-`admission.json`'s `"rules"` names the rule set's version, `admission/10`. A
+`admission.json`'s `"rules"` names the rule set's version, `admission/11`. A
 change to what a rule admits, or to what the record counts, moves it.
 
 ## Consequences

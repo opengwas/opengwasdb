@@ -5,8 +5,10 @@ the imputed mask, then EAF with the panel substitution, then SE from that EAF --
 and each copy was a place for the order or the shared read to go wrong (#253).
 They now ask `opengwasdb.associations`, and must not touch a plane at all.
 
-`validate` and the Indexed Variant Subset's validation keep decodes of their own,
-named below by the function each sits in. SE decoding is recognised by what is
+Validation -- every module under `validation/` that is not a reader, the
+Validation Rules and their scans included (ADR 0074) -- and the Indexed Variant
+Subset's validation keep decodes of their own, named below by the function each
+sits in. SE decoding is recognised by what is
 called -- the codec's `decode_se`, an SE plane type named (to open one, or to
 annotate a parameter that receives one), or an SE plane read -- so a decode
 anywhere else in those modules fails, however it is spelled.
@@ -23,6 +25,9 @@ ROOT = Path(__file__).resolve().parents[1] / "opengwasdb"
 
 #: Modules that read associations only through `opengwasdb.associations`.
 READERS = (
+    "layouts/dense/complete.py",
+    "layouts/hybrid/complete.py",
+    "layouts/ragged/complete.py",
     "query/facade.py",
     "query/resolve.py",
     "validation/observed_view.py",
@@ -30,32 +35,49 @@ READERS = (
     "validation/observed_view_hybrid.py",
 )
 
+#: Modules that use no other module's private names: Hybrid Reference Completion
+#: read the Overflow's private arrays and imported the Hybrid builder's table
+#: writer by its private name (#391).
+OWN_NAMES_ONLY = ("layouts/hybrid/complete.py",)
+
+#: The planes a reader module reaches that hold no association, and why.
+READER_PLANES = {
+    ("layouts/dense/complete.py", "imports DenseEafPlane"):
+        "the frequency pass carries each observed cell's stored frequency across the "
+        "row remap, after the statistic pass has read and judged the cell through the reader",
+}
+
 #: The one SE decode in a reader module: it reads no plane, but re-encodes the
 #: source's crossover cells and decodes them, to predict what completion stored.
 READER_ROUND_TRIPS = {("validation/observed_view_hybrid.py", "round_trip")}
 
-#: Modules that keep reviewed decodes of their own, and only those.
-CHECKED = ("validation/validate.py", "layouts/dense/indexed_subsets.py")
+#: Every module under `validation/`.
+VALIDATION = tuple(
+    sorted(str(path.relative_to(ROOT)) for path in (ROOT / "validation").rglob("*.py"))
+)
+
+#: Modules that keep reviewed decodes of their own, and only those: every validation
+#: module that is not a reader -- so a new rule or scan module cannot decode SE unseen
+#: -- and the Indexed Variant Subset's validation.
+CHECKED = (
+    *(module for module in VALIDATION if module not in READERS),
+    "layouts/dense/indexed_subsets.py",
+)
 
 #: The reviewed SE decodes, by the function (or class) each sits in.
 ALLOWED = {
     # Each shares an EAF read the check already holds.
-    ("validation/validate.py", "_validate_dense_band"):
-        "one frequency read per band, shared by the EAF range check and SE decoding",
-    ("validation/validate.py", "_decode_top_hit_band"):
-        "the band the Top-Hit Index check already read for its own EAF comparison",
+    ("validation/scans.py", "_dense_band_se"):
+        "one SE decode per band, from the codes the band already holds and its own EAF "
+        "read, shared by every value rule that folds over the band",
+    ("validation/scans.py", "_sequence_window_se"):
+        "one SE decode per sequence window, from the codes the window already holds and "
+        "its own EAF read, shared by every value rule that folds over the window",
     ("layouts/dense/indexed_subsets.py", "_compare_indexed_band"):
         "the primary block the subset's EAF is compared against",
     ("layouts/dense/indexed_subsets.py", "_sample_decoded_view"):
         "the sampled primary cells the subset's EAF is compared against",
     # The planes those decodes read, and the decoders the readers stand on.
-    ("validation/validate.py", "_validate_dense_arrays"):
-        "opens the SE plane `_validate_dense_band` decodes",
-    ("validation/validate.py", "_validate_top_hits"):
-        "opens the SE plane `_decode_top_hit_band` decodes",
-    ("validation/validate.py", "_decoded_csr_se"):
-        "one whole-sequence SE decode for the value, exception and marker checks; a "
-        "reader would decode Z, EAF and n with it",
     ("layouts/dense/indexed_subsets.py", "_decode_se_column"):
         "the subset's own decoder, which `SubsetReader` reads through",
     ("layouts/dense/indexed_subsets.py", "_se_band_error"):
@@ -71,19 +93,32 @@ PLANES = frozenset(
     {"DenseZPlane", "DenseSePlane", "DenseEafPlane", "RaggedSePlane", "RaggedEafPlane", "EafRead"}
 )
 
-#: The CSR reader's decode members, which only `CsrReader` calls.
+#: The CSR reader's decode members, which only `CsrReader` and the modules named
+#: below call.
 CSR_DECODES = frozenset(
     {
-        "get_analysis",
+        "z_slice",
+        "z_at",
         "se_slice",
         "se_at",
         "eaf_slice_read",
         "eaf_at_read",
-        "z_at",
+        "eaf_at",
         "n_slice",
         "n_at",
     }
 )
+
+#: The modules that may call them, and why.
+CSR_DECODE_CALLERS = {
+    "associations/csr.py": "the CSR adapter",
+    "layouts/ragged/zarr_csr.py": "the reader that defines them",
+    "layouts/ragged/top_hits.py": (
+        "the Top-Hit harvest, a Layout (layer 3) the builders call, which cannot import "
+        "the Association Reader (Query, layer 4) without an upward import "
+        "(docs/architecture/components.yaml)"
+    ),
+}
 
 #: The SE plane types: naming one is how a function comes to decode SE.
 SE_PLANES = frozenset({"DenseSePlane", "RaggedSePlane"})
@@ -192,13 +227,26 @@ def test_the_guard_sees_a_new_decode_beside_the_reviewed_ones(module: str, bypas
 
 
 def test_the_guard_lets_the_reviewed_functions_be() -> None:
-    source = "def _validate_dense_band(se_plane, eaf):\n    return se_plane.band(0, 1, eaf=eaf)\n"
-    assert unreviewed_decodes("validation/validate.py", source) == []
+    source = "def _dense_band_se(se_plane, eaf):\n    return se_plane.band(0, 1, eaf=eaf)\n"
+    assert unreviewed_decodes("validation/scans.py", source) == []
+
+
+def test_every_validation_module_is_a_reader_or_checked() -> None:
+    readers = {module for module in READERS if module.startswith("validation/")}
+    assert readers <= set(VALIDATION), "a reader the guard names no longer exists"
+    assert "validation/scans.py" in CHECKED, "the band scan must be checked"
+    assert set(VALIDATION) == readers | {m for m in CHECKED if m.startswith("validation/")}
 
 
 @pytest.mark.parametrize("module", READERS)
 def test_readers_reach_no_plane(module: str) -> None:
-    assert plane_reads((ROOT / module).read_text(encoding="utf-8"), module) == []
+    found = plane_reads((ROOT / module).read_text(encoding="utf-8"), module)
+    assert [read for read in found if (module, read) not in READER_PLANES] == []
+
+
+@pytest.mark.parametrize(("module", "read"), sorted(READER_PLANES))
+def test_each_reviewed_reader_plane_is_still_reached(module: str, read: str) -> None:
+    assert read in plane_reads((ROOT / module).read_text(encoding="utf-8"), module)
 
 
 @pytest.mark.parametrize("module", CHECKED)
@@ -208,3 +256,49 @@ def test_only_the_reviewed_decodes_remain(module: str) -> None:
     reviewed = {owner for owner, _ in se_decodes(source)}
     stale = {owner for (path, owner) in ALLOWED if path == module} - reviewed
     assert not stale, f"allowed decodes that no longer exist: {sorted(stale)}"
+
+
+def private_reaches(source: str) -> list[str]:
+    """Each private name `source` imports from a module, or reads off another object."""
+    found = []
+    for _, node in _in_functions(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom):
+            found += [f"imports {a.name}" for a in node.names if a.name.startswith("_")]
+        elif isinstance(node, ast.Attribute) and node.attr.startswith("_"):
+            owner = ast.unparse(node.value)
+            if not node.attr.startswith("__") and owner not in ("self", "cls"):
+                found.append(f"reads {owner}.{node.attr} at line {node.lineno}")
+    return found
+
+
+def test_the_guard_sees_a_private_name_imported_or_read() -> None:
+    source = "from m import _hidden\ndef f(csr):\n    return csr._offsets[:]\n"
+    assert private_reaches(source) == ["imports _hidden", "reads csr._offsets at line 3"]
+
+
+@pytest.mark.parametrize("module", OWN_NAMES_ONLY)
+def test_a_module_uses_no_other_module_s_private_names(module: str) -> None:
+    assert private_reaches((ROOT / module).read_text(encoding="utf-8")) == []
+
+
+def csr_decode_calls(source: str) -> list[str]:
+    """Each call `source` makes to a CSR decode member, by name."""
+    return [
+        f"calls .{node.func.attr}() at line {node.lineno}"
+        for _, node in _in_functions(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in CSR_DECODES
+    ]
+
+
+def test_only_the_csr_adapter_calls_the_csr_decodes() -> None:
+    """A sequence's associations are read through `CsrReader`, which applies the
+    presence rule, so no module in the package but those named decodes one itself."""
+    found = {
+        module: calls
+        for path in sorted(ROOT.rglob("*.py"))
+        if (module := str(path.relative_to(ROOT))) not in CSR_DECODE_CALLERS
+        and (calls := csr_decode_calls(path.read_text(encoding="utf-8")))
+    }
+    assert found == {}

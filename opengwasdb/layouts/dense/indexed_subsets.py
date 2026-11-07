@@ -98,12 +98,11 @@ from opengwasdb.encoding import (
     positions_flat,
     positions_rows_cols,
 )
-from opengwasdb.encoding.planes import SE_COEFFICIENTS
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.arrays import ArrayRole, array_length
+from opengwasdb.store.arrays import SE_COEFFICIENTS, ArrayRole, array_length
 from opengwasdb.store.open import (
     DestinationExistsError,
     destination_lock,
@@ -2479,8 +2478,12 @@ def validate_indexed_subsets(
     if not isinstance(namespace, zarr.Group):
         errors.append(f"data.zarr/{INDEXED_SUBSETS_GROUP} is not a group")
         return
+    # Each entry is judged on its own findings: a defect in one subset says
+    # nothing about another, so it must not stop that one's value comparison.
     for entry in _namespace_entries(context.namespace_dir):
-        _validate_namespace_entry(context, namespace, entry, errors, exhaustive=exhaustive)
+        found: list[str] = []
+        _validate_namespace_entry(context, namespace, entry, found, exhaustive=exhaustive)
+        errors.extend(found)
 
 
 def _report_absent_namespace(namespace_dir: Path, errors: list[str]) -> None:

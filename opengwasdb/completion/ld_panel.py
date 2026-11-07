@@ -217,6 +217,70 @@ def blocks_over_variants(
     return dict(per_analysis)
 
 
+@dataclass(frozen=True)
+class SharedEndpoint:
+    """The position a block ends at and the next block starts at, and the
+    variants both blocks hold there, which the next block owns."""
+
+    following: str
+    alids: frozenset[str]
+
+
+def shared_endpoints(blocks: Iterable[LDBlock]) -> dict[str, SharedEndpoint]:
+    """Each block's end that one other block starts at, keyed by the ending block.
+
+    Blocks are half-open, ``[start, end)``: a variant at a position one block
+    ends at and the next starts at belongs to the block that starts there, and
+    only that block fills it; it stays in both blocks' LD context (ADR 0072).
+    A block no other block follows, such as a chromosome's last, keeps its end.
+    The panels completion reads put a shared endpoint in both blocks, since
+    they were cut with an inclusive end. A variant two blocks hold anywhere
+    else is no endpoint of theirs, and a completion resolves its two fills by
+    the duplicate rule (D5).
+
+    A block's extent is the span of its variants' positions, so an endpoint is
+    a position both blocks hold a variant at.
+    """
+    by_chromosome: dict[str, list[LDBlock]] = defaultdict(list)
+    for block in blocks:
+        by_chromosome[block.chrom].append(block)
+    shared: dict[str, SharedEndpoint] = {}
+    for chromosome_blocks in by_chromosome.values():
+        shared.update(_chromosome_endpoints(chromosome_blocks))
+    return shared
+
+
+def ceded_at_end(blocks: Iterable[LDBlock]) -> dict[str, frozenset[str]]:
+    """Per block, the variants at its end the next block owns, for a completion
+    that completes every Analysis against every block (`shared_endpoints`)."""
+    return {block_id: end.alids for block_id, end in shared_endpoints(blocks).items()}
+
+
+def _chromosome_endpoints(blocks: list[LDBlock]) -> dict[str, SharedEndpoint]:
+    starting: dict[int, list[LDBlock]] = defaultdict(list)
+    for block in blocks:
+        starting[block.start_bp].append(block)
+    shared: dict[str, SharedEndpoint] = {}
+    for block in blocks:
+        following = [b for b in starting.get(block.end_bp, ()) if b.block_id != block.block_id]
+        if len(following) != 1:
+            continue
+        (successor,) = following
+        alids = _alids_at(block, block.end_bp) & _alids_at(successor, successor.start_bp)
+        if alids:
+            shared[block.block_id] = SharedEndpoint(successor.block_id, frozenset(alids))
+    return shared
+
+
+def _alids_at(block: LDBlock, position: int) -> set[str]:
+    """The canonical ALIDs a block holds at one position."""
+    return {
+        alid
+        for snp in block.snp_ids
+        if snp_position(snp) == position and (alid := canonical_panel_alid(snp)) is not None
+    }
+
+
 def list_chromosomes(ld_dir: str | Path, ancestry: str) -> list[str]:
     """Return the chromosome names present in the panel for *ancestry*."""
     ancestry_dir = Path(ld_dir) / ancestry

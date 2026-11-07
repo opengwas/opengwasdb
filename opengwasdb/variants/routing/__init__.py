@@ -15,13 +15,12 @@ from __future__ import annotations
 
 from opengwasdb.variants.routing.extract import (
     EmptyReferenceError,
-    ReverseStrandLiftError,
     VariantReferenceExtraction,
     extract_variant_reference,
 )
 from opengwasdb.variants.routing.keys import SourceKey
 from opengwasdb.variants.routing.lift import SitePlacement, place_sites
-from opengwasdb.variants.routing.names import RoutedNames
+from opengwasdb.variants.routing.names import RoutedNames, union_names
 from opengwasdb.variants.routing.route import (
     FromReference,
     LiftedUnion,
@@ -37,7 +36,6 @@ from opengwasdb.variants.routing.table import (
     RouteTable,
     Unmatched,
     collapse_duplicates,
-    last_wins,
 )
 from opengwasdb.variants.routing.union import Pass1Stats, UnionOptions
 
@@ -50,7 +48,6 @@ __all__ = [
     "LiftedUnion",
     "Pass1Stats",
     "Placed",
-    "ReverseStrandLiftError",
     "RouteTable",
     "RoutedColumn",
     "RoutedNames",
@@ -62,7 +59,7 @@ __all__ = [
     "VariantRouting",
     "collapse_duplicates",
     "extract_variant_reference",
-    "last_wins",
     "place_sites",
     "route_variants",
+    "union_names",
 ]

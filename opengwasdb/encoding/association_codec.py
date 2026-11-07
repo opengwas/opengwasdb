@@ -2,8 +2,9 @@
 
 `storable` is the one judgement a writer makes before any plane is written:
 every cell must be one Association Admission would admit (ADR 0072), judged by
-Admission's own check, and an SE above the largest a `float16` plane holds is
-counted per Analysis. Admission guarantees the first for every source row, so
+Admission's own check, every missing marker must be the canonical NaN (spec
+§15), and an SE above the largest a `float16` plane holds is counted per
+Analysis. Admission guarantees the first for every source row, so
 a cell that breaks it here was produced after admission -- a completion fill,
 a merged pass, a re-encode -- and the write is refused. A writer writes what
 `storable` returns; today that is every cell it was handed, unchanged.
@@ -37,9 +38,10 @@ from opengwasdb.encoding.codec import (
     positions_flat,
     positions_pairs,
     positions_row_band,
+    require_parallel,
 )
 from opengwasdb.encoding.plan import StoreEncoding
-from opengwasdb.encoding.planes import SE_COEFFICIENTS
+from opengwasdb.store.arrays import SE_COEFFICIENTS
 
 log = logging.getLogger(__name__)
 
@@ -122,24 +124,47 @@ def storable(
     would not admit, by Admission's own check (`require_admitted`): one of z and
     SE missing, an infinite z, an SE not positive, an imputed flag that is not
     0/1 or sits on a missing cell. An SE of `+inf` is not refused: it is what a
-    `float16` plane holds for an SE of 65,520 or more.
+    `float16` plane holds for an SE of 65,520 or more. It raises `NotAdmitted`
+    too for a missing z or SE whose NaN is not the canonical marker (spec §15,
+    ADR 0070), judged in the dtype the writer hands it: a `float16` plane would
+    store that NaN as itself.
     """
     # Imported here: Admission's package imports the association readers, whose
     # Ragged adapter imports the writer that imports this module, and importing
-    # any module of the package runs its `__init__` first.
+    # any module of either package runs its `__init__` first.
     from opengwasdb.admission.cells import require_admitted
 
     z, se, imputed = _parallel(cells, where)
     owner = np.broadcast_to(np.asarray(analyses, dtype=np.int64), z.shape)
     over = np.zeros(n_analyses, dtype=np.int64)
     for window in _windows(z.shape):
-        se_w, imputed_w = se[window], None if imputed is None else imputed[window]
-        require_admitted(
-            z[window], se_w, imputed=imputed_w, where=_where(where, window, z.shape),
-            narrowed_se=True,
-        )
+        z_w, se_w = z[window], se[window]
+        at = _where(where, window, z.shape)
+        imputed_w = None if imputed is None else imputed[window]
+        require_admitted(z_w, se_w, imputed=imputed_w, where=at, narrowed_se=True)
+        _refuse_odd_markers(z_w, se_w, where=at)
         over += _out_of_range(se_w, owner[window], n_analyses)
     return Storable(cells=cells, stored=np.ones(z.shape, dtype=bool), se_out_of_range=over)
+
+
+def _refuse_odd_markers(z: np.ndarray, se: np.ndarray, *, where: str) -> None:
+    """Refuse a missing z or SE whose NaN is not the canonical marker (spec §15).
+
+    The presence rule's own test (`non_canonical`), so a writer refuses exactly
+    the markers a reader and `validate` refuse.
+    """
+    from opengwasdb.admission.cells import NotAdmitted
+    from opengwasdb.associations.record import non_canonical
+
+    odd = non_canonical(z) | non_canonical(se)
+    if not odd.any():
+        return
+    first = tuple(int(axis[0]) for axis in np.nonzero(odd))
+    raise NotAdmitted(
+        f"{where}: cells no plane may hold (a missing marker other than the canonical "
+        f"NaN: {int(odd.sum()):,}); first a missing marker other than the canonical NaN "
+        f"at {first}"
+    )
 
 
 @dataclass(frozen=True)
@@ -148,6 +173,10 @@ class Placement:
 
     `rows` and `analyses` broadcast against the batch's shape; `positions` is
     each cell's flat position, which keys every side table (spec §6a).
+    `per_cell` is what the batch must match one for one (issue #392): the
+    indices that address a single cell each, named as the caller that built the
+    placement names them. A grid's are not among them -- `band`'s rows and
+    Analyses broadcast by design, so an array of theirs is not an accident.
     """
 
     #: Each cell's variant row: what gathers its EAF baseline and panel EAF.
@@ -156,6 +185,22 @@ class Placement:
     analyses: np.ndarray
     positions: PositionSource
     n_analyses: int
+    #: What the placement's own indices are called: `per_cell` pairs these names
+    #: with `rows` and `analyses`, so only the naming is held here. Empty for
+    #: `band`, whose rows and Analyses are a grid by design.
+    names: tuple[str, ...] = ()
+
+    @property
+    def per_cell(self) -> tuple[tuple[str, np.ndarray], ...]:
+        """The indices this placement addresses one cell per cell, named.
+
+        Read from `rows` and `analyses` themselves rather than kept beside them:
+        a placement rebuilt with `dataclasses.replace` must be judged against
+        the arrays it now holds, not the ones it was built with (issue #392).
+        """
+        if not self.names:
+            return ()
+        return tuple(zip(self.names, (self.rows, self.analyses), strict=False))
 
     @classmethod
     def band(cls, r0: int, r1: int, n_analyses: int) -> Placement:
@@ -169,9 +214,21 @@ class Placement:
 
     @classmethod
     def pairs(cls, rows: np.ndarray, cols: np.ndarray, n_analyses: int) -> Placement:
-        """The Dense cells `(rows[i], cols[i])`, as `Cells.pairs` names them."""
+        """The Dense cells `(rows[i], cols[i])`, as `Cells.pairs` names them.
+
+        Each row needs its column, so the two lists must be one length: refused
+        here, before `positions_pairs` reaches numpy's unnamed broadcast error
+        (issue #392).
+        """
         rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
-        return cls(rows, cols, positions_pairs(rows, cols, n_analyses), n_analyses)
+        require_parallel((("rows", rows), ("cols", cols)), where="Placement.pairs")
+        return cls(
+            rows,
+            cols,
+            positions_pairs(rows, cols, n_analyses),
+            n_analyses,
+            ("rows", "cols"),
+        )
 
     @classmethod
     def sequence(
@@ -181,13 +238,23 @@ class Placement:
         analysis_index: np.ndarray | int,
         n_analyses: int,
     ) -> Placement:
-        """A run of an association sequence from flat position `start`."""
-        return cls(
-            np.asarray(variant_index, dtype=np.int64),
-            np.asarray(analysis_index, dtype=np.int64),
-            positions_flat(start),
-            n_analyses,
-        )
+        """A run of an association sequence from flat position `start`.
+
+        `analysis_index` is each cell's Analysis: one per cell, or the one
+        Analysis the whole run belongs to, which broadcasts by design. An array
+        that is not parallel to `variant_index` is refused, because the two
+        describe the same cells (issue #392).
+        """
+        variants = np.asarray(variant_index, dtype=np.int64)
+        analyses = np.asarray(analysis_index, dtype=np.int64)
+        names: tuple[str, ...] = ("variant_index",)
+        if analyses.ndim:
+            require_parallel(
+                (("variant_index", variants), ("analysis_index", analyses)),
+                where="Placement.sequence",
+            )
+            names += ("analysis_index",)
+        return cls(variants, analyses, positions_flat(start), n_analyses, names)
 
 
 @dataclass(frozen=True)
@@ -261,8 +328,11 @@ class AssociationCodec:
         `EafBaselineError` (a residual EAF plan with no baseline), and
         `ValueError` for what the plan cannot hold: a frequency outside
         [0, 1], a frequency where the plan declares no EAF plane, or a
-        residual SE with no model or no decoded frequency (issue #159).
+        residual SE with no model or no decoded frequency (issue #159). It
+        raises `ValueError` too for a placement that does not address one cell
+        per cell of the batch (issue #392).
         """
+        require_parallel((*_cell_arrays(cells), *at.per_cell), where=where)
         kept = storable(cells, at.analyses, at.n_analyses, where=where)
         values = kept.cells
         z_overflow = ZOverflowBuilder()
@@ -423,47 +493,20 @@ def log_se_out_of_range(
     )
 
 
-def require_parallel(named: Sequence[tuple[str, Any]], *, where: str) -> None:
-    """Refuse arrays that are not parallel, naming each one's length.
-
-    Parallel means one shape: the arrays are alternative readings of the same
-    cells, so an index into one is an index into all of them. `named` is
-    `(name, array)` pairs in the order the refusal should name them, `None`
-    where a plane is absent.
-
-    One rule for every writer, because the failure it prevents is the same
-    everywhere: an array shorter (or longer) than the cells it describes is
-    either broadcast to the cells' length, which stores one cell's value
-    under another's variant, or indexed with a mask of the wrong length, which
-    crashes after the planes are open. Neither says which array was wrong.
-    """
-    present = [(name, np.asarray(array)) for name, array in named if array is not None]
-    if not present:
-        return
-    _, first = present[0]
-    if all(array.shape == first.shape for _, array in present):
-        return
-    raise ValueError(f"{where}: {_lengths(present)} must be parallel")
-
-
-def _lengths(named: Sequence[tuple[str, np.ndarray]]) -> str:
-    """`named` as a readable list, a sequence's length or an array's shape."""
-    described = [
-        f"{name} of length {array.shape[0]}"
-        if array.ndim == 1
-        else f"{name} of shape {array.shape}"
-        for name, array in named
-    ]
-    if len(described) == 1:
-        return described[0]
-    return ", ".join(described[:-1]) + " and " + described[-1]
+def _cell_arrays(cells: CellValues) -> tuple[tuple[str, Any], ...]:
+    """A batch's own arrays, as `require_parallel` names them."""
+    return (
+        ("z", cells.z),
+        ("se", cells.se),
+        ("eaf", cells.eaf),
+        ("imputed", cells.imputed),
+    )
 
 
 def _parallel(cells: CellValues, where: str) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    require_parallel(_cell_arrays(cells), where=where)
     z, se = np.asarray(cells.z), np.asarray(cells.se)
-    eaf = None if cells.eaf is None else np.asarray(cells.eaf)
     imputed = None if cells.imputed is None else np.asarray(cells.imputed)
-    require_parallel((("z", z), ("se", se), ("eaf", eaf), ("imputed", imputed)), where=where)
     return z, se, imputed
 
 

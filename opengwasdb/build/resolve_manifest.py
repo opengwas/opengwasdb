@@ -50,6 +50,12 @@ from uuid import uuid4
 
 from opengwasdb.ancestry.mixture import AncestryAssignment, Gates
 from opengwasdb.ancestry.reference import AncestryReference, load_reference
+from opengwasdb.build.effect_consistency import (
+    DEFAULT_EFFECT_CONSISTENCY_POLICY,
+    EffectConsistency,
+    EffectConsistencyPolicy,
+    check_sample_bound,
+)
 from opengwasdb.build.liftover import normalise_build
 from opengwasdb.build.phenotype_sd_pipeline import load_af_reference
 from opengwasdb.build.resolve import (
@@ -91,6 +97,7 @@ from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, load_liftover
 from opengwasdb.readers.interface import SourceReader
 from opengwasdb.readers.registry import known_capabilities, requires_probe_id, resolve_reader
+from opengwasdb.variants.reference import refuse_unmarked_artifact
 from opengwasdb.version import installed_version
 
 logger = logging.getLogger(__name__)
@@ -179,8 +186,16 @@ def compute_fingerprint_digest(fp: dict[str, Any]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _parse_panel_header(first_line: str) -> tuple[int, str | None]:
+def _parse_panel_header(first_line: str, path: Path) -> tuple[int, str | None]:
+    """The column a panel names its variants in, and the first line's variant
+    when the line is not a header.
+
+    A Variant Reference artifact from before issue #354 is refused: its ALIDs
+    may name a reverse-strand variant on the source's strand
+    (`refuse_unmarked_artifact`).
+    """
     tokens = first_line.split()
+    refuse_unmarked_artifact([tok.lstrip("#").strip() for tok in tokens], path)
     lower_tokens = [tok.strip().lower() for tok in tokens]
     for target in ("alid", "variant_id", "id"):
         if target in lower_tokens:
@@ -213,7 +228,7 @@ def load_extraction_panel(path: Path | str) -> set[str]:
         first_line = fh.readline()
         if not first_line:
             raise ValueError(f"empty extraction panel file: {panel_path}")
-        col_idx, initial_var = _parse_panel_header(first_line)
+        col_idx, initial_var = _parse_panel_header(first_line, panel_path)
         variants = _read_panel_lines(fh, col_idx, initial_var)
     if not variants:
         raise ValueError(f"no valid variants found in extraction panel: {panel_path}")
@@ -230,7 +245,7 @@ def load_variant_reference(path: Path | str) -> set[str]:
         first = fh.readline()
         if not first:
             raise ValueError(f"empty variant reference: {axis}")
-        column, initial = _parse_panel_header(first)
+        column, initial = _parse_panel_header(first, axis)
         variants = _read_panel_lines(fh, column, initial)
     if not variants:
         raise ValueError(f"no valid variants in variant reference: {axis}")
@@ -666,6 +681,21 @@ def _phenotype_sd_to_dict(p: PhenotypeSdResolution | None) -> dict[str, Any] | N
     }
 
 
+def _effect_consistency_to_dict(m: EffectConsistency | None) -> dict[str, Any] | None:
+    """The stored-z-versus-source-p measurement (the threshold is in the fingerprint)."""
+    if m is None:
+        return None
+    return {
+        "n_rows_considered": m.n_rows_considered,
+        "n_rows_compared": m.n_rows_compared,
+        "sampled": m.sampled,
+        "median_abs_delta": _optional_float(m.median_abs_delta),
+        "median_delta": _optional_float(m.median_delta),
+        "skip_reason": m.skip_reason.value if m.skip_reason is not None else None,
+        "refused": m.refused,
+    }
+
+
 def _diagnostics_to_dict(d: ScanDiagnostics) -> dict[str, Any]:
     """Serialize ScanDiagnostics to a dictionary.
 
@@ -708,6 +738,7 @@ def _diagnostics_to_dict(d: ScanDiagnostics) -> dict[str, Any]:
         ),
         "build_eligible_rows_se_from_ci": d.build_eligible_rows_se_from_ci,
         "build_eligible_rows_se_from_p_value": d.build_eligible_rows_se_from_p_value,
+        "effect_consistency": _effect_consistency_to_dict(d.effect_consistency),
         "ancestry_scope": d.ancestry_scope.value,
         "ancestry_measurement_id": d.ancestry_measurement_id,
     }
@@ -743,6 +774,7 @@ def _build_analysis_fingerprints(
     reference_build: str,
     chain_fingerprint: dict[str, Any],
     column_map: ColumnMap | None = None,
+    effect_consistency_policy: EffectConsistencyPolicy = DEFAULT_EFFECT_CONSISTENCY_POLICY,
 ) -> dict[str, Any]:
     file_bytes, file_mtime_ns = _stat_source_file(row.source_file)
     fp: dict[str, Any] = {
@@ -787,6 +819,10 @@ def _build_analysis_fingerprints(
             ),
             "maf_floor": maf_floor,
             "evidence_sample": evidence_sample,
+            # ADR 0069: the refusal threshold decides whether an Analysis
+            # resolves, so a record resolved under one can never be resumed
+            # under another.
+            "effect_consistency": effect_consistency_policy.as_fingerprint(),
             # Issue #209: the scan bound travels in the fingerprint, so a record
             # resolved under one bound can never be resumed as another. The
             # version is always present so a change to what a bound *means*
@@ -857,6 +893,7 @@ _WORKER_VARIANT_REFERENCE: Collection[str] | None = None
 _WORKER_AF_REFERENCES: Mapping[str, AfReference] | None = None
 _WORKER_EVIDENCE_SAMPLE: int = DEFAULT_EVIDENCE_SAMPLE
 _WORKER_SCAN_LIMIT: ScanLimit | None = None
+_WORKER_EFFECT_CONSISTENCY: EffectConsistencyPolicy = DEFAULT_EFFECT_CONSISTENCY_POLICY
 _WORKER_RECORDS_DIR: Path | None = None
 _REFERENCE_LOAD_CALLS: int = 0
 @dataclass(frozen=True)
@@ -895,6 +932,7 @@ def _analysis_request(task: dict[str, Any]) -> AnalysisRequest:
         stored_effect_scale=StoredEffectScale(task["stored_effect_scale"]),
         info_score_policy=task.get("info_score_policy", InfoScorePolicy()),
         maf_policy=task.get("maf_policy", MafPolicy()),
+        effect_consistency_policy=_WORKER_EFFECT_CONSISTENCY,
     )
 
 
@@ -1300,10 +1338,14 @@ def _assemble_index(
 
 
 def _validate_resolution_params(
-    evidence_sample: int, n_workers: int, records_dir: Path | str
+    evidence_sample: int,
+    n_workers: int,
+    records_dir: Path | str,
+    effect_consistency_policy: EffectConsistencyPolicy = DEFAULT_EFFECT_CONSISTENCY_POLICY,
 ) -> Path:
     if evidence_sample <= 0:
         raise ValueError(f"evidence_sample must be positive, got {evidence_sample!r}")
+    check_sample_bound(evidence_sample, effect_consistency_policy)
     if n_workers <= 0:
         raise ValueError(f"n_workers must be positive, got {n_workers!r}")
     out_dir = Path(records_dir)
@@ -1595,12 +1637,17 @@ def resolve_analyses_manifest(
     largest_first: bool = True,
     reference_version: str = "",
     column_map: ColumnMap | str | Path | None = None,
+    effect_consistency_policy: EffectConsistencyPolicy = DEFAULT_EFFECT_CONSISTENCY_POLICY,
 ) -> ManifestResolutionSummary:
     """Resolve an entire manifest with atomic checkpointed records and resume.
 
     `column_map` is the Column Map -- loaded, a file path, or a built-in name --
     that the manifest's `opengwasdb.column-map` Analyses are read through
     (issue #281). Its checksum is part of each such record's fingerprint.
+
+    `effect_consistency_policy` is when an Analysis whose effect contradicts its
+    source's own p-value is refused (ADR 0069); its threshold and minimum row
+    count are bound into every record's fingerprint.
 
     `max_ancestry_sites` bounds ancestry evidence accumulation (issue #209, issue #212):
     ancestry accumulation stops once that many distinct usable reference sites have
@@ -1617,7 +1664,9 @@ def resolve_analyses_manifest(
     if max_ancestry_sites is not None or max_rows is not None:
         scan_limit = ScanLimit(max_rows=max_rows, max_ancestry_sites=max_ancestry_sites)
         scan_limit.validate()
-    out_dir = _validate_resolution_params(evidence_sample, n_workers, records_dir)
+    out_dir = _validate_resolution_params(
+        evidence_sample, n_workers, records_dir, effect_consistency_policy
+    )
     loaded_map = as_column_map(column_map)
     rows = read_resolve_manifest(
         manifest_path,
@@ -1646,6 +1695,9 @@ def resolve_analyses_manifest(
         chain_file,
     )
     fp_kwargs["column_map"] = loaded_map
+    fp_kwargs["effect_consistency_policy"] = effect_consistency_policy
+    global _WORKER_EFFECT_CONSISTENCY
+    _WORKER_EFFECT_CONSISTENCY = effect_consistency_policy
     return _execute_resolution_pipeline(
         rows, out_dir, manifest_path, fp_kwargs, resume, largest_first, n_workers
     )

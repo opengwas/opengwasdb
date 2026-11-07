@@ -4,19 +4,25 @@ from __future__ import annotations
 
 import gzip
 import io
+import re
 from pathlib import Path
 from shutil import copytree
 
 import numpy as np
 import pytest
+from dense_sources import build_dense_fixture, write_dense_manifest
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
+from opengwasdb.admission import NotAdmitted
+from opengwasdb.associations import Cells, InvalidAssociations
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.completion.ld_panel import (
     LdPanelNotFoundError,
+    SharedEndpoint,
     canonical_panel_alid,
+    list_all_blocks,
     load_block,
     load_ld_eigenvectors,
+    shared_endpoints,
     snp_position,
 )
 from opengwasdb.encoding import (
@@ -25,6 +31,7 @@ from opengwasdb.encoding import (
     StoreCodec,
     StoreEncoding,
 )
+from opengwasdb.encoding.codec import Z_MISSING
 from opengwasdb.layouts.dense import complete as complete_module
 from opengwasdb.layouts.dense.complete import (
     complete_dense_store,
@@ -35,7 +42,28 @@ from opengwasdb.query import query_store
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.validation.validate import validate_store
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants import VariantAxis, parse_canonical_alid
+
+
+def assert_a_resume_refuses_an_older_checkpoint(dst: Path, resume) -> None:
+    """Rewrite the one block checkpoint an interrupted completion of ``dst``
+    left without its format mark, as a package before endpoint ownership wrote
+    every one, and require ``resume`` to refuse it, naming the directory and
+    both ways out, and discarding nothing."""
+    checkpoint_dir = checkpoint_dir_for(dst)
+    (written,) = (checkpoint_dir / "blocks").glob("*.npz")
+    with np.load(written, allow_pickle=False) as checkpoint:
+        arrays = {name: checkpoint[name] for name in checkpoint.files if name != "format"}
+    with open(written, "wb") as fh:
+        np.savez(fh, **arrays)
+    with np.load(written, allow_pickle=False) as rewritten:
+        assert "format" not in rewritten.files and "f_alid" in rewritten.files
+
+    with pytest.raises(
+        ValueError, match=rf"{re.escape(str(checkpoint_dir))}.*delete it.*--overwrite"
+    ):
+        resume(checkpoint_dir)
+    assert written.exists() and not dst.exists()
 
 
 def _crash_on_the_second_block(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -185,7 +213,7 @@ def _observed_store_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     source = root / "associations.tsv"
     source.write_text(SOURCE_HEADER + "\n" + "\n".join(SOURCE_ROWS) + "\n", encoding="utf-8")
     out = root / "obs.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], out,
         store_id="test", release_id="obs-v1", reference_assembly="GRCh38",
     )
@@ -487,12 +515,11 @@ class TestValidation:
         """
         import json
 
-        from opengwasdb.build.source import read_normalised_associations
-        from opengwasdb.layouts.dense import build_dense_observed_store
+        from dense_sources import build_dense_fixture
 
         observed = tmp_path / "obs-small-chunk.opengwasdb"
-        build_dense_observed_store(
-            read_normalised_associations(source_path),
+        build_dense_fixture(
+        [source_path],
             observed,
             store_id="test",
             release_id="obs-small",
@@ -677,7 +704,7 @@ class TestSourceFidelity:
     """
 
     def test_fidelity_passes_against_source(self, observed_store, source_path):
-        result = validate_store(observed_store, source=source_path)
+        result = validate_store(observed_store, source=write_dense_manifest(source_path))
         assert result.ok, result.errors
 
     def test_fidelity_detects_sign_flip(self, observed_store, source_path):
@@ -694,7 +721,7 @@ class TestSourceFidelity:
         root["z"][:] = z
 
         assert validate_store(observed_store).ok  # internal checks still pass
-        result = validate_store(observed_store, source=source_path)
+        result = validate_store(observed_store, source=write_dense_manifest(source_path))
         assert not result.ok
         assert any("source-fidelity" in e for e in result.errors), result.errors
 
@@ -704,8 +731,9 @@ class TestSourceFidelity:
         # A wrong source must fail loudly, naming both unmatched kinds: an Analysis
         # the store does not hold and a variant row it does not carry. A check that
         # quietly matched nothing would look exactly like "no association".
-        assert validate_store(observed_store, source=source_path).ok, validate_store(
-            observed_store, source=source_path
+        manifest = write_dense_manifest(source_path)
+        assert validate_store(observed_store, source=manifest).ok, validate_store(
+            observed_store, source=manifest
         ).errors
         wrong = tmp_path / "wrong-source.tsv"
         wrong.write_text(
@@ -716,7 +744,7 @@ class TestSourceFidelity:
             encoding="utf-8",
         )
 
-        result = validate_store(observed_store, source=wrong)
+        result = validate_store(observed_store, source=write_dense_manifest(wrong))
 
         assert not result.ok
         assert any(
@@ -731,10 +759,18 @@ class TestSourceFidelity:
     def test_fidelity_reports_source_with_no_readable_associations(self, observed_store, tmp_path):
         # A header-only source yields no associations; the check must say so rather
         # than treating an unreadable source as a store that agrees with nothing.
-        empty = tmp_path / "empty-source.tsv"
-        empty.write_text(SOURCE_HEADER + "\n", encoding="utf-8")
+        named = tmp_path / "named-source.tsv"
+        named.write_text(
+            SOURCE_HEADER + "\n"
+            + "a1\tp1\tHeight\tHeight primary\t1\t900000\tA\tG\t1.0\t0.15\trsX\tsd\n",
+            encoding="utf-8",
+        )
+        manifest = write_dense_manifest(named)
+        (manifest.parent / "a1.tsv").write_text(
+            "chromosome\tposition\teffect_allele\tother_allele\tz\tse\n", encoding="utf-8"
+        )
 
-        result = validate_store(observed_store, source=empty)
+        result = validate_store(observed_store, source=manifest)
 
         assert not result.ok
         assert any(
@@ -760,7 +796,8 @@ class TestSourceFidelity:
                 f"\t{z_src}\t{se_src}\trsX\tsd"
             )
         src.write_text(SOURCE_HEADER + "\n" + "\n".join(lines) + "\n", encoding="utf-8")
-        assert validate_store(observed_store, source=src).ok  # matches before the drop
+        manifest = write_dense_manifest(src)
+        assert validate_store(observed_store, source=manifest).ok  # matches before the drop
 
         va = VariantAxis(observed_store)
         row_by_alid = {}
@@ -792,7 +829,7 @@ class TestSourceFidelity:
         root["se"][:] = se
 
         assert validate_store(observed_store).ok
-        result = validate_store(observed_store, source=src)
+        result = validate_store(observed_store, source=manifest)
         assert not result.ok
         assert any(
             "source-fidelity: matched 5 source associations but the store held no "
@@ -1021,6 +1058,22 @@ class TestResume:
         assert result.n_variants > 0
 
         assert validate_store(dst).ok
+
+    def test_a_resume_refuses_a_block_checkpoint_an_older_package_wrote(
+        self, tmp_path, observed_store, ld_panel, monkeypatch
+    ):
+        """Before endpoint ownership (ADR 0072) a block filled and counted the
+        variant at its end that the next block owns, and its checkpoint says
+        nothing of which rule wrote it. Resumed beside the next block's, both
+        fills would reach one cell, so the resume refuses the directory,
+        naming it and the two ways out, and discards nothing."""
+        dst = tmp_path / "resumed.opengwasdb"
+        _crash_on_the_second_block(monkeypatch)
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            complete_dense_store(observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0)
+        monkeypatch.undo()
+
+        assert_a_resume_refuses_an_older_checkpoint(dst, resume_dense_completion)
 
     def test_resume_with_no_checkpointed_block_matches_fresh_run(
         self, tmp_path, observed_store, ld_panel, monkeypatch
@@ -1511,7 +1564,7 @@ def signal_source_path(tmp_path: Path) -> Path:
 @pytest.fixture
 def signal_observed_store(tmp_path: Path, signal_source_path: Path) -> Path:
     out = tmp_path / "signal_obs.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [signal_source_path], out,
         store_id="test", release_id="obs-v1", reference_assembly="GRCh38",
     )
@@ -1785,33 +1838,296 @@ def test_a_source_cell_with_one_of_z_and_se_missing_is_refused(
     tmp_path: Path,
     observed_store: Path,
     ld_panel: Path,
-    monkeypatch: pytest.MonkeyPatch,
     plane: str,
 ):
     """Spec §15 forbids a half-missing pair. Completing one would pair an imputed
-    value with an observed one, so completion refuses the source instead; the
-    source's first present cell is read back with one of its two values missing."""
-    from opengwasdb.admission.cells import NotAdmitted
-    from opengwasdb.encoding.planes import DenseSePlane, DenseZPlane
+    value with an observed one, so completion refuses the source instead: the
+    Association Reader's presence rule refuses the cell as the source is read
+    (ADR 0070). The source's first present cell loses one of its two values."""
+    import zarr
 
-    cls = DenseSePlane if plane == "se" else DenseZPlane
-    original = cls.rows
+    group = zarr.open_group(observed_store / "data.zarr", mode="r+")
+    encoding = open_store(observed_store).manifest.encoding
+    z = DenseZPlane.open(group, encoding).band(0, int(group["z"].shape[0]))
+    row, analysis = (int(axis[0]) for axis in np.nonzero(np.isfinite(z)))
+    # Fixture first: an int16 Z plane and a float16 SE plane, and the cell present in both.
+    assert group["z"].dtype == np.int16 and group["se"].dtype == np.float16
+    assert np.isfinite(np.asarray(group["se"][row, analysis], dtype=np.float32))
+    if plane == "se":
+        group["se"][row, analysis] = np.float16(np.nan)
+    else:
+        group["z"][row, analysis] = Z_MISSING
 
-    def rows(self, *args, **kwargs):
-        out = np.array(original(self, *args, **kwargs), dtype=np.float32, copy=True)
-        present = np.flatnonzero(np.isfinite(out))
-        # Fixture first: the band holds a present cell to break.
-        assert present.size
-        out.flat[present[0]] = np.nan
-        return out
-
-    monkeypatch.setattr(cls, "rows", rows)
-    with pytest.raises(NotAdmitted, match="one of z and SE missing"):
+    with pytest.raises(
+        InvalidAssociations,
+        match=rf"source's Dense grid: 1 .*\(partial 1\); first: \(variant {row}, "
+        rf"analysis {analysis}: partial\)",
+    ):
         complete_dense_store(
             observed_store, tmp_path / "comp.opengwasdb", ld_panel,
             ancestry="EUR", min_cor=0.0, release_id="comp-v1",
         )
     assert not (tmp_path / "comp.opengwasdb").exists()
+
+
+def _seed_unjudged(zb, sb, source, out_to_src, r0):
+    """Seed a band from the source as completion does, judging none of its cells."""
+    valid, rows = complete_module._band_source_rows(out_to_src, r0, r0 + len(zb))
+    if len(valid):
+        cells = source.inspect(Cells.variants(rows))
+        zb[valid, :] = cells.z.reshape(len(rows), -1)
+        sb[valid, :] = cells.se.reshape(len(rows), -1)
+
+
+@pytest.mark.parametrize(
+    ("judged_by", "refusal", "where"),
+    [
+        ("the source read", InvalidAssociations, r"source's Dense grid: 1 .*non_canonical 1"),
+        (
+            "the writer",
+            NotAdmitted,
+            "complete-dense, rows.*missing marker other than the canonical NaN",
+        ),
+    ],
+)
+def test_a_source_marker_other_than_the_canonical_nan_is_refused(
+    tmp_path: Path,
+    observed_store: Path,
+    ld_panel: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    judged_by: str,
+    refusal: type[ValueError],
+    where: str,
+):
+    """Spec §15 forbids a missing marker other than `np.nan`'s NaN (ADR 0070).
+
+    a2 is missing at chr1:900,000 in both planes, and no LD block fills it: a2
+    has one observation, too few to impute from. Its SE marker is planted as
+    the `float16` NaN 0x7e01. Read as missing, the cell's payload was carried
+    into the completed `float16` plane, which `validate` then failed. The source
+    read refuses the cell, and the writer's own check refuses it when nothing
+    has judged it before.
+    """
+    import zarr
+
+    group = zarr.open_group(observed_store / "data.zarr", mode="r+")
+    encoding = open_store(observed_store).manifest.encoding
+    row, a2 = 0, 1
+    # Fixture first: a float16 SE plane, and a2 missing at row 0 in both planes.
+    assert group["se"].dtype == np.float16
+    assert VariantAxis(observed_store).by_index(row).alid == "1:900000:A:G"
+    assert np.isnan(DenseZPlane.open(group, encoding).rows(np.array([row]))[0, a2])
+    assert np.isnan(DenseSePlane.open(group, encoding).rows(np.array([row]))[0, a2])
+    group["se"][row, a2] = np.array([0x7E01], np.uint16).view(np.float16)[0]
+    assert int(np.asarray(group["se"][row, a2]).view(np.uint16)) == 0x7E01
+    if judged_by == "the writer":
+        monkeypatch.setattr(complete_module, "_seed_paired_bands", _seed_unjudged)
+
+    with pytest.raises(refusal, match=where):
+        complete_dense_store(
+            observed_store, tmp_path / "comp.opengwasdb", ld_panel,
+            ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+        )
+    assert not (tmp_path / "comp.opengwasdb").exists()
+
+
+# ── a variant two LD blocks hold (ADR 0072) ────────────────────────────────
+
+#: What each stubbed block imputes for every candidate, by its size: the two
+#: fills the review found completion storing one of.
+_FILL_BY_BLOCK_SIZE = {5: 2.949039, 4: 2.949039, 3: 1.767842}
+
+#: chr1 cut at 1,050,000, which both blocks hold, as the panels completion
+#: reads hold each shared endpoint (their blocks were cut with an inclusive end).
+_ENDING_AT = [
+    ("1:900000:A:G", 0.35, 900_000),
+    ("1:950000:A:C", 0.32, 950_000),
+    ("1:1000000:A:G", 0.30, 1_000_000),
+    ("1:1050000:C:T", 0.40, 1_050_000),
+]
+_STARTING_AT = [
+    ("1:1050000:C:T", 0.40, 1_050_000),
+    ("1:1100000:A:C", 0.45, 1_100_000),
+    ("1:1200000:A:G", 0.30, 1_200_000),
+]
+
+
+def _stub_fits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every block's fit pass and impute each candidate its block's value."""
+    from opengwasdb.completion import block
+
+    def fit(z_dense, eigenvectors, eigenvalues, *, min_cor):
+        return np.full(len(z_dense), _FILL_BY_BLOCK_SIZE[len(z_dense)]), 0.9
+
+    monkeypatch.setattr(block, "impute_z_block", fit)
+
+
+def _boundary_panel(root: Path, ending: str, starting: str) -> Path:
+    _write_ld_block(root / "EUR" / "1", ending, _ENDING_AT, seed=0)
+    _write_ld_block(root / "EUR" / "1", starting, _STARTING_AT, seed=1)
+    return root
+
+
+def _cell(store: Path, alid: str, analysis: int) -> tuple[float, int]:
+    """One cell's decoded z and imputed flag."""
+    axis = VariantAxis(store)
+    try:
+        row = axis.by_alid(parse_canonical_alid(alid)).variant_index
+    finally:
+        axis.close()
+    opened = open_store(store)
+    root = opened.arrays(mode="r")
+    z = DenseZPlane.open(root, opened.manifest.encoding).rows(np.array([row]))[0, analysis]
+    return float(z), int(root["imputed"][row, analysis])
+
+
+def _imputed_by_block(store: Path, analysis: int) -> dict[str, int]:
+    import sqlite3
+
+    with sqlite3.connect(str(store / "index.sqlite")) as conn:
+        return dict(
+            conn.execute(
+                "SELECT block_id, n_imputed FROM completion_quality WHERE analysis_index = ?",
+                (analysis,),
+            )
+        )
+
+
+def test_shared_endpoints_name_the_block_that_starts_there(tmp_path: Path):
+    panel = _boundary_panel(tmp_path, "900000-1050000", "1050000-1200000")
+    _write_ld_block(panel / "EUR" / "2", "1-500000", [("2:100000:A:G", 0.2, 100_000)])
+
+    endpoints = shared_endpoints(
+        list_all_blocks(panel, "EUR", "1") + list_all_blocks(panel, "EUR", "2")
+    )
+
+    assert endpoints == {
+        "1/900000-1050000": SharedEndpoint("1/1050000-1200000", frozenset({"1:1050000:C:T"}))
+    }
+
+
+def test_a_block_neither_fills_nor_counts_what_it_cedes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The kernel both layouts run: a block leaves a ceded variant to the next
+    block, for the Analyses it cedes it for, and counts it neither filled nor
+    missing there. Its observation still informs the fit."""
+    from opengwasdb.completion.block import run_block
+
+    _stub_fits(monkeypatch)
+    panel = _boundary_panel(tmp_path, "900000-1050000", "1050000-1200000")
+    observed = {"1:900000:A:G": 1.0, "1:950000:A:C": 1.8, "1:1000000:A:G": 2.0}
+
+    def make_reader(block, alids):
+        z = np.array([observed.get(a, np.nan) for a in alids])
+        return [0, 1], lambda analysis: (z, np.where(np.isnan(z), np.nan, 0.15))
+
+    tsv = panel / "EUR" / "1" / "900000-1050000.tsv"
+    endpoint = frozenset({"1:1050000:C:T"})
+    result = run_block(
+        tsv, 0.9, 0.0, None, make_reader,
+        ceded=lambda analysis: endpoint if analysis == 0 else frozenset(),
+    )
+
+    assert [(f.alid, f.analysis_index) for f in result.fills] == [("1:1050000:C:T", 1)]
+    assert [(q.analysis_index, q.n_imputed, q.n_missing) for q in result.quality_rows] == [
+        (0, 0, 0),
+        (1, 1, 0),
+    ]
+
+
+def test_a_shared_endpoint_is_filled_by_the_block_that_starts_there_and_counted_once(
+    tmp_path: Path, observed_store: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Blocks are half-open (ADR 0072): 1,050,000 belongs to the block that
+    starts there, which alone fills it. The block that ends there neither
+    fills nor counts it, so a1's one imputed cell is counted once."""
+    _stub_fits(monkeypatch)
+    panel = _boundary_panel(tmp_path / "panel", "900000-1050000", "1050000-1200000")
+    dst = tmp_path / "comp.opengwasdb"
+    # Fixture first: a1 is missing at the endpoint, and each block can fill it.
+    assert "1:1050000:C:T" not in {v.alid for v in VariantAxis(observed_store).all()}
+    assert {len(_ENDING_AT), len(_STARTING_AT)} <= set(_FILL_BY_BLOCK_SIZE)
+
+    result = complete_dense_store(
+        observed_store, dst, panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+    )
+
+    z, imputed = _cell(dst, "1:1050000:C:T", 0)
+    assert imputed == 1
+    assert z == pytest.approx(_FILL_BY_BLOCK_SIZE[len(_STARTING_AT)], abs=1e-3)
+    assert _imputed_by_block(dst, 0) == {"1/900000-1050000": 0, "1/1050000-1200000": 1}
+    assert result.n_imputed == 1
+    a1 = next(r for r in read_analyses(dst / "analyses.tsv").rows if r["analysis_id"] == "a1")
+    assert a1["completion_n_imputed_total"] == "1"
+
+
+def test_a_shared_endpoint_does_not_depend_on_block_order(
+    tmp_path: Path, observed_store: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The same two blocks, named so their checkpoints sort the other way
+    round, complete to the same cells."""
+    _stub_fits(monkeypatch)
+    stores = []
+    for ending in ("900000-1050000", "0900000-1050000"):
+        panel = _boundary_panel(tmp_path / ending / "panel", ending, "1050000-1200000")
+        dst = tmp_path / ending / "comp.opengwasdb"
+        complete_dense_store(
+            observed_store, dst, panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+        )
+        stores.append(dst)
+    # Fixture first: the two names sort on either side of the starting block's.
+    assert sorted(["900000-1050000", "1050000-1200000"])[0] == "1050000-1200000"
+    assert sorted(["0900000-1050000", "1050000-1200000"])[0] == "0900000-1050000"
+
+    _assert_stores_identical(*stores)
+
+
+def test_two_overlapping_blocks_filling_one_cell_leave_it_missing_and_log_both(
+    tmp_path: Path,
+    observed_store: Path,
+    ld_panel: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """The review's reproduction: a second block overlaps the fixture's chr1
+    block, and both fill a1 at 1:1050000:C:T, with z 2.949039 and 1.767842.
+    1,050,000 is no endpoint of either, so no block owns it, and the fills
+    disagree: Association Admission's duplicate rule (D5) keeps neither, and
+    the log names both (D8). Completion used to store the last."""
+    import logging
+
+    _stub_fits(monkeypatch)
+    overlapping = [
+        ("1:1000000:A:G", 0.30, 1_000_000),
+        ("1:1050000:C:T", 0.40, 1_050_000),
+        ("1:1100000:A:C", 0.45, 1_100_000),
+    ]
+    _write_ld_block(ld_panel / "EUR" / "1", "1000000-1100000", overlapping, seed=2)
+    # Fixture first: both blocks hold the cell's variant, at no shared endpoint.
+    blocks = list_all_blocks(ld_panel, "EUR", "1")
+    assert [len(b.snp_ids) for b in blocks] == [3, 5]
+    assert all("1:1050000:C:T" in b.snp_ids for b in blocks)
+    assert shared_endpoints(blocks) == {}
+    caplog.set_level(logging.WARNING, logger="opengwasdb.layouts.dense.complete")
+    dst = tmp_path / "comp.opengwasdb"
+
+    complete_dense_store(
+        observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+    )
+
+    z, imputed = _cell(dst, "1:1050000:C:T", 0)
+    assert np.isnan(z) and imputed == 0
+    dropped = [
+        record.getMessage()
+        for record in caplog.records
+        if "dropped fill 1:1050000:C:T" in record.getMessage()
+    ]
+    assert len(dropped) == 2 and all(m.endswith("duplicate_conflicting") for m in dropped)
+    assert sorted(round(float(m.split("z=")[1].split(",")[0]), 6) for m in dropped) == [
+        1.767842,
+        2.949039,
+    ]
 
 
 def test_a_candidate_with_no_usable_se_is_not_a_fill(monkeypatch: pytest.MonkeyPatch):

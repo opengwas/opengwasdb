@@ -1,13 +1,13 @@
-"""The rs identifier each routed variant carries (issues #109, #192, #255, #306).
+"""The rs identifier each routed variant carries (issues #109, #192, #255, #306, #379).
 
 Pass 1 reads each source's names with its sites, first-named in ``(rank,
-site)`` order. A union the build routes by names its own ALIDs. A Variant
-Reference that names none is a harder case: the reference decides which ALID
-an association lands on, so the names are keyed by the build's Routing Key,
-rekeyed once through the routing the build actually uses, and compared with
-an independent walk of the raw names (the oracles in
-`opengwasdb.variants.reference`). A key whose sources name it differently is
-refused or left unnamed, as ``--on-rsid-conflict`` says, and counted.
+site)`` order. Every harvest keys them by Routing Key, rekeys them once
+through the routing the build actually uses, and compares the result with an
+independent walk of the raw names (the oracles in
+`opengwasdb.variants.reference`): a union the build routes by
+(`union_names`), or a Variant Reference that names none of its variants
+(`harvested_names`). A key whose sources name it differently is refused or
+left unnamed, as ``--on-rsid-conflict`` says, and counted, whichever routes.
 
 A Hybrid build routes the keys the reference does not know only in its fold,
 after Pass 2, so its names stay pending until `RoutedNames.finish` is given
@@ -20,7 +20,8 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar
+from types import MappingProxyType
+from typing import NamedTuple, TypeVar
 
 from opengwasdb.variants.reference import (
     expected_rsids_by_routed_key,
@@ -65,14 +66,27 @@ def _rekey_rsids_to_alids(
     return by_alid
 
 
+#: No placement: a harvest keyed for a routing it is given, not one it forms.
+_UNPLACED: Mapping[SourceKey, str] = MappingProxyType({})
+
+
+class _Keyed(NamedTuple):
+    """A harvest keyed by routing key (`_candidates_by_routing_key`)."""
+
+    candidates: dict[str, str]
+    conflicts: dict[str, list[str]]
+    routing: dict[str, str]
+
+
 def _candidates_by_routing_key(
     rsid_by_site: Mapping[SourceKey, str],
     *,
     label: str,
     on_conflict: RsidConflictPolicy = RsidConflictPolicy.REFUSE,
-) -> tuple[dict[str, str], dict[str, list[str]]]:
-    """The harvest's candidates by routing key, order kept, and the keys whose
-    sources name them differently.
+    site_alid: Mapping[SourceKey, str] = _UNPLACED,
+) -> _Keyed:
+    """The harvest's candidates by routing key, order kept, the keys whose
+    sources name them differently, and the routing ``site_alid`` gives.
 
     A routing key is not injective -- it upper-cases alleles -- and two raw
     sites that collapse onto one key are one stored variant, so the
@@ -83,18 +97,25 @@ def _candidates_by_routing_key(
     each to its distinct names in `(rank, site)` order, for the build to report
     and for `withhold_disputed` to unname the variants they reach (issue
     #306).
+
+    For a union placed site by site, ``site_alid`` gives each site's ALID, and
+    the routing (routing key -> ALID, a later site's placement winning) is
+    formed in the same walk, so each site is keyed once (#379). Without it the
+    routing is empty.
     """
     candidates: dict[str, str] = {}
     first_site: dict[str, SourceKey] = {}
     conflicts: dict[str, list[str]] = {}
+    routing: dict[str, str] = {}
     for site, rsid in rsid_by_site.items():
         folded = routing_key(site)
+        if alid := site_alid.get(site):
+            routing[folded] = alid
         existing = candidates.get(folded)
-        if existing is None:
+        if not existing:
+            # A new key, or one only blank sites have reached: its first site stays.
             candidates[folded] = rsid
-            first_site[folded] = site
-        elif not existing:
-            candidates[folded] = rsid
+            first_site.setdefault(folded, site)
         elif rsid and rsid != existing:
             if on_conflict is RsidConflictPolicy.REFUSE:
                 raise _rsid_conflict_error(label, folded, first_site[folded], existing, site, rsid)
@@ -102,7 +123,7 @@ def _candidates_by_routing_key(
     # Blanked only now: a key blanked mid-walk would take the next name it met.
     for folded in conflicts:
         candidates[folded] = ""
-    return candidates, conflicts
+    return _Keyed(candidates, conflicts, routing)
 
 
 def _note_conflict(
@@ -168,36 +189,44 @@ def _log_routing_disagreements(
 
 def _rekey_and_verify(
     rsid_by_site: Mapping[SourceKey, str],
-    routing: Mapping[str, str],
+    routing: Mapping[str, str] | None,
     *,
     label: str,
     on_conflict: RsidConflictPolicy,
-) -> tuple[dict[str, str], set[str]]:
+    site_alid: Mapping[SourceKey, str] = _UNPLACED,
+) -> tuple[dict[str, str], set[str], dict[str, list[str]]]:
     """Rekey harvested candidates ONCE through ONE routing, and verify exactly.
 
     ``routing`` must be keyed by routing key and be the *final* routing -- a
     reference's source keys combined with, for a Hybrid build, the fold's
-    off-reference resolution. One rekey in the candidates' `(rank, site)` order
-    and one global oracle comparison, so no partition can win a name the global
-    first-candidate rule would not give it (issue #255).
+    off-reference resolution. A union placed site by site passes ``None`` and
+    its ``site_alid`` instead, and the routing is formed as the candidates
+    are keyed (`_candidates_by_routing_key`). One rekey in the candidates'
+    `(rank, site)` order and one global oracle comparison, so no partition can
+    win a name the global first-candidate rule would not give it (issue #255).
 
     The oracle walks the **raw** ``rsid_by_site`` through `routing_key` itself rather
     than reading the keyed candidates, so the key preparation is checked: a
     collapse that keeps the wrong name disagrees with the raw walk and fails
     (issue #255 round 4). Under ``drop`` it finds the disputed keys itself too,
     so a variant one reaches that kept a name fails as well (issue #306).
-    Returns the resolved map and the variants left unnamed under ``drop``.
+    Returns the resolved map, the variants left unnamed under ``drop``, and
+    each disputed key's names.
     """
-    candidates, conflicts = _candidates_by_routing_key(
-        rsid_by_site, label=label, on_conflict=on_conflict
+    if (routing is None) == (site_alid is _UNPLACED):
+        raise ValueError("rekey through a routing or a union's placement, exactly one")
+    candidates, conflicts, placed = _candidates_by_routing_key(
+        rsid_by_site, label=label, on_conflict=on_conflict, site_alid=site_alid
     )
+    routing = placed if routing is None else routing
     resolved = _rekey_rsids_to_alids(routing, candidates)
+    del candidates, placed
     withheld = withhold_disputed(resolved, routing, conflicts)
     expected = expected_rsids_by_routed_key(
         rsid_by_site, routing, routing_key, drop_disputed=on_conflict is RsidConflictPolicy.DROP
     )
     require_rsids_match_expected(resolved, expected)
-    return resolved, withheld
+    return resolved, withheld, conflicts
 
 
 def _log_dropped_rsids(label: str, conflicts: RsidConflicts) -> None:
@@ -268,7 +297,7 @@ class RoutedNames:
         if route is not None:
             combined = {**combined, **_unrouted_keys(harvest, route)}
         label = harvest.label
-        merged, withheld = _rekey_and_verify(
+        merged, withheld, _disputed = _rekey_and_verify(
             harvest.rsid_by_site,
             combined,
             label=label,
@@ -338,7 +367,7 @@ def harvested_names(
     unrouted keys are placed; the raw names travel on, not a keyed copy, so
     `RoutedNames.finish`'s oracle can walk them through `routing_key` itself.
     """
-    candidates, conflicts = _candidates_by_routing_key(
+    candidates, conflicts, _ = _candidates_by_routing_key(
         rsid_by_site, label=label, on_conflict=policy
     )
     reference_routing = _routing_lookup(reference_lookup)
@@ -354,3 +383,37 @@ def harvested_names(
         RsidConflicts.found(policy, conflicts),
         _harvest=_Harvest(rsid_by_site, candidate_routing, label),
     )
+
+
+def refuse_disputed_names(rsid_by_site: Mapping[SourceKey, str], *, label: str) -> None:
+    """Refuse the first routing key ``rsid_by_site``'s sites name two ways.
+
+    The test every harvest applies (`_candidates_by_routing_key`), for a
+    writer that has no policy to offer and keeps its own first-named rule:
+    with no key disputed, that rule names every variant as the union does.
+    """
+    _candidates_by_routing_key(rsid_by_site, label=label, on_conflict=RsidConflictPolicy.REFUSE)
+
+
+def union_names(
+    rsid_by_site: Mapping[SourceKey, str],
+    site_alid: Mapping[SourceKey, str],
+    *,
+    policy: RsidConflictPolicy,
+    label: str,
+) -> RoutedNames:
+    """Final names for a union the build routes by: every site is placed already.
+
+    The same harvest as `harvested_names`: candidates keyed by Routing Key,
+    so a site's spellings are compared, rekeyed once through the union's own
+    placement and checked against the raw walk. A key
+    named two ways is refused or left unnamed, as ``policy`` says, so which
+    source is listed first never decides a name its sources dispute (issue
+    #379). Only named sites are keyed: they are every key a name can reach.
+    """
+    resolved, withheld, disputed = _rekey_and_verify(
+        rsid_by_site, None, label=label, on_conflict=policy, site_alid=site_alid
+    )
+    conflicts = RsidConflicts.found(policy, disputed).reaching(len(withheld))
+    _log_dropped_rsids(label, conflicts)
+    return RoutedNames(resolved, conflicts)

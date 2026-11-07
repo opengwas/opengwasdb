@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any, NamedTuple
 
 import numpy as np
 
-from opengwasdb.associations.cells import Cells
+from opengwasdb.associations.cells import Cells, require_within, window_region
 from opengwasdb.associations.record import (
     Associations,
     Inspection,
@@ -15,6 +16,7 @@ from opengwasdb.associations.record import (
     Status,
     classify,
     mask_required,
+    non_canonical,
     require_mask,
 )
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
@@ -107,7 +109,71 @@ class DenseGridReader:
             self._eaf_plane = DenseEafPlane.open(self._group, self._encoding)
         return self._eaf_plane
 
+    @property
+    def scan_window(self) -> int:
+        """Cells one window holds unless a scan says: a shard's rows of the Z plane
+        (a chunk's, unsharded), so each window reads one shard of each plane."""
+        array = self._z.array
+        return int((getattr(array, "shards", None) or array.chunks)[0])
+
     # ── the interface ───────────────────────────────────────────────────────
+
+    def windows(
+        self, cells: Cells | None = None, *, max_cells: int | None = None
+    ) -> Iterator[Cells]:
+        """An `analysis` or `analyses` region -- or, with none, the whole grid -- as
+        consecutive `cross` regions of at most `max_cells` cells each.
+
+        For a scan that must not hold a whole Analysis at once: each cell of the
+        region comes once, in the region's order, so the windows' reads joined are
+        the region's read. A window is a run of one Analysis's variants, since a
+        grid region is variants × Analyses and cannot hold the end of one Analysis
+        and the start of the next. `max_cells` defaults to `scan_window`. The
+        region is checked when this is called, before any window is cut
+        (`window_region`).
+        """
+        region, step = window_region(
+            cells,
+            max_cells,
+            default=self.scan_window,
+            n_analyses=self.n_analyses,
+            source=self._source,
+        )
+        return self._windows(region, step)
+
+    def _windows(self, region: Cells, step: int) -> Iterator[Cells]:
+        assert region.ai is not None
+        n = self.n_variants
+        for analysis in region.ai:
+            for lo in range(0, n, step):
+                rows = np.arange(lo, min(lo + step, n), dtype=np.int64)
+                yield Cells.cross(rows, [int(analysis)])
+
+    def z(self, cells: Cells) -> np.ndarray:
+        """Decoded Z of a `cross` region -- a window -- for a scan that thresholds Z
+        alone: every cell, a missing one as NaN, in the region's order.
+
+        A non-canonical marker is refused here, as every read refuses one (spec §15):
+        a NaN clears no cutoff, so a scan that compared it would drop the cell.
+        """
+        if cells.kind != "cross" or cells.vi is None or cells.ai is None:
+            raise TypeError(f"Z alone is read for a window, not a {cells.kind!r} region")
+        require_within(
+            cells, self._source, n_analyses=self.n_analyses, n_variants=self.n_variants
+        )
+        rows, cols = cells.vi, cells.ai
+        if len(rows) == 0 or len(cols) == 0:
+            return np.empty(0, dtype=np.float32)
+        z: np.ndarray = np.asarray(self._z.block(rows.tolist(), cols.tolist())).T.ravel()
+        odd = non_canonical(z)
+        if odd.any():
+            raise InvalidAssociations(
+                self._source,
+                np.tile(rows, len(cols))[odd],
+                np.repeat(cols, len(rows))[odd],
+                np.full(int(odd.sum()), State.NON_CANONICAL, dtype=np.int8),
+            )
+        return z
 
     def read(self, cells: Cells, *, observed_only: bool = False) -> Associations:
         """The region's associations; raises `InvalidAssociations` on a §15-invalid cell."""
@@ -147,17 +213,18 @@ class DenseGridReader:
     # ── decoding ────────────────────────────────────────────────────────────
 
     def _decode(self, cells: Cells) -> _Grid:
+        require_within(
+            cells, self._source, n_analyses=self.n_analyses, n_variants=self.n_variants
+        )
         decode = {
             "analysis": self._analysis,
+            "analyses": self._analyses,
             "variants": self._variants,
             "cross": self._cross,
             "pairs": self._pairs,
         }.get(cells.kind)
         if decode is None:
-            raise TypeError(
-                f"a Dense grid cannot read a {cells.kind!r} region"
-                + ("; read each `analysis`" if cells.kind == "analyses" else "")
-            )
+            raise TypeError(f"a Dense grid cannot read a {cells.kind!r} region")
         return decode(cells)
 
     def _analysis(self, cells: Cells) -> _Grid:
@@ -176,6 +243,13 @@ class DenseGridReader:
             analysis_major=True,
             elementwise=False,
         )
+
+    def _analyses(self, cells: Cells) -> _Grid:
+        """Every variant of each Analysis named, Analysis-major, in one read of each
+        plane: an `analysis` region apiece would read every chunk the Analyses
+        share once per Analysis."""
+        assert cells.ai is not None
+        return self._cross(Cells.cross(np.arange(self.n_variants), cells.ai))
 
     def _variants(self, cells: Cells) -> _Grid:
         """Whole rows, variant-major; one row reads as a row, several as a band or block."""

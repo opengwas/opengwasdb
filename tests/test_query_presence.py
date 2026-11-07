@@ -116,11 +116,16 @@ def test_every_query_returns_an_association_record(stores, name) -> None:
 
 
 @pytest.fixture(scope="module")
-def ragged_completed(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A Reference-Completed Ragged release whose one tier holds every cell."""
-    scenario = RaggedResidualScenario(tmp_path_factory)
-    build_ragged_top_hit_indexes(scenario.completed, thresholds=(1.0,))
-    return scenario.completed
+def ragged_completed(
+    residual_ragged_scenario: RaggedResidualScenario, tmp_path_factory: pytest.TempPathFactory
+) -> Path:
+    """The shared Reference-Completed Ragged release, its one tier holding every
+    cell. Built on a copy: the shared release is read by other modules too."""
+    store = Path(
+        copytree(residual_ragged_scenario.completed, tmp_path_factory.mktemp("tiered") / "comp")
+    )
+    build_ragged_top_hit_indexes(store, thresholds=(1.0,))
+    return store
 
 
 def _hide_tier_array(monkeypatch: pytest.MonkeyPatch, hidden: str) -> None:

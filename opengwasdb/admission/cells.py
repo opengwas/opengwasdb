@@ -5,7 +5,9 @@ where SE is (spec §15, `opengwasdb.associations.record.states`); a frequency is
 NaN or inside (0, 1); and a cell is flagged imputed only when it is present.
 A builder's rows reach a Store through a `Gate`, which admits only such
 cells; completion's candidates are checked by `admissible`, and a writer
-handed cells from anywhere else checks them with `require_admitted`.
+handed cells from anywhere else checks them with `require_admitted`. A
+completion reads its source Store's cells through the Association Reader, whose
+presence rule refuses an invalid one with `InvalidAssociations` (ADR 0070).
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ import numpy as np
 
 from opengwasdb.associations.record import State, states
 
-__all__ = ["NotAdmitted", "admissible", "require_admitted", "require_paired"]
+__all__ = ["NotAdmitted", "admissible", "require_admitted"]
 
 
 class NotAdmitted(ValueError):
@@ -66,19 +68,6 @@ def require_admitted(
         with np.errstate(invalid="ignore"):
             broken["frequency outside (0, 1)"] = ~np.isnan(eaf) & ~((eaf > 0) & (eaf < 1))
     _raise_if_broken(broken, where)
-
-
-def require_paired(z: np.ndarray, se: np.ndarray, *, where: str) -> None:
-    """Refuse cells with one of z and SE missing (spec §15, D1), naming ``where``.
-
-    What a completion checks of the cells it carries from a source Store, as
-    the Dense completion does of its bands: a half-missing pair would be stored
-    beside an imputed partner, or carried as a cell no reader can use.
-    """
-    unpaired = np.isnan(np.asarray(z, dtype=np.float64)) != np.isnan(
-        np.asarray(se, dtype=np.float64)
-    )
-    _raise_if_broken({"one of z and SE missing": unpaired}, where)
 
 
 def _raise_if_broken(broken: dict[str, np.ndarray], where: str) -> None:

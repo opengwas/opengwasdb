@@ -158,7 +158,8 @@ class _Overflow:
 
     def variant_indices(self, analysis: int, role: str) -> np.ndarray:
         """One Analysis's shared-axis indices, refused if any falls off the axis."""
-        indices = np.asarray(self.reader.structure.variant_indices(analysis), dtype=np.int64)
+        rows = self.reader.structure.variant_index(*self.segment(analysis))
+        indices = np.asarray(rows, dtype=np.int64)
         if indices.size and (indices.min() < 0 or indices.max() >= self.n_shared):
             raise ObservedViewRefused(
                 f"the {role} store's Overflow holds a variant index outside its "

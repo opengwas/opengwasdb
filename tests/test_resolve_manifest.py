@@ -39,10 +39,12 @@ from opengwasdb.build.resolve_manifest import (
     ManifestResolutionSummary,
     compute_fingerprint_digest,
     load_extraction_panel,
+    load_variant_reference,
     parse_af_references,
     resolve_analyses_manifest,
 )
 from opengwasdb.cli.main import app
+from opengwasdb.variants.reference import UnmarkedArtifactError
 
 N_VARIANTS = 50
 _STUDY_N = 10_000.0
@@ -931,3 +933,34 @@ def test_git_hash_falls_back_to_the_checkout_when_the_distribution_is_unknown(
     _checkout(monkeypatch, _package_dir().parent)
 
     assert resolve_manifest._get_git_hash() == "b" * 40
+
+
+#: An artifact as every engine before issue #354 wrote it: its routing column
+#: is `source_keys`, and the reverse-strand variant is on the source's strand.
+_UNMARKED_ARTIFACT = (
+    "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n"
+    "2:999001:A:G\t2\t999001\tA\tG\trs1\t2:1000:A:G\n"
+)
+
+
+@pytest.mark.parametrize("load", [load_variant_reference, load_extraction_panel])
+def test_a_reference_from_an_engine_before_354_is_refused(tmp_path, load):
+    """Issue #354: an unmarked artifact may name a variant on the source's
+    strand, so an overlap or a panel read from it would count the wrong
+    variant. Both loaders refuse it and say to extract it again."""
+    old = tmp_path / "old.variant-ref.tsv"
+    old.write_text(_UNMARKED_ARTIFACT, encoding="utf-8")
+
+    with pytest.raises(UnmarkedArtifactError, match="extract-variant-reference"):
+        load(old)
+
+
+def test_the_resolver_reads_a_marked_artifact_s_alids(tmp_path):
+    artifact = tmp_path / "new.variant-ref.tsv.gz"
+    with gzip.open(artifact, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
+            "2:999001:C:T\t2\t999001\tC\tT\trs1\t2:1000:A:G\t2:1000:A:G\n"
+        )
+
+    assert load_variant_reference(artifact) == {"2:999001:C:T"}

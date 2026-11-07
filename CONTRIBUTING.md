@@ -172,6 +172,29 @@ how a reader gets from a line of code to the reasoning behind it.
   index lives inside `write_variant_axis` precisely so no builder can write
   rsids and forget to index them.
 
+### Adding a validation rule
+
+`validate` is a registry of named Validation Rules (ADR 0074). A new check is a
+new rule, not a new branch in an existing one:
+
+- Write it in the `validation/rules/` module for its subject, as a `Check`, or as
+  a `Fold` if it reads association values. A fold measures each block of the
+  shared `ASSOCIATIONS` scan; it never reads a plane itself. Tests hold every
+  plane to one read per target, and the SE-decode guard fails a decode outside
+  `validation/scans.py`.
+- Name it `subject.what`, register it where its findings should appear, and add
+  its row to spec §20.0 in the same place. `test_validation_registry.py` fails
+  until both agree.
+- Put in `after` only what the rule reads. It runs after unrelated failures, and
+  that is the point: a release with two defects reports both.
+- Where a Dense check and its Ragged twin judge the same thing, write one rule,
+  keeping each layout's message. `validate --format json` is a contract, and its
+  messages do not change in passing.
+- Test it by identity, `result.failed() == {"subject.what"}`, which also catches
+  a collateral failure, and see the test fail on the code before your change.
+- A rule that checks what Association Admission guarantees names, in
+  `witnesses`, the Admission `Reason`s that keep such a cell out of a Store.
+
 ### Tooling
 
 `ruff` (line length 100; `E`, `F`, `I`, `UP`, `B`) and `mypy --strict`:
@@ -275,6 +298,7 @@ stopped working when the project moved to Pixi. Neither would fail a test.
 |---|---|---|
 | `docs/spec/store-format.md` | any change to the store format, envelope, or a validation rule | by hand, **in the same commit as the code** |
 | `docs/adr/` | a decision that supersedes an earlier one | banner on the old ADR naming its successor; new ADR |
+| `docs/architecture/components.yaml` and `layering-baseline.yaml` | a new engine source file no component claims, or an upward import that has gone | add the claim `tests/test_architecture_model.py` names; delete the entry `tests/test_architecture_layering.py` names |
 | `CHANGELOG.md` | nothing after the cutover — it is the history up to `0.3.0` | do not edit it; add `changelog.d/<slug>.<type>.md` instead |
 | `docs/store-format-compatibility.md` | a change to `format_version`, or to the formats the package writes or reads | add the row **in the same commit as the code** |
 | `README.md` | status, quickstart, or tooling drift | by hand |

@@ -26,6 +26,7 @@ from scipy.stats import multivariate_normal  # type: ignore[import-untyped]
 from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]
 
 from opengwasdb.encoding import DenseZPlane, StoreEncoding
+from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import ArrayRole
@@ -280,7 +281,15 @@ def write_rho_group(
     n_analyses: int,
 ) -> None:
     """Write the packed strict-lower-triangle ``rho``/``n_null`` arrays plus
-    provenance into ``data.zarr/rho``, replacing any existing group."""
+    provenance into ``data.zarr/rho``, replacing any existing group.
+
+    The two packed arrays are one cell list -- a pair's estimate and the null
+    count it was measured on -- so they are judged parallel before the group
+    exists. ``variant_index`` is per variant and not one of them (issue #392).
+    """
+    require_parallel(
+        (("rho", rho_packed), ("n_null", n_null_packed)), where="rho group"
+    )
     root = store_arrays.open_group_for_write(Path(store_path) / "data.zarr", "a")
     group = store_arrays.create_group(root, "rho")
     comp = store_arrays.compressor()

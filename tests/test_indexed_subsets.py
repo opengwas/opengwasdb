@@ -28,14 +28,14 @@ from typing import Any
 import numpy as np
 import pytest
 import zarr
+from dense_sources import build_dense_from_records
 from legacy_fixtures import relayout_as_0_1_0
 from typer.testing import CliRunner, Result
 
-from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.cli.main import app
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.layouts.dense import indexed_subsets
-from opengwasdb.layouts.dense.build import build_dense_observed_store
+from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.indexed_subsets import (
     DEFAULT_BAND_CELLS,
     EXHAUSTIVE_VALIDATION_BAND_CELLS,
@@ -126,7 +126,7 @@ def build_rich_store(store: Path) -> Path:
     own indexed copy without copying the fixture body (and so the two cannot
     drift into subtly different releases).
     """
-    build_dense_observed_store(
+    build_dense_from_records(
         _fixture_records(),
         store,
         store_id="idx-fixture",
@@ -674,7 +674,7 @@ def _absent_eaf_store(tmp_path: Path) -> Path:
         NormalisedAssociation("a1", CanonicalVariant("1", 200, "C", "T"), z=3.0, se=0.2),
         NormalisedAssociation("a2", CanonicalVariant("1", 300, "A", "G"), z=-6.0, se=0.5),
     ]
-    build_dense_observed_store(
+    build_dense_from_records(
         records,
         store,
         store_id="absent-eaf",
@@ -718,7 +718,7 @@ def _float32_eaf_store(tmp_path: Path) -> Path:
         )
         for row in range(8)
     ]
-    build_dense_observed_store(
+    build_dense_from_records(
         records,
         store,
         store_id="float32-eaf",
@@ -771,7 +771,7 @@ def big_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
         )
         for row in range(BIG_VARIANTS)
     ]
-    build_dense_observed_store(
+    build_dense_from_records(
         records,
         store,
         store_id="big",
@@ -1208,6 +1208,27 @@ def test_validation_rejects_a_corrupted_value(indexed_store: Path) -> None:
     group["z"][:] = values
     errors = _errors_for(store)
     assert any("z values" in error for error in errors), errors
+
+
+def test_a_defect_in_one_subset_does_not_hide_another_subsets(
+    indexed_store: Path, variant_list: Path
+) -> None:
+    """Each published subset is judged on its own findings (issue #55).
+
+    `a1` sorts before `hm3`; a missing attribute on it used to stop `hm3`'s
+    value comparison, so `hm3`'s corrupted value went unreported.
+    """
+    store = _build(indexed_store, "a1", variant_list)
+    del _index_group(store, "a1").attrs["input_sha256"]
+    group = _index_group(store, "hm3")
+    values = np.asarray(group["z"][:])
+    values[0, 0] = values[0, 0] + 1
+    group["z"][:] = values
+
+    errors = _errors_for(store)
+
+    assert any("indexed subset 'a1'" in error for error in errors), errors
+    assert any("'hm3'" in error and "z values" in error for error in errors), errors
 
 
 def test_validation_rejects_a_missing_overflow_table(indexed_store: Path) -> None:

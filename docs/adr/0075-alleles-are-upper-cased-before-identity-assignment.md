@@ -1,5 +1,19 @@
 # Alleles are upper-cased before identity assignment
 
+> **Amended by [ADR 0066](0066-withhold-an-rsid-its-sources-dispute.md)'s
+> clarification of 5 November 2026** (issue #379). The question the rsid
+> Consequence below leaves open is decided: names are compared everywhere. A
+> two-pass build no longer keeps the first name for a site's two spellings
+> named differently; it refuses or withholds it, as a single-pass build does,
+> and Variant Reference extraction refuses it.
+>
+> **Amended by [ADR 0072](0072-association-admission.md)** (issue #357). Where
+> one Analysis gives both spellings of a site, routing no longer keeps the
+> later. The two are resolved as any two associations on one index are, by
+> Association Admission's duplicate rule: agreeing ones collapse to the first,
+> and conflicting ones are both dropped and reported (`Placed.conflicting`).
+> The rest stands.
+
 Issue [#360](https://github.com/opengwas/opengwasdb/issues/360), part of epic
 #58. Records the case rule every build path and extraction follow, where it
 lives, and why it is not applied in the readers.

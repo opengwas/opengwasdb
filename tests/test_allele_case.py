@@ -20,11 +20,12 @@ import pytest
 from extraction_fixtures import extract_from_manifest
 from liftover_fixtures import write_collision_chain, write_two_strand_chain
 
+from opengwasdb.build.observed import build_dense_observed_from_manifest
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.query import query_store
-from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
+from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.axis import VariantAxis
@@ -231,25 +232,207 @@ def test_a_lifted_extraction_names_a_lower_case_source_by_the_upper_case_alid(tm
     assert _artifact_rows(artifact)[0][6] == "3:1000:g:a"
 
 
+def _ragged_manifest(tmp_path: Path, analyses: list[str]) -> Path:
+    """A Ragged SSF manifest of ``analyses``, in that order, each read from
+    ``<analysis>.tsv.gz`` in the filtered directory."""
+    lines = ["analysis_index\tanalysis_id\ttrait_id\tanalysis_label\tn\tfiltered_file"
+             "\tsource_genome_build"]
+    lines += [f"{i}\t{a}\t{a}\t{a}\t1000\t{a}.tsv.gz\tGRCh38" for i, a in enumerate(analyses)]
+    manifest = tmp_path / "ragged.tsv"
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return manifest
+
+
+def _ragged_build(manifest: Path, filtered: Path, store: Path) -> None:
+    build_ragged_from_ssf(
+        manifest, filtered, store, store_id="s", release_id="r", association_coverage="gwas"
+    )
+
+
 def test_ragged_stores_a_lower_case_source_under_the_upper_case_alid(tmp_path):
     filtered = tmp_path / "filtered"
     filtered.mkdir()
     _ssf(filtered / "lower.tsv.gz", "g", "a", 2.0, 0.5, rsid="rs1")
     assert _alleles(filtered / "lower.tsv.gz") == [("g", "a")]
-    manifest = tmp_path / "ragged.tsv"
-    manifest.write_text(
-        "analysis_index\tanalysis_id\ttrait_id\tanalysis_label\tn\tfiltered_file\tsource_genome_build\n"
-        "0\tlower\tlower\tlower\t1000\tlower.tsv.gz\tGRCh38\n",
-        encoding="utf-8",
-    )
     store = tmp_path / "ragged.opengwasdb"
 
-    build_ragged_from_ssf(
-        manifest, filtered, store, store_id="s", release_id="r", association_coverage="gwas"
-    )
+    _ragged_build(_ragged_manifest(tmp_path, ["lower"]), filtered, store)
 
     assert _axis(store) == [ALID]
     assert _z_by_alid(store, "lower") == {ALID: pytest.approx(-4.0, rel=5e-3)}
+
+
+def _ragged_spellings(tmp_path: Path, lower_rsid: str, upper_rsid: str) -> Path:
+    """Two Ragged Analyses, ``lower`` and ``upper``, each spelling the one site
+    in its own case and naming it as given."""
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    _ssf(filtered / "lower.tsv.gz", "g", "a", 2.0, 0.5, rsid=lower_rsid)
+    _ssf(filtered / "upper.tsv.gz", "G", "A", 1.0, 0.5, rsid=upper_rsid)
+    assert _alleles(filtered / "lower.tsv.gz") == [("g", "a")]
+    assert _alleles(filtered / "upper.tsv.gz") == [("G", "A")]
+    return filtered
+
+
+@pytest.mark.parametrize("lower_first", [False, True], ids=["upper-first", "lower-first"])
+def test_a_ragged_ssf_build_refuses_two_spellings_named_differently(tmp_path, lower_first):
+    """A Ragged SSF build compares a site's spellings as every other harvest
+    does (issue #379). `build-ragged-ssf` has no `--on-rsid-conflict`, so it
+    refuses whichever Analysis is listed first, and publishes nothing."""
+    filtered = _ragged_spellings(tmp_path, lower_rsid="rs2", upper_rsid="rs1")
+    analyses = ["upper", "lower"]
+    manifest = _ragged_manifest(tmp_path, analyses[::-1] if lower_first else analyses)
+    store = tmp_path / "ragged.opengwasdb"
+
+    with pytest.raises(ValueError, match="Ragged SSF build: .* one routing key '1:100000:A:G'"):
+        _ragged_build(manifest, filtered, store)
+    assert not store.exists()
+
+
+@pytest.mark.parametrize("blank_case", ["lower", "upper"], ids=["other-spelling", "same-spelling"])
+@pytest.mark.parametrize("blank_first", [False, True], ids=["named-first", "blank-first"])
+def test_a_ragged_ssf_build_names_a_variant_by_its_first_non_empty_rsid(
+    tmp_path, blank_case, blank_first
+):
+    """Spec §4: a variant takes the first non-empty rsid among the rows a build
+    admits for it (#400). A row that names nothing gives way to a later one,
+    whether that row spells the site the same way or the other way, and
+    whichever Analysis is listed first."""
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    blank_alleles = ("g", "a") if blank_case == "lower" else ("G", "A")
+    _ssf(filtered / "blank.tsv.gz", *blank_alleles, 2.0, 0.5, rsid="")
+    _ssf(filtered / "named.tsv.gz", "G", "A", 1.0, 0.5, rsid="rs1")
+    assert _alleles(filtered / "blank.tsv.gz") == [blank_alleles]
+    analyses = ["named", "blank"]
+    manifest = _ragged_manifest(tmp_path, analyses[::-1] if blank_first else analyses)
+    store = tmp_path / "ragged.opengwasdb"
+
+    _ragged_build(manifest, filtered, store)
+
+    (variant,) = VariantAxis(store).all()
+    assert (variant.alid, variant.rsid) == (ALID, "rs1")
+
+
+def test_a_ragged_ssf_build_refuses_a_tab_in_a_source_allele(tmp_path):
+    """The harvest keys a site as ``alid<TAB>ref<TAB>alt`` (#379), and a quoted
+    GWAS-SSF cell can carry a TAB that the ALID's normalisation strips. Such a
+    site is refused by name, not keyed under another site's spelling."""
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    chrom, pos = SITE
+    with gzip.open(filtered / "tab.tsv.gz", "wt", encoding="utf-8") as fh:
+        fh.write("\t".join(_SSF_COLUMNS) + "\n")
+        fh.write(f'{chrom}\t{pos}\tG\t"A\t"\t1.0\t0.5\trs1\n')
+    (association,) = GwasSsfReader(filtered / "tab.tsv.gz").stream_associations()
+    assert {association.ref, association.alt} == {"A\t", "G"}
+    store = tmp_path / "ragged.opengwasdb"
+
+    refusal = f"Ragged SSF build: a source allele of {ALID} holds a TAB"
+    with pytest.raises(ValueError, match=refusal):
+        _ragged_build(_ragged_manifest(tmp_path, ["tab"]), filtered, store)
+    assert not store.exists()
+
+
+def _association_tsv(path: Path, effect: str, other: str, rsid: str) -> Path:
+    """One Analysis's association TSV, holding the one site as given."""
+    chrom, pos = SITE
+    path.write_text(
+        "chromosome\tposition\teffect_allele\tother_allele\tbeta\tse\trsid\n"
+        f"{chrom}\t{pos}\t{effect}\t{other}\t1.0\t0.5\t{rsid}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _dense_manifest(tmp_path: Path, analyses: list[str], name: str) -> Path:
+    """A `build-dense` manifest of ``analyses``, in that order, each read from
+    ``sources/<analysis>.tsv``."""
+    manifest = tmp_path / f"{name}.manifest.tsv"
+    manifest.write_text(
+        "analysis_id\tsource_file\tstored_effect_scale\toriginal_sd_method\n"
+        + "".join(
+            f"{a}\t{tmp_path / 'sources' / f'{a}.tsv'}\tsd\tdeclared_standardised\n"
+            for a in analyses
+        ),
+        encoding="utf-8",
+    )
+    return manifest
+
+
+def _dense_build(tmp_path: Path, analyses: list[str], name: str = "dense") -> Path:
+    """A `build-dense` Store of ``analyses``, in that manifest order."""
+    store = tmp_path / f"{name}.opengwasdb"
+    build_dense_observed_from_manifest(
+        _dense_manifest(tmp_path, analyses, name), store, store_id="s", release_id="r",
+        admission_record=tmp_path / f"{name}.admission",
+    )
+    return store
+
+
+def _dense_spellings(tmp_path: Path, lower_rsid: str, upper_rsid: str) -> None:
+    """Two Analyses' TSVs, ``lower`` and ``upper``, each spelling the one site
+    in its own case and naming it as given."""
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    _association_tsv(sources / "lower.tsv", "g", "a", lower_rsid)
+    _association_tsv(sources / "upper.tsv", "G", "A", upper_rsid)
+    assert _alleles(sources / "lower.tsv") == [("g", "a")]
+    assert _alleles(sources / "upper.tsv") == [("G", "A")]
+
+
+def _dense_refusal(tmp_path: Path, analyses: list[str], name: str = "dense") -> str:
+    """The message `build-dense` refuses ``analyses`` with; nothing is published."""
+    refusal = "Dense build: .* one routing key '1:100000:A:G'"
+    with pytest.raises(ValueError, match=refusal) as caught:
+        _dense_build(tmp_path, analyses, name)
+    assert not (tmp_path / f"{name}.opengwasdb").exists()
+    return str(caught.value)
+
+
+@pytest.mark.parametrize("lower_first", [False, True], ids=["upper-first", "lower-first"])
+def test_a_dense_build_refuses_two_spellings_named_differently(tmp_path, lower_first):
+    """`build-dense` compares a site's spellings as every other harvest does
+    (issue #379). Like `build-dense-vcf` it has no `--on-rsid-conflict`, so it
+    refuses, naming the routing key and both rsids, whichever Analysis is
+    listed first."""
+    _dense_spellings(tmp_path, lower_rsid="rs2", upper_rsid="rs1")
+    analyses = ["upper", "lower"]
+
+    message = _dense_refusal(tmp_path, analyses[::-1] if lower_first else analyses)
+
+    assert "'rs1'" in message and "'rs2'" in message
+
+
+def test_a_dense_builds_names_do_not_follow_its_manifest_order(tmp_path):
+    """Swapping the manifest's rows changes no name (issue #379): either order
+    refuses the one disputed key, so neither publishes its first source's name."""
+    _dense_spellings(tmp_path, lower_rsid="rs2", upper_rsid="rs1")
+
+    refusals = [
+        _dense_refusal(tmp_path, order, name)
+        for name, order in (("first", ["upper", "lower"]), ("swapped", ["lower", "upper"]))
+    ]
+
+    names = [{n for n in ("rs1", "rs2") if repr(n) in message} for message in refusals]
+    assert names == [{"rs1", "rs2"}, {"rs1", "rs2"}]
+
+
+@pytest.mark.parametrize("blank_case", ["lower", "upper"], ids=["other-spelling", "same-spelling"])
+def test_a_dense_build_names_a_variant_by_its_first_non_empty_rsid(tmp_path, blank_case):
+    """Spec §4: a row that names nothing, listed first, gives way to a later row
+    that names the variant, in either spelling."""
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    blank_alleles = ("g", "a") if blank_case == "lower" else ("G", "A")
+    _association_tsv(sources / "blank.tsv", *blank_alleles, "")
+    _association_tsv(sources / "named.tsv", "G", "A", "rs1")
+    assert _alleles(sources / "blank.tsv") == [blank_alleles]
+
+    store = _dense_build(tmp_path, ["blank", "named"])
+
+    (variant,) = VariantAxis(store).all()
+    assert (variant.alid, variant.rsid) == (ALID, "rs1")
 
 
 def test_a_dense_build_from_an_alid_list_routes_a_lower_case_source(tmp_path):
@@ -269,24 +452,53 @@ def test_a_dense_build_from_an_alid_list_routes_a_lower_case_source(tmp_path):
     assert _z_by_alid(store, "lower") == {ALID: pytest.approx(-4.0, rel=5e-3)}
 
 
-def test_a_dense_harvest_refuses_two_spellings_named_differently(tmp_path):
-    """One site in two cases is one routing key, so a single-pass harvest
-    compares the names its spellings carry; `build-dense-vcf` has no
-    `--on-rsid-conflict`, and refuses them (spec §4)."""
+@pytest.mark.parametrize("lower_first", [False, True], ids=["upper-first", "lower-first"])
+@pytest.mark.parametrize("mode", ["single-pass", "two-pass"])
+def test_a_dense_harvest_refuses_two_spellings_named_differently(tmp_path, mode, lower_first):
+    """One site in two cases is one routing key, so a harvest compares the
+    names its spellings carry, from a reference naming none or from the
+    sources' own union alike (issue #379); `build-dense-vcf` has no
+    `--on-rsid-conflict`, and refuses them whichever source is listed first
+    (spec §4). The refusal names the build the way it was run."""
     lower = _vcf(tmp_path / "lower.vcf", "a", "g", 2.0, 0.5, rsid="rs2")
     upper = _vcf(tmp_path / "upper.vcf", "A", "G", 1.0, 0.5, rsid="rs1")
     assert _alleles(lower) == [("a", "g")] and _alleles(upper) == [("A", "G")]
-    manifest = _manifest(
-        tmp_path, [("upper", upper, GWAS_VCF_CAPABILITY), ("lower", lower, GWAS_VCF_CAPABILITY)]
-    )
+    rows = [("upper", upper, GWAS_VCF_CAPABILITY), ("lower", lower, GWAS_VCF_CAPABILITY)]
+    manifest = _manifest(tmp_path, rows[::-1] if lower_first else rows)
     panel = tmp_path / "panel.txt"
     panel.write_text(f"{ALID}\n", encoding="utf-8")
+    reference = {"single-pass": panel, "two-pass": None}[mode]
+    label = {"single-pass": "Single-pass build", "two-pass": "Two-pass build"}[mode]
 
-    with pytest.raises(ValueError, match="case-fold to one routing key '1:100000:A:G'"):
+    with pytest.raises(ValueError, match=f"{label}: .* one routing key '1:100000:A:G'"):
         build_dense_from_vcf_manifest(
-            manifest, tmp_path / "s.opengwasdb", variant_reference=panel,
+            manifest, tmp_path / "s.opengwasdb", variant_reference=reference,
             store_id="s", release_id="r",
         )
+
+
+@pytest.mark.parametrize("lower_first", [False, True], ids=["upper-first", "lower-first"])
+@pytest.mark.parametrize("assembly", ["hg38", "hg19"], ids=["hg38", "lifted"])
+def test_extraction_refuses_two_spellings_named_differently(tmp_path, assembly, lower_first):
+    """A Variant Reference is the union frozen, so its window writers compare
+    a site's spellings as the union does (issue #379). Extraction has no
+    `--on-rsid-conflict`: it refuses, in either order, rather than freeze the
+    first source's name for a single-pass build to use as given. chr3's
+    identity chain keeps the lifted site at `3:1000`."""
+    site = ("3", 1_000)
+    lower = _vcf(tmp_path / "lower.vcf", "a", "g", 2.0, 0.5, rsid="rs2", site=site)
+    upper = _vcf(tmp_path / "upper.vcf", "A", "G", 1.0, 0.5, rsid="rs1", site=site)
+    assert _alleles(lower) == [("a", "g")] and _alleles(upper) == [("A", "G")]
+    rows = [("upper", upper, GWAS_VCF_CAPABILITY), ("lower", lower, GWAS_VCF_CAPABILITY)]
+    manifest = _manifest(tmp_path, rows[::-1] if lower_first else rows, assembly=assembly)
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    artifact = tmp_path / "ref.variant-ref.tsv.gz"
+
+    with pytest.raises(
+        ValueError, match="Variant Reference extraction: .* one routing key '3:1000:A:G'"
+    ):
+        extract_from_manifest(manifest, artifact, chain_file=chain)
+    assert not artifact.exists()
 
 
 def _both_assemblies(

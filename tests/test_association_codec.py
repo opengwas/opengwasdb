@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -83,6 +84,39 @@ def test_a_present_cell_admission_would_not_admit_is_refused(z, se) -> None:
         storable(CellValues(z, se), 0, 1, where="complete-x")
 
 
+#: float16 NaNs other than `np.nan`'s 0x7e00: a payload, a sign and a signalling NaN.
+ODD_MARKERS = {"payload": 0x7E01, "negative": 0xFE00, "signalling": 0x7C01}
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+@pytest.mark.parametrize("bits", ODD_MARKERS.values(), ids=ODD_MARKERS.keys())
+@pytest.mark.parametrize("plane", ["z", "se"])
+def test_a_missing_marker_other_than_the_canonical_nan_is_refused(plane, bits, dtype) -> None:
+    """Spec §15: a float plane's missing marker is `np.nan`'s NaN, and a builder
+    rejects any other. A decoded `float16` plane carries a payload into
+    `float32`, and a `float16` plane would store it again as itself."""
+    from opengwasdb.associations import non_canonical
+
+    z = np.array([1.0, np.nan], dtype=dtype)
+    se = np.array([0.1, np.nan], dtype=dtype)
+    {"z": z, "se": se}[plane][1] = np.array([bits], np.uint16).view(np.float16)[0]
+    # Fixture first: the cell is missing in both planes, and its marker is odd.
+    assert np.isnan(z[1]) and np.isnan(se[1])
+    assert non_canonical({"z": z, "se": se}[plane]).tolist() == [False, True]
+    with pytest.raises(
+        NotAdmitted,
+        match=r"complete-x: .*a missing marker other than the canonical NaN: 1\); first .* "
+        r"at \(1,\)",
+    ):
+        storable(CellValues(z, se), 0, 1, where="complete-x")
+
+
+def test_the_canonical_marker_is_stored() -> None:
+    z, se = np.array([1.0, np.nan], np.float16), np.array([0.1, np.nan], np.float16)
+    assert int(se[1:].view(np.uint16)[0]) == 0x7E00
+    assert storable(CellValues(z, se), 0, 1, where="x").stored.tolist() == [True, True]
+
+
 def test_an_se_narrowed_to_infinity_is_a_stored_value_and_counted() -> None:
     kept = storable(CellValues(_f32(1.0, NAN), _f32(np.inf, NAN)), 0, 1, where="x")
     assert kept.stored.tolist() == [True, True]
@@ -154,6 +188,66 @@ def test_the_count_is_logged_once_naming_each_analysis(caplog) -> None:
         f"build-x: 7 {tally}: b: 5, c: 2",
         f"build-y, analysis_index 4: 3 {tally}",
     ]
+
+
+# ── Placement: where a batch sits ────────────────────────────────────────────
+
+
+def test_a_sequence_whose_analysis_index_is_not_parallel_is_refused() -> None:
+    """The run's variant index and its Analysis index describe the same cells."""
+    with pytest.raises(
+        ValueError,
+        match="Placement.sequence: variant_index of length 3 and analysis_index of length 2 "
+        "must be parallel",
+    ):
+        Placement.sequence(0, np.arange(3), np.array([0, 1]), 2)
+
+
+def test_one_analysis_index_of_a_sequence_stands_for_every_cell() -> None:
+    """A scalar broadcasts by design: the whole run belongs to that Analysis."""
+    at = Placement.sequence(0, np.arange(3), 1, 2)
+    kept = storable(
+        CellValues(_f32(1.0, 1.0, 1.0), _f32(0.5, np.inf, 0.5)), at.analyses, 2, where="x"
+    )
+    assert kept.se_out_of_range.tolist() == [0, 1]
+
+
+def test_a_sequence_of_variants_that_does_not_match_its_statistics_is_refused() -> None:
+    """The run's variant index addresses the same cells as z, SE and EAF: one of
+    another length would be broadcast across them, or refused by numpy from
+    inside the encode (issue #392)."""
+    cells = CellValues(_f32(1.0, 2.0, 3.0), _f32(0.1, 0.2, 0.3), _f32(0.3, 0.4, 0.5))
+    at = Placement.sequence(0, np.arange(2), 0, _N_ANALYSES)
+    with pytest.raises(
+        ValueError,
+        match=r"complete-ragged: z of length 3, se of length 3, eaf of length 3 "
+        r"and variant_index of length 2 must be parallel",
+    ):
+        _codec().encode(cells, at, where="complete-ragged")
+
+
+def test_a_cell_list_whose_rows_and_cols_disagree_is_refused_where_it_is_built() -> None:
+    """`Placement.pairs` cannot address a cell per entry from two lists of
+    different lengths, so it refuses the pair itself rather than letting
+    `positions_pairs` raise numpy's unnamed broadcast error (issue #392)."""
+    with pytest.raises(
+        ValueError,
+        match="Placement.pairs: rows of length 2 and cols of length 3 must be parallel",
+    ):
+        Placement.pairs(np.arange(2), np.arange(3), 2)
+
+
+def test_a_cell_lists_rows_and_cols_are_held_to_the_statistics_they_address() -> None:
+    """`Placement.pairs` addresses one cell per entry too, so a list of another
+    length is no more parallel to the batch than a sequence's index is."""
+    cells = CellValues(_f32(1.0, 2.0, 3.0), _f32(0.1, 0.2, 0.3))
+    at = Placement.pairs(np.array([0, 1]), np.array([0, 1]), _N_ANALYSES)
+    with pytest.raises(
+        ValueError,
+        match=r"complete-hybrid: z of length 3, se of length 3, rows of length 2 "
+        r"and cols of length 2 must be parallel",
+    ):
+        _codec().encode(cells, at, where="complete-hybrid")
 
 
 # ── AssociationCodec: one encode, in the order the planes allow ──────────────
@@ -398,11 +492,117 @@ def _read_band(group: Any, n_rows: int) -> tuple[np.ndarray, np.ndarray, np.ndar
     return DenseZPlane.open(group, _RESIDUAL).band(0, n_rows), se, eaf
 
 
+def _files(path: Any) -> dict[str, bytes]:
+    """Every file of a written tree, so a refused write shows as no change."""
+    return {str(p.relative_to(path)): p.read_bytes() for p in path.rglob("*") if p.is_file()}
+
+
+@pytest.mark.parametrize(
+    ("short", "refusal"),
+    [
+        ("z", "z of length 2, se of length 4, eaf of length 4 and imputed of length 4"),
+        ("se", "z of length 4, se of length 2, eaf of length 4 and imputed of length 4"),
+        ("eaf", "z of length 4, se of length 4, eaf of length 2 and imputed of length 4"),
+        ("imputed", "z of length 4, se of length 4, eaf of length 4 and imputed of length 2"),
+    ],
+)
+def test_a_planes_batch_whose_arrays_are_not_parallel_is_refused_and_writes_nothing(
+    tmp_path, short, refusal
+) -> None:
+    """One batch's z, se, eaf and imputed describe the same cells: a batch that
+    says otherwise is refused before the first plane is created, naming every
+    array's length."""
+    cells = CellValues(
+        _f32(1.0, 2.0, 3.0, 4.0),
+        _f32(0.1, 0.2, 0.3, 0.4),
+        _f32(0.3, 0.4, 0.5, 0.6),
+        imputed=np.zeros(4, dtype=np.uint8),
+    )
+    at = Placement.sequence(0, np.arange(4), np.array([0, 0, 1, 1]), _N_ANALYSES)
+    codec = _codec()
+    encoded = codec.encode(cells, at, where="x")
+    group = zarr.open_group(str(tmp_path / "grid.zarr"), mode="w", zarr_format=3)
+    before = _files(tmp_path / "grid.zarr")
+    assert set(before) == {"zarr.json"}, "fixture must be an empty group, not a missing one"
+    assert list(group.array_keys()) == [], "fixture must hold no array for this to mean anything"
+    with pytest.raises(ValueError, match=f"write_encoded_planes: {refusal} must be parallel"):
+        write_encoded_planes(
+            group,
+            _RESIDUAL,
+            replace(encoded, **{short: getattr(encoded, short)[:2]}),
+            role=ArrayRole.ASSOCIATION_SEQUENCE,
+            compressor=compressor(),
+            eaf_baseline=codec._baseline,
+            se_coefficients=codec._model(),
+        )
+    assert _files(tmp_path / "grid.zarr") == before
+
+
 def test_a_written_grid_reads_back_as_the_codec_round_trips_it(tmp_path) -> None:
     group, codec, cells = _written_band(tmp_path)
     expected = codec.round_trip(cells, Placement.band(0, 8, _N_ANALYSES), where="x")
     for found, want in zip(_read_band(group, 8), expected, strict=True):
         np.testing.assert_array_equal(found, want)
+
+
+@pytest.mark.parametrize(
+    ("short", "refusal"),
+    [
+        (
+            "rows",
+            "rows of length 1, cols of length 2, z of length 2, se of length 2, "
+            "eaf of length 2 and imputed of length 2",
+        ),
+        (
+            "cols",
+            "rows of length 2, cols of length 1, z of length 2, se of length 2, "
+            "eaf of length 2 and imputed of length 2",
+        ),
+        (
+            "z",
+            "rows of length 2, cols of length 2, z of length 1, se of length 2, "
+            "eaf of length 2 and imputed of length 2",
+        ),
+        (
+            "se",
+            "rows of length 2, cols of length 2, z of length 2, se of length 1, "
+            "eaf of length 2 and imputed of length 2",
+        ),
+        (
+            "eaf",
+            "rows of length 2, cols of length 2, z of length 2, se of length 2, "
+            "eaf of length 1 and imputed of length 2",
+        ),
+        (
+            "imputed",
+            "rows of length 2, cols of length 2, z of length 2, se of length 2, "
+            "eaf of length 2 and imputed of length 1",
+        ),
+    ],
+)
+def test_dense_cells_whose_arrays_are_not_parallel_are_refused_and_write_nothing(
+    tmp_path, short, refusal
+) -> None:
+    """`rows`, `cols` and the batch all address the same cells: a call that says
+    otherwise is refused before the first shard is written, naming every array's
+    length."""
+    group, codec, _ = _written_band(tmp_path)
+    group.create_array("imputed", data=np.zeros((8, _N_ANALYSES), dtype=np.uint8))
+    before = _files(tmp_path / "grid.zarr")
+    rows, cols = np.array([0, 2]), np.array([1, 3])
+    batch = CellValues(
+        _f32(1.5, 2.5), _f32(0.05, 0.06), _f32(0.4, 0.5), imputed=np.zeros(2, dtype=np.uint8)
+    )
+    encoded = codec.encode(batch, Placement.pairs(rows, cols, _N_ANALYSES), where="x")
+    if short == "rows":
+        rows = rows[:1]
+    elif short == "cols":
+        cols = cols[:1]
+    else:
+        encoded = replace(encoded, **{short: getattr(encoded, short)[:1]})
+    with pytest.raises(ValueError, match=f"write_dense_cells: {refusal} must be parallel"):
+        write_dense_cells(group, _RESIDUAL, rows, cols, encoded)
+    assert _files(tmp_path / "grid.zarr") == before
 
 
 def test_writing_cells_moves_each_cells_table_entries_and_keeps_the_rest(tmp_path) -> None:
@@ -423,3 +623,9 @@ def test_writing_cells_moves_each_cells_table_entries_and_keeps_the_rest(tmp_pat
     np.testing.assert_array_equal(se[rows, cols], expected.se)
     np.testing.assert_array_equal(eaf[rows, cols], expected.eaf)
     assert z[5, 1] == np.float32(300.0) and se[5, 1] == np.float32(4000.0)
+
+
+def test_the_wildcard_import_still_provides_require_parallel() -> None:
+    """`require_parallel` was a published name of this module (issue #392)."""
+    assert "require_parallel" in association_codec.__all__
+    assert callable(association_codec.require_parallel)

@@ -41,7 +41,7 @@ from typing import Any
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.admission import require_paired
+from opengwasdb.associations import CsrReader
 from opengwasdb.encoding import EAF_BASELINE, StoreEncoding
 from opengwasdb.encoding.association_codec import (
     AssociationCodec,
@@ -54,7 +54,7 @@ from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
-from opengwasdb.layouts.hybrid.build import _write_variant_table
+from opengwasdb.layouts.hybrid.build import write_variant_table
 from opengwasdb.layouts.hybrid.layout import (
     DENSE_SUBDIR,
     dense_component_path,
@@ -62,11 +62,7 @@ from opengwasdb.layouts.hybrid.layout import (
 )
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, with_variant_index
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.layouts.ragged.zarr_csr import (
-    RAGGED_ZARR_PATH,
-    RaggedCSRReader,
-    RaggedCSRWriter,
-)
+from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRWriter
 from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.model.enums import (
     CompletionState,
@@ -291,18 +287,38 @@ def _complete_dense_component(
 # ── Phase 2: crossover fold + shared-axis rebuild ───────────────────────────
 
 
+def _read_overflow_columns(
+    src: Path,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """The source's Ragged Overflow as `offsets` and whole flat `variant_index`,
+    `z`, `se` and `eaf` columns, read through the Association Reader a window
+    at a time.
+
+    D1: the Overflow is carried across, so the reader refuses a cell the
+    presence rule calls invalid, as the Dense Component's completion refuses
+    one of its own. The Overflow is observed by construction (ADR 0026), so it
+    owes no imputed mask.
+    """
+    reader = CsrReader.open(
+        src, source="complete-hybrid, the source's Ragged Overflow", requires_mask=False
+    )
+    total = reader.structure.sequence_length
+    variant_index = np.empty(total, dtype=np.int32)
+    z, se, eaf = (np.empty(total, dtype=np.float32) for _ in range(3))
+    for window in reader.windows():
+        assert window.pos is not None
+        rows = slice(int(window.pos[0]), int(window.pos[-1]) + 1)
+        found = reader.read(window)
+        variant_index[rows], z[rows], se[rows], eaf[rows] = (
+            found.variant_index, found.z, found.se, found.eaf
+        )
+    return reader.structure.offsets, variant_index, z, se, eaf
+
+
 def _read_source_overflow(src: Path) -> _SourceOverflow:
     """Read the observed source's Ragged Overflow Component and shared axis
     once: the crossover fold and the overflow rebuild share these arrays."""
-    src_csr = RaggedCSRReader(src)
-    offsets = src_csr._offsets[:]
-    variant_index = src_csr._variant_index[:]
-    z = src_csr.z_all()
-    se = src_csr.se_all()
-    # D1: the Overflow is carried across, so a half-missing cell is refused,
-    # as the Dense Component's completion refuses one of its own.
-    require_paired(z, se, where="complete-hybrid, the source's Ragged Overflow")
-    eaf = src_csr.eaf_slice(0, len(variant_index))
+    offsets, variant_index, z, se, eaf = _read_overflow_columns(src)
 
     src_shared_axis = VariantAxis(src)
     try:
@@ -409,7 +425,7 @@ def _write_shared_tables_and_overflow(
     chunk = tuple(int(size) for size in dense_layout.get("chunk_shape", _chunk_shape(src_manifest)))
     write_index(staged, axis.alids, analyses, (chunk[0], chunk[1]))
     source_by_alid = {a: overflow.source_alid_by_alid.get(a) for a in axis.alids}
-    _write_variant_table(staged.path, axis.alids, source_by_alid, overflow.rsid_by_alid)
+    write_variant_table(staged.path, axis.alids, source_by_alid, overflow.rsid_by_alid)
     dense_to_shared = np.array([axis.index[a] for a in axis.dense_alids], dtype=np.int32)
     np.save(dense_to_shared_path(staged.path), dense_to_shared)
 
@@ -558,7 +574,7 @@ def _fold_panel_crossovers(
     ``is_crossover`` is a boolean mask over the flat source-overflow
     association array (same order/length as ``overflow_alids``/``src_z``/
     ``src_se``/``src_eaf``); ``offsets`` partitions that flat array by analysis, exactly
-    as ``RaggedCSRReader`` exposes it. Returns how many of the overwritten
+    as the sequence's own ``offsets`` array does. Returns how many of the overwritten
     cells were previously marked imputed, so the caller can correct the
     reported imputed count -- see the module docstring (issue #99).
     """

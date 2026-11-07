@@ -44,7 +44,11 @@ them.**
   projection, each oriented by that module:
   - associations;
   - `ReaderBatch`es: the associations as columns, with each row's ALID, its
-    place in the source, its flip and its rsid;
+    alleles as the source spells them (`ref` and `alt`, as its association
+    carries them), its place in the source, its flip and its rsid. The ALID
+    upper-cases the alleles (ADR 0075). The spelling is there so that a
+    builder's rsid harvest can compare the names a site's spellings carry, as
+    ADR 0066 requires of every harvest (#379);
   - variants;
   - the resolver's `MetricsChunk`s;
   - sites.
@@ -98,7 +102,7 @@ The owner's rulings on the unifications, issue #56:
 |---|---|---|
 | O1 | Ragged SSF takes the GWAS-SSF reader's rsid rule: the first of `rsid` and `variant_id` that is an rs identifier | OGS-00006 gains 21 rsids; none is lost or replaced. OGS-00007 is unchanged |
 | O2 | Ragged SSF takes the reader's effect and SE rules (`odds_ratio`, signed z, CI and p recovery) and its refusals | 0 of OGS-00006's and -07's 58,257,233 rows change; 0 of their 1,410 files are refused |
-| O3 | Ragged SSF refuses a declared build other than GRCh38; it lifts nothing (the lift is #386) | 0 of 1,410 manifest rows |
+| O3 | Ragged SSF refused a declared build other than GRCh38, until #386 lifted it (superseded: see the note below) | 0 of 1,410 manifest rows |
 | O4 | Ragged BESD orients in the declared assembly and re-orients after the lift | 0 bytes |
 | O5 | The two `.esi` lifts stay until routing owns them | none |
 | O6 | GWAS-VCF orients by the identity rule, as every format does | 0 rows (#360's census) |
@@ -126,11 +130,25 @@ The owner's rulings on the unifications, issue #56:
   build. Each projection's z is therefore on the A1 of the alleles it reports.
   The resolver reads only the lifted metric blocks, and no builder opens a
   BESD reader lifted.
-- `build-dense`'s record reader (`build.source`) is not yet a registered
-  reader, though it orients through the module. It refuses an unreadable row
-  where every registered reader drops one, and it carries per-row Analysis
-  metadata. An adapter that keeps both is possible, but it is out of this
-  change's scope; a follow-up owns that second parse path.
+- `build-ragged-ssf` lifts a source declaring another build (issue #386), which
+  supersedes O3's refusal. The lift is the builder's, after the read, through
+  Variant Routing's `place_sites`: the GWAS-SSF reader stays in its declared
+  assembly and is not registered as a lifting reader, since the resolver and
+  ancestry assignment, which would then open it lifted, have no use for one.
+  A row that declares no build is still refused (O7). A build with any
+  non-GRCh38 source holds every Analysis's admitted rows until the lift has
+  placed them; a GRCh38-only build reads one Analysis at a time.
+- `build-dense` reads through the registry (issue #385). Its association TSV was
+  deferred from this change: its own parser refused an unreadable row where
+  every registered reader drops one, and carried each Analysis's metadata on
+  every row, which a reader's associations have no field for. It is now
+  `opengwasdb.association-tsv`, an ordinary reader: one file per Analysis,
+  associations only, `ReferenceAllele.UNDECLARED`. What the rows once
+  repeated (the Analysis id, its label, Trait Ontology, attribution, effect
+  scale, and MAF and INFO filters) is the build manifest's, as for every other
+  builder, and a header that still names one of those columns is refused. An
+  unreadable row still refuses the run; a malformed identity is dropped and
+  logged, like any reader's (#365).
 - A Ragged SSF build costs more per row. The GWAS-SSF reader's row parser
   applies every rule the old Ragged parser skipped. It was timed on one of
   OGS-00006's 1,400 sources, GCST90199621.filtered.tsv.gz, with 77,825 rows

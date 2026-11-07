@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from cli_output import normalize_cli_output
+from extraction_fixtures import write_hg38_artifact
 from liftover_fixtures import (
     assert_strand_statistics,
     strand_vcf_rows,
@@ -26,7 +27,7 @@ from liftover_fixtures import (
 from residual_fixtures import write_gwas_vcf_with_eaf
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
-from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
+from opengwasdb.layouts.dense.build_vcf import _spill_column, build_dense_from_vcf_manifest
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.query import query_store
@@ -303,6 +304,25 @@ def test_ontology_and_attribution_columns_populated_from_manifest(tmp_path):
     assert row["consortium"] == "GIANT"
     assert row["first_author"] == "J. Smith"
     assert row["analysis_label"] == "Trait A"
+
+
+def test_a_spilled_column_whose_arrays_are_not_parallel_is_refused_and_writes_nothing(
+    tmp_path,
+) -> None:
+    """A spilled column's rows, z, SE and EAF are one cell each: one of another
+    length would put a cell's statistic under another's variant in the spill the
+    band-write phase reads back (issue #392)."""
+    spill_dir = tmp_path / "spill"
+    spill_dir.mkdir()
+    rows = np.array([0, 1, 2], dtype=np.int64)
+    values = np.full(3, 0.1, dtype=np.float32)
+    with pytest.raises(
+        ValueError,
+        match=r"dense-vcf spill, analysis_index 0: rows of length 3, z of length 2, "
+        r"se of length 3 and eaf of length 3 must be parallel",
+    ):
+        _spill_column(spill_dir, 0, rows, values[:2], values, values)
+    assert list(spill_dir.iterdir()) == []
 
 
 def test_missing_required_manifest_field_fails_the_build_loudly(tmp_path):
@@ -1797,7 +1817,7 @@ def test_cli_invalid_options_fail_at_parse_time_dense(tmp_path):
     assert res_cap.exit_code != 0
     clean_cap_output = normalize_cli_output(res_cap.output)
     assert "unknown source reader capability 'unknown_capability'" in clean_cap_output
-    known = "known: opengwasdb.besd, opengwasdb.column-map, opengwasdb.finngen-r13"
+    known = "known: opengwasdb.association-tsv, opengwasdb.besd, opengwasdb.column-map"
     assert known in clean_cap_output
 
     res_ass = runner.invoke(app, [*args_base, "--source-assembly", "unknown_build"])
@@ -2097,7 +2117,9 @@ class TestVariantReferenceErrors:
         }
         rsid_by_alid = {HG38_ALID_1: "rs1", HG38_ALID_3: "rs3"}
         path = tmp_path / "roundtrip.variant-ref.tsv.gz"
-        write_variant_reference(path, list(source_lookup.values()), source_lookup, rsid_by_alid)
+        write_variant_reference(
+            path, list(source_lookup.values()), source_lookup, rsid_by_alid, reoriented=()
+        )
 
         reference = read_variant_reference(path)
 
@@ -2134,7 +2156,9 @@ class TestVariantReferenceErrors:
         manifest = self._one_row_manifest(tmp_path)
         header_only = tmp_path / "header-only.variant-ref.tsv.gz"
         with gzip.open(header_only, "wt", encoding="utf-8") as handle:
-            handle.write("#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n")
+            handle.write(
+                "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
+            )
         with pytest.raises(ValueError, match="contained no ALIDs"):
             build_dense_from_vcf_manifest(
                 manifest, tmp_path / "store.opengwasdb", store_id="s", release_id="r",
@@ -2157,8 +2181,10 @@ class TestVariantReferenceErrors:
         manifest = self._one_row_manifest(tmp_path)
         bad = tmp_path / "mismatch.variant-ref.tsv.gz"
         with gzip.open(bad, "wt", encoding="utf-8") as handle:
-            handle.write("#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n")
-            handle.write("1:100000:A:G\t1\t999\tA\tG\t\t1:100000:A:G\n")
+            handle.write(
+                "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
+            )
+            handle.write("1:100000:A:G\t1\t999\tA\tG\t\t1:100000:A:G\t\n")
         with pytest.raises(ValueError, match="row columns describe"):
             build_dense_from_vcf_manifest(
                 manifest, tmp_path / "store.opengwasdb", store_id="s", release_id="r",
@@ -2171,7 +2197,7 @@ class TestVariantReferenceErrors:
         bad = tmp_path / "unknown.tsv.gz"
         with gzip.open(bad, "wt", encoding="utf-8") as handle:
             handle.write("foo\tbar\n1\t2\n")
-        with pytest.raises(ValueError, match="neither an 'alid' nor a 'source_keys' column"):
+        with pytest.raises(ValueError, match="neither an 'alid' nor a 'routed_source_keys' column"):
             read_variant_reference(bad)
 
     def test_variant_artifact_missing_required_column_fails_loudly(self, tmp_path):
@@ -2188,9 +2214,11 @@ class TestVariantReferenceErrors:
 
         bad = tmp_path / "conflict.variant-ref.tsv.gz"
         with gzip.open(bad, "wt", encoding="utf-8") as handle:
-            handle.write("#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n")
-            handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:200000:A:G\n")
-            handle.write("1:100000:C:T\t1\t100000\tC\tT\t\t1:200000:A:G\n")
+            handle.write(
+                "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
+            )
+            handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:200000:A:G\t\n")
+            handle.write("1:100000:C:T\t1\t100000\tC\tT\t\t1:200000:A:G\t\n")
         with pytest.raises(ValueError, match="maps to both"):
             read_variant_reference(bad)
 
@@ -2199,9 +2227,11 @@ class TestVariantReferenceErrors:
 
         bad = tmp_path / "duplicate.variant-ref.tsv.gz"
         with gzip.open(bad, "wt", encoding="utf-8") as handle:
-            handle.write("#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n")
-            handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:100000:A:G\n")
-            handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:100000:A:G\n")
+            handle.write(
+                "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
+            )
+            handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:100000:A:G\t\n")
+            handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:100000:A:G\t\n")
         with pytest.raises(ValueError, match="duplicate ALID"):
             read_variant_reference(bad)
 
@@ -2210,10 +2240,56 @@ class TestVariantReferenceErrors:
 
         bad = tmp_path / "bad-key.variant-ref.tsv.gz"
         with gzip.open(bad, "wt", encoding="utf-8") as handle:
-            handle.write("#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n")
-            handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:not-a-position:A:G\n")
+            handle.write(
+                "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
+            )
+            handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:not-a-position:A:G\t\n")
         with pytest.raises(ValueError, match="invalid source key"):
             read_variant_reference(bad)
+
+    def test_reoriented_key_its_row_does_not_route_fails_loudly(self, tmp_path):
+        """A key the lift re-oriented is one it placed on that row (#354)."""
+        import gzip
+
+        bad = tmp_path / "stray.variant-ref.tsv.gz"
+        with gzip.open(bad, "wt", encoding="utf-8") as handle:
+            handle.write(
+                "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
+            )
+            handle.write("2:999001:C:T\t2\t999001\tC\tT\t\t2:1000:G:A\t2:2000:T:A\n")
+        with pytest.raises(ValueError, match="not one of its source keys"):
+            read_variant_reference(bad)
+
+    @pytest.mark.parametrize("column", ["routed_source_keys", "reoriented_keys"])
+    @pytest.mark.parametrize(
+        "cell", [";", "2:1000:G:A;;", "2:1000:G:A;2:1000:G:A"], ids=["lone", "trailing", "twice"]
+    )
+    def test_a_malformed_key_list_fails_naming_its_row(self, tmp_path, column, cell):
+        """An empty cell lists no keys; a list with an empty element or a key
+        named twice is a corrupt artifact, not fewer keys (#354)."""
+        import gzip
+
+        cells = {"routed_source_keys": "2:1000:G:A", "reoriented_keys": "2:1000:G:A", column: cell}
+        bad = tmp_path / "malformed.variant-ref.tsv.gz"
+        with gzip.open(bad, "wt", encoding="utf-8") as handle:
+            handle.write(
+                "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
+            )
+            handle.write(
+                f"2:999001:C:T\t2\t999001\tC\tT\t\t{cells['routed_source_keys']}"
+                f"\t{cells['reoriented_keys']}\n"
+            )
+        with pytest.raises(ValueError, match=rf"row '2:999001:C:T'.*{column}"):
+            read_variant_reference(bad)
+
+    def test_writing_a_reoriented_key_that_routes_nowhere_fails_loudly(self, tmp_path):
+        with pytest.raises(ValueError, match="route nowhere"):
+            write_variant_reference(
+                tmp_path / "stray.variant-ref.tsv.gz",
+                ["2:999001:C:T"],
+                {("2", 1000, "G", "A"): "2:999001:C:T"},
+                reoriented={("2", 2000, "T", "A")},
+            )
 
 
 def test_cli_variant_reference_builds_single_pass(tmp_path):
@@ -2430,7 +2506,8 @@ class TestPlainAlidReferenceRsids:
         reference = tmp_path / "curated.variant-ref.tsv.gz"
         source_lookup = {("1", 100000, "A", "G"): HG38_ALID_1}
         write_variant_reference(
-            reference, [HG38_ALID_1], source_lookup, {HG38_ALID_1: "rsCURATED"}
+            reference, [HG38_ALID_1], source_lookup, {HG38_ALID_1: "rsCURATED"},
+            reoriented=()
         )
         store = tmp_path / "curated.opengwasdb"
         build_dense_from_vcf_manifest(
@@ -2528,6 +2605,7 @@ class TestPlainAlidReferenceRsids:
                 ("9", 999, "A", "C"): source_alid,
             },
             {},
+            reoriented=(),
         )
         store = tmp_path / "custom-routing.opengwasdb"
         build_dense_from_vcf_manifest(
@@ -2585,12 +2663,7 @@ class TestPlainAlidReferenceRsids:
         )
         manifest = _manifest_with_source_assembly(tmp_path, [("named", vcf, "Named", "hg38")])
         reference = tmp_path / "dense-named.variant-ref.tsv.gz"
-        write_variant_reference(
-            reference,
-            [HG38_ALID_1, HG38_ALID_3],
-            {("1", 100000, "A", "G"): HG38_ALID_1, ("1", 1564620, "A", "G"): HG38_ALID_3},
-            {HG38_ALID_1: "rsPANEL"},
-        )
+        write_hg38_artifact(reference, [HG38_ALID_1, HG38_ALID_3], {HG38_ALID_1: "rsPANEL"})
         two_pass = tmp_path / "dense-named-two.opengwasdb"
         single_pass = tmp_path / "dense-named-one.opengwasdb"
         build_dense_from_vcf_manifest(manifest, two_pass, store_id="s", release_id="r")

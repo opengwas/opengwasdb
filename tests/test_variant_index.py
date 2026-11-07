@@ -32,11 +32,13 @@ from typing import Any
 
 import numpy as np
 import pytest
+import zarr
 from test_ragged_build_besd import _make_besd_fixture
 from test_ragged_build_ssf import _make_fixture
 from test_ragged_completion import _RESULT_KEYS
 from test_ragged_residual_completion import RaggedResidualScenario
 
+from opengwasdb.layouts.ragged import by_variant
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.by_variant import (
@@ -50,6 +52,7 @@ from opengwasdb.query import query_store
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store import open_store
 from opengwasdb.validation import validate_store
+from opengwasdb.validation.rules import by_variant as by_variant_rules
 
 #: The arrays a `by_variant` group always carries beside its offsets.
 _CORE_LEAVES = ("analysis_index", "z", "se")
@@ -325,22 +328,75 @@ def test_validation_rejects_a_wrong_code(observed_ssf: Path, tmp_path: Path) -> 
     assert any(BY_VARIANT_GROUP in error for error in result.errors), result.errors
 
 
-def test_validation_rejects_a_swapped_analysis(observed_ssf: Path, tmp_path: Path) -> None:
+def test_a_wrong_code_is_named_as_the_sequence_holds_it(
+    observed_ssf: Path, tmp_path: Path
+) -> None:
+    """The sampled comparison names both codes as they are stored, word for word.
+
+    Each source code is reported as a single-cell read returns it, a 0-d array,
+    however the cells are read.
+    """
     store = _copy_and_validate(observed_ssf, tmp_path)
-    index = store / "data.zarr" / "ragged" / BY_VARIANT_GROUP
-    root = store_arrays.open_group(index)
-    offsets = np.asarray(root["offsets"][:], dtype=np.int64)
-    analysis = np.asarray(root["analysis_index"][:])
-    # Flip the two rows of a variant that genuinely holds two Analyses.
+    index = zarr.open_group(str(store / "data.zarr" / "ragged" / BY_VARIANT_GROUP), mode="r+")
+    sequence = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="r")
+    first_variant = int(np.flatnonzero(np.diff(np.asarray(index["offsets"][:])) > 0)[0])
+    row = int(index["offsets"][first_variant])
+    analysis = int(index["analysis_index"][row])
+    held = np.asarray(index["z"][:])
+    held[row] = held[row] + 1
+    index["z"][...] = held
+    offsets = np.asarray(sequence["offsets"][:])
+    segment = np.asarray(sequence["variant_index"][offsets[analysis] : offsets[analysis + 1]])
+    source = int(offsets[analysis]) + int(np.searchsorted(segment, first_variant))
+
+    result = validate_store(store)
+
+    assert result.errors == [
+        f"data.zarr/ragged/by_variant: (variant={first_variant}, analysis={analysis}) "
+        f"z code {held[row]!r} != source {np.asarray(sequence['z'][source])!r}"
+    ]
+
+
+def _swap_two_analyses_of_one_variant(store: Path) -> None:
+    """Flip the first two rows of a variant that genuinely holds two Analyses.
+
+    Opened in whichever Zarr format the index is in, so a 0.1.0 index stays one.
+    """
+    index = zarr.open_group(str(store / "data.zarr" / "ragged" / BY_VARIANT_GROUP), mode="r+")
+    offsets = np.asarray(index["offsets"][:], dtype=np.int64)
+    analysis = np.asarray(index["analysis_index"][:])
     widths = np.diff(offsets)
     variant = int(np.argmax(widths >= 2))
     assert widths[variant] >= 2, "fixture must have a multi-Analysis variant"
     start = int(offsets[variant])
     analysis[start], analysis[start + 1] = analysis[start + 1], analysis[start]
-    _damage(index, "analysis_index", analysis.astype("int32"))
+    index["analysis_index"][...] = analysis.astype(index["analysis_index"].dtype)
+
+
+def test_validation_rejects_a_swapped_analysis(observed_ssf: Path, tmp_path: Path) -> None:
+    store = _copy_and_validate(observed_ssf, tmp_path)
+    _swap_two_analyses_of_one_variant(store)
     result = validate_store(store)
     assert not result.ok
     assert any(BY_VARIANT_GROUP in error for error in result.errors), result.errors
+
+
+def test_rows_out_of_order_are_found_across_a_window_edge(
+    observed_ssf: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The index is read a window at a time; a variant's run crossing a window's
+    edge is compared across it, with the row before the window carried in."""
+    monkeypatch.setattr(by_variant_rules, "_WINDOW", 1)
+    store = _copy_and_validate(observed_ssf, tmp_path)
+    _swap_two_analyses_of_one_variant(store)
+
+    result = validate_store(store)
+
+    assert result.failed() == {"by_variant.order"}, result.errors
+    assert result.errors == [
+        "data.zarr/ragged/by_variant/analysis_index is not non-decreasing within "
+        "a variant's block"
+    ]
 
 
 def test_validation_rejects_a_broken_offsets(observed_ssf: Path, tmp_path: Path) -> None:
@@ -432,6 +488,61 @@ def test_validate_fails_when_variant_index_missing(
     result = validate_store(store)
     assert not result.ok
     assert any("by_variant" in err for err in result.errors)
+
+
+def _as_0_1_0(store: Path, tmp_path: Path) -> Path:
+    """A 0.1.0 copy of `store`, which validates as one."""
+    from legacy_fixtures import relayout_as_0_1_0
+
+    legacy = relayout_as_0_1_0(store, tmp_path / "legacy.opengwasdb")
+    assert open_store(legacy).manifest.format_version == "0.1.0"
+    assert validate_store(legacy).ok, validate_store(legacy).errors
+    return legacy
+
+
+def test_a_0_1_0_component_need_not_carry_the_variant_index(
+    observed_ssf: Path, tmp_path: Path
+) -> None:
+    """Spec §11.1 requires the index "in format_version 0.2.0" (#380).
+
+    OGS-00004, -00005 and -00007 are 0.1.0 releases built before the index
+    existed; requiring it failed them for a group their format never had. The
+    rule records the absence as a skip, with its reason, not as a pass.
+    """
+    legacy = _strip_variant_index(_as_0_1_0(observed_ssf, tmp_path))
+    assert BY_VARIANT_GROUP not in open_store(legacy).arrays(mode="r")["ragged"]
+
+    result = validate_store(legacy)
+
+    assert result.ok, result.errors
+    assert result.skipped["by_variant.present"] == (
+        "a format 0.1.0 component need not carry the variant-centric index (spec §11.1)",
+    )
+
+
+def test_a_0_1_0_component_that_carries_the_variant_index_is_still_checked(
+    observed_ssf: Path, tmp_path: Path
+) -> None:
+    """Carrying the index is optional in 0.1.0; disagreeing with it is not."""
+    legacy = _as_0_1_0(observed_ssf, tmp_path)
+    _swap_two_analyses_of_one_variant(legacy)
+
+    result = validate_store(legacy)
+
+    assert result.failed() == {"by_variant.order"}, result.errors
+
+
+def test_a_0_1_0_manifest_that_records_an_absent_index_still_fails(
+    observed_ssf: Path, tmp_path: Path
+) -> None:
+    """A manifest that records an index the release does not carry is wrong in any format."""
+    legacy = _as_0_1_0(observed_ssf, tmp_path)
+    shutil.rmtree(legacy / "data.zarr" / "ragged" / BY_VARIANT_GROUP)
+
+    result = validate_store(legacy)
+
+    assert result.failed() == {"by_variant.present"}
+    assert "the index it describes is absent" in result.errors[0]
 
 
 def test_cli_rejects_no_variant_index_option() -> None:
@@ -986,3 +1097,51 @@ def test_augment_refreshes_consolidated_metadata(tmp_path: Path) -> None:
     # The refreshed record describes the group: a fresh open sees the new array.
     group = zarr.open_group(str(data_root), mode="r")
     assert "by_variant" in group["ragged"]
+
+
+def test_a_rekeyed_exception_table_refuses_an_index_and_value_of_other_lengths(
+    tmp_path,
+) -> None:
+    """Two positions with three values wrote two of the three and dropped the
+    rest, in a table whose every entry is an exact value (issue #392)."""
+    index = zarr.open_group(str(tmp_path / "by_variant.zarr"), mode="w", zarr_format=2)
+    source = [
+        (
+            "se",
+            "se_exception_index",
+            "se_exception_value",
+            np.empty(0, dtype=np.int64),
+            np.empty(0, dtype=np.float32),
+        )
+    ]
+    with pytest.raises(
+        ValueError,
+        match=r"re-keyed exception table at se_exception_index: positions of length 2 "
+        r"and values of length 3 must be parallel",
+    ):
+        by_variant._write_rekeyed_tables(
+            index,
+            source,
+            [[np.arange(2, dtype=np.int64)]],
+            [[np.arange(3, dtype=np.float32)]],
+        )
+    assert list(index.array_keys()) == []
+
+
+def test_no_exception_table_is_written_when_a_later_one_is_malformed(tmp_path) -> None:
+    """A valid Z table ahead of a malformed SE table was written before the SE
+    table was refused, leaving half a re-keyed index behind (issue #392)."""
+    index = zarr.open_group(str(tmp_path / "by_variant.zarr"), mode="w", zarr_format=2)
+    empty = (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float32))
+    source = [
+        ("z", "z_overflow_index", "z_overflow_value", *empty),
+        ("se", "se_exception_index", "se_exception_value", *empty),
+    ]
+    with pytest.raises(ValueError, match=r"se_exception_index: positions of length 2"):
+        by_variant._write_rekeyed_tables(
+            index,
+            source,
+            [[np.arange(2, dtype=np.int64)], [np.arange(2, dtype=np.int64)]],
+            [[np.arange(2, dtype=np.float32)], [np.arange(1, dtype=np.float32)]],
+        )
+    assert list(index.array_keys()) == []

@@ -208,6 +208,32 @@ source's allele string at a moved coordinate. Signed statistics follow the
 projected alleles, so a lift that swaps which allele is `A1` flips them
 (§5).
 
+A Variant Reference artifact (`*.variant-ref.tsv.gz`, which
+`extract-variant-reference` writes) records such a lift, so that a single-pass
+build routed by it stores what the two-pass build stores. Its columns are
+`alid`, `chromosome`, `position`, `a1`, `a2`, `rsid`, `routed_source_keys` and
+`reoriented_keys`. A row's ALID is formed from the projected alleles;
+`routed_source_keys` lists, `;`-separated, the source keys
+(`chrom:pos:ref:alt`, as each source spells them) that route to it; and
+`reoriented_keys` lists those of them whose lift makes the other allele `A1`,
+whose statistics a build routed by the artifact re-orients (§5). A
+reverse-strand key whose `A1` does not change, such as an indel the complement
+leaves in order, is in `routed_source_keys` alone, under its projected ALID.
+An empty cell lists no keys. A list with an empty element or a key named twice
+is refused, naming the row, and so is a re-oriented key its row does not route.
+
+Every extraction before issue #354 named the routing column `source_keys` and
+recorded no re-orientation. Such an artifact cannot say which keys were
+re-oriented, and may name a reverse-strand key's ALID on the source's strand,
+so every reader of a Variant Reference MUST refuse one whose header names
+`source_keys`, rather than read it as re-orienting nothing or check a lift
+against its ALIDs: the single-pass builds, `build-ragged-besd`'s lift check
+and `resolve-analyses --variant-reference` all do. It is extracted again. The
+column was renamed for the converse: an engine before issue #354 requires
+`source_keys`, so it refuses a new artifact rather than route it without its
+re-orientation. A plain ALID list and a Store Variant Table name no such column
+and are read as before.
+
 The BESD builder (`build-ragged-besd`) checks its lift, and records that it
 did. Given `--variant-reference`, a reverse-strand lifted variant whose alleles
 the reference spells on the other strand fails the build naming the variant; a
@@ -238,6 +264,29 @@ their statistics from it, but they do not perform this allele check and record
 no `provenance.lift`; nothing in this section requires them to until one is
 added deliberately.
 
+`build-ragged-ssf` lifts too (issue #386). A Ragged SSF Store is one build,
+GRCh38, and every manifest row declares its source's build: a row that declares
+none is refused. A source on hg19 (GRCh37) is read oriented in its own build,
+lifted by `--chain-file`, which any such row requires and which is refused before
+any source is read when it is missing, and re-oriented by the rule above. Its
+sites are placed together, through the placement Variant Routing uses
+(`place_sites`), once every Analysis's rows have been admitted: the failure rate
+`--liftover-failure-threshold` bounds (default 0.01) is the lifted group's, as in
+the Dense and Hybrid builds. Two drops are counted in the Admission record, per
+Analysis, as `lift_unmapped` (the chain places the site nowhere) and
+`lift_ambiguous` (a Routing Key that a lifted source and a source already on
+GRCh38 both declare: two loci that share a string, dropped from the Analyses of
+both, as Pass 1's union drops it). Two source sites that lift onto one variant
+are one Analysis's duplicate rows, and the duplicate rule resolves them. A
+lifted Store records `provenance.lift` as `build-ragged-besd` does, with
+`n_unmapped` and `n_ambiguous` (Routing Keys) beside `n_lifted`, and
+`reference: null`: the lift is not checked against a Variant Reference. A Store
+whose sources are all on GRCh38 records no `provenance.lift`. A build with any
+non-GRCh38 source holds every Analysis's admitted rows in memory until the lift
+has placed them; a GRCh38-only build reads one Analysis at a time. A lift that
+leaves no variant refuses the build, naming each Analysis's `lift_unmapped` and
+`lift_ambiguous` counts, after the Admission record is finished.
+
 Cross-Store identity is:
 
 ```text
@@ -264,8 +313,7 @@ is part of the contract (issue #255):
   or empty cell names nothing and never clears an earlier name. Several source
   coordinates that canonicalise to one ALID therefore take the answer of the
   one that sorts first, not of the one that appears first in a file. The one
-  exception is a single-pass build's routing key that its sources name
-  differently, below.
+  exception is a routing key that its sources name differently, below.
 - A GWAS-SSF source, read directly or through a Column Map, names a variant by
   the first of its `rsid` and `variant_id` cells that names an rs identifier,
   normalised before any name is compared (issue #306): a `;`-separated list
@@ -278,11 +326,17 @@ is part of the contract (issue #255):
   read as before.
 - A routing key spells a coordinate's alleles upper-cased, as identity does
   (above), so source coordinates spelt in different case are one stored
-  variant on every build. A single-pass build that harvests compares the
-  names those spellings carry: when their sources name it with different
-  (normalised) rsids, nothing in the sources says which is right, and
-  `build-hybrid --on-rsid-conflict` decides (issue #306); `build-dense-vcf`
-  has no such option and always refuses. Under `build-hybrid`, `refuse`, the
+  variant on every build. Every build that harvests — a two-pass build, or a
+  single-pass build whose reference names no variants — compares the names
+  those spellings carry, by one rule, and so does Variant Reference extraction
+  (issue #379), and so do `build-ragged-ssf` and `build-dense` over the rows
+  they admit: when
+  their sources name it with different (normalised) rsids, nothing in the
+  sources says which is right, and `build-hybrid --on-rsid-conflict` decides
+  (issue #306); `build-dense`, `build-dense-vcf`, `build-ragged-ssf` and
+  `extract-variant-reference` have no such option and always refuse. Which
+  source is listed first therefore never decides such a name. Under
+  `build-hybrid`, `refuse`, the
   default, fails the build and names the routing key and both names. `drop` gives **no
   rsid** to every stored variant such a key routes to, over the build's final
   combined routing — even when a second routing key reaches the same variant
@@ -301,15 +355,24 @@ is part of the contract (issue #255):
   its distinct names in `(rank, site)` order. A build that compared names and
   found none disputed — even one whose sources name nothing — reports `0` and
   `0`. `n_keys` and `n_variants` are `null`, never `0`, for a build that
-  compared no names across sources — a
-  `--reference-panel` build, or one whose reference names its variants — and a
-  build with no `--variant-reference` refuses `drop`, which it could not apply. A
+  compared no names across sources: one whose reference names its variants. A
   checkpointed build records the policy and the counts, and resuming it under
   the other policy is refused. A resume past the fold does not harvest again, so
   one whose recorded counts are missing is refused too, unless its checkpoint
   predates the option (records no `on_rsid_conflict`); its counts are then
-  `null`. A two-pass build compares no names across sources, so it names such
-  a variant by the first-non-empty rule above.
+  `null`.
+- `build-ragged-ssf` harvests only the rows it admits, in Manifest Row order
+  and file order, and gives a variant the first non-empty rsid among them, by
+  the rule above (issue #400). A row that names nothing gives way to a later
+  row that names the variant, whichever spelling either row uses.
+- `build-dense` harvests only the rows Association Admission keeps, in
+  manifest row order and file order, and gives a variant the first non-empty
+  rsid among them, by the rule above (issue #379). It compares the spellings
+  each row's `ReaderBatch` carries, and refuses a disputed name as
+  `build-dense-vcf` does.
+- A `build-ragged-besd` file set lists a variant once, and two of its rows
+  that canonicalise to one variant are both dropped, with their associations,
+  so no two names ever meet there.
 - A single-pass build given `--variant-reference` MUST NOT write a `rsid`
   column blank simply because the reference it was given is a plain ALID list.
   When the reference names none of its variants, the build runs the same Pass 1
@@ -1811,6 +1874,21 @@ read alike. A release without the plane never has the key. The CLI's resolved
 output prints an `n` column immediately before `association_status` (`.` where
 missing) only for such a release (ADR 0067).
 
+`query --format json` prints that record, one JSON object per association, as
+an array: `variant_index`, `analysis_index`, `z`, `se`, `eaf`,
+`association_status`, and `n` when the release carries it in its integer form.
+The output is RFC 8259 JSON, so it never holds `NaN` or `Infinity` as a bare
+token. A cell that is not there is `null`, and ±inf is the string `"Infinity"`
+or `"-Infinity"`, because an infinite value is a value (§15) and a `null`
+would be indistinguishable from the missing cell beside it (issue #394).
+
+A `null` `eaf` therefore says the frequency is not available, not that the
+association is: `association_status` says the association is `missing`. An
+`eaf` is `null` wherever the cell holds no frequency -- on every cell of a
+release with no association-frequency plane, except an imputed one, whose
+`eaf` is the LD Reference Panel's where the release carries Reference EAF
+(§9, ADR 0036).
+
 Reference-Completed queries include imputed associations by default. Query APIs MUST provide an Observed-Only mode that excludes imputed associations.
 
 Detailed Reference Completion Quality is not joined onto every imputed association by default. Query APIs MAY expose it when requested.
@@ -1843,7 +1921,7 @@ Validators MUST check at least:
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
-- `variant_index` is **strictly increasing within every Analysis's segment** in a standalone Ragged or a Hybrid Overflow CSR (§11): an out-of-order segment makes the variant-side binary search answer with a plausible, wrong row, and a repeated one is a second association at a variant that Analysis already holds. It is checked on every release, not only on ones this build wrote. The check MUST be bounded and MUST NOT materialise the array: it reads the sequence in windows (1,000,000 int32, 4 MB), carries the preceding value across a window boundary and resets at each Analysis boundary, so peak memory is the window, its comparison bool and the per-Analysis offsets (`O(n_analyses)`), independent of the association count. The error names the first offending Analysis and says which of the two it found — a decrease, or a repeat;
+- `variant_index` is **strictly increasing within every Analysis's segment** in a standalone Ragged or a Hybrid Overflow CSR (§11): an out-of-order segment makes the variant-side binary search answer with a plausible, wrong row, and a repeated one is a second association at a variant that Analysis already holds. It is checked on every release, not only on ones this build wrote. The check MUST be bounded and MUST NOT materialise the array: it reads the sequence in windows, the association scan's (§20.0, within one 1 GiB decoded budget), carries the preceding cell across a window boundary and resets at each Analysis boundary, so peak memory is the window and the per-Analysis offsets (`O(n_analyses)`), independent of the association count. The error names the first offending Analysis and says which of the two it found — a decrease, or a repeat;
 - the variant-centric index MUST be present on every Ragged component (a Ragged Store Release or a Hybrid Overflow) in `format_version` 0.2.0, agrees with the Analysis-sorted component and is recorded in `provenance.ragged.by_variant`: its `offsets` array is `n_axis + 1` direct offsets spanning `[0, N)`, each variant holds exactly as many index rows as the component holds at that variant, `analysis_index` is non-decreasing within each variant's block and names a real Analysis, `eaf`/`imputed`/`n` are present on both sides or neither, and the cell contents match the Analysis-sorted planes (§11.1, ADR 0060);
 - the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it, carries an imputed mask, holds one entry per variant of its axis, and holds only frequencies in `[0, 1]`;
 - the `n` plane is present exactly when the `encoding` block declares one, in the declared dtype, and only beside a `float16` `se` plane; its length equals the CSR's; every code is a count from 1 to `2³² − 2` or the missing code; the plane holds at least one N, since an all-missing plane reads exactly like a release without one; every Analysis holding an N declares `sample_size_scope=variant_level`; and the by-variant copy is present on both sides or neither and its sampled cells equal the CSR's (§6a, §11, ADR 0067). The read is windowed, never the whole plane;
@@ -1857,15 +1935,155 @@ Validators MUST check at least:
 - the per-variant chunking rule applies to the **inner** chunk of a sharded array, not to the shard (§6, §10a);
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).
 
+### 20.0 Validation Rules
+
+Every check above is a named **Validation Rule** (ADR 0074). A rule judges one kind of
+target:
+- *release*: a Store Release, a Hybrid's outer release, or its nested Dense Component;
+- *grid*: a Dense grid, a Dense Component's included;
+- *sequence*: a Ragged release's association sequence, or a Hybrid's Ragged Overflow.
+
+A rule may run after others. It is skipped, and recorded as skipped with the rules
+that blocked it, when one of those failed or was skipped on its target or a target it
+belongs to. A skip is not a pass. Whether a rule applies to a target is asked only
+after its prerequisites passed. `fidelity.source`, which runs after every error rule
+before it, is stopped only by one that failed. A *fold* is judged from one streamed read of its
+target that every fold on it shares; a *check* reads what it needs. A fold may run after an
+earlier fold on the same read: that prerequisite is decided when the read ends, the
+folds are judged in this table's order, and whether the later fold applies is asked
+before the read.
+
+`validate_store(path, rules={...})` runs the named rules and the rules they run after,
+and refuses a name this table does not list. `ValidationResult.failed()` names the
+rules that reported an error. `validate --format json` reports each finding's rule,
+severity and target beside its message, skips included (§20.1). The names are
+stable: a rule is renamed or removed only by a
+change to this table, which the test suite holds to the registry, in its order.
+
+| Rule | Judges | Kind | What it checks |
+|---|---|---|---|
+| `manifest.loads` | release | check | `manifest.json` loads, in a format this build reads; nothing else runs without it |
+| `zarr.format` | release | check | the Zarr tree is in the on-disk format `format_version` names |
+| `envelope.required` | release | check | every entry the layout requires is present |
+| `envelope.closed` | release | check | no entry the layout does not produce is present |
+| `manifest.coverage` | release | check | the declared association coverage is one the layout can carry |
+| `sqlite.analyses_table` | release | check | `index.sqlite` holds no `analyses` table |
+| `variant_table.rows` | release | fold | the Store Variant Table has as many rows as its offset sidecar |
+| `variant_table.alid_index` | release | fold | the ALID search index covers exactly the indexable ALIDs, collision-free |
+| `variant_table.rsid_index` | release | fold | every rsid in the table resolves through the rsid search index |
+| `variant_table.sequence` | release | fold | rows are in `variant_index` order, one per canonical variant |
+| `variant_table.representatives` | release | fold | the offset sidecar and the tabix index find the rows the table holds |
+| `sqlite.variant_aliases` | release | check | every alias names a variant the table holds; skipped where there is no alias table |
+| `analyses.readable` | release | check | `analyses.tsv` parses |
+| `analyses.retired_columns` | release | check | no retired column is present |
+| `analyses.analysis_index` | release | check | one row per `analysis_index`, covering exactly `0..n-1` |
+| `analyses.analysis_id` | release | check | no `analysis_id` names two rows |
+| `analyses.completion_declared` | release | check | every `completion_n_imputed_total` is an integer, and an Analysis completed against no ancestry declares no imputed cells |
+| `analyses.vocabularies` | release | check | each controlled column holds only its vocabulary's values |
+| `analyses.top_hit_count_columns` | release | check | the Top-Hit Count columns are present and non-negative integers |
+| `csr.arrays` | sequence | check | `offsets`, `variant_index`, `z` and `se` are present |
+| `csr.lengths` | sequence | check | each parallel array, `eaf` included, holds one entry per association |
+| `csr.analyses` | sequence | check | `analyses.tsv` has one row per segment `offsets` bounds |
+| `csr.observed_only` | sequence | check | an Overflow holds no imputed array |
+| `hybrid.dense_to_shared` | release | check | `dense_to_shared` names distinct rows of the shared variant table |
+| `hybrid.component` | release | check | the Dense Component opens, as a Dense release |
+| `hybrid.plan` | release | check | both components declare one statistic encoding |
+| `hybrid.coverage` | release | check | each Dense Component row's shared row holds its variant |
+| `encoding.dtypes` | grid, sequence | check | each plane has the dtype its declared encoding stores |
+| `encoding.per_variant_chunks` | grid, sequence | check | no per-variant array is chunked as one block |
+| `encoding.eaf` | grid, sequence | check | the `eaf` plane, baseline, exception table and reference match the plan |
+| `encoding.n` | grid, sequence | check | the `n` plane is present exactly when declared, in its dtype, beside a `float16` `se` |
+| `encoding.se` | grid, sequence | check | the `se` plane's coefficients and exception table match the plan |
+| `encoding.z` | grid, sequence | check | the `z` plane's overflow table matches the plan |
+| `sample_size.length` | sequence | check | the `n` plane holds one code per association |
+| `by_variant.present` | sequence | check | the variant-centric index is present in format 0.2.0; skipped in 0.1.0 without one |
+| `by_variant.provenance` | sequence | check | the manifest records the index, and describes the index present |
+| `by_variant.offsets` | sequence | check | the index's runs span `[0, N)` over the variant axis, and each column is `N` long |
+| `by_variant.members` | sequence | check | `eaf`, `imputed` and `n` are on both sides or neither |
+| `by_variant.layout` | sequence | check | each index array has its role's inner chunk and shard |
+| `by_variant.analyses` | sequence | fold | every index row names one of the component's Analyses |
+| `by_variant.order` | sequence | fold | within each variant's run, the rows' Analyses are non-decreasing |
+| `grid.planes` | grid | check | `z` and `se` are present, and every plane spans the grid's axes |
+| `grid.eaf_side_lengths` | grid | check | the per-variant `eaf` side arrays are the variant axis's length |
+| `completion.mask` | grid, sequence | check | a completed component carries a mask of its shape, and a grid binary panel flags |
+| `csr.segment_order` | sequence | fold | `variant_index` strictly increases within every Analysis's segment |
+| `csr.shared_rows` | sequence | fold | an Overflow's `variant_index` addresses rows of the shared variant table |
+| `hybrid.partition` | sequence | fold | no Overflow association is at a Dense Component variant |
+| `by_variant.counts` | sequence | fold | each variant holds as many index rows as the sequence holds cells |
+| `associations.decodable` | grid, sequence | fold | every block's SE decodes under the declared plan |
+| `associations.se_infinite` | grid, sequence | fold, warning | names the cells of a `float16` `se` plane holding `+inf` |
+| `associations.se_negative` | grid, sequence | fold | no finite SE is negative |
+| `associations.markers_paired` | grid, sequence | fold | Z and SE are missing in exactly the same cells |
+| `associations.markers_canonical` | grid, sequence | fold | every missing marker is the canonical one |
+| `completion.mask_binary` | grid, sequence | fold | the imputed mask holds only 0 and 1 |
+| `completion.imputed_present` | grid, sequence | fold | an imputed cell carries both Z and SE |
+| `completion.off_panel` | grid | fold | no off-panel row is imputed |
+| `completion.declaration` | grid, sequence | fold | each Analysis holds imputed cells exactly when it declares them |
+| `associations.eaf_range` | grid, sequence | fold | no decoded frequency falls outside `[0, 1]`; skipped on a component holding none, and behind `side_tables.eaf_exceptions` where the plane cannot be decoded |
+| `side_tables.z_overflow` | grid, sequence | fold | the `z` overflow table describes exactly the overflow cells |
+| `side_tables.eaf_exceptions` | grid, sequence | fold | the `eaf` exception table describes exactly the exception cells, and a plane that cannot be decoded is reported |
+| `side_tables.se_exceptions` | grid, sequence | fold | the `se` exception table describes exactly the exception cells |
+| `sample_size.codes` | sequence | fold | every `n` code is a sample size or the missing code, and some cell holds a size |
+| `sample_size.scope` | sequence | fold | an Analysis holding per-association N declares `variant_level` scope |
+| `top_hits.arrays` | grid, sequence | check | every tier carries the arrays a tier is made of |
+| `top_hits.structure` | grid, sequence | check | every tier has parallel arrays, sound offsets and ordered slices |
+| `top_hits.abs_z` | sequence | check | every tier's `abs_z` is its `z`'s magnitude |
+| `top_hits.held` | sequence | fold | every tier cell is an association the sequence holds |
+| `top_hits.z` | grid, sequence | fold | every tier cell's Z agrees with the decoded plane and clears the cutoff |
+| `top_hits.se` | grid, sequence | fold | every tier cell's SE equals the decoded plane's |
+| `top_hits.imputed` | grid, sequence | fold | every tier cell's imputed flag equals the mask's |
+| `top_hits.eaf` | grid, sequence | fold | every tier cell's EAF equals the decoded plane's |
+| `top_hits.complete` | grid, sequence | fold | a tier holds every cell whose \|z\| clears its cutoff |
+| `by_variant.sample` | sequence | check | sampled index cells hold the codes and exact values the sequence holds |
+| `completion.quality_table` | grid, sequence | check | the `completion_quality` table is complete and names real Analyses |
+| `completion.n_missing_column` | grid, sequence | check | `analyses.tsv` carries `completion_n_missing_total` |
+| `rho.members` | grid | check | a Rho Matrix records its provenance and carries its arrays |
+| `rho.analyses` | grid | check | the matrix was estimated over the release's Analyses |
+| `rho.lengths` | grid | check | `rho` and `n_null` hold one entry per pair of Analyses |
+| `rho.values` | grid | check | rho is finite exactly where it has null support, and in `[-1, 1]` |
+| `rho.variants` | grid | check | `variant_index` holds the variants the estimate used |
+| `layout.recorded` | grid | check | the three layout recordings describe the planes |
+| `hybrid.recordings` | release | check | a Hybrid's outer recordings describe its Dense Component's planes |
+| `subsets.indexed` | grid | check | every Indexed Variant Subset is self-consistent and value-equal |
+| `eaf_orientation.readable` | release | check | the table the orientation rules read can be read |
+| `eaf_scope.plan` | release | check | `eaf_scope` and the plan's `eaf` kind agree |
+| `eaf_orientation.evidence` | release | check | every Analysis storing EAF carries orientation evidence, recorded alike twice |
+| `eaf_orientation.unverified` | release | check, warning | names each Analysis whose orientation is `unverified` |
+| `fidelity.unsupported` | release | check | a source is given only for a Dense release |
+| `fidelity.source` | grid | check | sampled source associations equal the stored ones |
+
 ### 20.1 Validation and inspection CLI interface
 
 Command-line validation (`ogdb validate`) and inspection (`ogdb info`) provide both human-readable text output (default) and machine-readable JSON output via `--format json` (issue #175, ADR 0042):
 
 - `ogdb validate <store> --format json` outputs a single JSON object on `stdout`:
   ```json
-  {"ok": true, "errors": [], "warnings": []}
+  {"ok": true, "errors": [], "warnings": [], "findings": []}
   ```
   On failure (`ok=false`), it outputs the JSON object containing the recorded error strings on `stdout` and exits with a non-zero exit code. On success, `stderr` is empty.
+  `findings` names the rule behind every record (§20.0, ADR 0074, issue #378): each
+  item is an object of exactly `rule`, `severity`, `target` and `message`, all
+  strings, where `severity` is `error`, `warning` or `skip`, `rule` is a name from
+  §20.0's table, `target` is the part of the release the rule judged — `.` for the
+  release, `data.zarr` for a Dense grid, `data.zarr/ragged` for an association
+  sequence, `dense` and `dense/data.zarr` for a Hybrid's Dense Component — and
+  `message` is the same string the rule's entry in `errors` or `warnings` holds,
+  or, for a skip, the reason ADR 0074 records for it: the rules that blocked it, or
+  the rule's own reason for having nothing to judge. A skipped rule appears once per
+  target it could not judge, one record whose message names every rule that blocked
+  it in the order it looks them up, so a release where a rule never ran is not
+  indistinguishable from one where every rule passed. The order is deterministic:
+  rule order, as §20.0's table lists the rules, then target order; a rule's failures
+  and warnings on a target come before its skip of that target, and a rule is one or
+  the other, never both. A rule that enumerates something the store holds unordered
+  — a Zarr group's members above all — sorts it, so the tiers of a Top-Hit Index are
+  named by threshold and then by name, strictest first (`p_5e_08`, `p_5e_06`,
+  `p_5e_04`), a tier whose threshold will not parse last; and the nodes
+  `zarr.format` walks are named by path. `ok`, `errors` and `warnings` carry the
+  messages and the verdict they carried before this key, and `errors` and `warnings`
+  remain the `message`s of the `error` and `warning` records in that order. Order is
+  the one thing that changed: a release that named the same defects in a different
+  order on each run names them in one.
 - `ogdb info <store> --format json` outputs a single JSON object on `stdout` representing the store release manifest with decomposed structured encoding:
   ```json
   {
@@ -2209,6 +2427,50 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   with `--cis-window-bp 1000000` against the HGDP+1kGP EUR panel, the refit moved all 135,596
   observed SEs (by a median of 0.09% and at most 0.14%) and the check failed with
   `se_mismatch`; since #301 none moves and the check passes.
+
+### 20.5 Association TSV: building a Dense Store with `build-dense`
+
+`ogdb build-dense OUTPUT --manifest MANIFEST.tsv --store-id ID --release-id ID
+--admission-record DIR` builds a Dense Observed-Only Store from a build manifest
+(issue #385, ADR 0076). The manifest is the one every builder reads: a row per
+Analysis, with `analysis_id`, `source_file`, `stored_effect_scale` and
+`original_sd_method`, and optionally the label, Trait Ontology, attribution,
+`maf_threshold` and `info_score_threshold` columns. Each row's `source_file` is
+that Analysis's **association TSV**, read as `opengwasdb.association-tsv`,
+which a row that omits `source_reader_capability` takes. The Store's columns are
+the manifest's rows in order.
+
+- An association TSV holds associations only, one Analysis per file. It names
+  its columns as `chromosome`/`chrom`/`chr`, `position`/`pos`/`base_pair_location`,
+  `effect_allele`/`ea`/`a1`, `other_allele`/`oa`/`a2`/`non_effect_allele`,
+  `se`/`standard_error`, `z`/`zscore`/`z_score` or else
+  `beta`/`effect`/`effect_size`, and optionally `eaf`/`effect_allele_frequency` and
+  `rsid`/`variant_id`. A `.csv` file is comma-delimited; `.gz` is read
+  compressed. A header that names a column the manifest owns (an Analysis id,
+  label, Trait Ontology, attribution, effect scale, `maf_threshold` or
+  `info_score_threshold`) is refused.
+- The format declares no reference allele (§5): its effect and other alleles
+  need not be REF and ALT.
+- A row that cannot be read (a required field missing, a number that is not
+  one, equal alleles) refuses the run, naming the row. A row whose identity no
+  ALID can spell (§4) is dropped by Association Admission and logged.
+- A build whose sources spell one site in different case and name it with
+  different rsids is refused, naming the routing key and both rsids (§4,
+  issue #379).
+- `build-dense` does not lift. Each row's source assembly (`source_assembly`,
+  default `--reference-assembly`, which is `GRCh37` unless given) must be the
+  assembly the Store records, and a row in another is refused.
+- A row whose reader is not `opengwasdb.association-tsv`, a numeric INFO
+  threshold (an association carries no imputation score), and an
+  `original_sd_method` of `unavailable` are refused; an SD-rescaling method
+  divides the Analysis's standard errors by its `original_sd`, as in
+  `build-dense-vcf` (§7).
+- The Python API's source-fidelity check, `validate_store(store, source=...)`
+  (§20.0), takes the same build manifest. It compares each sampled source
+  association with the Store after that standardisation, reads a source as the
+  build does (a row the build dropped as malformed is not a failure), and
+  reports `fidelity.source` for a bare association TSV, which names no Analysis,
+  or a manifest with no rows.
 
 ## 21. Compatibility
 

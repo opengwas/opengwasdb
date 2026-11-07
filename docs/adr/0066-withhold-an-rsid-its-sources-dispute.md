@@ -1,5 +1,28 @@
 # Withhold an rsid its sources dispute, and read compound ids as their rs identifier
 
+> **Clarified 5 November 2026** (issue
+> [#379](https://github.com/opengwas/opengwasdb/issues/379), the owner's ruling
+> "compare everywhere"). The rule below holds in every harvest, not only in a
+> single-pass Hybrid build's. A two-pass build, Hybrid or Dense, compares the
+> names a site's spellings carry and refuses or withholds a disputed one exactly
+> as a single-pass build does, through the same test
+> (`opengwasdb.variants.routing.names`), so no such name depends on the order of
+> the sources. `--on-rsid-conflict` keeps its meaning, and a `--reference-panel`
+> build now accepts `drop` and reports `n_keys` and `n_variants` instead of
+> `null`; only a reference that names its own variants reports `null`.
+> Variant Reference extraction has no policy and refuses, so an artifact a
+> build uses as given never carries a disputed name. `build-ragged-ssf`
+> compares the rows it admits, now that a `ReaderBatch` carries each row's
+> spelling (ADR 0076). It has no policy, so it refuses. It now takes the
+> first non-empty rsid among a variant's admitted rows (#400). It used to take
+> the first admitted row's, even a blank one, and the change renames no
+> published variant.
+> `build-dense` compares the rows it admits too, through the spellings its
+> `ReaderBatch`es carry. It has no policy either, so it refuses, as
+> `build-dense-vcf` does. A `build-ragged-besd` file set lists each variant
+> once. The Consequence "A Dense build never meets this" stopped holding with
+> ADR 0075, which upper-cases a Dense routing key too.
+
 A Hybrid build's rsid harvest refuses a routing key whose sources name it with
 two different rsids (issue #255 round 4). OGS-00011, the GWAS Catalog EUR
 Hybrid release, has 99,577 such keys over 3,169 Analyses, so its rebuild cannot

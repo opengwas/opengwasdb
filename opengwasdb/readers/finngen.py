@@ -94,6 +94,9 @@ def _iter_rows(
                 se=tabular.parse_positive_float(row.get("sebeta")),
                 af_alt=tabular.parse_af(row.get("af_alt"), frequencies),
                 rsid=_first_rsid(row.get("rsids")),
+                # SAIGE's two-sided p, for the resolver's effect check (ADR 0069).
+                # It never stands in for an unusable `sebeta` here.
+                p_value=tabular.parse_finite_float(row.get("pval")),
             )
 
 

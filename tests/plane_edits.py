@@ -16,8 +16,8 @@ import numpy as np
 from opengwasdb.encoding import codec as side
 from opengwasdb.encoding.codec import EAF_BASELINE, StoreCodec, positions_pairs
 from opengwasdb.encoding.plan import StoreEncoding
-from opengwasdb.encoding.planes import SE_COEFFICIENTS, DenseEafPlane, DenseSePlane, DenseZPlane
-from opengwasdb.store.arrays import compressor, write_shard_cells
+from opengwasdb.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.store.arrays import SE_COEFFICIENTS, compressor, write_shard_cells
 
 
 def patch(

@@ -14,9 +14,10 @@ This module pins the two properties the change must hold:
   `lookup`, and the Hybrid off-panel paths) must return the same six arrays as
   an oracle built from the Analysis-side `analysis` and Overflow reads
   decode -- the slice path #253 owns -- with and without `observed_only`.
-* **bounded reads.** No variant-side query decodes a whole plane: `z_all` and
-  `se_all` are never called, and a query whose answer touches one chunk of `z`
-  reads one chunk, not every chunk, even when the array holds more than one.
+* **bounded reads.** No variant-side query decodes a whole plane: no slice of
+  `z` or `se` is wider than a scan window, and a query whose answer touches one
+  chunk of `z` reads one chunk, not every chunk, even when the array holds more
+  than one.
 
 The wrong version lives in the test that monkeypatches it: a dropped imputed
 mask, asserted to make the identity check fail, so the identity check is known
@@ -52,7 +53,7 @@ from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.validation import validate as validate_module
+from opengwasdb.validation.rules import sequence as sequence_rules
 from opengwasdb.validation import validate_store
 
 
@@ -377,20 +378,30 @@ def test_identity_catches_a_dropped_imputed_mask(
 # ── bounded reads ───────────────────────────────────────────────────────────
 
 
-def _no_whole_plane(name: str):
-    def _boom(*_args, **_kwargs):
-        raise AssertionError(f"{name} must not be called by the variant-side scan")
+def _slice_widths(monkeypatch: pytest.MonkeyPatch, names: tuple[str, ...]) -> list[int]:
+    """The width of every slice the CSR's `names` decode from here on."""
+    widths: list[int] = []
+    for name in names:
+        real = getattr(RaggedCSRReader, name)
 
-    return _boom
+        def counted(self, start, end, *args, _real=real, **kwargs):
+            widths.append(int(end) - int(start))
+            return _real(self, start, end, *args, **kwargs)
+
+        monkeypatch.setattr(RaggedCSRReader, name, counted)
+    return widths
 
 
 def test_variant_shapes_never_decode_whole_planes(
     ragged_residual: RaggedResidualScenario, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No variant-side shape may call the whole-plane `z_all`/`se_all` decoders."""
-    monkeypatch.setattr(RaggedCSRReader, "z_all", _no_whole_plane("z_all"))
-    monkeypatch.setattr(RaggedCSRReader, "se_all", _no_whole_plane("se_all"))
+    """No variant-side shape decodes a whole plane: no Z or SE slice is wider than a
+    scan window, here made narrower than the sequence."""
+    window = 64
+    monkeypatch.setattr(RaggedCSRReader, "scan_window", property(lambda _self: window))
+    widths = _slice_widths(monkeypatch, ("z_slice", "se_slice"))
     with query_store(ragged_residual.completed) as query:
+        assert query._csr.sequence_length > window, "the sequence must outrun a window"
         alid = _any_alid(query)
         query.phewas(alid)
         query.range_phewas("1", 900_000, 1_600_000)
@@ -399,6 +410,7 @@ def test_variant_shapes_never_decode_whole_planes(
         # fallback is the variant-side path this test is about, so call it
         # directly rather than depend on the fixture having no index.
         query._top_hits_by_scan(analysis_id=None, threshold=5e-8, limit=None, observed_only=False)
+    assert widths and max(widths) <= window, f"widest slice {max(widths, default=0)}"
 
 
 # ── a genuinely multi-chunk store: reads are bounded by the answer ──────────
@@ -683,22 +695,35 @@ def test_validation_rejects_an_unsorted_persisted_segment(tmp_path: Path) -> Non
     assert any("Analysis 1's segment" in error for error in mutated.errors), mutated.errors
 
 
-def test_segment_first_break_detects_a_cross_window_decrease(
+def _ordered(
+    monkeypatch: pytest.MonkeyPatch, offsets: list[int], values: list[int]
+) -> tuple[list[str], int]:
+    """The ordering rule alone over `values`, three cells read at a time."""
+    monkeypatch.setattr(sequence_rules, "_ORDER_WINDOW", 3)
+    errors: list[str] = []
+    read = sequence_rules.segment_order_errors(
+        {"variant_index": np.array(values, dtype=np.int32)},
+        np.array(offsets, dtype=np.int64),
+        offsets[-1],
+        errors,
+        "data.zarr/ragged",
+    )
+    return errors, read
+
+
+def test_segment_order_detects_a_cross_window_decrease(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A decrease at the start of a window is caught by the carried value."""
-    monkeypatch.setattr(validate_module, "_ORDER_WINDOW", 3)
-    values = np.array([1, 2, 3, 2], dtype=np.int32)
-    failure, read = validate_module._segment_first_break(values, 0, 4)
-    assert failure is not None
-    assert failure.offset == 3, (
-        "the first row of the second window is below the first window's last"
-    )
-    assert failure.kind == validate_module._DECREASE
+    """A decrease at the start of a window is caught by the cell carried across."""
+    errors, read = _ordered(monkeypatch, [0, 4], [1, 2, 3, 2])
+    assert errors == [
+        "data.zarr/ragged/variant_index is not non-decreasing within Analysis 0's "
+        "segment: offset 3 holds 2 after 3"
+    ], "the first row of the second window is below the first window's last"
     assert read == 4
 
 
-def test_segment_first_break_detects_a_repeat_at_its_own_offset(
+def test_segment_order_detects_a_repeat_at_its_own_offset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A repeated variant is a break, and the first break is the one reported.
@@ -707,23 +732,27 @@ def test_segment_first_break_detects_a_repeat_at_its_own_offset(
     that window: if the scan looked for one kind before the other, it would
     report the later row and name the wrong offset.
     """
-    monkeypatch.setattr(validate_module, "_ORDER_WINDOW", 3)
-    values = np.array([1, 2, 3, 3, 2], dtype=np.int32)
-    failure, read = validate_module._segment_first_break(values, 0, 5)
-    assert failure is not None
-    assert failure.offset == 3, "offset 3 repeats offset 2's variant"
-    assert failure.kind == validate_module._REPEAT
+    errors, read = _ordered(monkeypatch, [0, 5], [1, 2, 3, 3, 2])
+    assert len(errors) == 1
+    assert "repeats variant 3" in errors[0]
+    assert "offsets 2 and 3 both hold it" in errors[0], "offset 3 repeats offset 2's variant"
     assert read == 5
 
 
-def test_segment_first_break_resets_at_analysis_boundaries(
+def test_segment_order_resets_at_analysis_boundaries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A lower first value in the next Analysis is not a decrease."""
-    monkeypatch.setattr(validate_module, "_ORDER_WINDOW", 3)
-    values = np.array([5, 6, 1, 2], dtype=np.int32)
-    assert validate_module._segment_first_break(values, 0, 2) == (None, 2)
-    assert validate_module._segment_first_break(values, 2, 4) == (None, 2)
+    """A lower first value in the next Analysis is not a decrease, across a window or not."""
+    assert _ordered(monkeypatch, [0, 2, 4], [5, 6, 1, 2]) == ([], 4)
+    assert _ordered(monkeypatch, [0, 3, 4], [5, 6, 7, 1]) == ([], 4)
+
+
+def test_segment_order_is_one_rule_for_the_scan_and_the_evidence_runner() -> None:
+    """The fold and the standalone check find a break with the same predicate."""
+    found = sequence_rules.first_break(
+        np.array([0, 0, 1], dtype=np.int32), np.array([4, 9, 2], dtype=np.int32), 10, (0, 4)
+    )
+    assert found == sequence_rules.SegmentBreak(analysis=0, offset=10, previous=4, held=4)
 
 
 def test_validation_rejects_a_variant_held_twice_in_one_analysis_slice(tmp_path: Path) -> None:
