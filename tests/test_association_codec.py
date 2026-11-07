@@ -23,6 +23,7 @@ from opengwasdb.encoding.association_codec import (
 from opengwasdb.encoding.codec import EafExceptionBuilder, SeExceptionBuilder, StoreCodec
 from opengwasdb.encoding.plan import (
     EAF_EXCEPTION,
+    SE_EXCEPTION,
     EafEncoding,
     SeEncoding,
     StoreEncoding,
@@ -405,6 +406,54 @@ def test_a_cell_admission_forbids_never_reaches_a_plane() -> None:
     at = Placement.pairs(np.array([0]), np.array([0]), _N_ANALYSES)
     with pytest.raises(NotAdmitted, match="one of z and SE missing"):
         _codec().encode(cells, at, where="x")
+
+
+@pytest.mark.parametrize("residual_in_steps", [10.3, 127.4999], ids=["off-grid", "range-edge"])
+def test_a_carried_se_is_held_exactly_when_its_code_would_not_decode_to_it(
+    residual_in_steps: float,
+) -> None:
+    """Issue #301: a carried cell -- one Ragged completion decoded from its source --
+    must decode to exactly its value. Coded, the first cell would read back as code
+    10 (or 127, at the range's edge: a source exception whose `float32` value has
+    rounded inside the range), so it is held as an exact exception; the second sits
+    on code 10's value and stays a code; the third is not carried and is coded."""
+    codec, step = _codec(), _RESIDUAL.se.step
+    at = Placement.pairs(np.array([5, 6, 7]), np.array([1, 1, 1]), _N_ANALYSES)
+    eaf = codec._baseline[[5, 6, 7]]  # each cell at its baseline: EAF code 0
+    decoded_eaf = codec.round_trip(
+        CellValues(_f32(1, 1, 1), _f32(0.1, 0.1, 0.1), eaf=eaf), at, where="x"
+    ).eaf
+    intercept, slope = (np.float64(c) for c in codec._model()[1])
+    f = decoded_eaf.astype(np.float64)
+    prediction = intercept + slope * np.log(2.0 * f * (1 - f))
+    on_grid = round(residual_in_steps)
+    se = np.array(
+        [
+            np.exp(prediction[0] + residual_in_steps * step),
+            np.exp(prediction[1] + on_grid * step),
+            np.exp(prediction[2] + residual_in_steps * step),
+        ],
+        dtype=np.float32,
+    )
+    cells = CellValues(_f32(1, 1, 1), se, eaf=eaf)
+    plain = codec.encode(cells, at, where="x")
+    assert plain.se.tolist() == [on_grid] * 3, "fixture: coded, every cell is ordinary"
+    assert codec.round_trip(cells, at, where="x").se[0] != se[0], "fixture: and the first moves"
+
+    encoded = codec.encode(cells, at, where="x", carried=np.array([True, True, False]))
+
+    assert encoded.se.tolist() == [SE_EXCEPTION, on_grid, on_grid]
+    table = encoded.tables.se_exceptions
+    assert table.index.tolist() == [5 * _N_ANALYSES + 1]
+    assert table.value.view(np.uint32).tolist() == [se[0].view(np.uint32)]
+    back = encoded.tables.decoder(_RESIDUAL).decode_se(
+        encoded.se,
+        eaf=decoded_eaf,
+        analysis_index=np.ones(3, np.int64),
+        coefficients=codec._model(),
+        positions=at.positions,
+    )
+    assert back[:2].view(np.uint32).tolist() == se[:2].view(np.uint32).tolist()
 
 
 # ── Writing an encoded batch ─────────────────────────────────────────────────

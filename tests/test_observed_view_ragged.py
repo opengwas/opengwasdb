@@ -71,8 +71,8 @@ ANALYSES = [
 EXPECTED = {"observed_in_source": 18, "imputed": 2, "nan_rows": 4, "regions": 3}
 N_ANALYSES = 4
 # `afr_other` reports no frequency. One Analysis without EAF keeps SE as float16 for the whole
-# Store (ADR 0037 section 3), which completion then carries exactly; with residual-coded SE the
-# refit re-quantises the observed SE of every Analysis it imputes into, see the spec's Ragged scope.
+# Store (ADR 0037 section 3), which completion then carries exactly. Residual-coded SE is carried
+# exactly too (issue #301); `test_ragged_completion_keeps_observed_se.py` checks that pair.
 NO_EAF = "afr_other"
 
 

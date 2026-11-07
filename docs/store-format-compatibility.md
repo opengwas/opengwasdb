@@ -50,6 +50,13 @@ them carries `ragged/n` and `ragged/by_variant/n`. A package built before #302
 reads the latter as it always read a Ragged release, without `n`, but its
 validator refuses `ragged/by_variant/n` as an unregistered array (ADR 0067).
 
+**#301 adds a provenance key without moving `format_version`.** A Ragged
+completion whose SE is `int8_residual` records each Analysis's SE exception
+share in `provenance.completion.se_exceptions` (ADR 0078). No array or
+encoding changes: the completed planes are coded against the source's own
+`se_coefficients`, which every reader already decodes, and a package built
+before #301 reads the new key as it reads any other provenance.
+
 ## Keeping this page true
 
 A pull request that moves `format_version`, or changes which formats the
