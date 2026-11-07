@@ -10,7 +10,7 @@ INTRO = """\
 # Test Panel
 
 The **Test Panel** (`CONTEXT.md`) is a real slice of HGDP+1kGP EUR, committed so that every
-ogld test that needs genotypes reads the same data: {n_variants} variants on chr21 and chr22 for
+ogld test that needs genotypes reads the same data: {n_variants:,} variants on chr21 and chr22 for
 all {n_samples} EUR samples, with their PC File and independent reference answers. Load it with
 `tests/testdata.py`; a test never parses these files itself.
 
@@ -26,8 +26,9 @@ every r is signed to the **ALT** allele; a builder re-signs it to the engine A1.
   downloaded and checked against the bucket's CRC32C. All 771 members of
   `/data/opengwasdb/reference/hgdp1kgp-hg38/members/EUR.keep` are in it. It has no missing
   calls, so no imputation is involved: the build input rule is that genotypes are complete.
-- **PCs:** {pcs_source}: our own 20 PCs, gnomAD's subcontinental recipe on v2 with the
-  Long-Range LD Regions excluded (`scripts/make_pcs.py`), the PCs the EUR build uses.
+- **PCs:** our own 20 PCs, from gnomAD's subcontinental recipe run on v2 with the Long-Range LD
+  Regions excluded (`scripts/make_pcs.py`): the PCs the EUR build uses. Declared source:
+  "{pcs_source}".
 - **Terms:** gnomAD's primary data "are available free of restrictions under the Creative Commons
   Zero Public Domain Dedication", and "All users of gnomAD data agree to not attempt to reidentify
   participants" (gnomAD Terms of Use, https://gnomad.broadinstitute.org/terms, read 7 November
@@ -77,7 +78,8 @@ def render(params: Params, m: dict[str, Any]) -> str:
     c, e = m["counts"], m["edge_cases"]
     parts = [INTRO.format(n_variants=c["n_variants"], n_samples=c["n_samples"],
                           pcs_source=params.pcs_source, settings=_settings(params)),
-             _files(m), REGENERATE.format(conversion=" ".join(m["conversion_command"])),
+             _files(m), REGENERATE.format(conversion=" ".join(
+                 str(a).replace(str(params.work), "<work>") for a in m["conversion_command"])),
              _filters(c), _covariates(m["pc_check"]), _edges(e), _gwas(params, e["gwas"]),
              _size(m)]
     return "\n".join(parts)
@@ -90,7 +92,7 @@ def _settings(p: Params) -> str:
         f"- **MAC >= {p.mac_min}**, counted on the 771 EUR samples.",
         "- **Complete genotypes:** a missing call stops the run, as it stops a build.",
         f"- **PC Adjustment** at k = {', '.join(map(str, p.ks))}; at k = 10, t_far = "
-        f"{p.t_far(771, 10)!r}."])
+        f"{p.t_far(771, 10):.7f}."])
 
 
 FILES = {

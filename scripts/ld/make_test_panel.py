@@ -24,7 +24,9 @@ It is deterministic: a fixed seed, no timestamps, and first-by-position or stron
 
 from __future__ import annotations
 
+import os
 import shutil
+import sys
 from pathlib import Path
 
 from test_panel import answers, assemble, extract, outputs, sites, summary
@@ -56,7 +58,22 @@ def counts(panel: assemble.Panel, a: answers.Answers, n: int) -> dict[str, objec
             "reference_pairs": len(a.i)}
 
 
+BLAS_ONE_THREAD = {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
+
+
+def single_threaded_blas() -> None:
+    """Re-run this script with one BLAS thread unless it already has one.
+
+    A threaded matrix product or QR sums in an order that depends on the thread count, which
+    moves r by an ulp and the committed files' bytes with it; numpy reads the setting only when it
+    loads, so the process starts again. The answers are small, and one thread costs nothing.
+    """
+    if any(os.environ.get(k) != v for k, v in BLAS_ONE_THREAD.items()):
+        os.execve(sys.executable, [sys.executable, *sys.argv], {**os.environ, **BLAS_ONE_THREAD})
+
+
 def main(argv: list[str] | None = None) -> None:
+    single_threaded_blas()
     params = parse(argv)
     (params.work / "logs").mkdir(parents=True, exist_ok=True)
     chosen = choose(params)

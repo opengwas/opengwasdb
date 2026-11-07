@@ -1,7 +1,7 @@
 # Test Panel
 
 The **Test Panel** (`CONTEXT.md`) is a real slice of HGDP+1kGP EUR, committed so that every
-ogld test that needs genotypes reads the same data: 1061 variants on chr21 and chr22 for
+ogld test that needs genotypes reads the same data: 1,061 variants on chr21 and chr22 for
 all 771 EUR samples, with their PC File and independent reference answers. Load it with
 `tests/testdata.py`; a test never parses these files itself.
 
@@ -17,8 +17,9 @@ every r is signed to the **ALT** allele; a builder re-signs it to the engine A1.
   downloaded and checked against the bucket's CRC32C. All 771 members of
   `/data/opengwasdb/reference/hgdp1kgp-hg38/members/EUR.keep` are in it. It has no missing
   calls, so no imputation is involved: the build input rule is that genotypes are complete.
-- **PCs:** ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002): our own 20 PCs, gnomAD's subcontinental recipe on v2 with the
-  Long-Range LD Regions excluded (`scripts/make_pcs.py`), the PCs the EUR build uses.
+- **PCs:** our own 20 PCs, from gnomAD's subcontinental recipe run on v2 with the Long-Range LD
+  Regions excluded (`scripts/make_pcs.py`): the PCs the EUR build uses. Declared source:
+  "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002)".
 - **Terms:** gnomAD's primary data "are available free of restrictions under the Creative Commons
   Zero Public Domain Dedication", and "All users of gnomAD data agree to not attempt to reidentify
   participants" (gnomAD Terms of Use, https://gnomad.broadinstitute.org/terms, read 7 November
@@ -32,7 +33,7 @@ every r is signed to the **ALT** allele; a builder re-signs it to the engine A1.
 - **FILTER:** PASS or `.` only, from the source's own FILTER column, which the conversion keeps in `panel.pvar`.
 - **MAC >= 20**, counted on the 771 EUR samples.
 - **Complete genotypes:** a missing call stops the run, as it stops a build.
-- **PC Adjustment** at k = 0, 10; at k = 10, t_far = 0.027421052631578947.
+- **PC Adjustment** at k = 0, 10; at k = 10, t_far = 0.0274211.
 
 Each is a parameter of `scripts/make_test_panel.py`; a changed decision is one run with the new
 value, which regenerates every file here.
@@ -47,7 +48,7 @@ value, which regenerates every file here.
 | `panel.keep` | `#IID`, the 771 samples | 6,609 |
 | `pcs.eigenvec` | the PC File: `#IID PC1 ... PC20` | 173,618 |
 | `variants.tsv` | per row: FILTER, MAC, `passes_filters`, `drop_reason`, `components` | 44,956 |
-| `reference/r.npz` | `row_i`, `row_j`, `r_k0`, `r_k10`: every same-chromosome pair of passing rows at most 10 Mb apart, row_i < row_j | 1,715,613 |
+| `reference/r.npz` | `row_i`, `row_j`, `r_k0`, `r_k10`: every same-chromosome pair of passing rows at most 10 Mb apart, row_i < row_j | 1,715,626 |
 | `plink2/r_unphased_k0.npz` | `r`: plink2 --r-unphased, float64, aligned with `reference/r.npz` | 838,217 |
 | `plink2/clump_r2_0.01.clumps` | plink2 --clump at r2 0.01, 3,000 kb; IDs are `r<row>` | 587 |
 | `plink2/clump_r2_0.001.clumps` | the same at r2 0.001 | 514 |
@@ -72,7 +73,7 @@ checks that both conversions give identical genotypes, then computes every answe
 first-by-position or strongest-first. The conversion that made `panel.*`:
 
 ```text
-plink2 --vcf /data/opengwasdb/work/tmp/claude-276801/-data-opengwasdb-work-orchestrate-ogld-1-worktrees-2d/0fabf912-4bbf-40b7-9135-647a010b197d/scratchpad/data/tp_work/test_panel.vcf.gz --keep /data/opengwasdb/reference/hgdp1kgp-hg38/members/EUR.keep --max-alleles 2 --set-all-var-ids @:#:$r:$a --new-id-max-allele-len 1000 --make-pgen pvar-cols=filter --out /data/opengwasdb/work/tmp/claude-276801/-data-opengwasdb-work-orchestrate-ogld-1-worktrees-2d/0fabf912-4bbf-40b7-9135-647a010b197d/scratchpad/data/tp_work/panel
+plink2 --vcf <work>/test_panel.vcf.gz --keep /data/opengwasdb/reference/hgdp1kgp-hg38/members/EUR.keep --max-alleles 2 --set-all-var-ids @:#:$r:$a --new-id-max-allele-len 1000 --make-pgen pvar-cols=filter --out <work>/panel
 ```
 
 ## What the filters leave
@@ -121,4 +122,4 @@ One phenotype from 8 causal variants (rows 287, 353, 421, 537, 612, 693, 774, 79
 
 ## Size
 
-The data files hold 3,000,425 bytes; this README and `manifest.json` add about 26 kB, and `tests/test_testdata.py` holds the whole directory under the 5 MB budget. The reference's float64 r is most of it: r at k = 0, r at k = 10 and plink2's r, 24 bytes a pair. Pairs grow with the square of variant density, so about 2,000 variants at these clusters' density would hold roughly four times the pairs, near 13 MB. The trade made: dense clusters of 150-300 variants, where LD is, and a 300 kb backbone elsewhere, rather than float32 r, which would move a stored code near a rounding edge.
+The data files hold 3,000,438 bytes; this README and `manifest.json` add about 26 kB, and `tests/test_testdata.py` holds the whole directory under the 5 MB budget. The reference's float64 r is most of it: r at k = 0, r at k = 10 and plink2's r, 24 bytes a pair. Pairs grow with the square of variant density, so about 2,000 variants at these clusters' density would hold roughly four times the pairs, near 13 MB. The trade made: dense clusters of 150-300 variants, where LD is, and a 300 kb backbone elsewhere, rather than float32 r, which would move a stored code near a rounding edge.
