@@ -115,9 +115,10 @@ def build_inputs(**overrides: Any) -> ogld.BuildInputs:
     return ogld.BuildInputs(**{**fields, **overrides})
 
 
-def test_build_inputs_defaults_are_the_epic_s() -> None:
+def test_build_inputs_defaults_are_the_owner_s() -> None:
+    # Epic #1 and the owner's decisions of 7 November 2026: up to 10 PCs, at least 5.
     inputs = build_inputs()
-    assert (inputs.k, inputs.mac_min, inputs.info_min) == (10, 20, 0.8)
+    assert (inputs.k, inputs.k_min, inputs.mac_min, inputs.info_min) == (10, 5, 20, 0.8)
 
 
 @pytest.mark.parametrize(
@@ -127,6 +128,8 @@ def test_build_inputs_defaults_are_the_epic_s() -> None:
         ({"k": -1}, "negative"),
         ({"pcs": None}, "PC File"),
         ({"pc_source": None}, "PC File"),
+        ({"k_min": 11}, "k_min"),
+        ({"k_min": -1}, "k_min"),
     ],
 )
 def test_build_inputs_refuse_what_cannot_be_built(overrides: dict[str, Any], message: str) -> None:
@@ -134,7 +137,8 @@ def test_build_inputs_refuse_what_cannot_be_built(overrides: dict[str, Any], mes
         build_inputs(**overrides)
 
 
-def test_k_zero_needs_no_pc_file() -> None:
+def test_k_zero_needs_no_pc_file_and_no_minimum() -> None:
+    # With k = 0 no PC is read, so the minimum does not apply.
     assert build_inputs(k=0, pcs=None, pc_source=None).pcs is None
 
 

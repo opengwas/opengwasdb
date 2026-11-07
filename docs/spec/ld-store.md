@@ -403,10 +403,12 @@ ignores the ones it does not know. The types are `ogld.format.Provenance`, and
 | `n_variants` | int | rows of `variants/` |
 | `near_bp` | int | the distance up to which the store holds every pair: 3000000 |
 | `far_bp` | int | the distance up to which the store measured pairs: 10000000 for a build, and at most that for any store. Every reader and refusal uses this recorded value |
-| `adjustment.covariates` | array of strings | every covariate regressed out of the genotypes, by name, in order: the first k PCs the PC Check kept, such as `"PC1"`, `"PC3"` … `"PC11"` when it dropped PC2; empty for unadjusted LD. An import names its source's, such as Pan-UKB's age, sex, age×sex, age², age²×sex and PC1–PC10 |
-| `adjustment.k` | int | the number of covariates: t_far's k (§3) |
+| `adjustment.covariates` | array of strings | every covariate regressed out of the genotypes, by name, in order: the first up to `k_target` PCs the PC Check kept, such as `"PC1"`, `"PC3"` … `"PC11"` when it dropped PC2; empty for unadjusted LD. An import names its source's, such as Pan-UKB's age, sex, age×sex, age², age²×sex and PC1–PC10 |
+| `adjustment.k` | int | the number of covariates used: t_far's k (§3). For a build, between `k_min` and `k_target` |
+| `adjustment.k_target` | int | the PCs a build aims to use: 10 by default (`BuildInputs.k`) |
+| `adjustment.k_min` | int | the fewest PCs a build may use: 5 by default (`BuildInputs.k_min`). With fewer surviving the PC Check, the build is refused |
 | `adjustment.pc_file` | object or null | the PC File (`docs/spec/build-inputs.md`): `sha256` and its declared `source`, such as the recipe script and release that made it; null when no PC File was read |
-| `adjustment.pc_check` | object or null | the PC Check's result: the rule's `window_bp` (4000000) and `min_share` (0.1); the `scan`, one entry per PC of the PC File with its best `window`, the `window_share` and `rest_share` explained and whether it is `local`; the `dropped` PCs; and the `null` the rest of the genome was judged against (`docs/spec/build-inputs.md`). Null when no PC File was read |
+| `adjustment.pc_check` | object or null | the PC Check's result: the rule's `window_bp` (4000000) and `min_share` (0.1); the `scan`, one entry per PC of the PC File with its best `window`, the `window_share` and `rest_share` explained, the `rest_null` the rest of the genome explains by chance, and whether it is `local` (`window_share` ≥ `min_share` and `rest_share` ≤ `rest_null`); the `dropped` PCs; and the `null` the rest of the genome was judged against (`docs/spec/build-inputs.md`). Null when no PC File was read |
 | `t_far` | float | max(0.001, q / (n − k − 1)) in float64, the value every reader uses |
 | `t_far_q` | float | 20.84: the χ²₁ upper quantile at p = 5×10⁻⁶ |
 | `far_code_floor` | int | §3 |
@@ -444,7 +446,10 @@ ogld's library runs no PCA. The PCs are our own, made outside it by a recipe scr
 gnomAD's subcontinental method with the Long-Range LD Regions ±2 Mb excluded, and a build reads
 them from a PC File. The builder then runs the PC Check: a PC that one 4 Mb window explains
 ≥ 10% of, while the rest of the genome explains it no better than chance, is local and is
-dropped, and the covariates are the first k PCs kept. So the provenance records the PC File's
+dropped. The covariates are the first up to 10 PCs kept, taken in order; if fewer than 10
+survive, the build uses those that do, as long as at least 5 do, and refuses with fewer, naming
+how many survived (owner, 7 November 2026). t_far's k is the number used. So the provenance
+records the target, the minimum and the k used, the PC File's
 hash and declared source and the whole scan, not a PCA method or LD pruning. A PC that tracks a
 region the rest of the genome also explains, such as EUR's north–south axis through LCT, is
 ancestry and is kept (ADR 0002 has the evidence).
@@ -705,7 +710,7 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 | `provenance.complete` | every §7 key is present with its type, null only where §7 allows; other keys are allowed |
 | `provenance.encoding` | `encoding` is exactly §3's: a reader refuses any other before decoding |
 | `provenance.distances` | `near_bp` is 3,000,000, and `near_bp` < `far_bp` ≤ 10,000,000 |
-| `provenance.threshold` | `adjustment.k` equals the number of `adjustment.covariates`; `t_far` equals max(0.001, q / (n − k − 1)) recomputed from provenance, with n − k − 1 > q (so t_far < 1); and `far_code_floor` equals its recomputed value |
+| `provenance.threshold` | `adjustment.k` equals the number of `adjustment.covariates`, and when a PC File was read, `k_min` ≤ k ≤ `k_target`; `t_far` equals max(0.001, q / (n − k − 1)) recomputed from provenance, with n − k − 1 > q (so t_far < 1); and `far_code_floor` equals its recomputed value |
 | `variants.chromosomes` | the `chromosomes` ranges are in chromosome order, contiguous and cover every row |
 | `variants.order` | positions ascend within each chromosome, ties broken by ALID ascending, with no repeated ALID |
 | `variants.identity` | each `alid` is the identity function's ALID for its chromosome, position, `a1` and `a2` (ogld#3) |

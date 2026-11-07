@@ -50,6 +50,7 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--genotype-source", required=True)
     unset = argparse.SUPPRESS
     b.add_argument("--k", type=int, default=unset)
+    b.add_argument("--k-min", type=int, default=unset)
     b.add_argument("--mac-min", type=int, default=unset)
     b.add_argument("--info-min", type=_optional_float, default=unset, help="a number, or none")
     b.add_argument("--threads", type=int, default=unset)
@@ -72,7 +73,7 @@ def _build(args: argparse.Namespace) -> int:
         panel_id=args.panel_id,
         ancestry=args.ancestry,
         genotype_source=args.genotype_source,
-        **_given(args, "k", "mac_min", "info_min"),
+        **_given(args, "k", "k_min", "mac_min", "info_min"),
     )
     provenance = build(inputs, args.out, **_given(args, "threads"))
     print(json.dumps(provenance, indent=1))

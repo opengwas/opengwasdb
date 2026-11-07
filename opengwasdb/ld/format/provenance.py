@@ -57,14 +57,16 @@ class PcScan(TypedDict):
     """One PC of the PC File, as the PC Check scanned it.
 
     `window` is the 4 Mb window that explains most of the PC and `window_share` how much
-    of it; `rest_share` is how much the rest of the genome explains, and `local` whether
-    the PC is dropped. `docs/spec/build-inputs.md` defines the statistics.
+    of it; `rest_share` is how much the rest of the genome explains, and `rest_null` how
+    much it explains by chance. `local` is window_share ≥ min_share and rest_share ≤
+    rest_null: the PC is dropped. `docs/spec/build-inputs.md` defines the statistics.
     """
 
     pc: str
     window: str
     window_share: float
     rest_share: float
+    rest_null: float
     local: bool
 
 
@@ -73,7 +75,8 @@ class PcCheck(TypedDict):
 
     A PC is local, and dropped from the covariates, when one `window_bp` window explains
     at least `min_share` of it and the rest of the genome explains it no better than
-    chance, as `null` records. `scan` holds every PC of the PC File, in order.
+    chance (`PcScan.rest_null`); `null` records how chance was measured. `scan` holds every
+    PC of the PC File, in order. A build with fewer than k PCs kept is refused.
     """
 
     window_bp: int
@@ -86,12 +89,14 @@ class PcCheck(TypedDict):
 class Adjustment(TypedDict):
     """What was regressed out of the genotypes before r was computed (PC Adjustment).
 
-    `covariates` are the first k PCs the PC Check kept, by name; `k` is their number,
-    and it is t_far's k.
+    `covariates` are the PCs the PC Check kept, by name, the first up to `k_target`;
+    `k` is their number, and it is t_far's k. A build with fewer than `k_min` is refused.
     """
 
     covariates: list[str]
     k: int
+    k_target: int
+    k_min: int
     pc_file: PcFile | None
     pc_check: PcCheck | None
 
@@ -169,6 +174,8 @@ REQUIRED_KEYS: Final = (
     "far_bp",
     "adjustment.covariates",
     "adjustment.k",
+    "adjustment.k_target",
+    "adjustment.k_min",
     "adjustment.pc_file",
     "adjustment.pc_check",
     "t_far",

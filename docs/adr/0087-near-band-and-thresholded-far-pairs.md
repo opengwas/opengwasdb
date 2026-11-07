@@ -197,8 +197,10 @@ the owner's later decisions the same day on lane 2d's measurements). ogld's libr
 The PCs are computed outside it by a recipe script that follows gnomAD's subcontinental method with
 the Long-Range LD Regions ±2 Mb excluded from the PCA, and a build reads them from a PC File. The
 builder's PC Check drops a local PC: one that a single 4 Mb window explains ≥ 10% of while the rest
-of the genome explains it no better than chance. The covariates are the first k = 10 PCs it keeps,
-and provenance records the scan, the dropped PCs and the null. Decision 4's "The PCs come from
+of the genome explains it no better than chance. The covariates are the first up to 10 PCs it
+keeps; if fewer survive, those that do, as long as at least 5 do, and the build is refused
+otherwise. t_far's k is the number used, and provenance records the target, the minimum, the k
+used, the scan, the dropped PCs and the null. Decision 4's "The PCs come from
 LD-pruned common variants, with the Long-Range LD Regions excluded" is superseded by
 [ADR 0002](./0002-build-inputs.md), which has the evidence: gnomAD's PCs, which did not exclude the
 regions, and our own, which do, both carry EUR's north–south axis through LCT, and the rule keeps
