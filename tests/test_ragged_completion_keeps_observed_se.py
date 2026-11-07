@@ -37,6 +37,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from stored_rows import stored_rows
 from test_ragged_residual_completion import (
     _FREQS,
     _source_bp,
@@ -48,7 +49,6 @@ from opengwasdb import StoreManifest, open_store
 from opengwasdb.completion.impute import scalar_n_se
 from opengwasdb.encoding import SE_EXCEPTION, SE_EXCEPTION_BUDGET, SE_MISSING
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.analyses import read_analysis_records
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.observed_view import check_observed_view
@@ -183,10 +183,9 @@ def _cells(store: Path) -> dict[tuple[str, str], _Cell]:
     )
     with closing(VariantAxis(store)) as axis:
         alid = {v.variant_index: v.alid for v in axis.all()}
-    reader = RaggedCSRReader(store)
     cells: dict[tuple[str, str], _Cell] = {}
     for ai, analysis_id in enumerate(_analysis_ids(store)):
-        row = reader.get_analysis(ai)
+        row = stored_rows(store, ai)
         for i, (vi, se) in enumerate(zip(row.variant_index, row.se, strict=True)):
             at = int(offsets[ai]) + i
             held = exact.get(at)
