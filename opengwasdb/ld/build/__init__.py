@@ -66,16 +66,21 @@ class BuildInputs:
     def __post_init__(self) -> None:
         if not self.pgen:
             raise InputError("BuildInputs needs at least one pgen")
-        if self.k < 0:
-            raise InputError(f"k counts PCs, so it cannot be negative: {self.k}")
-        if self.k_min < 0:
-            raise InputError(f"k_min counts PCs, so it cannot be negative: {self.k_min}")
-        if self.k > 0 and self.k_min > self.k:
-            raise InputError(f"k_min = {self.k_min} cannot exceed the target k = {self.k}")
+        _check_pc_counts(self.k, self.k_min)
         if self.k > 0 and (self.pcs is None or self.pc_source is None):
             raise InputError(
                 f"k = {self.k} needs a PC File and its declared source; only k = 0 runs without"
             )
+
+
+def _check_pc_counts(k: int, k_min: int) -> None:
+    """The target and the minimum count PCs, and the minimum cannot exceed the target."""
+    if k < 0:
+        raise InputError(f"k counts PCs, so it cannot be negative: {k}")
+    if k_min < 0:
+        raise InputError(f"k_min counts PCs, so it cannot be negative: {k_min}")
+    if k > 0 and k_min > k:
+        raise InputError(f"k_min = {k_min} cannot exceed the target k = {k}")
 
 
 def build(inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1) -> Provenance:

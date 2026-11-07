@@ -1,4 +1,4 @@
-"""The LD Store format as code: encoding, thresholds, answers, refusals, provenance (layer 1).
+"""The LD Store format as code: encoding, thresholds, answers, refusals, provenance (layer 0).
 
 The semantics core of `docs/spec/ld-store.md`, implemented and complete: quantisation
 (§3), t_far and the far code floor (§3), the answer kind of a pair (§8) and the decision
