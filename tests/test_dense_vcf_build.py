@@ -24,7 +24,14 @@ from liftover_fixtures import (
     strand_vcf_rows,
     write_two_strand_chain,
 )
-from residual_fixtures import write_gwas_vcf_with_eaf
+from residual_fixtures import (
+    MAF_VCF_FREQUENCIES,
+    MAF_VCF_N_VARIANTS,
+    maf_vcf_rows,
+    model_se,
+    write_gwas_vcf_with_eaf,
+    write_hg38_manifest,
+)
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
 from opengwasdb.layouts.dense.build_vcf import _spill_column, build_dense_from_vcf_manifest
@@ -1612,69 +1619,26 @@ def test_standalone_gwas_vcf_build_codes_residual_se_and_falls_back_without_eaf(
     back to ``float16`` (and an absent EAF plane) yet still build, query and
     validate.
     """
-    n_variants = 600
-    frequencies = np.linspace(0.05, 0.95, n_variants, dtype=np.float64)
+    n_variants = MAF_VCF_N_VARIANTS
 
-    def model_se(col: int, freq: float, phase: int) -> float:
-        return float(
-            np.exp(
-                (-3.0 + col * 0.2)
-                - 0.5 * np.log(2 * freq * (1 - freq))
-                + 0.12 * np.sin(phase * (0.07 + col * 0.01))
-            )
-        )
-
-    def rows_with_af(col: int) -> list[str]:
-        lines: list[str] = []
-        for i in range(n_variants):
-            freq = frequencies[i]
-            se = model_se(col, freq, i)
-            z = 8.0 if i % 50 == 0 else 1.0
-            effect = f"{z * se:.6f}:{se:.6f}"
-            lines.append(
-                f"1\t{(i + 1) * 1000}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF"
-                f"\t{effect}:{freq:.6f}\n"
-            )
-        return lines
-
-    def rows_without_af(col: int) -> list[str]:
-        lines: list[str] = []
-        for i in range(n_variants):
-            freq = frequencies[i]
-            se = model_se(col, freq, i)
-            z = 8.0 if i % 50 == 0 else 1.0
-            lines.append(
-                f"1\t{(i + 1) * 1000}\t.\tA\tG\t.\tPASS\t.\tES:SE"
-                f"\t{z * se:.6f}:{se:.6f}\n"
-            )
-        return lines
-
-    def manifest(vcfs: dict[str, Path], name: str) -> Path:
-        path = tmp_path / f"{name}.manifest.tsv"
-        path.write_text(
-            "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
-            "\toriginal_sd_method\tsource_assembly\n"
-            + "\n".join(
-                f"{tid}\t{vcf}\tTrait {tid}\t1000\tsd\tdeclared_standardised\thg38"
-                for tid, vcf in vcfs.items()
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        return path
+    def z_for(row: int, _column: int) -> float:
+        return 8.0 if row % 50 == 0 else 1.0
 
     def expected_for(col: int) -> np.ndarray:
         return np.array(
-            [model_se(col, frequencies[i], i) for i in range(n_variants)], dtype=np.float32
+            [model_se(col, MAF_VCF_FREQUENCIES[row], row) for row in range(n_variants)],
+            dtype=np.float32,
         )
 
     vcfs_with_af = {
-        tid: write_gwas_vcf_with_eaf(tmp_path / f"{tid}.vcf", rows_with_af(col))
+        tid: write_gwas_vcf_with_eaf(
+            tmp_path / f"{tid}.vcf", maf_vcf_rows(col, z_for)
+        )
         for col, tid in enumerate(("t0", "t1"))
     }
     residual = tmp_path / "residual.opengwasdb"
     build_dense_from_vcf_manifest(
-        manifest(vcfs_with_af, "residual"),
+        write_hg38_manifest(tmp_path / "residual.manifest.tsv", vcfs_with_af),
         residual,
         store_id="s",
         release_id="r",
@@ -1696,11 +1660,15 @@ def test_standalone_gwas_vcf_build_codes_residual_se_and_falls_back_without_eaf(
         assert np.isfinite(hits["se"]).all()
     assert validate_store(residual).ok, validate_store(residual).errors
 
-    no_af = {tid: write_gwas_vcf_with_eaf(tmp_path / f"{tid}.noaf.vcf", rows_without_af(col))
-             for col, tid in enumerate(("t0", "t1"))}
+    no_af = {
+        tid: write_gwas_vcf_with_eaf(
+            tmp_path / f"{tid}.noaf.vcf", maf_vcf_rows(col, z_for, with_af=False)
+        )
+        for col, tid in enumerate(("t0", "t1"))
+    }
     fallback = tmp_path / "fallback.opengwasdb"
     build_dense_from_vcf_manifest(
-        manifest(no_af, "fallback"),
+        write_hg38_manifest(tmp_path / "fallback.manifest.tsv", no_af),
         fallback,
         store_id="s",
         release_id="r",
