@@ -3,8 +3,9 @@
 > **Clarified on 7 November 2026** (see "Clarification, 7 November 2026" at the end). The
 > upstream half is settled as a Proxy Index; a matrix query returns NaN for an unstored pair and a
 > number only through the caller's `fill`; and the PC part of decision 4 is superseded by
-> [ADR 0002](./0002-build-inputs.md): PCs are supplied in a PC File and checked by the PC Check,
-> not computed by ogld. The decisions below stand as written otherwise.
+> [ADR 0002](./0002-build-inputs.md): the PCs are our own, computed outside ogld with the
+> Long-Range LD Regions excluded, and the builder drops local PCs. The decisions below stand as
+> written otherwise.
 
 Issue [#2](https://github.com/opengwas/ogld/issues/2), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 This ADR records the owner's decisions of 7 November 2026 (epic #1, "Decisions already taken"),
@@ -191,13 +192,22 @@ compare r̂², values are returned as signed r, and the refusals above stand, co
 distances each store records. MR's r² 0.001 with a 10 Mb window is answered only where
 t_far = 0.001, on UK Biobank EUR.
 
-**PCs are supplied** (decision 6). ogld runs no PCA. A build reads precomputed PCs from a PC File,
-and HGDP+1kGP's are gnomAD v3.1.2's `subcontinental_pca` (20 PCs, covering all 3,520 members of
-the five panels). Those were not computed with the Long-Range LD Regions excluded, so the builder's
-PC Check tests each PC against those regions and fails a build when one tracks a region. Decision
-4's "The PCs come from LD-pruned common variants, with the Long-Range LD Regions excluded" is
-superseded by [ADR 0002](./0002-build-inputs.md), which records this decision with the build
-inputs. What PC Adjustment is, and why, is unchanged.
+**PCs are our own, supplied in a PC File, and the builder drops local ones** (decision 6, and
+the owner's later decisions the same day on lane 2d's measurements). ogld's library runs no PCA.
+The PCs are computed outside it by a recipe script that follows gnomAD's subcontinental method with
+the Long-Range LD Regions ±2 Mb excluded from the PCA, and a build reads them from a PC File. The
+builder's PC Check drops a local PC: one that a single 4 Mb window explains ≥ 10% of while the rest
+of the genome explains it no better than chance. The covariates are the first k = 10 PCs it keeps,
+and provenance records the scan, the dropped PCs and the null. Decision 4's "The PCs come from
+LD-pruned common variants, with the Long-Range LD Regions excluded" is superseded by
+[ADR 0002](./0002-build-inputs.md), which has the evidence: gnomAD's PCs, which did not exclude the
+regions, and our own, which do, both carry EUR's north–south axis through LCT, and the rule keeps
+it as ancestry. What PC Adjustment is, and why, is unchanged.
+
+**Genotypes are complete** (the same later decisions). The builds read the phased HGDP+1kGP v2
+callset, which has no missing calls, and the builder refuses an input with any. So decision 2's
+Near Band at k = 0 equals `plink2 --r-unphased` exactly, to within the quantisation step, with no
+imputation and no call-rate filter.
 
 **Provenance** (the comment "Pan-UKB LD as a source"). Importing Pan-UKB's LD matrices is a later
 epic, and the format allows it now. Each store records its source kind (genotypes or an imported

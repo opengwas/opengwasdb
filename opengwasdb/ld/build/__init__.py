@@ -2,8 +2,10 @@
 
 The builder runs where the genotypes are and writes only the LD Store (ADR 0001,
 decision 5). Its inputs are specified in `docs/spec/build-inputs.md` (ADR 0002): a PLINK
-2 pgen, a keep file and a PC File; ogld runs no PCA. It imports `ogld.store`,
-`ogld.format` and `ogld.identity`, never `ogld.query`.
+2 pgen with complete genotypes, a keep file and a PC File. ogld runs no PCA: the PCs are
+computed outside the library by a recipe script, and the builder only chooses which of
+them to adjust for, by the PC Check. It imports `ogld.store`, `ogld.format` and
+`ogld.identity`, never `ogld.query`.
 """
 
 from __future__ import annotations
@@ -22,20 +24,21 @@ class BuildInputs:
     Each field is recorded in the store's provenance (spec §7).
 
     - `pgen`: one or more PLINK 2 `.pgen` files, one per chromosome or one for the
-      genome, each with its `.pvar` (or `.pvar.zst`) and `.psam` beside it; GRCh38.
+      genome, each with its `.pvar` (or `.pvar.zst`) and `.psam` beside it; GRCh38. The
+      genotypes must be complete: the build refuses any missing call, naming the variant
+      and the panel, rather than impute it (owner, 7 November 2026; ADR 0002).
     - `keep`: the samples to use, one `#IID` per line; n is their count.
-    - `pcs`: the PC File (plink2's `.eigenvec` layout); PC1…PCk are regressed out. None
+    - `pcs`: the PC File (plink2's `.eigenvec` layout). The PC Check scans every PC in
+      it, drops the local ones, and the first k PCs it keeps are regressed out. None
       only with k = 0.
     - `pc_source`: the PC File's declared source, recorded beside its SHA-256; None only
       with k = 0.
     - `panel_id`, `ancestry`: the Source Panel, as provenance names it.
-    - `genotype_source`: what the genotypes are, such as the gnomAD release and files.
-    - `k`: PCs regressed out, and t_far's k (ADR 0001).
+    - `genotype_source`: what the genotypes are, such as the release and its files.
+    - `k`: the PCs regressed out, after the PC Check, and t_far's k (ADR 0001).
     - `mac_min`: the minor allele count floor, counted on the kept samples.
     - `info_min`: the INFO floor; a pgen that carries no INFO with it set is refused,
       so a sequenced panel passes None explicitly rather than skip a filter quietly.
-    - `call_rate_min`: the call-rate floor; missing calls are handled by the rule in
-      `docs/spec/build-inputs.md`, and None means no floor.
     """
 
     pgen: tuple[Path, ...]
@@ -48,7 +51,6 @@ class BuildInputs:
     k: int = 10
     mac_min: int = 20
     info_min: float | None = 0.8
-    call_rate_min: float | None = 0.95
 
     def __post_init__(self) -> None:
         if not self.pgen:
@@ -64,10 +66,13 @@ class BuildInputs:
 def build(inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1) -> Provenance:
     """Build the LD Store of `inputs` at `out` and return its provenance (spec §7; ogld#5).
 
-    Filters the Variant Set, regresses PC1…PCk out of the standardised dosages, writes
-    the Near Band exactly and the Proxy Index at t_far, and finishes through
-    `StoreWriter.finish`, which validates the store. The PC Check runs first: a PC that
-    tracks a long-range LD region fails the build, naming the PC and the region.
+    Refuses an input with a missing call. Filters the Variant Set, then runs the PC
+    Check: a PC that one 4 Mb window explains ≥ 10% of, while the rest of the genome
+    explains it no better than chance, is local and is dropped, and the first k PCs kept
+    are the covariates. It regresses them out of the standardised dosages, writes the
+    Near Band exactly and the Proxy Index at t_far, and finishes through
+    `StoreWriter.finish`, which validates the store. Provenance records the scan, the
+    dropped PCs and the null the scan was judged against.
     """
     raise NotImplementedError("ogld#5")
 

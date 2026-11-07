@@ -51,20 +51,41 @@ class PcFile(TypedDict):
     source: str
 
 
-class PcCheck(TypedDict):
-    """The PC Check's result: whether any PC tracks a long-range LD region (ADR 0002)."""
+class PcScan(TypedDict):
+    """One PC of the PC File, as the PC Check scanned it.
 
-    passed: bool
-    statistic: str
-    threshold: float
-    regions: list[str]
-    max_by_region: dict[str, float]
+    `window` is the 4 Mb window that explains most of the PC and `window_share` how much
+    of it; `rest_share` is how much the rest of the genome explains, and `local` whether
+    the PC is dropped. `docs/spec/build-inputs.md` defines the statistics.
+    """
+
+    pc: str
+    window: str
+    window_share: float
+    rest_share: float
+    local: bool
+
+
+class PcCheck(TypedDict):
+    """The PC Check's result (owner, 7 November 2026; ADR 0002).
+
+    A PC is local, and dropped from the covariates, when one `window_bp` window explains
+    at least `min_share` of it and the rest of the genome explains it no better than
+    chance, as `null` records. `scan` holds every PC of the PC File, in order.
+    """
+
+    window_bp: int
+    min_share: float
+    scan: list[PcScan]
+    dropped: list[str]
+    null: dict[str, float | str]
 
 
 class Adjustment(TypedDict):
     """What was regressed out of the genotypes before r was computed (PC Adjustment).
 
-    `k` is len(covariates), and it is t_far's k.
+    `covariates` are the first k PCs the PC Check kept, by name; `k` is their number,
+    and it is t_far's k.
     """
 
     covariates: list[str]

@@ -34,8 +34,7 @@ SURFACE: dict[str, tuple[Callable[..., Any], str]] = {
         ogld.BuildInputs,
         "(pgen: 'tuple[Path, ...]', keep: 'Path', pcs: 'Path | None', pc_source: 'str | None', "
         "panel_id: 'str', ancestry: 'str', genotype_source: 'str', k: 'int' = 10, "
-        "mac_min: 'int' = 20, info_min: 'float | None' = 0.8, "
-        "call_rate_min: 'float | None' = 0.95) -> None",
+        "mac_min: 'int' = 20, info_min: 'float | None' = 0.8) -> None",
     ),
     "ogld.LDStore.matrix": (
         ogld.LDStore.matrix,

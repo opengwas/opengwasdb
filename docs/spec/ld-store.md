@@ -181,7 +181,7 @@ up to 0.0010006 reads "r² < 0.001". The walkthrough "A pair at exactly t_far" i
 
 **t_far's k counts covariates.** t_far = max(0.001, q / (n − k − 1)), where k is the number of
 covariates regressed out, named in `adjustment.covariates` (§7); the 1 is the intercept. For a
-build from a PC File that is the k PCs. For an imported LD matrix it counts every covariate the
+build from a PC File that is the k PCs the PC Check kept. For an imported LD matrix it counts every covariate the
 source adjusted for: Pan-UKB's 10 PCs and five age and sex terms make k = 15.
 
 ## 4. Near Band (`near/<chrom>/`)
@@ -348,6 +348,11 @@ ratio. On layout B's 32,768 chunk, each Near Band is 1.5–7.4% larger
 (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/panel_sizes_inner32768.tsv`).
 PC Adjustment at k = 10 lowers the index's density a little, most in AMR.
 
+These sizes are upper bounds. They counted every MAC ≥ 20 site of the gnomAD v3.1.2 VCFs,
+non-PASS sites included, about 25% of EUR chr22's; and the builds now read the phased
+HGDP+1kGP v2 callset, whose QC keeps fewer sites (owner, 7 November 2026; ADR 0002). Lane 2d of
+ogld#2 re-measures them on v2.
+
 **UK Biobank EUR's size is ogld#10's measurement.** No UK Biobank genotype was read for this
 spec. At n = 49,766, MAC ≥ 20 is MAF ≥ 2.0×10⁻⁴. The only UK Biobank variant list under
 `/data/opengwasdb/reference/` on the IEU compute nodes is the engine's UK Biobank EUR LD Reference
@@ -387,15 +392,15 @@ ignores the ones it does not know. The types are `ogld.format.Provenance`, and
 | `panel.n` | int | samples the LD was computed from |
 | `panel.samples_sha256` | string or null | SHA-256 of the sorted sample identifiers, one per line; null only for an `ld_matrix` source that does not publish them. The identifiers themselves stay with the Source Panel |
 | `reference_assembly` | string | the engine's Reference Assembly, such as `"GRCh38"` |
-| `variant_filters` | object | every filter and its value: `mac_min` (int, default 20), `info_min` (float or null), `call_rate_min` (float or null), `max_alleles` (int), and any other the build applied (`docs/spec/build-inputs.md`) |
+| `variant_filters` | object | every filter and its value: `mac_min` (int, default 20), `info_min` (float or null), `max_alleles` (int), and any other the build applied (`docs/spec/build-inputs.md`). There is no call-rate filter: a build refuses an input with any missing call |
 | `variants_dropped` | object | count per reason a variant passing the filters was dropped: at least `zero_variance` (int) |
 | `n_variants` | int | rows of `variants/` |
 | `near_bp` | int | the distance up to which the store holds every pair: 3000000 |
 | `far_bp` | int | the distance up to which the store measured pairs: 10000000 for a build, and at most that for any store. Every reader and refusal uses this recorded value |
-| `adjustment.covariates` | array of strings | every covariate regressed out of the genotypes, by name, in order, such as `"PC1"` … `"PC10"`; empty for unadjusted LD. An import names its source's, such as Pan-UKB's age, sex, age×sex, age², age²×sex and PC1–PC10 |
+| `adjustment.covariates` | array of strings | every covariate regressed out of the genotypes, by name, in order: the first k PCs the PC Check kept, such as `"PC1"`, `"PC3"` … `"PC11"` when it dropped PC2; empty for unadjusted LD. An import names its source's, such as Pan-UKB's age, sex, age×sex, age², age²×sex and PC1–PC10 |
 | `adjustment.k` | int | the number of covariates: t_far's k (§3) |
-| `adjustment.pc_file` | object or null | the PC File (`docs/spec/build-inputs.md`): `sha256` and its declared `source`, such as gnomAD v3.1.2's `hgdp_tgp_meta.subcontinental_pca.pca_scores`; null when no PC File was read |
-| `adjustment.pc_check` | object or null | the PC Check's result: `passed` (bool), the `statistic` and `threshold` it applied, the `regions` it checked, and `max_by_region`, the largest statistic per region (`docs/spec/build-inputs.md`); null when no PC File was read |
+| `adjustment.pc_file` | object or null | the PC File (`docs/spec/build-inputs.md`): `sha256` and its declared `source`, such as the recipe script and release that made it; null when no PC File was read |
+| `adjustment.pc_check` | object or null | the PC Check's result: the rule's `window_bp` (4000000) and `min_share` (0.1); the `scan`, one entry per PC of the PC File with its best `window`, the `window_share` and `rest_share` explained and whether it is `local`; the `dropped` PCs; and the `null` the rest of the genome was judged against (`docs/spec/build-inputs.md`). Null when no PC File was read |
 | `t_far` | float | max(0.001, q / (n − k − 1)) in float64, the value every reader uses |
 | `t_far_q` | float | 20.84: the χ²₁ upper quantile at p = 5×10⁻⁶ |
 | `far_code_floor` | int | §3 |
@@ -415,7 +420,7 @@ cross-chromosome pairs; `seed`, 405; `n_pairs`, 200,000), `rate_r2_ge_0_01_unadj
 of those pairs with r² ≥ 0.01 at k = 0), `rate_r2_ge_0_01_adjusted` (the same share after PC
 Adjustment), `rate_r2_ge_0_01_sampling` (the share sampling alone predicts,
 P(χ²₁ ≥ 0.01 × (n − k − 1))) and `near_100kb_change` (quantiles 0, 0.5, 0.9, 0.99 and 1 of the
-change in r from adjustment, for pairs within 100 kb outside the PC Check's regions: ogld#5's "real
+change in r from adjustment, for pairs within 100 kb outside the Long-Range LD Regions: ogld#5's "real
 LD survives").
 
 The provenance holds counts, hashes and settings, never a sample identifier or a per-sample value.
@@ -428,10 +433,20 @@ was not built from genotypes here, to name every covariate t_far's k counts, and
 distance it measured, which a lift to GRCh38 can shorten. These keys cost nothing now and would be
 a format change later.
 
-**PCs are supplied, not computed** (owner, 7 November 2026; ADR 0002). ogld runs no PCA, so the
-provenance records the PC File's hash and declared source and the PC Check's result, not a PCA
-method, LD pruning or a list of excluded regions. gnomAD v3.1.2's subcontinental PCs did not
-exclude the long-range LD regions; the PC Check is how a build shows that no PC tracks one.
+**PCs are supplied, and the builder chooses among them** (owner, 7 November 2026; ADR 0002).
+ogld's library runs no PCA. The PCs are our own, made outside it by a recipe script that follows
+gnomAD's subcontinental method with the Long-Range LD Regions ±2 Mb excluded, and a build reads
+them from a PC File. The builder then runs the PC Check: a PC that one 4 Mb window explains
+≥ 10% of, while the rest of the genome explains it no better than chance, is local and is
+dropped, and the covariates are the first k PCs kept. So the provenance records the PC File's
+hash and declared source and the whole scan, not a PCA method or LD pruning. A PC that tracks a
+region the rest of the genome also explains, such as EUR's north–south axis through LCT, is
+ancestry and is kept (ADR 0002 has the evidence).
+
+**Genotypes are complete.** The builds read the phased HGDP+1kGP v2 callset, which has no missing
+calls, and a build refuses any input with one. So there is no imputation of missing calls and no
+call-rate filter, and with k = 0 the Near Band is exactly the r `plink2 --r-unphased` computes, to
+within the quantisation step (§4).
 
 ## 8. Pair answers
 

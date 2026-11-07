@@ -21,5 +21,8 @@ fi
 # plink2 is the independent reference; the IEU nodes keep one in opengwasdb-stores' environment.
 : "${OGLD_PLINK2:=$(command -v plink2 || echo "$HOME/repo/opengwasdb-stores/.pixi/envs/dev/bin/plink2")}"
 export OGLD_PLINK2
+# The phased HGDP+1kGP v2 EUR chr22 pgen fileset (no suffix), converted with variant IDs set, as
+# docs/spec/build-inputs.md says. A test that needs it and finds it unset fails, naming it.
+export OGLD_V2_EUR_CHR22="${OGLD_V2_EUR_CHR22:-}"
 
 exec pytest -m realdata --timeout=300 -p no:cacheprovider "${PREFLIGHT[@]}" "$@"

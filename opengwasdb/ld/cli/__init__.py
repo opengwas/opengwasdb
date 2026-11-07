@@ -48,7 +48,6 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--k", type=int, default=10)
     b.add_argument("--mac-min", type=int, default=20)
     b.add_argument("--info-min", type=_optional_float, default=0.8, help="a number, or none")
-    b.add_argument("--call-rate-min", type=_optional_float, default=0.95, help="a number, or none")
     b.add_argument("--threads", type=int, default=1)
     for name, text in (("validate", "run every validation rule"), ("info", "print the provenance")):
         commands.add_parser(name, help=text).add_argument("location")
@@ -67,7 +66,6 @@ def _build(args: argparse.Namespace) -> int:
         k=args.k,
         mac_min=args.mac_min,
         info_min=args.info_min,
-        call_rate_min=args.call_rate_min,
     )
     print(json.dumps(build(inputs, args.out, threads=args.threads), indent=1))
     return 0

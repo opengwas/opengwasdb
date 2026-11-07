@@ -1,9 +1,14 @@
-"""ogld#5's realdata contract: the builder against plink2 on real HGDP+1kGP EUR chr22.
+"""ogld#5's realdata contract: the builder on real HGDP+1kGP EUR chr22.
 
-The Test Panel proves the logic; this proves it survives real genotypes (CLAUDE.md). It
-cuts a 3 Mb slice of the shipped EUR chr22 panel with plink2, builds it at k = 0, and holds
-300 of its variants' Near Band to `plink2 --r-unphased` within the quantisation step: epic
-#1's acceptance that the k = 0 builder matches plink2 within int16 rounding.
+The Test Panel proves the logic; this proves it survives real genotypes (CLAUDE.md).
+
+- The builds read the phased HGDP+1kGP v2 callset, which has no missing calls (owner,
+  7 November 2026; ADR 0002). On a 3 Mb slice of its EUR chr22, the k = 0 Near Band of 300
+  variants matches `plink2 --r-unphased` within the quantisation step: epic #1's acceptance.
+  `OGLD_V2_EUR_CHR22` names that chromosome's pgen fileset, converted as
+  `docs/spec/build-inputs.md` says.
+- The gnomAD v3.1.2 pgens shipped under /data/opengwasdb/reference/ have missing calls, at
+  11,725 of the 15,272 variants of the same slice. The builder refuses them.
 """
 
 from __future__ import annotations
@@ -19,10 +24,12 @@ import ogld
 from ogld.identity import orient
 
 PANELS = Path("/data/opengwasdb/reference/hgdp1kgp-hg38")
-EUR_CHR22 = PANELS / "pgen" / "EUR" / "chr22"
+SHIPPED_EUR_CHR22 = PANELS / "pgen" / "EUR" / "chr22"
 EUR_KEEP = PANELS / "members" / "EUR.keep"
+WINDOW = ["--chr", "22", "--from-bp", "20000000", "--to-bp", "23000000"]
 #: plink2 prints r to six significant digits.
 PRINTED = 5e-7
+OGLD_5 = pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="ogld#5")
 
 
 def plink2(*args: str | Path) -> None:
@@ -40,32 +47,49 @@ def pvar_rows(path: Path) -> list[list[str]]:
     return [line.split("\t") for line in lines if not line.startswith("#")]
 
 
-@pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="ogld#5")
-def test_the_builder_matches_plink2_on_a_real_chr22_slice(tmp_path: Path) -> None:
-    window = ["--chr", "22", "--from-bp", "20000000", "--to-bp", "23000000"]
-    plink2(
-        "--pfile",
-        EUR_CHR22,
-        "vzs",
-        "--keep",
-        EUR_KEEP,
-        *window,
-        "--make-pgen",
-        "--out",
-        tmp_path / "slice",
-    )
-    inputs = ogld.BuildInputs(
-        pgen=(tmp_path / "slice.pgen",),
+def inputs(pgen: Path, source: str) -> ogld.BuildInputs:
+    return ogld.BuildInputs(
+        pgen=(pgen,),
         keep=EUR_KEEP,
         pcs=None,
         pc_source=None,
         panel_id="hgdp1kgp-hg38-EUR-chr22-20-23Mb",
         ancestry="EUR",
-        genotype_source=f"{EUR_CHR22}.pgen, chr22:20,000,000-23,000,000",
+        genotype_source=source,
         k=0,
         info_min=None,
     )
-    ogld.build(inputs, tmp_path / "store")
+
+
+@OGLD_5
+def test_the_builder_refuses_the_shipped_pgen_for_its_missing_calls(tmp_path: Path) -> None:
+    slice_ = tmp_path / "shipped"
+    plink2(
+        "--pfile",
+        SHIPPED_EUR_CHR22,
+        "vzs",
+        "--keep",
+        EUR_KEEP,
+        *WINDOW,
+        "--make-pgen",
+        "--out",
+        slice_,
+    )
+    plink2("--pfile", slice_, "--missing", "variant-only", "--out", tmp_path / "missing")
+    counts = np.loadtxt(tmp_path / "missing.vmiss", usecols=2, skiprows=1, dtype=np.int64)
+    assert (counts > 0).any(), "the shipped slice must have missing calls for this to mean anything"
+    with pytest.raises(ValueError, match="missing"):
+        ogld.build(
+            inputs(tmp_path / "shipped.pgen", "gnomAD v3.1.2, shipped pgen"), tmp_path / "store"
+        )
+
+
+@OGLD_5
+def test_the_builder_matches_plink2_on_a_real_chr22_slice(tmp_path: Path) -> None:
+    v2 = os.environ.get("OGLD_V2_EUR_CHR22", "")
+    assert v2, "set OGLD_V2_EUR_CHR22 to the phased v2 EUR chr22 pgen fileset (no suffix)"
+    plink2("--pfile", v2, "--keep", EUR_KEEP, *WINDOW, "--make-pgen", "--out", tmp_path / "slice")
+    ogld.build(inputs(tmp_path / "slice.pgen", f"{v2}, chr22:20-23 Mb"), tmp_path / "store")
     store = ogld.open(tmp_path / "store")
 
     rows = pvar_rows(tmp_path / "slice.pvar")
