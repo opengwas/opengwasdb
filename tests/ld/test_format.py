@@ -351,19 +351,38 @@ def test_answer_kinds_refuses_an_unstored_near_band_pair() -> None:
         )
 
 
-def test_answer_kinds_after_a_fill_still_reads_the_bound() -> None:
-    # fill = 0 replaces NaN. A Far Pair has r̂² ≥ t_far, so a 3–10 Mb cell below t_far,
-    # 0 included, is the Bound; and every Near Band pair is stored, so a 0 there is r.
-    out = fmt.answer_kinds(
-        np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.2], [0.0, 0.2, 1.0]]),
-        chrom=np.array(["1", "1", "1"]),
-        position=np.array([0, 5_000_000, 5_000_100]),
-        t_far=EUR_K10,
-        near_bp=fmt.NEAR_BP,
-        far_bp=fmt.FAR_BP,
+def kinds_of_pair(r: float, *, distance: int, same: bool = True) -> str:
+    return str(
+        fmt.answer_kinds(
+            np.array([[1.0, r], [r, 1.0]]),
+            chrom=np.array(["1", "1" if same else "2"]),
+            position=np.array([0, distance]),
+            t_far=EUR_K10,
+            near_bp=fmt.NEAR_BP,
+            far_bp=fmt.FAR_BP,
+        )[0, 1]
     )
-    s, b = fmt.AnswerKind.STORED.value, fmt.AnswerKind.BOUND.value
-    assert out.tolist() == [[s, b, b], [b, s, s], [b, s, s]]
+
+
+def test_a_number_where_the_store_holds_nothing_is_refused_not_labelled() -> None:
+    # A cell beyond far_bp, or across chromosomes, holds nothing; a number there is a fill
+    # or a broken read, and kinds() must not call it Not Measured.
+    assert kinds_of_pair(math.nan, distance=11_000_000) == "not_measured"
+    with pytest.raises(ValueError, match="holds nothing"):
+        kinds_of_pair(0.0, distance=11_000_000)
+    with pytest.raises(ValueError, match="holds nothing"):
+        kinds_of_pair(0.3, distance=1_000, same=False)
+
+
+def test_a_far_cell_below_t_far_is_refused_not_called_the_bound() -> None:
+    # Every stored pair beyond near_bp has r̂² ≥ t_far, so a smaller number there, 0
+    # included, is not a Stored r: it is a fill or a broken read.
+    assert kinds_of_pair(math.nan, distance=5_000_000) == "bound"
+    assert kinds_of_pair(0.3, distance=5_000_000) == "stored"
+    with pytest.raises(ValueError, match="below t_far"):
+        kinds_of_pair(0.0, distance=5_000_000)
+    with pytest.raises(ValueError, match="below t_far"):
+        kinds_of_pair(0.1, distance=5_000_000)
 
 
 # ------------------------------------------------------------------ §9 refusals

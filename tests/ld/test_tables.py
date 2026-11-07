@@ -93,14 +93,13 @@ def test_an_ld_matrix_says_what_each_nan_means() -> None:
     assert out[0].tolist() == ["stored", "bound", "stored", "not_measured"]
 
 
-def test_an_ld_matrix_filled_with_zero_still_says_which_cells_are_the_bound() -> None:
-    out = matrix([[1, 0.0], [0.0, 1]], fill=0.0, step=4_000_000).kinds()
-    assert out[0, 1] == "bound"
-
-
-def test_a_fill_that_could_be_a_stored_r_makes_the_kinds_ambiguous() -> None:
-    with pytest.raises(ValueError, match="ambiguous"):
-        matrix([[1, 0.5], [0.5, 1]], fill=0.5, step=4_000_000).kinds()
+@pytest.mark.parametrize("fill", [0.0, 0.5, -9.0])
+def test_a_filled_matrix_has_no_kinds(fill: float) -> None:
+    # A filled cell cannot be told from a stored one, so kinds() is defined only without a
+    # fill: ask for the matrix again with fill=None.
+    filled = matrix([[1, fill], [fill, 1]], fill=fill, step=4_000_000)
+    with pytest.raises(ValueError, match="fill"):
+        filled.kinds()
 
 
 def build_inputs(**overrides: Any) -> ogld.BuildInputs:

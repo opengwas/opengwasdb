@@ -503,11 +503,13 @@ Measured alike.
   and positions, t_far and the store's distances. A NaN between two variants on one chromosome
   more than `near_bp` and at most `far_bp` apart is the Bound; any other NaN is Not Measured. No
   NaN can lie within `near_bp`, because the Near Band is complete. So no second matrix of kinds is
-  returned. `ogld.format.answer_kinds` reads the kinds back.
+  returned. `ogld.format.answer_kinds` reads the kinds back from a matrix made without a fill,
+  and refuses one it cannot vouch for: a NaN within `near_bp`, a number where the store holds
+  nothing, or a number beyond `near_bp` below t_far.
 - **`fill` is the caller's.** A reader MUST NOT put a number in place of an unstored pair unless
-  the caller passed `fill`, and then it puts exactly that number. With a fill below √t_far, 0
-  included, the kinds stay recoverable: beyond `near_bp`, a cell whose square is below t_far is
-  the Bound, because every Far Pair's is at least t_far.
+  the caller passed `fill`, and then it puts exactly that number. A filled cell cannot be told
+  from a stored one, so the matrix records its `fill`, and `LDMatrix.kinds()` refuses a filled
+  matrix: the caller asks for the matrix with no fill to read the kinds.
 - **The stored data never changes.** An LD Store holds no code for an unstored pair, and no read
   writes one. `fill` acts on a query's result, never on the store.
 - Absent variants are listed beside the matrix and are not rows of it.

@@ -61,28 +61,39 @@ def answer_kinds(
     near_bp: int,
     far_bp: int,
 ) -> npt.NDArray[np.str_]:
-    """The AnswerKind value of every cell of a signed-r matrix a query returned (spec §8).
+    """The AnswerKind value of every cell of an unfilled signed-r matrix (spec §8).
 
     This is how an unstored pair's meaning is recovered from the matrix alone, as the
     owner decided on 7 November 2026: from the rows' chromosomes and positions and the
-    store's t_far. A cell more than `near_bp` and at most `far_bp` apart on one
-    chromosome is STORED when its r̂² reaches t_far and the Bound otherwise, so NaN and
-    any `fill` below √t_far, 0 included, read as the Bound. A NaN within `near_bp` raises:
-    the Near Band is complete, so it can only be a broken read.
+    store's t_far. A NaN more than `near_bp` and at most `far_bp` apart on one chromosome
+    is the Bound; any other NaN is Not Measured. It reads only a matrix without a `fill`,
+    and checks every cell against what the store can hold, so it labels nothing it
+    cannot vouch for: a NaN within `near_bp` (the Near Band is complete), a number where
+    the store holds nothing, and a number beyond `near_bp` below t_far (no stored pair
+    there is) each raise, as a fill or a broken read.
     """
     same = chrom[:, None] == chrom[None, :]
     distance = np.abs(position[:, None].astype(np.int64) - position[None, :].astype(np.int64))
     near = same & (distance <= near_bp)
-    if np.isnan(r[near]).any():
-        raise ValueError(
-            "a NaN within near_bp: the Near Band is complete, so this read is broken (spec §8)"
-        )
     far = same & (distance > near_bp) & (distance <= far_bp)
+    unstored = np.isnan(r)
+    if (unstored & near).any():
+        raise ValueError("a NaN within near_bp: the Near Band is complete, so the read is broken")
+    if (~unstored & ~near & ~far).any():
+        raise ValueError(
+            "a number where the store holds nothing (beyond far_bp, or across chromosomes): "
+            "a fill or a broken read, not a Pair Answer (spec §8)"
+        )
     with np.errstate(invalid="ignore"):
-        reaches = r * r >= t_far
+        below = ~unstored & far & (r * r < t_far)
+    if below.any():
+        raise ValueError(
+            "a number beyond near_bp below t_far, where no pair is stored: a fill or a broken "
+            "read, not a Pair Answer (spec §8)"
+        )
     out = np.full(r.shape, AnswerKind.NOT_MEASURED.value, dtype="<U12")
-    out[near | (far & reaches)] = AnswerKind.STORED.value
-    out[far & ~reaches] = AnswerKind.BOUND.value
+    out[near | (far & ~unstored)] = AnswerKind.STORED.value
+    out[far & unstored] = AnswerKind.BOUND.value
     return out
 
 

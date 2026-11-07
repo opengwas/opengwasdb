@@ -24,8 +24,9 @@ class LDMatrix:
 
     `r[i, j]` is the Stored r of variants i and j, signed to each one's A1, with 1 on the
     diagonal. A pair the store does not hold is NaN, unless the caller passed `fill`, in
-    which case it is `fill`. `absent` lists the requested ALIDs outside the Variant Set;
-    they are not rows. `kinds()` says which answer each cell is.
+    which case it is `fill`, recorded here. `absent` lists the requested ALIDs outside the
+    Variant Set; they are not rows. `kinds()` says which answer each cell is, on a matrix
+    made without a fill.
     """
 
     r: npt.NDArray[np.float64]
@@ -43,13 +44,15 @@ class LDMatrix:
     def kinds(self) -> npt.NDArray[np.str_]:
         """The `AnswerKind` value of every cell: stored, bound or not_measured (spec §8).
 
-        Recovered from the variants' chromosomes and positions and t_far. A `fill` whose
-        square reaches t_far could be a stored r beyond near_bp, so it raises rather
-        than guess.
+        Recovered from the variants' chromosomes and positions and t_far, and defined only
+        for a matrix made without a fill: a filled cell cannot be told from a stored one,
+        so a filled matrix raises rather than mislabel. Ask for the matrix with fill=None.
         """
-        if self.fill is not None and self.fill * self.fill >= self.t_far:
-            detail = f"fill={self.fill} could be a stored r (r² ≥ t_far={self.t_far})"
-            raise ValueError(f"{detail}, so the kinds are ambiguous")
+        if self.fill is not None:
+            raise ValueError(
+                f"this matrix was made with fill={self.fill}, and a filled cell cannot be told "
+                "from a stored one; kinds() needs the matrix made with fill=None"
+            )
         return answer_kinds(
             self.r,
             chrom=self.variants.chrom,
