@@ -166,3 +166,16 @@ def test_the_cli_refuses_a_build_it_cannot_run(capsys: pytest.CaptureFixture[str
     status = cli.main([*argv, "--ancestry", "EUR", "--genotype-source", "g"])
     assert status == 2
     assert "PC File" in capsys.readouterr().err
+
+
+def test_the_cli_reports_each_rule_and_fails_on_any_finding(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    passing: dict[str, list[ogld.Finding]] = {"near.codes": [], "index.symmetric": []}
+    assert cli.report(passing) == 0
+    one = ogld.Finding("index.symmetric", "22:5", "one direction only")
+    assert cli.report({**passing, "index.symmetric": [one]}) == 1
+    out = capsys.readouterr().out
+    assert "ok   near.codes" in out
+    assert "FAIL index.symmetric" in out
+    assert "22:5: one direction only" in out

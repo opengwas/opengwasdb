@@ -16,7 +16,7 @@ from pathlib import Path
 from ogld.build import BuildInputs, build
 from ogld.format import Refusal
 from ogld.query import open as open_store
-from ogld.store import validate
+from ogld.store import Finding, validate
 
 
 def _optional_float(text: str) -> float | None:
@@ -73,13 +73,17 @@ def _build(args: argparse.Namespace) -> int:
     return 0
 
 
-def _validate(args: argparse.Namespace) -> int:
-    findings = validate(args.location)
+def report(findings: dict[str, list[Finding]]) -> int:
+    """Print each rule's verdict and its findings; 1 when any rule failed, else 0."""
     for rule, found in findings.items():
-        print(f"{'ok  ' if not found else 'FAIL'} {rule}")
+        print(f"{'FAIL' if found else 'ok  '} {rule}")
         for finding in found:
             print(f"     {finding.where}: {finding.message}")
     return 1 if any(findings.values()) else 0
+
+
+def _validate(args: argparse.Namespace) -> int:
+    return report(validate(args.location))
 
 
 def _info(args: argparse.Namespace) -> int:
@@ -98,4 +102,4 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
 
-__all__ = ["main"]
+__all__ = ["main", "report"]
