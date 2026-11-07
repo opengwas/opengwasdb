@@ -17,10 +17,10 @@ from a run of a sequence, and `Block.of` from arrays a test holds.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from functools import cached_property, partial
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -412,8 +412,50 @@ def completed(target: Target) -> bool:
     return target.store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
 
 
+def cell_count(offsets: np.ndarray) -> int:
+    """How many cells a sequence holds, from its segment bounds: one formula for it."""
+    return int(offsets[-1]) if len(offsets) else 0
+
+
+def _grid_limits(target: Target) -> Iterator[tuple[int, int]]:
+    """A Dense grid's bands, by row, under the decoded-byte budget."""
+    z = target.group["z"]
+    return band_limits(int(z.shape[0]), int(z.shape[1]), inner_chunk_of(z)[0])
+
+
+def _sequence_limits(target: Target) -> Iterator[tuple[int, int]]:
+    """A sequence's windows, by cell, under the same budget counted in cells."""
+    step = window_cells(inner_chunk_of(target.group["z"])[0])
+    n_cells = cell_count(sequence_offsets(target))
+    return ((lo, min(lo + step, n_cells)) for lo in range(0, n_cells, step))
+
+
+class _Banding(NamedTuple):
+    """How one layout of associations is read: where its blocks are, and how it makes them.
+
+    Bounds and blocks are one entry per layout, and both the count `_association_blocks`
+    reports and the blocks `_blocks` reads take them from the same entry: a pass cannot
+    describe blocks it does not take, and adding a layout is one entry, not two (issue
+    #308).
+    """
+
+    limits: Callable[[Target], Iterator[tuple[int, int]]]
+    blocks: Callable[[Target, Iterator[tuple[int, int]]], Iterator[Block]]
+
+
+_BANDING: dict[Kind, _Banding] = {
+    Kind.GRID: _Banding(_grid_limits, lambda target, limits: _dense_blocks(target, limits)),
+    Kind.CSR: _Banding(_sequence_limits, lambda target, limits: _sequence_blocks(target, limits)),
+}
+
+
 def dense_bands(target: Target) -> Iterator[Block]:
     """A Dense grid's rows in byte-bounded bands aligned to its physical read unit."""
+    yield from _dense_blocks(target, _grid_limits(target))
+
+
+def _dense_blocks(target: Target, limits: Iterable[tuple[int, int]]) -> Iterator[Block]:
+    """The bands `limits` names, read as the grid's own chunks."""
     group = target.group
     on_panel = None
     if "on_panel" in group:
@@ -421,8 +463,7 @@ def dense_bands(target: Target) -> Iterator[Block]:
             "on_panel", lambda: np.asarray(group["on_panel"][:]), until=SCAN_NAME
         )
     grid = _DenseGrid(target, on_panel, completed(target))
-    n_variants, n_analyses = grid.shape
-    for r0, r1 in band_limits(n_variants, n_analyses, inner_chunk_of(grid.z)[0]):
+    for r0, r1 in limits:
         yield grid.band(r0, r1)
 
 
@@ -506,7 +547,7 @@ class _Sequence:
         encoding = target.encoding
         self.target, self.group, self.encoding = target, group, encoding
         self.offsets = sequence_offsets(target)
-        self.n_cells = int(self.offsets[-1]) if len(self.offsets) else 0
+        self.n_cells = cell_count(self.offsets)
         self.n_analyses = max(len(self.offsets) - 1, 0)
         self.shape = (self.n_cells,)
         self.completed = completed(target)
@@ -653,21 +694,25 @@ def sequence_windows(target: Target) -> Iterator[Block]:
     Each window carries the Analysis and variant of the cell before it, so a rule
     about consecutive cells sees across a window's edge.
     """
+    yield from _sequence_blocks(target, _sequence_limits(target))
+
+
+def _sequence_blocks(target: Target, limits: Iterable[tuple[int, int]]) -> Iterator[Block]:
+    """The windows `limits` names, each carrying the cell before it."""
     sequence = _Sequence(target)
-    step = window_cells(inner_chunk_of(sequence.z)[0])
     previous: tuple[int, int] | None = None
-    for lo in range(0, sequence.n_cells, step):
-        block = sequence.window(lo, min(lo + step, sequence.n_cells), previous)
+    for lo, hi in limits:
+        block = sequence.window(lo, hi, previous)
         assert block.analysis is not None and block.variant is not None
         previous = (int(block.analysis[-1]), int(block.variant[-1]))
         yield block
 
 
 def _blocks(target: Target) -> Iterator[Block]:
-    if target.kind is Kind.GRID:
-        yield from dense_bands(target)
-    elif target.kind is Kind.CSR:
-        yield from sequence_windows(target)
+    """Every block of a component, from the entry its layout has in `_BANDING`."""
+    banding = _BANDING.get(target.kind)
+    if banding is not None:
+        yield from banding.blocks(target, banding.limits(target))
 
 
 def _read_failure(_target: Target, exc: Exception) -> str:
@@ -676,4 +721,16 @@ def _read_failure(_target: Target, exc: Exception) -> str:
     return f"validation failed: {exc}"
 
 
-ASSOCIATIONS: Scan[Block] = Scan(SCAN_NAME, _blocks, _read_failure)
+def _association_blocks(target: Target) -> int:
+    """How many blocks `_blocks` will read for `target`, before a cell is read.
+
+    The runner reports progress against this count, so an operator watching a
+    multi-hour validation sees how far through the planes it is (issue #308). It
+    counts the bounds `_blocks` reads from, and nothing else: no second formula for a
+    band or a window can drift from the one the read uses.
+    """
+    banding = _BANDING.get(target.kind)
+    return 0 if banding is None else sum(1 for _ in banding.limits(target))
+
+
+ASSOCIATIONS: Scan[Block] = Scan(SCAN_NAME, _blocks, _read_failure, _association_blocks)
