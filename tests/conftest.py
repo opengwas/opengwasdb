@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from shutil import copytree
+from typing import TYPE_CHECKING
 
 import pytest
+import shared_releases
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
+if TYPE_CHECKING:
+    from test_ragged_residual_completion import RaggedResidualScenario
 
 SOURCE_HEADER = "\t".join(
     [
@@ -42,14 +46,29 @@ def source_path(tmp_path: Path) -> Path:
     return path
 
 
+@pytest.fixture(scope="session")
+def dense_fixture_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """`shared_releases.dense_fixture_store`, built once per session."""
+    return shared_releases.dense_fixture_store(tmp_path_factory.mktemp("dense-fixture"))
+
+
 @pytest.fixture
-def dense_store_path(tmp_path: Path, source_path: Path) -> Path:
-    store_path = tmp_path / "store.opengwasdb"
-    build_dense_observed_from_sources(
-        [source_path],
-        store_path,
-        store_id="fixture-store",
-        release_id="observed-v1",
-        reference_assembly="GRCh37",
+def dense_store_path(tmp_path: Path, dense_fixture_store: Path) -> Path:
+    """A private copy of the shared fixture Store, which is never written to."""
+    return Path(copytree(dense_fixture_store, tmp_path / "store.opengwasdb"))
+
+
+@pytest.fixture(scope="session")
+def residual_ragged_scenario(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> RaggedResidualScenario:
+    """`shared_releases.residual_ragged`, built once per session."""
+    return shared_releases.residual_ragged(tmp_path_factory)
+
+
+@pytest.fixture(scope="session")
+def panel_only_eaf_ragged_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """`shared_releases.panel_only_eaf_ragged`, built once per session."""
+    return shared_releases.panel_only_eaf_ragged(
+        tmp_path_factory.mktemp("panel-only-eaf-ragged")
     )
-    return store_path

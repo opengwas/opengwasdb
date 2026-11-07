@@ -166,6 +166,20 @@ def test_the_overflow_table_is_sorted_by_position_for_binary_search():
     assert list(table.value) == [-50.0, 33.0, 40.0]
 
 
+def test_a_table_entry_refuses_positions_and_values_of_different_lengths():
+    """An exact-value table pairs one value with one flat position: a short
+    value array would leave entries without a value, or drop values, in the
+    table a reader decodes the cell from (issue #392)."""
+    builder = ZOverflowBuilder()
+    with pytest.raises(
+        ValueError,
+        match=r"the z overflow table: positions of length 3 and values of length 1 "
+        r"must be parallel",
+    ):
+        builder.add(np.array([9, 2, 5]), np.array([40.0]))
+    assert len(builder) == 0
+
+
 def test_the_overflow_table_round_trips_through_zarr(tmp_path):
     import zarr
 

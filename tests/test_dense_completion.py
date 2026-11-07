@@ -10,8 +10,10 @@ from shutil import copytree
 
 import numpy as np
 import pytest
+from dense_sources import build_dense_fixture, write_dense_manifest
 
-from opengwasdb.build.observed import build_dense_observed_from_sources
+from opengwasdb.admission import NotAdmitted
+from opengwasdb.associations import Cells, InvalidAssociations
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.completion.ld_panel import (
     LdPanelNotFoundError,
@@ -29,6 +31,7 @@ from opengwasdb.encoding import (
     StoreCodec,
     StoreEncoding,
 )
+from opengwasdb.encoding.codec import Z_MISSING
 from opengwasdb.layouts.dense import complete as complete_module
 from opengwasdb.layouts.dense.complete import (
     complete_dense_store,
@@ -210,7 +213,7 @@ def _observed_store_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     source = root / "associations.tsv"
     source.write_text(SOURCE_HEADER + "\n" + "\n".join(SOURCE_ROWS) + "\n", encoding="utf-8")
     out = root / "obs.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], out,
         store_id="test", release_id="obs-v1", reference_assembly="GRCh38",
     )
@@ -512,12 +515,11 @@ class TestValidation:
         """
         import json
 
-        from opengwasdb.build.source import read_normalised_associations
-        from opengwasdb.layouts.dense import build_dense_observed_store
+        from dense_sources import build_dense_fixture
 
         observed = tmp_path / "obs-small-chunk.opengwasdb"
-        build_dense_observed_store(
-            read_normalised_associations(source_path),
+        build_dense_fixture(
+        [source_path],
             observed,
             store_id="test",
             release_id="obs-small",
@@ -702,7 +704,7 @@ class TestSourceFidelity:
     """
 
     def test_fidelity_passes_against_source(self, observed_store, source_path):
-        result = validate_store(observed_store, source=source_path)
+        result = validate_store(observed_store, source=write_dense_manifest(source_path))
         assert result.ok, result.errors
 
     def test_fidelity_detects_sign_flip(self, observed_store, source_path):
@@ -719,7 +721,7 @@ class TestSourceFidelity:
         root["z"][:] = z
 
         assert validate_store(observed_store).ok  # internal checks still pass
-        result = validate_store(observed_store, source=source_path)
+        result = validate_store(observed_store, source=write_dense_manifest(source_path))
         assert not result.ok
         assert any("source-fidelity" in e for e in result.errors), result.errors
 
@@ -729,8 +731,9 @@ class TestSourceFidelity:
         # A wrong source must fail loudly, naming both unmatched kinds: an Analysis
         # the store does not hold and a variant row it does not carry. A check that
         # quietly matched nothing would look exactly like "no association".
-        assert validate_store(observed_store, source=source_path).ok, validate_store(
-            observed_store, source=source_path
+        manifest = write_dense_manifest(source_path)
+        assert validate_store(observed_store, source=manifest).ok, validate_store(
+            observed_store, source=manifest
         ).errors
         wrong = tmp_path / "wrong-source.tsv"
         wrong.write_text(
@@ -741,7 +744,7 @@ class TestSourceFidelity:
             encoding="utf-8",
         )
 
-        result = validate_store(observed_store, source=wrong)
+        result = validate_store(observed_store, source=write_dense_manifest(wrong))
 
         assert not result.ok
         assert any(
@@ -756,10 +759,18 @@ class TestSourceFidelity:
     def test_fidelity_reports_source_with_no_readable_associations(self, observed_store, tmp_path):
         # A header-only source yields no associations; the check must say so rather
         # than treating an unreadable source as a store that agrees with nothing.
-        empty = tmp_path / "empty-source.tsv"
-        empty.write_text(SOURCE_HEADER + "\n", encoding="utf-8")
+        named = tmp_path / "named-source.tsv"
+        named.write_text(
+            SOURCE_HEADER + "\n"
+            + "a1\tp1\tHeight\tHeight primary\t1\t900000\tA\tG\t1.0\t0.15\trsX\tsd\n",
+            encoding="utf-8",
+        )
+        manifest = write_dense_manifest(named)
+        (manifest.parent / "a1.tsv").write_text(
+            "chromosome\tposition\teffect_allele\tother_allele\tz\tse\n", encoding="utf-8"
+        )
 
-        result = validate_store(observed_store, source=empty)
+        result = validate_store(observed_store, source=manifest)
 
         assert not result.ok
         assert any(
@@ -785,7 +796,8 @@ class TestSourceFidelity:
                 f"\t{z_src}\t{se_src}\trsX\tsd"
             )
         src.write_text(SOURCE_HEADER + "\n" + "\n".join(lines) + "\n", encoding="utf-8")
-        assert validate_store(observed_store, source=src).ok  # matches before the drop
+        manifest = write_dense_manifest(src)
+        assert validate_store(observed_store, source=manifest).ok  # matches before the drop
 
         va = VariantAxis(observed_store)
         row_by_alid = {}
@@ -817,7 +829,7 @@ class TestSourceFidelity:
         root["se"][:] = se
 
         assert validate_store(observed_store).ok
-        result = validate_store(observed_store, source=src)
+        result = validate_store(observed_store, source=manifest)
         assert not result.ok
         assert any(
             "source-fidelity: matched 5 source associations but the store held no "
@@ -1552,7 +1564,7 @@ def signal_source_path(tmp_path: Path) -> Path:
 @pytest.fixture
 def signal_observed_store(tmp_path: Path, signal_source_path: Path) -> Path:
     out = tmp_path / "signal_obs.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [signal_source_path], out,
         store_id="test", release_id="obs-v1", reference_assembly="GRCh38",
     )
@@ -1826,28 +1838,31 @@ def test_a_source_cell_with_one_of_z_and_se_missing_is_refused(
     tmp_path: Path,
     observed_store: Path,
     ld_panel: Path,
-    monkeypatch: pytest.MonkeyPatch,
     plane: str,
 ):
     """Spec §15 forbids a half-missing pair. Completing one would pair an imputed
-    value with an observed one, so completion refuses the source instead; the
-    source's first present cell is read back with one of its two values missing."""
-    from opengwasdb.admission.cells import NotAdmitted
-    from opengwasdb.encoding.planes import DenseSePlane, DenseZPlane
+    value with an observed one, so completion refuses the source instead: the
+    Association Reader's presence rule refuses the cell as the source is read
+    (ADR 0070). The source's first present cell loses one of its two values."""
+    import zarr
 
-    cls = DenseSePlane if plane == "se" else DenseZPlane
-    original = cls.rows
+    group = zarr.open_group(observed_store / "data.zarr", mode="r+")
+    encoding = open_store(observed_store).manifest.encoding
+    z = DenseZPlane.open(group, encoding).band(0, int(group["z"].shape[0]))
+    row, analysis = (int(axis[0]) for axis in np.nonzero(np.isfinite(z)))
+    # Fixture first: an int16 Z plane and a float16 SE plane, and the cell present in both.
+    assert group["z"].dtype == np.int16 and group["se"].dtype == np.float16
+    assert np.isfinite(np.asarray(group["se"][row, analysis], dtype=np.float32))
+    if plane == "se":
+        group["se"][row, analysis] = np.float16(np.nan)
+    else:
+        group["z"][row, analysis] = Z_MISSING
 
-    def rows(self, *args, **kwargs):
-        out = np.array(original(self, *args, **kwargs), dtype=np.float32, copy=True)
-        present = np.flatnonzero(np.isfinite(out))
-        # Fixture first: the band holds a present cell to break.
-        assert present.size
-        out.flat[present[0]] = np.nan
-        return out
-
-    monkeypatch.setattr(cls, "rows", rows)
-    with pytest.raises(NotAdmitted, match="one of z and SE missing"):
+    with pytest.raises(
+        InvalidAssociations,
+        match=rf"source's Dense grid: 1 .*\(partial 1\); first: \(variant {row}, "
+        rf"analysis {analysis}: partial\)",
+    ):
         complete_dense_store(
             observed_store, tmp_path / "comp.opengwasdb", ld_panel,
             ancestry="EUR", min_cor=0.0, release_id="comp-v1",
@@ -1855,19 +1870,24 @@ def test_a_source_cell_with_one_of_z_and_se_missing_is_refused(
     assert not (tmp_path / "comp.opengwasdb").exists()
 
 
-def _seed_unjudged(zb, sb, src_plane, src_se_plane, out_to_src, r0):
+def _seed_unjudged(zb, sb, source, out_to_src, r0):
     """Seed a band from the source as completion does, judging none of its cells."""
     valid, rows = complete_module._band_source_rows(out_to_src, r0, r0 + len(zb))
     if len(valid):
-        zb[valid, :] = src_plane.rows(rows)
-        sb[valid, :] = src_se_plane.rows(np.asarray(rows, dtype=np.int64))
+        cells = source.inspect(Cells.variants(rows))
+        zb[valid, :] = cells.z.reshape(len(rows), -1)
+        sb[valid, :] = cells.se.reshape(len(rows), -1)
 
 
 @pytest.mark.parametrize(
-    ("judged_by", "where"),
+    ("judged_by", "refusal", "where"),
     [
-        ("the source read", r"complete-dense, the source's cells"),
-        ("the writer", "complete-dense, rows"),
+        ("the source read", InvalidAssociations, r"source's Dense grid: 1 .*non_canonical 1"),
+        (
+            "the writer",
+            NotAdmitted,
+            "complete-dense, rows.*missing marker other than the canonical NaN",
+        ),
     ],
 )
 def test_a_source_marker_other_than_the_canonical_nan_is_refused(
@@ -1876,6 +1896,7 @@ def test_a_source_marker_other_than_the_canonical_nan_is_refused(
     ld_panel: Path,
     monkeypatch: pytest.MonkeyPatch,
     judged_by: str,
+    refusal: type[ValueError],
     where: str,
 ):
     """Spec §15 forbids a missing marker other than `np.nan`'s NaN (ADR 0070).
@@ -1888,8 +1909,6 @@ def test_a_source_marker_other_than_the_canonical_nan_is_refused(
     has judged it before.
     """
     import zarr
-
-    from opengwasdb.admission import NotAdmitted
 
     group = zarr.open_group(observed_store / "data.zarr", mode="r+")
     encoding = open_store(observed_store).manifest.encoding
@@ -1904,7 +1923,7 @@ def test_a_source_marker_other_than_the_canonical_nan_is_refused(
     if judged_by == "the writer":
         monkeypatch.setattr(complete_module, "_seed_paired_bands", _seed_unjudged)
 
-    with pytest.raises(NotAdmitted, match=f"{where}.*missing marker other than the canonical NaN"):
+    with pytest.raises(refusal, match=where):
         complete_dense_store(
             observed_store, tmp_path / "comp.opengwasdb", ld_panel,
             ancestry="EUR", min_cor=0.0, release_id="comp-v1",

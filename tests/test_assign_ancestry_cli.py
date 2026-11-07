@@ -11,9 +11,11 @@ from __future__ import annotations
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
+from fork_order import CompletionOrder
 from typer.testing import CliRunner
 
 from opengwasdb.ancestry import (
@@ -22,6 +24,7 @@ from opengwasdb.ancestry import (
     load_reference,
     read_source_manifest,
 )
+from opengwasdb.ancestry import pipeline as ancestry_pipeline
 from opengwasdb.cli.main import app
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 
@@ -136,7 +139,7 @@ def test_catalogue_independent_of_worker_count(scenario):
     src = read_source_manifest(manifest)
     serial = tmp_path / "serial.tsv"
     parallel = tmp_path / "parallel.tsv"
-    for out, workers in [(serial, 1), (parallel, 3)]:
+    for out, workers in [(serial, 1), (parallel, 4)]:
         annotate_catalogue(
             src,
             reference,
@@ -148,6 +151,68 @@ def test_catalogue_independent_of_worker_count(scenario):
             reference_build="GRCh38",
         )
     assert serial.read_text() == parallel.read_text()
+
+
+# The scenario's three Analyses, and the order the fixture manifest lists them.
+_SCENARIO_IDS = ["eur1", "afr1", "mix1"]
+_SCENARIO_ORDER = CompletionOrder(len(_SCENARIO_IDS))
+_REAL_ANNOTATE_ONE = ancestry_pipeline._annotate_one
+#: Set by the test, so the worker below can recognise its Analysis: the pool
+#: hands it the task, and the task carries no index of its own.
+_INDEX_BY_SOURCE: dict[str, int] = {}
+
+
+def _annotate_one_finishing_last(context: Any, task: tuple[str, str, str]) -> Any:
+    """The pipeline's own worker, held so the first Analysis finishes last."""
+    index = _INDEX_BY_SOURCE[task[0]]
+    if index == 0:
+        _SCENARIO_ORDER.wait_for_the_rest()
+    result = _REAL_ANNOTATE_ONE(context, task)
+    _SCENARIO_ORDER.claim(index)
+    return result
+
+
+def test_catalogue_keeps_input_order_when_the_first_analysis_finishes_last(
+    scenario, monkeypatch
+):
+    """`fork_each` yields in completion order (#395): the Catalogue must not.
+
+    The first Analysis is held until the other two have finished, so a pipeline
+    that paired the pool's results with the manifest by position would give an
+    Analysis another Analysis's Ancestry Assignment -- a confidently wrong
+    label on a real cohort, invisible in the row order.
+    """
+    tmp_path, reference, manifest, _fp, _gp = scenario
+    src = read_source_manifest(manifest)
+    assert [row.trait_id for row in src] == _SCENARIO_IDS
+    _SCENARIO_ORDER.reset()
+    _INDEX_BY_SOURCE.update({row.file_path: i for i, row in enumerate(src)})
+    monkeypatch.setattr(ancestry_pipeline, "_annotate_one", _annotate_one_finishing_last)
+
+    rows = annotate_catalogue(
+        src,
+        reference,
+        _gates(),
+        tmp_path / "ordered.tsv",
+        catalogue_version="cat-v1",
+        ancestry_reference_version="prive2022-hg38",
+        n_workers=len(_SCENARIO_IDS),
+        reference_build="GRCh38",
+    )
+
+    assert [row.trait_id for row in rows] == _SCENARIO_IDS
+    # The fit travels with its own Analysis: the first-listed is EUR, the
+    # second AFR, and the admixed one is parked Unassigned.
+    assert {row.trait_id: row.assignment.assigned_ancestry for row in rows} == {
+        "eur1": "EUR",
+        "afr1": "AFR",
+        "mix1": None,
+    }
+    # Meaningful only if the pool really finished in another order: the
+    # Analysis input order demands first is the one that finished last.
+    finished = _SCENARIO_ORDER.order()
+    assert sorted(finished) == list(range(len(_SCENARIO_IDS)))
+    assert finished[-1] == 0
 
 
 def _assign_ancestry_args(

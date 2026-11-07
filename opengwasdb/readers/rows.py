@@ -402,6 +402,10 @@ class ReaderBatch:
     - ``imputation_score`` and ``imputation_status``: the declared score's parse,
       NaN and `UNDECLARED` where the Analysis declares none.
     - ``rsid``: the source's rs identifier for the row's variant, ``""`` where none.
+    - ``ref`` and ``alt``: the row's alleles as the source spells them, in its
+      order, as its association carries them (ADR 0075). The ALID upper-cases
+      them; the rsid harvest compares the names a site's spellings carry, so it
+      reads these (#379).
     - ``reference``: the format's declaration of which allele is the genome's
       reference, carried unchanged from the reader (`ReferenceAllele`).
     - ``ref_first``: for each row, whether its `ref` is the allele its ALID
@@ -421,6 +425,8 @@ class ReaderBatch:
     imputation_score: np.ndarray
     imputation_status: np.ndarray
     rsid: np.ndarray
+    ref: np.ndarray
+    alt: np.ndarray
     reference: ReferenceAllele
     ref_first: np.ndarray | None = None
     key_prefix: str = ""
@@ -440,6 +446,8 @@ class ReaderBatch:
             )
         if self.ref_first is not None and len(self.ref_first) != len(self.alid):
             raise ValueError("ref_first must hold one value per row of the batch")
+        if not len(self.ref) == len(self.alt) == len(self.alid):
+            raise ValueError("ref and alt must each hold one allele per row of the batch")
 
     def __len__(self) -> int:
         return int(self.alid.shape[0])
@@ -457,6 +465,8 @@ class ReaderBatch:
             imputation_score=self.imputation_score[keep],
             imputation_status=self.imputation_status[keep],
             rsid=self.rsid[keep],
+            ref=self.ref[keep],
+            alt=self.alt[keep],
             ref_first=None if self.ref_first is None else self.ref_first[keep],
         )
 
@@ -540,6 +550,8 @@ def _batch_of_rows(
         ),
         imputation_status=_row_array(rows, lambda row: row.imputation_score.status, object),
         rsid=_row_array(rows, lambda row: row.rsid, object),
+        ref=_row_array(rows, lambda row: row.ref, object),
+        alt=_row_array(rows, lambda row: row.alt, object),
         reference=reference,
         ref_first=_ref_first(rows) if reference.declared else None,
     )

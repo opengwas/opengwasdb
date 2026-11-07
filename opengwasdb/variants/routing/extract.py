@@ -10,10 +10,18 @@ pre-lift window is lifted in a worker, re-bucketed by post-lift window, merged
 and compressed (issue #197). The members concatenate in genomic order behind
 one header member.
 
-The lift here is the window's own, so the failure threshold applies to the
-whole union and the reverse-strand guard sees every key before anything is
-written (issue #354). It moves onto `place_sites` when the artifact can record
-a lift's orientation.
+Each window writer compares the names a site's spellings carry as the union's
+harvest does, and refuses a key its sources name two ways: an artifact a
+build uses as given must not freeze the name of whichever source came first
+(issue #379).
+
+The lift here is the window's own, so its failures are counted over the whole
+union before anything is written. It projects and orients by the rules
+`place_sites` applies: a key's ALID is formed from its alleles as they read on
+GRCh38 (`LiftedRow.alid`), and a key whose statistics that projection
+re-orients (`statistics_swap`) is written to the artifact's
+``reoriented_keys``, so a build reading it re-signs exactly what Pass 1 would
+(issue #354).
 """
 
 from __future__ import annotations
@@ -30,14 +38,15 @@ from functools import partial
 from pathlib import Path
 from typing import TypeVar
 
-from opengwasdb.build.liftover import LiftoverFailureError, lifted_rows
+from opengwasdb.build.liftover import LiftoverFailureError, lifted_rows, statistics_swap
 from opengwasdb.build.ordered_pool import fork_pool
 from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.variants.axis import alid_sort_key
-from opengwasdb.variants.normalise import canonical_alid, chromosome_sort_key
+from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.variants.reference import ARTIFACT_HEADER, artifact_line
 from opengwasdb.variants.routing.keys import SourceKey, routing_key
 from opengwasdb.variants.routing.lift import cross_assembly_collisions, log_cross_assembly_drop
+from opengwasdb.variants.routing.names import refuse_disputed_names
 from opengwasdb.variants.routing.union import (
     Pass1Stats,
     ReaderFactory,
@@ -51,22 +60,8 @@ from opengwasdb.variants.windows import WindowKey, window_key, window_size_bp
 
 log = logging.getLogger(__name__)
 
-
-class ReverseStrandLiftError(ValueError):
-    """Extraction refuses a lift that puts any source key on the reverse strand.
-
-    A Variant Reference artifact names each source key's own ``(ref, alt)`` at
-    the key's post-lift position, so it can only describe a lift that left the
-    alleles as they read. A reverse-strand chain block complements them instead
-    (spec §4), which the artifact has no field to record: a single-pass build
-    reading it would name the wrong ALID, and a palindromic pair -- whose ALID
-    is the same under either projection -- would keep its name and lose its
-    sign. The block's strand, not the statistics, is what makes an artifact
-    unsafe: an indel's complement can keep the alleles in their original order,
-    so it swaps no statistic while still moving the ALID. Extraction therefore
-    stops rather than write an artifact that reads as a right answer (issue
-    #354).
-    """
+#: What extraction's refusal of a disputed name calls it.
+EXTRACTION_LABEL = "Variant Reference extraction"
 
 
 class EmptyReferenceError(ValueError):
@@ -145,17 +140,16 @@ class _LiftedBucket:
 class _StagedWindow:
     """One pre-lift window's step-A result: sub-shards plus lift and drop counts.
 
-    ``reverse_strand`` counts the window's hg19 keys the chain block put on the
-    reverse strand, and ``first_reverse_strand`` is the genomic-first of them,
-    so the parent can refuse the whole artifact naming one key (issue #354).
+    ``reoriented`` counts the window's hg19 keys whose statistics the lift
+    re-oriented and which survived the cross-assembly drop, which the parent
+    logs (issue #354).
     """
 
     buckets: tuple[_LiftedBucket, ...]
     attempts: int
     failures: int
     collisions: int
-    reverse_strand: int
-    first_reverse_strand: SourceKey | None
+    reoriented: int
 
 
 @dataclass(frozen=True)
@@ -206,11 +200,12 @@ def extract_variant_reference(
 
     ``union`` shapes the windowed tree-reduce and never changes the artifact
     (issues #188, #194); an unusable value fails before any source is read.
-    Phase timings and shard counts ride on the result. Raises ``ValueError``
-    when there are no sources, `EmptyReferenceError` when they resolve no
-    variant, `LiftoverFailureError` when the hg19 group fails the lift beyond
-    ``failure_threshold``, and `ReverseStrandLiftError` when the lift puts any
-    key on the reverse strand, which the artifact cannot record (issue #354).
+    Phase timings and shard counts ride on the result. A key whose statistics
+    the lift re-oriented is written under the ALID its projected alleles name
+    and listed in its row's ``reoriented_keys`` (issue #354). Raises
+    ``ValueError`` when there are no sources, `EmptyReferenceError` when they
+    resolve no variant, and `LiftoverFailureError` when the hg19 group fails
+    the lift beyond ``failure_threshold``.
     """
     if not sources:
         raise ValueError("no sources to extract a Variant Reference from")
@@ -289,13 +284,17 @@ def _write_member(
     member_path: str | Path,
     rsid_by_alid: Mapping[str, str],
     source_keys_by_alid: Mapping[str, list[str]],
+    reoriented_by_alid: Mapping[str, list[str]],
 ) -> None:
     """Write one window's ALIDs, sorted by ``alid_sort_key``, as a gzip member."""
     with gzip.open(member_path, "wt", encoding="utf-8") as handle:
         for alid in sorted(source_keys_by_alid, key=alid_sort_key):
             source_keys = source_keys_by_alid[alid]
             source_keys.sort()
-            handle.write(artifact_line(alid, source_keys, rsid_by_alid.get(alid, "")))
+            reoriented = sorted(reoriented_by_alid.get(alid, ()))
+            handle.write(
+                artifact_line(alid, source_keys, rsid_by_alid.get(alid, ""), reoriented)
+            )
 
 
 def _stream_window_artifact(task: tuple[WindowKey, str, str]) -> _WindowArtifact:
@@ -312,14 +311,18 @@ def _stream_window_artifact(task: tuple[WindowKey, str, str]) -> _WindowArtifact
     window, shard_path, member_path = task
     rsid_by_alid: dict[str, str] = {}
     source_keys_by_alid: dict[str, list[str]] = {}
+    named: dict[SourceKey, str] = {}
     n_source_keys = 0
     for (chrom, pos, ref, alt), rsid in iter_shard(Path(shard_path)):
         alid = canonical_alid(chrom, pos, ref, alt)
-        if rsid and alid not in rsid_by_alid:
-            rsid_by_alid[alid] = rsid
+        if rsid:
+            named[(chrom, pos, ref, alt)] = rsid
+            rsid_by_alid.setdefault(alid, rsid)
         source_keys_by_alid.setdefault(alid, []).append(f"{chrom}:{pos}:{ref}:{alt}")
         n_source_keys += 1
-    _write_member(member_path, rsid_by_alid, source_keys_by_alid)
+    refuse_disputed_names(named, label=EXTRACTION_LABEL)
+    # Nothing on GRCh38 is lifted, so nothing is re-oriented.
+    _write_member(member_path, rsid_by_alid, source_keys_by_alid, {})
     return _WindowArtifact(
         window, Path(member_path), len(source_keys_by_alid), n_source_keys, len(rsid_by_alid)
     )
@@ -413,14 +416,15 @@ def _write_streaming_artifact(
 def _lifted_line(
     rank: tuple[int, int],
     pre_site: tuple[str, int, str, str],
-    post_chrom: str,
-    post_pos: int,
+    alid: str,
+    reoriented: bool,
     rsid: str,
 ) -> str:
-    """One intermediate record: rank, pre-lift site, post-lift locus and rsid."""
+    """One intermediate record: rank, pre-lift site, post-lift ALID, whether the
+    lift re-oriented the site, and its rsid."""
     chunk, spill = rank
     chrom, pos, ref, alt = pre_site
-    return f"{chunk}\t{spill}\t{chrom}\t{pos}\t{ref}\t{alt}\t{post_chrom}\t{post_pos}\t{rsid}\n"
+    return f"{chunk}\t{spill}\t{chrom}\t{pos}\t{ref}\t{alt}\t{alid}\t{int(reoriented)}\t{rsid}\n"
 
 
 def _read_assembly_records(
@@ -449,33 +453,39 @@ def _bucket_lifted_records(
     hg38_records: Mapping[tuple[str, int, str, str], tuple[tuple[int, int], str]],
     hg19_records: Mapping[tuple[str, int, str, str], tuple[tuple[int, int], str]],
     lifted: Mapping[tuple[str, int, str, str], str],
+    reoriented: AbstractSet[SourceKey],
     size_bp: int,
-) -> tuple[dict[WindowKey, list[str]], int]:
+) -> tuple[dict[WindowKey, list[str]], int, int]:
     """Drop cross-assembly ambiguous tuples, then bucket survivors by post-lift window.
 
     The union's rule, `cross_assembly_collisions`, over the hg38 group and the
     hg19 sites that lifted: every spelling of an identity both declare is
     dropped from both. A routing key fixes its pre-lift window, so the union
     of these window-local rulings is exactly the global one (issue #197).
-    Returns the buckets and the number of identities both groups declared.
+    ``lifted`` is each lifted site's ALID and ``reoriented`` the sites whose
+    statistics the lift re-oriented (issue #354). Returns the buckets, the
+    number of identities both groups declared, and the number of re-oriented
+    sites the buckets hold.
     """
     n_tuples, collisions = _colliding_sites(hg38_records.keys(), lifted.keys())
     buckets: dict[WindowKey, list[str]] = {}
+    n_reoriented = 0
     for site, (rank, rsid) in hg38_records.items():
         if site in collisions:
             continue
         buckets.setdefault(window_key(site[0], site[1], size_bp), []).append(
-            _lifted_line(rank, site, site[0], site[1], rsid)
+            _lifted_line(rank, site, canonical_alid(*site), False, rsid)
         )
     for site, (rank, rsid) in hg19_records.items():
         alid = lifted.get(site)
         if alid is None or site in collisions:
             continue
         post_chrom, post_pos, _a1, _a2 = alid.split(":")
+        n_reoriented += site in reoriented
         buckets.setdefault(window_key(post_chrom, int(post_pos), size_bp), []).append(
-            _lifted_line(rank, site, post_chrom, int(post_pos), rsid)
+            _lifted_line(rank, site, alid, site in reoriented, rsid)
         )
-    return buckets, n_tuples
+    return buckets, n_tuples, n_reoriented
 
 
 def _colliding_sites(
@@ -491,29 +501,24 @@ def _colliding_sites(
     }
 
 
-def _source_key_order(key: SourceKey) -> tuple[tuple[int, str], int, str, str]:
-    """Genomic order for naming the first of several source keys."""
-    return (chromosome_sort_key(key[0]), key[1], key[2], key[3])
-
-
 def _stage_liftover_window(task: _LiftStageTask) -> _StagedWindow:
     """Lift one pre-lift window and re-bucket the survivors by post-lift window.
 
     Both assemblies' final shards are read once, the hg19 rows are lifted with a
     per-worker cached LiftOver, ambiguous raw tuples are dropped from both, and
     each survivor is written to the intermediate sub-shard of the post-lift
-    window its hg38 locus falls in. Lift attempts and failures are counted, as
-    are the keys the chain block put on the reverse strand; only bucket paths
-    and counts cross back (issues #197, #354).
+    window its hg38 locus falls in, under the ALID its projected alleles name
+    and with whether the lift re-oriented it. Lift attempts and failures are
+    counted; only bucket paths and counts cross back (issues #197, #354).
     """
     hg38_records, hg19_records = _read_assembly_records(task.shards)
     rows, attempts, failures = lifted_rows(
         hg19_records, chain_file=task.chain_file, from_build="hg19", to_build="hg38"
     )
     lifted = {key: row.alid for key, row in rows.items()}
-    reverse_strand = [key for key, row in rows.items() if row.strand == "-"]
-    buckets, collisions = _bucket_lifted_records(
-        hg38_records, hg19_records, lifted, task.size_bp
+    reoriented = {key for key, row in rows.items() if statistics_swap(key, row)}
+    buckets, collisions, n_reoriented = _bucket_lifted_records(
+        hg38_records, hg19_records, lifted, reoriented, task.size_bp
     )
     members_dir = Path(task.members_dir)
     specs: list[_LiftedBucket] = []
@@ -522,21 +527,17 @@ def _stage_liftover_window(task: _LiftStageTask) -> _StagedWindow:
         with open(sub_shard_path, "w", encoding="utf-8") as handle:
             handle.writelines(lines)
         specs.append(_LiftedBucket(post_window, sub_shard_path))
-    return _StagedWindow(
-        tuple(specs),
-        attempts,
-        failures,
-        collisions,
-        len(reverse_strand),
-        min(reverse_strand, key=_source_key_order) if reverse_strand else None,
-    )
+    return _StagedWindow(tuple(specs), attempts, failures, collisions, n_reoriented)
 
 
-def _read_lifted_records(
-    paths: Sequence[str],
-) -> list[tuple[int, int, str, int, str, str, str, int, str]]:
+#: One intermediate record, typed: chunk, spill, the pre-lift site, its
+#: post-lift ALID, whether the lift re-oriented it, and its rsid.
+_LiftedRecord = tuple[int, int, str, int, str, str, str, bool, str]
+
+
+def _read_lifted_records(paths: Sequence[str]) -> list[_LiftedRecord]:
     """Read step A's intermediate sub-shards back into typed records."""
-    records: list[tuple[int, int, str, int, str, str, str, int, str]] = []
+    records: list[_LiftedRecord] = []
     for path in paths:
         with open(path, encoding="utf-8") as handle:
             for line in handle:
@@ -547,8 +548,8 @@ def _read_lifted_records(
                     raw_pre_pos,
                     raw_pre_ref,
                     raw_pre_alt,
-                    raw_post_chrom,
-                    raw_post_pos,
+                    raw_alid,
+                    raw_reoriented,
                     raw_rsid,
                 ) = line.rstrip("\n").split("\t")
                 records.append(
@@ -559,8 +560,8 @@ def _read_lifted_records(
                         int(raw_pre_pos),
                         raw_pre_ref,
                         raw_pre_alt,
-                        raw_post_chrom,
-                        int(raw_post_pos),
+                        raw_alid,
+                        raw_reoriented == "1",
                         raw_rsid,
                     )
                 )
@@ -573,20 +574,25 @@ def _compress_lifted_window(task: _LiftMergeTask) -> _WindowArtifact:
     Records are ordered by ``(rank, pre-lift site)``, so an ALID several records
     resolve to takes the first non-empty rsid exactly as the materialising
     writer's global ``(rank, site)`` insertion did. Source keys are combined and
-    sorted and the window's ALIDs are sorted by ``alid_sort_key``.
+    sorted, the ones the lift re-oriented are listed again apart, and the
+    window's ALIDs are sorted by ``alid_sort_key``.
     """
     records = _read_lifted_records(task.sub_shards)
     records.sort(key=lambda record: record[:6])
     rsid_by_alid: dict[str, str] = {}
     source_keys_by_alid: dict[str, list[str]] = {}
-    for _chunk, _spill, pre_chrom, pre_pos, pre_ref, pre_alt, post_chrom, post_pos, rsid in records:
-        alid = canonical_alid(post_chrom, post_pos, pre_ref, pre_alt)
-        if rsid and alid not in rsid_by_alid:
-            rsid_by_alid[alid] = rsid
-        source_keys_by_alid.setdefault(alid, []).append(
-            f"{pre_chrom}:{pre_pos}:{pre_ref}:{pre_alt}"
-        )
-    _write_member(task.member_path, rsid_by_alid, source_keys_by_alid)
+    reoriented_by_alid: dict[str, list[str]] = {}
+    named: dict[SourceKey, str] = {}
+    for _chunk, _spill, pre_chrom, pre_pos, pre_ref, pre_alt, alid, reoriented, rsid in records:
+        if rsid:
+            named.setdefault((pre_chrom, pre_pos, pre_ref, pre_alt), rsid)
+            rsid_by_alid.setdefault(alid, rsid)
+        source_key = f"{pre_chrom}:{pre_pos}:{pre_ref}:{pre_alt}"
+        source_keys_by_alid.setdefault(alid, []).append(source_key)
+        if reoriented:
+            reoriented_by_alid.setdefault(alid, []).append(source_key)
+    refuse_disputed_names(named, label=EXTRACTION_LABEL)
+    _write_member(task.member_path, rsid_by_alid, source_keys_by_alid, reoriented_by_alid)
     return _WindowArtifact(
         task.window,
         Path(task.member_path),
@@ -644,30 +650,6 @@ def _enforce_liftover_threshold(staged: Sequence[_StagedWindow], threshold: floa
         )
 
 
-def _refuse_reverse_strand_lift(staged: Sequence[_StagedWindow]) -> None:
-    """Refuse the artifact when the lift put any source key on the reverse strand.
-
-    Called between step A and step B: the sub-shards exist, but no post-lift
-    member, and therefore no artifact, has been written (issue #354).
-    """
-    reverse_strand = sum(stage.reverse_strand for stage in staged)
-    if not reverse_strand:
-        return
-    first = min(
-        (stage.first_reverse_strand for stage in staged if stage.first_reverse_strand is not None),
-        key=_source_key_order,
-    )
-    raise ReverseStrandLiftError(
-        f"{reverse_strand} source key(s) lift onto the reverse strand, which complements "
-        f"their alleles (first: {first[0]}:{first[1]}:{first[2]}:{first[3]}), and a "
-        f"Variant Reference artifact cannot record that orientation: it keeps every "
-        f"source key's own pre-lift alleles, so a single-pass build reading it would "
-        f"name the wrong ALID, and a palindromic pair would keep its ALID and lose its "
-        f"sign. Build this manifest two-pass, so the lift happens in Pass 1 and its "
-        f"orientation is applied (issue #354)."
-    )
-
-
 def _merge_lifted_windows(
     staged: Sequence[_StagedWindow], n_workers: int, work_dir: str
 ) -> list[_WindowArtifact]:
@@ -700,11 +682,10 @@ def _write_lifted_streaming_artifact(
 
     Step A lifts each pre-lift window; the parent aggregates attempt/failure
     counts and enforces the threshold before any post-lift member is written,
-    and refuses a lift that put any key on the reverse strand, which would name
-    the artifact's variants on the source's strand (issue #354).
-    Step B merges the intermediate sub-shards per post-lift window and compresses
-    each; step C writes the header and appends the post-lift members in genomic
-    order. No step reads a row or builds a site set in the parent (issue #197).
+    and logs how many keys the lift re-oriented (issue #354). Step B merges the
+    intermediate sub-shards per post-lift window and compresses each; step C
+    writes the header and appends the post-lift members in genomic order. No
+    step reads a row or builds a site set in the parent (issue #197).
     """
     size_bp = window_size_bp(window_size_mb)
     write_start = time.monotonic()
@@ -717,7 +698,10 @@ def _write_lifted_streaming_artifact(
         staged = _stage_all_windows(shards, size_bp, n_workers, chain_file_str, work_dir)
         log_cross_assembly_drop(sum(stage.collisions for stage in staged))
         _enforce_liftover_threshold(staged, liftover_failure_threshold)
-        _refuse_reverse_strand_lift(staged)
+        log.info(
+            "Liftover re-oriented %d source key(s), recorded in reoriented_keys",
+            sum(stage.reoriented for stage in staged),
+        )
         artifacts = _merge_lifted_windows(staged, n_workers, work_dir)
         return _finish_members(out, artifacts, write_start)
 

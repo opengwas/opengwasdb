@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from opengwasdb.build.source import NormalisedAssociation
+from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.variants import CanonicalVariant
 
 #: A format-4.2 GWAS-VCF header declaring ES, SE, EZ and AF, one sample

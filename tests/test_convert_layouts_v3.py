@@ -27,6 +27,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from dense_sources import build_dense_fixture
 from legacy_fixtures import relayout_as_0_1_0
 from test_dense_completion import SOURCE_HEADER, SOURCE_ROWS
 from test_dense_completion import _make_ld_panel as _make_dense_ld_panel
@@ -43,7 +44,6 @@ from test_ragged_completion import _make_besd_fixture
 from test_ragged_completion import _make_ld_panel as _make_ragged_ld_panel
 
 from benchmarks.benchmark_store_comparison import assert_identical, result_digests
-from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
@@ -111,7 +111,7 @@ def dense_completed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     source = root / "associations.tsv"
     source.write_text(SOURCE_HEADER + "\n" + "\n".join(SOURCE_ROWS) + "\n", encoding="utf-8")
     observed = root / "dense-obs.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], observed, store_id="dense-rc", release_id="obs-v1", reference_assembly="GRCh38"
     )
     panel = _make_dense_ld_panel(root)
@@ -142,7 +142,7 @@ def small_dense_observed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     source = root / "associations.tsv"
     source.write_text("\n".join(lines) + "\n", encoding="utf-8")
     store = root / "small-dense-built.opengwasdb"
-    build_dense_observed_from_sources(
+    build_dense_fixture(
         [source], store, store_id="small-dense", release_id="v1", reference_assembly="GRCh37"
     )
     return relayout_as_0_1_0(store, root / "small-dense.opengwasdb")

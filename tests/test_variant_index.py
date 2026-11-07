@@ -38,6 +38,7 @@ from test_ragged_build_ssf import _make_fixture
 from test_ragged_completion import _RESULT_KEYS
 from test_ragged_residual_completion import RaggedResidualScenario
 
+from opengwasdb.layouts.ragged import by_variant
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.by_variant import (
@@ -1096,3 +1097,51 @@ def test_augment_refreshes_consolidated_metadata(tmp_path: Path) -> None:
     # The refreshed record describes the group: a fresh open sees the new array.
     group = zarr.open_group(str(data_root), mode="r")
     assert "by_variant" in group["ragged"]
+
+
+def test_a_rekeyed_exception_table_refuses_an_index_and_value_of_other_lengths(
+    tmp_path,
+) -> None:
+    """Two positions with three values wrote two of the three and dropped the
+    rest, in a table whose every entry is an exact value (issue #392)."""
+    index = zarr.open_group(str(tmp_path / "by_variant.zarr"), mode="w", zarr_format=2)
+    source = [
+        (
+            "se",
+            "se_exception_index",
+            "se_exception_value",
+            np.empty(0, dtype=np.int64),
+            np.empty(0, dtype=np.float32),
+        )
+    ]
+    with pytest.raises(
+        ValueError,
+        match=r"re-keyed exception table at se_exception_index: positions of length 2 "
+        r"and values of length 3 must be parallel",
+    ):
+        by_variant._write_rekeyed_tables(
+            index,
+            source,
+            [[np.arange(2, dtype=np.int64)]],
+            [[np.arange(3, dtype=np.float32)]],
+        )
+    assert list(index.array_keys()) == []
+
+
+def test_no_exception_table_is_written_when_a_later_one_is_malformed(tmp_path) -> None:
+    """A valid Z table ahead of a malformed SE table was written before the SE
+    table was refused, leaving half a re-keyed index behind (issue #392)."""
+    index = zarr.open_group(str(tmp_path / "by_variant.zarr"), mode="w", zarr_format=2)
+    empty = (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float32))
+    source = [
+        ("z", "z_overflow_index", "z_overflow_value", *empty),
+        ("se", "se_exception_index", "se_exception_value", *empty),
+    ]
+    with pytest.raises(ValueError, match=r"se_exception_index: positions of length 2"):
+        by_variant._write_rekeyed_tables(
+            index,
+            source,
+            [[np.arange(2, dtype=np.int64)], [np.arange(2, dtype=np.int64)]],
+            [[np.arange(2, dtype=np.float32)], [np.arange(1, dtype=np.float32)]],
+        )
+    assert list(index.array_keys()) == []

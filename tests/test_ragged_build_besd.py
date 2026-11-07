@@ -13,7 +13,9 @@ from liftover_fixtures import (
     write_collision_chain,
     write_two_strand_chain,
 )
+from stored_rows import stored_rows
 
+from opengwasdb.associations import Cells, CsrReader
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
@@ -173,24 +175,23 @@ def test_zarr_csr_associations(tmp_path):
     assert csr.n_associations == 5  # 2 + 1 + 2
 
     # Probe 0 has 2 associations
-    a0 = csr.get_analysis(0)
+    a0 = stored_rows(out, 0)
     assert len(a0.variant_index) == 2
 
     # Probe 1 has 1 association
-    a1 = csr.get_analysis(1)
+    a1 = stored_rows(out, 1)
     assert len(a1.variant_index) == 1
 
     # Probe 2 has 2 associations
-    a2 = csr.get_analysis(2)
+    a2 = stored_rows(out, 2)
     assert len(a2.variant_index) == 2
 
 
 def test_z_scores_computed_correctly(tmp_path):
     out = _build_store(tmp_path)
 
-    csr = RaggedCSRReader(out)
     # Probe 1: single assoc beta=0.5, se=0.05 → z=10.0
-    a1 = csr.get_analysis(1)
+    a1 = stored_rows(out, 1)
     assert len(a1.z) == 1
     assert abs(float(a1.z[0]) - 10.0) < 0.001  # fixed-point 1/1024 (ADR 0037)
 
@@ -235,9 +236,8 @@ def test_top_hit_z_values_match_csr(tmp_path):
     ais = group["analysis_index"][:].astype(int)
     zs = group["z"][:].astype("float32")
 
-    offsets = csr._offsets[:]
-    vi_all = csr._variant_index[:]
-    z_all = csr.z_all()
+    whole = CsrReader.open(out, requires_mask=False).inspect(Cells.analyses(0, csr.n_analyses))
+    offsets, vi_all, z_all = csr.offsets, whole.variant_index, whole.z
 
     for vi, ai, z_hit in zip(vis, ais, zs):
         start, end = int(offsets[ai]), int(offsets[ai + 1])
@@ -792,7 +792,7 @@ def test_reverse_strand_hg19_snp_is_stored_as_the_resolver_orients_it(tmp_path):
 
     axis = VariantAxis(out)
     try:
-        associations = RaggedCSRReader(out).get_analysis(0)
+        associations = stored_rows(out, 0)
         z_by_alid = {
             axis.by_index(int(index)).alid: float(z)
             for index, z in zip(associations.variant_index, associations.z, strict=True)
@@ -926,9 +926,8 @@ def test_hg19_lift_collision_drops_every_entry_and_association_in_the_group(
     assert result.n_variants == 2
     assert result.n_associations == 2, "the colliding rows' associations must go too"
 
-    reader = RaggedCSRReader(out)
-    assert len(reader.get_analysis(0).z) == 2
-    assert len(reader.get_analysis(1).z) == 0, "a probe with only colliding rows is empty"
+    assert len(stored_rows(out, 0).z) == 2
+    assert len(stored_rows(out, 1).z) == 0, "a probe with only colliding rows is empty"
 
     lift = json.loads((out / "manifest.json").read_text())["provenance"]["lift"]
     assert lift["n_collisions"] == 2, lift
@@ -1017,9 +1016,8 @@ def test_same_assembly_duplicate_variant_is_dropped_and_counted_at_the_root(
     with gzip.open(record / "dropped" / "0.tsv.gz", "rt") as fh:
         assert fh.read().splitlines()[1:] == ["esi:0\toff_axis", "esi:1\toff_axis"]
 
-    reader = RaggedCSRReader(out)
-    assert len(reader.get_analysis(0).z) == 1
-    assert len(reader.get_analysis(1).z) == 0, "a probe with only duplicated rows is empty"
+    assert len(stored_rows(out, 0).z) == 1
+    assert len(stored_rows(out, 1).z) == 0, "a probe with only duplicated rows is empty"
 
     provenance = json.loads((out / "manifest.json").read_text())["provenance"]
     assert "lift" not in provenance, (

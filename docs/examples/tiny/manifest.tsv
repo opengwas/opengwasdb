@@ -1,0 +1,3 @@
+analysis_id	source_file	analysis_label	stored_effect_scale	original_sd_method	trait_ontology_id	trait_ontology_label
+height_eur	docs/examples/tiny/height_eur.tsv	Height EUR pilot	sd	declared_standardised	EFO:0004339	body height
+ldl_eur	docs/examples/tiny/ldl_eur.tsv	LDL EUR pilot	sd	declared_standardised	EFO:0004611	low density lipoprotein cholesterol measurement

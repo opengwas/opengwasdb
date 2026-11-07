@@ -16,6 +16,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+import numpy as np
+
 from opengwasdb.build.liftover import normalise_build
 from opengwasdb.model.analyses import Analysis, PassthroughMetadata
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
@@ -37,7 +39,13 @@ from opengwasdb.readers.column_map import (
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.registry import SourceSpec, known_capabilities
 
-__all__ = ["ManifestRow", "column_map_provenance", "manifest_row_to_analysis", "read_manifest"]
+__all__ = [
+    "ManifestRow",
+    "apply_se_divisor",
+    "column_map_provenance",
+    "manifest_row_to_analysis",
+    "read_manifest",
+]
 
 
 @dataclass(frozen=True)
@@ -88,6 +96,16 @@ class ManifestRow:
             stored_effect_scale=StoredEffectScale(self.stored_effect_scale),
             column_map=self.column_map,
         )
+
+
+def apply_se_divisor(se: np.ndarray, se_divisor: float) -> np.ndarray:
+    """Continuous-trait phenotype-SD standardisation (issue #18):
+    ``stored_se = original_se / sd``. Shared by the dense and hybrid builders,
+    both of which resolve an association stream to ``(index, z, se)`` and need
+    the same no-op-when-1.0 divide applied to ``se`` before spilling."""
+    if se_divisor == 1.0:
+        return se
+    return se / np.float32(se_divisor)
 
 
 def manifest_row_to_analysis(row: ManifestRow) -> Analysis:

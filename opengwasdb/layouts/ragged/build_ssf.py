@@ -18,6 +18,7 @@ from __future__ import annotations
 import csv
 import math
 from collections.abc import Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -35,12 +36,19 @@ from opengwasdb.build.eaf_orientation import (
     load_eaf_reference,
     select_sites,
 )
-from opengwasdb.build.liftover import normalise_build
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.by_variant import build_variant_index
 from opengwasdb.layouts.ragged.provenance import ragged_provenance
+from opengwasdb.layouts.ragged.ssf_lift import (
+    STORE_BUILD,
+    LiftOptions,
+    SitePlacement,
+    place_batch,
+    place_held_sources,
+    require_liftable,
+)
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
@@ -73,7 +81,8 @@ from opengwasdb.variants.normalise import (
     CanonicalVariant,
     chromosome_sort_key,
 )
-from opengwasdb.variants.routing import collapse_duplicates
+from opengwasdb.variants.routing import SourceKey, collapse_duplicates, union_names
+from opengwasdb.variants.rsid import RsidConflictPolicy
 
 _MISSING = {"", ".", "NA", "NaN", "nan", "None"}
 
@@ -93,7 +102,7 @@ class AnalyteInput:
     mhc: bool
     filtered_path: Path
     #: The build the manifest row declares (`source_genome_build`), normalised:
-    #: GRCh38's, since a row declaring another build, or none, is refused.
+    #: ``hg38``, or ``hg19`` for a source the build lifts. A row declaring none is refused.
     source_build: str
     assigned_ancestry: str = ""  # optional manifest column (ADR 0028); "" when omitted
     # Shared-core analyses.tsv columns the manifest supplies and this builder only
@@ -133,31 +142,28 @@ def _analyte_from_row(
         context=_opt(r.get("context")),
         mhc=str(r.get("mhc", "")).strip().upper() in {"TRUE", "1", "YES"},
         filtered_path=filtered_path,
-        source_build=_grch38_source(r, analysis_id),
+        source_build=_declared_source(r, analysis_id),
         assigned_ancestry=_opt(r.get("assigned_ancestry")) or "",
         metadata=PassthroughMetadata.from_manifest_row(r),
     )
 
 
-def _grch38_source(row: Mapping[str, str], analysis_id: str) -> str:
-    """The row's declared build, refused unless it is GRCh38.
+def _declared_source(row: Mapping[str, str], analysis_id: str) -> str:
+    """The row's declared build, normalised; refused when it declares none.
 
-    A Ragged SSF Store is one build, and every source declares its own. The
-    build lifts nothing, so a source on another build would be stored at
-    coordinates its variants do not have; one that declares none is not
-    assumed to be on GRCh38.
+    A Ragged SSF Store is one build, GRCh38, and every source declares its own:
+    a source that declares none is not assumed to be on GRCh38. A build other
+    than GRCh38 is lifted, and needs a chain (`require_liftable`).
     """
-    build = declared_build(row, context=f"analysis {analysis_id!r}")
+    try:
+        build = declared_build(row, context=f"analysis {analysis_id!r}")
+    except ValueError as exc:
+        raise ValueError(f"analysis {analysis_id!r}: {exc}") from exc
     if build is None:
         raise ValueError(
             f"analysis {analysis_id!r} declares no source_genome_build; "
-            f"build-ragged-ssf reads {RAGGED_REFERENCE_ASSEMBLY} sources, and every "
+            f"build-ragged-ssf lifts every source to {RAGGED_REFERENCE_ASSEMBLY}, and every "
             "manifest row must declare its source's build"
-        )
-    if build != normalise_build(RAGGED_REFERENCE_ASSEMBLY):
-        raise ValueError(
-            f"analysis {analysis_id!r} declares source_genome_build {build}; "
-            f"build-ragged-ssf reads {RAGGED_REFERENCE_ASSEMBLY} sources and lifts none"
         )
     return build
 
@@ -327,6 +333,8 @@ def build_ragged_from_ssf(
     eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False,
     admission_record: str | Path | None = None,
+    chain_file: str | Path | None = None,
+    liftover_failure_threshold: float = 0.01,
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from filtered GWAS-SSF inputs.
 
@@ -335,8 +343,15 @@ def build_ragged_from_ssf(
     -- the same command builds a cis-eQTL release, a signals-only metabolite
     release and a genome-wide one, so the layout cannot choose it (ADR 0064).
     ``admission_record`` is Association Admission's record (#357), beside the Store.
-    Every manifest row must declare its `source_genome_build`, and declare
-    GRCh38: a Ragged SSF Store is one build, and this build lifts nothing.
+    Every manifest row must declare its `source_genome_build`. A Ragged SSF Store
+    is one build, GRCh38: a source declaring another is lifted by ``chain_file``,
+    which it then requires. The build fails when the chain cannot place more than
+    ``liftover_failure_threshold`` of the lifted group's sites, and when the lift
+    leaves no variant (`ssf_lift`).
+
+    Memory: a build with any non-GRCh38 source holds every Analysis's admitted
+    rows until the lift has placed them; a GRCh38-only build reads one Analysis
+    at a time.
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     _validate_stored_effect_scale(stored_effect_scale)
@@ -355,6 +370,9 @@ def build_ragged_from_ssf(
                 eaf_reference_ancestry=eaf_reference_ancestry,
                 allow_unverified_eaf=allow_unverified_eaf,
                 admission_record=admission.admission_record_for(out, admission_record),
+                lift=LiftOptions(
+                    None if chain_file is None else Path(chain_file), liftover_failure_threshold
+                ),
             ),
         )
 
@@ -371,6 +389,7 @@ class _SsfBuildRequest:
     eaf_reference_ancestry: str | None
     allow_unverified_eaf: bool
     admission_record: Path
+    lift: LiftOptions
 
 
 def _build_ssf_release(
@@ -386,25 +405,18 @@ def _build_ssf_release(
     passed over.
     """
     manifest_path, filtered_dir = sources
-    analytes = _read_manifest(manifest_path, filtered_dir)
-    print(f"Manifest: {len(analytes)} analyses")
-    record = admission.AdmissionRecord.open(
-        request.admission_record,
-        [a.analysis_id for a in analytes],
-        command="build-ragged-ssf",
-    )
-    rules = declared_rules(manifest_path, {a.analysis_id: GWAS_SSF_CAPABILITY for a in analytes})
-    per_analysis, alid_variant, rsid_by_alid = _ingest_ssf_sources(analytes, record, rules, request)
+    analytes, ingested = _read_sources(manifest_path, filtered_dir, request)
     eaf_report = _verify_eaf_orientation(
-        analytes, per_analysis, alid_variant,
+        analytes, ingested.per_analysis, ingested.alid_variant,
         eaf_reference=request.eaf_reference,
         eaf_reference_ancestry=request.eaf_reference_ancestry,
         allow_unverified_eaf=request.allow_unverified_eaf,
     )
-    variants, alid_to_idx = _build_variant_axis(staged, alid_variant, rsid_by_alid)
+    variants, alid_to_idx = _build_variant_axis(
+        staged, ingested.alid_variant, ingested.rsid_by_alid
+    )
     csr, encoding, eaf_scopes = _encode_ssf_csr(
-        per_analysis, alid_to_idx, len(analytes),
-        len(variants), staged.path,
+        ingested.per_analysis, alid_to_idx, len(analytes), len(variants), staged.path,
     )
     _write_indexes_and_metadata(
         staged,
@@ -429,10 +441,27 @@ def _build_ssf_release(
         eaf_orientation=eaf_report.provenance(
             allow_unverified=request.allow_unverified_eaf
         ),
+        lift=ingested.lift,
     )
     return _finalise_result(
         out, len(variants), len(analytes), csr.n_associations, request.coverage
     )
+
+
+def _read_sources(
+    manifest_path: str | Path, filtered_dir: str | Path, request: _SsfBuildRequest
+) -> tuple[list[AnalyteInput], _Ingested]:
+    """Phase 1: the manifest, the lift refused if it cannot be done, and every source read."""
+    analytes = _read_manifest(manifest_path, filtered_dir)
+    require_liftable([(a.analysis_id, a.source_build) for a in analytes], request.lift.chain_file)
+    print(f"Manifest: {len(analytes)} analyses")
+    record = admission.AdmissionRecord.open(
+        request.admission_record,
+        [a.analysis_id for a in analytes],
+        command="build-ragged-ssf",
+    )
+    rules = declared_rules(manifest_path, {a.analysis_id: GWAS_SSF_CAPABILITY for a in analytes})
+    return analytes, _ingest_ssf_sources(analytes, record, rules, request)
 
 
 def _finalise_result(
@@ -462,53 +491,263 @@ def _validate_stored_effect_scale(stored_effect_scale: str) -> None:
         ) from exc
 
 
+@dataclass(frozen=True)
+class _Ingested:
+    """What reading every source gives the build: each Analysis's associations,
+    the variants they reach, those variants' rsids, and the lift's record when
+    a source was lifted."""
+
+    per_analysis: list[list[_Assoc]]
+    alid_variant: dict[str, CanonicalVariant]
+    rsid_by_alid: dict[str, str]
+    lift: dict[str, object] | None = None
+
+
 def _ingest_ssf_sources(
     analytes: list[AnalyteInput],
     record: admission.AdmissionRecord,
     rules: Mapping[str, admission.AnalysisRules],
     request: _SsfBuildRequest,
-) -> tuple[list[list[_Assoc]], dict[str, CanonicalVariant], dict[str, str]]:
+) -> _Ingested:
     """Read every filtered source and resolve each analysis's associations.
 
     One pass per analysis: canonicalise each source row, admit it through the
     Analysis's gate, deduplicate rows that canonicalise to the same variant
     (issue #101), and collect the global canonical-variant set plus each
-    variant's first-seen rsid. The printed per-analysis count is the fail-loud
-    record of what survived: a row Admission drops never reaches this point and
-    is in ``record``, and a conflicting duplicate pair is dropped for that cell
-    entirely rather than one of them silently kept.
+    variant's rsid, after comparing its spellings' names (`_Harvest`). The
+    printed per-analysis count is the fail-loud record of what survived: a row
+    Admission drops never reaches this point and is in ``record``, and a
+    conflicting duplicate pair is dropped for that cell entirely rather than
+    one of them silently kept.
+
+    A build whose sources are all on GRCh38 streams, one Analysis at a time. A
+    build with a source to lift holds every Analysis's admitted rows until the
+    lift has placed their sites together (`_ingest_lifted`).
     """
     scale = StoredEffectScale(request.stored_effect_scale)
+    if any(a.source_build != STORE_BUILD for a in analytes):
+        return _ingest_lifted(analytes, record, rules, scale, request.lift)
     per_analysis: list[list[_Assoc]] = []
-    alid_variant: dict[str, CanonicalVariant] = {}
-    rsid_by_alid: dict[str, str] = {}
+    harvest = _Harvest()
     for a in analytes:
         with record.gate(rules[a.analysis_id]) as gate:
             batches = _admitted_batches(a, gate, scale)
             for batch in batches:
-                _first_seen(batch, alid_variant, rsid_by_alid)
+                harvest.add(batch)
             recs, n_consistent, n_conflicting = _dedupe_per_analysis(batches, gate)
         per_analysis.append(recs)
         _print_ingest_summary(a, recs, n_consistent, n_conflicting)
     record.finish()
-    return per_analysis, alid_variant, rsid_by_alid
+    return _Ingested(per_analysis, harvest.alid_variant, harvest.names())
 
 
-def _first_seen(
-    batch: ReaderBatch,
-    alid_variant: dict[str, CanonicalVariant],
-    rsid_by_alid: dict[str, str],
-) -> None:
-    """Register each admitted row's variant the first time any Analysis names it,
-    with the rsid its row names (the GWAS-SSF reader's rule: `rsid`, else
-    `variant_id`, whichever is an rs identifier)."""
-    for alid, rsid in zip(batch.alid.tolist(), batch.rsid.tolist(), strict=True):
-        if alid in alid_variant:
-            continue
-        chromosome, position, a1, a2 = alid.split(":")
-        alid_variant[alid] = CanonicalVariant(chromosome, int(position), a1, a2)
+def _ingest_lifted(
+    analytes: list[AnalyteInput],
+    record: admission.AdmissionRecord,
+    rules: Mapping[str, admission.AnalysisRules],
+    scale: StoredEffectScale,
+    options: LiftOptions,
+) -> _Ingested:
+    """`_ingest_ssf_sources` for a build with a source on another build.
+
+    Every Analysis's gate stays open until the lift has placed the admitted
+    sites of all of them: a site's failure rate is the lifted group's, and a
+    Routing Key both builds declare is dropped from the Analyses of each, so
+    neither can be settled one Analysis at a time. Every Analysis's rows are
+    held until then, and are harvested after, in Manifest Row order, so a
+    variant's rsid is the one it would have had were every source on GRCh38.
+    """
+    with ExitStack() as stack:
+        gates = [stack.enter_context(record.gate(rules[a.analysis_id])) for a in analytes]
+        held = [_admitted_batches(a, g, scale) for a, g in zip(analytes, gates, strict=True)]
+        lifted = [a.source_build != STORE_BUILD for a in analytes]
+        placement = place_held_sources(list(zip(lifted, held, strict=True)), options)
+        harvest = _Harvest()
+        per_analysis: list[list[_Assoc]] = []
+        for index, (a, gate) in enumerate(zip(analytes, gates, strict=True)):
+            batches, held[index] = held[index], []
+            recs, n_consistent, n_conflicting = _place_analysis(
+                batches, lifted[index], placement, gate, harvest
+            )
+            per_analysis.append(recs)
+            _print_ingest_summary(a, recs, n_consistent, n_conflicting)
+    summary = record.finish()
+    if not harvest.alid_variant:
+        raise ValueError(_nothing_placed(summary))
+    return _Ingested(
+        per_analysis, harvest.alid_variant, harvest.names(),
+        placement.provenance(options.chain_file),
+    )
+
+
+def _nothing_placed(summary: admission.AdmissionSummary) -> str:
+    """The refusal of a lift that left no variant for the Store, naming each Analysis's drops."""
+    unmapped, ambiguous = admission.Reason.LIFT_UNMAPPED, admission.Reason.LIFT_AMBIGUOUS
+    per_analysis = "; ".join(
+        f"analysis {analysis_id!r}: {counts.dropped.get(unmapped, 0)} lift_unmapped, "
+        f"{counts.dropped.get(ambiguous, 0)} lift_ambiguous"
+        for analysis_id, counts in summary.counts.items()
+    )
+    return (
+        "build-ragged-ssf: the lift placed no variant, so the Store would hold none "
+        f"({per_analysis}); the Admission record names every dropped row"
+    )
+
+
+def _place_analysis(
+    batches: list[ReaderBatch],
+    lifted: bool,
+    placement: SitePlacement,
+    gate: admission.Gate,
+    harvest: _Harvest,
+) -> tuple[list[_Assoc], int, int]:
+    """One Analysis's admitted rows on GRCh38: the lift's drops counted in its
+    gate, the rows that remain harvested and then deduplicated."""
+    placed = [place_batch(batch, lifted, placement) for batch in batches]
+    for one in placed:
+        gate.unplaced(admission.Reason.LIFT_UNMAPPED, one.unmapped)
+        gate.unplaced(admission.Reason.LIFT_AMBIGUOUS, one.ambiguous)
+        if lifted:
+            harvest.add_lifted(one.batch, one.source_alid)
+        else:
+            harvest.add(one.batch)
+    return _dedupe_per_analysis([one.batch for one in placed], gate)
+
+
+#: What the harvest's refusal calls this build (ADR 0066).
+HARVEST_LABEL = "Ragged SSF build"
+
+
+@dataclass
+class _Harvest:
+    """The variants a build's admitted rows reach, and the names they carry.
+
+    Rows are added in Manifest Row order and file order. Each row is read
+    with the GWAS-SSF reader's rsid rule: `rsid`, else `variant_id`,
+    whichever is an rs identifier.
+
+    - ``alid_variant``: each variant, registered at its first admitted row.
+    - ``named``: each raw site's first non-empty rsid, in the order sites are
+      first named. A site is its ALID and its alleles as the source spells
+      them, as Pass 1's union keeps a site, so `names` can compare a site's
+      spellings.
+    - ``unnamed``: the sites whose admitted rows have named nothing so far.
+    - ``placed``: a lifted source's named sites, each with its variant on GRCh38.
+      A lifted site is the source's own coordinate (`add_lifted`), so its name is
+      compared with the names of its own spellings, as Pass 1's union does.
+
+    The cost is kept to what the first-seen check before #379 paid
+    (OGS-00006 admits 58M rows for 12M sites):
+    - A row of a site already named costs one lookup.
+    - The ALID holds the site's chromosome and position, so it is split once
+      per variant here and once per site at naming, not once per row.
+    - A site is keyed as one string, ``alid<TAB>ref<TAB>alt``. A map of
+      strings holds nothing the cyclic garbage collector tracks, so it adds
+      nothing to each of the build's collections. Tuple keys added 12M
+      entries to every collection. A source allele holding a TAB would make
+      two spellings one key, so `names` refuses it.
+    """
+
+    alid_variant: dict[str, CanonicalVariant] = field(default_factory=dict)
+    named: dict[str, str] = field(default_factory=dict)
+    unnamed: set[str] = field(default_factory=set)
+    #: A lifted source's named sites: each one's variant on GRCh38. A GRCh38
+    #: site is its own, so only a lifted one is held here.
+    placed: dict[str, str] = field(default_factory=dict)
+
+    def add_lifted(self, batch: ReaderBatch, source_alid: np.ndarray) -> None:
+        """`add` for a lifted source's rows.
+
+        ``batch`` holds the rows on GRCh38 and ``source_alid`` each one's ALID as
+        its source spelt it. A site is the source's own coordinate and alleles, as
+        Pass 1's union keeps it, so a lifted site's name is compared with its
+        spellings and never with a GRCh38 site's of another coordinate.
+        """
+        alid_variant = self.alid_variant
+        for source, target, ref, alt, rsid in zip(
+            source_alid.tolist(), batch.alid.tolist(), batch.ref.tolist(), batch.alt.tolist(),
+            batch.rsid.tolist(), strict=True,
+        ):
+            if target not in alid_variant:
+                chromosome, position, a1, a2 = target.split(":")
+                alid_variant[target] = CanonicalVariant(chromosome, int(position), a1, a2)
+            self._note(f"{source}\t{ref}\t{alt}", rsid, target)
+
+    def _note(self, site: str, rsid: str, target: str) -> None:
+        """Record one lifted row's site: named by its rsid, else awaiting one."""
+        if site in self.named:
+            return
         if rsid:
-            rsid_by_alid[alid] = rsid
+            self.unnamed.discard(site)
+            self.named[site] = rsid
+            self.placed[site] = target
+        else:
+            self.unnamed.add(site)
+
+    def add(self, batch: ReaderBatch) -> None:
+        """Register each of ``batch``'s rows, a batch of admitted rows."""
+        alid_variant, named, unnamed = self.alid_variant, self.named, self.unnamed
+        for alid, ref, alt, rsid in zip(
+            batch.alid.tolist(), batch.ref.tolist(), batch.alt.tolist(), batch.rsid.tolist(),
+            strict=True,
+        ):
+            site = f"{alid}\t{ref}\t{alt}"
+            if site in named:
+                continue
+            if site in unnamed:
+                if rsid:
+                    unnamed.discard(site)
+                    named[site] = rsid
+                continue
+            if alid not in alid_variant:
+                chromosome, position, a1, a2 = alid.split(":")
+                alid_variant[alid] = CanonicalVariant(chromosome, int(position), a1, a2)
+            if rsid:
+                named[site] = rsid
+            else:
+                unnamed.add(site)
+
+    def names(self) -> dict[str, str]:
+        """Each variant's rsid, after comparing the names a site's spellings carry.
+
+        The harvest goes through `union_names`, the test every harvest applies
+        (ADR 0066, #379). `build-ragged-ssf` has no `--on-rsid-conflict`, so a
+        Routing Key its sources name two ways is refused, naming both names.
+        Otherwise a variant takes the first non-empty rsid among its admitted
+        rows, as spec §4 says, whichever spelling carries it (#400).
+        """
+        alid_variant = self.alid_variant
+        # The ALIDs the names are keyed by are the registered ones, not the
+        # copies a key's split makes. Copies made here would outlive the
+        # naming in the build's variant table and pin the memory freed around
+        # them: on OGS-00006 that kept the peak 2 GB higher.
+        registered = {alid: alid for alid in alid_variant}
+        rsid_by_site: dict[SourceKey, str] = {}
+        site_alid: dict[SourceKey, str] = {}
+        for key, rsid in self.named.items():
+            fields = key.split("\t")
+            if len(fields) != 3:
+                # Checked here, once per named site, not on every row added.
+                raise ValueError(
+                    f"{HARVEST_LABEL}: a source allele of {fields[0]} holds a TAB, which "
+                    "the build's site key cannot tell apart from another spelling"
+                )
+            alid, ref, alt = fields
+            target = self.placed.get(key)
+            if target is None:
+                variant = alid_variant[alid]
+                chromosome, position = variant.chromosome, variant.position
+                target = alid
+            else:
+                chromosome, position_text, _a1, _a2 = alid.split(":")
+                position = int(position_text)
+            site = (chromosome, position, ref, alt)
+            rsid_by_site[site] = rsid
+            site_alid[site] = registered[target]
+        del registered
+        return union_names(
+            rsid_by_site, site_alid, policy=RsidConflictPolicy.REFUSE, label=HARVEST_LABEL
+        ).rsid_by_alid
 
 
 def _print_ingest_summary(
@@ -717,6 +956,7 @@ def _write_manifest(
     mhc_analyses: list[str],
     encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
+    lift: dict[str, object] | None = None,
 ) -> None:
     staged.write_manifest(
         observed_only_release_manifest(
@@ -735,6 +975,7 @@ def _write_manifest(
                 "n_analyses": n_analyses,
                 "n_associations": n_associations,
                 **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
+                **({"lift": lift} if lift is not None else {}),
                 "ragged": ragged_provenance(staged.path, encoding),
             },
         )

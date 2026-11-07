@@ -170,7 +170,7 @@ Deciding which of an Analysis's source rows a Store admits as associations, and 
 A build's record of Association Admission, written beside its Store Release and never inside it, so it moves no `format_version`: `admission.json` lists each Analysis's counts by reason, in Manifest Row order, and `dropped/<analysis_index>.tsv.gz` names, by source key, every row dropped, except those a declared INFO or MAF filter dropped and those collapsed into an agreeing duplicate, which it only counts (ADR 0072, D8). It is the same at any worker count.
 
 **Routing Key**:
-The spelling a build matches a source coordinate by, `chrom:pos:ref:alt`, the same for the names it harvests and the associations it routes. Its alleles are upper-cased, as **Variant Identity** spells them, and kept in the source's order, since case is not an orientation change; every build keys this way. Two coordinates one key spells — one site written in two cases — must route to one place, or the build refuses.
+The spelling a build matches a source coordinate by, `chrom:pos:ref:alt`, the same for the names it harvests and the associations it routes. Its alleles are upper-cased, as **Variant Identity** spells them, and kept in the source's order, since case is not an orientation change; every build keys this way. Two coordinates one key spells — one site written in two cases — must route to one place, or the build refuses. Every rsid harvest keyed this way — a two-pass build's, a single-pass build's, and Variant Reference extraction's — compares the names one key's spellings carry: a key its sources name two ways has no name the build can trust, so the build refuses it, or under `--on-rsid-conflict drop` stores every variant it reaches with no rsid (ADR 0066, issue #379).
 
 **By-Variant Index**:
 An optional, additive structure inside a Ragged component (`ragged/by_variant/`, ADR 0060): a `(variant index, Analysis)`-ordered duplicate of the component's cell-keyed arrays that makes a by-variant PheWAS or region query proportional to the answer. Distinct from the **Variant Index** (a row reference); the name is deliberately different. It does not change `format_version`, and a release without it answers every query through the scan it replaces.
@@ -231,8 +231,8 @@ One named judgement `validate` makes of a Store Release, such as `associations.s
 _Avoid_: check, validator, seam — a rule is the unit a caller names and a test asserts on.
 
 **Finding**:
-What one Validation Rule reports about one target: the rule's name, an error or a warning, the message, and the target it judged. A release fails when any rule reports an error; a warning names something a reader should know about a valid release, such as an infinite SE.
-_Avoid_: error string — a finding carries the rule that found it.
+What one Validation Rule reports about one target: the rule's name, an error, a warning or a skip, the message, and the target it judged. A release fails when any rule reports an error; a warning names something a reader should know about a valid release, such as an infinite SE; a skip says the rule could not judge that target and names why — the rules that blocked it, or that it had nothing to judge — so a skip never reads as a pass. `validate --format json` prints every finding, skips included, and `errors`, `warnings` and `skipped` project the same records (spec §20.1).
+_Avoid_: error string, pass — a finding carries the rule that found it, and a skip is not a finding that everything was well.
 
 ## Example dialogue
 

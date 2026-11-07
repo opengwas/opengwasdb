@@ -61,6 +61,16 @@ name the decisions issue #357 took on the rules that differed.
   touches), and the Hybrid's Ragged Overflow. What it leaves unimputed is
   already counted in each Store's `completion_quality`, so a completion writes
   no record.
+  - *Clarified 5 Nov 2026.* A completion that reads its source through the
+    Association Reader (ADR 0070) refuses such a cell by the reader's presence
+    rule instead, and a missing marker other than the canonical NaN with it:
+    `InvalidAssociations` names the source, where `require_paired` raised
+    `NotAdmitted`. Both are `ValueError`s, but code that catches `NotAdmitted`
+    no longer catches the refusal. The completions that read this way:
+    - Hybrid, its source's Ragged Overflow (#391).
+    - Ragged, each source Analysis (#393).
+    - Dense, its source's bands and each LD block's rows (#393). With that,
+      no completion calls `require_paired`, and it is removed.
 - **`require_admitted`** checks Admission's guarantee on cells a writer is handed.
   Every builder calls it on the z and SE it is about to store, so a half-missing
   pair (spec §15) or any other cell a gate should have dropped refuses the build,
@@ -86,6 +96,13 @@ name the decisions issue #357 took on the rules that differed.
 | `duplicate_reversed_indel` | it is an indel whose declared reference allele its ALID spells second, at a (variant, Analysis) whose distinct rows, once agreeing copies collapse, are this one and one spelling it first, which is kept | yes | D5, reversed indels |
 | `duplicate_conflicting` | the rows for its (variant, Analysis) disagree on z or SE: all are dropped | yes | D5 |
 | `off_axis` | no axis of the Store holds its variant, and nothing will place it later | yes | D6 |
+| `lift_unmapped` | its source is lifted onto the Store's assembly and the chain places its site nowhere | yes | #386 |
+| `lift_ambiguous` | its Routing Key is declared by a lifted source and by a source already on the Store's assembly: two loci sharing a string, so no row of it is placed | yes | #386 |
+
+`build-ragged-ssf` lifts a source declaring another build, and counts what the
+lift drops under its own two reasons rather than `off_axis`: a record then says
+the chain, not an axis, lost the row. Records written before #386 hold neither
+reason and read as before. The rule set's version moved to `admission/11`.
 
 The duplicate rule is Variant Routing's `collapse_duplicates`, applied after
 the rules above, wherever two rows can reach one (variant, Analysis):
@@ -224,7 +241,7 @@ whose reported frequency is absent, when the build stores the frequency. An
 infinite `.esi` frequency is one of them; the `.esi` reader used to refuse
 the file for it.
 
-`admission.json`'s `"rules"` names the rule set's version, `admission/10`. A
+`admission.json`'s `"rules"` names the rule set's version, `admission/11`. A
 change to what a rule admits, or to what the record counts, moves it.
 
 ## Consequences

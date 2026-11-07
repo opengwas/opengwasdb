@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from stored_rows import stored_rows
 
 from opengwasdb.completion.ld_panel import LdPanelNotFoundError
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
@@ -141,8 +142,7 @@ def _assert_completed_stores_equal(dst_a, dst_b) -> None:
     assert reader_a.n_analyses == reader_b.n_analyses
     assert reader_a.n_associations == reader_b.n_associations
     for ai in range(reader_a.n_analyses):
-        a = reader_a.get_analysis(ai)
-        b = reader_b.get_analysis(ai)
+        a, b = stored_rows(dst_a, ai), stored_rows(dst_b, ai)
         assert np.array_equal(a.variant_index, b.variant_index), f"analysis {ai} variants differ"
         assert np.array_equal(a.z, b.z, equal_nan=True), f"analysis {ai} z differs"
         assert np.array_equal(a.se, b.se, equal_nan=True), f"analysis {ai} se differs"
@@ -465,7 +465,6 @@ class TestCompletionFiles:
         import gzip
 
         from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
-        from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 
         filtered_dir = tmp_path / "filtered"
         filtered_dir.mkdir()
@@ -488,14 +487,10 @@ class TestCompletionFiles:
             association_coverage="cis_and_signals",
         )
 
-        obs_reader = RaggedCSRReader(observed)
+        source = stored_rows(observed, 0)
         observed_eaf = {
             int(vi): float(e)
-            for vi, e in zip(
-                obs_reader.get_analysis(0).variant_index,
-                obs_reader.get_analysis(0).eaf,
-                strict=True,
-            )
+            for vi, e in zip(source.variant_index, source.eaf, strict=True)
             if np.isfinite(e)
         }
         assert observed_eaf, "fixture must carry EAF for this to mean anything"
@@ -516,7 +511,7 @@ class TestCompletionFiles:
             obs_axis.close()
             comp_axis.close()
 
-        comp = RaggedCSRReader(completed).get_analysis(0)
+        comp = stored_rows(completed, 0)
         completed_eaf = {
             comp_alid[int(vi)]: float(e)
             for vi, e in zip(comp.variant_index, comp.eaf, strict=True)
@@ -713,14 +708,15 @@ class TestObservedAlidMapsRecord:
     the field assertions cannot pass on a swapped or missing map."""
 
     def test_each_field_is_its_own_statistics_alid_keyed_map(self):
+        from opengwasdb.associations import Associations
         from opengwasdb.layouts.ragged.complete import _observed_alid_maps, _ObservedAlidMaps
-        from opengwasdb.layouts.ragged.zarr_csr import AnalysisAssociations
 
         src_alids = ["1:100:A:G", "1:200:C:T", "1:300:A:C"]
-        obs = AnalysisAssociations(
+        obs = Associations.from_decoded(
             # Shuffled on purpose: the fold must bind each value to the ALID of
             # the row that carried it, not to a positional twin.
             variant_index=np.array([2, 0, 1], dtype=np.int32),
+            analysis_index=0,
             z=np.array([1.25, -2.5, 3.75], dtype=np.float32),
             se=np.array([0.25, 0.0625, 0.125], dtype=np.float32),
             eaf=np.array([0.75, 0.25, 0.5], dtype=np.float32),
@@ -737,11 +733,12 @@ class TestObservedAlidMapsRecord:
         assert maps.eaf_by_alid == {"1:100:A:G": 0.25, "1:200:C:T": 0.5, "1:300:A:C": 0.75}
 
     def test_an_empty_analysis_yields_all_three_maps(self):
+        from opengwasdb.associations import Associations
         from opengwasdb.layouts.ragged.complete import _observed_alid_maps
-        from opengwasdb.layouts.ragged.zarr_csr import AnalysisAssociations
 
-        obs = AnalysisAssociations(
+        obs = Associations.from_decoded(
             variant_index=np.empty(0, dtype=np.int32),
+            analysis_index=0,
             z=np.empty(0, dtype=np.float32),
             se=np.empty(0, dtype=np.float32),
             eaf=np.empty(0, dtype=np.float32),
@@ -788,7 +785,6 @@ class TestCompletedStoreKeepsObservedStatistics:
     def test_observed_z_se_and_eaf_survive_completion(self, tmp_path):
         from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
         from opengwasdb.layouts.ragged.complete import complete_ragged_store
-        from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
         from opengwasdb.variants.axis import VariantAxis
 
         filtered_dir = tmp_path / "filtered"
@@ -810,7 +806,7 @@ class TestCompletedStoreKeepsObservedStatistics:
             association_coverage="cis_and_signals",
         )
 
-        src = RaggedCSRReader(observed).get_analysis(0)
+        src = stored_rows(observed, 0)
         obs_axis = VariantAxis(observed)
         try:
             expected = {
@@ -837,7 +833,7 @@ class TestCompletedStoreKeepsObservedStatistics:
             cis_window_bp=500_000, min_cor=0.0, release_id="comp",
         )
 
-        comp = RaggedCSRReader(completed).get_analysis(0)
+        comp = stored_rows(completed, 0)
         comp_axis = VariantAxis(completed)
         try:
             comp_by_alid = {
@@ -1833,12 +1829,13 @@ class TestObservedDuplicates:
 
     @staticmethod
     def _observed():
-        from opengwasdb.layouts.ragged.zarr_csr import AnalysisAssociations
+        from opengwasdb.associations import Associations
 
         # Variant 0 twice, agreeing on z and SE but not on EAF; variant 1
         # twice, disagreeing; variant 2 once.
-        return AnalysisAssociations(
+        return Associations.from_decoded(
             variant_index=np.array([0, 1, 0, 1, 2], dtype=np.int32),
+            analysis_index=0,
             z=np.array([1.0, 2.0, 1.0, 3.0, 4.0], dtype=np.float32),
             se=np.array([0.25, 0.5, 0.25, 0.5, 0.125], dtype=np.float32),
             eaf=np.array([0.25, 0.5, 0.75, 0.5, 0.5], dtype=np.float32),
@@ -1859,7 +1856,7 @@ class TestObservedDuplicates:
 
         completed = _completed_analysis(
             0,
-            src_csr=SimpleNamespace(get_analysis=lambda ai: self._observed()),
+            source=SimpleNamespace(read=lambda cells: self._observed()),
             src_alids=self._ALIDS,
             src_idx_remap=[0, 1, 2],
             new_alid_to_idx={alid: i for i, alid in enumerate(self._ALIDS)},
@@ -1882,30 +1879,30 @@ class TestObservedDuplicates:
         assert fills_by_analysis == {0: {"1:100:A:G": (1.0, 0.25)}}
 
 
-def test_a_half_missing_source_cell_is_refused_even_where_no_block_completes(monkeypatch):
+def test_a_half_missing_source_cell_is_refused_even_where_no_block_completes(observed_store):
     """D1 (issue #357): spec §15 forbids a cell with one of z and SE missing.
     An Analysis no completable block touches is carried through as it stands,
-    so its half-missing cell is refused rather than written."""
-    from types import SimpleNamespace
-
-    from opengwasdb.admission import NotAdmitted
+    so its half-missing cell is refused rather than written: the Association
+    Reader the source is read through refuses it."""
+    from opengwasdb.associations import CsrReader, InvalidAssociations
     from opengwasdb.layouts.ragged.complete import _completed_analysis
-    from opengwasdb.layouts.ragged.zarr_csr import AnalysisAssociations
+    from opengwasdb.model.manifest import StoreManifest
+    from opengwasdb.variants import VariantAxis
 
-    observed = AnalysisAssociations(
-        variant_index=np.array([0, 1], dtype=np.int32),
-        z=np.array([2.0, 1.0], dtype=np.float32),
-        se=np.array([np.nan, 0.5], dtype=np.float32),
-        eaf=np.array([0.25, 0.5], dtype=np.float32),
-    )
+    assert StoreManifest.load(observed_store).encoding.se.kind == "float16"
+    ragged = zarr.open_group(observed_store / RAGGED_ZARR_PATH, mode="r+")
+    start, stop = (int(x) for x in np.asarray(ragged["offsets"][0:2]))
+    assert stop > start and np.isfinite(float(ragged["se"][start])), "a present cell to break"
+    ragged["se"][start] = np.float16(np.nan)
+    alids = [v.alid for v in VariantAxis(observed_store).all()]
 
-    with pytest.raises(NotAdmitted, match=r"complete-ragged, Analysis 0: .*one of z and SE"):
+    with pytest.raises(InvalidAssociations, match=r"partial 1"):
         _completed_analysis(
             0,
-            src_csr=SimpleNamespace(get_analysis=lambda ai: observed),
-            src_alids=["1:100:A:G", "1:200:C:T"],
-            src_idx_remap=[0, 1],
-            new_alid_to_idx={"1:100:A:G": 0, "1:200:C:T": 1},
+            source=CsrReader.open(observed_store),
+            src_alids=alids,
+            src_idx_remap=list(range(len(alids))),
+            new_alid_to_idx={alid: i for i, alid in enumerate(alids)},
             block_ids=[],
             block_canonical_alids={},
             fills={},
@@ -1926,7 +1923,7 @@ def test_a_block_cedes_its_end_only_for_an_analysis_completed_against_the_next()
 
     endpoint = frozenset({"1:200:A:G"})
     plan = _BlockPlan(
-        src_csr=None,
+        source=None,
         state=None,
         analysis_to_blocks={0: ["1/100-200", "1/200-300"], 1: ["1/100-200"]},
         block_to_tsv={},
@@ -1994,11 +1991,12 @@ def test_every_observed_row_completion_drops_is_logged(caplog):
     variants that disagree are all named, not a sample of them."""
     from types import SimpleNamespace
 
+    from opengwasdb.associations import Associations
     from opengwasdb.layouts.ragged.complete import _completed_analysis
-    from opengwasdb.layouts.ragged.zarr_csr import AnalysisAssociations
 
-    observed = AnalysisAssociations(
+    observed = Associations.from_decoded(
         variant_index=np.tile(np.arange(6, dtype=np.int32), 2),
+        analysis_index=0,
         z=np.repeat(np.array([1.0, 2.0], dtype=np.float32), 6),
         se=np.full(12, 0.25, dtype=np.float32),
         eaf=np.full(12, 0.5, dtype=np.float32),
@@ -2006,7 +2004,7 @@ def test_every_observed_row_completion_drops_is_logged(caplog):
 
     completed = _completed_analysis(
         0,
-        src_csr=SimpleNamespace(get_analysis=lambda ai: observed),
+        source=SimpleNamespace(read=lambda cells: observed),
         src_alids=_SIX,
         src_idx_remap=list(range(6)),
         new_alid_to_idx={alid: i for i, alid in enumerate(_SIX)},

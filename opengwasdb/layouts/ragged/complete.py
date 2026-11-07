@@ -36,7 +36,7 @@ from typing import Any
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.admission import require_paired
+from opengwasdb.associations import Associations, Cells, CsrReader
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
 from opengwasdb.completion.checkpoint import (
@@ -82,11 +82,7 @@ from opengwasdb.encoding.association_codec import log_se_out_of_range
 from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.layouts.ragged.zarr_csr import (
-    RAGGED_ZARR_PATH,
-    AnalysisAssociations,
-    RaggedCSRReader,
-)
+from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
 from opengwasdb.model.analyses import (
     Analysis,
     ancestry_impute_mask,
@@ -168,8 +164,8 @@ class _ObservedAlidMaps:
 
 
 def _admitted_observed(
-    obs: AnalysisAssociations,
-) -> tuple[AnalysisAssociations, Duplicates]:
+    obs: Associations,
+) -> tuple[Associations, Duplicates]:
     """One Analysis's observed rows, each variant's duplicates resolved by
     Association Admission's rule (`collapse_duplicates`, D5).
 
@@ -182,8 +178,7 @@ def _admitted_observed(
     found = collapse_duplicates(obs.variant_index, obs.z, obs.se)
     if len(found.keep) == len(obs.variant_index):
         return obs, found
-    keep = found.keep
-    return AnalysisAssociations(*(column[keep] for column in obs)), found
+    return obs.take(found.keep), found
 
 
 def _log_dropped(ai: int, what: str, rows: Iterable[tuple[str, float, float]]) -> None:
@@ -202,7 +197,7 @@ def _log_dropped(ai: int, what: str, rows: Iterable[tuple[str, float, float]]) -
 
 
 def _warn_observed_duplicates(
-    ai: int, obs: AnalysisAssociations, found: Duplicates, src_alids: list[str]
+    ai: int, obs: Associations, found: Duplicates, src_alids: list[str]
 ) -> None:
     """Say what `_admitted_observed` dropped or collapsed of one Analysis's
     rows, ``obs``: a count, and a line for every dropped row."""
@@ -225,7 +220,7 @@ def _warn_observed_duplicates(
         )
 
 
-def _observed_alid_maps(obs: AnalysisAssociations, src_alids: list[str]) -> _ObservedAlidMaps:
+def _observed_alid_maps(obs: Associations, src_alids: list[str]) -> _ObservedAlidMaps:
     """Map one Analysis's observed CSR rows onto ``{alid: z/se/eaf}``. Observed
     EAF is carried across the rebuild (ADR 0036): Reference Completion adds
     panel rows to an Analysis; it does not change what the source reported for
@@ -254,6 +249,12 @@ def _observed_alid_maps(obs: AnalysisAssociations, src_alids: list[str]) -> _Obs
     )
 
 
+def _open_source_sequence(src: Path) -> CsrReader:
+    """The source release's association sequence, read through the Association
+    Reader: every Analysis completion reads meets the presence rule (ADR 0070)."""
+    return CsrReader.open(src, source=f"complete-ragged's source {src}")
+
+
 def _make_reader(task: _BlockTask):
     """ragged's half of the ``run_block`` seam: read one Analysis's observed
     z/se at a time from its CSR row, since (unlike dense's `gwas`-coverage
@@ -262,7 +263,7 @@ def _make_reader(task: _BlockTask):
     """
 
     def make_reader(block, canonical_alids: list[str | None]):
-        src_csr = RaggedCSRReader(task.source_path)
+        source = _open_source_sequence(task.source_path)
         src_variant_axis = VariantAxis(task.source_path)
         try:
             src_alids = [v.alid for v in src_variant_axis.all()]
@@ -270,7 +271,7 @@ def _make_reader(task: _BlockTask):
             src_variant_axis.close()
 
         def read(ai: int) -> tuple[np.ndarray, np.ndarray]:
-            obs = src_csr.get_analysis(ai)
+            obs = source.read(Cells.analysis(ai))
             observed = _observed_alid_maps(obs, src_alids)
 
             z_dense = np.array(
@@ -465,7 +466,7 @@ class _BlockPlan:
     the panel ALIDs the source never held. Fills stay on disk in checkpoints;
     this is everything Phase 2 runs and Phase 3 resolves them against."""
 
-    src_csr: RaggedCSRReader
+    source: CsrReader
     state: _SourceState
     analysis_to_blocks: dict[int, list[str]]
     block_to_tsv: dict[str, Path]
@@ -659,7 +660,7 @@ def _imputable_analyses(state: _SourceState) -> list[tuple[int, Analysis]]:
 
 
 def _gene_target_less_blocks(
-    state: _SourceState, src_csr: RaggedCSRReader, ld_dir: Path, ancestry: str
+    state: _SourceState, source: CsrReader, ld_dir: Path, ancestry: str
 ) -> dict[int, list[LDBlock]]:
     """LD blocks for Analyses with no Trait position (issue #102): every block
     holding an association they already have, resolved in one ALID-keyed pass
@@ -674,7 +675,7 @@ def _gene_target_less_blocks(
     held = {
         i: [
             (state.src_alids[vi], state.src_variants[vi].chromosome)
-            for vi in src_csr.variant_indices(i).tolist()
+            for vi in source.structure.variant_index(*source.structure.span(i)).tolist()
         ]
         for i, _a in gene_target_less
     }
@@ -697,7 +698,7 @@ def _new_panel_alids(alids: list[str | None], source_alids: set[str]) -> set[str
 
 def _scan_block_maps(
     state: _SourceState,
-    src_csr: RaggedCSRReader,
+    source: CsrReader,
     own_variant_blocks: dict[int, list[LDBlock]],
     ld_dir: Path,
     ancestry: str,
@@ -736,7 +737,7 @@ def _scan_block_maps(
             )
 
     return _BlockPlan(
-        src_csr=src_csr,
+        source=source,
         state=state,
         analysis_to_blocks=analysis_to_blocks,
         block_to_tsv=block_to_tsv,
@@ -753,13 +754,13 @@ def _plan_blocks(
     """Phase 1: scan every imputable Analysis's cis window (its own variants
     when it has no Trait position, issue #102) for touching LD blocks and
     return the plan Phase 2 runs and Phase 3 resolves."""
-    src_csr = RaggedCSRReader(state.src)
-    own_variant_blocks = _gene_target_less_blocks(state, src_csr, ld_dir, ancestry)
+    source = _open_source_sequence(state.src)
+    own_variant_blocks = _gene_target_less_blocks(state, source, ld_dir, ancestry)
     print(
         "Scanning for LD blocks + new panel variants (cis windows where a "
         "Trait position exists, the Analysis's own variants otherwise)..."
     )
-    plan = _scan_block_maps(state, src_csr, own_variant_blocks, ld_dir, ancestry, cis_window_bp)
+    plan = _scan_block_maps(state, source, own_variant_blocks, ld_dir, ancestry, cis_window_bp)
     print(f"New LD panel variants: {len(plan.new_alids):,}")
     print(f"LD blocks touched: {len(plan.block_to_tsv):,}")
     return plan
@@ -1010,7 +1011,7 @@ def _reference_alids(
 
 
 def _passthrough_analysis(
-    obs: AnalysisAssociations, src_idx_remap: list[int]
+    obs: Associations, src_idx_remap: list[int]
 ) -> _AnalysisCompleted:
     """An Analysis no completable block touches: its source association list
     remapped onto the merged axis, every row marked observed."""
@@ -1109,7 +1110,7 @@ def _sort_cells(cells: list[_CsrCell], n_imputed: int, n_missing: int) -> _Analy
 def _completed_analysis(
     ai: int,
     *,
-    src_csr: RaggedCSRReader,
+    source: CsrReader,
     src_alids: list[str],
     src_idx_remap: list[int],
     new_alid_to_idx: dict[str, int],
@@ -1121,12 +1122,11 @@ def _completed_analysis(
     0036), block fills as imputed, block positions neither produced as
     missing -- or, when no completable block touches the Analysis, its source
     association list untouched."""
-    source = src_csr.get_analysis(ai)
-    # D1: a source cell the presence rule calls invalid is refused, whatever
-    # completes the Analysis.
-    require_paired(source.z, source.se, where=f"complete-ragged, Analysis {ai}")
-    obs, found = _admitted_observed(source)
-    _warn_observed_duplicates(ai, source, found, src_alids)
+    # D1: the reader refuses a source cell the presence rule calls invalid,
+    # whatever completes the Analysis.
+    held = source.read(Cells.analysis(ai))
+    obs, found = _admitted_observed(held)
+    _warn_observed_duplicates(ai, held, found, src_alids)
     if not block_ids:
         return _passthrough_analysis(obs, src_idx_remap)
     observed = _observed_alid_maps(obs, src_alids)
@@ -1166,7 +1166,7 @@ def _assemble_completed_csr(
     for ai in range(plan.state.n_analyses):
         completed = _completed_analysis(
             ai,
-            src_csr=plan.src_csr,
+            source=plan.source,
             src_alids=plan.state.src_alids,
             src_idx_remap=axis.src_idx_remap,
             new_alid_to_idx=axis.new_alid_to_idx,

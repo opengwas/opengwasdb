@@ -37,9 +37,11 @@ from opengwasdb.encoding.codec import (
     positions_pairs,
     positions_row_band,
     positions_rows_cols,
+    require_parallel,
 )
 from opengwasdb.encoding.plan import EafBaselineError, StoreEncoding
 from opengwasdb.store.arrays import (
+    SE_COEFFICIENTS,
     ArrayRole,
     component_variant_chunk,
     compressor,
@@ -49,9 +51,6 @@ from opengwasdb.store.arrays import (
 
 if TYPE_CHECKING:
     from opengwasdb.encoding.association_codec import Encoded
-
-SE_COEFFICIENTS = "se_coefficients"
-
 
 class EafRead(NamedTuple):
     """One region's decoded frequencies, and the imputed mask read with them.
@@ -940,6 +939,43 @@ def _write_se_arrays(
 # ── Writing an encoded batch ────────────────────────────────────────────────
 
 
+def _write_eaf_arrays(
+    group: Any,
+    plan: StoreEncoding,
+    encoded: Encoded,
+    *,
+    role: ArrayRole,
+    compressor: Any,
+    chunks: tuple[int, ...] | None,
+    eaf_baseline: np.ndarray | None,
+) -> None:
+    """Replace the `eaf` plane and, for a residual plan, its baseline and exception table.
+
+    The plane, its baseline and its exception table are one artifact in three
+    arrays, exactly as `_write_se_arrays` treats the SE plan's: writing them
+    from one place is what stops a builder producing two of the three. A batch
+    with no frequency plane writes none of them.
+    """
+    if encoded.eaf is None:
+        return
+    create_array(
+        group,
+        "eaf",
+        role,
+        data=encoded.eaf,
+        dtype=plan.eaf.dtype,
+        compressor=compressor,
+        hint=chunks,
+        overwrite=True,
+    )
+    if not plan.eaf.is_residual:
+        return
+    if eaf_baseline is None:
+        raise EafBaselineError("a residual eaf plane is written with its eaf_baseline")
+    write_eaf_baseline(group, eaf_baseline, compressor=compressor, role=_per_variant_role(role))
+    encoded.tables.eaf_exceptions.write(group, role=_side_table_role(role))
+
+
 def write_encoded_planes(
     group: Any,
     plan: StoreEncoding,
@@ -959,7 +995,13 @@ def write_encoded_planes(
     or an association sequence's) and decides the side arrays' roles. The `z`
     plane takes `chunks` as a hint and the others take the chunks it resolved
     to, so the three planes are chunked alike.
+
+    The batch's arrays are judged parallel before the first plane is created
+    (issue #392): one that is not describes cells the component does not have,
+    and a plane written from it holds one cell's statistic under another's
+    variant.
     """
+    require_parallel(_batch_arrays(encoded), where="write_encoded_planes")
     z_array = create_array(
         group, "z", role, data=encoded.z, dtype=plan.z.dtype, compressor=compressor, hint=chunks
     )
@@ -967,24 +1009,15 @@ def write_encoded_planes(
     if plan.z.is_fixed_point:
         # A float plane has no overflow table, and must not acquire an empty one.
         encoded.tables.z_overflow.write(group, role=_side_table_role(role))
-    if encoded.eaf is not None:
-        create_array(
-            group,
-            "eaf",
-            role,
-            data=encoded.eaf,
-            dtype=plan.eaf.dtype,
-            compressor=compressor,
-            hint=resolved,
-            overwrite=True,
-        )
-        if plan.eaf.is_residual:
-            if eaf_baseline is None:
-                raise EafBaselineError("a residual eaf plane is written with its eaf_baseline")
-            write_eaf_baseline(
-                group, eaf_baseline, compressor=compressor, role=_per_variant_role(role)
-            )
-            encoded.tables.eaf_exceptions.write(group, role=_side_table_role(role))
+    _write_eaf_arrays(
+        group,
+        plan,
+        encoded,
+        role=role,
+        compressor=compressor,
+        chunks=resolved,
+        eaf_baseline=eaf_baseline,
+    )
     _write_se_arrays(
         group,
         StoreCodec(plan),
@@ -1007,8 +1040,14 @@ def write_dense_cells(
     Each side table is rewritten with its plane, not after it: a cell can
     enter or leave a table, and a table left describing the value a cell used
     to have is the stale-by-one-call-site defect the codec exists to prevent.
+
+    `rows`, `cols` and the batch address the same cells, and a call whose
+    arrays disagree is refused before the grid is touched (issue #392).
     """
     rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
+    require_parallel(
+        (("rows", rows), ("cols", cols), *_batch_arrays(encoded)), where="write_dense_cells"
+    )
     if len(rows) == 0:
         return
     positions = positions_pairs(rows, cols, int(group["z"].shape[1]))
@@ -1033,6 +1072,20 @@ def write_dense_cells(
         se_table = SeExceptionTable.read(group)
         merged = _merged(se_table, positions, tables.se_exceptions, SeExceptionBuilder())
         merged.write(group, compressor=compressor())
+
+
+def _batch_arrays(encoded: Encoded) -> tuple[tuple[str, Any], ...]:
+    """An encoded batch's own arrays: every one of them describes the same cells.
+
+    The tables are not among them -- they hold an entry per exceptional cell,
+    not per cell -- so `require_parallel` judges only the batch.
+    """
+    return (
+        ("z", encoded.z),
+        ("se", encoded.se),
+        ("eaf", encoded.eaf),
+        ("imputed", encoded.imputed),
+    )
 
 
 _Table = ZOverflowTable | EafExceptionTable | SeExceptionTable

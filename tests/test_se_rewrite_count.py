@@ -10,6 +10,7 @@ the streamed encode disagrees with the allocation.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import zarr
 
 from opengwasdb.encoding import se as se_module
@@ -84,3 +85,30 @@ def test_rewrite_ignores_a_measurement_that_saw_no_exceptions(tmp_path, monkeypa
 
     assert selected.se.is_residual
     assert group["se_exception_index"].shape[0] == 10
+
+
+def test_the_rewrites_exception_tables_refuse_arrays_that_do_not_pair_up() -> None:
+    """Three indices with one value wrote that value into all three exception
+    cells: a silent broadcast into a stored side table (issue #392)."""
+    index = np.zeros(3, dtype=np.int64)
+    value = np.zeros(3, dtype=np.float32)
+    sink = se_module._RewriteSink(
+        pending=None,
+        exception_index=index,
+        exception_value=value,
+        exception_count=3,
+        row_chunk=1,
+        n_rows=3,
+        n_chunks=1,
+        chunk_timer=None,
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"the SE rewrite's exception tables: se_exception_index of length 3 "
+        r"and se_exception_value of length 1 must be parallel",
+    ):
+        se_module._write_exception_tables(
+            sink, [np.arange(3, dtype=np.int64)], [np.zeros(1, dtype=np.float32)], 3
+        )
+    assert index.tolist() == [0, 0, 0]
+    assert value.tolist() == [0.0, 0.0, 0.0]

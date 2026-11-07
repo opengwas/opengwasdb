@@ -483,23 +483,6 @@ def _refuse_indexed_subset(store_path: Path, layout: str, subset_name: str) -> N
     )
 
 
-def _chunk_windows(lo: int, hi: int, chunk: int) -> Iterator[tuple[int, int]]:
-    """Half-open windows of `chunk` covering `[lo, hi)`.
-
-    The variant-side scans read in these windows so peak memory is a window,
-    not the association count (#252): at OGS-00011's 3,085,080,783-cell Overflow
-    a whole-array decode held 12.3 GB of `variant_index` and 3.1 GB of mask at
-    once. The window is the association arrays' own inner chunk, so no chunk is
-    read twice.
-    """
-    start = int(lo)
-    stop = int(hi)
-    step = max(1, int(chunk))
-    while start < stop:
-        yield start, min(start + step, stop)
-        start += step
-
-
 class RaggedStoreQuery(_StoreQueryBase):
     """Public query object that hides the physical store layout — Ragged stores."""
 
@@ -634,25 +617,28 @@ class RaggedStoreQuery(_StoreQueryBase):
         )
         return record.observed_only(observed_only).head(limit)
 
-    def _scan_threshold_hits(self, lo: int, hi: int, threshold: float) -> np.ndarray:
-        """Flat CSR positions in `[lo, hi)` clearing `threshold`.
+    def _scan_threshold_hits(self, region: Cells | None, threshold: float) -> np.ndarray:
+        """Flat CSR positions of `region`'s rows -- every row, with None -- clearing
+        `threshold`.
 
-        The scan reads z in chunk-sized windows and keeps only what clears the
-        cutoff, so the whole-plane `z_all()` decode (plus the whole
-        `variant_index` and `imputed` arrays) is never held (#252). The cutoff
-        is `z_critical`, the one the index is built with, so a scan and an
-        index agree on the boundary. Each window is read through the reader,
-        which refuses a non-canonical marker the cutoff would otherwise drop.
+        The scan reads Z a window at a time and keeps only what clears the cutoff,
+        so peak memory is a window, not the association count (#252): at
+        OGS-00011's 3,085,080,783-cell Overflow a whole-array decode held 12.3 GB
+        of `variant_index` and 3.1 GB of mask at once. The cutoff is
+        `z_critical`, the one the index is built with, so a scan and an index
+        agree on the boundary. The reader refuses a non-canonical marker the
+        cutoff would otherwise drop.
         """
         cutoff = top_hits.z_critical(threshold)
-        windows: list[np.ndarray] = []
-        for start, stop in _chunk_windows(lo, hi, self._csr.scan_window):
-            mask = np.abs(self._reader.z(start, stop)) >= cutoff
+        hits: list[np.ndarray] = []
+        for window in self._reader.windows(region):
+            assert window.pos is not None
+            mask = np.abs(self._reader.z(window)) >= cutoff
             if mask.any():
-                windows.append(np.where(mask)[0].astype(np.int64) + start)
-        if not windows:
+                hits.append(window.pos[mask])
+        if not hits:
             return np.empty(0, dtype=np.int64)
-        return np.concatenate(windows)
+        return np.concatenate(hits)
 
     def _top_hits_by_scan(
         self,
@@ -670,14 +656,13 @@ class RaggedStoreQuery(_StoreQueryBase):
         both paths rather than an unfiltered store-wide scan on this one. The
         hits are read at their flat positions, which ascend in genomic order.
         """
-        if analysis_id is None:
-            lo, hi = 0, self._csr.n_associations
-        else:
+        region = None
+        if analysis_id is not None:
             analysis_index = self._resolve_analysis_id(analysis_id)
             if analysis_index is None:
                 return self._empty()
-            lo, hi = self._csr.span(analysis_index)
-        hit_positions = self._scan_threshold_hits(lo, hi, threshold)
+            region = Cells.analysis(analysis_index)
+        hit_positions = self._scan_threshold_hits(region, threshold)
         if len(hit_positions) == 0:
             return self._empty()
         found = self._reader.read(Cells.positions(hit_positions), observed_only=observed_only)

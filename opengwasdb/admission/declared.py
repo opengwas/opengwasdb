@@ -39,6 +39,7 @@ def declared_rules(
         reader = csv.DictReader(fh, delimiter="\t")
         id_column = manifest_column(reader.fieldnames or [], "analysis_id")
         raw_rows = list(reader)
+    _refuse_repeated(manifest_path, id_column, raw_rows)
     found = {raw.get(id_column or "", "") for raw in raw_rows}
     if id_column is None or found != set(capabilities) or len(raw_rows) != len(capabilities):
         raise ValueError(
@@ -49,6 +50,22 @@ def declared_rules(
         raw[id_column]: _rules(manifest_path, raw[id_column], raw, capabilities[raw[id_column]])
         for raw in raw_rows
     }
+
+
+def _refuse_repeated(
+    manifest_path: str | Path, id_column: str | None, raw_rows: list[dict[str, str]]
+) -> None:
+    """Refuse an Analysis a manifest names in more than one row, naming it and the rows."""
+    rows: dict[str, list[int]] = {}
+    for number, raw in enumerate(raw_rows, start=2):  # the header is line 1
+        rows.setdefault(raw.get(id_column or "", ""), []).append(number)
+    for analysis_id, numbers in rows.items():
+        if len(numbers) > 1:
+            named = ", ".join(map(str, numbers[:-1])) + f" and {numbers[-1]}"
+            raise ValueError(
+                f"manifest {manifest_path}: analysis {analysis_id!r} is named by rows {named}; "
+                "one row each"
+            )
 
 
 def _rules(
