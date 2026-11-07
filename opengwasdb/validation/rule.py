@@ -313,6 +313,9 @@ class Scan(Generic[B]):
     name: str
     blocks: Callable[[Target], Iterator[B]]
     failure: Callable[[Target, Exception], str] = _validation_failed
+    #: How many blocks `blocks` will yield for a target, when that is known before
+    #: the read; the runner reports progress against it. None silences progress.
+    total: Callable[[Target], int] | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
