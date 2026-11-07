@@ -7,8 +7,10 @@ an association a Store can hold at all, then the filters the Analysis declared:
 0. a malformed identity, which no ALID can spell: a missing chromosome
    (`chromosome_missing`: an empty cell, `.`, `NA`), then an allele outside
    A, C, G and T (`allele_invalid`), then an indel whose source declares no
-   reference allele (`indel_reference_undeclared`), since an indel's ALID
-   spells its reference first (ADR 0079). The Source Reader finds these as it
+   reference allele (`indel_reference_undeclared`, or, for GWAS-SSF, a reason
+   naming its layout: `indel_ssf_unharmonised`, `indel_ssf_hm_columns`,
+   `indel_ssf_hm_code`), since an indel's ALID spells its reference first
+   (ADR 0079). The Source Reader finds these as it
    forms the row's identity (`variants.normalise.MalformedIdentity`), drops
    the row and reports it, the same on every reader;
 1. an unusable reported SE (`se_unusable`): missing, not positive, or not
@@ -81,7 +83,14 @@ from opengwasdb.build.info_score_filter import (
 )
 from opengwasdb.model.info_score_policy import InfoScorePolicy
 from opengwasdb.model.maf_policy import MafPolicy, MafState
-from opengwasdb.variants.normalise import InvalidAllele, MissingChromosome, UndeclaredReference
+from opengwasdb.variants.normalise import (
+    HmCodeIndel,
+    HmColumnsIndel,
+    InvalidAllele,
+    MissingChromosome,
+    UndeclaredReference,
+    UnharmonisedIndel,
+)
 
 __all__ = [
     "LOGGED",
@@ -104,6 +113,13 @@ class Reason(StrEnum):
     #: An indel whose source declares neither allele the genome's reference, so
     #: no ALID can spell it reference first (#381, ADR 0079).
     INDEL_REFERENCE_UNDECLARED = UndeclaredReference.reason
+    #: The same, for each GWAS-SSF layout, so a record says which (#381): a file
+    #: with no harmoniser columns; one that keeps harmonised alleles in `hm_*`
+    #: columns, all of whose indels are dropped; and, in the layout whose main
+    #: columns are harmonised, a row whose harmoniser code is not 10 or 11.
+    INDEL_SSF_UNHARMONISED = UnharmonisedIndel.reason
+    INDEL_SSF_HM_COLUMNS = HmColumnsIndel.reason
+    INDEL_SSF_HM_CODE = HmCodeIndel.reason
     SE_UNUSABLE = "se_unusable"
     EFFECT_MISSING = "effect_missing"
     Z_NONFINITE = "z_nonfinite"
@@ -136,6 +152,9 @@ LOGGED: frozenset[Reason] = frozenset(
         Reason.CHROMOSOME_MISSING,
         Reason.ALLELE_INVALID,
         Reason.INDEL_REFERENCE_UNDECLARED,
+        Reason.INDEL_SSF_UNHARMONISED,
+        Reason.INDEL_SSF_HM_COLUMNS,
+        Reason.INDEL_SSF_HM_CODE,
         Reason.SE_UNUSABLE,
         Reason.EFFECT_MISSING,
         Reason.Z_NONFINITE,
@@ -215,7 +234,10 @@ class AdmissionCounts:
     Analysis declared no MAF filter; it is not ``dropped[MAF_MISSING]``, which
     counts only the rows dropped for it. ``eaf_made_absent`` counts the reported
     frequencies outside (0, 1) the Store holds as absent, over every row read
-    (D7); a row is never dropped for one.
+    (D7); a row is never dropped for one. ``indels_kept_by_hm_code`` counts the
+    indels a GWAS-SSF harmoniser code of 10 or 11 placed, over every row read,
+    beside the ``indel_ssf_*`` drops, so a record says what the rule took and
+    what it left (#381).
     """
 
     examined: int = 0
@@ -224,6 +246,7 @@ class AdmissionCounts:
     info: InfoScoreCounts = field(default_factory=InfoScoreCounts)
     maf_missing: int = 0
     eaf_made_absent: int = 0
+    indels_kept_by_hm_code: int = 0
 
     def __add__(self, other: AdmissionCounts) -> AdmissionCounts:
         dropped = {
@@ -238,6 +261,7 @@ class AdmissionCounts:
             info=self.info + other.info,
             maf_missing=self.maf_missing + other.maf_missing,
             eaf_made_absent=self.eaf_made_absent + other.eaf_made_absent,
+            indels_kept_by_hm_code=self.indels_kept_by_hm_code + other.indels_kept_by_hm_code,
         )
 
     @property
@@ -254,6 +278,7 @@ class AdmissionCounts:
             "info": asdict(self.info),
             "maf_missing": self.maf_missing,
             "eaf_made_absent": self.eaf_made_absent,
+            "indels_kept_by_hm_code": self.indels_kept_by_hm_code,
         }
 
     @classmethod
@@ -266,6 +291,7 @@ class AdmissionCounts:
             info=InfoScoreCounts(**data["info"]),
             maf_missing=int(data["maf_missing"]),
             eaf_made_absent=int(data["eaf_made_absent"]),
+            indels_kept_by_hm_code=int(data["indels_kept_by_hm_code"]),
         )
 
     def _ordered_drops(self) -> list[tuple[Reason, int]]:

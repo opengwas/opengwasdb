@@ -41,6 +41,10 @@ this package refuses to complete it (rebuild it, then complete), and spells a
 source's indels sorted when it checks source fidelity against it. The converter
 writes 0.2.0 from a 0.1.0 Store, whose indels it cannot re-spell. #338's
 reference branch also used 0.2.1; if it lands after #381 it takes 0.2.2.
+A Reference-Completed 0.2.1 release also records, in
+`provenance.completion.panel_indels`, how its panel's indels took their
+reference; a package that does not know the key reads it as any other
+provenance.
 
 **#298 renames one manifest value without moving `format_version`, under spec
 §21.0.** A release written since it says `association_coverage: gwas` where an

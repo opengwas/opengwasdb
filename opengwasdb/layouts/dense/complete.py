@@ -41,9 +41,7 @@ from opengwasdb.completion.checkpoint import (
     write_block_checkpoint,
 )
 from opengwasdb.completion.ld_panel import (
-    canonical_panel_alid as _canonical_panel_alid,
-)
-from opengwasdb.completion.ld_panel import (
+    PanelIndels,
     ceded_at_end,
     check_panel_has_chromosomes,
     list_all_blocks,
@@ -377,6 +375,8 @@ class _UnionAxis:
     tsv_paths: list[Path]
     #: Per block's TSV, the variants at its end the next block owns.
     ceded: dict[Path, frozenset[str]]
+    #: How the panel's indels took their reference (`PanelIndels.record`).
+    panel_indels: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -426,6 +426,8 @@ class _Panel:
     tsv_paths: list[Path]
     alids: set[str]
     ceded: dict[Path, frozenset[str]]
+    #: How the panel's indels took their reference, for the completion record.
+    indels: dict[str, object]
 
 
 def _enumerate_panel(ld_dir: Path, ancestry: str) -> _Panel:
@@ -435,14 +437,13 @@ def _enumerate_panel(ld_dir: Path, ancestry: str) -> _Panel:
     tsv_paths: list[Path] = []
     panel_alids: set[str] = set()
     ceded: dict[Path, frozenset[str]] = {}
+    indels = PanelIndels()
     for chrom in list_chromosomes(ld_dir, ancestry):
         blocks = list_all_blocks(ld_dir, ancestry, chrom)
         for block in blocks:
             tsv_paths.append(block.tsv_path)
-            for snp_id in block.snp_ids:
-                ca = _canonical_panel_alid(snp_id)
-                if ca is not None:
-                    panel_alids.add(ca)
+            panel_alids.update(alid for alid in block.alids if alid is not None)
+            indels.add(block)
         at_end = ceded_at_end(blocks)
         ceded.update(
             (block.tsv_path, at_end[block.block_id]) for block in blocks if block.block_id in at_end
@@ -451,7 +452,8 @@ def _enumerate_panel(ld_dir: Path, ancestry: str) -> _Panel:
         f"LD panel: {len(tsv_paths):,} blocks, {len(panel_alids):,} panel variants, "
         f"{sum(map(len, ceded.values())):,} at an endpoint two blocks share"
     )
-    return _Panel(tsv_paths, panel_alids, ceded)
+    indels.log(ld_dir, ancestry)
+    return _Panel(tsv_paths, panel_alids, ceded, indels.record())
 
 
 def _orient_panel_alid(alid: str) -> CanonicalVariant | None:
@@ -591,6 +593,7 @@ def _build_union_axis(
         out_to_src=out_to_src,
         tsv_paths=panel.tsv_paths,
         ceded=panel.ceded,
+        panel_indels=panel.indels,
     )
 
 
@@ -818,6 +821,7 @@ def _write_completed_manifest(
             n_imputed=arrays.total_imputed,
             n_missing_off_panel=arrays.n_missing_off_panel_total,
             n_missing_imputation_failed=arrays.n_missing_imputation_failed,
+            panel_indels=axis.panel_indels,
         ),
     )
     staged.write_manifest(_record_effective_dense_chunk_shape(completed_manifest, staged))

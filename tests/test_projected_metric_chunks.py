@@ -24,20 +24,18 @@ from pathlib import Path
 import pytest
 
 from opengwasdb.readers.gwas_ssf import _METRICS_COLUMNS as _SSF_COLUMNS
+from opengwasdb.readers.gwas_ssf import MAIN_COLUMNS_REFERENCE
 from opengwasdb.readers.orientation import is_palindromic
 from opengwasdb.readers.tabular import (
-    DeclaredReference,
     MetricsChunk,
     stream_projected_metric_chunks,
     stream_projected_metrics,
 )
 
-#: GWAS-SSF's columns, read with a per-row declaration of the reference: a row
-#: whose `hm_code` is 11 declares its `other_allele` the reference. Both paths
-#: must apply it alike, whichever rows a reader's declaration names (ADR 0079).
-_METRICS_COLUMNS = replace(
-    _SSF_COLUMNS, reference=DeclaredReference(column=b"hm_code", codes=frozenset({b"11"}))
-)
+#: GWAS-SSF's columns as a file whose main columns are harmonised reads them: a
+#: row whose `hm_code` is 10 or 11 declares its `other_allele` the reference.
+#: Both paths must apply it alike (ADR 0079).
+_METRICS_COLUMNS = replace(_SSF_COLUMNS, reference=MAIN_COLUMNS_REFERENCE)
 
 _HEADER = (
     "chromosome base_pair_location effect_allele other_allele beta standard_error"
@@ -110,7 +108,7 @@ def _ordinary_rows() -> list[list[str]]:
         ["3", "300", "a", "c", "0.4", "0.2", "0.03", "10"],  # lower case, flipped identity
         ["4", "400", "AT", "A", "0.5", "0.3", "0.04", "11"],  # declared insertion
         ["4", "450", "A", "AT", "0.5", "0.3", "0.04", "11"],  # declared deletion, ref first
-        ["4", "460", "AT", "A", "0.5", "0.3", "0.04", "10"],  # an undeclared indel: dropped
+        ["4", "460", "AT", "A", "0.5", "0.3", "0.04", "12"],  # an undeclared indel: dropped
         ["5", "500", "G", "G", ".", "", "inf", "10"],  # identical alleles: dropped
         ["6", "0", "A", "C", "0.1", "0.1", "0.1", "10"],  # non-positive position: dropped
         ["X", "600", "T", "A", "0.6", "0.1", "0.02", "10"],

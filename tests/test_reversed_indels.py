@@ -5,9 +5,11 @@ repeat. A sorted ALID spelt both `1:827587:G:GGGGCC`, so Association Admission
 kept the insertion and dropped the deletion as `duplicate_reversed_indel`
 (#357). An indel's ALID now spells its reference allele first (ADR 0079): the
 pair is `1:827587:G:GGGGCC` and `1:827587:GGGGCC:G`, and a build that reads a
-source declaring its reference stores both rows. A source that declares no
-reference cannot place either, so both are dropped and logged as
-`indel_reference_undeclared`.
+source declaring its reference stores both rows: a GWAS-VCF or FinnGen source,
+or a GWAS-SSF row whose harmoniser code is 10 or 11 in the layout that holds
+harmonised alleles in its main columns. A source that declares no reference
+cannot place either, so both are dropped and logged, under a reason that says
+why: `indel_reference_undeclared`, or the GWAS-SSF layout's own.
 """
 
 from __future__ import annotations
@@ -30,10 +32,6 @@ from opengwasdb.variants.axis import iter_variant_records
 FINNGEN = [
     pytest.param("opengwasdb.finngen-r13", None, id="finngen-reader"),
     pytest.param("opengwasdb.column-map", "finngen-r13", id="finngen-map"),
-]
-GWAS_SSF = [
-    pytest.param("opengwasdb.gwas-ssf", None, id="gwas-ssf-reader"),
-    pytest.param("opengwasdb.column-map", "gwas-ssf", id="gwas-ssf-map"),
 ]
 
 #: ``(chrom, pos, ref, alt, beta, se, af_alt)`` as BMI_IRN reports them; the
@@ -194,24 +192,23 @@ def test_a_hybrid_build_stores_the_pair_as_two_variants(tmp_path: Path, on_panel
     assert analysis["dropped"] == {}
 
 
-def _ssf_rows(rows: list[tuple[str, ...]]) -> list[dict]:
+def _ssf_rows(rows: list[tuple[str, ...]], hm_code: str | None = None) -> list[dict]:
+    """Filtered GWAS-SSF rows, with a harmoniser code when one is given."""
+    code = {} if hm_code is None else {"hm_code": hm_code}
     return [
         {"chromosome": c, "base_pair_location": int(p), "effect_allele": a,
          "other_allele": r, "beta": float(b), "standard_error": float(s),
-         "effect_allele_frequency": float(f)}
+         "effect_allele_frequency": float(f), **code}
         for c, p, r, a, b, s, f in rows
     ]
 
 
-def test_a_ragged_build_stores_a_declared_pair_as_two_variants(tmp_path: Path, monkeypatch):
-    """No source a Ragged build reads declares its reference today (GWAS-SSF's
-    harmoniser code awaits a ruling, issue #381), so the declaration is set
-    here: a Ragged SSF Store then holds the pair as two variants, in ALID order."""
-    from opengwasdb.readers import gwas_ssf
-    from opengwasdb.readers.tabular import EVERY_ROW_REFERENCE
-
-    monkeypatch.setattr(gwas_ssf, "_DECLARED_REFERENCE", EVERY_ROW_REFERENCE)
-    store, _ = ragged_ssf_store(tmp_path, _ssf_rows(_rows(deletion_first=True)))
+@pytest.mark.parametrize("hm_code", ["10", "11"])
+def test_a_ragged_build_stores_a_harmonised_pair_as_two_variants(tmp_path: Path, hm_code: str):
+    """A main-column GWAS-SSF row whose harmoniser code is 10 or 11 declares its
+    `other_allele` the reference, so a Ragged SSF Store holds the pair as two
+    variants, and its record counts both as kept by the code."""
+    store, _ = ragged_ssf_store(tmp_path, _ssf_rows(_rows(deletion_first=True), hm_code))
 
     alids = [record.alid for record in iter_variant_records(store / "variants.tsv.gz")]
     assert sorted(alids) == sorted([INSERTION_ALID, DELETION_ALID, CONTROL_ALID])
@@ -221,43 +218,85 @@ def test_a_ragged_build_stores_a_declared_pair_as_two_variants(tmp_path: Path, m
     )
     (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {}
+    assert analysis["indels_kept_by_hm_code"] == 2
 
 
-#: How each undeclared indel of the pair is logged: by source key, the source's
-#: `ref` then `alt`, in source order.
-UNDECLARED_LOG = [
-    [DELETION_ALID, "indel_reference_undeclared"],
-    [INSERTION_ALID, "indel_reference_undeclared"],
-]
+@pytest.mark.parametrize("hm_code", ["10", "11"])
+def test_a_dense_build_of_a_harmonised_gwas_ssf_stores_the_pair(tmp_path: Path, hm_code: str):
+    source = _gwas_ssf(tmp_path / "bmi_irn.tsv", _rows(deletion_first=True), hm_code)
+
+    z_by_alid, analysis = _dense(tmp_path, source, "opengwasdb.gwas-ssf")
+
+    _assert_two_variants(z_by_alid, analysis)
+    assert analysis["indels_kept_by_hm_code"] == 2
+
+
+def _undeclared_log(reason: str) -> list[list[str]]:
+    """How each undeclared indel of the pair is logged: by source key, the
+    source's `ref` then `alt`, in source order."""
+    return [[DELETION_ALID, reason], [INSERTION_ALID, reason]]
+
+
+UNDECLARED_LOG = _undeclared_log("indel_reference_undeclared")
 
 
 def _assert_pair_dropped(store: Path, analysis: dict, log: list[list[str]]) -> None:
     alids = [record.alid for record in iter_variant_records(store / "variants.tsv.gz")]
     assert alids == [CONTROL_ALID]
-    assert analysis["dropped"] == {"indel_reference_undeclared": 2}
+    (reason,) = {reason for _, reason in log}
+    assert analysis["dropped"] == {reason: 2}
     assert (analysis["examined"], analysis["admitted"]) == (3, 1)
+    assert analysis["indels_kept_by_hm_code"] == 0
     assert _logged(store) == log
 
 
-@pytest.mark.parametrize(("capability", "column_map"), GWAS_SSF)
-@pytest.mark.parametrize("hm_code", ["10", "11"])
-def test_a_gwas_ssf_pair_is_dropped_and_logged_harmonised_or_not(
-    tmp_path: Path, capability: str, column_map: str | None, hm_code: str
-):
-    """GWAS-SSF names an effect and an other allele and declares neither the
-    reference, whatever its harmoniser code, so neither indel names an ALID."""
+@pytest.mark.parametrize("hm_code", ["12", "13", "NA"])
+def test_a_gwas_ssf_pair_another_harmoniser_code_names_is_dropped(tmp_path: Path, hm_code: str):
     source = _gwas_ssf(tmp_path / "bmi_irn.tsv", _rows(deletion_first=True), hm_code)
 
-    _z, analysis = _dense(tmp_path, source, capability, column_map)
+    _z, analysis = _dense(tmp_path, source, "opengwasdb.gwas-ssf")
+
+    _assert_pair_dropped(
+        tmp_path / "store.opengwasdb", analysis, _undeclared_log("indel_ssf_hm_code")
+    )
+
+
+def test_a_gwas_ssf_pair_beside_hm_allele_columns_is_dropped(tmp_path: Path):
+    """The main columns of such a file are the study's, so none of its indels is
+    placed, whatever its code (owner, 7 Nov)."""
+    lines = [
+        "hm_other_allele\thm_effect_allele\thm_code\tchromosome\tbase_pair_location"
+        "\teffect_allele\tother_allele\tbeta\tstandard_error\teffect_allele_frequency\tp_value"
+    ]
+    lines += [
+        f"{r}\t{a}\t10\t{c}\t{p}\t{a}\t{r}\t{b}\t{s}\t{f}\t0.5"
+        for c, p, r, a, b, s, f in _rows(deletion_first=True)
+    ]
+    source = tmp_path / "bmi_irn.tsv"
+    source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    _z, analysis = _dense(tmp_path, source, "opengwasdb.gwas-ssf")
+
+    _assert_pair_dropped(
+        tmp_path / "store.opengwasdb", analysis, _undeclared_log("indel_ssf_hm_columns")
+    )
+
+
+def test_a_gwas_ssf_column_map_declares_no_reference_whatever_the_code(tmp_path: Path):
+    """A Column Map's translation declares by its allele convention: GWAS-SSF's
+    effect and other alleles name none."""
+    source = _gwas_ssf(tmp_path / "bmi_irn.tsv", _rows(deletion_first=True), "10")
+
+    _z, analysis = _dense(tmp_path, source, "opengwasdb.column-map", "gwas-ssf")
 
     _assert_pair_dropped(tmp_path / "store.opengwasdb", analysis, UNDECLARED_LOG)
 
 
-def test_a_ragged_ssf_build_drops_and_logs_the_pair(tmp_path: Path):
+def test_a_ragged_ssf_build_drops_and_logs_an_unharmonised_pair(tmp_path: Path):
     store, _ = ragged_ssf_store(tmp_path, _ssf_rows(_rows(deletion_first=True)))
 
     (analysis,) = record_analyses(store)
-    _assert_pair_dropped(store, analysis, UNDECLARED_LOG)
+    _assert_pair_dropped(store, analysis, _undeclared_log("indel_ssf_unharmonised"))
 
 
 def test_a_build_dense_source_drops_and_logs_the_pair(tmp_path: Path):

@@ -220,12 +220,27 @@ and neither does an indel whose source declares no reference allele. Every
 builder drops such a row, and logs it in the build's Admission record as
 `chromosome_missing`, `allele_invalid` or `indel_reference_undeclared` (issues
 #365 and #381, ADR 0072). A source declares no reference when it names an
-effect and an other allele: GWAS-SSF, harmonised or not, a BESD `.esi`, a
-`build-dense` association TSV, and an `effect_and_other` or
-`ref_alt_and_effect_allele` Column Map. Its SNVs and substitutions are stored
-as before. No LD Reference Panel declares one either (§13), so Reference
-Completion neither matches nor fills a panel indel. An alt, random or unplaced
-contig is a chromosome.
+effect and an other allele: a BESD `.esi`, a `build-dense` association TSV,
+and an `effect_and_other` or `ref_alt_and_effect_allele` Column Map. Its SNVs
+and substitutions are stored as before.
+
+GWAS-SSF declares the reference row by row, by its layout, which the reader
+tells from the header (ADR 0079):
+- where the harmonised alleles are the main columns, beside `hm_code`, a row
+  whose code is 10 or 11 declares its `other_allele` the reference, and an
+  indel on a row of any other code is dropped as `indel_ssf_hm_code`;
+- where the study's alleles are the main columns and the harmonised ones are
+  `hm_other_allele`/`hm_effect_allele`, every indel is dropped as
+  `indel_ssf_hm_columns`;
+- where the file carries no harmoniser column, every indel is dropped as
+  `indel_ssf_unharmonised`;
+- a file with any other mix of harmoniser columns is refused.
+
+The Admission record counts, per Analysis, the indels a harmoniser code kept
+(`indels_kept_by_hm_code`) beside each reason's drops. An LD Reference Panel
+places its indels by a `REF` column, or by an indel-reference table settled by
+GRCh38 evidence, and places none where it has neither (§13). An alt, random or
+unplaced contig is a chromosome.
 
 A Store Release of `format_version` `0.2.0` or `0.1.0` sorts an indel's two
 alleles too, and is read as it was written: nothing rewrites its ALIDs. In such
@@ -1705,13 +1720,27 @@ If EAF is emitted for imputed associations, the LD Reference Panel MUST provide 
 The Store Release reference assembly MUST match the LD Reference Panel reference assembly.
 
 A panel names its variants by an id whose two alleles are sorted, whatever the
-genome's reference, and nothing else in a block says which allele of an indel
-is the reference: every panel on the IEU host writes its 13.1 M indels that way
-(issue #381). A panel indel therefore names no ALID (§4) and is neither matched
-to a source's indel nor filled; it stays in its block's LD, and a fill there
-counts as missing. Placing one needs a panel that records the reference, and a
-completion that signs a statistic for it against the allele the panel's LD is
-coded on, which for a deletion is not its `A1`.
+genome's reference: every panel on the IEU host writes its 13.1 M indels that
+way (issue #381). A panel indel is placed (§4) only by a reference the panel
+declares (ADR 0079):
+- a block's own `REF` column, where it has one; else
+- the indel-reference table beside the panel's blocks,
+  `ld_dir/{ancestry}/indel_reference.tsv.gz` (bgzipped, tabix-indexed; columns
+  `chromosome`, `position`, `allele1`, `allele2` -- the id's alleles --,
+  `reference`, `.` where unsettled, and `outcome`), with its provenance in
+  `indel_reference.json`. `scripts/build_panel_indel_reference.py` writes both
+  from GRCh38 evidence, settling an indel only where a source reads it one way
+  and none reads it otherwise, and never replaces either.
+
+An indel neither settles names no ALID, is neither matched to a source's indel
+nor filled, and stays in its block's LD; a fill there counts as missing. A
+panel's eigenvectors and `EAF` are for each row's `EA`, and a Store's
+statistics for its ALID's `A1`, so a row whose `A1` is not its `EA` -- a settled
+panel deletion -- has its eigenvector row negated and its frequency complemented
+before completion uses them. A completed release records how its panel's indels
+took their reference in `provenance.completion.panel_indels`: `reference_from`
+(`ref_column`, `table`, `none` or `mixed`), each table read with its path,
+checksum, revision and counts by outcome, and the indels read and placed.
 
 ### 13.1 LD representation
 

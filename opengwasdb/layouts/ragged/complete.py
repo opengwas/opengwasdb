@@ -50,8 +50,8 @@ from opengwasdb.completion.checkpoint import (
 )
 from opengwasdb.completion.ld_panel import (
     LDBlock,
+    PanelIndels,
     SharedEndpoint,
-    canonical_panel_alid,
     check_panel_has_chromosomes,
     shared_endpoints,
 )
@@ -475,6 +475,8 @@ class _BlockPlan:
     new_alids: set[str]
     #: Each block's end another planned block starts at (`shared_endpoints`).
     endpoints: dict[str, SharedEndpoint] = field(default_factory=dict)
+    #: How the planned blocks' indels took their reference (`PanelIndels.record`).
+    panel_indels: dict[str, object] = field(default_factory=dict)
 
     def ceded(self, block_id: str) -> dict[int, frozenset[str]]:
         """Per Analysis, the variants at ``block_id``'s end the next block owns.
@@ -503,6 +505,8 @@ class _MergedAxis:
     new_variants: list[CanonicalVariant]
     new_alid_to_idx: dict[str, int]
     src_idx_remap: list[int]
+    #: How the panel's indels took their reference (`PanelIndels.record`).
+    panel_indels: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -690,7 +694,7 @@ def _gene_target_less_blocks(
 
 
 def _canonical_alids(block: LDBlock) -> list[str | None]:
-    return [canonical_panel_alid(s) for s in block.snp_ids]
+    return block.alids
 
 
 def _new_panel_alids(alids: list[str | None], source_alids: set[str]) -> set[str]:
@@ -717,6 +721,7 @@ def _scan_block_maps(
     block_canonical_alids: dict[str, list[str | None]] = {}
     analysis_to_blocks: dict[int, list[str]] = {}
     planned: list[LDBlock] = []
+    indels = PanelIndels()
 
     for i, a in _imputable_analyses(state):
         blocks = blocks_for_analysis(
@@ -730,6 +735,7 @@ def _scan_block_maps(
             block_to_tsv[block.block_id] = block.tsv_path
             block_canonical_alids[block.block_id] = _canonical_alids(block)
             planned.append(block)
+            indels.add(block)
             new_alids.update(_new_panel_alids(block_canonical_alids[block.block_id], source_alids))
         if (i + 1) % 1000 == 0:
             print(
@@ -747,7 +753,13 @@ def _scan_block_maps(
         block_canonical_alids=block_canonical_alids,
         new_alids=new_alids,
         endpoints=shared_endpoints(planned),
+        panel_indels=_logged_indels(indels, ld_dir, ancestry),
     )
+
+
+def _logged_indels(indels: PanelIndels, ld_dir: Path, ancestry: str) -> dict[str, object]:
+    indels.log(ld_dir, ancestry)
+    return indels.record()
 
 
 def _plan_blocks(
@@ -783,7 +795,9 @@ def _as_canonical(v: VariantRecord) -> CanonicalVariant:
     )
 
 
-def _merged_axis(state: _SourceState, new_alids: set[str]) -> _MergedAxis:
+def _merged_axis(
+    state: _SourceState, new_alids: set[str], panel_indels: dict[str, object]
+) -> _MergedAxis:
     """Merge the new panel ALIDs into the source axis: canonicalise, drop any
     that collide with source variants, sort under the store's key, and build
     the maps that translate source variant indices and panel ALIDs into the
@@ -819,6 +833,7 @@ def _merged_axis(state: _SourceState, new_alids: set[str]) -> _MergedAxis:
         new_variants=new_variants,
         new_alid_to_idx=new_alid_to_idx,
         src_idx_remap=src_idx_remap,
+        panel_indels=panel_indels,
     )
 
 
@@ -1545,6 +1560,7 @@ def _completed_manifest(
             cis_window_bp=cis_window_bp,
             n_imputed=csr.total_imputed,
             n_missing=csr.total_missing,
+            panel_indels=axis.panel_indels,
             **({} if se_exceptions is None else {"se_exceptions": se_exceptions}),
         ),
         by_variant=recorded_provenance(staged.path),
@@ -1594,7 +1610,7 @@ def _run_completion(
     with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
         state = _read_source_state(src, impute_analysis_ids)
         plan = _plan_blocks(state, ld_dir, ancestry, cis_window_bp)
-        axis = _merged_axis(state, plan.new_alids)
+        axis = _merged_axis(state, plan.new_alids, plan.panel_indels)
         _write_variant_axis(staged.path, state, axis)
         csr = _checkpoint_and_assemble(
             staged,

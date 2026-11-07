@@ -96,7 +96,6 @@ from opengwasdb.readers.interface import (
 from opengwasdb.readers.rows import ReaderBatch, stream_batches
 from opengwasdb.readers.tabular import (
     DEFAULT_CHUNK_ROWS,
-    NO_REFERENCE,
     DeclaredReference,
     MetricsChunk,
     MetricsProjectionColumns,
@@ -119,24 +118,41 @@ from opengwasdb.readers.tabular import (
     stream_variants,
 )
 from opengwasdb.stats import FrequencyTally
-from opengwasdb.variants.normalise import IdentityFaults, Orientation, orient_or_drop
+from opengwasdb.variants.normalise import (
+    HmCodeIndel,
+    HmColumnsIndel,
+    IdentityFaults,
+    Orientation,
+    UnharmonisedIndel,
+    orient_or_drop,
+)
 from opengwasdb.variants.rsid import normalise_rsid
 
 GWAS_SSF_CAPABILITY = "opengwasdb.gwas-ssf"
 #: GWAS-SSF names an effect and an other allele, and the format declares
 #: neither the genome's reference, harmonised or not (ADR 0072).
 _REFERENCE = ReferenceAllele.UNDECLARED
-#: No row of a GWAS-SSF file declares its `other_allele` the reference either,
-#: so none of its indels names an ALID (ADR 0079). Issue #381's 4 Nov decision
-#: read harmoniser code 11 as declaring it, from files that keep the harmonised
-#: alleles in `hm_*` columns. The layout most files use carries them in the main
-#: columns beside `hm_code`, and there the evidence does not single out code 11:
-#: at FinnGen R13 indel sites read one way, `other_allele` is FinnGen's `ref` on
-#: 98.32% of 19,267,774 code-11 rows and 99.38% of 37,894,632 code-10 rows (197
-#: files), code 11 is under 95% in 51 of 131 files, and a rescued copy that
-#: swaps the allele columns keeps `hm_code`. Which rows declare it awaits that
-#: ruling; `DeclaredReference` can state a per-row rule once it is made.
-_DECLARED_REFERENCE = NO_REFERENCE
+#: Which rows of a GWAS-SSF file declare their `other_allele` the reference, by
+#: the file's layout, read from its header (ADR 0079; owner, 7 Nov 2026):
+#:
+#: - harmonised alleles in the main columns, `hm_code` beside them: a row whose
+#:   harmoniser code is 10 or 11. At FinnGen R13 indel sites read one way,
+#:   `other_allele` is FinnGen's `ref` on 99.38% of 37,894,632 code-10 rows and
+#:   98.32% of 19,267,774 code-11 rows (197 files); the residual error, a few
+#:   files whose minority code disagrees, is accepted;
+#: - the study's alleles in the main columns, harmonised ones in `hm_*` columns:
+#:   none, so every indel is dropped. Code-11 deletions there agree with
+#:   FinnGen on 87.42% of rows over 35 files;
+#: - no harmoniser column: none.
+MAIN_COLUMNS_REFERENCE = DeclaredReference(
+    column=b"hm_code", codes=frozenset({b"10", b"11"}), fault=HmCodeIndel
+)
+HM_COLUMNS_REFERENCE = DeclaredReference(fault=HmColumnsIndel)
+UNHARMONISED_REFERENCE = DeclaredReference(fault=UnharmonisedIndel)
+_HM_ALLELE_COLUMNS = ("hm_other_allele", "hm_effect_allele")
+#: Each harmonised layout, by whether the header names `hm_code` and how many
+#: `hm_*` allele columns it names.
+_LAYOUTS = {(True, 0): MAIN_COLUMNS_REFERENCE, (True, 2): HM_COLUMNS_REFERENCE}
 #: A row of an Analysis that declares no imputation score (#175).
 _UNDECLARED_SCORE = ImputationScore()
 #: GWAS-SSF's identity and alias columns, the variant projection's declaration.
@@ -147,7 +163,7 @@ VARIANT_COLUMNS = VariantProjectionColumns(
     ref=b"other_allele",
     alt=b"effect_allele",
     aliases=(b"rsid", b"variant_id"),
-    reference=_DECLARED_REFERENCE,
+    reference=UNHARMONISED_REFERENCE,
 )
 _METRICS_COLUMNS = MetricsProjectionColumns(
     chromosome=(b"chromosome",),
@@ -164,7 +180,7 @@ _METRICS_COLUMNS = MetricsProjectionColumns(
     ci_lower=b"ci_lower",
     ci_upper=b"ci_upper",
     p_value=b"p_value",
-    reference=_DECLARED_REFERENCE,
+    reference=UNHARMONISED_REFERENCE,
 )
 
 
@@ -278,6 +294,7 @@ def _tabular_row(
         other_allele,
         faults,
         other_is_reference=declaration.of_row(row),
+        undeclared=declaration.fault,
     )
     # An allele a row does not reach never orients, so the two None checks
     # only say so to the type checker.
@@ -448,25 +465,58 @@ def _iter_rows(
         score_column = _validated_score_column(reader.fieldnames, score_column)
         tally = tally or StreamTally()
         faults, frequencies = tally.faults, tally.frequencies
-        declaration = _declaration(path)
+        declaration = _declaration(path, reader.fieldnames)
         for row in reader:
             parsed = _tabular_row(
                 row, source, sample_size_column, score_column, frequencies, faults,
                 infinite_effects, declaration=declaration,
             )
-            if parsed is not None:
-                yield parsed
+            if parsed is None:
+                continue
+            tally.indels_kept_by_hm_code += _kept_by_code(declaration, parsed)
+            yield parsed
 
 
-def _declaration(path: SourcePath) -> DeclaredReference:
+def _kept_by_code(declaration: DeclaredReference, row: SourceRow) -> bool:
+    """Whether ``row`` is an indel its harmoniser code placed."""
+    return declaration.column is not None and len(row.ref.strip()) != len(row.alt.strip())
+
+
+def _declaration(path: SourcePath, header: Sequence[str] | None = None) -> DeclaredReference:
     """Which of ``path``'s rows declare their `other_allele` the reference.
 
-    A GWAS-SSF file's are none (`_DECLARED_REFERENCE`). A Column Map's
-    translation declares by its allele convention, of every row or none.
+    A Column Map's translation declares by its allele convention, of every row
+    or none. A GWAS-SSF file declares by its layout (`ssf_layout_reference`),
+    read from ``header`` or, when not given, from the file.
     """
     if isinstance(path, TabularSource):
         return declared_reference(path.reference)
-    return _DECLARED_REFERENCE
+    return ssf_layout_reference(_header(path) if header is None else header, path)
+
+
+def ssf_layout_reference(header: Sequence[str], source: object) -> DeclaredReference:
+    """The reference declaration of a GWAS-SSF file whose header is ``header``.
+
+    Its layout decides it (`MAIN_COLUMNS_REFERENCE`): `hm_code` with no `hm_*`
+    allele column is the main-column layout; `hm_code` with both `hm_*` allele
+    columns the `hm_*` layout; no harmoniser column at all an unharmonised
+    file. Any other mix fits neither harmonised layout, and nothing says which
+    columns hold its harmonised alleles, so it is refused rather than read
+    under one of them.
+    """
+    harmoniser = sorted(name for name in header if name.startswith("hm_"))
+    layout = ("hm_code" in harmoniser, sum(name in harmoniser for name in _HM_ALLELE_COLUMNS))
+    declaration = _LAYOUTS.get(layout)
+    if declaration is not None and (harmoniser or declaration is not UNHARMONISED_REFERENCE):
+        return declaration
+    if not harmoniser:
+        return UNHARMONISED_REFERENCE
+    raise ValueError(
+        f"{source}: a header whose harmoniser columns are {harmoniser} fits neither "
+        "GWAS-SSF harmonised layout (hm_code beside harmonised main columns, or hm_code with both "
+        "hm_other_allele and hm_effect_allele), so the reference of its indels "
+        "cannot be told (ADR 0079)"
+    )
 
 
 def _iter_variants(path: SourcePath) -> Iterator[SourceVariant]:

@@ -6,8 +6,11 @@
 > reversed-indel rule below can no longer fire: no build drops a row as
 > `duplicate_reversed_indel`, which stays readable in a record written before.
 > An indel whose source declares no reference is a third malformed identity,
-> dropped and logged as `indel_reference_undeclared` after `allele_invalid`.
-> The rule set's version is `admission/12`.
+> dropped and logged as `indel_reference_undeclared` after `allele_invalid`, or,
+> for GWAS-SSF, under a reason naming its layout (`indel_ssf_unharmonised`,
+> `indel_ssf_hm_columns`, `indel_ssf_hm_code`); a record also counts the indels
+> a GWAS-SSF harmoniser code kept (`indels_kept_by_hm_code`). The rule set's
+> version is `admission/13`.
 
 Issue [#357](https://github.com/opengwas/opengwasdb/issues/357), part of epic
 #58. Records which of an Analysis's source rows a Store admits, where that is
@@ -96,6 +99,9 @@ name the decisions issue #357 took on the rules that differed.
 | `chromosome_missing` | its chromosome is an empty cell or a missing-value token (`.`, `NA`, `NaN`, `None`) | yes | #365 |
 | `allele_invalid` | an allele, upper-cased (ADR 0075), is empty or holds a character other than A, C, G or T | yes | #365 |
 | `indel_reference_undeclared` | its two alleles differ in length and its source declares neither the reference, so no ALID can spell it reference first (ADR 0079) | yes | #381 |
+| `indel_ssf_unharmonised` | the same, in a GWAS-SSF file with no harmoniser column | yes | #381 |
+| `indel_ssf_hm_columns` | the same, in a GWAS-SSF file that keeps its harmonised alleles in `hm_*` columns, none of whose indels is placed | yes | #381 |
+| `indel_ssf_hm_code` | the same, in a GWAS-SSF file whose main columns are harmonised, on a row whose harmoniser code is neither 10 nor 11 | yes | #381 |
 | `se_unusable` | its reported SE is missing, not positive or not finite | yes | slice 4 (Ragged), D3 (every reader) |
 | `effect_missing` | it has a usable SE but no effect | yes | slice 5 |
 | `z_nonfinite` | its z is infinite, beside a usable SE | yes | D4 |

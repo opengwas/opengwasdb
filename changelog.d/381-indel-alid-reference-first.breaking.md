@@ -13,15 +13,25 @@
   - **A 0.2.1 Store** holds both variants of such a pair. Rebuilt from source,
     the FinnGen R13 pilot (OGS-00003) holds 96,428 more variants.
   - **An indel whose source declares no reference allele is dropped**, and logged
-    per Analysis in the Admission record as `indel_reference_undeclared`
-    (`admission/12`): every indel of a GWAS-SSF file, harmonised or not, of a
-    BESD `.esi`, of a `build-dense` association TSV, and of an
-    `effect_and_other` or `ref_alt_and_effect_allele` Column Map. GWAS-VCF,
-    FinnGen and `ref_alt_effect_is_alt` sources declare it.
-  - **Reference Completion places no panel indel**, since no LD Reference Panel
-    names one by its reference allele, and **refuses a 0.2.0 or 0.1.0 source**:
-    rebuild it, then complete it. The converter now writes 0.2.0, not the
-    current version.
+    per Analysis in the Admission record (`admission/13`). GWAS-VCF, FinnGen and
+    `ref_alt_effect_is_alt` sources declare it. GWAS-SSF declares it by layout:
+    in a file whose harmonised alleles are its main columns, a row whose
+    `hm_code` is 10 or 11 declares its `other_allele` the reference, and other
+    codes' indels are dropped as `indel_ssf_hm_code`; a file keeping harmonised
+    alleles in `hm_*` columns drops every indel (`indel_ssf_hm_columns`), and so
+    does one with no harmoniser column (`indel_ssf_unharmonised`); any other
+    mix of harmoniser columns is refused. The record counts the indels the code
+    kept, `indels_kept_by_hm_code`. A BESD `.esi`, a `build-dense` association
+    TSV, and an `effect_and_other` or `ref_alt_and_effect_allele` Column Map
+    declare none (`indel_reference_undeclared`).
+  - **Reference Completion places a panel indel by the panel's `REF` column, or
+    by an indel-reference table beside its blocks** that
+    `scripts/build_panel_indel_reference.py` settles from GRCh38 evidence, and
+    re-signs a panel deletion's LD and frequency for its reference allele. A
+    panel with neither places no indel, and its log and
+    `provenance.completion.panel_indels` say so. Completion **refuses a 0.2.0
+    or 0.1.0 source**: rebuild it, then complete it. The converter now writes
+    0.2.0, not the current version.
   - **`validate` adds `variant_table.indel_order`**, which fails a Store from
     0.2.1 on whose indel ALID contradicts its row's `effect_allele`/`other_allele`
     or `source_alid`.

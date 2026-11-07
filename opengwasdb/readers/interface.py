@@ -231,11 +231,12 @@ class SiteMetrics:
 class StreamTally:
     """What one Source Reader stream did to the rows it read, for Association
     Admission to record (issue #357): the rows it dropped because no ALID can
-    spell their identity (#365), and the reported frequencies it made absent
-    (D7)."""
+    spell their identity (#365), the reported frequencies it made absent (D7),
+    and the indels a GWAS-SSF harmoniser code placed (#381)."""
 
     faults: IdentityFaults = field(default_factory=IdentityFaults)
     frequencies: FrequencyTally = field(default_factory=FrequencyTally)
+    indels_kept_by_hm_code: int = 0
 
 
 class SourceReader(Protocol):

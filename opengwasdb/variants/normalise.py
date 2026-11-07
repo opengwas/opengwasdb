@@ -65,6 +65,28 @@ class UndeclaredReference(MalformedIdentity):
     reason = "indel_reference_undeclared"
 
 
+class UnharmonisedIndel(UndeclaredReference):
+    """An indel of a GWAS-SSF file with no harmoniser columns: nothing declares
+    either allele the reference (issue #381)."""
+
+    reason = "indel_ssf_unharmonised"
+
+
+class HmColumnsIndel(UndeclaredReference):
+    """An indel of a GWAS-SSF file that keeps the study's alleles in its main
+    columns and the harmonised ones in `hm_*` columns: every such indel is
+    dropped (owner, 7 Nov 2026; issue #381)."""
+
+    reason = "indel_ssf_hm_columns"
+
+
+class HmCodeIndel(UndeclaredReference):
+    """An indel of a GWAS-SSF file whose harmonised alleles are its main columns,
+    on a row whose harmoniser code is neither 10 nor 11 (issue #381)."""
+
+    reason = "indel_ssf_hm_code"
+
+
 @dataclass
 class IdentityFaults:
     """The rows one stream dropped for a malformed identity: ``(source key, reason)``.
@@ -362,8 +384,12 @@ def orient_or_drop(
     faults: IdentityFaults | None = None,
     *,
     other_is_reference: bool,
+    undeclared: type[UndeclaredReference] = UndeclaredReference,
 ) -> Orientation | None:
     """`orient_to_canonical`, or ``None`` for a row that names no variant.
+
+    An indel whose reference is undeclared is recorded under ``undeclared``'s
+    reason, which names why its source declares none (a GWAS-SSF layout).
 
     A malformed identity is recorded in ``faults`` under its source key
     (``chromosome:position:other:effect``, the source's ref then alt), for
@@ -385,10 +411,15 @@ def orient_or_drop(
     except MalformedIdentity as fault:
         if faults is not None:
             key = f"{chromosome}:{position}:{source_other_allele}:{source_effect_allele}"
-            faults.record(key, fault)
+            faults.record(key, _named(fault, undeclared))
         return None
     except VariantNormalisationError:
         return None
+
+
+def _named(fault: MalformedIdentity, undeclared: type[UndeclaredReference]) -> MalformedIdentity:
+    """``fault``, an undeclared reference recorded under ``undeclared``'s reason."""
+    return undeclared(str(fault)) if isinstance(fault, UndeclaredReference) else fault
 
 
 def chromosome_sort_key(chromosome: str) -> tuple[int, str]:

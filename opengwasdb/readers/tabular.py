@@ -48,6 +48,7 @@ from opengwasdb.readers.rows import (
 )
 from opengwasdb.stats import Z_975, inverse_normal_denominators, parse_af
 from opengwasdb.variants.normalise import (
+    UndeclaredReference,
     VariantNormalisationError,
     alid_alleles,
     identity_base,
@@ -179,14 +180,17 @@ class DeclaredReference:
     and is dropped (`UndeclaredReference`). ``every_row`` is a format that
     declares it of every row: a `ref_alt_effect_is_alt` Column Map. Otherwise a
     row declares it where its ``column`` cell is one of ``codes``, for a format
-    whose rows declare it one by one; GWAS-SSF's harmoniser code is the
-    candidate (issue #381), and until it is ruled on no reader states such a
-    rule. A row too short to reach the column declares nothing.
+    whose rows declare it one by one: a GWAS-SSF file whose main columns are
+    harmonised, by its harmoniser code (`opengwasdb.readers.gwas_ssf`). A row
+    too short to reach the column declares nothing.
     """
 
     every_row: bool = False
     column: bytes | None = None
     codes: frozenset[bytes] = frozenset()
+    #: The fault an undeclared indel is recorded under, naming why it is
+    #: undeclared (a GWAS-SSF layout); the generic one for every other source.
+    fault: type[UndeclaredReference] = UndeclaredReference
 
     @property
     def column_name(self) -> str | None:
