@@ -245,7 +245,7 @@ def scan_panel(s: Settings, panel: str, pgens: dict[int, Path]) -> dict[str, obj
     keep = s.work / panel / "scan.keep"
     _write_keep(keep, list(by_id))
     fam, w = _merge(panel, [_scan_chromosome(s, panel, c, pgens[c], keep) for c in range(1, 23)])
-    return pc_check.check(w, np.array([by_id[i] for i in fam]), 10)
+    return pc_check.check(w, np.array([by_id[i] for i in fam]))
 
 
 def _merge(panel: str,

@@ -2,8 +2,10 @@
 
 A PC is **local**, and dropped from the covariates, only if one 4 Mb window explains at least 10%
 of it **and** the rest of the genome explains it no better than chance. The covariates are the
-first k PCs that are kept. `docs/spec/build-inputs.md` ("The PC Check") is the authority; this
-is the numpy implementation the scripts use, and ogld#5's builder is held to the same numbers.
+first up to 10 PCs that are kept; fewer are used if fewer survive, as long as at least 5 do, and
+t_far's k is the number used (owner, 7 November 2026). `docs/spec/build-inputs.md` ("The PC
+Check") is the authority; this is the numpy implementation the scripts use, and ogld#5's builder
+is held to the same numbers.
 
 - **Windows:** 4 Mb, stepped by 2 Mb from each chromosome's first variant, so every stretch of
   up to 2 Mb lies wholly in one. A window's variants are the common ones (MAF >= 0.05) given,
@@ -33,6 +35,8 @@ MIN_SHARE = 0.10
 PERMUTATIONS = 200
 SEED = 405
 QUANTILE = 0.99
+K_MAX = 10
+K_MIN = 5
 NULL = {"kind": "rest_share of each PC's values permuted across samples",
         "permutations": float(PERMUTATIONS), "seed": float(SEED), "quantile": QUANTILE}
 
@@ -98,12 +102,15 @@ def scan(w: Windows, pcs: np.ndarray) -> list[dict[str, object]]:
     return out
 
 
-def check(w: Windows, pcs: np.ndarray, k: int) -> dict[str, object]:
-    """The PC Check's provenance record (`ogld.format.PcCheck`) and the covariates it keeps."""
+def check(w: Windows, pcs: np.ndarray, k_max: int = K_MAX,
+          k_min: int = K_MIN) -> dict[str, object]:
+    """The PC Check's provenance record (`ogld.format.PcCheck`) and the covariates it keeps:
+    the first `k_max` kept PCs, or all of them if fewer survive; fewer than `k_min` is refused."""
     s = scan(w, pcs)
     kept = [str(x["pc"]) for x in s if not x["local"]]
-    if len(kept) < k:
-        raise SystemExit(f"the PC Check keeps {len(kept)} PCs, fewer than k = {k}")
+    if len(kept) < k_min:
+        raise SystemExit(f"the PC Check keeps {len(kept)} PCs, fewer than the minimum {k_min}")
+    covariates = kept[:k_max]
     return {"window_bp": WINDOW_BP, "step_bp": STEP_BP, "min_share": MIN_SHARE,
             "windows": len(w.where), "scan": s, "dropped": [str(x["pc"]) for x in s if x["local"]],
-            "null": NULL, "covariates": kept[:k]}
+            "null": NULL, "kept": len(kept), "covariates": covariates, "k": len(covariates)}
