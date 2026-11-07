@@ -110,3 +110,14 @@ def _long_indel(panel: Panel) -> dict[str, object]:
     text = f"{panel.chrom[r]}:{panel.pos[r]}:{panel.ref[r]}:{panel.alt[r]}"
     return {**_row(panel, r), "ref_length": len(panel.ref[r]), "alt_length": len(panel.alt[r]),
             "chrom_pos_ref_alt_bytes": len(text.encode())}
+
+
+def dosage_rows(cases: dict[str, object]) -> list[int]:
+    """The rows `dosages.raw` exports: every Far Pair, the Bound and the band-edge pairs, so the
+    README's threshold literals rest on an independent recomputation."""
+    far = cases["far_pairs_k10"]
+    exact = cases["exact"]
+    assert isinstance(far, dict) and isinstance(exact, dict)
+    pairs = [p["rows"] for p in far["far_pairs_named"]] + [far["first_bound_pair"]["rows"]]
+    pairs += [x["rows"] for x in exact.values()]
+    return sorted({int(r) for pair in pairs for r in pair})

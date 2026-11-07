@@ -24,32 +24,59 @@ It is deterministic: a fixed seed, no timestamps, and first-by-position or stron
 
 from __future__ import annotations
 
-import os
 import shutil
-import sys
+from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 from test_panel import answers, assemble, extract, outputs, sites, summary
 from test_panel import pcs as pc_file
 from test_panel.params import Params, parse
 from test_panel.select import select
-from test_panel.tools import export_rows, write_rowid_pvar
+from test_panel.tools import (
+    export_rows,
+    single_threaded_blas,
+    stamp_digest,
+    stamp_matches,
+    write_rowid_pvar,
+    write_stamp,
+)
+
+K_TARGET = 10
 
 
-def choose(params: Params) -> list[assemble.Chosen]:
+@dataclass(frozen=True)
+class _Built:
+    panel: assemble.Panel
+    answers: answers.Answers
+    prefix: Path
+    fam: list[str]
+    pcs: np.ndarray
+    conversion: list[str]
+
+
+def _rowid(prefix: Path, out: Path) -> Path:
+    """`out`, a copy of the conversion's pvar with row IDs, rebuilt when the conversion was."""
+    inputs = {"conversion": stamp_digest(prefix)}
+    if not stamp_matches(out, inputs):
+        write_rowid_pvar(Path(f"{prefix}.pvar"), out)
+        write_stamp(out, inputs)
+    return out
+
+
+def _choose(params: Params, covariates: list[int]) -> list[assemble.Chosen]:
     chosen = []
     for chrom in params.chromosomes:
         prefix = sites.convert(params, chrom)
         s = sites.load(params, chrom, prefix)
         reason = sites.drop_reason(s, params)
-        rowid = params.work / f"EUR.chr{chrom}.rowid.pvar"
-        if not rowid.exists():
-            write_rowid_pvar(Path(f"{prefix}.pvar"), rowid)
-        chosen.append(assemble.Chosen(s, reason, select(params, s, reason, rowid), rowid))
+        rowid = _rowid(prefix, params.work / f"EUR.chr{chrom}.rowid.pvar")
+        chosen.append(assemble.Chosen(s, reason, select(params, s, reason, rowid, covariates),
+                                      rowid))
     return chosen
 
 
-def counts(panel: assemble.Panel, a: answers.Answers, n: int) -> dict[str, object]:
+def _counts(panel: assemble.Panel, a: answers.Answers, n: int) -> dict[str, object]:
     ok = panel.passing
     return {"n_samples": n, "n_variants": len(panel.pos), "n_passing": len(ok),
             "passing_by_chrom": {c: int(sum(panel.chrom[r] == c for r in ok))
@@ -58,25 +85,9 @@ def counts(panel: assemble.Panel, a: answers.Answers, n: int) -> dict[str, objec
             "reference_pairs": len(a.i)}
 
 
-BLAS_ONE_THREAD = {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
-
-
-def single_threaded_blas() -> None:
-    """Re-run this script with one BLAS thread unless it already has one.
-
-    A threaded matrix product or QR sums in an order that depends on the thread count, which
-    moves r by an ulp and the committed files' bytes with it; numpy reads the setting only when it
-    loads, so the process starts again. The answers are small, and one thread costs nothing.
-    """
-    if any(os.environ.get(k) != v for k, v in BLAS_ONE_THREAD.items()):
-        os.execve(sys.executable, [sys.executable, *sys.argv], {**os.environ, **BLAS_ONE_THREAD})
-
-
-def main(argv: list[str] | None = None) -> None:
-    single_threaded_blas()
-    params = parse(argv)
-    (params.work / "logs").mkdir(parents=True, exist_ok=True)
-    chosen = choose(params)
+def _build(params: Params, covariates: list[int]) -> _Built:
+    """Choose, cut, convert and answer, with `covariates` for the Far Pair search."""
+    chosen = _choose(params, covariates)
     vcf = params.work / "test_panel.vcf.gz"
     extract.write_vcf(params, [(c.sites, c.rows) for c in chosen], vcf)
     prefix = params.work / "panel"
@@ -89,17 +100,41 @@ def main(argv: list[str] | None = None) -> None:
     assemble.same_genotypes(params, chosen, g, fam)
     pcs = pc_file.load(params, fam)
     files = {"pgen": Path(f"{prefix}.pgen"), "psam": Path(f"{prefix}.psam"), "rowid_pvar": rowid}
-    a = answers.compute(params, panel, files, g, pcs)
+    return _Built(panel, answers.compute(params, panel, files, g, pcs), prefix, fam, pcs,
+                  conversion)
+
+
+def _settled(params: Params) -> _Built:
+    """Build until the Far Pair search used the covariates the Test Panel's PC Check keeps."""
+    covariates = list(range(K_TARGET))
+    for _ in range(3):
+        built = _build(params, covariates)
+        names = built.answers.pc_check["covariates"]
+        assert isinstance(names, list)
+        used = [int(str(n).removeprefix("PC")) - 1 for n in names]
+        if used == covariates:
+            return built
+        covariates = used
+    raise SystemExit("the PC Check's covariates did not settle in three builds")
+
+
+def main(argv: list[str] | None = None) -> None:
+    single_threaded_blas()
+    params = parse(argv)
+    (params.work / "logs").mkdir(parents=True, exist_ok=True)
+    b = _settled(params)
     if params.out.exists():
         if not (params.out / "manifest.json").exists():
             raise SystemExit(f"{params.out} exists but holds no Test Panel; not replacing it")
         shutil.rmtree(params.out)
-    outputs.write_data(params, panel, a, prefix, fam, pcs)
-    cases = summary.edge_cases(params, panel, a, len(fam))
-    manifest = outputs.write_manifest(params, conversion, cases, counts(panel, a, len(fam)),
-                                      a.pc_check)
+    outputs.write_data(params, b.panel, b.answers, b.prefix, b.fam, b.pcs)
+    cases = summary.edge_cases(params, b.panel, b.answers, len(b.fam))
+    outputs.write_dosages(params, b.prefix, summary.dosage_rows(cases))
+    manifest = outputs.write_manifest(params, b.conversion, cases,
+                                      _counts(b.panel, b.answers, len(b.fam)),
+                                      b.answers.pc_check)
     total = int(manifest["total_bytes"])
-    print(f"{len(panel.pos)} variants, {len(a.i)} pairs, {total:,} bytes")
+    print(f"{len(b.panel.pos)} variants, {len(b.answers.i)} pairs, {total:,} bytes")
     if total > params.size_budget_bytes:
         raise SystemExit(f"the Test Panel is {total:,} bytes, over the "
                          f"{params.size_budget_bytes:,}-byte budget")

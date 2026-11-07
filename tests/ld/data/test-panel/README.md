@@ -50,9 +50,10 @@ value, which regenerates every file here.
 | `variants.tsv` | per row: FILTER, MAC, `passes_filters`, `drop_reason`, `components` | 44,956 |
 | `reference/r.npz` | `row_i`, `row_j`, `r_k0`, `r_k10`: every same-chromosome pair of passing rows at most 10 Mb apart, row_i < row_j | 1,715,626 |
 | `plink2/r_unphased_k0.npz` | `r`: plink2 --r-unphased, float64, aligned with `reference/r.npz` | 838,217 |
-| `plink2/clump_r2_0.01.clumps` | plink2 --clump at r2 0.01, 3,000 kb; IDs are `r<row>` | 587 |
-| `plink2/clump_r2_0.001.clumps` | the same at r2 0.001 | 514 |
+| `plink2/clump_r2_0.01.clumps` | plink2 --clump --clump-unphased at r2 0.01, 3,000 kb; IDs are `r<row>`, most significant lead first | 585 |
+| `plink2/clump_r2_0.001.clumps` | the same at r2 0.001 | 515 |
 | `gwas/z.tsv` | per row: the simulated GWAS z, `nan` where the row fails the filters | 24,805 |
+| `dosages.raw` | plink2 --export A (ALT counted) for every Far Pair, Bound and band-edge row: the independent genotypes `tests/test_testdata.py` recomputes r from | 49,189 |
 
 `manifest.json` records every parameter, input, tool version and file SHA-256; `tests/test_testdata.py` checks the hashes.
 
@@ -62,8 +63,13 @@ On an IEU compute node, from the repository root, after `scripts/make_pcs.py` ha
 `/data/opengwasdb/work/ogld/pcs/EUR.eigenvec`:
 
 ```bash
-pixi run -e dev python scripts/make_test_panel.py --work <scratch dir>
+OGLD_PLINK2=<plink2> OGLD_BCFTOOLS=<bcftools> OGLD_BGZIP=<bgzip>     pixi run -e dev python scripts/make_test_panel.py --work <scratch dir>
 ```
+
+Inputs come from documented roots (`scripts/test_panel/roots.py`): `$OGLD_PHASED_V2` for the
+BCFs, `$OGLD_PCS` for the PC File and `$OGLD_REFERENCE` for the keep file. `manifest.json` records
+each by root, name and hash, never by host path. A cached conversion, genotype count or row-ID
+pvar is reused only when the stamp beside it records the same inputs.
 
 It converts chr21 and chr22 for the EUR samples with the documented command
 (`docs/spec/build-inputs.md`), chooses the records below, cuts exactly those records out of the
@@ -73,7 +79,7 @@ checks that both conversions give identical genotypes, then computes every answe
 first-by-position or strongest-first. The conversion that made `panel.*`:
 
 ```text
-plink2 --vcf <work>/test_panel.vcf.gz --keep /data/opengwasdb/reference/hgdp1kgp-hg38/members/EUR.keep --max-alleles 2 --set-all-var-ids @:#:$r:$a --new-id-max-allele-len 1000 --make-pgen pvar-cols=filter --out <work>/panel
+plink2 --vcf <work>/test_panel.vcf.gz --keep $OGLD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep --max-alleles 2 --set-all-var-ids @:#:$r:$a --new-id-max-allele-len 1000 --make-pgen pvar-cols=filter --out <work>/panel
 ```
 
 ## What the filters leave
@@ -90,6 +96,8 @@ tests (ogld#5) make each one.
 The PC Check (`docs/spec/build-inputs.md`, section 8) on the Test Panel's own common variants (33 windows of 4 Mb) drops no PC, so k = 10 regresses out PC1, PC2, PC3, PC4, PC5, PC6, PC7, PC8, PC9, PC10; `reference_r(10)` and the GWAS use exactly these. The largest window share is 0.084, of PC1 in 22:22021005-26021004. `manifest.json` holds the scan, `pc_check`.
 
 ## The edge cases, and where they are
+
+The Far Pairs, the Bound and the band-edge pairs are also in `dosages.raw`, and `tests/test_testdata.py` recomputes their r at k = 0 and 10 from it with `numpy.linalg.lstsq`, independently of `reference/r.npz`.
 
 | edge case | rows | what is there |
 |---|---|---|
@@ -118,8 +126,8 @@ The PC Check (`docs/spec/build-inputs.md`, section 8) on the Test Panel's own co
 
 ## The simulated GWAS
 
-One phenotype from 8 causal variants (rows 287, 353, 421, 537, 612, 693, 774, 798), each explaining 6% of its variance, the rest Gaussian noise from seed 20261107. Every passing row's z is its t statistic in y ~ 1 + PC1..PC10 + genotype; only z is committed. The largest |z| is 8.92. plink2 --clump (p1 = p2 = 5e-08, 3,000 kb, p = erfc(|z| / sqrt 2)) gives lead rows [612, 421, 774, 537, 353, 798, 287, 730] at r2 0.01 and [612, 421, 774, 353, 513, 287] at r2 0.001.
+One phenotype from 8 causal variants (rows 287, 353, 421, 537, 612, 693, 774, 798), each explaining 6% of its variance, the rest Gaussian noise from seed 20261107. Every passing row's z is its t statistic in y ~ 1 + PC1..PC10 + genotype; only z is committed. The largest |z| is 8.92. plink2 --clump with --clump-unphased, because an LD Store's r is unphased and v2's pgen holds phase (p1 = p2 = 5e-08, 3,000 kb, p = erfc(|z| / sqrt 2)), gives lead rows [612, 421, 774, 537, 353, 798, 287, 730] at r2 0.01 and [612, 421, 774, 353, 287, 703] at r2 0.001, most significant first.
 
 ## Size
 
-The data files hold 3,000,438 bytes; this README and `manifest.json` add about 26 kB, and `tests/test_testdata.py` holds the whole directory under the 5 MB budget. The reference's float64 r is most of it: r at k = 0, r at k = 10 and plink2's r, 24 bytes a pair. Pairs grow with the square of variant density, so about 2,000 variants at these clusters' density would hold roughly four times the pairs, near 13 MB. The trade made: dense clusters of 150-300 variants, where LD is, and a 300 kb backbone elsewhere, rather than float32 r, which would move a stored code near a rounding edge.
+The data files hold 3,049,626 bytes; this README and `manifest.json` add about 26 kB, and `tests/test_testdata.py` holds the whole directory under the 5 MB budget. The reference's float64 r is most of it: r at k = 0, r at k = 10 and plink2's r, 24 bytes a pair. Pairs grow with the square of variant density, so about 2,000 variants at these clusters' density would hold roughly four times the pairs, near 13 MB. The trade made: dense clusters of 150-300 variants, where LD is, and a 300 kb backbone elsewhere, rather than float32 r, which would move a stored code near a rounding edge.

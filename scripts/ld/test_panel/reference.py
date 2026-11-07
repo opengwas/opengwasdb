@@ -88,7 +88,10 @@ def _t_stat(gv: np.ndarray, y: np.ndarray, covar: np.ndarray) -> float:
 
 def clump(params: Params, panel: dict[str, Path], extract: Path, rows: np.ndarray,
           z: np.ndarray, r2: float) -> tuple[list[int], Path]:
-    """plink2 --clump lead rows, k = 0, on the passing variants; p = erfc(|z| / sqrt 2)."""
+    """plink2 --clump lead rows, k = 0, on the passing variants; p = erfc(|z| / sqrt 2).
+
+    `--clump-unphased`: plink2 clumps on phased r^2 when the pgen holds phase, as v2's does, but
+    an LD Store's r is unphased (ADR 0002), and #6 is held to equal these leads."""
     sumstats = params.work / "gwas.sumstats"
     sumstats.write_text("ID\tP\n" + "".join(
         f"r{r}\t{math.erfc(abs(v) / math.sqrt(2))!r}\n" for r, v in zip(rows, z, strict=True)))
@@ -96,7 +99,7 @@ def clump(params: Params, panel: dict[str, Path], extract: Path, rows: np.ndarra
     plink2(params, ["--pgen", str(panel["pgen"]), "--pvar", str(panel["rowid_pvar"]), "--psam",
                     str(panel["psam"]), "--extract", str(extract), "--clump", str(sumstats),
                     "--clump-p1", str(params.clump_p1), "--clump-p2", str(params.clump_p1),
-                    "--clump-r2", str(r2), "--clump-kb", str(params.clump_kb),
+                    "--clump-r2", str(r2), "--clump-kb", str(params.clump_kb), "--clump-unphased",
                     "--clump-id-field", "ID", "--clump-p-field", "P", "--out", str(out)],
            f"clump_r2_{r2}")
     clumps = Path(f"{out}.clumps")

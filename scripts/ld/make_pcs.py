@@ -44,22 +44,24 @@ from pathlib import Path
 
 import numpy as np
 from test_panel import pc_check
+from test_panel.roots import portable, root, tool
 from test_panel.tools import (
     bim_positions,
     conversion_args,
-    converted,
+    conversion_inputs,
     read_bed,
     run,
     run_plink2,
     sha256,
+    single_threaded_blas,
+    stamp_matches,
     version,
+    write_stamp,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
-V2 = Path("/data/opengwasdb/work/ogld/phased_v2")
 BCF = "hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf"
-META = Path("/data/opengwasdb/reference/hgdp1kgp-hg38/source/"
-            "gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.tsv.bgz")
+META_NAME = "hgdp1kgp-hg38/source/gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.tsv.bgz"
 N_PCS = 20
 MAF_MIN = 0.05
 PRUNE = ("500kb", "0.1")
@@ -70,6 +72,7 @@ class Settings:
     work: Path
     out: Path
     bcf_dir: Path
+    meta: Path
     regions: Path
     margin_bp: int
     plink2: Path
@@ -82,16 +85,19 @@ class Settings:
                           threads or self.threads, self.memory_mb)
 
 
-def convert_all(s: Settings) -> dict[int, Path]:
-    """Every autosome, all v2 samples, with the conversion `docs/spec/build-inputs.md` documents."""
+def _convert_all(s: Settings) -> dict[int, Path]:
+    """Every autosome, all v2 samples, with the conversion `docs/spec/build-inputs.md` documents.
+    A conversion on disk is reused only when its stamp records today's command and inputs."""
     def one(chrom: int) -> Path:
         prefix = s.work / f"v2.chr{chrom}"
-        if not converted(prefix):
-            bcf = s.bcf_dir / BCF.format(chrom=chrom)
-            if not Path(f"{bcf}.complete").exists():
-                raise SystemExit(f"{bcf} has no .complete marker: download and verify it first")
-            s.plink(conversion_args(bcf, None, prefix), f"convert.chr{chrom}",
-                    max(1, s.threads // s.concurrent))
+        bcf = s.bcf_dir / BCF.format(chrom=chrom)
+        if not Path(f"{bcf}.complete").exists():
+            raise SystemExit(f"{bcf} has no .complete marker: download and verify it first")
+        args = conversion_args(bcf, None, prefix)
+        inputs = conversion_inputs(s.plink2, args, bcf, None)
+        if not stamp_matches(prefix, inputs):
+            s.plink(args, f"convert.chr{chrom}", max(1, s.threads // s.concurrent))
+            write_stamp(prefix, inputs)
         return prefix
 
     with ThreadPoolExecutor(s.concurrent) as pool:
@@ -108,11 +114,11 @@ class Samples:
     keep: dict[str, Path]
 
 
-def samples(keep: Path, psam: Path, work: Path, panel: str) -> Samples:
+def _samples(keep: Path, psam: Path, work: Path, panel: str, meta: Path) -> Samples:
     """The panel's samples present in v2, split by gnomAD's relatedness flag."""
     ids = _first_column(keep)
     in_v2 = set(_first_column(psam))
-    related = _related(set(ids))
+    related = _related(set(ids), meta)
     present = [i for i in ids if i in in_v2]
     unrelated = [i for i in present if not related[i]]
     paths = {"all": work / f"{panel}.all.keep", "unrelated": work / f"{panel}.unrelated.keep"}
@@ -131,9 +137,9 @@ def _write_keep(path: Path, ids: list[str]) -> None:
     path.write_text("#IID\n" + "".join(f"{i}\n" for i in ids))
 
 
-def _related(want: set[str]) -> dict[str, bool]:
+def _related(want: set[str], meta: Path) -> dict[str, bool]:
     out: dict[str, bool] = {}
-    with gzip.open(META, "rt") as f:
+    with gzip.open(meta, "rt") as f:
         col = f.readline().rstrip("\n").split("\t").index("relatedness_inference")
         for line in f:
             c = line.rstrip("\n").split("\t")
@@ -146,7 +152,7 @@ def _related(want: set[str]) -> dict[str, bool]:
     return out
 
 
-def excluded(s: Settings, work: Path) -> tuple[Path, list[dict[str, object]]]:
+def _excluded(s: Settings, work: Path) -> tuple[Path, list[dict[str, object]]]:
     rows = [line.split("\t") for line in s.regions.read_text().splitlines()
             if line and not line.startswith(("#", "region\t"))]
     regions = [{"region": r[0], "chrom": int(r[1]), "start": max(1, int(r[2]) - s.margin_bp),
@@ -157,7 +163,7 @@ def excluded(s: Settings, work: Path) -> tuple[Path, list[dict[str, object]]]:
     return path, regions
 
 
-def prune_chromosome(s: Settings, panel: str, chrom: int, src: Path, keep: dict[str, Path],
+def _prune_chromosome(s: Settings, panel: str, chrom: int, src: Path, keep: dict[str, Path],
                      excl: Path) -> dict[str, int]:
     work = s.work / panel
     threads = max(1, s.threads // s.concurrent)
@@ -171,11 +177,14 @@ def prune_chromosome(s: Settings, panel: str, chrom: int, src: Path, keep: dict[
              "--make-pgen", "--out", str(d)], f"{panel}.extract.chr{chrom}", threads)
     remaining = [int(x.split()[0]) for x in out.splitlines() if "remaining after main" in x
                  and "variants" in x]
-    return {"chrom": chrom, "candidates": remaining[0] if remaining else -1,
+    if len(remaining) != 1:
+        raise SystemExit(f"{panel} chr{chrom}: plink2's log does not say how many variants "
+                         f"remained after the filters ({a}.log)")
+    return {"chrom": chrom, "candidates": remaining[0],
             "pruned_in": sum(1 for _ in Path(f"{a}.prune.in").open())}
 
 
-def pca(s: Settings, panel: str, keep: dict[str, Path]) -> Path:
+def _pca(s: Settings, panel: str, keep: dict[str, Path]) -> Path:
     work = s.work / panel
     (work / "merge.list").write_text("".join(f"{work / f'pruned.chr{c}'}\n" for c in range(1, 23)))
     s.plink(["--pmerge-list", str(work / "merge.list"), "pfile", "--out", str(work / "merged")],
@@ -190,7 +199,7 @@ def pca(s: Settings, panel: str, keep: dict[str, Path]) -> Path:
     return work
 
 
-def pc_file(work: Path, ids: list[str], path: Path) -> float:
+def _pc_file(work: Path, ids: list[str], path: Path) -> float:
     """Write the PC File in keep-file order; return the smallest |corr| between an unrelated
     sample's projection and the PCA's own eigenvector, over PC1-PC20 (1 when consistent)."""
     score = _table(work / "proj.sscore", "IID", [f"PC{k}_AVG" for k in range(1, N_PCS + 1)])
@@ -212,19 +221,19 @@ def _table(path: Path, key: str, columns: list[str]) -> dict[str, list[float]]:
     return {f[head.index(key)]: [float(f[i]) for i in idx] for f in lines[1:]}
 
 
-def panel_pcs(s: Settings, panel: str, keep_file: Path,
+def _panel_pcs(s: Settings, panel: str, keep_file: Path,
               pgens: dict[int, Path]) -> dict[str, object]:
     t0 = time.perf_counter()
     (s.work / panel).mkdir(parents=True, exist_ok=True)
-    sm = samples(keep_file, Path(f"{pgens[22]}.psam"), s.work / panel, panel)
-    excl, regions = excluded(s, s.work / panel)
+    sm = _samples(keep_file, Path(f"{pgens[22]}.psam"), s.work / panel, panel, s.meta)
+    excl, regions = _excluded(s, s.work / panel)
     with ThreadPoolExecutor(s.concurrent) as pool:
         per_chr = list(pool.map(
-            lambda c: prune_chromosome(s, panel, c, pgens[c], sm.keep, excl), range(1, 23)))
-    work = pca(s, panel, sm.keep)
+            lambda c: _prune_chromosome(s, panel, c, pgens[c], sm.keep, excl), range(1, 23)))
+    work = _pca(s, panel, sm.keep)
     out = s.out / f"{panel}.eigenvec"
-    consistency = pc_file(work, sm.ids, out)
-    return {"panel": panel, "keep": str(keep_file), "keep_sha256": sha256(keep_file),
+    consistency = _pc_file(work, sm.ids, out)
+    return {"panel": panel, "keep": portable(keep_file), "keep_sha256": sha256(keep_file),
             "n_samples": len(sm.ids), "absent_from_v2": sm.absent_from_v2,
             "n_unrelated": len(sm.unrelated),
             "n_related_projected": len(sm.ids) - len(sm.unrelated),
@@ -234,11 +243,11 @@ def panel_pcs(s: Settings, panel: str, keep_file: Path,
             "variants_pruned_in": sum(c["pruned_in"] for c in per_chr),
             "eigenvalues": [float(x) for x in (work / "pca.eigenval").read_text().split()],
             "unrelated_projection_min_abs_corr": consistency,
-            "pc_file": str(out), "pc_file_sha256": sha256(out),
+            "pc_file": portable(out), "pc_file_sha256": sha256(out),
             "seconds": round(time.perf_counter() - t0, 1)}
 
 
-def scan_panel(s: Settings, panel: str, pgens: dict[int, Path]) -> dict[str, object]:
+def _scan_panel(s: Settings, panel: str, pgens: dict[int, Path]) -> dict[str, object]:
     """The PC Check on the panel's PC File, over its genome-wide common variants (k = 10)."""
     pcs_path = s.out / f"{panel}.eigenvec"
     by_id = _table(pcs_path, "IID", [f"PC{k}" for k in range(1, N_PCS + 1)])
@@ -267,18 +276,19 @@ def _scan_chromosome(s: Settings, panel: str, chrom: int, pgen: Path,
     return fam, pc_check.windows(np.full(len(pos), str(chrom)), pos, g)
 
 
-def parse(argv: list[str] | None) -> tuple[Settings, dict[str, Path], bool]:
+def _parse(argv: list[str] | None) -> tuple[Settings, dict[str, Path], bool]:
     p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     p.add_argument("--work", type=Path, required=True, help="scratch, about 25 GB")
-    p.add_argument("--out", type=Path, default=Path("/data/opengwasdb/work/ogld/pcs"))
-    p.add_argument("--bcf-dir", type=Path, default=V2)
+    p.add_argument("--out", type=Path, help="default: $OGLD_PCS")
+    p.add_argument("--bcf-dir", type=Path, help="the v2 BCFs; default: $OGLD_PHASED_V2")
+    p.add_argument("--meta", type=Path, help=f"gnomAD's sample metadata; default: "
+                                             f"$OGLD_REFERENCE/{META_NAME}")
     p.add_argument("--regions", type=Path,
                    default=ROOT / "docs/spec/long-range-ld-regions-grch38.tsv")
     p.add_argument("--margin-bp", type=int, default=2_000_000)
     p.add_argument("--panel", action="append", required=True, metavar="NAME=KEEP",
                    help="a panel and its keep file (#IID); repeat for each panel")
-    p.add_argument("--plink2", type=Path,
-                   default=Path.home() / "repo/opengwasdb-stores/.pixi/envs/dev/bin/plink2")
+    p.add_argument("--plink2", type=Path, help="default: $OGLD_PLINK2, else plink2 on PATH")
     p.add_argument("--threads", type=int, default=16)
     p.add_argument("--concurrent", type=int, default=2)
     p.add_argument("--memory-mb", type=int, default=32000)
@@ -286,31 +296,34 @@ def parse(argv: list[str] | None) -> tuple[Settings, dict[str, Path], bool]:
                    help="only add the PC Check's scan to PC Files that already exist")
     a = p.parse_args(argv)
     panels = {name: Path(path) for name, path in (x.split("=", 1) for x in a.panel)}
-    return Settings(a.work, a.out, a.bcf_dir, a.regions.resolve(), a.margin_bp, a.plink2,
-                    a.threads, a.concurrent, a.memory_mb), panels, a.scan_only
+    return Settings(a.work, a.out or root("OGLD_PCS"), a.bcf_dir or root("OGLD_PHASED_V2"),
+                    a.meta or root("OGLD_REFERENCE") / META_NAME, a.regions.resolve(),
+                    a.margin_bp, a.plink2 or tool("plink2"), a.threads, a.concurrent,
+                    a.memory_mb), panels, a.scan_only
 
 
 def main(argv: list[str] | None = None) -> None:
-    s, panels, scan_only = parse(argv)
+    single_threaded_blas()
+    s, panels, scan_only = _parse(argv)
     for d in (s.work / "logs", s.out):
         d.mkdir(parents=True, exist_ok=True)
     uptime = run(["uptime"], s.work / "logs" / "uptime.log").strip()
-    pgens = convert_all(s)
+    pgens = _convert_all(s)
     for panel, keep in panels.items():
         if scan_only:
             report = json.loads((s.out / f"{panel}.json").read_text())
             t0 = time.perf_counter()
-            report["pc_check"] = scan_panel(s, panel, pgens)
+            report["pc_check"] = _scan_panel(s, panel, pgens)
             report["pc_check_seconds"] = round(time.perf_counter() - t0, 1)
             report["uptime_scan"] = run(["uptime"], s.work / "logs" / "uptime.log").strip()
             (s.out / f"{panel}.json").write_text(json.dumps(report, indent=1) + "\n")
             print(panel, report["pc_check"]["dropped"], report["pc_check"]["covariates"])
             continue
-        report = panel_pcs(s, panel, keep, pgens)
-        report["pc_check"] = scan_panel(s, panel, pgens)
+        report = _panel_pcs(s, panel, keep, pgens)
+        report["pc_check"] = _scan_panel(s, panel, pgens)
         report.update({"uptime_start": uptime,
                        "uptime_end": run(["uptime"], s.work / "logs" / "uptime.log").strip(),
-                       "plink2": version(s.plink2), "bcf_dir": str(s.bcf_dir),
+                       "plink2": version(s.plink2), "bcf_dir": portable(s.bcf_dir),
                        "bcf_complete": {c: json.loads(Path(
                            f"{s.bcf_dir / BCF.format(chrom=c)}.complete").read_text())["crc32c"]
                            for c in range(1, 23)},

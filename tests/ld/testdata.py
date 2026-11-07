@@ -11,16 +11,18 @@ carries chrom, pos, ref and alt for a caller to form one.
 **Orientation.** Every r here is the correlation of **ALT-allele dosages** (pvar ALT). Signing r
 to the engine A1 is ogld#3's rule and the builder's job, not this loader's.
 
-Loads are cached, and every array is read-only, so one test cannot change what the next reads.
-Only numpy and the standard library are used.
+Loads are cached, and everything returned is read-only (arrays, tuples, mapping proxies), so one
+test cannot change what the next reads. Only numpy and the standard library are used.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
@@ -95,6 +97,25 @@ class Gwas:
 
 
 @dataclass(frozen=True)
+class PcFile:
+    """The Test Panel's PC File: `values[s, p]` is sample `iids[s]`'s value of PC `names[p]`."""
+
+    iids: tuple[str, ...]
+    names: tuple[str, ...]
+    values: npt.NDArray[np.float64]
+
+
+@dataclass(frozen=True)
+class Dosages:
+    """`plink2 --export A` for a few Test Panel rows (README, "Files"), an independent copy of
+    their genotypes: `alt_counts[s, v]` is sample `iids[s]`'s ALT count at row `rows[v]`."""
+
+    rows: npt.NDArray[np.int64]
+    iids: tuple[str, ...]
+    alt_counts: npt.NDArray[np.int8]
+
+
+@dataclass(frozen=True)
 class ClumpParams:
     """The `plink2 --clump` settings the clump goldens were made with (README, "The simulated
     GWAS"): leads have p <= `p1`, members p <= `p2`, within `kb` kilobases; p = erfc(|z|/sqrt 2).
@@ -112,10 +133,19 @@ def _frozen(a: npt.ArrayLike, dtype: npt.DTypeLike) -> Any:
     return out
 
 
+def _read_only(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType({k: _read_only(v) for k, v in value.items()})
+    if isinstance(value, list):
+        return tuple(_read_only(v) for v in value)
+    return value
+
+
 @cache
-def manifest() -> dict[str, Any]:
-    """`manifest.json`: every parameter, input, tool version, count and file SHA-256."""
-    data: dict[str, Any] = json.loads((TEST_PANEL / "manifest.json").read_text())
+def manifest() -> Mapping[str, Any]:
+    """`manifest.json`: every parameter, input, tool version, count and file SHA-256, read-only
+    all the way down (objects are mapping proxies, arrays are tuples)."""
+    data: Mapping[str, Any] = _read_only(json.loads((TEST_PANEL / "manifest.json").read_text()))
     return data
 
 
@@ -190,11 +220,34 @@ def clump_params() -> ClumpParams:
 
 
 @cache
-def clump_leads(r2: float) -> list[int]:
+def pcs() -> PcFile:
+    lines = [line.split("\t") for line in panel().pcs.read_text().splitlines()]
+    return PcFile(tuple(f[0] for f in lines[1:]), tuple(lines[0][1:]),
+                  _frozen([[float(x) for x in f[1:]] for f in lines[1:]], np.float64))
+
+
+@cache
+def dosages() -> Dosages:
+    """`dosages.raw`: plink2's sample-major `--export A` table; each variant column is named
+    `r<row>_<counted allele>`, and the counted allele is the row's ALT."""
+    lines = [line.split() for line in (TEST_PANEL / "dosages.raw").read_text().splitlines()]
+    head = lines[0]
+    first = head.index("PHENOTYPE") + 1
+    names = [h.split("_", 1) for h in head[first:]]
+    rows = [int(name.removeprefix("r")) for name, _ in names]
+    alt = variants().alt
+    if any(allele != alt[row] for row, (_, allele) in zip(rows, names, strict=True)):
+        raise ValueError("dosages.raw does not count each row's ALT allele")
+    return Dosages(_frozen(rows, np.int64), tuple(f[head.index("IID")] for f in lines[1:]),
+                   _frozen([[int(x) for x in f[first:]] for f in lines[1:]], np.int8))
+
+
+@cache
+def clump_leads(r2: float) -> tuple[int, ...]:
     """plink2's `--clump` lead rows at k = 0 and `clump_params()`, for r2 0.01 or 0.001, in
-    plink2's output order (by chromosome, then position)."""
+    plink2's output order: most significant first."""
     if r2 not in CLUMP_R2:
         raise ValueError(f"the Test Panel holds clumps at r2 in {CLUMP_R2}, not {r2}")
     lines = (TEST_PANEL / "plink2" / f"clump_r2_{r2}.clumps").read_text().splitlines()
     col = lines[0].lstrip("#").split("\t").index("ID")
-    return [int(line.split("\t")[col].removeprefix("r")) for line in lines[1:]]
+    return tuple(int(line.split("\t")[col].removeprefix("r")) for line in lines[1:])

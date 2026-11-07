@@ -18,7 +18,15 @@ from pathlib import Path
 import numpy as np
 
 from test_panel.params import Params
-from test_panel.tools import conversion_args, converted, plink2
+from test_panel.tools import (
+    conversion_args,
+    conversion_inputs,
+    plink2,
+    stamp_digest,
+    stamp_matches,
+    version,
+    write_stamp,
+)
 
 REASONS = ("filter", "mac", "zero_variance")
 
@@ -59,20 +67,26 @@ class Sites:
 
 
 def convert(params: Params, chrom: str) -> Path:
-    """Convert one chromosome with the documented command, unless a matching run is on disk."""
+    """Convert one chromosome with the documented command, unless the conversion on disk was
+    made by the same command from the same source, samples and plink2 (its stamp says so)."""
     prefix = params.work / f"EUR.chr{chrom}"
-    if not converted(prefix):
-        source = params.source.format(chrom=chrom)
-        plink2(params, conversion_args(source, params.keep, prefix), f"convert.chr{chrom}")
+    source = Path(params.source.format(chrom=chrom))
+    args = conversion_args(source, params.keep, prefix)
+    inputs = conversion_inputs(params.plink2, args, source, params.keep)
+    if not stamp_matches(prefix, inputs):
+        plink2(params, args, f"convert.chr{chrom}")
+        write_stamp(prefix, inputs)
     return prefix
 
 
 def load(params: Params, chrom: str, prefix: Path) -> Sites:
-    # A separate --out, so this run's log never replaces the conversion's, which convert() reads.
+    # Rebuilt whenever the conversion it counts was (its stamp records the conversion's stamp).
     counts_prefix = Path(f"{prefix}.counts")
-    if not Path(f"{counts_prefix}.gcount").exists():
+    inputs = {"conversion": stamp_digest(prefix), "plink2": version(params.plink2)}
+    if not stamp_matches(counts_prefix, inputs):
         plink2(params, ["--pfile", str(prefix), "--geno-counts", "--out", str(counts_prefix)],
                f"gcount.chr{chrom}")
+        write_stamp(counts_prefix, inputs)
     cols = _columns(Path(f"{prefix}.pvar"), ("POS", "REF", "ALT", "FILTER"))  # FILTER required
     counts = _columns(Path(f"{counts_prefix}.gcount"), ("HOM_REF_CT", "HET_REF_ALT_CTS",
                                                  "TWO_ALT_GENO_CTS", "MISSING_CT"))

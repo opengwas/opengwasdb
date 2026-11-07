@@ -52,8 +52,14 @@ On an IEU compute node, from the repository root, after `scripts/make_pcs.py` ha
 `/data/opengwasdb/work/ogld/pcs/EUR.eigenvec`:
 
 ```bash
-pixi run -e dev python scripts/make_test_panel.py --work <scratch dir>
+OGLD_PLINK2=<plink2> OGLD_BCFTOOLS=<bcftools> OGLD_BGZIP=<bgzip> \
+    pixi run -e dev python scripts/make_test_panel.py --work <scratch dir>
 ```
+
+Inputs come from documented roots (`scripts/test_panel/roots.py`): `$OGLD_PHASED_V2` for the
+BCFs, `$OGLD_PCS` for the PC File and `$OGLD_REFERENCE` for the keep file. `manifest.json` records
+each by root, name and hash, never by host path. A cached conversion, genotype count or row-ID
+pvar is reused only when the stamp beside it records the same inputs.
 
 It converts chr21 and chr22 for the EUR samples with the documented command
 (`docs/spec/build-inputs.md`), chooses the records below, cuts exactly those records out of the
@@ -105,9 +111,12 @@ FILES = {
                        "passing rows at most 10 Mb apart, row_i < row_j",
     "plink2/r_unphased_k0.npz": "`r`: plink2 --r-unphased, float64, aligned with "
                                 "`reference/r.npz`",
-    "plink2/clump_r2_0.01.clumps": "plink2 --clump at r2 0.01, 3,000 kb; IDs are `r<row>`",
+    "plink2/clump_r2_0.01.clumps": "plink2 --clump --clump-unphased at r2 0.01, 3,000 kb; "
+                                   "IDs are `r<row>`, most significant lead first",
     "plink2/clump_r2_0.001.clumps": "the same at r2 0.001",
     "gwas/z.tsv": "per row: the simulated GWAS z, `nan` where the row fails the filters",
+    "dosages.raw": "plink2 --export A (ALT counted) for every Far Pair, Bound and band-edge row: "
+                   "the independent genotypes `tests/test_testdata.py` recomputes r from",
 }
 
 
@@ -141,6 +150,9 @@ def _covariates(pc: dict[str, Any]) -> str:
 
 def _edges(e: dict[str, Any]) -> str:
     lines = ["## The edge cases, and where they are", "",
+             "The Far Pairs, the Bound and the band-edge pairs are also in `dosages.raw`, and "
+             "`tests/test_testdata.py` recomputes their r at k = 0 and 10 from it with "
+             "`numpy.linalg.lstsq`, independently of `reference/r.npz`.", "",
              "| edge case | rows | what is there |", "|---|---|---|"]
     for name, cl in e["clusters"].items():
         lines.append(f"| {name} | {cl['first_row']}-{cl['last_row']} | {cl['rows']} rows, "
@@ -191,9 +203,11 @@ def _gwas(p: Params, g: dict[str, Any]) -> str:
             f"variants (rows {', '.join(map(str, g['causal_rows']))}), each explaining "
             f"{p.h2_each:.0%} of its variance, the rest Gaussian noise from seed {p.seed}. Every "
             f"passing row's z is its t statistic in y ~ 1 + PC1..PC{p.gwas_pcs} + genotype; only "
-            f"z is committed. The largest |z| is {g['max_abs_z']:.2f}. plink2 --clump "
-            f"(p1 = p2 = {p.clump_p1:g}, {p.clump_kb:,} kb, p = erfc(|z| / sqrt 2)) gives lead "
-            f"rows {g['leads']['0.01']} at r2 0.01 and {g['leads']['0.001']} at r2 0.001.\n")
+            f"z is committed. The largest |z| is {g['max_abs_z']:.2f}. plink2 --clump with "
+            f"--clump-unphased, because an LD Store's r is unphased and v2's pgen holds phase "
+            f"(p1 = p2 = {p.clump_p1:g}, {p.clump_kb:,} kb, p = erfc(|z| / sqrt 2)), gives lead "
+            f"rows {g['leads']['0.01']} at r2 0.01 and {g['leads']['0.001']} at r2 0.001, most "
+            "significant first.\n")
 
 
 def _size(m: dict[str, Any]) -> str:

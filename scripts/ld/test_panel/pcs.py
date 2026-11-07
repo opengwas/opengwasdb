@@ -1,9 +1,7 @@
-"""The PC File: gnomAD's subcontinental PCs, or a PC File given instead (`--pcs`)."""
+"""The PC File the Test Panel uses: `#IID PC1 ... PC20`, plink2's `.eigenvec` layout."""
 
 from __future__ import annotations
 
-import gzip
-import json
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +13,7 @@ N_PCS = 20
 
 def load(params: Params, iids: list[str]) -> np.ndarray:
     """(samples, 20) PCs in the order of `iids`; every sample must have all 20, finite."""
-    rows = _gnomad(params.meta, set(iids)) if params.pcs == "gnomad" else _pc_file(params.pcs)
+    rows = _pc_file(params.pcs)
     missing = [i for i in iids if i not in rows]
     if missing:
         raise SystemExit(f"{len(missing)} kept samples have no PCs, such as {missing[:3]}")
@@ -25,21 +23,8 @@ def load(params: Params, iids: list[str]) -> np.ndarray:
     return pcs
 
 
-def _gnomad(meta: Path, want: set[str]) -> dict[str, list[float]]:
-    out: dict[str, list[float]] = {}
-    with gzip.open(meta, "rt") as f:
-        col = f.readline().rstrip("\n").split("\t").index("hgdp_tgp_meta")
-        for line in f:
-            c = line.rstrip("\n").split("\t")
-            if c[0] in want:
-                scores = json.loads(c[col])["subcontinental_pca"]["pca_scores"]
-                if scores is not None:
-                    out[c[0]] = scores
-    return out
-
-
-def _pc_file(path: str) -> dict[str, list[float]]:
-    lines = Path(path).read_text().splitlines()
+def _pc_file(path: Path) -> dict[str, list[float]]:
+    lines = path.read_text().splitlines()
     if lines[0].split("\t")[0] != "#IID":
         raise SystemExit(f"{path}: a PC File's header starts #IID")
     return {f[0]: [float(v) for v in f[1 : N_PCS + 1]]

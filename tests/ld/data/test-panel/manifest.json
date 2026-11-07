@@ -2,14 +2,10 @@
  "made_by": "scripts/make_test_panel.py (opengwas/ogld#2)",
  "params": {
   "out": "tests/data/test-panel",
-  "work": "/data/opengwasdb/work/tmp/claude-276801/-data-opengwasdb-work-orchestrate-ogld-1-worktrees-2d/0fabf912-4bbf-40b7-9135-647a010b197d/scratchpad/data/tp_work",
-  "plink2": "/home/gh13047/repo/opengwasdb-stores/.pixi/envs/dev/bin/plink2",
-  "bcftools": "/home/gh13047/repo/opengwasdb-stores/.pixi/envs/dev/bin/bcftools",
-  "bgzip": "/home/gh13047/repo/opengwasdb-stores/.pixi/envs/dev/bin/bgzip",
-  "source": "/data/opengwasdb/work/ogld/phased_v2/hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf",
-  "keep": "/data/opengwasdb/reference/hgdp1kgp-hg38/members/EUR.keep",
-  "meta": "/data/opengwasdb/reference/hgdp1kgp-hg38/source/gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.tsv.bgz",
-  "pcs": "/data/opengwasdb/work/ogld/pcs/EUR.eigenvec",
+  "work": "<work>",
+  "source": "$OGLD_PHASED_V2/hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf",
+  "keep": "$OGLD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep",
+  "pcs": "$OGLD_PCS/EUR.eigenvec",
   "pcs_source": "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002)",
   "chromosomes": [
    "21",
@@ -96,15 +92,15 @@
    0.001
   ],
   "size_budget_bytes": 5000000,
-  "threads": 2,
+  "threads": 4,
   "memory_mb": 32000
  },
  "conversion_command": [
   "plink2",
   "--vcf",
-  "/data/opengwasdb/work/tmp/claude-276801/-data-opengwasdb-work-orchestrate-ogld-1-worktrees-2d/0fabf912-4bbf-40b7-9135-647a010b197d/scratchpad/data/tp_work/test_panel.vcf.gz",
+  "<work>/test_panel.vcf.gz",
   "--keep",
-  "/data/opengwasdb/reference/hgdp1kgp-hg38/members/EUR.keep",
+  "$OGLD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep",
   "--max-alleles",
   "2",
   "--set-all-var-ids",
@@ -114,12 +110,12 @@
   "--make-pgen",
   "pvar-cols=filter",
   "--out",
-  "/data/opengwasdb/work/tmp/claude-276801/-data-opengwasdb-work-orchestrate-ogld-1-worktrees-2d/0fabf912-4bbf-40b7-9135-647a010b197d/scratchpad/data/tp_work/panel"
+  "<work>/panel"
  ],
  "inputs": {
   "genotypes": {
    "21": {
-    "path": "/data/opengwasdb/work/ogld/phased_v2/hgdp1kgp_chr21.filtered.SNV_INDEL.phased.shapeit5.bcf",
+    "path": "$OGLD_PHASED_V2/hgdp1kgp_chr21.filtered.SNV_INDEL.phased.shapeit5.bcf",
     "bytes": 269957263,
     "verified": {
      "file": "hgdp1kgp_chr21.filtered.SNV_INDEL.phased.shapeit5.bcf",
@@ -135,7 +131,7 @@
     }
    },
    "22": {
-    "path": "/data/opengwasdb/work/ogld/phased_v2/hgdp1kgp_chr22.filtered.SNV_INDEL.phased.shapeit5.bcf",
+    "path": "$OGLD_PHASED_V2/hgdp1kgp_chr22.filtered.SNV_INDEL.phased.shapeit5.bcf",
     "bytes": 278689536,
     "verified": {
      "file": "hgdp1kgp_chr22.filtered.SNV_INDEL.phased.shapeit5.bcf",
@@ -152,16 +148,13 @@
    }
   },
   "keep": {
-   "path": "/data/opengwasdb/reference/hgdp1kgp-hg38/members/EUR.keep",
+   "path": "$OGLD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep",
    "sha256": "5b491d6fd477e4cc9a48cc0928463d50ce3cb49a5890b6eeb82b396fe81cad71"
   },
-  "sample_meta": {
-   "path": "/data/opengwasdb/reference/hgdp1kgp-hg38/source/gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.tsv.bgz",
-   "sha256": "d5c212dd6534fbaf6deb1110cc70a6e9fd0322b97f27d6f0acde2a3fa6cb52a9"
-  },
   "pcs": {
-   "path": "/data/opengwasdb/work/ogld/pcs/EUR.eigenvec",
-   "sha256": "8ea02cdc208b334278d348b0d53e46cb6c6d322ea69b89c8e26d72ad52915e79"
+   "path": "$OGLD_PCS/EUR.eigenvec",
+   "sha256": "8ea02cdc208b334278d348b0d53e46cb6c6d322ea69b89c8e26d72ad52915e79",
+   "declared_source": "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002)"
   }
  },
  "tools": {
@@ -508,8 +501,8 @@
      421,
      774,
      353,
-     513,
-     287
+     287,
+     703
     ]
    }
   }
@@ -526,6 +519,7 @@
     "window_share": 0.08430652110855608,
     "rest_share": 0.041909071163763946,
     "local": false,
+    "window_null_q99": 0.028451394675989918,
     "rest_null_q99": 0.008972701002485308
    },
    {
@@ -534,6 +528,7 @@
     "window_share": 0.03615913206276343,
     "rest_share": 0.01909401098549407,
     "local": false,
+    "window_null_q99": 0.030148612504882714,
     "rest_null_q99": 0.008727268899794952
    },
    {
@@ -542,6 +537,7 @@
     "window_share": 0.032066476411912855,
     "rest_share": 0.010749367602118356,
     "local": false,
+    "window_null_q99": 0.0267563178047114,
     "rest_null_q99": 0.00862840582804243
    },
    {
@@ -550,6 +546,7 @@
     "window_share": 0.026349890624470247,
     "rest_share": 0.008875930540055215,
     "local": false,
+    "window_null_q99": 0.028224485614832963,
     "rest_null_q99": 0.008769329783073798
    },
    {
@@ -558,6 +555,7 @@
     "window_share": 0.028148811195805902,
     "rest_share": 0.009756881657504223,
     "local": false,
+    "window_null_q99": 0.027656789463823307,
     "rest_null_q99": 0.008502185664259625
    },
    {
@@ -566,6 +564,7 @@
     "window_share": 0.024220706355568018,
     "rest_share": 0.009297465028201366,
     "local": false,
+    "window_null_q99": 0.02875964630141477,
     "rest_null_q99": 0.008644030524630595
    },
    {
@@ -574,6 +573,7 @@
     "window_share": 0.022881669160604634,
     "rest_share": 0.00844409173126182,
     "local": false,
+    "window_null_q99": 0.03483052203232663,
     "rest_null_q99": 0.008739642405153073
    },
    {
@@ -582,6 +582,7 @@
     "window_share": 0.023487087431667112,
     "rest_share": 0.007127990588164683,
     "local": false,
+    "window_null_q99": 0.029412529128338426,
     "rest_null_q99": 0.008931158741394257
    },
    {
@@ -590,6 +591,7 @@
     "window_share": 0.024517280436259677,
     "rest_share": 0.008065288913167767,
     "local": false,
+    "window_null_q99": 0.02544389854835155,
     "rest_null_q99": 0.008693243896607599
    },
    {
@@ -598,6 +600,7 @@
     "window_share": 0.015055650267547294,
     "rest_share": 0.006018766245545036,
     "local": false,
+    "window_null_q99": 0.02574589690688892,
     "rest_null_q99": 0.009035314055974304
    },
    {
@@ -606,6 +609,7 @@
     "window_share": 0.019981203337639655,
     "rest_share": 0.007200146427289026,
     "local": false,
+    "window_null_q99": 0.026137981678011256,
     "rest_null_q99": 0.008459205304924083
    },
    {
@@ -614,6 +618,7 @@
     "window_share": 0.02268475802405566,
     "rest_share": 0.008315288389175323,
     "local": false,
+    "window_null_q99": 0.025614170059607286,
     "rest_null_q99": 0.008604292158993136
    },
    {
@@ -622,6 +627,7 @@
     "window_share": 0.023289953514413674,
     "rest_share": 0.008317907282593589,
     "local": false,
+    "window_null_q99": 0.02783903898345114,
     "rest_null_q99": 0.008671107581781091
    },
    {
@@ -630,6 +636,7 @@
     "window_share": 0.017398596300572715,
     "rest_share": 0.006713854266078506,
     "local": false,
+    "window_null_q99": 0.02836784288496891,
     "rest_null_q99": 0.008668720176419247
    },
    {
@@ -638,6 +645,7 @@
     "window_share": 0.0217690382787373,
     "rest_share": 0.007983327245080798,
     "local": false,
+    "window_null_q99": 0.031429377551513586,
     "rest_null_q99": 0.009168054688924482
    },
    {
@@ -646,6 +654,7 @@
     "window_share": 0.020134632198786386,
     "rest_share": 0.007284764279906554,
     "local": false,
+    "window_null_q99": 0.024711634442685926,
     "rest_null_q99": 0.0086520953181847
    },
    {
@@ -654,6 +663,7 @@
     "window_share": 0.025901035361306786,
     "rest_share": 0.008226233798442357,
     "local": false,
+    "window_null_q99": 0.027975951066616357,
     "rest_null_q99": 0.009350195279177244
    },
    {
@@ -662,6 +672,7 @@
     "window_share": 0.02627100956422651,
     "rest_share": 0.008066803945985888,
     "local": false,
+    "window_null_q99": 0.028884587697012392,
     "rest_null_q99": 0.00896061558835653
    },
    {
@@ -670,6 +681,7 @@
     "window_share": 0.01755234795483585,
     "rest_share": 0.0077257003047039256,
     "local": false,
+    "window_null_q99": 0.030433440513018693,
     "rest_null_q99": 0.008601876126731084
    },
    {
@@ -678,12 +690,13 @@
     "window_share": 0.025462566216420054,
     "rest_share": 0.008593210097266735,
     "local": false,
+    "window_null_q99": 0.02799809525003027,
     "rest_null_q99": 0.009200049234812215
    }
   ],
   "dropped": [],
   "null": {
-   "kind": "rest_share of each PC's values permuted across samples",
+   "kind": "each PC's values permuted across samples: q99 of the largest window share and of the rest share",
    "permutations": 200.0,
    "seed": 405.0,
    "quantile": 0.99
@@ -701,6 +714,8 @@
    "PC9",
    "PC10"
   ],
+  "k_target": 10,
+  "k_min": 5,
   "k": 10
  },
  "clump": {
@@ -712,12 +727,16 @@
    0.001
   ],
   "p_from_z": "erfc(|z| / sqrt(2))",
-  "ld": "plink2's own, k = 0, from panel.pgen's passing rows"
+  "ld": "plink2's own unphased r^2 (--clump-unphased), k = 0, from panel.pgen's passing rows"
  },
  "files": {
   "README.md": {
-   "sha256": "1b333539cb38295d9d98d1ac7d56939cb62522a3e5f37dbea7958a0067dacff7",
-   "bytes": 9085
+   "sha256": "e39deed5ce970430394f44671e882bb123ce36c59a69c8c3d6b25fd67be32c3d",
+   "bytes": 10044
+  },
+  "dosages.raw": {
+   "sha256": "31d296bc32b733a5d2d0de07bc4633382ab304436c95b8a44811972549de7832",
+   "bytes": 49189
   },
   "gwas/z.tsv": {
    "sha256": "514588fea4e8e882986049c69b580ce3ccf32d2de7565b03bb72bedae88e1e1e",
@@ -744,12 +763,12 @@
    "bytes": 173618
   },
   "plink2/clump_r2_0.001.clumps": {
-   "sha256": "65ce9a64149f782605973c6c8c4cd0ddc0aed6163bfcde04a6706752a8c3703c",
-   "bytes": 514
+   "sha256": "febca8734e87cffab041b11755a43da2eba39c6458133f2653a5247f79f81081",
+   "bytes": 515
   },
   "plink2/clump_r2_0.01.clumps": {
-   "sha256": "f6ef7d49746c39fb1f4dd3a048d0b22e236ecd414388e9c12bb2a265ac68c4d3",
-   "bytes": 587
+   "sha256": "8d9c91b48fea3f747a4d8914314975af4189cd67cb5ce63b50814f9421bbb4ef",
+   "bytes": 585
   },
   "plink2/r_unphased_k0.npz": {
    "sha256": "23437a88f73243d6f0e9f073b13694968efd8239bda9ad110cbba98dff535a86",
@@ -764,5 +783,5 @@
    "bytes": 44956
   }
  },
- "total_bytes": 3009523
+ "total_bytes": 3059670
 }

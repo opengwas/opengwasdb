@@ -1,7 +1,9 @@
 """Every setting the Test Panel is made with, recorded whole in its manifest.
 
 The genotype source, the PC File and every filter are parameters, so a changed decision is one
-run with a new value (ADR 0002).
+run with a new value (ADR 0002). Paths default to the documented roots of `test_panel.roots`
+(`$OGLD_PHASED_V2`, `$OGLD_PCS`, `$OGLD_REFERENCE`) and tools to `$OGLD_PLINK2`,
+`$OGLD_BCFTOOLS` and `$OGLD_BGZIP`, or `PATH`.
 """
 
 from __future__ import annotations
@@ -10,10 +12,9 @@ import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
 
-REFERENCE = Path("/data/opengwasdb/reference/hgdp1kgp-hg38")
-TOOLS = Path.home() / "repo/opengwasdb-stores/.pixi/envs/dev/bin"
-V2 = ("/data/opengwasdb/work/ogld/phased_v2/"
-      "hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf")
+from test_panel.roots import root, tool
+
+V2_NAME = "hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf"
 
 
 @dataclass(frozen=True)
@@ -22,15 +23,14 @@ class Params:
 
     out: Path
     work: Path
-    plink2: Path = TOOLS / "plink2"
-    bcftools: Path = TOOLS / "bcftools"
-    bgzip: Path = TOOLS / "bgzip"
+    plink2: Path
+    bcftools: Path
+    bgzip: Path
     # The phased HGDP+1kGP v2 callset (Koenig et al. 2024), downloaded and CRC32C-verified.
-    source: str = V2
-    keep: Path = REFERENCE / "members/EUR.keep"
-    meta: Path = REFERENCE / "source/gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.tsv.bgz"
-    # A PC File (#IID PC1 ... PC20), or "gnomad" for hgdp_tgp_meta.subcontinental_pca.pca_scores.
-    pcs: str = "/data/opengwasdb/work/ogld/pcs/EUR.eigenvec"
+    source: str
+    keep: Path
+    # The PC File, `#IID PC1 ... PC20`: make_pcs.py's for EUR.
+    pcs: Path
     pcs_source: str = "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002)"
     chromosomes: tuple[str, ...] = ("21", "22")
     # Variant filters (docs/spec/build-inputs.md). Genotypes must be complete: a missing call is
@@ -83,16 +83,23 @@ def parse(argv: list[str] | None = None) -> Params:
     p.add_argument("--out", type=Path, default=Path("tests/data/test-panel"))
     p.add_argument("--work", type=Path, required=True,
                    help="scratch directory for the converted chromosomes (several GB)")
-    p.add_argument("--plink2", type=Path, default=Params.plink2)
-    p.add_argument("--bcftools", type=Path, default=Params.bcftools)
-    p.add_argument("--bgzip", type=Path, default=Params.bgzip)
-    p.add_argument("--source", default=V2, help="per-chromosome VCF/BCF, with {chrom}")
-    p.add_argument("--pcs", default=Params.pcs, help='a PC File, or "gnomad"')
+    p.add_argument("--plink2", type=Path, help="default: $OGLD_PLINK2, else plink2 on PATH")
+    p.add_argument("--bcftools", type=Path, help="default: $OGLD_BCFTOOLS, else PATH")
+    p.add_argument("--bgzip", type=Path, help="default: $OGLD_BGZIP, else PATH")
+    p.add_argument("--source", help="per-chromosome BCF or VCF with {chrom}; default "
+                                    f"$OGLD_PHASED_V2/{V2_NAME}")
+    p.add_argument("--keep", type=Path,
+                   help="default: $OGLD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep")
+    p.add_argument("--pcs", type=Path, help="the PC File; default $OGLD_PCS/EUR.eigenvec")
     p.add_argument("--pcs-source", default=Params.pcs_source)
     p.add_argument("--mac-min", type=int, default=Params.mac_min)
     p.add_argument("--no-require-pass", action="store_true")
     p.add_argument("--threads", type=int, default=Params.threads)
     a = p.parse_args(argv)
-    return Params(out=a.out, work=a.work, plink2=a.plink2, bcftools=a.bcftools, bgzip=a.bgzip,
-                  source=a.source, pcs=a.pcs, pcs_source=a.pcs_source, mac_min=a.mac_min,
-                  require_pass=not a.no_require_pass, threads=a.threads)
+    return Params(
+        out=a.out, work=a.work, plink2=a.plink2 or tool("plink2"),
+        bcftools=a.bcftools or tool("bcftools"), bgzip=a.bgzip or tool("bgzip"),
+        source=a.source or str(root("OGLD_PHASED_V2") / V2_NAME),
+        keep=a.keep or root("OGLD_REFERENCE") / "hgdp1kgp-hg38/members/EUR.keep",
+        pcs=a.pcs or root("OGLD_PCS") / "EUR.eigenvec", pcs_source=a.pcs_source,
+        mac_min=a.mac_min, require_pass=not a.no_require_pass, threads=a.threads)

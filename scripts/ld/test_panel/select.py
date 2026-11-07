@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from test_panel import pcs as pc_file
+from test_panel import reference
 from test_panel.params import Params
 from test_panel.sites import Sites
 from test_panel.tools import export_rows
@@ -19,7 +20,10 @@ from test_panel.tools import export_rows
 Components = dict[str, list[int]]
 
 
-def select(params: Params, s: Sites, reason: np.ndarray, rowid_pvar: Path) -> Components:
+def select(params: Params, s: Sites, reason: np.ndarray, rowid_pvar: Path,
+           covariates: list[int]) -> Components:
+    """The chosen rows by component. `covariates` are the 0-based PC File columns the reference
+    regresses out at k = 10, so a Far Pair chosen here is one in the reference."""
     ok = reason == ""
     common_full = ok & (s.maf >= params.common_maf) & (s.pos >= params.q_arm_start[s.chrom])
     c: Components = {
@@ -28,7 +32,7 @@ def select(params: Params, s: Sites, reason: np.ndarray, rowid_pvar: Path) -> Co
         "backbone": _backbone(s, common_full, params),
         "causal": _causal(s, common_full, params),
     }
-    c["far_pair_k10"] = _far_pairs(params, s, common_full, rowid_pvar)
+    c["far_pair_k10"] = _far_pairs(params, s, common_full, rowid_pvar, covariates)
     if s.chrom == params.edge_chrom:
         c.update(_edge_cases(params, s, ok, common_full, reason))
     return c
@@ -58,13 +62,15 @@ def _causal(s: Sites, common_full: np.ndarray, params: Params) -> list[int]:
     return [_nearest(s, eligible, a) for a in params.causal_anchor[s.chrom]]
 
 
-def _far_pairs(params: Params, s: Sites, common: np.ndarray, rowid_pvar: Path) -> list[int]:
+def _far_pairs(params: Params, s: Sites, common: np.ndarray, rowid_pvar: Path,
+               covariates: list[int]) -> list[int]:
     """Real Far Pairs at k = 10: the strongest 3-10 Mb pairs with Stored r^2 >= t_far among
     common variants thinned to one per `far_search_thin_bp`."""
     got, fam, g = export_rows(params, s.prefix, rowid_pvar,
                               _thin(s.pos, common, params.far_search_thin_bp),
                               params.work / f"far_search.chr{s.chrom}")
-    z = _residual_unit(g.astype(np.float64), pc_file.load(params, fam)[:, :10])
+    cov = pc_file.load(params, fam)[:, covariates]
+    z = reference.residual_unit(g, cov, len(covariates))
     hits = _strong_far(z, s.pos[got], params.t_far(len(fam), 10), params.far_bp)
     chosen: list[int] = []
     for _, a, b in hits:
@@ -95,12 +101,6 @@ def _strong_far(z: np.ndarray, pos: np.ndarray, t_far: float,
         q2 = (np.rint((z[lo:hi] @ z[a]) * 32767) / 32767) ** 2
         hits += [(-float(q2[b]), a, lo + int(b)) for b in np.flatnonzero(q2 >= t_far)]
     return sorted(hits)
-
-
-def _residual_unit(x: np.ndarray, pcs: np.ndarray) -> np.ndarray:
-    q, _ = np.linalg.qr(np.column_stack([np.ones(len(pcs)), pcs]))
-    e = x - (x @ q) @ q.T
-    return e / np.linalg.norm(e, axis=1)[:, None]
 
 
 def _edge_cases(params: Params, s: Sites, ok: np.ndarray, common_full: np.ndarray,

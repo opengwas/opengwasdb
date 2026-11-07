@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -51,20 +54,57 @@ def plink2(params: Params, args: list[str], log_name: str) -> None:
                params.memory_mb)
 
 
-def converted(prefix: Path) -> bool:
-    """A conversion finished, with today's command, when plink2's own log says so and its three
-    files exist."""
-    log = Path(f"{prefix}.log")
-    files = all(Path(f"{prefix}.{e}").exists() for e in ("pgen", "pvar", "psam"))
-    text = log.read_text() if log.exists() else ""
-    return files and "End time" in text and all(
-        flag in text for flag in ("pvar-cols=filter", "--set-all-var-ids"))
+BLAS_ONE_THREAD = {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
+
+
+def single_threaded_blas() -> None:
+    """Re-run the calling script with one BLAS thread unless it already has one.
+
+    A threaded matrix product or QR sums in an order that depends on the thread count, which
+    moves a result by an ulp and a written file's bytes with it; numpy reads the setting only
+    when it loads, so the process starts again.
+    """
+    if any(os.environ.get(k) != v for k, v in BLAS_ONE_THREAD.items()):
+        os.execve(sys.executable, [sys.executable, *sys.argv], {**os.environ, **BLAS_ONE_THREAD})
+
+
+def stamp_matches(target: Path, inputs: dict[str, str]) -> bool:
+    """A cached `target` is reused only when the inputs recorded beside it are today's."""
+    stamp = Path(f"{target}.stamp.json")
+    return stamp.exists() and json.loads(stamp.read_text()) == inputs
+
+
+def write_stamp(target: Path, inputs: dict[str, str]) -> None:
+    Path(f"{target}.stamp.json").write_text(json.dumps(inputs, indent=1, sort_keys=True) + "\n")
+
+
+def stamp_digest(target: Path) -> str:
+    """The hash of `target`'s stamp, which a cache built from `target` records as its input."""
+    return sha256(Path(f"{target}.stamp.json"))
+
+
+def source_checksum(path: Path) -> str:
+    """A downloaded source's verified checksum (`.complete`, ADR 0002), or its SHA-256."""
+    complete = Path(f"{path}.complete")
+    if complete.exists():
+        return "crc32c:" + str(json.loads(complete.read_text())["crc32c"])
+    return "sha256:" + sha256(path)
+
+
+def conversion_inputs(binary: Path, args: list[str], source: Path,
+                      keep: Path | None) -> dict[str, str]:
+    """What a conversion's output depends on: the command, the source, the samples, plink2."""
+    return {"command": " ".join(args), "source": source_checksum(source),
+            "keep": sha256(keep) if keep is not None else "", "plink2": version(binary)}
 
 
 def version(binary: Path) -> str:
     out = subprocess.run([str(binary), "--version"], capture_output=True, text=True,
                          check=False)
-    return (out.stdout or out.stderr).splitlines()[0].strip()
+    text = (out.stdout or out.stderr).strip()
+    if out.returncode != 0 or not text:
+        raise SystemExit(f"{binary} --version failed ({out.returncode}): {out.stderr[-500:]}")
+    return text.splitlines()[0].strip()
 
 
 def sha256(path: Path) -> str:
