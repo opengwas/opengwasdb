@@ -1,9 +1,9 @@
-"""Load a module from `scripts/` so it can be tested (issue #333).
+"""Load a module from `scripts/` so it can be tested.
 
 The scripts under `scripts/` are entry points, not part of the installed
-package, so a test loads them by path -- the convention
-`tests/test_restamp_store_to_0_1_0.py` and `tests/test_migrate_store_to_analyses_tsv.py`
-already use. Kept in one place so the callers cannot drift.
+package, so a test loads them by path. `tests/test_check_changelog.py` and
+`tests/test_release.py` both need this; kept in one place so the two callers
+cannot drift.
 """
 
 from __future__ import annotations
