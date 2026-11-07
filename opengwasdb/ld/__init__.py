@@ -14,7 +14,7 @@ A request the store cannot answer exactly raises `Refusal`, naming its reason.
 """
 
 from ogld.build import BuildInputs, build
-from ogld.format import AnswerKind, Provenance, Refusal, RefusalReason
+from ogld.format import AnswerKind, InputError, Provenance, Refusal, RefusalReason
 from ogld.query import Clumps, LDMatrix, LDStore, Proxies, open
 from ogld.store import Finding, Variants, validate
 from ogld.version import __version__
@@ -24,6 +24,7 @@ __all__ = [
     "BuildInputs",
     "Clumps",
     "Finding",
+    "InputError",
     "LDMatrix",
     "LDStore",
     "Provenance",

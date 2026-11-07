@@ -14,7 +14,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from ogld.format import Provenance
+from ogld.format import InputError, Provenance
 
 
 @dataclass(frozen=True)
@@ -54,11 +54,11 @@ class BuildInputs:
 
     def __post_init__(self) -> None:
         if not self.pgen:
-            raise ValueError("BuildInputs needs at least one pgen")
+            raise InputError("BuildInputs needs at least one pgen")
         if self.k < 0:
-            raise ValueError(f"k counts PCs, so it cannot be negative: {self.k}")
+            raise InputError(f"k counts PCs, so it cannot be negative: {self.k}")
         if self.k > 0 and (self.pcs is None or self.pc_source is None):
-            raise ValueError(
+            raise InputError(
                 f"k = {self.k} needs a PC File and its declared source; only k = 0 runs without"
             )
 

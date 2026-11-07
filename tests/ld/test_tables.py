@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import Any
 
 import numpy as np
 import pytest
@@ -130,7 +130,7 @@ def test_build_inputs_defaults_are_the_epic_s() -> None:
     ],
 )
 def test_build_inputs_refuse_what_cannot_be_built(overrides: dict[str, Any], message: str) -> None:
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ogld.InputError, match=message):
         build_inputs(**overrides)
 
 
@@ -138,18 +138,16 @@ def test_k_zero_needs_no_pc_file() -> None:
     assert build_inputs(k=0, pcs=None, pc_source=None).pcs is None
 
 
-class FakeReader:
-    """Stands in for StoreReader where only the provenance is read."""
+class FakeReader(StoreReader):
+    """A StoreReader whose provenance is three facts; nothing else is read."""
 
-    provenance: ClassVar[dict[str, float]] = {
-        "t_far": 0.0274,
-        "near_bp": 3_000_000,
-        "far_bp": 8_000_000,
-    }
+    @property
+    def provenance(self) -> Any:
+        return {"t_far": 0.0274, "near_bp": 3_000_000, "far_bp": 8_000_000}
 
 
 def test_an_ld_store_reports_the_facts_its_store_recorded() -> None:
-    opened = ogld.LDStore(cast(StoreReader, FakeReader()))
+    opened = ogld.LDStore(FakeReader())
     assert (opened.t_far, opened.near_bp, opened.far_bp) == (0.0274, 3_000_000, 8_000_000)
 
 
@@ -178,3 +176,42 @@ def test_the_cli_reports_each_rule_and_fails_on_any_finding(
     assert "ok   near.codes" in out
     assert "FAIL index.symmetric" in out
     assert "22:5: one direction only" in out
+
+
+BUILD_ARGS = ["build", "out", "--pgen", "x.pgen", "--keep", "k", "--pcs", "p.eigenvec"]
+BUILD_ARGS += ["--pc-source", "s", "--panel-id", "p", "--ancestry", "EUR", "--genotype-source", "g"]
+
+
+def test_the_cli_s_defaults_are_build_inputs_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[ogld.BuildInputs] = []
+    monkeypatch.setattr(cli, "build", lambda inputs, out, threads=1: seen.append(inputs) or {})
+    assert cli.main(BUILD_ARGS) == 0
+    expected = ogld.BuildInputs(
+        pgen=(Path("x.pgen"),),
+        keep=Path("k"),
+        pcs=Path("p.eigenvec"),
+        pc_source="s",
+        panel_id="p",
+        ancestry="EUR",
+        genotype_source="g",
+    )
+    assert seen == [expected]
+
+
+def test_the_cli_exits_2_on_an_input_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(inputs: object, out: object, threads: int = 1) -> None:
+        raise ogld.InputError("chr22:1:A:G has a missing call")
+
+    monkeypatch.setattr(cli, "build", refuse)
+    assert cli.main(BUILD_ARGS) == 2
+
+
+def test_the_cli_lets_any_other_fault_propagate(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A ValueError from inside the build, such as quantise refusing r = 1.3, is a builder
+    # fault: exit 2 ("an input it cannot use") would hide it.
+    def fault(inputs: object, out: object, threads: int = 1) -> None:
+        raise ValueError("not a correlation, so it has no code: [1.3]")
+
+    monkeypatch.setattr(cli, "build", fault)
+    with pytest.raises(ValueError, match="not a correlation"):
+        cli.main(BUILD_ARGS)

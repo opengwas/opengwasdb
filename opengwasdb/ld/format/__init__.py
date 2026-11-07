@@ -41,6 +41,7 @@ from ogld.format.provenance import (
 from ogld.format.semantics import (
     AnswerKind,
     Decision,
+    InputError,
     Refusal,
     RefusalReason,
     answer_kind,
@@ -67,6 +68,7 @@ __all__ = [
     "Counts",
     "Decision",
     "Encoding",
+    "InputError",
     "Panel",
     "PcCheck",
     "PcDiagnostic",

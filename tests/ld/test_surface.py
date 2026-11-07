@@ -160,8 +160,8 @@ def test_the_signature_is_the_recorded_one(name: str) -> None:
 
 def test_the_top_level_names_are_the_public_surface() -> None:
     expected = (
-        "AnswerKind BuildInputs Clumps Finding LDMatrix LDStore Provenance Proxies Refusal "
-        "RefusalReason Variants __version__ build open validate"
+        "AnswerKind BuildInputs Clumps Finding InputError LDMatrix LDStore Provenance Proxies "
+        "Refusal RefusalReason Variants __version__ build open validate"
     )
     assert " ".join(sorted(ogld.__all__)) == expected
     for name in ogld.__all__:

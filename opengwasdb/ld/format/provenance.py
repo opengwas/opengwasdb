@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Final, Literal, TypedDict
 
+from ogld.format.encoding import R_SCALE, RESERVED_CODE
+
 FORMAT_VERSION: Final = "0.1.0"
 
 
@@ -23,8 +25,8 @@ class Encoding(TypedDict):
 #: The only encoding this package reads or writes (spec §3). A reader refuses any other.
 ENCODING: Final[Encoding] = {
     "r_dtype": "int16",
-    "r_scale": 32767,
-    "r_reserved_code": -32768,
+    "r_scale": R_SCALE,
+    "r_reserved_code": RESERVED_CODE,
     "rounding": "half_to_even",
 }
 

@@ -2,7 +2,9 @@
 
 A thin shell over the public functions, so a job and a person run exactly what a caller
 of the package runs: `build` (ogld#5), `validate` and `info` (ogld#4). Exit status: 0
-done, 1 the store breaks a rule, 2 a refusal or an input it cannot use.
+done, 1 the store breaks a rule, 2 a `Refusal` or an `InputError`. Any other exception is a
+fault inside ogld and propagates with its traceback. An option left out takes the default
+`BuildInputs` and `build` declare, so no default is written twice.
 """
 
 from __future__ import annotations
@@ -12,9 +14,10 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from ogld.build import BuildInputs, build
-from ogld.format import Refusal
+from ogld.format import InputError, Refusal
 from ogld.query import open as open_store
 from ogld.store import Finding, validate
 
@@ -45,13 +48,19 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--panel-id", required=True)
     b.add_argument("--ancestry", required=True)
     b.add_argument("--genotype-source", required=True)
-    b.add_argument("--k", type=int, default=10)
-    b.add_argument("--mac-min", type=int, default=20)
-    b.add_argument("--info-min", type=_optional_float, default=0.8, help="a number, or none")
-    b.add_argument("--threads", type=int, default=1)
+    unset = argparse.SUPPRESS
+    b.add_argument("--k", type=int, default=unset)
+    b.add_argument("--mac-min", type=int, default=unset)
+    b.add_argument("--info-min", type=_optional_float, default=unset, help="a number, or none")
+    b.add_argument("--threads", type=int, default=unset)
     for name, text in (("validate", "run every validation rule"), ("info", "print the provenance")):
         commands.add_parser(name, help=text).add_argument("location")
     return parser
+
+
+def _given(args: argparse.Namespace, *names: str) -> dict[str, Any]:
+    """The options among `names` the command line set; the rest keep their declared defaults."""
+    return {name: getattr(args, name) for name in names if hasattr(args, name)}
 
 
 def _build(args: argparse.Namespace) -> int:
@@ -63,11 +72,10 @@ def _build(args: argparse.Namespace) -> int:
         panel_id=args.panel_id,
         ancestry=args.ancestry,
         genotype_source=args.genotype_source,
-        k=args.k,
-        mac_min=args.mac_min,
-        info_min=args.info_min,
+        **_given(args, "k", "mac_min", "info_min"),
     )
-    print(json.dumps(build(inputs, args.out, threads=args.threads), indent=1))
+    provenance = build(inputs, args.out, **_given(args, "threads"))
+    print(json.dumps(provenance, indent=1))
     return 0
 
 
@@ -95,7 +103,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run = {"build": _build, "validate": _validate, "info": _info}[args.command]
     try:
         return run(args)
-    except (Refusal, ValueError) as problem:
+    except (Refusal, InputError) as problem:
         print(f"ogld {args.command}: {problem}", file=sys.stderr)
         return 2
 
