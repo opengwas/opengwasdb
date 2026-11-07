@@ -42,6 +42,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from logged_warnings import logged_warnings
 from stored_rows import stored_rows
 
 from opengwasdb import StoreManifest, open_store
@@ -213,23 +214,30 @@ def _panel_eaf_by_alid(panel: Path) -> dict[str, float]:
 
 class RaggedResidualScenario:
     """The observed source, its residual-codable fixture values and the
-    completed release built from it -- shared by every test in this module."""
+    completed release built from it -- shared by every test in this module.
+
+    `warnings` is what that one completion logged, kept because the session
+    fixture is also the completion an under-budget Analysis is asserted silent
+    on (`test_ragged_completion_keeps_observed_se.py`).
+    """
 
     def __init__(self, tmp_path_factory: pytest.TempPathFactory) -> None:
         root = tmp_path_factory.mktemp("ragged_residual_140")
         self.source, self.expected_se = build_residual_ssf_source(root)
-        panel = write_eaf_carrying_panel(root / "ld_panel")
-        self.panel_eaf = _panel_eaf_by_alid(panel)
+        self.panel = write_eaf_carrying_panel(root / "ld_panel")
+        self.panel_eaf = _panel_eaf_by_alid(self.panel)
         self.completed = root / "comp.opengwasdb"
-        self.result = complete_ragged_store(
-            self.source,
-            self.completed,
-            panel,
-            ancestry="EUR",
-            cis_window_bp=1_000_000,
-            min_cor=0.0,
-            release_id="comp",
-        )
+        with logged_warnings() as warnings:
+            self.result = complete_ragged_store(
+                self.source,
+                self.completed,
+                self.panel,
+                ancestry="EUR",
+                cis_window_bp=1_000_000,
+                min_cor=0.0,
+                release_id="comp",
+            )
+        self.warnings = warnings
 
     def expected_observed(self) -> dict[str, dict[str, tuple[float, float]]]:
         """The source's decoded observed cells per Analysis, keyed by ALID.
