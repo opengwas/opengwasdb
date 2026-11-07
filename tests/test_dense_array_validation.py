@@ -32,6 +32,7 @@ from opengwasdb.encoding import (
     StoreEncoding,
     ZEncoding,
 )
+from opengwasdb.encoding.banding import BYTES_PER_CELL, band_limits
 from opengwasdb.model.enums import CompletionState
 from opengwasdb.store import open_store
 from opengwasdb.top_hits import slices_are_ordered
@@ -40,7 +41,6 @@ from opengwasdb.validation.rule import Fold, Kind, Target, ValidationOptions
 from opengwasdb.validation.rules import associations
 from opengwasdb.validation.rules import top_hits as top_hit_rules
 from opengwasdb.validation.run import evaluate
-from opengwasdb.encoding.banding import BYTES_PER_CELL, band_limits
 from opengwasdb.validation.scans import Block, CellIndex
 from opengwasdb.validation.validate import release_targets
 

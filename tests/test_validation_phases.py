@@ -23,11 +23,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from opengwasdb.encoding import banding
 from opengwasdb.layouts.dense import indexed_subsets
 from opengwasdb.layouts.dense.indexed_subsets import INDEXED_SUBSETS_GROUP
 from opengwasdb.store.arrays import inner_chunk_of, open_group
 from opengwasdb.validation import run as validation_run
-from opengwasdb.encoding import banding
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.rules import by_variant, variants
 from opengwasdb.validation.validate import MANIFEST_RULE
