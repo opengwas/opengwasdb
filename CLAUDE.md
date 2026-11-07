@@ -31,9 +31,9 @@ pixi run -e report …        # Quarto + Jupyter, for .qmd benchmark documents
 ## Branches
 
 `feature → main`. **Work on a feature branch; never commit to `main`
-directly.** Every pull request merged into `main` is tagged `vX.Y.Z`, with the
-`changelog.d/` fragments it added as the release notes
-(`.github/workflows/release.yml`).
+directly.** Every merge to `main` is a tagged release. **Merge
+your own finished pull request** with `gh pr merge --auto --merge`, unless
+an owner gate in [CONTRIBUTING.md, Merging](./CONTRIBUTING.md#merging) applies.
 
 ## Before you finish a change
 

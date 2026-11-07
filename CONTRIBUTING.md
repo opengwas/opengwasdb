@@ -511,6 +511,33 @@ above remains the right local check.
 - [ ] `README.md` and this file still true, tooling baselines re-measured.
 - [ ] Sibling-repository docs updated, or an issue open there.
 
+### Merging
+
+A ruleset protects `main`: a pull request, and green `tests, lint, typecheck`
+and `changelog fragment` checks, with no approval required. **Merge your own
+pull request** once its work is finished: the checklist above, and for an
+orchestrate run its final review. Run `gh pr merge <n> --auto --merge`, and
+GitHub merges it when the checks pass. Never `--admin`, never a draft.
+
+**Leave it for the owner instead**, and name the reason in the PR body, when it:
+
+- moves `format_version` (`CURRENT_FORMAT_VERSION`), PATCH or MINOR, or changes
+  which formats the package reads or writes. Every move is permanent: a reader
+  of a series reads every Store ever written in it (spec §21);
+- adds a `breaking` changelog fragment;
+- adds or supersedes an ADR whose decision the owner has not made. An ADR that
+  cites the owner's ruling (who, when, where) records the owner's decision;
+- changes `.github/workflows/`, `quality.json` or `quality/`. CI is the
+  reviewer, so its configuration is the owner's.
+
+Spec and ADR edits are not gated by themselves. They touched 11 and 12 of the
+26 merges between 15 Oct and 7 Nov 2026, so gating them would put half of all
+merges back in front of the owner.
+
+The `changelog fragment` check reads labels only when it runs. Add
+`no-changelog` when you open the PR; if you add it later, close and reopen the
+PR to re-run the check.
+
 ---
 
 ## Commits and pull requests
