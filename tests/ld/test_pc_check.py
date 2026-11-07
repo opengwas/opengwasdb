@@ -58,7 +58,7 @@ REAL_SCANS = {
 
 @pytest.mark.parametrize("name", sorted(REAL_SCANS))
 def test_the_owner_s_rule_on_real_scans(name: str) -> None:
-    window_share, window_null, rest_share, rest_null, local = REAL_SCANS[name]
+    window_share, window_null, rest_share, _rest_null, local = REAL_SCANS[name]
     assert pc_check.is_local(window_share, window_null, rest_share) is local
 
 
@@ -99,8 +99,10 @@ def test_a_window_s_own_axis_is_local(scanned) -> None:
     windows, local, noise = scanned
     first = pc_check.check(windows, np.column_stack([local, noise]))["scan"][0]
     # Windows step by 2 Mb from each chromosome's first variant, here at 20 kb.
-    assert first["local"] and first["window"] == "2:10020000-14019999"
-    assert first["window_share"] > 0.85 and first["window_share"] > first["window_null_q99"]
+    assert first["local"]
+    assert first["window"] == "2:10020000-14019999"
+    assert first["window_share"] > 0.85
+    assert first["window_share"] > first["window_null_q99"]
     assert first["ratio"] <= pc_check.MAX_RATIO
 
 

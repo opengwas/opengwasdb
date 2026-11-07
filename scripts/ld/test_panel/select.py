@@ -20,8 +20,9 @@ from test_panel.tools import export_rows
 Components = dict[str, list[int]]
 
 
-def select(params: Params, s: Sites, reason: np.ndarray, rowid_pvar: Path,
-           covariates: list[int]) -> Components:
+def select(
+    params: Params, s: Sites, reason: np.ndarray, rowid_pvar: Path, covariates: list[int]
+) -> Components:
     """The chosen rows by component. `covariates` are the 0-based PC File columns the reference
     regresses out at k = 10, so a Far Pair chosen here is one in the reference."""
     ok = reason == ""
@@ -62,13 +63,18 @@ def _causal(s: Sites, common_full: np.ndarray, params: Params) -> list[int]:
     return [_nearest(s, eligible, a) for a in params.causal_anchor[s.chrom]]
 
 
-def _far_pairs(params: Params, s: Sites, common: np.ndarray, rowid_pvar: Path,
-               covariates: list[int]) -> list[int]:
+def _far_pairs(
+    params: Params, s: Sites, common: np.ndarray, rowid_pvar: Path, covariates: list[int]
+) -> list[int]:
     """Real Far Pairs at k = 10: the strongest 3-10 Mb pairs with Stored r^2 >= t_far among
     common variants thinned to one per `far_search_thin_bp`."""
-    got, fam, g = export_rows(params, s.prefix, rowid_pvar,
-                              _thin(s.pos, common, params.far_search_thin_bp),
-                              params.work / f"far_search.chr{s.chrom}")
+    got, fam, g = export_rows(
+        params,
+        s.prefix,
+        rowid_pvar,
+        _thin(s.pos, common, params.far_search_thin_bp),
+        params.work / f"far_search.chr{s.chrom}",
+    )
     cov = pc_file.load(params, fam)[:, covariates]
     z = reference.residual_unit(g, cov, len(covariates))
     hits = _strong_far(z, s.pos[got], params.t_far(len(fam), 10), params.far_bp)
@@ -91,8 +97,9 @@ def _thin(pos: np.ndarray, eligible: np.ndarray, bp: int) -> list[int]:
     return rows
 
 
-def _strong_far(z: np.ndarray, pos: np.ndarray, t_far: float,
-                far_bp: int) -> list[tuple[float, int, int]]:
+def _strong_far(
+    z: np.ndarray, pos: np.ndarray, t_far: float, far_bp: int
+) -> list[tuple[float, int, int]]:
     """(-Stored r^2, a, b) for every 3 Mb < d <= far_bp pair reaching t_far, strongest first."""
     hits: list[tuple[float, int, int]] = []
     for a in range(len(pos)):
@@ -103,14 +110,16 @@ def _strong_far(z: np.ndarray, pos: np.ndarray, t_far: float,
     return sorted(hits)
 
 
-def _edge_cases(params: Params, s: Sites, ok: np.ndarray, common_full: np.ndarray,
-                reason: np.ndarray) -> Components:
+def _edge_cases(
+    params: Params, s: Sites, ok: np.ndarray, common_full: np.ndarray, reason: np.ndarray
+) -> Components:
     start = params.q_arm_start[s.chrom]
     c: Components = {f"exact_{d}": _exact(s, common_full, d) for d in params.exact_distances}
     c["multiallelic"] = _multiallelic(s, ok & (s.pos >= start) & _is_snv(s))
     lengths = np.char.str_len(s.ref.astype(str)) + np.char.str_len(s.alt.astype(str))
-    c["long_indel"] = [int(np.flatnonzero(ok & (s.pos >= start))[
-        np.argmax(lengths[ok & (s.pos >= start)])])]
+    c["long_indel"] = [
+        int(np.flatnonzero(ok & (s.pos >= start))[np.argmax(lengths[ok & (s.pos >= start)])])
+    ]
     c.update(_failing(params, s, reason, start))
     return c
 
@@ -143,8 +152,12 @@ def _failing(params: Params, s: Sites, reason: np.ndarray, start: int) -> Compon
     FILTER value and the first site with no genotype variance. v2 has no FILTER values and, at
     MAC >= 20, no site without variance, so those two come back empty (README)."""
     after = s.pos >= start
-    c: Components = {"fail_mac": [int(np.flatnonzero(after & (reason == "mac") & (s.mac == m))[0])
-                                  for m in params.fail_mac_values]}
+    c: Components = {
+        "fail_mac": [
+            int(np.flatnonzero(after & (reason == "mac") & (s.mac == m))[0])
+            for m in params.fail_mac_values
+        ]
+    }
     f_rows = np.flatnonzero(after & (reason == "filter") & (s.mac >= params.mac_min))
     _, first = np.unique(s.filt[f_rows], return_index=True)
     c["fail_filter"] = sorted(f_rows[first].tolist())[: params.fail_filters_max]

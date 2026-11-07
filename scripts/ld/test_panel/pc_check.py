@@ -45,9 +45,13 @@ SEED = 405
 QUANTILE = 0.99
 K_TARGET = 10
 K_MIN = 5
-NULL = {"kind": "each PC's values permuted across samples: q99 of the largest window share "
-                "(decides) and of the rest share (diagnostic)",
-        "permutations": float(PERMUTATIONS), "seed": float(SEED), "quantile": QUANTILE}
+NULL = {
+    "kind": "each PC's values permuted across samples: q99 of the largest window share "
+    "(decides) and of the rest share (diagnostic)",
+    "permutations": float(PERMUTATIONS),
+    "seed": float(SEED),
+    "quantile": QUANTILE,
+}
 
 
 @dataclass(frozen=True)
@@ -101,29 +105,38 @@ def _scan(w: Windows, pcs: np.ndarray) -> list[dict[str, object]]:
 def is_local(window_share: float, window_null_q99: float, rest_share: float) -> bool:
     """The owner's rule: one window explains >= 10% of the PC, more than chance does, and the
     rest of the genome at most 0.05 of what that window does."""
-    return (window_share >= MIN_SHARE and window_share > window_null_q99
-            and rest_share / window_share <= MAX_RATIO)
+    return (
+        window_share >= MIN_SHARE
+        and window_share > window_null_q99
+        and rest_share / window_share <= MAX_RATIO
+    )
 
 
-def _scan_one(w: Windows, observed: np.ndarray, pc: np.ndarray, k: int,
-              rng: np.random.Generator) -> dict[str, object]:
+def _scan_one(
+    w: Windows, observed: np.ndarray, pc: np.ndarray, k: int, rng: np.random.Generator
+) -> dict[str, object]:
     best = int(np.argmax(observed))
     bc, bs = w.where[best]
     rest = np.array([c != bc or abs(s - bs) >= WINDOW_BP for c, s in w.where])
-    null = _shares(w, np.stack([pc[rng.permutation(len(pc))] for _ in range(PERMUTATIONS)],
-                               axis=1))
+    null = _shares(w, np.stack([pc[rng.permutation(len(pc))] for _ in range(PERMUTATIONS)], axis=1))
     window_q99 = float(np.quantile(null.max(axis=0), QUANTILE))
     rest_q99 = float(np.quantile(null[rest].mean(axis=0), QUANTILE))
     window_share, rest_share = float(observed[best]), float(observed[rest].mean())
-    return {"pc": f"PC{k + 1}", "window": f"{bc}:{bs}-{bs + WINDOW_BP - 1}",
-            "window_share": window_share, "rest_share": rest_share,
-            "ratio": rest_share / window_share,
-            "local": is_local(window_share, window_q99, rest_share),
-            "window_null_q99": window_q99, "rest_null_q99": rest_q99}
+    return {
+        "pc": f"PC{k + 1}",
+        "window": f"{bc}:{bs}-{bs + WINDOW_BP - 1}",
+        "window_share": window_share,
+        "rest_share": rest_share,
+        "ratio": rest_share / window_share,
+        "local": is_local(window_share, window_q99, rest_share),
+        "window_null_q99": window_q99,
+        "rest_null_q99": rest_q99,
+    }
 
 
-def check(w: Windows, pcs: np.ndarray, k_target: int = K_TARGET,
-          k_min: int = K_MIN) -> dict[str, object]:
+def check(
+    w: Windows, pcs: np.ndarray, k_target: int = K_TARGET, k_min: int = K_MIN
+) -> dict[str, object]:
     """The PC Check's provenance record (`ogld.format.PcCheck`) and the covariates it keeps:
     the first `k_target` kept PCs, or all of them if fewer survive; fewer than `k_min` is
     refused. `k` is the number used, t_far's k."""
@@ -132,8 +145,18 @@ def check(w: Windows, pcs: np.ndarray, k_target: int = K_TARGET,
     if len(kept) < k_min:
         raise SystemExit(f"the PC Check keeps {len(kept)} PCs, fewer than the minimum {k_min}")
     covariates = kept[:k_target]
-    return {"window_bp": WINDOW_BP, "step_bp": STEP_BP, "min_share": MIN_SHARE,
-            "max_ratio": MAX_RATIO,
-            "windows": len(w.where), "scan": s, "dropped": [str(x["pc"]) for x in s if x["local"]],
-            "null": NULL, "kept": len(kept), "covariates": covariates,
-            "k_target": k_target, "k_min": k_min, "k": len(covariates)}
+    return {
+        "window_bp": WINDOW_BP,
+        "step_bp": STEP_BP,
+        "min_share": MIN_SHARE,
+        "max_ratio": MAX_RATIO,
+        "windows": len(w.where),
+        "scan": s,
+        "dropped": [str(x["pc"]) for x in s if x["local"]],
+        "null": NULL,
+        "kept": len(kept),
+        "covariates": covariates,
+        "k_target": k_target,
+        "k_min": k_min,
+        "k": len(covariates),
+    }

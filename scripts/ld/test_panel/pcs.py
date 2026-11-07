@@ -27,14 +27,17 @@ def _pc_file(path: Path) -> dict[str, list[float]]:
     lines = path.read_text().splitlines()
     if lines[0].split("\t")[0] != "#IID":
         raise SystemExit(f"{path}: a PC File's header starts #IID")
-    return {f[0]: [float(v) for v in f[1 : N_PCS + 1]]
-            for f in (line.split("\t") for line in lines[1:])}
+    return {
+        f[0]: [float(v) for v in f[1 : N_PCS + 1]] for f in (line.split("\t") for line in lines[1:])
+    }
 
 
 def write(path: Path, iids: list[str], pcs: np.ndarray) -> None:
     """plink2's `.eigenvec` layout, `#IID PC1 ... PC20`, values written at full precision so
     the reference r and a builder read exactly the same numbers."""
     head = "#IID\t" + "\t".join(f"PC{k}" for k in range(1, N_PCS + 1)) + "\n"
-    body = "".join(i + "\t" + "\t".join(repr(float(v)) for v in row) + "\n"
-                   for i, row in zip(iids, pcs, strict=True))
+    body = "".join(
+        i + "\t" + "\t".join(repr(float(v)) for v in row) + "\n"
+        for i, row in zip(iids, pcs, strict=True)
+    )
     path.write_text(head + body)

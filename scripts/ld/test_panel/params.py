@@ -41,13 +41,16 @@ class Params:
     far_bp: int = 10_000_000
     t_far_q: float = 20.84
     # Selection. Each window was picked on the converted chromosomes (README, "Selection").
-    q_arm_start: dict[str, int] = field(default_factory=lambda: {"21": 14_000_000,
-                                                                 "22": 16_000_000})
-    proxy_window: dict[str, tuple[int, int]] = field(default_factory=lambda: {
-        "21": (30_686_000, 30_740_000), "22": (38_850_000, 38_950_000)})
+    q_arm_start: dict[str, int] = field(
+        default_factory=lambda: {"21": 14_000_000, "22": 16_000_000}
+    )
+    proxy_window: dict[str, tuple[int, int]] = field(
+        default_factory=lambda: {"21": (30_686_000, 30_740_000), "22": (38_850_000, 38_950_000)}
+    )
     proxy_max: int = 150
-    gwas_window: dict[str, tuple[int, int]] = field(default_factory=lambda: {
-        "21": (42_000_000, 43_000_000), "22": (20_000_000, 21_500_000)})
+    gwas_window: dict[str, tuple[int, int]] = field(
+        default_factory=lambda: {"21": (42_000_000, 43_000_000), "22": (20_000_000, 21_500_000)}
+    )
     gwas_max: dict[str, int] = field(default_factory=lambda: {"21": 200, "22": 300})
     backbone_bp: int = 300_000
     common_maf: float = 0.05
@@ -58,9 +61,12 @@ class Params:
     fail_mac_values: tuple[int, ...] = (0, 1, 5, 10, 19)
     fail_filters_max: int = 4
     # The simulated GWAS: causal variants nearest these positions, each explaining h2_each.
-    causal_anchor: dict[str, tuple[int, ...]] = field(default_factory=lambda: {
-        "21": (42_150_000, 42_500_000, 42_850_000),
-        "22": (20_150_000, 20_450_000, 20_750_000, 21_050_000, 21_350_000)})
+    causal_anchor: dict[str, tuple[int, ...]] = field(
+        default_factory=lambda: {
+            "21": (42_150_000, 42_500_000, 42_850_000),
+            "22": (20_150_000, 20_450_000, 20_750_000, 21_050_000, 21_350_000),
+        }
+    )
     causal_min_maf: float = 0.2
     h2_each: float = 0.06
     seed: int = 20261107
@@ -81,15 +87,22 @@ def parse(argv: list[str] | None = None) -> Params:
     """Command-line settings over the defaults above."""
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--out", type=Path, default=Path("tests/data/test-panel"))
-    p.add_argument("--work", type=Path, required=True,
-                   help="scratch directory for the converted chromosomes (several GB)")
+    p.add_argument(
+        "--work",
+        type=Path,
+        required=True,
+        help="scratch directory for the converted chromosomes (several GB)",
+    )
     p.add_argument("--plink2", type=Path, help="default: $OGLD_PLINK2, else plink2 on PATH")
     p.add_argument("--bcftools", type=Path, help="default: $OGLD_BCFTOOLS, else PATH")
     p.add_argument("--bgzip", type=Path, help="default: $OGLD_BGZIP, else PATH")
-    p.add_argument("--source", help="per-chromosome BCF or VCF with {chrom}; default "
-                                    f"$OGLD_PHASED_V2/{V2_NAME}")
-    p.add_argument("--keep", type=Path,
-                   help="default: $OGLD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep")
+    p.add_argument(
+        "--source",
+        help=f"per-chromosome BCF or VCF with {{chrom}}; default $OGLD_PHASED_V2/{V2_NAME}",
+    )
+    p.add_argument(
+        "--keep", type=Path, help="default: $OGLD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep"
+    )
     p.add_argument("--pcs", type=Path, help="the PC File; default $OGLD_PCS/EUR.eigenvec")
     p.add_argument("--pcs-source", default=Params.pcs_source)
     p.add_argument("--mac-min", type=int, default=Params.mac_min)
@@ -97,9 +110,16 @@ def parse(argv: list[str] | None = None) -> Params:
     p.add_argument("--threads", type=int, default=Params.threads)
     a = p.parse_args(argv)
     return Params(
-        out=a.out, work=a.work, plink2=a.plink2 or tool("plink2"),
-        bcftools=a.bcftools or tool("bcftools"), bgzip=a.bgzip or tool("bgzip"),
+        out=a.out,
+        work=a.work,
+        plink2=a.plink2 or tool("plink2"),
+        bcftools=a.bcftools or tool("bcftools"),
+        bgzip=a.bgzip or tool("bgzip"),
         source=a.source or str(root("OGLD_PHASED_V2") / V2_NAME),
         keep=a.keep or root("OGLD_REFERENCE") / "hgdp1kgp-hg38/members/EUR.keep",
-        pcs=a.pcs or root("OGLD_PCS") / "EUR.eigenvec", pcs_source=a.pcs_source,
-        mac_min=a.mac_min, require_pass=not a.no_require_pass, threads=a.threads)
+        pcs=a.pcs or root("OGLD_PCS") / "EUR.eigenvec",
+        pcs_source=a.pcs_source,
+        mac_min=a.mac_min,
+        require_pass=not a.no_require_pass,
+        threads=a.threads,
+    )

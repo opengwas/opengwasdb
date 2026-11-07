@@ -56,14 +56,22 @@ def table(chosen: list[Chosen], pvar: Path) -> Panel:
     if got != list(zip(cols["chrom"], cols["pos"], cols["ref"], cols["alt"], strict=True)):
         raise SystemExit("the converted Test Panel's records differ from the selection")
     return Panel(
-        chrom=cols["chrom"], pos=np.array(cols["pos"]), ref=cols["ref"], alt=cols["alt"],
-        vid=[f[2] for f in lines], filt=cols["filt"], mac=np.array(cols["mac"]),
-        reason=np.array(cols["reason"], dtype=object), components=cols["components"])
+        chrom=cols["chrom"],
+        pos=np.array(cols["pos"]),
+        ref=cols["ref"],
+        alt=cols["alt"],
+        vid=[f[2] for f in lines],
+        filt=cols["filt"],
+        mac=np.array(cols["mac"]),
+        reason=np.array(cols["reason"], dtype=object),
+        components=cols["components"],
+    )
 
 
 def _columns(chosen: list[Chosen]) -> dict[str, list[Any]]:
-    cols: dict[str, list[Any]] = {k: [] for k in ("chrom", "pos", "ref", "alt", "filt", "mac",
-                                                  "reason", "components")}
+    cols: dict[str, list[Any]] = {
+        k: [] for k in ("chrom", "pos", "ref", "alt", "filt", "mac", "reason", "components")
+    }
     for c in chosen:
         for r in c.rows:
             _append(cols, c, r)
@@ -82,13 +90,15 @@ def _append(cols: dict[str, list[Any]], c: Chosen, r: int) -> None:
     cols["components"].append(sorted(n for n, v in c.components.items() if r in v))
 
 
-def same_genotypes(params: Params, chosen: list[Chosen], panel_g: np.ndarray,
-                   panel_fam: list[str]) -> None:
+def same_genotypes(
+    params: Params, chosen: list[Chosen], panel_g: np.ndarray, panel_fam: list[str]
+) -> None:
     """The cut-and-convert path must reproduce the whole-chromosome conversion exactly."""
     parts = []
     for c in chosen:
-        _, fam, g = export_rows(params, c.sites.prefix, c.rowid_pvar, c.rows,
-                                params.work / f"check.chr{c.sites.chrom}")
+        _, fam, g = export_rows(
+            params, c.sites.prefix, c.rowid_pvar, c.rows, params.work / f"check.chr{c.sites.chrom}"
+        )
         if fam != panel_fam:
             raise SystemExit("sample order differs between the two conversions")
         parts.append(g)

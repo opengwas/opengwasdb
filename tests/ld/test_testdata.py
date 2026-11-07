@@ -48,7 +48,8 @@ CLUMP_P1 = 5e-8
 def test_every_file_matches_its_manifest_hash() -> None:
     files = td.manifest()["files"]
     on_disk = sorted(
-        str(p.relative_to(td.TEST_PANEL)) for p in td.TEST_PANEL.rglob("*")
+        str(p.relative_to(td.TEST_PANEL))
+        for p in td.TEST_PANEL.rglob("*")
         if p.is_file() and p.name != "manifest.json"
     )
     assert len(on_disk) >= 12, "the fixture must hold the Test Panel's files"
@@ -70,7 +71,8 @@ def test_panel_files_and_counts() -> None:
         assert path.is_file(), path
     assert (p.n_samples, p.n_variants) == (771, N_VARIANTS)
     keep = p.keep.read_text().splitlines()
-    assert keep[0] == "#IID" and len(keep) == 772
+    assert keep[0] == "#IID"
+    assert len(keep) == 772
     pcs = p.pcs.read_text().splitlines()
     assert pcs[0].split("\t") == ["#IID", *(f"PC{k}" for k in range(1, 21))]
     assert {x.split("\t")[0] for x in pcs[1:]} == set(keep[1:]), "a PC row for every sample"
@@ -83,8 +85,10 @@ def test_variants_are_in_pvar_order_with_their_filters() -> None:
     assert set(v.chrom) == {"21", "22"}
     for c in ("21", "22"):
         assert (np.diff(v.pos[v.chrom == c]) >= 0).all(), "positions ascend within a chromosome"
-    assert all(i == f"{c}:{p}:{r}:{a}" for i, c, p, r, a in
-               zip(v.id, v.chrom, v.pos, v.ref, v.alt, strict=True)), "IDs are chrom:pos:REF:ALT"
+    assert all(
+        i == f"{c}:{p}:{r}:{a}"
+        for i, c, p, r, a in zip(v.id, v.chrom, v.pos, v.ref, v.alt, strict=True)
+    ), "IDs are chrom:pos:REF:ALT"
     assert (v.drop_reason[v.passes_filters] == "").all()
     assert (v.drop_reason[~v.passes_filters] != "").all()
     with pytest.raises(ValueError, match="read-only"):
@@ -97,19 +101,23 @@ def test_reference_pairs_are_every_close_pair_of_passing_rows() -> None:
         ref = td.reference_r(k)
         assert len(ref) == N_PAIRS
         assert (ref.row_i < ref.row_j).all()
-        assert v.passes_filters[ref.row_i].all() and v.passes_filters[ref.row_j].all()
+        assert v.passes_filters[ref.row_i].all()
+        assert v.passes_filters[ref.row_j].all()
         assert (v.chrom[ref.row_i] == v.chrom[ref.row_j]).all()
         d = v.pos[ref.row_j] - v.pos[ref.row_i]
-        assert (d >= 0).all() and (d <= 10_000_000).all()
+        assert (d >= 0).all()
+        assert (d <= 10_000_000).all()
         # A perfectly correlated pair can come out a few ulps over 1 in float64.
-        assert np.isfinite(ref.r).all() and (np.abs(ref.r) <= 1 + 1e-12).all()
+        assert np.isfinite(ref.r).all()
+        assert (np.abs(ref.r) <= 1 + 1e-12).all()
     with pytest.raises(ValueError, match="k = 5"):
         td.reference_r(5)
 
 
 def test_reference_r_at_k0_equals_plink2_s() -> None:
     ref, plink2 = td.reference_r(0), td.plink2_r()
-    assert np.array_equal(ref.row_i, plink2.row_i) and np.array_equal(ref.row_j, plink2.row_j)
+    assert np.array_equal(ref.row_i, plink2.row_i)
+    assert np.array_equal(ref.row_j, plink2.row_j)
     strong = np.abs(plink2.r) > 0.9
     assert strong.sum() > 100, "the fixture must hold strong LD for this to mean anything"
     # Complete genotypes: numpy's Pearson r and plink2's agree to rounding (ADR 0002), far
@@ -135,14 +143,19 @@ def _dosage_r(k: int) -> dict[tuple[int, int], float]:
     covariates = list(td.manifest()["pc_check"]["covariates"])[:k]
     by_iid = {iid: n for n, iid in enumerate(pcs.iids)}
     columns = [pcs.names.index(name) for name in covariates]
-    design = np.column_stack([np.ones(len(d.iids)),
-                              pcs.values[[by_iid[i] for i in d.iids]][:, columns]])
+    design = np.column_stack(
+        [np.ones(len(d.iids)), pcs.values[[by_iid[i] for i in d.iids]][:, columns]]
+    )
     g = d.alt_counts.astype(np.float64)
     resid = g - design @ np.linalg.lstsq(design, g, rcond=None)[0]
     resid /= np.linalg.norm(resid, axis=0)
     r = resid.T @ resid
-    return {(int(a), int(b)): float(r[x, y]) for x, a in enumerate(d.rows)
-            for y, b in enumerate(d.rows) if a < b}
+    return {
+        (int(a), int(b)): float(r[x, y])
+        for x, a in enumerate(d.rows)
+        for y, b in enumerate(d.rows)
+        if a < b
+    }
 
 
 @pytest.mark.parametrize("k", td.KS)
@@ -173,8 +186,11 @@ def _pair_index(i: int, j: int) -> int | None:
 def test_pairs_at_the_band_edges(distance: int) -> None:
     i, j, pi, pj = EXACT[distance]
     v = td.variants()
-    assert (v.pos[i], v.pos[j]) == (pi, pj) and pj - pi == distance
-    assert v.passes_filters[i] and v.passes_filters[j] and v.chrom[i] == v.chrom[j]
+    assert (v.pos[i], v.pos[j]) == (pi, pj)
+    assert pj - pi == distance
+    assert v.passes_filters[i]
+    assert v.passes_filters[j]
+    assert v.chrom[i] == v.chrom[j]
     assert (_pair_index(i, j) is not None) == (distance <= 10_000_000)
 
 
@@ -201,19 +217,24 @@ def test_a_far_pair_below_t_far_is_a_bound() -> None:
 def test_pairs_the_reference_does_not_hold() -> None:
     v = td.variants()
     i, j = BEYOND_10MB
-    assert v.chrom[i] == v.chrom[j] and v.pos[j] - v.pos[i] > 10_000_000
+    assert v.chrom[i] == v.chrom[j]
+    assert v.pos[j] - v.pos[i] > 10_000_000
     a, b = CROSS_CHROMOSOME
     assert v.chrom[a] != v.chrom[b]
     for x, y in (BEYOND_10MB, CROSS_CHROMOSOME):
-        assert v.passes_filters[x] and v.passes_filters[y]
+        assert v.passes_filters[x]
+        assert v.passes_filters[y]
         assert _pair_index(x, y) is None
 
 
 def test_a_split_multiallelic_site_is_two_rows_at_one_position() -> None:
     v = td.variants()
     a, b, pos = MULTIALLELIC
-    assert v.pos[a] == v.pos[b] == pos and v.ref[a] == v.ref[b] and v.alt[a] != v.alt[b]
-    assert v.passes_filters[a] and v.passes_filters[b]
+    assert v.pos[a] == v.pos[b] == pos
+    assert v.ref[a] == v.ref[b]
+    assert v.alt[a] != v.alt[b]
+    assert v.passes_filters[a]
+    assert v.passes_filters[b]
     assert _pair_index(a, b) is not None, "a pair at distance 0 is an ordinary pair"
 
 
@@ -250,7 +271,7 @@ def test_clump_leads_are_plink2_s() -> None:
             assert v.passes_filters[row]
             assert math.erfc(abs(z[row]) / math.sqrt(2)) <= params.p1
     assert len(LEADS[0.01]) > len(LEADS[0.001]) >= 2, "the thresholds must give different leads"
-    with pytest.raises(ValueError, match="0.05"):
+    with pytest.raises(ValueError, match=r"0\.05"):
         td.clump_leads(0.05)
 
 

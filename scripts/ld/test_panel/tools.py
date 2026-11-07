@@ -31,9 +31,21 @@ def conversion_args(source: str | Path, keep: Path | None, out: Path) -> list[st
     """
     flag = "--bcf" if str(source).endswith(".bcf") else "--vcf"
     keep_args = ["--keep", str(keep)] if keep is not None else []
-    return [flag, str(source), *keep_args, "--max-alleles", "2",
-            "--set-all-var-ids", "@:#:$r:$a", "--new-id-max-allele-len", "1000",
-            "--make-pgen", "pvar-cols=filter", "--out", str(out)]
+    return [
+        flag,
+        str(source),
+        *keep_args,
+        "--max-alleles",
+        "2",
+        "--set-all-var-ids",
+        "@:#:$r:$a",
+        "--new-id-max-allele-len",
+        "1000",
+        "--make-pgen",
+        "pvar-cols=filter",
+        "--out",
+        str(out),
+    ]
 
 
 def run(cmd: list[str], log: Path) -> str:
@@ -50,8 +62,13 @@ def run_plink2(binary: Path, args: list[str], log: Path, threads: int, memory_mb
 
 
 def plink2(params: Params, args: list[str], log_name: str) -> None:
-    run_plink2(params.plink2, args, params.work / "logs" / f"{log_name}.log", params.threads,
-               params.memory_mb)
+    run_plink2(
+        params.plink2,
+        args,
+        params.work / "logs" / f"{log_name}.log",
+        params.threads,
+        params.memory_mb,
+    )
 
 
 BLAS_ONE_THREAD = {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
@@ -91,16 +108,20 @@ def source_checksum(path: Path) -> str:
     return "sha256:" + sha256(path)
 
 
-def conversion_inputs(binary: Path, args: list[str], source: Path,
-                      keep: Path | None) -> dict[str, str]:
+def conversion_inputs(
+    binary: Path, args: list[str], source: Path, keep: Path | None
+) -> dict[str, str]:
     """What a conversion's output depends on: the command, the source, the samples, plink2."""
-    return {"command": " ".join(args), "source": source_checksum(source),
-            "keep": sha256(keep) if keep is not None else "", "plink2": version(binary)}
+    return {
+        "command": " ".join(args),
+        "source": source_checksum(source),
+        "keep": sha256(keep) if keep is not None else "",
+        "plink2": version(binary),
+    }
 
 
 def version(binary: Path) -> str:
-    out = subprocess.run([str(binary), "--version"], capture_output=True, text=True,
-                         check=False)
+    out = subprocess.run([str(binary), "--version"], capture_output=True, text=True, check=False)
     text = (out.stdout or out.stderr).strip()
     if out.returncode != 0 or not text:
         raise SystemExit(f"{binary} --version failed ({out.returncode}): {out.stderr[-500:]}")
@@ -149,18 +170,34 @@ def read_bed(prefix: Path) -> tuple[list[str], list[str], np.ndarray]:
 
 
 def bim_positions(prefix: Path) -> np.ndarray:
-    return np.array([int(line.split("\t")[3])
-                     for line in Path(f"{prefix}.bim").read_text().splitlines()])
+    return np.array(
+        [int(line.split("\t")[3]) for line in Path(f"{prefix}.bim").read_text().splitlines()]
+    )
 
 
-def export_rows(params: Params, pfile: Path, rowid_pvar: Path, rows: list[int],
-                out: Path) -> tuple[list[int], list[str], np.ndarray]:
+def export_rows(
+    params: Params, pfile: Path, rowid_pvar: Path, rows: list[int], out: Path
+) -> tuple[list[int], list[str], np.ndarray]:
     """Genotypes of the given 0-based rows of a pgen, as (rows, IIDs, ALT counts)."""
     extract = out.with_suffix(".extract")
     extract.write_text("".join(f"r{r}\n" for r in rows))
-    plink2(params, ["--pgen", f"{pfile}.pgen", "--pvar", str(rowid_pvar), "--psam",
-                    f"{pfile}.psam", "--extract", str(extract), "--make-bed", "--out", str(out)],
-           out.name)
+    plink2(
+        params,
+        [
+            "--pgen",
+            f"{pfile}.pgen",
+            "--pvar",
+            str(rowid_pvar),
+            "--psam",
+            f"{pfile}.psam",
+            "--extract",
+            str(extract),
+            "--make-bed",
+            "--out",
+            str(out),
+        ],
+        out.name,
+    )
     ids, fam, g = read_bed(out)
     got = [int(i[1:]) for i in ids]
     if got != sorted(rows):

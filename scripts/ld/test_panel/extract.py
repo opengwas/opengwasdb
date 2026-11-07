@@ -37,15 +37,19 @@ def write_vcf(params: Params, chosen: list[tuple[Sites, list[int]]], out: Path) 
     return n
 
 
-def _records(params: Params, s: Sites, rows: list[int],
-             with_header: bool) -> tuple[str, list[bytes]]:
+def _records(
+    params: Params, s: Sites, rows: list[int], with_header: bool
+) -> tuple[str, list[bytes]]:
     want = {(int(s.pos[r]), str(s.ref[r]), str(s.alt[r])) for r in rows}
     regions = params.work / f"regions.chr{s.chrom}.tsv"
     contig = f"chr{s.chrom}"
     regions.write_text("".join(f"{contig}\t{p}\t{p}\n" for p in sorted({w[0] for w in want})))
     source = params.source.format(chrom=s.chrom)
-    proc = subprocess.run([str(params.bcftools), "view", "--no-version", "-Ov", "-R",
-                           str(regions), source], capture_output=True, check=True)
+    proc = subprocess.run(
+        [str(params.bcftools), "view", "--no-version", "-Ov", "-R", str(regions), source],
+        capture_output=True,
+        check=True,
+    )
     header, records = _split(proc.stdout.splitlines(keepends=True))
     body = _matching(records, want)
     if len(body) != len(want):
