@@ -193,9 +193,13 @@ The report's region figures read `eur_regions.json`. It holds one region from ea
 Analyses: the one #409's judgement names, and one from each other \|z\| band, drawn with
 seed 62 from those with at least as many index variants as the named one. Each region is
 the 10 Mb window, starting at one of the Analysis's index variants, that holds the most
-index variants. The command rebuilds each region's rows, clumps and leads with the
-functions above. It refuses to write when any count differs from `eur_sweep.json` or
-`eur_profile.json`, and the error names the field:
+index variants. An Analysis is its Store and analysis_id together, and the file holds the
+draw order and every index variant's position, so the choice can be repeated from the
+JSON alone. Each region also counts the 5e-8 rows in view that are not in the shared set,
+which no figure draws, with their largest \|z\| and #403's reason for each. The command
+rebuilds each region's rows, clumps and leads with the functions above. It refuses to
+write when any count differs from `eur_sweep.json` or `eur_profile.json`, and the error
+names the field:
 
 ```bash
 pixi run -e dev python -m prototypes.locus_leads regions \

@@ -53,7 +53,16 @@ from .profile_sweep import (
     shared_set_identity,
 )
 from .rule import locus_leads, rule_order
-from .run import SharedSet, TierRows, build_shared_set, check_tier, clump_shared_set, read_tier
+from .run import (
+    PARTITION,
+    SharedSet,
+    TierRows,
+    build_shared_set,
+    categorise,
+    check_tier,
+    clump_shared_set,
+    read_tier,
+)
 from .sweep import BP_ONLY, PRIMARY_R2, TIER, panel_content_digests, read_hm3
 
 WINDOW_BP = 10_000_000
@@ -65,17 +74,23 @@ PROMINENCE = Rule("prominence", PROFILE_BIN_BP, Threshold("relative", 0.75))
 LD_BLOCKS = Rule("ld_blocks")
 
 DEFINITION = {
-    "analyses": "the Analysis #409's judgement names, then one Analysis from each other "
-                "z_band, drawn with numpy default_rng(seed) in sorted z_band order from the "
-                "Analyses of that band with at least as many r^2 0.01 index variants as the "
-                "named one",
+    "analyses": "an Analysis is its (store, analysis_id): the one #409's judgement names, then "
+                "one from each other z_band, in the order `draws` lists the bands, each drawn "
+                "with one numpy default_rng(seed) from that band's Analyses with at least as "
+                "many r^2 0.01 index variants as the named one, listed by analysis_id then "
+                "store",
     "window": f"the {WINDOW_BP:,} bp window [p, p + {WINDOW_BP:,}) starting at one of the "
               "Analysis's index variants that holds the most index variants; ties go to the "
               "first in genome order (chromosome 1-22 by number, then others by name, then "
               "position)",
     "view": f"the window's shared-set rows from first to last, padded by {VIEW_PAD_SHARE:.0%} "
             f"of that span (at least {VIEW_PAD_MIN_BP:,} bp) each side, never below 0",
+    "genome_index_variants": "every plink2 index variant of the Analysis, in genome order: "
+                             "the positions the window is chosen from",
     "rows": "every 5e-8 row of the shared set in the view, by position",
+    "not_drawn": "the Analysis's observed 5e-8 rows in the view that are not in the shared set, "
+                 "so are not drawn and not clumped: how many, the largest |z| among them (null "
+                 "when none), and how many fall under each of #403's partition reasons",
     "clump": "a clump with a row in the view, numbered 1, 2, ... in the Locus Lead ranking of "
              "its index variant (abs_z descending, then Store Variant Index); rows, start and "
              "end count all its members on the chromosome, in the view or not",
@@ -115,6 +130,8 @@ class Rebuilt:
     in_hm3: np.ndarray
     profile: Profile
     profile_hm3: Profile
+    left_out: TierRows
+    left_out_reason: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -147,21 +164,46 @@ def densest_window(chromosome: np.ndarray, position: np.ndarray,
 
 def choose(profile: dict[str, Any]) -> dict[str, Any]:
     """The Analyses the figures show, by `DEFINITION["analyses"]`, and how each was picked."""
-    records = {a["analysis"]["analysis_id"]: a for a in profile["analyses"]}
-    named = records[profile["judgement"]["named_analysis"]["analysis_id"]]
-    floor = named["index_variants"]
+    records = keyed(profile["analyses"], "#409's record")
+    named = _named(records, profile["judgement"]["named_analysis"]["analysis_id"])
+    floor = records[named]["index_variants"]
     rng = np.random.default_rng(SEED)
     draws = []
     for band in sorted({a["selection"]["z_band"] for a in records.values()}
-                       - {named["selection"]["z_band"]}):
-        eligible = sorted(i for i, a in records.items()
-                          if a["selection"]["z_band"] == band and a["index_variants"] >= floor)
+                       - {records[named]["selection"]["z_band"]}):
+        eligible = sorted((k for k, a in records.items()
+                           if a["selection"]["z_band"] == band and a["index_variants"] >= floor),
+                          key=lambda k: (k[1], k[0]))
         if not eligible:
             raise ValueError(f"no Analysis in z band {band} has {floor} index variants or more")
-        draws.append({"z_band": band, "eligible": eligible,
-                      "chosen": eligible[int(rng.integers(len(eligible)))]})
-    return {"seed": SEED, "min_index_variants": floor,
-            "named": named["analysis"]["analysis_id"], "draws": draws}
+        draws.append({"z_band": band, "eligible": [_named_pair(k) for k in eligible],
+                      "chosen": _named_pair(eligible[int(rng.integers(len(eligible)))])})
+    return {"seed": SEED, "min_index_variants": floor, "named": _named_pair(named),
+            "draws": draws}
+
+
+def keyed(analyses: list[dict[str, Any]],
+          source: str) -> dict[tuple[str, str], dict[str, Any]]:
+    """Analyses by (store, analysis_id): an analysis_id is unique only within its Store, so a
+    pair seen twice is refused rather than one copy kept."""
+    records: dict[tuple[str, str], dict[str, Any]] = {}
+    for record in analyses:
+        key = (record["store"], record["analysis"]["analysis_id"])
+        if key in records:
+            raise ValueError(f"{key[0]}/{key[1]} appears twice in {source}")
+        records[key] = record
+    return records
+
+
+def _named(records: dict[tuple[str, str], dict[str, Any]], analysis_id: str) -> tuple[str, str]:
+    found = [key for key in records if key[1] == analysis_id]
+    if len(found) != 1:
+        raise ValueError(f"#409 names {analysis_id}, which is {len(found)} Analyses here")
+    return found[0]
+
+
+def _named_pair(key: tuple[str, str]) -> dict[str, str]:
+    return {"store": key[0], "analysis_id": key[1]}
 
 
 def first_difference(mine: Any, theirs: Any, field: str = "") -> tuple[str, Any, Any] | None:
@@ -214,14 +256,20 @@ def check_same(what: str, mine: Any, theirs: Any, source: str) -> None:
 def rebuild(tier: TierRows, genetic_map: LoadedMap, panel: Panel, hm3: frozenset[str], *,
             work_dir: Path, threads: int) -> Rebuilt:
     """The 5e-4 tier's 5e-8 rows on the panel and map, clumped at r^2 0.01 as #409 did."""
-    at_tier = tier.abs_z >= z_critical(TIER)
-    shared, accounting = build_shared_set(tier.take(at_tier), panel, genetic_map.map)
+    at_tier = tier.take(tier.abs_z >= z_critical(TIER))
+    shared, accounting = build_shared_set(at_tier, panel, genetic_map.map)
+    reason = categorise(at_tier, panel, genetic_map.map)[2]
+    counted = {name: int(np.sum(reason == name)) for name in PARTITION}
+    if counted != accounting["partition"]:
+        raise ValueError(f"the rows' reasons {counted} are not the partition "
+                         f"{accounting['partition']}")
     work_dir.mkdir(parents=True, exist_ok=True)
     index_of = clump_shared_set(shared, panel, [R2], threshold=TIER, work_dir=work_dir,
                                 threads=threads).index_of[R2]
     profile = Profile(tier.chromosome, tier.position, tier.abs_z)
+    out = reason != "shared_set"
     return Rebuilt(shared, accounting, index_of, on_hm3(hm3, shared.rows.alid), profile,
-                   profile.take(on_hm3(hm3, tier.alid)))
+                   profile.take(on_hm3(hm3, tier.alid)), at_tier.take(out), reason[out])
 
 
 def methods(named_cm: dict[str, Any], blocks: Blocks) -> list[Method]:
@@ -329,6 +377,7 @@ def region(r: Rebuilt, leads: dict[str, np.ndarray], blocks: Blocks) -> dict[str
         "window": {"chromosome": chromosome, "start": window.start,
                    "end": window.start + WINDOW_BP, "index_variants": window.index_variants},
         "view": {"chromosome": chromosome, "start": start, "end": end},
+        "genome_index_variants": _genome_index_variants(rows, is_index),
         "rows": {"position": rows.position[shown].tolist(), "abs_z": rows.abs_z[shown].tolist(),
                  "clump": [number[int(index_of[k])] for k in shown],
                  "index_variant": is_index[shown].tolist()},
@@ -337,7 +386,25 @@ def region(r: Rebuilt, leads: dict[str, np.ndarray], blocks: Blocks) -> dict[str
                   for key, lead_of in leads.items()},
         "blocks": _blocks_in(blocks, chromosome, start, end),
         "profile": _profile_in(r.profile, chromosome, start, end),
+        "not_drawn": _not_drawn(r, chromosome, start, end),
     }
+
+
+def _genome_index_variants(rows: TierRows, is_index: np.ndarray) -> dict[str, list[Any]]:
+    at = sorted(zip(rows.chromosome[is_index].tolist(), rows.position[is_index].tolist(),
+                    strict=True), key=lambda c: (genome_order(str(c[0])), c[1]))
+    return {"chromosome": [str(c) for c, _ in at], "position": [int(p) for _, p in at]}
+
+
+def _not_drawn(r: Rebuilt, chromosome: str, start: int, end: int) -> dict[str, Any]:
+    """The 5e-8 rows in view that the shared set left out, and why (`DEFINITION`)."""
+    out = r.left_out
+    here = (out.chromosome == chromosome) & (out.position >= start) & (out.position <= end)
+    reasons = r.left_out_reason[here]
+    return {"rows": int(here.sum()),
+            "max_abs_z": float(out.abs_z[here].max()) if here.any() else None,
+            "reasons": {name: int(np.sum(reasons == name)) for name in PARTITION
+                        if name != "shared_set"}}
 
 
 def _clump(r: Rebuilt, head: int, number: int) -> dict[str, Any]:
@@ -389,13 +456,12 @@ class Inputs:
     threads: int
 
 
-def analyse(chosen: str, sweep: dict[str, Any], profile: dict[str, Any], given: Inputs,
-            every: list[Method]) -> dict[str, Any]:
+def analyse(picked: dict[str, str], sweep: dict[str, Any], profile: dict[str, Any],
+            given: Inputs, every: list[Method]) -> dict[str, Any]:
     """One chosen Analysis: read, rebuilt, checked against both records, then its region."""
-    theirs = next(a for a in profile["analyses"] if a["analysis"]["analysis_id"] == chosen)
-    store_id = theirs["store"]
-    committed = (next(a for a in sweep["analyses"] if (a["store"], a["analysis"]["analysis_id"])
-                      == (store_id, chosen)), theirs)
+    store_id, chosen = picked["store"], picked["analysis_id"]
+    theirs = keyed(profile["analyses"], "#409's record")[(store_id, chosen)]
+    committed = (keyed(sweep["analyses"], "#403's record")[(store_id, chosen)], theirs)
     store = given.stores_dir / store_id / "store.opengwasdb"
     tier, identity = read_tier(store, chosen, PROFILE_TIER)
     reference, _ = read_tier(store, chosen, TIER)

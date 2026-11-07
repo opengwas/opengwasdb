@@ -4,6 +4,7 @@ counts that are not the committed ones (prototypes/locus_leads, #409)."""
 from __future__ import annotations
 
 import copy
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -58,10 +59,19 @@ def test_a_tie_goes_to_the_first_window_in_genome_order() -> None:
     assert window == regions.Window("2", 3_000, 2)
 
 
-def _profile(records: list[tuple[str, str, int]], named: str) -> dict[str, Any]:
+def _profile(records: list[tuple[str, str, int]], named: str,
+             store: str = "S") -> dict[str, Any]:
+    """#409's record of Analyses given as (store/id or id, z band, index variants)."""
+    def key(name: str) -> dict[str, Any]:
+        found, _, analysis = name.rpartition("/")
+        return {"store": found or store, "analysis": {"analysis_id": analysis}}
     return {"judgement": {"named_analysis": {"analysis_id": named}},
-            "analyses": [{"analysis": {"analysis_id": a}, "selection": {"z_band": band},
-                          "index_variants": n} for a, band, n in records]}
+            "analyses": [key(a) | {"selection": {"z_band": band}, "index_variants": n}
+                         for a, band, n in records]}
+
+
+def _ids(entries: list[dict[str, str]]) -> list[str]:
+    return [f"{e['store']}/{e['analysis_id']}" for e in entries]
 
 
 def test_one_analysis_per_other_z_band_is_drawn_from_those_with_enough_index_variants() -> None:
@@ -70,13 +80,27 @@ def test_one_analysis_per_other_z_band_is_drawn_from_those_with_enough_index_var
 
     picked = regions.choose(_profile(records, "N"))
 
-    assert picked["named"] == "N" and picked["min_index_variants"] == 27
-    assert [(d["z_band"], d["eligible"]) for d in picked["draws"]] == [
-        ("38.5-100", ["v"]), ("<38.5", ["y", "z"])]
-    assert picked["draws"][1]["chosen"] in ("y", "z")
+    assert picked["named"] == {"store": "S", "analysis_id": "N"}
+    assert picked["min_index_variants"] == 27
+    assert [(d["z_band"], _ids(d["eligible"])) for d in picked["draws"]] == [
+        ("38.5-100", ["S/v"]), ("<38.5", ["S/y", "S/z"])]
+    assert _ids([picked["draws"][1]["chosen"]])[0] in ("S/y", "S/z")
     assert picked == regions.choose(_profile(records, "N")), "the draw is seeded"
     with pytest.raises(ValueError, match="no Analysis in z band 38.5-100"):
         regions.choose(_profile(records[:4] + [("w", "38.5-100", 5)], "N"))
+
+
+def test_analyses_are_told_apart_by_store_and_a_repeated_pair_is_refused() -> None:
+    # An analysis_id is unique only within its Store. The eligible are listed by analysis_id,
+    # then Store, the order the committed draw was made in.
+    records = [("N", ">=100", 27), ("A/y", "<38.5", 30), ("B/y", "<38.5", 40),
+               ("B/a", "<38.5", 50)]
+
+    picked = regions.choose(_profile(records, "N"))
+
+    assert _ids(picked["draws"][0]["eligible"]) == ["B/a", "A/y", "B/y"]
+    with pytest.raises(ValueError, match="A/y appears twice"):
+        regions.choose(_profile([*records, ("A/y", "<38.5", 31)], "N"))
 
 
 def _tier(abs_z: dict[int, float]) -> Any:
@@ -129,6 +153,9 @@ def test_each_row_is_drawn_in_the_clump_plink2_puts_it_in_numbered_by_strength(
          "start": 500_000, "end": 1_100_000},
         {"clump": 2, "index_position": 100_000, "index_abs_z": 9.0, "rows": 2,
          "start": 100_000, "end": 700_000}]
+    # Every index variant behind the window choice, so the JSON alone can repeat it.
+    assert record["genome_index_variants"] == {"chromosome": ["1", "1"],
+                                               "position": [100_000, 500_000]}
 
 
 def test_the_view_pads_its_rows_by_4_percent_at_least_20_kb_and_not_below_0(
@@ -174,6 +201,30 @@ def test_a_method_s_leads_are_agreed_or_split_and_its_merged_index_variants_lost
         {"position": 500_000, "clump": 1, "kind": "agreed"},
         {"position": 700_000, "clump": 2, "kind": "spurious_split"},
         {"position": 1_100_000, "clump": 1, "kind": "spurious_split"}], "lost": 0}
+
+
+def test_5e8_rows_left_out_of_the_shared_set_are_counted_with_their_reasons(
+        tmp_path: Path) -> None:
+    write_panel(tmp_path, "1", [(100_000, "A", "G"), (300_000, "A", "G"), (500_000, "A", "G")],
+                [SIGNAL, SIGNAL, OTHER])
+    tier = _tier({100_000: 20.0, 300_000: 12.0, 400_000: 9.0, 500_000: 8.0, 5_000_000: 30.0})
+    # 300 kb carries C/T against the panel's A/G; 400 kb and 5 Mb are not on the panel.
+    tier = dataclasses.replace(tier, allele_1=np.array(["A", "C", "A", "A", "A"]),
+                               allele_2=np.array(["G", "T", "G", "G", "G"]))
+
+    rebuilt = regions.rebuild(tier, _map("GRCh38"), panel.Panel(tmp_path), frozenset(),
+                              work_dir=tmp_path / "work", threads=1)
+    assert rebuilt.accounting["partition"] | {"shared_set": 0} == {
+        "shared_set": 0, "matched_no_cm": 0, "off_panel_chromosome": 0,
+        "absent_at_position": 2, "allele_mismatch": 1, "ambiguous": 0}
+
+    record = regions.region(rebuilt, {}, blocks.Blocks("EUR", {}, {}))
+
+    assert record["view"] == {"chromosome": "1", "start": 80_000, "end": 520_000}
+    # 5 Mb is out of the view, so its |z| of 30 is not the largest left out.
+    assert record["not_drawn"] == {"rows": 2, "max_abs_z": 12.0, "reasons": {
+        "matched_no_cm": 0, "off_panel_chromosome": 0, "absent_at_position": 1,
+        "allele_mismatch": 1, "ambiguous": 0}}
 
 
 HM3 = frozenset({"1:100:A:G"})
@@ -260,6 +311,9 @@ def test_records_that_match_are_written_with_the_region(conftest_store: dict[str
         "bp_only": [agreed], "named_cm": [agreed], "prominence": [agreed],
         "ld_blocks": [agreed, {"position": 300, "clump": 1, "kind": "spurious_split"}]}
     assert only["blocks"] == [[0, 200], [200, 10_000_000]]
+    assert only["not_drawn"] == {"rows": 0, "max_abs_z": None, "reasons": {
+        reason: 0 for reason in ("matched_no_cm", "off_panel_chromosome", "absent_at_position",
+                                 "allele_mismatch", "ambiguous")}}
 
 
 @pytest.mark.parametrize(("record", "change", "field"), [
