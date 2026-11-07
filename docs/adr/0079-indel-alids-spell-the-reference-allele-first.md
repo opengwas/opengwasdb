@@ -136,6 +136,24 @@ neither column declares it. So:
 - **A panel with neither** places no indel, and says so in completion's log
   and its record.
 
+The tables written on 7 Nov 2026 (script at `ccb7156`; evidence the 110
+HGDP+1kGP pvars and FinnGen R13 BMI_IRN, checksummed in each
+`indel_reference.json`):
+
+| panel | indels | settled (both agree / pvar / FinnGen) | both ways | disagree | no evidence |
+|---|---:|---:|---:|---:|---:|
+| UKB EUR (`ld/ukb`) | 648,392 | 592,020 (525,950 / 54,111 / 11,959) | 51,096 | 1,568 | 3,708 |
+| HGDP+1kGP AFR | 3,195,736 | 2,388,309 (620,486 / 1,767,823 / 0) | 798,406 | 9,021 | 0 |
+| HGDP+1kGP EAS | 2,088,527 | 1,493,451 (532,775 / 960,676 / 0) | 589,674 | 5,402 | 0 |
+| HGDP+1kGP EUR | 2,265,931 | 1,629,969 (608,021 / 1,021,948 / 0) | 630,342 | 5,620 | 0 |
+| HGDP+1kGP SAS | 2,265,025 | 1,627,674 (608,971 / 1,018,703 / 0) | 631,677 | 5,674 | 0 |
+
+The HGDP+1kGP AMR panel needs no table: its `REF` column places all 2,660,493
+of its indels. Of UKB's settled indels, 409,287 are deletions; 367,799 of them
+are deletions OGS-00017 (FinnGen R13) observes, and a rebuild of it at 0.2.1
+spells each as the panel does, where completing its 0.2.0 Store with the
+sorted rule would have put 364,124 of them under a second spelling.
+
 `canonical_panel_alid` names an unsettled indel no ALID, so completion neither
 matches nor fills it: a fill there counts as missing, and an observed indel
 stays observed. A panel codes its eigenvectors and `EAF` on each row's `EA`
