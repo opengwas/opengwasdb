@@ -757,17 +757,37 @@ def _remap_side_table(
     value = np.asarray(source_value, dtype=np.float32)
     if len(index) == 0:
         return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float32)
-    source_variants = index // n_analyses
-    source_analyses = index % n_analyses
     n_subset = len(subset)
-    slots = np.searchsorted(subset, source_variants)
-    in_bounds = slots < n_subset
-    hit = np.zeros(len(index), dtype=bool)
-    hit[in_bounds] = subset[slots[in_bounds]] == source_variants[in_bounds]
-    new_index = source_analyses[hit] * n_subset + slots[hit]
+    slots = _subset_slots(index, subset, n_analyses)
+    hit = _subset_side_table_hits(index, slots, subset, n_analyses)
+    new_index = (index % n_analyses)[hit] * n_subset + slots[hit]
     new_value = value[hit]
     order = np.argsort(new_index, kind="stable")
     return new_index[order], new_value[order]
+
+
+def _subset_slots(
+    index: np.ndarray, subset: np.ndarray, n_analyses: int
+) -> np.ndarray:
+    """Where each primary cell's variant sits in the subset's Variant Index."""
+    return np.searchsorted(subset, index // n_analyses)
+
+
+def _subset_side_table_hits(
+    index: np.ndarray, slots: np.ndarray, subset: np.ndarray, n_analyses: int
+) -> np.ndarray:
+    """Which of a primary side table's cells sit at a variant the subset holds.
+
+    A slot the search found can hold a different variant, so it is the match
+    itself that decides.  The writer's remap and the validator's read of it ask
+    this one question, so they ask it here.
+    """
+    in_bounds = slots < len(subset)
+    slot = np.full(len(index), 0, dtype=np.int64)
+    slot[in_bounds] = slots[in_bounds]
+    hit = subset[slot] == index // n_analyses
+    hit[~in_bounds] = False
+    return hit
 
 
 def _read_side(root: Any, name: str) -> np.ndarray:
@@ -3038,7 +3058,8 @@ def _check_eaf_exceptions(
     for start in range(0, entries, EXCEPTION_TABLE_WINDOW):
         stop = min(start + EXCEPTION_TABLE_WINDOW, entries)
         window_index = np.asarray(root[EAF_EXCEPTION_INDEX][start:stop], dtype=np.int64)
-        hit = _subset_side_table_hits(window_index, subset, n_analyses)
+        slots = _subset_slots(window_index, subset, n_analyses)
+        hit = _subset_side_table_hits(window_index, slots, subset, n_analyses)
         if not np.any(hit):
             continue
         kept_index.append(window_index[hit])
@@ -3070,16 +3091,6 @@ def _check_eaf_exceptions(
     )
 
 
-def _subset_side_table_hits(
-    source_index: np.ndarray, subset: np.ndarray, n_analyses: int
-) -> np.ndarray:
-    """Which of a primary side table's cells sit at a variant the subset holds."""
-    source_variants = source_index // n_analyses
-    slots = np.searchsorted(subset, source_variants)
-    in_bounds = slots < len(subset)
-    hit = np.zeros(len(source_index), dtype=bool)
-    hit[in_bounds] = subset[slots[in_bounds]] == source_variants[in_bounds]
-    return hit
 
 
 def _check_remapped_table(
