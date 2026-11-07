@@ -1,12 +1,13 @@
 """Pass 2's lookup: each source key's place on the Variant Index, fork-safe.
 
 A `RouteTable` is built once, in the parent, from a routing's site map and
-the axes a build stores. It holds numpy arrays only -- a sorted object array
-of byte keys and a parallel target, axis and re-orientation array -- so a
-forked Pass 2 worker binary-searches it without touching the per-element
-reference counts a dict would copy page by page (issue 043 item 2). The keys
-are Python bytes rather than a fixed-width ``S`` array, so one rare 546-byte
-indel does not pad every key to 546 bytes.
+the axes a build stores. It holds numpy arrays and one ``bytes`` only -- each
+Routing Key as a sorted ``uint64`` (`IntegerKeyCodec`), a parallel target,
+axis and re-orientation array, and the full keys of the entries whose integer
+is a hash -- so a forked Pass 2 worker searches it without touching the
+per-element reference counts a dict or an object array would copy page by
+page (issue 043 item 2). A hash only narrows the search: a hashed row is
+matched to an entry only when their full Routing Keys are equal (issue #316).
 
 `RouteTable.route_column` streams one Analysis's associations in fixed-size
 batches, so a worker never holds a genome-wide source as Python lists, and
@@ -35,7 +36,15 @@ from opengwasdb.readers.interface import (
     ReferenceAllele,
 )
 from opengwasdb.variants.normalise import ref_is_a1
-from opengwasdb.variants.routing.keys import SourceKey, encode_routing_keys, routing_key
+from opengwasdb.variants.routing import keys as routing_keys
+from opengwasdb.variants.routing.keys import (
+    IntegerKeyCodec,
+    IntegerKeys,
+    KeyHash,
+    SourceKey,
+    is_hashed,
+    routing_key,
+)
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +52,10 @@ log = logging.getLogger(__name__)
 # (genome-wide) source as Python lists at once -- peak per-worker memory is one
 # batch of columns plus the accumulated matched rows (issue 043).
 _RESOLVE_BATCH = 250_000
+
+#: Sites encoded at a time while a table is built, so the parent never holds
+#: a genome's sites as four more lists at once.
+_ENCODE_BATCH = 1 << 20
 
 #: The seven per-association lists one batch is read into: chromosome,
 #: position, ref, alt, z, se and EAF (NaN where the source reports none).
@@ -497,6 +510,83 @@ def _admitted(
     return keep
 
 
+class _KeyIndex:
+    """A table's Routing Keys as sorted integers (`IntegerKeyCodec`), and the
+    full keys of the entries whose integer is a hash.
+
+    The full keys are one ``bytes`` and its offsets, in table order, rather than
+    an object a key: a forked worker comparing them would otherwise raise every
+    key's reference count, and copy each page it sits on (issue 043 item 2).
+    """
+
+    def __init__(
+        self,
+        codec: IntegerKeyCodec,
+        values: np.ndarray,
+        hashed_at: np.ndarray,
+        hashed_keys: bytes,
+        offsets: np.ndarray,
+    ) -> None:
+        self.codec = codec
+        self.values = values
+        self._hashed_at = hashed_at
+        self._hashed_keys = hashed_keys
+        self._offsets = offsets
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def full_keys(self, positions: np.ndarray) -> list[bytes]:
+        """The full Routing Keys of the hashed entries at ``positions``."""
+        slot = np.searchsorted(self._hashed_at, positions)
+        held = slot < len(self._hashed_at)
+        if not (held.all() and np.array_equal(self._hashed_at[slot], positions)):
+            raise RuntimeError("route table: a hashed key's entry holds no full key")
+        data = self._hashed_keys
+        starts, stops = self._offsets[slot].tolist(), self._offsets[slot + 1].tolist()
+        return [data[start:stop] for start, stop in zip(starts, stops, strict=True)]
+
+    def find(self, encoded: IntegerKeys) -> tuple[np.ndarray, np.ndarray]:
+        """Whether each row's key is in the table, and its position there."""
+        values = self.values
+        at = np.minimum(np.searchsorted(values, encoded.values), len(values) - 1)
+        matched = encoded.known & (values[at] == encoded.values)
+        if len(encoded.hashed):
+            self._confirm(encoded, at, matched)
+        return matched, at
+
+    def _confirm(self, encoded: IntegerKeys, at: np.ndarray, matched: np.ndarray) -> None:
+        """Match each hashed row only to an entry whose full Routing Key is its own.
+
+        The entries sharing a row's integer are adjacent, so each row walks
+        them from the first until one holds its key, or none is left. Two
+        keys a hash sends to one integer therefore never trade rows, and a key
+        whose integer some other key holds stays unmatched.
+        """
+        rows = encoded.hashed
+        value = encoded.values[rows]
+        place = at[rows]
+        pending = matched[rows]
+        found = np.zeros(len(rows), dtype=bool)
+        last = len(self.values) - 1
+        while pending.any():
+            walking = np.flatnonzero(pending)
+            stored = self.full_keys(place[walking])
+            same = np.fromiter(
+                (key == encoded.full[i] for key, i in zip(stored, walking.tolist(), strict=True)),
+                dtype=bool,
+                count=len(walking),
+            )
+            found[walking[same]] = True
+            rest = walking[~same]
+            more = place[rest] < last
+            place[rest] += more
+            pending[:] = False
+            pending[rest] = more & (self.values[place[rest]] == value[rest])
+        matched[rows] = found
+        at[rows] = place
+
+
 class RouteTable:
     """Source routing keys -> a place on one of a build's axes.
 
@@ -506,7 +596,7 @@ class RouteTable:
 
     def __init__(
         self,
-        keys: np.ndarray,
+        keys: _KeyIndex,
         target: np.ndarray,
         axis: np.ndarray | None,
         swaps: np.ndarray,
@@ -531,6 +621,7 @@ class RouteTable:
         axes: Sequence[Sequence[str]],
         *,
         keep_unmatched: bool,
+        key_hash: KeyHash | None = None,
     ) -> RouteTable:
         """Place every routed site on the first axis that holds its ALID.
 
@@ -538,41 +629,38 @@ class RouteTable:
         unmatched. Two sites one routing key spells -- one site written in two
         cases -- must reach the same place with the same orientation: otherwise
         which one a lookup finds would depend on insertion order, and an
-        association would be misplaced in silence.
+        association would be misplaced in silence. ``key_hash`` hashes the
+        keys the integer cannot spell exactly; `keys.key_hash` by default.
         """
         if not axes or max(len(axis) for axis in axes) >= np.iinfo(np.int32).max:
             raise ValueError("a route table needs one or more axes, each shorter than int32")
         indices = [{alid: i for i, alid in enumerate(axis)} for axis in axes]
-        placed = _placed_sites(site_alid, reoriented, indices)
+        sites, targets, axis_ids, swapped, orders = _placed_sites(site_alid, reoriented, indices)
         del indices
-        arrays = _sorted_by_key(*placed)
-        del placed
-        table = cls(*arrays, n_axes=len(axes), keep_unmatched=keep_unmatched)
-        table._refuse_folded_conflicts()
+        keys, order = _indexed(sites, routing_keys.key_hash if key_hash is None else key_hash)
+        target, axis, swaps, allele = _in_key_order(order, targets, axis_ids, swapped, orders)
+        _refuse_folded_conflicts(
+            keys, target, axis, swaps, lambda at: routing_key(sites[order[at]]).encode()
+        )
+        table = cls(
+            keys, target, axis, swaps, allele, n_axes=len(axes), keep_unmatched=keep_unmatched
+        )
+        hashed = int(is_hashed(keys.values).sum())
         log.info(
-            "Pass 2 lookup: %d variant keys, max key length %d bytes, %d re-oriented by the lift",
-            len(table._keys),
-            max((len(k) for k in table._keys), default=0),
-            int(table._swaps.sum()),
+            "Pass 2 lookup: %d variant keys, %d of them hashed and matched on the full key, "
+            "%d re-oriented by the lift",
+            len(keys),
+            hashed,
+            int(swaps.sum()),
         )
         return table
 
     def __len__(self) -> int:
         return len(self._keys)
 
-    def _refuse_folded_conflicts(self) -> None:
-        keys = self._keys
-        duplicate = keys[1:] == keys[:-1]
-        conflicting = duplicate & (
-            (self._target[1:] != self._target[:-1]) | (self._swaps[1:] != self._swaps[:-1])
-        )
-        if self._axis is not None:
-            conflicting |= duplicate & (self._axis[1:] != self._axis[:-1])
-        if np.any(conflicting):
-            first = keys[1:][conflicting][0]
-            raise ValueError(
-                f"source key {first!r} maps to conflicting variants after case folding"
-            )
+    def integer_keys(self, sites: Sequence[SourceKey]) -> IntegerKeys:
+        """``sites`` as the integer keys this table is searched by."""
+        return self._keys.codec.encode(*_columns_of(sites))
 
     def route_column(
         self,
@@ -660,10 +748,8 @@ class RouteTable:
             matched = np.zeros(len(zs), dtype=bool)
             position = _empty_index()
         else:
-            query = encode_routing_keys(chroms, poss, refs, alts)
-            clipped = np.minimum(np.searchsorted(self._keys, query), len(self._keys) - 1)
-            matched = self._keys[clipped] == query
-            position = clipped[matched]
+            matched, place = self._keys.find(self._keys.codec.encode(chroms, poss, refs, alts))
+            position = place[matched]
         z = np.array(zs, dtype=np.float32)
         se = np.array(ses, dtype=np.float32)
         eaf = np.array(eafs, dtype=np.float32)
@@ -709,40 +795,133 @@ class RouteTable:
             )
 
 
-def _sorted_by_key(
-    keys_list: list[bytes],
+def _in_key_order(
+    order: np.ndarray,
     targets: list[int],
     axis_ids: list[int] | None,
     swaps: list[bool],
     orders: list[int],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, np.ndarray]:
-    """The table's parallel arrays, in sorted key order (a stable sort).
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, np.ndarray]:
+    """The table's parallel arrays, in its keys' order.
 
-    Each list is emptied once its array exists, before the sort, so a
-    genome-scale table does not hold both forms at its peak.
+    Each list is emptied once its array exists, so a genome-scale table does
+    not hold both forms at its peak.
     """
-    keys = np.array(keys_list, dtype=object)
-    keys_list.clear()
     target = np.array(targets, dtype=np.int32)
     targets.clear()
     swap = np.array(swaps, dtype=bool)
     swaps.clear()
     allele = np.array(orders, dtype=np.int8)
     orders.clear()
-    axis = None if axis_ids is None else np.array(axis_ids, dtype=np.int8)
-    order = np.argsort(keys, kind="stable")
-    sorted_axis = None if axis is None else axis[order]
-    return keys[order], target[order], sorted_axis, swap[order], allele[order]
+    axis = None if axis_ids is None else np.array(axis_ids, dtype=np.int8)[order]
+    return target[order], axis, swap[order], allele[order]
+
+
+def _columns_of(
+    sites: Sequence[SourceKey],
+) -> tuple[list[str], list[int], list[str], list[str]]:
+    """Sites as their four columns: chromosome, position, ref and alt."""
+    if not sites:
+        return [], [], [], []
+    chroms, poss, refs, alts = (list(column) for column in zip(*sites, strict=True))
+    return chroms, poss, refs, alts
+
+
+def _indexed(sites: list[SourceKey], key_hash: KeyHash) -> tuple[_KeyIndex, np.ndarray]:
+    """The sites' keys, sorted, and the order that sorts them (a stable sort).
+
+    Encoded a batch at a time; the hashed entries' full keys are then laid
+    out in table order, so the entry at a position finds its key by one
+    search of the hashed positions.
+    """
+    codec = IntegerKeyCodec((site[0] for site in sites), key_hash)
+    values = np.empty(len(sites), dtype=np.uint64)
+    hashed_rows: list[np.ndarray] = []
+    full: list[bytes] = []
+    for start in range(0, len(sites), _ENCODE_BATCH):
+        batch = sites[start : start + _ENCODE_BATCH]
+        encoded = codec.encode(*_columns_of(batch))
+        values[start : start + len(batch)] = encoded.values
+        hashed_rows.append(encoded.hashed + start)
+        full.extend(encoded.full)
+    order = np.argsort(values, kind="stable")
+    rank = np.empty(len(order), dtype=np.int64)
+    rank[order] = np.arange(len(order))
+    hashed_at = rank[np.concatenate(hashed_rows)] if hashed_rows else _empty_index()
+    del rank
+    by_place = np.argsort(hashed_at)
+    keys = [full[i] for i in by_place.tolist()]
+    del full
+    offsets = np.zeros(len(keys) + 1, dtype=np.int64)
+    np.cumsum(np.fromiter(map(len, keys), dtype=np.int64, count=len(keys)), out=offsets[1:])
+    return _KeyIndex(codec, values[order], hashed_at[by_place], b"".join(keys), offsets), order
+
+
+def _refuse_folded_conflicts(
+    keys: _KeyIndex,
+    target: np.ndarray,
+    axis: np.ndarray | None,
+    swaps: np.ndarray,
+    key_at: Callable[[int], bytes],
+) -> None:
+    """Refuse two entries of one Routing Key that reach different places or
+    orientations.
+
+    Equal integers that spell their alleles exactly are one key, so adjacent
+    ones are compared directly. Equal hashed integers may be different keys,
+    so each run of them is compared by its full keys.
+    """
+    values = keys.values
+    same = values[1:] == values[:-1]
+    if not same.any():
+        return
+    differ = (target[1:] != target[:-1]) | (swaps[1:] != swaps[:-1])
+    if axis is not None:
+        differ |= axis[1:] != axis[:-1]
+    hashed = is_hashed(values[1:])
+    exact = np.flatnonzero(same & ~hashed & differ)
+    if len(exact):
+        _refuse(key_at(int(exact[0]) + 1))
+    pairs = np.flatnonzero(same & hashed)
+    for run in np.split(pairs, np.flatnonzero(np.diff(pairs) != 1) + 1):
+        if len(run):
+            _refuse_hashed_run(keys, int(run[0]), int(run[-1]) + 2, target, axis, swaps)
+
+
+def _refuse_hashed_run(
+    keys: _KeyIndex,
+    start: int,
+    stop: int,
+    target: np.ndarray,
+    axis: np.ndarray | None,
+    swaps: np.ndarray,
+) -> None:
+    """`_refuse_folded_conflicts` for the entries ``[start, stop)``, which share
+    one hashed integer."""
+    first: dict[bytes, int] = {}
+    at = np.arange(start, stop)
+    for position, key in zip(at.tolist(), keys.full_keys(at), strict=True):
+        earlier = first.setdefault(key, position)
+        if (
+            target[earlier] != target[position]
+            or swaps[earlier] != swaps[position]
+            or (axis is not None and axis[earlier] != axis[position])
+        ):
+            _refuse(key)
+
+
+def _refuse(key: bytes) -> None:
+    raise ValueError(f"source key {key!r} maps to conflicting variants after case folding")
 
 
 def _placed_sites(
     site_alid: Mapping[SourceKey, str],
     reoriented: Collection[SourceKey],
     indices: list[dict[str, int]],
-) -> tuple[list[bytes], list[int], list[int] | None, list[bool], list[int]]:
-    """Each placeable site's key, target, axis (with more than one), swap, and
+) -> tuple[list[SourceKey], list[int], list[int] | None, list[bool], list[int]]:
+    """Each placeable site, its target, axis (with more than one), swap, and
     where its ``ref`` sits in the stored ALID (`allele_order`, after the swap)."""
-    keys: list[bytes] = []
+    sites: list[SourceKey] = []
     targets: list[int] = []
     axis_ids: list[int] | None = [] if len(indices) > 1 else None
     swaps: list[bool] = []
@@ -757,14 +936,14 @@ def _placed_sites(
             axis_id += 1
         if target is None:
             continue
-        keys.append(routing_key(site).encode())
+        sites.append(site)
         targets.append(target)
         if axis_ids is not None:
             axis_ids.append(axis_id)
         swapped = site in reoriented
         swaps.append(swapped)
         orders.append(_stored_order(site, swapped))
-    return keys, targets, axis_ids, swaps, orders
+    return sites, targets, axis_ids, swaps, orders
 
 
 def _stored_order(site: SourceKey, swapped: bool) -> int:
