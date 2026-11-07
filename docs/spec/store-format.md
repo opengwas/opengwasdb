@@ -616,6 +616,38 @@ costs side-table bytes and no accuracy. The quantity that bounds those bytes
 for an Analysis is its share over all of its cells, wherever they live. Hybrid
 components share one decision, and each must save bytes on its own.
 
+**Reference Completion keeps its source's SE model** (ADR 0078, issue #301).
+A completed release declares its source's `kind` and `residual_range` (ADR
+0038 §4), and every cell it holds is coded against the source's
+`se_coefficients`, which it carries unchanged. Dense and Hybrid completion
+patch the source's plane, so its codes carry over. Ragged completion rewrites
+its whole CSR plane from decoded values, and it never refits the model: a
+model fitted to the completed rows decodes each observed code to a value the
+source never held. Each observed cell is held exactly: its code decodes to the
+source's value, and one whose code would decode to anything else is an exact
+exception. For example, a source exception whose `float32` value rounds back
+inside the range stays an exception. So the source's exceptions carry over
+with their values. An imputed cell is coded against the same model, and one
+whose residual falls outside the range is an exact exception, like any other.
+
+The 2% budget is the criterion a build uses to choose its range, and
+completion does not choose again. Imputed cells may take an Analysis past
+2%. Completion never brings it back under by refitting or by writing
+`float16`: either would change observed values that §12 says completion
+preserves. Instead a Ragged completion records each Analysis's share in
+`manifest.json`'s `provenance.completion.se_exceptions` and logs a warning
+naming every Analysis above the budget. `validate` does not check the budget:
+it bounds side-table bytes, not accuracy. The block holds:
+
+- `budget`: 0.02;
+- `analyses`: one entry per Analysis, in `analyses.tsv` order, with
+  `analysis_id`, `n_se` (its cells carrying an SE), `n_exceptions`,
+  `n_imputed_se`, `n_imputed_exceptions` and `exception_rate`
+  (`n_exceptions / n_se`, null for an Analysis with no SE);
+- `over_budget`: the ids whose rate exceeds the budget.
+
+It is absent when SE is `float16`, which has no exceptions.
+
 **`eaf` — one of three kinds** (ADR 0037 §2). EAF's *semantics* are unchanged by
 the encoding: it is still per (variant, Analysis), still oriented to the stored
 effect allele (§5, §9.1), still declared per Analysis by `eaf_scope` (§9).
@@ -2387,14 +2419,14 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   or `cis_window_bp` recorded, a release that cannot be opened or decoded (a missing array
   group or EAF array included), and either `--ld-panel` or `--ancestry` for a Dense or Hybrid
   pair.
-- **Known limit: residual-coded SE.** SE is compared for exact equality, as the contract in
-  section 12 states. Ragged completion refits `se_coefficients` over the completed Analysis, so
-  when SE is `int8_residual` (ADR 0037 section 3) every observed SE of an Analysis that was
-  completed is re-quantised and differs from its source (on three real Chen 2023 Analyses completed with
-  `--cis-window-bp 1000000`: all 135,596 observed SE differ, by a median of 0.09% and at most
-  0.14%, with Z and EAF identical); such a pair fails with `se_mismatch`. Where SE is `float16`
-  the pair is exact. The check stays strict (owner ruling, 2026-10-22): the re-quantisation is
-  completion's defect, and opengwasdb#301 owns fixing the refit, not this check.
+- **Residual-coded SE is compared exactly too.** SE is compared for exact equality, as the
+  contract in section 12 states, whether it is `float16` or `int8_residual` (owner ruling,
+  2026-10-22). Ragged completion used to refit `se_coefficients` over the completed Analysis,
+  which re-quantised every observed SE; it now keeps the source's model and holds each observed
+  cell exactly (section 6a, ADR 0078, issue #301). On three real Chen 2023 Analyses completed
+  with `--cis-window-bp 1000000` against the HGDP+1kGP EUR panel, the refit moved all 135,596
+  observed SEs (by a median of 0.09% and at most 0.14%) and the check failed with
+  `se_mismatch`; since #301 none moves and the check passes.
 
 ### 20.5 Association TSV: building a Dense Store with `build-dense`
 

@@ -309,8 +309,20 @@ class AssociationCodec:
             se_coefficients=held(SE_COEFFICIENTS) if plan.se.is_residual else None,
         )
 
-    def encode(self, cells: CellValues, at: Placement, *, where: str) -> Encoded:
+    def encode(
+        self,
+        cells: CellValues,
+        at: Placement,
+        *,
+        where: str,
+        carried: np.ndarray | None = None,
+    ) -> Encoded:
         """`storable`, then each plane's codes, in the order the planes allow.
+
+        `carried` marks cells decoded from another Store, whose SE must decode
+        to exactly the value given: Ragged completion's observed cells (issue
+        #301). Under a residual SE plan a carried cell whose code would decode
+        to anything else is an exact exception.
 
         No I/O and deterministic. Raises `NotAdmitted` (`storable`),
         `EafBaselineError` (a residual EAF plan with no baseline), and
@@ -328,7 +340,7 @@ class AssociationCodec:
         eaf_exceptions = EafExceptionBuilder()
         eaf = self._encode_eaf(values, at, eaf_exceptions, where)
         se_exceptions = SeExceptionBuilder()
-        se = self._encode_se(values, at, eaf, eaf_exceptions, se_exceptions)
+        se = self._encode_se(values, at, eaf, eaf_exceptions, se_exceptions, carried)
         imputed = None if values.imputed is None else np.asarray(values.imputed, dtype=np.uint8)
         tables = SideTables(z_overflow.table(), eaf_exceptions.table(), se_exceptions.table())
         return Encoded(z, se, eaf, imputed, tables, kept)
@@ -385,6 +397,7 @@ class AssociationCodec:
         eaf_codes: np.ndarray | None,
         eaf_exceptions: EafExceptionBuilder,
         exceptions: SeExceptionBuilder,
+        carried: np.ndarray | None = None,
     ) -> np.ndarray:
         shape = np.shape(values.se)
         if not self.plan.se.is_residual:
@@ -404,6 +417,7 @@ class AssociationCodec:
             coefficients=self._model(),
             positions=at.positions,
             exceptions=exceptions,
+            exact=carried,
         )
 
     def _decoded_eaf(

@@ -8,6 +8,13 @@
 > version reference below as a historical name for what is now the one readable
 > format.
 
+> **Amended by [ADR 0078](0078-completion-keeps-its-sources-se-model.md)** (issue
+> #301) for §3's completion bullet. Ragged completion no longer refits
+> `se_coefficients`: like Dense and Hybrid completion, it codes every cell against
+> its source's model and range. Each observed cell is held exactly, and an imputed
+> cell outside the range is an exact exception. The 2% exception budget is
+> recorded per Analysis and reported, not enforced, after completion.
+
 > **Excepted by [ADR 0067](0067-per-association-sample-size-and-besd-allele-frequency.md) §4**
 > (issue #302) for `se` selection. A Ragged release carrying a per-association
 > `n` plane keeps `se` in `float16` whatever §3's measurements choose: the
@@ -382,11 +389,11 @@ Five details were settled during implementation:
   *patch* the source's plane, carrying its existing codes forward, so they read
   `se_coefficients` off the source and must never refit — a refit would
   silently re-point every carried-over code at a new model. Ragged completion
-  rewrites the whole CSR plane from decoded values, so it refits, and its
-  imputed cells are then modelled by the fit rather than excluded from it.
-  Completion preserves the source's *kind and range* either way (ADR 0038 §4);
-  the coefficients are decode parameters of the array actually written, not
-  part of the encoding the release declares.
+  rewrites the whole CSR plane from decoded values, and it does not refit
+  either (ADR 0078, issue #301). Its refit re-quantised every observed SE, all
+  135,596 of them on three Chen 2023 Analyses. It now codes every cell against
+  the source's coefficients and holds each observed cell exactly. Completion
+  preserves the source's *kind and range* either way (ADR 0038 §4).
 
 The gate is per Analysis, not pooled over the plane: an exception share taken
 across every cell lets one badly fitting Analysis hide behind its well-fitting

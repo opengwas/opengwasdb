@@ -251,8 +251,8 @@ def test_ragged_completion_keeps_only_the_rows_it_stores(
     its others, at rs1001 and rs1003, are the controls.
 
     A first probe with one SE leaves the build no residual SE model, so it
-    stores `float16` SEs; with two, completion refits the model on the rows it
-    stores, and the second probe keeps two SEs to fit it by.
+    stores `float16` SEs; with two, the build fits one, and completion codes
+    the rows it stores against it (issue #301).
     """
     prefix = trc._make_besd_fixture(
         tmp_path,
