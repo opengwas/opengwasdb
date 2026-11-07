@@ -332,7 +332,7 @@ class AssociationCodec:
         raises `ValueError` too for a placement that does not address one cell
         per cell of the batch (issue #392).
         """
-        require_parallel((*_cell_arrays(cells), *at.per_cell), where=where)
+        require_parallel((*_cell_arrays(cells), *at.per_cell, ("carried", carried)), where=where)
         kept = storable(cells, at.analyses, at.n_analyses, where=where)
         values = kept.cells
         z_overflow = ZOverflowBuilder()

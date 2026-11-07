@@ -998,6 +998,26 @@ class TestParallelAndResume:
         assert serial.n_associations > 0, "fixture must complete some rows to mean anything"
         _assert_completed_stores_equal(serial_dst, parallel_dst)
 
+    def test_cli_n_workers_reaches_the_block_pool(self, tmp_path, observed_store, ld_panel):
+        """`complete-ragged --n-workers` sizes the LD-block pool, as `complete-dense` and
+        `complete-hybrid` already do; without it the command completes every block in one
+        process (stores #224)."""
+        from typer.testing import CliRunner
+
+        from opengwasdb.cli.main import app
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "complete-ragged", str(observed_store), str(tmp_path / "cli.opengwasdb"),
+                "--ld-panel", str(ld_panel), "--min-cor", "0.0",
+                "--cis-window-bp", "500000", "--n-workers", "2",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "(n_workers=2)" in result.output
+
     def test_resume_matches_fresh_run(self, tmp_path, observed_store, ld_panel):
         import json
 

@@ -456,6 +456,67 @@ def test_a_carried_se_is_held_exactly_when_its_code_would_not_decode_to_it(
     assert back[:2].view(np.uint32).tolist() == se[:2].view(np.uint32).tolist()
 
 
+@pytest.mark.parametrize("length", [1, 2], ids=["one", "two"])
+def test_a_carried_mask_that_is_not_parallel_to_the_cells_is_refused(length: int) -> None:
+    """`carried` is one flag per cell: a mask of another length would be
+    broadcast over the batch -- holding cells the caller never marked -- or raise
+    numpy's unnamed error. It is refused by name, as every other array of a
+    batch is (issue #301, #392)."""
+    cells = CellValues(_f32(1.0, 2.0, 3.0), _f32(0.1, 0.2, 0.3), eaf=_f32(0.3, 0.4, 0.5))
+    at = Placement.pairs(np.array([0, 1, 2]), np.array([0, 1, 2]), _N_ANALYSES)
+    refusal = (
+        "x: z of length 3, se of length 3, eaf of length 3, rows of length 3, "
+        f"cols of length 3 and carried of length {length} must be parallel"
+    )
+    with pytest.raises(ValueError, match=refusal):
+        _codec().encode(cells, at, where="x", carried=np.ones(length, dtype=bool))
+
+
+def test_the_exact_rule_predicts_from_the_frequency_decode_se_reads() -> None:
+    """`decode_se` narrows the EAF to `float32` before predicting, so the exact rule
+    must predict from that same value (issue #301). Given a `float64` frequency that
+    is not a `float32`, a carried cell built on the narrowed prediction decodes to
+    its value bit for bit and keeps its code. Predicted from the value as given, the
+    cell looks drifted and is held as an exception -- a code and a table entry no
+    reader needs."""
+    codec, step = StoreCodec(_RESIDUAL), _RESIDUAL.se.step
+    coefficients = np.array([[-3.0, -0.5]], np.float32)
+    # Four tenths of the way to the next `float32`: every frequency narrows back to
+    # the one it was built from, and none is itself a `float32`.
+    narrowed = np.linspace(0.03, 0.97, 64, dtype=np.float32)
+    eaf = narrowed.astype(np.float64) + 0.4 * (
+        np.nextafter(narrowed, np.float32(1.0)).astype(np.float64) - narrowed
+    )
+    analysis = np.zeros(len(eaf), np.int64)
+    at = Placement.pairs(np.arange(len(eaf)), np.zeros(len(eaf), np.int64), 1)
+    as_read = codec._se_prediction(narrowed, analysis, coefficients)
+    as_given = codec._se_prediction(eaf, analysis, coefficients)
+    codes = np.arange(len(eaf)) % 20 + 5
+    se = codec._se_from_codes(as_read, codes, step)
+    assert np.array_equal(eaf.astype(np.float32), narrowed), "fixture: each one narrows back"
+    assert not np.array_equal(narrowed, eaf), "fixture: none is a float32 already"
+    moved = codec._se_from_codes(as_given, codes, step) != se
+    assert moved.any(), "fixture: the two predictions must disagree about some decode"
+
+    exceptions = SeExceptionBuilder()
+    written = codec.encode_se(
+        se,
+        eaf=eaf,
+        analysis_index=analysis,
+        coefficients=coefficients,
+        exceptions=exceptions,
+        exact=np.ones(len(eaf), dtype=bool),
+        positions=at.positions,
+    )
+
+    assert written.tolist() == codes.tolist(), "a carried cell on the reader's code keeps it"
+    assert exceptions.table().index.tolist() == []
+    back = codec.decode_se(
+        written, eaf=eaf, analysis_index=analysis, coefficients=coefficients, positions=at.positions
+    )
+    assert back.view(np.uint32).tolist() == se.view(np.uint32).tolist()
+
+
 # ── Writing an encoded batch ─────────────────────────────────────────────────
 
 
