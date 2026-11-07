@@ -29,7 +29,6 @@ from opengwasdb.completion.checkpoint import BlockCompletionResult, FillRow, Qua
 from opengwasdb.completion.impute import impute_z_block, scalar_n_se
 from opengwasdb.completion.ld_panel import (
     LDBlock,
-    canonical_panel_alid,
     load_block,
     load_ld_eigenvectors,
 )
@@ -200,11 +199,15 @@ def run_block(
         log.warning("Block %s: cannot load eigenvectors (%s) — skipping", block.block_id, exc)
         return BlockCompletionResult(block_id=block.block_id, quality_rows=[], fills=[])
 
-    # Canonical ALID per block variant (None if it doesn't parse); the LD
+    # Canonical ALID per block variant (None where it names none); the LD
     # eigenvectors are indexed by block position, so every block SNP keeps
-    # its slot even when unmatched.
-    canonical_alids = [canonical_panel_alid(s) for s in block.snp_ids]
-    eaf = block.eaf
+    # its slot even when unmatched. A panel codes its LD and EAF on each row's
+    # EA, and the Store signs a statistic for its ALID's A1, so a row whose A1
+    # is not its EA -- a panel deletion, spelt reference first -- is re-signed
+    # (ADR 0079).
+    canonical_alids = block.alids
+    eigenvectors = block.oriented_eigenvectors(eigenvectors)
+    eaf = block.eaf_for_a1()
     positions = np.array([_snp_position(s) for s in block.snp_ids], dtype=np.int64)
 
     analysis_indices, read_observed = make_reader(block, canonical_alids)

@@ -43,13 +43,12 @@ from opengwasdb.completion.checkpoint import (
     write_block_checkpoint,
 )
 from opengwasdb.completion.ld_panel import (
-    canonical_panel_alid as _canonical_panel_alid,
-)
-from opengwasdb.completion.ld_panel import (
+    PanelPlacement,
     ceded_at_end,
     check_panel_has_chromosomes,
     list_all_blocks,
     list_chromosomes,
+    panel_variant,
 )
 from opengwasdb.completion.manifest import (
     build_completion_provenance,
@@ -104,10 +103,8 @@ from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
     CanonicalVariant,
     VariantAxis,
-    VariantNormalisationError,
     VariantRecord,
     chromosome_sort_key,
-    orient_to_canonical,
     parse_canonical_alid,
     write_variant_axis,
 )
@@ -407,6 +404,9 @@ class _UnionAxis:
     tsv_paths: list[Path]
     #: Per block's TSV, the variants at its end the next block owns.
     ceded: dict[Path, frozenset[str]]
+    #: How the panel placed its rows: the completion record's `panel_indels`
+    #: and `panel_snvs_unplaced` (`PanelPlacement.record`).
+    panel_placement: dict[str, dict[str, object]]
 
 
 @dataclass(frozen=True)
@@ -456,6 +456,8 @@ class _Panel:
     tsv_paths: list[Path]
     alids: set[str]
     ceded: dict[Path, frozenset[str]]
+    #: How the panel placed its rows, for the completion record.
+    placement: dict[str, dict[str, object]]
 
 
 def _enumerate_panel(ld_dir: Path, ancestry: str) -> _Panel:
@@ -465,14 +467,13 @@ def _enumerate_panel(ld_dir: Path, ancestry: str) -> _Panel:
     tsv_paths: list[Path] = []
     panel_alids: set[str] = set()
     ceded: dict[Path, frozenset[str]] = {}
+    placement = PanelPlacement()
     for chrom in list_chromosomes(ld_dir, ancestry):
         blocks = list_all_blocks(ld_dir, ancestry, chrom)
         for block in blocks:
             tsv_paths.append(block.tsv_path)
-            for snp_id in block.snp_ids:
-                ca = _canonical_panel_alid(snp_id)
-                if ca is not None:
-                    panel_alids.add(ca)
+            panel_alids.update(alid for alid in block.alids if alid is not None)
+            placement.add(block)
         at_end = ceded_at_end(blocks)
         ceded.update(
             (block.tsv_path, at_end[block.block_id]) for block in blocks if block.block_id in at_end
@@ -481,22 +482,8 @@ def _enumerate_panel(ld_dir: Path, ancestry: str) -> _Panel:
         f"LD panel: {len(tsv_paths):,} blocks, {len(panel_alids):,} panel variants, "
         f"{sum(map(len, ceded.values())):,} at an endpoint two blocks share"
     )
-    return _Panel(tsv_paths, panel_alids, ceded)
-
-
-def _orient_panel_alid(alid: str) -> CanonicalVariant | None:
-    """The store-canonical variant one panel ALID names, or ``None`` when the
-    panel's identifier cannot be parsed or oriented. An ALID the panel cannot
-    say what it is must never become a variant the store claims to cover."""
-    parts = alid.split(":")
-    if len(parts) != 4:
-        return None
-    chrom, pos_str, a1, a2 = parts
-    try:
-        cv_result = orient_to_canonical(chrom, int(pos_str), a1, a2)
-    except (VariantNormalisationError, ValueError):
-        return None
-    return cv_result.variant
+    placement.log(ld_dir, ancestry)
+    return _Panel(tsv_paths, panel_alids, ceded, placement.record())
 
 
 def _union_variant_table(
@@ -506,13 +493,14 @@ def _union_variant_table(
 ) -> tuple[list[CanonicalVariant], list[CanonicalVariant], dict[str, int]]:
     """Append the panel variants the source does not already hold (deduplicated
     through canonical orientation) and sort the union into the store's
-    canonical order."""
+    canonical order. An ALID the panel cannot say what it is never becomes a
+    variant the store claims to cover (`panel_variant`)."""
     present = set(src_alid_to_idx)
     new_canonical: list[CanonicalVariant] = []
     for alid in panel_alids:
         if alid in present:
             continue
-        variant = _orient_panel_alid(alid)
+        variant = panel_variant(alid)
         if variant is None:
             continue
         if variant.alid in present:
@@ -619,6 +607,7 @@ def _build_union_axis(
         out_to_src=out_to_src,
         tsv_paths=panel.tsv_paths,
         ceded=panel.ceded,
+        panel_placement=panel.placement,
     )
 
 
@@ -850,6 +839,7 @@ def _write_completed_manifest(
             n_imputed=arrays.total_imputed,
             n_missing_off_panel=arrays.n_missing_off_panel_total,
             n_missing_imputation_failed=arrays.n_missing_imputation_failed,
+            **axis.panel_placement,
         ),
     )
     staged.write_manifest(_record_effective_dense_chunk_shape(completed_manifest, staged))
@@ -907,7 +897,9 @@ def _completed_analysis_rows(
         [
             replace(
                 a,
-                completed_against=ancestry if axis.impute_mask is None or axis.impute_mask[i] else "",
+                completed_against=(
+                    ancestry if axis.impute_mask is None or axis.impute_mask[i] else ""
+                ),
                 # `eaf_scope` is derived from what the release actually holds, not
                 # copied forward -- the declaration disagreeing with the arrays is
                 # the defect that got through review on #106 (ADR 0037 §4).

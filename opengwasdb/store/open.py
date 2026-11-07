@@ -41,9 +41,10 @@ if TYPE_CHECKING:
 #: Two entries since #245: `0.1` (Zarr v2, read but never written again) and
 #: `0.2` (Zarr v3 with sharding, what every builder writes from #247 on). The
 #: four pre-reset versions are not in it and are not readable -- see
-#: `PRE_RESET_FORMAT_VERSIONS`.
+#: `PRE_RESET_FORMAT_VERSIONS`. The 0.2 series reaches remainder 1 with #381:
+#: `0.2.1` spells an indel's ALID reference first (ADR 0079).
 SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingProxyType(
-    {(0, 1): (0,), (0, 2): (0,)}
+    {(0, 1): (0,), (0, 2): (1,)}
 )
 
 #: format_version stamped on releases written by this build. A build writes
@@ -53,10 +54,30 @@ SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingPr
 #:
 #: `0.2.0` since #247: Zarr v3 with the sharding codec (ADR 0057), at the Dense
 #: inner chunk and shard shapes ADR 0058 decided. The builders write it through
-#: `opengwasdb.store.arrays`, and the converter writes it from a `0.1.0` source
-#: (`opengwasdb.store.convert.SOURCE_FORMAT_VERSION`); `0.1.0` stays readable
-#: until a later decision deletes the v2 reader (ADR 0057).
-CURRENT_FORMAT_VERSION = "0.2.0"
+#: `opengwasdb.store.arrays`; `0.1.0` stays readable until a later decision
+#: deletes the v2 reader (ADR 0057).
+#:
+#: `0.2.1` since #381: the same arrays, with an indel's ALID spelt reference
+#: first rather than sorted (ADR 0079). Every builder writes it. The converter
+#: still writes `0.2.0` from a `0.1.0` source
+#: (`opengwasdb.store.convert.TARGET_FORMAT_VERSION`), because nothing in a
+#: Store says which allele of a sorted indel ALID is the reference.
+CURRENT_FORMAT_VERSION = "0.2.1"
+
+#: The first `format_version` whose indel ALIDs spell the reference allele first
+#: (ADR 0079). Every earlier one sorts an indel's alleles, so its deletion reads
+#: like the insertion of the same sequence; nothing rewrites such a Store.
+REFERENCE_FIRST_INDELS_SINCE = (0, 2, 1)
+
+
+def indels_reference_first(version: str) -> bool:
+    """Whether a Store of ``version`` spells an indel's ALID reference first.
+
+    A Store before `REFERENCE_FIRST_INDELS_SINCE` is read as it was written: its
+    indel ALIDs keep their sorted spelling, and a check or a join against it
+    spells a source's indel the same way (ADR 0079).
+    """
+    return parse_format_version(version) >= REFERENCE_FIRST_INDELS_SINCE
 
 #: The Zarr on-disk format each readable release series is stored in.  The
 #: series-to-layout coupling is part of the format contract, so it lives beside
@@ -227,25 +248,35 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
     lies about its own encoding, which is the failure class this project exists
     to avoid.
 
-    It is live since #247: this build writes `0.2.0` (Zarr v3 with sharding), so
-    completing a `0.1.0` source -- Zarr v2, written by every build before this
-    one -- is refused here.  The refusal names the conversion tool, because a
-    Dense 0.1.0 release whose values are right can be converted rather than
-    rebuilt (ADR 0057 §3).  Convert, then complete; converting later is not
-    possible, because completion writes into the source's arrays.
+    Since #381 this build writes `0.2.1`, so a `0.2.0` or `0.1.0` source is
+    refused here: both sort an indel's alleles, and completing one would add
+    panel ALIDs spelt reference first (ADR 0079) beside the source's own
+    deletions spelt like insertions -- one deletion under two ALIDs. Nothing in
+    such a Store says which of its indels are deletions, so it is rebuilt, not
+    converted, before it is completed.
     """
     check_format_version(version, source=source)
-    if version != CURRENT_FORMAT_VERSION:
+    if version == CURRENT_FORMAT_VERSION:
+        return version
+    if not indels_reference_first(version):
+        # A completion would add panel ALIDs spelt by ADR 0079 to a Store whose
+        # own deletions are spelt like insertions: one deletion, two ALIDs.
         raise UnsupportedFormatVersion(
             f"{source} is format_version={version!r}, which this build reads but cannot "
             f"write (it writes {CURRENT_FORMAT_VERSION!r}). Completion preserves its "
-            "source's format rather than re-encoding it (ADR 0038 §4), so this release "
-            "cannot be completed by this build. The one order that works is: convert the "
-            f"0.1.0 source to {CURRENT_FORMAT_VERSION} with "
-            "scripts/convert_store_to_0_2_0.py (it accepts every converter-supported layout), "
-            "then complete the converted release; or rebuild the release from source."
+            "source's format rather than re-encoding it (ADR 0038 §4), and a "
+            f"{version} Store sorts an indel's alleles, so a deletion in it is spelt "
+            "like the insertion of the same sequence; this build spells an indel "
+            "reference first (ADR 0079) and cannot tell which of its source's indels "
+            "are deletions. Rebuild the release from source with this build, then "
+            "complete the rebuilt release."
         )
-    return version
+    raise UnsupportedFormatVersion(
+        f"{source} is format_version={version!r}, which this build reads but cannot "
+        f"write (it writes {CURRENT_FORMAT_VERSION!r}). Completion preserves its "
+        "source's format rather than re-encoding it (ADR 0038 §4), so this release "
+        "cannot be completed by this build. Rebuild the release from source."
+    )
 
 
 # --- Store Release envelope (store-format spec §1/§10/§11/§16/§17) --------

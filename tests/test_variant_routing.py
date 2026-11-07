@@ -485,36 +485,32 @@ def _indel_association(
     )
 
 
-#: BMI_IRN (FinnGen r13) at 1:827587: an insertion and a deletion of one repeat,
-#: whose sorted alleles make one ALID, `1:827587:G:GGGGCC`.
+#: BMI_IRN (FinnGen r13) at 1:827587: an insertion and a deletion of one repeat.
+#: A sorted ALID spelt both `1:827587:G:GGGGCC`; written reference first they
+#: are two variants (ADR 0079).
 INSERTION: Site = ("1", 827587, "G", "GGGGCC")
 DELETION: Site = ("1", 827587, "GGGGCC", "G")
 
 
-def _reversed_pair_column(stream):
-    routing = _hg38_routing([INSERTION, DELETION])
-    (alid,) = routing.alids
-    assert alid == "1:827587:G:GGGGCC"
-    return routing.table([routing.alids]).route_column(stream).placed[0]
-
-
 @pytest.mark.parametrize("order", ["insertion first", "deletion first"])
-def test_a_reversed_indel_keeps_the_row_whose_declared_reference_the_alid_spells_first(order):
-    """D5 for an insertion and a deletion sharing an ALID: when the source
-    declares which allele is the reference, the insertion -- the reading the
-    ALID spells -- is kept wherever it falls, and the deletion is dropped."""
+def test_an_insertion_and_a_deletion_at_one_position_reach_two_places(order):
+    """Each keeps its own row, wherever it falls in the stream: neither is a
+    duplicate of the other, so no row is dropped."""
+    routing = _hg38_routing([INSERTION, DELETION])
+    assert routing.alids == ["1:827587:G:GGGGCC", "1:827587:GGGGCC:G"]
     stream = [_indel_association(INSERTION, 1.5), _indel_association(DELETION, -0.5)]
     if order == "deletion first":
         stream.reverse()
 
-    placed = _reversed_pair_column(stream)
+    placed = routing.table([routing.alids]).route_column(stream).placed[0]
 
-    assert placed.index.tolist() == [0]
-    assert placed.z.tolist() == [1.5]
-    assert placed.reversed_indels.tolist() == [0]
-    assert placed.conflicting.tolist() == []
+    z_by_alid = dict(
+        zip([routing.alids[i] for i in placed.index.tolist()], placed.z.tolist(), strict=True)
+    )
+    assert z_by_alid == {"1:827587:G:GGGGCC": 1.5, "1:827587:GGGGCC:G": -0.5}
+    assert placed.reversed_indels.tolist() == placed.conflicting.tolist() == []
     assert (placed.dropped.tolist(), placed.collapsed) == ([], 0)
-    assert placed.reference.tolist() == [route_table.REFERENCE_FIRST]
+    assert placed.reference.tolist() == [route_table.REFERENCE_FIRST] * 2
 
 
 @pytest.mark.parametrize(
@@ -549,36 +545,6 @@ def test_a_reversed_indel_is_judged_on_its_distinct_rows(codes, z, kept, reverse
     assert found.conflicting.tolist() == ([] if kept else [0])
 
 
-def test_a_reversed_indel_with_no_declared_reference_drops_both_rows():
-    """Effect and other alleles do not say which is the genome's: D5 unchanged."""
-    stream = [
-        _indel_association(INSERTION, 1.5, ReferenceAllele.UNDECLARED),
-        _indel_association(DELETION, -0.5, ReferenceAllele.UNDECLARED),
-    ]
-
-    placed = _reversed_pair_column(stream)
-
-    assert placed.index.tolist() == []
-    assert placed.conflicting.tolist() == [0]
-    assert placed.dropped.tolist() == [0, 0]
-    assert placed.reversed_indels.tolist() == []
-
-
-def test_a_declared_alt_reference_is_judged_on_the_alt_allele():
-    """A row whose source declares its `alt` the reference spells the ALID's
-    first allele when its `alt` sorts first: `GGGGCC>G` with `G` the reference
-    is the insertion, and is kept over `G>GGGGCC` whose reference is `GGGGCC`."""
-    stream = [
-        _indel_association(INSERTION, 1.5, ReferenceAllele.ALT),
-        _indel_association(DELETION, -0.5, ReferenceAllele.ALT),
-    ]
-
-    placed = _reversed_pair_column(stream)
-
-    assert placed.z.tolist() == [-0.5]
-    assert placed.reversed_indels.tolist() == [0]
-
-
 def test_snvs_spelling_the_reference_both_ways_still_drop_both_rows():
     """Two SNV rows at one ALID are one variant seen from opposite alleles, so
     a declared reference tells them nothing: both are dropped."""
@@ -596,7 +562,7 @@ def test_snvs_spelling_the_reference_both_ways_still_drop_both_rows():
     assert placed.reversed_indels.tolist() == []
 
 
-def test_a_reversed_indel_is_resolved_across_batches(monkeypatch):
+def test_a_declaration_travels_with_each_row_across_batches(monkeypatch):
     """The declaration travels with each row through a batch boundary, and a
     reader that changes it mid-stream changes it from that row on."""
     monkeypatch.setattr(route_table, "_RESOLVE_BATCH", 2)
@@ -610,11 +576,19 @@ def test_a_reversed_indel_is_resolved_across_batches(monkeypatch):
     ]
 
     placed = table.route_column(stream).placed[0]
-    alids = [routing.alids[i] for i in placed.index.tolist()]
+    reference_by_alid = dict(
+        zip(
+            [routing.alids[i] for i in placed.index.tolist()],
+            placed.reference.tolist(),
+            strict=True,
+        )
+    )
 
-    assert alids == ["1:827587:G:GGGGCC"]
-    assert placed.z.tolist() == [1.5]
-    assert [routing.alids[i] for i in placed.conflicting.tolist()] == ["1:900:A:AT"]
+    unknown, first = route_table.REFERENCE_UNKNOWN, route_table.REFERENCE_FIRST
+    assert reference_by_alid == {
+        "1:900:A:AT": unknown, "1:827587:GGGGCC:G": first,
+        "1:900:AT:A": unknown, "1:827587:G:GGGGCC": first,
+    }
 
 
 def test_a_lift_that_reorients_a_site_moves_its_reference_to_the_other_side():
@@ -644,8 +618,9 @@ def test_an_unmatched_row_carries_its_reference_code():
 
     unmatched = table.route_column(stream).unmatched
 
+    # A deletion's key spells its reference first, as its ALID does (ADR 0079).
     assert unmatched.reference.tolist() == [
-        route_table.REFERENCE_FIRST, route_table.REFERENCE_SECOND, route_table.REFERENCE_UNKNOWN,
+        route_table.REFERENCE_FIRST, route_table.REFERENCE_FIRST, route_table.REFERENCE_UNKNOWN,
     ]
 
 

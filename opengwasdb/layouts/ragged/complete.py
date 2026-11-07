@@ -50,9 +50,10 @@ from opengwasdb.completion.checkpoint import (
 )
 from opengwasdb.completion.ld_panel import (
     LDBlock,
+    PanelPlacement,
     SharedEndpoint,
-    canonical_panel_alid,
     check_panel_has_chromosomes,
+    panel_variant,
     shared_endpoints,
 )
 from opengwasdb.completion.manifest import (
@@ -105,12 +106,7 @@ from opengwasdb.variants.axis import (
     VariantRecord,
     write_variant_axis,
 )
-from opengwasdb.variants.normalise import (
-    CanonicalVariant,
-    VariantNormalisationError,
-    chromosome_sort_key,
-    orient_to_canonical,
-)
+from opengwasdb.variants.normalise import CanonicalVariant, chromosome_sort_key
 from opengwasdb.variants.routing import Duplicates, collapse_duplicates
 
 log = logging.getLogger(__name__)
@@ -473,6 +469,9 @@ class _BlockPlan:
     block_to_analyses: dict[str, list[int]]
     block_canonical_alids: dict[str, list[str | None]]
     new_alids: set[str]
+    #: How the planned blocks placed their rows: the completion record's
+    #: `panel_indels` and `panel_snvs_unplaced` (`PanelPlacement.record`).
+    panel_placement: dict[str, dict[str, object]]
     #: Each block's end another planned block starts at (`shared_endpoints`).
     endpoints: dict[str, SharedEndpoint] = field(default_factory=dict)
 
@@ -689,10 +688,6 @@ def _gene_target_less_blocks(
     return trait_less_blocks(held, ld_dir, ancestry)
 
 
-def _canonical_alids(block: LDBlock) -> list[str | None]:
-    return [canonical_panel_alid(s) for s in block.snp_ids]
-
-
 def _new_panel_alids(alids: list[str | None], source_alids: set[str]) -> set[str]:
     """The panel ALIDs among `alids` the source release never held."""
     return {a for a in alids if a is not None and a not in source_alids}
@@ -717,6 +712,7 @@ def _scan_block_maps(
     block_canonical_alids: dict[str, list[str | None]] = {}
     analysis_to_blocks: dict[int, list[str]] = {}
     planned: list[LDBlock] = []
+    placement = PanelPlacement()
 
     for i, a in _imputable_analyses(state):
         blocks = blocks_for_analysis(
@@ -728,8 +724,9 @@ def _scan_block_maps(
             if block.block_id in block_to_tsv:
                 continue
             block_to_tsv[block.block_id] = block.tsv_path
-            block_canonical_alids[block.block_id] = _canonical_alids(block)
+            block_canonical_alids[block.block_id] = block.alids
             planned.append(block)
+            placement.add(block)
             new_alids.update(_new_panel_alids(block_canonical_alids[block.block_id], source_alids))
         if (i + 1) % 1000 == 0:
             print(
@@ -747,7 +744,15 @@ def _scan_block_maps(
         block_canonical_alids=block_canonical_alids,
         new_alids=new_alids,
         endpoints=shared_endpoints(planned),
+        panel_placement=_logged_placement(placement, ld_dir, ancestry),
     )
+
+
+def _logged_placement(
+    placement: PanelPlacement, ld_dir: Path, ancestry: str
+) -> dict[str, dict[str, object]]:
+    placement.log(ld_dir, ancestry)
+    return placement.record()
 
 
 def _plan_blocks(
@@ -784,23 +789,16 @@ def _as_canonical(v: VariantRecord) -> CanonicalVariant:
 
 
 def _merged_axis(state: _SourceState, new_alids: set[str]) -> _MergedAxis:
-    """Merge the new panel ALIDs into the source axis: canonicalise, drop any
-    that collide with source variants, sort under the store's key, and build
-    the maps that translate source variant indices and panel ALIDs into the
-    union."""
+    """Merge the new panel ALIDs into the source axis: canonicalise
+    (`panel_variant`), drop any that collide with source variants, sort under
+    the store's key, and build the maps that translate source variant indices
+    and panel ALIDs into the union."""
     source_alids = set(state.src_alids)
     new_variants: list[CanonicalVariant] = []
     for alid in new_alids:
-        try:
-            parts = alid.split(":")
-            if len(parts) != 4:
-                continue
-            chrom, pos_str, a1, a2 = parts
-            cv_result = orient_to_canonical(chrom, int(pos_str), a1, a2)
-            if cv_result.variant.alid not in source_alids:
-                new_variants.append(cv_result.variant)
-        except (VariantNormalisationError, ValueError):
-            continue
+        variant = panel_variant(alid)
+        if variant is not None and variant.alid not in source_alids:
+            new_variants.append(variant)
     new_variants.sort(key=_sort_key)
     variants = sorted(
         [_as_canonical(v) for v in state.src_variants] + new_variants, key=_sort_key
@@ -1520,6 +1518,7 @@ def _completed_manifest(
     thresh: float,
     cis_window_bp: int,
     axis: _MergedAxis,
+    panel_placement: dict[str, dict[str, object]],
     csr: _CompletedCsr,
     encode_plan: _EncodePlan,
     se_exceptions: dict[str, Any] | None,
@@ -1542,6 +1541,7 @@ def _completed_manifest(
             cis_window_bp=cis_window_bp,
             n_imputed=csr.total_imputed,
             n_missing=csr.total_missing,
+            **panel_placement,
             **({} if se_exceptions is None else {"se_exceptions": se_exceptions}),
         ),
         by_variant=recorded_provenance(staged.path),
@@ -1620,13 +1620,13 @@ def _run_completion(
                 thresh=thresh,
                 cis_window_bp=cis_window_bp,
                 axis=axis,
+                panel_placement=plan.panel_placement,
                 csr=csr,
                 encode_plan=encode_plan,
                 se_exceptions=se_exceptions,
             )
         )
-        result = _completion_result(dst, state, axis, csr)
-    return result
+        return _completion_result(dst, state, axis, csr)
 
 
 def _source_eaf_baseline(source_path: Path) -> np.ndarray | None:

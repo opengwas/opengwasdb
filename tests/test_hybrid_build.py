@@ -606,7 +606,8 @@ def test_gwas_ssf_capability_builds_a_hybrid_store_alongside_gwas_vcf(tmp_path):
     manifest.write_text(
         "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
         "\toriginal_sd_method\toriginal_sd\tsource_reader_capability\n"
-        f"trait_ssf\t{ssf_path}\tTrait SSF\t1000\tsd\tdeclared_standardised\t\t{GWAS_SSF_CAPABILITY}\n"
+        f"trait_ssf\t{ssf_path}\tTrait SSF\t1000\tsd\tdeclared_standardised"
+        f"\t\t{GWAS_SSF_CAPABILITY}\n"
         f"trait_b\t{vcf_b}\tTrait B\t1000\tsd\tdeclared_standardised\t\t\n",
         encoding="utf-8",
     )
@@ -1909,13 +1910,14 @@ class TestVariantReference:
         ] * 2
 
     @pytest.mark.parametrize("deletion_first", [True, False], ids=["deletion", "insertion"])
-    def test_a_reversed_indel_the_fold_resolves_keeps_its_insertion(
+    def test_the_fold_resolves_an_insertion_and_a_deletion_to_two_variants(
         self, tmp_path, deletion_first
     ):
-        """D5 for a reversed indel no reference names (issue #357): the fold
-        resolves `G>GGGGCC` and `GGGGCC>G` to one ALID, and GWAS-VCF declares
-        `REF` the reference, so the insertion is kept wherever it falls and the
-        deletion is logged."""
+        """BMI_IRN's pair, which no reference names: GWAS-VCF declares `REF`
+        the reference, so the fold resolves `G>GGGGCC` and `GGGGCC>G` to two
+        ALIDs, each spelt reference first (ADR 0079), and the Overflow stores
+        both rows wherever they fall. Before #381 they shared one ALID and the
+        deletion was dropped as `duplicate_reversed_indel` (#357)."""
         reference = _write_reference_artifact(
             tmp_path, _hybrid_manifest(tmp_path), panel_only=True
         )
@@ -1934,17 +1936,18 @@ class TestVariantReference:
             n_workers=2,
         )
 
-        assert (result.n_off_panel, result.n_overflow) == (1, 1)
+        assert (result.n_off_panel, result.n_overflow) == (2, 2)
         with query_store(store) as q:
-            res = q.lookup(["1:827587:G:GGGGCC"], ["bmi_irn"])
-        # The insertion's z, its effect allele sorting second: within the z
-        # code's resolution of +0.0852, where the deletion's would be 0.447.
-        assert res["z"].tolist() == pytest.approx([0.00115727 / 0.0135908], abs=1e-3)
+            insertion = q.lookup(["1:827587:G:GGGGCC"], ["bmi_irn"])
+            deletion = q.lookup(["1:827587:GGGGCC:G"], ["bmi_irn"])
+        # Each z is signed for its reference allele, A1: the insertion's
+        # effect allele `GGGGCC` is its A2, and so is the deletion's `G`.
+        assert insertion["z"].tolist() == pytest.approx([0.00115727 / 0.0135908], abs=1e-3)
+        assert deletion["z"].tolist() == pytest.approx([-0.0226233 / 0.05058], abs=1e-3)
         (analysis,) = record_analyses(store)
-        assert analysis["dropped"] == {"duplicate_reversed_indel": 1}
-        assert logged(admission_record_for(store), 0, "fold")[1:] == [
-            ["1:827587:G:GGGGCC", "duplicate_reversed_indel"]
-        ]
+        assert analysis["dropped"] == {}
+        # The fold dropped nothing, so it logged nothing.
+        assert not (admission_record_for(store) / "dropped" / "0.fold.tsv.gz").exists()
 
     def test_manifest_records_the_variant_reference(self, tmp_path):
         manifest = _hybrid_manifest(tmp_path)
@@ -2117,7 +2120,7 @@ def test_off_reference_resolution_reads_hashed_raw_keys_after_the_merge(tmp_path
         _key_prepared(tmp_path, 2), _key_options(2)
     )
     assert resolved is not None
-    assert sorted(resolved.alids) == ["1:5:A:G", "1:7:C:CT", "2:9:G:GA"]
+    assert sorted(resolved.alids) == ["1:5:A:G", "1:7:CT:C", "2:9:GA:G"]
     assert not [path for path in tmp_path.iterdir() if "keyrun" in path.name]
 
 

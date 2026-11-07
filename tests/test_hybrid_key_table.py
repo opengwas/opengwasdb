@@ -85,10 +85,12 @@ def test_resolve_keys_canonicalises_an_hg38_packed_snv() -> None:
 
 
 def test_resolve_keys_canonicalises_an_hg38_hashed_key_from_its_raw_string() -> None:
-    distinct = _distinct(("1:5:CT:C", HG38))
-    assert len(distinct.hashed_values) == 1, "the fixture must be a hashed key"
+    distinct = _distinct(("1:5:CT:C", HG38), ("1:6:ca:c", HG38))
+    assert len(distinct.hashed_values) == 2, "the fixture must be hashed keys"
     resolved = resolve_keys(distinct, liftover_failure_threshold=1.0, chain_file=None)
-    assert resolved.alids == ["1:5:C:CT"]
+    # A raw key is `chrom:pos:ref:alt`, and a deletion's ALID is spelt reference
+    # first (ADR 0079), upper-cased (ADR 0075).
+    assert sorted(resolved.alids) == ["1:5:CT:C", "1:6:CA:C"]
 
 
 def test_resolve_keys_keeps_two_hg38_keys_on_one_alid() -> None:

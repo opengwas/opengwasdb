@@ -173,7 +173,13 @@ def _lift_variant(
 
 
 def oriented_variant(
-    liftover: object | None, chrom: str, pos: str, effect: str, other: str
+    liftover: object | None,
+    chrom: str,
+    pos: str,
+    effect: str,
+    other: str,
+    *,
+    other_is_reference: bool,
 ) -> Orientation | None:
     """One source row's canonical orientation, lifted first when `liftover` is set.
 
@@ -189,7 +195,9 @@ def oriented_variant(
             return None
         chrom, pos, effect, other = lifted
     try:
-        return orient_to_canonical(chrom, pos, effect, other)
+        return orient_to_canonical(
+            chrom, pos, effect, other, other_is_reference=other_is_reference
+        )
     except VariantNormalisationError:
         return None
 
@@ -358,7 +366,7 @@ def _oriented(chrom: str, pos: str, effect: str, other: str) -> tuple[int, str, 
     position = _position(pos)
     if position is None:
         return None
-    oriented = oriented_alid(chrom, position, effect, other)
+    oriented = oriented_alid(chrom, position, effect, other, other_is_reference=True)
     return None if oriented is None else (position, *oriented)
 
 
@@ -510,7 +518,7 @@ def _lifted_rows_of(
         if isinstance(identity, MalformedIdentity):
             faults.record(f"{chrom_raw}:{pos}:{ref}:{alt}", identity)
             continue
-        orientation = oriented_variant(liftover, chrom_raw, pos, alt, ref)
+        orientation = oriented_variant(liftover, chrom_raw, pos, alt, ref, other_is_reference=True)
         if orientation is None:
             continue
         variant = orientation.variant

@@ -76,11 +76,12 @@ _EXCEPTION_TABLE_NAMES = _UNCOMPRESSED_TABLE_NAMES | frozenset(
 _DENSE_GRID_NAMES = frozenset({"z", "se", "eaf"})
 
 #: The Store format every build writes since #247: Zarr v3 groups and arrays,
-#: every array sharded, under a manifest declaring 0.2.0. These are spelled out
-#: rather than imported, so a build that changes either fails here even if the
-#: constant it reads changed with it (#244 review, finding 2).
+#: every array sharded, under a manifest declaring 0.2.1 (since #381, which
+#: spells an indel's ALID reference first). These are spelled out rather than
+#: imported, so a build that changes either fails here even if the constant it
+#: reads changed with it (#244 review, finding 2).
 _STORE_ZARR_FORMAT = 3
-_STORE_FORMAT_VERSION = "0.2.0"
+_STORE_FORMAT_VERSION = "0.2.1"
 
 
 @dataclass(frozen=True)
@@ -507,7 +508,7 @@ def test_every_built_array_matches_the_seam_policy(conformance_stores: list[_Bui
     assert np is not None
 
 
-def test_every_built_root_is_zarr_v3_sharded_under_a_0_2_0_manifest(
+def test_every_built_root_is_zarr_v3_sharded_under_a_0_2_1_manifest(
     conformance_stores: list[_BuiltStore],
 ) -> None:
     """Every build writes 0.2.0: v3 metadata only, no v2 file anywhere.
