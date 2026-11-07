@@ -9,9 +9,11 @@ in one place is what stops two artifacts disagreeing about what a field means.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import shutil
 import subprocess
+import tarfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -43,6 +45,80 @@ def tree_fingerprint(root: str | Path) -> str:
         digest.update(str(path.relative_to(package)).encode())
         digest.update(path.read_bytes())
     return digest.hexdigest()
+
+
+def _digest(files: list[tuple[tuple[str, ...], bytes]]) -> str:
+    digest = hashlib.sha256()
+    for parts, content in sorted(files, key=lambda item: item[0]):
+        digest.update("/".join(parts).encode())
+        digest.update(content)
+    return digest.hexdigest()
+
+
+def is_ancestor(ancestor: str, descendant: str, *, repo: str | Path | None = None) -> bool | None:
+    """Whether `ancestor` is in `descendant`'s history; `None` when git cannot say.
+
+    `git merge-base --is-ancestor` exits 0 for yes and 1 for no, and anything
+    else (an unknown revision, a shallow clone that lacks it) is not a "no".
+    """
+    found = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=repo,
+        capture_output=True,
+        check=False,
+    )
+    if found.returncode == 0:
+        return True
+    return False if found.returncode == 1 else None
+
+
+def export_revision(
+    revision: str, destination: Path, *, repo: str | Path | None = None
+) -> dict[str, Any]:
+    """Export `revision`'s `opengwasdb` with `git archive`, fingerprinted from the archive.
+
+    The fingerprint is computed from the archive's own bytes, in memory, before
+    anything is written, so it names the commit's code even if the exported
+    tree is later edited or a working tree holds uncommitted changes. The
+    exported tree is re-read and must agree with it.
+    """
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{revision}^{{commit}}"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if resolved.returncode != 0:
+        raise SystemExit(f"--control-revision {revision!r} is not a commit in this repository")
+    sha = resolved.stdout.strip()
+    archive = subprocess.run(
+        ["git", "archive", sha, "opengwasdb"], cwd=repo, capture_output=True, check=False
+    )
+    if archive.returncode != 0:
+        raise SystemExit(
+            f"git archive {sha} opengwasdb failed: {archive.stderr.decode(errors='replace')[-300:]}"
+        )
+    files: list[tuple[tuple[str, ...], bytes]] = []
+    with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as tar:
+        for member in tar.getmembers():
+            if member.isfile() and member.name.endswith(".py"):
+                extracted = tar.extractfile(member)
+                assert extracted is not None
+                files.append((tuple(member.name.split("/")[1:]), extracted.read()))
+        if destination.exists():
+            raise SystemExit(f"{destination}: already exists; refusing to overwrite")
+        destination.mkdir(parents=True)
+        tar.extractall(destination, filter="data")
+    fingerprint = _digest(files)
+    if tree_fingerprint(destination) != fingerprint:
+        raise SystemExit(f"{destination}: the exported tree does not match git archive {sha}")
+    return {
+        "module_path": destination,
+        "revision": sha,
+        "opengwasdb_fingerprint": fingerprint,
+        "fingerprint_basis": f"git archive {sha}",
+    }
 
 
 def package_fingerprint() -> tuple[str, str]:

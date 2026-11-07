@@ -82,11 +82,12 @@ from opengwasdb.variants.windows import (
 )
 from opengwasdb.version import __version__
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+#: The one logging layout a step's stderr is written in. A benchmark that parses
+#: those lines imports these rather than spelling the layout again.
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
 
 app = typer.Typer(no_args_is_help=True)
 
