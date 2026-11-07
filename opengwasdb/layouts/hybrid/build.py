@@ -70,7 +70,7 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import require_parallel
-from opengwasdb.encoding.timing import format_duration
+from opengwasdb.encoding.timing import format_duration, log_phase
 from opengwasdb.layouts import build_manifest
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
@@ -2102,33 +2102,35 @@ def _verify_eaf_orientation(
     The components are sampled separately and merged, so an Analysis present
     in both contributes up to twice the per-Analysis budget -- more evidence
     than asked for, never less."""
-    shared_hashes = site_hashes(prepared.partition.shared_sorted)
-    dense_survey = survey_eaf_spills(
-        prepared.spill_dir,
-        routed.id_by_col,
-        prepared.partition.shared_sorted,
-        shared_hashes,
-        row_map=prepared.dense_to_shared,
-        n_workers=options.n_workers,
-    )
-    overflow_survey = survey_eaf_spills(
-        prepared.spill_dir,
-        routed.id_by_col,
-        prepared.partition.shared_sorted,
-        shared_hashes,
-        suffix=".ovf",
-        index_key="variant_index",
-        n_workers=options.n_workers,
-    )
-    observations = dense_survey.observations
-    for analysis_id, off_panel in overflow_survey.observations.items():
-        observations[analysis_id].update(off_panel)
-    report = verify_eaf_orientation(
-        observations,
-        eaf_reference=options.eaf_reference,
-        eaf_reference_ancestry=options.eaf_reference_ancestry,
-        allow_unverified=options.allow_unverified_eaf,
-    )
+    with log_phase(log, "EAF survey and orientation verification"):
+        with log_phase(log, "EAF site hashes"):
+            shared_hashes = site_hashes(prepared.partition.shared_sorted)
+        dense_survey = survey_eaf_spills(
+            prepared.spill_dir,
+            routed.id_by_col,
+            prepared.partition.shared_sorted,
+            shared_hashes,
+            row_map=prepared.dense_to_shared,
+            n_workers=options.n_workers,
+        )
+        overflow_survey = survey_eaf_spills(
+            prepared.spill_dir,
+            routed.id_by_col,
+            prepared.partition.shared_sorted,
+            shared_hashes,
+            suffix=".ovf",
+            index_key="variant_index",
+            n_workers=options.n_workers,
+        )
+        observations = dense_survey.observations
+        for analysis_id, off_panel in overflow_survey.observations.items():
+            observations[analysis_id].update(off_panel)
+        report = verify_eaf_orientation(
+            observations,
+            eaf_reference=options.eaf_reference,
+            eaf_reference_ancestry=options.eaf_reference_ancestry,
+            allow_unverified=options.allow_unverified_eaf,
+        )
     return _EafEvidence(
         dense_survey=dense_survey,
         overflow_survey=overflow_survey,

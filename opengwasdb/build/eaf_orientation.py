@@ -64,6 +64,7 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb.encoding.timing import log_phase
 from opengwasdb.model.analyses import Analysis
 from opengwasdb.model.enums import EafOrientationMethod, EafOrientationOutcome
 from opengwasdb.variants.normalise import VariantNormalisationError, orient_to_canonical
@@ -518,6 +519,11 @@ def iter_eaf_reference(
     from reference MAF (issue #176), so neither grows its own drifting copy.
     """
     reference_path = Path(path)
+    log.info(
+        "EAF reference source: %s%s",
+        reference_path,
+        f" (ancestry {ancestry})" if reference_path.is_dir() else " (table)",
+    )
     if reference_path.is_dir():
         if not ancestry:
             raise EafReferenceError(
@@ -565,13 +571,14 @@ def load_eaf_reference(
     kept: dict[str, float] = {}
     n_variants = 0
     n_above_half = 0
-    for alid, eaf in rows:
-        n_variants += 1
-        digest.update(f"{alid}\t{eaf:.6f}\n".encode())
-        if eaf > 0.5:
-            n_above_half += 1
-        if alid in wanted:
-            kept[alid] = eaf
+    with log_phase(log, "EAF reference load"):
+        for alid, eaf in rows:
+            n_variants += 1
+            digest.update(f"{alid}\t{eaf:.6f}\n".encode())
+            if eaf > 0.5:
+                n_above_half += 1
+            if alid in wanted:
+                kept[alid] = eaf
     fraction_above_half = n_above_half / n_variants if n_variants else 0.0
 
     if n_variants == 0:
@@ -1016,14 +1023,15 @@ def verify_eaf_orientation(
         if eaf_reference is None
         else load_eaf_reference(eaf_reference, sites, ancestry=eaf_reference_ancestry)
     )
-    report = check_eaf_orientation(
-        observations,
-        reference=reference,
-        n_sites=len(sites),
-        min_overlap=min_overlap,
-        min_variance=min_variance,
-    )
-    enforce_eaf_orientation(report, allow_unverified=allow_unverified)
+    with log_phase(log, "EAF orientation verification"):
+        report = check_eaf_orientation(
+            observations,
+            reference=reference,
+            n_sites=len(sites),
+            min_overlap=min_overlap,
+            min_variance=min_variance,
+        )
+        enforce_eaf_orientation(report, allow_unverified=allow_unverified)
     return report
 
 
