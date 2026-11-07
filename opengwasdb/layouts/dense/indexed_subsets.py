@@ -98,6 +98,7 @@ from opengwasdb.encoding import (
     positions_flat,
     positions_rows_cols,
 )
+from opengwasdb.encoding.timing import log_phase, log_progress, progress_every
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
@@ -112,6 +113,7 @@ from opengwasdb.store.open import (
     zarr_format_for_version,
 )
 from opengwasdb.variants import VariantAxis, parse_canonical_alid
+from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.version import installed_version
 
 log = logging.getLogger(__name__)
@@ -590,8 +592,11 @@ def _canonical_alid_or_none(candidate: str) -> str | None:
     parsed = parse_canonical_alid(candidate)
     if parsed is None:
         return None
-    effect, other = sorted((parsed.effect_allele, parsed.other_allele))
-    canonical = f"{parsed.chromosome}:{parsed.position}:{effect}:{other}"
+    # An indel's order is its meaning (its reference first, ADR 0079), so either
+    # order is canonical; alleles of one length must be sorted.
+    canonical = canonical_alid(
+        parsed.chromosome, parsed.position, parsed.effect_allele, parsed.other_allele
+    )
     return canonical if canonical == candidate else None
 
 
@@ -2482,7 +2487,11 @@ def validate_indexed_subsets(
     # nothing about another, so it must not stop that one's value comparison.
     for entry in _namespace_entries(context.namespace_dir):
         found: list[str] = []
-        _validate_namespace_entry(context, namespace, entry, found, exhaustive=exhaustive)
+        # The rule's cost is dominated by the value comparison, which is minutes of
+        # decoding on a genome-wide release; the entry's phase says which subset that
+        # was (issue #308).
+        with log_phase(log, f"Indexed Variant Subset {entry!r}"):
+            _validate_namespace_entry(context, namespace, entry, found, exhaustive=exhaustive)
         errors.extend(found)
 
 
@@ -3254,6 +3263,10 @@ def _compare_indexed_values(
     reference EAF must equal the release's own; and missingness must agree
     within the index before the values are compared.  The build's publication
     gate uses the bounded sample in `_compare_indexed_sample` instead.
+
+    Each comparison logs a progress line with an ETA: `subsets.indexed` spent 11,030 s
+    of OGS-00009's 16,974 s validation here, so its bands are what an operator wants to
+    watch (issue #308).
     """
     context = _open_decode_context(name, group, root, encoding, errors)
     if context is None:
@@ -3266,16 +3279,23 @@ def _compare_indexed_values(
     # on the 20k probe (measured) and was no faster -- the decode and compare,
     # not the primary re-read, is the work.
     write_unit = _physical_write_unit(group["z"])
-    for start, stop in _output_write_bands(len(subset), write_unit):
-        for a0, a1 in _analysis_tiles(
-            n_analyses, write_unit, EXHAUSTIVE_VALIDATION_BAND_CELLS, 1
-        ):
-            message = _compare_indexed_band(
-                name, context, group, encoding, subset, start, stop, a0, a1
-            )
-            if message is not None:
-                errors.append(message)
-                return
+    bands = _output_write_bands(len(subset), write_unit)
+    tiles = _analysis_tiles(n_analyses, write_unit, EXHAUSTIVE_VALIDATION_BAND_CELLS, 1)
+    total = len(bands) * len(tiles)
+    started = time.monotonic()
+    done = 0
+    label = f"Indexed Variant Subset {name!r} comparison"
+    with log_phase(log, label):
+        for start, stop in bands:
+            for a0, a1 in tiles:
+                message = _compare_indexed_band(
+                    name, context, group, encoding, subset, start, stop, a0, a1
+                )
+                if message is not None:
+                    errors.append(message)
+                    return
+                done += 1
+                log_progress(log, label, done, total, started, every=progress_every(total))
 
 
 def _compare_indexed_band(

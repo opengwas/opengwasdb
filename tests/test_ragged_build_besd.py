@@ -239,7 +239,7 @@ def test_top_hit_z_values_match_csr(tmp_path):
     whole = CsrReader.open(out, requires_mask=False).inspect(Cells.analyses(0, csr.n_analyses))
     offsets, vi_all, z_all = csr.offsets, whole.variant_index, whole.z
 
-    for vi, ai, z_hit in zip(vis, ais, zs):
+    for vi, ai, z_hit in zip(vis, ais, zs, strict=True):
         start, end = int(offsets[ai]), int(offsets[ai + 1])
         pos = start + int(np.searchsorted(vi_all[start:end], vi))
         assert pos < end and int(vi_all[pos]) == vi
@@ -780,7 +780,7 @@ def test_reverse_strand_hg19_snp_is_stored_as_the_resolver_orients_it(tmp_path):
     expected_z: dict[str, float] = {}
     for snp in (_REVERSE_SNP, _FORWARD_SNP):
         orientation = oriented_variant(
-            resolver, snp["chr"], str(snp["bp"]), snp["a1"], snp["a2"]
+            resolver, snp["chr"], str(snp["bp"]), snp["a1"], snp["a2"], other_is_reference=False
         )
         assert orientation is not None, "the fixture row must lift to be compared"
         assert orientation.variant.alid in stored, (

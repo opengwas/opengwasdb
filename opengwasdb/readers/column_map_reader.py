@@ -57,6 +57,7 @@ from opengwasdb.readers.tabular import (
     DEFAULT_CHUNK_ROWS,
     MetricsChunk,
     TabularMetricsRow,
+    declared_reference,
     open_binary,
     stream_projected_variants,
 )
@@ -490,8 +491,13 @@ class ColumnMapReader:
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         separator = self.column_map.conventions.rsid_separator
-        columns = replace(VARIANT_COLUMNS, alias_separator=separator)
-        yield from stream_projected_variants(self._source(), columns)
+        source = self._source()
+        columns = replace(
+            VARIANT_COLUMNS,
+            alias_separator=separator,
+            reference=declared_reference(source.reference),
+        )
+        yield from stream_projected_variants(source, columns)
 
     def stream_metrics(self) -> Iterator[TabularMetricsRow]:
         yield from self._delegate.stream_metrics()

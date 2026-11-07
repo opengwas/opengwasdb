@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.model.enums import PrimaryStorageLayout
+from opengwasdb.store.open import indels_reference_first
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Skip, Target
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.variants import (
@@ -48,15 +49,46 @@ class TableBlock:
     previous: VariantRecord | None
 
 
+def _block_limits(n_rows: int | None) -> Iterator[tuple[int, int]]:
+    """Every block of a table, by row: the one place the size of one is set.
+
+    `n_rows` is how long the table claims to be, or None while the stream is the only
+    thing that knows. The count passes the offsets sidecar's length; the read passes
+    None, so a sidecar that is wrong -- or unreadable -- moves no block boundary and
+    changes nothing about what the folds measure (issue #308).
+    """
+    start = 0
+    while n_rows is None or start < n_rows:
+        stop = start + _BLOCK_ROWS if n_rows is None else min(start + _BLOCK_ROWS, n_rows)
+        yield start, stop
+        start = stop
+
+
+def _n_blocks(target: Target) -> int:
+    """How many blocks `_blocks` reads for a table as long as its offsets sidecar.
+
+    The count is the sidecar's, because how long the stream is is what the read is
+    finding out: a table that disagrees with the sidecar -- which
+    `variant_table.rows` reports -- runs past this count, and its progress line then
+    never reaches `n/N`. The alternative, counting rows first, would read the table
+    twice (issue #308).
+    """
+    return sum(1 for _ in _block_limits(target.variant_axis.n_variants))
+
+
 def _blocks(target: Target) -> Iterator[TableBlock]:
+    """Consecutive rows of the table, `_block_limits` at a time, until the stream ends."""
+    limits = _block_limits(None)
+    limit = next(limits)
     previous: VariantRecord | None = None
     start = 0
     records: list[VariantRecord] = []
     for record in iter_variant_records(variant_table_path(target.store.path)):
         records.append(record)
-        if len(records) == _BLOCK_ROWS:
+        if start + len(records) >= limit[1]:
             yield TableBlock(start, records, previous)
             previous, start, records = records[-1], start + len(records), []
+            limit = next(limits)
     if records:
         yield TableBlock(start, records, previous)
 
@@ -67,7 +99,7 @@ def _read_failure(target: Target, exc: Exception) -> str:
     return f"validation failed: {exc}"
 
 
-VARIANT_TABLE: Scan[TableBlock] = Scan("variant_table", _blocks, _read_failure)
+VARIANT_TABLE: Scan[TableBlock] = Scan("variant_table", _blocks, _read_failure, _n_blocks)
 
 
 def _rows(_target: Target, block: TableBlock) -> int:
@@ -252,6 +284,65 @@ def _judge_representatives(target: Target, picked: _Picked) -> Iterator[str]:
             return
 
 
+@dataclass(frozen=True)
+class _IndelOrder:
+    """How many indel rows spell their ALID against the table's own orientation,
+    and the first of them."""
+
+    n_rows: int = 0
+    first: str = ""
+
+    def __add__(self, other: _IndelOrder) -> _IndelOrder:
+        return _IndelOrder(self.n_rows + other.n_rows, self.first or other.first)
+
+
+def _indel_order(_target: Target, block: TableBlock) -> _IndelOrder:
+    """Each indel row whose ALID order the table's other columns contradict.
+
+    An indel's ALID spells its reference allele first (ADR 0079), and the table
+    records that order twice more: the row's `effect_allele` and
+    `other_allele`, which a statistic is signed for, and, for a lifted variant,
+    its `source_alid`, the same variant spelt on the source's assembly, where
+    a lift complements an allele but never changes its length.
+    """
+    n_rows, first = 0, ""
+    for offset, record in enumerate(block.records):
+        _chrom, _pos, a1, a2 = record.alid.split(":")
+        if len(a1) == len(a2):
+            continue
+        fault = _order_fault(record, a1, a2)
+        if fault:
+            n_rows += 1
+            first = first or f"row {block.start + offset}: {fault}"
+    return _IndelOrder(n_rows, first)
+
+
+def _order_fault(record: VariantRecord, a1: str, a2: str) -> str:
+    """Why one indel row's ALID order contradicts the row, or ``""``."""
+    alid, effect, other = record.alid, record.effect_allele, record.other_allele
+    if (a1, a2) != (effect, other):
+        return f"ALID {alid} but effect_allele {effect!r} and other_allele {other!r}"
+    source = (record.source_alid or "").split(":")
+    if len(source) == 4 and len(source[2]) != len(a1):
+        return f"ALID {alid} but source_alid {record.source_alid}, the other allele first"
+    return ""
+
+
+def _judge_indel_order(_target: Target, found: _IndelOrder) -> Iterator[str]:
+    if found.n_rows:
+        yield (
+            f"{found.n_rows} indel row(s) of variants.tsv.gz spell their ALID in an order "
+            f"the table's own orientation contradicts ({found.first}): an indel's ALID "
+            "spells its reference allele first (ADR 0079), and a statistic is signed for "
+            "its effect_allele"
+        )
+
+
+def _spells_indels_reference_first(target: Target) -> bool:
+    """A Store from format 0.2.1 on; an earlier one sorts an indel's alleles."""
+    return indels_reference_first(target.store.manifest.format_version)
+
+
 def variant_aliases(target: Target) -> Iterator[str]:
     """Every alias names a variant the table holds.
 
@@ -316,6 +407,16 @@ RULES: tuple[Rule, ...] = (
         zero=_Picked(),
         measure=_pick,
         judge=_judge_representatives,
+    ),
+    Fold(
+        name="variant_table.indel_order",
+        kinds=Kind.RELEASE,
+        after=(REQUIRED,),
+        when=_spells_indels_reference_first,
+        scan=VARIANT_TABLE,
+        zero=_IndelOrder(),
+        measure=_indel_order,
+        judge=_judge_indel_order,
     ),
     Check(
         name="sqlite.variant_aliases",

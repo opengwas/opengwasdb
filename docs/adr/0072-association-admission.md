@@ -1,5 +1,17 @@
 # Association Admission: one rule set, one gate, one record
 
+> **Amended by [ADR 0079](0079-indel-alids-spell-the-reference-allele-first.md)**
+> (issue #381). An indel's ALID spells its reference allele first, so an
+> insertion and a deletion at one position are two variants, and the
+> reversed-indel rule below can no longer fire: no build drops a row as
+> `duplicate_reversed_indel`, which stays readable in a record written before.
+> An indel whose source declares no reference is a third malformed identity,
+> dropped and logged as `indel_reference_undeclared` after `allele_invalid`, or,
+> for GWAS-SSF, under a reason naming its layout (`indel_ssf_unharmonised`,
+> `indel_ssf_hm_columns`, `indel_ssf_hm_code`); a record also counts the indels
+> a GWAS-SSF harmoniser code kept (`indel_rows_kept_by_hm_code`). The rule set's
+> version is `admission/13`.
+
 Issue [#357](https://github.com/opengwas/opengwasdb/issues/357), part of epic
 #58. Records which of an Analysis's source rows a Store admits, where that is
 decided, and where what it dropped is written down. Amends ADR 0054, whose one
@@ -86,6 +98,10 @@ name the decisions issue #357 took on the rules that differed.
 |---|---|---|---|
 | `chromosome_missing` | its chromosome is an empty cell or a missing-value token (`.`, `NA`, `NaN`, `None`) | yes | #365 |
 | `allele_invalid` | an allele, upper-cased (ADR 0075), is empty or holds a character other than A, C, G or T | yes | #365 |
+| `indel_reference_undeclared` | its two alleles differ in length and its source declares neither the reference, so no ALID can spell it reference first (ADR 0079) | yes | #381 |
+| `indel_ssf_unharmonised` | the same, in a GWAS-SSF file with no harmoniser column | yes | #381 |
+| `indel_ssf_hm_columns` | the same, in a GWAS-SSF file that keeps its harmonised alleles in `hm_*` columns, none of whose indels is placed | yes | #381 |
+| `indel_ssf_hm_code` | the same, in a GWAS-SSF file whose main columns are harmonised, on a row whose harmoniser code is neither 10 nor 11 | yes | #381 |
 | `se_unusable` | its reported SE is missing, not positive or not finite | yes | slice 4 (Ragged), D3 (every reader) |
 | `effect_missing` | it has a usable SE but no effect | yes | slice 5 |
 | `z_nonfinite` | its z is infinite, beside a usable SE | yes | D4 |
@@ -93,7 +109,7 @@ name the decisions issue #357 took on the rules that differed.
 | `maf_missing` | a `FILTERED` MAF policy finds no usable frequency | no | ADR 0054; every builder since D2 |
 | `maf_below_threshold` | MAF is below a `FILTERED` threshold | no | ADR 0054; every builder since D2 |
 | `duplicate_collapsed` | it agrees on z and SE with an earlier row for its (variant, Analysis), whose association it is | no | D5 |
-| `duplicate_reversed_indel` | it is an indel whose declared reference allele its ALID spells second, at a (variant, Analysis) whose distinct rows, once agreeing copies collapse, are this one and one spelling it first, which is kept | yes | D5, reversed indels |
+| `duplicate_reversed_indel` | it is an indel whose declared reference allele its ALID spells second, at a (variant, Analysis) whose distinct rows, once agreeing copies collapse, are this one and one spelling it first, which is kept; no longer fires since ADR 0079 | yes | D5, reversed indels |
 | `duplicate_conflicting` | the rows for its (variant, Analysis) disagree on z or SE: all are dropped | yes | D5 |
 | `off_axis` | no axis of the Store holds its variant, and nothing will place it later | yes | D6 |
 | `lift_unmapped` | its source is lifted onto the Store's assembly and the chain places its site nowhere | yes | #386 |

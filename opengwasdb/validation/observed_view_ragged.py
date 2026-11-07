@@ -49,7 +49,6 @@ from opengwasdb.associations import Cells, CsrReader, Inspection, State, Tally
 from opengwasdb.completion.ld_panel import (
     LDBlock,
     LdPanelNotFoundError,
-    canonical_panel_alid,
     check_panel_has_chromosomes,
 )
 from opengwasdb.completion.regions import (
@@ -385,7 +384,7 @@ class _RegionRows:
         parts = []
         for block in blocks:
             if block.block_id not in self._by_block:
-                alids = [a for a in map(canonical_panel_alid, block.snp_ids) if a is not None]
+                alids = [a for a in block.alids if a is not None]
                 self._by_block[block.block_id] = self._target_rows.rows(alids)
             parts.append(self._by_block[block.block_id])
         return np.unique(np.concatenate(parts)) if parts else np.empty(0, dtype=np.int64)
