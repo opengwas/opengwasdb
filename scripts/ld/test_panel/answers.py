@@ -63,7 +63,7 @@ def _covariates(params: Params, panel: Panel, g: np.ndarray,
     af = g[ok].mean(axis=1) / 2
     common = ok[np.minimum(af, 1 - af) >= params.common_maf]
     w = pc_check.windows(np.array(panel.chrom)[common], panel.pos[common], g[common])
-    check = pc_check.check(w, pcs, k_max=max(params.ks))
+    check = pc_check.check(w, pcs, k_target=max(params.ks))
     names = check["covariates"]
     assert isinstance(names, list)
     return check, pcs[:, [int(str(n)[2:]) - 1 for n in names]]
