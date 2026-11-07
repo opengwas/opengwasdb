@@ -1061,7 +1061,15 @@ class StoreCodec:
             residual = np.log(v) - prediction
         out, exceptional = se_residual_codes(v, residual, self.encoding.se.step)
         if exact is not None:
-            exceptional |= self._not_exact(v, out, exceptional, prediction, exact)
+            # `decode_se` narrows the frequency to `float32` before predicting, so
+            # the exact rule predicts from the value it will read (issue #301).
+            # Prediction from the EAF as given would call a cell drifted that the
+            # reader decodes exactly, holding a needless exception. The codes above
+            # keep the prediction from the EAF as given, so no build's bytes move.
+            readable = self._se_prediction(
+                np.asarray(eaf, dtype=np.float32), analysis_index, coefficients
+            )
+            exceptional |= self._not_exact(v, out, exceptional, readable, exact)
             out[exceptional] = SE_EXCEPTION
         if np.any(exceptional):
             if exceptions is None:
