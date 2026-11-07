@@ -14,10 +14,20 @@ made before are kept.
 
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Callable, Collection, Iterable, Sequence
-from functools import partial
+from functools import cache, partial
 from typing import Any
 
+from opengwasdb.encoding.timing import (
+    PhaseTimer,
+    format_duration,
+    log_phase,
+    log_progress,
+    log_progress_unknown,
+    progress_every,
+)
 from opengwasdb.validation.rule import (
     Finding,
     Fold,
@@ -30,8 +40,32 @@ from opengwasdb.validation.rule import (
     ValidationResult,
 )
 
+log = logging.getLogger(__name__)
+
 #: How a rule ended on one target, as the rules that run after it see it.
 _PASSED, _FAILED, _SKIPPED = "passed", "failed", "skipped"
+
+@cache
+def untimed_rules() -> frozenset[str]:
+    """The rules with nothing to time here: `validate`'s manifest rule, whose Store is
+    opened from its manifest before `evaluate` runs (issue #308).
+
+    Read from the rule's own name constant rather than copied, so a rename cannot leave
+    a stale exclusion behind; imported here because `validate` imports this module.
+    """
+    from opengwasdb.validation.validate import MANIFEST_RULE
+
+    return frozenset({MANIFEST_RULE})
+
+
+def _rule_label(rule: Rule, target: Target) -> str:
+    """One rule judging one target, named the same way in the log and the report."""
+    return f"{rule.name} on {target.label}"
+
+
+def _scan_label(scan: Scan[Any], target: Target) -> str:
+    """One pass of a scan, named the same way in the log and the report."""
+    return f"scan {scan.name} on {target.label}"
 
 
 def evaluate(
@@ -39,15 +73,26 @@ def evaluate(
     targets: Sequence[Target],
     selection: Collection[str] | None = None,
 ) -> ValidationResult:
-    """Run `rules` over `targets` in registration order; report findings in that order."""
+    """Run `rules` over `targets` in registration order; report findings in that order.
+
+    Every rule that runs logs its start and its elapsed time, as does every pass of a
+    scan, and the run closes with the wall time each accounted for (issue #308). A
+    validation of a full-size Store Release runs for hours; one that logged nothing
+    until it finished could not say which rule was slow. The timings go to the log,
+    never to the report a caller prints.
+    """
     run = _Run(rules, targets, selected(rules, selection))
+    log.info("Validation: %d rules over %d targets", len(run.chosen), len(targets))
     try:
-        for rule in rules:
-            if rule.name in run.chosen:
-                run.judge(rule)
+        with log_phase(log, "Validation"):
+            for rule in rules:
+                if rule.name in run.chosen:
+                    run.judge(rule)
     finally:
         for target in targets:
             target.close()
+        # A failed or interrupted run says where it spent the time before it stopped.
+        log.info("Validation phase timings:\n%s", run.timer.format_report())
     return run.result()
 
 
@@ -85,6 +130,8 @@ class _Run:
         self.skipped: dict[tuple[str, int], list[Finding]] = {}
         #: Each scan's folds, by name: a prerequisite among them is decided by the pass.
         self.on_scan: dict[str, set[str]] = {}
+        #: The wall time each rule and each scan pass accounted for.
+        self.timer = PhaseTimer()
         for rule in rules:
             if isinstance(rule, Fold):
                 self.on_scan.setdefault(rule.scan.name, set()).add(rule.name)
@@ -102,10 +149,28 @@ class _Run:
         for i, target in enumerate(self.targets):
             if self.decided(rule, i) or not rule.judges(target):
                 continue
-            if isinstance(rule, Fold):
-                self.scan(rule.scan, i, target)
-            elif self.ready(rule, i, target) and self.applies(rule, i, target):
-                self.settle(rule, i, _contained(rule, target, partial(rule.findings, target)))
+            self.judge_one(rule, i, target)
+
+    def judge_one(self, rule: Rule, i: int, target: Target) -> None:
+        """`rule` on target `i`, timed only if it runs.
+
+        A fold costs what its shared read costs, and that read is one phase for every
+        fold on it: charging the wait to the first fold would attribute another rule's
+        work to it (ADR 0074). A rule the target does not call for, or one a failed
+        prerequisite stops, is not timed at all, so the report cannot claim it ran;
+        `skip` logs the one line that says it did not (issue #308).
+        """
+        if isinstance(rule, Fold):
+            self.scan(rule.scan, i, target)
+        elif self.ready(rule, i, target) and self.applies(rule, i, target):
+            timed = rule.name not in untimed_rules()
+            with _Phase(self.timer, _rule_label(rule, target), timed=timed) as phase:
+                outcome = _contained(rule, target, partial(rule.findings, target))
+                if isinstance(outcome, Skip):
+                    # It looked and found nothing to judge, so it is not charged: a row
+                    # for it would say a rule was judged that was not (issue #308).
+                    phase.drop()
+                self.settle(rule, i, outcome)
 
     def decided(self, rule: Rule, i: int) -> bool:
         return (rule.name, i) in self.states or (rule.name, i) in self.declined
@@ -163,7 +228,8 @@ class _Run:
 
         One record per rule and target: the reasons are named in its message, in the
         order they were recorded, and kept apart in `reasons` so `skipped` reads them
-        one by one.
+        one by one. The log gets one line for it and no phase: a rule that did not run
+        has no time to account for (issue #308).
         """
         self.states[(name, i)] = _SKIPPED
         existing = self.skipped.get((name, i))
@@ -175,6 +241,7 @@ class _Run:
             name, Severity.SKIP, ", ".join(reasons), self.targets[i].label, tuple(reasons)
         )
         self.skipped[(name, i)] = [record]
+        log.info("%s on %s: skipped, %s", name, self.targets[i].label, record.message)
 
     def scan(self, scan: Scan[Any], i: int, target: Target) -> None:
         """Read `scan` once on target `i` for every fold on it that can run there."""
@@ -186,9 +253,15 @@ class _Run:
         if not ready:
             return  # nothing to measure, so nothing to read
         done = _Pass(scan, target, ready)
+        label = _scan_label(scan, target)
         try:
-            done.drive()
-            self.conclude(done, i, target)
+            with log_phase(log, label):
+                with self.timer.phase(label):
+                    # The folds share the one read, so they are charged to it, not
+                    # timed apart: naming them says which rules the phase serves.
+                    log.info("%s: %s", label, ", ".join(fold.name for fold in ready))
+                    done.drive()
+                    self.conclude(done, i, target)
         finally:  # an interruption still ends the pass, and what it held goes with it
             target.release(scan.name)
 
@@ -260,16 +333,60 @@ class _Pass:
         return [fold for fold in self.folds if fold.name not in stopped]
 
     def drive(self) -> None:
+        started = time.monotonic()
+        label = _scan_label(self.scan, self.target)
+        # Counting is not the read: outside the read's `try`, a count that fails leaves
+        # every fold to meet the corruption where the blocks do, exactly as a pass with
+        # no progress at all would. Inside it, the count's failure would be reported as
+        # the read's and block the folds that would have judged (issue #308).
+        total = self.counted(label)
+        overran = False
         try:
-            for block in self.scan.blocks(self.target):
+            for done, block in enumerate(self.scan.blocks(self.target), start=1):
                 for fold in self.measuring():
                     self.measure(fold, block)
+                overran = self.report_progress(label, done, total, started, overran)
         except Exception as exc:  # the read itself failed, so no fold saw all of it
             measuring = self.measuring()
             if measuring:
                 self.report(measuring[0], exc)
                 for fold in measuring[1:]:
                     self.blocked[fold.name] = measuring[0].name
+
+    def counted(self, label: str) -> int | None:
+        """How many blocks the scan expects, or None where the count cannot be made.
+
+        The count reads what the read may never reach -- a Store Variant Table's offsets
+        sidecar and its tabix index, say -- and a corrupted one must not turn into a
+        failed read, so the failure is logged and the pass goes on without a total.
+        """
+        if self.scan.total is None:
+            return None
+        try:
+            return self.scan.total(self.target)
+        except Exception as exc:  # the read meets it, or does not, as it would alone
+            log.info("%s: no block count (%s), so progress without an ETA", label, exc)
+            return None
+
+    def report_progress(
+        self, label: str, done: int, total: int | None, started: float, overran: bool
+    ) -> bool:
+        """One progress line for this block, and the first overrun's warning.
+
+        A count taken from a sidecar is what the read expects, not what it will find: a
+        table longer than its sidecar runs past it, and the line keeps saying `k/N` so
+        the disagreement shows before the rule that reports it.
+        """
+        if total is None:
+            log_progress_unknown(log, label, done, started)
+            return overran
+        if done > total and not overran:
+            log.warning(
+                "%s: %d blocks, %d more than its sidecar counted", label, done, done - total
+            )
+            overran = True
+        log_progress(log, label, done, total, started, every=progress_every(total))
+        return overran
 
     def measure(self, fold: Fold[Any, Any], block: Any) -> None:
         """Add one block's measure to `fold`'s total; a fold that raises stops there."""
@@ -301,6 +418,32 @@ class _Pass:
     def report(self, fold: Fold[Any, Any], exc: Exception) -> None:
         message = self.scan.failure(self.target, exc)
         self.failures[fold.name] = fold.finding(self.target, message, Severity.ERROR)
+
+
+class _Phase:
+    """One rule's timed work: its start line now, its elapsed line and report row at the
+    end -- unless the rule reports that it judged nothing (issue #308)."""
+
+    def __init__(self, timer: PhaseTimer, label: str, *, timed: bool = True) -> None:
+        self.timer, self.label, self.timed = timer, label, timed
+        self.started = time.monotonic()
+        self.dropped = False
+
+    def __enter__(self) -> _Phase:
+        if self.timed:
+            log.info("%s: start", self.label)
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        if not self.timed or self.dropped:
+            return
+        elapsed = time.monotonic() - self.started
+        self.timer.record(self.label, elapsed)
+        log.info("%s: done in %s", self.label, format_duration(elapsed))
+
+    def drop(self) -> None:
+        """The rule judged nothing: no elapsed line and no row in the report."""
+        self.dropped = True
 
 
 def _failure(rule: Rule, target: Target, exc: Exception) -> Finding:
