@@ -17,6 +17,7 @@ import zarr
 
 from opengwasdb.build import ordered_pool
 from opengwasdb.encoding import se as se_module
+from opengwasdb.encoding.banding import BYTES_PER_CELL
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
 from opengwasdb.encoding.timing import PhaseTimer
@@ -289,13 +290,26 @@ def test_gather_in_row_chunks_matches_across_workers(tmp_path) -> None:
     np.testing.assert_array_equal(parallel, serial)
 
 
-def test_rebuilt_top_hit_index_matches_across_workers(tmp_path) -> None:
+def test_rebuilt_top_hit_index_matches_across_workers(tmp_path, caplog) -> None:
     serial_store = _small_store(tmp_path, "serial-hits")
     parallel_store = _small_store(tmp_path, "parallel-hits")
     thresholds = (1e-4,)
 
-    build_top_hit_indexes(serial_store, thresholds=thresholds, encoding=_PLAIN, n_workers=1)
-    build_top_hit_indexes(parallel_store, thresholds=thresholds, encoding=_PLAIN, n_workers=3)
+    # The fixture is 100 variants in a 30-row band, so four bands: a scan whose
+    # bands were folded out of order could still match in one.
+    budget = 30 * BYTES_PER_CELL * 3
+    with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits"):
+        build_top_hit_indexes(
+            serial_store, thresholds=thresholds, encoding=_PLAIN, n_workers=1,
+            working_bytes=budget,
+        )
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("30 rows per band" in message for message in messages), messages
+    assert any(message.startswith("Top-hit scan: 4/4") for message in messages), messages
+    build_top_hit_indexes(
+        parallel_store, thresholds=thresholds, encoding=_PLAIN, n_workers=3,
+        working_bytes=budget,
+    )
 
     serial = _tier_arrays(serial_store)
     parallel = _tier_arrays(parallel_store)

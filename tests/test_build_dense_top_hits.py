@@ -1,11 +1,11 @@
-"""`build-dense-top-hits` from the command line: its `--n-workers` process pool,
-and its refusal of a release it cannot write an index into (issue #313).
+"""`build-dense-top-hits`: its `--n-workers` pool, its scan's row band, and its
+refusal of a release it cannot write an index into (issue #313).
 
-The index is the same whichever worker count builds it, and a 0.1.0 release --
-Zarr v2, so nothing the v3 index's arrays can be added to -- is refused before
-anything is written. A 0.2.0 release stays indexable: what decides is the
-release's on-disk layout, not its `format_version`'s distance from
-`CURRENT_FORMAT_VERSION` (ADR 0057).
+The index is the same whichever worker count builds it and whatever band the
+scan reads. A 0.1.0 release -- Zarr v2, so nothing the v3 index's arrays can be
+added to -- is refused before anything is queued. A 0.2.0 release stays
+indexable: what decides is the release's on-disk layout, not its
+`format_version`'s distance from `CURRENT_FORMAT_VERSION` (ADR 0057).
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
@@ -27,14 +28,15 @@ from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
 from opengwasdb.encoding import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+from opengwasdb.encoding.banding import BYTES_PER_CELL, WORKING_BYTES, band_rows
+from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.model.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.top_hits import TOP_HIT_TIER_ARRAYS
 
-#: `build_top_hit_indexes` scans the `z` plane in bands of `max(z.chunks[0],
-#: 250_000)` variants, so this fixture's chunk size is also its band size, and
-#: 600,000 variants make three bands.
-_BAND_ROWS = 250_000
+#: The `z` row chunk. 250,000 is also the row cap the band keeps for a narrow
+#: release, so this fixture's band is its chunk and 600,000 variants make three.
+_ROW_CHUNK = 250_000
 _N_VARIANTS = 600_000
 _N_ANALYSES = 2
 
@@ -48,6 +50,8 @@ _HITS = [
     (400_000, 0, 4.0),  # band 1
     (550_000, 0, 5.0),  # band 2
 ]
+
+_ROWS_PER_BAND = re.compile(r"(\d+) rows per band")
 
 #: The six associations of `_SOURCE_ROWS`, |z| 8, 6, 11, 7, 5 and 4; 5.45, 4.56
 #: and 3.48 are the 5e-8, 5e-6 and 5e-4 |z| cutoffs, so every tier is larger
@@ -89,8 +93,16 @@ def _copy(source: Path, destination: Path) -> Path:
     return destination
 
 
-def _banded_store(tmp_path: Path, name: str) -> Path:
-    """A Dense release whose `z` plane spans three scan bands, hits detached."""
+def _store(
+    tmp_path: Path,
+    name: str,
+    *,
+    n_analyses: int = _N_ANALYSES,
+    n_variants: int = _N_VARIANTS,
+    row_chunk: int = _ROW_CHUNK,
+    with_hits: bool = True,
+) -> Path:
+    """A Dense release with a manifest, a `z`/`se`/`eaf` plane and some hits."""
     store = tmp_path / name
     store.mkdir()
     (store / "manifest.json").write_text(
@@ -114,20 +126,39 @@ def _banded_store(tmp_path: Path, name: str) -> Path:
     )
     root = zarr.open_group(str(store / "data.zarr"), mode="w", zarr_format=3)
     rng = np.random.default_rng(20261107)
-    z = rng.normal(0.0, 0.5, (_N_VARIANTS, _N_ANALYSES)).astype(np.float16)
-    for row, column, value in _HITS:
-        z[row, column] = np.float16(value)
-    chunks = (_BAND_ROWS, _N_ANALYSES)
+    z = rng.normal(0.0, 0.5, (n_variants, n_analyses)).astype(np.float16)
+    if with_hits:
+        for row, column, value in _HITS:
+            if row < n_variants:
+                z[row, column % n_analyses] = np.float16(value)
+    chunks = (row_chunk, n_analyses)
     root.create_array("z", data=z, chunks=chunks)
     root.create_array(
-        "se", data=np.full((_N_VARIANTS, _N_ANALYSES), 0.1, dtype=np.float16), chunks=chunks
+        "se", data=np.full((n_variants, n_analyses), 0.1, dtype=np.float16), chunks=chunks
     )
     root.create_array(
         "eaf",
-        data=rng.uniform(0.05, 0.95, (_N_VARIANTS, _N_ANALYSES)).astype(np.float32),
+        data=rng.uniform(0.05, 0.95, (n_variants, n_analyses)).astype(np.float32),
         chunks=chunks,
     )
     return store
+
+
+def _logged_band(
+    caplog: pytest.LogCaptureFixture, store: Path, working_bytes: int | None = None
+) -> int:
+    """The rows per band the scan logged, for the budget it was given."""
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits"):
+        if working_bytes is None:
+            build_top_hit_indexes(store)
+        else:
+            build_top_hit_indexes(store, working_bytes=working_bytes)
+    messages = [record.getMessage() for record in caplog.records]
+    bands = [_ROWS_PER_BAND.search(message) for message in messages if "rows per band" in message]
+    assert len(bands) == 1, messages
+    assert bands[0] is not None, messages
+    return int(bands[0].group(1))
 
 
 def _tier_arrays(store: Path) -> dict[str, np.ndarray]:
@@ -162,20 +193,28 @@ def _run(*arguments: str):
     return CliRunner().invoke(app, ["build-dense-top-hits", *arguments])
 
 
-def test_the_index_is_identical_at_one_and_three_workers(tmp_path: Path) -> None:
-    source = _banded_store(tmp_path, "source")
+def test_the_index_is_identical_at_one_and_three_workers(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    source = _store(tmp_path, "source")
     serial = _copy(source, tmp_path / "serial")
     parallel = _copy(source, tmp_path / "parallel")
 
     # The fixture is meaningful only if the scan has several bands with hits in
     # every one: a single band would make the worker count immaterial.
-    assert _N_VARIANTS > 2 * _BAND_ROWS
-    assert {row // _BAND_ROWS for row, _, _ in _HITS} == {0, 1, 2}
+    assert _N_VARIANTS > 2 * _ROW_CHUNK
+    assert {row // _ROW_CHUNK for row, _, _ in _HITS} == {0, 1, 2}
 
-    one = _run(str(serial), "--n-workers", "1")
-    assert one.exit_code == 0, one.output
-    three = _run(str(parallel), "--n-workers", "3")
-    assert three.exit_code == 0, three.output
+    with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits"):
+        one = _run(str(serial), "--n-workers", "1")
+        assert one.exit_code == 0, one.output
+        three = _run(str(parallel), "--n-workers", "3")
+        assert three.exit_code == 0, three.output
+    scanned = [
+        record.getMessage() for record in caplog.records
+        if record.getMessage().startswith("Top-hit scan: ")
+    ]
+    assert any("scan: 3/3" in message for message in scanned), scanned
 
     serial_arrays = _tier_arrays(serial)
     parallel_arrays = _tier_arrays(parallel)
@@ -193,13 +232,62 @@ def test_the_index_is_identical_at_one_and_three_workers(tmp_path: Path) -> None
 def test_the_scan_log_names_the_requested_worker_count(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    store = _banded_store(tmp_path, "logged")
+    store = _store(tmp_path, "logged")
     with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits"):
         result = _run(str(store), "--n-workers", "3")
 
     assert result.exit_code == 0, result.output
     messages = [record.getMessage() for record in caplog.records]
-    assert f"Top-hit index: scanning {_N_VARIANTS} variants (n_workers=3)" in messages
+    assert any(
+        message.startswith(f"Top-hit index: scanning {_N_VARIANTS} variants")
+        and "n_workers=3" in message
+        and f"{_ROW_CHUNK} rows per band" in message
+        and f"{WORKING_BYTES}-byte working-set budget" in message
+        for message in messages
+    ), messages
+
+
+def test_a_wide_release_gets_a_narrower_band_than_a_narrow_one(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    budget = 2 * 1024 * 1024
+    narrow = _store(tmp_path, "narrow", n_analyses=2, n_variants=400, row_chunk=50)
+    wide = _store(tmp_path, "wide", n_analyses=48, n_variants=400, row_chunk=50)
+
+    narrow_rows = _logged_band(caplog, narrow, budget)
+    wide_rows = _logged_band(caplog, wide, budget)
+
+    assert wide_rows < narrow_rows, (wide_rows, narrow_rows)
+    # Each band is as large as its budget allows, not merely smaller: one more
+    # whole row chunk of the same width would not fit.
+    assert wide_rows * 48 * BYTES_PER_CELL <= budget
+    assert (wide_rows + 50) * 48 * BYTES_PER_CELL > budget
+    assert narrow_rows * 2 * BYTES_PER_CELL <= budget
+    assert narrow_rows <= 250_000, narrow_rows
+
+
+def test_every_band_fits_the_decoded_budget(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    n_analyses = 2_514
+    store = _store(
+        tmp_path, "wide", n_analyses=n_analyses, n_variants=40, row_chunk=50, with_hits=False
+    )
+
+    rows = _logged_band(caplog, store)
+
+    assert rows * n_analyses * BYTES_PER_CELL <= WORKING_BYTES, (rows, n_analyses)
+    assert rows < 250_000, "a store this wide must not get the row cap"
+    # A single row is the irreducible minimum when one row exceeds the budget.
+    assert band_rows(WORKING_BYTES // BYTES_PER_CELL + 1, 1) == 1
+
+
+def test_a_narrow_release_keeps_the_row_cap(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = _store(tmp_path, "narrow", n_analyses=2, n_variants=400, row_chunk=50)
+
+    assert _logged_band(caplog, store) == 250_000
 
 
 def test_a_0_1_0_release_is_refused_and_left_untouched(tmp_path: Path, release: Path) -> None:

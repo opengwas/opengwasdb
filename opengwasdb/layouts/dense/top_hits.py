@@ -15,6 +15,7 @@ import numpy as np
 from opengwasdb import top_hits
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
+from opengwasdb.encoding.banding import WORKING_BYTES, band_rows
 from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
 from opengwasdb.model.manifest import StoreManifest
@@ -217,12 +218,49 @@ def _refuse_legacy_data_layout(store_path: Path) -> None:
     )
 
 
+class _ScanPlanes(NamedTuple):
+    """The planes one scan reads, opened once."""
+
+    z: DenseZPlane
+    se: DenseSePlane
+    imputed: Any
+    eaf: DenseEafPlane
+
+
+def _open_scan_planes(store_path: Path, encoding: StoreEncoding) -> _ScanPlanes:
+    root = store_arrays.open_group(store_path / "data.zarr")
+    return _ScanPlanes(
+        z=DenseZPlane.open(root, encoding),
+        se=DenseSePlane.open(root, encoding),
+        imputed=root["imputed"] if "imputed" in root else None,
+        eaf=DenseEafPlane.open(root, encoding),
+    )
+
+
+def _log_scan_plan(
+    z_plane: DenseZPlane, n_workers: int, working_bytes: int
+) -> int:
+    """The rows per band the scan will read, logged with its width and budget."""
+    rows = band_rows(z_plane.n_analyses, int(z_plane.array.chunks[0]), working_bytes)
+    log.info(
+        "Top-hit index: scanning %d variants over %d Analyses "
+        "(n_workers=%d, %d rows per band, %d-byte working-set budget per worker)",
+        int(z_plane.array.shape[0]),
+        z_plane.n_analyses,
+        n_workers,
+        rows,
+        working_bytes,
+    )
+    return rows
+
+
 def build_top_hit_indexes(
     store_path: str | Path,
     thresholds: tuple[float, ...] = TOP_HIT_THRESHOLDS,
     encoding: StoreEncoding | None = None,
     timer: PhaseTimer | None = None,
     n_workers: int = 1,
+    working_bytes: int = WORKING_BYTES,
 ) -> None:
     """(Re)build ranked top-hit arrays by scanning the stored dense matrix.
 
@@ -242,6 +280,12 @@ def build_top_hit_indexes(
     is scanned or written: the index is v3 arrays, so writing one there would
     hide the release's own arrays (issue #313).
 
+    A band holds at most ``working_bytes`` decoded bytes, so a worker's memory
+    does not grow with the release's number of Analyses: the row count comes from
+    `banding.band_rows` and its one-GiB policy, which the validation passes share
+    (issue #313). ``working_bytes`` is the knob a caller with a different budget
+    passes; the band it produces is logged with the scan.
+
     A caller that passes a ``PhaseTimer`` gets the scan and the write charged
     separately, which is how the re-encoding passes of a store-wide rewrite are
     told apart from this one (issue #144): 63.5 s on the migrated FinnGen R13
@@ -252,27 +296,21 @@ def build_top_hit_indexes(
     _refuse_legacy_data_layout(store_path)
     if encoding is None:
         encoding = StoreManifest.load(store_path).encoding
-    root = store_arrays.open_group(store_path / "data.zarr")
-    z_plane = DenseZPlane.open(root, encoding)
-    imputed_arr = root["imputed"] if "imputed" in root else None
-    eaf_plane = DenseEafPlane.open(root, encoding)
-    log.info(
-        "Top-hit index: scanning %d variants (n_workers=%d)",
-        int(z_plane.array.shape[0]),
-        n_workers,
-    )
+    planes = _open_scan_planes(store_path, encoding)
+    n_variants = int(planes.z.array.shape[0])
+    band = _log_scan_plan(planes.z, n_workers, working_bytes)
     with timer.phase("top_hits.scan"):
         parts = _scan_candidates(
-            z_plane,
-            DenseSePlane.open(root, encoding),
-            imputed_arr,
-            eaf_plane,
-            int(z_plane.array.shape[0]),
-            max(int(z_plane.array.chunks[0]), 250_000),
+            planes.z,
+            planes.se,
+            planes.imputed,
+            planes.eaf,
+            n_variants,
+            band,
             top_hits.z_critical(max(thresholds)),
             n_workers,
         )
-    _write_scan_harvest(store_path, parts, thresholds, imputed_arr, eaf_plane, timer)
+    _write_scan_harvest(store_path, parts, thresholds, planes.imputed, planes.eaf, timer)
     log.info("Top-hit phase timings:\n%s", timer.format_report())
 
 
