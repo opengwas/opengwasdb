@@ -10,5 +10,7 @@
   decoded plane per worker — enough for a 32-worker pool to exhaust the host's
   memory. The scan and validation's streamed reads now both take their band from
   `opengwasdb.encoding.banding` and its one-GiB decoded-byte budget, so
-  OGS-00009 reads 4,000 rows per band while a narrow release keeps its
+  OGS-00009 reads 4,000 rows per band: its peak resident set per process falls
+  from 33.3 GB to 7.1 GB, and 16 workers scan it in 352.8 s and 326.7 s against
+  1085.8 s and 1080.9 s at four with the old band. A narrow release keeps its
   250,000-row band. The default stays 1.
