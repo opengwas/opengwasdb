@@ -28,33 +28,12 @@ pixi run -e dev python …    # anything ad hoc; a bare `python` lacks the deps
 pixi run -e report …        # Quarto + Jupyter, for .qmd benchmark documents
 ```
 
-## Branches and merging
+## Branches
 
 `feature → main`. **Work on a feature branch; never commit to `main`
-directly.** Every pull request merged into `main` is tagged `vX.Y.Z`, with the
-`changelog.d/` fragments it added as the release notes
-(`.github/workflows/release.yml`).
-
-A ruleset protects `main`: a pull request, and green `tests, lint, typecheck`
-and `changelog fragment` checks, with no approval required. **Merge your own
-pull request** once its work is finished: the checklist below, and for an
-orchestrate run its final review. Run `gh pr merge <n> --auto --merge`, and
-GitHub merges it when the checks pass. Never `--admin`, never a draft.
-
-**Leave it for the owner instead**, and name the reason in the PR body, when it:
-
-- moves `format_version` (`CURRENT_FORMAT_VERSION`), PATCH or MINOR, or changes
-  which formats the package reads or writes. Every move is permanent: a reader
-  of a series reads every Store ever written in it (spec §21);
-- adds a `breaking` changelog fragment;
-- adds or supersedes an ADR whose decision the owner has not made. An ADR that
-  cites the owner's ruling (who, when, where) records the owner's decision;
-- changes `.github/workflows/`, `quality.json` or `quality/`. CI is the
-  reviewer, so its configuration is the owner's.
-
-The `changelog fragment` check reads labels only when it runs. Add
-`no-changelog` when you open the PR; if you add it later, close and reopen the
-PR to re-run the check.
+directly.** Every merge to `main` is a tagged release. **Merge
+your own finished pull request** with `gh pr merge --auto --merge`, unless
+an owner gate in [CONTRIBUTING.md, Merging](./CONTRIBUTING.md#merging) applies.
 
 ## Before you finish a change
 
