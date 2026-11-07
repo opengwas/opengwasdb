@@ -30,7 +30,7 @@ field is recorded in the store's provenance (`ld-store.md` §7).
 | `ancestry` | string | — | the ancestry label, such as `EUR` |
 | `genotype_source` | string | — | what the genotypes are: the release and its files |
 | `k` | int | 10 | the target: the first `k` PCs the PC Check keeps are regressed out (§8). If fewer survive, the build uses those. Provenance records it as `k_target` |
-| `k_min` | int | 5 | the fewest kept PCs a build accepts; below it the build is refused. Provenance records it, and `k`, the number used, which is t_far's k |
+| `k_min` | int | 5 | the fewest kept PCs a build accepts; below it the build is refused, naming the dropped PCs (§8). Provenance records it, and `k`, the number used, which is t_far's k. It applies only when PCs are used: with `k` = 0 no PC File is read, nothing is refused for want of PCs, and provenance records k = 0 and `k_min` as null |
 | `mac_min` | int | 20 | the minor allele count floor (§6) |
 | `info_min` | float or None | 0.8 | the INFO floor (§6); None for a sequenced panel, explicitly |
 
@@ -134,8 +134,9 @@ outside the Test Panel.
 ## 6. Variant filters
 
 Applied in this order on the keep-file samples; a dropped variant is counted under the first one
-it fails, in `variants_dropped.<reason>`, and every filter's value is in `variant_filters`
-(`ld-store.md` §7).
+it fails, in `variants_dropped.<reason>`. Every setting is in `variant_filters` (`ld-store.md` §7):
+`filter` (`["PASS", "."]`), `mac_min`, `info_min` (null when none was applied), and
+`autosomes_only`, for §2's chromosome rule, which refuses a record rather than drop it.
 
 | order | filter | default | reason recorded |
 |---|---|---|---|
@@ -228,8 +229,10 @@ the number of covariates actually used (owner, 7 November 2026; ADR 0002, decisi
 
 **Provenance** (`adjustment.pc_check`, `ogld.format.PcCheck`): `window_bp` (4,000,000),
 `step_bp` (2,000,000), `windows` (the number of windows scanned), `min_share` (0.10), `max_ratio` (0.05), `scan` (one `PcScan` per PC of the file, in order), `dropped` (the local PCs'
-names), and `null` (how chance was made: kind, permutations, seed, quantile). `adjustment`
-records `k_target` (10), `k_min` (5) and `k`, the number used, and `covariates` names them.
+names), and `null` (`ogld.format.PcNull`, how chance was made: `kind`, the integer `permutations`
+and `seed`, and `quantile`). `adjustment`
+records `k_target` (10), `k_min` (5) and `k`, the number used, and `covariates` names them. At
+`k` = 0 no PC Check runs: `pc_file`, `pc_check` and `k_min` are null, and `k_target` = k = 0.
 
 **What it found on the HGDP+1kGP PC Files** (`proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pc_check_v2_scan.tsv` and `proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pcs_v2/<panel>.json`, `scripts/make_pcs.py --scan-only`'s reports):
 

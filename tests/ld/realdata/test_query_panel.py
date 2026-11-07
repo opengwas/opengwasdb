@@ -11,15 +11,16 @@ Two inputs, named by environment variables that `tests/realdata/run.sh` passes o
 - `OGLD_403_ANALYSES`: one directory per Analysis, each holding `hits.tsv` (a header, then
   ALID and z per row: the 5e-8 tier) and `leads_r2_0.01.txt` and `leads_r2_0.001.txt` (plink2's
   index variants, one ALID per line, from the same genotypes at k = 0). ogld#6 makes them.
+
+Until they exist the test stops as an expected failure naming the missing one
+(`realdata_inputs.required`), before it opens anything.
 """
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 import numpy as np
 import pytest
+from realdata_inputs import required
 
 import ogld
 
@@ -27,9 +28,10 @@ import ogld
 @pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="ogld#6")
 @pytest.mark.parametrize("r2", [0.01, 0.001])
 def test_leads_equal_plink2_s_on_403_s_37_analyses(r2: float) -> None:
-    store = ogld.open(os.environ.get("OGLD_EUR_K0_STORE", ""))
+    location = required("OGLD_EUR_K0_STORE", "the k = 0 EUR LD Store, which ogld#6 makes")
+    root = required("OGLD_403_ANALYSES", "#403's 37 Analyses with plink2's leads, from ogld#6")
+    store = ogld.open(location)
     assert store.provenance["adjustment"]["k"] == 0, "the comparison is with unadjusted LD"
-    root = Path(os.environ.get("OGLD_403_ANALYSES", ""))
     analyses = sorted(path for path in root.iterdir() if path.is_dir())
     assert len(analyses) == 37, f"#403 has 37 EUR Analyses; {root} holds {len(analyses)}"
     differences = {}

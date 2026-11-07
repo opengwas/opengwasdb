@@ -13,6 +13,7 @@ import shutil
 from collections.abc import Callable
 from functools import cache
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -21,7 +22,7 @@ from support import alids, contract, panel_data, passing_rows, reference, refere
 
 import ogld
 from ogld import cli
-from ogld.format import VALIDATION_RULES, RefusalReason, quantise
+from ogld.format import VALIDATION_RULES, RefusalReason, far_code_floor, quantise, t_far
 from ogld.store import StoreWriter
 
 OGLD_4 = contract("ogld#4")
@@ -50,6 +51,17 @@ def expected() -> np.ndarray:
     return reference_matrix(support.K, tuple(int(row) for row in passing_rows()))
 
 
+def with_provenance(tmp_path: Path, edit: Callable[[dict[str, Any]], None]) -> Path:
+    """A copy of the Test Store whose provenance `edit` has changed."""
+    copy = tmp_path / "store"
+    shutil.copytree(support.TEST_STORE, copy)
+    meta = copy / "zarr.json"
+    doc = json.loads(meta.read_text())
+    edit(doc["attributes"]["ld_store"])
+    meta.write_text(json.dumps(doc))
+    return copy
+
+
 # ------------------------------------------------------------------ opening
 
 
@@ -70,14 +82,12 @@ def test_the_test_store_records_its_panel_and_its_distances() -> None:
 @OGLD_4
 def test_a_reader_refuses_a_format_version_it_does_not_implement(tmp_path: Path) -> None:
     opened()
-    copy = tmp_path / "store"
-    shutil.copytree(support.TEST_STORE, copy)
-    meta = copy / "zarr.json"
-    doc = json.loads(meta.read_text())
-    doc["attributes"]["ld_store"]["format_version"] = "9.0.0"
-    meta.write_text(json.dumps(doc))
+
+    def future(p: dict[str, Any]) -> None:
+        p["format_version"] = "9.0.0"
+
     with pytest.raises(ValueError, match=r"9\.0\.0"):
-        ogld.open(copy)
+        ogld.open(with_provenance(tmp_path, future))
 
 
 @OGLD_4
@@ -288,9 +298,15 @@ def test_the_writer_refuses_a_location_that_exists(tmp_path: Path) -> None:
 # ------------------------------------------------------------------ validation (spec §12)
 
 
+@cache
+def committed_findings() -> dict[str, list[ogld.Finding]]:
+    """The committed Test Store validated, once per worker: every test below starts from it."""
+    return ogld.validate(support.TEST_STORE)
+
+
 @OGLD_4
 def test_the_test_store_passes_every_rule() -> None:
-    findings = ogld.validate(support.TEST_STORE)
+    findings = committed_findings()
     assert tuple(findings) == VALIDATION_RULES
     assert {rule: found for rule, found in findings.items() if found} == {}
 
@@ -335,12 +351,57 @@ def test_every_rule_has_a_way_to_break_it() -> None:
 @OGLD_4
 @pytest.mark.parametrize("rule", VALIDATION_RULES)
 def test_a_store_that_breaks_a_rule_fails_that_rule(rule: str, tmp_path: Path) -> None:
-    assert not any(ogld.validate(support.TEST_STORE).values())
+    assert not any(committed_findings().values())
     copy = tmp_path / "store"
     shutil.copytree(support.TEST_STORE, copy)
     BREAKERS[rule](copy)
     findings = ogld.validate(copy)
     assert findings[rule], f"{rule} passed a store built to break it"
+
+
+def as_unadjusted(k_min: int | None) -> Callable[[dict[str, Any]], None]:
+    """The Test Store's provenance recorded as a k = 0 build's, t_far and floor included."""
+
+    def edit(p: dict[str, Any]) -> None:
+        p["adjustment"].update(
+            covariates=[], k=0, k_target=0, k_min=k_min, pc_file=None, pc_check=None
+        )
+        p["t_far"] = t_far(p["panel"]["n"], 0)
+        p["far_code_floor"] = far_code_floor(p["t_far"])
+
+    return edit
+
+
+def as_import(k_target: int | None) -> Callable[[dict[str, Any]], None]:
+    """The Test Store's provenance recorded as an imported matrix's: its 10 covariates, k = 10."""
+
+    def edit(p: dict[str, Any]) -> None:
+        p["source"]["kind"] = "ld_matrix"
+        p["adjustment"].update(k_target=k_target, k_min=None, pc_file=None, pc_check=None)
+        p["pc_diagnostic"] = None
+
+    return edit
+
+
+#: Spec §7 and §12: `k_min` applies only when a PC File was read, and an import has no
+#: `k_target`. Each pair differs in that one field, so the passing one is the control.
+K_RECORDS: dict[str, tuple[Callable[[dict[str, Any]], None], bool]] = {
+    "unadjusted, k_min null": (as_unadjusted(None), True),
+    "unadjusted, k_min 5": (as_unadjusted(5), False),
+    "import, k_target null": (as_import(None), True),
+    "import, k_target 10": (as_import(10), False),
+}
+
+
+@OGLD_4
+@pytest.mark.parametrize("case", list(K_RECORDS))
+def test_provenance_threshold_holds_k_min_and_k_target_to_the_source(
+    case: str, tmp_path: Path
+) -> None:
+    assert not committed_findings()["provenance.threshold"]
+    edit, passes = K_RECORDS[case]
+    findings = ogld.validate(with_provenance(tmp_path, edit))["provenance.threshold"]
+    assert (not findings) is passes, f"{case}: {findings}"
 
 
 # ------------------------------------------------------------------ the CLI

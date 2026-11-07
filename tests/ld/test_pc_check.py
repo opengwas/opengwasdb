@@ -124,3 +124,18 @@ def test_fewer_kept_pcs_than_the_minimum_is_refused(scanned) -> None:
     assert "keeps 4 PCs" in message
     assert "dropped as local: PC1, PC2, PC3" in message
     assert message.rstrip().endswith("PC16")
+
+
+def test_too_few_pcs_with_none_local_says_none_was_dropped(small) -> None:
+    windows, _, noise = small
+    # Four noise PCs: none is local (as above), so the refusal has no PC to name.
+    with pytest.raises(SystemExit, match="keeps 4 PCs, fewer than the minimum 5") as refused:
+        pc_check.check(windows, noise[:, :4])
+    assert str(refused.value).endswith("; none dropped as local")
+
+
+def test_the_null_records_its_permutations_and_seed_as_integers(small) -> None:
+    windows, _, noise = small
+    null = pc_check.check(windows, noise[:, :5])["null"]
+    assert (null["permutations"], null["seed"]) == (200, 405)
+    assert all(type(null[key]) is int for key in ("permutations", "seed"))

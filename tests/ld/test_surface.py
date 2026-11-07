@@ -11,6 +11,7 @@ purpose, with a changelog fragment that says so.
 from __future__ import annotations
 
 import inspect
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -23,6 +24,9 @@ import pytest
 import ogld
 from ogld import cli, identity, store
 from ogld.query import clumping, matrices, proxies
+
+#: The committed Test Store (tests/contract/support.py), written by the walking skeleton.
+TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
 
 SURFACE: dict[str, tuple[Callable[..., Any], str]] = {
     "ogld.open": (ogld.open, "(location: 'str | os.PathLike[str]') -> 'LDStore'"),
@@ -244,19 +248,23 @@ def test_the_list_of_unbuilt_bodies_is_complete() -> None:
     assert stubs == len(UNBUILT), "every stub in ogld/ has an entry in UNBUILT, and no more"
 
 
-def test_ogld_imports_and_opens_without_pgenlib() -> None:
+def test_ogld_imports_and_reads_the_test_store_without_pgenlib() -> None:
     # pgenlib is the builder's pgen reader. A reader-only install may lack it, so nothing
-    # outside the builder's read path may import it.
+    # outside the builder's read path may import it. Until the reader is built its stub
+    # raises NotImplementedError naming its ticket, the one error this lets through; once
+    # it is, the committed Test Store is opened and read, and any error fails the test.
     code = (
         "import sys\n"
         "sys.modules['pgenlib'] = None\n"
         "import ogld\n"
         "try:\n"
-        "    ogld.open('no-such-store')\n"
-        "except ImportError:\n"
-        "    raise\n"
-        "except Exception:\n"
-        "    pass\n"
+        f"    store = ogld.open({str(TEST_STORE)!r})\n"
+        "    store.region('22', 30_000_000, 100_000)\n"
+        "except NotImplementedError as unbuilt:\n"
+        "    print('unbuilt', unbuilt)\n"
+        "else:\n"
+        "    print('read', store.provenance['n_variants'])\n"
     )
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
+    assert re.fullmatch(r"unbuilt ogld#\d+|read \d+", done.stdout.strip()), done.stdout

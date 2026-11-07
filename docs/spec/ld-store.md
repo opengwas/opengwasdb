@@ -188,8 +188,9 @@ the gnomAD v3.1.2 counts.
 
 **t_far's k counts covariates.** t_far = max(0.001, q / (n − k − 1)), where k is the number of
 covariates regressed out, named in `adjustment.covariates` (§7); the 1 is the intercept. For a
-build from a PC File that is the k PCs the PC Check kept. For an imported LD matrix it counts every covariate the
-source adjusted for: Pan-UKB's 10 PCs and five age and sex terms make k = 15.
+build that is the number of PCs actually used, and 0 for an unadjusted build. For an imported LD
+matrix it is the source's declared count of every covariate it adjusted for: Pan-UKB's 10 PCs
+and five age and sex terms make k = 15.
 
 ## 4. Near Band (`near/<chrom>/`)
 
@@ -395,22 +396,22 @@ ignores the ones it does not know. The types are `ogld.format.Provenance`, and
 | `source.kind` | string | `"genotypes"`: built from a Source Panel's genotypes; `"ld_matrix"`: imported from a published LD matrix, such as Pan-UKB's |
 | `source.description` | string | what the input was, such as the gnomAD release and files, or the matrix's location and release |
 | `source.sha256` | object | SHA-256 per input file: the genotype files, or the matrix's files |
-| `panel.id` | string | the Source Panel's identifier, such as `"hgdp1kgp-gnomad-v3.1.2-EUR"` |
+| `panel.id` | string | the Source Panel's identifier, such as `"hgdp1kgp-v2-EUR"` (`docs/spec/build-inputs.md` §1) |
 | `panel.ancestry` | string | the ancestry label, such as `"EUR"` |
 | `panel.n` | int | samples the LD was computed from |
 | `panel.samples_sha256` | string or null | SHA-256 of the sorted sample identifiers, one per line; null only for an `ld_matrix` source that does not publish them. The identifiers themselves stay with the Source Panel |
 | `reference_assembly` | string | the engine's Reference Assembly, such as `"GRCh38"` |
-| `variant_filters` | object | every filter and its value: `mac_min` (int, default 20), `info_min` (float or null), `max_alleles` (int), and any other the build applied (`docs/spec/build-inputs.md`). There is no call-rate filter: a build refuses an input with any missing call |
+| `variant_filters` | object | the build's variant filters and their values, as `docs/spec/build-inputs.md` §6 applies them: `filter` (array of strings, the FILTER values that pass: `["PASS", "."]`), `mac_min` (int, default 20), `info_min` (float, or null when no INFO floor was applied, as for a sequenced panel) and `autosomes_only` (bool, true: a record off chromosomes 1–22 is refused, §1). A zero-variance variant is dropped with no setting to record, and counted in `variants_dropped`. Biallelic records are the conversion's job, so no filter sees a multi-allelic one. There is no call-rate filter: a build refuses an input with any missing call |
 | `variants_dropped` | object | count per reason a variant passing the filters was dropped: at least `zero_variance` (int) |
 | `n_variants` | int | rows of `variants/` |
 | `near_bp` | int | the distance up to which the store holds every pair: 3000000 |
 | `far_bp` | int | the distance up to which the store measured pairs: 10000000 for a build, and at most that for any store. Every reader and refusal uses this recorded value |
 | `adjustment.covariates` | array of strings | every covariate regressed out of the genotypes, by name, in order: the first up to `k_target` PCs the PC Check kept, such as `"PC1"`, `"PC3"` … `"PC11"` when it dropped PC2; empty for unadjusted LD. An import names its source's, such as Pan-UKB's age, sex, age×sex, age², age²×sex and PC1–PC10 |
-| `adjustment.k` | int | the number of covariates used: t_far's k (§3). For a build, between `k_min` and `k_target` |
-| `adjustment.k_target` | int | the PCs a build aims to use: 10 by default (`BuildInputs.k`) |
-| `adjustment.k_min` | int | the fewest PCs a build may use: 5 by default (`BuildInputs.k_min`). With fewer surviving the PC Check, the build is refused |
+| `adjustment.k` | int | the number of covariates used: t_far's k (§3). For a build from a PC File, the PCs actually used, between `k_min` and `k_target`; 0 for an unadjusted build; for an import, its source's declared count of covariates |
+| `adjustment.k_target` | int or null | the PCs a build aims to use: `BuildInputs.k`, 10 by default, and 0 for an unadjusted build; null for an `ld_matrix` source, which has no target |
+| `adjustment.k_min` | int or null | the fewest PCs a build may use: `BuildInputs.k_min`, 5 by default. With fewer surviving the PC Check, the build is refused. It applies only when PCs are used, so it is null when no PC File was read: for an unadjusted build (k = 0, which nothing refuses for want of PCs) and for an `ld_matrix` source |
 | `adjustment.pc_file` | object or null | the PC File (`docs/spec/build-inputs.md`): `sha256` and its declared `source`, such as the recipe script and release that made it; null when no PC File was read |
-| `adjustment.pc_check` | object or null | the PC Check's result (`docs/spec/build-inputs.md` §8): the rule's `window_bp` (4000000), `step_bp` (2000000), `min_share` (0.1) and `max_ratio` (0.05); `windows`, the number of windows scanned; the `scan`, one entry per PC of the PC File with its best `window`, its `window_share`, its `rest_share` (the mean share of every window that does not overlap that one), `ratio` (rest_share / window_share), `window_null_q99` (the threshold the window share must beat), `rest_null_q99` (a diagnostic) and whether it is `local` (`window_share` ≥ `min_share`, `window_share` > `window_null_q99` and `ratio` ≤ `max_ratio`); the `dropped` PCs; and the `null`, how chance was made (kind, permutations, seed, quantile). Null when no PC File was read |
+| `adjustment.pc_check` | object or null | the PC Check's result (`docs/spec/build-inputs.md` §8): the rule's `window_bp` (4000000), `step_bp` (2000000), `min_share` (0.1) and `max_ratio` (0.05); `windows`, the number of windows scanned; the `scan`, one entry per PC of the PC File with its best `window`, its `window_share`, its `rest_share` (the mean share of every window that does not overlap that one), `ratio` (rest_share / window_share), `window_null_q99` (the threshold the window share must beat), `rest_null_q99` (a diagnostic) and whether it is `local` (`window_share` ≥ `min_share`, `window_share` > `window_null_q99` and `ratio` ≤ `max_ratio`); the `dropped` PCs; and the `null`, how chance was made: `kind` (string), `permutations` (int), `seed` (int) and `quantile` (float). Null when no PC File was read |
 | `t_far` | float | max(0.001, q / (n − k − 1)) in float64, the value every reader uses |
 | `t_far_q` | float | 20.84: the χ²₁ upper quantile at p = 5×10⁻⁶ |
 | `far_code_floor` | int | §3 |
@@ -715,7 +716,7 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 | `provenance.complete` | every §7 key is present with its type, null only where §7 allows; other keys are allowed |
 | `provenance.encoding` | `encoding` is exactly §3's: a reader refuses any other before decoding |
 | `provenance.distances` | `near_bp` is 3,000,000, and `near_bp` < `far_bp` ≤ 10,000,000 |
-| `provenance.threshold` | `adjustment.k` equals the number of `adjustment.covariates`, and when a PC File was read, `k_min` ≤ k ≤ `k_target`; `t_far` equals max(0.001, q / (n − k − 1)) recomputed from provenance, with n − k − 1 > q (so t_far < 1); and `far_code_floor` equals its recomputed value |
+| `provenance.threshold` | `adjustment.k` equals the number of `adjustment.covariates`. When a PC File was read (`pc_file` is not null), `k_min` ≤ k ≤ `k_target`; when none was, `k_min` is null, and a `genotypes` source has k = `k_target` = 0. An `ld_matrix` source has `k_target` null. `t_far` equals max(0.001, q / (n − k − 1)) recomputed from provenance, with n − k − 1 > q (so t_far < 1); and `far_code_floor` equals its recomputed value |
 | `variants.chromosomes` | the `chromosomes` ranges are in chromosome order, contiguous and cover every row |
 | `variants.order` | positions ascend within each chromosome, ties broken by ALID ascending, with no repeated ALID |
 | `variants.identity` | each `alid` is the identity function's ALID for its chromosome, position, `a1` and `a2` (ogld#3) |

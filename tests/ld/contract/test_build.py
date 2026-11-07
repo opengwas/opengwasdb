@@ -12,7 +12,8 @@ refusing with fewer than 5 (owner, 7 November 2026; ADR 0002). The hand-built PC
 Test Panel's 771 samples: the ratio cannot drop any PC below about 100.
 
 Every test calls `ogld.build` before it reads the Test Panel: a build is given `PANEL`'s
-paths, which need no loader, and each k is built once per worker (`built`). The tests that
+paths, which need no loader, and each k is built once per worker (`built`), as is the one
+build from a PC File with a Local PC (`with_a_local_pc`) that two tests read. The tests that
 make their own pgen or PC File read and write pgen with pgenlib, which ogld#5 adds, after
 that first build.
 """
@@ -20,7 +21,9 @@ that first build.
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +49,7 @@ from ogld.format import far_code_floor, t_far
 OGLD_5 = contract("ogld#5")
 PANEL_ID = "test-panel-hgdp1kgp-EUR"
 _BUILT: dict[int, tuple[ogld.Provenance, Path]] = {}
+_WITH_A_LOCAL_PC: list[ogld.Provenance] = []
 
 
 def inputs(k: int = support.K, **overrides: Any) -> ogld.BuildInputs:
@@ -146,10 +150,32 @@ def test_the_provenance_records_what_was_built(tmp_path_factory: pytest.TempPath
     assert provenance["t_far"] == support.T_FAR == t_far(771, 10)
     assert provenance["far_code_floor"] == far_code_floor(support.T_FAR)
     assert provenance["source"]["kind"] == "genotypes"
-    assert provenance["variant_filters"]["mac_min"] == 20
+    # Exactly what build-inputs.md §6 applies; the Test Panel is sequenced, so no INFO floor.
+    assert provenance["variant_filters"] == {
+        "filter": ["PASS", "."],
+        "mac_min": 20,
+        "info_min": None,
+        "autosomes_only": True,
+    }
     assert provenance["n_variants"] == len(passing_rows())
     assert "zero_variance" in provenance["variants_dropped"]
     assert provenance["counts"]["index_entries"] >= 2 * provenance["counts"]["far_pairs"]
+
+
+@OGLD_5
+def test_an_unadjusted_build_records_k0_and_no_minimum(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    # k_min applies only when PCs are used (spec §7): at k = 0 the default k_min = 5 refuses
+    # nothing, and provenance records it as null.
+    provenance, _ = built(0, tmp_path_factory)
+    assert inputs(0).k_min == 5, "the build was given the default minimum"
+    adjustment = provenance["adjustment"]
+    assert (adjustment["k_target"], adjustment["k_min"], adjustment["k"]) == (0, None, 0)
+    assert adjustment["covariates"] == []
+    assert adjustment["pc_file"] is None
+    assert adjustment["pc_check"] is None
+    assert provenance["t_far"] == t_far(771, 0)
 
 
 @OGLD_5
@@ -242,12 +268,14 @@ def standard(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     return (x - x.mean()) / x.std()
 
 
+@cache
 def local_axis() -> npt.NDArray[np.float64]:
     """The genotype axis of chr22's densest 2 Mb stretch, in the PC File's sample order.
 
     The first principal component of the stretch's standardised genotypes. A stretch of at
     most 2 Mb lies wholly in one of the PC Check's windows (4 Mb stepped by 2 Mb), so that
     window explains most of the axis and the rest of the genome about what chance does.
+    Computed once per worker, and read-only, since every caller shares it.
     """
     v = panel_data().variants()
     rows = passing_rows()[v.chrom[passing_rows()] == "22"]
@@ -260,7 +288,9 @@ def local_axis() -> npt.NDArray[np.float64]:
     z = (z - z.mean(axis=0)) / z.std(axis=0)
     axis = np.linalg.svd(z, full_matrices=False)[0][:, 0]
     order = [psam_iids(PANEL.psam).index(iid) for iid in panel_data().pcs().iids]
-    return standard(axis[order])
+    out = standard(axis[order])
+    out.flags.writeable = False
+    return out
 
 
 def ancestry_pcs(count: int) -> list[npt.NDArray[np.float64]]:
@@ -300,6 +330,33 @@ def scan_of(provenance: ogld.Provenance) -> tuple[dict[str, dict[str, Any]], lis
     return {scan["pc"]: dict(scan) for scan in check["scan"]}, list(check["dropped"])
 
 
+def with_a_local_pc(tmp_path_factory: pytest.TempPathFactory) -> ogld.Provenance:
+    """One build, once per worker, from a PC File whose PC1 is local and whose other 7 survive.
+
+    PC1 is one stretch's axis: its window explains most of it, the rest only by chance. PC2 is
+    the Test Panel's ancestry PC1 with 30% of its variance from that axis, as EUR's PC2 carries
+    LCT: one window explains much of it, and so does the rest of the genome. PC3–PC8 are the
+    Test Panel's PC2–PC7. Lane 2d's reference scan (scripts/test_panel/pc_check.py) drops PC1
+    alone, with a window share of 0.999 at a ratio of 0.009, and keeps PC2 at 0.203 and 0.142:
+    each clear of its bar by about 2x. So 7 PCs survive, and k = 7.
+    """
+    if not _WITH_A_LOCAL_PC:
+        built(10, tmp_path_factory)
+        axis = local_axis()
+        ancestry = standard(ancestry_pcs(1)[0])
+        # An SVD's sign is arbitrary, and the axis correlates about −0.2 with ancestry PC1, so
+        # fix its sign: the mix then has the same shares on every implementation.
+        if np.corrcoef(axis, ancestry)[0, 1] > 0:
+            axis = -axis
+        mixed = np.sqrt(0.3) * axis + np.sqrt(0.7) * ancestry
+        # Not ancestry PC1 itself as well: with it and the mix both covariates, the dropped
+        # axis would lie in their span and be regressed out after all.
+        out = tmp_path_factory.mktemp("with-a-local-pc")
+        pcs = pc_file(out, [axis, mixed, *ancestry_pcs(7)[1:]])
+        _WITH_A_LOCAL_PC.append(ogld.build(inputs(10, pcs=pcs), out / "store"))
+    return _WITH_A_LOCAL_PC[0]
+
+
 @OGLD_5
 def test_an_input_with_a_missing_call_is_refused(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
@@ -318,23 +375,9 @@ def test_an_input_with_a_missing_call_is_refused(
 
 @OGLD_5
 def test_a_local_pc_is_dropped_and_an_ancestry_pc_with_a_strong_window_is_kept(
-    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+    tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    built(10, tmp_path_factory)
-    axis = local_axis()
-    ancestry = standard(ancestry_pcs(1)[0])
-    # An SVD's sign is arbitrary, and the axis correlates about −0.2 with ancestry PC1, so
-    # fix its sign: the mix below then has the same shares on every implementation.
-    if np.corrcoef(axis, ancestry)[0, 1] > 0:
-        axis = -axis
-    # PC1 is one stretch's axis: its window explains most of it, the rest only by chance.
-    # PC2 is the Test Panel's ancestry PC1 with 30% of its variance from that axis, as EUR's
-    # PC2 carries LCT: one window explains much of it, and so does the rest of the genome.
-    # Lane 2d's reference scan (scripts/test_panel/pc_check.py) gives PC1 a window share of
-    # 0.999 at a ratio of 0.009, and PC2 0.203 at 0.142: each clear of its bar by about 2x.
-    mixed = np.sqrt(0.3) * axis + np.sqrt(0.7) * ancestry
-    pcs = pc_file(tmp_path, [axis, mixed, *ancestry_pcs(20)])
-    provenance = ogld.build(inputs(10, pcs=pcs), tmp_path / "store")
+    provenance = with_a_local_pc(tmp_path_factory)
     scans, dropped = scan_of(provenance)
     local, kept = scans["PC1"], scans["PC2"]
     assert local["window_share"] >= 0.1
@@ -344,19 +387,15 @@ def test_a_local_pc_is_dropped_and_an_ancestry_pc_with_a_strong_window_is_kept(
     assert kept["window_share"] >= 0.1, "the first two conditions hold for PC2 too"
     assert kept["window_share"] > kept["window_null_q99"]
     assert kept["ratio"] > 0.05, "so the ratio is what keeps it"
-    covariates = provenance["adjustment"]["covariates"]
-    assert covariates == [f"PC{i}" for i in range(2, 12)]
-    assert provenance["adjustment"]["k"] == 10
+    assert provenance["adjustment"]["covariates"][0] == "PC2"
 
 
 @OGLD_5
 def test_seven_surviving_pcs_are_used_with_t_far_at_k7(
-    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+    tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
     # Owner, 7 November 2026: the first up to 10 PCs kept; fewer are used if at least 5 are.
-    built(10, tmp_path_factory)
-    pcs = pc_file(tmp_path, [local_axis(), *ancestry_pcs(7)])
-    provenance = ogld.build(inputs(10, pcs=pcs), tmp_path / "store")
+    provenance = with_a_local_pc(tmp_path_factory)
     _, dropped = scan_of(provenance)
     assert dropped == ["PC1"]
     adjustment = provenance["adjustment"]
@@ -375,5 +414,6 @@ def test_fewer_than_five_surviving_pcs_are_refused(
     with pytest.raises(ogld.InputError, match=r"\b4\b") as refused:
         ogld.build(inputs(10, pcs=pcs), tmp_path / "store")
     message = str(refused.value)
-    assert "5" in message, "it names the minimum it needed"
-    assert "PC1" in message, "it names the dropped PC"
+    # PC5 is in this PC File and kept, so a bare "5" would pass on its name alone.
+    assert re.search(r"\b5\b", message), "it names the minimum it needed"
+    assert re.search(r"\bPC1\b", message), "it names the dropped PC"

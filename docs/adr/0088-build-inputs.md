@@ -110,6 +110,8 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    owner's PC minimum, decided the same day). t_far's k is the number of covariates actually used.
    Provenance records `k_target`, `k_min` and `k`, the scan (with each PC's `ratio`,
    `window_null_q99` and, as a diagnostic, `rest_null_q99`), the dropped PCs and the null.
+   `k_min` applies only when PCs are used: at k = 0 no PC File is read, nothing is refused for
+   want of PCs, and provenance records `k_min` as null (review of #2, 7 November 2026).
 
    **Why the ratio.** The owner first set the rule as "one window explains ≥ 10% and the rest of
    the genome explains it no better than chance". Measured on karyotype-like scores, it kept EUR's

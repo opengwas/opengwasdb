@@ -13,17 +13,20 @@ The Test Panel proves the logic; this proves it survives real genotypes (CLAUDE.
   `OGLD_EUR_PC_FILE` names EUR's PC File from `scripts/make_pcs.py` (§10).
 - The gnomAD v3.1.2 pgens shipped under /data/opengwasdb/reference/ have missing calls, at
   11,725 of the 15,272 variants of chr22:20–23 Mb. The builder refuses them.
+
+An unset or missing `OGLD_PLINK2`, `OGLD_V2_EUR_CHR22` or `OGLD_EUR_PC_FILE` stops a test as an
+expected failure naming it (`realdata_inputs.required`), before ogld or plink2 runs.
 """
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
+from realdata_inputs import required
 
 import ogld
 from ogld.identity import orient
@@ -41,10 +44,9 @@ _SLICES: dict[str, Path] = {}
 
 
 def plink2(*args: str | Path) -> None:
-    exe = os.environ.get("OGLD_PLINK2", "")
-    assert exe, "set OGLD_PLINK2, or run this tier through `pixi run test-realdata`"
+    exe = required("OGLD_PLINK2", "plink2, the independent reference; run.sh finds one")
     subprocess.run(
-        [exe, *map(str, args), "--threads", "4", "--memory", "8000"],
+        [str(exe), *map(str, args), "--threads", "4", "--memory", "8000"],
         check=True,
         capture_output=True,
     )
@@ -64,11 +66,10 @@ def section_3_conversion(source: Path, out: Path) -> list[str]:
 def v2_slice(name: str, tmp_path_factory: pytest.TempPathFactory) -> Path:
     """The v2 EUR chr22 slice `name` ("wide" 20–32 Mb, "narrow" 20–23 Mb), once per session."""
     if name not in _SLICES:
-        bcf = os.environ.get("OGLD_V2_EUR_CHR22", "")
-        assert bcf, "set OGLD_V2_EUR_CHR22 to the phased v2 chr22 BCF (build-inputs.md §10)"
+        bcf = required("OGLD_V2_EUR_CHR22", "the phased v2 chr22 BCF, build-inputs.md §10")
         out = tmp_path_factory.mktemp(f"v2-{name}") / "slice"
         if name == "wide":
-            plink2(*section_3_conversion(Path(bcf), out), *WIDE)
+            plink2(*section_3_conversion(bcf, out), *WIDE)
         else:
             wide = v2_slice("wide", tmp_path_factory)
             plink2("--pfile", wide, *NARROW, "--make-pgen", "pvar-cols=filter", "--out", out)
@@ -162,12 +163,11 @@ def test_real_ld_survives_pc_adjustment(
 ) -> None:
     # Epic #1 and ogld#5: pairs within 100 kb change little outside the Long-Range LD
     # Regions (none is in chr22:20–32 Mb), and the distribution is recorded.
-    pcs = os.environ.get("OGLD_EUR_PC_FILE", "")
-    assert pcs, "set OGLD_EUR_PC_FILE to EUR's PC File (build-inputs.md §10)"
+    pcs = required("OGLD_EUR_PC_FILE", "EUR's PC File from scripts/make_pcs.py, §10")
     slice_ = v2_slice("wide", tmp_path_factory)
     pgen = slice_.with_suffix(".pgen")
     ogld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb"), tmp_path / "k0")
-    adjusted = ogld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb", Path(pcs)), tmp_path / "k10")
+    adjusted = ogld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb", pcs), tmp_path / "k10")
 
     unadjusted_store, adjusted_store = ogld.open(tmp_path / "k0"), ogld.open(tmp_path / "k10")
     # Twelve regions 100 kb wide, one per Mb: every pair inside one is within 100 kb, and

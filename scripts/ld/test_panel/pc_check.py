@@ -48,8 +48,8 @@ K_MIN = 5
 NULL = {
     "kind": "each PC's values permuted across samples: q99 of the largest window share "
     "(decides) and of the rest share (diagnostic)",
-    "permutations": float(PERMUTATIONS),
-    "seed": float(SEED),
+    "permutations": PERMUTATIONS,
+    "seed": SEED,
     "quantile": QUANTILE,
 }
 
@@ -134,6 +134,13 @@ def _scan_one(
     }
 
 
+def _refusal(s: list[dict[str, object]], kept: int, k_min: int) -> SystemExit:
+    """Fewer than `k_min` kept PCs, refused naming the dropped ones (build-inputs.md §8)."""
+    local = [str(x["pc"]) for x in s if x["local"]]
+    dropped = f"dropped as local: {', '.join(local)}" if local else "none dropped as local"
+    return SystemExit(f"the PC Check keeps {kept} PCs, fewer than the minimum {k_min}; {dropped}")
+
+
 def check(
     w: Windows, pcs: np.ndarray, k_target: int = K_TARGET, k_min: int = K_MIN
 ) -> dict[str, object]:
@@ -143,11 +150,7 @@ def check(
     s = _scan(w, pcs)
     kept = [str(x["pc"]) for x in s if not x["local"]]
     if len(kept) < k_min:
-        dropped = ", ".join(str(x["pc"]) for x in s if x["local"])
-        raise SystemExit(
-            f"the PC Check keeps {len(kept)} PCs, fewer than the minimum {k_min}; "
-            f"dropped as local: {dropped}"
-        )
+        raise _refusal(s, len(kept), k_min)
     covariates = kept[:k_target]
     return {
         "window_bp": WINDOW_BP,

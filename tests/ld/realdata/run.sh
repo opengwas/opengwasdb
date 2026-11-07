@@ -29,9 +29,10 @@ V2=/data/opengwasdb/work/ogld/phased_v2
 export OGLD_V2_EUR_CHR22="${OGLD_V2_EUR_CHR22:-$V2/hgdp1kgp_chr22.filtered.SNV_INDEL.phased.shapeit5.bcf}"
 export OGLD_EUR_PC_FILE="${OGLD_EUR_PC_FILE:-/data/opengwasdb/work/ogld/pcs/EUR.eigenvec}"
 # The k = 0 EUR LD Store and #403's 37 Analyses with plink2's leads, which ogld#6 makes
-# (tests/realdata/test_query_panel.py says the layout). A test that needs one and finds it
-# unset fails, naming it.
+# (tests/realdata/test_query_panel.py says the layout). A test whose input is unset, or names
+# nothing, stops as an expected failure naming it (tests/realdata/realdata_inputs.py): a
+# missing input is not a defect of ogld. `-rfEx` prints every such reason.
 export OGLD_EUR_K0_STORE="${OGLD_EUR_K0_STORE:-}"
 export OGLD_403_ANALYSES="${OGLD_403_ANALYSES:-}"
 
-exec pytest -m realdata --timeout=300 -p no:cacheprovider "${PREFLIGHT[@]}" "$@"
+exec pytest -m realdata --timeout=300 -rfEx -p no:cacheprovider "${PREFLIGHT[@]}" "$@"

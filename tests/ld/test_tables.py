@@ -108,7 +108,7 @@ def build_inputs(**overrides: Any) -> ogld.BuildInputs:
         "keep": Path("EUR.keep"),
         "pcs": Path("pcs.eigenvec"),
         "pc_source": "gnomAD v3.1.2 hgdp_tgp_meta.subcontinental_pca.pca_scores",
-        "panel_id": "hgdp1kgp-gnomad-v3.1.2-EUR",
+        "panel_id": "hgdp1kgp-v2-EUR",
         "ancestry": "EUR",
         "genotype_source": "gnomAD v3.1.2 HGDP+1kG",
     }

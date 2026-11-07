@@ -74,6 +74,16 @@ class PcScan(TypedDict):
     rest_null_q99: float
 
 
+class PcNull(TypedDict):
+    """How the PC Check's chance was made (`docs/spec/build-inputs.md` §8): `kind` says what was
+    permuted, and `permutations`, `seed` and `quantile` how (200, 405 and 0.99 by the rule)."""
+
+    kind: str
+    permutations: int
+    seed: int
+    quantile: float
+
+
 class PcCheck(TypedDict):
     """The PC Check's result: the local-PC rule (owner, 7 November 2026; ADR 0002).
 
@@ -92,20 +102,24 @@ class PcCheck(TypedDict):
     max_ratio: float
     scan: list[PcScan]
     dropped: list[str]
-    null: dict[str, float | int | str]
+    null: PcNull
 
 
 class Adjustment(TypedDict):
-    """What was regressed out of the genotypes before r was computed (PC Adjustment).
+    """What was regressed out of the genotypes before r was computed (spec §7).
 
-    `covariates` are the PCs the PC Check kept, by name, the first up to `k_target`;
-    `k` is their number, and it is t_far's k. A build with fewer than `k_min` is refused.
+    `covariates` names every covariate, in order, and `k` is their number: t_far's k. For a
+    build from a PC File they are the first up to `k_target` PCs the PC Check kept, and
+    `k_min` ≤ k ≤ `k_target`, since a build with fewer than `k_min` is refused. With no PC
+    File read, `k_min` does not apply and is None: an unadjusted build records k =
+    `k_target` = 0. An imported LD matrix records its source's covariates and their count
+    as k, and `k_target` and `k_min` are None.
     """
 
     covariates: list[str]
     k: int
-    k_target: int
-    k_min: int
+    k_target: int | None
+    k_min: int | None
     pc_file: PcFile | None
     pc_check: PcCheck | None
 
@@ -122,6 +136,20 @@ class PcDiagnostic(TypedDict):
     rate_r2_ge_0_01_adjusted: float
     rate_r2_ge_0_01_sampling: float
     near_100kb_change: dict[str, float]
+
+
+class VariantFilters(TypedDict):
+    """The build's variant filters and their values (`docs/spec/build-inputs.md` §6).
+
+    `filter` lists the FILTER values that pass (`PASS` and `.`); `mac_min` is the minor
+    allele count floor; `info_min` the INFO floor, None when none was applied (a sequenced
+    panel); `autosomes_only` that a record off chromosomes 1-22 was refused (spec §1).
+    """
+
+    filter: list[str]
+    mac_min: int
+    info_min: float | None
+    autosomes_only: bool
 
 
 class Counts(TypedDict):
@@ -146,7 +174,7 @@ class Provenance(TypedDict):
     source: Source
     panel: Panel
     reference_assembly: str
-    variant_filters: dict[str, int | float | None]
+    variant_filters: VariantFilters
     variants_dropped: dict[str, int]
     n_variants: int
     near_bp: int
