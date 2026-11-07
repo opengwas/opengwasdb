@@ -81,10 +81,13 @@ class PcCheck(TypedDict):
     window explains at least `min_share` of it; that share beats `PcScan.window_null_q99`;
     and `PcScan.ratio` ≤ `max_ratio`. `scan` holds every PC of the PC File, in order,
     `dropped` the local ones, and `null` how chance was made (kind, permutations, seed,
-    quantile).
+    quantile). `step_bp` and `windows` describe the scan: windows start every `step_bp`, and
+    `windows` were scanned.
     """
 
     window_bp: int
+    step_bp: int
+    windows: int
     min_share: float
     max_ratio: float
     scan: list[PcScan]

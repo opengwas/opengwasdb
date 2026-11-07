@@ -227,11 +227,11 @@ the number of covariates actually used (owner, 7 November 2026; ADR 0002, decisi
   share.
 
 **Provenance** (`adjustment.pc_check`, `ogld.format.PcCheck`): `window_bp` (4,000,000),
-`min_share` (0.10), `max_ratio` (0.05), `scan` (one `PcScan` per PC of the file, in order), `dropped` (the local PCs'
+`step_bp` (2,000,000), `windows` (the number of windows scanned), `min_share` (0.10), `max_ratio` (0.05), `scan` (one `PcScan` per PC of the file, in order), `dropped` (the local PCs'
 names), and `null` (how chance was made: kind, permutations, seed, quantile). `adjustment`
 records `k_target` (10), `k_min` (5) and `k`, the number used, and `covariates` names them.
 
-**What it found on the HGDP+1kGP PC Files** (`proto/1-build-inputs@8c25ab3:…/results/pc_check_v2_scan.tsv` and `…/results/pcs_v2/<panel>.json`, `scripts/make_pcs.py --scan-only`'s reports):
+**What it found on the HGDP+1kGP PC Files** (`proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pc_check_v2_scan.tsv` and `proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pcs_v2/<panel>.json`, `scripts/make_pcs.py --scan-only`'s reports):
 
 | panel | samples (PCA + projected) | windows | local PCs | kept | k used | largest window share among PC1–PC10 (window null), and its ratio | smallest ratio of any PC |
 |---|---|---|---|---|---|---|---|
@@ -266,7 +266,7 @@ PC1–PC9 and scanned as if each were a PC: they are what a PC that tracks an in
 - **The window null keeps small panels' noise PCs.** AMR PC5–PC20 reach window shares of
   0.055–0.085 against window nulls of 0.080–0.098; without it, one crossing 0.10 by chance would
   meet the first condition.
-- **Two implementations agree** on the shares: the prototype's `m10_local_pc_rule.py`, written
+- **Two implementations agree** on the shares: the prototype's `proto/1-build-inputs@28b5380:prototypes/build-inputs/m10_local_pc_rule.py`, written
   separately, gives the same windows, window shares and rest shares on EUR as
   `scripts/test_panel/pc_check.py` to every printed digit. `tests/test_pc_check.py` holds the rule
   to the three real verdicts above (EUR 17q21.31 dropped, EUR PC2 kept, AMR PC7 kept).
@@ -274,7 +274,7 @@ PC1–PC9 and scanned as if each were a PC: they are what a PC that tracks an in
 **The rule it replaces.** The first rule failed a PC when one of four named regions explained
 ≥ 10% of it and ≥ 2× the most any of 47 random 4 Mb windows did. It failed EUR PC2 on LCT, with
 gnomAD's PCs (0.217 against 0.047) and with our own region-free ones (0.204 against 0.054)
-(`proto/1-build-inputs@fb3f26c:…/results/pc_check_verdict.tsv`, `pc_check_verdict_own.tsv`). Those
+(`proto/1-build-inputs@96312d8:prototypes/build-inputs/results/pc_check_verdict.tsv`, `proto/1-build-inputs@fb3f26c:prototypes/build-inputs/results/pc_check_verdict_own.tsv`). Those
 windows explain up to 5.4% of PC2, far above chance: PC2 is EUR's north–south ancestry axis, and
 LCT is differentiated along it. The local-PC rule asks the question that matters, whether the
 rest of the genome explains the PC, and keeps it.
@@ -291,7 +291,7 @@ GRCh38, 1-based inclusive, each with its source and its source coordinates:
   _Parkinsonism Relat Disord_, PMC7686230) give it in GRCh38;
 - the MHC (chr6:28,477,797–33,448,354 in GRCh37, the GRC's MHC) and the 8p23.1 inversion
   (chr8:8,055,789–11,980,649 in GRCh37), as Pan-UKB's EUR PCA excluded them
-  (atgu/ukbb_pan_ancestry `pre_process_saige_data.py`). Both lie inside a Price region; they are
+  (atgu/ukbb_pan_ancestry, https://github.com/atgu/ukbb_pan_ancestry/blob/master/pre_process_saige_data.py). Both lie inside a Price region; they are
   listed for their narrower sources.
 
 Each GRCh37 endpoint is lifted alone with UCSC's `hg19ToHg38.over.chain.gz`, so a region is never
@@ -317,7 +317,7 @@ pruning window. The regions also define "outside the excluded regions" for ogld#
 - **Samples:** the members files under `/data/opengwasdb/reference/hgdp1kgp-hg38*/members/`; the
   v2 counts are EUR 771, AFR 801, EAS 816, SAS 782, AMR 345 (ADR 0002 lists the five absent).
 - **PC Files:** `scripts/make_pcs.py` writes `/data/opengwasdb/work/ogld/pcs/<panel>.eigenvec`
-  and `<panel>.json`; declared source "ogld scripts/make_pcs.py on HGDP+1kGP v2" with its commit.
+  and, beside it, the PC Check's JSON report; declared source "ogld scripts/make_pcs.py on HGDP+1kGP v2" with its commit.
 - **Conversion:** §3's BCF command, one fileset per chromosome.
 
 ## 11. The Test Panel

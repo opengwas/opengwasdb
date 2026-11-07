@@ -283,8 +283,9 @@ def scan_of(provenance: ogld.Provenance) -> tuple[dict[str, dict[str, Any]], lis
     """The PC Check's scan by PC, and its dropped PCs, each held to the owner's rule."""
     check = provenance["adjustment"]["pc_check"]
     assert check is not None
-    rule = (check["window_bp"], check["min_share"], check["max_ratio"])
-    assert rule == (4_000_000, 0.1, 0.05)
+    rule = (check["window_bp"], check["step_bp"], check["min_share"], check["max_ratio"])
+    assert rule == (4_000_000, 2_000_000, 0.1, 0.05)
+    assert check["windows"] > 0, "the scan records how many windows it read"
     assert check["null"], "how chance was made is recorded"
     for scan in check["scan"]:
         assert scan["ratio"] == pytest.approx(scan["rest_share"] / scan["window_share"], rel=1e-9)

@@ -117,5 +117,10 @@ def test_covariates_are_the_first_ten_kept(scanned) -> None:
 def test_fewer_kept_pcs_than_the_minimum_is_refused(scanned) -> None:
     windows, local, noise = scanned
     many_local = np.column_stack([local + 1e-3 * noise[:, n] for n in range(16)] + [noise[:, :4]])
-    with pytest.raises(SystemExit, match="fewer than the minimum 5"):
+    with pytest.raises(SystemExit, match="fewer than the minimum 5") as refused:
         pc_check.check(windows, many_local)
+    # build-inputs.md §8: the refusal names the dropped PCs, so a person can see which.
+    message = str(refused.value)
+    assert "keeps 4 PCs" in message
+    assert "dropped as local: PC1, PC2, PC3" in message
+    assert message.rstrip().endswith("PC16")

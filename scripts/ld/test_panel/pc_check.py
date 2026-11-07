@@ -143,7 +143,11 @@ def check(
     s = _scan(w, pcs)
     kept = [str(x["pc"]) for x in s if not x["local"]]
     if len(kept) < k_min:
-        raise SystemExit(f"the PC Check keeps {len(kept)} PCs, fewer than the minimum {k_min}")
+        dropped = ", ".join(str(x["pc"]) for x in s if x["local"])
+        raise SystemExit(
+            f"the PC Check keeps {len(kept)} PCs, fewer than the minimum {k_min}; "
+            f"dropped as local: {dropped}"
+        )
     covariates = kept[:k_target]
     return {
         "window_bp": WINDOW_BP,
