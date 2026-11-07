@@ -11,13 +11,18 @@ purpose, with a changelog fragment that says so.
 from __future__ import annotations
 
 import inspect
+import subprocess
+import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 import ogld
 from ogld import cli, identity, store
+from ogld.query import clumping, matrices, proxies
 
 SURFACE: dict[str, tuple[Callable[..., Any], str]] = {
     "ogld.open": (ogld.open, "(location: 'str | os.PathLike[str]') -> 'LDStore'"),
@@ -62,22 +67,23 @@ SURFACE: dict[str, tuple[Callable[..., Any], str]] = {
     "ogld.LDMatrix.kinds": (ogld.LDMatrix.kinds, "(self) -> 'npt.NDArray[np.str_]'"),
     "ogld.Proxies": (
         ogld.Proxies,
-        "(query: 'npt.NDArray[Any]', proxy: 'npt.NDArray[Any]', r: 'npt.NDArray[np.float64]', "
-        "r2: 'npt.NDArray[np.float64]', distance: 'npt.NDArray[np.int64]', "
+        "(query: 'npt.NDArray[np.str_]', proxy: 'npt.NDArray[np.str_]', "
+        "r: 'npt.NDArray[np.float64]', r2: 'npt.NDArray[np.float64]', "
+        "distance: 'npt.NDArray[np.int64]', "
         "absent: 'tuple[str, ...]', r2_min: 'float', window_bp: 'float', t_far: 'float') -> None",
     ),
     "ogld.Clumps": (
         ogld.Clumps,
-        "(alid: 'npt.NDArray[Any]', chrom: 'npt.NDArray[np.str_]', "
+        "(alid: 'npt.NDArray[np.str_]', chrom: 'npt.NDArray[np.str_]', "
         "position: 'npt.NDArray[np.int64]', score: 'npt.NDArray[np.float64]', "
-        "lead: 'npt.NDArray[Any]', r: 'npt.NDArray[np.float64]', absent: 'tuple[str, ...]', "
+        "lead: 'npt.NDArray[np.str_]', r: 'npt.NDArray[np.float64]', absent: 'tuple[str, ...]', "
         "r2: 'float', window_bp: 'float') -> None",
     ),
-    "ogld.Clumps.leads": (ogld.Clumps.leads, "(self) -> 'npt.NDArray[Any]'"),
+    "ogld.Clumps.leads": (ogld.Clumps.leads, "(self) -> 'npt.NDArray[np.str_]'"),
     "ogld.Variants": (
         ogld.Variants,
         "(chrom: 'npt.NDArray[np.str_]', position: 'npt.NDArray[np.int64]', "
-        "alid: 'npt.NDArray[Any]', a1: 'npt.NDArray[Any]', a2: 'npt.NDArray[Any]', "
+        "alid: 'npt.NDArray[np.str_]', a1: 'npt.NDArray[np.str_]', a2: 'npt.NDArray[np.str_]', "
         "a1_frequency: 'npt.NDArray[np.float64]') -> None",
     ),
     "ogld.Finding": (ogld.Finding, "(rule: 'str', where: 'str', message: 'str') -> None"),
@@ -168,17 +174,89 @@ def test_the_top_level_names_are_the_public_surface() -> None:
         assert hasattr(ogld, name), name
 
 
-def test_every_unbuilt_body_names_the_ticket_that_builds_it() -> None:
+def no_rows() -> np.ndarray:
+    return np.array([0], dtype=np.int64)
+
+
+READER = store.StoreReader.__new__(store.StoreReader)
+WRITER = store.StoreWriter.__new__(store.StoreWriter)
+NO_CLUMPS = ogld.Clumps(
+    alid=np.array([], dtype=str),
+    chrom=np.array([], dtype=str),
+    position=np.array([], dtype=np.int64),
+    score=np.array([], dtype=np.float64),
+    lead=np.array([], dtype=str),
+    r=np.array([], dtype=np.float64),
+    absent=(),
+    r2=0.1,
+    window_bp=1000.0,
+)
+CODES = np.array([0], dtype=np.int16)
+
+#: Every body that raises NotImplementedError, with the ticket that builds it. A ticket
+#: that builds one removes its entry, as it unmarks the contract tests it makes pass.
+UNBUILT: dict[str, tuple[Callable[[], object], str]] = {
+    "identity.orient": (lambda: identity.orient("1", 1, "A", "G"), "ogld#3"),
+    "identity.normalise_chromosome": (lambda: identity.normalise_chromosome("1"), "ogld#3"),
+    "identity.alid_locus": (lambda: identity.alid_locus("1:1:A:G"), "ogld#3"),
+    "StoreReader.open": (lambda: store.StoreReader.open("x"), "ogld#4"),
+    "StoreReader.provenance": (lambda: READER.provenance, "ogld#4"),
+    "StoreReader.rows_of": (lambda: READER.rows_of(["1:1:A:G"]), "ogld#4"),
+    "StoreReader.rows_in": (lambda: READER.rows_in("1", 0, 1), "ogld#4"),
+    "StoreReader.variants": (lambda: READER.variants(no_rows()), "ogld#4"),
+    "StoreReader.pair_r": (lambda: READER.pair_r(no_rows()), "ogld#4"),
+    "StoreReader.index": (lambda: READER.index(no_rows()), "ogld#4"),
+    "StoreReader.band": (lambda: READER.band(no_rows()), "ogld#4"),
+    "StoreWriter.create": (
+        lambda: store.StoreWriter.create("x", variants=None, near_bp=1, far_bp=2),
+        "ogld#4",
+    ),
+    "StoreWriter.write_near": (lambda: WRITER.write_near(0, no_rows(), CODES), "ogld#4"),
+    "StoreWriter.write_index": (
+        lambda: WRITER.write_index("1", no_rows(), no_rows(), CODES),
+        "ogld#4",
+    ),
+    "StoreWriter.finish": (lambda: WRITER.finish({}), "ogld#4"),
+    "validate": (lambda: ogld.validate("x"), "ogld#4"),
+    "matrices.matrix": (lambda: matrices.matrix(READER, [], fill=None), "ogld#4"),
+    "matrices.region": (lambda: matrices.region(READER, "1", 0, 1, fill=None), "ogld#4"),
+    "build": (lambda: ogld.build(None, "x"), "ogld#5"),
+    "proxies.proxies": (lambda: proxies.proxies(READER, [], r2=0.8, kb=1), "ogld#6"),
+    "clumping.clump": (lambda: clumping.clump(READER, [], [], r2=0.1, kb=1), "ogld#6"),
+    "Clumps.leads": (NO_CLUMPS.leads, "ogld#6"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(UNBUILT))
+def test_every_unbuilt_body_names_the_ticket_that_builds_it(name: str) -> None:
     # A stub that raised a bare NotImplementedError would let a contract test xfail for the
-    # wrong ticket; each names its own (ogld#3, #4, #5 or #6).
-    unbuilt = {
-        identity.orient: ("1", 1, "A", "G"),
-        identity.normalise_chromosome: ("1",),
-        identity.alid_locus: ("1:1:A:G",),
-        store.StoreReader.open: ("x",),
-        ogld.validate: ("x",),
-        ogld.open: ("x",),
-    }
-    for function, args in unbuilt.items():
-        with pytest.raises(NotImplementedError, match=r"^ogld#[3-6]$"):
-            function(*args)
+    # wrong ticket; each names its own.
+    call, ticket = UNBUILT[name]
+    with pytest.raises(NotImplementedError, match=rf"^{ticket}$"):
+        call()
+
+
+def test_the_list_of_unbuilt_bodies_is_complete() -> None:
+    package = Path(ogld.__file__).parent
+    stubs = sum(
+        path.read_text().count("raise NotImplementedError(") for path in package.rglob("*.py")
+    )
+    assert stubs == len(UNBUILT), "every stub in ogld/ has an entry in UNBUILT, and no more"
+
+
+def test_ogld_imports_and_opens_without_pgenlib() -> None:
+    # pgenlib is the builder's pgen reader. A reader-only install may lack it, so nothing
+    # outside the builder's read path may import it.
+    code = (
+        "import sys\n"
+        "sys.modules['pgenlib'] = None\n"
+        "import ogld\n"
+        "try:\n"
+        "    ogld.open('no-such-store')\n"
+        "except ImportError:\n"
+        "    raise\n"
+        "except Exception:\n"
+        "    pass\n"
+    )
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr

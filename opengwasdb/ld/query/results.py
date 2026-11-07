@@ -9,7 +9,6 @@ still says what every unstored pair means, and no second matrix is needed for it
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -73,8 +72,8 @@ class Proxies:
     `distance` is |position difference| in bp.
     """
 
-    query: npt.NDArray[Any]
-    proxy: npt.NDArray[Any]
+    query: npt.NDArray[np.str_]
+    proxy: npt.NDArray[np.str_]
     r: npt.NDArray[np.float64]
     r2: npt.NDArray[np.float64]
     distance: npt.NDArray[np.int64]
@@ -89,7 +88,7 @@ class Proxies:
     def __len__(self) -> int:
         return len(self.r)
 
-    def columns(self) -> dict[str, npt.NDArray[Any]]:
+    def columns(self) -> dict[str, npt.NDArray[np.generic]]:
         return columns_of(self)
 
 
@@ -103,11 +102,11 @@ class Clumps:
     it reaches at r̂² ≥ `r2` within `window_bp`.
     """
 
-    alid: npt.NDArray[Any]
+    alid: npt.NDArray[np.str_]
     chrom: npt.NDArray[np.str_]
     position: npt.NDArray[np.int64]
     score: npt.NDArray[np.float64]
-    lead: npt.NDArray[Any]
+    lead: npt.NDArray[np.str_]
     r: npt.NDArray[np.float64]
     absent: tuple[str, ...]
     r2: float
@@ -119,9 +118,9 @@ class Clumps:
     def __len__(self) -> int:
         return len(self.alid)
 
-    def columns(self) -> dict[str, npt.NDArray[Any]]:
+    def columns(self) -> dict[str, npt.NDArray[np.generic]]:
         return columns_of(self)
 
-    def leads(self) -> npt.NDArray[Any]:
+    def leads(self) -> npt.NDArray[np.str_]:
         """The lead ALIDs, strongest first, ties by genomic order then ALID (ogld#6)."""
         raise NotImplementedError("ogld#6")

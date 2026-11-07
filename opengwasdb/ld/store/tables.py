@@ -2,14 +2,14 @@
 
 Tables are frozen dataclasses of equal-length one-dimensional numpy arrays, one per
 column, so they need no dependency beyond numpy, type-check under mypy --strict, and
-convert to a data frame in one call (`pandas.DataFrame(table.columns())`). String
-columns hold Python `str` per row.
+convert to a data frame in one call (`pandas.DataFrame(table.columns())`). A string
+column is a numpy unicode array (`np.str_`), one string per row.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from _typeshed import DataclassInstance
 
 
-def columns_of(table: DataclassInstance) -> dict[str, npt.NDArray[Any]]:
+def columns_of(table: DataclassInstance) -> dict[str, npt.NDArray[np.generic]]:
     """A table's array columns by name, in declaration order."""
     return {
         f.name: getattr(table, f.name)
@@ -40,9 +40,9 @@ class Variants:
 
     chrom: npt.NDArray[np.str_]
     position: npt.NDArray[np.int64]
-    alid: npt.NDArray[Any]
-    a1: npt.NDArray[Any]
-    a2: npt.NDArray[Any]
+    alid: npt.NDArray[np.str_]
+    a1: npt.NDArray[np.str_]
+    a2: npt.NDArray[np.str_]
     a1_frequency: npt.NDArray[np.float64]
 
     def __post_init__(self) -> None:
@@ -51,7 +51,7 @@ class Variants:
     def __len__(self) -> int:
         return len(self.position)
 
-    def columns(self) -> dict[str, npt.NDArray[Any]]:
+    def columns(self) -> dict[str, npt.NDArray[np.generic]]:
         return columns_of(self)
 
 

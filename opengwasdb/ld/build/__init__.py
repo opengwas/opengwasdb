@@ -6,6 +6,10 @@ decision 5). Its inputs are specified in `docs/spec/build-inputs.md` (ADR 0002):
 computed outside the library by a recipe script, and the builder only chooses which of
 them to adjust for, by the PC Check. It imports `ogld.store`, `ogld.format` and
 `ogld.identity`, never `ogld.query`.
+
+pgenlib, the pgen reader, is imported inside the build's read path only, never at module
+import: `import ogld` and every reader must work on an install without it
+(tests/test_surface.py holds this).
 """
 
 from __future__ import annotations

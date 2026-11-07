@@ -28,9 +28,9 @@ def variants(
     return ogld.Variants(
         chrom=np.array([chrom] * n),
         position=positions,
-        alid=np.array([f"{chrom}:{p}:A:G" for p in positions], dtype=object),
-        a1=np.array(["A"] * n, dtype=object),
-        a2=np.array(["G"] * n, dtype=object),
+        alid=np.array([f"{chrom}:{p}:A:G" for p in positions]),
+        a1=np.array(["A"] * n),
+        a2=np.array(["G"] * n),
         a1_frequency=np.full(n, 0.2),
     )
 
