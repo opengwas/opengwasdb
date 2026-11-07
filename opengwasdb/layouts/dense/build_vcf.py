@@ -15,7 +15,7 @@ import logging
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
@@ -56,7 +56,8 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import require_parallel, se_float16
-from opengwasdb.encoding.timing import format_duration, log_phase
+from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase
+from opengwasdb.encoding.timing import log_progress as log_phase_progress
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
@@ -102,6 +103,9 @@ from opengwasdb.variants.routing import (
 )
 
 log = logging.getLogger(__name__)
+
+SURVEY_PROGRESS_EVERY = 25
+"""Analyses between the EAF survey's progress lines."""
 
 # One compressor for every dense statistic array (z/se/eaf), so a new array
 # cannot quietly ship with different settings from the ones beside it.
@@ -575,9 +579,9 @@ def _survey_and_verify_eaf(
     verify in the store's provenance instead of rejecting them.
     """
     id_by_col = {axis.analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
-    eaf_survey = survey_eaf_spills(
-        spill_dir, id_by_col, axis.alids, site_hashes(axis.alids), n_workers=n_workers
-    )
+    with log_phase(log, "EAF site hashes"):
+        hashes = site_hashes(axis.alids)
+    eaf_survey = survey_eaf_spills(spill_dir, id_by_col, axis.alids, hashes, n_workers=n_workers)
     eaf_report = verify_eaf_orientation(
         eaf_survey.observations,
         eaf_reference=eaf_reference,
@@ -673,15 +677,16 @@ def _spill_verify_and_encode(
             n_workers,
             pass2_start,
         )
-        eaf_survey, eaf_report = _survey_and_verify_eaf(
-            spill_dir,
-            manifest_rows,
-            prepared.axis,
-            eaf_reference=eaf_reference,
-            eaf_reference_ancestry=eaf_reference_ancestry,
-            allow_unverified_eaf=allow_unverified_eaf,
-            n_workers=n_workers,
-        )
+        with log_phase(log, "EAF survey and orientation verification"):
+            eaf_survey, eaf_report = _survey_and_verify_eaf(
+                spill_dir,
+                manifest_rows,
+                prepared.axis,
+                eaf_reference=eaf_reference,
+                eaf_reference_ancestry=eaf_reference_ancestry,
+                allow_unverified_eaf=allow_unverified_eaf,
+                n_workers=n_workers,
+            )
         encoded = _write_encoded_bands(
             staged,
             spill_dir,
@@ -1142,6 +1147,43 @@ def _accumulate_survey_column(
     )
 
 
+def _fold_survey(
+    results: Iterable[_SurveyColumn | None],
+    id_by_col: Mapping[int, str],
+    alids: Sequence[str],
+    *,
+    label: str,
+) -> EafSpillSurvey:
+    """Fold the columns' samples into one survey, in the order they are yielded.
+
+    `results` is lazy: the pool's work happens as this loop pulls from it, so
+    the loop's own seconds are timed apart and reported once, summed over the
+    Analyses, rather than as a phase of their own.
+    """
+    observations: dict[str, dict[str, float]] = {aid: {} for aid in id_by_col.values()}
+    totals = _SurveyTotals()
+    timer = PhaseTimer()
+    total = len(id_by_col)
+    started = time.monotonic()
+    for completed, result in enumerate(results, start=1):
+        with timer.phase("accumulate"):
+            _accumulate_survey_column(result, alids, observations, totals)
+        log_phase_progress(log, label, completed, total, started, every=SURVEY_PROGRESS_EVERY)
+    log.info(
+        "%s accumulation: done in %s across %d Analyses",
+        label,
+        format_duration(timer.seconds.get("accumulate", 0.0)),
+        total,
+    )
+    return EafSpillSurvey(
+        observations=observations,
+        n_spill_cells=totals.n_spill_cells,
+        n_eaf_cells=totals.n_eaf_cells,
+        sample_rows=_concatenate_or_empty(totals.sample_rows, np.int64),
+        sample_values=_concatenate_or_empty(totals.sample_values, np.float64),
+    )
+
+
 def survey_eaf_spills(
     spill_dir: Path,
     id_by_col: Mapping[int, str],
@@ -1173,8 +1215,7 @@ def survey_eaf_spills(
     never in completion order. `n_workers <= 1` is the serial path.
     """
     global _survey_context
-    observations: dict[str, dict[str, float]] = {aid: {} for aid in id_by_col.values()}
-    totals = _SurveyTotals()
+    label = f"EAF survey ({suffix.lstrip('.')})" if suffix else "EAF survey"
     try:
         _survey_context = _SurveyContext(
             spill_dir=spill_dir,
@@ -1184,17 +1225,11 @@ def survey_eaf_spills(
             index_key=index_key,
             row_map=row_map,
         )
-        for result in ordered_map(_survey_column, list(id_by_col.items()), n_workers):
-            _accumulate_survey_column(result, alids, observations, totals)
+        with log_phase(log, label):
+            results = ordered_map(_survey_column, list(id_by_col.items()), n_workers)
+            return _fold_survey(results, id_by_col, alids, label=label)
     finally:
         _survey_context = None
-    return EafSpillSurvey(
-        observations=observations,
-        n_spill_cells=totals.n_spill_cells,
-        n_eaf_cells=totals.n_eaf_cells,
-        sample_rows=_concatenate_or_empty(totals.sample_rows, np.int64),
-        sample_values=_concatenate_or_empty(totals.sample_values, np.float64),
-    )
 
 
 @dataclass(frozen=True)

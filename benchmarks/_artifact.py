@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -64,6 +67,67 @@ def provenance() -> dict[str, str]:
         "opengwasdb_path": path,
         "opengwasdb_fingerprint": fingerprint,
     }
+
+
+def host_load() -> dict[str, Any]:
+    """The node's load averages and core count, as one reading."""
+    one, five, fifteen = os.getloadavg()
+    return {"load_1m": one, "load_5m": five, "load_15m": fifteen, "cpus": os.cpu_count()}
+
+
+def tree_is_clean() -> bool:
+    """True when the checkout has no uncommitted change, so `commit()` names the code run."""
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], capture_output=True, text=True, check=True
+    )
+    return not status.stdout.strip()
+
+
+def artifact_header(tool: str, argv: list[str]) -> dict[str, Any]:
+    """What an artifact says about the run that made it, taken before it starts:
+    the tool, its argv, the host load, and `provenance()` plus whether the tree
+    was clean."""
+    return {
+        "tool": tool,
+        "argv": argv,
+        "host_load_start": host_load(),
+        "worktree_clean": tree_is_clean(),
+        **provenance(),
+    }
+
+
+class LoadSampler:
+    """Samples `host_load()` every `period_s` seconds on a thread while a run is in progress.
+
+    A load read only at the start and the end says nothing about a run that
+    overlapped another job in between. Use as a context manager; `samples`
+    holds each reading with its seconds since the start.
+    """
+
+    def __init__(self, period_s: float = 30.0) -> None:
+        self.period_s = period_s
+        self.samples: list[dict[str, Any]] = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._started = 0.0
+
+    def _sample(self) -> None:
+        self.samples.append({"seconds": round(time.monotonic() - self._started, 1), **host_load()})
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.period_s):
+            self._sample()
+
+    def __enter__(self) -> LoadSampler:
+        self._started = time.monotonic()
+        self._sample()
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        self._thread.join()
+        self._sample()
 
 
 def scratch_copy(source: Path, destination: Path) -> str:
