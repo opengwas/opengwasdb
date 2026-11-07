@@ -1,0 +1,766 @@
+{
+ "made_by": "scripts/make_test_panel.py (opengwas/ogld#2)",
+ "params": {
+  "out": "tests/data/test-panel",
+  "work": "/data/opengwasdb/work/tmp/claude-276801/-data-opengwasdb-work-orchestrate-ogld-1-worktrees-2d/0fabf912-4bbf-40b7-9135-647a010b197d/scratchpad/data/tp_work",
+  "plink2": "/home/gh13047/repo/opengwasdb-stores/.pixi/envs/dev/bin/plink2",
+  "bcftools": "/home/gh13047/repo/opengwasdb-stores/.pixi/envs/dev/bin/bcftools",
+  "bgzip": "/home/gh13047/repo/opengwasdb-stores/.pixi/envs/dev/bin/bgzip",
+  "source": "/data/opengwasdb/work/ogld/phased_v2/hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf",
+  "keep": "/data/opengwasdb/reference/hgdp1kgp-hg38/members/EUR.keep",
+  "meta": "/data/opengwasdb/reference/hgdp1kgp-hg38/source/gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.tsv.bgz",
+  "pcs": "/data/opengwasdb/work/ogld/pcs/EUR.eigenvec",
+  "pcs_source": "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002)",
+  "chromosomes": [
+   "21",
+   "22"
+  ],
+  "require_pass": true,
+  "mac_min": 20,
+  "ks": [
+   0,
+   10
+  ],
+  "far_bp": 10000000,
+  "t_far_q": 20.84,
+  "q_arm_start": {
+   "21": 14000000,
+   "22": 16000000
+  },
+  "proxy_window": {
+   "21": [
+    30686000,
+    30740000
+   ],
+   "22": [
+    38850000,
+    38950000
+   ]
+  },
+  "proxy_max": 150,
+  "gwas_window": {
+   "21": [
+    42000000,
+    43000000
+   ],
+   "22": [
+    20000000,
+    21500000
+   ]
+  },
+  "gwas_max": {
+   "21": 200,
+   "22": 300
+  },
+  "backbone_bp": 300000,
+  "common_maf": 0.05,
+  "far_search_thin_bp": 20000,
+  "far_pairs_per_chrom": 3,
+  "edge_chrom": "22",
+  "exact_distances": [
+   3000000,
+   3000001,
+   10000000,
+   10000001
+  ],
+  "fail_mac_values": [
+   0,
+   1,
+   5,
+   10,
+   19
+  ],
+  "fail_filters_max": 4,
+  "causal_anchor": {
+   "21": [
+    42150000,
+    42500000,
+    42850000
+   ],
+   "22": [
+    20150000,
+    20450000,
+    20750000,
+    21050000,
+    21350000
+   ]
+  },
+  "causal_min_maf": 0.2,
+  "h2_each": 0.06,
+  "seed": 20261107,
+  "gwas_pcs": 10,
+  "clump_p1": 5e-08,
+  "clump_kb": 3000,
+  "clump_r2": [
+   0.01,
+   0.001
+  ],
+  "size_budget_bytes": 5000000,
+  "threads": 2,
+  "memory_mb": 32000
+ },
+ "conversion_command": [
+  "plink2",
+  "--vcf",
+  "/data/opengwasdb/work/tmp/claude-276801/-data-opengwasdb-work-orchestrate-ogld-1-worktrees-2d/0fabf912-4bbf-40b7-9135-647a010b197d/scratchpad/data/tp_work/test_panel.vcf.gz",
+  "--keep",
+  "/data/opengwasdb/reference/hgdp1kgp-hg38/members/EUR.keep",
+  "--max-alleles",
+  "2",
+  "--set-all-var-ids",
+  "@:#:$r:$a",
+  "--new-id-max-allele-len",
+  "1000",
+  "--make-pgen",
+  "pvar-cols=filter",
+  "--out",
+  "/data/opengwasdb/work/tmp/claude-276801/-data-opengwasdb-work-orchestrate-ogld-1-worktrees-2d/0fabf912-4bbf-40b7-9135-647a010b197d/scratchpad/data/tp_work/panel"
+ ],
+ "inputs": {
+  "genotypes": {
+   "21": {
+    "path": "/data/opengwasdb/work/ogld/phased_v2/hgdp1kgp_chr21.filtered.SNV_INDEL.phased.shapeit5.bcf",
+    "bytes": 269957263,
+    "verified": {
+     "file": "hgdp1kgp_chr21.filtered.SNV_INDEL.phased.shapeit5.bcf",
+     "bytes": 269957263,
+     "crc32c": "SC95Qg==",
+     "md5": "f0xDGSV+WobjhOAaFsTxOw==",
+     "verified_against": [
+      "crc32c"
+     ],
+     "generation": "1691452840730543",
+     "updated": "2023-08-08T00:00:40.761Z",
+     "url": "https://storage.googleapis.com/gcp-public-data--gnomad/resources/hgdp_1kg/phased_haplotypes_v2/hgdp1kgp_chr21.filtered.SNV_INDEL.phased.shapeit5.bcf"
+    }
+   },
+   "22": {
+    "path": "/data/opengwasdb/work/ogld/phased_v2/hgdp1kgp_chr22.filtered.SNV_INDEL.phased.shapeit5.bcf",
+    "bytes": 278689536,
+    "verified": {
+     "file": "hgdp1kgp_chr22.filtered.SNV_INDEL.phased.shapeit5.bcf",
+     "bytes": 278689536,
+     "crc32c": "reIgjw==",
+     "md5": "6PY3ioMcfmpLLTZF9jVPGw==",
+     "verified_against": [
+      "crc32c"
+     ],
+     "generation": "1691452839099606",
+     "updated": "2023-08-08T00:00:39.131Z",
+     "url": "https://storage.googleapis.com/gcp-public-data--gnomad/resources/hgdp_1kg/phased_haplotypes_v2/hgdp1kgp_chr22.filtered.SNV_INDEL.phased.shapeit5.bcf"
+    }
+   }
+  },
+  "keep": {
+   "path": "/data/opengwasdb/reference/hgdp1kgp-hg38/members/EUR.keep",
+   "sha256": "5b491d6fd477e4cc9a48cc0928463d50ce3cb49a5890b6eeb82b396fe81cad71"
+  },
+  "sample_meta": {
+   "path": "/data/opengwasdb/reference/hgdp1kgp-hg38/source/gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.tsv.bgz",
+   "sha256": "d5c212dd6534fbaf6deb1110cc70a6e9fd0322b97f27d6f0acde2a3fa6cb52a9"
+  },
+  "pcs": {
+   "path": "/data/opengwasdb/work/ogld/pcs/EUR.eigenvec",
+   "sha256": "8ea02cdc208b334278d348b0d53e46cb6c6d322ea69b89c8e26d72ad52915e79"
+  }
+ },
+ "tools": {
+  "plink2": "PLINK v2.0.0-a.6.9LM 64-bit Intel (29 Jan 2025)",
+  "bcftools": "bcftools 1.24",
+  "numpy": "2.3.5",
+  "python": "3.12.16"
+ },
+ "counts": {
+  "n_samples": 771,
+  "n_variants": 1061,
+  "n_passing": 1056,
+  "passing_by_chrom": {
+   "21": 468,
+   "22": 588
+  },
+  "dropped": {
+   "filter": 0,
+   "mac": 5,
+   "zero_variance": 0
+  },
+  "reference_pairs": 146593
+ },
+ "edge_cases": {
+  "clusters": {
+   "proxy_cluster_chr21": {
+    "first_row": 60,
+    "last_row": 209,
+    "rows": 150,
+    "pairs": 11175,
+    "pairs_r2_ge_0.8_k0": 5514,
+    "pairs_r2_ge_0.8_k10": 5511
+   },
+   "proxy_cluster_chr22": {
+    "first_row": 869,
+    "last_row": 1018,
+    "rows": 150,
+    "pairs": 11175,
+    "pairs_r2_ge_0.8_k0": 534,
+    "pairs_r2_ge_0.8_k10": 534
+   },
+   "gwas_region_chr21": {
+    "first_row": 250,
+    "last_row": 455,
+    "rows": 200,
+    "pairs": 19900,
+    "pairs_r2_ge_0.8_k0": 78,
+    "pairs_r2_ge_0.8_k10": 77
+   },
+   "gwas_region_chr22": {
+    "first_row": 495,
+    "last_row": 804,
+    "rows": 300,
+    "pairs": 44850,
+    "pairs_r2_ge_0.8_k0": 346,
+    "pairs_r2_ge_0.8_k10": 342
+   },
+   "backbone_chr21": {
+    "first_row": 0,
+    "last_row": 467,
+    "rows": 109,
+    "pairs": 3036,
+    "pairs_r2_ge_0.8_k0": 0,
+    "pairs_r2_ge_0.8_k10": 0
+   },
+   "backbone_chr22": {
+    "first_row": 471,
+    "last_row": 1060,
+    "rows": 116,
+    "pairs": 3266,
+    "pairs_r2_ge_0.8_k0": 0,
+    "pairs_r2_ge_0.8_k10": 0
+   }
+  },
+  "exact": {
+   "exact_10000000": {
+    "rows": [
+     475,
+     821
+    ],
+    "positions": [
+     16029456,
+     26029456
+    ],
+    "distance": 10000000,
+    "in_reference": {
+     "r_k0": 0.0317367611720796,
+     "r_k10": 0.024265418213713957
+    }
+   },
+   "exact_10000001": {
+    "rows": [
+     479,
+     823
+    ],
+    "positions": [
+     16231175,
+     26231176
+    ],
+    "distance": 10000001,
+    "in_reference": null
+   },
+   "exact_3000000": {
+    "rows": [
+     478,
+     491
+    ],
+    "positions": [
+     16190010,
+     19190010
+    ],
+    "distance": 3000000,
+    "in_reference": {
+     "r_k0": -0.02521895551610736,
+     "r_k10": -0.03455311946697763
+    }
+   },
+   "exact_3000001": {
+    "rows": [
+     472,
+     490
+    ],
+    "positions": [
+     16022568,
+     19022569
+    ],
+    "distance": 3000001,
+    "in_reference": {
+     "r_k0": -0.08332359312251093,
+     "r_k10": -0.08091322778198387
+    }
+   }
+  },
+  "far_pairs_k10": {
+   "t_far_k10": 0.027421052631578947,
+   "far_pairs_k10": 7,
+   "far_pairs_named": [
+    {
+     "rows": [
+      6,
+      39
+     ],
+     "distance": 9198849,
+     "r_k0": 0.1668268148531578,
+     "r_k10": 0.17279452502231543
+    },
+    {
+     "rows": [
+      35,
+      216
+     ],
+     "distance": 8517708,
+     "r_k0": 0.1727371166729743,
+     "r_k10": 0.18567028816782435
+    },
+    {
+     "rows": [
+      44,
+      221
+     ],
+     "distance": 7734483,
+     "r_k0": 0.177043593328757,
+     "r_k10": 0.17014993888154517
+    },
+    {
+     "rows": [
+      848,
+      1032
+     ],
+     "distance": 8793156,
+     "r_k0": 0.19866949733666195,
+     "r_k10": 0.20344341835890994
+    },
+    {
+     "rows": [
+      854,
+      1020
+     ],
+     "distance": 4001684,
+     "r_k0": 0.18846608814778262,
+     "r_k10": 0.19309278592668805
+    },
+    {
+     "rows": [
+      856,
+      1025
+     ],
+     "distance": 4954402,
+     "r_k0": 0.1923110455307261,
+     "r_k10": 0.21042773409728627
+    }
+   ],
+   "bound_pairs_k10": 37374,
+   "first_bound_pair": {
+    "rows": [
+     0,
+     11
+    ],
+    "distance": 3000282,
+    "r_k10": -0.021592651529779093
+   }
+  },
+  "beyond_far_bp": {
+   "same_chromosome_pairs_over_far_bp": 135263,
+   "first_same_chromosome": [
+    0,
+    36
+   ],
+   "cross_chromosome_pairs": 275184,
+   "first_cross_chromosome": [
+    0,
+    471
+   ]
+  },
+  "multiallelic": {
+   "rows": [
+    476,
+    477
+   ],
+   "positions": [
+    16109998,
+    16109998
+   ],
+   "alleles": [
+    [
+     "G",
+     "A"
+    ],
+    [
+     "G",
+     "T"
+    ]
+   ],
+   "pair_at_distance_0": {
+    "r_k0": -0.060777782085407364,
+    "r_k10": -0.06414839191777144
+   }
+  },
+  "long_indel": {
+   "row": 806,
+   "chrom": "22",
+   "pos": 21715659,
+   "ref": "GCAACCTCCGCCTCCCGGGTTCAAGTGATTCTCCTGCCTCAGCCTCCTGAGTAGCTGGGACTACTGGCACGTGCCACCACACCTAATTTTTCTTTTTCTTTTCTTTTTTTTTTTTTTTTTTTGAGACAGAGTTTCGCTCTTATTGCCCAGGCTGGAGTGCAATGGCACGATCTTGGCTCACCA",
+   "alt": "G",
+   "filter": ".",
+   "mac": 287,
+   "drop_reason": "",
+   "ref_length": 183,
+   "alt_length": 1,
+   "chrom_pos_ref_alt_bytes": 197
+  },
+  "failing": {
+   "filter": [],
+   "mac": [
+    {
+     "row": 468,
+     "chrom": "22",
+     "pos": 16007829,
+     "ref": "G",
+     "alt": "A",
+     "filter": ".",
+     "mac": 0,
+     "drop_reason": "mac"
+    },
+    {
+     "row": 469,
+     "chrom": "22",
+     "pos": 16007886,
+     "ref": "C",
+     "alt": "T",
+     "filter": ".",
+     "mac": 5,
+     "drop_reason": "mac"
+    },
+    {
+     "row": 470,
+     "chrom": "22",
+     "pos": 16007917,
+     "ref": "A",
+     "alt": "G",
+     "filter": ".",
+     "mac": 1,
+     "drop_reason": "mac"
+    },
+    {
+     "row": 473,
+     "chrom": "22",
+     "pos": 16024793,
+     "ref": "C",
+     "alt": "A",
+     "filter": ".",
+     "mac": 19,
+     "drop_reason": "mac"
+    },
+    {
+     "row": 474,
+     "chrom": "22",
+     "pos": 16027434,
+     "ref": "C",
+     "alt": "G",
+     "filter": ".",
+     "mac": 10,
+     "drop_reason": "mac"
+    }
+   ],
+   "zero_variance": []
+  },
+  "zero_variance_site": [],
+  "gwas": {
+   "causal_rows": [
+    287,
+    353,
+    421,
+    537,
+    612,
+    693,
+    774,
+    798
+   ],
+   "betas": [
+    0.37552462116871427,
+    -0.38891640360228197,
+    -0.35434514830385533,
+    -0.35278991108670144,
+    -0.36083892088303443,
+    0.37138912161270954,
+    -0.41012765731685885,
+    -0.41678517258988973
+   ],
+   "max_abs_z": 8.917518701011595,
+   "leads": {
+    "0.01": [
+     612,
+     421,
+     774,
+     537,
+     353,
+     798,
+     287,
+     730
+    ],
+    "0.001": [
+     612,
+     421,
+     774,
+     353,
+     513,
+     287
+    ]
+   }
+  }
+ },
+ "pc_check": {
+  "window_bp": 4000000,
+  "step_bp": 2000000,
+  "min_share": 0.1,
+  "windows": 33,
+  "scan": [
+   {
+    "pc": "PC1",
+    "window": "22:22021005-26021004",
+    "window_share": 0.08430652110855613,
+    "rest_share": 0.04190907116376392,
+    "local": false,
+    "rest_null_q99": 0.00897270100248532
+   },
+   {
+    "pc": "PC2",
+    "window": "22:24021005-28021004",
+    "window_share": 0.03615913206276328,
+    "rest_share": 0.01909401098549406,
+    "local": false,
+    "rest_null_q99": 0.008727268899794966
+   },
+   {
+    "pc": "PC3",
+    "window": "22:18021005-22021004",
+    "window_share": 0.03206647641191293,
+    "rest_share": 0.010749367602118361,
+    "local": false,
+    "rest_null_q99": 0.00862840582804242
+   },
+   {
+    "pc": "PC4",
+    "window": "22:36021005-40021004",
+    "window_share": 0.026349890624470244,
+    "rest_share": 0.00887593054005518,
+    "local": false,
+    "rest_null_q99": 0.008769329783073807
+   },
+   {
+    "pc": "PC5",
+    "window": "21:24000167-28000166",
+    "window_share": 0.028148811195805905,
+    "rest_share": 0.009756881657504215,
+    "local": false,
+    "rest_null_q99": 0.008502185664259629
+   },
+   {
+    "pc": "PC6",
+    "window": "21:36000167-40000166",
+    "window_share": 0.024220706355568066,
+    "rest_share": 0.009297465028201357,
+    "local": false,
+    "rest_null_q99": 0.008644030524630584
+   },
+   {
+    "pc": "PC7",
+    "window": "21:18000167-22000166",
+    "window_share": 0.02288166916060456,
+    "rest_share": 0.008444091731261823,
+    "local": false,
+    "rest_null_q99": 0.008739642405153073
+   },
+   {
+    "pc": "PC8",
+    "window": "22:22021005-26021004",
+    "window_share": 0.023487087431667067,
+    "rest_share": 0.007127990588164679,
+    "local": false,
+    "rest_null_q99": 0.008931158741394253
+   },
+   {
+    "pc": "PC9",
+    "window": "22:24021005-28021004",
+    "window_share": 0.024517280436259583,
+    "rest_share": 0.00806528891316777,
+    "local": false,
+    "rest_null_q99": 0.0086932438966076
+   },
+   {
+    "pc": "PC10",
+    "window": "22:30021005-34021004",
+    "window_share": 0.015055650267547283,
+    "rest_share": 0.006018766245545026,
+    "local": false,
+    "rest_null_q99": 0.009035314055974308
+   },
+   {
+    "pc": "PC11",
+    "window": "22:36021005-40021004",
+    "window_share": 0.019981203337639662,
+    "rest_share": 0.007200146427289019,
+    "local": false,
+    "rest_null_q99": 0.008459205304924082
+   },
+   {
+    "pc": "PC12",
+    "window": "21:34000167-38000166",
+    "window_share": 0.022684758024055784,
+    "rest_share": 0.008315288389175312,
+    "local": false,
+    "rest_null_q99": 0.008604292158993125
+   },
+   {
+    "pc": "PC13",
+    "window": "21:28000167-32000166",
+    "window_share": 0.023289953514413785,
+    "rest_share": 0.00831790728259359,
+    "local": false,
+    "rest_null_q99": 0.008671107581781077
+   },
+   {
+    "pc": "PC14",
+    "window": "22:28021005-32021004",
+    "window_share": 0.01739859630057268,
+    "rest_share": 0.0067138542660784934,
+    "local": false,
+    "rest_null_q99": 0.008668720176419242
+   },
+   {
+    "pc": "PC15",
+    "window": "21:36000167-40000166",
+    "window_share": 0.021769038278737232,
+    "rest_share": 0.007983327245080794,
+    "local": false,
+    "rest_null_q99": 0.009168054688924466
+   },
+   {
+    "pc": "PC16",
+    "window": "21:20000167-24000166",
+    "window_share": 0.020134632198786407,
+    "rest_share": 0.007284764279906553,
+    "local": false,
+    "rest_null_q99": 0.008652095318184698
+   },
+   {
+    "pc": "PC17",
+    "window": "21:14000167-18000166",
+    "window_share": 0.025901035361306814,
+    "rest_share": 0.008226233798442353,
+    "local": false,
+    "rest_null_q99": 0.009350195279177244
+   },
+   {
+    "pc": "PC18",
+    "window": "21:40000167-44000166",
+    "window_share": 0.02627100956422652,
+    "rest_share": 0.008066803945985896,
+    "local": false,
+    "rest_null_q99": 0.008960615588356551
+   },
+   {
+    "pc": "PC19",
+    "window": "22:40021005-44021004",
+    "window_share": 0.017552347954835887,
+    "rest_share": 0.007725700304703929,
+    "local": false,
+    "rest_null_q99": 0.008601876126731075
+   },
+   {
+    "pc": "PC20",
+    "window": "21:36000167-40000166",
+    "window_share": 0.025462566216420006,
+    "rest_share": 0.00859321009726674,
+    "local": false,
+    "rest_null_q99": 0.00920004923481222
+   }
+  ],
+  "dropped": [],
+  "null": {
+   "kind": "rest_share of each PC's values permuted across samples",
+   "permutations": 200.0,
+   "seed": 405.0,
+   "quantile": 0.99
+  },
+  "covariates": [
+   "PC1",
+   "PC2",
+   "PC3",
+   "PC4",
+   "PC5",
+   "PC6",
+   "PC7",
+   "PC8",
+   "PC9",
+   "PC10"
+  ]
+ },
+ "clump": {
+  "p1": 5e-08,
+  "p2": 5e-08,
+  "kb": 3000,
+  "r2": [
+   0.01,
+   0.001
+  ],
+  "p_from_z": "erfc(|z| / sqrt(2))",
+  "ld": "plink2's own, k = 0, from panel.pgen's passing rows"
+ },
+ "files": {
+  "README.md": {
+   "sha256": "4aa853d5fe30a99a294f9ce58d2c0a57751540360b16ba5fff62c82fac77ea1d",
+   "bytes": 9361
+  },
+  "gwas/z.tsv": {
+   "sha256": "514588fea4e8e882986049c69b580ce3ccf32d2de7565b03bb72bedae88e1e1e",
+   "bytes": 24805
+  },
+  "panel.keep": {
+   "sha256": "5b491d6fd477e4cc9a48cc0928463d50ce3cb49a5890b6eeb82b396fe81cad71",
+   "bytes": 6609
+  },
+  "panel.pgen": {
+   "sha256": "228b0734e0f4f447af35adcea6d3d46e5592536030130df5289065e1d3610941",
+   "bytes": 149059
+  },
+  "panel.psam": {
+   "sha256": "8ff7ddb764d24aee07b6e1a4aaea677f009f6708f8a0dcc92e2acf81a4f69179",
+   "bytes": 8926
+  },
+  "panel.pvar": {
+   "sha256": "a6200ea0a739d22c7fd7b1e09a98977312b2e96916a81cb336b63f2477e160fb",
+   "bytes": 37521
+  },
+  "pcs.eigenvec": {
+   "sha256": "1b9bd8dca2b960b69264a44a5d65b34bfffbd7165862aa16b214fa6b04709348",
+   "bytes": 173618
+  },
+  "plink2/clump_r2_0.001.clumps": {
+   "sha256": "65ce9a64149f782605973c6c8c4cd0ddc0aed6163bfcde04a6706752a8c3703c",
+   "bytes": 514
+  },
+  "plink2/clump_r2_0.01.clumps": {
+   "sha256": "f6ef7d49746c39fb1f4dd3a048d0b22e236ecd414388e9c12bb2a265ac68c4d3",
+   "bytes": 587
+  },
+  "plink2/r_unphased_k0.npz": {
+   "sha256": "23437a88f73243d6f0e9f073b13694968efd8239bda9ad110cbba98dff535a86",
+   "bytes": 838217
+  },
+  "reference/r.npz": {
+   "sha256": "2af6404cbf9ab8058ad2a16c5a3343e98c1da8c9f1f5bb752367b2ecdd144dd1",
+   "bytes": 1715613
+  },
+  "variants.tsv": {
+   "sha256": "61a0a8e9317c69a61f960128014e4070f8549350e1e3810358cb9c400ba1f239",
+   "bytes": 44956
+  }
+ },
+ "total_bytes": 3009786
+}
