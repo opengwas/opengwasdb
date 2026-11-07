@@ -1,5 +1,11 @@
 # LD Stores hold a 3 Mb Near Band and thresholded Far Pairs
 
+> **Clarified on 7 November 2026** (see "Clarification, 7 November 2026" at the end). The
+> upstream half is settled as a Proxy Index; a matrix query returns NaN for an unstored pair and a
+> number only through the caller's `fill`; and the PC part of decision 4 is superseded by
+> [ADR 0002](./0002-build-inputs.md): PCs are supplied in a PC File and checked by the PC Check,
+> not computed by ogld. The decisions below stand as written otherwise.
+
 Issue [#2](https://github.com/opengwas/ogld/issues/2), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 This ADR records the owner's decisions of 7 November 2026 (epic #1, "Decisions already taken"),
 and the options they rejected. It also records what the prototypes measured. The format itself is
@@ -152,3 +158,51 @@ all five panels.
 - A request whose threshold is below t_far is refused only when its window exceeds 3 Mb. A small
   panel such as AMR (t_far 0.062) therefore refuses more than a large one. UK Biobank EUR
   (t_far 0.001) refuses, at r2 ≥ 0.001, only windows over 10 Mb.
+
+## Clarification, 7 November 2026
+
+The owner checked this ADR and the spec at ogld#2 and decided four further points the same day
+(epic #1, comment of 7 November 2026, decisions 1, 2, 3 and 6). They clarify the decisions above
+and do not reverse them: the answer table and the refusals stand.
+
+**The upstream half is a Proxy Index** (decision 1 of the comment). The consequence above, "A
+variant's upstream partners are scattered", is settled. Per variant, the LD Store keeps every
+partner within 10 Mb on either side with r̂² ≥ t_far, stored in both directions, so `proxies()`
+reads one row (0.045 MB, 9.7 ms on the prototype) instead of the Near Band's column (about 650 MB).
+It costs 3.1–8.7% of a store. Because the index holds every Far Pair, in both directions, the spec
+recommends it as the Far Pairs' only storage: one dense Near Band and one sparse, symmetric,
+thresholded index (`docs/spec/ld-store.md` §5 and §11). That changes no answer and no refusal, and
+whether to merge is the owner's decision, put to them at ogld#2. Decision 3 above is unchanged in
+meaning: a 3–10 Mb pair is stored exactly when r̂² ≥ t_far.
+
+**A matrix is one signed-r matrix, NaN where unstored** (decision 2). A matrix query returns the
+Stored r of every pair it holds and NaN for every other pair, the Bound and Not Measured alike.
+What a NaN means follows from the returned positions, chromosomes and t_far: the Bound when the
+pair is 3–10 Mb apart on one chromosome, Not Measured otherwise. A caller that passes `fill`, such
+as 0, gets that number in place of NaN. This replaces the epic's acceptance criterion "No query
+ever turns an unstored pair into a 0" for a query whose caller asks for a fill, and the spec's
+earlier rule that a reader returning a plain numeric matrix must refuse. An LD Store itself still
+never holds a 0, or any code, for an unstored pair.
+
+**The queries** (decision 3). `matrix` for a list of ALIDs; `region` for a centre and a radius,
+whose width is capped at the store's far distance (radius ≤ 5 Mb); `proxies` for a list of ALIDs,
+by default at r² ≥ 0.8 within 10 Mb; and `clump` for ALIDs, a score, r² and a window. Thresholds
+compare r̂², values are returned as signed r, and the refusals above stand, compared with the
+distances each store records. MR's r² 0.001 with a 10 Mb window is answered only where
+t_far = 0.001, on UK Biobank EUR.
+
+**PCs are supplied** (decision 6). ogld runs no PCA. A build reads precomputed PCs from a PC File,
+and HGDP+1kGP's are gnomAD v3.1.2's `subcontinental_pca` (20 PCs, covering all 3,520 members of
+the five panels). Those were not computed with the Long-Range LD Regions excluded, so the builder's
+PC Check tests each PC against those regions and fails a build when one tracks a region. Decision
+4's "The PCs come from LD-pruned common variants, with the Long-Range LD Regions excluded" is
+superseded by [ADR 0002](./0002-build-inputs.md), which records this decision with the build
+inputs. What PC Adjustment is, and why, is unchanged.
+
+**Provenance** (the comment "Pan-UKB LD as a source"). Importing Pan-UKB's LD matrices is a later
+epic, and the format allows it now. Each store records its source kind (genotypes or an imported
+LD matrix), every covariate it adjusted for by name, with t_far's k counting them, and the
+distances it measured: 3 Mb near, and at most 10 Mb far (`docs/spec/ld-store.md` §7).
+
+The format version stays `0.1.0`: no LD Store has been written in it yet.
+
