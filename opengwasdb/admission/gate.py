@@ -123,8 +123,8 @@ class Gate:
         made_absent = tally.frequencies.made_absent
         if made_absent:
             self._counts += AdmissionCounts(eaf_made_absent=made_absent)
-        if tally.indels_kept_by_hm_code:
-            self._counts += AdmissionCounts(indels_kept_by_hm_code=tally.indels_kept_by_hm_code)
+        if kept := tally.indel_rows_kept_by_hm_code:
+            self._counts += AdmissionCounts(indel_rows_kept_by_hm_code=kept)
 
     def collapsed(self, n: int) -> None:
         """``n`` admitted rows agreed with an earlier row for their place."""

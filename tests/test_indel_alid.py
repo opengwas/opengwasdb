@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from opengwasdb.admission.rules import LOGGED, Reason
+from opengwasdb.readers.tabular import NO_REFERENCE
 from opengwasdb.variants.normalise import (
     IdentityFaults,
     MalformedIdentity,
@@ -37,6 +38,34 @@ def test_an_insertion_keeps_its_spelling() -> None:
 
 def test_the_two_alleles_of_a_repeat_are_two_alids() -> None:
     assert canonical_alid("1", 827587, *INSERTION) != canonical_alid("1", 827587, *DELETION)
+
+
+#: Allele pairs of every shape: SNVs, substitutions, insertions and deletions
+#: (anchored or not), each both ways round.
+PAIRS = [
+    (ref, alt)
+    for one, other in [
+        ("A", "G"), ("C", "T"), ("AC", "GT"), ("ACG", "TTT"), ("G", "GGGGCC"),
+        ("T", "TA"), ("A", "CT"), ("GAT", "C"), ("AT", "ATTT"),
+    ]
+    for ref, alt in [(one, other), (other, one)]
+]
+
+
+def test_the_vectorised_alid_rule_gives_alid_alleles_answer() -> None:
+    import numpy as np
+
+    from opengwasdb.variants.normalise import alid_allele_arrays, alid_alleles
+
+    ref = np.array([r for r, _a in PAIRS], dtype=object)
+    alt = np.array([a for _r, a in PAIRS], dtype=object)
+
+    first, second, indel = alid_allele_arrays(ref, alt)
+
+    assert list(zip(first.tolist(), second.tolist(), strict=True)) == [
+        alid_alleles(r, a) for r, a in PAIRS
+    ]
+    assert indel.tolist() == [len(r) != len(a) for r, a in PAIRS]
 
 
 @pytest.mark.parametrize(
@@ -89,7 +118,7 @@ def test_an_indel_whose_source_declares_no_reference_names_no_alid(ref: str, alt
 def test_an_undeclared_indel_is_recorded_as_an_identity_fault() -> None:
     faults = IdentityFaults()
     ref, alt = DELETION
-    assert orient_or_drop("1", 827587, alt, ref, faults, other_is_reference=False) is None
+    assert orient_or_drop("1", 827587, alt, ref, faults, declaration=NO_REFERENCE, row={}) is None
     assert faults.rows == [("1:827587:GGGGCC:G", "indel_reference_undeclared")]
 
 
@@ -262,7 +291,7 @@ def test_every_reader_spells_an_indel_by_its_declared_reference_or_drops_it(
     assert alids == [alid for alid, _ in expected]
     assert zs == pytest.approx([z for _, z in expected])
     assert [list(row) for row in tally.faults.rows] == faults
-    assert tally.indels_kept_by_hm_code == kept_by_hm_code
+    assert tally.indel_rows_kept_by_hm_code == kept_by_hm_code
     associations = list(reader.stream_associations(StreamTally()))
     assert [
         canonical_alid(a.chromosome, a.position, a.ref, a.alt) for a in associations
@@ -368,6 +397,9 @@ def test_completion_adds_no_second_spelling_of_an_observed_deletion(tmp_path, ca
     assert completed_z == observed_z == pytest.approx([-3.0], abs=1e-3)
     assert _panel_indels_record(completed) == {
         "reference_from": "none", "tables": [], "n_indels": 1, "n_placed": 0,
+        "unplaced_rows": {
+            "no_reference": 1, "no_effect_allele": 0, "effect_allele_not_an_allele": 0,
+        },
     }
     assert "names no indel's reference" in caplog.text
     result = validate_store(completed)
@@ -408,21 +440,41 @@ def test_a_panel_insertion_beside_an_observed_deletion_is_a_new_variant(tmp_path
 # --- validate: an indel ALID against the table's own orientation --------------
 
 
-def _observed_deletion_store(tmp_path):
-    """A 0.2.1 Dense Store from FinnGen whose variant table holds a deletion."""
+#: Each layout's 0.2.1 Store of one observed deletion.
+LAYOUTS = ["dense", "ragged", "hybrid"]
+
+
+def _observed_deletion_store(tmp_path, layout: str = "dense"):
+    """A 0.2.1 Store whose variant table holds a deletion: Dense from FinnGen,
+    Ragged from GWAS-SSF (harmoniser code 10), Hybrid from GWAS-VCF with the
+    deletion in its Ragged Overflow, off the Dense Component's axis."""
     import test_reversed_indels as pair
+    from admission_helpers import ragged_ssf_store
 
     from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
+    from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 
     rows = [
         ("1", "900000", "A", "G", "0.2", "0.1", "0.3"),
         ("1", "950000", "GGGGCC", "G", "0.3", "0.1", "0.2"),
     ]
-    source = pair._finngen(tmp_path / "trait.tsv", rows)
+    if layout == "ragged":
+        store, _result = ragged_ssf_store(tmp_path, pair._ssf_rows(rows, hm_code="10"))
+        return store
     store = tmp_path / "store.opengwasdb"
+    if layout == "hybrid":
+        panel = tmp_path / "panel.txt"
+        panel.write_text("1:900000:A:G\n", encoding="utf-8")
+        build_hybrid_from_vcf_manifest(
+            pair._manifest(tmp_path, pair._gwas_vcf(tmp_path / "trait.vcf", rows),
+                           "opengwasdb.gwas-vcf"),
+            store, reference_panel=panel, store_id="s", release_id="r",
+        )
+        return store
     build_dense_from_vcf_manifest(
-        pair._manifest(tmp_path, source, "opengwasdb.finngen-r13"), store,
-        store_id="s", release_id="r",
+        pair._manifest(tmp_path, pair._finngen(tmp_path / "trait.tsv", rows),
+                       "opengwasdb.finngen-r13"),
+        store, store_id="s", release_id="r",
     )
     return store
 
@@ -470,10 +522,12 @@ def _sorted_deletion(line: str, *, source_alid: str | None = None) -> str:
     return "\t".join(fields) + "\n"
 
 
-def test_a_0_2_1_store_passes_the_indel_order_rule(tmp_path) -> None:
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_a_0_2_1_store_passes_the_indel_order_rule(tmp_path, layout: str) -> None:
     from opengwasdb.validation.validate import validate_store
 
-    store = _observed_deletion_store(tmp_path)
+    store = _observed_deletion_store(tmp_path, layout)
+    assert DELETION_AT_950000 in _alids_at_950000(store), "the fixture must hold the deletion"
 
     result = validate_store(store, rules={"variant_table.indel_order"})
 
@@ -482,10 +536,11 @@ def test_a_0_2_1_store_passes_the_indel_order_rule(tmp_path) -> None:
     assert not result.skipped
 
 
-def test_an_indel_alid_its_effect_allele_contradicts_fails(tmp_path) -> None:
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_an_indel_alid_its_effect_allele_contradicts_fails(tmp_path, layout: str) -> None:
     from opengwasdb.validation.validate import validate_store
 
-    store = _observed_deletion_store(tmp_path)
+    store = _observed_deletion_store(tmp_path, layout)
     _rewrite_table(store, _sorted_deletion)
 
     result = validate_store(store)
@@ -571,5 +626,5 @@ def test_a_ragged_build_records_how_many_indels_the_harmoniser_code_kept(tmp_pat
     store, _ = ragged_ssf_store(tmp_path, rows)
 
     (analysis,) = record_analyses(store)
-    assert analysis["indels_kept_by_hm_code"] == 1
+    assert analysis["indel_rows_kept_by_hm_code"] == 1
     assert analysis["dropped"] == {"indel_ssf_hm_code": 1}

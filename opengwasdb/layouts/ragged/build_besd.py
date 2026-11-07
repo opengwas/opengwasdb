@@ -87,7 +87,7 @@ from opengwasdb.variants import (
 from opengwasdb.variants.normalise import (
     MalformedIdentity,
     allele_fault,
-    identity_fault,
+    chromosome_fault,
     undeclared_reference,
 )
 from opengwasdb.variants.routing import collapse_duplicates
@@ -451,14 +451,14 @@ def _axis_frequencies(
 def _malformed_esi_rows(snps: list[SnpRecord]) -> dict[int, str]:
     """Each ESI row whose identity is malformed, and its reason (#365).
 
-    The rule is `identity_fault`'s, which every Source Reader applies; each
-    spelling of a chromosome is judged once.
+    The rule is every Source Reader's (`identity_fault`): the chromosome
+    (`chromosome_fault`), each spelling judged once, then the allele pair.
     """
     chromosomes: dict[str, MalformedIdentity | None] = {}
     malformed: dict[int, str] = {}
     for snp in snps:
         if snp.chromosome not in chromosomes:
-            chromosomes[snp.chromosome] = identity_fault(snp.chromosome, other_is_reference=False)
+            chromosomes[snp.chromosome] = chromosome_fault(snp.chromosome)
         fault = chromosomes[snp.chromosome] or _allele_pair_fault(snp)
         if fault is not None:
             malformed[snp.row_idx] = fault.reason

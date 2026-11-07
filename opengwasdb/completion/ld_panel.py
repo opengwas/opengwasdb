@@ -15,17 +15,21 @@ its `EA` allele. An indel's ALID spells its reference allele first (ADR 0079),
 which the id cannot say, so an indel is placed only where the panel declares its
 reference: a block's own `REF` column, or else the indel-reference table beside
 the panel's blocks (`ld_dir/{ancestry}/indel_reference.tsv.gz`, which
-`scripts/build_panel_indel_reference.py` writes from GRCh38 evidence). Every
-other indel names no ALID. A variant whose ALID's `A1` is not its `EA` is
-re-signed for its `A1` when its block is read (`LDBlock.flipped`).
+`scripts/build_panel_indel_reference.py` writes from GRCh38 evidence, and which
+is read only beside a provenance its checksum matches). Every other indel names
+no ALID. A variant whose ALID's `A1` is not its `EA` is re-signed for its `A1`
+when its block is read (`LDBlock.flipped`); a row whose `EA` is neither of its
+alleles names none.
 """
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import logging
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -33,8 +37,8 @@ import numpy as np
 import pysam
 
 from opengwasdb.completion.impute import ld_pca, min_observed_points
-from opengwasdb.variants import VariantNormalisationError, orient_to_canonical
-from opengwasdb.variants.normalise import identity_allele
+from opengwasdb.variants import CanonicalVariant, VariantNormalisationError, orient_to_canonical
+from opengwasdb.variants.normalise import identity_allele, normalise_chromosome
 
 log = logging.getLogger(__name__)
 
@@ -52,16 +56,19 @@ class LDBlock:
     snp_ids: list[str]  # panel-native ids; see canonical_panel_alid
     eaf: np.ndarray     # float64, length n_ld_snps, for the row's EA; NaN where absent
     #: Each row's canonical ALID, or None where it names none: an unparseable
-    #: id, or an indel the panel declares no reference for.
-    alids: list[str | None] = field(default_factory=list)
+    #: id, an indel the panel declares no reference for, or a row whose `EA`
+    #: is not one of its alleles.
+    alids: list[str | None]
     #: Each row whose ALID's A1 is not its EA, so its eigenvector row and EAF
     #: are re-signed for its A1 before they meet the Store's statistics.
-    flipped: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=bool))
+    flipped: np.ndarray
     #: Where the block's indels took their reference: ``ref_column``, ``table``
     #: or ``none``; and how many indels it holds and how many it placed.
-    indel_reference: str = "none"
-    n_indels: int = 0
-    n_indels_placed: int = 0
+    indel_reference: str
+    n_indels: int
+    n_indels_placed: int
+    #: Per reason (`UNPLACED_REASONS`), the rows naming a variant it does not place.
+    unplaced: dict[str, int]
 
     def eaf_for_a1(self) -> np.ndarray:
         """Each row's frequency of its ALID's A1."""
@@ -80,8 +87,9 @@ def _strip_chr(s: str) -> str:
     return s[3:] if s.startswith("chr") else s
 
 
-def _id_parts(snp_id: str) -> tuple[str, str, str, str] | None:
-    """``(chrom, pos, allele, allele)`` of a panel SNP id, in its own order."""
+def panel_id_parts(snp_id: str) -> tuple[str, str, str, str] | None:
+    """``(chrom, pos, allele, allele)`` of a panel SNP id, in its own order:
+    ``[chr]CHR:POS:A:B``, or ``[chr]CHR:POS_A_B`` as the UKB EUR panel writes it."""
     parts = _strip_chr(snp_id).split(":")
     if len(parts) == 4:
         chrom, pos_s, first, second = parts
@@ -109,7 +117,7 @@ def canonical_panel_alid(snp_id: str, reference: str | None = None) -> str | Non
     indel-reference table; without one, or with one that is neither allele, an
     indel names no ALID, so completion neither matches nor fills it.
     """
-    parts = _id_parts(snp_id)
+    parts = panel_id_parts(snp_id)
     if parts is None:
         return None
     chrom, pos_s, first, second = parts
@@ -128,6 +136,42 @@ def canonical_panel_alid(snp_id: str, reference: str | None = None) -> str | Non
         return None
 
 
+def panel_variant(alid: str) -> CanonicalVariant | None:
+    """The canonical variant a panel ALID (`canonical_panel_alid`'s) names, or
+    None where it names none. An ALID read back keeps its order: an indel's A1
+    is its reference (ADR 0079), and an SNV's pair is already sorted."""
+    parts = alid.split(":")
+    if len(parts) != 4:
+        return None
+    chrom, pos_s, a1, a2 = parts
+    try:
+        return orient_to_canonical(chrom, int(pos_s), a2, a1, other_is_reference=True).variant
+    except (VariantNormalisationError, ValueError):
+        return None
+
+
+#: An indel's key in an indel-reference table: its chromosome, its position,
+#: and its two alleles sorted, each as `identity_allele` spells it.
+IndelKey = tuple[str, int, str, str]
+
+
+def indel_key(chromosome: str, position: str | int, first: str, second: str) -> IndelKey | None:
+    """The key a table holds an indel under, or None for alleles of one length
+    or a site that names none. The table's builder keys the panel's ids and its
+    evidence by it, and completion looks each panel indel up by it, so the two
+    never spell one key two ways."""
+    first, second = identity_allele(first.strip()), identity_allele(second.strip())
+    if len(first) == len(second):
+        return None
+    try:
+        chrom = normalise_chromosome(chromosome)
+        pos = int(position)
+    except (VariantNormalisationError, ValueError):
+        return None
+    a1, a2 = sorted((first, second))
+    return chrom, pos, a1, a2
+
+
 #: The indel-reference table and its provenance, beside a panel's blocks in
 #: ``ld_dir/{ancestry}``: bgzipped and tabix-indexed, one row per panel indel
 #: (`scripts/build_panel_indel_reference.py`).
@@ -139,30 +183,76 @@ INDEL_REFERENCE_PROVENANCE = "indel_reference.json"
 INDEL_REFERENCE_COLUMNS = ("chromosome", "position", "allele1", "allele2", "reference", "outcome")
 
 
+#: What a table's provenance must record: the table's checksum, and the
+#: counts and script revision a completion record repeats.
+_PROVENANCE_KEYS = ("table_sha256", "counts", "revision")
+
+
+class IndelReferenceTableError(ValueError):
+    """An indel-reference table completion does not read: one with no
+    provenance beside it, or one its provenance's checksum does not match."""
+
+
 def indel_reference_table(ancestry_dir: Path) -> Path | None:
     """The panel's indel-reference table, or None when it has none."""
     path = Path(ancestry_dir) / INDEL_REFERENCE_TABLE
     return path if path.exists() else None
 
 
+@dataclass(frozen=True)
+class _IndelReference:
+    """An opened indel-reference table, its checksum and its provenance."""
+
+    tabix: pysam.TabixFile
+    sha256: str
+    provenance: dict[str, object]
+
+
+def _sha256(path: Path) -> str:
+    with open(path, "rb") as fh:
+        return hashlib.file_digest(fh, "sha256").hexdigest()
+
+
 @lru_cache(maxsize=8)
-def _indel_reference_tabix(path: str) -> pysam.TabixFile:
-    return pysam.TabixFile(path)
+def _open_indel_reference(path: str) -> _IndelReference:
+    """The table at ``path``, once its provenance is found and its checksum
+    matches the one the provenance records. A table that cannot say what
+    evidence settled it, or is not the table its provenance describes, would
+    place indels by a reference nothing vouches for."""
+    table = Path(path)
+    provenance_path = table.with_name(INDEL_REFERENCE_PROVENANCE)
+    if not provenance_path.is_file():
+        raise IndelReferenceTableError(
+            f"{table} has no {INDEL_REFERENCE_PROVENANCE} beside it, so nothing says "
+            "what evidence settled its indels; completion does not read it (ADR 0079)"
+        )
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    missing = [key for key in _PROVENANCE_KEYS if key not in provenance]
+    if missing:
+        raise IndelReferenceTableError(f"{provenance_path} records no {', '.join(missing)}")
+    digest = _sha256(table)
+    if provenance["table_sha256"] != digest:
+        raise IndelReferenceTableError(
+            f"{table} has sha256 {digest}, but {provenance_path} records table_sha256 "
+            f"{provenance['table_sha256']}: the table is not the one its provenance describes"
+        )
+    return _IndelReference(pysam.TabixFile(path), digest, provenance)
 
 
 def _table_references(
     table: Path, chrom: str, start_bp: int, end_bp: int
-) -> dict[tuple[int, str, str], str]:
-    """``(position, allele1, allele2) -> reference`` for the settled indels the
-    table holds in one block's extent."""
-    tabix = _indel_reference_tabix(str(table))
+) -> dict[IndelKey, str]:
+    """``key -> reference`` for the settled indels the table holds in one
+    block's extent."""
+    tabix = _open_indel_reference(str(table)).tabix
     if chrom not in tabix.contigs:
         return {}
-    settled: dict[tuple[int, str, str], str] = {}
+    settled: dict[IndelKey, str] = {}
     for line in tabix.fetch(chrom, max(start_bp - 1, 0), end_bp):
-        _chrom, pos, allele1, allele2, reference, _outcome = line.split("\t")
-        if reference != ".":
-            settled[(int(pos), allele1, allele2)] = reference
+        chromosome, pos, allele1, allele2, reference, _outcome = line.split("\t")
+        key = indel_key(chromosome, pos, allele1, allele2)
+        if key is not None and reference != ".":
+            settled[key] = reference
     return settled
 
 
@@ -180,6 +270,7 @@ class PanelIndels:
         self.tables: set[Path] = set()
         self.n_indels = 0
         self.n_placed = 0
+        self.unplaced: Counter[str] = Counter({reason: 0 for reason in UNPLACED_REASONS})
 
     def add(self, block: LDBlock) -> None:
         self.sources.add(block.indel_reference)
@@ -189,11 +280,13 @@ class PanelIndels:
                 self.tables.add(table)
         self.n_indels += block.n_indels
         self.n_placed += block.n_indels_placed
+        self.unplaced.update(block.unplaced)
 
     def record(self) -> dict[str, object]:
         """The completion record's entry: where the references came from, the
-        table (with its checksum and provenance) where one was read, and the
-        indels read and placed."""
+        table (with its checksum and provenance) where one was read, the
+        indels read and placed, and, per reason, the rows naming a variant
+        (an SNV or an indel) that were not placed."""
         source = next(iter(self.sources)) if len(self.sources) == 1 else (
             "mixed" if self.sources else "none"
         )
@@ -202,6 +295,7 @@ class PanelIndels:
             "tables": [_table_record(table) for table in sorted(self.tables)],
             "n_indels": self.n_indels,
             "n_placed": self.n_placed,
+            "unplaced_rows": {reason: self.unplaced[reason] for reason in UNPLACED_REASONS},
         }
 
     def log(self, ld_dir: str | Path, ancestry: str) -> None:
@@ -216,23 +310,24 @@ class PanelIndels:
                 "LD panel %s/%s: %d of %d indels placed by %s",
                 ld_dir, ancestry, self.n_placed, self.n_indels, ", ".join(sorted(self.sources)),
             )
+        without_effect = self.unplaced["no_effect_allele"] + self.unplaced[
+            "effect_allele_not_an_allele"
+        ]
+        if without_effect:
+            log.warning(
+                "LD panel %s/%s: %d rows record no EA, or one that is neither of their "
+                "alleles, so nothing says which allele their LD is for; they are not placed",
+                ld_dir, ancestry, without_effect,
+            )
 
 
 def _table_record(table: Path) -> dict[str, object]:
-    import hashlib
-    import json
-
-    digest = hashlib.sha256(table.read_bytes()).hexdigest()
-    provenance_path = table.with_name(INDEL_REFERENCE_PROVENANCE)
-    provenance = (
-        json.loads(provenance_path.read_text(encoding="utf-8"))
-        if provenance_path.exists() else None
-    )
+    opened = _open_indel_reference(str(table))
     return {
         "path": str(table),
-        "sha256": digest,
-        "counts": None if provenance is None else provenance.get("counts"),
-        "revision": None if provenance is None else provenance.get("revision"),
+        "sha256": opened.sha256,
+        "counts": opened.provenance["counts"],
+        "revision": opened.provenance["revision"],
     }
 
 
@@ -300,6 +395,12 @@ def _read_block_tsv(tsv_path: Path) -> _BlockTable:
     )
 
 
+#: Why a panel row naming a variant is not placed: an indel the panel
+#: declares no reference for; a row whose `EA` is empty (or, for an indel, a
+#: block with no `EA` column); and a row whose `EA` is neither of its alleles.
+UNPLACED_REASONS = ("no_reference", "no_effect_allele", "effect_allele_not_an_allele")
+
+
 @dataclass(frozen=True)
 class _BlockAlleles:
     alids: list[str | None]
@@ -307,33 +408,88 @@ class _BlockAlleles:
     source: str
     n_indels: int
     n_placed: int
+    unplaced: dict[str, int]
+
+
+@dataclass(frozen=True)
+class _Row:
+    """One panel row's placement: its ALID or None, whether its A1 is not its
+    EA, whether it is an indel, and why a row naming a variant is not placed."""
+
+    alid: str | None
+    flipped: bool
+    indel: bool
+    unplaced: str | None
 
 
 def _block_alleles(
     table: _BlockTable, chrom: str, indel_table: Path | None
 ) -> _BlockAlleles:
-    """Each row's ALID and whether its A1 is not its EA.
+    """Each row's ALID and whether its A1 is not its EA (`_place_row`).
 
     An indel's reference is the row's `REF`, where the block has the column,
-    else the panel's indel-reference table. A row whose EA the block does not
-    record is taken as coded on its ALID's A1, as completion always has; an
-    indel is then left unplaced, since nothing says which allele its LD is for.
+    else the panel's indel-reference table.
     """
     source = _reference_source(table, indel_table)
-    settled: Mapping[tuple[int, str, str], str] = {}
+    settled: Mapping[IndelKey, str] = {}
     if source == "table" and indel_table is not None:
         settled = _table_references(indel_table, chrom, table.min_bp, table.max_bp)
     alids: list[str | None] = []
-    indels = np.zeros(len(table.snp_ids), dtype=bool)
-    for i, snp_id in enumerate(table.snp_ids):
-        parts = _id_parts(snp_id)
-        indels[i] = parts is not None and len(parts[2]) != len(parts[3])
-        reference = _row_reference(table, i, parts, settled) if indels[i] else None
-        alids.append(canonical_panel_alid(snp_id, reference))
-    placed = np.array([alid is not None for alid in alids], dtype=bool)
+    flipped: list[bool] = []
+    unplaced = Counter({reason: 0 for reason in UNPLACED_REASONS})
+    n_indels = n_placed = 0
+    for i in range(len(table.snp_ids)):
+        row = _place_row(table, i, settled)
+        alids.append(row.alid)
+        flipped.append(row.flipped)
+        n_indels += row.indel
+        n_placed += row.indel and row.alid is not None
+        if row.unplaced is not None:
+            unplaced[row.unplaced] += 1
     return _BlockAlleles(
-        alids, _flipped(table, alids), source, int(indels.sum()), int((indels & placed).sum())
+        alids, np.array(flipped, dtype=bool), source, n_indels, n_placed, dict(unplaced)
     )
+
+
+def _place_row(table: _BlockTable, row: int, settled: Mapping[IndelKey, str]) -> _Row:
+    """One row's placement.
+
+    A row is placed only where its `EA`, which its LD and `EAF` are coded on,
+    is one of its alleles (`_oriented_row`). A block with no `EA` column codes
+    an SNV on its ALID's A1, as completion always has, and places no indel,
+    since nothing says which allele an indel's LD is for.
+    """
+    snp_id = table.snp_ids[row]
+    parts = panel_id_parts(snp_id)
+    if parts is None:
+        return _Row(None, False, False, None)
+    indel = len(parts[2]) != len(parts[3])
+    effect = _effect_allele(table, row)
+    if effect == "" or (indel and effect is None):
+        return _Row(None, False, indel, "no_effect_allele")
+    if not indel:
+        return _oriented_row(canonical_panel_alid(snp_id), effect, indel=False)
+    reference = _row_reference(table, row, parts, settled)
+    if reference is None:
+        return _Row(None, False, True, "no_reference")
+    return _oriented_row(canonical_panel_alid(snp_id, reference), effect, indel=True)
+
+
+def _effect_allele(table: _BlockTable, row: int) -> str | None:
+    """A row's `EA` as identity spells it, ``""`` where its cell is empty, or
+    None where the block records none."""
+    return None if table.effect is None else identity_allele(table.effect[row].strip())
+
+
+def _oriented_row(alid: str | None, effect: str | None, *, indel: bool) -> _Row:
+    """A named row, flipped where its `EA` is its ALID's A2, or not placed where
+    its `EA` is neither allele. With no `EA` (``None``), as it stands."""
+    if alid is None or effect is None:
+        return _Row(alid, False, indel, None)
+    a1, a2 = alid.split(":")[2:]
+    if effect not in (a1, a2):
+        return _Row(None, False, indel, "effect_allele_not_an_allele")
+    return _Row(alid, effect != a1, indel, None)
 
 
 def _reference_source(table: _BlockTable, indel_table: Path | None) -> str:
@@ -347,48 +503,31 @@ def _reference_source(table: _BlockTable, indel_table: Path | None) -> str:
 def _row_reference(
     table: _BlockTable,
     row: int,
-    parts: tuple[str, str, str, str] | None,
-    settled: Mapping[tuple[int, str, str], str],
+    parts: tuple[str, str, str, str],
+    settled: Mapping[IndelKey, str],
 ) -> str | None:
     """One indel row's declared reference: its `REF` cell, else the table's.
-    None where the block records no EA, since its LD's allele is then unknown."""
-    if parts is None or table.effect is None:
-        return None
+    None where neither names one of the row's two alleles."""
     if table.reference is not None:
-        return table.reference[row] or None
-    a1, a2 = sorted((identity_allele(parts[2]), identity_allele(parts[3])))
-    return settled.get((int(parts[1]), a1, a2))
-
-
-def _flipped(table: _BlockTable, alids: list[str | None]) -> np.ndarray:
-    """Whether each named row's ALID A1 is not its EA (False where unrecorded)."""
-    if table.effect is None:
-        return np.zeros(len(alids), dtype=bool)
-    return np.array(
-        [
-            alid is not None and bool(effect) and alid.split(":")[2] != identity_allele(effect)
-            for alid, effect in zip(alids, table.effect, strict=True)
-        ],
-        dtype=bool,
-    )
+        reference: str | None = identity_allele(table.reference[row].strip())
+    else:
+        key = indel_key(*parts)
+        reference = None if key is None else settled.get(key)
+    alleles = {identity_allele(parts[2]), identity_allele(parts[3])}
+    return reference if reference in alleles else None
 
 
 def panel_indel_frequencies(ld_dir: str | Path, ancestry: str) -> dict[str, float]:
     """``{ALID: A1 frequency}`` of every indel the panel places (ADR 0079).
 
     The panel's `EAF` is for its `EA`, and a placed indel's A1 is its reference,
-    so a deletion's frequency is complemented, as its eigenvector row is
-    re-signed. A frequency outside ``[0, 1]`` is none.
+    so a deletion's frequency is complemented (`LDBlock.eaf_for_a1`), as its
+    eigenvector row is re-signed. A frequency outside ``[0, 1]`` is none.
     """
-    ancestry_dir = Path(ld_dir) / ancestry
-    table = indel_reference_table(ancestry_dir)
     frequencies: dict[str, float] = {}
     for chrom in list_chromosomes(ld_dir, ancestry):
-        for tsv_path in sorted((ancestry_dir / chrom).glob("*.tsv")):
-            block = _read_block_tsv(tsv_path)
-            alleles = _block_alleles(block, chrom, table)
-            a1_eaf = np.where(alleles.flipped, 1.0 - block.eaf, block.eaf)
-            for alid, eaf in zip(alleles.alids, a1_eaf.tolist(), strict=True):
+        for block in list_all_blocks(ld_dir, ancestry, chrom):
+            for alid, eaf in zip(block.alids, block.eaf_for_a1().tolist(), strict=True):
                 if alid is None or not 0.0 <= eaf <= 1.0:
                     continue
                 _chrom, _pos, a1, a2 = alid.split(":")
@@ -439,6 +578,7 @@ def load_block(tsv_path: Path) -> LDBlock | None:
         indel_reference=alleles.source,
         n_indels=alleles.n_indels,
         n_indels_placed=alleles.n_placed,
+        unplaced=alleles.unplaced,
     )
 
 

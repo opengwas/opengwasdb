@@ -81,7 +81,8 @@ def _iter_rows(
             # A row too short to reach an allele has a missing one, which
             # `faults` names (#365); the None checks are the type checker's.
             orientation = orient_or_drop(
-                chromosome, row.get("pos"), alt, ref, faults, other_is_reference=True
+                chromosome, row.get("pos"), alt, ref, faults,
+                declaration=tabular.EVERY_ROW_REFERENCE, row=row,
             )
             if orientation is None or ref is None or alt is None:
                 continue

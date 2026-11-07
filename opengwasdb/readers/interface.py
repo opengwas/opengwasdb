@@ -121,7 +121,8 @@ class ReferenceAllele(StrEnum):
     `ref` are the reference allele (`REF`, the row's own `ref`), while
     GWAS-SSF, BESD and an effect/other Column Map name an effect allele and an
     other one, which need not be the reference (`UNDECLARED`). `ALT` is a row
-    whose `alt` its source declares the reference; no reader declares one.
+    whose `alt` its source declares the reference; no reader declares one, so
+    it is unreachable, and #316 removes it with the reversed-indel rule.
 
     An indel's ALID is formed from the declaration when the row is read (ADR
     0079), and one whose source declares none is dropped there, so every
@@ -236,7 +237,7 @@ class StreamTally:
 
     faults: IdentityFaults = field(default_factory=IdentityFaults)
     frequencies: FrequencyTally = field(default_factory=FrequencyTally)
-    indels_kept_by_hm_code: int = 0
+    indel_rows_kept_by_hm_code: int = 0
 
 
 class SourceReader(Protocol):

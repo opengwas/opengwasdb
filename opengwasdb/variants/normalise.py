@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from typing import Protocol
+
+import numpy as np
 
 VALID_BASES = frozenset("ACGT")
 #: A one-base allele in either case: the cell nearly every row holds, checked
@@ -85,6 +88,17 @@ class HmCodeIndel(UndeclaredReference):
     on a row whose harmoniser code is neither 10 nor 11 (issue #381)."""
 
     reason = "indel_ssf_hm_code"
+
+
+class ReferenceDeclaration(Protocol):
+    """Which rows of a source declare their other allele the genome's
+    reference, and the fault an indel on a row that declares none is recorded
+    under (`opengwasdb.readers.tabular.DeclaredReference`)."""
+
+    @property
+    def fault(self) -> type[UndeclaredReference]: ...
+
+    def of_row(self, row: Mapping[str, str | None]) -> bool: ...
 
 
 @dataclass
@@ -213,6 +227,28 @@ def canonical_alid(chromosome: str, position: int | str, ref: str, alt: str) -> 
     return f"{chromosome}:{position}:{a1}:{a2}"
 
 
+def alid_allele_arrays(
+    ref: np.ndarray, alt: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """`alid_alleles` of each pair, for a reader's vectorised path: ``(A1, A2,
+    indel)``, where ``indel`` marks the pairs whose alleles differ in length.
+
+    Each allele spelt as `identity_allele` spells it. A contract test holds
+    the two to one answer.
+    """
+    indel = np.char.str_len(ref.astype(str)) != np.char.str_len(alt.astype(str))
+    ref_first = indel | (ref < alt)
+    return np.where(ref_first, ref, alt), np.where(ref_first, alt, ref), indel
+
+
+def sorted_alid_alleles(ref: str, alt: str) -> tuple[str, str]:
+    """``(A1, A2)`` as a Store before format 0.2.1 spells them: every pair
+    sorted, an indel's too (ADR 0079 §5). For reading such a Store; nothing
+    writes this spelling."""
+    a1, a2 = sorted((identity_allele(ref), identity_allele(alt)))
+    return a1, a2
+
+
 def ref_is_a1(ref: str, alt: str) -> bool:
     """Whether the ALID formed from ``ref`` and ``alt`` spells ``ref`` first."""
     return alid_alleles(ref, alt)[0] == identity_allele(ref)
@@ -264,8 +300,19 @@ def undeclared_reference(
     )
 
 
+def chromosome_fault(chromosome: str) -> MalformedIdentity | None:
+    """Why a row's chromosome is malformed (#365), or ``None``: `identity_fault`
+    for a source whose alleles are judged elsewhere. A chromosome refused for
+    another reason (an unsupported number) is not this rule's."""
+    try:
+        normalise_chromosome(chromosome)
+    except VariantNormalisationError as refused:
+        return refused if isinstance(refused, MalformedIdentity) else None
+    return None
+
+
 def identity_fault(
-    chromosome: str, *alleles: str | None, other_is_reference: bool
+    chromosome: str, effect: str | None, other: str | None, *, other_is_reference: bool
 ) -> MalformedIdentity | None:
     """Why a row's identity is malformed (#365), or ``None``, in
     `orient_to_canonical`'s order: the chromosome, the alleles, then, for an
@@ -278,15 +325,9 @@ def identity_fault(
     """
     try:
         normalise_chromosome(chromosome)
-    except MalformedIdentity as fault:
-        return fault
-    except VariantNormalisationError:
-        return None
-    invalid = allele_fault(*alleles)
-    if invalid is not None or len(alleles) != 2:
-        return invalid
-    effect, other = alleles
-    return undeclared_reference(
+    except VariantNormalisationError as refused:
+        return refused if isinstance(refused, MalformedIdentity) else None
+    return allele_fault(effect, other) or undeclared_reference(
         effect or "", other or "", other_is_reference=other_is_reference
     )
 
@@ -383,13 +424,15 @@ def orient_or_drop(
     source_other_allele: str | None,
     faults: IdentityFaults | None = None,
     *,
-    other_is_reference: bool,
-    undeclared: type[UndeclaredReference] = UndeclaredReference,
+    declaration: ReferenceDeclaration,
+    row: Mapping[str, str | None],
 ) -> Orientation | None:
     """`orient_to_canonical`, or ``None`` for a row that names no variant.
 
-    An indel whose reference is undeclared is recorded under ``undeclared``'s
-    reason, which names why its source declares none (a GWAS-SSF layout).
+    Whether the other allele is the reference is ``declaration``'s answer for
+    ``row``, the row as a mapping of its header's names to its cells. An indel
+    whose reference is undeclared is recorded under the declaration's fault,
+    whose reason names why its source declares none (a GWAS-SSF layout).
 
     A malformed identity is recorded in ``faults`` under its source key
     (``chromosome:position:other:effect``, the source's ref then alt), for
@@ -406,12 +449,12 @@ def orient_or_drop(
             position,
             source_effect_allele,
             source_other_allele,
-            other_is_reference=other_is_reference,
+            other_is_reference=declaration.of_row(row),
         )
     except MalformedIdentity as fault:
         if faults is not None:
             key = f"{chromosome}:{position}:{source_other_allele}:{source_effect_allele}"
-            faults.record(key, _named(fault, undeclared))
+            faults.record(key, _named(fault, declaration.fault))
         return None
     except VariantNormalisationError:
         return None

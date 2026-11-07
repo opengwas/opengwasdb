@@ -50,6 +50,7 @@ from opengwasdb.stats import Z_975, inverse_normal_denominators, parse_af
 from opengwasdb.variants.normalise import (
     UndeclaredReference,
     VariantNormalisationError,
+    alid_allele_arrays,
     alid_alleles,
     identity_base,
     normalise_allele,
@@ -1343,15 +1344,12 @@ def _projected_chunk(
     position, position_ok = _position_arrays(frame[names["position"]])
 
     # An indel is spelt reference first, and named only where its row declares
-    # its `ref` the reference (`alid_alleles`, ADR 0079).
-    indel = np.char.str_len(alt.astype(str)) != np.char.str_len(other.astype(str))
+    # its `ref` the reference (`alid_allele_arrays`, ADR 0079).
+    first, second, indel = alid_allele_arrays(other, alt)
     declared = _declared_rows(frame, names, declaration)
     keep = (
         chromosome_ok & position_ok & alt_ok & other_ok & (alt != other) & (~indel | declared)
     )
-    ref_first = indel | (other < alt)
-    first = np.where(ref_first, other, alt)
-    second = np.where(ref_first, alt, other)
     text = np.where(position_ok, position, 0).astype(str).astype(object)
     effect = _projected_effect_arrays(frame, names, effect_source)
     scores, statuses = _score_arrays(frame, names.get("imputation_score"))

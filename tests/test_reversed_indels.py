@@ -218,7 +218,7 @@ def test_a_ragged_build_stores_a_harmonised_pair_as_two_variants(tmp_path: Path,
     )
     (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {}
-    assert analysis["indels_kept_by_hm_code"] == 2
+    assert analysis["indel_rows_kept_by_hm_code"] == 2
 
 
 @pytest.mark.parametrize("hm_code", ["10", "11"])
@@ -228,7 +228,7 @@ def test_a_dense_build_of_a_harmonised_gwas_ssf_stores_the_pair(tmp_path: Path, 
     z_by_alid, analysis = _dense(tmp_path, source, "opengwasdb.gwas-ssf")
 
     _assert_two_variants(z_by_alid, analysis)
-    assert analysis["indels_kept_by_hm_code"] == 2
+    assert analysis["indel_rows_kept_by_hm_code"] == 2
 
 
 def _undeclared_log(reason: str) -> list[list[str]]:
@@ -246,7 +246,7 @@ def _assert_pair_dropped(store: Path, analysis: dict, log: list[list[str]]) -> N
     (reason,) = {reason for _, reason in log}
     assert analysis["dropped"] == {reason: 2}
     assert (analysis["examined"], analysis["admitted"]) == (3, 1)
-    assert analysis["indels_kept_by_hm_code"] == 0
+    assert analysis["indel_rows_kept_by_hm_code"] == 0
     assert _logged(store) == log
 
 

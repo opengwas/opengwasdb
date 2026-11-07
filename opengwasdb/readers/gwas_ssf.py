@@ -293,8 +293,8 @@ def _tabular_row(
         effect_allele,
         other_allele,
         faults,
-        other_is_reference=declaration.of_row(row),
-        undeclared=declaration.fault,
+        declaration=declaration,
+        row=row,
     )
     # An allele a row does not reach never orients, so the two None checks
     # only say so to the type checker.
@@ -473,7 +473,7 @@ def _iter_rows(
             )
             if parsed is None:
                 continue
-            tally.indels_kept_by_hm_code += _kept_by_code(declaration, parsed)
+            tally.indel_rows_kept_by_hm_code += _kept_by_code(declaration, parsed)
             yield parsed
 
 
@@ -486,15 +486,15 @@ def _declaration(path: SourcePath, header: Sequence[str] | None = None) -> Decla
     """Which of ``path``'s rows declare their `other_allele` the reference.
 
     A Column Map's translation declares by its allele convention, of every row
-    or none. A GWAS-SSF file declares by its layout (`ssf_layout_reference`),
+    or none. A GWAS-SSF file declares by its layout (`_ssf_layout_reference`),
     read from ``header`` or, when not given, from the file.
     """
     if isinstance(path, TabularSource):
         return declared_reference(path.reference)
-    return ssf_layout_reference(_header(path) if header is None else header, path)
+    return _ssf_layout_reference(_header(path) if header is None else header, path)
 
 
-def ssf_layout_reference(header: Sequence[str], source: object) -> DeclaredReference:
+def _ssf_layout_reference(header: Sequence[str], source: object) -> DeclaredReference:
     """The reference declaration of a GWAS-SSF file whose header is ``header``.
 
     Its layout decides it (`MAIN_COLUMNS_REFERENCE`): `hm_code` with no `hm_*`
@@ -507,7 +507,7 @@ def ssf_layout_reference(header: Sequence[str], source: object) -> DeclaredRefer
     harmoniser = sorted(name for name in header if name.startswith("hm_"))
     layout = ("hm_code" in harmoniser, sum(name in harmoniser for name in _HM_ALLELE_COLUMNS))
     declaration = _LAYOUTS.get(layout)
-    if declaration is not None and (harmoniser or declaration is not UNHARMONISED_REFERENCE):
+    if declaration is not None:
         return declaration
     if not harmoniser:
         return UNHARMONISED_REFERENCE

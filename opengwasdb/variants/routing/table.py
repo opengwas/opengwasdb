@@ -55,7 +55,9 @@ _Columns = tuple[list[str], list[int], list[str], list[str], list[float], list[f
 #: reference, or its two alleles are one length, so nothing tells two rows of
 #: the ALID apart; `REFERENCE_FIRST` when the ALID spells the reference allele
 #: first, which for an anchored indel is the insertion; `REFERENCE_SECOND`
-#: when it spells it second.
+#: when it spells it second. No row is coded `REFERENCE_SECOND` since ADR
+#: 0079, which spells every declared indel reference first; it stays, unreached,
+#: until #316 removes it with the reversed-indel rule (`collapse_duplicates`).
 REFERENCE_UNKNOWN = 0
 REFERENCE_FIRST = 1
 REFERENCE_SECOND = 2
@@ -231,8 +233,8 @@ def collapse_duplicates(
     position shared an ALID, because the ALID sorted its alleles: `G>GGGGCC`
     and `GGGGCC>G` were both `1:827587:G:GGGGCC`, two alleles of a repeat
     rather than one variant seen from both sides. Spelt reference first they
-    are two places, so no reader's rows meet this case; it stays for a row
-    whose codes say otherwise. ``reference`` is each row's `REFERENCE_*` code.
+    are two places, so no reader's rows meet this case: it is unreachable, and
+    stays only until #316 removes it. ``reference`` is each row's `REFERENCE_*` code.
     Agreeing copies collapse first, so the rule judges a place's distinct
     rows: when every row declares its reference allele and the distinct rows
     are two, one spelling it first and one second, the first is kept, the

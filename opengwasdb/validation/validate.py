@@ -418,7 +418,7 @@ def _stream_unit(
     from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
     from opengwasdb.readers.interface import StreamTally
     from opengwasdb.readers.registry import resolve_reader
-    from opengwasdb.variants.normalise import canonical_alid
+    from opengwasdb.variants.normalise import alid_alleles, sorted_alid_alleles
 
     analysis_id, path, is_vcf, se_divisor = unit
     if analysis_id is None:
@@ -429,11 +429,9 @@ def _stream_unit(
     reader = resolve_reader(capability, path, StoredEffectScale.SD)
     # Read as the build reads it: a row it dropped as malformed is not a failure.
     for association in reader.stream_associations(StreamTally()):
-        _chrom, _pos, a1, a2 = canonical_alid(
-            association.chromosome, association.position, association.ref, association.alt
-        ).split(":")
+        a1, a2 = alid_alleles(association.ref, association.alt)
         z = association.z
-        if not reference_first and a2 < a1:
+        if not reference_first and sorted_alid_alleles(a1, a2) != (a1, a2):
             a1, a2, z = a2, a1, -z
         se = association.se
         if se_divisor != 1.0:

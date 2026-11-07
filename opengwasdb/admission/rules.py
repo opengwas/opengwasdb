@@ -130,7 +130,9 @@ class Reason(StrEnum):
     #: association it is: not lost, so counted only.
     DUPLICATE_COLLAPSED = "duplicate_collapsed"
     #: An indel row whose declared reference allele its ALID spells second, at
-    #: a (variant, Analysis) that keeps the row spelling it first.
+    #: a (variant, Analysis) that keeps the row spelling it first. No build
+    #: writes it since ADR 0079 spelt every indel reference first; it stays
+    #: readable in records written before, and #316 removes the rule.
     DUPLICATE_REVERSED_INDEL = "duplicate_reversed_indel"
     #: A row for a (variant, Analysis) whose rows disagree on z or SE.
     DUPLICATE_CONFLICTING = "duplicate_conflicting"
@@ -234,9 +236,9 @@ class AdmissionCounts:
     Analysis declared no MAF filter; it is not ``dropped[MAF_MISSING]``, which
     counts only the rows dropped for it. ``eaf_made_absent`` counts the reported
     frequencies outside (0, 1) the Store holds as absent, over every row read
-    (D7); a row is never dropped for one. ``indels_kept_by_hm_code`` counts the
-    indels a GWAS-SSF harmoniser code of 10 or 11 placed, over every row read,
-    beside the ``indel_ssf_*`` drops, so a record says what the rule took and
+    (D7); a row is never dropped for one. ``indel_rows_kept_by_hm_code`` counts
+    the indel rows a GWAS-SSF harmoniser code of 10 or 11 placed, over every row
+    read and before duplicates are resolved, beside the ``indel_ssf_*`` drops, so a record says what the rule took and
     what it left (#381).
     """
 
@@ -246,7 +248,7 @@ class AdmissionCounts:
     info: InfoScoreCounts = field(default_factory=InfoScoreCounts)
     maf_missing: int = 0
     eaf_made_absent: int = 0
-    indels_kept_by_hm_code: int = 0
+    indel_rows_kept_by_hm_code: int = 0
 
     def __add__(self, other: AdmissionCounts) -> AdmissionCounts:
         dropped = {
@@ -261,7 +263,9 @@ class AdmissionCounts:
             info=self.info + other.info,
             maf_missing=self.maf_missing + other.maf_missing,
             eaf_made_absent=self.eaf_made_absent + other.eaf_made_absent,
-            indels_kept_by_hm_code=self.indels_kept_by_hm_code + other.indels_kept_by_hm_code,
+            indel_rows_kept_by_hm_code=(
+                self.indel_rows_kept_by_hm_code + other.indel_rows_kept_by_hm_code
+            ),
         )
 
     @property
@@ -278,7 +282,7 @@ class AdmissionCounts:
             "info": asdict(self.info),
             "maf_missing": self.maf_missing,
             "eaf_made_absent": self.eaf_made_absent,
-            "indels_kept_by_hm_code": self.indels_kept_by_hm_code,
+            "indel_rows_kept_by_hm_code": self.indel_rows_kept_by_hm_code,
         }
 
     @classmethod
@@ -291,7 +295,7 @@ class AdmissionCounts:
             info=InfoScoreCounts(**data["info"]),
             maf_missing=int(data["maf_missing"]),
             eaf_made_absent=int(data["eaf_made_absent"]),
-            indels_kept_by_hm_code=int(data["indels_kept_by_hm_code"]),
+            indel_rows_kept_by_hm_code=int(data["indel_rows_kept_by_hm_code"]),
         )
 
     def _ordered_drops(self) -> list[tuple[Reason, int]]:

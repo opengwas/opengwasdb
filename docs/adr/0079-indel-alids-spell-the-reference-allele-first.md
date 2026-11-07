@@ -49,12 +49,20 @@ signed for `A1`, as every statistic is, so a deletion's z is now signed for its
 reference allele: FinnGen's deletion, whose beta is for `G`, is stored negated.
 
 The rule is `opengwasdb.variants.normalise.alid_alleles`. Every place an ALID is
-formed goes through it: `canonical_alid`, `orient_to_canonical` and its
-hot-path form `oriented_alid`, which a contract test holds to one answer. That
-covers each Source Reader's rows and projections, routing's sites and keys, the
-lift (`statistics_swap`), Variant Reference extraction and reading, the Hybrid
-fold's key table, the Indexed Variant Subset list reader, the phenotype-SD
-pipeline and source fidelity.
+formed goes through it: `canonical_alid`, `orient_to_canonical`, and two
+hot-path forms that a contract test each holds to its answer, `oriented_alid`
+(a row) and `alid_allele_arrays` (a tabular reader's projection, a block of
+rows at once). That covers each Source Reader's rows and projections, routing's
+sites and keys, the lift (`statistics_swap`), Variant Reference extraction and
+reading, the Hybrid fold's key table, the Indexed Variant Subset list reader,
+the phenotype-SD pipeline and source fidelity. An LD panel's ids are keyed and
+placed by `canonical_panel_alid` and `indel_key` (see 6), which the panel
+table's builder imports. The one other spelling is a Store's from before 0.2.1,
+`sorted_alid_alleles`, which only reads such a Store (see 5).
+
+`variant_table.indel_order` (see 5) forms no ALID. It judges a Store's own
+ALIDs against the table's other columns, by the table alone, and does not call
+these functions: on purpose, so a defect in them cannot pass its own check.
 
 **2. Where the reference comes from.** Only from the source's declaration
 (`orient_to_canonical(..., other_is_reference=)`, required wherever an ALID is
@@ -91,8 +99,8 @@ statistic change.
 
 - **A 0.2.0 Store is read as before.** Its indel ALIDs keep their sorted
   spelling, and nothing rewrites them. A source-fidelity check spells a
-  source's indels sorted against such a Store, and signs them with it
-  (`validate --source`).
+  source's indels sorted against such a Store (`sorted_alid_alleles`), and
+  signs them with it (`validate --source`).
 - **The converter writes 0.2.0**, not the current version: a 0.1.0 Store
   sorts its indels and says nowhere which allele is the reference, so its copy
   cannot honestly be stamped 0.2.1 (`TARGET_FORMAT_VERSION`).
@@ -128,8 +136,11 @@ neither column declares it. So:
   indel_reference.tsv.gz` (tabix-indexed), with `indel_reference.json` beside
   it: the evidence files and their checksums, the script's revision, and the
   counts by outcome. `scripts/build_panel_indel_reference.py` writes both and
-  never replaces either. It settles an indel by the HGDP+1kGP pvars and
-  FinnGen R13's declared `ref`, only where a source reads the key one way and
+  never replaces either, and fails, writing neither, on an evidence file it
+  cannot read to its end. Completion reads a table only beside its
+  provenance, and only while the table's sha256 is the `table_sha256` that
+  provenance records; it refuses any other table. The script settles an indel
+  by the HGDP+1kGP pvars and FinnGen R13's declared `ref`, only where a source reads the key one way and
   no source reads it otherwise; a key a source holds both ways (the insertion
   and the deletion both exist), one the sources read differently, and one no
   source holds are left unsettled, each counted.
@@ -160,11 +171,15 @@ stays observed. A panel codes its eigenvectors and `EAF` on each row's `EA`
 (the sorted-first allele, `construct_block.py`), and a statistic is signed for
 the ALID's `A1`, so a row whose `A1` is not its `EA` -- every settled panel
 deletion -- has its eigenvector row negated and its frequency complemented
-when its block is read (`LDBlock.flipped`). The same rule holds an SNP whose
-`EA` were not its `A1`; on the host's panels none is. A completion records how
-its panel's indels took their reference (`provenance.completion.panel_indels`:
-`reference_from`, each table read with its checksum and counts, the indels
-read and placed).
+when its block is read (`LDBlock.flipped`). The same rule holds an SNV whose
+`EA` were not its `A1`; on the host's panels none is. A row whose `EA` is empty,
+or is neither of its alleles, names no ALID, since nothing says which allele
+its LD is for; none of the 64,785,257 rows of the six panels is such a row. A
+completion records how its panel's indels took their reference
+(`provenance.completion.panel_indels`: `reference_from`, each table read with
+its checksum, counts and revision, the indels read and placed, and, per reason,
+the rows not placed: `no_reference`, `no_effect_allele` or
+`effect_allele_not_an_allele`).
 
 **7. GWAS-SSF declares its reference by layout and harmoniser code** (owner,
 7 Nov; it supersedes the 4 Nov rule for code 11). The reader tells the layout
@@ -184,9 +199,10 @@ from the header:
   says which columns hold its harmonised alleles, so the file is refused,
   never read under a default.
 
-Each record counts, per Analysis, the indels the code rule kept
-(`indels_kept_by_hm_code`, over the rows the reader read) beside those each
-reason dropped, so a Release says how many indels it took on this rule.
+Each record counts, per Analysis, the indel rows the code rule kept
+(`indel_rows_kept_by_hm_code`: rows read, before duplicates are resolved)
+beside those each reason dropped, so a Release says how many indels it took on
+this rule.
 
 The evidence, at FinnGen R13 indel sites read one way (FinnGen
 `finngen_R13_AB1_GONOCOCCAL`'s declared `ref`). In the main-column layout,
@@ -209,21 +225,29 @@ In the `hm_*` layout, over 35 files, `hm_other_allele` is the reference for
 GCST90061408 but did not generalise (GCST90000293 and GCST90054782 show the
 reverse failure), so that layout places no indel.
 
-**Rescued copies are an open contract with opengwasdb-stores.** The 58
+**Rescued copies keep the raw file's alleles** (owner, 7 Nov). The 58
 `swap_alleles` copies under `derived/ebi-gwas-catalog/` (opengwasdb-stores #155)
-exchange the allele columns but keep `hm_code`, so in them `effect_allele` is
-the reference and this rule reads the wrong allele on every indel row. Nothing
-a build reads says a file is such a copy -- the decision is in the stores
-repository's `allele-check` sidecars and the acquisition overlay, and only the
-path tells -- so the reader does not guess from the path. No build manifest
-names a rescued copy today; one that does needs a declared signal first.
+exchanged the allele columns but kept `hm_code`, so in them `effect_allele`
+was the reference and this rule would read the wrong allele on every indel
+row. A record of them exists,
+`derived/ebi-gwas-catalog/eur-hybrid-rescue-orientation-manifest.tsv` (each
+file's checksum, and "rescued via swap_alleles"), but nothing in this package
+reads it, and no build manifest names a rescued copy. The rescue is redone in
+opengwasdb-stores instead: it keeps `effect_allele` and `other_allele` as the
+raw file has them, so `other_allele` stays the reference, and rewrites the
+statistics, negating beta, inverting an odds ratio and its interval, and
+complementing the frequency; the 58 copies are then regenerated. A rescued
+copy is then read like any other file of its layout, and the engine needs
+no signal and no guard.
 
 **8. #357's reversed-indel rule no longer fires.** An insertion and a deletion
 at one position are two variants, and an indel whose source declares no
 reference never reaches a place, so no build drops a row as
 `duplicate_reversed_indel`. The reason stays readable in records written
 before. Routing still carries each row's declaration (`REFERENCE_*`), now
-`REFERENCE_FIRST` for every declared indel.
+`REFERENCE_FIRST` for every declared indel. The rule's branch,
+`REFERENCE_SECOND` and `ReferenceAllele.ALT` are unreachable, and stay only
+until #316 removes them.
 
 ## Considered
 
@@ -242,8 +266,9 @@ before. Routing still carries each row's declaration (`REFERENCE_*`), now
   lose them for no accuracy (7).
 - **Dropping every GWAS-SSF indel**, which no code-keyed error can reach. The
   owner chose to keep codes 10 and 11 and accept the residual error (7).
-- **Reading a rescued copy's reference from its path.** That is a contract
-  between two repositories, and needs one (7).
+- **Reading a rescued copy's reference from its path, or from the rescue
+  record.** Either makes the engine depend on opengwasdb-stores' layout; a
+  rescue that keeps the raw alleles needs neither (7).
 
 ## Consequences
 

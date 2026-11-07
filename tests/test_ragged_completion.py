@@ -1950,6 +1950,7 @@ def test_a_block_cedes_its_end_only_for_an_analysis_completed_against_the_next()
         block_to_analyses={"1/100-200": [0, 1], "1/200-300": [0]},
         block_canonical_alids={},
         new_alids=set(),
+        panel_indels={},
         endpoints={"1/100-200": SharedEndpoint("1/200-300", endpoint)},
     )
 

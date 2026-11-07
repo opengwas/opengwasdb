@@ -21,7 +21,7 @@
     alleles in `hm_*` columns drops every indel (`indel_ssf_hm_columns`), and so
     does one with no harmoniser column (`indel_ssf_unharmonised`); any other
     mix of harmoniser columns is refused. The record counts the indels the code
-    kept, `indels_kept_by_hm_code`. A BESD `.esi`, a `build-dense` association
+    kept, `indel_rows_kept_by_hm_code`. A BESD `.esi`, a `build-dense` association
     TSV, and an `effect_and_other` or `ref_alt_and_effect_allele` Column Map
     declare none (`indel_reference_undeclared`).
   - **Reference Completion places a panel indel by the panel's `REF` column, or
@@ -29,13 +29,16 @@
     `scripts/build_panel_indel_reference.py` settles from GRCh38 evidence, and
     re-signs a panel deletion's LD and frequency for its reference allele. A
     panel with neither places no indel, and its log and
-    `provenance.completion.panel_indels` say so. Completion **refuses a 0.2.0
+    `provenance.completion.panel_indels` say so. A table is read only beside
+    its `indel_reference.json`, whose checksum it must match, and a panel row
+    whose `EA` is not one of its alleles is not placed (`unplaced_rows`). Completion **refuses a 0.2.0
     or 0.1.0 source**: rebuild it, then complete it. The converter now writes
     0.2.0, not the current version.
   - **`validate` adds `variant_table.indel_order`**, which fails a Store from
     0.2.1 on whose indel ALID contradicts its row's `effect_allele`/`other_allele`
     or `source_alid`.
-  - Python: `orient_to_canonical`, `oriented_alid`, `orient_or_drop`,
-    `identity_fault`, `project_source_variant` and `oriented_variant` take a
-    required `other_is_reference`, and the tabular projection columns a required
-    `reference`.
+  - Python: `orient_to_canonical`, `oriented_alid`, `identity_fault`,
+    `project_source_variant` and `oriented_variant` take a required
+    `other_is_reference`, `orient_or_drop` a required `declaration` and `row`,
+    and the tabular projection columns a required `reference`. `identity_fault`
+    takes exactly two alleles; `chromosome_fault` judges a chromosome alone.

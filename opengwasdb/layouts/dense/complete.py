@@ -46,6 +46,7 @@ from opengwasdb.completion.ld_panel import (
     check_panel_has_chromosomes,
     list_all_blocks,
     list_chromosomes,
+    panel_variant,
 )
 from opengwasdb.completion.manifest import (
     build_completion_provenance,
@@ -99,10 +100,8 @@ from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
     CanonicalVariant,
     VariantAxis,
-    VariantNormalisationError,
     VariantRecord,
     chromosome_sort_key,
-    orient_to_canonical,
     parse_canonical_alid,
     write_variant_axis,
 )
@@ -376,7 +375,7 @@ class _UnionAxis:
     #: Per block's TSV, the variants at its end the next block owns.
     ceded: dict[Path, frozenset[str]]
     #: How the panel's indels took their reference (`PanelIndels.record`).
-    panel_indels: dict[str, object] = field(default_factory=dict)
+    panel_indels: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -456,23 +455,6 @@ def _enumerate_panel(ld_dir: Path, ancestry: str) -> _Panel:
     return _Panel(tsv_paths, panel_alids, ceded, indels.record())
 
 
-def _orient_panel_alid(alid: str) -> CanonicalVariant | None:
-    """The store-canonical variant one panel ALID names, or ``None`` when the
-    panel's identifier cannot be parsed or oriented. An ALID the panel cannot
-    say what it is must never become a variant the store claims to cover."""
-    parts = alid.split(":")
-    if len(parts) != 4:
-        return None
-    chrom, pos_str, a1, a2 = parts
-    try:
-        # A canonical ALID read back keeps its order: A1 is the reference of an
-        # indel (ADR 0079), and an SNV's pair is already sorted.
-        cv_result = orient_to_canonical(chrom, int(pos_str), a2, a1, other_is_reference=True)
-    except (VariantNormalisationError, ValueError):
-        return None
-    return cv_result.variant
-
-
 def _union_variant_table(
     src_variants: list[VariantRecord],
     src_alid_to_idx: dict[str, int],
@@ -480,13 +462,14 @@ def _union_variant_table(
 ) -> tuple[list[CanonicalVariant], list[CanonicalVariant], dict[str, int]]:
     """Append the panel variants the source does not already hold (deduplicated
     through canonical orientation) and sort the union into the store's
-    canonical order."""
+    canonical order. An ALID the panel cannot say what it is never becomes a
+    variant the store claims to cover (`panel_variant`)."""
     present = set(src_alid_to_idx)
     new_canonical: list[CanonicalVariant] = []
     for alid in panel_alids:
         if alid in present:
             continue
-        variant = _orient_panel_alid(alid)
+        variant = panel_variant(alid)
         if variant is None:
             continue
         if variant.alid in present:

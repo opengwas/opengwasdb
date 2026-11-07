@@ -27,6 +27,7 @@ from opengwasdb.readers.finngen import FinnGenR13Reader
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
 from opengwasdb.readers.gwas_vcf import GwasVcfReader
 from opengwasdb.readers.interface import SourceReader, StreamTally
+from opengwasdb.readers.tabular import NO_REFERENCE
 from opengwasdb.variants.axis import iter_variant_records
 from opengwasdb.variants.normalise import (
     IdentityFaults,
@@ -95,8 +96,9 @@ def test_a_malformed_identity_is_judged_before_the_rest_of_the_row():
     refused for another reason (an unsupported number) leaves it the reader's."""
     faults = IdentityFaults()
 
-    assert orient_or_drop("1", "not-a-position", "G", "N", faults, other_is_reference=False) is None
-    assert orient_or_drop("27", 100, "G", "N", faults, other_is_reference=False) is None
+    none = {"declaration": NO_REFERENCE, "row": {}}
+    assert orient_or_drop("1", "not-a-position", "G", "N", faults, **none) is None
+    assert orient_or_drop("27", 100, "G", "N", faults, **none) is None
 
     assert faults.rows == [("1:not-a-position:N:G", "allele_invalid")]
     assert isinstance(identity_fault("1", "N", "G", other_is_reference=False), InvalidAllele)

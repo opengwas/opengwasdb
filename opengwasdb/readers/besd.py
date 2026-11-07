@@ -36,7 +36,7 @@ from opengwasdb.stats import parse_af
 from opengwasdb.variants.normalise import (
     MalformedIdentity,
     allele_fault,
-    identity_fault,
+    chromosome_fault,
     normalise_chromosome,
     oriented_alid,
     undeclared_reference,
@@ -222,7 +222,7 @@ class _EsiColumns:
     def _chromosome(self, chrom: str) -> MalformedIdentity | str:
         known = self._chromosomes.get(chrom)
         if known is None:
-            fault = identity_fault(chrom, other_is_reference=False)
+            fault = chromosome_fault(chrom)
             known = fault if fault is not None else normalise_chromosome(chrom)
             self._chromosomes[chrom] = known
         return known

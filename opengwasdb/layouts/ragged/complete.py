@@ -53,6 +53,7 @@ from opengwasdb.completion.ld_panel import (
     PanelIndels,
     SharedEndpoint,
     check_panel_has_chromosomes,
+    panel_variant,
     shared_endpoints,
 )
 from opengwasdb.completion.manifest import (
@@ -105,12 +106,7 @@ from opengwasdb.variants.axis import (
     VariantRecord,
     write_variant_axis,
 )
-from opengwasdb.variants.normalise import (
-    CanonicalVariant,
-    VariantNormalisationError,
-    chromosome_sort_key,
-    orient_to_canonical,
-)
+from opengwasdb.variants.normalise import CanonicalVariant, chromosome_sort_key
 from opengwasdb.variants.routing import Duplicates, collapse_duplicates
 
 log = logging.getLogger(__name__)
@@ -473,10 +469,10 @@ class _BlockPlan:
     block_to_analyses: dict[str, list[int]]
     block_canonical_alids: dict[str, list[str | None]]
     new_alids: set[str]
+    #: How the planned blocks' indels took their reference (`PanelIndels.record`).
+    panel_indels: dict[str, object]
     #: Each block's end another planned block starts at (`shared_endpoints`).
     endpoints: dict[str, SharedEndpoint] = field(default_factory=dict)
-    #: How the planned blocks' indels took their reference (`PanelIndels.record`).
-    panel_indels: dict[str, object] = field(default_factory=dict)
 
     def ceded(self, block_id: str) -> dict[int, frozenset[str]]:
         """Per Analysis, the variants at ``block_id``'s end the next block owns.
@@ -505,8 +501,6 @@ class _MergedAxis:
     new_variants: list[CanonicalVariant]
     new_alid_to_idx: dict[str, int]
     src_idx_remap: list[int]
-    #: How the panel's indels took their reference (`PanelIndels.record`).
-    panel_indels: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -693,10 +687,6 @@ def _gene_target_less_blocks(
     return trait_less_blocks(held, ld_dir, ancestry)
 
 
-def _canonical_alids(block: LDBlock) -> list[str | None]:
-    return block.alids
-
-
 def _new_panel_alids(alids: list[str | None], source_alids: set[str]) -> set[str]:
     """The panel ALIDs among `alids` the source release never held."""
     return {a for a in alids if a is not None and a not in source_alids}
@@ -733,7 +723,7 @@ def _scan_block_maps(
             if block.block_id in block_to_tsv:
                 continue
             block_to_tsv[block.block_id] = block.tsv_path
-            block_canonical_alids[block.block_id] = _canonical_alids(block)
+            block_canonical_alids[block.block_id] = block.alids
             planned.append(block)
             indels.add(block)
             new_alids.update(_new_panel_alids(block_canonical_alids[block.block_id], source_alids))
@@ -795,29 +785,17 @@ def _as_canonical(v: VariantRecord) -> CanonicalVariant:
     )
 
 
-def _merged_axis(
-    state: _SourceState, new_alids: set[str], panel_indels: dict[str, object]
-) -> _MergedAxis:
-    """Merge the new panel ALIDs into the source axis: canonicalise, drop any
-    that collide with source variants, sort under the store's key, and build
-    the maps that translate source variant indices and panel ALIDs into the
-    union."""
+def _merged_axis(state: _SourceState, new_alids: set[str]) -> _MergedAxis:
+    """Merge the new panel ALIDs into the source axis: canonicalise
+    (`panel_variant`), drop any that collide with source variants, sort under
+    the store's key, and build the maps that translate source variant indices
+    and panel ALIDs into the union."""
     source_alids = set(state.src_alids)
     new_variants: list[CanonicalVariant] = []
     for alid in new_alids:
-        try:
-            parts = alid.split(":")
-            if len(parts) != 4:
-                continue
-            chrom, pos_str, a1, a2 = parts
-            # A panel ALID keeps its order (ADR 0079), as the source's do.
-            cv_result = orient_to_canonical(
-                chrom, int(pos_str), a2, a1, other_is_reference=True
-            )
-            if cv_result.variant.alid not in source_alids:
-                new_variants.append(cv_result.variant)
-        except (VariantNormalisationError, ValueError):
-            continue
+        variant = panel_variant(alid)
+        if variant is not None and variant.alid not in source_alids:
+            new_variants.append(variant)
     new_variants.sort(key=_sort_key)
     variants = sorted(
         [_as_canonical(v) for v in state.src_variants] + new_variants, key=_sort_key
@@ -833,7 +811,6 @@ def _merged_axis(
         new_variants=new_variants,
         new_alid_to_idx=new_alid_to_idx,
         src_idx_remap=src_idx_remap,
-        panel_indels=panel_indels,
     )
 
 
@@ -1538,6 +1515,7 @@ def _completed_manifest(
     thresh: float,
     cis_window_bp: int,
     axis: _MergedAxis,
+    panel_indels: dict[str, object],
     csr: _CompletedCsr,
     encode_plan: _EncodePlan,
     se_exceptions: dict[str, Any] | None,
@@ -1560,7 +1538,7 @@ def _completed_manifest(
             cis_window_bp=cis_window_bp,
             n_imputed=csr.total_imputed,
             n_missing=csr.total_missing,
-            panel_indels=axis.panel_indels,
+            panel_indels=panel_indels,
             **({} if se_exceptions is None else {"se_exceptions": se_exceptions}),
         ),
         by_variant=recorded_provenance(staged.path),
@@ -1610,7 +1588,7 @@ def _run_completion(
     with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
         state = _read_source_state(src, impute_analysis_ids)
         plan = _plan_blocks(state, ld_dir, ancestry, cis_window_bp)
-        axis = _merged_axis(state, plan.new_alids, plan.panel_indels)
+        axis = _merged_axis(state, plan.new_alids)
         _write_variant_axis(staged.path, state, axis)
         csr = _checkpoint_and_assemble(
             staged,
@@ -1639,13 +1617,13 @@ def _run_completion(
                 thresh=thresh,
                 cis_window_bp=cis_window_bp,
                 axis=axis,
+                panel_indels=plan.panel_indels,
                 csr=csr,
                 encode_plan=encode_plan,
                 se_exceptions=se_exceptions,
             )
         )
-        result = _completion_result(dst, state, axis, csr)
-    return result
+        return _completion_result(dst, state, axis, csr)
 
 
 def _source_eaf_baseline(source_path: Path) -> np.ndarray | None:

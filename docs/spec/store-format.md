@@ -236,8 +236,9 @@ tells from the header (ADR 0079):
   `indel_ssf_unharmonised`;
 - a file with any other mix of harmoniser columns is refused.
 
-The Admission record counts, per Analysis, the indels a harmoniser code kept
-(`indels_kept_by_hm_code`) beside each reason's drops. An LD Reference Panel
+The Admission record counts, per Analysis, the indel rows a harmoniser code kept
+(`indel_rows_kept_by_hm_code`, rows read before duplicates are resolved) beside
+each reason's drops. An LD Reference Panel
 places its indels by a `REF` column, or by an indel-reference table settled by
 GRCh38 evidence, and places none where it has neither (§13). An alt, random or
 unplaced contig is a chromosome.
@@ -1728,19 +1729,24 @@ declares (ADR 0079):
   `ld_dir/{ancestry}/indel_reference.tsv.gz` (bgzipped, tabix-indexed; columns
   `chromosome`, `position`, `allele1`, `allele2` -- the id's alleles --,
   `reference`, `.` where unsettled, and `outcome`), with its provenance in
-  `indel_reference.json`. `scripts/build_panel_indel_reference.py` writes both
-  from GRCh38 evidence, settling an indel only where a source reads it one way
-  and none reads it otherwise, and never replaces either.
+  `indel_reference.json`, whose `table_sha256` the table MUST match: a
+  completion MUST refuse a table with no provenance or a different checksum.
+  `scripts/build_panel_indel_reference.py` writes both from GRCh38 evidence,
+  settling an indel only where a source reads it one way and none reads it
+  otherwise, and never replaces either.
 
 An indel neither settles names no ALID, is neither matched to a source's indel
 nor filled, and stays in its block's LD; a fill there counts as missing. A
 panel's eigenvectors and `EAF` are for each row's `EA`, and a Store's
 statistics for its ALID's `A1`, so a row whose `A1` is not its `EA` -- a settled
 panel deletion -- has its eigenvector row negated and its frequency complemented
-before completion uses them. A completed release records how its panel's indels
+before completion uses them. A row whose `EA` is empty or is neither of its
+alleles names no ALID. A completed release records how its panel's indels
 took their reference in `provenance.completion.panel_indels`: `reference_from`
 (`ref_column`, `table`, `none` or `mixed`), each table read with its path,
-checksum, revision and counts by outcome, and the indels read and placed.
+checksum, revision and counts by outcome, the indels read and placed, and
+`unplaced_rows`, the rows naming a variant that were not placed, by reason
+(`no_reference`, `no_effect_allele`, `effect_allele_not_an_allele`).
 
 ### 13.1 LD representation
 

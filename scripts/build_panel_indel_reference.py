@@ -14,8 +14,9 @@ script settles each panel indel by evidence that declares the reference:
 - the HGDP+1kGP pvars (``--pvar``, gnomAD v3.1.2's REF/ALT);
 - FinnGen R13's declared ``ref`` (``--finngen``).
 
-A source reads a key -- chromosome, position and the unordered allele pair --
-one way when every record of it names the same REF. An indel is settled when
+A source reads a key -- chromosome, position and the unordered allele pair,
+as completion keys a panel indel (`ld_panel.indel_key`) -- one way when every
+record of it names the same REF. An indel is settled when
 at least one source reads it one way and none reads it otherwise:
 ``settled_pvar``, ``settled_finngen``, or ``settled_agree`` when both do. It is
 left unsettled (``reference`` ``.``) when a source holds both readings
@@ -27,8 +28,9 @@ The panel's own files are left alone. Beside them it writes
 ``indel_reference.tsv.gz`` (bgzipped and tabix-indexed, one row per panel
 indel), which Reference Completion reads (`opengwasdb.completion.ld_panel`),
 and ``indel_reference.json``: the evidence files with their sizes and
-checksums, this script's revision, and the counts by outcome. It refuses to
-run where either file already exists.
+checksums, the table's own checksum, this script's revision, and the counts by
+outcome. It refuses to run where either file already exists, and fails, writing
+nothing, on an evidence file it cannot read to its end.
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ import subprocess
 import sys
 from collections import Counter
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO
@@ -52,17 +55,12 @@ from opengwasdb.completion.ld_panel import (
     INDEL_REFERENCE_COLUMNS,
     INDEL_REFERENCE_PROVENANCE,
     INDEL_REFERENCE_TABLE,
+    IndelKey,
+    indel_key,
     list_chromosomes,
+    panel_id_parts,
 )
-from opengwasdb.variants.normalise import (
-    VariantNormalisationError,
-    chromosome_sort_key,
-    identity_allele,
-    normalise_chromosome,
-)
-
-#: ``(chromosome, position, allele1, allele2)``: the alleles sorted, upper-cased.
-Key = tuple[str, int, str, str]
+from opengwasdb.variants.normalise import chromosome_sort_key, identity_allele
 
 OUTCOMES = (
     "settled_agree",
@@ -74,85 +72,84 @@ OUTCOMES = (
 )
 
 
-def _key(chromosome: str, position: str | int, first: str, second: str) -> Key | None:
-    """A variant's key, or None for one that is not an indel or names no site."""
-    first, second = identity_allele(first.strip()), identity_allele(second.strip())
-    if len(first) == len(second):
-        return None
-    try:
-        chrom = normalise_chromosome(chromosome)
-        pos = int(position)
-    except (VariantNormalisationError, ValueError):
-        return None
-    a1, a2 = sorted((first, second))
-    return chrom, pos, a1, a2
-
-
-def _id_alleles(snp_id: str) -> tuple[str, str, str, str] | None:
-    """A panel id's ``(chrom, pos, allele, allele)``: ``chr:pos:a:b`` or ``chr:pos_a_b``."""
-    snp_id = snp_id[3:] if snp_id.startswith("chr") else snp_id
-    parts = snp_id.split(":")
-    if len(parts) == 4:
-        return parts[0], parts[1], parts[2], parts[3]
-    if len(parts) == 2 and parts[1].count("_") == 2:
-        pos, first, second = parts[1].split("_")
-        return parts[0], pos, first, second
-    return None
-
-
-def panel_indels(panel_dir: Path) -> set[Key]:
+def panel_indels(panel_dir: Path) -> set[IndelKey]:
     """Every indel the panel's block tables name."""
-    keys: set[Key] = set()
+    keys: set[IndelKey] = set()
     for chrom in list_chromosomes(panel_dir.parent, panel_dir.name):
         for tsv in sorted((panel_dir / chrom).glob("*.tsv")):
             with open(tsv, encoding="utf-8") as fh:
                 header = fh.readline().rstrip("\n").split("\t")
                 snp = header.index("SNP")
                 for line in fh:
-                    parts = _id_alleles(line.rstrip("\n").split("\t")[snp])
-                    key = None if parts is None else _key(*parts)
+                    parts = panel_id_parts(line.rstrip("\n").split("\t")[snp])
+                    key = None if parts is None else indel_key(*parts)
                     if key is not None:
                         keys.add(key)
     return keys
 
 
-def _open_text(path: Path) -> IO[str]:
-    if path.name.endswith(".zst"):
-        process = subprocess.Popen(
-            ["zstdcat", str(path)], stdout=subprocess.PIPE, text=True, encoding="utf-8"
+@contextmanager
+def _open_text(path: Path) -> Iterator[IO[str]]:
+    """``path``'s text, decompressed. A `zstdcat` that exits non-zero -- a
+    truncated or corrupt file -- raises `subprocess.CalledProcessError` once
+    its output is read, so a file read short never passes for a whole one."""
+    if not path.name.endswith(".zst"):
+        opened = (
+            gzip.open(path, "rt", encoding="utf-8") if path.name.endswith((".gz", ".bgz"))
+            else open(path, encoding="utf-8")
         )
+        with opened as fh:
+            yield fh
+        return
+    command = ["zstdcat", str(path)]
+    with subprocess.Popen(command, stdout=subprocess.PIPE, text=True, encoding="utf-8") as process:
         assert process.stdout is not None
-        return process.stdout
-    if path.name.endswith((".gz", ".bgz")):
-        return gzip.open(path, "rt", encoding="utf-8")
-    return open(path, encoding="utf-8")
+        yield process.stdout
+        process.stdout.read()
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(process.returncode, command)
+
+
+def _header(fh: IO[str]) -> list[str] | None:
+    """The column names of a file read from its start, or None if it has none."""
+    for line in fh:
+        if not line.startswith("##"):
+            return line.lstrip("#").rstrip("\n").split("\t")
+    return None
 
 
 def _records(path: Path, columns: tuple[str, str, str, str]) -> Iterator[tuple[str, ...]]:
-    """``(chrom, pos, ref, alt)`` of each record, by the named header columns."""
+    """``(chrom, pos, ref, alt)`` of each record, by the named header columns.
+
+    A file that ends before its header, or in a record cut short, raises
+    `ValueError`, once a decompressor that failed has raised for itself.
+    """
+    fault = ""
     with _open_text(path) as fh:
-        for line in fh:
-            if line.startswith("##"):
-                continue
-            header = line.lstrip("#").rstrip("\n").split("\t")
-            break
+        header = _header(fh)
+        if header is None:
+            fault = "ends before its header"
         else:
-            return
-        where = [header.index(name) for name in columns]
-        for line in fh:
-            cells = line.rstrip("\n").split("\t")
-            yield tuple(cells[i] for i in where)
+            where = [header.index(name) for name in columns]
+            for line in fh:
+                cells = line.rstrip("\n").split("\t")
+                if len(cells) < len(header):
+                    fault = f"ends in a record cut short ({line[:60]!r})"
+                    break
+                yield tuple(cells[i] for i in where)
+    if fault:
+        raise ValueError(f"{path} {fault}: it cannot be read to its end")
 
 
 def evidence_references(paths: list[Path], columns: tuple[str, str, str, str],
-                        wanted: set[Key]) -> dict[Key, set[str]]:
+                        wanted: set[IndelKey]) -> dict[IndelKey, set[str]]:
     """The REFs each wanted key's records in ``paths`` name. A multi-allelic
     record (an ALT listing several alleles) names one REF per allele."""
-    found: dict[Key, set[str]] = {}
+    found: dict[IndelKey, set[str]] = {}
     for path in paths:
         for chrom, pos, ref, alts in _records(path, columns):
             for alt in alts.split(","):
-                key = _key(chrom, pos, ref, alt)
+                key = indel_key(chrom, pos, ref, alt)
                 if key is not None and key in wanted:
                     found.setdefault(key, set()).add(identity_allele(ref.strip()))
     return found
@@ -164,7 +161,7 @@ _SETTLED_BY = {
 }
 
 
-def settle(key: Key, pvar: set[str] | None, finngen: set[str] | None) -> tuple[str, str]:
+def settle(key: IndelKey, pvar: set[str] | None, finngen: set[str] | None) -> tuple[str, str]:
     """``(reference, outcome)`` for one panel indel; reference ``.`` unless settled."""
     readings = [r for r in (pvar, finngen) if r]
     references = set().union(*readings)
@@ -178,11 +175,8 @@ def settle(key: Key, pvar: set[str] | None, finngen: set[str] | None) -> tuple[s
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
     with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 22), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(fh, "sha256").hexdigest()
 
 
 def _revision() -> dict[str, object]:

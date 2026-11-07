@@ -9,7 +9,7 @@
 > dropped and logged as `indel_reference_undeclared` after `allele_invalid`, or,
 > for GWAS-SSF, under a reason naming its layout (`indel_ssf_unharmonised`,
 > `indel_ssf_hm_columns`, `indel_ssf_hm_code`); a record also counts the indels
-> a GWAS-SSF harmoniser code kept (`indels_kept_by_hm_code`). The rule set's
+> a GWAS-SSF harmoniser code kept (`indel_rows_kept_by_hm_code`). The rule set's
 > version is `admission/13`.
 
 Issue [#357](https://github.com/opengwas/opengwasdb/issues/357), part of epic
