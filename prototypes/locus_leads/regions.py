@@ -43,12 +43,12 @@ from .profile_sweep import (
     Candidates,
     ReadOncePanel,
     Rule,
-    _n_leads,
-    _on,
-    _per_lead,
     apply,
     check_inputs,
     check_same_shared_set,
+    n_leads,
+    on_hm3,
+    per_lead,
     reference_shared_set,
     shared_set_identity,
 )
@@ -220,8 +220,8 @@ def rebuild(tier: TierRows, genetic_map: LoadedMap, panel: Panel, hm3: frozenset
     index_of = clump_shared_set(shared, panel, [R2], threshold=TIER, work_dir=work_dir,
                                 threads=threads).index_of[R2]
     profile = Profile(tier.chromosome, tier.position, tier.abs_z)
-    return Rebuilt(shared, accounting, index_of, _on(hm3, shared.rows.alid), profile,
-                   profile.take(_on(hm3, tier.alid)))
+    return Rebuilt(shared, accounting, index_of, on_hm3(hm3, shared.rows.alid), profile,
+                   profile.take(on_hm3(hm3, tier.alid)))
 
 
 def methods(named_cm: dict[str, Any], blocks: Blocks) -> list[Method]:
@@ -278,18 +278,18 @@ def check_rebuilt(r: Rebuilt, reference: TierRows, committed: tuple[dict[str, An
     check_same(f"{analysis_id} HapMap3 rows", {"rows_full": int(r.in_hm3.size),
                                                "rows_hm3": int(r.in_hm3.sum())},
                sweep["density"], "eur_sweep.json")
-    check_same(f"{analysis_id} index variants", {"index_variants": _n_leads(r.index_of)},
+    check_same(f"{analysis_id} index variants", {"index_variants": n_leads(r.index_of)},
                {"index_variants": profile["index_variants"]}, "eur_profile.json")
     leads = {}
     for method in every:
         theirs = method.committed(sweep, profile)
         full = method.lead_of(r, False)
-        per_lead = _per_lead(r.shared, full, r.index_of)
-        check_same(f"{analysis_id} {method.label} per-lead record", per_lead,
-                   {k: v for k, v in theirs["by_r2"][PRIMARY_R2].items() if k in per_lead},
+        record = per_lead(r.shared, full, r.index_of)
+        check_same(f"{analysis_id} {method.label} per-lead record", record,
+                   {k: v for k, v in theirs["by_r2"][PRIMARY_R2].items() if k in record},
                    method.source)
         check_same(f"{analysis_id} {method.label} density",
-                   {"leads_full": _n_leads(full), "leads_hm3": _n_leads(method.lead_of(r, True))},
+                   {"leads_full": n_leads(full), "leads_hm3": n_leads(method.lead_of(r, True))},
                    theirs["density"], method.source)
         leads[method.key] = full
     return leads

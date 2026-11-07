@@ -161,15 +161,17 @@ def reference_shared_set(reference: TierRows, store_id: str, analysis_id: str,
     return shared_set_identity(store_id, analysis_id, shared.rows.variant_index)
 
 
-def _on(hm3: frozenset[str], alid: np.ndarray) -> np.ndarray:
+def on_hm3(hm3: frozenset[str], alid: np.ndarray) -> np.ndarray:
+    """Whether each ALID is on the HapMap3 list."""
     return np.fromiter((a in hm3 for a in alid.tolist()), dtype=bool, count=alid.size)
 
 
-def _n_leads(lead_of: np.ndarray) -> int:
+def n_leads(lead_of: np.ndarray) -> int:
+    """How many rows are their own lead."""
     return int(np.sum(lead_of == np.arange(lead_of.size)))
 
 
-def _per_lead(shared: SharedSet, lead_of: np.ndarray, index_of: np.ndarray) -> dict[str, Any]:
+def per_lead(shared: SharedSet, lead_of: np.ndarray, index_of: np.ndarray) -> dict[str, Any]:
     """#403's per-lead record at r^2 0.01, without the pair lists."""
     summary = _summary(shared, classify(lead_of, index_of), lead_of, index_of)
     return {k: v for k, v in summary.items()
@@ -190,8 +192,8 @@ def check_baselines(shared: SharedSet, index_of: np.ndarray, in_hm3: np.ndarray,
         sparse = rows.take(in_hm3)
         lead_hm3 = locus_leads(sparse.chromosome, sparse.position, shared.cm[in_hm3],
                                sparse.abs_z, sparse.variant_index, d_cm=d_cm, w_bp=w_bp)
-        mine = {"per_lead": _per_lead(shared, lead_of, index_of),
-                "density": {"leads_full": _n_leads(lead_of), "leads_hm3": _n_leads(lead_hm3)}}
+        mine = {"per_lead": per_lead(shared, lead_of, index_of),
+                "density": {"leads_full": n_leads(lead_of), "leads_hm3": n_leads(lead_hm3)}}
         expected = {"per_lead": {k: v for k, v in theirs["by_r2"][PRIMARY_R2].items()
                                  if k in mine["per_lead"]}, "density": theirs["density"]}
         if json.loads(json.dumps(mine)) != expected:
@@ -235,8 +237,8 @@ def rule_record(rule: Rule, shared: SharedSet, full: Candidates, sparse: Candida
         {(str(c), int(b)) for c, b, k in zip(splits.chromosome, splits.bin, splits.kind,
                                              strict=True) if k == "no_row"})
     record = rule.label() | {
-        "density": {"leads_full": _n_leads(lead_of), "leads_hm3": _n_leads(lead_hm3)},
-        "by_r2": {PRIMARY_R2: _per_lead(shared, lead_of, index_of)},
+        "density": {"leads_full": n_leads(lead_of), "leads_hm3": n_leads(lead_hm3)},
+        "by_r2": {PRIMARY_R2: per_lead(shared, lead_of, index_of)},
         **extra, **{f"{k}_hm3": v for k, v in extra_hm3.items()}}
     return record, [list(v) for v in valleys]
 
@@ -271,10 +273,10 @@ def score_profile(tier: TierRows, identity: dict[str, Any], reference: TierRows,
     work_dir.mkdir(parents=True, exist_ok=True)
     index_of = clump_shared_set(shared, panel, [R2], threshold=TIER, work_dir=work_dir,
                                 threads=threads).index_of[R2]
-    in_hm3 = _on(hm3, shared.rows.alid)
+    in_hm3 = on_hm3(hm3, shared.rows.alid)
     profile = Profile(tier.chromosome, tier.position, tier.abs_z)
     full = Candidates(shared.rows, profile)
-    sparse = Candidates(shared.rows.take(in_hm3), profile.take(_on(hm3, tier.alid)))
+    sparse = Candidates(shared.rows.take(in_hm3), profile.take(on_hm3(hm3, tier.alid)))
     density = {"rows_full": int(in_hm3.size), "rows_hm3": int(in_hm3.sum())}
     if density != committed["density"]:
         raise SharedSetMismatch(f"{analysis_id}: rows on HapMap3 {density}, but #403 "
@@ -289,7 +291,7 @@ def score_profile(tier: TierRows, identity: dict[str, Any], reference: TierRows,
                     "on_hm3": int(sparse.profile.abs_z.size)},
         "rows": accounting, "shared_set": mine | {"matches_403_summaries": True},
         "density": density,
-        "index_variants": _n_leads(index_of), "baselines_equal_403": baselines,
+        "index_variants": n_leads(index_of), "baselines_equal_403": baselines,
         "rules": [record for record, _ in scored],
         "no_row_valleys": _no_row_valleys(rule_grid(), [valleys for _, valleys in scored]),
     }
