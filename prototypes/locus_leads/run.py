@@ -135,15 +135,22 @@ def match_rows(rows: TierRows, panel: Panel) -> PanelMatch:
                           {c: panel.variants(c) for c in panel.chromosomes if c in present})
 
 
-def build_shared_set(rows: TierRows, panel: Panel,
-                     genetic_map: GeneticMap) -> tuple[SharedSet, dict[str, Any]]:
-    """The rows on the panel with finite cM, and a count of every other row by reason."""
+def categorise(rows: TierRows, panel: Panel,
+               genetic_map: GeneticMap) -> tuple[PanelMatch, np.ndarray, np.ndarray]:
+    """Each row's panel match, its cM, and the one category of `PARTITION` it falls in."""
     match = match_rows(rows, panel)
     cm = genetic_map.cm_at(rows.chromosome, rows.position)
     check_cm(rows.chromosome, rows.position, cm, genetic_map)
-    no_cm = np.isnan(cm)
     category = np.where(match.status == "matched",
-                        np.where(no_cm, "matched_no_cm", "shared_set"), match.status)
+                        np.where(np.isnan(cm), "matched_no_cm", "shared_set"), match.status)
+    return match, cm, category
+
+
+def build_shared_set(rows: TierRows, panel: Panel,
+                     genetic_map: GeneticMap) -> tuple[SharedSet, dict[str, Any]]:
+    """The rows on the panel with finite cM, and a count of every other row by reason."""
+    match, cm, category = categorise(rows, panel, genetic_map)
+    no_cm = np.isnan(cm)
     keep = category == "shared_set"
     shared = SharedSet(rows.take(keep), match.panel_id[keep], cm[keep])
     partition = {name: int(np.sum(category == name)) for name in PARTITION}
