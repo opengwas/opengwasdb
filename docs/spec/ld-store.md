@@ -513,7 +513,7 @@ recorded (§7) and its recorded t_far:
 
 | request | answer |
 |---|---|
-| r2 outside [0, 1], or kb negative or not finite | refused: `invalid` |
+| r2 outside [0, 1], kb negative or not finite, or a `clump` score that is not one finite, non-negative number per ALID | refused: `invalid` |
 | W > `far_bp` | refused: `window_over_far`. Pairs more than `far_bp` apart are Not Measured |
 | `near_bp` < W ≤ `far_bp` and r2 < t_far | refused: `threshold_below_t_far`. The store holds only the Bound for the pairs beyond `near_bp` that are not Far Pairs, and that does not decide r̂² ≥ r2 |
 | `near_bp` < W ≤ `far_bp` and r2 ≥ t_far | answered from the Near Band and the Proxy Index. Every pair beyond `near_bp` left out has r̂² < t_far ≤ r2, so none of them can reach r2 |
