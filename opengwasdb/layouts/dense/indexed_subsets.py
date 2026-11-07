@@ -139,6 +139,15 @@ DEFAULT_BAND_CELLS = 65_536_000
 #: and does not use this.
 EXHAUSTIVE_VALIDATION_BAND_CELLS = 4_000_000
 
+#: Exception-table entries one bounded read of a primary side table holds.  A
+#: full-size Store's EAF exception table is hundreds of millions of entries in one
+#: Zarr v3 shard -- 237,027,522 on OGS-00016, 1,136,991,041 on OGS-00011 -- so
+#: reading it whole costs 2.7 GiB and 12.7 GiB of resident memory.  Its inner
+#: chunks are 200,000 entries, which Zarr reads as byte ranges, so the table can
+#: be walked a window at a time instead (issue #387).  About 96 MB: the same
+#: window `WindowedExactTable` scatters over.
+EXCEPTION_TABLE_WINDOW = 8_000_000
+
 #: The build's publication gate validates the structural invariants exhaustively
 #: and a bounded deterministic sample of decoded cells.  Standalone `validate`
 #: uses the exhaustive mode below, which decodes every cell (#270).
@@ -2599,8 +2608,11 @@ def _validate_one_indexed_subset(
     declared, subset = prepared
     # Cheap, high-value invariants that stay exhaustive even on the sampled
     # build path: the side tables are small, so their remapping and the
-    # per-variant baselines are compared in full rather than sampled.
-    _check_side_tables_against_primary(
+    # per-variant baselines are compared in full rather than sampled.  The EAF
+    # exception cells that check keeps are what the value comparison decodes the
+    # primary plane with, so the table is read once here and not again per band
+    # (issue #387).
+    eaf_cells = _check_side_tables_against_primary(
         name, group, context.root, declared, subset, context.n_analyses, errors
     )
     _eaf_reference_error(name, group, context.root, subset, declared, errors)
@@ -2608,7 +2620,8 @@ def _validate_one_indexed_subset(
         return None
     if exhaustive:
         _compare_indexed_values(
-            name, context.root, group, declared, subset, context.n_analyses, errors
+            name, context.root, group, declared, subset, context.n_analyses, errors,
+            eaf_cells=eaf_cells,
         )
         return None
     sample = _validation_sample(
@@ -2618,7 +2631,9 @@ def _validate_one_indexed_subset(
         _physical_write_unit(group["z"]),
         int(group["z"].chunks[1]),
     )
-    _compare_indexed_sample(name, context.root, group, declared, subset, sample, errors)
+    _compare_indexed_sample(
+        name, context.root, group, declared, subset, sample, errors, eaf_cells=eaf_cells
+    )
     return sample
 
 
@@ -2954,14 +2969,20 @@ def _check_side_tables_against_primary(
     subset: np.ndarray,
     n_analyses: int,
     errors: list[str],
-) -> None:
+) -> EafExceptionTable | None:
     """The index's small side tables are exactly the primary's, remapped.
 
     Exhaustive even on the sampled build path: the tables are O(exception
     count) or O(n_subset), not O(n_analyses * n_subset), and a wrong remap
     would move a decoded cell plausibly and wrongly (#270).  The full decoded
     matrix comparison is what sampling replaces; this is not.
+
+    Returns the subset's EAF exception cells keyed by the *primary's* flat
+    positions, or None when the plan codes no exceptions.  That read is what the
+    value comparison needs too, so it is handed them instead of making its own
+    (issue #387).
     """
+    eaf_cells = None
     if encoding.z.is_fixed_point:
         _check_remapped_table(
             name, "z overflow", group, root,
@@ -2985,10 +3006,80 @@ def _check_side_tables_against_primary(
             errors.append(
                 f"indexed subset {name!r} eaf_baseline disagrees with the primary release"
             )
-        _check_remapped_table(
-            name, "eaf exception", group, root,
-            EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE, subset, n_analyses, errors,
+        eaf_cells = _check_eaf_exceptions(name, group, root, subset, n_analyses, errors)
+    return eaf_cells
+
+
+def _check_eaf_exceptions(
+    name: str,
+    group: Any,
+    root: Any,
+    subset: np.ndarray,
+    n_analyses: int,
+    errors: list[str],
+) -> EafExceptionTable:
+    """The index's EAF exception table is the primary's, remapped, in one bounded pass.
+
+    Returns the cells themselves, keyed by the *primary's* flat positions, which
+    is what the value comparison decodes the primary plane with: the cells the
+    subset holds are the only ones it can reach, so it never looks the table up
+    again (issue #387).
+
+    The primary's table is walked one `EXCEPTION_TABLE_WINDOW` at a time rather
+    than read whole.  It is a single Zarr v3 shard of hundreds of millions of
+    entries, so `[:]` is 12.7 GiB of `int64` on OGS-00011 and its remapping holds
+    several copies of that at once; the shard's inner chunks are 200,000 entries
+    and Zarr reads them as byte ranges, so the same bytes stream through in
+    windows of about 96 MB and what is kept is the subset's own cells.
+    """
+    entries = array_length(root[EAF_EXCEPTION_INDEX])
+    kept_index: list[np.ndarray] = []
+    kept_value: list[np.ndarray] = []
+    for start in range(0, entries, EXCEPTION_TABLE_WINDOW):
+        stop = min(start + EXCEPTION_TABLE_WINDOW, entries)
+        window_index = np.asarray(root[EAF_EXCEPTION_INDEX][start:stop], dtype=np.int64)
+        hit = _subset_side_table_hits(window_index, subset, n_analyses)
+        if not np.any(hit):
+            continue
+        kept_index.append(window_index[hit])
+        kept_value.append(
+            np.asarray(root[EAF_EXCEPTION_VALUE][start:stop], dtype=np.float32)[hit]
         )
+    primary_index = (
+        np.concatenate(kept_index) if kept_index else np.empty(0, dtype=np.int64)
+    )
+    primary_value = (
+        np.concatenate(kept_value) if kept_value else np.empty(0, dtype=np.float32)
+    )
+    expected_index, expected_value = _remap_side_table(
+        primary_index, primary_value, subset, n_analyses
+    )
+    if not (
+        np.array_equal(_read_side(group, EAF_EXCEPTION_INDEX), expected_index)
+        and np.array_equal(
+            _read_side(group, EAF_EXCEPTION_VALUE), expected_value, equal_nan=True
+        )
+    ):
+        errors.append(
+            f"indexed subset {name!r} eaf exception table is not the primary release's "
+            "remapped table; the index is stale or corrupt"
+        )
+    return EafExceptionTable(
+        index=np.asarray(primary_index, dtype=np.int64),
+        value=np.asarray(primary_value, dtype=np.float32),
+    )
+
+
+def _subset_side_table_hits(
+    source_index: np.ndarray, subset: np.ndarray, n_analyses: int
+) -> np.ndarray:
+    """Which of a primary side table's cells sit at a variant the subset holds."""
+    source_variants = source_index // n_analyses
+    slots = np.searchsorted(subset, source_variants)
+    in_bounds = slots < len(subset)
+    hit = np.zeros(len(source_index), dtype=bool)
+    hit[in_bounds] = subset[slots[in_bounds]] == source_variants[in_bounds]
+    return hit
 
 
 def _check_remapped_table(
@@ -3032,9 +3123,20 @@ class _DecodeContext:
 
 
 def _open_decode_context(
-    name: str, group: Any, root: Any, encoding: StoreEncoding, errors: list[str]
+    name: str,
+    group: Any,
+    root: Any,
+    encoding: StoreEncoding,
+    errors: list[str],
+    *,
+    eaf_cells: EafExceptionTable | None = None,
 ) -> _DecodeContext | None:
-    """Open every decoder, or report that the index cannot be decoded at all."""
+    """Open every decoder, or report that the index cannot be decoded at all.
+
+    `eaf_cells` is the primary's EAF exception cells for this subset, already
+    read by `_check_side_tables_against_primary`; the plane consults it instead
+    of a view that would read the whole table again for every band (#387).
+    """
     try:
         codec = _codec(group, encoding)
         z_plane = DenseZPlane.open(root, encoding)
@@ -3042,7 +3144,7 @@ def _open_decode_context(
         # Opened even when the index carries no `eaf` array: a release whose
         # source reported no frequency still has imputed cells with the panel's
         # (issue #113), and those are exactly the values a naive skip would drop.
-        eaf_plane = DenseEafPlane.open(root, encoding)
+        eaf_plane = DenseEafPlane.open(root, encoding, exceptions=eaf_cells)
     except Exception as exc:
         errors.append(f"indexed subset {name!r} cannot be decoded: {exc}")
         return None
@@ -3251,6 +3353,8 @@ def _compare_indexed_values(
     subset: np.ndarray,
     n_analyses: int,
     errors: list[str],
+    *,
+    eaf_cells: EafExceptionTable | None = None,
 ) -> None:
     """Stream decoded index bands and compare every one to the primary planes.
 
@@ -3264,7 +3368,9 @@ def _compare_indexed_values(
     of OGS-00009's 16,974 s validation here, so its bands are what an operator wants to
     watch (issue #308).
     """
-    context = _open_decode_context(name, group, root, encoding, errors)
+    context = _open_decode_context(
+        name, group, root, encoding, errors, eaf_cells=eaf_cells
+    )
     if context is None:
         return
     # Read the index in its own physical write units and tile the Analysis axis
@@ -3699,6 +3805,8 @@ def _compare_indexed_sample(
     subset: np.ndarray,
     sample: _SamplePlan,
     errors: list[str],
+    *,
+    eaf_cells: EafExceptionTable | None = None,
 ) -> None:
     """Decode and compare a bounded deterministic sample of index cells.
 
@@ -3710,7 +3818,9 @@ def _compare_indexed_sample(
     unsampled corruption can pass this gate by design and is left to the
     exhaustive standalone audit.
     """
-    context = _open_decode_context(name, group, root, encoding, errors)
+    context = _open_decode_context(
+        name, group, root, encoding, errors, eaf_cells=eaf_cells
+    )
     if context is None:
         return
     if sample.cells == 0:
