@@ -218,7 +218,6 @@ def place_batch(batch: ReaderBatch, lifted: bool, placement: SitePlacement) -> P
         flipped=batch.flipped ^ swapped,
         z=z,
         eaf=eaf,
-        ref_first=None if batch.ref_first is None else batch.ref_first ^ swapped,
     ).take(keep)
     return PlacedBatch(
         placed, batch.alid[keep], batch.keys_at(np.array(unmapped, dtype=np.int64)),

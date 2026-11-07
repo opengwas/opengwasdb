@@ -270,6 +270,13 @@ before. Routing still carries each row's declaration (`REFERENCE_*`), now
 `REFERENCE_SECOND` and `ReferenceAllele.ALT` are unreachable, and stay only
 until #316 removes them.
 
+*Clarified 7 Nov 2026 (#316).* They are removed, with the per-row
+`REFERENCE_*` codes and the readers' `ref_first`, which only the rule read, and
+the reference arrays of a Hybrid's Overflow and off-reference spills.
+Routing no longer carries a row's declaration. `duplicate_reversed_indel`
+keeps its place among the reasons, retired, because a reason's code is its
+position (ADR 0072's clarification of 7 Nov).
+
 ## Considered
 
 - **Sorted ALIDs with a flag recording the orientation.** Keeps 0.2.0's

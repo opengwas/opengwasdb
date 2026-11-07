@@ -38,12 +38,6 @@ from opengwasdb.readers.interface import (
 )
 from opengwasdb.readers.registry import SourceSpec, open_source, resolve_reader
 from opengwasdb.readers.rows import ReaderBatch, SourceRow, stream_associations, stream_batches
-from opengwasdb.variants.routing.table import (
-    REFERENCE_FIRST,
-    REFERENCE_UNKNOWN,
-    allele_order,
-    reference_codes,
-)
 from tests.besd_fixtures import write_besd_sparse_3f, write_epi, write_esi
 
 _VCF_HEADER = """\
@@ -204,19 +198,8 @@ def test_every_projection_carries_the_formats_reference_declaration(
     (batch,) = reader.stream_batches(StreamTally())
     assert batch.reference is declared
     # A declared deletion GGGGCC>G spells its reference allele first in its
-    # ALID, 1:200:GGGGCC:G (ADR 0079); an undeclared one names none, and an
-    # SNV's alleles tell nothing apart.
-    codes = batch.reference_codes()
-    expected = [REFERENCE_UNKNOWN, REFERENCE_UNKNOWN]
-    if declared is not ReferenceAllele.UNDECLARED:
-        expected.insert(1, REFERENCE_FIRST)
-    assert codes.tolist() == expected
-    associations = list(reader.stream_associations(StreamTally()))
-    routed = reference_codes(
-        np.full(len(associations), 0 if declared is ReferenceAllele.UNDECLARED else 1),
-        np.array([allele_order(a.ref, a.alt) for a in associations]),
-    )
-    np.testing.assert_array_equal(codes, routed)
+    # ALID, 1:200:GGGGCC:G (ADR 0079); an undeclared one names none.
+    assert batch.alid.tolist() == _alids(declared)
 
 
 def test_finngens_metric_blocks_read_an_infinite_beta_as_absent(tmp_path: Path) -> None:
@@ -458,35 +441,6 @@ def test_nothing_that_carries_the_declaration_defaults_it() -> None:
         assert reference is None or reference.default is inspect.Parameter.empty, reader
 
 
-def test_a_batch_declaring_a_reference_needs_each_rows_allele_order() -> None:
-    """Without `ref_first`, a declared batch would give every row
-    `REFERENCE_UNKNOWN`, and a reversed indel could not be told apart."""
-    row = SourceRow(
-        chromosome="1", position=200, ref="GGGGCC", alt="G", alid="1:200:GGGGCC:G",
-        flipped=True, af_alt=None, beta=0.4, se=0.2,
-    )
-    (batch,) = stream_batches([row], ReferenceAllele.REF)
-    assert batch.reference_codes().tolist() == [REFERENCE_FIRST]
-    with pytest.raises(ValueError, match="needs each row's ref_first"):
-        replace(batch, ref_first=None)
-
-
-def _undeclared_insertion() -> ReaderBatch:
-    row = SourceRow(
-        chromosome="1", position=100, ref="A", alt="AT", alid="1:100:A:AT",
-        flipped=False, af_alt=None, beta=0.4, se=0.2,
-    )
-    (batch,) = stream_batches([row], ReferenceAllele.UNDECLARED)
-    assert batch.ref_first is None and batch.reference_codes().tolist() == [REFERENCE_UNKNOWN]
-    return batch
-
-
-def test_a_batch_declaring_no_reference_refuses_an_allele_order() -> None:
-    """An order would say which allele is the reference where the format says none."""
-    with pytest.raises(ValueError, match="declares no reference allele"):
-        replace(_undeclared_insertion(), ref_first=np.array([True]))
-
-
 @pytest.mark.parametrize("short", ["ref", "alt", "alid"])
 def test_a_batch_refuses_alleles_that_do_not_line_up_with_its_rows(short: str) -> None:
     """The rsid harvest pairs each row's ALID with its ref and alt (#379). A
@@ -502,14 +456,6 @@ def test_a_batch_refuses_alleles_that_do_not_line_up_with_its_rows(short: str) -
     assert len(batch) == len(batch.ref) == len(batch.alt) == 2
     with pytest.raises(ValueError, match="ref and alt must each hold one allele per row"):
         replace(batch, **{short: getattr(batch, short)[:-1]})
-
-
-def test_reference_codes_follow_the_declaration_not_the_allele_order() -> None:
-    """An order set past construction still names no reference: the codes
-    read the declaration first."""
-    batch = _undeclared_insertion()
-    object.__setattr__(batch, "ref_first", np.array([True]))
-    assert batch.reference_codes().tolist() == [REFERENCE_UNKNOWN]
 
 
 def test_a_besd_probe_refuses_a_column_map_and_a_score_declaration(tmp_path: Path) -> None:

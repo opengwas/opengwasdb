@@ -225,13 +225,7 @@ EVERY_ROW_REFERENCE = DeclaredReference(every_row=True)
 
 
 def declared_reference(reference: ReferenceAllele) -> DeclaredReference:
-    """A format's one declaration for every row, as a `DeclaredReference`.
-
-    `ReferenceAllele.ALT` declares the effect allele the reference, which no
-    tabular source does; it is refused rather than read as either.
-    """
-    if reference is ReferenceAllele.ALT:
-        raise ValueError("a tabular source declares its ref, not its alt, the reference")
+    """A format's one declaration for every row, as a `DeclaredReference`."""
     return EVERY_ROW_REFERENCE if reference is ReferenceAllele.REF else NO_REFERENCE
 
 

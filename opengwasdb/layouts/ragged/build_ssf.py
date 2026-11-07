@@ -268,27 +268,24 @@ def _dedupe_per_analysis(
     to pick a winner from the data alone.
 
     The rule is Variant Routing's (`collapse_duplicates`), so every builder
-    resolves a duplicate alike, with the reader's reference declaration.
-    Agreement is judged on `(z, se)` alone. A duplicate pair that agrees on
-    the statistics but not on `eaf` is still one association -- the frequency
-    is annotation, not the finding -- so the first row's `eaf` is kept rather
-    than the cell being dropped over it (ADR 0036). The gate counts the
+    resolves a duplicate alike. Agreement is judged on `(z, se)` alone. A
+    duplicate pair that agrees on the statistics but not on `eaf` is still one
+    association -- the frequency is annotation, not the finding -- so the
+    first row's `eaf` is kept rather than the cell being dropped over it (ADR
+    0036). The gate counts the
     collapsed rows and counts and logs the dropped ones.
 
     Returns ``(deduped_recs, n_consistent_collapsed, n_conflicting_dropped)``,
     the last two counting variants.
     """
-    alid, z, se, eaf, reference = _columns(batches)
+    alid, z, se, eaf = _columns(batches)
     number: dict[str, int] = {}
     codes = np.fromiter(
         (number.setdefault(key, len(number)) for key in alid.tolist()),
         dtype=np.int64, count=len(alid),
     )
-    found = collapse_duplicates(codes, z, se, reference)
-    gate.duplicates(
-        [str(alid[i]) for i in found.dropped.tolist()], found.collapsed,
-        [str(alid[i]) for i in found.reversed_indels.tolist()],
-    )
+    found = collapse_duplicates(codes, z, se)
+    gate.duplicates([str(alid[i]) for i in found.dropped.tolist()], found.collapsed)
     repeated = int(np.count_nonzero(np.bincount(codes, minlength=len(number)) > 1))
     n_conflicting = len(found.conflicting)
     kept = found.keep
@@ -304,8 +301,8 @@ def _dedupe_per_analysis(
 
 def _columns(
     batches: list[ReaderBatch],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """One Analysis's batches as ``(alid, z, se, eaf, reference codes)`` columns."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """One Analysis's batches as ``(alid, z, se, eaf)`` columns."""
 
     def joined(parts: list[np.ndarray], dtype: DTypeLike) -> np.ndarray:
         return np.concatenate(parts) if parts else np.empty(0, dtype=dtype)
@@ -315,7 +312,6 @@ def _columns(
         joined([b.z for b in batches], np.float64),
         joined([b.se for b in batches], np.float64),
         joined([b.eaf for b in batches], np.float64),
-        joined([b.reference_codes() for b in batches], np.int8),
     )
 
 
