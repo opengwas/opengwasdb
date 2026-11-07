@@ -1,0 +1,141 @@
+{
+  "tool": "benchmarks/profile_reference_completion.py",
+  "argv": [
+    "profile_reference_completion.py",
+    "bands",
+    "/data/opengwasdb/stores/OGS-00009/replaced/20261023T190459Z/store.opengwasdb",
+    "/data/opengwasdb/reference/ld",
+    "--work",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/309/bands-work",
+    "--bands",
+    "2",
+    "--n-workers",
+    "32",
+    "--output",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/309/bands-2.json"
+  ],
+  "host_load_start": {
+    "load_1m": 104.65,
+    "load_5m": 51.39,
+    "load_15m": 26.34,
+    "cpus": 224
+  },
+  "commit": "248a553",
+  "measured_at": "2026-11-07T10:40:56.704402+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/309/opengwasdb",
+  "opengwasdb_fingerprint": "ccad445f32fc198098c5bf3871e2eb3f382aa8869019d4da44d1956c8b883517",
+  "kind": "bands",
+  "source": "/data/opengwasdb/stores/OGS-00009/replaced/20261023T190459Z/store.opengwasdb",
+  "ld_panel": "/data/opengwasdb/reference/ld",
+  "ancestry": "EUR",
+  "n_workers": 32,
+  "union_variants": 11191070,
+  "n_analyses": 2514,
+  "band_rows": 200000,
+  "slice_rows": 400000,
+  "bands_run": 2,
+  "bands_in_full_matrix": 56,
+  "blocks_run": 50,
+  "blocks_in_panel": 1357,
+  "slice_imputed_cells": 406375515,
+  "slice_cells": 1005600000,
+  "total_seconds": 2252.9409971919667,
+  "stages": [
+    {
+      "stage": "ld_block_phase_slice",
+      "seconds": 1053.0594538089936,
+      "share": 0.4674154605564512,
+      "calls": 1
+    },
+    {
+      "stage": "band_eaf_pass",
+      "seconds": 267.610730645014,
+      "share": 0.11878284028678963,
+      "calls": 1
+    },
+    {
+      "stage": "axis_construction_full",
+      "seconds": 249.7582363569818,
+      "share": 0.11085875602968603,
+      "calls": 1
+    },
+    {
+      "stage": "band_residual_se_rewrite",
+      "seconds": 216.10044899999048,
+      "share": 0.09591926698006516,
+      "calls": 1
+    },
+    {
+      "stage": "merge_shard_fills_and_quality",
+      "seconds": 127.58322737400886,
+      "share": 0.05662963545562301,
+      "calls": 1
+    },
+    {
+      "stage": "band_judge_and_write",
+      "seconds": 117.57961675498518,
+      "share": 0.05218939018000681,
+      "calls": 2
+    },
+    {
+      "stage": "band_seed_from_source",
+      "seconds": 117.54125247802585,
+      "share": 0.052172361648408716,
+      "calls": 2
+    },
+    {
+      "stage": "band_apply_fills",
+      "seconds": 55.99816853401717,
+      "share": 0.0248555859224953,
+      "calls": 2
+    },
+    {
+      "stage": "merge_reference_eaf",
+      "seconds": 39.87956135699642,
+      "share": 0.017701112193662296,
+      "calls": 1
+    },
+    {
+      "stage": "merge_union_map",
+      "seconds": 4.61372860299889,
+      "share": 0.00204786925567486,
+      "calls": 1
+    },
+    {
+      "stage": "band_counts",
+      "seconds": 1.9175546919868793,
+      "share": 0.000851134004120344,
+      "calls": 4
+    },
+    {
+      "stage": "band_statistic_pass_other",
+      "seconds": 1.135808724007802,
+      "share": 0.0005041449045596213,
+      "calls": 1
+    },
+    {
+      "stage": "merge_create_planes",
+      "seconds": 0.11415755798225291,
+      "share": 5.067046057776802e-05,
+      "calls": 1
+    },
+    {
+      "stage": "band_write_other",
+      "seconds": 0.04339577196515165,
+      "share": 1.9261832431137575e-05,
+      "calls": 1
+    },
+    {
+      "stage": "merge_other",
+      "seconds": 0.005655534012475982,
+      "share": 2.51028944811469e-06,
+      "calls": 1
+    }
+  ],
+  "host_load_end": {
+    "load_1m": 18.22,
+    "load_5m": 29.85,
+    "load_15m": 39.42,
+    "cpus": 224
+  }
+}

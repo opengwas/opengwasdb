@@ -1,0 +1,90 @@
+{
+  "tool": "benchmarks/profile_reference_completion.py",
+  "argv": [
+    "profile_reference_completion.py",
+    "block",
+    "/data/opengwasdb/stores/OGS-00009/replaced/20261023T190459Z/store.opengwasdb",
+    "/data/opengwasdb/reference/ld",
+    "--work",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/309/work",
+    "--output",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/309/block-median.json"
+  ],
+  "host_load_start": {
+    "load_1m": 23.05,
+    "load_5m": 20.92,
+    "load_15m": 13.45,
+    "cpus": 224
+  },
+  "commit": "ca8fa47",
+  "measured_at": "2026-11-07T10:35:51.028256+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/309/opengwasdb",
+  "opengwasdb_fingerprint": "ccad445f32fc198098c5bf3871e2eb3f382aa8869019d4da44d1956c8b883517",
+  "kind": "block",
+  "source": "/data/opengwasdb/stores/OGS-00009/replaced/20261023T190459Z/store.opengwasdb",
+  "ld_panel": "/data/opengwasdb/reference/ld",
+  "ancestry": "EUR",
+  "block": "/data/opengwasdb/reference/ld/EUR/6/56175027-60230066.tsv",
+  "block_variants": 7024,
+  "chosen_by": "median",
+  "n_analyses": 2514,
+  "fills": 9901491,
+  "checkpoint_bytes": 752566132,
+  "total_seconds": 219.9306143669819,
+  "stages": [
+    {
+      "stage": "elastic_net_fit",
+      "seconds": 153.20427917691995,
+      "share": 0.6966027881924585,
+      "calls": 2514
+    },
+    {
+      "stage": "fill_loop_and_cell_prep",
+      "seconds": 44.79832309173071,
+      "share": 0.20369298390163668,
+      "calls": 2514
+    },
+    {
+      "stage": "block_bookkeeping",
+      "seconds": 9.83339499880094,
+      "share": 0.04471135147375473,
+      "calls": 1
+    },
+    {
+      "stage": "source_read",
+      "seconds": 4.7769145899801515,
+      "share": 0.02172009842162887,
+      "calls": 1
+    },
+    {
+      "stage": "checkpoint_write",
+      "seconds": 4.357735166006023,
+      "share": 0.019814136283612584,
+      "calls": 1
+    },
+    {
+      "stage": "poly_rescale",
+      "seconds": 2.488600405951729,
+      "share": 0.011315388778931823,
+      "calls": 2514
+    },
+    {
+      "stage": "se_scale",
+      "seconds": 0.3760912736179307,
+      "share": 0.001710045119004556,
+      "calls": 2514
+    },
+    {
+      "stage": "ld_panel_read",
+      "seconds": 0.09527566397446208,
+      "share": 0.00043320782897228964,
+      "calls": 2
+    }
+  ],
+  "host_load_end": {
+    "load_1m": 92.77,
+    "load_5m": 41.79,
+    "load_15m": 22.28,
+    "cpus": 224
+  }
+}
