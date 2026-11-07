@@ -42,7 +42,7 @@ an owner gate in [CONTRIBUTING.md, Merging](./CONTRIBUTING.md#merging) applies.
       The type sets the bump: `breaking`/`added`/`changed` minor, else patch.
 - [ ] `docs/store-format-compatibility.md` updated if `format_version` moved.
 - [ ] No new ruff or mypy findings. Baselines are in `.baselines.json`
-      (60 / 37); `pixi run -e dev python scripts/check_baselines.py`.
+      (57 / 34); `pixi run -e dev python scripts/check_baselines.py`.
 - [ ] New tests **observed to fail** against the unfixed code. A test that
       cannot fail is worse than no test — one written this year passed with the
       bug present because its fixture never reached the broken path.

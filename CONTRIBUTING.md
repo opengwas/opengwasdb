@@ -427,8 +427,10 @@ the imported guide:
   trees were excluded, recorded 19,121 escape sites and a duplication share
   of 92.51% (8,271,343 of 8,941,213 significant lines) — almost all of it the
   pixi environments and repository copies inside `.claude/worktrees/…/`; once
-  excluded, the project's own source measures 39 escape sites and 7.1%
-  (2,692 of 37,906 lines). The baselines are committed ratchets, so they may
+  excluded, the project's own source measured 39 escape sites and 7.1%
+  (2,692 of 37,906 lines). Re-baselined on 7 Nov 2026 at `fb2688c`, it
+  measured 28 escape sites and 1.20% (1,642 of 136,420 lines): fewer copies in
+  a codebase 3.6 times the size. The baselines are committed ratchets, so they may
   only measure content that exists on every machine and that a reviewed
   change can affect:
   a pixi environment differs by machine and by day, so scanning one would
