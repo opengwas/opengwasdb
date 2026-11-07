@@ -26,25 +26,36 @@ WORKING_BYTES = 1024**3
 BYTES_PER_CELL = 96
 
 
-def band_rows(n_analyses: int, row_chunk: int, working_bytes: int = WORKING_BYTES) -> int:
-    """Rows whose decoded working set fits `working_bytes`.
+def band_rows(n_analyses: int, row_chunk: int, working_bytes: int | None = None) -> int:
+    """Rows whose decoded working set fits the budget (`WORKING_BYTES` by default).
 
     Whole inner chunks avoid decoding a physical chunk into two consecutive
     bands. A single row is the irreducible minimum when an exceptionally wide
-    store exceeds the budget by itself.
+    store exceeds the budget by itself. `working_bytes` is `None` rather than
+    the constant so a caller that replaces the budget for a whole pass -- a test
+    shrinking it until a fixture spans several bands -- moves every reader of it.
     """
+    budget = WORKING_BYTES if working_bytes is None else working_bytes
     if n_analyses <= 0:
         return BAND_ROWS
-    rows = min(BAND_ROWS, max(1, working_bytes // (BYTES_PER_CELL * n_analyses)))
+    rows = min(BAND_ROWS, max(1, budget // (BYTES_PER_CELL * n_analyses)))
     if row_chunk > 0 and rows >= row_chunk:
         rows = max(row_chunk, rows // row_chunk * row_chunk)
     return rows
 
 
 def band_limits(
-    n_variants: int, n_analyses: int, row_chunk: int, working_bytes: int = WORKING_BYTES
+    n_variants: int, n_analyses: int, row_chunk: int, working_bytes: int | None = None
 ) -> Iterator[tuple[int, int]]:
     """Every Dense row band, exhaustively, under the decoded-byte budget."""
     rows = band_rows(n_analyses, row_chunk, working_bytes)
     for r0 in range(0, n_variants, rows):
         yield r0, min(r0 + rows, n_variants)
+
+
+def window_cells(cell_chunk: int) -> int:
+    """Cells one sequence window holds: the same budget, counted in cells."""
+    cells = max(1, WORKING_BYTES // BYTES_PER_CELL)
+    if cell_chunk > 0 and cells >= cell_chunk:
+        cells = cells // cell_chunk * cell_chunk
+    return cells

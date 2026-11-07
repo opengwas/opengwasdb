@@ -25,7 +25,7 @@ from typing import Any, NamedTuple
 import numpy as np
 
 from opengwasdb.associations import Tally, non_canonical
-from opengwasdb.encoding.banding import BYTES_PER_CELL, WORKING_BYTES, band_limits
+from opengwasdb.encoding.banding import band_limits, window_cells
 from opengwasdb.encoding.codec import (
     EAF_BASELINE,
     EAF_REFERENCE,
@@ -486,14 +486,6 @@ def sequence_offsets(target: Target) -> np.ndarray:
     return target.remember(
         "offsets", lambda: np.asarray(target.group["offsets"][:], dtype=np.int64)
     )
-
-
-def window_cells(cell_chunk: int) -> int:
-    """Cells one sequence window holds: the Dense band's byte budget, in whole chunks."""
-    cells = max(1, WORKING_BYTES // BYTES_PER_CELL)
-    if cell_chunk > 0 and cells >= cell_chunk:
-        cells = cells // cell_chunk * cell_chunk
-    return cells
 
 
 def analyses_of(offsets: np.ndarray, lo: int, hi: int) -> np.ndarray:
