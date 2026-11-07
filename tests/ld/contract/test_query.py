@@ -8,7 +8,7 @@ k = 0 store the walking skeleton's `scripts/make_test_store.py` writes from `ref
 from __future__ import annotations
 
 import math
-from pathlib import Path
+from functools import cache
 
 import numpy as np
 import pytest
@@ -26,27 +26,30 @@ OGLD_6 = contract("ogld#6")
 P1 = 5e-8
 
 
-def expected_proxies(query: int, r2: float, window: float) -> dict[int, float]:
-    """Each partner of Test Panel row `query` with r̂² ≥ r2 within `window` bp: row → r."""
+@cache
+def proxy_pairs(r2: float, window: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Every (query row, proxy row, r̂) with r̂² ≥ r2 within `window` bp, both directions."""
     ref = reference(support.K)
     r_hat = ref.code.astype(np.float64) / 32767
     keep = (r_hat * r_hat >= r2) & (ref.distance <= window)
-    out = {}
-    for i, j, r in zip(ref.row_i[keep], ref.row_j[keep], r_hat[keep], strict=True):
-        if i == query:
-            out[int(j)] = float(r)
-        elif j == query:
-            out[int(i)] = float(r)
-    return out
+    query = np.concatenate([ref.row_i[keep], ref.row_j[keep]])
+    proxy = np.concatenate([ref.row_j[keep], ref.row_i[keep]])
+    return query, proxy, np.concatenate([r_hat[keep], r_hat[keep]])
+
+
+def expected_proxies(query: int, r2: float, window: float) -> dict[int, float]:
+    """Each partner of Test Panel row `query` with r̂² ≥ r2 within `window` bp: row → r."""
+    queries, proxies, r = proxy_pairs(r2, window)
+    mine = queries == query
+    return dict(zip(proxies[mine].tolist(), r[mine].tolist(), strict=True))
 
 
 def busiest_query(r2: float, window: float) -> int:
     """The passing row with the most proxies, so the test has something to compare."""
-    rows = passing_rows()
-    counts = [len(expected_proxies(int(q), r2, window)) for q in rows[:: max(1, len(rows) // 200)]]
-    best = int(rows[:: max(1, len(rows) // 200)][int(np.argmax(counts))])
-    assert max(counts) > 1, "the Test Panel must hold a cluster with proxies at this r²"
-    return best
+    queries, _, _ = proxy_pairs(r2, window)
+    counts = np.bincount(queries, minlength=int(passing_rows().max()) + 1)
+    assert counts.max() > 1, "the Test Panel must hold a cluster with proxies at this r²"
+    return int(np.argmax(counts))
 
 
 @OGLD_6
@@ -67,10 +70,10 @@ def test_proxies_return_signed_r() -> None:
     rows = passing_rows()
     sample = rows[:: max(1, len(rows) // 100)]
     found = store.proxies(alids(sample), r2=0.5, kb=3000)
-    expected = {}
-    for q in sample:
-        for p, r in expected_proxies(int(q), 0.5, 3_000_000).items():
-            expected[(alids([q])[0], alids([p])[0])] = r
+    queries, proxies, r = proxy_pairs(0.5, 3_000_000)
+    mine = np.isin(queries, sample)
+    names = zip(alids(queries[mine]), alids(proxies[mine]), strict=True)
+    expected = dict(zip(names, r[mine].tolist(), strict=True))
     assert any(r < 0 for r in expected.values()), "the fixture must hold negative r"
     assert any(r > 0 for r in expected.values()), "the fixture must hold positive r"
     got = {(q, p): r for q, p, r in zip(found.query, found.proxy, found.r, strict=True)}
@@ -141,16 +144,24 @@ def candidates(p_max: float) -> tuple[list[str], np.ndarray, np.ndarray]:
     return alids(keep), np.abs(z[keep]), keep
 
 
-def k0_store(tmp_path: Path) -> ogld.LDStore:
-    load_script("make_test_store").write_test_store(0, tmp_path / "k0")
-    return ogld.open(tmp_path / "k0")
+_K0: list[ogld.LDStore] = []
+
+
+def k0_store(tmp_path_factory: pytest.TempPathFactory) -> ogld.LDStore:
+    """A k = 0 store written from reference_r(0), once per worker."""
+    if not _K0:
+        out = tmp_path_factory.mktemp("k0") / "store"
+        _K0.append(ogld.open(load_script("make_test_store").write_test_store(0, out)))
+    return _K0[0]
 
 
 @OGLD_6
 @pytest.mark.parametrize("r2", [0.01, 0.001])
-def test_clump_leads_equal_plink2_s_at_k0(r2: float, tmp_path: Path) -> None:
+def test_clump_leads_equal_plink2_s_at_k0(
+    r2: float, tmp_path_factory: pytest.TempPathFactory
+) -> None:
     ogld.open(support.TEST_STORE)
-    store = k0_store(tmp_path)
+    store = k0_store(tmp_path_factory)
     names, score, _ = candidates(P1)
     leads = set(store.clump(names, score, r2=r2, kb=3000).leads())
     plink2 = set(alids(panel_data().clump_leads(r2)))
@@ -161,9 +172,11 @@ def test_clump_leads_equal_plink2_s_at_k0(r2: float, tmp_path: Path) -> None:
 
 
 @OGLD_6
-def test_every_member_reaches_its_lead_and_every_lead_leads_itself(tmp_path: Path) -> None:
+def test_every_member_reaches_its_lead_and_every_lead_leads_itself(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
     ogld.open(support.TEST_STORE)
-    store = k0_store(tmp_path)
+    store = k0_store(tmp_path_factory)
     names, score, _ = candidates(1e-4)
     clumps = store.clump(names, score, r2=0.01, kb=3000)
     assert list(clumps.alid) == names
@@ -177,13 +190,16 @@ def test_every_member_reaches_its_lead_and_every_lead_leads_itself(tmp_path: Pat
 
 
 @OGLD_6
-def test_a_stricter_threshold_gives_a_prefix_of_the_leads(tmp_path: Path) -> None:
+def test_a_stricter_threshold_gives_a_prefix_of_the_leads(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
     # ogld#6: the leads at p ≤ 5e-8 are the leads at p ≤ 1e-4 with p ≤ 5e-8, so the engine
     # can store one clumping per configuration.
     ogld.open(support.TEST_STORE)
-    store = k0_store(tmp_path)
+    store = k0_store(tmp_path_factory)
     loose_names, loose_score, _ = candidates(1e-4)
     strict_names, strict_score, _ = candidates(P1)
+    assert len(loose_names) > len(strict_names), "the looser set must add variants to test"
     loose = store.clump(loose_names, loose_score, r2=0.01, kb=3000).leads()
     strict = store.clump(strict_names, strict_score, r2=0.01, kb=3000).leads()
     assert list(strict) == [lead for lead in loose if lead in set(strict_names)]

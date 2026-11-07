@@ -1,4 +1,5 @@
-"""What the contract tests share: the Test Store, the marker, and the Test Panel read as ALIDs.
+"""What the contract tests share: the Test Panel's paths, the Test Store, the marker, and the
+Test Panel read as ALIDs and as reference matrices.
 
 The contract tests are epic #1's tickets written as tests before the tickets start. Each is
 marked `contract("ogld#<n>")`: a strict xfail that expects NotImplementedError, so it fails
@@ -6,19 +7,27 @@ until its ticket lands and errors the moment it passes while still marked. A tic
 is to make its own module pass, unmarking each test it makes pass, without changing a
 public signature (tests/test_surface.py).
 
-Every test calls the ogld function it is about before it reads the Test Panel or the Test
-Store, so an unbuilt function surfaces as the expected failure, not as a missing file.
-The Test Panel is lane 2d's `tests/testdata.py`; the Test Store is written from its
-`reference_r(10)` by the walking skeleton into `tests/data/test-panel/store/`.
+Every test calls the ogld function it is about before it reads the Test Panel through lane
+2d's loader, `tests/testdata.py`. A build is given the Test Panel's paths, `PANEL`, which
+need no loader; `check_panel_paths` holds them to the loader's once the call has returned.
+So an unbuilt function surfaces as the expected failure, never as a missing loader or file.
+The Test Store is written from `reference_r(10)` by the walking skeleton's script into
+`tests/data/test-panel/store/`; no test writes there.
+
+The expected-value helpers are vectorised and cached, so the default tier stays within its
+2 s per test once the stubs are real (CONTRIBUTING.md, "Tests").
 """
 
 from __future__ import annotations
 
+import http.server
 import importlib
+import io
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from types import ModuleType
+from typing import BinaryIO
 
 import numpy as np
 import numpy.typing as npt
@@ -28,7 +37,8 @@ from ogld.format import far_code_floor, quantise, t_far
 from ogld.identity import orient
 
 TESTS = Path(__file__).resolve().parents[1]
-TEST_STORE = TESTS / "data" / "test-panel" / "store"
+TEST_PANEL = TESTS / "data" / "test-panel"
+TEST_STORE = TEST_PANEL / "store"
 
 #: The Test Panel: HGDP+1kGP EUR's 771 samples; the Test Store is built at k = 10.
 N_SAMPLES = 771
@@ -38,6 +48,25 @@ FLOOR = far_code_floor(T_FAR)
 HALF_STEP = 1 / 65534
 #: Two independent float64 computations of one r may differ by a few ulps before rounding.
 SLACK = 1e-9
+
+
+@dataclass(frozen=True)
+class PanelPaths:
+    pgen: Path
+    pvar: Path
+    psam: Path
+    keep: Path
+    pcs: Path
+
+
+#: The Test Panel's files, named without the loader so a build can be called before it.
+PANEL = PanelPaths(
+    pgen=TEST_PANEL / "test-panel.pgen",
+    pvar=TEST_PANEL / "test-panel.pvar",
+    psam=TEST_PANEL / "test-panel.psam",
+    keep=TEST_PANEL / "EUR.keep",
+    pcs=TEST_PANEL / "pcs.eigenvec",
+)
 
 
 def contract(ticket: str) -> pytest.MarkDecorator:
@@ -50,26 +79,33 @@ def panel_data() -> ModuleType:
     return importlib.import_module("testdata")
 
 
+def check_panel_paths() -> None:
+    """`PANEL` names the files the loader names. Call it after the ogld call under test."""
+    loaded = panel_data().panel()
+    for field in ("pgen", "pvar", "psam", "keep", "pcs"):
+        assert Path(getattr(loaded, field)) == getattr(PANEL, field), field
+
+
 @cache
-def oriented() -> tuple[list[str], npt.NDArray[np.float64]]:
+def oriented() -> tuple[npt.NDArray[np.str_], npt.NDArray[np.float64]]:
     """Each Test Panel row's ALID, and +1 where A1 is its ALT allele, −1 where it is REF.
 
     The Test Panel's reference r is the correlation of ALT dosages, so a stored r, signed to
     A1, is the reference r times both rows' signs (spec §3).
     """
     v = panel_data().variants()
-    found = [
-        orient(str(c), int(p), str(ref), str(alt))
-        for c, p, ref, alt in zip(v.chrom, v.pos, v.ref, v.alt, strict=True)
-    ]
-    return [o.alid for o in found], np.array([1.0 if o.a1_is_alt else -1.0 for o in found])
+    rows = zip(v.chrom, v.pos, v.ref, v.alt, strict=True)
+    found = [orient(str(c), int(p), str(ref), str(alt)) for c, p, ref, alt in rows]
+    names = np.array([o.alid for o in found])
+    return names, np.array([1.0 if o.a1_is_alt else -1.0 for o in found])
 
 
 def alids(rows: npt.ArrayLike) -> list[str]:
     names, _ = oriented()
-    return [names[int(row)] for row in np.atleast_1d(rows)]
+    return [str(name) for name in names[np.atleast_1d(np.asarray(rows, dtype=np.int64))]]
 
 
+@cache
 def passing_rows() -> npt.NDArray[np.int64]:
     """The Test Panel rows that pass the build's filters: the Test Store's Variant Set."""
     return np.flatnonzero(panel_data().variants().passes_filters).astype(np.int64)
@@ -103,10 +139,47 @@ def reference(k: int = K) -> Pairs:
     return Pairs(i, j, pos[j] - pos[i], ref.r * sign[i] * sign[j])
 
 
-def lookup(k: int = K) -> dict[tuple[int, int], float]:
-    """Reference r by (row_i, row_j), either order."""
+@cache
+def reference_matrix(k: int, rows: tuple[int, ...]) -> npt.NDArray[np.float64]:
+    """The reference r among Test Panel `rows`, in that order: 1 on the diagonal, NaN for a
+    pair the reference does not hold (more than 10 Mb apart, or across chromosomes)."""
     ref = reference(k)
-    out = {}
-    for i, j, r in zip(ref.row_i.tolist(), ref.row_j.tolist(), ref.r.tolist(), strict=True):
-        out[(i, j)] = out[(j, i)] = r
+    where = np.full(len(panel_data().variants().pos), -1, dtype=np.int64)
+    where[list(rows)] = np.arange(len(rows))
+    a, b = where[ref.row_i], where[ref.row_j]
+    keep = (a >= 0) & (b >= 0)
+    out = np.full((len(rows), len(rows)), np.nan)
+    out[a[keep], b[keep]] = ref.r[keep]
+    out[b[keep], a[keep]] = ref.r[keep]
+    np.fill_diagonal(out, 1.0)
     return out
+
+
+class RangeHandler(http.server.SimpleHTTPRequestHandler):
+    """A static file server that honours one byte range, as Zarr over HTTP needs."""
+
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+    def send_head(self) -> BinaryIO | io.BytesIO | None:
+        header = self.headers.get("Range")
+        if not header or not header.startswith("bytes="):
+            return super().send_head()
+        path = Path(self.translate_path(self.path))
+        if not path.is_file():
+            self.send_error(404)
+            return None
+        data = path.read_bytes()
+        start_text, _, stop_text = header[len("bytes=") :].partition("-")
+        if start_text:
+            start = int(start_text)
+            stop = int(stop_text) if stop_text else len(data) - 1
+        else:
+            start, stop = len(data) - int(stop_text), len(data) - 1
+        body = data[start : stop + 1]
+        self.send_response(206)
+        self.send_header("Content-Range", f"bytes {start}-{start + len(body) - 1}/{len(data)}")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return None

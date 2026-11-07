@@ -12,6 +12,7 @@ cd "$(dirname "$0")/../.."
 
 PREFLIGHT=(
   "tests/realdata/test_build_panel.py"
+  "tests/realdata/test_query_panel.py"
 )
 
 if [ ! -d /data/opengwasdb/reference/hgdp1kgp-hg38 ]; then
@@ -24,5 +25,11 @@ export OGLD_PLINK2
 # The phased HGDP+1kGP v2 EUR chr22 pgen fileset (no suffix), converted with variant IDs set, as
 # docs/spec/build-inputs.md says. A test that needs it and finds it unset fails, naming it.
 export OGLD_V2_EUR_CHR22="${OGLD_V2_EUR_CHR22:-}"
+# EUR's PC File from the recipe script; the k = 0 EUR LD Store; and #403's 37 Analyses with
+# plink2's leads (tests/realdata/test_query_panel.py says the layout). Each test that needs one
+# and finds it unset fails, naming it.
+export OGLD_EUR_PC_FILE="${OGLD_EUR_PC_FILE:-}"
+export OGLD_EUR_K0_STORE="${OGLD_EUR_K0_STORE:-}"
+export OGLD_403_ANALYSES="${OGLD_403_ANALYSES:-}"
 
 exec pytest -m realdata --timeout=300 -p no:cacheprovider "${PREFLIGHT[@]}" "$@"

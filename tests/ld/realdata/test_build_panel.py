@@ -7,6 +7,9 @@ The Test Panel proves the logic; this proves it survives real genotypes (CLAUDE.
   variants matches `plink2 --r-unphased` within the quantisation step: epic #1's acceptance.
   `OGLD_V2_EUR_CHR22` names that chromosome's pgen fileset, converted as
   `docs/spec/build-inputs.md` says.
+- Real LD survives PC Adjustment: on the same slice, pairs within 100 kb change little from
+  k = 0 to k = 10, and the provenance records the change's quantiles. `OGLD_EUR_PC_FILE`
+  names EUR's PC File, made by the recipe script.
 - The gnomAD v3.1.2 pgens shipped under /data/opengwasdb/reference/ have missing calls, at
   11,725 of the 15,272 variants of the same slice. The builder refuses them.
 """
@@ -47,16 +50,16 @@ def pvar_rows(path: Path) -> list[list[str]]:
     return [line.split("\t") for line in lines if not line.startswith("#")]
 
 
-def inputs(pgen: Path, source: str) -> ogld.BuildInputs:
+def inputs(pgen: Path, source: str, pcs: Path | None = None) -> ogld.BuildInputs:
     return ogld.BuildInputs(
         pgen=(pgen,),
         keep=EUR_KEEP,
-        pcs=None,
-        pc_source=None,
+        pcs=pcs,
+        pc_source="the recipe script's EUR PC File" if pcs else None,
         panel_id="hgdp1kgp-hg38-EUR-chr22-20-23Mb",
         ancestry="EUR",
         genotype_source=source,
-        k=0,
+        k=10 if pcs else 0,
         info_min=None,
     )
 
@@ -118,3 +121,34 @@ def test_the_builder_matches_plink2_on_a_real_chr22_slice(tmp_path: Path) -> Non
     # r of A1 dosages is r of ALT dosages times both variants' signs (spec §3).
     worst = np.abs(ours - theirs * sign[:, None] * sign[None, :]).max()
     assert worst <= 1 / 65534 + PRINTED, f"the builder is {worst} from plink2"
+
+
+@OGLD_5
+def test_real_ld_survives_pc_adjustment(tmp_path: Path) -> None:
+    # Epic #1 and ogld#5: pairs within 100 kb change little outside the Long-Range LD
+    # Regions (none is in chr22:20–23 Mb), and the distribution is recorded.
+    v2 = os.environ.get("OGLD_V2_EUR_CHR22", "")
+    pcs = os.environ.get("OGLD_EUR_PC_FILE", "")
+    assert v2, "set OGLD_V2_EUR_CHR22 to the phased v2 EUR chr22 pgen fileset (no suffix)"
+    assert pcs, "set OGLD_EUR_PC_FILE to EUR's PC File from the recipe script"
+    plink2("--pfile", v2, "--keep", EUR_KEEP, *WINDOW, "--make-pgen", "--out", tmp_path / "slice")
+    pgen = tmp_path / "slice.pgen"
+    ogld.build(inputs(pgen, f"{v2}, chr22:20-23 Mb"), tmp_path / "k0")
+    adjusted = ogld.build(inputs(pgen, f"{v2}, chr22:20-23 Mb", Path(pcs)), tmp_path / "k10")
+
+    rows = pvar_rows(tmp_path / "slice.pvar")
+    found = [orient(r[0], int(r[1]), r[3], r[4]) for r in rows]
+    unadjusted_store, adjusted_store = ogld.open(tmp_path / "k0"), ogld.open(tmp_path / "k10")
+    present = unadjusted_store.matrix([o.alid for o in found])
+    names = list(present.variants.alid)
+    before, after = present.r, adjusted_store.matrix(names).r
+    pos = present.variants.position.astype(np.int64)
+    near = (np.abs(pos[:, None] - pos[None, :]) <= 100_000) & ~np.eye(len(names), dtype=bool)
+    assert near.sum() > 10_000, "the slice must hold many pairs within 100 kb"
+    change = np.abs(after[near] - before[near])
+    assert np.median(change) < 0.01, f"real LD moved: median |change| {np.median(change)}"
+    diagnostic = adjusted["pc_diagnostic"]
+    assert diagnostic is not None
+    recorded = diagnostic["near_100kb_change"]
+    assert set(recorded) == {"0", "0.5", "0.9", "0.99", "1"}
+    assert abs(recorded["0.5"] - float(np.quantile(after[near] - before[near], 0.5))) <= 2 / 32767
