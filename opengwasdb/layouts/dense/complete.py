@@ -18,13 +18,16 @@ Pipeline shape:
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import shutil
+import time
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 import numpy as np
 
@@ -69,6 +72,7 @@ from opengwasdb.encoding import (
     write_eaf_reference,
 )
 from opengwasdb.encoding.association_codec import CellValues, log_se_out_of_range, storable
+from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.constants import (
@@ -112,11 +116,56 @@ from opengwasdb.variants.routing import collapse_duplicates
 
 log = logging.getLogger(__name__)
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
 _COMPRESSOR = compressor()
 _LD_PANEL_ID = "eur-hg38-gpm"
 
 #: What the Association Reader names the source in a refusal.
 _SOURCE = "complete-dense, the source's Dense grid"
+
+
+# ── Wall-time accounting ────────────────────────────────────────────────────
+
+#: The five phases of a completion, in the order they run. A run's report
+#: partitions its time over these; anything between them (the manifest, the
+#: Analyses rows) is small and is not charged to any.
+AXIS_PHASE = "Axis construction"
+BLOCK_PHASE = "LD-block completion"
+MERGE_PHASE = "Checkpoint merge"
+BAND_PHASE = "Band write"
+TOP_HIT_PHASE = "Top-Hit Index"
+
+#: The running completion's timer. `_stream_completed_arrays` runs the merge and
+#: the band write back to back, so those two phases are timed where they are
+#: defined rather than threaded through its signature.
+_active_timer: PhaseTimer | None = None
+
+
+@contextmanager
+def _completion_phase(name: str) -> Iterator[None]:
+    """Log `name`'s start and elapsed time and charge it to the running
+    completion's report."""
+    timer = _active_timer
+    with log_phase(log, name):
+        if timer is None:
+            yield
+        else:
+            with timer.phase(name):
+                yield
+
+
+def _in_completion_phase(name: str) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    def decorate(function: Callable[_P, _R]) -> Callable[_P, _R]:
+        @functools.wraps(function)
+        def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+            with _completion_phase(name):
+                return function(*args, **kwargs)
+
+        return wrapped
+
+    return decorate
 
 
 @dataclass(frozen=True)
@@ -649,6 +698,7 @@ def _sorted_union_map(new_alid_to_idx: dict[str, int]) -> tuple[np.ndarray, np.n
     return union_alids[o], union_rows[o]
 
 
+@_in_completion_phase(MERGE_PHASE)
 def _merge_checkpoint_fills(
     staged: StagedRelease,
     axis: _UnionAxis,
@@ -935,41 +985,57 @@ def _run_completion(
     orchestrator over the five phases above, all inside one staged release so
     a failure leaves no half-written store behind (resume reads the per-block
     checkpoints Phase 2 left)."""
+    global _active_timer
     src = Path(source_path)
     dst = Path(dest_path)
-    with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
-        source = open_store(src)
-        manifest = source.manifest
-        source_format_version = _checked_dense_source(manifest, src)
-        print(f"Source store: {manifest.store_id} / {manifest.release_id}")
+    timer = PhaseTimer()
+    previous_timer, _active_timer = _active_timer, timer
+    started = time.monotonic()
+    try:
+        with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
+            source = open_store(src)
+            manifest = source.manifest
+            source_format_version = _checked_dense_source(manifest, src)
+            print(f"Source store: {manifest.store_id} / {manifest.release_id}")
 
-        axis = _build_union_axis(src, staged, ld_dir, ancestry, impute_analysis_ids)
-        src_root = source.arrays(mode="r")
-        blocks_dir = _complete_pending_blocks(
-            axis,
-            src,
-            checkpoint_dir,
-            min_cor=min_cor,
-            thresh=thresh,
-            n_workers=n_workers,
-        )
-        arrays = _stream_completed_arrays(
-            staged, src_root, axis, blocks_dir, ld_dir, ancestry, manifest.encoding
-        )
-        _write_completed_manifest(
-            staged,
-            manifest,
-            source_format_version,
-            axis,
-            arrays,
-            release_id=release_id,
-            ld_panel_id=ld_panel_id,
-            ancestry=ancestry,
-            min_cor=min_cor,
-            thresh=thresh,
-        )
-        dst_analyses = _completed_analysis_rows(staged, axis, arrays, ancestry=ancestry)
-        result = _finalise_release(staged, dst, axis, arrays, dst_analyses)
+            with _completion_phase(AXIS_PHASE):
+                axis = _build_union_axis(src, staged, ld_dir, ancestry, impute_analysis_ids)
+            src_root = source.arrays(mode="r")
+            with _completion_phase(BLOCK_PHASE):
+                blocks_dir = _complete_pending_blocks(
+                    axis,
+                    src,
+                    checkpoint_dir,
+                    min_cor=min_cor,
+                    thresh=thresh,
+                    n_workers=n_workers,
+                )
+            # The merge and the band write are timed inside this call.
+            arrays = _stream_completed_arrays(
+                staged, src_root, axis, blocks_dir, ld_dir, ancestry, manifest.encoding
+            )
+            _write_completed_manifest(
+                staged,
+                manifest,
+                source_format_version,
+                axis,
+                arrays,
+                release_id=release_id,
+                ld_panel_id=ld_panel_id,
+                ancestry=ancestry,
+                min_cor=min_cor,
+                thresh=thresh,
+            )
+            dst_analyses = _completed_analysis_rows(staged, axis, arrays, ancestry=ancestry)
+            with _completion_phase(TOP_HIT_PHASE):
+                result = _finalise_release(staged, dst, axis, arrays, dst_analyses)
+    finally:
+        _active_timer = previous_timer
+    log.info(
+        "Reference Completion phase report (%s elapsed):\n%s",
+        format_duration(time.monotonic() - started),
+        timer.format_report(),
+    )
     return result
 
 
@@ -1614,6 +1680,7 @@ def _rewrite_completed_residual_se(
     rewrite_dense_se(root, encoding, source_coefficients)
 
 
+@_in_completion_phase(BAND_PHASE)
 def _write_completed_bands(
     staged: StagedRelease,
     src_root: Any,
