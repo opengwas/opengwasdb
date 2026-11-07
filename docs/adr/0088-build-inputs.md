@@ -6,7 +6,7 @@ the evidence that led to them and the options rejected. It **supersedes the PC w
 [ADR 0001](./0001-near-band-and-thresholded-far-pairs.md), decision 4** ("The PCs come from
 LD-pruned common variants, with the Long-Range LD Regions excluded"): the PCs are still computed
 that way, but outside ogld, by one recipe, and the builder checks every PC File it is given.
-ADR 0001 carries the matching clarification. The formats and rules are in
+Lane 2c adds the matching clarification to ADR 0001 (#2). The formats and rules are in
 [`docs/spec/build-inputs.md`](../spec/build-inputs.md); the terms are in `CONTEXT.md`.
 
 Every number below is from the prototype branch `proto/1-build-inputs`, cited as
@@ -97,11 +97,40 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    Long-Range LD Regions of `docs/spec/long-range-ld-regions-grch38.tsv` ±2 Mb; 20 PCs.
 5. **The PC Check is the local-PC rule, and the builder runs it on every PC File.** A PC is
    dropped from the covariates only if one 4 Mb window explains ≥ 10% of it **and** the rest of the
-   genome explains it no better than chance, judged by a permutation null. The covariates are the
-   first up to 10 PCs it keeps; if fewer survive the builder uses those, as long as at least 5 do,
+   genome explains it no better than chance (the owner's shape). "Chance" is ours to define, and
+   is 200 permutations of the PC across samples. The window share must also beat the permutations'
+   99th percentile of the largest window share, and the rest share must not beat their 99th
+   percentile of the rest share. The covariates are the first up to `BuildInputs.k` = 10 PCs it
+   keeps; if fewer survive the builder uses those, as long as at least `BuildInputs.k_min` = 5 do,
    and refuses below 5 (the owner's PC minimum, decided the same day). t_far's k is the number of
-   covariates actually used. The scan, the dropped PCs and the null are recorded in provenance.
-   On our v2 PCs it drops no PC in any of the five panels, so every build uses PC1-PC10. It keeps EUR PC2: LCT's window explains 0.195 of it, but the rest of the genome explains 0.0204 against a null 99th percentile of 0.0070 (`proto/1-build-inputs@c658b36:…/results/pcs_v2_summary.tsv`).
+   covariates actually used. Provenance records `k_target`, `k_min` and `k`, the scan, the dropped
+   PCs and the null.
+
+   On our v2 PCs it drops no PC in any of the five panels, so every build uses PC1–PC10. It keeps
+   EUR PC2: LCT's window explains 0.195 of it, but the rest of the genome explains 0.0204 against a
+   rest null of 0.0070 (`proto/1-build-inputs@5d0a93a:…/results/pc_check_v2_scan.tsv`).
+
+   **Its known weakness** (`proto/1-build-inputs@c1c1639:…/results/rule_power.tsv`). Karyotype-like
+   scores (an inversion region's top genotype PC, orthogonal to PC1–PC9) are dropped for 8p23.1 in
+   EUR and AMR and for 17q21.31 in AMR, but EUR's 17q21.31 score is kept: its window share is
+   0.934, but its rest share (0.0073) beats the rest null (0.0071), because H1/H2 frequency carries
+   a trace of ancestry. Rest share / window share separates all four karyotypes (0.007–0.019) from
+   every real EUR and AMR PC (≥ 0.104). Adopting it changes the rule beyond "chance", so it is
+   proposed and awaits the owner (epic #1).
+6. **Imported LD matrices (Pan-UKB) are a later epic.** This epic's provenance already records
+   the source kind and every covariate adjusted for (epic #1 comment of 7 November 2026).
+7. **The test data is a committed real slice**, the Test Panel: v2 chr21 and chr22 for the 771
+   EUR samples, with the EUR PC File and independent reference answers
+   ([`tests/data/test-panel/README.md`](../../tests/data/test-panel/README.md)). The owner approved
+   committing this public slice on 7 November 2026. ADR 0001's decision 5, "Genotypes never leave
+   the host they are built on", still holds for every non-public Source Panel, such as UK Biobank.
+   It does not hold for HGDP+1kGP, whose genotypes are already public under gnomAD's CC0 terms.
+8. **An INFO floor needs INFO** (accepted at the review of #2). With `info_min` set, a pgen that
+   carries no INFO score (`R2` or `INFO` in the pvar) is refused, so a sequenced panel passes
+   `info_min = None` explicitly rather than skip the filter quietly.
+9. **Only autosomes are built** (provisional: owner decision pending, epic #1). A record on X, Y,
+   a PAR or MT is refused: a male's X and Y genotypes are hemizygous, the diploid dosage model has
+   no rule for them, and the HGDP+1kGP psam files carry no sex to apply one.
 6. **Imported LD matrices (Pan-UKB) are a later epic.** This epic's provenance already records
    the source kind and every covariate adjusted for (epic #1 comment of 7 November 2026).
 7. **The test data is a committed real slice**, the Test Panel: v2 chr21 and chr22 for the 771
@@ -150,3 +179,8 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
   A PC dropped by it costs nothing: the next PC takes its place among the first k.
 - **Every input is recorded.** Provenance holds the pgen's and PC File's hashes, the PC File's
   declared source, every filter and its counts, and the PC Check's scan.
+- **Clumping is held to plink2's unphased leads.** v2's pgen holds phase, and `plink2 --clump`
+  uses phased r² unless told otherwise, so the Test Panel's clump goldens use `--clump-unphased`.
+  Greedy clumping over the Test Panel's own unphased reference r gives the same leads.
+- **An inversion axis that carries ancestry can pass the PC Check** until the owner rules on the
+  rest statistic (decision 5).

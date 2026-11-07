@@ -29,7 +29,8 @@ field is recorded in the store's provenance (`ld-store.md` §7).
 | `panel_id` | string | — | the Source Panel's identifier, such as `hgdp1kgp-v2-EUR` |
 | `ancestry` | string | — | the ancestry label, such as `EUR` |
 | `genotype_source` | string | — | what the genotypes are: the release and its files |
-| `k` | int | 10 | the most PCs regressed out: the first k the PC Check keeps (§8). If fewer than k survive, the build uses those, as long as at least 5 do. t_far's k is the number used |
+| `k` | int | 10 | the target: the first `k` PCs the PC Check keeps are regressed out (§8). If fewer survive, the build uses those. Provenance records it as `k_target` |
+| `k_min` | int | 5 | the fewest kept PCs a build accepts; below it the build is refused. Provenance records it, and `k`, the number used, which is t_far's k |
 | `mac_min` | int | 20 | the minor allele count floor (§6) |
 | `info_min` | float or None | 0.8 | the INFO floor (§6); None for a sequenced panel, explicitly |
 
@@ -51,9 +52,11 @@ A build reads PLINK 2 pgen filesets only (ADR 0002, decision 1).
   unchanged to the engine's identity function (ogld#3), which upper-cases and left-aligns them.
   A record with `*`, a symbolic allele or `.` is refused.
 - **Chromosome names.** `#CHROM` is mapped to the engine's labels: a leading `chr` (any case) is
-  removed; `1`–`22` are kept. **Only autosomes are built.** A record on `X`, `Y`, `XY`, a PAR,
-  `M`/`MT` (or plink2's codes `23`–`26`) is refused, naming the chromosome: the diploid dosage
-  model has no rule yet for hemizygous genotypes, and the HGDP+1kGP psam files carry no sex.
+  removed; `1`–`22` are kept. **Only autosomes are built** (provisional: owner decision pending,
+  epic #1). A record on `X`, `Y`, `XY`, a PAR, `M`/`MT` (or plink2's codes `23`–`26`) is refused,
+  naming the chromosome. The reason: a male's X and Y genotypes are hemizygous, and the diploid
+  dosage model has no rule for coding them, and the HGDP+1kGP psam files carry no sex to apply one.
+  `ld-store.md` already names `X`, `Y` and `MT`, so the format is ready when the owner rules.
 - **Columns.** The `.pvar` MUST have `#CHROM POS ID REF ALT FILTER`; INFO is read only when
   `info_min` is set (§6). The FILTER column MUST be present even when every value is `.`, so that
   "nothing to filter" is said by the file, not assumed from a missing column.
@@ -184,14 +187,19 @@ of genome such as an inversion or the MHC, rather than ancestry.
 
 **The rule.** PC j is local, and dropped from the covariates, only when
 
-1. one 4 Mb window explains at least 10% of it (`window_share` ≥ 0.10), **and**
-2. the rest of the genome explains it no better than chance (`rest_share` ≤ the null's 99th
-   percentile).
+1. one 4 Mb window explains at least 10% of it (`window_share` ≥ 0.10), **and** more than a
+   vector with no genotype structure reaches by chance in its best window (`window_share` >
+   `window_null_q99`), **and**
+2. the rest of the genome explains it no better than chance (`rest_share` ≤ `rest_null_q99`).
 
-**The covariates** are the first k = 10 PCs of the PC File that are not local, in PC order. If
-fewer than 10 survive, the build uses all that do, as long as at least 5 do; with fewer than 5 it
-is refused, naming the dropped PCs. t_far's k is the number of covariates actually used, and
-provenance records it (owner, 7 November 2026; ADR 0002, decision 5).
+The owner fixed the rule's shape (7 November 2026); "chance" is defined below. The window-side
+null was added in review: at n = 345 a random vector's best window reaches 0.08–0.10 by chance,
+so a small panel's noise PC could otherwise be dropped as local (§ "Evidence" below).
+
+**The covariates** are the first `k` = 10 (`BuildInputs.k`) PCs of the PC File that are not local,
+in PC order. If fewer than 10 survive, the build uses all that do, as long as at least
+`BuildInputs.k_min` = 5 do; with fewer than 5 it is refused, naming the dropped PCs. t_far's k is
+the number of covariates actually used (owner, 7 November 2026; ADR 0002, decision 5).
 
 **The scan.**
 
@@ -205,32 +213,50 @@ provenance records it (owner, 7 November 2026; ADR 0002, decision 5).
   the window's basis.
 - **Per PC** (`PcScan` in provenance): `window`, the window with the largest share, as
   `chrom:start-end`; `window_share`, that share; `rest_share`, the mean share over every window
-  that does not overlap it; `local`, the verdict; and `rest_null_q99`, the threshold it was judged
-  against.
-- **The null:** `rest_share` of the same PC with its values permuted across samples, 200 times
-  (seed 405). A permuted vector carries no genotype structure, so its shares are chance: about
-  5 / n per window. `rest_share` ≤ the permutations' 99th percentile is "no better than chance".
+  that does not overlap it; `local`, the verdict; and the two thresholds it was judged against,
+  `window_null_q99` and `rest_null_q99`.
+- **Chance:** the same PC with its values permuted across samples, 200 times (seed 405). A
+  permuted vector carries no genotype structure. `window_null_q99` is the permutations' 99th
+  percentile of the largest window share; `rest_null_q99` their 99th percentile of the rest share.
 
 **Provenance** (`adjustment.pc_check`, `ogld.format.PcCheck`): `window_bp` (4,000,000),
 `min_share` (0.10), `scan` (one `PcScan` per PC of the file, in order), `dropped` (the local PCs'
-names), and `null` (how the null was made: kind, permutations, seed, quantile).
-`adjustment.covariates` names the PCs used and `adjustment.k` counts them.
+names), and `null` (how chance was made: kind, permutations, seed, quantile). `adjustment`
+records `k_target` (10), `k_min` (5) and `k`, the number used, and `covariates` names them.
 
-**What it found on the HGDP+1kGP PC Files** (`proto/1-build-inputs@c658b36:…/results/pcs_v2_summary.tsv` and `…/results/pc_check_v2_scan.tsv`, from `scripts/make_pcs.py`'s reports):
+**What it found on the HGDP+1kGP PC Files** (`proto/1-build-inputs@5d0a93a:…/results/pc_check_v2_scan.tsv` and `…/results/pcs_v2/<panel>.json`, `scripts/make_pcs.py --scan-only`'s reports):
 
-| panel | samples (PCA + projected) | pruned SNVs | windows | local PCs | kept | covariates used | largest window share among PC1-PC10; rest of genome against null q99 |
-|---|---|---|---|---|---|---|---|
-| EUR | 771 (665 + 106) | 86,240 | 1,398 | none | 20 of 20 | 10 | PC1, 16:84030204-88030203: 0.312; rest 0.0733 against 0.0070 |
-| AFR | 801 (608 + 193) | 210,291 | 1,399 | none | 20 of 20 | 10 | PC1, 9:39516-4039515: 0.731; rest 0.1984 against 0.0077 |
-| EAS | 816 (724 + 92) | 85,818 | 1,399 | none | 20 of 20 | 10 | PC1, 14:102242093-106242092: 0.472; rest 0.1334 against 0.0074 |
-| SAS | 782 (672 + 110) | 94,812 | 1,398 | none | 20 of 20 | 10 | PC1, 12:128011565-132011564: 0.466; rest 0.1603 against 0.0079 |
-| AMR | 345 (341 + 4) | 75,296 | 1,398 | none | 20 of 20 | 10 | PC1, 16:6021628-10021627: 0.655; rest 0.4547 against 0.0237 |
+| panel | samples (PCA + projected) | windows | local PCs | kept | k used | largest window share among PC1–PC10, against its window null; rest share against its rest null |
+|---|---|---|---|---|---|---|
+| EUR | 771 (665 + 106) | 1,398 | none | 20 of 20 | 10 | PC1, 16:84030204-88030203: 0.312 against 0.038; rest 0.0733 against 0.0070 |
+| AFR | 801 (608 + 193) | 1,399 | none | 20 of 20 | 10 | PC1, 9:39516-4039515: 0.731 against 0.041; rest 0.1984 against 0.0077 |
+| EAS | 816 (724 + 92) | 1,399 | none | 20 of 20 | 10 | PC1, 14:102242093-106242092: 0.472 against 0.040; rest 0.1334 against 0.0074 |
+| SAS | 782 (672 + 110) | 1,398 | none | 20 of 20 | 10 | PC1, 12:128011565-132011564: 0.466 against 0.038; rest 0.1603 against 0.0079 |
+| AMR | 345 (341 + 4) | 1,398 | none | 20 of 20 | 10 | PC1, 16:6021628-10021627: 0.655 against 0.092; rest 0.4547 against 0.0237 |
 
-- **No PC is local in any panel**, so every build regresses out PC1-PC10 and t_far's k is 10. Each panel's largest window share belongs to an ancestry axis that the rest of the genome also explains, 10 to 26 times the null's 99th percentile.
-- **EUR PC2 is kept.** Its top window is LCT, 2:134013241-138013240, at 0.195, over the 10% bar; the rest of the genome explains 0.0204 of it against a null 99th percentile of 0.0070. gnomAD's EUR PC2 gives the same verdict (LCT 0.209, rest 0.020)
-  (`proto/1-build-inputs@28b5380:…/results/local_pc_rule.tsv`).
-- **Two implementations agree.** The prototype's `m10_local_pc_rule.py`, written separately, gives the same windows, shares and rest shares on EUR to every printed digit.
-- **Caveat: every PC beats the null a little.** A PC from a genome-wide PCA loads on every window, so even EUR PC20's rest share (0.0085) exceeds the permutation null's 99th percentile (0.0071). A real inversion PC from such a PCA may therefore also clear the null and be kept. None of these panels has one, so the rule's power on a real local PC is untested; ogld#5's test builds a purely local PC, which it drops.
+Every panel keeps all 20 PCs and uses PC1–PC10, so t_far's k is 10 everywhere.
+
+**Evidence for the rule, and its known weakness** (`proto/1-build-inputs@c1c1639:…/results/rule_power.tsv`):
+
+- **EUR PC2 is kept**, as it must be. Its top window is LCT at 0.195, but the rest of the genome
+  explains 0.0204 of it against a rest null of 0.0070. It is EUR's north–south ancestry axis.
+- **The window null keeps small panels' noise PCs.** AMR PC5–PC20 reach window shares of
+  0.055–0.085 against window nulls of 0.080–0.098, with rest shares below the rest null. Without the
+  window null, one crossing 0.10 by chance would be dropped.
+- **Power, on karyotype-like scores.** The top PC of each inversion region's own genotypes,
+  orthogonalised to PC1–PC9 and scanned as if it were a PC, is dropped for 8p23.1 in EUR and AMR
+  and for 17q21.31 in AMR. **EUR's 17q21.31 score is kept**: 93% of it lies in one window, but its
+  rest share is 0.0073 against a rest null of 0.0071. H1/H2 frequency carries a trace of ancestry
+  that orthogonalising does not remove, so the rest of the genome explains it slightly better than
+  chance.
+- **Proposed, not adopted: rest share / window share.** It is 0.007–0.019 for the four karyotype
+  scores, at least 0.104 for every real PC of EUR and AMR (EUR PC2 lowest), and 0.19–0.27 for AMR's
+  noise PCs; a bar of 0.05 separates them. Adopting it changes the rule beyond "chance", so it waits
+  for the owner (epic #1). Until then, a PC File whose inversion axis carries ancestry can pass the
+  check.
+- **Two implementations agree.** The prototype's `m10_local_pc_rule.py`, written separately,
+  gives the same windows, shares and rest shares on EUR as `scripts/test_panel/pc_check.py` to every
+  printed digit.
 
 **The rule it replaces.** The first rule failed a PC when one of four named regions explained
 ≥ 10% of it and ≥ 2× the most any of 47 random 4 Mb windows did. It failed EUR PC2 on LCT, with
@@ -287,3 +313,13 @@ The Test Panel, `tests/data/test-panel/`, is v2 chr21 and chr22 for the 771 EUR 
 EUR PC File and independent reference answers. Its README lists what it holds, where each edge case
 is, and how `scripts/make_test_panel.py` regenerates it; `tests/testdata.py` is the only way a test
 reads it.
+
+- **Reference r** at k = 0 equals `plink2 --r-unphased` to 1.0×10⁻¹⁴ on every pair. At k = 0 and
+  k = 10 it is recomputed by a second route, `numpy.linalg.lstsq` residuals on plink2's
+  `--export A` dosages of the threshold rows (`dosages.raw`), to 1×10⁻¹².
+- **Clump goldens** use `plink2 --clump --clump-unphased`: v2's pgen holds phase, and plink2
+  otherwise clumps on phased r², while an LD Store's r is unphased (§2). Greedy clumping over the
+  Test Panel's own `reference_r(0)` gives the same leads at r² 0.01 and 0.001 under either reading
+  of the threshold (≥ or >).
+- **k = 10** uses the first 10 PCs the PC Check keeps on the Test Panel's own common variants:
+  PC1–PC10.
