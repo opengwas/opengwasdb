@@ -230,7 +230,7 @@ r reaches t_far (owner, 7 November 2026; §11):
 - **The Far Pairs are the index's entries more than `near_bp` apart.** A pair with
   `near_bp` < d ≤ `far_bp` is a Far Pair exactly when it is in the index. One that is not has
   r̂² < t_far: its answer is the **Bound** (§8). So the store has no separate component for the
-  Far Pairs (the recommended form; §11 gives the trade-off and the owner's decision it awaits).
+  Far Pairs (the owner's decision of 8 November 2026; §11 gives the trade-off).
 - **Its entries within `near_bp` are copies of Near Band codes, by design,** thresholded at t_far
   and transposed for each pair's later variant. They are how the index answers a variant's
   upstream partners without the Near Band's column read, so `proxies` at r2 ≥ t_far reads one
@@ -632,7 +632,7 @@ cold on that region took A 34.25 s, B 10.92 s, C 3.86 s.
 
 **Settled** by the owner on 7 November 2026 (epic #1, comment of that date): a sparse symmetric
 Proxy Index (§5). This section keeps the measurements that decided it, and states the further
-step this spec recommends: the index takes the Far Pairs' place.
+step the owner took on 8 November 2026: the index takes the Far Pairs' place.
 
 **The problem.** The Near Band stores row i as r(i, i+1 … the last variant ≤ `near_bp` away): the
 upper triangle. So a variant's upstream partners, the ones before it, are scattered one per row
@@ -671,7 +671,7 @@ in both directions. A Far Pair is exactly such a pair more than `near_bp` apart 
 holds every Far Pair, twice. A separate Far Pairs component would hold nothing the index does not.
 The index already copies the Near Band's pairs at r̂² ≥ t_far, by design, so merging does not make
 the store copy-free: it removes the second copy of each 3–10 Mb pair.
-This spec therefore writes the merged form as its recommended one: one dense Near Band and one
+The owner adopted the merged form on 8 November 2026 (epic #1): one dense Near Band and one
 sparse, symmetric, thresholded index (§1, §5). It changes no answer and no refusal:
 
 - a pair within `near_bp` is still answered from the Near Band;
@@ -683,7 +683,7 @@ sparse, symmetric, thresholded index (§1, §5). It changes no answer and no ref
 
 The trade-off, on the prototype's numbers at k = 0:
 
-| | Near Band + Proxy Index (recommended) | Near Band + Far Pairs + Proxy Index |
+| | Near Band + Proxy Index (adopted) | Near Band + Far Pairs + Proxy Index |
 |---|---|---|
 | bytes per panel | the index alone: 11.3–25.7 GB | also the Far Pairs, once more: 0.09 GB (EUR) to 1.39 GB (AMR), 0.03–0.76% of a store, and one more `indptr` per chromosome |
 | builder paths | one sparse output, symmetric, from the Near Band rows and the 3–10 Mb scan | two: the upper-triangle Far Pairs and the symmetric index, from the same scan |
@@ -698,10 +698,19 @@ saves is the second copy of each 3–10 Mb pair, the builder output that writes 
 cross-component rules for 3–10 Mb: the four `far.*` rules and the one holding the Far Pairs equal
 to the index. One fewer copy is one fewer way for `matrix` and `proxies` to disagree.
 
-**The merge awaits the owner's decision (ogld#2).** If the owner keeps the Far Pairs as their own
-component, §1 regains `far/<chrom>/` (`indptr`, `partner`, `r`, upper triangle as in §4), §7 keeps
-the same counts, and §12 regains `far.rows`, `far.distance`, `far.threshold` and `far.codes`, plus a
-rule that the Far Pairs equal the index's entries beyond `near_bp`.
+**Decided** by the owner on 8 November 2026 (epic #1), after asking what the merge costs in query
+time:
+- `proxies`, a single pair, a matrix for a list of ALIDs and `clump` on a list of hits are
+  unchanged. Each reads one row per variant, and a row of either component sits in one inner
+  chunk, so the requests are the same.
+- A region matrix up to `near_bp` wide needs no pair beyond `near_bp`.
+- A region matrix wider than `near_bp` reads each region variant's index row instead of its Far
+  Pairs row. That is about 3–9% more bytes than the Near Band read it already makes: the index's
+  share of a store, about 5% for EUR and 9% for AMR.
+
+ogld#8 times region reads locally and over HTTP. The format is an unreleased draft (§13). If those
+numbers show the cost matters, the Far Pairs can come back before the first release, with `far/<chrom>/`
+in §1 and the `far.*` rules in §12.
 
 ## 12. Validation rules
 

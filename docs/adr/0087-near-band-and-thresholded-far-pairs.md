@@ -176,6 +176,9 @@ recommends it as the Far Pairs' only storage: one dense Near Band and one sparse
 thresholded index (`docs/spec/ld-store.md` §5 and §11). That changes no answer and no refusal, and
 whether to merge is the owner's decision, put to them at ogld#2. Decision 3 above is unchanged in
 meaning: a 3–10 Mb pair is stored exactly when r̂² ≥ t_far.
+*8 November 2026:* the owner merged them. The Proxy Index is the Far Pairs' only storage, and a
+region matrix wider than 3 Mb reads about 3–9% more bytes for it (spec §11). ogld#8 measures that
+cost before the first release.
 
 **A matrix is one signed-r matrix, NaN where unstored** (decision 2). A matrix query returns the
 Stored r of every pair it holds and NaN for every other pair, the Bound and Not Measured alike.
