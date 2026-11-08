@@ -28,6 +28,9 @@ _CHROMOSOME_ALIASES = {
 }
 
 
+_PRIMARY_NON_AUTOSOMES = frozenset({"X", "Y", "MT"})
+
+
 class VariantNormalisationError(ValueError):
     """Raised when a source row cannot be represented as a canonical variant."""
 
@@ -156,6 +159,22 @@ def normalise_chromosome(chromosome: str) -> str:
     if chrom.isdigit():
         raise VariantNormalisationError(f"unsupported chromosome {chromosome!r}")
     return chrom
+
+
+def is_primary_contig(chromosome: str) -> bool:
+    """Whether ``chromosome`` is a primary-assembly contig: 1-22, X, Y or MT.
+
+    The labels spec §4 makes canonical, and their numeric aliases (`23`-`26`,
+    `M`), with or without a `chr` prefix. An alt, random or unplaced contig is
+    not, and neither is a label no ALID can spell. This is the one definition:
+    every path that lifts a source variant onto the release's assembly asks it
+    of the contig the lift lands on (#376).
+    """
+    try:
+        label = normalise_chromosome(chromosome)
+    except VariantNormalisationError:
+        return False
+    return label in _AUTOSOMES or label in _PRIMARY_NON_AUTOSOMES
 
 
 def identity_allele(allele: str) -> str:

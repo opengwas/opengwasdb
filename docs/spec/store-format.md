@@ -241,7 +241,8 @@ The Admission record counts, per Analysis, the indel rows a harmoniser code kept
 each reason's drops. An LD Reference Panel
 places its indels by a `REF` column, or by an indel-reference table settled by
 GRCh38 evidence, and places none where it has neither (§13). An alt, random or
-unplaced contig is a chromosome.
+unplaced contig is a chromosome, in a source already on the release's assembly.
+A lift onto one is not (below).
 
 A Store Release of `format_version` `0.2.0` or `0.1.0` sorts an indel's two
 alleles too, and is read as it was written: nothing rewrites its ALIDs. In such
@@ -249,6 +250,16 @@ a Store a deletion is spelt like the insertion of the same sequence, and its
 statistic is signed for the alphabetically first allele. A source-fidelity
 check (`validate --source`) spells the source's indels the same way when it
 reads one.
+
+A Store holds the primary assembly's contigs: `1`–`22`, `X`, `Y` and `MT` (their
+numeric aliases and a `chr` prefix are the same contigs). A lift that places a
+source variant on any other contig, an alt, random or unplaced one such as
+`11_KI270927v1_alt`, does not place it: every builder drops the variant's rows
+from the Analyses that declare it, and logs and counts them in the Admission
+record, per Analysis, as `lift_off_primary` (#376, ADR 0072). A source already on
+the release's assembly is unchanged: its alt contig is a chromosome. A Variant
+Reference's extraction drops such a site too and counts it in its report, and a
+build routed by that reference counts the rows of the site as `off_axis`.
 
 A build that lifts a source variant from another Reference Assembly MUST project
 the variant onto the release's assembly using the chain block's orientation: on a
@@ -323,19 +334,22 @@ sites are placed together, through the placement Variant Routing uses
 (`place_sites`), once every Analysis's rows have been admitted: the failure rate
 `--liftover-failure-threshold` bounds (default 0.01) is the lifted group's, as in
 the Dense and Hybrid builds. Two drops are counted in the Admission record, per
-Analysis, as `lift_unmapped` (the chain places the site nowhere) and
+Analysis, as `lift_unmapped` (the chain places the site nowhere),
+`lift_off_primary` (it places it on an alt, random or unplaced contig) and
 `lift_ambiguous` (a Routing Key that a lifted source and a source already on
 GRCh38 both declare: two loci that share a string, dropped from the Analyses of
 both, as Pass 1's union drops it). Two source sites that lift onto one variant
 are one Analysis's duplicate rows, and the duplicate rule resolves them. A
 lifted Store records `provenance.lift` as `build-ragged-besd` does, with
-`n_unmapped` and `n_ambiguous` (Routing Keys) beside `n_lifted`, and
+`n_unmapped`, `n_off_primary` (sites lifted onto an alt, random or unplaced
+contig, counted as `lift_off_primary` and left out) and `n_ambiguous` (Routing
+Keys) beside `n_lifted`, and
 `reference: null`: the lift is not checked against a Variant Reference. A Store
 whose sources are all on GRCh38 records no `provenance.lift`. A build with any
 non-GRCh38 source holds every Analysis's admitted rows in memory until the lift
 has placed them; a GRCh38-only build reads one Analysis at a time. A lift that
-leaves no variant refuses the build, naming each Analysis's `lift_unmapped` and
-`lift_ambiguous` counts, after the Admission record is finished.
+leaves no variant refuses the build, naming each Analysis's `lift_unmapped`,
+`lift_ambiguous` and `lift_off_primary` counts, after the Admission record is finished.
 
 Cross-Store identity is:
 

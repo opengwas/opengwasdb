@@ -33,6 +33,35 @@ def write_two_strand_chain(path: Path) -> Path:
     return path
 
 
+#: The target contig `write_alt_target_chain` lifts hg19 chr5 onto: a real GRCh38
+#: alt scaffold of chr11, which is not a primary-assembly contig.
+ALT_TARGET_CONTIG = "11_KI270927v1_alt"
+
+#: A source coordinate the alt-target chain lifts onto `ALT_TARGET_CONTIG`, as
+#: `(hg19 contig, hg19 position, REF, ALT, the ALID it would name on the alt)`.
+ALT_LIFTED_ROW = ("5", 1_000, "G", "A", f"{ALT_TARGET_CONTIG}:1000:A:G")
+#: A source coordinate the same chain lifts onto a primary contig, unchanged.
+PRIMARY_LIFTED_ROW = ("3", 1_000, "G", "A", "3:1000:A:G")
+
+
+def write_alt_target_chain(path: Path) -> Path:
+    """A real chain whose hg19 chr5 lands on a GRCh38 alt contig and chr3 on chr3.
+
+    Both blocks are forward and cover the whole contig, so the mapping is the
+    identity on position and no allele is complemented: only the target's
+    contig decides what a lifted row is. hg19 chr5:1000 is therefore
+    `11_KI270927v1_alt:1000`, and chr3:1000 is `3:1000`.
+    """
+    size = STRAND_CHAIN_SIZE
+    path.write_text(
+        f"chain 1000 chr5 {size} + 0 {size} chr{ALT_TARGET_CONTIG} {size} + 0 {size} 1\n"
+        f"{size}\n\n"
+        f"chain 1000 chr3 {size} + 0 {size} chr3 {size} + 0 {size} 2\n{size}\n\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def write_collision_chain(path: Path) -> Path:
     """A real chain file whose two chains image overlapping target intervals.
 

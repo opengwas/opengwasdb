@@ -59,6 +59,7 @@ from opengwasdb.variants.normalise import (
     VariantNormalisationError,
     allele_fault,
     identity_allele,
+    is_primary_contig,
     normalise_chromosome,
     orient_to_canonical,
     oriented_alid,
@@ -155,7 +156,10 @@ def project_lifted_alleles(
 def _lift_variant(
     liftover: object, chrom: str, pos_str: str, effect: str, other: str
 ) -> tuple[str, str, str, str] | None:
-    """Lift one SNP and project its alleles onto one unambiguous mapping strand."""
+    """Lift one SNP and project its alleles onto one unambiguous mapping strand.
+
+    ``None`` when the lift places it nowhere, or on an alt, random or unplaced
+    contig: a build drops such a row (#376), and so does this."""
     _require_snp(effect, other)
     bare = chrom[3:] if chrom.lower().startswith("chr") else chrom
     identity = f"{chrom}:{pos_str}:{effect}:{other}"
@@ -169,6 +173,8 @@ def _lift_variant(
     new_chrom, new_pos, strand, *_rest = mapping
     effect, other = project_lifted_alleles(strand, effect, other, identity)
     bare_target = new_chrom[3:] if new_chrom.lower().startswith("chr") else new_chrom
+    if not is_primary_contig(bare_target):
+        return None
     return bare_target, str(int(new_pos) + 1), effect, other
 
 

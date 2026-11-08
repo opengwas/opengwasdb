@@ -92,12 +92,14 @@ class VariantRouting:
         axis: Sequence[str] | None,
         names: RoutedNames,
         stats: Pass1Stats,
+        off_primary: frozenset[str] = frozenset(),
     ) -> None:
         self._site_alid: Mapping[SourceKey, str] | None = site_alid
         self._reoriented = reoriented
         self._axis = axis
         self.names = names
         self.stats = stats
+        self.off_primary = off_primary
 
     def _sites(self) -> Mapping[SourceKey, str]:
         if self._site_alid is None:
@@ -177,7 +179,7 @@ def route_variants(
             union_pass, authority, on_rsid_conflict, label or HARVEST_LABEL
         )
     tuples_by_assembly, rsid_by_site = union_pass.sites()
-    site_alid, reoriented, dropped = place_union(
+    site_alid, reoriented, dropped, off_primary = place_union(
         tuples_by_assembly,
         chain_file=authority.chain_file,
         failure_threshold=authority.failure_threshold,
@@ -189,7 +191,8 @@ def route_variants(
         label=label or UNION_LABEL,
     )
     return VariantRouting(
-        site_alid, reoriented, axis=None, names=names, stats=union_pass.stats
+        site_alid, reoriented, axis=None, names=names, stats=union_pass.stats,
+        off_primary=frozenset(off_primary),
     )
 
 
@@ -253,7 +256,7 @@ def _route_by_reference(
         )
     else:
         tuples_by_assembly, rsid_by_site = union_pass.sites()
-        pass1_lookup, _reoriented, dropped = place_union(
+        pass1_lookup, _reoriented, dropped, _off_primary = place_union(
             tuples_by_assembly,
             chain_file=authority.chain_file,
             failure_threshold=authority.failure_threshold,

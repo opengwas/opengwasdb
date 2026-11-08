@@ -10,7 +10,9 @@
 > for GWAS-SSF, under a reason naming its layout (`indel_ssf_unharmonised`,
 > `indel_ssf_hm_columns`, `indel_ssf_hm_code`); a record also counts the indels
 > a GWAS-SSF harmoniser code kept (`indel_rows_kept_by_hm_code`). The rule set's
-> version is `admission/13`.
+> version is `admission/14`: a row of a lifted source that the chain places on
+> an alt, random or unplaced contig is dropped and logged as `lift_off_primary`
+> (#376).
 
 Issue [#357](https://github.com/opengwas/opengwasdb/issues/357), part of epic
 #58. Records which of an Analysis's source rows a Store admits, where that is
@@ -114,6 +116,7 @@ name the decisions issue #357 took on the rules that differed.
 | `off_axis` | no axis of the Store holds its variant, and nothing will place it later | yes | D6 |
 | `lift_unmapped` | its source is lifted onto the Store's assembly and the chain places its site nowhere | yes | #386 |
 | `lift_ambiguous` | its Routing Key is declared by a lifted source and by a source already on the Store's assembly: two loci sharing a string, so no row of it is placed | yes | #386 |
+| `lift_off_primary` | its source is lifted onto the Store's assembly and the chain places its site on an alt, random or unplaced contig, which a Store does not hold | yes | #376 |
 
 `build-ragged-ssf` lifts a source declaring another build, and counts what the
 lift drops under its own two reasons rather than `off_axis`: a record then says

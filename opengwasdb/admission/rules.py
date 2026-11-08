@@ -144,6 +144,10 @@ class Reason(StrEnum):
     #: A row whose Routing Key a source on the Store's assembly and a lifted source
     #: both declare: two loci that share a string, so no row of it is placed (#386).
     LIFT_AMBIGUOUS = "lift_ambiguous"
+    #: A row of a source lifted onto the Store's assembly whose site the chain
+    #: places on an alt, random or unplaced contig: the Store holds the primary
+    #: assembly's contigs only, so no row of it is placed (#376).
+    LIFT_OFF_PRIMARY = "lift_off_primary"
 
 
 #: The reasons whose rows are logged by source key, not only counted. A declared
@@ -165,6 +169,7 @@ LOGGED: frozenset[Reason] = frozenset(
         Reason.OFF_AXIS,
         Reason.LIFT_UNMAPPED,
         Reason.LIFT_AMBIGUOUS,
+        Reason.LIFT_OFF_PRIMARY,
     }
 )
 

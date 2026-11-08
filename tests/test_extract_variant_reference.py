@@ -1009,7 +1009,7 @@ def _materialised_union(
         options=UnionOptions(window_size_mb, reduction_batch_size, map_spill_records),
         stats=None,
     )
-    source_lookup, reoriented, _dropped = place_union(
+    source_lookup, reoriented, _dropped, _off_primary = place_union(
         tuples_by_assembly,
         chain_file=None,
         failure_threshold=liftover_failure_threshold,
