@@ -1878,11 +1878,9 @@ class TestObservedDuplicates:
             0,
             source=SimpleNamespace(read=lambda cells: self._observed()),
             src_alids=self._ALIDS,
-            src_idx_remap=[0, 1, 2],
-            new_alid_to_idx={alid: i for i, alid in enumerate(self._ALIDS)},
-            block_ids=[],
-            block_canonical_alids={},
-            fills={},
+            axis=_axis(self._ALIDS),
+            reference=[],
+            fills=_fills([]),
         )
 
         assert completed.vi.tolist() == [0, 2]
@@ -1890,13 +1888,16 @@ class TestObservedDuplicates:
         assert completed.eaf.tolist() == [0.25, 0.5]
         assert "2 observed row(s) at 1 variant(s) disagree" in caplog.text
 
-    def test_fills_two_blocks_disagree_on_are_dropped(self, tmp_path):
-        fills_by_analysis = _merged_fills(
-            tmp_path,
+    def test_fills_two_blocks_disagree_on_are_dropped(self):
+        completed = _completed_from_fills(
+            self._ALIDS[:2],
             {z: [("1:100:A:G", 1.0, 0.25), ("1:200:C:T", z, 0.5)] for z in (1.5, 2.5)},
         )
 
-        assert fills_by_analysis == {0: {"1:100:A:G": (1.0, 0.25)}}
+        assert completed.vi.tolist() == [0, 1]
+        assert (completed.z[0], completed.se[0], completed.imp[0]) == (1.0, 0.25, 1)
+        assert np.isnan(completed.z[1]) and completed.imp[1] == 0
+        assert (completed.n_imputed, completed.n_missing) == (1, 1)
 
 
 def test_a_half_missing_source_cell_is_refused_even_where_no_block_completes(observed_store):
@@ -1921,11 +1922,9 @@ def test_a_half_missing_source_cell_is_refused_even_where_no_block_completes(obs
             0,
             source=CsrReader.open(observed_store),
             src_alids=alids,
-            src_idx_remap=list(range(len(alids))),
-            new_alid_to_idx={alid: i for i, alid in enumerate(alids)},
-            block_ids=[],
-            block_canonical_alids={},
-            fills={},
+            axis=_axis(alids),
+            reference=[],
+            fills=_fills([]),
         )
 
 
@@ -1968,39 +1967,67 @@ def _logged_drops(caplog) -> list[tuple[str, str]]:
     return drops
 
 
-def _merged_fills(tmp_path, blocks: dict[float, list[tuple[str, float, float]]]) -> dict:
-    """What `_merge_checkpoint_rows` makes of one block checkpoint per entry,
-    each holding Analysis 0's ``(alid, z, se)`` fills."""
-    import sqlite3
+def _axis(alids: list[str]):
+    """A merged axis holding exactly `alids`, each source row its own row."""
+    from opengwasdb.layouts.ragged.complete import _MergedAxis
+    from opengwasdb.variants import CanonicalVariant
 
-    from opengwasdb.completion.checkpoint import (
-        BlockCompletionResult,
-        FillRow,
-        write_block_checkpoint,
+    fields = [alid.split(":") for alid in alids]
+    variants = [CanonicalVariant(chrom, int(pos), a1, a2) for chrom, pos, a1, a2 in fields]
+    return _MergedAxis(
+        variants=variants,
+        new_variants=[],
+        new_alid_to_idx={alid: i for i, alid in enumerate(alids)},
+        src_idx_remap=np.arange(len(alids)),
     )
-    from opengwasdb.completion.schema import create_completion_quality_table
-    from opengwasdb.layouts.ragged.complete import _merge_checkpoint_rows
-
-    directory = tmp_path / "blocks"
-    directory.mkdir()
-    for i, fills in enumerate(blocks.values()):
-        rows = [FillRow(alid, 0, z, se) for alid, z, se in fills]
-        write_block_checkpoint(directory / f"{i}.npz", BlockCompletionResult(str(i), [], rows))
-    db = sqlite3.connect(tmp_path / "index.sqlite")
-    create_completion_quality_table(db)
-    fills_by_analysis, _ = _merge_checkpoint_rows(directory, db)
-    return fills_by_analysis
 
 
-def test_every_fill_completion_drops_is_logged(tmp_path, caplog):
+def _fills(rows: list[tuple[int, float, float]]) -> np.ndarray:
+    """Analysis 0's fill records, as a batch's fill shard gives them."""
+    from opengwasdb.completion.fill_shards import FILL_RECORD_DTYPE
+
+    records = np.zeros(len(rows), dtype=FILL_RECORD_DTYPE)
+    for i, (row, z, se) in enumerate(rows):
+        records[i] = (row, 0, z, se)
+    return records
+
+
+def _completed_from_fills(alids: list[str], blocks: dict[float, list[tuple[str, float, float]]]):
+    """Analysis 0, observing nothing and completed against `alids`, given one
+    block's ``(alid, z, se)`` fills per entry, in block order."""
+    from types import SimpleNamespace
+
+    from opengwasdb.associations import Associations
+    from opengwasdb.layouts.ragged.complete import _completed_analysis
+
+    nothing = Associations.from_decoded(
+        variant_index=np.empty(0, dtype=np.int32),
+        analysis_index=0,
+        z=np.empty(0, dtype=np.float32),
+        se=np.empty(0, dtype=np.float32),
+        eaf=np.empty(0, dtype=np.float32),
+    )
+    row = {alid: i for i, alid in enumerate(alids)}
+    return _completed_analysis(
+        0,
+        source=SimpleNamespace(read=lambda cells: nothing),
+        src_alids=[],
+        axis=_axis(alids),
+        reference=[np.arange(len(alids))],
+        fills=_fills([(row[a], z, se) for fills in blocks.values() for a, z, se in fills]),
+    )
+
+
+def test_every_fill_completion_drops_is_logged(caplog):
     """D8 (issue #357): a row dropped for a reason other than a declared filter
     is logged, every one, where completion logs its drops. Six variants two LD
     blocks fill differently drop twelve fills, and the log names all twelve."""
-    fills_by_analysis = _merged_fills(
-        tmp_path, {z: [(alid, z, 0.5) for alid in _SIX] for z in (1.5, 2.5)}
+    completed = _completed_from_fills(
+        _SIX, {z: [(alid, z, 0.5) for alid in _SIX] for z in (1.5, 2.5)}
     )
 
-    assert fills_by_analysis == {0: {}}
+    assert completed.n_imputed == 0 and completed.n_missing == 6
+    assert np.isnan(completed.z).all()
     assert sorted(_logged_drops(caplog)) == sorted(
         (alid, "duplicate_conflicting") for alid in _SIX * 2
     )
@@ -2026,14 +2053,114 @@ def test_every_observed_row_completion_drops_is_logged(caplog):
         0,
         source=SimpleNamespace(read=lambda cells: observed),
         src_alids=_SIX,
-        src_idx_remap=list(range(6)),
-        new_alid_to_idx={alid: i for i, alid in enumerate(_SIX)},
-        block_ids=[],
-        block_canonical_alids={},
-        fills={},
+        axis=_axis(_SIX),
+        reference=[],
+        fills=_fills([]),
     )
 
     assert completed.vi.tolist() == []
     assert sorted(_logged_drops(caplog)) == sorted(
         (alid, "duplicate_conflicting") for alid in _SIX * 2
+    )
+
+
+def test_a_carried_analysis_is_written_in_the_completed_axis_order(tmp_path):
+    """Issue #424: an Analysis completion carries through unchanged is remapped
+    onto the completed axis, whose order at one position can differ from its
+    source's. `build_ragged_from_ssf` keeps two variants at one position in the
+    order its file gave them; the completed axis orders them by allele. The
+    remapped rows were written unsorted -- 265 descending pairs in 176 of
+    OGS-00006's Analyses, a release `validate` refuses (spec §11) and whose
+    variant-side lookups binary-search to a wrong row (#252). Each Analysis's
+    segment is now written in variant order, the rows unchanged."""
+    from contextlib import closing
+
+    from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+    from opengwasdb.validation.rules.sequence import segment_order_errors
+    from opengwasdb.variants.axis import VariantAxis
+
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    rows = [(1_000_000, "C", "T", 2.0), (1_000_000, "A", "C", -3.0), (1_100_000, "A", "G", 1.0)]
+    _write_ssf_filtered(filtered / "t.tsv.gz", [
+        {"chromosome": "1", "base_pair_location": bp, "effect_allele": ea, "other_allele": oa,
+         "beta": z * 0.1, "standard_error": 0.1, "rsid": f"rs{i}"}
+        for i, (bp, ea, oa, z) in enumerate(rows)
+    ])
+    manifest = tmp_path / "manifest.tsv"
+    _write_ssf_manifest(manifest, [
+        {"analysis_index": 0, "analysis_id": "t", "trait_id": "T", "trait_chr": "1",
+         "trait_bp": 1_050_000, "n": 1000, "mhc": "FALSE", "filtered_file": "t.tsv.gz",
+         "source_genome_build": "GRCh38"},
+    ])
+    observed = tmp_path / "obs.opengwasdb"
+    build_ragged_from_ssf(
+        manifest, filtered, observed, store_id="t", release_id="obs",
+        association_coverage="cis_and_signals",
+    )
+    with closing(VariantAxis(observed)) as axis:
+        source_order = [v.alid for v in axis.all()]
+    assert source_order[:2] == ["1:1000000:C:T", "1:1000000:A:C"], "fixture: file order kept"
+    completed = tmp_path / "comp.opengwasdb"
+
+    complete_ragged_store(
+        observed, completed, _make_ld_panel(tmp_path, "1", 900_000, 1_300_000),
+        ancestry="EUR", cis_window_bp=500_000, release_id="comp", impute_analysis_ids=set(),
+    )
+
+    ragged = zarr.open_group(str(completed / RAGGED_ZARR_PATH), mode="r")
+    offsets = ragged["offsets"][:]
+    errors: list[str] = []
+    segment_order_errors(ragged, offsets, int(offsets[-1]), errors, "data.zarr/ragged")
+    assert errors == []
+    with closing(VariantAxis(completed)) as axis:
+        alids = [axis.by_index(int(v)).alid for v in stored_rows(completed, 0).variant_index]
+    assert alids == ["1:1000000:A:C", "1:1000000:C:T", "1:1100000:A:G"]
+    np.testing.assert_allclose(stored_rows(completed, 0).z, [-3.0, 2.0, 1.0], atol=1e-3)
+
+
+#: What 1ab2b09 wrote for `test_a_stored_missing_observed_row_is_never_filled`.
+_STORED_MISSING_TOTALS = {"n_imputed": 10, "n_missing": 2}
+
+
+def test_a_stored_missing_observed_row_is_never_filled(tmp_path):
+    """Issue #424: a source Analysis may hold a row whose z and SE are both
+    missing, which the Association Reader returns as a missing association.
+    Completion's block reader sees that position unobserved, so a block fills
+    it; but the row is the source's, and completion carries every source row
+    as it stands (ADR 0036). It stays missing, counted neither imputed nor
+    missing, as 1ab2b09 kept it; the totals are 1ab2b09's."""
+    from contextlib import closing
+
+    from test_ragged_residual_completion import build_residual_ssf_source, write_eaf_carrying_panel
+
+    from opengwasdb.encoding.plan import EAF_ABSENT, SE_MISSING, Z_MISSING
+    from opengwasdb.variants.axis import VariantAxis
+
+    observed, _ = build_residual_ssf_source(tmp_path / "source")
+    ragged = zarr.open_group(str(observed / RAGGED_ZARR_PATH), mode="r+")
+    with closing(VariantAxis(observed)) as axis:
+        row = axis.by_identifier("1:1030000:A:G").variant_index  # source row 30, in the block
+    start, stop = (int(x) for x in ragged["offsets"][1:3])
+    at = start + int(np.flatnonzero(ragged["variant_index"][start:stop] == row)[0])
+    ragged["z"][at], ragged["se"][at], ragged["eaf"][at] = Z_MISSING, SE_MISSING, EAF_ABSENT
+    held = stored_rows(observed, 1)
+    assert np.isnan(held.z[held.variant_index == row]).all(), "fixture: a stored missing row"
+    completed = tmp_path / "comp.opengwasdb"
+
+    result = complete_ragged_store(
+        observed, completed, write_eaf_carrying_panel(tmp_path / "ld_panel"), ancestry="EUR",
+        cis_window_bp=1_000_000, min_cor=0.0, release_id="comp",
+    )
+
+    with closing(VariantAxis(completed)) as axis:
+        out_row = axis.by_identifier("1:1030000:A:G").variant_index
+    rows = stored_rows(completed, 1)
+    at_row = rows.variant_index == out_row
+    assert at_row.sum() == 1 and np.isnan(rows.z[at_row]).all() and np.isnan(rows.se[at_row]).all()
+    group = zarr.open_group(str(completed / RAGGED_ZARR_PATH), mode="r")
+    first = int(group["offsets"][1]) + int(np.flatnonzero(at_row)[0])
+    assert group["imputed"][first] == 0
+    assert {"n_imputed": result.n_imputed, "n_missing": result.n_missing} == (
+        _STORED_MISSING_TOTALS
     )
