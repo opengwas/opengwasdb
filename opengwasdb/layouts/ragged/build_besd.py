@@ -1035,7 +1035,6 @@ class _ProbeRows(NamedTuple):
     se: np.ndarray
     esi_row: np.ndarray
     eaf: np.ndarray
-    reference: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -1118,7 +1117,7 @@ def _placed_rows(
     placed = keep & on_axis
     return _ProbeRows(
         variant_index[placed], z[placed], batch.se[placed], batch.source_row[placed],
-        stored_eaf[placed], batch.reference_codes()[placed],
+        stored_eaf[placed],
     )
 
 
@@ -1130,12 +1129,11 @@ def _resolved_duplicates(rows: _ProbeRows, gate: Gate) -> _ProbeRows:
     association, collapsed to the first; rows that disagree are all dropped,
     and logged by ESI row, where both used to be stored.
     """
-    found = collapse_duplicates(rows.variant_index, rows.z, rows.se, rows.reference)
+    found = collapse_duplicates(rows.variant_index, rows.z, rows.se)
     if len(found.keep) == len(rows.variant_index):
         return rows
     gate.duplicates(
-        [f"esi:{int(rows.esi_row[i])}" for i in found.dropped.tolist()], found.collapsed,
-        [f"esi:{int(rows.esi_row[i])}" for i in found.reversed_indels.tolist()],
+        [f"esi:{int(rows.esi_row[i])}" for i in found.dropped.tolist()], found.collapsed
     )
     return _ProbeRows(*(column[found.keep] for column in rows))
 
@@ -1240,7 +1238,7 @@ def _concatenated(parts: list[_ProbeRows]) -> _ProbeRows:
         return parts[0]
     empty = _ProbeRows(
         np.empty(0, np.int64), np.empty(0), np.empty(0), np.empty(0, np.int64),
-        np.empty(0, np.float32), np.empty(0, np.int8),
+        np.empty(0, np.float32),
     )
     return _ProbeRows(*(np.concatenate(columns) for columns in zip(empty, *parts, strict=True)))
 

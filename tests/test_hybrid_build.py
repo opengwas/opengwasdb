@@ -1916,8 +1916,7 @@ class TestVariantReference:
         """BMI_IRN's pair, which no reference names: GWAS-VCF declares `REF`
         the reference, so the fold resolves `G>GGGGCC` and `GGGGCC>G` to two
         ALIDs, each spelt reference first (ADR 0079), and the Overflow stores
-        both rows wherever they fall. Before #381 they shared one ALID and the
-        deletion was dropped as `duplicate_reversed_indel` (#357)."""
+        both rows wherever they fall."""
         reference = _write_reference_artifact(
             tmp_path, _hybrid_manifest(tmp_path), panel_only=True
         )
@@ -2793,7 +2792,7 @@ def test_a_two_pass_build_refuses_an_off_reference_spill(tmp_path, monkeypatch):
         assert not len(spill[0]), "a two-pass Pass 2 spills nothing of its own"
         one = np.ones(1, dtype=np.float32)
         keys = encode_keys(["1:5:A:G"])
-        return keys.values, one, one, one, np.zeros(1, dtype=np.int8), keys.hashed_index, []
+        return keys.values, one, one, one, keys.hashed_index, []
 
     monkeypatch.setattr(hybrid_build, "_off_reference_spill", _spill_a_row)
     with pytest.raises(RuntimeError, match=r"two-pass Hybrid build found \d+ off-reference"):
@@ -2819,16 +2818,8 @@ def test_a_hybrid_spilled_column_whose_arrays_are_not_parallel_is_refused_and_wr
         np.full(2, 0.1, dtype=np.float32),
         np.full(3, 0.3, dtype=np.float32),
     )
-    overflow = (empty_i64, empty_f32, empty_f32, empty_f32, empty_f32)
-    off_reference = (
-        np.empty(0, dtype=np.uint64),
-        empty_f32,
-        empty_f32,
-        empty_f32,
-        empty_f32,
-        empty_i64,
-        [],
-    )
+    overflow = (empty_i64, empty_f32, empty_f32, empty_f32)
+    off_reference = (np.empty(0, dtype=np.uint64), empty_f32, empty_f32, empty_f32, empty_i64, [])
     with pytest.raises(
         ValueError,
         match=r"hybrid spill, analysis_index 0: rows of length 3, z of length 3, "

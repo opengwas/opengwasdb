@@ -45,13 +45,12 @@ is the `maf_missing` a Store's provenance reports.
 After the rules, a row is judged against the other rows that reach its place
 on the Variant Index. Rows that agree on z and SE are one association and
 collapse to the first (`duplicate_collapsed`); rows that disagree are all
-dropped (`duplicate_conflicting`), since nothing says which is right. The one
-exception, a reversed indel (`duplicate_reversed_indel`), kept the row whose
-declared reference allele a sorted ALID spelt first (#357). Now that an
-indel's ALID spells its reference first (ADR 0079), an insertion and a
-deletion at one position are two variants, and an indel no source declares a
-reference for never reaches a place, so no build drops a row for it; the
-reason stays readable in a record written before. A row whose
+dropped (`duplicate_conflicting`), since nothing says which is right. An
+indel's ALID spells its reference allele first (ADR 0079), so an insertion and
+a deletion at one position are two variants, never one place's rows. #357's
+exception for such a pair (`duplicate_reversed_indel`) is retired: no build
+drops a row for it, and the reason stays readable in a record written before
+(#316). A row whose
 variant no axis of the Store holds is dropped too (`off_axis`), where a build
 has nowhere else to put it. A build that lifts a source onto the Store's
 assembly drops the rows of a site its chain places nowhere (`lift_unmapped`),
@@ -130,10 +129,11 @@ class Reason(StrEnum):
     #: A row that agreed with an earlier row for its (variant, Analysis), whose
     #: association it is: not lost, so counted only.
     DUPLICATE_COLLAPSED = "duplicate_collapsed"
-    #: An indel row whose declared reference allele its ALID spells second, at
-    #: a (variant, Analysis) that keeps the row spelling it first. No build
-    #: writes it since ADR 0079 spelt every indel reference first; it stays
-    #: readable in records written before, and #316 removes the rule.
+    #: Retired (#316): no rule drops a row for it. #357 dropped an indel row
+    #: whose declared reference allele a sorted ALID spelt second, beside one
+    #: spelling it first; an ALID spells an indel reference first since ADR
+    #: 0079. The member keeps its place, because a reason's code is its
+    #: position, and records written before name it.
     DUPLICATE_REVERSED_INDEL = "duplicate_reversed_indel"
     #: A row for a (variant, Analysis) whose rows disagree on z or SE.
     DUPLICATE_CONFLICTING = "duplicate_conflicting"

@@ -107,7 +107,4 @@ def _batch(rows: list[ReaderAssociation]) -> ReaderBatch:
         ref=column(lambda a: a.ref, object),
         alt=column(lambda a: a.alt, object),
         reference=reference,
-        ref_first=column(lambda a: identity_allele(a.ref) < identity_allele(a.alt), bool)
-        if reference.declared
-        else None,
     )
