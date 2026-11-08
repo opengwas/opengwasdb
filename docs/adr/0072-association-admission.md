@@ -10,7 +10,9 @@
 > for GWAS-SSF, under a reason naming its layout (`indel_ssf_unharmonised`,
 > `indel_ssf_hm_columns`, `indel_ssf_hm_code`); a record also counts the indels
 > a GWAS-SSF harmoniser code kept (`indel_rows_kept_by_hm_code`). The rule set's
-> version is `admission/13`.
+> version is `admission/14`: a row of a lifted source that the chain places on
+> an alt, random or unplaced contig is dropped and logged as `lift_off_primary`
+> (#376).
 >
 > **Clarified 7 Nov 2026 (issue #316): D5 has no reversed-indel case.** With
 > every indel's ALID spelt reference first, the rows of one (variant,
@@ -21,7 +23,8 @@
 > one sentence: rows that agree collapse to the first, and rows that disagree
 > are all dropped. `duplicate_reversed_indel` is retired in place: a reason's
 > code is its position, so the member keeps its place, and no rule gives it.
-> The rule set stays `admission/13`, since no record a build writes changes.
+> #316 left the rule set at `admission/13`, since no record a build writes
+> changed; #376 moves it to `admission/14`.
 
 Issue [#357](https://github.com/opengwas/opengwasdb/issues/357), part of epic
 #58. Records which of an Analysis's source rows a Store admits, where that is
@@ -125,11 +128,33 @@ name the decisions issue #357 took on the rules that differed.
 | `off_axis` | no axis of the Store holds its variant, and nothing will place it later | yes | D6 |
 | `lift_unmapped` | its source is lifted onto the Store's assembly and the chain places its site nowhere | yes | #386 |
 | `lift_ambiguous` | its Routing Key is declared by a lifted source and by a source already on the Store's assembly: two loci sharing a string, so no row of it is placed | yes | #386 |
+| `lift_off_primary` | its source is lifted onto the Store's assembly and the chain places its site on an alt, random or unplaced contig, which a Store does not hold | yes | #376 |
 
 `build-ragged-ssf` lifts a source declaring another build, and counts what the
-lift drops under its own two reasons rather than `off_axis`: a record then says
+lift drops under its own three reasons (`lift_unmapped`, `lift_ambiguous` and, since
+#376, `lift_off_primary`) rather than `off_axis`: a record then says
 the chain, not an axis, lost the row. Records written before #386 hold neither
 reason and read as before. The rule set's version moved to `admission/11`.
+
+A lift onto an alt, random or unplaced contig (#376, `admission/14`) is counted this
+way by every builder, not only `build-ragged-ssf`: Dense and Hybrid lift the rows
+a Variant Reference does not hold to tell them from `off_axis` ones, and a
+reference extracted before #376 that routes a lifted row onto such a contig has the
+row dropped and counted the same way. A Store records each Analysis's source
+assembly nowhere, so no rule can say which Analysis's rows were lifted; the rule
+`variant_table.lifted_contig` judges the variant table instead, by `source_alid`
+(the contig a lifted variant came from), and cannot judge a row whose `source_alid`
+a collision blanked. It is an error on a release of format 0.2.1 or later, which the
+fixed builders write, and a warning on an earlier one, which #367 owns. The routing
+check above is what covers the rows it cannot judge.
+
+One limit #367 must know if it rebuilds from a published axis. A plain ALID list
+or a Store Variant Table used as a Variant Reference records no source keys, so the
+build cannot tell an alt-contig ALID that a lift put on it from one a GRCh38 source
+named: it keeps the ALID, whose row stays empty in the new Store, and
+`variant_table.lifted_contig` passes it, since the row's `source_alid` is the ALID
+itself. A Store rebuilt from such an axis holds the alt-contig variants with no
+associations until the axis is rebuilt from the sources.
 
 The duplicate rule is Variant Routing's `collapse_duplicates`, applied after
 the rules above, wherever two rows can reach one (variant, Analysis):

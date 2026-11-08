@@ -12,12 +12,17 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property
 from pathlib import Path
 
 from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.variants.axis import sorted_alids
+from opengwasdb.variants.normalise import (
+    VariantNormalisationError,
+    is_primary_contig,
+    normalise_chromosome,
+)
 from opengwasdb.variants.reference import (
     VariantReference,
     warn_reference_left_rows_blank,
@@ -92,12 +97,14 @@ class VariantRouting:
         axis: Sequence[str] | None,
         names: RoutedNames,
         stats: Pass1Stats,
+        off_primary: frozenset[str] = frozenset(),
     ) -> None:
         self._site_alid: Mapping[SourceKey, str] | None = site_alid
         self._reoriented = reoriented
         self._axis = axis
         self.names = names
         self.stats = stats
+        self.off_primary = off_primary
 
     def _sites(self) -> Mapping[SourceKey, str]:
         if self._site_alid is None:
@@ -177,19 +184,20 @@ def route_variants(
             union_pass, authority, on_rsid_conflict, label or HARVEST_LABEL
         )
     tuples_by_assembly, rsid_by_site = union_pass.sites()
-    site_alid, reoriented, dropped = place_union(
+    placed = place_union(
         tuples_by_assembly,
         chain_file=authority.chain_file,
         failure_threshold=authority.failure_threshold,
     )
     names = union_names(
-        _undropped(rsid_by_site, dropped),
-        site_alid,
+        _undropped(rsid_by_site, placed.dropped),
+        placed.lookup,
         policy=on_rsid_conflict,
         label=label or UNION_LABEL,
     )
     return VariantRouting(
-        site_alid, reoriented, axis=None, names=names, stats=union_pass.stats
+        placed.lookup, placed.reoriented, axis=None, names=names, stats=union_pass.stats,
+        off_primary=frozenset(placed.off_primary),
     )
 
 
@@ -231,6 +239,67 @@ class _UnionPass:
         return result
 
 
+def _contig(label: str) -> str:
+    try:
+        return normalise_chromosome(label)
+    except VariantNormalisationError:
+        return label
+
+
+def _without_off_primary_lifts(
+    reference: VariantReference,
+) -> tuple[VariantReference, frozenset[str]]:
+    """``reference`` less the source sites a lift placed on an alt, random or
+    unplaced contig, and those sites' routing keys (#376).
+
+    An extraction since #376 leaves such a site out, but one made before it routes
+    an hg19 row onto ``11_KI270927v1_alt:…``. A site whose own contig is not the
+    contig of the ALID it reaches was lifted; where that ALID is off the primary
+    assembly the site is dropped, as a lift drops it, and so is an ALID only such
+    sites reach. A site on an alt contig of its own assembly is a chromosome."""
+    stale = _lifted_off_primary_sites(reference)
+    if not stale:
+        return reference, frozenset()
+    trimmed = _without_sites(reference, stale)
+    log.warning(
+        "%d source key(s) of the Variant Reference were lifted onto an alt, random or "
+        "unplaced contig by the extraction -- their rows are dropped, and so are the %d "
+        "ALID(s) only they reach",
+        len(stale), len(reference.alids) - len(trimmed.alids),
+    )
+    return trimmed, frozenset(routing_key(site) for site in stale)
+
+
+def _without_sites(reference: VariantReference, sites: set[SourceKey]) -> VariantReference:
+    """``reference`` without ``sites``, and without any off-primary ALID only they reach."""
+    lookup = {site: alid for site, alid in reference.source_lookup.items() if site not in sites}
+    reached = set(lookup.values())
+    alids = [
+        a for a in reference.alids if is_primary_contig(a.split(":", 1)[0]) or a in reached
+    ]
+    kept = set(alids)
+    return replace(
+        reference,
+        alids=alids,
+        source_lookup=lookup,
+        rsid_by_alid={a: r for a, r in reference.rsid_by_alid.items() if a in kept},
+        reoriented=reference.reoriented - sites,
+    )
+
+
+def _lifted_off_primary_sites(reference: VariantReference) -> set[SourceKey]:
+    """The reference's source sites whose own contig is not that of the off-primary
+    ALID they reach: the ones a lift put there."""
+    off_primary = {a for a in reference.alids if not is_primary_contig(a.split(":", 1)[0])}
+    if not off_primary:
+        return set()
+    return {
+        site
+        for site, alid in reference.source_lookup.items()
+        if alid in off_primary and _contig(site[0]) != alid.split(":", 1)[0]
+    }
+
+
 def _route_by_reference(
     union_pass: _UnionPass,
     authority: FromReference,
@@ -245,7 +314,7 @@ def _route_by_reference(
     reference routes, and the keys it records as re-oriented are the ones
     re-oriented (issue #354).
     """
-    reference = authority.reference
+    reference, off_primary = _without_off_primary_lifts(authority.reference)
     if reference.rsid_by_alid:
         warn_reference_left_rows_blank(reference)
         names = RoutedNames(
@@ -253,7 +322,7 @@ def _route_by_reference(
         )
     else:
         tuples_by_assembly, rsid_by_site = union_pass.sites()
-        pass1_lookup, _reoriented, dropped = place_union(
+        placed = place_union(
             tuples_by_assembly,
             chain_file=authority.chain_file,
             failure_threshold=authority.failure_threshold,
@@ -261,10 +330,10 @@ def _route_by_reference(
         # A tuple declared under both assemblies is two loci; naming the lifted
         # one from the other's row would attach an rsid to a variant a different
         # association owns.
-        candidates = _undropped(rsid_by_site, dropped)
+        candidates = _undropped(rsid_by_site, placed.dropped)
         del rsid_by_site
         names = harvested_names(
-            candidates, reference.source_lookup, pass1_lookup, policy=policy, label=label
+            candidates, reference.source_lookup, placed.lookup, policy=policy, label=label
         )
     return VariantRouting(
         reference.source_lookup,
@@ -272,4 +341,5 @@ def _route_by_reference(
         axis=reference.alids,
         names=names,
         stats=union_pass.stats,
+        off_primary=off_primary,
     )

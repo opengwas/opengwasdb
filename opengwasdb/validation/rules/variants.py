@@ -21,6 +21,7 @@ import numpy as np
 
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store.open import indels_reference_first
+from opengwasdb.validation import rule as validation_rule
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Skip, Target
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.variants import (
@@ -31,6 +32,7 @@ from opengwasdb.variants import (
     variant_alid_bytes_path,
     variant_table_path,
 )
+from opengwasdb.variants.normalise import is_primary_contig
 
 #: Rows one block of the stream holds: enough to amortise the per-block work,
 #: few enough that a block's records are a small, bounded allocation.
@@ -343,6 +345,80 @@ def _spells_indels_reference_first(target: Target) -> bool:
     return indels_reference_first(target.store.manifest.format_version)
 
 
+@dataclass(frozen=True)
+class _LiftedOffPrimary:
+    """How many table rows name a lifted variant on a non-primary contig, the first,
+    and how many non-primary rows have no ``source_alid`` to judge them by."""
+
+    n_rows: int = 0
+    first: str = ""
+    n_unjudged: int = 0
+
+    def __add__(self, other: _LiftedOffPrimary) -> _LiftedOffPrimary:
+        return _LiftedOffPrimary(
+            self.n_rows + other.n_rows,
+            self.first or other.first,
+            self.n_unjudged + other.n_unjudged,
+        )
+
+
+def _lifted_off_primary(_target: Target, block: TableBlock) -> _LiftedOffPrimary:
+    """Each row on an alt, random or unplaced contig whose ``source_alid`` is on another.
+
+    A source on the release's assembly keeps its alt contig, so its ``source_alid``
+    is the ALID itself; a lift's is the source's own coordinate, on another contig.
+    A row on such a contig with no ``source_alid`` (no lift, or a collision blanked
+    it) cannot be judged, and is counted so the message can say so.
+    """
+    n_rows, first, n_unjudged = 0, "", 0
+    for offset, record in enumerate(block.records):
+        if is_primary_contig(record.chromosome):
+            continue
+        if record.source_alid is None:
+            n_unjudged += 1
+        elif record.source_alid.split(":", 1)[0] != record.chromosome:
+            n_rows += 1
+            first = first or f"row {block.start + offset}: {record.alid} from {record.source_alid}"
+    return _LiftedOffPrimary(n_rows, first, n_unjudged)
+
+
+def _unjudged(found: _LiftedOffPrimary) -> str:
+    return f"{found.n_unjudged} not judged (no source ALID)"
+
+
+def _judge_lifted_off_primary(_target: Target, found: _LiftedOffPrimary) -> Iterator[str]:
+    if found.n_rows:
+        yield (
+            f"{found.n_rows} variant(s) of variants.tsv.gz were lifted onto an alt, random or "
+            f"unplaced contig ({found.first}), {_unjudged(found)}: a build leaves such a "
+            "variant out and counts its rows as lift_off_primary (#376), so this release was "
+            "built before that, or routed by a Variant Reference extracted before it -- "
+            "rebuild it (an earlier format's release is #367's)"
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
+class _ErrorFromFormat(Fold[TableBlock, _LiftedOffPrimary]):
+    """A fold that fails a release of a format whose builders cannot write what it finds
+    (0.2.1 or later, `indels_reference_first`) and warns on an earlier one, which says
+    what the release is without failing a Store nobody can fix in place (#376, #367).
+
+    Where it finds nothing but cannot judge some rows, it warns that it did not."""
+
+    def judged(self, target: Target, total: _LiftedOffPrimary) -> Iterator[validation_rule.Finding]:
+        severity = validation_rule.Severity
+        level = severity.ERROR if _spells_indels_reference_first(target) else severity.WARNING
+        for message in self.judge(target, total):
+            yield self.finding(target, message, level)
+        if not total.n_rows and total.n_unjudged:
+            yield self.finding(
+                target,
+                f"{_unjudged(total)}: variants.tsv.gz has non-primary-contig variants with no "
+                "source_alid, which cannot be told from a lift's",
+                severity.WARNING,
+            )
+
+
 def variant_aliases(target: Target) -> Iterator[str]:
     """Every alias names a variant the table holds.
 
@@ -417,6 +493,15 @@ RULES: tuple[Rule, ...] = (
         zero=_IndelOrder(),
         measure=_indel_order,
         judge=_judge_indel_order,
+    ),
+    _ErrorFromFormat(
+        name="variant_table.lifted_contig",
+        kinds=Kind.RELEASE,
+        after=(REQUIRED,),
+        scan=VARIANT_TABLE,
+        zero=_LiftedOffPrimary(),
+        measure=_lifted_off_primary,
+        judge=_judge_lifted_off_primary,
     ),
     Check(
         name="sqlite.variant_aliases",

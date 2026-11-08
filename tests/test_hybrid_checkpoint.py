@@ -577,7 +577,7 @@ class TestRefusals:
         with pytest.raises(ValueError, match="records format version"):
             resume_hybrid_build(checkpoint_dir)
 
-    @pytest.mark.parametrize("older", [1, 2])
+    @pytest.mark.parametrize("older", [1, 2, 3])
     def test_an_older_format_checkpoint_is_refused(self, tmp_path, monkeypatch, older):
         """An older record is refused, never reinterpreted.
 
@@ -592,8 +592,8 @@ class TestRefusals:
         # Fixture first: a real checkpoint with real spills is what an older
         # record is; refusing an empty directory would prove nothing.
         assert _dir_bytes(checkpoint_dir / "spill") > 0
-        assert CHECKPOINT_FORMAT_VERSION == 3, (
-            "format 3 is the Association Admission checkpoint record (opengwasdb#357)"
+        assert CHECKPOINT_FORMAT_VERSION == 4, (
+            "format 4 records the keys a lift placed off the primary assembly (opengwasdb#376)"
         )
 
         path = checkpoint_dir / "build_params.json"
@@ -605,6 +605,19 @@ class TestRefusals:
         with pytest.raises(ValueError, match=f"records format version {older}"):
             resume_hybrid_build(checkpoint_dir)
         assert not store.exists(), "a refused resume publishes nothing"
+
+    def test_a_recorded_axis_without_its_off_primary_keys_is_refused(self, tmp_path):
+        """A current-format checkpoint always writes the keys a lift placed off the
+        primary assembly, an empty file when none; a missing one is a torn record,
+        and reading it as empty would publish uncounted alt-contig ALIDs (#376)."""
+        from opengwasdb.layouts.hybrid.build import _recorded_off_primary
+        from opengwasdb.layouts.hybrid.checkpoint import CheckpointState
+
+        state = CheckpointState(path=tmp_path, params={}, completed=())
+        with pytest.raises(ValueError, match="axis_off_primary.txt.*Start the build again"):
+            _recorded_off_primary(state)
+        (tmp_path / "axis_off_primary.txt").write_text("", encoding="utf-8")
+        assert _recorded_off_primary(state) == frozenset()
 
     def test_torn_phase_record_is_refused(self, tmp_path, monkeypatch):
         """A marker set with a gap cannot come from a build this code ran."""

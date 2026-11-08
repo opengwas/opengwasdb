@@ -10,7 +10,7 @@ reports come from one judgement and cannot disagree (stores #176).
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import Protocol
 
 import numpy as np
@@ -107,6 +107,16 @@ class Gate:
         self._counts += AdmissionCounts(admitted=-len(keys), dropped={reason: len(keys)})
         if reason in LOGGED:
             self._dropped.extend((key, reason) for key in keys)
+
+    def unplaced_off_axis(self, keys: Sequence[str], lifted_off_primary: Collection[str]) -> None:
+        """Rows no axis holds, named by ``keys``: `off_axis`, except those whose key
+        is in ``lifted_off_primary``, which a lift placed off the primary assembly
+        and are counted as `lift_off_primary` (#376)."""
+        if not lifted_off_primary:
+            self.unplaced(Reason.OFF_AXIS, keys)
+            return
+        self.unplaced(Reason.OFF_AXIS, [key for key in keys if key not in lifted_off_primary])
+        self.unplaced(Reason.LIFT_OFF_PRIMARY, [key for key in keys if key in lifted_off_primary])
 
     def streamed(self, tally: StreamTally) -> None:
         """What the Source Reader did to this Analysis's rows as it read them.

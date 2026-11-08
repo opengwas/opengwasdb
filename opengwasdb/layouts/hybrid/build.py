@@ -99,6 +99,7 @@ from opengwasdb.layouts.hybrid.checkpoint import (
     AXIS,
     AXIS_CANONICAL_RAW,
     AXIS_OFF_PANEL,
+    AXIS_OFF_PRIMARY,
     AXIS_PANEL,
     AXIS_SHARED,
     FOLD_DIR,
@@ -323,6 +324,7 @@ def _resolve_column_hybrid(
     gate: Gate,
     axes: tuple[Sequence[str], ...],
     folds: bool,
+    off_primary: frozenset[str] = frozenset(),
 ) -> tuple[_Component, _Overflow, _OffReferenceSpill]:
     """Stream one study once, routing each association to the dense fill
     (on-panel), the ragged overflow (off-panel), or -- when the route table does
@@ -355,7 +357,7 @@ def _resolve_column_hybrid(
     if not folds:
         # A two-pass axis is the sources' whole union, so nothing folds an
         # unmatched row onto it later: it is dropped here, and logged.
-        gate.unplaced(Reason.OFF_AXIS, unmatched.keys)
+        gate.unplaced_off_axis(unmatched.keys, off_primary)
         unmatched = Unmatched([], unmatched.z[:0], unmatched.se[:0], unmatched.eaf[:0])
     divisor = row.se_divisor
     overflow_se = build_manifest.apply_se_divisor(overflow.se, divisor)
@@ -460,6 +462,7 @@ class _Pass2Context:
     record: AdmissionRecord
     axes: tuple[Sequence[str], ...]
     folds: bool
+    off_primary: frozenset[str] = frozenset()
 
 
 def _route_column(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
@@ -473,7 +476,7 @@ def _route_column(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
     )
     with context.record.gate(rules) as gate:
         dense, overflow, off_reference = _resolve_column_hybrid(
-            context.table, row, gate, context.axes, context.folds
+            context.table, row, gate, context.axes, context.folds, context.off_primary
         )
         _spill_hybrid_column(
             context.spill_dir, col_idx, *_stored_parts(row.trait_id, dense, overflow, off_reference)
@@ -673,6 +676,8 @@ class _SourceAxis:
     #: harvested and the fold still has off-reference keys to route (issue #255).
     names: RoutedNames
     table: RouteTable
+    #: The routing keys of the sites a lift placed off the primary assembly (#376).
+    off_primary: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -703,6 +708,8 @@ class _PreparedBuild:
     #: table's only reader -- is done.
     table: RouteTable | None
     n_analyses: int
+    #: The routing keys of the sites a lift placed off the primary assembly (#376).
+    off_primary: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -944,6 +951,10 @@ def _route(
         n_workers=options.n_workers,
         label=label,
     )
+    if options.variant_reference is not None:
+        # The routing drops the reference's ALIDs that only a lift onto an alt,
+        # random or unplaced contig reaches (#376); the panel keeps none of them.
+        panel_alids &= set(routing.alids)
     return routing, panel_alids
 
 
@@ -983,6 +994,7 @@ def _lift_and_partition(
         hg38_to_source=hg38_to_source,
         names=routing.names,
         table=table,
+        off_primary=routing.off_primary,
     )
 
 
@@ -1352,6 +1364,7 @@ class _FoldContext:
     record: AdmissionRecord
     shared_alids: Sequence[str]
     marker_dir: Path | None = None
+    off_primary: frozenset[str] = frozenset()
 
 
 _fold_context: _FoldContext | None = None
@@ -1387,6 +1400,9 @@ class _FoldInputs:
     shared_sorted: list[str]
     dense_to_shared: np.ndarray
     hg38_to_source: dict[str, str | None]
+    #: The raw keys the lift placed off the primary assembly, which the fold counts
+    #: as `lift_off_primary` and not `off_axis` (#376).
+    off_primary: frozenset[str] = frozenset()
 
 
 def _folded_columns(state: CheckpointState | None) -> frozenset[int]:
@@ -1515,7 +1531,7 @@ def _record_fold(
     alids = ctx.shared_alids
     with ctx.record.stage(ctx.record.analyses[col], "fold") as gate:
         gate.duplicates([alids[i] for i in folded.conflicting], folded.collapsed)
-        gate.unplaced(Reason.OFF_AXIS, unresolved)
+        gate.unplaced_off_axis(unresolved, ctx.off_primary)
 
 
 def _fold_column(col: int) -> int:
@@ -1608,6 +1624,7 @@ def _fold_unknown_spills(
     shared_alids: Sequence[str],
     marker_dir: Path | None = None,
     already_folded: frozenset[int] = frozenset(),
+    off_primary: frozenset[str] = frozenset(),
 ) -> None:
     """Fold every column's ``.unk.npz`` into its ``.ovf.npz`` with shared indices.
 
@@ -1645,6 +1662,7 @@ def _fold_unknown_spills(
         record=record,
         shared_alids=shared_alids,
         marker_dir=marker_dir,
+        off_primary=off_primary,
     )
     pending = [col for col in range(n_analyses) if col not in already_folded]
     try:
@@ -1864,6 +1882,7 @@ def _fold_under(
         shared_alids=fold.shared_sorted,
         marker_dir=_fold_marker_dir(state),
         already_folded=_folded_columns(state),
+        off_primary=fold.off_primary,
     )
     # The fold's drops are each Analysis's too, so the summary is written again.
     record.finish()
@@ -1896,6 +1915,7 @@ def _off_reference_fold_inputs(
             shared_sorted=prepared.partition.shared_sorted,
             dense_to_shared=prepared.dense_to_shared,
             hg38_to_source=prepared.hg38_to_source,
+            off_primary=resolved.off_primary,
         )
     table, old_to_new, index, off_panel, shared_sorted = _build_shared_key_table(
         prepared, resolved
@@ -1913,6 +1933,7 @@ def _off_reference_fold_inputs(
         shared_sorted=shared_sorted,
         dense_to_shared=dense_to_shared,
         hg38_to_source=_merge_unknown_provenance(prepared.hg38_to_source, resolved),
+        off_primary=resolved.off_primary,
     )
 
 
@@ -1963,6 +1984,7 @@ def _record_axis(
     write_lines(state.path / AXIS_PANEL, prepared.partition.panel_sorted)
     write_lines(state.path / AXIS_OFF_PANEL, inputs.off_panel)
     write_lines(state.path / AXIS_SHARED, inputs.shared_sorted)
+    write_lines(state.path / AXIS_OFF_PRIMARY, sorted(inputs.off_primary))
     write_str_map(state.path / PROVENANCE_SOURCE, inputs.hg38_to_source)
     write_str_map(state.path / PROVENANCE_RSID, prepared.names.rsid_by_alid)
     # A run resumed after the fold harvests nothing, so the count is kept here.
@@ -1986,7 +2008,24 @@ def _recorded_axis(state: CheckpointState | None) -> _FoldInputs | None:
         shared_sorted=read_lines(state.path / AXIS_SHARED),
         dense_to_shared=arrays["dense_to_shared"].astype(np.int32),
         hg38_to_source=read_str_map(state.path / PROVENANCE_SOURCE),
+        off_primary=_recorded_off_primary(state),
     )
+
+
+def _recorded_off_primary(state: CheckpointState) -> frozenset[str]:
+    """The raw keys the first run's lift placed off the primary assembly (#376).
+
+    A recorded axis always has the file, empty when no key was placed off it; a
+    missing one is refused, since reading it as empty would publish the alt-contig
+    ALIDs the lift put on the axis uncounted."""
+    path = state.path / AXIS_OFF_PRIMARY
+    if not path.exists():
+        raise ValueError(
+            f"The checkpoint at {state.path} records an axis but not {path.name}, which "
+            f"this build writes beside it: the record is torn or predates this build. "
+            f"Start the build again with --checkpoint."
+        )
+    return frozenset(read_lines(path))
 
 
 def _update_partition(
@@ -2039,6 +2078,7 @@ def _route_studies(
         record,
         (prepared.partition.panel_sorted, prepared.partition.shared_sorted),
         folds=options.variant_reference is not None,
+        off_primary=prepared.off_primary,
     )
     tasks = [(analysis_index[row.trait_id], row) for row in rows]
     routed = fork_each(_route_column, context, tasks, options.n_workers)
@@ -2523,6 +2563,7 @@ def _prepare_build(
         spill_dir=spill_dir,
         table=axis.table,
         n_analyses=len(manifest_rows),
+        off_primary=axis.off_primary,
     )
 
 

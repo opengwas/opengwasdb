@@ -578,10 +578,14 @@ def _ingest_lifted(
 
 def _nothing_placed(summary: admission.AdmissionSummary) -> str:
     """The refusal of a lift that left no variant for the Store, naming each Analysis's drops."""
-    unmapped, ambiguous = admission.Reason.LIFT_UNMAPPED, admission.Reason.LIFT_AMBIGUOUS
+    reasons = (
+        admission.Reason.LIFT_UNMAPPED,
+        admission.Reason.LIFT_AMBIGUOUS,
+        admission.Reason.LIFT_OFF_PRIMARY,
+    )
     per_analysis = "; ".join(
-        f"analysis {analysis_id!r}: {counts.dropped.get(unmapped, 0)} lift_unmapped, "
-        f"{counts.dropped.get(ambiguous, 0)} lift_ambiguous"
+        f"analysis {analysis_id!r}: "
+        + ", ".join(f"{counts.dropped.get(reason, 0)} {reason}" for reason in reasons)
         for analysis_id, counts in summary.counts.items()
     )
     return (
@@ -603,6 +607,7 @@ def _place_analysis(
     for one in placed:
         gate.unplaced(admission.Reason.LIFT_UNMAPPED, one.unmapped)
         gate.unplaced(admission.Reason.LIFT_AMBIGUOUS, one.ambiguous)
+        gate.unplaced(admission.Reason.LIFT_OFF_PRIMARY, one.off_primary)
         if lifted:
             harvest.add_lifted(one.batch, one.source_alid)
         else:

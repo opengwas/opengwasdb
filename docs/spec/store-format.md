@@ -241,7 +241,8 @@ The Admission record counts, per Analysis, the indel rows a harmoniser code kept
 each reason's drops. An LD Reference Panel
 places its indels by a `REF` column, or by an indel-reference table settled by
 GRCh38 evidence, and places none where it has neither (§13). An alt, random or
-unplaced contig is a chromosome.
+unplaced contig is a chromosome, in a source already on the release's assembly.
+A lift onto one is not (below).
 
 A Store Release of `format_version` `0.2.0` or `0.1.0` sorts an indel's two
 alleles too, and is read as it was written: nothing rewrites its ALIDs. In such
@@ -249,6 +250,30 @@ a Store a deletion is spelt like the insertion of the same sequence, and its
 statistic is signed for the alphabetically first allele. A source-fidelity
 check (`validate --source`) spells the source's indels the same way when it
 reads one.
+
+A Store holds the primary assembly's contigs: `1`–`22`, `X`, `Y` and `MT` (their
+numeric aliases and a `chr` prefix are the same contigs). A lift that places a
+source variant on any other contig, an alt, random or unplaced one such as
+`11_KI270927v1_alt`, does not place it: every builder drops the variant's rows
+from the Analyses that declare it, and logs and counts them in the Admission
+record, per Analysis, as `lift_off_primary` (#376, ADR 0072). A source already on
+the release's assembly is unchanged: its alt contig is a chromosome. A Variant
+Reference's extraction drops such a site too, so the reference holds no ALID that
+only a lift reaches, and logs how many. A build routed by a reference lifts the rows
+the reference does not hold, as the Hybrid fold lifts its off-reference keys, and
+counts those the chain places off the primary assembly as `lift_off_primary` and
+not `off_axis`; a reference extracted before #376 may still route a lifted row
+onto an alt contig, and the build drops that row and its ALID, and counts the row
+the same way. The release records the lift by `source_alid`, which `validate`
+judges (`variant_table.lifted_contig`, §20.0): it names the contig a lifted
+variant came from, and a row whose `source_alid` was blanked by a collision is not
+judged, so a release can be checked for the drop only where that column survives. A
+plain ALID list, or another Store's variant table, used as a Variant Reference
+records no source keys: the build keeps an alt-contig ALID it holds, as a GRCh38
+source's variant, and its row stays empty in the release, which
+`variant_table.lifted_contig` passes because the row's `source_alid` is the ALID itself.
+A release rebuilt from a published axis therefore holds the axis's alt-contig
+variants, with no associations, until the axis is rebuilt from the sources.
 
 A build that lifts a source variant from another Reference Assembly MUST project
 the variant onto the release's assembly using the chain block's orientation: on a
@@ -293,7 +318,10 @@ a genome, and cannot say that a variant it omits does not exist. A lift with no
 reference warns and is recorded as unchecked rather than passing as verified.
 That release's `manifest.json` `provenance.lift` records the source Reference
 Assembly, the chain, the reference (or `null` when none was supplied) and the
-verified / other-variant / absent counts (issue #284, ADR 0062).
+verified / other-variant / absent counts (issue #284, ADR 0062), `n_lifted`
+(the sites the chain mapped, those it placed off the primary assembly included) and
+`n_off_primary` (those sites, which §4 leaves out and the Admission record counts as
+`lift_off_primary`).
 
 A lift that lands two ESI entries on one canonical variant is ambiguous, and
 MUST be dropped, not resolved: a source of 9,000,000 rows cannot fail the way
@@ -322,20 +350,23 @@ any source is read when it is missing, and re-oriented by the rule above. Its
 sites are placed together, through the placement Variant Routing uses
 (`place_sites`), once every Analysis's rows have been admitted: the failure rate
 `--liftover-failure-threshold` bounds (default 0.01) is the lifted group's, as in
-the Dense and Hybrid builds. Two drops are counted in the Admission record, per
-Analysis, as `lift_unmapped` (the chain places the site nowhere) and
+the Dense and Hybrid builds. Three drops are counted in the Admission record, per
+Analysis, as `lift_unmapped` (the chain places the site nowhere),
+`lift_off_primary` (it places it on an alt, random or unplaced contig) and
 `lift_ambiguous` (a Routing Key that a lifted source and a source already on
 GRCh38 both declare: two loci that share a string, dropped from the Analyses of
 both, as Pass 1's union drops it). Two source sites that lift onto one variant
 are one Analysis's duplicate rows, and the duplicate rule resolves them. A
 lifted Store records `provenance.lift` as `build-ragged-besd` does, with
-`n_unmapped` and `n_ambiguous` (Routing Keys) beside `n_lifted`, and
-`reference: null`: the lift is not checked against a Variant Reference. A Store
+`n_unmapped`, `n_off_primary` (sites lifted onto an alt, random or unplaced
+contig, counted as `lift_off_primary` and left out) and `n_ambiguous` (Routing
+Keys) beside `n_lifted` (the sites the chain mapped, those off the primary assembly
+and the ambiguous ones included), and `reference: null`: the lift is not checked against a Variant Reference. A Store
 whose sources are all on GRCh38 records no `provenance.lift`. A build with any
 non-GRCh38 source holds every Analysis's admitted rows in memory until the lift
 has placed them; a GRCh38-only build reads one Analysis at a time. A lift that
-leaves no variant refuses the build, naming each Analysis's `lift_unmapped` and
-`lift_ambiguous` counts, after the Admission record is finished.
+leaves no variant refuses the build, naming each Analysis's `lift_unmapped`,
+`lift_ambiguous` and `lift_off_primary` counts, after the Admission record is finished.
 
 Cross-Store identity is:
 
@@ -2058,6 +2089,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `variant_table.sequence` | release | fold | rows are in `variant_index` order, one per canonical variant |
 | `variant_table.representatives` | release | fold | the offset sidecar and the tabix index find the rows the table holds |
 | `variant_table.indel_order` | release | fold | from format 0.2.1, every indel row's ALID spells its alleles as the row records them: its `effect_allele` then its `other_allele`, and, for a lifted variant, its reference first as its `source_alid` does; not judged on a 0.2.0 or 0.1.0 release, which sorts an indel's alleles |
+| `variant_table.lifted_contig` | release | fold | no row on an alt, random or unplaced contig has a `source_alid` on another contig: a lift left no variant there (§4); an error from format 0.2.1, a warning on an earlier release, which #367 owns; a row with no `source_alid` is not judged |
 | `sqlite.variant_aliases` | release | check | every alias names a variant the table holds; skipped where there is no alias table |
 | `analyses.readable` | release | check | `analyses.tsv` parses |
 | `analyses.retired_columns` | release | check | no retired column is present |
