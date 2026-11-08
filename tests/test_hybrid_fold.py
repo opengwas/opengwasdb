@@ -5,9 +5,8 @@ Pins the fold guarantees:
 2. Rows that share a Variant Index -- an off-reference entry and an existing
    overflow one, or two raw keys of one column -- are resolved by Association
    Admission's duplicate rule (D5, issue #357): agreeing rows collapse to the
-   first, conflicting ones are dropped, and a reversed indel whose source
-   declared the reference keeps the row whose reference allele the ALID spells
-   first. What the fold drops is the Admission record's `fold` stage.
+   first, and conflicting ones are dropped. What the fold drops is the
+   Admission record's `fold` stage.
 3. Overflow spills are written once atomically via temp file rename, and .unk
    files are unlinked only after successful write.
 4. Parallel execution across --n-workers matches serial execution (n_workers=1).
@@ -99,7 +98,6 @@ def test_fold_drops_an_off_reference_entry_conflicting_with_existing_overflow(
         z=np.array([1.0, 2.0], dtype=np.float32),
         se=np.array([0.5, 0.4], dtype=np.float32),
         eaf=np.array([0.2, 0.3], dtype=np.float32),
-        reference=np.zeros(2, dtype=np.int8),
     )
 
     # Column 0 has off-reference spill with key 1000 resolving to variant index 100,
@@ -110,7 +108,6 @@ def test_fold_drops_an_off_reference_entry_conflicting_with_existing_overflow(
         z=np.array([5.0], dtype=np.float32),
         se=np.array([0.1], dtype=np.float32),
         eaf=np.array([0.8], dtype=np.float32),
-        reference=np.zeros(1, dtype=np.int8),
         hashed_index=np.empty(0, dtype=np.int64),
     )
 
@@ -148,7 +145,6 @@ def test_fold_drops_unresolved_keys_without_leaking(tmp_path: Path) -> None:
         z=np.array([2.0, 4.0, -999.0], dtype=np.float32),
         se=np.array([0.2, 0.4, 0.999], dtype=np.float32),
         eaf=np.array([0.1, 0.3, 0.99], dtype=np.float32),
-        reference=np.zeros(3, dtype=np.int8),
         hashed_index=np.empty(0, dtype=np.int64),
     )
 
@@ -167,18 +163,11 @@ def test_fold_drops_unresolved_keys_without_leaking(tmp_path: Path) -> None:
     assert -999.0 not in z
 
 
-@pytest.mark.parametrize(
-    ("reference", "kept"),
-    [([0, 0], []), ([1, 2], [1.5]), ([2, 1], [3.5]), ([1, 1], [])],
-    ids=["undeclared", "first-spelt-first", "second-spelt-first", "same-side"],
-)
 def test_fold_two_raw_keys_mapping_to_one_variant_index_are_d5_duplicates(
-    tmp_path: Path, reference: list[int], kept: list[float]
+    tmp_path: Path,
 ) -> None:
     """D5 (issue #357): two raw keys of one column that resolve to one Variant
-    Index and disagree are both dropped, where the later used to win (#223) --
-    unless they are a reversed indel whose source declared the reference, which
-    keeps the row whose reference allele the ALID spells first."""
+    Index and disagree are both dropped, where the later used to win (#223)."""
     spill_dir = tmp_path / "spills"
     spill_dir.mkdir()
 
@@ -191,7 +180,6 @@ def test_fold_two_raw_keys_mapping_to_one_variant_index_are_d5_duplicates(
         z=np.array([1.5, 3.5], dtype=np.float32),
         se=np.array([0.3, 0.1], dtype=np.float32),
         eaf=np.array([0.25, 0.75], dtype=np.float32),
-        reference=np.array(reference, dtype=np.int8),
         hashed_index=np.empty(0, dtype=np.int64),
     )
 
@@ -202,12 +190,10 @@ def test_fold_two_raw_keys_mapping_to_one_variant_index_are_d5_duplicates(
 
     vi, z, se, eaf = _run_fold_column(spill_dir, table)
 
-    assert z.tolist() == pytest.approx(kept)
-    assert vi.tolist() == [42] * len(kept)
+    assert z.tolist() == [] and vi.tolist() == []
     part, logged = _fold_stage(spill_dir)
-    reason = "duplicate_reversed_indel" if kept else "duplicate_conflicting"
-    assert part["dropped"] == {reason: 2 - len(kept)}
-    assert logged == [f"1:43:A:G\t{reason}"] * (2 - len(kept))
+    assert part["dropped"] == {"duplicate_conflicting": 2}
+    assert logged == ["1:43:A:G\tduplicate_conflicting"] * 2
 
 
 def test_fold_atomic_write_preserves_unk_on_failure(
@@ -225,7 +211,6 @@ def test_fold_atomic_write_preserves_unk_on_failure(
         z=np.array([1.0], dtype=np.float32),
         se=np.array([0.1], dtype=np.float32),
         eaf=np.array([0.2], dtype=np.float32),
-        reference=np.zeros(1, dtype=np.int8),
         hashed_index=np.empty(0, dtype=np.int64),
     )
 
@@ -290,7 +275,6 @@ def test_fold_parallel_matches_serial(tmp_path: Path) -> None:
             z=np.array([1.0, 2.0], dtype=np.float32),
             se=np.array([0.1, 0.2], dtype=np.float32),
             eaf=np.array([0.3, 0.4], dtype=np.float32),
-            reference=np.zeros(2, dtype=np.int8),
         )
         # col 1: off-ref only
         np.savez(
@@ -299,7 +283,6 @@ def test_fold_parallel_matches_serial(tmp_path: Path) -> None:
             z=np.array([2.5, 3.5], dtype=np.float32),
             se=np.array([0.25, 0.35], dtype=np.float32),
             eaf=np.array([0.45, 0.55], dtype=np.float32),
-            reference=np.zeros(2, dtype=np.int8),
             hashed_index=np.empty(0, dtype=np.int64),
         )
         # col 2: both with overlap on index 100 (key 10 maps to 100, existing 1 maps to 100)
@@ -309,7 +292,6 @@ def test_fold_parallel_matches_serial(tmp_path: Path) -> None:
             z=np.array([1.1], dtype=np.float32),
             se=np.array([0.11], dtype=np.float32),
             eaf=np.array([0.21], dtype=np.float32),
-            reference=np.zeros(1, dtype=np.int8),
         )
         np.savez(
             s / "2.unk.npz",
@@ -317,7 +299,6 @@ def test_fold_parallel_matches_serial(tmp_path: Path) -> None:
             z=np.array([9.9], dtype=np.float32),
             se=np.array([0.99], dtype=np.float32),
             eaf=np.array([0.88], dtype=np.float32),
-            reference=np.zeros(1, dtype=np.int8),
             hashed_index=np.empty(0, dtype=np.int64),
         )
         # col 3: both disjoint
@@ -327,7 +308,6 @@ def test_fold_parallel_matches_serial(tmp_path: Path) -> None:
             z=np.array([2.2], dtype=np.float32),
             se=np.array([0.22], dtype=np.float32),
             eaf=np.array([0.33], dtype=np.float32),
-            reference=np.zeros(1, dtype=np.int8),
         )
         np.savez(
             s / "3.unk.npz",
@@ -335,7 +315,6 @@ def test_fold_parallel_matches_serial(tmp_path: Path) -> None:
             z=np.array([4.4], dtype=np.float32),
             se=np.array([0.44], dtype=np.float32),
             eaf=np.array([0.55], dtype=np.float32),
-            reference=np.zeros(1, dtype=np.int8),
             hashed_index=np.empty(0, dtype=np.int64),
         )
         # col 4: unresolved key 999
@@ -345,7 +324,6 @@ def test_fold_parallel_matches_serial(tmp_path: Path) -> None:
             z=np.array([2.0, -100.0], dtype=np.float32),
             se=np.array([0.2, 1.0], dtype=np.float32),
             eaf=np.array([0.3, 0.5], dtype=np.float32),
-            reference=np.zeros(2, dtype=np.int8),
             hashed_index=np.empty(0, dtype=np.int64),
         )
         # col 5: two raw keys mapping to one variant index (10 and 50 both map to 100)
@@ -355,7 +333,6 @@ def test_fold_parallel_matches_serial(tmp_path: Path) -> None:
             z=np.array([1.0, 5.0], dtype=np.float32),
             se=np.array([0.1, 0.5], dtype=np.float32),
             eaf=np.array([0.2, 0.8], dtype=np.float32),
-            reference=np.zeros(2, dtype=np.int8),
             hashed_index=np.empty(0, dtype=np.int64),
         )
         # col 6: empty
@@ -366,7 +343,6 @@ def test_fold_parallel_matches_serial(tmp_path: Path) -> None:
             z=np.array([8.0, 9.0], dtype=np.float32),
             se=np.array([0.8, 0.9], dtype=np.float32),
             eaf=np.array([0.8, 0.9], dtype=np.float32),
-            reference=np.zeros(2, dtype=np.int8),
             hashed_index=np.empty(0, dtype=np.int64),
         )
         return s
@@ -429,7 +405,6 @@ def test_fold_counts_and_logs_the_rows_no_key_resolves(tmp_path: Path) -> None:
         z=np.array([1.0, 2.0, 3.0], dtype=np.float32),
         se=np.full(3, 0.1, dtype=np.float32),
         eaf=np.full(3, np.nan, dtype=np.float32),
-        reference=np.zeros(3, dtype=np.int8),
         hashed_index=encoded.hashed_index,
     )
     _write_unknown_side_file(spill_dir, 0, encoded.hashed_raw)

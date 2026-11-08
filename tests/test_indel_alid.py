@@ -313,8 +313,8 @@ def _complete_an_observed_deletion(tmp_path, *, reference: str | None):
     indel-reference table settling it as ``reference``, or by nothing.
     Returns the observed and completed Stores."""
     import test_dense_completion as tdc
+    import test_indel_pairs as pair
     import test_panel_indels as panel_fixture
-    import test_reversed_indels as pair
 
     from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
     from opengwasdb.layouts.dense.complete import complete_dense_store
@@ -456,7 +456,7 @@ def _observed_deletion_store(tmp_path, layout: str = "dense"):
     """A 0.2.1 Store whose variant table holds a deletion: Dense from FinnGen,
     Ragged from GWAS-SSF (harmoniser code 10), Hybrid from GWAS-VCF with the
     deletion in its Ragged Overflow, off the Dense Component's axis."""
-    import test_reversed_indels as pair
+    import test_indel_pairs as pair
     from admission_helpers import ragged_ssf_store
 
     from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest

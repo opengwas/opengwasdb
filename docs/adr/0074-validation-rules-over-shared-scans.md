@@ -171,8 +171,9 @@ Admission `Reason`s whose drops keep a cell it would fail out of a Store
 - `associations.markers_canonical` and `completion.imputed_present`:
   `z_nonfinite` and `se_unusable`;
 - `associations.se_negative`: `se_unusable`;
-- `csr.segment_order`, its repeat case: `duplicate_collapsed`,
-  `duplicate_reversed_indel` and `duplicate_conflicting`;
+- `csr.segment_order`, its repeat case: `duplicate_collapsed` and
+  `duplicate_conflicting` (and `duplicate_reversed_indel`, until #316 retired
+  it);
 - `completion.mask_binary`: none. It witnesses the cell guard's flag rule, which
   no row's `Reason` names.
 
