@@ -131,13 +131,9 @@ class Gate:
         if n:
             self._counts += AdmissionCounts(admitted=-n, dropped={Reason.DUPLICATE_COLLAPSED: n})
 
-    def duplicates(
-        self, conflicting: Sequence[str], collapsed: int, reversed_indels: Sequence[str] = ()
-    ) -> None:
+    def duplicates(self, conflicting: Sequence[str], collapsed: int) -> None:
         """One batch of duplicates resolved: the keys of the rows dropped because
-        their (variant, Analysis) conflicts, how many rows collapsed, and the
-        keys of the reversed indels' rows a kept row displaced."""
-        self.unplaced(Reason.DUPLICATE_REVERSED_INDEL, reversed_indels)
+        their (variant, Analysis) conflicts, and how many rows collapsed."""
         self.unplaced(Reason.DUPLICATE_CONFLICTING, conflicting)
         self.collapsed(collapsed)
 

@@ -11,6 +11,17 @@
 > `indel_ssf_hm_columns`, `indel_ssf_hm_code`); a record also counts the indels
 > a GWAS-SSF harmoniser code kept (`indel_rows_kept_by_hm_code`). The rule set's
 > version is `admission/13`.
+>
+> **Clarified 7 Nov 2026 (issue #316): D5 has no reversed-indel case.** With
+> every indel's ALID spelt reference first, the rows of one (variant,
+> Analysis) are never an insertion and a deletion, so #316 removed the
+> exception and what fed it: routing's per-row `REFERENCE_*` codes, the
+> readers' `ref_first`, `ReferenceAllele.ALT`, and the reference arrays of a
+> Hybrid's Overflow and off-reference spills. The duplicate rule is now the
+> one sentence: rows that agree collapse to the first, and rows that disagree
+> are all dropped. `duplicate_reversed_indel` is retired in place: a reason's
+> code is its position, so the member keeps its place, and no rule gives it.
+> The rule set stays `admission/13`, since no record a build writes changes.
 
 Issue [#357](https://github.com/opengwas/opengwasdb/issues/357), part of epic
 #58. Records which of an Analysis's source rows a Store admits, where that is
@@ -109,7 +120,7 @@ name the decisions issue #357 took on the rules that differed.
 | `maf_missing` | a `FILTERED` MAF policy finds no usable frequency | no | ADR 0054; every builder since D2 |
 | `maf_below_threshold` | MAF is below a `FILTERED` threshold | no | ADR 0054; every builder since D2 |
 | `duplicate_collapsed` | it agrees on z and SE with an earlier row for its (variant, Analysis), whose association it is | no | D5 |
-| `duplicate_reversed_indel` | it is an indel whose declared reference allele its ALID spells second, at a (variant, Analysis) whose distinct rows, once agreeing copies collapse, are this one and one spelling it first, which is kept; no longer fires since ADR 0079 | yes | D5, reversed indels |
+| `duplicate_reversed_indel` | retired by #316, and given by no rule; it was: an indel whose declared reference allele its ALID spells second, at a (variant, Analysis) whose distinct rows, once agreeing copies collapse, are this one and one spelling it first, which is kept; no longer fires since ADR 0079 | yes | D5, reversed indels |
 | `duplicate_conflicting` | the rows for its (variant, Analysis) disagree on z or SE: all are dropped | yes | D5 |
 | `off_axis` | no axis of the Store holds its variant, and nothing will place it later | yes | D6 |
 | `lift_unmapped` | its source is lifted onto the Store's assembly and the chain places its site nowhere | yes | #386 |
@@ -219,7 +230,8 @@ Which formats declare the reference allele (`ReferenceAllele`, carried on each
 This is an interim rule. The ALID still spells a reversed pair as one variant:
 #381 gives an indel a ref-first ALID, which is an ADR and a format change, and
 #382 corrects the published cells that hold a deletion's statistics under the
-insertion's ALID.
+insertion's ALID. (#381 did, in ADR 0079, and #316 removed the rule: see the
+note at the top.)
 
 `off_axis` is a Dense VCF row its axis lacks (a lift failure, a variant a
 Variant Reference omits), a two-pass Hybrid row no axis holds (it used to be

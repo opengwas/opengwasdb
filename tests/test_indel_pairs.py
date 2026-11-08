@@ -2,8 +2,8 @@
 
 FinnGen r13 BMI_IRN reports `1:827587 G>GGGGCC` and `GGGGCC>G`, two alleles of a
 repeat. A sorted ALID spelt both `1:827587:G:GGGGCC`, so Association Admission
-kept the insertion and dropped the deletion as `duplicate_reversed_indel`
-(#357). An indel's ALID now spells its reference allele first (ADR 0079): the
+kept the insertion and dropped the deletion (#357). An indel's ALID now spells
+its reference allele first (ADR 0079): the
 pair is `1:827587:G:GGGGCC` and `1:827587:GGGGCC:G`, and a build that reads a
 source declaring its reference stores both rows: a GWAS-VCF or FinnGen source,
 or a GWAS-SSF row whose harmoniser code is 10 or 11 in the layout that holds
