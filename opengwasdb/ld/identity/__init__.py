@@ -2,19 +2,21 @@
 
 ogld must form exactly the engine's ALID (opengwas/opengwasdb `CONTEXT.md`, _Variant
 Identity_) and sign r against its A1. A mismatch is silent: it flips the sign of r for
-some variants, the allele-flip error fine-mapping diagnostics exist to catch. ogld#3
-decides whether this imports the engine's function or keeps a copy held to it by a
-conformance test; either way these signatures are the seam the rest of ogld calls.
-ADR 0003 records the decision: a copy, held to the engine by `tests/data/identity/`.
+some variants, the allele-flip error fine-mapping diagnostics exist to catch. This module
+is a copy of the engine's rules at `1ab2b09`, held to the engine's own answers by the
+fixture in `tests/data/identity/` (ADR 0003). The engine upper-cases, validates A, C, G, T
+and sorts the two alleles. It does not trim or left-align, though its glossary says it does.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 _VALID_BASES = frozenset("ACGT")
 _MISSING_CHROMOSOMES = frozenset({"", ".", "NA", "NAN", "NONE"})
 _AUTOSOMES = frozenset(str(number) for number in range(1, 23))
+_SEX_AND_MT = frozenset({"X", "Y", "MT"})
 _CHROMOSOME_ALIASES = {
     "23": "X",
     "X": "X",
@@ -25,6 +27,24 @@ _CHROMOSOME_ALIASES = {
     "M": "MT",
     "MT": "MT",
 }
+#: A position an int32 column holds (spec §2), spelt with at most this many digits.
+_MAX_POSITION = 2**31 - 1
+_MAX_POSITION_DIGITS = 10
+
+
+class IdentityError(ValueError):
+    """A record or label the engine's identity function refuses.
+
+    `reason` is the engine's own: `chromosome_missing` or `allele_invalid`
+    (opengwas/opengwasdb#365), and empty for every other refusal the engine makes (an
+    unsupported chromosome number, a bad position, identical alleles). `duplicate_record` is
+    ogld's, for two records that cannot both be one variant's split
+    (`resolve_reversed_indels`).
+    """
+
+    def __init__(self, message: str, reason: str = "") -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -48,10 +68,12 @@ class Orientation:
 def normalise_chromosome(label: str) -> str:
     """The engine's canonical chromosome label (`1`–`22`, `X`, `Y`, `MT`; no `chr` prefix).
 
-    Raises ValueError for a label the engine does not support. LD Store groups are named
-    by this label (spec §1), and a query's `chrom` passes through it (ogld#3). Like the
-    engine, a non-numeric label that is no alias (a contig such as `HLA-A`) passes through
-    unchanged; the build's autosomes-only rule (build-inputs §2) refuses it, not this.
+    Raises IdentityError for a label the engine refuses: a missing one, or a number outside
+    `1`–`26`. LD Store groups are named by this label (spec §1), and a query's `chrom`
+    passes through it (ogld#3). Like the engine, anything else passes through, trimmed of a
+    `chr` prefix only: a contig such as `HLA-A`, and `-1`, `+22`, `22.0` or `chr 22` (which
+    keeps its space). The build's autosomes-only rule (build-inputs §2) refuses those, not
+    this; `alid_locus` accepts only `1`–`22`, `X`, `Y` and `MT`.
     """
     chrom = str(label).strip()
     if chrom.lower().startswith("chr"):
@@ -62,18 +84,18 @@ def normalise_chromosome(label: str) -> str:
     if chrom in _AUTOSOMES:
         return chrom
     if chrom.upper() in _MISSING_CHROMOSOMES:
-        raise ValueError(f"chromosome is missing: {label!r}")
+        raise IdentityError(f"chromosome is missing: {label!r}", "chromosome_missing")
     if chrom.isdigit():
-        raise ValueError(f"unsupported chromosome {label!r}")
+        raise IdentityError(f"unsupported chromosome {label!r}")
     return chrom
 
 
 def _identity_allele(allele: str) -> str:
     value = str(allele).strip().upper()
     if not value:
-        raise ValueError("allele is missing")
-    if any(base not in _VALID_BASES for base in value):
-        raise ValueError(f"unsupported allele {value!r}")
+        raise IdentityError("allele is missing", "allele_invalid")
+    if not _is_allele(value):
+        raise IdentityError(f"unsupported allele {value!r}", "allele_invalid")
     return value
 
 
@@ -81,21 +103,23 @@ def orient(chrom: str, position: int, ref: str, alt: str) -> Orientation:
     """The engine's identity of the biallelic record `ref`/`alt` at `chrom`:`position` (ogld#3).
 
     A1 is the allele the engine puts first: alphabetically first after upper-casing. The
-    engine does no trimming or left alignment (ADR 0003), and neither does this; the build's
-    bcftools step left-aligns its input (build-inputs §3). Raises ValueError for a record the
-    engine cannot identify: a missing or unsupported chromosome, an allele that is empty or
-    outside A, C, G, T, a position below 1, or identical alleles. Judged in that order, as the
-    engine judges them. Never truncates an allele (spec §2).
+    engine does no trimming or left alignment (ADR 0003), and neither does this. Raises
+    IdentityError for a record the engine cannot identify, judged in the engine's order: the
+    chromosome, then ALT, then REF (the engine's effect allele is the ALT), then the position
+    (an integer above 0), then identical alleles. Never truncates an allele (spec §2).
     """
     canonical_chrom = normalise_chromosome(chrom)
-    ref_allele = _identity_allele(ref)
     alt_allele = _identity_allele(alt)
-    if int(position) <= 0:
-        raise ValueError(f"invalid position {position!r}")
+    ref_allele = _identity_allele(ref)
+    try:
+        pos = int(position)
+    except (TypeError, ValueError) as exc:
+        raise IdentityError(f"invalid position {position!r}") from exc
+    if pos <= 0:
+        raise IdentityError(f"invalid position {position!r}")
     if ref_allele == alt_allele:
-        raise ValueError("effect and other alleles are identical")
+        raise IdentityError("effect and other alleles are identical")
     a1, a2 = sorted((ref_allele, alt_allele))
-    pos = int(position)
     return Orientation(
         chrom=canonical_chrom,
         position=pos,
@@ -110,9 +134,10 @@ def alid_locus(alid: str) -> tuple[str, int] | None:
     """The chromosome and position an ALID names, or None when it is not an ALID (spec §2).
 
     A reader finds an ALID by this locus, then compares full ALID strings at that
-    position, so a malformed one is Absent rather than an error (ogld#3). An ALID is
-    `chrom:position:A1:A2` with a canonical chromosome label, a position spelt as a
-    positive integer without padding, and two alleles over A, C, G, T.
+    position, so a malformed one is Absent rather than an error, and this never raises. An
+    ALID is `chrom:position:A1:A2`: a chromosome label of the format (`1`–`22`, `X`, `Y`, `MT`,
+    spec §2), a position of at most 10 ASCII digits, positive, unpadded and within int32, and
+    two distinct alleles over A, C, G, T with A1 sorted before A2.
     """
     parts = alid.split(":")
     if len(parts) != 4:
@@ -120,24 +145,66 @@ def alid_locus(alid: str) -> tuple[str, int] | None:
     chrom, pos, a1, a2 = parts
     if not (_is_canonical_chromosome(chrom) and _is_canonical_position(pos)):
         return None
-    if not (_is_allele(a1) and _is_allele(a2)):
+    if not (_is_allele(a1) and _is_allele(a2) and a1 < a2):
         return None
     return chrom, int(pos)
 
 
 def _is_canonical_chromosome(label: str) -> bool:
-    try:
-        return normalise_chromosome(label) == label
-    except ValueError:
-        return False
+    return label in _AUTOSOMES or label in _SEX_AND_MT
 
 
 def _is_canonical_position(text: str) -> bool:
-    return text.isascii() and text.isdigit() and text == str(int(text)) and int(text) > 0
+    if not (text.isascii() and text.isdigit()) or len(text) > _MAX_POSITION_DIGITS:
+        return False
+    return text == str(int(text)) and 0 < int(text) <= _MAX_POSITION
 
 
 def _is_allele(text: str) -> bool:
-    return bool(text) and all(base in _VALID_BASES for base in text)
+    return bool(text) and _VALID_BASES.issuperset(text)
 
 
-__all__ = ["Orientation", "alid_locus", "normalise_chromosome", "orient"]
+def resolve_reversed_indels(
+    records: Sequence[tuple[str, int, str, str]],
+) -> tuple[list[int], list[int]]:
+    """Which of `(chrom, position, ref, alt)` records a Variant Set keeps, and which it drops.
+
+    An insertion and a deletion at one position form one ALID, because the ALID sorts its
+    alleles (`T/TA` and `TA/T` are both `T:TA`). Following the engine (opengwas/opengwasdb ADR
+    0072, `duplicate_reversed_indel`), the record whose REF the ALID spells first (REF = A1) is
+    kept and the other is dropped, to be counted as `variants_dropped.duplicate_reversed_indel`
+    (build-inputs §6). Returns the indices into `records` of the kept and of the dropped, each in
+    input order. Raises IdentityError, reason `duplicate_record`, for two records that no split of
+    one site gives: identical REF and ALT, or two SNVs sharing an ALID. Any record the engine
+    refuses raises its own IdentityError.
+    """
+    seen: dict[str, dict[bool, int]] = {}
+    for index, (chrom, position, ref, alt) in enumerate(records):
+        o = orient(chrom, position, ref, alt)
+        by_orientation = seen.setdefault(o.alid, {})
+        _require_a_split(o, index, by_orientation)
+        by_orientation[o.a1_is_alt] = index
+    # A1 = REF exactly when A1 is not the ALT; the record spelling REF second is dropped.
+    dropped = sorted(by_o[True] for by_o in seen.values() if len(by_o) == 2)
+    return [i for i in range(len(records)) if i not in set(dropped)], dropped
+
+
+def _require_a_split(o: Orientation, index: int, by_orientation: dict[bool, int]) -> None:
+    """Refuse a record that no split of one site gives beside the records already at its ALID."""
+    snv = len(o.a1) == 1 and len(o.a2) == 1
+    if o.a1_is_alt in by_orientation or (snv and by_orientation):
+        raise IdentityError(
+            f"record {index} is not a split of one site: it shares {o.alid} with record "
+            f"{next(iter(by_orientation.values()))}",
+            "duplicate_record",
+        )
+
+
+__all__ = [
+    "IdentityError",
+    "Orientation",
+    "alid_locus",
+    "normalise_chromosome",
+    "orient",
+    "resolve_reversed_indels",
+]

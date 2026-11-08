@@ -1,10 +1,10 @@
 """ogld#3's contract: the engine's ALID and A1, so r is signed as the engine signs a statistic.
 
 The engine's rule (opengwas/opengwasdb `CONTEXT.md`, _Variant Identity_): ALID is
-`chr:pos:A1:A2`, A1 the alphabetically first allele after upper-casing, trimming and left
-alignment. These are literals of that rule. The conformance test against the engine's own
-function on a fixture of awkward alleles (lower case, indels, split multi-allelic sites) is
-ogld#3's to write beside them, once it decides how ogld gets the function.
+`chr:pos:A1:A2`, A1 the alphabetically first allele after upper-casing. These are literals of
+that rule. The engine's code does not trim or left-align, though its glossary says it does
+(ADR 0003). The conformance test against the engine's own answers is
+`tests/test_identity_conformance.py`.
 """
 
 from __future__ import annotations

@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import opengwasdb
 from opengwasdb.variants.normalise import normalise_chromosome, orient_to_canonical
 
 HERE = Path(__file__).resolve().parent
@@ -25,7 +26,7 @@ LONG = "A" + "CGT" * 15
 
 # (chrom, position, ref, alt): lower case (#360), indels, split multi-allelic sites, long
 # alleles, padding, and the malformed identities of #365.
-ORIENT_CASES: list[tuple[str, int, str, str]] = [
+ORIENT_CASES: list[tuple[str, int | str, str, str]] = [
     ("22", 16050075, "G", "A"),
     ("22", 16050075, "A", "G"),
     ("22", 16050075, "T", "C"),
@@ -99,6 +100,48 @@ ORIENT_CASES: list[tuple[str, int, str, str]] = [
     ("22", 0, "A", "G"),
     ("22", -5, "A", "G"),
     ("22", 0, "A", "A"),
+    # two faults at once: the engine's order decides which it names (ALT before REF, alleles
+    # before the position, the chromosome before both)
+    ("22", 0, "N", "G"),
+    ("22", 0, "G", "N"),
+    ("22", 100, "N", "X"),
+    ("22", 100, "X", "N"),
+    ("22", 100, "", "N"),
+    ("22", 100, "N", ""),
+    ("27", 100, "N", "G"),
+    ("27", 100, "G", "N"),
+    ("", 100, "N", "G"),
+    ("27", 0, "G", "A"),
+    ("", 0, "G", "A"),
+    ("22", 0, "A", "A"),
+    ("22", 0, "N", "N"),
+    ("22", "abc", "A", "G"),
+    ("22", "", "A", "G"),
+    ("22", "1.5", "A", "G"),
+    ("22", "None", "A", "G"),
+    ("22", " 12 ", "A", "G"),
+    ("22", "abc", "N", "G"),
+    ("22", "abc", "A", "A"),
+    ("chr 22", 100, "A", "G"),
+    ("-1", 100, "A", "G"),
+    ("+22", 100, "A", "G"),
+    ("22.0", 100, "A", "G"),
+]
+
+# Reversed indels, one pair per group: (group, chrom, position, ref, alt, kept). `kept` is the
+# engine's ADR 0072 rule, `duplicate_reversed_indel`: the record whose REF its ALID spells first
+# is kept. The first pair is the engine's own test (tests/test_reversed_indels.py, FinnGen r13
+# BMI_IRN); the second is chr22:16029124 in HGDP+1kGP v2; the third has a deletion kept, since
+# `AT` sorts before `T`. The ALID and flip of each record are the engine's.
+REVERSED_PAIRS: list[tuple[str, str, int, str, str, bool]] = [
+    ("bmi_irn", "1", 827587, "G", "GGGGCC", True),
+    ("bmi_irn", "1", 827587, "GGGGCC", "G", False),
+    ("v2_chr22", "22", 16029124, "T", "TA", True),
+    ("v2_chr22", "22", 16029124, "TA", "T", False),
+    ("deletion_kept", "21", 700, "AT", "T", True),
+    ("deletion_kept", "21", 700, "T", "AT", False),
+    ("lower_case", "21", 800, "c", "cag", True),
+    ("lower_case", "21", 800, "CAG", "C", False),
 ]
 
 CHROMOSOME_CASES = [
@@ -115,6 +158,12 @@ CHROMOSOME_CASES = [
 
 
 def engine_commit(engine: Path) -> str:
+    # The commit recorded must be the code that answered: refuse an `opengwasdb` imported from
+    # anywhere but this checkout.
+    imported = Path(opengwasdb.__file__).resolve()
+    if engine.resolve() not in imported.parents:
+        sys.exit(f"opengwasdb was imported from {imported}, not from {engine}")
+
     def git(*args: str) -> str:
         return subprocess.run(
             ["git", "-C", str(engine), *args], check=True, capture_output=True, text=True
@@ -133,27 +182,42 @@ def main(engine: Path) -> None:
     with (HERE / "orient.tsv").open("w", newline="") as handle:
         handle.write(header + "\n")
         out = csv.writer(handle, delimiter="\t", lineterminator="\n")
-        out.writerow(["chrom", "position", "ref", "alt", "alid", "a1", "a2", "a1_is_alt", "error"])
+        out.writerow(
+            ["chrom", "position", "ref", "alt", "alid", "a1", "a2", "a1_is_alt", "error", "reason"]
+        )
         for chrom, pos, ref, alt in ORIENT_CASES:
             try:
                 o = orient_to_canonical(chrom, pos, alt, ref)
             except ValueError as fault:
-                out.writerow([chrom, pos, ref, alt, "", "", "", "", str(fault)])
+                reason = getattr(fault, "reason", "")
+                out.writerow([chrom, pos, ref, alt, "", "", "", "", str(fault), reason])
             else:
                 v = o.variant
                 flag = str(not o.flipped).lower()
                 out.writerow(
-                    [chrom, pos, ref, alt, v.alid, v.effect_allele, v.other_allele, flag, ""]
+                    [chrom, pos, ref, alt, v.alid, v.effect_allele, v.other_allele, flag, "", ""]
                 )
     with (HERE / "chromosomes.tsv").open("w", newline="") as handle:
         handle.write(header + "\n")
         out = csv.writer(handle, delimiter="\t", lineterminator="\n")
-        out.writerow(["label", "canonical", "error"])
+        out.writerow(["label", "canonical", "error", "reason"])
         for label in CHROMOSOME_CASES:
             try:
-                out.writerow([label, normalise_chromosome(label), ""])
+                out.writerow([label, normalise_chromosome(label), "", ""])
             except ValueError as fault:
-                out.writerow([label, "", str(fault)])
+                out.writerow([label, "", str(fault), getattr(fault, "reason", "")])
+    write_reversed(header)
+
+
+def write_reversed(header: str) -> None:
+    with (HERE / "reversed.tsv").open("w", newline="") as handle:
+        handle.write(header + "\n")
+        out = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        out.writerow(["group", "chrom", "position", "ref", "alt", "alid", "a1_is_alt", "kept"])
+        for group, chrom, pos, ref, alt, kept in REVERSED_PAIRS:
+            o = orient_to_canonical(chrom, pos, alt, ref)
+            flag = str(not o.flipped).lower()
+            out.writerow([group, chrom, pos, ref, alt, o.variant.alid, flag, str(kept).lower()])
 
 
 if __name__ == "__main__":
