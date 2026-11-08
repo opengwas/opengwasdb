@@ -15,7 +15,7 @@ import logging
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
@@ -99,7 +99,7 @@ from opengwasdb.model.enums import (
 )
 from opengwasdb.readers.column_map import ColumnMap
 from opengwasdb.readers.interface import StreamTally
-from opengwasdb.readers.registry import open_source
+from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts, z_critical
@@ -112,6 +112,7 @@ from opengwasdb.variants.routing import (
     VariantRouting,
     route_variants,
 )
+from opengwasdb.variants.routing.keys import routing_key
 from opengwasdb.variants.routing.lift import lifted_off_primary
 
 log = logging.getLogger(__name__)
@@ -472,7 +473,14 @@ def _prepare_axis(
         column_map=column_map_provenance(manifest_rows),
         rules=rules,
         off_primary=routing.off_primary,
-        unmatched_lift=UnmatchedLift(chain_file) if variant_reference is not None else None,
+        unmatched_lift=(
+            UnmatchedLift(
+                chain_file,
+                tuple(row.source for row in manifest_rows if row.source_assembly == "hg38"),
+            )
+            if variant_reference is not None
+            else None
+        ),
     )
 
 
@@ -494,22 +502,60 @@ class _Pass2Context:
 class UnmatchedLift:
     """How a single-pass build tells a lift's drops from `off_axis` ones: its hg19
     Analyses' unmatched rows are lifted by ``chain_file``, and those the chain
-    places off the primary assembly are counted as `lift_off_primary` (#376)."""
+    places off the primary assembly are counted as `lift_off_primary` (#376).
+    ``grch38_sources`` are the Analyses already on GRCh38, whose declaring a key
+    makes it two loci that no row of is a lift's drop. ``checked`` is the keys a
+    process has already looked up in them, and whether one declares each, so a
+    worker reads the sources once for a key however many Analyses it routes; it
+    belongs to this build, and each forked worker keeps its own."""
 
     chain_file: str | Path | None
+    grch38_sources: tuple[SourceSpec, ...] = ()
+    checked: dict[str, bool] = field(default_factory=dict)
+
+
+def _declared_in(source: SourceSpec, wanted: Collection[str]) -> set[str]:
+    """The routing keys among ``wanted`` that one source's variants spell."""
+    spelt = (
+        routing_key((v.chromosome, v.position, v.ref, v.alt))
+        for v in open_source(source).stream_variants()
+    )
+    return {key for key in spelt if key in wanted}
+
+
+def _declared_by_grch38(keys: Collection[str], lift: UnmatchedLift) -> set[str]:
+    """The routing keys among ``keys`` that a GRCh38 Analysis's source declares."""
+    unchecked = {key for key in keys if key not in lift.checked}
+    found: set[str] = set()
+    for source in lift.grch38_sources if unchecked else ():
+        found |= _declared_in(source, unchecked)
+    lift.checked.update({key: key in found for key in unchecked})
+    return {key for key in keys if lift.checked[key]}
 
 
 def _unmatched_off_primary(
     keys: Sequence[str], row: ManifestRow, context: _Pass2Context
 ) -> frozenset[str]:
-    """The routing keys among ``keys`` the build's lift places off the primary
-    assembly: those the union found, and, for a single-pass build's hg19 Analysis,
-    those its unmatched rows lift onto."""
+    """The routing keys among ``keys`` that this Analysis's lift placed off the
+    primary assembly, which are dropped as `lift_off_primary`.
+
+    Only an hg19 Analysis's rows were lifted. A two-pass build's union has placed
+    every site and settled the keys both assemblies declare; a single-pass build's
+    candidates are the union's too (a stale reference's) and the unmatched rows the
+    chain lifts onto the alt contig, less any key a GRCh38 Analysis declares, as
+    the Hybrid fold leaves them (two loci, `off_axis`)."""
+    if row.source_assembly != "hg19":
+        return frozenset()
     lift = context.unmatched_lift
-    if lift is None or row.source_assembly != "hg19" or not keys:
+    if lift is None:
         return context.off_primary
+    if not keys:
+        return frozenset()
     sites = [(c, int(p), r, a) for c, p, r, a in (key.split(":") for key in keys)]
-    return context.off_primary | lifted_off_primary(sites, chain_file=lift.chain_file)
+    candidates = (context.off_primary & set(keys)) | lifted_off_primary(
+        sites, chain_file=lift.chain_file
+    )
+    return frozenset(candidates - _declared_by_grch38(candidates, lift))
 
 
 def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
