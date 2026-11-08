@@ -132,7 +132,9 @@ row dropped and counted the same way. A Store records each Analysis's source
 assembly nowhere, so no rule can say which Analysis's rows were lifted; the rule
 `variant_table.lifted_contig` judges the variant table instead, by `source_alid`
 (the contig a lifted variant came from), and cannot judge a row whose `source_alid`
-a collision blanked. The routing check above is what covers those.
+a collision blanked. It is an error on a release of format 0.2.1 or later, which the
+fixed builders write, and a warning on an earlier one, which #367 owns. The routing
+check above is what covers the rows it cannot judge.
 
 The duplicate rule is Variant Routing's `collapse_duplicates`, applied after
 the rules above, wherever two rows can reach one (variant, Analysis):

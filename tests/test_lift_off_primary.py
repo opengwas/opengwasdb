@@ -635,3 +635,27 @@ def test_the_validation_rule_names_a_lifted_variant_on_an_alt_contig():
     assert "rebuild it" in message
     empty = _lifted_off_primary(None, TableBlock(0, [], None))
     assert not list(_judge_lifted_off_primary(None, empty))
+
+
+@pytest.mark.parametrize(
+    ("format_version", "severity"),
+    [("0.2.1", "error"), ("0.3.0", "error"), ("0.2.0", "warning"), ("0.1.0", "warning")],
+)
+def test_the_lifted_contig_rule_fails_a_release_its_builders_make_and_warns_on_older_ones(
+    format_version, severity
+):
+    """Format 0.2.1 or later is written by the fixed builders, so a lifted alt-contig
+    variant there is an error; an earlier release is #367's, and only warns."""
+    from types import SimpleNamespace
+
+    from opengwasdb.validation.rules.variants import RULES, _LiftedOffPrimary
+
+    rule = next(r for r in RULES if r.name == "variant_table.lifted_contig")
+    target = SimpleNamespace(
+        store=SimpleNamespace(manifest=SimpleNamespace(format_version=format_version)),
+        label=".",
+    )
+    found = _LiftedOffPrimary(1, "row 7: x from y")
+    (finding,) = rule.judged(target, found)
+    assert finding.severity.value == severity
+    assert not list(rule.judged(target, _LiftedOffPrimary()))

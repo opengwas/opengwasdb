@@ -2083,7 +2083,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `variant_table.sequence` | release | fold | rows are in `variant_index` order, one per canonical variant |
 | `variant_table.representatives` | release | fold | the offset sidecar and the tabix index find the rows the table holds |
 | `variant_table.indel_order` | release | fold | from format 0.2.1, every indel row's ALID spells its alleles as the row records them: its `effect_allele` then its `other_allele`, and, for a lifted variant, its reference first as its `source_alid` does; not judged on a 0.2.0 or 0.1.0 release, which sorts an indel's alleles |
-| `variant_table.lifted_contig` | release | fold | no row on an alt, random or unplaced contig has a `source_alid` on another contig: a lift left no variant there (§4); a row with no `source_alid` is not judged |
+| `variant_table.lifted_contig` | release | fold | no row on an alt, random or unplaced contig has a `source_alid` on another contig: a lift left no variant there (§4); an error from format 0.2.1, a warning on an earlier release, which #367 owns; a row with no `source_alid` is not judged |
 | `sqlite.variant_aliases` | release | check | every alias names a variant the table holds; skipped where there is no alias table |
 | `analyses.readable` | release | check | `analyses.tsv` parses |
 | `analyses.retired_columns` | release | check | no retired column is present |

@@ -21,6 +21,7 @@ import numpy as np
 
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store.open import indels_reference_first
+from opengwasdb.validation import rule as validation_rule
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Skip, Target
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.variants import (
@@ -378,8 +379,22 @@ def _judge_lifted_off_primary(_target: Target, found: _LiftedOffPrimary) -> Iter
             f"{found.n_rows} variant(s) of variants.tsv.gz were lifted onto an alt, random or "
             f"unplaced contig ({found.first}): a build leaves such a variant out and counts "
             "its rows as lift_off_primary (#376), so this release was built before that, or "
-            "routed by a Variant Reference extracted before it -- rebuild it"
+            "routed by a Variant Reference extracted before it -- rebuild it (an earlier "
+            "format's release is #367's)"
         )
+
+
+@dataclass(frozen=True, kw_only=True)
+class _ErrorFromFormat(Fold[TableBlock, _LiftedOffPrimary]):
+    """A fold that fails a release of a format whose builders cannot write what it finds
+    (0.2.1 or later, `indels_reference_first`) and warns on an earlier one, which says
+    what the release is without failing a Store nobody can fix in place (#376, #367)."""
+
+    def judged(self, target: Target, total: _LiftedOffPrimary) -> Iterator[validation_rule.Finding]:
+        severity = validation_rule.Severity
+        level = severity.ERROR if _spells_indels_reference_first(target) else severity.WARNING
+        for message in self.judge(target, total):
+            yield self.finding(target, message, level)
 
 
 def variant_aliases(target: Target) -> Iterator[str]:
@@ -457,7 +472,7 @@ RULES: tuple[Rule, ...] = (
         measure=_indel_order,
         judge=_judge_indel_order,
     ),
-    Fold(
+    _ErrorFromFormat(
         name="variant_table.lifted_contig",
         kinds=Kind.RELEASE,
         after=(REQUIRED,),
