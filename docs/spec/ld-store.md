@@ -9,7 +9,9 @@ queries return, and when a request is refused. The decisions behind it are in AD
 (`docs/adr/0001-near-band-and-thresholded-far-pairs.md`), including its clarification of
 7 November 2026; the build inputs are in `docs/spec/build-inputs.md` (ADR 0002); the terms are in
 `CONTEXT.md`. **ALID**, its **A1** and **Reference Assembly** are the engine's
-(opengwas/opengwasdb `CONTEXT.md`, _Variant Identity_), not redefined here.
+(opengwas/opengwasdb `CONTEXT.md`, _Variant Identity_), not redefined here. The engine's glossary
+says an ALID is formed after "upper-casing, trimming and left alignment"; its code at `1ab2b09`
+only upper-cases, requires A, C, G, T and sorts the two alleles, and so does ogld (ADR 0003).
 
 The numbers that chose the layout and the codec come from prototypes run on real HGDP+1kGP
 chr22 genotypes. They are on the prototype branch `proto/1-ld-store-layout`, and each is cited as
@@ -402,7 +404,7 @@ ignores the ones it does not know. The types are `ogld.format.Provenance`, and
 | `panel.samples_sha256` | string or null | SHA-256 of the sorted sample identifiers, one per line; null only for an `ld_matrix` source that does not publish them. The identifiers themselves stay with the Source Panel |
 | `reference_assembly` | string | the engine's Reference Assembly, such as `"GRCh38"` |
 | `variant_filters` | object | the build's variant filters and their values, as `docs/spec/build-inputs.md` §6 applies them: `filter` (array of strings, the FILTER values that pass: `["PASS", "."]`), `mac_min` (int, default 20), `info_min` (float, or null when no INFO floor was applied, as for a sequenced panel) and `autosomes_only` (bool, true: a record off chromosomes 1–22 is refused, §1). A zero-variance variant is dropped with no setting to record, and counted in `variants_dropped`. Biallelic records are the conversion's job, so no filter sees a multi-allelic one. There is no call-rate filter: a build refuses an input with any missing call |
-| `variants_dropped` | object | count per reason a variant passing the filters was dropped: at least `zero_variance` (int) |
+| `variants_dropped` | object | count per reason a variant passing the filters was dropped: at least `zero_variance` and `duplicate_reversed_indel` (int each; the latter is `docs/spec/build-inputs.md` §6's rule, from the engine's ADR 0072) |
 | `n_variants` | int | rows of `variants/` |
 | `near_bp` | int | the distance up to which the store holds every pair: 3000000 |
 | `far_bp` | int | the distance up to which the store measured pairs: 10000000 for a build, and at most that for any store. Every reader and refusal uses this recorded value |
