@@ -19,7 +19,8 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 def load_script(name: str) -> ModuleType:
     path = SCRIPTS / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None, f"cannot load {path}"
+    assert spec is not None, f"cannot load {path}"
+    assert spec.loader is not None, f"cannot load {path}"
     module = importlib.util.module_from_spec(spec)
     # Registered before execution so that anything the module resolves through
     # its own namespace -- a dataclass reads `sys.modules[cls.__module__]` --

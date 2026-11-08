@@ -153,10 +153,14 @@ def manifest() -> Mapping[str, Any]:
 def panel() -> TestPanel:
     counts = manifest()["counts"]
     return TestPanel(
-        pgen=TEST_PANEL / "panel.pgen", pvar=TEST_PANEL / "panel.pvar",
-        psam=TEST_PANEL / "panel.psam", keep=TEST_PANEL / "panel.keep",
-        pcs=TEST_PANEL / "pcs.eigenvec", n_samples=int(counts["n_samples"]),
-        n_variants=int(counts["n_variants"]))
+        pgen=TEST_PANEL / "panel.pgen",
+        pvar=TEST_PANEL / "panel.pvar",
+        psam=TEST_PANEL / "panel.psam",
+        keep=TEST_PANEL / "panel.keep",
+        pcs=TEST_PANEL / "pcs.eigenvec",
+        n_samples=int(counts["n_samples"]),
+        n_variants=int(counts["n_variants"]),
+    )
 
 
 @cache
@@ -167,15 +171,19 @@ def variants() -> Variants:
     col = {name: i for i, name in enumerate(tsv[0])}
     rows = tsv[1:]
     if [(p[0], p[1], p[3], p[4]) for p in pvar] != [
-            (r[col["chrom"]], r[col["pos"]], r[col["ref"]], r[col["alt"]]) for r in rows]:
+        (r[col["chrom"]], r[col["pos"]], r[col["ref"]], r[col["alt"]]) for r in rows
+    ]:
         raise ValueError("panel.pvar and variants.tsv name different records")
     reason = [r[col["drop_reason"]] for r in rows]
     return Variants(
-        chrom=_frozen([p[0] for p in pvar], np.str_), pos=_frozen([p[1] for p in pvar], np.int64),
-        ref=_frozen([p[3] for p in pvar], np.str_), alt=_frozen([p[4] for p in pvar], np.str_),
+        chrom=_frozen([p[0] for p in pvar], np.str_),
+        pos=_frozen([p[1] for p in pvar], np.int64),
+        ref=_frozen([p[3] for p in pvar], np.str_),
+        alt=_frozen([p[4] for p in pvar], np.str_),
         id=_frozen([p[2] for p in pvar], np.str_),
         passes_filters=_frozen([r[col["passes_filters"]] == "1" for r in rows], np.bool_),
-        drop_reason=_frozen(["" if x == "." else x for x in reason], np.str_))
+        drop_reason=_frozen(["" if x == "." else x for x in reason], np.str_),
+    )
 
 
 @cache
@@ -190,8 +198,12 @@ def reference_r(k: int) -> ReferencePairs:
     if k not in KS:
         raise ValueError(f"the Test Panel holds reference r at k in {KS}, not k = {k}")
     p = _pairs()
-    return ReferencePairs(k, _frozen(p["row_i"], np.int64), _frozen(p["row_j"], np.int64),
-                          _frozen(p[f"r_k{k}"], np.float64))
+    return ReferencePairs(
+        k,
+        _frozen(p["row_i"], np.int64),
+        _frozen(p["row_j"], np.int64),
+        _frozen(p[f"r_k{k}"], np.float64),
+    )
 
 
 @cache
@@ -200,8 +212,9 @@ def plink2_r() -> ReferencePairs:
     p = _pairs()
     with np.load(TEST_PANEL / "plink2" / "r_unphased_k0.npz") as f:
         r = f["r"]
-    return ReferencePairs(0, _frozen(p["row_i"], np.int64), _frozen(p["row_j"], np.int64),
-                          _frozen(r, np.float64))
+    return ReferencePairs(
+        0, _frozen(p["row_i"], np.int64), _frozen(p["row_j"], np.int64), _frozen(r, np.float64)
+    )
 
 
 @cache
@@ -215,15 +228,19 @@ def gwas() -> Gwas:
 @cache
 def clump_params() -> ClumpParams:
     c = manifest()["clump"]
-    return ClumpParams(float(c["p1"]), float(c["p2"]), int(c["kb"]),
-                       tuple(float(x) for x in c["r2"]))
+    return ClumpParams(
+        float(c["p1"]), float(c["p2"]), int(c["kb"]), tuple(float(x) for x in c["r2"])
+    )
 
 
 @cache
 def pcs() -> PcFile:
     lines = [line.split("\t") for line in panel().pcs.read_text().splitlines()]
-    return PcFile(tuple(f[0] for f in lines[1:]), tuple(lines[0][1:]),
-                  _frozen([[float(x) for x in f[1:]] for f in lines[1:]], np.float64))
+    return PcFile(
+        tuple(f[0] for f in lines[1:]),
+        tuple(lines[0][1:]),
+        _frozen([[float(x) for x in f[1:]] for f in lines[1:]], np.float64),
+    )
 
 
 @cache
@@ -238,8 +255,11 @@ def dosages() -> Dosages:
     alt = variants().alt
     if any(allele != alt[row] for row, (_, allele) in zip(rows, names, strict=True)):
         raise ValueError("dosages.raw does not count each row's ALT allele")
-    return Dosages(_frozen(rows, np.int64), tuple(f[head.index("IID")] for f in lines[1:]),
-                   _frozen([[int(x) for x in f[first:]] for f in lines[1:]], np.int8))
+    return Dosages(
+        _frozen(rows, np.int64),
+        tuple(f[head.index("IID")] for f in lines[1:]),
+        _frozen([[int(x) for x in f[first:]] for f in lines[1:]], np.int8),
+    )
 
 
 @cache

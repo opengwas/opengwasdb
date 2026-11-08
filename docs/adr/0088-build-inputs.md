@@ -28,11 +28,11 @@ genotypes set missing. On EUR chr22 (`proto/1-build-inputs@fb3f26c:…/results/`
   (25%) are not FILTER=PASS.
 - **plink2 uses pairwise-complete samples**: on 2.74 M pairs of chr22:30.0–30.6 Mb its float64 r
   equals numpy's pairwise-complete r to 1.1×10⁻¹⁶ in every call-rate bin
-  (`missing_window_by_call_rate.tsv`).
+  (`proto/1-build-inputs@96312d8:prototypes/build-inputs/results/missing_window_by_call_rate.tsv`).
 - Mean imputation, the only treatment that composes with regressing out PCs, matches plink2 only
   when both variants are fully called (6.4×10⁻¹⁵). One missing call in 771 already moves r by up
   to 0.0235, about 1,500 half-steps of 1/65534. **No call-rate floor below 1.0 makes them agree**
-  (`missing_window_floors.tsv`):
+  (`proto/1-build-inputs@96312d8:prototypes/build-inputs/results/missing_window_floors.tsv`):
 
   | call-rate floor | chr22 MAC ≥ 20 sites kept | largest \|r_plink2 − r_mean\| |
   |---|---|---|
@@ -56,9 +56,9 @@ failed, both EUR PC2:
 AFR, EAS, SAS and AMR passed every region; no PC was an inversion's axis.
 
 **Our own PCs, without the regions, carry the same axis.** EUR's PCs recomputed by gnomAD's
-recipe with the four checked regions excluded ±2 Mb (`m07_own_pcs.py`) reproduce gnomAD's: |corr|
+recipe with the four checked regions excluded ±2 Mb (`proto/1-build-inputs@28b5380:prototypes/build-inputs/m07_own_pcs.py`) reproduce gnomAD's: |corr|
 0.996, 0.953, 0.922 and 0.908 for PC1–PC4. Their PC2 still explains 20.4% with LCT's own top 5
-PCs, against at most 5.4% for any random window (`pc_check_verdict_own.tsv`). No LCT variant was
+PCs, against at most 5.4% for any random window (`proto/1-build-inputs@fb3f26c:prototypes/build-inputs/results/pc_check_verdict_own.tsv`). No LCT variant was
 in that PCA, so the association is LCT's real north–south differentiation, which lactase
 persistence follows across Europe, not LD weighting the PCA. The first rule cannot tell the two
 apart; regressing out an ancestry axis is what PC Adjustment is for.
@@ -77,7 +77,9 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
 3. **HGDP+1kGP's genotypes are the phased v2 callset** (Koenig et al. 2024, Genome Research):
    `gs://gcp-public-data--gnomad/resources/hgdp_1kg/phased_haplotypes_v2/`, one BCF per autosome,
    19.1 GB. It has no missing and no unphased calls; SHAPEIT5 filled in up to 10% missing calls
-   per site from haplotypes, unflagged (`notes/inputs-phased.md` of the orchestration). Before
+   per site from haplotypes, unflagged. That is read from the chr22 BCF itself, at the path above
+   (7 November 2026): neither the paper (https://pmc.ncbi.nlm.nih.gov/articles/PMC11216312/) nor
+   the bucket's README says how missing calls were handled. Before
    phasing it kept, on all 4,091 samples pooled, gnomAD PASS sites with HWE p ≥ 1×10⁻³⁰,
    F_MISSING ≤ 0.1 and 0.5 ≤ ExcHet ≤ 1.5, and after phasing MAC ≥ 2. The panels in it:
 
@@ -108,6 +110,8 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    owner's PC minimum, decided the same day). t_far's k is the number of covariates actually used.
    Provenance records `k_target`, `k_min` and `k`, the scan (with each PC's `ratio`,
    `window_null_q99` and, as a diagnostic, `rest_null_q99`), the dropped PCs and the null.
+   `k_min` applies only when PCs are used: at k = 0 no PC File is read, nothing is refused for
+   want of PCs, and provenance records `k_min` as null (review of #2, 7 November 2026).
 
    **Why the ratio.** The owner first set the rule as "one window explains ≥ 10% and the rest of
    the genome explains it no better than chance". Measured on karyotype-like scores, it kept EUR's
@@ -138,11 +142,6 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
 9. **Only autosomes are built** (provisional: owner decision pending, epic #1). A record on X, Y,
    a PAR or MT is refused: a male's X and Y genotypes are hemizygous, the diploid dosage model has
    no rule for them, and the HGDP+1kGP psam files carry no sex to apply one.
-6. **Imported LD matrices (Pan-UKB) are a later epic.** This epic's provenance already records
-   the source kind and every covariate adjusted for (epic #1 comment of 7 November 2026).
-7. **The test data is a committed real slice**, the Test Panel: v2 chr21 and chr22 for the 771
-   EUR samples, with the EUR PC File and independent reference answers
-   ([`tests/data/test-panel/README.md`](../../tests/data/test-panel/README.md)).
 
 ## Considered options
 

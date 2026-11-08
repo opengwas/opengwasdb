@@ -1,5 +1,13 @@
 # LD Stores hold a 3 Mb Near Band and thresholded Far Pairs
 
+> **Clarified on 7 November 2026** (see "Clarification, 7 November 2026" at the end). The
+> upstream half is settled as a Proxy Index; a matrix query returns NaN for an unstored pair and a
+> number only through the caller's `fill`; and the PC part of decision 4 is superseded by
+> [ADR 0002](./0002-build-inputs.md): the PCs are our own, computed outside ogld with the
+> Long-Range LD Regions excluded, and the builder drops local PCs. Decision 5 holds for every
+> non-public panel; the public Test Panel slice is committed. The decisions below stand as written
+> otherwise.
+
 Issue [#2](https://github.com/opengwas/ogld/issues/2), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 This ADR records the owner's decisions of 7 November 2026 (epic #1, "Decisions already taken"),
 and the options they rejected. It also records what the prototypes measured. The format itself is
@@ -152,3 +160,77 @@ all five panels.
 - A request whose threshold is below t_far is refused only when its window exceeds 3 Mb. A small
   panel such as AMR (t_far 0.062) therefore refuses more than a large one. UK Biobank EUR
   (t_far 0.001) refuses, at r2 ≥ 0.001, only windows over 10 Mb.
+
+## Clarification, 7 November 2026
+
+The owner checked this ADR and the spec at ogld#2 and decided four further points the same day
+(epic #1, comment of 7 November 2026, decisions 1, 2, 3 and 6). They clarify the decisions above
+and do not reverse them: the answer table and the refusals stand.
+
+**The upstream half is a Proxy Index** (decision 1 of the comment). The consequence above, "A
+variant's upstream partners are scattered", is settled. Per variant, the LD Store keeps every
+partner within 10 Mb on either side with r̂² ≥ t_far, stored in both directions, so `proxies()`
+reads one row (0.045 MB, 9.7 ms on the prototype) instead of the Near Band's column (about 650 MB).
+It costs 3.1–8.7% of a store. Because the index holds every Far Pair, in both directions, the spec
+recommends it as the Far Pairs' only storage: one dense Near Band and one sparse, symmetric,
+thresholded index (`docs/spec/ld-store.md` §5 and §11). That changes no answer and no refusal, and
+whether to merge is the owner's decision, put to them at ogld#2. Decision 3 above is unchanged in
+meaning: a 3–10 Mb pair is stored exactly when r̂² ≥ t_far.
+
+**A matrix is one signed-r matrix, NaN where unstored** (decision 2). A matrix query returns the
+Stored r of every pair it holds and NaN for every other pair, the Bound and Not Measured alike.
+What a NaN means follows from the returned positions, chromosomes and t_far: the Bound when the
+pair is 3–10 Mb apart on one chromosome, Not Measured otherwise. A caller that passes `fill`, such
+as 0, gets that number in place of NaN. This replaces the epic's acceptance criterion "No query
+ever turns an unstored pair into a 0" for a query whose caller asks for a fill, and the spec's
+earlier rule that a reader returning a plain numeric matrix must refuse. An LD Store itself still
+never holds a 0, or any code, for an unstored pair.
+
+**The queries** (decision 3). `matrix` for a list of ALIDs; `region` for a centre and a radius,
+whose width is capped at the store's far distance (radius ≤ 5 Mb); `proxies` for a list of ALIDs,
+by default at r² ≥ 0.8 within 10 Mb; and `clump` for ALIDs, a score, r² and a window. Thresholds
+compare r̂², values are returned as signed r, and the refusals above stand, compared with the
+distances each store records. MR's r² 0.001 with a 10 Mb window is answered only where
+t_far = 0.001, on UK Biobank EUR.
+
+**PCs are our own, supplied in a PC File, and the builder drops local ones** (decision 6, and
+the owner's later decisions the same day on lane 2d's measurements). ogld's library runs no PCA.
+The PCs are computed outside it by a recipe script that follows gnomAD's subcontinental method with
+the Long-Range LD Regions ±2 Mb excluded from the PCA, and a build reads them from a PC File. The
+builder's PC Check drops a local PC by the owner's rule: one 4 Mb window explains ≥ 10% of it,
+that share beats the window-side null, and the rest of the genome explains at most 0.05 of what
+that window does. The covariates are the first up to 10 PCs it
+keeps; if fewer survive, those that do, as long as at least 5 do, and the build is refused
+otherwise. t_far's k is the number used, and provenance records the target, the minimum, the k
+used, the scan, the dropped PCs and the null. Decision 4's "The PCs come from
+LD-pruned common variants, with the Long-Range LD Regions excluded" is superseded by
+[ADR 0002](./0002-build-inputs.md), which has the evidence: gnomAD's PCs, which did not exclude the
+regions, and our own, which do, both carry EUR's north–south axis through LCT, and the rule keeps
+it as ancestry. What PC Adjustment is, and why, is unchanged.
+
+**Genotypes are complete** (the same later decisions). The builds read the phased HGDP+1kGP v2
+callset, which has no missing calls, and the builder refuses an input with any. So decision 2's
+Near Band at k = 0 equals `plink2 --r-unphased` exactly, to within the quantisation step, with no
+imputation and no call-rate filter.
+
+**Provenance** (the comment "Pan-UKB LD as a source"). Importing Pan-UKB's LD matrices is a later
+epic, and the format allows it now. Each store records its source kind (genotypes or an imported
+LD matrix), every covariate it adjusted for by name, with t_far's k counting them, and the
+distances it measured: 3 Mb near, and at most 10 Mb far (`docs/spec/ld-store.md` §7).
+
+**Decision 5 and the Test Panel** (owner, 7 November 2026). The owner approved committing the
+Test Panel, a public slice of HGDP+1kGP v2 chr21 and chr22 for the 771 EUR samples, to this
+repository as test data. HGDP+1kGP's genotypes are already public under gnomAD's terms, so this
+does not touch decision 5, which still holds for every non-public Source Panel, such as UK
+Biobank: its genotypes never leave the host they are on. ADR 0002, decision 7, records the same
+from the build inputs' side.
+
+**Panel sizes** (the same later decisions). The phased v2 callset has fewer samples in three
+panels: AFR 801, EAS 816 and SAS 782, against decision 3's table's 804, 817 and 783 (EUR 771 and
+AMR 345 are unchanged). So their t_far at k = 10 are 0.0263797, 0.0258882 and 0.0270298, and the
+spec's §3 table uses these sizes. The consequence above that a pair at exactly t_far "is stored
+on every HGDP+1kGP panel at k = 10" no longer holds: on EAS and SAS it reads as the Bound. The
+table in decision 3 is left as it was decided.
+
+The format version stays `0.1.0`: no LD Store has been written in it yet.
+

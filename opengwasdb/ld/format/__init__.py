@@ -1,0 +1,94 @@
+"""The LD Store format as code: encoding, thresholds, answers, refusals, provenance (layer 0).
+
+The semantics core of `docs/spec/ld-store.md`, implemented and complete: quantisation
+(§3), t_far and the far code floor (§3), the answer kind of a pair (§8) and the decision
+for a request (§9). It also names the provenance types (§7) and the validation rules
+(§12). Every other layer takes these from here, so no component rounds, thresholds or
+refuses by a rule of its own. It imports nothing else from ogld.
+"""
+
+from ogld.format.encoding import (
+    FAR_BP,
+    NEAR_BP,
+    QUANTISATION_ERROR,
+    R_SCALE,
+    RESERVED_CODE,
+    T_FAR_MIN,
+    T_FAR_Q,
+    dequantise,
+    far_code_floor,
+    quantise,
+    t_far,
+)
+from ogld.format.provenance import (
+    ENCODING,
+    FORMAT_VERSION,
+    REQUIRED_KEYS,
+    VALIDATION_RULES,
+    Adjustment,
+    Build,
+    Counts,
+    Encoding,
+    Panel,
+    PcCheck,
+    PcDiagnostic,
+    PcFile,
+    PcNull,
+    PcScan,
+    Provenance,
+    Source,
+    SourceKind,
+    VariantFilters,
+)
+from ogld.format.semantics import (
+    AnswerKind,
+    Decision,
+    InputError,
+    Refusal,
+    RefusalReason,
+    answer_kind,
+    answer_kinds,
+    judge_region,
+    judge_request,
+)
+
+__all__ = [
+    "ENCODING",
+    "FAR_BP",
+    "FORMAT_VERSION",
+    "NEAR_BP",
+    "QUANTISATION_ERROR",
+    "REQUIRED_KEYS",
+    "RESERVED_CODE",
+    "R_SCALE",
+    "T_FAR_MIN",
+    "T_FAR_Q",
+    "VALIDATION_RULES",
+    "Adjustment",
+    "AnswerKind",
+    "Build",
+    "Counts",
+    "Decision",
+    "Encoding",
+    "InputError",
+    "Panel",
+    "PcCheck",
+    "PcDiagnostic",
+    "PcFile",
+    "PcNull",
+    "PcScan",
+    "Provenance",
+    "Refusal",
+    "RefusalReason",
+    "Source",
+    "SourceKind",
+    "VariantFilters",
+    "answer_kind",
+    "answer_kinds",
+    "dequantise",
+    "far_code_floor",
+    "judge_region",
+    "judge_request",
+    "quantise",
+    "t_far",
+]

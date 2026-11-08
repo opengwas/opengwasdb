@@ -71,18 +71,24 @@ def _choose(params: Params, covariates: list[int]) -> list[assemble.Chosen]:
         s = sites.load(params, chrom, prefix)
         reason = sites.drop_reason(s, params)
         rowid = _rowid(prefix, params.work / f"EUR.chr{chrom}.rowid.pvar")
-        chosen.append(assemble.Chosen(s, reason, select(params, s, reason, rowid, covariates),
-                                      rowid))
+        chosen.append(
+            assemble.Chosen(s, reason, select(params, s, reason, rowid, covariates), rowid)
+        )
     return chosen
 
 
 def _counts(panel: assemble.Panel, a: answers.Answers, n: int) -> dict[str, object]:
     ok = panel.passing
-    return {"n_samples": n, "n_variants": len(panel.pos), "n_passing": len(ok),
-            "passing_by_chrom": {c: int(sum(panel.chrom[r] == c for r in ok))
-                                 for c in sorted(set(panel.chrom))},
-            "dropped": {r: int((panel.reason == r).sum()) for r in sites.REASONS},
-            "reference_pairs": len(a.i)}
+    return {
+        "n_samples": n,
+        "n_variants": len(panel.pos),
+        "n_passing": len(ok),
+        "passing_by_chrom": {
+            c: int(sum(panel.chrom[r] == c for r in ok)) for c in sorted(set(panel.chrom))
+        },
+        "dropped": {r: int((panel.reason == r).sum()) for r in sites.REASONS},
+        "reference_pairs": len(a.i),
+    }
 
 
 def _build(params: Params, covariates: list[int]) -> _Built:
@@ -95,13 +101,15 @@ def _build(params: Params, covariates: list[int]) -> _Built:
     panel = assemble.table(chosen, Path(f"{prefix}.pvar"))
     rowid = params.work / "panel.rowid.pvar"
     write_rowid_pvar(Path(f"{prefix}.pvar"), rowid)
-    _, fam, g = export_rows(params, prefix, rowid, list(range(len(panel.pos))),
-                            params.work / "panel.all")
+    _, fam, g = export_rows(
+        params, prefix, rowid, list(range(len(panel.pos))), params.work / "panel.all"
+    )
     assemble.same_genotypes(params, chosen, g, fam)
     pcs = pc_file.load(params, fam)
     files = {"pgen": Path(f"{prefix}.pgen"), "psam": Path(f"{prefix}.psam"), "rowid_pvar": rowid}
-    return _Built(panel, answers.compute(params, panel, files, g, pcs), prefix, fam, pcs,
-                  conversion)
+    return _Built(
+        panel, answers.compute(params, panel, files, g, pcs), prefix, fam, pcs, conversion
+    )
 
 
 def _settled(params: Params) -> _Built:
@@ -130,14 +138,15 @@ def main(argv: list[str] | None = None) -> None:
     outputs.write_data(params, b.panel, b.answers, b.prefix, b.fam, b.pcs)
     cases = summary.edge_cases(params, b.panel, b.answers, len(b.fam))
     outputs.write_dosages(params, b.prefix, summary.dosage_rows(cases))
-    manifest = outputs.write_manifest(params, b.conversion, cases,
-                                      _counts(b.panel, b.answers, len(b.fam)),
-                                      b.answers.pc_check)
+    manifest = outputs.write_manifest(
+        params, b.conversion, cases, _counts(b.panel, b.answers, len(b.fam)), b.answers.pc_check
+    )
     total = int(manifest["total_bytes"])
     print(f"{len(b.panel.pos)} variants, {len(b.answers.i)} pairs, {total:,} bytes")
     if total > params.size_budget_bytes:
-        raise SystemExit(f"the Test Panel is {total:,} bytes, over the "
-                         f"{params.size_budget_bytes:,}-byte budget")
+        raise SystemExit(
+            f"the Test Panel is {total:,} bytes, over the {params.size_budget_bytes:,}-byte budget"
+        )
 
 
 if __name__ == "__main__":

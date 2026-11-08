@@ -718,8 +718,8 @@
   "dropped": [],
   "null": {
    "kind": "each PC's values permuted across samples: q99 of the largest window share (decides) and of the rest share (diagnostic)",
-   "permutations": 200.0,
-   "seed": 405.0,
+   "permutations": 200,
+   "seed": 405,
    "quantile": 0.99
   },
   "kept": 20,

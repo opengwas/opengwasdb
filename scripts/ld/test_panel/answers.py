@@ -30,8 +30,9 @@ class Answers:
     clumps: dict[float, Path] = field(default_factory=dict)
 
 
-def compute(params: Params, panel: Panel, files: dict[str, Path], g: np.ndarray,
-            pcs: np.ndarray) -> Answers:
+def compute(
+    params: Params, panel: Panel, files: dict[str, Path], g: np.ndarray, pcs: np.ndarray
+) -> Answers:
     ok = panel.passing
     extract = params.work / "passing.extract"
     extract.write_text("".join(f"r{r}\n" for r in ok))
@@ -50,14 +51,17 @@ def compute(params: Params, panel: Panel, files: dict[str, Path], g: np.ndarray,
     return a
 
 
-def _reference(params: Params, g: np.ndarray, covariates: np.ndarray, i: np.ndarray,
-               j: np.ndarray) -> dict[int, np.ndarray]:
-    return {k: reference.reference_r(reference.residual_unit(g, covariates, k), i, j)
-            for k in params.ks}
+def _reference(
+    params: Params, g: np.ndarray, covariates: np.ndarray, i: np.ndarray, j: np.ndarray
+) -> dict[int, np.ndarray]:
+    return {
+        k: reference.reference_r(reference.residual_unit(g, covariates, k), i, j) for k in params.ks
+    }
 
 
-def _covariates(params: Params, panel: Panel, g: np.ndarray,
-                pcs: np.ndarray) -> tuple[dict[str, object], np.ndarray]:
+def _covariates(
+    params: Params, panel: Panel, g: np.ndarray, pcs: np.ndarray
+) -> tuple[dict[str, object], np.ndarray]:
     """The PC Check over the passing variants with MAF >= 0.05, and the PCs it keeps, in order."""
     ok = panel.passing
     af = g[ok].mean(axis=1) / 2

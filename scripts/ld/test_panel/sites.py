@@ -84,18 +84,32 @@ def load(params: Params, chrom: str, prefix: Path) -> Sites:
     counts_prefix = Path(f"{prefix}.counts")
     inputs = {"conversion": stamp_digest(prefix), "plink2": version(params.plink2)}
     if not stamp_matches(counts_prefix, inputs):
-        plink2(params, ["--pfile", str(prefix), "--geno-counts", "--out", str(counts_prefix)],
-               f"gcount.chr{chrom}")
+        plink2(
+            params,
+            ["--pfile", str(prefix), "--geno-counts", "--out", str(counts_prefix)],
+            f"gcount.chr{chrom}",
+        )
         write_stamp(counts_prefix, inputs)
     cols = _columns(Path(f"{prefix}.pvar"), ("POS", "REF", "ALT", "FILTER"))  # FILTER required
-    counts = _columns(Path(f"{counts_prefix}.gcount"), ("HOM_REF_CT", "HET_REF_ALT_CTS",
-                                                 "TWO_ALT_GENO_CTS", "MISSING_CT"))
+    counts = _columns(
+        Path(f"{counts_prefix}.gcount"),
+        ("HOM_REF_CT", "HET_REF_ALT_CTS", "TWO_ALT_GENO_CTS", "MISSING_CT"),
+    )
     ints = [np.array(c, dtype=np.int64) for c in counts]
     if ints[3].any():
-        raise SystemExit(f"chr{chrom}: {int((ints[3] > 0).sum())} records have missing calls "
-                         f"({int(ints[3].sum())} in all); genotypes must be complete")
-    return Sites(chrom, prefix, np.array(cols[0], dtype=np.int64), np.array(cols[1]),
-                 np.array(cols[2]), np.array(cols[3]), *ints)
+        raise SystemExit(
+            f"chr{chrom}: {int((ints[3] > 0).sum())} records have missing calls "
+            f"({int(ints[3].sum())} in all); genotypes must be complete"
+        )
+    return Sites(
+        chrom,
+        prefix,
+        np.array(cols[0], dtype=np.int64),
+        np.array(cols[1]),
+        np.array(cols[2]),
+        np.array(cols[3]),
+        *ints,
+    )
 
 
 def _columns(path: Path, names: tuple[str, ...]) -> list[list[str]]:

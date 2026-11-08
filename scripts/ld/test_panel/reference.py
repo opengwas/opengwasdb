@@ -46,20 +46,46 @@ def reference_r(z: np.ndarray, i: np.ndarray, j: np.ndarray) -> np.ndarray:
     return np.einsum("ij,ij->i", z[i], z[j])
 
 
-def plink2_r(params: Params, panel: dict[str, Path], extract: Path, n: int,
-             i: np.ndarray, j: np.ndarray) -> np.ndarray:
+def _rowid_inputs(panel: dict[str, Path], extract: Path) -> list[str]:
+    """plink2's inputs for the passing variants, named by row (`rowid_pvar`)."""
+    return [
+        "--pgen",
+        str(panel["pgen"]),
+        "--pvar",
+        str(panel["rowid_pvar"]),
+        "--psam",
+        str(panel["psam"]),
+        "--extract",
+        str(extract),
+    ]
+
+
+def plink2_r(
+    params: Params, panel: dict[str, Path], extract: Path, n: int, i: np.ndarray, j: np.ndarray
+) -> np.ndarray:
     """plink2 --r-unphased on the passing variants, float64 square matrix, REF-based sign
     (the same as ALT-based: flipping both variants leaves r unchanged)."""
     out = params.work / "plink2_r"
-    plink2(params, ["--pgen", str(panel["pgen"]), "--pvar", str(panel["rowid_pvar"]), "--psam",
-                    str(panel["psam"]), "--extract", str(extract), "--r-unphased", "square",
-                    "bin", "ref-based", "--out", str(out)], "plink2_r")
+    plink2(
+        params,
+        [
+            *_rowid_inputs(panel, extract),
+            "--r-unphased",
+            "square",
+            "bin",
+            "ref-based",
+            "--out",
+            str(out),
+        ],
+        "plink2_r",
+    )
     m = np.fromfile(f"{out}.unphased.vcor1.bin", dtype=np.float64).reshape(n, n)
     return m[i, j]
 
 
-def simulate_gwas(params: Params, g: np.ndarray, causal: list[int],
-                  pcs: np.ndarray) -> tuple[np.ndarray, list[float]]:
+def simulate_gwas(
+    params: Params, g: np.ndarray, causal: list[int], pcs: np.ndarray
+) -> tuple[np.ndarray, list[float]]:
     """z of every passing variant for one phenotype made from `causal` (rows of `g`).
 
     Each causal variant explains `h2_each` of the phenotype's variance and the rest is Gaussian
@@ -86,22 +112,50 @@ def _t_stat(gv: np.ndarray, y: np.ndarray, covar: np.ndarray) -> float:
     return float(beta[-1] / se)
 
 
-def clump(params: Params, panel: dict[str, Path], extract: Path, rows: np.ndarray,
-          z: np.ndarray, r2: float) -> tuple[list[int], Path]:
+def clump(
+    params: Params,
+    panel: dict[str, Path],
+    extract: Path,
+    rows: np.ndarray,
+    z: np.ndarray,
+    r2: float,
+) -> tuple[list[int], Path]:
     """plink2 --clump lead rows, k = 0, on the passing variants; p = erfc(|z| / sqrt 2).
 
     `--clump-unphased`: plink2 clumps on phased r^2 when the pgen holds phase, as v2's does, but
     an LD Store's r is unphased (ADR 0002), and #6 is held to equal these leads."""
     sumstats = params.work / "gwas.sumstats"
-    sumstats.write_text("ID\tP\n" + "".join(
-        f"r{r}\t{math.erfc(abs(v) / math.sqrt(2))!r}\n" for r, v in zip(rows, z, strict=True)))
+    sumstats.write_text(
+        "ID\tP\n"
+        + "".join(
+            f"r{r}\t{math.erfc(abs(v) / math.sqrt(2))!r}\n" for r, v in zip(rows, z, strict=True)
+        )
+    )
     out = params.work / f"clump_r2_{r2}"
-    plink2(params, ["--pgen", str(panel["pgen"]), "--pvar", str(panel["rowid_pvar"]), "--psam",
-                    str(panel["psam"]), "--extract", str(extract), "--clump", str(sumstats),
-                    "--clump-p1", str(params.clump_p1), "--clump-p2", str(params.clump_p1),
-                    "--clump-r2", str(r2), "--clump-kb", str(params.clump_kb), "--clump-unphased",
-                    "--clump-id-field", "ID", "--clump-p-field", "P", "--out", str(out)],
-           f"clump_r2_{r2}")
+    plink2(
+        params,
+        [
+            *_rowid_inputs(panel, extract),
+            "--clump",
+            str(sumstats),
+            "--clump-p1",
+            str(params.clump_p1),
+            "--clump-p2",
+            str(params.clump_p1),
+            "--clump-r2",
+            str(r2),
+            "--clump-kb",
+            str(params.clump_kb),
+            "--clump-unphased",
+            "--clump-id-field",
+            "ID",
+            "--clump-p-field",
+            "P",
+            "--out",
+            str(out),
+        ],
+        f"clump_r2_{r2}",
+    )
     clumps = Path(f"{out}.clumps")
     lines = clumps.read_text().splitlines()
     col = lines[0].lstrip("#").split("\t").index("ID")

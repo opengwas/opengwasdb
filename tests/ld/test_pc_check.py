@@ -58,7 +58,7 @@ REAL_SCANS = {
 
 @pytest.mark.parametrize("name", sorted(REAL_SCANS))
 def test_the_owner_s_rule_on_real_scans(name: str) -> None:
-    window_share, window_null, rest_share, rest_null, local = REAL_SCANS[name]
+    window_share, window_null, rest_share, _rest_null, local = REAL_SCANS[name]
     assert pc_check.is_local(window_share, window_null, rest_share) is local
 
 
@@ -99,8 +99,10 @@ def test_a_window_s_own_axis_is_local(scanned) -> None:
     windows, local, noise = scanned
     first = pc_check.check(windows, np.column_stack([local, noise]))["scan"][0]
     # Windows step by 2 Mb from each chromosome's first variant, here at 20 kb.
-    assert first["local"] and first["window"] == "2:10020000-14019999"
-    assert first["window_share"] > 0.85 and first["window_share"] > first["window_null_q99"]
+    assert first["local"]
+    assert first["window"] == "2:10020000-14019999"
+    assert first["window_share"] > 0.85
+    assert first["window_share"] > first["window_null_q99"]
     assert first["ratio"] <= pc_check.MAX_RATIO
 
 
@@ -115,5 +117,25 @@ def test_covariates_are_the_first_ten_kept(scanned) -> None:
 def test_fewer_kept_pcs_than_the_minimum_is_refused(scanned) -> None:
     windows, local, noise = scanned
     many_local = np.column_stack([local + 1e-3 * noise[:, n] for n in range(16)] + [noise[:, :4]])
-    with pytest.raises(SystemExit, match="fewer than the minimum 5"):
+    with pytest.raises(SystemExit, match="fewer than the minimum 5") as refused:
         pc_check.check(windows, many_local)
+    # build-inputs.md §8: the refusal names the dropped PCs, so a person can see which.
+    message = str(refused.value)
+    assert "keeps 4 PCs" in message
+    assert "dropped as local: PC1, PC2, PC3" in message
+    assert message.rstrip().endswith("PC16")
+
+
+def test_too_few_pcs_with_none_local_says_none_was_dropped(small) -> None:
+    windows, _, noise = small
+    # Four noise PCs: none is local (as above), so the refusal has no PC to name.
+    with pytest.raises(SystemExit, match="keeps 4 PCs, fewer than the minimum 5") as refused:
+        pc_check.check(windows, noise[:, :4])
+    assert str(refused.value).endswith("; none dropped as local")
+
+
+def test_the_null_records_its_permutations_and_seed_as_integers(small) -> None:
+    windows, _, noise = small
+    null = pc_check.check(windows, noise[:, :5])["null"]
+    assert (null["permutations"], null["seed"]) == (200, 405)
+    assert all(type(null[key]) is int for key in ("permutations", "seed"))
