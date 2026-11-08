@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,8 @@ import numpy as np
 import zarr
 
 from opengwasdb.encoding import (
+    SE_EXCEPTION,
+    SE_MISSING,
     EafExceptionBuilder,
     EafMeasurements,
     EafRead,
@@ -31,17 +34,20 @@ from opengwasdb.encoding import (
     positions_at,
     positions_flat,
     write_eaf_baseline,
+    write_eaf_reference,
 )
 from opengwasdb.encoding.association_codec import (
     AssociationCodec,
     CellValues,
     Placement,
+    Storable,
     log_se_out_of_range,
     storable,
 )
 from opengwasdb.encoding.codec import require_parallel, se_float16
 from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
+from opengwasdb.model.enums import CompletionState
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import ArrayRole, array_length
@@ -96,6 +102,61 @@ def sequence_region_step(total: int, region_cells: int) -> int:
     return shards_per_region * shard
 
 
+@dataclass(frozen=True)
+class SeExceptionCounts:
+    """Per Analysis, the SEs a residual plane holds and those it holds as exact
+    exceptions (spec §6a), each also counted among the imputed cells alone.
+
+    What a Reference Completion records against the 2% exception budget, which
+    it reports rather than enforces (issue #301): counted as each region's codes
+    are written, so no pass over the plane is needed to know them.
+    """
+
+    n_se: np.ndarray
+    n_exceptions: np.ndarray
+    n_imputed_se: np.ndarray
+    n_imputed_exceptions: np.ndarray
+
+    @classmethod
+    def zeros(cls, n_analyses: int) -> SeExceptionCounts:
+        return cls(*(np.zeros(n_analyses, dtype=np.int64) for _ in range(4)))
+
+    def add(self, codes: np.ndarray, analysis_index: np.ndarray, imputed: np.ndarray) -> None:
+        """Count one region's codes, in place."""
+        held, exact, flagged = codes != SE_MISSING, codes == SE_EXCEPTION, imputed == 1
+        n = len(self.n_se)
+        for total, mask in (
+            (self.n_se, held),
+            (self.n_exceptions, exact),
+            (self.n_imputed_se, held & flagged),
+            (self.n_imputed_exceptions, exact & flagged),
+        ):
+            total += np.bincount(analysis_index[mask], minlength=n)
+
+
+@dataclass(frozen=True, eq=False)
+class ReferenceCompletion:
+    """What makes a writer's sequence a Reference-Completed one (issue #424).
+
+    Given once, when the writer is made, so no part of it can be set without
+    the rest: every cell not flagged imputed was decoded from the source Store,
+    so its SE is carried exactly (#301); `eaf_reference` is the panel's
+    frequency per variant, which an imputed cell reads (ADR 0037 §4), or None
+    when the panel declares none; the SEs above `float16`'s range are logged in
+    one line naming every Analysis (`analysis_ids`, under `where`) as the write
+    begins, rather than an Analysis at a time as a build logs them; and the
+    component is written `REFERENCE_COMPLETED`.
+    """
+
+    analysis_ids: tuple[str, ...]
+    eaf_reference: np.ndarray | None
+    where: str
+
+    @property
+    def state(self) -> CompletionState:
+        return CompletionState.REFERENCE_COMPLETED
+
+
 def _float32_cells(
     z: np.ndarray, se: np.ndarray, eaf: np.ndarray | None, n_rows: int
 ) -> CellValues:
@@ -147,8 +208,10 @@ class RaggedCSRWriter:
     batches, and again in the CSR flush.
     """
 
-    def __init__(self, n_variants: int) -> None:
+    def __init__(self, n_variants: int, completion: ReferenceCompletion | None = None) -> None:
         self._n_variants = int(n_variants)
+        #: A Reference Completion's sequence, or `None` for a build's.
+        self._completion = completion
         self._variant_indices: list[np.ndarray] = []
         self._zscores: list[np.ndarray] = []
         self._ses: list[np.ndarray] = []
@@ -158,6 +221,12 @@ class RaggedCSRWriter:
         #: Hybrid Overflow -- must not pay four bytes a cell for a plane it
         #: will never write (ADR 0067).
         self._ns: list[np.ndarray | None] = []
+        #: Each Analysis's imputed flags, or `None` for one given none: held
+        #: lazily, like `n`, so a build -- whose every cell is observed -- pays
+        #: nothing for the plane only a Reference Completion writes (issue #424).
+        self._imputed: list[np.ndarray | None] = []
+        #: Per Analysis, how many of its SEs exceed `float16`'s range.
+        self._se_out_of_range: list[int] = []
         self._offsets: list[int] = [0]
         #: The baseline this writer has already derived, or `None` before the
         #: first ask. `None` can only mean "not derived": a derivation under a
@@ -179,6 +248,7 @@ class RaggedCSRWriter:
         eaf: np.ndarray | None = None,
         n: np.ndarray | None = None,
         *,
+        imputed: np.ndarray | None = None,
         where: str | None = None,
     ) -> None:
         """Append one analysis. Arrays must be parallel and the same length.
@@ -201,6 +271,10 @@ class RaggedCSRWriter:
         Analysis that carries it; the plane is written only when the plan
         declares one.
 
+        `imputed`, a completion's 0/1 mask, is judged with the cells and
+        written as the `imputed` plane. A completion's out-of-range SEs are
+        logged once, at the write (`ReferenceCompletion`).
+
         Every array must be as long as every other one, checked here before
         anything is cast, judged or stored: an array of another length would
         otherwise be broadcast to `z`'s cells -- one value stored under three
@@ -208,15 +282,30 @@ class RaggedCSRWriter:
         """
         where = where or f"the Ragged writer, analysis_index {self.n_analyses}"
         require_parallel(
-            (("variant_index", variant_index), ("z", z), ("se", se), ("eaf", eaf), ("n", n)),
+            (
+                ("variant_index", variant_index), ("z", z), ("se", se), ("eaf", eaf), ("n", n),
+                ("imputed", imputed),
+            ),
             where=where,
         )
         vi = _sorted_variant_indices(variant_index)
         # Judged as handed over, so a missing marker is judged before a cast
         # could make it canonical; then held as float32 and quantised once, by
         # the codec, at flush -- never pre-rounded into a stored dtype here.
-        kept = storable(CellValues(np.asarray(z), np.asarray(se), eaf), 0, 1, where=where)
-        log_se_out_of_range(kept.se_out_of_range, where=where)
+        kept = storable(
+            CellValues(np.asarray(z), np.asarray(se), eaf, imputed=imputed), 0, 1, where=where
+        )
+        self._se_out_of_range.append(int(np.sum(kept.se_out_of_range)))
+        if self._completion is None:
+            log_se_out_of_range(kept.se_out_of_range, where=where)
+        self._hold(vi, kept, n, flagged=imputed is not None)
+
+    def _hold(
+        self, vi: np.ndarray, kept: Storable, n: np.ndarray | None, *, flagged: bool
+    ) -> None:
+        """Hold one Analysis as `storable` returned it: the rows it stores, with
+        their values, so a row it does not store leaves its frequency, its N and
+        its imputed flag behind."""
         rows = kept.stored
         cells = _float32_cells(kept.cells.z, kept.cells.se, kept.cells.eaf, len(vi))
         self._variant_indices.append(vi[rows])
@@ -224,6 +313,9 @@ class RaggedCSRWriter:
         self._ses.append(np.asarray(cells.se)[rows])
         self._eafs.append(np.asarray(cells.eaf)[rows])
         self._ns.append(None if n is None else encode_sample_sizes(np.asarray(n)[rows]))
+        self._imputed.append(
+            np.asarray(kept.cells.imputed, dtype=np.uint8)[rows] if flagged else None
+        )
         self._offsets.append(self._offsets[-1] + int(np.count_nonzero(rows)))
         # A baseline is a median over every cell at its variant, so a new cell
         # can move one: a held baseline must never outlive the cells it came
@@ -237,6 +329,7 @@ class RaggedCSRWriter:
     @property
     def n_associations(self) -> int:
         return self._offsets[-1]
+
 
     def _flat(self) -> tuple[np.ndarray, np.ndarray]:
         """The concatenated `(variant_index, eaf)` this writer holds."""
@@ -547,7 +640,7 @@ class RaggedCSRWriter:
         se_coefficients: np.ndarray | None,
         total: int,
         region_cells: int,
-    ) -> None:
+    ) -> SeExceptionCounts | None:
         """Encode `se` against the EAF plane just written, region by region.
 
         The residual has to predict from the frequencies a reader will get back,
@@ -555,33 +648,68 @@ class RaggedCSRWriter:
         a region at a time, read back from the plane rather than kept from the
         encode (issue #228). A Hybrid build supplies `se_coefficients` because
         both components share one fit; a Ragged build has only itself to fit
-        against.
+        against; a Reference Completion supplies its source's (issue #301).
+        Returns each Analysis's exception counts under a residual plan.
         """
         plane = self._plane(root, "se", total, encoding.se.dtype)
         if not encoding.se.is_residual:
             for lo, hi in self._flat_regions(total, region_cells):
                 plane[lo:hi] = se_float16(self._gather_region(offsets, lo, hi)[2])
-            return
+            return None
         coefficients = (
             se_coefficients
             if se_coefficients is not None
             else self._fit_own_coefficients(root, encoding, offsets, total)
         )
-        decoded = RaggedEafPlane.open(root, encoding)
         exceptions = SeExceptionBuilder()
-        for lo, hi in self._flat_regions(total, region_cells):
-            plane[lo:hi] = codec.encode_se(
-                self._gather_region(offsets, lo, hi)[2],
-                eaf=decoded.slice(lo, hi),
-                analysis_index=self._region_analysis_indices(offsets, lo, hi),
-                coefficients=coefficients,
-                positions=positions_flat(lo),
-                exceptions=exceptions,
-            )
+        counts = self._encode_residual_regions(
+            root, plane, codec, encoding, offsets, coefficients, exceptions, region_cells
+        )
         write_se_coefficients(root, coefficients, compressor=_COMPRESSOR)
         exceptions.table().write(
             root, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_EXCEPTION_TABLE
         )
+        return counts
+
+    def _encode_residual_regions(
+        self,
+        root: Any,
+        plane: Any,
+        codec: StoreCodec,
+        encoding: StoreEncoding,
+        offsets: np.ndarray,
+        coefficients: np.ndarray,
+        exceptions: SeExceptionBuilder,
+        region_cells: int,
+    ) -> SeExceptionCounts:
+        """Residual-code each region's SEs into `plane`, counting as they go.
+
+        The frequency each cell is coded against is the one a reader decodes
+        for it: the panel's on an imputed cell, read through the `imputed` plane
+        and `eaf_reference` (ADR 0037 §4). In a completion every cell not flagged
+        imputed was decoded from the source Store, so its SE is coded to decode
+        to exactly its value, as an exact exception where no code does (#301).
+        """
+        decoded = RaggedEafPlane.open(
+            root, encoding, imputed=root["imputed"] if "imputed" in root else None
+        )
+        counts = SeExceptionCounts.zeros(self.n_analyses)
+        carried = self._completion is not None
+        for lo, hi in self._flat_regions(self.n_associations, region_cells):
+            analyses = self._region_analysis_indices(offsets, lo, hi)
+            imputed = self._gather_imputed(offsets, lo, hi)
+            codes = codec.encode_se(
+                self._gather_region(offsets, lo, hi)[2],
+                eaf=decoded.slice(lo, hi),
+                analysis_index=analyses,
+                coefficients=coefficients,
+                positions=positions_flat(lo),
+                exceptions=exceptions,
+                exact=imputed == 0 if carried else None,
+            )
+            plane[lo:hi] = codes
+            counts.add(codes, analyses, imputed)
+        return counts
 
     def _fit_own_coefficients(
         self, root: Any, encoding: StoreEncoding, offsets: np.ndarray, total: int
@@ -698,8 +826,11 @@ class RaggedCSRWriter:
         function of its value, keyed on global flat position (`positions_flat(lo)`
         per region).
         `eaf_baseline` lets Reference Completion carry its source's baselines
-        across a variant remap; see `_flush_baseline`.
+        across a variant remap; see `_flush_baseline`. A completion's
+        `eaf_reference` and `imputed` plane are written here, before the SE half
+        decodes through them, and its out-of-range SEs are logged first.
         """
+        self._log_completion_out_of_range()
         out = Path(store_path) / RAGGED_ZARR_PATH
         root = store_arrays.open_group_for_write(out, "w")
         offsets_arr = np.asarray(self._offsets, dtype=np.int64)
@@ -713,6 +844,7 @@ class RaggedCSRWriter:
             dtype=np.int64,
             compressor=_COMPRESSOR,
         )
+        self._write_completion_planes(root, offsets_arr, region_cells)
         self._write_frequency_regions(root, codec, encoding, offsets_arr, baseline, region_cells)
         # Held so the joint SE fit and its byte measurement read these cells
         # back rather than re-encoding them (issue #232). The decoded view is
@@ -729,7 +861,7 @@ class RaggedCSRWriter:
         *,
         se_coefficients: np.ndarray | None = None,
         region_cells: int = DEFAULT_FLUSH_REGION_CELLS,
-    ) -> None:
+    ) -> SeExceptionCounts | None:
         """Add the SE half to the group `write_eaf_plane` created.
 
         The residual has to predict from the frequencies a reader will get
@@ -738,18 +870,27 @@ class RaggedCSRWriter:
         completion marker is written last, and `write_eaf_plane` deliberately
         does not write it: a group carrying only the frequency half is one a
         failed build left, not a finished component (issue #232).
+
+        A Reference Completion's writer carries its observed SEs (see
+        `_encode_residual_regions`) and is marked completed; it reads the
+        returned exception counts, and a build ignores them.
         """
         out = Path(store_path) / RAGGED_ZARR_PATH
         root = store_arrays.open_group_for_write(out, "a")
         offsets_arr = np.asarray(self._offsets, dtype=np.int64)
         codec = StoreCodec(encoding)
-        self._write_se_streamed(
-            root, codec, encoding, offsets_arr, se_coefficients, self.n_associations, region_cells
+        counts = self._write_se_streamed(
+            root, codec, encoding, offsets_arr, se_coefficients, self.n_associations,
+            region_cells,
         )
         root.attrs["layout"] = "ragged"
-        root.attrs["completion_state"] = "observed_only"
+        state = (
+            CompletionState.OBSERVED_ONLY if self._completion is None else self._completion.state
+        )
+        root.attrs["completion_state"] = state.value
         root.attrs["n_analyses"] = self.n_analyses
         root.attrs["n_associations"] = self.n_associations
+        return counts
 
     def flush(
         self,
@@ -759,7 +900,7 @@ class RaggedCSRWriter:
         eaf_baseline: np.ndarray | None = None,
         se_coefficients: np.ndarray | None = None,
         region_cells: int = DEFAULT_FLUSH_REGION_CELLS,
-    ) -> None:
+    ) -> SeExceptionCounts | None:
         """Write the whole CSR: the frequency half, the `n` plane, then the SE half.
 
         One call for callers that hold every cell already -- the standalone
@@ -768,12 +909,16 @@ class RaggedCSRWriter:
         halves itself, because its joint SE fit sits between them (issue #232),
         and never carries `n` (ADR 0067). `n` sits before the SE half because
         that half writes the completion marker, which must come last.
+
+        Reference Completion writes its completed sequence here too (issue
+        #424), through a writer made with a `ReferenceCompletion`, and records
+        the returned exception counts (#301).
         """
         self.write_eaf_plane(
             store_path, encoding, eaf_baseline=eaf_baseline, region_cells=region_cells
         )
         self._write_n_plane(store_path, encoding, region_cells)
-        self.flush_se(
+        return self.flush_se(
             store_path, encoding, se_coefficients=se_coefficients, region_cells=region_cells
         )
 
@@ -801,19 +946,66 @@ class RaggedCSRWriter:
         for lo, hi in self._flat_regions(total, region_cells):
             plane[lo:hi] = self._gather_n(offsets, lo, hi)
 
+    def _log_completion_out_of_range(self) -> None:
+        """A completion's SEs above `float16`'s range, in one line naming each
+        Analysis (spec §15); a build logged its own as each Analysis arrived."""
+        if self._completion is None:
+            return
+        names = self._completion.analysis_ids
+        if len(names) != self.n_analyses:
+            raise ValueError(
+                f"{self._completion.where}: {len(names):,} Analysis ids name a sequence of "
+                f"{self.n_analyses:,} Analyses"
+            )
+        log_se_out_of_range(
+            np.asarray(self._se_out_of_range, dtype=np.int64), names, where=self._completion.where
+        )
+
     def _gather_n(self, offsets: np.ndarray, lo: int, hi: int) -> np.ndarray:
         """The `n` codes for flat cells `[lo, hi)`; missing for an Analysis given none."""
+        return self._gather_held(self._ns, offsets, lo, hi, N_MISSING, np.uint32)
+
+    def _gather_imputed(self, offsets: np.ndarray, lo: int, hi: int) -> np.ndarray:
+        """The imputed flags for flat cells `[lo, hi)`; 0 for an Analysis given none."""
+        return self._gather_held(self._imputed, offsets, lo, hi, 0, np.uint8)
+
+    def _gather_held(
+        self,
+        held: list[np.ndarray | None],
+        offsets: np.ndarray,
+        lo: int,
+        hi: int,
+        absent: int,
+        dtype: Any,
+    ) -> np.ndarray:
+        """A lazily held per-Analysis plane for flat cells `[lo, hi)`, `absent`
+        for each Analysis that was given none."""
         parts: list[np.ndarray] = []
         for analysis in self._analyses_spanning(offsets, lo, hi):
             start = int(offsets[analysis])
             head, tail = max(lo, start) - start, min(hi, int(offsets[analysis + 1])) - start
-            codes = self._ns[analysis]
+            values = held[analysis]
             parts.append(
-                np.full(tail - head, N_MISSING, dtype=np.uint32)
-                if codes is None
-                else codes[head:tail]
+                np.full(tail - head, absent, dtype=dtype) if values is None else values[head:tail]
             )
-        return np.concatenate(parts) if parts else np.empty(0, dtype=np.uint32)
+        return np.concatenate(parts) if parts else np.empty(0, dtype=dtype)
+
+    def _write_completion_planes(self, root: Any, offsets: np.ndarray, region_cells: int) -> None:
+        """What only a Reference Completion writes (issue #424): the imputed
+        mask, when any Analysis was given one, and the panel's frequency per
+        variant, which an imputed cell reads (ADR 0037 §4). A build's component
+        has neither, as before."""
+        reference = None if self._completion is None else self._completion.eaf_reference
+        if reference is not None:
+            write_eaf_reference(
+                root, reference, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_PER_VARIANT
+            )
+        if all(flags is None for flags in self._imputed):
+            return
+        total = self.n_associations
+        plane = self._plane(root, "imputed", total, np.uint8)
+        for lo, hi in self._flat_regions(total, region_cells):
+            plane[lo:hi] = self._gather_imputed(offsets, lo, hi)
 
 
 class RaggedCSRReader:
