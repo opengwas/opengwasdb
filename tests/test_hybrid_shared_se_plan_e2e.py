@@ -40,6 +40,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import residual_fixtures as fixtures
+from query_assertions import decoded_se, indexed_se
 
 from opengwasdb.encoding.plan import SE_EXCEPTION, SE_MISSING, SeEncoding
 from opengwasdb.encoding.planes import DenseSePlane, DenseZPlane
@@ -396,41 +397,33 @@ def test_dense_component_exception_is_the_source_se_float16_cannot_hold(
     `1.0001`, which `float16` rounds to exactly 1.0, and the residual it implies
     is far outside every candidate range, so it must be an exact exception.
     """
-    unprepresentable = float(np.float32(1.0001))
-    assert np.float16(unprepresentable) == np.float16(1.0), (
+    unrepresentable = float(np.float32(1.0001))
+    assert np.float16(unrepresentable) == np.float16(1.0), (
         "the fixture must carry an SE float16 cannot represent, or this proves nothing"
     )
     alid = panel_alid(50)
-    store = _build_hybrid(
-        tmp_path, "exact-se", [{"exact_se_at": {alid: 1.0001}}, dict()]
-    )
+    store = _build_hybrid(tmp_path, "exact-se", [{"exact_se_at": {alid: 1.0001}}, dict()])
     encoding = StoreManifest.load(store)
     assert encoding.encoding.se.is_residual, "the fixture must residual-code its se plane"
     assert encoding.encoding.se == StoreManifest.load(store / "dense").encoding.se
 
     dense_group = _dense_group(store)
     row = _dense_row_by_alid(store)[alid]
-    n_analyses = int(dense_group["se"].shape[1])
-    flat = row * n_analyses
-    assert int(np.asarray(dense_group["se"][row, 0])) == SE_EXCEPTION
+    flat = row * int(dense_group["se"].shape[1])
+    assert int(np.asarray(dense_group["se"][row, 0])) == SE_EXCEPTION, (
+        "the odd SE must be an exact exception, or the table is not under test"
+    )
     index = np.asarray(dense_group["se_exception_index"][:]).tolist()
     assert index.count(flat) == 1
     stored = float(np.asarray(dense_group["se_exception_value"][:])[index.index(flat)])
-    assert stored == unprepresentable, (
-        f"the exception table holds {stored!r}; the source carried {unprepresentable!r}"
+    assert stored == unrepresentable, (
+        f"the exception table holds {stored!r}; the source carried {unrepresentable!r}"
     )
     decoded = DenseSePlane.open(dense_group, encoding.encoding).band(row, row + 1)[0, 0]
-    assert float(decoded) == unprepresentable
+    assert float(decoded) == unrepresentable
 
-    with query_store(store) as query:
-        cell = query.lookup([alid], ["trait_0"])
-        assert len(cell["se"]) == 1
-        assert float(cell["se"][0]) == unprepresentable
-        hits = query.top_hits(threshold=5e-8, analysis_id="trait_0")
-        variants = query.variants_table()
-        names = [variants[int(index)]["alid"] for index in hits["variant_index"]]
-        assert alid in names
-        assert float(hits["se"][np.array([name == alid for name in names])][0]) == unprepresentable
+    assert decoded_se(store, alid, "trait_0") == unrepresentable
+    assert indexed_se(store, alid, "trait_0") == unrepresentable
     assert validate_store(store).ok, validate_store(store).errors
 
 

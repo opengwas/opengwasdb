@@ -2108,6 +2108,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `side_tables.z_overflow` | grid, sequence | fold | the `z` overflow table describes exactly the overflow cells |
 | `side_tables.eaf_exceptions` | grid, sequence | fold | the `eaf` exception table describes exactly the exception cells, and a plane that cannot be decoded is reported |
 | `side_tables.se_exceptions` | grid, sequence | fold | the `se` exception table describes exactly the exception cells |
+| `side_tables.se_exceptions_rounded` | grid, sequence | check | no more than 1% of the `se` exception table is a value a `float16` plane stores, which is what a plane rounded before its plan was chosen holds; an error from `format_version` 0.2.1 and a warning before it |
 | `sample_size.codes` | sequence | fold | every `n` code is a sample size or the missing code, and some cell holds a size |
 | `sample_size.scope` | sequence | fold | an Analysis holding per-association N declares `variant_level` scope |
 | `top_hits.arrays` | grid, sequence | check | every tier carries the arrays a tier is made of |

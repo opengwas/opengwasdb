@@ -59,7 +59,6 @@ from opengwasdb.encoding.codec import (
     EafExceptionTable,
     eaf_exception_table,
     require_parallel,
-    se_float16,
 )
 from opengwasdb.encoding.memory import (
     MEMINFO,
@@ -641,7 +640,6 @@ def _write_encoded_bands(
         n_variants,
         n_analyses,
         effective_chunks,
-        dtype,
         pass2_start,
         encoding,
         n_workers,
@@ -1460,11 +1458,11 @@ def _load_z_column(
         if np.any(hit):
             hit_rows = rows[hit]
             hit_z = zc[hit]
-            # As a `float16` se plane holds it: the index's `se` is float32 and
-            # must be the value the Store decodes at that cell, which for a
-            # residual plan is the plane's own (`write_top_hit_indexes_for_store`
-            # discards this and re-reads once the plan exists).
-            hit_se = se_float16(data["se"][hit]).astype(np.float32)
+            # The value a `float16` se plane stores at this cell, which is what
+            # the index carries under that plan; the codec owns that rounding
+            # (issue #355). Under a residual plan
+            # `write_top_hit_indexes_for_store` re-reads the plane instead.
+            hit_se = codec.float16_se(data["se"][hit]).astype(np.float32)
         else:
             hit_rows = np.empty(0, dtype=np.int64)
             hit_z = np.empty(0, dtype=np.float32)
@@ -1600,7 +1598,6 @@ def _write_dense_z_bands(
     n_analyses: int,
     band_cols: int,
     codec: StoreCodec,
-    dtype: str,
     pass2_start: float,
     n_workers: int,
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray], np.ndarray]:
@@ -1613,11 +1610,11 @@ def _write_dense_z_bands(
     serial path's. At ``n_workers <= 1`` ``ordered_map`` runs the same loader
     in this process, which is the serial path. The top-hit harvest thresholds
     on the **quantised/decoded stored** z -- what a query reads back -- not the
-    source z, and reads each hit's se straight from the spill rounded to the
-    stored dtype. The overflow table is part of the z plane, not an addendum:
-    it is written in the same pass that finished writing z. Returns the
-    per-column hit parts and the per-Analysis ``column_has_eaf`` survey for
-    the coordinator.
+    source z, and takes each hit's se through the codec, as a `float16` plane
+    stores it, because the plan is not decided yet (issue #355). The overflow
+    table is part of the z plane, not an addendum: it is written in the same
+    pass that finished writing z. Returns the per-column hit parts and the
+    per-Analysis ``column_has_eaf`` survey for the coordinator.
     """
     z_arr = root["z"]
     overflow = ZOverflowBuilder()
@@ -1712,7 +1709,6 @@ def write_dense_bands(
     n_variants: int,
     n_analyses: int,
     effective_chunks: tuple[int, int],
-    dtype: str,
     pass2_start: float,
     encoding: StoreEncoding,
     n_workers: int,
@@ -1722,17 +1718,19 @@ def write_dense_bands(
     ``z`` and ``se`` are written in two separate passes so only one band is
     ever resident, and the top-hit harvest runs in the z-pass on the stored z.
     Each pass loads the band's columns across ``n_workers`` forked workers
-    (issue #220); ``n_workers <= 1`` runs the loaders serially in-process.
-    Spills are retained through the se pass and the EAF write, and are only
-    unlinked once both consumed them. Returns the concatenated top-hit
-    candidate arrays ``(rows, cols, z, se)`` plus the per-Analysis
-    ``column_has_eaf`` survey for the index build and EAF decision.
+    (issue #220); ``n_workers <= 1`` runs the loaders serially in-process. Each
+    band takes the dtype of the plane it is written into, so neither pass can
+    round a value its plane holds wider (issue #355). Spills are retained
+    through the se pass and the EAF write, and are only unlinked once both
+    consumed them. Returns the concatenated top-hit candidate arrays ``(rows,
+    cols, z, se)`` plus the per-Analysis ``column_has_eaf`` survey for the index
+    build and EAF decision.
     """
     root = staged.arrays(mode="a")
     band_cols = _shard_columns(root["z"], effective_chunks)
     codec = StoreCodec(encoding)
     rows_parts, cols_parts, z_parts, se_parts, column_has_eaf = _write_dense_z_bands(
-        root, spill_dir, n_variants, n_analyses, band_cols, codec, dtype, pass2_start, n_workers
+        root, spill_dir, n_variants, n_analyses, band_cols, codec, pass2_start, n_workers
     )
     _write_dense_se_bands(
         root, spill_dir, n_variants, n_analyses, band_cols, pass2_start, n_workers

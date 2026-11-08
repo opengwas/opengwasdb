@@ -108,16 +108,15 @@ def _positions_for(mask: np.ndarray, positions: PositionSource, *, what: str) ->
 
 
 def se_float16(values: np.ndarray) -> np.ndarray:
-    """SEs as a `float16` SE plane holds them: the one place an SE is narrowed.
+    """SEs as a `float16` SE plane holds them: the one rounding rule for an SE.
 
     Rounded to nearest, so an SE above 65,504 and below 65,520 becomes 65,504,
     and one of 65,520 or more becomes `+inf`; either stays an association (spec
-    §15, issue #337). The plane's writers and its byte measurement both come
-    through here, so a plane cannot be measured under one rounding and written
-    under another. A build holds its SEs at the source's `float32` until a plan
-    is chosen, because a residual plan's exact exception is that value (issue
-    #355, spec §6a); this is reached only once the plan is `float16`, and for a
-    Dense build's `float16` view of a top-hit candidate's SE.
+    §15, issue #337). Everything that needs an SE as a `float16` plane holds it
+    comes through here or through `StoreCodec.float16_se`, so a plane cannot be
+    measured under one rounding and written under another. A build holds its SEs
+    at the source's `float32` until a plan is chosen, because a residual plan's
+    exact exception is that value (issue #355, spec §6a).
     """
     with np.errstate(over="ignore"):
         narrowed: np.ndarray = np.asarray(values).astype(np.float16)
@@ -998,6 +997,20 @@ class StoreCodec:
         self.se_exceptions = se_exceptions
 
     # ---- se --------------------------------------------------------------
+
+    def float16_se(self, values: np.ndarray) -> np.ndarray:
+        """These SEs as a `float16` plan's plane stores them, at `float16`.
+
+        The non-residual plan's rounding, asked of the codec so no builder or
+        checker narrows an SE itself (issue #355). A Dense build harvests a
+        top-hit candidate's SE this way before its plan is decided, because
+        under a `float16` plan that is the value a query decodes at the cell;
+        `write_top_hit_indexes_for_store` re-reads the plane under a residual
+        one, whose cells hold codes. Validation re-applies it to a source value
+        to compare the cell a `float16` plane stores, and to a table entry to
+        ask whether that entry is one such rounding (spec §20.0).
+        """
+        return se_float16(values)
 
     @staticmethod
     def _se_prediction(

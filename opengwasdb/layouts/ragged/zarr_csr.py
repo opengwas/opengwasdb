@@ -39,7 +39,7 @@ from opengwasdb.encoding.association_codec import (
     log_se_out_of_range,
     storable,
 )
-from opengwasdb.encoding.codec import require_parallel, se_float16
+from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.model.manifest import StoreManifest
@@ -560,7 +560,7 @@ class RaggedCSRWriter:
         plane = self._plane(root, "se", total, encoding.se.dtype)
         if not encoding.se.is_residual:
             for lo, hi in self._flat_regions(total, region_cells):
-                plane[lo:hi] = se_float16(self._gather_region(offsets, lo, hi)[2])
+                plane[lo:hi] = codec.float16_se(self._gather_region(offsets, lo, hi)[2])
             return
         coefficients = (
             se_coefficients
