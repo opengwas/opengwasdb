@@ -258,7 +258,7 @@ source variant on any other contig, an alt, random or unplaced one such as
 from the Analyses that declare it, and logs and counts them in the Admission
 record, per Analysis, as `lift_off_primary` (#376, ADR 0072). A source already on
 the release's assembly is unchanged: its alt contig is a chromosome. A Variant
-Reference's extraction drops such a site too and counts it in its report, and a
+Reference's extraction drops such a site too and logs how many, and a
 build routed by that reference counts the rows of the site as `off_axis`.
 
 A build that lifts a source variant from another Reference Assembly MUST project

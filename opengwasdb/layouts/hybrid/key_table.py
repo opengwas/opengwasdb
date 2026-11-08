@@ -479,7 +479,7 @@ def _drop_unresolved(
     values: np.ndarray,
     alids: list[str | None],
     origins: list[str | None],
-    off_primary: frozenset[str],
+    off_primary: frozenset[str] = frozenset(),
 ) -> ResolvedKeys:
     """Keep the keys that resolved; ``alids``/``origins`` are reused, not copied,
     when every key did (the usual case -- they are tens of millions long)."""
