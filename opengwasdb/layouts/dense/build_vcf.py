@@ -61,6 +61,12 @@ from opengwasdb.encoding.codec import (
     require_parallel,
     se_float16,
 )
+from opengwasdb.encoding.memory import (
+    MEMINFO,
+    available_memory_bytes,
+    memory_budget_bytes,
+    workers_within_memory,
+)
 from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase
 from opengwasdb.encoding.timing import log_progress as log_phase_progress
 from opengwasdb.index import initialise_schema, set_metadata
@@ -808,6 +814,22 @@ def _eaf_row_band(shard_rows: int, n_analyses: int) -> int:
     return max(rows, (target // rows) * rows)
 
 
+#: A band worker's fixed footprint and its per-cell footprint, in bytes. Both
+#: are empirical: `benchmarks/measure_eaf_band_memory.py` runs this module's own
+#: worker, in a forked child, on two real bands of OGS-00009 (251.4M and 25.1M
+#: cells), reads each child's `VmHWM`, and fits `fixed + per cell` -- see
+#: `docs/benchmark-output/opengwasdb_320_eaf_band/eaf_band_memory.json`. The fit
+#: was 135 MiB + 66.9 B a cell; these are its rounded-up forms, so a band's
+#: estimate sits about 8% above the peak it was measured at.
+_EAF_BAND_FIXED_BYTES = 144 * 1024**2
+_EAF_BAND_BYTES_PER_CELL = 72
+
+
+def _eaf_band_bytes(n_analyses: int, band_rows: int) -> int:
+    """Bytes one band's worker holds: the fork's floor plus the cells it encodes."""
+    return _EAF_BAND_FIXED_BYTES + _EAF_BAND_BYTES_PER_CELL * n_analyses * band_rows
+
+
 def _write_dense_eaf(
     staged: StagedRelease,
     spill_dir: Path,
@@ -973,6 +995,48 @@ def _encode_residual_dense_eaf(
     del root[_EAF_STAGING]
 
 
+def _eaf_encode_pool(n_analyses: int, band_rows: int, requested: int) -> int:
+    """The band loop's effective worker count, and the lines that say why.
+
+    A band is at least one Dense shard, so on a wide release a worker holds a
+    large fraction of a gigabyte, and a pool sized from ``--n-workers`` alone
+    can exhaust the host. The budget is a quarter of `MemAvailable` at the
+    phase's start, one band a worker within it, and an unreadable host gets one
+    worker rather than a guess -- silently at `--n-workers 1`, where the
+    reading changes nothing, and with a warning when it does.
+    """
+    per_band_bytes = _eaf_band_bytes(n_analyses, band_rows)
+    budget = memory_budget_bytes(available_memory_bytes())
+    if budget is None and requested > 1:
+        log.warning(
+            "Encode eaf: cannot read %s, so no memory budget can be set under %d worker(s); "
+            "encoding on one worker",
+            MEMINFO,
+            requested,
+        )
+    if budget is not None and budget < per_band_bytes:
+        log.warning(
+            "Encode eaf: a %d-row band of %d analyses needs %d MiB a worker, and the budget "
+            "is %d MiB, less than one band; encoding on one worker, which will overrun it",
+            band_rows,
+            n_analyses,
+            per_band_bytes >> 20,
+            budget >> 20,
+        )
+    workers = workers_within_memory(requested, per_band_bytes, budget)
+    log.info(
+        "Encode eaf: %d of %d worker(s); a %d-row band of %d analyses is %d MiB a worker, "
+        "against a budget of %s",
+        workers,
+        requested,
+        band_rows,
+        n_analyses,
+        per_band_bytes >> 20,
+        "unknown" if budget is None else f"{budget >> 20} MiB",
+    )
+    return workers
+
+
 def _write_eaf_bands(
     encoded: Any,
     baseline: np.ndarray,
@@ -985,18 +1049,32 @@ def _write_eaf_bands(
     The parent consumes ``ordered_map`` in row order, so each band's codes and
     baselines land in the rows they were computed from and the exception runs
     are laid end to end in that same order -- which is the only thing that makes
-    the table's bytes independent of which worker finished first.
+    the table's bytes independent of which worker finished first. How many bands
+    run at once is `_eaf_encode_pool`'s answer, and the parent's window is the
+    same count so it holds one returned band a worker.
     """
+    workers = _eaf_encode_pool(context.n_analyses, context.band_rows, n_workers)
     starts = range(0, context.n_variants, context.band_rows)
     bands: list[EafExceptionTable] = []
-    encoded_bands = ordered_map(_encode_eaf_band, starts, n_workers, shared=context)
+    encoded_bands = ordered_map(
+        _encode_eaf_band, starts, workers, max_in_flight=workers, shared=context
+    )
     for expected, band in zip(starts, encoded_bands, strict=True):
         if band.start != expected:
             raise ValueError(
                 f"encode eaf bands arrived out of order: expected rows from {expected}, "
                 f"got {band.start}"
             )
-        r1 = band.start + len(band.baseline)
+        # The band's rows are the plan's, not the worker's: a result that
+        # describes a different number of them would be written beside the rows
+        # its codes were computed from.
+        r1 = min(band.start + context.band_rows, context.n_variants)
+        if len(band.baseline) != r1 - band.start or len(band.codes) != r1 - band.start:
+            raise ValueError(
+                f"encode eaf band at rows {band.start}:{r1} came back with "
+                f"{len(band.baseline)} baseline(s) and {len(band.codes)} code row(s); "
+                "the band plan and the worker disagree"
+            )
         encoded[band.start:r1] = band.codes
         baseline[band.start:r1] = band.baseline
         bands.append(band.exceptions)
