@@ -580,6 +580,68 @@ do.
 
 ---
 
+### `benchmark_ragged_completion_streams.py` (#424)
+
+Times each phase of `complete-ragged` on a subset of a real Ragged Store and
+projects Phase 3 to the full Store: everything after the blocks, the shard
+pass, the assembly, the CSR write with its variant index, and the top hits. Written for
+OGS-00006 (1,400 Analyses, 10.0B fills), whose first completion held 178 GB
+at 11% of its merge. The subset uses two existing mechanisms and nothing new
+in the package: `impute_analysis_ids` completes the first `--n-analyses`
+Analyses and carries the rest observed-only, and `--ld-dir` may be a directory
+of a few chromosomes symlinked from the real panel. Phases are timed by
+wrapping the completion module's own phase functions under either
+generation's names, so one script times the code before #424 and after it;
+RSS is sampled per phase with `benchmarks/_rss.py`, and the run goes under
+`/usr/bin/time -v` for the lifetime peak. Each artifact records the commit of
+the tree whose package it measured, and a run refuses a tree with uncommitted
+changes under `opengwasdb/`.
+
+Two Phase 3 costs a subset cannot show are measured apart. `shard-append`: the
+shard pass files each checkpoint's records a batch at a time, and a subset has
+one batch where the full Store has its whole batch count. `batch-peak`: what
+reading one batch shard allocates per byte of shard, and what stays held while
+the next is read, since a subset never holds a full batch. `project` combines
+two runs and both: time off the line through the two runs' Phase 3 against
+fills plus the extra filing cost per checkpoint, memory from its parts
+(`_memory_model`), set beside the larger run's measured peaks.
+
+The artifacts of the #424 runs are in
+`docs/benchmark-output/ragged_completion_streams/`.
+
+```bash
+# A chr15-22 panel: the real panel's chromosome directories, linked.
+mkdir -p /data/opengwasdb/work/odb424/panel-chr15-22/EUR
+for f in /data/opengwasdb/reference/ld/EUR/*; do b=$(basename "$f")
+  if [[ ! "$b" =~ ^[0-9]+$ ]] || (( b >= 15 )); then
+    ln -sfn "$f" /data/opengwasdb/work/odb424/panel-chr15-22/EUR/"$b"; fi; done
+
+for n in 25 100; do
+  /usr/bin/time -v pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py \
+      run --source /data/opengwasdb/stores/OGS-00006/store.opengwasdb \
+      --ld-dir /data/opengwasdb/work/odb424/panel-chr15-22 --n-analyses $n --n-workers 16 \
+      --dest /data/opengwasdb/work/odb424/runs/head-$n.opengwasdb \
+      --output docs/benchmark-output/ragged_completion_streams/head-$n.json
+done
+pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py shard-append \
+    --batches 47 --output docs/benchmark-output/ragged_completion_streams/shard-append.json
+pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py batch-peak \
+    --output docs/benchmark-output/ragged_completion_streams/batch-peak.json
+pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py project \
+    docs/benchmark-output/ragged_completion_streams/head-25.json \
+    docs/benchmark-output/ragged_completion_streams/head-100.json \
+    --full-fills 10001552498 --full-checkpoints 1348 \
+    --shard-append docs/benchmark-output/ragged_completion_streams/shard-append.json \
+    --batch-peak docs/benchmark-output/ragged_completion_streams/batch-peak.json \
+    --output docs/benchmark-output/ragged_completion_streams/projection.json
+```
+
+`--batches 47` is the full Store's count: 12.36B cells at 2**28 records a
+batch; `project` refuses a measurement of fewer. To time the code before #424,
+run `run` from a detached worktree of that commit (`git worktree add --detach`)
+with `PYTHONPATH` set to it and `python -P`, so its package is imported
+instead of the checkout's and the artifact names its commit.
+
 ### `benchmark_store_comparison.py`
 
 Compares several Store Releases holding **the same data in different physical
