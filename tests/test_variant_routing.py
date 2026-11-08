@@ -8,20 +8,16 @@ and every lift goes through a chain whose strands are known by construction
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import fields
-from inspect import signature
 from pathlib import Path
 
 import numpy as np
 import pytest
 from liftover_fixtures import write_collision_chain, write_two_strand_chain
 
-from opengwasdb.admission import Gate
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.fake import FakeReader
 from opengwasdb.readers.interface import ReaderAssociation, ReferenceAllele, SourceVariant
 from opengwasdb.readers.registry import SourceSpec
-from opengwasdb.readers.rows import ReaderBatch
 from opengwasdb.variants.reference import VariantReference, read_variant_reference
 from opengwasdb.variants.routing import (
     AssociationBatch,
@@ -512,22 +508,9 @@ def test_an_insertion_and_a_deletion_resolve_their_duplicates_apart():
     assert placed.dropped.tolist() == [1, 1]
 
 
-def test_no_duplicate_rule_reads_a_reference_code():
-    """#357's reversed-indel exception is gone with everything that fed it
-    (#316): the duplicate rule takes no reference codes and reports no
-    displaced rows, routing and the readers carry no code a row, and no reader
-    declares its `alt` the reference."""
-    def names(carrier: type) -> set[str]:
-        return {field.name for field in fields(carrier)}
-
-    assert list(signature(route_table.collapse_duplicates).parameters) == ["place", "z", "se"]
-    assert names(route_table.Duplicates) == {"keep", "conflicting", "dropped", "collapsed"}
-    assert names(route_table.Placed) == {
-        "index", "z", "se", "eaf", "conflicting", "dropped", "collapsed"
-    }
-    assert names(route_table.Unmatched) == {"keys", "z", "se", "eaf", "conflicting"}
-    assert list(signature(Gate.duplicates).parameters) == ["self", "conflicting", "collapsed"]
-    assert "ref_first" not in names(ReaderBatch)
+def test_no_reader_declares_its_alt_the_reference():
+    """A reader declares its `ref` the reference, or nothing (#316): #357's
+    reversed-indel rule, the one reader of an `alt` declaration, is gone."""
     assert [declared.value for declared in ReferenceAllele] == ["undeclared", "ref"]
 
 

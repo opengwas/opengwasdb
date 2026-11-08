@@ -48,8 +48,8 @@ def encode_routing_keys(
 ) -> np.ndarray:
     """A batch's routing keys as one byte-string array, vectorised.
 
-    Byte-for-byte the keys `routing_key` writes, so a batch looked up in a
-    `RouteTable` matches the keys the table was built with. ``pos``
+    Byte-for-byte the keys `routing_key` writes, so a batch matches the keys a
+    lift's placement was built with (the Ragged SSF lift, `ssf_lift`). ``pos``
     int->bytes goes through numpy (``np.int64(10).astype('S') == b'10'``),
     not per-element Python string work.
     """
@@ -67,8 +67,8 @@ def key_hash(key: bytes) -> int:
     CRC-32, because it is the same in every process and every run: `hash()` is
     salted per interpreter, so a table built under one salt would find no row
     for a key hashed under another, and each such association would be dropped
-    as off its axis rather than refused. Looked up when a table is built, not
-    bound as a default, so a test can make every key collide.
+    as off its axis rather than refused. `RouteTable.build` looks it up here
+    when it runs, so a test can make every key collide by replacing it.
     """
     return zlib.crc32(key)
 
@@ -122,6 +122,11 @@ class IntegerKeyCodec:
     length, one whose position the field cannot hold -- holds a hash of its
     whole Routing Key instead, and a bit no exact key sets: equal integers then
     only say two keys may be equal, and the caller compares the ``full`` keys.
+
+    A search key, not a spill format: the chromosome codes are the table's
+    own labels, and a hashed key cannot be decoded. A Hybrid's off-reference
+    spill, which must name keys no table holds, has its own lossless encoding
+    (`layouts.hybrid.unknown_keys`).
     """
 
     def __init__(self, chromosomes: Iterable[str], hash_key: KeyHash) -> None:
@@ -198,8 +203,8 @@ def _one_base_codes(alleles: Sequence[str]) -> np.ndarray:
     return codes
 
 
-def is_hashed(values: np.ndarray) -> np.ndarray:
-    """Whether each integer key holds a hash, so equal integers need not be
-    equal Routing Keys."""
+def hash_tagged(values: np.ndarray) -> np.ndarray:
+    """Whether each `IntegerKeyCodec` key holds a hash, so equal integers need
+    not be equal Routing Keys."""
     hashed: np.ndarray = (values & np.uint64(_HASHED)) != 0
     return hashed

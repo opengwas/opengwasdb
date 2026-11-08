@@ -173,7 +173,7 @@ _EMPTY_DENSE = (
     np.empty(0, dtype=np.float32),
     np.empty(0, dtype=np.float32),
 )
-#: An Overflow component also carries each row's `REFERENCE_*` code.
+#: An Overflow component's spill holds the same four arrays.
 _EMPTY_OVERFLOW = _EMPTY_DENSE
 
 

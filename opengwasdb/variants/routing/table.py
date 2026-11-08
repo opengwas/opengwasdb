@@ -35,7 +35,7 @@ from opengwasdb.variants.routing.keys import (
     IntegerKeys,
     KeyHash,
     SourceKey,
-    is_hashed,
+    hash_tagged,
     routing_key,
 )
 
@@ -454,7 +454,6 @@ class RouteTable:
         axes: Sequence[Sequence[str]],
         *,
         keep_unmatched: bool,
-        key_hash: KeyHash | None = None,
     ) -> RouteTable:
         """Place every routed site on the first axis that holds its ALID.
 
@@ -462,21 +461,21 @@ class RouteTable:
         unmatched. Two sites one routing key spells -- one site written in two
         cases -- must reach the same place with the same orientation: otherwise
         which one a lookup finds would depend on insertion order, and an
-        association would be misplaced in silence. ``key_hash`` hashes the
-        keys the integer cannot spell exactly; `keys.key_hash` by default.
+        association would be misplaced in silence. The keys the integer cannot
+        spell exactly are hashed by `keys.key_hash`.
         """
         if not axes or max(len(axis) for axis in axes) >= np.iinfo(np.int32).max:
             raise ValueError("a route table needs one or more axes, each shorter than int32")
         indices = [{alid: i for i, alid in enumerate(axis)} for axis in axes]
         sites, targets, axis_ids, swapped = _placed_sites(site_alid, reoriented, indices)
         del indices
-        keys, order = _indexed(sites, routing_keys.key_hash if key_hash is None else key_hash)
+        keys, order = _indexed(sites, routing_keys.key_hash)
         target, axis, swaps = _in_key_order(order, targets, axis_ids, swapped)
         _refuse_folded_conflicts(
             keys, target, axis, swaps, lambda at: routing_key(sites[order[at]]).encode()
         )
         table = cls(keys, target, axis, swaps, n_axes=len(axes), keep_unmatched=keep_unmatched)
-        hashed = int(is_hashed(keys.values).sum())
+        hashed = int(hash_tagged(keys.values).sum())
         log.info(
             "Pass 2 lookup: %d variant keys, %d of them hashed and matched on the full key, "
             "%d re-oriented by the lift",
@@ -488,10 +487,6 @@ class RouteTable:
 
     def __len__(self) -> int:
         return len(self._keys)
-
-    def integer_keys(self, sites: Sequence[SourceKey]) -> IntegerKeys:
-        """``sites`` as the integer keys this table is searched by."""
-        return self._keys.codec.encode(*_columns_of(sites))
 
     def route_column(
         self,
@@ -687,7 +682,7 @@ def _refuse_folded_conflicts(
     differ = (target[1:] != target[:-1]) | (swaps[1:] != swaps[:-1])
     if axis is not None:
         differ |= axis[1:] != axis[:-1]
-    hashed = is_hashed(values[1:])
+    hashed = hash_tagged(values[1:])
     exact = np.flatnonzero(same & ~hashed & differ)
     if len(exact):
         _refuse(key_at(int(exact[0]) + 1))

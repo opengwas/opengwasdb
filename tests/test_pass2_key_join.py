@@ -25,7 +25,7 @@ from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.interface import ReaderAssociation, ReferenceAllele
 from opengwasdb.variants.routing import RouteTable
 from opengwasdb.variants.routing import keys as routing_keys
-from opengwasdb.variants.routing.keys import routing_key
+from opengwasdb.variants.routing.keys import MAX_CHROMOSOMES, IntegerKeyCodec, routing_key
 
 GOLDEN = json.loads(fixtures.GOLDEN.read_text(encoding="utf-8"))
 
@@ -148,14 +148,20 @@ def _association(site: tuple[str, int, str, str], z: float) -> ReaderAssociation
     )
 
 
-def test_keys_a_hash_sends_to_one_integer_each_reach_their_own_row():
+def _encoded(sites: list[tuple[str, int, str, str]], chromosomes: list[str]):
+    """``sites``' integer keys, under the hash a table built now would use."""
+    codec = IntegerKeyCodec(chromosomes, routing_keys.key_hash)
+    return codec.encode(*map(list, zip(*sites, strict=True)))
+
+
+def test_keys_a_hash_sends_to_one_integer_each_reach_their_own_row(monkeypatch):
+    monkeypatch.setattr(routing_keys, "key_hash", _every_key_collides)
     alids = [f"1:100:{ref.upper()}:{alt.upper()}" for _, _, ref, alt in _INDELS]
     table = RouteTable.build(
-        dict(zip(_INDELS, alids, strict=True)), (), [alids], keep_unmatched=True,
-        key_hash=_every_key_collides,
+        dict(zip(_INDELS, alids, strict=True)), (), [alids], keep_unmatched=True
     )
     queried = [*_INDELS, _ABSENT]
-    encoded = table.integer_keys(queried)
+    encoded = _encoded(queried, ["1"])
     # Fixture first: every query, the absent one too, shares one integer key.
     assert len(set(encoded.values.tolist())) == 1
     assert encoded.hashed.tolist() == list(range(len(queried)))
@@ -168,3 +174,37 @@ def test_keys_a_hash_sends_to_one_integer_each_reach_their_own_row():
     n = len(queried)
     assert by_index == {i: float(n - 1 - i) for i in range(len(_INDELS))}
     assert column.unmatched.keys == [routing_key(_ABSENT)]
+
+
+# ── the integer key's limits ─────────────────────────────────────────────────
+
+
+def test_a_table_codes_at_most_max_chromosomes_labels():
+    """A chromosome code is 16 bits: one label more than they hold is
+    refused, never wrapped onto another chromosome's code."""
+    labels = [f"contig{i}" for i in range(MAX_CHROMOSOMES + 1)]
+    IntegerKeyCodec(labels[:-1], routing_keys.key_hash)
+    with pytest.raises(ValueError, match=f"names {MAX_CHROMOSOMES + 1} chromosomes"):
+        IntegerKeyCodec(labels, routing_keys.key_hash)
+
+
+def test_a_position_the_field_cannot_hold_is_hashed_and_matched_on_the_full_key():
+    """A position is 30 bits. One past them is hashed and confirmed, so it
+    reaches its own row and no other: written into the field, 2^30 + 1 on
+    chromosome 1 would carry into the chromosome bits and read as 2:1."""
+    big, edge = ("1", 2**30, "A", "G"), ("1", 2**30 - 1, "A", "G")
+    absent, other = ("1", 2**30 + 1, "A", "G"), ("2", 1, "A", "G")
+    sites = {big: "1:1073741824:A:G", edge: "1:1073741823:A:G", other: "2:1:A:G"}
+    alids = list(sites.values())
+    table = RouteTable.build(sites, (), [alids], keep_unmatched=True)
+    queried = [big, edge, absent, other]
+    # Fixture first: the two positions past the field are hashed, the edge is exact.
+    assert _encoded(queried, ["1", "2"]).hashed.tolist() == [0, 2]
+
+    column = table.route_column([_association(site, float(i)) for i, site in enumerate(queried)])
+
+    placed = column.placed[0]
+    assert dict(zip(placed.index.tolist(), placed.z.tolist(), strict=True)) == {
+        0: 0.0, 1: 1.0, 2: 3.0
+    }
+    assert column.unmatched.keys == [routing_key(absent)]

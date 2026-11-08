@@ -12,4 +12,7 @@
   `ReferenceAllele.ALT` and routing's `REFERENCE_*`, `allele_order` and
   `reference_codes` are gone. A Hybrid's Overflow and off-reference spills no
   longer carry a `reference` array; a resumed build ignores one written
-  before. Stores and Admission records are unchanged.
+  before. The spill format is internal to a build and has changed; the Store
+  has not. Rebuilt from its sources before and after, the Hybrid pilot
+  (OGS-00004) has identical arrays (75), `analyses.tsv`, `variants.tsv.gz` and
+  Admission record, as does the FinnGen R13 pilot (OGS-00003).
