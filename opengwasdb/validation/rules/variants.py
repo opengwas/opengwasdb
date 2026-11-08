@@ -31,6 +31,7 @@ from opengwasdb.variants import (
     variant_alid_bytes_path,
     variant_table_path,
 )
+from opengwasdb.variants.normalise import is_primary_contig
 
 #: Rows one block of the stream holds: enough to amortise the per-block work,
 #: few enough that a block's records are a small, bounded allocation.
@@ -343,6 +344,44 @@ def _spells_indels_reference_first(target: Target) -> bool:
     return indels_reference_first(target.store.manifest.format_version)
 
 
+@dataclass(frozen=True)
+class _LiftedOffPrimary:
+    """How many table rows name a lifted variant on a non-primary contig, and the first."""
+
+    n_rows: int = 0
+    first: str = ""
+
+    def __add__(self, other: _LiftedOffPrimary) -> _LiftedOffPrimary:
+        return _LiftedOffPrimary(self.n_rows + other.n_rows, self.first or other.first)
+
+
+def _lifted_off_primary(_target: Target, block: TableBlock) -> _LiftedOffPrimary:
+    """Each row on an alt, random or unplaced contig whose ``source_alid`` is on another.
+
+    A source on the release's assembly keeps its alt contig, so its ``source_alid``
+    is the ALID itself; a lift's is the source's own coordinate, on another contig.
+    A row with no ``source_alid`` (no lift, or a collision blanked it) is not judged.
+    """
+    n_rows, first = 0, ""
+    for offset, record in enumerate(block.records):
+        if record.source_alid is None or is_primary_contig(record.chromosome):
+            continue
+        if record.source_alid.split(":", 1)[0] != record.chromosome:
+            n_rows += 1
+            first = first or f"row {block.start + offset}: {record.alid} from {record.source_alid}"
+    return _LiftedOffPrimary(n_rows, first)
+
+
+def _judge_lifted_off_primary(_target: Target, found: _LiftedOffPrimary) -> Iterator[str]:
+    if found.n_rows:
+        yield (
+            f"{found.n_rows} variant(s) of variants.tsv.gz were lifted onto an alt, random or "
+            f"unplaced contig ({found.first}): a build leaves such a variant out and counts "
+            "its rows as lift_off_primary (#376), so this release was built before that, or "
+            "routed by a Variant Reference extracted before it -- rebuild it"
+        )
+
+
 def variant_aliases(target: Target) -> Iterator[str]:
     """Every alias names a variant the table holds.
 
@@ -417,6 +456,15 @@ RULES: tuple[Rule, ...] = (
         zero=_IndelOrder(),
         measure=_indel_order,
         judge=_judge_indel_order,
+    ),
+    Fold(
+        name="variant_table.lifted_contig",
+        kinds=Kind.RELEASE,
+        after=(REQUIRED,),
+        scan=VARIANT_TABLE,
+        zero=_LiftedOffPrimary(),
+        measure=_lifted_off_primary,
+        judge=_judge_lifted_off_primary,
     ),
     Check(
         name="sqlite.variant_aliases",

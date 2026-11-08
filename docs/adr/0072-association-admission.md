@@ -119,9 +119,20 @@ name the decisions issue #357 took on the rules that differed.
 | `lift_off_primary` | its source is lifted onto the Store's assembly and the chain places its site on an alt, random or unplaced contig, which a Store does not hold | yes | #376 |
 
 `build-ragged-ssf` lifts a source declaring another build, and counts what the
-lift drops under its own two reasons rather than `off_axis`: a record then says
+lift drops under its own three reasons (`lift_unmapped`, `lift_ambiguous` and, since
+#376, `lift_off_primary`) rather than `off_axis`: a record then says
 the chain, not an axis, lost the row. Records written before #386 hold neither
 reason and read as before. The rule set's version moved to `admission/11`.
+
+A lift onto an alt, random or unplaced contig (#376, `admission/14`) is counted this
+way by every builder, not only `build-ragged-ssf`: Dense and Hybrid lift the rows
+a Variant Reference does not hold to tell them from `off_axis` ones, and a
+reference extracted before #376 that routes a lifted row onto such a contig has the
+row dropped and counted the same way. A Store records each Analysis's source
+assembly nowhere, so no rule can say which Analysis's rows were lifted; the rule
+`variant_table.lifted_contig` judges the variant table instead, by `source_alid`
+(the contig a lifted variant came from), and cannot judge a row whose `source_alid`
+a collision blanked. The routing check above is what covers those.
 
 The duplicate rule is Variant Routing's `collapse_duplicates`, applied after
 the rules above, wherever two rows can reach one (variant, Analysis):

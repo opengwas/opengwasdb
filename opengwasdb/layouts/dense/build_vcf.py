@@ -112,6 +112,7 @@ from opengwasdb.variants.routing import (
     VariantRouting,
     route_variants,
 )
+from opengwasdb.variants.routing.lift import lifted_off_primary
 
 log = logging.getLogger(__name__)
 
@@ -315,6 +316,10 @@ class _PreparedBuild:
     rules: Mapping[str, AnalysisRules] = field(default_factory=dict)
     #: The routing keys of the sites a lift placed off the primary assembly (#376).
     off_primary: frozenset[str] = frozenset()
+    #: The chain a single-pass build lifts its hg19 Analyses' unmatched rows by, to
+    #: tell a lift's off-primary drops from `off_axis` ones; None for a two-pass
+    #: build, whose union has lifted every site already (#376).
+    unmatched_lift: UnmatchedLift | None = None
     #: The ``--variant-reference`` a single-pass build was given, or None for
     #: the inline two-pass build. Recorded in the store manifest's provenance
     #: so the axis's origin is auditable (issue #185).
@@ -467,6 +472,7 @@ def _prepare_axis(
         column_map=column_map_provenance(manifest_rows),
         rules=rules,
         off_primary=routing.off_primary,
+        unmatched_lift=UnmatchedLift(chain_file) if variant_reference is not None else None,
     )
 
 
@@ -481,6 +487,29 @@ class _Pass2Context:
     alids: Sequence[str]
     rules: Mapping[str, AnalysisRules]
     off_primary: frozenset[str] = frozenset()
+    unmatched_lift: UnmatchedLift | None = None
+
+
+@dataclass(frozen=True)
+class UnmatchedLift:
+    """How a single-pass build tells a lift's drops from `off_axis` ones: its hg19
+    Analyses' unmatched rows are lifted by ``chain_file``, and those the chain
+    places off the primary assembly are counted as `lift_off_primary` (#376)."""
+
+    chain_file: str | Path | None
+
+
+def _unmatched_off_primary(
+    keys: Sequence[str], row: ManifestRow, context: _Pass2Context
+) -> frozenset[str]:
+    """The routing keys among ``keys`` the build's lift places off the primary
+    assembly: those the union found, and, for a single-pass build's hg19 Analysis,
+    those its unmatched rows lift onto."""
+    lift = context.unmatched_lift
+    if lift is None or row.source_assembly != "hg19" or not keys:
+        return context.off_primary
+    sites = [(c, int(p), r, a) for c, p, r, a in (key.split(":") for key in keys)]
+    return context.off_primary | lifted_off_primary(sites, chain_file=lift.chain_file)
 
 
 def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
@@ -506,7 +535,9 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
         gate.streamed(tally)
         placed = routed.placed[0]
         record_duplicates(gate, placed, context.alids)
-        gate.unplaced_off_axis(routed.unmatched.keys, context.off_primary)
+        gate.unplaced_off_axis(
+            routed.unmatched.keys, _unmatched_off_primary(routed.unmatched.keys, row, context)
+        )
         se = apply_se_divisor(placed.se, row.se_divisor)
         where = f"build-dense-vcf, Analysis {row.trait_id}"
         kept = storable(CellValues(placed.z, se, placed.eaf), 0, 1, where=where)
@@ -560,7 +591,8 @@ def _spill_columns(
         admission_record, [row.trait_id for row in manifest_rows], command="build-dense-vcf"
     )
     context = _Pass2Context(
-        prepared.table, spill_dir, record, prepared.axis.alids, prepared.rules, prepared.off_primary
+        prepared.table, spill_dir, record, prepared.axis.alids, prepared.rules,
+        prepared.off_primary, prepared.unmatched_lift,
     )
     columns = fork_each(_route_and_spill, context, tasks, n_workers)
     for i, col_idx in enumerate(columns):

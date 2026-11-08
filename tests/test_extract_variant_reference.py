@@ -1009,12 +1009,13 @@ def _materialised_union(
         options=UnionOptions(window_size_mb, reduction_batch_size, map_spill_records),
         stats=None,
     )
-    source_lookup, reoriented, _dropped, _off_primary = place_union(
+    placed = place_union(
         tuples_by_assembly,
         chain_file=None,
         failure_threshold=liftover_failure_threshold,
     )
-    return source_lookup, expected_rsids_by_routing(rsid_by_site, source_lookup), reoriented
+    source_lookup = placed.lookup
+    return source_lookup, expected_rsids_by_routing(rsid_by_site, source_lookup), placed.reoriented
 
 
 def _materialising_writer_output(

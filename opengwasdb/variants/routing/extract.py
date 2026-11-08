@@ -36,16 +36,20 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import TypeVar
+from typing import NamedTuple, TypeVar
 
 from opengwasdb.build.liftover import LiftoverFailureError, lifted_rows, statistics_swap
 from opengwasdb.build.ordered_pool import fork_pool
 from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.variants.axis import alid_sort_key
-from opengwasdb.variants.normalise import canonical_alid, is_primary_contig
+from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.variants.reference import ARTIFACT_HEADER, artifact_line
 from opengwasdb.variants.routing.keys import SourceKey, routing_key
-from opengwasdb.variants.routing.lift import cross_assembly_collisions, log_cross_assembly_drop
+from opengwasdb.variants.routing.lift import (
+    cross_assembly_collisions,
+    log_cross_assembly_drop,
+    split_off_primary,
+)
 from opengwasdb.variants.routing.names import refuse_disputed_names
 from opengwasdb.variants.routing.union import (
     Pass1Stats,
@@ -451,6 +455,17 @@ def _read_assembly_records(
     return hg38_records, hg19_records
 
 
+class _Buckets(NamedTuple):
+    """`_bucket_lifted_records`' result: the post-lift buckets, the identities both
+    assemblies declared, the re-oriented sites the buckets hold, and the off-primary
+    sites left out (#376)."""
+
+    buckets: dict[WindowKey, list[str]]
+    collisions: int
+    reoriented: int
+    off_primary: int
+
+
 def _bucket_lifted_records(
     hg38_records: Mapping[tuple[str, int, str, str], tuple[tuple[int, int], str]],
     hg19_records: Mapping[tuple[str, int, str, str], tuple[tuple[int, int], str]],
@@ -458,7 +473,7 @@ def _bucket_lifted_records(
     reoriented: AbstractSet[SourceKey],
     size_bp: int,
     off_primary: AbstractSet[SourceKey] = frozenset(),
-) -> tuple[dict[WindowKey, list[str]], int, int, int]:
+) -> _Buckets:
     """Drop cross-assembly ambiguous tuples, then bucket survivors by post-lift window.
 
     The union's rule, `cross_assembly_collisions`, over the hg38 group and the
@@ -491,7 +506,7 @@ def _bucket_lifted_records(
         buckets.setdefault(window_key(post_chrom, int(post_pos), size_bp), []).append(
             _lifted_line(rank, site, alid, site in reoriented, rsid)
         )
-    return buckets, n_tuples, n_reoriented, n_off_primary
+    return _Buckets(buckets, n_tuples, n_reoriented, n_off_primary)
 
 
 def _colliding_sites(
@@ -521,13 +536,13 @@ def _stage_liftover_window(task: _LiftStageTask) -> _StagedWindow:
     rows, attempts, failures = lifted_rows(
         hg19_records, chain_file=task.chain_file, from_build="hg19", to_build="hg38"
     )
-    on_primary = {key: row for key, row in rows.items() if is_primary_contig(row.chromosome)}
-    off_primary = rows.keys() - on_primary.keys()
-    lifted = {key: row.alid for key, row in on_primary.items()}
-    reoriented = {key for key, row in on_primary.items() if statistics_swap(key, row)}
-    buckets, collisions, n_reoriented, n_off_primary = _bucket_lifted_records(
-        hg38_records, hg19_records, lifted, reoriented, task.size_bp, off_primary
+    split = split_off_primary(rows)
+    lifted = {key: row.alid for key, row in split.primary.items()}
+    reoriented = {key for key, row in split.primary.items() if statistics_swap(key, row)}
+    bucketed = _bucket_lifted_records(
+        hg38_records, hg19_records, lifted, reoriented, task.size_bp, split.off_primary
     )
+    buckets = bucketed.buckets
     members_dir = Path(task.members_dir)
     specs: list[_LiftedBucket] = []
     for index, (post_window, lines) in enumerate(buckets.items()):
@@ -536,7 +551,8 @@ def _stage_liftover_window(task: _LiftStageTask) -> _StagedWindow:
             handle.writelines(lines)
         specs.append(_LiftedBucket(post_window, sub_shard_path))
     return _StagedWindow(
-        tuple(specs), attempts, failures, collisions, n_reoriented, n_off_primary
+        tuple(specs), attempts, failures, bucketed.collisions, bucketed.reoriented,
+        bucketed.off_primary,
     )
 
 

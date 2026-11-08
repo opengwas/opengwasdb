@@ -87,6 +87,7 @@ from opengwasdb.variants.normalise import (
     HmCodeIndel,
     HmColumnsIndel,
     InvalidAllele,
+    LiftedOffPrimary,
     MissingChromosome,
     UndeclaredReference,
     UnharmonisedIndel,
@@ -147,7 +148,7 @@ class Reason(StrEnum):
     #: A row of a source lifted onto the Store's assembly whose site the chain
     #: places on an alt, random or unplaced contig: the Store holds the primary
     #: assembly's contigs only, so no row of it is placed (#376).
-    LIFT_OFF_PRIMARY = "lift_off_primary"
+    LIFT_OFF_PRIMARY = LiftedOffPrimary.reason
 
 
 #: The reasons whose rows are logged by source key, not only counted. A declared

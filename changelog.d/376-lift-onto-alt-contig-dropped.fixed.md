@@ -7,3 +7,14 @@
   `ADMISSION_RULES` to `admission/14`. A source already on GRCh38 is
   unchanged: an alt contig there is still a chromosome. Stores built before
   this change are unchanged; the published Stores' rebuilds are #367's.
+
+  A Variant Reference extracted before this change, which still routes an hg19
+  row onto an alt contig, has that row dropped and counted at build time, and a
+  build routed by a reference counts a lift's off-primary rows as
+  `lift_off_primary`, not `off_axis`. A Hybrid checkpoint written before this
+  change is refused on resume (`CHECKPOINT_FORMAT_VERSION` 4): start the build
+  again. `validate` gains `variant_table.lifted_contig`, which fails a release
+  whose variant table holds a variant lifted onto an alt, random or unplaced
+  contig, so OGS-00008, -09 and -27 now fail it until rebuilt (#367).
+  `provenance.lift.n_lifted` still counts the sites the chain mapped, and
+  `n_off_primary` is added beside it.

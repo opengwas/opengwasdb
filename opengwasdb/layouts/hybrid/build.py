@@ -99,8 +99,8 @@ from opengwasdb.layouts.hybrid.checkpoint import (
     AXIS,
     AXIS_CANONICAL_RAW,
     AXIS_OFF_PANEL,
-    AXIS_PANEL,
     AXIS_OFF_PRIMARY,
+    AXIS_PANEL,
     AXIS_SHARED,
     FOLD_DIR,
     HITS,
@@ -970,6 +970,10 @@ def _route(
         n_workers=options.n_workers,
         label=label,
     )
+    if options.variant_reference is not None:
+        # The routing drops the reference's ALIDs that only a lift onto an alt,
+        # random or unplaced contig reaches (#376); the panel keeps none of them.
+        panel_alids &= set(routing.alids)
     return routing, panel_alids
 
 
@@ -2038,10 +2042,19 @@ def _recorded_axis(state: CheckpointState | None) -> _FoldInputs | None:
 
 
 def _recorded_off_primary(state: CheckpointState) -> frozenset[str]:
-    """The raw keys the first run's lift placed off the primary assembly. A
-    checkpoint written before they were recorded names none (#376)."""
+    """The raw keys the first run's lift placed off the primary assembly (#376).
+
+    A recorded axis always has the file, empty when no key was placed off it; a
+    missing one is refused, since reading it as empty would publish the alt-contig
+    ALIDs the lift put on the axis uncounted."""
     path = state.path / AXIS_OFF_PRIMARY
-    return frozenset(read_lines(path)) if path.exists() else frozenset()
+    if not path.exists():
+        raise ValueError(
+            f"The checkpoint at {state.path} records an axis but not {path.name}, which "
+            f"this build writes beside it: the record is torn or predates this build. "
+            f"Start the build again with --checkpoint."
+        )
+    return frozenset(read_lines(path))
 
 
 def _update_partition(

@@ -54,6 +54,7 @@ from opengwasdb.readers.rows import (
 from opengwasdb.stats import FrequencyTally, parse_af
 from opengwasdb.variants.normalise import (
     IdentityFaults,
+    LiftedOffPrimary,
     MalformedIdentity,
     Orientation,
     VariantNormalisationError,
@@ -156,10 +157,7 @@ def project_lifted_alleles(
 def _lift_variant(
     liftover: object, chrom: str, pos_str: str, effect: str, other: str
 ) -> tuple[str, str, str, str] | None:
-    """Lift one SNP and project its alleles onto one unambiguous mapping strand.
-
-    ``None`` when the lift places it nowhere, or on an alt, random or unplaced
-    contig: a build drops such a row (#376), and so does this."""
+    """Lift one SNP and project its alleles onto one unambiguous mapping strand."""
     _require_snp(effect, other)
     bare = chrom[3:] if chrom.lower().startswith("chr") else chrom
     identity = f"{chrom}:{pos_str}:{effect}:{other}"
@@ -173,8 +171,6 @@ def _lift_variant(
     new_chrom, new_pos, strand, *_rest = mapping
     effect, other = project_lifted_alleles(strand, effect, other, identity)
     bare_target = new_chrom[3:] if new_chrom.lower().startswith("chr") else new_chrom
-    if not is_primary_contig(bare_target):
-        return None
     return bare_target, str(int(new_pos) + 1), effect, other
 
 
@@ -186,11 +182,14 @@ def oriented_variant(
     other: str,
     *,
     other_is_reference: bool,
+    off_primary: list[str] | None = None,
 ) -> Orientation | None:
     """One source row's canonical orientation, lifted first when `liftover` is set.
 
-    `None` when the row names no usable variant: unnormalisable alleles, or a
-    lift that did not land. An indel or an ambiguous mapping under a lift
+    `None` when the row names no usable variant: unnormalisable alleles, a lift
+    that did not land, or one that landed on an alt, random or unplaced contig,
+    which a Store does not hold (#376): ``off_primary``, given, then gets the row's
+    own spelling, so a caller can tell the last from the others. An indel or an ambiguous mapping under a lift
     raises `LiftoverProjectionError` instead, because no single position lift
     can establish its target identity (ADR 0044). Shared with the BESD resolver
     (issue #282), which aligns `.esi` rows by the same rule.
@@ -198,6 +197,10 @@ def oriented_variant(
     if liftover is not None:
         lifted = _lift_variant(liftover, chrom, pos, effect, other)
         if lifted is None:
+            return None
+        if not is_primary_contig(lifted[0]):
+            if off_primary is not None:
+                off_primary.append(f"{chrom}:{pos}:{effect}:{other}")
             return None
         chrom, pos, effect, other = lifted
     try:
@@ -524,8 +527,13 @@ def _lifted_rows_of(
         if isinstance(identity, MalformedIdentity):
             faults.record(f"{chrom_raw}:{pos}:{ref}:{alt}", identity)
             continue
-        orientation = oriented_variant(liftover, chrom_raw, pos, alt, ref, other_is_reference=True)
+        off_primary: list[str] = []
+        orientation = oriented_variant(
+            liftover, chrom_raw, pos, alt, ref, other_is_reference=True, off_primary=off_primary
+        )
         if orientation is None:
+            if off_primary:
+                faults.record(f"{chrom_raw}:{pos}:{ref}:{alt}", LiftedOffPrimary(off_primary[0]))
             continue
         variant = orientation.variant
         se = _parse_positive_float(se_cell)

@@ -399,7 +399,7 @@ def _lift_hg19(
     lift_positions = np.concatenate([packed_positions, hashed_positions])
     for position, tup in zip(lift_positions.tolist(), tuples, strict=True):
         alids[position] = placement.alid.get(tup)
-    return frozenset(":".join(map(str, site)) for site in placement.off_primary)
+    return frozenset(raw_key(site) for site in placement.off_primary)
 
 
 class UnorientedOffReferenceLiftError(ValueError):
@@ -432,6 +432,12 @@ def _require_oriented(
         f"a wrong sign. Build this source two-pass (a --reference-panel axis, or no "
         f"--variant-reference) so the lift happens in Pass 1 (issue #284)."
     )
+
+
+def raw_key(site: tuple[str, int, str, str]) -> str:
+    """``site`` as the raw ``chrom:pos:ref:alt`` key the off-reference spill names it by,
+    which `decode_packed` spells for a packed key."""
+    return ":".join(map(str, site))
 
 
 def _split_source_key(key: str) -> tuple[str, int, str, str]:

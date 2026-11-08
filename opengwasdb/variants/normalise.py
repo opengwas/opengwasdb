@@ -53,6 +53,13 @@ class MissingChromosome(MalformedIdentity):
     reason = "chromosome_missing"
 
 
+class LiftedOffPrimary(MalformedIdentity):
+    """A lift places the row on an alt, random or unplaced contig (#376): a Store
+    does not hold it, so a reader that lifts drops it and names it in its tally."""
+
+    reason = "lift_off_primary"
+
+
 class InvalidAllele(MalformedIdentity):
     """An allele is empty, or holds a character other than A, C, G or T."""
 

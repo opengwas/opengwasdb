@@ -101,7 +101,13 @@ __all__ = [
 #: than in ``info_counts.json``; the record's path is a build parameter. A
 #: format-2 checkpoint has no record to resume, so it is refused and the build
 #: starts again.
-CHECKPOINT_FORMAT_VERSION = 3
+#:
+#: **4** (opengwasdb#376): the recorded axis names the keys the off-reference
+#: lift placed off the primary assembly, which the fold counts as
+#: ``lift_off_primary``. A format-3 checkpoint's axis may hold such a lift's
+#: alt-contig ALIDs with no record of them, so it is refused and the build
+#: starts again.
+CHECKPOINT_FORMAT_VERSION = 4
 
 #: The function a refusal tells an operator to call.
 RESUME_FUNCTION = "resume_hybrid_build"

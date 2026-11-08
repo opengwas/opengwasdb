@@ -31,6 +31,7 @@ from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -100,13 +101,14 @@ class SitePlacement:
 
         A lift here is never checked against a reference, so `reference` is
         ``null`` and its counts are too: an unchecked lift does not read as a
-        checked one. ``n_lifted`` counts the sites the chain placed, the
-        ambiguous ones among them.
+        checked one. ``n_lifted`` counts the sites the chain mapped, those it
+        placed off the primary assembly (``n_off_primary``) and the ambiguous
+        ones among them.
         """
         return {
             "source_build": "hg19",
             "chain_file": str(chain_file) if chain_file is not None else None,
-            "n_lifted": len(self.alid),
+            "n_lifted": len(self.alid) + len(self.off_primary),
             "n_unmapped": self.n_unmapped,
             "n_off_primary": len(self.off_primary),
             "n_ambiguous": len(self.ambiguous),
@@ -213,9 +215,8 @@ def place_batch(batch: ReaderBatch, lifted: bool, placement: SitePlacement) -> P
     ambiguous = [
         i for i, site in enumerate(sites) if routing_key(site) in placement.ambiguous
     ]
-    moves, unmapped, off_primary = (
-        _moves(sites, set(ambiguous), placement) if lifted else ({}, [], [])
-    )
+    moved = _moves(sites, set(ambiguous), placement) if lifted else _Moves({}, [], [])
+    moves, unmapped, off_primary = moved.moves, moved.unmapped, moved.off_primary
     alid = batch.alid.copy()
     swapped = np.zeros(len(sites), dtype=bool)
     for i, (moved, reoriented) in moves.items():
@@ -238,9 +239,18 @@ def place_batch(batch: ReaderBatch, lifted: bool, placement: SitePlacement) -> P
     )
 
 
+class _Moves(NamedTuple):
+    """`_moves`' result: each moved row's ALID and orientation, and the rows the
+    chain placed nowhere or off the primary assembly."""
+
+    moves: dict[int, tuple[str, bool]]
+    unmapped: list[int]
+    off_primary: list[int]
+
+
 def _moves(
     sites: list[SourceKey], skip: set[int], placement: SitePlacement
-) -> tuple[dict[int, tuple[str, bool]], list[int], list[int]]:
+) -> _Moves:
     """Each lifted row's ALID on GRCh38 and whether the lift re-oriented it, the
     rows the chain placed nowhere, and those it placed off the primary assembly.
     A row in ``skip`` is dropped already."""
@@ -255,4 +265,4 @@ def _moves(
             (off_primary if site in placement.off_primary else unmapped).append(i)
         else:
             moves[i] = (moved, site in placement.reoriented)
-    return moves, unmapped, off_primary
+    return _Moves(moves, unmapped, off_primary)
