@@ -631,8 +631,9 @@ def test_the_validation_rule_names_a_lifted_variant_on_an_alt_contig():
     )
     found = _lifted_off_primary(None, block)
     assert found.n_rows == 1 and "row 1" in found.first
+    assert found.n_unjudged == 1
     (message,) = _judge_lifted_off_primary(None, found)
-    assert "rebuild it" in message
+    assert "rebuild it" in message and "1 not judged (no source ALID)" in message
     empty = _lifted_off_primary(None, TableBlock(0, [], None))
     assert not list(_judge_lifted_off_primary(None, empty))
 
@@ -659,3 +660,68 @@ def test_the_lifted_contig_rule_fails_a_release_its_builders_make_and_warns_on_o
     (finding,) = rule.judged(target, found)
     assert finding.severity.value == severity
     assert not list(rule.judged(target, _LiftedOffPrimary()))
+
+
+# --- A single-pass build applies the off-primary set by assembly ----------------
+
+
+def _mixed_assembly_vcfs(tmp_path: Path) -> dict[str, Path]:
+    """`old` is hg19 and lifts its chr5 row onto the alt contig; `new` is GRCh38 and
+    declares the same key, the other locus."""
+    return {
+        "old": write_gwas_vcf_with_eaf(tmp_path / "o.vcf", _alt_and_primary_rows()),
+        "new": write_gwas_vcf_with_eaf(
+            tmp_path / "n.vcf", [_vcf_row("5", 1_000, "G", "A"), _vcf_row("3", 2_000, "G", "A")]
+        ),
+    }
+
+
+def _mixed_dense(tmp_path: Path, chain: Path, **options) -> list[Mapping[str, object]]:
+    sub = tmp_path / f"mixed{len(list(tmp_path.glob('mixed*')))}"
+    sub.mkdir()
+    store = sub / "dense.opengwasdb"
+    build_dense_from_vcf_manifest(
+        _vcf_manifest(sub, _mixed_assembly_vcfs(sub), assembly={"old": "hg19", "new": "hg38"}),
+        store, store_id="s", release_id="r", chain_file=chain, **options,
+    )
+    return [analysis["dropped"] for analysis in _admission(store)]
+
+
+def test_single_pass_dense_counts_a_shared_key_as_two_pass_does(tmp_path, chain):
+    """The key both assemblies declare is two loci: neither row is a lift's drop, and a
+    GRCh38 row is never one. Two-pass drops both as `off_axis`; so must a build routed
+    by a reference, whether the reference is a head extraction or a stale one."""
+    from extraction_fixtures import extract_from_manifest
+
+    expected = [{"off_axis": 1}, {"off_axis": 1}]
+    assert _mixed_dense(tmp_path, chain) == expected, "two-pass is the yardstick"
+
+    sub = tmp_path / "extract"
+    sub.mkdir()
+    artifact = sub / "head.variant-ref.tsv.gz"
+    extract_from_manifest(
+        _vcf_manifest(sub, _mixed_assembly_vcfs(sub), assembly={"old": "hg19", "new": "hg38"}),
+        artifact, chain_file=chain, liftover_failure_threshold=0.0,
+    )
+    assert _mixed_dense(tmp_path, chain, variant_reference=artifact) == expected
+
+    alt, primary = ALT_LIFTED_ROW, PRIMARY_LIFTED_ROW
+    stale = _reference_with(
+        tmp_path, [primary[4], "3:2000:A:G", alt[4]],
+        {alt[:4]: alt[4], primary[:4]: primary[4], ("3", 2_000, "G", "A"): "3:2000:A:G"},
+    )
+    assert _mixed_dense(tmp_path, chain, variant_reference=stale) == expected
+
+
+def test_the_lifted_contig_rule_warns_when_it_found_nothing_but_could_not_judge_rows():
+    from types import SimpleNamespace
+
+    from opengwasdb.validation.rules.variants import RULES, _LiftedOffPrimary
+
+    rule = next(r for r in RULES if r.name == "variant_table.lifted_contig")
+    target = SimpleNamespace(
+        store=SimpleNamespace(manifest=SimpleNamespace(format_version="0.3.0")), label="."
+    )
+    (finding,) = rule.judged(target, _LiftedOffPrimary(0, "", 3))
+    assert finding.severity.value == "warning"
+    assert "3 not judged (no source ALID)" in finding.message

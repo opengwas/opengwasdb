@@ -148,6 +148,14 @@ a collision blanked. It is an error on a release of format 0.2.1 or later, which
 fixed builders write, and a warning on an earlier one, which #367 owns. The routing
 check above is what covers the rows it cannot judge.
 
+One limit #367 must know if it rebuilds from a published axis. A plain ALID list
+or a Store Variant Table used as a Variant Reference records no source keys, so the
+build cannot tell an alt-contig ALID that a lift put on it from one a GRCh38 source
+named: it keeps the ALID, whose row stays empty in the new Store, and
+`variant_table.lifted_contig` passes it, since the row's `source_alid` is the ALID
+itself. A Store rebuilt from such an axis holds the alt-contig variants with no
+associations until the axis is rebuilt from the sources.
+
 The duplicate rule is Variant Routing's `collapse_duplicates`, applied after
 the rules above, wherever two rows can reach one (variant, Analysis):
 - the Dense VCF and Hybrid builds, through routing: an axis's rows, and the

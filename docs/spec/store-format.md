@@ -267,7 +267,13 @@ onto an alt contig, and the build drops that row and its ALID, and counts the ro
 the same way. The release records the lift by `source_alid`, which `validate`
 judges (`variant_table.lifted_contig`, §20.0): it names the contig a lifted
 variant came from, and a row whose `source_alid` was blanked by a collision is not
-judged, so a release can be checked for the drop only where that column survives.
+judged, so a release can be checked for the drop only where that column survives. A
+plain ALID list, or another Store's variant table, used as a Variant Reference
+records no source keys: the build keeps an alt-contig ALID it holds, as a GRCh38
+source's variant, and its row stays empty in the release, which
+`variant_table.lifted_contig` passes because the row's `source_alid` is the ALID itself.
+A release rebuilt from a published axis therefore holds the axis's alt-contig
+variants, with no associations, until the axis is rebuilt from the sources.
 
 A build that lifts a source variant from another Reference Assembly MUST project
 the variant onto the release's assembly using the chain block's orientation: on a

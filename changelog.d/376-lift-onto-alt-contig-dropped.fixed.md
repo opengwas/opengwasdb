@@ -13,8 +13,10 @@
   build routed by a reference counts a lift's off-primary rows as
   `lift_off_primary`, not `off_axis`. A Hybrid checkpoint written before this
   change is refused on resume (`CHECKPOINT_FORMAT_VERSION` 4): start the build
-  again. `validate` gains `variant_table.lifted_contig`, which fails a release
+  again. `validate` gains `variant_table.lifted_contig`, which flags a release
   whose variant table holds a variant lifted onto an alt, random or unplaced
-  contig, so OGS-00008, -09 and -27 now fail it until rebuilt (#367).
+  contig. It is an error from format 0.2.1 and a warning on earlier releases, so
+  OGS-00008, -09 and -27 (0.1.0/0.2.0) now warn on it until rebuilt (#367); it does not
+  fail them.
   `provenance.lift.n_lifted` still counts the sites the chain mapped, and
   `n_off_primary` is added beside it.

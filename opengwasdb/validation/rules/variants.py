@@ -347,13 +347,19 @@ def _spells_indels_reference_first(target: Target) -> bool:
 
 @dataclass(frozen=True)
 class _LiftedOffPrimary:
-    """How many table rows name a lifted variant on a non-primary contig, and the first."""
+    """How many table rows name a lifted variant on a non-primary contig, the first,
+    and how many non-primary rows have no ``source_alid`` to judge them by."""
 
     n_rows: int = 0
     first: str = ""
+    n_unjudged: int = 0
 
     def __add__(self, other: _LiftedOffPrimary) -> _LiftedOffPrimary:
-        return _LiftedOffPrimary(self.n_rows + other.n_rows, self.first or other.first)
+        return _LiftedOffPrimary(
+            self.n_rows + other.n_rows,
+            self.first or other.first,
+            self.n_unjudged + other.n_unjudged,
+        )
 
 
 def _lifted_off_primary(_target: Target, block: TableBlock) -> _LiftedOffPrimary:
@@ -361,26 +367,33 @@ def _lifted_off_primary(_target: Target, block: TableBlock) -> _LiftedOffPrimary
 
     A source on the release's assembly keeps its alt contig, so its ``source_alid``
     is the ALID itself; a lift's is the source's own coordinate, on another contig.
-    A row with no ``source_alid`` (no lift, or a collision blanked it) is not judged.
+    A row on such a contig with no ``source_alid`` (no lift, or a collision blanked
+    it) cannot be judged, and is counted so the message can say so.
     """
-    n_rows, first = 0, ""
+    n_rows, first, n_unjudged = 0, "", 0
     for offset, record in enumerate(block.records):
-        if record.source_alid is None or is_primary_contig(record.chromosome):
+        if is_primary_contig(record.chromosome):
             continue
-        if record.source_alid.split(":", 1)[0] != record.chromosome:
+        if record.source_alid is None:
+            n_unjudged += 1
+        elif record.source_alid.split(":", 1)[0] != record.chromosome:
             n_rows += 1
             first = first or f"row {block.start + offset}: {record.alid} from {record.source_alid}"
-    return _LiftedOffPrimary(n_rows, first)
+    return _LiftedOffPrimary(n_rows, first, n_unjudged)
+
+
+def _unjudged(found: _LiftedOffPrimary) -> str:
+    return f"{found.n_unjudged} not judged (no source ALID)"
 
 
 def _judge_lifted_off_primary(_target: Target, found: _LiftedOffPrimary) -> Iterator[str]:
     if found.n_rows:
         yield (
             f"{found.n_rows} variant(s) of variants.tsv.gz were lifted onto an alt, random or "
-            f"unplaced contig ({found.first}): a build leaves such a variant out and counts "
-            "its rows as lift_off_primary (#376), so this release was built before that, or "
-            "routed by a Variant Reference extracted before it -- rebuild it (an earlier "
-            "format's release is #367's)"
+            f"unplaced contig ({found.first}), {_unjudged(found)}: a build leaves such a "
+            "variant out and counts its rows as lift_off_primary (#376), so this release was "
+            "built before that, or routed by a Variant Reference extracted before it -- "
+            "rebuild it (an earlier format's release is #367's)"
         )
 
 
@@ -388,13 +401,22 @@ def _judge_lifted_off_primary(_target: Target, found: _LiftedOffPrimary) -> Iter
 class _ErrorFromFormat(Fold[TableBlock, _LiftedOffPrimary]):
     """A fold that fails a release of a format whose builders cannot write what it finds
     (0.2.1 or later, `indels_reference_first`) and warns on an earlier one, which says
-    what the release is without failing a Store nobody can fix in place (#376, #367)."""
+    what the release is without failing a Store nobody can fix in place (#376, #367).
+
+    Where it finds nothing but cannot judge some rows, it warns that it did not."""
 
     def judged(self, target: Target, total: _LiftedOffPrimary) -> Iterator[validation_rule.Finding]:
         severity = validation_rule.Severity
         level = severity.ERROR if _spells_indels_reference_first(target) else severity.WARNING
         for message in self.judge(target, total):
             yield self.finding(target, message, level)
+        if not total.n_rows and total.n_unjudged:
+            yield self.finding(
+                target,
+                f"{_unjudged(total)}: variants.tsv.gz has non-primary-contig variants with no "
+                "source_alid, which cannot be told from a lift's",
+                severity.WARNING,
+            )
 
 
 def variant_aliases(target: Target) -> Iterator[str]:
