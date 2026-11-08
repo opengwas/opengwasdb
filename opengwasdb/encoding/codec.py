@@ -112,10 +112,12 @@ def se_float16(values: np.ndarray) -> np.ndarray:
 
     Rounded to nearest, so an SE above 65,504 and below 65,520 becomes 65,504,
     and one of 65,520 or more becomes `+inf`; either stays an association (spec
-    §15, issue #337). The plane's writers, its byte
-    measurement and the Dense build's rounding of the SEs it holds exactly
-    (issue #355) all come through here, so a plane cannot be measured under
-    one rounding and written under another.
+    §15, issue #337). The plane's writers and its byte measurement both come
+    through here, so a plane cannot be measured under one rounding and written
+    under another. A build holds its SEs at the source's `float32` until a plan
+    is chosen, because a residual plan's exact exception is that value (issue
+    #355, spec §6a); this is reached only once the plan is `float16`, and for a
+    Dense build's `float16` view of a top-hit candidate's SE.
     """
     with np.errstate(over="ignore"):
         narrowed: np.ndarray = np.asarray(values).astype(np.float16)

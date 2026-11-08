@@ -90,6 +90,7 @@ def _analysis_rows(
     *,
     drop_eaf_at: str | None = None,
     exact_exception_at: tuple[str, ...] = (),
+    exact_se_at: dict[str, float] | None = None,
     missing_dense_from: int | None = None,
     exception_factor: float = 50.0,
 ) -> list[str]:
@@ -100,10 +101,13 @@ def _analysis_rows(
     which is the one cell that vetoes residual eligibility for the whole pair
     (issue #141 AC2/AC3). ``exact_exception_at`` names ALIDs whose SE is
     scaled by ``exception_factor``, pushing the residual far beyond every
-    candidate range so each must be stored exactly. ``missing_dense_from``
-    leaves the tail panel variants unobserved, so their Dense cells stay
-    missing. Rows are emitted in position order.
+    candidate range so each must be stored exactly. ``exact_se_at`` names
+    ALIDs whose SE is a given value instead of the model's, for an exception
+    whose exact value the test knows. ``missing_dense_from`` leaves the tail
+    panel variants unobserved, so their Dense cells stay missing. Rows are
+    emitted in position order.
     """
+    exact_se_at = exact_se_at or {}
     frequencies = np.linspace(0.05, 0.95, N_PANEL, dtype=np.float64)
     off_frequencies = np.linspace(0.10, 0.90, N_OFF_PANEL, dtype=np.float64)
     rows: list[str] = []
@@ -112,22 +116,31 @@ def _analysis_rows(
             continue
         rows.append(_row((row + 1) * 1000, frequencies[row], row, column,
                          drop_eaf=(panel_alid(row) == drop_eaf_at),
-                         scale=exception_factor if panel_alid(row) in exact_exception_at else 1.0))
+                         scale=exception_factor if panel_alid(row) in exact_exception_at else 1.0,
+                         se_override=exact_se_at.get(panel_alid(row))))
     for row in range(N_OFF_PANEL):
         in_exceptions = overflow_alid(row) in exact_exception_at
         rows.append(_row(OFF_BASE + row * 1000, off_frequencies[row], row, column,
                          drop_eaf=(overflow_alid(row) == drop_eaf_at),
-                         scale=exception_factor if in_exceptions else 1.0))
+                         scale=exception_factor if in_exceptions else 1.0,
+                         se_override=exact_se_at.get(overflow_alid(row))))
     return rows
 
 
 def _row(
-    position: int, freq: float, phase: int, column: int, *, drop_eaf: bool, scale: float
+    position: int,
+    freq: float,
+    phase: int,
+    column: int,
+    *,
+    drop_eaf: bool,
+    scale: float,
+    se_override: float | None = None,
 ) -> str:
     """One ``1:POS A G`` hg38 row; REF=A is the stored effect allele, so the
     z the store reports is -ES/SE (the two cancel in every assertion below,
     which is about `se`)."""
-    se = _se_value(column, freq, phase) * scale
+    se = _se_value(column, freq, phase) * scale if se_override is None else se_override
     # Row 0 and every 50th row carries |z| = 8 (a p < 5e-8 top hit), which is
     # what lets the exception rows appear in the top-hit index; the rest are
     # filler that keeps the dense plane's byte gates honest.
@@ -367,6 +380,58 @@ def test_residual_hybrid_exact_exception_cells_decode_exactly(tmp_path: Path) ->
             )
             assert mask.any()
             assert float(hits["se"][mask][0]) == exact
+
+
+# -- the Dense Component's exceptions are the source's float32 ----------------
+
+
+def test_dense_component_exception_is_the_source_se_float16_cannot_hold(
+    tmp_path: Path,
+) -> None:
+    """Issue #355 through a Hybrid's Dense Component.
+
+    The component is written by the Dense band-writer that ``build-dense-vcf``
+    shares, so its exception table used to hold the `float16` rounding of the
+    source's SE rather than the source's `float32` (spec §6a). The odd SE is
+    `1.0001`, which `float16` rounds to exactly 1.0, and the residual it implies
+    is far outside every candidate range, so it must be an exact exception.
+    """
+    unprepresentable = float(np.float32(1.0001))
+    assert np.float16(unprepresentable) == np.float16(1.0), (
+        "the fixture must carry an SE float16 cannot represent, or this proves nothing"
+    )
+    alid = panel_alid(50)
+    store = _build_hybrid(
+        tmp_path, "exact-se", [{"exact_se_at": {alid: 1.0001}}, dict()]
+    )
+    encoding = StoreManifest.load(store)
+    assert encoding.encoding.se.is_residual, "the fixture must residual-code its se plane"
+    assert encoding.encoding.se == StoreManifest.load(store / "dense").encoding.se
+
+    dense_group = _dense_group(store)
+    row = _dense_row_by_alid(store)[alid]
+    n_analyses = int(dense_group["se"].shape[1])
+    flat = row * n_analyses
+    assert int(np.asarray(dense_group["se"][row, 0])) == SE_EXCEPTION
+    index = np.asarray(dense_group["se_exception_index"][:]).tolist()
+    assert index.count(flat) == 1
+    stored = float(np.asarray(dense_group["se_exception_value"][:])[index.index(flat)])
+    assert stored == unprepresentable, (
+        f"the exception table holds {stored!r}; the source carried {unprepresentable!r}"
+    )
+    decoded = DenseSePlane.open(dense_group, encoding.encoding).band(row, row + 1)[0, 0]
+    assert float(decoded) == unprepresentable
+
+    with query_store(store) as query:
+        cell = query.lookup([alid], ["trait_0"])
+        assert len(cell["se"]) == 1
+        assert float(cell["se"][0]) == unprepresentable
+        hits = query.top_hits(threshold=5e-8, analysis_id="trait_0")
+        variants = query.variants_table()
+        names = [variants[int(index)]["alid"] for index in hits["variant_index"]]
+        assert alid in names
+        assert float(hits["se"][np.array([name == alid for name in names])][0]) == unprepresentable
+    assert validate_store(store).ok, validate_store(store).errors
 
 
 # -- missing cells stay missing under a residual plan -------------------------

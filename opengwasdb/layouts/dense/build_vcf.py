@@ -1284,8 +1284,10 @@ def _load_z_column(
         if np.any(hit):
             hit_rows = rows[hit]
             hit_z = zc[hit]
-            # As the band pass holds it (`_load_se_column`); a residual plan's
-            # index re-reads its SE through the plane once the plan exists.
+            # As a `float16` se plane holds it: the index's `se` is float32 and
+            # must be the value the Store decodes at that cell, which for a
+            # residual plan is the plane's own (`write_top_hit_indexes_for_store`
+            # discards this and re-reads once the plan exists).
             hit_se = se_float16(data["se"][hit]).astype(np.float32)
         else:
             hit_rows = np.empty(0, dtype=np.int64)
@@ -1320,15 +1322,17 @@ class _LoadedColumn:
 
 
 def _load_se_column(spill_dir: Path, n_variants: int, c: int) -> _LoadedColumn:
-    """One Analysis's SE column, rounded to `float16` before the float32 scratch holds it.
+    """One Analysis's SE column, at the `float32` the source reported it.
 
-    The rounding reaches every SE the plane keeps exactly, so a residual plan's
-    exception table holds `float16`-rounded values, not the source's (issue
-    #355, which fixes it; spec §6a promises the source's). It is kept here, in
-    the open, so the Stores this build writes stay byte-identical until then.
+    The column reaches the scratch plane unrounded because that plane is where
+    a residual plan's exact exception table comes from (`_encode_band`), and
+    spec §6a says such an exception is the source's own value. Narrowing an SE
+    is the codec's: `_narrow_dense_se_to_float16` when the measured plan turns
+    out to be `float16` (issue #355).
     """
-    column = _load_sparse_column(spill_dir, n_variants, "se", c)
-    return _LoadedColumn(col=c, column=se_float16(column))
+    return _LoadedColumn(
+        col=c, column=_load_sparse_column(spill_dir, n_variants, "se", c)
+    )
 
 
 def _load_eaf_column(spill_dir: Path, n_variants: int, c: int) -> _LoadedColumn:
@@ -1478,22 +1482,26 @@ def _write_dense_se_bands(
     n_variants: int,
     n_analyses: int,
     band_cols: int,
-    dtype: str,
     pass2_start: float,
     n_workers: int,
 ) -> None:
-    """se pass: the independent float-scratch write over one band at a time.
+    """se pass: the independent scratch write over one band at a time.
 
     ``z`` and ``se`` no longer share a dtype (ADR 0037), so this pass owns a
     fresh buffer of its own rather than reusing the z pass's. Its columns are
     loaded in parallel exactly as the z pass's are, and ``ordered_map`` keeps
     them in Analysis order so the written band is the serial one.
+
+    The buffer takes the dtype of the plane ``create_dense_zarr`` created -- the
+    `float32` scratch -- and not the build's ``dtype``: a `float16` band would
+    round every SE before the codec decided the plan, and a residual plan's
+    exact exception is read back out of this plane (issue #355, spec §6a).
     """
     se_arr = root["se"]
     loader = partial(_load_se_column, spill_dir, n_variants)
     with log_phase(log, "Band-write se"):
         for _c, _loaded, flush in _ordered_bands(
-            loader, n_analyses, n_workers, n_variants, band_cols, dtype, "se"
+            loader, n_analyses, n_workers, n_variants, band_cols, str(se_arr.dtype), "se"
         ):
             if flush is not None:
                 _flush_band(se_arr, flush, "Band-write se", n_analyses, pass2_start, band_cols)
@@ -1551,7 +1559,7 @@ def write_dense_bands(
         root, spill_dir, n_variants, n_analyses, band_cols, codec, dtype, pass2_start, n_workers
     )
     _write_dense_se_bands(
-        root, spill_dir, n_variants, n_analyses, band_cols, dtype, pass2_start, n_workers
+        root, spill_dir, n_variants, n_analyses, band_cols, pass2_start, n_workers
     )
     _write_dense_eaf(
         staged,

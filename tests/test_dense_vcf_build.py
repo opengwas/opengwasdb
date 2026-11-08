@@ -34,14 +34,18 @@ from residual_fixtures import (
 )
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
+from opengwasdb.encoding.plan import SE_EXCEPTION
+from opengwasdb.encoding.planes import DenseSePlane
 from opengwasdb.layouts.dense.build_vcf import _spill_column, build_dense_from_vcf_manifest
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.store.open import open_store
 from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation import validate_store
+from opengwasdb.variants import VariantAxis
 from opengwasdb.variants.reference import read_variant_reference, write_variant_reference
 
 # hg19 positions used in fixtures and their expected hg38 positions
@@ -1684,6 +1688,136 @@ def test_standalone_gwas_vcf_build_codes_residual_se_and_falls_back_without_eaf(
             assert np.isfinite(result["se"]).all()
             np.testing.assert_allclose(result["se"], expected_for(col), rtol=0.01)
     assert validate_store(fallback).ok, validate_store(fallback).errors
+
+
+#: An SE `float16` cannot hold: near 1.0 its spacing is 2**-10, so this rounds
+#: to exactly 1.0. A build reads the source's `float32` 1.00010001..., which
+#: spec §6a says an exact exception stores unchanged (issue #355). Written as
+#: five significant digits because the GWAS-VCF reader's `bcftools query`
+#: prints an SE at six, so a longer literal would not survive the source.
+_UNREPRESENTABLE_SE_TEXT = "1.0001"
+_UNREPRESENTABLE_SE = np.float32(1.0001)
+#: The row the odd SE sits on. 451st variant, and |z| = 8, so the exception is
+#: also a top hit: one fixture proves the plane and the index agree.
+_EXCEPTION_ROW = 300
+
+
+def _exception_se_rows(column: int, *, exception: bool) -> list[str]:
+    """Shared frequency-fixture rows, one SE of which `float16` cannot hold.
+
+    Every other row's SE tracks the MAF model, so the plane is eligible for
+    residual coding. The odd row's does not, which puts its residual outside
+    every candidate range, so the build must store it exactly.
+    """
+    rows = maf_vcf_rows(column, lambda _row, _col: 1.0)
+    if exception:
+        position = (_EXCEPTION_ROW + 1) * 1000
+        frequency = MAF_VCF_FREQUENCIES[_EXCEPTION_ROW]
+        rows[_EXCEPTION_ROW] = (
+            f"1\t{position}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t"
+            f"{8.0 * float(_UNREPRESENTABLE_SE_TEXT):.6f}:{_UNREPRESENTABLE_SE_TEXT}"
+            f":{frequency:.6f}\n"
+        )
+    return rows
+
+
+@pytest.fixture(scope="module")
+def residual_se_exception_store(tmp_path_factory) -> Path:
+    """A residual Dense release whose t0 carries one SE `float16` cannot hold."""
+    tmp_path = tmp_path_factory.mktemp("residual-se-exception")
+    vcfs = {
+        tid: write_gwas_vcf_with_eaf(
+            tmp_path / f"{tid}.vcf", _exception_se_rows(col, exception=col == 0)
+        )
+        for col, tid in enumerate(("t0", "t1"))
+    }
+    store = tmp_path / "exception.opengwasdb"
+    build_dense_from_vcf_manifest(
+        write_hg38_manifest(tmp_path / "exception.manifest.tsv", vcfs),
+        store,
+        store_id="s",
+        release_id="r",
+        chunk_shape=(100, 2),
+    )
+    return store
+
+
+def _exception_cell(store: Path) -> tuple[int, str]:
+    """The row and ALID of the odd SE's variant, and the flat position it codes at."""
+    alid = f"1:{(_EXCEPTION_ROW + 1) * 1000}:A:G"
+    axis = VariantAxis(store)
+    rows = {record.alid: int(record.variant_index) for record in axis.all()}
+    axis.close()
+    return rows[alid], alid
+
+
+def test_residual_se_exception_is_the_source_se_float16_cannot_hold(
+    residual_se_exception_store: Path,
+) -> None:
+    """Issue #355: a Dense build stores an exact SE exception as the source's
+    `float32`, not as the `float16` the plane happened to scratch in.
+
+    The pre-fix band write rounded every SE to `float16` before the float32
+    scratch plane held it, so the exception table held 1.0 beside a source that
+    said 1.0001 -- a value a query could not tell from a correctly stored one.
+    """
+    store = residual_se_exception_store
+    assert np.float16(_UNREPRESENTABLE_SE) == np.float16(1.0), (
+        "the fixture must carry an SE float16 cannot represent, or this proves nothing"
+    )
+    encoding = StoreManifest.load(store).encoding
+    assert encoding.se.is_residual, "the fixture must residual-code its se plane"
+
+    root = open_store(store).arrays(mode="r")
+    row, _alid = _exception_cell(store)
+    n_analyses = int(root["se"].shape[1])
+    flat = row * n_analyses
+    assert int(np.asarray(root["se"][row, 0])) == SE_EXCEPTION, (
+        "the odd SE must be an exact exception, or the table is not under test"
+    )
+    index = np.asarray(root["se_exception_index"][:]).tolist()
+    assert index.count(flat) == 1
+    stored = float(np.asarray(root["se_exception_value"][:])[index.index(flat)])
+    assert stored == float(_UNREPRESENTABLE_SE), (
+        f"the exception table holds {stored!r}; the source carried "
+        f"{float(_UNREPRESENTABLE_SE)!r}"
+    )
+    assert stored != float(np.float16(_UNREPRESENTABLE_SE))
+
+    decoded = DenseSePlane.open(root, encoding).band(row, row + 1)[0, 0]
+    assert float(decoded) == float(_UNREPRESENTABLE_SE)
+    with query_store(store) as query:
+        _row, alid = _exception_cell(store)
+        cell = query.lookup([alid], ["t0"])
+        assert len(cell["se"]) == 1
+        assert float(cell["se"][0]) == float(_UNREPRESENTABLE_SE)
+    assert validate_store(store).ok, validate_store(store).errors
+
+
+def test_top_hit_index_carries_the_exception_se_the_plane_decodes(
+    residual_se_exception_store: Path,
+) -> None:
+    """The Top-Hit Index's SE for a hit is the SE the Store decodes there.
+
+    The index's `se` is `float32` and rule `top_hits.se` says it equals the
+    decoded plane's, which for an exact exception is the source's `float32`.
+    """
+    store = residual_se_exception_store
+    encoding = StoreManifest.load(store).encoding
+    row, alid = _exception_cell(store)
+    root = open_store(store).arrays(mode="r")
+    decoded = float(DenseSePlane.open(root, encoding).band(row, row + 1)[0, 0])
+
+    with query_store(store) as query:
+        hits = query.top_hits(threshold=5e-8, analysis_id="t0")
+        variants = query.variants_table()
+        alids = [variants[int(index)]["alid"] for index in hits["variant_index"]]
+        assert alid in alids, "the fixture's |z| = 8 cell must reach the index"
+        indexed = float(hits["se"][np.array([name == alid for name in alids])][0])
+        assert hits["se"].dtype == np.dtype("float32")
+
+    assert indexed == decoded, f"the index holds {indexed!r}, the plane decodes {decoded!r}"
+    assert indexed == float(_UNREPRESENTABLE_SE)
 
 
 def test_cli_default_source_assembly_applies_to_dense_build(tmp_path):
