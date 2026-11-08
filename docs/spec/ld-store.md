@@ -76,8 +76,8 @@ identifiers, no per-sample values of any kind. A reader ignores any array or gro
   contiguous and cover rows `[0, n_variants)`. A row's **chromosome-local row** is its row minus
   its chromosome's `row_start`; `near/` and `index/` use local rows.
 - `position` is the 1-based position on the Reference Assembly, `int32`.
-- `alid` is the engine's ALID, exactly as the engine's identity function forms it. ogld#3 decides
-  whether ogld imports that function or holds a tested copy; this format stores what it forms.
+- `alid` is the engine's ALID, exactly as the engine's identity function forms it. ogld holds a copy
+  of that function, tested against the engine's own answers (ADR 0003); this format stores what it forms.
   `a1` and `a2` are the variant's two alleles as the engine's _Variant Identity_ spells them, A1
   first, in full (opengwas/opengwasdb ADR 0017 keeps the full alleles). All three are Zarr v3
   variable-length UTF-8 strings (`string` data type), and none is ever truncated.
