@@ -13,7 +13,6 @@ bands of the narrowed scan below -- over residual-coded ``se`` and ``eaf`` plane
 the layout where the inline side holds the source's own values and the scan side
 only ever sees the plane.
 """
-
 from __future__ import annotations
 
 import logging
@@ -29,7 +28,7 @@ from residual_fixtures import (
 )
 
 from benchmarks.compare_store_releases import compare_values, discover_arrays
-from opengwasdb.layouts.dense import top_hits as dense_top_hits
+from opengwasdb.encoding.banding import BYTES_PER_CELL
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.model.manifest import StoreManifest
@@ -51,11 +50,12 @@ TIER_ROWS = (0, 250, 550)
 TIER_MAGNITUDES = {0: 6.0, 250: 4.7, 550: 3.6}
 TIER_STEPS = {0: 0.05, 250: 0.02, 550: 0.04}
 
-#: Rows per band for the standalone scan. `build_top_hit_indexes` sizes its own
-#: bands as `max(z.chunks[0], 250_000)`, which is one band for any fixture small
-#: enough to belong in this suite, so the multi-band rebuild is driven by
-#: wrapping `_scan_candidates` -- the one function that takes the band size.
-SCAN_BAND_ROWS = 250
+#: Rows per band for the narrowed standalone scan: several bands over this
+#: fixture, where the default one-GiB budget would give the old single band. It
+#: is the budget that is narrowed, so the band is the one `build_top_hit_indexes`
+#: sizes for itself; `band_rows` rounds it to whole rows chunks of `z`.
+SCAN_BAND_ROWS = 200
+SCAN_WORKING_BYTES = SCAN_BAND_ROWS * BYTES_PER_CELL * len(ANALYSES)
 
 
 def _designed_z(row: int, column: int) -> float:
@@ -129,7 +129,7 @@ def _assert_index_matches(inline: Path, rebuilt: Path) -> None:
 
 
 def test_a_dense_builds_inline_top_hit_index_equals_a_standalone_rebuild(
-    tmp_path, caplog, monkeypatch
+    tmp_path, caplog
 ) -> None:
     with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits"):
         inline = _build_inline_store(tmp_path)
@@ -185,28 +185,13 @@ def test_a_dense_builds_inline_top_hit_index_equals_a_standalone_rebuild(
 
     narrow = Path(shutil.copytree(inline, tmp_path / "narrow.opengwasdb"))
     caplog.clear()
-    _narrow_the_scan(monkeypatch)
     with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits"):
-        build_top_hit_indexes(narrow)
+        build_top_hit_indexes(narrow, working_bytes=SCAN_WORKING_BYTES)
+    assert any(
+        f"{SCAN_BAND_ROWS} rows per band" in message for message in _messages(caplog)
+    ), "the budget must be what narrows the scan's band"
     bands = -(-MAF_VCF_N_VARIANTS // SCAN_BAND_ROWS)
     assert any(
         message.startswith(f"Top-hit scan: {bands}/{bands}") for message in _messages(caplog)
     ), f"the rebuild must have scanned in {bands} bands of {SCAN_BAND_ROWS} rows"
     _assert_index_matches(inline, narrow)
-
-
-def _narrow_the_scan(monkeypatch) -> None:
-    """Make the standalone scan read `SCAN_BAND_ROWS` rows at a time.
-
-    A wrapper around the one function that takes the band size, rather than a
-    rewrite of `build_top_hit_indexes`: every other line of the rebuild is the
-    path `build-dense-top-hits` runs.
-    """
-    original = dense_top_hits._scan_candidates
-
-    def scan(z_plane, se_plane, imputed, eaf_plane, n_variants, _band_rows, loosest, n_workers):
-        return original(
-            z_plane, se_plane, imputed, eaf_plane, n_variants, SCAN_BAND_ROWS, loosest, n_workers
-        )
-
-    monkeypatch.setattr(dense_top_hits, "_scan_candidates", scan)

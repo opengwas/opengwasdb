@@ -25,6 +25,7 @@ from typing import Any, NamedTuple
 import numpy as np
 
 from opengwasdb.associations import Tally, non_canonical
+from opengwasdb.encoding.banding import band_limits, window_cells
 from opengwasdb.encoding.codec import (
     EAF_BASELINE,
     EAF_REFERENCE,
@@ -46,37 +47,8 @@ from opengwasdb.store.arrays import SE_COEFFICIENTS, array_length, inner_chunk_o
 from opengwasdb.validation.rule import Kind, Scan, Target, Unreadable
 
 # Dense validation decodes several raw, float32/float64 and boolean views of a
-# cell at once. OGS-00009/10 profiling measured at most 59 bytes per cell in
-# the Dense pass and 47 in the Top-Hit pass; the 96-byte allowance leaves 63%
-# headroom inside this one-GiB decoded working-set budget. The row cap preserves
-# the old call size for a narrow store, while the byte budget makes a wide
-# Store's band shrink instead of scaling its memory with the number of Analyses
-# (issue #254).
-_BAND_ROWS = 250_000
-_WORKING_BYTES = 1024**3
-BYTES_PER_CELL = 96
-
-
-def band_rows(n_analyses: int, row_chunk: int) -> int:
-    """Rows whose decoded working set fits the Dense validation byte budget.
-
-    Whole inner chunks avoid decoding a physical chunk into two consecutive
-    bands. A single row is the irreducible minimum when an exceptionally wide
-    store exceeds the budget by itself.
-    """
-    if n_analyses <= 0:
-        return _BAND_ROWS
-    rows = min(_BAND_ROWS, max(1, _WORKING_BYTES // (BYTES_PER_CELL * n_analyses)))
-    if row_chunk > 0 and rows >= row_chunk:
-        rows = max(row_chunk, rows // row_chunk * row_chunk)
-    return rows
-
-
-def band_limits(n_variants: int, n_analyses: int, row_chunk: int) -> Iterator[tuple[int, int]]:
-    """Every Dense row band, exhaustively, under the decoded-byte budget."""
-    rows = band_rows(n_analyses, row_chunk)
-    for r0 in range(0, n_variants, rows):
-        yield r0, min(r0 + rows, n_variants)
+# cell at once, so its bands come from the shared decoded-byte budget
+# (`opengwasdb.encoding.banding`), which the Top-Hit scan reads too.
 
 
 def per_variant(target: Target, name: str) -> np.ndarray:
@@ -514,14 +486,6 @@ def sequence_offsets(target: Target) -> np.ndarray:
     return target.remember(
         "offsets", lambda: np.asarray(target.group["offsets"][:], dtype=np.int64)
     )
-
-
-def window_cells(cell_chunk: int) -> int:
-    """Cells one sequence window holds: the Dense band's byte budget, in whole chunks."""
-    cells = max(1, _WORKING_BYTES // BYTES_PER_CELL)
-    if cell_chunk > 0 and cells >= cell_chunk:
-        cells = cells // cell_chunk * cell_chunk
-    return cells
 
 
 def analyses_of(offsets: np.ndarray, lo: int, hi: int) -> np.ndarray:
