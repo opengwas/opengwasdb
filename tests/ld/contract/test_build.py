@@ -158,7 +158,7 @@ def test_the_provenance_records_what_was_built(tmp_path_factory: pytest.TempPath
         "autosomes_only": True,
     }
     assert provenance["n_variants"] == len(passing_rows())
-    assert "zero_variance" in provenance["variants_dropped"]
+    assert {"zero_variance", "duplicate_reversed_indel"} <= set(provenance["variants_dropped"])
     assert provenance["counts"]["index_entries"] >= 2 * provenance["counts"]["far_pairs"]
 
 
@@ -371,6 +371,36 @@ def test_an_input_with_a_missing_call_is_refused(
         ogld.build(inputs(0, pgen=(pgen,)), tmp_path / "store")
     assert str(panel_data().variants().id[row]) in str(refused.value), "it names the variant"
     assert PANEL_ID in str(refused.value), "it names the panel"
+
+
+@OGLD_5
+def test_a_reversed_indel_pair_keeps_the_record_whose_ref_the_alid_spells_first(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    # `T/TA` and `TA/T` at one position form one ALID, `T:TA`. The engine's rule (opengwasdb
+    # ADR 0072, `duplicate_reversed_indel`; build-inputs §6) keeps the record with REF = A1, the
+    # insertion, and counts the other in `variants_dropped`.
+    built(0, tmp_path_factory)
+    first, second = (int(row) for row in passing_rows()[:2])
+    assert second == first + 1, "two consecutive Test Panel records are rewritten"
+    lines = PANEL.pvar.read_text().splitlines()
+    fields = lines[1 + first].split("\t")
+    position = fields[1]
+    for row, (ref, alt) in ((first, ("TA", "T")), (second, ("T", "TA"))):
+        chrom = lines[1 + row].split("\t")[0]
+        lines[1 + row] = "\t".join(
+            [chrom, position, f"{chrom}:{position}:{ref}:{alt}", ref, alt, "."]
+        )
+    prefix = tmp_path / "reversed"
+    pgen = write_pgen(read_genotypes(PANEL.pgen), prefix)
+    pgen.with_suffix(".pvar").write_text("\n".join(lines) + "\n")
+    out = tmp_path / "store"
+    provenance = ogld.build(inputs(0, pgen=(pgen,)), out)
+    assert provenance["variants_dropped"]["duplicate_reversed_indel"] == 1
+    assert provenance["n_variants"] == len(passing_rows()) - 1
+    kept = f"{fields[0]}:{position}:T:TA"
+    store = ogld.open(out)
+    assert store.matrix([kept]).absent == (), "the insertion, REF = A1, is in the Variant Set"
 
 
 @OGLD_5

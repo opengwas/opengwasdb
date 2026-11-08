@@ -18,6 +18,7 @@ from typing import Any
 
 from ogld.build import BuildInputs, build
 from ogld.format import InputError, Refusal
+from ogld.identity import IdentityError
 from ogld.query import open as open_store
 from ogld.store import Finding, validate
 
@@ -104,7 +105,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run = {"build": _build, "validate": _validate, "info": _info}[args.command]
     try:
         return run(args)
-    except (Refusal, InputError) as problem:
+    except (Refusal, InputError, IdentityError) as problem:
         print(f"ogld {args.command}: {problem}", file=sys.stderr)
         return 2
 

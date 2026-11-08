@@ -48,8 +48,11 @@ A build reads PLINK 2 pgen filesets only (ADR 0002, decision 1).
   ignored, and order does not matter.
 - **Records.** Biallelic: one ALT per record. A split multi-allelic site is several records at
   one position, each its own variant, and their pair at distance 0 is an ordinary pair. REF and
-  ALT MUST be strings of `A`, `C`, `G`, `T` or `N`, in either case; the builder passes them
-  unchanged to the engine's identity function (ogld#3), which upper-cases and left-aligns them.
+  ALT MUST be strings of `A`, `C`, `G` or `T`, in either case; the builder passes them unchanged
+  to the engine's identity function (ogld#3), which upper-cases them, requires nothing outside
+  A, C, G, T (an `N`, an empty allele or any other character is refused, naming the record) and
+  sorts the pair. It does not trim or left-align (ADR 0003): the ALID spells the alleles as the
+  pgen holds them.
   A record with `*`, a symbolic allele or `.` is refused.
 - **Chromosome names.** `#CHROM` is mapped to the engine's labels: a leading `chr` (any case) is
   removed; `1`–`22` are kept. **Only autosomes are built** (owner, 8 November 2026,
@@ -93,8 +96,10 @@ keep INFO, `--make-pgen pvar-cols=filter,info`. plink2 regenerates hard calls fr
 builder reads the dosages.
 
 **Multi-allelic records**: split and left-align with bcftools before plink2:
-`bcftools norm -m -any -f GRCh38.fa in.vcf.gz -Ob -o split.bcf`. Left alignment matters to the
-ALID (ogld#3).
+`bcftools norm -m -any -f GRCh38.fa in.vcf.gz -Ob -o split.bcf`. This is the only normalisation a
+conversion does, and only for a source that needs the split: the v2 command above has no `norm`,
+and v2 holds no multi-allelic record. ogld itself neither trims nor left-aligns (§2, ADR 0003), so
+the ALID spells the alleles as that step left them.
 
 **PLINK 1 bed**: `plink2 --bfile in --fa GRCh38.fa --ref-from-fa force --set-all-var-ids
 '@:#:$r:$a' --new-id-max-allele-len 1000 --make-pgen pvar-cols=filter --out out`. A bed's A1/A2 are
@@ -144,8 +149,22 @@ it fails, in `variants_dropped.<reason>`. Every setting is in `variant_filters` 
 | 2 | MAC ≥ `mac_min`, counted on the kept samples | 20 | `mac` |
 | 3 | INFO > `info_min`, from the pvar INFO subfield `R2` (Minimac) or `INFO` (IMPUTE); a pgen with neither, with `info_min` set, is refused; with both, refused | 0.8, or None | `info` |
 | 4 | nonzero genotype variance on the kept samples (after PC Adjustment, nonzero residual variance) | always | `zero_variance` |
+| 5 | one record per ALID: of a reversed-indel pair, the record whose REF the ALID spells first | always | `duplicate_reversed_indel` |
 
 Biallelic records are the conversion's job (§3). There is no call-rate filter (§7).
+
+**Reversed indels (filter 5).** An insertion and a deletion at one position form one ALID, because
+the ALID sorts its alleles: `T/TA` and `TA/T` are both `22:16029124:T:TA`, with opposite
+`a1_is_alt`. They are two alleles of a repeat, not one variant, and §2 of `ld-store.md` needs one
+Variant Set row per ALID. The builder follows the engine (opengwas/opengwasdb ADR 0072,
+`duplicate_reversed_indel`): of two records that passed filters 1–4 and share an ALID, **it keeps
+the record whose REF is spelled first in the ALID (REF = A1) and drops the other**, counting it in
+`variants_dropped.duplicate_reversed_indel`. The engine admits associations by this rule, so an
+LD Store row means the same variant as the engine's association at that ALID. The rule is
+`ogld.identity.resolve_reversed_indels`. Two records that no split of one site gives are refused
+as a malformed input, naming both: two with identical REF and ALT, and two SNVs sharing an ALID.
+On v2 chr22, 11,848 ALIDs are shared by such a pair, 1,156 of them with both records at EUR
+MAC ≥ 20 (spec review of ogld#3); the Test Panel has none.
 
 MAC ≥ 20 is Pan-UKB's floor. A site where every kept sample is heterozygous passes it and has no
 variance; ADR 0001's prototype found 9 such sites on AFR chr22 of the unfiltered VCF. v2's pooled

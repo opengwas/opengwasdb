@@ -1,23 +1,20 @@
 """ogld#3's contract: the engine's ALID and A1, so r is signed as the engine signs a statistic.
 
 The engine's rule (opengwas/opengwasdb `CONTEXT.md`, _Variant Identity_): ALID is
-`chr:pos:A1:A2`, A1 the alphabetically first allele after upper-casing, trimming and left
-alignment. These are literals of that rule. The conformance test against the engine's own
-function on a fixture of awkward alleles (lower case, indels, split multi-allelic sites) is
-ogld#3's to write beside them, once it decides how ogld gets the function.
+`chr:pos:A1:A2`, A1 the alphabetically first allele after upper-casing. These are literals of
+that rule. The engine's code does not trim or left-align, though its glossary says it does
+(ADR 0003). The conformance test against the engine's own answers is
+`tests/test_identity_conformance.py`.
 """
 
 from __future__ import annotations
 
 import pytest
-from support import contract, panel_data
+from support import panel_data
 
 from ogld.identity import alid_locus, normalise_chromosome, orient
 
-OGLD_3 = contract("ogld#3")
 
-
-@OGLD_3
 @pytest.mark.parametrize(
     ("ref", "alt", "alid", "a1_is_alt"),
     [
@@ -35,7 +32,6 @@ def test_a1_is_the_alphabetically_first_allele(
     assert o.a1_is_alt is a1_is_alt
 
 
-@OGLD_3
 def test_a_lower_case_base_is_the_same_base() -> None:
     # opengwas/opengwasdb#360.
     lower = orient("22", 100, "g", "a")
@@ -43,7 +39,6 @@ def test_a_lower_case_base_is_the_same_base() -> None:
     assert lower == orient("22", 100, "G", "A")
 
 
-@OGLD_3
 def test_an_alid_is_never_truncated() -> None:
     # The engine's |S32 index drops ALIDs over 32 bytes; an LD Store stores them whole (spec §2).
     long = "A" + "CGT" * 15
@@ -52,13 +47,11 @@ def test_an_alid_is_never_truncated() -> None:
     assert o.alid == f"21:5000000:A:{long}"
 
 
-@OGLD_3
 def test_identical_alleles_are_refused() -> None:
     with pytest.raises(ValueError, match="allele"):
         orient("22", 100, "A", "a")
 
 
-@OGLD_3
 @pytest.mark.parametrize(
     ("label", "canonical"),
     [
@@ -75,13 +68,11 @@ def test_chromosome_labels_are_the_engine_s(label: str, canonical: str) -> None:
     assert normalise_chromosome(label) == canonical
 
 
-@OGLD_3
 def test_an_unsupported_chromosome_is_refused() -> None:
     with pytest.raises(ValueError, match="chr"):
         normalise_chromosome("27")
 
 
-@OGLD_3
 @pytest.mark.parametrize(
     ("alid", "locus"),
     [
@@ -96,7 +87,6 @@ def test_an_alid_names_its_locus(alid: str, locus: tuple[str, int] | None) -> No
     assert alid_locus(alid) == locus
 
 
-@OGLD_3
 def test_every_test_panel_record_is_oriented_consistently() -> None:
     orient("22", 1, "A", "G")
     v = panel_data().variants()

@@ -200,9 +200,6 @@ CODES = np.array([0], dtype=np.int16)
 #: Every body that raises NotImplementedError, with the ticket that builds it. A ticket
 #: that builds one removes its entry, as it unmarks the contract tests it makes pass.
 UNBUILT: dict[str, tuple[Callable[[], object], str]] = {
-    "identity.orient": (lambda: identity.orient("1", 1, "A", "G"), "ogld#3"),
-    "identity.normalise_chromosome": (lambda: identity.normalise_chromosome("1"), "ogld#3"),
-    "identity.alid_locus": (lambda: identity.alid_locus("1:1:A:G"), "ogld#3"),
     "StoreReader.open": (lambda: store.StoreReader.open("x"), "ogld#4"),
     "StoreReader.provenance": (lambda: READER.provenance, "ogld#4"),
     "StoreReader.rows_of": (lambda: READER.rows_of(["1:1:A:G"]), "ogld#4"),
