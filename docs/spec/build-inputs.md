@@ -52,7 +52,7 @@ A build reads PLINK 2 pgen filesets only (ADR 0002, decision 1).
   unchanged to the engine's identity function (ogld#3), which upper-cases and left-aligns them.
   A record with `*`, a symbolic allele or `.` is refused.
 - **Chromosome names.** `#CHROM` is mapped to the engine's labels: a leading `chr` (any case) is
-  removed; `1`–`22` are kept. **Only autosomes are built** (provisional: owner decision pending,
+  removed; `1`–`22` are kept. **Only autosomes are built** (owner, 8 November 2026,
   epic #1). A record on `X`, `Y`, `XY`, a PAR, `M`/`MT` (or plink2's codes `23`–`26`) is refused,
   naming the chromosome. The reason: a male's X and Y genotypes are hemizygous, and the diploid
   dosage model has no rule for coding them, and the HGDP+1kGP psam files carry no sex to apply one.

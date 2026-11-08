@@ -59,7 +59,7 @@ per (**Source Panel**, **Reference Assembly**) (ADR 0001, decision 1).
 `<chrom>` is the engine's canonical chromosome label (`1`–`22`, `X`, `Y`, `MT`, no `chr` prefix).
 The format allows every one of them. For now a builder builds autosomes only and refuses a record
 on X, Y, a PAR or MT, because the diploid dosage model has no rule for a male's hemizygous
-genotypes (ADR 0002, decision 9, provisional with the owner). Each chromosome of the Variant Set has its own `near/<chrom>` and `index/<chrom>` groups. Neither
+genotypes (ADR 0002, decision 9). Each chromosome of the Variant Set has its own `near/<chrom>` and `index/<chrom>` groups. Neither
 component crosses a chromosome, so per-chromosome arrays lose nothing. They also let a builder
 write chromosomes in parallel: a Zarr shard is written whole, and no shard can then span two
 chromosomes.

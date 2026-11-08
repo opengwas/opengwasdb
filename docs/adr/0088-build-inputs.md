@@ -139,9 +139,13 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
 8. **An INFO floor needs INFO** (accepted at the review of #2). With `info_min` set, a pgen that
    carries no INFO score (`R2` or `INFO` in the pvar) is refused, so a sequenced panel passes
    `info_min = None` explicitly rather than skip the filter quietly.
-9. **Only autosomes are built** (provisional: owner decision pending, epic #1). A record on X, Y,
+9. **Only autosomes are built** (owner, 8 November 2026, epic #1; chrX is a later ticket). A record on X, Y,
    a PAR or MT is refused: a male's X and Y genotypes are hemizygous, the diploid dosage model has
    no rule for them, and the HGDP+1kGP psam files carry no sex to apply one.
+10. **pgenlib is an optional `ogld[build]` extra** (owner, 8 November 2026). Reading an LD Store
+   needs numpy, zarr and numcodecs only. Building one needs pgenlib, which conda-forge does not
+   carry, so `import ogld` works without it and the builder refuses, naming the extra, when it is
+   missing.
 
 ## Considered options
 
