@@ -26,7 +26,7 @@ from typing import Any
 
 from opengwasdb.readers.gwas_vcf import project_lifted_alleles
 from opengwasdb.variants.axis import parse_canonical_alid
-from opengwasdb.variants.normalise import canonical_alid, identity_allele
+from opengwasdb.variants.normalise import canonical_alid, ref_is_a1
 from opengwasdb.variants.reference import refuse_unmarked_artifact
 
 log = logging.getLogger(__name__)
@@ -98,8 +98,8 @@ class LiftedRow:
 def statistics_swap(source: SourceVariantKey, row: LiftedRow) -> bool:
     """Whether the lift swapped which allele is canonical, so z and EAF must follow.
 
-    A source reader signs a statistic against the source-assembly canonical A1
-    (``min`` of the upper-cased ``ref`` and ``alt``, see `identity_allele`), by
+    A source reader signs a statistic against the source-assembly ALID's A1
+    (`alid_alleles`: the upper-cased pair sorted, or an indel's reference), by
     `opengwasdb.readers.orientation`'s rule. A reverse-strand block
     complements both alleles, and a complement reverses their alphabetical
     order -- or, for a palindromic pair, maps A1 onto A2 -- so the projected
@@ -107,13 +107,12 @@ def statistics_swap(source: SourceVariantKey, row: LiftedRow) -> bool:
     stored z is then the negation of the source's and the stored frequency is
     ``1 - eaf``, exactly as BESD orients a probe (issue #284).
 
-    Computed from the row's projected alleles in source order, so it is exact
-    for an indel too rather than assuming complement always reverses order.
+    Computed from the row's projected alleles in source order. An indel's ALID
+    spells its reference first on either assembly -- the projected `ref` is
+    the release assembly's reference (ADR 0079) -- so a lift never swaps one.
     """
-    ref, alt = identity_allele(source[2]), identity_allele(source[3])
-    effect, other = identity_allele(row.effect_allele), identity_allele(row.other_allele)
-    projected_first = effect if min(ref, alt) == ref else other
-    return projected_first != min(effect, other)
+    projected_ref, projected_alt = row.effect_allele, row.other_allele
+    return ref_is_a1(source[2], source[3]) != ref_is_a1(projected_ref, projected_alt)
 
 
 def build_liftover_lookup(
@@ -126,7 +125,8 @@ def build_liftover_lookup(
     """Convert hg19 (bare_chrom, pos, ref, alt) tuples to hg38 ALIDs.
 
     Returns a dict mapping each input tuple to its hg38 ALID
-    (``chr:pos:A1:A2`` where A1 = alphabetically first allele), with the
+    (``chr:pos:A1:A2`` by `alid_alleles`: the pair sorted, an indel's reference
+    first), with the
     alleles projected onto the mapping's strand (issue #284). Variants that
     fail liftover are omitted; a warning is logged.
 

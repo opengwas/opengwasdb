@@ -152,13 +152,23 @@ def test_every_projection_needs_bcftools(tmp_path: Path) -> None:
 
 def test_oriented_alid_is_orient_to_canonicals_answer() -> None:
     """The VCF reader's fast orientation, against the rule it stands in for."""
-    alleles = ["A", "c", "G", "t", "AC", "Tg", "GGGGCC"]
+    alleles = ["A", "c", "G", "t", "AC", "Tg", "GGGGCC", "g"]
+    declared_indels = 0
     for effect, other in itertools.product(alleles, repeat=2):
-        try:
-            expected = orient_to_canonical("1", 100, effect, other)
-        except VariantNormalisationError:
-            assert oriented_alid("1", 100, effect, other) is None
-            continue
-        assert oriented_alid("1", 100, effect, other) == (
-            expected.variant.alid, expected.flipped
-        )
+        for declared in (True, False):
+            try:
+                expected = orient_to_canonical(
+                    "1", 100, effect, other, other_is_reference=declared
+                )
+            except VariantNormalisationError:
+                assert oriented_alid("1", 100, effect, other, other_is_reference=declared) is None
+                continue
+            declared_indels += declared and len(effect) != len(other)
+            assert oriented_alid("1", 100, effect, other, other_is_reference=declared) == (
+                expected.variant.alid, expected.flipped
+            )
+    # The pairs must reach a declared indel, whose ALID is spelt reference first.
+    assert declared_indels
+    assert oriented_alid("1", 100, "G", "GGGGCC", other_is_reference=True) == (
+        "1:100:GGGGCC:G", True
+    )

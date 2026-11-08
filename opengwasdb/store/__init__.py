@@ -33,6 +33,7 @@ __all__ = [
     "UnsupportedFormatVersion",
     "check_format_version",
     "check_writable_format_version",
+    "check_writable_zarr_layout",
     "destination_lock",
     "directory_lock",
     "open_store",

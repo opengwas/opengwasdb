@@ -11,9 +11,9 @@ from __future__ import annotations
 import csv
 import gzip
 import math
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Protocol, cast, runtime_checkable
 
@@ -48,10 +48,14 @@ from opengwasdb.readers.rows import (
 )
 from opengwasdb.stats import Z_975, inverse_normal_denominators, parse_af
 from opengwasdb.variants.normalise import (
+    UndeclaredReference,
     VariantNormalisationError,
+    alid_allele_arrays,
+    alid_alleles,
     identity_base,
     normalise_allele,
     normalise_chromosome,
+    undeclared_reference,
 )
 from opengwasdb.variants.rsid import normalise_rsid
 
@@ -101,7 +105,11 @@ def parse_positive_float(value: str | None) -> float | None:
 
 
 __all__ = [
+    "EVERY_ROW_REFERENCE",
+    "NO_REFERENCE",
+    "DeclaredReference",
     "MetricsProjectionColumns",
+    "declared_reference",
     "SourcePath",
     "TabularSource",
     "SourceRow",
@@ -164,11 +172,78 @@ def open_binary(path: SourcePath) -> IO[bytes]:
 
 
 @dataclass(frozen=True)
+class DeclaredReference:
+    """Which rows of a tabular source declare their `ref` the genome's reference allele.
+
+    A tabular source's `ref` is its other allele, beside an `alt` effect
+    allele. An indel is placed only on a row that declares it, since its ALID
+    spells the reference first (ADR 0079); every other indel names no ALID
+    and is dropped (`UndeclaredReference`). ``every_row`` is a format that
+    declares it of every row: a `ref_alt_effect_is_alt` Column Map. Otherwise a
+    row declares it where its ``column`` cell is one of ``codes``, for a format
+    whose rows declare it one by one: a GWAS-SSF file whose main columns are
+    harmonised, by its harmoniser code (`opengwasdb.readers.gwas_ssf`). A row
+    too short to reach the column declares nothing.
+    """
+
+    every_row: bool = False
+    column: bytes | None = None
+    codes: frozenset[bytes] = frozenset()
+    #: The fault an undeclared indel is recorded under, naming why it is
+    #: undeclared (a GWAS-SSF layout); the generic one for every other source.
+    fault: type[UndeclaredReference] = UndeclaredReference
+
+    @property
+    def column_name(self) -> str | None:
+        """``column`` as a header name, or ``None``."""
+        return None if self.column is None else self.column.decode("utf-8")
+
+    def of_cell(self, cell: bytes | str | None) -> bool:
+        """Whether a row whose ``column`` cell is ``cell`` declares its `ref` the reference."""
+        if self.every_row:
+            return True
+        if cell is None:
+            return False
+        if isinstance(cell, str):
+            cell = cell.encode("utf-8")
+        return cell.strip() in self.codes
+
+    def of_row(self, row: Mapping[str, str | None]) -> bool:
+        """`of_cell` of a row read as a mapping of header names to cells."""
+        name = self.column_name
+        return self.every_row or (name is not None and self.of_cell(row.get(name)))
+
+    def index(self, indexes: Mapping[bytes, int]) -> int | None:
+        """Where a header holds ``column``, or ``None`` when it holds none."""
+        return None if self.column is None or self.every_row else indexes.get(self.column)
+
+
+#: A source that declares no reference: none of its indels names an ALID.
+NO_REFERENCE = DeclaredReference()
+#: A source whose every row's `ref` is the reference.
+EVERY_ROW_REFERENCE = DeclaredReference(every_row=True)
+
+
+def declared_reference(reference: ReferenceAllele) -> DeclaredReference:
+    """A format's one declaration for every row, as a `DeclaredReference`.
+
+    `ReferenceAllele.ALT` declares the effect allele the reference, which no
+    tabular source does; it is refused rather than read as either.
+    """
+    if reference is ReferenceAllele.ALT:
+        raise ValueError("a tabular source declares its ref, not its alt, the reference")
+    return EVERY_ROW_REFERENCE if reference is ReferenceAllele.REF else NO_REFERENCE
+
+
+@dataclass(frozen=True)
 class VariantProjectionColumns:
     """Provider column names needed by a variant-only tabular scan.
 
     `alias_separator` is set when an alias cell may list several identifiers --
     FinnGen's `rsids` (issue #281) -- and the first is the row's rsid.
+    `reference` is which rows declare their `ref` the reference, and has no
+    default: a scan that forgot it would drop every indel, or place one by a
+    guessed order.
     """
 
     chromosome: tuple[bytes, ...]
@@ -177,6 +252,7 @@ class VariantProjectionColumns:
     alt: bytes
     aliases: tuple[bytes, ...] = ()
     alias_separator: str | None = None
+    reference: DeclaredReference = field(kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -213,6 +289,8 @@ class MetricsProjectionColumns:
     ci_lower: bytes | None = None
     ci_upper: bytes | None = None
     p_value: bytes | None = None
+    #: Which rows declare their `ref` the reference (`VariantProjectionColumns`).
+    reference: DeclaredReference = field(kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -225,7 +303,15 @@ class _ResolvedProjection:
     second_alias: int | None
     last_required: int
     split_limit: int
+    declaration: DeclaredReference
+    reference: int | None
     alias_separator: str | None = None
+
+    def declares(self, row: list[bytes]) -> bool:
+        """Whether ``row`` declares its `ref` the reference."""
+        index = self.reference
+        cell = row[index] if index is not None and index < len(row) else None
+        return self.declaration.of_cell(cell)
 
 
 def _normalise_projected_chromosome(value: bytes) -> str:
@@ -253,13 +339,17 @@ def project_source_variant(
     ref_bytes: bytes,
     alt_bytes: bytes,
     rsid: str,
+    *,
+    other_is_reference: bool,
 ) -> SourceVariant | None:
     """Validate projected identity fields without constructing an orientation.
 
     Numeric chromosomes and single-base alleles are the common production path.
     Less common labels and long alleles fall back to the same normalizers used
     by full association parsing, while parity tests protect the observable
-    reader contract (issue #179).
+    reader contract (issue #179). An indel is a variant only where the row
+    declares its `ref` the reference (``other_is_reference``, ADR 0079), as
+    `orient_to_canonical` rules.
     """
     try:
         chromosome = _normalise_projected_chromosome(chromosome_bytes)
@@ -273,6 +363,8 @@ def project_source_variant(
             alt = _SINGLE_ALLELE_TEXT[alt_bytes]
         else:
             ref, alt = _validate_projected_alleles(ref_bytes, alt_bytes)
+            if undeclared_reference(alt, ref, other_is_reference=other_is_reference):
+                return None
     except (UnicodeDecodeError, ValueError, VariantNormalisationError):
         return None
 
@@ -338,8 +430,9 @@ def _resolve_projection(
         return None
     indexes, (chromosome, position, ref, alt) = found
     aliases = _alias_pair(indexes, columns.aliases)
+    reference = columns.reference.index(indexes)
     selected = (chromosome, position, ref, alt) + tuple(
-        index for index in aliases if index is not None
+        index for index in (*aliases, reference) if index is not None
     )
     last_selected = max(selected)
     return _ResolvedProjection(
@@ -351,6 +444,8 @@ def _resolve_projection(
         second_alias=aliases[1],
         last_required=max(chromosome, position, ref, alt),
         split_limit=last_selected + (last_selected < len(header) - 1),
+        declaration=columns.reference,
+        reference=reference,
         alias_separator=columns.alias_separator,
     )
 
@@ -424,6 +519,7 @@ def _projected_variant(
         row[projection.ref],
         row[projection.alt],
         rsid,
+        other_is_reference=projection.declares(row),
     )
     return () if variant is None else (variant,)
 
@@ -486,6 +582,9 @@ class _ResolvedMetricsProjection:
     imputation_score: int | None
     last_identity: int
     split_limit: int
+    #: Which rows declare their `ref` the reference, and where its cell is.
+    declaration: DeclaredReference
+    reference: int | None
 
     @property
     def effect_kind(self) -> EffectSourceKind | None:
@@ -523,6 +622,8 @@ def _metrics_projection_indexes(
         standard_error=optional["standard_error"],
         sample_size=optional["sample_size"],
         imputation_score=optional["imputation_score"],
+        declaration=columns.reference,
+        reference=optional["reference"],
     )
 
 
@@ -550,6 +651,7 @@ def _optional_metric_indexes(
         "standard_error": indexes.get(columns.standard_error),
         "sample_size": _sample_size_index(indexes, header, effect_source),
         "imputation_score": resolve_imputation_score_column(header, score_column),
+        "reference": columns.reference.index(indexes),
     }
 
 
@@ -690,7 +792,10 @@ def _metrics_identity(
         return None
     if effect == other:
         return None
-    a1, a2 = (effect, other) if effect < other else (other, effect)
+    declared = projection.declaration.of_cell(_metrics_cell(row, projection.reference))
+    if undeclared_reference(effect, other, other_is_reference=declared):
+        return None
+    a1, a2 = alid_alleles(other, effect)
     alid = f"{chromosome}:{position}:{a1}:{a2}"
     ref = ref_cell.decode("utf-8")
     alt = alt_cell.decode("utf-8")
@@ -899,7 +1004,9 @@ _STATISTIC_FIELDS = (
     "standard_error",
     "sample_size",
 )
-_PROJECTED_FIELDS = ("chromosome", "position", "ref", "alt", *_STATISTIC_FIELDS, "imputation_score")
+_PROJECTED_FIELDS = (
+    "chromosome", "position", "ref", "alt", *_STATISTIC_FIELDS, "imputation_score", "reference",
+)
 _MISSING_TOKENS = sorted(_MISSING)
 
 def _projected_column_names(
@@ -1223,7 +1330,10 @@ def _score_arrays(frame: pd.DataFrame, name: str | None) -> tuple[np.ndarray, np
 
 
 def _projected_chunk(
-    frame: pd.DataFrame, names: dict[str, str], effect_source: EffectSource | None
+    frame: pd.DataFrame,
+    names: dict[str, str],
+    effect_source: EffectSource | None,
+    declaration: DeclaredReference,
 ) -> MetricsChunk:
     """One block's projection, reduced to the rows naming a canonical variant."""
     chromosome, _, chromosome_ok = _category_arrays(
@@ -1233,9 +1343,13 @@ def _projected_chunk(
     other, other_base, other_ok = _category_arrays(frame[names["ref"]], normalise_allele)
     position, position_ok = _position_arrays(frame[names["position"]])
 
-    keep = chromosome_ok & position_ok & alt_ok & other_ok & (alt != other)
-    first = np.where(alt < other, alt, other)
-    second = np.where(alt < other, other, alt)
+    # An indel is spelt reference first, and named only where its row declares
+    # its `ref` the reference (`alid_allele_arrays`, ADR 0079).
+    first, second, indel = alid_allele_arrays(other, alt)
+    declared = _declared_rows(frame, names, declaration)
+    keep = (
+        chromosome_ok & position_ok & alt_ok & other_ok & (alt != other) & (~indel | declared)
+    )
     text = np.where(position_ok, position, 0).astype(str).astype(object)
     effect = _projected_effect_arrays(frame, names, effect_source)
     scores, statuses = _score_arrays(frame, names.get("imputation_score"))
@@ -1257,6 +1371,19 @@ def _projected_chunk(
     )
 
 
+def _declared_rows(
+    frame: pd.DataFrame, names: dict[str, str], declaration: DeclaredReference
+) -> np.ndarray:
+    """Per row, whether it declares its `ref` the reference (`DeclaredReference`)."""
+    if declaration.every_row:
+        return np.ones(len(frame), dtype=bool)
+    if "reference" not in names:
+        return np.zeros(len(frame), dtype=bool)
+    cells = frame[names["reference"]].astype(str).str.strip().str.encode("utf-8")
+    declared: np.ndarray = cells.isin(declaration.codes).to_numpy(dtype=bool)
+    return declared
+
+
 def _metric_frame_reader(
     path: str | Path | IO[bytes], names: dict[str, str], chunk_rows: int
 ) -> pd.io.parsers.TextFileReader:
@@ -1271,8 +1398,9 @@ def _metric_frame_reader(
     exactly the missing spellings `parse_finite_float` accepts.
     """
     dtypes: dict[str, str] = {names["position"]: "str"}
-    if "imputation_score" in names:
-        dtypes[names["imputation_score"]] = "str"
+    for text_field in ("imputation_score", "reference"):
+        if text_field in names:
+            dtypes[names[text_field]] = "str"
     dtypes.update(
         dict.fromkeys((names[field] for field in ("chromosome", "ref", "alt")), "category")
     )
@@ -1326,7 +1454,7 @@ def stream_projected_metric_chunks(
     with ExitStack() as stack:
         frames = _metric_frame_reader(_pandas_input(path, stack), names, chunk_rows)
         for frame in stack.enter_context(frames):
-            yield _projected_chunk(frame, names, projection.effect_source)
+            yield _projected_chunk(frame, names, projection.effect_source, projection.declaration)
 
 
 def _or_nan(value: float | None) -> float:

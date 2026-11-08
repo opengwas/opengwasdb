@@ -1124,6 +1124,101 @@ misrepresent what was measured.
 
 ---
 
+### `measure_epic307_evidence.py`
+
+One command for epic #307's timing evidence. It re-derives the epic's tables
+from the inputs they were assembled from and writes one JSON artifact:
+
+1. **Steps and phases** — for every `records/<step>.json` of each
+   `--store LABEL=PATH`: the step's wall time, every `log_phase` pair
+   (`X: start` … `X: done in 1h28m`) with its start, end and span (the
+   minute-rounded `done in` value is recorded beside it, not instead of it),
+   every progress phase (`X: n/N done (extra) — elapsed …, ETA …`) with the
+   pace it achieved, and the count of lines that looked like a phase or
+   progress line and did not parse. A step or phase "overlaps a window" when any
+   part of it falls inside one; windows are half-open intervals on the log
+   lines' own clock.
+2. **The reader A/B** — for each `--source CAPABILITY=PATH`, three sides
+   interleaved round by round in fresh interpreters: the current reader, a
+   control reader exported with `git archive` from `--control-revision` (the
+   epic measured at `d405de0`, and both readers changed after it), and the parse
+   floor. The floor
+   is recorded by its method: a `pandas` C-engine read of the seven columns a
+   tabular association row is built from plus `z = beta / sebeta`, or the
+   GWAS-VCF reader's own `bcftools query` format with no per-record Python. Both
+   skip orientation and Analysis admission, so they bound the gain rather than
+   predict it. Every side reports the `opengwasdb` it imported, and a reader
+   that streams a different number of associations than the control is refused.
+3. **The comparison** — every figure in the epic's tables beside its measured
+   value, whether the record reproduces it, and the reason when it does not.
+
+`--window START/END` is one interval (an END before its START ends the next
+day). `--daily-window HH:MM-HH:MM --tz ZONE --daily-from DATE --until DATE`
+repeats the nightly snapshot from `--daily-from` over every night up to
+`--until`; without it a step that ran overnight is reported at the pace the
+backup let it have. The daily window is an assumption read off 22 Oct's
+observation and applied back to 14 Oct, the first night of the October
+records, where OGS-00016's build slows in the same hours; the September build
+is left outside it, the epic having read it as clean. The artifact records it
+as an assumption. `--store` takes a replaced or retired Store's directory
+too, under any label: the September OGS-00009 build and OGS-00010's completion
+are read from where those Stores' files now sit.
+
+**Output file written to `docs/benchmark-output/`:**
+
+| File | Description |
+|---|---|
+| `opengwasdb_epic307_evidence.json` | Per Store: every step with its phases, window flags (`null` where a time is unknown) and clean rates, including each clean interval more than 3x the median; per source: the reader A/B samples, per-round paired ratios, medians, control and floor method; the epic comparison with a verdict, a checked reason and checked notes per row; the run's revision, argv and `host` load window. **Not a quiet-node measurement**: read the load at its start and end in the artifact's `host` block, and each sample's in `reader_ab[].samples`, before reading any timing. |
+
+**Usage** — the sources are read-only and every side is I/O bound, so take the
+host's shared heavy-job lock around it (`flock -w 14400 <lock> …`); the artifact
+records the 1/5/15-minute load at the run's start and end, and per A/B sample:
+
+The control is the epic's own revision. The harness runs `git archive` on it,
+fingerprints the archive's own bytes, and imports the exported tree in the
+control's fresh interpreters, so the fingerprint names the commit and not a
+tree someone left on disk:
+
+```bash
+pixi run -e dev python benchmarks/measure_epic307_evidence.py \
+  --store OGS-00009=/data/opengwasdb/stores/OGS-00009 \
+  --store OGS-00016=/data/opengwasdb/stores/OGS-00016 \
+  --store OGS-00017=/data/opengwasdb/stores/OGS-00017 \
+  --store OGS-00011=/data/opengwasdb/stores/OGS-00011 \
+  --store OGS-00012=/data/opengwasdb/stores/OGS-00012 \
+  --store OGS-00013=/data/opengwasdb/stores/OGS-00013 \
+  --store OGS-00009-sept=/data/opengwasdb/stores/OGS-00009/replaced/20261021T223815Z \
+  --store OGS-00010-retired=/data/opengwasdb/work/retired/OGS-00010 \
+  --window 2026-10-22T01:06/2026-10-22T16:10 \
+  --daily-window 01:06-16:10 --tz Europe/London \
+  --daily-from 2026-10-14 --until 2026-11-02 \
+  --source opengwasdb.finngen-r13=/data/opengwasdb/finngen-r13/releases/r13-full/source/finngen_R13_AB1_ACTINOMYCOSIS.gz \
+  --source opengwasdb.gwas-vcf=/data/opengwasdb/raw/gwas-vcf/ukb-b/ukb-b-10001.vcf.gz \
+  --control-revision d405de0 \
+  --repetitions 6 --source-repetitions opengwasdb.gwas-vcf=10 \
+  --output docs/benchmark-output/opengwasdb_epic307_evidence.json
+```
+
+`--repetitions` is the rounds per source: an even number, six by default, so
+head and control each lead half of them; `--source-repetitions CAPABILITY=N`
+gives a cheap source more rounds. The A/B reports each round's head / control
+ratio with that round's load and who ran first, the sign test and the Wilcoxon
+signed-rank p over the ratios, and names a direction only from at least six
+rounds with both p under 0.05; otherwise the row says the run is not resolved.
+The artifact records the control's revision and the fingerprint of the
+`opengwasdb` each side imported, and the run is refused if the control's
+fingerprint is not the archive's or is this checkout's. The output path is
+checked first, so a committed artifact is refused before any sample is taken.
+
+A step's `wall_seconds` is the record's own `elapsed_seconds`, and its phases
+need not sum to it: a step can run for hours outside any phase it logs, and that
+unattributed time is the point of #308–#310. The Stores named above are the
+epic's own (OGS-00009 and the full-size OGS-00016/17/11, plus OGS-00012/13 for
+its step rows); a Store re-encoded after its build still has the build's
+records, so these baselines are times, not bytes.
+
+---
+
 ### #244: zarr-python 3's read levers, and the 0.2.0 shape screen
 
 #244 moved the package to zarr-python 3.4. These scripts measured what that

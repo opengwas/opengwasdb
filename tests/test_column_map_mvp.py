@@ -64,7 +64,11 @@ def test_the_fixture_reaches_every_convention_the_rewrite_handles() -> None:
     assert 712_300 in positions, "a scientific position with a fractional mantissa"
     assert 9_000 in positions, "a signed integer position"
     assert any(row.chromosome == "X" for row in continuous), "a non-autosome"
-    assert any(row.ref == "AT" for row in continuous), "an indel"
+    # An indel: neither reading declares the reference, so both drop it, and
+    # the parity above holds over its absence (ADR 0079).
+    lines = (_FIXTURES / "gwas_ssf" / "continuous.tsv").read_text().splitlines()
+    assert any(line.startswith("3\t4000\tA\tAT\t") for line in lines), "an indel"
+    assert not any(row.position == 4000 for row in continuous)
     assert any(row.flipped for row in continuous), "an effect allele that is ref"
     assert any(row.se_from_p_value for row in continuous), "a standard error from p"
     assert any(row.se_from_ci for row in binary), "a standard error from the interval"

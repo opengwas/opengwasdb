@@ -152,7 +152,7 @@ The correlation between two Analyses' association statistics under the null — 
 A release-level derived structure for a Dense Store giving Rho between every pair of Analyses. It is optional provenance-bearing metadata (which variants and null threshold produced it), not part of the association data, and shares the Store's Analysis identity and query concepts.
 
 **Variant Identity**:
-The canonical within-Store variant key is ALID, `chr:pos:A1:A2`, where A1 is alphabetically first and A2 is the other allele after upper-casing, trimming and left alignment. A lower-case base is the same base, so `a`/`g` and `A`/`G` are one variant on every layout, and a statistic is signed against the upper-cased pair's A1 (issue #360). Cross-Store identity is the pair (**Reference Assembly**, ALID).
+The canonical within-Store variant key is ALID, `chr:pos:A1:A2`, after upper-casing, trimming and left alignment. Where the two alleles are one length (an SNV or a substitution), A1 is alphabetically first and A2 the other; where they differ (an indel), A1 is the reference allele the source declares, so an insertion and the deletion of the same sequence are two variants (format 0.2.1, ADR 0079). An indel whose source declares no reference names no ALID and is dropped. A lower-case base is the same base, so `a`/`g` and `A`/`G` are one variant on every layout, and a statistic is signed against the upper-cased pair's A1 (issue #360). Cross-Store identity is the pair (**Reference Assembly**, ALID).
 
 **Store Variant Table**:
 The Store-wide union of canonical variants referenced by its Analyses. Each variant occurs once in a Store Release, independently of how many Analyses report it.

@@ -38,7 +38,7 @@ from opengwasdb.readers.interface import (
     SourceVariant,
 )
 from opengwasdb.readers.orientation import a1_frequencies, is_palindromic, swap, swap_one
-from opengwasdb.variants.normalise import identity_allele, normalise_chromosome
+from opengwasdb.variants.normalise import normalise_chromosome, ref_is_a1
 
 __all__ = [
     "DEFAULT_CHUNK_ROWS",
@@ -558,5 +558,5 @@ def _batch_of_rows(
 
 
 def _ref_first(rows: list[SourceRow]) -> np.ndarray:
-    """Whether each row's `ref` is the allele its ALID spells first."""
-    return _row_array(rows, lambda row: identity_allele(row.ref) < identity_allele(row.alt), bool)
+    """Whether each row's `ref` is the allele its ALID spells first (`ref_is_a1`)."""
+    return _row_array(rows, lambda row: ref_is_a1(row.ref, row.alt), bool)

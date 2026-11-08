@@ -23,11 +23,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from opengwasdb.encoding import banding
 from opengwasdb.layouts.dense import indexed_subsets
 from opengwasdb.layouts.dense.indexed_subsets import INDEXED_SUBSETS_GROUP
 from opengwasdb.store.arrays import inner_chunk_of, open_group
 from opengwasdb.validation import run as validation_run
-from opengwasdb.validation import scans, validate_store
+from opengwasdb.validation import validate_store
 from opengwasdb.validation.rules import by_variant, variants
 from opengwasdb.validation.validate import MANIFEST_RULE
 
@@ -220,7 +221,7 @@ def test_a_dense_band_loop_logs_progress_with_an_eta(
     # Two rows per Analysis: the budget a genome-wide Store's rows are banded by,
     # shrunk until a fixture's handful of rows spans more than one band.
     monkeypatch.setattr(
-        scans, "_WORKING_BYTES", scans.BYTES_PER_CELL * _ROWS_PER_BAND * n_analyses
+        banding, "DECODED_BAND_BYTES", banding.BYTES_PER_CELL * _ROWS_PER_BAND * n_analyses
     )
     assert inner_chunk_of(grid)[0] > _ROWS_PER_BAND, "the budget must decide the band"
     total = -(-n_variants // _ROWS_PER_BAND)
@@ -239,7 +240,7 @@ def test_a_sequence_window_loop_logs_progress_with_an_eta(
 ) -> None:
     # One cell per window, for the same reason: the sequence's budget is the same
     # decoded-byte allowance, counted in cells.
-    monkeypatch.setattr(scans, "_WORKING_BYTES", scans.BYTES_PER_CELL)
+    monkeypatch.setattr(banding, "DECODED_BAND_BYTES", banding.BYTES_PER_CELL)
     sequence = open_group(ragged_store_path / "data.zarr" / "ragged")
     n_cells = int(np.asarray(sequence["offsets"][:], dtype=np.int64)[-1])
     assert inner_chunk_of(sequence["z"])[0] > 1, "the budget must decide the window"

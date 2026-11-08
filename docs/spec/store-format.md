@@ -1,14 +1,17 @@
 # OpenGWASDB Store Format Specification
 
 Status: draft  
-Format version described: `0.2.0` (Zarr v3 with sharding, §10a; what every builder writes)  
-Also readable: `0.1.0` (Zarr v2); nothing else (§21)
+Format version described: `0.2.1` (Zarr v3 with sharding, §10a; an indel's ALID spelt reference first, §4; what every builder writes)  
+Also readable: `0.2.0` (the same layout, indel ALIDs sorted; what the converter writes) and `0.1.0` (Zarr v2); nothing else (§21)
 
 This document defines the contract for valid OpenGWASDB Store Releases. It
-describes `format_version` **0.2.0** (§10a: Zarr v3 with the sharding codec),
-what every builder writes since #247, and **0.1.0** (Zarr v2), which a reader
-still reads and a builder no longer writes. Everything below that is not
-about the physical layout holds for both versions: statistic planes carry a
+describes `format_version` **0.2.1**, what every builder writes since #381;
+**0.2.0**, the same physical layout (§10a: Zarr v3 with the sharding codec)
+with an indel's two alleles sorted in its ALID (§4), which every builder wrote
+from #247 and the converter still writes; and **0.1.0** (Zarr v2), which a
+reader still reads and a builder no longer writes. The two 0.2 releases are
+"the 0.2 series" below wherever the layout is meant. Everything below that is
+not about the physical layout or the indel ALID holds for all three: statistic planes carry a
 declared encoding (§6a), `z` is `int16` fixed point rather than `float16`, `eaf`
 is a per-variant baseline plus a per-cell `int8` logit residual rather than a
 `float32` plane, and `se` is either `float16` or — when the build measures the
@@ -185,20 +188,67 @@ where:
   assignment. VCF and GWAS-SSF bases are case-insensitive, so a lower-case
   base is the same base: a source spelling `a`/`g` and one spelling `A`/`G`
   name one variant, on every build path and in extraction (issue #360);
-- `A1` is alphabetically first;
-- `A2` is the other allele.
+- where the two alleles are one length — an SNV, or a substitution of several
+  bases — `A1` is alphabetically first and `A2` the other allele;
+- where their lengths differ — an indel — `A1` is the **reference allele** and
+  `A2` the alternate (format `0.2.1`, issue #381, ADR 0079).
+
+An indel is written reference first because a sorted ALID cannot tell an
+insertion from the deletion of the same sequence. At a repeat both are real:
+FinnGen R13 BMI_IRN reports `1:827587` `G>GGGGCC` (alt frequency 0.83%) and
+`GGGGCC>G` (0.05%), which a sorted ALID spelt both `1:827587:G:GGGGCC`; they
+are `1:827587:G:GGGGCC` and `1:827587:GGGGCC:G`. An insertion's ALID is
+unchanged, since an anchored indel's shorter allele sorts first; a deletion's
+is reversed. The reference allele is the one the source declares: GWAS-VCF's
+`REF`, FinnGen's `ref`, a `ref_alt_effect_is_alt` Column Map's `ref`. After a
+lift it is the release assembly's: the source's declared reference projected
+onto that assembly, complemented on a reverse-strand chain block, so a lift
+never re-orients an indel. A genome reference sequence would not settle it:
+where the genome reads `GGGGCC`, both readings fit it.
 
 A signed statistic is oriented on the same upper-cased alleles: it is stored
 for `A1`, so a source allele pair `a`/`G` whose effect allele is `G` is
-negated, as `A`/`G` would be. A source's own spelling survives only as
+negated, as `A`/`G` would be, and an indel's statistic is signed for its
+reference allele: FinnGen's deletion `GGGGCC>G`, whose beta is for `G`, is
+stored negated at `1:827587:GGGGCC:G`. A source's own spelling survives only as
 provenance — a Variant Reference's source keys — and in the rsid harvest
 below, which compares the names a site's spellings carry.
 
 A source row whose chromosome is missing (an empty cell, `.`, `NA`) or whose
-allele, upper-cased, holds a character other than A, C, G or T names no ALID.
-Every builder drops it, and logs it in the build's Admission record as
-`chromosome_missing` or `allele_invalid` (issue #365, ADR 0072). An alt, random
-or unplaced contig is a chromosome.
+allele, upper-cased, holds a character other than A, C, G or T names no ALID,
+and neither does an indel whose source declares no reference allele. Every
+builder drops such a row, and logs it in the build's Admission record as
+`chromosome_missing`, `allele_invalid` or `indel_reference_undeclared` (issues
+#365 and #381, ADR 0072). A source declares no reference when it names an
+effect and an other allele: a BESD `.esi`, a `build-dense` association TSV,
+and an `effect_and_other` or `ref_alt_and_effect_allele` Column Map. Its SNVs
+and substitutions are stored as before.
+
+GWAS-SSF declares the reference row by row, by its layout, which the reader
+tells from the header (ADR 0079):
+- where the harmonised alleles are the main columns, beside `hm_code`, a row
+  whose code is 10 or 11 declares its `other_allele` the reference, and an
+  indel on a row of any other code is dropped as `indel_ssf_hm_code`;
+- where the study's alleles are the main columns and the harmonised ones are
+  `hm_other_allele`/`hm_effect_allele`, every indel is dropped as
+  `indel_ssf_hm_columns`;
+- where the file carries no harmoniser column, every indel is dropped as
+  `indel_ssf_unharmonised`;
+- a file with any other mix of harmoniser columns is refused.
+
+The Admission record counts, per Analysis, the indel rows a harmoniser code kept
+(`indel_rows_kept_by_hm_code`, rows read before duplicates are resolved) beside
+each reason's drops. An LD Reference Panel
+places its indels by a `REF` column, or by an indel-reference table settled by
+GRCh38 evidence, and places none where it has neither (§13). An alt, random or
+unplaced contig is a chromosome.
+
+A Store Release of `format_version` `0.2.0` or `0.1.0` sorts an indel's two
+alleles too, and is read as it was written: nothing rewrites its ALIDs. In such
+a Store a deletion is spelt like the insertion of the same sequence, and its
+statistic is signed for the alphabetically first allele. A source-fidelity
+check (`validate --source`) spells the source's indels the same way when it
+reads one.
 
 A build that lifts a source variant from another Reference Assembly MUST project
 the variant onto the release's assembly using the chain block's orientation: on a
@@ -1175,11 +1225,11 @@ In Observed-Only Dense stores:
 
 Recommended compression for initial implementation is Zarr with Zstandard and bitshuffle, using benchmarked chunking appropriate for mixed range, variant, PheWAS, and full-analysis extraction workloads.
 
-## 10a. `data.zarr` physical layout in format 0.2.0
+## 10a. `data.zarr` physical layout in the 0.2 series
 
-Format 0.2.0 stores every array as **Zarr v3 with the sharding codec**. The
+The 0.2 series (`0.2.0` and `0.2.1`) stores every array as **Zarr v3 with the sharding codec**. The
 arrays, dtypes, fill values and encodings are exactly those of 0.1.0 (§10); only
-the physical layout changes. A 0.2.0 release exists because the unit a query
+the physical layout changes. A 0.2 release exists because the unit a query
 reads — the **inner chunk** — is decoupled from the unit stored as a file — the
 **shard** — so the Dense Analysis-axis inner chunk can narrow without
 multiplying the file count (ADR 0057, ADR 0021).
@@ -1187,6 +1237,7 @@ multiplying the file count (ADR 0057, ADR 0021).
 ```text
 format_version 0.1.0   Zarr v2   .zarray / .zgroup, one file per chunk
 format_version 0.2.0   Zarr v3   zarr.json, one file per shard
+format_version 0.2.1   Zarr v3   the same; an indel's ALID spelt reference first (§4)
 ```
 
 **Shards are bounded on both axes.** The Dense VCF builder writes `[all variants
@@ -1263,7 +1314,7 @@ written uncompressed in 0.1.0 (the `z`/`eaf` exception and overflow tables)
 stays uncompressed inside its shard. Every shard carries the codec's own
 `crc32c` index codec.
 
-**Where the layout is recorded.** A 0.2.0 release records the Dense planes'
+**Where the layout is recorded.** A 0.2 release records the Dense planes'
 inner chunk and shard in three places, all of which MUST agree with the arrays:
 
 - `manifest.json` `provenance.dense.chunk_shape`, `.shard_shape` and
@@ -1399,14 +1450,14 @@ declared `encoding` plus its Completion State: a `float16` `se` or a
 exactly as §6a requires of the primary planes; a Reference-Completed release
 always has `imputed`, a release declaring reference EAF always has
 `eaf_reference`, and an Observed-Only release has neither. `imputed` is `uint8`
-and MUST hold only 0 and 1. On a 0.2.0 release (§10a) each plane's shard is one
+and MUST hold only 0 and 1. On a 0.2 release (§10a) each plane's shard is one
 Analysis row by 1,048,576 variants (16 inner chunks), clipped to the array, so
 reading one Analysis never decompresses another's cells.
 
 The inner chunk and shard of **every** array, not only the statistic planes, are
 part of the format: each array's expected layout is derived from its `ArrayRole`
 and shape through the store-array seam's policies (§10a), so no attribute records
-it and none is required. On a 0.2.0 release every array MUST carry that shard; on
+it and none is required. On a 0.2 release every array MUST carry that shard; on
 a 0.1.0 release no array may be sharded. A plane inner chunk or shard that spans
 Analyses defeats the index's one-Analysis narrow read, and a per-variant side
 array off the format's layout is the same class of silent divergence; both the
@@ -1584,7 +1635,7 @@ cell for `n`, as it does for `eaf` when an index carries none.
 
 ### 11.1 The variant-centric index (`ragged/by_variant/`)
 
-In `format_version` 0.2.0, every Ragged component (a Ragged Store Release or a
+In the 0.2 series, every Ragged component (a Ragged Store Release or a
 Hybrid Overflow) MUST carry a variant-centric index at `ragged/by_variant/`
 (ADR 0060). It is **required**: an absent index is refused by the query facade
 and fails validation, and builders always write it. Its presence is recorded
@@ -1668,6 +1719,38 @@ An LD Reference Panel used for Reference Completion MUST define:
 If EAF is emitted for imputed associations, the LD Reference Panel MUST provide EAF for panel variants or declare why EAF is absent.
 
 The Store Release reference assembly MUST match the LD Reference Panel reference assembly.
+
+A panel names its variants by an id whose two alleles are sorted, whatever the
+genome's reference: every panel on the IEU host writes its 13.1 M indels that
+way (issue #381). A panel indel is placed (§4) only by a reference the panel
+declares (ADR 0079):
+- a block's own `REF` column, where it has one; else
+- the indel-reference table beside the panel's blocks,
+  `ld_dir/{ancestry}/indel_reference.tsv.gz` (bgzipped, tabix-indexed; columns
+  `chromosome`, `position`, `allele1`, `allele2` -- the id's alleles --,
+  `reference`, `.` where unsettled, and `outcome`), with its provenance in
+  `indel_reference.json`, whose `table_sha256` the table MUST match: a
+  completion MUST refuse a table with no provenance or a different checksum.
+  `scripts/build_panel_indel_reference.py` writes both from GRCh38 evidence,
+  settling an indel only where a source reads it one way and none reads it
+  otherwise, and never replaces either.
+
+An indel neither settles names no ALID, is neither matched to a source's indel
+nor filled, and stays in its block's LD; a fill there counts as missing. A
+panel's eigenvectors and `EAF` are for each row's `EA`, and a Store's
+statistics for its ALID's `A1`, so a row whose `A1` is not its `EA` -- a settled
+panel deletion -- has its eigenvector row negated and its frequency complemented
+before completion uses them. A row with no `EA` (an empty cell, or a block
+with no `EA` column), or whose `EA` is neither of its alleles, names no ALID.
+A completed release records how its panel placed its rows. In
+`provenance.completion.panel_indels`: `reference_from` (`ref_column`, `table`,
+`none` or `mixed`), each table read with its path, checksum, revision and
+counts by outcome, the indels read and placed, and `unplaced`, the indels not
+placed by reason (`no_reference`, `no_effect_allele`,
+`effect_allele_not_an_allele`, `identity_invalid`), which sum to the
+difference. In `provenance.completion.panel_snvs_unplaced`: the SNVs and
+substitutions not placed, by the last three reasons. Every count is summed
+over LD blocks: an indel on a block boundary counts once per block.
 
 ### 13.1 LD representation
 
@@ -1918,18 +2001,19 @@ Validators MUST check at least:
 - `analyses.tsv` contains exactly one row per Analysis, covering every `analysis_index` referenced by `index.sqlite` (this is the one place SQLite cannot enforce the relationship as a foreign key, since `analyses.tsv` is a separate file);
 - `index.sqlite` does not contain an `analyses` table, nor a `variants` table (§1, issue #128);
 - `variant_alid_bytes.npy` holds one entry per ALID narrow enough to index, and no key in it is shared by two variants — a shared key is what silently truncating an over-wide ALID produced, and it makes one variant answer another's lookup (issue #127);
+- from `format_version` 0.2.1, every indel row of the Store Variant Table spells its ALID as the row records its orientation: `A1` is its `effect_allele` and `A2` its `other_allele`, and a lifted variant's `source_alid` spells the same allele first, a lift complementing an allele but never changing its length (§4, ADR 0079). An indel spelt sorted where its reference sorts second reads as the insertion of the same sequence; a 0.2.0 or 0.1.0 release, which sorts every indel, is not judged by this rule;
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
 - `variant_index` is **strictly increasing within every Analysis's segment** in a standalone Ragged or a Hybrid Overflow CSR (§11): an out-of-order segment makes the variant-side binary search answer with a plausible, wrong row, and a repeated one is a second association at a variant that Analysis already holds. It is checked on every release, not only on ones this build wrote. The check MUST be bounded and MUST NOT materialise the array: it reads the sequence in windows, the association scan's (§20.0, within one 1 GiB decoded budget), carries the preceding cell across a window boundary and resets at each Analysis boundary, so peak memory is the window and the per-Analysis offsets (`O(n_analyses)`), independent of the association count. The error names the first offending Analysis and says which of the two it found — a decrease, or a repeat;
-- the variant-centric index MUST be present on every Ragged component (a Ragged Store Release or a Hybrid Overflow) in `format_version` 0.2.0, agrees with the Analysis-sorted component and is recorded in `provenance.ragged.by_variant`: its `offsets` array is `n_axis + 1` direct offsets spanning `[0, N)`, each variant holds exactly as many index rows as the component holds at that variant, `analysis_index` is non-decreasing within each variant's block and names a real Analysis, `eaf`/`imputed`/`n` are present on both sides or neither, and the cell contents match the Analysis-sorted planes (§11.1, ADR 0060);
+- the variant-centric index MUST be present on every Ragged component (a Ragged Store Release or a Hybrid Overflow) in the 0.2 series, agrees with the Analysis-sorted component and is recorded in `provenance.ragged.by_variant`: its `offsets` array is `n_axis + 1` direct offsets spanning `[0, N)`, each variant holds exactly as many index rows as the component holds at that variant, `analysis_index` is non-decreasing within each variant's block and names a real Analysis, `eaf`/`imputed`/`n` are present on both sides or neither, and the cell contents match the Analysis-sorted planes (§11.1, ADR 0060);
 - the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it, carries an imputed mask, holds one entry per variant of its axis, and holds only frequencies in `[0, 1]`;
 - the `n` plane is present exactly when the `encoding` block declares one, in the declared dtype, and only beside a `float16` `se` plane; its length equals the CSR's; every code is a count from 1 to `2³² − 2` or the missing code; the plane holds at least one N, since an all-missing plane reads exactly like a release without one; every Analysis holding an N declares `sample_size_scope=variant_level`; and the by-variant copy is present on both sides or neither and its sampled cells equal the CSR's (§6a, §11, ADR 0067). The read is windowed, never the whole plane;
 - the `se` plane, its `se_coefficients` and its exception table agree with the plan the manifest declares (§6a): a residual-coded plane has finite `float32` coefficients of shape `(n_analyses, 2)`, a sorted duplicate-free exception table whose positions lie inside the plane and whose entries are exactly the cells marked `-127`, and a complete `eaf` plane beside it; a `float16` plane has none of those arrays, and carrying one is a failure rather than a harmless relic;
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
 - each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
-- the Zarr on-disk format matches `format_version`: a 0.1.0 release has Zarr v2 metadata (`.zarray`/`.zgroup`, `zarr_format: 2`) and no `zarr.json` anywhere; a 0.2.0 release has Zarr v3 metadata (`zarr.json`, `zarr_format: 3`) and no v2 metadata anywhere, and every array uses the `sharding_indexed` codec. A half-converted release — one manifest, two formats — is invalid (§10a, ADR 0057);
+- the Zarr on-disk format matches `format_version`: a 0.1.0 release has Zarr v2 metadata (`.zarray`/`.zgroup`, `zarr_format: 2`) and no `zarr.json` anywhere; a 0.2 release (`0.2.0` or `0.2.1`) has Zarr v3 metadata (`zarr.json`, `zarr_format: 3`) and no v2 metadata anywhere, and every array uses the `sharding_indexed` codec. A half-converted release — one manifest, two formats — is invalid (§10a, ADR 0057);
 - an Indexed Variant Subset, when present, is self-describing and agrees with the release it indexes (§10b): the only entries under `data.zarr/indexed_subsets` are published subset groups — no staging or replacement directory, no unknown name, no non-group entry and no explicit empty group — and each group records a name, profile, encoding and source identity matching the release. It carries exactly the arrays its declared encoding and the release's Completion State define — an Observed-Only release's index has no `imputed`, a Reference-Completed release's must; a release declaring reference EAF carries `eaf_reference`, and one that does not carries none; `imputed` holds only 0 and 1; `variant_index` is stored `int32` and is non-empty, sorted ascending, unique and in `[0, n_variants)` — a zero-variant subset is not an index and is rejected even when its planes are zero-length; every array's inner chunk and shard match the format's `ArrayRole` policy (the layout is derived, never an attribute); its Analysis-major planes have shape `(n_analyses, n_subset_variants)` and the declared dtypes; `eaf_reference` holds one entry per indexed variant when declared; its side tables are sorted, unique and in range; Z and SE missingness agree within the index; no imputed cell is missing; the `imputed` mask and `eaf_reference` equal the release's own; and every **decoded** indexed Z, SE and EAF equals the authoritative primary-plane cell at that Store Variant Index. This is the **standalone** `validate` contract and it is exhaustive. The build's own staged publication gate is narrower and documented: exhaustively it checks only the enumerated structural rules -- self-describing identity and attributes, the exact array set, shapes and dtypes, the inner-chunk/shard layout, the full Variant Index (dtype, non-empty, sorted, unique, in bounds), counts and provenance, and the small side tables' structure and remapping (with the per-variant `eaf_baseline`/`eaf_reference`) -- while the `imputed` mask domain and agreement, Z/SE missingness, and decoded Z/SE/EAF values are compared over a documented deterministic, bounded, input-checksum-seeded sample (the endpoints of both axes, a spread of physical write-unit and inner-chunk boundaries, a spread of Analyses and seeded cells). The build records `validation_mode`, the sample strategy, seed and cell count, and its duration, and an isolated unsampled corruption is caught by the exhaustive standalone audit instead. A release with no `indexed_subsets` group stays valid and unchanged, and a reader MUST refuse a subset whose recorded source release, store, format, assembly or encoding does not match the release, before decoding any value (ADR 0061, issue #264, #266);
 - the recorded layout matches the arrays: the Dense planes' `chunk_shape` and `shard_shape` in `manifest.json` `provenance.dense`, in the `index.sqlite` `dense` blob and in the `data.zarr` root attributes each clip to the plane's dimensions to equal the plane's actual **inner** chunk, and name its actual shard, and the three compressors agree. A manifest that describes one shape over arrays of another is a silent failure class (§10a);
 - the per-variant chunking rule applies to the **inner** chunk of a sharded array, not to the shard (§6, §10a);
@@ -1973,6 +2057,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `variant_table.rsid_index` | release | fold | every rsid in the table resolves through the rsid search index |
 | `variant_table.sequence` | release | fold | rows are in `variant_index` order, one per canonical variant |
 | `variant_table.representatives` | release | fold | the offset sidecar and the tabix index find the rows the table holds |
+| `variant_table.indel_order` | release | fold | from format 0.2.1, every indel row's ALID spells its alleles as the row records them: its `effect_allele` then its `other_allele`, and, for a lifted variant, its reference first as its `source_alid` does; not judged on a 0.2.0 or 0.1.0 release, which sorts an indel's alleles |
 | `sqlite.variant_aliases` | release | check | every alias names a variant the table holds; skipped where there is no alias table |
 | `analyses.readable` | release | check | `analyses.tsv` parses |
 | `analyses.retired_columns` | release | check | no retired column is present |
@@ -1996,7 +2081,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `encoding.se` | grid, sequence | check | the `se` plane's coefficients and exception table match the plan |
 | `encoding.z` | grid, sequence | check | the `z` plane's overflow table matches the plan |
 | `sample_size.length` | sequence | check | the `n` plane holds one code per association |
-| `by_variant.present` | sequence | check | the variant-centric index is present in format 0.2.0; skipped in 0.1.0 without one |
+| `by_variant.present` | sequence | check | the variant-centric index is present in the 0.2 series; skipped in 0.1.0 without one |
 | `by_variant.provenance` | sequence | check | the manifest records the index, and describes the index present |
 | `by_variant.offsets` | sequence | check | the index's runs span `[0, N)` over the variant axis, and each column is `N` long |
 | `by_variant.members` | sequence | check | `eaf`, `imputed` and `n` are on both sides or neither |
@@ -2089,7 +2174,7 @@ Command-line validation (`ogdb validate`) and inspection (`ogdb info`) provide b
   {
     "store_id": "...",
     "release_id": "...",
-    "format_version": "0.2.0",
+    "format_version": "0.2.1",
     "primary_layout": "dense",
     "association_coverage": "gwas",
     "completion_state": "observed_only",
@@ -2546,7 +2631,9 @@ For a release at `M.m.p`, a reader that fully understands that release series up
 
 Accepting a newer remainder follows from the definition of a compatible change: if an older reader could not read it correctly, the change was incompatible and was classified wrong. The warning is what makes such a misclassification visible instead of silently returning partial data.
 
-This build reads two series, `0.1` (Zarr v2, readable but no longer written) and `0.2` (Zarr v3 with sharding, §10a, what every builder writes since #247). `0.2.0` is the only 0.2 release and `0.1.0` the only 0.1 release; a second remainder in either series is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
+This build reads two series, `0.1` (Zarr v2, readable but no longer written) and `0.2` (Zarr v3 with sharding, §10a). `0.1.0` is the only 0.1 release. The 0.2 series has two: `0.2.0`, which every builder wrote from #247 and the converter still writes, and `0.2.1`, which every builder writes since #381 and which spells an indel's ALID reference first (§4, ADR 0079); a further remainder is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
+
+`0.2.1` moves the remainder, not the series. A reader that knows only `0.2.0` reads a `0.2.1` release correctly — an ALID is a string it looks up as given, and a statistic is signed for the ALID's `A1` in both — and warns that the release is newer. What such a reader does not know is how a `0.2.1` builder spells an indel: a completion run by it would spell its panel's indels sorted, beside the release's reference-first deletions. Only a build that knows `0.2.1` completes one.
 
 A reader meeting a feature it does not implement — an encoding kind, an index type, or a value in a controlled vocabulary it does not know — MUST reject the release rather than guess or fall back. Before `1.0.0` that refusal is exactly what a §21.0 vocabulary change produces in an older package: the "MUST accept a newer remainder" rows above govern a release whose *content* a reader understands, and §21.0 is the pre-release substitute for the version bump those rows would otherwise require.
 
@@ -2556,7 +2643,7 @@ Future format versions may add fields, arrays, or indexes, but MUST preserve exp
 
 A build writes exactly one `format_version` and reads every series it implements. There is no facility for writing an older format: a store that needs to be in an older format already exists in that format.
 
-**Since #247**, this build writes `0.2.0` from every builder and from the converter (§21.4), whose target is `CURRENT_FORMAT_VERSION` — the same constant the builders read — and whose source version is `SOURCE_FORMAT_VERSION = "0.1.0"`. A built release and a converted release therefore declare the same format and carry the same Zarr v3 sharded layout — which is what lets #249 check their identity. `0.1.0` stays readable; deleting the v2 reader is a later decision (ADR 0057). Because completion writes into its source's arrays and keeps its `format_version`, a `0.1.0` source cannot be Reference-Completed by this build: **the one executable order is to convert the `0.1.0` source to `0.2.0` and then complete the converted release** (or rebuild it). Completion refuses a `0.1.0` source and names the conversion tool. A converted `0.2.0` release is writable, so it can then be completed in place.
+**Since #381**, every builder writes `0.2.1` (`CURRENT_FORMAT_VERSION`). The converter (§21.4) writes `0.2.0` (`TARGET_FORMAT_VERSION`) from a `SOURCE_FORMAT_VERSION = "0.1.0"` release: it copies the source's stored codes and ALIDs, and a `0.1.0` release sorts an indel's alleles without saying which is the reference, so its copy is honestly `0.2.0`, not `0.2.1`. From #247 to #381 both wrote `0.2.0`, which is what let #249 check a built and a converted release's identity; a built release and a converted one now differ in their indel ALIDs and in `format_version`, and carry the same layout. `0.1.0` stays readable; deleting the v2 reader is a later decision (ADR 0057). Because completion writes into its source's arrays and keeps its `format_version`, a `0.1.0` or `0.2.0` source cannot be Reference-Completed by this build: completing one would add panel ALIDs spelt by §4 beside its own deletions spelt like insertions, and nothing in it says which of its indels are deletions. **The one executable order is to rebuild the release and complete the rebuilt one.** Completion refuses such a source and says so.
 
 ### 21.4 I have an old store — now what?
 
@@ -2574,4 +2661,4 @@ re-validated.
 
 There is no support window for older remainders: a known series reads every remainder within it.
 
-**Reference Completion preserves its source's `format_version`**, because it writes into the source's arrays and therefore its encoding — a completed release is the same format as its source. A build that can read a source but cannot write that format MUST refuse to complete it, rather than stamp a version onto arrays it did not encode that way. Since #247 the refusal fires on a `0.1.0` source: convert a Dense 0.1.0 release to `0.2.0` with `scripts/convert_store_to_0_2_0.py` and complete that, or rebuild it; the message names the tool.
+**Reference Completion preserves its source's `format_version`**, because it writes into the source's arrays and therefore its encoding — a completed release is the same format as its source. A build that can read a source but cannot write that format MUST refuse to complete it, rather than stamp a version onto arrays it did not encode that way. Since #381 the refusal fires on a `0.1.0` or a `0.2.0` source, converted or built: both sort an indel's alleles (§4), so it is rebuilt and the rebuilt release completed; the message says so.
