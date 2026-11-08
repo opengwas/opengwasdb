@@ -193,3 +193,73 @@ def test_the_script_is_deterministic_to_the_byte(tmp_path: Path) -> None:
     match, mismatch, errors = filecmp.cmpfiles(first, second, names, shallow=False)
     assert (mismatch, errors) == ([], [])
     assert len(match) == len(names)
+
+
+def four_row_writer(tmp_path: Path, written: Path) -> StoreWriter:
+    """A writer over the Test Store's first four rows, all on chromosome 21, 300 kb apart."""
+    variants = StoreReader.open(written).variants(np.arange(4))
+    assert set(variants.chrom) == {"21"}, "the fixture's first rows must share a chromosome"
+    return StoreWriter.create(tmp_path / "s", variants=variants, near_bp=NEAR_BP, far_bp=10_000_000)
+
+
+GOOD_LENGTHS = np.array([3, 2, 1, 0], dtype=np.int64)
+SIX_CODES = np.arange(6, dtype=np.int16)
+
+
+@pytest.mark.parametrize(
+    ("first_row", "lengths", "codes", "message"),
+    [
+        (1, GOOD_LENGTHS[1:], SIX_CODES[:3], "in order"),
+        (0, np.append(GOOD_LENGTHS, 0), SIX_CODES, "past the end"),
+        (0, GOOD_LENGTHS, SIX_CODES[:5], "disagree"),
+        (0, GOOD_LENGTHS, np.full(6, RESERVED_CODE, dtype=np.int16), "reserved"),
+    ],
+)
+def test_the_writer_refuses_a_near_band_write_that_is_out_of_order_or_unsound(
+    tmp_path: Path,
+    written: Path,
+    first_row: int,
+    lengths: np.ndarray,
+    codes: np.ndarray,
+    message: str,
+) -> None:
+    writer = four_row_writer(tmp_path, written)
+    with pytest.raises(ValueError, match=message):
+        writer.write_near(first_row, lengths, codes)
+
+
+def test_the_writer_accepts_the_near_band_these_refusals_are_the_exception_to(
+    tmp_path: Path, written: Path
+) -> None:
+    writer = four_row_writer(tmp_path, written)
+    writer.write_near(0, GOOD_LENGTHS, SIX_CODES)
+    assert (tmp_path / "s" / "near" / "21" / "r").is_dir()
+
+
+@pytest.mark.parametrize(
+    ("chrom", "indptr", "partner", "codes", "message"),
+    [
+        ("7", [0] * 5, [], [], "not in the Variant Set"),
+        ("21", [0, 0], [], [], "indptr must span"),
+        ("21", [0, 1, 1, 1, 1], [1], [], "disagree"),
+        ("21", [0, 1, 1, 1, 1], [9], [5], "outside chromosome 21"),
+        ("21", [0, 1, 1, 1, 1], [1], [RESERVED_CODE], "reserved"),
+    ],
+)
+def test_the_writer_refuses_a_proxy_index_that_does_not_fit_its_chromosome(
+    tmp_path: Path,
+    written: Path,
+    chrom: str,
+    indptr: list[int],
+    partner: list[int],
+    codes: list[int],
+    message: str,
+) -> None:
+    writer = four_row_writer(tmp_path, written)
+    with pytest.raises(ValueError, match=message):
+        writer.write_index(
+            chrom,
+            np.array(indptr, dtype=np.int64),
+            np.array(partner, dtype=np.int64),
+            np.array(codes, dtype=np.int16),
+        )

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -35,6 +36,28 @@ class NearBand:
         return np.diff(self.indptr)
 
 
+def _import_pgenlib() -> Any:
+    """pgenlib, or a refusal naming the extra that installs it (ADR 0002, decision 10)."""
+    try:
+        import pgenlib
+    except ImportError as missing:
+        raise InputError(
+            "reading a pgen needs pgenlib, which ogld installs with the build extra: "
+            "pip install 'ogld[build]'"
+        ) from missing
+    return pgenlib
+
+
+def _kept_columns(psam: Path, keep: Path) -> npt.NDArray[np.int64]:
+    """The psam columns of the kept samples, in psam order."""
+    iids = [line.split("\t")[0] for line in psam.read_text().splitlines()[1:]]
+    kept = {line.strip() for line in keep.read_text().splitlines()[1:] if line.strip()}
+    columns = np.array([i for i, iid in enumerate(iids) if iid in kept], dtype=np.int64)
+    if len(columns) != len(kept):
+        raise InputError(f"the keep file names samples that {psam} does not have")
+    return columns
+
+
 def read_alt_counts(
     pgen: Path, psam: Path, keep: Path, rows: npt.NDArray[np.int64]
 ) -> npt.NDArray[np.int8]:
@@ -43,18 +66,8 @@ def read_alt_counts(
     `rows` are 0-based pgen variant indexes. The genotypes must be complete: a missing call
     is refused naming the variant and the panel, never imputed (ADR 0002).
     """
-    try:
-        import pgenlib
-    except ImportError as missing:
-        raise InputError(
-            "reading a pgen needs pgenlib, which ogld installs with the build extra: "
-            "pip install 'ogld[build]'"
-        ) from missing
-    iids = [line.split("\t")[0] for line in psam.read_text().splitlines()[1:]]
-    kept = {line.strip() for line in keep.read_text().splitlines()[1:] if line.strip()}
-    columns = np.array([i for i, iid in enumerate(iids) if iid in kept], dtype=np.int64)
-    if len(columns) != len(kept):
-        raise InputError(f"the keep file names samples that {psam} does not have")
+    pgenlib = _import_pgenlib()
+    columns = _kept_columns(psam, keep)
     reader = pgenlib.PgenReader(str(pgen).encode())
     out = np.empty((len(rows), reader.get_raw_sample_ct()), dtype=np.int8)
     reader.read_list(rows.astype(np.uint32), out)

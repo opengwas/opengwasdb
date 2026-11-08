@@ -103,3 +103,11 @@ def test_a_missing_call_is_refused_naming_the_variant_and_the_panel(tmp_path: Pa
     rows = np.array([0, 1], dtype=np.int64)
     with pytest.raises(InputError, match=r"missing call.*v1.*gappy\.pgen"):
         read_alt_counts(pgen, psam, keep, rows)
+
+
+def test_a_keep_file_naming_a_sample_the_panel_lacks_is_refused(tmp_path: Path) -> None:
+    panel = testdata.panel()
+    keep = tmp_path / "stranger.keep"
+    keep.write_text("#IID\nnobody-in-the-panel\n")
+    with pytest.raises(InputError, match="keep file"):
+        read_alt_counts(panel.pgen, panel.psam, keep, np.array([0], dtype=np.int64))

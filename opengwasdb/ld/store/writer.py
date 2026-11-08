@@ -90,6 +90,22 @@ class StoreWriter:
                 f"Near Band rows of chromosome {chrom} must be written in order: "
                 f"expected row {self._next_row[chrom]}, got {first_row}"
             )
+        self._check_near(first_row, stop, lengths, codes)
+        self._pending.setdefault(chrom, []).append((lengths.astype(np.int64), codes))
+        self._next_row[chrom] = first_row + len(lengths)
+        if self._next_row[chrom] == stop:
+            self._flush_near(chrom)
+
+    def _check_near(
+        self,
+        first_row: int,
+        stop: int,
+        lengths: npt.NDArray[np.int64],
+        codes: npt.NDArray[np.int16],
+    ) -> None:
+        """Refuse Near Band rows that run past their chromosome, disagree with their codes,
+        hold the reserved code or are not the rows spec §4 gives."""
+        chrom = self._chromosome_of(first_row)
         if first_row + len(lengths) > stop:
             raise ValueError(f"Near Band rows run past the end of chromosome {chrom}")
         if int(lengths.sum()) != len(codes):
@@ -102,10 +118,6 @@ class StoreWriter:
                 f"a Near Band row holds every later variant within near_bp = {self._near_bp}: "
                 f"rows {first_row}–{first_row + len(lengths) - 1} of chromosome {chrom} do not"
             )
-        self._pending.setdefault(chrom, []).append((lengths.astype(np.int64), codes))
-        self._next_row[chrom] = first_row + len(lengths)
-        if self._next_row[chrom] == stop:
-            self._flush_near(chrom)
 
     def _near_lengths(self, first: int, last: int) -> npt.NDArray[np.int64]:
         """The Near Band row lengths spec §4 gives rows `first` … `last − 1` of one chromosome."""
