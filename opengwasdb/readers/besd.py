@@ -36,9 +36,10 @@ from opengwasdb.stats import parse_af
 from opengwasdb.variants.normalise import (
     MalformedIdentity,
     allele_fault,
-    identity_fault,
+    chromosome_fault,
     normalise_chromosome,
     oriented_alid,
+    undeclared_reference,
 )
 
 __all__ = [
@@ -196,7 +197,11 @@ class _EsiColumns:
     def add(self, row: int, chrom: str, bp: int, a1: str, a2: str, snp_id: str,
             freq: float | None, liftover: object | None) -> None:
         chromosome = self._chromosome(chrom)
-        fault = chromosome if isinstance(chromosome, MalformedIdentity) else allele_fault(a1, a2)
+        fault = (
+            chromosome
+            if isinstance(chromosome, MalformedIdentity)
+            else allele_fault(a1, a2) or undeclared_reference(a1, a2, other_is_reference=False)
+        )
         if fault is not None:
             self.malformed[row] = fault.reason
             alid, flipped = "", False
@@ -217,7 +222,7 @@ class _EsiColumns:
     def _chromosome(self, chrom: str) -> MalformedIdentity | str:
         known = self._chromosomes.get(chrom)
         if known is None:
-            fault = identity_fault(chrom)
+            fault = chromosome_fault(chrom)
             known = fault if fault is not None else normalise_chromosome(chrom)
             self._chromosomes[chrom] = known
         return known
@@ -249,11 +254,11 @@ def _oriented(
     is, by `oriented_alid`; lifted, by `oriented_variant` on the reference build.
     """
     if liftover is not None:
-        orientation = oriented_variant(liftover, chrom, str(bp), a1, a2)
+        orientation = oriented_variant(liftover, chrom, str(bp), a1, a2, other_is_reference=False)
         return ("", False) if orientation is None else (
             orientation.variant.alid, orientation.flipped
         )
-    oriented = oriented_alid(chromosome, bp, a1, a2) if bp > 0 else None
+    oriented = oriented_alid(chromosome, bp, a1, a2, other_is_reference=False) if bp > 0 else None
     return ("", False) if oriented is None else oriented
 
 

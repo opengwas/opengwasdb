@@ -71,7 +71,9 @@ today, which keeps this decision additive rather than a format break.
 ### 2. `eaf` is oriented to the stored ALID's effect allele
 
 The canonical ALID convention orders alleles lexicographically
-(`A1 = min(ref, alt)`), so a stored effect allele is frequently the source's
+(`A1 = min(ref, alt)`; an indel's `A1` is its reference allele since
+[ADR 0079](0079-indel-alids-spell-the-reference-allele-first.md), which leaves
+this rule unchanged), so a stored effect allele is frequently the source's
 *other* allele. Stored EAF is the frequency of `effect_allele` **as stored**:
 where the reader flipped the association's sign, it stores `1 - af`, the same
 rule `extract_at_sites` already applies to `SiteMetrics.af`. Storing the

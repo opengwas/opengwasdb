@@ -481,7 +481,11 @@ def _orient_row(
     if eaf is None:
         return None
     try:
-        orientation = orient_to_canonical(chromosome, position, effect, other)
+        # A table of effect and other alleles declares no reference, so it
+        # places no indel (ADR 0079); its `alid` column is read as written.
+        orientation = orient_to_canonical(
+            chromosome, position, effect, other, other_is_reference=False
+        )
     except VariantNormalisationError:
         return None
     return orientation.variant.alid, (1.0 - eaf if orientation.flipped else eaf)

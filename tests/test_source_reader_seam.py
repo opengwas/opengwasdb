@@ -39,7 +39,7 @@ from opengwasdb.readers.interface import (
 from opengwasdb.readers.registry import SourceSpec, open_source, resolve_reader
 from opengwasdb.readers.rows import ReaderBatch, SourceRow, stream_associations, stream_batches
 from opengwasdb.variants.routing.table import (
-    REFERENCE_SECOND,
+    REFERENCE_FIRST,
     REFERENCE_UNKNOWN,
     allele_order,
     reference_codes,
@@ -122,6 +122,17 @@ def _indexed(vcf: Path) -> Path:
     return out
 
 
+#: The fixture's rows as a reader that declares its `ref` the reference stores
+#: them: the deletion `GGGGCC>G` spelt reference first (ADR 0079).
+_DECLARED_ALIDS = ["1:100:A:G", "1:200:GGGGCC:G", "2:300:C:T"]
+#: And as one that declares none, which drops the deletion: it names no ALID.
+_UNDECLARED_ALIDS = ["1:100:A:G", "2:300:C:T"]
+
+
+def _alids(declared: ReferenceAllele) -> list[str]:
+    return _UNDECLARED_ALIDS if declared is ReferenceAllele.UNDECLARED else _DECLARED_ALIDS
+
+
 def _readers(
     tmp_path: Path, *, lower: bool = False
 ) -> dict[str, tuple[SourceReader, ReferenceAllele]]:
@@ -147,18 +158,18 @@ def _readers(
     "name", ["gwas-vcf", "gwas-ssf", "finngen-r13", "association-tsv", "column-map"]
 )
 def test_a_readers_batches_are_its_associations_as_columns(tmp_path: Path, name: str) -> None:
-    reader, _reference = _readers(tmp_path)[name]
-    associations = list(reader.stream_associations())
-    batches = list(reader.stream_batches())
+    reader, reference = _readers(tmp_path)[name]
+    associations = list(reader.stream_associations(StreamTally()))
+    batches = list(reader.stream_batches(StreamTally()))
     z = np.concatenate([b.z for b in batches])
     se = np.concatenate([b.se for b in batches])
     eaf = np.concatenate([b.eaf for b in batches])
-    assert len(z) == len(associations) == 3
+    assert len(z) == len(associations) == len(_alids(reference))
     np.testing.assert_array_equal(z, [a.z for a in associations])
     np.testing.assert_array_equal(se, [a.se for a in associations])
     np.testing.assert_array_equal(eaf, [np.nan if a.eaf is None else a.eaf for a in associations])
     alids = np.concatenate([b.alid for b in batches]).tolist()
-    assert alids == ["1:100:A:G", "1:200:G:GGGGCC", "2:300:C:T"]
+    assert alids == _alids(reference)
 
 
 @pytest.mark.parametrize(
@@ -172,8 +183,8 @@ def test_a_batch_spells_each_rows_alleles_as_its_source_does(tmp_path: Path, nam
         reader = open_source(_besd_spec(_besd(tmp_path, lower=True), "P1"))
     else:
         reader = _readers(tmp_path, lower=True)[name][0]
-    associations = list(reader.stream_associations())
-    (batch,) = reader.stream_batches()
+    associations = list(reader.stream_associations(StreamTally()))
+    (batch,) = reader.stream_batches(StreamTally())
     assert sorted((associations[0].ref, associations[0].alt)) == ["a", "g"]
     assert batch.alid.tolist()[0] == "1:100:A:G"
     assert batch.ref.tolist() == [a.ref for a in associations]
@@ -189,16 +200,18 @@ def test_every_projection_carries_the_formats_reference_declaration(
     tmp_path: Path, name: str
 ) -> None:
     reader, declared = _readers(tmp_path)[name]
-    assert {a.reference for a in reader.stream_associations()} == {declared}
-    (batch,) = reader.stream_batches()
+    assert {a.reference for a in reader.stream_associations(StreamTally())} == {declared}
+    (batch,) = reader.stream_batches(StreamTally())
     assert batch.reference is declared
-    # The deletion GGGGCC>G spells its reference allele second in its ALID,
-    # 1:200:G:GGGGCC, which is what Variant Routing's duplicate rule reads
-    # (`duplicate_reversed_indel`); an SNV's alleles tell nothing apart.
+    # A declared deletion GGGGCC>G spells its reference allele first in its
+    # ALID, 1:200:GGGGCC:G (ADR 0079); an undeclared one names none, and an
+    # SNV's alleles tell nothing apart.
     codes = batch.reference_codes()
-    indel = REFERENCE_UNKNOWN if declared is ReferenceAllele.UNDECLARED else REFERENCE_SECOND
-    assert codes.tolist() == [REFERENCE_UNKNOWN, indel, REFERENCE_UNKNOWN]
-    associations = list(reader.stream_associations())
+    expected = [REFERENCE_UNKNOWN, REFERENCE_UNKNOWN]
+    if declared is not ReferenceAllele.UNDECLARED:
+        expected.insert(1, REFERENCE_FIRST)
+    assert codes.tolist() == expected
+    associations = list(reader.stream_associations(StreamTally()))
     routed = reference_codes(
         np.full(len(associations), 0 if declared is ReferenceAllele.UNDECLARED else 1),
         np.array([allele_order(a.ref, a.alt) for a in associations]),
@@ -209,7 +222,7 @@ def test_every_projection_carries_the_formats_reference_declaration(
 def test_finngens_metric_blocks_read_an_infinite_beta_as_absent(tmp_path: Path) -> None:
     reader = FinnGenR13Reader(_finngen(tmp_path))
     (chunk,) = reader.stream_metric_chunks()
-    assert chunk.alid.tolist() == ["1:100:A:G", "1:200:G:GGGGCC", "2:300:C:T"]
+    assert chunk.alid.tolist() == _DECLARED_ALIDS
     assert np.isnan(chunk.beta[2])
     # The association keeps it, for Admission to drop as `z_nonfinite` (D4).
     assert np.isinf(list(reader.stream_associations())[2].z)
@@ -417,8 +430,8 @@ def test_every_reader_carries_its_one_reference_declaration(tmp_path: Path, name
     (`test_nothing_that_carries_the_declaration_defaults_it`), so an adapter
     that drops it raises here instead of passing `UNDECLARED`."""
     reader, declared = _declared_readers(tmp_path)[name]
-    associations = list(reader.stream_associations())
-    batches = list(reader.stream_batches())
+    associations = list(reader.stream_associations(StreamTally()))
+    batches = list(reader.stream_batches(StreamTally()))
     assert associations and sum(len(batch) for batch in batches) == len(associations)
     assert {a.reference for a in associations} == {declared}
     assert {batch.reference for batch in batches} == {declared}
@@ -449,11 +462,11 @@ def test_a_batch_declaring_a_reference_needs_each_rows_allele_order() -> None:
     """Without `ref_first`, a declared batch would give every row
     `REFERENCE_UNKNOWN`, and a reversed indel could not be told apart."""
     row = SourceRow(
-        chromosome="1", position=200, ref="GGGGCC", alt="G", alid="1:200:G:GGGGCC",
-        flipped=False, af_alt=None, beta=0.4, se=0.2,
+        chromosome="1", position=200, ref="GGGGCC", alt="G", alid="1:200:GGGGCC:G",
+        flipped=True, af_alt=None, beta=0.4, se=0.2,
     )
     (batch,) = stream_batches([row], ReferenceAllele.REF)
-    assert batch.reference_codes().tolist() == [REFERENCE_SECOND]
+    assert batch.reference_codes().tolist() == [REFERENCE_FIRST]
     with pytest.raises(ValueError, match="needs each row's ref_first"):
         replace(batch, ref_first=None)
 

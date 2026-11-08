@@ -67,7 +67,7 @@ import gzip
 import io
 import math
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO
 
@@ -96,6 +96,7 @@ from opengwasdb.readers.interface import (
 from opengwasdb.readers.rows import ReaderBatch, stream_batches
 from opengwasdb.readers.tabular import (
     DEFAULT_CHUNK_ROWS,
+    DeclaredReference,
     MetricsChunk,
     MetricsProjectionColumns,
     SourcePath,
@@ -103,6 +104,7 @@ from opengwasdb.readers.tabular import (
     TabularMetricsRow,
     TabularSource,
     VariantProjectionColumns,
+    declared_reference,
     extract_at_sites,
     parse_af,
     parse_effect,
@@ -116,13 +118,41 @@ from opengwasdb.readers.tabular import (
     stream_variants,
 )
 from opengwasdb.stats import FrequencyTally
-from opengwasdb.variants.normalise import IdentityFaults, Orientation, orient_or_drop
+from opengwasdb.variants.normalise import (
+    HmCodeIndel,
+    HmColumnsIndel,
+    IdentityFaults,
+    Orientation,
+    UnharmonisedIndel,
+    orient_or_drop,
+)
 from opengwasdb.variants.rsid import normalise_rsid
 
 GWAS_SSF_CAPABILITY = "opengwasdb.gwas-ssf"
-#: GWAS-SSF names an effect and an other allele and declares neither the
-#: genome's reference, harmonised or not.
+#: GWAS-SSF names an effect and an other allele, and the format declares
+#: neither the genome's reference, harmonised or not (ADR 0072).
 _REFERENCE = ReferenceAllele.UNDECLARED
+#: Which rows of a GWAS-SSF file declare their `other_allele` the reference, by
+#: the file's layout, read from its header (ADR 0079; owner, 7 Nov 2026):
+#:
+#: - harmonised alleles in the main columns, `hm_code` beside them: a row whose
+#:   harmoniser code is 10 or 11. At FinnGen R13 indel sites read one way,
+#:   `other_allele` is FinnGen's `ref` on 99.38% of 37,894,632 code-10 rows and
+#:   98.32% of 19,267,774 code-11 rows (197 files); the residual error, a few
+#:   files whose minority code disagrees, is accepted;
+#: - the study's alleles in the main columns, harmonised ones in `hm_*` columns:
+#:   none, so every indel is dropped. Code-11 deletions there agree with
+#:   FinnGen on 87.42% of rows over 35 files;
+#: - no harmoniser column: none.
+MAIN_COLUMNS_REFERENCE = DeclaredReference(
+    column=b"hm_code", codes=frozenset({b"10", b"11"}), fault=HmCodeIndel
+)
+HM_COLUMNS_REFERENCE = DeclaredReference(fault=HmColumnsIndel)
+UNHARMONISED_REFERENCE = DeclaredReference(fault=UnharmonisedIndel)
+_HM_ALLELE_COLUMNS = ("hm_other_allele", "hm_effect_allele")
+#: Each harmonised layout, by whether the header names `hm_code` and how many
+#: `hm_*` allele columns it names.
+_LAYOUTS = {(True, 0): MAIN_COLUMNS_REFERENCE, (True, 2): HM_COLUMNS_REFERENCE}
 #: A row of an Analysis that declares no imputation score (#175).
 _UNDECLARED_SCORE = ImputationScore()
 #: GWAS-SSF's identity and alias columns, the variant projection's declaration.
@@ -133,6 +163,7 @@ VARIANT_COLUMNS = VariantProjectionColumns(
     ref=b"other_allele",
     alt=b"effect_allele",
     aliases=(b"rsid", b"variant_id"),
+    reference=UNHARMONISED_REFERENCE,
 )
 _METRICS_COLUMNS = MetricsProjectionColumns(
     chromosome=(b"chromosome",),
@@ -149,6 +180,7 @@ _METRICS_COLUMNS = MetricsProjectionColumns(
     ci_lower=b"ci_lower",
     ci_upper=b"ci_upper",
     p_value=b"p_value",
+    reference=UNHARMONISED_REFERENCE,
 )
 
 
@@ -238,6 +270,8 @@ def _tabular_row(
     frequencies: FrequencyTally | None = None,
     faults: IdentityFaults | None = None,
     infinite_effects: bool = False,
+    *,
+    declaration: DeclaredReference,
 ) -> SourceRow | None:
     """One source row as a `SourceRow`, or `None` when it names no canonical variant.
 
@@ -246,8 +280,10 @@ def _tabular_row(
     effect/`standard_error` still yields a row (its `beta`/`se` are `None`) so
     `stream_variants` can still see it per the interface's superset contract.
     A row too short to reach an allele has a missing allele, which `faults`
-    names (#365). With ``infinite_effects`` (the association stream), an
-    effect the row reports as infinite is its beta (`_infinite_effect`).
+    names (#365), and so is an indel the row does not declare the reference
+    of (``declaration``, ADR 0079). With ``infinite_effects`` (the association
+    stream), an effect the row reports as infinite is its beta
+    (`_infinite_effect`).
     """
     effect_allele = row.get("effect_allele")
     other_allele = row.get("other_allele")
@@ -257,6 +293,8 @@ def _tabular_row(
         effect_allele,
         other_allele,
         faults,
+        declaration=declaration,
+        row=row,
     )
     # An allele a row does not reach never orients, so the two None checks
     # only say so to the type checker.
@@ -427,17 +465,64 @@ def _iter_rows(
         score_column = _validated_score_column(reader.fieldnames, score_column)
         tally = tally or StreamTally()
         faults, frequencies = tally.faults, tally.frequencies
+        declaration = _declaration(path, reader.fieldnames)
         for row in reader:
             parsed = _tabular_row(
                 row, source, sample_size_column, score_column, frequencies, faults,
-                infinite_effects,
+                infinite_effects, declaration=declaration,
             )
-            if parsed is not None:
-                yield parsed
+            if parsed is None:
+                continue
+            tally.indel_rows_kept_by_hm_code += _kept_by_code(declaration, parsed)
+            yield parsed
+
+
+def _kept_by_code(declaration: DeclaredReference, row: SourceRow) -> bool:
+    """Whether ``row`` is an indel its harmoniser code placed."""
+    return declaration.column is not None and len(row.ref.strip()) != len(row.alt.strip())
+
+
+def _declaration(path: SourcePath, header: Sequence[str] | None = None) -> DeclaredReference:
+    """Which of ``path``'s rows declare their `other_allele` the reference.
+
+    A Column Map's translation declares by its allele convention, of every row
+    or none. A GWAS-SSF file declares by its layout (`_ssf_layout_reference`),
+    read from ``header`` or, when not given, from the file.
+    """
+    if isinstance(path, TabularSource):
+        return declared_reference(path.reference)
+    return _ssf_layout_reference(_header(path) if header is None else header, path)
+
+
+def _ssf_layout_reference(header: Sequence[str], source: object) -> DeclaredReference:
+    """The reference declaration of a GWAS-SSF file whose header is ``header``.
+
+    Its layout decides it (`MAIN_COLUMNS_REFERENCE`): `hm_code` with no `hm_*`
+    allele column is the main-column layout; `hm_code` with both `hm_*` allele
+    columns the `hm_*` layout; no harmoniser column at all an unharmonised
+    file. Any other mix fits neither harmonised layout, and nothing says which
+    columns hold its harmonised alleles, so it is refused rather than read
+    under one of them.
+    """
+    harmoniser = sorted(name for name in header if name.startswith("hm_"))
+    layout = ("hm_code" in harmoniser, sum(name in harmoniser for name in _HM_ALLELE_COLUMNS))
+    declaration = _LAYOUTS.get(layout)
+    if declaration is not None:
+        return declaration
+    if not harmoniser:
+        return UNHARMONISED_REFERENCE
+    raise ValueError(
+        f"{source}: a header whose harmoniser columns are {harmoniser} fits neither "
+        "GWAS-SSF harmonised layout (hm_code beside harmonised main columns, or hm_code with both "
+        "hm_other_allele and hm_effect_allele), so the reference of its indels "
+        "cannot be told (ADR 0079)"
+    )
 
 
 def _iter_variants(path: SourcePath) -> Iterator[SourceVariant]:
-    yield from stream_projected_variants(path, VARIANT_COLUMNS)
+    yield from stream_projected_variants(
+        path, replace(VARIANT_COLUMNS, reference=_declaration(path))
+    )
 
 
 def _header(path: SourcePath) -> list[str]:
@@ -524,6 +609,10 @@ class GwasSsfReader:
         return _REFERENCE
 
     @property
+    def _metrics_columns(self) -> MetricsProjectionColumns:
+        return replace(_METRICS_COLUMNS, reference=_declaration(self.path))
+
+    @property
     def imputation_score_column(self) -> str | None:
         """Exact provider-backed column, or None when no score is declared."""
         declaration = self.imputation_score_declaration
@@ -591,7 +680,7 @@ class GwasSsfReader:
         """
         require_z_score_usable(self.path, self.effect_source, self.stored_effect_scale)
         yield from stream_projected_metrics(
-            self.path, _METRICS_COLUMNS, score_column=self.imputation_score_column
+            self.path, self._metrics_columns, score_column=self.imputation_score_column
         )
 
     def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
@@ -605,7 +694,7 @@ class GwasSsfReader:
         require_z_score_usable(self.path, self.effect_source, self.stored_effect_scale)
         yield from stream_projected_metric_chunks(
             self.path,
-            _METRICS_COLUMNS,
+            self._metrics_columns,
             chunk_rows=self.chunk_rows,
             score_column=self.imputation_score_column,
         )
