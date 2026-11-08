@@ -17,6 +17,7 @@ from ogld.format.encoding import (
     T_FAR_Q,
     dequantise,
     far_code_floor,
+    near_row_lengths,
     quantise,
     t_far,
 )
@@ -89,6 +90,7 @@ __all__ = [
     "far_code_floor",
     "judge_region",
     "judge_request",
+    "near_row_lengths",
     "quantise",
     "t_far",
 ]

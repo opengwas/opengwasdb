@@ -199,7 +199,6 @@ NO_CLUMPS = ogld.Clumps(
 #: that builds one removes its entry, as it unmarks the contract tests it makes pass.
 UNBUILT: dict[str, tuple[Callable[[], object], str]] = {
     "StoreReader.open over HTTP": (lambda: store.StoreReader.open("http://x/"), "ogld#4"),
-    "StoreReader.band": (lambda: READER.band(no_rows()), "ogld#4"),
     "validate": (lambda: ogld.validate("x"), "ogld#4"),
     "matrices.matrix": (lambda: matrices.matrix(READER, [], fill=None), "ogld#4"),
     "matrices.region": (lambda: matrices.region(READER, "1", 0, 1, fill=None), "ogld#4"),

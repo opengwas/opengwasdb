@@ -14,7 +14,9 @@
         "sha256": {
           "panel.pgen": "228b0734e0f4f447af35adcea6d3d46e5592536030130df5289065e1d3610941",
           "panel.pvar": "a6200ea0a739d22c7fd7b1e09a98977312b2e96916a81cb336b63f2477e160fb",
-          "panel.psam": "8ff7ddb764d24aee07b6e1a4aaea677f009f6708f8a0dcc92e2acf81a4f69179"
+          "panel.psam": "8ff7ddb764d24aee07b6e1a4aaea677f009f6708f8a0dcc92e2acf81a4f69179",
+          "panel.keep": "5b491d6fd477e4cc9a48cc0928463d50ce3cb49a5890b6eeb82b396fe81cad71",
+          "reference/r.npz": "ce67cb85524b1088c1a03db0b866b7bbf1ad545eb4bf70be2cd7d7b0de3f33ba"
         }
       },
       "panel": {
@@ -280,7 +282,23 @@
       "t_far": 0.027421052631578947,
       "t_far_q": 20.84,
       "far_code_floor": 5426,
-      "pc_diagnostic": null,
+      "pc_diagnostic": {
+        "pairs": {
+          "source": "every chr21 \u00d7 chr22 pair of the Test Panel's variants: the Test Panel holds no other cross-chromosome pairs, so none is drawn and the seed is recorded only",
+          "seed": 405,
+          "n_pairs": 275184
+        },
+        "rate_r2_ge_0_01_unadjusted": 0.012787807430664573,
+        "rate_r2_ge_0_01_adjusted": 0.011497761497761497,
+        "rate_r2_ge_0_01_sampling": 0.005836830082645424,
+        "near_100kb_change": {
+          "0": -0.050012048528130446,
+          "0.5": 2.4424906541753444e-15,
+          "0.9": 0.00907426462220176,
+          "0.99": 0.020243447826607038,
+          "1": 0.04501450055733097
+        }
+      },
       "counts": {
         "near_pairs": 109212,
         "far_candidates": 37381,
@@ -288,14 +306,14 @@
         "index_entries": 36420
       },
       "software": {
-        "ogld": "unversioned: written by scripts/make_test_store.py",
+        "ogld": "0.0.1.dev52+g6dae34586.d20261108",
         "numpy": "2.3.5",
         "zarr": "3.4.2"
       },
       "build": {
-        "created_at": "1970-01-01T00:00:00Z",
-        "wall_seconds": 0.0,
-        "peak_memory_bytes": 0,
+        "created_at": "2026-11-08T01:39:29Z",
+        "wall_seconds": 0.3805556060397066,
+        "peak_memory_bytes": 2060664832,
         "threads": 1
       }
     }

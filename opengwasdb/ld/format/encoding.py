@@ -105,3 +105,11 @@ def far_code_floor(t_far: float) -> int:
     while (code / R_SCALE) ** 2 < t_far:
         code += 1
     return code
+
+
+def near_row_lengths(position: npt.ArrayLike, near_bp: int) -> npt.NDArray[np.int64]:
+    """The length of each Near Band row of one chromosome: len_l = |{m > l : p_m − p_l ≤ near_bp}|
+    (spec §4). `position` is the chromosome's positions in row order, ascending."""
+    at = np.asarray(position, dtype=np.int64)
+    reach = np.searchsorted(at, at + near_bp, side="right")
+    return (reach - np.arange(len(at)) - 1).astype(np.int64)

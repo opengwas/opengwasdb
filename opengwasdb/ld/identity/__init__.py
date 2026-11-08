@@ -150,6 +150,21 @@ def alid_locus(alid: str) -> tuple[str, int] | None:
     return chrom, int(pos)
 
 
+_CHROMOSOME_RANK = {
+    **{str(number): number for number in range(1, 23)},
+    "X": 23,
+    "Y": 24,
+    "MT": 25,
+}
+
+
+def variant_order_key(o: Orientation) -> tuple[int, int, str]:
+    """The engine's variant order, as a sort key: chromosome (`1`–`22`, `X`, `Y`, `MT`), then
+    position ascending, then ALID ascending (bytewise: an ALID is ASCII) at one position
+    (spec §2). A chromosome off that list has no rank and raises KeyError."""
+    return _CHROMOSOME_RANK[o.chrom], o.position, o.alid
+
+
 def _is_canonical_chromosome(label: str) -> bool:
     return label in _AUTOSOMES or label in _SEX_AND_MT
 
@@ -207,4 +222,5 @@ __all__ = [
     "normalise_chromosome",
     "orient",
     "resolve_reversed_indels",
+    "variant_order_key",
 ]

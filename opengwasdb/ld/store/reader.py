@@ -12,7 +12,7 @@ ogld#4 replaces the internals with bounded reads, without changing a signature.
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -20,7 +20,7 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import ENCODING, FORMAT_VERSION, Provenance, dequantise
+from ogld.format import ENCODING, FORMAT_VERSION, RESERVED_CODE, InputError, Provenance, dequantise
 from ogld.identity import alid_locus
 from ogld.store.layout import R_DTYPE
 from ogld.store.tables import Partners, Variants
@@ -77,16 +77,16 @@ class StoreReader:
         root = zarr.open_group(str(location), mode="r", zarr_format=3)
         recorded = root.attrs.get("ld_store")
         if not isinstance(recorded, dict):
-            raise ValueError(
+            raise InputError(
                 f"{location} has no ld_store provenance: it is not a finished LD Store"
             )
         if recorded.get("format_version") != FORMAT_VERSION:
-            raise ValueError(
+            raise InputError(
                 f"{location} is LD Store format {recorded.get('format_version')!r}; "
                 f"this ogld reads {FORMAT_VERSION!r} only (spec §13)"
             )
         if recorded.get("encoding") != ENCODING:
-            raise ValueError(
+            raise InputError(
                 f"{location} records the encoding {recorded.get('encoding')!r}; "
                 f"this ogld reads {ENCODING!r} only (spec §3)"
             )
@@ -123,6 +123,10 @@ class StoreReader:
 
     def rows_in(self, chrom: str, start: int, stop: int) -> npt.NDArray[np.int64]:
         """The rows on `chrom` with start ≤ position ≤ stop, ascending (spec §2)."""
+        if alid_locus(f"{chrom}:1:A:C") is None:
+            raise InputError(
+                f"{chrom!r} is not a canonical chromosome label (1–22, X, Y, MT; no 'chr' prefix)"
+            )
         if chrom not in self._ranges:
             return np.empty(0, dtype=np.int64)
         first, last = self._ranges[chrom]
@@ -133,6 +137,7 @@ class StoreReader:
 
     def variants(self, rows: npt.NDArray[np.int64]) -> Variants:
         """The Variant Set's columns at `rows`, in the order given (spec §2)."""
+        rows = self._checked(rows)
         c = self._columns
         return Variants(
             chrom=self._chrom[rows].astype(np.str_),
@@ -169,6 +174,7 @@ class StoreReader:
         The diagonal is 1. Every pair the store does not hold, the Bound and Not Measured
         alike, is NaN.
         """
+        rows = self._checked(rows)
         near_bp, far_bp = self._provenance["near_bp"], self._provenance["far_bp"]
         position = self._columns["position"].astype(np.int64)
         n = len(rows)
@@ -182,7 +188,7 @@ class StoreReader:
             hi = np.maximum(local[a], local[b])
             distance = np.abs(position[rows[members]][a] - position[rows[members]][b])
             near = (lo < hi) & (distance <= near_bp)
-            codes = np.full(a.shape, -1, dtype=np.int64)
+            codes = np.full(a.shape, RESERVED_CODE, dtype=np.int64)
             codes[near] = chrom.near_r[chrom.near_indptr[lo[near]] + (hi[near] - lo[near] - 1)]
             stored = near.copy()
             far = (lo < hi) & (distance > near_bp) & (distance <= far_bp)
@@ -198,19 +204,12 @@ class StoreReader:
     def index(self, rows: npt.NDArray[np.int64]) -> Partners:
         """Each row's Proxy Index entries: every partner within far_bp, either side, with
         r̂² ≥ t_far, and its Stored r (spec §5). One sparse row per variant (§10)."""
-        indptr = [0]
-        partner: list[npt.NDArray[np.int64]] = []
-        codes: list[npt.NDArray[np.int16]] = []
-        for row in rows:
-            chrom = self._chromosome(str(self._chrom[row]))
-            local = int(row) - chrom.start
+
+        def entries(chrom: _Chromosome, local: int) -> tuple[npt.NDArray[np.int64], Any]:
             lo, hi = chrom.index_indptr[local], chrom.index_indptr[local + 1]
-            partner.append(chrom.index_partner[lo:hi].astype(np.int64) + chrom.start)
-            codes.append(chrom.index_r[lo:hi])
-            indptr.append(indptr[-1] + int(hi - lo))
-        flat = np.concatenate(partner) if partner else np.empty(0, dtype=np.int64)
-        held = np.concatenate(codes) if codes else np.empty(0, dtype=R_DTYPE)
-        return Partners(np.array(indptr, dtype=np.int64), flat, dequantise(held))
+            return chrom.index_partner[lo:hi].astype(np.int64), chrom.index_r[lo:hi]
+
+        return self._gather(rows, entries)
 
     def band(self, rows: npt.NDArray[np.int64]) -> Partners:
         """Each row's Near Band partners on both sides, with their Stored r (spec §4, §10).
@@ -219,11 +218,61 @@ class StoreReader:
         each row of the preceding near_bp. It is the slow read the Proxy Index exists to
         avoid, used only by `proxies` at an r2 below t_far.
         """
-        raise NotImplementedError("ogld#4")
+        near_bp = self._provenance["near_bp"]
+        position = self._columns["position"].astype(np.int64)
+
+        def entries(chrom: _Chromosome, local: int) -> tuple[npt.NDArray[np.int64], Any]:
+            at = position[chrom.start : chrom.stop]
+            first = int(np.searchsorted(at, at[local] - near_bp, side="left"))
+            up = np.arange(first, local, dtype=np.int64)
+            lo, hi = chrom.near_indptr[local], chrom.near_indptr[local + 1]
+            down = np.arange(local + 1, local + 1 + int(hi - lo), dtype=np.int64)
+            above = chrom.near_r[chrom.near_indptr[up] + (local - up - 1)]
+            return np.concatenate([up, down]), np.concatenate([above, chrom.near_r[lo:hi]])
+
+        return self._gather(rows, entries)
+
+    def _gather(
+        self,
+        rows: npt.NDArray[np.int64],
+        entries: Callable[[_Chromosome, int], tuple[npt.NDArray[np.int64], Any]],
+    ) -> Partners:
+        """The partners `entries` gives for each of `rows`, as global rows, in CSR form."""
+        indptr = [0]
+        partner: list[npt.NDArray[np.int64]] = []
+        codes: list[npt.NDArray[np.int16]] = []
+        for row in self._checked(rows):
+            chrom = self._chromosome(str(self._chrom[row]))
+            found, held = entries(chrom, int(row) - chrom.start)
+            partner.append(found + chrom.start)
+            codes.append(held)
+            indptr.append(indptr[-1] + len(found))
+        return _partners(indptr, partner, codes)
+
+    def _checked(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
+        """`rows`, if every one is a row of the Variant Set. An Absent ALID is −1 from `rows_of`
+        and is no row: read as an index it would be the last variant."""
+        rows = np.asarray(rows, dtype=np.int64)
+        bad = (rows < 0) | (rows >= len(self._chrom))
+        if bad.any():
+            raise ValueError(
+                f"rows {rows[bad][:5].tolist()} are outside the Variant Set of "
+                f"{len(self._chrom)} rows: an Absent ALID is not a row (spec §8)"
+            )
+        return rows
 
 
 _NOT_IN_INDEX = np.iinfo(np.int64).min
 _VARIANT_COLUMNS = ("position", "alid", "a1", "a2", "a1_frequency")
+
+
+def _partners(
+    indptr: list[int], partner: list[npt.NDArray[np.int64]], codes: list[npt.NDArray[np.int16]]
+) -> Partners:
+    """One `Partners` from each row's partners and codes; a code the store never wrote refuses."""
+    flat = np.concatenate(partner) if partner else np.empty(0, dtype=np.int64)
+    held = np.concatenate(codes) if codes else np.empty(0, dtype=R_DTYPE)
+    return Partners(np.array(indptr, dtype=np.int64), flat, dequantise(held))
 
 
 def _index_codes(

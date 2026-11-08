@@ -7,6 +7,7 @@ Index. ogld#5 builds those around it. pgenlib is imported inside `read_alt_count
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import InputError, quantise
+from ogld.format import InputError, near_row_lengths, quantise
 
 #: Rows of the Near Band computed per matrix product: bounds the work array.
 BLOCK_ROWS = 512
@@ -48,10 +49,21 @@ def _import_pgenlib() -> Any:
     return pgenlib
 
 
+def _refuse_repeats(listed: list[str]) -> None:
+    """A duplicate IID in the keep file is refused, naming it: n must not shrink silently."""
+    repeated = sorted({iid for iid in listed if listed.count(iid) > 1})
+    if repeated:
+        raise InputError(
+            f"the keep file has a duplicate IID: {', '.join(repeated)} (build-inputs §4)"
+        )
+
+
 def _kept_columns(psam: Path, keep: Path) -> npt.NDArray[np.int64]:
     """The psam columns of the kept samples, in psam order."""
     iids = [line.split("\t")[0] for line in psam.read_text().splitlines()[1:]]
-    kept = {line.strip() for line in keep.read_text().splitlines()[1:] if line.strip()}
+    listed = [line.strip() for line in keep.read_text().splitlines()[1:] if line.strip()]
+    _refuse_repeats(listed)
+    kept = set(listed)
     columns = np.array([i for i, iid in enumerate(iids) if iid in kept], dtype=np.int64)
     if len(columns) != len(kept):
         raise InputError(f"the keep file names samples that {psam} does not have")
@@ -97,24 +109,33 @@ def unadjusted_near_band(
     a1_is_alt: npt.NDArray[np.bool_],
     positions: npt.NDArray[np.int64],
     near_bp: int,
+    *,
+    names: Sequence[str] | None = None,
+    panel: str = "the panel",
 ) -> NearBand:
     """The Near Band of one chromosome's variants at k = 0 (spec §3, §4).
 
     `alt_counts` is [variants, samples] in genomic order and `a1_is_alt` says which allele is
-    each variant's A1, so r is the correlation of the A1 dosages.
+    each variant's A1, so r is the correlation of the A1 dosages. `names` and `panel` say which
+    variant and panel a refusal is about.
     """
     z = alt_counts.astype(np.float64)
     z -= z.mean(axis=1, keepdims=True)
     norm = np.sqrt((z * z).sum(axis=1, keepdims=True))
-    if (norm == 0).any():
-        raise InputError("a variant with no genotype variance has no r (spec §3)")
+    flat = np.flatnonzero(norm[:, 0] == 0)
+    if len(flat):
+        which = names[flat[0]] if names is not None else f"#{flat[0]}"
+        raise InputError(
+            f"variant {which} of panel {panel} has no genotype variance, so no r (spec §3): "
+            "the builder drops such a variant before it computes r"
+        )
     z /= norm
     # r is the correlation of ALT dosages; A1 dosages are 2 − ALT where A1 is REF, so the
     # standardised column changes sign and so does every r the variant is in (spec §3).
     z[~a1_is_alt] *= -1
     n = len(positions)
-    stop = np.searchsorted(positions, positions + near_bp, side="right")
-    lengths = (stop - np.arange(n) - 1).astype(np.int64)
+    lengths = near_row_lengths(positions, near_bp)
+    stop = np.arange(n) + 1 + lengths
     indptr = np.concatenate([[0], np.cumsum(lengths)]).astype(np.int64)
     codes = np.empty(int(indptr[-1]), dtype=np.int16)
     for first in range(0, n, BLOCK_ROWS):

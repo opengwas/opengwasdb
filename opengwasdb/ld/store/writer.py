@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import ENCODING, RESERVED_CODE, Provenance
+from ogld.format import ENCODING, RESERVED_CODE, Provenance, near_row_lengths
 from ogld.store import layout
 from ogld.store.tables import Variants
 
@@ -44,6 +44,7 @@ class StoreWriter:
         self._far_bp = far_bp
         self._pending: dict[str, list[tuple[npt.NDArray[np.int64], npt.NDArray[np.int16]]]] = {}
         self._next_row = {chrom: start for chrom, (start, _) in ranges.items()}
+        self._lengths: dict[str, npt.NDArray[np.int64]] = {}
         self._near_done: set[str] = set()
         self._index_done: set[str] = set()
 
@@ -59,11 +60,16 @@ class StoreWriter:
         ranges = chromosome_ranges(variants.chrom)
         root = zarr.open_group(str(path), mode="w-", zarr_format=3)
         group = root.create_group("variants")
-        layout.put_numbers(group, "position", variants.position.astype(np.int32), 0)
+        layout.put_numbers(group, "position", _positions(variants.position), layout.POSITION_FILL)
         layout.put_strings(group, "alid", variants.alid)
         layout.put_strings(group, "a1", variants.a1)
         layout.put_strings(group, "a2", variants.a2)
-        layout.put_numbers(group, "a1_frequency", variants.a1_frequency.astype(np.float32), np.nan)
+        layout.put_numbers(
+            group,
+            "a1_frequency",
+            variants.a1_frequency.astype(np.float32),
+            layout.FREQUENCY_FILL,
+        )
         group.attrs["chromosomes"] = [
             {"name": name, "row_start": start, "row_stop": stop}
             for name, (start, stop) in ranges.items()
@@ -90,6 +96,7 @@ class StoreWriter:
                 f"Near Band rows of chromosome {chrom} must be written in order: "
                 f"expected row {self._next_row[chrom]}, got {first_row}"
             )
+        _check_dtype(codes)
         self._check_near(first_row, stop, lengths, codes)
         self._pending.setdefault(chrom, []).append((lengths.astype(np.int64), codes))
         self._next_row[chrom] = first_row + len(lengths)
@@ -121,11 +128,12 @@ class StoreWriter:
 
     def _near_lengths(self, first: int, last: int) -> npt.NDArray[np.int64]:
         """The Near Band row lengths spec §4 gives rows `first` … `last − 1` of one chromosome."""
-        start, stop = self._ranges[self._chromosome_of(first)]
-        position = self._position[start:stop].astype(np.int64)
-        local = np.arange(first - start, last - start)
-        reach = np.searchsorted(position, position[local] + self._near_bp, side="right")
-        return cast(npt.NDArray[np.int64], (reach - local - 1).astype(np.int64))
+        chrom = self._chromosome_of(first)
+        if chrom not in self._lengths:
+            start, stop = self._ranges[chrom]
+            self._lengths[chrom] = near_row_lengths(self._position[start:stop], self._near_bp)
+        start, _ = self._ranges[chrom]
+        return self._lengths[chrom][first - start : last - start]
 
     def _flush_near(self, chrom: str) -> None:
         parts = self._pending.pop(chrom)
@@ -148,12 +156,13 @@ class StoreWriter:
     ) -> None:
         """Write one chromosome's Proxy Index in CSR form over its rows, partners as
         global rows ascending within each row, both directions of every pair (spec §5)."""
+        _check_dtype(codes)
         start = self._check_index(chrom, indptr, partner, codes)
         group = self._root.require_group(f"index/{chrom}")
         layout.put_numbers(group, "indptr", indptr.astype(np.int64), layout.INT64_FILL)
         local = (partner - start).astype(np.int32)
         layout.put_numbers(group, "partner", local, layout.PARTNER_FILL)
-        layout.put_numbers(group, "r", codes.astype(layout.R_DTYPE), RESERVED_CODE)
+        layout.put_numbers(group, "r", codes, RESERVED_CODE)
         self._index_done.add(chrom)
 
     def _check_index(
@@ -210,6 +219,22 @@ def _check_entries(
         raise ValueError(f"a Proxy Index partner lies outside chromosome {chrom}")
     if (codes == RESERVED_CODE).any():
         raise ValueError(f"code {RESERVED_CODE} is reserved and never a correlation (spec §3)")
+
+
+def _check_dtype(codes: npt.NDArray[np.int16]) -> None:
+    """Codes are stored as they come: any dtype but the encoding's would wrap, so it is refused."""
+    if codes.dtype != layout.R_DTYPE:
+        raise ValueError(
+            f"codes must be {layout.R_DTYPE} as `ogld.format.quantise` makes them, not "
+            f"{codes.dtype}: a cast would wrap an out-of-range code into a wrong r (spec §3)"
+        )
+
+
+def _positions(position: npt.NDArray[np.int64]) -> npt.NDArray[np.int32]:
+    """Positions as the int32 array stores them; one that does not fit is refused, not wrapped."""
+    if len(position) and (position.min() < 0 or position.max() > np.iinfo(np.int32).max):
+        raise ValueError("a position does not fit the int32 `position` array (spec §2)")
+    return position.astype(np.int32)
 
 
 def chromosome_ranges(chrom: npt.NDArray[np.str_]) -> dict[str, tuple[int, int]]:

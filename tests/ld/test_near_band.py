@@ -111,3 +111,25 @@ def test_a_keep_file_naming_a_sample_the_panel_lacks_is_refused(tmp_path: Path) 
     keep.write_text("#IID\nnobody-in-the-panel\n")
     with pytest.raises(InputError, match="keep file"):
         read_alt_counts(panel.pgen, panel.psam, keep, np.array([0], dtype=np.int64))
+
+
+def test_a_variant_without_variance_is_refused_naming_it_and_the_panel() -> None:
+    alt = np.array([[0, 1, 2, 1], [1, 1, 1, 1], [2, 0, 1, 1]], dtype=np.int8)
+    with pytest.raises(InputError, match=r"variant rs-flat of panel the-test-panel"):
+        unadjusted_near_band(
+            alt,
+            np.array([True, True, True]),
+            np.array([100, 200, 300]),
+            NEAR_BP,
+            names=["rs-ok", "rs-flat", "rs-also-ok"],
+            panel="the-test-panel",
+        )
+
+
+def test_a_duplicate_iid_in_the_keep_file_is_refused_naming_it(tmp_path: Path) -> None:
+    panel = testdata.panel()
+    iids = panel.keep.read_text().splitlines()
+    keep = tmp_path / "twice.keep"
+    keep.write_text("\n".join([*iids, iids[3]]) + "\n")
+    with pytest.raises(InputError, match=rf"duplicate.*{iids[3]}"):
+        read_alt_counts(panel.pgen, panel.psam, keep, np.array([0], dtype=np.int64))

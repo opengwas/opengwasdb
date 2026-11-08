@@ -17,20 +17,25 @@ was written at (spec §4, §5). It is deterministic: the same inputs write the s
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import importlib
+import math
+import resource
 import shutil
 import sys
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
 import zarr
 
+import ogld
 from ogld.build.near_band import read_alt_counts
 from ogld.format import (
     ENCODING,
@@ -44,15 +49,20 @@ from ogld.format import (
     quantise,
     t_far,
 )
-from ogld.identity import Orientation, orient, resolve_reversed_indels
+from ogld.identity import Orientation, orient, resolve_reversed_indels, variant_order_key
 from ogld.store import StoreWriter, Variants
 from ogld.store.writer import chromosome_ranges
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = ROOT / "tests" / "data" / "test-panel" / "store"
+TEST_PANEL = ROOT / "tests" / "data" / "test-panel"
 PANEL_ID = "hgdp1kgp-v2-EUR-test-panel"
-#: The time and cost of a build the Test Store was not: fixed, so regeneration is byte-identical.
-NOT_A_BUILD = "1970-01-01T00:00:00Z"
+#: The seed ogld#405's cross-chromosome pair set is drawn with (spec §7).
+DIAGNOSTIC_SEED = 405
+RATE_R2 = 0.01
+NEAR_100KB = 100_000
+QUANTILES = (0, 0.5, 0.9, 0.99, 1)
+LONG_RANGE = ROOT / "docs" / "spec" / "long-range-ld-regions-grch38.tsv"
 
 
 @dataclass(frozen=True)
@@ -73,15 +83,6 @@ def panel_data() -> ModuleType:
     return importlib.import_module("testdata")
 
 
-def chromosome_order(label: str) -> int:
-    return {"X": 23, "Y": 24, "MT": 25}.get(label) or int(label)
-
-
-def engine_order(o: Orientation) -> tuple[int, int, str]:
-    """The engine's variant order: chromosome, position, then ALID bytewise (spec §2)."""
-    return chromosome_order(o.chrom), o.position, o.alid
-
-
 def variant_set() -> VariantSet:
     """The rows that pass the filters, reversed indels resolved, in the engine's order."""
     v = panel_data().variants()
@@ -89,9 +90,7 @@ def variant_set() -> VariantSet:
     records = [(str(v.chrom[r]), int(v.pos[r]), str(v.ref[r]), str(v.alt[r])) for r in passing]
     kept, dropped = resolve_reversed_indels(records)
     found = {i: orient(*records[i]) for i in kept}
-    order = sorted(
-        kept, key=lambda i: (chromosome_order(records[i][0]), records[i][1], found[i].alid)
-    )
+    order = sorted(kept, key=lambda i: variant_order_key(found[i]))
     rows = passing[order].astype(np.int64)
     oriented = [found[i] for i in order]
     is_alt = np.array([o.a1_is_alt for o in oriented])
@@ -181,6 +180,9 @@ def write_chromosome(
     return len(codes), int(far.sum()), int((far & keep).sum()), int(keep.sum())
 
 
+INPUTS = ("panel.pgen", "panel.pvar", "panel.psam", "panel.keep", "reference/r.npz")
+
+
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -241,7 +243,7 @@ def provenance_inputs(k: int) -> dict[str, object]:
                 f"the Test Panel (tests/data/test-panel): HGDP+1kGP v2 EUR chr21 and chr22, "
                 f"{n} samples; r is the panel's independent reference_r({k}), not a build's"
             ),
-            "sha256": {f.name: sha256(f) for f in (panel.pgen, panel.pvar, panel.psam)},
+            "sha256": {name: sha256(TEST_PANEL / name) for name in INPUTS},
         },
         "panel": {
             "id": PANEL_ID,
@@ -259,7 +261,13 @@ def provenance_inputs(k: int) -> dict[str, object]:
     }
 
 
-def provenance(k: int, vs: VariantSet, counts: tuple[int, int, int, int]) -> Provenance:
+def provenance(
+    k: int,
+    vs: VariantSet,
+    counts: tuple[int, int, int, int],
+    diagnostic: dict[str, object] | None,
+    build: dict[str, object],
+) -> Provenance:
     far_t = t_far(panel_data().panel().n_samples, k)
     near, candidates, far_pairs, entries = counts
     record: dict[str, object] = {
@@ -277,8 +285,7 @@ def provenance(k: int, vs: VariantSet, counts: tuple[int, int, int, int]) -> Pro
         "t_far": far_t,
         "t_far_q": T_FAR_Q,
         "far_code_floor": far_code_floor(far_t),
-        # Not measured: the diagnostic needs the build's PC Adjustment (ogld#5).
-        "pc_diagnostic": None,
+        "pc_diagnostic": diagnostic,
         "counts": {
             "near_pairs": near,
             "far_candidates": candidates,
@@ -286,22 +293,107 @@ def provenance(k: int, vs: VariantSet, counts: tuple[int, int, int, int]) -> Pro
             "index_entries": entries,
         },
         "software": {
-            "ogld": "unversioned: written by scripts/make_test_store.py",
+            "ogld": ogld.__version__,
             "numpy": np.__version__,
             "zarr": zarr.__version__,
         },
-        "build": {
-            "created_at": NOT_A_BUILD,
-            "wall_seconds": 0.0,
-            "peak_memory_bytes": 0,
-            "threads": 1,
-        },
+        "build": build,
     }
     return cast(Provenance, record)
 
 
+def build_record(started: float) -> dict[str, object]:
+    """What this run cost: when it finished, how long it took, its peak memory, its threads."""
+    now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    peak_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return {
+        "created_at": now,
+        "wall_seconds": time.perf_counter() - started,
+        "peak_memory_bytes": int(peak_kib) * 1024,
+        "threads": 1,
+    }
+
+
+def unit_columns(vs: VariantSet, k: int) -> npt.NDArray[np.float64]:
+    """Each variant's A1 dosages across the kept samples, after regressing out an intercept and
+    the first `k` PCs, as a unit vector: a row product is r signed to A1 (spec §3)."""
+    data = panel_data()
+    panel = data.panel()
+    alt = read_alt_counts(panel.pgen, panel.psam, panel.keep, vs.panel_rows).astype(np.float64)
+    z = alt - alt.mean(axis=1, keepdims=True)
+    if k:
+        z = z - residual_fit(z, kept_pcs(k))
+    z /= np.sqrt((z * z).sum(axis=1, keepdims=True))
+    return z * vs.sign[:, None]
+
+
+def kept_pcs(k: int) -> npt.NDArray[np.float64]:
+    """The intercept and first `k` PCs of the kept samples, in the genotypes' sample order."""
+    data = panel_data()
+    panel = data.panel()
+    kept = {line.strip() for line in panel.keep.read_text().splitlines()[1:]}
+    ordered = [line.split("\t")[0] for line in panel.psam.read_text().splitlines()[1:]]
+    wanted = [iid for iid in ordered if iid in kept]
+    pcs = data.pcs()
+    row = {iid: i for i, iid in enumerate(pcs.iids)}
+    values = pcs.values[[row[iid] for iid in wanted], :k]
+    return np.column_stack([np.ones(len(wanted)), values])
+
+
+def residual_fit(z: npt.NDArray[np.float64], design: npt.NDArray[np.float64]) -> Any:
+    """The part of each row of `z` the design's columns explain (least squares)."""
+    beta, *_ = np.linalg.lstsq(design, z.T, rcond=None)
+    return (design @ beta).T
+
+
+def long_range_mask(vs: VariantSet) -> npt.NDArray[np.bool_]:
+    """True for each variant inside a Long-Range LD Region (build-inputs §9)."""
+    rows = [
+        line.split("\t")
+        for line in LONG_RANGE.read_text().splitlines()
+        if line and not line.startswith("#")
+    ][1:]
+    inside = np.zeros(len(vs.variants), dtype=np.bool_)
+    for _, chrom, start, end, *_ in rows:
+        on = (vs.variants.chrom == chrom) & (vs.variants.position >= int(start))
+        inside |= on & (vs.variants.position <= int(end))
+    return inside
+
+
+def pc_diagnostic(vs: VariantSet, k: int) -> dict[str, object]:
+    """What PC Adjustment did to chance LD, measured on the Test Panel (spec §7): every
+    chr21 × chr22 pair, the share at r² ≥ 0.01 before and after, what sampling predicts, and the
+    quantiles of the change in r within 100 kb outside the Long-Range LD Regions."""
+    before, after = unit_columns(vs, 0), unit_columns(vs, k)
+    chrom, pos = vs.variants.chrom, vs.variants.position
+    across = np.triu(chrom[:, None] != chrom[None, :], k=1)
+    r_before, r_after = before @ before.T, after @ after.T
+    near = np.triu(
+        (chrom[:, None] == chrom[None, :]) & (pos[None, :] - pos[:, None] <= NEAR_100KB), k=1
+    )
+    outside = ~long_range_mask(vs)
+    near &= outside[:, None] & outside[None, :]
+    change = np.quantile((r_after - r_before)[near], QUANTILES)
+    n = panel_data().panel().n_samples
+    return {
+        "pairs": {
+            "source": (
+                "every chr21 × chr22 pair of the Test Panel's variants: the Test Panel holds no "
+                "other cross-chromosome pairs, so none is drawn and the seed is recorded only"
+            ),
+            "seed": DIAGNOSTIC_SEED,
+            "n_pairs": int(across.sum()),
+        },
+        "rate_r2_ge_0_01_unadjusted": float((r_before[across] ** 2 >= RATE_R2).mean()),
+        "rate_r2_ge_0_01_adjusted": float((r_after[across] ** 2 >= RATE_R2).mean()),
+        "rate_r2_ge_0_01_sampling": math.erfc(math.sqrt(RATE_R2 * (n - k - 1) / 2)),
+        "near_100kb_change": {f"{q:g}": float(c) for q, c in zip(QUANTILES, change, strict=True)},
+    }
+
+
 def write_test_store(k: int, out: str | Path) -> Path:
     """Write the Test Store at `out` from the Test Panel's reference r at `k`; return `out`."""
+    started = time.perf_counter()
     vs = variant_set()
     writer = StoreWriter.create(out, variants=vs.variants, near_bp=NEAR_BP, far_bp=FAR_BP)
     ranges = chromosome_ranges(vs.variants.chrom)
@@ -311,9 +403,9 @@ def write_test_store(k: int, out: str | Path) -> Path:
         start, stop = ranges[chrom]
         position = vs.variants.position[start:stop]
         totals += write_chromosome(writer, chrom, start, position, dense, held, floor)
-    writer.finish(
-        provenance(k, vs, (int(totals[0]), int(totals[1]), int(totals[2]), int(totals[3])))
-    )
+    counts = (int(totals[0]), int(totals[1]), int(totals[2]), int(totals[3]))
+    diagnostic = pc_diagnostic(vs, k)
+    writer.finish(provenance(k, vs, counts, diagnostic, build_record(started)))
     return Path(out)
 
 

@@ -25,9 +25,12 @@ SIDE: Final = (16_384, 1_048_576)
 #: The Near Band's `r`: layout C, provisional until ogld#8 settles it (spec §6).
 NEAR_R: Final = (262_144, 67_108_864)
 
-#: Each array's fill value: one a valid LD Store never holds (spec §6).
+#: Each array's fill value: one a valid LD Store never holds (spec §6). The `r` arrays' is
+#: RESERVED_CODE and the strings' is ""; both are set where those arrays are made.
 INT64_FILL: Final = -1
 PARTNER_FILL: Final = -1
+POSITION_FILL: Final = 0
+FREQUENCY_FILL: Final = float("nan")
 
 
 def clipped(length: int, inner: int, shard: int) -> tuple[int, int]:
