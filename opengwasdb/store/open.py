@@ -27,7 +27,7 @@ import zarr
 
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest, normalise_coverage
-from opengwasdb.store.arrays import open_group
+from opengwasdb.store.arrays import STORE_ZARR_FORMAT, open_group
 
 if TYPE_CHECKING:
     from opengwasdb.query.facade import StoreQuery
@@ -105,6 +105,32 @@ def zarr_format_for_version(version: str, *, source: str = "release") -> int:
             f"{_series_text(series)}, which this build reads but has no Zarr on-disk "
             "layout for; the version table and the layout table disagree"
         ) from None
+
+
+def check_writable_zarr_layout(version: str, *, source: str = "release") -> int:
+    """Return `version`'s Zarr on-disk format, refusing one this build cannot write.
+
+    A pass that adds arrays to a release's own data group has to write them in
+    the format that group already is: a Zarr v3 array in a `0.1.0` release --
+    Zarr v2 -- puts a `zarr.json` beside the release's `.zgroup`, which zarr 3
+    then reads as the group's format, hiding every v2 array it has (issue #313).
+
+    The series-to-layout rule is `zarr_format_for_version`'s and what this build
+    writes is `STORE_ZARR_FORMAT`'s. It is deliberately not a comparison with
+    `CURRENT_FORMAT_VERSION`: that constant moves *within* a series (#381, to
+    `0.2.1`), and a release of the same series stays writable when it does.
+    """
+    layout = zarr_format_for_version(version, source=source)
+    if layout != STORE_ZARR_FORMAT:
+        raise UnsupportedFormatVersion(
+            f"{source} declares format_version={version!r}, whose arrays are stored in "
+            f"Zarr format {layout}, and this build writes Zarr format {STORE_ZARR_FORMAT}: "
+            "arrays written here would sit beside metadata that says otherwise, hiding "
+            "every array the release has. Convert the 0.1.0 release with "
+            "scripts/convert_store_to_0_2_0.py and write to the converted release; or "
+            "rebuild the release from source."
+        )
+    return layout
 
 
 #: The versions the format carried before the reset, and what each one was.
