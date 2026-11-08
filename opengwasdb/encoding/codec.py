@@ -679,6 +679,25 @@ class EafExceptionBuilder(SparseExactBuilder):
         return cast(EafExceptionTable, super().table())
 
 
+def eaf_exception_table(bands: Sequence[EafExceptionTable]) -> EafExceptionTable:
+    """One table from a grid encode's per-band ones, in the order they arrive.
+
+    A Dense row band holds a contiguous run of flat positions, so the bands'
+    runs, laid end to end in row order, are already the sorted, unique table
+    the format requires -- and are taken as given rather than sorted again,
+    because sorting would hide the one thing that makes the bytes depend on
+    order: which band a parent put first. A caller that assembled them in the
+    order its workers *finished* is refused by the table's own rule (the index
+    would no longer ascend), instead of writing a table no lookup can read.
+    """
+    if not bands:
+        return EafExceptionTable.empty()
+    return EafExceptionTable(
+        index=np.concatenate([band.index for band in bands]),
+        value=np.concatenate([band.value for band in bands]),
+    )
+
+
 @dataclass(frozen=True)
 class SeExceptionTable(SparseExactTable):
     """Exact physical SE for cells not representable by the residual plane."""
