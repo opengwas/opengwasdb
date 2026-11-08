@@ -8,12 +8,12 @@
   and 48.0 s at `--n-workers 1` against 7.3 s and 6.5 s at `--n-workers 32`,
   with the same 408,822 / 805,360 / 2,383,859 hits each time. A band was
   `max(z.chunks[0], 250_000)` rows whatever the release's width, which on
-  OGS-00009 (2,514 Analyses) decodes about 30 GB of plane: enough for a
+  OGS-00009 (2,514 Analyses) decodes about 32 GiB of plane: enough for a
   32-worker pool to exhaust the host's memory and be killed. The scan and
   validation's streamed reads now take their band from
   `opengwasdb.encoding.banding` and its one-GiB decoded-band budget, so
   OGS-00009 reads 4,000 rows per band while a narrow release keeps its
   250,000-row band. The band leaves the scan's speed where it was — 1,060 s at
   four workers against 1,083 s — and the 3× a wider pool gives (353 s at
-  sixteen) is affordable only because a worker now decodes one band of cells
-  instead of thirty gigabytes of plane. The default stays 1.
+  sixteen) is affordable only because a worker now holds one band of decoded
+  cells, 0.75 GiB, instead of 31.6 GiB of plane. The default stays 1.
