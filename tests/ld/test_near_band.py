@@ -6,8 +6,6 @@ independent r (ALT dosages, so signed to A1 here by `ogld.identity.orient`; spec
 
 from __future__ import annotations
 
-import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -105,17 +103,3 @@ def test_a_missing_call_is_refused_naming_the_variant_and_the_panel(tmp_path: Pa
     rows = np.array([0, 1], dtype=np.int64)
     with pytest.raises(InputError, match=r"missing call.*v1.*gappy\.pgen"):
         read_alt_counts(pgen, psam, keep, rows)
-
-
-def test_a_build_without_pgenlib_refuses_naming_the_extra() -> None:
-    code = (
-        "import sys\nsys.modules['pgenlib'] = None\n"
-        "from pathlib import Path\nimport numpy as np\n"
-        "import ogld\nfrom ogld.build.near_band import read_alt_counts\n"
-        "p = Path('x')\n"
-        "try:\n    read_alt_counts(p, p, p, np.zeros(1, dtype=np.int64))\n"
-        "except ogld.InputError as e:\n    print(e)\n"
-    )
-    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
-    assert done.returncode == 0, done.stderr
-    assert "ogld[build]" in done.stdout

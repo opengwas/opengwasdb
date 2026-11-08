@@ -19,12 +19,10 @@ import numpy as np
 import support
 import zarr
 from script_modules import load_script
-from support import alids, contract, panel_data, passing_rows, reference
+from support import alids, panel_data, passing_rows, reference
 
 import ogld
 from ogld.store import StoreReader
-
-SKELETON = contract("the walking skeleton")
 
 
 def near_pair_r(reader: StoreReader, k: int) -> tuple[float, float]:
@@ -36,19 +34,16 @@ def near_pair_r(reader: StoreReader, k: int) -> tuple[float, float]:
     return float(reader.pair_r(rows)[0, 1]), float(pair.r[0])
 
 
-@SKELETON
 def test_the_test_store_opens_through_ogld_open() -> None:
     store = ogld.open(support.TEST_STORE)
     assert (store.t_far, store.near_bp, store.far_bp) == (support.T_FAR, 3_000_000, 10_000_000)
 
 
-@SKELETON
 def test_one_near_band_pair_reads_back_its_reference_r() -> None:
     got, expected = near_pair_r(StoreReader.open(support.TEST_STORE), 10)
     assert abs(got - expected) <= support.HALF_STEP + support.SLACK
 
 
-@SKELETON
 def test_pairs_the_store_does_not_hold_read_as_nan() -> None:
     reader = StoreReader.open(support.TEST_STORE)
     ref = reference()
@@ -66,7 +61,6 @@ def test_pairs_the_store_does_not_hold_read_as_nan() -> None:
         assert np.isnan(reader.pair_r(found)[0, 1]), f"rows {i} and {j}: unstored, so NaN"
 
 
-@SKELETON
 def test_the_test_store_can_be_written_again_at_k0(tmp_path: Path) -> None:
     StoreReader.open(support.TEST_STORE)
     out = load_script("make_test_store").write_test_store(0, tmp_path / "k0")
@@ -87,7 +81,6 @@ def arrays(group: zarr.Group, prefix: str = "") -> dict[str, np.ndarray]:
     return out
 
 
-@SKELETON
 def test_the_script_writes_the_committed_test_store_again(tmp_path: Path) -> None:
     # Into tmp_path, never over the committed store: the ticket runs the script into
     # tests/data/test-panel/store/, and this holds the two to one set of arrays.

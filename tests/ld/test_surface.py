@@ -183,7 +183,6 @@ def no_rows() -> np.ndarray:
 
 
 READER = store.StoreReader.__new__(store.StoreReader)
-WRITER = store.StoreWriter.__new__(store.StoreWriter)
 NO_CLUMPS = ogld.Clumps(
     alid=np.array([], dtype=str),
     chrom=np.array([], dtype=str),
@@ -195,29 +194,12 @@ NO_CLUMPS = ogld.Clumps(
     r2=0.1,
     window_bp=1000.0,
 )
-CODES = np.array([0], dtype=np.int16)
 
 #: Every body that raises NotImplementedError, with the ticket that builds it. A ticket
 #: that builds one removes its entry, as it unmarks the contract tests it makes pass.
 UNBUILT: dict[str, tuple[Callable[[], object], str]] = {
-    "StoreReader.open": (lambda: store.StoreReader.open("x"), "ogld#4"),
-    "StoreReader.provenance": (lambda: READER.provenance, "ogld#4"),
-    "StoreReader.rows_of": (lambda: READER.rows_of(["1:1:A:G"]), "ogld#4"),
-    "StoreReader.rows_in": (lambda: READER.rows_in("1", 0, 1), "ogld#4"),
-    "StoreReader.variants": (lambda: READER.variants(no_rows()), "ogld#4"),
-    "StoreReader.pair_r": (lambda: READER.pair_r(no_rows()), "ogld#4"),
-    "StoreReader.index": (lambda: READER.index(no_rows()), "ogld#4"),
+    "StoreReader.open over HTTP": (lambda: store.StoreReader.open("http://x/"), "ogld#4"),
     "StoreReader.band": (lambda: READER.band(no_rows()), "ogld#4"),
-    "StoreWriter.create": (
-        lambda: store.StoreWriter.create("x", variants=None, near_bp=1, far_bp=2),
-        "ogld#4",
-    ),
-    "StoreWriter.write_near": (lambda: WRITER.write_near(0, no_rows(), CODES), "ogld#4"),
-    "StoreWriter.write_index": (
-        lambda: WRITER.write_index("1", no_rows(), no_rows(), CODES),
-        "ogld#4",
-    ),
-    "StoreWriter.finish": (lambda: WRITER.finish({}), "ogld#4"),
     "validate": (lambda: ogld.validate("x"), "ogld#4"),
     "matrices.matrix": (lambda: matrices.matrix(READER, [], fill=None), "ogld#4"),
     "matrices.region": (lambda: matrices.region(READER, "1", 0, 1, fill=None), "ogld#4"),
@@ -265,3 +247,22 @@ def test_ogld_imports_and_reads_the_test_store_without_pgenlib() -> None:
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
     assert re.fullmatch(r"unbuilt ogld#\d+|read \d+", done.stdout.strip()), done.stdout
+
+
+def test_a_pgen_read_without_pgenlib_refuses_naming_the_extra() -> None:
+    code = (
+        "import sys\n"
+        "sys.modules['pgenlib'] = None\n"
+        "from pathlib import Path\n"
+        "import numpy as np\n"
+        "import ogld\n"
+        "from ogld.build.near_band import read_alt_counts\n"
+        "p = Path('x')\n"
+        "try:\n"
+        "    read_alt_counts(p, p, p, np.zeros(1, dtype=np.int64))\n"
+        "except ogld.InputError as refusal:\n"
+        "    print(refusal)\n"
+    )
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert "ogld[build]" in done.stdout

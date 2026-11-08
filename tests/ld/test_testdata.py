@@ -46,11 +46,14 @@ CLUMP_P1 = 5e-8
 
 
 def test_every_file_matches_its_manifest_hash() -> None:
+    # The Test Store under store/ is not the Test Panel: scripts/make_test_store.py writes it.
     files = td.manifest()["files"]
     on_disk = sorted(
         str(p.relative_to(td.TEST_PANEL))
         for p in td.TEST_PANEL.rglob("*")
-        if p.is_file() and p.name != "manifest.json"
+        if p.is_file()
+        and p.name != "manifest.json"
+        and p.relative_to(td.TEST_PANEL).parts[0] != "store"
     )
     assert len(on_disk) >= 12, "the fixture must hold the Test Panel's files"
     assert on_disk == sorted(files), "every file is listed, and every listed file exists"
