@@ -243,6 +243,53 @@ and accepts EAF in [0, 1].
   read untouched in one function (#56). `check-observed-view` is not a rule set
   here (#375).
 
+## Amendment: the subset check reads the exception table in windows (issue #387)
+
+The `subsets.indexed` rule read the primary release's EAF exception table whole to
+prove the index's copy was the primary's, remapped, and the value comparison then
+had the plane consult the table again for every band it decoded. The whole read is
+what set the rule's peak. That table is one Zarr v3 shard of hundreds of millions
+of entries -- 237,027,522 on OGS-00016, 1,136,991,041 on OGS-00011 -- so reading it
+whole is 2.7 GiB and 12.7 GiB of `int64` plus `float32`, and `_remap_side_table`
+held several copies of it at once.
+
+The shard's inner chunks are 200,000 entries and Zarr reads them as byte ranges, so
+the rule now walks the table a window of 8,000,000 entries (about 96 MB, inside the
+1 GiB budget above) at a time, keeps the cells whose variant the subset holds, and
+compares that set with the index's own table as before. Those cells -- 21,157,534
+of them on OGS-00011's HapMap3 index -- are also what the value comparison decodes
+the primary plane with, keyed by the primary's flat positions, so the table is read
+once per pass rather than once per band: 1,128 bands on OGS-00016's HapMap3 subset,
+2,114 on OGS-00011's.
+
+A shared scan's folds are also judged after, not before, the 1.60 GiB the plain
+association scan holds for them is released -- chiefly the Top-Hit Index's tiers --
+so a judge words its findings from its total and from each tier's key and cell
+count, which are metadata, and reports exactly what it did before.
+
+Measured base against head, in a process of its own and then on the two full runs:
+
+| | base | head |
+|---|---|---|
+| OGS-00016's HapMap3 subset, the rule's high-water mark | 12.12 GiB | 0.60 GiB |
+| OGS-00016's HapMap3 subset, the pass over the table | 13.3 s | 14.7 s |
+| OGS-00011's HapMap3 subset, the rule's high-water mark | 57.37 GiB | 1.60 GiB |
+| OGS-00011's HapMap3 subset, the pass over the table | 67.1 s | 70.7 s |
+| OGS-00011's HapMap3 subset, one comparison band | 26.4 s | 14.6 s |
+| OGS-00011, a full `validate`, wall time | 40,036 s | 31,413 s |
+| OGS-00011, `subsets.indexed` | 25,164 s | 16,383 s |
+| OGS-00011, the association scan over the Dense grid | 14,271 s | 14,415 s |
+| OGS-00011, peak RSS as the validating process's own `VmHWM` | 68.22 GiB | 42.22 GiB |
+
+So the rule that set the peak no longer does: the highest point of a full
+`validate` is now the association scan's, and it is 3.9 GiB lower than the base
+run's was (46.12 GiB against 42.22 GiB) because its folds are judged after what
+they held is released. `validate`'s report was byte-identical across both runs.
+
+The paragraphs in "Time and memory" above that call the subset check's table read
+the peak of a full run, and that call the scan's held folds the reason its later
+stage starts higher, describe the code before this amendment.
+
 ## Alternatives considered
 
 - **`check(release)` over a caching release** (the ticket's sketch). Simple
