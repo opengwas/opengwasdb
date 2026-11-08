@@ -1,0 +1,71 @@
+# opengwasdb 1ab2b09: answers from opengwasdb.variants.normalise; see make_fixture.py
+chrom	position	ref	alt	alid	a1	a2	a1_is_alt	error
+22	16050075	G	A	22:16050075:A:G	A	G	true	
+22	16050075	A	G	22:16050075:A:G	A	G	false	
+22	16050075	T	C	22:16050075:C:T	C	T	true	
+22	16050075	C	T	22:16050075:C:T	C	T	false	
+22	100	g	a	22:100:A:G	A	G	true	
+22	100	G	a	22:100:A:G	A	G	true	
+22	100	a	G	22:100:A:G	A	G	false	
+22	100	A	a					effect and other alleles are identical
+22	100	 a 	g	22:100:A:G	A	G	false	
+22	100	A	G 	22:100:A:G	A	G	false	
+22	200	A	AT	22:200:A:AT	A	AT	false	
+22	200	AT	A	22:200:A:AT	A	AT	true	
+22	200	a	at	22:200:A:AT	A	AT	false	
+22	200	AT	a	22:200:A:AT	A	AT	true	
+22	300	CAG	C	22:300:C:CAG	C	CAG	true	
+22	300	C	CAG	22:300:C:CAG	C	CAG	false	
+22	300	cag	c	22:300:C:CAG	C	CAG	true	
+22	400	CAA	CA	22:400:CA:CAA	CA	CAA	true	
+22	400	CA	CAA	22:400:CA:CAA	CA	CAA	false	
+22	401	TCA	TGA	22:401:TCA:TGA	TCA	TGA	false	
+22	402	ACA	AA	22:402:AA:ACA	AA	ACA	true	
+22	403	GAT	GT	22:403:GAT:GT	GAT	GT	false	
+22	404	AGT	AT	22:404:AGT:AT	AGT	AT	false	
+22	405	CTT	CT	22:405:CT:CTT	CT	CTT	true	
+22	406	AC	GC	22:406:AC:GC	AC	GC	false	
+22	407	AA	AAAA	22:407:AA:AAAA	AA	AAAA	false	
+21	500	A	C	21:500:A:C	A	C	false	
+21	500	A	G	21:500:A:G	A	G	false	
+21	500	A	T	21:500:A:T	A	T	false	
+21	500	A	AT	21:500:A:AT	A	AT	false	
+21	500	AT	A	21:500:A:AT	A	AT	true	
+21	5000000	ACGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGT	A	21:5000000:A:ACGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGT	A	ACGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGT	true	
+21	5000000	A	ACGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGT	21:5000000:A:ACGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGT	A	ACGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGT	false	
+21	5000000	acgtcgtcgtcgtcgtcgtcgtcgtcgtcgtcgtcgtcgtcgtcgt	a	21:5000000:A:ACGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGT	A	ACGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGT	true	
+21	5000000	AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA	AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA	21:5000000:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA	AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA	AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA	false	
+1	1	A	G	1:1:A:G	A	G	false	
+chr1	1	A	G	1:1:A:G	A	G	false	
+CHR2	248956422	T	C	2:248956422:C:T	C	T	true	
+Chr22	50818468	t	c	22:50818468:C:T	C	T	true	
+22	1	A	G	22:1:A:G	A	G	false	
+X	100	A	G	X:100:A:G	A	G	false	
+chrX	100	A	G	X:100:A:G	A	G	false	
+23	100	A	G	X:100:A:G	A	G	false	
+MT	100	A	G	MT:100:A:G	A	G	false	
+M	100	A	G	MT:100:A:G	A	G	false	
+22	100	A	A					effect and other alleles are identical
+22	100	A	a					effect and other alleles are identical
+22	100	AT	at					effect and other alleles are identical
+22	100		A					allele is missing
+22	100	A						allele is missing
+22	100	 	A					allele is missing
+22	100	N	A					unsupported allele 'N'
+22	100	A	*					unsupported allele '*'
+22	100	A	<DEL>					unsupported allele '<DEL>'
+22	100	A	.					unsupported allele '.'
+22	100	A	A,G					unsupported allele 'A,G'
+22	100	ACGU	A					unsupported allele 'ACGU'
+	100	A	G					chromosome is missing: ''
+.	100	A	G					chromosome is missing: '.'
+NA	100	A	G					chromosome is missing: 'NA'
+chr	100	A	G					chromosome is missing: 'chr'
+none	100	A	G					chromosome is missing: 'none'
+27	100	A	G					unsupported chromosome '27'
+0	100	A	G					unsupported chromosome '0'
+	100	A	A					chromosome is missing: ''
+27	100	A	A					unsupported chromosome '27'
+22	0	A	G					invalid position 0
+22	-5	A	G					invalid position -5
+22	0	A	A					invalid position 0
