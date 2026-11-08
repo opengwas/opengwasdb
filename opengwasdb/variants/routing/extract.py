@@ -36,7 +36,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import TypeVar
+from typing import NamedTuple, TypeVar
 
 from opengwasdb.build.liftover import LiftoverFailureError, lifted_rows, statistics_swap
 from opengwasdb.build.ordered_pool import fork_pool
@@ -45,7 +45,11 @@ from opengwasdb.variants.axis import alid_sort_key
 from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.variants.reference import ARTIFACT_HEADER, artifact_line
 from opengwasdb.variants.routing.keys import SourceKey, routing_key
-from opengwasdb.variants.routing.lift import cross_assembly_collisions, log_cross_assembly_drop
+from opengwasdb.variants.routing.lift import (
+    cross_assembly_collisions,
+    log_cross_assembly_drop,
+    split_off_primary,
+)
 from opengwasdb.variants.routing.names import refuse_disputed_names
 from opengwasdb.variants.routing.union import (
     Pass1Stats,
@@ -142,7 +146,8 @@ class _StagedWindow:
 
     ``reoriented`` counts the window's hg19 keys whose statistics the lift
     re-oriented and which survived the cross-assembly drop, which the parent
-    logs (issue #354).
+    logs (issue #354). ``off_primary`` counts its hg19 keys the lift placed on an
+    alt, random or unplaced contig, which a reference does not hold (#376).
     """
 
     buckets: tuple[_LiftedBucket, ...]
@@ -150,6 +155,7 @@ class _StagedWindow:
     failures: int
     collisions: int
     reoriented: int
+    off_primary: int = 0
 
 
 @dataclass(frozen=True)
@@ -449,13 +455,25 @@ def _read_assembly_records(
     return hg38_records, hg19_records
 
 
+class _Buckets(NamedTuple):
+    """`_bucket_lifted_records`' result: the post-lift buckets, the identities both
+    assemblies declared, the re-oriented sites the buckets hold, and the off-primary
+    sites left out (#376)."""
+
+    buckets: dict[WindowKey, list[str]]
+    collisions: int
+    reoriented: int
+    off_primary: int
+
+
 def _bucket_lifted_records(
     hg38_records: Mapping[tuple[str, int, str, str], tuple[tuple[int, int], str]],
     hg19_records: Mapping[tuple[str, int, str, str], tuple[tuple[int, int], str]],
     lifted: Mapping[tuple[str, int, str, str], str],
     reoriented: AbstractSet[SourceKey],
     size_bp: int,
-) -> tuple[dict[WindowKey, list[str]], int, int]:
+    off_primary: AbstractSet[SourceKey] = frozenset(),
+) -> _Buckets:
     """Drop cross-assembly ambiguous tuples, then bucket survivors by post-lift window.
 
     The union's rule, `cross_assembly_collisions`, over the hg38 group and the
@@ -463,13 +481,16 @@ def _bucket_lifted_records(
     dropped from both. A routing key fixes its pre-lift window, so the union
     of these window-local rulings is exactly the global one (issue #197).
     ``lifted`` is each lifted site's ALID and ``reoriented`` the sites whose
-    statistics the lift re-oriented (issue #354). Returns the buckets, the
-    number of identities both groups declared, and the number of re-oriented
-    sites the buckets hold.
+    statistics the lift re-oriented (issue #354). ``off_primary`` is the hg19
+    sites the lift placed off the primary assembly: no bucket holds them, but
+    each is a lifted locus for the collision rule (#376). Returns the buckets,
+    the number of identities both groups declared, the number of re-oriented
+    sites the buckets hold, and the number of off-primary sites left out.
     """
-    n_tuples, collisions = _colliding_sites(hg38_records.keys(), lifted.keys())
+    n_tuples, collisions = _colliding_sites(hg38_records.keys(), lifted.keys() | off_primary)
     buckets: dict[WindowKey, list[str]] = {}
     n_reoriented = 0
+    n_off_primary = len(off_primary - collisions)
     for site, (rank, rsid) in hg38_records.items():
         if site in collisions:
             continue
@@ -485,7 +506,7 @@ def _bucket_lifted_records(
         buckets.setdefault(window_key(post_chrom, int(post_pos), size_bp), []).append(
             _lifted_line(rank, site, alid, site in reoriented, rsid)
         )
-    return buckets, n_tuples, n_reoriented
+    return _Buckets(buckets, n_tuples, n_reoriented, n_off_primary)
 
 
 def _colliding_sites(
@@ -515,11 +536,13 @@ def _stage_liftover_window(task: _LiftStageTask) -> _StagedWindow:
     rows, attempts, failures = lifted_rows(
         hg19_records, chain_file=task.chain_file, from_build="hg19", to_build="hg38"
     )
-    lifted = {key: row.alid for key, row in rows.items()}
-    reoriented = {key for key, row in rows.items() if statistics_swap(key, row)}
-    buckets, collisions, n_reoriented = _bucket_lifted_records(
-        hg38_records, hg19_records, lifted, reoriented, task.size_bp
+    split = split_off_primary(rows)
+    lifted = {key: row.alid for key, row in split.primary.items()}
+    reoriented = {key for key, row in split.primary.items() if statistics_swap(key, row)}
+    bucketed = _bucket_lifted_records(
+        hg38_records, hg19_records, lifted, reoriented, task.size_bp, split.off_primary
     )
+    buckets = bucketed.buckets
     members_dir = Path(task.members_dir)
     specs: list[_LiftedBucket] = []
     for index, (post_window, lines) in enumerate(buckets.items()):
@@ -527,7 +550,10 @@ def _stage_liftover_window(task: _LiftStageTask) -> _StagedWindow:
         with open(sub_shard_path, "w", encoding="utf-8") as handle:
             handle.writelines(lines)
         specs.append(_LiftedBucket(post_window, sub_shard_path))
-    return _StagedWindow(tuple(specs), attempts, failures, collisions, n_reoriented)
+    return _StagedWindow(
+        tuple(specs), attempts, failures, bucketed.collisions, bucketed.reoriented,
+        bucketed.off_primary,
+    )
 
 
 #: One intermediate record, typed: chunk, spill, the pre-lift site, its
@@ -702,6 +728,12 @@ def _write_lifted_streaming_artifact(
             "Liftover re-oriented %d source key(s), recorded in reoriented_keys",
             sum(stage.reoriented for stage in staged),
         )
+        if n_off_primary := sum(stage.off_primary for stage in staged):
+            log.warning(
+                "%d source key(s) lifted onto an alt, random or unplaced contig, which the "
+                "Variant Reference does not hold -- left out",
+                n_off_primary,
+            )
         artifacts = _merge_lifted_windows(staged, n_workers, work_dir)
         return _finish_members(out, artifacts, write_start)
 

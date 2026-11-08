@@ -1,10 +1,16 @@
 """Process-pool worker setup shared by dense and ragged block-parallel completion."""
 from __future__ import annotations
 
+import logging
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any
 
 from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]
+
+from opengwasdb.encoding.timing import log_progress
+
+log = logging.getLogger(__name__)
 
 # Kept alive for the worker's lifetime so the BLAS thread cap persists (a bare
 # threadpool_limits() call would reset on garbage collection).
@@ -30,19 +36,24 @@ def run_block_tasks(
     every: int = 200,
 ) -> None:
     """Run completion block tasks over a process pool, or serially when
-    ``n_workers <= 1``, propagating worker errors and printing progress every
-    ``every`` tasks. Each task writes its own checkpoint; the parent keeps
-    nothing per block (issue 044). Shared by the dense and ragged completion
-    drivers, which differ only in what ``run_block`` does."""
+    ``n_workers <= 1``, propagating worker errors and logging progress, with an
+    ETA, every ``every`` tasks and on the last. Each task writes its own
+    checkpoint; the parent keeps nothing per block (issue 044). Shared by the
+    dense and ragged completion drivers, which differ only in what
+    ``run_block`` does.
+
+    The ETA extrapolates the mean time per block so far; blocks differ in size,
+    so it is a guide, not a promise."""
+    total = len(pending)
+    started = time.monotonic()
+    label = f"LD {noun}"
     if n_workers <= 1:
         for i, task in enumerate(pending):
             run_block(task)
-            if (i + 1) % every == 0:
-                print(f"  {i + 1:,} / {len(pending):,} {noun}")
+            log_progress(log, label, i + 1, total, started, every=every)
     else:
         with ProcessPoolExecutor(max_workers=n_workers, initializer=init_block_worker) as pool:
             futures = [pool.submit(run_block, task) for task in pending]
             for i, fut in enumerate(as_completed(futures)):
                 fut.result()  # propagate worker errors; result is on disk
-                if (i + 1) % every == 0:
-                    print(f"  {i + 1:,} / {len(pending):,} {noun}")
+                log_progress(log, label, i + 1, total, started, every=every)

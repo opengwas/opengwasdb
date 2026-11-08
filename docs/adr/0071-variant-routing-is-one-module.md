@@ -23,7 +23,8 @@
 > `route_column` no longer keeps the last occurrence of an index. An axis's
 > repeated rows are resolved by Association Admission's duplicate rule
 > (`collapse_duplicates`): rows that agree collapse to the first, and rows that
-> conflict are all dropped and logged, but for a reversed indel's (D5).
+> conflict are all dropped and logged, but for a reversed indel's (D5). #316
+> removed that exception once ADR 0079 spelt every indel reference first.
 > `last_wins` is removed.
 
 Issue [#352](https://github.com/opengwas/opengwasdb/issues/352), part of epic

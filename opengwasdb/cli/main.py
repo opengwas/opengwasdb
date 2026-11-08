@@ -67,6 +67,7 @@ from opengwasdb.query.facade import HybridStoreQuery, RaggedStoreQuery, StoreQue
 from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
+from opengwasdb.store.open import UnsupportedFormatVersion
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.routing import (
     EmptyReferenceError,
@@ -82,11 +83,12 @@ from opengwasdb.variants.windows import (
 )
 from opengwasdb.version import __version__
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+#: The one logging layout a step's stderr is written in. A benchmark that parses
+#: those lines imports these rather than spelling the layout again.
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -1787,9 +1789,22 @@ def build_ragged_top_hits_command(store_path: Path) -> None:
 
 
 @app.command("build-dense-top-hits")
-def build_dense_top_hits_command(store_path: Path) -> None:
-    """Build (or rebuild) the top-hit index for a Dense store."""
-    build_top_hit_indexes(store_path)
+def build_dense_top_hits_command(
+    store_path: Path, n_workers: int = _N_WORKERS_OPTION
+) -> None:
+    """Build (or rebuild) the top-hit index for a Dense store.
+
+    A release stored as Zarr v2 -- every `format_version` 0.1.0 release -- is
+    refused before anything is written: the index is Zarr v3 arrays written into
+    the release's own data group, and a v3 group beside its `.zgroup` would hide
+    every array it has. Convert it with `scripts/convert_store_to_0_2_0.py`
+    first, as completion requires.
+    """
+    try:
+        build_top_hit_indexes(store_path, n_workers=n_workers)
+    except UnsupportedFormatVersion as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
     typer.echo("done")
 
 

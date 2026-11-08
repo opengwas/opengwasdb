@@ -21,7 +21,9 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import time
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -41,13 +43,12 @@ from opengwasdb.completion.checkpoint import (
     write_block_checkpoint,
 )
 from opengwasdb.completion.ld_panel import (
-    canonical_panel_alid as _canonical_panel_alid,
-)
-from opengwasdb.completion.ld_panel import (
+    PanelPlacement,
     ceded_at_end,
     check_panel_has_chromosomes,
     list_all_blocks,
     list_chromosomes,
+    panel_variant,
 )
 from opengwasdb.completion.manifest import (
     build_completion_provenance,
@@ -69,6 +70,7 @@ from opengwasdb.encoding import (
     write_eaf_reference,
 )
 from opengwasdb.encoding.association_codec import CellValues, log_se_out_of_range, storable
+from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.constants import (
@@ -101,10 +103,8 @@ from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
     CanonicalVariant,
     VariantAxis,
-    VariantNormalisationError,
     VariantRecord,
     chromosome_sort_key,
-    orient_to_canonical,
     parse_canonical_alid,
     write_variant_axis,
 )
@@ -112,11 +112,38 @@ from opengwasdb.variants.routing import collapse_duplicates
 
 log = logging.getLogger(__name__)
 
+
 _COMPRESSOR = compressor()
 _LD_PANEL_ID = "eur-hg38-gpm"
 
 #: What the Association Reader names the source in a refusal.
 _SOURCE = "complete-dense, the source's Dense grid"
+
+
+# ── Wall-time accounting ────────────────────────────────────────────────────
+
+#: The five phases of a completion, in the order they run. A run's report
+#: partitions its time over these; anything between them (the manifest, the
+#: Analyses rows) is small and is not charged to any.
+AXIS_PHASE = "Axis construction"
+BLOCK_PHASE = "LD-block completion"
+MERGE_PHASE = "Checkpoint merge"
+BAND_PHASE = "Band write"
+TOP_HIT_PHASE = "Top-Hit Index"
+
+@contextmanager
+def _completion_phase(timer: PhaseTimer, name: str) -> Iterator[None]:
+    """Log `name`'s start and elapsed time and charge it to the run's report."""
+    with log_phase(log, name), timer.phase(name):
+        yield
+
+
+def _log_phase_report(timer: PhaseTimer, started: float) -> None:
+    log.info(
+        "Reference Completion phase report (%s elapsed):\n%s",
+        format_duration(time.monotonic() - started),
+        timer.format_report(),
+    )
 
 
 @dataclass(frozen=True)
@@ -377,6 +404,9 @@ class _UnionAxis:
     tsv_paths: list[Path]
     #: Per block's TSV, the variants at its end the next block owns.
     ceded: dict[Path, frozenset[str]]
+    #: How the panel placed its rows: the completion record's `panel_indels`
+    #: and `panel_snvs_unplaced` (`PanelPlacement.record`).
+    panel_placement: dict[str, dict[str, object]]
 
 
 @dataclass(frozen=True)
@@ -426,6 +456,8 @@ class _Panel:
     tsv_paths: list[Path]
     alids: set[str]
     ceded: dict[Path, frozenset[str]]
+    #: How the panel placed its rows, for the completion record.
+    placement: dict[str, dict[str, object]]
 
 
 def _enumerate_panel(ld_dir: Path, ancestry: str) -> _Panel:
@@ -435,14 +467,13 @@ def _enumerate_panel(ld_dir: Path, ancestry: str) -> _Panel:
     tsv_paths: list[Path] = []
     panel_alids: set[str] = set()
     ceded: dict[Path, frozenset[str]] = {}
+    placement = PanelPlacement()
     for chrom in list_chromosomes(ld_dir, ancestry):
         blocks = list_all_blocks(ld_dir, ancestry, chrom)
         for block in blocks:
             tsv_paths.append(block.tsv_path)
-            for snp_id in block.snp_ids:
-                ca = _canonical_panel_alid(snp_id)
-                if ca is not None:
-                    panel_alids.add(ca)
+            panel_alids.update(alid for alid in block.alids if alid is not None)
+            placement.add(block)
         at_end = ceded_at_end(blocks)
         ceded.update(
             (block.tsv_path, at_end[block.block_id]) for block in blocks if block.block_id in at_end
@@ -451,22 +482,8 @@ def _enumerate_panel(ld_dir: Path, ancestry: str) -> _Panel:
         f"LD panel: {len(tsv_paths):,} blocks, {len(panel_alids):,} panel variants, "
         f"{sum(map(len, ceded.values())):,} at an endpoint two blocks share"
     )
-    return _Panel(tsv_paths, panel_alids, ceded)
-
-
-def _orient_panel_alid(alid: str) -> CanonicalVariant | None:
-    """The store-canonical variant one panel ALID names, or ``None`` when the
-    panel's identifier cannot be parsed or oriented. An ALID the panel cannot
-    say what it is must never become a variant the store claims to cover."""
-    parts = alid.split(":")
-    if len(parts) != 4:
-        return None
-    chrom, pos_str, a1, a2 = parts
-    try:
-        cv_result = orient_to_canonical(chrom, int(pos_str), a1, a2)
-    except (VariantNormalisationError, ValueError):
-        return None
-    return cv_result.variant
+    placement.log(ld_dir, ancestry)
+    return _Panel(tsv_paths, panel_alids, ceded, placement.record())
 
 
 def _union_variant_table(
@@ -476,13 +493,14 @@ def _union_variant_table(
 ) -> tuple[list[CanonicalVariant], list[CanonicalVariant], dict[str, int]]:
     """Append the panel variants the source does not already hold (deduplicated
     through canonical orientation) and sort the union into the store's
-    canonical order."""
+    canonical order. An ALID the panel cannot say what it is never becomes a
+    variant the store claims to cover (`panel_variant`)."""
     present = set(src_alid_to_idx)
     new_canonical: list[CanonicalVariant] = []
     for alid in panel_alids:
         if alid in present:
             continue
-        variant = _orient_panel_alid(alid)
+        variant = panel_variant(alid)
         if variant is None:
             continue
         if variant.alid in present:
@@ -589,6 +607,7 @@ def _build_union_axis(
         out_to_src=out_to_src,
         tsv_paths=panel.tsv_paths,
         ceded=panel.ceded,
+        panel_placement=panel.placement,
     )
 
 
@@ -709,28 +728,32 @@ def _stream_completed_arrays(
     ld_dir: Path,
     ancestry: str,
     source_encoding: StoreEncoding,
+    timer: PhaseTimer,
 ) -> _CompletedArrays:
     """Phase 3 — stream the completed z/se/imputed matrix out of the sharded
     checkpoints into row-band writes (issue 044), returning the counts the
-    metadata phases must state."""
-    encoding, eaf_reference_present, effective_chunks, fill_shard_dir = _merge_checkpoint_fills(
-        staged, axis, blocks_dir, ld_dir, ancestry, source_encoding
-    )
+    metadata phases must state. The merge and the band write are charged to
+    ``timer`` separately."""
+    with _completion_phase(timer, MERGE_PHASE):
+        encoding, eaf_reference_present, effective_chunks, fill_shard_dir = (
+            _merge_checkpoint_fills(staged, axis, blocks_dir, ld_dir, ancestry, source_encoding)
+        )
     print("Writing data.zarr (band-streamed)...")
-    tallies = _write_completed_bands(
-        staged,
-        src_root,
-        axis.out_to_src,
-        axis.on_panel,
-        fill_shard_dir,
-        effective_chunks,
-        axis.n_variants,
-        axis.n_analyses,
-        source_encoding,
-        encoding,
-        impute_mask=axis.impute_mask,
-        name_row=lambda row: axis.merged_variants[row].alid,
-    )
+    with _completion_phase(timer, BAND_PHASE):
+        tallies = _write_completed_bands(
+            staged,
+            src_root,
+            axis.out_to_src,
+            axis.on_panel,
+            fill_shard_dir,
+            effective_chunks,
+            axis.n_variants,
+            axis.n_analyses,
+            source_encoding,
+            encoding,
+            impute_mask=axis.impute_mask,
+            name_row=lambda row: axis.merged_variants[row].alid,
+        )
     shutil.rmtree(fill_shard_dir, ignore_errors=True)
     log_se_out_of_range(
         tallies.se_out_of_range,
@@ -816,6 +839,7 @@ def _write_completed_manifest(
             n_imputed=arrays.total_imputed,
             n_missing_off_panel=arrays.n_missing_off_panel_total,
             n_missing_imputation_failed=arrays.n_missing_imputation_failed,
+            **axis.panel_placement,
         ),
     )
     staged.write_manifest(_record_effective_dense_chunk_shape(completed_manifest, staged))
@@ -873,7 +897,9 @@ def _completed_analysis_rows(
         [
             replace(
                 a,
-                completed_against=ancestry if axis.impute_mask is None or axis.impute_mask[i] else "",
+                completed_against=(
+                    ancestry if axis.impute_mask is None or axis.impute_mask[i] else ""
+                ),
                 # `eaf_scope` is derived from what the release actually holds, not
                 # copied forward -- the declaration disagreeing with the arrays is
                 # the defect that got through review on #106 (ADR 0037 §4).
@@ -937,24 +963,23 @@ def _run_completion(
     checkpoints Phase 2 left)."""
     src = Path(source_path)
     dst = Path(dest_path)
+    timer = PhaseTimer()
+    started = time.monotonic()
     with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
         source = open_store(src)
         manifest = source.manifest
         source_format_version = _checked_dense_source(manifest, src)
         print(f"Source store: {manifest.store_id} / {manifest.release_id}")
 
-        axis = _build_union_axis(src, staged, ld_dir, ancestry, impute_analysis_ids)
+        with _completion_phase(timer, AXIS_PHASE):
+            axis = _build_union_axis(src, staged, ld_dir, ancestry, impute_analysis_ids)
         src_root = source.arrays(mode="r")
-        blocks_dir = _complete_pending_blocks(
-            axis,
-            src,
-            checkpoint_dir,
-            min_cor=min_cor,
-            thresh=thresh,
-            n_workers=n_workers,
-        )
+        with _completion_phase(timer, BLOCK_PHASE):
+            blocks_dir = _complete_pending_blocks(
+                axis, src, checkpoint_dir, min_cor=min_cor, thresh=thresh, n_workers=n_workers
+            )
         arrays = _stream_completed_arrays(
-            staged, src_root, axis, blocks_dir, ld_dir, ancestry, manifest.encoding
+            staged, src_root, axis, blocks_dir, ld_dir, ancestry, manifest.encoding, timer
         )
         _write_completed_manifest(
             staged,
@@ -969,7 +994,9 @@ def _run_completion(
             thresh=thresh,
         )
         dst_analyses = _completed_analysis_rows(staged, axis, arrays, ancestry=ancestry)
-        result = _finalise_release(staged, dst, axis, arrays, dst_analyses)
+        with _completion_phase(timer, TOP_HIT_PHASE):
+            result = _finalise_release(staged, dst, axis, arrays, dst_analyses)
+    _log_phase_report(timer, started)
     return result
 
 

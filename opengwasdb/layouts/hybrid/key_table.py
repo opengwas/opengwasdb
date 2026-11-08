@@ -144,6 +144,7 @@ class ResolvedKeys:
     keys: np.ndarray
     alids: list[str]
     origins: list[str]
+    off_primary: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -375,8 +376,11 @@ def _lift_hg19(
     *,
     liftover_failure_threshold: float,
     chain_file: str | Path | None,
-) -> None:
-    """Fill the hg19-declared keys' ALIDs in place, dropping failed lifts."""
+) -> frozenset[str]:
+    """Fill the hg19-declared keys' ALIDs in place, dropping failed lifts.
+
+    Returns the raw keys the lift placed off the primary assembly (#376), which
+    are dropped like a failed lift but counted apart."""
     packed_positions = np.flatnonzero(is_hg19 & ~hashed)
     hashed_positions = np.flatnonzero(is_hg19 & hashed)
     tuples: list[tuple[str, int, str, str]] = []
@@ -387,7 +391,7 @@ def _lift_hg19(
         _split_source_key(raw) for raw in _hashed_raw_list(values[hashed_positions], merged)
     )
     if not tuples:
-        return
+        return frozenset()
     placement = place_sites(
         {"hg19": tuples}, chain_file=chain_file, failure_threshold=liftover_failure_threshold
     )
@@ -395,6 +399,7 @@ def _lift_hg19(
     lift_positions = np.concatenate([packed_positions, hashed_positions])
     for position, tup in zip(lift_positions.tolist(), tuples, strict=True):
         alids[position] = placement.alid.get(tup)
+    return frozenset(raw_key(site) for site in placement.off_primary)
 
 
 class UnorientedOffReferenceLiftError(ValueError):
@@ -429,6 +434,12 @@ def _require_oriented(
     )
 
 
+def raw_key(site: tuple[str, int, str, str]) -> str:
+    """``site`` as the raw ``chrom:pos:ref:alt`` key the off-reference spill names it by,
+    which `decode_packed` spells for a packed key."""
+    return ":".join(map(str, site))
+
+
 def _split_source_key(key: str) -> tuple[str, int, str, str]:
     chrom, position, ref, alt = key.split(":")
     return chrom, int(position), ref, alt
@@ -455,8 +466,9 @@ def resolve_keys(
     hashed = is_hashed(values)
     alids = _hg38_alids(values, bits, hashed, merged)
     is_hg19 = bits == HG19
+    off_primary: frozenset[str] = frozenset()
     if bool(is_hg19.any()):
-        _lift_hg19(
+        off_primary = _lift_hg19(
             values,
             is_hg19,
             hashed,
@@ -466,11 +478,14 @@ def resolve_keys(
             chain_file=chain_file,
         )
     origins = _origins(values, alids, is_hg19, hashed, merged)
-    return _drop_unresolved(values, alids, origins)
+    return _drop_unresolved(values, alids, origins, off_primary)
 
 
 def _drop_unresolved(
-    values: np.ndarray, alids: list[str | None], origins: list[str | None]
+    values: np.ndarray,
+    alids: list[str | None],
+    origins: list[str | None],
+    off_primary: frozenset[str] = frozenset(),
 ) -> ResolvedKeys:
     """Keep the keys that resolved; ``alids``/``origins`` are reused, not copied,
     when every key did (the usual case -- they are tens of millions long)."""
@@ -480,6 +495,7 @@ def _drop_unresolved(
             keys=values,
             alids=cast(list[str], alids),
             origins=cast(list[str], origins),
+            off_primary=off_primary,
         )
     kept = np.flatnonzero(resolved)
     resolved_alids: list[str] = []
@@ -495,4 +511,5 @@ def _drop_unresolved(
         keys=values[kept],
         alids=resolved_alids,
         origins=resolved_origins,
+        off_primary=off_primary,
     )

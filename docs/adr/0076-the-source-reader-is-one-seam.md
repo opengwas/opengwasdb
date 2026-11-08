@@ -78,8 +78,9 @@ them.**
 
   Association Admission judges everything else. A reader declares, once per
   format, whether its rows name the genome's reference allele
-  (`ReferenceAllele`). Every projection carries that declaration unchanged, and
-  a batch also carries the `REFERENCE_*` codes routing's duplicate rule reads.
+  (`ReferenceAllele`). Every projection carries that declaration unchanged.
+  (A batch also carried the `REFERENCE_*` codes #357's reversed-indel rule
+  read, until #316 removed the rule.)
 - **The Ragged builders read through readers.**
   - `build-ragged-ssf` reads each Analysis with the GWAS-SSF reader's
     `stream_batches`.

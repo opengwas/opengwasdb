@@ -38,7 +38,7 @@ from opengwasdb.readers.interface import (
     SourceVariant,
 )
 from opengwasdb.readers.orientation import a1_frequencies, is_palindromic, swap, swap_one
-from opengwasdb.variants.normalise import identity_allele, normalise_chromosome
+from opengwasdb.variants.normalise import normalise_chromosome
 
 __all__ = [
     "DEFAULT_CHUNK_ROWS",
@@ -408,10 +408,6 @@ class ReaderBatch:
       reads these (#379).
     - ``reference``: the format's declaration of which allele is the genome's
       reference, carried unchanged from the reader (`ReferenceAllele`).
-    - ``ref_first``: for each row, whether its `ref` is the allele its ALID
-      spells first, as Variant Routing's `allele_order` reads it. Only
-      ``reference`` gives it meaning: it is required where the format declares
-      a reference, and refused where it declares none.
     - ``key_prefix``: how a dropped row is named in Admission's log: by ALID when
       empty, else ``key_prefix`` and its ``source_row`` (``esi:12``).
     """
@@ -428,24 +424,9 @@ class ReaderBatch:
     ref: np.ndarray
     alt: np.ndarray
     reference: ReferenceAllele
-    ref_first: np.ndarray | None = None
     key_prefix: str = ""
 
     def __post_init__(self) -> None:
-        declared = self.reference.declared
-        if declared and self.ref_first is None:
-            raise ValueError(
-                f"a batch whose reader declares {self.reference.value!r} the reference "
-                "allele needs each row's ref_first: without it a reversed indel could "
-                "not be told apart"
-            )
-        if not declared and self.ref_first is not None:
-            raise ValueError(
-                "a batch whose reader declares no reference allele takes no ref_first: "
-                "it would name a reference the source does not"
-            )
-        if self.ref_first is not None and len(self.ref_first) != len(self.alid):
-            raise ValueError("ref_first must hold one value per row of the batch")
         if not len(self.ref) == len(self.alt) == len(self.alid):
             raise ValueError("ref and alt must each hold one allele per row of the batch")
 
@@ -467,7 +448,6 @@ class ReaderBatch:
             rsid=self.rsid[keep],
             ref=self.ref[keep],
             alt=self.alt[keep],
-            ref_first=None if self.ref_first is None else self.ref_first[keep],
         )
 
     def keys_at(self, positions: np.ndarray) -> list[str]:
@@ -475,33 +455,6 @@ class ReaderBatch:
         if self.key_prefix:
             return [f"{self.key_prefix}{int(row)}" for row in self.source_row[positions]]
         return [str(alid) for alid in self.alid[positions]]
-
-    def reference_codes(self) -> np.ndarray:
-        """Each row's `REFERENCE_*` code, for Variant Routing's duplicate rule.
-
-        `REFERENCE_UNKNOWN` everywhere when the format declares no reference.
-        """
-        from opengwasdb.variants.routing.table import (
-            REFERENCE_FIRST,
-            REFERENCE_SECOND,
-            REFERENCE_UNKNOWN,
-        )
-
-        codes = np.full(len(self), REFERENCE_UNKNOWN, dtype=np.int8)
-        if not self.reference.declared or self.ref_first is None:
-            return codes
-        first = self.ref_first if self.reference is ReferenceAllele.REF else ~self.ref_first
-        indel = self._indel()
-        codes[indel & first] = REFERENCE_FIRST
-        codes[indel & ~first] = REFERENCE_SECOND
-        return codes
-
-    def _indel(self) -> np.ndarray:
-        """Rows whose two alleles differ in length, read from the ALID."""
-        lengths = [alid.split(":", 3)[2:] for alid in self.alid.tolist()]
-        return np.fromiter(
-            (len(a1) != len(a2) for a1, a2 in lengths), dtype=bool, count=len(lengths)
-        )
 
 
 def stream_batches(
@@ -553,10 +506,4 @@ def _batch_of_rows(
         ref=_row_array(rows, lambda row: row.ref, object),
         alt=_row_array(rows, lambda row: row.alt, object),
         reference=reference,
-        ref_first=_ref_first(rows) if reference.declared else None,
     )
-
-
-def _ref_first(rows: list[SourceRow]) -> np.ndarray:
-    """Whether each row's `ref` is the allele its ALID spells first."""
-    return _row_array(rows, lambda row: identity_allele(row.ref) < identity_allele(row.alt), bool)

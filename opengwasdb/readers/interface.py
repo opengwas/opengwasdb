@@ -120,15 +120,15 @@ class ReferenceAllele(StrEnum):
     Declared by the format, never inferred: GWAS-VCF's `REF` and FinnGen's
     `ref` are the reference allele (`REF`, the row's own `ref`), while
     GWAS-SSF, BESD and an effect/other Column Map name an effect allele and an
-    other one, which need not be the reference (`UNDECLARED`). `ALT` is a row
-    whose `alt` its source declares the reference. Association Admission reads
-    it only to tell the two alleles of an indel apart when an insertion and a
-    deletion share one ALID (issue #357).
+    other one, which need not be the reference (`UNDECLARED`).
+
+    An indel's ALID is formed from the declaration when the row is read (ADR
+    0079), and one whose source declares none is dropped there, so every
+    indel a reader yields has its reference in `ref`.
     """
 
     UNDECLARED = "undeclared"
     REF = "ref"
-    ALT = "alt"
 
     @property
     def declared(self) -> bool:
@@ -141,10 +141,11 @@ class ReaderAssociation:
     """One source association's position, effect, and precision.
 
     `ref`/`alt` are the source's own allele labelling, case included, not
-    reordered to canonical A1/A2 -- `z` is already sign-corrected to the
-    A1 = min(ref, alt) convention every reader in this package follows, the two
-    compared upper-cased (`opengwasdb.variants.normalise.identity_allele`, spec
-    §4: a lower-case base is the same base). `z` is NaN for a source row that
+    reordered to canonical A1/A2 -- `z` is already sign-corrected to the ALID's
+    A1 every reader in this package forms (`alid_alleles`: the two sorted, or an
+    indel's reference allele, which is then `ref`), the two compared upper-cased
+    (`opengwasdb.variants.normalise.identity_allele`, spec §4: a lower-case base
+    is the same base). `z` is NaN for a source row that
     reports no effect: such a row is not an association, and Association
     Admission drops and logs it (`effect_missing`). `eaf` follows `z`: it is
     the frequency of the *stored* effect allele, so a reader that negated `z`
@@ -226,11 +227,12 @@ class SiteMetrics:
 class StreamTally:
     """What one Source Reader stream did to the rows it read, for Association
     Admission to record (issue #357): the rows it dropped because no ALID can
-    spell their identity (#365), and the reported frequencies it made absent
-    (D7)."""
+    spell their identity (#365), the reported frequencies it made absent (D7),
+    and the indels a GWAS-SSF harmoniser code placed (#381)."""
 
     faults: IdentityFaults = field(default_factory=IdentityFaults)
     frequencies: FrequencyTally = field(default_factory=FrequencyTally)
+    indel_rows_kept_by_hm_code: int = 0
 
 
 class SourceReader(Protocol):

@@ -15,7 +15,7 @@ import logging
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
@@ -23,7 +23,7 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.admission import AdmissionRecord, AnalysisRules, Reason, admission_record_for
+from opengwasdb.admission import AdmissionRecord, AnalysisRules, admission_record_for
 from opengwasdb.admission.declared import declared_rules
 from opengwasdb.admission.duplicates import record_duplicates
 from opengwasdb.build.eaf_orientation import (
@@ -55,7 +55,18 @@ from opengwasdb.encoding.association_codec import (
     log_se_out_of_range,
     storable,
 )
-from opengwasdb.encoding.codec import require_parallel, se_float16
+from opengwasdb.encoding.codec import (
+    EafExceptionTable,
+    eaf_exception_table,
+    require_parallel,
+    se_float16,
+)
+from opengwasdb.encoding.memory import (
+    MEMINFO,
+    available_memory_bytes,
+    memory_budget_bytes,
+    workers_within_memory,
+)
 from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase
 from opengwasdb.encoding.timing import log_progress as log_phase_progress
 from opengwasdb.index import initialise_schema, set_metadata
@@ -88,7 +99,7 @@ from opengwasdb.model.enums import (
 )
 from opengwasdb.readers.column_map import ColumnMap
 from opengwasdb.readers.interface import StreamTally
-from opengwasdb.readers.registry import open_source
+from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts, z_critical
@@ -101,6 +112,8 @@ from opengwasdb.variants.routing import (
     VariantRouting,
     route_variants,
 )
+from opengwasdb.variants.routing.keys import routing_key
+from opengwasdb.variants.routing.lift import lifted_off_primary
 
 log = logging.getLogger(__name__)
 
@@ -302,6 +315,12 @@ class _PreparedBuild:
     table: RouteTable
     #: Each Analysis's declared INFO and MAF filters, by Analysis id (D2).
     rules: Mapping[str, AnalysisRules] = field(default_factory=dict)
+    #: The routing keys of the sites a lift placed off the primary assembly (#376).
+    off_primary: frozenset[str] = frozenset()
+    #: The chain a single-pass build lifts its hg19 Analyses' unmatched rows by, to
+    #: tell a lift's off-primary drops from `off_axis` ones; None for a two-pass
+    #: build, whose union has lifted every site already (#376).
+    unmatched_lift: UnmatchedLift | None = None
     #: The ``--variant-reference`` a single-pass build was given, or None for
     #: the inline two-pass build. Recorded in the store manifest's provenance
     #: so the axis's origin is auditable (issue #185).
@@ -453,6 +472,15 @@ def _prepare_axis(
         variant_reference=str(variant_reference) if variant_reference is not None else None,
         column_map=column_map_provenance(manifest_rows),
         rules=rules,
+        off_primary=routing.off_primary,
+        unmatched_lift=(
+            UnmatchedLift(
+                chain_file,
+                tuple(row.source for row in manifest_rows if row.source_assembly == "hg38"),
+            )
+            if variant_reference is not None
+            else None
+        ),
     )
 
 
@@ -466,6 +494,68 @@ class _Pass2Context:
     record: AdmissionRecord
     alids: Sequence[str]
     rules: Mapping[str, AnalysisRules]
+    off_primary: frozenset[str] = frozenset()
+    unmatched_lift: UnmatchedLift | None = None
+
+
+@dataclass(frozen=True)
+class UnmatchedLift:
+    """How a single-pass build tells a lift's drops from `off_axis` ones: its hg19
+    Analyses' unmatched rows are lifted by ``chain_file``, and those the chain
+    places off the primary assembly are counted as `lift_off_primary` (#376).
+    ``grch38_sources`` are the Analyses already on GRCh38, whose declaring a key
+    makes it two loci that no row of is a lift's drop. ``checked`` is the keys a
+    process has already looked up in them, and whether one declares each, so a
+    worker reads the sources once for a key however many Analyses it routes; it
+    belongs to this build, and each forked worker keeps its own."""
+
+    chain_file: str | Path | None
+    grch38_sources: tuple[SourceSpec, ...] = ()
+    checked: dict[str, bool] = field(default_factory=dict)
+
+
+def _declared_in(source: SourceSpec, wanted: Collection[str]) -> set[str]:
+    """The routing keys among ``wanted`` that one source's variants spell."""
+    spelt = (
+        routing_key((v.chromosome, v.position, v.ref, v.alt))
+        for v in open_source(source).stream_variants()
+    )
+    return {key for key in spelt if key in wanted}
+
+
+def _declared_by_grch38(keys: Collection[str], lift: UnmatchedLift) -> set[str]:
+    """The routing keys among ``keys`` that a GRCh38 Analysis's source declares."""
+    unchecked = {key for key in keys if key not in lift.checked}
+    found: set[str] = set()
+    for source in lift.grch38_sources if unchecked else ():
+        found |= _declared_in(source, unchecked)
+    lift.checked.update({key: key in found for key in unchecked})
+    return {key for key in keys if lift.checked[key]}
+
+
+def _unmatched_off_primary(
+    keys: Sequence[str], row: ManifestRow, context: _Pass2Context
+) -> frozenset[str]:
+    """The routing keys among ``keys`` that this Analysis's lift placed off the
+    primary assembly, which are dropped as `lift_off_primary`.
+
+    Only an hg19 Analysis's rows were lifted. A two-pass build's union has placed
+    every site and settled the keys both assemblies declare; a single-pass build's
+    candidates are the union's too (a stale reference's) and the unmatched rows the
+    chain lifts onto the alt contig, less any key a GRCh38 Analysis declares, as
+    the Hybrid fold leaves them (two loci, `off_axis`)."""
+    if row.source_assembly != "hg19":
+        return frozenset()
+    lift = context.unmatched_lift
+    if lift is None:
+        return context.off_primary
+    if not keys:
+        return frozenset()
+    sites = [(c, int(p), r, a) for c, p, r, a in (key.split(":") for key in keys)]
+    candidates = (context.off_primary & set(keys)) | lifted_off_primary(
+        sites, chain_file=lift.chain_file
+    )
+    return frozenset(candidates - _declared_by_grch38(candidates, lift))
 
 
 def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
@@ -491,7 +581,9 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
         gate.streamed(tally)
         placed = routed.placed[0]
         record_duplicates(gate, placed, context.alids)
-        gate.unplaced(Reason.OFF_AXIS, routed.unmatched.keys)
+        gate.unplaced_off_axis(
+            routed.unmatched.keys, _unmatched_off_primary(routed.unmatched.keys, row, context)
+        )
         se = apply_se_divisor(placed.se, row.se_divisor)
         where = f"build-dense-vcf, Analysis {row.trait_id}"
         kept = storable(CellValues(placed.z, se, placed.eaf), 0, 1, where=where)
@@ -544,7 +636,10 @@ def _spill_columns(
     record = AdmissionRecord.open(
         admission_record, [row.trait_id for row in manifest_rows], command="build-dense-vcf"
     )
-    context = _Pass2Context(prepared.table, spill_dir, record, prepared.axis.alids, prepared.rules)
+    context = _Pass2Context(
+        prepared.table, spill_dir, record, prepared.axis.alids, prepared.rules,
+        prepared.off_primary, prepared.unmatched_lift,
+    )
     columns = fork_each(_route_and_spill, context, tasks, n_workers)
     for i, col_idx in enumerate(columns):
         log_progress(
@@ -803,6 +898,22 @@ def _eaf_row_band(shard_rows: int, n_analyses: int) -> int:
     return max(rows, (target // rows) * rows)
 
 
+#: A band worker's fixed footprint and its per-cell footprint, in bytes. Both
+#: are empirical: `benchmarks/measure_eaf_band_memory.py` runs this module's own
+#: worker, in a forked child, on two real bands of OGS-00009 (251.4M and 25.1M
+#: cells), reads each child's `VmHWM`, and fits `fixed + per cell` -- see
+#: `docs/benchmark-output/opengwasdb_320_eaf_band/eaf_band_memory.json`. The fit
+#: was 135 MiB + 66.9 B a cell; these are its rounded-up forms, so a band's
+#: estimate sits about 8% above the peak it was measured at.
+_EAF_BAND_FIXED_BYTES = 144 * 1024**2
+_EAF_BAND_BYTES_PER_CELL = 72
+
+
+def _eaf_band_bytes(n_analyses: int, band_rows: int) -> int:
+    """Bytes one band's worker holds: the fork's floor plus the cells it encodes."""
+    return _EAF_BAND_FIXED_BYTES + _EAF_BAND_BYTES_PER_CELL * n_analyses * band_rows
+
+
 def _write_dense_eaf(
     staged: StagedRelease,
     spill_dir: Path,
@@ -859,7 +970,57 @@ def _write_dense_eaf(
     if not residual:
         return
     _encode_residual_dense_eaf(
-        staged, n_variants, n_analyses, effective_chunks, codec, pass2_start
+        staged, n_variants, n_analyses, effective_chunks, codec, pass2_start, n_workers
+    )
+
+
+@dataclass(frozen=True)
+class _EafBandContext:
+    """What every row band of the residual encode reads.
+
+    The staged grid is opened by the parent and shared by inheritance, so the
+    workers read it rather than being handed a copy per band; the grid is
+    read-only from here on and is deleted only once the whole encode is done.
+    """
+
+    staging: Any
+    codec: StoreCodec
+    n_analyses: int
+    band_rows: int
+    n_variants: int
+
+
+@dataclass(frozen=True)
+class _EncodedEafBand:
+    """One row band's residual codes, its baselines and its exception cells."""
+
+    start: int
+    codes: np.ndarray
+    baseline: np.ndarray
+    exceptions: EafExceptionTable
+
+
+def _encode_eaf_band(context: _EafBandContext, r0: int) -> _EncodedEafBand:
+    """Encode one row band against the baselines its own rows imply.
+
+    A band reads only its own rows, so its codes, baselines and exceptions are
+    the serial pass's for those rows and no worker depends on another's order.
+    """
+    r1 = min(r0 + context.band_rows, context.n_variants)
+    block = np.asarray(context.staging[r0:r1], dtype=np.float32)
+    rows_baseline = eaf_baseline_from_grid(block)
+    exceptions = EafExceptionBuilder()
+    codes = context.codec.encode_eaf(
+        block,
+        baseline=np.repeat(rows_baseline[:, None], context.n_analyses, axis=1),
+        positions=positions_row_band(r0, context.n_analyses),
+        exceptions=exceptions,
+    )
+    return _EncodedEafBand(
+        start=r0,
+        codes=codes,
+        baseline=rows_baseline,
+        exceptions=exceptions.table(),
     )
 
 
@@ -870,8 +1031,16 @@ def _encode_residual_dense_eaf(
     effective_chunks: tuple[int, int],
     codec: StoreCodec,
     pass2_start: float,
+    n_workers: int,
 ) -> None:
     """Residual re-encode: transpose the staged float32 grid, then delete it.
+
+    The transpose runs one row band per item on the ordered pool, and the
+    parent consumes them in row order: it writes each band's codes and
+    baselines straight into their arrays, and lays the bands' exception runs
+    end to end. So every output is the serial pass's byte for byte, whichever
+    band a worker finished first, and the exception table is never sorted (its
+    bytes are the order it was assembled in -- `eaf_exception_table`).
 
     The staging array is only deleted once the baseline and exception tables it
     produced are both written -- a failed encode leaves the staging plane in
@@ -880,37 +1049,128 @@ def _encode_residual_dense_eaf(
     clipped.
     """
     root = staged.arrays(mode="a")
-    encoded = _create_eaf_array(
-        staged,
-        n_variants,
-        n_analyses,
-        effective_chunks,
-        dtype=codec.eaf_dtype,
-        fill_value=codec.eaf_fill_value,
-    )
-    baseline = np.full(n_variants, np.nan, dtype=np.float32)
-    exceptions = EafExceptionBuilder()
-    band_rows = _eaf_row_band(_shard_rows(encoded, effective_chunks), n_analyses)
-    for r0 in range(0, n_variants, band_rows):
-        r1 = min(r0 + band_rows, n_variants)
-        block = np.asarray(root[_EAF_STAGING][r0:r1], dtype=np.float32)
-        rows_baseline = eaf_baseline_from_grid(block)
-        baseline[r0:r1] = rows_baseline
-        encoded[r0:r1] = codec.encode_eaf(
-            block,
-            baseline=np.repeat(rows_baseline[:, None], n_analyses, axis=1),
-            positions=positions_row_band(r0, n_analyses),
-            exceptions=exceptions,
+    with log_phase(log, "Encode eaf"):
+        encoded = _create_eaf_array(
+            staged,
+            n_variants,
+            n_analyses,
+            effective_chunks,
+            dtype=codec.eaf_dtype,
+            fill_value=codec.eaf_fill_value,
         )
-        log_progress("Encode eaf", r1, n_variants, pass2_start, f"rows {r0}:{r1}", every=band_rows)
-    write_eaf_baseline(root, baseline, compressor=_DENSE_COMPRESSOR)
-    exceptions.table().write(root)
+        baseline = np.full(n_variants, np.nan, dtype=np.float32)
+        band_rows = _eaf_row_band(_shard_rows(encoded, effective_chunks), n_analyses)
+        context = _EafBandContext(
+            staging=root[_EAF_STAGING],
+            codec=codec,
+            n_analyses=n_analyses,
+            band_rows=band_rows,
+            n_variants=n_variants,
+        )
+        bands = _write_eaf_bands(encoded, baseline, context, pass2_start, n_workers)
+        write_eaf_baseline(root, baseline, compressor=_DENSE_COMPRESSOR)
+        exceptions = eaf_exception_table(bands)
+        exceptions.write(root)
     log.info(
         "eaf: int8 residual at +/-%.1f, %d exception cell(s)",
         codec.encoding.eaf.residual_range,
         len(exceptions),
     )
     del root[_EAF_STAGING]
+
+
+def _eaf_encode_pool(n_analyses: int, band_rows: int, requested: int) -> int:
+    """The band loop's effective worker count, and the lines that say why.
+
+    A band is at least one Dense shard, so on a wide release a worker holds a
+    large fraction of a gigabyte, and a pool sized from ``--n-workers`` alone
+    can exhaust the host. The budget is a quarter of `MemAvailable` at the
+    phase's start, one band a worker within it, and an unreadable host gets one
+    worker rather than a guess -- silently at `--n-workers 1`, where the
+    reading changes nothing, and with a warning when it does.
+    """
+    per_band_bytes = _eaf_band_bytes(n_analyses, band_rows)
+    budget = memory_budget_bytes(available_memory_bytes())
+    if budget is None and requested > 1:
+        log.warning(
+            "Encode eaf: cannot read %s, so no memory budget can be set under %d worker(s); "
+            "encoding on one worker",
+            MEMINFO,
+            requested,
+        )
+    if budget is not None and budget < per_band_bytes:
+        log.warning(
+            "Encode eaf: a %d-row band of %d analyses needs %d MiB a worker, and the budget "
+            "is %d MiB, less than one band; encoding on one worker, which will overrun it",
+            band_rows,
+            n_analyses,
+            per_band_bytes >> 20,
+            budget >> 20,
+        )
+    workers = workers_within_memory(requested, per_band_bytes, budget)
+    log.info(
+        "Encode eaf: %d of %d worker(s); a %d-row band of %d analyses is %d MiB a worker, "
+        "against a budget of %s",
+        workers,
+        requested,
+        band_rows,
+        n_analyses,
+        per_band_bytes >> 20,
+        "unknown" if budget is None else f"{budget >> 20} MiB",
+    )
+    return workers
+
+
+def _write_eaf_bands(
+    encoded: Any,
+    baseline: np.ndarray,
+    context: _EafBandContext,
+    pass2_start: float,
+    n_workers: int,
+) -> list[EafExceptionTable]:
+    """Encode every row band across the pool, writing the results in row order.
+
+    The parent consumes ``ordered_map`` in row order, so each band's codes and
+    baselines land in the rows they were computed from and the exception runs
+    are laid end to end in that same order -- which is the only thing that makes
+    the table's bytes independent of which worker finished first. How many bands
+    run at once is `_eaf_encode_pool`'s answer, and the parent's window is the
+    same count so it holds one returned band a worker.
+    """
+    workers = _eaf_encode_pool(context.n_analyses, context.band_rows, n_workers)
+    starts = range(0, context.n_variants, context.band_rows)
+    bands: list[EafExceptionTable] = []
+    encoded_bands = ordered_map(
+        _encode_eaf_band, starts, workers, max_in_flight=workers, shared=context
+    )
+    for expected, band in zip(starts, encoded_bands, strict=True):
+        if band.start != expected:
+            raise ValueError(
+                f"encode eaf bands arrived out of order: expected rows from {expected}, "
+                f"got {band.start}"
+            )
+        # The band's rows are the plan's, not the worker's: a result that
+        # describes a different number of them would be written beside the rows
+        # its codes were computed from.
+        r1 = min(band.start + context.band_rows, context.n_variants)
+        if len(band.baseline) != r1 - band.start or len(band.codes) != r1 - band.start:
+            raise ValueError(
+                f"encode eaf band at rows {band.start}:{r1} came back with "
+                f"{len(band.baseline)} baseline(s) and {len(band.codes)} code row(s); "
+                "the band plan and the worker disagree"
+            )
+        encoded[band.start:r1] = band.codes
+        baseline[band.start:r1] = band.baseline
+        bands.append(band.exceptions)
+        log_progress(
+            "Encode eaf",
+            r1,
+            context.n_variants,
+            pass2_start,
+            f"rows {band.start}:{r1}",
+            every=context.band_rows,
+        )
+    return bands
 
 
 #: Name of the transient `float32` plane a residual-coded build stages into.

@@ -20,6 +20,8 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.model.enums import PrimaryStorageLayout
+from opengwasdb.store.open import indels_reference_first
+from opengwasdb.validation import rule as validation_rule
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Skip, Target
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.variants import (
@@ -30,6 +32,7 @@ from opengwasdb.variants import (
     variant_alid_bytes_path,
     variant_table_path,
 )
+from opengwasdb.variants.normalise import is_primary_contig
 
 #: Rows one block of the stream holds: enough to amortise the per-block work,
 #: few enough that a block's records are a small, bounded allocation.
@@ -283,6 +286,139 @@ def _judge_representatives(target: Target, picked: _Picked) -> Iterator[str]:
             return
 
 
+@dataclass(frozen=True)
+class _IndelOrder:
+    """How many indel rows spell their ALID against the table's own orientation,
+    and the first of them."""
+
+    n_rows: int = 0
+    first: str = ""
+
+    def __add__(self, other: _IndelOrder) -> _IndelOrder:
+        return _IndelOrder(self.n_rows + other.n_rows, self.first or other.first)
+
+
+def _indel_order(_target: Target, block: TableBlock) -> _IndelOrder:
+    """Each indel row whose ALID order the table's other columns contradict.
+
+    An indel's ALID spells its reference allele first (ADR 0079), and the table
+    records that order twice more: the row's `effect_allele` and
+    `other_allele`, which a statistic is signed for, and, for a lifted variant,
+    its `source_alid`, the same variant spelt on the source's assembly, where
+    a lift complements an allele but never changes its length.
+    """
+    n_rows, first = 0, ""
+    for offset, record in enumerate(block.records):
+        _chrom, _pos, a1, a2 = record.alid.split(":")
+        if len(a1) == len(a2):
+            continue
+        fault = _order_fault(record, a1, a2)
+        if fault:
+            n_rows += 1
+            first = first or f"row {block.start + offset}: {fault}"
+    return _IndelOrder(n_rows, first)
+
+
+def _order_fault(record: VariantRecord, a1: str, a2: str) -> str:
+    """Why one indel row's ALID order contradicts the row, or ``""``."""
+    alid, effect, other = record.alid, record.effect_allele, record.other_allele
+    if (a1, a2) != (effect, other):
+        return f"ALID {alid} but effect_allele {effect!r} and other_allele {other!r}"
+    source = (record.source_alid or "").split(":")
+    if len(source) == 4 and len(source[2]) != len(a1):
+        return f"ALID {alid} but source_alid {record.source_alid}, the other allele first"
+    return ""
+
+
+def _judge_indel_order(_target: Target, found: _IndelOrder) -> Iterator[str]:
+    if found.n_rows:
+        yield (
+            f"{found.n_rows} indel row(s) of variants.tsv.gz spell their ALID in an order "
+            f"the table's own orientation contradicts ({found.first}): an indel's ALID "
+            "spells its reference allele first (ADR 0079), and a statistic is signed for "
+            "its effect_allele"
+        )
+
+
+def _spells_indels_reference_first(target: Target) -> bool:
+    """A Store from format 0.2.1 on; an earlier one sorts an indel's alleles."""
+    return indels_reference_first(target.store.manifest.format_version)
+
+
+@dataclass(frozen=True)
+class _LiftedOffPrimary:
+    """How many table rows name a lifted variant on a non-primary contig, the first,
+    and how many non-primary rows have no ``source_alid`` to judge them by."""
+
+    n_rows: int = 0
+    first: str = ""
+    n_unjudged: int = 0
+
+    def __add__(self, other: _LiftedOffPrimary) -> _LiftedOffPrimary:
+        return _LiftedOffPrimary(
+            self.n_rows + other.n_rows,
+            self.first or other.first,
+            self.n_unjudged + other.n_unjudged,
+        )
+
+
+def _lifted_off_primary(_target: Target, block: TableBlock) -> _LiftedOffPrimary:
+    """Each row on an alt, random or unplaced contig whose ``source_alid`` is on another.
+
+    A source on the release's assembly keeps its alt contig, so its ``source_alid``
+    is the ALID itself; a lift's is the source's own coordinate, on another contig.
+    A row on such a contig with no ``source_alid`` (no lift, or a collision blanked
+    it) cannot be judged, and is counted so the message can say so.
+    """
+    n_rows, first, n_unjudged = 0, "", 0
+    for offset, record in enumerate(block.records):
+        if is_primary_contig(record.chromosome):
+            continue
+        if record.source_alid is None:
+            n_unjudged += 1
+        elif record.source_alid.split(":", 1)[0] != record.chromosome:
+            n_rows += 1
+            first = first or f"row {block.start + offset}: {record.alid} from {record.source_alid}"
+    return _LiftedOffPrimary(n_rows, first, n_unjudged)
+
+
+def _unjudged(found: _LiftedOffPrimary) -> str:
+    return f"{found.n_unjudged} not judged (no source ALID)"
+
+
+def _judge_lifted_off_primary(_target: Target, found: _LiftedOffPrimary) -> Iterator[str]:
+    if found.n_rows:
+        yield (
+            f"{found.n_rows} variant(s) of variants.tsv.gz were lifted onto an alt, random or "
+            f"unplaced contig ({found.first}), {_unjudged(found)}: a build leaves such a "
+            "variant out and counts its rows as lift_off_primary (#376), so this release was "
+            "built before that, or routed by a Variant Reference extracted before it -- "
+            "rebuild it (an earlier format's release is #367's)"
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
+class _ErrorFromFormat(Fold[TableBlock, _LiftedOffPrimary]):
+    """A fold that fails a release of a format whose builders cannot write what it finds
+    (0.2.1 or later, `indels_reference_first`) and warns on an earlier one, which says
+    what the release is without failing a Store nobody can fix in place (#376, #367).
+
+    Where it finds nothing but cannot judge some rows, it warns that it did not."""
+
+    def judged(self, target: Target, total: _LiftedOffPrimary) -> Iterator[validation_rule.Finding]:
+        severity = validation_rule.Severity
+        level = severity.ERROR if _spells_indels_reference_first(target) else severity.WARNING
+        for message in self.judge(target, total):
+            yield self.finding(target, message, level)
+        if not total.n_rows and total.n_unjudged:
+            yield self.finding(
+                target,
+                f"{_unjudged(total)}: variants.tsv.gz has non-primary-contig variants with no "
+                "source_alid, which cannot be told from a lift's",
+                severity.WARNING,
+            )
+
+
 def variant_aliases(target: Target) -> Iterator[str]:
     """Every alias names a variant the table holds.
 
@@ -347,6 +483,25 @@ RULES: tuple[Rule, ...] = (
         zero=_Picked(),
         measure=_pick,
         judge=_judge_representatives,
+    ),
+    Fold(
+        name="variant_table.indel_order",
+        kinds=Kind.RELEASE,
+        after=(REQUIRED,),
+        when=_spells_indels_reference_first,
+        scan=VARIANT_TABLE,
+        zero=_IndelOrder(),
+        measure=_indel_order,
+        judge=_judge_indel_order,
+    ),
+    _ErrorFromFormat(
+        name="variant_table.lifted_contig",
+        kinds=Kind.RELEASE,
+        after=(REQUIRED,),
+        scan=VARIANT_TABLE,
+        zero=_LiftedOffPrimary(),
+        measure=_lifted_off_primary,
+        judge=_judge_lifted_off_primary,
     ),
     Check(
         name="sqlite.variant_aliases",

@@ -6,9 +6,13 @@ an association a Store can hold at all, then the filters the Analysis declared:
 
 0. a malformed identity, which no ALID can spell: a missing chromosome
    (`chromosome_missing`: an empty cell, `.`, `NA`), then an allele outside
-   A, C, G and T (`allele_invalid`). The Source Reader finds these as it forms
-   the row's identity (`variants.normalise.MalformedIdentity`), drops the row
-   and reports it, the same on every reader;
+   A, C, G and T (`allele_invalid`), then an indel whose source declares no
+   reference allele (`indel_reference_undeclared`, or, for GWAS-SSF, a reason
+   naming its layout: `indel_ssf_unharmonised`, `indel_ssf_hm_columns`,
+   `indel_ssf_hm_code`), since an indel's ALID spells its reference first
+   (ADR 0079). The Source Reader finds these as it
+   forms the row's identity (`variants.normalise.MalformedIdentity`), drops
+   the row and reports it, the same on every reader;
 1. an unusable reported SE (`se_unusable`): missing, not positive, or not
    finite;
 2. no effect (`effect_missing`): a usable SE beside a z the source gave no
@@ -41,12 +45,12 @@ is the `maf_missing` a Store's provenance reports.
 After the rules, a row is judged against the other rows that reach its place
 on the Variant Index. Rows that agree on z and SE are one association and
 collapse to the first (`duplicate_collapsed`); rows that disagree are all
-dropped (`duplicate_conflicting`), since nothing says which is right. The one
-exception is a reversed indel: an insertion and a deletion at one position
-share an ALID, because the ALID sorts its alleles, so when the source declares
-which allele is the reference, and the place's distinct rows (agreeing copies
-collapsed) are one spelling it first and one second, the first is kept and the
-second dropped (`duplicate_reversed_indel`). A row whose
+dropped (`duplicate_conflicting`), since nothing says which is right. An
+indel's ALID spells its reference allele first (ADR 0079), so an insertion and
+a deletion at one position are two variants, never one place's rows. #357's
+exception for such a pair (`duplicate_reversed_indel`) is retired: no build
+drops a row for it, and the reason stays readable in a record written before
+(#316). A row whose
 variant no axis of the Store holds is dropped too (`off_axis`), where a build
 has nowhere else to put it. A build that lifts a source onto the Store's
 assembly drops the rows of a site its chain places nowhere (`lift_unmapped`),
@@ -78,7 +82,15 @@ from opengwasdb.build.info_score_filter import (
 )
 from opengwasdb.model.info_score_policy import InfoScorePolicy
 from opengwasdb.model.maf_policy import MafPolicy, MafState
-from opengwasdb.variants.normalise import InvalidAllele, MissingChromosome
+from opengwasdb.variants.normalise import (
+    HmCodeIndel,
+    HmColumnsIndel,
+    InvalidAllele,
+    LiftedOffPrimary,
+    MissingChromosome,
+    UndeclaredReference,
+    UnharmonisedIndel,
+)
 
 __all__ = [
     "LOGGED",
@@ -98,6 +110,16 @@ class Reason(StrEnum):
     CHROMOSOME_MISSING = MissingChromosome.reason
     #: A row with an allele outside the ALID alphabet (#365).
     ALLELE_INVALID = InvalidAllele.reason
+    #: An indel whose source declares neither allele the genome's reference, so
+    #: no ALID can spell it reference first (#381, ADR 0079).
+    INDEL_REFERENCE_UNDECLARED = UndeclaredReference.reason
+    #: The same, for each GWAS-SSF layout, so a record says which (#381): a file
+    #: with no harmoniser columns; one that keeps harmonised alleles in `hm_*`
+    #: columns, all of whose indels are dropped; and, in the layout whose main
+    #: columns are harmonised, a row whose harmoniser code is not 10 or 11.
+    INDEL_SSF_UNHARMONISED = UnharmonisedIndel.reason
+    INDEL_SSF_HM_COLUMNS = HmColumnsIndel.reason
+    INDEL_SSF_HM_CODE = HmCodeIndel.reason
     SE_UNUSABLE = "se_unusable"
     EFFECT_MISSING = "effect_missing"
     Z_NONFINITE = "z_nonfinite"
@@ -107,8 +129,11 @@ class Reason(StrEnum):
     #: A row that agreed with an earlier row for its (variant, Analysis), whose
     #: association it is: not lost, so counted only.
     DUPLICATE_COLLAPSED = "duplicate_collapsed"
-    #: An indel row whose declared reference allele its ALID spells second, at
-    #: a (variant, Analysis) that keeps the row spelling it first.
+    #: Retired (#316): no rule drops a row for it. #357 dropped an indel row
+    #: whose declared reference allele a sorted ALID spelt second, beside one
+    #: spelling it first; an ALID spells an indel reference first since ADR
+    #: 0079. The member keeps its place, because a reason's code is its
+    #: position, and records written before name it.
     DUPLICATE_REVERSED_INDEL = "duplicate_reversed_indel"
     #: A row for a (variant, Analysis) whose rows disagree on z or SE.
     DUPLICATE_CONFLICTING = "duplicate_conflicting"
@@ -120,6 +145,10 @@ class Reason(StrEnum):
     #: A row whose Routing Key a source on the Store's assembly and a lifted source
     #: both declare: two loci that share a string, so no row of it is placed (#386).
     LIFT_AMBIGUOUS = "lift_ambiguous"
+    #: A row of a source lifted onto the Store's assembly whose site the chain
+    #: places on an alt, random or unplaced contig: the Store holds the primary
+    #: assembly's contigs only, so no row of it is placed (#376).
+    LIFT_OFF_PRIMARY = LiftedOffPrimary.reason
 
 
 #: The reasons whose rows are logged by source key, not only counted. A declared
@@ -129,6 +158,10 @@ LOGGED: frozenset[Reason] = frozenset(
     {
         Reason.CHROMOSOME_MISSING,
         Reason.ALLELE_INVALID,
+        Reason.INDEL_REFERENCE_UNDECLARED,
+        Reason.INDEL_SSF_UNHARMONISED,
+        Reason.INDEL_SSF_HM_COLUMNS,
+        Reason.INDEL_SSF_HM_CODE,
         Reason.SE_UNUSABLE,
         Reason.EFFECT_MISSING,
         Reason.Z_NONFINITE,
@@ -137,6 +170,7 @@ LOGGED: frozenset[Reason] = frozenset(
         Reason.OFF_AXIS,
         Reason.LIFT_UNMAPPED,
         Reason.LIFT_AMBIGUOUS,
+        Reason.LIFT_OFF_PRIMARY,
     }
 )
 
@@ -208,7 +242,10 @@ class AdmissionCounts:
     Analysis declared no MAF filter; it is not ``dropped[MAF_MISSING]``, which
     counts only the rows dropped for it. ``eaf_made_absent`` counts the reported
     frequencies outside (0, 1) the Store holds as absent, over every row read
-    (D7); a row is never dropped for one.
+    (D7); a row is never dropped for one. ``indel_rows_kept_by_hm_code`` counts
+    the indel rows a GWAS-SSF harmoniser code of 10 or 11 placed, over every row
+    read and before duplicates are resolved, beside the ``indel_ssf_*`` drops,
+    so a record says what the rule took and what it left (#381).
     """
 
     examined: int = 0
@@ -217,6 +254,7 @@ class AdmissionCounts:
     info: InfoScoreCounts = field(default_factory=InfoScoreCounts)
     maf_missing: int = 0
     eaf_made_absent: int = 0
+    indel_rows_kept_by_hm_code: int = 0
 
     def __add__(self, other: AdmissionCounts) -> AdmissionCounts:
         dropped = {
@@ -231,6 +269,9 @@ class AdmissionCounts:
             info=self.info + other.info,
             maf_missing=self.maf_missing + other.maf_missing,
             eaf_made_absent=self.eaf_made_absent + other.eaf_made_absent,
+            indel_rows_kept_by_hm_code=(
+                self.indel_rows_kept_by_hm_code + other.indel_rows_kept_by_hm_code
+            ),
         )
 
     @property
@@ -247,6 +288,7 @@ class AdmissionCounts:
             "info": asdict(self.info),
             "maf_missing": self.maf_missing,
             "eaf_made_absent": self.eaf_made_absent,
+            "indel_rows_kept_by_hm_code": self.indel_rows_kept_by_hm_code,
         }
 
     @classmethod
@@ -259,6 +301,7 @@ class AdmissionCounts:
             info=InfoScoreCounts(**data["info"]),
             maf_missing=int(data["maf_missing"]),
             eaf_made_absent=int(data["eaf_made_absent"]),
+            indel_rows_kept_by_hm_code=int(data["indel_rows_kept_by_hm_code"]),
         )
 
     def _ordered_drops(self) -> list[tuple[Reason, int]]:
