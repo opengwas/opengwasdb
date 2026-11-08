@@ -1,0 +1,37 @@
+{
+  "commit": "bd046986ed2dd3320dfaebc56d09763be751cacd",
+  "measured_at": "2026-11-08T01:25:33.010315+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/odb424/wt/opengwasdb",
+  "opengwasdb_fingerprint": "53045692108ac356ed28e12df71f2963d2456931d47eb03c66a47823e29dda1f",
+  "runs": [
+    "/data/opengwasdb/work/odb424/runs2/head-25.json",
+    "/data/opengwasdb/work/odb424/runs2/head-100.json"
+  ],
+  "full_fills": 10001552498,
+  "full_cells": 12355609979,
+  "full_batches": 47,
+  "phase3_seconds_fitted": 13748,
+  "shard_batches_extra_seconds": 832,
+  "phase3_seconds": 14580,
+  "phase3_hours": 4.05,
+  "memory_full": {
+    "before_assembly_gb": 8.73,
+    "held_cells_gb": 195.6,
+    "batch_gb": 18.0,
+    "write_region_gb": 3.14,
+    "assembly_peak_gb": 222.4,
+    "write_peak_gb": 207.5
+  },
+  "memory_model_at_larger_run": {
+    "before_assembly_gb": 8.73,
+    "held_cells_gb": 3.4,
+    "batch_gb": 8.64,
+    "write_region_gb": 3.14,
+    "assembly_peak_gb": 20.8,
+    "write_peak_gb": 15.3
+  },
+  "memory_measured_at_larger_run": {
+    "assembly_peak_gb": 14.6,
+    "write_peak_gb": 15.297
+  }
+}

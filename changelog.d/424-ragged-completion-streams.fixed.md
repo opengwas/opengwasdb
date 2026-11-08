@@ -13,4 +13,7 @@
   source orders two variants at one position the other way round, its rows were
   written unsorted -- 265 descending pairs in 176 of OGS-00006's Analyses, a
   release `validate` refuses (spec §11) and whose lookups binary-search to a
-  wrong row (#252).
+  wrong row (#252). On 25 of OGS-00006's Analyses (chromosomes 15-22, 32.5M
+  fills), Phase 3 -- its shard pass, assembly, CSR write, variant index and top
+  hits -- took 234 s at a 13.4 GiB peak, against 434 s and 19.3 GiB before;
+  projected to all 10.0B fills, about 4.1 h and 222 GiB.
