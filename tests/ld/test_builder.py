@@ -30,13 +30,8 @@ N, K = 771, 10
 
 @pytest.fixture(scope="module")
 def built(tmp_path_factory: pytest.TempPathFactory) -> dict[int, Path]:
-    """The Test Panel built at k = 10 and k = 0, once for this module."""
-    out = {}
-    for k in (10, 0):
-        store = tmp_path_factory.mktemp(f"k{k}") / "store"
-        ogld.build(fixtures.inputs(testdata.panel().pgen, k), store)
-        out[k] = store
-    return out
+    """The Test Panel built at k = 10 and k = 0, shared (build_fixtures.test_panel_build)."""
+    return {k: fixtures.test_panel_build(k, tmp_path_factory)[1] for k in (10, 0)}
 
 
 def passing() -> npt.NDArray[np.int64]:

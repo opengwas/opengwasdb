@@ -30,8 +30,7 @@ REGIONS = ROOT / "docs" / "spec" / "long-range-ld-regions-grch38.tsv"
 
 @pytest.fixture(scope="module")
 def k10(tmp_path_factory: pytest.TempPathFactory) -> ogld.Provenance:
-    out = tmp_path_factory.mktemp("k10") / "store"
-    return ogld.build(made.inputs(testdata.panel().pgen, 10), out)
+    return made.test_panel_build(10, tmp_path_factory)[0]
 
 
 def test_the_change_within_100kb_is_the_reference_s(k10: ogld.Provenance) -> None:

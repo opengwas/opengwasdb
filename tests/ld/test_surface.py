@@ -232,7 +232,7 @@ def test_a_pgen_read_without_pgenlib_refuses_naming_the_extra() -> None:
         "from pathlib import Path\n"
         "import numpy as np\n"
         "import ogld\n"
-        "from ogld.build.near_band import read_alt_counts\n"
+        "from ogld.build.genotypes import read_alt_counts\n"
         "p = Path('x')\n"
         "try:\n"
         "    read_alt_counts(p, p, p, np.zeros(1, dtype=np.int64))\n"

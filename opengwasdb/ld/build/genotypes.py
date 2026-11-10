@@ -10,13 +10,14 @@ pgenlib is imported here, inside the read path only (ADR 0002, decision 10).
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import TracebackType
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 
-from ogld.build.inputs import Fileset
+from ogld.build.inputs import Fileset, fileset, read_keep
 from ogld.format import InputError
 
 
@@ -71,3 +72,27 @@ class Genotypes:
         if len(wanted):
             self._reader.read_dosages_list(wanted.astype(np.uint32), out)
         return self._ordered(out)[back]
+
+
+def read_alt_counts(
+    pgen: Path, psam: Path, keep: Path, rows: npt.NDArray[np.int64], *, panel: str = ""
+) -> npt.NDArray[np.float64]:
+    """The ALT dosages of pgen `rows` (0-based) for the keep file's samples, in the psam's order:
+    [rows, samples]. The build's own readers, keep file and fileset, so there is one of each; a
+    missing call is refused naming the variant and the panel (`panel`, else the pgen's name).
+    """
+    import_pgenlib()
+    name = panel or pgen.name
+    kept = read_keep(keep, name)
+    found = fileset(pgen, kept, None, name)
+    if found.psam != psam:
+        raise InputError(f"panel {name}: {psam} is not the psam beside {pgen}")
+    with Genotypes(found) as genotypes:
+        dosages = genotypes.rows(np.asarray(rows, dtype=np.int64))
+    holed = np.flatnonzero((dosages < 0).any(axis=1))
+    if len(holed):
+        raise InputError(
+            f"panel {name}: missing call in pgen row {int(rows[holed[0]])} of {pgen.name}: "
+            "a build refuses incomplete genotypes rather than impute them"
+        )
+    return dosages

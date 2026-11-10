@@ -36,7 +36,7 @@ import numpy.typing as npt
 import zarr
 
 import ogld
-from ogld.build.near_band import read_alt_counts
+from ogld.build.genotypes import read_alt_counts
 from ogld.format import (
     ENCODING,
     FAR_BP,
@@ -319,7 +319,10 @@ def unit_columns(vs: VariantSet, k: int) -> npt.NDArray[np.float64]:
     the first `k` PCs, as a unit vector: a row product is r signed to A1 (spec §3)."""
     data = panel_data()
     panel = data.panel()
-    alt = read_alt_counts(panel.pgen, panel.psam, panel.keep, vs.panel_rows).astype(np.float64)
+    # Column-major, as the walking skeleton's reader returned its genotypes: BLAS rounds a matrix
+    # product of another layout differently, by 1e-15, and the committed store's diagnostic was
+    # computed from this one, so the same inputs still write the same bytes.
+    alt = np.asfortranarray(read_alt_counts(panel.pgen, panel.psam, panel.keep, vs.panel_rows))
     z = alt - alt.mean(axis=1, keepdims=True)
     if k:
         z = z - residual_fit(z, kept_pcs(k))

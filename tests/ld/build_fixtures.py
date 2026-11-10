@@ -11,20 +11,21 @@ from __future__ import annotations
 import functools
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import numpy as np
 import numpy.typing as npt
+import pytest
 import testdata
 
 import ogld
 from ogld.identity import orient
 from ogld.store import StoreReader
 
-HALF_STEP = 1 / 65534
+HALF_STEP: Final = 1 / 65534
 #: Two float64 computations of one r may differ by a few ulps before rounding.
-SLACK = 1e-9
-PANEL_ID = "test-panel-hgdp1kgp-EUR"
+SLACK: Final = 1e-9
+PANEL_ID: Final = "test-panel-hgdp1kgp-EUR"
 
 
 def inputs(fileset: Path, k: int = 0, **overrides: Any) -> ogld.BuildInputs:
@@ -42,6 +43,19 @@ def inputs(fileset: Path, k: int = 0, **overrides: Any) -> ogld.BuildInputs:
         "pc_source": "tests/data/test-panel/pcs.eigenvec" if k else None,
     }
     return ogld.BuildInputs(**{**fields, **overrides})
+
+
+_BUILDS: dict[int, tuple[ogld.Provenance, Path]] = {}
+
+
+def test_panel_build(k: int, factory: pytest.TempPathFactory) -> tuple[ogld.Provenance, Path]:
+    """The Test Panel built at k, once per test process and shared by every module that reads
+    one: tests/contract/test_build.py, test_builder.py, test_build_diagnostic.py and
+    test_walking_path.py. Each would otherwise build its own."""
+    if k not in _BUILDS:
+        out = factory.mktemp(f"test-panel-k{k}") / "store"
+        _BUILDS[k] = (ogld.build(inputs(testdata.panel().pgen, k), out), out)
+    return _BUILDS[k]
 
 
 @functools.cache

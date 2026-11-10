@@ -27,6 +27,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+import build_fixtures
 import numpy as np
 import numpy.typing as npt
 import pytest
@@ -46,7 +47,6 @@ from ogld import cli
 from ogld.format import far_code_floor, t_far
 
 PANEL_ID = "test-panel-hgdp1kgp-EUR"
-_BUILT: dict[int, tuple[ogld.Provenance, Path]] = {}
 _WITH_A_LOCAL_PC: list[ogld.Provenance] = []
 
 
@@ -67,13 +67,11 @@ def inputs(k: int = support.K, **overrides: Any) -> ogld.BuildInputs:
 
 
 def built(k: int, tmp_path_factory: pytest.TempPathFactory) -> tuple[ogld.Provenance, Path]:
-    """The Test Panel built at k, once per worker; the first call is where a test stops
-    until ogld#5 lands."""
-    if k not in _BUILT:
-        out = tmp_path_factory.mktemp(f"built-k{k}") / "store"
-        _BUILT[k] = (ogld.build(inputs(k), out), out)
-        check_panel_paths()
-    return _BUILT[k]
+    """The Test Panel built at k, once per worker and shared with ogld#5's own tests
+    (tests/build_fixtures.py); the first call is where a test stops until ogld#5 lands."""
+    found = build_fixtures.test_panel_build(k, tmp_path_factory)
+    check_panel_paths()
+    return found
 
 
 def near_band_matches(store: ogld.LDStore, k: int) -> int:
