@@ -337,17 +337,18 @@ def _resolve_column_hybrid(
     alike (continuous-trait phenotype-SD standardisation, issue #18): a study's
     SD rescaling applies whichever component an association routes to. The
     Analysis's imputation-score declaration reaches the reader, and ``gate``
-    judges each batch before it is matched.
+    judges each batch before it is matched. The study is read as its reader's
+    association batches where it offers them, else one association at a time
+    (`RouteTable.route_reader`).
     """
     reader = open_source(
         row.source,
         imputation_score_declaration=gate.rules.info.imputation_score_declaration,
     )
     tally = StreamTally()
-    routed = table.route_column(
-        reader.stream_associations(tally),
-        admit=gate.admit,
-        imputation_scores=gate.reads_imputation_scores,
+    # The reader's own association batches where it offers them (#318).
+    routed = table.route_reader(
+        reader, tally, admit=gate.admit, imputation_scores=gate.reads_imputation_scores
     )
     gate.streamed(tally)
     dense, overflow = routed.placed
