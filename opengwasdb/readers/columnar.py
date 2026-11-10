@@ -77,6 +77,11 @@ class Format(Protocol):
         """How the engine names a source in the log."""
         ...
 
+    @property
+    def crlf(self) -> bool:
+        """Whether a line ending in CR LF is read as plain text, as `csv` reads it."""
+        ...
+
     def block_bytes(self) -> int:
         """Decompressed bytes one block reads."""
         ...
@@ -100,13 +105,32 @@ class Format(Protocol):
 #: The bytes `csv` reads otherwise than as text between tabs and newlines.
 _SPECIAL = ((b'"', "a quote"), (b"\r", "a carriage return"), (b"\x00", "a NUL byte"))
 _NON_ASCII = re.compile(rb"[\x80-\xff]")
+_STRAY_CR = re.compile(rb"\r(?!\n)")
 
 
-def first_special(data: bytes, *, ascii_only: bool = True) -> tuple[int, str] | None:
+def _found(data: bytes, crlf: bool) -> list[tuple[int, str]]:
+    """Each kind of special byte ``data`` holds, at its first place."""
+    found = [
+        (at, name)
+        for byte, name in _SPECIAL
+        if not (crlf and byte == b"\r") and (at := data.find(byte)) >= 0
+    ]
+    stray = _STRAY_CR.search(data) if crlf else None
+    if stray is not None:
+        found.append((stray.start(), "a carriage return that ends no line"))
+    return found
+
+
+def first_special(
+    data: bytes, *, ascii_only: bool = True, crlf: bool = False
+) -> tuple[int, str] | None:
     """Where ``data`` first holds a byte `csv` reads otherwise than by splitting
     at tabs and newlines -- a quote, a carriage return, a NUL, or (with
-    ``ascii_only``) any byte outside ASCII -- and what it is; ``None`` for none."""
-    found = [(at, name) for byte, name in _SPECIAL if (at := data.find(byte)) >= 0]
+    ``ascii_only``) any byte outside ASCII -- and what it is; ``None`` for none.
+
+    With ``crlf`` a carriage return that ends a line with its line feed is plain,
+    as `csv` reads it, and only one that does not is special."""
+    found = _found(data, crlf)
     if ascii_only and not data.isascii():
         outside = _NON_ASCII.search(data)
         if outside is not None:
@@ -114,16 +138,18 @@ def first_special(data: bytes, *, ascii_only: bool = True) -> tuple[int, str] | 
     return min(found) if found else None
 
 
-def header_names(header: bytes) -> list[str] | str:
+def header_names(header: bytes, *, crlf: bool = False) -> list[str] | str:
     """A header line's names, as `csv` reads a line it splits only at tabs, or
-    why it cannot be read so."""
+    why it cannot be read so. With ``crlf`` the line may end in CR LF."""
     if not header.endswith(b"\n") or len(header) < 2:
         return "its header is not one whole line"
-    special = first_special(header, ascii_only=False)
+    special = first_special(header, ascii_only=False, crlf=crlf)
     if special is not None:
         return f"its header holds {special[1]}"
     try:
-        return header[:-1].decode("utf-8").split("\t")
+        return header.rstrip(b"\r\n").decode("utf-8").split("\t") if crlf else (
+            header[:-1].decode("utf-8").split("\t")
+        )
     except UnicodeDecodeError:
         return "its header is not UTF-8"
 
@@ -258,21 +284,26 @@ class Source:
             data = carry + block
             cut = data.rfind(b"\n") + 1
             lines, carry = data[:cut], data[cut:]
-            special = first_special(lines)
+            special = first_special(lines, crlf=self.fmt.crlf)
             if special is not None:
                 at, what = special
                 self.per_row_blocks += 1
                 yield from self.per_row(data, names, offset + at, f"it holds {what}")
                 return
-            yield from self.fmt.block_batches(lines, offset, self)
+            yield from self.fmt.block_batches(self._lf(lines), offset, self)
             offset += cut
-        special = first_special(carry)
+        special = first_special(carry, crlf=self.fmt.crlf)
         if special is not None:
             at, what = special
             self.per_row_blocks += 1
             yield from self.per_row(carry, names, offset + at, f"it holds {what}")
         elif carry:
-            yield from self.fmt.block_batches(carry + b"\n", offset, self)
+            yield from self.fmt.block_batches(self._lf(carry) + b"\n", offset, self)
+
+    def _lf(self, lines: bytes) -> bytes:
+        """``lines`` with each CR LF read as the line feed it ends in, where the
+        format reads one so."""
+        return lines.replace(b"\r\n", b"\n") if self.fmt.crlf else lines
 
 
 def block_batches(

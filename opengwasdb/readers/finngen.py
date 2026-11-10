@@ -362,6 +362,8 @@ class _Format:
     log: logging.Logger = log
     label: str = "FinnGen source"
 
+    crlf = False
+
     def block_bytes(self) -> int:
         return _BLOCK_BYTES
 

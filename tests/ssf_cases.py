@@ -285,8 +285,16 @@ def _cases() -> list[Case]:
         _plain))
     cases.append(_case(
         "quoted statistic", text(MAIN, [row(pos="100"), row(pos="200", beta='"0.3"')]), _plain))
-    cases.append(_case("crlf", text(MAIN, [row(pos="100"), row(pos="200")], newline="\r\n"),
-                       _plain))
+    crlf = text(MAIN, _BETA_ROWS[:24], newline="\r\n")
+    cases.append(_case("crlf", crlf, _plain))
+    cases.append(_case("crlf gzipped", crlf, _plain, gzipped=True))
+    cases.append(_case("crlf unterminated", crlf.rstrip("\r\n"), _plain))
+    cases.append(_case(
+        "stray carriage return",
+        text(MAIN, [row(pos="100"), row(pos="200", rsid="rs\r1"), row(pos="300")]), _plain))
+    cases.append(_case(
+        "crlf with a stray carriage return",
+        text(MAIN, [row(pos="100"), row(pos="200", rsid="rs\r1")], newline="\r\n"), _plain))
     cases.append(_case(
         "non-ascii", text(MAIN, [row(pos="100"), row(pos="200", rsid="rsé")]), _plain))
     cases.append(_case("nul byte", text(MAIN, [row(pos="100"), row(pos="200", rsid="r\0s")]),

@@ -16,6 +16,10 @@ source's own `other_allele`/`effect_allele` labelling (mirroring GWAS-VCF's
 REF/ALT, where ALT is likewise the effect allele) -- not reordered to
 canonical A1/A2, per the interface's contract.
 
+`stream_association_batches` (#319) is `stream_associations` as columns, a block
+of the file at a time and held to it bit for bit (see "Association batches"
+below); Pass 2 reads it.
+
 `stream_metrics` (issue #207) is the third projection: identity plus the
 effect allele's frequency, `beta` and `standard_error`, read by column index in
 one pass. It exists because the pre-build annotation stages both want a
@@ -610,8 +614,9 @@ def stream_full_row_metrics(path: str | Path) -> Iterator[TabularMetricsRow]:
 # indel it may be is one its layout declares the reference of (ADR 0079); its
 # statistics are then formed as `row_statistics` forms them, from the cells
 # already parsed. Any other row -- one the rules refuse, whose refusal the tally
-# must name, or a frequency whose absence it must explain -- is read by
-# `_tabular_row` from its own cells.
+# must name -- is read by `_tabular_row` from its own cells. A block with a quote,
+# a carriage return, a NUL or a byte outside ASCII, and a source with a declared
+# imputation score, go to the per-row reader whole.
 
 #: Decompressed bytes one block reads, 32 MiB (see `finngen._BLOCK_BYTES`).
 _BLOCK_BYTES = 1 << 25
@@ -650,7 +655,7 @@ class _Plan:
         """The plan, or why the columnar parse leaves the source to the per-row
         reader: a header `csv` reads otherwise than by splitting at tabs, one
         missing a column that names a variant, or an imputation score declared."""
-        names = columnar.header_names(header)
+        names = columnar.header_names(header, crlf=True)
         if isinstance(names, str):
             return names
         at = {name: index for index, name in enumerate(names)}
@@ -685,6 +690,9 @@ class _Format:
     declaration: DeclaredReference
     log: logging.Logger = log
     label: str = "GWAS-SSF source"
+
+    #: GWAS Catalog files end every line in CR LF.
+    crlf = True
 
     def block_bytes(self) -> int:
         return _BLOCK_BYTES

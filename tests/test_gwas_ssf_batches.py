@@ -321,7 +321,7 @@ def test_a_statistic_is_missing_where_the_per_row_reader_reads_it_missing() -> N
     [
         ("quoted", "it holds a quote"),
         ("non-ascii", "it holds a byte outside ASCII"),
-        ("crlf", "its header holds a carriage return"),
+        ("stray carriage return", "it holds a carriage return that ends no line"),
         ("no chromosome column", "its header names no chromosome column"),
     ],
 )
@@ -330,9 +330,8 @@ def test_a_source_read_row_by_row_says_where_from_and_why(
 ) -> None:
     (case,) = (c for c in CASES if c.name == name)
     path = case.write(tmp_path)
-    offset = case.body.find(b'"') if "quote" in reason else (
-        case.body.find("é".encode()) if "ASCII" in reason else 0
-    )
+    marker = {"quote": b'"', "ASCII": "\u00e9".encode(), "carriage": b"\r"}
+    offset = next((case.body.find(m) for key, m in marker.items() if key in reason), 0)
     with caplog.at_level("WARNING", logger=gwas_ssf.__name__):
         list(_ssf(path).stream_association_batches(StreamTally()))
     assert _fallbacks(caplog) == [
