@@ -28,9 +28,9 @@ genome-wide variants, of which the module scans the common ones, and records the
 
 Writes `<out>/<panel>.eigenvec` (`#IID PC1 ... PC20`, plink2's layout) and `<out>/<panel>.json`
 with every setting, count, eigenvalue, hash, the PC Check's `pc_check` record and the `commit` that
-made it (a checkout with uncommitted changes is refused). The PC Files hold one row per sample, so
-they are individual-level and never committed. `--scan-only` adds the scan to PC Files that
-already exist, naming its commit as `pc_check_commit`.
+made it (a checkout that is not that commit's code is refused, `test_panel.checkout`). The PC
+Files hold one row per sample, so they are individual-level and never committed. `--scan-only`
+adds the scan to PC Files that already exist, naming its commit as `pc_check_commit`.
 
     pixi run -e dev python scripts/make_pcs.py --work <scratch> --panel EUR=<keep> [...]
 """
@@ -40,12 +40,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from importlib import metadata
 from pathlib import Path
 
 import numpy as np
+from test_panel import checkout
 from test_panel.roots import META_NAME, portable, root, tool
 from test_panel.tools import (
     bim_positions,
@@ -414,13 +417,16 @@ def _parse(argv: list[str] | None) -> tuple[Settings, dict[str, Path], bool]:
     )
 
 
-def _commit(s: Settings) -> str:
+def _commit() -> str:
     """The checkout's commit, which the report names so a citation of it holds (build-inputs
-    §8). A checkout with changes is refused: the report would name code that did not run."""
-    log = s.work / "logs" / "git.log"
-    if run(["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"], log).strip():
-        raise SystemExit(f"{ROOT} has uncommitted changes: commit them, then make the PC Files")
-    return run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], log).strip()
+    §8). A checkout that is not that commit's code is refused (`test_panel.checkout`, the guard
+    the realdata tier uses too): the report would name code that did not run."""
+    found = checkout.problem(ROOT, metadata.version("ogld"))
+    if found:
+        raise SystemExit(f"{ROOT}: {found}")
+    return subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -428,7 +434,7 @@ def main(argv: list[str] | None = None) -> None:
     s, panels, scan_only = _parse(argv)
     for d in (s.work / "logs", s.out):
         d.mkdir(parents=True, exist_ok=True)
-    commit = _commit(s)
+    commit = _commit()
     uptime = run(["uptime"], s.work / "logs" / "uptime.log").strip()
     pgens = _convert_all(s)
     for panel, keep in panels.items():
