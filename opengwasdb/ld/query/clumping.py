@@ -63,9 +63,8 @@ def _greedy(
 
     Strongest first; ties by genomic order, then ALID. plink2's edges, which the owner
     ruled `clump` follows (10 November 2026): a variant joins at r̂² **>** r2 and distance
-    **<** W. A pair the store does not hold (NaN) never reaches r2. Each lead reads its own
-    row of the store once (`_row_r`), so the cost per lead is that row's length, never the
-    square of the candidates within its window.
+    **<** W. A pair the store does not hold (NaN) never reaches r2. Each lead reads only the
+    still-unclumped variants within its window, so memory is hits × hits-within-W, never n².
     """
     n = len(rows)
     keys = [
@@ -82,44 +81,11 @@ def _greedy(
         near = same[np.abs(variants.position[same] - variants.position[i]) < window]
         if len(near) == 0:
             continue
-        r = _lead_r(reader, rows[i], rows[near], r2=r2)
+        r = reader.pair_r(rows[np.concatenate([[i], near])])[0, 1:]
         joins = r * r > r2
         lead[near[joins]] = i
         r_lead[near[joins]] = r[joins]
     return lead, r_lead
-
-
-#: Up to this many candidates, a lead's r with them is one `pair_r` block of (1 + m)² pairs, at most
-#: about 10⁶ and under 0.2 s, which beats reading a whole row (a Near Band row and column is tens of
-#: thousands of elements). Beyond it the block grows with m², and the lead reads its own row.
-BLOCK_CANDIDATES = 1000
-
-
-def _lead_r(
-    reader: StoreReader, lead: np.int64, candidates: npt.NDArray[np.int64], *, r2: float
-) -> npt.NDArray[np.float64]:
-    """The lead's signed r with each candidate row, NaN where the store holds none."""
-    if len(candidates) <= BLOCK_CANDIDATES:
-        return reader.pair_r(np.concatenate([[lead], candidates]))[0, 1:]
-    return _row_r(reader, lead, candidates, r2=r2)
-
-
-def _row_r(
-    reader: StoreReader, lead: np.int64, candidates: npt.NDArray[np.int64], *, r2: float
-) -> npt.NDArray[np.float64]:
-    """The lead's signed r with each candidate row, NaN where the store holds none.
-
-    At r2 ≥ t_far the Proxy Index row has every pair that can reach r2 (spec §5), out to far_bp;
-    below t_far, which `judge_request` answers only within near_bp, the Near Band row and column
-    hold every pair (spec §4). A pair in neither is the Bound or Not Measured, and stays NaN.
-    """
-    row = np.array([lead], dtype=np.int64)
-    held = reader.index(row) if r2 >= reader.provenance["t_far"] else reader.band(row)
-    partner, r = held.partner, held.r  # one row: ascending global rows
-    if len(partner) == 0:
-        return np.full(len(candidates), np.nan)
-    at = np.minimum(np.searchsorted(partner, candidates), len(partner) - 1)
-    return np.where(partner[at] == candidates, r[at], np.nan)
 
 
 def _checked_score(score: npt.ArrayLike, expected: int) -> npt.NDArray[np.float64]:

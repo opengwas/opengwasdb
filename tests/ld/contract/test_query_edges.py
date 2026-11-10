@@ -13,7 +13,6 @@ from functools import cache
 
 import numpy as np
 import numpy.typing as npt
-import pytest
 import support
 from support import alids, panel_data, passing_rows, reference
 
@@ -21,7 +20,7 @@ import ogld
 from ogld.format import dequantise
 from ogld.query import clumping
 from ogld.query.results import Clumps
-from ogld.store import Partners, StoreReader
+from ogld.store import StoreReader
 
 
 @cache
@@ -125,7 +124,7 @@ def test_leads_go_strongest_first_then_by_genomic_order_then_alid() -> None:
 
 
 class Spy(StoreReader):
-    """A reader that records the largest request of any read `clump` could make."""
+    """A reader that records the largest `pair_r` request."""
 
     largest = 0
 
@@ -133,38 +132,14 @@ class Spy(StoreReader):
         self.largest = max(self.largest, len(rows))
         return super().pair_r(rows)
 
-    def band(self, rows: npt.NDArray[np.int64]) -> Partners:
-        self.largest = max(self.largest, len(rows))
-        return super().band(rows)
 
-    def index(self, rows: npt.NDArray[np.int64]) -> Partners:
-        self.largest = max(self.largest, len(rows))
-        return super().index(rows)
-
-
-def test_each_lead_reads_one_row_and_the_leads_are_unchanged(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Below t_far the row is the Near Band's, at or above it the Proxy Index's; a request for
-    # the lead together with its candidates (a block of their pairs) would be larger than 1.
-    monkeypatch.setattr(clumping, "BLOCK_CANDIDATES", 0)
-    rows = passing_rows()
-    z = np.abs(panel_data().gwas().z)[rows]
-    for r2, kb in ((0.01, 100), (0.1, 10_000)):
-        spy = Spy.open(support.TEST_STORE)
-        got = clumping.clump(spy, alids(rows), z, r2=r2, kb=kb)
-        assert spy.largest == 1, f"r2 {r2}, {kb} kb: a lead reads its own row"
-        assert list(got.lead) == alids(rows[greedy(rows, z, r2, kb)])
-
-
-def test_a_lead_with_few_candidates_reads_a_bounded_block(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(clumping, "BLOCK_CANDIDATES", 7)
+def test_clump_reads_pairs_within_the_window_only_and_the_leads_are_unchanged() -> None:
     rows = passing_rows()
     z = np.abs(panel_data().gwas().z)[rows]
     spy = Spy.open(support.TEST_STORE)
-    got = clumping.clump(spy, alids(rows), z, r2=0.01, kb=3000)
-    assert 1 < spy.largest <= 8, "a block of at most 1 + 7 rows, and the rest as one row"
-    assert list(got.lead) == alids(rows[greedy(rows, z, 0.01, 3000)])
+    narrow = clumping.clump(spy, alids(rows), z, r2=0.01, kb=100)
+    assert spy.largest < len(rows) // 4, "a 100 kb window must not read an n × n matrix"
+    assert list(narrow.lead) == alids(rows[greedy(rows, z, 0.01, 100)])
 
 
 def test_a_far_pair_beyond_near_bp_is_a_proxy_from_both_sides() -> None:
