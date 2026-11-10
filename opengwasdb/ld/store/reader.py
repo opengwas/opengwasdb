@@ -209,6 +209,76 @@ class StoreReader:
             out[np.ix_(members, members)] = block[np.ix_(back, back)]
         return out
 
+    def partners(
+        self,
+        rows: npt.NDArray[np.int64],
+        *,
+        r2: float,
+        window_bp: float,
+        among: npt.NDArray[np.int64] | None = None,
+    ) -> Partners:
+        """Each of `rows`' partners at r̂² ≥ r2 within `window_bp`, both sides, with their
+        Stored r and distance (spec §9, §10; ogld#14): the one read `proxies` and `clump` share.
+
+        A partner is another variant on the row's chromosome with distance d ≤ window_bp and
+        r̂² ≥ r2, judged on the Stored r in float64 (§3); never the row itself. Row i's
+        partners are `partner[indptr[i]:indptr[i + 1]]`, ascending, with `r` and `distance`
+        at the same offsets. Both edges are inclusive, as `proxies` asks; `clump` narrows them
+        to its own, r̂² > r2 and d < W, because the edges are each query's (§9), not the
+        reader's. `among`, ascending distinct global rows, keeps only the partners in it:
+        `clump` passes the hits still unclumped, so it resolves only the pairs it needs.
+
+        The reader, not its caller, chooses the stored part, so no query branches on t_far:
+
+        - r2 ≥ t_far: each row's Proxy Index row, both sides in one piece, and no Near Band
+          chunk. The index holds every pair within far_bp at r̂² ≥ t_far (§5), so it misses
+          none. A window over far_bp raises: past it is Not Measured, and a short answer
+          would read as a complete one.
+        - r2 < t_far: the Near Band alone, which holds every pair within near_bp (§4). A
+          window over near_bp raises: past it the store holds only the Bound, which cannot
+          decide r̂² ≥ r2 (§9, `threshold_below_t_far`). Without `among`, each row's Near
+          Band row up to the window and its column within it; with `among`, one element of
+          `near/<c>/r` per pair of a row and a member of `among` within the window
+          (`r_of_pairs`), and nothing else.
+
+        Memory: the kept entries, 32 bytes each, and one block of at most `_PAIRS_PER_STEP`
+        entries read before they are judged.
+        """
+        raise NotImplementedError("ogld#14")
+
+    def r_of_pairs(
+        self, first: npt.NDArray[np.int64], second: npt.NDArray[np.int64]
+    ) -> npt.NDArray[np.float64]:
+        """The Stored r of each pair (first[k], second[k]), as one array (spec §8, §10; ogld#14).
+
+        `first` and `second` broadcast against each other, so one row in `first` is one row
+        against many. A row with itself is 1. Every pair the store does not hold, the Bound,
+        Not Measured and a pair across chromosomes alike, is NaN. A pair within near_bp is one
+        element of the Near Band; a pair farther apart is looked up in the Proxy Index row of
+        its earlier variant. `partners` (below t_far, with `among`) and `pair_r` resolve
+        their pairs through it, so a pair is resolved in one place.
+
+        Memory: the result, and at most `_PAIRS_PER_STEP` pairs' addresses at a time with the
+        index rows of that step's earlier variants.
+        """
+        raise NotImplementedError("ogld#14")
+
+    def region_r(self, start: int, stop: int) -> npt.NDArray[np.float64]:
+        """The square matrix of Stored r among the contiguous rows [start, stop) of one
+        chromosome, in row order (spec §8, §10; ogld#14): the read `region` makes.
+
+        Each row's Near Band pairs inside the region are one contiguous slice of
+        `near/<c>/r`, from the row's first code to its last partner before `stop`, never a
+        gather pair by pair, and never the row's partners past the region. The region's pairs
+        beyond near_bp come from its rows' Proxy Index rows, each entry inside the region
+        scattered into the matrix. The diagonal is 1 and every unstored pair is NaN. A span
+        that leaves its chromosome or the Variant Set raises; start == stop is 0 × 0.
+
+        Memory: the n × n float64 result, and one block of rows at a time, at most
+        `_PAIRS_PER_STEP` codes, with their index rows.
+        """
+        raise NotImplementedError("ogld#14")
+
     def _block(self, c: _Chromosome, local: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
         """The Stored r among one chromosome's ascending, distinct local rows (NaN unstored)."""
         at = c.position[local]

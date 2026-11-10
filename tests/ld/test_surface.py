@@ -28,6 +28,7 @@ import pytest
 
 import ogld
 from ogld import cli, identity
+from ogld.store import StoreReader
 
 #: The committed Test Store (tests/contract/support.py), written by the walking skeleton.
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
@@ -138,6 +139,15 @@ def no_rows() -> np.ndarray:
 #: that builds one removes its entry, as it unmarks the contract tests it makes pass.
 UNBUILT: dict[str, tuple[Callable[[], object], str]] = {
     "build": (lambda: ogld.build(None, "x"), "ogld#5"),
+    "StoreReader.partners": (
+        lambda: StoreReader.open(TEST_STORE).partners(no_rows(), r2=0.8, window_bp=1000.0),
+        "ogld#14",
+    ),
+    "StoreReader.r_of_pairs": (
+        lambda: StoreReader.open(TEST_STORE).r_of_pairs(no_rows(), no_rows()),
+        "ogld#14",
+    ),
+    "StoreReader.region_r": (lambda: StoreReader.open(TEST_STORE).region_r(0, 1), "ogld#14"),
 }
 
 
