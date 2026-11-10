@@ -101,9 +101,12 @@ def test_one_chromosome_has_no_chance_rate(tmp_path: Path) -> None:
     provenance = ogld.build(made.inputs(pgen), tmp_path / "store")
     d = provenance["pc_diagnostic"]
     assert d is not None
+    # The owner's ruling (orchestrator note 1 on ogld#5): no cross-chromosome pairs is
+    # `n_pairs` 0 and null for all three rates, the sampling one too; null only then.
     assert d["pairs"]["n_pairs"] == 0
     assert d["rate_r2_ge_0_01_unadjusted"] is None
     assert d["rate_r2_ge_0_01_adjusted"] is None
+    assert d["rate_r2_ge_0_01_sampling"] is None
     assert "one chromosome" in d["pairs"]["source"]
     # At k = 0 nothing is adjusted, so nothing changes.
     assert set(d["near_100kb_change"].values()) == {0.0}

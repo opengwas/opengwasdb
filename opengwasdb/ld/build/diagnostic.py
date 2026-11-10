@@ -6,7 +6,8 @@ replacement by seed 405, then 200,000 pairs of them on different chromosomes, dr
 replacement by a second generator seeded 405. A build draws its pairs the same way from its
 Variant Set, and records the share at r² ≥ 0.01 before PC Adjustment, after it, and as sampling
 alone predicts, P(χ²₁ ≥ 0.01 × (n − k − 1)). A Variant Set on one chromosome has no
-cross-chromosome pair, so its rates are null, never a number nothing measured.
+cross-chromosome pair: it records `n_pairs` 0 and null for all three rates, and a rate is null
+only then (the owner's ruling, orchestrator note 1 on ogld#5).
 
 **Real LD.** The quantiles 0, 0.5, 0.9, 0.99 and 1 of the change in r (adjusted minus
 unadjusted, signed to A1) over every pair within 100 kb with both variants outside the
@@ -201,6 +202,6 @@ def pc_diagnostic(rates: ChanceRates, n: int, k: int, change: ChangeHistogram) -
         },
         "rate_r2_ge_0_01_unadjusted": rates.unadjusted,
         "rate_r2_ge_0_01_adjusted": rates.adjusted,
-        "rate_r2_ge_0_01_sampling": sampling_rate(n, k),
+        "rate_r2_ge_0_01_sampling": sampling_rate(n, k) if rates.pairs else None,
         "near_100kb_change": change.quantiles(),
     }

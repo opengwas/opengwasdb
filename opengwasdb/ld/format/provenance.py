@@ -131,14 +131,14 @@ class PcDiagnosticPairs(TypedDict):
 
 
 class PcDiagnostic(TypedDict):
-    """What PC Adjustment did to chance LD and to real LD (spec §7). The two measured rates are
-    None when the Variant Set has no cross-chromosome pair (one chromosome), and `pairs.n_pairs`
-    is then 0: a rate nothing measured is not a number."""
+    """What PC Adjustment did to chance LD and to real LD (spec §7). A store with no
+    cross-chromosome pairs records `pairs.n_pairs` 0 and None for all three rates, and a rate is
+    None only then (the owner's ruling, orchestrator note 1 on ogld#5)."""
 
     pairs: PcDiagnosticPairs
     rate_r2_ge_0_01_unadjusted: float | None
     rate_r2_ge_0_01_adjusted: float | None
-    rate_r2_ge_0_01_sampling: float
+    rate_r2_ge_0_01_sampling: float | None
     near_100kb_change: dict[str, float]
 
 
