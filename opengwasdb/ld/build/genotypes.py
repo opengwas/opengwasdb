@@ -11,6 +11,7 @@ pgenlib is imported here, inside the read path only (ADR 0002, decision 10).
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
 from types import TracebackType
 from typing import Any, TypeVar
@@ -34,6 +35,21 @@ def import_pgenlib() -> Any:
             "pip install 'ogld[build]'"
         ) from missing
     return pgenlib
+
+
+def one_blas_thread() -> AbstractContextManager[object]:
+    """BLAS held to one thread until the context closes, so a build's `threads` workers are its
+    whole thread count (review of ogld#5): OpenBLAS otherwise starts a thread per core in each
+    matrix product. threadpoolctl comes with the build extra, as pgenlib does."""
+    try:
+        from threadpoolctl import threadpool_limits
+    except ImportError as missing:
+        raise InputError(
+            "a build bounds its threads with threadpoolctl, which ogld installs with the build "
+            "extra: pip install 'ogld[build]'"
+        ) from missing
+    limits: AbstractContextManager[object] = threadpool_limits(limits=1, user_api="blas")
+    return limits
 
 
 class Genotypes:

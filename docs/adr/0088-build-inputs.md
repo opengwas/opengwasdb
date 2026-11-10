@@ -156,6 +156,13 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    an extra was possible, and was rejected: pgenlib is an extra only because conda-forge lacks it,
    and an install that cannot read a published store over HTTP would be a reader that half works.
 
+   _Addition, 10 November 2026 (orchestrator's fix brief for #5, at its review):_ **threadpoolctl
+   joins pgenlib in the `ogld[build]` extra.** A build's `threads` must bound it, and each LD
+   tile is a matrix product on which OpenBLAS starts a thread per core unless told otherwise:
+   the review measured 64 under `build.threads` = 16. threadpoolctl holds BLAS to one thread
+   for the build's duration, so the build's own workers are its whole thread count. Only a
+   build needs it, so it is an extra, refused by name when missing, as pgenlib is.
+
 ## Considered options
 
 - **ogld computes the PCs.** Rejected by the owner: a PCA inside the builder makes every build

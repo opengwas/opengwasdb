@@ -155,3 +155,32 @@ def test_the_proxy_index_layout_is_both_directions_sorted(
     )
     with pytest.raises(ValueError, match="not in"):
         tiles.Entries.of([lo[::-1]], [hi[::-1]], [codes])
+
+
+def test_blas_runs_one_thread_in_each_worker_while_tiling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Review of #5 (standards a4): `threads` must bound the build, but each tile's matrix product
+    # ran on as many BLAS threads as the caller's environment allowed (OpenBLAS here starts 64).
+    # Inside a build BLAS runs one thread, so `threads` workers are `threads` threads.
+    from threadpoolctl import threadpool_info, threadpool_limits
+
+    from ogld.build import tiles
+
+    seen: list[int] = []
+    real = tiles._tile
+
+    def spy(inputs: tiles.Inputs, first: int, last: int) -> tiles.Tile:
+        pools = [p["num_threads"] for p in threadpool_info() if p["user_api"] == "blas"]
+        seen.append(max(pools))
+        return real(inputs, first, last)
+
+    monkeypatch.setattr(tiles, "_tile", spy)
+    pgen = fixtures.write_fileset(
+        tmp_path / "chr22", np.flatnonzero(testdata.variants().chrom == "22")
+    )
+    with threadpool_limits(limits=8, user_api="blas"):
+        assert max(p["num_threads"] for p in threadpool_info() if p["user_api"] == "blas") == 8
+        provenance = ogld.build(fixtures.inputs(pgen), tmp_path / "store", threads=2)
+    assert seen, "the spy must see the build's tiles"
+    assert max(seen) == 1 <= provenance["build"]["threads"]

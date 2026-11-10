@@ -508,3 +508,23 @@ def test_a_psam_missing_one_sample_is_refused(tmp_path: Path) -> None:
     keep = keep_file(tmp_path, ["#IID", *(iid for iid in iids() if iid != gone)])
     with pytest.raises(ogld.InputError, match=r"short\.psam lists 770 samples.*short\.pgen.*771"):
         ogld.build(fx.inputs(pgen, keep=keep), tmp_path / "store")
+
+
+def test_a_build_without_threadpoolctl_refuses_naming_the_extra(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "sys.modules['threadpoolctl'] = None\n"
+        "sys.path.insert(0, 'tests')\n"
+        "import build_fixtures, testdata, ogld\n"
+        "try:\n"
+        f"    ogld.build(build_fixtures.inputs(testdata.panel().pgen), {str(tmp_path / 's')!r})\n"
+        "except ogld.InputError as refusal:\n"
+        "    print(refusal)\n"
+    )
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert "ogld[build]" in done.stdout
+    assert not (tmp_path / "s").exists()
