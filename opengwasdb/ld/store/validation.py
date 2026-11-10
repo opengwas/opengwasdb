@@ -156,6 +156,7 @@ class _Store:
         # A round trip through JSON, so a check on write judges exactly what is stored.
         self.provenance = json.loads(json.dumps(provenance)) if provenance is not None else None
         self._kept: dict[str, npt.NDArray[np.int64]] = {}
+        self._arrays: dict[str, zarr.Array[Any] | None] = {}
 
     def value(self, key: str) -> Any:
         """The provenance value at dotted `key`, or `_Unchecked`."""
@@ -173,8 +174,11 @@ class _Store:
         return int(value)
 
     def find(self, path: str) -> zarr.Array[Any] | None:
-        member = self.root.get(path)
-        return member if isinstance(member, zarr.Array) else None
+        """The array at `path`, or None; each is opened once, as opening reads its metadata."""
+        if path not in self._arrays:
+            member = self.root.get(path)
+            self._arrays[path] = member if isinstance(member, zarr.Array) else None
+        return self._arrays[path]
 
     def array(self, path: str) -> zarr.Array[Any]:
         found = self.find(path)

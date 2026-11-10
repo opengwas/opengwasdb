@@ -27,6 +27,7 @@ from store_copies import TEST_STORE, copy_store, resharded
 import ogld
 from ogld.format import InputError, quantise
 from ogld.store import StoreReader, location, reader
+from ogld.store.validation import validate_group
 
 #: Inner chunks of 512 elements, 4 to a shard: chr22's Near Band is 136 chunks in 34 shards.
 INNER, PER_SHARD = 512, 4
@@ -188,6 +189,11 @@ def test_a_lost_chunk_of_any_array_is_refused_never_read_as_data(
         ogld.open(copy).matrix(every)
 
 
+def fill_findings(store: Path) -> list[ogld.Finding]:
+    root = zarr.open_group(store, mode="r")
+    return validate_group(root, root.attrs["ld_store"], ["envelope.fill"])["envelope.fill"]
+
+
 def set_fill(store: Path, path: str, fill: object) -> None:
     meta = store / path / "zarr.json"
     doc = json.loads(meta.read_text())
@@ -209,7 +215,7 @@ def test_a_partner_whose_lost_chunk_would_read_as_row_0_is_refused(
         ValueError, match=r"index/22/partner has the fill value 0, which valid data"
     ):
         ogld.open(copy).matrix(names)
-    assert ogld.validate(copy)["envelope.fill"], "validate fails what open refuses"
+    assert fill_findings(copy), "validate fails what open refuses"
 
 
 @pytest.mark.parametrize(
@@ -223,7 +229,7 @@ def test_an_array_whose_fill_valid_data_can_hold_is_refused(
     set_fill(copy, path, fill)
     with pytest.raises(ValueError, match=rf"{path} has the fill value"):
         ogld.open(copy).region("22", 30_000_000, 1_000_000)
-    assert ogld.validate(copy)["envelope.fill"], "validate fails what open refuses"
+    assert fill_findings(copy), "validate fails what open refuses"
 
 
 def test_an_r_array_whose_lost_chunk_would_read_as_a_number_is_refused(tmp_path: Path) -> None:

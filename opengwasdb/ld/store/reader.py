@@ -70,6 +70,7 @@ class StoreReader:
     _stops: npt.NDArray[np.int64]
     _loaded: dict[str, _Chromosome]
     _cache: ChunkCache
+    _columns: dict[str, zarr.Array[Any]]
 
     def _attach(self, root: zarr.Group, provenance: Provenance) -> None:
         """Keep the provenance and the chromosome ranges of an opened, checked store."""
@@ -81,8 +82,9 @@ class StoreReader:
         self._stops = np.array([stop for _, stop in self._ranges.values()], dtype=np.int64)
         self._loaded = {}
         self._cache = ChunkCache()
-        for name in _VARIANT_COLUMNS:
-            _kept_array(root, f"variants/{name}")
+        # Each handle is opened once: opening one reads its metadata document, which over
+        # HTTP is a request.
+        self._columns = {name: _kept_array(root, f"variants/{name}") for name in _VARIANT_COLUMNS}
 
     @classmethod
     def open(cls, location: str | os.PathLike[str]) -> StoreReader:
@@ -163,7 +165,7 @@ class StoreReader:
             position[members] = c.position[rows[members] - c.start]
         names = np.array(self._names, dtype=np.str_)
         chrom = names[np.searchsorted(self._stops, rows, side="right")]
-        frequency = self._read(_array(self._root, "variants/a1_frequency"), rows)
+        frequency = self._read(self._columns["a1_frequency"], rows)
         return Variants(
             chrom=chrom,
             position=position,
@@ -290,8 +292,8 @@ class StoreReader:
         if name not in self._loaded:
             start, stop = self._ranges[name]
             position = _refused_if_lost(
-                _array(self._root, "variants/position"),
-                np.asarray(_array(self._root, "variants/position")[start:stop]),
+                self._columns["position"],
+                np.asarray(self._columns["position"][start:stop]),
             )
             near_r, index_r = (
                 _kept_array(self._root, f"{kind}/{name}/r") for kind in ("near", "index")
@@ -320,9 +322,7 @@ class StoreReader:
     def _strings(self, name: str, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.str_]:
         """The string column `name` at `rows`; an empty string is a lost chunk's, never data."""
         # zarr hands back numpy StringDType, which casts to a fixed width only via a list.
-        values = np.array(
-            self._read(_array(self._root, f"variants/{name}"), rows).tolist(), dtype=np.str_
-        )
+        values = np.array(self._read(self._columns[name], rows).tolist(), dtype=np.str_)
         return values
 
     def _read(self, array: zarr.Array[Any], coords: npt.NDArray[np.int64]) -> npt.NDArray[Any]:
