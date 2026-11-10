@@ -232,7 +232,7 @@ def test_the_release_eaf_table_is_never_read_whole(
 
     monkeypatch.setattr(side_tables, "EafExceptionTable", NoWholeTable)
 
-    result = validate_store(wide_store)
+    result = validate_store(wide_store, rules={"side_tables.eaf_exceptions"})
 
     assert result.ok, result.errors
     assert whole == []
@@ -263,12 +263,12 @@ def test_an_entry_missing_from_a_later_band_is_still_found(
     assert dropped >= WIDE_VARIANTS, "the dropped cell must sit past the first band"
     _drop_last_entry(root)
 
-    result = validate_store(wide_store)
+    result = validate_store(wide_store, rules={"side_tables.eaf_exceptions"})
 
-    assert (
+    assert result.errors == [
         f"data.zarr/eaf: 1 eaf exception cell(s) have no entry in the eaf exception "
-        f"table (first at flat position {dropped})" in result.errors
-    ), result.errors
+        f"table (first at flat position {dropped})"
+    ], result.errors
 
 
 def _table(path: Path, positions: np.ndarray, values: np.ndarray) -> zarr.Group:

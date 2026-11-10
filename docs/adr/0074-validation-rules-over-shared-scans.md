@@ -244,24 +244,48 @@ and accepts EAF in [0, 1].
   read untouched in one function (#56). `check-observed-view` is not a rule set
   here (#375).
 
-## Amendment: the subset check reads the exception table in windows (issue #387)
+## Amendment: the Dense EAF exception table is read once per pass (issue #387)
 
-The `subsets.indexed` rule read the primary release's EAF exception table whole to
-prove the index's copy was the primary's, remapped, and the value comparison then
-had the plane consult the table again for every band it decoded. The whole read is
-what set the rule's peak. That table is one Zarr v3 shard of hundreds of millions
-of entries -- 237,027,522 on OGS-00016, 1,136,991,041 on OGS-00011 -- so reading it
-whole is 2.7 GiB and 12.7 GiB of `int64` plus `float32`, and `_remap_side_table`
-held several copies of it at once.
+Two rules read that table, and both read it whole. The table is one Zarr v3 shard
+of hundreds of millions of entries -- 237,027,522 on OGS-00016, 1,136,991,041 on
+OGS-00011 -- so `[:]` is 2.7 GiB and 12.7 GiB of `int64` plus `float32`.
 
-The shard's inner chunks are 200,000 entries and Zarr reads them as byte ranges, so
-the rule now walks the table a window of 8,000,000 entries (about 96 MB, inside the
-1 GiB budget above) at a time, keeps the cells whose variant the subset holds, and
-compares that set with the index's own table as before. Those cells -- 21,157,534
-of them on OGS-00011's HapMap3 index -- are also what the value comparison decodes
-the primary plane with, keyed by the primary's flat positions, so the table is read
-once per pass rather than once per band: 1,128 bands on OGS-00016's HapMap3 subset,
-2,114 on OGS-00011's.
+- `subsets.indexed` read it whole to prove the index's copy was the primary's,
+  remapped, and `_remap_side_table` held several copies of it at once; the value
+  comparison then had the plane consult the table again for every band it decoded.
+- `side_tables.eaf_exceptions` held the flat position of every marked cell for the
+  whole association scan -- 1.14 billion of them, 8.5 GiB -- and its judge read
+  the whole table beside them, sorted them and set-differenced the two.
+
+**One read per pass, in windows.** The shard's inner chunks are 200,000 entries
+and Zarr reads them as byte ranges, so both rules now walk the table a window at
+a time instead of materialising it (about 96 MB for the subset rule, one page of
+262,144 entries for the scan, both inside the 1 GiB budget above):
+
+- `subsets.indexed` keeps the cells whose variant the subset holds -- 21,157,534
+  of them on OGS-00011's HapMap3 index -- compares that set with the index's own
+  table, and hands it to the value comparison keyed by the primary's flat
+  positions, so the table is not consulted again per band: 1,128 bands on
+  OGS-00016's HapMap3 subset, 2,114 on OGS-00011's.
+- `side_tables.eaf_exceptions` compares each block's marked cells against the
+  span of the table that block must occupy, as the scan reaches it. A block's
+  cells are one contiguous range of flat positions and the table is sorted by
+  them, so its entries are one contiguous span starting where the previous
+  block's ended: the whole table is read once, in order, and nothing but the
+  running counts, the first position of each kind and one page's tail is held.
+
+A table that is not sorted and unique, or whose values are not parallel with its
+positions, is the subset's finding rather than an exception that ends the rule
+before the entries after it are judged.
+
+**"Once per pass" means once per Indexed Variant Subset today**, because a
+release carries one: OGS-00011's Dense Component has `hm3` and nothing else. A
+release with two subsets would read the table once for each, which is the
+question #314's band restructure answers.
+
+The per-band consult the *association scan* makes when it decodes a band stays: a
+Dense band's exception cells are one contiguous span of the sorted table, so a
+band's lookup is one read of it already.
 
 A shared scan's folds are also judged after, not before, the 1.60 GiB the plain
 association scan holds for them is released -- chiefly the Top-Hit Index's tiers --
@@ -282,10 +306,12 @@ Measured base against head, in a process of its own and then on the two full run
 | OGS-00011, the association scan over the Dense grid | 14,271 s | 14,415 s |
 | OGS-00011, peak RSS as the validating process's own `VmHWM` | 68.22 GiB | 42.22 GiB |
 
-So the rule that set the peak no longer does: the highest point of a full
-`validate` is now the association scan's, and it is 3.9 GiB lower than the base
-run's was (46.12 GiB against 42.22 GiB) because its folds are judged after what
-they held is released. `validate`'s report was byte-identical across both runs.
+Those OGS-00011 runs measured the subset rule's read alone; the Dense scan's
+marked positions and its judge's whole read were still there, and were the
+42.22 GiB. OGS-00016's full runs, base against head side by side, are the figure
+the owner asked for: <ogs16 rows>
+
+`validate`'s report was byte-identical across every one of those runs.
 
 The paragraphs in "Time and memory" above that call the subset check's table read
 the peak of a full run, and that call the scan's held folds the reason its later
