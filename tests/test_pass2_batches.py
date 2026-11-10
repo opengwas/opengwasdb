@@ -192,10 +192,12 @@ def _manifest(directory: Path, capability: str) -> Path:
 
 
 def _build(
-    directory: Path, capability: str, monkeypatch: pytest.MonkeyPatch
+    directory: Path, capability: str
 ) -> tuple[dict[int, dict[str, np.ndarray]], Path]:
     directory.mkdir()
-    with captured_spills(monkeypatch) as spills:
+    # Each build's own context: a capture left in place would chain onto the
+    # next build's, which would then overwrite this one's arrays.
+    with pytest.MonkeyPatch.context() as patch, captured_spills(patch) as spills:
         build_dense_from_vcf_manifest(
             _manifest(directory, capability), directory / "store.opengwasdb",
             store_id="s", release_id="r",
@@ -212,8 +214,8 @@ def test_pass2_routes_a_readers_batches_as_it_routes_its_associations(
     monkeypatch.setitem(
         registry._READERS, _BATCHES, lambda path, scale: BatchedFake(ASSOCIATIONS, 4)
     )
-    rows, rows_record = _build(tmp_path / "rows", _ROWS, monkeypatch)
-    batches, batches_record = _build(tmp_path / "batches", _BATCHES, monkeypatch)
+    rows, rows_record = _build(tmp_path / "rows", _ROWS)
+    batches, batches_record = _build(tmp_path / "batches", _BATCHES)
 
     assert sorted(rows) == [0, 1] and all(len(spill["rows"]) for spill in rows.values())
     for column, spill in rows.items():

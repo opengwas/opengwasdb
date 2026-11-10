@@ -22,7 +22,8 @@ from typing import Any
 import finngen_cases
 import numpy as np
 import pytest
-from finngen_cases import CASES, GOLDEN, Case
+from finngen_cases import CASES, GOLDEN, Case, _row
+from liftover_fixtures import ALT_LIFTED_ROW, PRIMARY_LIFTED_ROW, write_alt_target_chain
 from pass2_fixtures import captured_spills
 from test_column_map_reader import _FINNGEN_FIXTURES
 from test_indel_alid import _finngen_text
@@ -408,66 +409,105 @@ class RowsOnly:
 
 
 _ROWS_ONLY = "opengwasdb.test-finngen-rows"
-#: The cases a build reads. Pass 1 refuses the rest before Pass 2 runs: a
-#: position no Routing Key holds, a source that is not UTF-8, and a header
-#: that names no chromosome, position or allele column; and a source with no
-#: rows is no Analysis.
-_REFUSED_BY_PASS_1 = (
-    "huge-position", "not-utf8", "empty", "header-only", "byte-order-mark", "no-chrom",
-    "no-pos", "no-ref", "no-alt",
-)
-#: Each built source, by name. One build each: two cases may name one site
-#: with two rsids, which a two-pass build refuses (#379).
-_BUILT: dict[str, Callable[[Path], Path]] = {
-    **{case.name: case.write for case in CASES if case.name not in _REFUSED_BY_PASS_1},
-    "generated": _generated,
+
+
+def _off_primary(directory: Path) -> Path:
+    """A source declared hg19 whose first row the alt-target chain lifts onto
+    an alt contig, which the Store does not hold (#376), and its second onto a
+    primary one."""
+    path = directory / "off-primary.tsv"
+    rows = [_row(c, str(p), r, a) for c, p, r, a, _alid in (ALT_LIFTED_ROW, PRIMARY_LIFTED_ROW)]
+    path.write_text("\n".join([finngen_cases.HEADER, *rows]) + "\n", encoding="utf-8")
+    return path
+
+
+#: What a Dense build reads, and the assembly its manifest declares: four
+#: sources that between them meet every reason a FinnGen row is dropped for,
+#: and one declared hg19 whose lift puts a row off the primary assembly. The
+#: other cases differ only in how a row is read, which the identity tests
+#: above hold at three block sizes.
+_BUILDS: dict[str, tuple[Callable[[Path], Path], str]] = {
+    "generated": (_generated, "hg38"),
+    "empty-cells": (_CASES["empty-cells"].write, "hg38"),
+    "alleles": (_CASES["alleles"].write, "hg38"),
+    "beta": (_CASES["beta"].write, "hg38"),
+    "off-primary": (_off_primary, "hg19"),
 }
 
 
-def _build(
-    directory: Path, capability: str, source: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[dict[int, dict[str, np.ndarray]], Path]:
+@dataclass(frozen=True)
+class Built:
+    """One Dense build: the spill Pass 2 wrote, and its Admission record."""
+
+    spills: dict[int, dict[str, np.ndarray]]
+    record: Path
+
+
+def _build(directory: Path, capability: str, source: Path, assembly: str, chain: Path) -> Built:
     directory.mkdir()
     manifest = directory / "manifest.tsv"
     manifest.write_text(
-        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method"
+        "trait_id\ttrait_name\tfile_path\tn\tstored_effect_scale\toriginal_sd_method"
         "\toriginal_sd\tsource_reader_capability\tsource_assembly\n"
-        f"finngen\t{source}\tFinnGen\t1000\tlog_or\tbinary_trait\t\t{capability}\thg38\n",
+        f"finngen\tFinnGen\t{source}\t1000\tlog_or\tbinary_trait\t\t{capability}\t{assembly}\n",
         encoding="utf-8",
     )
     store = directory / "store.opengwasdb"
-    with captured_spills(monkeypatch) as spills:
-        build_dense_from_vcf_manifest(manifest, store, store_id="s", release_id="r")
-    return spills, admission_record_for(store)
+    lift = {"chain_file": chain, "liftover_failure_threshold": 0.0} if assembly == "hg19" else {}
+    # Each build's own context: a capture left in place would chain onto the
+    # next build's, which would then overwrite this one's arrays.
+    with pytest.MonkeyPatch.context() as patch, captured_spills(patch) as spills:
+        build_dense_from_vcf_manifest(manifest, store, store_id="s", release_id="r", **lift)
+    return Built(spills, admission_record_for(store))
 
 
-@pytest.mark.parametrize("name", list(_BUILT))
+def _refuse_rows(self: FinnGenR13Reader, tally: object = None) -> None:
+    raise AssertionError("Pass 2 read a reader that offers batches one association at a time")
+
+
+@pytest.fixture(scope="module")
+def builds(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[Built, Built]]:
+    """Each source built twice: once read row by row, once as batches by a
+    reader that refuses to be read row by row."""
+    root = tmp_path_factory.mktemp("builds")
+    chain = write_alt_target_chain(root / "alt-target.chain")
+    built: dict[str, tuple[Built, Built]] = {}
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(
+            registry._READERS, _ROWS_ONLY,
+            lambda path, scale: RowsOnly(FinnGenR13Reader(path, scale)),
+        )
+        patch.setattr(finngen, "_BLOCK_BYTES", 1 << 12)
+        for name, (write, assembly) in _BUILDS.items():
+            (root / name).mkdir()
+            source = write(root / name)
+            rows = _build(root / name / "rows", _ROWS_ONLY, source, assembly, chain)
+            with pytest.MonkeyPatch.context() as refuse:
+                refuse.setattr(FinnGenR13Reader, "stream_associations", _refuse_rows)
+                batches = _build(
+                    root / name / "batches", finngen.FINNGEN_R13_CAPABILITY, source, assembly,
+                    chain,
+                )
+            built[name] = (rows, batches)
+    return built
+
+
+@pytest.mark.parametrize("name", list(_BUILDS))
 def test_pass2_reads_finngen_batches_as_it_reads_its_associations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+    builds: dict[str, tuple[Built, Built]], name: str
 ) -> None:
     """The spill and the Admission record are the same whether Pass 2 read the
     source's batches or its associations one at a time."""
-    monkeypatch.setitem(
-        registry._READERS, _ROWS_ONLY,
-        lambda path, scale: RowsOnly(FinnGenR13Reader(path, scale)),
-    )
-    monkeypatch.setattr(finngen, "_BLOCK_BYTES", 1 << 12)
-    (tmp_path / "source").mkdir()
-    source = _BUILT[name](tmp_path / "source")
-
-    rows, rows_record = _build(tmp_path / "rows", _ROWS_ONLY, source, monkeypatch)
-    batches, batches_record = _build(
-        tmp_path / "batches", finngen.FINNGEN_R13_CAPABILITY, source, monkeypatch
-    )
-
-    assert sorted(rows) == sorted(batches) == [0]
-    for array, values in rows[0].items():
-        assert values.dtype == batches[0][array].dtype, array
-        assert values.tobytes() == batches[0][array].tobytes(), array
-    record = (rows_record / "admission.json").read_bytes()
+    rows, batches = builds[name]
+    assert sorted(rows.spills) == sorted(batches.spills) == [0]
+    assert len(rows.spills[0]["rows"]) > 0
+    for array, values in rows.spills[0].items():
+        assert values.dtype == batches.spills[0][array].dtype, array
+        assert values.tobytes() == batches.spills[0][array].tobytes(), array
+    record = (rows.record / "admission.json").read_bytes()
     assert json.loads(record)["analyses"][0]["examined"] > 0
-    assert record == (batches_record / "admission.json").read_bytes()
-    assert _logs(rows_record) == _logs(batches_record)
+    assert record == (batches.record / "admission.json").read_bytes()
+    assert _logs(rows.record) == _logs(batches.record)
 
 
 def _logs(record: Path) -> dict[str, bytes]:
@@ -476,21 +516,14 @@ def _logs(record: Path) -> dict[str, bytes]:
     return {log.name: log.read_bytes() for log in dropped.iterdir()} if dropped.exists() else {}
 
 
-def test_the_built_sources_meet_every_drop_reason(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """What the builds above compare includes a row dropped for each reason a
-    FinnGen row can be."""
+def test_the_builds_meet_every_drop_reason(builds: dict[str, tuple[Built, Built]]) -> None:
+    """What the builds compare includes a row dropped for each reason a FinnGen
+    row can be, a lift onto an alt contig among them."""
     reasons: set[str] = set()
-    for name in ("alleles", "chromosomes-hash", "se", "beta", "generated"):
-        (tmp_path / name).mkdir()
-        _spills, record = _build(
-            tmp_path / name / "build", finngen.FINNGEN_R13_CAPABILITY,
-            _BUILT[name](tmp_path / name), monkeypatch,
-        )
-        dropped = json.loads((record / "admission.json").read_text())["analyses"][0]["dropped"]
-        reasons |= set(dropped)
+    for rows, _batches in builds.values():
+        analysis = json.loads((rows.record / "admission.json").read_text())["analyses"][0]
+        reasons |= set(analysis["dropped"])
     assert reasons >= {
         "allele_invalid", "chromosome_missing", "se_unusable", "effect_missing", "z_nonfinite",
-        "duplicate_collapsed", "duplicate_conflicting",
+        "duplicate_collapsed", "duplicate_conflicting", "lift_off_primary",
     }

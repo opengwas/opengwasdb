@@ -70,7 +70,7 @@ def _manifest(directory: Path, capability: str, names: list[str]) -> Path:
 
 
 def _build(
-    directory: Path, capability: str, single_pass: bool, monkeypatch: pytest.MonkeyPatch
+    directory: Path, capability: str, single_pass: bool
 ) -> tuple[dict[str, dict[int, dict[str, np.ndarray]]], Path, Path]:
     panel = directory / "panel.txt"
     panel.write_text("\n".join(SNVS) + "\n", encoding="utf-8")
@@ -80,7 +80,9 @@ def _build(
         extract_from_manifest(_manifest(directory, capability, ["alpha"]), reference)
         options["variant_reference"] = reference
     store = directory / f"{capability}-{single_pass}.opengwasdb"
-    with captured_spills(monkeypatch) as spills:
+    # Each build's own context: a capture left in place would chain onto the
+    # next build's, which would then overwrite this one's arrays.
+    with pytest.MonkeyPatch.context() as patch, captured_spills(patch) as spills:
         hybrid_build.build_hybrid_from_vcf_manifest(
             _manifest(directory, capability, ["alpha", "beta"]), store,
             store_id="s", release_id="r", on_rsid_conflict="drop", **options,
@@ -101,11 +103,11 @@ def test_hybrid_pass2_reads_batches_as_it_reads_associations(
     monkeypatch.setitem(
         registry._READERS, _ROWS_ONLY, lambda path, scale: RowsOnly(FinnGenR13Reader(path, scale))
     )
-    rows, rows_record, rows_store = _build(tmp_path, _ROWS_ONLY, single_pass, monkeypatch)
+    rows, rows_record, rows_store = _build(tmp_path, _ROWS_ONLY, single_pass)
     with monkeypatch.context() as patch:
         patch.setattr(FinnGenR13Reader, "stream_associations", _refuse_rows)
         batches, batches_record, batches_store = _build(
-            tmp_path, FINNGEN_R13_CAPABILITY, single_pass, monkeypatch
+            tmp_path, FINNGEN_R13_CAPABILITY, single_pass
         )
 
     assert rows["dense"] and rows["overflow"][0]["variant_index"].size
