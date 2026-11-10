@@ -946,22 +946,26 @@ def _pass(
 ) -> set[str]:
     """One chromosome's pass: each rule built and begun, fed every block, and ended. Returns
     the rules that ended; the others stopped, and are fed nothing more."""
-    rules: dict[str, _Scanned] = {}
+    begun = _begun(store, c, names, found)
+    stopped = _feed(store, c, {name: rule for name, rule in begun.items() if rule.parts}, found)
+    live = [(name, rule) for name, rule in begun.items() if name not in stopped]
+    return {name for name, rule in live if _record(found, name, _outcome(rule.end))}
+
+
+def _begun(
+    store: _Store, c: _Chromosome, names: list[str], found: dict[str, list[Finding]]
+) -> dict[str, _Scanned]:
+    """Each rule of `names` built for `c` and begun; a rule that cannot be is recorded."""
+    begun: dict[str, _Scanned] = {}
     for name in names:
         try:
-            rules[name] = _SCANNED[name](store, c)
+            rule = _SCANNED[name](store, c)
         except _Unchecked as unchecked:
             found[name].append(_finding(name, unchecked))
-    begun = {
-        name: rule for name, rule in rules.items() if _record(found, name, _outcome(rule.begin))
-    }
-    fed = {name: rule for name, rule in begun.items() if rule.parts}
-    stopped = _feed(store, c, fed, found)
-    return {
-        name
-        for name, rule in begun.items()
-        if name not in stopped and _record(found, name, _outcome(rule.end))
-    }
+            continue
+        if _record(found, name, _outcome(rule.begin)):
+            begun[name] = rule
+    return begun
 
 
 def _feed(
