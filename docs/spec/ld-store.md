@@ -439,11 +439,11 @@ LD survives").
 - **The pairs** are drawn as #405 drew them
   (`opengwas/opengwasdb@6b97e57:prototypes/locus_leads/panel_chance.py`): at most 3,000 Variant Set variants without replacement by
   `numpy.random.default_rng(405)`, then 200,000 pairs of those on different chromosomes, with
-  replacement, by a second generator seeded 405. **A store with no cross-chromosome pairs**
-  (a Variant Set on one chromosome: a test slice, never a panel's LD Store) records
-  `pairs.n_pairs` = 0, and null for the three rates; `source` says why. A rate is null only when
-  `n_pairs` is 0, so a genome-wide build records real rates on #405's pairs (the owner's ruling,
-  orchestrator note 1 on ogld#5).
+  replacement, by a second generator seeded 405. **A Variant Set on one chromosome has no such
+  pair** (a test slice, never a panel's LD Store): `n_pairs` is 0, `source` says so, and the two
+  measured rates are null, never a number nothing measured; each is null only when `n_pairs` is
+  0. `rate_r2_ge_0_01_sampling` is a formula of n and k and always a number (the owner's
+  ruling, orchestrator note 2 on ogld#5).
 - **The change in r** is adjusted minus unadjusted r, signed to A1, computed in float64. A whole
   panel has about 10⁹ such pairs, so a build counts them into bins 2⁻²⁰ (about 10⁻⁶) wide: the
   quantiles 0 and 1 are the exact extremes, and each other quantile q is the order statistic at
