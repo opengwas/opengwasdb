@@ -23,7 +23,6 @@ import pytest
 
 import ogld
 from ogld import cli, identity, store
-from ogld.query import clumping, proxies
 
 #: The committed Test Store (tests/contract/support.py), written by the walking skeleton.
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
@@ -182,26 +181,10 @@ def no_rows() -> np.ndarray:
     return np.array([0], dtype=np.int64)
 
 
-READER = store.StoreReader.__new__(store.StoreReader)
-NO_CLUMPS = ogld.Clumps(
-    alid=np.array([], dtype=str),
-    chrom=np.array([], dtype=str),
-    position=np.array([], dtype=np.int64),
-    score=np.array([], dtype=np.float64),
-    lead=np.array([], dtype=str),
-    r=np.array([], dtype=np.float64),
-    absent=(),
-    r2=0.1,
-    window_bp=1000.0,
-)
-
 #: Every body that raises NotImplementedError, with the ticket that builds it. A ticket
 #: that builds one removes its entry, as it unmarks the contract tests it makes pass.
 UNBUILT: dict[str, tuple[Callable[[], object], str]] = {
     "build": (lambda: ogld.build(None, "x"), "ogld#5"),
-    "proxies.proxies": (lambda: proxies.proxies(READER, [], r2=0.8, kb=1), "ogld#6"),
-    "clumping.clump": (lambda: clumping.clump(READER, [], [], r2=0.1, kb=1), "ogld#6"),
-    "Clumps.leads": (NO_CLUMPS.leads, "ogld#6"),
 }
 
 

@@ -542,10 +542,12 @@ r̂² (§3).
 | `matrix(alids, fill=None)` | one signed-r matrix over the present ALIDs, in request order (§8) | every pair of the list | never for distance: a pair more than `far_bp` apart is a NaN that is Not Measured |
 | `region(chrom, centre, radius, fill=None)` | one signed-r matrix over every variant with \|p − centre\| ≤ radius, in genomic order (§8) | every pair of the region | the width 2 × radius exceeds `far_bp`: radius > 5 Mb on a 10 Mb store |
 | `proxies(alids, r2=0.8, kb=10000)` | per present ALID, every other variant within W with r̂² ≥ r2: query, proxy, signed r, r̂², distance | d ≤ W | the table below |
-| `clump(alids, score, r2, kb)` | per present ALID, the lead of the clump it joined and its signed r with that lead | d ≤ W | the table below |
+| `clump(alids, score, r2, kb)` | per present ALID, the lead of the clump it joined and its signed r with that lead | d < W (clump only: plink2's edge) | the table below |
 
-`proxies` and `clump` consider the pairs with d ≤ W, where W = kb × 1,000 bp. A pair reaches the
-threshold when r̂² ≥ r2 (§3). The refusals are ADR 0001's, compared with the distances the store
+`proxies` considers the pairs with d ≤ W, where W = kb × 1,000 bp, and a pair reaches the threshold
+when r̂² ≥ r2 (§3). `clump` is the one exception, following `plink2 --clump` (owner, 10 November
+2026): it considers the pairs with d < W, and a pair reaches the threshold when r̂² > r2. The
+refusals below are the same for both. The refusals are ADR 0001's, compared with the distances the store
 recorded (§7) and its recorded t_far:
 
 | request | answer |
@@ -574,10 +576,14 @@ recorded (§7) and its recorded t_far:
   centre − radius ≤ position ≤ centre + radius, in the Variant Set's order.
 - **`clump`.** Greedy, strongest score first. The score is |z| or −log10 p, never raw p, which
   underflows to 0 for |z| over 38. Ties go to genomic order, then ALID. Each variant joins the
-  strongest lead it reaches. Whether `plink2 --clump` compares r² with ≥ or >, and the window with
-  ≤ or <, is ogld#6's to check. #6 records any difference beside its equality test.
+  strongest lead it reaches. plink2 compares r² with `>` and the window with `<` (checked on plink2 v2.0.0-a.6.9LM and
+  recorded beside the equality test, `tests/contract/test_query.py`), so `clump` joins a variant to a lead at r̂² > r2
+  and d < W, and `proxies` keeps ≥ and ≤. A stored r̂² equals r2 exactly only at 0 or 1.
 
-`ogld.format.judge_request` and `ogld.format.judge_region` implement these tables.
+`ogld.format.judge_request` and `ogld.format.judge_region` implement the table's refusals, all but
+one: a `clump` score that is not one finite, non-negative number per ALID is refused as `invalid`
+by `ogld.query.clumping._checked_score`, because it depends on the score, which the judges never
+see. `judge_request` runs first.
 `proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html` drives them and the answer
 table interactively, with walkthroughs of the edge cases: exactly 3 Mb, exactly 10 Mb, r²
 equal to t_far, rounding onto a threshold, AMR's t_far, a pair at exactly t_far, and a window over
