@@ -38,9 +38,9 @@ from ogld.format.encoding import (
     RESERVED_CODE,
     T_FAR_Q,
     far_code_floor,
-    near_row_lengths,
     t_far,
 )
+from ogld.format.geometry import near_row_lengths
 from ogld.format.provenance import ENCODING, FORMAT_VERSION, VALIDATION_RULES
 from ogld.identity import IdentityError, alid_locus, orient, variant_order_key
 from ogld.store.layout import never_data, shown_fill, spans_at
