@@ -23,6 +23,7 @@ import pytest
 import zarr
 from contract import support
 from contract.support import RangeHandler
+from numpy.dtypes import StringDType
 from store_copies import TEST_STORE, copy_store, resharded
 
 import ogld
@@ -108,7 +109,7 @@ def test_index_and_band_rows_read_the_same_from_any_layout(
 def retained(cache: location.ChunkCache) -> int:
     """The bytes the cache's kept chunks actually hold alive: each one's owning buffer, once."""
     owners = {}
-    for chunk in cache._kept.values():
+    for chunk, _ in cache._kept.values():
         owner = chunk if chunk.base is None else chunk.base
         owners[id(owner)] = owner.nbytes
     return sum(owners.values())
@@ -140,23 +141,42 @@ def measured(chunk: np.ndarray) -> int:
     return taken
 
 
-def test_string_chunks_count_what_they_hold(tmp_path: Path) -> None:
-    # ALIDs of 64 characters: numpy's variable-width strings keep each in an arena that
-    # nbytes does not count (16 bytes an element), so a budget counted by nbytes is no bound.
-    names = np.array([f"22:{i}:{'A' * 52}:C"[:64].ljust(64, "G") for i in range(20 * 512)])
-    alid = zarr.open_group(tmp_path / "g", mode="w").create_array(
-        "alid", shape=names.shape, dtype=str, chunks=(512,), fill_value=""
+def text(i: int, length: int) -> str:
+    """A string of `length` characters, ALID-like when long enough."""
+    return (
+        f"{i:0{length}d}"[-length:]
+        if length < 12
+        else (f"22:{i}:" + "A" * length)[: length - 2] + ":C"
     )
+
+
+#: Chunks of 512 strings: all 8 characters, held inside the array; all 200, each in the arena;
+#: and every tenth 200 among 8s. Each budget keeps a few chunks.
+STRINGS = {
+    "short 8": (lambda i: text(i, 8), 40_000),
+    "long 200": (lambda i: text(i, 200), 450_000),
+    "mixed": (lambda i: text(i, 200 if i % 10 == 0 else 8), 100_000),
+}
+
+
+@pytest.mark.parametrize("kind", list(STRINGS))
+def test_string_chunks_count_an_upper_bound_on_what_they_hold(tmp_path: Path, kind: str) -> None:
+    # numpy's variable-width strings keep each string over 15 bytes in an arena that nbytes
+    # (16 bytes an element) leaves out, so a budget counted by nbytes would be no bound.
+    make, budget = STRINGS[kind]
+    names = np.array([make(i) for i in range(20 * 512)], dtype=StringDType())
+    group = zarr.open_group(tmp_path / "g", mode="w")
+    alid = group.create_array("alid", shape=names.shape, dtype=str, chunks=(512,), fill_value="")
     alid[:] = names
-    budget = 400_000
     cache = location.ChunkCache(budget)
     np.testing.assert_array_equal(cache.take(alid, np.arange(len(names))), names)
     kept = list(cache._kept.values())
     assert len(kept) >= 2, "the cache must keep chunks for this to mean anything"
-    held = sum(measured(chunk) for chunk in kept)
-    assert held <= budget
-    # What tracemalloc sees beyond the count is each array object itself, 96 bytes here.
-    assert 0 <= held - cache._bytes <= 128 * len(kept)
+    assert all(chunk.dtype.kind == "T" for chunk, _ in kept), "kept as variable-width strings"
+    for chunk, counted in kept:
+        assert measured(chunk) <= counted, "a chunk counts at least what it holds"
+    assert sum(measured(chunk) for chunk, _ in kept) <= cache._bytes <= budget
+    assert cache._bytes == sum(counted for _, counted in kept)
 
 
 def test_threads_missing_one_chunk_store_it_once(small_chunks: Path) -> None:
@@ -183,7 +203,8 @@ def test_threads_missing_one_chunk_store_it_once(small_chunks: Path) -> None:
         worker.join()
     assert wrong == []
     assert len(cache._kept) == 24, "the cache must be full, having evicted 30 of 54 chunks"
-    assert cache._bytes == sum(chunk.nbytes for chunk in cache._kept.values()) == retained(cache)
+    counted = [size for _, size in cache._kept.values()]
+    assert cache._bytes == sum(counted) == retained(cache)
     assert cache._bytes <= budget
 
 

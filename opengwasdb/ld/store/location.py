@@ -15,6 +15,7 @@ is read is decided here, in one place, which ogld#8 tunes when it times the read
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 from collections import OrderedDict
@@ -53,17 +54,16 @@ class ChunkCache:
     the least recently used dropped first.
 
     Each kept chunk owns its memory, copied out of the read that fetched it (a view would keep
-    that whole read alive), and is counted by its `nbytes`. That is the memory it holds because
-    a string chunk is kept as fixed-width text: numpy's variable-width strings, which zarr
-    returns, keep each string over 15 bytes in an arena `nbytes` leaves out. One lock guards
-    every lookup, insertion and eviction, so threads sharing a reader keep one copy of a chunk
-    they both missed and the count stays the bytes held. Reads themselves run outside it.
+    that whole read alive), and counts an upper bound on what is held (`_counted`), so the
+    budget is a bound on the memory kept. One lock guards every lookup, insertion and eviction,
+    so threads sharing a reader keep one copy of a chunk they both missed, and the count stays
+    the sum of what is kept. Reads, and counting, run outside it.
     """
 
     def __init__(self, budget: int | None = None) -> None:
         self._budget = CACHE_BYTES if budget is None else budget
         self._bytes = 0
-        self._kept: OrderedDict[tuple[str, int], npt.NDArray[Any]] = OrderedDict()
+        self._kept: OrderedDict[tuple[str, int], tuple[npt.NDArray[Any], int]] = OrderedDict()
         self._lock = threading.Lock()
 
     def take(self, array: zarr.Array[Any], coords: npt.ArrayLike) -> npt.NDArray[Any]:
@@ -101,7 +101,7 @@ class ChunkCache:
             for k in wanted:
                 kept = self._kept.get((path, k))
                 if kept is not None:
-                    found[k] = kept
+                    found[k] = kept[0]
                     self._kept.move_to_end((path, k))
         return found
 
@@ -110,29 +110,45 @@ class ChunkCache:
     ) -> dict[int, npt.NDArray[Any]]:
         """Chunks first … stop − 1, read in one request, each copied out and kept."""
         data = np.asarray(array[first * size : stop * size])
-        read = {
-            k: _owned(data[(k - first) * size : (k - first + 1) * size]) for k in range(first, stop)
-        }
+        copies = [
+            data[(k - first) * size : (k - first + 1) * size].copy() for k in range(first, stop)
+        ]
+        read = {first + i: (chunk, _counted(chunk)) for i, chunk in enumerate(copies)}
         with self._lock:
-            return {k: self._keep((array.path, k), chunk) for k, chunk in read.items()}
+            return {k: self._keep((array.path, k), *entry) for k, entry in read.items()}
 
-    def _keep(self, key: tuple[str, int], chunk: npt.NDArray[Any]) -> npt.NDArray[Any]:
+    def _keep(
+        self, key: tuple[str, int], chunk: npt.NDArray[Any], counted: int
+    ) -> npt.NDArray[Any]:
         """Keep `chunk`, or the copy another thread kept first; the caller holds the lock."""
         kept = self._kept.get(key)
         if kept is not None:
             self._kept.move_to_end(key)
-            return kept
-        self._kept[key] = chunk
-        self._bytes += chunk.nbytes
+            return kept[0]
+        self._kept[key] = (chunk, counted)
+        self._bytes += counted
         while self._bytes > self._budget and self._kept:
-            _, dropped = self._kept.popitem(last=False)
-            self._bytes -= dropped.nbytes
+            _, (_, dropped) = self._kept.popitem(last=False)
+            self._bytes -= dropped
         return chunk
 
 
-def _owned(chunk: npt.NDArray[Any]) -> npt.NDArray[Any]:
-    """A copy of `chunk` that owns all its memory in one buffer, so `nbytes` is what it holds:
-    numeric chunks as they are, string chunks as fixed-width text."""
-    if chunk.dtype.kind == "T":
-        return np.array(chunk.tolist(), dtype=np.str_)
-    return chunk.copy()
+#: numpy's variable-width strings (StringDType, what zarr returns for a string array) keep a
+#: string of at most 15 UTF-8 bytes inside the array, and a longer one in an arena beside it:
+#: its bytes after a size header of at most 8, in an arena that grows by a quarter at a time,
+#: plus the array's own allocator, measured at 328 bytes. `nbytes` counts none of the arena.
+_INLINE: Final = 15
+_HEADER: Final = 8
+_GROWTH: Final = 1.25
+_ARENA_FIXED: Final = 512
+
+
+def _counted(chunk: npt.NDArray[Any]) -> int:
+    """An upper bound on the bytes `chunk` holds: a numeric chunk's buffer, and for a string
+    chunk its buffer and arena. Measured against tracemalloc on 72 chunks of 1–16,384 strings
+    of 1–20,000 characters, ASCII and not, the count was never below what a chunk held."""
+    if chunk.dtype.kind != "T":
+        return int(chunk.nbytes)
+    long = [n for n in (len(s.encode("utf-8")) for s in chunk.tolist()) if n > _INLINE]
+    arena = math.ceil(_GROWTH * (sum(long) + _HEADER * len(long))) + _ARENA_FIXED
+    return int(chunk.nbytes) + arena

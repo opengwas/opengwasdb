@@ -649,12 +649,17 @@ kept. Every other read the reader makes goes through its cache of decoded inner 
 (`ogld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request
 needs, whole, which is what Zarr fetches and decodes in any case, each run of neighbouring chunks
 in one read. It keeps them up to 256 MiB per opened store, dropping the least recently used first.
-Each kept chunk owns its memory, copied out of the read that fetched it, and counts its `nbytes`.
-That is the memory it holds because a string chunk is kept as fixed-width text: the variable-width
-strings zarr returns keep each string over 15 bytes in an arena `nbytes` leaves out, about 2.2
-times the count for 16-character ALIDs. One lock guards the cache, so threads sharing a reader
-keep one copy of a chunk. Validation's rules are single bounded passes and read through Zarr directly (§12). So a
-query that reads a few pairs at a time fetches each chunk once: clumping the Test
+Each kept chunk owns its memory, copied out of the read that fetched it, and counts an upper bound
+on what is held, so the budget bounds the memory kept. A numeric chunk counts its buffer. A string
+chunk stays numpy's variable-width strings, as zarr returns them, which keep each string over 15
+UTF-8 bytes in an arena that `nbytes` leaves out (about 2.2 times `nbytes` for 16-character
+ALIDs). So it counts `nbytes` + 1.25 × Σ(bytes + 8) over those strings + 512: the arena grows by a
+quarter at a time, a string's size header is at most 8 bytes, and the allocator takes 328. Measured
+by tracemalloc on 72 chunks of 1–16,384 strings of 1–20,000 characters, the count was never below
+what a chunk held. Fixed-width text would be counted exactly, but one 2,000-character indel ALID
+would make its 16,384-row chunk 131 MB. One lock guards the cache, so threads sharing a reader keep
+one copy of a chunk. Validation's rules are single bounded passes and read through Zarr directly
+(§12). So a query that reads a few pairs at a time fetches each chunk once: clumping the Test
 Store's 1,056 variants, one read per lead, took 3.6 s reading through Zarr call by call and 0.7 s
 with the cache, against 0.6 s for the walking skeleton's arrays held whole. A matrix resolves its
 pairs about 4 million at a time, which bounds its working memory beside the matrix itself.
