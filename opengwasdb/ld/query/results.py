@@ -16,6 +16,13 @@ import numpy.typing as npt
 from ogld.format import answer_kinds
 from ogld.store.tables import Variants, check_columns, columns_of
 
+_RANK = {"X": 23, "Y": 24, "MT": 25}
+
+
+def genomic_key(chrom: str, position: int, alid: str) -> tuple[int, int, str]:
+    """The engine's variant order as a sort key: chromosome, position, ALID (spec §2)."""
+    return (int(chrom) if chrom.isdigit() else _RANK[chrom], int(position), str(alid))
+
 
 @dataclass(frozen=True)
 class LDMatrix:
@@ -123,4 +130,12 @@ class Clumps:
 
     def leads(self) -> npt.NDArray[np.str_]:
         """The lead ALIDs, strongest first, ties by genomic order then ALID (ogld#6)."""
-        raise NotImplementedError("ogld#6")
+
+        def key(i: int) -> tuple[float, int, int, str]:
+            rank, position, alid = genomic_key(
+                str(self.chrom[i]), int(self.position[i]), str(self.alid[i])
+            )
+            return -float(self.score[i]), rank, position, alid
+
+        order = sorted(np.flatnonzero(self.lead == self.alid).tolist(), key=key)
+        return self.alid[np.array(order, dtype=np.int64)]

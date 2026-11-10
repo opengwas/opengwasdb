@@ -570,8 +570,12 @@ recorded (§7) and its recorded t_far:
   within `near_bp`, they are its Near Band row and column (§10).
 - **`clump`.** Greedy, strongest score first. The score is |z| or −log10 p, never raw p, which
   underflows to 0 for |z| over 38. Ties go to genomic order, then ALID. Each variant joins the
-  strongest lead it reaches. Whether `plink2 --clump` compares r² with ≥ or >, and the window with
-  ≤ or <, is ogld#6's to check. #6 records any difference beside its equality test.
+  strongest lead it reaches. Checked on plink2 v2.0.0-a.6.9LM (ogld#6): `--clump` compares r² with
+  **>** (a pair whose r² is exactly the `--clump-r2` does not join; 0.25 against 0.25 did not, against
+  0.2499999999 did) and the window with **<** (a partner exactly `--clump-kb` × 1,000 bp away does not
+  join; one bp nearer does). A store's `clump` follows this section's ≥ and ≤. The two differ only
+  for a pair whose r̂² is exactly r2 or whose distance is exactly W, and the realdata comparison
+  lists any lead that differs.
 
 `ogld.format.judge_request` and `ogld.format.judge_region` implement these tables.
 `proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html` drives them and the answer
