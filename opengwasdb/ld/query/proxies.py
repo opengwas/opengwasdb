@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from ogld.format import judge_request
+from ogld.query.requests import window_of
 from ogld.query.results import Proxies
 from ogld.store import StoreReader
 
@@ -19,11 +19,7 @@ def proxies(reader: StoreReader, alids: Sequence[str], *, r2: float, kb: float) 
     Near Band on both sides (`StoreReader.band`).
     """
     p = reader.provenance
-    decision = judge_request(
-        r2=r2, kb=kb, t_far=p["t_far"], near_bp=p["near_bp"], far_bp=p["far_bp"]
-    )
-    decision.raise_if_refused()
-    window = decision.window_bp
+    window = window_of(reader, r2=r2, kb=kb)
 
     found = reader.rows_of(alids)
     absent = tuple(alid for alid, row in zip(alids, found, strict=True) if row < 0)
