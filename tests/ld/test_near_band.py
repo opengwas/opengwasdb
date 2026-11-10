@@ -15,6 +15,7 @@ import testdata
 
 from ogld.build.near_band import NearBand, read_alt_counts, unadjusted_near_band
 from ogld.format import NEAR_BP, InputError, dequantise
+from ogld.format.geometry import near_address
 from ogld.identity import orient
 
 HALF_STEP = 1 / 65534
@@ -68,7 +69,7 @@ def test_the_k0_near_band_matches_reference_r_signed_to_a1(chrom: str) -> None:
         a, b = local[int(i)], local[int(j)]
         if v.pos[j] - v.pos[i] > NEAR_BP:
             continue
-        got = stored[band.indptr[a] + (b - a - 1)]
+        got = stored[near_address(band.indptr, a, b)]
         want = r * sign[a] * sign[b]
         assert abs(got - want) <= HALF_STEP + SLACK, f"rows {i} and {j}"
         seen += 1

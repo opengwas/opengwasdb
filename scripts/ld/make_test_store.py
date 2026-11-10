@@ -50,9 +50,16 @@ from ogld.format import (
     quantise,
     t_far,
 )
+from ogld.format.geometry import (
+    chromosome_ranges,
+    global_rows,
+    indptr_of,
+    local_rows,
+    near_row_lengths,
+    within,
+)
 from ogld.identity import Orientation, orient, resolve_reversed_indels, variant_order_key
 from ogld.store import StoreWriter, Variants
-from ogld.store.writer import chromosome_ranges
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = ROOT / "tests" / "data" / "test-panel" / "store"
@@ -138,8 +145,8 @@ def code_matrices(
         size = stop - start
         dense = np.full((size, size), RESERVED_CODE, dtype=np.int16)
         held = np.zeros((size, size), dtype=np.bool_)
-        dense[lo[mine] - start, hi[mine] - start] = codes[mine]
-        held[lo[mine] - start, hi[mine] - start] = True
+        dense[local_rows(lo[mine], start), local_rows(hi[mine], start)] = codes[mine]
+        held[local_rows(lo[mine], start), local_rows(hi[mine], start)] = True
         out[chrom] = (dense, held)
     return out
 
@@ -149,7 +156,7 @@ def require_every_pair(
 ) -> None:
     """Every pair within far_bp must have a reference r, or a Bound would hide a missing one."""
     gap = position[None, :] - position[:, None]
-    wanted = np.triu(gap <= FAR_BP, k=1)
+    wanted = np.triu(within(gap, FAR_BP), k=1)
     if (wanted & ~held).any():
         raise ValueError(f"the reference lacks a pair within {FAR_BP} bp on chromosome {chrom}")
 
@@ -165,18 +172,16 @@ def write_chromosome(
 ) -> tuple[int, int, int, int]:
     """Write one chromosome's Near Band and Proxy Index; return the counts provenance records."""
     require_every_pair(held, position, chrom)
-    size = len(position)
-    reach = np.searchsorted(position, position + NEAR_BP, side="right")
-    lengths = (reach - np.arange(size) - 1).astype(np.int64)
+    lengths = near_row_lengths(position, NEAR_BP)
     codes = np.concatenate([dense[row, row + 1 : row + 1 + n] for row, n in enumerate(lengths)])
     writer.write_near(start, lengths, codes)
     both = held | held.T
     symmetric = np.where(held, dense, dense.T)
     keep = both & (np.abs(symmetric.astype(np.int32)) >= floor)
-    partner = np.nonzero(keep)[1].astype(np.int64) + start
-    indptr = np.concatenate([[0], np.cumsum(keep.sum(axis=1))]).astype(np.int64)
+    partner = global_rows(np.nonzero(keep)[1], start)
+    indptr = indptr_of(keep.sum(axis=1))
     writer.write_index(chrom, indptr, partner, symmetric[keep])
-    far = np.triu(position[None, :] - position[:, None] > NEAR_BP, k=1) & held
+    far = np.triu(~within(position[None, :] - position[:, None], NEAR_BP), k=1) & held
     return len(codes), int(far.sum()), int((far & keep).sum()), int(keep.sum())
 
 

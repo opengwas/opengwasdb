@@ -124,10 +124,11 @@ def drop_flat(the_plan: Plan, found: Pass, chosen: Covariates) -> list[Chromosom
 
 
 def variants_table(chromosomes: list[Chromosome]) -> Variants:
-    """The store's variant table (spec §2): the chromosomes in order, strings of any length."""
+    """The store's variant table (spec §2): the chromosomes in order, strings of any length.
+    The chromosome labels are short and fixed-width, the type `ogld.format.geometry` reads."""
     oriented = [o for c in chromosomes for o in c.oriented]
     return Variants(
-        chrom=_strings(oriented, "chrom"),
+        chrom=np.array([o.chrom for o in oriented], dtype=np.str_),
         position=np.concatenate([c.position for c in chromosomes]),
         alid=_strings(oriented, "alid"),
         a1=_strings(oriented, "a1"),
