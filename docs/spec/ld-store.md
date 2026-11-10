@@ -426,8 +426,8 @@ ignores the ones it does not know. The types are `ogld.format.Provenance`, and
 | `counts.index_entries` | int | Proxy Index entries, both directions and within `near_bp` included |
 | `software` | object | versions: `ogld`, `numpy`, `zarr`, and `plink2` when a build used it |
 | `build.created_at` | string | ISO 8601 UTC |
-| `build.wall_seconds` | float | build time |
-| `build.peak_memory_bytes` | int | peak memory |
+| `build.wall_seconds` | float | build time, up to the validation `StoreWriter.finish` runs before it writes this provenance: a provenance cannot hold the time taken to check it. On EUR chr22 that validation took another 80 s of a 2 min build |
+| `build.peak_memory_bytes` | int | peak memory over the same span: the build's own on Linux, whose high-water mark the build resets when it starts; elsewhere the process's |
 | `build.threads` | int | threads used |
 
 `pc_diagnostic` holds `pairs` (the pair set: `source`, opengwas/opengwasdb#405's seeded
