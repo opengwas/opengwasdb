@@ -4,18 +4,23 @@ The Test Panel proves the logic; this proves it survives real genotypes (CLAUDE.
 
 - The builds read the phased HGDP+1kGP v2 callset, which has no missing calls (owner,
   7 November 2026; ADR 0002). `OGLD_V2_EUR_CHR22` names its chr22 BCF
-  (`docs/spec/build-inputs.md` §10), and the suite converts chr22:20–32 Mb for the EUR samples
-  once, with §3's flags. On 20–23 Mb of it, the k = 0 Near Band of 300 variants matches
-  `plink2 --r-unphased` within the quantisation step: epic #1's acceptance.
+  (`docs/spec/build-inputs.md` §10), and the suite converts chr22:20–32 Mb once, with §3's flags,
+  for EUR's 665 unrelated samples: `OGLD_EUR_KEEP` names the keep file `scripts/make_keeps.py`
+  writes (ADR 0002, decision 11). On 20–23 Mb of it, the k = 0 Near Band matches
+  `plink2 --r-unphased` within the quantisation step: epic #1's acceptance. The variants compared
+  include reversed-indel pairs' records, each the one the store keeps by build-inputs §6, judged
+  here from plink2's own allele counts.
 - Real LD survives PC Adjustment: on the 12 Mb slice, pairs within 100 kb change little from
-  k = 0 to k = 10, and the provenance records the change's quantiles. 12 Mb, not 3, because
-  the PC Check scans the build's own input and needs windows apart from the best one.
+  k = 0 to k = 10, and each of the provenance's five quantiles of that change is its own
+  computation over every such pair, from the two stores' Near Bands. 12 Mb, not 3, because the
+  PC Check scans the build's own input and needs windows apart from the best one.
   `OGLD_EUR_PC_FILE` names EUR's PC File from `scripts/make_pcs.py` (§10).
 - The gnomAD v3.1.2 pgens shipped under /data/opengwasdb/reference/ have missing calls, at
   11,725 of the 15,272 variants of chr22:20–23 Mb. The builder refuses them.
 
-An unset or missing `OGLD_PLINK2`, `OGLD_V2_EUR_CHR22` or `OGLD_EUR_PC_FILE` stops a test as an
-expected failure naming it (`realdata_inputs.required`), before ogld or plink2 runs.
+An unset or missing `OGLD_PLINK2`, `OGLD_V2_EUR_CHR22`, `OGLD_EUR_KEEP` or `OGLD_EUR_PC_FILE`
+stops a test as an expected failure naming it (`realdata_inputs.required`), before ogld or plink2
+runs.
 """
 
 from __future__ import annotations
@@ -26,16 +31,19 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 import pytest
+import zarr
 from realdata_inputs import required
 
 import ogld
-from ogld.identity import orient
+from ogld.build.diagnostic import outside_regions
+from ogld.format import dequantise, row_reach
+from ogld.identity import Orientation, orient
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 PANELS = Path("/data/opengwasdb/reference/hgdp1kgp-hg38")
 SHIPPED_EUR_CHR22 = PANELS / "pgen" / "EUR" / "chr22"
-EUR_KEEP = PANELS / "members" / "EUR.keep"
 NARROW = ["--chr", "22", "--from-bp", "20000000", "--to-bp", "23000000"]
 WIDE = ["--chr", "22", "--from-bp", "20000000", "--to-bp", "32000000"]
 #: plink2 prints r to six significant digits.
@@ -52,6 +60,10 @@ def plink2(*args: str | Path) -> None:
     )
 
 
+def eur_keep() -> Path:
+    return required("OGLD_EUR_KEEP", "EUR's unrelated keep file, scripts/make_keeps.py, §10")
+
+
 def section_3_conversion(source: Path, out: Path) -> list[str]:
     """build-inputs.md §3's conversion of `source` for the EUR samples, as lane 2d's Test Panel
     script spells it, so the flags live in one place."""
@@ -59,7 +71,7 @@ def section_3_conversion(source: Path, out: Path) -> list[str]:
         sys.path.insert(0, str(SCRIPTS))
     from test_panel.tools import conversion_args
 
-    args: list[str] = conversion_args(source, EUR_KEEP, out)
+    args: list[str] = conversion_args(source, eur_keep(), out)
     return args
 
 
@@ -85,7 +97,7 @@ def pvar_rows(path: Path) -> list[list[str]]:
 def inputs(pgen: Path, source: str, pcs: Path | None = None) -> ogld.BuildInputs:
     return ogld.BuildInputs(
         pgen=(pgen,),
-        keep=EUR_KEEP,
+        keep=eur_keep(),
         pcs=pcs,
         pc_source="ogld scripts/make_pcs.py on HGDP+1kGP v2, EUR" if pcs else None,
         panel_id="hgdp1kgp-v2-EUR-chr22-slice",
@@ -103,7 +115,7 @@ def test_the_builder_refuses_the_shipped_pgen_for_its_missing_calls(tmp_path: Pa
         SHIPPED_EUR_CHR22,
         "vzs",
         "--keep",
-        EUR_KEEP,
+        eur_keep(),
         *NARROW,
         "--make-pgen",
         "--out",
@@ -118,6 +130,26 @@ def test_the_builder_refuses_the_shipped_pgen_for_its_missing_calls(tmp_path: Pa
         )
 
 
+def kept_records(slice_: Path, found: list[Orientation], tmp_path: Path) -> list[int]:
+    """The slice's records the store holds, judged here, not by the builder: MAC >= 20 from
+    plink2's own allele counts (v2's FILTER is all `.`, and none of its variants lacks
+    variance), and of a reversed-indel pair that both pass, the record whose REF is A1
+    (build-inputs §6); of a pair one passes, that one."""
+    plink2("--pfile", slice_, "--freq", "counts", "--out", tmp_path / "freq")
+    table = [line.split("\t") for line in (tmp_path / "freq.acount").read_text().splitlines()]
+    head = [name.lstrip("#") for name in table[0]]
+    alt = np.array([int(row[head.index("ALT_CTS")]) for row in table[1:]])
+    obs = np.array([int(row[head.index("OBS_CT")]) for row in table[1:]])
+    passes = np.minimum(alt, obs - alt) >= 20
+    by_alid: dict[str, list[int]] = {}
+    for i in np.flatnonzero(passes):
+        by_alid.setdefault(found[int(i)].alid, []).append(int(i))
+    return sorted(
+        next((i for i in group if not found[i].a1_is_alt), group[0]) if len(group) > 1 else group[0]
+        for group in by_alid.values()
+    )
+
+
 def test_the_builder_matches_plink2_on_a_real_chr22_slice(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
@@ -127,17 +159,17 @@ def test_the_builder_matches_plink2_on_a_real_chr22_slice(
 
     rows = pvar_rows(slice_.with_suffix(".pvar"))
     found = [orient(r[0], int(r[1]), r[3], r[4]) for r in rows]
-    # 3,000 candidates spread over the slice: a matrix of all of them stays small.
-    spread = list(range(0, len(found), max(1, len(found) // 3000)))
-    m = store.matrix([found[i].alid for i in spread])
-    # A reversed-indel pair is two records with one ALID, and the store holds one of them
-    # (build-inputs §6): compare only records whose ALID no other record shares.
+    kept = kept_records(slice_, found, tmp_path)
     shared = Counter(o.alid for o in found)
-    present = [
-        i for i in spread if found[i].alid not in set(m.absent) and shared[found[i].alid] == 1
-    ]
-    sample = present[:: max(1, len(present) // 300)][:300]
-    assert len(sample) == 300, "the slice must hold 300 variants that pass the filters"
+    pairs = [i for i in kept if shared[found[i].alid] > 1]
+    # 300 records spread over the slice, and 40 more whose ALID a reversed-indel pair shares,
+    # each the record the store keeps: the k = 0 criterion holds for every pair (§7).
+    sample = sorted(
+        {*kept[:: max(1, len(kept) // 300)][:300], *pairs[:: max(1, len(pairs) // 40)][:40]}
+    )
+    assert len(sample) >= 330, "the slice must hold 300 kept records and 30 reversed-indel ones"
+    assert sum(shared[found[i].alid] > 1 for i in sample) >= 30
+    assert store.matrix([found[i].alid for i in sample]).absent == (), "the store holds each"
     (tmp_path / "sample.txt").write_text("\n".join(rows[i][2] for i in sample) + "\n")
     plink2(
         "--pfile",
@@ -161,6 +193,17 @@ def test_the_builder_matches_plink2_on_a_real_chr22_slice(
     assert worst <= 1 / 65534 + PRINTED, f"the builder is {worst} from plink2"
 
 
+def band_within(store: Path, distance: int) -> npt.NDArray[np.float64]:
+    """Every chr22 Near Band pair of `store` within `distance`, as Stored r, row after row."""
+    root = zarr.open_group(str(store), mode="r", zarr_format=3)
+    position = np.asarray(root["variants/position"][:]).astype(np.int64)
+    indptr = np.asarray(root["near/22/indptr"][:])
+    codes = np.asarray(root["near/22/r"][:])
+    lengths = row_reach(position, distance) - np.arange(len(position)) - 1
+    offset = np.arange(int(lengths.sum())) - np.repeat(np.cumsum(lengths) - lengths, lengths)
+    return dequantise(codes[np.repeat(indptr[:-1], lengths) + offset])
+
+
 def test_real_ld_survives_pc_adjustment(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
@@ -171,19 +214,12 @@ def test_real_ld_survives_pc_adjustment(
     pgen = slice_.with_suffix(".pgen")
     ogld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb"), tmp_path / "k0")
     adjusted = ogld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb", pcs), tmp_path / "k10")
+    held = [zarr.open_group(str(tmp_path / s), mode="r")["variants"] for s in ("k0", "k10")]
+    assert list(held[0]["alid"][:]) == list(held[1]["alid"][:]), "one Variant Set, both builds"
+    assert outside_regions("22", np.asarray(held[0]["position"][:]).astype(np.int64)).all()
 
-    unadjusted_store, adjusted_store = ogld.open(tmp_path / "k0"), ogld.open(tmp_path / "k10")
-    # Twelve regions 100 kb wide, one per Mb: every pair inside one is within 100 kb, and
-    # each matrix stays a few thousand variants square.
-    changes = []
-    for centre in range(20_500_000, 32_000_000, 1_000_000):
-        before = unadjusted_store.region("22", centre, 50_000)
-        after = adjusted_store.region("22", centre, 50_000)
-        assert list(before.variants.alid) == list(after.variants.alid)
-        upper = np.triu_indices(len(before.variants), k=1)
-        changes.append(after.r[upper] - before.r[upper])
-    change = np.concatenate(changes)
-    assert len(change) > 10_000, "the slice must hold many pairs within 100 kb"
+    change = band_within(tmp_path / "k10", 100_000) - band_within(tmp_path / "k0", 100_000)
+    assert len(change) > 500_000, "the slice must hold many pairs within 100 kb"
     assert np.median(np.abs(change)) < 0.01, (
         f"real LD moved: median |change| {np.median(np.abs(change))}"
     )
@@ -191,5 +227,8 @@ def test_real_ld_survives_pc_adjustment(
     assert diagnostic is not None
     recorded = diagnostic["near_100kb_change"]
     assert set(recorded) == {"0", "0.5", "0.9", "0.99", "1"}
-    # The provenance's quantiles are over every pair within 100 kb; these regions sample them.
-    assert abs(recorded["0.5"] - float(np.quantile(change, 0.5))) <= 0.01
+    # The provenance's quantiles are of the computed change; these are of the Stored r's, so
+    # they differ by at most two half-steps (3.1e-5) and half a bin.
+    for q in (0.0, 0.5, 0.9, 0.99, 1.0):
+        ours = float(np.quantile(change, q, method="lower"))
+        assert abs(recorded[f"{q:g}"] - ours) <= 1e-4, (q, recorded[f"{q:g}"], ours)
