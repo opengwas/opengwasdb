@@ -9,7 +9,7 @@ import numpy.typing as npt
 
 from ogld.format import Refusal, RefusalReason
 from ogld.query.requests import window_of
-from ogld.query.results import Clumps, genomic_key
+from ogld.query.results import Clumps, strongest_first
 from ogld.store import StoreReader, Variants
 
 
@@ -61,34 +61,30 @@ def _greedy(
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
     """Each variant's lead, as an index into `rows`, and its signed r with it.
 
-    Strongest first; ties by genomic order, then ALID. A pair beyond the window, or one
-    the store does not hold (NaN), never reaches r2.
+    Strongest first; ties by genomic order, then ALID. plink2's edges, which the owner
+    ruled `clump` follows (10 November 2026): a variant joins at r̂² **>** r2 and distance
+    **<** W. A pair the store does not hold (NaN) never reaches r2. Each lead reads only the
+    still-unclumped variants within its window, so memory is hits × hits-within-W, never n².
     """
     n = len(rows)
-
-    def strongest_first(i: int) -> tuple[float, int, int, str]:
-        rank, position, alid = genomic_key(
-            str(variants.chrom[i]), int(variants.position[i]), str(variants.alid[i])
-        )
-        return -float(scores[i]), rank, position, alid
-
-    order = sorted(range(n), key=strongest_first)
+    keys = [
+        strongest_first(scores[i], variants.chrom[i], variants.position[i], variants.alid[i])
+        for i in range(n)
+    ]
     lead = np.full(n, -1, dtype=np.int64)
     r_lead = np.full(n, np.nan)
-    by_chrom = {c: np.flatnonzero(variants.chrom == c) for c in dict.fromkeys(variants.chrom)}
-    pair = {c: reader.pair_r(rows[members]) for c, members in by_chrom.items()}
-    where = {c: {int(m): k for k, m in enumerate(members)} for c, members in by_chrom.items()}
-    for i in order:
+    for i in sorted(range(n), key=keys.__getitem__):
         if lead[i] >= 0:
             continue
-        chrom = variants.chrom[i]
-        members = by_chrom[chrom]
-        r = pair[chrom][where[chrom][i]]
-        near = np.abs(variants.position[members] - variants.position[i]) <= window
-        joins = near & (r * r >= r2) & (lead[members] < 0)
-        lead[members[joins]] = i
-        r_lead[members[joins]] = r[joins]
         lead[i], r_lead[i] = i, 1.0
+        same = np.flatnonzero((variants.chrom == variants.chrom[i]) & (lead < 0))
+        near = same[np.abs(variants.position[same] - variants.position[i]) < window]
+        if len(near) == 0:
+            continue
+        r = reader.pair_r(rows[np.concatenate([[i], near])])[0, 1:]
+        joins = r * r > r2
+        lead[near[joins]] = i
+        r_lead[near[joins]] = r[joins]
     return lead, r_lead
 
 

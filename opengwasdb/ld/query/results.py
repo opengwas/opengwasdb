@@ -14,14 +14,17 @@ import numpy as np
 import numpy.typing as npt
 
 from ogld.format import answer_kinds
+from ogld.identity import orient, variant_order_key
 from ogld.store.tables import Variants, check_columns, columns_of
 
-_RANK = {"X": 23, "Y": 24, "MT": 25}
 
-
-def genomic_key(chrom: str, position: int, alid: str) -> tuple[int, int, str]:
-    """The engine's variant order as a sort key: chromosome, position, ALID (spec §2)."""
-    return (int(chrom) if chrom.isdigit() else _RANK[chrom], int(position), str(alid))
+def strongest_first(
+    score: float, chrom: str, position: int, alid: str
+) -> tuple[float, int, int, str]:
+    """The order clumping takes variants in: score descending, then the engine's variant order
+    (chromosome, position, ALID; spec §2). `Clumps.leads()` and the greedy pass share it."""
+    _, _, a1, a2 = alid.split(":")
+    return (-float(score), *variant_order_key(orient(str(chrom), int(position), a1, a2)))
 
 
 @dataclass(frozen=True)
@@ -132,10 +135,7 @@ class Clumps:
         """The lead ALIDs, strongest first, ties by genomic order then ALID (ogld#6)."""
 
         def key(i: int) -> tuple[float, int, int, str]:
-            rank, position, alid = genomic_key(
-                str(self.chrom[i]), int(self.position[i]), str(self.alid[i])
-            )
-            return -float(self.score[i]), rank, position, alid
+            return strongest_first(self.score[i], self.chrom[i], self.position[i], self.alid[i])
 
         order = sorted(np.flatnonzero(self.lead == self.alid).tolist(), key=key)
         return self.alid[np.array(order, dtype=np.int64)]
