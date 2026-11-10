@@ -419,7 +419,7 @@ ignores the ones it does not know. The types are `ogld.format.Provenance`, and
 | `t_far` | float | max(0.001, q / (n − k − 1)) in float64, the value every reader uses |
 | `t_far_q` | float | 20.84: the χ²₁ upper quantile at p = 5×10⁻⁶ |
 | `far_code_floor` | int | §3 |
-| `pc_diagnostic` | object or null | what PC Adjustment did to chance LD (below); null only for an `ld_matrix` source |
+| `pc_diagnostic` | object or null | what PC Adjustment did to chance LD (below); null only for an `ld_matrix` source. A Variant Set with no cross-chromosome pair (one chromosome) records `pairs.n_pairs` 0 and null for the two measured rates, `rate_r2_ge_0_01_unadjusted` and `rate_r2_ge_0_01_adjusted`: each is null only when `n_pairs` is 0, and a number otherwise (10 November 2026). `rate_r2_ge_0_01_sampling` is a formula of n and k, and always a number |
 | `counts.near_pairs` | int | Near Band codes, over all chromosomes |
 | `counts.far_candidates` | int | pairs more than `near_bp` and at most `far_bp` apart that were examined |
 | `counts.far_pairs` | int | Far Pairs: those of them in the Proxy Index, each counted once |
@@ -815,8 +815,8 @@ of each rule that reads it.
   keys inside them, `variant_filters`, `variants_dropped`, `pc_file`, the PC Check's settings and
   its `null`, each `scan` entry's fields, `pc_diagnostic` with its `pairs` and the five quantiles
   of `near_100kb_change`, and `software`'s `ogld`, `numpy` and `zarr`. A null is allowed only
-  where §7 allows it, and for `panel.samples_sha256` and `pc_diagnostic` only with an `ld_matrix`
-  source.
+  where §7 allows it: for `panel.samples_sha256` and `pc_diagnostic` only with an `ld_matrix`
+  source, and for the two measured rates exactly when `pc_diagnostic.pairs.n_pairs` is 0.
 - `provenance.threshold` also holds `t_far_q` to 20.84.
 - `index.symmetric` reads each entry once. It adds a 64-bit hash of (earlier row, later row,
   code) to one of two sums kept for the pair's earlier row: one for the entries in that row, one

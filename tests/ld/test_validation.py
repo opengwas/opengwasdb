@@ -260,6 +260,16 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
         negate("index/22/r", 0),
         "the earlier row of a pair held one way only, or with two codes at 0",
     ),
+    "a measured rate null though pairs were measured": (
+        "provenance.complete",
+        edit_ld_store(lambda p: p["pc_diagnostic"].update(rate_r2_ge_0_01_adjusted=None)),
+        "null, which spec §7 allows only when pc_diagnostic.pairs.n_pairs is 0",
+    ),
+    "a measured rate though no pair was measured": (
+        "provenance.complete",
+        edit_ld_store(lambda p: p["pc_diagnostic"]["pairs"].update(n_pairs=0)),
+        "but pc_diagnostic.pairs.n_pairs is 0, so nothing was measured",
+    ),
     "a missing indptr": (
         "envelope.arrays",
         lambda store: shutil.rmtree(store / "near" / "22" / "indptr"),
@@ -286,6 +296,21 @@ def test_each_way_to_break_a_rule_is_named(way: str, tmp_path: Path) -> None:
     edit(copy)
     found = findings(copy, [rule])[rule]
     assert any(says in f.message for f in found), found
+
+
+def unmeasured(p: dict[str, Any]) -> None:
+    """The record of a Variant Set on one chromosome: no cross-chromosome pair, so the two
+    measured rates are null; the sampling rate is a formula, and stays a number."""
+    p["pc_diagnostic"]["pairs"].update(n_pairs=0)
+    p["pc_diagnostic"].update(rate_r2_ge_0_01_unadjusted=None, rate_r2_ge_0_01_adjusted=None)
+
+
+def test_a_store_with_no_cross_chromosome_pair_records_null_rates(tmp_path: Path) -> None:
+    # The ruling of 10 November 2026 (orchestrator note 1 for #4), as lane #5's chr22 builds
+    # record it: n_pairs 0 and the two measured rates null pass.
+    copy = copy_store(tmp_path / "store")
+    edit_ld_store(unmeasured)(copy)
+    assert findings(copy, ["provenance.complete"])["provenance.complete"] == []
 
 
 def corrupt(store: Path, path: str) -> None:

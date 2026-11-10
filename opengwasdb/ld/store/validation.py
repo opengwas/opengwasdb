@@ -360,8 +360,10 @@ def _envelope_fill(store: _Store) -> _Problems:
 # ------------------------------------------------------------------ provenance
 
 #: Every key spec §7 names, required ones and the keys inside them, with their types.
-#: "?" allows null; "?import" allows it only for an `ld_matrix` source. A key inside one that
-#: is null or absent is not checked: the enclosing key's own row reports it.
+#: "?" allows null; "?import" allows it only for an `ld_matrix` source; "?unmeasured" makes it
+#: null exactly when `pc_diagnostic.pairs.n_pairs` is 0, when no cross-chromosome pair was
+#: there to measure (ruling of 10 November 2026). A key inside one that is null or absent is
+#: not checked: the enclosing key's own row reports it.
 _SCHEMA: Final = {
     "format_version": "str",
     "encoding.r_dtype": "str",
@@ -415,8 +417,8 @@ _SCHEMA: Final = {
     "pc_diagnostic.pairs.source": "str",
     "pc_diagnostic.pairs.seed": "int",
     "pc_diagnostic.pairs.n_pairs": "int",
-    "pc_diagnostic.rate_r2_ge_0_01_unadjusted": "number",
-    "pc_diagnostic.rate_r2_ge_0_01_adjusted": "number",
+    "pc_diagnostic.rate_r2_ge_0_01_unadjusted": "number?unmeasured",
+    "pc_diagnostic.rate_r2_ge_0_01_adjusted": "number?unmeasured",
     "pc_diagnostic.rate_r2_ge_0_01_sampling": "number",
     "pc_diagnostic.near_100kb_change": "object",
     "counts.near_pairs": "int",
@@ -468,17 +470,38 @@ def _within_null(provenance: dict[str, Any], key: str) -> bool:
     return any(not isinstance(_lookup(provenance, e), dict) for e in enclosing if e in _SCHEMA)
 
 
-def _key_problem(kind: str, value: object, source: object) -> str | None:
+@dataclass(frozen=True)
+class _Context:
+    """What decides whether a key may be null: the source kind, and the pairs measured."""
+
+    source: object = None
+    n_pairs: object = None
+
+
+def _null_problem(nullable: str, only: str, context: _Context) -> str | None:
+    if not nullable:
+        return "null, which spec §7 allows nowhere for this key"
+    if only == "import" and context.source != "ld_matrix":
+        return "null, which spec §7 allows only for an ld_matrix source"
+    if only == "unmeasured" and context.n_pairs != 0:
+        return "null, which spec §7 allows only when pc_diagnostic.pairs.n_pairs is 0"
+    return None
+
+
+def _key_problem(kind: str, value: object, context: _Context) -> str | None:
     base, nullable, only = kind.partition("?")
     if value is _MISSING:
         return "missing (spec §7)"
     if value is None:
-        if not nullable:
-            return "null, which spec §7 allows nowhere for this key"
-        if only == "import" and source != "ld_matrix":
-            return "null, which spec §7 allows only for an ld_matrix source"
-        return None
-    return None if _TYPES[base](value) else f"{value!r:.80} is not of type {base} (spec §7)"
+        return _null_problem(nullable, only, context)
+    if not _TYPES[base](value):
+        return f"{value!r:.80} is not of type {base} (spec §7)"
+    if only == "unmeasured" and context.n_pairs == 0:
+        return (
+            f"{value!r}, but pc_diagnostic.pairs.n_pairs is 0, so nothing was measured: it is "
+            "null (spec §7)"
+        )
+    return None
 
 
 def _scan_problems(provenance: dict[str, Any]) -> _Problems:
@@ -487,7 +510,7 @@ def _scan_problems(provenance: dict[str, Any]) -> _Problems:
     for i, entry in enumerate(scan if isinstance(scan, list) else []):
         fields = entry if isinstance(entry, dict) else {}
         for key, kind in _SCAN_ENTRY.items():
-            problem = _key_problem(kind, fields.get(key, _MISSING), None)
+            problem = _key_problem(kind, fields.get(key, _MISSING), _Context())
             if problem is not None:
                 yield f"adjustment.pc_check.scan[{i}].{key}", problem
 
@@ -496,7 +519,7 @@ def _quantile_problems(provenance: dict[str, Any]) -> _Problems:
     """The five quantiles §7 names in `pc_diagnostic.near_100kb_change`."""
     change = _lookup(provenance, "pc_diagnostic.near_100kb_change")
     for q in _QUANTILES if isinstance(change, dict) else ():
-        problem = _key_problem("number", change.get(q, _MISSING), None)
+        problem = _key_problem("number", change.get(q, _MISSING), _Context())
         if problem is not None:
             yield f"pc_diagnostic.near_100kb_change[{q}]", problem
 
@@ -507,10 +530,12 @@ def _provenance_complete(store: _Store) -> _Problems:
     if not isinstance(provenance, dict):
         yield "ld_store", "the root group has no ld_store provenance object (spec §7)"
         return
-    source = _lookup(provenance, "source.kind")
+    context = _Context(
+        _lookup(provenance, "source.kind"), _lookup(provenance, "pc_diagnostic.pairs.n_pairs")
+    )
     for key, kind in _SCHEMA.items():
         if not _within_null(provenance, key):
-            problem = _key_problem(kind, _lookup(provenance, key), source)
+            problem = _key_problem(kind, _lookup(provenance, key), context)
             if problem is not None:
                 yield key, problem
     yield from _scan_problems(provenance)
