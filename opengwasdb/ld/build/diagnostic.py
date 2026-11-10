@@ -29,7 +29,8 @@ from typing import Final
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import InputError, PcDiagnostic
+from ogld.build import tiles
+from ogld.format import FAR_BP, NEAR_BP, InputError, PcDiagnostic
 
 SEED: Final = 405
 MAX_VARIANTS: Final = 3_000
@@ -83,8 +84,9 @@ def require_change_pairs(
     an MHC-only slice: its change in r cannot be measured (spec §7). Each chromosome's sorted
     positions say so before the build writes anything, so nothing is left half-written."""
     for chrom, position in positions:
-        clear = position[outside_regions(chrom, position)]
-        if len(clear) > 1 and int(np.diff(clear).min()) <= CHANGE_BP:
+        band = tiles.Band.of(position, NEAR_BP, FAR_BP, CHANGE_BP)
+        clear = tiles.change_pairs(band, outside_regions(chrom, position), 0, len(position))[2]
+        if clear.any():
             return
     raise InputError(
         f"panel {panel}: no two variants within 100 kb lie outside the Long-Range LD Regions, "
@@ -181,9 +183,9 @@ class ChangeHistogram:
     def quantiles(self) -> dict[str, float]:
         """`near_100kb_change`: quantiles 0, 0.5, 0.9, 0.99 and 1, keyed as spec §7 names them."""
         if not self.n:
-            raise InputError(
-                "no pair within 100 kb lies outside the Long-Range LD Regions, so the PC "
-                "diagnostic's change in r cannot be measured (spec §7)"
+            raise ValueError(
+                "no change was counted: a builder fault, since the build refuses a Variant Set "
+                "with no pair to count before it writes (require_change_pairs)"
             )
         cumulative = np.cumsum(self.counts)
         out: dict[str, float] = {}

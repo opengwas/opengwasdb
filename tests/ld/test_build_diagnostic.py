@@ -184,8 +184,9 @@ def test_the_histogram_reads_quantiles_to_within_a_bin() -> None:
         assert abs(got[f"{q:g}"] - np.quantile(values, q, method="lower")) <= 2.0**-21
 
 
-def test_an_empty_histogram_is_refused() -> None:
-    with pytest.raises(InputError, match="cannot be measured"):
+def test_an_empty_histogram_is_a_builder_fault() -> None:
+    # Unreachable from a build, which refuses a Variant Set with no 100 kb pair before writing.
+    with pytest.raises(ValueError, match="builder fault"):
         diagnostic.ChangeHistogram().quantiles()
 
 

@@ -136,6 +136,19 @@ def _entries(
     return lo[reach].astype(np.int32), hi[reach].astype(np.int32), codes[reach]
 
 
+def change_pairs(
+    band: Band, outside: npt.NDArray[np.bool_], first: int, last: int
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.bool_]]:
+    """The pairs within `change_bp` of rows `first` … `last − 1`, row after row, as (t, partner,
+    clear): t the row's offset from `first`, partner its row, and clear when both variants lie
+    outside the Long-Range LD Regions. The one definition of the PC diagnostic's 100 kb pairs
+    (spec §7): the tiles measure the change on them, and the build refuses a Variant Set with
+    none before it writes (`diagnostic.require_change_pairs`)."""
+    starts = np.arange(first + 1, last + 1, dtype=np.int64)
+    t, partner = _cells(starts, band.change_stop[first:last])
+    return t, partner, outside[first + t] & outside[partner]
+
+
 def _change(
     inputs: Inputs, r: npt.NDArray[np.float64], first: int, last: int
 ) -> npt.NDArray[np.float64]:
@@ -143,8 +156,7 @@ def _change(
     the Long-Range LD Regions; at k = 0 the two are one and every change is 0."""
     starts = np.arange(first + 1, last + 1, dtype=np.int64)
     stops = inputs.band.change_stop[first:last]
-    t, partner = _cells(starts, stops)
-    clear = inputs.outside[first + t] & inputs.outside[partner]
+    clear = change_pairs(inputs.band, inputs.outside, first, last)[2]
     after = _ragged(r, first, starts, stops)[clear]
     if inputs.unadjusted is None:
         return np.zeros_like(after)
