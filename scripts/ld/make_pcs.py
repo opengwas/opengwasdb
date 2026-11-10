@@ -26,9 +26,10 @@ Then it runs the PC Check (`ogld.build.pc_check`, the one implementation of the 
 genome-wide variants, of which the module scans the common ones, and records the scan.
 
 Writes `<out>/<panel>.eigenvec` (`#IID PC1 ... PC20`, plink2's layout) and `<out>/<panel>.json`
-with every setting, count, eigenvalue, hash and the PC Check's `pc_check` record. The PC Files
-hold one row per sample, so they are individual-level and never committed. `--scan-only` adds the
-scan to PC Files that already exist.
+with every setting, count, eigenvalue, hash, the PC Check's `pc_check` record and the `commit` that
+made it (a checkout with uncommitted changes is refused). The PC Files hold one row per sample, so
+they are individual-level and never committed. `--scan-only` adds the scan to PC Files that
+already exist, naming its commit as `pc_check_commit`.
 
     pixi run -e dev python scripts/make_pcs.py --work <scratch> --panel EUR=<keep> [...]
 """
@@ -437,11 +438,21 @@ def _parse(argv: list[str] | None) -> tuple[Settings, dict[str, Path], bool]:
     )
 
 
+def _commit(s: Settings) -> str:
+    """The checkout's commit, which the report names so a citation of it holds (build-inputs
+    §8). A checkout with changes is refused: the report would name code that did not run."""
+    log = s.work / "logs" / "git.log"
+    if run(["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"], log).strip():
+        raise SystemExit(f"{ROOT} has uncommitted changes: commit them, then make the PC Files")
+    return run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], log).strip()
+
+
 def main(argv: list[str] | None = None) -> None:
     single_threaded_blas()
     s, panels, scan_only = _parse(argv)
     for d in (s.work / "logs", s.out):
         d.mkdir(parents=True, exist_ok=True)
+    commit = _commit(s)
     uptime = run(["uptime"], s.work / "logs" / "uptime.log").strip()
     pgens = _convert_all(s)
     for panel, keep in panels.items():
@@ -450,6 +461,7 @@ def main(argv: list[str] | None = None) -> None:
             t0 = time.perf_counter()
             report["pc_check"] = _scan_panel(s, panel, pgens)
             report["pc_check_seconds"] = round(time.perf_counter() - t0, 1)
+            report["pc_check_commit"] = commit
             report["uptime_scan"] = run(["uptime"], s.work / "logs" / "uptime.log").strip()
             (s.out / f"{panel}.json").write_text(json.dumps(report, indent=1) + "\n")
             print(panel, report["pc_check"]["dropped"], report["pc_check"]["covariates"])
@@ -470,6 +482,7 @@ def main(argv: list[str] | None = None) -> None:
                 },
                 "method": "gnomAD v3.1.2 subcontinental recipe (atgu/hgdp_tgp "
                 "pca_subcont.ipynb at 9feaa41), Long-Range LD Regions excluded",
+                "commit": commit,
             }
         )
         (s.out / f"{panel}.json").write_text(json.dumps(report, indent=1) + "\n")
