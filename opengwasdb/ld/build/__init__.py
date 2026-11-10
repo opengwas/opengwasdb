@@ -155,7 +155,8 @@ def _build(inputs: BuildInputs, target: Path, threads: int, cost: record.Cost) -
             made,
             (NEAR_BP, FAR_BP, far_t, floor),
             cost.record(threads),
-        )
+        ),
+        threads=threads,
     )
 
 

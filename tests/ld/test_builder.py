@@ -191,3 +191,26 @@ def test_blas_runs_one_thread_in_each_worker_while_tiling(
         provenance = ogld.build(fixtures.inputs(pgen), tmp_path / "store", threads=2)
     assert seen, "the spy must see the build's tiles"
     assert max(seen) == 1 <= provenance["build"]["threads"]
+
+
+def test_the_store_is_validated_on_the_build_s_threads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Orchestrator note 6: StoreWriter.finish validates on threads (#4's follow-up, c862ea1), and
+    # the build passes it its own, which bound it: the whole EUR panel's validation took 1 h 58 min
+    # on one thread and about 11 min on 16.
+    from ogld.store import StoreWriter
+
+    seen: list[int] = []
+    real = StoreWriter.finish
+
+    def spy(self: StoreWriter, provenance: ogld.Provenance, *, threads: int = 1) -> ogld.Provenance:
+        seen.append(threads)
+        return real(self, provenance, threads=threads)
+
+    monkeypatch.setattr(StoreWriter, "finish", spy)
+    pgen = fixtures.write_fileset(
+        tmp_path / "chr22", np.flatnonzero(testdata.variants().chrom == "22")
+    )
+    ogld.build(fixtures.inputs(pgen), tmp_path / "store", threads=3)
+    assert seen == [3]
