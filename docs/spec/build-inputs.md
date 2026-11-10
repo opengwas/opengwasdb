@@ -234,7 +234,9 @@ the number of covariates actually used (owner, 7 November 2026; ADR 0002, decisi
   so every stretch of up to 2 Mb lies wholly in one window. A window's variants are thinned evenly
   to at most 5,000; a window with fewer than 5 is skipped.
 - **A window's basis:** its top min(5, m) sample-space principal components: the leading
-  eigenvectors of XᵀX, X the window's genotypes standardised per variant.
+  eigenvectors of XᵀX, X the window's genotypes standardised per variant. A window whose
+  genotypes have rank below 5, such as one of five variants two of which are identical, has
+  only that many: no direction its genotypes do not span is added to its basis.
 - **Share:** a PC's share in a window is the fraction of its centred variance in the span of
   the window's basis.
 - **Per PC** (`PcScan` in provenance): `window`, the window with the largest share, as
@@ -289,9 +291,12 @@ PC1–PC9 and scanned as if each were a PC: they are what a PC that tracks an in
   0.055–0.085 against window nulls of 0.080–0.098; without it, one crossing 0.10 by chance would
   meet the first condition.
 - **Two implementations agree** on the shares: the prototype's `proto/1-build-inputs@28b5380:prototypes/build-inputs/m10_local_pc_rule.py`, written
-  separately, gives the same windows, window shares and rest shares on EUR as
-  `scripts/test_panel/pc_check.py` to every printed digit. `tests/test_pc_check.py` holds the rule
-  to the three real verdicts above (EUR 17q21.31 dropped, EUR PC2 kept, AMR PC7 kept).
+  separately, gives the same windows, window shares and rest shares on EUR as lane 2d's reference
+  to every printed digit. ogld#5 adopted that reference as `ogld/build/pc_check.py`, the one
+  implementation: the builder, `scripts/make_pcs.py` and the Test Panel's script all run it, and
+  it selects the MAF ≥ 0.05 variants itself. `tests/test_pc_check.py` holds it to the three real
+  verdicts above (EUR 17q21.31 dropped, EUR PC2 kept, AMR PC7 kept), and to the Test Panel's
+  scan as the reference made it before the adoption (its manifest's `pc_check`), to 10⁻¹².
 
 **The rule it replaces.** The first rule failed a PC when one of four named regions explained
 ≥ 10% of it and ≥ 2× the most any of 47 random 4 Mb windows did. It failed EUR PC2 on LCT, with

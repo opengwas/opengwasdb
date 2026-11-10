@@ -21,8 +21,9 @@ It follows gnomAD v3.1.2's subcontinental recipe (atgu/hgdp_tgp `pca_subcont.ipy
 4. **PCA.** `plink2 --pca 20 allele-wts` on the unrelated samples, then `--score
    variance-standardize` for every sample.
 
-Then it runs the PC Check (`test_panel.pc_check`, the rule `docs/spec/build-inputs.md` gives) on
-each PC File over the panel's genome-wide common variants, as a build would, and records the scan.
+Then it runs the PC Check (`ogld.build.pc_check`, the one implementation of the rule
+`docs/spec/build-inputs.md` gives, which a build runs too) on each PC File over the panel's
+genome-wide variants, of which the module scans the common ones, and records the scan.
 
 Writes `<out>/<panel>.eigenvec` (`#IID PC1 ... PC20`, plink2's layout) and `<out>/<panel>.json`
 with every setting, count, eigenvalue, hash and the PC Check's `pc_check` record. The PC Files
@@ -43,7 +44,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from test_panel import pc_check
 from test_panel.roots import portable, root, tool
 from test_panel.tools import (
     bim_positions,
@@ -58,6 +58,8 @@ from test_panel.tools import (
     version,
     write_stamp,
 )
+
+from ogld.build import pc_check
 
 ROOT = Path(__file__).resolve().parent.parent
 BCF = "hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf"
@@ -358,18 +360,12 @@ def _scan_panel(s: Settings, panel: str, pgens: dict[int, Path]) -> dict[str, ob
     by_id = _table(pcs_path, "IID", [f"PC{k}" for k in range(1, N_PCS + 1)])
     keep = s.work / panel / "scan.keep"
     _write_keep(keep, list(by_id))
-    fam, w = _merge(panel, [_scan_chromosome(s, panel, c, pgens[c], keep) for c in range(1, 23)])
-    return pc_check.check(w, np.array([by_id[i] for i in fam]))
-
-
-def _merge(
-    panel: str, parts: list[tuple[list[str], pc_check.Windows]]
-) -> tuple[list[str], pc_check.Windows]:
+    parts = [_scan_chromosome(s, panel, c, pgens[c], keep) for c in range(1, 23)]
     fam = parts[0][0]
     if any(p[0] != fam for p in parts):
         raise SystemExit(f"{panel}: sample order differs between chromosomes")
-    where = [x for _, p in parts for x in p.where]
-    return fam, pc_check.Windows(where, np.concatenate([p.basis for _, p in parts], axis=1))
+    w = pc_check.merge([p for _, p in parts])
+    return pc_check.check(w, np.array([by_id[i] for i in fam])).report()
 
 
 def _scan_chromosome(
@@ -382,8 +378,6 @@ def _scan_chromosome(
             str(pgen),
             "--keep",
             str(keep),
-            "--maf",
-            "0.05",
             "--make-bed",
             "--out",
             str(prefix),
