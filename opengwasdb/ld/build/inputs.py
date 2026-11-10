@@ -284,6 +284,15 @@ def read_pc_file(path: Path, samples: Samples, panel: str) -> PcFile:
     return PcFile(names, values, hashlib.sha256(path.read_bytes()).hexdigest())
 
 
+def pc_file_iids(path: Path, panel: str) -> list[str]:
+    """The PC File's IIDs, in its order: the same reader as `read_pc_file`, so a missing, empty
+    or malformed PC File is refused the same way (`scripts/make_keeps.py` reads a panel's
+    samples so)."""
+    lines = [line.split("\t") for line in _lines(path, panel) if line.strip()]
+    column, _ = _pc_header(lines[0], path, panel)
+    return list(_pc_rows(lines[1:], column, path, panel))
+
+
 def _pc_header(header: list[str], path: Path, panel: str) -> tuple[int, tuple[str, ...]]:
     """The IID column, and the PCs' names, which must be PC1 … PCm in order (build-inputs §5)."""
     column = _iid_column(header, path.name, panel)

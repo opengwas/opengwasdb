@@ -9,7 +9,8 @@ unrelated samples (`relatedness_inference.related` false in its sample metadata)
 no first- or second-degree pair.
 
 A panel's samples are the ones `scripts/make_pcs.py` made its PC File for, the members present
-in v2, read from that PC File; the keep file is those that are unrelated, in the PC File's
+in v2, read from that PC File by the build's own reader (`ogld.build.inputs.pc_file_iids`, so a
+missing or empty one is refused); the keep file is those that are unrelated, in the PC File's
 order, under plink2's `#IID` header. A sample the metadata lacks is refused, naming it. The
 same inputs write the same bytes. Expected counts: EUR 665, AFR 608, EAS 724, SAS 672, AMR 341.
 
@@ -27,19 +28,18 @@ from pathlib import Path
 from test_panel.roots import META_NAME, root
 from test_panel.tools import relatedness
 
+from ogld.build.inputs import pc_file_iids
+from ogld.format import InputError
+
 PANELS = ("EUR", "AFR", "EAS", "SAS", "AMR")
-
-
-def panel_samples(pc_file: Path) -> list[str]:
-    """The IIDs of a PC File (`#IID PC1 ...` or `#FID IID PC1 ...`), in its order."""
-    lines = [line.split("\t") for line in pc_file.read_text().splitlines() if line.strip()]
-    column = [name.lstrip("#") for name in lines[0]].index("IID")
-    return [line[column] for line in lines[1:]]
 
 
 def unrelated(pc_file: Path, meta: Path) -> list[str]:
     """A panel's samples that gnomAD v3.1.2 does not mark related, in the PC File's order."""
-    iids = panel_samples(pc_file)
+    try:
+        iids = pc_file_iids(pc_file, pc_file.stem)
+    except InputError as refused:
+        raise SystemExit(str(refused)) from refused
     related = relatedness(set(iids), meta)
     return [iid for iid in iids if not related[iid]]
 

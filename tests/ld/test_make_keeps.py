@@ -62,3 +62,14 @@ def test_a_sample_missing_from_the_metadata_is_refused(tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="NOT-IN-GNOMAD"):
         make_keeps.main([*argv, "--panel", "AFR"])
     assert not (tmp_path / "keep" / "AFR.keep").exists()
+
+
+@pytest.mark.parametrize("state", ["missing", "empty"])
+def test_a_missing_or_empty_pc_file_is_refused_naming_it(tmp_path: Path, state: str) -> None:
+    meta = metadata(tmp_path, {"NA2": False})
+    (tmp_path / "pcs").mkdir()
+    if state == "empty":
+        (tmp_path / "pcs" / "SAS.eigenvec").write_text("")
+    argv = ["--pcs", str(tmp_path / "pcs"), "--meta", str(meta), "--out", str(tmp_path / "keep")]
+    with pytest.raises(SystemExit, match=r"SAS\.eigenvec"):
+        make_keeps.main([*argv, "--panel", "SAS"])
