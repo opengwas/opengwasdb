@@ -17,6 +17,8 @@ from __future__ import annotations
 import csv
 import gzip
 import io
+import logging
+import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +50,8 @@ from opengwasdb.variants.normalise import (
 )
 
 FINNGEN_R13_CAPABILITY = "opengwasdb.finngen-r13"
+
+log = logging.getLogger(__name__)
 _FINNGEN_CHROMOSOMES = {
     str(chromosome).encode(): normalise_chromosome(str(chromosome))
     for chromosome in range(1, 24)
@@ -290,8 +294,10 @@ def stream_full_row_variants(path: str | Path) -> Iterator[SourceVariant]:
 # whose absence the tally must explain -- is read by `_source_row` from its
 # own cells.
 
-#: Decompressed bytes one block reads: about 250,000 FinnGen rows. A Pass 2
-#: worker holds one block's text, frame and columns at a time.
+#: Decompressed bytes one block reads, 32 MiB: what bounds a Pass 2 worker's
+#: batch, which holds one block and the line the read before it split. R13's
+#: 21,326,102-row ACTINOMYCOSIS file reads as 63 batches, the largest of
+#: 346,947 rows, and the read's resident memory peaked at 501 MiB (ADR 0076).
 _BLOCK_BYTES = 1 << 25
 
 #: Associations a batch holds once a source is handed to the per-row reader.
@@ -326,18 +332,19 @@ class _Plan:
     reads: dict[str, int]
 
     @classmethod
-    def of(cls, header: bytes) -> _Plan | None:
-        """The plan, or ``None`` for a header the columnar parse leaves to the
-        per-row reader: one `csv` reads otherwise than by splitting at tabs, one
+    def of(cls, header: bytes) -> _Plan | str:
+        """The plan, or why the columnar parse leaves the source to the per-row
+        reader: a header `csv` reads otherwise than by splitting at tabs, one
         that is not UTF-8, or one naming no chromosome, position or allele."""
         names = _header_names(header)
-        if names is None:
-            return None
+        if isinstance(names, str):
+            return names
         at = {name: index for index, name in enumerate(names)}
         chromosome = "#chrom" if "#chrom" in at else "chrom"
         reads = {name: at[name] for name in (chromosome, *_READ) if name in at}
-        if not {chromosome, "pos", "ref", "alt"} <= reads.keys():
-            return None
+        missing = _missing_identity(reads)
+        if missing:
+            return f"its header names no {', '.join(missing)} column"
         return cls(names, reads)
 
     @property
@@ -345,24 +352,47 @@ class _Plan:
         return self.reads["#chrom"] if "#chrom" in self.reads else self.reads["chrom"]
 
 
-def _header_names(header: bytes) -> list[str] | None:
-    """A header line's names, as `csv` reads a line it splits only at tabs."""
-    if not header.endswith(b"\n") or len(header) < 2 or not _plain(header, ascii_only=False):
-        return None
+def _missing_identity(reads: dict[str, int]) -> list[str]:
+    """The identity columns a header's ``reads`` lack, by the names it may use."""
+    missing = [name for name in ("pos", "ref", "alt") if name not in reads]
+    if "#chrom" not in reads and "chrom" not in reads:
+        missing.insert(0, "#chrom or chrom")
+    return missing
+
+
+def _header_names(header: bytes) -> list[str] | str:
+    """A header line's names, as `csv` reads a line it splits only at tabs, or
+    why it cannot be read so."""
+    if not header.endswith(b"\n") or len(header) < 2:
+        return "its header is not one whole line"
+    special = _first_special(header, ascii_only=False)
+    if special is not None:
+        return f"its header holds {special[1]}"
     try:
         return header[:-1].decode("utf-8").split("\t")
     except UnicodeDecodeError:
-        return None
+        return "its header is not UTF-8"
 
 
 #: The cells an association reads beyond its chromosome.
 _READ = ("pos", "ref", "alt", "beta", "sebeta", "af_alt")
 
 
-def _plain(data: bytes, *, ascii_only: bool = True) -> bool:
-    """Whether `csv` reads ``data`` by splitting it at tabs and newlines alone."""
-    plain = b'"' not in data and b"\r" not in data and b"\x00" not in data
-    return plain and (data.isascii() or not ascii_only)
+#: The bytes `csv` reads otherwise than as text between tabs and newlines.
+_SPECIAL = ((b'"', "a quote"), (b"\r", "a carriage return"), (b"\x00", "a NUL byte"))
+_NON_ASCII = re.compile(rb"[\x80-\xff]")
+
+
+def _first_special(data: bytes, *, ascii_only: bool = True) -> tuple[int, str] | None:
+    """Where ``data`` first holds a byte `csv` reads otherwise than by splitting
+    at tabs and newlines -- a quote, a carriage return, a NUL, or (with
+    ``ascii_only``) any byte outside ASCII -- and what it is; ``None`` for none."""
+    found = [(at, name) for byte, name in _SPECIAL if (at := data.find(byte)) >= 0]
+    if ascii_only and not data.isascii():
+        outside = _NON_ASCII.search(data)
+        if outside is not None:
+            found.append((outside.start(), "a byte outside ASCII"))
+    return min(found) if found else None
 
 
 def _without_blank_lines(lines: bytes) -> bytes:
@@ -397,31 +427,70 @@ class _Resumed(io.RawIOBase):
 def _association_batches(
     path: str | Path, tally: interface.StreamTally, scale: StoredEffectScale
 ) -> Iterator[AssociationBatch]:
-    """A source's associations, a block of whole lines at a time.
+    """A source's associations, a block of whole lines at a time (`_Source`)."""
+    with _opener(path)(path, "rb") as fh:
+        source = _Source(path, fh, tally, scale)
+        header = fh.readline()
+        plan = _Plan.of(header)
+        if not header:
+            return
+        if isinstance(plan, str):
+            yield from source.per_row(header, None, 0, plan)
+            return
+        yield from source.blocks(plan, len(header))
+
+
+@dataclass
+class _Source:
+    """One FinnGen source read a block at a time, and what the read fills.
 
     A line split across two reads is carried to the next block, and a last line
     with no newline is read as if it had one, as `csv` reads it. From the first
-    block that is not plain, the source's rest goes to the per-row reader.
+    block that is not plain, the rest goes to the per-row reader. The rows read
+    the same either way; the per-row reader is about five times slower, so the
+    first place a source is read row by row is logged, once, by byte offset.
     """
-    with _opener(path)(path, "rb") as fh:
-        header = fh.readline()
-        plan = _Plan.of(header)
-        if plan is None:
-            yield from _per_row_batches(_text_after(header, fh), None, tally, scale)
-            return
+
+    path: str | Path
+    fh: io.BufferedIOBase
+    tally: interface.StreamTally
+    scale: StoredEffectScale
+    warned: bool = False
+
+    def warn(self, message: str, *args: object) -> None:
+        """Log ``message`` the first time this source falls back, and never again."""
+        if not self.warned:
+            log.warning("FinnGen source %s: " + message, self.path, *args)
+            self.warned = True
+
+    def per_row(
+        self, head: bytes, names: list[str] | None, offset: int, reason: str
+    ) -> Iterator[AssociationBatch]:
+        """``head`` and the rest of the source, from byte ``offset``, row by row."""
+        self.warn("read row by row from byte %d on, since %s", offset, reason)
+        text = _text_after(head, self.fh)
+        yield from _per_row_batches(text, names, self.tally, self.scale)
+
+    def blocks(self, plan: _Plan, offset: int) -> Iterator[AssociationBatch]:
+        """The source after its header, which ends at byte ``offset``."""
         carry = b""
-        while block := fh.read(_BLOCK_BYTES):
+        while block := self.fh.read(_BLOCK_BYTES):
             data = carry + block
             cut = data.rfind(b"\n") + 1
             lines, carry = data[:cut], data[cut:]
-            if lines and not _plain(lines):
-                yield from _per_row_batches(_text_after(data, fh), plan.names, tally, scale)
+            special = _first_special(lines)
+            if special is not None:
+                at, what = special
+                yield from self.per_row(data, plan.names, offset + at, f"it holds {what}")
                 return
-            yield from _block_batches(lines, plan, tally, scale)
-        if carry and not _plain(carry):
-            yield from _per_row_batches(_text_after(carry, fh), plan.names, tally, scale)
+            yield from _block_batches(lines, offset, plan, self)
+            offset += cut
+        special = _first_special(carry)
+        if special is not None:
+            at, what = special
+            yield from self.per_row(carry, plan.names, offset + at, f"it holds {what}")
         elif carry:
-            yield from _block_batches(carry + b"\n", plan, tally, scale)
+            yield from _block_batches(carry + b"\n", offset, plan, self)
 
 
 def _text_after(head: bytes, rest: io.BufferedIOBase) -> io.TextIOWrapper:
@@ -447,21 +516,26 @@ def _per_row_batches(
 
 
 def _block_batches(
-    lines: bytes, plan: _Plan, tally: interface.StreamTally, scale: StoredEffectScale
+    lines: bytes, offset: int, plan: _Plan, source: _Source
 ) -> Iterator[AssociationBatch]:
-    """One block's associations, as one batch, or none where it holds none."""
+    """One block's associations, as one batch, or none where it holds none.
+
+    ``lines`` start at byte ``offset`` of the source.
+    """
     lines = _without_blank_lines(lines)
     if not lines:
         return
     try:
         block = _Block.read(lines, plan)
-    except pd.errors.ParserError:
+    except pd.errors.ParserError as refused:
         # pandas refuses a block none of whose lines reaches the header's last
         # column; `csv` pads each, and reads it.
+        source.warn("the block at byte %d is read row by row: pandas refused it (%s)",
+                    offset, str(refused).strip())
         text = io.TextIOWrapper(io.BytesIO(lines), encoding="ascii", newline="")
-        yield from _per_row_batches(text, plan.names, tally, scale)
+        yield from _per_row_batches(text, plan.names, source.tally, source.scale)
         return
-    batch = block.associations(lines, plan, tally, scale)
+    batch = block.associations(lines, plan, source.tally, source.scale)
     if len(batch):
         yield batch
 
@@ -690,19 +764,19 @@ def _undecided(
     tally: interface.StreamTally,
     scale: StoredEffectScale,
 ) -> Iterator[tuple[int, ReaderAssociation | None]]:
-    """Each of ``rows``, read by `_source_row` from its own cells as written."""
-    frame = pd.read_csv(
-        io.BytesIO(lines),
-        names=range(len(plan.names)),
-        usecols=sorted(plan.reads.values()),
-        dtype=str,
-        na_filter=False,
-        **_PANDAS,
-    )
-    cells = {name: frame[index].to_numpy(dtype=object) for name, index in plan.reads.items()}
+    """Each of ``rows``, read by `_source_row` from its own line.
+
+    The block is plain, so a line's cells are what lies between its tabs, as
+    `csv` reads them, and a cell a short line does not reach is ``None``, as a
+    `csv.DictReader` row holds it.
+    """
+    ends = np.flatnonzero(np.frombuffer(lines, dtype=np.uint8) == ord("\n"))
+    starts = np.concatenate(([0], ends[:-1] + 1))
     faults, frequencies = tally.faults, tally.frequencies
     for row in rows.tolist():
-        cell = {name: values[row] for name, values in cells.items()}
+        cells = lines[starts[row] : ends[row]].decode("ascii").split("\t")
+        cell = {name: cells[index] if index < len(cells) else None
+                for name, index in plan.reads.items()}
         source_row = _source_row(cell, faults, frequencies, tabular.parse_effect)
         if source_row is None:
             yield row, None

@@ -17,6 +17,7 @@ import struct
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import finngen_cases
 import numpy as np
@@ -256,6 +257,43 @@ def test_the_batches_are_the_per_row_associations(
     assert per_row == batched
 
 
+#: Sources whose every line is plain, read at block sizes smaller than the source.
+_BLOCKED = [
+    pytest.param("generated", 1 << 12, id="generated-4KiB"),
+    *[
+        pytest.param(source, block, id=f"{source}-{block}B")
+        for source in ("case alleles", "case se", "case beta", "case af", "case indels")
+        for block in (64, 1)
+    ],
+]
+
+
+@pytest.mark.parametrize(("source", "block"), _BLOCKED)
+def test_a_block_holds_one_read_and_the_line_it_split(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str, block: int
+) -> None:
+    """A small block size reads a source as many blocks, each at most one read
+    and the line the read before it split: what bounds a worker's memory is
+    the block, not the source."""
+    path = SOURCES[source](tmp_path)
+    with finngen._opener(path)(path, "rb") as fh:
+        fh.readline()
+        longest = max(len(line) for line in fh)
+    parsed: list[int] = []
+    parse = finngen._block_batches
+
+    def record(lines: bytes, *args: Any) -> Iterator[AssociationBatch]:
+        parsed.append(len(lines))
+        return parse(lines, *args)
+
+    monkeypatch.setattr(finngen, "_BLOCK_BYTES", block)
+    monkeypatch.setattr(finngen, "_block_batches", record)
+    batches = list(FinnGenR13Reader(path).stream_association_batches(StreamTally()))
+
+    assert len(batches) > 1 and len(parsed) > 1
+    assert max(parsed) <= block + longest
+
+
 def test_a_plain_source_is_parsed_as_columns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -276,6 +314,64 @@ def test_a_plain_source_is_parsed_as_columns(
 def test_a_statistic_is_missing_where_the_per_row_reader_reads_it_missing() -> None:
     """The block parse's missing tokens are the per-row parsers' own."""
     assert set(finngen._MISSING_STATISTICS) == tabular._MISSING == stats._MISSING_AF
+
+
+_CASES = {case.name: case for case in CASES}
+
+
+def _fallbacks(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == finngen.__name__]
+
+
+@pytest.mark.parametrize(
+    ("case", "byte", "reason"),
+    [
+        ("quoted", b'"', "it holds a quote"),
+        ("non-ascii", "É".encode(), "it holds a byte outside ASCII"),
+        ("crlf", None, "its header holds a carriage return"),
+        ("no-pos", None, "its header names no pos column"),
+        ("byte-order-mark", None, "its header names no #chrom or chrom column"),
+    ],
+)
+def test_a_source_read_row_by_row_says_where_from_and_why(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, case: str, byte: bytes | None, reason: str
+) -> None:
+    """The rows read the same, but about five times slower, so the source,
+    the byte the per-row reader starts at and the cause are logged once."""
+    source = _CASES[case]
+    path = source.write(tmp_path)
+    offset = 0 if byte is None else (source.prefix + source.text.encode()).find(byte)
+    with caplog.at_level("WARNING", logger=finngen.__name__):
+        list(FinnGenR13Reader(path).stream_association_batches(StreamTally()))
+    assert _fallbacks(caplog) == [
+        f"FinnGen source {path}: read row by row from byte {offset} on, since {reason}"
+    ]
+
+
+def test_blocks_pandas_refuses_are_read_row_by_row_and_said_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """pandas refuses a block in which no line reaches the header's last
+    column. Each such block is read row by row; the first is logged."""
+    path = tmp_path / "short.tsv"
+    lines = [finngen_cases.HEADER, *(f"1\t{100 * i}\tA\tG" for i in range(1, 40))]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    monkeypatch.setattr(finngen, "_BLOCK_BYTES", 64)
+    with caplog.at_level("WARNING", logger=finngen.__name__):
+        assert _batched(path) == _per_row(path)
+    (message,) = _fallbacks(caplog)
+    assert message.startswith(
+        f"FinnGen source {path}: the block at byte {len(lines[0]) + 1} is read row by row: "
+        "pandas refused it"
+    )
+
+
+def test_a_plain_source_is_read_without_a_fallback(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING", logger=finngen.__name__):
+        list(FinnGenR13Reader(_generated(tmp_path)).stream_association_batches(StreamTally()))
+    assert _fallbacks(caplog) == []
 
 
 def test_finngen_offers_its_associations_as_batches(tmp_path: Path) -> None:

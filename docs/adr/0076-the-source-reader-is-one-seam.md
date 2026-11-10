@@ -81,6 +81,21 @@ them.**
     Rebuilding the FinnGen pilot OGS-00003, Pass 2 takes about 50 s an
     Analysis against about 271 s, and the Store and Admission record are
     identical.
+  - A batch's memory is a block's. R13's 21,326,102-row file reads as 63
+    batches, the largest of 346,947 rows, and the read alone peaks at 501 MiB
+    resident. Each OGS-00003 Pass 2 worker held about 0.27 GiB more private
+    memory than when it read rows: 0.89 and 1.00 GiB, mean, against 0.62 and
+    0.74, and at most 1.58 GiB. At the full FinnGen Store's 32 workers
+    (OGS-00017) that is about 32 × 1.58 GiB beside a 19.6 GiB parent, about
+    70 GiB, against the quarter of available memory a build may take: 172 GiB
+    of the 690 GiB available when it was measured.
+  - A block or row read by the per-row rules is logged once a source, with
+    the byte it starts at and why: those rows read the same, about five times
+    slower.
+  - The issue listed FinnGen's first-rsid rule among what a batch covers. It
+    is left out deliberately: Pass 2 names no rsid, as `ReaderAssociation`
+    named none before, and Pass 1 still applies the rule, so a rebuild's
+    `variants.tsv.gz` is byte-identical.
 - **The registry is the only way in.**
   - `open_source(spec, alignment=)` and `resolve_reader(..., liftover=)` open a
     reader lifted onto the reference build, and a capability that cannot lift
@@ -166,7 +181,7 @@ The owner's rulings on the unifications, issue #56:
   every registered reader drops one, and carried each Analysis's metadata on
   every row, which a reader's associations have no field for. It is now
   `opengwasdb.association-tsv`, an ordinary reader: one file per Analysis,
-  associations only, `ReferenceAllele.UNDECLARED`. What the rows once
+  associations only, its format declaring no reference allele. What the rows once
   repeated (the Analysis id, its label, Trait Ontology, attribution, effect
   scale, and MAF and INFO filters) is the build manifest's, as for every other
   builder, and a header that still names one of those columns is refused. An

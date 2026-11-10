@@ -125,16 +125,16 @@ def parse_imputation_score(value: str | None, *, declared: bool) -> ImputationSc
 
 
 class ReferenceAllele(StrEnum):
-    """Which of a row's two alleles its source declares to be the genome's reference.
+    """Whether a tabular source's `ref` column is the genome's reference allele.
 
-    Declared by the format, never inferred: GWAS-VCF's `REF` and FinnGen's
-    `ref` are the reference allele (`REF`, the row's own `ref`), while
-    GWAS-SSF, BESD and an effect/other Column Map name an effect allele and an
-    other one, which need not be the reference (`UNDECLARED`).
-
-    An indel's ALID is formed from the declaration when the row is read (ADR
-    0079), and one whose source declares none is dropped there, so every
-    indel a reader yields has its reference in `ref`.
+    Declared, never inferred: a Column Map's allele convention says it (`REF`
+    for a `ref_alt_effect_is_alt` map such as FinnGen's, `UNDECLARED` for one
+    that names an effect allele and another that need not be the reference),
+    and `tabular.declared_reference` turns it into the `DeclaredReference` the
+    read places indels by. An indel's ALID is formed from the declaration when
+    the row is read (ADR 0079), and one whose source declares none is dropped
+    there. Every other reader applies its format's declaration as it reads a
+    row, and no association or batch carries it (#318).
     """
 
     UNDECLARED = "undeclared"
