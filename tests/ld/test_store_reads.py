@@ -19,11 +19,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from contract import support
 from contract.support import RangeHandler
 from store_copies import TEST_STORE, copy_store, resharded
 
 import ogld
-from ogld.format import InputError
+from ogld.format import InputError, quantise
 from ogld.store import StoreReader, location, reader
 
 #: Inner chunks of 512 elements, 4 to a shard: chr22's Near Band is 136 chunks in 34 shards.
@@ -54,24 +55,94 @@ def test_a_re_sharded_store_reads_the_same_as_the_committed_one(small_chunks: Pa
     np.testing.assert_array_equal(whole(small_chunks).r, whole(TEST_STORE).r)
 
 
+def reference_pairs(rows: np.ndarray) -> np.ndarray:
+    """What the store must answer among its `rows`, from the Test Panel's reference r at k = 10:
+    the A1-signed code over 32,767 where the store holds the pair, NaN where it does not."""
+    names, _ = support.oriented()
+    panel = {str(name): i for i, name in enumerate(names)}
+    variants = StoreReader.open(TEST_STORE).variants(rows)
+    ref = support.reference_matrix(support.K, tuple(panel[a] for a in variants.alid))
+    gap = np.abs(variants.position[:, None] - variants.position[None, :])
+    codes = quantise(np.where(np.isnan(ref), 0.0, ref)).astype(np.int32)
+    held = ~np.isnan(ref) & ((gap <= 3_000_000) | (np.abs(codes) >= support.FLOOR))
+    expected = np.where(held, codes / 32767, np.nan)
+    np.fill_diagonal(expected, 1.0)
+    return expected
+
+
 @pytest.mark.parametrize("budget", [0, 1 << 28])
-def test_reads_agree_with_and_without_the_chunk_cache(
+def test_a_matrix_read_a_few_pairs_at_a_time_is_the_reference(
     small_chunks: Path, budget: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A budget of 0 keeps no chunk, so every read fetches its chunks again. A tiny step makes
-    # pair_r resolve its pairs a few at a time. Each must give the committed store's answers.
+    # pair_r resolves 97 pairs a step, so this matrix takes over twenty steps; a budget of 0
+    # keeps no chunk, so every step fetches its chunks again. Each must give the reference r.
+    rows = np.arange(0, 1056, 7)
+    monkeypatch.setattr(location, "CACHE_BYTES", budget)
+    monkeypatch.setattr(reader, "_PAIRS_PER_STEP", 97)
+    expected = reference_pairs(rows)
+    stored = (np.isfinite(expected).sum() - len(rows)) // 2
+    assert stored > 20 * 97, "the matrix must take many steps for this to mean anything"
+    assert np.isnan(expected).any(), "and hold unstored pairs"
+    np.testing.assert_array_equal(StoreReader.open(small_chunks).pair_r(rows), expected)
+
+
+@pytest.mark.parametrize("budget", [0, 1 << 28])
+def test_index_and_band_rows_read_the_same_from_any_layout(
+    small_chunks: Path, budget: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     rows = np.arange(0, 1056, 7)
     expected = StoreReader.open(TEST_STORE)
     monkeypatch.setattr(location, "CACHE_BYTES", budget)
-    monkeypatch.setattr(reader, "_PAIRS_PER_STEP", 97)
     got = StoreReader.open(small_chunks)
-    np.testing.assert_array_equal(got.pair_r(rows), expected.pair_r(rows))
     for read in ("index", "band"):
         mine, theirs = getattr(got, read)(rows), getattr(expected, read)(rows)
         assert len(theirs.partner) > 1000, f"{read} must return many partners"
         np.testing.assert_array_equal(mine.indptr, theirs.indptr)
         np.testing.assert_array_equal(mine.partner, theirs.partner)
         np.testing.assert_array_equal(mine.r, theirs.r)
+
+
+def retained(cache: location.ChunkCache) -> int:
+    """The bytes the cache's kept chunks actually hold alive: each one's owning buffer, once."""
+    owners = {}
+    for chunk in cache._kept.values():
+        owner = chunk if chunk.base is None else chunk.base
+        owners[id(owner)] = owner.nbytes
+    return sum(owners.values())
+
+
+def test_the_cache_holds_no_more_than_its_budget(small_chunks: Path) -> None:
+    # One read of 40 neighbouring chunks is one run; keeping 4 of them must not keep the run.
+    near = zarr.open_array(small_chunks / "near" / "22" / "r", mode="r")
+    budget = 4 * INNER * near.dtype.itemsize
+    cache = location.ChunkCache(budget)
+    got = cache.take(near, np.arange(0, 40 * INNER))
+    np.testing.assert_array_equal(got, np.asarray(near[: 40 * INNER]))
+    assert len(cache._kept) == 4, "the cache must keep a few chunks for this to mean anything"
+    assert retained(cache) <= budget
+
+
+def test_threads_missing_one_chunk_store_it_once(small_chunks: Path) -> None:
+    near = zarr.open_array(small_chunks / "near" / "22" / "r", mode="r")
+    everything = np.asarray(near[:])
+    cache = location.ChunkCache(64 * INNER * near.dtype.itemsize)
+    start = threading.Barrier(16)
+    wrong: list[int] = []
+
+    def read(first: int) -> None:
+        start.wait()
+        coords = np.arange(first * INNER, (first + 48) * INNER, 5)
+        if not np.array_equal(cache.take(near, coords), everything[coords]):
+            wrong.append(first)
+
+    workers = [threading.Thread(target=read, args=(i % 8,)) for i in range(16)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    assert wrong == []
+    assert len(cache._kept) > 32, "the threads' reads must overlap in many kept chunks"
+    assert cache._bytes == sum(chunk.nbytes for chunk in cache._kept.values()) == retained(cache)
 
 
 def test_a_lost_shard_refuses_the_pairs_it_held_and_no_others(

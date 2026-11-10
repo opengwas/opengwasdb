@@ -147,6 +147,14 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    carry, so `import ogld` works without it and the builder refuses, naming the extra, when it is
    missing.
 
+   _Addition, 10 November 2026 (owner, at the review of #4):_ reading an LD Store also needs
+   **fsspec and aiohttp, as required runtime dependencies**, not an extra. Spec §1 makes a read
+   over HTTP(S) as much a read as one from disk, and zarr opens a URL through fsspec's HTTP
+   filesystem, which is async and imports aiohttp; fsspec's requests-based alternative is its
+   experimental pyodide shim. Both are on conda-forge. A local read does not import aiohttp, so
+   an extra was possible, and was rejected: pgenlib is an extra only because conda-forge lacks it,
+   and an install that cannot read a published store over HTTP would be a reader that half works.
+
 ## Considered options
 
 - **ogld computes the PCs.** Rejected by the owner: a PCA inside the builder makes every build

@@ -16,6 +16,7 @@ is read is decided here, in one place, which ogld#8 tunes when it times the read
 from __future__ import annotations
 
 import os
+import threading
 from collections import OrderedDict
 from typing import Any, Final
 
@@ -43,12 +44,19 @@ def open_group(location: str | os.PathLike[str]) -> zarr.Group:
 
 class ChunkCache:
     """Decoded inner chunks of one store's 1-D arrays, read whole and kept to `budget` bytes,
-    the least recently used dropped first."""
+    the least recently used dropped first.
+
+    Each kept chunk owns its memory, copied out of the read that fetched it, so the bytes it
+    counts are the bytes it holds: a view would keep that whole read alive. One lock guards
+    every lookup, insertion and eviction, so threads sharing a reader keep one copy of a chunk
+    they both missed and the count stays the bytes held. Reads themselves run outside it.
+    """
 
     def __init__(self, budget: int | None = None) -> None:
         self._budget = CACHE_BYTES if budget is None else budget
         self._bytes = 0
         self._kept: OrderedDict[tuple[str, int], npt.NDArray[Any]] = OrderedDict()
+        self._lock = threading.Lock()
 
     def take(self, array: zarr.Array[Any], coords: npt.ArrayLike) -> npt.NDArray[Any]:
         """The elements of a 1-D array at `coords`, in that order, from the inner chunks that
@@ -81,26 +89,34 @@ class ChunkCache:
     def _kept_chunks(self, path: str, wanted: list[int]) -> dict[int, npt.NDArray[Any]]:
         """Those of the chunks `wanted` that are kept, each marked as just used."""
         found: dict[int, npt.NDArray[Any]] = {}
-        for k in wanted:
-            kept = self._kept.get((path, k))
-            if kept is not None:
-                found[k] = kept
-                self._kept.move_to_end((path, k))
+        with self._lock:
+            for k in wanted:
+                kept = self._kept.get((path, k))
+                if kept is not None:
+                    found[k] = kept
+                    self._kept.move_to_end((path, k))
         return found
 
     def _read_run(
         self, array: zarr.Array[Any], first: int, stop: int, size: int
     ) -> dict[int, npt.NDArray[Any]]:
-        """Chunks first … stop − 1, read in one request and kept."""
+        """Chunks first … stop − 1, read in one request, each copied out and kept."""
         data = np.asarray(array[first * size : stop * size])
-        read = {k: data[(k - first) * size : (k - first + 1) * size] for k in range(first, stop)}
-        for k, chunk in read.items():
-            self._keep((array.path, k), chunk)
-        return read
+        read = {
+            k: data[(k - first) * size : (k - first + 1) * size].copy() for k in range(first, stop)
+        }
+        with self._lock:
+            return {k: self._keep((array.path, k), chunk) for k, chunk in read.items()}
 
-    def _keep(self, key: tuple[str, int], chunk: npt.NDArray[Any]) -> None:
+    def _keep(self, key: tuple[str, int], chunk: npt.NDArray[Any]) -> npt.NDArray[Any]:
+        """Keep `chunk`, or the copy another thread kept first; the caller holds the lock."""
+        kept = self._kept.get(key)
+        if kept is not None:
+            self._kept.move_to_end(key)
+            return kept
         self._kept[key] = chunk
         self._bytes += chunk.nbytes
         while self._bytes > self._budget and self._kept:
             _, dropped = self._kept.popitem(last=False)
             self._bytes -= dropped.nbytes
+        return chunk
