@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -39,7 +40,6 @@ NARROW = ["--chr", "22", "--from-bp", "20000000", "--to-bp", "23000000"]
 WIDE = ["--chr", "22", "--from-bp", "20000000", "--to-bp", "32000000"]
 #: plink2 prints r to six significant digits.
 PRINTED = 5e-7
-OGLD_5 = pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="ogld#5")
 _SLICES: dict[str, Path] = {}
 
 
@@ -118,7 +118,6 @@ def test_the_builder_refuses_the_shipped_pgen_for_its_missing_calls(tmp_path: Pa
         )
 
 
-@OGLD_5
 def test_the_builder_matches_plink2_on_a_real_chr22_slice(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
@@ -131,7 +130,12 @@ def test_the_builder_matches_plink2_on_a_real_chr22_slice(
     # 3,000 candidates spread over the slice: a matrix of all of them stays small.
     spread = list(range(0, len(found), max(1, len(found) // 3000)))
     m = store.matrix([found[i].alid for i in spread])
-    present = [i for i in spread if found[i].alid not in set(m.absent)]
+    # A reversed-indel pair is two records with one ALID, and the store holds one of them
+    # (build-inputs §6): compare only records whose ALID no other record shares.
+    shared = Counter(o.alid for o in found)
+    present = [
+        i for i in spread if found[i].alid not in set(m.absent) and shared[found[i].alid] == 1
+    ]
     sample = present[:: max(1, len(present) // 300)][:300]
     assert len(sample) == 300, "the slice must hold 300 variants that pass the filters"
     (tmp_path / "sample.txt").write_text("\n".join(rows[i][2] for i in sample) + "\n")
@@ -142,6 +146,7 @@ def test_the_builder_matches_plink2_on_a_real_chr22_slice(
         tmp_path / "sample.txt",
         "--r-unphased",
         "square",
+        "ref-based",  # plink2 otherwise signs r to each variant's major allele
         "--out",
         tmp_path / "r",
     )
@@ -156,7 +161,6 @@ def test_the_builder_matches_plink2_on_a_real_chr22_slice(
     assert worst <= 1 / 65534 + PRINTED, f"the builder is {worst} from plink2"
 
 
-@OGLD_5
 def test_real_ld_survives_pc_adjustment(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
