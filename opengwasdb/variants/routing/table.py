@@ -26,6 +26,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import cached_property
+from typing import Any
 
 import numpy as np
 
@@ -96,21 +98,58 @@ class Placed:
 
 @dataclass(frozen=True)
 class Unmatched:
-    """The associations no axis holds, by routing key, in stream order.
+    """The associations no axis holds, in stream order, by the coordinate each
+    was routed by.
 
     Kept only by a table built with ``keep_unmatched``; otherwise empty, and
     only counted. Not deduplicated, and in the reader's orientation.
-    ``conflicting`` names the keys more than one kept association reached
-    with a different z or SE, by `collapse_duplicates`' rule, as
-    `Placed.conflicting` names an axis's indices; all their rows are still
-    here.
+    ``chromosome``, ``position``, ``ref`` and ``alt`` are each row's, as its
+    batch held them, the alleles as the source spells them. `keys` spells each
+    row as its Routing Key, formed when first asked for: a Hybrid fold encodes
+    an off-reference row from its fields (`unknown_keys.encode_fields`) and
+    forms a key only for a row it hashes or names (#318). `conflicting` names
+    the keys more than one kept association reached with a different z or SE,
+    by `collapse_duplicates`' rule, as `Placed.conflicting` names an axis's
+    indices; all their rows are still here.
     """
 
-    keys: Sequence[str]
     z: np.ndarray
     se: np.ndarray
     eaf: np.ndarray
-    conflicting: Sequence[str] = ()
+    chromosome: Sequence[str]
+    position: Sequence[int]
+    ref: Sequence[str]
+    alt: Sequence[str]
+
+    def __post_init__(self) -> None:
+        # A row's statistics read against another row's coordinate would
+        # spill an association under the wrong key, so a ragged one is refused.
+        lengths = {len(values) for values in vars(self).values()}
+        if len(lengths) != 1:
+            raise ValueError(f"unmatched rows hold {sorted(lengths)} values across their fields")
+
+    @classmethod
+    def none(cls) -> Unmatched:
+        """No association: what a column that keeps no unmatched row holds."""
+        empty = _empty_stat()
+        return cls(empty, empty, empty, chromosome=[], position=[], ref=[], alt=[])
+
+    def __len__(self) -> int:
+        return len(self.z)
+
+    def key_at(self, row: int) -> str:
+        """Row ``row``'s Routing Key."""
+        site = (self.chromosome[row], self.position[row], self.ref[row], self.alt[row])
+        return routing_key(site)
+
+    @cached_property
+    def keys(self) -> list[str]:
+        """Each row's Routing Key, in order."""
+        return [self.key_at(row) for row in range(len(self))]
+
+    @cached_property
+    def conflicting(self) -> list[str]:
+        return _conflicting_keys(self.keys, (self.z, self.se))
 
 
 @dataclass(frozen=True)
@@ -210,7 +249,7 @@ class _Collected:
     def __init__(self, n_axes: int, keep_unmatched: bool) -> None:
         self.parts: list[list[tuple[np.ndarray, ...]]] = [[] for _ in range(n_axes)]
         self.keep_unmatched = keep_unmatched
-        self.unmatched_keys: list[str] = []
+        self.unmatched_rows: list[AssociationBatch] = []
         self.unmatched_parts: list[tuple[np.ndarray, ...]] = []
         self.n_unmatched = 0
 
@@ -218,9 +257,9 @@ class _Collected:
         if len(part[0]):
             self.parts[axis].append(part)
 
-    def add_unmatched(self, keys: list[str], part: tuple[np.ndarray, ...]) -> None:
-        self.unmatched_keys.extend(keys)
+    def add_unmatched(self, rows: AssociationBatch, part: tuple[np.ndarray, ...]) -> None:
         if len(part[0]):
+            self.unmatched_rows.append(rows)
             self.unmatched_parts.append(part)
 
     def column(self) -> RoutedColumn:
@@ -229,12 +268,23 @@ class _Collected:
             _placed(*_joined(parts, (_empty_index(), *statistics))) for parts in self.parts
         )
         z, se, eaf = _joined(self.unmatched_parts, statistics)
-        keys = self.unmatched_keys
-        return RoutedColumn(
-            placed=placed,
-            unmatched=Unmatched(keys, z, se, eaf, _conflicting_keys(keys, (z, se))),
-            n_unmatched=self.n_unmatched,
+        rows = self.unmatched_rows
+        chromosome, position, ref, alt = (
+            _chained([getattr(batch, name) for batch in rows])
+            for name in ("chromosome", "position", "ref", "alt")
         )
+        unmatched = Unmatched(
+            z, se, eaf, chromosome=chromosome, position=position, ref=ref, alt=alt
+        )
+        return RoutedColumn(placed=placed, unmatched=unmatched, n_unmatched=self.n_unmatched)
+
+
+def _chained(parts: list[Any]) -> Any:
+    """One column of the unmatched rows, joined across their batches: an array
+    where every batch held one, else a list."""
+    if parts and all(isinstance(part, np.ndarray) for part in parts):
+        return np.concatenate(parts)
+    return [value for part in parts for value in part]
 
 
 def _conflicting_keys(keys: list[str], statistics: tuple[np.ndarray, np.ndarray]) -> list[str]:
@@ -504,9 +554,11 @@ class RouteTable:
         unmatched = ~matched
         collected.n_unmatched += int(unmatched.sum())
         if self._keep_unmatched:
-            at = np.flatnonzero(unmatched).tolist()
-            keys = [routing_key((chroms[j], poss[j], refs[j], alts[j])) for j in at]
-            collected.add_unmatched(keys, (z[unmatched], se[unmatched], eaf[unmatched]))
+            # The rows' own fields, not their Routing Keys: a key is a string
+            # a row, and most unmatched rows never need one (#318).
+            collected.add_unmatched(
+                batch.take(unmatched), (z[unmatched], se[unmatched], eaf[unmatched])
+            )
 
     def _collect_matched(
         self,

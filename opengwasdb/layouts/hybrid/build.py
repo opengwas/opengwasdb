@@ -161,8 +161,8 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
     check_hash,
     decode_packed,
+    encode_fields,
     encode_key,
-    encode_keys,
     is_hashed,
     placed_hashed_values,
     validated_hashed_values,
@@ -293,7 +293,7 @@ def _off_reference_spill(
     the fold. Only the hashed survivors need a raw string in the side file;
     packed keys decode from their own bits.
     """
-    if not unmatched.keys:
+    if not len(unmatched):
         return (
             np.empty(0, dtype=np.uint64),
             np.empty(0, dtype=np.float32),
@@ -302,10 +302,10 @@ def _off_reference_spill(
             np.empty(0, dtype=np.int64),
             [],
         )
-    encoded = encode_keys(unmatched.keys)
+    encoded = encode_fields(unmatched.chromosome, unmatched.position, unmatched.ref, unmatched.alt)
     found = collapse_duplicates(encoded.values, unmatched.z, unmatched.se)
     gate.unplaced(
-        Reason.DUPLICATE_CONFLICTING, [unmatched.keys[i] for i in found.dropped.tolist()]
+        Reason.DUPLICATE_CONFLICTING, [unmatched.key_at(row) for row in found.dropped.tolist()]
     )
     gate.collapsed(found.collapsed)
     keep = found.keep
@@ -359,7 +359,7 @@ def _resolve_column_hybrid(
         # A two-pass axis is the sources' whole union, so nothing folds an
         # unmatched row onto it later: it is dropped here, and logged.
         gate.unplaced_off_axis(unmatched.keys, off_primary)
-        unmatched = Unmatched([], unmatched.z[:0], unmatched.se[:0], unmatched.eaf[:0])
+        unmatched = Unmatched.none()
     divisor = row.se_divisor
     overflow_se = build_manifest.apply_se_divisor(overflow.se, divisor)
     return (

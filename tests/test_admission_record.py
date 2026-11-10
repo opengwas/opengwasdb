@@ -523,11 +523,13 @@ def test_the_hybrid_off_reference_spill_resolves_its_duplicates():
     from opengwasdb.variants.routing import Unmatched
 
     unmatched = Unmatched(
-        ["1:5:A:G", "1:5:A:G", "1:9:C:T", "1:9:C:T", "2:4:A:C"],
         np.array([1.0, 1.0, 2.0, -2.0, 3.0], dtype=np.float32),
         np.full(5, 0.1, dtype=np.float32),
         np.full(5, np.nan, dtype=np.float32),
-        np.zeros(5, dtype=np.int8),
+        chromosome=["1", "1", "1", "1", "2"],
+        position=[5, 5, 9, 9, 4],
+        ref=["A", "A", "C", "C", "A"],
+        alt=["G", "G", "T", "T", "C"],
     )
     gate = counting_gate(AnalysisRules("A"))
     keys, z, *_ = _off_reference_spill(unmatched, 1.0, gate)
