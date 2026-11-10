@@ -23,6 +23,7 @@ import testdata
 import ogld
 from ogld.build import adjust, diagnostic, record
 from ogld.format import InputError
+from ogld.store import StoreReader
 
 ROOT = Path(__file__).resolve().parents[1]
 REGIONS = ROOT / "docs" / "spec" / "long-range-ld-regions-grch38.tsv"
@@ -220,3 +221,51 @@ def test_a_variant_set_inside_the_long_range_regions_is_refused_before_a_write(
     with pytest.raises(InputError, match=rf"panel {made.PANEL_ID}.*100 kb.*Long-Range LD Regions"):
         ogld.build(made.inputs(pgen), tmp_path / "store")
     assert not (tmp_path / "store").exists(), "nothing is written"
+
+
+def standardised(x: np.ndarray) -> np.ndarray:
+    return (x - x.mean()) / x.std()
+
+
+def test_a_variant_the_covariates_span_is_dropped_and_counted(tmp_path: Path) -> None:
+    # Review of #5 (standards a5): filter 4 after PC Adjustment had no test. PC10 here is 30% one
+    # variant's genotypes and 70% ancestry PC1, as the contract's kept PC2 is: one window explains
+    # much of it, the rest of the genome too, so the PC Check keeps it, and with PC1 also a
+    # covariate the variant lies in their span: no variance is left.
+    row = 1050
+    pcs = testdata.pcs().values
+    mix = np.sqrt(0.3) * standardised(made.hard_calls()[row].astype(np.float64))
+    mix += np.sqrt(0.7) * standardised(pcs[:, 0])
+    lines = testdata.panel().pcs.read_text().splitlines()
+    out = [lines[0]]
+    for i, line in enumerate(lines[1:]):
+        fields = line.split("\t")
+        fields[10] = repr(float(mix[i]))
+        out.append("\t".join(fields))
+    pc_file = tmp_path / "pcs.eigenvec"
+    pc_file.write_text("\n".join(out) + "\n")
+    passing = testdata.variants().passes_filters
+    assert passing[row]
+    twins = (made.hard_calls()[passing] == made.hard_calls()[row]).all(axis=1).sum()
+    assert twins == 1, "no other variant shares its genotypes, so exactly one is flat"
+    provenance = ogld.build(made.inputs(testdata.panel().pgen, 10, pcs=pc_file), tmp_path / "s")
+    assert provenance["adjustment"]["covariates"][-1] == "PC10", "the PC Check keeps the mix"
+    assert provenance["variants_dropped"]["zero_variance"] == 1
+    assert provenance["n_variants"] == int(passing.sum()) - 1
+    reader = StoreReader.open(tmp_path / "s")
+    assert reader.rows_of(made.alids([row]))[0] == -1
+
+
+def test_flat_is_a_float_error_bar_not_a_variance_floor() -> None:
+    # A residual 1e-6 of the centred dosages' sum of squares is real variance, kept; one the
+    # covariates span exactly is flat. FLAT is 1e-12: at 1e-3 the first would be dropped.
+    rng = np.random.default_rng(4)
+    pcs = rng.standard_normal((300, 2))
+    spanned = 1.0 + pcs[:, 0] - 0.5 * pcs[:, 1]
+    covariates = adjust.covariates(["PC1", "PC2"], pcs, 300)
+    noise = rng.standard_normal(300)
+    noise -= covariates.basis @ (covariates.basis.T @ noise)
+    centred = spanned - spanned.mean()
+    noise *= np.sqrt(1e-6 * (centred @ centred) / (noise @ noise))
+    _, flat = adjust.residuals(np.vstack([spanned, spanned + noise]), covariates)
+    assert flat.tolist() == [True, False]
