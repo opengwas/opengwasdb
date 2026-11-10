@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The realdata tier (CONTRIBUTING.md, "Tests"): `pixi run test-realdata`.
+# The realdata tier (CONTRIBUTING.md, "Tests"): `pixi run -e dev test-realdata`.
 #
 # These suites read the HGDP+1kGP panels under /data/opengwasdb/reference/, so they run on
 # the IEU compute nodes, within 5 minutes in all. Every suite the tier holds is named in
