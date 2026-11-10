@@ -13,6 +13,7 @@ import http.server
 import json
 import shutil
 import threading
+import tracemalloc
 from collections.abc import Iterator
 from functools import partial
 from pathlib import Path
@@ -124,27 +125,66 @@ def test_the_cache_holds_no_more_than_its_budget(small_chunks: Path) -> None:
     assert retained(cache) <= budget
 
 
+def measured(chunk: np.ndarray) -> int:
+    """The bytes a chunk's storage takes, measured by tracemalloc as a copy of it allocates
+    them: its buffer, and for numpy's variable-width strings their arena, which nbytes omits."""
+    tracing = tracemalloc.is_tracing()
+    if not tracing:
+        tracemalloc.start()
+    before = tracemalloc.get_traced_memory()[0]
+    copy = chunk.copy()
+    taken = tracemalloc.get_traced_memory()[0] - before
+    del copy
+    if not tracing:
+        tracemalloc.stop()
+    return taken
+
+
+def test_string_chunks_count_what_they_hold(tmp_path: Path) -> None:
+    # ALIDs of 64 characters: numpy's variable-width strings keep each in an arena that
+    # nbytes does not count (16 bytes an element), so a budget counted by nbytes is no bound.
+    names = np.array([f"22:{i}:{'A' * 52}:C"[:64].ljust(64, "G") for i in range(20 * 512)])
+    alid = zarr.open_group(tmp_path / "g", mode="w").create_array(
+        "alid", shape=names.shape, dtype=str, chunks=(512,), fill_value=""
+    )
+    alid[:] = names
+    budget = 400_000
+    cache = location.ChunkCache(budget)
+    np.testing.assert_array_equal(cache.take(alid, np.arange(len(names))), names)
+    kept = list(cache._kept.values())
+    assert len(kept) >= 2, "the cache must keep chunks for this to mean anything"
+    held = sum(measured(chunk) for chunk in kept)
+    assert held <= budget
+    # What tracemalloc sees beyond the count is each array object itself, 96 bytes here.
+    assert 0 <= held - cache._bytes <= 128 * len(kept)
+
+
 def test_threads_missing_one_chunk_store_it_once(small_chunks: Path) -> None:
+    # 16 threads each read 8 chunks, overlapping their neighbours', 54 chunks in all, into a
+    # 24-chunk budget: each read fits the budget, so threads race on chunks still kept, and
+    # the cache evicts as they do.
     near = zarr.open_array(small_chunks / "near" / "22" / "r", mode="r")
     everything = np.asarray(near[:])
-    cache = location.ChunkCache(64 * INNER * near.dtype.itemsize)
+    budget = 24 * INNER * near.dtype.itemsize
+    cache = location.ChunkCache(budget)
     start = threading.Barrier(16)
     wrong: list[int] = []
 
     def read(first: int) -> None:
         start.wait()
-        coords = np.arange(first * INNER, (first + 48) * INNER, 5)
+        coords = np.arange(first * INNER, (first + 8) * INNER, 5)
         if not np.array_equal(cache.take(near, coords), everything[coords]):
             wrong.append(first)
 
-    workers = [threading.Thread(target=read, args=(i % 8,)) for i in range(16)]
+    workers = [threading.Thread(target=read, args=(3 * i,)) for i in range(16)]
     for worker in workers:
         worker.start()
     for worker in workers:
         worker.join()
     assert wrong == []
-    assert len(cache._kept) > 32, "the threads' reads must overlap in many kept chunks"
+    assert len(cache._kept) == 24, "the cache must be full, having evicted 30 of 54 chunks"
     assert cache._bytes == sum(chunk.nbytes for chunk in cache._kept.values()) == retained(cache)
+    assert cache._bytes <= budget
 
 
 def test_a_lost_shard_refuses_the_pairs_it_held_and_no_others(
@@ -216,6 +256,16 @@ def test_a_partner_whose_lost_chunk_would_read_as_row_0_is_refused(
     ):
         ogld.open(copy).matrix(names)
     assert fill_findings(copy), "validate fails what open refuses"
+
+
+def test_every_fill_is_judged_before_any_element_is_decoded(tmp_path: Path) -> None:
+    # A lost indptr chunk and a partner fill of 0: the fill is refused first, so no element of
+    # the chromosome was decoded from an array whose lost chunk could read as data.
+    copy = copy_store(tmp_path / "store")
+    set_fill(copy, "index/22/partner", 0)
+    (copy / "near" / "22" / "indptr" / "c" / "0").unlink()
+    with pytest.raises(ValueError, match=r"index/22/partner has the fill value 0"):
+        ogld.open(copy).region("22", 30_000_000, 1_000_000)
 
 
 @pytest.mark.parametrize(

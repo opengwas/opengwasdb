@@ -35,7 +35,7 @@ from ogld.format.encoding import (
 )
 from ogld.format.provenance import ENCODING, FORMAT_VERSION, VALIDATION_RULES
 from ogld.identity import IdentityError, alid_locus, orient, variant_order_key
-from ogld.store.layout import never_data, spans
+from ogld.store.layout import never_data, shown_fill, spans
 from ogld.store.location import open_group
 
 #: Elements of a Near Band or a Proxy Index a rule reads at once: 8 Mi codes are 16 MiB.
@@ -173,10 +173,17 @@ class _Store:
             raise _Unchecked(key, f"provenance {key} is {value!r}, not an integer")
         return int(value)
 
+    def node(self, path: str) -> zarr.Array[Any] | zarr.Group | None:
+        """The node at `path`, or None; one whose metadata will not parse is `_Unreadable`."""
+        try:
+            return self.root.get(path)
+        except _READ_ERRORS as error:
+            raise _Unreadable(path, f"{type(error).__name__}: {error}") from error
+
     def find(self, path: str) -> zarr.Array[Any] | None:
         """The array at `path`, or None; each is opened once, as opening reads its metadata."""
         if path not in self._arrays:
-            member = self.root.get(path)
+            member = self.node(path)
             self._arrays[path] = member if isinstance(member, zarr.Array) else None
         return self._arrays[path]
 
@@ -205,7 +212,7 @@ class _Store:
 
     def chromosomes(self) -> list[tuple[str, int, int]]:
         """The `chromosomes` ranges, if each is a canonical name and rows in order."""
-        listed = self.root.get("variants")
+        listed = self.node("variants")
         entries = listed.attrs.get("chromosomes") if isinstance(listed, zarr.Group) else None
         if not isinstance(entries, list) or not all(_range_entry(e) for e in entries):
             raise _Unchecked(
@@ -346,13 +353,12 @@ def _envelope_fill(store: _Store) -> _Problems:
     never read as data: the reserved code in an r array, a negative indptr, and so on."""
     for path in _arrays(store):
         fill = store.array(path).fill_value
-        if not never_data(path.rsplit("/", 1)[-1], fill).all():
-            shown = json.dumps(fill) if isinstance(fill, str) else str(fill)
+        if not never_data(path, fill).all():
             yield (
                 path,
                 (
-                    f"its fill value {shown} is one valid data can hold there: a chunk it "
-                    "lost would read as data (spec §6)"
+                    f"its fill value {shown_fill(fill)} is one valid data can hold there: a "
+                    "chunk it lost would read as data (spec §6)"
                 ),
             )
 
@@ -806,7 +812,9 @@ def _index_rows(store: _Store) -> _Problems:
         if end is None:
             problems.append((f"index/{chrom}", "partner and r differ in length"))
         yield from problems
-        for a, b in _blocks(indptr) if not problems else ():
+        if problems:
+            continue
+        for a, b in _blocks(indptr):
             yield from _partner_problems(chrom, size, _index_block(store, chrom, indptr, a, b))
 
 

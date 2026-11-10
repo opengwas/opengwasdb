@@ -29,10 +29,18 @@ import zarr
 
 from ogld.format import ENCODING, FORMAT_VERSION, RESERVED_CODE, InputError, Provenance, dequantise
 from ogld.identity import alid_locus
-from ogld.store.layout import never_data, spans
+from ogld.store.layout import never_data, shown_fill, spans
 from ogld.store.location import ChunkCache, open_group
 from ogld.store.tables import Partners, Variants
 
+#: Each chromosome's arrays (spec §1), in the order `_Chromosome` takes them.
+_CHROMOSOME_ARRAYS: Final = (
+    ("near", "indptr"),
+    ("near", "r"),
+    ("index", "indptr"),
+    ("index", "partner"),
+    ("index", "r"),
+)
 #: The variant table's columns (spec §2).
 _VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
 #: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
@@ -56,7 +64,7 @@ class _Chromosome:
 
 
 class StoreReader:
-    """An opened LD Store, local or over HTTP (spec §1).
+    """An opened LD Store, local or over HTTP (spec §2, §10).
 
     Opening reads the provenance and the chromosome ranges and refuses a store whose
     `format_version` or `encoding` this package does not implement (spec §13), naming
@@ -288,25 +296,24 @@ class StoreReader:
         return Partners(indptr, partner, r)
 
     def _chromosome(self, name: str) -> _Chromosome:
-        """One chromosome's kept arrays, read on first use (spec §10)."""
+        """One chromosome's kept arrays, read on first use (spec §10). Each of its five arrays'
+        fill values is judged before any element of the chromosome is decoded."""
         if name not in self._loaded:
             start, stop = self._ranges[name]
-            position = _refused_if_lost(
-                self._columns["position"],
-                np.asarray(self._columns["position"][start:stop]),
+            near_indptr, near_r, index_indptr, index_partner, index_r = (
+                _kept_array(self._root, f"{kind}/{name}/{array}")
+                for kind, array in _CHROMOSOME_ARRAYS
             )
-            near_r, index_r = (
-                _kept_array(self._root, f"{kind}/{name}/r") for kind in ("near", "index")
-            )
+            position = self._columns["position"]
             self._loaded[name] = _Chromosome(
                 name,
                 start,
                 stop,
-                position.astype(np.int64),
-                _indptr(self._root, f"near/{name}/indptr"),
+                _refused_if_lost(position, np.asarray(position[start:stop])).astype(np.int64),
+                _indptr(near_indptr),
                 near_r,
-                _indptr(self._root, f"index/{name}/indptr"),
-                _kept_array(self._root, f"index/{name}/partner"),
+                _indptr(index_indptr),
+                index_partner,
                 index_r,
             )
         return self._loaded[name]
@@ -385,11 +392,12 @@ def _pairs(
 def _refused_if_lost(array: zarr.Array[Any], values: npt.NDArray[Any]) -> npt.NDArray[Any]:
     """`values` read from `array`, unless one is a value no LD Store holds there, as its fill
     value is: that is a chunk the store lost, and decoding it would be inventing data."""
-    lost = never_data(array.path.rsplit("/", 1)[-1], values)
+    lost = never_data(array.path, values)
     if lost.any():
         raise ValueError(
-            f"{array.path} read {int(lost.sum())} element(s) no LD Store holds there, as its fill "
-            f"value {_shown(array.fill_value)} is: a chunk the store lost, never data (spec §3, §6)"
+            f"{array.path} read {int(lost.sum())} element(s) no LD Store holds there, as its "
+            f"fill value {shown_fill(array.fill_value)} is: a chunk the store lost, never data "
+            "(spec §3, §6)"
         )
     return values
 
@@ -409,19 +417,13 @@ def _array(root: zarr.Group, path: str) -> zarr.Array[Any]:
 def _kept_array(root: zarr.Group, path: str) -> zarr.Array[Any]:
     """An array, refused unless a chunk it lost would read as a value no store holds there."""
     array = _array(root, path)
-    if not never_data(path.rsplit("/", 1)[-1], array.fill_value).all():
+    if not never_data(path, array.fill_value).all():
         raise ValueError(
-            f"{path} has the fill value {_shown(array.fill_value)}, which valid data can hold "
+            f"{path} has the fill value {shown_fill(array.fill_value)}, which valid data can hold "
             "there: a chunk it lost would read as data (spec §6, envelope.fill)"
         )
     return array
 
 
-def _shown(fill: object) -> str:
-    """A fill value as a message names it: a string quoted, so an empty one shows."""
-    return f'"{fill}"' if isinstance(fill, str) else str(fill)
-
-
-def _indptr(root: zarr.Group, path: str) -> npt.NDArray[np.int64]:
-    array = _kept_array(root, path)
+def _indptr(array: zarr.Array[Any]) -> npt.NDArray[np.int64]:
     return _refused_if_lost(array, np.asarray(array[:]).astype(np.int64))

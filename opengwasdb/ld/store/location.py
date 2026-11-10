@@ -33,21 +33,29 @@ CACHE_BYTES: Final = 1 << 28
 def open_group(location: str | os.PathLike[str]) -> zarr.Group:
     """The root group of the hierarchy at `location`, read-only, whatever its Zarr format.
 
-    A location with no Zarr group at all is an `InputError` naming it. A Zarr v2 group opens,
+    A location with no Zarr group at all, or whose root metadata will not parse, is an
+    `InputError` naming it. A Zarr v2 group opens,
     so validation can say it is not v3 (spec §12, `envelope.arrays`) rather than not there.
     """
     try:
         return zarr.open_group(str(location), mode="r")
     except FileNotFoundError as missing:
         raise InputError(f"no LD Store at {location}: there is no Zarr group there") from missing
+    except (ValueError, TypeError) as unreadable:
+        raise InputError(
+            f"{location}'s metadata cannot be read as a Zarr group: "
+            f"{type(unreadable).__name__}: {unreadable}"
+        ) from unreadable
 
 
 class ChunkCache:
     """Decoded inner chunks of one store's 1-D arrays, read whole and kept to `budget` bytes,
     the least recently used dropped first.
 
-    Each kept chunk owns its memory, copied out of the read that fetched it, so the bytes it
-    counts are the bytes it holds: a view would keep that whole read alive. One lock guards
+    Each kept chunk owns its memory, copied out of the read that fetched it (a view would keep
+    that whole read alive), and is counted by its `nbytes`. That is the memory it holds because
+    a string chunk is kept as fixed-width text: numpy's variable-width strings, which zarr
+    returns, keep each string over 15 bytes in an arena `nbytes` leaves out. One lock guards
     every lookup, insertion and eviction, so threads sharing a reader keep one copy of a chunk
     they both missed and the count stays the bytes held. Reads themselves run outside it.
     """
@@ -103,7 +111,7 @@ class ChunkCache:
         """Chunks first … stop − 1, read in one request, each copied out and kept."""
         data = np.asarray(array[first * size : stop * size])
         read = {
-            k: data[(k - first) * size : (k - first + 1) * size].copy() for k in range(first, stop)
+            k: _owned(data[(k - first) * size : (k - first + 1) * size]) for k in range(first, stop)
         }
         with self._lock:
             return {k: self._keep((array.path, k), chunk) for k, chunk in read.items()}
@@ -120,3 +128,11 @@ class ChunkCache:
             _, dropped = self._kept.popitem(last=False)
             self._bytes -= dropped.nbytes
         return chunk
+
+
+def _owned(chunk: npt.NDArray[Any]) -> npt.NDArray[Any]:
+    """A copy of `chunk` that owns all its memory in one buffer, so `nbytes` is what it holds:
+    numeric chunks as they are, string chunks as fixed-width text."""
+    if chunk.dtype.kind == "T":
+        return np.array(chunk.tolist(), dtype=np.str_)
+    return chunk.copy()

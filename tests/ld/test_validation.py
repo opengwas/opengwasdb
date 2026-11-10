@@ -343,6 +343,38 @@ def test_a_corrupt_chunk_is_a_finding_of_each_rule_that_reads_it(
     assert not found["provenance.complete"], "a rule that reads no array still passes"
 
 
+@pytest.mark.parametrize(
+    ("node", "needs"),
+    [
+        ("near/22/r", ["envelope.arrays", "envelope.fill", "near.codes", "index.near"]),
+        ("variants", ["envelope.arrays", "variants.chromosomes", "index.rows"]),
+    ],
+)
+def test_a_corrupt_metadata_document_is_a_finding_not_a_crash(
+    tmp_path: Path, node: str, needs: list[str]
+) -> None:
+    copy = copy_store(tmp_path / "store")
+    (copy / node / "zarr.json").write_text("{ not json")
+    found = ogld.validate(copy)
+    for rule in needs:
+        assert any(
+            f.where == node and f.message.startswith("cannot be read: JSONDecodeError")
+            for f in found[rule]
+        ), (rule, found[rule])
+    assert not found["provenance.complete"], "a rule that reads no array still passes"
+
+
+def test_a_corrupt_root_document_is_an_input_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    copy = copy_store(tmp_path / "store")
+    (copy / "zarr.json").write_text("{ not json")
+    with pytest.raises(InputError, match="metadata cannot be read"):
+        ogld.validate(copy)
+    assert cli.main(["validate", str(copy)]) == 2
+    assert "metadata cannot be read" in capsys.readouterr().err
+
+
 def test_index_symmetric_reads_the_index_within_the_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -419,7 +419,7 @@ ignores the ones it does not know. The types are `ogld.format.Provenance`, and
 | `t_far` | float | max(0.001, q / (n − k − 1)) in float64, the value every reader uses |
 | `t_far_q` | float | 20.84: the χ²₁ upper quantile at p = 5×10⁻⁶ |
 | `far_code_floor` | int | §3 |
-| `pc_diagnostic` | object or null | what PC Adjustment did to chance LD (below); null only for an `ld_matrix` source. A Variant Set with no cross-chromosome pair (one chromosome) records `pairs.n_pairs` 0 and null for the two measured rates, `rate_r2_ge_0_01_unadjusted` and `rate_r2_ge_0_01_adjusted`: each is null only when `n_pairs` is 0, and a number otherwise (10 November 2026). `rate_r2_ge_0_01_sampling` is a formula of n and k, and always a number |
+| `pc_diagnostic` | object or null | what PC Adjustment did to chance LD (below); null only for an `ld_matrix` source. A Variant Set with no cross-chromosome pair (one chromosome) records `pairs.n_pairs` 0 and null for the two measured rates, `rate_r2_ge_0_01_unadjusted` and `rate_r2_ge_0_01_adjusted`: each is null only when `n_pairs` is 0, and a number otherwise (10 November 2026). `rate_r2_ge_0_01_sampling` is a formula of n and k, and always a number. `ogld.format.PcDiagnostic` types the two measured rates `float \| None` and the sampling rate `float` |
 | `counts.near_pairs` | int | Near Band codes, over all chromosomes |
 | `counts.far_candidates` | int | pairs more than `near_bp` and at most `far_bp` apart that were examined |
 | `counts.far_pairs` | int | Far Pairs: those of them in the Proxy Index, each counted once |
@@ -649,9 +649,11 @@ kept. Every other read the reader makes goes through its cache of decoded inner 
 (`ogld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request
 needs, whole, which is what Zarr fetches and decodes in any case, each run of neighbouring chunks
 in one read. It keeps them up to 256 MiB per opened store, dropping the least recently used first.
-Each kept chunk owns its memory, copied out of the read that fetched it, so the bytes it counts are
-the bytes it holds, and one lock guards the cache, so threads sharing a reader keep one copy of a
-chunk. Validation's rules are single bounded passes and read through Zarr directly (§12). So a
+Each kept chunk owns its memory, copied out of the read that fetched it, and counts its `nbytes`.
+That is the memory it holds because a string chunk is kept as fixed-width text: the variable-width
+strings zarr returns keep each string over 15 bytes in an arena `nbytes` leaves out, about 2.2
+times the count for 16-character ALIDs. One lock guards the cache, so threads sharing a reader
+keep one copy of a chunk. Validation's rules are single bounded passes and read through Zarr directly (§12). So a
 query that reads a few pairs at a time fetches each chunk once: clumping the Test
 Store's 1,056 variants, one read per lead, took 3.6 s reading through Zarr call by call and 0.7 s
 with the cache, against 0.6 s for the walking skeleton's arrays held whole. A matrix resolves its
