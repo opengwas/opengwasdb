@@ -37,6 +37,7 @@ from opengwasdb.readers.interface import (
     ReaderAssociation,
     StreamTally,
 )
+from opengwasdb.stats import FrequencyTally
 from opengwasdb.variants.normalise import VariantNormalisationError
 
 #: Associations a batch holds once a source is handed to the per-row reader.
@@ -66,9 +67,15 @@ INT64_MAX = np.iinfo(np.int64).max
 class Format(Protocol):
     """What a tabular format gives the engine to read one source."""
 
-    #: Where the engine logs, and how it names a source there.
-    log: logging.Logger
-    label: str
+    @property
+    def log(self) -> logging.Logger:
+        """Where the engine logs."""
+        ...
+
+    @property
+    def label(self) -> str:
+        """How the engine names a source in the log."""
+        ...
 
     def block_bytes(self) -> int:
         """Decompressed bytes one block reads."""
@@ -356,6 +363,86 @@ def is_indel(ref: Cells, alt: Cells) -> np.ndarray:
     lengths = np.vectorize(len, otypes=[np.int64])
     different: np.ndarray = ref.rows(lengths(ref.value)) != alt.rows(lengths(alt.value))
     return different
+
+
+@dataclass(frozen=True)
+class Identity:
+    """A block's identity columns, judged: chromosome, the two alleles (``ref``
+    the other allele, ``alt`` the effect allele), and the position.
+
+    ``flipped`` and ``same`` are per row: whether the effect allele is A2, and
+    whether the alleles are one. ``position`` is ``None`` where pandas read
+    some cell otherwise than as `int()` reads it.
+    """
+
+    chromosome: Cells
+    ref: Cells
+    alt: Cells
+    flipped: np.ndarray
+    same: np.ndarray
+    position: np.ndarray | None
+
+    @classmethod
+    def read(
+        cls, frame: pd.DataFrame, chromosome: int, ref: int, alt: int, position: int,
+        normalise_chromosome: Callable[[str], str], normalise_allele: Callable[[str], str],
+    ) -> Identity:
+        refs = Cells.of(frame[ref], normalise_allele)
+        alts = Cells.of(frame[alt], normalise_allele)
+        return cls(
+            Cells.of(frame[chromosome], normalise_chromosome),
+            refs,
+            alts,
+            *orientation(refs, alts),
+            numbers(frame, position, "i"),
+        )
+
+    def __len__(self) -> int:
+        return len(self.chromosome.codes)
+
+    def valid(self) -> np.ndarray:
+        """The rows whose identity every rule accepts; none where the position
+        column could not be read as `int()` reads it."""
+        if self.position is None:
+            return np.zeros(len(self), dtype=bool)
+        valid: np.ndarray = (
+            self.chromosome.rows(self.chromosome.ok)
+            & self.ref.rows(self.ref.ok)
+            & self.alt.rows(self.alt.ok)
+            & (self.position > 0)
+            & ~self.same
+        )
+        return valid
+
+    def columns(
+        self, z: np.ndarray, se: np.ndarray, af: np.ndarray, kept: np.ndarray
+    ) -> Columns:
+        """The block's association columns: ``z`` (as reported) negated and
+        ``af`` complemented where the effect allele is A2, and an ``af`` outside
+        (0, 1) made absent. ``kept`` are the rows that hold an association."""
+        in_range = (af > 0) & (af < 1)
+        return Columns(
+            chromosome=self.chromosome.rows(self.chromosome.value),
+            # A copy: pandas' own column is read-only, and an undecided row's
+            # position is placed in it.
+            position=(
+                np.zeros(len(self), dtype=np.int64) if self.position is None
+                else self.position.copy()
+            ),
+            ref=self.ref.rows(self.ref.verbatim),
+            alt=self.alt.rows(self.alt.verbatim),
+            z=np.where(self.flipped, -z, z),
+            se=se,
+            eaf=np.where(in_range, np.where(self.flipped, 1.0 - af, af), np.nan),
+            kept=kept.copy(),
+        )
+
+
+def made_absent(af: np.ndarray, decided: np.ndarray, tally: FrequencyTally) -> None:
+    """Count the ``decided`` rows whose frequency was reported but is not inside
+    (0, 1), as `parse_af` counts it made absent (D7)."""
+    outside = ~((af > 0) & (af < 1)) & ~np.isnan(af)
+    tally.made_absent += int(np.count_nonzero(decided & outside))
 
 
 def numbers(frame: pd.DataFrame, index: int | None, kind: str) -> np.ndarray | None:

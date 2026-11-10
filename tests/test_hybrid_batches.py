@@ -12,11 +12,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from batch_fixtures import RowsOnly
 from extraction_fixtures import extract_from_manifest
 from finngen_cases import HEADER, _row
 from hybrid_pass2_fixtures import captured_spills
 from test_column_map_build import _store_contents
-from test_finngen_batches import RowsOnly
 
 import opengwasdb.readers.finngen as finngen
 from opengwasdb.admission import admission_record_for

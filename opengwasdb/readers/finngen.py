@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import csv
 import gzip
-import io
 import logging
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from io import BytesIO, TextIOBase
 from pathlib import Path
 from typing import Any
 
@@ -366,7 +366,7 @@ class _Format:
         return _BLOCK_BYTES
 
     def per_row(
-        self, text: io.TextIOBase, names: list[str] | None, source: columnar.Source
+        self, text: TextIOBase, names: list[str] | None, source: columnar.Source
     ) -> Iterator[AssociationBatch]:
         yield from _per_row_batches(text, names, source.tally, source.scale)
 
@@ -378,7 +378,7 @@ class _Format:
 
 
 def _per_row_batches(
-    text: io.TextIOBase,
+    text: TextIOBase,
     names: list[str] | None,
     tally: interface.StreamTally,
     scale: StoredEffectScale,
@@ -414,13 +414,7 @@ def _block_batches(
 class _Block:
     """One block's identity cells and numbers, before any row is decided."""
 
-    chromosome: columnar.Cells
-    ref: columnar.Cells
-    alt: columnar.Cells
-    #: Per row: whether the effect allele is A2, and whether the alleles are one.
-    flipped: np.ndarray
-    same: np.ndarray
-    position: np.ndarray | None
+    identity: columnar.Identity
     beta: np.ndarray | None
     se: np.ndarray | None
     af: np.ndarray | None
@@ -430,7 +424,7 @@ class _Block:
         reads = plan.reads
         statistics = [reads[name] for name in ("beta", "sebeta", "af_alt") if name in reads]
         frame = pd.read_csv(
-            io.BytesIO(lines),
+            BytesIO(lines),
             names=range(len(plan.names)),
             usecols=sorted(reads.values()),
             dtype={reads[name]: "category" for name in ("ref", "alt")}
@@ -440,14 +434,11 @@ class _Block:
             float_precision="round_trip",
             **columnar.PANDAS,
         )
-        ref = columnar.Cells.of(frame[reads["ref"]], normalise_allele)
-        alt = columnar.Cells.of(frame[reads["alt"]], normalise_allele)
         return cls(
-            columnar.Cells.of(frame[plan.chromosome], normalise_chromosome),
-            ref,
-            alt,
-            *columnar.orientation(ref, alt),
-            columnar.numbers(frame, reads["pos"], "i"),
+            columnar.Identity.read(
+                frame, plan.chromosome, reads["ref"], reads["alt"], reads["pos"],
+                normalise_chromosome, normalise_allele,
+            ),
             columnar.numbers(frame, reads.get("beta"), "f"),
             columnar.numbers(frame, reads.get("sebeta"), "f"),
             columnar.numbers(frame, reads.get("af_alt"), "f"),
@@ -458,16 +449,9 @@ class _Block:
         number read as the per-row reader reads it. A frequency read as
         missing is left to the row, since only its cell says whether the
         tally counts it."""
-        rows = len(self.chromosome.codes)
-        if self.position is None or self.beta is None or self.se is None or self.af is None:
-            return np.zeros(rows, dtype=bool)
-        decided: np.ndarray = (
-            self.chromosome.rows(self.chromosome.ok)
-            & self.ref.rows(self.ref.ok)
-            & self.alt.rows(self.alt.ok)
-            & (self.position > 0)
-            & ~self.same
-        )
+        if self.beta is None or self.se is None or self.af is None:
+            return np.zeros(len(self.identity), dtype=bool)
+        decided = self.identity.valid()
         if "af_alt" in plan.reads:
             decided &= ~np.isnan(self.af)
         return decided
@@ -500,22 +484,8 @@ class _Block:
         reported = np.divide(
             beta, se, out=np.full(rows, np.nan), where=decided & ~np.isnan(beta) & se_ok
         )
-        af_ok = (af > 0) & (af < 1)
-        tally.frequencies.made_absent += int(np.count_nonzero(decided & ~np.isnan(af) & ~af_ok))
-        return columnar.Columns(
-            chromosome=self.chromosome.rows(self.chromosome.value),
-            # A copy: pandas' own column is read-only, and an undecided row's
-            # position is placed in it.
-            position=(
-                np.zeros(rows, dtype=np.int64) if self.position is None else self.position.copy()
-            ),
-            ref=self.ref.rows(self.ref.verbatim),
-            alt=self.alt.rows(self.alt.verbatim),
-            z=np.where(self.flipped, -reported, reported),
-            se=np.where(se_ok, se, np.nan),
-            eaf=np.where(af_ok, np.where(self.flipped, 1.0 - af, af), np.nan),
-            kept=decided.copy(),
-        )
+        columnar.made_absent(af, decided, tally.frequencies)
+        return self.identity.columns(reported, np.where(se_ok, se, np.nan), af, decided)
 
 
 def _undecided(
