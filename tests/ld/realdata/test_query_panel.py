@@ -25,7 +25,6 @@ from realdata_inputs import required
 import ogld
 
 
-@pytest.mark.xfail(strict=True, raises=NotImplementedError, reason="ogld#6")
 @pytest.mark.parametrize("r2", [0.01, 0.001])
 def test_leads_equal_plink2_s_on_403_s_37_analyses(r2: float) -> None:
     location = required("OGLD_EUR_K0_STORE", "the k = 0 EUR LD Store, which ogld#6 makes")
