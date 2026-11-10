@@ -29,9 +29,12 @@ import zarr
 
 from ogld.format import ENCODING, FORMAT_VERSION, RESERVED_CODE, InputError, Provenance, dequantise
 from ogld.identity import alid_locus
+from ogld.store.layout import never_data, spans
 from ogld.store.location import ChunkCache, open_group
 from ogld.store.tables import Partners, Variants
 
+#: The variant table's columns (spec §2).
+_VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
 #: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
 _PAIRS_PER_STEP: Final = 1 << 22
 
@@ -78,6 +81,8 @@ class StoreReader:
         self._stops = np.array([stop for _, stop in self._ranges.values()], dtype=np.int64)
         self._loaded = {}
         self._cache = ChunkCache()
+        for name in _VARIANT_COLUMNS:
+            _kept_array(root, f"variants/{name}")
 
     @classmethod
     def open(cls, location: str | os.PathLike[str]) -> StoreReader:
@@ -126,7 +131,7 @@ class StoreReader:
             lo = np.searchsorted(c.position, at, side="left")
             hi = np.searchsorted(c.position, at, side="right")
             asked.extend(np.repeat(which, hi - lo).tolist())
-            candidates.append(c.start + _spans(lo, hi - lo))
+            candidates.append(c.start + spans(lo, hi - lo))
         found = np.full(len(alids), -1, dtype=np.int64)
         if not asked:
             return found
@@ -158,8 +163,7 @@ class StoreReader:
             position[members] = c.position[rows[members] - c.start]
         names = np.array(self._names, dtype=np.str_)
         chrom = names[np.searchsorted(self._stops, rows, side="right")]
-        frequency = self._cache.take(_array(self._root, "variants/a1_frequency"), rows)
-        _refuse_fill(np.isnan(frequency), "variants/a1_frequency", "NaN")
+        frequency = self._read(_array(self._root, "variants/a1_frequency"), rows)
         return Variants(
             chrom=chrom,
             position=position,
@@ -193,7 +197,7 @@ class StoreReader:
         np.fill_diagonal(block, 1.0)
         first = np.arange(1, len(local) + 1, dtype=np.int64)
         for i, j in _pairs(first, near):
-            codes = self._codes(c.near_r, c.near_indptr[local[i]] + (local[j] - local[i] - 1))
+            codes = self._read(c.near_r, c.near_indptr[local[i]] + (local[j] - local[i] - 1))
             block[i, j] = block[j, i] = dequantise(codes)
         for i, j in _pairs(near, far):
             held, codes = self._index_codes(c, local[i], local[j])
@@ -223,16 +227,15 @@ class StoreReader:
         """The Proxy Index rows of `local` rows, back to back: partners, codes, row lengths."""
         first = c.index_indptr[local]
         length = c.index_indptr[local + 1] - first
-        coords = _spans(first, length)
-        partner = self._cache.take(c.index_partner, coords).astype(np.int64)
-        _refuse_fill(partner < 0, f"index/{c.name}/partner", "-1")
-        return partner, self._codes(c.index_r, coords), length
+        coords = spans(first, length)
+        partner = self._read(c.index_partner, coords).astype(np.int64)
+        return partner, self._read(c.index_r, coords), length
 
     def index(self, rows: npt.NDArray[np.int64]) -> Partners:
         """Each row's Proxy Index entries: every partner within far_bp, either side, with
         r̂² ≥ t_far, and its Stored r (spec §5). One sparse row per variant (§10)."""
 
-        def entries(c: _Chromosome, local: npt.NDArray[np.int64]) -> _Entries:
+        def entries(c: _Chromosome, local: npt.NDArray[np.int64]) -> _RowEntries:
             partner, codes, length = self._index_rows(c, local)
             return length, partner, codes
 
@@ -247,28 +250,28 @@ class StoreReader:
         """
         near_bp = self._provenance["near_bp"]
 
-        def entries(c: _Chromosome, local: npt.NDArray[np.int64]) -> _Entries:
+        def entries(c: _Chromosome, local: npt.NDArray[np.int64]) -> _RowEntries:
             first = np.searchsorted(c.position, c.position[local] - near_bp, side="left")
             length = (local - first) + (c.near_indptr[local + 1] - c.near_indptr[local])
             # Each row's span runs from its first upstream partner to its last downstream one,
             # the row itself included once; dropping it leaves both halves, ascending.
-            span = _spans(first, length + 1)
+            span = spans(first, length + 1)
             owner = np.repeat(local, length + 1)
             partner, owner = span[span != owner], owner[span != owner]
             lo, hi = np.minimum(owner, partner), np.maximum(owner, partner)
-            return length, partner, self._codes(c.near_r, c.near_indptr[lo] + (hi - lo - 1))
+            return length, partner, self._read(c.near_r, c.near_indptr[lo] + (hi - lo - 1))
 
         return self._gather(rows, entries)
 
     def _gather(
         self,
         rows: npt.NDArray[np.int64],
-        entries: Callable[[_Chromosome, npt.NDArray[np.int64]], _Entries],
+        entries: Callable[[_Chromosome, npt.NDArray[np.int64]], _RowEntries],
     ) -> Partners:
         """The partners `entries` gives each of `rows`, as global rows, in CSR form."""
         rows = self._checked(rows)
         length = np.empty(len(rows), dtype=np.int64)
-        found: list[tuple[npt.NDArray[np.int64], _Entries]] = []
+        found: list[tuple[npt.NDArray[np.int64], _RowEntries]] = []
         for c, members in self._by_chromosome(rows):
             got = entries(c, rows[members] - c.start)
             length[members] = got[0]
@@ -277,7 +280,7 @@ class StoreReader:
         partner = np.empty(int(indptr[-1]), dtype=np.int64)
         r = np.empty(int(indptr[-1]), dtype=np.float64)
         for members, (lengths, partners, codes) in found:
-            where = _spans(indptr[members], lengths)
+            where = spans(indptr[members], lengths)
             partner[where] = partners
             r[where] = dequantise(codes)
         return Partners(indptr, partner, r)
@@ -286,10 +289,12 @@ class StoreReader:
         """One chromosome's kept arrays, read on first use (spec §10)."""
         if name not in self._loaded:
             start, stop = self._ranges[name]
-            position = np.asarray(_array(self._root, "variants/position")[start:stop])
-            _refuse_fill(position <= 0, "variants/position", "0")
+            position = _refused_if_lost(
+                _array(self._root, "variants/position"),
+                np.asarray(_array(self._root, "variants/position")[start:stop]),
+            )
             near_r, index_r = (
-                _r_array(self._root, f"{kind}/{name}/r") for kind in ("near", "index")
+                _kept_array(self._root, f"{kind}/{name}/r") for kind in ("near", "index")
             )
             self._loaded[name] = _Chromosome(
                 name,
@@ -299,7 +304,7 @@ class StoreReader:
                 _indptr(self._root, f"near/{name}/indptr"),
                 near_r,
                 _indptr(self._root, f"index/{name}/indptr"),
-                _array(self._root, f"index/{name}/partner"),
+                _kept_array(self._root, f"index/{name}/partner"),
                 index_r,
             )
         return self._loaded[name]
@@ -316,20 +321,13 @@ class StoreReader:
         """The string column `name` at `rows`; an empty string is a lost chunk's, never data."""
         # zarr hands back numpy StringDType, which casts to a fixed width only via a list.
         values = np.array(
-            self._cache.take(_array(self._root, f"variants/{name}"), rows).tolist(), dtype=np.str_
+            self._read(_array(self._root, f"variants/{name}"), rows).tolist(), dtype=np.str_
         )
-        _refuse_fill(values == "", f"variants/{name}", '""')
         return values
 
-    def _codes(self, array: zarr.Array[Any], coords: npt.NDArray[np.int64]) -> npt.NDArray[Any]:
-        """The codes of an `r` array at `coords`; the reserved code is a lost chunk, refused."""
-        codes = self._cache.take(array, coords)
-        if (codes == RESERVED_CODE).any():
-            raise ValueError(
-                f"{array.path} read the reserved code {RESERVED_CODE} where a pair is stored: a "
-                "chunk the store lost, never a correlation (spec §3)"
-            )
-        return codes
+    def _read(self, array: zarr.Array[Any], coords: npt.NDArray[np.int64]) -> npt.NDArray[Any]:
+        """The elements of `array` at `coords`, through the chunk cache; a lost chunk refused."""
+        return _refused_if_lost(array, self._cache.take(array, coords))
 
     def _checked(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
         """`rows`, if every one is a row of the Variant Set. An Absent ALID is −1 from `rows_of`
@@ -346,7 +344,7 @@ class StoreReader:
 
 
 #: What `_gather` asks for each chromosome: row lengths, partners (local rows) and codes.
-_Entries = tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[Any]]
+_RowEntries = tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[Any]]
 
 
 def _loci(
@@ -366,14 +364,6 @@ def _loci(
     }
 
 
-def _spans(first: npt.NDArray[np.int64], length: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
-    """first[i], first[i] + 1, … for length[i] elements each, back to back."""
-    length = np.asarray(length, dtype=np.int64)
-    total = int(length.sum())
-    offset = np.repeat(np.cumsum(length) - length, length)
-    return np.repeat(np.asarray(first, dtype=np.int64), length) + (np.arange(total) - offset)
-
-
 def _pairs(
     first: npt.NDArray[np.int64], stop: npt.NDArray[np.int64]
 ) -> Iterator[tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]]:
@@ -387,18 +377,21 @@ def _pairs(
         if ends[end - 1] > before:
             yield (
                 np.repeat(np.arange(start, end), length[start:end]),
-                _spans(first[start:end], length[start:end]),
+                spans(first[start:end], length[start:end]),
             )
         start = end
 
 
-def _refuse_fill(bad: npt.NDArray[np.bool_], name: str, fill: str) -> None:
-    """Refuse values that are their array's fill value, which no valid LD Store holds."""
-    if bad.any():
+def _refused_if_lost(array: zarr.Array[Any], values: npt.NDArray[Any]) -> npt.NDArray[Any]:
+    """`values` read from `array`, unless one is a value no LD Store holds there, as its fill
+    value is: that is a chunk the store lost, and decoding it would be inventing data."""
+    lost = never_data(array.path.rsplit("/", 1)[-1], values)
+    if lost.any():
         raise ValueError(
-            f"{name} read {int(bad.sum())} element(s) as its fill value {fill}, which no LD "
-            "Store holds: a chunk the store lost, never data (spec §6)"
+            f"{array.path} read {int(lost.sum())} element(s) no LD Store holds there, as its fill "
+            f"value {_shown(array.fill_value)} is: a chunk the store lost, never data (spec §3, §6)"
         )
+    return values
 
 
 def _group(root: zarr.Group, path: str) -> zarr.Group:
@@ -413,18 +406,22 @@ def _array(root: zarr.Group, path: str) -> zarr.Array[Any]:
     return member
 
 
-def _r_array(root: zarr.Group, path: str) -> zarr.Array[Any]:
-    """An `r` array, refused unless a chunk it lost would read as the reserved code."""
+def _kept_array(root: zarr.Group, path: str) -> zarr.Array[Any]:
+    """An array, refused unless a chunk it lost would read as a value no store holds there."""
     array = _array(root, path)
-    if array.fill_value != RESERVED_CODE:
+    if not never_data(path.rsplit("/", 1)[-1], array.fill_value).all():
         raise ValueError(
-            f"{path} has the fill value {array.fill_value}, not {RESERVED_CODE}: a chunk it "
-            "lost would read as a correlation (spec §6, envelope.fill)"
+            f"{path} has the fill value {_shown(array.fill_value)}, which valid data can hold "
+            "there: a chunk it lost would read as data (spec §6, envelope.fill)"
         )
     return array
 
 
+def _shown(fill: object) -> str:
+    """A fill value as a message names it: a string quoted, so an empty one shows."""
+    return f'"{fill}"' if isinstance(fill, str) else str(fill)
+
+
 def _indptr(root: zarr.Group, path: str) -> npt.NDArray[np.int64]:
-    values = np.asarray(_array(root, path)[:]).astype(np.int64)
-    _refuse_fill(values < 0, path, "-1")
-    return values
+    array = _kept_array(root, path)
+    return _refused_if_lost(array, np.asarray(array[:]).astype(np.int64))

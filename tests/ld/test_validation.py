@@ -33,6 +33,9 @@ WINDOWED = [
     rule for rule in VALIDATION_RULES if rule.split(".")[0] in {"variants", "near", "index"}
 ]
 WINDOWED.remove("variants.chromosomes")
+#: The windowed rules that carry state from one block to the next: the contract breaks each
+#: of the others in one window, and breaking it in several asks nothing more of them.
+ACROSS_BLOCKS = ["index.symmetric", "index.near"]
 
 
 @cache
@@ -71,8 +74,8 @@ def test_the_test_store_passes_every_windowed_rule_in_small_windows() -> None:
 
 
 @pytest.mark.usefixtures("small_windows")
-@pytest.mark.parametrize("rule", WINDOWED)
-def test_each_breaker_fails_its_rule_in_small_windows(rule: str, tmp_path: Path) -> None:
+@pytest.mark.parametrize("rule", ACROSS_BLOCKS)
+def test_a_breaker_fails_a_rule_whose_state_crosses_blocks(rule: str, tmp_path: Path) -> None:
     copy = copy_store(tmp_path / "store")
     breakers()[rule](copy)
     assert findings(copy, [rule])[rule], f"{rule} passed a store built to break it"
@@ -113,6 +116,14 @@ def edit_ranges(edit: Callable[[list[dict[str, Any]]], object]) -> Callable[[Pat
 def write_array(path: str, at: slice, value: Any) -> Callable[[Path], None]:
     def change(store: Path) -> None:
         zarr.open_array(store / path, mode="r+")[at] = value
+
+    return change
+
+
+def negate(path: str, at: int) -> Callable[[Path], None]:
+    def change(store: Path) -> None:
+        array = zarr.open_array(store / path, mode="r+")
+        array[at] = -array[at]
 
     return change
 
@@ -209,6 +220,46 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
         edit_doc("variants/a1_frequency", lambda doc: doc.update(data_type="float64")),
         "cannot be read: ValueError",
     ),
+    "a format version this ogld does not read": (
+        "provenance.encoding",
+        edit_ld_store(lambda p: p.update(format_version="0.2.0")),
+        "'0.2.0': this ogld reads '0.1.0' only",
+    ),
+    "n_variants one short of the variant table": (
+        "envelope.arrays",
+        edit_ld_store(lambda p: p.update(n_variants=1055)),
+        "provenance records 1,055, but variants/ holds 1,056 rows",
+    ),
+    "no zarr version in software": (
+        "provenance.complete",
+        edit_ld_store(lambda p: p["software"].pop("zarr")),
+        "missing",
+    ),
+    "no versions in software": (
+        "provenance.complete",
+        edit_ld_store(lambda p: p.update(software={})),
+        "missing",
+    ),
+    "no seed in the PC Check's null": (
+        "provenance.complete",
+        edit_ld_store(lambda p: p["adjustment"]["pc_check"]["null"].pop("seed")),
+        "missing",
+    ),
+    "an empty scan entry": (
+        "provenance.complete",
+        edit_ld_store(lambda p: p["adjustment"]["pc_check"].update(scan=[{}])),
+        "missing",
+    ),
+    "no near_100kb_change quantiles": (
+        "provenance.complete",
+        edit_ld_store(lambda p: p["pc_diagnostic"].update(near_100kb_change={})),
+        "missing",
+    ),
+    "a pair whose two entries carry two codes": (
+        "index.symmetric",
+        negate("index/22/r", 0),
+        "the earlier row of a pair held one way only, or with two codes at 0",
+    ),
     "a missing indptr": (
         "envelope.arrays",
         lambda store: shutil.rmtree(store / "near" / "22" / "indptr"),
@@ -222,7 +273,7 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
     "an index indptr that ends past its entries": (
         "index.rows",
         write_array("index/22/indptr", slice(-1, None), 10**7),
-        "ends at 10,000,000, but partner and r hold",
+        "ends at 10,000,000, but its rows' arrays hold",
     ),
 }
 
@@ -230,10 +281,61 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
 @pytest.mark.parametrize("way", list(WAYS))
 def test_each_way_to_break_a_rule_is_named(way: str, tmp_path: Path) -> None:
     rule, edit, says = WAYS[way]
+    assert not findings(TEST_STORE, [rule])[rule], "the Test Store passes the rule"
     copy = copy_store(tmp_path / "store")
     edit(copy)
-    found = ogld.validate(copy)[rule]
+    found = findings(copy, [rule])[rule]
     assert any(says in f.message for f in found), found
+
+
+def corrupt(store: Path, path: str) -> None:
+    """Flip bytes inside the first chunk's zstd frame of the array at `path`."""
+    shard = store / path / "c" / "0"
+    data = bytearray(shard.read_bytes())
+    data[20:60] = bytes(b ^ 0xFF for b in data[20:60])
+    shard.write_bytes(bytes(data))
+
+
+@pytest.mark.parametrize(
+    ("path", "needs"),
+    [
+        ("near/22/r", ["near.codes", "index.near"]),
+        ("index/22/partner", ["index.rows", "index.distance", "index.symmetric", "index.near"]),
+        ("variants/alid", ["variants.order", "variants.identity"]),
+    ],
+)
+def test_a_corrupt_chunk_is_a_finding_of_each_rule_that_reads_it(
+    tmp_path: Path, path: str, needs: list[str]
+) -> None:
+    copy = copy_store(tmp_path / "store")
+    corrupt(copy, path)
+    found = ogld.validate(copy)
+    for rule in needs:
+        assert any(
+            f.where == path and f.message.startswith("cannot be read: RuntimeError")
+            for f in found[rule]
+        ), (rule, found[rule])
+    assert not found["provenance.complete"], "a rule that reads no array still passes"
+
+
+def test_index_symmetric_reads_the_index_within_the_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Spec §12: no rule reads more than 8 Mi elements of an index array at once; here 4,096.
+    monkeypatch.setattr(validation, "_WINDOW", 4096)
+    read: list[int] = []
+    getitem = zarr.Array.__getitem__
+
+    def counted(array: zarr.Array, selection: Any) -> Any:
+        values = getitem(array, selection)
+        if array.path.startswith("index/") and not array.path.endswith("indptr"):
+            read.append(np.asarray(values).size)
+        return values
+
+    monkeypatch.setattr(zarr.Array, "__getitem__", counted)
+    assert not findings(TEST_STORE, ["index.symmetric"])["index.symmetric"]
+    assert len(read) > 8, "the index must take many windows for this to mean anything"
+    assert max(read) <= 4096
 
 
 @pytest.mark.parametrize(

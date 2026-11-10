@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import http.server
+import json
 import shutil
 import threading
 from collections.abc import Iterator
@@ -158,22 +159,22 @@ def test_a_lost_shard_refuses_the_pairs_it_held_and_no_others(
     np.testing.assert_array_equal(
         store.matrix(names[:20]).r, ogld.open(TEST_STORE).matrix(names[:20]).r
     )
-    with pytest.raises(ValueError, match=r"near/22/r read the reserved code -32768"):
+    with pytest.raises(ValueError, match=r"near/22/r read \d+ element\(s\) .* -32768"):
         store.matrix(names[-20:])
 
 
 @pytest.mark.parametrize(
-    ("path", "message"),
+    ("path", "fill"),
     [
-        ("variants/alid", r"variants/alid read \d+ element\(s\) as its fill value"),
-        ("variants/position", r"variants/position read \d+ element\(s\) as its fill value 0"),
-        ("index/22/partner", r"index/22/partner read \d+ element\(s\) as its fill value -1"),
-        ("index/22/r", "reserved code"),
-        ("near/22/indptr", r"near/22/indptr read \d+ element\(s\) as its fill value -1"),
+        ("variants/alid", '""'),
+        ("variants/position", "0"),
+        ("index/22/partner", "-1"),
+        ("index/22/r", "-32768"),
+        ("near/22/indptr", "-1"),
     ],
 )
 def test_a_lost_chunk_of_any_array_is_refused_never_read_as_data(
-    small_chunks: Path, tmp_path: Path, path: str, message: str
+    small_chunks: Path, tmp_path: Path, path: str, fill: str
 ) -> None:
     # An ALID that read as "" would make a present variant Absent; a partner of −1 would name
     # the last variant. Each is refused, naming the array.
@@ -182,15 +183,54 @@ def test_a_lost_chunk_of_any_array_is_refused_never_read_as_data(
     every = list(StoreReader.open(copy).variants(np.arange(1056)).alid)
     for shard in sorted((copy / path / "c").iterdir()):
         shard.unlink()
+    message = rf"{path} read \d+ element\(s\) no LD Store holds there, as its fill value {fill} is"
     with pytest.raises(ValueError, match=message):
         ogld.open(copy).matrix(every)
+
+
+def set_fill(store: Path, path: str, fill: object) -> None:
+    meta = store / path / "zarr.json"
+    doc = json.loads(meta.read_text())
+    doc["fill_value"] = fill
+    meta.write_text(json.dumps(doc))
+
+
+def test_a_partner_whose_lost_chunk_would_read_as_row_0_is_refused(
+    small_chunks: Path, tmp_path: Path
+) -> None:
+    # The review's case: fill 0 (zarr's int32 default) and a lost shard read as partner row 0,
+    # chr22's first variant, and proxies named it 377 times in place of the true partners.
+    copy = tmp_path / "store"
+    shutil.copytree(small_chunks, copy)
+    set_fill(copy, "index/22/partner", 0)
+    shards(copy, "index/22/partner")[1].unlink()
+    names = list(StoreReader.open(TEST_STORE).variants(np.arange(468, 1056, 15)).alid)
+    with pytest.raises(
+        ValueError, match=r"index/22/partner has the fill value 0, which valid data"
+    ):
+        ogld.open(copy).matrix(names)
+    assert ogld.validate(copy)["envelope.fill"], "validate fails what open refuses"
+
+
+@pytest.mark.parametrize(
+    ("path", "fill"),
+    [("variants/position", 5), ("variants/alid", "22:1:A:C"), ("near/22/indptr", 0)],
+)
+def test_an_array_whose_fill_valid_data_can_hold_is_refused(
+    tmp_path: Path, path: str, fill: object
+) -> None:
+    copy = copy_store(tmp_path / "store")
+    set_fill(copy, path, fill)
+    with pytest.raises(ValueError, match=rf"{path} has the fill value"):
+        ogld.open(copy).region("22", 30_000_000, 1_000_000)
+    assert ogld.validate(copy)["envelope.fill"], "validate fails what open refuses"
 
 
 def test_an_r_array_whose_lost_chunk_would_read_as_a_number_is_refused(tmp_path: Path) -> None:
     copy = copy_store(tmp_path / "store")
     meta = copy / "near" / "22" / "r" / "zarr.json"
     meta.write_text(meta.read_text().replace('"fill_value": -32768', '"fill_value": 0'))
-    with pytest.raises(ValueError, match=r"near/22/r has the fill value 0"):
+    with pytest.raises(ValueError, match=r"near/22/r has the fill value 0, which valid data"):
         ogld.open(copy).region("22", 30_000_000, 100_000)
     chr21 = StoreReader.open(copy).variants(np.array([100])).position[0]
     assert ogld.open(copy).region("21", int(chr21), 1_000_000).r.size > 1, "chr21 is intact"

@@ -273,8 +273,10 @@ V is the Variant Set's size, n_c a chromosome's rows and index_c its Proxy Index
 fill value is one a valid LD Store never holds, so a chunk that was never written cannot read as
 data. This table describes how a builder writes an LD Store. Each array's own Zarr metadata
 records its chunk, shard and codecs, and readers MUST NOT depend on them: a store re-sharded for
-serving (ogld#9) reads the same. Validation checks only that every `r` array's fill value is
-−32768 (§12).
+serving (ogld#9) reads the same. A store may record other fill values, but each MUST be one a
+valid store never holds in that array: −32768 in an `r` array, a negative number in an `indptr` or
+`partner`, a position ≤ 0, `""` in a string column, and a frequency outside (0, 1) or NaN. A reader
+refuses an array whose fill value is not, and `envelope.fill` fails it (§12).
 
 **Why zstd level 3.** int16 r codes are mostly sampling noise around 0, so they compress little,
 and the codec was chosen on measured ratio and speed. These are the measurements on EUR chr22's
@@ -643,11 +645,14 @@ cold on that region took A 34.25 s, B 10.92 s, C 3.86 s.
 **How ogld reads** (ogld#4). Opening a store reads its provenance and its chromosome ranges, and
 refuses a `format_version` or `encoding` it does not implement (§13). A chromosome's `position`
 range and its two `indptr` arrays are read the first time a request touches that chromosome, and
-kept. Every other read, in the reader and in validation alike, goes through a cache of decoded
-inner chunks (`ogld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a
-request needs, whole, which is what Zarr fetches and decodes in any case, each run of neighbouring
-chunks in one read. It keeps them up to 256 MiB per opened store, dropping the least recently used
-first. So a query that reads a few pairs at a time fetches each chunk once: clumping the Test
+kept. Every other read the reader makes goes through its cache of decoded inner chunks
+(`ogld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request
+needs, whole, which is what Zarr fetches and decodes in any case, each run of neighbouring chunks
+in one read. It keeps them up to 256 MiB per opened store, dropping the least recently used first.
+Each kept chunk owns its memory, copied out of the read that fetched it, so the bytes it counts are
+the bytes it holds, and one lock guards the cache, so threads sharing a reader keep one copy of a
+chunk. Validation's rules are single bounded passes and read through Zarr directly (§12). So a
+query that reads a few pairs at a time fetches each chunk once: clumping the Test
 Store's 1,056 variants, one read per lead, took 3.6 s reading through Zarr call by call and 0.7 s
 with the cache, against 0.6 s for the walking skeleton's arrays held whole. A matrix resolves its
 pairs about 4 million at a time, which bounds its working memory beside the matrix itself.
@@ -655,12 +660,14 @@ pairs about 4 million at a time, which bounds its working memory beside the matr
 - **Over HTTP** a store is opened through zarr's fsspec store, whose HTTP filesystem uses aiohttp.
   Both are runtime dependencies. A static host that honours byte ranges is enough: no node is
   found by listing a directory.
-- **A lost chunk is refused, in every array.** It reads as its array's fill value, and §6 chose
-  each fill value as one a valid store never holds. So a read refuses the value, naming the array:
-  the reserved code in an `r` array, −1 in an `indptr` or `partner`, 0 in `position`, `""` in a
-  string column (which would otherwise make a present ALID Absent) and NaN in `a1_frequency`. A
-  reader also refuses an `r` array whose fill value is not −32768 (`envelope.fill`), because a
-  chunk it lost would decode as a correlation.
+- **A lost chunk is refused, in every array.** It reads as its array's fill value. So a reader
+  first refuses any array whose fill value a valid store could hold there (§6, `envelope.fill`):
+  the variant columns when it opens the store, and a chromosome's arrays when a request first
+  touches that chromosome, before any element of it is decoded. Then a read refuses every value
+  no valid store holds, naming the array: the reserved code in an `r` array, a negative `indptr`
+  or `partner`, a position ≤ 0, `""` in a string column (which would otherwise make a present ALID
+  Absent) and a frequency outside (0, 1). A `partner` filled with 0, zarr's default, would
+  otherwise read a lost chunk as partner row 0.
 - **Measured on the Test Store, re-sharded** into 512-element inner chunks, 4 to a shard, which
   reads exactly as the committed one (`tests/test_store_reads.py`). A 3-variant matrix over HTTP
   fetched 1,042 of chr22's 138,718 Near Band bytes, in 2 requests (42,690 bytes in 29 requests in
@@ -759,10 +766,10 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 
 | rule | checks |
 |---|---|
-| `envelope.arrays` | the hierarchy is Zarr v3, and every §1 array exists with its §1 dtype and the length §2, §4 and §5 give it |
-| `envelope.fill` | the fill value of every `r` array is −32768, so an unwritten chunk can never read as r = 0 |
+| `envelope.arrays` | the hierarchy is Zarr v3, and every §1 array exists with its §1 dtype and the length §2, §4 and §5 give it; `n_variants` is the variant table's length |
+| `envelope.fill` | the fill value of every array is one a valid store never holds there (§6): −32768 in every `r` array, so an unwritten chunk can never read as r = 0, and so on for the others |
 | `provenance.complete` | every §7 key is present with its type, null only where §7 allows; other keys are allowed |
-| `provenance.encoding` | `encoding` is exactly §3's: a reader refuses any other before decoding |
+| `provenance.encoding` | `format_version` is one this package reads, and `encoding` is exactly §3's: a reader refuses any other before decoding (§13) |
 | `provenance.distances` | `near_bp` is 3,000,000, and `near_bp` < `far_bp` ≤ 10,000,000 |
 | `provenance.threshold` | `adjustment.k` equals the number of `adjustment.covariates`. When a PC File was read (`pc_file` is not null), `k_min` ≤ k ≤ `k_target`; when none was, `k_min` is null, and a `genotypes` source has k = `k_target` = 0. An `ld_matrix` source has `k_target` null. `t_far` equals max(0.001, q / (n − k − 1)) recomputed from provenance, with n − k − 1 > q (so t_far < 1); and `far_code_floor` equals its recomputed value |
 | `variants.chromosomes` | the `chromosomes` ranges are in chromosome order, contiguous and cover every row |
@@ -778,7 +785,7 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 | `index.symmetric` | (l, m) is an entry with code c exactly when (m, l) is an entry with code c |
 | `index.near` | every entry within `near_bp` carries the Near Band's code for that pair, and every Near Band code with \|code\| ≥ `far_code_floor` is an entry: the index's near half is the band, thresholded |
 
-No rule checks chunk shapes, shards, codecs or the fill value of a non-`r` array (§6). No rule can
+No rule checks chunk shapes, shards or codecs (§6). No rule can
 check that every Far Pair was found: that needs the genotypes, and ogld#5's tests check it against
 an independent reference on the Test Panel. Each rule has a store that breaks it, in
 `tests/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 18.
@@ -797,19 +804,25 @@ metadata declares is a finding that it cannot be read. Neither passes the rule, 
 the other rules. So one fault can fail several rules; the breakers' tests assert only that each
 fails its own.
 
-**How the rules read.** A chromosome's positions and `indptr` arrays are read whole, as a reader
-keeps them (§10). Near Band codes and Proxy Index entries are read in blocks of rows holding at
-most 8,388,608 elements, and the variant columns 1,048,576 rows at a time, so no rule loads a
-whole Near Band or Proxy Index.
+**How the rules read.** Each rule is one pass, reading through Zarr directly. A chromosome's
+positions and `indptr` arrays are read whole, as a reader keeps them (§10). Near Band codes and
+Proxy Index entries are read in blocks of rows holding at most 8,388,608 elements of each array,
+and the variant columns 1,048,576 rows at a time, so no rule loads a whole Near Band or Proxy
+Index. A chunk that will not decode, such as a corrupt zstd frame, is a "cannot be read" finding
+of each rule that reads it.
 
-- `provenance.complete` checks every key of `ogld.format.REQUIRED_KEYS` and the keys this
-  section's table names inside them: `variant_filters`, `variants_dropped`, `pc_file`, the
-  PC Check's settings and `pc_diagnostic`. A null is allowed only where §7 allows it, and for
-  `panel.samples_sha256` and `pc_diagnostic` only with an `ld_matrix` source.
+- `provenance.complete` checks every key §7 names: those of `ogld.format.REQUIRED_KEYS` and the
+  keys inside them, `variant_filters`, `variants_dropped`, `pc_file`, the PC Check's settings and
+  its `null`, each `scan` entry's fields, `pc_diagnostic` with its `pairs` and the five quantiles
+  of `near_100kb_change`, and `software`'s `ogld`, `numpy` and `zarr`. A null is allowed only
+  where §7 allows it, and for `panel.samples_sha256` and `pc_diagnostic` only with an `ld_matrix`
+  source.
 - `provenance.threshold` also holds `t_far_q` to 20.84.
-- `index.symmetric` reads each block of rows together with the rows up to `far_bp` before it,
-  where the earlier row of each of its pairs lies, and matches every pair once. A pair more than
-  `far_bp` apart is `index.distance`'s finding.
+- `index.symmetric` reads each entry once. It adds a 64-bit hash of (earlier row, later row,
+  code) to one of two sums kept for the pair's earlier row: one for the entries in that row, one
+  for those in the later row. A row whose two sums differ is the earlier row of a pair held one
+  way only, or with two codes, and the finding names it. Two different sets of entries give equal
+  sums by chance about once in 1.8×10¹⁹; the sums take 16 bytes per row.
 - `index.near` compares each block's entries in a pair's earlier row with that Near Band row at
   the far code floor, both ways, and reads the band's code for every entry in a pair's later row
   within `near_bp`. That such a later-row entry exists at all is `index.symmetric`'s finding.

@@ -4,11 +4,12 @@ Each rule is a generator over one opened hierarchy and its provenance, yielding 
 how the store breaks it. `validate` runs all 18, in the spec's order, on a store at a path or
 URL; `StoreWriter.finish` runs them on the store it wrote, before the provenance that makes
 it readable goes in. A rule never trusts what it does not check: when what it needs is
-missing or malformed it reports that it cannot be checked, as a finding, rather than pass.
+missing or malformed it reports that it cannot be checked, and when an array will not
+decode it reports that it cannot be read, each as a finding, rather than pass or stop.
 
-Every rule reads in bounded windows. A chromosome's positions and `indptr` arrays are read
-whole, as a reader keeps them (spec §10); a Near Band, a Proxy Index and the variant columns
-are read `_WINDOW` elements or rows at a time, never whole.
+Every rule reads in bounded windows, in one pass, through Zarr directly: a chromosome's
+positions and `indptr` arrays whole, as a reader keeps them (spec §10), and a Near Band, a
+Proxy Index and the variant columns at most `_WINDOW` elements or `_ROWS` rows at a time.
 """
 
 from __future__ import annotations
@@ -23,19 +24,19 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import (
-    ENCODING,
+from ogld.format.encoding import (
     FAR_BP,
     NEAR_BP,
     RESERVED_CODE,
     T_FAR_Q,
-    VALIDATION_RULES,
     far_code_floor,
     near_row_lengths,
     t_far,
 )
+from ogld.format.provenance import ENCODING, FORMAT_VERSION, VALIDATION_RULES
 from ogld.identity import IdentityError, alid_locus, orient, variant_order_key
-from ogld.store.location import ChunkCache, open_group
+from ogld.store.layout import never_data, spans
+from ogld.store.location import open_group
 
 #: Elements of a Near Band or a Proxy Index a rule reads at once: 8 Mi codes are 16 MiB.
 _WINDOW: Final = 1 << 23
@@ -92,6 +93,10 @@ class _Unchecked(Exception):
         self.why = why
 
 
+class _Unreadable(_Unchecked):
+    """An array that will not read or decode as its metadata declares."""
+
+
 _Problems = Iterator[tuple[str, str]]
 _RULES: dict[str, Callable[[_Store], _Problems]] = {}
 
@@ -105,22 +110,24 @@ def _rule(name: str) -> Callable[[Callable[[_Store], _Problems]], Callable[[_Sto
 
 
 def _run(rule: str, store: _Store) -> list[Finding]:
-    """The rule's findings. An array that cannot be read or decoded fails the rule, as a
-    finding naming the error: validation reports a broken store, it does not stop at one."""
+    """The rule's findings; one it cannot finish says why, so it never passes unchecked."""
     found: list[Finding] = []
     try:
         for where, message in _RULES[rule](store):
             found.append(Finding(rule, where, message))
+    except _Unreadable as unreadable:
+        found.append(Finding(rule, unreadable.where, f"cannot be read: {unreadable.why}"))
     except _Unchecked as unchecked:
         found.append(Finding(rule, unchecked.where, f"cannot be checked: {unchecked.why}"))
-    except _UNREADABLE as error:
-        found.append(Finding(rule, "the store", f"cannot be read: {type(error).__name__}: {error}"))
     return found
 
 
-#: What reading a corrupt array raises, from zarr, its codecs or numpy. A fault in a rule
-#: itself (an AttributeError, an AssertionError) is not here, and propagates.
-_UNREADABLE: Final = (ValueError, TypeError, IndexError, KeyError, OSError)
+#: What reading a corrupt array raises: a codec's RuntimeError (zstd's "Data corruption
+#: detected"), or a ValueError, TypeError or OSError from zarr or numpy. Only the read is
+#: guarded, so a fault in a rule itself still propagates.
+_READ_ERRORS: Final = (RuntimeError, ValueError, TypeError, IndexError, KeyError, OSError)
+
+_MISSING: Final = object()
 
 
 def _is_int(value: object) -> TypeGuard[int]:
@@ -131,6 +138,16 @@ def _is_number(value: object) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
+def _lookup(provenance: object, key: str) -> Any:
+    """The value at dotted `key`, or `_MISSING`."""
+    node: Any = provenance
+    for part in key.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return _MISSING
+        node = node[part]
+    return node
+
+
 class _Store:
     """The hierarchy under validation and its provenance; what rules share is read once."""
 
@@ -138,19 +155,16 @@ class _Store:
         self.root = root
         # A round trip through JSON, so a check on write judges exactly what is stored.
         self.provenance = json.loads(json.dumps(provenance)) if provenance is not None else None
-        self._cache: dict[str, npt.NDArray[np.int64]] = {}
-        self.chunks = ChunkCache()
+        self._kept: dict[str, npt.NDArray[np.int64]] = {}
 
     def value(self, key: str) -> Any:
         """The provenance value at dotted `key`, or `_Unchecked`."""
-        node: Any = self.provenance
-        if not isinstance(node, dict):
+        if not isinstance(self.provenance, dict):
             raise _Unchecked("ld_store", "the root group has no ld_store provenance (spec §7)")
-        for part in key.split("."):
-            if not isinstance(node, dict) or part not in node:
-                raise _Unchecked(key, f"provenance has no {key} (provenance.complete)")
-            node = node[part]
-        return node
+        found = _lookup(self.provenance, key)
+        if found is _MISSING:
+            raise _Unchecked(key, f"provenance has no {key} (provenance.complete)")
+        return found
 
     def integer(self, key: str) -> int:
         value = self.value(key)
@@ -168,6 +182,23 @@ class _Store:
             raise _Unchecked(path, f"{path} is missing (envelope.arrays)")
         return found
 
+    def read(self, path: str, lo: int | None = None, hi: int | None = None) -> npt.NDArray[Any]:
+        """Elements [lo, hi) of the array at `path`; one that will not decode is `_Unreadable`."""
+        array = self.array(path)
+        try:
+            return np.asarray(array[lo:hi])
+        except _READ_ERRORS as error:
+            raise _Unreadable(path, f"{type(error).__name__}: {error}") from error
+
+    def pick(self, path: str, coords: npt.NDArray[np.int64]) -> npt.NDArray[Any]:
+        """The elements of the array at `path` at scattered `coords`, in that order."""
+        distinct, back = np.unique(coords, return_inverse=True)
+        try:
+            found = np.asarray(self.array(path).get_coordinate_selection(distinct))
+        except _READ_ERRORS as error:
+            raise _Unreadable(path, f"{type(error).__name__}: {error}") from error
+        return found[back]
+
     def chromosomes(self) -> list[tuple[str, int, int]]:
         """The `chromosomes` ranges, if each is a canonical name and rows in order."""
         listed = self.root.get("variants")
@@ -181,22 +212,30 @@ class _Store:
     def positions(self, name: str, start: int, stop: int) -> npt.NDArray[np.int64]:
         """One chromosome's positions, kept as a reader keeps them (spec §10)."""
         key = f"position/{name}"
-        if key not in self._cache:
-            self._cache[key] = np.asarray(self.array("variants/position")[start:stop]).astype(
-                np.int64
-            )
-        return self._cache[key]
+        if key not in self._kept:
+            self._kept[key] = self.read("variants/position", start, stop).astype(np.int64)
+        return self._kept[key]
 
     def indptr(self, path: str, rows: int) -> npt.NDArray[np.int64]:
         """An `indptr` array that delimits `rows` rows; one that cannot is `_Unchecked`."""
-        if path not in self._cache:
-            values = np.asarray(self.array(path)[:]).astype(np.int64)
-            if len(values) != rows + 1 or values[0] != 0 or (np.diff(values) < 0).any():
-                raise _Unchecked(
-                    path, f"{path} does not delimit {rows} rows (near.rows, index.rows)"
-                )
-            self._cache[path] = values
-        return self._cache[path]
+        if path not in self._kept:
+            values = self.read(path).astype(np.int64)
+            for _, problem in _indptr_problems(path, values, rows):
+                raise _Unchecked(path, f"{path} {problem} (near.rows, index.rows)")
+            self._kept[path] = values
+        return self._kept[path]
+
+
+def _indptr_problems(
+    path: str, indptr: npt.NDArray[np.int64], rows: int, end: int | None = None
+) -> _Problems:
+    """How `indptr` fails to delimit `rows` rows, ending at `end` elements when it is given."""
+    if len(indptr) != rows + 1 or indptr[0] != 0:
+        yield path, f"has {len(indptr)} entries from {indptr[:1].tolist()}, not {rows + 1} from 0"
+    elif (np.diff(indptr) < 0).any():
+        yield path, "decreases, so it delimits no rows"
+    elif end is not None and indptr[-1] != end:
+        yield path, f"ends at {indptr[-1]:,}, but its rows' arrays hold {end:,} elements"
 
 
 def _range_entry(entry: object) -> bool:
@@ -218,6 +257,17 @@ def _flag(where: str, bad: npt.NDArray[np.bool_], first: int, what: str) -> _Pro
 def _windows(start: int, stop: int, step: int) -> Iterator[tuple[int, int]]:
     for lo in range(start, stop, step):
         yield lo, min(stop, lo + step)
+
+
+def _blocks(*indptrs: npt.NDArray[np.int64]) -> Iterator[tuple[int, int]]:
+    """Row ranges [a, b) holding at most `_WINDOW` elements in each array `indptrs` delimit,
+    or one row when that row alone holds more."""
+    rows, a = len(indptrs[0]) - 1, 0
+    while a < rows:
+        b = min(int(np.searchsorted(p, p[a] + _WINDOW, side="right")) - 1 for p in indptrs)
+        b = min(max(b, a + 1), rows)
+        yield a, b
+        a = b
 
 
 # ------------------------------------------------------------------ envelope
@@ -248,7 +298,22 @@ def _last(store: _Store, path: str) -> int | None:
     array = store.find(path)
     if array is None or not array.shape or not array.shape[0]:
         return None
-    return int(np.asarray(array[-1:])[0])
+    return int(store.read(path, array.shape[0] - 1)[0])
+
+
+def _arrays(store: _Store) -> Iterator[str]:
+    """The path of every array spec §1 names, for the store's chromosomes."""
+    yield from (f"variants/{name}" for name in _VARIANT_DTYPES)
+    for chrom, _, _ in store.chromosomes():
+        yield from (f"near/{chrom}/{name}" for name in ("indptr", "r"))
+        yield from (f"index/{chrom}/{name}" for name in ("indptr", "partner", "r"))
+
+
+def _counted(store: _Store, rows: int) -> _Problems:
+    """`n_variants` against the variant table, when provenance records it as a number."""
+    recorded = _lookup(store.provenance, "n_variants")
+    if _is_int(recorded) and recorded != rows:
+        yield "n_variants", f"provenance records {recorded:,}, but variants/ holds {rows:,} rows"
 
 
 @_rule("envelope.arrays")
@@ -260,6 +325,7 @@ def _envelope_arrays(store: _Store) -> _Problems:
     size = ranges[-1][2] if ranges else 0
     for name, dtype in _VARIANT_DTYPES.items():
         yield from _shape(store, f"variants/{name}", dtype, size)
+    yield from _counted(store, size)
     r_dtype = ENCODING["r_dtype"]
     for chrom, start, stop in ranges:
         for kind in ("near", "index"):
@@ -272,23 +338,26 @@ def _envelope_arrays(store: _Store) -> _Problems:
 
 @_rule("envelope.fill")
 def _envelope_fill(store: _Store) -> _Problems:
-    for chrom, _, _ in store.chromosomes():
-        for path in (f"near/{chrom}/r", f"index/{chrom}/r"):
-            array = store.array(path)
-            if array.fill_value != RESERVED_CODE:
-                yield (
-                    path,
-                    (
-                        f"its fill value is {array.fill_value}, not {RESERVED_CODE}: an unwritten "
-                        "chunk would read as a correlation (spec §3, §6)"
-                    ),
-                )
+    """Every array's fill value is one no valid store holds there, so a chunk it lost can
+    never read as data: the reserved code in an r array, a negative indptr, and so on."""
+    for path in _arrays(store):
+        fill = store.array(path).fill_value
+        if not never_data(path.rsplit("/", 1)[-1], fill).all():
+            shown = json.dumps(fill) if isinstance(fill, str) else str(fill)
+            yield (
+                path,
+                (
+                    f"its fill value {shown} is one valid data can hold there: a chunk it "
+                    "lost would read as data (spec §6)"
+                ),
+            )
 
 
 # ------------------------------------------------------------------ provenance
 
-#: Every key spec §7 requires, and the keys its table names inside them, with their types.
-#: "?" allows null; "?import" allows it only for an `ld_matrix` source.
+#: Every key spec §7 names, required ones and the keys inside them, with their types.
+#: "?" allows null; "?import" allows it only for an `ld_matrix` source. A key inside one that
+#: is null or absent is not checked: the enclosing key's own row reports it.
 _SCHEMA: Final = {
     "format_version": "str",
     "encoding.r_dtype": "str",
@@ -330,6 +399,10 @@ _SCHEMA: Final = {
     "adjustment.pc_check.scan": "list",
     "adjustment.pc_check.dropped": "strings",
     "adjustment.pc_check.null": "object",
+    "adjustment.pc_check.null.kind": "str",
+    "adjustment.pc_check.null.permutations": "int",
+    "adjustment.pc_check.null.seed": "int",
+    "adjustment.pc_check.null.quantile": "number",
     "t_far": "number",
     "t_far_q": "number",
     "far_code_floor": "int",
@@ -347,11 +420,29 @@ _SCHEMA: Final = {
     "counts.far_pairs": "int",
     "counts.index_entries": "int",
     "software": "object",
+    "software.ogld": "str",
+    "software.numpy": "str",
+    "software.zarr": "str",
     "build.created_at": "str",
     "build.wall_seconds": "number",
     "build.peak_memory_bytes": "int",
     "build.threads": "int",
 }
+
+#: Each entry of the PC Check's `scan`, one per PC of the PC File (spec §7).
+_SCAN_ENTRY: Final = {
+    "pc": "str",
+    "window": "str",
+    "window_share": "number",
+    "rest_share": "number",
+    "ratio": "number",
+    "local": "bool",
+    "window_null_q99": "number",
+    "rest_null_q99": "number",
+}
+
+#: The quantiles `pc_diagnostic.near_100kb_change` holds, by name (spec §7).
+_QUANTILES: Final = ("0", "0.5", "0.9", "0.99", "1")
 
 _TYPES: Final[dict[str, Callable[[object], bool]]] = {
     "str": lambda v: isinstance(v, str),
@@ -365,17 +456,6 @@ _TYPES: Final[dict[str, Callable[[object], bool]]] = {
     "kind": lambda v: v in ("genotypes", "ld_matrix"),
 }
 
-_MISSING: Final = object()
-
-
-def _lookup(provenance: dict[str, Any], key: str) -> Any:
-    node: Any = provenance
-    for part in key.split("."):
-        if not isinstance(node, dict) or part not in node:
-            return _MISSING
-        node = node[part]
-    return node
-
 
 def _within_null(provenance: dict[str, Any], key: str) -> bool:
     """True when an enclosing key of the schema is null or absent: its own row reports it."""
@@ -384,7 +464,7 @@ def _within_null(provenance: dict[str, Any], key: str) -> bool:
     return any(not isinstance(_lookup(provenance, e), dict) for e in enclosing if e in _SCHEMA)
 
 
-def _key_problem(key: str, kind: str, value: object, source: object) -> str | None:
+def _key_problem(kind: str, value: object, source: object) -> str | None:
     base, nullable, only = kind.partition("?")
     if value is _MISSING:
         return "missing (spec §7)"
@@ -397,6 +477,26 @@ def _key_problem(key: str, kind: str, value: object, source: object) -> str | No
     return None if _TYPES[base](value) else f"{value!r:.80} is not of type {base} (spec §7)"
 
 
+def _scan_problems(provenance: dict[str, Any]) -> _Problems:
+    """The fields §7 names in each entry of the PC Check's `scan`."""
+    scan = _lookup(provenance, "adjustment.pc_check.scan")
+    for i, entry in enumerate(scan if isinstance(scan, list) else []):
+        fields = entry if isinstance(entry, dict) else {}
+        for key, kind in _SCAN_ENTRY.items():
+            problem = _key_problem(kind, fields.get(key, _MISSING), None)
+            if problem is not None:
+                yield f"adjustment.pc_check.scan[{i}].{key}", problem
+
+
+def _quantile_problems(provenance: dict[str, Any]) -> _Problems:
+    """The five quantiles §7 names in `pc_diagnostic.near_100kb_change`."""
+    change = _lookup(provenance, "pc_diagnostic.near_100kb_change")
+    for q in _QUANTILES if isinstance(change, dict) else ():
+        problem = _key_problem("number", change.get(q, _MISSING), None)
+        if problem is not None:
+            yield f"pc_diagnostic.near_100kb_change[{q}]", problem
+
+
 @_rule("provenance.complete")
 def _provenance_complete(store: _Store) -> _Problems:
     provenance = store.provenance
@@ -405,15 +505,21 @@ def _provenance_complete(store: _Store) -> _Problems:
         return
     source = _lookup(provenance, "source.kind")
     for key, kind in _SCHEMA.items():
-        if _within_null(provenance, key):
-            continue
-        problem = _key_problem(key, kind, _lookup(provenance, key), source)
-        if problem is not None:
-            yield key, problem
+        if not _within_null(provenance, key):
+            problem = _key_problem(kind, _lookup(provenance, key), source)
+            if problem is not None:
+                yield key, problem
+    yield from _scan_problems(provenance)
+    yield from _quantile_problems(provenance)
 
 
 @_rule("provenance.encoding")
 def _provenance_encoding(store: _Store) -> _Problems:
+    """The format version and the encoding are the ones this package reads (spec §3, §13):
+    `ogld info` and every reader refuse a store with any other."""
+    version = store.value("format_version")
+    if version != FORMAT_VERSION:
+        yield "format_version", f"{version!r}: this ogld reads {FORMAT_VERSION!r} only (spec §13)"
     recorded = store.value("encoding")
     if recorded != ENCODING:
         yield "encoding", f"{recorded!r} is not spec §3's {ENCODING!r}"
@@ -525,8 +631,7 @@ def _variants_chromosomes(store: _Store) -> _Problems:
 
 
 def _strings(store: _Store, name: str, lo: int, hi: int) -> npt.NDArray[np.str_]:
-    values = np.asarray(store.array(f"variants/{name}")[lo:hi])
-    return np.array(values.tolist(), dtype=np.str_)
+    return np.array(store.read(f"variants/{name}", lo, hi).tolist(), dtype=np.str_)
 
 
 @_rule("variants.order")
@@ -535,7 +640,7 @@ def _variants_order(store: _Store) -> _Problems:
         carry_pos = np.empty(0, dtype=np.int64)
         carry_alid = np.empty(0, dtype=np.str_)
         for lo, hi in _windows(start, stop, _ROWS):
-            pos = np.concatenate([carry_pos, store.array("variants/position")[lo:hi]])
+            pos = np.concatenate([carry_pos, store.read("variants/position", lo, hi)])
             alid = np.concatenate([carry_alid, _strings(store, "alid", lo, hi)])
             after = (pos[1:] > pos[:-1]) | ((pos[1:] == pos[:-1]) & (alid[1:] > alid[:-1]))
             first = lo - len(carry_pos) + 1
@@ -555,7 +660,7 @@ def _engine_alid(chrom: str, position: int, a1: str, a2: str) -> tuple[str, str,
 def _variants_identity(store: _Store) -> _Problems:
     for chrom, start, stop in store.chromosomes():
         for lo, hi in _windows(start, stop, _ROWS):
-            pos = np.asarray(store.array("variants/position")[lo:hi])
+            pos = store.read("variants/position", lo, hi)
             alid, a1, a2 = (_strings(store, name, lo, hi) for name in ("alid", "a1", "a2"))
             rows = zip(pos, alid, a1, a2, strict=True)
             bad = np.array(
@@ -568,9 +673,8 @@ def _variants_identity(store: _Store) -> _Problems:
 
 @_rule("variants.frequency")
 def _variants_frequency(store: _Store) -> _Problems:
-    array = store.array("variants/a1_frequency")
-    for lo, hi in _windows(0, array.shape[0], _ROWS):
-        f = np.asarray(array[lo:hi]).astype(np.float64)
+    for lo, hi in _windows(0, store.array("variants/a1_frequency").shape[0], _ROWS):
+        f = store.read("variants/a1_frequency", lo, hi).astype(np.float64)
         with np.errstate(invalid="ignore"):
             bad = ~(np.isfinite(f) & (f > 0) & (f < 1))
         yield from _flag("variants/a1_frequency", bad, lo, "not finite and in (0, 1)")
@@ -584,25 +688,21 @@ def _near_rows(store: _Store) -> _Problems:
     near_bp = store.integer("near_bp")
     for chrom, start, stop in store.chromosomes():
         path = f"near/{chrom}/indptr"
-        indptr = np.asarray(store.array(path)[:]).astype(np.int64)
-        if len(indptr) != stop - start + 1 or indptr[0] != 0:
-            yield (
-                path,
-                f"{len(indptr)} entries from {indptr[:1].tolist()}, not {stop - start + 1} from 0",
-            )
-            continue
-        expected = near_row_lengths(store.positions(chrom, start, stop), near_bp)
-        yield from _flag(
-            path, np.diff(indptr) != expected, 0, "a row whose length is not spec §4's"
-        )
+        indptr = store.read(path).astype(np.int64)
+        problems = list(_indptr_problems(path, indptr, stop - start))
+        yield from problems
+        if not problems:
+            expected = near_row_lengths(store.positions(chrom, start, stop), near_bp)
+            bad = np.diff(indptr) != expected
+            yield from _flag(path, bad, 0, "a row whose length is not spec §4's")
 
 
 def _scan_codes(store: _Store, kind: str) -> _Problems:
     for chrom, _, _ in store.chromosomes():
-        array = store.array(f"{kind}/{chrom}/r")
-        for lo, hi in _windows(0, array.shape[0], _WINDOW):
-            bad = np.asarray(array[lo:hi]) == RESERVED_CODE
-            yield from _flag(array.path, bad, lo, f"the reserved code {RESERVED_CODE}")
+        path = f"{kind}/{chrom}/r"
+        for lo, hi in _windows(0, store.array(path).shape[0], _WINDOW):
+            bad = store.read(path, lo, hi) == RESERVED_CODE
+            yield from _flag(path, bad, lo, f"the reserved code {RESERVED_CODE}")
 
 
 @_rule("near.codes")
@@ -614,79 +714,71 @@ def _near_codes(store: _Store) -> _Problems:
 
 
 @dataclass(frozen=True)
-class _Entries:
-    """Proxy Index entries of one chromosome's rows [first, last): owner, partner, code."""
+class _IndexBlock:
+    """The Proxy Index entries of one chromosome's rows [first, last): owner, partner, code,
+    and `at`, the offset of the first entry in `partner` and `r`."""
 
     first: int
     last: int
+    at: int
     owner: npt.NDArray[np.int64]
     partner: npt.NDArray[np.int64]
     code: npt.NDArray[np.int64]
 
+    def valid(self, size: int) -> npt.NDArray[np.bool_]:
+        """Entries whose partner is a row of the chromosome: the others are index.rows'."""
+        return (self.partner >= 0) & (self.partner < size)
 
-def _entries(store: _Store, chrom: str, size: int, first: int, last: int) -> _Entries:
-    indptr = store.indptr(f"index/{chrom}/indptr", size)
+
+def _index_block(
+    store: _Store, chrom: str, indptr: npt.NDArray[np.int64], first: int, last: int
+) -> _IndexBlock:
     lo, hi = int(indptr[first]), int(indptr[last])
     owner = np.repeat(np.arange(first, last, dtype=np.int64), np.diff(indptr[first : last + 1]))
-    partner = np.asarray(store.array(f"index/{chrom}/partner")[lo:hi]).astype(np.int64)
-    code = np.asarray(store.array(f"index/{chrom}/r")[lo:hi]).astype(np.int64)
-    return _Entries(first, last, owner, partner, code)
+    partner = store.read(f"index/{chrom}/partner", lo, hi).astype(np.int64)
+    code = store.read(f"index/{chrom}/r", lo, hi).astype(np.int64)
+    return _IndexBlock(first, last, lo, owner, partner, code)
 
 
-def _blocks(indptr: npt.NDArray[np.int64]) -> Iterator[tuple[int, int]]:
-    """Row ranges [a, b) whose entries number at most `_WINDOW`, or one row when it is longer."""
-    rows, a = len(indptr) - 1, 0
-    while a < rows:
-        b = int(np.searchsorted(indptr, indptr[a] + _WINDOW, side="right")) - 1
-        b = min(max(b, a + 1), rows)
-        yield a, b
-        a = b
+def _chromosome_blocks(store: _Store, chrom: str, size: int) -> Iterator[_IndexBlock]:
+    """One chromosome's Proxy Index in blocks of rows."""
+    indptr = store.indptr(f"index/{chrom}/indptr", size)
+    for a, b in _blocks(indptr):
+        yield _index_block(store, chrom, indptr, a, b)
 
 
-def _index_blocks(store: _Store) -> Iterator[tuple[str, int, int, _Entries]]:
+def _index_blocks(store: _Store) -> Iterator[tuple[str, int, int, _IndexBlock]]:
     """Each chromosome's Proxy Index in blocks of rows, with its first row and its size."""
     for chrom, start, stop in store.chromosomes():
-        size = stop - start
-        for a, b in _blocks(store.indptr(f"index/{chrom}/indptr", size)):
-            yield chrom, start, size, _entries(store, chrom, size, a, b)
+        for block in _chromosome_blocks(store, chrom, stop - start):
+            yield chrom, start, stop - start, block
 
 
-def _indptr_problems(
-    path: str, indptr: npt.NDArray[np.int64], rows: int, entries: tuple[int, int]
-) -> _Problems:
-    """An index `indptr` that does not delimit `rows` rows ending at the `entries` of
-    `partner` and `r`."""
-    if len(indptr) != rows + 1 or indptr[0] != 0:
-        yield path, f"{len(indptr)} entries from {indptr[:1].tolist()}, not {rows + 1} from 0"
-    elif (np.diff(indptr) < 0).any():
-        yield path, "decreases, so it delimits no rows"
-    elif {int(indptr[-1])} != set(entries):
-        yield (
-            path,
-            f"ends at {indptr[-1]:,}, but partner and r hold {entries[0]:,} and {entries[1]:,}",
-        )
-
-
-def _partner_problems(chrom: str, size: int, e: _Entries, first: int) -> _Problems:
-    outside = (e.partner < 0) | (e.partner >= size) | (e.partner == e.owner)
+def _partner_problems(chrom: str, size: int, e: _IndexBlock) -> _Problems:
+    outside = ~e.valid(size) | (e.partner == e.owner)
     repeated = (np.diff(e.partner) <= 0) & (np.diff(e.owner) == 0)
     where = f"index/{chrom}/partner"
-    yield from _flag(where, outside, first, "a partner outside [0, n_c) or the row itself")
-    yield from _flag(where, repeated, first + 1, "a partner not above the one before it")
+    yield from _flag(where, outside, e.at, "a partner outside [0, n_c) or the row itself")
+    yield from _flag(where, repeated, e.at + 1, "a partner not above the one before it")
+
+
+def _index_ends(store: _Store, chrom: str) -> int | None:
+    """The length `partner` and `r` share, or None when they disagree."""
+    lengths = {store.array(f"index/{chrom}/{name}").shape[0] for name in ("partner", "r")}
+    return lengths.pop() if len(lengths) == 1 else None
 
 
 @_rule("index.rows")
 def _index_rows(store: _Store) -> _Problems:
     for chrom, start, stop in store.chromosomes():
-        path, size = f"index/{chrom}/indptr", stop - start
-        indptr = np.asarray(store.array(path)[:]).astype(np.int64)
-        entries = tuple(store.array(f"index/{chrom}/{a}").shape[0] for a in ("partner", "r"))
-        problems = list(_indptr_problems(path, indptr, size, (entries[0], entries[1])))
+        path, size, end = f"index/{chrom}/indptr", stop - start, _index_ends(store, chrom)
+        indptr = store.read(path).astype(np.int64)
+        problems = list(_indptr_problems(path, indptr, size, end))
+        if end is None:
+            problems.append((f"index/{chrom}", "partner and r differ in length"))
         yield from problems
-        if not problems:
-            for a, b in _blocks(indptr):
-                e = _entries(store, chrom, size, a, b)
-                yield from _partner_problems(chrom, size, e, int(indptr[a]))
+        for a, b in _blocks(indptr) if not problems else ():
+            yield from _partner_problems(chrom, size, _index_block(store, chrom, indptr, a, b))
 
 
 @_rule("index.codes")
@@ -694,29 +786,22 @@ def _index_codes(store: _Store) -> _Problems:
     yield from _scan_codes(store, "index")
 
 
-def _valid(e: _Entries, size: int) -> npt.NDArray[np.bool_]:
-    """Entries whose partner is a row of the chromosome: the others are index.rows' findings."""
-    return (e.partner >= 0) & (e.partner < size)
-
-
 @_rule("index.distance")
 def _index_distance(store: _Store) -> _Problems:
     far_bp = store.integer("far_bp")
     for chrom, start, size, e in _index_blocks(store):
         pos = store.positions(chrom, start, start + size)
-        partner = np.where(_valid(e, size), e.partner, e.owner)
+        partner = np.where(e.valid(size), e.partner, e.owner)
         beyond = np.abs(pos[partner] - pos[e.owner]) > far_bp
-        first = int(store.indptr(f"index/{chrom}/indptr", size)[e.first])
-        yield from _flag(f"index/{chrom}/partner", beyond, first, f"a partner beyond {far_bp:,} bp")
+        yield from _flag(f"index/{chrom}/partner", beyond, e.at, f"a partner beyond {far_bp:,} bp")
 
 
 @_rule("index.threshold")
 def _index_threshold(store: _Store) -> _Problems:
     floor = store.integer("far_code_floor")
-    for chrom, _, size, e in _index_blocks(store):
-        first = int(store.indptr(f"index/{chrom}/indptr", size)[e.first])
+    for chrom, _, _, e in _index_blocks(store):
         below = np.abs(e.code) < floor
-        yield from _flag(f"index/{chrom}/r", below, first, f"|code| below far_code_floor {floor}")
+        yield from _flag(f"index/{chrom}/r", below, e.at, f"|code| below far_code_floor {floor}")
 
 
 def _keys(
@@ -724,6 +809,15 @@ def _keys(
 ) -> npt.NDArray[np.int64]:
     """One integer per (pair, code), so two sets of entries compare with one set operation."""
     return ((lo * size + hi) << 16) + (code - RESERVED_CODE)
+
+
+def _mixed(keys: npt.NDArray[np.int64]) -> npt.NDArray[np.uint64]:
+    """splitmix64's finaliser of each key: a sum of these tells two multisets of keys apart
+    unless they collide modulo 2⁶⁴, about one chance in 1.8×10¹⁹ for each difference."""
+    z = keys.astype(np.uint64) + np.uint64(0x9E3779B97F4A7C15)
+    z = (z ^ (z >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+    z = (z ^ (z >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+    return z ^ (z >> np.uint64(31))
 
 
 def _odd_pairs(chrom: str, odd: npt.NDArray[np.int64], size: int, what: str) -> _Problems:
@@ -737,47 +831,45 @@ def _odd_pairs(chrom: str, odd: npt.NDArray[np.int64], size: int, what: str) -> 
 
 @_rule("index.symmetric")
 def _index_symmetric(store: _Store) -> _Problems:
-    """Each pair within far_bp, matched across the rows it joins. A block [a, b) is read with
-    the rows up to far_bp before it, where every earlier half of its pairs lies; a pair
-    farther apart is index.distance's finding."""
-    far_bp = store.integer("far_bp")
+    """Each pair's two entries, matched in one bounded pass. Every entry adds a hash of
+    (earlier row, later row, code) to its pair's earlier row, the entry in that row to one
+    sum and the entry in the later row to the other; a row whose two sums differ is the
+    earlier row of a pair held one way only, or with two codes."""
     for chrom, start, stop in store.chromosomes():
-        size, pos = stop - start, store.positions(chrom, start, stop)
-        for a, b in _blocks(store.indptr(f"index/{chrom}/indptr", size)):
-            c = int(np.searchsorted(pos, pos[a] - far_bp, side="left"))
-            e = _entries(store, chrom, size, c, b)
-            ok = _valid(e, size) & (e.partner >= e.first)
-            later = ok & (e.owner < e.partner) & (e.partner >= a) & (e.partner < b)
-            earlier = ok & (e.owner > e.partner) & (e.owner >= a)
-            odd = np.setxor1d(
-                _keys(e.owner[later], e.partner[later], e.code[later], size),
-                _keys(e.partner[earlier], e.owner[earlier], e.code[earlier], size),
-            )
-            yield from _odd_pairs(chrom, odd, size, "pairs held one way only, or with two codes")
+        size = stop - start
+        # Two sums of pair hashes per row, not r values: 0 is the empty sum.
+        sums = np.full((2, size), 0, dtype=np.uint64)
+        for e in _chromosome_blocks(store, chrom, size):
+            ok = e.valid(size) & (e.partner != e.owner)
+            lo, hi = np.minimum(e.owner, e.partner)[ok], np.maximum(e.owner, e.partner)[ok]
+            later = (e.owner > e.partner)[ok].astype(np.int64)
+            np.add.at(sums, (later, lo), _mixed(_keys(lo, hi, e.code[ok], size)))
+        what = "the earlier row of a pair held one way only, or with two codes"
+        yield from _flag(f"index/{chrom}", sums[0] != sums[1], 0, what)
 
 
 def _band_block(
     store: _Store, chrom: str, indptr: npt.NDArray[np.int64], a: int, b: int
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.int64]]:
-    """The Near Band's pairs of rows [a, b): earlier row, later row, code."""
+    """The Near Band's pairs of rows [a, b): earlier row, later row, code (spec §4)."""
+    rows = np.arange(a, b, dtype=np.int64)
     length = np.diff(indptr[a : b + 1])
-    owner = np.repeat(np.arange(a, b, dtype=np.int64), length)
-    offset = np.arange(len(owner)) - np.repeat(np.cumsum(length) - length, length)
-    code = np.asarray(store.array(f"near/{chrom}/r")[indptr[a] : indptr[b]]).astype(np.int64)
-    return owner, owner + 1 + offset, code
+    code = store.read(f"near/{chrom}/r", int(indptr[a]), int(indptr[b])).astype(np.int64)
+    return np.repeat(rows, length), spans(rows + 1, length), code
 
 
 def _near_half(store: _Store, chrom: str, start: int, stop: int) -> _Problems:
-    """Each block's index entries within near_bp: the later ones are the band's row,
-    thresholded; the earlier ones carry the band's code of their pair."""
+    """Each block's index entries within near_bp: those in a pair's earlier row are the band's
+    row, thresholded; those in its later row carry the band's code of their pair."""
     size, pos = stop - start, store.positions(chrom, start, stop)
     near_bp, floor = store.integer("near_bp"), store.integer("far_code_floor")
     band = store.indptr(f"near/{chrom}/indptr", size)
-    for a, b in _blocks(band):
+    index = store.indptr(f"index/{chrom}/indptr", size)
+    for a, b in _blocks(band, index):
         lo, hi, code = _band_block(store, chrom, band, a, b)
         kept = np.abs(code) >= floor
-        e = _entries(store, chrom, size, a, b)
-        ok = _valid(e, size)
+        e = _index_block(store, chrom, index, a, b)
+        ok = e.valid(size)
         within = ok & (np.abs(pos[np.where(ok, e.partner, e.owner)] - pos[e.owner]) <= near_bp)
         later, earlier = within & (e.partner > e.owner), within & (e.partner < e.owner)
         odd = np.setxor1d(
@@ -786,8 +878,7 @@ def _near_half(store: _Store, chrom: str, start: int, stop: int) -> _Problems:
         )
         yield from _odd_pairs(chrom, odd, size, "not the Near Band's pairs at the far code floor")
         up, down = e.partner[earlier], e.owner[earlier]
-        coords = band[up] + (down - up - 1)
-        held = store.chunks.take(store.array(f"near/{chrom}/r"), coords).astype(np.int64)
+        held = store.pick(f"near/{chrom}/r", band[up] + (down - up - 1)).astype(np.int64)
         differ = held != e.code[earlier]
         yield from _odd_pairs(
             chrom, _keys(up[differ], down[differ], e.code[earlier][differ], size), size,
