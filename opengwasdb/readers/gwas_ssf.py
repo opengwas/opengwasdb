@@ -820,9 +820,10 @@ class _Block:
         assert plan is not None
         tally = source.tally
         decided = self.decided()
+        # A frequency pandas reads as NaN was one of the missing tokens, which
+        # `parse_af` reads as absent and nothing counts; any other spelling of
+        # NaN makes the whole column text, and the block is left to the rows.
         af = np.full(len(decided), np.nan) if self.af is None else self.af
-        if "effect_allele_frequency" in plan.reads:
-            _explain_missing_frequencies(lines, plan, af, decided, tally.frequencies)
         columnar.made_absent(af, decided, tally.frequencies)
         if fmt.declaration.column is not None:
             tally.indel_rows_kept_by_hm_code += int(np.count_nonzero(decided & self.raw_indel))
@@ -837,36 +838,6 @@ class _Block:
             source.undecided += len(undecided)
             columns.place(_undecided(lines, plan, undecided, fmt, source))
         return columns.batch()
-
-
-def _explain_missing_frequencies(
-    lines: bytes, plan: _Plan, af: np.ndarray, decided: np.ndarray, tally: FrequencyTally
-) -> None:
-    """Count the frequencies the block's decided rows lack, as `parse_af` would.
-
-    A cell read as missing is absent, which nothing counts, unless it is text
-    `parse_af` reads as neither missing nor a number (``NAN``), which it counts
-    made absent. Only the cell's own text says which, so each distinct text of
-    the rows concerned is judged by `parse_af` itself. A row whose text reads as
-    a frequency after all is left to the per-row reader.
-    """
-    missing = np.flatnonzero(decided & np.isnan(af))
-    if not len(missing):
-        return
-    at = plan.reads["effect_allele_frequency"]
-    texts = pd.read_csv(
-        io.BytesIO(lines), names=range(len(plan.names)), usecols=[at], dtype=str, na_filter=False,
-        **{key: value for key, value in columnar.PANDAS.items() if key != "keep_default_na"},
-    )[at].to_numpy(dtype=object)[missing]
-    cells = pd.Series(texts, dtype=object)
-    usable = set()
-    for text, count in cells.value_counts().items():
-        counted = FrequencyTally()
-        if parse_af(str(text), counted) is not None:
-            usable.add(text)
-        tally.made_absent += counted.made_absent * int(count)
-    if usable:
-        decided[missing[cells.isin(usable).to_numpy()]] = False
 
 
 def _finite(values: np.ndarray | None, rows: int) -> np.ndarray:

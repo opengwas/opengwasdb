@@ -10,11 +10,13 @@ the same batches.
 
 from __future__ import annotations
 
+import io
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import batch_fixtures as shared
+import pandas as pd
 import pytest
 import ssf_cases
 from batch_fixtures import Built
@@ -288,6 +290,23 @@ def _fallbacks(caplog: pytest.LogCaptureFixture) -> list[str]:
 
 def _extent(path: Path, row_by_row: int, blocks: int, undecided: int) -> str:
     return shared.extent("GWAS-SSF", path, row_by_row, blocks, undecided)
+
+
+@pytest.mark.parametrize(
+    "cell",
+    ["NAN", "Nan", "+nan", "-nan", "nan ", "NaN ", "None ", "NA ", "#NA", "N/A", "null"],
+)
+def test_pandas_reads_a_nan_only_from_the_tokens_a_statistic_is_missing_for(cell: str) -> None:
+    """A frequency the columns read as NaN is one `parse_af` reads as absent
+    without counting it, so the batch path needs no cell text to tell: any
+    other spelling of NaN makes pandas read the whole column as text."""
+    data = f"0.1\n{cell}\n0.2\n".encode()
+    frame = pd.read_csv(
+        io.BytesIO(data), names=[0], na_values={0: list(columnar.MISSING_STATISTICS)},
+        float_precision="round_trip", **columnar.PANDAS,
+    )
+    assert frame[0].dtype.kind != "f"
+    assert cell not in columnar.MISSING_STATISTICS
 
 
 def test_a_statistic_is_missing_where_the_per_row_reader_reads_it_missing() -> None:
