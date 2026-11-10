@@ -15,12 +15,10 @@ import numpy as np
 import pytest
 import support
 from script_modules import load_script
-from support import alids, contract, panel_data, passing_rows, reference
+from support import alids, panel_data, passing_rows, reference
 
 import ogld
 from ogld.format import RefusalReason
-
-OGLD_6 = contract("ogld#6")
 
 #: plink2's unphased leads at r² 0.001 on the Test Panel (tests/data/test-panel/README.md).
 LEADS_R2_0_001 = {612, 421, 774, 353, 287, 703}
@@ -52,7 +50,6 @@ def busiest_query(r2: float, window: float) -> int:
     return int(np.argmax(counts))
 
 
-@OGLD_6
 def test_proxies_default_to_r2_0_8_within_10_mb() -> None:
     store = ogld.open(support.TEST_STORE)
     query = busiest_query(0.8, 10_000_000)
@@ -64,7 +61,6 @@ def test_proxies_default_to_r2_0_8_within_10_mb() -> None:
     assert (found.distance <= 10_000_000).all()
 
 
-@OGLD_6
 def test_proxies_return_signed_r() -> None:
     store = ogld.open(support.TEST_STORE)
     rows = passing_rows()
@@ -81,7 +77,6 @@ def test_proxies_return_signed_r() -> None:
     np.testing.assert_array_equal(found.r2, found.r * found.r)
 
 
-@OGLD_6
 def test_proxies_are_ordered_and_never_the_query_itself() -> None:
     store = ogld.open(support.TEST_STORE)
     query = busiest_query(0.5, 3_000_000)
@@ -91,7 +86,6 @@ def test_proxies_are_ordered_and_never_the_query_itself() -> None:
     assert keys == sorted(keys), "rows go by r² descending, then distance, then ALID"
 
 
-@OGLD_6
 def test_proxies_below_t_far_within_3_mb_read_the_near_band() -> None:
     # r2 = 0.01 < t_far is answered within 3 Mb: every pair there is stored (spec §9).
     store = ogld.open(support.TEST_STORE)
@@ -104,14 +98,12 @@ def test_proxies_below_t_far_within_3_mb_read_the_near_band() -> None:
     assert sorted(found.proxy) == sorted(alids(list(expected)))
 
 
-@OGLD_6
 def test_proxies_list_absent_queries() -> None:
     store = ogld.open(support.TEST_STORE)
     found = store.proxies(["not-an-alid", *alids(passing_rows()[:1])])
     assert found.absent == ("not-an-alid",)
 
 
-@OGLD_6
 @pytest.mark.parametrize(
     ("r2", "kb", "reason"),
     [
@@ -155,11 +147,15 @@ def k0_store(tmp_path_factory: pytest.TempPathFactory) -> ogld.LDStore:
     return _K0[0]
 
 
-@OGLD_6
 @pytest.mark.parametrize("r2", [0.01, 0.001])
 def test_clump_leads_equal_plink2_s_at_k0(
     r2: float, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
+    """Leads equal plink2's. plink2 v2.0.0-a.6.9LM joins a variant at r² > --clump-r2 and distance
+    < --clump-kb × 1,000 (checked on a constructed pair at exactly r² 0.25, and at exactly 3 Mb),
+    and so does `clump` (owner, 10 November 2026); `proxies` keeps ≥ and ≤. No candidate pair of
+    the Test Panel sits on either edge, so the leads are the same under both; the edges are
+    tested in test_query_edges.py."""
     ogld.open(support.TEST_STORE)
     store = k0_store(tmp_path_factory)
     params = panel_data().clump_params()
@@ -176,7 +172,6 @@ def test_clump_leads_equal_plink2_s_at_k0(
     )
 
 
-@OGLD_6
 def test_every_member_reaches_its_lead_and_every_lead_leads_itself(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -194,7 +189,6 @@ def test_every_member_reaches_its_lead_and_every_lead_leads_itself(
     assert all(lead_score[lead] >= s for lead, s in zip(clumps.lead, clumps.score, strict=True))
 
 
-@OGLD_6
 def test_a_stricter_threshold_gives_a_prefix_of_the_leads(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -210,7 +204,6 @@ def test_a_stricter_threshold_gives_a_prefix_of_the_leads(
     assert list(strict) == [lead for lead in loose if lead in set(strict_names)]
 
 
-@OGLD_6
 @pytest.mark.parametrize(
     ("r2", "kb", "reason"),
     [
@@ -228,7 +221,6 @@ def test_each_clump_refusal(r2: float, kb: float, reason: RefusalReason) -> None
     assert refused.value.reason is reason
 
 
-@OGLD_6
 @pytest.mark.parametrize("score", [[6.0, math.nan, 4.0], [6.0, -1.0, 4.0], [6.0, 5.0]])
 def test_a_score_that_is_not_one_per_alid_finite_and_non_negative_is_invalid(
     score: list[float],
