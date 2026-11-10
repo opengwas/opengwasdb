@@ -107,17 +107,9 @@ def far_code_floor(t_far: float) -> int:
     return code
 
 
-def row_reach(position: npt.ArrayLike, distance: int) -> npt.NDArray[np.int64]:
-    """For each row l of one chromosome, the first row more than `distance` past it: rows l + 1
-    … reach − 1 are its partners within `distance` (spec §4, §5). The one rule for where a
-    band, near_bp or far_bp, ends; `position` is ascending, in row order."""
-    at = np.asarray(position, dtype=np.int64)
-    reach: npt.NDArray[np.int64] = np.searchsorted(at, at + distance, side="right").astype(np.int64)
-    return reach
-
-
 def near_row_lengths(position: npt.ArrayLike, near_bp: int) -> npt.NDArray[np.int64]:
     """The length of each Near Band row of one chromosome: len_l = |{m > l : p_m − p_l ≤ near_bp}|
     (spec §4). `position` is the chromosome's positions in row order, ascending."""
-    reach = row_reach(position, near_bp)
-    return (reach - np.arange(len(reach)) - 1).astype(np.int64)
+    at = np.asarray(position, dtype=np.int64)
+    reach = np.searchsorted(at, at + near_bp, side="right")
+    return (reach - np.arange(len(at)) - 1).astype(np.int64)

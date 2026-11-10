@@ -38,7 +38,7 @@ from realdata_inputs import required
 
 import ogld
 from ogld.build.diagnostic import outside_regions
-from ogld.format import dequantise, row_reach
+from ogld.format import dequantise
 from ogld.identity import Orientation, orient
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -199,7 +199,8 @@ def band_within(store: Path, distance: int) -> npt.NDArray[np.float64]:
     position = np.asarray(root["variants/position"][:]).astype(np.int64)
     indptr = np.asarray(root["near/22/indptr"][:])
     codes = np.asarray(root["near/22/r"][:])
-    lengths = row_reach(position, distance) - np.arange(len(position)) - 1
+    reach = np.searchsorted(position, position + distance, side="right")
+    lengths = reach - np.arange(len(position)) - 1
     offset = np.arange(int(lengths.sum())) - np.repeat(np.cumsum(lengths) - lengths, lengths)
     return dequantise(codes[np.repeat(indptr[:-1], lengths) + offset])
 

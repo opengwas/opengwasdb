@@ -23,7 +23,7 @@ from typing import Final
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import R_SCALE, quantise, row_reach
+from ogld.format import R_SCALE, near_row_lengths, quantise
 
 #: Rows a tile computes: a tile is TILE_ROWS × (variants within far_bp) float64.
 TILE_ROWS: Final = 256
@@ -40,11 +40,11 @@ class Band:
 
     @classmethod
     def of(cls, position: npt.NDArray[np.int64], near_bp: int, far_bp: int, change_bp: int) -> Band:
-        return cls(
-            row_reach(position, near_bp),
-            row_reach(position, far_bp),
-            row_reach(position, change_bp),
-        )
+        rows = np.arange(len(position), dtype=np.int64)
+        near = rows + 1 + near_row_lengths(position, near_bp)
+        far = np.searchsorted(position, position + far_bp, side="right").astype(np.int64)
+        change = np.searchsorted(position, position + change_bp, side="right").astype(np.int64)
+        return cls(near, far, change)
 
 
 @dataclass(frozen=True)

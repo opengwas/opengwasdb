@@ -27,15 +27,7 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import (
-    ENCODING,
-    FORMAT_VERSION,
-    RESERVED_CODE,
-    InputError,
-    Provenance,
-    dequantise,
-    row_reach,
-)
+from ogld.format import ENCODING, FORMAT_VERSION, RESERVED_CODE, InputError, Provenance, dequantise
 from ogld.identity import alid_locus
 from ogld.store.layout import never_data, shown_fill, spans
 from ogld.store.location import ChunkCache, open_group
@@ -209,8 +201,8 @@ class StoreReader:
     def _block(self, c: _Chromosome, local: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
         """The Stored r among one chromosome's ascending, distinct local rows (NaN unstored)."""
         at = c.position[local]
-        near = row_reach(at, self._provenance["near_bp"])
-        far = row_reach(at, self._provenance["far_bp"])
+        near = np.searchsorted(at, at + self._provenance["near_bp"], side="right")
+        far = np.searchsorted(at, at + self._provenance["far_bp"], side="right")
         block = np.full((len(local), len(local)), np.nan)
         np.fill_diagonal(block, 1.0)
         first = np.arange(1, len(local) + 1, dtype=np.int64)
