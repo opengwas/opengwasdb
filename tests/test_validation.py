@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import math
 import os
 import shutil
 from pathlib import Path
@@ -7,14 +9,24 @@ from pathlib import Path
 import numpy as np
 import plane_edits
 import pytest
+from dense_sources import build_dense_from_records
+from residual_fixtures import model_se
 
 from opengwasdb.encoding import DenseSePlane
+from opengwasdb.encoding.codec import SeExceptionTable, se_float16
+from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.rho import build_dense_rho
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.model.analyses import read_analyses, write_analyses
+from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
-from opengwasdb.store.open import open_store
+from opengwasdb.store.open import CURRENT_FORMAT_VERSION, open_store
 from opengwasdb.validation import Severity, validate_store
+from opengwasdb.validation.rules.side_tables import (
+    FLOAT16_EXACT_MINIMUM,
+    FLOAT16_EXACT_SHARE,
+)
+from opengwasdb.variants import CanonicalVariant
 
 
 def test_validator_rejects_missing_required_array(dense_store_path):
@@ -936,3 +948,141 @@ def test_validator_rejects_rho_variant_index_length_mismatch(dense_store_path):
 
     assert not result.ok
     assert any("rho variant_index has" in error for error in result.errors)
+
+
+# -- the SE exception table's precision (issue #355) -------------------------
+
+#: A residual plan keeps at most 2% of an Analysis's cells as exceptions, so a
+#: table the precision rule judges needs at least 50,000 cells in the Analysis.
+ROUNDED_SE_VARIANTS = 60_000
+ROUNDED_SE_EXCEPTIONS = 1_100
+
+
+def _se_exception_records() -> list[NormalisedAssociation]:
+    """One Analysis whose SE tracks its MAF, with a block the plan cannot code.
+
+    The block's SE is `exp(2.2)` times the model's, so its residual sits beyond
+    every candidate range and the build must store it exactly -- which is what
+    makes the table's precision the thing under test.
+    """
+    frequencies = np.linspace(0.05, 0.95, ROUNDED_SE_VARIANTS, dtype=np.float64)
+    records = []
+    for row in range(ROUNDED_SE_VARIANTS):
+        se = model_se(0, float(frequencies[row]), row)
+        if row < ROUNDED_SE_EXCEPTIONS:
+            se *= math.exp(2.2)
+        records.append(
+            NormalisedAssociation(
+                analysis_id="a",
+                variant=CanonicalVariant("1", row + 1, "A", "G"),
+                z=1.0,
+                se=se,
+                eaf=float(frequencies[row]),
+            )
+        )
+    return records
+
+
+@pytest.fixture(scope="module")
+def se_exception_stores(tmp_path_factory) -> tuple[Path, Path]:
+    """A residual release with over 1,000 exceptions, and a copy of it rounded.
+
+    The copy holds what a build before #355 wrote: the same cells marked `-127`,
+    every table entry the `float16` rounding of its SE rather than the source's.
+    """
+    directory = tmp_path_factory.mktemp("rounded-se-exceptions")
+    exact = directory / "exact.opengwasdb"
+    build_dense_from_records(
+        _se_exception_records(),
+        exact,
+        store_id="s",
+        release_id="r",
+        reference_assembly="GRCh38",
+        chunk_shape=(1000, 1),
+    )
+    rounded = directory / "rounded.opengwasdb"
+    shutil.copytree(exact, rounded)
+    root = open_store(rounded).arrays(mode="r+")
+    values = np.asarray(root[SeExceptionTable.value_name][:], dtype=np.float32)
+    root[SeExceptionTable.value_name][:] = se_float16(values)
+    return exact, rounded
+
+
+def _exception_values(store: Path) -> np.ndarray:
+    """The store's SE exception values, asserted to be enough for the rule to judge."""
+    values = np.asarray(
+        open_store(store).arrays(mode="r")[SeExceptionTable.value_name][:], dtype=np.float32
+    )
+    assert len(values) >= FLOAT16_EXACT_MINIMUM, (
+        f"the fixture must hold {FLOAT16_EXACT_MINIMUM} exceptions, not {len(values)}, "
+        "or the precision rule has nothing to judge"
+    )
+    return values
+
+
+def test_an_exact_se_exception_table_passes_the_precision_rule(
+    se_exception_stores: tuple[Path, Path],
+) -> None:
+    """A build that held the source's `float32` is the shape the rule expects."""
+    exact, _rounded = se_exception_stores
+    values = _exception_values(exact)
+    exact_share = float(np.count_nonzero(se_float16(values).astype(np.float32) == values)) / len(
+        values
+    )
+    assert exact_share < FLOAT16_EXACT_SHARE, (
+        f"the exact fixture's share is {exact_share:.2%}, which the rule would flag"
+    )
+    result = validate_store(exact)
+    assert "side_tables.se_exceptions_rounded" not in result.failed()
+    assert not [w for w in result.warnings if "float16 plane stores" in w]
+    assert result.ok, result.errors
+
+
+def test_a_rounded_se_exception_table_fails_a_0_2_1_release(
+    se_exception_stores: tuple[Path, Path],
+) -> None:
+    """Issue #355: every entry of a rounded table is what a `float16` plane stores.
+
+    One rounded exception reads exactly like a right one, so nothing per cell can
+    find this; the table's share is 100% against the 2**-13 a source value is
+    `float16`-exact by chance.
+    """
+    _exact, rounded = se_exception_stores
+    assert StoreManifest.load(rounded).format_version == CURRENT_FORMAT_VERSION
+    values = _exception_values(rounded)
+    assert (se_float16(values).astype(np.float32) == values).all(), (
+        "every fixture entry must be a float16 rounding, or the share is not 100%"
+    )
+
+    result = validate_store(rounded)
+
+    assert result.failed() == {"side_tables.se_exceptions_rounded"}
+    message = result.errors[0]
+    assert f"{len(values)} of {len(values)} se exceptions" in message
+    assert "float16 plane stores" in message
+    assert "rebuild the release" in message
+
+
+def test_a_rounded_se_exception_table_warns_on_an_earlier_release(
+    se_exception_stores: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """A release from before the fix is reported, not failed: #367 owns it.
+
+    Re-validating a published Store must say what it is without failing a Store
+    nobody can rebuild in place.
+    """
+    _exact, rounded = se_exception_stores
+    store = tmp_path / "restamped.opengwasdb"
+    shutil.copytree(rounded, store)
+    manifest = json.loads((store / "manifest.json").read_text(encoding="utf-8"))
+    manifest["format_version"] = "0.2.0"
+    (store / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    _exception_values(store)
+
+    result = validate_store(store)
+
+    assert "side_tables.se_exceptions_rounded" not in result.failed()
+    warnings = [w for w in result.warnings if "float16 plane stores" in w]
+    assert len(warnings) == 1
+    assert "predates the fix" in warnings[0]
+    assert result.ok, result.errors

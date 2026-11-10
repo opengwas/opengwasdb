@@ -20,7 +20,6 @@ from opengwasdb.associations import present as present_cells
 from opengwasdb.encoding import (
     StoreCodec,
 )
-from opengwasdb.encoding.codec import se_float16
 from opengwasdb.layouts.build_manifest import apply_se_divisor
 from opengwasdb.layouts.dense.indexed_subsets import validate_indexed_subsets
 from opengwasdb.layouts.hybrid.layout import dense_component_path
@@ -642,10 +641,14 @@ def _compare_fidelity_cells(
 ) -> tuple[int, list[str]]:
     """Comparison phase: compare each matched cell against its source value.
 
-    The store's own codec quantises the source value before comparison, and a
-    cell whose store value is missing is skipped, not compared: a store holding
-    *no* finite value at any matched cell is a different failure (dropped
-    associations), reported by the caller.
+    The reference is what the store's plan promises to hold. `z` is quantised by
+    the store's own codec. Under a residual `se` plan it is the source's own
+    `float32`: an exact exception is that value, and an ordinary cell is within
+    the coding's tolerance of it (spec §6a). Under a `float16` plan it is the
+    codec's rounding of the source, because an SE of 65,520 or more is `+inf`
+    there (spec §15). A cell whose store value is missing is skipped, not
+    compared: a store holding *no* finite value at any matched cell is a
+    different failure (dropped associations), reported by the caller.
     """
     z_blk, se_blk, ri, ci = _fidelity_blocks(store, pairs)
     codec = StoreCodec(store.manifest.encoding)
@@ -659,7 +662,11 @@ def _compare_fidelity_cells(
             continue
         n_compared += 1
         z_ref = float(codec.quantise_z(np.array([z_src]))[0])
-        se_ref = float(se_float16(np.array([se_src]))[0])
+        se_ref = (
+            float(np.float32(se_src))
+            if codec.encoding.se.is_residual
+            else float(codec.float16_se(np.array([se_src]))[0])
+        )
         if not (
             np.isclose(sz, z_ref, rtol=_FIDELITY_RTOL, atol=_FIDELITY_ATOL)
             and np.isclose(sse, se_ref, rtol=_FIDELITY_RTOL, atol=_FIDELITY_ATOL)

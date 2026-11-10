@@ -1,6 +1,6 @@
 {
   "_comment": "Pre-existing ruff/mypy findings. CONTRIBUTING.md: a change adds none. Lowering these is welcome as a change of its own; raising one needs a reason in the commit message. Scope is this project's own code: ruff excludes the vendored quality/ tree (pyproject.toml), and mypy only ever checked opengwasdb/.",
-  "measured_at": "epic #240 integration branch @ b0ee425 (6 Oct 2026)",
-  "ruff": 60,
-  "mypy": 37
+  "measured_at": "main @ fb2688c (7 Nov 2026), with PYTHONNOUSERSITE=1 as in CI: a user site-packages on the host can hide mypy findings",
+  "ruff": 57,
+  "mypy": 34
 }

@@ -219,8 +219,8 @@ def place_batch(batch: ReaderBatch, lifted: bool, placement: SitePlacement) -> P
     moves, unmapped, off_primary = moved.moves, moved.unmapped, moved.off_primary
     alid = batch.alid.copy()
     swapped = np.zeros(len(sites), dtype=bool)
-    for i, (moved, reoriented) in moves.items():
-        alid[i], swapped[i] = moved, reoriented
+    for i, (moved_alid, reoriented) in moves.items():
+        alid[i], swapped[i] = moved_alid, reoriented
     keep = np.ones(len(sites), dtype=bool)
     keep[ambiguous + unmapped + off_primary] = False
     z, eaf = swap(swapped, batch.z, batch.eaf)
