@@ -66,7 +66,10 @@ def test_a_pair_from_the_pgen_is_answered_by_the_store_it_wrote(tmp_path: Path) 
     counts = (len(band.codes), 0, 0, len(partner))
     build = script.build_record(0.0)
     sub = script.VariantSet(rows, table, vs.sign[on22], 0)
-    writer.finish(script.provenance(0, sub, counts, None, build))
+    # finish validates (spec §12), and a genotypes store's pc_diagnostic is never null: this one
+    # is the Test Panel's own, measured at k = 0 on its chr21 × chr22 pairs.
+    diagnostic = script.pc_diagnostic(vs, 0)
+    writer.finish(script.provenance(0, sub, counts, diagnostic, build))
 
     store = ogld.open(out)
     ref = testdata.reference_r(0)

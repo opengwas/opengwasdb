@@ -35,7 +35,6 @@ from support import (
     PANEL,
     alids,
     check_panel_paths,
-    contract,
     panel_data,
     passing_rows,
     reference,
@@ -46,7 +45,6 @@ import ogld
 from ogld import cli
 from ogld.format import far_code_floor, t_far
 
-OGLD_5 = contract("ogld#5")
 PANEL_ID = "test-panel-hgdp1kgp-EUR"
 _BUILT: dict[int, tuple[ogld.Provenance, Path]] = {}
 _WITH_A_LOCAL_PC: list[ogld.Provenance] = []
@@ -92,7 +90,6 @@ def near_band_matches(store: ogld.LDStore, k: int) -> int:
     return int(near.sum())
 
 
-@OGLD_5
 def test_the_near_band_at_k10_matches_the_reference(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -100,7 +97,6 @@ def test_the_near_band_at_k10_matches_the_reference(
     assert near_band_matches(ogld.open(out), 10) > 1000
 
 
-@OGLD_5
 def test_the_near_band_at_k0_matches_the_reference(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -109,7 +105,6 @@ def test_the_near_band_at_k0_matches_the_reference(
     assert near_band_matches(ogld.open(out), 0) > 1000
 
 
-@OGLD_5
 def test_the_far_pairs_kept_are_the_reference_s(tmp_path_factory: pytest.TempPathFactory) -> None:
     _, out = built(10, tmp_path_factory)
     ref = reference(10)
@@ -198,7 +193,6 @@ def test_the_provenance_records_the_diagnostic_and_the_cost(
     assert build["threads"] >= 1
 
 
-@OGLD_5
 def test_the_variant_set_is_the_test_panel_s_passing_rows(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -216,7 +210,6 @@ def test_a_pgen_without_info_refuses_an_info_floor(tmp_path: Path) -> None:
         ogld.build(inputs(10, info_min=0.8), tmp_path / "store")
 
 
-@OGLD_5
 def test_ogld_build_writes_a_store_that_validates(tmp_path: Path) -> None:
     out = tmp_path / "store"
     argv = ["build", str(out), "--pgen", str(PANEL.pgen), "--keep", str(PANEL.keep)]
@@ -368,7 +361,6 @@ def test_an_input_with_a_missing_call_is_refused(
     assert PANEL_ID in str(refused.value), "it names the panel"
 
 
-@OGLD_5
 def test_a_reversed_indel_pair_keeps_the_record_whose_ref_the_alid_spells_first(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:

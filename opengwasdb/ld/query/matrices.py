@@ -1,9 +1,21 @@
-"""LD matrices: for a list of ALIDs, and for a region (spec §8; ogld#4)."""
+"""LD matrices: for a list of ALIDs, and for a region (spec §8; ogld#4).
+
+Both return one signed-r matrix (owner, 7 November 2026). Every pair the store does not
+hold is NaN, the Bound and Not Measured alike, and the matrix's positions and t_far say
+which (`LDMatrix.kinds`). A caller's `fill` replaces exactly those cells, in this module
+and nowhere else, and is recorded on the result, so a filled cell is never mistaken for a
+stored one. The store itself is never written.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
+import numpy as np
+import numpy.typing as npt
+
+from ogld.format import judge_region
+from ogld.identity import normalise_chromosome
 from ogld.query.results import LDMatrix
 from ogld.store import StoreReader
 
@@ -14,7 +26,9 @@ def matrix(reader: StoreReader, alids: Sequence[str], *, fill: float | None) -> 
     Unstored pairs are NaN, replaced by `fill` only when the caller passed one. Never a
     refusal: a pair more than far_bp apart is a NaN whose kind is Not Measured.
     """
-    raise NotImplementedError("ogld#4")
+    found = reader.rows_of(alids)
+    absent = tuple(alid for alid, row in zip(alids, found, strict=True) if row < 0)
+    return _ld_matrix(reader, found[found >= 0], absent, fill)
 
 
 def region(
@@ -22,4 +36,25 @@ def region(
 ) -> LDMatrix:
     """The signed-r matrix of every variant with |position − centre| ≤ radius on `chrom`,
     in genomic order (spec §8; ogld#4). Refused unless 2 × radius ≤ far_bp."""
-    raise NotImplementedError("ogld#4")
+    judge_region(radius=radius, far_bp=reader.provenance["far_bp"]).raise_if_refused()
+    rows = reader.rows_in(normalise_chromosome(chrom), centre - radius, centre + radius)
+    return _ld_matrix(reader, rows, (), fill)
+
+
+def _ld_matrix(
+    reader: StoreReader, rows: npt.NDArray[np.int64], absent: tuple[str, ...], fill: float | None
+) -> LDMatrix:
+    """The matrix of `rows`, with the caller's `fill`, if any, in place of every NaN."""
+    r = reader.pair_r(rows)
+    if fill is not None:
+        r = np.where(np.isnan(r), float(fill), r)
+    p = reader.provenance
+    return LDMatrix(
+        r=r,
+        variants=reader.variants(rows),
+        absent=absent,
+        t_far=p["t_far"],
+        near_bp=p["near_bp"],
+        far_bp=p["far_bp"],
+        fill=fill,
+    )

@@ -33,6 +33,44 @@ POSITION_FILL: Final = 0
 FREQUENCY_FILL: Final = float("nan")
 
 
+def never_data(path: str, values: npt.ArrayLike) -> npt.NDArray[np.bool_]:
+    """Where `values` of the array at `path`, such as `index/22/partner`, are ones no valid LD
+    Store holds there (spec §2–§6). The array's kind is its name, the path's last component.
+
+    Each array's fill value must be such a value, because a chunk the store lost reads as its
+    fill value: then every read can tell a lost chunk from data and refuse it. The reader
+    refuses an array whose fill value is not, and `envelope.fill` fails it (spec §12).
+    """
+    v = np.asarray(values)
+    name = path.rsplit("/", 1)[-1]
+    if name == "r":
+        return np.asarray(v == RESERVED_CODE)
+    if name in {"indptr", "partner"}:
+        return np.asarray(v < 0)
+    if name == "position":
+        return np.asarray(v <= 0)
+    if name in {"alid", "a1", "a2"}:
+        return np.asarray(v == "")
+    if name == "a1_frequency":
+        with np.errstate(invalid="ignore"):
+            return np.asarray(~((v > 0) & (v < 1)))
+    raise KeyError(f"{name} is not an array of an LD Store (spec §1)")
+
+
+def shown_fill(fill: object) -> str:
+    """A fill value as a message names it: a string quoted, so an empty one shows."""
+    return f'"{fill}"' if isinstance(fill, str) else str(fill)
+
+
+def spans(first: npt.ArrayLike, length: npt.ArrayLike) -> npt.NDArray[np.int64]:
+    """first[i], first[i] + 1, … for length[i] elements each, back to back: the elements of
+    CSR rows, or the columns of Near Band rows (spec §4, §5)."""
+    count = np.asarray(length, dtype=np.int64)
+    offset = np.repeat(np.cumsum(count) - count, count)
+    start = np.repeat(np.asarray(first, dtype=np.int64), count)
+    return start + (np.arange(int(count.sum()), dtype=np.int64) - offset)
+
+
 def clipped(length: int, inner: int, shard: int) -> tuple[int, int]:
     """The inner chunk and shard of an array of `length`: an inner chunk longer than the array
     is clipped to it, and a shard to the smallest whole number of inner chunks covering it."""

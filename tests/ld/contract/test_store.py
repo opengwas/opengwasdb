@@ -18,14 +18,13 @@ from typing import Any
 import numpy as np
 import pytest
 import support
-from support import alids, contract, panel_data, passing_rows, reference, reference_matrix
+import zarr
+from support import alids, panel_data, passing_rows, reference, reference_matrix
 
 import ogld
 from ogld import cli
 from ogld.format import VALIDATION_RULES, RefusalReason, far_code_floor, quantise, t_far
 from ogld.store import StoreWriter
-
-OGLD_4 = contract("ogld#4")
 
 
 def two(store: ogld.LDStore, i: int, j: int) -> tuple[float, str]:
@@ -88,7 +87,6 @@ def test_a_reader_refuses_a_format_version_it_does_not_implement(tmp_path: Path)
         ogld.open(with_provenance(tmp_path, future))
 
 
-@OGLD_4
 def test_the_test_store_reads_the_same_over_http(served_store: str) -> None:
     # Spec §1: a local path or an HTTP(S) URL. A static Range-serving server, as #9 may use.
     remote = ogld.open(served_store)
@@ -100,7 +98,6 @@ def test_the_test_store_reads_the_same_over_http(served_store: str) -> None:
 # ------------------------------------------------------------------ pair answers (spec §8)
 
 
-@OGLD_4
 def test_a_pair_exactly_3_mb_apart_is_the_near_band_s_exact_r() -> None:
     store = opened()
     pair = reference().where(reference().distance == 3_000_000, "a pair exactly 3 Mb apart")
@@ -109,7 +106,6 @@ def test_a_pair_exactly_3_mb_apart_is_the_near_band_s_exact_r() -> None:
     assert abs(r - pair.r[0]) <= support.HALF_STEP + support.SLACK
 
 
-@OGLD_4
 def test_a_pair_beyond_3_mb_below_t_far_is_nan_and_the_bound() -> None:
     store = opened()
     ref = reference()
@@ -120,7 +116,6 @@ def test_a_pair_beyond_3_mb_below_t_far_is_nan_and_the_bound() -> None:
     assert kind == "bound"
 
 
-@OGLD_4
 def test_a_far_pair_is_stored_and_reads_back_its_r() -> None:
     store = opened()
     ref = reference()
@@ -141,7 +136,6 @@ def a_pair_apart(distance: int) -> tuple[int, int] | None:
     return (int(rows[found[0][0]]), int(rows[found[0][1]])) if len(found) else None
 
 
-@OGLD_4
 def test_exactly_10_mb_is_measured_and_one_base_more_is_not() -> None:
     store = opened()
     at = reference().where(reference().distance == 10_000_000, "a pair exactly 10 Mb apart")
@@ -153,7 +147,6 @@ def test_exactly_10_mb_is_measured_and_one_base_more_is_not() -> None:
     assert kind == "not_measured"
 
 
-@OGLD_4
 def test_another_chromosome_is_not_measured() -> None:
     store = opened()
     v = panel_data().variants()
@@ -167,7 +160,6 @@ def test_another_chromosome_is_not_measured() -> None:
     assert kind == "not_measured"
 
 
-@OGLD_4
 def test_two_records_at_one_position_are_a_near_band_pair() -> None:
     store = opened()
     pair = reference().where(reference().distance == 0, "two records at one position")
@@ -179,7 +171,6 @@ def test_two_records_at_one_position_are_a_near_band_pair() -> None:
 # ------------------------------------------------------------------ matrices, NaN and fill
 
 
-@OGLD_4
 def test_the_whole_store_reads_back_within_half_a_step() -> None:
     # The round trip: every pair of both chromosomes against the reference r, signed to A1.
     m = whole_store()
@@ -191,7 +182,6 @@ def test_the_whole_store_reads_back_within_half_a_step() -> None:
     assert np.isnan(m.r[~stored]).all(), "every pair the store does not hold is NaN"
 
 
-@OGLD_4
 def test_every_stored_cell_is_exactly_what_the_codes_say() -> None:
     m = whole_store()
     ref = expected()
@@ -201,7 +191,6 @@ def test_every_stored_cell_is_exactly_what_the_codes_say() -> None:
     np.testing.assert_array_equal(m.r[stored], quantise(ref[stored]) / 32767)
 
 
-@OGLD_4
 def test_unstored_cells_are_nan_and_a_fill_replaces_exactly_them() -> None:
     plain = whole_store()
     kinds = plain.kinds()
@@ -220,7 +209,6 @@ def test_unstored_cells_are_nan_and_a_fill_replaces_exactly_them() -> None:
         filled.kinds()
 
 
-@OGLD_4
 def test_absent_alids_are_listed_and_are_not_rows() -> None:
     store = opened()
     v = panel_data().variants()
@@ -237,7 +225,6 @@ def test_absent_alids_are_listed_and_are_not_rows() -> None:
 # ------------------------------------------------------------------ regions
 
 
-@OGLD_4
 def test_a_region_is_the_matrix_of_its_variants_in_genomic_order() -> None:
     store = opened()
     v = panel_data().variants()
@@ -252,7 +239,6 @@ def test_a_region_is_the_matrix_of_its_variants_in_genomic_order() -> None:
     np.testing.assert_array_equal(region.r, store.matrix(alids(inside)).r)
 
 
-@OGLD_4
 def test_a_region_is_at_most_10_mb_wide() -> None:
     store = opened()
     store.region("22", 30_000_000, 5_000_000)
@@ -267,7 +253,6 @@ def test_a_region_is_at_most_10_mb_wide() -> None:
 # ------------------------------------------------------------------ writing
 
 
-@OGLD_4
 def test_a_lost_chunk_is_refused_never_read_as_zero(tmp_path: Path) -> None:
     opened()
     copy = tmp_path / "store"
@@ -281,7 +266,6 @@ def test_a_lost_chunk_is_refused_never_read_as_zero(tmp_path: Path) -> None:
         ogld.open(copy).matrix(alids(rows[:50]))
 
 
-@OGLD_4
 def test_the_writer_refuses_a_location_that_exists(tmp_path: Path) -> None:
     # Against a copy: a broken writer is never pointed at the committed Test Store.
     variants = opened().matrix(alids(passing_rows()[:2])).variants
@@ -302,42 +286,180 @@ def committed_findings() -> dict[str, list[ogld.Finding]]:
     return ogld.validate(support.TEST_STORE)
 
 
-@OGLD_4
 def test_the_test_store_passes_every_rule() -> None:
     findings = committed_findings()
     assert tuple(findings) == VALIDATION_RULES
     assert {rule: found for rule, found in findings.items() if found} == {}
 
 
-def unbuilt(how: str) -> Callable[[Path], None]:
+# The breakers edit a copy's JSON documents or rewrite one of its arrays whole, which the
+# Test Store's size allows. Each changes exactly what its description says.
+
+
+def edit_json(store: Path, node: str, edit: Callable[[dict[str, Any]], None]) -> None:
+    """Edit the metadata document of `node` ("" for the root) in place."""
+    meta = store / node / "zarr.json"
+    doc = json.loads(meta.read_text())
+    edit(doc)
+    meta.write_text(json.dumps(doc))
+
+
+def edit_provenance(edit: Callable[[dict[str, Any]], None]) -> Callable[[Path], None]:
+    return lambda store: edit_json(store, "", lambda doc: edit(doc["attributes"]["ld_store"]))
+
+
+def rewrite(store: Path, path: str, change: Callable[[np.ndarray], np.ndarray]) -> None:
+    """Replace the array at `path` with `change` of its data, resizing it to fit."""
+    array = zarr.open_array(store / path, mode="r+")
+    data = change(np.asarray(array[:]).copy())
+    array.resize(data.shape)
+    array[:] = data
+
+
+def chr22(store: Path) -> tuple[int, np.ndarray]:
+    """chr22's first row and its positions in the copy."""
+    group = zarr.open_group(store / "variants", mode="r")
+    (start, stop), *_ = [(c["row_start"], c["row_stop"]) for c in group.attrs["chromosomes"]
+                         if c["name"] == "22"]  # fmt: skip
+    return start, np.asarray(group["position"][start:stop]).astype(np.int64)
+
+
+def index22(store: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """chr22's Proxy Index as entries: owner, partner (local rows) and code."""
+    group = zarr.open_group(store / "index" / "22", mode="r")
+    indptr = np.asarray(group["indptr"][:])
+    owner = np.repeat(np.arange(len(indptr) - 1), np.diff(indptr))
+    return owner, np.asarray(group["partner"][:]).astype(np.int64), np.asarray(group["r"][:])
+
+
+def write_index22(store: Path, owner: np.ndarray, partner: np.ndarray, code: np.ndarray) -> None:
+    """Write chr22's Proxy Index from entries, in row order and ascending partner."""
+    order = np.lexsort((partner, owner))
+    size = len(chr22(store)[1])
+    counts = np.bincount(owner, minlength=size)
+    rewrite(store, "index/22/indptr", lambda _: np.concatenate([[0], np.cumsum(counts)]))
+    rewrite(store, "index/22/partner", lambda _: partner[order].astype(np.int32))
+    rewrite(store, "index/22/r", lambda _: code[order].astype(np.int16))
+
+
+def add_pair(gap: Callable[[np.ndarray], np.ndarray], code: int) -> Callable[[Path], None]:
+    """A breaker adding, both ways, the first chr22 pair not in the index whose distance
+    `gap` accepts, with `code`."""
+
     def breaker(store: Path) -> None:
-        raise NotImplementedError(f"ogld#4: write a copy of the Test Store that {how}")
+        _, pos = chr22(store)
+        owner, partner, codes = index22(store)
+        held = set(zip(owner.tolist(), partner.tolist(), strict=True))
+        apart = np.argwhere(np.triu(gap(pos[None, :] - pos[:, None]), k=1))
+        lo, hi = next((int(a), int(b)) for a, b in apart if (int(a), int(b)) not in held)
+        both = (np.append(owner, [lo, hi]), np.append(partner, [hi, lo]))
+        write_index22(store, *both, np.append(codes, [code, code]).astype(np.int16))
+
+    return breaker
+
+
+def drop_entry(near: bool) -> Callable[[Path], None]:
+    """A breaker dropping the first chr22 entry, earlier row first, within 3 Mb or beyond."""
+
+    def breaker(store: Path) -> None:
+        _, pos = chr22(store)
+        owner, partner, codes = index22(store)
+        within = np.abs(pos[partner] - pos[owner]) <= 3_000_000
+        first = np.flatnonzero((within == near) & (partner > owner))[0]
+        keep = np.arange(len(owner)) != first
+        write_index22(store, owner[keep], partner[keep], codes[keep])
+
+    return breaker
+
+
+def shorten_a_near_row(store: Path) -> None:
+    indptr = np.asarray(zarr.open_array(store / "near/22/indptr", mode="r")[:])
+    row = int(np.flatnonzero(np.diff(indptr) > 0)[0])
+    rewrite(store, "near/22/r", lambda r: np.delete(r, indptr[row + 1] - 1))
+    rewrite(store, "near/22/indptr", lambda p: p - (np.arange(len(p)) > row))
+
+
+def swap_two_positions(store: Path) -> None:
+    start, pos = chr22(store)
+    row = start + int(np.flatnonzero(np.diff(pos) > 0)[0])
+    rewrite(store, "variants/position", lambda p: p[np.r_[:row, row + 1, row, row + 2 : len(p)]])
+
+
+def reverse_an_alid(store: Path) -> None:
+    start, _ = chr22(store)
+
+    def reverse(alid: np.ndarray) -> np.ndarray:
+        chrom, pos, a1, a2 = str(alid[start]).split(":")
+        alid[start] = f"{chrom}:{pos}:{a2}:{a1}"
+        return alid
+
+    rewrite(store, "variants/alid", reverse)
+
+
+def repeat_a_partner(store: Path) -> None:
+    owner, partner, codes = index22(store)
+    k = int(np.flatnonzero(owner[1:] == owner[:-1])[0])
+    partner[k + 1] = partner[k]
+    write_index22(store, owner, partner, codes)
+
+
+def set_element(path: str, at: int, value: float) -> Callable[[Path], None]:
+    def breaker(store: Path) -> None:
+        def change(data: np.ndarray) -> np.ndarray:
+            data[at] = value
+            return data
+
+        rewrite(store, path, change)
 
     return breaker
 
 
 #: One way to break each rule, applied to a copy of the Test Store. ogld#4 writes each.
 BREAKERS: dict[str, Callable[[Path], None]] = {
-    "envelope.arrays": unbuilt("lacks index/22/partner"),
-    "envelope.fill": unbuilt("sets near/22/r's fill value to 0"),
-    "provenance.complete": unbuilt("drops the key adjustment.covariates"),
-    "provenance.encoding": unbuilt("records r_scale 32768"),
-    "provenance.distances": unbuilt("records far_bp 12,000,000"),
-    "provenance.threshold": unbuilt("records t_far 0.02 for n = 771, k = 10"),
-    "variants.chromosomes": unbuilt("gives chr22's range a gap"),
-    "variants.order": unbuilt("swaps two positions on chr22"),
-    "variants.identity": unbuilt("writes an ALID with its alleles reversed"),
-    "variants.frequency": unbuilt("sets one a1_frequency to 0"),
-    "near.rows": unbuilt("shortens one Near Band row by one code"),
-    "near.codes": unbuilt("writes −32768 into near/22/r"),
-    "index.rows": unbuilt("repeats a partner within one index row"),
-    "index.codes": unbuilt("writes −32768 into index/22/r"),
-    "index.distance": unbuilt("adds an index entry 10,000,001 bp apart"),
-    "index.threshold": unbuilt("adds an index entry with |code| = far_code_floor − 1"),
-    "index.symmetric": unbuilt("drops one direction of one index pair"),
-    "index.near": unbuilt(
-        "drops an index entry within 3 Mb whose Near Band code reaches the floor"
+    # lacks index/22/partner
+    "envelope.arrays": lambda store: shutil.rmtree(store / "index" / "22" / "partner"),
+    # sets near/22/r's fill value to 0
+    "envelope.fill": lambda store: edit_json(
+        store, "near/22/r", lambda doc: doc.update(fill_value=0)
     ),
+    # drops the key adjustment.covariates
+    "provenance.complete": edit_provenance(lambda p: p["adjustment"].pop("covariates")),
+    # records r_scale 32768
+    "provenance.encoding": edit_provenance(lambda p: p["encoding"].update(r_scale=32768)),
+    # records far_bp 12,000,000
+    "provenance.distances": edit_provenance(lambda p: p.update(far_bp=12_000_000)),
+    # records t_far 0.02 for n = 771, k = 10
+    "provenance.threshold": edit_provenance(lambda p: p.update(t_far=0.02)),
+    # gives chr22's range a gap
+    "variants.chromosomes": lambda store: edit_json(
+        store,
+        "variants",
+        lambda doc: doc["attributes"]["chromosomes"][1].update(row_start=469),
+    ),
+    # swaps two positions on chr22
+    "variants.order": swap_two_positions,
+    # writes an ALID with its alleles reversed
+    "variants.identity": reverse_an_alid,
+    # sets one a1_frequency to 0
+    "variants.frequency": set_element("variants/a1_frequency", 7, 0.0),
+    # shortens one Near Band row by one code
+    "near.rows": shorten_a_near_row,
+    # writes −32768 into near/22/r
+    "near.codes": set_element("near/22/r", 5, -32768),
+    # repeats a partner within one index row
+    "index.rows": repeat_a_partner,
+    # writes −32768 into index/22/r
+    "index.codes": set_element("index/22/r", 3, -32768),
+    # adds an index entry 10,000,001 bp apart
+    "index.distance": add_pair(lambda gap: gap == 10_000_001, support.FLOOR + 100),
+    # adds an index entry with |code| = far_code_floor − 1
+    "index.threshold": add_pair(
+        lambda gap: (gap > 3_000_000) & (gap <= 10_000_000), -(support.FLOOR - 1)
+    ),
+    # drops one direction of one index pair
+    "index.symmetric": drop_entry(near=False),
+    # drops an index entry within 3 Mb whose Near Band code reaches the floor
+    "index.near": drop_entry(near=True),
 }
 
 
@@ -346,7 +468,6 @@ def test_every_rule_has_a_way_to_break_it() -> None:
     assert tuple(BREAKERS) == VALIDATION_RULES
 
 
-@OGLD_4
 @pytest.mark.parametrize("rule", VALIDATION_RULES)
 def test_a_store_that_breaks_a_rule_fails_that_rule(rule: str, tmp_path: Path) -> None:
     assert not any(committed_findings().values())
@@ -391,7 +512,6 @@ K_RECORDS: dict[str, tuple[Callable[[dict[str, Any]], None], bool]] = {
 }
 
 
-@OGLD_4
 @pytest.mark.parametrize("case", list(K_RECORDS))
 def test_provenance_threshold_holds_k_min_and_k_target_to_the_source(
     case: str, tmp_path: Path
@@ -405,7 +525,6 @@ def test_provenance_threshold_holds_k_min_and_k_target_to_the_source(
 # ------------------------------------------------------------------ the CLI
 
 
-@OGLD_4
 def test_ogld_validate_and_info_on_the_test_store(capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["validate", str(support.TEST_STORE)]) == 0
     assert cli.main(["info", str(support.TEST_STORE)]) == 0

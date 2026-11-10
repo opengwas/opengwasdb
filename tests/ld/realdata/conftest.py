@@ -1,7 +1,7 @@
 """Every test under tests/realdata/ is in the `realdata` tier.
 
 The tier reads the HGDP+1kGP panels under /data/opengwasdb/reference/, so it runs on the IEU
-compute nodes only, through `pixi run test-realdata` (CONTRIBUTING.md, "Tests"). Marking by
+compute nodes only, through `pixi run -e dev test-realdata` (CONTRIBUTING.md, "Tests"). Marking by
 directory means a test placed here cannot run in the default tier by forgetting its marker.
 """
 
