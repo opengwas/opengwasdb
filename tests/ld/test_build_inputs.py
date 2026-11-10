@@ -443,3 +443,68 @@ def test_ogld_build_prints_the_provenance_and_exits_2_on_a_refusal(
     assert printed["build"]["threads"] == 2
     assert cli.main(argv) == 2, "the store exists now, so a second build is refused"
     assert "exists" in capsys.readouterr().err
+
+
+# ------------------------------------------------------------- malformed and misaligned inputs
+
+
+def malformed(tmp_path: Path, what: str) -> tuple[ogld.BuildInputs, str]:
+    """A chr22 build whose `what` is broken, and the file and line its refusal must name."""
+    rows = chr22()
+    pgen = fx.write_fileset(tmp_path / "bad", rows)
+    k, pcs = 0, None
+    if what == "a short pvar line":
+        pvar = pgen.with_suffix(".pvar")
+        lines = pvar.read_text().splitlines()
+        lines[3] = lines[3].rsplit("\t", 2)[0]
+        pvar.write_text("\n".join(lines) + "\n")
+        return fx.inputs(pgen), r"bad\.pvar line 4"
+    if what == "a POS that is not an integer":
+        pvar = pgen.with_suffix(".pvar")
+        lines = pvar.read_text().splitlines()
+        fields = lines[5].split("\t")
+        lines[5] = "\t".join([fields[0], "12a34", *fields[2:]])
+        pvar.write_text("\n".join(lines) + "\n")
+        return fx.inputs(pgen), r"bad\.pvar line 6"
+    if what == "an empty PC File":
+        pcs = tmp_path / "empty.eigenvec"
+        pcs.write_text("")
+        return fx.inputs(pgen, 10, pcs=pcs), r"empty\.eigenvec is empty"
+    if what == "an empty psam":
+        pgen.with_suffix(".psam").write_text("")
+        return fx.inputs(pgen), r"bad\.psam is empty"
+    data = pgen.read_bytes()
+    pgen.write_bytes(data[: len(data) // 2])
+    return fx.inputs(pgen, k, pcs=pcs), r"bad\.pgen"
+
+
+@pytest.mark.parametrize(
+    "what",
+    [
+        "a short pvar line",
+        "a POS that is not an integer",
+        "an empty PC File",
+        "an empty psam",
+        "a truncated pgen",
+    ],
+)
+def test_a_malformed_input_is_refused_naming_the_file(tmp_path: Path, what: str) -> None:
+    # Review of #5 (standards a2): each was a traceback, an IndexError or a RuntimeError.
+    given, names = malformed(tmp_path, what)
+    with pytest.raises(ogld.InputError, match=names):
+        ogld.build(given, tmp_path / "store")
+    assert not (tmp_path / "store").exists()
+
+
+def test_a_psam_missing_one_sample_is_refused(tmp_path: Path) -> None:
+    # Review of #5 (standards a1): with row 100 of 771 gone from the psam, every later IID names
+    # the genotypes of the sample after it. The keep file lists the 770 the psam still has, so
+    # only the psam's count can tell: it must equal the pgen's.
+    pgen = fx.write_fileset(tmp_path / "short", chr22())
+    psam = pgen.with_suffix(".psam")
+    lines = psam.read_text().splitlines()
+    gone = lines.pop(101).split("\t")[0]
+    psam.write_text("\n".join(lines) + "\n")
+    keep = keep_file(tmp_path, ["#IID", *(iid for iid in iids() if iid != gone)])
+    with pytest.raises(ogld.InputError, match=r"short\.psam lists 770 samples.*short\.pgen.*771"):
+        ogld.build(fx.inputs(pgen, keep=keep), tmp_path / "store")

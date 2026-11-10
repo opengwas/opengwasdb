@@ -55,7 +55,8 @@ class Fileset:
 
     `subset` is the psam index of each kept sample, ascending, as pgenlib takes it; pgenlib's
     columns are in that order, and `order` reorders them to the sample order (None when they
-    already are).
+    already are). `samples` is the psam's count, which the pgen's must equal: a psam one row
+    short would give every later IID the genotypes of the sample after it.
     """
 
     pgen: Path
@@ -63,6 +64,8 @@ class Fileset:
     psam: Path
     subset: npt.NDArray[np.uint32]
     order: npt.NDArray[np.int64] | None
+    samples: int
+    panel: str
 
 
 @dataclass(frozen=True)
@@ -116,9 +119,17 @@ def _iid_column(header: list[str], where: str, panel: str) -> int:
 
 def psam_iids(psam: Path, panel: str) -> list[str]:
     """A psam's IIDs, in its order."""
-    lines = _text(psam, panel).splitlines()
+    lines = _lines(psam, panel)
     column = _iid_column(lines[0].split(), psam.name, panel)
     return [line.split()[column] for line in lines[1:] if line.strip()]
+
+
+def _lines(path: Path, panel: str) -> list[str]:
+    """A text input's lines; an empty file is refused, naming it."""
+    lines = _text(path, panel).splitlines()
+    if not lines or not lines[0].strip():
+        raise InputError(f"panel {panel}: {path.name} is empty, or its first line is blank")
+    return lines
 
 
 def _beside(pgen: Path, panel: str) -> tuple[Path, Path]:
@@ -151,21 +162,22 @@ def fileset(pgen: Path, kept: list[str], sample_order: list[str] | None, panel: 
     subset = _subset(iids, kept, psam, panel)
     mine = [iids[i] for i in subset]
     if sample_order is None or mine == sample_order:
-        return Fileset(pgen, pvar, psam, subset, None)
+        return Fileset(pgen, pvar, psam, subset, None, len(iids), panel)
     column = {iid: i for i, iid in enumerate(mine)}
     order = np.array([column[iid] for iid in sample_order], dtype=np.int64)
-    return Fileset(pgen, pvar, psam, subset, order)
+    return Fileset(pgen, pvar, psam, subset, order, len(iids), panel)
 
 
-def _pvar_lines(pvar: Path) -> Iterator[str]:
-    """A pvar's lines, `##` meta lines dropped; a `.pvar.zst` is decompressed whole."""
+def _pvar_lines(pvar: Path) -> Iterator[tuple[int, str]]:
+    """A pvar's lines with their 1-based line numbers, `##` meta lines dropped; a `.pvar.zst`
+    is decompressed whole."""
     if pvar.suffix == ".zst":
         # numcodecs, a dependency already, decodes plink2's .pvar.zst; it ships no type stubs.
         zstd = importlib.import_module("numcodecs").Zstd()
         lines: Iterator[str] = iter(bytes(zstd.decode(pvar.read_bytes())).decode().splitlines())
     else:
         lines = (line.rstrip("\n") for line in pvar.open())
-    return (line for line in lines if not line.startswith("##"))
+    return ((n, line) for n, line in enumerate(lines, 1) if not line.startswith("##"))
 
 
 def records(pvar: Path, panel: str, info: bool) -> Iterator[Records]:
@@ -176,11 +188,44 @@ def records(pvar: Path, panel: str, info: bool) -> Iterator[Records]:
     genotypes, so that a missing call is the refusal an input with both gets (build-inputs §7).
     """
     lines = _pvar_lines(pvar)
-    at = _columns(next(lines, "").split("\t"), pvar, panel)
+    at = _columns(next(lines, (1, ""))[1].split("\t"), pvar, panel)
     first = 0
     for batch in itertools.batched(lines, CHUNK_RECORDS):
-        yield _block([line.split("\t") for line in batch], first, at, info)
+        rows = [_fields(line, n, len(at), pvar, panel) for n, line in batch]
+        yield _block(rows, first, at, info, _Where(pvar, panel, [n for n, _ in batch]))
         first += len(batch)
+
+
+def _fields(line: str, number: int, columns: int, pvar: Path, panel: str) -> list[str]:
+    """One record's fields; a record with fewer than the header's columns is refused."""
+    fields = line.split("\t")
+    if len(fields) < columns:
+        raise InputError(
+            f"panel {panel}: {pvar.name} line {number} has {len(fields)} fields where its "
+            f"header has {columns}"
+        )
+    return fields[:columns]
+
+
+@dataclass(frozen=True)
+class _Where:
+    """Where a block of records came from, so a refusal can name the file and the line."""
+
+    pvar: Path
+    panel: str
+    lines: list[int]
+
+
+def _positions(values: tuple[str, ...], where: _Where) -> npt.NDArray[np.int64]:
+    """The POS column as integers; a value that is not one is refused, naming its line."""
+    try:
+        return np.array(values, dtype=np.int64)
+    except ValueError:
+        bad = next(i for i, value in enumerate(values) if not value.strip().lstrip("-").isdigit())
+        raise InputError(
+            f"panel {where.panel}: {where.pvar.name} line {where.lines[bad]} has POS "
+            f"{values[bad]!r}, which is not an integer (build-inputs §2)"
+        ) from None
 
 
 def _columns(header: list[str], pvar: Path, panel: str) -> dict[str, int]:
@@ -194,14 +239,16 @@ def _columns(header: list[str], pvar: Path, panel: str) -> dict[str, int]:
     return {name: header.index(name) for name in header}
 
 
-def _block(rows: list[list[str]], first: int, at: dict[str, int], info: bool) -> Records:
+def _block(
+    rows: list[list[str]], first: int, at: dict[str, int], info: bool, where: _Where
+) -> Records:
     column = list(zip(*rows, strict=True))
     filters = list(column[at["FILTER"]]) if "FILTER" in at else None
     infos = list(column[at["INFO"]]) if info and "INFO" in at else None
     return Records(
         first=first,
         chrom=list(column[at["#CHROM"]]),
-        pos=np.array(column[at["POS"]], dtype=np.int64),
+        pos=_positions(column[at["POS"]], where),
         ids=list(column[at["ID"]]),
         ref=list(column[at["REF"]]),
         alt=list(column[at["ALT"]]),
@@ -223,7 +270,7 @@ class PcFile:
 def read_pc_file(path: Path, samples: Samples, panel: str) -> PcFile:
     """The PC File (build-inputs §5): plink2's `.eigenvec`, `#IID PC1 … PCm` or `#FID IID PC1 …`,
     tab-separated, one row per sample. Every kept sample needs a row; extra rows are ignored."""
-    lines = [line.split("\t") for line in _text(path, panel).splitlines() if line.strip()]
+    lines = [line.split("\t") for line in _lines(path, panel) if line.strip()]
     column, names = _pc_header(lines[0], path, panel)
     rows = _pc_rows(lines[1:], column, path, panel)
     absent = [iid for iid in samples.iids if iid not in rows]

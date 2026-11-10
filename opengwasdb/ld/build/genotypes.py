@@ -10,15 +10,18 @@ pgenlib is imported here, inside the read path only (ADR 0002, decision 10).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 import numpy.typing as npt
 
 from ogld.build.inputs import Fileset, fileset, read_keep
 from ogld.format import InputError
+
+T = TypeVar("T")
 
 
 def import_pgenlib() -> Any:
@@ -38,10 +41,29 @@ class Genotypes:
 
     def __init__(self, fileset: Fileset) -> None:
         self._fileset = fileset
-        self._reader = import_pgenlib().PgenReader(
-            str(fileset.pgen).encode(), sample_subset=fileset.subset
+        pgenlib = import_pgenlib()
+        self._reader = self._read(
+            lambda: pgenlib.PgenReader(str(fileset.pgen).encode(), sample_subset=fileset.subset)
         )
         self.variant_count = int(self._reader.get_variant_ct())
+        held = int(self._reader.get_raw_sample_ct())
+        if held != fileset.samples:
+            self._reader.close()
+            raise InputError(
+                f"panel {fileset.panel}: {fileset.psam.name} lists {fileset.samples} samples, "
+                f"but {fileset.pgen.name} holds {held}: a psam must name every sample of its "
+                "pgen, in order (build-inputs §2)"
+            )
+
+    def _read(self, call: Callable[[], T]) -> T:
+        """`call`, with pgenlib's own error (a truncated or corrupt pgen) a refusal naming it."""
+        try:
+            return call()
+        except RuntimeError as broken:
+            raise InputError(
+                f"panel {self._fileset.panel}: {self._fileset.pgen.name} cannot be read as a "
+                f"pgen: {str(broken).strip()}"
+            ) from broken
 
     def __enter__(self) -> Genotypes:
         return self
@@ -62,7 +84,7 @@ class Genotypes:
         """The pgen rows `first` … `stop − 1`."""
         out = np.empty((stop - first, len(self._fileset.subset)), dtype=np.float64)
         if stop > first:
-            self._reader.read_dosages_range(first, stop, out)
+            self._read(lambda: self._reader.read_dosages_range(first, stop, out))
         return self._ordered(out)
 
     def rows(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
@@ -70,7 +92,7 @@ class Genotypes:
         wanted, back = np.unique(rows, return_inverse=True)
         out = np.empty((len(wanted), len(self._fileset.subset)), dtype=np.float64)
         if len(wanted):
-            self._reader.read_dosages_list(wanted.astype(np.uint32), out)
+            self._read(lambda: self._reader.read_dosages_list(wanted.astype(np.uint32), out))
         return self._ordered(out)[back]
 
 
