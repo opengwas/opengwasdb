@@ -233,13 +233,15 @@ def test_the_per_row_reader_reads_each_case_as_it_did_before_the_batches(
 # ── the batches are the associations ─────────────────────────────────────────
 
 #: Bytes a block reads: the reader's own, about one line, and one byte, so a
-#: line is split across blocks and a source spans many. The generated source
-#: is not read a byte a block: that tests nothing the small sources do not.
+#: line is split across blocks and a source spans many. The generated source is
+#: read in 4 KiB blocks instead of the two smallest: about 200 blocks, each
+#: parsed as columns with a line carried over, at a fraction of the cost.
+_SMALL_BLOCKS = ((None, "default"), (64, "64B"), (1, "1B"))
+_GENERATED_BLOCKS = ((None, "default"), (1 << 12, "4KiB"))
 READS = [
     pytest.param(source, block, id=f"{source}-{label}")
     for source in SOURCES
-    for block, label in ((None, "default"), (64, "64B"), (1, "1B"))
-    if not (source == "generated" and block == 1)
+    for block, label in (_GENERATED_BLOCKS if source == "generated" else _SMALL_BLOCKS)
 ]
 
 
