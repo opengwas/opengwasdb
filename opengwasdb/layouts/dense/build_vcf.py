@@ -573,10 +573,8 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
     )
     tally = StreamTally()
     with context.record.gate(rules) as gate:
-        routed = context.table.route_column(
-            reader.stream_associations(tally),
-            admit=gate.admit,
-            imputation_scores=gate.reads_imputation_scores,
+        routed = context.table.route_reader(
+            reader, tally, admit=gate.admit, imputation_scores=gate.reads_imputation_scores
         )
         gate.streamed(tally)
         placed = routed.placed[0]

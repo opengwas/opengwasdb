@@ -8,7 +8,8 @@ assembly unless the reader was opened aligned to another:
 
 - `stream_variants`, every variant, for a builder's union-variant pass;
 - `stream_associations`, one association per row, for Variant Routing's Pass 2;
-- `stream_batches`, the same associations as columns, for a Ragged build;
+- `stream_batches`, the same associations as columns with each row's ALID,
+  for a Ragged build;
 - `stream_metric_chunks`, identity and statistics in blocks, for the resolver;
 - `extract_at_sites`, A1 frequency and SE at requested sites, for ancestry
   assignment and phenotype-SD estimation.
@@ -17,15 +18,24 @@ Every reader presents them from its rows through `opengwasdb.readers.rows`, so
 each is oriented to A1 by one rule. The interface is structural
 (`typing.Protocol`), not an ABC: every reader and `FakeReader` satisfy it
 without a shared base class.
+
+A reader may also offer `stream_association_batches` (`BatchedReader`, issue
+#318): its associations as `AssociationBatch` columns, parsed a block at a
+time rather than built one association at a time. Pass 2 routes a reader's
+batches when it offers them (`association_batches`), and its associations one
+at a time otherwise. The per-row stream stays the reference: a reader's
+batches hold exactly its associations, in order, bit for bit, and fill the
+same `StreamTally`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
+import math
+from collections.abc import Iterable, Iterator, Sequence
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -289,6 +299,160 @@ class SourceReader(Protocol):
         other reads the whole source, with the same answer.
         """
         ...
+
+
+@dataclass(frozen=True)
+class AssociationBatch:
+    """A block of one Source Reader's associations as columns, before routing.
+
+    The columnar form of `ReaderAssociation`: the same rows, in the reader's
+    order, each column as an association holds it. ``chromosome`` and
+    ``position`` are the identity rule's; ``ref`` and ``alt`` are the source's
+    own spelling, case included (ADR 0075); ``z`` and ``eaf`` are on A1;
+    ``se`` is the reported one, possibly unusable. ``eaf`` and
+    ``imputation_score`` are NaN where the association has none, and
+    ``imputation_status`` is each score's status. Variant Routing's Pass 2
+    routes one, and Association Admission judges it before any row is matched.
+
+    Unlike a Ragged build's `ReaderBatch`, it names no ALID and no rsid: Pass 2
+    matches a row by its Routing Key, so it never forms either. Every column
+    is positionally parallel, and a ragged batch is refused.
+    """
+
+    chromosome: Sequence[str]
+    position: Sequence[int]
+    ref: Sequence[str]
+    alt: Sequence[str]
+    z: np.ndarray
+    se: np.ndarray
+    eaf: np.ndarray
+    imputation_score: np.ndarray
+    imputation_status: np.ndarray
+
+    def __post_init__(self) -> None:
+        # One row filtered against another batch's mask either raises or, worse,
+        # silently keeps the wrong rows, so a ragged batch is refused (stores #175).
+        lengths = {len(values) for values in vars(self).values()}
+        if len(lengths) != 1:
+            raise ValueError(
+                f"association batch columns hold {sorted(lengths)} row(s); every "
+                "column must hold the batch's rows"
+            )
+
+    def __len__(self) -> int:
+        return len(self.z)
+
+    def take(self, keep: np.ndarray) -> AssociationBatch:
+        """The rows the boolean mask ``keep`` selects, in order.
+
+        A column held as a list stays a list, so a batch built one association
+        at a time keeps the Python values it was built from.
+        """
+        if bool(keep.all()):
+            return self
+        at = np.flatnonzero(keep)
+        taken = {name: _taken(values, keep, at) for name, values in vars(self).items()}
+        return replace(self, **taken)
+
+
+def _taken(values: Any, keep: np.ndarray, at: np.ndarray) -> Any:
+    if isinstance(values, np.ndarray):
+        return values[keep]
+    return [values[index] for index in at.tolist()]
+
+
+def batched(
+    associations: Iterable[ReaderAssociation], *, rows: int, scores: bool = True
+) -> Iterator[AssociationBatch]:
+    """``associations`` as `AssociationBatch`es of up to ``rows`` rows, in order.
+
+    How Pass 2 reads a reader that offers no batches of its own. Its columns
+    are lists, filled one association at a time; ``scores=False`` leaves each
+    association's imputation score uncollected and the batch carries every
+    row's as undeclared, which saves Pass 2 about a fifth of its per-row time
+    when the Analysis declared no score.
+    """
+    chroms: list[str] = []
+    poss: list[int] = []
+    refs: list[str] = []
+    alts: list[str] = []
+    zs: list[float] = []
+    ses: list[float] = []
+    eafs: list[float] = []
+    values: list[float | None] = []
+    statuses: list[ImputationScoreStatus] = []
+    for assoc in associations:
+        chroms.append(assoc.chromosome)
+        poss.append(assoc.position)
+        refs.append(assoc.ref)
+        alts.append(assoc.alt)
+        zs.append(assoc.z)
+        ses.append(assoc.se)
+        eafs.append(math.nan if assoc.eaf is None else assoc.eaf)
+        if scores:
+            values.append(assoc.imputation_score.value)
+            statuses.append(assoc.imputation_score.status)
+        if len(zs) >= rows:
+            yield _listed(chroms, poss, refs, alts, (zs, ses, eafs), values, statuses)
+            chroms, poss, refs, alts, zs, ses, eafs = [], [], [], [], [], [], []
+            values, statuses = [], []
+    if zs:
+        yield _listed(chroms, poss, refs, alts, (zs, ses, eafs), values, statuses)
+
+
+def _listed(
+    chroms: list[str],
+    poss: list[int],
+    refs: list[str],
+    alts: list[str],
+    statistics: tuple[list[float], list[float], list[float]],
+    values: list[float | None],
+    statuses: list[ImputationScoreStatus],
+) -> AssociationBatch:
+    """One batch from its lists; with no statuses collected, every score undeclared."""
+    zs, ses, eafs = statistics
+    if statuses:
+        score = np.asarray(values, dtype=np.float64)
+        status = np.asarray(statuses, dtype=object)
+    else:
+        score = np.full(len(zs), np.nan)
+        status = np.full(len(zs), ImputationScoreStatus.UNDECLARED, dtype=object)
+    return AssociationBatch(
+        chromosome=chroms,
+        position=poss,
+        ref=refs,
+        alt=alts,
+        z=np.asarray(zs, dtype=np.float64),
+        se=np.asarray(ses, dtype=np.float64),
+        eaf=np.asarray(eafs, dtype=np.float64),
+        imputation_score=score,
+        imputation_status=status,
+    )
+
+
+@runtime_checkable
+class BatchedReader(Protocol):
+    """A Source Reader that also reads its associations as columns (#318).
+
+    `stream_association_batches` yields `stream_associations`' associations as
+    `AssociationBatch`es: the same rows in the same order, bit for bit, with
+    the same rows dropped and the same ``tally``. The per-row stream is the
+    reference the batches are held to.
+    """
+
+    def stream_association_batches(
+        self, tally: StreamTally | None = None
+    ) -> Iterator[AssociationBatch]: ...
+
+
+def association_batches(
+    reader: SourceReader, tally: StreamTally
+) -> Iterator[AssociationBatch] | None:
+    """``reader``'s own association batches, or ``None`` for a reader that offers
+    none, which Pass 2 reads one association at a time."""
+    if isinstance(reader, BatchedReader):
+        return reader.stream_association_batches(tally)
+    return None
 
 
 def site_metrics_arrays(sites: dict[str, SiteMetrics]) -> tuple[np.ndarray, np.ndarray]:

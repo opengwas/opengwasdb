@@ -60,6 +60,19 @@ them.**
   `stream_associations`, `stream_batches`, `stream_metric_chunks` and
   `extract_at_sites` (which takes `region` and `regions_file`). Every
   registered reader implements all five.
+- **A reader may also offer its associations as columns** (#318, added 10
+  Nov 2026). `stream_association_batches` yields `AssociationBatch`es:
+  `stream_associations`' rows, in order and bit for bit, with the same rows
+  dropped and the same tally filled. The method is optional (`BatchedReader`).
+  Pass 2 routes a reader's batches where it offers them
+  (`RouteTable.route_reader`), and otherwise reads its associations one at a
+  time into batches of the same type. Both go through one `route_batches`, so
+  the routed column and the Admission record cannot depend on which was read.
+  - The per-row stream stays the reference. A reader that offers batches is
+    held to it by an identity test over its fixtures.
+  - An `AssociationBatch` names no ALID and no rsid, which a Ragged build's
+    `ReaderBatch` carries: Pass 2 matches a row by its Routing Key and needs
+    neither, and forming them is most of what a per-row reader costs.
 - **The registry is the only way in.**
   - `open_source(spec, alignment=)` and `resolve_reader(..., liftover=)` open a
     reader lifted onto the reference build, and a capability that cannot lift

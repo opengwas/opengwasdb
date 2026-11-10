@@ -13,6 +13,7 @@ Not imported by `opengwasdb.variants`, which the Source Readers import.
 
 from __future__ import annotations
 
+from opengwasdb.readers.interface import AssociationBatch
 from opengwasdb.variants.routing.extract import (
     EmptyReferenceError,
     VariantReferenceExtraction,
@@ -29,7 +30,6 @@ from opengwasdb.variants.routing.route import (
 )
 from opengwasdb.variants.routing.table import (
     Admit,
-    AssociationBatch,
     Duplicates,
     Placed,
     RoutedColumn,
