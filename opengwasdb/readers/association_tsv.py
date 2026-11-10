@@ -20,8 +20,7 @@ The columns, by name (case-insensitive; the first alias present wins):
 
 A `.csv` (or `.csv.gz`) file is comma-delimited, any other tab-delimited. The
 format names no reference allele: its effect and other alleles need not be the
-genome's REF and ALT (`interface.ReferenceAllele.UNDECLARED`). A cell of `.`, `NA`, `NaN`,
-`nan` or nothing is missing.
+genome's REF and ALT. A cell of `.`, `NA`, `NaN`, `nan` or nothing is missing.
 
 A row it cannot read refuses the whole read (`SourceRowError`): a missing
 required field, or a number that is not one. A row whose identity no ALID can
@@ -65,9 +64,6 @@ from opengwasdb.variants.normalise import (
 __all__ = ["ASSOCIATION_TSV_CAPABILITY", "AssociationTsvReader", "SourceRowError"]
 
 ASSOCIATION_TSV_CAPABILITY = "opengwasdb.association-tsv"
-
-#: The format names no reference allele.
-_REFERENCE = interface.ReferenceAllele.UNDECLARED
 
 #: The sites an extraction asks for.
 _Sites = Iterable[str]
@@ -270,10 +266,10 @@ class AssociationTsvReader:
     def stream_associations(
         self, tally: interface.StreamTally | None = None
     ) -> Iterator[interface.ReaderAssociation]:
-        return stream_associations(self._rows(tally), self.stored_effect_scale, _REFERENCE)
+        return stream_associations(self._rows(tally), self.stored_effect_scale)
 
     def stream_batches(self, tally: interface.StreamTally | None = None) -> Iterator[ReaderBatch]:
-        return stream_batches(self._rows(tally), _REFERENCE)
+        return stream_batches(self._rows(tally))
 
     def stream_variants(self) -> Iterator[interface.SourceVariant]:
         return stream_variants(self._rows())

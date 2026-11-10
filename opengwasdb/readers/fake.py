@@ -83,14 +83,10 @@ class FakeReader:
 
 def _batch(rows: list[ReaderAssociation]) -> ReaderBatch:
     """Associations already on A1, as the one batch of their columns."""
-    references = {a.reference for a in rows}
-    if len(references) != 1:
-        raise ValueError("a fake reader's associations must share one reference declaration")
 
     def column(value: Callable[[ReaderAssociation], object], dtype: DTypeLike) -> np.ndarray:
         return np.array([value(a) for a in rows], dtype=dtype)
 
-    reference = references.pop()
     return ReaderBatch(
         alid=column(lambda a: canonical_alid(a.chromosome, a.position, a.ref, a.alt), object),
         source_row=np.arange(len(rows), dtype=np.int64),
@@ -106,5 +102,4 @@ def _batch(rows: list[ReaderAssociation]) -> ReaderBatch:
         rsid=np.full(len(rows), "", dtype=object),
         ref=column(lambda a: a.ref, object),
         alt=column(lambda a: a.alt, object),
-        reference=reference,
     )

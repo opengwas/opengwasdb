@@ -77,10 +77,11 @@ them.**
   - the SE is the one reported, or recovered where the format recovers one.
 
   Association Admission judges everything else. A reader declares, once per
-  format, whether its rows name the genome's reference allele
-  (`ReferenceAllele`). Every projection carries that declaration unchanged.
-  (A batch also carried the `REFERENCE_*` codes #357's reversed-indel rule
-  read, until #316 removed the rule.)
+  format, whether its rows name the genome's reference allele, and spells
+  each indel's ALID by that declaration as it reads the row (ADR 0079). No
+  projection carries it. (Each association and batch carried it, and a batch
+  the `REFERENCE_*` codes #357's reversed-indel rule read, until #316 removed
+  the rule; nothing read the field after that, and #318 removed it.)
 - **The Ragged builders read through readers.**
   - `build-ragged-ssf` reads each Analysis with the GWAS-SSF reader's
     `stream_batches`.

@@ -30,7 +30,7 @@ from opengwasdb.layouts.dense import (
 )
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.model.analyses import Analysis
-from opengwasdb.readers.interface import ImputationScoreStatus, ReferenceAllele, StreamTally
+from opengwasdb.readers.interface import ImputationScoreStatus, StreamTally
 from opengwasdb.readers.rows import ReaderBatch
 
 #: Each Analysis-level column the combined TSV may carry, by the manifest column
@@ -165,7 +165,6 @@ def _batch(rows: Sequence[NormalisedAssociation]) -> ReaderBatch:
         # Unflipped, so the effect allele is the row's alt, as a source spells it.
         ref=np.array([r.variant.other_allele for r in rows], dtype=object),
         alt=np.array([r.variant.effect_allele for r in rows], dtype=object),
-        reference=ReferenceAllele.UNDECLARED,
     )
 
 

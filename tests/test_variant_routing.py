@@ -64,7 +64,6 @@ def _association(site: Site, z: float, *, eaf: float | None = None) -> ReaderAss
     chrom, pos, ref, alt = site
     return ReaderAssociation(
         chrom, pos, ref, alt, z, 0.1, StoredEffectScale.SD, eaf=eaf,
-        reference=ReferenceAllele.UNDECLARED,
     )
 
 
@@ -456,7 +455,7 @@ def test_collapse_duplicates_reads_each_place_as_the_rule_says():
 def _indel_association(site: Site, z: float) -> ReaderAssociation:
     chrom, pos, ref, alt = site
     return ReaderAssociation(
-        chrom, pos, ref, alt, z, 0.1, StoredEffectScale.SD, reference=ReferenceAllele.REF
+        chrom, pos, ref, alt, z, 0.1, StoredEffectScale.SD
     )
 
 
@@ -703,7 +702,6 @@ def test_an_analysis_without_a_declared_score_hands_admit_no_scores():
     scored = ReaderAssociation(
         "1", 100, "A", "G", 1.0, 0.1, StoredEffectScale.SD,
         imputation_score=ImputationScore(0.9, ImputationScoreStatus.USABLE),
-        reference=ReferenceAllele.UNDECLARED,
     )
     seen: dict[bool, tuple[list[float], list[ImputationScoreStatus]]] = {}
     for collect in (True, False):

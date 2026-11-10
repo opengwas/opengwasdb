@@ -4,7 +4,8 @@ FinnGen publishes one tab-delimited, bgzip-compressed file per endpoint on
 GRCh38.  ``ref`` is the reference allele and ``alt`` the effect allele; the
 reader therefore converts ``beta / sebeta`` to the package-wide canonical A1
 orientation while leaving the source REF/ALT labels intact on streamed
-records, each declaring ``ref`` the reference.
+records. Every row declares its ``ref`` the reference, so an indel's ALID
+spells it first (ADR 0079).
 """
 
 from __future__ import annotations
@@ -31,8 +32,6 @@ from opengwasdb.variants.normalise import (
 )
 
 FINNGEN_R13_CAPABILITY = "opengwasdb.finngen-r13"
-#: FinnGen's `ref` is the GRCh38 reference allele, on every row.
-_REFERENCE = interface.ReferenceAllele.REF
 _FINNGEN_CHROMOSOMES = {
     str(chromosome).encode(): normalise_chromosome(str(chromosome))
     for chromosome in range(1, 24)
@@ -242,11 +241,11 @@ class FinnGenR13Reader:
         self, tally: interface.StreamTally | None = None
     ) -> Iterator[ReaderAssociation]:
         yield from tabular.stream_associations(
-            _iter_rows(self.path, tally), self.stored_effect_scale, _REFERENCE
+            _iter_rows(self.path, tally), self.stored_effect_scale
         )
 
     def stream_batches(self, tally: interface.StreamTally | None = None) -> Iterator[ReaderBatch]:
-        yield from stream_batches(_iter_rows(self.path, tally), _REFERENCE)
+        yield from stream_batches(_iter_rows(self.path, tally))
 
     def stream_metric_chunks(self) -> Iterator[tabular.MetricsChunk]:
         """The resolver's blocks, from the full-row parser: FinnGen has no

@@ -157,9 +157,6 @@ class ReaderAssociation:
     source file itself (issue #17): it is Analytical Metadata a reader
     receives from its caller (ultimately the build manifest, validated
     against issue #16's schema) and attaches to every association it yields.
-    `reference` says which of `ref` and `alt` the source declares to be the
-    reference allele, if it declares one. It is keyword-only and has no
-    default: every reader states its format's declaration.
     """
 
     chromosome: str
@@ -172,7 +169,6 @@ class ReaderAssociation:
     eaf: float | None = None
     # Present only with an independent provider-backed declaration (#175).
     imputation_score: ImputationScore = ImputationScore()
-    reference: ReferenceAllele = field(kw_only=True)
 
     def __post_init__(self) -> None:
         # An unusable `se` (NaN, not positive, not finite) is the source's, as

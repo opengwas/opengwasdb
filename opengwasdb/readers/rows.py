@@ -33,7 +33,6 @@ from opengwasdb.readers.interface import (
     ImputationScore,
     ImputationScoreStatus,
     ReaderAssociation,
-    ReferenceAllele,
     SiteMetrics,
     SourceVariant,
 )
@@ -297,17 +296,13 @@ def _association_z(row: SourceRow) -> float:
 
 
 def stream_associations(
-    rows: Iterable[SourceRow],
-    stored_effect_scale: StoredEffectScale,
-    reference: ReferenceAllele,
+    rows: Iterable[SourceRow], stored_effect_scale: StoredEffectScale
 ) -> Iterator[ReaderAssociation]:
     """Each row as a `ReaderAssociation`, oriented to A1 by `swap_one`.
 
-    ``reference`` is the reader's one declaration of what its format says of
-    every row's alleles, and is carried onto each association unchanged; it
-    has no default, so a reader cannot forget to pass it. A row with no usable SE has a NaN
-    SE, and one with no effect a NaN z, for Association Admission to drop and
-    log; a reader recovers an SE it can (a CI, a p) before this.
+    A row with no usable SE has a NaN SE, and one with no effect a NaN z, for
+    Association Admission to drop and log; a reader recovers an SE it can (a
+    CI, a p) before this.
     """
     # Each association is built without its frozen ``__init__``: a Dense or
     # Hybrid build routes one per source row, and the ``__init__`` with its
@@ -335,7 +330,6 @@ def stream_associations(
                 "stored_effect_scale": stored_effect_scale,
                 "eaf": eaf,
                 "imputation_score": row.imputation_score,
-                "reference": reference,
             },
         )
         yield association
@@ -406,8 +400,6 @@ class ReaderBatch:
       order, as its association carries them (ADR 0075). The ALID upper-cases
       them; the rsid harvest compares the names a site's spellings carry, so it
       reads these (#379).
-    - ``reference``: the format's declaration of which allele is the genome's
-      reference, carried unchanged from the reader (`ReferenceAllele`).
     - ``key_prefix``: how a dropped row is named in Admission's log: by ALID when
       empty, else ``key_prefix`` and its ``source_row`` (``esi:12``).
     """
@@ -423,7 +415,6 @@ class ReaderBatch:
     rsid: np.ndarray
     ref: np.ndarray
     alt: np.ndarray
-    reference: ReferenceAllele
     key_prefix: str = ""
 
     def __post_init__(self) -> None:
@@ -458,32 +449,26 @@ class ReaderBatch:
 
 
 def stream_batches(
-    rows: Iterable[SourceRow],
-    reference: ReferenceAllele,
-    *,
-    chunk_rows: int = DEFAULT_CHUNK_ROWS,
+    rows: Iterable[SourceRow], *, chunk_rows: int = DEFAULT_CHUNK_ROWS
 ) -> Iterator[ReaderBatch]:
     """`stream_associations`' rows, ``chunk_rows`` at a time, as `ReaderBatch`es.
 
     Each row's z and frequency are oriented by `swap`, the same rule
-    `stream_associations` applies one row at a time. ``reference`` is the
-    reader's declaration, as `stream_associations` takes it.
+    `stream_associations` applies one row at a time.
     """
     block: list[SourceRow] = []
     start = 0
     for row in rows:
         block.append(row)
         if len(block) >= chunk_rows:
-            yield _batch_of_rows(block, start, reference)
+            yield _batch_of_rows(block, start)
             start += len(block)
             block = []
     if block:
-        yield _batch_of_rows(block, start, reference)
+        yield _batch_of_rows(block, start)
 
 
-def _batch_of_rows(
-    rows: list[SourceRow], start: int, reference: ReferenceAllele
-) -> ReaderBatch:
+def _batch_of_rows(rows: list[SourceRow], start: int) -> ReaderBatch:
     n = len(rows)
     flipped = _row_array(rows, lambda row: row.flipped, bool)
     z, eaf = swap(
@@ -505,5 +490,4 @@ def _batch_of_rows(
         rsid=_row_array(rows, lambda row: row.rsid, object),
         ref=_row_array(rows, lambda row: row.ref, object),
         alt=_row_array(rows, lambda row: row.alt, object),
-        reference=reference,
     )

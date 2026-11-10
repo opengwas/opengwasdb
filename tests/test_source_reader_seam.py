@@ -9,9 +9,7 @@ once for every probe.
 
 from __future__ import annotations
 
-import dataclasses
 import gzip
-import inspect
 from dataclasses import replace
 from pathlib import Path
 from subprocess import run
@@ -32,12 +30,11 @@ from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader
 from opengwasdb.readers.interface import (
     ImputationScoreDeclaration,
     ImputationScoreKind,
-    ReaderAssociation,
     SourceReader,
     StreamTally,
 )
 from opengwasdb.readers.registry import SourceSpec, open_source, resolve_reader
-from opengwasdb.readers.rows import ReaderBatch, SourceRow, stream_associations, stream_batches
+from opengwasdb.readers.rows import SourceRow, stream_batches
 from tests.besd_fixtures import write_besd_sparse_3f, write_epi, write_esi
 
 _VCF_HEADER = """\
@@ -190,13 +187,11 @@ def test_a_batch_spells_each_rows_alleles_as_its_source_does(tmp_path: Path, nam
 @pytest.mark.parametrize(
     "name", ["gwas-vcf", "gwas-ssf", "finngen-r13", "association-tsv", "column-map"]
 )
-def test_every_projection_carries_the_formats_reference_declaration(
+def test_a_declared_deletion_spells_its_reference_first_in_a_batch(
     tmp_path: Path, name: str
 ) -> None:
     reader, declared = _readers(tmp_path)[name]
-    assert {a.reference for a in reader.stream_associations(StreamTally())} == {declared}
     (batch,) = reader.stream_batches(StreamTally())
-    assert batch.reference is declared
     # A declared deletion GGGGCC>G spells its reference allele first in its
     # ALID, 1:200:GGGGCC:G (ADR 0079); an undeclared one names none.
     assert batch.alid.tolist() == _alids(declared)
@@ -297,7 +292,6 @@ def test_a_besd_probes_batch_names_its_malformed_rows_and_absent_frequencies(
     assert np.isnan(batch.eaf[1])  # a frequency of exactly 1 is absent (D7)
     assert batch.source_row.tolist() == [0, 2]
     assert batch.keys_at(np.array([1])) == ["esi:2"]
-    assert batch.reference is ReferenceAllele.UNDECLARED
     assert tally.faults.rows == [("esi:1", "chromosome_missing")]
     assert tally.frequencies.made_absent == 1
     assert [a.z for a in reader.stream_associations()] == pytest.approx([-5.0, 3.0])
@@ -355,48 +349,27 @@ def test_a_lifted_besd_reader_keeps_each_projections_z_on_its_own_alleles(
 _FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def _declared_readers(tmp_path: Path) -> dict[str, tuple[SourceReader, ReferenceAllele]]:
-    """Every registered capability, and every Column Map, with the reference
-    declaration its format makes (ADR 0072): stated here, not read off a reader."""
+def _registered_readers(tmp_path: Path) -> dict[str, SourceReader]:
+    """Every registered capability, and every Column Map, opened through the registry."""
     scale = StoredEffectScale.SD
     return {
-        "gwas-vcf": (
-            resolve_reader(GWAS_VCF_CAPABILITY, _indexed(_vcf(tmp_path)), scale),
-            ReferenceAllele.REF,
+        "gwas-vcf": resolve_reader(GWAS_VCF_CAPABILITY, _indexed(_vcf(tmp_path)), scale),
+        "gwas-ssf": resolve_reader(GWAS_SSF_CAPABILITY, _ssf(tmp_path), scale),
+        "finngen-r13": resolve_reader(FINNGEN_R13_CAPABILITY, _finngen(tmp_path), scale),
+        "association-tsv": resolve_reader(
+            ASSOCIATION_TSV_CAPABILITY, _association_tsv(tmp_path), scale
         ),
-        "gwas-ssf": (
-            resolve_reader(GWAS_SSF_CAPABILITY, _ssf(tmp_path), scale), ReferenceAllele.UNDECLARED
+        "besd": resolve_reader(BESD_CAPABILITY, _besd(tmp_path), scale, probe_id="P1"),
+        "column-map gwas-ssf": resolve_reader(
+            COLUMN_MAP_CAPABILITY, _ssf(tmp_path), scale, column_map=load_column_map("gwas-ssf")
         ),
-        "finngen-r13": (
-            resolve_reader(FINNGEN_R13_CAPABILITY, _finngen(tmp_path), scale), ReferenceAllele.REF
+        "column-map finngen-r13": resolve_reader(
+            COLUMN_MAP_CAPABILITY, _finngen(tmp_path), scale,
+            column_map=load_column_map("finngen-r13"),
         ),
-        "association-tsv": (
-            resolve_reader(ASSOCIATION_TSV_CAPABILITY, _association_tsv(tmp_path), scale),
-            ReferenceAllele.UNDECLARED,
-        ),
-        "besd": (
-            resolve_reader(BESD_CAPABILITY, _besd(tmp_path), scale, probe_id="P1"),
-            ReferenceAllele.UNDECLARED,
-        ),
-        "column-map gwas-ssf": (
-            resolve_reader(
-                COLUMN_MAP_CAPABILITY, _ssf(tmp_path), scale, column_map=load_column_map("gwas-ssf")
-            ),
-            ReferenceAllele.UNDECLARED,
-        ),
-        "column-map finngen-r13": (
-            resolve_reader(
-                COLUMN_MAP_CAPABILITY, _finngen(tmp_path), scale,
-                column_map=load_column_map("finngen-r13"),
-            ),
-            ReferenceAllele.REF,
-        ),
-        "column-map mvp-gia": (
-            resolve_reader(
-                COLUMN_MAP_CAPABILITY, _FIXTURES / "dbgap_mvp" / "raw" / "continuous.tsv", scale,
-                column_map=load_column_map(_FIXTURES / "dbgap_mvp" / "mvp-gia.toml"),
-            ),
-            ReferenceAllele.UNDECLARED,
+        "column-map mvp-gia": resolve_reader(
+            COLUMN_MAP_CAPABILITY, _FIXTURES / "dbgap_mvp" / "raw" / "continuous.tsv", scale,
+            column_map=load_column_map(_FIXTURES / "dbgap_mvp" / "mvp-gia.toml"),
         ),
     }
 
@@ -408,37 +381,13 @@ def _declared_readers(tmp_path: Path) -> dict[str, tuple[SourceReader, Reference
         "column-map finngen-r13", "column-map mvp-gia",
     ],
 )
-def test_every_reader_carries_its_one_reference_declaration(tmp_path: Path, name: str) -> None:
-    """Propagated, not defaulted: no carrier of the declaration has a default
-    (`test_nothing_that_carries_the_declaration_defaults_it`), so an adapter
-    that drops it raises here instead of passing `UNDECLARED`."""
-    reader, declared = _declared_readers(tmp_path)[name]
+def test_every_registered_readers_batches_hold_its_associations(
+    tmp_path: Path, name: str
+) -> None:
+    reader = _registered_readers(tmp_path)[name]
     associations = list(reader.stream_associations(StreamTally()))
     batches = list(reader.stream_batches(StreamTally()))
     assert associations and sum(len(batch) for batch in batches) == len(associations)
-    assert {a.reference for a in associations} == {declared}
-    assert {batch.reference for batch in batches} == {declared}
-
-
-def test_nothing_that_carries_the_declaration_defaults_it() -> None:
-    """A reader that forgot its declaration would otherwise pass the default's.
-
-    With no default anywhere, an adapter that drops the argument raises, and an
-    association built without its ``__init__`` and missing the field has no
-    class attribute to fall back on.
-    """
-    for presenter in (stream_associations, stream_batches):
-        reference = inspect.signature(presenter).parameters["reference"]
-        assert reference.default is inspect.Parameter.empty
-    for carrier in (ReaderBatch, ReaderAssociation):
-        (field,) = (f for f in dataclasses.fields(carrier) if f.name == "reference")
-        assert field.default is dataclasses.MISSING
-        assert not hasattr(carrier, "reference")
-    for reader in (
-        GwasVcfReader, GwasSsfReader, FinnGenR13Reader, BesdProbeReader, ColumnMapReader
-    ):
-        reference = inspect.signature(reader).parameters.get("reference")
-        assert reference is None or reference.default is inspect.Parameter.empty, reader
 
 
 @pytest.mark.parametrize("short", ["ref", "alt", "alid"])
@@ -452,7 +401,7 @@ def test_a_batch_refuses_alleles_that_do_not_line_up_with_its_rows(short: str) -
         )
         for position in (100, 200)
     ]
-    (batch,) = stream_batches(rows, ReferenceAllele.UNDECLARED)
+    (batch,) = stream_batches(rows)
     assert len(batch) == len(batch.ref) == len(batch.alt) == 2
     with pytest.raises(ValueError, match="ref and alt must each hold one allele per row"):
         replace(batch, **{short: getattr(batch, short)[:-1]})
