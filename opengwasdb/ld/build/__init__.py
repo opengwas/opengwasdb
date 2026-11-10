@@ -122,6 +122,7 @@ def build(inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1)
     found = variant_set(plan.filesets, settings, plan.samples.n)
     chosen = passes.choose(plan, found, inputs.k, inputs.k_min)
     chromosomes = passes.drop_flat(plan, found, chosen.covariates)
+    diagnostic.require_change_pairs([(c.name, c.position) for c in chromosomes], plan.panel)
     k = chosen.covariates.k
     rates = passes.chance(plan, chromosomes, chosen.covariates)
     writer = StoreWriter.create(

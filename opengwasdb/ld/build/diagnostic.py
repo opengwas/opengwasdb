@@ -18,7 +18,7 @@ and each other quantile is the order statistic at rank ⌊q(N − 1)⌋, to with
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Final
 
@@ -85,6 +85,22 @@ def outside_regions(chrom: str, position: npt.NDArray[np.int64]) -> npt.NDArray[
         if on == chrom:
             inside |= (position >= start) & (position <= end)
     return ~inside
+
+
+def require_change_pairs(
+    positions: Sequence[tuple[str, npt.NDArray[np.int64]]], panel: str
+) -> None:
+    """Refuse a Variant Set with no pair within 100 kb outside the Long-Range LD Regions, such as
+    an MHC-only slice: its change in r cannot be measured (spec §7). Each chromosome's sorted
+    positions say so before the build writes anything, so nothing is left half-written."""
+    for chrom, position in positions:
+        clear = position[outside_regions(chrom, position)]
+        if len(clear) > 1 and int(np.diff(clear).min()) <= CHANGE_BP:
+            return
+    raise InputError(
+        f"panel {panel}: no two variants within 100 kb lie outside the Long-Range LD Regions, "
+        "so the PC diagnostic's change in r cannot be measured (spec §7)"
+    )
 
 
 def draw_variants(count: int) -> npt.NDArray[np.int64]:

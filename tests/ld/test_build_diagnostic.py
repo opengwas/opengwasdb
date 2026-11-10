@@ -193,3 +193,30 @@ def test_the_cost_is_this_build_s() -> None:
     cost = record.Cost.start()
     assert cost.record(2)["peak_memory_bytes"] > 0
     assert record.Cost().record(1)["peak_memory_bytes"] > 0, "without the reset: the process's"
+
+
+def test_a_variant_set_inside_the_long_range_regions_is_refused_before_a_write(
+    tmp_path: Path,
+) -> None:
+    # Review of #5 (standards a3): the PC diagnostic's change in r is measured on pairs within
+    # 100 kb outside the Long-Range LD Regions. An MHC-only Variant Set has none, which its
+    # positions say before anything is written, so the build refuses there, naming the panel,
+    # and leaves no half-written store to block a rerun.
+    v = testdata.variants()
+    on22 = np.flatnonzero((v.chrom == "22") & (v.pos >= 20_000_000) & (v.pos < 24_000_000))
+    assert len(on22) > 100, "the fixture must hold a dense stretch to move into the MHC"
+    shift = 28_600_000 - int(v.pos[on22[0]])
+    text = made.pvar_lines()
+    lines = [text[0]]
+    for row in on22:
+        fields = text[1 + int(row)].split("\t")
+        moved = str(int(fields[1]) + shift)
+        lines.append("\t".join(["6", moved, fields[2], *fields[3:]]))
+    assert (
+        diagnostic.outside_regions("6", np.array([int(x.split("\t")[1]) for x in lines[1:]])).sum()
+        == 0
+    )
+    pgen = made.write_fileset(tmp_path / "mhc", on22, lines=lines)
+    with pytest.raises(InputError, match=rf"panel {made.PANEL_ID}.*100 kb.*Long-Range LD Regions"):
+        ogld.build(made.inputs(pgen), tmp_path / "store")
+    assert not (tmp_path / "store").exists(), "nothing is written"
