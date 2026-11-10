@@ -45,6 +45,7 @@ PASSING_FILTERS: Final = ("PASS", ".")
 #: The reasons a record that passed the record rules is dropped, in the order they are judged.
 REASONS: Final = ("filter", "mac", "info", "zero_variance", "duplicate_reversed_indel")
 _ALLELE = re.compile(r"[ACGTacgt]+")
+_ALLELES = re.compile(r"[ACGTacgt]+(?:\t[ACGTacgt]+)*")
 _INFO_KEYS: Final = ("R2", "INFO")
 
 
@@ -168,10 +169,11 @@ def _read_fileset(state: Pass, index: int, fileset: Fileset, genotypes: Genotype
 
 def _count_missing(state: Pass, block: Records, g: npt.NDArray[np.float64]) -> int:
     """Count the block's missing calls into `state`; remember the first by ID."""
-    missing = (g < 0).sum(axis=1)
-    found = int(missing.sum())
+    # One pass finds the records with a missing call (−9); only those are counted cell by cell.
+    holed = np.flatnonzero(g.min(axis=1) < 0)
+    found = int((g[holed] < 0).sum())
     if found and not state.missing_calls:
-        state.first_missing = block.ids[int(np.flatnonzero(missing)[0])]
+        state.first_missing = block.ids[int(holed[0])]
     state.missing_calls += found
     return found
 
@@ -254,6 +256,8 @@ def _judge(
 def _check_alleles(block: Records, start: int, stop: int, panel: str) -> None:
     """REF and ALT are A, C, G and T in either case (build-inputs §2); anything else, such as
     `*`, `N`, a symbolic allele or `.`, is refused naming the record."""
+    if _ALLELES.fullmatch("\t".join(block.ref[start:stop] + block.alt[start:stop])):
+        return  # every allele of the run is A, C, G and T: one match, not one per record
     for at in range(start, stop):
         if not (_ALLELE.fullmatch(block.ref[at]) and _ALLELE.fullmatch(block.alt[at])):
             raise InputError(
@@ -272,7 +276,7 @@ def _filters(
         ("filter", lambda: _filter_column(block, start, stop, s.panel)),
         ("mac", lambda: np.minimum(alt_sum, 2 * state.samples - alt_sum) >= s.mac_min),
         ("info", lambda: _info(block, start, stop, s)),
-        ("zero_variance", lambda: g.max(axis=1) > g.min(axis=1)),
+        ("zero_variance", lambda: _varies(g, keep)),
     ]
     keep = np.ones(stop - start, dtype=np.bool_)
     for reason, test in tests:
@@ -280,6 +284,14 @@ def _filters(
         state.dropped[reason] += int((keep & ~passed).sum())
         keep &= passed
     return keep
+
+
+def _varies(g: npt.NDArray[np.float64], keep: npt.NDArray[np.bool_]) -> npt.NDArray[np.bool_]:
+    """Filter 4 on the records still kept (most fail MAC first): nonzero genotype variance."""
+    varies = np.ones(len(g), dtype=np.bool_)
+    kept = g[keep]
+    varies[keep] = kept.max(axis=1) > kept.min(axis=1)
+    return varies
 
 
 def _filter_column(block: Records, start: int, stop: int, panel: str) -> npt.NDArray[np.bool_]:
