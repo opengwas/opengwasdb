@@ -324,6 +324,20 @@ def _fallbacks(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [r.getMessage() for r in caplog.records if r.name == finngen.__name__]
 
 
+def _extent(path: Path, row_by_row: int, blocks: int, undecided: int) -> str:
+    """The line a source's read ends with when the per-row rules read any of it."""
+    return (
+        f"FinnGen source {path}: {row_by_row} of {blocks} blocks read row by row, and "
+        f"{undecided} rows of the others read from their own line"
+    )
+
+
+def _read_logging(path: Path, caplog: pytest.LogCaptureFixture) -> list[str]:
+    with caplog.at_level("WARNING", logger=finngen.__name__):
+        list(FinnGenR13Reader(path).stream_association_batches(StreamTally()))
+    return _fallbacks(caplog)
+
+
 @pytest.mark.parametrize(
     ("case", "byte", "reason"),
     [
@@ -338,33 +352,79 @@ def test_a_source_read_row_by_row_says_where_from_and_why(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, case: str, byte: bytes | None, reason: str
 ) -> None:
     """The rows read the same, but about five times slower, so the source,
-    the byte the per-row reader starts at and the cause are logged once."""
+    the byte the per-row reader starts at and the cause are logged, and then
+    how much of the source the per-row rules read. Each source here is one
+    block, all of it read row by row."""
     source = _CASES[case]
     path = source.write(tmp_path)
     offset = 0 if byte is None else (source.prefix + source.text.encode()).find(byte)
-    with caplog.at_level("WARNING", logger=finngen.__name__):
-        list(FinnGenR13Reader(path).stream_association_batches(StreamTally()))
-    assert _fallbacks(caplog) == [
-        f"FinnGen source {path}: read row by row from byte {offset} on, since {reason}"
+    assert _read_logging(path, caplog) == [
+        f"FinnGen source {path}: read row by row from byte {offset} on, since {reason}",
+        _extent(path, 1, 1, 0),
     ]
 
 
-def test_blocks_pandas_refuses_are_read_row_by_row_and_said_once(
+def _with_a_quote(directory: Path, *, last: bool) -> tuple[Path, int]:
+    """The generated source with a quoted gene in a line far past the first
+    4 KiB block, or in its last line, left unterminated; and that quote's byte."""
+    with gzip.open(_generated(directory), "rt", encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+    at = len(lines) - 1 if last else 3_000
+    lines[at] = lines[at].replace("GENE", '"GE NE"')
+    text = "\n".join(lines) + ("" if last else "\n")
+    path = directory / f"quoted-{'last' if last else 'later'}.tsv"
+    path.write_text(text, encoding="utf-8")
+    return path, text.encode().find(b'"')
+
+
+@pytest.mark.parametrize("last", [False, True], ids=["later-block", "unterminated-tail"])
+def test_a_fallback_names_its_true_byte_past_the_first_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, last: bool
+) -> None:
+    path, byte = _with_a_quote(tmp_path, last=last)
+    assert byte > 4 * (1 << 12), "the quote must lie past the first blocks"
+    monkeypatch.setattr(finngen, "_BLOCK_BYTES", 1 << 12)
+    with caplog.at_level("WARNING", logger=finngen.__name__):
+        assert _batched(path) == _per_row(path)
+    first, extent = _fallbacks(caplog)
+    assert first == (
+        f"FinnGen source {path}: read row by row from byte {byte} on, since it holds a quote"
+    )
+    assert extent.startswith(f"FinnGen source {path}: ")
+
+
+def test_a_source_pandas_refuses_throughout_says_every_block_was_read_row_by_row(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """pandas refuses a block in which no line reaches the header's last
-    column. Each such block is read row by row; the first is logged."""
+    column. Here none does, so every block is read row by row: the first is
+    logged, and so is the whole extent."""
     path = tmp_path / "short.tsv"
     lines = [finngen_cases.HEADER, *(f"1\t{100 * i}\tA\tG" for i in range(1, 40))]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     monkeypatch.setattr(finngen, "_BLOCK_BYTES", 64)
     with caplog.at_level("WARNING", logger=finngen.__name__):
         assert _batched(path) == _per_row(path)
-    (message,) = _fallbacks(caplog)
-    assert message.startswith(
+    blocks = math.ceil((path.stat().st_size - len(lines[0]) - 1) / 64)
+    first, extent = _fallbacks(caplog)
+    assert blocks > 5
+    assert first.startswith(
         f"FinnGen source {path}: the block at byte {len(lines[0]) + 1} is read row by row: "
         "pandas refused it"
     )
+    assert extent == _extent(path, blocks, blocks, 0)
+
+
+def test_rows_read_from_their_own_line_are_counted(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A frequency read as missing leaves its row to the per-row rules, which
+    read it from its own line; the block is still parsed as columns."""
+    path = tmp_path / "missing-frequencies.tsv"
+    rows = [finngen_cases._row(pos=str(100 * i), af="NA" if i % 3 == 0 else "0.2")
+            for i in range(1, 10)]
+    path.write_text("\n".join([finngen_cases.HEADER, *rows]) + "\n", encoding="utf-8")
+    assert _read_logging(path, caplog) == [_extent(path, 0, 1, 3)]
 
 
 def test_a_plain_source_is_read_without_a_fallback(

@@ -297,7 +297,8 @@ def stream_full_row_variants(path: str | Path) -> Iterator[SourceVariant]:
 #: Decompressed bytes one block reads, 32 MiB: what bounds a Pass 2 worker's
 #: batch, which holds one block and the line the read before it split. R13's
 #: 21,326,102-row ACTINOMYCOSIS file reads as 63 batches, the largest of
-#: 346,947 rows, and the read's resident memory peaked at 501 MiB (ADR 0076).
+#: 346,947 rows, and the read's sampled resident memory peaked at 501 MiB
+#: (ADR 0076 gives `ru_maxrss` beside it).
 _BLOCK_BYTES = 1 << 25
 
 #: Associations a batch holds once a source is handed to the per-row reader.
@@ -405,22 +406,26 @@ def _without_blank_lines(lines: bytes) -> bytes:
 
 
 class _Resumed(io.RawIOBase):
-    """The bytes a block parse already read from a source, then the rest of it."""
+    """The bytes a block parse already read from a source, then the rest of it,
+    as the blocks ``rest`` yields."""
 
-    def __init__(self, head: bytes, rest: io.BufferedIOBase) -> None:
+    def __init__(self, head: bytes, rest: Iterator[bytes]) -> None:
         super().__init__()
-        self._head = memoryview(head)
+        self._pending = memoryview(head)
         self._rest = rest
 
     def readable(self) -> bool:
         return True
 
     def readinto(self, buffer: Any) -> int:
-        if not self._head:
-            return self._rest.readinto(buffer)
-        size = min(len(buffer), len(self._head))
-        memoryview(buffer).cast("B")[:size] = self._head[:size]
-        self._head = self._head[size:]
+        while not self._pending:
+            block = next(self._rest, None)
+            if block is None:
+                return 0
+            self._pending = memoryview(block)
+        size = min(len(buffer), len(self._pending))
+        memoryview(buffer).cast("B")[:size] = self._pending[:size]
+        self._pending = self._pending[size:]
         return size
 
 
@@ -436,8 +441,9 @@ def _association_batches(
             return
         if isinstance(plan, str):
             yield from source.per_row(header, None, 0, plan)
-            return
-        yield from source.blocks(plan, len(header))
+        else:
+            yield from source.blocks(plan, len(header))
+        source.summarise()
 
 
 @dataclass
@@ -448,7 +454,8 @@ class _Source:
     with no newline is read as if it had one, as `csv` reads it. From the first
     block that is not plain, the rest goes to the per-row reader. The rows read
     the same either way; the per-row reader is about five times slower, so the
-    first place a source is read row by row is logged, once, by byte offset.
+    first place a source is read row by row is logged, by byte offset, and once
+    the source is read one more line says how much of it was (`summarise`).
     """
 
     path: str | Path
@@ -456,6 +463,13 @@ class _Source:
     tally: interface.StreamTally
     scale: StoredEffectScale
     warned: bool = False
+    #: Blocks parsed as columns, and blocks read row by row: one pandas
+    #: refused, the block that sent the rest of the source row by row, and
+    #: every read after it.
+    column_blocks: int = 0
+    per_row_blocks: int = 0
+    #: Rows of the column-parsed blocks that were read from their own line.
+    undecided: int = 0
 
     def warn(self, message: str, *args: object) -> None:
         """Log ``message`` the first time this source falls back, and never again."""
@@ -463,13 +477,29 @@ class _Source:
             log.warning("FinnGen source %s: " + message, self.path, *args)
             self.warned = True
 
+    def summarise(self) -> None:
+        """Say, once the source is read, how much of it the per-row rules read."""
+        if self.per_row_blocks or self.undecided:
+            log.warning(
+                "FinnGen source %s: %d of %d blocks read row by row, and %d rows of the "
+                "others read from their own line",
+                self.path, self.per_row_blocks, self.column_blocks + self.per_row_blocks,
+                self.undecided,
+            )
+
     def per_row(
         self, head: bytes, names: list[str] | None, offset: int, reason: str
     ) -> Iterator[AssociationBatch]:
         """``head`` and the rest of the source, from byte ``offset``, row by row."""
         self.warn("read row by row from byte %d on, since %s", offset, reason)
-        text = _text_after(head, self.fh)
+        text = _text_after(head, self._rest())
         yield from _per_row_batches(text, names, self.tally, self.scale)
+
+    def _rest(self) -> Iterator[bytes]:
+        """The source's remaining blocks, each counted as read row by row."""
+        while block := self.fh.read(_BLOCK_BYTES):
+            self.per_row_blocks += 1
+            yield block
 
     def blocks(self, plan: _Plan, offset: int) -> Iterator[AssociationBatch]:
         """The source after its header, which ends at byte ``offset``."""
@@ -481,6 +511,7 @@ class _Source:
             special = _first_special(lines)
             if special is not None:
                 at, what = special
+                self.per_row_blocks += 1
                 yield from self.per_row(data, plan.names, offset + at, f"it holds {what}")
                 return
             yield from _block_batches(lines, offset, plan, self)
@@ -488,12 +519,13 @@ class _Source:
         special = _first_special(carry)
         if special is not None:
             at, what = special
+            self.per_row_blocks += 1
             yield from self.per_row(carry, plan.names, offset + at, f"it holds {what}")
         elif carry:
             yield from _block_batches(carry + b"\n", offset, plan, self)
 
 
-def _text_after(head: bytes, rest: io.BufferedIOBase) -> io.TextIOWrapper:
+def _text_after(head: bytes, rest: Iterator[bytes]) -> io.TextIOWrapper:
     """``head``, then the rest of the source, as text the per-row reader reads."""
     source = io.BufferedReader(_Resumed(head, rest))
     return io.TextIOWrapper(source, encoding="utf-8", newline="")
@@ -532,10 +564,12 @@ def _block_batches(
         # column; `csv` pads each, and reads it.
         source.warn("the block at byte %d is read row by row: pandas refused it (%s)",
                     offset, str(refused).strip())
+        source.per_row_blocks += 1
         text = io.TextIOWrapper(io.BytesIO(lines), encoding="ascii", newline="")
         yield from _per_row_batches(text, plan.names, source.tally, source.scale)
         return
-    batch = block.associations(lines, plan, source.tally, source.scale)
+    source.column_blocks += 1
+    batch = block.associations(lines, plan, source)
     if len(batch):
         yield batch
 
@@ -663,16 +697,15 @@ class _Block:
             decided &= ~np.isnan(self.af)
         return decided
 
-    def associations(
-        self, lines: bytes, plan: _Plan, tally: interface.StreamTally, scale: StoredEffectScale
-    ) -> AssociationBatch:
+    def associations(self, lines: bytes, plan: _Plan, source: _Source) -> AssociationBatch:
         """The block's associations: the decided rows from the columns, the
         rest from `_source_row`, in the block's order."""
         decided = self.decided(plan)
-        columns = _Columns.of(self, decided, tally)
+        columns = _Columns.of(self, decided, source.tally)
         undecided = np.flatnonzero(~decided)
         if len(undecided):
-            columns.place(_undecided(lines, plan, undecided, tally, scale))
+            source.undecided += len(undecided)
+            columns.place(_undecided(lines, plan, undecided, source.tally, source.scale))
         return columns.batch()
 
 

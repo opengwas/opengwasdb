@@ -18,6 +18,7 @@ from hybrid_pass2_fixtures import captured_spills
 from test_column_map_build import _store_contents
 from test_finngen_batches import RowsOnly
 
+import opengwasdb.readers.finngen as finngen
 from opengwasdb.admission import admission_record_for
 from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.readers import registry
@@ -94,21 +95,31 @@ def _refuse_rows(self: FinnGenR13Reader, tally: object = None) -> None:
     raise AssertionError("Pass 2 read a reader that offers batches one association at a time")
 
 
+def _refuse_per_row_blocks(*args: object) -> None:
+    raise AssertionError("the FinnGen reader handed a block to the per-row rules")
+
+
 @pytest.mark.parametrize("single_pass", [False, True], ids=["two-pass", "single-pass"])
 def test_hybrid_pass2_reads_batches_as_it_reads_associations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, single_pass: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    single_pass: bool,
 ) -> None:
+    """The batch build's reader refuses to be read row by row, and parses its
+    files as columns: no block reaches the per-row rules, and nothing says one
+    did."""
     _source(tmp_path / "alpha.tsv", ALPHA)
     _source(tmp_path / "beta.tsv", BETA)
     monkeypatch.setitem(
         registry._READERS, _ROWS_ONLY, lambda path, scale: RowsOnly(FinnGenR13Reader(path, scale))
     )
     rows, rows_record, rows_store = _build(tmp_path, _ROWS_ONLY, single_pass)
-    with monkeypatch.context() as patch:
+    with monkeypatch.context() as patch, caplog.at_level("WARNING", logger=finngen.__name__):
         patch.setattr(FinnGenR13Reader, "stream_associations", _refuse_rows)
+        patch.setattr(finngen, "_per_row_batches", _refuse_per_row_blocks)
         batches, batches_record, batches_store = _build(
             tmp_path, FINNGEN_R13_CAPABILITY, single_pass
         )
+    assert [r.getMessage() for r in caplog.records if r.name == finngen.__name__] == []
 
     assert rows["dense"] and rows["overflow"][0]["variant_index"].size
     if single_pass:

@@ -82,16 +82,22 @@ them.**
     Analysis against about 271 s, and the Store and Admission record are
     identical.
   - A batch's memory is a block's. R13's 21,326,102-row file reads as 63
-    batches, the largest of 346,947 rows, and the read alone peaks at 501 MiB
-    resident. Each OGS-00003 Pass 2 worker held about 0.27 GiB more private
-    memory than when it read rows: 0.89 and 1.00 GiB, mean, against 0.62 and
-    0.74, and at most 1.58 GiB. At the full FinnGen Store's 32 workers
-    (OGS-00017) that is about 32 × 1.58 GiB beside a 19.6 GiB parent, about
-    70 GiB, against the quarter of available memory a build may take: 172 GiB
-    of the 690 GiB available when it was measured.
-  - A block or row read by the per-row rules is logged once a source, with
-    the byte it starts at and why: those rows read the same, about five times
-    slower.
+    batches, the largest of 346,947 rows. Reading it alone peaks at 501 MiB
+    resident, sampled every 0.2 s, and at 906 MiB by `ru_maxrss` in that run,
+    which started under `pixi run`; the reader A/B's readers, started
+    directly, peaked at 506 to 518 MiB by `ru_maxrss`.
+  - In an OGS-00003 rebuild each Pass 2 worker held about 0.27 GiB more
+    private memory than when it read rows: 0.89 and 1.00 GiB, mean, against
+    0.62 and 0.74, and at most 1.58 GiB. A build of the full FinnGen Store
+    (OGS-00017) at its 32 workers therefore needs about 32 × 1.58 GiB beside a
+    19.6 GiB parent, about 70 GiB. By the rule that a build takes at most a
+    quarter of available memory, it may start wherever about 280 GiB is
+    available.
+  - Where a source is read by the per-row rules, the first place is logged
+    with the byte it starts at and why. Once the source is read, one more line
+    gives how many of its blocks were read row by row, of how many, and how
+    many rows of the column-parsed blocks were read from their own line.
+    Those rows read the same, about five times slower.
   - The issue listed FinnGen's first-rsid rule among what a batch covers. It
     is left out deliberately: Pass 2 names no rsid, as `ReaderAssociation`
     named none before, and Pass 1 still applies the rule, so a rebuild's
