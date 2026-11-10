@@ -41,7 +41,6 @@ from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
-from opengwasdb.layouts.ragged import complete as ragged_complete
 from opengwasdb.layouts.ragged import zarr_csr
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRWriter
@@ -272,7 +271,8 @@ def test_ragged_completion_keeps_only_the_rows_it_stores(
     observed_alid = VariantAxis(observed).by_indices(probe_observed.variant_index.tolist())
     alid_of = {int(v): observed_alid[int(v)].alid for v in probe_observed.variant_index}
 
-    judged = _inject(monkeypatch, _se_is(0.05), ragged_complete, association_codec)
+    # Completion's rows are judged by the writer it adds them to (#424).
+    judged = _inject(monkeypatch, _se_is(0.05), zarr_csr, association_codec)
     completed = tmp_path / "comp.opengwasdb"
     complete_ragged_store(
         observed, completed, trc._make_ld_panel(tmp_path, "1", 900_000, 1_300_000),

@@ -1,0 +1,68 @@
+{
+  "commit": "1ab2b0963b4f2ac23bc4d14c7dca132cb267d5ad",
+  "measured_at": "2026-11-08T00:28:35.789464+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/odb424/base-wt/opengwasdb",
+  "opengwasdb_fingerprint": "f8b6c4147f3cd8a912aa57e410efab1e13d6b938cbdc04a051d9bd5f6963caa2",
+  "argv": [
+    "benchmarks/benchmark_ragged_completion_streams.py",
+    "run",
+    "--source",
+    "/data/opengwasdb/stores/OGS-00006/store.opengwasdb",
+    "--ld-dir",
+    "/data/opengwasdb/work/odb424/panel-chr15-22",
+    "--n-analyses",
+    "25",
+    "--dest",
+    "/data/opengwasdb/work/odb424/runs2/base-25.opengwasdb",
+    "--n-workers",
+    "16",
+    "--output",
+    "/data/opengwasdb/work/odb424/runs2/base-25.json"
+  ],
+  "n_analyses_completed": 25,
+  "n_analyses": 1400,
+  "result": {
+    "n_variants": 12396479,
+    "n_associations": 97662085,
+    "n_imputed": 32485686,
+    "n_missing": 7122187
+  },
+  "total_seconds": 1156.03,
+  "ru_maxrss_gb": 19.683,
+  "phases": {
+    "_plan_blocks": {
+      "seconds": 19.14,
+      "peak_rss_gb": 5.173
+    },
+    "_run_pending_blocks": {
+      "seconds": 543.38,
+      "peak_rss_gb": 7.494
+    },
+    "_merge_checkpoint_rows": {
+      "seconds": 78.52,
+      "peak_rss_gb": 14.626
+    },
+    "_assemble_completed_csr": {
+      "seconds": 257.53,
+      "peak_rss_gb": 15.883
+    },
+    "build_variant_index": {
+      "seconds": 55.97,
+      "peak_rss_gb": 14.128
+    },
+    "_write_completed_zarr": {
+      "seconds": 84.24,
+      "peak_rss_gb": 19.32
+    },
+    "_write_top_hits_and_analyses": {
+      "seconds": 13.62,
+      "peak_rss_gb": 10.424
+    }
+  },
+  "checkpoint_fills": 32485686,
+  "checkpoint_bytes": 2469552304,
+  "phase3": {
+    "seconds": 433.91,
+    "peak_rss_gb": 19.32
+  }
+}
