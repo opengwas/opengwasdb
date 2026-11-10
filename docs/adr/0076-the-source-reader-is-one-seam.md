@@ -102,6 +102,32 @@ them.**
     is left out deliberately: Pass 2 names no rsid, as `ReaderAssociation`
     named none before, and Pass 1 still applies the rule, so a rebuild's
     `variants.tsv.gz` is byte-identical.
+  - GWAS-SSF's reader offers them too (#319, 10 Nov 2026), and `ColumnMapReader`
+    names the method itself and delegates, since a reader offers batches only
+    if it has the method. Both share FinnGen's engine (`readers/columnar.py`).
+    - A row is decided by its columns when its identity passes and any indel is
+      one its layout declares the reference of (ADR 0079: `hm_code` 10 or 11 in
+      the main-columns layout, every row of a Column Map by its convention). Its
+      effect and SE are those `row_statistics` gives: the plain cases as arrays,
+      and every other row (the second effect column, an interval or a p-value for
+      the SE, an infinite effect) by `row_statistics` itself on the cells already
+      parsed. A row the rules refuse, whose fault the tally names, is read by
+      `_tabular_row` from its own line.
+    - A GWAS Catalog file ends every line in CR LF, so GWAS-SSF reads a carriage
+      return that ends its line as the plain text `csv` reads it, and falls back
+      on one that ends no line. FinnGen keeps its rule. The first rebuild of
+      OGS-00004 missed this: all nine sources fell back and the build was no
+      faster.
+    - A source with a declared imputation score is read row by row throughout,
+      and says so. An Analysis that declares one gets no speed-up.
+    - On the largest OGS-00004 source (GCST009324, 17,343,104 rows) the
+      reader reads in 35.2 s against 186.9 s one association at a time, beside a
+      21.1 s parse floor (6 rounds, p = 0.031): 0.187 of the time, and 1.66 times
+      the floor. Peak `ru_maxrss` is 586 MiB against 161 MiB, about 0.43 GiB more
+      per worker.
+    - Rebuilding OGS-00004, Pass 2 takes about 21 s an Analysis against about
+      124 s (two pairs run side by side), and the Store, the Admission record and
+      every dropped-row log are identical.
 - **The registry is the only way in.**
   - `open_source(spec, alignment=)` and `resolve_reader(..., liftover=)` open a
     reader lifted onto the reference build, and a capability that cannot lift
