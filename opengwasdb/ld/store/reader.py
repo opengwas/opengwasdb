@@ -29,12 +29,9 @@ import zarr
 
 from ogld.format import ENCODING, FORMAT_VERSION, RESERVED_CODE, InputError, Provenance, dequantise
 from ogld.identity import alid_locus
-from ogld.store.location import open_group
+from ogld.store.location import open_group, take
 from ogld.store.tables import Partners, Variants
 
-#: A read of `coords` takes the slice from the first to the last when that slice is at most
-#: this many times as long as `coords`; otherwise it selects the coordinates themselves.
-_DENSE: Final = 4
 #: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
 _PAIRS_PER_STEP: Final = 1 << 22
 
@@ -159,7 +156,7 @@ class StoreReader:
             position[members] = c.position[rows[members] - c.start]
         names = np.array(self._names, dtype=np.str_)
         chrom = names[np.searchsorted(self._stops, rows, side="right")]
-        frequency = _take(_array(self._root, "variants/a1_frequency"), rows)
+        frequency = take(_array(self._root, "variants/a1_frequency"), rows)
         _refuse_fill(np.isnan(frequency), "variants/a1_frequency", "NaN")
         return Variants(
             chrom=chrom,
@@ -225,7 +222,7 @@ class StoreReader:
         first = c.index_indptr[local]
         length = c.index_indptr[local + 1] - first
         coords = _spans(first, length)
-        partner = _take(c.index_partner, coords).astype(np.int64)
+        partner = take(c.index_partner, coords).astype(np.int64)
         _refuse_fill(partner < 0, f"index/{c.name}/partner", "-1")
         return partner, _codes(c.index_r, coords), length
 
@@ -287,7 +284,7 @@ class StoreReader:
         """One chromosome's kept arrays, read on first use (spec §10)."""
         if name not in self._loaded:
             start, stop = self._ranges[name]
-            position = _take(_array(self._root, "variants/position"), np.arange(start, stop))
+            position = take(_array(self._root, "variants/position"), np.arange(start, stop))
             _refuse_fill(position <= 0, "variants/position", "0")
             near_r, index_r = (
                 _r_array(self._root, f"{kind}/{name}/r") for kind in ("near", "index")
@@ -317,7 +314,7 @@ class StoreReader:
         """The string column `name` at `rows`; an empty string is a lost chunk's, never data."""
         # zarr hands back numpy StringDType, which casts to a fixed width only via a list.
         values = np.array(
-            _take(_array(self._root, f"variants/{name}"), rows).tolist(), dtype=np.str_
+            take(_array(self._root, f"variants/{name}"), rows).tolist(), dtype=np.str_
         )
         _refuse_fill(values == "", f"variants/{name}", '""')
         return values
@@ -383,22 +380,9 @@ def _pairs(
         start = end
 
 
-def _take(array: zarr.Array[Any], coords: npt.NDArray[np.int64]) -> npt.NDArray[Any]:
-    """The elements of a 1-D array at `coords`, in that order, reading only the inner chunks
-    that hold them: one slice when they are dense, the coordinates themselves when not."""
-    coords = np.asarray(coords, dtype=np.int64)
-    if len(coords) == 0:
-        return np.asarray(array[0:0])
-    lo, hi = int(coords.min()), int(coords.max()) + 1
-    if hi - lo <= _DENSE * len(coords):
-        return np.asarray(array[lo:hi])[coords - lo]
-    distinct, back = np.unique(coords, return_inverse=True)
-    return np.asarray(array.get_coordinate_selection(distinct))[back]
-
-
 def _codes(array: zarr.Array[Any], coords: npt.NDArray[np.int64]) -> npt.NDArray[Any]:
     """The codes of an `r` array at `coords`; the reserved code is a lost chunk, refused."""
-    codes = _take(array, coords)
+    codes = take(array, coords)
     if (codes == RESERVED_CODE).any():
         raise ValueError(
             f"{array.path} read the reserved code {RESERVED_CODE} where a pair is stored: a chunk "

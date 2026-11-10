@@ -8,6 +8,7 @@ and a whole-array read differ, and are expected to: each asserts the copy has ma
 
 from __future__ import annotations
 
+import contextlib
 import http.server
 import shutil
 import threading
@@ -23,7 +24,7 @@ from store_copies import TEST_STORE, copy_store, resharded
 
 import ogld
 from ogld.format import InputError
-from ogld.store import StoreReader, reader
+from ogld.store import StoreReader, location, reader
 
 #: Inner chunks of 512 elements, 4 to a shard: chr22's Near Band is 136 chunks in 34 shards.
 INNER, PER_SHARD = 512, 4
@@ -61,7 +62,7 @@ def test_scattered_and_sliced_reads_agree(
     # pair_r resolve its pairs a few at a time. Each must give the committed store's answers.
     rows = np.arange(0, 1056, 7)
     expected = StoreReader.open(TEST_STORE)
-    monkeypatch.setattr(reader, "_DENSE", dense)
+    monkeypatch.setattr(location, "_DENSE", dense)
     monkeypatch.setattr(reader, "_PAIRS_PER_STEP", 97)
     got = StoreReader.open(small_chunks)
     np.testing.assert_array_equal(got.pair_r(rows), expected.pair_r(rows))
@@ -124,9 +125,12 @@ def test_an_r_array_whose_lost_chunk_would_read_as_a_number_is_refused(tmp_path:
     assert ogld.open(copy).region("21", int(chr21), 1_000_000).r.size > 1, "chr21 is intact"
 
 
-@pytest.fixture
-def served(small_chunks: Path) -> Iterator[tuple[str, list[tuple[str, int]]]]:
-    """The re-sharded copy over HTTP, with the path and body length of every response."""
+Served = tuple[str, list[tuple[str, int]]]
+
+
+@contextlib.contextmanager
+def serving(directory: Path) -> Iterator[Served]:
+    """`directory` over HTTP, with the path and body length of every response it sends."""
     sent: list[tuple[str, int]] = []
 
     class Counting(RangeHandler):
@@ -135,7 +139,7 @@ def served(small_chunks: Path) -> Iterator[tuple[str, list[tuple[str, int]]]]:
                 sent.append((self.path, int(value)))
             super().send_header(keyword, value)
 
-    handler = partial(Counting, directory=str(small_chunks))
+    handler = partial(Counting, directory=str(directory))
     with http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler) as server:
         worker = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
         worker.start()
@@ -144,8 +148,15 @@ def served(small_chunks: Path) -> Iterator[tuple[str, list[tuple[str, int]]]]:
         worker.join()
 
 
+@pytest.fixture
+def served(small_chunks: Path) -> Iterator[Served]:
+    """The re-sharded copy over HTTP."""
+    with serving(small_chunks) as found:
+        yield found
+
+
 def test_a_few_pairs_over_http_fetch_a_small_part_of_the_near_band(
-    served: tuple[str, list[tuple[str, int]]], small_chunks: Path
+    served: Served, small_chunks: Path
 ) -> None:
     url, sent = served
     store = ogld.open(url)
@@ -158,12 +169,24 @@ def test_a_few_pairs_over_http_fetch_a_small_part_of_the_near_band(
     assert 0 < read < near / 10, f"{read:,} of chr22's {near:,} Near Band bytes were read"
 
 
+def test_the_test_store_passes_every_rule_over_http() -> None:
+    with serving(TEST_STORE) as (url, sent):
+        assert not any(ogld.validate(url).values())
+    assert any(path.startswith("/index/22/partner/c/") for path, _ in sent), "read over HTTP"
+
+
 def test_a_url_with_no_store_is_an_input_error(
-    served: tuple[str, list[tuple[str, int]]],
+    served: Served,
 ) -> None:
     url, _ = served
     with pytest.raises(InputError, match="no LD Store"):
         ogld.open(url + "nothing/")
+
+
+def test_a_zarr_v2_hierarchy_is_not_read_as_a_store(tmp_path: Path) -> None:
+    zarr.open_group(tmp_path / "v2", mode="w", zarr_format=2)
+    with pytest.raises(InputError, match="Zarr v2"):
+        ogld.open(tmp_path / "v2")
 
 
 def test_a_region_takes_the_chr_prefix_a_query_may_carry() -> None:
