@@ -73,6 +73,14 @@ them.**
   - An `AssociationBatch` names no ALID and no rsid, which a Ragged build's
     `ReaderBatch` carries: Pass 2 matches a row by its Routing Key and needs
     neither, and forming them is most of what a per-row reader costs.
+  - FinnGen R13's reader offers them first: pandas parses 32 MiB of the
+    decompressed file at a time, and a block, or a row, that the columns
+    cannot show they read as `csv` and the per-row rules do is read by the
+    per-row rules themselves. On a 21,326,102-row R13 file it reads in 40.1 s
+    against 220.7 s one association at a time, beside a 24.7 s parse floor.
+    Rebuilding the FinnGen pilot OGS-00003, Pass 2 takes about 50 s an
+    Analysis against about 271 s, and the Store and Admission record are
+    identical.
 - **The registry is the only way in.**
   - `open_source(spec, alignment=)` and `resolve_reader(..., liftover=)` open a
     reader lifted onto the reference build, and a capability that cannot lift
