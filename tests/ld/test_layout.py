@@ -1,34 +1,44 @@
-"""The ragged walk the store's arrays share (spec §4, §5): `spans` and its inverse, `spans_at`,
-against a loop that builds every span element by element."""
+"""The record of the chromosome ranges in `variants.attrs` (spec §2): its keys are layout's."""
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
-from ogld.store.layout import spans, spans_at
+from ogld.store.layout import chromosomes_listed, chromosomes_record
 
 
-def walked(first: list[int], length: list[int]) -> tuple[list[int], list[int]]:
-    """Each element of the spans, in order: the span it belongs to and its value."""
-    span, value = [], []
-    for i, (start, count) in enumerate(zip(first, length, strict=True)):
-        for k in range(count):
-            span.append(i)
-            value.append(start + k)
-    return span, value
+def test_the_record_lists_each_range_with_the_spec_keys_in_order() -> None:
+    record = chromosomes_record({"1": (0, 2), "22": (2, 9)})
+    assert record == [
+        {"name": "1", "row_start": 0, "row_stop": 2},
+        {"name": "22", "row_start": 2, "row_stop": 9},
+    ]
+    assert chromosomes_listed(record) == [("1", 0, 2), ("22", 2, 9)]
 
 
-@pytest.mark.parametrize("seed", range(6))
-def test_spans_at_inverts_spans_element_by_element(seed: int) -> None:
-    rng = np.random.default_rng(seed)
-    length = rng.integers(0, 6, size=40)
-    length[[0, 7, 8, -1]] = 0  # empty spans first, together and last
-    first = rng.integers(-5, 50, size=40)
-    span, value = walked(first.tolist(), length.tolist())
-    assert len(value) > 50, "the spans must hold many elements for this to mean anything"
-    np.testing.assert_array_equal(spans(first, length), value)
-    at = rng.permutation(len(value))
-    found_span, found_value = spans_at(first, length, at)
-    np.testing.assert_array_equal(found_span, np.asarray(span)[at])
-    np.testing.assert_array_equal(found_value, np.asarray(value)[at])
+def test_a_repeated_chromosome_is_kept_for_a_rule_to_see() -> None:
+    record = [
+        {"name": "1", "row_start": 0, "row_stop": 2},
+        {"name": "1", "row_start": 2, "row_stop": 3},
+    ]
+    assert chromosomes_listed(record) == [("1", 0, 2), ("1", 2, 3)]
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        None,
+        {"name": "1"},
+        [{"name": "1", "row_start": 0}],
+        [{"name": "1", "row_start": 0, "row_stop": 2, "extra": 1}],
+        [{"name": 1, "row_start": 0, "row_stop": 2}],
+        [{"name": "1", "row_start": 0.0, "row_stop": 2}],
+        [{"name": "1", "row_start": True, "row_stop": 2}],
+        [{"name": "1", "row_start": 3, "row_stop": 2}],
+        [{"name": "1", "row_start": -1, "row_stop": 2}],
+        ["1"],
+    ],
+)
+def test_a_malformed_record_is_refused(record: object) -> None:
+    with pytest.raises(ValueError, match="chromosomes"):
+        chromosomes_listed(record)
