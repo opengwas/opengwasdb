@@ -192,13 +192,21 @@ EUR's would be about 26% of the 308 GB in `ld-store.md`, near 80 GB; ogld#7 meas
 **Rule: genotypes MUST be complete.** A build refuses an input with any missing genotype among
 the kept samples, naming the number of missing genotypes, the first variant by ID and the panel.
 No genotype is imputed and there is no call-rate floor (ADR 0002, decision 2). A build reads the
-records in blocks of 65,536, in file order. It checks a block's genotypes for missing calls
-before it applies the other rules to that block, and once it has found one it only counts
-missing calls in the rest, so the refusal counts every one from the first. A block before the
-first missing call is judged in full: a fault there, such as a missing FILTER column or a record
-on chrX, is refused first, and the missing calls after it are never counted. So an input whose
-first block has a missing call, as the shipped gnomAD v3.1.2 pgens' do, is refused for its
-missing calls even though it has no FILTER column either.
+records in blocks of 65,536, in file order, and refuses the first fault it meets, in this order:
+
+- **A malformed pvar line** (fields that do not match the header, a POS that is not an integer)
+  is refused as its block is read, naming the line, whether or not a missing call came before.
+- **Missing calls.** It checks each block's genotypes for missing calls before it applies the
+  other rules to that block, and once it has found one it only counts missing calls in the rest,
+  so the refusal counts every one from the first.
+- **A block before the first missing call is judged in full:** a fault there, such as a missing
+  FILTER column or a record on chrX, is refused first, and the missing calls after it are never
+  counted.
+- **A pvar whose record count differs from its pgen's** is refused when that fileset has been
+  read, before the missing calls are, since the counts would describe the wrong records.
+
+So an input whose first block has a missing call, as the shipped gnomAD v3.1.2 pgens' do, is
+refused for its missing calls even though it has no FILTER column either.
 
 **Why.** `plink2 --r-unphased` computes each pair's r on the samples called at both variants
 (pairwise-complete): on 2.74 M EUR chr22 pairs of the gnomAD v3.1.2 VCF its float64 r equals
