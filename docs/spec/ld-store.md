@@ -799,8 +799,9 @@ an independent reference on the Test Panel. Each rule has a store that breaks it
 
 **On write and on demand** (ogld#4). `ogld.validate(location)` runs the rules on a store on disk
 or over HTTP and returns every rule's findings, an empty list for a rule the store passes.
-`StoreWriter.finish` runs them on the store it wrote, judged with the provenance it was given as
-JSON will hold it, and writes that provenance only when all 18 pass. Otherwise it raises
+`StoreWriter.finish` runs them on the store it wrote, on the threads the builder gives it, judged
+with the provenance it was given as JSON will hold it, and writes that provenance only when all 18
+pass. Otherwise it raises
 `ValidationFailed`, naming each failing rule and where, and the store keeps no provenance, so a
 reader refuses it (§13) rather than read it as a short one.
 
@@ -811,12 +812,24 @@ metadata declares is a finding that it cannot be read. Neither passes the rule, 
 the other rules. So one fault can fail several rules; the breakers' tests assert only that each
 fails its own.
 
-**How the rules read.** Each rule is one pass, reading through Zarr directly. A chromosome's
-positions and `indptr` arrays are read whole, as a reader keeps them (§10). Near Band codes and
-Proxy Index entries are read in blocks of rows holding at most 8,388,608 elements of each array,
-and the variant columns 1,048,576 rows at a time, so no rule loads a whole Near Band or Proxy
-Index. A chunk that will not decode, such as a corrupt zstd frame, is a "cannot be read" finding
-of each rule that reads it.
+**How the rules read.** The rules read through Zarr directly. A chromosome's positions and
+`indptr` arrays are read whole, as a reader keeps them (§10). Near Band codes and Proxy Index
+entries are read in blocks of rows holding at most 8,388,608 codes and 1,048,576 entries, and the
+variant columns 1,048,576 rows at a time, so no rule loads a whole Near Band or Proxy Index. An
+entry holds an eighth as many as a code because the rules work on each entry through about 100
+bytes of arrays, and on each code through about 6: a block's working arrays stay near 150 MiB
+however dense the index is.
+
+The seven rules that read codes and entries one by one, `near.codes` and the six `index.*` rules,
+share one pass over each chromosome: each block is read once and handed to all seven, so each code
+and entry of a store that passes is decoded once per validation. A caller may give the pass t
+threads (`ogld validate --threads t`, or `StoreWriter.finish(provenance, threads=t)`); t blocks are
+then read and checked at once, and no more are held. When an `indptr` cannot delimit the rows,
+`near.codes` or `index.codes` reads its `r` array in windows of its own instead.
+
+A chunk that will not decode, such as a corrupt zstd frame, is a "cannot be read" finding of each
+rule that reads it. An `indptr` that ends past its array is a "cannot be checked" finding of each
+rule that reads by it.
 
 - `provenance.complete` checks every key §7 names: those of `ogld.format.REQUIRED_KEYS` and the
   keys inside them, `variant_filters`, `variants_dropped`, `pc_file`, the PC Check's settings and
@@ -831,8 +844,12 @@ of each rule that reads it.
   way only, or with two codes, and the finding names it. Two different sets of entries give equal
   sums by chance about once in 1.8×10¹⁹; the sums take 16 bytes per row.
 - `index.near` compares each block's entries in a pair's earlier row with that Near Band row at
-  the far code floor, both ways, and reads the band's code for every entry in a pair's later row
-  within `near_bp`. That such a later-row entry exists at all is `index.symmetric`'s finding.
+  the far code floor, both ways. Each entry in a pair's later row within `near_bp` must carry the
+  band's code: it adds a 64-bit hash of (earlier row, later row, code) to one sum kept for the
+  pair's earlier row, and each band pair from that row at the floor adds its hash to the other.
+  Only the entries naming a row whose two sums differ are read again, each against the band's
+  code for its pair, so a store that passes reads its band once. That such a later-row entry
+  exists at all is `index.symmetric`'s finding.
 
 ## 13. Compatibility
 

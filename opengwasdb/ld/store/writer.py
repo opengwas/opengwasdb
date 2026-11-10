@@ -188,13 +188,14 @@ class StoreWriter:
         _check_entries(chrom, (start, stop), partner, codes)
         return start
 
-    def finish(self, provenance: Provenance) -> Provenance:
+    def finish(self, provenance: Provenance, *, threads: int = 1) -> Provenance:
         """Validate the store and write its provenance; return it as written (spec §7, §12).
 
         Refuses, naming the chromosome, a store whose Near Band or Proxy Index is incomplete,
         and a provenance that disagrees with what was written. Then it runs every rule of
-        spec §12 and raises `ValidationFailed` if any fails, before the provenance is
-        written: a reader refuses a store without one, so a broken store is never read.
+        spec §12, reading and checking `threads` blocks at once, and raises `ValidationFailed`
+        if any fails, before the provenance is written: a reader refuses a store without one,
+        so a broken store is never read.
         """
         chromosomes = set(self._ranges)
         for what, done in (("Near Band", self._near_done), ("Proxy Index", self._index_done)):
@@ -203,7 +204,7 @@ class StoreWriter:
                 raise ValueError(f"the {what} of chromosome {missing} was not written")
         self._check_provenance(provenance)
         recorded = _as_json(provenance)
-        findings = validate_group(self._root, recorded)
+        findings = validate_group(self._root, recorded, threads=threads)
         if any(findings.values()):
             raise ValidationFailed(findings)
         self._root.attrs.update({"ld_store": recorded})

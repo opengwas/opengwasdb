@@ -20,7 +20,8 @@ from ogld.build import BuildInputs, build
 from ogld.format import InputError, Refusal
 from ogld.identity import IdentityError
 from ogld.query import open as open_store
-from ogld.store import Finding, validate
+from ogld.store import Finding
+from ogld.store.validation import validate_at
 
 
 def _optional_float(text: str) -> float | None:
@@ -55,8 +56,10 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--mac-min", type=int, default=unset)
     b.add_argument("--info-min", type=_optional_float, default=unset, help="a number, or none")
     b.add_argument("--threads", type=int, default=unset)
-    for name, text in (("validate", "run every validation rule"), ("info", "print the provenance")):
-        commands.add_parser(name, help=text).add_argument("location")
+    v = commands.add_parser("validate", help="run every validation rule")
+    v.add_argument("location")
+    v.add_argument("--threads", type=int, default=1, help="blocks read and checked at once")
+    commands.add_parser("info", help="print the provenance").add_argument("location")
     return parser
 
 
@@ -91,7 +94,7 @@ def report(findings: dict[str, list[Finding]]) -> int:
 
 
 def _validate(args: argparse.Namespace) -> int:
-    return report(validate(args.location))
+    return report(validate_at(args.location, threads=args.threads))
 
 
 def _info(args: argparse.Namespace) -> int:
