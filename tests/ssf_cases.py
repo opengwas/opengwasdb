@@ -289,6 +289,12 @@ def _cases() -> list[Case]:
     cases.append(_case("crlf", crlf, _plain))
     cases.append(_case("crlf gzipped", crlf, _plain, gzipped=True))
     cases.append(_case("crlf unterminated", crlf.rstrip("\r\n"), _plain))
+    tail = ["chromosome", "base_pair_location", "effect_allele", "effect_allele_frequency",
+            "beta", "standard_error", "other_allele"]
+    tail_rows = [[c, str(100 * i), "G", "NAN" if i % 3 == 0 else "0.2", "0.1", "0.05", "A"]
+                 for i, c in enumerate(["1", "2", "X"] * 6, start=1)]
+    cases.append(_case("crlf with other_allele last", text(tail, tail_rows, newline="\r\n"),
+                       lambda r: r.refused is None and r.associations == len(tail_rows)))
     cases.append(_case(
         "stray carriage return",
         text(MAIN, [row(pos="100"), row(pos="200", rsid="rs\r1"), row(pos="300")]), _plain))
@@ -380,6 +386,21 @@ def decided(rows: int = 6_000) -> bytes:
             pick.choice(["1", "2", "chr7", "X", "23"]), str(1_000 + 29 * i), effect, other, af,
             beta, se, repr(pick.random() ** 2), "", "", odds, lower, upper, hm])
     return text(header, out).encode()
+
+
+#: Every status a declared score takes, in cells the columns decide.
+SCORES = ["0", "0.6", "1", "", "NA", "#NA", "None", ".", "NaN", "nan", "inf", "-inf", "-0.1",
+          "1.01", " 0.5", "1e-3", "-1e-400", "2"]
+#: Cells the columns cannot read as `float()` does, or read as text: the block
+#: they are in is left to the rows.
+MALFORMED_SCORES = ["bogus", " ", "NA ", "1_0", "0x1", "#na"]
+
+
+def scored(scores: list[str], *, newline: str = "\n") -> str:
+    """A file declaring a score column, `info`, with one row per cell of ``scores``."""
+    rows = [[*row(pos=str(100 + 10 * i), beta=str(0.1 + i / 100)), score]
+            for i, score in enumerate(scores)]
+    return text([*MAIN, "info"], rows, newline=newline)
 
 
 CASES: list[Case] = _cases()

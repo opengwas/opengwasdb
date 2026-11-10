@@ -47,6 +47,10 @@ ROW_BATCH = 250_000
 #: `stats.parse_af`'s set, which a test holds this to.
 MISSING_STATISTICS = ("", ".", "NA", "NaN", "None", "nan")
 
+#: The cells a declared imputation score reads as missing:
+#: `interface.parse_imputation_score`'s set, which a test holds this to.
+MISSING_SCORES = ("", ".", "NA", "#NA", "NaN", "nan", "None")
+
 #: How pandas reads a block: every line one row, every field as written.
 PANDAS = {
     "sep": "\t",
@@ -75,11 +79,6 @@ class Format(Protocol):
     @property
     def label(self) -> str:
         """How the engine names a source in the log."""
-        ...
-
-    @property
-    def crlf(self) -> bool:
-        """Whether a line ending in CR LF is read as plain text, as `csv` reads it."""
         ...
 
     def block_bytes(self) -> int:
@@ -201,23 +200,31 @@ def association_batches(
     path: object,
     tally: StreamTally,
     scale: StoredEffectScale,
-    start: Callable[[bytes], tuple[Format, list[str] | None, str | None]],
+    start: Callable[[list[str] | str], tuple[Format, str | None]],
+    *,
+    crlf: bool = False,
 ) -> Iterator[AssociationBatch]:
     """A source's associations, a block of whole lines at a time (`Source`).
 
-    ``start`` reads the header line to the source's `Format` and either
-    ``(names, None)``, where the source can be read as columns, or
-    ``(None, reason)``, where the per-row reader must read it throughout.
+    ``crlf`` says whether a line ending in CR LF is plain text, as `csv` reads
+    it, for the header and every block alike; a carriage return that ends no
+    line never is. ``start`` is given the header's names, or why they cannot be
+    read as `csv` reads them, and returns the source's `Format` and, where the
+    source can be read as columns, ``None``, or else why the per-row reader must
+    read it throughout.
     """
     header = fh.readline()
-    fmt, names, reason = start(header)
+    names = header_names(header, crlf=crlf)
+    fmt, reason = start(names)
     if not header:
         return
-    source = Source(path, fh, tally, scale, fmt)
-    if reason is not None:
-        yield from source.per_row(header, None, 0, reason)
+    source = Source(path, fh, tally, scale, fmt, crlf=crlf)
+    if isinstance(names, str):
+        reason = names
+    if reason is not None or isinstance(names, str):
+        yield from source.per_row(header, None, 0, reason or "")
     else:
-        yield from source.blocks(names or [], len(header))
+        yield from source.blocks(names, len(header))
     source.summarise()
 
 
@@ -238,6 +245,7 @@ class Source:
     tally: StreamTally
     scale: StoredEffectScale
     fmt: Format
+    crlf: bool = False
     warned: bool = False
     #: Blocks parsed as columns, and blocks read row by row: one pandas
     #: refused, the block that sent the rest of the source row by row, and
@@ -284,7 +292,7 @@ class Source:
             data = carry + block
             cut = data.rfind(b"\n") + 1
             lines, carry = data[:cut], data[cut:]
-            special = first_special(lines, crlf=self.fmt.crlf)
+            special = first_special(lines, crlf=self.crlf)
             if special is not None:
                 at, what = special
                 self.per_row_blocks += 1
@@ -292,7 +300,7 @@ class Source:
                 return
             yield from self.fmt.block_batches(self._lf(lines), offset, self)
             offset += cut
-        special = first_special(carry, crlf=self.fmt.crlf)
+        special = first_special(carry, crlf=self.crlf)
         if special is not None:
             at, what = special
             self.per_row_blocks += 1
@@ -303,7 +311,7 @@ class Source:
     def _lf(self, lines: bytes) -> bytes:
         """``lines`` with each CR LF read as the line feed it ends in, where the
         format reads one so."""
-        return lines.replace(b"\r\n", b"\n") if self.fmt.crlf else lines
+        return lines.replace(b"\r\n", b"\n") if self.crlf else lines
 
 
 def block_batches(
@@ -522,6 +530,9 @@ class Columns:
     se: np.ndarray
     eaf: np.ndarray
     kept: np.ndarray
+    #: A declared imputation score and its status per row; undeclared by default.
+    imputation_score: np.ndarray | None = None
+    imputation_status: np.ndarray | None = None
 
     def place(self, rows: Iterable[tuple[int, ReaderAssociation | None]]) -> None:
         """Put each undecided row's association, where it has one, in its place."""
@@ -535,7 +546,16 @@ class Columns:
             self.ref[row], self.alt[row] = association.ref, association.alt
             self.z[row], self.se[row] = association.z, association.se
             self.eaf[row] = np.nan if association.eaf is None else association.eaf
+            self._place_score(row, association)
             self.kept[row] = True
+
+    def _place_score(self, row: int, association: ReaderAssociation) -> None:
+        """Put one undecided row's declared score, where the block declares one."""
+        if self.imputation_score is None or self.imputation_status is None:
+            return
+        score = association.imputation_score
+        self.imputation_score[row] = np.nan if score.value is None else score.value
+        self.imputation_status[row] = score.status
 
     def batch(self) -> AssociationBatch:
         kept = self.kept
@@ -548,7 +568,13 @@ class Columns:
             z=self.z[kept],
             se=self.se[kept],
             eaf=self.eaf[kept],
-            imputation_score=np.full(held, np.nan),
-            imputation_status=np.full(held, ImputationScoreStatus.UNDECLARED, dtype=object),
+            imputation_score=(
+                np.full(held, np.nan) if self.imputation_score is None
+                else self.imputation_score[kept]
+            ),
+            imputation_status=(
+                np.full(held, ImputationScoreStatus.UNDECLARED, dtype=object)
+                if self.imputation_status is None else self.imputation_status[kept]
+            ),
         )
 

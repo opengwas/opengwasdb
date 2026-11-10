@@ -310,13 +310,10 @@ class _Plan:
     reads: dict[str, int]
 
     @classmethod
-    def of(cls, header: bytes) -> _Plan | str:
-        """The plan, or why the columnar parse leaves the source to the per-row
-        reader: a header `csv` reads otherwise than by splitting at tabs, one
-        that is not UTF-8, or one naming no chromosome, position or allele."""
-        names = columnar.header_names(header)
-        if isinstance(names, str):
-            return names
+    def of(cls, names: list[str]) -> _Plan | str:
+        """The plan for a header whose names are ``names``, or why the columnar
+        parse leaves the source to the per-row reader: one naming no chromosome,
+        position or allele."""
         at = {name: index for index, name in enumerate(names)}
         chromosome = "#chrom" if "#chrom" in at else "chrom"
         reads = {name: at[name] for name in (chromosome, *_READ) if name in at}
@@ -343,11 +340,11 @@ def _association_batches(
 ) -> Iterator[AssociationBatch]:
     """A source's associations, a block of whole lines at a time."""
 
-    def start(header: bytes) -> tuple[columnar.Format, list[str] | None, str | None]:
-        found = _Plan.of(header)
-        if isinstance(found, str):
-            return _Format(None), None, found
-        return _Format(found), found.names, None
+    def start(names: list[str] | str) -> tuple[columnar.Format, str | None]:
+        found = None if isinstance(names, str) else _Plan.of(names)
+        if found is None or isinstance(found, str):
+            return _Format(None), found
+        return _Format(found), None
 
     with _opener(path)(path, "rb") as fh:
         yield from columnar.association_batches(fh, path, tally, scale, start)
@@ -361,8 +358,6 @@ class _Format:
     plan: _Plan | None
     log: logging.Logger = log
     label: str = "FinnGen source"
-
-    crlf = False
 
     def block_bytes(self) -> int:
         return _BLOCK_BYTES

@@ -61,15 +61,24 @@ class Built:
     record: Path
 
 
-def build(directory: Path, capability: str, source: Path, assembly: str, chain: Path) -> Built:
+def build(
+    directory: Path, capability: str, source: Path, assembly: str, chain: Path,
+    score: str | None = None,
+) -> Built:
     directory.mkdir()
     manifest = directory / "manifest.tsv"
-    manifest.write_text(
+    header = (
         "trait_id\ttrait_name\tfile_path\tn\tstored_effect_scale\toriginal_sd_method"
-        "\toriginal_sd\tsource_reader_capability\tsource_assembly\n"
-        f"trait\tTrait\t{source}\t1000\tlog_or\tbinary_trait\t\t{capability}\t{assembly}\n",
-        encoding="utf-8",
+        "\toriginal_sd\tsource_reader_capability\tsource_assembly"
     )
+    cells = f"trait\tTrait\t{source}\t1000\tlog_or\tbinary_trait\t\t{capability}\t{assembly}"
+    if score is not None:
+        header += (
+            "\tinfo_score_threshold\timputation_score_column\timputation_score_kind"
+            "\timputation_score_provenance"
+        )
+        cells += f"\t0.5\t{score}\timputation_info\tProvider Table 2 INFO"
+    manifest.write_text(header + "\n" + cells + "\n", encoding="utf-8")
     store = directory / "store.opengwasdb"
     lift = {"chain_file": chain, "liftover_failure_threshold": 0.0} if assembly == "hg19" else {}
     # Each build's own context: a capture left in place would chain onto the
@@ -85,7 +94,7 @@ def _refuse_rows(self: object, tally: object = None) -> None:
 
 def paired_builds(
     root: Path,
-    sources: dict[str, tuple[Callable[[Path], Path], str]],
+    sources: dict[str, tuple[Any, ...]],
     *,
     reader: type,
     module: ModuleType,
@@ -95,20 +104,24 @@ def paired_builds(
     reader that refuses to be read row by row. ``sources`` give each source's
     writer and the assembly its manifest declares."""
     chain = write_alt_target_chain(root / "alt-target.chain")
-    rows_only = "opengwasdb.test-rows-only"
     built: dict[str, tuple[Built, Built]] = {}
     with pytest.MonkeyPatch.context() as patch:
-        patch.setitem(
-            registry._READERS, rows_only, lambda path, scale: RowsOnly(reader(path, scale))
-        )
         patch.setattr(module, "_BLOCK_BYTES", 1 << 12)
-        for name, (write, assembly) in sources.items():
+        for name, (write, assembly, *score) in sources.items():
             (root / name).mkdir()
             source = write(root / name)
-            by_rows = build(root / name / "rows", rows_only, source, assembly, chain)
+            with pytest.MonkeyPatch.context() as hidden:
+                # The capability's own name, so its manifest rules still apply.
+                hidden.setitem(
+                    registry._READERS, capability,
+                    lambda path, scale: RowsOnly(reader(path, scale)),
+                )
+                by_rows = build(root / name / "rows", capability, source, assembly, chain, *score)
             with pytest.MonkeyPatch.context() as refuse:
                 refuse.setattr(reader, "stream_associations", _refuse_rows)
-                by_batches = build(root / name / "batches", capability, source, assembly, chain)
+                by_batches = build(
+                    root / name / "batches", capability, source, assembly, chain, *score
+                )
             built[name] = (by_rows, by_batches)
     return built
 

@@ -38,8 +38,6 @@ from opengwasdb.readers.column_map_reader import ColumnMapReader
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
 from opengwasdb.readers.interface import (
     AssociationBatch,
-    ImputationScoreDeclaration,
-    ImputationScoreKind,
     StreamTally,
     association_batches,
 )
@@ -200,34 +198,6 @@ def test_a_signed_z_is_refused_on_a_case_control_scale_by_both_paths(
     assert _batched(make, path, StoredEffectScale.LOG_OR) == per_row
 
 
-def _declared_scores(directory: Path) -> Path:
-    header = [*MAIN, "info"]
-    scores = ["0", "0.6", "1", "", "NA", "#NA", "bogus", "inf", "-0.1", "1.01"]
-    rows = [[*row(pos=str(100 + i)), score] for i, score in enumerate(scores)]
-    path = directory / "scored.tsv"
-    path.write_text(text(header, rows), encoding="utf-8")
-    return path
-
-
-@pytest.mark.parametrize("make", [_ssf, _mapped], ids=["reader", "column-map"])
-def test_a_declared_imputation_score_is_read_as_it_is_per_row(tmp_path: Path, make: Make) -> None:
-    path = _declared_scores(tmp_path)
-    declaration = ImputationScoreDeclaration(
-        "info", ImputationScoreKind.IMPUTATION_INFO, "provider documentation: INFO"
-    )
-
-    def declared(path: Path, scale: StoredEffectScale) -> Any:
-        reader = make(path, scale)
-        return type(reader)(
-            **{**reader.__dict__, "imputation_score_declaration": declaration}
-        )
-
-    per_row = _per_row(declared, path, StoredEffectScale.SD)
-    assert per_row.columns is not None
-    assert len(set(per_row.columns["imputation_status"])) >= 5
-    assert _batched(declared, path, StoredEffectScale.SD) == per_row
-
-
 # ── the block bound, and what the columns decide ─────────────────────────────
 
 _BLOCKED = [
@@ -354,6 +324,29 @@ def test_rows_the_columns_leave_to_the_per_row_rules_are_counted(
     assert _fallbacks(caplog) == [_extent(path, 0, 1, 2)]
 
 
+@pytest.mark.parametrize(
+    "name", ["crlf", "crlf gzipped", "crlf unterminated", "crlf with other_allele last"]
+)
+@pytest.mark.parametrize("block", [None, 64])
+def test_a_crlf_source_is_read_as_columns_not_row_by_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    name: str, block: int | None,
+) -> None:
+    """GWAS Catalog files end every line in CR LF, which `csv` reads as plain.
+    The first rebuild of OGS-00004 read all nine of its sources row by row, since
+    the header's carriage return sent them there; identity cannot see that."""
+    if block is not None:
+        monkeypatch.setattr(gwas_ssf, "_BLOCK_BYTES", block)
+    (case,) = (c for c in CASES if c.name == name)
+    path = case.write(tmp_path)
+    with caplog.at_level("WARNING", logger=gwas_ssf.__name__):
+        batches = list(_ssf(path).stream_association_batches(StreamTally()))
+    assert batches
+    messages = _fallbacks(caplog)
+    assert not [m for m in messages if "read row by row from byte" in m], messages
+    assert all(f"{path}: 0 of " in m for m in messages), messages
+
+
 def test_a_plain_source_is_read_without_a_fallback(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -361,21 +354,6 @@ def test_a_plain_source_is_read_without_a_fallback(
     with caplog.at_level("WARNING", logger=gwas_ssf.__name__):
         list(_ssf(case.write(tmp_path)).stream_association_batches(StreamTally()))
     assert _fallbacks(caplog) == []
-
-
-def test_a_declared_imputation_score_is_read_row_by_row_and_says_so(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    path = _declared_scores(tmp_path)
-    declaration = ImputationScoreDeclaration(
-        "info", ImputationScoreKind.IMPUTATION_INFO, "provider documentation: INFO"
-    )
-    with caplog.at_level("WARNING", logger=gwas_ssf.__name__):
-        list(
-            GwasSsfReader(path, imputation_score_declaration=declaration)
-            .stream_association_batches(StreamTally())
-        )
-    assert "since an imputation score is declared" in _fallbacks(caplog)[0]
 
 
 def test_both_readers_offer_their_associations_as_batches(tmp_path: Path) -> None:
@@ -390,6 +368,15 @@ def test_both_readers_offer_their_associations_as_batches(tmp_path: Path) -> Non
 def _written(name: str) -> Callable[[Path], Path]:
     (case,) = (c for c in CASES if c.name == name)
     return case.write
+
+
+def _scored(directory: Path) -> Path:
+    """A source declaring a score in `info`, in every status the columns decide,
+    with the duplicates and the unusable SE the other builds meet."""
+    cells = [*ssf_cases.SCORES * 4]
+    path = directory / "scored.tsv"
+    path.write_text(ssf_cases.scored(cells), encoding="utf-8")
+    return path
 
 
 def _off_primary(directory: Path) -> Path:
@@ -408,9 +395,8 @@ def _off_primary(directory: Path) -> Path:
 #: the primary assembly.
 _BUILDS: dict[str, tuple[Callable[[Path], Path], str]] = {
     "generated": (_written("generated"), "hg38"),
-    "decided": (_written("decided"), "hg38"),
     "beta": (_written("beta"), "hg38"),
-    "SE recovered": (_written("SE recovered from the row"), "hg38"),
+    "declared score": (_scored, "hg38", "info"),
     "layout hm_": (_written("hm_ allele columns"), "hg38"),
     "unharmonised": (_written("no harmoniser column"), "hg38"),
     "off-primary": (_off_primary, "hg19"),
