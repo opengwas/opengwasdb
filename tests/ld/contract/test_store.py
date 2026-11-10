@@ -65,7 +65,6 @@ def with_provenance(tmp_path: Path, edit: Callable[[dict[str, Any]], None]) -> P
 # ------------------------------------------------------------------ opening
 
 
-@OGLD_4
 def test_the_test_store_records_its_panel_and_its_distances() -> None:
     p = opened().provenance
     assert p["format_version"] == "0.1.0"
@@ -79,7 +78,6 @@ def test_the_test_store_records_its_panel_and_its_distances() -> None:
     assert p["n_variants"] == len(passing_rows())
 
 
-@OGLD_4
 def test_a_reader_refuses_a_format_version_it_does_not_implement(tmp_path: Path) -> None:
     opened()
 

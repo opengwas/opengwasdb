@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 
+from ogld.format import NEAR_BP, dequantise, quantise
 from test_panel.answers import Answers
 from test_panel.assemble import Panel
 from test_panel.params import Params
-
-SCALE = 32767
 
 
 def edge_cases(params: Params, panel: Panel, a: Answers, n: int) -> dict[str, object]:
@@ -90,9 +89,9 @@ def _exact(panel: Panel, a: Answers, d: np.ndarray) -> dict[str, object]:
 
 def _far(params: Params, panel: Panel, a: Answers, d: np.ndarray, n: int) -> dict[str, object]:
     t_far = params.t_far(n, 10)
-    code = np.rint(a.r[10] * SCALE)
-    band = (d > 3_000_000) & (d <= params.far_bp)
-    far = band & ((code / SCALE) ** 2 >= t_far)
+    stored = dequantise(quantise(a.r[10]))
+    band = (d > NEAR_BP) & (d <= params.far_bp)
+    far = band & (stored**2 >= t_far)
     named = [
         (int(x), int(y))
         for x, y in zip(a.i[far], a.j[far], strict=True)

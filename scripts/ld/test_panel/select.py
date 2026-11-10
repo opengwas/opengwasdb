@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ogld.format import NEAR_BP, dequantise, quantise
 from test_panel import pcs as pc_file
 from test_panel import reference
 from test_panel.params import Params
@@ -103,9 +104,9 @@ def _strong_far(
     """(-Stored r^2, a, b) for every 3 Mb < d <= far_bp pair reaching t_far, strongest first."""
     hits: list[tuple[float, int, int]] = []
     for a in range(len(pos)):
-        lo = int(np.searchsorted(pos, pos[a] + 3_000_001))
+        lo = int(np.searchsorted(pos, pos[a] + NEAR_BP + 1))
         hi = int(np.searchsorted(pos, pos[a] + far_bp, side="right"))
-        q2 = (np.rint((z[lo:hi] @ z[a]) * 32767) / 32767) ** 2
+        q2 = dequantise(quantise(z[lo:hi] @ z[a])) ** 2
         hits += [(-float(q2[b]), a, lo + int(b)) for b in np.flatnonzero(q2 >= t_far)]
     return sorted(hits)
 

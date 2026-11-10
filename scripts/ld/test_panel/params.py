@@ -12,6 +12,8 @@ import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ogld.format import FAR_BP, T_FAR_Q
+from ogld.format import t_far as format_t_far
 from test_panel.roots import root, tool
 
 V2_NAME = "hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf"
@@ -38,8 +40,9 @@ class Params:
     require_pass: bool = True
     mac_min: int = 20
     ks: tuple[int, ...] = (0, 10)
-    far_bp: int = 10_000_000
-    t_far_q: float = 20.84
+    far_bp: int = FAR_BP
+    # Recorded in the manifest; t_far itself is ogld.format's.
+    t_far_q: float = T_FAR_Q
     # Selection. Each window was picked on the converted chromosomes (README, "Selection").
     q_arm_start: dict[str, int] = field(
         default_factory=lambda: {"21": 14_000_000, "22": 16_000_000}
@@ -79,8 +82,8 @@ class Params:
     memory_mb: int = 32000
 
     def t_far(self, n: int, k: int) -> float:
-        """t_far = max(0.001, q / (n - k - 1)) (ADR 0001)."""
-        return max(0.001, self.t_far_q / (n - k - 1))
+        """t_far = max(0.001, q / (n - k - 1)) (ADR 0001), as ogld.format has it."""
+        return format_t_far(n, k)
 
 
 def parse(argv: list[str] | None = None) -> Params:
