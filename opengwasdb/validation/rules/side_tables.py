@@ -239,7 +239,9 @@ def _left_behind(target: Target, total: Reconciled) -> tuple[int, int | None]:
     A table that describes a cell past the last one the scan read leaves them
     here: the scan never reaches them, and the rule is that no entry is stray.
     """
-    left = total.total - total.returned
+    # The table's own length, not the scan's count of it: a component with no cell
+    # to read takes nothing, and every entry it holds is then past the last span.
+    left = array_length(target.group[EafExceptionTable.index_name]) - total.returned
     if left <= 0:
         return 0, None
     first = np.asarray(
