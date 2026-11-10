@@ -2219,7 +2219,6 @@ def _write_dense_component_bands(
         prepared.partition.n_panel,
         prepared.n_analyses,
         plan.effective_chunks,
-        options.dtype,
         pass2_start,
         plan.encoding,
         options.n_workers,

@@ -59,7 +59,6 @@ from opengwasdb.encoding.codec import (
     EafExceptionTable,
     eaf_exception_table,
     require_parallel,
-    se_float16,
 )
 from opengwasdb.encoding.memory import (
     MEMINFO,
@@ -725,7 +724,6 @@ def _write_encoded_bands(
         n_variants,
         n_analyses,
         effective_chunks,
-        dtype,
         pass2_start,
         encoding,
         n_workers,
@@ -1544,9 +1542,11 @@ def _load_z_column(
         if np.any(hit):
             hit_rows = rows[hit]
             hit_z = zc[hit]
-            # As the band pass holds it (`_load_se_column`); a residual plan's
-            # index re-reads its SE through the plane once the plan exists.
-            hit_se = se_float16(data["se"][hit]).astype(np.float32)
+            # The value a `float16` se plane stores at this cell, which is what
+            # the index carries under that plan; the codec owns that rounding
+            # (issue #355). Under a residual plan
+            # `write_top_hit_indexes_for_store` re-reads the plane instead.
+            hit_se = codec.float16_se(data["se"][hit]).astype(np.float32)
         else:
             hit_rows = np.empty(0, dtype=np.int64)
             hit_z = np.empty(0, dtype=np.float32)
@@ -1580,15 +1580,17 @@ class _LoadedColumn:
 
 
 def _load_se_column(spill_dir: Path, n_variants: int, c: int) -> _LoadedColumn:
-    """One Analysis's SE column, rounded to `float16` before the float32 scratch holds it.
+    """One Analysis's SE column, at the `float32` the source reported it.
 
-    The rounding reaches every SE the plane keeps exactly, so a residual plan's
-    exception table holds `float16`-rounded values, not the source's (issue
-    #355, which fixes it; spec §6a promises the source's). It is kept here, in
-    the open, so the Stores this build writes stay byte-identical until then.
+    The column reaches the scratch plane unrounded because that plane is where
+    a residual plan's exact exception table comes from (`_encode_band`), and
+    spec §6a says such an exception is the source's own value. Narrowing an SE
+    is the codec's: `_narrow_dense_se_to_float16` when the measured plan turns
+    out to be `float16` (issue #355).
     """
-    column = _load_sparse_column(spill_dir, n_variants, "se", c)
-    return _LoadedColumn(col=c, column=se_float16(column))
+    return _LoadedColumn(
+        col=c, column=_load_sparse_column(spill_dir, n_variants, "se", c)
+    )
 
 
 def _load_eaf_column(spill_dir: Path, n_variants: int, c: int) -> _LoadedColumn:
@@ -1680,7 +1682,6 @@ def _write_dense_z_bands(
     n_analyses: int,
     band_cols: int,
     codec: StoreCodec,
-    dtype: str,
     pass2_start: float,
     n_workers: int,
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray], np.ndarray]:
@@ -1693,11 +1694,11 @@ def _write_dense_z_bands(
     serial path's. At ``n_workers <= 1`` ``ordered_map`` runs the same loader
     in this process, which is the serial path. The top-hit harvest thresholds
     on the **quantised/decoded stored** z -- what a query reads back -- not the
-    source z, and reads each hit's se straight from the spill rounded to the
-    stored dtype. The overflow table is part of the z plane, not an addendum:
-    it is written in the same pass that finished writing z. Returns the
-    per-column hit parts and the per-Analysis ``column_has_eaf`` survey for
-    the coordinator.
+    source z, and takes each hit's se through the codec, as a `float16` plane
+    stores it, because the plan is not decided yet (issue #355). The overflow
+    table is part of the z plane, not an addendum: it is written in the same
+    pass that finished writing z. Returns the per-column hit parts and the
+    per-Analysis ``column_has_eaf`` survey for the coordinator.
     """
     z_arr = root["z"]
     overflow = ZOverflowBuilder()
@@ -1738,22 +1739,26 @@ def _write_dense_se_bands(
     n_variants: int,
     n_analyses: int,
     band_cols: int,
-    dtype: str,
     pass2_start: float,
     n_workers: int,
 ) -> None:
-    """se pass: the independent float-scratch write over one band at a time.
+    """se pass: the independent scratch write over one band at a time.
 
     ``z`` and ``se`` no longer share a dtype (ADR 0037), so this pass owns a
     fresh buffer of its own rather than reusing the z pass's. Its columns are
     loaded in parallel exactly as the z pass's are, and ``ordered_map`` keeps
     them in Analysis order so the written band is the serial one.
+
+    The buffer takes the dtype of the plane ``create_dense_zarr`` created -- the
+    `float32` scratch -- and not the build's ``dtype``: a `float16` band would
+    round every SE before the codec decided the plan, and a residual plan's
+    exact exception is read back out of this plane (issue #355, spec §6a).
     """
     se_arr = root["se"]
     loader = partial(_load_se_column, spill_dir, n_variants)
     with log_phase(log, "Band-write se"):
         for _c, _loaded, flush in _ordered_bands(
-            loader, n_analyses, n_workers, n_variants, band_cols, dtype, "se"
+            loader, n_analyses, n_workers, n_variants, band_cols, str(se_arr.dtype), "se"
         ):
             if flush is not None:
                 _flush_band(se_arr, flush, "Band-write se", n_analyses, pass2_start, band_cols)
@@ -1788,7 +1793,6 @@ def write_dense_bands(
     n_variants: int,
     n_analyses: int,
     effective_chunks: tuple[int, int],
-    dtype: str,
     pass2_start: float,
     encoding: StoreEncoding,
     n_workers: int,
@@ -1798,20 +1802,22 @@ def write_dense_bands(
     ``z`` and ``se`` are written in two separate passes so only one band is
     ever resident, and the top-hit harvest runs in the z-pass on the stored z.
     Each pass loads the band's columns across ``n_workers`` forked workers
-    (issue #220); ``n_workers <= 1`` runs the loaders serially in-process.
-    Spills are retained through the se pass and the EAF write, and are only
-    unlinked once both consumed them. Returns the concatenated top-hit
-    candidate arrays ``(rows, cols, z, se)`` plus the per-Analysis
-    ``column_has_eaf`` survey for the index build and EAF decision.
+    (issue #220); ``n_workers <= 1`` runs the loaders serially in-process. Each
+    band takes the dtype of the plane it is written into, so neither pass can
+    round a value its plane holds wider (issue #355). Spills are retained
+    through the se pass and the EAF write, and are only unlinked once both
+    consumed them. Returns the concatenated top-hit candidate arrays ``(rows,
+    cols, z, se)`` plus the per-Analysis ``column_has_eaf`` survey for the index
+    build and EAF decision.
     """
     root = staged.arrays(mode="a")
     band_cols = _shard_columns(root["z"], effective_chunks)
     codec = StoreCodec(encoding)
     rows_parts, cols_parts, z_parts, se_parts, column_has_eaf = _write_dense_z_bands(
-        root, spill_dir, n_variants, n_analyses, band_cols, codec, dtype, pass2_start, n_workers
+        root, spill_dir, n_variants, n_analyses, band_cols, codec, pass2_start, n_workers
     )
     _write_dense_se_bands(
-        root, spill_dir, n_variants, n_analyses, band_cols, dtype, pass2_start, n_workers
+        root, spill_dir, n_variants, n_analyses, band_cols, pass2_start, n_workers
     )
     _write_dense_eaf(
         staged,
