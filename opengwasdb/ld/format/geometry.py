@@ -14,8 +14,7 @@ variant at the same position, and a variant exactly `distance` bp away is inside
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
-from typing import Any
+from collections.abc import Iterator
 
 import numpy as np
 import numpy.typing as npt
@@ -41,67 +40,62 @@ def chromosome_ranges(chrom: npt.ArrayLike) -> dict[str, tuple[int, int]]:
     return ranges
 
 
-def listed_ranges(ranges: dict[str, tuple[int, int]]) -> list[dict[str, Any]]:
-    """The ranges as `variants.attrs["chromosomes"]` records them (spec §2)."""
-    return [
-        {"name": name, "row_start": start, "row_stop": stop}
-        for name, (start, stop) in ranges.items()
-    ]
-
-
-def ranges_listed(listed: Sequence[dict[str, Any]]) -> dict[str, tuple[int, int]]:
-    """The ranges a `chromosomes` attribute records, in its order; `listed_ranges` inverted."""
-    return {str(c["name"]): (int(c["row_start"]), int(c["row_stop"])) for c in listed}
-
-
-def chromosome_of(ranges: dict[str, tuple[int, int]], row: int) -> str:
-    """The chromosome holding global `row`; a row of no chromosome raises."""
-    for name, (start, stop) in ranges.items():
-        if start <= row < stop:
-            return name
-    raise ValueError(f"row {row} is in no chromosome's range")
-
-
 def chromosome_index(stops: npt.ArrayLike, rows: npt.ArrayLike) -> npt.NDArray[np.int64]:
     """For each global row, the index of its chromosome among those whose row_stop are
-    `stops` (ascending). A row at or past the last stop gets an index one past the end."""
-    return np.searchsorted(np.asarray(stops), np.asarray(rows), side="right").astype(np.int64)
+    `stops` (ascending). A row outside [0, V), V being the last stop, is no row of the
+    Variant Set and raises: −1 is what an Absent ALID reads as, never the first chromosome."""
+    edge = np.asarray(stops, dtype=np.int64)
+    at = np.asarray(rows, dtype=np.int64)
+    size = int(edge[-1]) if len(edge) else 0
+    bad = (at < 0) | (at >= size)
+    if bad.any():
+        raise ValueError(f"row {int(at[bad].ravel()[0])} is not in the Variant Set of {size} rows")
+    return np.searchsorted(edge, at, side="right").astype(np.int64)
+
+
+def local_rows(rows: npt.ArrayLike, start: int) -> npt.NDArray[np.int64]:
+    """Global rows as rows of the chromosome that starts at global row `start` (spec §2)."""
+    return np.asarray(rows, dtype=np.int64) - start
+
+
+def global_rows(local: npt.ArrayLike, start: int) -> npt.NDArray[np.int64]:
+    """Rows of the chromosome that starts at global row `start` as global rows (spec §2)."""
+    return np.asarray(local, dtype=np.int64) + start
 
 
 # ------------------------------------------------------------------ stops (spec §4, §5)
 
 
-def _stop(position: npt.ArrayLike, distance: int) -> npt.NDArray[np.int64]:
+def stop_within(position: npt.ArrayLike, distance: int) -> npt.NDArray[np.int64]:
+    """For each row, the index just past the last variant with p_m − p_l ≤ distance: pass
+    `near_bp` for the Near Band's stop (spec §4) and `far_bp` for the Proxy Index's (spec §5).
+    Exactly `distance` away is within; one more is not. It counts the row itself, and
+    any variant at the same position."""
     at = np.asarray(position, dtype=np.int64)
     return np.searchsorted(at, at + distance, side="right").astype(np.int64)
 
 
-def near_stop(position: npt.ArrayLike, near_bp: int) -> npt.NDArray[np.int64]:
-    """For each row, the index just past the last variant with p_m − p_l ≤ near_bp (spec §4).
-    Exactly near_bp away is within; one more is not."""
-    return _stop(position, near_bp)
-
-
-def far_stop(position: npt.ArrayLike, far_bp: int) -> npt.NDArray[np.int64]:
-    """For each row, the index just past the last variant with p_m − p_l ≤ far_bp (spec §5)."""
-    return _stop(position, far_bp)
-
-
-def near_start(
-    position: npt.ArrayLike, near_bp: int, rows: npt.ArrayLike | None = None
+def start_within(
+    position: npt.ArrayLike, distance: int, rows: npt.ArrayLike | None = None
 ) -> npt.NDArray[np.int64]:
     """For each of `rows` (all of them when None), the index of the first variant with
-    p_l − p_m ≤ near_bp: where the Near Band partners before it begin (spec §4). Exactly
-    near_bp away is within."""
+    p_l − p_m ≤ distance: where the partners before it begin (spec §4). Exactly `distance`
+    away is within."""
     at = np.asarray(position, dtype=np.int64)
     of = at if rows is None else at[np.asarray(rows, dtype=np.int64)]
-    return np.searchsorted(at, of - near_bp, side="left").astype(np.int64)
+    return np.searchsorted(at, of - distance, side="left").astype(np.int64)
+
+
+def within(gap: npt.ArrayLike, distance: int) -> npt.NDArray[np.bool_]:
+    """Whether positions `gap` bp apart, either way round, are within `distance`: the edge
+    the stops use, so exactly `distance` is within and one more is not."""
+    return np.asarray(np.abs(np.asarray(gap, dtype=np.int64)) <= distance)
 
 
 def near_row_lengths(position: npt.ArrayLike, near_bp: int) -> npt.NDArray[np.int64]:
     """The length of each Near Band row of one chromosome: len_l = |{m > l : p_m − p_l ≤ near_bp}|
     (spec §4). `position` is the chromosome's positions in row order, ascending."""
-    return (near_stop(position, near_bp) - np.arange(len(np.asarray(position))) - 1).astype(
+    return (stop_within(position, near_bp) - np.arange(len(np.asarray(position))) - 1).astype(
         np.int64
     )
 
@@ -141,6 +135,19 @@ def spans(first: npt.ArrayLike, length: npt.ArrayLike) -> npt.NDArray[np.int64]:
     return start + (np.arange(int(count.sum()), dtype=np.int64) - offset)
 
 
+def owners(length: npt.ArrayLike, labels: npt.ArrayLike | None = None) -> npt.NDArray[np.int64]:
+    """The owner of each element of the ragged ranges `length` describes, back to back: i
+    repeated length[i] times, or labels[i] when `labels` are given. The owners of `spans`."""
+    count = np.asarray(length, dtype=np.int64)
+    who = np.arange(len(count), dtype=np.int64) if labels is None else np.asarray(labels)
+    return np.repeat(who, count).astype(np.int64)
+
+
+def indptr_of(length: npt.ArrayLike) -> npt.NDArray[np.int64]:
+    """The CSR `indptr` of rows of `length` elements each: 0, then the running total."""
+    return np.concatenate([[0], np.cumsum(np.asarray(length, dtype=np.int64))]).astype(np.int64)
+
+
 def spans_at(
     first: npt.ArrayLike, length: npt.ArrayLike, at: npt.ArrayLike
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
@@ -153,6 +160,19 @@ def spans_at(
     span = np.searchsorted(ends, where, side="right")
     value = np.asarray(first, dtype=np.int64)[span] + (where - (ends[span] - count[span]))
     return span.astype(np.int64), value
+
+
+def near_pair_of(
+    indptr: npt.ArrayLike, at: npt.ArrayLike
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+    """The inverse of `near_address`: the pair (lo, hi) of rows, as indices into the rows
+    `indptr` delimits, stored at each address `at` of a Near Band's `r` (spec §4). `indptr`
+    may be a slice of rows, its first entry the address of its first row's first code."""
+    edges = np.asarray(indptr, dtype=np.int64)
+    lo, hi = spans_at(
+        np.arange(1, len(edges), dtype=np.int64), np.diff(edges), np.asarray(at) - edges[0]
+    )
+    return lo, hi
 
 
 # ------------------------------------------------------------------ bounded iteration

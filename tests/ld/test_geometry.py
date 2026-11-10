@@ -12,20 +12,22 @@ from ogld.format import FAR_BP, NEAR_BP
 from ogld.format.geometry import (
     blocks,
     chromosome_index,
-    chromosome_of,
     chromosome_ranges,
-    far_stop,
-    listed_ranges,
+    global_rows,
+    indptr_of,
+    local_rows,
     near_address,
+    near_pair_of,
     near_row_lengths,
-    near_start,
-    near_stop,
+    owners,
     position_rows,
-    ranges_listed,
     row_pairs,
     spans,
     spans_at,
+    start_within,
+    stop_within,
     windows,
+    within,
 )
 
 
@@ -54,8 +56,7 @@ def test_a_stop_counts_every_variant_within_the_distance(
     data: st.DataObject, distance: int
 ) -> None:
     position = data.draw(ascending(distance))
-    assert near_stop(position, distance).tolist() == brute_stop(position, distance)
-    assert far_stop(position, distance).tolist() == brute_stop(position, distance)
+    assert stop_within(position, distance).tolist() == brute_stop(position, distance)
 
 
 @given(data=st.data(), distance=distances)
@@ -81,43 +82,42 @@ def test_the_near_start_is_the_first_variant_within_near_bp_before(
         min(m for m in range(len(position)) if position[row] - position[m] <= distance)
         for row in range(len(position))
     ]
-    assert near_start(position, distance).tolist() == expected
+    assert start_within(position, distance).tolist() == expected
     some = [row for row in range(len(position)) if row % 2 == 0][::-1]
-    assert near_start(position, distance, some).tolist() == [expected[row] for row in some]
+    assert start_within(position, distance, some).tolist() == [expected[row] for row in some]
 
 
 @pytest.mark.parametrize(("distance", "name"), [(NEAR_BP, "near_bp"), (FAR_BP, "far_bp")])
 def test_exactly_the_distance_apart_is_within_and_one_more_is_not(distance: int, name: str) -> None:
     position = [100, 100 + distance, 100 + distance + 1]
     # Row 0 reaches the variant exactly `distance` away, not the one 1 bp farther.
-    assert near_stop(position, distance).tolist() == [2, 3, 3], name
-    assert far_stop(position, distance).tolist() == [2, 3, 3], name
+    assert stop_within(position, distance).tolist() == [2, 3, 3], name
     assert near_row_lengths(position, distance).tolist() == [1, 1, 0], name
-    assert near_start(position, distance).tolist() == [0, 0, 1], name
+    assert start_within(position, distance).tolist() == [0, 0, 1], name
 
 
 def test_two_variants_at_one_position_see_each_other() -> None:
     position = [5, 5, 5, 9]
-    assert near_stop(position, 3).tolist() == [3, 3, 3, 4]
+    assert stop_within(position, 3).tolist() == [3, 3, 3, 4]
     assert near_row_lengths(position, 3).tolist() == [2, 1, 0, 0]
-    assert near_start(position, 3).tolist() == [0, 0, 0, 3]
+    assert start_within(position, 3).tolist() == [0, 0, 0, 3]
 
 
 def test_a_one_variant_chromosome_has_one_empty_row() -> None:
-    assert near_stop([7], NEAR_BP).tolist() == [1]
+    assert stop_within([7], NEAR_BP).tolist() == [1]
     assert near_row_lengths([7], NEAR_BP).tolist() == [0]
-    assert near_start([7], NEAR_BP).tolist() == [0]
+    assert start_within([7], NEAR_BP).tolist() == [0]
 
 
 def test_the_last_row_is_empty_and_its_stop_is_the_end() -> None:
     position = [1, 2, 3, 100]
     assert near_row_lengths(position, 10).tolist() == [2, 1, 0, 0]
-    assert near_stop(position, 10).tolist()[-1] == len(position)
-    assert near_start(position, 10).tolist()[0] == 0
+    assert stop_within(position, 10).tolist()[-1] == len(position)
+    assert start_within(position, 10).tolist()[0] == 0
 
 
 def test_an_empty_chromosome_has_no_rows() -> None:
-    for got in (near_stop([], 5), far_stop([], 5), near_start([], 5), near_row_lengths([], 5)):
+    for got in (stop_within([], 5), start_within([], 5), near_row_lengths([], 5)):
         assert got.tolist() == []
         assert got.dtype == np.int64
     lo, hi = position_rows([], [1, 4], [9, 6])
@@ -151,11 +151,15 @@ def test_a_pair_is_stored_where_the_band_enumerates_it(data: st.DataObject, dist
         for m in range(row + 1, len(position))
         if position[m] - position[row] <= distance
     ]
-    indptr = np.concatenate([[0], np.cumsum(near_row_lengths(position, distance))])
-    assert len(band) == int(indptr[-1])
+    indptr = [0]  # each row's first address, counted off the enumerated band
+    for row in range(len(position)):
+        indptr.append(indptr[-1] + sum(1 for first, _ in band if first == row))
+    assert len(band) == indptr[-1]
     lo = np.array([row for row, _ in band], dtype=np.int64)
     hi = np.array([m for _, m in band], dtype=np.int64)
     assert near_address(indptr, lo, hi).tolist() == list(range(len(band)))
+    got_lo, got_hi = near_pair_of(indptr, np.arange(len(band)))
+    assert (got_lo.tolist(), got_hi.tolist()) == (lo.tolist(), hi.tolist())
 
 
 def test_the_address_of_a_pair_is_its_rows_start_plus_its_distance_in_rows() -> None:
@@ -176,18 +180,23 @@ def test_the_address_of_a_pair_is_its_rows_start_plus_its_distance_in_rows() -> 
 labels = st.sampled_from(["1", "2", "10", "X"])
 
 
-@given(st.lists(labels, max_size=12))
-def test_chromosome_ranges_are_the_runs_of_equal_labels(chrom: list[str]) -> None:
+def runs_of(chrom: list[str]) -> dict[str, tuple[int, int]] | None:
+    """Each label's [first row, last row + 1) by walking the rows; None when a label returns."""
     runs: dict[str, tuple[int, int]] = {}
-    contiguous = True
     for row, name in enumerate(chrom):
         if name not in runs:
             runs[name] = (row, row + 1)
         elif runs[name][1] == row:
             runs[name] = (runs[name][0], row + 1)
         else:
-            contiguous = False
-    if contiguous:
+            return None
+    return runs
+
+
+@given(st.lists(labels, max_size=12))
+def test_chromosome_ranges_are_the_runs_of_equal_labels(chrom: list[str]) -> None:
+    runs = runs_of(chrom)
+    if runs is not None:
         assert chromosome_ranges(np.array(chrom, dtype=np.str_)) == runs
     else:
         with pytest.raises(ValueError, match="not contiguous"):
@@ -197,36 +206,54 @@ def test_chromosome_ranges_are_the_runs_of_equal_labels(chrom: list[str]) -> Non
 def test_a_one_variant_chromosome_and_the_first_and_last_rows_are_ranges() -> None:
     ranges = chromosome_ranges(np.array(["1", "1", "2", "X"], dtype=np.str_))
     assert ranges == {"1": (0, 2), "2": (2, 3), "X": (3, 4)}
-    assert [chromosome_of(ranges, row) for row in range(4)] == ["1", "1", "2", "X"]
-    with pytest.raises(ValueError, match="no chromosome"):
-        chromosome_of(ranges, 4)
-    with pytest.raises(ValueError, match="no chromosome"):
-        chromosome_of(ranges, -1)
 
 
 def test_no_variants_have_no_chromosomes() -> None:
     assert chromosome_ranges(np.array([], dtype=np.str_)) == {}
 
 
-@given(st.lists(labels, min_size=1, max_size=12, unique=False))
-def test_the_chromosome_index_of_a_row_is_its_place_in_the_ranges(chrom: list[str]) -> None:
-    ordered = sorted(chrom, key=lambda name: ["1", "2", "10", "X"].index(name))
-    ranges = chromosome_ranges(np.array(ordered, dtype=np.str_))
-    names = list(ranges)
-    stops = [stop for _, stop in ranges.values()]
-    got = chromosome_index(stops, np.arange(len(ordered)))
-    assert [names[i] for i in got] == ordered
-    assert chromosome_index(stops, [len(ordered)]).tolist() == [len(names)]
+@given(st.lists(st.integers(1, 5), min_size=1, max_size=6))
+def test_the_chromosome_index_of_a_row_is_its_place_among_the_stops(sizes: list[int]) -> None:
+    stops = [sum(sizes[: i + 1]) for i in range(len(sizes))]
+    expected = [
+        i for i, size in enumerate(sizes) for _ in range(size)
+    ]  # the chromosome of each row
+    total = stops[-1]
+    assert chromosome_index(stops, np.arange(total)).tolist() == expected
+    assert chromosome_index(stops, [0, total - 1]).tolist() == [0, len(sizes) - 1]
 
 
-def test_ranges_survive_being_listed_and_read_back() -> None:
-    ranges = {"1": (0, 2), "22": (2, 9)}
-    listed = listed_ranges(ranges)
-    assert listed == [
-        {"name": "1", "row_start": 0, "row_stop": 2},
-        {"name": "22", "row_start": 2, "row_stop": 9},
+@pytest.mark.parametrize("row", [-1, 6, 7])
+def test_a_row_outside_the_variant_set_has_no_chromosome(row: int) -> None:
+    # −1 is what an Absent ALID reads as: it is not the first chromosome, nor the last row.
+    with pytest.raises(ValueError, match="not in the Variant Set of 6 rows"):
+        chromosome_index([2, 6], [0, row])
+    with pytest.raises(ValueError, match="of 0 rows"):
+        chromosome_index([], [0])
+
+
+def test_local_and_global_rows_convert_both_ways() -> None:
+    assert local_rows([10, 11, 14], 10).tolist() == [0, 1, 4]
+    assert global_rows([0, 1, 4], 10).tolist() == [10, 11, 14]
+    assert local_rows([], 3).tolist() == []
+
+
+@given(
+    gap=st.lists(st.integers(-30, 30), max_size=20),
+    distance=st.integers(0, 12),
+)
+def test_within_is_inclusive_either_way_round(gap: list[int], distance: int) -> None:
+    assert within(gap, distance).tolist() == [abs(g) <= distance for g in gap]
+
+
+def test_a_pair_exactly_at_the_distance_is_within_and_one_more_is_not() -> None:
+    assert within([NEAR_BP, NEAR_BP + 1, -NEAR_BP, -NEAR_BP - 1], NEAR_BP).tolist() == [
+        True,
+        False,
+        True,
+        False,
     ]
-    assert ranges_listed(listed) == ranges
+    assert within([FAR_BP, FAR_BP + 1], FAR_BP).tolist() == [True, False]
 
 
 # ------------------------------------------------------------------ ragged ranges
@@ -255,6 +282,20 @@ def test_spans_at_inverts_spans_element_by_element(seed: int) -> None:
     found_span, found_value = spans_at(first, length, at)
     np.testing.assert_array_equal(found_span, np.asarray(span)[at])
     np.testing.assert_array_equal(found_value, np.asarray(value)[at])
+
+
+@given(st.lists(st.integers(0, 5), max_size=12))
+def test_owners_name_the_span_of_each_element_and_indptr_counts_them_off(length: list[int]) -> None:
+    named = [i for i, count in enumerate(length) for _ in range(count)]
+    assert owners(length).tolist() == named
+    assert owners(length, [100 + i for i in range(len(length))]).tolist() == [
+        100 + i for i in named
+    ]
+    running = [0]
+    for count in length:
+        running.append(running[-1] + count)
+    assert indptr_of(length).tolist() == running
+    assert indptr_of(length).dtype == np.int64
 
 
 def test_no_spans_are_no_elements() -> None:
@@ -320,3 +361,10 @@ def test_row_pairs_are_every_pair_of_a_rows_range_in_bounded_steps(
     for rows, _ in steps:
         # A step is whole rows; it exceeds per_step only when one row alone does.
         assert len(rows) <= per_step or len(set(rows.tolist())) == 1
+
+
+def test_the_inverse_of_an_address_reads_a_slice_of_rows() -> None:
+    # Rows 1 and 2 of the band above, whose codes sit at addresses 3, 4 and 5: the pairs are
+    # (1, 2), (1, 3) and (2, 3), so in the slice's own rows (0, 1), (0, 2) and (1, 2).
+    lo, hi = near_pair_of([3, 5, 6], [3, 4, 5])
+    assert (lo.tolist(), hi.tolist()) == ([0, 0, 1], [1, 2, 2])

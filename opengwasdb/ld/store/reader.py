@@ -30,17 +30,19 @@ import zarr
 from ogld.format import ENCODING, FORMAT_VERSION, RESERVED_CODE, InputError, Provenance, dequantise
 from ogld.format.geometry import (
     chromosome_index,
-    far_stop,
+    global_rows,
+    indptr_of,
+    local_rows,
     near_address,
-    near_start,
-    near_stop,
+    owners,
     position_rows,
-    ranges_listed,
     row_pairs,
     spans,
+    start_within,
+    stop_within,
 )
 from ogld.identity import alid_locus
-from ogld.store.layout import never_data, shown_fill
+from ogld.store.layout import chromosomes_listed, never_data, shown_fill
 from ogld.store.location import ChunkCache, open_group
 from ogld.store.tables import Partners, Variants
 
@@ -52,10 +54,10 @@ _CHROMOSOME_ARRAYS: Final = (
     ("index", "partner"),
     ("index", "r"),
 )
-#: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
-_PAIRS_PER_STEP: Final = 1 << 22
 #: The variant table's columns (spec §2).
 _VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
+#: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
+_PAIRS_PER_STEP: Final = 1 << 22
 
 
 @dataclass(frozen=True)
@@ -95,8 +97,8 @@ class StoreReader:
         """Keep the provenance and the chromosome ranges of an opened, checked store."""
         self._root = root
         self._provenance = provenance
-        listed = cast(list[dict[str, Any]], _group(root, "variants").attrs["chromosomes"])
-        self._ranges = ranges_listed(listed)
+        listed = chromosomes_listed(_group(root, "variants").attrs["chromosomes"])
+        self._ranges = {name: (start, stop) for name, start, stop in listed}
         self._names = list(self._ranges)
         self._stops = np.array([stop for _, stop in self._ranges.values()], dtype=np.int64)
         self._loaded = {}
@@ -150,8 +152,8 @@ class StoreReader:
         for chrom, (which, at) in _loci(alids, self._ranges).items():
             c = self._chromosome(chrom)
             lo, hi = position_rows(c.position, at, at)
-            asked.extend(np.repeat(which, hi - lo).tolist())
-            candidates.append(c.start + spans(lo, hi - lo))
+            asked.extend(owners(hi - lo, which).tolist())
+            candidates.append(global_rows(spans(lo, hi - lo), c.start))
         found = np.full(len(alids), -1, dtype=np.int64)
         if not asked:
             return found
@@ -172,14 +174,14 @@ class StoreReader:
             return np.empty(0, dtype=np.int64)
         c = self._chromosome(chrom)
         lo, hi = position_rows(c.position, start, stop)
-        return np.arange(c.start + int(lo), c.start + int(hi), dtype=np.int64)
+        return global_rows(np.arange(int(lo), int(hi), dtype=np.int64), c.start)
 
     def variants(self, rows: npt.NDArray[np.int64]) -> Variants:
         """The Variant Set's columns at `rows`, in the order given (spec §2)."""
         rows = self._checked(rows)
         position = np.empty(len(rows), dtype=np.int64)
         for c, members in self._by_chromosome(rows):
-            position[members] = c.position[rows[members] - c.start]
+            position[members] = c.position[local_rows(rows[members], c.start)]
         names = np.array(self._names, dtype=np.str_)
         chrom = names[chromosome_index(self._stops, rows)]
         frequency = self._read(self._columns["a1_frequency"], rows)
@@ -202,7 +204,7 @@ class StoreReader:
         rows = self._checked(rows)
         out = np.full((len(rows), len(rows)), np.nan)
         for c, members in self._by_chromosome(rows):
-            local, back = np.unique(rows[members] - c.start, return_inverse=True)
+            local, back = np.unique(local_rows(rows[members], c.start), return_inverse=True)
             block = self._block(c, local)
             out[np.ix_(members, members)] = block[np.ix_(back, back)]
         return out
@@ -210,8 +212,8 @@ class StoreReader:
     def _block(self, c: _Chromosome, local: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
         """The Stored r among one chromosome's ascending, distinct local rows (NaN unstored)."""
         at = c.position[local]
-        near = near_stop(at, self._provenance["near_bp"])
-        far = far_stop(at, self._provenance["far_bp"])
+        near = stop_within(at, self._provenance["near_bp"])
+        far = stop_within(at, self._provenance["far_bp"])
         block = np.full((len(local), len(local)), np.nan)
         np.fill_diagonal(block, 1.0)
         first = np.arange(1, len(local) + 1, dtype=np.int64)
@@ -228,10 +230,10 @@ class StoreReader:
     ) -> tuple[npt.NDArray[np.bool_], npt.NDArray[Any]]:
         """For local pairs lo < hi beyond near_bp: whether the Proxy Index holds each, as
         the Far Pair it then is, and its code there; read from each lo's index row."""
-        owners = np.unique(lo)
-        partner, codes, length = self._index_rows(c, owners)
+        held_by = np.unique(lo)
+        partner, codes, length = self._index_rows(c, held_by)
         size = c.stop - c.start
-        keys = np.repeat(owners, length) * size + partner
+        keys = owners(length, held_by) * size + partner
         order = np.argsort(keys, kind="stable")
         keys, codes = keys[order], codes[order]
         wanted = lo * size + hi
@@ -270,12 +272,12 @@ class StoreReader:
         near_bp = self._provenance["near_bp"]
 
         def entries(c: _Chromosome, local: npt.NDArray[np.int64]) -> _RowEntries:
-            first = near_start(c.position, near_bp, local)
+            first = start_within(c.position, near_bp, local)
             length = (local - first) + (c.near_indptr[local + 1] - c.near_indptr[local])
             # Each row's span runs from its first upstream partner to its last downstream one,
             # the row itself included once; dropping it leaves both halves, ascending.
             span = spans(first, length + 1)
-            owner = np.repeat(local, length + 1)
+            owner = owners(length + 1, local)
             partner, owner = span[span != owner], owner[span != owner]
             lo, hi = np.minimum(owner, partner), np.maximum(owner, partner)
             return length, partner, self._read(c.near_r, near_address(c.near_indptr, lo, hi))
@@ -292,10 +294,10 @@ class StoreReader:
         length = np.empty(len(rows), dtype=np.int64)
         found: list[tuple[npt.NDArray[np.int64], _RowEntries]] = []
         for c, members in self._by_chromosome(rows):
-            got = entries(c, rows[members] - c.start)
+            got = entries(c, local_rows(rows[members], c.start))
             length[members] = got[0]
-            found.append((members, (got[0], got[1] + c.start, got[2])))
-        indptr = np.concatenate([[0], np.cumsum(length)]).astype(np.int64)
+            found.append((members, (got[0], global_rows(got[1], c.start), got[2])))
+        indptr = indptr_of(length)
         partner = np.empty(int(indptr[-1]), dtype=np.int64)
         r = np.empty(int(indptr[-1]), dtype=np.float64)
         for members, (lengths, partners, codes) in found:

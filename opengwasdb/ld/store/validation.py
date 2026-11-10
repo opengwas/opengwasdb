@@ -40,10 +40,18 @@ from ogld.format.encoding import (
     far_code_floor,
     t_far,
 )
-from ogld.format.geometry import blocks, near_address, near_row_lengths, spans_at, windows
+from ogld.format.geometry import (
+    blocks,
+    near_address,
+    near_pair_of,
+    near_row_lengths,
+    owners,
+    windows,
+    within,
+)
 from ogld.format.provenance import ENCODING, FORMAT_VERSION, VALIDATION_RULES
 from ogld.identity import IdentityError, alid_locus, orient, variant_order_key
-from ogld.store.layout import never_data, shown_fill
+from ogld.store.layout import chromosomes_listed, never_data, shown_fill
 from ogld.store.location import open_group
 
 #: Elements of a Near Band or a Proxy Index a rule reads at once: 8 Mi codes are 16 MiB.
@@ -245,12 +253,17 @@ class _Store:
     def chromosomes(self) -> list[tuple[str, int, int]]:
         """The `chromosomes` ranges, if each is a canonical name and rows in order."""
         listed = self.node("variants")
-        entries = listed.attrs.get("chromosomes") if isinstance(listed, zarr.Group) else None
-        if not isinstance(entries, list) or not all(_range_entry(e) for e in entries):
+        record = listed.attrs.get("chromosomes") if isinstance(listed, zarr.Group) else None
+        try:
+            entries = chromosomes_listed(record)
+            canonical = all(alid_locus(f"{name}:1:A:C") is not None for name, _, _ in entries)
+        except ValueError:
+            canonical = False
+        if not canonical:
             raise _Unchecked(
                 "variants", "the chromosomes ranges are malformed (variants.chromosomes)"
             )
-        return [(str(e["name"]), int(e["row_start"]), int(e["row_stop"])) for e in entries]
+        return entries
 
     def positions(self, name: str, start: int, stop: int) -> npt.NDArray[np.int64]:
         """One chromosome's positions, kept as a reader keeps them (spec §10)."""
@@ -279,14 +292,6 @@ def _indptr_problems(
         yield path, "decreases, so it delimits no rows"
     elif end is not None and indptr[-1] != end:
         yield path, f"ends at {indptr[-1]:,}, but its rows' arrays hold {end:,} elements"
-
-
-def _range_entry(entry: object) -> bool:
-    if not isinstance(entry, dict) or set(entry) != {"name", "row_start", "row_stop"}:
-        return False
-    canonical = isinstance(entry["name"], str) and alid_locus(f"{entry['name']}:1:A:C") is not None
-    bounds = _is_int(entry["row_start"]) and _is_int(entry["row_stop"])
-    return canonical and bounds and 0 <= entry["row_start"] <= entry["row_stop"]
 
 
 def _flag(where: str, bad: npt.NDArray[np.bool_], first: int, what: str) -> _Problems:
@@ -858,7 +863,7 @@ def _read_block(
         # Built from entries read, never from indptr alone: an indptr that ends far past its
         # array would otherwise ask for as many owners as it claims.
         numbered = np.arange(a, b, dtype=np.int64)
-        held["owner"] = unread[0] if unread else np.repeat(numbered, np.diff(c.index[a : b + 1]))
+        held["owner"] = unread[0] if unread else owners(np.diff(c.index[a : b + 1]), numbered)
     return _Block(a, b, at, held)
 
 
@@ -1081,7 +1086,7 @@ class _IndexDistance(_Scanned):
     def block(self, b: _Block) -> _Problems:
         partner, owner = b.get("partner"), b.get("owner")
         partner = np.where(_valid(partner, self.c.size), partner, owner)
-        beyond = np.abs(self.pos[partner] - self.pos[owner]) > self.far_bp
+        beyond = ~within(self.pos[partner] - self.pos[owner], self.far_bp)
         what = f"a partner beyond {self.far_bp:,} bp"
         yield from _flag(self.c.path("partner"), beyond, b.at["partner"], what)
 
@@ -1223,17 +1228,17 @@ class _IndexNear(_Scanned):
     ) -> tuple[npt.NDArray[np.bool_], npt.NDArray[np.bool_]]:
         """The entries within near_bp held in a pair's earlier row, and in its later row."""
         ok = _valid(partner, self.c.size)
-        apart = np.abs(self.pos[np.where(ok, partner, owner)] - self.pos[owner])
-        within = ok & (apart <= self.near_bp)
-        return within & (partner > owner), within & (partner < owner)
+        apart = self.pos[np.where(ok, partner, owner)] - self.pos[owner]
+        close = ok & within(apart, self.near_bp)
+        return close & (partner > owner), close & (partner < owner)
 
     def _kept(self, b: _Block) -> tuple[npt.NDArray[np.int64], ...]:
         """The block's Near Band pairs with |code| ≥ the floor: earlier row, later row, code."""
         codes = b.get("band")
         at = np.flatnonzero((codes >= self.floor) | (codes <= -self.floor))
         rows = np.arange(b.first, b.last, dtype=np.int64)
-        row, later = spans_at(rows + 1, np.diff(self.band[b.first : b.last + 1]), at)
-        return rows[row], later, codes[at].astype(np.int64)
+        row, later = near_pair_of(self.band[b.first : b.last + 1], at + b.at["band"])
+        return rows[row], later + b.first, codes[at].astype(np.int64)
 
     def block(self, b: _Block) -> _Problems:
         lo, hi, code = self._kept(b)

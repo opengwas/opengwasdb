@@ -26,7 +26,13 @@ import numpy.typing as npt
 import zarr
 
 from ogld.format import ENCODING, RESERVED_CODE, Provenance
-from ogld.format.geometry import chromosome_of, chromosome_ranges, listed_ranges, near_row_lengths
+from ogld.format.geometry import (
+    chromosome_index,
+    chromosome_ranges,
+    indptr_of,
+    local_rows,
+    near_row_lengths,
+)
 from ogld.store import layout
 from ogld.store.tables import Variants
 from ogld.store.validation import ValidationFailed, validate_group
@@ -46,6 +52,8 @@ class StoreWriter:
         self._root = root
         self._position = variants.position
         self._ranges = ranges
+        self._names = list(ranges)
+        self._stops = [stop for _, stop in ranges.values()]
         self._near_bp = near_bp
         self._far_bp = far_bp
         self._pending: dict[str, list[tuple[npt.NDArray[np.int64], npt.NDArray[np.int16]]]] = {}
@@ -76,8 +84,12 @@ class StoreWriter:
             variants.a1_frequency.astype(np.float32),
             layout.FREQUENCY_FILL,
         )
-        group.attrs["chromosomes"] = listed_ranges(ranges)
+        group.attrs["chromosomes"] = layout.chromosomes_record(ranges)
         return cls(root, variants, ranges, near_bp, far_bp)
+
+    def _chromosome_of(self, row: int) -> str:
+        """The chromosome of global `row`; a row outside the Variant Set raises."""
+        return self._names[int(chromosome_index(self._stops, [row])[0])]
 
     def write_near(
         self, first_row: int, lengths: npt.NDArray[np.int64], codes: npt.NDArray[np.int16]
@@ -86,7 +98,7 @@ class StoreWriter:
         chromosome, in order): `lengths[i]` codes for each, back to back (spec §4)."""
         if len(lengths) == 0:
             return
-        chrom = chromosome_of(self._ranges, first_row)
+        chrom = self._chromosome_of(first_row)
         _, stop = self._ranges[chrom]
         if first_row != self._next_row[chrom]:
             raise ValueError(
@@ -109,7 +121,7 @@ class StoreWriter:
     ) -> None:
         """Refuse Near Band rows that run past their chromosome, disagree with their codes,
         hold the reserved code or are not the rows spec §4 gives."""
-        chrom = chromosome_of(self._ranges, first_row)
+        chrom = self._chromosome_of(first_row)
         if first_row + len(lengths) > stop:
             raise ValueError(f"Near Band rows run past the end of chromosome {chrom}")
         if int(lengths.sum()) != len(codes):
@@ -125,18 +137,19 @@ class StoreWriter:
 
     def _near_lengths(self, first: int, last: int) -> npt.NDArray[np.int64]:
         """The Near Band row lengths spec §4 gives rows `first` … `last − 1` of one chromosome."""
-        chrom = chromosome_of(self._ranges, first)
+        chrom = self._chromosome_of(first)
         if chrom not in self._lengths:
             start, stop = self._ranges[chrom]
             self._lengths[chrom] = near_row_lengths(self._position[start:stop], self._near_bp)
         start, _ = self._ranges[chrom]
-        return self._lengths[chrom][first - start : last - start]
+        lo, hi = local_rows([first, last], start)
+        return self._lengths[chrom][lo:hi]
 
     def _flush_near(self, chrom: str) -> None:
         parts = self._pending.pop(chrom)
         lengths = np.concatenate([p[0] for p in parts])
         codes = np.concatenate([p[1] for p in parts])
-        indptr = np.concatenate([[0], np.cumsum(lengths)]).astype(np.int64)
+        indptr = indptr_of(lengths)
         group = self._root.require_group(f"near/{chrom}")
         layout.put_numbers(group, "indptr", indptr, layout.INT64_FILL)
         array = layout.new_r_array(group, "r", len(codes), layout.NEAR_R)
@@ -157,7 +170,7 @@ class StoreWriter:
         start = self._check_index(chrom, indptr, partner, codes)
         group = self._root.require_group(f"index/{chrom}")
         layout.put_numbers(group, "indptr", indptr.astype(np.int64), layout.INT64_FILL)
-        local = (partner - start).astype(np.int32)
+        local = local_rows(partner, start).astype(np.int32)
         layout.put_numbers(group, "partner", local, layout.PARTNER_FILL)
         layout.put_numbers(group, "r", codes, RESERVED_CODE)
         self._index_done.add(chrom)
