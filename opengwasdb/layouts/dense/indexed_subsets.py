@@ -774,7 +774,8 @@ def _subset_slots(
     index: np.ndarray, subset: np.ndarray, n_analyses: int
 ) -> np.ndarray:
     """Where each primary cell's variant sits in the subset's Variant Index."""
-    return np.searchsorted(subset, index // n_analyses)
+    slots: np.ndarray = np.searchsorted(subset, index // n_analyses)
+    return slots
 
 
 def _subset_side_table_hits(
@@ -789,7 +790,7 @@ def _subset_side_table_hits(
     in_bounds = slots < len(subset)
     slot = np.full(len(index), 0, dtype=np.int64)
     slot[in_bounds] = slots[in_bounds]
-    hit = subset[slot] == index // n_analyses
+    hit: np.ndarray = subset[slot] == index // n_analyses
     hit[~in_bounds] = False
     return hit
 
@@ -3041,20 +3042,61 @@ def _check_eaf_exceptions(
     subset: np.ndarray,
     n_analyses: int,
     errors: list[str],
-) -> EafExceptionTable:
+) -> EafExceptionTable | None:
     """The index's EAF exception table is the primary's, remapped, in one bounded pass.
 
     Returns the cells themselves, keyed by the *primary's* flat positions, which
     is what the value comparison decodes the primary plane with: the cells the
     subset holds are the only ones it can reach, so it never looks the table up
-    again (issue #387).
+    again (issue #387). None when the tables disagree, so no value is compared
+    against a table the index does not reproduce.
 
-    The primary's table is walked one `EXCEPTION_TABLE_WINDOW` at a time rather
-    than read whole.  It is a single Zarr v3 shard of hundreds of millions of
-    entries, so `[:]` is 12.7 GiB of `int64` on OGS-00011 and its remapping holds
-    several copies of that at once; the shard's inner chunks are 200,000 entries
-    and Zarr reads them as byte ranges, so the same bytes stream through in
-    windows of about 96 MB and what is kept is the subset's own cells.
+    Each failure ends with the subset's one finding and nothing returned: an
+    entry judged with no comparison at all says more than the tables' contents
+    do.
+    """
+    if array_length(root[EAF_EXCEPTION_INDEX]) != array_length(
+        root[EAF_EXCEPTION_VALUE]
+    ):
+        # Positions and values that are not parallel are not a table an index can
+        # be the remapping of. Comparing the two lengths once says so; a window
+        # with no hit in it never looks at the values at all.
+        errors.append(_remapped_table_message(name, "eaf exception"))
+        return None
+    primary_index, primary_value = _subset_eaf_cells(
+        root, subset, n_analyses
+    )
+    expected_index, expected_value = _remap_side_table(
+        primary_index, primary_value, subset, n_analyses
+    )
+    error = _remapped_table_error(
+        name, "eaf exception", group, EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE,
+        expected_index, expected_value,
+    )
+    if error is not None:
+        errors.append(error)
+        return None
+    try:
+        return EafExceptionTable(index=primary_index, value=primary_value)
+    except ValueError:
+        # A primary table that is not sorted and unique is not one an index can be
+        # the remapping of, and a table that cannot be built must not abort the
+        # entries still to be judged.
+        errors.append(_remapped_table_message(name, "eaf exception"))
+        return None
+
+
+def _subset_eaf_cells(
+    root: Any, subset: np.ndarray, n_analyses: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """The primary's EAF exception cells at the subset's variants, in one bounded pass.
+
+    The table is walked one `EXCEPTION_TABLE_WINDOW` at a time rather than read
+    whole.  It is a single Zarr v3 shard of hundreds of millions of entries, so
+    `[:]` is 12.7 GiB of `int64` on OGS-00011 and its remapping held several
+    copies of that at once; the shard's inner chunks are 200,000 entries and
+    Zarr reads them as byte ranges, so the same bytes stream through in windows
+    of about 96 MB and what is kept is the subset's own cells.
     """
     entries = array_length(root[EAF_EXCEPTION_INDEX])
     kept_index: list[np.ndarray] = []
@@ -3070,30 +3112,10 @@ def _check_eaf_exceptions(
         kept_value.append(
             np.asarray(root[EAF_EXCEPTION_VALUE][start:stop], dtype=np.float32)[hit]
         )
-    primary_index = (
-        np.concatenate(kept_index) if kept_index else np.empty(0, dtype=np.int64)
+    return (
+        np.concatenate(kept_index) if kept_index else np.empty(0, dtype=np.int64),
+        np.concatenate(kept_value) if kept_value else np.empty(0, dtype=np.float32),
     )
-    primary_value = (
-        np.concatenate(kept_value) if kept_value else np.empty(0, dtype=np.float32)
-    )
-    expected_index, expected_value = _remap_side_table(
-        primary_index, primary_value, subset, n_analyses
-    )
-    if not (
-        np.array_equal(_read_side(group, EAF_EXCEPTION_INDEX), expected_index)
-        and np.array_equal(
-            _read_side(group, EAF_EXCEPTION_VALUE), expected_value, equal_nan=True
-        )
-    ):
-        errors.append(
-            f"indexed subset {name!r} eaf exception table is not the primary release's "
-            "remapped table; the index is stale or corrupt"
-        )
-    return EafExceptionTable(
-        index=np.asarray(primary_index, dtype=np.int64),
-        value=np.asarray(primary_value, dtype=np.float32),
-    )
-
 
 
 
@@ -3112,16 +3134,36 @@ def _check_remapped_table(
     expected_index, expected_value = _remap_side_table(
         _read_side(root, index_name), _read_side(root, value_name), subset, n_analyses
     )
-    if not (
-        np.array_equal(_read_side(group, index_name), expected_index)
-        and np.array_equal(
-            _read_side(group, value_name), expected_value, equal_nan=True
-        )
+    error = _remapped_table_error(
+        name, what, group, index_name, value_name, expected_index, expected_value
+    )
+    if error is not None:
+        errors.append(error)
+
+
+def _remapped_table_error(
+    name: str,
+    what: str,
+    group: Any,
+    index_name: str,
+    value_name: str,
+    expected_index: np.ndarray,
+    expected_value: np.ndarray,
+) -> str | None:
+    """The finding for a table that is not the primary's remapping, or None."""
+    if np.array_equal(_read_side(group, index_name), expected_index) and np.array_equal(
+        _read_side(group, value_name), expected_value, equal_nan=True
     ):
-        errors.append(
-            f"indexed subset {name!r} {what} table is not the primary release's remapped "
-            "table; the index is stale or corrupt"
-        )
+        return None
+    return _remapped_table_message(name, what)
+
+
+def _remapped_table_message(name: str, what: str) -> str:
+    """What a table that is not the primary's remapping is reported as."""
+    return (
+        f"indexed subset {name!r} {what} table is not the primary release's remapped "
+        "table; the index is stale or corrupt"
+    )
 
 
 @dataclass
