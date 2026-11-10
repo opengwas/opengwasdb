@@ -82,6 +82,8 @@ def test_the_near_start_is_the_first_variant_within_near_bp_before(
         for row in range(len(position))
     ]
     assert near_start(position, distance).tolist() == expected
+    some = [row for row in range(len(position)) if row % 2 == 0][::-1]
+    assert near_start(position, distance, some).tolist() == [expected[row] for row in some]
 
 
 @pytest.mark.parametrize(("distance", "name"), [(NEAR_BP, "near_bp"), (FAR_BP, "far_bp")])

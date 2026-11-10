@@ -25,7 +25,8 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import ENCODING, RESERVED_CODE, Provenance, near_row_lengths
+from ogld.format import ENCODING, RESERVED_CODE, Provenance
+from ogld.format.geometry import chromosome_of, chromosome_ranges, listed_ranges, near_row_lengths
 from ogld.store import layout
 from ogld.store.tables import Variants
 from ogld.store.validation import ValidationFailed, validate_group
@@ -75,17 +76,8 @@ class StoreWriter:
             variants.a1_frequency.astype(np.float32),
             layout.FREQUENCY_FILL,
         )
-        group.attrs["chromosomes"] = [
-            {"name": name, "row_start": start, "row_stop": stop}
-            for name, (start, stop) in ranges.items()
-        ]
+        group.attrs["chromosomes"] = listed_ranges(ranges)
         return cls(root, variants, ranges, near_bp, far_bp)
-
-    def _chromosome_of(self, row: int) -> str:
-        for chrom, (start, stop) in self._ranges.items():
-            if start <= row < stop:
-                return chrom
-        raise ValueError(f"row {row} is not in the Variant Set of {len(self._position)} rows")
 
     def write_near(
         self, first_row: int, lengths: npt.NDArray[np.int64], codes: npt.NDArray[np.int16]
@@ -94,7 +86,7 @@ class StoreWriter:
         chromosome, in order): `lengths[i]` codes for each, back to back (spec §4)."""
         if len(lengths) == 0:
             return
-        chrom = self._chromosome_of(first_row)
+        chrom = chromosome_of(self._ranges, first_row)
         _, stop = self._ranges[chrom]
         if first_row != self._next_row[chrom]:
             raise ValueError(
@@ -117,7 +109,7 @@ class StoreWriter:
     ) -> None:
         """Refuse Near Band rows that run past their chromosome, disagree with their codes,
         hold the reserved code or are not the rows spec §4 gives."""
-        chrom = self._chromosome_of(first_row)
+        chrom = chromosome_of(self._ranges, first_row)
         if first_row + len(lengths) > stop:
             raise ValueError(f"Near Band rows run past the end of chromosome {chrom}")
         if int(lengths.sum()) != len(codes):
@@ -133,7 +125,7 @@ class StoreWriter:
 
     def _near_lengths(self, first: int, last: int) -> npt.NDArray[np.int64]:
         """The Near Band row lengths spec §4 gives rows `first` … `last − 1` of one chromosome."""
-        chrom = self._chromosome_of(first)
+        chrom = chromosome_of(self._ranges, first)
         if chrom not in self._lengths:
             start, stop = self._ranges[chrom]
             self._lengths[chrom] = near_row_lengths(self._position[start:stop], self._near_bp)
@@ -258,20 +250,3 @@ def _positions(position: npt.NDArray[np.int64]) -> npt.NDArray[np.int32]:
     if len(position) and (position.min() < 0 or position.max() > np.iinfo(np.int32).max):
         raise ValueError("a position does not fit the int32 `position` array (spec §2)")
     return position.astype(np.int32)
-
-
-def chromosome_ranges(chrom: npt.NDArray[np.str_]) -> dict[str, tuple[int, int]]:
-    """Each chromosome's [row_start, row_stop), in order of appearance; a chromosome that
-    reappears after another breaks the Variant Set's order (spec §2)."""
-    ranges: dict[str, tuple[int, int]] = {}
-    if len(chrom) == 0:
-        return ranges
-    edges = np.flatnonzero(chrom[1:] != chrom[:-1]) + 1
-    starts = np.concatenate([[0], edges])
-    stops = np.concatenate([edges, [len(chrom)]])
-    for start, stop in zip(starts, stops, strict=True):
-        name = str(chrom[start])
-        if name in ranges:
-            raise ValueError(f"chromosome {name} is not contiguous in the Variant Set (spec §2)")
-        ranges[name] = (int(start), int(stop))
-    return ranges

@@ -20,10 +20,6 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-#: The pairs one step of `row_pairs` yields at most (when a single row holds fewer).
-PAIRS_PER_STEP = 1 << 22
-
-
 # ------------------------------------------------------------------ chromosomes (spec §2)
 
 
@@ -91,11 +87,15 @@ def far_stop(position: npt.ArrayLike, far_bp: int) -> npt.NDArray[np.int64]:
     return _stop(position, far_bp)
 
 
-def near_start(position: npt.ArrayLike, near_bp: int) -> npt.NDArray[np.int64]:
-    """For each row, the index of the first variant with p_l − p_m ≤ near_bp: where the
-    Near Band partners before it begin (spec §4). Exactly near_bp away is within."""
+def near_start(
+    position: npt.ArrayLike, near_bp: int, rows: npt.ArrayLike | None = None
+) -> npt.NDArray[np.int64]:
+    """For each of `rows` (all of them when None), the index of the first variant with
+    p_l − p_m ≤ near_bp: where the Near Band partners before it begin (spec §4). Exactly
+    near_bp away is within."""
     at = np.asarray(position, dtype=np.int64)
-    return np.searchsorted(at, at - near_bp, side="left").astype(np.int64)
+    of = at if rows is None else at[np.asarray(rows, dtype=np.int64)]
+    return np.searchsorted(at, of - near_bp, side="left").astype(np.int64)
 
 
 def near_row_lengths(position: npt.ArrayLike, near_bp: int) -> npt.NDArray[np.int64]:
@@ -178,7 +178,7 @@ def blocks(*limits: tuple[npt.NDArray[np.int64], int]) -> Iterator[tuple[int, in
 def row_pairs(
     first: npt.NDArray[np.int64],
     stop: npt.NDArray[np.int64],
-    per_step: int = PAIRS_PER_STEP,
+    per_step: int,
 ) -> Iterator[tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]]:
     """The pairs (i, j) with first[i] ≤ j < stop[i], a bounded number at a time: whole rows
     until `per_step` pairs, or one row when it alone holds more."""

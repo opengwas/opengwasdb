@@ -49,9 +49,9 @@ from ogld.format import (
     quantise,
     t_far,
 )
+from ogld.format.geometry import chromosome_ranges, near_row_lengths
 from ogld.identity import Orientation, orient, resolve_reversed_indels, variant_order_key
 from ogld.store import StoreWriter, Variants
-from ogld.store.writer import chromosome_ranges
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = ROOT / "tests" / "data" / "test-panel" / "store"
@@ -165,9 +165,7 @@ def write_chromosome(
 ) -> tuple[int, int, int, int]:
     """Write one chromosome's Near Band and Proxy Index; return the counts provenance records."""
     require_every_pair(held, position, chrom)
-    size = len(position)
-    reach = np.searchsorted(position, position + NEAR_BP, side="right")
-    lengths = (reach - np.arange(size) - 1).astype(np.int64)
+    lengths = near_row_lengths(position, NEAR_BP)
     codes = np.concatenate([dense[row, row + 1 : row + 1 + n] for row, n in enumerate(lengths)])
     writer.write_near(start, lengths, codes)
     both = held | held.T

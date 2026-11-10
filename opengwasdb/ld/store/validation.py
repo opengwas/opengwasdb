@@ -40,10 +40,10 @@ from ogld.format.encoding import (
     far_code_floor,
     t_far,
 )
-from ogld.format.geometry import near_row_lengths
+from ogld.format.geometry import blocks, near_address, near_row_lengths, spans_at, windows
 from ogld.format.provenance import ENCODING, FORMAT_VERSION, VALIDATION_RULES
 from ogld.identity import IdentityError, alid_locus, orient, variant_order_key
-from ogld.store.layout import never_data, shown_fill, spans_at
+from ogld.store.layout import never_data, shown_fill
 from ogld.store.location import open_group
 
 #: Elements of a Near Band or a Proxy Index a rule reads at once: 8 Mi codes are 16 MiB.
@@ -295,22 +295,6 @@ def _flag(where: str, bad: npt.NDArray[np.bool_], first: int, what: str) -> _Pro
     if len(at):
         more = f" and {len(at) - _NAMED:,} more" if len(at) > _NAMED else ""
         yield where, f"{what} at {', '.join(str(i) for i in at[:_NAMED])}{more}"
-
-
-def _windows(start: int, stop: int, step: int) -> Iterator[tuple[int, int]]:
-    for lo in range(start, stop, step):
-        yield lo, min(stop, lo + step)
-
-
-def _blocks(*limits: tuple[npt.NDArray[np.int64], int]) -> Iterator[tuple[int, int]]:
-    """Row ranges [a, b) holding at most `limit` elements of each array an `indptr` delimits,
-    for each (indptr, limit) of `limits`, or one row when that row alone holds more."""
-    rows, a = len(limits[0][0]) - 1, 0
-    while a < rows:
-        b = min(int(np.searchsorted(p, p[a] + most, side="right")) - 1 for p, most in limits)
-        b = min(max(b, a + 1), rows)
-        yield a, b
-        a = b
 
 
 # ------------------------------------------------------------------ envelope
@@ -706,7 +690,7 @@ def _variants_order(store: _Store) -> _Problems:
     for chrom, start, stop in store.chromosomes():
         carry_pos = np.empty(0, dtype=np.int64)
         carry_alid = np.empty(0, dtype=np.str_)
-        for lo, hi in _windows(start, stop, _ROWS):
+        for lo, hi in windows(start, stop, _ROWS):
             pos = np.concatenate([carry_pos, store.read("variants/position", lo, hi)])
             alid = np.concatenate([carry_alid, _strings(store, "alid", lo, hi)])
             after = (pos[1:] > pos[:-1]) | ((pos[1:] == pos[:-1]) & (alid[1:] > alid[:-1]))
@@ -726,7 +710,7 @@ def _engine_alid(chrom: str, position: int, a1: str, a2: str) -> tuple[str, str,
 @_rule("variants.identity")
 def _variants_identity(store: _Store) -> _Problems:
     for chrom, start, stop in store.chromosomes():
-        for lo, hi in _windows(start, stop, _ROWS):
+        for lo, hi in windows(start, stop, _ROWS):
             pos = store.read("variants/position", lo, hi)
             alid, a1, a2 = (_strings(store, name, lo, hi) for name in ("alid", "a1", "a2"))
             rows = zip(pos, alid, a1, a2, strict=True)
@@ -740,7 +724,7 @@ def _variants_identity(store: _Store) -> _Problems:
 
 @_rule("variants.frequency")
 def _variants_frequency(store: _Store) -> _Problems:
-    for lo, hi in _windows(0, store.array("variants/a1_frequency").shape[0], _ROWS):
+    for lo, hi in windows(0, store.array("variants/a1_frequency").shape[0], _ROWS):
         f = store.read("variants/a1_frequency", lo, hi).astype(np.float64)
         with np.errstate(invalid="ignore"):
             bad = ~(np.isfinite(f) & (f > 0) & (f < 1))
@@ -813,7 +797,7 @@ class _Chromosome:
         """The rows in blocks of at most `_WINDOW` band codes and an eighth as many entries."""
         limits = [(self.band, _WINDOW), (self.index, _WINDOW >> _ENTRY_SHIFT)]
         delimiting = [(indptr, most) for indptr, most in limits if indptr is not None]
-        return list(_blocks(*delimiting)) if delimiting else []
+        return list(blocks(*delimiting)) if delimiting else []
 
 
 def _chromosome(store: _Store, name: str, start: int, stop: int) -> _Chromosome:
@@ -1023,8 +1007,8 @@ class _Codes(_Scanned):
         def check(window: tuple[int, int]) -> list[tuple[str, str]]:
             return list(self._reserved(self.store.read(self.path, *window), window[0]))
 
-        windows = _windows(0, self.length, _WINDOW)
-        for problems in _in_order(check, windows, self.store.threads):
+        tiles = windows(0, self.length, _WINDOW)
+        for problems in _in_order(check, tiles, self.store.threads):
             yield from problems
 
     def block(self, b: _Block) -> _Problems:
@@ -1288,7 +1272,7 @@ class _IndexNear(_Scanned):
         _, in_later = self._halves(owner, partner)
         in_later[in_later] = rows[partner[in_later]]
         up, down, code = partner[in_later], owner[in_later], held[in_later]
-        band = self.store.pick(f"near/{self.c.name}/r", self.band[up] + (down - up - 1))
+        band = self.store.pick(f"near/{self.c.name}/r", near_address(self.band, up, down))
         differ = band.astype(np.int64) != code
         odd = _keys(up[differ], down[differ], code[differ], self.c.size)
         yield from _odd_pairs(
