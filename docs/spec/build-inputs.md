@@ -273,7 +273,13 @@ and `seed`, and `quantile`). `adjustment`
 records `k_target` (10), `k_min` (5) and `k`, the number used, and `covariates` names them. At
 `k` = 0 no PC Check runs: `pc_file`, `pc_check` and `k_min` are null, and `k_target` = k = 0.
 
-**What it found on the HGDP+1kGP PC Files** (`proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pc_check_v2_scan.tsv` and `proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pcs_v2/<panel>.json`, `scripts/make_pcs.py --scan-only`'s reports):
+**What it found on the HGDP+1kGP PC Files** (the JSON report beside each PC File in
+`/data/opengwasdb/work/ogld/pcs/` on the IEU nodes, each naming the commit that made it: `scripts/make_pcs.py` at `bb38fbb`, run whole on all
+five panels on 10 November 2026 with the adopted `ogld.build.pc_check`, which selects the MAF ≥
+0.05 variants itself. It wrote the five PC Files again byte for byte, and its scans equal the
+earlier `--scan-only` reports, `proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pcs_v2/<panel>.json` and
+`proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pc_check_v2_scan.tsv`, to 4×10⁻¹⁶ in every share, null and
+ratio, with the same best windows):
 
 | panel | samples (PCA + projected) | windows | local PCs | kept | k used | largest window share among PC1–PC10 (window null), and its ratio | smallest ratio of any PC |
 |---|---|---|---|---|---|---|---|
