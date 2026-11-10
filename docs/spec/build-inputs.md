@@ -123,6 +123,14 @@ after the header. Every listed sample MUST be in every fileset's `.psam` and hav
 a duplicate IID is refused. The keep file's SHA-256 of sorted IDs is `panel.samples_sha256`
 (`ld-store.md` §7).
 
+**A Source Panel's samples are unrelated** (owner, 10 November 2026; ADR 0002, decision 11): its
+keep file holds no first- or second-degree pair. Relatives share long haplotypes on every
+chromosome, so they put LD between unlinked variants that n does not predict: with the
+HGDP+1kGP members files' 1kGP trios (197 first-degree pairs among EUR's 771), the share of
+seeded cross-chromosome pairs at r² ≥ 0.01 was 1.76 times what sampling predicts at k = 0, and
+1.07 times among the 665 unrelated. The builder cannot judge relatedness from genotypes it does
+not otherwise model, so the rule is the keep file's: §10 says how the HGDP+1kGP ones are made.
+
 ## 5. The PC File
 
 plink2's `.eigenvec` layout: tab-separated text, a header `#IID PC1 PC2 … PCm` (plink2 also
@@ -353,6 +361,13 @@ pruning window. The regions also define "outside the excluded regions" for ogld#
   ogld#7 decides their permanent home.
 - **Samples:** the members files under `/data/opengwasdb/reference/hgdp1kgp-hg38*/members/`; the
   v2 counts are EUR 771, AFR 801, EAS 816, SAS 782, AMR 345 (ADR 0002 lists the five absent).
+  These are the PC Files' samples (below).
+- **Keep files:** `scripts/make_keeps.py` writes `/data/opengwasdb/work/ogld/keep/<panel>.keep`
+  (`$OGLD_KEEP`), plink2's `#IID` layout: each panel's PC File samples that gnomAD v3.1.2's sample
+  metadata does not mark related (`relatedness_inference.related` false, its maximal set of
+  unrelated samples), in the PC File's order. A sample the metadata lacks is refused. EUR 665,
+  AFR 608, EAS 724, SAS 672, AMR 341. A build reads these (§4); the members files are the PC
+  Files' input only.
 - **PC Files:** `scripts/make_pcs.py` writes `/data/opengwasdb/work/ogld/pcs/<panel>.eigenvec`
   and, beside it, the PC Check's JSON report; declared source "ogld scripts/make_pcs.py on HGDP+1kGP v2" with its commit.
 - **Conversion:** §3's BCF command, one fileset per chromosome.

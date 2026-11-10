@@ -37,7 +37,6 @@ already exist, naming its commit as `pc_check_commit`.
 from __future__ import annotations
 
 import argparse
-import gzip
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -45,12 +44,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from test_panel.roots import portable, root, tool
+from test_panel.roots import META_NAME, portable, root, tool
 from test_panel.tools import (
     bim_positions,
     conversion_args,
     conversion_inputs,
     read_bed,
+    relatedness,
     run,
     run_plink2,
     sha256,
@@ -64,7 +64,6 @@ from ogld.build import pc_check
 
 ROOT = Path(__file__).resolve().parent.parent
 BCF = "hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf"
-META_NAME = "hgdp1kgp-hg38/source/gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.tsv.bgz"
 N_PCS = 20
 MAF_MIN = 0.05
 PRUNE = ("500kb", "0.1")
@@ -127,7 +126,7 @@ def _samples(keep: Path, psam: Path, work: Path, panel: str, meta: Path) -> Samp
     """The panel's samples present in v2, split by gnomAD's relatedness flag."""
     ids = _first_column(keep)
     in_v2 = set(_first_column(psam))
-    related = _related(set(ids), meta)
+    related = relatedness(set(ids), meta)
     present = [i for i in ids if i in in_v2]
     unrelated = [i for i in present if not related[i]]
     paths = {"all": work / f"{panel}.all.keep", "unrelated": work / f"{panel}.unrelated.keep"}
@@ -147,22 +146,6 @@ def _first_column(path: Path) -> list[str]:
 
 def _write_keep(path: Path, ids: list[str]) -> None:
     path.write_text("#IID\n" + "".join(f"{i}\n" for i in ids))
-
-
-def _related(want: set[str], meta: Path) -> dict[str, bool]:
-    out: dict[str, bool] = {}
-    with gzip.open(meta, "rt") as f:
-        col = f.readline().rstrip("\n").split("\t").index("relatedness_inference")
-        for line in f:
-            c = line.rstrip("\n").split("\t")
-            if c[0] in want:
-                out[c[0]] = bool(json.loads(c[col])["related"])
-    missing = want - set(out)
-    if missing:
-        raise SystemExit(
-            f"{len(missing)} samples have no gnomAD relatedness, such as {sorted(missing)[:3]}"
-        )
-    return out
 
 
 def _excluded(s: Settings, work: Path) -> tuple[Path, list[dict[str, object]]]:
