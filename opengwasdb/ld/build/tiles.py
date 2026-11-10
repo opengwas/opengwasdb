@@ -71,8 +71,8 @@ class Tile:
     first: int
     lengths: npt.NDArray[np.int64]
     codes: npt.NDArray[np.int16]
-    lo: npt.NDArray[np.int64]
-    hi: npt.NDArray[np.int64]
+    lo: npt.NDArray[np.int32]
+    hi: npt.NDArray[np.int32]
     entry_codes: npt.NDArray[np.int16]
     change: npt.NDArray[np.float64]
 
@@ -123,15 +123,17 @@ def tile(inputs: Inputs, first: int, last: int) -> Tile:
 
 def _entries(
     r: npt.NDArray[np.float64], first: int, far_stop: npt.NDArray[np.int64], floor: int
-) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.int16]]:
-    """The tile's pairs lo < hi within far_bp whose code reaches `floor` (spec §5)."""
+) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int32], npt.NDArray[np.int16]]:
+    """The tile's pairs lo < hi within far_bp whose code reaches `floor` (spec §5), as local
+    rows in int32: a chromosome holds far fewer than 2³¹ rows (spec §5, `partner`), and a dense
+    one such as chr6, the MHC's, has hundreds of millions of these entries."""
     t, c = np.nonzero(np.abs(r) >= (floor - 1) / R_SCALE)
     lo, hi = first + t.astype(np.int64), first + c.astype(np.int64)
     inside = (hi > lo) & (hi < far_stop[lo])
     t, c, lo, hi = t[inside], c[inside], lo[inside], hi[inside]
     codes = quantise(r[t, c])
     reach = np.abs(codes.astype(np.int64)) >= floor
-    return lo[reach], hi[reach], codes[reach]
+    return lo[reach].astype(np.int32), hi[reach].astype(np.int32), codes[reach]
 
 
 def _change(
@@ -178,31 +180,88 @@ def _in_order(
         yield pending.popleft().result()
 
 
+#: Entries placed at a time when the Proxy Index is laid out: bounds its index arrays.
+PLACE_CHUNK: Final = 1 << 24
+
+
 @dataclass(frozen=True)
 class Entries:
-    """A chromosome's Proxy Index entries, each pair once: local rows lo < hi and its code."""
+    """A chromosome's Proxy Index entries, each pair once: local rows lo < hi and its code, in
+    the order the tiles found them, which is ascending by (lo, hi)."""
 
-    lo: npt.NDArray[np.int64]
-    hi: npt.NDArray[np.int64]
+    lo: npt.NDArray[np.int32]
+    hi: npt.NDArray[np.int32]
     codes: npt.NDArray[np.int16]
 
     @classmethod
     def of(
         cls,
-        lo: list[npt.NDArray[np.int64]],
-        hi: list[npt.NDArray[np.int64]],
+        lo: list[npt.NDArray[np.int32]],
+        hi: list[npt.NDArray[np.int32]],
         codes: list[npt.NDArray[np.int16]],
     ) -> Entries:
-        return cls(np.concatenate(lo), np.concatenate(hi), np.concatenate(codes))
+        found = cls(np.concatenate(lo), np.concatenate(hi), np.concatenate(codes))
+        found.require_order()
+        return found
+
+    def require_order(self) -> None:
+        """The layout below needs (lo, hi) ascending, as tiles in row order give them."""
+        step = np.diff(self.lo.astype(np.int64))
+        later = np.diff(self.hi.astype(np.int64)) > 0
+        if not ((self.lo < self.hi).all() and ((step > 0) | ((step == 0) & later)).all()):
+            raise ValueError("Proxy Index entries are not in (lo, hi) order: a builder fault")
 
     def both_directions(
-        self, rows: int
+        self, rows: int, offset: int
     ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.int16]]:
-        """The Proxy Index in CSR form over `rows` local rows: each pair in both its rows, with
-        one code, partners ascending within a row (spec §5)."""
-        row = np.concatenate([self.lo, self.hi])
-        partner = np.concatenate([self.hi, self.lo])
-        codes = np.concatenate([self.codes, self.codes])
-        order = np.lexsort((partner, row))
-        indptr = np.concatenate([[0], np.cumsum(np.bincount(row, minlength=rows))])
-        return indptr.astype(np.int64), partner[order], codes[order]
+        """The Proxy Index in CSR form over `rows` local rows, partners as global rows (local +
+        `offset`): each pair in both its rows with one code, partners ascending (spec §5).
+
+        Row l's partners below it all precede those above it, so each half is placed where it
+        goes rather than the 2N entries sorted: a stable sort by hi lays out the lower halves,
+        and the upper halves are already in order. That holds the transient arrays to one
+        index of N and a chunk, where a lexsort of 2N needed several of 2N.
+        """
+        up = np.bincount(self.lo, minlength=rows)
+        down = np.bincount(self.hi, minlength=rows)
+        indptr = np.concatenate([[0], np.cumsum(up + down)]).astype(np.int64)
+        out = _Layout(
+            np.empty(int(indptr[-1]), dtype=np.int64),
+            np.empty(int(indptr[-1]), dtype=self.codes.dtype),
+            offset,
+        )
+        below = np.argsort(self.hi, kind="stable")
+        out.place(indptr[:-1], down, self.hi, self.lo, self.codes, below)
+        del below
+        out.place(indptr[:-1] + down, up, self.lo, self.hi, self.codes, None)
+        return indptr, out.partner, out.codes
+
+
+@dataclass(frozen=True)
+class _Layout:
+    """The CSR arrays being filled: global partner rows and their codes."""
+
+    partner: npt.NDArray[np.int64]
+    codes: npt.NDArray[np.int16]
+    offset: int
+
+    def place(
+        self,
+        base: npt.NDArray[np.int64],
+        counts: npt.NDArray[np.int64],
+        row: npt.NDArray[np.int32],
+        other: npt.NDArray[np.int32],
+        codes: npt.NDArray[np.int16],
+        order: npt.NDArray[np.intp] | None,
+    ) -> None:
+        """Put each entry's `other` row and code in its `row`'s block, which starts at
+        base[row]. `order` lists the entries by row (None: they already are); an entry's place
+        in its block is its rank there. A chunk at a time, to bound the index arrays."""
+        starts = np.cumsum(counts) - counts
+        for first in range(0, len(row), PLACE_CHUNK):
+            stop = min(first + PLACE_CHUNK, len(row))
+            picked = np.arange(first, stop) if order is None else order[first:stop]
+            owner = row[picked].astype(np.int64)
+            at = base[owner] + np.arange(first, stop) - starts[owner]
+            self.partner[at] = other[picked].astype(np.int64) + self.offset
+            self.codes[at] = codes[picked]

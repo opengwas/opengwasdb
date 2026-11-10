@@ -194,41 +194,68 @@ def write_ld(
     )
     start = 0
     for chromosome in chromosomes:
-        adjusted = units(the_plan, chromosome, chosen)
-        unadjusted = None
-        if chosen.k:
-            unadjusted = units(the_plan, chromosome, covariates([], None, the_plan.samples.n))
-        band = tiles.Band.of(chromosome.position, *distances, CHANGE_BP)
-        inputs = tiles.Inputs(
-            adjusted, unadjusted, outside_regions(chromosome.name, chromosome.position), band, floor
-        )
-        _write_chromosome(writer, chromosome.name, start, inputs, threads, written)
-        start += len(chromosome)
+        inputs = _inputs(the_plan, chromosome, chosen, floor, distances)
+        band, rows = inputs.band, len(inputs.units)
+        last, found = _write_band(writer, start, inputs, threads, written)
+        # The unit vectors go before the chromosome's last rows complete its band, which the
+        # writer then holds whole while it writes it (ogld#4): the two largest arrays a
+        # chromosome makes are never held at once.
+        del inputs
+        writer.write_near(start + last.first, last.lengths, last.codes)
+        entries = tiles.Entries.of(*found)
+        del found
+        indptr, partner, codes = entries.both_directions(rows, start)
+        writer.write_index(chromosome.name, indptr, partner, codes)
+        _count(written, band, entries, len(partner))
+        start += rows
     return written
 
 
-def _write_chromosome(
-    writer: StoreWriter,
-    name: str,
-    start: int,
-    inputs: tiles.Inputs,
-    threads: int,
-    written: Written,
-) -> None:
-    lo: list[npt.NDArray[np.int64]] = []
-    hi: list[npt.NDArray[np.int64]] = []
-    codes: list[npt.NDArray[np.int16]] = []
+def _inputs(
+    the_plan: Plan,
+    chromosome: Chromosome,
+    chosen: Covariates,
+    floor: int,
+    distances: tuple[int, int],
+) -> tiles.Inputs:
+    """What every tile of `chromosome` reads: its unit vectors, adjusted and (at k > 0) not."""
+    adjusted = units(the_plan, chromosome, chosen)
+    unadjusted = None
+    if chosen.k:
+        unadjusted = units(the_plan, chromosome, covariates([], None, the_plan.samples.n))
+    band = tiles.Band.of(chromosome.position, *distances, CHANGE_BP)
+    outside = outside_regions(chromosome.name, chromosome.position)
+    return tiles.Inputs(adjusted, unadjusted, outside, band, floor)
+
+
+_Found = tuple[
+    list[npt.NDArray[np.int32]], list[npt.NDArray[np.int32]], list[npt.NDArray[np.int16]]
+]
+
+
+def _write_band(
+    writer: StoreWriter, start: int, inputs: tiles.Inputs, threads: int, written: Written
+) -> tuple[tiles.Tile, _Found]:
+    """Write every tile's Near Band rows but the last tile's, which is returned, and collect
+    every tile's Proxy Index entries."""
+    found: _Found = ([], [], [])
+    held: tiles.Tile | None = None
     for tile in tiles.tiles(inputs, threads):
-        writer.write_near(start + tile.first, tile.lengths, tile.codes)
-        lo.append(tile.lo)
-        hi.append(tile.hi)
-        codes.append(tile.entry_codes)
+        if held is not None:
+            writer.write_near(start + held.first, held.lengths, held.codes)
+        held = tile
+        found[0].append(tile.lo)
+        found[1].append(tile.hi)
+        found[2].append(tile.entry_codes)
         written.change.add(tile.change)
         written.counts["near_pairs"] += len(tile.codes)
-    band = inputs.band
-    entries = tiles.Entries.of(lo, hi, codes)
-    indptr, partner, code = entries.both_directions(len(inputs.units))
-    writer.write_index(name, indptr, partner + start, code)
+    assert held is not None, "a chromosome of the Variant Set has at least one variant"
+    return held, found
+
+
+def _count(written: Written, band: tiles.Band, entries: tiles.Entries, index_entries: int) -> None:
+    """Add one chromosome to the counts provenance records (spec §7)."""
     written.counts["far_candidates"] += int((band.far_stop - band.near_stop).sum())
-    written.counts["far_pairs"] += int((entries.hi >= band.near_stop[entries.lo]).sum())
-    written.counts["index_entries"] += len(partner)
+    far = entries.hi.astype(np.int64) >= band.near_stop[entries.lo]
+    written.counts["far_pairs"] += int(far.sum())
+    written.counts["index_entries"] += index_entries

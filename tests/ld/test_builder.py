@@ -134,3 +134,29 @@ def test_a_copied_fileset_is_the_same_input(built: dict[int, Path], tmp_path: Pa
         "panel.keep",
     }
     fixtures.same_store(built[0], tmp_path / "store")
+
+
+def test_the_proxy_index_layout_is_both_directions_sorted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The layout places each half where it goes instead of sorting 2N entries; it must equal
+    # the sort, across several placement chunks.
+    from ogld.build import tiles
+
+    rng = np.random.default_rng(9)
+    rows = 300
+    pairs = {(int(a), int(b)) for a, b in rng.integers(0, rows, (4_000, 2)) if a < b}
+    lo, hi = (np.array(x, dtype=np.int32) for x in zip(*sorted(pairs), strict=True))
+    codes = rng.integers(-32767, 32768, len(lo)).astype(np.dtype("int16"))
+    monkeypatch.setattr(tiles, "PLACE_CHUNK", 97)
+    indptr, partner, placed = tiles.Entries.of([lo], [hi], [codes]).both_directions(rows, 1_000)
+    row = np.concatenate([lo, hi]).astype(np.int64)
+    other = np.concatenate([hi, lo]).astype(np.int64)
+    order = np.lexsort((other, row))
+    assert np.array_equal(partner, other[order] + 1_000)
+    assert np.array_equal(placed, np.concatenate([codes, codes])[order])
+    assert np.array_equal(
+        indptr, np.concatenate([[0], np.cumsum(np.bincount(row, minlength=rows))])
+    )
+    with pytest.raises(ValueError, match="not in"):
+        tiles.Entries.of([lo[::-1]], [hi[::-1]], [codes])
