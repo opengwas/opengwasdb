@@ -28,6 +28,13 @@ def _optional_float(text: str) -> float | None:
     return None if text.lower() == "none" else float(text)
 
 
+def _threads(text: str) -> int:
+    threads = int(text)
+    if threads < 1:
+        raise argparse.ArgumentTypeError(f"needs at least one thread, not {threads}")
+    return threads
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ogld", description="Build, validate and inspect LD Stores."
@@ -58,7 +65,7 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--threads", type=int, default=unset)
     v = commands.add_parser("validate", help="run every validation rule")
     v.add_argument("location")
-    v.add_argument("--threads", type=int, default=1, help="blocks read and checked at once")
+    v.add_argument("--threads", type=_threads, default=1, help="blocks read and checked at once")
     commands.add_parser("info", help="print the provenance").add_argument("location")
     return parser
 

@@ -1,17 +1,18 @@
 """The spec's validation rules, by name, on write and on demand (spec §12; ogld#4).
 
-Each rule is a generator over one opened hierarchy and its provenance, yielding where and
-how the store breaks it. `validate` runs all 18, in the spec's order, on a store at a path or
-URL; `StoreWriter.finish` runs them on the store it wrote, before the provenance that makes
-it readable goes in. A rule never trusts what it does not check: when what it needs is
-missing or malformed it reports that it cannot be checked, and when an array will not
-decode it reports that it cannot be read, each as a finding, rather than pass or stop.
+Each rule yields where and how one opened hierarchy and its provenance break it. `validate`
+runs all 18, in the spec's order, on a store at a path or URL; `StoreWriter.finish` runs them
+on the store it wrote, before the provenance that makes it readable goes in. A rule never
+trusts what it does not check: when what it needs is missing or malformed it reports that it
+cannot be checked, and when an array will not decode it reports that it cannot be read, each
+as a finding, rather than pass or stop.
 
 Every rule reads in bounded windows, through Zarr directly: a chromosome's positions and
-`indptr` arrays whole, as a reader keeps them (spec §10), and a Near Band, a Proxy Index and
-the variant columns at most `_WINDOW` elements or `_ROWS` rows at a time. The seven rules that
-read the Near Band and the Proxy Index element by element share one pass over each chromosome:
-each block of rows is read once, on the threads the caller gives, and handed to all of them.
+`indptr` arrays whole, as a reader keeps them (spec §10); a Near Band `_WINDOW` codes, a Proxy
+Index an eighth as many entries, and the variant columns `_ROWS` rows at a time. Eleven rules
+are generators over the whole store. The seven that read the band and the index element by
+element (`_SCANNED`) share one pass over each chromosome instead: each block of rows is read
+once, on the threads the caller gives, and handed to all seven.
 """
 
 from __future__ import annotations

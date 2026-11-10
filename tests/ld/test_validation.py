@@ -510,6 +510,11 @@ def test_at_most_threads_blocks_are_held_at_once() -> None:
     assert most <= 4
 
 
+def test_validation_needs_a_thread() -> None:
+    with pytest.raises(ValueError, match="needs at least one thread, not 0"):
+        findings(TEST_STORE, SCANNED, threads=0)
+
+
 @pytest.mark.parametrize(
     ("path", "needs"),
     [
@@ -593,6 +598,10 @@ def test_ogld_validate_exits_1_naming_the_rule_a_store_breaks(
     assert "FAIL index.symmetric" in out
     assert "ok   index.near" in out
     assert cli.main(["info", str(tmp_path / "nothing")]) == 2
+    with pytest.raises(SystemExit) as refused:
+        cli.main(["validate", "--threads", "0", str(copy)])
+    assert refused.value.code == 2
+    assert "needs at least one thread, not 0" in capsys.readouterr().err
 
 
 # ------------------------------------------------------------------ on write
