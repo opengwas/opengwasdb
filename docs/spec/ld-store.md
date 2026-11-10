@@ -424,7 +424,7 @@ ignores the ones it does not know. The types are `ogld.format.Provenance`, and
 | `counts.far_candidates` | int | pairs more than `near_bp` and at most `far_bp` apart that were examined |
 | `counts.far_pairs` | int | Far Pairs: those of them in the Proxy Index, each counted once |
 | `counts.index_entries` | int | Proxy Index entries, both directions and within `near_bp` included |
-| `software` | object | versions: `ogld`, `numpy`, `zarr`, and `plink2` when a build used it |
+| `software` | object | versions, by package name. A build from genotypes records exactly `ogld`, `numpy`, `zarr` and `pgenlib`, its genotype reader (ogld#5's review); `ogld` is the installed version, which names the commit that built the store when the install is fresh (the realdata tier refuses a stale one) |
 | `build.created_at` | string | ISO 8601 UTC |
 | `build.wall_seconds` | float | build time, up to the validation `StoreWriter.finish` runs before it writes this provenance: a provenance cannot hold the time taken to check it. On EUR chr22 that validation took another 80 s of a 2 min build |
 | `build.peak_memory_bytes` | int | peak memory over the same span: the build's own on Linux, whose high-water mark the build resets when it starts; elsewhere the process's |
