@@ -19,7 +19,7 @@ import pytest
 import testdata
 
 from ogld.build import pc_check
-from ogld.build.genotypes import read_alt_counts
+from ogld.build.near_band import read_alt_counts
 from ogld.format import InputError
 
 CHROMS, STEP_BP = 3, 20_000
