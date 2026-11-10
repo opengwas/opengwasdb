@@ -12,19 +12,23 @@ import importlib
 import json
 import shutil
 import sys
+import threading
+import tracemalloc
+from collections import Counter
 from collections.abc import Callable
 from functools import cache
 from pathlib import Path
+from types import ModuleType
 from typing import Any, cast
 
 import numpy as np
 import pytest
 import zarr
-from store_copies import TEST_STORE, copy_store
+from store_copies import TEST_STORE, arrays, copy_store
 
 import ogld
 from ogld import cli
-from ogld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError, Provenance
+from ogld.format import REQUIRED_KEYS, RESERVED_CODE, VALIDATION_RULES, InputError, Provenance
 from ogld.store import StoreReader, StoreWriter, validation
 from ogld.store.validation import ValidationFailed, validate_group
 
@@ -38,13 +42,32 @@ WINDOWED.remove("variants.chromosomes")
 ACROSS_BLOCKS = ["index.symmetric", "index.near"]
 
 
+RESERVED = RESERVED_CODE
+
+#: The rules one pass over each chromosome's Near Band and Proxy Index feeds (spec §12).
+SCANNED = [
+    "near.codes",
+    "index.rows",
+    "index.codes",
+    "index.distance",
+    "index.threshold",
+    "index.symmetric",
+    "index.near",
+]
+
+
 @cache
+def contract() -> ModuleType:
+    """The contract's module. It imports its siblings, so their directory goes first."""
+    directory = str(Path(__file__).resolve().parent / "contract")
+    if directory not in sys.path:
+        sys.path.insert(0, directory)
+    return importlib.import_module("test_store")
+
+
 def breakers() -> dict[str, Callable[[Path], None]]:
-    """The contract's breakers. Their module imports its siblings, so their directory goes first."""
-    contract = str(Path(__file__).resolve().parent / "contract")
-    if contract not in sys.path:
-        sys.path.insert(0, contract)
-    found: dict[str, Callable[[Path], None]] = importlib.import_module("test_store").BREAKERS
+    """The contract's breakers, one per rule."""
+    found: dict[str, Callable[[Path], None]] = contract().BREAKERS
     return found
 
 
@@ -56,14 +79,15 @@ def small_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(validation, "_ROWS", 100)
 
 
-def findings(store: Path, rules: list[str]) -> dict[str, list[ogld.Finding]]:
+def findings(store: Path, rules: list[str], threads: int = 1) -> dict[str, list[ogld.Finding]]:
     root = zarr.open_group(store, mode="r")
-    return validate_group(root, root.attrs["ld_store"], rules)
+    return validate_group(root, root.attrs["ld_store"], rules, threads=threads)
 
 
 def test_every_required_key_has_a_type_to_check() -> None:
     assert set(REQUIRED_KEYS) <= set(validation._SCHEMA)
-    assert set(VALIDATION_RULES) == set(validation._RULES)
+    assert set(VALIDATION_RULES) == set(validation._RULES) | set(validation._SCANNED)
+    assert not set(validation._RULES) & set(validation._SCANNED)
 
 
 @pytest.mark.usefixtures("small_windows")
@@ -126,6 +150,15 @@ def negate(path: str, at: int) -> Callable[[Path], None]:
         array[at] = -array[at]
 
     return change
+
+
+def negate_a_later_entry(store: Path) -> None:
+    """Negates the code of the first chr22 entry in a pair's later row within 3 Mb, leaving
+    the entry in the earlier row as the band holds it."""
+    _, pos = contract().chr22(store)
+    owner, partner, _ = contract().index22(store)
+    within = np.abs(pos[partner] - pos[owner]) <= 3_000_000
+    negate("index/22/r", int(np.flatnonzero(within & (partner < owner))[0]))(store)
 
 
 #: One edit per way a rule says a store breaks it, and what that rule's finding then says.
@@ -285,6 +318,11 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
         write_array("index/22/indptr", slice(-1, None), 10**7),
         "ends at 10,000,000, but its rows' arrays hold",
     ),
+    "an entry in a pair's later row whose code is not the band's": (
+        "index.near",
+        negate_a_later_entry,
+        "entries whose code is not the Near Band's: (",
+    ),
 }
 
 
@@ -378,7 +416,8 @@ def test_a_corrupt_root_document_is_an_input_error(
 def test_index_symmetric_reads_the_index_within_the_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Spec §12: no rule reads more than 8 Mi elements of an index array at once; here 4,096.
+    # Spec §12: no rule reads more than 1 Mi entries of an index array at once, an eighth of
+    # the 8 Mi band codes; here 512 of a window of 4,096.
     monkeypatch.setattr(validation, "_WINDOW", 4096)
     read: list[int] = []
     getitem = zarr.Array.__getitem__
@@ -392,7 +431,166 @@ def test_index_symmetric_reads_the_index_within_the_window(
     monkeypatch.setattr(zarr.Array, "__getitem__", counted)
     assert not findings(TEST_STORE, ["index.symmetric"])["index.symmetric"]
     assert len(read) > 8, "the index must take many windows for this to mean anything"
-    assert max(read) <= 4096
+    assert max(read) <= 512
+
+
+# ------------------------------------------------------------------ what validation costs
+
+
+def counted_reads(monkeypatch: pytest.MonkeyPatch) -> Counter[str]:
+    """The elements each Near Band `r` and Proxy Index array gives up, by path, from now on:
+    by slice, by coordinates, and the threads that read them, under "threads"."""
+    read: Counter[str] = Counter()
+    lock = threading.Lock()
+
+    def counting(method: Callable[..., Any]) -> Callable[..., Any]:
+        def counted(array: zarr.Array, *args: Any, **kwargs: Any) -> Any:
+            values = method(array, *args, **kwargs)
+            if array.path.split("/")[0] in {"near", "index"} and "indptr" not in array.path:
+                with lock:
+                    read[array.path] += np.asarray(values).size
+                    read[f"thread {threading.get_ident()}"] = 1
+            return values
+
+        return counted
+
+    for name in ("__getitem__", "get_coordinate_selection"):
+        monkeypatch.setattr(zarr.Array, name, counting(getattr(zarr.Array, name)))
+    return read
+
+
+@pytest.mark.usefixtures("small_windows")
+def test_every_code_and_entry_is_read_once_by_all_the_rules_together(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Spec §12: the rules that read the band and the index element by element share one pass.
+    group = zarr.open_group(TEST_STORE, mode="r")
+    held = {
+        path: array.shape[0]
+        for path, array in arrays(group)
+        if path.split("/")[0] in {"near", "index"} and "indptr" not in path
+    }
+    read = counted_reads(monkeypatch)
+    assert not any(ogld.validate(TEST_STORE).values())
+    assert {path: n for path, n in read.items() if not path.startswith("thread")} == held
+
+
+def faults_in_every_block(store: Path) -> None:
+    """Breaks all seven scanned rules all along chr22: every 1,500th band code reserved; every
+    700th index entry's code reserved or 1, by turns, and every 900th partner the last row."""
+    band = zarr.open_array(store / "near/22/r", mode="r+")
+    band[::1500] = RESERVED
+    code = zarr.open_array(store / "index/22/r", mode="r+")
+    values = np.asarray(code[::700])
+    values[0::2], values[1::2] = RESERVED, 1
+    code[::700] = values
+    partner = zarr.open_array(store / "index/22/partner", mode="r+")
+    partner[::900] = len(contract().chr22(store)[1]) - 1
+
+
+#: The rules whose findings come one per block they fault; the other two report at the end.
+PER_BLOCK = ["near.codes", "index.rows", "index.codes", "index.distance", "index.threshold"]
+
+
+def test_threads_find_what_one_thread_finds_in_the_same_order(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Windows of 16,384 codes and 2,048 entries: several blocks a chromosome, few reads.
+    monkeypatch.setattr(validation, "_WINDOW", 1 << 14)
+    copy = copy_store(tmp_path / "store")
+    faults_in_every_block(copy)
+    one = findings(copy, SCANNED)
+    assert all(one[rule] for rule in SCANNED), "every scanned rule must fail"
+    spread = {rule: len(one[rule]) for rule in PER_BLOCK}
+    assert min(spread.values()) > 5, f"each rule's findings must span blocks: {spread}"
+    assert findings(copy, SCANNED, threads=4) == one
+
+
+@pytest.mark.usefixtures("small_windows")
+def test_index_near_rechecks_only_the_blocks_that_name_a_row_it_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Spec §12: a later-row entry unlike the band is found again in the pass's windows, and
+    # only the blocks holding an entry that names its row are read twice.
+    copy = copy_store(tmp_path / "store")
+    negate_a_later_entry(copy)
+    entries = zarr.open_array(copy / "index/22/partner", mode="r").shape[0]
+    assert entries > 20 * (validation._WINDOW >> 3), "the index must span many windows"
+    read = Counter[str]()
+    sizes: list[int] = []
+    getitem = zarr.Array.__getitem__
+
+    def counted(array: zarr.Array, selection: Any) -> Any:
+        values = getitem(array, selection)
+        if array.path in {"index/22/partner", "index/22/r"}:
+            read[array.path] += np.asarray(values).size
+            sizes.append(np.asarray(values).size)
+        return values
+
+    monkeypatch.setattr(zarr.Array, "__getitem__", counted)
+    (found,) = findings(copy, ["index.near"])["index.near"]
+    assert found.message == "entries whose code is not the Near Band's: (0, 1)"
+    assert max(sizes) <= validation._WINDOW >> 3
+    assert read["index/22/partner"] < entries + entries // 4, read
+
+
+@pytest.mark.usefixtures("small_windows")
+def test_threads_read_blocks_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    read = counted_reads(monkeypatch)
+    assert not any(findings(TEST_STORE, SCANNED, threads=4).values())
+    assert sum(1 for key in read if key.startswith("thread")) > 1
+
+
+def test_at_most_threads_blocks_are_held_at_once() -> None:
+    # Each block read ahead is held until the rules take it, so `threads` bounds the memory.
+    held, most, lock = 0, 0, threading.Lock()
+
+    def read(i: int) -> int:
+        nonlocal held, most
+        with lock:
+            held += 1
+            most = max(most, held)
+        return i
+
+    taken = []
+    for i in validation._in_order(read, range(50), 4):
+        taken.append(i)
+        with lock:
+            held -= 1
+    assert taken == list(range(50))
+    assert most <= 4
+
+
+def test_validation_needs_a_thread() -> None:
+    with pytest.raises(ValueError, match="needs at least one thread, not 0"):
+        findings(TEST_STORE, SCANNED, threads=0)
+
+
+@pytest.mark.parametrize(
+    ("path", "needs"),
+    [
+        ("index/22/indptr", ["index.distance", "index.threshold", "index.symmetric", "index.near"]),
+        ("near/22/indptr", ["index.near"]),
+    ],
+)
+def test_an_indptr_that_ends_past_its_array_is_a_finding_not_a_crash(
+    tmp_path: Path, path: str, needs: list[str]
+) -> None:
+    copy = copy_store(tmp_path / "store")
+    write_array(path, slice(-1, None), 10**9)(copy)
+    tracemalloc.start()
+    try:
+        found = ogld.validate(copy)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    for rule in needs:
+        assert any(
+            "cannot be checked" in f.message and "fewer than its indptr" in f.message
+            for f in found[rule]
+        ), (rule, found[rule])
+    # What a block holds follows what was read, not the 10⁹ elements indptr claims.
+    assert peak < 64 << 20, f"validation held {peak:,} bytes"
 
 
 @pytest.mark.parametrize(
@@ -446,11 +644,17 @@ def test_ogld_validate_exits_1_naming_the_rule_a_store_breaks(
 ) -> None:
     copy = copy_store(tmp_path / "store")
     breakers()["index.symmetric"](copy)
-    assert cli.main(["validate", str(copy)]) == 1
+    assert cli.main(["validate", "--threads", "4", str(copy)]) == 1
     out = capsys.readouterr().out
     assert "FAIL index.symmetric" in out
     assert "ok   index.near" in out
     assert cli.main(["info", str(tmp_path / "nothing")]) == 2
+    for threads in ("0", "x"):
+        with pytest.raises(SystemExit) as refused:
+            cli.main(["validate", "--threads", threads, str(copy)])
+        assert refused.value.code == 2
+        said = capsys.readouterr().err
+        assert f"argument --threads: needs a whole number of at least 1, not '{threads}'" in said
 
 
 # ------------------------------------------------------------------ on write
@@ -481,7 +685,7 @@ def provenance(**changes: Any) -> Provenance:
 
 
 def test_finish_writes_the_provenance_of_a_store_that_passes_every_rule(tmp_path: Path) -> None:
-    written = four_rows(tmp_path, "good").finish(provenance())
+    written = four_rows(tmp_path, "good").finish(provenance(), threads=2)
     assert written["n_variants"] == 4
     assert not any(ogld.validate(tmp_path / "good").values())
     store = ogld.open(tmp_path / "good")

@@ -71,6 +71,20 @@ def spans(first: npt.ArrayLike, length: npt.ArrayLike) -> npt.NDArray[np.int64]:
     return start + (np.arange(int(count.sum()), dtype=np.int64) - offset)
 
 
+def spans_at(
+    first: npt.ArrayLike, length: npt.ArrayLike, at: npt.ArrayLike
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+    """The inverse of `spans`: for elements `at` of `spans(first, length)`, the span i each
+    lies in and its value, first[i] + its place in the span, without building the spans. For
+    a block of Near Band rows that is each code's row and its later row (spec §4)."""
+    count = np.asarray(length, dtype=np.int64)
+    ends = np.cumsum(count)
+    where = np.asarray(at, dtype=np.int64)
+    span = np.searchsorted(ends, where, side="right")
+    value = np.asarray(first, dtype=np.int64)[span] + (where - (ends[span] - count[span]))
+    return span.astype(np.int64), value
+
+
 def clipped(length: int, inner: int, shard: int) -> tuple[int, int]:
     """The inner chunk and shard of an array of `length`: an inner chunk longer than the array
     is clipped to it, and a shard to the smallest whole number of inner chunks covering it."""
