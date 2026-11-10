@@ -148,8 +148,9 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    missing.
 
    _Addition, 10 November 2026 (owner, at the review of #4):_ reading an LD Store also needs
-   **fsspec and aiohttp, as required runtime dependencies**, not an extra. Spec §1 makes a read
-   over HTTP(S) as much a read as one from disk, and zarr opens a URL through fsspec's HTTP
+   **fsspec and aiohttp, as required runtime dependencies**, not an extra. The spec makes a read
+   over HTTP(S) as much a read as one from disk: §2 keeps the whole store one Zarr hierarchy so
+   that a client reads it over HTTP, and §10 reads it so. zarr opens a URL through fsspec's HTTP
    filesystem, which is async and imports aiohttp; fsspec's requests-based alternative is its
    experimental pyodide shim. Both are on conda-forge. A local read does not import aiohttp, so
    an extra was possible, and was rejected: pgenlib is an extra only because conda-forge lacks it,
