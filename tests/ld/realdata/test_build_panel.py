@@ -8,8 +8,8 @@ The Test Panel proves the logic; this proves it survives real genotypes (CLAUDE.
   for EUR's 665 unrelated samples: `OGLD_EUR_KEEP` names the keep file `scripts/make_keeps.py`
   writes (ADR 0002, decision 11). On 20–23 Mb of it, the k = 0 Near Band matches
   `plink2 --r-unphased` within the quantisation step: epic #1's acceptance. The variants compared
-  include reversed-indel pairs' records, each the one the store keeps by build-inputs §6, judged
-  here from plink2's own allele counts.
+  include every choice build-inputs §6's reversed-indel rule makes there (both records at MAC >=
+  20, judged here from plink2's own allele counts): each must keep the record whose REF is A1.
 - Real LD survives PC Adjustment: on the 12 Mb slice, pairs within 100 kb change little from
   k = 0 to k = 10, and each of the provenance's five quantiles of that change is its own
   computation over every such pair, from the two stores' Near Bands. 12 Mb, not 3, because the
@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -130,24 +130,32 @@ def test_the_builder_refuses_the_shipped_pgen_for_its_missing_calls(tmp_path: Pa
         )
 
 
-def kept_records(slice_: Path, found: list[Orientation], tmp_path: Path) -> list[int]:
-    """The slice's records the store holds, judged here, not by the builder: MAC >= 20 from
-    plink2's own allele counts (v2's FILTER is all `.`, and none of its variants lacks
-    variance), and of a reversed-indel pair that both pass, the record whose REF is A1
-    (build-inputs §6); of a pair one passes, that one."""
+@dataclass(frozen=True)
+class Kept:
+    """The slice's records the store holds, judged here, not by the builder (build-inputs §6):
+    MAC >= 20 from plink2's own allele counts (v2's FILTER is all `.`, and none of its variants
+    lacks variance); of a reversed-indel pair that both pass, the record whose REF is A1. Those
+    pairs are `choices`, the only ones the rule decides; of a pair one passes, that one."""
+
+    records: list[int]
+    choices: list[int]
+    ref_frequency: npt.NDArray[np.float64]
+
+
+def kept_records(slice_: Path, found: list[Orientation], tmp_path: Path) -> Kept:
     plink2("--pfile", slice_, "--freq", "counts", "--out", tmp_path / "freq")
     table = [line.split("\t") for line in (tmp_path / "freq.acount").read_text().splitlines()]
     head = [name.lstrip("#") for name in table[0]]
     alt = np.array([int(row[head.index("ALT_CTS")]) for row in table[1:]])
     obs = np.array([int(row[head.index("OBS_CT")]) for row in table[1:]])
-    passes = np.minimum(alt, obs - alt) >= 20
     by_alid: dict[str, list[int]] = {}
-    for i in np.flatnonzero(passes):
+    for i in np.flatnonzero(np.minimum(alt, obs - alt) >= 20):
         by_alid.setdefault(found[int(i)].alid, []).append(int(i))
-    return sorted(
-        next((i for i in group if not found[i].a1_is_alt), group[0]) if len(group) > 1 else group[0]
-        for group in by_alid.values()
+    choices = sorted(
+        next(i for i in g if not found[i].a1_is_alt) for g in by_alid.values() if len(g) > 1
     )
+    records = sorted({g[0] for g in by_alid.values() if len(g) == 1} | set(choices))
+    return Kept(records, choices, 1 - alt / obs)
 
 
 def test_the_builder_matches_plink2_on_a_real_chr22_slice(
@@ -160,15 +168,16 @@ def test_the_builder_matches_plink2_on_a_real_chr22_slice(
     rows = pvar_rows(slice_.with_suffix(".pvar"))
     found = [orient(r[0], int(r[1]), r[3], r[4]) for r in rows]
     kept = kept_records(slice_, found, tmp_path)
-    shared = Counter(o.alid for o in found)
-    pairs = [i for i in kept if shared[found[i].alid] > 1]
-    # 300 records spread over the slice, and 40 more whose ALID a reversed-indel pair shares,
-    # each the record the store keeps: the k = 0 criterion holds for every pair (§7).
-    sample = sorted(
-        {*kept[:: max(1, len(kept) // 300)][:300], *pairs[:: max(1, len(pairs) // 40)][:40]}
-    )
-    assert len(sample) >= 330, "the slice must hold 300 kept records and 30 reversed-indel ones"
-    assert sum(shared[found[i].alid] > 1 for i in sample) >= 30
+    # Every reversed-indel pair whose two records both pass is a choice §6 makes: the store must
+    # hold the record whose REF is A1, which its A1 frequency, that record's REF frequency, shows.
+    assert len(kept.choices) >= 20, "the slice must hold 20 choices for this to mean anything"
+    held = store.matrix([found[i].alid for i in kept.choices])
+    assert held.absent == ()
+    frequency = held.variants.a1_frequency
+    assert np.allclose(frequency, kept.ref_frequency[kept.choices], atol=1e-6), "REF = A1 kept"
+    # And r: 300 records spread over the slice and every choice, against plink2 (§7: the k = 0
+    # criterion holds for every pair).
+    sample = sorted({*kept.records[:: max(1, len(kept.records) // 300)][:300], *kept.choices})
     assert store.matrix([found[i].alid for i in sample]).absent == (), "the store holds each"
     (tmp_path / "sample.txt").write_text("\n".join(rows[i][2] for i in sample) + "\n")
     plink2(
