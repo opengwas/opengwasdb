@@ -23,7 +23,7 @@ import pytest
 
 import ogld
 from ogld import cli, identity, store
-from ogld.query import clumping, matrices, proxies
+from ogld.query import clumping, proxies
 
 #: The committed Test Store (tests/contract/support.py), written by the walking skeleton.
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
@@ -198,10 +198,7 @@ NO_CLUMPS = ogld.Clumps(
 #: Every body that raises NotImplementedError, with the ticket that builds it. A ticket
 #: that builds one removes its entry, as it unmarks the contract tests it makes pass.
 UNBUILT: dict[str, tuple[Callable[[], object], str]] = {
-    "StoreReader.open over HTTP": (lambda: store.StoreReader.open("http://x/"), "ogld#4"),
     "validate": (lambda: ogld.validate("x"), "ogld#4"),
-    "matrices.matrix": (lambda: matrices.matrix(READER, [], fill=None), "ogld#4"),
-    "matrices.region": (lambda: matrices.region(READER, "1", 0, 1, fill=None), "ogld#4"),
     "build": (lambda: ogld.build(None, "x"), "ogld#5"),
     "proxies.proxies": (lambda: proxies.proxies(READER, [], r2=0.8, kb=1), "ogld#6"),
     "clumping.clump": (lambda: clumping.clump(READER, [], [], r2=0.1, kb=1), "ogld#6"),

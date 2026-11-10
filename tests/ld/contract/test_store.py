@@ -88,7 +88,6 @@ def test_a_reader_refuses_a_format_version_it_does_not_implement(tmp_path: Path)
         ogld.open(with_provenance(tmp_path, future))
 
 
-@OGLD_4
 def test_the_test_store_reads_the_same_over_http(served_store: str) -> None:
     # Spec §1: a local path or an HTTP(S) URL. A static Range-serving server, as #9 may use.
     remote = ogld.open(served_store)
@@ -100,7 +99,6 @@ def test_the_test_store_reads_the_same_over_http(served_store: str) -> None:
 # ------------------------------------------------------------------ pair answers (spec §8)
 
 
-@OGLD_4
 def test_a_pair_exactly_3_mb_apart_is_the_near_band_s_exact_r() -> None:
     store = opened()
     pair = reference().where(reference().distance == 3_000_000, "a pair exactly 3 Mb apart")
@@ -109,7 +107,6 @@ def test_a_pair_exactly_3_mb_apart_is_the_near_band_s_exact_r() -> None:
     assert abs(r - pair.r[0]) <= support.HALF_STEP + support.SLACK
 
 
-@OGLD_4
 def test_a_pair_beyond_3_mb_below_t_far_is_nan_and_the_bound() -> None:
     store = opened()
     ref = reference()
@@ -120,7 +117,6 @@ def test_a_pair_beyond_3_mb_below_t_far_is_nan_and_the_bound() -> None:
     assert kind == "bound"
 
 
-@OGLD_4
 def test_a_far_pair_is_stored_and_reads_back_its_r() -> None:
     store = opened()
     ref = reference()
@@ -141,7 +137,6 @@ def a_pair_apart(distance: int) -> tuple[int, int] | None:
     return (int(rows[found[0][0]]), int(rows[found[0][1]])) if len(found) else None
 
 
-@OGLD_4
 def test_exactly_10_mb_is_measured_and_one_base_more_is_not() -> None:
     store = opened()
     at = reference().where(reference().distance == 10_000_000, "a pair exactly 10 Mb apart")
@@ -153,7 +148,6 @@ def test_exactly_10_mb_is_measured_and_one_base_more_is_not() -> None:
     assert kind == "not_measured"
 
 
-@OGLD_4
 def test_another_chromosome_is_not_measured() -> None:
     store = opened()
     v = panel_data().variants()
@@ -167,7 +161,6 @@ def test_another_chromosome_is_not_measured() -> None:
     assert kind == "not_measured"
 
 
-@OGLD_4
 def test_two_records_at_one_position_are_a_near_band_pair() -> None:
     store = opened()
     pair = reference().where(reference().distance == 0, "two records at one position")
@@ -179,7 +172,6 @@ def test_two_records_at_one_position_are_a_near_band_pair() -> None:
 # ------------------------------------------------------------------ matrices, NaN and fill
 
 
-@OGLD_4
 def test_the_whole_store_reads_back_within_half_a_step() -> None:
     # The round trip: every pair of both chromosomes against the reference r, signed to A1.
     m = whole_store()
@@ -191,7 +183,6 @@ def test_the_whole_store_reads_back_within_half_a_step() -> None:
     assert np.isnan(m.r[~stored]).all(), "every pair the store does not hold is NaN"
 
 
-@OGLD_4
 def test_every_stored_cell_is_exactly_what_the_codes_say() -> None:
     m = whole_store()
     ref = expected()
@@ -201,7 +192,6 @@ def test_every_stored_cell_is_exactly_what_the_codes_say() -> None:
     np.testing.assert_array_equal(m.r[stored], quantise(ref[stored]) / 32767)
 
 
-@OGLD_4
 def test_unstored_cells_are_nan_and_a_fill_replaces_exactly_them() -> None:
     plain = whole_store()
     kinds = plain.kinds()
@@ -220,7 +210,6 @@ def test_unstored_cells_are_nan_and_a_fill_replaces_exactly_them() -> None:
         filled.kinds()
 
 
-@OGLD_4
 def test_absent_alids_are_listed_and_are_not_rows() -> None:
     store = opened()
     v = panel_data().variants()
@@ -237,7 +226,6 @@ def test_absent_alids_are_listed_and_are_not_rows() -> None:
 # ------------------------------------------------------------------ regions
 
 
-@OGLD_4
 def test_a_region_is_the_matrix_of_its_variants_in_genomic_order() -> None:
     store = opened()
     v = panel_data().variants()
@@ -252,7 +240,6 @@ def test_a_region_is_the_matrix_of_its_variants_in_genomic_order() -> None:
     np.testing.assert_array_equal(region.r, store.matrix(alids(inside)).r)
 
 
-@OGLD_4
 def test_a_region_is_at_most_10_mb_wide() -> None:
     store = opened()
     store.region("22", 30_000_000, 5_000_000)
@@ -267,7 +254,6 @@ def test_a_region_is_at_most_10_mb_wide() -> None:
 # ------------------------------------------------------------------ writing
 
 
-@OGLD_4
 def test_a_lost_chunk_is_refused_never_read_as_zero(tmp_path: Path) -> None:
     opened()
     copy = tmp_path / "store"
@@ -281,7 +267,6 @@ def test_a_lost_chunk_is_refused_never_read_as_zero(tmp_path: Path) -> None:
         ogld.open(copy).matrix(alids(rows[:50]))
 
 
-@OGLD_4
 def test_the_writer_refuses_a_location_that_exists(tmp_path: Path) -> None:
     # Against a copy: a broken writer is never pointed at the committed Test Store.
     variants = opened().matrix(alids(passing_rows()[:2])).variants
