@@ -77,7 +77,7 @@ class Tile:
     change: npt.NDArray[np.float64]
 
 
-def cells(
+def _cells(
     starts: npt.NDArray[np.int64], stops: npt.NDArray[np.int64]
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
     """For rows t = 0, 1, …, the columns starts[t] … stops[t] − 1, row after row, as (t, column)."""
@@ -89,7 +89,7 @@ def cells(
     return t, np.repeat(starts, lengths) + offset
 
 
-def ragged(
+def _ragged(
     block: npt.NDArray[np.float64],
     first: int,
     starts: npt.NDArray[np.int64],
@@ -102,13 +102,13 @@ def ragged(
     return np.concatenate(runs) if runs else np.empty(0)
 
 
-def tile(inputs: Inputs, first: int, last: int) -> Tile:
+def _tile(inputs: Inputs, first: int, last: int) -> Tile:
     """Rows `first` … `last − 1` of one chromosome (local rows)."""
     band = inputs.band
     stop = int(band.far_stop[last - 1])
     r = inputs.units[first:last] @ inputs.units[first:stop].T
     rows = np.arange(first, last, dtype=np.int64)
-    codes = quantise(ragged(r, first, rows + 1, band.near_stop[first:last]))
+    codes = quantise(_ragged(r, first, rows + 1, band.near_stop[first:last]))
     lo, hi, entry_codes = _entries(r, first, band.far_stop, inputs.floor)
     return Tile(
         first,
@@ -143,14 +143,14 @@ def _change(
     the Long-Range LD Regions; at k = 0 the two are one and every change is 0."""
     starts = np.arange(first + 1, last + 1, dtype=np.int64)
     stops = inputs.band.change_stop[first:last]
-    t, partner = cells(starts, stops)
+    t, partner = _cells(starts, stops)
     clear = inputs.outside[first + t] & inputs.outside[partner]
-    after = ragged(r, first, starts, stops)[clear]
+    after = _ragged(r, first, starts, stops)[clear]
     if inputs.unadjusted is None:
         return np.zeros_like(after)
     u0 = inputs.unadjusted
     r0 = u0[first:last] @ u0[first : int(stops.max())].T
-    return after - ragged(r0, first, starts, stops)[clear]
+    return after - _ragged(r0, first, starts, stops)[clear]
 
 
 def tiles(inputs: Inputs, threads: int) -> Iterator[Tile]:
@@ -158,10 +158,10 @@ def tiles(inputs: Inputs, threads: int) -> Iterator[Tile]:
     n = len(inputs.units)
     spans = [(first, min(first + TILE_ROWS, n)) for first in range(0, n, TILE_ROWS)]
     if threads <= 1:
-        yield from (tile(inputs, first, last) for first, last in spans)
+        yield from (_tile(inputs, first, last) for first, last in spans)
         return
     with ThreadPoolExecutor(max_workers=threads) as pool:
-        yield from _in_order(pool, lambda span: tile(inputs, *span), spans, 2 * threads)
+        yield from _in_order(pool, lambda span: _tile(inputs, *span), spans, 2 * threads)
 
 
 def _in_order(

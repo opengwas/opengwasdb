@@ -143,7 +143,7 @@ def _strings(oriented: list[Orientation], name: str) -> npt.NDArray[np.str_]:
     return column
 
 
-def units(the_plan: Plan, chromosome: Chromosome, chosen: Covariates) -> npt.NDArray[np.float64]:
+def _units(the_plan: Plan, chromosome: Chromosome, chosen: Covariates) -> npt.NDArray[np.float64]:
     """The chromosome's unit vectors after PC Adjustment by `chosen`, in Variant Set order."""
     out = np.empty((len(chromosome), the_plan.samples.n))
     for first, dosages in _blocks(the_plan, chromosome):
@@ -164,7 +164,7 @@ def chance(the_plan: Plan, chromosomes: list[Chromosome], chosen: Covariates) ->
             mine = rows[(rows >= start[i]) & (rows < start[i + 1])] - start[i]
             picked = c.without(~np.isin(np.arange(len(c)), mine))
             for out, cov in zip(both, (unadjusted, chosen), strict=True):
-                out.append(units(the_plan, picked, cov))
+                out.append(_units(the_plan, picked, cov))
         return tuple(np.concatenate(out) for out in both)
 
     return chance_rates(labels, units_of)
@@ -219,10 +219,10 @@ def _inputs(
     distances: tuple[int, int],
 ) -> tiles.Inputs:
     """What every tile of `chromosome` reads: its unit vectors, adjusted and (at k > 0) not."""
-    adjusted = units(the_plan, chromosome, chosen)
+    adjusted = _units(the_plan, chromosome, chosen)
     unadjusted = None
     if chosen.k:
-        unadjusted = units(the_plan, chromosome, covariates([], None, the_plan.samples.n))
+        unadjusted = _units(the_plan, chromosome, covariates([], None, the_plan.samples.n))
     band = tiles.Band.of(chromosome.position, *distances, CHANGE_BP)
     outside = outside_regions(chromosome.name, chromosome.position)
     return tiles.Inputs(adjusted, unadjusted, outside, band, floor)

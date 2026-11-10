@@ -12,7 +12,8 @@ cross-chromosome pair, so its rates are null, never a number nothing measured.
 unadjusted, signed to A1) over every pair within 100 kb with both variants outside the
 Long-Range LD Regions: ogld#5's "real LD survives". A whole panel has about 10⁹ such pairs, so
 they are counted into bins 2⁻²⁰ (about 10⁻⁶) wide rather than held; the extremes are exact,
-and each other quantile is the order statistic at rank ⌊q(N − 1)⌋, to within one bin.
+and each other quantile is the order statistic at rank ⌊q(N − 1)⌋, to within half a bin:
+the centre of the bin that holds it.
 """
 
 from __future__ import annotations
