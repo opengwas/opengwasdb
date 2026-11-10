@@ -31,9 +31,9 @@ pixi run -e report …        # Quarto + Jupyter, for .qmd benchmark documents
 ## Branches
 
 `feature → main`. **Work on a feature branch; never commit to `main`
-directly.** Every pull request merged into `main` is tagged `vX.Y.Z`, with the
-`changelog.d/` fragments it added as the release notes
-(`.github/workflows/release.yml`).
+directly.** Every merge to `main` is a tagged release. **Merge
+your own finished pull request** with `gh pr merge --auto --merge`, unless
+an owner gate in [CONTRIBUTING.md, Merging](./CONTRIBUTING.md#merging) applies.
 
 ## Before you finish a change
 
@@ -42,7 +42,7 @@ directly.** Every pull request merged into `main` is tagged `vX.Y.Z`, with the
       The type sets the bump: `breaking`/`added`/`changed` minor, else patch.
 - [ ] `docs/store-format-compatibility.md` updated if `format_version` moved.
 - [ ] No new ruff or mypy findings. Baselines are in `.baselines.json`
-      (60 / 37); `pixi run -e dev python scripts/check_baselines.py`.
+      (57 / 34); `pixi run -e dev python scripts/check_baselines.py`.
 - [ ] New tests **observed to fail** against the unfixed code. A test that
       cannot fail is worse than no test — one written this year passed with the
       bug present because its fixture never reached the broken path.
