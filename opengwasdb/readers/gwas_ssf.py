@@ -86,7 +86,6 @@ from opengwasdb.readers.interface import (
     ImputationScore,
     ImputationScoreDeclaration,
     ReaderAssociation,
-    ReferenceAllele,
     RegionsFile,
     SiteMetrics,
     SourceVariant,
@@ -129,9 +128,6 @@ from opengwasdb.variants.normalise import (
 from opengwasdb.variants.rsid import normalise_rsid
 
 GWAS_SSF_CAPABILITY = "opengwasdb.gwas-ssf"
-#: GWAS-SSF names an effect and an other allele, and the format declares
-#: neither the genome's reference, harmonised or not (ADR 0072).
-_REFERENCE = ReferenceAllele.UNDECLARED
 #: Which rows of a GWAS-SSF file declare their `other_allele` the reference, by
 #: the file's layout, read from its header (ADR 0079; owner, 7 Nov 2026):
 #:
@@ -598,17 +594,6 @@ class GwasSsfReader:
     imputation_score_declaration: ImputationScoreDeclaration | None = None
 
     @property
-    def reference(self) -> ReferenceAllele:
-        """Which allele the rows declare the genome's reference.
-
-        A GWAS-SSF file's is `_REFERENCE`. A Column Map's translation declares
-        its own: one whose `other_allele` is a `ref` column declares it (`REF`).
-        """
-        if isinstance(self.path, TabularSource):
-            return self.path.reference
-        return _REFERENCE
-
-    @property
     def _metrics_columns(self) -> MetricsProjectionColumns:
         return replace(_METRICS_COLUMNS, reference=_declaration(self.path))
 
@@ -655,14 +640,10 @@ class GwasSsfReader:
         )
 
     def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
-        yield from stream_associations(
-            self._association_rows(tally), self.stored_effect_scale, self.reference
-        )
+        yield from stream_associations(self._association_rows(tally), self.stored_effect_scale)
 
     def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
-        yield from stream_batches(
-            self._association_rows(tally), self.reference, chunk_rows=self.chunk_rows
-        )
+        yield from stream_batches(self._association_rows(tally), chunk_rows=self.chunk_rows)
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         yield from _iter_variants(self.path)

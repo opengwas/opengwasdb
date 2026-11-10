@@ -4,7 +4,8 @@ For each source the harness runs three sides, round by round with the order
 alternating and each sample in a fresh interpreter:
 
 * `reader_head` -- the SourceReader this checkout builds, streaming the file's
-  associations;
+  associations as Pass 2 reads them: as the reader's association batches where
+  it offers them (#318), else one association at a time;
 * `reader_base` -- the same, from a detached tree given with
   `--control-module-path` (the epic measured at `d405de0`; both readers changed
   after it, so without this control a slower read cannot be told from a louder
@@ -194,11 +195,22 @@ def measure(capability: str, path: Path, side: str) -> tuple[float, int]:
     if side in ("reader_head", "reader_base"):
         reader = _reader(capability, path)
         started = time.perf_counter()
-        associations = sum(1 for _ in reader.stream_associations())
+        associations = _associations_read(reader)
         return time.perf_counter() - started, associations
     if side == "parse_floor":
         return source.floor(path)
     raise ValueError(f"unknown side {side!r}")
+
+
+def _associations_read(reader: Any) -> int:
+    """How many associations Pass 2 reads from ``reader``, read as it reads them:
+    its association batches where it offers them (#318), else its associations
+    one at a time. Looked up by name, since a control tree from before #318
+    has no `association_batches` to ask."""
+    batches = getattr(reader, "stream_association_batches", None)
+    if batches is not None:
+        return sum(len(batch) for batch in batches())
+    return sum(1 for _ in reader.stream_associations())
 
 
 def child(

@@ -969,6 +969,29 @@ class _FakeChild:
         }
 
 
+def test_a_reader_side_reads_the_associations_as_pass2_does(tmp_path, monkeypatch):
+    """FinnGen offers its associations as batches, which Pass 2 routes (#318), so
+    the reader side times the batches; a reader without them is read row by row."""
+    from opengwasdb.readers.finngen import FinnGenR13Reader
+
+    source = tmp_path / "finngen_R13_SYNTHETIC.gz"
+    with gzip.open(source, "wt", encoding="utf-8") as fh:
+        fh.write("#chrom\tpos\tref\talt\tbeta\tsebeta\taf_alt\n")
+        fh.writelines(f"1\t{position}\tA\tG\t0.1\t0.2\t0.3\n" for position in (1, 2, 3))
+
+    def per_row(self, tally=None):
+        raise AssertionError("a reader that offers batches was timed row by row")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(FinnGenR13Reader, "stream_associations", per_row)
+        _seconds, rows = _reader_ab.measure("opengwasdb.finngen-r13", source, "reader_head")
+    assert rows == 3
+    with monkeypatch.context() as patch:
+        patch.delattr(FinnGenR13Reader, "stream_association_batches")
+        _seconds, rows = _reader_ab.measure("opengwasdb.finngen-r13", source, "reader_head")
+    assert rows == 3
+
+
 def test_the_reader_ab_interleaves_its_sides_and_scores_them(tmp_path, monkeypatch):
     source = tmp_path / "finngen_R13_SYNTHETIC.gz"
     with gzip.open(source, "wt", encoding="utf-8") as fh:

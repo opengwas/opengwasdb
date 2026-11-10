@@ -9,9 +9,12 @@ per-element reference counts a dict or an object array would copy page by
 page (issue 043 item 2). A hash only narrows the search: a hashed row is
 matched to an entry only when their full Routing Keys are equal (issue #316).
 
-`RouteTable.route_column` streams one Analysis's associations in fixed-size
-batches, so a worker never holds a genome-wide source as Python lists, and
-returns each axis's rows with each index's duplicates resolved
+`RouteTable.route_reader` routes one Analysis: from its reader's own
+association batches where it offers them (#318), and otherwise from its
+associations, read one at a time into fixed-size batches
+(`RouteTable.route_column`), so a worker never holds a genome-wide source as
+Python lists. Either way it returns each axis's rows with each index's
+duplicates resolved
 (`collapse_duplicates`): rows that agree collapse to the first, and rows that
 disagree are all dropped, since no row says which is right (ADR 0072, D5). An
 indel's ALID spells its reference allele first (ADR 0079), so an insertion and
@@ -23,12 +26,20 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Any
 
 import numpy as np
 
 from opengwasdb.readers import orientation
-from opengwasdb.readers.interface import ImputationScoreStatus, ReaderAssociation
+from opengwasdb.readers.interface import (
+    AssociationBatch,
+    ReaderAssociation,
+    SourceReader,
+    StreamTally,
+    association_batches,
+    batched,
+)
 from opengwasdb.variants.routing import keys as routing_keys
 from opengwasdb.variants.routing.keys import (
     IntegerKeyCodec,
@@ -41,18 +52,15 @@ from opengwasdb.variants.routing.keys import (
 
 log = logging.getLogger(__name__)
 
-# Streamed in fixed-size batches so a worker never materialises a whole
-# (genome-wide) source as Python lists at once -- peak per-worker memory is one
-# batch of columns plus the accumulated matched rows (issue 043).
+# A reader's associations are read into fixed-size batches so a worker never
+# materialises a whole (genome-wide) source as Python lists at once -- peak
+# per-worker memory is one batch of columns plus the accumulated matched rows
+# (issue 043).
 _RESOLVE_BATCH = 250_000
 
 #: Sites encoded at a time while a table is built, so the parent never holds
 #: a genome's sites as four more lists at once.
 _ENCODE_BATCH = 1 << 20
-
-#: The seven per-association lists one batch is read into: chromosome,
-#: position, ref, alt, z, se and EAF (NaN where the source reports none).
-_Columns = tuple[list[str], list[int], list[str], list[str], list[float], list[float], list[float]]
 
 
 def _empty_index() -> np.ndarray:
@@ -61,40 +69,6 @@ def _empty_index() -> np.ndarray:
 
 def _empty_stat() -> np.ndarray:
     return np.empty(0, dtype=np.float32)
-
-
-@dataclass(frozen=True)
-class AssociationBatch:
-    """One batch of a Source Reader's associations, before routing.
-
-    In the reader's orientation: ``z`` and ``eaf`` are the source's own, not
-    yet re-oriented by a reverse-strand lift. ``eaf`` and
-    ``imputation_score`` are NaN where the source reports none. What an
-    ``admit`` callable judges, so a row it refuses is never matched.
-    """
-
-    chromosome: Sequence[str]
-    position: Sequence[int]
-    ref: Sequence[str]
-    alt: Sequence[str]
-    z: np.ndarray
-    se: np.ndarray
-    eaf: np.ndarray
-    imputation_score: np.ndarray
-    imputation_status: np.ndarray
-
-    def __post_init__(self) -> None:
-        # One row filtered against another batch's mask either raises or, worse,
-        # silently keeps the wrong rows, so a ragged batch is refused (stores #175).
-        lengths = {len(values) for values in vars(self).values()}
-        if len(lengths) != 1:
-            raise ValueError(
-                f"association batch columns hold {sorted(lengths)} row(s); every "
-                "column must hold the batch's rows"
-            )
-
-    def __len__(self) -> int:
-        return len(self.z)
 
 
 #: Says which rows of one batch to route; True keeps a row.
@@ -124,21 +98,58 @@ class Placed:
 
 @dataclass(frozen=True)
 class Unmatched:
-    """The associations no axis holds, by routing key, in stream order.
+    """The associations no axis holds, in stream order, by the coordinate each
+    was routed by.
 
     Kept only by a table built with ``keep_unmatched``; otherwise empty, and
     only counted. Not deduplicated, and in the reader's orientation.
-    ``conflicting`` names the keys more than one kept association reached
-    with a different z or SE, by `collapse_duplicates`' rule, as
-    `Placed.conflicting` names an axis's indices; all their rows are still
-    here.
+    ``chromosome``, ``position``, ``ref`` and ``alt`` are each row's, as its
+    batch held them, the alleles as the source spells them. `keys` spells each
+    row as its Routing Key, formed when first asked for: a Hybrid fold encodes
+    an off-reference row from its fields (`unknown_keys.encode_fields`) and
+    forms a key only for a row it hashes or names (#318). `conflicting` names
+    the keys more than one kept association reached with a different z or SE,
+    by `collapse_duplicates`' rule, as `Placed.conflicting` names an axis's
+    indices; all their rows are still here.
     """
 
-    keys: Sequence[str]
     z: np.ndarray
     se: np.ndarray
     eaf: np.ndarray
-    conflicting: Sequence[str] = ()
+    chromosome: Sequence[str]
+    position: Sequence[int]
+    ref: Sequence[str]
+    alt: Sequence[str]
+
+    def __post_init__(self) -> None:
+        # A row's statistics read against another row's coordinate would
+        # spill an association under the wrong key, so a ragged one is refused.
+        lengths = {len(values) for values in vars(self).values()}
+        if len(lengths) != 1:
+            raise ValueError(f"unmatched rows hold {sorted(lengths)} values across their fields")
+
+    @classmethod
+    def none(cls) -> Unmatched:
+        """No association: what a column that keeps no unmatched row holds."""
+        empty = _empty_stat()
+        return cls(empty, empty, empty, chromosome=[], position=[], ref=[], alt=[])
+
+    def __len__(self) -> int:
+        return len(self.z)
+
+    def key_at(self, row: int) -> str:
+        """Row ``row``'s Routing Key."""
+        site = (self.chromosome[row], self.position[row], self.ref[row], self.alt[row])
+        return routing_key(site)
+
+    @cached_property
+    def keys(self) -> list[str]:
+        """Each row's Routing Key, in order."""
+        return [self.key_at(row) for row in range(len(self))]
+
+    @cached_property
+    def conflicting(self) -> list[str]:
+        return _conflicting_keys(self.keys, (self.z, self.se))
 
 
 @dataclass(frozen=True)
@@ -238,7 +249,7 @@ class _Collected:
     def __init__(self, n_axes: int, keep_unmatched: bool) -> None:
         self.parts: list[list[tuple[np.ndarray, ...]]] = [[] for _ in range(n_axes)]
         self.keep_unmatched = keep_unmatched
-        self.unmatched_keys: list[str] = []
+        self.unmatched_rows: list[AssociationBatch] = []
         self.unmatched_parts: list[tuple[np.ndarray, ...]] = []
         self.n_unmatched = 0
 
@@ -246,9 +257,9 @@ class _Collected:
         if len(part[0]):
             self.parts[axis].append(part)
 
-    def add_unmatched(self, keys: list[str], part: tuple[np.ndarray, ...]) -> None:
-        self.unmatched_keys.extend(keys)
+    def add_unmatched(self, rows: AssociationBatch, part: tuple[np.ndarray, ...]) -> None:
         if len(part[0]):
+            self.unmatched_rows.append(rows)
             self.unmatched_parts.append(part)
 
     def column(self) -> RoutedColumn:
@@ -257,12 +268,23 @@ class _Collected:
             _placed(*_joined(parts, (_empty_index(), *statistics))) for parts in self.parts
         )
         z, se, eaf = _joined(self.unmatched_parts, statistics)
-        keys = self.unmatched_keys
-        return RoutedColumn(
-            placed=placed,
-            unmatched=Unmatched(keys, z, se, eaf, _conflicting_keys(keys, (z, se))),
-            n_unmatched=self.n_unmatched,
+        rows = self.unmatched_rows
+        chromosome, position, ref, alt = (
+            _chained([getattr(batch, name) for batch in rows])
+            for name in ("chromosome", "position", "ref", "alt")
         )
+        unmatched = Unmatched(
+            z, se, eaf, chromosome=chromosome, position=position, ref=ref, alt=alt
+        )
+        return RoutedColumn(placed=placed, unmatched=unmatched, n_unmatched=self.n_unmatched)
+
+
+def _chained(parts: list[Any]) -> Any:
+    """One column of the unmatched rows, joined across their batches: an array
+    where every batch held one, else a list."""
+    if parts and all(isinstance(part, np.ndarray) for part in parts):
+        return np.concatenate(parts)
+    return [value for part in parts for value in part]
 
 
 def _conflicting_keys(keys: list[str], statistics: tuple[np.ndarray, np.ndarray]) -> list[str]:
@@ -292,48 +314,12 @@ def _joined(
     return tuple(np.concatenate(column) for column in zip(*parts, strict=True))
 
 
-def _retain_rows(columns: Sequence[list[Any]], keep: np.ndarray) -> None:
-    """Keep ``keep``'s rows in every list of one batch, in place.
-
-    The lists are positionally parallel, so a refused row leaves all of them
-    together: a filter that kept a coordinate and dropped its z would route
-    an association the caller refused.
-    """
-    if bool(keep.all()):
-        return
-    indices = np.flatnonzero(keep).tolist()
-    for values in columns:
-        values[:] = [values[index] for index in indices]
-
-
-def _admitted(
-    admit: Admit, columns: _Columns, scores: list[float | None], statuses: list[Any]
-) -> np.ndarray:
+def _admitted(admit: Admit, batch: AssociationBatch) -> np.ndarray:
     """``admit``'s keep mask for one batch: a boolean array with one entry per row.
 
     Nothing else is coerced into one. A NaN or a number is not a decision to
     keep a row, so a mask that is not boolean is refused rather than read.
-    ``scores`` and ``statuses`` are empty when no score was collected, and the
-    batch then carries every row's score as undeclared.
     """
-    chroms, poss, refs, alts, zs, ses, eafs = columns
-    if statuses:
-        imputation_score = np.asarray(scores, dtype=np.float64)
-        imputation_status = np.asarray(statuses, dtype=object)
-    else:
-        imputation_score = np.full(len(zs), np.nan)
-        imputation_status = np.full(len(zs), ImputationScoreStatus.UNDECLARED, dtype=object)
-    batch = AssociationBatch(
-        chromosome=chroms,
-        position=poss,
-        ref=refs,
-        alt=alts,
-        z=np.asarray(zs, dtype=np.float64),
-        se=np.asarray(ses, dtype=np.float64),
-        eaf=np.asarray(eafs, dtype=np.float64),
-        imputation_score=imputation_score,
-        imputation_status=imputation_status,
-    )
     keep = admit(batch)
     if not isinstance(keep, np.ndarray) or keep.dtype != np.bool_:
         got = keep.dtype if isinstance(keep, np.ndarray) else type(keep).__name__
@@ -488,6 +474,30 @@ class RouteTable:
     def __len__(self) -> int:
         return len(self._keys)
 
+    def route_reader(
+        self,
+        reader: SourceReader,
+        tally: StreamTally,
+        *,
+        admit: Admit | None = None,
+        imputation_scores: bool = True,
+    ) -> RoutedColumn:
+        """Route one Analysis from its Source Reader, filling ``tally``.
+
+        From the reader's own association batches where it offers them
+        (`association_batches`, #318), else from its associations one at a
+        time (`route_column`). The two hold the same rows, so the column, and
+        what ``admit`` judges of it, does not depend on which is read.
+        """
+        batches = association_batches(reader, tally)
+        if batches is None:
+            return self.route_column(
+                reader.stream_associations(tally),
+                admit=admit,
+                imputation_scores=imputation_scores,
+            )
+        return self.route_batches(batches, admit=admit)
+
     def route_column(
         self,
         associations: Iterable[ReaderAssociation],
@@ -495,86 +505,60 @@ class RouteTable:
         admit: Admit | None = None,
         imputation_scores: bool = True,
     ) -> RoutedColumn:
+        """Route one Analysis's associations, read one at a time into batches.
+
+        `route_batches` over `batched`. ``imputation_scores=False`` says the
+        Analysis declared no score, so its rows' scores are not collected and
+        each batch carries them as undeclared, which is what such a reader
+        yields anyway; with no ``admit`` nothing reads them.
+        """
+        scores = admit is not None and imputation_scores
+        return self.route_batches(
+            batched(associations, rows=_RESOLVE_BATCH, scores=scores), admit=admit
+        )
+
+    def route_batches(
+        self, batches: Iterable[AssociationBatch], *, admit: Admit | None = None
+    ) -> RoutedColumn:
         """Route one Analysis's associations, batch by batch, onto the axes.
 
         ``admit``, given, judges each batch before it is matched and returns a
         keep mask; a refused row reaches no axis and is not counted unmatched.
-        Without it every row is routed. ``imputation_scores=False`` says the
-        Analysis declared no score, so its rows' scores are not collected and
-        each batch carries them as undeclared, which is what such a reader
-        yields anyway. A key a reverse-strand lift re-oriented has its z
-        negated and its EAF complemented, so both follow the stored alleles
-        (issue #284, spec §4-5).
+        Without it every row is routed. A key a reverse-strand lift re-oriented
+        has its z negated and its EAF complemented, so both follow the stored
+        alleles (issue #284, spec §4-5). Nothing here depends on where one
+        batch ends and the next begins.
         """
-        columns: _Columns = ([], [], [], [], [], [], [])
-        chroms, poss, refs, alts, zs, ses, eafs = columns
-        scores: list[float | None] = []
-        statuses: list[ImputationScoreStatus] = []
         collected = _Collected(self._n_axes, self._keep_unmatched)
-        batch_size = _RESOLVE_BATCH
-        # Collecting each row's score costs a Pass 2 worker about a fifth of its
-        # per-row routing time, so it is done only for a batch that can use it.
-        collect_scores = admit is not None and imputation_scores
-        for assoc in associations:
-            chroms.append(assoc.chromosome)
-            poss.append(assoc.position)
-            refs.append(assoc.ref)
-            alts.append(assoc.alt)
-            zs.append(assoc.z)
-            ses.append(assoc.se)
-            eafs.append(float("nan") if assoc.eaf is None else assoc.eaf)
-            if collect_scores:
-                scores.append(assoc.imputation_score.value)
-                statuses.append(assoc.imputation_score.status)
-            if len(zs) >= batch_size:
-                self._flush(columns, scores, statuses, admit, collected)
-        self._flush(columns, scores, statuses, admit, collected)
+        for batch in batches:
+            if admit is not None and len(batch):
+                batch = batch.take(_admitted(admit, batch))
+            if len(batch):
+                self._match(batch, collected)
         return collected.column()
 
-    def _flush(
-        self,
-        columns: _Columns,
-        scores: list[float | None],
-        statuses: list[ImputationScoreStatus],
-        admit: Admit | None,
-        collected: _Collected,
-    ) -> None:
-        """Admit, match and collect one batch, then empty every buffer."""
-        try:
-            if not columns[4]:
-                return
-            if admit is not None:
-                keep = _admitted(admit, columns, scores, statuses)
-                _retain_rows(columns, keep)
-                if not columns[4]:
-                    return
-            self._match(columns, collected)
-        finally:
-            for values in columns:
-                values.clear()
-            scores.clear()
-            statuses.clear()
-
-    def _match(self, columns: _Columns, collected: _Collected) -> None:
+    def _match(self, batch: AssociationBatch, collected: _Collected) -> None:
         """Look one batch up and add its rows to ``collected``, order kept."""
-        chroms, poss, refs, alts, zs, ses, eafs = columns
+        chroms, poss, refs, alts = batch.chromosome, batch.position, batch.ref, batch.alt
         if len(self._keys) == 0:
-            matched = np.zeros(len(zs), dtype=bool)
+            matched = np.zeros(len(batch), dtype=bool)
             position = _empty_index()
         else:
             matched, place = self._keys.find(self._keys.codec.encode(chroms, poss, refs, alts))
             position = place[matched]
-        z = np.array(zs, dtype=np.float32)
-        se = np.array(ses, dtype=np.float32)
-        eaf = np.array(eafs, dtype=np.float32)
+        z = batch.z.astype(np.float32)
+        se = batch.se.astype(np.float32)
+        eaf = batch.eaf.astype(np.float32)
         matched_rows = (z[matched], se[matched], eaf[matched])
         self._collect_matched(position, matched_rows, collected)
         unmatched = ~matched
         collected.n_unmatched += int(unmatched.sum())
         if self._keep_unmatched:
-            at = np.flatnonzero(unmatched).tolist()
-            keys = [routing_key((chroms[j], poss[j], refs[j], alts[j])) for j in at]
-            collected.add_unmatched(keys, (z[unmatched], se[unmatched], eaf[unmatched]))
+            # The rows' own fields, not their Routing Keys: a key is a string
+            # a row, and most unmatched rows never need one (#318).
+            collected.add_unmatched(
+                batch.take(unmatched), (z[unmatched], se[unmatched], eaf[unmatched])
+            )
 
     def _collect_matched(
         self,

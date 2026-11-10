@@ -33,6 +33,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from opengwasdb.variants.routing.keys import routing_key
+
 __all__ = [
     "EncodedKeys",
     "MAX_POSITION",
@@ -41,6 +43,7 @@ __all__ = [
     "decode_keys",
     "decode_packed",
     "decode_spill",
+    "encode_fields",
     "encode_key",
     "encode_keys",
     "hashed_lookup",
@@ -246,6 +249,73 @@ def encode_keys(
         hashed_index=np.array(hashed_index, dtype=np.int64),
         hashed_raw=hashed_raw,
     )
+
+
+#: Each one-base allele a Routing Key spells as A, C, G or T: in either case,
+#: since a key upper-cases its alleles (`routing_key`).
+_KEY_ALLELE_CODES = {
+    **_ALLELE_CODES, **{base.lower(): code for base, code in _ALLELE_CODES.items()}
+}
+
+
+def encode_fields(
+    chromosome: Sequence[str],
+    position: Sequence[int],
+    ref: Sequence[str],
+    alt: Sequence[str],
+    *,
+    hash_fn: HashFn | None = None,
+) -> EncodedKeys:
+    """`encode_keys` of the Routing Keys these rows' fields spell, without the keys.
+
+    A key is formed only for a row it hashes: an SNV on a canonical chromosome
+    packs from its fields, and every other row's key is hashed, refused on a
+    collision and named in the side file exactly as `encode_keys` would. The
+    answer is `encode_keys`' for ``routing_key`` of each row, byte for byte,
+    which a test holds it to; a Hybrid off-reference spill no longer forms a
+    string a row to have it parsed back (#318).
+    """
+    count = len(chromosome)
+    codes = np.fromiter(
+        (_CHROMOSOME_CODES.get(label, -1) for label in chromosome), dtype=np.int64, count=count
+    )
+    places = np.asarray(position, dtype=object if count == 0 else None)
+    refs = np.fromiter((_KEY_ALLELE_CODES.get(a, -1) for a in ref), dtype=np.int64, count=count)
+    alts = np.fromiter((_KEY_ALLELE_CODES.get(a, -1) for a in alt), dtype=np.int64, count=count)
+    packs = (codes >= 0) & (places > 0) & (places <= MAX_POSITION) & (refs >= 0) & (alts >= 0)
+    packs = np.asarray(packs, dtype=bool)
+    values = np.zeros(count, dtype=np.uint64)
+    values[packs] = (
+        (codes[packs].astype(np.uint64) << np.uint64(_CHROMOSOME_SHIFT))
+        | (places[packs].astype(np.uint64) << np.uint64(_POSITION_SHIFT))
+        | (refs[packs].astype(np.uint64) << np.uint64(_REF_SHIFT))
+        | (alts[packs].astype(np.uint64) << np.uint64(_ALT_SHIFT))
+    )
+    hashed_index = np.flatnonzero(~packs)
+    hashed_raw = [
+        routing_key((chromosome[row], position[row], ref[row], alt[row]))
+        for row in hashed_index.tolist()
+    ]
+    _hash_rows(values, hashed_index, hashed_raw, _resolve_hash_fn(hash_fn))
+    return EncodedKeys(values=values, hashed_index=hashed_index.astype(np.int64),
+                       hashed_raw=hashed_raw)
+
+
+def _hash_rows(
+    values: np.ndarray, rows: np.ndarray, keys: Sequence[str], hash_fn: HashFn
+) -> None:
+    """Hash each of ``keys`` into its row of ``values``, refusing two keys that
+    share a value, as `encode_keys` does."""
+    seen: dict[int, str] = {}
+    for row, key in zip(rows.tolist(), keys, strict=True):
+        value = _hashed_value(key, hash_fn)
+        values[row] = value
+        existing = seen.setdefault(value, key)
+        if existing != key:
+            raise UnknownKeyEncodingError(
+                f"hash collision between off-reference keys {existing!r} and {key!r} "
+                f"(both encode to {value}); refusing to merge them"
+            )
 
 
 def is_hashed(values: np.ndarray) -> np.ndarray:

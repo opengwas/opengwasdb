@@ -60,6 +60,48 @@ them.**
   `stream_associations`, `stream_batches`, `stream_metric_chunks` and
   `extract_at_sites` (which takes `region` and `regions_file`). Every
   registered reader implements all five.
+- **A reader may also offer its associations as columns** (#318, added 10
+  Nov 2026). `stream_association_batches` yields `AssociationBatch`es:
+  `stream_associations`' rows, in order and bit for bit, with the same rows
+  dropped and the same tally filled. The method is optional (`BatchedReader`).
+  Pass 2 routes a reader's batches where it offers them
+  (`RouteTable.route_reader`), and otherwise reads its associations one at a
+  time into batches of the same type. Both go through one `route_batches`, so
+  the routed column and the Admission record cannot depend on which was read.
+  - The per-row stream stays the reference. A reader that offers batches is
+    held to it by an identity test over its fixtures.
+  - An `AssociationBatch` names no ALID and no rsid, which a Ragged build's
+    `ReaderBatch` carries: Pass 2 matches a row by its Routing Key and needs
+    neither, and forming them is most of what a per-row reader costs.
+  - FinnGen R13's reader offers them first: pandas parses 32 MiB of the
+    decompressed file at a time, and a block, or a row, that the columns
+    cannot show they read as `csv` and the per-row rules do is read by the
+    per-row rules themselves. On a 21,326,102-row R13 file it reads in 40.1 s
+    against 220.7 s one association at a time, beside a 24.7 s parse floor.
+    Rebuilding the FinnGen pilot OGS-00003, Pass 2 takes about 50 s an
+    Analysis against about 271 s, and the Store and Admission record are
+    identical.
+  - A batch's memory is a block's. R13's 21,326,102-row file reads as 63
+    batches, the largest of 346,947 rows. Reading it alone peaks at 501 MiB
+    resident, sampled every 0.2 s, and at 906 MiB by `ru_maxrss` in that run,
+    which started under `pixi run`; the reader A/B's readers, started
+    directly, peaked at 506 to 518 MiB by `ru_maxrss`.
+  - In an OGS-00003 rebuild each Pass 2 worker held about 0.27 GiB more
+    private memory than when it read rows: 0.89 and 1.00 GiB, mean, against
+    0.62 and 0.74, and at most 1.58 GiB. A build of the full FinnGen Store
+    (OGS-00017) at its 32 workers therefore needs about 32 × 1.58 GiB beside a
+    19.6 GiB parent, about 70 GiB. By the rule that a build takes at most a
+    quarter of available memory, it may start wherever about 280 GiB is
+    available.
+  - Where a source is read by the per-row rules, the first place is logged
+    with the byte it starts at and why. Once the source is read, one more line
+    gives how many of its blocks were read row by row, of how many, and how
+    many rows of the column-parsed blocks were read from their own line.
+    Those rows read the same, about five times slower.
+  - The issue listed FinnGen's first-rsid rule among what a batch covers. It
+    is left out deliberately: Pass 2 names no rsid, as `ReaderAssociation`
+    named none before, and Pass 1 still applies the rule, so a rebuild's
+    `variants.tsv.gz` is byte-identical.
 - **The registry is the only way in.**
   - `open_source(spec, alignment=)` and `resolve_reader(..., liftover=)` open a
     reader lifted onto the reference build, and a capability that cannot lift
@@ -77,10 +119,11 @@ them.**
   - the SE is the one reported, or recovered where the format recovers one.
 
   Association Admission judges everything else. A reader declares, once per
-  format, whether its rows name the genome's reference allele
-  (`ReferenceAllele`). Every projection carries that declaration unchanged.
-  (A batch also carried the `REFERENCE_*` codes #357's reversed-indel rule
-  read, until #316 removed the rule.)
+  format, whether its rows name the genome's reference allele, and spells
+  each indel's ALID by that declaration as it reads the row (ADR 0079). No
+  projection carries it. (Each association and batch carried it, and a batch
+  the `REFERENCE_*` codes #357's reversed-indel rule read, until #316 removed
+  the rule; nothing read the field after that, and #318 removed it.)
 - **The Ragged builders read through readers.**
   - `build-ragged-ssf` reads each Analysis with the GWAS-SSF reader's
     `stream_batches`.
@@ -144,7 +187,7 @@ The owner's rulings on the unifications, issue #56:
   every registered reader drops one, and carried each Analysis's metadata on
   every row, which a reader's associations have no field for. It is now
   `opengwasdb.association-tsv`, an ordinary reader: one file per Analysis,
-  associations only, `ReferenceAllele.UNDECLARED`. What the rows once
+  associations only, its format declaring no reference allele. What the rows once
   repeated (the Analysis id, its label, Trait Ontology, attribution, effect
   scale, and MAF and INFO filters) is the build manifest's, as for every other
   builder, and a header that still names one of those columns is refused. An

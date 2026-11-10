@@ -36,7 +36,6 @@ from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers import interface
 from opengwasdb.readers.interface import (
     ReaderAssociation,
-    ReferenceAllele,
     SiteMetrics,
     SourceVariant,
     StreamTally,
@@ -67,8 +66,6 @@ from opengwasdb.variants.normalise import (
 )
 
 GWAS_VCF_CAPABILITY = "opengwasdb.gwas-vcf"
-#: GWAS-VCF's REF is the genome's reference allele, on every record.
-_REFERENCE = ReferenceAllele.REF
 
 
 def write_regions_file(alids: Iterable[str], path: str | Path) -> Path:
@@ -625,11 +622,11 @@ class GwasVcfReader:
 
     def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
         with contextlib.closing(_record_rows(self.path, tally=tally)) as rows:
-            yield from stream_associations(rows, self.stored_effect_scale, _REFERENCE)
+            yield from stream_associations(rows, self.stored_effect_scale)
 
     def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
         with contextlib.closing(_record_rows(self.path, tally=tally)) as rows:
-            yield from stream_batches(rows, _REFERENCE, chunk_rows=self.chunk_rows)
+            yield from stream_batches(rows, chunk_rows=self.chunk_rows)
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         yield from _variants(self.path)

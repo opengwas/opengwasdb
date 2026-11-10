@@ -241,7 +241,8 @@ opposite alleles. Dropping both rows was rejected because it loses a cell
 base kept; this rule keeps it wherever the source declares the reference.
 
 Which formats declare the reference allele (`ReferenceAllele`, carried on each
-`ReaderAssociation` and through routing as one byte a row):
+`ReaderAssociation` and through routing as one byte a row, until #316 and #318
+removed both carriers):
 - GWAS-VCF's `REF`, FinnGen r13's `ref`, and a Column Map with
   `ref_alt_effect_is_alt`, whose rows are the FinnGen reader's, do.
 - GWAS-SSF names an effect and an other allele, and its documentation does not
