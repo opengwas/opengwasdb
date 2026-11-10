@@ -151,6 +151,11 @@ def k0_store(tmp_path_factory: pytest.TempPathFactory) -> ogld.LDStore:
 def test_clump_leads_equal_plink2_s_at_k0(
     r2: float, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
+    """Leads equal plink2's. plink2 v2.0.0-a.6.9LM joins a variant at r² > --clump-r2 and distance
+    < --clump-kb × 1,000 (checked on a constructed pair at exactly r² 0.25, and at exactly 3 Mb),
+    and so does `clump` (owner, 10 November 2026); `proxies` keeps ≥ and ≤. No candidate pair of
+    the Test Panel sits on either edge, so the leads are the same under both; the edges are
+    tested in test_query_edges.py."""
     ogld.open(support.TEST_STORE)
     store = k0_store(tmp_path_factory)
     params = panel_data().clump_params()
