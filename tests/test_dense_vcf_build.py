@@ -24,6 +24,7 @@ from liftover_fixtures import (
     strand_vcf_rows,
     write_two_strand_chain,
 )
+from query_assertions import decoded_se, indexed_se
 from residual_fixtures import (
     MAF_VCF_FREQUENCIES,
     MAF_VCF_N_VARIANTS,
@@ -34,14 +35,18 @@ from residual_fixtures import (
 )
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
+from opengwasdb.encoding.plan import SE_EXCEPTION
+from opengwasdb.encoding.planes import DenseSePlane
 from opengwasdb.layouts.dense.build_vcf import _spill_column, build_dense_from_vcf_manifest
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.store.open import open_store
 from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation import validate_store
+from opengwasdb.variants import VariantAxis
 from opengwasdb.variants.reference import read_variant_reference, write_variant_reference
 
 # hg19 positions used in fixtures and their expected hg38 positions
@@ -1682,6 +1687,198 @@ def test_standalone_gwas_vcf_build_codes_residual_se_and_falls_back_without_eaf(
             assert np.isfinite(result["se"]).all()
             np.testing.assert_allclose(result["se"], expected_for(col), rtol=0.01)
     assert validate_store(fallback).ok, validate_store(fallback).errors
+
+
+#: An SE `float16` cannot hold: near 1.0 its spacing is 2**-10, so this rounds
+#: to exactly 1.0. A build reads the source's `float32` 1.00010001..., which
+#: spec §6a says an exact exception stores unchanged (issue #355). Written as
+#: five significant digits because the GWAS-VCF reader's `bcftools query`
+#: prints an SE at six, so a longer literal would not survive the source.
+_UNREPRESENTABLE_SE_TEXT = "1.0001"
+_UNREPRESENTABLE_SE = np.float32(1.0001)
+#: An SE `float16` cannot hold in the other direction: above 65,504 its rounding
+#: is `+inf`, so a residual plan's exact exception is the only way a Store holds
+#: this number at all (issue #355).
+_LARGE_SE_TEXT = "100000.0"
+_LARGE_SE = np.float32(100000.0)
+#: The row the odd SE sits on. 451st variant, and |z| = 8, so the exception is
+#: also a top hit: one fixture proves the plane and the index agree.
+_EXCEPTION_ROW = 300
+
+
+def _exception_se_rows(column: int, *, se_text: str | None) -> list[str]:
+    """Shared frequency-fixture rows, optionally with one SE the plan cannot code.
+
+    Every other row's SE tracks the MAF model, so the plane is eligible for
+    residual coding. The odd row's does not, which puts its residual outside
+    every candidate range, so the build must store it exactly.
+    """
+    rows = maf_vcf_rows(column, lambda _row, _col: 1.0)
+    if se_text is not None:
+        position = (_EXCEPTION_ROW + 1) * 1000
+        frequency = MAF_VCF_FREQUENCIES[_EXCEPTION_ROW]
+        rows[_EXCEPTION_ROW] = (
+            f"1\t{position}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t"
+            f"{8.0 * float(se_text):.6f}:{se_text}:{frequency:.6f}\n"
+        )
+    return rows
+
+
+def _build_with_odd_se(tmp_path: Path, label: str, se_text: str) -> tuple[Path, Path]:
+    """A residual Dense release of two Analyses, t0 carrying `se_text` as one SE.
+
+    Returns the store and the manifest it was built from, which is also the
+    source `fidelity.source` checks it against.
+    """
+    vcfs = {
+        tid: write_gwas_vcf_with_eaf(
+            tmp_path / f"{tid}.vcf",
+            _exception_se_rows(col, se_text=se_text if col == 0 else None),
+        )
+        for col, tid in enumerate(("t0", "t1"))
+    }
+    manifest = write_hg38_manifest(tmp_path / f"{label}.manifest.tsv", vcfs)
+    store = tmp_path / f"{label}.opengwasdb"
+    build_dense_from_vcf_manifest(
+        manifest, store, store_id="s", release_id="r", chunk_shape=(100, 2)
+    )
+    return store, manifest
+
+
+@pytest.fixture(scope="module")
+def residual_se_exception_store(tmp_path_factory) -> tuple[Path, Path]:
+    """A residual Dense release whose t0 carries one SE `float16` cannot hold."""
+    return _build_with_odd_se(
+        tmp_path_factory.mktemp("residual-se-exception"), "exception", _UNREPRESENTABLE_SE_TEXT
+    )
+
+
+@pytest.fixture(scope="module")
+def large_se_store(tmp_path_factory) -> tuple[Path, Path]:
+    """A residual Dense release whose t0 carries one SE above `float16`'s range."""
+    return _build_with_odd_se(tmp_path_factory.mktemp("large-se"), "large", _LARGE_SE_TEXT)
+
+
+def _exception_cell(store: Path) -> tuple[int, str]:
+    """The variant row and ALID that carry the fixture's odd SE."""
+    alid = f"1:{(_EXCEPTION_ROW + 1) * 1000}:A:G"
+    axis = VariantAxis(store)
+    rows = {record.alid: int(record.variant_index) for record in axis.all()}
+    axis.close()
+    return rows[alid], alid
+
+
+def _stored_exception(store: Path, row: int) -> float:
+    """The SE exception table's value at `row` in Analysis 0, asserted to be an exception.
+
+    A table entry the plane does not ask for is not what these tests are about,
+    so the cell's `-127` code and its one table position are checked first.
+    """
+    root = open_store(store).arrays(mode="r")
+    assert int(np.asarray(root["se"][row, 0])) == SE_EXCEPTION, (
+        "the odd SE must be an exact exception, or the table is not under test"
+    )
+    flat = row * int(root["se"].shape[1])
+    index = np.asarray(root["se_exception_index"][:]).tolist()
+    assert index.count(flat) == 1
+    return float(np.asarray(root["se_exception_value"][:])[index.index(flat)])
+
+
+def test_residual_se_exception_is_the_source_se_float16_cannot_hold(
+    residual_se_exception_store: tuple[Path, Path],
+) -> None:
+    """Issue #355: a Dense build stores an exact SE exception as the source's
+    `float32`, not as the `float16` the plane happened to scratch in.
+
+    The pre-fix band write rounded every SE to `float16` before the float32
+    scratch plane held it, so the exception table held 1.0 beside a source that
+    said 1.0001 -- a value a query could not tell from a correctly stored one.
+    """
+    store, _manifest = residual_se_exception_store
+    assert np.float16(_UNREPRESENTABLE_SE) == np.float16(1.0), (
+        "the fixture must carry an SE float16 cannot represent, or this proves nothing"
+    )
+    assert StoreManifest.load(store).encoding.se.is_residual, (
+        "the fixture must residual-code its se plane"
+    )
+    row, alid = _exception_cell(store)
+    stored = _stored_exception(store, row)
+    assert stored == float(_UNREPRESENTABLE_SE), (
+        f"the exception table holds {stored!r}; the source carried "
+        f"{float(_UNREPRESENTABLE_SE)!r}"
+    )
+    assert stored != float(np.float16(_UNREPRESENTABLE_SE))
+
+    root = open_store(store).arrays(mode="r")
+    decoded = DenseSePlane.open(root, StoreManifest.load(store).encoding).band(row, row + 1)[0, 0]
+    assert float(decoded) == float(_UNREPRESENTABLE_SE)
+    assert decoded_se(store, alid, "t0") == float(_UNREPRESENTABLE_SE)
+    assert validate_store(store).ok, validate_store(store).errors
+
+
+def test_an_se_above_float16s_range_is_an_exact_exception_not_a_failed_build(
+    large_se_store: tuple[Path, Path],
+) -> None:
+    """Issue #355: an SE of 100,000 is held exactly, not turned into `+inf`.
+
+    `float16` rounds it to `+inf`, and the pre-fix build could not store an
+    infinite SE at all: the scratch plane held `+inf` and the SE encoding
+    refused it with "cannot store negative or non-finite standard errors".
+    """
+    store, _manifest = large_se_store
+    with np.errstate(over="ignore"):
+        assert float(np.float16(_LARGE_SE)) == float("inf"), (
+            "the fixture must carry an SE float16 turns into +inf, or this proves nothing"
+        )
+    assert StoreManifest.load(store).encoding.se.is_residual
+    row, alid = _exception_cell(store)
+    stored = _stored_exception(store, row)
+    assert np.isfinite(stored)
+    assert stored == float(_LARGE_SE)
+    assert decoded_se(store, alid, "t0") == float(_LARGE_SE)
+    assert validate_store(store).ok, validate_store(store).errors
+
+
+def test_source_fidelity_accepts_the_source_se_float16_cannot_hold(
+    large_se_store: tuple[Path, Path],
+) -> None:
+    """`fidelity.source` compares an exact exception with the source's `float32`.
+
+    Its reference used to be the codec's `float16` rounding, which for an SE
+    above 65,504 is `+inf`: a correct release would have failed its own source
+    check. The fixture's SE is one of those, so the two references cannot agree
+    by accident.
+    """
+    store, manifest = large_se_store
+    with np.errstate(over="ignore"):
+        assert float(np.float16(_LARGE_SE)) == float("inf"), (
+            "the fixture must carry an SE whose float16 reference is +inf, or this proves nothing"
+        )
+    result = validate_store(store, source=manifest)
+    assert "fidelity.source" not in result.failed(), result.errors
+    assert result.ok, result.errors
+
+
+def test_top_hit_index_carries_the_exception_se_the_plane_decodes(
+    residual_se_exception_store: tuple[Path, Path],
+) -> None:
+    """The Top-Hit Index's SE for a hit is the SE the Store decodes there.
+
+    The index's `se` is `float32` and rule `top_hits.se` says it equals the
+    decoded plane's, which for an exact exception is the source's `float32`.
+    """
+    store, _manifest = residual_se_exception_store
+    encoding = StoreManifest.load(store).encoding
+    assert encoding.se.is_residual, "the fixture must residual-code its se plane"
+    row, alid = _exception_cell(store)
+    assert _stored_exception(store, row) == float(_UNREPRESENTABLE_SE), (
+        "the fixture's odd SE must be the exception the index is asked to carry"
+    )
+    root = open_store(store).arrays(mode="r")
+    decoded = float(DenseSePlane.open(root, encoding).band(row, row + 1)[0, 0])
+    indexed = indexed_se(store, alid, "t0")
+    assert indexed == decoded, f"the index holds {indexed!r}, the plane decodes {decoded!r}"
+    assert indexed == float(_UNREPRESENTABLE_SE)
 
 
 def test_cli_default_source_assembly_applies_to_dense_build(tmp_path):

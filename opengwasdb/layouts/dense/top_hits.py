@@ -354,10 +354,10 @@ def write_top_hit_indexes_for_store(
     with log_phase(log, "Top-hit EAF gather"):
         eaf = _collect_top_hit_eaf(store_path, rows, cols, encoding, n_workers)
     if encoding.se.is_residual:
-        # The harvested `se` is what the source reported; the plane now holds a
-        # residual of it. ADR 0040 asks the index to carry what a query reads
-        # back, so re-read it through the plane rather than keep the un-encoded
-        # value the band-writer happened to still be holding.
+        # A residual plane holds codes, so the harvested `se` -- the source's
+        # value, or its `float16` view -- is not what a query decodes at that
+        # cell. ADR 0040 asks the index to carry what a query reads back, so
+        # re-read it through the plane (issue #355).
         log.info("Re-reading top-hit se through the residual plane")
         with log_phase(log, "Top-hit se re-read"):
             se = _collect_top_hit_se(store_path, rows, cols, encoding, n_workers)
