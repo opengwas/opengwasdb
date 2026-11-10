@@ -1,11 +1,16 @@
-"""The public surface and the seams between tickets, pinned signature by signature.
+"""The public surface, pinned signature by signature.
 
-Epic #1's tickets build against these signatures in parallel: ogld#4 implements the store
-seams that ogld#5 writes through and ogld#6 reads through. A ticket's job is to make its
-contract tests (tests/contract/) pass without changing any of these. cleat's public-api
-gate records only a declaration's first line at column 0, so it cannot see a method or a
-signature that ruff wraps; this test sees both. Changing an entry is an API change, made on
-purpose, with a changelog fragment that says so.
+What a caller of ogld sees is pinned here: `ogld.open`, the four queries and their results,
+`ogld.build` and its inputs, `ogld.validate`, the identity functions and the CLI's entry.
+Changing an entry is an API change, made on purpose, with a changelog fragment that says so.
+cleat's public-api gate records only a declaration's first line at column 0, so it cannot see
+a method or a signature that ruff wraps; this test sees both.
+
+The seams inside the package are not pinned (owner, 10 November 2026): `StoreReader`, which
+the queries read through, and `StoreWriter`, which a build writes through. They were pinned
+while epic #1's first tickets were built in parallel against them. They now move with what the
+reads and the builds are measured to need, held by the contract tests (tests/contract/) and by
+`docs/architecture/ownership.md`, which says what each module owns.
 """
 
 from __future__ import annotations
@@ -22,7 +27,7 @@ import numpy as np
 import pytest
 
 import ogld
-from ogld import cli, identity, store
+from ogld import cli, identity
 
 #: The committed Test Store (tests/contract/support.py), written by the walking skeleton.
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
@@ -104,58 +109,6 @@ SURFACE: dict[str, tuple[Callable[..., Any], str]] = {
         identity.Orientation,
         "(chrom: 'str', position: 'int', alid: 'str', a1: 'str', a2: 'str', a1_is_alt: 'bool')"
         " -> None",
-    ),
-    "ogld.store.StoreReader.open": (
-        store.StoreReader.open,
-        "(location: 'str | os.PathLike[str]') -> 'StoreReader'",
-    ),
-    "ogld.store.StoreReader.rows_of": (
-        store.StoreReader.rows_of,
-        "(self, alids: 'Sequence[str]') -> 'npt.NDArray[np.int64]'",
-    ),
-    "ogld.store.StoreReader.rows_in": (
-        store.StoreReader.rows_in,
-        "(self, chrom: 'str', start: 'int', stop: 'int') -> 'npt.NDArray[np.int64]'",
-    ),
-    "ogld.store.StoreReader.variants": (
-        store.StoreReader.variants,
-        "(self, rows: 'npt.NDArray[np.int64]') -> 'Variants'",
-    ),
-    "ogld.store.StoreReader.pair_r": (
-        store.StoreReader.pair_r,
-        "(self, rows: 'npt.NDArray[np.int64]') -> 'npt.NDArray[np.float64]'",
-    ),
-    "ogld.store.StoreReader.index": (
-        store.StoreReader.index,
-        "(self, rows: 'npt.NDArray[np.int64]') -> 'Partners'",
-    ),
-    "ogld.store.StoreReader.band": (
-        store.StoreReader.band,
-        "(self, rows: 'npt.NDArray[np.int64]') -> 'Partners'",
-    ),
-    "ogld.store.StoreWriter.create": (
-        store.StoreWriter.create,
-        "(location: 'str | os.PathLike[str]', *, variants: 'Variants', near_bp: 'int', "
-        "far_bp: 'int') -> 'StoreWriter'",
-    ),
-    "ogld.store.StoreWriter.write_near": (
-        store.StoreWriter.write_near,
-        "(self, first_row: 'int', lengths: 'npt.NDArray[np.int64]', "
-        "codes: 'npt.NDArray[np.int16]') -> 'None'",
-    ),
-    "ogld.store.StoreWriter.write_index": (
-        store.StoreWriter.write_index,
-        "(self, chrom: 'str', indptr: 'npt.NDArray[np.int64]', partner: 'npt.NDArray[np.int64]', "
-        "codes: 'npt.NDArray[np.int16]') -> 'None'",
-    ),
-    "ogld.store.StoreWriter.finish": (
-        store.StoreWriter.finish,
-        "(self, provenance: 'Provenance') -> 'Provenance'",
-    ),
-    "ogld.store.Partners": (
-        store.Partners,
-        "(indptr: 'npt.NDArray[np.int64]', partner: 'npt.NDArray[np.int64]', "
-        "r: 'npt.NDArray[np.float64]') -> None",
     ),
     "ogld.cli.main": (cli.main, "(argv: 'Sequence[str] | None' = None) -> 'int'"),
 }
