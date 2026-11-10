@@ -28,7 +28,7 @@ from store_copies import TEST_STORE, arrays, copy_store
 
 import ogld
 from ogld import cli
-from ogld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError, Provenance
+from ogld.format import REQUIRED_KEYS, RESERVED_CODE, VALIDATION_RULES, InputError, Provenance
 from ogld.store import StoreReader, StoreWriter, validation
 from ogld.store.validation import ValidationFailed, validate_group
 
@@ -41,6 +41,8 @@ WINDOWED.remove("variants.chromosomes")
 #: of the others in one window, and breaking it in several asks nothing more of them.
 ACROSS_BLOCKS = ["index.symmetric", "index.near"]
 
+
+RESERVED = RESERVED_CODE
 
 #: The rules one pass over each chromosome's Near Band and Proxy Index feeds (spec §12).
 SCANNED = [
@@ -473,14 +475,63 @@ def test_every_code_and_entry_is_read_once_by_all_the_rules_together(
     assert {path: n for path, n in read.items() if not path.startswith("thread")} == held
 
 
-@pytest.mark.usefixtures("small_windows")
-@pytest.mark.parametrize("rule", SCANNED)
-def test_threads_find_what_one_thread_finds(rule: str, tmp_path: Path) -> None:
+def faults_in_every_block(store: Path) -> None:
+    """Breaks all seven scanned rules all along chr22: every 1,500th band code reserved; every
+    700th index entry's code reserved or 1, by turns, and every 900th partner the last row."""
+    band = zarr.open_array(store / "near/22/r", mode="r+")
+    band[::1500] = RESERVED
+    code = zarr.open_array(store / "index/22/r", mode="r+")
+    values = np.asarray(code[::700])
+    values[0::2], values[1::2] = RESERVED, 1
+    code[::700] = values
+    partner = zarr.open_array(store / "index/22/partner", mode="r+")
+    partner[::900] = len(contract().chr22(store)[1]) - 1
+
+
+#: The rules whose findings come one per block they fault; the other two report at the end.
+PER_BLOCK = ["near.codes", "index.rows", "index.codes", "index.distance", "index.threshold"]
+
+
+def test_threads_find_what_one_thread_finds_in_the_same_order(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Windows of 16,384 codes and 2,048 entries: several blocks a chromosome, few reads.
+    monkeypatch.setattr(validation, "_WINDOW", 1 << 14)
     copy = copy_store(tmp_path / "store")
-    breakers()[rule](copy)
+    faults_in_every_block(copy)
     one = findings(copy, SCANNED)
-    assert one[rule], f"{rule} passed a store built to break it"
+    assert all(one[rule] for rule in SCANNED), "every scanned rule must fail"
+    spread = {rule: len(one[rule]) for rule in PER_BLOCK}
+    assert min(spread.values()) > 5, f"each rule's findings must span blocks: {spread}"
     assert findings(copy, SCANNED, threads=4) == one
+
+
+@pytest.mark.usefixtures("small_windows")
+def test_index_near_rechecks_only_the_blocks_that_name_a_row_it_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Spec §12: a later-row entry unlike the band is found again in the pass's windows, and
+    # only the blocks holding an entry that names its row are read twice.
+    copy = copy_store(tmp_path / "store")
+    negate_a_later_entry(copy)
+    entries = zarr.open_array(copy / "index/22/partner", mode="r").shape[0]
+    assert entries > 20 * (validation._WINDOW >> 3), "the index must span many windows"
+    read = Counter[str]()
+    sizes: list[int] = []
+    getitem = zarr.Array.__getitem__
+
+    def counted(array: zarr.Array, selection: Any) -> Any:
+        values = getitem(array, selection)
+        if array.path in {"index/22/partner", "index/22/r"}:
+            read[array.path] += np.asarray(values).size
+            sizes.append(np.asarray(values).size)
+        return values
+
+    monkeypatch.setattr(zarr.Array, "__getitem__", counted)
+    (found,) = findings(copy, ["index.near"])["index.near"]
+    assert found.message == "entries whose code is not the Near Band's: (0, 1)"
+    assert max(sizes) <= validation._WINDOW >> 3
+    assert read["index/22/partner"] < entries + entries // 4, read
 
 
 @pytest.mark.usefixtures("small_windows")
@@ -598,10 +649,12 @@ def test_ogld_validate_exits_1_naming_the_rule_a_store_breaks(
     assert "FAIL index.symmetric" in out
     assert "ok   index.near" in out
     assert cli.main(["info", str(tmp_path / "nothing")]) == 2
-    with pytest.raises(SystemExit) as refused:
-        cli.main(["validate", "--threads", "0", str(copy)])
-    assert refused.value.code == 2
-    assert "needs at least one thread, not 0" in capsys.readouterr().err
+    for threads in ("0", "x"):
+        with pytest.raises(SystemExit) as refused:
+            cli.main(["validate", "--threads", threads, str(copy)])
+        assert refused.value.code == 2
+        said = capsys.readouterr().err
+        assert f"argument --threads: needs a whole number of at least 1, not '{threads}'" in said
 
 
 # ------------------------------------------------------------------ on write

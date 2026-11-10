@@ -43,7 +43,7 @@ from ogld.format.encoding import (
 )
 from ogld.format.provenance import ENCODING, FORMAT_VERSION, VALIDATION_RULES
 from ogld.identity import IdentityError, alid_locus, orient, variant_order_key
-from ogld.store.layout import never_data, shown_fill
+from ogld.store.layout import never_data, shown_fill, spans_at
 from ogld.store.location import open_group
 
 #: Elements of a Near Band or a Proxy Index a rule reads at once: 8 Mi codes are 16 MiB.
@@ -1020,12 +1020,12 @@ class _Codes(_Scanned):
         if self.parts:
             return
 
-        def read(window: tuple[int, int]) -> tuple[int, npt.NDArray[Any]]:
-            return window[0], self.store.read(self.path, *window)
+        def check(window: tuple[int, int]) -> list[tuple[str, str]]:
+            return list(self._reserved(self.store.read(self.path, *window), window[0]))
 
         windows = _windows(0, self.length, _WINDOW)
-        for lo, codes in _in_order(read, windows, self.store.threads):
-            yield from self._reserved(codes, lo)
+        for problems in _in_order(check, windows, self.store.threads):
+            yield from problems
 
     def block(self, b: _Block) -> _Problems:
         yield from self._reserved(b.get(self.part), b.at[self.part])
@@ -1151,6 +1151,32 @@ class _Sums:
         return differ
 
 
+class _Named:
+    """Per row, the first and the last row whose entries name it as their partner, kept from
+    several threads: so a row can be checked again by reading only the blocks between them."""
+
+    def __init__(self, rows: int) -> None:
+        self.first = np.full(rows, rows, dtype=np.int64)
+        self.last = np.full(rows, -1, dtype=np.int64)
+        self.lock = threading.Lock()
+
+    def add(self, named: npt.NDArray[np.int64], by: npt.NDArray[np.int64]) -> None:
+        with self.lock:
+            np.minimum.at(self.first, named, by)
+            np.maximum.at(self.last, named, by)
+
+    def blocks(
+        self, rows: npt.NDArray[np.bool_], blocks: list[tuple[int, int]]
+    ) -> list[tuple[int, int]]:
+        """The `blocks` holding an entry that names one of `rows`."""
+        named = rows & (self.last >= 0)
+        size = len(self.first)
+        opened = np.bincount(self.first[named], minlength=size + 1)
+        closed = np.bincount(self.last[named] + 1, minlength=size + 1)
+        held = np.cumsum(opened - closed)[:size] > 0
+        return [(a, b) for a, b in blocks if held[a:b].any()]
+
+
 def _odd_pairs(chrom: str, odd: npt.NDArray[np.int64], size: int, what: str) -> _Problems:
     """One finding naming the pairs in `odd` (keys of `_keys`), if there are any."""
     pair = odd >> 16
@@ -1193,9 +1219,10 @@ class _IndexNear(_Scanned):
     """The index's near half is the band, thresholded (spec §5). Each block's entries in a
     pair's earlier row are compared with those Near Band rows at the floor, both ways. An entry
     in a pair's later row must carry the band's code: its key goes to one sum of its pair's
-    earlier row, and that row's band pairs at the floor to the other, so only a row whose
-    sums differ is read again, entry by entry. That such an entry exists at all is
-    index.symmetric's to say."""
+    earlier row, and that row's band pairs at the floor to the other. At the chromosome's end,
+    only the blocks holding an entry that names a row whose sums differ are read again, and
+    only those entries are checked, each against the band's code for its pair. That such an
+    entry exists at all is index.symmetric's to say."""
 
     parts = frozenset({"band", "partner", "code"})
 
@@ -1205,7 +1232,7 @@ class _IndexNear(_Scanned):
         self.near_bp, self.floor = store.integer("near_bp"), store.integer("far_code_floor")
         self.band = store.indptr(f"near/{c.name}/indptr", c.size)
         self.index = _index_indptr(store, c)
-        self.sums = _Sums(c.size)
+        self.sums, self.named = _Sums(c.size), _Named(c.size)
 
     def _halves(
         self, owner: npt.NDArray[np.int64], partner: npt.NDArray[np.int64]
@@ -1220,10 +1247,9 @@ class _IndexNear(_Scanned):
         """The block's Near Band pairs with |code| ≥ the floor: earlier row, later row, code."""
         codes = b.get("band")
         at = np.flatnonzero((codes >= self.floor) | (codes <= -self.floor))
-        starts = self.band[b.first : b.last + 1] - self.band[b.first]
-        row = np.searchsorted(starts, at, side="right") - 1
-        lo = b.first + row
-        return lo, lo + 1 + (at - starts[row]), codes[at].astype(np.int64)
+        rows = np.arange(b.first, b.last, dtype=np.int64)
+        row, later = spans_at(rows + 1, np.diff(self.band[b.first : b.last + 1]), at)
+        return rows[row], later, codes[at].astype(np.int64)
 
     def block(self, b: _Block) -> _Problems:
         lo, hi, code = self._kept(b)
@@ -1240,13 +1266,20 @@ class _IndexNear(_Scanned):
         self.sums.add(0, lo, band)
         up, down = partner[in_later], owner[in_later]
         self.sums.add(1, up, _keys(up, down, held[in_later], size))
+        self.named.add(up, down)
 
     def end(self) -> _Problems:
         rows = self.sums.differ()
-        if rows.any():
-            for block in self.c.blocks():
-                b = _read_block(self.store, self.c, frozenset({"partner", "code"}), block)
-                yield from self._recheck(rows, b)
+        if not rows.any():
+            return
+
+        def recheck(block: tuple[int, int]) -> list[tuple[str, str]]:
+            b = _read_block(self.store, self.c, frozenset({"partner", "code"}), block)
+            return list(self._recheck(rows, b))
+
+        blocks = self.named.blocks(rows, self.c.blocks())
+        for problems in _in_order(recheck, blocks, self.store.threads):
+            yield from problems
 
     def _recheck(self, rows: npt.NDArray[np.bool_], b: _Block) -> _Problems:
         """The block's entries in a pair's later row whose earlier row is one of `rows`,

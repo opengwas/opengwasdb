@@ -29,10 +29,10 @@ def _optional_float(text: str) -> float | None:
 
 
 def _threads(text: str) -> int:
-    threads = int(text)
-    if threads < 1:
-        raise argparse.ArgumentTypeError(f"needs at least one thread, not {threads}")
-    return threads
+    """A count of threads; argparse names the option in front of the reason it refuses one."""
+    if not text.strip().isdigit() or int(text) < 1:
+        raise argparse.ArgumentTypeError(f"needs a whole number of at least 1, not {text!r}")
+    return int(text)
 
 
 def _parser() -> argparse.ArgumentParser:
