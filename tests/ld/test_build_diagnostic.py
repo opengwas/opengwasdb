@@ -25,9 +25,6 @@ from ogld.build import adjust, diagnostic, record
 from ogld.format import InputError
 from ogld.store import StoreReader
 
-ROOT = Path(__file__).resolve().parents[1]
-REGIONS = ROOT / "docs" / "spec" / "long-range-ld-regions-grch38.tsv"
-
 
 @pytest.fixture(scope="module")
 def k10(tmp_path_factory: pytest.TempPathFactory) -> ogld.Provenance:
@@ -155,15 +152,17 @@ def test_a_variant_the_covariates_span_has_no_variance_left() -> None:
         adjust.unit_vectors(np.vstack([spanned, free]), covariates, np.array([True, True]))
 
 
-def test_the_package_s_regions_are_the_spec_s() -> None:
-    rows = [
-        line.split("\t")
-        for line in REGIONS.read_text().splitlines()
-        if line and not line.startswith("#")
-    ][1:]
-    table = tuple((r[0], r[1], int(r[2]), int(r[3])) for r in rows)
-    assert table == diagnostic.LONG_RANGE_LD_REGIONS
+def test_the_package_owns_the_long_range_ld_regions() -> None:
+    # The table is package data (ogld/build/long-range-ld-regions-grch38.tsv), read once by
+    # diagnostic.long_range_ld_regions, which the build and both scripts call. Held here to
+    # build-inputs §9's own numbers.
+    table = diagnostic.long_range_ld_regions()
     assert len(table) == 27
+    named = {name: (chrom, start, end) for name, chrom, start, end in table}
+    assert named["17q21.31_inversion"] == ("17", 45761253, 46765892)
+    assert named["price2008_03_LCT"] == ("2", 133742429, 137242430)
+    assert named["MHC"][0] == named["price2008_12_MHC_wide"][0] == "6"
+    assert all(start <= end for _, _, start, end in table)
 
 
 def test_a_region_s_variants_are_left_out() -> None:

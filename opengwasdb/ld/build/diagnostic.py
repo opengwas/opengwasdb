@@ -18,9 +18,12 @@ the centre of the bin that holds it.
 
 from __future__ import annotations
 
+import functools
+import importlib.resources
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from importlib.resources.abc import Traversable
 from typing import Final
 
 import numpy as np
@@ -45,44 +48,29 @@ NO_PAIR_SOURCE: Final = (
     "rates are not measured"
 )
 
-#: The Long-Range LD Regions, GRCh38, 1-based inclusive: name, chromosome, start, end.
-#: A copy of `docs/spec/long-range-ld-regions-grch38.tsv` (build-inputs §9), held to it by
-#: tests/test_build_diagnostic.py, because the package carries no docs.
-LONG_RANGE_LD_REGIONS: Final = (
-    ("price2008_01", "1", 47534328, 51534328),
-    ("price2008_02", "2", 85772877, 99883538),
-    ("price2008_03_LCT", "2", 133742429, 137242430),
-    ("price2008_04", "2", 182135273, 189135274),
-    ("price2008_05", "3", 47458510, 49962567),
-    ("price2008_06", "3", 83450849, 86950850),
-    ("price2008_07", "3", 88950850, 97781156),
-    ("price2008_08", "5", 44499898, 51204166),
-    ("price2008_09", "5", 98664296, 101164296),
-    ("price2008_10", "5", 129664307, 132664308),
-    ("price2008_11", "5", 136164311, 139164311),
-    ("price2008_12_MHC_wide", "6", 24999772, 35032223),
-    ("MHC", "6", 28510020, 33480577),
-    ("price2008_13", "6", 57135202, 63290095),
-    ("price2008_14", "6", 139678863, 142178863),
-    ("price2008_15", "7", 54932307, 66535013),
-    ("price2008_16_8p23_wide", "8", 7142478, 13142491),
-    ("8p23.1_inversion", "8", 8198267, 12123140),
-    ("price2008_17", "8", 43144857, 49087441),
-    ("price2008_18", "8", 110987771, 113987771),
-    ("price2008_19", "10", 36711072, 42504552),
-    ("price2008_20", "11", 45978449, 57232526),
-    ("price2008_21", "11", 87789108, 90766832),
-    ("price2008_22", "12", 32847066, 39606198),
-    ("price2008_23", "12", 109062195, 111562196),
-    ("17q21.31_inversion", "17", 45761253, 46765892),
-    ("price2008_24", "20", 33412194, 35912078),
-)
+#: The Long-Range LD Regions' table (build-inputs §9), data of this package, which owns it.
+REGIONS_FILE: Final = "long-range-ld-regions-grch38.tsv"
+
+
+def long_range_ld_regions_file() -> Traversable:
+    """The table's file: tab-separated, a `#` comment, a header, one region a row."""
+    return importlib.resources.files("ogld.build").joinpath(REGIONS_FILE)
+
+
+@functools.cache
+def long_range_ld_regions() -> tuple[tuple[str, str, int, int], ...]:
+    """The Long-Range LD Regions, GRCh38, 1-based inclusive: (name, chromosome, start, end), in
+    the table's order. The one reader of the table: the build's PC diagnostic, the PC Files'
+    recipe (`scripts/make_pcs.py`) and the Test Store's script all call it."""
+    lines = long_range_ld_regions_file().read_text().splitlines()
+    rows = [line.split("\t") for line in lines if line and not line.startswith("#")][1:]
+    return tuple((row[0], row[1], int(row[2]), int(row[3])) for row in rows)
 
 
 def outside_regions(chrom: str, position: npt.NDArray[np.int64]) -> npt.NDArray[np.bool_]:
     """True for each variant of chromosome `chrom` outside every Long-Range LD Region."""
     inside = np.zeros(len(position), dtype=np.bool_)
-    for _, on, start, end in LONG_RANGE_LD_REGIONS:
+    for _, on, start, end in long_range_ld_regions():
         if on == chrom:
             inside |= (position >= start) & (position <= end)
     return ~inside

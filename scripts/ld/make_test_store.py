@@ -36,6 +36,7 @@ import numpy.typing as npt
 import zarr
 
 import ogld
+from ogld.build.diagnostic import long_range_ld_regions
 from ogld.build.near_band import read_alt_counts
 from ogld.format import (
     ENCODING,
@@ -62,7 +63,6 @@ DIAGNOSTIC_SEED = 405
 RATE_R2 = 0.01
 NEAR_100KB = 100_000
 QUANTILES = (0, 0.5, 0.9, 0.99, 1)
-LONG_RANGE = ROOT / "docs" / "spec" / "long-range-ld-regions-grch38.tsv"
 
 
 @dataclass(frozen=True)
@@ -348,11 +348,7 @@ def residual_fit(z: npt.NDArray[np.float64], design: npt.NDArray[np.float64]) ->
 
 def long_range_mask(vs: VariantSet) -> npt.NDArray[np.bool_]:
     """True for each variant inside a Long-Range LD Region (build-inputs §9)."""
-    rows = [
-        line.split("\t")
-        for line in LONG_RANGE.read_text().splitlines()
-        if line and not line.startswith("#")
-    ][1:]
+    rows = long_range_ld_regions()
     inside = np.zeros(len(vs.variants), dtype=np.bool_)
     for _, chrom, start, end, *_ in rows:
         on = (vs.variants.chrom == chrom) & (vs.variants.position >= int(start))

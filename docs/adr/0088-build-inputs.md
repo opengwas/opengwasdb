@@ -96,7 +96,7 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    panels they are **our own**, from the same v2 genotypes, by one recipe script,
    `scripts/make_pcs.py`: gnomAD's subcontinental method (PCA on gnomAD's unrelated samples,
    relateds projected; SNVs with AF 5–95%; LD-pruned at r² < 0.1 in 500 kb), excluding the
-   Long-Range LD Regions of `docs/spec/long-range-ld-regions-grch38.tsv` ±2 Mb; 20 PCs.
+   Long-Range LD Regions of `ogld/build/long-range-ld-regions-grch38.tsv` ±2 Mb; 20 PCs.
 5. **The PC Check is the local-PC rule, and the builder runs it on every PC File.** A PC is
    local, and dropped from the covariates, when all three hold (the owner's rule, adopted
    7 November 2026 at the review of #2):

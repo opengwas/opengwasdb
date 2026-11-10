@@ -13,7 +13,8 @@ It follows gnomAD v3.1.2's subcontinental recipe (atgu/hgdp_tgp `pca_subcont.ipy
    unrelated ones too, is projected, so all are on one scale. A keep-file sample absent from v2
    is named in the report and has no row.
 2. **Variants.** SNVs with MAF >= 0.05 on the unrelated samples (AF 5-95%), outside every
-   region of `docs/spec/long-range-ld-regions-grch38.tsv` widened by `--margin-bp` on each
+   Long-Range LD Region (`ogld.build.diagnostic.long_range_ld_regions`, the package's table,
+   build-inputs §9) widened by `--margin-bp` on each
    side. v2 has no missing calls and already applied its pooled HWE, F_MISSING and ExcHet
    filters, so gnomAD's call-rate and PASS steps have nothing left to remove.
 3. **Pruning.** `plink2 --indep-pairwise 500kb 0.1` on the unrelated samples (gnomAD: Hail
@@ -37,6 +38,7 @@ already exist, naming its commit as `pc_check_commit`.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -61,6 +63,7 @@ from test_panel.tools import (
 )
 
 from ogld.build import pc_check
+from ogld.build.diagnostic import REGIONS_FILE, long_range_ld_regions, long_range_ld_regions_file
 
 ROOT = Path(__file__).resolve().parent.parent
 BCF = "hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf"
@@ -75,7 +78,6 @@ class Settings:
     out: Path
     bcf_dir: Path
     meta: Path
-    regions: Path
     margin_bp: int
     plink2: Path
     threads: int
@@ -149,19 +151,14 @@ def _write_keep(path: Path, ids: list[str]) -> None:
 
 
 def _excluded(s: Settings, work: Path) -> tuple[Path, list[dict[str, object]]]:
-    rows = [
-        line.split("\t")
-        for line in s.regions.read_text().splitlines()
-        if line and not line.startswith(("#", "region\t"))
-    ]
     regions = [
         {
-            "region": r[0],
-            "chrom": int(r[1]),
-            "start": max(1, int(r[2]) - s.margin_bp),
-            "end": int(r[3]) + s.margin_bp,
+            "region": name,
+            "chrom": int(chrom),
+            "start": max(1, start - s.margin_bp),
+            "end": end + s.margin_bp,
         }
-        for r in rows
+        for name, chrom, start, end in long_range_ld_regions()
     ]
     path = work / "excluded.bed1"
     path.write_text(
@@ -325,8 +322,8 @@ def _panel_pcs(
         "maf_min": MAF_MIN,
         "prune": PRUNE,
         "margin_bp": s.margin_bp,
-        "regions": str(s.regions.relative_to(ROOT)),
-        "regions_sha256": sha256(s.regions),
+        "regions": f"ogld/build/{REGIONS_FILE}",
+        "regions_sha256": hashlib.sha256(long_range_ld_regions_file().read_bytes()).hexdigest(),
         "n_regions": len(regions),
         "per_chromosome": per_chr,
         "variants_pruned_in": sum(c["pruned_in"] for c in per_chr),
@@ -381,9 +378,6 @@ def _parse(argv: list[str] | None) -> tuple[Settings, dict[str, Path], bool]:
     p.add_argument(
         "--meta", type=Path, help=f"gnomAD's sample metadata; default: $OGLD_REFERENCE/{META_NAME}"
     )
-    p.add_argument(
-        "--regions", type=Path, default=ROOT / "docs/spec/long-range-ld-regions-grch38.tsv"
-    )
     p.add_argument("--margin-bp", type=int, default=2_000_000)
     p.add_argument(
         "--panel",
@@ -409,7 +403,6 @@ def _parse(argv: list[str] | None) -> tuple[Settings, dict[str, Path], bool]:
             a.out or root("OGLD_PCS"),
             a.bcf_dir or root("OGLD_PHASED_V2"),
             a.meta or root("OGLD_REFERENCE") / META_NAME,
-            a.regions.resolve(),
             a.margin_bp,
             a.plink2 or tool("plink2"),
             a.threads,

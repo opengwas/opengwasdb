@@ -332,7 +332,8 @@ rest of the genome explains the PC, and keeps it.
 
 ## 9. Long-Range LD Regions
 
-[`long-range-ld-regions-grch38.tsv`](./long-range-ld-regions-grch38.tsv) lists the regions in
+[`ogld/build/long-range-ld-regions-grch38.tsv`](../../ogld/build/long-range-ld-regions-grch38.tsv),
+data of the package, which owns it, lists the regions in
 GRCh38, 1-based inclusive, each with its source and its source coordinates:
 
 - the 24 autosomal regions of Price et al. (2008, _AJHG_ 83:132) and Weale (2010), from the GRCh37
