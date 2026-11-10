@@ -525,7 +525,8 @@ Measured alike.
   matrix: the caller asks for the matrix with no fill to read the kinds.
 - **The stored data never changes.** An LD Store holds no code for an unstored pair, and no read
   writes one. `fill` acts on a query's result, never on the store.
-- Absent variants are listed beside the matrix and are not rows of it.
+- Absent variants are listed beside the matrix, in request order, and are not rows of it. A
+  present ALID asked for twice is two rows, as asked.
 
 This replaces the earlier rule that a reader returning a plain numeric matrix must refuse when any
 pair is not a Stored r, and the epic's acceptance criterion that no query turns an unstored pair
@@ -568,6 +569,9 @@ recorded (§7) and its recorded t_far:
   grouped by query, in request order, then by r̂² descending, distance ascending and proxy ALID. At
   r2 ≥ t_far a variant's proxies are its Proxy Index row; below t_far, which is answered only
   within `near_bp`, they are its Near Band row and column (§10).
+- **`region`.** Its chromosome passes through the engine's label normalisation
+  (`ogld.identity.normalise_chromosome`), so `chr22` reads as `22`. Its variants are those with
+  centre − radius ≤ position ≤ centre + radius, in the Variant Set's order.
 - **`clump`.** Greedy, strongest score first. The score is |z| or −log10 p, never raw p, which
   underflows to 0 for |z| over 38. Ties go to genomic order, then ALID. Each variant joins the
   strongest lead it reaches. Whether `plink2 --clump` compares r² with ≥ or >, and the window with
@@ -629,6 +633,30 @@ cold on that region took A 34.25 s, B 10.92 s, C 3.86 s.
   0.04–0.38 s over HTTP
   (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/access_open.tsv`).
 - The Proxy Index row that replaces the column read is in §11's table.
+
+**How ogld reads** (ogld#4). Opening a store reads its provenance and its chromosome ranges, and
+refuses a `format_version` or `encoding` it does not implement (§13). A chromosome's `position`
+range and its two `indptr` arrays are read the first time a request touches that chromosome, and
+kept. Every other read, in the reader and in validation alike, goes through one function
+(`ogld.store.location.take`). It reads one slice when the elements a request needs are dense,
+spanning at most 4 times their number, and Zarr's coordinate selection when they are not. Either
+way only the inner chunks that hold them are fetched. A matrix resolves its pairs about 4 million
+at a time, which bounds its working memory beside the matrix itself.
+
+- **Over HTTP** a store is opened through zarr's fsspec store, whose HTTP filesystem uses aiohttp.
+  Both are runtime dependencies. A static host that honours byte ranges is enough: no node is
+  found by listing a directory.
+- **A lost chunk is refused, in every array.** It reads as its array's fill value, and §6 chose
+  each fill value as one a valid store never holds. So a read refuses the value, naming the array:
+  the reserved code in an `r` array, −1 in an `indptr` or `partner`, 0 in `position`, `""` in a
+  string column (which would otherwise make a present ALID Absent) and NaN in `a1_frequency`. A
+  reader also refuses an `r` array whose fill value is not −32768 (`envelope.fill`), because a
+  chunk it lost would decode as a correlation.
+- **Measured on the Test Store, re-sharded** into 512-element inner chunks, 4 to a shard, which
+  reads exactly as the committed one (`tests/test_store_reads.py`). A 3-variant matrix over HTTP
+  fetched 1,042 of chr22's 138,718 Near Band bytes, in 2 requests (48,593 bytes in 31 requests in
+  all, most of it metadata documents); a reader that read whole arrays fetched 133,505 Near Band
+  bytes. Read latency at scale is ogld#8's to measure.
 
 ## 11. The upstream half: the Proxy Index
 
@@ -743,8 +771,39 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 
 No rule checks chunk shapes, shards, codecs or the fill value of a non-`r` array (§6). No rule can
 check that every Far Pair was found: that needs the genotypes, and ogld#5's tests check it against
-an independent reference on the Test Panel. ogld#4 implements these rules, each with a test whose
-store breaks it.
+an independent reference on the Test Panel. Each rule has a store that breaks it, in
+`tests/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 18.
+
+**On write and on demand** (ogld#4). `ogld.validate(location)` runs the rules on a store on disk
+or over HTTP and returns every rule's findings, an empty list for a rule the store passes.
+`StoreWriter.finish` runs them on the store it wrote, judged with the provenance it was given as
+JSON will hold it, and writes that provenance only when all 18 pass. Otherwise it raises
+`ValidationFailed`, naming each failing rule and where, and the store keeps no provenance, so a
+reader refuses it (§13) rather than read it as a short one.
+
+**What a rule says when it cannot judge.** A rule whose prerequisite is missing or malformed,
+such as `near.rows` without a `near_bp` or `index.distance` without a readable `indptr`, reports
+a finding that it cannot be checked, naming what it needed. An array that will not decode as its
+metadata declares is a finding that it cannot be read. Neither passes the rule, and neither stops
+the other rules. So one fault can fail several rules; the breakers' tests assert only that each
+fails its own.
+
+**How the rules read.** A chromosome's positions and `indptr` arrays are read whole, as a reader
+keeps them (§10). Near Band codes and Proxy Index entries are read in blocks of rows holding at
+most 8,388,608 elements, and the variant columns 1,048,576 rows at a time, so no rule loads a
+whole Near Band or Proxy Index.
+
+- `provenance.complete` checks every key of `ogld.format.REQUIRED_KEYS` and the keys this
+  section's table names inside them: `variant_filters`, `variants_dropped`, `pc_file`, the
+  PC Check's settings and `pc_diagnostic`. A null is allowed only where §7 allows it, and for
+  `panel.samples_sha256` and `pc_diagnostic` only with an `ld_matrix` source.
+- `provenance.threshold` also holds `t_far_q` to 20.84.
+- `index.symmetric` reads each block of rows together with the rows up to `far_bp` before it,
+  where the earlier row of each of its pairs lies, and matches every pair once. A pair more than
+  `far_bp` apart is `index.distance`'s finding.
+- `index.near` compares each block's entries in a pair's earlier row with that Near Band row at
+  the far code floor, both ways, and reads the band's code for every entry in a pair's later row
+  within `near_bp`. That such a later-row entry exists at all is `index.symmetric`'s finding.
 
 ## 13. Compatibility
 
