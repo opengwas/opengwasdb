@@ -19,6 +19,7 @@ from ogld.format.encoding import (
     far_code_floor,
     near_row_lengths,
     quantise,
+    row_reach,
     t_far,
 )
 from ogld.format.provenance import (
@@ -92,5 +93,6 @@ __all__ = [
     "judge_request",
     "near_row_lengths",
     "quantise",
+    "row_reach",
     "t_far",
 ]

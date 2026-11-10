@@ -29,9 +29,18 @@ N, K = 771, 10
 
 
 @pytest.fixture(scope="module")
-def built(tmp_path_factory: pytest.TempPathFactory) -> dict[int, Path]:
-    """The Test Panel built at k = 10 and k = 0, shared (build_fixtures.test_panel_build)."""
-    return {k: fixtures.test_panel_build(k, tmp_path_factory)[1] for k in (10, 0)}
+def built(tmp_path_factory: pytest.TempPathFactory) -> Built:
+    """The Test Panel's store at k, shared (build_fixtures.test_panel_build) and built when a
+    test first asks for that k, so no one setup pays for two builds."""
+    return Built(tmp_path_factory)
+
+
+class Built:
+    def __init__(self, factory: pytest.TempPathFactory) -> None:
+        self._factory = factory
+
+    def __getitem__(self, k: int) -> Path:
+        return fixtures.test_panel_build(k, self._factory)[1]
 
 
 def passing() -> npt.NDArray[np.int64]:
@@ -51,7 +60,7 @@ def reference_at(k: int, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]
 
 
 @pytest.mark.parametrize("k", [10, 0])
-def test_the_near_band_is_the_reference_r_signed_to_a1(built: dict[int, Path], k: int) -> None:
+def test_the_near_band_is_the_reference_r_signed_to_a1(built: Built, k: int) -> None:
     rows = passing()
     ours, theirs = fixtures.stored_r(built[k], rows), reference_at(k, rows)
     v = testdata.variants()
@@ -69,7 +78,7 @@ def test_the_near_band_is_the_reference_r_signed_to_a1(built: dict[int, Path], k
     assert (near & (sign[:, None] != sign[None, :]) & (np.abs(theirs) > 0.1)).sum() > 100
 
 
-def test_the_far_pairs_are_the_reference_s_above_the_floor(built: dict[int, Path]) -> None:
+def test_the_far_pairs_are_the_reference_s_above_the_floor(built: Built) -> None:
     rows = passing()
     ours, theirs = fixtures.stored_r(built[K], rows), reference_at(K, rows)
     v = testdata.variants()
@@ -85,7 +94,7 @@ def test_the_far_pairs_are_the_reference_s_above_the_floor(built: dict[int, Path
     assert np.abs(ours[far][kept] - theirs[far][kept]).max() <= fixtures.HALF_STEP + fixtures.SLACK
 
 
-def test_the_pc_file_s_row_order_does_not_matter(built: dict[int, Path], tmp_path: Path) -> None:
+def test_the_pc_file_s_row_order_does_not_matter(built: Built, tmp_path: Path) -> None:
     # Covariates are matched to genotypes by IID, never by row: a PC File in another order
     # builds the same store.
     lines = testdata.panel().pcs.read_text().splitlines()
@@ -95,9 +104,7 @@ def test_the_pc_file_s_row_order_does_not_matter(built: dict[int, Path], tmp_pat
     fixtures.same_store(built[K], tmp_path / "store")
 
 
-def test_two_filesets_in_two_sample_orders_build_one_store(
-    built: dict[int, Path], tmp_path: Path
-) -> None:
+def test_two_filesets_in_two_sample_orders_build_one_store(built: Built, tmp_path: Path) -> None:
     # chr21 and chr22 in a fileset each, chr22's psam listing the samples backwards: pgenlib
     # returns each fileset's samples in its own psam order, and the build puts them in one.
     v = testdata.variants()
@@ -109,7 +116,7 @@ def test_two_filesets_in_two_sample_orders_build_one_store(
     fixtures.same_store(built[K], tmp_path / "store")
 
 
-def test_the_thread_count_does_not_change_the_store(built: dict[int, Path], tmp_path: Path) -> None:
+def test_the_thread_count_does_not_change_the_store(built: Built, tmp_path: Path) -> None:
     provenance = ogld.build(
         fixtures.inputs(testdata.panel().pgen, K), tmp_path / "store", threads=3
     )
@@ -117,7 +124,7 @@ def test_the_thread_count_does_not_change_the_store(built: dict[int, Path], tmp_
     fixtures.same_store(built[K], tmp_path / "store")
 
 
-def test_a_copied_fileset_is_the_same_input(built: dict[int, Path], tmp_path: Path) -> None:
+def test_a_copied_fileset_is_the_same_input(built: Built, tmp_path: Path) -> None:
     # The store names its genotype files by name and hash, not by where they were read.
     provenance = ogld.build(
         fixtures.inputs(fixtures.copy_panel(tmp_path / "copy"), 0), tmp_path / "store"

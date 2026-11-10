@@ -20,6 +20,7 @@ from typing import Final
 import numpy as np
 import zarr
 
+from ogld.build.variant_set import PASSING_FILTERS
 from ogld.format import (
     ENCODING,
     FORMAT_VERSION,
@@ -33,12 +34,9 @@ from ogld.format import (
     Provenance,
     Source,
     VariantFilters,
-    far_code_floor,
-    t_far,
 )
 from ogld.version import __version__
 
-PASSING: Final = ["PASS", "."]
 _STATUS: Final = Path("/proc/self/status")
 _CLEAR_REFS: Final = Path("/proc/self/clear_refs")
 
@@ -98,7 +96,7 @@ def source(description: str, files: list[Path]) -> Source:
 
 def variant_filters(mac_min: int, info_min: float | None) -> VariantFilters:
     return {
-        "filter": list(PASSING),
+        "filter": list(PASSING_FILTERS),
         "mac_min": mac_min,
         "info_min": info_min,
         "autosomes_only": True,
@@ -166,13 +164,13 @@ def provenance(
     head: Head,
     adjusted: Adjustment,
     made: Made,
-    distances: tuple[int, int],
+    measured: tuple[int, int, float, int],
     build: Build,
 ) -> Provenance:
-    """The whole `ld_store` attribute; t_far and its floor are computed here from n and the k
-    used, and `distances` are (near_bp, far_bp), the distances the build measured."""
-    far_t = t_far(head.panel["n"], adjusted["k"])
-    near_bp, far_bp = distances
+    """The whole `ld_store` attribute. `measured` is what the build applied: (near_bp, far_bp,
+    t_far, far code floor), so provenance records the threshold the Proxy Index was cut at,
+    computed once, never a second computation of it."""
+    near_bp, far_bp, far_t, floor = measured
     return {
         "format_version": FORMAT_VERSION,
         "encoding": ENCODING.copy(),
@@ -187,7 +185,7 @@ def provenance(
         "adjustment": adjusted,
         "t_far": far_t,
         "t_far_q": T_FAR_Q,
-        "far_code_floor": far_code_floor(far_t),
+        "far_code_floor": floor,
         "pc_diagnostic": made.diagnostic,
         "counts": made.counts,
         "software": software(),

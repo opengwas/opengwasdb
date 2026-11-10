@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from ogld.build import diagnostic, passes, record
+from ogld.build import diagnostic, passes, pc_check, record
 from ogld.build.genotypes import one_blas_thread
 from ogld.build.variant_set import Settings, variant_set
 from ogld.format import (
@@ -71,8 +71,8 @@ class BuildInputs:
     panel_id: str
     ancestry: str
     genotype_source: str
-    k: int = 10
-    k_min: int = 5
+    k: int = pc_check.K_TARGET
+    k_min: int = pc_check.K_MIN
     mac_min: int = 20
     info_min: float | None = 0.8
 
@@ -137,7 +137,8 @@ def _build(inputs: BuildInputs, target: Path, threads: int, cost: record.Cost) -
     writer = StoreWriter.create(
         target, variants=passes.variants_table(chromosomes), near_bp=NEAR_BP, far_bp=FAR_BP
     )
-    floor = far_code_floor(t_far(plan.samples.n, k))
+    far_t = t_far(plan.samples.n, k)
+    floor = far_code_floor(far_t)
     written = passes.write_ld(
         writer, plan, chromosomes, chosen.covariates, floor, (NEAR_BP, FAR_BP), threads
     )
@@ -152,7 +153,7 @@ def _build(inputs: BuildInputs, target: Path, threads: int, cost: record.Cost) -
             _head(inputs, plan),
             _adjustment(inputs, plan, chosen),
             made,
-            (NEAR_BP, FAR_BP),
+            (NEAR_BP, FAR_BP, far_t, floor),
             cost.record(threads),
         )
     )
