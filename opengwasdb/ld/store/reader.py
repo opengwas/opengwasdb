@@ -5,16 +5,23 @@ shard shapes, chromosome-local rows and the int16 codes: callers pass and receiv
 Variant Set rows and Stored r as float64. Every unstored pair it reports is NaN, never a
 number, and the meaning of a NaN is the format's to say (`ogld.format.answer_kinds`).
 
-This is the walking skeleton's version (ogld#12): it reads whole chromosomes into memory.
-ogld#4 replaces the internals with bounded reads, without changing a signature.
+Reads are bounded (spec §10). Opening reads the provenance and the chromosome ranges, and
+nothing else. A chromosome's positions and its two `indptr` arrays are read the first time
+a request touches it, and kept. Every other read goes through the reader's `ChunkCache`,
+which fetches only the inner chunks holding the elements a request needs, from disk or over
+HTTP alike, and keeps them, so a query that reads a few pairs at a time fetches each once.
+
+A chunk the store lost reads as its array's fill value, and spec §6 chose each fill value
+as one a valid LD Store never holds. So every read refuses that value, naming the array,
+rather than decode it: a lost Near Band chunk is a refusal, never a run of r = 0.
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -22,26 +29,42 @@ import zarr
 
 from ogld.format import ENCODING, FORMAT_VERSION, RESERVED_CODE, InputError, Provenance, dequantise
 from ogld.identity import alid_locus
-from ogld.store.layout import R_DTYPE
+from ogld.store.layout import never_data, shown_fill, spans
+from ogld.store.location import ChunkCache, open_group
 from ogld.store.tables import Partners, Variants
+
+#: Each chromosome's arrays (spec §1), in the order `_Chromosome` takes them.
+_CHROMOSOME_ARRAYS: Final = (
+    ("near", "indptr"),
+    ("near", "r"),
+    ("index", "indptr"),
+    ("index", "partner"),
+    ("index", "r"),
+)
+#: The variant table's columns (spec §2).
+_VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
+#: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
+_PAIRS_PER_STEP: Final = 1 << 22
 
 
 @dataclass(frozen=True)
 class _Chromosome:
-    """One chromosome's Variant Set rows and its arrays, read whole."""
+    """One chromosome: its rows, the positions and `indptr` arrays a reader keeps (spec §10),
+    and handles on its code arrays, read element by element as requests need them."""
 
     name: str
     start: int
     stop: int
+    position: npt.NDArray[np.int64]
     near_indptr: npt.NDArray[np.int64]
-    near_r: npt.NDArray[np.int16]
+    near_r: zarr.Array[Any]
     index_indptr: npt.NDArray[np.int64]
-    index_partner: npt.NDArray[np.int32]
-    index_r: npt.NDArray[np.int16]
+    index_partner: zarr.Array[Any]
+    index_r: zarr.Array[Any]
 
 
 class StoreReader:
-    """An opened LD Store, local or over HTTP (spec §1).
+    """An opened LD Store, local or over HTTP (spec §2, §10).
 
     Opening reads the provenance and the chromosome ranges and refuses a store whose
     `format_version` or `encoding` this package does not implement (spec §13), naming
@@ -51,31 +74,36 @@ class StoreReader:
     _root: zarr.Group
     _provenance: Provenance
     _ranges: dict[str, tuple[int, int]]
-    _columns: dict[str, npt.NDArray[Any]]
-    _chrom: npt.NDArray[Any]
+    _names: list[str]
+    _stops: npt.NDArray[np.int64]
     _loaded: dict[str, _Chromosome]
+    _cache: ChunkCache
+    _columns: dict[str, zarr.Array[Any]]
 
     def _attach(self, root: zarr.Group, provenance: Provenance) -> None:
-        """Read the Variant Set and chromosome ranges of an opened, checked store."""
+        """Keep the provenance and the chromosome ranges of an opened, checked store."""
         self._root = root
         self._provenance = provenance
-        variants = root["variants"]
-        assert isinstance(variants, zarr.Group)
-        listed = cast(list[dict[str, Any]], variants.attrs["chromosomes"])
+        listed = cast(list[dict[str, Any]], _group(root, "variants").attrs["chromosomes"])
         self._ranges = {str(c["name"]): (int(c["row_start"]), int(c["row_stop"])) for c in listed}
-        self._columns = {name: _read(variants, name) for name in _VARIANT_COLUMNS}
-        self._chrom = np.empty(len(self._columns["position"]), dtype=object)
-        for name, (start, stop) in self._ranges.items():
-            self._chrom[start:stop] = name
+        self._names = list(self._ranges)
+        self._stops = np.array([stop for _, stop in self._ranges.values()], dtype=np.int64)
         self._loaded = {}
+        self._cache = ChunkCache()
+        # Each handle is opened once: opening one reads its metadata document, which over
+        # HTTP is a request.
+        self._columns = {name: _kept_array(root, f"variants/{name}") for name in _VARIANT_COLUMNS}
 
     @classmethod
     def open(cls, location: str | os.PathLike[str]) -> StoreReader:
         """Open the LD Store at a local path or an HTTP(S) URL (ogld#4)."""
-        if str(location).startswith(("http://", "https://")):
-            raise NotImplementedError("ogld#4")
-        root = zarr.open_group(str(location), mode="r", zarr_format=3)
+        root = open_group(location)
         recorded = root.attrs.get("ld_store")
+        if root.metadata.zarr_format != 3:
+            raise InputError(
+                f"{location} is a Zarr v{root.metadata.zarr_format} hierarchy; an LD Store is "
+                "Zarr v3 (spec §1)"
+            )
         if not isinstance(recorded, dict):
             raise InputError(
                 f"{location} has no ld_store provenance: it is not a finished LD Store"
@@ -102,23 +130,26 @@ class StoreReader:
     def rows_of(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:
         """The Variant Set row of each ALID, in order; −1 where the ALID is Absent (spec §2).
 
-        A malformed ALID is Absent too: it names no variant in the store.
+        A malformed ALID is Absent too: it names no variant in the store. Each ALID's
+        position is found in its chromosome's positions, and only the ALID strings at
+        that position are read and compared, all in one read.
         """
-        position = self._columns["position"]
-        names = self._columns["alid"]
+        asked: list[int] = []
+        candidates: list[npt.NDArray[np.int64]] = []
+        for chrom, (which, at) in _loci(alids, self._ranges).items():
+            c = self._chromosome(chrom)
+            lo = np.searchsorted(c.position, at, side="left")
+            hi = np.searchsorted(c.position, at, side="right")
+            asked.extend(np.repeat(which, hi - lo).tolist())
+            candidates.append(c.start + spans(lo, hi - lo))
         found = np.full(len(alids), -1, dtype=np.int64)
-        for i, alid in enumerate(alids):
-            locus = alid_locus(alid)
-            if locus is None or locus[0] not in self._ranges:
-                continue
-            chrom, at = locus
-            start, stop = self._ranges[chrom]
-            lo = start + int(np.searchsorted(position[start:stop], at, side="left"))
-            hi = start + int(np.searchsorted(position[start:stop], at, side="right"))
-            for row in range(lo, hi):
-                if names[row] == alid:
-                    found[i] = row
-                    break
+        if not asked:
+            return found
+        rows = np.concatenate(candidates)
+        names = self._strings("alid", rows)
+        query = np.array([alids[i] for i in asked], dtype=np.str_)
+        hit = names == query
+        found[np.array(asked, dtype=np.int64)[hit]] = rows[hit]
         return found
 
     def rows_in(self, chrom: str, start: int, stop: int) -> npt.NDArray[np.int64]:
@@ -129,85 +160,94 @@ class StoreReader:
             )
         if chrom not in self._ranges:
             return np.empty(0, dtype=np.int64)
-        first, last = self._ranges[chrom]
-        position = self._columns["position"][first:last]
-        lo = int(np.searchsorted(position, start, side="left"))
-        hi = int(np.searchsorted(position, stop, side="right"))
-        return np.arange(first + lo, first + hi, dtype=np.int64)
+        c = self._chromosome(chrom)
+        lo = int(np.searchsorted(c.position, start, side="left"))
+        hi = int(np.searchsorted(c.position, stop, side="right"))
+        return np.arange(c.start + lo, c.start + hi, dtype=np.int64)
 
     def variants(self, rows: npt.NDArray[np.int64]) -> Variants:
         """The Variant Set's columns at `rows`, in the order given (spec §2)."""
         rows = self._checked(rows)
-        c = self._columns
+        position = np.empty(len(rows), dtype=np.int64)
+        for c, members in self._by_chromosome(rows):
+            position[members] = c.position[rows[members] - c.start]
+        names = np.array(self._names, dtype=np.str_)
+        chrom = names[np.searchsorted(self._stops, rows, side="right")]
+        frequency = self._read(self._columns["a1_frequency"], rows)
         return Variants(
-            chrom=self._chrom[rows].astype(np.str_),
-            position=c["position"][rows].astype(np.int64),
-            alid=c["alid"][rows],
-            a1=c["a1"][rows],
-            a2=c["a2"][rows],
-            a1_frequency=c["a1_frequency"][rows].astype(np.float64),
+            chrom=chrom,
+            position=position,
+            alid=self._strings("alid", rows),
+            a1=self._strings("a1", rows),
+            a2=self._strings("a2", rows),
+            a1_frequency=frequency.astype(np.float64),
         )
-
-    def _chromosome(self, name: str) -> _Chromosome:
-        if name not in self._loaded:
-            start, stop = self._ranges[name]
-            near = self._root[f"near/{name}"]
-            index = self._root[f"index/{name}"]
-            assert isinstance(near, zarr.Group)
-            assert isinstance(index, zarr.Group)
-            self._loaded[name] = _Chromosome(
-                name,
-                start,
-                stop,
-                _array(near, "indptr", np.int64),
-                _array(near, "r", R_DTYPE),
-                _array(index, "indptr", np.int64),
-                _array(index, "partner", np.int32),
-                _array(index, "r", R_DTYPE),
-            )
-        return self._loaded[name]
 
     def pair_r(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
         """The square matrix of Stored r among `rows`, in the order given (spec §8, §10).
 
-        Pairs within near_bp come from the Near Band, farther ones from the Proxy Index.
-        The diagonal is 1. Every pair the store does not hold, the Bound and Not Measured
-        alike, is NaN.
+        Pairs within near_bp come from the Near Band, farther ones from the Proxy Index
+        row of the earlier variant. The diagonal is 1. Every pair the store does not hold,
+        the Bound and Not Measured alike, is NaN.
         """
         rows = self._checked(rows)
-        near_bp, far_bp = self._provenance["near_bp"], self._provenance["far_bp"]
-        position = self._columns["position"].astype(np.int64)
-        n = len(rows)
-        out = np.full((n, n), np.nan)
-        for name in dict.fromkeys(self._chrom[rows]):
-            chrom = self._chromosome(str(name))
-            members = np.flatnonzero(self._chrom[rows] == name)
-            local = rows[members] - chrom.start
-            a, b = np.meshgrid(np.arange(len(members)), np.arange(len(members)), indexing="ij")
-            lo = np.minimum(local[a], local[b])
-            hi = np.maximum(local[a], local[b])
-            distance = np.abs(position[rows[members]][a] - position[rows[members]][b])
-            near = (lo < hi) & (distance <= near_bp)
-            codes = np.full(a.shape, RESERVED_CODE, dtype=np.int64)
-            codes[near] = chrom.near_r[chrom.near_indptr[lo[near]] + (hi[near] - lo[near] - 1)]
-            stored = near.copy()
-            far = (lo < hi) & (distance > near_bp) & (distance <= far_bp)
-            held = _index_codes(chrom, lo[far], hi[far])
-            codes[far] = held
-            stored[far] = held != _NOT_IN_INDEX
-            block = np.full(a.shape, np.nan)
-            block[stored] = dequantise(codes[stored])
-            block[lo == hi] = 1.0
-            out[np.ix_(members, members)] = block
+        out = np.full((len(rows), len(rows)), np.nan)
+        for c, members in self._by_chromosome(rows):
+            local, back = np.unique(rows[members] - c.start, return_inverse=True)
+            block = self._block(c, local)
+            out[np.ix_(members, members)] = block[np.ix_(back, back)]
         return out
+
+    def _block(self, c: _Chromosome, local: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
+        """The Stored r among one chromosome's ascending, distinct local rows (NaN unstored)."""
+        at = c.position[local]
+        near = np.searchsorted(at, at + self._provenance["near_bp"], side="right")
+        far = np.searchsorted(at, at + self._provenance["far_bp"], side="right")
+        block = np.full((len(local), len(local)), np.nan)
+        np.fill_diagonal(block, 1.0)
+        first = np.arange(1, len(local) + 1, dtype=np.int64)
+        for i, j in _pairs(first, near):
+            codes = self._read(c.near_r, c.near_indptr[local[i]] + (local[j] - local[i] - 1))
+            block[i, j] = block[j, i] = dequantise(codes)
+        for i, j in _pairs(near, far):
+            held, codes = self._index_codes(c, local[i], local[j])
+            block[i[held], j[held]] = block[j[held], i[held]] = dequantise(codes[held])
+        return block
+
+    def _index_codes(
+        self, c: _Chromosome, lo: npt.NDArray[np.int64], hi: npt.NDArray[np.int64]
+    ) -> tuple[npt.NDArray[np.bool_], npt.NDArray[Any]]:
+        """For local pairs lo < hi beyond near_bp: whether the Proxy Index holds each, as
+        the Far Pair it then is, and its code there; read from each lo's index row."""
+        owners = np.unique(lo)
+        partner, codes, length = self._index_rows(c, owners)
+        size = c.stop - c.start
+        keys = np.repeat(owners, length) * size + partner
+        order = np.argsort(keys, kind="stable")
+        keys, codes = keys[order], codes[order]
+        wanted = lo * size + hi
+        if len(keys) == 0:
+            return np.full(len(wanted), False), np.full(len(wanted), RESERVED_CODE, codes.dtype)
+        at = np.minimum(np.searchsorted(keys, wanted), len(keys) - 1)
+        return keys[at] == wanted, codes[at]
+
+    def _index_rows(
+        self, c: _Chromosome, local: npt.NDArray[np.int64]
+    ) -> tuple[npt.NDArray[np.int64], npt.NDArray[Any], npt.NDArray[np.int64]]:
+        """The Proxy Index rows of `local` rows, back to back: partners, codes, row lengths."""
+        first = c.index_indptr[local]
+        length = c.index_indptr[local + 1] - first
+        coords = spans(first, length)
+        partner = self._read(c.index_partner, coords).astype(np.int64)
+        return partner, self._read(c.index_r, coords), length
 
     def index(self, rows: npt.NDArray[np.int64]) -> Partners:
         """Each row's Proxy Index entries: every partner within far_bp, either side, with
         r̂² ≥ t_far, and its Stored r (spec §5). One sparse row per variant (§10)."""
 
-        def entries(chrom: _Chromosome, local: int) -> tuple[npt.NDArray[np.int64], Any]:
-            lo, hi = chrom.index_indptr[local], chrom.index_indptr[local + 1]
-            return chrom.index_partner[lo:hi].astype(np.int64), chrom.index_r[lo:hi]
+        def entries(c: _Chromosome, local: npt.NDArray[np.int64]) -> _RowEntries:
+            partner, codes, length = self._index_rows(c, local)
+            return length, partner, codes
 
         return self._gather(rows, entries)
 
@@ -219,85 +259,171 @@ class StoreReader:
         avoid, used only by `proxies` at an r2 below t_far.
         """
         near_bp = self._provenance["near_bp"]
-        position = self._columns["position"].astype(np.int64)
 
-        def entries(chrom: _Chromosome, local: int) -> tuple[npt.NDArray[np.int64], Any]:
-            at = position[chrom.start : chrom.stop]
-            first = int(np.searchsorted(at, at[local] - near_bp, side="left"))
-            up = np.arange(first, local, dtype=np.int64)
-            lo, hi = chrom.near_indptr[local], chrom.near_indptr[local + 1]
-            down = np.arange(local + 1, local + 1 + int(hi - lo), dtype=np.int64)
-            above = chrom.near_r[chrom.near_indptr[up] + (local - up - 1)]
-            return np.concatenate([up, down]), np.concatenate([above, chrom.near_r[lo:hi]])
+        def entries(c: _Chromosome, local: npt.NDArray[np.int64]) -> _RowEntries:
+            first = np.searchsorted(c.position, c.position[local] - near_bp, side="left")
+            length = (local - first) + (c.near_indptr[local + 1] - c.near_indptr[local])
+            # Each row's span runs from its first upstream partner to its last downstream one,
+            # the row itself included once; dropping it leaves both halves, ascending.
+            span = spans(first, length + 1)
+            owner = np.repeat(local, length + 1)
+            partner, owner = span[span != owner], owner[span != owner]
+            lo, hi = np.minimum(owner, partner), np.maximum(owner, partner)
+            return length, partner, self._read(c.near_r, c.near_indptr[lo] + (hi - lo - 1))
 
         return self._gather(rows, entries)
 
     def _gather(
         self,
         rows: npt.NDArray[np.int64],
-        entries: Callable[[_Chromosome, int], tuple[npt.NDArray[np.int64], Any]],
+        entries: Callable[[_Chromosome, npt.NDArray[np.int64]], _RowEntries],
     ) -> Partners:
-        """The partners `entries` gives for each of `rows`, as global rows, in CSR form."""
-        indptr = [0]
-        partner: list[npt.NDArray[np.int64]] = []
-        codes: list[npt.NDArray[np.int16]] = []
-        for row in self._checked(rows):
-            chrom = self._chromosome(str(self._chrom[row]))
-            found, held = entries(chrom, int(row) - chrom.start)
-            partner.append(found + chrom.start)
-            codes.append(held)
-            indptr.append(indptr[-1] + len(found))
-        return _partners(indptr, partner, codes)
+        """The partners `entries` gives each of `rows`, as global rows, in CSR form."""
+        rows = self._checked(rows)
+        length = np.empty(len(rows), dtype=np.int64)
+        found: list[tuple[npt.NDArray[np.int64], _RowEntries]] = []
+        for c, members in self._by_chromosome(rows):
+            got = entries(c, rows[members] - c.start)
+            length[members] = got[0]
+            found.append((members, (got[0], got[1] + c.start, got[2])))
+        indptr = np.concatenate([[0], np.cumsum(length)]).astype(np.int64)
+        partner = np.empty(int(indptr[-1]), dtype=np.int64)
+        r = np.empty(int(indptr[-1]), dtype=np.float64)
+        for members, (lengths, partners, codes) in found:
+            where = spans(indptr[members], lengths)
+            partner[where] = partners
+            r[where] = dequantise(codes)
+        return Partners(indptr, partner, r)
+
+    def _chromosome(self, name: str) -> _Chromosome:
+        """One chromosome's kept arrays, read on first use (spec §10). Each of its five arrays'
+        fill values is judged before any element of the chromosome is decoded."""
+        if name not in self._loaded:
+            start, stop = self._ranges[name]
+            near_indptr, near_r, index_indptr, index_partner, index_r = (
+                _kept_array(self._root, f"{kind}/{name}/{array}")
+                for kind, array in _CHROMOSOME_ARRAYS
+            )
+            position = self._columns["position"]
+            self._loaded[name] = _Chromosome(
+                name,
+                start,
+                stop,
+                _refused_if_lost(position, np.asarray(position[start:stop])).astype(np.int64),
+                _indptr(near_indptr),
+                near_r,
+                _indptr(index_indptr),
+                index_partner,
+                index_r,
+            )
+        return self._loaded[name]
+
+    def _by_chromosome(
+        self, rows: npt.NDArray[np.int64]
+    ) -> Iterator[tuple[_Chromosome, npt.NDArray[np.int64]]]:
+        """Each chromosome `rows` touch, with the positions in `rows` that are on it."""
+        which = np.searchsorted(self._stops, rows, side="right")
+        for index in np.unique(which):
+            yield self._chromosome(self._names[index]), np.flatnonzero(which == index)
+
+    def _strings(self, name: str, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.str_]:
+        """The string column `name` at `rows`; an empty string is a lost chunk's, never data."""
+        # zarr hands back numpy StringDType, which casts to a fixed width only via a list.
+        values = np.array(self._read(self._columns[name], rows).tolist(), dtype=np.str_)
+        return values
+
+    def _read(self, array: zarr.Array[Any], coords: npt.NDArray[np.int64]) -> npt.NDArray[Any]:
+        """The elements of `array` at `coords`, through the chunk cache; a lost chunk refused."""
+        return _refused_if_lost(array, self._cache.take(array, coords))
 
     def _checked(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
         """`rows`, if every one is a row of the Variant Set. An Absent ALID is −1 from `rows_of`
         and is no row: read as an index it would be the last variant."""
         rows = np.asarray(rows, dtype=np.int64)
-        bad = (rows < 0) | (rows >= len(self._chrom))
+        size = int(self._stops[-1]) if len(self._stops) else 0
+        bad = (rows < 0) | (rows >= size)
         if bad.any():
             raise ValueError(
                 f"rows {rows[bad][:5].tolist()} are outside the Variant Set of "
-                f"{len(self._chrom)} rows: an Absent ALID is not a row (spec §8)"
+                f"{size} rows: an Absent ALID is not a row (spec §8)"
             )
         return rows
 
 
-_NOT_IN_INDEX = np.iinfo(np.int64).min
-_VARIANT_COLUMNS = ("position", "alid", "a1", "a2", "a1_frequency")
+#: What `_gather` asks for each chromosome: row lengths, partners (local rows) and codes.
+_RowEntries = tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[Any]]
 
 
-def _partners(
-    indptr: list[int], partner: list[npt.NDArray[np.int64]], codes: list[npt.NDArray[np.int16]]
-) -> Partners:
-    """One `Partners` from each row's partners and codes; a code the store never wrote refuses."""
-    flat = np.concatenate(partner) if partner else np.empty(0, dtype=np.int64)
-    held = np.concatenate(codes) if codes else np.empty(0, dtype=R_DTYPE)
-    return Partners(np.array(indptr, dtype=np.int64), flat, dequantise(held))
+def _loci(
+    alids: Sequence[str], ranges: dict[str, tuple[int, int]]
+) -> dict[str, tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]]:
+    """Per chromosome of the store, which of `alids` name a locus on it, and its position."""
+    by_chrom: dict[str, tuple[list[int], list[int]]] = {}
+    for i, alid in enumerate(alids):
+        locus = alid_locus(alid)
+        if locus is not None and locus[0] in ranges:
+            which, at = by_chrom.setdefault(locus[0], ([], []))
+            which.append(i)
+            at.append(locus[1])
+    return {
+        chrom: (np.array(which, dtype=np.int64), np.array(at, dtype=np.int64))
+        for chrom, (which, at) in by_chrom.items()
+    }
 
 
-def _index_codes(
-    chrom: _Chromosome, lo: npt.NDArray[np.int64], hi: npt.NDArray[np.int64]
-) -> npt.NDArray[np.int64]:
-    """The Proxy Index's code for each pair (lo, hi) of local rows, or `_NOT_IN_INDEX`."""
-    size = chrom.stop - chrom.start
-    rows = np.repeat(np.arange(size, dtype=np.int64), np.diff(chrom.index_indptr))
-    keys = rows * size + chrom.index_partner.astype(np.int64)
-    wanted = lo * size + hi
-    at = np.minimum(np.searchsorted(keys, wanted), max(len(keys) - 1, 0))
-    if len(keys) == 0:
-        return np.full(len(wanted), _NOT_IN_INDEX, dtype=np.int64)
-    hit = keys[at] == wanted
-    return np.where(hit, chrom.index_r[at].astype(np.int64), _NOT_IN_INDEX)
+def _pairs(
+    first: npt.NDArray[np.int64], stop: npt.NDArray[np.int64]
+) -> Iterator[tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]]:
+    """The pairs (i, j) with first[i] ≤ j < stop[i], a bounded number at a time."""
+    length = np.maximum(stop - first, 0)
+    ends = np.cumsum(length)
+    start = 0
+    while start < len(length):
+        before = int(ends[start] - length[start])
+        end = max(int(np.searchsorted(ends, before + _PAIRS_PER_STEP, side="right")), start + 1)
+        if ends[end - 1] > before:
+            yield (
+                np.repeat(np.arange(start, end), length[start:end]),
+                spans(first[start:end], length[start:end]),
+            )
+        start = end
 
 
-def _array(group: zarr.Group, name: str, dtype: Any) -> npt.NDArray[Any]:
-    member = group[name]
+def _refused_if_lost(array: zarr.Array[Any], values: npt.NDArray[Any]) -> npt.NDArray[Any]:
+    """`values` read from `array`, unless one is a value no LD Store holds there, as its fill
+    value is: that is a chunk the store lost, and decoding it would be inventing data."""
+    lost = never_data(array.path, values)
+    if lost.any():
+        raise ValueError(
+            f"{array.path} read {int(lost.sum())} element(s) no LD Store holds there, as its "
+            f"fill value {shown_fill(array.fill_value)} is: a chunk the store lost, never data "
+            "(spec §3, §6)"
+        )
+    return values
+
+
+def _group(root: zarr.Group, path: str) -> zarr.Group:
+    member = root[path]
+    assert isinstance(member, zarr.Group)
+    return member
+
+
+def _array(root: zarr.Group, path: str) -> zarr.Array[Any]:
+    member = root[path]
     assert isinstance(member, zarr.Array)
-    return np.asarray(member[:]).astype(dtype, copy=False)
+    return member
 
 
-def _read(group: zarr.Group, name: str) -> npt.NDArray[Any]:
-    member = group[name]
-    assert isinstance(member, zarr.Array)
-    values = np.asarray(member[:])
-    return np.array(values.tolist(), dtype=np.str_) if name in {"alid", "a1", "a2"} else values
+def _kept_array(root: zarr.Group, path: str) -> zarr.Array[Any]:
+    """An array, refused unless a chunk it lost would read as a value no store holds there."""
+    array = _array(root, path)
+    if not never_data(path, array.fill_value).all():
+        raise ValueError(
+            f"{path} has the fill value {shown_fill(array.fill_value)}, which valid data can hold "
+            "there: a chunk it lost would read as data (spec §6, envelope.fill)"
+        )
+    return array
+
+
+def _indptr(array: zarr.Array[Any]) -> npt.NDArray[np.int64]:
+    return _refused_if_lost(array, np.asarray(array[:]).astype(np.int64))

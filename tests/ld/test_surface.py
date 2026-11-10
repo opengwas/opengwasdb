@@ -23,7 +23,6 @@ import pytest
 
 import ogld
 from ogld import cli, identity, store
-from ogld.query import matrices
 
 #: The committed Test Store (tests/contract/support.py), written by the walking skeleton.
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
@@ -182,15 +181,9 @@ def no_rows() -> np.ndarray:
     return np.array([0], dtype=np.int64)
 
 
-READER = store.StoreReader.__new__(store.StoreReader)
-
 #: Every body that raises NotImplementedError, with the ticket that builds it. A ticket
 #: that builds one removes its entry, as it unmarks the contract tests it makes pass.
 UNBUILT: dict[str, tuple[Callable[[], object], str]] = {
-    "StoreReader.open over HTTP": (lambda: store.StoreReader.open("http://x/"), "ogld#4"),
-    "validate": (lambda: ogld.validate("x"), "ogld#4"),
-    "matrices.matrix": (lambda: matrices.matrix(READER, [], fill=None), "ogld#4"),
-    "matrices.region": (lambda: matrices.region(READER, "1", 0, 1, fill=None), "ogld#4"),
     "build": (lambda: ogld.build(None, "x"), "ogld#5"),
 }
 

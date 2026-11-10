@@ -6,16 +6,20 @@ one chromosome's band can exceed 70 GB raw (spec §4). A store is not one until 
 writes its provenance; a reader refuses a directory without provenance, so a half-written
 store cannot be read as a short one.
 
-This is the walking skeleton's version (ogld#12): it holds one chromosome's Near Band in
-memory until the chromosome is complete, and `finish` does not yet run the spec's
-validation rules. ogld#4 replaces both, without changing a signature.
+`finish` runs every validation rule of spec §12 on what was written, judged with the
+provenance it is given, and writes that provenance only when all 18 pass. So a store that
+breaks a rule is refused, naming the rule and where, and stays unreadable.
+
+It holds one chromosome's Near Band in memory until the chromosome is complete (ogld#12).
+Bounding that is the builder's concern (ogld#5), and needs no change of signature.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -24,6 +28,7 @@ import zarr
 from ogld.format import ENCODING, RESERVED_CODE, Provenance, near_row_lengths
 from ogld.store import layout
 from ogld.store.tables import Variants
+from ogld.store.validation import ValidationFailed, validate_group
 
 
 class StoreWriter:
@@ -184,26 +189,43 @@ class StoreWriter:
         return start
 
     def finish(self, provenance: Provenance) -> Provenance:
-        """Write the provenance and return it as written (spec §7).
+        """Validate the store and write its provenance; return it as written (spec §7, §12).
 
         Refuses, naming the chromosome, a store whose Near Band or Proxy Index is incomplete,
-        and a provenance that disagrees with what was written. It does not yet run the
-        spec's validation rules (§12): `ogld.validate` is ogld#4's.
+        and a provenance that disagrees with what was written. Then it runs every rule of
+        spec §12 and raises `ValidationFailed` if any fails, before the provenance is
+        written: a reader refuses a store without one, so a broken store is never read.
         """
         chromosomes = set(self._ranges)
         for what, done in (("Near Band", self._near_done), ("Proxy Index", self._index_done)):
             if done != chromosomes:
                 missing = ", ".join(sorted(chromosomes - done))
                 raise ValueError(f"the {what} of chromosome {missing} was not written")
+        self._check_provenance(provenance)
+        recorded = _as_json(provenance)
+        findings = validate_group(self._root, recorded)
+        if any(findings.values()):
+            raise ValidationFailed(findings)
+        self._root.attrs.update({"ld_store": recorded})
+        return cast(Provenance, recorded)
+
+    def _check_provenance(self, provenance: Provenance) -> None:
+        """Refuse a provenance that disagrees with what this writer wrote."""
         if provenance["n_variants"] != len(self._position):
             raise ValueError("provenance n_variants is not the Variant Set's size")
         if (provenance["near_bp"], provenance["far_bp"]) != (self._near_bp, self._far_bp):
             raise ValueError("provenance near_bp and far_bp are not the distances written with")
         if provenance["encoding"] != ENCODING:
             raise ValueError("provenance records an encoding this writer does not write (spec §3)")
-        attributes: dict[str, Any] = {"ld_store": dict(provenance)}
-        self._root.attrs.update(attributes)
-        return provenance
+
+
+def _as_json(provenance: Provenance) -> dict[str, Any]:
+    """The provenance as the JSON attribute will hold it, so what is validated is what is
+    stored; a value JSON cannot hold, such as a numpy integer, is refused, not converted."""
+    try:
+        return cast(dict[str, Any], json.loads(json.dumps(provenance)))
+    except TypeError as unwritable:
+        raise ValueError(f"provenance must be plain JSON values: {unwritable}") from unwritable
 
 
 def _check_entries(
