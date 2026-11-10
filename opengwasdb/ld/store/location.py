@@ -6,14 +6,17 @@ ranges reads exactly as it does from disk. zarr opens a URL through fsspec's HTT
 (aiohttp). Nothing here lists a directory: every node is found by its own metadata document,
 which a static host serves like any other file.
 
-Every element a reader or a rule reads goes through `take`, which fetches only the inner
-chunks holding them, so how a store is read is decided in one place, which ogld#8 tunes when
-it times the reads.
+Every element a reader or a rule reads goes through a `ChunkCache`. It reads whole inner
+chunks, which is what Zarr fetches and decodes in any case, keeps the decoded chunks up to a
+byte budget, and serves each request from them. So a query that reads a few pairs at a time,
+as clumping does once per lead, fetches each chunk once, from disk or over HTTP. How a store
+is read is decided here, in one place, which ogld#8 tunes when it times the reads.
 """
 
 from __future__ import annotations
 
 import os
+from collections import OrderedDict
 from typing import Any, Final
 
 import numpy as np
@@ -22,9 +25,8 @@ import zarr
 
 from ogld.format import InputError
 
-#: A read of `coords` takes the slice from the first to the last when that slice is at most
-#: this many times as long as `coords`; otherwise it selects the coordinates themselves.
-_DENSE: Final = 4
+#: Decoded inner chunks a reader keeps, in bytes. At layout C a Near Band chunk is 512 KiB.
+CACHE_BYTES: Final = 1 << 28
 
 
 def open_group(location: str | os.PathLike[str]) -> zarr.Group:
@@ -39,14 +41,66 @@ def open_group(location: str | os.PathLike[str]) -> zarr.Group:
         raise InputError(f"no LD Store at {location}: there is no Zarr group there") from missing
 
 
-def take(array: zarr.Array[Any], coords: npt.ArrayLike) -> npt.NDArray[Any]:
-    """The elements of a 1-D array at `coords`, in that order, reading only the inner chunks
-    that hold them: one slice when they are dense, the coordinates themselves when not."""
-    at = np.asarray(coords, dtype=np.int64)
-    if len(at) == 0:
-        return np.asarray(array[0:0])
-    lo, hi = int(at.min()), int(at.max()) + 1
-    if hi - lo <= _DENSE * len(at):
-        return np.asarray(array[lo:hi])[at - lo]
-    distinct, back = np.unique(at, return_inverse=True)
-    return np.asarray(array.get_coordinate_selection(distinct))[back]
+class ChunkCache:
+    """Decoded inner chunks of one store's 1-D arrays, read whole and kept to `budget` bytes,
+    the least recently used dropped first."""
+
+    def __init__(self, budget: int | None = None) -> None:
+        self._budget = CACHE_BYTES if budget is None else budget
+        self._bytes = 0
+        self._kept: OrderedDict[tuple[str, int], npt.NDArray[Any]] = OrderedDict()
+
+    def take(self, array: zarr.Array[Any], coords: npt.ArrayLike) -> npt.NDArray[Any]:
+        """The elements of a 1-D array at `coords`, in that order, from the inner chunks that
+        hold them: each read whole, once, and runs of neighbouring chunks in one read."""
+        at = np.asarray(coords, dtype=np.int64)
+        if len(at) == 0:
+            return np.asarray(array[0:0])
+        size = int(array.chunks[0])
+        which = at // size
+        wanted = np.unique(which)
+        chunks = self._chunks(array, wanted, size)
+        start = np.concatenate([[0], np.cumsum([len(c) for c in chunks])])
+        joined = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
+        found: npt.NDArray[Any] = joined[
+            start[np.searchsorted(wanted, which)] + (at - which * size)
+        ]
+        return found
+
+    def _chunks(
+        self, array: zarr.Array[Any], wanted: npt.NDArray[np.int64], size: int
+    ) -> list[npt.NDArray[Any]]:
+        """The decoded chunks `wanted`, in order: kept ones from memory, the rest read."""
+        found = self._kept_chunks(array.path, wanted.tolist())
+        missing = np.array([k for k in wanted.tolist() if k not in found], dtype=np.int64)
+        for run in np.split(missing, np.flatnonzero(np.diff(missing) != 1) + 1):
+            if len(run):
+                found.update(self._read_run(array, int(run[0]), int(run[-1]) + 1, size))
+        return [found[k] for k in wanted.tolist()]
+
+    def _kept_chunks(self, path: str, wanted: list[int]) -> dict[int, npt.NDArray[Any]]:
+        """Those of the chunks `wanted` that are kept, each marked as just used."""
+        found: dict[int, npt.NDArray[Any]] = {}
+        for k in wanted:
+            kept = self._kept.get((path, k))
+            if kept is not None:
+                found[k] = kept
+                self._kept.move_to_end((path, k))
+        return found
+
+    def _read_run(
+        self, array: zarr.Array[Any], first: int, stop: int, size: int
+    ) -> dict[int, npt.NDArray[Any]]:
+        """Chunks first … stop − 1, read in one request and kept."""
+        data = np.asarray(array[first * size : stop * size])
+        read = {k: data[(k - first) * size : (k - first + 1) * size] for k in range(first, stop)}
+        for k, chunk in read.items():
+            self._keep((array.path, k), chunk)
+        return read
+
+    def _keep(self, key: tuple[str, int], chunk: npt.NDArray[Any]) -> None:
+        self._kept[key] = chunk
+        self._bytes += chunk.nbytes
+        while self._bytes > self._budget and self._kept:
+            _, dropped = self._kept.popitem(last=False)
+            self._bytes -= dropped.nbytes

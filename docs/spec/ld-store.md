@@ -643,11 +643,14 @@ cold on that region took A 34.25 s, B 10.92 s, C 3.86 s.
 **How ogld reads** (ogld#4). Opening a store reads its provenance and its chromosome ranges, and
 refuses a `format_version` or `encoding` it does not implement (§13). A chromosome's `position`
 range and its two `indptr` arrays are read the first time a request touches that chromosome, and
-kept. Every other read, in the reader and in validation alike, goes through one function
-(`ogld.store.location.take`). It reads one slice when the elements a request needs are dense,
-spanning at most 4 times their number, and Zarr's coordinate selection when they are not. Either
-way only the inner chunks that hold them are fetched. A matrix resolves its pairs about 4 million
-at a time, which bounds its working memory beside the matrix itself.
+kept. Every other read, in the reader and in validation alike, goes through a cache of decoded
+inner chunks (`ogld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a
+request needs, whole, which is what Zarr fetches and decodes in any case, each run of neighbouring
+chunks in one read. It keeps them up to 256 MiB per opened store, dropping the least recently used
+first. So a query that reads a few pairs at a time fetches each chunk once: clumping the Test
+Store's 1,056 variants, one read per lead, took 3.6 s reading through Zarr call by call and 0.7 s
+with the cache, against 0.6 s for the walking skeleton's arrays held whole. A matrix resolves its
+pairs about 4 million at a time, which bounds its working memory beside the matrix itself.
 
 - **Over HTTP** a store is opened through zarr's fsspec store, whose HTTP filesystem uses aiohttp.
   Both are runtime dependencies. A static host that honours byte ranges is enough: no node is
@@ -660,9 +663,9 @@ at a time, which bounds its working memory beside the matrix itself.
   chunk it lost would decode as a correlation.
 - **Measured on the Test Store, re-sharded** into 512-element inner chunks, 4 to a shard, which
   reads exactly as the committed one (`tests/test_store_reads.py`). A 3-variant matrix over HTTP
-  fetched 1,042 of chr22's 138,718 Near Band bytes, in 2 requests (48,593 bytes in 31 requests in
+  fetched 1,042 of chr22's 138,718 Near Band bytes, in 2 requests (42,690 bytes in 29 requests in
   all, most of it metadata documents); a reader that read whole arrays fetched 133,505 Near Band
-  bytes. Read latency at scale is ogld#8's to measure.
+  bytes. The same read again fetched none. Read latency at scale is ogld#8's to measure.
 
 ## 11. The upstream half: the Proxy Index
 

@@ -7,9 +7,9 @@ number, and the meaning of a NaN is the format's to say (`ogld.format.answer_kin
 
 Reads are bounded (spec §10). Opening reads the provenance and the chromosome ranges, and
 nothing else. A chromosome's positions and its two `indptr` arrays are read the first time
-a request touches it, and kept. Every other read takes only the elements a request needs,
-as one contiguous slice when they are dense and by Zarr's coordinate selection when they
-are not, so only the inner chunks that hold them are fetched, from disk or over HTTP alike.
+a request touches it, and kept. Every other read goes through the reader's `ChunkCache`,
+which fetches only the inner chunks holding the elements a request needs, from disk or over
+HTTP alike, and keeps them, so a query that reads a few pairs at a time fetches each once.
 
 A chunk the store lost reads as its array's fill value, and spec §6 chose each fill value
 as one a valid LD Store never holds. So every read refuses that value, naming the array,
@@ -29,7 +29,7 @@ import zarr
 
 from ogld.format import ENCODING, FORMAT_VERSION, RESERVED_CODE, InputError, Provenance, dequantise
 from ogld.identity import alid_locus
-from ogld.store.location import open_group, take
+from ogld.store.location import ChunkCache, open_group
 from ogld.store.tables import Partners, Variants
 
 #: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
@@ -66,6 +66,7 @@ class StoreReader:
     _names: list[str]
     _stops: npt.NDArray[np.int64]
     _loaded: dict[str, _Chromosome]
+    _cache: ChunkCache
 
     def _attach(self, root: zarr.Group, provenance: Provenance) -> None:
         """Keep the provenance and the chromosome ranges of an opened, checked store."""
@@ -76,6 +77,7 @@ class StoreReader:
         self._names = list(self._ranges)
         self._stops = np.array([stop for _, stop in self._ranges.values()], dtype=np.int64)
         self._loaded = {}
+        self._cache = ChunkCache()
 
     @classmethod
     def open(cls, location: str | os.PathLike[str]) -> StoreReader:
@@ -156,7 +158,7 @@ class StoreReader:
             position[members] = c.position[rows[members] - c.start]
         names = np.array(self._names, dtype=np.str_)
         chrom = names[np.searchsorted(self._stops, rows, side="right")]
-        frequency = take(_array(self._root, "variants/a1_frequency"), rows)
+        frequency = self._cache.take(_array(self._root, "variants/a1_frequency"), rows)
         _refuse_fill(np.isnan(frequency), "variants/a1_frequency", "NaN")
         return Variants(
             chrom=chrom,
@@ -191,7 +193,7 @@ class StoreReader:
         np.fill_diagonal(block, 1.0)
         first = np.arange(1, len(local) + 1, dtype=np.int64)
         for i, j in _pairs(first, near):
-            codes = _codes(c.near_r, c.near_indptr[local[i]] + (local[j] - local[i] - 1))
+            codes = self._codes(c.near_r, c.near_indptr[local[i]] + (local[j] - local[i] - 1))
             block[i, j] = block[j, i] = dequantise(codes)
         for i, j in _pairs(near, far):
             held, codes = self._index_codes(c, local[i], local[j])
@@ -222,9 +224,9 @@ class StoreReader:
         first = c.index_indptr[local]
         length = c.index_indptr[local + 1] - first
         coords = _spans(first, length)
-        partner = take(c.index_partner, coords).astype(np.int64)
+        partner = self._cache.take(c.index_partner, coords).astype(np.int64)
         _refuse_fill(partner < 0, f"index/{c.name}/partner", "-1")
-        return partner, _codes(c.index_r, coords), length
+        return partner, self._codes(c.index_r, coords), length
 
     def index(self, rows: npt.NDArray[np.int64]) -> Partners:
         """Each row's Proxy Index entries: every partner within far_bp, either side, with
@@ -254,7 +256,7 @@ class StoreReader:
             owner = np.repeat(local, length + 1)
             partner, owner = span[span != owner], owner[span != owner]
             lo, hi = np.minimum(owner, partner), np.maximum(owner, partner)
-            return length, partner, _codes(c.near_r, c.near_indptr[lo] + (hi - lo - 1))
+            return length, partner, self._codes(c.near_r, c.near_indptr[lo] + (hi - lo - 1))
 
         return self._gather(rows, entries)
 
@@ -284,7 +286,7 @@ class StoreReader:
         """One chromosome's kept arrays, read on first use (spec §10)."""
         if name not in self._loaded:
             start, stop = self._ranges[name]
-            position = take(_array(self._root, "variants/position"), np.arange(start, stop))
+            position = np.asarray(_array(self._root, "variants/position")[start:stop])
             _refuse_fill(position <= 0, "variants/position", "0")
             near_r, index_r = (
                 _r_array(self._root, f"{kind}/{name}/r") for kind in ("near", "index")
@@ -314,10 +316,20 @@ class StoreReader:
         """The string column `name` at `rows`; an empty string is a lost chunk's, never data."""
         # zarr hands back numpy StringDType, which casts to a fixed width only via a list.
         values = np.array(
-            take(_array(self._root, f"variants/{name}"), rows).tolist(), dtype=np.str_
+            self._cache.take(_array(self._root, f"variants/{name}"), rows).tolist(), dtype=np.str_
         )
         _refuse_fill(values == "", f"variants/{name}", '""')
         return values
+
+    def _codes(self, array: zarr.Array[Any], coords: npt.NDArray[np.int64]) -> npt.NDArray[Any]:
+        """The codes of an `r` array at `coords`; the reserved code is a lost chunk, refused."""
+        codes = self._cache.take(array, coords)
+        if (codes == RESERVED_CODE).any():
+            raise ValueError(
+                f"{array.path} read the reserved code {RESERVED_CODE} where a pair is stored: a "
+                "chunk the store lost, never a correlation (spec §3)"
+            )
+        return codes
 
     def _checked(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
         """`rows`, if every one is a row of the Variant Set. An Absent ALID is −1 from `rows_of`
@@ -378,17 +390,6 @@ def _pairs(
                 _spans(first[start:end], length[start:end]),
             )
         start = end
-
-
-def _codes(array: zarr.Array[Any], coords: npt.NDArray[np.int64]) -> npt.NDArray[Any]:
-    """The codes of an `r` array at `coords`; the reserved code is a lost chunk, refused."""
-    codes = take(array, coords)
-    if (codes == RESERVED_CODE).any():
-        raise ValueError(
-            f"{array.path} read the reserved code {RESERVED_CODE} where a pair is stored: a chunk "
-            "the store lost, never a correlation (spec §3)"
-        )
-    return codes
 
 
 def _refuse_fill(bad: npt.NDArray[np.bool_], name: str, fill: str) -> None:

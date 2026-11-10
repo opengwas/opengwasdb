@@ -54,15 +54,15 @@ def test_a_re_sharded_store_reads_the_same_as_the_committed_one(small_chunks: Pa
     np.testing.assert_array_equal(whole(small_chunks).r, whole(TEST_STORE).r)
 
 
-@pytest.mark.parametrize("dense", [0, 10**9])
-def test_scattered_and_sliced_reads_agree(
-    small_chunks: Path, dense: int, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("budget", [0, 1 << 28])
+def test_reads_agree_with_and_without_the_chunk_cache(
+    small_chunks: Path, budget: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # _DENSE = 0 selects every coordinate; 10**9 always reads one slice. A tiny step makes
+    # A budget of 0 keeps no chunk, so every read fetches its chunks again. A tiny step makes
     # pair_r resolve its pairs a few at a time. Each must give the committed store's answers.
     rows = np.arange(0, 1056, 7)
     expected = StoreReader.open(TEST_STORE)
-    monkeypatch.setattr(location, "_DENSE", dense)
+    monkeypatch.setattr(location, "CACHE_BYTES", budget)
     monkeypatch.setattr(reader, "_PAIRS_PER_STEP", 97)
     got = StoreReader.open(small_chunks)
     np.testing.assert_array_equal(got.pair_r(rows), expected.pair_r(rows))
@@ -167,6 +167,30 @@ def test_a_few_pairs_over_http_fetch_a_small_part_of_the_near_band(
     assert len(shards(small_chunks, "near/22/r")) > 20, "the Near Band must span many shards"
     read = sum(length for path, length in sent if path.startswith("/near/22/r/c/"))
     assert 0 < read < near / 10, f"{read:,} of chr22's {near:,} Near Band bytes were read"
+
+
+@pytest.mark.parametrize(("budget", "again"), [(1 << 28, False), (0, True)])
+def test_a_repeated_read_fetches_its_chunks_once(
+    served: Served,
+    small_chunks: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    budget: int,
+    again: bool,
+) -> None:
+    # Clumping reads a few pairs per lead, many times over: each chunk is fetched once and kept.
+    url, sent = served
+    monkeypatch.setattr(location, "CACHE_BYTES", budget)
+    store = ogld.open(url)
+    names = list(StoreReader.open(small_chunks).variants(np.arange(500, 560, 3)).alid)
+
+    def near_bytes() -> int:
+        return sum(length for path, length in sent if path.startswith("/near/22/r/c/"))
+
+    first = store.matrix(names).r
+    once = near_bytes()
+    assert once > 0, "the first read must fetch Near Band chunks"
+    np.testing.assert_array_equal(store.matrix(names).r, first)
+    assert (near_bytes() > once) is again
 
 
 def test_the_test_store_passes_every_rule_over_http() -> None:

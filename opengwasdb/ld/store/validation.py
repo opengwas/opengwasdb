@@ -35,7 +35,7 @@ from ogld.format import (
     t_far,
 )
 from ogld.identity import IdentityError, alid_locus, orient, variant_order_key
-from ogld.store.location import open_group, take
+from ogld.store.location import ChunkCache, open_group
 
 #: Elements of a Near Band or a Proxy Index a rule reads at once: 8 Mi codes are 16 MiB.
 _WINDOW: Final = 1 << 23
@@ -139,6 +139,7 @@ class _Store:
         # A round trip through JSON, so a check on write judges exactly what is stored.
         self.provenance = json.loads(json.dumps(provenance)) if provenance is not None else None
         self._cache: dict[str, npt.NDArray[np.int64]] = {}
+        self.chunks = ChunkCache()
 
     def value(self, key: str) -> Any:
         """The provenance value at dotted `key`, or `_Unchecked`."""
@@ -785,7 +786,8 @@ def _near_half(store: _Store, chrom: str, start: int, stop: int) -> _Problems:
         )
         yield from _odd_pairs(chrom, odd, size, "not the Near Band's pairs at the far code floor")
         up, down = e.partner[earlier], e.owner[earlier]
-        held = take(store.array(f"near/{chrom}/r"), band[up] + (down - up - 1)).astype(np.int64)
+        coords = band[up] + (down - up - 1)
+        held = store.chunks.take(store.array(f"near/{chrom}/r"), coords).astype(np.int64)
         differ = held != e.code[earlier]
         yield from _odd_pairs(
             chrom, _keys(up[differ], down[differ], e.code[earlier][differ], size), size,
