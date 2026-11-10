@@ -44,8 +44,10 @@ A build reads PLINK 2 pgen filesets only (ADR 0002, decision 1).
 - **Assembly.** GRCh38. Positions are 1-based. The builder cannot check the assembly from the
   file; `genotype_source` names it, and an LD Store records `reference_assembly` GRCh38.
 - **Filesets.** One fileset per chromosome, or one for the genome. A chromosome MUST NOT appear in
-  two filesets. Every fileset's `.psam` MUST hold every keep-file sample; extra samples are
-  ignored, and order does not matter.
+  two filesets, and within a fileset its records MUST be one contiguous run. No two filesets may
+  share a file name, since provenance names each file by its name. Every fileset's `.psam` MUST
+  hold every keep-file sample; extra samples are ignored, and order does not matter: the build
+  puts every fileset's samples, and the PC File's, in one order, the first fileset's.
 - **Records.** Biallelic: one ALT per record. A split multi-allelic site is several records at
   one position, each its own variant, and their pair at distance 0 is an ordinary pair. REF and
   ALT MUST be strings of `A`, `C`, `G` or `T`, in either case; the builder passes them unchanged
@@ -60,9 +62,10 @@ A build reads PLINK 2 pgen filesets only (ADR 0002, decision 1).
   naming the chromosome. The reason: a male's X and Y genotypes are hemizygous, and the diploid
   dosage model has no rule for coding them, and the HGDP+1kGP psam files carry no sex to apply one.
   `ld-store.md` already names `X`, `Y` and `MT`, so the format is ready when the owner rules.
-- **Columns.** The `.pvar` MUST have `#CHROM POS ID REF ALT FILTER`; INFO is read only when
-  `info_min` is set (§6). The FILTER column MUST be present even when every value is `.`, so that
-  "nothing to filter" is said by the file, not assumed from a missing column.
+- **Columns.** The `.pvar` (plain, or zstd-compressed as plink2's `.pvar.zst`) MUST have
+  `#CHROM POS ID REF ALT FILTER`, found by name, with one record per pgen variant; INFO is read
+  only when `info_min` is set (§6). The FILTER column MUST be present even when every value is
+  `.`, so that "nothing to filter" is said by the file, not assumed from a missing column.
 - **IDs.** Set at conversion to `chrom:pos:REF:ALT` (§3). The builder never keys by ID, which
   can repeat; it names a variant by ID in a refusal.
 - **Genotypes.** Hard calls, or dosages where the pgen carries them; they MUST be complete (§7).
@@ -125,7 +128,7 @@ a duplicate IID is refused. The keep file's SHA-256 of sorted IDs is `panel.samp
 plink2's `.eigenvec` layout: tab-separated text, a header `#IID PC1 PC2 … PCm` (plink2 also
 writes `#FID IID PC1 …`, which is accepted: samples are matched by IID), and one row per sample.
 
-- **PCs used:** PC1…PCm in order; the covariates are the first k of them the PC Check keeps (§8),
+- **PCs used:** PC1…PCm in order, and the header MUST name them so; the covariates are the first k of them the PC Check keeps (§8),
   or all it keeps if fewer, and at least 5 MUST survive. The HGDP+1kGP PC Files have m = 20.
 - **Samples:** every keep-file sample MUST have a row; extra rows are ignored; a duplicate IID is
   refused.
@@ -148,7 +151,7 @@ it fails, in `variants_dropped.<reason>`. Every setting is in `variant_filters` 
 | 1 | FILTER is `PASS` or `.` | always | `filter` |
 | 2 | MAC ≥ `mac_min`, counted on the kept samples | 20 | `mac` |
 | 3 | INFO > `info_min`, from the pvar INFO subfield `R2` (Minimac) or `INFO` (IMPUTE); a pgen with neither, with `info_min` set, is refused; with both, refused | 0.8, or None | `info` |
-| 4 | nonzero genotype variance on the kept samples (after PC Adjustment, nonzero residual variance) | always | `zero_variance` |
+| 4 | nonzero genotype variance on the kept samples (after PC Adjustment, nonzero residual variance: a residual sum of squares above 10⁻¹² of the centred dosages', judged once the PC Check has chosen the covariates, so after filter 5) | always | `zero_variance` |
 | 5 | one record per ALID: of a reversed-indel pair, the record whose REF the ALID spells first | always | `duplicate_reversed_indel` |
 
 Biallelic records are the conversion's job (§3). There is no call-rate filter (§7).
@@ -180,7 +183,11 @@ EUR's would be about 26% of the 308 GB in `ld-store.md`, near 80 GB; ogld#7 meas
 
 **Rule: genotypes MUST be complete.** A build refuses an input with any missing genotype among
 the kept samples, naming the number of missing genotypes, the first variant by ID and the panel.
-No genotype is imputed and there is no call-rate floor (ADR 0002, decision 2).
+No genotype is imputed and there is no call-rate floor (ADR 0002, decision 2). A build reads every
+record's genotypes before it applies any other rule to the record, and once it finds a missing
+call it only counts the rest: so the refusal counts them all, and an input that also breaks
+another rule, such as the shipped gnomAD v3.1.2 pgens, which have no FILTER column either, is
+refused for its missing calls.
 
 **Why.** `plink2 --r-unphased` computes each pair's r on the samples called at both variants
 (pairwise-complete): on 2.74 M EUR chr22 pairs of the gnomAD v3.1.2 VCF its float64 r equals

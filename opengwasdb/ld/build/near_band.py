@@ -10,11 +10,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 
+from ogld.build.genotypes import import_pgenlib
 from ogld.format import InputError, near_row_lengths, quantise
 
 #: Rows of the Near Band computed per matrix product: bounds the work array.
@@ -35,18 +35,6 @@ class NearBand:
     @property
     def lengths(self) -> npt.NDArray[np.int64]:
         return np.diff(self.indptr)
-
-
-def _import_pgenlib() -> Any:
-    """pgenlib, or a refusal naming the extra that installs it (ADR 0002, decision 10)."""
-    try:
-        import pgenlib
-    except ImportError as missing:
-        raise InputError(
-            "reading a pgen needs pgenlib, which ogld installs with the build extra: "
-            "pip install 'ogld[build]'"
-        ) from missing
-    return pgenlib
 
 
 def _refuse_repeats(listed: list[str]) -> None:
@@ -78,7 +66,7 @@ def read_alt_counts(
     `rows` are 0-based pgen variant indexes. The genotypes must be complete: a missing call
     is refused naming the variant and the panel, never imputed (ADR 0002).
     """
-    pgenlib = _import_pgenlib()
+    pgenlib = import_pgenlib()
     columns = _kept_columns(psam, keep)
     reader = pgenlib.PgenReader(str(pgen).encode())
     out = np.empty((len(rows), reader.get_raw_sample_ct()), dtype=np.int8)

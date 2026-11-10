@@ -18,7 +18,18 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from ogld.format import InputError, Provenance
+from ogld.build import diagnostic, passes, record
+from ogld.build.variant_set import Settings, variant_set
+from ogld.format import (
+    FAR_BP,
+    NEAR_BP,
+    Adjustment,
+    InputError,
+    Provenance,
+    far_code_floor,
+    t_far,
+)
+from ogld.store import StoreWriter
 
 
 @dataclass(frozen=True)
@@ -96,8 +107,72 @@ def build(inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1)
     Near Band exactly and the Proxy Index at t_far, and finishes through
     `StoreWriter.finish`, which validates the store. Provenance records the scan, the
     dropped PCs and the null the scan was judged against.
+
+    `threads` is how many tiles are computed at once. Each tile is a matrix product: set the
+    BLAS's own threads to 1 (OPENBLAS_NUM_THREADS=1) so `threads` is the build's thread count.
     """
-    raise NotImplementedError("ogld#5")
+    cost = record.Cost.start()
+    target = Path(out)
+    if target.exists():
+        raise InputError(f"{target} exists: a store is never written over another")
+    if threads < 1:
+        raise InputError(f"threads counts worker threads, so it must be at least 1: {threads}")
+    plan = passes.plan(inputs.pgen, inputs.keep, inputs.pcs if inputs.k else None, inputs.panel_id)
+    settings = Settings(inputs.panel_id, inputs.mac_min, inputs.info_min, bool(inputs.k), threads)
+    found = variant_set(plan.filesets, settings, plan.samples.n)
+    chosen = passes.choose(plan, found, inputs.k, inputs.k_min)
+    chromosomes = passes.drop_flat(plan, found, chosen.covariates)
+    k = chosen.covariates.k
+    rates = passes.chance(plan, chromosomes, chosen.covariates)
+    writer = StoreWriter.create(
+        target, variants=passes.variants_table(chromosomes), near_bp=NEAR_BP, far_bp=FAR_BP
+    )
+    floor = far_code_floor(t_far(plan.samples.n, k))
+    written = passes.write_ld(
+        writer, plan, chromosomes, chosen.covariates, floor, (NEAR_BP, FAR_BP), threads
+    )
+    made = record.Made(
+        sum(len(c) for c in chromosomes),
+        found.dropped,
+        written.counts,
+        diagnostic.pc_diagnostic(rates, plan.samples.n, k, written.change),
+    )
+    return writer.finish(
+        record.provenance(
+            _head(inputs, plan),
+            _adjustment(inputs, plan, chosen),
+            made,
+            (NEAR_BP, FAR_BP),
+            cost.record(threads),
+        )
+    )
+
+
+def _head(inputs: BuildInputs, plan: passes.Plan) -> record.Head:
+    files = [path for f in plan.filesets for path in (f.pgen, f.pvar, f.psam)]
+    return record.Head(
+        record.source(inputs.genotype_source, [*files, inputs.keep]),
+        {
+            "id": inputs.panel_id,
+            "ancestry": inputs.ancestry,
+            "n": plan.samples.n,
+            "samples_sha256": plan.samples.sha256(),
+        },
+        record.variant_filters(inputs.mac_min, inputs.info_min),
+    )
+
+
+def _adjustment(inputs: BuildInputs, plan: passes.Plan, chosen: passes.Choice) -> Adjustment:
+    if plan.pcs is None or chosen.checked is None:
+        return record.adjustment([], 0, inputs.k_min, None, None)
+    assert inputs.pc_source is not None, "BuildInputs refuses k > 0 without a declared source"
+    return record.adjustment(
+        chosen.covariates.names,
+        inputs.k,
+        inputs.k_min,
+        (plan.pcs.sha256, inputs.pc_source),
+        chosen.checked.record,
+    )
 
 
 __all__ = ["BuildInputs", "build"]

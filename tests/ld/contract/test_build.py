@@ -127,7 +127,6 @@ def test_the_far_pairs_kept_are_the_reference_s(tmp_path_factory: pytest.TempPat
     assert ((kept == expected) | edge).all(), "a Far Pair was kept or dropped against the reference"
 
 
-@OGLD_5
 def test_the_provenance_records_what_was_built(tmp_path_factory: pytest.TempPathFactory) -> None:
     provenance, _ = built(10, tmp_path_factory)
     assert provenance["panel"]["n"] == support.N_SAMPLES == panel_data().panel().n_samples
@@ -162,7 +161,6 @@ def test_the_provenance_records_what_was_built(tmp_path_factory: pytest.TempPath
     assert provenance["counts"]["index_entries"] >= 2 * provenance["counts"]["far_pairs"]
 
 
-@OGLD_5
 def test_an_unadjusted_build_records_k0_and_no_minimum(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -178,7 +176,6 @@ def test_an_unadjusted_build_records_k0_and_no_minimum(
     assert provenance["t_far"] == t_far(771, 0)
 
 
-@OGLD_5
 def test_the_provenance_records_the_diagnostic_and_the_cost(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -213,7 +210,6 @@ def test_the_variant_set_is_the_test_panel_s_passing_rows(
     assert set(m.absent) == set(alids(failing))
 
 
-@OGLD_5
 def test_a_pgen_without_info_refuses_an_info_floor(tmp_path: Path) -> None:
     # A sequenced panel has no INFO: info_min must be None, said on purpose, not skipped.
     with pytest.raises(ogld.InputError, match="INFO"):
@@ -357,7 +353,6 @@ def with_a_local_pc(tmp_path_factory: pytest.TempPathFactory) -> ogld.Provenance
     return _WITH_A_LOCAL_PC[0]
 
 
-@OGLD_5
 def test_an_input_with_a_missing_call_is_refused(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
@@ -403,7 +398,6 @@ def test_a_reversed_indel_pair_keeps_the_record_whose_ref_the_alid_spells_first(
     assert store.matrix([kept]).absent == (), "the insertion, REF = A1, is in the Variant Set"
 
 
-@OGLD_5
 def test_a_local_pc_is_dropped_and_an_ancestry_pc_with_a_strong_window_is_kept(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -420,7 +414,6 @@ def test_a_local_pc_is_dropped_and_an_ancestry_pc_with_a_strong_window_is_kept(
     assert provenance["adjustment"]["covariates"][0] == "PC2"
 
 
-@OGLD_5
 def test_seven_surviving_pcs_are_used_with_t_far_at_k7(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -435,7 +428,6 @@ def test_seven_surviving_pcs_are_used_with_t_far_at_k7(
     assert provenance["far_code_floor"] == far_code_floor(t_far(771, 7))
 
 
-@OGLD_5
 def test_fewer_than_five_surviving_pcs_are_refused(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:

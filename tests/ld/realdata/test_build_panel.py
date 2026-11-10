@@ -96,7 +96,6 @@ def inputs(pgen: Path, source: str, pcs: Path | None = None) -> ogld.BuildInputs
     )
 
 
-@OGLD_5
 def test_the_builder_refuses_the_shipped_pgen_for_its_missing_calls(tmp_path: Path) -> None:
     slice_ = tmp_path / "shipped"
     plink2(

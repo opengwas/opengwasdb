@@ -269,7 +269,12 @@ def check(
     kept = [s["pc"] for s in scan if not s["local"]]
     if len(kept) < k_min:
         raise _refusal(scan, len(kept), k_min)
-    record: PcCheck = {
+    return Checked(_record(w, scan), kept[:k_target], len(kept), k_target, k_min)
+
+
+def _record(w: Windows, scan: list[PcScan]) -> PcCheck:
+    """The PC Check's provenance record (spec §7, `adjustment.pc_check`)."""
+    return {
         "window_bp": WINDOW_BP,
         "step_bp": STEP_BP,
         "windows": len(w.where),
@@ -279,7 +284,6 @@ def check(
         "dropped": [s["pc"] for s in scan if s["local"]],
         "null": NULL,
     }
-    return Checked(record, kept[:k_target], len(kept), k_target, k_min)
 
 
 __all__ = [
