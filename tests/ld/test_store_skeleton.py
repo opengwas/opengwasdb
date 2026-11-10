@@ -463,5 +463,7 @@ def test_the_diagnostic_s_adjusted_r_is_the_reference_r(k: int) -> None:
     where = store_rows()
     i, j = where[ref.row_i], where[ref.row_j]
     sign = signs()
-    got = (z[i] * z[j]).sum(axis=1)
+    # The 1,056 × 1,056 matrix of products, then the pairs read from it: the per-pair product
+    # (146,593 × 771, about 1 GB of temporaries) took 1.5 s and hit the 5 s budget under load.
+    got = (z @ z.T)[i, j]
     np.testing.assert_allclose(got, ref.r * sign[ref.row_i] * sign[ref.row_j], atol=1e-9)
