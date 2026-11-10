@@ -459,6 +459,15 @@ def malformed(tmp_path: Path, what: str) -> tuple[ogld.BuildInputs, str]:
         lines[3] = lines[3].rsplit("\t", 2)[0]
         pvar.write_text("\n".join(lines) + "\n")
         return fx.inputs(pgen), r"bad\.pvar line 4"
+    if what == "a long pvar line":
+        # The review's probe: a record with its REF written twice has one field too many, and
+        # was cut to fit and filtered as FILTER, its REF read as the ALT.
+        pvar = pgen.with_suffix(".pvar")
+        lines = pvar.read_text().splitlines()
+        fields = lines[7].split("\t")
+        lines[7] = "\t".join([*fields[:4], fields[3], *fields[4:]])
+        pvar.write_text("\n".join(lines) + "\n")
+        return fx.inputs(pgen), r"bad\.pvar line 8 has 7 fields where its header has 6"
     if what == "a POS that is not an integer":
         pvar = pgen.with_suffix(".pvar")
         lines = pvar.read_text().splitlines()
@@ -482,6 +491,7 @@ def malformed(tmp_path: Path, what: str) -> tuple[ogld.BuildInputs, str]:
     "what",
     [
         "a short pvar line",
+        "a long pvar line",
         "a POS that is not an integer",
         "an empty PC File",
         "an empty psam",

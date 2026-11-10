@@ -197,14 +197,15 @@ def records(pvar: Path, panel: str, info: bool) -> Iterator[Records]:
 
 
 def _fields(line: str, number: int, columns: int, pvar: Path, panel: str) -> list[str]:
-    """One record's fields; a record with fewer than the header's columns is refused."""
+    """One record's fields; a record with more or fewer than its header's columns is refused,
+    since either could be a field moved into the wrong column (a REF read as an ALT)."""
     fields = line.split("\t")
-    if len(fields) < columns:
+    if len(fields) != columns:
         raise InputError(
             f"panel {panel}: {pvar.name} line {number} has {len(fields)} fields where its "
             f"header has {columns}"
         )
-    return fields[:columns]
+    return fields
 
 
 @dataclass(frozen=True)
