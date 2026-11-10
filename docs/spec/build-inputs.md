@@ -384,7 +384,8 @@ pruning window. The regions also define "outside the excluded regions" for ogld#
   AFR 608, EAS 724, SAS 672, AMR 341. A build reads these (§4); the members files are the PC
   Files' input only.
 - **PC Files:** `scripts/make_pcs.py` writes `/data/opengwasdb/work/ogld/pcs/<panel>.eigenvec`
-  and, beside it, the PC Check's JSON report; declared source "ogld scripts/make_pcs.py on HGDP+1kGP v2" with its commit.
+  (`$OGLD_PCS`) and, beside it, the PC Check's JSON report, which names that file by its root
+  variable and its SHA-256; declared source "ogld scripts/make_pcs.py on HGDP+1kGP v2" with its commit.
 - **Conversion:** §3's BCF command, one fileset per chromosome.
 
 ## 11. The Test Panel
