@@ -11,12 +11,13 @@ pgenlib is imported here, inside the read path only (ADR 0002, decision 10).
 from __future__ import annotations
 
 from collections.abc import Callable
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, ExitStack
 from types import TracebackType
 from typing import Any, TypeVar
 
 import numpy as np
 import numpy.typing as npt
+import zarr
 
 from ogld.build.inputs import Fileset
 from ogld.format import InputError
@@ -36,10 +37,15 @@ def import_pgenlib() -> Any:
     return pgenlib
 
 
-def one_blas_thread() -> AbstractContextManager[object]:
-    """BLAS held to one thread until the context closes, so a build's `threads` workers are its
-    whole thread count (review of ogld#5): OpenBLAS otherwise starts a thread per core in each
-    matrix product. threadpoolctl comes with the build extra, as pgenlib does."""
+def bounded(threads: int) -> AbstractContextManager[object]:
+    """The build's thread bound, until the context closes (review of ogld#5): BLAS runs one
+    thread, since every parallel part of a build runs on its own `threads` workers, and zarr's
+    pool, which encodes the store's chunks, runs at most `threads`. OpenBLAS otherwise starts a
+    thread per core in each matrix product, and zarr's default pool adds 28 to the write.
+
+    The caller's zarr setting is restored on exit. zarr makes its pool once, on first use, so
+    the cap holds when the build is its process's first zarr work, as `ogld build` is.
+    threadpoolctl comes with the build extra, as pgenlib does."""
     try:
         from threadpoolctl import threadpool_limits
     except ImportError as missing:
@@ -47,8 +53,10 @@ def one_blas_thread() -> AbstractContextManager[object]:
             "a build bounds its threads with threadpoolctl, which ogld installs with the build "
             "extra: pip install 'ogld[build]'"
         ) from missing
-    limits: AbstractContextManager[object] = threadpool_limits(limits=1, user_api="blas")
-    return limits
+    stack = ExitStack()
+    stack.enter_context(threadpool_limits(limits=1, user_api="blas"))
+    stack.enter_context(zarr.config.set({"threading.max_workers": threads}))
+    return stack
 
 
 class Genotypes:

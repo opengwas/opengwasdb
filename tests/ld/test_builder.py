@@ -214,3 +214,36 @@ def test_the_store_is_validated_on_the_build_s_threads(
     )
     ogld.build(fixtures.inputs(pgen), tmp_path / "store", threads=3)
     assert seen == [3]
+
+
+def test_zarr_s_pool_is_held_to_the_build_s_threads_and_released(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Review round 2 (standards a1): zarr's default pool added 28 threads to the write, so a
+    # build at threads = 4 reached 1187% CPU. Inside a build zarr's pool is capped at `threads`,
+    # and the caller's own setting is back when the build returns.
+    import zarr
+
+    from ogld.store import StoreWriter
+
+    seen: list[object] = []
+    real = StoreWriter.write_index
+
+    def spy(
+        self: StoreWriter,
+        chrom: str,
+        indptr: npt.NDArray[np.int64],
+        partner: npt.NDArray[np.int64],
+        codes: npt.NDArray[np.int16],
+    ) -> None:
+        seen.append(zarr.config.get("threading.max_workers"))
+        real(self, chrom, indptr, partner, codes)
+
+    monkeypatch.setattr(StoreWriter, "write_index", spy)
+    before = zarr.config.get("threading.max_workers")
+    pgen = fixtures.write_fileset(
+        tmp_path / "chr22", np.flatnonzero(testdata.variants().chrom == "22")
+    )
+    ogld.build(fixtures.inputs(pgen), tmp_path / "store", threads=3)
+    assert seen == [3]
+    assert zarr.config.get("threading.max_workers") == before

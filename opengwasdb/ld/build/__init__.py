@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ogld.build import diagnostic, passes, pc_check, record
-from ogld.build.genotypes import one_blas_thread
+from ogld.build.genotypes import bounded
 from ogld.build.variant_set import Settings, variant_set
 from ogld.format import (
     FAR_BP,
@@ -110,9 +110,10 @@ def build(inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1)
     dropped PCs and the null the scan was judged against.
 
     `threads` is how many worker threads the build runs, and it bounds it: every parallel part,
-    the PC Check's windows and the LD tiles, runs on that many workers, and BLAS runs one
-    thread inside the build (threadpoolctl, from the build extra), whatever the caller's
-    environment says. Provenance records it as `build.threads`.
+    the PC Check's windows, the LD tiles and validation, runs on that many workers; BLAS runs
+    one thread inside the build (threadpoolctl, from the build extra), and zarr's pool at most
+    `threads`, whatever the caller's environment says. Provenance records it as
+    `build.threads`.
     """
     cost = record.Cost.start()
     target = Path(out)
@@ -120,7 +121,7 @@ def build(inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1)
         raise InputError(f"{target} exists: a store is never written over another")
     if threads < 1:
         raise InputError(f"threads counts worker threads, so it must be at least 1: {threads}")
-    with one_blas_thread():
+    with bounded(threads):
         return _build(inputs, target, threads, cost)
 
 
