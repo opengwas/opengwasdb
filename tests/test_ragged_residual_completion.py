@@ -43,7 +43,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 from logged_warnings import logged_warnings
-from region_tables import NO_SIGNIFICANT_REGIONS, write_region_table
 from stored_rows import stored_rows
 
 from opengwasdb import StoreManifest, open_store
@@ -159,7 +158,7 @@ def build_residual_ssf_source(root: Path) -> tuple[Path, dict[str, np.ndarray]]:
     store = root / "obs.opengwasdb"
     build_ragged_from_ssf(
         root / "manifest.tsv", filtered_dir, store, store_id="residual-rag", release_id="obs",
-        allow_unverified_eaf=True, association_coverage="cis_and_signals",
+        allow_unverified_eaf=True, association_coverage="cis",
     )
     return store, per_analysis_se
 
@@ -237,7 +236,6 @@ class RaggedResidualScenario:
                 cis_window_bp=1_000_000,
                 min_cor=0.0,
                 release_id="comp",
-                regions=write_region_table(root / "regions.tsv", NO_SIGNIFICANT_REGIONS),
             )
         self.warnings = warnings
 

@@ -195,10 +195,6 @@ def main() -> None:
     parser.add_argument("--ancestry", default="EUR")
     parser.add_argument("--min-cor", type=float, default=0.7)
     parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument(
-        "--regions", default=None,
-        help="The source build's region table; required unless its coverage is cis (#430)",
-    )
     args = parser.parse_args()
 
     observed_path = Path(args.observed)
@@ -215,7 +211,6 @@ def main() -> None:
         cr = complete_ragged_store(
             observed_path, completed_path, args.ld_panel,
             ancestry=args.ancestry, min_cor=args.min_cor, overwrite=args.overwrite,
-            regions=args.regions,
         )
         elapsed = time.time() - t0
         results["build"] = {

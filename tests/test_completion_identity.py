@@ -31,7 +31,7 @@ import pytest
 import test_dense_completion as tdc
 import test_ragged_completion as trc
 import test_ragged_completion_keeps_observed_se as keeps
-from region_tables import NO_SIGNIFICANT_REGIONS, every_analysis, write_region_table
+from region_tables import NO_SIGNIFICANT_REGIONS, every_analysis, with_regions
 from store_digest import GOLDEN, matches_pin
 from stored_rows import stored_rows
 
@@ -100,13 +100,12 @@ def besd_completion(tmp_path_factory: pytest.TempPathFactory):
     observed = root / "obs.opengwasdb"
     build_ragged_from_besd(
         trc._make_besd_fixture(root), observed, store_id="test", release_id="obs-v1",
-        tissue="Blood", association_coverage="cis_and_signals",
+        tissue="Blood", association_coverage="cis",
     )
     dst = root / "comp.opengwasdb"
     result = complete_ragged_store(
         observed, dst, trc._make_ld_panel(root, "1", 900_000, 1_300_000),
         ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
-        regions=write_region_table(root / "regions.tsv", NO_SIGNIFICANT_REGIONS),
     )
     return dst, _ragged_totals(result)
 
@@ -115,19 +114,16 @@ def besd_completion(tmp_path_factory: pytest.TempPathFactory):
 def trait_less_completion(tmp_path_factory: pytest.TempPathFactory):
     """`TestGeneTargetLessAnalyses`'s source and panel: an Analysis with no Trait
     position (issue #102). It was completed from the block its own variants fall
-    in; it is now completed in the significant region its region table records
-    (issue #430), which spans that block's panel variants, so its pin stands."""
+    in; it is now completed in the significant region its `regions.tsv` records
+    (issue #430), which spans that block's panel variants."""
     root = tmp_path_factory.mktemp("identity-trait-less")
     observed = _observed_rich(root)
     trc.TestGeneTargetLessAnalyses._drop_trait_positions(observed)
+    with_regions(observed, every_analysis(observed, "significant_trans", "1", 900_000, 1_150_000))
     dst = root / "comp.opengwasdb"
     result = complete_ragged_store(
         observed, dst, trc._make_rich_ld_panel(root), ancestry="EUR", min_cor=0.0,
         release_id="comp-v1",
-        regions=write_region_table(
-            root / "sparse_regions.tsv",
-            every_analysis(observed, "significant_trans", "1", 900_000, 1_150_000),
-        ),
     )
     return dst, _ragged_totals(result)
 
@@ -137,9 +133,9 @@ def overlapping_completion(tmp_path_factory: pytest.TempPathFactory):
     root = tmp_path_factory.mktemp("identity-overlap")
     dst = root / "comp.opengwasdb"
     result = complete_ragged_store(
-        _observed_rich(root), dst, _overlapping_panel(root), ancestry="EUR",
-        cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
-        regions=write_region_table(root / "regions.tsv", NO_SIGNIFICANT_REGIONS),
+        with_regions(_observed_rich(root), NO_SIGNIFICANT_REGIONS), dst,
+        _overlapping_panel(root), ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+        release_id="comp-v1",
     )
     return dst, _ragged_totals(result)
 

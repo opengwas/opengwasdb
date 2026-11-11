@@ -648,54 +648,57 @@ run `run` from a detached worktree of that commit (`git worktree add --detach`)
 with `PYTHONPATH` set to it and `python -P`, so its package is imported
 instead of the checkout's and the artifact names its commit.
 
-**Since #430** completion fills each Analysis only inside its regions, so
-OGS-00006, whose Analyses have no Trait position, runs with its bundle's region
-table, `run --regions .../stores/OGS-00006/sidecars/sparse_regions.tsv`, from
-an Observed-Only source (the published Store is now Reference-Completed). **Since
-#381** that source must be format 0.2.1, a fresh build: completion refuses a 0.2.0
-one (ADR 0079), and the archived Observed-Only Stores are 0.1.0 and 0.2.0. A 0.2.1
-build of OGS-00006 has no indel at all: its GWAS-SSF sources carry no harmoniser
-columns, so the build drops their 594,623 indel variants (`indel_ssf_unharmonised`)
-and keeps the same 11,491,840 SNVs. A run given a table adds `region_accounting`:
-per completed Analysis, its significant regions and their extent on the run's
-panel, and the cells completion added it,
-read back from both Stores and tested against the table here rather than by the
-package's own region code; `added_outside_regions` and `observed_rows_lost` must
-be 0. `regions-projection` counts, for every Analysis, the panel variants inside
-its regions that it does not observe, which is what a completion adds it: on a
-run's panel it is checked against that run, Analysis by Analysis
-(`checked_against_run.disagreeing` must be empty), and on the full panel it is
-the full Store's cells, the `--full-fills` for `project`. The #430 artifacts are
+**Since #430** completion fills each Analysis only inside the regions its source
+Store records in `regions.tsv`, so OGS-00006, whose coverage is `signals_only`,
+runs from an Observed-Only source built with its bundle's region table
+(`build-ragged-ssf --regions .../stores/OGS-00006/sidecars/sparse_regions.tsv`;
+the published Store is now Reference-Completed, and was built without one). **Since
+#381** that source must also be a build of this package: completion refuses a Store
+whose indels are sorted (format 0.2.1 or earlier, ADR 0079), and every build of this
+package writes 0.2.2. A 0.2.2 build of OGS-00006 has no indel at all: its GWAS-SSF
+sources carry no harmoniser columns, so the build drops their 594,623 indel variants
+(`indel_ssf_unharmonised`) and keeps the same 11,491,840 SNVs. A run from a source
+carrying `regions.tsv` adds `region_accounting`: per completed Analysis, its
+significant regions and their extent on the run's panel, and the cells completion
+added it, read back from both Stores and tested against the table here rather than
+by the package's own region code; `added_outside_regions` and `observed_rows_lost`
+must be 0. `regions-projection` counts, for every Analysis, the panel variants inside
+its regions that it does not observe, which is what a completion adds it: on a run's
+panel it is checked against that run, Analysis by Analysis
+(`checked_against_run.disagreeing` must be empty), and on the full panel it is the
+full Store's cells, the `--full-fills` for `project`. The #430 artifacts are
 `regions-*.json` in the same directory.
 
 The chr15-22 panel holds the real panel's chromosome directories 15 to 22 and its
 indel-reference table (`indel_reference.tsv.gz`, its index and its provenance),
 linked. Without the table the panel places no indel and the runs complete none
 (ADR 0079). `STORES` is a checkout of opengwasdb-stores, whose bundle holds the
-region table.
+region table, and the source is built from the bundle's own build argv (the
+published Store's `records/build.json`) with `--admission-record`, required since
+#357, and `--regions` added.
 
 ```bash
 STORES=path/to/opengwasdb-stores
-TABLE=$STORES/stores/OGS-00006/sidecars/sparse_regions.tsv
-SRC=/data/opengwasdb/work/odb430/OGS-00006-0.2.1.opengwasdb
+SRC=/data/opengwasdb/work/odb430/OGS-00006-0.2.2.opengwasdb
 PANEL=/data/opengwasdb/work/odb430/panel-chr15-22
 OUT=docs/benchmark-output/ragged_completion_streams
-# The Observed-Only source at 0.2.1, built as records/build.json built the published one.
 pixi run -e dev opengwasdb build-ragged-ssf /data/opengwasdb/stores/OGS-00006/work/analyses.tsv \
     /data/opengwasdb/stores/OGS-00006/source $SRC --store-id OGS-00006 --release-id OGS-00006 \
-    --association-coverage signals_only --stored-effect-scale sd
+    --association-coverage signals_only --stored-effect-scale sd \
+    --admission-record $SRC.admission \
+    --regions $STORES/stores/OGS-00006/sidecars/sparse_regions.tsv
 mkdir -p $PANEL/EUR
 for c in $(seq 15 22); do ln -sfn /data/opengwasdb/reference/ld/EUR/$c $PANEL/EUR/$c; done
 for f in indel_reference.tsv.gz indel_reference.tsv.gz.tbi indel_reference.json; do
   ln -sfn /data/opengwasdb/reference/ld/EUR/$f $PANEL/EUR/$f; done
 for n in 25 100; do
   /usr/bin/time -v pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py \
-      run --source $SRC --regions $TABLE --n-analyses $n --n-workers 16 --ld-dir $PANEL \
+      run --source $SRC --n-analyses $n --n-workers 16 --ld-dir $PANEL \
       --dest /data/opengwasdb/work/odb430/runs/head-$n.opengwasdb --output $OUT/regions-head-$n.json
 done
 for panel in $PANEL /data/opengwasdb/reference/ld; do
   pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py regions-projection \
-      --source $SRC --regions $TABLE --ld-dir $panel --run $OUT/regions-head-100.json \
+      --source $SRC --ld-dir $panel --run $OUT/regions-head-100.json \
       --output $OUT/regions-projection-$(basename $panel).json
 done
 # The full Store's shape: 1,038,245 cells over 1,286 blocks, one batch.
@@ -708,23 +711,27 @@ pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py project
     --output $OUT/regions-projection-phase3.json
 ```
 
-The #430 artifacts were measured at `aed5c4a`, on the archived 0.2.0
-Observed-Only Store (`replaced/20261023T230254Z`), with the panel read as before
-#381: every indel named by its sorted alleles, none re-signed. On that reading the
-full Store adds 1,038,245 cells (`regions-projection-ld.json`), where its first
-completion added 10,001,552,498. The subsets imputed every cell they added.
-`project`'s Phase 3 time is a line through two runs 17,191 fills apart, both
-carrying the same 58M observed rows, so host noise sets its slope: read its 2,074 s
-as an upper bound beside the 241 s the 100-Analysis run took.
+`regions-head-*.json`, `regions-projection-*.json` and `regions-shard-append.json`
+were measured at `b897533` (#432), on a build of package 0.9.0 carrying
+`regions.tsv`: format 0.2.1, its indels sorted and the panel read as before #381,
+every indel named by its sorted alleles and none re-signed. On that reading the full
+Store adds 1,038,245 cells (`regions-projection-ld.json`), where its first completion
+added 10,001,552,498; the subsets imputed every cell they added, and the chr15-22
+projection agrees with the 100-Analysis run for all 100 Analyses. `project` reads
+Phase 3's time off a line through two runs 17,191 fills apart, both carrying the
+same 58M observed rows, so host noise sets its slope: here the 100-Analysis run's
+Phase 3 took 184 s and the 25-Analysis run's 192 s, so `project` records no time
+(`phase3_not_fitted`) rather than extrapolate a negative one. The full Store holds
+59.1M cells, 1.7% more than the 100-Analysis run's 58.1M; the memory model puts it
+at 9.4 GB at assembly and 12.8 GB at write.
 
-The recipe above was re-run at `48c0576` on a 0.2.1 build, with the panel read as
-completion reads it now (`regions-0.2.1-*.json`). The 100-Analysis run imputes
-38,861 cells, none outside a region, and loses no observed row. On chromosomes
-15-22 the projection agrees with it Analysis by Analysis. On the full panel the
-full Store adds 2,160,436 cells, about twice the 0.2.0 figure: the build drops the
-Store's indels, so every panel indel inside a region is a cell completion adds
-rather than one the Analysis observes. The 25-Analysis run and the Phase 3
-projection were not re-run for that count.
+`regions-0.2.1-*.json` were measured at `48c0576`, before #432, on a build of this
+branch whose indels were spelt reference first: format 0.2.1 as #381 first numbered
+it, 0.2.2 since main's #432 took 0.2.1. The 100-Analysis run imputes 38,861 cells,
+none outside a region, and loses no observed row; on chromosomes 15-22 the
+projection agrees with it Analysis by Analysis; on the full panel the full Store
+adds 2,160,436 cells, about twice the sorted figure, because the build drops the
+Store's indels and every panel indel inside a region becomes a cell completion adds.
 
 ### `benchmark_store_comparison.py`
 

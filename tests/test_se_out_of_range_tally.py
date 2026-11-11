@@ -16,7 +16,6 @@ import pytest
 import test_hybrid_build as hb
 import test_hybrid_completion as thc
 import test_ragged_completion as trc
-from region_tables import NO_SIGNIFICANT_REGIONS, write_region_table
 from test_dense_vcf_build import HG19_POS_1, HG19_POS_3, _make_manifest, _make_vcf
 
 from opengwasdb.admission import NotAdmitted
@@ -140,14 +139,13 @@ def test_ragged_completion_logs_each_analysis_s_out_of_range_ses_once(tmp_path, 
     observed = tmp_path / "obs.opengwasdb"
     trc.build_ragged_from_besd(
         fixture / "test", observed, store_id="t", release_id="obs", tissue="Blood",
-        association_coverage="cis_and_signals",
+        association_coverage="cis",
     )
     with caplog.at_level(logging.WARNING):
         trc.complete_ragged_store(
             observed, tmp_path / "comp.opengwasdb",
             trc._make_ld_panel(tmp_path, "1", 900_000, 1_300_000),
             ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp",
-            regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
         )
     assert _completion_lines(caplog, "complete-ragged") == [
         f"complete-ragged: 1 {_TALLY} (spec §15): ENSG00000000001::Blood: 1"

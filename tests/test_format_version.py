@@ -101,10 +101,35 @@ def test_the_version_this_build_writes_is_one_it_can_read():
 
 
 def test_the_readable_formats_are_the_two_the_epic_carries():
-    """Two series: 0.1 (Zarr v2) and 0.2 (Zarr v3 with sharding, since #245),
-    whose remainder reaches 1 with #381 (indel ALIDs spelt reference first). A
-    third entry is a decision, not an accident."""
-    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (1,)}
+    """Two series: 0.1 (Zarr v2) and 0.2 (Zarr v3 with sharding, since #245). The 0.2
+    series reads to 0.2.2: 0.2.1 adds a Ragged release's optional `regions.tsv` (#430),
+    and 0.2.2 spells an indel's ALID reference first (#381, ADR 0079). Another entry
+    is a decision, not an accident."""
+    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (2,)}
+
+
+def test_a_release_is_stamped_the_lowest_version_whose_features_it_uses():
+    """The owner's decision of 2026-11-11 (spec §21.3, ADR 0038 §3): 0.2.1 differs from
+    0.2.0 only by an optional, manifest-declared `regions.tsv`, and 0.2.2 from 0.2.1
+    only by an indel's ALID spelt reference first, the region table still optional. A
+    release is stamped the lowest of the three whose features it uses."""
+    stamp = store_open.format_version_for
+    assert stamp(carries_regions=False, reference_first_indels=False) == "0.2.0"
+    assert stamp(carries_regions=True, reference_first_indels=False) == "0.2.1"
+    assert stamp(carries_regions=False, reference_first_indels=True) == "0.2.2"
+    assert stamp(carries_regions=True, reference_first_indels=True) == "0.2.2"
+    assert store_open.WRITTEN_FORMAT_VERSIONS == ("0.2.0", "0.2.1", "0.2.2")
+
+
+def test_the_current_version_is_the_stamp_of_a_release_using_no_optional_feature():
+    """What every build of this package writes for a release without a region table,
+    since every build spells an indel reference first, and what opengwasdb-stores'
+    engine update probes (`ogstores.engine_update`) and compares with its
+    `REQUIRED_FORMAT_VERSION`."""
+    assert CURRENT_FORMAT_VERSION == store_open.format_version_for(
+        carries_regions=False, reference_first_indels=True
+    )
+    assert CURRENT_FORMAT_VERSION == "0.2.2"
 
 
 def test_each_readable_series_has_one_zarr_on_disk_format():
@@ -172,24 +197,24 @@ def test_validation_reports_a_pre_reset_release_as_an_error_not_a_crash(dense_st
 # --- writing is narrower than reading (ADR 0041 §3) ------------------------
 
 
-def test_the_current_version_is_writable():
-    writable = store_open.check_writable_format_version(CURRENT_FORMAT_VERSION)
-    assert writable == CURRENT_FORMAT_VERSION
+@pytest.mark.parametrize("version", ["0.2.0", "0.2.1"])
+def test_every_version_this_build_writes_is_writable(version):
+    """Their arrays are encoded identically, so completing a 0.2.0 or a 0.2.1 release
+    writes it in its own format (ADR 0038 §4)."""
+    assert store_open.check_writable_format_version(version) == version
 
 
-def test_the_converter_writes_0_2_0_and_the_builders_0_2_1():
-    """#247 made the converter's target the builders' version; #381 parts them.
-
-    The converter reads `SOURCE_FORMAT_VERSION` (0.1.0, Zarr v2) and copies its
-    stored codes and ALIDs into Zarr v3. A 0.1.0 Store sorts an indel's alleles
-    and says nowhere which is the reference, so its copy is 0.2.0, whose ALIDs
-    are spelt the same way; the builders write 0.2.1, an indel reference first
+def test_the_converter_stamps_by_the_builders_rule_and_keeps_sorted_indels():
+    """#247 made the converter's target the builders' version, and #430 stamps both by
+    one rule (`format_version_for`). #381 parts their output: the converter reads
+    `SOURCE_FORMAT_VERSION` (0.1.0, Zarr v2) and copies its stored codes and ALIDs into
+    Zarr v3. A 0.1.0 Store sorts an indel's alleles and says nowhere which is the
+    reference, so its copy is stamped as sorted, 0.2.0, where a build writes 0.2.2
     (ADR 0079).
     """
     from opengwasdb.store import convert
 
-    assert convert.TARGET_FORMAT_VERSION == "0.2.0"
-    assert store_open.CURRENT_FORMAT_VERSION == "0.2.1"
+    assert convert.format_version_for is store_open.format_version_for
     assert convert.SOURCE_FORMAT_VERSION == "0.1.0"
 
 
@@ -223,6 +248,7 @@ def test_a_readable_but_unwritable_version_is_refused(monkeypatch):
     that has never been executed is a guess.
     """
     monkeypatch.setattr(store_open, "CURRENT_FORMAT_VERSION", "0.1.1")
+    monkeypatch.setattr(store_open, "WRITTEN_FORMAT_VERSIONS", ("0.1.1",))
     monkeypatch.setattr(store_open, "SUPPORTED_FORMAT_VERSIONS", {(0, 1): (1,)})
 
     store_open.check_format_version("0.1.0")  # still readable

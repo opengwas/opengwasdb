@@ -66,14 +66,7 @@ from opengwasdb.completion.manifest import (
 )
 from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
-from opengwasdb.completion.regions import (
-    Region,
-    RegionTable,
-    analysis_regions,
-    inside,
-    read_region_table,
-    region_blocks,
-)
+from opengwasdb.completion.regions import analysis_regions, inside, region_blocks
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
     EAF_BASELINE,
@@ -97,10 +90,12 @@ from opengwasdb.model.analyses import (
     write_analysis_records,
 )
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.model.regions import REGIONS_FILE, Region, RegionTable, read_store_regions
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     StagedRelease,
+    check_format_version_stamp,
     check_writable_format_version,
     open_store,
 )
@@ -327,7 +322,6 @@ def complete_ragged_store(
     overwrite: bool = False,
     impute_analysis_ids: set[str] | None = None,
     region_cap_bp: int | None = REGION_CAP_BP,
-    regions: str | Path | None = None,
 ) -> CompletionResult:
     """Produce a Reference-Completed Store Release from an observed-only ragged store.
 
@@ -340,10 +334,10 @@ def complete_ragged_store(
         ``assigned_ancestry`` column when present, imputing every analysis
         when it is not (no behaviour change for sources with no ancestry
         information).
-    regions: the build's region table, its regions (`completion.regions`, issue #430).
+    The regions are the source's `regions.tsv` (`completion.regions`, issue #430).
     """
     table, impute_analysis_ids, resolved = _check_completion_inputs(
-        Path(source_path), ld_dir, ancestry, regions, cis_window_bp, impute_analysis_ids
+        Path(source_path), ld_dir, ancestry, cis_window_bp, impute_analysis_ids
     )
     dst = Path(dest_path)
     checkpoint_dir = checkpoint.checkpoint_dir_for(dst)
@@ -433,20 +427,22 @@ def resume_ragged_completion(
 
 
 def _region_params(table: RegionTable | None) -> dict[str, str | None]:
-    """The region table's build parameters. Recorded, null included, so a resume
-    knows the rule (issue #430) its checkpoints were written under, and refuses
-    one that predates it (`_resumed_regions`)."""
+    """The region table's build parameters: its path, and the SHA-256 the source's
+    manifest declares for it, which `read_store_regions` has held the file to. Recorded,
+    null included, so a resume knows the rule (issue #430) its checkpoints were written
+    under, and refuses one that predates it (`_resumed_regions`)."""
     if table is None:
         return {"regions": None, "regions_sha256": None}
     return {"regions": str(table.path.resolve()), "regions_sha256": table.sha256}
 
 
 def _resumed_regions(checkpoint_dir: Path, params: dict[str, Any]) -> RegionTable | None:
-    """The region table a resumed completion's checkpoints were written against.
+    """The source's `regions.tsv` a resumed completion's checkpoints were written against.
 
     Refused when the checkpoint predates the region rule (issue #430), whose blocks
-    were filled whole, or when the table has changed since: either would land fills
-    one rule chose beside rows another one chose.
+    were filled whole, or when the SHA-256 the source's manifest declares has changed
+    since, or the table been added or removed: either would land fills one table chose
+    beside rows another one chose.
     """
     if "regions" not in params:
         raise ValueError(
@@ -454,15 +450,11 @@ def _resumed_regions(checkpoint_dir: Path, params: dict[str, Any]) -> RegionTabl
             "blocks, before completion was bounded to each Analysis's regions (issue "
             "#430); its block checkpoints cannot be resumed, so start the completion again"
         )
-    if params["regions"] is None:
-        return None
-    table = read_region_table(
-        params["regions"], StoreManifest.load(Path(params["source_path"])).reference_assembly
-    )
-    if table.sha256 != params["regions_sha256"]:
+    table = read_store_regions(params["source_path"])
+    if (None if table is None else table.sha256) != params["regions_sha256"]:
         raise ValueError(
-            f"region table {params['regions']} has changed since {checkpoint_dir} was "
-            "written; its block checkpoints were filled inside the regions it held then"
+            f"the source's {REGIONS_FILE} has changed since {checkpoint_dir} was written; "
+            "its block checkpoints were filled inside the regions it held then"
         )
     return table
 
@@ -597,13 +589,13 @@ def _check_completion_inputs(
     src: Path,
     ld_dir: str | Path,
     ancestry: str,
-    regions: str | Path | None,
     cis_window_bp: int,
     impute_analysis_ids: set[str] | None,
 ) -> tuple[RegionTable | None, set[str] | None, dict[int, tuple[Region, ...]]]:
     """The refusals that need no side effect, run before any is taken: the
-    region table, read and checked whole, and the Analyses to impute, derived
-    from the source's ancestry (ADR 0028) when not given, each with its regions.
+    source's region table, read and checked whole, and the Analyses to impute,
+    derived from the source's ancestry (ADR 0028) when not given, each with its
+    regions.
 
     Ahead of `require_fresh_destination`, which under `overwrite` deletes a
     previous checkpoint: a run that is going to be refused for its source, its
@@ -611,10 +603,7 @@ def _check_completion_inputs(
     """
     _refuse_sample_size_source(src)
     check_panel_has_chromosomes(ld_dir, ancestry)
-    table = (
-        None if regions is None
-        else read_region_table(regions, StoreManifest.load(src).reference_assembly)
-    )
+    table = read_store_regions(src)
     if impute_analysis_ids is None:
         impute_analysis_ids = derive_impute_analysis_ids(_read_analyses_rows(src), ancestry)
     resolved = _resolve_regions(src, table, cis_window_bp, impute_analysis_ids)
@@ -653,13 +642,16 @@ def _refuse_sample_size_source(src: Path) -> None:
 
 def _open_source(src: Path) -> tuple[StoreManifest, str]:
     """Open the observed-only source and refuse a format this build cannot
-    write, before any of the work (ADR 0038 §4)."""
+    write, or a stamp its features do not give, before any of the work (ADR 0038
+    §4, spec §21.3)."""
     _refuse_sample_size_source(src)
     source = open_store(src)
     manifest = source.manifest
     # See the dense path: refused before the work, not after it (ADR 0038 §4).
-    source_format_version = check_writable_format_version(
-        manifest.format_version, source=f"source release {src}"
+    source_format_version = check_format_version_stamp(
+        check_writable_format_version(manifest.format_version, source=f"source release {src}"),
+        carries_regions=manifest.regions is not None,
+        source=f"source release {src}",
     )
     print(f"Source store: {manifest.store_id} / {manifest.release_id}")
     print(f"  completion_state: {manifest.completion_state}")
@@ -1394,7 +1386,8 @@ def _write_top_hits_and_analyses(
     """Phase 5 metadata: top-hit indexes built with the completed encoding,
     and analyses.tsv -- rollup from index.sqlite (ADR 0030), `eaf_scope` from
     what the release holds, completion columns refreshed, and the source's
-    pre-completion hit counts zeroed so add_hit_counts recomputes them."""
+    pre-completion hit counts zeroed so add_hit_counts recomputes them; and the
+    source's regions.tsv, carried unchanged (`_carry_regions`)."""
     print("Building top-hit indexes...")
     build_ragged_top_hit_indexes(staged.path, encoding=encode_plan.encoding)
 
@@ -1425,6 +1418,17 @@ def _write_top_hits_and_analyses(
     write_analysis_records(
         staged.path / "analyses.tsv", top_hits.add_hit_counts(staged.path, dst_analyses)
     )
+    _carry_regions(state.src, staged.path)
+
+
+def _carry_regions(src: Path, dst: Path) -> None:
+    """The region table the source's manifest declares, carried into the completed Store
+    byte for byte, so the entry its manifest carries forward (`completed_release_manifest`)
+    still names it: the regions the Store was built with are what it was completed inside
+    (issue #430)."""
+    declared = StoreManifest.load(src).regions
+    if declared is not None:
+        shutil.copyfile(src / declared.path, dst / declared.path)
 
 
 def _completed_manifest(

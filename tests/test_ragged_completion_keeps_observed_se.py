@@ -45,7 +45,6 @@ from shutil import copytree
 import numpy as np
 import pytest
 from logged_warnings import logged_warnings
-from region_tables import NO_SIGNIFICANT_REGIONS, write_region_table
 from stored_rows import stored_rows
 from test_ragged_residual_completion import _FREQS, RaggedResidualScenario, _source_bp
 
@@ -149,12 +148,10 @@ def _skewed_panel_rows() -> list[tuple[str, float, int]]:
 def _complete(
     source: Path, root: Path, panel: Path, impute_analysis_ids: set[str] | None = None
 ) -> _Completion:
-    root.mkdir(parents=True, exist_ok=True)
     with logged_warnings() as warnings:
         result = complete_ragged_store(
             source, root / "comp.opengwasdb", panel, ancestry="EUR", cis_window_bp=1_000_000,
             min_cor=0.0, release_id="comp", impute_analysis_ids=impute_analysis_ids,
-            regions=write_region_table(root / "regions.tsv", NO_SIGNIFICANT_REGIONS),
         )
     return _Completion(root / "comp.opengwasdb", panel, result.n_imputed, warnings)
 
@@ -431,8 +428,7 @@ def test_an_imputed_cell_outside_the_range_is_an_exact_exception(
 def test_the_strict_observed_view_check_passes(completions: _Completions) -> None:
     for name, run in completions.runs.items():
         verdict = check_observed_view(
-            completions.source, run.path, seed=301, n_random=10, ld_panel=run.panel,
-            regions=run.path.parent / "regions.tsv",  # the table its completion was given
+            completions.source, run.path, seed=301, n_random=10, ld_panel=run.panel
         )
         totals = verdict.record["totals"]
         assert totals["observed_in_source"] == 600 + 596, f"{name}: every Analysis compared"

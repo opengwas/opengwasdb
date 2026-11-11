@@ -6,7 +6,8 @@ questions they left open, which both turned out to be answered in practice by
 completing a store to nothing and saying so only in a log line nobody sees.
 
 **Decision 1 is amended (2026-11-11, issue #430):** a region is one the
-Store's build recorded, completed only within its own boundary. See
+Store's build recorded in the Store, as `regions.tsv`, completed only within
+its own boundary. See
 [Amendment: regions are the ones the build recorded](#amendment-regions-are-the-ones-the-build-recorded-issue-430);
 the text of decision 1 below is kept as the record of what it replaced.
 
@@ -147,18 +148,28 @@ appropriately". For every Ragged Analysis:
   in one block;
 - **an Analysis with no region is carried Observed-Only.**
 
-**Where the boundaries come from.** A Store records which rows it holds, not
-why it holds them, so the boundaries are the build's: the bundle's region
-table (`sidecars/sparse_regions.tsv`), passed to `complete-ragged --regions`
-and to the Observed-View Check's `--regions`. Only its `cis` and
-`significant_trans` rows are regions. The cis boundary is the table's `cis`
+**Where the boundaries come from: the owner's third decision (2026-11-11).**
+A Store records which rows it holds, not why it holds them, so the boundaries
+are the build's: the region table the bundle-prep filter already writes as each
+release's `sidecars/sparse_regions.tsv`. The owner decided the build keeps that
+table **in the Store, with its other metadata**: `build-ragged-ssf --regions`
+checks it and writes it beside `analyses.tsv` as `regions.tsv`, declaring it in
+the manifest's `regions` entry by path and SHA-256; completion and the
+Observed-View Check find it through that entry in the source Store, with no
+completion-time flag, and the completed Store carries the file and the entry
+forward unchanged. Three reasons:
+the table already exists, so the Release Bundle machinery does not change; a
+Store should describe itself, rather than need a second file found and passed
+beside it at every completion; and a summary of the Store (`opengwasdb info`)
+can then show what it holds. Only the table's `cis` and `significant_trans`
+rows are regions. The cis boundary is the table's `cis`
 row where there is one, and otherwise the Trait position plus or minus
 `--cis-window-bp`, which is the cis-only eQTLGen Stores' case (OGS-00001,
--00002 and -00027 record no table). The table is required unless the Store's
-Association Coverage is `cis`: a `cis_and_signals` Store whose every Analysis
-has a Trait position would otherwise complete on its cis windows and silently
-leave out its significant trans regions (OGS-00007 would lose 12,442 of its
-18,352 imputed cells). A table row of an unknown kind, in another assembly, or
+-00002 and -00027 record no table). A Store whose Association Coverage is not
+`cis` and that holds no `regions.tsv` is refused, and must be rebuilt with the
+table: a `cis_and_signals` Store whose every Analysis has a Trait position would
+otherwise complete on its cis windows and silently leave out its significant
+trans regions (OGS-00007 would lose 12,442 of its 18,352 imputed cells). A table row of an unknown kind, in another assembly, or
 naming an Analysis the Store lacks refuses the completion, and so does an
 Analysis with no Trait position the table says nothing of: the "four
 observations anywhere" rule is never a fallback. A region no LD block overlaps
@@ -185,15 +196,37 @@ row completion added outside every region (`missing_outside_retained`).
   A significant region whose block holds fewer observations than the fit needs
   is completed as missing rows, which is what spec §17 says a completed region
   holds where nothing could be imputed.
-- `complete-ragged` without `--regions` refuses a Store with a trait-less
-  Analysis, which it used to complete: opengwasdb-stores passes the bundle's
-  table where the bundle has one (its sibling ticket).
+- `complete-ragged` refuses a Store whose coverage is not `cis` and that holds
+  no `regions.tsv`, which it used to complete: existing Stores gain the table
+  only when rebuilt, and opengwasdb-stores passes each bundle's sidecar to the
+  builder (opengwas/opengwasdb-stores#459).
+- `regions.tsv` is a new optional file in a Ragged release (spec §1, §2, §17),
+  found through the manifest, which spec §21.2 requires of every feature a format
+  adds (the owner, 2026-11-11). `validate` fails a file the manifest does not
+  declare, a declared file that is missing, and one whose bytes are not the
+  declared SHA-256, and completion refuses each. The owner chose to move
+  `format_version` to 0.2.1 for it (§21.1); how a build stamps that version is
+  spec §21.3's, and is recorded with the move.
 - A resume of a checkpoint written before the amendment is refused: its blocks
   were filled whole.
 - Every published Reference-Completed Ragged Store was completed under the old
   rules and differs under these; re-completing one is the owner's call.
 
 ## Considered options
+
+- **Pass the build's region table to completion (`--regions`, issue #430).**
+  Released in 0.8.0, and withdrawn by the owner's third decision: a Ragged Store
+  should describe its own regions, and a table passed beside it at completion
+  is a second record every caller must find, and that can disagree with the
+  Store.
+- **Infer the regions from the Store's own significant observations (issue
+  #430).** Measured on OGS-00006's archived Observed-Only Store: its
+  associations at p <= 5e-8, each +/- 1 Mb, merged per Analysis, reproduce 3,621
+  of the bundle's 3,627 recorded `significant_trans` regions exactly, with none
+  extra. Set aside for the recorded table, which is exact: the six it misses are
+  regions whose centre or leftmost source hit is not a significant hit in the
+  Store, and inference would also have to restate the filter's rule in the
+  engine, where it could drift from the one that chose the rows.
 
 - **Warn instead of raising (issue #98).** Rejected: the run already logged at
   `info` and the operator still shipped an empty store. A warning is what the

@@ -106,7 +106,6 @@ def dense_completion_n2(out: Path) -> None:
 
 def ragged_completion_n2(out: Path) -> None:
     import test_ragged_completion as trc
-    from region_tables import NO_SIGNIFICANT_REGIONS, write_region_table
 
     from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
     from opengwasdb.layouts.ragged.complete import complete_ragged_store
@@ -117,15 +116,11 @@ def ragged_completion_n2(out: Path) -> None:
     prefix = trc._make_besd_fixture(d)
     build_ragged_from_besd(
         prefix, observed, store_id="test", release_id="obs-v1", tissue="Blood",
-        association_coverage="cis_and_signals",
+        association_coverage="cis",
     )
     panel = trc._make_ld_panel(d, "1", 900_000, 1_300_000)
     kwargs = {"ancestry": "EUR", "cis_window_bp": 500_000, "min_cor": 0.0, "release_id": "comp-v1"}
-    # A cis_and_signals source needs its region table (issue #430): here, cis windows only.
-    regions = write_region_table(d / "regions.tsv", NO_SIGNIFICANT_REGIONS)
-    complete_ragged_store(
-        observed, d / "comp.opengwasdb", panel, n_workers=2, regions=regions, **kwargs
-    )
+    complete_ragged_store(observed, d / "comp.opengwasdb", panel, n_workers=2, **kwargs)
 
 
 def gather_n2(out: Path) -> None:

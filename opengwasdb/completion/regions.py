@@ -12,11 +12,13 @@ position, and its significant trans regions (issue #430):
 * `suggestive_trans` and `qc_panel` rows never make a region, however many of them fall
   in one block.
 
-The table is the one the Store's build recorded, a bundle's `sidecars/sparse_regions.tsv`
-(`read_region_table`): a Store records which rows it holds, not why it holds them. Only a
-Store whose Association Coverage is `cis` holds no region but its cis windows, so only one
-may be completed without a table; any other would have its significant trans regions
-completed nowhere.
+The table is the one the Store's build recorded: a Release Bundle's
+`sidecars/sparse_regions.tsv`, which `build-ragged-ssf --regions` checks, writes into
+the Store as `regions.tsv` (`model.regions`), beside `analyses.tsv`, and declares in its
+manifest, and which completion carries into the completed Store unchanged. Only a Store
+whose Association Coverage is `cis` holds no region but its cis windows, so only one may
+be completed without it; any other would have its significant trans regions completed
+nowhere.
 
 A block is completed for an Analysis when its extent overlaps one of the Analysis's
 regions (`region_blocks`), and the fit uses every observation the Analysis holds at the
@@ -27,8 +29,6 @@ as the source holds it.
 
 from __future__ import annotations
 
-import csv
-import hashlib
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -39,33 +39,24 @@ import numpy as np
 from opengwasdb.completion.ld_panel import LDBlock, list_all_blocks, list_chromosomes
 from opengwasdb.model.analyses import Analysis
 from opengwasdb.model.enums import AssociationCoverage
+from opengwasdb.model.regions import (
+    REGION_KINDS,
+    REGIONS_FILE,
+    Region,
+    RegionTable,
+    RegionTableError,
+    check_region_table,
+)
 from opengwasdb.variants.normalise import chromosome_sort_key, normalise_chromosome
 
 __all__ = [
-    "COMPLETED_KINDS",
-    "REGION_KINDS",
-    "Region",
-    "RegionTable",
-    "RegionTableError",
+    "RegionBlocks",
     "analysis_regions",
     "has_trait_position",
-    "RegionBlocks",
     "inside",
-    "read_region_table",
     "region_blocks",
+    "region_summary",
 ]
-
-
-@dataclass(frozen=True)
-class Region:
-    """One region an Analysis is completed inside: a chromosome and an inclusive span,
-    named by its table's `region_id` (or, for a cis window, by its Analysis)."""
-
-    chromosome: str
-    start: int
-    end: int
-    kind: str
-    region_id: str
 
 
 def has_trait_position(a: Analysis) -> bool:
@@ -73,85 +64,19 @@ def has_trait_position(a: Analysis) -> bool:
     return bool(a.trait_chr) and bool(a.trait_bp)
 
 
-#: Every kind a region table may give a row, and the two that make a region. A
-#: suggestive lead is one row, kept to say a locus exists; a QC-panel row is kept for the
-#: build's ancestry and frequency checks. Neither is evidence completion fits from.
-REGION_KINDS = ("cis", "significant_trans", "suggestive_trans", "qc_panel")
-COMPLETED_KINDS = frozenset({"cis", "significant_trans"})
-#: The columns `read_region_table` reads; a table may carry more, which it ignores.
-TABLE_COLUMNS = (
-    "analysis_id", "region_id", "region_kind", "chromosome", "start", "end", "source_genome_build",
-)
-
-
-class RegionTableError(ValueError):
-    """A region table completion cannot complete against, or an Analysis it cannot place."""
-
-
-@dataclass(frozen=True)
-class RegionTable:
-    """A build's per-Analysis region table, read and checked whole (`read_region_table`).
-
-    `regions` holds each Analysis's `cis` and `significant_trans` rows only, and
-    `analysis_ids` every Analysis the table gives a row of any kind.
-    """
-
-    path: Path
-    sha256: str
-    regions: Mapping[str, tuple[Region, ...]]
-    analysis_ids: frozenset[str]
-
-
-def read_region_table(path: str | Path, assembly: str) -> RegionTable:
-    """Read a region table (a bundle's `sidecars/sparse_regions.tsv`), refusing it whole.
-
-    Every row must name a kind in `REGION_KINDS`, coordinates in `assembly` (the Store's,
-    GRCh38) and an inclusive span `1 <= start <= end` on a chromosome; a row that does
-    not is refused by line, never skipped, since a skipped region is a region completed
-    nowhere.
-    """
-    path = Path(path)
-    data = path.read_bytes()
-    lines = data.decode("utf-8").splitlines()
-    rows = list(csv.DictReader(lines, delimiter="\t"))
-    header = next(csv.reader(lines[:1], delimiter="\t"), [])
-    missing = [c for c in TABLE_COLUMNS if c not in header]
-    if missing:
-        raise RegionTableError(f"region table {path} has no {', '.join(missing)} column")
-    regions: dict[str, list[Region]] = defaultdict(list)
-    for line, row in enumerate(rows, start=2):
-        region = _table_region(row, assembly, f"region table {path} line {line}")
-        if region.kind in COMPLETED_KINDS:
-            regions[row["analysis_id"]].append(region)
-    return RegionTable(
-        path=path,
-        sha256=hashlib.sha256(data).hexdigest(),
-        regions={a: tuple(r) for a, r in regions.items()},
-        analysis_ids=frozenset(row["analysis_id"] for row in rows),
-    )
-
-
-def _table_region(row: Mapping[str, str], assembly: str, where: str) -> Region:
-    kind = row["region_kind"]
-    if kind not in REGION_KINDS:
-        raise RegionTableError(
-            f"{where}: region_kind {kind!r} is none of {', '.join(REGION_KINDS)}"
-        )
-    if row["source_genome_build"] != assembly:
-        raise RegionTableError(
-            f"{where}: source_genome_build {row['source_genome_build']!r}, not the "
-            f"Store's {assembly}"
-        )
-    try:
-        region = Region(
-            normalise_chromosome(row["chromosome"]), int(row["start"]), int(row["end"]), kind,
-            row["region_id"],
-        )
-    except ValueError as exc:
-        raise RegionTableError(f"{where}: {exc}") from exc
-    if not 1 <= region.start <= region.end:
-        raise RegionTableError(f"{where}: start {region.start} and end {region.end} are no span")
-    return region
+def region_summary(table: RegionTable, analyses: Sequence[Analysis]) -> dict[str, object]:
+    """What `opengwasdb info` says of a Store's regions: its rows by kind, and how many of
+    its Analyses have a completion region (a `cis` or `significant_trans` row, or a Trait
+    position to centre a cis window on) and how many have none."""
+    counts = {kind: 0 for kind in REGION_KINDS}
+    for row in table.rows:
+        counts[row["region_kind"]] += 1
+    with_region = sum(1 for a in analyses if _regions_of(a, table, cis_window_bp=0))
+    return {
+        "rows_by_kind": counts,
+        "analyses_with_region": with_region,
+        "analyses_without_region": len(analyses) - with_region,
+    }
 
 
 def _cis_window(a: Analysis, cis_window_bp: int) -> Region:
@@ -197,23 +122,17 @@ def _refuse_missing_table(table: RegionTable | None, coverage: AssociationCovera
     regions only its build's table holds, which completing without it would leave out."""
     if table is None and coverage is not AssociationCoverage.CIS:
         raise RegionTableError(
-            f"the Store's Association Coverage is {coverage.value}, so its regions are in the "
-            "region table its build recorded: give complete-ragged that table (--regions). "
-            "Only a cis Store is completed without one, on each Trait position +/- the cis "
-            "window"
+            f"the Store's Association Coverage is {coverage.value} and it holds no "
+            f"{REGIONS_FILE}, the region table its build records: rebuild it with "
+            "build-ragged-ssf --regions. Only a cis Store is completed without one, on each "
+            "Trait position +/- the cis window"
         )
 
 
 def _refuse_foreign_rows(analyses: Sequence[Analysis], table: RegionTable | None) -> None:
     """A table naming an Analysis the Store lacks is another Store's table, or a stale one."""
-    if table is None:
-        return
-    foreign = sorted(table.analysis_ids - {a.analysis_id for a in analyses})
-    if foreign:
-        raise RegionTableError(
-            f"region table {table.path} names {len(foreign):,} Analyses the Store does "
-            f"not hold; first: {foreign[:5]}"
-        )
+    if table is not None:
+        check_region_table(table, (a.analysis_id for a in analyses))
 
 
 def _refuse_unplaced(
@@ -230,8 +149,8 @@ def _refuse_unplaced(
     if not unplaced:
         return
     where = (
-        "and no region table, so there is no region to complete them in: give "
-        "complete-ragged the region table the Store's build recorded (--regions)"
+        f"and the Store holds no {REGIONS_FILE}, so there is no region to complete them "
+        "in: rebuild it with build-ragged-ssf --regions"
         if table is None
         else f"and no row in region table {table.path}"
     )

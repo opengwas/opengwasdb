@@ -17,14 +17,16 @@ Analyses, never by index.
   of the Analysis's retained regions. An Analysis the ancestry filter did not admit is
   carried through observed-only (ADR 0028), so it must hold no imputed cell at all.
 
-**Retained regions** (ADR 0014, ADR 0039, issue #430) are not stored as coordinates: a
-Store records only block ids and counts in `completion_quality`. They are rebuilt here
-by the call completion makes (`completion.regions`): an Analysis's cis region, from the
-region table's `cis` row or else its Trait position and the `cis_window_bp` the manifest
-records, and its significant trans regions, from the table. The check therefore takes
-the region table completion was given (`regions`), refusing a trait-less Analysis
-without one as completion does, and the panel, refusing without it: a check that quietly
-skipped the region criterion would pass a Store whose imputed cells sit anywhere. A
+**Retained regions** (ADR 0014, ADR 0039, issue #430) are rebuilt here by the call
+completion makes (`completion.regions`), from the region table the source's manifest
+declares (`regions.tsv`) and the LD panel: an Analysis's cis region, from its `cis` row
+or else its Trait position and the `cis_window_bp` the manifest records, and its
+significant trans regions, from its `significant_trans` rows. A Store's arrays hold no
+region, only block ids and counts in `completion_quality`, and which panel variants lie
+inside a region is the panel's to say. The check refuses what completion refuses, a
+source whose coverage is not `cis` and that declares no `regions.tsv`, and takes the
+panel, refusing without it: a check that quietly skipped the region criterion would pass
+a Store whose imputed cells sit anywhere. A
 region's rows are the panel variants of the blocks it overlaps that lie inside it. Block
 ids that `completion_quality` records but the rebuilt regions lack fail the check, so a
 panel other than the one completion used is noticed rather than trusted.
@@ -56,18 +58,15 @@ from opengwasdb.completion.ld_panel import (
     check_panel_has_chromosomes,
 )
 from opengwasdb.completion.regions import (
-    Region,
-    RegionTable,
-    RegionTableError,
     analysis_regions,
     has_trait_position,
     inside,
-    read_region_table,
     region_blocks,
 )
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
 from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.model.enums import AssociationCoverage, CompletionState
+from opengwasdb.model.regions import Region, RegionTable, RegionTableError, read_store_regions
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.validation.observed_view import (
@@ -128,21 +127,20 @@ def check_ragged(
     n_random: int,
     ld_panel: str | Path | None,
     ancestry: str | None,
-    regions: str | Path | None = None,
 ) -> ObservedViewVerdict:
     """Compare an Observed-Only Ragged Store with the Reference-Completed one made from it.
 
     Raises `ObservedViewRefused` when the pair cannot be checked (mixed layouts, a source
     that is not Observed-Only, a target that is not Reference-Completed, no LD panel, a
-    panel or ancestry the completion was not run with, or a region table completion
-    could not have been run with, `regions` missing for a trait-less Analysis among
-    them). `ancestry` defaults to the one the completed manifest records. A mismatch is
-    a verdict with `passed` false.
+    panel or ancestry the completion was not run with, or a source `regions.tsv` completion
+    would refuse, its absence from a source whose coverage is not `cis` among them).
+    `ancestry` defaults to the one the completed manifest records. A mismatch is a verdict
+    with `passed` false.
     """
     started = time.time()
     pair = _open_pair(Path(source_path), Path(target_path))
     completion = _completion_provenance(pair.target, pair.target_path)
-    panel = _open_panel(ld_panel, ancestry, completion, regions, pair.source)
+    panel = _open_panel(ld_panel, ancestry, completion, pair.source_path, pair.source)
     analyses = _analyses_record(pair)
     axis = _map_axis(pair.source_path, pair.target_path, pair.n_source_rows, pair.n_target_rows)
     record: dict[str, Any] = {
@@ -249,14 +247,14 @@ def _open_panel(
     ld_panel: str | Path | None,
     ancestry: str | None,
     completion: dict[str, Any],
-    regions: str | Path | None,
+    source_path: Path,
     source: OpenGWASDBStore,
 ) -> _Panel:
     if ld_panel is None:
         raise ObservedViewRefused(
-            "a Ragged pair needs --ld-panel: its retained regions are not stored as "
-            "coordinates, so they are rebuilt from the LD panel (and --ancestry) that "
-            "complete-ragged was run with"
+            "a Ragged pair needs --ld-panel: its retained regions' rows are the panel "
+            "variants inside them, so they are rebuilt from the LD panel (and --ancestry) "
+            "that complete-ragged was run with"
         )
     recorded = str(completion["ancestry"])
     if ancestry is not None and ancestry != recorded:
@@ -268,12 +266,9 @@ def _open_panel(
     except LdPanelNotFoundError as exc:
         raise ObservedViewRefused(f"LD panel {ld_panel}: {exc}") from exc
     try:
-        table = (
-            None if regions is None
-            else read_region_table(regions, source.manifest.reference_assembly)
-        )
+        table = read_store_regions(source_path)
     except (OSError, RegionTableError) as exc:
-        raise ObservedViewRefused(f"region table {regions}: {exc}") from exc
+        raise ObservedViewRefused(f"source store {source_path}: {exc}") from exc
     return _Panel(
         Path(ld_panel), recorded, int(completion["cis_window_bp"]), table,
         source.manifest.association_coverage,

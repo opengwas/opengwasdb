@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
-from region_tables import every_analysis, write_region_table
+from region_tables import write_region_table
 from store_assertions import replace_exception_table
 
 from opengwasdb.encoding import (
@@ -916,9 +916,14 @@ def _ragged_store_with_no_frequencies_seed(
         filtered, seed_path / "ssf_nofreq_manifest.tsv", frequencies=False
     )
     out = seed_path / "ragged-nofreq.opengwasdb"
+    # Its Analyses have no Trait position, so the build records their regions (#430).
+    regions = write_region_table(
+        seed_path / "sparse_regions.tsv",
+        [(a, "significant_trans", "1", 100, 900) for a in _ANALYSES],
+    )
     build_ragged_from_ssf(
         manifest, filtered, out, store_id="nofreq", release_id="v1", allow_unverified_eaf=True,
-        association_coverage="cis_and_signals",
+        association_coverage="cis_and_signals", regions=regions,
     )
     return out
 
@@ -943,11 +948,7 @@ def test_completing_a_ragged_source_with_no_frequencies_carries_panel_eaf(
     out = tmp_path / "ragged-nofreq-completed.opengwasdb"
     complete_ragged_store(
         ragged_store_with_no_frequencies, out, _ld_panel(tmp_path),
-        ancestry="EUR", min_cor=0.0, thresh=0.99, regions=write_region_table(
-            tmp_path / "sparse_regions.tsv", every_analysis(
-                ragged_store_with_no_frequencies, "significant_trans", "1", 100, 900
-            ),
-        ),
+        ancestry="EUR", min_cor=0.0, thresh=0.99,
     )
     manifest = json.loads((out / "manifest.json").read_text())
     assert manifest["encoding"]["eaf"]["reference"] is True
@@ -1002,11 +1003,7 @@ def test_orientation_evidence_is_not_required_of_panel_only_frequencies(
     out = tmp_path / "ragged-nofreq-noorientation.opengwasdb"
     complete_ragged_store(
         ragged_store_with_no_frequencies, out, _ld_panel(tmp_path),
-        ancestry="EUR", min_cor=0.0, thresh=0.99, regions=write_region_table(
-            tmp_path / "sparse_regions.tsv", every_analysis(
-                ragged_store_with_no_frequencies, "significant_trans", "1", 100, 900
-            ),
-        ),
+        ancestry="EUR", min_cor=0.0, thresh=0.99,
     )
     # Fixture meaningfulness: the release must be the panel-only shape, and
     # must declare `association` -- otherwise the rule is never reached.
