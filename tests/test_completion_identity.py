@@ -16,10 +16,12 @@ with no Trait position; and LD blocks that fill one variant twice, agreeing at
 one and disagreeing at another (D5).
 
 Two manifest entries are pinned as the code writes them since #381 rather than
-as `1ab2b09` wrote them (ADR 0079): `format_version` is 0.2.1, and the
-completion record states how the panel placed its rows (`panel_indels`,
+as `1ab2b09` wrote them (ADR 0079): `format_version` is 0.2.2, the stamp of a
+release whose indels are spelt reference first (spec §21.3), and the completion
+record states how the panel placed its rows (`panel_indels`,
 `panel_snvs_unplaced`). Each fixture's panel places every row, so those counts
-hold no unplaced row, and every other value in a pin is `1ab2b09`'s.
+hold no unplaced row, and every other value in a pin is `1ab2b09`'s, as #430
+re-derived it.
 """
 
 from __future__ import annotations
