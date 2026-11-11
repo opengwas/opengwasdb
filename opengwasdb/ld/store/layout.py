@@ -62,13 +62,39 @@ def shown_fill(fill: object) -> str:
     return f'"{fill}"' if isinstance(fill, str) else str(fill)
 
 
-def spans(first: npt.ArrayLike, length: npt.ArrayLike) -> npt.NDArray[np.int64]:
-    """first[i], first[i] + 1, … for length[i] elements each, back to back: the elements of
-    CSR rows, or the columns of Near Band rows (spec §4, §5)."""
-    count = np.asarray(length, dtype=np.int64)
-    offset = np.repeat(np.cumsum(count) - count, count)
-    start = np.repeat(np.asarray(first, dtype=np.int64), count)
-    return start + (np.arange(int(count.sum()), dtype=np.int64) - offset)
+#: The keys of one record of `variants.attrs["chromosomes"]` (spec §2).
+CHROMOSOME_KEYS: Final = ("name", "row_start", "row_stop")
+
+
+def chromosomes_record(ranges: dict[str, tuple[int, int]]) -> list[dict[str, Any]]:
+    """The `variants` group's `chromosomes` attribute for these ranges, in order (spec §2)."""
+    return [
+        dict(zip(CHROMOSOME_KEYS, (name, start, stop), strict=True))
+        for name, (start, stop) in ranges.items()
+    ]
+
+
+def _is_row(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _chromosome_entry(entry: object) -> tuple[str, int, int]:
+    """One `chromosomes` entry as (name, row_start, row_stop), or ValueError."""
+    if not isinstance(entry, dict) or set(entry) != set(CHROMOSOME_KEYS):
+        raise ValueError(f"a chromosomes entry does not have exactly the keys {CHROMOSOME_KEYS}")
+    name, start, stop = (entry[key] for key in CHROMOSOME_KEYS)
+    if not (isinstance(name, str) and _is_row(start) and _is_row(stop) and 0 <= start <= stop):
+        raise ValueError(f"a chromosomes entry is not a name and rows 0 <= start <= stop: {entry}")
+    return name, start, stop
+
+
+def chromosomes_listed(record: object) -> list[tuple[str, int, int]]:
+    """The (name, row_start, row_stop) of each entry of a `chromosomes` attribute, in order and
+    with repeats kept, so a rule can see them. A record that is not a list of entries with
+    exactly these keys, a string name and integer bounds 0 ≤ start ≤ stop raises ValueError."""
+    if not isinstance(record, list):
+        raise ValueError("the chromosomes attribute is not a list")
+    return [_chromosome_entry(entry) for entry in record]
 
 
 def clipped(length: int, inner: int, shard: int) -> tuple[int, int]:

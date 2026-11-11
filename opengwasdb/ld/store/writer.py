@@ -25,7 +25,14 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import ENCODING, RESERVED_CODE, Provenance, near_row_lengths
+from ogld.format import ENCODING, RESERVED_CODE, Provenance
+from ogld.format.geometry import (
+    chromosome_index,
+    chromosome_ranges,
+    indptr_of,
+    local_rows,
+    near_row_lengths,
+)
 from ogld.store import layout
 from ogld.store.tables import Variants
 from ogld.store.validation import ValidationFailed, validate_group
@@ -45,6 +52,8 @@ class StoreWriter:
         self._root = root
         self._position = variants.position
         self._ranges = ranges
+        self._names = list(ranges)
+        self._stops = [stop for _, stop in ranges.values()]
         self._near_bp = near_bp
         self._far_bp = far_bp
         self._pending: dict[str, list[tuple[npt.NDArray[np.int64], npt.NDArray[np.int16]]]] = {}
@@ -75,17 +84,12 @@ class StoreWriter:
             variants.a1_frequency.astype(np.float32),
             layout.FREQUENCY_FILL,
         )
-        group.attrs["chromosomes"] = [
-            {"name": name, "row_start": start, "row_stop": stop}
-            for name, (start, stop) in ranges.items()
-        ]
+        group.attrs["chromosomes"] = layout.chromosomes_record(ranges)
         return cls(root, variants, ranges, near_bp, far_bp)
 
     def _chromosome_of(self, row: int) -> str:
-        for chrom, (start, stop) in self._ranges.items():
-            if start <= row < stop:
-                return chrom
-        raise ValueError(f"row {row} is not in the Variant Set of {len(self._position)} rows")
+        """The chromosome of global `row`; a row outside the Variant Set raises."""
+        return self._names[int(chromosome_index(self._stops, [row])[0])]
 
     def write_near(
         self, first_row: int, lengths: npt.NDArray[np.int64], codes: npt.NDArray[np.int16]
@@ -138,13 +142,14 @@ class StoreWriter:
             start, stop = self._ranges[chrom]
             self._lengths[chrom] = near_row_lengths(self._position[start:stop], self._near_bp)
         start, _ = self._ranges[chrom]
-        return self._lengths[chrom][first - start : last - start]
+        lo, hi = local_rows([first, last], start)
+        return self._lengths[chrom][lo:hi]
 
     def _flush_near(self, chrom: str) -> None:
         parts = self._pending.pop(chrom)
         lengths = np.concatenate([p[0] for p in parts])
         codes = np.concatenate([p[1] for p in parts])
-        indptr = np.concatenate([[0], np.cumsum(lengths)]).astype(np.int64)
+        indptr = indptr_of(lengths)
         group = self._root.require_group(f"near/{chrom}")
         layout.put_numbers(group, "indptr", indptr, layout.INT64_FILL)
         array = layout.new_r_array(group, "r", len(codes), layout.NEAR_R)
@@ -165,7 +170,7 @@ class StoreWriter:
         start = self._check_index(chrom, indptr, partner, codes)
         group = self._root.require_group(f"index/{chrom}")
         layout.put_numbers(group, "indptr", indptr.astype(np.int64), layout.INT64_FILL)
-        local = (partner - start).astype(np.int32)
+        local = local_rows(partner, start).astype(np.int32)
         layout.put_numbers(group, "partner", local, layout.PARTNER_FILL)
         layout.put_numbers(group, "r", codes, RESERVED_CODE)
         self._index_done.add(chrom)
@@ -188,13 +193,14 @@ class StoreWriter:
         _check_entries(chrom, (start, stop), partner, codes)
         return start
 
-    def finish(self, provenance: Provenance) -> Provenance:
+    def finish(self, provenance: Provenance, *, threads: int = 1) -> Provenance:
         """Validate the store and write its provenance; return it as written (spec §7, §12).
 
         Refuses, naming the chromosome, a store whose Near Band or Proxy Index is incomplete,
         and a provenance that disagrees with what was written. Then it runs every rule of
-        spec §12 and raises `ValidationFailed` if any fails, before the provenance is
-        written: a reader refuses a store without one, so a broken store is never read.
+        spec §12, reading and checking `threads` blocks at once, and raises `ValidationFailed`
+        if any fails, before the provenance is written: a reader refuses a store without one,
+        so a broken store is never read.
         """
         chromosomes = set(self._ranges)
         for what, done in (("Near Band", self._near_done), ("Proxy Index", self._index_done)):
@@ -203,7 +209,7 @@ class StoreWriter:
                 raise ValueError(f"the {what} of chromosome {missing} was not written")
         self._check_provenance(provenance)
         recorded = _as_json(provenance)
-        findings = validate_group(self._root, recorded)
+        findings = validate_group(self._root, recorded, threads=threads)
         if any(findings.values()):
             raise ValidationFailed(findings)
         self._root.attrs.update({"ld_store": recorded})
@@ -257,20 +263,3 @@ def _positions(position: npt.NDArray[np.int64]) -> npt.NDArray[np.int32]:
     if len(position) and (position.min() < 0 or position.max() > np.iinfo(np.int32).max):
         raise ValueError("a position does not fit the int32 `position` array (spec §2)")
     return position.astype(np.int32)
-
-
-def chromosome_ranges(chrom: npt.NDArray[np.str_]) -> dict[str, tuple[int, int]]:
-    """Each chromosome's [row_start, row_stop), in order of appearance; a chromosome that
-    reappears after another breaks the Variant Set's order (spec §2)."""
-    ranges: dict[str, tuple[int, int]] = {}
-    if len(chrom) == 0:
-        return ranges
-    edges = np.flatnonzero(chrom[1:] != chrom[:-1]) + 1
-    starts = np.concatenate([[0], edges])
-    stops = np.concatenate([edges, [len(chrom)]])
-    for start, stop in zip(starts, stops, strict=True):
-        name = str(chrom[start])
-        if name in ranges:
-            raise ValueError(f"chromosome {name} is not contiguous in the Variant Set (spec §2)")
-        ranges[name] = (int(start), int(stop))
-    return ranges

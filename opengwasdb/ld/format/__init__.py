@@ -1,7 +1,8 @@
 """The LD Store format as code: encoding, thresholds, answers, refusals, provenance (layer 0).
 
 The semantics core of `docs/spec/ld-store.md`, implemented and complete: quantisation
-(§3), t_far and the far code floor (§3), the answer kind of a pair (§8) and the decision
+(§3), t_far and the far code floor (§3), the row and band geometry (§2, §4, §5, in
+`ogld.format.geometry`), the answer kind of a pair (§8) and the decision
 for a request (§9). It also names the provenance types (§7) and the validation rules
 (§12). Every other layer takes these from here, so no component rounds, thresholds or
 refuses by a rule of its own. It imports nothing else from ogld.
@@ -17,10 +18,10 @@ from ogld.format.encoding import (
     T_FAR_Q,
     dequantise,
     far_code_floor,
-    near_row_lengths,
     quantise,
     t_far,
 )
+from ogld.format.geometry import near_row_lengths
 from ogld.format.provenance import (
     ENCODING,
     FORMAT_VERSION,

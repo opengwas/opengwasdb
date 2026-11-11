@@ -136,9 +136,7 @@ def no_rows() -> np.ndarray:
 
 #: Every body that raises NotImplementedError, with the ticket that builds it. A ticket
 #: that builds one removes its entry, as it unmarks the contract tests it makes pass.
-UNBUILT: dict[str, tuple[Callable[[], object], str]] = {
-    "build": (lambda: ogld.build(None, "x"), "ogld#5"),
-}
+UNBUILT: dict[str, tuple[Callable[[], object], str]] = {}
 
 
 @pytest.mark.parametrize("name", sorted(UNBUILT))

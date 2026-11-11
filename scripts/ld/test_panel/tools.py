@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
@@ -203,3 +204,23 @@ def export_rows(
     if got != sorted(rows):
         raise SystemExit(f"{out}: plink2 returned other rows than were asked for")
     return got, fam, g
+
+
+def relatedness(want: set[str], meta: Path) -> dict[str, bool]:
+    """Each of `want`'s gnomAD v3.1.2 `relatedness_inference.related` flag, from the sample
+    metadata `meta` (gzip TSV, `s` first): True for a sample outside gnomAD's maximal set of
+    unrelated samples. A sample the metadata lacks is refused, naming it, rather than taken as
+    unrelated."""
+    out: dict[str, bool] = {}
+    with gzip.open(meta, "rt") as f:
+        col = f.readline().rstrip("\n").split("\t").index("relatedness_inference")
+        for line in f:
+            c = line.rstrip("\n").split("\t")
+            if c[0] in want:
+                out[c[0]] = bool(json.loads(c[col])["related"])
+    missing = want - set(out)
+    if missing:
+        raise SystemExit(
+            f"{len(missing)} samples have no gnomAD relatedness, such as {sorted(missing)[:3]}"
+        )
+    return out

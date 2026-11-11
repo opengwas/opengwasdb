@@ -24,3 +24,20 @@ def required(name: str, what: str) -> Path:
     if not Path(value).exists():
         pytest.xfail(f"input missing: ${name} names nothing at {value} ({what})")
     return Path(value)
+
+
+def installed_mismatch() -> str:
+    """Why this checkout cannot be cited as the code the stores it builds record, or "" when it
+    can: `scripts/test_panel/checkout.py`'s `problem`, the one guard `scripts/make_pcs.py` uses
+    too. The installed ogld must name HEAD, and nothing under `ogld/` or `scripts/` may differ
+    from it, tracked or untracked Python."""
+    import importlib
+    import sys
+    from importlib.metadata import version
+
+    root = Path(__file__).resolve().parents[2]
+    if str(root / "scripts") not in sys.path:
+        sys.path.insert(0, str(root / "scripts"))
+    checkout = importlib.import_module("test_panel.checkout")
+    found: str = checkout.problem(root, version("ogld"))
+    return found

@@ -399,7 +399,7 @@ ignores the ones it does not know. The types are `ogld.format.Provenance`, and
 | `encoding.rounding` | string | `"half_to_even"` |
 | `source.kind` | string | `"genotypes"`: built from a Source Panel's genotypes; `"ld_matrix"`: imported from a published LD matrix, such as Pan-UKB's |
 | `source.description` | string | what the input was, such as the gnomAD release and files, or the matrix's location and release |
-| `source.sha256` | object | SHA-256 per input file: the genotype files, or the matrix's files |
+| `source.sha256` | object | SHA-256 per input file, keyed by file name: the genotype files (each fileset's `.pgen`, `.pvar` or `.pvar.zst`, and `.psam`) and the keep file, or the matrix's files |
 | `panel.id` | string | the Source Panel's identifier, such as `"hgdp1kgp-v2-EUR"` (`docs/spec/build-inputs.md` §1) |
 | `panel.ancestry` | string | the ancestry label, such as `"EUR"` |
 | `panel.n` | int | samples the LD was computed from |
@@ -424,11 +424,11 @@ ignores the ones it does not know. The types are `ogld.format.Provenance`, and
 | `counts.far_candidates` | int | pairs more than `near_bp` and at most `far_bp` apart that were examined |
 | `counts.far_pairs` | int | Far Pairs: those of them in the Proxy Index, each counted once |
 | `counts.index_entries` | int | Proxy Index entries, both directions and within `near_bp` included |
-| `software` | object | versions: `ogld`, `numpy`, `zarr`, and `plink2` when a build used it |
+| `software` | object | versions, by package name. A build from genotypes records exactly `ogld`, `numpy`, `zarr` and `pgenlib`, its genotype reader (ogld#5's review); `ogld` is the installed version, which names the commit that built the store when the install is fresh (the realdata tier refuses a stale one) |
 | `build.created_at` | string | ISO 8601 UTC |
-| `build.wall_seconds` | float | build time |
-| `build.peak_memory_bytes` | int | peak memory |
-| `build.threads` | int | threads used |
+| `build.wall_seconds` | float | build time, up to the validation `StoreWriter.finish` runs before it writes this provenance: a provenance cannot hold the time taken to check it. On EUR chr22 that validation took another 80 s of a 2 min build |
+| `build.peak_memory_bytes` | int | peak memory over the same span: the build's own on Linux, whose high-water mark the build resets when it starts; elsewhere the process's |
+| `build.threads` | int | threads used: the build's worker threads, which bound it, since BLAS runs one thread inside a build |
 
 `pc_diagnostic` holds `pairs` (the pair set: `source`, opengwas/opengwasdb#405's seeded
 cross-chromosome pairs; `seed`, 405; `n_pairs`, 200,000), `rate_r2_ge_0_01_unadjusted` (the share
@@ -437,6 +437,19 @@ Adjustment), `rate_r2_ge_0_01_sampling` (the share sampling alone predicts,
 P(χ²₁ ≥ 0.01 × (n − k − 1))) and `near_100kb_change` (quantiles 0, 0.5, 0.9, 0.99 and 1 of the
 change in r from adjustment, for pairs within 100 kb outside the Long-Range LD Regions: ogld#5's "real
 LD survives").
+
+- **The pairs** are drawn as #405 drew them
+  (`opengwas/opengwasdb@6b97e57:prototypes/locus_leads/panel_chance.py`): at most 3,000 Variant Set variants without replacement by
+  `numpy.random.default_rng(405)`, then 200,000 pairs of those on different chromosomes, with
+  replacement, by a second generator seeded 405. **A Variant Set on one chromosome has no such
+  pair** (a test slice, never a panel's LD Store): `n_pairs` is 0, `source` says so, and the two
+  measured rates are null, never a number nothing measured; each is null only when `n_pairs` is
+  0. `rate_r2_ge_0_01_sampling` is a formula of n and k and always a number (the owner's
+  ruling, orchestrator note 2 on ogld#5).
+- **The change in r** is adjusted minus unadjusted r, signed to A1, computed in float64. A whole
+  panel has about 10⁹ such pairs, so a build counts them into bins 2⁻²⁰ (about 10⁻⁶) wide: the
+  quantiles 0 and 1 are the exact extremes, and each other quantile q is the order statistic at
+  rank ⌊q(N − 1)⌋ of the N pairs, to within half a bin. At k = 0 every change is 0.
 
 The provenance holds counts, hashes and settings, never a sample identifier or a per-sample value.
 
@@ -658,8 +671,8 @@ quarter at a time, a string's size header is at most 8 bytes, and the allocator 
 by tracemalloc on 72 chunks of 1–16,384 strings of 1–20,000 characters, the count was never below
 what a chunk held. Fixed-width text would be counted exactly, but one 2,000-character indel ALID
 would make its 16,384-row chunk 131 MB. One lock guards the cache, so threads sharing a reader keep
-one copy of a chunk. Validation's rules are single bounded passes and read through Zarr directly
-(§12). So a query that reads a few pairs at a time fetches each chunk once: clumping the Test
+one copy of a chunk. Validation's rules read through Zarr directly, in bounded windows: one pass
+over each chromosome, and a second read of the blocks `index.near` flags in a store it fails (§12). So a query that reads a few pairs at a time fetches each chunk once: clumping the Test
 Store's 1,056 variants, one read per lead, took 3.6 s reading through Zarr call by call and 0.7 s
 with the cache, against 0.6 s for the walking skeleton's arrays held whole. A matrix resolves its
 pairs about 4 million at a time, which bounds its working memory beside the matrix itself.
@@ -799,8 +812,9 @@ an independent reference on the Test Panel. Each rule has a store that breaks it
 
 **On write and on demand** (ogld#4). `ogld.validate(location)` runs the rules on a store on disk
 or over HTTP and returns every rule's findings, an empty list for a rule the store passes.
-`StoreWriter.finish` runs them on the store it wrote, judged with the provenance it was given as
-JSON will hold it, and writes that provenance only when all 18 pass. Otherwise it raises
+`StoreWriter.finish` runs them on the store it wrote, on the threads the builder gives it, judged
+with the provenance it was given as JSON will hold it, and writes that provenance only when all 18
+pass. Otherwise it raises
 `ValidationFailed`, naming each failing rule and where, and the store keeps no provenance, so a
 reader refuses it (§13) rather than read it as a short one.
 
@@ -811,12 +825,29 @@ metadata declares is a finding that it cannot be read. Neither passes the rule, 
 the other rules. So one fault can fail several rules; the breakers' tests assert only that each
 fails its own.
 
-**How the rules read.** Each rule is one pass, reading through Zarr directly. A chromosome's
-positions and `indptr` arrays are read whole, as a reader keeps them (§10). Near Band codes and
-Proxy Index entries are read in blocks of rows holding at most 8,388,608 elements of each array,
-and the variant columns 1,048,576 rows at a time, so no rule loads a whole Near Band or Proxy
-Index. A chunk that will not decode, such as a corrupt zstd frame, is a "cannot be read" finding
-of each rule that reads it.
+**How the rules read.** The rules read through Zarr directly. A chromosome's positions and
+`indptr` arrays are read whole, as a reader keeps them (§10). Near Band codes and Proxy Index
+entries are read in blocks of rows holding at most 8,388,608 codes and 1,048,576 entries, and the
+variant columns 1,048,576 rows at a time, so no rule loads a whole Near Band or Proxy Index. An
+entry holds an eighth as many as a code because the rules work on each entry through about 100
+bytes of arrays, and on each code through about 6: a block's working arrays stay near 150 MiB
+however dense the index is.
+
+The seven rules that read codes and entries one by one, `near.codes` and the six `index.*` rules,
+share one pass over each chromosome: each block is read once and handed to all seven, so each code
+and entry of a store that passes is decoded once per validation. A caller may give the pass t
+threads (`ogld validate --threads t`, or `StoreWriter.finish(provenance, threads=t)`); t blocks are
+then read and checked at once, and no more are held. `near.codes` and `index.codes` read their
+`r` array in windows of their own instead when its `indptr` cannot delimit the rows or does not end
+at `r`'s length, as when it ends short of `r`: windows of 8,388,608 elements, codes or entries
+alike, t of them at once.
+
+A chunk that will not decode, such as a corrupt zstd frame, is a "cannot be read" finding of each
+rule that reads it. An `indptr` that ends past its array is a "cannot be checked" finding of each
+rule that reads by it. A rule that stops so reports the faults its pass had finished checking,
+then that it cannot be read or checked, and fails either way. `index.near` finishes its check of
+later-row entries only at a chromosome's end, so a stop inside a chromosome drops that check's
+findings there, though never the failure.
 
 - `provenance.complete` checks every key §7 names: those of `ogld.format.REQUIRED_KEYS` and the
   keys inside them, `variant_filters`, `variants_dropped`, `pc_file`, the PC Check's settings and
@@ -831,8 +862,15 @@ of each rule that reads it.
   way only, or with two codes, and the finding names it. Two different sets of entries give equal
   sums by chance about once in 1.8×10¹⁹; the sums take 16 bytes per row.
 - `index.near` compares each block's entries in a pair's earlier row with that Near Band row at
-  the far code floor, both ways, and reads the band's code for every entry in a pair's later row
-  within `near_bp`. That such a later-row entry exists at all is `index.symmetric`'s finding.
+  the far code floor, both ways. Each entry in a pair's later row within `near_bp` must carry the
+  band's code: it adds a 64-bit hash of (earlier row, later row, code) to one sum kept for the
+  pair's earlier row, and each band pair from that row at the floor adds its hash to the other.
+  The pass also keeps, per row, the first and the last row whose entries name it: with the sums,
+  32 bytes per row. At a chromosome's end, if any row's sums differ, the blocks holding an entry
+  that names such a row are read again, in the pass's windows and on its threads, and each of
+  their entries that names such a row is checked against the band's code for its pair, fetched
+  by coordinates. So a store that passes reads its band and its index once. That such a
+  later-row entry exists at all is `index.symmetric`'s finding.
 
 ## 13. Compatibility
 

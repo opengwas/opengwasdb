@@ -7,7 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
-from test_panel import pc_check, reference
+from ogld.build import pc_check
+from test_panel import reference
 from test_panel.assemble import Panel
 from test_panel.params import Params
 
@@ -62,12 +63,9 @@ def _reference(
 def _covariates(
     params: Params, panel: Panel, g: np.ndarray, pcs: np.ndarray
 ) -> tuple[dict[str, object], np.ndarray]:
-    """The PC Check over the passing variants with MAF >= 0.05, and the PCs it keeps, in order."""
+    """The PC Check over the passing variants, as a build of the Test Panel runs it (the module
+    selects the common ones, MAF >= 0.05), and the PCs it keeps, in order."""
     ok = panel.passing
-    af = g[ok].mean(axis=1) / 2
-    common = ok[np.minimum(af, 1 - af) >= params.common_maf]
-    w = pc_check.windows(np.array(panel.chrom)[common], panel.pos[common], g[common])
-    check = pc_check.check(w, pcs, k_target=max(params.ks))
-    names = check["covariates"]
-    assert isinstance(names, list)
-    return check, pcs[:, [int(str(n)[2:]) - 1 for n in names]]
+    w = pc_check.windows(np.array(panel.chrom)[ok], panel.pos[ok], g[ok])
+    checked = pc_check.check(w, pcs, k_target=max(params.ks))
+    return checked.report(), pcs[:, [int(n[2:]) - 1 for n in checked.covariates]]
