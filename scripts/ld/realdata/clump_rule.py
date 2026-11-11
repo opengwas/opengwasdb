@@ -6,8 +6,11 @@ pair on the true r. So the two can disagree about a pair only when the true r² 
 opposite sides of r2, and then r̂² is within 2|r̂|·e + e² of r2 (e = `max_error`), because
 |r̂² − r²| ≤ 2|r̂|·e + e². `explain` finds every pair the two judge on opposite sides and refuses
 the case when one lies outside that band: a difference the encoding cannot explain is a defect.
-Otherwise it replays the greedy twice, on the store's joins and with exactly those pairs flipped,
-and returns both lead sets; the caller compares the first with `clump` and the second with plink2.
+It also checks plink2's r against the Stored r for every pair in the window, not only the flipped
+ones: |r̂| must be within half a code (and the six digits plink2 prints) of √r²_plink2, or the
+band proves nothing, since a wrong r̂ that lands on the threshold's code would pass it. Otherwise
+it replays the greedy twice, on the store's joins and with exactly those pairs flipped, and
+returns both lead sets; the caller compares the first with `clump` and the second with plink2.
 
 Pure numpy, so the tier, the acceptance run and the tests share one definition.
 """
@@ -46,6 +49,16 @@ class Explained:
     leads_true: list[int]
 
 
+#: plink2 prints r² to six significant digits; a printed r is that near the true one.
+PRINTED = 1e-6
+
+
+def within_band(r_hat: float, r2: float, max_error: float) -> bool:
+    """Whether a pair stored as `r_hat` can be on either side of r2 once rounded: r̂² is within
+    2|r̂|·e + e² of r2 (e = `max_error`). The one definition; the acceptance run uses it too."""
+    return bool(abs(r_hat**2 - r2) <= 2 * abs(r_hat) * max_error + max_error**2)
+
+
 def replay(order: Sequence[int], join: npt.NDArray[np.bool_]) -> list[int]:
     """The greedy clumping of `order` (strongest first) under `join`: each variant not yet
     clumped leads, and takes every unclumped variant it joins. The leads, in order."""
@@ -81,18 +94,29 @@ def explain(
     if np.isnan(r_hat[near]).any():
         i, j = np.argwhere(near & np.isnan(r_hat))[0]
         raise OutsideBand(f"pair ({i}, {j}) is inside the window and not stored (spec §3)")
+    if np.isnan(true_r2[near]).any():
+        i, j = np.argwhere(near & np.isnan(true_r2))[0]
+        raise OutsideBand(f"pair ({i}, {j}) is inside the window and plink2 gave no r² for it")
+    off = near & (
+        np.abs(np.abs(np.where(near, r_hat, 0.0)) - np.sqrt(np.where(near, true_r2, 0.0)))
+        > max_error + PRINTED
+    )
+    if off.any():
+        i, j = np.argwhere(off)[0]
+        raise OutsideBand(
+            f"pair ({i}, {j}): stored r̂ {r_hat[i, j]:.6g} is further than half a code from the "
+            f"r plink2 measured, √{true_r2[i, j]:.6g}: it is not that r rounded"
+        )
     stored = np.where(near, r_hat, 0.0) ** 2 > r2
     truth = near & (true_r2 > r2)
     differ = stored ^ truth
     flipped = []
     for i, j in np.argwhere(np.triu(differ)):
-        slack = 2 * abs(r_hat[i, j]) * max_error + max_error**2
-        gap = abs(r_hat[i, j] ** 2 - r2)
-        if gap > slack:
+        if not within_band(r_hat[i, j], r2, max_error):
             raise OutsideBand(
                 f"pair ({i}, {j}): stored r̂² {r_hat[i, j] ** 2:.6g}, true r² {true_r2[i, j]:.6g} "
-                f"fall on opposite sides of {r2}, but r̂² is {gap:.3g} from it and the encoding "
-                f"allows {slack:.3g}"
+                f"fall on opposite sides of {r2}, and r̂² is further from it than the encoding "
+                f"allows at half a code of {max_error:.3g}"
             )
         flipped.append(Pair(int(i), int(j), float(r_hat[i, j] ** 2), float(true_r2[i, j])))
     return Explained(flipped, replay(order, stored), replay(order, stored ^ differ))

@@ -46,19 +46,57 @@ def test_a_pair_on_the_threshold_that_rounds_the_other_way_explains_the_differen
     assert [(p.i, p.j) for p in got.flipped] == [(0, 1)]
 
 
+def test_the_band_is_two_r_half_codes_plus_the_square_of_one() -> None:
+    # r̂² = 0.0121 against r2 = 0.01 is 0.0021 past it: far beyond 2|r|·e + e² = 0.0004 at × 511.
+    assert not rule.within_band(0.11, 0.01, E511)
+    assert rule.within_band(51 / 511, 0.01, E511), "code 51 is 0.0000394 from the threshold"
+    assert rule.within_band(-51 / 511, 0.01, E511), "the sign is no part of it"
+    assert not rule.within_band(0.11, 0.01, E511 / 64), "the band narrows with the step"
+
+
 def test_a_difference_outside_the_band_is_refused_not_explained() -> None:
-    # r̂² = 0.0121 against r2 = 0.01 is 0.0021 past it: far beyond 2|r|·e + e² = 0.0004 at ×511.
-    with pytest.raises(rule.OutsideBand, match=r"0\.0121"):
+    with pytest.raises(rule.OutsideBand):
         rule.explain(r2=0.01, **three_variants(0.11, 0.0099))
 
 
 def test_a_threshold_moved_by_0_002_leaves_the_flipped_pair_outside_the_band() -> None:
-    # The same pair that is explained at 0.01 (r̂² 0.0100018, true r² 0.0099992). Judged at 0.012
-    # against a true r² of 0.0125 the two sides disagree 0.002 from the threshold, outside the band.
-    data = three_variants(0.1000092, 0.0125)
+    # At × 511 the store holds r̂ = 52/511, r̂² = 0.010355. A true r² of 0.0102 (r = 0.10100, within
+    # half a code of r̂) against r2 = 0.0103 is a pair the encoding explains: the store joins and
+    # plink2 does not, 0.000055 from the threshold.
+    stored = 52 / 511
+    on_the_threshold = three_variants(stored, 0.0102)
+    got = rule.explain(r2=0.0103, **on_the_threshold)
+    assert [(p.i, p.j) for p in got.flipped] == [(0, 1)]
+    # Moved by 0.002 on both sides, the threshold is 0.0123 and plink2's side is a true r² of
+    # 0.0125: r = 0.1118 is 0.0100 from r̂, ten half-codes away, so no encoding gives it.
+    moved = three_variants(stored, 0.0125)
     with pytest.raises(rule.OutsideBand):
-        rule.explain(r2=0.012, **{**data, "max_error": 1 / (2 * 32767)})
-    rule.explain(r2=0.01, **{**three_variants(0.1000092, 0.0099992), "max_error": 1 / (2 * 32767)})
+        rule.explain(r2=0.0123, **moved)
+
+
+def test_plink2_s_r_must_lie_within_half_a_code_of_the_stored_r_for_every_pair_in_the_window() -> (
+    None
+):
+    # r̂ = 51/511 (r̂² = 0.0099606) is on the threshold's side that plink2's r² = 0.0121 is not: the
+    # pair is flipped at r2 = 0.01 and within the band by r̂ alone, but plink2's r = 0.11 is 0.0102
+    # from r̂, ten half-codes: the stored r is not the rounding of anything plink2 measured.
+    with pytest.raises(rule.OutsideBand, match=r"plink2"):
+        rule.explain(r2=0.01, **three_variants(51 / 511, 0.0121))
+    # And a pair that is NOT flipped is checked too: both sides agree it joins, but plink2's r²
+    # is 0.5 against a stored 0.81.
+    data = three_variants(51 / 511, 0.0099)
+    data["true_r2"] = np.array([[1, 0.0099, 0.0], [0.0099, 1, 0.5], [0.0, 0.5, 1]])
+    with pytest.raises(rule.OutsideBand, match=r"plink2"):
+        rule.explain(r2=0.01, **data)
+
+
+def test_a_pair_plink2_did_not_give_is_refused_not_read_as_no_join() -> None:
+    data = three_variants(0.1000092, 0.0099992)
+    truth = np.array(data["true_r2"], dtype=float)
+    truth[0, 1] = truth[1, 0] = np.nan
+    data["true_r2"] = truth
+    with pytest.raises(rule.OutsideBand, match="plink2 gave no r"):
+        rule.explain(r2=0.01, **{**data, "max_error": 1 / (2 * 32767)})
 
 
 def test_an_unstored_pair_inside_the_window_is_refused_not_read_as_no_correlation() -> None:
