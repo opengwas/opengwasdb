@@ -607,10 +607,16 @@ fills plus the extra filing cost per checkpoint, memory from its parts
 (`_memory_model`), set beside the larger run's measured peaks.
 
 The artifacts of the #424 runs are in
-`docs/benchmark-output/ragged_completion_streams/`.
+`docs/benchmark-output/ragged_completion_streams/`. They were run at `1ab2b09`
+and `bd04698`, on the published Observed-Only Store as it then was (format
+0.2.0), before #430 bounded completion to regions and #381 made completion
+refuse a 0.2.0 source. The commands below are those runs; they reproduce them
+only from a worktree of those commits (see the paragraph after them). At today's
+code, use the #430 recipe below, whose source and panel completion accepts.
 
 ```bash
-# A chr15-22 panel: the real panel's chromosome directories, linked.
+# A chr15-22 panel: the real panel's chromosome directories, linked, and the
+# files beside them, the indel-reference table among them.
 mkdir -p /data/opengwasdb/work/odb424/panel-chr15-22/EUR
 for f in /data/opengwasdb/reference/ld/EUR/*; do b=$(basename "$f")
   if [[ ! "$b" =~ ^[0-9]+$ ]] || (( b >= 15 )); then
@@ -645,9 +651,14 @@ instead of the checkout's and the artifact names its commit.
 **Since #430** completion fills each Analysis only inside its regions, so
 OGS-00006, whose Analyses have no Trait position, runs with its bundle's region
 table, `run --regions .../stores/OGS-00006/sidecars/sparse_regions.tsv`, from
-an Observed-Only source (the published Store is now Reference-Completed). A run
-given a table adds `region_accounting`: per completed Analysis, its significant
-regions and their extent on the run's panel, and the cells completion added it,
+an Observed-Only source (the published Store is now Reference-Completed). **Since
+#381** that source must be format 0.2.1, a fresh build: completion refuses a 0.2.0
+one (ADR 0079), and the archived Observed-Only Stores are 0.1.0 and 0.2.0. A 0.2.1
+build of OGS-00006 has no indel at all: its GWAS-SSF sources carry no harmoniser
+columns, so the build drops their 594,623 indel variants (`indel_ssf_unharmonised`)
+and keeps the same 11,491,840 SNVs. A run given a table adds `region_accounting`:
+per completed Analysis, its significant regions and their extent on the run's
+panel, and the cells completion added it,
 read back from both Stores and tested against the table here rather than by the
 package's own region code; `added_outside_regions` and `observed_rows_lost` must
 be 0. `regions-projection` counts, for every Analysis, the panel variants inside
@@ -657,18 +668,26 @@ run's panel it is checked against that run, Analysis by Analysis
 the full Store's cells, the `--full-fills` for `project`. The #430 artifacts are
 `regions-*.json` in the same directory.
 
-The chr15-22 panel holds the real panel's chromosome directories 15 to 22, linked,
-and nothing else; `STORES` is a checkout of opengwasdb-stores, whose bundle holds
-the region table.
+The chr15-22 panel holds the real panel's chromosome directories 15 to 22 and its
+indel-reference table (`indel_reference.tsv.gz`, its index and its provenance),
+linked. Without the table the panel places no indel and the runs complete none
+(ADR 0079). `STORES` is a checkout of opengwasdb-stores, whose bundle holds the
+region table.
 
 ```bash
 STORES=path/to/opengwasdb-stores
 TABLE=$STORES/stores/OGS-00006/sidecars/sparse_regions.tsv
-SRC=/data/opengwasdb/stores/OGS-00006/replaced/20261023T230254Z/store.opengwasdb
+SRC=/data/opengwasdb/work/odb430/OGS-00006-0.2.1.opengwasdb
 PANEL=/data/opengwasdb/work/odb430/panel-chr15-22
 OUT=docs/benchmark-output/ragged_completion_streams
+# The Observed-Only source at 0.2.1, built as records/build.json built the published one.
+pixi run -e dev opengwasdb build-ragged-ssf /data/opengwasdb/stores/OGS-00006/work/analyses.tsv \
+    /data/opengwasdb/stores/OGS-00006/source $SRC --store-id OGS-00006 --release-id OGS-00006 \
+    --association-coverage signals_only --stored-effect-scale sd
 mkdir -p $PANEL/EUR
 for c in $(seq 15 22); do ln -sfn /data/opengwasdb/reference/ld/EUR/$c $PANEL/EUR/$c; done
+for f in indel_reference.tsv.gz indel_reference.tsv.gz.tbi indel_reference.json; do
+  ln -sfn /data/opengwasdb/reference/ld/EUR/$f $PANEL/EUR/$f; done
 for n in 25 100; do
   /usr/bin/time -v pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py \
       run --source $SRC --regions $TABLE --n-analyses $n --n-workers 16 --ld-dir $PANEL \
@@ -689,11 +708,23 @@ pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py project
     --output $OUT/regions-projection-phase3.json
 ```
 
-On OGS-00006 the full Store adds 1,038,245 cells (`regions-projection-ld.json`),
-where its first completion added 10,001,552,498; the subsets imputed every cell
-they added. `project`'s Phase 3 time is a line through two runs 17,191 fills
-apart, both carrying the same 58M observed rows, so host noise sets its slope:
-read its 2,074 s as an upper bound beside the 241 s the 100-Analysis run took.
+The #430 artifacts were measured at `aed5c4a`, on the archived 0.2.0
+Observed-Only Store (`replaced/20261023T230254Z`), with the panel read as before
+#381: every indel named by its sorted alleles, none re-signed. On that reading the
+full Store adds 1,038,245 cells (`regions-projection-ld.json`), where its first
+completion added 10,001,552,498. The subsets imputed every cell they added.
+`project`'s Phase 3 time is a line through two runs 17,191 fills apart, both
+carrying the same 58M observed rows, so host noise sets its slope: read its 2,074 s
+as an upper bound beside the 241 s the 100-Analysis run took.
+
+The recipe above was re-run at `48c0576` on a 0.2.1 build, with the panel read as
+completion reads it now (`regions-0.2.1-*.json`). The 100-Analysis run imputes
+38,861 cells, none outside a region, and loses no observed row. On chromosomes
+15-22 the projection agrees with it Analysis by Analysis. On the full panel the
+full Store adds 2,160,436 cells, about twice the 0.2.0 figure: the build drops the
+Store's indels, so every panel indel inside a region is a cell completion adds
+rather than one the Analysis observes. The 25-Analysis run and the Phase 3
+projection were not re-run for that count.
 
 ### `benchmark_store_comparison.py`
 

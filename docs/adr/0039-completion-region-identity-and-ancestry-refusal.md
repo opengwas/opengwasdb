@@ -169,13 +169,15 @@ is a panel gap, completed nowhere and not refused; the completion names it by
 when its extent overlaps one of the Analysis's regions, and
 `completion.block.run_block` fits on the Analysis's observations at all of that
 block's own panel variants, as before. Only the fills and counts are bounded:
-the block neither fills nor counts a variant outside the Analysis's regions,
-through the same seam that leaves a shared endpoint to the next block (ADR
-0072), so the checkpoint format and `completion_quality` still describe exactly
-the rows the Store holds. `completion.regions` stays the one region definition,
-called by both `complete-ragged` and the Observed-View Check, which now also
-fails a missing row completion added outside every region
-(`missing_outside_retained`).
+the block neither fills nor counts a panel row outside the Analysis's regions,
+so the checkpoint format and `completion_quality` still describe exactly the
+rows the Store holds. `run_block` leaves those rows out by position (its
+`outside` mask), beside the seam by ALID that leaves a shared endpoint to the
+next block (ADR 0072). Leaving them out by ALID through that seam, as first
+written, missed a panel row no ALID names, which ADR 0079 made common.
+`completion.regions` stays the one region definition, called by both
+`complete-ragged` and the Observed-View Check, which now also fails a missing
+row completion added outside every region (`missing_outside_retained`).
 
 **Consequences.**
 
