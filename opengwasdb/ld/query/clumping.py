@@ -76,13 +76,21 @@ def _greedy(
             continue
         lead[i], r_lead[i] = i, 1.0
         # The same variant asked again is r = 1 at d = 0, and joins on the same edges.
-        if r2 < 1.0 and window > 0:
+        if _joins(np.ones(1), np.zeros(1, dtype=np.int64), r2=r2, window=window).all():
             hits.join(lead, r_lead, i, np.array([rows[i]]), np.ones(1))
         hits.close(rows[i], lead)
         found = reader.partners(rows[i : i + 1], r2=r2, window_bp=window, among=hits.open())
-        joins = (found.r * found.r > r2) & (found.distance < window)
+        joins = _joins(found.r, found.distance, r2=r2, window=window)
         hits.join(lead, r_lead, i, found.partner[joins], found.r[joins])
     return lead, r_lead
+
+
+def _joins(
+    r: npt.NDArray[np.float64], distance: npt.NDArray[np.int64], *, r2: float, window: float
+) -> npt.NDArray[np.bool_]:
+    """plink2's edges, which `clump` keeps (spec §9): r̂² **>** r2 and d **<** W. The reader
+    hands back r̂² ≥ r2 and d ≤ W, and this is where `clump` narrows them."""
+    return np.asarray((r * r > r2) & (distance < window))
 
 
 class _Hits:

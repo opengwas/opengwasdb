@@ -502,7 +502,7 @@ class StoreReader:
     ) -> _RowEntries:
         """Each local row's Near Band partners within `reach` ≤ near_bp on both sides: the
         row up to `reach`, and the column, one element in each earlier row within it."""
-        lo, hi = position_rows(c.position, c.position[local] - reach, c.position[local] + reach)
+        lo, hi = _window(c, local, reach)
         # Each row's span runs from its first upstream partner to its last downstream one,
         # the row itself included once; dropping it leaves both halves, ascending.
         span, owner = spans(lo, hi - lo), owners(hi - lo, local)
@@ -521,7 +521,7 @@ class StoreReader:
     ) -> _RowEntries:
         """Each local row's pairs with the `listed` rows within `reach` ≤ near_bp, both sides,
         resolved one Near Band element each: one row against many, and nothing else."""
-        lo, hi = position_rows(c.position, c.position[local] - reach, c.position[local] + reach)
+        lo, hi = _window(c, local, reach)
         a = np.searchsorted(listed, global_rows(lo, c.start))
         b = np.searchsorted(listed, global_rows(hi, c.start))
         partner = local_rows(listed[spans(a, b - a)], c.start)
@@ -677,11 +677,19 @@ def _index_length(c: _Chromosome, local: npt.NDArray[np.int64]) -> npt.NDArray[n
     return c.index_indptr[local + 1] - c.index_indptr[local]
 
 
+def _window(
+    c: _Chromosome, local: npt.NDArray[np.int64], reach: int
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+    """For each local row, the rows [lo, hi) within `reach` bp of it on both sides, itself
+    included: the window `partners` reads in the Near Band."""
+    return position_rows(c.position, c.position[local] - reach, c.position[local] + reach)
+
+
 def _window_rows(
     c: _Chromosome, local: npt.NDArray[np.int64], *, reach: int
 ) -> npt.NDArray[np.int64]:
     """How many rows lie within `reach` of each local row, on both sides, itself included."""
-    lo, hi = position_rows(c.position, c.position[local] - reach, c.position[local] + reach)
+    lo, hi = _window(c, local, reach)
     return hi - lo
 
 
