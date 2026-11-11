@@ -13,6 +13,8 @@ whose checksum it must match.
 from __future__ import annotations
 
 import json
+import multiprocessing
+import os
 from pathlib import Path
 
 import numpy as np
@@ -377,3 +379,53 @@ def test_the_table_sits_beside_the_blocks_and_hides_no_chromosome(tmp_path: Path
         "1", "indel_reference.json", "indel_reference.tsv.gz", "indel_reference.tsv.gz.tbi",
     ]
     assert list_chromosomes(tmp_path, "EUR") == ["1"]
+
+
+def _reads_through_its_own_handle(tsv: Path) -> bool:
+    """In a forked worker: load the block, and say whether the table handle it
+    read through was opened by this process."""
+    from opengwasdb.completion import ld_panel
+
+    load_block(tsv)
+    table = ld_panel.indel_reference_table(tsv.parent.parent)
+    return ld_panel._open_indel_reference(str(table)).tabix.opened_by == os.getpid()
+
+
+def test_a_forked_worker_reads_the_table_through_its_own_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A block pool forks after the parent has read the table (Dense's panel
+    enumeration loads every block, Ragged's region scan the blocks it plans). A
+    worker reading through the parent's handle shares its file offset with every
+    other worker, so their fetches read each other's bytes: on OGS-00003 with 16
+    workers one raised and another split a line into too many fields."""
+    from concurrent.futures import ProcessPoolExecutor
+
+    from opengwasdb.completion import ld_panel
+
+    tsv = _write_block(tmp_path)
+    _write_table(tmp_path, "GGGGCC")
+    opened = pysam.TabixFile
+
+    class Recorded:
+        """A table handle that remembers the process that opened it."""
+
+        def __init__(self, path: str) -> None:
+            self._file = opened(path)
+            self.contigs = self._file.contigs
+            self.opened_by = os.getpid()
+
+        def fetch(self, *args: object) -> object:
+            return self._file.fetch(*args)
+
+    monkeypatch.setattr(ld_panel.pysam, "TabixFile", Recorded)
+    ld_panel._open_indel_reference.cache_clear()
+    try:
+        load_block(tsv)
+        table = str(ld_panel.indel_reference_table(tsv.parent.parent))
+        assert ld_panel._open_indel_reference(table).tabix.opened_by == os.getpid()
+        fork = multiprocessing.get_context("fork")
+        with ProcessPoolExecutor(max_workers=1, mp_context=fork) as pool:
+            assert pool.submit(_reads_through_its_own_handle, tsv).result()
+    finally:
+        ld_panel._open_indel_reference.cache_clear()

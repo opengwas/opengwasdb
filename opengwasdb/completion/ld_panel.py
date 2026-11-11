@@ -27,6 +27,7 @@ import csv
 import hashlib
 import json
 import logging
+import os
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -241,6 +242,13 @@ def _open_indel_reference(path: str) -> _IndelReference:
             f"{provenance['table_sha256']}: the table is not the one its provenance describes"
         )
     return _IndelReference(pysam.TabixFile(path), digest, provenance)
+
+
+# An opened table is its process's own. A block pool forks after the parent has
+# read the table, and a child reading through the parent's handle shares one file
+# offset with the parent and every other child, so their fetches read each other's
+# bytes: a fetch fails, splits a line, or ends early and leaves indels unplaced.
+os.register_at_fork(after_in_child=_open_indel_reference.cache_clear)
 
 
 def _table_references(
