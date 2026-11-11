@@ -31,6 +31,7 @@ import numpy.typing as npt
 
 from ogld.build import tiles
 from ogld.format import FAR_BP, InputError, PcDiagnostic
+from ogld.format.geometry import windows
 
 SEED: Final = 405
 MAX_VARIANTS: Final = 3_000
@@ -82,12 +83,16 @@ def require_change_pairs(
 ) -> None:
     """Refuse a Variant Set with no pair within 100 kb outside the Long-Range LD Regions, such as
     an MHC-only slice: its change in r cannot be measured (spec §7). Each chromosome's sorted
-    positions say so before the build writes anything, so nothing is left half-written."""
+    positions say so before the build writes anything, so nothing is left half-written.
+
+    The pairs are listed a tile of rows at a time, as the tiles list them, and the first clear
+    one ends the check: a chromosome's pairs within 100 kb are 9.4 GB on EUR chr6 (ogld#25)."""
     for chrom, position in positions:
         band = tiles.Band.of(position, FAR_BP, CHANGE_BP)
-        clear = tiles.change_pairs(band, outside_regions(chrom, position), 0, len(position))[2]
-        if clear.any():
-            return
+        outside = outside_regions(chrom, position)
+        for first, last in windows(0, len(position), tiles.TILE_ROWS):
+            if tiles.change_pairs(band, outside, first, last)[2].any():
+                return
     raise InputError(
         f"panel {panel}: no two variants within 100 kb lie outside the Long-Range LD Regions, "
         "so the PC diagnostic's change in r cannot be measured (spec §7)"
