@@ -85,22 +85,39 @@ def _write_panel(root: Path) -> Path:
 
 
 def _write_source(
-    root: Path, analyses: list[dict], coverage: str = "cis_and_signals"
+    root: Path,
+    analyses: list[dict],
+    coverage: str = "cis_and_signals",
+    *,
+    hm_code: str | None = None,
+    deletion: str | None = None,
 ) -> Path:
     """An Observed-Only Ragged Store of Association Coverage `coverage`; each Analysis
-    observes `OBSERVED` on its `chromosomes`."""
+    observes `OBSERVED` on its `chromosomes`, and the `deletion` ALID where it is on one
+    of them. With `hm_code` every row carries that harmoniser code; 10 declares a row's
+    other allele its reference, so the build keeps an indel (ADR 0079)."""
     filtered = root / "filtered"
     filtered.mkdir()
+    code = "" if hm_code is None else f"\t{hm_code}"
     for a in analyses:
         with gzip.open(filtered / f"{a['analysis_id']}.tsv.gz", "wt", encoding="utf-8") as fh:
             fh.write(
                 "chromosome\tbase_pair_location\teffect_allele\tother_allele"
-                "\tbeta\tstandard_error\teffect_allele_frequency\n"
+                "\tbeta\tstandard_error\teffect_allele_frequency"
+                + ("" if hm_code is None else "\thm_code") + "\n"
             )
             for chromosome in a["chromosomes"]:
+                rows = []
                 for k, bp in enumerate(OBSERVED[chromosome]):
                     z = (1.5 + 0.7 * k) * (-1) ** k
-                    fh.write(f"{chromosome}\t{bp}\tA\tG\t{z * 0.15:.6f}\t0.15\t{0.2 + 0.1 * k}\n")
+                    rows.append(
+                        (bp, f"{chromosome}\t{bp}\tA\tG\t{z * 0.15:.6f}\t0.15\t{0.2 + 0.1 * k}")
+                    )
+                if deletion is not None and deletion.split(":")[0] == chromosome:
+                    _c, bp, reference, alt = deletion.split(":")
+                    row = f"{chromosome}\t{bp}\t{alt}\t{reference}\t-0.45\t0.15\t0.25"
+                    rows.append((int(bp), row))
+                fh.writelines(f"{row}{code}\n" for _bp, row in sorted(rows))
     manifest = root / "manifest.tsv"
     _write_ssf_manifest(manifest, [
         {
@@ -301,19 +318,37 @@ def test_every_added_row_lies_inside_a_region_of_its_analysis(tabled):
 
 
 
-# --- a panel row no ALID names, outside the regions ---------------------------
+# --- indels: one the source observes, ones the panel declares, ones it cannot name --
 
 #: Per chromosome, a panel indel no ALID names (its panel declares no reference, ADR
 #: 0079): in block 1 outside the cis row, and in block 2 outside the significant region.
 UNNAMED = {"1": 1_240_000, "2": 380_000}
+#: Panel deletions the panel's indel-reference table settles, by the id the panel writes
+#: (alleles sorted, its `EA` the first) and the ALID completion spells reference first:
+#: one inside the cis row, one inside the significant region.
+DECLARED = {"1:1060000:G:GA": "1:1060000:GA:G", "2:260000:C:CT": "2:260000:CT:C"}
+#: A deletion every Analysis observes inside the significant region, by its ALID and by
+#: the id the panel holds it under; the table settles the panel's row too.
+OBSERVED_DELETION, OBSERVED_DELETION_PANEL_ID = "2:180000:AT:A", "2:180000:A:AT"
 
 
-def _add_unnamed_rows(panel: Path) -> Path:
-    """`_write_panel`'s blocks, each with an `UNNAMED` indel row in position order."""
-    for seed, (chromosome, bp) in enumerate(UNNAMED.items()):
+def _add_indel_rows(panel: Path) -> Path:
+    """`_write_panel`'s blocks with the `UNNAMED`, `DECLARED` and observed-deletion
+    rows, in position order, each row's `EA` its id's first allele; and the panel's
+    indel-reference table, which settles every one of them but the `UNNAMED`."""
+    import test_panel_indels as panel_fixture
+
+    added: dict[str, list[str]] = {}
+    for chromosome, bp in UNNAMED.items():
+        added.setdefault(chromosome, []).append(f"{chromosome}:{bp}:A:AT")
+    for snp in [*DECLARED, OBSERVED_DELETION_PANEL_ID]:
+        added.setdefault(snp.split(":")[0], []).append(snp)
+    for seed, (chromosome, snps) in enumerate(added.items()):
         tsv = panel / "EUR" / chromosome / f"{BLOCKS[chromosome]}.tsv"
         header, *rows = tsv.read_text(encoding="utf-8").splitlines()
-        rows.append(f"{chromosome}\t{chromosome}:{bp}:A:AT\tAT\tA\t0.3\t{bp}")
+        for snp in snps:
+            _c, bp, ea, oa = snp.split(":")
+            rows.append(f"{chromosome}\t{snp}\t{oa}\t{ea}\t0.3\t{bp}")
         rows.sort(key=lambda row: int(row.split("\t")[-1]))
         tsv.write_text("\n".join([header, *rows]) + "\n", encoding="utf-8")
         n = len(rows)
@@ -322,42 +357,137 @@ def _add_unnamed_rows(panel: Path) -> Path:
         values, vectors = np.linalg.eigh((ld + ld.T) / 2)
         order = np.argsort(values)[::-1]
         np.savez(tsv.with_suffix(".ldeig.npz"), values=values[order], vectors=vectors[:, order])
+    settled = {**{snp: alid for snp, alid in DECLARED.items()},
+               OBSERVED_DELETION_PANEL_ID: OBSERVED_DELETION}
+    table = panel / "EUR" / "indel_reference.tsv"
+    table.write_text(
+        "#chromosome\tposition\tallele1\tallele2\treference\toutcome\n" + "".join(
+            f"{c}\t{bp}\t{a1}\t{a2}\t{alid.split(':')[2]}\tsettled_agree\n"
+            for snp, alid in sorted(settled.items(), key=lambda kv: (kv[0].split(":")[0],
+                                                                      int(kv[0].split(":")[1])))
+            for c, bp, a1, a2 in [snp.split(":")]
+        ),
+        encoding="utf-8",
+    )
+    panel_fixture._compress_and_index(table)
     return panel
 
 
-@pytest.fixture(scope="module")
-def unnamed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
-    root = tmp_path_factory.mktemp("unnamed")
-    source = _write_source(root, TABLED)
+@dataclass(frozen=True)
+class Completed:
+    source: Path
+    completed: Path
+    panel: Path
+    table: Path
+
+
+def _complete_with_indels(root: Path, **kwargs) -> Completed:
+    """`TABLED`'s Store from harmonised files, every Analysis observing
+    `OBSERVED_DELETION`, completed against the panel `_add_indel_rows` writes."""
+    source = _write_source(root, TABLED, hm_code="10", deletion=OBSERVED_DELETION)
+    panel = _add_indel_rows(_write_panel(root))
+    table = write_region_table(root / "sparse_regions.tsv", TABLE)
     completed = root / "comp.opengwasdb"
     complete_ragged_store(
-        source, completed, _add_unnamed_rows(_write_panel(root)), ancestry="EUR",
-        cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
-        regions=write_region_table(root / "sparse_regions.tsv", TABLE),
+        source, completed, panel, ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+        release_id="comp-v1", regions=table, **kwargs,
     )
-    return source, completed
+    return Completed(source, completed, panel, table)
 
 
-def test_a_panel_row_no_alid_names_outside_the_regions_is_not_counted(unnamed):
-    """An Analysis's `completion_quality` counts are the rows it is given: its imputed
-    and missing counts add up to the rows completion added it. A panel row no ALID names
-    is never a row, and one outside every region of the Analysis is not counted
-    missing either, whether or not the block's fit could have filled it."""
+@pytest.fixture(scope="module")
+def indels(tmp_path_factory: pytest.TempPathFactory) -> Completed:
+    return _complete_with_indels(tmp_path_factory.mktemp("indels"))
+
+
+def _completion_record(store: Path) -> dict:
+    return json.loads((store / "manifest.json").read_text(encoding="utf-8"))[
+        "provenance"]["completion"]
+
+
+def _alids_at(store: Path, chromosome: str, bp: int) -> list[str]:
+    from opengwasdb.variants.axis import iter_variant_records
+
+    return [
+        r.alid for r in iter_variant_records(store / "variants.tsv.gz")
+        if (r.chromosome, r.position) == (chromosome, bp)
+    ]
+
+
+def test_the_indel_fixture_holds_what_the_assertions_read(indels):
+    """The source keeps its deletion, spelt reference first; the panel declares three
+    indels and leaves two unnamed; the declared ones lie inside the regions and the
+    unnamed ones outside them."""
+    for analysis in (0, 1, 2):
+        assert OBSERVED_DELETION in completed_rows(indels.source, analysis).all, analysis
+    record = _completion_record(indels.completed)["panel_indels"]
+    assert (record["reference_from"], record["n_indels"], record["n_placed"]) == ("table", 5, 3)
+    assert record["unplaced"]["no_reference"] == 2
+    for alid in [*DECLARED.values(), OBSERVED_DELETION]:
+        assert within(alid, *REGIONS[0]), alid
+    assert within(DECLARED["2:260000:C:CT"], *REGIONS[1])
+    assert not any(within(f"{c}:{bp}:A:AT", *REGIONS[0]) for c, bp in UNNAMED.items())
+
+
+def test_a_declared_panel_deletion_in_a_region_is_a_row_spelt_reference_first(indels):
+    """Completion names a panel deletion by its ALID, reference first, wherever it
+    plans, adds and writes it (ADR 0079): a row of each Analysis whose region holds it,
+    never its panel id's sorted spelling."""
+    cis_signals = completed_rows(indels.completed, 0, indels.source)
+    sig_only = completed_rows(indels.completed, 1, indels.source)
+
+    assert set(DECLARED.values()) <= cis_signals.added
+    assert DECLARED["2:260000:C:CT"] in sig_only.added
+    assert DECLARED["1:1060000:G:GA"] not in sig_only.all, "outside its only region"
+    for snp, alid in DECLARED.items():
+        chromosome, bp, *_ = snp.split(":")
+        assert _alids_at(indels.completed, chromosome, int(bp)) == [alid]
+
+
+def test_an_observed_deletion_is_carried_exactly_and_named_once(indels):
+    """The source's deletion and the panel's row for it are one variant: carried
+    observed, values unchanged, with no second spelling beside it."""
+    for analysis in (0, 1, 2):
+        before = completed_rows(indels.source, analysis)
+        after = completed_rows(indels.completed, analysis)
+        assert OBSERVED_DELETION not in after.imputed
+        for plane in ("z", "se", "eaf"):
+            got = getattr(after, plane)[OBSERVED_DELETION]
+            assert got == getattr(before, plane)[OBSERVED_DELETION], (analysis, plane)
+    assert _alids_at(indels.completed, "2", 180_000) == [OBSERVED_DELETION]
+
+
+def test_a_completion_with_indels_passes_the_observed_view_check(indels):
+    """The check rebuilds each Analysis's region rows from the panel as completion
+    named them, so the reference-first deletion rows lie inside the regions."""
+    from opengwasdb.validation.observed_view_ragged import check_ragged
+
+    verdict = check_ragged(
+        indels.source, indels.completed, seed=7, n_random=3, ld_panel=indels.panel,
+        ancestry="EUR", regions=indels.table,
+    )
+
+    assert verdict.record["totals"]["regions"] == 3, "both Analyses' regions were checked"
+    assert verdict.passed, verdict.failures
+
+
+def test_a_panel_row_no_alid_names_outside_the_regions_is_not_counted(indels):
+    """An Analysis's `completion_quality` counts are the rows it is given: where every
+    panel row inside its regions has an ALID, as here, its imputed and missing counts add
+    up to the rows completion added it. A panel row no ALID names is never a row, and one
+    outside every region of the Analysis is not counted missing either, whether or not
+    the block's fit could have filled it."""
     from opengwasdb.model.analyses import read_analysis_records
 
-    source, completed = unnamed
-    placement = json.loads((completed / "manifest.json").read_text(encoding="utf-8"))
-    indels = placement["provenance"]["completion"]["panel_indels"]
-    assert indels["n_indels"] == 2 and indels["unplaced"]["no_reference"] == 2
-    assert not any(within(f"{c}:{bp}:A:AT", *REGIONS[0]) for c, bp in UNNAMED.items())
-    records = read_analysis_records(completed / "analyses.tsv")
+    records = read_analysis_records(indels.completed / "analyses.tsv")
     for analysis in (0, 1):
-        rows = completed_rows(completed, analysis, source)
+        rows = completed_rows(indels.completed, analysis, indels.source)
         counted = int(records[analysis].completion_n_imputed_total) + int(
             records[analysis].completion_n_missing_total
         )
         assert rows.added, analysis
         assert counted == len(rows.added), analysis
+
 
 
 # --- refusals ---------------------------------------------------------------
