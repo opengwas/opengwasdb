@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from region_tables import every_analysis, write_region_table
 from store_assertions import replace_exception_table
 
 from opengwasdb.encoding import (
@@ -942,7 +943,11 @@ def test_completing_a_ragged_source_with_no_frequencies_carries_panel_eaf(
     out = tmp_path / "ragged-nofreq-completed.opengwasdb"
     complete_ragged_store(
         ragged_store_with_no_frequencies, out, _ld_panel(tmp_path),
-        ancestry="EUR", min_cor=0.0, thresh=0.99,
+        ancestry="EUR", min_cor=0.0, thresh=0.99, regions=write_region_table(
+            tmp_path / "sparse_regions.tsv", every_analysis(
+                ragged_store_with_no_frequencies, "significant_trans", "1", 100, 900
+            ),
+        ),
     )
     manifest = json.loads((out / "manifest.json").read_text())
     assert manifest["encoding"]["eaf"]["reference"] is True
@@ -997,7 +1002,11 @@ def test_orientation_evidence_is_not_required_of_panel_only_frequencies(
     out = tmp_path / "ragged-nofreq-noorientation.opengwasdb"
     complete_ragged_store(
         ragged_store_with_no_frequencies, out, _ld_panel(tmp_path),
-        ancestry="EUR", min_cor=0.0, thresh=0.99,
+        ancestry="EUR", min_cor=0.0, thresh=0.99, regions=write_region_table(
+            tmp_path / "sparse_regions.tsv", every_analysis(
+                ragged_store_with_no_frequencies, "significant_trans", "1", 100, 900
+            ),
+        ),
     )
     # Fixture meaningfulness: the release must be the panel-only shape, and
     # must declare `association` -- otherwise the rule is never reached.

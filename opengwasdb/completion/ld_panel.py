@@ -147,22 +147,6 @@ def load_block(tsv_path: Path) -> LDBlock | None:
     )
 
 
-def find_blocks(
-    ld_dir: str | Path,
-    ancestry: str,
-    chrom: str,
-    start_bp: int,
-    end_bp: int,
-) -> list[LDBlock]:
-    """Return all LD blocks whose genomic extent intersects [start_bp, end_bp]."""
-    blocks: list[LDBlock] = []
-    for block in list_all_blocks(ld_dir, ancestry, chrom):
-        if block.end_bp < start_bp or block.start_bp > end_bp:
-            continue
-        blocks.append(block)
-    return blocks
-
-
 def blocks_over_variants(
     ld_dir: str | Path,
     ancestry: str,
@@ -299,8 +283,8 @@ class LdPanelNotFoundError(Exception):
 def check_panel_has_chromosomes(ld_dir: str | Path, ancestry: str) -> None:
     """Raise if the panel has no chromosome directory for *ancestry*.
 
-    `list_all_blocks`/`find_blocks` treat a missing `ld_dir/{ancestry}/{chr}`
-    as "no blocks here" and return `[]` -- correct when scanning one
+    `list_all_blocks` treats a missing `ld_dir/{ancestry}/{chr}`
+    as "no blocks here" and returns `[]` -- correct when scanning one
     chromosome a real panel simply has nothing on, wrong when `ld_dir` or
     `ancestry` is misconfigured: every chromosome then reports the same empty
     result, and completion runs to a successful finish with the "0 imputed"
