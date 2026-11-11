@@ -10,17 +10,19 @@ A stored r̂² equals r2 exactly only at 0 or 1, so the r² edge is tested on a 
 from __future__ import annotations
 
 from functools import cache
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 import support
+import zarr
 from support import alids, panel_data, passing_rows, reference
 
 import ogld
 from ogld.format import dequantise
 from ogld.query import clumping
 from ogld.query.results import Clumps
-from ogld.store import StoreReader
+from ogld.store import StoreReader, location
 
 
 @cache
@@ -123,21 +125,25 @@ def test_leads_go_strongest_first_then_by_genomic_order_then_alid() -> None:
     assert list(clumps.leads()) == expected
 
 
-class Spy(StoreReader):
-    """A reader that records the largest `pair_r` request."""
+class Largest(location.ChunkCache):
+    """A reader's chunk cache that records the most Stored r it is asked for at once: the
+    elements of a Near Band or Proxy Index `r` array in one read (ogld#14)."""
 
     largest = 0
 
-    def pair_r(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
-        self.largest = max(self.largest, len(rows))
-        return super().pair_r(rows)
+    def take(self, array: zarr.Array[Any], coords: npt.ArrayLike) -> npt.NDArray[Any]:
+        got = super().take(array, coords)
+        if array.path.endswith("/r"):
+            self.largest = max(self.largest, len(got))
+        return got
 
 
 def test_clump_reads_pairs_within_the_window_only_and_the_leads_are_unchanged() -> None:
     rows = passing_rows()
     z = np.abs(panel_data().gwas().z)[rows]
-    spy = Spy.open(support.TEST_STORE)
-    narrow = clumping.clump(spy, alids(rows), z, r2=0.01, kb=100)
+    reader = StoreReader.open(support.TEST_STORE)
+    reader._cache = spy = Largest()
+    narrow = clumping.clump(reader, alids(rows), z, r2=0.01, kb=100)
     assert spy.largest < len(rows) // 4, "a 100 kb window must not read an n × n matrix"
     assert list(narrow.lead) == alids(rows[greedy(rows, z, 0.01, 100)])
 
