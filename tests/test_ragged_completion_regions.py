@@ -490,6 +490,37 @@ def test_a_panel_row_no_alid_names_outside_the_regions_is_not_counted(indels):
 
 
 
+def test_a_worker_that_places_fewer_indels_than_the_plan_stops_the_completion(
+    tmp_path, monkeypatch
+):
+    """The completion record says how the plan's read of the panel placed its indels
+    (`panel_indels`), and each block is read again where it is completed. A read that
+    places fewer, as a worker reading the indel table through another process's handle
+    once did, stops the completion: its fills and its record would describe two panels."""
+    from dataclasses import replace
+
+    from opengwasdb.completion import block as block_module
+    from opengwasdb.completion.ld_panel import PanelReadMismatchError
+
+    read = block_module.load_block
+
+    def short_read(tsv_path):
+        block = read(tsv_path)
+        placed = [
+            k for k, a in enumerate(block.alids)
+            if a is not None and len(a.split(":")[2]) != len(a.split(":")[3])
+        ]
+        if not placed:
+            return block
+        alids = list(block.alids)
+        alids[placed[0]] = None
+        return replace(block, alids=alids, n_indels_placed=block.n_indels_placed - 1)
+
+    monkeypatch.setattr(block_module, "load_block", short_read)
+    with pytest.raises(PanelReadMismatchError, match=r"places \d+ indels?, where"):
+        _complete_with_indels(tmp_path)
+
+
 # --- refusals ---------------------------------------------------------------
 
 

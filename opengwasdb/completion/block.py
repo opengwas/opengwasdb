@@ -28,6 +28,7 @@ from opengwasdb.admission.cells import admissible
 from opengwasdb.completion.checkpoint import BlockCompletionResult, FillRow, QualityRow
 from opengwasdb.completion.impute import impute_z_block, scalar_n_se
 from opengwasdb.completion.ld_panel import (
+    BlockPlacement,
     LDBlock,
     load_block,
     load_ld_eigenvectors,
@@ -170,6 +171,20 @@ ObservedReader = Callable[[int], "tuple[np.ndarray, np.ndarray]"]
 # a reader for each one's observed z/se). Built once per block, not once per
 # Analysis, since opening the source is the expensive part.
 BlockReaderFactory = Callable[[LDBlock, list[str | None]], "tuple[Iterable[int], ObservedReader]"]
+
+
+def read_as_planned(planned: BlockPlacement, make_reader: BlockReaderFactory) -> BlockReaderFactory:
+    """``make_reader``, once the block a worker has read names its rows as the
+    read the completion was planned from did (`BlockPlacement.require`)."""
+
+    def checked(
+        block: LDBlock, canonical_alids: list[str | None]
+    ) -> tuple[Iterable[int], ObservedReader]:
+        planned.require(block)
+        return make_reader(block, canonical_alids)
+
+    return checked
+
 
 # The canonical ALIDs a block leaves to the block that follows it, for one
 # Analysis (`completion.ld_panel.shared_endpoints`).

@@ -45,8 +45,14 @@ from opengwasdb import top_hits
 from opengwasdb.associations import Associations, Cells, CsrReader
 from opengwasdb.completion import checkpoint, fill_shards
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
-from opengwasdb.completion.block import REGION_CAP_BP, panel_positions, run_block
+from opengwasdb.completion.block import (
+    REGION_CAP_BP,
+    panel_positions,
+    read_as_planned,
+    run_block,
+)
 from opengwasdb.completion.ld_panel import (
+    BlockPlacement,
     LDBlock,
     PanelPlacement,
     SharedEndpoint,
@@ -140,6 +146,8 @@ class _BlockTask:
     chromosome: str
     #: Each assigned Analysis's regions: only its variants inside one are filled or counted.
     regions: dict[int, tuple[Region, ...]]
+    #: How the plan's read of the block placed its rows, which the worker's must repeat.
+    placement: BlockPlacement
     #: Per Analysis, the variants at this block's end the next block owns.
     ceded: dict[int, frozenset[str]] = field(default_factory=dict)
 
@@ -288,7 +296,8 @@ def _outside(task: _BlockTask, analysis: int, positions: np.ndarray) -> np.ndarr
 def _run_block(task: _BlockTask) -> checkpoint.BlockCompletionResult | None:
     """Complete one LD block for the Analyses one of whose regions it overlaps."""
     result = run_block(
-        task.tsv_path, task.thresh, task.min_cor, task.region_cap_bp, _make_reader(task),
+        task.tsv_path, task.thresh, task.min_cor, task.region_cap_bp,
+        read_as_planned(task.placement, _make_reader(task)),
         ceded=lambda analysis: task.ceded.get(analysis, frozenset()),
         outside=lambda analysis, positions: _outside(task, analysis, positions),
     )
@@ -515,6 +524,8 @@ class _BlockPlan:
     endpoints: dict[str, SharedEndpoint] = field(default_factory=dict)
     #: The `region_id` of each region no block overlaps (`RegionBlocks.uncovered`).
     uncovered: tuple[str, ...] = ()
+    #: Per planned block's TSV, how the plan's read placed its rows (`BlockPlacement`).
+    block_placement: dict[Path, BlockPlacement] = field(default_factory=dict)
 
     def ceded(self, block_id: str) -> dict[int, frozenset[str]]:
         """Per Analysis, the variants at ``block_id``'s end the next block owns.
@@ -771,6 +782,7 @@ def _scan_block_maps(
             block_canonical_alids, block_positions,
         ),
         endpoints=shared_endpoints(planned),
+        block_placement=placement.blocks,
         panel_placement=_logged_placement(placement, ld_dir, ancestry),
     )
 
@@ -925,6 +937,7 @@ def _run_pending_blocks(
                     checkpoint_path=ckpt_path,
                     chromosome=plan.block_chromosome[block_id],
                     regions={i: plan.regions[i] for i in plan.block_to_analyses[block_id]},
+                    placement=plan.block_placement[tsv_path],
                     ceded=plan.ceded(block_id),
                 )
             )

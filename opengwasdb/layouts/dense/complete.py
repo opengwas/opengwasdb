@@ -32,7 +32,7 @@ import numpy as np
 
 from opengwasdb.associations import Cells, DenseGridReader
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
-from opengwasdb.completion.block import REGION_CAP_BP, run_block
+from opengwasdb.completion.block import REGION_CAP_BP, read_as_planned, run_block
 from opengwasdb.completion.checkpoint import (
     BlockCompletionResult,
     checkpoint_blocks_dir,
@@ -53,6 +53,7 @@ from opengwasdb.completion.fill_shards import (
     sorted_union_map,
 )
 from opengwasdb.completion.ld_panel import (
+    BlockPlacement,
     PanelPlacement,
     ceded_at_end,
     check_panel_has_chromosomes,
@@ -175,6 +176,8 @@ class _BlockTask:
     min_cor: float
     thresh: float
     checkpoint_path: Path
+    #: How the plan's read of the block placed its rows, which the worker's must repeat.
+    placement: BlockPlacement
     #: The variants at this block's end the next block owns (`shared_endpoints`).
     ceded: frozenset[str] = frozenset()
 
@@ -251,7 +254,8 @@ def _run_block(task: _BlockTask) -> BlockCompletionResult | None:
     variants for each.
     """
     result = run_block(
-        task.tsv_path, task.thresh, task.min_cor, REGION_CAP_BP, _make_reader(task),
+        task.tsv_path, task.thresh, task.min_cor, REGION_CAP_BP,
+        read_as_planned(task.placement, _make_reader(task)),
         ceded=lambda _analysis: task.ceded,
     )
     if result is None:
@@ -416,6 +420,8 @@ class _UnionAxis:
     #: How the panel placed its rows: the completion record's `panel_indels`
     #: and `panel_snvs_unplaced` (`PanelPlacement.record`).
     panel_placement: dict[str, dict[str, object]]
+    #: Per block's TSV, how the plan's read placed its rows (`BlockPlacement`).
+    block_placement: dict[Path, BlockPlacement]
 
 
 @dataclass(frozen=True)
@@ -467,6 +473,8 @@ class _Panel:
     ceded: dict[Path, frozenset[str]]
     #: How the panel placed its rows, for the completion record.
     placement: dict[str, dict[str, object]]
+    #: Per block's TSV, how this read placed its rows (`BlockPlacement`).
+    blocks: dict[Path, BlockPlacement]
 
 
 def _enumerate_panel(ld_dir: Path, ancestry: str) -> _Panel:
@@ -492,7 +500,7 @@ def _enumerate_panel(ld_dir: Path, ancestry: str) -> _Panel:
         f"{sum(map(len, ceded.values())):,} at an endpoint two blocks share"
     )
     placement.log(ld_dir, ancestry)
-    return _Panel(tsv_paths, panel_alids, ceded, placement.record())
+    return _Panel(tsv_paths, panel_alids, ceded, placement.record(), placement.blocks)
 
 
 def _union_variant_table(
@@ -617,6 +625,7 @@ def _build_union_axis(
         tsv_paths=panel.tsv_paths,
         ceded=panel.ceded,
         panel_placement=panel.placement,
+        block_placement=panel.blocks,
     )
 
 
@@ -654,6 +663,7 @@ def _complete_pending_blocks(
                     min_cor=min_cor,
                     thresh=thresh,
                     checkpoint_path=ckpt_path,
+                    placement=axis.block_placement[tsv_path],
                     ceded=axis.ceded.get(tsv_path, frozenset()),
                 )
             )

@@ -207,7 +207,8 @@ def profile_block(
     require_new_directory(work)
     task = dense._BlockTask(
         tsv_path=tsv_path, source_path=source, min_cor=DEFAULT_MIN_COR, thresh=DEFAULT_THRESH,
-        checkpoint_path=work / "profile-block.npz", ceded=panel.ceded.get(tsv_path, frozenset()),
+        checkpoint_path=work / "profile-block.npz", placement=panel.blocks[tsv_path],
+        ceded=panel.ceded.get(tsv_path, frozenset()),
     )
     stages = StageClock(clock)
     captured: dict[str, Any] = {}

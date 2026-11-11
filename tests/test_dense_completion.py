@@ -17,6 +17,7 @@ from opengwasdb.associations import Cells, InvalidAssociations
 from opengwasdb.completion import fill_shards
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.completion.ld_panel import (
+    BlockPlacement,
     LdPanelNotFoundError,
     SharedEndpoint,
     canonical_panel_alid,
@@ -1631,6 +1632,31 @@ class TestEigendecompositionOnlyPanelImputesRealCells:
         root = open_store(dst).arrays(mode="r")
         assert root["imputed"][:].sum() > 0
 
+    def test_a_worker_that_reads_a_block_otherwise_than_the_plan_stops_the_completion(
+        self, tmp_path, signal_observed_store, signal_panel_npz_only, monkeypatch
+    ):
+        """The union axis and the completion record come from the plan's read of
+        the panel, and each block is read again where it is completed. A read that
+        names a row the plan's named differently stops the completion rather than
+        fill a panel the record does not describe."""
+        from dataclasses import replace
+
+        from opengwasdb.completion import block as block_module
+        from opengwasdb.completion.ld_panel import PanelReadMismatchError
+
+        read = block_module.load_block
+
+        def short_read(tsv_path):
+            block = read(tsv_path)
+            return replace(block, alids=[None, *block.alids[1:]])
+
+        monkeypatch.setattr(block_module, "load_block", short_read)
+        with pytest.raises(PanelReadMismatchError, match=r"names \d+ of \d+ rows"):
+            complete_dense_store(
+                signal_observed_store, tmp_path / "comp.opengwasdb", signal_panel_npz_only,
+                ancestry="EUR", min_cor=0.0, release_id="comp-signal-v1",
+            )
+
 
 # ── The declaration and the arrays are two accounts of the same cells ────────
 #
@@ -1807,6 +1833,7 @@ class TestReaderSeam:
             min_cor=0.0,
             thresh=1e-5,
             checkpoint_path=observed_store / "unused-checkpoint",
+            placement=BlockPlacement(len(alids), 2, 0, "unused: no block is read"),
         )
         analysis_range, read = complete_module._make_reader(task)(None, alids)
         n_analyses = len(analysis_range)
