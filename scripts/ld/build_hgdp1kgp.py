@@ -36,7 +36,7 @@ from test_panel.roots import root, tool
 #: AFR first: it has the most variants, so its chr6 is the memory to watch.
 PANELS = ("AFR", "EUR", "EAS", "SAS", "AMR")
 CHROMS = tuple(range(1, 23))
-R_SCALE = 511
+PANEL_SCALE = 511
 K = 10
 CONVERT_THREADS = 4
 CONVERT_MEMORY_MB = 16000
@@ -133,7 +133,7 @@ def build_command(
         "--k",
         str(K),
         "--r-scale",
-        str(R_SCALE),
+        str(PANEL_SCALE),
         "--info-min",
         "none",
         "--threads",
