@@ -1,15 +1,13 @@
 {
-  "commit": "aed5c4a7aea8e114875509e0667af93698762026",
-  "measured_at": "2026-11-11T03:40:53.018464+00:00",
+  "commit": "b8975330aaa5df266fcdcd32b12ad62614fd164c",
+  "measured_at": "2026-11-11T12:37:52.311147+00:00",
   "opengwasdb_path": "/data/opengwasdb/work/odb430/wt/opengwasdb",
-  "opengwasdb_fingerprint": "22c6fc69663c5d10e8c54ff13f8aa548fef1ba0f4a39449f51289d381ef510da",
+  "opengwasdb_fingerprint": "f3abcd4184e8d208a31870b881928601d356755428fb7958aa0230b13bcbfd74",
   "argv": [
     "benchmarks/benchmark_ragged_completion_streams.py",
     "run",
     "--source",
-    "/data/opengwasdb/stores/OGS-00006/replaced/20261023T230254Z/store.opengwasdb",
-    "--regions",
-    "/home/gh13047/repo/opengwasdb-stores/stores/OGS-00006/sidecars/sparse_regions.tsv",
+    "/data/opengwasdb/work/odb430/ogs6/store.opengwasdb",
     "--n-analyses",
     "25",
     "--n-workers",
@@ -30,43 +28,43 @@
     "n_imputed": 4041,
     "n_missing": 0
   },
-  "total_seconds": 441.45,
-  "ru_maxrss_gb": 13.088,
+  "total_seconds": 427.98,
+  "ru_maxrss_gb": 13.026,
   "phases": {
     "_plan_blocks": {
-      "seconds": 4.7,
-      "peak_rss_gb": 5.006
+      "seconds": 4.58,
+      "peak_rss_gb": 5.135
     },
     "_run_pending_blocks": {
-      "seconds": 74.71,
-      "peak_rss_gb": 7.464
+      "seconds": 75.14,
+      "peak_rss_gb": 7.584
     },
     "shard_checkpoint_fills": {
       "seconds": 0.02,
-      "peak_rss_gb": 8.222
+      "peak_rss_gb": 8.342
     },
     "_assemble_completed_csr": {
-      "seconds": 117.31,
-      "peak_rss_gb": 9.377
+      "seconds": 101.25,
+      "peak_rss_gb": 9.439
     },
     "build_variant_index": {
-      "seconds": 46.34,
-      "peak_rss_gb": 10.867
+      "seconds": 48.14,
+      "peak_rss_gb": 10.982
     },
     "_write_completed_zarr": {
-      "seconds": 82.79,
-      "peak_rss_gb": 12.986
+      "seconds": 81.17,
+      "peak_rss_gb": 12.929
     },
     "_write_top_hits_and_analyses": {
-      "seconds": 9.48,
-      "peak_rss_gb": 9.136
+      "seconds": 9.38,
+      "peak_rss_gb": 9.201
     }
   },
   "checkpoint_fills": 4041,
   "checkpoint_bytes": 371100,
   "phase3": {
-    "seconds": 209.6,
-    "peak_rss_gb": 12.986
+    "seconds": 191.82,
+    "peak_rss_gb": 12.929
   },
   "region_accounting": {
     "panel_chromosomes": [

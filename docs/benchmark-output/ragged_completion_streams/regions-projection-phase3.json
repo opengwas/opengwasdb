@@ -1,8 +1,8 @@
 {
-  "commit": "aed5c4a7aea8e114875509e0667af93698762026",
-  "measured_at": "2026-11-11T04:00:22.703226+00:00",
+  "commit": "b8975330aaa5df266fcdcd32b12ad62614fd164c",
+  "measured_at": "2026-11-11T12:58:33.560876+00:00",
   "opengwasdb_path": "/data/opengwasdb/work/odb430/wt/opengwasdb",
-  "opengwasdb_fingerprint": "22c6fc69663c5d10e8c54ff13f8aa548fef1ba0f4a39449f51289d381ef510da",
+  "opengwasdb_fingerprint": "f3abcd4184e8d208a31870b881928601d356755428fb7958aa0230b13bcbfd74",
   "runs": [
     "docs/benchmark-output/ragged_completion_streams/regions-head-25.json",
     "docs/benchmark-output/ragged_completion_streams/regions-head-100.json"
@@ -10,28 +10,29 @@
   "full_fills": 1038245,
   "full_cells": 59092457,
   "full_batches": 1,
-  "phase3_seconds_fitted": 2074,
+  "phase3_seconds_fitted": null,
   "shard_batches_extra_seconds": 0,
-  "phase3_seconds": 2074,
-  "phase3_hours": 0.58,
+  "phase3_seconds": null,
+  "phase3_hours": null,
+  "phase3_not_fitted": "the larger run's Phase 3 took 184 s, no longer than the smaller run's 192 s: their difference is host noise, not the cost of fills",
   "memory_full": {
-    "before_assembly_gb": 8.26,
+    "before_assembly_gb": 8.38,
     "held_cells_gb": 0.9,
     "batch_gb": 0.07,
-    "write_region_gb": 3.34,
-    "assembly_peak_gb": 9.3,
-    "write_peak_gb": 12.5
+    "write_region_gb": 3.44,
+    "assembly_peak_gb": 9.4,
+    "write_peak_gb": 12.8
   },
   "memory_model_at_larger_run": {
-    "before_assembly_gb": 8.26,
+    "before_assembly_gb": 8.38,
     "held_cells_gb": 0.9,
     "batch_gb": 0.0,
-    "write_region_gb": 3.34,
-    "assembly_peak_gb": 9.2,
-    "write_peak_gb": 12.5
+    "write_region_gb": 3.44,
+    "assembly_peak_gb": 9.3,
+    "write_peak_gb": 12.7
   },
   "memory_measured_at_larger_run": {
-    "assembly_peak_gb": 9.393,
-    "write_peak_gb": 12.52
+    "assembly_peak_gb": 9.502,
+    "write_peak_gb": 12.745
   }
 }
