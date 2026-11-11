@@ -642,6 +642,59 @@ run `run` from a detached worktree of that commit (`git worktree add --detach`)
 with `PYTHONPATH` set to it and `python -P`, so its package is imported
 instead of the checkout's and the artifact names its commit.
 
+**Since #430** completion fills each Analysis only inside its regions, so
+OGS-00006, whose Analyses have no Trait position, runs with its bundle's region
+table, `run --regions .../stores/OGS-00006/sidecars/sparse_regions.tsv`, from
+an Observed-Only source (the published Store is now Reference-Completed). A run
+given a table adds `region_accounting`: per completed Analysis, its significant
+regions and their extent on the run's panel, and the cells completion added it,
+read back from both Stores and tested against the table here rather than by the
+package's own region code; `added_outside_regions` and `observed_rows_lost` must
+be 0. `regions-projection` counts, for every Analysis, the panel variants inside
+its regions that it does not observe, which is what a completion adds it: on a
+run's panel it is checked against that run, Analysis by Analysis
+(`checked_against_run.disagreeing` must be empty), and on the full panel it is
+the full Store's cells, the `--full-fills` for `project`. The #430 artifacts are
+`regions-*.json` in the same directory.
+
+The chr15-22 panel holds the real panel's chromosome directories 15 to 22, linked,
+and nothing else; `STORES` is a checkout of opengwasdb-stores, whose bundle holds
+the region table.
+
+```bash
+STORES=path/to/opengwasdb-stores
+TABLE=$STORES/stores/OGS-00006/sidecars/sparse_regions.tsv
+SRC=/data/opengwasdb/stores/OGS-00006/replaced/20261023T230254Z/store.opengwasdb
+PANEL=/data/opengwasdb/work/odb430/panel-chr15-22
+OUT=docs/benchmark-output/ragged_completion_streams
+mkdir -p $PANEL/EUR
+for c in $(seq 15 22); do ln -sfn /data/opengwasdb/reference/ld/EUR/$c $PANEL/EUR/$c; done
+for n in 25 100; do
+  /usr/bin/time -v pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py \
+      run --source $SRC --regions $TABLE --n-analyses $n --n-workers 16 --ld-dir $PANEL \
+      --dest /data/opengwasdb/work/odb430/runs/head-$n.opengwasdb --output $OUT/regions-head-$n.json
+done
+for panel in $PANEL /data/opengwasdb/reference/ld; do
+  pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py regions-projection \
+      --source $SRC --regions $TABLE --ld-dir $panel --run $OUT/regions-head-100.json \
+      --output $OUT/regions-projection-$(basename $panel).json
+done
+# The full Store's shape: 1,038,245 cells over 1,286 blocks, one batch.
+pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py shard-append \
+    --analyses 6 --fills-per-block 135 --batches 1 --output $OUT/regions-shard-append.json
+pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py project \
+    $OUT/regions-head-25.json $OUT/regions-head-100.json \
+    --full-fills 1038245 --full-checkpoints 1286 \
+    --shard-append $OUT/regions-shard-append.json --batch-peak $OUT/batch-peak.json \
+    --output $OUT/regions-projection-phase3.json
+```
+
+On OGS-00006 the full Store adds 1,038,245 cells (`regions-projection-ld.json`),
+where its first completion added 10,001,552,498; the subsets imputed every cell
+they added. `project`'s Phase 3 time is a line through two runs 17,191 fills
+apart, both carrying the same 58M observed rows, so host noise sets its slope:
+read its 2,074 s as an upper bound beside the 241 s the 100-Analysis run took.
+
 ### `benchmark_store_comparison.py`
 
 Compares several Store Releases holding **the same data in different physical
