@@ -44,17 +44,21 @@ def test_a_table_refuses_columns_of_different_lengths() -> None:
 
 
 def test_partners_refuses_an_indptr_that_does_not_end_at_its_entries() -> None:
+    one = np.array([5], dtype=np.int64)
     ok = Partners(
-        indptr=np.array([0, 1, 1], dtype=np.int64),
-        partner=np.array([5], dtype=np.int64),
-        r=np.array([0.5]),
+        indptr=np.array([0, 1, 1], dtype=np.int64), partner=one, r=np.array([0.5]), distance=one
     )
     assert len(ok) == 2
     with pytest.raises(ValueError, match="indptr"):
         Partners(
-            indptr=np.array([0, 2], dtype=np.int64),
-            partner=np.array([5], dtype=np.int64),
+            indptr=np.array([0, 2], dtype=np.int64), partner=one, r=np.array([0.5]), distance=one
+        )
+    with pytest.raises(ValueError, match="distance"):
+        Partners(
+            indptr=np.array([0, 1], dtype=np.int64),
+            partner=one,
             r=np.array([0.5]),
+            distance=np.array([5, 6], dtype=np.int64),
         )
 
 

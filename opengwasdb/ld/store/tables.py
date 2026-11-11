@@ -57,24 +57,29 @@ class Variants:
 
 @dataclass(frozen=True)
 class Partners:
-    """Each of a list of variants' partners and their Stored r, in CSR form.
+    """Each of a list of variants' partners, their Stored r and distance, in CSR form.
 
     The partners of the i-th variant asked for are `partner[indptr[i]:indptr[i + 1]]`,
     as global Variant Set rows in ascending order, never the variant itself, with their
-    Stored r in `r` at the same offsets.
+    Stored r in `r` and their distance from it in bp, |p_partner − p_variant|, in
+    `distance` at the same offsets. The distance comes from the positions the reader
+    keeps, so a query filters on it without reading a string column (ogld#14).
     """
 
     indptr: npt.NDArray[np.int64]
     partner: npt.NDArray[np.int64]
     r: npt.NDArray[np.float64]
+    distance: npt.NDArray[np.int64]
 
     def __post_init__(self) -> None:
+        entries = len(self.partner)
         if (
-            len(self.partner) != len(self.r)
+            len(self.r) != entries
+            or len(self.distance) != entries
             or len(self.indptr) == 0
-            or self.indptr[-1] != len(self.partner)
+            or self.indptr[-1] != entries
         ):
-            raise ValueError("Partners: indptr must end at len(partner) == len(r)")
+            raise ValueError("Partners: indptr must end at len(partner) == len(r) == len(distance)")
 
     def __len__(self) -> int:
         return len(self.indptr) - 1
