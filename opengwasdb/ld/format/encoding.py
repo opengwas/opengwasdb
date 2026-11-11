@@ -140,7 +140,9 @@ class REncoding:
     def holds(self, codes: npt.ArrayLike) -> npt.NDArray[np.bool_]:
         """Where `codes` are codes of this encoding, |code| ≤ scale: the reserved code never is,
         and neither is a code past the scale, which would decode to |r̂| > 1 (spec §12)."""
-        values = np.asarray(codes).astype(np.int64)
+        # Compared in the codes' own dtype: every scale fits int16, and a validation block of 8 Mi
+        # codes would otherwise hold a 64 MiB copy (spec §12).
+        values = np.asarray(codes)
         return np.asarray((values >= -self.scale) & (values <= self.scale))
 
     def dequantise(self, codes: npt.ArrayLike) -> npt.NDArray[np.float64]:
