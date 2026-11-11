@@ -320,11 +320,12 @@ a time, the only write zarr makes without reading a shard back, and less than on
 to the next block. A row of the Proxy Index is complete when its own block arrives: its partners
 below it come from earlier blocks, its partners above from its own. So the index is written row by
 row too, carrying only the pairs whose later row is still to come. `partner` and `r` grow a whole
-shard at a time, and an index under one shard is written at its clipped shape at the end. What a
-build holds is a shard of each array and the pairs and unit vectors within `far_bp` of the rows
-being written, never a chromosome: on HGDP+1kGP EUR chr6, the MHC's, the band carry is 128 MiB and
-the index carry at most 33,869,608 pairs, 323 MiB. A store written in any blocks, on any number of
-threads, holds the same arrays.
+shard at a time, and an index under one shard is written at its clipped shape at the end. While
+a build writes its store it holds a shard of each array and the pairs and unit vectors within
+`far_bp` of the rows being written, never a chromosome. On HGDP+1kGP EUR chr6, the MHC's, the band
+carry is 128 MiB, the index carry at most 33,869,608 pairs (323 MiB), and the writing peaks at
+4.8 GB on 8 threads, against 31.4 GB when the writer held the chromosome. A store written in any
+blocks, on any number of threads, holds the same arrays.
 
 **Why zstd level 3.** int16 r codes are mostly sampling noise around 0, so they compress little,
 and the codec was chosen on measured ratio and speed. These are the measurements on EUR chr22's
