@@ -9,7 +9,7 @@ runs after.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import replace
 from pathlib import Path
 
@@ -360,10 +360,12 @@ def test_a_when_is_not_asked_behind_a_failed_prerequisite() -> None:
     assert result.skipped == {"b": ("a",), "c": ("a",)}
 
 
-def test_what_a_scan_held_for_its_folds_is_released_when_its_pass_ends() -> None:
-    """Held for the folds on the scan, not for the rest of the run: a rule after it
-    that wants the value reads it again."""
-    reads: list[str] = []
+def _holding_scan(reads: list[str]) -> tuple[Fold[int, int], Callable[[Target], int]]:
+    """A fold whose pass holds a value, and that value; `reads` records its reads.
+
+    The value is the array a real pass holds for its folds -- the Top-Hit Index's
+    tiers -- and the fold's total is that value plus the blocks it read.
+    """
     scan = _counting_scan([1, 2], [])
 
     def held(target: Target) -> int:
@@ -381,12 +383,44 @@ def test_what_a_scan_held_for_its_folds_is_released_when_its_pass_ends() -> None
         measure=lambda target, block: held(target) + block,
         judge=lambda target, total: [f"a: total {total}"],
     )
+    return fold, held
+
+
+def test_what_a_scan_held_for_its_folds_is_released_when_its_pass_ends() -> None:
+    """Held for the folds on the scan, not for the rest of the run: a rule after it
+    that wants the value reads it again."""
+    reads: list[str] = []
+    fold, held = _holding_scan(reads)
     later = Check(name="b", kinds=Kind.RELEASE, run=lambda target: [f"b: {held(target)}"])
 
     result = evaluate([fold, later], [RELEASE])
 
     assert result.errors == ["a: total 23", "b: 10"]
     assert reads == ["read", "read"]
+
+
+def test_what_a_scan_held_for_its_folds_is_released_before_they_are_judged() -> None:
+    """The read is over when the folds are judged, so what it held goes first.
+
+    On a full-size release the pass keeps 1.6 GiB for its folds -- chiefly the
+    Top-Hit Index's tiers -- and judging needs the totals and the small facts
+    kept beside them, not the arrays the measuring read (issue #387).
+    """
+    reads: list[str] = []
+    fold, held = _holding_scan(reads)
+    target = Target(Kind.RELEASE, "a release of its own")
+    judged: list[int] = []
+
+    def judge(target: Target, total: int) -> Iterable[str]:
+        judged.append(held(target))
+        return []
+
+    fold = replace(fold, judge=judge)
+    result = evaluate([fold], [target])
+
+    assert result.errors == []
+    assert judged == [10], "the judge still sees the value"
+    assert reads == ["read", "read"], "and reads it again: the pass released its own"
 
 
 def test_a_rule_that_cannot_judge_its_target_is_skipped_with_its_reason() -> None:

@@ -244,6 +244,104 @@ and accepts EAF in [0, 1].
   read untouched in one function (#56). `check-observed-view` is not a rule set
   here (#375).
 
+## Amendment: no rule reads the Dense EAF exception table whole (issue #387)
+
+Three rules read that table, and each read it whole or once per band. The table is
+one Zarr v3 shard of hundreds of millions of entries -- 237,027,522 on OGS-00016,
+1,136,991,041 on OGS-00011 -- so `[:]` is 2.7 GiB and 12.7 GiB of `int64` plus
+`float32`.
+
+- `encoding.eaf` loaded it to check that positions pair with values, are sorted and
+  unrepeated, and hold frequencies.
+- `subsets.indexed` loaded it to prove the index's copy was the primary's,
+  remapped, and `_remap_side_table` held several copies of it at once; the value
+  comparison then had the plane consult the table again for every band.
+- `side_tables.eaf_exceptions` held the flat position of every marked cell for the
+  whole association scan -- 1.14 billion of them, 8.5 GiB -- and its judge read
+  the whole table beside them, sorted them and set-differenced the two.
+
+**No consumer reads it whole.** The shard's inner chunks are 200,000 entries and
+Zarr reads them as byte ranges, so each rule streams what it needs and holds a
+page at most -- about 96 MB for the subset check, one page of 262,144 entries for
+the plan rule and the scan (all inside the 1 GiB budget above):
+
+- `encoding.eaf` walks the table a page at a time, carrying the last position
+  across the boundary, so sortedness, uniqueness and the value range are judged
+  where they were and its three findings keep their order.
+- `subsets.indexed` keeps the cells whose variant the subset holds -- 21,157,534
+  of them on OGS-00011's HapMap3 index -- compares that set with the index's own
+  table, and hands it to the value comparison keyed by the primary's flat
+  positions, so the table is not consulted again per band: 1,128 bands on
+  OGS-00016's HapMap3 subset, 2,114 on OGS-00011's.
+- `side_tables.eaf_exceptions` compares each block's marked cells against the span
+  of the table that block must occupy, as the scan reaches it. A block's cells are
+  one contiguous range of flat positions and the table is sorted by them, so its
+  entries are one contiguous span starting where the previous block's ended:
+  nothing but the running counts, the first position of each kind and one page's
+  tail is held.
+
+A table that is not sorted and unique, or whose values are not parallel with its
+positions, is the subset's finding rather than an exception that ends the rule
+before the entries after it are judged.
+
+**A pass still streams the table several times**, which is not the same as reading
+it whole: once in `encoding.eaf`, once in `side_tables.eaf_exceptions`, once in
+`subsets.indexed`, and once per band in the association scan's own decode. Each
+stream is bounded, and each rule needs its own view. Merging them into one pass is
+#314's, which moves the subset comparison onto the scan's bands; the subset check's
+own read is once per Indexed Variant Subset today, and a release carries one.
+
+The per-band consult the association scan makes when it decodes a band stays: a
+Dense band's exception cells are one contiguous span of the sorted table, so a
+band's lookup is one read of it already. A Dense grid reads the table in 4,756
+bands on OGS-00011, about 239,000 exception cells a band.
+
+A shared scan's folds are also judged after, not before, the 1.60 GiB the plain
+association scan holds for them is released -- chiefly the Top-Hit Index's tiers --
+so a judge words its findings from its total and from each tier's key and cell
+count, which are metadata, and reports exactly what it did before.
+
+Measured, each side's peak read from its own `VmHWM`:
+
+| | base `df000b4` | head, round 1 | head, round 2 |
+|---|---|---|---|
+| OGS-00016's HapMap3 subset, the subset rule's high-water mark | 12.12 GiB | 0.60 GiB | |
+| OGS-00011's HapMap3 subset, the subset rule's high-water mark | 57.37 GiB | 1.60 GiB | |
+| OGS-00011's HapMap3 subset, one comparison band | 26.4 s | 14.6 s | |
+| OGS-00016, a full `validate`, wall time | 21,056 s | 20,436 s | |
+| OGS-00016, a full `validate`, peak RSS | 14.55 GiB | 3.92 GiB | |
+| OGS-00011, a full `validate`, wall time | 40,998 s | 33,219 s | 32,279 s |
+| OGS-00011, a full `validate`, peak RSS | 68.53 GiB | 18.15 GiB | 8.30 GiB |
+
+The two full runs on each Store were started at the same moment, so they saw the
+same load; the round-2 run on OGS-00011 is head alone, against a base figure
+measured on the same Store. Base's OGS-00016 peak rises from 4.88 GiB at 16:59:16 to 14.55 GiB at 16:59:46, a
+window that holds both the side-table judge's whole read and the subset check's —
+16:59:27 to 16:59:39, 12.12 GiB on its own — so the samples cannot say which of
+the two took it over the other. Round 1's peaks are reads of the table: 3.92 GiB
+is the plan rule's read of the 2.65 GiB table on OGS-00016, and 18.15 GiB its read
+of the 12.7 GiB one on OGS-00011. After round 2 pages that read, nothing head does
+reads the table whole: its 8.30 GiB is the Dense association scan's own working
+set, 8.10 GiB of it reached two minutes into that scan and 0.2 GiB gained over the
+four hours that followed.
+
+`validate`'s report is the same to the byte across base and head on OGS-00011 and on
+every published Store and fixture this change was run over; on OGS-00016 it differs
+by one record, 355-build's `side_tables.se_exceptions_rounded` warning, which
+`df000b4` predates. **The one report that did change is a release no earlier
+version could judge.** A release whose own EAF exception table is disordered,
+duplicated or unpaired used to abort the rule, in `EafExceptionTable.__post_init__`,
+with `validation failed: eaf exception table index must be sorted and unique` or
+`… index and value must be parallel 1-D arrays`, and `_eaf_reference` never ran. It
+now gets a finding — `… eaf exception table is not sorted by position, or repeats
+one`, or `… eaf exception table has 3 positions but 2 values` — and the entries
+after it are still judged, which is round 1's "a corrupt table is a finding, not an
+abort".
+
+The paragraphs in "Time and memory" above that call the subset check's table read
+the peak of a full run, and that call the scan's held folds the reason its later
+stage starts higher, describe the code before this amendment.
+
 ## Alternatives considered
 
 - **`check(release)` over a caching release** (the ticket's sketch). Simple

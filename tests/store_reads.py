@@ -114,6 +114,28 @@ def times_read(counts: Counter[str], array: zarr.Array) -> float:
 
 
 @contextmanager
+def largest_read(monkeypatch: pytest.MonkeyPatch) -> Iterator[Counter[str]]:
+    """The most elements any one read returns, keyed by the array's store path.
+
+    `element_reads` says how many elements a pass read in total; this says how much
+    of an array it held at once, which is what a rule that pages through a table
+    instead of loading it is for.
+    """
+    sizes: Counter[str] = Counter()
+    for method in _SELECTIONS:
+        original = getattr(zarr.Array, method)
+
+        def wrapper(self: zarr.Array, *args: Any, _original: Any = original, **kwargs: Any) -> Any:
+            result = _original(self, *args, **kwargs)
+            sizes[array_key(self)] = max(sizes[array_key(self)], int(np.size(result)))
+            return result
+
+        monkeypatch.setattr(zarr.Array, method, wrapper)
+    yield sizes
+    monkeypatch.undo()
+
+
+@contextmanager
 def old_index_without_fields(
     monkeypatch: pytest.MonkeyPatch, names: tuple[str, ...]
 ) -> Iterator[None]:
