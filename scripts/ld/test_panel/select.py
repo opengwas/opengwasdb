@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ogld.format import NEAR_BP, dequantise, quantise
+from ogld.format import NEAR_BP, REncoding
 from test_panel import pcs as pc_file
 from test_panel import reference
 from test_panel.params import Params
@@ -78,7 +78,9 @@ def _far_pairs(
     )
     cov = pc_file.load(params, fam)[:, covariates]
     z = reference.residual_unit(g, cov, len(covariates))
-    hits = _strong_far(z, s.pos[got], params.t_far(len(fam), 10), params.far_bp)
+    hits = _strong_far(
+        z, s.pos[got], params.t_far(len(fam), 10), params.far_bp, REncoding(params.r_scale)
+    )
     chosen: list[int] = []
     for _, a, b in hits:
         pair = [got[a], got[b]]
@@ -99,14 +101,14 @@ def _thin(pos: np.ndarray, eligible: np.ndarray, bp: int) -> list[int]:
 
 
 def _strong_far(
-    z: np.ndarray, pos: np.ndarray, t_far: float, far_bp: int
+    z: np.ndarray, pos: np.ndarray, t_far: float, far_bp: int, encoding: REncoding
 ) -> list[tuple[float, int, int]]:
     """(-Stored r^2, a, b) for every 3 Mb < d <= far_bp pair reaching t_far, strongest first."""
     hits: list[tuple[float, int, int]] = []
     for a in range(len(pos)):
         lo = int(np.searchsorted(pos, pos[a] + NEAR_BP + 1))
         hi = int(np.searchsorted(pos, pos[a] + far_bp, side="right"))
-        q2 = dequantise(quantise(z[lo:hi] @ z[a])) ** 2
+        q2 = encoding.dequantise(encoding.quantise(z[lo:hi] @ z[a])) ** 2
         hits += [(-float(q2[b]), a, lo + int(b)) for b in np.flatnonzero(q2 >= t_far)]
     return sorted(hits)
 

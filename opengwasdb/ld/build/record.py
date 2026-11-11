@@ -22,7 +22,6 @@ import zarr
 
 from ogld.build.variant_set import PASSING_FILTERS
 from ogld.format import (
-    ENCODING,
     FORMAT_VERSION,
     T_FAR_Q,
     Adjustment,
@@ -32,6 +31,7 @@ from ogld.format import (
     PcCheck,
     PcDiagnostic,
     Provenance,
+    REncoding,
     Source,
     VariantFilters,
 )
@@ -166,14 +166,15 @@ def provenance(
     made: Made,
     measured: tuple[int, int, float, int],
     build: Build,
+    encoding: REncoding,
 ) -> Provenance:
     """The whole `ld_store` attribute. `measured` is what the build applied: (near_bp, far_bp,
     t_far, far code floor), so provenance records the threshold the Proxy Index was cut at,
-    computed once, never a second computation of it."""
+    computed once, never a second computation of it; and `encoding` the scale it was given."""
     near_bp, far_bp, far_t, floor = measured
     return {
         "format_version": FORMAT_VERSION,
-        "encoding": ENCODING.copy(),
+        "encoding": encoding.record(),
         "source": head.source,
         "panel": head.panel,
         "reference_assembly": "GRCh38",

@@ -44,7 +44,7 @@ from support import (
 
 import ogld
 from ogld import cli
-from ogld.format import far_code_floor, t_far
+from ogld.format import t_far
 
 PANEL_ID = "test-panel-hgdp1kgp-EUR"
 _WITH_A_LOCAL_PC: list[ogld.Provenance] = []
@@ -60,6 +60,7 @@ def inputs(k: int = support.K, **overrides: Any) -> ogld.BuildInputs:
         "panel_id": PANEL_ID,
         "ancestry": "EUR",
         "genotype_source": "HGDP+1kGP phased v2, the Test Panel's slice",
+        "r_scale": support.R_SCALE,
         "k": k,
         "info_min": None,
     }
@@ -115,8 +116,8 @@ def test_the_far_pairs_kept_are_the_reference_s(tmp_path_factory: pytest.TempPat
     expected = np.abs(far.code) >= support.FLOOR
     assert expected.any(), "the Test Panel must hold real Far Pairs at k = 10"
     assert (~expected).any(), "the Test Panel must hold 3–10 Mb pairs below t_far"
-    # Only a pair whose r × 32767 lies within float error of the rounding edge may differ.
-    edge = np.abs(np.abs(far.r) * 32767 - (support.FLOOR - 0.5)) < 1e-6
+    # Only a pair whose r × scale lies within float error of the rounding edge may differ.
+    edge = np.abs(np.abs(far.r) * support.R_SCALE - (support.FLOOR - 0.5)) < 1e-6
     assert ((kept == expected) | edge).all(), "a Far Pair was kept or dropped against the reference"
 
 
@@ -140,7 +141,8 @@ def test_the_provenance_records_what_was_built(tmp_path_factory: pytest.TempPath
     # PC Check keeps all ten on the Test Panel. If it does not, the reference must change.
     assert adjustment["covariates"] == [f"PC{i}" for i in range(1, 11)]
     assert provenance["t_far"] == support.T_FAR == t_far(771, 10)
-    assert provenance["far_code_floor"] == far_code_floor(support.T_FAR)
+    assert provenance["far_code_floor"] == support.FLOOR
+    assert provenance["encoding"]["r_scale"] == support.R_SCALE
     assert provenance["source"]["kind"] == "genotypes"
     # Exactly what build-inputs.md §6 applies; the Test Panel is sequenced, so no INFO floor.
     assert provenance["variant_filters"] == {
@@ -213,6 +215,7 @@ def test_ogld_build_writes_a_store_that_validates(tmp_path: Path) -> None:
     argv = ["build", str(out), "--pgen", str(PANEL.pgen), "--keep", str(PANEL.keep)]
     argv += ["--pcs", str(PANEL.pcs), "--pc-source", "the Test Panel's PC File"]
     argv += ["--panel-id", PANEL_ID, "--ancestry", "EUR", "--genotype-source", "Test Panel"]
+    argv += ["--r-scale", str(support.R_SCALE)]
     assert cli.main([*argv, "--info-min", "none"]) == 0
     assert not any(ogld.validate(out).values())
 
@@ -415,7 +418,7 @@ def test_seven_surviving_pcs_are_used_with_t_far_at_k7(
     assert adjustment["covariates"] == [f"PC{i}" for i in range(2, 9)]
     assert (adjustment["k_target"], adjustment["k_min"], adjustment["k"]) == (10, 5, 7)
     assert provenance["t_far"] == t_far(771, 7)
-    assert provenance["far_code_floor"] == far_code_floor(t_far(771, 7))
+    assert provenance["far_code_floor"] == support.FLOOR_K7
 
 
 def test_fewer_than_five_surviving_pcs_are_refused(

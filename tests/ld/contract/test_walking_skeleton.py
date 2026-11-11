@@ -63,7 +63,7 @@ def test_pairs_the_store_does_not_hold_read_as_nan() -> None:
 
 def test_the_test_store_can_be_written_again_at_k0(tmp_path: Path) -> None:
     StoreReader.open(support.TEST_STORE)
-    out = load_script("make_test_store").write_test_store(0, tmp_path / "k0")
+    out = load_script("make_test_store").write_test_store(0, tmp_path / "k0", support.R_SCALE)
     reader = StoreReader.open(out)
     assert reader.provenance["adjustment"]["k"] == 0
     got, expected = near_pair_r(reader, 0)
@@ -85,7 +85,7 @@ def test_the_script_writes_the_committed_test_store_again(tmp_path: Path) -> Non
     # Into tmp_path, never over the committed store: the ticket runs the script into
     # tests/data/test-panel/store/, and this holds the two to one set of arrays.
     StoreReader.open(support.TEST_STORE)
-    out = load_script("make_test_store").write_test_store(10, tmp_path / "again")
+    out = load_script("make_test_store").write_test_store(10, tmp_path / "again", support.R_SCALE)
     committed = arrays(zarr.open_group(support.TEST_STORE, mode="r"))
     again = arrays(zarr.open_group(out, mode="r"))
     assert committed, "the committed Test Store must hold arrays for this to mean anything"
