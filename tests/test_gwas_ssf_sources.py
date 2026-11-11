@@ -8,10 +8,12 @@ imputation score, whose rules the batch path reads in columns.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
+import batch_fixtures as shared
 import pytest
 import ssf_cases
 from test_allele_case import _ssf as _allele_case_ssf
@@ -159,14 +161,59 @@ def test_a_fixture_file_reads_as_it_reads_per_row(block: int | None, path: Path)
     _identical(make, path, scale)
 
 
+#: Files under `tests/fixtures/` that are not sources, each with why. Nothing else
+#: is exempt but a `.toml` Column Map, which maps a source and holds none.
+EXCUSED: dict[Path, str] = {}
+
+
+def unlisted_sources(root: Path, listed: Iterable[Path], excused: Iterable[Path]) -> list[Path]:
+    """Every file under ``root`` that is neither a `.toml` map, nor read above, nor
+    excused: whatever its name, since a reader gunzips a `.bgz` and reads a file
+    with no extension all the same."""
+    known = {*listed, *excused}
+    return sorted(
+        path for path in root.rglob("*")
+        if path.is_file() and path.suffix != ".toml" and path not in known
+    )
+
+
 def test_every_source_file_under_the_fixtures_directory_is_read_above() -> None:
-    """A GWAS-SSF or Column Map source added to `tests/fixtures/` that this module
-    does not list fails here, so the identity check cannot miss a new fixture."""
-    kept = {
-        path for path in FIXTURES.rglob("*")
-        if path.is_file() and path.suffix in (".tsv", ".gz", ".tsv.gz", ".txt", ".csv")
-    }
-    assert kept == set(FIXTURE_SOURCES)
+    """A source added to `tests/fixtures/` that this module neither lists nor
+    excuses (with a reason) fails here, so the identity check cannot miss it."""
+    assert unlisted_sources(FIXTURES, FIXTURE_SOURCES, EXCUSED) == []
+    assert all(EXCUSED.values()), "an excused fixture says why"
+    assert all(path.is_file() for path in [*FIXTURE_SOURCES, *EXCUSED])
+
+
+def test_the_guard_names_a_source_whatever_its_name(tmp_path: Path) -> None:
+    kept = tmp_path / "listed.tsv"
+    names = ["new.bgz", "new.tab", "new", "new.tsv.gz", "map.toml"]
+    for name in [kept.name, *names]:
+        (tmp_path / name).write_text("x", encoding="utf-8")
+    assert unlisted_sources(tmp_path, [kept], []) == [
+        tmp_path / name for name in sorted(names) if name != "map.toml"
+    ]
+    assert unlisted_sources(tmp_path, [kept], [tmp_path / "new.bgz"]) == [
+        tmp_path / name for name in sorted(names) if name not in ("map.toml", "new.bgz")
+    ]
+
+
+def test_the_shadow_refuses_batches_that_differ_from_the_associations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`shadow_gwas_ssf` re-reads every GWAS-SSF read of `test_readers` and
+    `test_effect_recovery` as batches; it must be able to fail."""
+    path = _readers_module(tmp_path)
+    batches = GwasSsfReader.stream_association_batches
+
+    def negated(self: GwasSsfReader, tally: StreamTally | None = None) -> Any:
+        return (replace(batch, z=-batch.z) for batch in batches(self, tally))
+
+    shared.shadow_gwas_ssf(monkeypatch)
+    assert len(list(GwasSsfReader(path).stream_associations())) == 2
+    monkeypatch.setattr(GwasSsfReader, "stream_association_batches", negated)
+    with pytest.raises(AssertionError, match="batches differ"):
+        list(GwasSsfReader(path).stream_associations())
 
 
 # ── a declared imputation score ──────────────────────────────────────────────

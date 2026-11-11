@@ -665,8 +665,10 @@ def stream_full_row_metrics(path: str | Path) -> Iterator[TabularMetricsRow]:
 # statistics are then formed as `row_statistics` forms them, from the cells
 # already parsed. Any other row -- one the rules refuse, whose refusal the tally
 # must name -- is read by `_tabular_row` from its own cells. A block with a quote,
-# a carriage return, a NUL or a byte outside ASCII, and a source with a declared
-# imputation score, go to the per-row reader whole.
+# a carriage return that ends no line, a NUL or a byte outside ASCII goes to the
+# per-row reader whole, with the rest of the source. A declared imputation score
+# is read in columns, and a block whose score pandas cannot read as `float()` does
+# is left to its rows.
 
 #: Decompressed bytes one block reads, 32 MiB (see `finngen._BLOCK_BYTES`).
 _BLOCK_BYTES = 1 << 25

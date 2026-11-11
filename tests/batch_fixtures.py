@@ -31,6 +31,10 @@ class RowsOnly:
 
     reader: Any
 
+    def __getattr__(self, name: str) -> Any:
+        """What the reader says of itself (its score column, say), not its batches."""
+        return getattr(self.reader, name)
+
     def stream_associations(
         self, tally: interface.StreamTally | None = None
     ) -> Iterator[interface.ReaderAssociation]:
@@ -102,7 +106,15 @@ def paired_builds(
 ) -> dict[str, tuple[Built, Built]]:
     """Each source built twice: once read row by row, once as batches by a
     reader that refuses to be read row by row. ``sources`` give each source's
-    writer and the assembly its manifest declares."""
+    writer, the assembly its manifest declares and, optionally, the column it
+    declares an imputation score in.
+
+    The registry builds a fresh reader when a score is declared, so the wrapper
+    that hides the batches is put where the registry makes its readers, under
+    both names. Each build must have read the way it is named for: the rows
+    build's reader class counts the sources it streamed as associations, and
+    none as batches.
+    """
     chain = write_alt_target_chain(root / "alt-target.chain")
     built: dict[str, tuple[Built, Built]] = {}
     with pytest.MonkeyPatch.context() as patch:
@@ -110,20 +122,44 @@ def paired_builds(
         for name, (write, assembly, *score) in sources.items():
             (root / name).mkdir()
             source = write(root / name)
+            reads = {"rows": 0, "batches": 0}
+            by_rows_method, by_batches_method = _counting(reader, reads)
             with pytest.MonkeyPatch.context() as hidden:
-                # The capability's own name, so its manifest rules still apply.
-                hidden.setitem(
-                    registry._READERS, capability,
-                    lambda path, scale: RowsOnly(reader(path, scale)),
-                )
+                hidden.setattr(reader, "stream_associations", by_rows_method)
+                hidden.setattr(reader, "stream_association_batches", by_batches_method)
+
+                def rows_only(path: Any, scale: Any, **declared: Any) -> RowsOnly:
+                    return RowsOnly(reader(path, scale, **declared))
+
+                hidden.setitem(registry._READERS, capability, rows_only)
+                if getattr(registry, reader.__name__, None) is reader:
+                    hidden.setattr(registry, reader.__name__, rows_only)
                 by_rows = build(root / name / "rows", capability, source, assembly, chain, *score)
+            assert reads == {"rows": 1, "batches": 0}, (name, reads)
             with pytest.MonkeyPatch.context() as refuse:
                 refuse.setattr(reader, "stream_associations", _refuse_rows)
+                refuse.setattr(reader, "stream_association_batches", by_batches_method)
                 by_batches = build(
                     root / name / "batches", capability, source, assembly, chain, *score
                 )
+            assert reads == {"rows": 1, "batches": 1}, (name, reads)
             built[name] = (by_rows, by_batches)
     return built
+
+
+def _counting(reader: type, reads: dict[str, int]) -> tuple[Any, Any]:
+    """``reader``'s two association streams, each counting the sources it read."""
+    rows, batches = reader.stream_associations, reader.stream_association_batches
+
+    def by_rows(self: Any, tally: Any = None) -> Any:
+        reads["rows"] += 1
+        return rows(self, tally)
+
+    def by_batches(self: Any, tally: Any = None) -> Any:
+        reads["batches"] += 1
+        return batches(self, tally)
+
+    return by_rows, by_batches
 
 
 def logs(record: Path) -> dict[str, bytes]:
@@ -175,3 +211,48 @@ def read_logging(
     with caplog.at_level(logging.WARNING, logger=module.__name__):
         list(batches())
     return fallbacks(caplog, module)
+
+
+def shadow_gwas_ssf(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Have every `GwasSsfReader.stream_associations` that follows also read its
+    source as batches, and refuse a difference in the associations (every float
+    bit for bit), the tally or the refusal.
+
+    The identity tests name their sources; this covers the sources a module's own
+    tests write and read, whatever they are, so a new one cannot be missed.
+    """
+    from opengwasdb.readers.gwas_ssf import GwasSsfReader
+
+    rows_of = GwasSsfReader.stream_associations
+    shadowing = [False]
+
+    def shadowed(self: Any, tally: interface.StreamTally | None = None) -> Any:
+        if shadowing[0]:
+            yield from rows_of(self, tally)
+            return
+        from test_finngen_batches import Read, _columns, _rows, _tally
+
+        read = tally if tally is not None else interface.StreamTally()
+        refused: Exception | None = None
+        try:
+            associations = list(rows_of(self, read))
+        except Exception as error:
+            refused, associations = error, []
+        shadowing[0] = True
+        batch_tally = interface.StreamTally()
+        try:
+            batches = list(self.stream_association_batches(batch_tally))
+            other = None if refused else Read(_columns(batches), _tally(batch_tally))
+            batch_refused: Exception | None = None
+        except Exception as error:
+            other, batch_refused = None, error
+        finally:
+            shadowing[0] = False
+        expected = None if refused else Read(_rows(associations), _tally(read))
+        assert type(refused) is type(batch_refused), (self.path, refused, batch_refused)
+        assert expected == other, f"batches differ from the associations of {self.path}"
+        if refused is not None:
+            raise refused
+        yield from associations
+
+    monkeypatch.setattr(GwasSsfReader, "stream_associations", shadowed)

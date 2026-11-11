@@ -125,6 +125,10 @@ them.**
       beside a padded token) leaves that block's rows to the per-row rules,
       which log how many; the source is not read row by row throughout.
       605 of OGS-00011's 3,169 Analyses (19%) declare one.
+      Five OGS-00011 sources read both ways with their declarations (103,471 to
+      10,764,138 rows; `info`, `INFO`, `imputed_r2`, 999 missing scores, 1,633,075
+      out of range) are identical, log no fallback, and read 6.0 to 8.7 times
+      faster in batches.
     - Pass 2 names no rsid, so the batch path never reads one: the rsid rules,
       compound and listed ids among them, are Pass 1's, as FinnGen's first-rsid
       rule is. The compound-id fixture is parse coverage only.
@@ -140,15 +144,18 @@ them.**
 
       | Source | Bytes a line | Rows | Batches | Largest batch | Peak resident |
       |---|---|---|---|---|---|
-      | GCST009926 (the narrowest) | 81 | 6,799,463 | 17 | 405,314 rows | 604 MiB |
-      | GCST009324 (the largest) | 130 | 17,343,104 | 70 | 252,697 rows | 553 MiB |
+      | GCST90205183 (OGS-00011's narrowest) | 66 | 8,312,193 | 17 | 492,330 rows | 601 MiB |
+      | GCST009926 (OGS-00004's narrowest) | 81 | 6,799,463 | 17 | 405,314 rows | 604 MiB |
+      | GCST009324 (OGS-00004's largest) | 130 | 17,343,104 | 70 | 252,697 rows | 553 MiB |
 
-      Both started from 155 MiB, and the per-row reader peaks at 161 MiB on
-      GCST009324. A worker therefore holds up to about 0.45 GiB more than when
-      it reads rows. OGS-00011 builds at 24 workers (`records/build.json`),
-      which is about 11 GiB more, and OGS-00012 to -16 at 16, about 7 GiB: under
-      6% of the 179 GiB a quarter of the host's available memory allowed when
-      measured. The bound is the block, not the source, whatever the line width.
+      Each started from 155 MiB, and the per-row reader peaks at 161 MiB on
+      GCST009324. The most a worker held more than when it read rows is
+      604 − 161 = 443 MiB, 0.43 GiB. OGS-00011 builds at 24 workers
+      (`records/build.json`), which is 10.4 GiB more (5.8% of the 179 GiB a
+      quarter of the host's available memory allowed when measured), and
+      OGS-00012 to -16 at 16, 6.9 GiB (3.9%). The bound is the block, not the
+      source: narrower lines raise a batch's rows (492,330 here) and leave its
+      bytes where they were.
     - Rebuilding OGS-00004, Pass 2 takes about 21 s an Analysis against about
       124 s (two pairs, side by side), and the Store, the Admission record and
       every dropped-row log are identical.
