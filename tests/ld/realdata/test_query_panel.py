@@ -32,6 +32,7 @@ from test_build_panel import HGDP_SCALE, eur_keep, inputs, v2_slice
 
 import ogld
 from ogld.format import REncoding
+from ogld.identity import alid_locus
 from ogld.query.results import strongest_first
 
 KB = 3000
@@ -73,7 +74,9 @@ def explained(
 ) -> int:
     """The number of pairs that explain the difference, after the rule has accepted them."""
     alid = [a for a, _ in hits]
-    position = np.array([int(a.split(":")[1]) for a in alid], dtype=np.int64)
+    loci = [alid_locus(a) for a in alid]
+    assert all(locus is not None and locus[0] == "22" for locus in loci), "hits are chr22 ALIDs"
+    position = np.array([locus[1] for locus in loci if locus is not None], dtype=np.int64)
     key = [strongest_first(z, "22", position[i], a) for i, (a, z) in enumerate(hits)]
     order = sorted(range(len(alid)), key=key.__getitem__)
     got = clump_rule.explain(

@@ -25,25 +25,22 @@ the other side of the threshold, and is within the store's own encoding band.
 
 from __future__ import annotations
 
-import hashlib
 import json
+import math
 import os
 from pathlib import Path
 
+import clump_rule
+import make_403_inputs as maker
 import numpy as np
 import pytest
 
 import ogld
 from ogld.format import REncoding
+from ogld.identity import alid_locus
 
 EXPLAINED_FILE = Path(__file__).with_name("explained_differences.json")
 KB = 3000
-
-
-def provenance_sha256(store: ogld.LDStore) -> str:
-    """A hash of the store's provenance as recorded: it names the build, not just the panel."""
-    text = json.dumps(dict(store.provenance), sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def named(variable: str, what: str) -> Path:
@@ -55,8 +52,12 @@ def named(variable: str, what: str) -> Path:
     return Path(value)
 
 
-def positions(alid: str, other: str) -> int:
-    return abs(int(alid.split(":")[1]) - int(other.split(":")[1]))
+def distance(alid: str, other: str) -> float:
+    """The bp between two ALIDs on one chromosome; infinite across chromosomes (no pair there)."""
+    here, there = alid_locus(alid), alid_locus(other)
+    assert here is not None, f"{alid} must be an ALID"
+    assert there is not None, f"{other} must be an ALID"
+    return abs(here[1] - there[1]) if here[0] == there[0] else math.inf
 
 
 def check_pair(store: ogld.LDStore, case: dict, pair: dict, differing: set[str]) -> None:
@@ -64,14 +65,32 @@ def check_pair(store: ogld.LDStore, case: dict, pair: dict, differing: set[str])
     a, b, r2 = pair["a"], pair["b"], case["r2"]
     where = f"{case['analysis']} at {r2}: {pair}"
     assert {a, b} & differing, f"{where} touches no differing lead"
-    assert positions(a, b) < KB * 1000, f"{where} is not within the window"
+    assert distance(a, b) < KB * 1000, f"{where} is not within the window"
     held = store.matrix([a, b])
     assert held.absent == (), f"{where} is not in the store"
     r = float(held.r[0, 1])
     assert r * r == pytest.approx(pair["store_r2"], abs=1e-7), f"{where}: the store holds {r * r}"
     assert (pair["store_r2"] > r2) != (pair["plink2_r2"] > r2), f"{where} is not on the threshold"
     e = REncoding.of(store.provenance["encoding"]).max_error
-    assert abs(r * r - r2) <= 2 * abs(r) * e + e * e, f"{where} is outside the store's band"
+    assert clump_rule.within_band(r, r2, e), f"{where} is outside the store's band"
+
+
+def test_the_inputs_say_which_store_and_keep_file_they_were_made_from() -> None:
+    """The pins `make_403_inputs.py` writes are read here: inputs without them, or made from
+    another store, keep file, or plink2, are refused, not compared."""
+    store = ogld.open(named("OGLD_EUR_K0_STORE", "the k = 0 EUR LD Store"))
+    root = named("OGLD_403_ANALYSES", "#403's 37 Analyses with plink2's leads")
+    manifest = json.loads((root / "manifest.json").read_text())
+    for key in ("opengwasdb_sha", "plink2_version", "provenance_sha256", "keep_sha256"):
+        assert manifest.get(key), f"manifest.json has no {key}: remake the inputs with the script"
+    assert manifest["provenance_sha256"] == maker.provenance_sha256(store.provenance), (
+        "the inputs were made from another store than this one"
+    )
+    assert manifest["keep_sha256"] == store.provenance["panel"]["samples_sha256"]
+    prepared = json.loads((root.parent / "EUR-k0.plink2" / "pins.json").read_text())
+    assert prepared["provenance_sha256"] == manifest["provenance_sha256"]
+    assert prepared["keep_sha256"] == manifest["keep_sha256"]
+    assert prepared["plink2_version"] == manifest["plink2_version"]
 
 
 @pytest.mark.parametrize("r2", [0.01, 0.001])
@@ -81,7 +100,7 @@ def test_leads_equal_plink2_s_on_403_s_37_analyses(r2: float) -> None:
     assert store.provenance["adjustment"]["k"] == 0, "the comparison is with unadjusted LD"
     snapshot = json.loads(EXPLAINED_FILE.read_text())
     assert snapshot["store"]["encoding"] == store.provenance["encoding"], "another encoding"
-    assert snapshot["store"]["provenance_sha256"] == provenance_sha256(store), (
+    assert snapshot["store"]["provenance_sha256"] == maker.provenance_sha256(store.provenance), (
         f"{EXPLAINED_FILE.name} was made on another store than {store.provenance['build']}"
     )
     analyses = sorted(path for path in root.iterdir() if path.is_dir())
