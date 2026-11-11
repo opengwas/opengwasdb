@@ -113,19 +113,31 @@ def put_numbers(
     shape: tuple[int, int] = SIDE,
 ) -> zarr.Array[Any]:
     """Create the numeric array `name` (bytes, then zstd level 3) and write all of `data`."""
-    inner, shard = clipped(len(data), *shape)
-    array = group.create_array(
+    array = new_numbers(group, name, len(data), data.dtype, fill, shape)
+    if len(data):
+        array[:] = data
+    return array
+
+
+def new_numbers(
+    group: zarr.Group,
+    name: str,
+    length: int,
+    dtype: npt.DTypeLike,
+    fill: float | int,
+    shape: tuple[int, int] = SIDE,
+) -> zarr.Array[Any]:
+    """A numeric array `name` of `length` with nothing written: every chunk reads `fill`."""
+    inner, shard = clipped(length, *shape)
+    return group.create_array(
         name,
-        shape=data.shape,
-        dtype=data.dtype,
+        shape=(length,),
+        dtype=dtype,
         chunks=(inner,),
         shards=(shard,),
         compressors=[ZstdCodec(level=3)],
         fill_value=fill,
     )
-    if len(data):
-        array[:] = data
-    return array
 
 
 def put_strings(group: zarr.Group, name: str, data: npt.NDArray[np.str_]) -> zarr.Array[Any]:

@@ -1,13 +1,13 @@
-"""The whole path, once: Test Panel pgen → k = 0 Near Band → `StoreWriter` → `ogld.open` → one pair.
+"""The whole path, once: Test Panel pgen → k = 0 r → `StoreWriter` → `ogld.open` → one pair.
 
-Nothing in it comes from `reference_r` except the expected value: the codes the store answers with
-were computed from the pgen's genotypes, read by `ogld.build.genotypes`, by this file's own plain
-k = 0 band (`k0_near_band`), not by the builder's tiles.
+Nothing in it comes from `reference_r` except the expected value. The r the store is made from was
+computed from the pgen's genotypes, read by `ogld.build.genotypes`, by this file's own plain k = 0
+product (`k0_r`), not by the builder's tiles. The store makes its Near Band and Proxy Index from it
+(ogld#17); no index is built here.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import build_fixtures as fx
@@ -16,56 +16,21 @@ import numpy.typing as npt
 import pytest
 import testdata
 from script_modules import load_script
-from store_copies import FLOOR_K0, HALF_STEP, R_SCALE, codes_at
+from store_copies import HALF_STEP, R_SCALE
 
 import ogld
-from ogld.format import FAR_BP, NEAR_BP, REncoding, near_row_lengths
-from ogld.format.geometry import indptr_of, stop_within
+from ogld.format import FAR_BP, NEAR_BP, REncoding
 from ogld.store import StoreReader, StoreWriter, Variants
 
 
-@dataclass(frozen=True)
-class NearBand:
-    """One chromosome's Near Band as `StoreWriter.write_near` takes it: row l's codes are
-    `codes[indptr[l]:indptr[l + 1]]`, its partners l + 1, l + 2, …"""
-
-    indptr: npt.NDArray[np.int64]
-    codes: npt.NDArray[np.int16]
-
-    @property
-    def lengths(self) -> npt.NDArray[np.int64]:
-        return np.diff(self.indptr)
-
-
-def k0_near_band(
-    alt: npt.NDArray[np.int8], a1_is_alt: npt.NDArray[np.bool_], positions: npt.NDArray[np.int64]
-) -> NearBand:
-    """The k = 0 Near Band, written out plainly from standardised A1 dosages: this test's own
-    oracle for the path, where `ogld.build` tiles the same product."""
+def k0_r(alt: npt.NDArray[np.int8], a1_is_alt: npt.NDArray[np.bool_]) -> npt.NDArray[np.float64]:
+    """The k = 0 r of every pair, signed to A1, written out plainly from standardised A1 dosages:
+    this test's own computation of what `ogld.build` tiles."""
     z = alt - alt.mean(axis=1, keepdims=True)
     z /= np.sqrt((z * z).sum(axis=1, keepdims=True))
     z[~a1_is_alt] *= -1
-    stop = stop_within(positions, NEAR_BP)
-    indptr = indptr_of(near_row_lengths(positions, NEAR_BP))
-    codes = np.concatenate([codes_at(z[i] @ z[i + 1 : stop[i]].T) for i in range(len(z))])
-    return NearBand(indptr, codes.astype(np.int16))
-
-
-def band_index(
-    band: NearBand, start: int, size: int, floor: int
-) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.int16]]:
-    """The Proxy Index of a chromosome whose pairs are the Near Band's: both directions."""
-    rows = np.repeat(np.arange(size), np.diff(band.indptr))
-    cols = np.concatenate([np.arange(r + 1, r + 1 + n) for r, n in enumerate(np.diff(band.indptr))])
-    keep = np.abs(band.codes.astype(np.int32)) >= floor
-    a, b, c = (
-        np.concatenate([rows[keep], cols[keep]]),
-        np.concatenate([cols[keep], rows[keep]]),
-        (np.concatenate([band.codes[keep], band.codes[keep]])),
-    )
-    order = np.lexsort((b, a))
-    indptr = np.concatenate([[0], np.cumsum(np.bincount(a, minlength=size))]).astype(np.int64)
-    return indptr, b[order].astype(np.int64) + start, c[order]
+    r: npt.NDArray[np.float64] = z @ z.T
+    return r
 
 
 def test_a_pair_from_the_pgen_is_answered_by_the_store_it_wrote(tmp_path: Path) -> None:
@@ -86,22 +51,23 @@ def test_a_pair_from_the_pgen_is_answered_by_the_store_it_wrote(tmp_path: Path) 
         a2=v.a2[on22],
         a1_frequency=v.a1_frequency[on22],
     )
-    band = k0_near_band(script.alt_counts(rows), vs.sign[on22] > 0, table.position)
-    encoding = REncoding(R_SCALE)
     out = tmp_path / "walk"
     writer = StoreWriter.create(
-        out, variants=table, near_bp=NEAR_BP, far_bp=FAR_BP, encoding=encoding
+        out,
+        variants=table,
+        encoding=REncoding(R_SCALE),
+        near_bp=NEAR_BP,
+        far_bp=FAR_BP,
+        n=testdata.panel().n_samples,
+        k=0,
     )
-    writer.write_near(0, band.lengths, band.codes)
-    indptr, partner, codes = band_index(band, 0, len(table), FLOOR_K0)
-    writer.write_index("22", indptr, partner, codes)
-    counts = (len(band.codes), 0, 0, len(partner))
-    build = script.build_record(0.0)
+    writer.write(writer.cut(0, k0_r(script.alt_counts(rows), vs.sign[on22] > 0)))
     sub = script.VariantSet(rows, table, vs.sign[on22], 0)
     # finish validates (spec §12), and a genotypes store's pc_diagnostic is never null: this one
     # is the Test Panel's own, measured at k = 0 on its chr21 × chr22 pairs.
     diagnostic = script.pc_diagnostic(vs, 0)
-    writer.finish(script.provenance(0, sub, counts, diagnostic, build, encoding))
+    written = writer.finish(script.sourced(0, sub, diagnostic, script.build_record(0.0)))
+    assert written["counts"]["far_pairs"] > 0, "the store found Far Pairs in the r it was given"
 
     store = ogld.open(out)
     ref = testdata.reference_r(0)

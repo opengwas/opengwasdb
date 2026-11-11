@@ -34,6 +34,7 @@ from ogld.format.provenance import (
     PcScan,
     Provenance,
     Source,
+    Sourced,
     SourceKind,
     VariantFilters,
 )
@@ -77,6 +78,7 @@ __all__ = [
     "RefusalReason",
     "Source",
     "SourceKind",
+    "Sourced",
     "VariantFilters",
     "answer_kind",
     "answer_kinds",
