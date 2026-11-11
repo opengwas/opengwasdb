@@ -38,4 +38,5 @@ RD=/data/opengwasdb/work/ogld/realdata
 export OGLD_EUR_K0_STORE="${OGLD_EUR_K0_STORE:-$RD/EUR-k0.store}"
 export OGLD_403_ANALYSES="${OGLD_403_ANALYSES:-$RD/403-analyses}"
 
-exec pytest -m realdata --timeout=300 -rfEx -p no:cacheprovider "${PREFLIGHT[@]}" "$@"
+# The comparison clumps 37 Analyses on 8.6M variants: about 49 min at r² 0.01 and 24 min at 0.001.
+exec pytest -m realdata --timeout=7200 -rfEx -p no:cacheprovider "${PREFLIGHT[@]}" "$@"
