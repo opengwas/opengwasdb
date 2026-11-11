@@ -29,7 +29,15 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import ENCODING, FORMAT_VERSION, RESERVED_CODE, InputError, Provenance, dequantise
+from ogld.format import (
+    ENCODING,
+    FORMAT_VERSION,
+    RESERVED_CODE,
+    InputError,
+    Provenance,
+    dequantise,
+    judge_window,
+)
 from ogld.format.geometry import (
     blocks,
     chromosome_index,
@@ -260,25 +268,29 @@ class StoreReader:
         reader's. `among`, ascending distinct global rows, keeps only the partners in it:
         `clump` passes the hits still unclumped, so it resolves only the pairs it needs.
 
-        The reader, not its caller, chooses the stored part, so no query branches on t_far:
+        A request `ogld.format.judge_window` refuses is refused here, by it, with its
+        `Refusal`: a window past far_bp, or past near_bp below t_far, where a short answer would
+        read as a complete one (§9). The reader never decides that rule itself. Of an answered
+        window it chooses the stored part, so no query branches on t_far:
 
         - r2 ≥ t_far: each row's Proxy Index row, both sides in one piece, and no Near Band
           chunk. The index holds every pair within far_bp at r̂² ≥ t_far (§5), so it misses
-          none. A window over far_bp raises: past it is Not Measured, and a short answer
-          would read as a complete one.
-        - r2 < t_far: the Near Band alone, which holds every pair within near_bp (§4). A
-          window over near_bp raises: past it the store holds only the Bound, which cannot
-          decide r̂² ≥ r2 (§9, `threshold_below_t_far`). Without `among`, each row's Near
-          Band row up to the window and its column within it; with `among`, one element of
-          `near/<c>/r` per pair of a row and a member of `among` within the window, and
-          nothing else.
+          none.
+        - r2 < t_far: the Near Band alone, which holds every pair within near_bp (§4). Without
+          `among`, each row's Near Band row up to the window and its column within it; with
+          `among`, one element of `near/<c>/r` per pair of a row and a member of `among` within
+          the window, and nothing else.
 
         Memory: the kept entries, 32 bytes each, and one block of at most `_PAIRS_PER_STEP`
         entries read before they are judged.
         """
         p = self._provenance
+        judge_window(
+            r2=r2, window_bp=window_bp, t_far=p["t_far"], near_bp=p["near_bp"], far_bp=p["far_bp"]
+        ).raise_if_refused()
         index = r2 >= p["t_far"]
-        reach = _reach(window_bp, p["far_bp"] if index else p["near_bp"], index)
+        # d ≤ W is d ≤ ⌊W⌋ for a whole d; the window is answered, so ⌊W⌋ is within the part.
+        reach = math.floor(window_bp)
         listed = None if among is None else self._listed(among)
         read: _Read
         estimate: _Estimate = partial(_window_rows, reach=reach)
@@ -638,24 +650,6 @@ _RowEntries = tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np
 #: entries before they are judged, which sizes the blocks `partners` reads.
 _Read = Callable[["_Chromosome", npt.NDArray[np.int64]], _RowEntries]
 _Estimate = Callable[["_Chromosome", npt.NDArray[np.int64]], npt.NDArray[np.int64]]
-
-
-def _reach(window_bp: float, limit: int, index: bool) -> int:
-    """The farthest distance in whole bp a window of `window_bp` takes in: d ≤ window_bp is
-    d ≤ ⌊window_bp⌋ for a whole d. Refused past what the chosen part holds every pair of,
-    which `judge_request` refuses first (spec §9): a short answer would read as complete."""
-    reach = math.floor(window_bp)
-    if not 0 <= reach <= limit:
-        part, beyond = (
-            ("the Proxy Index, to far_bp", "Not Measured")
-            if index
-            else ("the Near Band, to near_bp", "only the Bound")
-        )
-        raise ValueError(
-            f"a window of {window_bp} bp is outside {part} ({limit} bp): past it the store "
-            f"holds {beyond}, and a partial answer would read as a whole one (spec §9)"
-        )
-    return reach
 
 
 def _index_length(c: _Chromosome, local: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:

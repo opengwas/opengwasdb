@@ -27,7 +27,7 @@ from numpy.dtypes import StringDType
 from store_copies import TEST_STORE, copy_store, resharded
 
 import ogld
-from ogld.format import InputError, quantise
+from ogld.format import InputError, Refusal, RefusalReason, judge_request, quantise
 from ogld.query import clumping
 from ogld.query import proxies as proxies_query
 from ogld.store import StoreReader, location, reader
@@ -164,14 +164,40 @@ def test_partners_are_the_reference_pairs_at_r2_within_the_window(
     assert len(got.partner) > 500, "many partners in all"
 
 
-def test_partners_refuses_a_window_past_the_part_it_reads() -> None:
+@pytest.mark.parametrize(
+    ("r2", "window_bp", "reason"),
+    [
+        (0.01, 3_000_000.9, RefusalReason.THRESHOLD_BELOW_T_FAR),
+        (0.01, 3_000_001, RefusalReason.THRESHOLD_BELOW_T_FAR),
+        (0.5, 10_000_000.5, RefusalReason.WINDOW_OVER_FAR),
+        (0.5, -1.0, RefusalReason.INVALID),
+        (1.5, 1000.0, RefusalReason.INVALID),
+    ],
+)
+def test_partners_refuses_what_judge_request_refuses(
+    r2: float, window_bp: float, reason: RefusalReason
+) -> None:
+    # One rule (spec §9): the reader asks ogld.format, so a window 0.9 bp past near_bp below
+    # t_far is refused there as it is by judge_request, not answered to ⌊W⌋ (ogld#14).
+    t_far = StoreReader.open(TEST_STORE).provenance["t_far"]
+    judged = judge_request(r2=r2, kb=window_bp / 1000, t_far=t_far, near_bp=3_000_000,
+                           far_bp=10_000_000)  # fmt: skip
+    assert judged.refusal is reason, "judge_request refuses it so"
+    with pytest.raises(Refusal) as refused:
+        StoreReader.open(TEST_STORE).partners(np.array([10, 600]), r2=r2, window_bp=window_bp)
+    assert refused.value.reason is reason
+
+
+def test_partners_answers_exactly_near_bp_below_t_far_and_far_bp_above() -> None:
     reader = StoreReader.open(TEST_STORE)
     rows = np.array([10, 600])
-    assert len(reader.partners(rows, r2=0.01, window_bp=3_000_000.9).indptr) == 3, "3 Mb is in"
-    with pytest.raises(ValueError, match="Not Measured"):
-        reader.partners(rows, r2=0.5, window_bp=10_000_001)
-    with pytest.raises(ValueError, match="only the Bound"):
-        reader.partners(rows, r2=0.01, window_bp=3_000_001)
+    assert len(reader.partners(rows, r2=0.01, window_bp=3_000_000).indptr) == 3
+    assert len(reader.partners(rows, r2=0.5, window_bp=10_000_000).indptr) == 3
+
+
+def test_partners_refuses_a_list_that_is_not_ascending_distinct_rows() -> None:
+    reader = StoreReader.open(TEST_STORE)
+    rows = np.array([10, 600])
     with pytest.raises(ValueError, match="ascending, distinct"):
         reader.partners(rows, r2=0.5, window_bp=1000, among=np.array([5, 5]))
     with pytest.raises(ValueError, match="Absent ALID"):
