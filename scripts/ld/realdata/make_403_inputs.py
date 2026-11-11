@@ -516,8 +516,8 @@ def unphased_r2(pfile: Path, alids: Sequence[str], work: Path) -> Any:
     (work / "r2.ids").write_text("".join(f"{a}\n" for a in alids))
     run([plink2_exe(), "--pfile", pfile, "--extract", work / "r2.ids", "--r2-unphased", "square",
          "--threads", 1, "--memory", 4000, "--out", work / "r2"])  # fmt: skip
-    names = (work / "r2.vcor.vars").read_text().split()
-    matrix = np.loadtxt(work / "r2.vcor", ndmin=2)
+    names = (work / "r2.unphased.vcor2.vars").read_text().split()
+    matrix = np.loadtxt(work / "r2.unphased.vcor2", ndmin=2)
     where = {name: i for i, name in enumerate(names)}
     order = [where[a] for a in alids]
     return matrix[np.ix_(order, order)]
