@@ -2,9 +2,10 @@
 
 On an unadjusted (k = 0) HGDP+1kGP EUR LD Store, `clump` gives the same lead variants as
 `plink2 --clump` for opengwas/opengwasdb#403's 37 EUR Analyses, the 5e-8 tier of each, at r²
-0.01 and 0.001 with a 3 Mb window. It reads 8.6 M variants and takes about 25 minutes, so it is an
-acceptance run, not part of the realdata tier: `pixi run -e dev acceptance-clump`
-(CONTRIBUTING.md, "Acceptance runs"). Its result is recorded on the ticket.
+0.01 and 0.001 with a 3 Mb window. It reads 8.6 M variants and takes about an hour (25 minutes on
+ogld#14's partner reads), so it is an acceptance run, not part of the realdata tier:
+`pixi run -e dev acceptance-clump` (CONTRIBUTING.md, "Acceptance runs").
+Its result is recorded on the ticket.
 
 Two inputs, named by environment variables that `tests/acceptance/run.sh` passes on:
 
