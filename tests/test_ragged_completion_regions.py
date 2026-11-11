@@ -27,6 +27,7 @@ block  extent       observed                           panel-only
 from __future__ import annotations
 
 import gzip
+import json
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -297,6 +298,66 @@ def test_every_added_row_lies_inside_a_region_of_its_analysis(tabled):
         rows = completed_rows(completed, analysis, source)
         assert sorted(a for a in rows.added if not within(a, *regions)) == [], analysis
         assert rows.imputed | rows.missing >= rows.added
+
+
+
+# --- a panel row no ALID names, outside the regions ---------------------------
+
+#: Per chromosome, a panel indel no ALID names (its panel declares no reference, ADR
+#: 0079): in block 1 outside the cis row, and in block 2 outside the significant region.
+UNNAMED = {"1": 1_240_000, "2": 380_000}
+
+
+def _add_unnamed_rows(panel: Path) -> Path:
+    """`_write_panel`'s blocks, each with an `UNNAMED` indel row in position order."""
+    for seed, (chromosome, bp) in enumerate(UNNAMED.items()):
+        tsv = panel / "EUR" / chromosome / f"{BLOCKS[chromosome]}.tsv"
+        header, *rows = tsv.read_text(encoding="utf-8").splitlines()
+        rows.append(f"{chromosome}\t{chromosome}:{bp}:A:AT\tAT\tA\t0.3\t{bp}")
+        rows.sort(key=lambda row: int(row.split("\t")[-1]))
+        tsv.write_text("\n".join([header, *rows]) + "\n", encoding="utf-8")
+        n = len(rows)
+        noise = np.random.default_rng(seed).normal(size=(n, n))
+        ld = noise @ noise.T + np.eye(n) * n * 0.1
+        values, vectors = np.linalg.eigh((ld + ld.T) / 2)
+        order = np.argsort(values)[::-1]
+        np.savez(tsv.with_suffix(".ldeig.npz"), values=values[order], vectors=vectors[:, order])
+    return panel
+
+
+@pytest.fixture(scope="module")
+def unnamed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    root = tmp_path_factory.mktemp("unnamed")
+    source = _write_source(root, TABLED)
+    completed = root / "comp.opengwasdb"
+    complete_ragged_store(
+        source, completed, _add_unnamed_rows(_write_panel(root)), ancestry="EUR",
+        cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
+        regions=write_region_table(root / "sparse_regions.tsv", TABLE),
+    )
+    return source, completed
+
+
+def test_a_panel_row_no_alid_names_outside_the_regions_is_not_counted(unnamed):
+    """An Analysis's `completion_quality` counts are the rows it is given: its imputed
+    and missing counts add up to the rows completion added it. A panel row no ALID names
+    is never a row, and one outside every region of the Analysis is not counted
+    missing either, whether or not the block's fit could have filled it."""
+    from opengwasdb.model.analyses import read_analysis_records
+
+    source, completed = unnamed
+    placement = json.loads((completed / "manifest.json").read_text(encoding="utf-8"))
+    indels = placement["provenance"]["completion"]["panel_indels"]
+    assert indels["n_indels"] == 2 and indels["unplaced"]["no_reference"] == 2
+    assert not any(within(f"{c}:{bp}:A:AT", *REGIONS[0]) for c, bp in UNNAMED.items())
+    records = read_analysis_records(completed / "analyses.tsv")
+    for analysis in (0, 1):
+        rows = completed_rows(completed, analysis, source)
+        counted = int(records[analysis].completion_n_imputed_total) + int(
+            records[analysis].completion_n_missing_total
+        )
+        assert rows.added, analysis
+        assert counted == len(rows.added), analysis
 
 
 # --- refusals ---------------------------------------------------------------

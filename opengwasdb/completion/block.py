@@ -175,6 +175,11 @@ BlockReaderFactory = Callable[[LDBlock, list[str | None]], "tuple[Iterable[int],
 # Analysis (`completion.ld_panel.shared_endpoints`).
 CededAlids = Callable[[int], "frozenset[str]"]
 
+# (Analysis, the block's positions in block order) -> a mask of the rows outside
+# every region the Analysis is completed in (Ragged, issue #430). By position, so
+# it leaves out a row no ALID names as well as a variant.
+OutsideRegions = Callable[[int, np.ndarray], np.ndarray]
+
 
 def run_block(
     tsv_path: str | Path,
@@ -183,6 +188,7 @@ def run_block(
     region_cap_bp: int | None,
     make_reader: BlockReaderFactory,
     ceded: CededAlids | None = None,
+    outside: OutsideRegions | None = None,
 ) -> BlockCompletionResult | None:
     """Complete one LD block for every Analysis its caller assigns to it.
 
@@ -192,9 +198,9 @@ def run_block(
     checkpoint-worthy, so a later run doesn't keep retrying an unreadable
     block).
 
-    ``ceded`` names, per Analysis, the variants at this block's end that the
-    block starting there owns (ADR 0072). This block neither fills nor counts
-    them, so each such cell is filled, and counted, once.
+    ``ceded`` names, per Analysis, the variants at this block's end the block starting
+    there owns (ADR 0072); ``outside`` marks its rows outside its regions (#430). The
+    block fits both but fills and counts neither, so a ceded cell is counted once.
     """
     block = load_block(tsv_path)
     if block is None:
@@ -221,7 +227,7 @@ def run_block(
 
     quality_rows: list[QualityRow] = []
     fills: list[FillRow] = []
-    ceded_mask = _ceded_masks(canonical_alids, ceded)
+    left_alone = _left_alone(canonical_alids, positions, ceded, outside)
     for ai in analysis_indices:
         z_dense, se_dense = read_observed(ai)
         block_result = complete_block_for_analysis(
@@ -229,12 +235,32 @@ def run_block(
             min_cor=min_cor, region_cap_bp=region_cap_bp,
         )
         analysis_fills, quality = _owned_rows(
-            ai, block_result, canonical_alids, ceded_mask(ai), np.isnan(z_dense)
+            ai, block_result, canonical_alids, left_alone(ai), np.isnan(z_dense)
         )
         fills.extend(analysis_fills)
         quality_rows.append(quality)
 
     return BlockCompletionResult(block_id=block.block_id, quality_rows=quality_rows, fills=fills)
+
+
+def _left_alone(
+    canonical_alids: list[str | None],
+    positions: np.ndarray,
+    ceded: CededAlids | None,
+    outside: OutsideRegions | None,
+) -> Callable[[int], np.ndarray | None]:
+    """Per Analysis, the block rows it neither fills nor counts: those it cedes and
+    those outside its regions; None where there are none."""
+    ceded_mask = _ceded_masks(canonical_alids, ceded)
+
+    def mask(analysis: int) -> np.ndarray | None:
+        left = ceded_mask(analysis)
+        if outside is None:
+            return left
+        rows = outside(analysis, positions)
+        return rows if left is None else left | rows
+
+    return mask
 
 
 def _ceded_masks(

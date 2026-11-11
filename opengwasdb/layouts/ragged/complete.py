@@ -136,10 +136,8 @@ class _BlockTask:
     thresh: float
     region_cap_bp: int | None
     checkpoint_path: Path
-    #: The block's chromosome, and its canonical ALIDs and their positions in block order.
+    #: The block's chromosome.
     chromosome: str
-    alids: list[str | None]
-    positions: np.ndarray
     #: Each assigned Analysis's regions: only its variants inside one are filled or counted.
     regions: dict[int, tuple[Region, ...]]
     #: Per Analysis, the variants at this block's end the next block owns.
@@ -279,25 +277,20 @@ def _make_reader(task: _BlockTask):
     return make_reader
 
 
-def _left_out(task: _BlockTask, analysis: int) -> frozenset[str]:
-    """The block's variants it neither fills nor counts for one Analysis: those outside
-    the Analysis's regions (issue #430), and those at its end the next block owns.
-
-    Both go through `run_block`'s one seam for the positions a block leaves alone, so
-    the fit still sees every observation in the block, and the checkpoint's fills and
-    `completion_quality` counts hold only the rows the Analysis is given.
-    """
-    outside = ~inside(task.regions[analysis], task.chromosome, task.positions)
-    return task.ceded.get(analysis, frozenset()) | frozenset(
-        a for a, out in zip(task.alids, outside.tolist(), strict=True) if out and a is not None
-    )
+def _outside(task: _BlockTask, analysis: int, positions: np.ndarray) -> np.ndarray:
+    """The block's rows outside the Analysis's regions (issue #430), by position: the
+    fit still sees every observation in the block, and the checkpoint's fills and
+    `completion_quality` counts hold only the rows the Analysis is given. A panel row
+    no ALID names is never one of those rows, inside or outside a region."""
+    return ~inside(task.regions[analysis], task.chromosome, positions)
 
 
 def _run_block(task: _BlockTask) -> checkpoint.BlockCompletionResult | None:
     """Complete one LD block for the Analyses one of whose regions it overlaps."""
     result = run_block(
         task.tsv_path, task.thresh, task.min_cor, task.region_cap_bp, _make_reader(task),
-        ceded=lambda analysis: _left_out(task, analysis),
+        ceded=lambda analysis: task.ceded.get(analysis, frozenset()),
+        outside=lambda analysis, positions: _outside(task, analysis, positions),
     )
     if result is None:
         return None
@@ -931,8 +924,6 @@ def _run_pending_blocks(
                     region_cap_bp=region_cap_bp,
                     checkpoint_path=ckpt_path,
                     chromosome=plan.block_chromosome[block_id],
-                    alids=plan.block_canonical_alids[block_id],
-                    positions=plan.block_positions[block_id],
                     regions={i: plan.regions[i] for i in plan.block_to_analyses[block_id]},
                     ceded=plan.ceded(block_id),
                 )
