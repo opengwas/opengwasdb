@@ -19,6 +19,7 @@ opens a shared store for writing.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from shutil import copytree
 from typing import Any
@@ -27,7 +28,7 @@ import numpy as np
 import zarr
 from dense_sources import build_dense_from_records
 from pytest import MonkeyPatch, TempPathFactory, approx, fixture, mark, param
-from store_reads import largest_read
+from store_reads import _SELECTIONS, largest_read
 from test_indexed_subsets import (
     _build,
     _index_group,
@@ -37,7 +38,8 @@ from test_indexed_subsets import (
 )
 
 from opengwasdb.encoding import banding
-from opengwasdb.encoding.codec import EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE
+from opengwasdb.encoding import codec as codec_module
+from opengwasdb.encoding.codec import EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE, WindowedExactTable
 from opengwasdb.layouts.dense import indexed_subsets
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.indexed_subsets import (
@@ -48,7 +50,7 @@ from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import create_array
 from opengwasdb.store.open import open_store
-from opengwasdb.validation import validate_store
+from opengwasdb.validation import scans, validate_store
 from opengwasdb.validation.rule import Kind, Target
 from opengwasdb.validation.rules import encoding as encoding_rules
 from opengwasdb.validation.rules import side_tables
@@ -143,6 +145,25 @@ def small_copy(tmp_path: Path, small_seed: Path) -> Path:
 
 
 @fixture
+def chunked_store(tmp_path: Path, monkeypatch: MonkeyPatch) -> Path:
+    """A release whose exception table is stored in pages, not in one chunk.
+
+    The table's inner chunk is a role constant, so it is narrowed for the build and
+    for the run that judges it: a table in a single chunk cannot tell a rule's read
+    from zarr's own granularity, and this file is about which reads a rule makes.
+    """
+    monkeypatch.setattr(store_arrays, "EXCEPTION_TABLE_CHUNK", 64)
+    monkeypatch.setattr(codec_module, "EXACT_TABLE_CHUNK", 64)
+    store = _build_store(tmp_path / "store.opengwasdb", SMALL_VARIANTS, "eaf-chunked")
+    listing = tmp_path / "hm3.alid.txt"
+    listing.write_text(
+        "\n".join(f"1:{row + 1}:A:G" for row in range(SMALL_VARIANTS)) + "\n", encoding="utf-8"
+    )
+    _build(store, NAME, listing)
+    return store
+
+
+@fixture
 def indexed_store(tmp_path: Path) -> Path:
     """A published subset over `test_indexed_subsets`' rich release."""
     store = build_rich_store(tmp_path / "store.opengwasdb")
@@ -206,51 +227,68 @@ def test_the_fixture_spans_several_bands_and_several_windows(
 
 
 def test_no_consumer_reads_the_whole_table(
-    small_copy: Path, monkeypatch: MonkeyPatch
+    chunked_store: Path, monkeypatch: MonkeyPatch
 ) -> None:
     """A full `validate` pages through the release's table, and never loads it.
 
-    Every rule that reads it is asked here at once: the plan rule, the subset check
-    and the side-table rule that the association scan folds over.  A whole read of
-    it is 2.7 GiB on OGS-00016 and 12.7 GiB on OGS-00011.
+    Every rule of a full run is asked here at once, and the guard is on the release
+    table's own arrays rather than on one reader: any read of them that returns more
+    than a page fails, whatever slice or lookup asked for it.  A whole read of that
+    table is 2.7 GiB on OGS-00016 and 12.7 GiB on OGS-00011.
     """
-    entries, _first = _table(small_copy)
-    assert entries >= 300, "the fixture must carry a real table"
-    monkeypatch.setattr(indexed_subsets, "EXCEPTION_TABLE_WINDOW", 64)
+    entries, _first = _table(chunked_store)
+    page = 64
+    assert entries > 4 * page, "the table must span several pages"
+    root = zarr.open_group(str(chunked_store / "data.zarr"), mode="r")
+    assert int(root[EAF_EXCEPTION_INDEX].chunks[0]) == page, "the table must be chunked by page"
+    monkeypatch.setattr(indexed_subsets, "EXCEPTION_TABLE_WINDOW", page)
     monkeypatch.setattr(banding, "DECODED_BAND_BYTES", 48_000)
-    monkeypatch.setattr(side_tables, "SPAN_PAGE", 64)
-    monkeypatch.setattr(encoding_rules, "EAF_TABLE_PAGE", 64)
-    whole = _no_whole_table(monkeypatch)
-
-    # Every rule that reads the table, and what they run after: the plan rule, the
-    # subset check and the scan the side-table rule folds over.
-    result = validate_store(
-        small_copy,
-        rules={"encoding.eaf", "subsets.indexed", "side_tables.eaf_exceptions"},
+    monkeypatch.setattr(side_tables, "SPAN_PAGE", page)
+    monkeypatch.setattr(encoding_rules, "EAF_TABLE_PAGE", page)
+    # The scan's own lookup reads windows of the table, so its window is a page too;
+    # otherwise the guard would be measuring zarr's granularity, not a rule's.
+    monkeypatch.setattr(WindowedExactTable, "scan_window_entries", page)
+    guarded = _guard_release_table(
+        monkeypatch,
+        (str(root[EAF_EXCEPTION_INDEX].store_path), str(root[EAF_EXCEPTION_VALUE].store_path)),
+        page,
     )
 
+    result = validate_store(chunked_store)
+
     assert result.ok, result.errors
-    assert whole == []
+    assert guarded == [], "a rule read more of the release's table than a page"
 
 
-def _no_whole_table(monkeypatch: MonkeyPatch) -> list[str]:
-    """Make `EafExceptionTable.read` refuse the release's table, and only that one.
+def _guard_release_table(
+    monkeypatch: MonkeyPatch, keys: tuple[str, ...], page: int
+) -> list[str]:
+    """Refuse any read of the release's table arrays that returns more than a page.
 
     A subset's own copy of the table is `O(exception count)` and small; the
-    release's is the shard this ticket is about.
+    release's is the shard this ticket is about, and no rule may hold it whole.
     """
-    table_type = side_tables.EafExceptionTable
-    original = table_type.read
-    whole: list[str] = []
+    over: list[str] = []
+    for method in _SELECTIONS:
+        original = getattr(zarr.Array, method)
 
-    def read(group: Any) -> Any:
-        if INDEXED_SUBSETS_GROUP in str(getattr(group, "store_path", "")):
-            return original(group)
-        whole.append(str(getattr(group, "store_path", group)))
-        raise AssertionError("the release's whole eaf exception table was read")
+        def wrapper(
+            self: zarr.Array,
+            *args: Any,
+            _original: Any = original,
+            **kwargs: Any,
+        ) -> Any:
+            result = _original(self, *args, **kwargs)
+            key = str(self.store_path)
+            if key in keys and int(np.size(result)) > page:
+                over.append(f"{key}: {int(np.size(result))} entries")
+                raise AssertionError(
+                    f"the release's {key} was read whole: {int(np.size(result))} entries"
+                )
+            return result
 
-    monkeypatch.setattr(table_type, "read", read)
-    return whole
+        monkeypatch.setattr(zarr.Array, method, wrapper)
+    return over
 
 
 def test_a_corrupted_eaf_cell_in_a_later_band_is_still_found(
@@ -383,32 +421,29 @@ def test_an_entry_past_the_last_span_is_found(
     ]
 
 
-def test_a_component_with_no_cells_reports_every_entry_stray(
-    small_seed: Path, monkeypatch: MonkeyPatch
+def test_a_pass_that_reads_no_cell_reports_every_entry_stray(
+    small_copy: Path, monkeypatch: MonkeyPatch
 ) -> None:
-    """Nothing was read, so every entry the table holds is past the last span.
+    """A pass over no block at all takes nothing, and every entry is then stray.
 
-    The scan's own count of what it took is zero there, and the judgement has to
-    come from the table's length instead.
+    The rule's own count of what it took is zero there, because the scan reached no
+    cell, so the judgement has to come from the table's length instead.
     """
-    entries, first = _table(small_seed)
+    entries, first = _table(small_copy)
     assert entries > 1
-    target = _target(small_seed)
-    monkeypatch.setattr(side_tables, "_spans", _no_spans)
+    monkeypatch.setattr(banding, "DECODED_BAND_BYTES", 48_000)
+    monkeypatch.setattr(side_tables, "SPAN_PAGE", 64)
+    monkeypatch.setattr(scans, "band_limits", _no_bands)
 
-    findings = list(
-        side_tables._judge_eaf_exceptions(target, side_tables.Reconciled(returned=0))
-    )
-
-    assert findings == [
+    assert validate_store(small_copy, rules={"side_tables.eaf_exceptions"}).errors == [
         f"data.zarr/eaf: eaf exception table describes {entries} cell(s) that are not "
         f"marked eaf exception (first at flat position {first})"
     ]
 
 
-def _no_spans(_target: Target) -> None:
-    """No block was measured, so the rule never opened its reader."""
-    return None
+def _no_bands(*_args: object, **_kwargs: object) -> Iterator[tuple[int, int]]:
+    """A grid the scan reads in no band at all."""
+    return iter(())
 
 
 def _target(store: Path) -> Target:
