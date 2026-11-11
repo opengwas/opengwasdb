@@ -24,8 +24,9 @@ def clump(
     Bound, which cannot reach an answered r2.
 
     Greedy: the strongest unclumped variant leads, and every unclumped variant within
-    the window with r̂² ≥ r2 of it joins it. Because leads are taken strongest first, a
-    member joins the strongest lead it reaches. Ties go to genomic order, then ALID.
+    the window (distance < W) with r̂² > r2 of it joins it, as `plink2 --clump` does (spec
+    §9). Because leads are taken strongest first, a member joins the strongest lead it
+    reaches. Ties go to genomic order, then ALID.
     """
     window = window_of(reader, r2=r2, kb=kb)
     scores = _checked_score(score, len(alids))
