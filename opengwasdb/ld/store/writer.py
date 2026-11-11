@@ -76,16 +76,18 @@ class StoreWriter:
 
         `n` and `k` are given here because blocks are thresholded as they arrive; `finish`
         refuses a `Sourced` whose `panel.n` or `adjustment.k` differs. Refuses, before writing
-        anything, a location that exists and an n and k with no t_far.
+        anything, a location that exists, an n and k with no t_far, and a position the int32
+        `position` array cannot hold.
         """
         path = Path(location)
         if path.exists():
             raise FileExistsError(f"{path} exists: a store is never written over another")
         ranges = chromosome_ranges(variants.chrom)
-        cutter = Cutter(variants.position, ranges, (near_bp, far_bp), encoding, (n, k))
+        cutter = Cutter(variants.position, ranges, (near_bp, far_bp), encoding, n=n, k=k)
+        position = _positions(variants.position)
         root = zarr.open_group(str(path), mode="w-", zarr_format=3)
         group = root.create_group("variants")
-        layout.put_numbers(group, "position", _positions(variants.position), layout.POSITION_FILL)
+        layout.put_numbers(group, "position", position, layout.POSITION_FILL)
         layout.put_strings(group, "alid", variants.alid)
         layout.put_strings(group, "a1", variants.a1)
         layout.put_strings(group, "a2", variants.a2)
@@ -157,7 +159,7 @@ class StoreWriter:
         self._tally.add(cut)
         self._next += cut.rows
         if self._next == stop:
-            self._tally.index_entries += self._open.close()
+            self._open.close()
             self._open = None
 
     def finish(self, sourced: Sourced, *, threads: int = 1) -> Provenance:

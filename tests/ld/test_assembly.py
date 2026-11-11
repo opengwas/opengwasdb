@@ -322,11 +322,98 @@ def test_the_writer_holds_a_window_of_the_chromosome_not_the_chromosome(
     assert long < short + 400_000, (short, long)
 
 
+# ------------------------------------------------------------------ empty bands
+
+
+def test_a_chromosome_with_an_empty_near_band_holds_only_its_far_pairs(tmp_path: Path) -> None:
+    # Review of #17 (asked): chr1's three variants are 4 and 4.5 Mb apart, so no pair is within
+    # near_bp and its band is empty; two of its three pairs reach the floor. chr2 holds one
+    # variant, so no pair at all. The store writes both and passes every rule.
+    position = np.array([1_000_000, 5_000_000, 9_500_000, 2_000_000], dtype=np.int64)
+    chrom = ["1", "1", "1", "2"]
+    oriented = [orient(c, int(p), "A", "C") for c, p in zip(chrom, position, strict=True)]
+    table = Variants(
+        np.array(chrom),
+        position,
+        np.array([o.alid for o in oriented]),
+        np.array([o.a1 for o in oriented]),
+        np.array([o.a2 for o in oriented]),
+        np.full(4, 0.3),
+    )
+    writer = create(tmp_path / "s", table)
+    r = np.full((3, 3), np.nan)
+    r[0, 1], r[0, 2], r[1, 2] = 0.5, -0.3, 0.01
+    writer.write(writer.cut(0, r))
+    writer.write(writer.cut(3, np.full((1, 1), np.nan)))
+    written = writer.finish(sourced())
+    root = zarr.open_group(tmp_path / "s", mode="r")
+    one, three = int(codes_at(0.5)), int(codes_at(-0.3))
+    assert abs(one) >= FLOOR, "0.5 reaches the floor"
+    assert abs(three) >= FLOOR > abs(int(codes_at(0.01))), "-0.3 reaches it, and 0.01 does not"
+    expected = {
+        "near/1/indptr": [0, 0, 0, 0],
+        "near/1/r": [],
+        "index/1/indptr": [0, 2, 3, 4],
+        "index/1/partner": [1, 2, 0, 0],
+        "index/1/r": [one, three, one, three],
+        "near/2/indptr": [0, 0],
+        "near/2/r": [],
+        "index/2/indptr": [0, 0],
+        "index/2/partner": [],
+        "index/2/r": [],
+    }
+    for path, values in expected.items():
+        np.testing.assert_array_equal(root[path][:], values, err_msg=path)
+    assert written["counts"] == {
+        "near_pairs": 0,
+        "far_candidates": 3,
+        "far_pairs": 2,
+        "index_entries": 4,
+    }
+
+
+# ------------------------------------------------------------------ the streams' own guards
+
+
+def test_a_near_band_closed_short_of_its_codes_is_refused(tmp_path: Path) -> None:
+    # The writer closes a chromosome only when its last row's cut arrives, so this is a store
+    # assembly fault, refused rather than written with a run of fill values.
+    from ogld.store.assembly import NearBandStream
+
+    group = zarr.open_group(tmp_path / "g", mode="w")
+    stream = NearBandStream(group, np.array([2, 1, 0]), REncoding(R_SCALE))
+    stream.add(np.array([5, -7], dtype=np.int16))
+    with pytest.raises(ValueError, match="holds 2 codes of 3"):
+        stream.close()
+
+
+def test_a_proxy_index_closed_with_rows_not_written_is_refused(tmp_path: Path) -> None:
+    from ogld.store.assembly import ProxyIndexStream
+
+    writer = create(tmp_path / "s")
+    first, r = first_block("21", 10)
+    cut = writer.cut(first, r)
+    assert (cut.hi >= 10).any(), "the block must carry a pair whose later row is to come"
+    group = zarr.open_group(tmp_path / "g", mode="w")
+    stream = ProxyIndexStream(group, 20, REncoding(R_SCALE))
+    stream.add(cut)
+    with pytest.raises(ValueError, match="rows not written"):
+        stream.close()
+
+
 # ------------------------------------------------------------------ refusals
 
 
 def first_block(chrom: str = "21", rows: int = 10) -> tuple[int, npt.NDArray[np.float64]]:
     return blocks(chrom, rows)[0]
+
+
+@pytest.mark.parametrize("r", [np.zeros(5), np.zeros((0, 5)), np.zeros((2, 2, 2))])
+def test_a_cut_is_refused_when_r_is_not_a_matrix_with_a_row_each(
+    tmp_path: Path, r: npt.NDArray[np.float64]
+) -> None:
+    with pytest.raises(ValueError, match="a matrix with a row each"):
+        create(tmp_path / "s").cut(0, r)
 
 
 def test_a_cut_is_refused_when_it_leaves_its_chromosome(tmp_path: Path) -> None:
@@ -418,6 +505,7 @@ def written_store(out: Path, table: Variants | None = None) -> StoreWriter:
         ({"adjustment": {**sourced()["adjustment"], "k": 9}}, "k = 9.*10"),
         ({"t_far": 0.02}, "t_far.*store derives"),
         ({"counts": {}}, "counts.*store derives"),
+        ({"comment": "a key no reader knows"}, "comment: not a key of `Sourced`"),
     ],
 )
 def test_finish_refuses_a_sourced_that_is_not_only_what_the_producer_knows(
@@ -433,6 +521,24 @@ def test_finish_refuses_a_sourced_without_a_key_the_producer_must_give(tmp_path:
     del given["software"]
     with pytest.raises(ValueError, match="software"):
         written_store(tmp_path / "s").finish(cast(Sourced, given))
+
+
+def test_the_writer_says_the_encoding_and_far_bp_it_was_created_with(tmp_path: Path) -> None:
+    # Orchestrator note 2: a producer gives the scale once, at create, and reads it back here
+    # (for its own diagnostic, say), never a floor.
+    writer = create(tmp_path / "s", encoding=REncoding(2047), far_bp=9_000_000)
+    assert writer.encoding == REncoding(2047)
+    assert writer.far_bp == 9_000_000
+
+
+def test_create_refuses_a_position_int32_cannot_hold_before_it_writes(tmp_path: Path) -> None:
+    table = synthetic(2)
+    wide = Variants(
+        table.chrom, table.position + 2**31, table.alid, table.a1, table.a2, table.a1_frequency
+    )
+    with pytest.raises(ValueError, match="does not fit the int32"):
+        create(tmp_path / "s", wide)
+    assert not (tmp_path / "s").exists()
 
 
 def test_create_refuses_an_n_and_k_with_no_t_far_before_it_writes(tmp_path: Path) -> None:

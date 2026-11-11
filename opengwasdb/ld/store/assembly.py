@@ -104,18 +104,21 @@ class Cutter:
         ranges: dict[str, tuple[int, int]],
         distances: tuple[int, int],
         encoding: REncoding,
-        adjusted: tuple[int, int],
+        *,
+        n: int,
+        k: int,
     ) -> None:
-        """`adjusted` is (n, k). Blocks are thresholded as they arrive, so t_far(n, k) and its
-        floor are fixed here, before the first; an n and k with no t_far raise here."""
-        n, k = adjusted
+        """Blocks are thresholded as they arrive, so t_far for `n` samples and `k` covariates, and
+        its floor, are fixed here, before the first; an n and k with no t_far raise here. The
+        positions are copied and made read-only, so no caller can change what a cut reads."""
         self.t_far = t_far(n, k)
         self.floor = encoding.far_code_floor(self.t_far)
         self.encoding = encoding
-        self.adjusted = adjusted
+        self.n, self.k = n, k
         self.near_bp, self.far_bp = distances
         self._least = encoding.least_r(self.floor)
-        self._position = position
+        self._position = np.array(position, dtype=np.int64)
+        self._position.flags.writeable = False
         self._ranges = ranges
         self._names = list(ranges)
         self._stops = [stop for _, stop in ranges.values()]
@@ -239,26 +242,23 @@ class Cutter:
             ) from refused
 
 
-class Appender:
-    """A 1-D array whose length is known only at its end, written a whole shard at a time.
+class ShardCarry:
+    """Values written a whole shard at a time, less than one carried to the next call.
 
     Zarr writes a shard without reading it back only when a write covers it whole (zarr 3.4.2,
-    `_is_complete_shard_write`). So whole shards are written as they fill, and less than one is
-    carried. The array is created at one shard when the first fills and grows by `resize`. An
-    array under one shard is made at its end, at its clipped shape (spec §6). Either way its
-    shard files and metadata are those of the array written whole (checked on zarr 3.4.2).
+    `_is_complete_shard_write`), so `put(at, values)` is called with one whole shard at a time,
+    and what is left is `rest` until its array ends. The one loop both streams share.
     """
 
     def __init__(
-        self, make: Callable[[int], zarr.Array[Any]], dtype: npt.DTypeLike, shard: int
+        self, shard: int, dtype: npt.DTypeLike, put: Callable[[int, npt.NDArray[Any]], None]
     ) -> None:
-        self._make = make
-        self._buffer = np.empty(shard, dtype=dtype)
+        self._buffer = np.empty(max(1, shard), dtype=dtype)
         self._held = 0
-        self._written = 0
-        self._array: zarr.Array[Any] | None = None
+        self.written = 0
+        self._put = put
 
-    def add(self, values: npt.NDArray[np.generic]) -> None:
+    def add(self, values: npt.NDArray[Any]) -> None:
         shard, at = len(self._buffer), 0
         while at < len(values):
             take = min(shard - self._held, len(values) - at)
@@ -266,28 +266,54 @@ class Appender:
             self._held += take
             at += take
             if self._held == shard:
-                self._flush()
+                self._put(self.written, self._buffer)
+                self.written += shard
+                self._held = 0
 
-    def _flush(self) -> None:
-        shard = len(self._buffer)
+    @property
+    def total(self) -> int:
+        """Every value added: those written and those carried."""
+        return self.written + self._held
+
+    def rest(self) -> npt.NDArray[Any]:
+        """The values carried, less than a shard."""
+        return self._buffer[: self._held]
+
+
+class Appender:
+    """A 1-D array whose length is known only at its end, written a whole shard at a time.
+
+    The array is created at one shard when the first fills and grows by `resize`. An array under
+    one shard is made at its end, at its clipped shape (spec §6). Either way its shard files and
+    metadata are those of the array written whole (checked on zarr 3.4.2).
+    """
+
+    def __init__(
+        self, make: Callable[[int], zarr.Array[Any]], dtype: npt.DTypeLike, shard: int
+    ) -> None:
+        self._make = make
+        self._array: zarr.Array[Any] | None = None
+        self._carry = ShardCarry(shard, dtype, self._put)
+
+    def add(self, values: npt.NDArray[Any]) -> None:
+        self._carry.add(values)
+
+    def _put(self, at: int, values: npt.NDArray[Any]) -> None:
         if self._array is None:
-            self._array = self._make(shard)
+            self._array = self._make(len(values))
         else:
-            self._array.resize((self._written + shard,))
-        self._array[self._written : self._written + shard] = self._buffer
-        self._written += shard
-        self._held = 0
+            self._array.resize((at + len(values),))
+        self._array[at : at + len(values)] = values
 
-    def close(self) -> int:
-        """Write what is carried; return the array's length."""
-        total = self._written + self._held
+    def close(self) -> None:
+        """Write what is carried, making or growing the array to its length."""
+        total, rest = self._carry.total, self._carry.rest()
         if self._array is None:
             self._array = self._make(total)
-        elif self._held:
+        elif len(rest):
             self._array.resize((total,))
-        if self._held:
-            self._array[self._written : total] = self._buffer[: self._held]
-        return total
+        if len(rest):
+            self._array[self._carry.written : total] = rest
 
 
 class NearBandStream:
@@ -296,9 +322,8 @@ class NearBandStream:
     This is lane #4's measured design (comment on ogld#17). `r`'s length, the sum of the row
     lengths, is known from the positions before any code arrives. So `indptr` is written whole,
     and `r` is created at its full length, when the chromosome's first block arrives. Codes
-    are written in whole shards of `r`, the only writes zarr makes without reading a shard
-    back, and less than one shard is carried to the next block. The last shard is written when
-    the last row arrives.
+    are written in whole shards of `r` (`ShardCarry`), and less than one shard is carried to the
+    next block. The last shard is written when the last row arrives.
     """
 
     def __init__(self, group: zarr.Group, lengths: npt.NDArray[np.int64], encoding: REncoding):
@@ -307,33 +332,25 @@ class NearBandStream:
         self._total = int(indptr[-1])
         self._array = layout.new_r_array(group, "r", self._total, layout.NEAR_R, encoding)
         shard = layout.clipped(self._total, *layout.NEAR_R)[1]
-        self._buffer = np.empty(min(shard, self._total), dtype=encoding.dtype)
-        self._held = 0
-        self._written = 0
+        self._carry = ShardCarry(min(shard, self._total), encoding.dtype, self._put)
+
+    def _put(self, at: int, codes: Codes) -> None:
+        self._array[at : at + len(codes)] = codes
 
     def add(self, codes: Codes) -> None:
         """Append the next rows' codes, writing each shard they complete."""
-        if self._written + self._held + len(codes) > self._total:
-            raise ValueError("more Near Band codes than the chromosome's rows hold (spec §4)")
-        shard, at = len(self._buffer), 0
-        while at < len(codes):
-            take = min(shard - self._held, len(codes) - at)
-            self._buffer[self._held : self._held + take] = codes[at : at + take]
-            self._held += take
-            at += take
-            if self._held == shard:
-                self._array[self._written : self._written + shard] = self._buffer
-                self._written += shard
-                self._held = 0
+        self._carry.add(codes)
 
     def close(self) -> None:
         """Write the carried codes; refuse a band whose codes are not the sum of its lengths."""
-        if self._written + self._held != self._total:
+        if self._carry.total != self._total:
             raise ValueError(
-                f"the Near Band holds {self._written + self._held} codes of {self._total}"
+                f"the Near Band holds {self._carry.total} codes of {self._total}: a store "
+                "assembly fault"
             )
-        if self._held:
-            self._array[self._written :] = self._buffer[: self._held]
+        rest = self._carry.rest()
+        if len(rest):
+            self._array[self._carry.written :] = rest
 
 
 _Pairs = tuple[_Rows, _Rows, Codes]
@@ -428,16 +445,14 @@ class ProxyIndexStream:
                 self._carried[key] = kept
         return taken
 
-    def close(self) -> int:
-        """Write `indptr` and the last entries; return the entries written. A carried pair left
-        over would be a row never written, and is refused."""
-        if self._carried or self._next != len(self._counts) or (self._counts < 0).any():
+    def close(self) -> None:
+        """Write `indptr` and the last entries. A row not written, or a carried pair left over,
+        would be a row the index lacks, and is refused."""
+        if self._carried or (self._counts < 0).any():
             raise ValueError("the Proxy Index has rows not written: a store assembly fault")
         layout.put_numbers(self._group, "indptr", indptr_of(self._counts), layout.INT64_FILL)
-        total = self._partner.close()
-        if self._codes.close() != total:
-            raise ValueError("the Proxy Index's partners and codes disagree: an assembly fault")
-        return total
+        self._partner.close()
+        self._codes.close()
 
 
 @dataclass
@@ -450,9 +465,12 @@ class Tally:
     index_entries: int = 0
 
     def add(self, cut: Cut) -> None:
+        """Count a cut: its Near Band codes, its pairs judged and kept beyond near_bp, and two
+        Proxy Index entries for each pair it keeps, one in each of its rows (spec §5)."""
         self.near_pairs += len(cut.near)
         self.far_candidates += cut.far_candidates
         self.far_pairs += cut.far_pairs
+        self.index_entries += 2 * len(cut.codes)
 
     def counts(self) -> Counts:
         return {
@@ -482,10 +500,10 @@ class Chromosome:
         self.near.add(cut.near)
         self.index.add(cut)
 
-    def close(self) -> int:
-        """Finish both; return the Proxy Index's entries."""
+    def close(self) -> None:
+        """Finish both."""
         self.near.close()
-        return self.index.close()
+        self.index.close()
 
 
 _PRODUCER_KEYS: Final = frozenset(Sourced.__required_keys__)
@@ -494,25 +512,35 @@ _PRODUCER_KEYS: Final = frozenset(Sourced.__required_keys__)
 def provenance(sourced: Sourced, cutter: Cutter, n_variants: int, tally: Tally) -> Provenance:
     """The store's provenance, in spec §7's order. It is the producer's `sourced` plus what the
     store derives from itself: `format_version`, `encoding`, `n_variants`, `near_bp`, `far_bp`,
-    `t_far`, `t_far_q`, `far_code_floor` and `counts`. A `sourced` that carries a key of the
-    store's, lacks one of the producer's, or records an n or k other than the threshold's is
-    refused."""
+    `t_far`, `t_far_q`, `far_code_floor` and `counts`.
+
+    Spec §7 lets a store hold other keys, which a reader ignores. This writer records none: a key
+    `Sourced` does not name is refused, whether it is one the store derives, which a producer may
+    not give, or one no reader knows, which would otherwise be stored unread and unchecked. A
+    `sourced` that lacks a key of the producer's, or records an n or k other than the threshold's,
+    is refused too."""
     given = dict(sourced)
-    ours = sorted(set(given) - _PRODUCER_KEYS)
+    derived_keys = set(Provenance.__required_keys__) - _PRODUCER_KEYS
+    ours = sorted(set(given) & derived_keys)
     if ours:
         raise ValueError(
             f"{', '.join(ours)}: the store derives these itself; a producer gives only "
             f"{sorted(_PRODUCER_KEYS)} (spec §7)"
         )
+    unknown = sorted(set(given) - _PRODUCER_KEYS)
+    if unknown:
+        raise ValueError(
+            f"{', '.join(unknown)}: not a key of `Sourced`; spec §7 lets a store hold other keys, "
+            "but this writer records only the producer's and its own"
+        )
     missing = sorted(_PRODUCER_KEYS - set(given))
     if missing:
         raise ValueError(f"provenance lacks {', '.join(missing)}, which only its producer knows")
-    n, k = cutter.adjusted
     said = (sourced["panel"]["n"], sourced["adjustment"]["k"])
-    if said != (n, k):
+    if said != (cutter.n, cutter.k):
         raise ValueError(
             f"provenance records n = {said[0]} and k = {said[1]}, but the store was "
-            f"thresholded at t_far for n = {n} and k = {k} (spec §3)"
+            f"thresholded at t_far for n = {cutter.n} and k = {cutter.k} (spec §3)"
         )
     derived: dict[str, Any] = {
         "format_version": FORMAT_VERSION,
