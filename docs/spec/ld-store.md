@@ -721,10 +721,10 @@ pairs about 4 million at a time, which bounds its working memory beside the matr
   Absent) and a frequency outside (0, 1). A `partner` filled with 0, zarr's default, would
   otherwise read a lost chunk as partner row 0.
 - **Measured on the Test Store, re-sharded** into 512-element inner chunks, 4 to a shard, which
-  reads exactly as the committed one (`tests/test_store_reads.py`). A 3-variant matrix over HTTP
-  fetched 1,042 of chr22's 138,718 Near Band bytes, in 2 requests (42,690 bytes in 29 requests in
-  all, most of it metadata documents); a reader that read whole arrays fetched 133,505 Near Band
-  bytes. The same read again fetched none. Read latency at scale is ogld#8's to measure.
+  reads exactly as the committed one (`tests/test_store_reads.py`). On the × 511 Test Store
+  (ogld#16), a 3-variant matrix over HTTP fetched 759 of chr22's 97,699 Near Band bytes, in 2
+  requests (41,290 bytes in 28 requests in all, most of it metadata documents); a reader that read
+  whole arrays fetched 96,582 Near Band bytes. The same read again fetched none. Read latency at scale is ogld#8's to measure.
 
 ## 11. The upstream half: the Proxy Index
 

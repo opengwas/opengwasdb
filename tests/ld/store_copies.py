@@ -19,14 +19,16 @@ TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
 #: The Test Store's encoding, r̂ = code / R_SCALE, as a literal: every test that needs the Test
 #: Store's step, or builds the Test Panel to compare with it, takes it from here, never from
 #: ogld (spec §3; ADR 0004). A test holds the store's record to it.
-R_SCALE = 32767
+R_SCALE = 511
 #: Half a step: |r̂ − r| never exceeds it.
 HALF_STEP = 1 / (2 * R_SCALE)
 #: The far code floor at R_SCALE for n = 771 (spec §3's table): FLOOR at the Test Store's
 #: k = 10, FLOOR_K0 at k = 0, and FLOOR_K7 at k = 7, where a build that drops a local PC lands.
-FLOOR = 5426
-FLOOR_K0 = 5391
-FLOOR_K7 = 5416
+#: At × 511 the three t_far (0.0274211, 0.0270649, 0.0273132) share a floor; at × 32767 they
+#: were 5426, 5391 and 5416.
+FLOOR = 85
+FLOOR_K0 = 85
+FLOOR_K7 = 85
 
 
 def codes_at(r: npt.ArrayLike, scale: int = R_SCALE) -> npt.NDArray[np.int64]:

@@ -23,6 +23,15 @@ from ogld.format import RefusalReason
 #: plink2's unphased leads at r² 0.001 on the Test Panel (tests/data/test-panel/README.md).
 LEADS_R2_0_001 = {612, 421, 774, 353, 287, 703}
 
+#: The band the plink2 comparison lists (spec §3; ogld#16): candidate pairs (p ≤ p1, under
+#: 3,000 kb, k = 0) whose true r², plink2's, and whose r̂² at the Test Store's × 511 lie on two
+#: sides of r2. Each is within 2|r| × half a step of it: true r² 0.00101–0.00104, read as code 16,
+#: r̂² 0.00098. None moves a lead. At × 32767 there were none.
+CROSSING = {
+    0.01: set(),
+    0.001: {(538, 613), (538, 703), (693, 798), (707, 798), (719, 798)},
+}
+
 
 @cache
 def proxy_pairs(r2: float, window: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -172,6 +181,52 @@ def test_clump_leads_equal_plink2_s_at_k0(
     assert leads == plink2, (
         f"only ours: {sorted(leads - plink2)}; only plink2's: {sorted(plink2 - leads)}"
     )
+
+
+@pytest.mark.parametrize("r2", [0.01, 0.001])
+def test_the_pairs_the_store_s_step_moves_across_r2_are_listed_and_within_it(r2: float) -> None:
+    # Every pair of the Test Panel the step moves across r2 lies within 2|r| × half a step of it;
+    # among the plink2 comparison's candidates they are exactly CROSSING's.
+    ogld.open(support.TEST_STORE)
+    ref = reference(0)
+    params = panel_data().clump_params()
+    *_, rows = candidates(params.p1)
+    window = ref.distance < params.kb * 1000
+    crossing = window & ((ref.r**2 > r2) != (support.stored_at(ref.r) ** 2 > r2))
+    assert crossing.sum() > 100, "the step must move many pairs for this to mean anything"
+    band = np.abs(ref.r**2 - r2) <= 2 * np.abs(ref.r) * support.HALF_STEP + support.SLACK
+    assert band[crossing].all(), "a pair moved across r2 lies within the step of it"
+    among = crossing & np.isin(ref.row_i, rows) & np.isin(ref.row_j, rows)
+    found = zip(ref.row_i[among].tolist(), ref.row_j[among].tolist(), strict=True)
+    assert set(found) == CROSSING[r2]
+
+
+@pytest.mark.parametrize("r2", [0.01, 0.001])
+def test_proxies_are_plink2_s_r_outside_the_band_of_the_store_s_step(
+    r2: float, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    # k = 0's reference r is plink2's --r-unphased (tests/test_testdata.py). The proxies within
+    # 3 Mb of the comparison's candidates, judged on plink2's r², differ from the store's only by
+    # pairs within 2|r| × half a step of r2.
+    ogld.open(support.TEST_STORE)
+    store = k0_store(tmp_path_factory)
+    ref = reference(0)
+    *_, rows = candidates(panel_data().clump_params().p1)
+    names, _ = support.oriented()
+    passing = set(passing_rows().tolist())
+    band = np.abs(ref.r**2 - r2) <= 2 * np.abs(ref.r) * support.HALF_STEP + support.SLACK
+    seen, moved = 0, 0
+    for row in rows:
+        found = store.proxies(alids([row]), r2=r2, kb=2_999)
+        mine = ((ref.row_i == row) | (ref.row_j == row)) & (ref.distance <= 2_999_000)
+        other = np.where(ref.row_i == row, ref.row_j, ref.row_i)
+        theirs = {int(x) for x in other[mine & (ref.r**2 >= r2)] if int(x) in passing}
+        got = {int(np.flatnonzero(names == p)[0]) for p in found.proxy}
+        inside = {int(x) for x in other[mine & band]}
+        assert theirs ^ got <= inside, (row, sorted((theirs ^ got) - inside))
+        seen, moved = seen + len(got), moved + len(theirs ^ got)
+    assert seen > 100, "the candidates must have many proxies for this to mean anything"
+    assert moved < seen / 20, "the band is a sliver of the answer"
 
 
 def test_every_member_reaches_its_lead_and_every_lead_leads_itself(

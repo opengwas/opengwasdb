@@ -83,6 +83,11 @@ store at any other scale could be neither written nor read.
   85, against 5426 at × 32767, and the true r² a pair at the floor's edge stands for moves with
   it: spec §3's table gives it per panel at its own scale. A pair at exactly t_far is stored on
   EUR, AFR and AMR at k = 10 and on UK Biobank EUR, and reads as the Bound on EAS and SAS.
+- **The Test Store is × 511**, HGDP+1kGP EUR's encoding, and the tests write × 2047 and × 32767
+  stores beside it from the same reference r. At × 511 its clumping at r² 0.1 has 438 clumps
+  where × 32767 had 439: five pairs whose true r² lies 3–7×10⁻⁵ below 0.1, within the band, read
+  as r̂² 0.1005. Five candidate pairs of the plink2 comparison at r² 0.001 lie across it the other
+  way, and move no lead.
 - **The sizes are re-derived** from the bits per pair measured on a real chr22 build at × 511
   against the same build at × 32767 (spec §6).
 - **The public API changes.** `BuildInputs` gains the required `r_scale`. `ogld.format` loses
