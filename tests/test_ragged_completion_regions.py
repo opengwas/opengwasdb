@@ -499,13 +499,11 @@ def test_a_worker_that_places_fewer_indels_than_the_plan_stops_the_completion(
     once did, stops the completion: its fills and its record would describe two panels."""
     from dataclasses import replace
 
-    from opengwasdb.completion import block as block_module
+    from block_rereads import reread_with
+
     from opengwasdb.completion.ld_panel import PanelReadMismatchError
 
-    read = block_module.load_block
-
-    def short_read(tsv_path):
-        block = read(tsv_path)
+    def one_indel_fewer(block):
         placed = [
             k for k, a in enumerate(block.alids)
             if a is not None and len(a.split(":")[2]) != len(a.split(":")[3])
@@ -516,7 +514,7 @@ def test_a_worker_that_places_fewer_indels_than_the_plan_stops_the_completion(
         alids[placed[0]] = None
         return replace(block, alids=alids, n_indels_placed=block.n_indels_placed - 1)
 
-    monkeypatch.setattr(block_module, "load_block", short_read)
+    reread_with(monkeypatch, one_indel_fewer)
     with pytest.raises(PanelReadMismatchError, match=r"places \d+ indels?, where"):
         _complete_with_indels(tmp_path)
 

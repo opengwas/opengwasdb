@@ -1641,16 +1641,11 @@ class TestEigendecompositionOnlyPanelImputesRealCells:
         fill a panel the record does not describe."""
         from dataclasses import replace
 
-        from opengwasdb.completion import block as block_module
+        from block_rereads import reread_with
+
         from opengwasdb.completion.ld_panel import PanelReadMismatchError
 
-        read = block_module.load_block
-
-        def short_read(tsv_path):
-            block = read(tsv_path)
-            return replace(block, alids=[None, *block.alids[1:]])
-
-        monkeypatch.setattr(block_module, "load_block", short_read)
+        reread_with(monkeypatch, lambda block: replace(block, alids=[None, *block.alids[1:]]))
         with pytest.raises(PanelReadMismatchError, match=r"names \d+ of \d+ rows"):
             complete_dense_store(
                 signal_observed_store, tmp_path / "comp.opengwasdb", signal_panel_npz_only,
