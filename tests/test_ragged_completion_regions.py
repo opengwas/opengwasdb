@@ -323,6 +323,8 @@ def test_every_added_row_lies_inside_a_region_of_its_analysis(tabled):
 #: Per chromosome, a panel indel no ALID names (its panel declares no reference, ADR
 #: 0079): in block 1 outside the cis row, and in block 2 outside the significant region.
 UNNAMED = {"1": 1_240_000, "2": 380_000}
+#: The same, inside: in the cis row, and in the significant region.
+UNNAMED_INSIDE = {"1": 1_150_500, "2": 290_000}
 #: Panel deletions the panel's indel-reference table settles, by the id the panel writes
 #: (alleles sorted, its `EA` the first) and the ALID completion spells reference first:
 #: one inside the cis row, one inside the significant region.
@@ -333,13 +335,13 @@ OBSERVED_DELETION, OBSERVED_DELETION_PANEL_ID = "2:180000:AT:A", "2:180000:A:AT"
 
 
 def _add_indel_rows(panel: Path) -> Path:
-    """`_write_panel`'s blocks with the `UNNAMED`, `DECLARED` and observed-deletion
+    """`_write_panel`'s blocks with the unnamed, `DECLARED` and observed-deletion
     rows, in position order, each row's `EA` its id's first allele; and the panel's
-    indel-reference table, which settles every one of them but the `UNNAMED`."""
+    indel-reference table, which settles every one of them but the unnamed ones."""
     import test_panel_indels as panel_fixture
 
     added: dict[str, list[str]] = {}
-    for chromosome, bp in UNNAMED.items():
+    for chromosome, bp in [*UNNAMED.items(), *UNNAMED_INSIDE.items()]:
         added.setdefault(chromosome, []).append(f"{chromosome}:{bp}:A:AT")
     for snp in [*DECLARED, OBSERVED_DELETION_PANEL_ID]:
         added.setdefault(snp.split(":")[0], []).append(snp)
@@ -417,17 +419,19 @@ def _alids_at(store: Path, chromosome: str, bp: int) -> list[str]:
 
 def test_the_indel_fixture_holds_what_the_assertions_read(indels):
     """The source keeps its deletion, spelt reference first; the panel declares three
-    indels and leaves two unnamed; the declared ones lie inside the regions and the
-    unnamed ones outside them."""
+    indels and leaves four unnamed; the declared ones lie inside the regions, and of
+    the unnamed ones two lie inside them and two outside."""
     for analysis in (0, 1, 2):
         assert OBSERVED_DELETION in completed_rows(indels.source, analysis).all, analysis
     record = _completion_record(indels.completed)["panel_indels"]
-    assert (record["reference_from"], record["n_indels"], record["n_placed"]) == ("table", 5, 3)
-    assert record["unplaced"]["no_reference"] == 2
+    assert (record["reference_from"], record["n_indels"], record["n_placed"]) == ("table", 7, 3)
+    assert record["unplaced"]["no_reference"] == 4
     for alid in [*DECLARED.values(), OBSERVED_DELETION]:
         assert within(alid, *REGIONS[0]), alid
     assert within(DECLARED["2:260000:C:CT"], *REGIONS[1])
     assert not any(within(f"{c}:{bp}:A:AT", *REGIONS[0]) for c, bp in UNNAMED.items())
+    assert all(within(f"{c}:{bp}:A:AT", *REGIONS[0]) for c, bp in UNNAMED_INSIDE.items())
+    assert within(f"2:{UNNAMED_INSIDE['2']}:A:AT", *REGIONS[1])
 
 
 def test_a_declared_panel_deletion_in_a_region_is_a_row_spelt_reference_first(indels):
@@ -472,14 +476,17 @@ def test_a_completion_with_indels_passes_the_observed_view_check(indels):
     assert verdict.passed, verdict.failures
 
 
-def test_a_panel_row_no_alid_names_outside_the_regions_is_not_counted(indels):
-    """An Analysis's `completion_quality` counts are the rows it is given: where every
-    panel row inside its regions has an ALID, as here, its imputed and missing counts add
-    up to the rows completion added it. A panel row no ALID names is never a row, and one
-    outside every region of the Analysis is not counted missing either, whether or not
-    the block's fit could have filled it."""
+def test_a_panel_row_no_alid_names_is_never_counted(indels):
+    """An Analysis's `completion_quality` counts only rows the Store holds (the owner's
+    ruling of 11 Nov 2026, ADR 0039): its imputed and missing counts add up to the rows
+    completion added it, block by block and in `analyses.tsv`. A panel row no ALID
+    names is never a row, so it is counted missing nowhere, inside a region or outside
+    every region, whether or not the block's fit could have filled it."""
+    from completion_counts import assert_counts_are_rows
+
     from opengwasdb.model.analyses import read_analysis_records
 
+    assert_counts_are_rows(indels.completed, indels.source, indels.panel)
     records = read_analysis_records(indels.completed / "analyses.tsv")
     for analysis in (0, 1):
         rows = completed_rows(indels.completed, analysis, indels.source)
@@ -521,6 +528,16 @@ def test_a_worker_that_places_fewer_indels_than_the_plan_stops_the_completion(
 
 
 # --- the build records the table, and completion carries it ---------------------
+
+
+@pytest.mark.parametrize("fixture", ["tabled", "cis_only"])
+def test_every_region_completion_counts_the_rows_it_added(fixture, request):
+    """Each `completion_quality` row counts exactly the rows completion added its
+    Analysis that its block owns (the owner's ruling of 11 Nov 2026)."""
+    from completion_counts import assert_counts_are_rows
+
+    source, completed = request.getfixturevalue(fixture)
+    assert_counts_are_rows(completed, source, completed.parent / "panel")
 
 
 def _table_rows(path: Path) -> list[dict[str, str]]:

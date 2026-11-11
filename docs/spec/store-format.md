@@ -1789,7 +1789,11 @@ declares (ADR 0079):
   otherwise, and never replaces either.
 
 An indel neither settles names no ALID, is neither matched to a source's indel
-nor filled, and stays in its block's LD; a fill there counts as missing. A
+nor filled, and stays in its block's LD; a fill there is dropped, and
+`completion_quality` counts it neither imputed nor missing, since it counts only
+rows the Store holds (the owner's ruling of 11 Nov 2026, ADR 0079's note). The
+completion record counts it, in `provenance.completion.panel_indels`
+(`unplaced.no_reference`). A
 panel's eigenvectors and `EAF` are for each row's `EA`, and a Store's
 statistics for its ALID's `A1`, so a row whose `A1` is not its `EA` -- a settled
 panel deletion -- has its eigenvector row negated and its frequency complemented

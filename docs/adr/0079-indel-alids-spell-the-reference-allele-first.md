@@ -184,8 +184,20 @@ a rebuild of it at 0.2.2 spells each as the panel does, where completing its
 spelling.
 
 `canonical_panel_alid` names an unsettled indel no ALID, so completion neither
-matches nor fills it: a fill there counts as missing, and an observed indel
-stays observed. A panel codes its eigenvectors and `EAF` on each row's `EA`
+matches nor fills it: a fill there is dropped and counted nowhere, and an observed
+indel stays observed.
+
+> **Clarified 11 Nov 2026 (the owner's ruling):** a panel indel this point names no
+> ALID is counted neither imputed nor missing in `completion_quality`, inside a
+> region or out, at a shared endpoint or not. It is no row of any Store, and a
+> block's counts describe only rows the Store holds (ADR 0039), so a quality row's
+> `n_imputed + n_missing` is the rows completion added that Analysis that the block
+> owns. This point first said such a fill "counts as missing"; that rule is
+> withdrawn. The completion record still counts every such indel, in
+> `provenance.completion.panel_indels` (`unplaced.no_reference`, and `n_indels`
+> less `n_placed`).
+
+A panel codes its eigenvectors and `EAF` on each row's `EA`
 (the sorted-first allele, `construct_block.py`), and a statistic is signed for
 the ALID's `A1`, so a row whose `A1` is not its `EA` -- every settled panel
 deletion -- has its eigenvector row negated and its frequency complemented

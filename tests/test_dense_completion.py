@@ -2033,6 +2033,52 @@ def test_a_shared_endpoint_is_filled_by_the_block_that_starts_there_and_counted_
     assert a1["completion_n_imputed_total"] == "1"
 
 
+#: An indel at the shared endpoint that the panel declares no reference for, in both
+#: blocks: no ALID names it (ADR 0079), so it is never a cell of the Store.
+_UNNAMED_AT_END = ("1:1050000:A:AT", 0.2, 1_050_000)
+
+
+def _quality(store: Path) -> dict[tuple[int, str], tuple[int, int]]:
+    import sqlite3
+
+    with sqlite3.connect(str(store / "index.sqlite")) as conn:
+        return {
+            (int(a), str(b)): (int(i), int(m))
+            for a, b, i, m in conn.execute(
+                "SELECT analysis_index, block_id, n_imputed, n_missing FROM completion_quality"
+            )
+        }
+
+
+def test_a_panel_row_no_alid_names_is_counted_by_no_block(
+    tmp_path: Path, observed_store: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`completion_quality` counts only cells the Store holds (the owner's ruling of 11
+    Nov 2026, ADR 0039). An unnamed indel at the shared endpoint is in both blocks, and
+    ceding by ALID cannot reach it, so each block once counted it missing. Neither does
+    now: the counts are those of the same completion without it."""
+    _stub_fits(monkeypatch)
+    plain = _boundary_panel(tmp_path / "plain", "900000-1050000", "1050000-1200000")
+    unnamed = tmp_path / "unnamed"
+    write_ld_block(unnamed / "EUR" / "1", "900000-1050000", [*_ENDING_AT, _UNNAMED_AT_END])
+    write_ld_block(
+        unnamed / "EUR" / "1", "1050000-1200000", [_UNNAMED_AT_END, *_STARTING_AT], seed=1
+    )
+    counts = {}
+    for name, panel in (("plain", plain), ("unnamed", unnamed)):
+        dst = tmp_path / f"{name}.opengwasdb"
+        complete_dense_store(
+            observed_store, dst, panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+        )
+        counts[name] = _quality(dst)
+        record = open_store(dst).manifest.provenance["completion"]
+        unplaced = record["panel_indels"]["unplaced"]["no_reference"]
+        assert unplaced == (2 if name == "unnamed" else 0), (name, record["panel_indels"])
+
+    assert counts["plain"], "the completion records no quality row"
+    assert counts["unnamed"] == counts["plain"]
+
+
 def test_a_shared_endpoint_does_not_depend_on_block_order(
     tmp_path: Path, observed_store: Path, monkeypatch: pytest.MonkeyPatch
 ):

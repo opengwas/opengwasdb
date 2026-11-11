@@ -56,6 +56,11 @@ AGREED = "1:1050500:C:T"
 DISPUTED = "1:1125000:A:G"
 
 
+#: Each completion fixture's (source, panel), by its completed Store, for the counts
+#: check (`completion_counts`).
+_INPUTS: dict[Path, tuple[Path, Path]] = {}
+
+
 def _ragged_totals(result) -> dict[str, int]:
     return {
         name: int(getattr(result, name))
@@ -105,10 +110,12 @@ def besd_completion(tmp_path_factory: pytest.TempPathFactory):
         tissue="Blood", association_coverage="cis",
     )
     dst = root / "comp.opengwasdb"
+    panel = trc._make_ld_panel(root, "1", 900_000, 1_300_000)
     result = complete_ragged_store(
-        observed, dst, trc._make_ld_panel(root, "1", 900_000, 1_300_000),
+        observed, dst, panel,
         ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
     )
+    _INPUTS[dst] = (observed, panel)
     return dst, _ragged_totals(result)
 
 
@@ -123,10 +130,11 @@ def trait_less_completion(tmp_path_factory: pytest.TempPathFactory):
     trc.TestGeneTargetLessAnalyses._drop_trait_positions(observed)
     with_regions(observed, every_analysis(observed, "significant_trans", "1", 900_000, 1_150_000))
     dst = root / "comp.opengwasdb"
+    panel = trc._make_rich_ld_panel(root)
     result = complete_ragged_store(
-        observed, dst, trc._make_rich_ld_panel(root), ancestry="EUR", min_cor=0.0,
-        release_id="comp-v1",
+        observed, dst, panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1",
     )
+    _INPUTS[dst] = (observed, panel)
     return dst, _ragged_totals(result)
 
 
@@ -134,11 +142,13 @@ def trait_less_completion(tmp_path_factory: pytest.TempPathFactory):
 def overlapping_completion(tmp_path_factory: pytest.TempPathFactory):
     root = tmp_path_factory.mktemp("identity-overlap")
     dst = root / "comp.opengwasdb"
+    source = with_regions(_observed_rich(root), NO_SIGNIFICANT_REGIONS)
+    panel = _overlapping_panel(root)
     result = complete_ragged_store(
-        with_regions(_observed_rich(root), NO_SIGNIFICANT_REGIONS), dst,
-        _overlapping_panel(root), ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+        source, dst, panel, ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
         release_id="comp-v1",
     )
+    _INPUTS[dst] = (source, panel)
     return dst, _ragged_totals(result)
 
 
@@ -257,3 +267,45 @@ def test_a_panel_only_frequency_completion_matches_its_pin(panel_only_eaf_ragged
 def test_a_completion_matches_its_pin(name, fixture, request):
     store, totals = request.getfixturevalue(fixture)
     matches_pin(name, store, totals)
+
+
+def _completion_inputs(name: str, request) -> tuple[Path, Path, Path]:
+    """`name`'s completed Store, its source and its panel."""
+    if name in ("besd_completion", "trait_less_completion", "overlapping_completion"):
+        store, _totals = request.getfixturevalue(name)
+        return (store, *_INPUTS[store])
+    if name in ("in_range", "out_of_range"):
+        runs = request.getfixturevalue("completions")
+        return runs.runs[name].path, runs.source, runs.runs[name].panel
+    if name == "off_grid":
+        pinned = request.getfixturevalue("off_grid")
+        return pinned.completed.path, pinned.source, pinned.completed.panel
+    store = request.getfixturevalue("panel_only_eaf_ragged_store")
+    return store, store.parent / "observed.opengwasdb", store.parent / "ld"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "besd_completion", "trait_less_completion", "overlapping_completion",
+        "in_range", "out_of_range", "off_grid", "panel_only_eaf",
+    ],
+)
+def test_every_ragged_completion_counts_the_rows_it_added(name, request):
+    """Each `completion_quality` row counts exactly the rows completion added its
+    Analysis that its block owns, overlapping blocks included (the owner's ruling of
+    11 Nov 2026, `completion_counts`)."""
+    from completion_counts import assert_counts_are_rows
+
+    assert_counts_are_rows(*_completion_inputs(name, request))
+
+
+def test_the_dense_completion_counts_the_cells_it_added(dense_completion):
+    """Dense's counts are its cells: every imputed cell and every one left missing
+    where a fill failed, each counted by the one block that owns it."""
+    from completion_counts import quality_rows
+
+    store, totals = dense_completion
+    counted = quality_rows(store)
+    assert totals["n_imputed"] > 0, "nothing was imputed, so nothing is under test"
+    assert sum(counted.values()) == totals["n_imputed"] + totals["n_missing_imputation_failed"]

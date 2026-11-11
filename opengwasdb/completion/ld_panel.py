@@ -317,9 +317,9 @@ class PanelPlacement:
     it must repeat (`BlockPlacement`).
 
     A panel with neither a `REF` column nor an indel-reference table places no
-    indel; its blocks are still read, its indels count as missing where a fill
-    would land, and the record says why. Every count is summed over LD blocks:
-    an indel on a block boundary counts once per block.
+    indel; its blocks are still read, its indels are no row of the Store, so
+    `completion_quality` counts them nowhere, and this record says why. Every count
+    is summed over LD blocks: an indel on a block boundary counts once per block.
     """
 
     def __init__(self) -> None:

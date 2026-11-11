@@ -264,16 +264,19 @@ def _left_alone(
     ceded: CededAlids | None,
     outside: OutsideRegions | None,
 ) -> Callable[[int], np.ndarray | None]:
-    """Per Analysis, the block rows it neither fills nor counts: those it cedes and
-    those outside its regions; None where there are none."""
+    """Per Analysis, the block rows it neither fills nor counts: those no ALID names,
+    which are never a Store row (the owner's ruling of 11 Nov 2026, ADR 0039), those
+    it cedes, and those outside its regions; None where there are none."""
+    named = np.array([alid is not None for alid in canonical_alids], dtype=bool)
+    unnamed = None if named.all() else ~named
     ceded_mask = _ceded_masks(canonical_alids, ceded)
 
     def mask(analysis: int) -> np.ndarray | None:
-        left = ceded_mask(analysis)
-        if outside is None:
-            return left
-        rows = outside(analysis, positions)
-        return rows if left is None else left | rows
+        masks = [ceded_mask(analysis), unnamed]
+        if outside is not None:
+            masks.append(outside(analysis, positions))
+        present = [m for m in masks if m is not None]
+        return np.logical_or.reduce(present) if present else None
 
     return mask
 
@@ -303,10 +306,11 @@ def _owned_rows(
     ceded: np.ndarray | None,
     missing: np.ndarray,
 ) -> tuple[list[FillRow], QualityRow]:
-    """One Analysis's fills and quality row, leaving out what the block cedes.
+    """One Analysis's fills and quality row, leaving out what the block leaves alone.
 
-    A ceded position is neither a fill nor missing here: the next block counts
-    it. A fill at a position no ALID names is missing.
+    A position left alone (`_left_alone`: ceded, outside the Analysis's regions, or
+    named by no ALID) is neither a fill nor missing here: the next block counts a
+    ceded one, and the others are no row of the Analysis.
     """
     n_missing = result.n_missing
     if ceded is not None:
@@ -315,9 +319,9 @@ def _owned_rows(
     for local_idx, zv, sev in result.fills:
         alid = canonical_alids[local_idx]
         if ceded is not None and ceded[local_idx]:
-            n_missing += 1  # counted out with the ceded positions above
-        elif alid is None:
-            n_missing += 1
-        else:
-            fills.append(FillRow(alid, ai, zv, sev))
+            n_missing += 1  # counted out with the left-alone positions above
+            continue
+        if alid is None:
+            raise AssertionError(f"block position {local_idx} names no ALID but was not left alone")
+        fills.append(FillRow(alid, ai, zv, sev))
     return fills, QualityRow(ai, result.pearson_r, len(fills), n_missing)
