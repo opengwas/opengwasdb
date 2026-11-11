@@ -137,7 +137,8 @@ quantisation error at most half of it, 1/(2s):
 A build takes its scale as an input (`BuildInputs.r_scale`, `docs/spec/build-inputs.md` §1), and
 there is no default: a build that was not given one is refused. The issue's measurement on real
 HGDP+1kGP EUR chr22 chose the widths: at × 511 the error is 0.03 of r's sampling error at
-n = 771, and the Near Band costs 1.70× fewer bits a pair than at × 32767 (§6).
+n = 771, and the Near Band costs 1.70× fewer bits a pair than at × 32767; a whole chr22 build
+at k = 10 measured 1.68× (§6).
 
 - **Every encoding shares one container**: `int16` codes, −32768 reserved, half-to-even rounding.
   The scale is symmetric, so negating a code to flip an allele never overflows, and r = ±1 is
@@ -373,24 +374,45 @@ HGDP+1kGP EUR's Near Band, and 7,200 for AFR's. The other arrays use one shape, 
 the prototype's stores used this shape for them. At EUR's 6.2×10⁹ index entries that is about
 6,000 shards for each of `partner` and `r`; ogld#8 may coarsen the shard, which changes no reader.
 
+**Bits per pair, measured** (ogld#16). A real build of HGDP+1kGP EUR chr22 at each scale: the
+phased v2 callset converted by `docs/spec/build-inputs.md` §3, the 665 unrelated samples of the EUR
+keep file, k = 10 from `/data/opengwasdb/work/ogld/pcs/EUR.eigenvec`, 8 threads, at ogld
+`88cb8e9`: 119,632 variants and 1,165,485,828 Near Band pairs, on the provisional layout. Bytes
+are those of the arrays' files on disk; the Proxy Index's are its `indptr`, `partner` and `r`
+together.
+
+| encoding | Near Band | bits per pair | against × 32767 | Proxy Index entries | Proxy Index | bits per entry |
+|---|---|---|---|---|---|---|
+| `int16` × 511 | 1,002,545,575 B | 6.88 | 1.68× fewer | 45,496,764 | 69,284,904 B | 12.18 |
+| `int16` × 2047 | 1,249,975,092 B | 8.58 | 1.34× fewer | 45,664,034 | 78,524,164 B | 13.76 |
+| `int16` × 32767 | 1,680,078,624 B | 11.53 | 1.00× | 45,677,130 | 89,977,528 B | 15.76 |
+
+The issue's own measurement, on a k = 0 slice of the MAC ≥ 50 pgen (24–30 Mb, 140 M pairs), gave
+7.11, 9.04 and 12.06 bits: 1.70× and 1.33×. The whole chromosome at k = 10 agrees with those ratios
+to within 1.5%, though not with their bits, so the sizes below carry the ratios over. The index holds slightly fewer entries at × 511
+because the far code floor's cut moves with the scale (§3): 101,886 Far Pairs against 105,272.
+
 **Sizes.** On the provisional layout, with MAC ≥ 20 and the index's densities measured at k = 0
 (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/panel_sizes_inner262144.tsv`
-and `proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/upstream_alternatives_sizes_inner262144.tsv`):
+and `proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/upstream_alternatives_sizes_inner262144.tsv`),
+re-derived at × 511 (ADR 0004): each Near Band is the prototype's × 32767 size times the measured
+ratio 0.597, and each Proxy Index its size times 0.770, the ratios of the EUR chr22 builds above:
 
-| LD Store | variants | Near Band pairs | Near Band | Proxy Index entries | Proxy Index | total |
-|---|---|---|---|---|---|---|
-| HGDP+1kGP EUR | 12.9 M | 1.86×10¹¹ | 308 GB | 6.24×10⁹ | 15.5 GB | 324 GB |
-| HGDP+1kGP AFR | 20.9 M | 4.83×10¹¹ | 829 GB | 1.03×10¹⁰ | 25.7 GB | 854 GB |
-| HGDP+1kGP EAS | 11.9 M | 1.58×10¹¹ | 263 GB | 4.53×10⁹ | 11.3 GB | 274 GB |
-| HGDP+1kGP SAS | 13.2 M | 1.95×10¹¹ | 325 GB | 5.33×10⁹ | 13.2 GB | 338 GB |
-| HGDP+1kGP AMR | 9.8 M | 1.09×10¹¹ | 182 GB | 6.35×10⁹ | 15.8 GB | 198 GB |
+| LD Store | variants | Near Band pairs | Near Band | Proxy Index entries | Proxy Index | total | at × 32767 |
+|---|---|---|---|---|---|---|---|
+| HGDP+1kGP EUR | 12.9 M | 1.86×10¹¹ | 184 GB | 6.24×10⁹ | 11.9 GB | 196 GB | 324 GB |
+| HGDP+1kGP AFR | 20.9 M | 4.83×10¹¹ | 495 GB | 1.03×10¹⁰ | 19.8 GB | 514 GB | 854 GB |
+| HGDP+1kGP EAS | 11.9 M | 1.58×10¹¹ | 157 GB | 4.53×10⁹ | 8.7 GB | 166 GB | 274 GB |
+| HGDP+1kGP SAS | 13.2 M | 1.95×10¹¹ | 194 GB | 5.33×10⁹ | 10.2 GB | 204 GB | 338 GB |
+| HGDP+1kGP AMR | 9.8 M | 1.09×10¹¹ | 109 GB | 6.35×10⁹ | 12.2 GB | 121 GB | 198 GB |
 
-That is 1.99 TB for the five, against 1.91 TB without the index; the owner accepted about
-1.9 TB and the index's 3–9% on 7 November 2026. AMR is measured genome-wide. EUR, AFR, EAS and
-SAS scale each chromosome's measured MAC ≥ 50 counts by chr22's measured MAC ≥ 20 / MAC ≥ 50
-ratio. On layout B's 32,768 chunk, each Near Band is 1.5–7.4% larger
+That is 1.20 TB for the five at × 511, against 1.99 TB at × 32767, which the owner accepted on
+7 November 2026 with the index's 3–9%. AMR is measured genome-wide. EUR, AFR, EAS and SAS scale
+each chromosome's measured MAC ≥ 50 counts by chr22's measured MAC ≥ 20 / MAC ≥ 50 ratio. On
+layout B's 32,768 chunk, each Near Band is 1.5–7.4% larger at × 32767
 (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/panel_sizes_inner32768.tsv`).
-PC Adjustment at k = 10 lowers the index's density a little, most in AMR.
+PC Adjustment at k = 10 lowers the index's density a little, most in AMR. Only EUR's ratios were
+measured; AFR's and AMR's codes, from denser LD, may compress a little differently.
 
 These sizes are upper bounds. They counted every MAC ≥ 20 site of the gnomAD v3.1.2 VCFs,
 non-PASS sites included, about 25% of EUR chr22's; and the builds now read the phased
@@ -404,9 +426,13 @@ Panel's: 9.8 M variants, all with MAF ≥ 0.005
 (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/ukb_panel_list_maf.json`).
 That list is a subset of the MAC ≥ 20 set and cannot count it.
 
-- On that list alone, the Near Band would hold 1.10×10¹¹ pairs, or 182 GB.
+- On that list alone, the Near Band would hold 1.10×10¹¹ pairs, or 182 GB at × 32767 and about
+  135 GB at UK Biobank EUR's × 2047 (the measured ratio 0.744). That is an upper bound: at
+  n = 49,766 the r of unlinked pairs spread √(49,766 / 665) ≈ 8.7 times less than at n = 665, so
+  its codes take fewer bits.
 - Near Band bytes grow with variants × partners per row, so roughly with the square of variant
-  density. Twice the list's variants gives about 729 GB, and three times gives 1.64 TB
+  density. Twice the list's variants gives about 729 GB, and three times gives 1.64 TB, at
+  × 32767; about 542 GB and 1.22 TB at × 2047
   (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/panel_sizes_inner262144.tsv`).
 - The Far Pairs at t_far = 0.001 cannot be measured at n = 771. There, the mean r² at 3–10 Mb
   (0.0012945) is no higher than sampling alone predicts (1/n = 0.0012970;

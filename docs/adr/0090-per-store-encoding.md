@@ -88,8 +88,9 @@ store at any other scale could be neither written nor read.
   where × 32767 had 439: five pairs whose true r² lies 3–7×10⁻⁵ below 0.1, within the band, read
   as r̂² 0.1005. Five candidate pairs of the plink2 comparison at r² 0.001 lie across it the other
   way, and move no lead.
-- **The sizes are re-derived** from the bits per pair measured on a real chr22 build at × 511
-  against the same build at × 32767 (spec §6).
+- **The sizes are re-derived** from the bits per pair measured on a real EUR chr22 build at
+  k = 10: 6.88 a Near Band pair at × 511, 8.58 at × 2047 and 11.53 at × 32767. The five
+  HGDP+1kGP stores come to about 1.20 TB, from 1.99 TB (spec §6).
 - **The public API changes.** `BuildInputs` gains the required `r_scale`. `ogld.format` loses
   `ENCODING`, `R_SCALE`, `RESERVED_CODE`, `QUANTISATION_ERROR` and the module functions
   `quantise`, `dequantise` and `far_code_floor`, whose one scale was the default this decision
