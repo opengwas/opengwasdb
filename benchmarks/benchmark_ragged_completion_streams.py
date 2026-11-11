@@ -41,20 +41,20 @@ the code before #424 is measured from a detached worktree of its commit
       --full-checkpoints 1348 --shard-append .../shard-append.json \\
       --batch-peak .../batch-peak.json --output .../projection.json
 
-Since issue #430 each Analysis is completed only inside its regions, so a
-Store whose Analyses have no Trait position (OGS-00006) is run with its
-bundle's region table, `--regions .../sidecars/sparse_regions.tsv`. A run given
-one also accounts for every completed Analysis, read back from the completed
-Store and checked against the table by a test written here, not the package's:
-its significant regions, the cells completion added and how many of them lie
-outside those regions (which must be none). `regions-projection` counts, for
+Since issue #430 each Analysis is completed only inside its regions, the
+`regions.tsv` its source Store carries (`build-ragged-ssf --regions`), so a
+Store whose coverage is not `cis` (OGS-00006) must be built with one. A run
+from such a source also accounts for every completed Analysis, read back from
+the completed Store and checked against the table by a test written here, not
+the package's: its significant regions, the cells completion added and how many
+of them lie outside those regions (which must be none). `regions-projection` counts, for
 every Analysis of the full Store, the panel variants inside its regions that it
 does not observe: the cells a full completion adds. Run on the subset's panel
 it is checked against a run's measured cells, Analysis by Analysis, and on the
 full panel it gives the `--full-fills` that `project` reads.
 
   pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py \\
-      regions-projection --source SOURCE --regions .../sparse_regions.tsv \\
+      regions-projection --source SOURCE \\
       --ld-dir /data/opengwasdb/reference/ld --run RUN.json --output .../full.json
 
 Two costs a subset cannot show are measured apart. `shard-append`: the shard
@@ -86,9 +86,9 @@ import numpy as np
 
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._rss import RssSampler
-from opengwasdb.completion.regions import COMPLETED_KINDS
 from opengwasdb.layouts.ragged import complete
 from opengwasdb.model.analyses import read_analysis_records
+from opengwasdb.model.regions import COMPLETED_KINDS, REGIONS_FILE
 
 #: The completion module's phase functions, under either generation's names.
 PHASES = (
@@ -197,7 +197,6 @@ def run(args: argparse.Namespace) -> None:
     records: dict[str, Any] = {}
     _instrument(records)
     started = perf_counter()
-    regions = {} if args.regions is None else {"regions": args.regions}
     result = complete.complete_ragged_store(
         args.source,
         args.dest,
@@ -206,7 +205,6 @@ def run(args: argparse.Namespace) -> None:
         n_workers=args.n_workers,
         overwrite=args.overwrite,
         impute_analysis_ids=chosen,
-        **regions,
     )
     payload = {
         **provenance(),
@@ -224,9 +222,9 @@ def run(args: argparse.Namespace) -> None:
         **records,
         "phase3": _phase3(records["phases"]),
     }
-    if args.regions is not None:
+    if (args.source / REGIONS_FILE).exists():
         payload["region_accounting"] = _region_accounting(
-            args.source, args.dest, args.regions, args.ld_dir, args.ancestry,
+            args.source, args.dest, args.source / REGIONS_FILE, args.ld_dir, args.ancestry,
             [i for i, a in enumerate(analyses) if a.analysis_id in chosen],
         )
     write_artifact(args.output, payload)
@@ -234,7 +232,6 @@ def run(args: argparse.Namespace) -> None:
         "phase3": payload["phase3"], "result": payload["result"],
         "regions": payload.get("region_accounting", {}).get("summary"),
     }))
-
 
 
 def _table_regions(table: Path) -> dict[str, list[tuple[str, int, int, str]]]:
@@ -395,7 +392,7 @@ def regions_projection(args: argparse.Namespace) -> None:
     the run's measured share."""
     from opengwasdb.associations import Cells, CsrReader
 
-    regions = _table_regions(args.regions)
+    regions = _table_regions(args.source / REGIONS_FILE)
     analyses = sorted(
         read_analysis_records(args.source / "analyses.tsv"), key=lambda a: int(a.analysis_index)
     )
@@ -454,6 +451,35 @@ def regions_projection(args: argparse.Namespace) -> None:
 def _line(small: float, large: float, x_small: float, x_large: float, x: float) -> float:
     """The straight line through two measurements, read at `x`."""
     return large + (large - small) / (x_large - x_small) * (x - x_large)
+
+
+def _phase3_time(
+    small: dict[str, Any], large: dict[str, Any], fills: list[int], full_fills: int,
+    shard_extra: float,
+) -> dict[str, Any]:
+    """Phase 3's time at the full Store's fills, read off the line through both runs, or
+    none where the larger run's Phase 3 is no slower than the smaller's: the line's slope
+    is then host noise, and read at the full Store it extrapolates that noise (#430's
+    subsets, whose few fills sit beside the same 58M observed rows)."""
+    a, b = small["phase3"]["seconds"], large["phase3"]["seconds"]
+    if b <= a:
+        return {
+            "phase3_seconds_fitted": None,
+            "shard_batches_extra_seconds": round(shard_extra),
+            "phase3_seconds": None,
+            "phase3_hours": None,
+            "phase3_not_fitted": (
+                f"the larger run's Phase 3 took {b:.0f} s, no longer than the smaller "
+                f"run's {a:.0f} s: their difference is host noise, not the cost of fills"
+            ),
+        }
+    fitted = _line(a, b, *fills, full_fills)
+    return {
+        "phase3_seconds_fitted": round(fitted),
+        "shard_batches_extra_seconds": round(shard_extra),
+        "phase3_seconds": round(fitted + shard_extra),
+        "phase3_hours": round((fitted + shard_extra) / 3600, 2),
+    }
 
 
 def shard_append(args: argparse.Namespace) -> None:
@@ -587,7 +613,6 @@ def project(args: argparse.Namespace) -> None:
         )
     peak = json.loads(Path(args.batch_peak).read_text(encoding="utf-8"))
     shard_extra = append["extra_seconds_per_checkpoint"] * args.full_checkpoints
-    fitted = _line(small["phase3"]["seconds"], large["phase3"]["seconds"], *fills, args.full_fills)
     out: dict[str, Any] = {
         **provenance(),
         "commit": large["commit"],
@@ -595,10 +620,7 @@ def project(args: argparse.Namespace) -> None:
         "full_fills": args.full_fills,
         "full_cells": round(full_cells),
         "full_batches": full_batches,
-        "phase3_seconds_fitted": round(fitted),
-        "shard_batches_extra_seconds": round(shard_extra),
-        "phase3_seconds": round(fitted + shard_extra),
-        "phase3_hours": round((fitted + shard_extra) / 3600, 2),
+        **_phase3_time(small, large, fills, args.full_fills, shard_extra),
         # A batch holds at most the budget, and at most every fill (issue #430's Stores
         # fill far less than one batch).
         "memory_full": _memory_model(large, full_cells, min(args.full_fills, budget), peak),
@@ -625,13 +647,11 @@ def _parser() -> argparse.ArgumentParser:
     one.add_argument("--dest", type=Path, required=True)
     one.add_argument("--n-workers", type=int, default=16)
     one.add_argument("--overwrite", action="store_true")
-    one.add_argument("--regions", type=Path, default=None, help="the bundle's region table")
     one.add_argument("--output", type=Path, required=True)
     regions = commands.add_parser(
         "regions-projection", help="count the cells a completion adds each Analysis"
     )
     regions.add_argument("--source", type=Path, required=True)
-    regions.add_argument("--regions", type=Path, required=True)
     regions.add_argument("--ld-dir", type=Path, required=True)
     regions.add_argument("--ancestry", default="EUR")
     regions.add_argument("--run", type=Path, required=True, help="a run's JSON to check against")

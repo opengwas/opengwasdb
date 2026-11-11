@@ -39,24 +39,65 @@ if TYPE_CHECKING:
 #: correctly.
 #:
 #: Two entries since #245: `0.1` (Zarr v2, read but never written again) and
-#: `0.2` (Zarr v3 with sharding, what every builder writes from #247 on). The
-#: four pre-reset versions are not in it and are not readable -- see
-#: `PRE_RESET_FORMAT_VERSIONS`.
+#: `0.2` (Zarr v3 with sharding, what every builder writes from #247 on), read to
+#: 0.2.1 since #430. The four pre-reset versions are not in it and are not
+#: readable -- see `PRE_RESET_FORMAT_VERSIONS`.
 SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingProxyType(
-    {(0, 1): (0,), (0, 2): (0,)}
+    {(0, 1): (0,), (0, 2): (1,)}
 )
 
-#: format_version stamped on releases written by this build. A build writes
-#: exactly one version and reads every one in `SUPPORTED_FORMAT_VERSIONS`
-#: (ADR 0041 §3): supporting the *writing* of historical formats would mean
-#: keeping every retired encoder alive and tested, for a use case nobody has.
+#: The format_versions this build writes, oldest first. A build stamps each release
+#: the lowest whose features it uses (`format_version_for`; spec §21.3, ADR 0038 §3
+#: as amended by the owner's decision of 2026-11-11, issue #430), and reads every
+#: one in `SUPPORTED_FORMAT_VERSIONS`: supporting the *writing* of historical
+#: formats would mean keeping every retired encoder alive and tested, for a use
+#: case nobody has, but these two are written by the same encoders.
 #:
 #: `0.2.0` since #247: Zarr v3 with the sharding codec (ADR 0057), at the Dense
 #: inner chunk and shard shapes ADR 0058 decided. The builders write it through
 #: `opengwasdb.store.arrays`, and the converter writes it from a `0.1.0` source
 #: (`opengwasdb.store.convert.SOURCE_FORMAT_VERSION`); `0.1.0` stays readable
-#: until a later decision deletes the v2 reader (ADR 0057).
-CURRENT_FORMAT_VERSION = "0.2.0"
+#: until a later decision deletes the v2 reader (ADR 0057). `0.2.1` since #430:
+#: 0.2.0 plus a Ragged release's optional, manifest-declared `regions.tsv`, so a
+#: 0.2.0 release is a 0.2.1 one without the file.
+WRITTEN_FORMAT_VERSIONS: tuple[str, ...] = ("0.2.0", "0.2.1")
+#: The format_version a release that uses no optional feature is stamped
+#: (`format_version_for`): what every builder has written since #247, and what
+#: opengwasdb-stores' engine update probes as the format a locked engine writes. The
+#: newest version written is `WRITTEN_FORMAT_VERSIONS[-1]`.
+CURRENT_FORMAT_VERSION = WRITTEN_FORMAT_VERSIONS[0]
+
+
+def format_version_for(*, carries_regions: bool) -> str:
+    """The `format_version` a release this build writes is stamped: the lowest whose
+    features it uses (spec §21.3). The one rule every writer stamps by -- the builders,
+    completion, the converter -- so a release no older reader can fully read says so,
+    and every other one reads exactly as before.
+
+    `carries_regions`: the release carries `regions.tsv`, the one feature 0.2.1 adds.
+    """
+    return WRITTEN_FORMAT_VERSIONS[1] if carries_regions else WRITTEN_FORMAT_VERSIONS[0]
+
+
+def check_format_version_stamp(
+    version: str, *, carries_regions: bool, source: str = "release"
+) -> str:
+    """Return `version` if it is the stamp a release with these features gets
+    (`format_version_for`); raise otherwise.
+
+    A release stamped otherwise disagrees with itself: a 0.2.0 release carrying
+    `regions.tsv` is one an older reader takes as fully understood, and a 0.2.1 one
+    without it is not what any writer stamps. Completion refuses it rather than
+    re-stamp it either way, and `validate` fails it (spec §21.3).
+    """
+    stamp = format_version_for(carries_regions=carries_regions)
+    if version != stamp:
+        carried = "regions.tsv" if carries_regions else "no region table"
+        raise UnsupportedFormatVersion(
+            f"{source} is stamped {version}, but a release carrying {carried} is {stamp} "
+            "(spec §21.3)"
+        )
+    return version
 
 #: The Zarr on-disk format each readable release series is stored in.  The
 #: series-to-layout coupling is part of the format contract, so it lives beside
@@ -221,27 +262,29 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
     Reference Completion writes into the source's arrays and therefore into the
     source's encoding, so a completed release keeps its source's
     `format_version` rather than being stamped with the current one. That is
-    only honest while this build can actually write that format. Once
-    `CURRENT_FORMAT_VERSION` moves ahead of a store on disk, completing it would
-    otherwise stamp a version onto arrays that are not in it -- a store that
+    only honest while this build can actually write that format. A store on disk
+    in a version this build does not write (`WRITTEN_FORMAT_VERSIONS`) would
+    otherwise be stamped a version onto arrays that are not in it -- a store that
     lies about its own encoding, which is the failure class this project exists
-    to avoid.
+    to avoid. 0.2.0 and 0.2.1 are written by the same encoders, so both are
+    writable (issue #430).
 
-    It is live since #247: this build writes `0.2.0` (Zarr v3 with sharding), so
-    completing a `0.1.0` source -- Zarr v2, written by every build before this
+    It is live since #247: this build writes the 0.2 series (Zarr v3 with
+    sharding), so completing a `0.1.0` source -- Zarr v2, written by every build before this
     one -- is refused here.  The refusal names the conversion tool, because a
     Dense 0.1.0 release whose values are right can be converted rather than
     rebuilt (ADR 0057 §3).  Convert, then complete; converting later is not
     possible, because completion writes into the source's arrays.
     """
     check_format_version(version, source=source)
-    if version != CURRENT_FORMAT_VERSION:
+    if version not in WRITTEN_FORMAT_VERSIONS:
         raise UnsupportedFormatVersion(
             f"{source} is format_version={version!r}, which this build reads but cannot "
-            f"write (it writes {CURRENT_FORMAT_VERSION!r}). Completion preserves its "
+            f"write (it writes {', '.join(map(repr, WRITTEN_FORMAT_VERSIONS))}). "
+            "Completion preserves its "
             "source's format rather than re-encoding it (ADR 0038 §4), so this release "
             "cannot be completed by this build. The one order that works is: convert the "
-            f"0.1.0 source to {CURRENT_FORMAT_VERSION} with "
+            f"0.1.0 source to {format_version_for(carries_regions=False)} with "
             "scripts/convert_store_to_0_2_0.py (it accepts every converter-supported layout), "
             "then complete the converted release; or rebuild the release from source."
         )
@@ -284,8 +327,9 @@ _BASE_ENVELOPE: frozenset[str] = frozenset(
 DENSE_ENVELOPE: frozenset[str] = _BASE_ENVELOPE | {"overview.html"}
 
 #: Ragged Observed-Only/Reference-Completed (§11, §17) -- no `overview.html`,
-#: which is Dense/Hybrid-only today.
-RAGGED_ENVELOPE: frozenset[str] = _BASE_ENVELOPE
+#: which is Dense/Hybrid-only today -- and, optionally, `regions.tsv`, the region
+#: table its build recorded and completion fills inside (issue #430).
+RAGGED_ENVELOPE: frozenset[str] = _BASE_ENVELOPE | {"regions.tsv"}
 
 #: A Hybrid release's own top-level entries (§16 introduces its nested
 #: `dense/` Dense Component directory). The Dense Component's *own*

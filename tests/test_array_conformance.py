@@ -42,7 +42,6 @@ from typing import Any
 
 import numpy as np
 import pytest
-from region_tables import NO_SIGNIFICANT_REGIONS, write_region_table
 
 from opengwasdb.encoding import StoreCodec
 from opengwasdb.encoding.plan import SE_MISSING
@@ -233,7 +232,7 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
     observed = d / "obs.opengwasdb"
     build_ragged_from_besd(
         trc._make_besd_fixture(d), observed, store_id="test", release_id="obs-v1", tissue="Blood",
-        association_coverage="cis_and_signals",
+        association_coverage="cis",
     )
     completed = d / "comp.opengwasdb"
     complete_ragged_store(
@@ -244,7 +243,6 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
         cis_window_bp=500_000,
         min_cor=0.0,
         release_id="comp-v1",
-        regions=write_region_table(d / "regions.tsv", NO_SIGNIFICANT_REGIONS),
     )
     stores.append(_BuiltStore("ragged-completion", completed, dense_planes_whole=False))
 

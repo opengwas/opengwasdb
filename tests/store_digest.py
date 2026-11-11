@@ -22,6 +22,12 @@ completion's Phase 3 streamed: running the identity tests with
 `OPENGWASDB_WRITE_PINS` set to a directory writes each fixture's digest there
 instead of comparing it, and the pins are those files, merged. A test compares
 the new code with the old one, never the new code with itself.
+
+The Ragged pins were re-derived once, at issue #430, which completes a Store whose
+coverage is not `cis` only from the region table it carries: each pinned source
+became a `cis` Store (its manifest's `association_coverage` the one difference)
+or carries its `regions.tsv` into the completed Store (that file the one
+difference), and each re-derived pin's `written_by` says which.
 """
 
 from __future__ import annotations

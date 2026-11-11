@@ -17,9 +17,10 @@ Analysis        ancestry   source associations          completed against the on
 `afr_other`     AFR        5 on the block                not admitted: carried through
 =============== ========== ============================= =====================================
 
-`eur_traitless` has no Trait position, so completion and the check both take the region
-table (`TABLE`) that gives it its one significant region (issue #430); the others are
-completed in their Trait position's cis window.
+`eur_traitless` has no Trait position, so the source is built with the region table
+(`TABLE`) that gives it its one significant region, as `regions.tsv`, which completion and
+the check both read (issue #430); the others are completed in their Trait position's cis
+window.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ import test_ragged_completion as trc
 import zarr
 from cli_output import normalize_cli_output
 from presence_fixtures import RAGGED_Z_GROUP, float_plane_z, plant_payload_nan
-from region_tables import write_region_table
+from region_tables import edit_manifest, with_regions, write_region_table
 from stored_rows import stored_rows
 from typer.testing import CliRunner
 
@@ -99,6 +100,7 @@ def _build_source(
     root: Path,
     sources: dict[str, list[tuple[int, str, str]]],
     analyses: list[dict] = ANALYSES,
+    regions: list[tuple[str, str, str, int, int]] = TABLE,
 ) -> Path:
     filtered = root / "filtered"
     filtered.mkdir(parents=True)
@@ -121,6 +123,7 @@ def _build_source(
     build_ragged_from_ssf(
         manifest, filtered, observed, store_id="test", release_id="obs-v1",
         association_coverage="cis_and_signals",
+        regions=write_region_table(root / "sparse_regions.tsv", regions),
     )
     return observed
 
@@ -133,7 +136,7 @@ def _pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path, Pa
     completed = root / "comp.opengwasdb"
     complete_ragged_store(
         observed, completed, panel, ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
-        release_id="comp-v1", regions=write_region_table(root / "sparse_regions.tsv", TABLE),
+        release_id="comp-v1",
     )
     return observed, completed, panel
 
@@ -162,15 +165,10 @@ def pair(tmp_path: Path, _pair_seed: tuple[Path, Path, Path]) -> tuple[Path, Pat
     )
 
 
-def _run(source, target, out, *extra, seed=7, panel=None, ancestry="EUR", regions=TABLE):
-    """The check, given the panel, the ancestry and a region table of `regions` rows, written
-    beside the panel so that two checks of one pair name one table."""
+def _run(source, target, out, *extra, seed=7, panel=None, ancestry="EUR"):
     options = ["--ld-panel", str(panel)] if panel is not None else []
     if panel is not None and ancestry:
         options += ["--ancestry", ancestry]
-    if panel is not None and regions is not None:
-        table = write_region_table(Path(panel).parent / "sparse_regions.tsv", regions)
-        options += ["--regions", str(table)]
     return CliRunner().invoke(
         app,
         ["check-observed-view", str(source), str(target), "--seed", str(seed),
@@ -339,9 +337,10 @@ def test_an_imputed_association_outside_the_retained_regions_fails(tmp_path, pai
     assert "imputed_outside_retained" in verdict["failures"]
 
 
-#: A narrower table than completion was given (issue #430): `eur_traitless`'s significant
-#: region stops short of the SNP completion imputed for it, 1:1050500, and `eur_sparse` gets a
-#: cis row that leaves three of its four NaN rows (1,050,500, 1,100,000 and 1,150,000) outside.
+#: A narrower table than the source was completed with (issue #430): `eur_traitless`'s
+#: significant region stops short of the SNP completion imputed for it, 1:1050500, and
+#: `eur_sparse` gets a cis row that leaves three of its four NaN rows (1,050,500, 1,100,000
+#: and 1,150,000) outside.
 NARROWER = [
     ("eur_traitless", "significant_trans", "1", 900_000, 1_000_000),
     ("eur_sparse", "cis", "1", 900_000, 1_000_000),
@@ -353,8 +352,9 @@ def test_imputed_and_missing_rows_outside_the_regions_fail(tmp_path, pair):
     missing ones each fail, though the panel holds every one of them."""
     observed, completed, panel = pair
     out = tmp_path / "verdict.json"
+    with_regions(observed, NARROWER)
 
-    result = _run(observed, completed, out, panel=panel, regions=NARROWER)
+    result = _run(observed, completed, out, panel=panel)
 
     assert result.exit_code == 1, result.output
     verdict = _verdict(result, out)
@@ -363,17 +363,17 @@ def test_imputed_and_missing_rows_outside_the_regions_fail(tmp_path, pair):
     assert {"imputed_outside_retained", "missing_outside_retained"} <= set(verdict["failures"])
 
 
-def test_a_pair_whose_coverage_is_not_cis_is_refused_without_the_region_table(
-    tmp_path, pair
-):
-    """As completion refuses it (issue #430): the pair is `cis_and_signals`, whose regions only
-    its build's table records."""
+def test_a_source_whose_coverage_is_not_cis_is_refused_without_regions_tsv(tmp_path, pair):
+    """As completion refuses it (issue #430): the source is `cis_and_signals`, whose regions
+    only the `regions.tsv` its build recorded holds."""
     observed, completed, panel = pair
+    (observed / "regions.tsv").unlink()
+    edit_manifest(observed, lambda m: {k: v for k, v in m.items() if k != "regions"})
     out = tmp_path / "verdict.json"
 
     _assert_refused(
-        _run(observed, completed, out, panel=panel, regions=None), out,
-        "Association Coverage is cis_and_signals",
+        _run(observed, completed, out, panel=panel), out,
+        "Association Coverage is cis_and_signals and it holds no regions.tsv",
     )
 
 
@@ -579,17 +579,14 @@ def _other_layout_pairs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, t
 
 
 @pytest.mark.parametrize("layout", ["dense", "hybrid"])
-@pytest.mark.parametrize("option", ["--ld-panel", "--ancestry", "--regions"])
+@pytest.mark.parametrize("option", ["--ld-panel", "--ancestry"])
 def test_a_ragged_only_option_is_refused_for_a_dense_or_hybrid_pair(
     tmp_path, pair, layout, option, _other_layout_pairs
 ):
     _, _, panel = pair
     source, target = _other_layout_pairs[layout]
     out = tmp_path / "verdict.json"
-    value = {
-        "--ld-panel": str(panel), "--ancestry": "EUR",
-        "--regions": str(write_region_table(tmp_path / "sparse_regions.tsv", TABLE)),
-    }[option]
+    value = str(panel) if option == "--ld-panel" else "EUR"
 
     result = CliRunner().invoke(
         app,
@@ -749,12 +746,12 @@ def _write_multi_block_panel(root: Path) -> Path:
 @pytest.fixture(scope="module")
 def _region_pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path, Path]:
     root = tmp_path_factory.mktemp("observed-view-ragged-regions")
-    observed = _build_source(root, REGION_SOURCES, REGION_ANALYSES)
+    observed = _build_source(root, REGION_SOURCES, REGION_ANALYSES, REGION_TABLE)
     panel = _write_multi_block_panel(root)
     completed = root / "comp.opengwasdb"
     complete_ragged_store(
         observed, completed, panel, ancestry="EUR", cis_window_bp=CIS_WINDOW_BP, min_cor=0.0,
-        release_id="comp-v1", regions=write_region_table(root / "sparse_regions.tsv", REGION_TABLE),
+        release_id="comp-v1",
     )
     return observed, completed, panel
 
@@ -763,7 +760,7 @@ def test_retained_regions_follow_the_hand_derived_block_table(tmp_path, _region_
     observed, completed, panel = _region_pair_seed
     out = tmp_path / "verdict.json"
 
-    result = _run(observed, completed, out, panel=panel, regions=REGION_TABLE)
+    result = _run(observed, completed, out, panel=panel)
 
     verdict = _verdict(result, out)
     assert result.exit_code == 0, verdict["failures"]

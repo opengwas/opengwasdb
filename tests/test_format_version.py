@@ -102,9 +102,27 @@ def test_the_version_this_build_writes_is_one_it_can_read():
 
 def test_the_readable_formats_are_the_two_the_epic_carries():
     """Format 0.2.0 is readable since #245 (Zarr v3 with sharding, the
-    converter's output), alongside 0.1.0 which every builder still writes.  A
-    third entry is a decision, not an accident."""
-    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (0,)}
+    converter's output), alongside 0.1.0; the 0.2 series reads to 0.2.1 since
+    #430, which adds a Ragged release's optional `regions.tsv`.  Another entry is
+    a decision, not an accident."""
+    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (1,)}
+
+
+def test_a_release_is_stamped_the_lowest_version_whose_features_it_uses():
+    """The owner's decision of 2026-11-11 (spec §21.3, ADR 0038 §3): 0.2.1 differs from
+    0.2.0 only by an optional, manifest-declared `regions.tsv`, so a 0.2.0 release is a
+    0.2.1 one without the file, and only a release that carries it is 0.2.1."""
+    assert store_open.format_version_for(carries_regions=False) == "0.2.0"
+    assert store_open.format_version_for(carries_regions=True) == "0.2.1"
+    assert store_open.WRITTEN_FORMAT_VERSIONS == ("0.2.0", "0.2.1")
+
+
+def test_the_current_version_is_the_stamp_of_a_release_using_no_optional_feature():
+    """What every builder wrote before #430, and what opengwasdb-stores' engine update
+    probes (`ogstores.engine_update`) and compares with its `REQUIRED_FORMAT_VERSION`:
+    a release that uses no optional feature is still stamped it."""
+    assert CURRENT_FORMAT_VERSION == store_open.format_version_for(carries_regions=False)
+    assert CURRENT_FORMAT_VERSION == "0.2.0"
 
 
 def test_each_readable_series_has_one_zarr_on_disk_format():
@@ -172,22 +190,24 @@ def test_validation_reports_a_pre_reset_release_as_an_error_not_a_crash(dense_st
 # --- writing is narrower than reading (ADR 0041 §3) ------------------------
 
 
-def test_the_current_version_is_writable():
-    writable = store_open.check_writable_format_version(CURRENT_FORMAT_VERSION)
-    assert writable == CURRENT_FORMAT_VERSION
+@pytest.mark.parametrize("version", ["0.2.0", "0.2.1"])
+def test_every_version_this_build_writes_is_writable(version):
+    """Their arrays are encoded identically, so completing a 0.2.0 or a 0.2.1 release
+    writes it in its own format (ADR 0038 §4)."""
+    assert store_open.check_writable_format_version(version) == version
 
 
-def test_the_converter_writes_the_current_version_and_reads_0_1_0():
-    """#247 made the converter's target the builders' version: one constant.
-
-    The converter reads `SOURCE_FORMAT_VERSION` (0.1.0, Zarr v2) and writes
-    `CURRENT_FORMAT_VERSION` (0.2.0).  Anything else would let a built store and
-    a converted store declare different formats while both carry Zarr v3
-    sharding, which is exactly the identity #249 checks.
+def test_the_converter_stamps_what_a_build_would_and_reads_0_1_0():
+    """#247 made the converter's target the builders' version, and #430 keeps it so:
+    the converter reads `SOURCE_FORMAT_VERSION` (0.1.0, Zarr v2) and stamps its
+    output by the builders' one rule (`format_version_for`), 0.2.0 for a release
+    carrying no region table.  Anything else would let a built store and a converted
+    store declare different formats while both carry Zarr v3 sharding, which is
+    exactly the identity #249 checks.
     """
     from opengwasdb.store import convert
 
-    assert convert.CURRENT_FORMAT_VERSION == store_open.CURRENT_FORMAT_VERSION == "0.2.0"
+    assert convert.format_version_for is store_open.format_version_for
     assert convert.SOURCE_FORMAT_VERSION == "0.1.0"
 
 
@@ -212,6 +232,7 @@ def test_a_readable_but_unwritable_version_is_refused(monkeypatch):
     that has never been executed is a guess.
     """
     monkeypatch.setattr(store_open, "CURRENT_FORMAT_VERSION", "0.1.1")
+    monkeypatch.setattr(store_open, "WRITTEN_FORMAT_VERSIONS", ("0.1.1",))
     monkeypatch.setattr(store_open, "SUPPORTED_FORMAT_VERSIONS", {(0, 1): (1,)})
 
     store_open.check_format_version("0.1.0")  # still readable

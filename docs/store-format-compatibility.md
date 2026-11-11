@@ -8,7 +8,8 @@ package release may move neither, one, or both numbers.
 | package | writes `format_version` | reads |
 |---|---|---|
 | 0.2.0 | 0.1 | 0.1 |
-| 0.3.0 and later (every merge to `main` is a version) | 0.2.0 from every builder and the converter | 0.1.0, 0.2.0 |
+| 0.3.0 to 0.8.0 (every merge to `main` is a version) | 0.2.0 from every builder and the converter | 0.1.0, 0.2.0 |
+| the release #430 merges as (0.9.0, from 0.8.0 and a `breaking` fragment) and later | each release the lowest version its features use: 0.2.1 for a Ragged release carrying `regions.tsv`, 0.2.0 for every other, the converter's output included | 0.1.0, 0.2.0, 0.2.1 |
 
 The two `format_version` values in that table are different formats despite
 reading alike: `0.1` is the pre-release format 0.2.0 wrote, and `0.1.0` is the
@@ -56,6 +57,30 @@ share in `provenance.completion.se_exceptions` (ADR 0078). No array or
 encoding changes: the completed planes are coded against the source's own
 `se_coefficients`, which every reader already decodes, and a package built
 before #301 reads the new key as it reads any other provenance.
+
+**#430 adds format 0.2.1, stamped only on a release that uses it.** A Ragged
+release built with `build-ragged-ssf --regions` carries `regions.tsv`, the region
+table its build recorded (spec §1, §17), and declares it in `manifest.json` as
+`"regions": {"path": "regions.tsv", "sha256": …}` (§2), which is how a reader
+finds it (§21.2). §21.1 makes such an addition compatible, a patch move, and the
+owner decided on 2026-11-11 that a build stamps each release the lowest version
+whose features it uses (§21.3, amending ADR 0038 §3): 0.2.1 is 0.2.0 plus that
+file, so a release carrying it is 0.2.1 and every other release, Dense, Hybrid,
+Ragged without a table and every converted one, is 0.2.0, byte for byte as
+before. Completion keeps its source's version, and this package completes, and
+adds the variant index to, 0.2.0 and 0.2.1 releases alike.
+
+What an earlier package does with a 0.2.1 release, measured on OGS-00007 rebuilt
+with its table (0.7.4, and 0.8.0 at `d12c8c4`): it reads it, logging that 0.2.1 is
+a newer compatible version than it knows; it ignores the `regions` entry; its
+`validate` refuses `regions.tsv` as an unexpected store entry; and its
+`complete-ragged` refuses the release, whose format it reads but cannot write
+(ADR 0038 §4), so neither completes it outside its regions nor drops its table.
+0.8.0 refuses it sooner without `--regions`, its coverage being `cis_and_signals`.
+Stamped 0.2.0, the same Store was completed by both: 0.7.4 by the old rule, whole
+LD blocks (101,308 imputed cells where the regions give 18,352), and 0.8.0 inside
+the same regions when given `--regions`, each writing neither the file nor the
+entry. The patch move is what stops that.
 
 ## Keeping this page true
 
