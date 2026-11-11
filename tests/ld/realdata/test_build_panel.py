@@ -38,7 +38,6 @@ from realdata_inputs import required
 
 import ogld
 from ogld.build.diagnostic import outside_regions
-from ogld.format import dequantise
 from ogld.identity import Orientation, orient
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -48,6 +47,10 @@ NARROW = ["--chr", "22", "--from-bp", "20000000", "--to-bp", "23000000"]
 WIDE = ["--chr", "22", "--from-bp", "20000000", "--to-bp", "32000000"]
 #: plink2 prints r to six significant digits.
 PRINTED = 5e-7
+#: HGDP+1kGP's encoding, which ogld#7 builds every panel at (ADR 0004): every build here uses it.
+HGDP_SCALE = 511
+#: Half the bins the PC Diagnostic counts the change in r into, 2⁻²⁰ wide (spec §7).
+HALF_BIN = 2.0**-21
 _SLICES: dict[str, Path] = {}
 
 
@@ -94,7 +97,7 @@ def pvar_rows(path: Path) -> list[list[str]]:
     return [line.split("\t") for line in lines if not line.startswith("#")]
 
 
-def inputs(pgen: Path, source: str, pcs: Path | None = None) -> ogld.BuildInputs:
+def inputs(pgen: Path, source: str, r_scale: int, pcs: Path | None = None) -> ogld.BuildInputs:
     return ogld.BuildInputs(
         pgen=(pgen,),
         keep=eur_keep(),
@@ -103,6 +106,7 @@ def inputs(pgen: Path, source: str, pcs: Path | None = None) -> ogld.BuildInputs
         panel_id="hgdp1kgp-v2-EUR-chr22-slice",
         ancestry="EUR",
         genotype_source=source,
+        r_scale=r_scale,
         k=10 if pcs else 0,
         info_min=None,
     )
@@ -126,7 +130,8 @@ def test_the_builder_refuses_the_shipped_pgen_for_its_missing_calls(tmp_path: Pa
     assert (counts > 0).any(), "the shipped slice must have missing calls for this to mean anything"
     with pytest.raises(ogld.InputError, match="missing"):
         ogld.build(
-            inputs(tmp_path / "shipped.pgen", "gnomAD v3.1.2, shipped pgen"), tmp_path / "store"
+            inputs(tmp_path / "shipped.pgen", "gnomAD v3.1.2, shipped pgen", HGDP_SCALE),
+            tmp_path / "store",
         )
 
 
@@ -162,7 +167,8 @@ def test_the_builder_matches_plink2_on_a_real_chr22_slice(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
     slice_ = v2_slice("narrow", tmp_path_factory)
-    ogld.build(inputs(slice_.with_suffix(".pgen"), "v2 EUR chr22:20-23 Mb"), tmp_path / "store")
+    narrow = inputs(slice_.with_suffix(".pgen"), "v2 EUR chr22:20-23 Mb", HGDP_SCALE)
+    ogld.build(narrow, tmp_path / "store")
     store = ogld.open(tmp_path / "store")
 
     rows = pvar_rows(slice_.with_suffix(".pvar"))
@@ -199,11 +205,12 @@ def test_the_builder_matches_plink2_on_a_real_chr22_slice(
     ours = store.matrix([by_id[v].alid for v in order]).r
     # r of A1 dosages is r of ALT dosages times both variants' signs (spec §3).
     worst = np.abs(ours - theirs * sign[:, None] * sign[None, :]).max()
-    assert worst <= 1 / 65534 + PRINTED, f"the builder is {worst} from plink2"
+    assert worst <= 1 / (2 * HGDP_SCALE) + PRINTED, f"the builder is {worst} from plink2"
 
 
-def band_within(store: Path, distance: int) -> npt.NDArray[np.float64]:
-    """Every chr22 Near Band pair of `store` within `distance`, as Stored r, row after row."""
+def band_within(store: Path, distance: int) -> tuple[npt.NDArray[np.float64], int]:
+    """Every chr22 Near Band pair of `store` within `distance`, as Stored r, row after row, and
+    the scale the store records, which its codes are read at."""
     root = zarr.open_group(str(store), mode="r", zarr_format=3)
     position = np.asarray(root["variants/position"][:]).astype(np.int64)
     indptr = np.asarray(root["near/22/indptr"][:])
@@ -211,7 +218,10 @@ def band_within(store: Path, distance: int) -> npt.NDArray[np.float64]:
     reach = np.searchsorted(position, position + distance, side="right")
     lengths = reach - np.arange(len(position)) - 1
     offset = np.arange(int(lengths.sum())) - np.repeat(np.cumsum(lengths) - lengths, lengths)
-    return dequantise(codes[np.repeat(indptr[:-1], lengths) + offset])
+    scale: int = root.attrs["ld_store"]["encoding"]["r_scale"]
+    assert scale == HGDP_SCALE, "the store records the scale the test built it at"
+    stored: npt.NDArray[np.float64] = codes[np.repeat(indptr[:-1], lengths) + offset] / scale
+    return stored, scale
 
 
 def test_real_ld_survives_pc_adjustment(
@@ -222,13 +232,14 @@ def test_real_ld_survives_pc_adjustment(
     pcs = required("OGLD_EUR_PC_FILE", "EUR's PC File from scripts/make_pcs.py, §10")
     slice_ = v2_slice("wide", tmp_path_factory)
     pgen = slice_.with_suffix(".pgen")
-    ogld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb"), tmp_path / "k0")
-    adjusted = ogld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb", pcs), tmp_path / "k10")
+    ogld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb", HGDP_SCALE), tmp_path / "k0")
+    adjusted = ogld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb", HGDP_SCALE, pcs), tmp_path / "k10")
     held = [zarr.open_group(str(tmp_path / s), mode="r")["variants"] for s in ("k0", "k10")]
     assert list(held[0]["alid"][:]) == list(held[1]["alid"][:]), "one Variant Set, both builds"
     assert outside_regions("22", np.asarray(held[0]["position"][:]).astype(np.int64)).all()
 
-    change = band_within(tmp_path / "k10", 100_000) - band_within(tmp_path / "k0", 100_000)
+    (after, scale), (before, _) = (band_within(tmp_path / s, 100_000) for s in ("k10", "k0"))
+    change = after - before
     assert len(change) > 500_000, "the slice must hold many pairs within 100 kb"
     assert np.median(np.abs(change)) < 0.01, (
         f"real LD moved: median |change| {np.median(np.abs(change))}"
@@ -237,8 +248,11 @@ def test_real_ld_survives_pc_adjustment(
     assert diagnostic is not None
     recorded = diagnostic["near_100kb_change"]
     assert set(recorded) == {"0", "0.5", "0.9", "0.99", "1"}
-    # The provenance's quantiles are of the computed change; these are of the Stored r's, so
-    # they differ by at most two half-steps (3.1e-5) and half a bin.
+    # The provenance's quantiles are of the computed change; these are of the Stored r's. Each
+    # Stored r is within half the store's step of its r, so a change in Stored r is within one
+    # step of the computed change, and an order statistic moves no further; the recorded quantile
+    # is the computed one to within half a bin. At × 511 that is 1.96×10⁻³ (#16).
+    tolerance = 1 / scale + HALF_BIN
     for q in (0.0, 0.5, 0.9, 0.99, 1.0):
         ours = float(np.quantile(change, q, method="lower"))
-        assert abs(recorded[f"{q:g}"] - ours) <= 1e-4, (q, recorded[f"{q:g}"], ours)
+        assert abs(recorded[f"{q:g}"] - ours) <= tolerance, (q, recorded[f"{q:g}"], ours)

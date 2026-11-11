@@ -29,6 +29,7 @@ field is recorded in the store's provenance (`ld-store.md` §7).
 | `panel_id` | string | — | the Source Panel's identifier, such as `hgdp1kgp-v2-EUR` |
 | `ancestry` | string | — | the ancestry label, such as `EUR` |
 | `genotype_source` | string | — | what the genotypes are: the release and its files |
+| `r_scale` | int | — | the scale of the store's encoding of r, r̂ = code / r_scale, a whole number from 1 to 32767 (`ld-store.md` §3): 511 for the HGDP+1kGP panels, 2047 for UK Biobank EUR (ADR 0004). There is no default: a build without one is refused, naming it. Provenance records it as `encoding.r_scale` |
 | `k` | int | 10 | the target: the first `k` PCs the PC Check keeps are regressed out (§8). If fewer survive, the build uses those. Provenance records it as `k_target` |
 | `k_min` | int | 5 | the fewest kept PCs a build accepts; below it the build is refused, naming the dropped PCs (§8). Provenance records it, and `k`, the number used, which is t_far's k. It applies only when PCs are used: with `k` = 0 no PC File is read, nothing is refused for want of PCs, and provenance records k = 0 and `k_min` as null |
 | `mac_min` | int | 20 | the minor allele count floor (§6) |
@@ -246,7 +247,7 @@ nothing.
 
 **Its limit.** By chance alone a window holds about 5 / n of any vector's variance, so a PC's
 ratio cannot fall much below 5 / (n × `window_share`): below about 100 samples the rule cannot
-drop any PC. Every HGDP+1kGP panel has n ≥ 345.
+drop any PC. Every HGDP+1kGP panel keeps at least 341 samples, AMR's unrelated ones (§10).
 
 **The covariates** are the first `k` = 10 (`BuildInputs.k`) PCs of the PC File that are not local,
 in PC order. If fewer than 10 survive, the build uses all that do, as long as at least

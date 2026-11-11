@@ -41,7 +41,14 @@ from ogld.build.inputs import (
     read_pc_file,
 )
 from ogld.build.variant_set import Chromosome, Pass
-from ogld.format import Counts, InputError
+from ogld.format import Codes, Counts, InputError, REncoding
+from ogld.format.geometry import (
+    chromosome_index,
+    chromosome_ranges,
+    global_rows,
+    local_rows,
+    windows,
+)
 from ogld.identity import Orientation
 from ogld.store import StoreWriter, Variants
 
@@ -101,8 +108,8 @@ def _blocks(
 ) -> Iterator[tuple[int, npt.NDArray[np.float64]]]:
     """A chromosome's genotypes in Variant Set order, a block at a time: (first row, dosages)."""
     with Genotypes(the_plan.filesets[chromosome.fileset]) as genotypes:
-        for first in range(0, len(chromosome), CHUNK_RECORDS):
-            yield first, genotypes.rows(chromosome.rows[first : first + CHUNK_RECORDS])
+        for first, stop in windows(0, len(chromosome), CHUNK_RECORDS):
+            yield first, genotypes.rows(chromosome.rows[first:stop])
 
 
 def drop_flat(the_plan: Plan, found: Pass, chosen: Covariates) -> list[Chromosome]:
@@ -124,11 +131,10 @@ def drop_flat(the_plan: Plan, found: Pass, chosen: Covariates) -> list[Chromosom
 
 
 def variants_table(chromosomes: list[Chromosome]) -> Variants:
-    """The store's variant table (spec §2): the chromosomes in order, strings of any length.
-    The chromosome labels are short and fixed-width, the type `ogld.format.geometry` reads."""
+    """The store's variant table (spec §2): the chromosomes in order, strings of any length."""
     oriented = [o for c in chromosomes for o in c.oriented]
     return Variants(
-        chrom=np.array([o.chrom for o in oriented], dtype=np.str_),
+        chrom=_strings(oriented, "chrom"),
         position=np.concatenate([c.position for c in chromosomes]),
         alid=_strings(oriented, "alid"),
         a1=_strings(oriented, "a1"),
@@ -153,16 +159,28 @@ def _units(the_plan: Plan, chromosome: Chromosome, chosen: Covariates) -> npt.ND
     return out
 
 
+def _global(local: int, start: int) -> int:
+    """A chromosome's local row as the Variant Set's global row (spec §2)."""
+    return int(global_rows(local, start))
+
+
+def _labels(chromosomes: list[Chromosome]) -> npt.NDArray[np.str_]:
+    """The chromosome of each row of the Variant Set, in its order."""
+    return np.concatenate([np.full(len(c), c.name) for c in chromosomes])
+
+
 def chance(the_plan: Plan, chromosomes: list[Chromosome], chosen: Covariates) -> ChanceRates:
     """#405's chance-LD rates over the Variant Set (`ogld.build.diagnostic`)."""
-    labels = np.concatenate([np.full(len(c), c.name) for c in chromosomes])
-    start = np.cumsum([0] + [len(c) for c in chromosomes])
+    labels = _labels(chromosomes)
+    ranges = list(chromosome_ranges(labels).values())
+    stops = [stop for _, stop in ranges]
     unadjusted = covariates([], None, the_plan.samples.n)
 
     def units_of(rows: npt.NDArray[np.int64]) -> tuple[npt.NDArray[np.float64], ...]:
         both: tuple[list[npt.NDArray[np.float64]], ...] = ([], [])
         for i, c in enumerate(chromosomes):
-            mine = rows[(rows >= start[i]) & (rows < start[i + 1])] - start[i]
+            own = chromosome_index(stops, rows) == i
+            mine = local_rows(rows[own], ranges[i][0])
             picked = c.without(~np.isin(np.arange(len(c)), mine))
             for out, cov in zip(both, (unadjusted, chosen), strict=True):
                 out.append(_units(the_plan, picked, cov))
@@ -187,28 +205,30 @@ def write_ld(
     floor: int,
     distances: tuple[int, int],
     threads: int,
+    encoding: REncoding,
 ) -> Written:
-    """Each chromosome's Near Band and Proxy Index, through `writer` (spec §4, §5)."""
+    """Each chromosome's Near Band and Proxy Index, through `writer`, as `encoding`'s codes
+    (spec §3, §4, §5)."""
     written = Written(
         {"near_pairs": 0, "far_candidates": 0, "far_pairs": 0, "index_entries": 0},
         ChangeHistogram(),
     )
-    start = 0
+    ranges = chromosome_ranges(_labels(chromosomes))
     for chromosome in chromosomes:
-        inputs = _inputs(the_plan, chromosome, chosen, floor, distances)
+        start = ranges[chromosome.name][0]
+        inputs = _inputs(the_plan, chromosome, chosen, floor, distances, encoding)
         band, rows = inputs.band, len(inputs.units)
         last, found = _write_band(writer, start, inputs, threads, written)
         # The unit vectors go before the chromosome's last rows complete its band, which the
         # writer then holds whole while it writes it (ogld#4): the two largest arrays a
         # chromosome makes are never held at once.
         del inputs
-        writer.write_near(start + last.first, last.lengths, last.codes)
+        writer.write_near(_global(last.first, start), last.lengths, last.codes)
         entries = tiles.Entries.of(*found)
         del found
         indptr, partner, codes = entries.both_directions(rows, start)
         writer.write_index(chromosome.name, indptr, partner, codes)
         _count(written, band, entries, len(partner))
-        start += rows
     return written
 
 
@@ -218,6 +238,7 @@ def _inputs(
     chosen: Covariates,
     floor: int,
     distances: tuple[int, int],
+    encoding: REncoding,
 ) -> tiles.Inputs:
     """What every tile of `chromosome` reads: its unit vectors, adjusted and (at k > 0) not."""
     adjusted = _units(the_plan, chromosome, chosen)
@@ -226,12 +247,10 @@ def _inputs(
         unadjusted = _units(the_plan, chromosome, covariates([], None, the_plan.samples.n))
     band = tiles.Band.of(chromosome.position, *distances, CHANGE_BP)
     outside = outside_regions(chromosome.name, chromosome.position)
-    return tiles.Inputs(adjusted, unadjusted, outside, band, floor)
+    return tiles.Inputs(adjusted, unadjusted, outside, band, floor, encoding)
 
 
-_Found = tuple[
-    list[npt.NDArray[np.int32]], list[npt.NDArray[np.int32]], list[npt.NDArray[np.int16]]
-]
+_Found = tuple[list[npt.NDArray[np.int32]], list[npt.NDArray[np.int32]], list[Codes]]
 
 
 def _write_band(
@@ -243,7 +262,7 @@ def _write_band(
     held: tiles.Tile | None = None
     for tile in tiles.tiles(inputs, threads):
         if held is not None:
-            writer.write_near(start + held.first, held.lengths, held.codes)
+            writer.write_near(_global(held.first, start), held.lengths, held.codes)
         held = tile
         found[0].append(tile.lo)
         found[1].append(tile.hi)

@@ -25,6 +25,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+import testdata
 
 import ogld
 from ogld import cli, identity
@@ -46,8 +47,9 @@ SURFACE: dict[str, tuple[Callable[..., Any], str]] = {
     "ogld.BuildInputs": (
         ogld.BuildInputs,
         "(pgen: 'tuple[Path, ...]', keep: 'Path', pcs: 'Path | None', pc_source: 'str | None', "
-        "panel_id: 'str', ancestry: 'str', genotype_source: 'str', k: 'int' = 10, "
-        "k_min: 'int' = 5, mac_min: 'int' = 20, info_min: 'float | None' = 0.8) -> None",
+        "panel_id: 'str', ancestry: 'str', genotype_source: 'str', r_scale: 'int', "
+        "k: 'int' = 10, k_min: 'int' = 5, mac_min: 'int' = 20, "
+        "info_min: 'float | None' = 0.8) -> None",
     ),
     "ogld.LDStore.matrix": (
         ogld.LDStore.matrix,
@@ -179,16 +181,18 @@ def test_ogld_imports_and_reads_the_test_store_without_pgenlib() -> None:
 
 
 def test_a_pgen_read_without_pgenlib_refuses_naming_the_extra() -> None:
+    panel = testdata.panel()
     code = (
         "import sys\n"
         "sys.modules['pgenlib'] = None\n"
         "from pathlib import Path\n"
-        "import numpy as np\n"
         "import ogld\n"
-        "from ogld.build.near_band import read_alt_counts\n"
-        "p = Path('x')\n"
+        "from ogld.build.genotypes import Genotypes\n"
+        "from ogld.build.inputs import fileset, read_keep\n"
+        f"pgen, keep = Path({str(panel.pgen)!r}), Path({str(panel.keep)!r})\n"
+        "opened = fileset(pgen, read_keep(keep, 'p'), None, 'p')\n"
         "try:\n"
-        "    read_alt_counts(p, p, p, np.zeros(1, dtype=np.int64))\n"
+        "    Genotypes(opened)\n"
         "except ogld.InputError as refusal:\n"
         "    print(refusal)\n"
     )

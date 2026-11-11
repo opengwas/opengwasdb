@@ -24,8 +24,11 @@ import numpy.typing as npt
 
 def chromosome_ranges(chrom: npt.ArrayLike) -> dict[str, tuple[int, int]]:
     """Each chromosome's [row_start, row_stop), in order of appearance; a chromosome that
-    reappears after another breaks the Variant Set's order (spec §2)."""
-    labels = np.asarray(chrom, dtype=np.str_)
+    reappears after another breaks the Variant Set's order (spec §2). `chrom` may be fixed-width
+    (`<U`) or numpy's variable-width `StringDType`, which is what zarr returns."""
+    labels = np.asarray(chrom)
+    if labels.dtype.kind not in "UT":  # bytes and objects become str; U and StringDType are
+        labels = labels.astype(np.str_)  # already text
     ranges: dict[str, tuple[int, int]] = {}
     if len(labels) == 0:
         return ranges

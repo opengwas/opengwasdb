@@ -17,27 +17,21 @@ import pytest
 import testdata
 import zarr
 from script_modules import load_script
+from store_copies import FLOOR, R_SCALE, codes_at, stored_at
 
-from ogld.format import (
-    NEAR_BP,
-    RESERVED_CODE,
-    InputError,
-    dequantise,
-    far_code_floor,
-    quantise,
-    t_far,
-)
+from ogld.format import NEAR_BP, InputError, REncoding
 from ogld.identity import orient
 from ogld.store import StoreReader, StoreWriter, layout
 
 K = 10
-FLOOR = far_code_floor(t_far(771, K))
+#: The Test Store's encoding, which the stores written here share.
+TEST_STORE_ENCODING = REncoding(R_SCALE)
 
 
 @pytest.fixture(scope="module")
 def written(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return load_script("make_test_store").write_test_store(
-        K, tmp_path_factory.mktemp("s") / "store"
+        K, tmp_path_factory.mktemp("s") / "store", R_SCALE
     )
 
 
@@ -78,7 +72,7 @@ def test_every_array_has_the_fill_value_and_codecs_spec_6_says(written: Path) ->
     fills = {
         "indptr": -1,
         "partner": -1,
-        "r": RESERVED_CODE,
+        "r": -32768,
         "position": 0,
         "alid": "",
         "a1": "",
@@ -126,13 +120,13 @@ def test_the_whole_store_reads_back_the_reference_codes_exactly(written: Path) -
     i, j = where[ref.row_i], where[ref.row_j]
     pos = testdata.variants().pos
     distance = pos[ref.row_j] - pos[ref.row_i]
-    code = quantise(ref.r * sign[ref.row_i] * sign[ref.row_j])
+    code = codes_at(ref.r * sign[ref.row_i] * sign[ref.row_j])
     held = (distance <= NEAR_BP) | (np.abs(code) >= FLOOR)
     assert (np.abs(code) >= FLOOR)[distance > NEAR_BP].any(), "the fixture needs a Far Pair"
     assert ((distance > NEAR_BP) & (np.abs(code) < FLOOR)).any(), "the fixture needs a Bound"
     expected = np.full((len(rows), len(rows)), np.nan)
-    expected[i[held], j[held]] = dequantise(code[held])
-    expected[j[held], i[held]] = dequantise(code[held])
+    expected[i[held], j[held]] = code[held] / R_SCALE
+    expected[j[held], i[held]] = code[held] / R_SCALE
     np.fill_diagonal(expected, 1.0)
     np.testing.assert_array_equal(reader.pair_r(np.arange(len(rows))), expected)
 
@@ -143,7 +137,7 @@ def test_the_proxy_index_holds_each_pair_both_ways_at_the_threshold(written: Pat
     index = reader.index(np.arange(n))
     held = np.repeat(np.arange(n), np.diff(index.indptr))
     assert len(index.partner) == reader.provenance["counts"]["index_entries"] > 100
-    assert (np.abs(quantise(index.r)) >= FLOOR).all()
+    assert (np.abs(codes_at(index.r)) >= FLOOR).all()
     forward = dict(zip(zip(held, index.partner, strict=True), index.r, strict=True))
     assert all(forward[(m, j)] == r for (j, m), r in forward.items())
 
@@ -151,19 +145,25 @@ def test_the_proxy_index_holds_each_pair_both_ways_at_the_threshold(written: Pat
 def test_an_unwritten_near_band_chunk_reads_as_the_reserved_code(tmp_path: Path) -> None:
     group = zarr.open_group(tmp_path / "g", mode="w", zarr_format=3)
     length = layout.NEAR_R[1] + 5
-    array = layout.new_r_array(group, "r", length, layout.NEAR_R)
-    assert array.fill_value == RESERVED_CODE
-    assert (np.asarray(array[:10]) == RESERVED_CODE).all()
-    assert (np.asarray(array[layout.NEAR_R[1] :]) == RESERVED_CODE).all()
+    array = layout.new_r_array(group, "r", length, layout.NEAR_R, TEST_STORE_ENCODING)
+    assert array.fill_value == -32768
+    assert (np.asarray(array[:10]) == -32768).all()
+    assert (np.asarray(array[layout.NEAR_R[1] :]) == -32768).all()
     with pytest.raises(ValueError, match="reserved"):
-        dequantise(np.asarray(array[:10]))
+        TEST_STORE_ENCODING.dequantise(np.asarray(array[:10]))
 
 
 def test_a_store_without_its_provenance_is_not_read_as_a_short_one(
     tmp_path: Path, written: Path
 ) -> None:
     variants = StoreReader.open(written).variants(np.arange(3))
-    StoreWriter.create(tmp_path / "half", variants=variants, near_bp=NEAR_BP, far_bp=10_000_000)
+    StoreWriter.create(
+        tmp_path / "half",
+        variants=variants,
+        near_bp=NEAR_BP,
+        far_bp=10_000_000,
+        encoding=TEST_STORE_ENCODING,
+    )
     with pytest.raises(ValueError, match="provenance"):
         StoreReader.open(tmp_path / "half")
 
@@ -173,7 +173,11 @@ def test_the_writer_refuses_an_unfinished_chromosome_naming_it(
 ) -> None:
     reader = StoreReader.open(written)
     writer = StoreWriter.create(
-        tmp_path / "s", variants=reader.variants(np.arange(3)), near_bp=NEAR_BP, far_bp=10_000_000
+        tmp_path / "s",
+        variants=reader.variants(np.arange(3)),
+        near_bp=NEAR_BP,
+        far_bp=10_000_000,
+        encoding=TEST_STORE_ENCODING,
     )
     with pytest.raises(ValueError, match=r"Near Band of chromosome 21"):
         writer.finish(reader.provenance)
@@ -185,7 +189,11 @@ def test_the_writer_refuses_a_near_band_row_of_the_wrong_length(
     reader = StoreReader.open(written)
     rows = np.arange(4)
     writer = StoreWriter.create(
-        tmp_path / "s", variants=reader.variants(rows), near_bp=NEAR_BP, far_bp=10_000_000
+        tmp_path / "s",
+        variants=reader.variants(rows),
+        near_bp=NEAR_BP,
+        far_bp=10_000_000,
+        encoding=TEST_STORE_ENCODING,
     )
     with pytest.raises(ValueError, match="every later variant within near_bp"):
         writer.write_near(0, np.array([1, 1, 1, 0]), np.zeros(3, dtype=np.int16))
@@ -193,8 +201,8 @@ def test_the_writer_refuses_a_near_band_row_of_the_wrong_length(
 
 def test_the_script_writes_the_same_arrays_and_the_same_provenance_again(tmp_path: Path) -> None:
     script = load_script("make_test_store")
-    first = script.write_test_store(0, tmp_path / "one")
-    second = script.write_test_store(0, tmp_path / "two")
+    first = script.write_test_store(0, tmp_path / "one", R_SCALE)
+    second = script.write_test_store(0, tmp_path / "two", R_SCALE)
     one, two = zarr.open_group(first, mode="r"), zarr.open_group(second, mode="r")
     names = {name: np.asarray(array[:]) for name, array in arrays(one)}
     assert len(names) == 15, "every array must be compared for this to mean anything"
@@ -216,7 +224,13 @@ def four_row_writer(tmp_path: Path, written: Path) -> StoreWriter:
     """A writer over the Test Store's first four rows, all on chromosome 21, 300 kb apart."""
     variants = StoreReader.open(written).variants(np.arange(4))
     assert set(variants.chrom) == {"21"}, "the fixture's first rows must share a chromosome"
-    return StoreWriter.create(tmp_path / "s", variants=variants, near_bp=NEAR_BP, far_bp=10_000_000)
+    return StoreWriter.create(
+        tmp_path / "s",
+        variants=variants,
+        near_bp=NEAR_BP,
+        far_bp=10_000_000,
+        encoding=TEST_STORE_ENCODING,
+    )
 
 
 GOOD_LENGTHS = np.array([3, 2, 1, 0], dtype=np.int64)
@@ -229,7 +243,14 @@ SIX_CODES = np.arange(6, dtype=np.int16)
         (1, GOOD_LENGTHS[1:], SIX_CODES[:3], "in order"),
         (0, np.append(GOOD_LENGTHS, 0), SIX_CODES, "past the end"),
         (0, GOOD_LENGTHS, SIX_CODES[:5], "disagree"),
-        (0, GOOD_LENGTHS, np.full(6, RESERVED_CODE, dtype=np.int16), "reserved"),
+        (0, GOOD_LENGTHS, np.full(6, -32768, dtype=np.int16), "reserved"),
+        # One past the Test Store's scale: an int16 the container holds, but r̂ = 512 / 511.
+        (
+            0,
+            GOOD_LENGTHS,
+            np.array([1, 2, R_SCALE + 1, 4, 5, 6], dtype=np.int16),
+            rf"\[{R_SCALE + 1}\].*past the scale",
+        ),
     ],
 )
 def test_the_writer_refuses_a_near_band_write_that_is_out_of_order_or_unsound(
@@ -260,7 +281,8 @@ def test_the_writer_accepts_the_near_band_these_refusals_are_the_exception_to(
         ("21", [0, 0], [], [], "indptr must span"),
         ("21", [0, 1, 1, 1, 1], [1], [], "disagree"),
         ("21", [0, 1, 1, 1, 1], [9], [5], "outside chromosome 21"),
-        ("21", [0, 1, 1, 1, 1], [1], [RESERVED_CODE], "reserved"),
+        ("21", [0, 1, 1, 1, 1], [1], [-32768], "reserved"),
+        ("21", [0, 1, 1, 1, 1], [1], [-(R_SCALE + 1)], rf"\[{-(R_SCALE + 1)}\].*past the scale"),
     ],
 )
 def test_the_writer_refuses_a_proxy_index_that_does_not_fit_its_chromosome(
@@ -335,7 +357,7 @@ def test_the_band_is_both_sides_of_a_row_within_near_bp(written: Path) -> None:
     where, sign = store_rows(), signs()
     a, b = where[ref.row_i], where[ref.row_j]
     near = (testdata.variants().pos[ref.row_j] - testdata.variants().pos[ref.row_i]) <= NEAR_BP
-    stored = dequantise(quantise(ref.r * sign[ref.row_i] * sign[ref.row_j]))
+    stored = stored_at(ref.r * sign[ref.row_i] * sign[ref.row_j])
     some = reader.rows_in("22", 0, 100_000_000)[[200, 300, 400]]
     band = reader.band(some)
     for n, row in enumerate(some):
@@ -354,12 +376,12 @@ def test_the_proxy_index_is_exactly_the_reference_pairs_at_the_threshold(written
     reader = StoreReader.open(written)
     ref = testdata.reference_r(K)
     where, sign = store_rows(), signs()
-    code = quantise(ref.r * sign[ref.row_i] * sign[ref.row_j])
+    code = codes_at(ref.r * sign[ref.row_i] * sign[ref.row_j])
     keep = np.abs(code) >= FLOOR
     assert keep.sum() > 100, "the reference must hold many pairs at the threshold"
     a, b = where[ref.row_i[keep]], where[ref.row_j[keep]]
     expected = {
-        (int(x), int(y)): float(c) / 32767 for x, y, c in zip(a, b, code[keep], strict=True)
+        (int(x), int(y)): float(c) / R_SCALE for x, y, c in zip(a, b, code[keep], strict=True)
     }
     expected |= {(y, x): r for (x, y), r in expected.items()}
     n = reader.provenance["n_variants"]
@@ -401,7 +423,7 @@ def test_a_store_that_is_not_one_this_ogld_reads_is_an_input_error(
 
     for edit, match in (
         (lambda p: p.update(format_version="9.0.0"), r"9\.0\.0"),
-        (lambda p: p["encoding"].update(r_scale=255), "encoding"),
+        (lambda p: p["encoding"].update(r_dtype="int8"), "encoding"),
         (lambda p: p.clear(), "provenance|format"),
     ):
         copy = tmp_path / match.replace("|", "_").replace("\\", "")

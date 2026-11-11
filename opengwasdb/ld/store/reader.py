@@ -1,8 +1,9 @@
 """Reading an LD Store: the seam every query is built on (spec §1–§6, §10; ogld#4).
 
 `StoreReader` is the store layer's whole read interface. It hides Zarr, the chunk and
-shard shapes, chromosome-local rows and the int16 codes: callers pass and receive global
-Variant Set rows and Stored r as float64. Every unstored pair it reports is NaN, never a
+shard shapes, chromosome-local rows and the codes, which it decodes at the scale the store
+records (`ogld.format.REncoding`; ADR 0004): callers pass and receive global Variant Set rows
+and Stored r as float64. Every unstored pair it reports is NaN, never a
 number, and the meaning of a NaN is the format's to say (`ogld.format.answer_kinds`).
 
 Reads are bounded (spec §10). Opening reads the provenance and the chromosome ranges, and
@@ -27,7 +28,7 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import ENCODING, FORMAT_VERSION, RESERVED_CODE, InputError, Provenance, dequantise
+from ogld.format import FORMAT_VERSION, InputError, Provenance, REncoding
 from ogld.format.geometry import (
     chromosome_index,
     global_rows,
@@ -81,11 +82,13 @@ class StoreReader:
 
     Opening reads the provenance and the chromosome ranges and refuses a store whose
     `format_version` or `encoding` this package does not implement (spec §13), naming
-    it, before anything is decoded.
+    it, before anything is decoded. Every code is decoded with the store's own encoding, so
+    one process reads stores of different scales side by side.
     """
 
     _root: zarr.Group
     _provenance: Provenance
+    _encoding: REncoding
     _ranges: dict[str, tuple[int, int]]
     _names: list[str]
     _stops: npt.NDArray[np.int64]
@@ -93,10 +96,12 @@ class StoreReader:
     _cache: ChunkCache
     _columns: dict[str, zarr.Array[Any]]
 
-    def _attach(self, root: zarr.Group, provenance: Provenance) -> None:
-        """Keep the provenance and the chromosome ranges of an opened, checked store."""
+    def _attach(self, root: zarr.Group, provenance: Provenance, encoding: REncoding) -> None:
+        """Keep the provenance, the encoding and the chromosome ranges of an opened, checked
+        store."""
         self._root = root
         self._provenance = provenance
+        self._encoding = encoding
         listed = chromosomes_listed(_group(root, "variants").attrs["chromosomes"])
         self._ranges = {name: (start, stop) for name, start, stop in listed}
         self._names = list(self._ranges)
@@ -126,19 +131,23 @@ class StoreReader:
                 f"{location} is LD Store format {recorded.get('format_version')!r}; "
                 f"this ogld reads {FORMAT_VERSION!r} only (spec §13)"
             )
-        if recorded.get("encoding") != ENCODING:
-            raise InputError(
-                f"{location} records the encoding {recorded.get('encoding')!r}; "
-                f"this ogld reads {ENCODING!r} only (spec §3)"
-            )
+        try:
+            encoding = REncoding.of(recorded.get("encoding"))
+        except InputError as unimplemented:
+            raise InputError(f"{location}: {unimplemented}") from unimplemented
         reader = cls()
-        reader._attach(root, cast(Provenance, recorded))
+        reader._attach(root, cast(Provenance, recorded), encoding)
         return reader
 
     @property
     def provenance(self) -> Provenance:
         """The root group's `ld_store` attribute, as recorded (spec §7)."""
         return self._provenance
+
+    @property
+    def encoding(self) -> REncoding:
+        """The encoding the store records, which every code it reads is decoded with (§3)."""
+        return self._encoding
 
     def rows_of(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:
         """The Variant Set row of each ALID, in order; −1 where the ALID is Absent (spec §2).
@@ -219,10 +228,11 @@ class StoreReader:
         first = np.arange(1, len(local) + 1, dtype=np.int64)
         for i, j in row_pairs(first, near, _PAIRS_PER_STEP):
             codes = self._read(c.near_r, near_address(c.near_indptr, local[i], local[j]))
-            block[i, j] = block[j, i] = dequantise(codes)
+            block[i, j] = block[j, i] = self._encoding.dequantise(codes)
         for i, j in row_pairs(near, far, _PAIRS_PER_STEP):
             held, codes = self._index_codes(c, local[i], local[j])
-            block[i[held], j[held]] = block[j[held], i[held]] = dequantise(codes[held])
+            r = self._encoding.dequantise(codes[held])
+            block[i[held], j[held]] = block[j[held], i[held]] = r
         return block
 
     def _index_codes(
@@ -238,7 +248,8 @@ class StoreReader:
         keys, codes = keys[order], codes[order]
         wanted = lo * size + hi
         if len(keys) == 0:
-            return np.full(len(wanted), False), np.full(len(wanted), RESERVED_CODE, codes.dtype)
+            reserved = self._encoding.reserved_code
+            return np.full(len(wanted), False), np.full(len(wanted), reserved, codes.dtype)
         at = np.minimum(np.searchsorted(keys, wanted), len(keys) - 1)
         return keys[at] == wanted, codes[at]
 
@@ -303,7 +314,7 @@ class StoreReader:
         for members, (lengths, partners, codes) in found:
             where = spans(indptr[members], lengths)
             partner[where] = partners
-            r[where] = dequantise(codes)
+            r[where] = self._encoding.dequantise(codes)
         return Partners(indptr, partner, r)
 
     def _chromosome(self, name: str) -> _Chromosome:
