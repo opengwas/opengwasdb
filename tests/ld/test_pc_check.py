@@ -17,9 +17,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import testdata
+from script_modules import load_script
 
 from ogld.build import pc_check
-from ogld.build.near_band import read_alt_counts
 from ogld.format import InputError
 
 CHROMS, STEP_BP = 3, 20_000
@@ -148,9 +148,9 @@ def test_the_null_records_its_permutations_and_seed_as_integers(small) -> None:
 def test_the_test_panel_s_scan_is_the_one_its_manifest_holds() -> None:
     # The manifest's scan was made by lane 2d's reference before ogld#5 adopted it; the adopted
     # module, given every passing row, selects the common ones itself and gives it again.
-    panel, v = testdata.panel(), testdata.variants()
+    v = testdata.variants()
     passing = np.flatnonzero(v.passes_filters)
-    g = read_alt_counts(panel.pgen, panel.psam, panel.keep, passing.astype(np.int64))
+    g = load_script("make_test_store").alt_counts(passing.astype(np.int64))
     windows = pc_check.windows(v.chrom[passing], v.pos[passing], g, threads=2)
     checked = pc_check.check(windows, testdata.pcs().values)
     held = testdata.manifest()["pc_check"]
