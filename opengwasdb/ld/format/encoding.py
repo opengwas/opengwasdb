@@ -42,10 +42,6 @@ _R_SLACK: Final = 1e-6
 #: An array of codes, in the dtype every admitted encoding's container has (ADR 0004).
 type Codes = npt.NDArray[np.int16]
 
-#: The keys of a store's `encoding` record (spec §7), exactly: a key this package does not know
-#: could change what a code means, so a record with one is refused, not ignored.
-_RECORD_KEYS: Final = frozenset({"r_dtype", "r_scale", "r_reserved_code", "rounding"})
-
 
 @dataclass(frozen=True)
 class REncoding:
@@ -66,15 +62,22 @@ class REncoding:
     #: Never a correlation. Every `r` array's fill value, so a chunk that was never written
     #: cannot read as r = 0 (spec §3, §6).
     reserved_code: ClassVar[int] = int(np.iinfo(np.int16).min)
+    #: The largest scale the container holds symmetrically: the other end from the reserved code.
+    largest_scale: ClassVar[int] = int(np.iinfo(np.int16).max)
     #: How r × scale becomes a code: `numpy.rint`, which rounds half to even.
     rounding: ClassVar[str] = "half_to_even"
 
     def __post_init__(self) -> None:
-        largest = -(self.reserved_code + 1)
-        if not (_whole(self.scale) and 1 <= self.scale <= largest):
+        if not self.admits(self.scale):
             raise InputError(
-                f"an r scale is a whole number from 1 to {largest}, not {self.scale!r} (spec §3)"
+                f"an r scale is a whole number from 1 to {self.largest_scale}, not "
+                f"{self.scale!r} (spec §3)"
             )
+
+    @classmethod
+    def admits(cls, scale: object) -> bool:
+        """Whether `scale` is one the container holds: a whole number from 1 to 32767."""
+        return _whole(scale) and 1 <= scale <= cls.largest_scale
 
     @classmethod
     def of(cls, record: object) -> REncoding:
@@ -84,21 +87,21 @@ class REncoding:
         if not cls._implements(record):
             raise InputError(
                 f"the encoding {record!r} is not one this ogld implements: exactly the keys "
-                f"{sorted(_RECORD_KEYS)}, an int16 container with {cls.reserved_code} reserved, "
-                f"rounded {cls.rounding}, at a whole scale from 1 to {-(cls.reserved_code + 1)} "
-                "(spec §3, §13)"
+                f"{sorted(Encoding.__required_keys__)}, an int16 container with "
+                f"{cls.reserved_code} reserved, rounded {cls.rounding}, at a whole scale from 1 to "
+                f"{cls.largest_scale} (spec §3, §13)"
             )
         return cls(record["r_scale"])
 
     @classmethod
     def _implements(cls, record: object) -> TypeGuard[dict[str, Any]]:
-        if not isinstance(record, dict) or set(record) != _RECORD_KEYS:
+        # Exactly the record's keys, as `Encoding` types them: a key this package does not know
+        # could change what a code means, so a record with one is refused, not ignored.
+        if not isinstance(record, dict) or set(record) != Encoding.__required_keys__:
             return False
         container = (record["r_dtype"], record["r_reserved_code"], record["rounding"])
-        scale = record["r_scale"]
-        return container == (cls.dtype.name, cls.reserved_code, cls.rounding) and (
-            _whole(scale) and 1 <= scale <= -(cls.reserved_code + 1)
-        )
+        expected = (cls.dtype.name, cls.reserved_code, cls.rounding)
+        return container == expected and cls.admits(record["r_scale"])
 
     def record(self) -> Encoding:
         """The store's `encoding` provenance record of this encoding (spec §7)."""
@@ -145,13 +148,11 @@ class REncoding:
         values = np.asarray(codes)
         return np.asarray((values >= -self.scale) & (values <= self.scale))
 
-    def dequantise(self, codes: npt.ArrayLike) -> npt.NDArray[np.float64]:
-        """The Stored r of each code: code / scale (spec §3).
-
-        A code this encoding never writes raises, naming it. The reserved code −32768 is what
-        an unwritten chunk reads as, so decoding it to a number is exactly the silent zero the
-        reserved code exists to prevent; a code past the scale would be an r beyond ±1.
-        """
+    def require_codes(self, codes: npt.ArrayLike) -> None:
+        """Raise ValueError naming the values of `codes` this encoding never writes. The
+        reserved code −32768 is what an unwritten chunk reads as, so taking it for a number is
+        exactly the silent zero it exists to prevent; a code past the scale would be an r beyond
+        ±1. The reader refuses both before it decodes, and the writer before it stores."""
         values = np.asarray(codes)
         held = self.holds(values)
         if not held.all():
@@ -160,6 +161,12 @@ class REncoding:
                 f"codes {found} are not codes of r at × {self.scale}: {self.reserved_code} is "
                 "reserved for an unwritten chunk, and any other is past the scale (spec §3)"
             )
+
+    def dequantise(self, codes: npt.ArrayLike) -> npt.NDArray[np.float64]:
+        """The Stored r of each code: code / scale (spec §3). A code this encoding never writes
+        raises, naming it (`require_codes`)."""
+        values = np.asarray(codes)
+        self.require_codes(values)
         return values.astype(np.float64) / self.scale
 
     def far_code_floor(self, t_far: float) -> int:
@@ -184,7 +191,7 @@ class REncoding:
         return (code - 1) / self.scale
 
 
-def _whole(value: Any) -> bool:
+def _whole(value: object) -> TypeGuard[int]:
     """A whole number as JSON holds one: an int, never a bool or a float."""
     return isinstance(value, int) and not isinstance(value, bool)
 

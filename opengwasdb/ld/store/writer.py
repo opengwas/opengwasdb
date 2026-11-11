@@ -238,13 +238,7 @@ class StoreWriter:
                 f"codes must be {self._encoding.dtype} as `REncoding.quantise` makes them, not "
                 f"{codes.dtype}: a cast would wrap an out-of-range code into a wrong r (spec §3)"
             )
-        held = self._encoding.holds(codes)
-        if not held.all():
-            raise ValueError(
-                f"codes {codes[~held][:5].tolist()} are not codes of r at × "
-                f"{self._encoding.scale}: {self._encoding.reserved_code} is reserved and never a "
-                "correlation, and any other is past the scale (spec §3)"
-            )
+        self._encoding.require_codes(codes)
 
 
 def _as_json(provenance: Provenance) -> dict[str, Any]:

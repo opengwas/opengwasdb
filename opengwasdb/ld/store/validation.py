@@ -1022,16 +1022,16 @@ class _Codes(_Scanned):
             return
 
         def check(window: tuple[int, int]) -> list[tuple[str, str]]:
-            return list(self._reserved(self.store.read(self.path, *window), window[0]))
+            return list(self._outside_encoding(self.store.read(self.path, *window), window[0]))
 
         tiles = windows(0, self.length, _WINDOW)
         for problems in _in_order(check, tiles, self.store.threads):
             yield from problems
 
     def block(self, b: _Block) -> _Problems:
-        yield from self._reserved(b.get(self.part), b.at[self.part])
+        yield from self._outside_encoding(b.get(self.part), b.at[self.part])
 
-    def _reserved(self, codes: npt.NDArray[Any], first: int) -> _Problems:
+    def _outside_encoding(self, codes: npt.NDArray[Any], first: int) -> _Problems:
         reserved, scale = self.encoding.reserved_code, self.encoding.scale
         yield from _flag(self.path, codes == reserved, first, f"the reserved code {reserved}")
         past = ~self.encoding.holds(codes) & (codes != reserved)

@@ -244,6 +244,13 @@ SIX_CODES = np.arange(6, dtype=np.int16)
         (0, np.append(GOOD_LENGTHS, 0), SIX_CODES, "past the end"),
         (0, GOOD_LENGTHS, SIX_CODES[:5], "disagree"),
         (0, GOOD_LENGTHS, np.full(6, -32768, dtype=np.int16), "reserved"),
+        # One past the Test Store's scale: an int16 the container holds, but r̂ = 512 / 511.
+        (
+            0,
+            GOOD_LENGTHS,
+            np.array([1, 2, R_SCALE + 1, 4, 5, 6], dtype=np.int16),
+            rf"\[{R_SCALE + 1}\].*past the scale",
+        ),
     ],
 )
 def test_the_writer_refuses_a_near_band_write_that_is_out_of_order_or_unsound(
@@ -275,6 +282,7 @@ def test_the_writer_accepts_the_near_band_these_refusals_are_the_exception_to(
         ("21", [0, 1, 1, 1, 1], [1], [], "disagree"),
         ("21", [0, 1, 1, 1, 1], [9], [5], "outside chromosome 21"),
         ("21", [0, 1, 1, 1, 1], [1], [-32768], "reserved"),
+        ("21", [0, 1, 1, 1, 1], [1], [-(R_SCALE + 1)], rf"\[{-(R_SCALE + 1)}\].*past the scale"),
     ],
 )
 def test_the_writer_refuses_a_proxy_index_that_does_not_fit_its_chromosome(
