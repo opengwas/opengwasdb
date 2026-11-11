@@ -19,7 +19,6 @@ import zarr
 from contract import support
 from contract.support import alids, panel_data, passing_rows
 
-from ogld.format import dequantise
 from ogld.query import clumping, matrices
 from ogld.query import proxies as proxies_query
 from ogld.store import StoreReader, location
@@ -76,9 +75,9 @@ def reference_greedy(
     ref = support.reference_matrix(support.K, tuple(rows.tolist()))
     held = ~np.isnan(ref)
     r = np.full(ref.shape, np.nan)
-    r[held] = dequantise(support.quantise(ref[held]))
+    r[held] = support.stored_at(ref[held])
     code = np.zeros(ref.shape, dtype=np.int64)
-    code[held] = np.abs(support.quantise(ref[held]).astype(np.int64))
+    code[held] = np.abs(support.codes_at(ref[held]))
     lead = np.full(len(rows), -1, dtype=np.int64)
     needed = indexed = 0
     for i in np.lexsort((np.arange(len(rows)), -score)):
@@ -94,14 +93,14 @@ def reference_greedy(
     return lead, needed, indexed
 
 
-#: What the leads need, on the Test Store at f0e90de: the tip's square read resolved 1,495,403
-#: pairs at r² 0.1 (64 times as many), and 33,187 Near Band entries are the leads' whole rows
-#: and columns at r² 0.01, below t_far.
-NEEDED = {0.1: 23_327, 0.01: 7_246}
-#: What the reader takes (spec §10): at r² 0.1 ≥ t_far the 439 leads' Proxy Index rows, and
+#: What the leads need, on the Test Store at × 511 (ogld#16), from the reference. The square
+#: read at aa5d4d7 resolved 1,489,250 pairs at r² 0.1 and took 1,587,155 Stored r (68 times
+#: as many). At × 32767 (f0e90de) the leads needed 23,327 and 7,246.
+NEEDED = {0.1: 23_228, 0.01: 7_311}
+#: What the reader takes (spec §10): at r² 0.1 ≥ t_far the 438 leads' Proxy Index rows, and
 #: below t_far exactly the pairs the leads need. An exact count, so a counter that saw nothing
-#: fails the test rather than passing under its bound.
-RESOLVED = {0.1: 3_119, 0.01: 7_246}
+#: fails the test rather than passing under its bound. At × 32767 they were 3,119 and 7,246.
+RESOLVED = {0.1: 3_122, 0.01: 7_311}
 
 
 @pytest.mark.parametrize("r2", sorted(NEEDED))

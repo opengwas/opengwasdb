@@ -15,10 +15,7 @@ import numpy.typing as npt
 import zarr
 from zarr.codecs import ZstdCodec
 
-from ogld.format import ENCODING, RESERVED_CODE
-
-#: The dtype of every `r` array: the encoding's, never a literal (spec §3).
-R_DTYPE: Final = np.dtype(ENCODING["r_dtype"])
+from ogld.format import REncoding
 
 #: (inner chunk, shard) in elements, for every array but the Near Band's `r`.
 SIDE: Final = (16_384, 1_048_576)
@@ -26,7 +23,8 @@ SIDE: Final = (16_384, 1_048_576)
 NEAR_R: Final = (262_144, 67_108_864)
 
 #: Each array's fill value: one a valid LD Store never holds (spec §6). The `r` arrays' is
-#: RESERVED_CODE and the strings' is ""; both are set where those arrays are made.
+#: their encoding's reserved code and the strings' is ""; both are set where those arrays are
+#: made.
 INT64_FILL: Final = -1
 PARTNER_FILL: Final = -1
 POSITION_FILL: Final = 0
@@ -44,7 +42,9 @@ def never_data(path: str, values: npt.ArrayLike) -> npt.NDArray[np.bool_]:
     v = np.asarray(values)
     name = path.rsplit("/", 1)[-1]
     if name == "r":
-        return np.asarray(v == RESERVED_CODE)
+        # Every admitted encoding shares the container and its reserved code (ADR 0004), so a
+        # lost chunk is told from data before the store's own encoding is known.
+        return np.asarray(v == REncoding.reserved_code)
     if name in {"indptr", "partner"}:
         return np.asarray(v < 0)
     if name == "position":
@@ -145,16 +145,31 @@ def put_strings(group: zarr.Group, name: str, data: npt.NDArray[np.str_]) -> zar
 
 
 def new_r_array(
-    group: zarr.Group, name: str, length: int, shape: tuple[int, int]
+    group: zarr.Group, name: str, length: int, shape: tuple[int, int], encoding: REncoding
 ) -> zarr.Array[Any]:
-    """An `r` array of `length` with nothing written: every chunk reads the reserved code."""
+    """An `r` array of `length` in `encoding`'s dtype with nothing written: every chunk reads
+    the encoding's reserved code (spec §3, §6)."""
     inner, shard = clipped(length, *shape)
     return group.create_array(
         name,
         shape=(length,),
-        dtype=R_DTYPE,
+        dtype=encoding.dtype,
         chunks=(inner,),
         shards=(shard,),
         compressors=[ZstdCodec(level=3)],
-        fill_value=RESERVED_CODE,
+        fill_value=encoding.reserved_code,
     )
+
+
+def put_codes(
+    group: zarr.Group,
+    name: str,
+    codes: npt.NDArray[np.generic],
+    encoding: REncoding,
+    shape: tuple[int, int] = SIDE,
+) -> zarr.Array[Any]:
+    """Create the `r` array `name` in `encoding`'s dtype and fill value, and write `codes`."""
+    array = new_r_array(group, name, len(codes), shape, encoding)
+    if len(codes):
+        array[:] = codes
+    return array

@@ -4,7 +4,7 @@
       "format_version": "0.1.0",
       "encoding": {
         "r_dtype": "int16",
-        "r_scale": 32767,
+        "r_scale": 511,
         "r_reserved_code": -32768,
         "rounding": "half_to_even"
       },
@@ -281,7 +281,7 @@
       },
       "t_far": 0.027421052631578947,
       "t_far_q": 20.84,
-      "far_code_floor": 5426,
+      "far_code_floor": 85,
       "pc_diagnostic": {
         "pairs": {
           "source": "every chr21 \u00d7 chr22 pair of the Test Panel's variants: the Test Panel holds no other cross-chromosome pairs, so none is drawn and the seed is recorded only",
@@ -292,28 +292,28 @@
         "rate_r2_ge_0_01_adjusted": 0.011497761497761497,
         "rate_r2_ge_0_01_sampling": 0.005836830082645424,
         "near_100kb_change": {
-          "0": -0.050012048528130446,
-          "0.5": 2.4424906541753444e-15,
-          "0.9": 0.00907426462220176,
-          "0.99": 0.020243447826607038,
-          "1": 0.04501450055733097
+          "0": -0.05001204852813047,
+          "0.5": 2.55351295663786e-15,
+          "0.9": 0.00907426462220183,
+          "0.99": 0.020243447826607093,
+          "1": 0.045014500557330944
         }
       },
       "counts": {
         "near_pairs": 109212,
         "far_candidates": 37381,
         "far_pairs": 7,
-        "index_entries": 36420
+        "index_entries": 36476
       },
       "software": {
-        "ogld": "0.0.1.dev52+g6dae34586.d20261108",
-        "numpy": "2.3.5",
+        "ogld": "0.0.1.dev140+g1705e9bcc",
+        "numpy": "2.4.6",
         "zarr": "3.4.2"
       },
       "build": {
-        "created_at": "2026-11-08T01:39:29Z",
-        "wall_seconds": 0.3805556060397066,
-        "peak_memory_bytes": 2060664832,
+        "created_at": "2026-11-11T02:00:23Z",
+        "wall_seconds": 0.3903583539649844,
+        "peak_memory_bytes": 1957134336,
         "threads": 1
       }
     }

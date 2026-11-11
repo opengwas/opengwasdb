@@ -43,6 +43,10 @@ class Params:
     far_bp: int = FAR_BP
     # Recorded in the manifest; t_far itself is ogld.format's.
     t_far_q: float = T_FAR_Q
+    # The r scale the far-pair selection judges Stored r at: × 32767, the one encoding there was
+    # when the committed panel was made. The Test Store is × 511 (ogld#16, ADR 0004); the panel's
+    # Far Pairs reach t_far at both, and a regenerated panel may move this.
+    r_scale: int = 32767
     # Selection. Each window was picked on the converted chromosomes (README, "Selection").
     q_arm_start: dict[str, int] = field(
         default_factory=lambda: {"21": 14_000_000, "22": 16_000_000}

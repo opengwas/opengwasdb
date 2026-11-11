@@ -57,6 +57,13 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--panel-id", required=True)
     b.add_argument("--ancestry", required=True)
     b.add_argument("--genotype-source", required=True)
+    b.add_argument(
+        "--r-scale",
+        type=int,
+        required=True,
+        help="the store's r scale, r̂ = code / r_scale, as ADR 0004 sets it for the panel; "
+        "no default",
+    )
     unset = argparse.SUPPRESS
     b.add_argument("--k", type=int, default=unset)
     b.add_argument("--k-min", type=int, default=unset)
@@ -84,6 +91,7 @@ def _build(args: argparse.Namespace) -> int:
         panel_id=args.panel_id,
         ancestry=args.ancestry,
         genotype_source=args.genotype_source,
+        r_scale=args.r_scale,
         **_given(args, "k", "k_min", "mac_min", "info_min"),
     )
     provenance = build(inputs, args.out, **_given(args, "threads"))

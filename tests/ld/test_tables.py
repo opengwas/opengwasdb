@@ -6,6 +6,7 @@ uses them. The queries that fill them are tests/contract/'s.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from pathlib import Path
 from typing import Any
@@ -115,6 +116,7 @@ def build_inputs(**overrides: Any) -> ogld.BuildInputs:
         "panel_id": "hgdp1kgp-v2-EUR",
         "ancestry": "EUR",
         "genotype_source": "gnomAD v3.1.2 HGDP+1kG",
+        "r_scale": 511,
     }
     return ogld.BuildInputs(**{**fields, **overrides})
 
@@ -186,7 +188,18 @@ def test_the_cli_needs_a_command() -> None:
 
 def test_the_cli_refuses_a_build_it_cannot_run(capsys: pytest.CaptureFixture[str]) -> None:
     # k = 10 with no PC File is refused before anything is read, with exit status 2.
-    argv = ["build", "out", "--pgen", "x.pgen", "--keep", "k", "--panel-id", "p"]
+    argv = [
+        "build",
+        "out",
+        "--pgen",
+        "x.pgen",
+        "--keep",
+        "k",
+        "--panel-id",
+        "p",
+        "--r-scale",
+        "511",
+    ]
     status = cli.main([*argv, "--ancestry", "EUR", "--genotype-source", "g"])
     assert status == 2
     assert "PC File" in capsys.readouterr().err
@@ -207,6 +220,7 @@ def test_the_cli_reports_each_rule_and_fails_on_any_finding(
 
 BUILD_ARGS = ["build", "out", "--pgen", "x.pgen", "--keep", "k", "--pcs", "p.eigenvec"]
 BUILD_ARGS += ["--pc-source", "s", "--panel-id", "p", "--ancestry", "EUR", "--genotype-source", "g"]
+BUILD_ARGS += ["--r-scale", "511"]
 
 
 def test_the_cli_s_defaults_are_build_inputs_own(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -221,6 +235,7 @@ def test_the_cli_s_defaults_are_build_inputs_own(monkeypatch: pytest.MonkeyPatch
         panel_id="p",
         ancestry="EUR",
         genotype_source="g",
+        r_scale=511,
     )
     assert seen == [expected]
 
@@ -242,3 +257,44 @@ def test_the_cli_lets_any_other_fault_propagate(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(cli, "build", fault)
     with pytest.raises(ValueError, match="not a correlation"):
         cli.main(BUILD_ARGS)
+
+
+# ------------------------------------------------------------------ the build's scale (ogld#16)
+
+
+def test_a_build_with_no_scale_is_refused_naming_what_is_missing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Owner, 10 November 2026: a build takes its scale as an input, and there is no default it
+    # could fall back on silently (ADR 0004).
+    field = next(f for f in dataclasses.fields(ogld.BuildInputs) if f.name == "r_scale")
+    assert field.default is dataclasses.MISSING
+    given = {f.name: getattr(build_inputs(), f.name) for f in dataclasses.fields(ogld.BuildInputs)}
+    del given["r_scale"]
+    with pytest.raises(TypeError, match="r_scale"):
+        ogld.BuildInputs(**given)
+    with pytest.raises(
+        ogld.InputError, match="r scale is a whole number from 1 to 32767, not None"
+    ):
+        build_inputs(r_scale=None)
+    unscaled = BUILD_ARGS[: BUILD_ARGS.index("--r-scale")]
+    with pytest.raises(SystemExit) as refused:
+        cli.main(unscaled)
+    assert refused.value.code == 2
+    assert "the following arguments are required: --r-scale" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("scale", [0, -511, 32768, 511.5])
+def test_a_build_s_scale_is_one_the_format_admits(scale: object) -> None:
+    with pytest.raises(ogld.InputError, match=f"not {scale!r}"):
+        build_inputs(r_scale=scale)
+
+
+@pytest.mark.parametrize("scale", [511, 2047])
+def test_a_build_writes_the_encoding_of_its_scale(scale: int) -> None:
+    assert build_inputs(r_scale=scale).encoding().record() == {
+        "r_dtype": "int16",
+        "r_scale": scale,
+        "r_reserved_code": -32768,
+        "rounding": "half_to_even",
+    }

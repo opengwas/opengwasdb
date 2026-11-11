@@ -223,5 +223,6 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
   uses phased r² unless told otherwise, so the Test Panel's clump goldens use `--clump-unphased`.
   Greedy clumping over the Test Panel's own unphased reference r gives the same leads.
 - **The ratio cannot drop a PC in a small panel.** By chance a window holds about 5 / n of any
-  vector's variance, so below about 100 samples no ratio reaches 0.05. Every HGDP+1kGP panel has
-  n ≥ 345; a smaller panel would need the rule revisited.
+  vector's variance, so below about 100 samples no ratio reaches 0.05. Every HGDP+1kGP panel keeps
+  at least 341 samples, AMR's unrelated ones (decision 11); a smaller panel would need the rule
+  revisited.

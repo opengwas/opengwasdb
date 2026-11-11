@@ -24,11 +24,11 @@ from typing import Any, cast
 import numpy as np
 import pytest
 import zarr
-from store_copies import TEST_STORE, arrays, copy_store
+from store_copies import FLOOR, R_SCALE, TEST_STORE, arrays, copy_store
 
 import ogld
 from ogld import cli
-from ogld.format import REQUIRED_KEYS, RESERVED_CODE, VALIDATION_RULES, InputError, Provenance
+from ogld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError, Provenance, REncoding
 from ogld.store import StoreReader, StoreWriter, validation
 from ogld.store.validation import ValidationFailed, validate_group
 
@@ -42,7 +42,7 @@ WINDOWED.remove("variants.chromosomes")
 ACROSS_BLOCKS = ["index.symmetric", "index.near"]
 
 
-RESERVED = RESERVED_CODE
+RESERVED = -32768
 
 #: The rules one pass over each chromosome's Near Band and Proxy Index feeds (spec §12).
 SCANNED = [
@@ -220,8 +220,8 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
     ),
     "a floor one too low": (
         "provenance.threshold",
-        edit_ld_store(lambda p: p.update(far_code_floor=5425)),
-        "5425, but t_far 0.027421052631578947 gives 5426",
+        edit_ld_store(lambda p: p.update(far_code_floor=FLOOR - 1)),
+        f"{FLOOR - 1}, but t_far 0.027421052631578947 at × {R_SCALE} gives {FLOOR}",
     ),
     "chromosomes out of order": (
         "variants.chromosomes",
@@ -599,6 +599,18 @@ def test_an_indptr_that_ends_past_its_array_is_a_finding_not_a_crash(
         ({"n_variants": 5}, "n_variants"),
         ({"far_bp": 9_000_000}, "near_bp and far_bp"),
         ({"encoding": {"r_scale": 1}}, "encoding"),
+        # An encoding the format admits, but not the one the codes were written in.
+        (
+            {
+                "encoding": {
+                    "r_dtype": "int16",
+                    "r_scale": 2047,
+                    "r_reserved_code": -32768,
+                    "rounding": "half_to_even",
+                }
+            },
+            f"written at × {R_SCALE}",
+        ),
     ],
 )
 def test_finish_refuses_a_provenance_that_disagrees_with_what_was_written(
@@ -624,7 +636,9 @@ def test_a_store_without_provenance_cannot_pass_a_rule_that_needs_it(tmp_path: P
     found = ogld.validate(copy)
     assert "no ld_store provenance" in found["provenance.complete"][0].message
     assert found["near.rows"][0].message.startswith("cannot be checked")
-    assert not found["near.codes"], "a rule that needs no provenance still runs"
+    # near.codes needs the store's scale since ogld#16: without it, it cannot say a code is r.
+    assert found["near.codes"][0].message.startswith("cannot be checked")
+    assert not found["index.rows"], "a rule that needs no provenance still runs"
 
 
 def test_a_location_with_no_zarr_group_is_an_input_error(tmp_path: Path) -> None:
@@ -667,7 +681,11 @@ def four_rows(tmp_path: Path, name: str) -> StoreWriter:
     assert set(variants.chrom) == {"21"}, "the four rows must share a chromosome"
     assert np.ptp(variants.position) <= 3_000_000, "and all lie within near_bp"
     writer = StoreWriter.create(
-        tmp_path / name, variants=variants, near_bp=3_000_000, far_bp=10_000_000
+        tmp_path / name,
+        variants=variants,
+        near_bp=3_000_000,
+        far_bp=10_000_000,
+        encoding=REncoding(R_SCALE),
     )
     writer.write_near(0, np.array([3, 2, 1, 0]), np.array([10, -20, 30, 40, -50, 60], np.int16))
     writer.write_index(
@@ -690,7 +708,7 @@ def test_finish_writes_the_provenance_of_a_store_that_passes_every_rule(tmp_path
     assert not any(ogld.validate(tmp_path / "good").values())
     store = ogld.open(tmp_path / "good")
     first = store.matrix(list(StoreReader.open(tmp_path / "good").variants(np.arange(4)).alid))
-    np.testing.assert_array_equal(first.r[0, 1:], np.array([10, -20, 30]) / 32767)
+    np.testing.assert_array_equal(first.r[0, 1:], np.array([10, -20, 30]) / R_SCALE)
 
 
 def test_finish_refuses_a_store_that_breaks_a_rule_and_leaves_it_unreadable(
