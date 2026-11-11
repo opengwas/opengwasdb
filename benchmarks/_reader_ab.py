@@ -59,6 +59,13 @@ SCRIPT = Path(__file__).resolve().parent / "measure_epic307_evidence.py"
 #: does with its C-engine parse.
 FINNGEN_FLOOR_COLUMNS = ("#chrom", "pos", "ref", "alt", "beta", "sebeta", "af_alt")
 
+#: The seven a GWAS-SSF association row is built from; the effect is `beta` and
+#: the precision `standard_error`, as the reader reads a file naming both.
+GWAS_SSF_FLOOR_COLUMNS = (
+    "chromosome", "base_pair_location", "effect_allele", "other_allele",
+    "effect_allele_frequency", "beta", "standard_error",
+)
+
 
 @dataclass(frozen=True)
 class Source:
@@ -74,17 +81,24 @@ class Source:
     floor_name: str
 
 
-def _measure_pandas(path: Path) -> tuple[float, int]:
-    """The tabular floor: one C-engine parse of the columns, then `z`."""
-    import pandas as pd
+def _pandas_floor(
+    columns: tuple[str, ...], effect: str, precision: str
+) -> Callable[[Path], tuple[float, int]]:
+    """The tabular floor of a source whose association row is built from
+    ``columns``: one C-engine parse of them, then `z = effect / precision`."""
 
-    started = time.perf_counter()
-    frame = pd.read_csv(path, sep="\t", usecols=list(FINNGEN_FLOOR_COLUMNS), engine="c")
-    z = frame["beta"].to_numpy(dtype="float64") / frame["sebeta"].to_numpy(dtype="float64")
-    elapsed = time.perf_counter() - started
-    if z.size != len(frame):
-        raise SystemExit(f"{path}: floor derived {z.size} z values for {len(frame)} rows")
-    return elapsed, len(frame)
+    def measure(path: Path) -> tuple[float, int]:
+        import pandas as pd
+
+        started = time.perf_counter()
+        frame = pd.read_csv(path, sep="\t", usecols=list(columns), engine="c")
+        z = frame[effect].to_numpy(dtype="float64") / frame[precision].to_numpy(dtype="float64")
+        elapsed = time.perf_counter() - started
+        if z.size != len(frame):
+            raise SystemExit(f"{path}: floor derived {z.size} z values for {len(frame)} rows")
+        return elapsed, len(frame)
+
+    return measure
 
 
 def _measure_bcftools(path: Path) -> tuple[float, int]:
@@ -113,16 +127,16 @@ def _measure_bcftools(path: Path) -> tuple[float, int]:
     return elapsed, rows
 
 
-def _pandas_detail(path: Path) -> dict[str, Any]:
+def _pandas_detail(columns: tuple[str, ...], effect: str, precision: str) -> dict[str, Any]:
     import pandas as pd
 
     return {
         "method": (
-            "pandas.read_csv(sep='\\t', engine='c', usecols=<the seven columns the "
-            "association row reads>) plus z = beta / sebeta; no orientation and no "
+            f"pandas.read_csv(sep='\\t', engine='c', usecols=<the {len(columns)} columns the "
+            f"association row reads>) plus z = {effect} / {precision}; no orientation and no "
             "row admission"
         ),
-        "columns": list(FINNGEN_FLOOR_COLUMNS),
+        "columns": list(columns),
         "pandas_version": pd.__version__,
     }
 
@@ -156,8 +170,19 @@ SOURCES: dict[str, Source] = {
         reader_module="opengwasdb.readers.finngen",
         reader_class="FinnGenR13Reader",
         effect_scale="LOG_OR",
-        floor=_measure_pandas,
-        floor_detail=_pandas_detail,
+        floor=_pandas_floor(FINNGEN_FLOOR_COLUMNS, "beta", "sebeta"),
+        floor_detail=lambda path: _pandas_detail(FINNGEN_FLOOR_COLUMNS, "beta", "sebeta"),
+        floor_name="pandas_columns",
+    ),
+    "opengwasdb.gwas-ssf": Source(
+        capability="opengwasdb.gwas-ssf",
+        reader_module="opengwasdb.readers.gwas_ssf",
+        reader_class="GwasSsfReader",
+        effect_scale="LOG_OR",
+        floor=_pandas_floor(GWAS_SSF_FLOOR_COLUMNS, "beta", "standard_error"),
+        floor_detail=lambda path: _pandas_detail(
+            GWAS_SSF_FLOOR_COLUMNS, "beta", "standard_error"
+        ),
         floor_name="pandas_columns",
     ),
     "opengwasdb.gwas-vcf": Source(

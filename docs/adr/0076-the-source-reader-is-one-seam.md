@@ -102,6 +102,63 @@ them.**
     is left out deliberately: Pass 2 names no rsid, as `ReaderAssociation`
     named none before, and Pass 1 still applies the rule, so a rebuild's
     `variants.tsv.gz` is byte-identical.
+  - GWAS-SSF's reader offers them too (#319, 10 Nov 2026), and `ColumnMapReader`
+    names the method itself and delegates, since a reader offers batches only
+    if it has the method. Both share FinnGen's engine (`readers/columnar.py`).
+    - A row is decided by its columns when its identity passes and any indel is
+      one its layout declares the reference of (ADR 0079: `hm_code` 10 or 11 in
+      the main-columns layout, every row of a Column Map by its convention). Its
+      effect and SE are those `row_statistics` gives: the plain cases as arrays,
+      and every other row (the second effect column, an interval or a p-value for
+      the SE, an infinite effect) by `row_statistics` itself on the cells already
+      parsed. A row the rules refuse, whose fault the tally names, is read by
+      `_tabular_row` from its own line.
+    - A GWAS Catalog file ends every line in CR LF, so GWAS-SSF reads a carriage
+      return that ends its line as the plain text `csv` reads it, and falls back
+      on one that ends no line. FinnGen keeps its rule. The first rebuild of
+      OGS-00004 missed this: all nine sources fell back and the build was no
+      faster.
+    - A declared imputation score is read in columns, with
+      `parse_imputation_score`'s rules: a missing token is MISSING, an infinity
+      NONFINITE, any other number USABLE inside [0, 1] and OUT_OF_RANGE outside
+      it. A score pandas cannot read as `float()` reads it (`bogus`, `1_0`
+      beside a padded token) leaves that block's rows to the per-row rules,
+      which log how many; the source is not read row by row throughout.
+      605 of OGS-00011's 3,169 Analyses (19%) declare one.
+      Five OGS-00011 sources read both ways with their declarations (103,471 to
+      10,764,138 rows; `info`, `INFO`, `imputed_r2`, 999 missing scores, 1,633,075
+      out of range) are identical, log no fallback, and read 6.0 to 8.7 times
+      faster in batches.
+    - Pass 2 names no rsid, so the batch path never reads one: the rsid rules,
+      compound and listed ids among them, are Pass 1's, as FinnGen's first-rsid
+      rule is. The compound-id fixture is parse coverage only.
+    - On the largest OGS-00004 source (GCST009324, 17,343,104 rows, about 130
+      bytes a line) the reader reads in 35.2 s against 186.9 s one association
+      at a time, beside a 21.1 s parse floor (6 rounds, p = 0.031): 0.187 of
+      the time, and 1.66 times the floor.
+    - A batch's memory is a block's bytes, so narrower lines mean more rows. A
+      block is 32 MiB of decompressed text, and the read holds one block, the
+      line the read before it split, and the columns built from them.
+      Measured, reading each source alone in a fresh process, sampled every
+      0.2 s (the same as `ru_maxrss`):
+
+      | Source | Bytes a line | Rows | Batches | Largest batch | Peak resident |
+      |---|---|---|---|---|---|
+      | GCST90205183 (OGS-00011's narrowest) | 66 | 8,312,193 | 17 | 492,330 rows | 601 MiB |
+      | GCST009926 (OGS-00004's narrowest) | 81 | 6,799,463 | 17 | 405,314 rows | 604 MiB |
+      | GCST009324 (OGS-00004's largest) | 130 | 17,343,104 | 70 | 252,697 rows | 553 MiB |
+
+      Each started from 155 MiB, and the per-row reader peaks at 161 MiB on
+      GCST009324. The most a worker held more than when it read rows is
+      604 − 161 = 443 MiB, 0.43 GiB. OGS-00011 builds at 24 workers
+      (`records/build.json`), which is 10.4 GiB more (5.8% of the 179 GiB a
+      quarter of the host's available memory allowed when measured), and
+      OGS-00012 to -16 at 16, 6.9 GiB (3.9%). The bound is the block, not the
+      source: narrower lines raise a batch's rows (492,330 here) and leave its
+      bytes where they were.
+    - Rebuilding OGS-00004, Pass 2 takes about 21 s an Analysis against about
+      124 s (two pairs, side by side), and the Store, the Admission record and
+      every dropped-row log are identical.
 - **The registry is the only way in.**
   - `open_source(spec, alignment=)` and `resolve_reader(..., liftover=)` open a
     reader lifted onto the reference build, and a capability that cannot lift

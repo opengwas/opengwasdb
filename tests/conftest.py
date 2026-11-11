@@ -43,6 +43,21 @@ SOURCE_ROWS = [
 ]
 
 
+#: Test modules whose every GWAS-SSF read is also made as batches and compared
+#: (`batch_fixtures.shadow_gwas_ssf`, #319): the ones that write their own sources.
+_SHADOWED_MODULES = {"test_readers", "test_effect_recovery"}
+
+
+@pytest.fixture(autouse=True)
+def _gwas_ssf_batches_match_the_associations(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if request.module.__name__ in _SHADOWED_MODULES:
+        import batch_fixtures
+
+        batch_fixtures.shadow_gwas_ssf(monkeypatch)
+
+
 @pytest.fixture
 def source_path(tmp_path: Path) -> Path:
     path = tmp_path / "associations.tsv"

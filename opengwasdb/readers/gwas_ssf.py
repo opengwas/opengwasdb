@@ -16,6 +16,10 @@ source's own `other_allele`/`effect_allele` labelling (mirroring GWAS-VCF's
 REF/ALT, where ALT is likewise the effect allele) -- not reordered to
 canonical A1/A2, per the interface's contract.
 
+`stream_association_batches` (#319) is `stream_associations` as columns, a block
+of the file at a time and held to it bit for bit (see "Association batches"
+below); Pass 2 reads it.
+
 `stream_metrics` (issue #207) is the third projection: identity plus the
 effect allele's frequency, `beta` and `standard_error`, read by column index in
 one pass. It exists because the pre-build annotation stages both want a
@@ -65,12 +69,17 @@ from __future__ import annotations
 import csv
 import gzip
 import io
+import logging
 import math
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import IO
+from typing import IO, Protocol, cast
 
+import numpy as np
+import pandas as pd
+
+import opengwasdb.readers.columnar as columnar
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.effect_source import (
     EffectSource,
@@ -83,13 +92,16 @@ from opengwasdb.readers.effect_source import (
     row_statistics,
 )
 from opengwasdb.readers.interface import (
+    AssociationBatch,
     ImputationScore,
     ImputationScoreDeclaration,
+    ImputationScoreStatus,
     ReaderAssociation,
     RegionsFile,
     SiteMetrics,
     SourceVariant,
     StreamTally,
+    batched,
     parse_imputation_score,
 )
 from opengwasdb.readers.rows import ReaderBatch, stream_batches
@@ -123,6 +135,8 @@ from opengwasdb.variants.normalise import (
     IdentityFaults,
     Orientation,
     UnharmonisedIndel,
+    normalise_allele,
+    normalise_chromosome,
     orient_or_drop,
 )
 from opengwasdb.variants.rsid import normalise_rsid
@@ -196,8 +210,35 @@ def _rsid(rsid: str | None, variant_id: str | None) -> str:
     return ""
 
 
-def _row_cells(
-    row: dict[str, str],
+class _Cells(Protocol):
+    """A row's cells as `_read_row_cells` reads them, by the header's own names."""
+
+    def number(self, column: str) -> float | None:
+        """The cell as `parse_finite_float` reads it."""
+        ...
+
+    def frequency(self) -> float | None:
+        """The `effect_allele_frequency` cell as `parse_af` reads it, untallied."""
+        ...
+
+
+class _ParsedCells:
+    """A row read as a mapping of header names to cell text."""
+
+    __slots__ = ("row",)
+
+    def __init__(self, row: Mapping[str, str | None]) -> None:
+        self.row = row
+
+    def number(self, column: str) -> float | None:
+        return parse_finite_float(self.row.get(column))
+
+    def frequency(self) -> float | None:
+        return parse_af(self.row.get("effect_allele_frequency"))
+
+
+def _read_row_cells(
+    cells: _Cells,
     source: EffectSource | None,
     sample_size_column: str | None,
     p_value: float | None,
@@ -209,22 +250,23 @@ def _row_cells(
     interval's bounds. The second effect column is looked up by the spelling
     `resolve_effect_source` matched, padding included.
 
-    A cell is parsed only where `row_statistics` reads it: the second effect
+    A cell is read only where `row_statistics` reads it: the second effect
     column for a beta the row does not give, the interval and p-value for an
     SE it does not give, and the frequency and sample size for a signed z.
     The rest are left unread, which is what `row_statistics` makes of them.
-    ``p_value`` is the row's `p_value` cell, which the caller parses for every
-    row because the row carries it.
+    ``p_value`` is the row's `p_value` cell, which the caller reads for every
+    row because the row carries it. Both the per-row reader and the batch path
+    form a row's cells here, so the two cannot read a column differently.
     """
-    standard_error = parse_finite_float(row.get("standard_error"))
+    standard_error = cells.number("standard_error")
     if source is None:
         return RowCells(standard_error=standard_error)
-    effect = parse_finite_float(row.get(source.column_name))
+    effect = cells.number(source.column_name)
     if source.kind is EffectSourceKind.Z_SCORE:
-        return _z_score_cells(row, effect, standard_error, sample_size_column)
+        return _z_score_cells(cells, effect, standard_error, sample_size_column)
     fallback_column = source.fallback_column_name
     odds_ratio = (
-        parse_finite_float(row.get(fallback_column))
+        cells.number(fallback_column)
         if fallback_column and effect is None and source.kind is EffectSourceKind.BETA
         else None
     )
@@ -234,14 +276,24 @@ def _row_cells(
         effect=effect,
         odds_ratio=odds_ratio,
         standard_error=standard_error,
-        ci_lower=parse_finite_float(row.get("ci_lower")),
-        ci_upper=parse_finite_float(row.get("ci_upper")),
+        ci_lower=cells.number("ci_lower"),
+        ci_upper=cells.number("ci_upper"),
         p_value=p_value,
     )
 
 
+def _row_cells(
+    row: Mapping[str, str | None],
+    source: EffectSource | None,
+    sample_size_column: str | None,
+    p_value: float | None,
+) -> RowCells:
+    """`_read_row_cells` of a row read as a mapping of header names to cell text."""
+    return _read_row_cells(_ParsedCells(row), source, sample_size_column, p_value)
+
+
 def _z_score_cells(
-    row: dict[str, str],
+    cells: _Cells,
     z: float | None,
     standard_error: float | None,
     sample_size_column: str | None,
@@ -251,15 +303,13 @@ def _z_score_cells(
     return RowCells(
         effect=z,
         standard_error=standard_error,
-        frequency=parse_af(row.get("effect_allele_frequency")),
-        sample_size=(
-            parse_finite_float(row.get(sample_size_column)) if sample_size_column else None
-        ),
+        frequency=cells.frequency(),
+        sample_size=cells.number(sample_size_column) if sample_size_column else None,
     )
 
 
 def _tabular_row(
-    row: dict[str, str],
+    row: Mapping[str, str | None],
     source: EffectSource | None,
     sample_size_column: str | None,
     score_column: str | None = None,
@@ -366,7 +416,10 @@ def _built_row(
 
 
 def _reported_effect(
-    row: dict[str, str], source: EffectSource | None, beta: float | None, from_fallback: bool
+    row: Mapping[str, str | None],
+    source: EffectSource | None,
+    beta: float | None,
+    from_fallback: bool,
 ) -> tuple[float | None, bool]:
     """The row's beta for its association, and whether the fallback gave it.
 
@@ -380,7 +433,7 @@ def _reported_effect(
 
 
 def _infinite_effect(
-    row: dict[str, str], source: EffectSource | None, *, recovered: bool
+    row: Mapping[str, str | None], source: EffectSource | None, *, recovered: bool
 ) -> float | None:
     """The infinite effect a row reports, for its association (D4).
 
@@ -395,11 +448,22 @@ def _infinite_effect(
     """
     if source is None:
         return None
+    columns = _infinite_columns(source, recovered=recovered)
+    return _first_infinite(parse_effect(row.get(column)) for column in columns)
+
+
+def _infinite_columns(source: EffectSource, *, recovered: bool) -> list[str]:
+    """The columns whose infinite value is a row's effect: the effect column, and
+    the odds-ratio fallback unless the effect was ``recovered`` from something."""
     columns = [source.column_name]
     if not recovered and source.fallback_column_name:
         columns.append(source.fallback_column_name)
-    for column in columns:
-        effect = parse_effect(row.get(column))
+    return columns
+
+
+def _first_infinite(effects: Iterable[float | None]) -> float | None:
+    """The first of ``effects`` (each as `parse_effect` reads a cell) that is infinite."""
+    for effect in effects:
         if effect is not None and math.isinf(effect):
             return effect
     return None
@@ -426,6 +490,12 @@ def _validated_score_column(fieldnames: Sequence[str] | None, name: str | None) 
     return name
 
 
+def _gunzipped(path: str | Path) -> bool:
+    """Whether a file is read through gzip: only `.gz` is (`.bgz` is not), for
+    every way this reader opens one."""
+    return str(path).endswith(".gz")
+
+
 def _open_text(path: SourcePath) -> IO[str]:
     """One source as text: a file by its own opener rule, a translated source as UTF-8.
 
@@ -434,7 +504,7 @@ def _open_text(path: SourcePath) -> IO[str]:
     """
     if isinstance(path, TabularSource):
         return io.TextIOWrapper(path.open_binary(), encoding="utf-8", newline="")
-    opener = gzip.open if str(path).endswith(".gz") else open
+    opener = gzip.open if _gunzipped(path) else open
     return opener(path, "rt", encoding="utf-8", newline="")
 
 
@@ -459,18 +529,33 @@ def _iter_rows(
         source = effect_source or resolve_effect_source(reader.fieldnames or ())
         sample_size_column = _sample_size_column(reader.fieldnames, source)
         score_column = _validated_score_column(reader.fieldnames, score_column)
-        tally = tally or StreamTally()
-        faults, frequencies = tally.faults, tally.frequencies
-        declaration = _declaration(path, reader.fieldnames)
-        for row in reader:
-            parsed = _tabular_row(
-                row, source, sample_size_column, score_column, frequencies, faults,
-                infinite_effects, declaration=declaration,
-            )
-            if parsed is None:
-                continue
-            tally.indel_rows_kept_by_hm_code += _kept_by_code(declaration, parsed)
-            yield parsed
+        yield from _parsed_rows(
+            reader, source, sample_size_column, score_column, tally or StreamTally(),
+            infinite_effects, _declaration(path, reader.fieldnames),
+        )
+
+
+def _parsed_rows(
+    rows: Iterable[Mapping[str, str | None]],
+    source: EffectSource | None,
+    sample_size_column: str | None,
+    score_column: str | None,
+    tally: StreamTally,
+    infinite_effects: bool,
+    declaration: DeclaredReference,
+) -> Iterator[SourceRow]:
+    """`_tabular_row` of each of ``rows`` (a file read as mappings of header names
+    to cells) that names a variant, counting the indels a harmoniser code placed."""
+    faults, frequencies = tally.faults, tally.frequencies
+    for row in rows:
+        parsed = _tabular_row(
+            row, source, sample_size_column, score_column, frequencies, faults,
+            infinite_effects, declaration=declaration,
+        )
+        if parsed is None:
+            continue
+        tally.indel_rows_kept_by_hm_code += _kept_by_code(declaration, parsed)
+        yield parsed
 
 
 def _kept_by_code(declaration: DeclaredReference, row: SourceRow) -> bool:
@@ -568,6 +653,433 @@ def stream_full_row_metrics(path: str | Path) -> Iterator[TabularMetricsRow]:
     yield from _iter_rows(path)
 
 
+# ── Association batches (#319) ───────────────────────────────────────────────
+#
+# Pass 2 reads a GWAS-SSF source's associations as columns, a block of the
+# decompressed file at a time, by the engine FinnGen's batches share
+# (`opengwasdb.readers.columnar`). The per-row reader (`_tabular_row`) is the
+# reference: a block holds exactly its associations, in order, bit for bit.
+#
+# A row is decided by its columns when its identity passes every rule and the
+# indel it may be is one its layout declares the reference of (ADR 0079); its
+# statistics are then formed as `row_statistics` forms them, from the cells
+# already parsed. Any other row -- one the rules refuse, whose refusal the tally
+# must name -- is read by `_tabular_row` from its own cells. A block with a quote,
+# a carriage return that ends no line, a NUL or a byte outside ASCII goes to the
+# per-row reader whole, with the rest of the source. A declared imputation score
+# is read in columns, and a block whose score pandas cannot read as `float()` does
+# is left to its rows.
+
+#: Decompressed bytes one block reads, 32 MiB (see `finngen._BLOCK_BYTES`).
+_BLOCK_BYTES = 1 << 25
+
+#: The cells an association reads whatever the file's effect column is.
+_IDENTITY_COLUMNS = ("chromosome", "base_pair_location", "effect_allele", "other_allele")
+#: The statistic columns each association reads, by what the block calls them.
+_STATISTIC_NAMES = {
+    "se": "standard_error", "lower": "ci_lower", "upper": "ci_upper", "p_value": "p_value",
+    "af": "effect_allele_frequency",
+}
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _Plan:
+    """Where a source's header puts each cell an association reads.
+
+    ``names`` are the header's names as `csv` reads a header with no quote. A
+    repeated name is its last column, as a `csv.DictReader` row holds it.
+    """
+
+    names: list[str]
+    reads: dict[str, int]
+
+    @classmethod
+    def of(
+        cls,
+        names: list[str],
+        source: EffectSource,
+        sample_size_column: str | None,
+        score_column: str | None,
+        declaration: DeclaredReference,
+    ) -> _Plan | str:
+        """The plan for a header whose names are ``names``, or why the columnar
+        parse leaves the source to the per-row reader: a column that names a
+        variant is missing."""
+        at = {name: index for index, name in enumerate(names)}
+        missing = [name for name in _IDENTITY_COLUMNS if name not in at]
+        if missing:
+            return f"its header names no {', '.join(missing)} column"
+        read = (source.column_name, source.fallback_column_name, sample_size_column, score_column)
+        wanted = (
+            *_IDENTITY_COLUMNS, *_STATISTIC_NAMES.values(), *read, declaration.column_name,
+        )
+        return cls(names, {name: at[name] for name in dict.fromkeys(wanted) if name in at})
+
+
+@dataclass(frozen=True)
+class _Format:
+    """GWAS-SSF's columns and rules, to the engine; ``plan`` is ``None`` for a
+    source the per-row reader reads throughout."""
+
+    plan: _Plan | None
+    source: EffectSource
+    sample_size_column: str | None
+    score_column: str | None
+    declaration: DeclaredReference
+    log: logging.Logger = log
+    label: str = "GWAS-SSF source"
+
+    def block_bytes(self) -> int:
+        return _BLOCK_BYTES
+
+    def per_row(
+        self, text: io.TextIOBase, names: list[str] | None, source: columnar.Source
+    ) -> Iterator[AssociationBatch]:
+        rows = csv.DictReader(text, fieldnames=names, delimiter="\t")
+        parsed = _parsed_rows(
+            rows, self.source, self.sample_size_column, self.score_column, source.tally,
+            True, self.declaration,
+        )
+        associations = stream_associations(parsed, source.scale)
+        yield from batched(
+            associations, rows=columnar.ROW_BATCH, scores=self.score_column is not None
+        )
+
+    def block_batches(
+        self, lines: bytes, offset: int, source: columnar.Source
+    ) -> Iterator[AssociationBatch]:
+        plan = self.plan
+        assert plan is not None
+        yield from columnar.block_batches(
+            lines,
+            offset,
+            source,
+            lambda text: _Block.read(text, plan, self),
+            lambda block, text: block.associations(text, self, source),
+            plan.names,
+        )
+
+
+def _open_binary(path: SourcePath) -> IO[bytes]:
+    """One source's bytes, opened as `_open_text` opens it: only `.gz` is gunzipped."""
+    if isinstance(path, TabularSource):
+        return path.open_binary()
+    return cast(IO[bytes], gzip.open(path, "rb") if _gunzipped(path) else open(path, "rb"))
+
+
+def _association_batches(
+    path: SourcePath,
+    source: EffectSource,
+    score_column: str | None,
+    tally: StreamTally,
+    scale: StoredEffectScale,
+) -> Iterator[AssociationBatch]:
+    """``path``'s associations as batches, with the rules `_iter_rows` applies."""
+    names = _header(path)
+    sample_size_column = _sample_size_column(names, source)
+    score_column = _validated_score_column(names, score_column)
+    declaration = _declaration(path, names)
+
+    def start(header: list[str] | str) -> tuple[columnar.Format, str | None]:
+        plan = None if isinstance(header, str) else _Plan.of(
+            header, source, sample_size_column, score_column, declaration
+        )
+        refusal = plan if isinstance(plan, str) else None
+        fmt = _Format(
+            None if isinstance(plan, str) else plan, source, sample_size_column, score_column,
+            declaration,
+        )
+        return fmt, refusal
+
+    with _open_binary(path) as fh:
+        # GWAS Catalog files end every line in CR LF, which `csv` reads as plain.
+        yield from columnar.association_batches(fh, path, tally, scale, start, crlf=True)
+
+
+@dataclass(frozen=True)
+class _Block:
+    """One block's identity cells and numbers, before any row is decided.
+
+    A number is an array of the block's rows, NaN where the cell is missing,
+    ``None`` where pandas read some cell otherwise than as `float()` reads it
+    and so no row of the block is decided. An absent column is all missing.
+    """
+
+    identity: columnar.Identity
+    #: Per row: whether the row declares its other allele the reference, and
+    #: whether the raw alleles differ in length once stripped (`_kept_by_code`).
+    declared: np.ndarray
+    raw_indel: np.ndarray
+    effect: np.ndarray | None
+    fallback: np.ndarray | None
+    se: np.ndarray | None
+    lower: np.ndarray | None
+    upper: np.ndarray | None
+    p_value: np.ndarray | None
+    af: np.ndarray | None
+    sample_size: np.ndarray | None
+    #: The declared imputation score column, or ``None`` where none is declared.
+    score: np.ndarray | None
+    #: Each statistic column by the header's name for it, as `_Cells` reads it.
+    by_name: dict[str, np.ndarray | None]
+
+    @classmethod
+    def read(cls, lines: bytes, plan: _Plan, fmt: _Format) -> _Block:
+        reads = plan.reads
+        names = _STATISTIC_NAMES | {
+            "effect": fmt.source.column_name,
+            "fallback": fmt.source.fallback_column_name,
+            "sample_size": fmt.sample_size_column,
+            "score": fmt.score_column,
+        }
+        index = {key: reads.get(name) if name else None for key, name in names.items()}
+        hm = fmt.declaration.index({name.encode(): at for name, at in reads.items()})
+        frame = _frame(lines, plan, index, hm)
+        # `ref` is the other allele and `alt` the effect allele, as `orient_or_drop` is given them.
+        identity = columnar.Identity.read(
+            frame, reads["chromosome"], reads["other_allele"], reads["effect_allele"],
+            reads["base_pair_location"], normalise_chromosome, normalise_allele,
+        )
+        arrays = {key: columnar.numbers(frame, index[key], "f") for key in names}
+        by_name = {name: array for key, array in arrays.items() if (name := names[key])}
+        arrays["score"] = arrays["score"] if fmt.score_column else None
+        return cls(
+            identity,
+            _declared(frame, hm, fmt.declaration),
+            _raw_indel(identity.ref, identity.alt),
+            **arrays,
+            by_name=by_name,
+        )
+
+    def decided(self) -> np.ndarray:
+        """The rows the columns decide: every identity rule passed, an indel only
+        where the row declares its reference, and every number read as the
+        per-row reader reads it."""
+        if any(values is None for values in self._numbers()):
+            return np.zeros(len(self.identity), dtype=bool)
+        indel = columnar.is_indel(self.identity.ref, self.identity.alt)
+        decided: np.ndarray = self.identity.valid() & (~indel | self.declared)
+        return decided
+
+    def _numbers(self) -> list[np.ndarray | None]:
+        """Every column read as numbers, an absent one as all missing."""
+        return list(self.by_name.values())
+
+    def associations(
+        self, lines: bytes, fmt: _Format, source: columnar.Source
+    ) -> AssociationBatch:
+        """The block's associations: the decided rows from the columns, the rest
+        from `_tabular_row`, in the block's order."""
+        plan = fmt.plan
+        assert plan is not None
+        tally = source.tally
+        decided = self.decided()
+        # A frequency pandas reads as NaN was one of the missing tokens, which
+        # `parse_af` reads as absent and nothing counts; any other spelling of
+        # NaN makes the whole column text, and the block is left to the rows.
+        af = np.full(len(decided), np.nan) if self.af is None else self.af
+        columnar.made_absent(af, decided, tally.frequencies)
+        if fmt.declaration.column is not None:
+            tally.indel_rows_kept_by_hm_code += int(np.count_nonzero(decided & self.raw_indel))
+        beta, se = _statistics(self, decided, fmt.source, fmt.sample_size_column)
+        reported = np.divide(
+            beta, se, out=np.full(len(decided), np.nan),
+            where=decided & ~np.isnan(beta) & ~np.isnan(se),
+        )
+        columns = self.identity.columns(reported, se, af, decided)
+        if fmt.score_column:
+            # A block the columns do not decide holds no score array; each of its
+            # rows then takes its score from `_tabular_row`.
+            columns.imputation_score, columns.imputation_status = _scores(
+                np.full(len(decided), np.nan) if self.score is None else self.score
+            )
+        undecided = np.flatnonzero(~decided)
+        if len(undecided):
+            source.undecided += len(undecided)
+            columns.place(_undecided(lines, plan, undecided, fmt, source))
+        return columns.batch()
+
+
+def _finite(values: np.ndarray | None, rows: int) -> np.ndarray:
+    """``values`` where finite, else NaN: `parse_finite_float`'s answer, None as NaN."""
+    if values is None:
+        return np.full(rows, np.nan)
+    return np.where(np.isfinite(values), values, np.nan)
+
+
+def _statistics(
+    block: _Block, decided: np.ndarray, source: EffectSource, sample_size_column: str | None
+) -> tuple[np.ndarray, np.ndarray]:
+    """The decided rows' ``(beta, se)``, NaN where `row_statistics` gives none.
+
+    The rows every column reports plainly -- a usable effect and a positive
+    SE; a z with the frequency and sample size it derives from -- are formed as
+    arrays. The rest go through `row_statistics` itself, from the cells
+    already parsed: the second effect column, an interval or p-value for the
+    SE, and an effect the row reports as infinite.
+    """
+    rows = len(decided)
+    beta, se = np.full(rows, np.nan), np.full(rows, np.nan)
+    effect = _finite(block.effect, rows)
+    reported = _finite(block.se, rows)
+    with np.errstate(all="ignore"):
+        reported_ok = reported > 0
+        if source.kind is EffectSourceKind.Z_SCORE:
+            fast = _derive_z(block, effect, decided, beta, se)
+        elif source.kind is EffectSourceKind.ODDS_RATIO:
+            fast = decided & (effect > 0) & reported_ok
+            beta[fast] = [math.log(odds) for odds in effect[fast].tolist()]
+            se[fast] = reported[fast]
+        else:
+            fast = decided & ~np.isnan(effect) & reported_ok
+            beta[fast] = effect[fast]
+            se[fast] = reported[fast]
+    for row in np.flatnonzero(decided & ~fast).tolist():
+        beta[row], se[row] = _row_statistics(block, row, source, sample_size_column)
+    return beta, se
+
+
+def _derive_z(
+    block: _Block, z: np.ndarray, decided: np.ndarray, beta: np.ndarray, se: np.ndarray
+) -> np.ndarray:
+    """A signed z's ``(beta, se)`` where `derive_z_score_effect` derives them
+    without dividing by zero, which the per-row rule would raise on: the rows
+    returned are those formed. ``z`` is the z where finite."""
+    rows = len(decided)
+    frequency = np.full(rows, np.nan) if block.af is None else block.af
+    sample_size = _finite(block.sample_size, rows)
+    usable: np.ndarray = (
+        decided & ~np.isnan(z) & (frequency > 0) & (frequency < 1) & (sample_size > 0)
+    )
+    variance = 2.0 * frequency * (1.0 - frequency)
+    precision = variance * (sample_size + z * z)
+    usable &= np.isfinite(precision) & (precision > 0)
+    derived = 1.0 / np.sqrt(precision[usable])
+    se[usable] = derived
+    beta[usable] = z[usable] * derived
+    return usable
+
+
+class _BlockCells:
+    """One row of a block as `_read_row_cells` reads it: the columns already parsed,
+    each cell as `parse_finite_float` reads it, a missing one as ``None``."""
+
+    __slots__ = ("block", "row")
+
+    def __init__(self, block: _Block, row: int) -> None:
+        self.block, self.row = block, row
+
+    def number(self, column: str) -> float | None:
+        values = self.block.by_name.get(column)
+        if values is None:
+            return None
+        value = float(values[self.row])
+        return value if math.isfinite(value) else None
+
+    def frequency(self) -> float | None:
+        value = self.number("effect_allele_frequency")
+        return value if value is not None and 0.0 < value < 1.0 else None
+
+
+def _scores(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """A declared score column's value and status per row, as
+    `parse_imputation_score` reads each cell: a missing token (NaN, the only
+    spelling pandas reads as NaN) is MISSING, an infinity NONFINITE, any other
+    number USABLE inside [0, 1] and OUT_OF_RANGE outside it."""
+    finite = np.isfinite(values)
+    status = np.full(len(values), ImputationScoreStatus.USABLE, dtype=object)
+    status[np.isnan(values)] = ImputationScoreStatus.MISSING
+    status[np.isinf(values)] = ImputationScoreStatus.NONFINITE
+    status[finite & ((values < 0.0) | (values > 1.0))] = ImputationScoreStatus.OUT_OF_RANGE
+    return np.where(finite, values, np.nan), status
+
+
+def _row_statistics(
+    block: _Block, row: int, source: EffectSource, sample_size_column: str | None
+) -> tuple[float, float]:
+    """One row's ``(beta, se)`` by `row_statistics` and `_reported_effect`, NaN for none."""
+    cells = _BlockCells(block, row)
+    statistics = row_statistics(
+        source, _read_row_cells(cells, source, sample_size_column, cells.number("p_value"))
+    )
+    beta, from_fallback = statistics.beta, statistics.effect_from_odds_ratio_fallback
+    if beta is None or from_fallback:
+        infinite = _first_infinite(
+            None if (values := block.by_name.get(column)) is None else float(values[row])
+            for column in _infinite_columns(source, recovered=beta is not None)
+        )
+        beta = beta if infinite is None else infinite
+    return (
+        math.nan if beta is None else beta,
+        math.nan if statistics.se is None else statistics.se,
+    )
+
+
+def _undecided(
+    lines: bytes, plan: _Plan, rows: np.ndarray, fmt: _Format, source: columnar.Source
+) -> Iterator[tuple[int, ReaderAssociation | None]]:
+    """Each of ``rows``, read by `_tabular_row` from its own line."""
+    tally = source.tally
+    faults, frequencies = tally.faults, tally.frequencies
+    for row, cells in columnar.line_cells(lines, plan.reads, rows):
+        parsed = _tabular_row(
+            cells, fmt.source, fmt.sample_size_column, fmt.score_column, frequencies, faults,
+            True, declaration=fmt.declaration,
+        )
+        if parsed is None:
+            yield row, None
+            continue
+        tally.indel_rows_kept_by_hm_code += _kept_by_code(fmt.declaration, parsed)
+        yield row, next(stream_associations([parsed], source.scale))
+
+
+def _frame(
+    lines: bytes, plan: _Plan, index: dict[str, int | None], hm: int | None
+) -> pd.DataFrame:
+    """A block's cells ``plan`` reads: the identity columns and the harmoniser
+    code as distinct text, the statistic columns in ``index`` as `float()` reads
+    them, and a declared score with the tokens `parse_imputation_score` reads as
+    missing."""
+    reads = plan.reads
+    categories = [reads[name] for name in ("chromosome", "effect_allele", "other_allele")]
+    missing = {at: list(columnar.MISSING_STATISTICS) for at in index.values() if at is not None}
+    if index["score"] is not None:
+        missing[index["score"]] = list(columnar.MISSING_SCORES)
+    return pd.read_csv(
+        io.BytesIO(lines),
+        names=range(len(plan.names)),
+        usecols=sorted({*reads.values()}),
+        dtype={at: "category" for at in (*categories, *([hm] if hm is not None else []))},
+        na_values=missing,
+        # `float()` is correctly rounded and pandas' default converter is not.
+        float_precision="round_trip",
+        **columnar.PANDAS,
+    )
+
+
+def _declared(frame: pd.DataFrame, hm: int | None, declaration: DeclaredReference) -> np.ndarray:
+    """Per row: whether it declares its other allele the reference (ADR 0079)."""
+    rows = len(frame)
+    if declaration.every_row:
+        return np.ones(rows, dtype=bool)
+    if hm is None:
+        return np.zeros(rows, dtype=bool)
+    column = frame[hm]
+    categories = column.cat.categories.to_numpy(dtype=object)
+    declares = np.array([declaration.of_cell(cell) for cell in categories.tolist()], dtype=bool)
+    codes = column.cat.codes.to_numpy()
+    return np.zeros(rows, dtype=bool) if not len(declares) else declares[codes]
+
+
+def _raw_indel(ref: columnar.Cells, alt: columnar.Cells) -> np.ndarray:
+    lengths = np.vectorize(lambda cell: len(cell.strip()), otypes=[np.int64])
+    different: np.ndarray = ref.rows(lengths(ref.verbatim)) != alt.rows(lengths(alt.verbatim))
+    return different
+
+
+
 @dataclass(frozen=True)
 class GwasSsfReader:
     """SourceReader for one filtered/harmonised GWAS-Catalog-SSF file.
@@ -641,6 +1153,21 @@ class GwasSsfReader:
 
     def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
         yield from stream_associations(self._association_rows(tally), self.stored_effect_scale)
+
+    def stream_association_batches(
+        self, tally: StreamTally | None = None
+    ) -> Iterator[AssociationBatch]:
+        """`stream_associations`, a block of the file at a time, as columns
+        (#319): what Pass 2 routes. The same associations bit for bit, and the
+        same ``tally``; see `_association_batches`."""
+        source = self.effect_source
+        require_z_score_usable(self.path, source, self.stored_effect_scale)
+        if source is None:
+            return
+        yield from _association_batches(
+            self.path, source, self.imputation_score_column, tally or StreamTally(),
+            self.stored_effect_scale,
+        )
 
     def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
         yield from stream_batches(self._association_rows(tally), chunk_rows=self.chunk_rows)

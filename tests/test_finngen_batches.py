@@ -14,7 +14,7 @@ import json
 import math
 import random
 import struct
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,9 +22,17 @@ from typing import Any
 import finngen_cases
 import numpy as np
 import pytest
+from batch_fixtures import (
+    Built,
+    assert_identical,
+    drop_reasons,
+    extent,
+    fallbacks,
+    paired_builds,
+    read_logging,
+)
 from finngen_cases import CASES, GOLDEN, Case, _row
-from liftover_fixtures import ALT_LIFTED_ROW, PRIMARY_LIFTED_ROW, write_alt_target_chain
-from pass2_fixtures import captured_spills
+from liftover_fixtures import ALT_LIFTED_ROW, PRIMARY_LIFTED_ROW
 from test_column_map_reader import _FINNGEN_FIXTURES
 from test_indel_alid import _finngen_text
 from test_indel_pairs import _finngen as _pairs_finngen
@@ -36,20 +44,13 @@ from test_source_reader_seam import _finngen as _seam_finngen
 import opengwasdb.readers.finngen as finngen
 import opengwasdb.readers.tabular as tabular
 import opengwasdb.stats as stats
-from opengwasdb.admission import admission_record_for
-from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
-from opengwasdb.readers import registry
 from opengwasdb.readers.finngen import FinnGenR13Reader
 from opengwasdb.readers.interface import (
     AssociationBatch,
     ReaderAssociation,
-    RegionsFile,
-    SiteMetrics,
-    SourceVariant,
     StreamTally,
     association_batches,
 )
-from opengwasdb.readers.rows import MetricsChunk, ReaderBatch
 
 # ── every FinnGen source ─────────────────────────────────────────────────────
 
@@ -321,21 +322,17 @@ _CASES = {case.name: case for case in CASES}
 
 
 def _fallbacks(caplog: pytest.LogCaptureFixture) -> list[str]:
-    return [r.getMessage() for r in caplog.records if r.name == finngen.__name__]
+    return fallbacks(caplog, finngen)
 
 
 def _extent(path: Path, row_by_row: int, blocks: int, undecided: int) -> str:
-    """The line a source's read ends with when the per-row rules read any of it."""
-    return (
-        f"FinnGen source {path}: {row_by_row} of {blocks} blocks read row by row, and "
-        f"{undecided} rows of the others read from their own line"
-    )
+    return extent("FinnGen", path, row_by_row, blocks, undecided)
 
 
 def _read_logging(path: Path, caplog: pytest.LogCaptureFixture) -> list[str]:
-    with caplog.at_level("WARNING", logger=finngen.__name__):
-        list(FinnGenR13Reader(path).stream_association_batches(StreamTally()))
-    return _fallbacks(caplog)
+    return read_logging(
+        caplog, finngen, lambda: FinnGenR13Reader(path).stream_association_batches(StreamTally())
+    )
 
 
 @pytest.mark.parametrize(
@@ -443,34 +440,6 @@ def test_finngen_offers_its_associations_as_batches(tmp_path: Path) -> None:
 # ── through a Dense build's Pass 2 ───────────────────────────────────────────
 
 
-@dataclass(frozen=True)
-class RowsOnly:
-    """The FinnGen reader with its association batches hidden: Pass 2 reads it
-    one association at a time."""
-
-    reader: FinnGenR13Reader
-
-    def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
-        return self.reader.stream_associations(tally)
-
-    def stream_variants(self) -> Iterator[SourceVariant]:
-        return self.reader.stream_variants()
-
-    def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
-        return self.reader.stream_batches(tally)
-
-    def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
-        return self.reader.stream_metric_chunks()
-
-    def extract_at_sites(
-        self, alids: Iterable[str], *, region: str | None = None, regions_file: RegionsFile = None
-    ) -> dict[str, SiteMetrics]:
-        return self.reader.extract_at_sites(alids, region=region, regions_file=regions_file)
-
-
-_ROWS_ONLY = "opengwasdb.test-finngen-rows"
-
-
 def _off_primary(directory: Path) -> Path:
     """A source declared hg19 whose first row the alt-target chain lifts onto
     an alt contig, which the Store does not hold (#376), and its second onto a
@@ -495,95 +464,26 @@ _BUILDS: dict[str, tuple[Callable[[Path], Path], str]] = {
 }
 
 
-@dataclass(frozen=True)
-class Built:
-    """One Dense build: the spill Pass 2 wrote, and its Admission record."""
-
-    spills: dict[int, dict[str, np.ndarray]]
-    record: Path
-
-
-def _build(directory: Path, capability: str, source: Path, assembly: str, chain: Path) -> Built:
-    directory.mkdir()
-    manifest = directory / "manifest.tsv"
-    manifest.write_text(
-        "trait_id\ttrait_name\tfile_path\tn\tstored_effect_scale\toriginal_sd_method"
-        "\toriginal_sd\tsource_reader_capability\tsource_assembly\n"
-        f"finngen\tFinnGen\t{source}\t1000\tlog_or\tbinary_trait\t\t{capability}\t{assembly}\n",
-        encoding="utf-8",
-    )
-    store = directory / "store.opengwasdb"
-    lift = {"chain_file": chain, "liftover_failure_threshold": 0.0} if assembly == "hg19" else {}
-    # Each build's own context: a capture left in place would chain onto the
-    # next build's, which would then overwrite this one's arrays.
-    with pytest.MonkeyPatch.context() as patch, captured_spills(patch) as spills:
-        build_dense_from_vcf_manifest(manifest, store, store_id="s", release_id="r", **lift)
-    return Built(spills, admission_record_for(store))
-
-
-def _refuse_rows(self: FinnGenR13Reader, tally: object = None) -> None:
-    raise AssertionError("Pass 2 read a reader that offers batches one association at a time")
-
 
 @pytest.fixture(scope="module")
 def builds(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[Built, Built]]:
-    """Each source built twice: once read row by row, once as batches by a
-    reader that refuses to be read row by row."""
-    root = tmp_path_factory.mktemp("builds")
-    chain = write_alt_target_chain(root / "alt-target.chain")
-    built: dict[str, tuple[Built, Built]] = {}
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setitem(
-            registry._READERS, _ROWS_ONLY,
-            lambda path, scale: RowsOnly(FinnGenR13Reader(path, scale)),
-        )
-        patch.setattr(finngen, "_BLOCK_BYTES", 1 << 12)
-        for name, (write, assembly) in _BUILDS.items():
-            (root / name).mkdir()
-            source = write(root / name)
-            rows = _build(root / name / "rows", _ROWS_ONLY, source, assembly, chain)
-            with pytest.MonkeyPatch.context() as refuse:
-                refuse.setattr(FinnGenR13Reader, "stream_associations", _refuse_rows)
-                batches = _build(
-                    root / name / "batches", finngen.FINNGEN_R13_CAPABILITY, source, assembly,
-                    chain,
-                )
-            built[name] = (rows, batches)
-    return built
+    return paired_builds(
+        tmp_path_factory.mktemp("builds"), _BUILDS, reader=FinnGenR13Reader, module=finngen,
+        capability=finngen.FINNGEN_R13_CAPABILITY,
+    )
 
 
 @pytest.mark.parametrize("name", list(_BUILDS))
 def test_pass2_reads_finngen_batches_as_it_reads_its_associations(
     builds: dict[str, tuple[Built, Built]], name: str
 ) -> None:
-    """The spill and the Admission record are the same whether Pass 2 read the
-    source's batches or its associations one at a time."""
-    rows, batches = builds[name]
-    assert sorted(rows.spills) == sorted(batches.spills) == [0]
-    assert len(rows.spills[0]["rows"]) > 0
-    for array, values in rows.spills[0].items():
-        assert values.dtype == batches.spills[0][array].dtype, array
-        assert values.tobytes() == batches.spills[0][array].tobytes(), array
-    record = (rows.record / "admission.json").read_bytes()
-    assert json.loads(record)["analyses"][0]["examined"] > 0
-    assert record == (batches.record / "admission.json").read_bytes()
-    assert _logs(rows.record) == _logs(batches.record)
-
-
-def _logs(record: Path) -> dict[str, bytes]:
-    """Each dropped-row log a record holds; a record that dropped nothing has none."""
-    dropped = record / "dropped"
-    return {log.name: log.read_bytes() for log in dropped.iterdir()} if dropped.exists() else {}
+    assert_identical(*builds[name])
 
 
 def test_the_builds_meet_every_drop_reason(builds: dict[str, tuple[Built, Built]]) -> None:
     """What the builds compare includes a row dropped for each reason a FinnGen
     row can be, a lift onto an alt contig among them."""
-    reasons: set[str] = set()
-    for rows, _batches in builds.values():
-        analysis = json.loads((rows.record / "admission.json").read_text())["analyses"][0]
-        reasons |= set(analysis["dropped"])
-    assert reasons >= {
+    assert drop_reasons(builds) >= {
         "allele_invalid", "chromosome_missing", "se_unusable", "effect_missing", "z_nonfinite",
         "duplicate_collapsed", "duplicate_conflicting", "lift_off_primary",
     }
