@@ -40,6 +40,8 @@ import numpy.typing as npt
 
 from ogld.format import InputError, PcCheck, PcNull, PcScan
 
+#: Dosages (variants × samples), whatever their dtype: the scan casts them (`common`, `_basis`).
+Dosages = npt.NDArray[np.floating] | npt.NDArray[np.integer]
 WINDOW_BP: Final = 4_000_000
 STEP_BP: Final = 2_000_000
 MAX_VARIANTS: Final = 5_000
@@ -143,7 +145,7 @@ def windows(
                 str(c),
                 pos[on],
                 common(g[on]),
-                lambda rows, on=on: g[on[rows]],
+                _rows_of(g, on),
                 g.shape[1],
                 threads=threads,
             )
@@ -151,11 +153,22 @@ def windows(
     return merge(parts) if parts else Windows([], np.empty((g.shape[1], 0)))
 
 
+def _rows_of(
+    g: npt.NDArray[np.floating] | npt.NDArray[np.integer], on: npt.NDArray[np.intp]
+) -> Callable[[npt.NDArray[np.intp]], Dosages]:
+    """A `read` of the rows `on` of `g`, as `stream_windows` asks for them."""
+
+    def read(rows: npt.NDArray[np.intp]) -> Dosages:
+        return g[on[rows]]
+
+    return read
+
+
 def stream_windows(
     chrom: str,
     pos: npt.NDArray[np.int64],
     selected: npt.NDArray[np.bool_],
-    read: Callable[[npt.NDArray[np.intp]], npt.NDArray[np.floating]],
+    read: Callable[[npt.NDArray[np.intp]], Dosages],
     samples: int,
     *,
     threads: int = 1,
