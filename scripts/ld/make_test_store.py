@@ -5,13 +5,16 @@ The Test Store is the LD Store of the Test Panel (`CONTEXT.md`), written from th
 independent `reference_r(10)`, so a reader's tests have real data in the real format before any
 builder exists. Its variants are the rows that pass the build's filters, with the engine's ALID,
 A1 and A2 (`ogld.identity`), reversed indels resolved by the engine's rule; its r is the
-reference r signed to A1 and quantised (spec §3); its Near Band is every pair within 3 Mb and
-its Proxy Index every pair within 10 Mb whose Stored r reaches t_far for n = 771 and the k it
-was written at (spec §4, §5). It is deterministic: the same inputs write the same bytes.
+reference r signed to A1 and quantised at × 511, HGDP+1kGP EUR's encoding (spec §3; ADR 0004);
+its Near Band is every pair within 3 Mb and its Proxy Index every pair within 10 Mb whose Stored
+r reaches t_far for n = 771 and the k it was written at (spec §4, §5). It is deterministic: the
+same inputs write the same bytes.
 
-    pixi run -e dev python scripts/make_test_store.py [--k 10] [--force] [out]
+    pixi run -e dev python scripts/make_test_store.py --r-scale 511 [--k 10] [--force] [out]
 
-`write_test_store(k, out)` writes the store at either k the Test Panel holds a reference for.
+`write_test_store(k, out, r_scale)` writes the store at either k the Test Panel holds a reference
+for, at any scale the format admits: the committed Test Store is × 511, and tests write × 2047 and
+× 32767 stores beside it. The scale is always given, as a build's is: there is no default.
 """
 
 from __future__ import annotations
@@ -39,15 +42,13 @@ import ogld
 from ogld.build.diagnostic import long_range_ld_regions
 from ogld.build.near_band import read_alt_counts
 from ogld.format import (
-    ENCODING,
     FAR_BP,
     FORMAT_VERSION,
     NEAR_BP,
-    RESERVED_CODE,
     T_FAR_Q,
+    Codes,
     Provenance,
-    far_code_floor,
-    quantise,
+    REncoding,
     t_far,
 )
 from ogld.format.geometry import (
@@ -127,9 +128,10 @@ def variants_table(oriented: list[Orientation], frequency: npt.NDArray[np.float6
 
 
 def code_matrices(
-    vs: VariantSet, k: int, ranges: dict[str, tuple[int, int]]
-) -> dict[str, tuple[npt.NDArray[np.int16], npt.NDArray[np.bool_]]]:
-    """Per chromosome, the reference r as codes for local rows (lo, hi), lo < hi, and where held."""
+    vs: VariantSet, k: int, ranges: dict[str, tuple[int, int]], encoding: REncoding
+) -> dict[str, tuple[Codes, npt.NDArray[np.bool_]]]:
+    """Per chromosome, the reference r as `encoding`'s codes for local rows (lo, hi), lo < hi,
+    and where held."""
     ref = panel_data().reference_r(k)
     store_row = np.full(len(panel_data().variants()), -1, dtype=np.int64)
     store_row[vs.panel_rows] = np.arange(len(vs.panel_rows))
@@ -138,12 +140,12 @@ def code_matrices(
         raise ValueError("reference pairs name a row the Variant Set does not hold")
     r = ref.r * vs.sign[a] * vs.sign[b]
     lo, hi = np.minimum(a, b), np.maximum(a, b)
-    codes = quantise(r)
+    codes = encoding.quantise(r)
     out = {}
     for chrom, (start, stop) in ranges.items():
         mine = (lo >= start) & (lo < stop)
         size = stop - start
-        dense = np.full((size, size), RESERVED_CODE, dtype=np.int16)
+        dense = np.full((size, size), encoding.reserved_code, dtype=encoding.dtype)
         held = np.zeros((size, size), dtype=np.bool_)
         dense[local_rows(lo[mine], start), local_rows(hi[mine], start)] = codes[mine]
         held[local_rows(lo[mine], start), local_rows(hi[mine], start)] = True
@@ -166,7 +168,7 @@ def write_chromosome(
     chrom: str,
     start: int,
     position: npt.NDArray[np.int64],
-    dense: npt.NDArray[np.int16],
+    dense: Codes,
     held: npt.NDArray[np.bool_],
     floor: int,
 ) -> tuple[int, int, int, int]:
@@ -272,12 +274,13 @@ def provenance(
     counts: tuple[int, int, int, int],
     diagnostic: dict[str, object] | None,
     build: dict[str, object],
+    encoding: REncoding,
 ) -> Provenance:
     far_t = t_far(panel_data().panel().n_samples, k)
     near, candidates, far_pairs, entries = counts
     record: dict[str, object] = {
         "format_version": FORMAT_VERSION,
-        "encoding": dict(ENCODING),
+        "encoding": encoding.record(),
         **provenance_inputs(k),
         "variants_dropped": {
             "zero_variance": 0,
@@ -289,7 +292,7 @@ def provenance(
         "adjustment": adjustment(k),
         "t_far": far_t,
         "t_far_q": T_FAR_Q,
-        "far_code_floor": far_code_floor(far_t),
+        "far_code_floor": encoding.far_code_floor(far_t),
         "pc_diagnostic": diagnostic,
         "counts": {
             "near_pairs": near,
@@ -392,27 +395,37 @@ def pc_diagnostic(vs: VariantSet, k: int) -> dict[str, object]:
     }
 
 
-def write_test_store(k: int, out: str | Path) -> Path:
-    """Write the Test Store at `out` from the Test Panel's reference r at `k`; return `out`."""
+def write_test_store(k: int, out: str | Path, r_scale: int) -> Path:
+    """Write the Test Store at `out` from the Test Panel's reference r at `k`, at × `r_scale`;
+    return `out`."""
     started = time.perf_counter()
+    encoding = REncoding(r_scale)
     vs = variant_set()
-    writer = StoreWriter.create(out, variants=vs.variants, near_bp=NEAR_BP, far_bp=FAR_BP)
+    writer = StoreWriter.create(
+        out, variants=vs.variants, near_bp=NEAR_BP, far_bp=FAR_BP, encoding=encoding
+    )
     ranges = chromosome_ranges(vs.variants.chrom)
-    floor = far_code_floor(t_far(panel_data().panel().n_samples, k))
+    floor = encoding.far_code_floor(t_far(panel_data().panel().n_samples, k))
     totals = np.zeros(4, dtype=np.int64)
-    for chrom, (dense, held) in code_matrices(vs, k, ranges).items():
+    for chrom, (dense, held) in code_matrices(vs, k, ranges, encoding).items():
         start, stop = ranges[chrom]
         position = vs.variants.position[start:stop]
         totals += write_chromosome(writer, chrom, start, position, dense, held, floor)
     counts = (int(totals[0]), int(totals[1]), int(totals[2]), int(totals[3]))
     diagnostic = pc_diagnostic(vs, k)
-    writer.finish(provenance(k, vs, counts, diagnostic, build_record(started)))
+    writer.finish(provenance(k, vs, counts, diagnostic, build_record(started), encoding))
     return Path(out)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("out", nargs="?", type=Path, default=DEFAULT_OUT)
+    parser.add_argument(
+        "--r-scale",
+        type=int,
+        required=True,
+        help="the store's r scale: 511 for the committed Test Store, HGDP+1kGP EUR's (ADR 0004)",
+    )
     parser.add_argument("--k", type=int, default=10, choices=panel_data().KS)
     parser.add_argument("--force", action="store_true", help="replace a store already at `out`")
     args = parser.parse_args(argv)
@@ -420,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.force:
             parser.error(f"{args.out} exists; pass --force to write it again")
         shutil.rmtree(args.out)
-    out = write_test_store(args.k, args.out)
+    out = write_test_store(args.k, args.out, args.r_scale)
     print(out)
     return 0
 

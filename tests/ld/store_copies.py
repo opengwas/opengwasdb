@@ -11,10 +11,33 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import zarr
 from zarr.codecs import ZstdCodec
 
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
+#: The Test Store's encoding, r̂ = code / R_SCALE, as a literal: every test that needs the Test
+#: Store's step, or builds the Test Panel to compare with it, takes it from here, never from
+#: ogld (spec §3; ADR 0004). A test holds the store's record to it.
+R_SCALE = 32767
+#: Half a step: |r̂ − r| never exceeds it.
+HALF_STEP = 1 / (2 * R_SCALE)
+#: The far code floor at R_SCALE for n = 771 (spec §3's table): FLOOR at the Test Store's
+#: k = 10, FLOOR_K0 at k = 0, and FLOOR_K7 at k = 7, where a build that drops a local PC lands.
+FLOOR = 5426
+FLOOR_K0 = 5391
+FLOOR_K7 = 5416
+
+
+def codes_at(r: npt.ArrayLike, scale: int = R_SCALE) -> npt.NDArray[np.int64]:
+    """r as a store at × `scale` codes it, computed here rather than by ogld: spec §3's
+    clamp(rint(r × scale), −scale, +scale), half to even."""
+    return np.clip(np.rint(np.asarray(r, dtype=np.float64) * scale), -scale, scale).astype(np.int64)
+
+
+def stored_at(r: npt.ArrayLike, scale: int = R_SCALE) -> npt.NDArray[np.float64]:
+    """r as a store at × `scale` reads it back: its code / scale."""
+    return codes_at(r, scale) / scale
 
 
 def copy_store(to: Path) -> Path:

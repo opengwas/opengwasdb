@@ -12,13 +12,12 @@ import numpy as np
 import numpy.typing as npt
 import testdata
 from script_modules import load_script
+from store_copies import FLOOR_K0, HALF_STEP, R_SCALE
 
 import ogld
 from ogld.build.near_band import NearBand, read_alt_counts, unadjusted_near_band
-from ogld.format import FAR_BP, NEAR_BP, far_code_floor, t_far
+from ogld.format import FAR_BP, NEAR_BP, REncoding
 from ogld.store import StoreReader, StoreWriter, Variants
-
-HALF_STEP = 1 / 65534
 
 
 def band_index(
@@ -56,12 +55,14 @@ def test_a_pair_from_the_pgen_is_answered_by_the_store_it_wrote(tmp_path: Path) 
     )
     panel = testdata.panel()
     alt = read_alt_counts(panel.pgen, panel.psam, panel.keep, rows)
-    band = unadjusted_near_band(alt, vs.sign[on22] > 0, table.position, NEAR_BP)
+    encoding = REncoding(R_SCALE)
+    band = unadjusted_near_band(alt, vs.sign[on22] > 0, table.position, NEAR_BP, encoding=encoding)
     out = tmp_path / "walk"
-    writer = StoreWriter.create(out, variants=table, near_bp=NEAR_BP, far_bp=FAR_BP)
+    writer = StoreWriter.create(
+        out, variants=table, near_bp=NEAR_BP, far_bp=FAR_BP, encoding=encoding
+    )
     writer.write_near(0, band.lengths, band.codes)
-    floor = far_code_floor(t_far(771, 0))
-    indptr, partner, codes = band_index(band, 0, len(table), floor)
+    indptr, partner, codes = band_index(band, 0, len(table), FLOOR_K0)
     writer.write_index("22", indptr, partner, codes)
     counts = (len(band.codes), 0, 0, len(partner))
     build = script.build_record(0.0)
@@ -69,7 +70,7 @@ def test_a_pair_from_the_pgen_is_answered_by_the_store_it_wrote(tmp_path: Path) 
     # finish validates (spec §12), and a genotypes store's pc_diagnostic is never null: this one
     # is the Test Panel's own, measured at k = 0 on its chr21 × chr22 pairs.
     diagnostic = script.pc_diagnostic(vs, 0)
-    writer.finish(script.provenance(0, sub, counts, diagnostic, build))
+    writer.finish(script.provenance(0, sub, counts, diagnostic, build, encoding))
 
     store = ogld.open(out)
     ref = testdata.reference_r(0)

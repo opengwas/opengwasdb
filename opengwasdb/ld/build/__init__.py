@@ -27,7 +27,7 @@ from ogld.format import (
     Adjustment,
     InputError,
     Provenance,
-    far_code_floor,
+    REncoding,
     t_far,
 )
 from ogld.store import StoreWriter
@@ -51,6 +51,10 @@ class BuildInputs:
       with k = 0.
     - `panel_id`, `ancestry`: the Source Panel, as provenance names it.
     - `genotype_source`: what the genotypes are, such as the release and its files.
+    - `r_scale`: the scale of the store's encoding, r̂ = code / r_scale, any whole number
+      `ogld.format.REncoding` admits (spec §3). ADR 0004 sets each Source Panel's (owner,
+      10 November 2026). There is no default, so no build falls back on a scale it was not
+      given; provenance records it in `encoding`.
     - `k`: the target number of PCs to regress out, taken in order from those the PC
       Check keeps (owner, 7 November 2026); provenance records it as `k_target`.
     - `k_min`: the fewest PCs a build may use. When fewer than `k` survive the PC Check,
@@ -71,6 +75,7 @@ class BuildInputs:
     panel_id: str
     ancestry: str
     genotype_source: str
+    r_scale: int
     k: int = pc_check.K_TARGET
     k_min: int = pc_check.K_MIN
     mac_min: int = 20
@@ -79,11 +84,17 @@ class BuildInputs:
     def __post_init__(self) -> None:
         if not self.pgen:
             raise InputError("BuildInputs needs at least one pgen")
+        self.encoding()
         _check_pc_counts(self.k, self.k_min)
         if self.k > 0 and (self.pcs is None or self.pc_source is None):
             raise InputError(
                 f"k = {self.k} needs a PC File and its declared source; only k = 0 runs without"
             )
+
+    def encoding(self) -> REncoding:
+        """The encoding the build writes, from `r_scale`; an InputError naming a scale the
+        format does not admit, or none at all."""
+        return REncoding(self.r_scale)
 
 
 def _check_pc_counts(k: int, k_min: int) -> None:
@@ -135,13 +146,18 @@ def _build(inputs: BuildInputs, target: Path, threads: int, cost: record.Cost) -
     diagnostic.require_change_pairs([(c.name, c.position) for c in chromosomes], plan.panel)
     k = chosen.covariates.k
     rates = passes.chance(plan, chromosomes, chosen.covariates)
+    encoding = inputs.encoding()
     writer = StoreWriter.create(
-        target, variants=passes.variants_table(chromosomes), near_bp=NEAR_BP, far_bp=FAR_BP
+        target,
+        variants=passes.variants_table(chromosomes),
+        near_bp=NEAR_BP,
+        far_bp=FAR_BP,
+        encoding=encoding,
     )
     far_t = t_far(plan.samples.n, k)
-    floor = far_code_floor(far_t)
+    floor = encoding.far_code_floor(far_t)
     written = passes.write_ld(
-        writer, plan, chromosomes, chosen.covariates, floor, (NEAR_BP, FAR_BP), threads
+        writer, plan, chromosomes, chosen.covariates, floor, (NEAR_BP, FAR_BP), threads, encoding
     )
     made = record.Made(
         sum(len(c) for c in chromosomes),
@@ -156,6 +172,7 @@ def _build(inputs: BuildInputs, target: Path, threads: int, cost: record.Cost) -
             made,
             (NEAR_BP, FAR_BP, far_t, floor),
             cost.record(threads),
+            encoding,
         ),
         threads=threads,
     )

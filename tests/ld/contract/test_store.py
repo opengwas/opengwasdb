@@ -23,7 +23,7 @@ from support import alids, panel_data, passing_rows, reference, reference_matrix
 
 import ogld
 from ogld import cli
-from ogld.format import VALIDATION_RULES, RefusalReason, far_code_floor, quantise, t_far
+from ogld.format import VALIDATION_RULES, RefusalReason, REncoding, t_far
 from ogld.store import StoreWriter
 
 
@@ -71,7 +71,13 @@ def test_the_test_store_records_its_panel_and_its_distances() -> None:
     assert p["adjustment"]["k"] == support.K
     assert p["adjustment"]["covariates"] == [f"PC{i}" for i in range(1, 11)]
     assert p["t_far"] == support.T_FAR
-    assert p["far_code_floor"] == support.FLOOR == 5426
+    assert p["far_code_floor"] == support.FLOOR
+    assert p["encoding"] == {
+        "r_dtype": "int16",
+        "r_scale": support.R_SCALE,
+        "r_reserved_code": -32768,
+        "rounding": "half_to_even",
+    }
     assert (p["near_bp"], p["far_bp"]) == (3_000_000, 10_000_000)
     assert p["source"]["kind"] == "genotypes"
     assert p["n_variants"] == len(passing_rows())
@@ -188,7 +194,7 @@ def test_every_stored_cell_is_exactly_what_the_codes_say() -> None:
     stored = ~np.isnan(m.r)
     np.fill_diagonal(stored, False)
     assert stored.any()
-    np.testing.assert_array_equal(m.r[stored], quantise(ref[stored]) / 32767)
+    np.testing.assert_array_equal(m.r[stored], support.stored_at(ref[stored]))
 
 
 def test_unstored_cells_are_nan_and_a_fill_replaces_exactly_them() -> None:
@@ -273,7 +279,13 @@ def test_the_writer_refuses_a_location_that_exists(tmp_path: Path) -> None:
     shutil.copytree(support.TEST_STORE, copy)
     before = sorted(p.relative_to(copy) for p in copy.rglob("*"))
     with pytest.raises(FileExistsError):
-        StoreWriter.create(copy, variants=variants, near_bp=3_000_000, far_bp=10_000_000)
+        StoreWriter.create(
+            copy,
+            variants=variants,
+            near_bp=3_000_000,
+            far_bp=10_000_000,
+            encoding=REncoding(support.R_SCALE),
+        )
     assert sorted(p.relative_to(copy) for p in copy.rglob("*")) == before
 
 
@@ -342,11 +354,22 @@ def write_index22(store: Path, owner: np.ndarray, partner: np.ndarray, code: np.
     rewrite(store, "index/22/r", lambda _: code[order].astype(np.int16))
 
 
-def add_pair(gap: Callable[[np.ndarray], np.ndarray], code: int) -> Callable[[Path], None]:
+def floor_of(store: Path) -> int:
+    """The far code floor the copy records: a breaker sets a code by its own store's floor."""
+    floor: int = json.loads((store / "zarr.json").read_text())["attributes"]["ld_store"][
+        "far_code_floor"
+    ]
+    return floor
+
+
+def add_pair(
+    gap: Callable[[np.ndarray], np.ndarray], coded: Callable[[int], int]
+) -> Callable[[Path], None]:
     """A breaker adding, both ways, the first chr22 pair not in the index whose distance
-    `gap` accepts, with `code`."""
+    `gap` accepts, with the code `coded` gives for the store's far code floor."""
 
     def breaker(store: Path) -> None:
+        code = coded(floor_of(store))
         _, pos = chr22(store)
         owner, partner, codes = index22(store)
         held = set(zip(owner.tolist(), partner.tolist(), strict=True))
@@ -450,11 +473,11 @@ BREAKERS: dict[str, Callable[[Path], None]] = {
     "index.rows": repeat_a_partner,
     # writes −32768 into index/22/r
     "index.codes": set_element("index/22/r", 3, -32768),
-    # adds an index entry 10,000,001 bp apart
-    "index.distance": add_pair(lambda gap: gap == 10_000_001, support.FLOOR + 100),
+    # adds an index entry 10,000,001 bp apart, with a code above the floor
+    "index.distance": add_pair(lambda gap: gap == 10_000_001, lambda floor: floor + 100),
     # adds an index entry with |code| = far_code_floor − 1
     "index.threshold": add_pair(
-        lambda gap: (gap > 3_000_000) & (gap <= 10_000_000), -(support.FLOOR - 1)
+        lambda gap: (gap > 3_000_000) & (gap <= 10_000_000), lambda floor: -(floor - 1)
     ),
     # drops one direction of one index pair
     "index.symmetric": drop_entry(near=False),
@@ -486,7 +509,7 @@ def as_unadjusted(k_min: int | None) -> Callable[[dict[str, Any]], None]:
             covariates=[], k=0, k_target=0, k_min=k_min, pc_file=None, pc_check=None
         )
         p["t_far"] = t_far(p["panel"]["n"], 0)
-        p["far_code_floor"] = far_code_floor(p["t_far"])
+        p["far_code_floor"] = support.FLOOR_K0
 
     return edit
 

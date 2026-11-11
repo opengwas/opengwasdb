@@ -8,8 +8,9 @@ carries the band's own codes (`index.near`, spec §12). Tiles are computed on `t
 threads and written in row order, so the store is the same for any thread count.
 
 The far code floor is judged on codes, not on r: a pair is kept exactly when |code| ≥ the
-floor. Only pairs with |r| × 32767 ≥ floor − 1 are quantised to judge, which keeps every pair
-whose code can reach the floor, since rounding moves r × 32767 by at most ½.
+floor. Only pairs with |r| at least the encoding's `least_r(floor)` are quantised to judge,
+which keeps every pair whose code can reach the floor, since rounding moves r × scale by at
+most ½. Every code is the store's encoding's (`ogld.format.REncoding`).
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from typing import Final
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import R_SCALE, near_row_lengths, quantise
+from ogld.format import Codes, REncoding, near_row_lengths
 
 #: Rows a tile computes: a tile is TILE_ROWS × (variants within far_bp) float64.
 TILE_ROWS: Final = 256
@@ -61,6 +62,7 @@ class Inputs:
     outside: npt.NDArray[np.bool_]
     band: Band
     floor: int
+    encoding: REncoding
 
 
 @dataclass(frozen=True)
@@ -70,10 +72,10 @@ class Tile:
 
     first: int
     lengths: npt.NDArray[np.int64]
-    codes: npt.NDArray[np.int16]
+    codes: Codes
     lo: npt.NDArray[np.int32]
     hi: npt.NDArray[np.int32]
-    entry_codes: npt.NDArray[np.int16]
+    entry_codes: Codes
     change: npt.NDArray[np.float64]
 
 
@@ -108,8 +110,8 @@ def _tile(inputs: Inputs, first: int, last: int) -> Tile:
     stop = int(band.far_stop[last - 1])
     r = inputs.units[first:last] @ inputs.units[first:stop].T
     rows = np.arange(first, last, dtype=np.int64)
-    codes = quantise(_ragged(r, first, rows + 1, band.near_stop[first:last]))
-    lo, hi, entry_codes = _entries(r, first, band.far_stop, inputs.floor)
+    codes = inputs.encoding.quantise(_ragged(r, first, rows + 1, band.near_stop[first:last]))
+    lo, hi, entry_codes = _entries(r, first, band.far_stop, inputs.floor, inputs.encoding)
     return Tile(
         first,
         band.near_stop[first:last] - rows - 1,
@@ -122,16 +124,20 @@ def _tile(inputs: Inputs, first: int, last: int) -> Tile:
 
 
 def _entries(
-    r: npt.NDArray[np.float64], first: int, far_stop: npt.NDArray[np.int64], floor: int
-) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int32], npt.NDArray[np.int16]]:
+    r: npt.NDArray[np.float64],
+    first: int,
+    far_stop: npt.NDArray[np.int64],
+    floor: int,
+    encoding: REncoding,
+) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int32], Codes]:
     """The tile's pairs lo < hi within far_bp whose code reaches `floor` (spec §5), as local
     rows in int32: a chromosome holds far fewer than 2³¹ rows (spec §5, `partner`), and a dense
     one such as chr6, the MHC's, has hundreds of millions of these entries."""
-    t, c = np.nonzero(np.abs(r) >= (floor - 1) / R_SCALE)
+    t, c = np.nonzero(np.abs(r) >= encoding.least_r(floor))
     lo, hi = first + t.astype(np.int64), first + c.astype(np.int64)
     inside = (hi > lo) & (hi < far_stop[lo])
     t, c, lo, hi = t[inside], c[inside], lo[inside], hi[inside]
-    codes = quantise(r[t, c])
+    codes = encoding.quantise(r[t, c])
     reach = np.abs(codes.astype(np.int64)) >= floor
     return lo[reach].astype(np.int32), hi[reach].astype(np.int32), codes[reach]
 
@@ -203,14 +209,14 @@ class Entries:
 
     lo: npt.NDArray[np.int32]
     hi: npt.NDArray[np.int32]
-    codes: npt.NDArray[np.int16]
+    codes: Codes
 
     @classmethod
     def of(
         cls,
         lo: list[npt.NDArray[np.int32]],
         hi: list[npt.NDArray[np.int32]],
-        codes: list[npt.NDArray[np.int16]],
+        codes: list[Codes],
     ) -> Entries:
         found = cls(np.concatenate(lo), np.concatenate(hi), np.concatenate(codes))
         found.require_order()
@@ -225,7 +231,7 @@ class Entries:
 
     def both_directions(
         self, rows: int, offset: int
-    ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.int16]]:
+    ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], Codes]:
         """The Proxy Index in CSR form over `rows` local rows, partners as global rows (local +
         `offset`): each pair in both its rows with one code, partners ascending (spec §5).
 
@@ -254,7 +260,7 @@ class _Layout:
     """The CSR arrays being filled: global partner rows and their codes."""
 
     partner: npt.NDArray[np.int64]
-    codes: npt.NDArray[np.int16]
+    codes: Codes
     offset: int
 
     def place(
@@ -263,7 +269,7 @@ class _Layout:
         counts: npt.NDArray[np.int64],
         row: npt.NDArray[np.int32],
         other: npt.NDArray[np.int32],
-        codes: npt.NDArray[np.int16],
+        codes: Codes,
         order: npt.NDArray[np.intp] | None,
     ) -> None:
         """Put each entry's `other` row and code in its `row`'s block, which starts at

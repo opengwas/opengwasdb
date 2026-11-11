@@ -38,7 +38,6 @@ from realdata_inputs import required
 
 import ogld
 from ogld.build.diagnostic import outside_regions
-from ogld.format import dequantise
 from ogld.identity import Orientation, orient
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -48,6 +47,12 @@ NARROW = ["--chr", "22", "--from-bp", "20000000", "--to-bp", "23000000"]
 WIDE = ["--chr", "22", "--from-bp", "20000000", "--to-bp", "32000000"]
 #: plink2 prints r to six significant digits.
 PRINTED = 5e-7
+#: HGDP+1kGP's encoding, which ogld#7 builds every panel at (ADR 0004): the builds compared with
+#: plink2 use it. The PC Adjustment builds use the container's widest scale instead, because they
+#: hold the provenance's quantiles of the computed change to the change in Stored r, which can
+#: differ from it by a whole step.
+HGDP_SCALE = 511
+WIDEST_SCALE = 32767
 _SLICES: dict[str, Path] = {}
 
 
@@ -94,7 +99,7 @@ def pvar_rows(path: Path) -> list[list[str]]:
     return [line.split("\t") for line in lines if not line.startswith("#")]
 
 
-def inputs(pgen: Path, source: str, pcs: Path | None = None) -> ogld.BuildInputs:
+def inputs(pgen: Path, source: str, r_scale: int, pcs: Path | None = None) -> ogld.BuildInputs:
     return ogld.BuildInputs(
         pgen=(pgen,),
         keep=eur_keep(),
@@ -103,6 +108,7 @@ def inputs(pgen: Path, source: str, pcs: Path | None = None) -> ogld.BuildInputs
         panel_id="hgdp1kgp-v2-EUR-chr22-slice",
         ancestry="EUR",
         genotype_source=source,
+        r_scale=r_scale,
         k=10 if pcs else 0,
         info_min=None,
     )
@@ -126,7 +132,8 @@ def test_the_builder_refuses_the_shipped_pgen_for_its_missing_calls(tmp_path: Pa
     assert (counts > 0).any(), "the shipped slice must have missing calls for this to mean anything"
     with pytest.raises(ogld.InputError, match="missing"):
         ogld.build(
-            inputs(tmp_path / "shipped.pgen", "gnomAD v3.1.2, shipped pgen"), tmp_path / "store"
+            inputs(tmp_path / "shipped.pgen", "gnomAD v3.1.2, shipped pgen", HGDP_SCALE),
+            tmp_path / "store",
         )
 
 
@@ -162,7 +169,8 @@ def test_the_builder_matches_plink2_on_a_real_chr22_slice(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
     slice_ = v2_slice("narrow", tmp_path_factory)
-    ogld.build(inputs(slice_.with_suffix(".pgen"), "v2 EUR chr22:20-23 Mb"), tmp_path / "store")
+    narrow = inputs(slice_.with_suffix(".pgen"), "v2 EUR chr22:20-23 Mb", HGDP_SCALE)
+    ogld.build(narrow, tmp_path / "store")
     store = ogld.open(tmp_path / "store")
 
     rows = pvar_rows(slice_.with_suffix(".pvar"))
@@ -199,7 +207,7 @@ def test_the_builder_matches_plink2_on_a_real_chr22_slice(
     ours = store.matrix([by_id[v].alid for v in order]).r
     # r of A1 dosages is r of ALT dosages times both variants' signs (spec §3).
     worst = np.abs(ours - theirs * sign[:, None] * sign[None, :]).max()
-    assert worst <= 1 / 65534 + PRINTED, f"the builder is {worst} from plink2"
+    assert worst <= 1 / (2 * HGDP_SCALE) + PRINTED, f"the builder is {worst} from plink2"
 
 
 def band_within(store: Path, distance: int) -> npt.NDArray[np.float64]:
@@ -211,7 +219,10 @@ def band_within(store: Path, distance: int) -> npt.NDArray[np.float64]:
     reach = np.searchsorted(position, position + distance, side="right")
     lengths = reach - np.arange(len(position)) - 1
     offset = np.arange(int(lengths.sum())) - np.repeat(np.cumsum(lengths) - lengths, lengths)
-    return dequantise(codes[np.repeat(indptr[:-1], lengths) + offset])
+    scale = root.attrs["ld_store"]["encoding"]["r_scale"]
+    assert scale == WIDEST_SCALE, "the store is read at the scale the test built it at"
+    stored: npt.NDArray[np.float64] = codes[np.repeat(indptr[:-1], lengths) + offset] / scale
+    return stored
 
 
 def test_real_ld_survives_pc_adjustment(
@@ -222,8 +233,10 @@ def test_real_ld_survives_pc_adjustment(
     pcs = required("OGLD_EUR_PC_FILE", "EUR's PC File from scripts/make_pcs.py, §10")
     slice_ = v2_slice("wide", tmp_path_factory)
     pgen = slice_.with_suffix(".pgen")
-    ogld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb"), tmp_path / "k0")
-    adjusted = ogld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb", pcs), tmp_path / "k10")
+    ogld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb", WIDEST_SCALE), tmp_path / "k0")
+    adjusted = ogld.build(
+        inputs(pgen, "v2 EUR chr22:20-32 Mb", WIDEST_SCALE, pcs), tmp_path / "k10"
+    )
     held = [zarr.open_group(str(tmp_path / s), mode="r")["variants"] for s in ("k0", "k10")]
     assert list(held[0]["alid"][:]) == list(held[1]["alid"][:]), "one Variant Set, both builds"
     assert outside_regions("22", np.asarray(held[0]["position"][:]).astype(np.int64)).all()

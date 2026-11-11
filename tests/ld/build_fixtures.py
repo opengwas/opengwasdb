@@ -16,13 +16,16 @@ from typing import Any, Final
 import numpy as np
 import numpy.typing as npt
 import pytest
+import store_copies
 import testdata
 
 import ogld
 from ogld.identity import orient
 from ogld.store import StoreReader
 
-HALF_STEP: Final = 1 / 65534
+#: The Test Panel is built at the Test Store's scale, so a build compares with it code for code.
+R_SCALE: Final = store_copies.R_SCALE
+HALF_STEP: Final = store_copies.HALF_STEP
 #: Two float64 computations of one r may differ by a few ulps before rounding.
 SLACK: Final = 1e-9
 PANEL_ID: Final = "test-panel-hgdp1kgp-EUR"
@@ -37,6 +40,7 @@ def inputs(fileset: Path, k: int = 0, **overrides: Any) -> ogld.BuildInputs:
         "panel_id": PANEL_ID,
         "ancestry": "EUR",
         "genotype_source": "the Test Panel: HGDP+1kGP phased v2 EUR, chr21 and chr22",
+        "r_scale": R_SCALE,
         "pgen": (fileset,),
         "keep": panel.keep,
         "pcs": panel.pcs if k else None,

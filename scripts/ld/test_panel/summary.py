@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ogld.format import NEAR_BP, dequantise, quantise
+from ogld.format import NEAR_BP, REncoding
 from test_panel.answers import Answers
 from test_panel.assemble import Panel
 from test_panel.params import Params
@@ -89,7 +89,8 @@ def _exact(panel: Panel, a: Answers, d: np.ndarray) -> dict[str, object]:
 
 def _far(params: Params, panel: Panel, a: Answers, d: np.ndarray, n: int) -> dict[str, object]:
     t_far = params.t_far(n, 10)
-    stored = dequantise(quantise(a.r[10]))
+    encoding = REncoding(params.r_scale)
+    stored = encoding.dequantise(encoding.quantise(a.r[10]))
     band = (d > NEAR_BP) & (d <= params.far_bp)
     far = band & (stored**2 >= t_far)
     named = [

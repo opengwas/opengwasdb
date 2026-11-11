@@ -7,7 +7,8 @@ This document defines a valid **LD Store**: the arrays, their dtypes and Zarr la
 quantised, the provenance an LD Store carries, what a reader answers for a pair, what the four
 queries return, and when a request is refused. The decisions behind it are in ADR 0001
 (`docs/adr/0001-near-band-and-thresholded-far-pairs.md`), including its clarification of
-7 November 2026; the build inputs are in `docs/spec/build-inputs.md` (ADR 0002); the terms are in
+7 November 2026, and each store's encoding of r in ADR 0004
+(`docs/adr/0004-per-store-encoding.md`); the build inputs are in `docs/spec/build-inputs.md` (ADR 0002); the terms are in
 `CONTEXT.md`. **ALID**, its **A1** and **Reference Assembly** are the engine's
 (opengwas/opengwasdb `CONTEXT.md`, _Variant Identity_), not redefined here. The engine's glossary
 says an ALID is formed after "upper-casing, trimming and left alignment"; its code at `1ab2b09`
@@ -110,28 +111,46 @@ variant, so it is Absent too.
 variants i and j, where A1 is each variant's engine A1. A reader that flips one variant's alleles
 flips the sign of every r it is in.
 
-**Quantisation.** r is stored as an `int16` code:
+**Quantisation.** r is stored as an `int16` code at the store's scale s, a whole number from 1
+to 32767 that the store records as `encoding.r_scale` (§7; ADR 0004):
 
 ```text
-code = clamp(rint(r × 32767), −32767, +32767)      rint rounds half to even (IEEE 754, numpy.rint)
-r̂    = code / 32767                                 the Stored r a reader gets back
+code = clamp(rint(r × s), −s, +s)      rint rounds half to even (IEEE 754, numpy.rint)
+r̂    = code / s                          the Stored r a reader gets back
 ```
 
 | code | meaning |
 |---|---|
 | −32768 | reserved: never a correlation. It is every r array's fill value, and a valid LD Store holds none |
-| −32767 … +32767 | r̂ = code / 32767; r = ±1 is ±32767 exactly |
+| −s … +s | r̂ = code / s; r = ±1 is ±s exactly |
+| any other | past the scale: never a correlation, since \|r̂\| would exceed 1. A valid LD Store holds none |
 
-- The scale is symmetric, so negating a code to flip an allele never overflows, and r = ±1 is
-  exact. It is magenpy's `int16` scale (1 / `iinfo(int16).max`). The quantisation error is at most
-  1/65534 ≈ 1.53×10⁻⁵ in r.
+**Each store's scale is its own** (owner, 10 November 2026; ADR 0004). The step is 1/s and the
+quantisation error at most half of it, 1/(2s):
+
+| LD Store | encoding | step | max error in r |
+|---|---|---|---|
+| the five HGDP+1kGP panels | `int16` × 511 | 1.96×10⁻³ | 9.8×10⁻⁴ |
+| UK Biobank EUR | `int16` × 2047 | 4.89×10⁻⁴ | 2.4×10⁻⁴ |
+| the container's widest | `int16` × 32767 | 3.05×10⁻⁵ | 1.53×10⁻⁵ |
+
+A build takes its scale as an input (`BuildInputs.r_scale`, `docs/spec/build-inputs.md` §1), and
+there is no default: a build that was not given one is refused. The issue's measurement on real
+HGDP+1kGP EUR chr22 chose the widths: at × 511 the error is 0.03 of r's sampling error at
+n = 771, and the Near Band costs 1.70× fewer bits a pair than at × 32767 (§6).
+
+- **Every encoding shares one container**: `int16` codes, −32768 reserved, half-to-even rounding.
+  The scale is symmetric, so negating a code to flip an allele never overflows, and r = ±1 is
+  exact. At × 32767 it is magenpy's `int16` scale (1 / `iinfo(int16).max`). An `int8` container
+  is not built (ADR 0004).
 - **The clamp is for float error only.** A computed r that is not finite, or whose magnitude
   exceeds 1 by more than 10⁻⁶, is a builder fault, and quantising refuses it rather than store a
   plausible ±1.
 - **The reserved code is the fill value, so an unwritten chunk can never read as r = 0.** In a
   Zarr array, a chunk that was never written reads as the fill value. With a fill value of 0, a
   build that lost a chunk would hand readers a run of plausible zeros, which ADR 0001 forbids.
-  With −32768 the same loss reads as a code that validation (§12) and every reader reject.
+  With −32768 the same loss reads as a code that validation (§12) and every reader reject, at
+  every scale.
 - **There is no "undefined" code.** r is undefined only for a variant with no genotype variance
   after PC Adjustment. MAC ≥ 20 does not exclude this: a site where every called sample is
   heterozygous has none. The prototype found 9 such sites in the AFR chr22 slice and 2 each in
@@ -142,51 +161,61 @@ r̂    = code / 32767                                 the Stored r a reader gets
   MUST drop such variants from the Variant Set and count them in provenance (`variants_dropped`,
   §7). Every stored pair then has a defined r, and the answer table (§8) needs no fourth row.
 - The scale, dtype, reserved code and rounding are recorded in `encoding` (§7). A reader MUST
-  refuse an LD Store whose `encoding` it does not implement.
+  refuse an LD Store whose `encoding` it does not implement, and MUST decode every code at the
+  scale its own store records: one process reads stores of different scales side by side
+  (`ogld.format.REncoding` is the one place that quantises and decodes).
 
 **Thresholds are judged on the Stored r.** A pair reaches an r² threshold t when r̂² ≥ t,
 computed in float64. Every rule below uses this comparison: the Proxy Index's membership (§5),
 the Bound (§8), and clumping and proxies (§9). So a reader's view is self-consistent. But the
-computed r and r̂ differ by up to 1.53×10⁻⁵, so a pair whose computed r² lies within about
-2|r| × 1.53×10⁻⁵ of a threshold can fall on either side of it. For example, a computed r² of
+computed r and r̂ differ by up to half the store's step, so a pair whose computed r² lies within
+about 2|r| × 1/(2s) of a threshold can fall on either side of it. At × 32767, a computed r² of
 0.0099994 is stored as code 3277, which reads back as r̂² = 0.0100018 and reaches 0.01 (the
-rounding walkthrough of `proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html`).
-ogld#6 lists any pair like this when it compares clumping with `plink2 --clump`.
+rounding walkthrough of `proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html`). At
+× 511 the band is 64 times wider: a computed r² of 0.0101, above 0.01, is stored as code 51, which
+reads back as r̂² = 0.0099609 and does not reach it, while 0.0102 is code 52, r̂² = 0.0103554.
+ogld#6 lists any pair like this, at the store's own step, when it compares clumping with
+`plink2 --clump`.
 
-**The far code floor.** `far_code_floor` is the smallest integer c ≥ 0 with (c / 32767)² ≥ t_far
-in float64. A pair is in the Proxy Index exactly when it is within `far_bp` and |code| ≥
-`far_code_floor`, so a pair more than `near_bp` apart is a **Far Pair** exactly then. It is
-recorded in provenance, and validation recomputes it.
+**The far code floor.** `far_code_floor` is the smallest integer c ≥ 0 with (c / s)² ≥ t_far in
+float64, at the store's scale s. A pair is in the Proxy Index exactly when it is within `far_bp`
+and |code| ≥ `far_code_floor`, so a pair more than `near_bp` apart is a **Far Pair** exactly then.
+It is recorded in provenance, and validation recomputes it at the recorded scale.
 
-**Where a pair at exactly t_far lands.** Such a pair's code is rint(√t_far × 32767). It is a Far
+**Where a pair at exactly t_far lands.** Such a pair's code is rint(√t_far × s). It is a Far
 Pair when that reaches the floor, and reads as the Bound when it does not. In true r², the cut
-between the two is ((`far_code_floor` − ½) / 32767)². That cut lies within about 2√t_far / 65534 of
+between the two is ((`far_code_floor` − ½) / s)². That cut lies within about √t_far / s of
 t_far, on either side. So a pair whose true r² is up to that much above t_far can read
-"r² < t_far". The table uses the phased HGDP+1kGP v2 callset's sample counts, which the builds
-read (ADR 0002): EUR 771, AFR 801, EAS 816, SAS 782 and AMR 345. The method is the prototype's
+"r² < t_far". The table gives each panel at its own scale, on the phased HGDP+1kGP v2 callset's
+sample counts, which the builds read (ADR 0002): EUR 771, AFR 801, EAS 816, SAS 782 and AMR 345.
+The method is the prototype's
 (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/t_far_edge.tsv`, on the
-gnomAD v3.1.2 counts); `tests/test_format.py` holds the code to every row.
+gnomAD v3.1.2 counts, at × 32767); each value was computed in 50-digit decimal arithmetic outside
+ogld, and `tests/test_format.py` holds the code to every row.
 
-| LD Store | k | t_far | √t_far × 32767 | far code floor | a pair at exactly t_far | true r² cut |
-|---|---|---|---|---|---|---|
-| UK Biobank EUR | 0 or 10 | 0.001 | 1036.18 → 1036 | 1037 | **the Bound** | 0.0010006 |
-| HGDP+1kGP EUR | 0 | 0.0270649 | 5390.64 → 5391 | 5391 | stored | 0.0270635 |
-| HGDP+1kGP EUR | 10 | 0.0274211 | 5425.99 → 5426 | 5426 | stored | 0.0274161 |
-| HGDP+1kGP AFR | 0 | 0.0260500 | 5288.60 → 5289 | 5289 | stored | 0.0260490 |
-| HGDP+1kGP AFR | 10 | 0.0263797 | 5321.96 → 5322 | 5322 | stored | 0.0263751 |
-| HGDP+1kGP EAS | 0 | 0.0255706 | 5239.70 → 5240 | 5240 | stored | 0.0255686 |
-| HGDP+1kGP EAS | 10 | 0.0258882 | 5272.15 → 5272 | 5273 | **the Bound** | 0.0258917 |
-| HGDP+1kGP SAS | 0 | 0.0266837 | 5352.54 → 5353 | 5353 | stored | 0.0266833 |
-| HGDP+1kGP SAS | 10 | 0.0270298 | 5387.14 → 5387 | 5388 | **the Bound** | 0.0270334 |
-| HGDP+1kGP AMR | 0 | 0.0605814 | 8065.04 → 8065 | 8066 | **the Bound** | 0.0605884 |
-| HGDP+1kGP AMR | 10 | 0.0623952 | 8184.88 → 8185 | 8185 | stored | 0.0623894 |
+| LD Store | scale | k | t_far | √t_far × s | far code floor | a pair at exactly t_far | true r² cut |
+|---|---|---|---|---|---|---|---|
+| UK Biobank EUR | 2047 | 0 or 10 | 0.001 | 64.73 → 65 | 65 | stored | 0.0009929 |
+| HGDP+1kGP EUR | 511 | 0 | 0.0270649 | 84.07 → 84 | 85 | **the Bound** | 0.0273446 |
+| HGDP+1kGP EUR | 511 | 10 | 0.0274211 | 84.62 → 85 | 85 | stored | 0.0273446 |
+| HGDP+1kGP AFR | 511 | 0 | 0.0260500 | 82.48 → 82 | 83 | **the Bound** | 0.0260655 |
+| HGDP+1kGP AFR | 511 | 10 | 0.0263797 | 83.00 → 83 | 83 | stored | 0.0260655 |
+| HGDP+1kGP EAS | 511 | 0 | 0.0255706 | 81.71 → 82 | 82 | stored | 0.0254374 |
+| HGDP+1kGP EAS | 511 | 10 | 0.0258882 | 82.22 → 82 | 83 | **the Bound** | 0.0260655 |
+| HGDP+1kGP SAS | 511 | 0 | 0.0266837 | 83.47 → 83 | 84 | **the Bound** | 0.0267012 |
+| HGDP+1kGP SAS | 511 | 10 | 0.0270298 | 84.01 → 84 | 85 | **the Bound** | 0.0273446 |
+| HGDP+1kGP AMR | 511 | 0 | 0.0605814 | 125.77 → 126 | 126 | stored | 0.0603178 |
+| HGDP+1kGP AMR | 511 | 10 | 0.0623952 | 127.64 → 128 | 128 | stored | 0.0622556 |
 
 At k = 10, the default, a pair at exactly t_far is a Far Pair on HGDP+1kGP EUR, AFR and AMR, and
-so is a pair a little below it, down to the cut. On EAS and SAS it reads as the Bound: a true r²
-up to 0.0258917 on EAS, and 0.0270334 on SAS, reads "r² < t_far". So does one on UK Biobank EUR,
-up to 0.0010006. The walkthrough "A pair at exactly t_far" in
-`proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html` steps through these cases on
-the gnomAD v3.1.2 counts.
+so is a pair a little below it, down to the cut: 0.0273446 on EUR, against t_far 0.0274211. On EAS
+and SAS it reads as the Bound: a true r² up to 0.0260655 on EAS, and 0.0273446 on SAS, reads
+"r² < t_far". On UK Biobank EUR a pair at exactly t_far is stored, and so is one down to
+0.0009929. At × 32767 the same rule gave floors of 1037 (UK Biobank EUR) and 5426 (HGDP+1kGP EUR,
+k = 10) and cuts within 8×10⁻⁶ of t_far; `tests/test_format.py` keeps those floors too. The
+walkthrough "A pair at exactly t_far" in
+`proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html` steps through these cases at
+× 32767 on the gnomAD v3.1.2 counts.
 
 **t_far's k counts covariates.** t_far = max(0.001, q / (n − k − 1)), where k is the number of
 covariates regressed out, named in `adjustment.covariates` (§7); the 1 is the intercept. For a
@@ -269,7 +298,9 @@ spec §10a. An inner chunk longer than its array is clipped to the array.
 | `index/<chrom>/partner` | `int32` | (index_c,) | 16,384 | 1,048,576 | −1 |
 | `index/<chrom>/r` | `int16` | (index_c,) | 16,384 | 1,048,576 | −32768 |
 
-V is the Variant Set's size, n_c a chromosome's rows and index_c its Proxy Index entries. Every
+V is the Variant Set's size, n_c a chromosome's rows and index_c its Proxy Index entries. An `r`
+array is `int16` with fill value −32768 at every scale a store may record (§3): the encoding
+changes the codes, never the array's dtype or fill. Every
 fill value is one a valid LD Store never holds, so a chunk that was never written cannot read as
 data. This table describes how a builder writes an LD Store. Each array's own Zarr metadata
 records its chunk, shard and codecs, and readers MUST NOT depend on them: a store re-sharded for
@@ -393,8 +424,8 @@ ignores the ones it does not know. The types are `ogld.format.Provenance`, and
 | key | type | meaning |
 |---|---|---|
 | `format_version` | string | `"0.1.0"` |
-| `encoding.r_dtype` | string | `"int16"` |
-| `encoding.r_scale` | int | 32767: r̂ = code / r_scale |
+| `encoding.r_dtype` | string | `"int16"`, the container of every admitted encoding (§3) |
+| `encoding.r_scale` | int | the store's scale s, a whole number from 1 to 32767: r̂ = code / s. 511 for the HGDP+1kGP stores, 2047 for UK Biobank EUR (ADR 0004); a build records the `r_scale` it was given |
 | `encoding.r_reserved_code` | int | −32768 |
 | `encoding.rounding` | string | `"half_to_even"` |
 | `source.kind` | string | `"genotypes"`: built from a Source Panel's genotypes; `"ld_matrix"`: imported from a published LD matrix, such as Pan-UKB's |
@@ -501,8 +532,9 @@ The boundaries, exactly:
 - A variant outside the Variant Set is **Absent**, and so is every pair it is in. A reader MUST say
   which variants are Absent, distinct from pairs that are Not Measured.
 - The Bound states t_far, the value recorded in provenance. It is judged on the Stored r: it
-  means r̂² < t_far. So a pair whose true r² is up to about 2√t_far / 65534 above t_far can read as
-  the Bound. On UK Biobank EUR, a true r² up to 0.0010006 reads "r² < 0.001" (§3).
+  means r̂² < t_far. So a pair whose true r² is up to about √t_far / s above t_far, at the store's
+  scale s, can read as the Bound. On HGDP+1kGP SAS at k = 10, a true r² up to 0.0273446 reads
+  "r² < 0.0270298" (§3).
 
 ```mermaid
 flowchart TD
@@ -787,19 +819,19 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 | rule | checks |
 |---|---|
 | `envelope.arrays` | the hierarchy is Zarr v3, and every §1 array exists with its §1 dtype and the length §2, §4 and §5 give it; `n_variants` is the variant table's length |
-| `envelope.fill` | the fill value of every array is one a valid store never holds there (§6): −32768 in every `r` array, so an unwritten chunk can never read as r = 0, and so on for the others |
+| `envelope.fill` | the fill value of every array is one a valid store never holds there (§6): −32768 in every `r` array, at every scale, so an unwritten chunk can never read as r = 0, and so on for the others |
 | `provenance.complete` | every §7 key is present with its type, null only where §7 allows; other keys are allowed |
-| `provenance.encoding` | `format_version` is one this package reads, and `encoding` is exactly §3's: a reader refuses any other before decoding (§13) |
+| `provenance.encoding` | `format_version` is one this package reads, and `encoding` is one it implements: exactly the four keys, `int16`, −32768 reserved, `half_to_even`, and a whole `r_scale` from 1 to 32767 (§3). A reader refuses any other before decoding (§13) |
 | `provenance.distances` | `near_bp` is 3,000,000, and `near_bp` < `far_bp` ≤ 10,000,000 |
-| `provenance.threshold` | `adjustment.k` equals the number of `adjustment.covariates`. When a PC File was read (`pc_file` is not null), `k_min` ≤ k ≤ `k_target`; when none was, `k_min` is null, and a `genotypes` source has k = `k_target` = 0. An `ld_matrix` source has `k_target` null. `t_far` equals max(0.001, q / (n − k − 1)) recomputed from provenance, with n − k − 1 > q (so t_far < 1); and `far_code_floor` equals its recomputed value |
+| `provenance.threshold` | `adjustment.k` equals the number of `adjustment.covariates`. When a PC File was read (`pc_file` is not null), `k_min` ≤ k ≤ `k_target`; when none was, `k_min` is null, and a `genotypes` source has k = `k_target` = 0. An `ld_matrix` source has `k_target` null. `t_far` equals max(0.001, q / (n − k − 1)) recomputed from provenance, with n − k − 1 > q (so t_far < 1); and `far_code_floor` equals its value recomputed at the recorded scale |
 | `variants.chromosomes` | the `chromosomes` ranges are in chromosome order, contiguous and cover every row |
 | `variants.order` | positions ascend within each chromosome, ties broken by ALID ascending, with no repeated ALID |
 | `variants.identity` | each `alid` is the identity function's ALID for its chromosome, position, `a1` and `a2` (ogld#3) |
 | `variants.frequency` | every `a1_frequency` is finite and in (0, 1) |
 | `near.rows` | `indptr` starts at 0 and has n_c + 1 entries; each row's length equals the count of later variants within `near_bp` from `position`. So rows are contiguous and stay within `near_bp` |
-| `near.codes` | no code is −32768, so \|r̂\| ≤ 1 holds after dequantisation |
+| `near.codes` | every code is one of the store's encoding: none is −32768 and none is past the scale, \|code\| ≤ `r_scale`, so \|r̂\| ≤ 1 holds after dequantisation |
 | `index.rows` | `indptr` starts at 0, has n_c + 1 entries and ends at the length of `partner` and `r`; within a row partners are strictly ascending, in [0, n_c), and never the row itself |
-| `index.codes` | no code is −32768 |
+| `index.codes` | every code is one of the store's encoding, as for `near.codes` |
 | `index.distance` | every entry's partner lies within `far_bp` of its row's position |
 | `index.threshold` | every entry's \|code\| ≥ `far_code_floor` |
 | `index.symmetric` | (l, m) is an entry with code c exactly when (m, l) is an entry with code c |
@@ -823,7 +855,10 @@ such as `near.rows` without a `near_bp` or `index.distance` without a readable `
 a finding that it cannot be checked, naming what it needed. An array that will not decode as its
 metadata declares is a finding that it cannot be read. Neither passes the rule, and neither stops
 the other rules. So one fault can fail several rules; the breakers' tests assert only that each
-fails its own.
+fails its own, and that a breaker fails the same rules on a × 511 and a × 2047 store. The rules
+that judge a code against the scale, `near.codes`, `index.codes` and `provenance.threshold`'s far
+code floor, need the store's encoding: with one this package does not implement they cannot be
+checked, as `provenance.encoding` fails.
 
 **How the rules read.** The rules read through Zarr directly. A chromosome's positions and
 `indptr` arrays are read whole, as a reader keeps them (§10). Near Band codes and Proxy Index
@@ -875,8 +910,11 @@ findings there, though never the failure.
 ## 13. Compatibility
 
 `format_version` is `MAJOR.MINOR.PATCH`. A reader MUST refuse a `format_version` or an `encoding`
-it does not implement, naming the version, rather than decode it. A change to any array's dtype,
-encoding or meaning, or to §8's answers, is a new format version. A change of chunk or shard shape
-is not. Version `0.1.0` is an unreleased draft: no LD Store has been written in it, so the owner's
-decisions of 7 November 2026, the Proxy Index among them, are part of `0.1.0` rather than a new
+it does not implement, naming the version or the encoding, rather than decode it; ogld's reader
+refuses at open, with an `ogld.InputError`. A change to any array's dtype, encoding or meaning, or
+to §8's answers, is a new format version. A change of chunk or shard shape is not, and neither is
+a store's scale: any whole scale from 1 to 32767 in the `int16` container is version `0.1.0`, and
+each store records its own (§3, §7). Version `0.1.0` is an unreleased draft: no LD Store has been
+written in it, so the owner's decisions of 7 November 2026, the Proxy Index among them, and of
+10 November 2026, the per-store encoding (ADR 0004), are part of `0.1.0` rather than a new
 version.

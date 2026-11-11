@@ -12,13 +12,14 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 import testdata
+from store_copies import HALF_STEP, R_SCALE
 
 from ogld.build.near_band import NearBand, read_alt_counts, unadjusted_near_band
-from ogld.format import NEAR_BP, InputError, dequantise
+from ogld.format import NEAR_BP, InputError, REncoding
 from ogld.format.geometry import near_address
 from ogld.identity import orient
 
-HALF_STEP = 1 / 65534
+ENCODING = REncoding(R_SCALE)
 SLACK = 1e-9
 
 
@@ -41,7 +42,7 @@ def near_band(chrom: str) -> tuple[npt.NDArray[np.int64], NearBand]:
     panel, v = testdata.panel(), testdata.variants()
     rows = chromosome_rows(chrom)
     alt = read_alt_counts(panel.pgen, panel.psam, panel.keep, rows)
-    return rows, unadjusted_near_band(alt, a1_is_alt(rows), v.pos[rows], NEAR_BP)
+    return rows, unadjusted_near_band(alt, a1_is_alt(rows), v.pos[rows], NEAR_BP, encoding=ENCODING)
 
 
 def test_the_fixture_has_variants_whose_a1_is_ref_and_pairs_across_the_band() -> None:
@@ -60,7 +61,7 @@ def test_the_k0_near_band_matches_reference_r_signed_to_a1(chrom: str) -> None:
     v = testdata.variants()
     local = {int(r): i for i, r in enumerate(rows)}
     sign = np.where(a1_is_alt(rows), 1.0, -1.0)
-    stored = dequantise(band.codes)
+    stored = band.codes / R_SCALE
     ref = testdata.reference_r(0)
     seen = 0
     for i, j, r in zip(ref.row_i, ref.row_j, ref.r, strict=True):
@@ -122,6 +123,7 @@ def test_a_variant_without_variance_is_refused_naming_it_and_the_panel() -> None
             np.array([True, True, True]),
             np.array([100, 200, 300]),
             NEAR_BP,
+            encoding=ENCODING,
             names=["rs-ok", "rs-flat", "rs-also-ok"],
             panel="the-test-panel",
         )

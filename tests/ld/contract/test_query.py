@@ -28,7 +28,7 @@ LEADS_R2_0_001 = {612, 421, 774, 353, 287, 703}
 def proxy_pairs(r2: float, window: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Every (query row, proxy row, r̂) with r̂² ≥ r2 within `window` bp, both directions."""
     ref = reference(support.K)
-    r_hat = ref.code.astype(np.float64) / 32767
+    r_hat = ref.code.astype(np.float64) / support.R_SCALE
     keep = (r_hat * r_hat >= r2) & (ref.distance <= window)
     query = np.concatenate([ref.row_i[keep], ref.row_j[keep]])
     proxy = np.concatenate([ref.row_j[keep], ref.row_i[keep]])
@@ -143,7 +143,9 @@ def k0_store(tmp_path_factory: pytest.TempPathFactory) -> ogld.LDStore:
     """A k = 0 store written from reference_r(0), once per worker."""
     if not _K0:
         out = tmp_path_factory.mktemp("k0") / "store"
-        _K0.append(ogld.open(load_script("make_test_store").write_test_store(0, out)))
+        _K0.append(
+            ogld.open(load_script("make_test_store").write_test_store(0, out, support.R_SCALE))
+        )
     return _K0[0]
 
 

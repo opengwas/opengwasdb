@@ -1,6 +1,6 @@
 """The unadjusted (k = 0) Near Band, from a pgen: the walking skeleton's thin path (ogld#12).
 
-pgen → ALT counts of the kept samples → standardised A1 dosages → r → int16 codes, one
+pgen → ALT counts of the kept samples → standardised A1 dosages → r → codes, one
 chromosome at a time. It is not `ogld.build`: no filters, no PC Check, no regression, no Proxy
 Index. ogld#5 builds those around it. pgenlib is imported inside `read_alt_counts` only.
 """
@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import InputError, near_row_lengths, quantise
+from ogld.format import Codes, InputError, REncoding, near_row_lengths
 
 #: Rows of the Near Band computed per matrix product: bounds the work array.
 BLOCK_ROWS = 512
@@ -30,7 +30,7 @@ class NearBand:
     """
 
     indptr: npt.NDArray[np.int64]
-    codes: npt.NDArray[np.int16]
+    codes: Codes
 
     @property
     def lengths(self) -> npt.NDArray[np.int64]:
@@ -110,10 +110,11 @@ def unadjusted_near_band(
     positions: npt.NDArray[np.int64],
     near_bp: int,
     *,
+    encoding: REncoding,
     names: Sequence[str] | None = None,
     panel: str = "the panel",
 ) -> NearBand:
-    """The Near Band of one chromosome's variants at k = 0 (spec §3, §4).
+    """The Near Band of one chromosome's variants at k = 0 (spec §3, §4), as `encoding`'s codes.
 
     `alt_counts` is [variants, samples] in genomic order and `a1_is_alt` says which allele is
     each variant's A1, so r is the correlation of the A1 dosages. `names` and `panel` say which
@@ -137,7 +138,7 @@ def unadjusted_near_band(
     lengths = near_row_lengths(positions, near_bp)
     stop = np.arange(n) + 1 + lengths
     indptr = np.concatenate([[0], np.cumsum(lengths)]).astype(np.int64)
-    codes = np.empty(int(indptr[-1]), dtype=np.int16)
+    codes = np.empty(int(indptr[-1]), dtype=encoding.dtype)
     for first in range(0, n, BLOCK_ROWS):
         last = min(first + BLOCK_ROWS, n)
         reach = int(stop[first:last].max())
@@ -145,5 +146,6 @@ def unadjusted_near_band(
         for row in range(first, last):
             lo = row + 1
             hi = int(stop[row])
-            codes[indptr[row] : indptr[row + 1]] = quantise(r[row - first, lo - first : hi - first])
+            band = r[row - first, lo - first : hi - first]
+            codes[indptr[row] : indptr[row + 1]] = encoding.quantise(band)
     return NearBand(indptr, codes)

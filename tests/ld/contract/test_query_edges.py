@@ -17,7 +17,6 @@ import support
 from support import alids, panel_data, passing_rows, reference
 
 import ogld
-from ogld.format import dequantise
 from ogld.query import clumping
 from ogld.query.results import Clumps
 from ogld.store import StoreReader
@@ -56,7 +55,7 @@ def test_a_pair_exactly_w_apart_does_not_join_and_one_bp_nearer_does() -> None:
 def test_a_pair_whose_r_hat_squared_equals_r2_does_not_join_but_is_a_proxy() -> None:
     pairs = passing_pairs()
     perfect = pairs.where(
-        (np.abs(pairs.code.astype(np.int64)) == 32767) & (pairs.distance <= 3_000_000),
+        (np.abs(pairs.code.astype(np.int64)) == support.R_SCALE) & (pairs.distance <= 3_000_000),
         "a stored pair in perfect LD",
     )
     i, j = int(perfect.row_i[0]), int(perfect.row_j[0])
@@ -71,7 +70,7 @@ def stored_r(rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
     r = support.reference_matrix(support.K, tuple(rows.tolist()))
     held = ~np.isnan(r)
     out = np.full(r.shape, np.nan)
-    out[held] = dequantise(support.quantise(r[held]))
+    out[held] = support.stored_at(r[held])
     return out
 
 
@@ -150,7 +149,7 @@ def test_a_far_pair_beyond_near_bp_is_a_proxy_from_both_sides() -> None:
         "a Far Pair: beyond 3 Mb with r̂² ≥ t_far",
     )
     i, j = int(far.row_i[0]), int(far.row_j[0])
-    r_hat = float(support.quantise(far.r[:1])[0]) / 32767
+    r_hat = float(support.stored_at(far.r[:1])[0])
     store = ogld.open(support.TEST_STORE)
     for query, proxy in ((i, j), (j, i)):
         found = store.proxies(alids([query]), r2=support.T_FAR, kb=10_000)

@@ -21,9 +21,9 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 import testdata
+from store_copies import FLOOR, codes_at
 
 import ogld
-from ogld.format import far_code_floor, quantise, t_far
 
 N, K = 771, 10
 
@@ -85,8 +85,7 @@ def test_the_far_pairs_are_the_reference_s_above_the_floor(built: Built) -> None
     pos, chrom = v.pos[rows], v.chrom[rows]
     d = np.abs(pos[:, None] - pos[None, :])
     far = (d > 3_000_000) & (d <= 10_000_000) & (chrom[:, None] == chrom[None, :])
-    floor = far_code_floor(t_far(N, K))
-    expected = np.abs(quantise(theirs[far]).astype(np.int64)) >= floor
+    expected = np.abs(codes_at(theirs[far], fixtures.R_SCALE)) >= FLOOR
     kept = ~np.isnan(ours[far])
     assert expected.sum() == 14, "the Test Panel's 7 Far Pairs, both ways round"
     assert (~expected).sum() > 70_000, "and tens of thousands of 3–10 Mb pairs below t_far"

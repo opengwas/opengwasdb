@@ -32,14 +32,7 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format.encoding import (
-    FAR_BP,
-    NEAR_BP,
-    RESERVED_CODE,
-    T_FAR_Q,
-    far_code_floor,
-    t_far,
-)
+from ogld.format.encoding import FAR_BP, NEAR_BP, T_FAR_Q, REncoding, t_far
 from ogld.format.geometry import (
     blocks,
     near_address,
@@ -49,7 +42,8 @@ from ogld.format.geometry import (
     windows,
     within,
 )
-from ogld.format.provenance import ENCODING, FORMAT_VERSION, VALIDATION_RULES
+from ogld.format.provenance import FORMAT_VERSION, VALIDATION_RULES
+from ogld.format.semantics import InputError
 from ogld.identity import IdentityError, alid_locus, orient, variant_order_key
 from ogld.store.layout import chromosomes_listed, never_data, shown_fill
 from ogld.store.location import open_group
@@ -207,6 +201,15 @@ class _Store:
             raise _Unchecked(key, f"provenance has no {key} (provenance.complete)")
         return found
 
+    def encoding(self) -> REncoding:
+        """The encoding provenance records, or `_Unchecked` when this package does not implement
+        it: a rule that decodes codes or recomputes the floor cannot judge them at a scale it
+        does not know (provenance.encoding)."""
+        try:
+            return REncoding.of(self.value("encoding"))
+        except InputError as unimplemented:
+            raise _Unchecked("encoding", f"{unimplemented} (provenance.encoding)") from None
+
     def integer(self, key: str) -> int:
         value = self.value(key)
         if not _is_int(value):
@@ -358,7 +361,8 @@ def _envelope_arrays(store: _Store) -> _Problems:
     for name, dtype in _VARIANT_DTYPES.items():
         yield from _shape(store, f"variants/{name}", dtype, size)
     yield from _counted(store, size)
-    r_dtype = ENCODING["r_dtype"]
+    # The container's dtype: the same for every admitted encoding (spec §1, §3; ADR 0004).
+    r_dtype = REncoding.dtype.name
     for chrom, start, stop in ranges:
         for kind in ("near", "index"):
             yield from _shape(store, f"{kind}/{chrom}/indptr", "int64", stop - start + 1)
@@ -571,14 +575,15 @@ def _provenance_complete(store: _Store) -> _Problems:
 
 @_rule("provenance.encoding")
 def _provenance_encoding(store: _Store) -> _Problems:
-    """The format version and the encoding are the ones this package reads (spec §3, §13):
-    `ogld info` and every reader refuse a store with any other."""
+    """The format version is the one this package reads, and the encoding one it implements,
+    `REncoding.of` (spec §3, §13). `ogld info` and every reader refuse a store with any other."""
     version = store.value("format_version")
     if version != FORMAT_VERSION:
         yield "format_version", f"{version!r}: this ogld reads {FORMAT_VERSION!r} only (spec §13)"
-    recorded = store.value("encoding")
-    if recorded != ENCODING:
-        yield "encoding", f"{recorded!r} is not spec §3's {ENCODING!r}"
+    try:
+        REncoding.of(store.value("encoding"))
+    except InputError as unimplemented:
+        yield "encoding", str(unimplemented)
 
 
 @_rule("provenance.distances")
@@ -653,9 +658,13 @@ def _t_far_records(store: _Store) -> _Problems:
             "t_far",
             f"{recorded!r}, but max(0.001, q / (n − k − 1)) is {expected!r} at n {n}, k {k}",
         )
-    floor = store.integer("far_code_floor")
-    if floor != far_code_floor(expected):
-        yield "far_code_floor", f"{floor}, but t_far {expected!r} gives {far_code_floor(expected)}"
+    floor, encoding = store.integer("far_code_floor"), store.encoding()
+    if floor != encoding.far_code_floor(expected):
+        yield (
+            "far_code_floor",
+            f"{floor}, but t_far {expected!r} at × {encoding.scale} gives "
+            f"{encoding.far_code_floor(expected)}",
+        )
 
 
 @_rule("provenance.threshold")
@@ -995,10 +1004,13 @@ def _index_indptr(store: _Store, c: _Chromosome) -> npt.NDArray[np.int64]:
 
 
 class _Codes(_Scanned):
-    """No code of one `r` array is the reserved one. The pass feeds it when its blocks tile the
-    array; when its `indptr` cannot delimit them, it reads the array in windows of its own."""
+    """Every code of one `r` array is a code of the store's encoding, |code| ≤ r_scale: never
+    the reserved one, and never one past the scale, which would decode to |r̂| > 1. The pass
+    feeds it when its blocks tile the array; when its `indptr` cannot delimit them, it reads the
+    array in windows of its own. Without an encoding it implements it cannot be checked."""
 
     def __init__(self, store: _Store, c: _Chromosome, part: str) -> None:
+        self.encoding = store.encoding()
         self.store, self.part, self.path = store, part, c.path(part)
         self.length = store.array(self.path).shape[0]
         indptr = c.indptr(part)
@@ -1020,8 +1032,10 @@ class _Codes(_Scanned):
         yield from self._reserved(b.get(self.part), b.at[self.part])
 
     def _reserved(self, codes: npt.NDArray[Any], first: int) -> _Problems:
-        bad = codes == RESERVED_CODE
-        yield from _flag(self.path, bad, first, f"the reserved code {RESERVED_CODE}")
+        reserved, scale = self.encoding.reserved_code, self.encoding.scale
+        yield from _flag(self.path, codes == reserved, first, f"the reserved code {reserved}")
+        past = ~self.encoding.holds(codes) & (codes != reserved)
+        yield from _flag(self.path, past, first, f"a code past the scale, |code| > {scale}")
 
 
 @_scanned("near.codes")
@@ -1107,11 +1121,16 @@ class _IndexThreshold(_Scanned):
         yield from _flag(self.c.path("code"), below, b.at["code"], what)
 
 
+#: The bits a code takes in a key: the container's width, the same for every admitted encoding.
+_CODE_BITS: Final = 8 * REncoding.dtype.itemsize
+
+
 def _keys(
     lo: npt.NDArray[np.int64], hi: npt.NDArray[np.int64], code: npt.NDArray[np.int64], size: int
 ) -> npt.NDArray[np.int64]:
-    """One integer per (pair, code), so two sets of entries compare with one set operation."""
-    return ((lo * size + hi) << 16) + (code - RESERVED_CODE)
+    """One integer per (pair, code), so two sets of entries compare with one set operation: any
+    code of the container, less its smallest, the reserved code, fits `_CODE_BITS` bits."""
+    return ((lo * size + hi) << _CODE_BITS) + (code - REncoding.reserved_code)
 
 
 def _mixed(keys: npt.NDArray[np.int64]) -> npt.NDArray[np.uint64]:
@@ -1168,7 +1187,7 @@ class _Named:
 
 def _odd_pairs(chrom: str, odd: npt.NDArray[np.int64], size: int, what: str) -> _Problems:
     """One finding naming the pairs in `odd` (keys of `_keys`), if there are any."""
-    pair = odd >> 16
+    pair = odd >> _CODE_BITS
     names = [f"({p // size}, {p % size})" for p in pair[:_NAMED].tolist()]
     if len(odd):
         more = f" and {len(odd) - _NAMED:,} more" if len(odd) > _NAMED else ""
