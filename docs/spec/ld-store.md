@@ -328,7 +328,8 @@ a build writes its store it holds a shard of each array and the pairs and unit v
 `far_bp` of the rows being written, never a chromosome. On HGDP+1kGP EUR chr6, the MHC's, the band
 carry is 128 MiB, the index carry at most 33,869,608 pairs (323 MiB), and the writing peaks at
 4.8 GB on 8 threads, against 31.4 GB when the writer held the chromosome. The PC Check's pass
-before it still holds a chromosome's genotypes, 10.4 GB on chr6 at k = 10; ogld#25 bounds it. A
+before it reads a window's variants when it scans, not a chromosome's genotypes, and the build's
+peak before the tiles is 2.0 GB on chr6, against 10.4 GB (build-inputs §8, ogld#25). A
 store written in any blocks, on any number of threads, holds the same arrays.
 
 **Why zstd level 3.** int16 r codes are mostly sampling noise around 0, so they compress little,

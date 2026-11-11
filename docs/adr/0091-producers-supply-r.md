@@ -113,8 +113,11 @@ fourth copy of each rule. And neither the writer nor the builder survives UK Bio
 - **A store written in any blocks, on any number of threads, holds the same arrays.**
   `tests/test_assembly.py` holds every array to a brute force over pairs, written in blocks of 1
   to 100,000 rows on 1 to 4 threads.
-- **The PC Check pass is not bounded yet.** It holds a chromosome's genotypes before tiling:
-  10.4 GB on chr6 at k = 10, and about 120 GB at UK Biobank's n. ogld#25 bounds it, and blocks
-  ogld#10.
+- **The PC Check pass was not bounded when this was decided.** It held a chromosome's genotypes
+  before tiling: 6.1 GB on chr6 at k = 10, growing with rows × n, and the 10.4 GB peak
+  before the tiles also held `require_change_pairs`' list of a chromosome's 100 kb pairs, 9.4 GB.
+  ogld#25 bounded both (build-inputs §8): the peak before the tiles is 2.0 GB on chr6, and the
+  scan's share of it does not grow with n. The figures above this bullet are as measured on
+  11 November 2026.
 - **`StoreWriter`'s methods changed**, and `write_near` and `write_index` are gone. They are a seam
   inside the package, unpinned since 10 November 2026; no stored byte changes.
