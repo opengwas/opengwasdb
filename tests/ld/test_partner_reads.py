@@ -20,6 +20,7 @@ from contract.support import alids, panel_data, passing_rows
 
 from ogld.format import dequantise
 from ogld.query import clumping
+from ogld.query import proxies as proxies_query
 from ogld.store import StoreReader, location
 
 
@@ -90,3 +91,28 @@ def test_clump_resolves_at_most_twice_the_pairs_it_needs(r2: float) -> None:
     ours = clumping.clump(reader, alids(rows), z, r2=r2, kb=3000)
     assert list(ours.lead) == alids(rows[lead])
     assert cache.resolved() <= 2 * needed, f"resolved {cache.resolved()} for {needed} needed"
+
+
+#: The Variant Set's string columns (spec §2).
+STRING_COLUMNS = ("variants/alid", "variants/a1", "variants/a2")
+
+
+@pytest.mark.parametrize(("r2", "kb"), [(0.5, 3000), (0.8, 10_000)])
+def test_a_warm_proxies_decodes_no_string_column_before_its_rows_are_chosen(
+    r2: float, kb: float
+) -> None:
+    # The reader filters on the positions it keeps; the strings read are the queries' ALIDs,
+    # to find them, and then the kept proxies' ALIDs, to name them (ogld#14).
+    rows = passing_rows()[::25]
+    reader, cache = counted(support.TEST_STORE)
+    proxies_query.proxies(reader, alids(rows), r2=r2, kb=kb)
+    cache.taken.clear()
+    found = proxies_query.proxies(reader, alids(rows), r2=r2, kb=kb)
+    stored = panel_data().variants().pos.astype(np.int64)[passing_rows()]
+    at_queries = int(np.isin(stored, panel_data().variants().pos[rows]).sum())
+    near = panel_data().variants().pos.astype(np.int64)[rows]
+    candidates = int((np.abs(stored[:, None] - near[None, :]) <= kb * 1000).sum())
+    assert candidates > 20 * len(found), "far more candidates than proxies kept"
+    assert len(found) > 0, "and some kept"
+    strings = {path: n for path, n in cache.taken.items() if path in STRING_COLUMNS}
+    assert strings == {"variants/alid": at_queries + len(found)}

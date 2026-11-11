@@ -180,6 +180,11 @@ class StoreReader:
         lo, hi = position_rows(c.position, start, stop)
         return global_rows(np.arange(int(lo), int(hi), dtype=np.int64), c.start)
 
+    def alids_of(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.str_]:
+        """The ALID of each of `rows`, in the order given (spec §2): the one string column a
+        query names its rows by, read without the others (ogld#14)."""
+        return self._strings("alid", self._checked(rows))
+
     def variants(self, rows: npt.NDArray[np.int64]) -> Variants:
         """The Variant Set's columns at `rows`, in the order given (spec §2)."""
         rows = self._checked(rows)

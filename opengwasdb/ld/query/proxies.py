@@ -30,7 +30,7 @@ def proxies(reader: StoreReader, alids: Sequence[str], *, r2: float, kb: float) 
 
     owner = owners(np.diff(partners.indptr))
     r, distance = partners.r, partners.distance
-    proxy = reader.variants(partners.partner).alid
+    proxy = reader.alids_of(partners.partner)
 
     # Rows go by query (request order), r² descending, distance ascending, then proxy ALID.
     order = np.lexsort((proxy, distance, -(r * r), owner))
