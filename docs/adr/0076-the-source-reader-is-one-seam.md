@@ -118,15 +118,39 @@ them.**
       on one that ends no line. FinnGen keeps its rule. The first rebuild of
       OGS-00004 missed this: all nine sources fell back and the build was no
       faster.
-    - A source with a declared imputation score is read row by row throughout,
-      and says so. An Analysis that declares one gets no speed-up.
-    - On the largest OGS-00004 source (GCST009324, 17,343,104 rows) the
-      reader reads in 35.2 s against 186.9 s one association at a time, beside a
-      21.1 s parse floor (6 rounds, p = 0.031): 0.187 of the time, and 1.66 times
-      the floor. Peak `ru_maxrss` is 586 MiB against 161 MiB, about 0.43 GiB more
-      per worker.
+    - A declared imputation score is read in columns, with
+      `parse_imputation_score`'s rules: a missing token is MISSING, an infinity
+      NONFINITE, any other number USABLE inside [0, 1] and OUT_OF_RANGE outside
+      it. A score pandas cannot read as `float()` reads it (`bogus`, `1_0`
+      beside a padded token) leaves that block's rows to the per-row rules,
+      which log how many; the source is not read row by row throughout.
+      605 of OGS-00011's 3,169 Analyses (19%) declare one.
+    - Pass 2 names no rsid, so the batch path never reads one: the rsid rules,
+      compound and listed ids among them, are Pass 1's, as FinnGen's first-rsid
+      rule is. The compound-id fixture is parse coverage only.
+    - On the largest OGS-00004 source (GCST009324, 17,343,104 rows, about 130
+      bytes a line) the reader reads in 35.2 s against 186.9 s one association
+      at a time, beside a 21.1 s parse floor (6 rounds, p = 0.031): 0.187 of
+      the time, and 1.66 times the floor.
+    - A batch's memory is a block's bytes, so narrower lines mean more rows. A
+      block is 32 MiB of decompressed text, and the read holds one block, the
+      line the read before it split, and the columns built from them.
+      Measured, reading each source alone in a fresh process, sampled every
+      0.2 s (the same as `ru_maxrss`):
+
+      | Source | Bytes a line | Rows | Batches | Largest batch | Peak resident |
+      |---|---|---|---|---|---|
+      | GCST009926 (the narrowest) | 81 | 6,799,463 | 17 | 405,314 rows | 604 MiB |
+      | GCST009324 (the largest) | 130 | 17,343,104 | 70 | 252,697 rows | 553 MiB |
+
+      Both started from 155 MiB, and the per-row reader peaks at 161 MiB on
+      GCST009324. A worker therefore holds up to about 0.45 GiB more than when
+      it reads rows. OGS-00011 builds at 24 workers (`records/build.json`),
+      which is about 11 GiB more, and OGS-00012 to -16 at 16, about 7 GiB: under
+      6% of the 179 GiB a quarter of the host's available memory allowed when
+      measured. The bound is the block, not the source, whatever the line width.
     - Rebuilding OGS-00004, Pass 2 takes about 21 s an Analysis against about
-      124 s (two pairs run side by side), and the Store, the Admission record and
+      124 s (two pairs, side by side), and the Store, the Admission record and
       every dropped-row log are identical.
 - **The registry is the only way in.**
   - `open_source(spec, alignment=)` and `resolve_reader(..., liftover=)` open a
