@@ -168,7 +168,8 @@ fewer bits a pair than at × 32767; a whole chr22 build at k = 10 measured 1.68�
 
 **Thresholds are judged on the Stored r.** A pair reaches an r² threshold t when r̂² ≥ t,
 computed in float64. Every rule below uses this comparison: the Proxy Index's membership (§5),
-the Bound (§8), and clumping and proxies (§9). So a reader's view is self-consistent. But the
+the Bound (§8), and proxies (§9). Clumping is the one exception: it follows `plink2 --clump`,
+which joins a pair at r̂² > r2 and d < W, not ≥ and ≤ (§9; owner, 10 November 2026). So a reader's view is self-consistent. But the
 computed r and r̂ differ by up to half the store's step, so a pair whose computed r² lies within
 about 2|r| × 1/(2s) of a threshold can fall on either side of it. At × 32767, a computed r² of
 0.0099994 is stored as code 3277, which reads back as r̂² = 0.0100018 and reaches 0.01 (the

@@ -1,44 +1,124 @@
-"""ogld#6's realdata contract: clumping on a real k = 0 store equals plink2 on #403's Analyses.
+"""ogld#6's realdata contract: clumping on a real store equals plink2 on #403's Analyses, on chr22.
 
-Epic #1's acceptance: on an unadjusted (k = 0) HGDP+1kGP EUR LD Store, our clumping gives the
-same lead variants as `plink2 --clump` for opengwas/opengwasdb#403's 37 EUR Analyses, the 5e-8
-tier of each, at r² 0.01 and 0.001 with a 3 Mb window. Any disagreement must come from a pair
-whose r² rounds onto the threshold, and is listed (spec §3).
+Epic #1's acceptance is the whole panel: the same lead variants as `plink2 --clump` for
+opengwas/opengwasdb#403's 37 EUR Analyses, the 5e-8 tier of each, at r² 0.01 and 0.001 with a
+3 Mb window. That comparison reads 8.6 M variants and takes 25 minutes even on the fastest read
+path, so it is an acceptance run outside this tier (`pixi run -e dev acceptance-clump`,
+CONTRIBUTING.md, "Acceptance runs"). The tier keeps its rule, on chr22:
 
-Two inputs, named by environment variables that `tests/realdata/run.sh` passes on:
+- build chr22:20–32 Mb of the v2 EUR panel at k = 0 and × 511, the encoding of every HGDP+1kGP
+  store (ADR 0004), on the 665 unrelated samples (`test_build_panel.v2_slice`, once);
+- clump each of the 37 Analyses' hits on it that the store holds, at both r², and run
+  `plink2 --clump` on the same hits and the same genotypes;
+- where the leads differ, `scripts/realdata/clump_rule.py` finds every pair the store and plink2
+  judge on opposite sides of r2 (plink2's unphased r² against the store's r̂²), requires each to
+  lie within the encoding's band, |r̂² − r2| ≤ 2|r̂|·e + e², and replays the greedy: on the
+  store's joins it must give our leads, and with exactly those pairs flipped, plink2's.
 
-- `OGLD_EUR_K0_STORE`: the k = 0 EUR LD Store.
-- `OGLD_403_ANALYSES`: one directory per Analysis, each holding `hits.tsv` (a header, then
-  ALID and z per row: the 5e-8 tier) and `leads_r2_0.01.txt` and `leads_r2_0.001.txt` (plink2's
-  index variants, one ALID per line, from the same genotypes at k = 0). ogld#6 makes them.
-
-Until they exist the test stops as an expected failure naming the missing one
-(`realdata_inputs.required`), before it opens anything.
+The input `OGLD_403_ANALYSES` holds one directory per Analysis with `hits.all.tsv` (ALID, z,
+chromosome, position; the 5e-8 tier), which `scripts/realdata/make_403_inputs.py` makes.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import clump_rule
+import make_403_inputs as maker
 import numpy as np
 import pytest
 from realdata_inputs import required
+from test_build_panel import HGDP_SCALE, eur_keep, inputs, v2_slice
 
 import ogld
+from ogld.format import REncoding
+from ogld.identity import alid_locus
+from ogld.query.results import strongest_first
+
+KB = 3000
+#: Fewest Analyses with hits on the slice for the comparison to mean anything.
+MIN_ANALYSES = 20
+
+
+@pytest.fixture(scope="module")
+def chr22(tmp_path_factory: pytest.TempPathFactory) -> tuple[ogld.LDStore, Path]:
+    """The k = 0, × 511 store of the v2 EUR chr22:20–32 Mb slice, and plink2's pgen of the same
+    records with the ALIDs as IDs, which a clump of plink2's reads."""
+    slice_ = v2_slice("wide", tmp_path_factory)
+    root = tmp_path_factory.mktemp("clump-chr22")
+    ogld.build(inputs(slice_.with_suffix(".pgen"), "v2 EUR chr22:20-32 Mb", HGDP_SCALE), root / "s")
+    from ogld.store import StoreReader
+
+    reader = StoreReader.open(root / "s")
+    stored = maker.store_chromosome(reader, "22")
+    maker.prepare_chromosome(slice_, eur_keep(), root / "pgen", "22", stored)
+    return ogld.open(root / "s"), root / "pgen" / "chr22"
+
+
+def hits_on_the_store(directory: Path, store: ogld.LDStore) -> list[tuple[str, float]]:
+    """(ALID, |z|) of an Analysis's chr22 hits that the store holds."""
+    rows = maker.read_hits(directory / "hits.all.tsv")
+    on_chr22 = [(a, z) for a, z, c in rows if c == "22"]
+    absent = set(store.matrix([a for a, _ in on_chr22]).absent)
+    return [(a, abs(z)) for a, z in on_chr22 if a not in absent]
+
+
+def explained(
+    store: ogld.LDStore,
+    pfile: Path,
+    work: Path,
+    hits: list[tuple[str, float]],
+    r2: float,
+    ours: list[str],
+    theirs: list[str],
+) -> int:
+    """The number of pairs that explain the difference, after the rule has accepted them."""
+    alid = [a for a, _ in hits]
+    loci = [alid_locus(a) for a in alid]
+    assert all(locus is not None and locus[0] == "22" for locus in loci), "hits are chr22 ALIDs"
+    position = np.array([locus[1] for locus in loci if locus is not None], dtype=np.int64)
+    key = [strongest_first(z, "22", position[i], a) for i, (a, z) in enumerate(hits)]
+    order = sorted(range(len(alid)), key=key.__getitem__)
+    got = clump_rule.explain(
+        order=order,
+        position=position,
+        r_hat=store.matrix(alid).r,
+        true_r2=maker.unphased_r2(pfile, alid, work),
+        r2=r2,
+        window_bp=KB * 1000,
+        max_error=REncoding.of(store.provenance["encoding"]).max_error,
+    )
+    assert {alid[i] for i in got.leads_store} == set(ours), (
+        "the replay on the store's joins is ours"
+    )
+    assert {alid[i] for i in got.leads_true} == set(theirs), "flipping those pairs gives plink2's"
+    return len(got.flipped)
 
 
 @pytest.mark.parametrize("r2", [0.01, 0.001])
-def test_leads_equal_plink2_s_on_403_s_37_analyses(r2: float) -> None:
-    location = required("OGLD_EUR_K0_STORE", "the k = 0 EUR LD Store, which ogld#6 makes")
-    root = required("OGLD_403_ANALYSES", "#403's 37 Analyses with plink2's leads, from ogld#6")
-    store = ogld.open(location)
+def test_leads_equal_plink2_s_on_403_s_37_analyses_on_chr22(
+    r2: float, chr22: tuple[ogld.LDStore, Path], tmp_path: Path
+) -> None:
+    store, pfile = chr22
     assert store.provenance["adjustment"]["k"] == 0, "the comparison is with unadjusted LD"
+    assert REncoding.of(store.provenance["encoding"]).scale == HGDP_SCALE
+    root = required("OGLD_403_ANALYSES", "#403's 37 Analyses' hits, from ogld#6")
     analyses = sorted(path for path in root.iterdir() if path.is_dir())
     assert len(analyses) == 37, f"#403 has 37 EUR Analyses; {root} holds {len(analyses)}"
-    differences = {}
-    for analysis in analyses:
-        hits = np.loadtxt(analysis / "hits.tsv", dtype=str, skiprows=1, ndmin=2)
-        alid, z = list(hits[:, 0]), np.abs(hits[:, 1].astype(np.float64))
-        ours = set(store.clump(alid, z, r2=r2, kb=3000).leads())
-        theirs = set((analysis / f"leads_r2_{r2}.txt").read_text().split())
-        if ours != theirs:
-            differences[analysis.name] = (sorted(ours - theirs), sorted(theirs - ours))
-    assert not differences, f"leads differ from plink2's: {differences}"
+    compared = differing = flipped = 0
+    for directory in analyses:
+        hits = hits_on_the_store(directory, store)
+        if not hits:
+            continue
+        compared += 1
+        ours = list(
+            map(str, store.clump([a for a, _ in hits], [z for _, z in hits], r2=r2, kb=KB).leads())
+        )
+        work = tmp_path / directory.name / str(r2)
+        work.mkdir(parents=True)
+        theirs = maker.clump_chromosome(pfile, work, "22", hits, r2)
+        if set(ours) != set(theirs):
+            differing += 1
+            flipped += explained(store, pfile, work, hits, r2, ours, theirs)
+    assert compared >= MIN_ANALYSES, f"only {compared} Analyses have hits on chr22:20-32 Mb"
+    print(f"r2 {r2}: {compared} Analyses compared, {differing} differ, {flipped} pairs flipped")

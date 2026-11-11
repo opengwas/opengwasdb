@@ -109,7 +109,7 @@ class Clumps:
     In request order. `lead` is the ALID of the clump the variant joined (its own for a
     lead) and `r` its signed r with that lead (1 for a lead). Clumping is strongest
     score first, ties by genomic order then ALID, and a variant joins the strongest lead
-    it reaches at r̂² ≥ `r2` within `window_bp`.
+    it reaches at r̂² > `r2` and distance < `window_bp`, as plink2 does.
     """
 
     alid: npt.NDArray[np.str_]

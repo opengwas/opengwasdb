@@ -62,7 +62,7 @@ class LDStore:
         return proxies_query.proxies(self._reader, alids, r2=r2, kb=kb)
 
     def clump(self, alids: Sequence[str], score: npt.ArrayLike, *, r2: float, kb: float) -> Clumps:
-        """Clump `alids` by `score` (|z| or −log10 p) at r̂² ≥ r2 within kb × 1,000 bp."""
+        """Clump `alids` by `score`: join at r̂² > r2, within kb × 1,000 bp, as plink2 does."""
         return clumping.clump(self._reader, alids, score, r2=r2, kb=kb)
 
 
