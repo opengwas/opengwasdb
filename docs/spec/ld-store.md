@@ -603,7 +603,7 @@ and the reads map onto the arrays as follows.
 | a region | `region_r` | `region` | for each of its rows, one contiguous slice of `near/<c>/r`, from the row's first code to its last partner inside the region, never its partners past the region; for its pairs beyond `near_bp`, the Proxy Index rows of its variants, each entry inside the region scattered into the matrix |
 | a submatrix for any variant list | `pair_r` | `matrix` | one element of `near/<c>/r` per pair within `near_bp`; for the pairs beyond it, the Proxy Index rows of the listed variants, each entry scattered onto the listed pairs |
 | a list of pairs, or one row against many | `r_of_pairs` | `partners` and `pair_r` | one element of `near/<c>/r` per pair within `near_bp`; the Proxy Index row of each farther pair's earlier variant |
-| partners at r2 ≥ t_far | `partners` | `proxies`; `clump` | each variant's Proxy Index row: both sides, up to `far_bp`, in one piece. No Near Band chunk |
+| partners at r2 ≥ t_far | `partners` | `proxies`; `clump` | each variant's Proxy Index row: both sides, up to `far_bp`, in one piece. No chunk of `near/<c>/r` |
 | partners below t_far, W ≤ `near_bp` | `partners` | `proxies` | each variant's Near Band row up to W, and its column within W: one element in each row of the preceding W (§11) |
 | partners below t_far among a list, W ≤ `near_bp` | `partners`, `among` | `clump` | one element of `near/<c>/r` per pair of a variant and a listed variant within W, and nothing else |
 
@@ -618,8 +618,12 @@ compares r2 with t_far itself:
 
 `clump` asks for one lead's partners at a time, among the hits no stronger lead has taken, and
 never for a square among a lead and its m candidates, which resolves every pair among them. On the
-Test Store's 1,056 hits at r² 0.1 within 3 Mb, the leads need 23,327 pairs, the squares resolved
-1,495,403 (64 times as many), and the 439 leads' Proxy Index rows hold 3,119 entries.
+Test Store's 1,056 hits within 3 Mb, the leads need 23,327 pairs at r² 0.1. The squares resolved
+1,495,403 of them and took 1,593,636 Stored r from the chunk cache; `partners` takes 3,119, the 439
+leads' Proxy Index rows. At r² 0.01, below t_far, the leads need 7,246 pairs and `partners` takes
+exactly those. `tests/test_partner_reads.py` holds both, and `proxies` reading no string column
+but the ALIDs it returns. A chromosome's `near/<c>/indptr` is still read when a request first
+touches it, as below, at any threshold.
 
 The prototype timed each read on the EUR chr22 slice, a real Zarr v3 sharded LD Store (1.65 GB,
 65,035 variants), under the three layouts of §6. It read from local disk, and over HTTP from a
