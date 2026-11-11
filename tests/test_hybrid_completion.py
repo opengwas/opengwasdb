@@ -173,6 +173,27 @@ def completed_hybrid(
     )
 
 
+def test_a_hybrid_stamped_0_2_1_without_a_region_table_is_refused(
+    tmp_path: Path, completed_hybrid: tuple[Path, Path, HybridCompletionResult]
+) -> None:
+    """Spec §21.3: completion refuses a source stamped other than its features give,
+    rather than publish another; a Hybrid carries no region table, so it is 0.2.0."""
+    from region_tables import edit_manifest
+
+    from opengwasdb.store.open import UnsupportedFormatVersion
+
+    src, _, _ = completed_hybrid
+    assert StoreManifest.load(src).format_version == "0.2.0"
+    edit_manifest(src, lambda manifest: {**manifest, "format_version": "0.2.1"})
+    dst = tmp_path / "restamped-dst.opengwasdb"
+
+    with pytest.raises(
+        UnsupportedFormatVersion, match="stamped 0.2.1, but a release carrying no region table"
+    ):
+        complete_hybrid_store(src, dst, _make_ld_panel(tmp_path), min_cor=0.0, thresh=0.9)
+    assert not dst.exists()
+
+
 def test_cli_complete_hybrid_reports_the_sources_coverage(tmp_path: Path) -> None:
     """#294's `register` reads `association_coverage` off the completion's stdout
     JSON, so the command prints the value the completed release carries (#298).

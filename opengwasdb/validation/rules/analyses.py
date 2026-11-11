@@ -30,6 +30,12 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
     StoredEffectScale,
 )
+from opengwasdb.model.regions import (
+    REGIONS_FILE,
+    RegionTableError,
+    check_region_table,
+    read_store_regions,
+)
 from opengwasdb.validation.rule import Check, Kind, Rule, Severity, Target
 from opengwasdb.validation.rules.release import REQUIRED
 
@@ -307,6 +313,27 @@ def orientation_unverified(target: Target) -> Iterator[str]:
             )
 
 
+def regions_table(target: Target) -> Iterator[str]:
+    """The region table is declared in the manifest exactly when the release holds
+    `regions.tsv`, with the SHA-256 of its bytes; it parses; and it names only Analyses
+    the release holds (spec §17, issue #430). A table that does not would refuse the
+    release's completion. The version a release carrying it is stamped is
+    `manifest.format_stamp`'s."""
+    try:
+        table = read_store_regions(target.store.path)
+        if table is not None:
+            check_region_table(table, (row["analysis_id"] for row in target.analyses.rows))
+    except RegionTableError as exc:
+        yield f"{REGIONS_FILE}: {exc}"
+
+
+def _with_regions(target: Target) -> bool:
+    """A release that holds `regions.tsv` or whose manifest declares one."""
+    return _validated_table(target) and (
+        (target.store.path / REGIONS_FILE).exists() or target.store.manifest.regions is not None
+    )
+
+
 def _validated_table(target: Target) -> bool:
     """Dense and Ragged releases and a Hybrid's Dense Component, but not its outer one."""
     return target.layout is not PrimaryStorageLayout.HYBRID
@@ -346,6 +373,10 @@ TABLE_RULES: tuple[Rule, ...] = (
     _table_rule("analyses.completion_declared", completion_declared),
     _table_rule("analyses.vocabularies", vocabularies),
     _table_rule("analyses.top_hit_count_columns", top_hit_count_columns),
+    Check(
+        name="regions.table", kinds=Kind.RELEASE, when=_with_regions, after=(READABLE,),
+        run=regions_table,
+    ),
 )
 
 #: The rules that judge the EAF a release stores against the evidence it records.

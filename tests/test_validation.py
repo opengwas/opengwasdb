@@ -87,6 +87,27 @@ def hybrid_store_path(tmp_path):
     return store_path
 
 
+@pytest.mark.parametrize("fixture", ["dense_store_path", "ragged_store_path", "hybrid_store_path"])
+def test_a_release_stamped_0_2_1_without_a_region_table_fails_its_stamp(request, fixture):
+    """Spec §21.3: a release is stamped the lowest version its features use, so one
+    without `regions.tsv` is 0.2.0, and one stamped otherwise disagrees with itself. For
+    a Hybrid, the outer release's manifest is the one restamped."""
+    from region_tables import edit_manifest
+
+    store = request.getfixturevalue(fixture)
+    assert validate_store(store).ok, "the fixture must validate before it is restamped"
+    assert open_store(store).manifest.format_version == "0.2.0"
+    edit_manifest(store, lambda manifest: {**manifest, "format_version": "0.2.1"})
+
+    result = validate_store(store)
+
+    assert result.failed() == {"manifest.format_stamp"}, result.errors
+    assert any(
+        "stamped 0.2.1, but a release carrying no region table is 0.2.0" in error
+        for error in result.errors
+    ), result.errors
+
+
 def test_validator_rejects_missing_required_array(dense_store_path):
     root = open_store(dense_store_path).arrays(mode="a")
     del root["se"]

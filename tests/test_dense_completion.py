@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import gzip
-import io
 import re
 from pathlib import Path
 from shutil import copytree
@@ -11,6 +9,7 @@ from shutil import copytree
 import numpy as np
 import pytest
 from dense_sources import build_dense_fixture, write_dense_manifest
+from ld_blocks import write_ld_block
 
 from opengwasdb.admission import NotAdmitted
 from opengwasdb.associations import Cells, InvalidAssociations
@@ -125,61 +124,10 @@ SOURCE_ROWS = [
 ]
 
 
-def _write_ld_block(
-    block_dir: Path,
-    block_name: str,
-    snps: list[tuple[str, float, int]],
-    seed: int = 0,
-    *,
-    write_matrix: bool = True,
-    write_npz: bool = False,
-    npz_k: int | None = None,
-    snp_id_style: str = "alid",
-) -> None:
-    """Write one flat-layout LD block.
-
-    A block may carry an LD matrix, an eigendecomposition, or both — panels built
-    under ADR 0031 ship only the decomposition, so tests need to construct each
-    combination. ``npz_k`` truncates the stored eigenvectors to force the
-    under-resolved case. ``snp_id_style`` selects the panel's identifier
-    convention: canonical ALIDs, or the legacy ``chr:pos_ref_alt`` form used by the
-    production UKB EUR panel.
-    """
-    block_dir.mkdir(parents=True, exist_ok=True)
-    n = len(snps)
-
-    tsv_lines = ["CHR\tSNP\tOA\tEA\tEAF\tBP"]
-    for alid, eaf, bp in snps:
-        chrom, pos, a1, a2 = alid.split(":")
-        snp_id = alid if snp_id_style == "alid" else f"{chrom}:{pos}_{a1}_{a2}"
-        tsv_lines.append(f"{chrom}\t{snp_id}\t{a2}\t{a1}\t{eaf}\t{bp}")
-    (block_dir / f"{block_name}.tsv").write_text("\n".join(tsv_lines) + "\n")
-
-    rng = np.random.default_rng(seed)
-    A = rng.standard_normal((n, n))
-    ld = A @ A.T + np.eye(n) * n * 0.1
-
-    if write_matrix:
-        buf = io.BytesIO()
-        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
-            for row in ld:
-                gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
-        (block_dir / f"{block_name}.unphased.vcor1.gz").write_bytes(buf.getvalue())
-
-    if write_npz:
-        vals, vecs = np.linalg.eigh(ld)
-        vals = vals[::-1]
-        vecs = vecs[:, ::-1]
-        k = vecs.shape[1] if npz_k is None else min(npz_k, vecs.shape[1])
-        np.savez_compressed(
-            block_dir / f"{block_name}.ldeig", values=vals, vectors=vecs[:, :k]
-        )
-
-
 def _make_ld_panel(tmp_path: Path) -> Path:
     """Two blocks: chr1 (mixes observed + one new panel SNP) and chr2 (pure panel-only)."""
     root = tmp_path / "ld_panel"
-    _write_ld_block(
+    write_ld_block(
         root / "EUR" / "1", "900000-1300000",
         [
             ("1:900000:A:G", 0.35, 900_000),     # observed by a1
@@ -190,7 +138,7 @@ def _make_ld_panel(tmp_path: Path) -> Path:
         ],
         seed=0,
     )
-    _write_ld_block(
+    write_ld_block(
         root / "EUR" / "2", "1-500000",
         [
             ("2:100000:A:G", 0.20, 100_000),  # new — not observed by anyone
@@ -1393,7 +1341,7 @@ class TestPanelArtifacts:
 
     @staticmethod
     def _block(tmp_path: Path, name: str, **kwargs) -> Path:
-        _write_ld_block(
+        write_ld_block(
             tmp_path / "panel" / "EUR" / "1", name,
             [
                 ("1:900000:A:G", 0.35, 900_000),
@@ -1492,7 +1440,7 @@ class TestPanelFormatIndependence:
 
     @staticmethod
     def _panel(root: Path, **kwargs) -> Path:
-        _write_ld_block(
+        write_ld_block(
             root / "EUR" / "1", "900000-1300000",
             [
                 ("1:900000:A:G", 0.35, 900_000),
@@ -1503,7 +1451,7 @@ class TestPanelFormatIndependence:
             ],
             seed=0, **kwargs,
         )
-        _write_ld_block(
+        write_ld_block(
             root / "EUR" / "2", "1-500000",
             [
                 ("2:100000:A:G", 0.20, 100_000),
@@ -1964,8 +1912,8 @@ def _stub_fits(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _boundary_panel(root: Path, ending: str, starting: str) -> Path:
-    _write_ld_block(root / "EUR" / "1", ending, _ENDING_AT, seed=0)
-    _write_ld_block(root / "EUR" / "1", starting, _STARTING_AT, seed=1)
+    write_ld_block(root / "EUR" / "1", ending, _ENDING_AT, seed=0)
+    write_ld_block(root / "EUR" / "1", starting, _STARTING_AT, seed=1)
     return root
 
 
@@ -1996,7 +1944,7 @@ def _imputed_by_block(store: Path, analysis: int) -> dict[str, int]:
 
 def test_shared_endpoints_name_the_block_that_starts_there(tmp_path: Path):
     panel = _boundary_panel(tmp_path, "900000-1050000", "1050000-1200000")
-    _write_ld_block(panel / "EUR" / "2", "1-500000", [("2:100000:A:G", 0.2, 100_000)])
+    write_ld_block(panel / "EUR" / "2", "1-500000", [("2:100000:A:G", 0.2, 100_000)])
 
     endpoints = shared_endpoints(
         list_all_blocks(panel, "EUR", "1") + list_all_blocks(panel, "EUR", "2")
@@ -2104,7 +2052,7 @@ def test_two_overlapping_blocks_filling_one_cell_leave_it_missing_and_log_both(
         ("1:1050000:C:T", 0.40, 1_050_000),
         ("1:1100000:A:C", 0.45, 1_100_000),
     ]
-    _write_ld_block(ld_panel / "EUR" / "1", "1000000-1100000", overlapping, seed=2)
+    write_ld_block(ld_panel / "EUR" / "1", "1000000-1100000", overlapping, seed=2)
     # Fixture first: both blocks hold the cell's variant, at no shared endpoint.
     blocks = list_all_blocks(ld_panel, "EUR", "1")
     assert [len(b.snp_ids) for b in blocks] == [3, 5]

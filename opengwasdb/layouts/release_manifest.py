@@ -21,8 +21,8 @@ from opengwasdb.model.enums import (
     CompletionState,
     PrimaryStorageLayout,
 )
-from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.open import CURRENT_FORMAT_VERSION
+from opengwasdb.model.manifest import RegionsEntry, StoreManifest
+from opengwasdb.store.open import format_version_for
 
 
 def observed_only_release_manifest(
@@ -34,19 +34,23 @@ def observed_only_release_manifest(
     association_coverage: AssociationCoverage,
     reference_assembly: str,
     provenance: dict[str, Any],
+    regions: RegionsEntry | None = None,
 ) -> StoreManifest:
-    """The manifest of an Observed-Only Store Release in ``layout`` (spec §2)."""
+    """The manifest of an Observed-Only Store Release in ``layout`` (spec §2), declaring
+    ``regions``, the region table it carries, where it carries one (spec §17), and
+    stamped the lowest ``format_version`` its features use (spec §21.3)."""
     return StoreManifest(
         encoding=encoding,
         store_id=store_id,
         release_id=release_id,
-        format_version=CURRENT_FORMAT_VERSION,
+        format_version=format_version_for(carries_regions=regions is not None),
         primary_layout=layout,
         association_coverage=association_coverage,
         completion_state=CompletionState.OBSERVED_ONLY,
         reference_assembly=reference_assembly,
         created_at=datetime.now(UTC).isoformat(),
         provenance=provenance,
+        regions=regions,
     )
 
 

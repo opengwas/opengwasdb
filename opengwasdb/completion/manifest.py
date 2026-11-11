@@ -22,6 +22,7 @@ from opengwasdb.completion.block import COMPLETION_METHOD
 from opengwasdb.encoding import StoreEncoding
 from opengwasdb.model.enums import CompletionState
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store.open import check_format_version_stamp
 
 
 def build_completion_provenance(
@@ -58,12 +59,13 @@ def completed_release_manifest(
     """The Reference-Completed release's manifest, shared by the Dense and
     Ragged builders. A completion writes into its source's arrays, so the
     completed release keeps its source's ``store_id``, ``primary_layout``,
-    ``association_coverage``, ``reference_assembly`` and ``encoding``, and
-    preserves -- not re-stamps -- its ``format_version`` (ADR 0038 §4); the
-    one encoding addition, ``eaf_reference``, is recorded in the encoding
-    itself rather than here (ADR 0037 §4). ``release_id`` defaults to the
-    source's with ``-completed`` appended when none is supplied, exactly as
-    each builder used to compute it. ``completion_provenance`` is the
+    ``association_coverage``, ``reference_assembly``, ``encoding`` and ``regions``
+    entry (the table it carries unchanged, spec §17), and preserves -- not
+    re-stamps -- its ``format_version``, which must be the stamp its features
+    give (ADR 0038 §4, spec §21.3); the one encoding addition, ``eaf_reference``,
+    is recorded in the encoding itself rather than here (ADR 0037 §4).
+    ``release_id`` defaults to the source's with ``-completed`` appended when none
+    is supplied, exactly as each builder used to compute it. ``completion_provenance`` is the
     caller's own ``build_completion_provenance`` result: the completion
     counters a layout reports differ, so each layout builds its own.
 
@@ -92,11 +94,14 @@ def completed_release_manifest(
         encoding=encoding,
         store_id=source_manifest.store_id,
         release_id=release_id or f"{source_manifest.release_id}-completed",
-        format_version=source_format_version,
+        format_version=check_format_version_stamp(
+            source_format_version, carries_regions=source_manifest.regions is not None
+        ),
         primary_layout=source_manifest.primary_layout,
         association_coverage=source_manifest.association_coverage,
         completion_state=CompletionState.REFERENCE_COMPLETED,
         reference_assembly=source_manifest.reference_assembly,
         created_at=datetime.now(UTC).isoformat(),
         provenance=provenance,
+        regions=source_manifest.regions,
     )

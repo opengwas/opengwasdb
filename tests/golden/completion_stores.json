@@ -953,7 +953,7 @@
    ],
    "index.sqlite": "ce59d45d5883251a64387f987acb7b4ec7ea8054f07b8c512bf9a8b19103faf4",
    "manifest.json": {
-    "association_coverage": "cis_and_signals",
+    "association_coverage": "cis",
     "completion_state": "reference_completed",
     "encoding": {
      "eaf": {
@@ -1946,7 +1946,7 @@
    "n_missing": 3,
    "n_variants": 4
   },
-  "written_by": "1ab2b09"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis"
  },
  "ragged_nothing_imputed": {
   "store": {
@@ -1994,7 +1994,7 @@
    ],
    "index.sqlite": "20c045777cef8f21c802a2069f6a860fe32f238602e7c4648569dc50c550a481",
    "manifest.json": {
-    "association_coverage": "cis_and_signals",
+    "association_coverage": "cis",
     "completion_state": "reference_completed",
     "encoding": {
      "eaf": {
@@ -3291,7 +3291,7 @@
   "totals": {
    "n_imputed": 0
   },
-  "written_by": "1ab2b09"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis"
  },
  "ragged_off_grid": {
   "store": {
@@ -3339,7 +3339,7 @@
    ],
    "index.sqlite": "52a665f5e369ebaa002c3260b47bb2e5ef71fa6af0d531320fd7f540a605b129",
    "manifest.json": {
-    "association_coverage": "cis_and_signals",
+    "association_coverage": "cis",
     "completion_state": "reference_completed",
     "encoding": {
      "eaf": {
@@ -4636,7 +4636,7 @@
   "totals": {
    "n_imputed": 10
   },
-  "written_by": "1ab2b09"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis"
  },
  "ragged_out_of_range": {
   "store": {
@@ -4684,7 +4684,7 @@
    ],
    "index.sqlite": "fe11c0d0de38b6bf9243575c1481003508a5aeae5c33b8809a19dbdd68326f0d",
    "manifest.json": {
-    "association_coverage": "cis_and_signals",
+    "association_coverage": "cis",
     "completion_state": "reference_completed",
     "encoding": {
      "eaf": {
@@ -5983,7 +5983,7 @@
   "totals": {
    "n_imputed": 16
   },
-  "written_by": "1ab2b09"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis"
  },
  "ragged_overlap": {
   "store": {
@@ -6021,6 +6021,7 @@
     "analyses.tsv",
     "index.sqlite",
     "manifest.json",
+    "regions.tsv",
     "variant_alid_bytes.npy",
     "variant_alid_rows.npy",
     "variant_offsets.npy",
@@ -6047,7 +6048,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.0",
+    "format_version": "0.2.1",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_besd",
@@ -6088,9 +6089,14 @@
      "source_release_id": "obs-v1"
     },
     "reference_assembly": "GRCh38",
+    "regions": {
+     "path": "regions.tsv",
+     "sha256": "d49a511ba9e57e7e6c4315e084aa71cf556ea15c00486ddf121a2894381e18fb"
+    },
     "release_id": "comp-v1",
     "store_id": "test"
    },
+   "regions.tsv": "d49a511ba9e57e7e6c4315e084aa71cf556ea15c00486ddf121a2894381e18fb",
    "variant_alid_bytes.npy": "0e2ed94bdabd4b696de42e6c5003235b649e0ebf58432d0be6afb845f43ebe0e",
    "variant_alid_rows.npy": "7aa3c4515205667d5940578732273ee0ab006248e1575de797a9edb8adf497d2",
    "variant_offsets.npy": "7d60ac86cb290fba6f02ba7b37c75fe7f88ab03273f31079e86e23416c7499b6",
@@ -7024,7 +7030,7 @@
    "n_missing": 1,
    "n_variants": 7
   },
-  "written_by": "1ab2b09"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3)"
  },
  "ragged_panel_only_eaf": {
   "store": {
@@ -7062,6 +7068,7 @@
     "analyses.tsv",
     "index.sqlite",
     "manifest.json",
+    "regions.tsv",
     "variant_alid_bytes.npy",
     "variant_alid_rows.npy",
     "variant_offsets.npy",
@@ -7088,7 +7095,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.0",
+    "format_version": "0.2.1",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_ssf",
@@ -7174,9 +7181,14 @@
      "stored_effect_scale": "sd"
     },
     "reference_assembly": "GRCh38",
+    "regions": {
+     "path": "regions.tsv",
+     "sha256": "48dec9a1569f0b2ac2c6bb5b87c63e651f3d322a19fabedc6b18dd19280d56fc"
+    },
     "release_id": "v1-completed",
     "store_id": "no-frequencies"
    },
+   "regions.tsv": "48dec9a1569f0b2ac2c6bb5b87c63e651f3d322a19fabedc6b18dd19280d56fc",
    "variant_alid_bytes.npy": "83c1f5ac14f3c5d7c11e8022b0161fab6b6c65fc48b38dff2a7e1598b86955b5",
    "variant_alid_rows.npy": "fcf3e376923b0ac59e7b8073aa8d637d112b6ef442191e0a7e1c77ee3d2ab3e2",
    "variant_offsets.npy": "b20f43c15c4a031e64f34ece60b5694c8df25a387658b1037fe55d8083b039b0",
@@ -8104,7 +8116,7 @@
    }
   },
   "totals": {},
-  "written_by": "1ab2b09"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3)"
  },
  "ragged_residual": {
   "store": {
@@ -8152,7 +8164,7 @@
    ],
    "index.sqlite": "52a665f5e369ebaa002c3260b47bb2e5ef71fa6af0d531320fd7f540a605b129",
    "manifest.json": {
-    "association_coverage": "cis_and_signals",
+    "association_coverage": "cis",
     "completion_state": "reference_completed",
     "encoding": {
      "eaf": {
@@ -9449,7 +9461,7 @@
   "totals": {
    "n_imputed": 10
   },
-  "written_by": "1ab2b09"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis"
  },
  "ragged_trait_less": {
   "store": {
@@ -9487,6 +9499,7 @@
     "analyses.tsv",
     "index.sqlite",
     "manifest.json",
+    "regions.tsv",
     "variant_alid_bytes.npy",
     "variant_alid_rows.npy",
     "variant_offsets.npy",
@@ -9513,7 +9526,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.0",
+    "format_version": "0.2.1",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_besd",
@@ -9554,9 +9567,14 @@
      "source_release_id": "obs-v1"
     },
     "reference_assembly": "GRCh38",
+    "regions": {
+     "path": "regions.tsv",
+     "sha256": "ee7a95a2d19e537f70d0ba69fc440c48c657ccccfd77919205f752a62e22d6b7"
+    },
     "release_id": "comp-v1",
     "store_id": "test"
    },
+   "regions.tsv": "ee7a95a2d19e537f70d0ba69fc440c48c657ccccfd77919205f752a62e22d6b7",
    "variant_alid_bytes.npy": "5a2aaf9af070ebda944a8de2ac000043c9f266d141fa025912978a4c1952ac2a",
    "variant_alid_rows.npy": "ff78661dafefc001ff9c09676aaab415b99b516abc17f67204cf7764dccc5c23",
    "variant_offsets.npy": "c4b013689a3aecd1642e890d2fd76f71dd40a796913af3cf52a5ed48d118beca",
@@ -10490,6 +10508,6 @@
    "n_missing": 0,
    "n_variants": 6
   },
-  "written_by": "1ab2b09"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3)"
  }
 }
