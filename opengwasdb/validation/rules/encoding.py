@@ -321,21 +321,61 @@ def _eaf_residual_arrays(group: Any, read: _Read, label: str) -> Iterator[str]:
             "of any cell the residual coding cannot express"
         )
     else:
-        yield from _eaf_exception_table(EafExceptionTable.read(group), label)
+        yield from _eaf_exception_table(group, label)
 
 
-def _eaf_exception_table(table: EafExceptionTable, label: str) -> Iterator[str]:
-    """Positions pair with values, sorted and unrepeated; every value a frequency."""
-    if len(table.index) != len(table.value):
+#: Entries of the EAF exception table one page of a plan rule's read takes.  The
+#: table is one Zarr v3 shard of up to 1,136,991,041 entries, so loading it to
+#: check it is 12.7 GiB of `int64` and `float32`; its inner chunks are 200,000
+#: entries and Zarr reads them as byte ranges, so it can be walked instead.
+EAF_TABLE_PAGE = 262_144
+
+
+def _eaf_exception_table(group: Any, label: str) -> Iterator[str]:
+    """Positions pair with values, sorted and unrepeated; every value a frequency.
+
+    The table is walked a page at a time, carrying the last position across the
+    boundary, so the judgement is the same as reading it whole while nothing
+    larger than a page is held (issue #387).  The three findings keep the order
+    they had -- pairing, then sortedness, then the value range -- because a page
+    that is walked early can only say what it saw.
+    """
+    index_array = group[EAF_EXCEPTION_INDEX]
+    value_array = group[EAF_EXCEPTION_VALUE]
+    entries = array_length(index_array)
+    values = array_length(value_array)
+    if entries != values:
         yield (
-            f"{label} eaf exception table has {len(table.index)} positions but "
-            f"{len(table.value)} values"
+            f"{label} eaf exception table has {entries} positions but {values} values"
         )
-    elif len(table.index) > 1 and np.any(table.index[1:] <= table.index[:-1]):
+        return
+    unsorted = False
+    not_a_frequency = False
+    previous: int | None = None
+    for start in range(0, entries, EAF_TABLE_PAGE):
+        page = np.asarray(
+            index_array[start : start + EAF_TABLE_PAGE], dtype=np.int64
+        )
+        if len(page):
+            if previous is not None and int(page[0]) <= previous:
+                unsorted = True
+            elif len(page) > 1 and bool(np.any(page[1:] <= page[:-1])):
+                unsorted = True
+            previous = int(page[-1])
+        page_values = np.asarray(
+            value_array[start : start + EAF_TABLE_PAGE], dtype=np.float32
+        )
+        if len(page_values) and not bool(
+            np.all(
+                np.isfinite(page_values)
+                & (page_values >= 0.0)
+                & (page_values <= 1.0)
+            )
+        ):
+            not_a_frequency = True
+    if unsorted:
         yield f"{label} eaf exception table is not sorted by position, or repeats one"
-    elif len(table.value) and not np.all(
-        np.isfinite(table.value) & (table.value >= 0.0) & (table.value <= 1.0)
-    ):
+    elif not_a_frequency:
         yield f"{label} eaf exception table holds a value that is not a frequency in [0, 1]"
 
 

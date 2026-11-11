@@ -4,9 +4,14 @@ A plane that says "look in the table" for a cell the table does not describe has
 lost that association outright, and a table entry for a cell that is not marked
 is never read. For `z` the lost cell is the *largest* |z| in the store, for
 `eaf` the frequency furthest from its baseline, and for a residual `se` an
-exception the coding could not express. Each rule folds the marked cells'
-positions out of the association scan and matches them against the table once
-the scan is done.
+exception the coding could not express.
+
+`z` and `se` fold the marked positions out of the association scan and match them
+against the table once it is done; both tables are small. The `eaf` table is not:
+it is one Zarr v3 shard of up to 1,136,991,041 entries, so that rule reconciles
+each block against the span of the table it must occupy as the scan reaches it,
+holding one page rather than every marked position and the whole table beside
+them (issue #387).
 """
 
 from __future__ import annotations
@@ -174,9 +179,8 @@ class Reconciled:
     stray: int = 0
     stray_first: int | None = None
     undecodable: bool = False
-    #: Entries of the table the scan has taken, and how many it holds at all.
+    #: Entries of the table the scan has taken, in order.
     returned: int = 0
-    total: int = 0
 
     def __add__(self, other: Reconciled) -> Reconciled:
         return Reconciled(
@@ -186,7 +190,6 @@ class Reconciled:
             stray_first=_first(self.stray_first, other.stray_first),
             undecodable=self.undecodable or other.undecodable,
             returned=max(self.returned, other.returned),
-            total=max(self.total, other.total),
         )
 
 
@@ -229,7 +232,6 @@ def _eaf_exceptions(target: Target, block: Block) -> Reconciled:
         stray_first=int(stray[0]) if len(stray) else None,
         undecodable=block.eaf_undecodable,
         returned=spans.returned,
-        total=spans.total,
     )
 
 
