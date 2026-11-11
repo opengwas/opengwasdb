@@ -362,7 +362,9 @@ class ProxyIndexStream:
     """
 
     def __init__(self, group: zarr.Group, rows: int, encoding: REncoding) -> None:
-        self._counts = np.zeros(rows, dtype=np.int64)
+        #: Each row's entries once written; −1 until then, so a row never written is never read as
+        #: a row with no partners.
+        self._counts = np.full(rows, -1, dtype=np.int64)
         self._group = group
         self._next = 0
         self._carried: dict[int, list[_Pairs]] = {}
@@ -429,7 +431,7 @@ class ProxyIndexStream:
     def close(self) -> int:
         """Write `indptr` and the last entries; return the entries written. A carried pair left
         over would be a row never written, and is refused."""
-        if self._carried or self._next != len(self._counts):
+        if self._carried or self._next != len(self._counts) or (self._counts < 0).any():
             raise ValueError("the Proxy Index has rows not written: a store assembly fault")
         layout.put_numbers(self._group, "indptr", indptr_of(self._counts), layout.INT64_FILL)
         total = self._partner.close()

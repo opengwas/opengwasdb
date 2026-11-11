@@ -14,6 +14,7 @@ builder to the reference whether or not ogld#4 has landed.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import build_fixtures as fixtures
@@ -215,3 +216,29 @@ def test_zarr_s_pool_is_held_to_the_build_s_threads_and_released(
     assert len(seen) > 1, "the spy must see every cut the build writes"
     assert set(seen) == {3}
     assert zarr.config.get("threading.max_workers") == before
+
+
+def test_the_window_of_unit_vectors_moves_the_rows_still_needed_and_spares_a_tile_s_view() -> None:
+    # The builder holds a window of a chromosome's unit vectors, never the chromosome (ogld#17).
+    # When its array is full, the rows from the oldest tile in flight on move to a new one; a tile
+    # still reading the old array must see it unchanged.
+    from ogld.build import tiles
+
+    rows = np.arange(64, dtype=np.float64)
+    source = np.column_stack([rows, rows + 0.5, -rows])
+
+    def blocks() -> Iterator[tiles.UnitBlock]:
+        for first in range(0, 64, 8):
+            yield first, source[first : first + 8].copy(), -source[first : first + 8]
+
+    window = tiles.Window(blocks(), capacity=20)
+    window.reach(10, keep=0)
+    in_flight = window.rows(4, 12)
+    np.testing.assert_array_equal(in_flight, source[4:12])
+    window.reach(24, keep=8)  # 24 rows from row 0 do not fit 20: rows 8 … 15 move
+    np.testing.assert_array_equal(window.rows(8, 24), source[8:24])
+    np.testing.assert_array_equal(window.rows(8, 24, unadjusted=True), -source[8:24])
+    np.testing.assert_array_equal(in_flight, source[4:12])
+    window.reach(36, keep=20)
+    np.testing.assert_array_equal(window.rows(20, 36), source[20:36])
+    np.testing.assert_array_equal(in_flight, source[4:12])

@@ -446,8 +446,8 @@ def test_create_refuses_an_n_and_k_with_no_t_far_before_it_writes(tmp_path: Path
 
 def test_finish_adds_what_the_store_derives_to_what_the_producer_knows(tmp_path: Path) -> None:
     given = sourced()
-    written = written_store(tmp_path / "s").finish(given)
-    derived = {key: written[key] for key in DERIVED}  # type: ignore[literal-required]
+    written: dict[str, Any] = dict(written_store(tmp_path / "s").finish(given))
+    derived = {key: written[key] for key in DERIVED}
     assert derived.pop("counts")["near_pairs"] == sum(
         len(expected(c).near_r) for c in chromosomes()
     )
@@ -466,7 +466,7 @@ def test_finish_adds_what_the_store_derives_to_what_the_producer_knows(tmp_path:
         "t_far_q": 20.84,
         "far_code_floor": FLOOR,
     }
-    assert {key: written[key] for key in given} == given  # type: ignore[literal-required]
+    assert {key: written[key] for key in given} == given
     top = list(dict.fromkeys(key.split(".")[0] for key in REQUIRED_KEYS))
     assert list(written) == top, "spec §7's order"
     stored = StoreReader.open(tmp_path / "s").provenance
