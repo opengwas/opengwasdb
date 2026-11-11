@@ -24,7 +24,8 @@ from typing import Final
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import Codes, REncoding, near_row_lengths
+from ogld.format import Codes, REncoding
+from ogld.format.geometry import indptr_of, near_row_lengths, owners, spans, stop_within, windows
 
 #: Rows a tile computes: a tile is TILE_ROWS × (variants within far_bp) float64.
 TILE_ROWS: Final = 256
@@ -33,19 +34,24 @@ TILE_ROWS: Final = 256
 @dataclass(frozen=True)
 class Band:
     """One chromosome's geometry: for each local row l, the first row past near_bp, past
-    far_bp and past `change_bp` (exclusive stops), from its positions (spec §4)."""
+    far_bp and past `change_bp` (exclusive stops), and the Near Band's row lengths, all from
+    `ogld.format.geometry` (spec §4, §5)."""
 
+    near_length: npt.NDArray[np.int64]
+    change_length: npt.NDArray[np.int64]
     near_stop: npt.NDArray[np.int64]
     far_stop: npt.NDArray[np.int64]
     change_stop: npt.NDArray[np.int64]
 
     @classmethod
     def of(cls, position: npt.NDArray[np.int64], near_bp: int, far_bp: int, change_bp: int) -> Band:
-        rows = np.arange(len(position), dtype=np.int64)
-        near = rows + 1 + near_row_lengths(position, near_bp)
-        far = np.searchsorted(position, position + far_bp, side="right").astype(np.int64)
-        change = np.searchsorted(position, position + change_bp, side="right").astype(np.int64)
-        return cls(near, far, change)
+        return cls(
+            near_row_lengths(position, near_bp),
+            near_row_lengths(position, change_bp),
+            stop_within(position, near_bp),
+            stop_within(position, far_bp),
+            stop_within(position, change_bp),
+        )
 
 
 @dataclass(frozen=True)
@@ -79,18 +85,6 @@ class Tile:
     change: npt.NDArray[np.float64]
 
 
-def _cells(
-    starts: npt.NDArray[np.int64], stops: npt.NDArray[np.int64]
-) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
-    """For rows t = 0, 1, …, the columns starts[t] … stops[t] − 1, row after row, as (t, column)."""
-    lengths = stops - starts
-    t = np.repeat(np.arange(len(starts), dtype=np.int64), lengths)
-    offset = np.arange(int(lengths.sum()), dtype=np.int64) - np.repeat(
-        np.cumsum(lengths) - lengths, lengths
-    )
-    return t, np.repeat(starts, lengths) + offset
-
-
 def _ragged(
     block: npt.NDArray[np.float64],
     first: int,
@@ -99,8 +93,8 @@ def _ragged(
 ) -> npt.NDArray[np.float64]:
     """Row t's columns starts[t] … stops[t] − 1 of `block`, whose column 0 is row `first`,
     row after row. Each row's run is one slice: five times faster than a fancy index here."""
-    spans = enumerate(zip(starts, stops, strict=True))
-    runs = [block[t, s - first : e - first] for t, (s, e) in spans]
+    rows = enumerate(zip(starts, stops, strict=True))
+    runs = [block[t, s - first : e - first] for t, (s, e) in rows]
     return np.concatenate(runs) if runs else np.empty(0)
 
 
@@ -114,7 +108,7 @@ def _tile(inputs: Inputs, first: int, last: int) -> Tile:
     lo, hi, entry_codes = _entries(r, first, band.far_stop, inputs.floor, inputs.encoding)
     return Tile(
         first,
-        band.near_stop[first:last] - rows - 1,
+        band.near_length[first:last],
         codes,
         lo,
         hi,
@@ -151,7 +145,8 @@ def change_pairs(
     (spec §7): the tiles measure the change on them, and the build refuses a Variant Set with
     none before it writes (`diagnostic.require_change_pairs`)."""
     starts = np.arange(first + 1, last + 1, dtype=np.int64)
-    t, partner = _cells(starts, band.change_stop[first:last])
+    length = band.change_length[first:last]
+    t, partner = owners(length), spans(starts, length)
     return t, partner, outside[first + t] & outside[partner]
 
 
@@ -160,37 +155,37 @@ def _change(
 ) -> npt.NDArray[np.float64]:
     """Adjusted minus unadjusted r for the tile's pairs within `change_bp`, both variants outside
     the Long-Range LD Regions; at k = 0 the two are one and every change is 0."""
-    starts = np.arange(first + 1, last + 1, dtype=np.int64)
-    stops = inputs.band.change_stop[first:last]
-    clear = change_pairs(inputs.band, inputs.outside, first, last)[2]
-    after = _ragged(r, first, starts, stops)[clear]
+    t, partner, clear = change_pairs(inputs.band, inputs.outside, first, last)
+    t, column = t[clear], partner[clear] - first
+    after = r[t, column]
     if inputs.unadjusted is None:
         return np.zeros_like(after)
     u0 = inputs.unadjusted
-    r0 = u0[first:last] @ u0[first : int(stops.max())].T
-    return after - _ragged(r0, first, starts, stops)[clear]
+    reach = int(inputs.band.change_stop[first:last].max())
+    r0 = u0[first:last] @ u0[first:reach].T
+    return after - r0[t, column]
 
 
 def tiles(inputs: Inputs, threads: int) -> Iterator[Tile]:
     """Every tile of the chromosome, in row order, computed on `threads` threads."""
     n = len(inputs.units)
-    spans = [(first, min(first + TILE_ROWS, n)) for first in range(0, n, TILE_ROWS)]
+    blocks = list(windows(0, n, TILE_ROWS))
     if threads <= 1:
-        yield from (_tile(inputs, first, last) for first, last in spans)
+        yield from (_tile(inputs, first, last) for first, last in blocks)
         return
     with ThreadPoolExecutor(max_workers=threads) as pool:
-        yield from _in_order(pool, lambda span: _tile(inputs, *span), spans, 2 * threads)
+        yield from _in_order(pool, lambda span: _tile(inputs, *span), blocks, 2 * threads)
 
 
 def _in_order(
     pool: ThreadPoolExecutor,
     work: Callable[[tuple[int, int]], Tile],
-    spans: list[tuple[int, int]],
+    blocks: list[tuple[int, int]],
     ahead: int,
 ) -> Iterator[Tile]:
-    """`work` of each span, in order, with at most `ahead` in flight: bounded memory."""
+    """`work` of each block, in order, with at most `ahead` in flight: bounded memory."""
     pending: deque[Future[Tile]] = deque()
-    for span in spans:
+    for span in blocks:
         pending.append(pool.submit(work, span))
         if len(pending) >= ahead:
             yield pending.popleft().result()
@@ -242,7 +237,7 @@ class Entries:
         """
         up = np.bincount(self.lo, minlength=rows)
         down = np.bincount(self.hi, minlength=rows)
-        indptr = np.concatenate([[0], np.cumsum(up + down)]).astype(np.int64)
+        indptr = indptr_of(up + down)
         out = _Layout(
             np.empty(int(indptr[-1]), dtype=np.int64),
             np.empty(int(indptr[-1]), dtype=self.codes.dtype),
