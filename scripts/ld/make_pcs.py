@@ -13,7 +13,8 @@ It follows gnomAD v3.1.2's subcontinental recipe (atgu/hgdp_tgp `pca_subcont.ipy
    unrelated ones too, is projected, so all are on one scale. A keep-file sample absent from v2
    is named in the report and has no row.
 2. **Variants.** SNVs with MAF >= 0.05 on the unrelated samples (AF 5-95%), outside every
-   region of `docs/spec/long-range-ld-regions-grch38.tsv` widened by `--margin-bp` on each
+   Long-Range LD Region (`ogld.build.diagnostic.long_range_ld_regions`, the package's table,
+   build-inputs §9) widened by `--margin-bp` on each
    side. v2 has no missing calls and already applied its pooled HWE, F_MISSING and ExcHet
    filters, so gnomAD's call-rate and PASS steps have nothing left to remove.
 3. **Pruning.** `plink2 --indep-pairwise 500kb 0.1` on the unrelated samples (gnomAD: Hail
@@ -21,13 +22,15 @@ It follows gnomAD v3.1.2's subcontinental recipe (atgu/hgdp_tgp `pca_subcont.ipy
 4. **PCA.** `plink2 --pca 20 allele-wts` on the unrelated samples, then `--score
    variance-standardize` for every sample.
 
-Then it runs the PC Check (`test_panel.pc_check`, the rule `docs/spec/build-inputs.md` gives) on
-each PC File over the panel's genome-wide common variants, as a build would, and records the scan.
+Then it runs the PC Check (`ogld.build.pc_check`, the one implementation of the rule
+`docs/spec/build-inputs.md` gives, which a build runs too) on each PC File over the panel's
+genome-wide variants, of which the module scans the common ones, and records the scan.
 
 Writes `<out>/<panel>.eigenvec` (`#IID PC1 ... PC20`, plink2's layout) and `<out>/<panel>.json`
-with every setting, count, eigenvalue, hash and the PC Check's `pc_check` record. The PC Files
-hold one row per sample, so they are individual-level and never committed. `--scan-only` adds the
-scan to PC Files that already exist.
+with every setting, count, eigenvalue, hash, the PC Check's `pc_check` record and the `commit` that
+made it (a checkout that is not that commit's code is refused, `test_panel.checkout`). The PC
+Files hold one row per sample, so they are individual-level and never committed. `--scan-only`
+adds the scan to PC Files that already exist, naming its commit as `pc_check_commit`.
 
     pixi run -e dev python scripts/make_pcs.py --work <scratch> --panel EUR=<keep> [...]
 """
@@ -35,21 +38,24 @@ scan to PC Files that already exist.
 from __future__ import annotations
 
 import argparse
-import gzip
+import hashlib
 import json
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from importlib import metadata
 from pathlib import Path
 
 import numpy as np
-from test_panel import pc_check
-from test_panel.roots import portable, root, tool
+from test_panel import checkout
+from test_panel.roots import META_NAME, portable, root, tool
 from test_panel.tools import (
     bim_positions,
     conversion_args,
     conversion_inputs,
     read_bed,
+    relatedness,
     run,
     run_plink2,
     sha256,
@@ -59,9 +65,11 @@ from test_panel.tools import (
     write_stamp,
 )
 
+from ogld.build import pc_check
+from ogld.build.diagnostic import REGIONS_FILE, long_range_ld_regions, long_range_ld_regions_file
+
 ROOT = Path(__file__).resolve().parent.parent
 BCF = "hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf"
-META_NAME = "hgdp1kgp-hg38/source/gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.tsv.bgz"
 N_PCS = 20
 MAF_MIN = 0.05
 PRUNE = ("500kb", "0.1")
@@ -73,7 +81,6 @@ class Settings:
     out: Path
     bcf_dir: Path
     meta: Path
-    regions: Path
     margin_bp: int
     plink2: Path
     threads: int
@@ -124,7 +131,7 @@ def _samples(keep: Path, psam: Path, work: Path, panel: str, meta: Path) -> Samp
     """The panel's samples present in v2, split by gnomAD's relatedness flag."""
     ids = _first_column(keep)
     in_v2 = set(_first_column(psam))
-    related = _related(set(ids), meta)
+    related = relatedness(set(ids), meta)
     present = [i for i in ids if i in in_v2]
     unrelated = [i for i in present if not related[i]]
     paths = {"all": work / f"{panel}.all.keep", "unrelated": work / f"{panel}.unrelated.keep"}
@@ -146,36 +153,15 @@ def _write_keep(path: Path, ids: list[str]) -> None:
     path.write_text("#IID\n" + "".join(f"{i}\n" for i in ids))
 
 
-def _related(want: set[str], meta: Path) -> dict[str, bool]:
-    out: dict[str, bool] = {}
-    with gzip.open(meta, "rt") as f:
-        col = f.readline().rstrip("\n").split("\t").index("relatedness_inference")
-        for line in f:
-            c = line.rstrip("\n").split("\t")
-            if c[0] in want:
-                out[c[0]] = bool(json.loads(c[col])["related"])
-    missing = want - set(out)
-    if missing:
-        raise SystemExit(
-            f"{len(missing)} samples have no gnomAD relatedness, such as {sorted(missing)[:3]}"
-        )
-    return out
-
-
 def _excluded(s: Settings, work: Path) -> tuple[Path, list[dict[str, object]]]:
-    rows = [
-        line.split("\t")
-        for line in s.regions.read_text().splitlines()
-        if line and not line.startswith(("#", "region\t"))
-    ]
     regions = [
         {
-            "region": r[0],
-            "chrom": int(r[1]),
-            "start": max(1, int(r[2]) - s.margin_bp),
-            "end": int(r[3]) + s.margin_bp,
+            "region": name,
+            "chrom": int(chrom),
+            "start": max(1, start - s.margin_bp),
+            "end": end + s.margin_bp,
         }
-        for r in rows
+        for name, chrom, start, end in long_range_ld_regions()
     ]
     path = work / "excluded.bed1"
     path.write_text(
@@ -339,8 +325,8 @@ def _panel_pcs(
         "maf_min": MAF_MIN,
         "prune": PRUNE,
         "margin_bp": s.margin_bp,
-        "regions": str(s.regions.relative_to(ROOT)),
-        "regions_sha256": sha256(s.regions),
+        "regions": f"ogld/build/{REGIONS_FILE}",
+        "regions_sha256": hashlib.sha256(long_range_ld_regions_file().read_bytes()).hexdigest(),
         "n_regions": len(regions),
         "per_chromosome": per_chr,
         "variants_pruned_in": sum(c["pruned_in"] for c in per_chr),
@@ -358,18 +344,12 @@ def _scan_panel(s: Settings, panel: str, pgens: dict[int, Path]) -> dict[str, ob
     by_id = _table(pcs_path, "IID", [f"PC{k}" for k in range(1, N_PCS + 1)])
     keep = s.work / panel / "scan.keep"
     _write_keep(keep, list(by_id))
-    fam, w = _merge(panel, [_scan_chromosome(s, panel, c, pgens[c], keep) for c in range(1, 23)])
-    return pc_check.check(w, np.array([by_id[i] for i in fam]))
-
-
-def _merge(
-    panel: str, parts: list[tuple[list[str], pc_check.Windows]]
-) -> tuple[list[str], pc_check.Windows]:
+    parts = [_scan_chromosome(s, panel, c, pgens[c], keep) for c in range(1, 23)]
     fam = parts[0][0]
     if any(p[0] != fam for p in parts):
         raise SystemExit(f"{panel}: sample order differs between chromosomes")
-    where = [x for _, p in parts for x in p.where]
-    return fam, pc_check.Windows(where, np.concatenate([p.basis for _, p in parts], axis=1))
+    w = pc_check.merge([p for _, p in parts])
+    return pc_check.check(w, np.array([by_id[i] for i in fam])).report()
 
 
 def _scan_chromosome(
@@ -382,8 +362,6 @@ def _scan_chromosome(
             str(pgen),
             "--keep",
             str(keep),
-            "--maf",
-            "0.05",
             "--make-bed",
             "--out",
             str(prefix),
@@ -402,9 +380,6 @@ def _parse(argv: list[str] | None) -> tuple[Settings, dict[str, Path], bool]:
     p.add_argument("--bcf-dir", type=Path, help="the v2 BCFs; default: $OGLD_PHASED_V2")
     p.add_argument(
         "--meta", type=Path, help=f"gnomAD's sample metadata; default: $OGLD_REFERENCE/{META_NAME}"
-    )
-    p.add_argument(
-        "--regions", type=Path, default=ROOT / "docs/spec/long-range-ld-regions-grch38.tsv"
     )
     p.add_argument("--margin-bp", type=int, default=2_000_000)
     p.add_argument(
@@ -431,7 +406,6 @@ def _parse(argv: list[str] | None) -> tuple[Settings, dict[str, Path], bool]:
             a.out or root("OGLD_PCS"),
             a.bcf_dir or root("OGLD_PHASED_V2"),
             a.meta or root("OGLD_REFERENCE") / META_NAME,
-            a.regions.resolve(),
             a.margin_bp,
             a.plink2 or tool("plink2"),
             a.threads,
@@ -443,11 +417,24 @@ def _parse(argv: list[str] | None) -> tuple[Settings, dict[str, Path], bool]:
     )
 
 
+def _commit() -> str:
+    """The checkout's commit, which the report names so a citation of it holds (build-inputs
+    §8). A checkout that is not that commit's code is refused (`test_panel.checkout`, the guard
+    the realdata tier uses too): the report would name code that did not run."""
+    found = checkout.problem(ROOT, metadata.version("ogld"))
+    if found:
+        raise SystemExit(f"{ROOT}: {found}")
+    return subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
 def main(argv: list[str] | None = None) -> None:
     single_threaded_blas()
     s, panels, scan_only = _parse(argv)
     for d in (s.work / "logs", s.out):
         d.mkdir(parents=True, exist_ok=True)
+    commit = _commit()
     uptime = run(["uptime"], s.work / "logs" / "uptime.log").strip()
     pgens = _convert_all(s)
     for panel, keep in panels.items():
@@ -456,6 +443,7 @@ def main(argv: list[str] | None = None) -> None:
             t0 = time.perf_counter()
             report["pc_check"] = _scan_panel(s, panel, pgens)
             report["pc_check_seconds"] = round(time.perf_counter() - t0, 1)
+            report["pc_check_commit"] = commit
             report["uptime_scan"] = run(["uptime"], s.work / "logs" / "uptime.log").strip()
             (s.out / f"{panel}.json").write_text(json.dumps(report, indent=1) + "\n")
             print(panel, report["pc_check"]["dropped"], report["pc_check"]["covariates"])
@@ -476,6 +464,7 @@ def main(argv: list[str] | None = None) -> None:
                 },
                 "method": "gnomAD v3.1.2 subcontinental recipe (atgu/hgdp_tgp "
                 "pca_subcont.ipynb at 9feaa41), Long-Range LD Regions excluded",
+                "commit": commit,
             }
         )
         (s.out / f"{panel}.json").write_text(json.dumps(report, indent=1) + "\n")

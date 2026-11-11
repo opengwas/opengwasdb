@@ -8,7 +8,9 @@ variable plus the rest of its path, and by hash, so no host path is committed.
 - `OGLD_PCS`, default `/data/opengwasdb/work/ogld/pcs`: `scripts/make_pcs.py`'s PC Files and
   reports;
 - `OGLD_REFERENCE`, default `/data/opengwasdb/reference`: the panels' members files and gnomAD's
-  sample metadata;
+  sample metadata (`META_NAME` under it);
+- `OGLD_KEEP`, default `/data/opengwasdb/work/ogld/keep`: `scripts/make_keeps.py`'s keep files,
+  each panel's unrelated samples (ADR 0002);
 - `OGLD_PLINK2`, `OGLD_BCFTOOLS`, `OGLD_BGZIP`, default the program on `PATH`: the tools.
 """
 
@@ -22,7 +24,10 @@ DEFAULTS = {
     "OGLD_PHASED_V2": "/data/opengwasdb/work/ogld/phased_v2",
     "OGLD_PCS": "/data/opengwasdb/work/ogld/pcs",
     "OGLD_REFERENCE": "/data/opengwasdb/reference",
+    "OGLD_KEEP": "/data/opengwasdb/work/ogld/keep",
 }
+#: gnomAD v3.1.2's HGDP+1kGP sample metadata, under `OGLD_REFERENCE`.
+META_NAME = "hgdp1kgp-hg38/source/gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.tsv.bgz"
 TOOLS = {"plink2": "OGLD_PLINK2", "bcftools": "OGLD_BCFTOOLS", "bgzip": "OGLD_BGZIP"}
 
 

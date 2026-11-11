@@ -96,7 +96,7 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    panels they are **our own**, from the same v2 genotypes, by one recipe script,
    `scripts/make_pcs.py`: gnomAD's subcontinental method (PCA on gnomAD's unrelated samples,
    relateds projected; SNVs with AF 5–95%; LD-pruned at r² < 0.1 in 500 kb), excluding the
-   Long-Range LD Regions of `docs/spec/long-range-ld-regions-grch38.tsv` ±2 Mb; 20 PCs.
+   Long-Range LD Regions of `ogld/build/long-range-ld-regions-grch38.tsv` ±2 Mb; 20 PCs.
 5. **The PC Check is the local-PC rule, and the builder runs it on every PC File.** A PC is
    local, and dropped from the covariates, when all three hold (the owner's rule, adopted
    7 November 2026 at the review of #2):
@@ -155,6 +155,27 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    experimental pyodide shim. Both are on conda-forge. A local read does not import aiohttp, so
    an extra was possible, and was rejected: pgenlib is an extra only because conda-forge lacks it,
    and an install that cannot read a published store over HTTP would be a reader that half works.
+
+   _Addition, 10 November 2026 (orchestrator's fix brief for #5, at its review):_ **threadpoolctl
+   joins pgenlib in the `ogld[build]` extra.** A build's `threads` must bound it, and each LD
+   tile is a matrix product on which OpenBLAS starts a thread per core unless told otherwise:
+   the review measured 64 under `build.threads` = 16. threadpoolctl holds BLAS to one thread
+   for the build's duration, so the build's own workers are its whole thread count. Only a
+   build needs it, so it is an extra, refused by name when missing, as pgenlib is.
+
+11. **A Source Panel is its unrelated samples** (owner, 10 November 2026, epic #1, decided at the
+   review of #5's whole-panel EUR build). That build's PC diagnostic found 0.0104 of 200,000 seeded
+   cross-chromosome pairs at r² ≥ 0.01, against 0.0058 from sampling: the HGDP+1kGP members files
+   include 1kGP's trios (EUR has 197 first-degree pairs among 771; AFR 321 among 801), and
+   relatives share haplotypes on every chromosome. At k = 0 the rate was 1.76 times what n
+   predicts on all 771 EUR, and 1.07 times on the 665 unrelated. Every HGDP+1kGP panel therefore
+   uses gnomAD v3.1.2's maximal set of unrelated samples (`relatedness_inference.related` false),
+   which leaves no first- or second-degree pair: EUR 665, AFR 608, EAS 724, SAS 672, AMR 341.
+   `scripts/make_keeps.py` makes the keep files from gnomAD's sample metadata
+   (`build-inputs.md` §10). Unchanged: the PC Files, already computed on the unrelated samples with
+   the relatives projected; the Test Panel, which stays at 771 as committed test data whose
+   provenance says so; and #5's whole-panel cost evidence, built on 771. UK Biobank (#10) needs
+   an unrelated set too, by its own kinship.
 
 ## Considered options
 
