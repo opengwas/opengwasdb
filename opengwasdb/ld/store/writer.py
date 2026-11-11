@@ -1,9 +1,9 @@
 """Writing an LD Store: the seam the builder writes through (spec §1–§7, §12; ogld#4).
 
-`StoreWriter` takes Stored r as codes the builder quantised with the store's encoding,
-`ogld.format.REncoding`, which the writer is created with and which every `r` array's dtype,
-fill value and codes are held to, chromosome by chromosome and the Near Band in row blocks,
-because one chromosome's band can exceed 70 GB raw (spec §4). A store is not one until `finish`
+`StoreWriter` is created with the store's encoding, `ogld.format.REncoding`, and takes Stored r
+as that encoding's codes, chromosome by chromosome and the Near Band in row blocks, because one
+chromosome's band can exceed 70 GB raw (spec §4). Every `r` array takes the encoding's dtype and
+fill value, and every code is held to its scale. A store is not one until `finish`
 writes its provenance; a reader refuses a directory without provenance, so a half-written
 store cannot be read as a short one.
 
