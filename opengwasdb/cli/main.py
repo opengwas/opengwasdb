@@ -642,6 +642,18 @@ _OBSERVED_VIEW_ANCESTRY_HELP = (
     "Ragged only: the --ancestry complete-ragged was run with; defaults to the target "
     "manifest's, and is refused if it differs. Refused (exit 2) for a Dense or Hybrid pair"
 )
+_OBSERVED_VIEW_REGIONS_HELP = (
+    "Ragged only: the --regions table complete-ragged was run with; retained regions are "
+    "rebuilt from it. Required unless the source's association_coverage is cis. Refused "
+    "(exit 2) for a Dense or Hybrid pair"
+)
+_COMPLETE_RAGGED_REGIONS_HELP = (
+    "The region table the source's build recorded (a bundle's sidecars/sparse_regions.tsv; "
+    "columns analysis_id, region_id, region_kind, chromosome, start, end, "
+    "source_genome_build). Its cis and significant_trans rows are the regions completed; "
+    "suggestive_trans and qc_panel rows never are. Required unless the source's "
+    "association_coverage is cis, whose regions are each Trait position +/- --cis-window-bp"
+)
 
 
 @app.command("check-observed-view")
@@ -653,6 +665,7 @@ def check_observed_view_command(
     n_random: Annotated[int, typer.Option(min=0, help=_OBSERVED_VIEW_RANDOM_HELP)] = 1000,
     ld_panel: Annotated[Path | None, typer.Option(help=_OBSERVED_VIEW_PANEL_HELP)] = None,
     ancestry: Annotated[str | None, typer.Option(help=_OBSERVED_VIEW_ANCESTRY_HELP)] = None,
+    regions: Annotated[Path | None, typer.Option(help=_OBSERVED_VIEW_REGIONS_HELP)] = None,
 ) -> None:
     """Check that a Reference-Completed Store reproduces the Observed-Only Store it came from.
 
@@ -665,23 +678,23 @@ def check_observed_view_command(
     association that completion moved onto a panel row it added, which must equal
     its source value through the Dense Component's codec.
 
-    A Ragged pair is compared by ALID over a seeded sample of Analyses, not
-    chunk-rows: each source-observed association must be in the target with
-    identical Z, SE and EAF, the target must hold no observed association the
-    source lacks, and every imputed association must lie in one of its Analysis's
-    retained regions (a non-admitted Analysis holds none). Those regions are
-    rebuilt from the LD panel, so --ld-panel (the root complete-ragged was given)
-    is required for a Ragged pair, and --ancestry, if given, must be the one the
-    target records (the default). Neither option is accepted for a Dense or Hybrid
-    pair: it is refused (exit 2), not ignored.
+    A Ragged pair is compared by ALID over a seeded sample of Analyses: each
+    source-observed association must be in the target with identical Z, SE and
+    EAF, the target must hold no observed association the source lacks, and each
+    imputed or added missing association must lie in one of its Analysis's
+    regions (a non-admitted Analysis holds none), rebuilt as complete-ragged built
+    them: --ld-panel is required, --regions unless the source's coverage is cis,
+    and --ancestry, if given, must be the target's. None of the three
+    is accepted for a Dense or Hybrid pair: it is refused (exit 2), not ignored.
 
     Exits 0 when everything agrees and 1 when anything does not; the verdict is
     written to --output either way. Exits 2 without a verdict when the pair
     cannot be checked: a mixed-layout pair, or a layout the check does not
     support (it checks Dense, Hybrid and Ragged pairs), a source that is not
     Observed-Only, a target that is not Reference-Completed, a Store whose arrays
-    cannot be opened or decoded, or, for a Ragged pair, no --ld-panel, or a panel
-    or ancestry the target does not record.
+    cannot be opened or decoded, or, for a Ragged pair, no --ld-panel, a panel
+    or ancestry the target does not record, or a region table complete-ragged
+    would refuse, or none where the source's coverage is not cis.
     """
     from opengwasdb.validation.observed_view import ObservedViewRefused, check_observed_view
 
@@ -691,7 +704,7 @@ def check_observed_view_command(
     try:
         verdict = check_observed_view(
             source_path, target_path, seed=seed, n_random=n_random,
-            ld_panel=ld_panel, ancestry=ancestry,
+            ld_panel=ld_panel, ancestry=ancestry, regions=regions,
         )
     except ObservedViewRefused as refusal:
         typer.echo(f"error: refused: {refusal}", err=True)
@@ -1642,8 +1655,19 @@ def complete_ragged_command(
     release_id: str = typer.Option(None),
     n_workers: int = typer.Option(1, help="LD-block process-pool size"),
     overwrite: bool = typer.Option(False),
+    regions: Annotated[Path | None, typer.Option(help=_COMPLETE_RAGGED_REGIONS_HELP)] = None,
 ) -> None:
-    """Produce a Reference-Completed ragged store from an observed-only store."""
+    """Produce a Reference-Completed ragged store from an observed-only store.
+
+    Each Analysis is completed only inside its regions (issue #430): its cis
+    region, where it has a Trait position, and its significant trans regions.
+    The cis region is the --regions table's cis row, or else the Trait position
+    +/- --cis-window-bp; significant trans regions are the table's
+    significant_trans rows. --regions is required unless the source's
+    association_coverage is cis. An Analysis with no region is carried
+    observed-only; a region no LD block overlaps is listed in the summary
+    (regions_without_block).
+    """
     import time
     t0 = time.time()
     result = complete_ragged_store(
@@ -1656,6 +1680,7 @@ def complete_ragged_command(
         release_id=release_id or None,
         n_workers=n_workers,
         overwrite=overwrite,
+        regions=regions,
     )
     _echo_summary(
         {
@@ -1665,6 +1690,8 @@ def complete_ragged_command(
             "n_associations": result.n_associations,
             "n_imputed": result.n_imputed,
             "n_missing": result.n_missing,
+            "n_regions_without_block": len(result.regions_without_block),
+            "regions_without_block": list(result.regions_without_block),
             "association_coverage": _written_association_coverage(result.output_path),
             "elapsed_s": round(time.time() - t0, 1),
         }

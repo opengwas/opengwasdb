@@ -41,6 +41,22 @@ the code before #424 is measured from a detached worktree of its commit
       --full-checkpoints 1348 --shard-append .../shard-append.json \\
       --batch-peak .../batch-peak.json --output .../projection.json
 
+Since issue #430 each Analysis is completed only inside its regions, so a
+Store whose Analyses have no Trait position (OGS-00006) is run with its
+bundle's region table, `--regions .../sidecars/sparse_regions.tsv`. A run given
+one also accounts for every completed Analysis, read back from the completed
+Store and checked against the table by a test written here, not the package's:
+its significant regions, the cells completion added and how many of them lie
+outside those regions (which must be none). `regions-projection` counts, for
+every Analysis of the full Store, the panel variants inside its regions that it
+does not observe: the cells a full completion adds. Run on the subset's panel
+it is checked against a run's measured cells, Analysis by Analysis, and on the
+full panel it gives the `--full-fills` that `project` reads.
+
+  pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py \\
+      regions-projection --source SOURCE --regions .../sparse_regions.tsv \\
+      --ld-dir /data/opengwasdb/reference/ld --run RUN.json --output .../full.json
+
 Two costs a subset cannot show are measured apart. `shard-append`: the shard
 pass files each checkpoint's records one Analysis batch at a time, and a
 subset's checkpoints span one batch where the full Store's span up to its
@@ -61,6 +77,7 @@ import subprocess
 import sys
 import tempfile
 import tracemalloc
+from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -69,6 +86,7 @@ import numpy as np
 
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._rss import RssSampler
+from opengwasdb.completion.regions import COMPLETED_KINDS
 from opengwasdb.layouts.ragged import complete
 from opengwasdb.model.analyses import read_analysis_records
 
@@ -179,6 +197,7 @@ def run(args: argparse.Namespace) -> None:
     records: dict[str, Any] = {}
     _instrument(records)
     started = perf_counter()
+    regions = {} if args.regions is None else {"regions": args.regions}
     result = complete.complete_ragged_store(
         args.source,
         args.dest,
@@ -187,6 +206,7 @@ def run(args: argparse.Namespace) -> None:
         n_workers=args.n_workers,
         overwrite=args.overwrite,
         impute_analysis_ids=chosen,
+        **regions,
     )
     payload = {
         **provenance(),
@@ -204,8 +224,231 @@ def run(args: argparse.Namespace) -> None:
         **records,
         "phase3": _phase3(records["phases"]),
     }
+    if args.regions is not None:
+        payload["region_accounting"] = _region_accounting(
+            args.source, args.dest, args.regions, args.ld_dir, args.ancestry,
+            [i for i, a in enumerate(analyses) if a.analysis_id in chosen],
+        )
     write_artifact(args.output, payload)
-    print(json.dumps({"phase3": payload["phase3"], "result": payload["result"]}))
+    print(json.dumps({
+        "phase3": payload["phase3"], "result": payload["result"],
+        "regions": payload.get("region_accounting", {}).get("summary"),
+    }))
+
+
+
+def _table_regions(table: Path) -> dict[str, list[tuple[str, int, int, str]]]:
+    """Each Analysis's `cis` and `significant_trans` rows, as `(chromosome, start, end, kind)`."""
+    import csv
+
+    out: dict[str, list[tuple[str, int, int, str]]] = {}
+    with open(table, encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh, delimiter="\t"):
+            if row["region_kind"] in COMPLETED_KINDS:
+                out.setdefault(row["analysis_id"], []).append(
+                    (row["chromosome"], int(row["start"]), int(row["end"]), row["region_kind"])
+                )
+    return out
+
+
+def _in_any(
+    chromosome: np.ndarray, position: np.ndarray, held: list[tuple[str, int, int, str]]
+) -> np.ndarray:
+    found = np.zeros(len(position), dtype=bool)
+    for c, start, end, _kind in held:
+        found |= (chromosome == c) & (position >= start) & (position <= end)
+    return found
+
+
+def _identities(store: Path, variant_index: np.ndarray) -> dict[str, np.ndarray]:
+    from contextlib import closing
+
+    from opengwasdb.variants.axis import VariantAxis
+
+    with closing(VariantAxis(store)) as axis:
+        found = axis.identity_by_indices(np.asarray(variant_index, dtype=np.int64))
+    if found is None:
+        raise SystemExit(f"{store} has no ALID index to read identities from")
+    return found
+
+
+def _region_accounting(
+    source: Path, dest: Path, table: Path, ld_dir: Path, ancestry: str, completed: list[int]
+) -> dict[str, Any]:
+    """Each completed Analysis's significant regions and the cells completion added it,
+    read back from the two Stores: an added cell is a completed row whose ALID the
+    source does not hold for that Analysis."""
+    from opengwasdb.associations import Cells, CsrReader
+    from opengwasdb.completion.ld_panel import list_chromosomes
+
+    regions = _table_regions(table)
+    on_panel = set(list_chromosomes(ld_dir, ancestry))
+    analyses = sorted(
+        read_analysis_records(dest / "analyses.tsv"), key=lambda a: int(a.analysis_index)
+    )
+    src_reader, dst_reader = CsrReader.open(source), CsrReader.open(dest, requires_mask=False)
+    rows = []
+    for i in completed:
+        before = src_reader.inspect(Cells.analysis(i))
+        after = dst_reader.inspect(Cells.analysis(i))
+        observed = set(_identities(source, before.variant_index)["alid"].tolist())
+        ident = _identities(dest, after.variant_index)
+        added = np.array([a not in observed for a in ident["alid"].tolist()], dtype=bool)
+        held = regions.get(analyses[i].analysis_id, [])
+        here = [r for r in held if r[0] in on_panel]
+        inside = _in_any(ident["chromosome"], ident["position"], here)
+        imputed = (after.flags == 1) if after.flags is not None else np.zeros(len(added), bool)
+        rows.append({
+            "analysis_id": analyses[i].analysis_id,
+            "trait_position": bool(analyses[i].trait_chr and analyses[i].trait_bp),
+            "significant_regions": sum(r[3] == "significant_trans" for r in held),
+            "regions_on_panel": len(here),
+            "region_bp_on_panel": int(sum(r[2] - r[1] + 1 for r in here)),
+            "observed": int(len(before.variant_index)),
+            "imputed": int(imputed.sum()),
+            "missing_added": int((added & np.isnan(after.z)).sum()),
+            "added": int(added.sum()),
+            "added_outside_regions": int((added & ~inside).sum()),
+            "imputed_outside_regions": int((imputed & ~inside).sum()),
+            "observed_rows_kept": int((~added).sum()),
+        })
+    no_region = [r for r in rows if r["regions_on_panel"] == 0]
+    return {
+        "panel_chromosomes": sorted(on_panel, key=lambda c: (len(c), c)),
+        "analyses": rows,
+        "summary": {
+            "analyses": len(rows),
+            "imputed": sum(r["imputed"] for r in rows),
+            "missing_added": sum(r["missing_added"] for r in rows),
+            "added_outside_regions": sum(r["added_outside_regions"] for r in rows),
+            "imputed_outside_regions": sum(r["imputed_outside_regions"] for r in rows),
+            "observed_rows_lost": sum(r["observed"] - r["observed_rows_kept"] for r in rows),
+            "no_region_on_panel": len(no_region),
+            "no_significant_region": sum(r["significant_regions"] == 0 for r in rows),
+            "added_to_no_region_analyses": sum(r["added"] for r in no_region),
+            "imputed_per_region_mb": round(
+                sum(r["imputed"] for r in rows)
+                / max(1, sum(r["region_bp_on_panel"] for r in rows)) * 1e6, 1
+            ),
+        },
+    }
+
+
+@dataclass(frozen=True)
+class _PanelChromosome:
+    """One chromosome of a panel: its distinct canonical ALIDs, their positions, and its
+    blocks' extents."""
+
+    alids: np.ndarray
+    positions: np.ndarray
+    blocks: list[tuple[str, int, int]]
+
+
+def _panel(ld_dir: Path, ancestry: str) -> dict[str, _PanelChromosome]:
+    from opengwasdb.completion.ld_panel import (
+        canonical_panel_alid,
+        list_all_blocks,
+        list_chromosomes,
+    )
+
+    out = {}
+    for chromosome in list_chromosomes(ld_dir, ancestry):
+        blocks = list_all_blocks(ld_dir, ancestry, chromosome)
+        found: dict[str, int] = {}
+        for block in blocks:
+            for snp in block.snp_ids:
+                alid = canonical_panel_alid(snp)
+                if alid is not None:
+                    found.setdefault(alid, int(alid.split(":")[1]))
+        out[chromosome] = _PanelChromosome(
+            np.array(list(found), dtype=object),
+            np.fromiter(found.values(), dtype=np.int64, count=len(found)),
+            [(b.block_id, b.start_bp, b.end_bp) for b in blocks],
+        )
+    return out
+
+
+def _expected_added(
+    panel: dict[str, _PanelChromosome], held: list[tuple[str, int, int, str]],
+    identities: dict[str, np.ndarray],
+) -> tuple[int, set[str]]:
+    """One Analysis's panel variants inside its regions that it does not observe, and the
+    blocks its regions overlap."""
+    added, touched = 0, set()
+    for chromosome in {r[0] for r in held} & panel.keys():
+        here = [r for r in held if r[0] == chromosome]
+        p = panel[chromosome]
+        inside = _in_any(np.full(len(p.positions), chromosome, dtype=object), p.positions, here)
+        observed = set(identities["alid"][identities["chromosome"] == chromosome].tolist())
+        added += len(set(p.alids[inside].tolist()) - observed)
+        touched |= {
+            block for block, start, end in p.blocks
+            if any(not (end < r[1] or start > r[2]) for r in here)
+        }
+    return added, touched
+
+
+def regions_projection(args: argparse.Namespace) -> None:
+    """The cells a completion adds each Analysis: the panel variants inside its regions it
+    does not observe. On a run's panel, checked against what that run added, Analysis by
+    Analysis; on the full panel, the full Store's cells, split into imputed and missing by
+    the run's measured share."""
+    from opengwasdb.associations import Cells, CsrReader
+
+    regions = _table_regions(args.regions)
+    analyses = sorted(
+        read_analysis_records(args.source / "analyses.tsv"), key=lambda a: int(a.analysis_index)
+    )
+    reader = CsrReader.open(args.source)
+    started = perf_counter()
+    panel = _panel(args.ld_dir, args.ancestry)
+    expected: dict[str, int] = {}
+    blocks_touched: set[str] = set()
+    analysis_blocks = 0
+    for i, a in enumerate(analyses):
+        held = regions.get(a.analysis_id, [])
+        if not held:
+            expected[a.analysis_id] = 0
+            continue
+        identities = _identities(args.source, reader.inspect(Cells.analysis(i)).variant_index)
+        expected[a.analysis_id], touched = _expected_added(panel, held, identities)
+        blocks_touched |= touched
+        analysis_blocks += len(touched)
+    run = json.loads(Path(args.run).read_text(encoding="utf-8"))
+    summary = run["region_accounting"]["summary"]
+    # A run is checked against only on its own panel: elsewhere it completed nothing.
+    same_panel = run["region_accounting"]["panel_chromosomes"] == sorted(
+        panel, key=lambda c: (len(c), c)
+    )
+    measured = {
+        r["analysis_id"]: r["added"] for r in run["region_accounting"]["analyses"]
+    } if same_panel else {}
+    total = sum(expected.values())
+    imputed_share = summary["imputed"] / max(1, summary["imputed"] + summary["missing_added"])
+    out = {
+        **provenance(),
+        "commit": _measured_commit(),
+        "argv": sys.argv,
+        "seconds": round(perf_counter() - started, 1),
+        "analyses": len(analyses),
+        "with_region": sum(1 for a in analyses if regions.get(a.analysis_id)),
+        "blocks_touched": len(blocks_touched),
+        "analysis_blocks": analysis_blocks,
+        "added_cells": total,
+        "added_cells_per_analysis": {
+            "median": float(np.median(list(expected.values()))),
+            "max": max(expected.values()),
+        },
+        "imputed_share_from_run": round(imputed_share, 4),
+        "imputed_cells": round(total * imputed_share),
+        "missing_cells": round(total * (1 - imputed_share)),
+        "checked_against_run": {
+            "analyses": len(measured),
+            "disagreeing": {k: [expected[k], v] for k, v in measured.items() if expected[k] != v},
+        } if same_panel else None,
+    }
+    write_artifact(args.output, out)
+    print(json.dumps({k: v for k, v in out.items() if k != "argv"}, indent=1))
 
 
 def _line(small: float, large: float, x_small: float, x_large: float, x: float) -> float:
@@ -321,10 +564,11 @@ def project(args: argparse.Namespace) -> None:
 
     Memory is not read off a line: a subset's fills all fit one Analysis batch,
     so its assembly peak grows by a batch's records per fill, which at full
-    size stop at one batch. It is modelled from its parts (`_memory_model`) at
-    the full Store's cells -- its observed rows, which do not grow with the
-    fills, plus the fills with the missing rows the larger run makes per fill
-    -- and the model is set beside the larger run's measured peaks. The larger
+    size stop at one batch, or at every fill where they fit in one. It is
+    modelled from its parts (`_memory_model`) at the full Store's cells -- its
+    observed rows, which do not grow with the fills, plus the fills with the
+    missing rows the larger run makes per fill -- and the model is set beside
+    the larger run's measured peaks. The larger
     run must hold more cells than one sequence shard, so its write region is
     full size.
     """
@@ -355,7 +599,9 @@ def project(args: argparse.Namespace) -> None:
         "shard_batches_extra_seconds": round(shard_extra),
         "phase3_seconds": round(fitted + shard_extra),
         "phase3_hours": round((fitted + shard_extra) / 3600, 2),
-        "memory_full": _memory_model(large, full_cells, budget, peak),
+        # A batch holds at most the budget, and at most every fill (issue #430's Stores
+        # fill far less than one batch).
+        "memory_full": _memory_model(large, full_cells, min(args.full_fills, budget), peak),
         "memory_model_at_larger_run": _memory_model(
             large, large["result"]["n_associations"], min(fills[1], budget), peak
         ),
@@ -379,7 +625,17 @@ def _parser() -> argparse.ArgumentParser:
     one.add_argument("--dest", type=Path, required=True)
     one.add_argument("--n-workers", type=int, default=16)
     one.add_argument("--overwrite", action="store_true")
+    one.add_argument("--regions", type=Path, default=None, help="the bundle's region table")
     one.add_argument("--output", type=Path, required=True)
+    regions = commands.add_parser(
+        "regions-projection", help="count the cells a completion adds each Analysis"
+    )
+    regions.add_argument("--source", type=Path, required=True)
+    regions.add_argument("--regions", type=Path, required=True)
+    regions.add_argument("--ld-dir", type=Path, required=True)
+    regions.add_argument("--ancestry", default="EUR")
+    regions.add_argument("--run", type=Path, required=True, help="a run's JSON to check against")
+    regions.add_argument("--output", type=Path, required=True)
     append = commands.add_parser("shard-append", help="time the shard pass's per-batch filing")
     append.add_argument("--analyses", type=int, default=1100, help="Analyses one block fills")
     append.add_argument("--fills-per-block", type=int, default=6600)
@@ -406,7 +662,10 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = _parser().parse_args()
-    commands = {"run": run, "shard-append": shard_append, "batch-peak": batch_peak}
+    commands = {
+        "run": run, "shard-append": shard_append, "batch-peak": batch_peak,
+        "regions-projection": regions_projection,
+    }
     commands.get(args.command, project)(args)
 
 

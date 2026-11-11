@@ -1,22 +1,26 @@
 """Ragged Reference Completion — enhancement pipeline.
 
 Reads an observed-only ragged store and writes a new Reference-Completed
-Store Release by imputing z-scores and SE for all LD reference panel
-variants within each Analysis's declared cis window.
+Store Release by imputing z-scores and SE for the LD reference panel
+variants inside each Analysis's regions: its cis region, where it has a Trait
+position, and its significant trans regions (`completion.regions`, ADR 0039,
+issue #430).
 
 Pipeline shape mirrors dense completion (ADR 0023): LD blocks are the
 process-pool parallelism unit, checkpointed for resume. The difference from
-dense is the unit of relevance -- a block matters only to the Analyses whose
-cis window touches it, not to every Analysis genome-wide -- so Phase 1 also
+dense is the unit of relevance -- a block matters only to the Analyses one of
+whose regions it overlaps, not to every Analysis genome-wide -- so Phase 1 also
 records a block-to-Analyses mapping alongside the union variant axis, and
 Phase 2's tasks are told which Analyses to complete rather than assuming all
 of them:
-  Phase 1 (sequential): scan every Analysis's cis window for touching LD
-    blocks, collecting the union variant axis and a block_id -> Analysis
-    indices mapping as it goes.
+  Phase 1 (sequential): find the LD blocks each Analysis's regions overlap,
+    collecting the union variant axis and a block_id -> Analysis indices
+    mapping as it goes.
   Phase 2 (parallel, n_workers processes over touched LD blocks): each
     worker opens the source store and LD panel itself, completes every
-    Analysis assigned to its block, and writes its own checkpoint file.
+    Analysis assigned to its block, fitting on all of the block but filling
+    and counting only inside the Analysis's regions, and writes its own
+    checkpoint file.
   Phase 3 (sequential): shard every block's fills by Analysis batch on disk
     (writing completion_quality as it goes, `completion.fill_shards`, shared
     with dense), assemble each Analysis's completed association list from its
@@ -41,7 +45,7 @@ from opengwasdb import top_hits
 from opengwasdb.associations import Associations, Cells, CsrReader
 from opengwasdb.completion import checkpoint, fill_shards
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
-from opengwasdb.completion.block import REGION_CAP_BP, run_block
+from opengwasdb.completion.block import REGION_CAP_BP, panel_positions, run_block
 from opengwasdb.completion.ld_panel import (
     LDBlock,
     SharedEndpoint,
@@ -56,9 +60,12 @@ from opengwasdb.completion.manifest import (
 from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.regions import (
-    blocks_for_analysis,
-    has_trait_position,
-    trait_less_blocks,
+    Region,
+    RegionTable,
+    analysis_regions,
+    inside,
+    read_region_table,
+    region_blocks,
 )
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
@@ -116,6 +123,9 @@ class CompletionResult:
     n_associations: int
     n_imputed: int
     n_missing: int
+    #: The `region_id` of each region no LD block of the panel overlaps, which is
+    #: therefore completed nowhere (issue #430): a panel gap, reported, not refused.
+    regions_without_block: tuple[str, ...] = ()
 
 
 # ── Phase 2: per-block worker ───────────────────────────────────────────────
@@ -130,6 +140,12 @@ class _BlockTask:
     thresh: float
     region_cap_bp: int | None
     checkpoint_path: Path
+    #: The block's chromosome, and its canonical ALIDs and their positions in block order.
+    chromosome: str
+    alids: list[str | None]
+    positions: np.ndarray
+    #: Each assigned Analysis's regions: only its variants inside one are filled or counted.
+    regions: dict[int, tuple[Region, ...]]
     #: Per Analysis, the variants at this block's end the next block owns.
     ceded: dict[int, frozenset[str]] = field(default_factory=dict)
 
@@ -267,11 +283,25 @@ def _make_reader(task: _BlockTask):
     return make_reader
 
 
+def _left_out(task: _BlockTask, analysis: int) -> frozenset[str]:
+    """The block's variants it neither fills nor counts for one Analysis: those outside
+    the Analysis's regions (issue #430), and those at its end the next block owns.
+
+    Both go through `run_block`'s one seam for the positions a block leaves alone, so
+    the fit still sees every observation in the block, and the checkpoint's fills and
+    `completion_quality` counts hold only the rows the Analysis is given.
+    """
+    outside = ~inside(task.regions[analysis], task.chromosome, task.positions)
+    return task.ceded.get(analysis, frozenset()) | frozenset(
+        a for a, out in zip(task.alids, outside.tolist(), strict=True) if out and a is not None
+    )
+
+
 def _run_block(task: _BlockTask) -> checkpoint.BlockCompletionResult | None:
-    """Complete one LD block for the Analyses whose cis window touches it."""
+    """Complete one LD block for the Analyses one of whose regions it overlaps."""
     result = run_block(
         task.tsv_path, task.thresh, task.min_cor, task.region_cap_bp, _make_reader(task),
-        ceded=lambda analysis: task.ceded.get(analysis, frozenset()),
+        ceded=lambda analysis: _left_out(task, analysis),
     )
     if result is None:
         return None
@@ -299,6 +329,7 @@ def complete_ragged_store(
     overwrite: bool = False,
     impute_analysis_ids: set[str] | None = None,
     region_cap_bp: int | None = REGION_CAP_BP,
+    regions: str | Path | None = None,
 ) -> CompletionResult:
     """Produce a Reference-Completed Store Release from an observed-only ragged store.
 
@@ -311,16 +342,14 @@ def complete_ragged_store(
         ``assigned_ancestry`` column when present, imputing every analysis
         when it is not (no behaviour change for sources with no ancestry
         information).
+    regions: the build's region table, its regions (`completion.regions`, issue #430).
     """
-    _check_completion_inputs(Path(source_path), ld_dir, ancestry)
+    table, impute_analysis_ids, resolved = _check_completion_inputs(
+        Path(source_path), ld_dir, ancestry, regions, cis_window_bp, impute_analysis_ids
+    )
     dst = Path(dest_path)
     checkpoint_dir = checkpoint.checkpoint_dir_for(dst)
     checkpoint.require_fresh_destination(dst, checkpoint_dir, overwrite, "resume_ragged_completion")
-
-    if impute_analysis_ids is None:
-        impute_analysis_ids = derive_impute_analysis_ids(
-            _read_analyses_rows(Path(source_path)), ancestry
-        )
 
     (checkpoint_dir / "blocks").mkdir(parents=True)
     build_params = {
@@ -333,10 +362,9 @@ def complete_ragged_store(
         "thresh": thresh,
         "release_id": release_id,
         "ld_panel_id": ld_panel_id,
-        "impute_analysis_ids": sorted(impute_analysis_ids)
-        if impute_analysis_ids is not None
-        else None,
+        "impute_analysis_ids": None if impute_analysis_ids is None else sorted(impute_analysis_ids),
         "region_cap_bp": region_cap_bp,
+        **_region_params(table),
     }
     (checkpoint_dir / "build_params.json").write_text(
         json.dumps(build_params, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -356,6 +384,7 @@ def complete_ragged_store(
         checkpoint_dir=checkpoint_dir,
         impute_analysis_ids=impute_analysis_ids,
         region_cap_bp=region_cap_bp,
+        regions=resolved,
     )
     shutil.rmtree(checkpoint_dir)
     return result
@@ -380,6 +409,11 @@ def resume_ragged_completion(
     params = json.loads((checkpoint_dir / "build_params.json").read_text())
 
     impute_ids = params.get("impute_analysis_ids")
+    impute_ids = set(impute_ids) if impute_ids is not None else None
+    regions = _resolve_regions(
+        Path(params["source_path"]), _resumed_regions(checkpoint_dir, params),
+        params["cis_window_bp"], impute_ids,
+    )
     result = _run_completion(
         Path(params["source_path"]),
         Path(params["dest_path"]),
@@ -392,11 +426,47 @@ def resume_ragged_completion(
         ld_panel_id=params["ld_panel_id"],
         n_workers=n_workers,
         checkpoint_dir=checkpoint_dir,
-        impute_analysis_ids=set(impute_ids) if impute_ids is not None else None,
+        impute_analysis_ids=impute_ids,
         region_cap_bp=params.get("region_cap_bp"),
+        regions=regions,
     )
     shutil.rmtree(checkpoint_dir)
     return result
+
+
+def _region_params(table: RegionTable | None) -> dict[str, str | None]:
+    """The region table's build parameters. Recorded, null included, so a resume
+    knows the rule (issue #430) its checkpoints were written under, and refuses
+    one that predates it (`_resumed_regions`)."""
+    if table is None:
+        return {"regions": None, "regions_sha256": None}
+    return {"regions": str(table.path.resolve()), "regions_sha256": table.sha256}
+
+
+def _resumed_regions(checkpoint_dir: Path, params: dict[str, Any]) -> RegionTable | None:
+    """The region table a resumed completion's checkpoints were written against.
+
+    Refused when the checkpoint predates the region rule (issue #430), whose blocks
+    were filled whole, or when the table has changed since: either would land fills
+    one rule chose beside rows another one chose.
+    """
+    if "regions" not in params:
+        raise ValueError(
+            f"{checkpoint_dir} was written by a complete-ragged that filled whole LD "
+            "blocks, before completion was bounded to each Analysis's regions (issue "
+            "#430); its block checkpoints cannot be resumed, so start the completion again"
+        )
+    if params["regions"] is None:
+        return None
+    table = read_region_table(
+        params["regions"], StoreManifest.load(Path(params["source_path"])).reference_assembly
+    )
+    if table.sha256 != params["regions_sha256"]:
+        raise ValueError(
+            f"region table {params['regions']} has changed since {checkpoint_dir} was "
+            "written; its block checkpoints were filled inside the regions it held then"
+        )
+    return table
 
 
 def _read_analyses_rows(store_path: Path) -> list[dict]:
@@ -433,20 +503,26 @@ class _SourceState:
 
 @dataclass
 class _BlockPlan:
-    """Phase 1's LD-block discovery (ADR 0023, issue #102): every block each
-    Analysis is completed against, its tsv path and canonical panel ALIDs, and
-    the panel ALIDs the source never held. Fills stay on disk in checkpoints;
+    """Phase 1's LD-block discovery (ADR 0023, issue #430): each Analysis's
+    regions and every block they overlap, each block's tsv path, chromosome,
+    canonical panel ALIDs and their positions, and the panel ALIDs inside some
+    Analysis's regions the source never held. Fills stay on disk in checkpoints;
     this is everything Phase 2 runs and Phase 3 resolves them against."""
 
     source: CsrReader
     state: _SourceState
+    regions: dict[int, tuple[Region, ...]]
     analysis_to_blocks: dict[int, list[str]]
     block_to_tsv: dict[str, Path]
     block_to_analyses: dict[str, list[int]]
+    block_chromosome: dict[str, str]
     block_canonical_alids: dict[str, list[str | None]]
+    block_positions: dict[str, np.ndarray]
     new_alids: set[str]
     #: Each block's end another planned block starts at (`shared_endpoints`).
     endpoints: dict[str, SharedEndpoint] = field(default_factory=dict)
+    #: The `region_id` of each region no block overlaps (`RegionBlocks.uncovered`).
+    uncovered: tuple[str, ...] = ()
 
     def ceded(self, block_id: str) -> dict[int, frozenset[str]]:
         """Per Analysis, the variants at ``block_id``'s end the next block owns.
@@ -514,15 +590,45 @@ class _EncodePlan:
     se_coefficients: np.ndarray | None
 
 
-def _check_completion_inputs(src: Path, ld_dir: str | Path, ancestry: str) -> None:
-    """The refusals that need no side effect, run before any is taken.
+def _check_completion_inputs(
+    src: Path,
+    ld_dir: str | Path,
+    ancestry: str,
+    regions: str | Path | None,
+    cis_window_bp: int,
+    impute_analysis_ids: set[str] | None,
+) -> tuple[RegionTable | None, set[str] | None, dict[int, tuple[Region, ...]]]:
+    """The refusals that need no side effect, run before any is taken: the
+    region table, read and checked whole, and the Analyses to impute, derived
+    from the source's ancestry (ADR 0028) when not given, each with its regions.
 
     Ahead of `require_fresh_destination`, which under `overwrite` deletes a
-    previous checkpoint: a run that is going to be refused for its source or its
-    panel must not first discard what an earlier run left.
+    previous checkpoint: a run that is going to be refused for its source, its
+    panel or its regions must not first discard what an earlier run left.
     """
     _refuse_sample_size_source(src)
     check_panel_has_chromosomes(ld_dir, ancestry)
+    table = (
+        None if regions is None
+        else read_region_table(regions, StoreManifest.load(src).reference_assembly)
+    )
+    if impute_analysis_ids is None:
+        impute_analysis_ids = derive_impute_analysis_ids(_read_analyses_rows(src), ancestry)
+    resolved = _resolve_regions(src, table, cis_window_bp, impute_analysis_ids)
+    return table, impute_analysis_ids, resolved
+
+
+def _resolve_regions(
+    src: Path, table: RegionTable | None, cis_window_bp: int, impute_analysis_ids: set[str] | None
+) -> dict[int, tuple[Region, ...]]:
+    """Each Analysis to impute's regions (`analysis_regions`), refusing what it refuses:
+    a Store whose coverage is not `cis` with no table, an Analysis no region can be
+    found for, and a table naming an Analysis the source lacks."""
+    analyses, mask = _source_analyses(src, impute_analysis_ids)
+    return analysis_regions(
+        analyses, _imputable_indices(mask, len(analyses)), table, cis_window_bp,
+        StoreManifest.load(src).association_coverage,
+    )
 
 
 def _refuse_sample_size_source(src: Path) -> None:
@@ -567,17 +673,9 @@ def _read_source_state(
     src_variant_axis.close()
     src_alids = [v.alid for v in src_variants]
 
-    # analyses.tsv is the sole source of truth for Analytical Metadata
-    # (ADR 0034, issue #69) -- including each Analysis's Trait genomic
-    # position, so cis-window/LD-block scanning below reads it directly
-    # rather than through a second, independently-shaped position file.
-    src_analyses = sorted(
-        read_analysis_records(src / "analyses.tsv"), key=lambda a: int(a.analysis_index)
-    )
+    src_analyses, impute_mask = _source_analyses(src, impute_analysis_ids)
     n_analyses = len(src_analyses)
     print(f"Source: {len(src_alids):,} variants, {n_analyses:,} analyses")
-
-    impute_mask = ancestry_impute_mask(src_analyses, impute_analysis_ids)
     if impute_mask is not None:
         n_match = int(impute_mask.sum())
         print(f"Ancestry-match filter: imputing {n_match:,}/{n_analyses:,} analyses")
@@ -592,44 +690,36 @@ def _read_source_state(
     )
 
 
-def _imputable_analyses(state: _SourceState) -> list[tuple[int, Analysis]]:
+def _source_analyses(
+    src: Path, impute_analysis_ids: set[str] | None
+) -> tuple[list[Analysis], np.ndarray | None]:
+    """The source's Analyses in `analysis_index` order, and the ancestry-match
+    impute mask derived from them (ADR 0028).
+
+    analyses.tsv is the sole source of truth for Analytical Metadata (ADR 0034,
+    issue #69) -- including each Analysis's Trait genomic position, so the
+    region derivation reads it directly rather than through a second,
+    independently-shaped position file."""
+    analyses = sorted(
+        read_analysis_records(src / "analyses.tsv"), key=lambda a: int(a.analysis_index)
+    )
+    return analyses, ancestry_impute_mask(analyses, impute_analysis_ids)
+
+
+def _imputable_indices(impute_mask: np.ndarray | None, n_analyses: int) -> list[int]:
     """Every Analysis, or -- under the ancestry-match filter (ADR 0028) --
     only those the filter admits. The others are left observed-only: Phase 3's
     pass-through path carries them through unchanged, so they never enter the
     block maps at all."""
-    if state.impute_mask is None:
-        return list(enumerate(state.src_analyses))
+    return [i for i in range(n_analyses) if impute_mask is None or bool(impute_mask[i])]
+
+
+def _imputable_analyses(state: _SourceState) -> list[tuple[int, Analysis]]:
+    """`_imputable_indices` of the source state, with their Analyses."""
     return [
-        (i, a) for i, a in enumerate(state.src_analyses) if bool(state.impute_mask[i])
+        (i, state.src_analyses[i])
+        for i in _imputable_indices(state.impute_mask, state.n_analyses)
     ]
-
-
-def _gene_target_less_blocks(
-    state: _SourceState, source: CsrReader, ld_dir: Path, ancestry: str
-) -> dict[int, list[LDBlock]]:
-    """LD blocks for Analyses with no Trait position (issue #102): every block
-    holding an association they already have, resolved in one ALID-keyed pass
-    so the panel is read once rather than once per Analysis."""
-    gene_target_less = [
-        (i, a)
-        for i, a in _imputable_analyses(state)
-        if not has_trait_position(a)
-    ]
-    if not gene_target_less:
-        return {}
-    held = {
-        i: [
-            (state.src_alids[vi], state.src_variants[vi].chromosome)
-            for vi in source.structure.variant_index(*source.structure.span(i)).tolist()
-        ]
-        for i, _a in gene_target_less
-    }
-    chromosomes = {chromosome for pairs in held.values() for _alid, chromosome in pairs}
-    print(
-        f"  {len(gene_target_less):,} analyses have no Trait position; scanning "
-        f"{len(chromosomes)} chromosome(s) of panel blocks for regions they hold"
-    )
-    return trait_less_blocks(held, ld_dir, ancestry)
 
 
 def _canonical_alids(block: LDBlock) -> list[str | None]:
@@ -644,68 +734,97 @@ def _new_panel_alids(alids: list[str | None], source_alids: set[str]) -> set[str
 def _scan_block_maps(
     state: _SourceState,
     source: CsrReader,
-    own_variant_blocks: dict[int, list[LDBlock]],
-    ld_dir: Path,
-    ancestry: str,
-    cis_window_bp: int,
+    regions: dict[int, tuple[Region, ...]],
+    blocks_of: dict[int, list[LDBlock]],
 ) -> _BlockPlan:
-    """Enumerate every imputable Analysis's touching LD blocks and build the
-    `_BlockPlan` Phase 2 runs and Phase 3 resolves: the block -> Analysis
-    map, each block's tsv path and canonical panel ALIDs, and the union of
-    panel ALIDs the source never held."""
-    source_alids = set(state.src_alids)
-    new_alids: set[str] = set()
+    """Map every imputable Analysis to the LD blocks its regions overlap and build
+    the `_BlockPlan` Phase 2 runs and Phase 3 resolves: the block -> Analysis
+    map, each block's tsv path, canonical panel ALIDs and positions, and the
+    union of panel ALIDs inside some Analysis's regions the source never held.
+    A panel variant outside every region is no row of any Analysis, so it is
+    not added to the axis."""
     block_to_tsv: dict[str, Path] = {}
     block_to_analyses: dict[str, list[int]] = {}
+    block_chromosome: dict[str, str] = {}
     block_canonical_alids: dict[str, list[str | None]] = {}
+    block_positions: dict[str, np.ndarray] = {}
     analysis_to_blocks: dict[int, list[str]] = {}
     planned: list[LDBlock] = []
 
-    for i, a in _imputable_analyses(state):
-        blocks = blocks_for_analysis(
-            a, own_variant_blocks.get(i, []), ld_dir, ancestry, cis_window_bp
-        )
+    for i, _a in _imputable_analyses(state):
+        blocks = blocks_of.get(i, [])
         analysis_to_blocks[i] = [b.block_id for b in blocks]
         for block in blocks:
             block_to_analyses.setdefault(block.block_id, []).append(i)
             if block.block_id in block_to_tsv:
                 continue
             block_to_tsv[block.block_id] = block.tsv_path
+            block_chromosome[block.block_id] = block.chrom
             block_canonical_alids[block.block_id] = _canonical_alids(block)
+            block_positions[block.block_id] = panel_positions(block)
             planned.append(block)
-            new_alids.update(_new_panel_alids(block_canonical_alids[block.block_id], source_alids))
-        if (i + 1) % 1000 == 0:
-            print(
-                f"  Scanned {i + 1:,} / {state.n_analyses:,} analyses, "
-                f"{len(new_alids):,} new LD panel variants, "
-                f"{len(block_to_tsv):,} blocks touched"
-            )
 
     return _BlockPlan(
         source=source,
         state=state,
+        regions=regions,
         analysis_to_blocks=analysis_to_blocks,
         block_to_tsv=block_to_tsv,
         block_to_analyses=block_to_analyses,
+        block_chromosome=block_chromosome,
         block_canonical_alids=block_canonical_alids,
-        new_alids=new_alids,
+        block_positions=block_positions,
+        new_alids=_region_panel_alids(
+            state, regions, block_to_analyses, block_chromosome,
+            block_canonical_alids, block_positions,
+        ),
         endpoints=shared_endpoints(planned),
     )
 
 
+def _region_panel_alids(
+    state: _SourceState,
+    regions: dict[int, tuple[Region, ...]],
+    block_to_analyses: dict[str, list[int]],
+    block_chromosome: dict[str, str],
+    block_canonical_alids: dict[str, list[str | None]],
+    block_positions: dict[str, np.ndarray],
+) -> set[str]:
+    """The panel ALIDs the source never held that lie inside a region of an
+    Analysis completed against their block: the variants completion adds."""
+    source_alids = set(state.src_alids)
+    new_alids: set[str] = set()
+    for block_id, analyses in block_to_analyses.items():
+        held = inside(
+            [r for i in analyses for r in regions[i]],
+            block_chromosome[block_id], block_positions[block_id],
+        )
+        alids = block_canonical_alids[block_id]
+        new_alids.update(_new_panel_alids(
+            [a for a, kept in zip(alids, held.tolist(), strict=True) if kept], source_alids
+        ))
+    return new_alids
+
+
 def _plan_blocks(
-    state: _SourceState, ld_dir: Path, ancestry: str, cis_window_bp: int
+    state: _SourceState, ld_dir: Path, ancestry: str, regions: dict[int, tuple[Region, ...]]
 ) -> _BlockPlan:
-    """Phase 1: scan every imputable Analysis's cis window (its own variants
-    when it has no Trait position, issue #102) for touching LD blocks and
-    return the plan Phase 2 runs and Phase 3 resolves."""
+    """Phase 1: the LD blocks each imputable Analysis's regions overlap
+    (`completion.regions`, issue #430), and the plan Phase 2 runs and Phase 3
+    resolves. An Analysis with no region is carried Observed-Only."""
     source = _open_source_sequence(state.src)
-    own_variant_blocks = _gene_target_less_blocks(state, source, ld_dir, ancestry)
+    n_imputable = len(_imputable_analyses(state))
+    kinds = [r.kind for held in regions.values() for r in held]
     print(
-        "Scanning for LD blocks + new panel variants (cis windows where a "
-        "Trait position exists, the Analysis's own variants otherwise)..."
+        f"Regions: {kinds.count('cis'):,} cis and {kinds.count('significant_trans'):,} "
+        f"significant trans, over {len(regions):,} of {n_imputable:,} analyses to "
+        f"impute; {n_imputable - len(regions):,} have none and are carried observed-only"
     )
-    plan = _scan_block_maps(state, source, own_variant_blocks, ld_dir, ancestry, cis_window_bp)
+    print("Scanning the LD blocks the regions overlap + new panel variants...")
+    found = region_blocks(regions, ld_dir, ancestry)
+    plan = _scan_block_maps(state, source, regions, found.blocks)
+    plan.uncovered = tuple(r.region_id for r in found.uncovered)
+    print(_uncovered_line(plan.uncovered))
     print(f"New LD panel variants: {len(plan.new_alids):,}")
     print(f"LD blocks touched: {len(plan.block_to_tsv):,}")
     return plan
@@ -811,6 +930,10 @@ def _run_pending_blocks(
                     thresh=thresh,
                     region_cap_bp=region_cap_bp,
                     checkpoint_path=ckpt_path,
+                    chromosome=plan.block_chromosome[block_id],
+                    alids=plan.block_canonical_alids[block_id],
+                    positions=plan.block_positions[block_id],
+                    regions={i: plan.regions[i] for i in plan.block_to_analyses[block_id]},
                     ceded=plan.ceded(block_id),
                 )
             )
@@ -829,22 +952,49 @@ def _run_pending_blocks(
 _FILL_BATCH_CELLS = 1 << 28
 
 
-def _block_rows(plan: _BlockPlan, axis: _MergedAxis) -> dict[str, np.ndarray]:
+@dataclass(frozen=True)
+class _BlockRows:
+    """One planned block's panel variants the merged axis holds, in block order:
+    their merged-axis rows and their positions."""
+
+    chromosome: str
+    rows: np.ndarray
+    positions: np.ndarray
+
+
+def _block_rows(plan: _BlockPlan, axis: _MergedAxis) -> dict[str, _BlockRows]:
     """Each planned block's positions as merged-axis rows: the ALIDs the merged
     axis holds, in block order. An ALID it does not hold is no row of the
-    completed Analysis, as before (`_merged_axis` drops what it cannot orient)."""
+    completed Analysis, as before (`_merged_axis` drops what it cannot orient,
+    and `_scan_block_maps` adds none outside every region)."""
     lookup = axis.new_alid_to_idx
-    return {
-        block_id: np.fromiter(
-            (lookup[alid] for alid in alids if alid is not None and alid in lookup),
-            dtype=np.int64,
+    out: dict[str, _BlockRows] = {}
+    for block_id, alids in plan.block_canonical_alids.items():
+        held = [
+            (k, lookup[alid]) for k, alid in enumerate(alids) if alid is not None and alid in lookup
+        ]
+        at = np.array([k for k, _row in held], dtype=np.int64)
+        out[block_id] = _BlockRows(
+            plan.block_chromosome[block_id],
+            np.array([row for _k, row in held], dtype=np.int64),
+            plan.block_positions[block_id][at],
         )
-        for block_id, alids in plan.block_canonical_alids.items()
-    }
+    return out
+
+
+def _region_rows(plan: _BlockPlan, block_rows: dict[str, _BlockRows], ai: int) -> list[np.ndarray]:
+    """One Analysis's merged-axis rows in each block it is completed against,
+    inside its regions: the rows Phase 2 filled and counted for it, and the
+    only ones completion gives it (issue #430)."""
+    out = []
+    for block_id in plan.analysis_to_blocks.get(ai, []):
+        block = block_rows[block_id]
+        out.append(block.rows[inside(plan.regions[ai], block.chromosome, block.positions)])
+    return out
 
 
 def _analysis_batches(
-    plan: _BlockPlan, block_rows: dict[str, np.ndarray], budget: int = _FILL_BATCH_CELLS
+    plan: _BlockPlan, block_rows: dict[str, _BlockRows], budget: int = _FILL_BATCH_CELLS
 ) -> np.ndarray:
     """Each Analysis's fill-shard batch: consecutive Analyses, as many as fit
     `budget` cells. An Analysis has at most one fill per position of each block
@@ -852,7 +1002,7 @@ def _analysis_batches(
     batch_of = np.zeros(plan.state.n_analyses, dtype=np.int64)
     batch, held = 0, 0
     for ai in range(plan.state.n_analyses):
-        cells = sum(len(block_rows[b]) for b in plan.analysis_to_blocks.get(ai, []))
+        cells = sum(len(rows) for rows in _region_rows(plan, block_rows, ai))
         if held and held + cells > budget:
             batch, held = batch + 1, 0
         batch_of[ai] = batch
@@ -933,7 +1083,7 @@ def _batch_fills(fill_shard_dir: Path, batch: int) -> dict[int, np.ndarray]:
 def _assemble_completed_csr(
     plan: _BlockPlan,
     axis: _MergedAxis,
-    block_rows: dict[str, np.ndarray],
+    block_rows: dict[str, _BlockRows],
     fill_shard_dir: Path,
     batch_of: np.ndarray,
     eaf_reference: np.ndarray | None,
@@ -960,7 +1110,7 @@ def _assemble_completed_csr(
                 source=plan.source,
                 src_alids=plan.state.src_alids,
                 axis=axis,
-                reference=[block_rows[b] for b in plan.analysis_to_blocks.get(ai, [])],
+                reference=_region_rows(plan, block_rows, ai),
                 fills=fills.get(ai, no_fills),
             )
             writer.add_analysis(
@@ -1003,7 +1153,7 @@ def _completed_analysis(
     """One Analysis's completed rows over the merged axis, in variant order.
 
     Its rows are its block positions (`reference`, merged-axis rows of each
-    block it is completed against) and its observed rows. An observed row is
+    block it is completed against, inside its regions) and its observed rows. An observed row is
     carried across untouched, a stored missing one too (ADR 0036); a block
     position the source holds no row at takes its fill, an imputed cell whose
     frequency is deferred to `eaf_reference` (ADR 0037 §4), or stays a
@@ -1313,8 +1463,16 @@ def _completed_manifest(
     )
 
 
+def _uncovered_line(uncovered: tuple[str, ...]) -> str:
+    """The regions completed nowhere, by count and `region_id`."""
+    return (
+        f"Regions overlapping no LD block of the panel, completed nowhere: {len(uncovered):,}"
+        + (f" ({', '.join(uncovered)})" if uncovered else "")
+    )
+
+
 def _completion_result(
-    dst: Path, state: _SourceState, axis: _MergedAxis, csr: _CompletedCsr
+    dst: Path, state: _SourceState, axis: _MergedAxis, csr: _CompletedCsr, plan: _BlockPlan
 ) -> CompletionResult:
     result = CompletionResult(
         output_path=dst,
@@ -1323,12 +1481,14 @@ def _completion_result(
         n_associations=csr.writer.n_associations,
         n_imputed=csr.total_imputed,
         n_missing=csr.total_missing,
+        regions_without_block=plan.uncovered,
     )
     print(
         f"Reference completion complete: {result.n_variants:,} variants, "
         f"{result.n_analyses:,} analyses, {result.n_associations:,} associations "
         f"({result.n_imputed:,} imputed, {result.n_missing:,} missing)"
     )
+    print(_uncovered_line(result.regions_without_block))
     return result
 
 
@@ -1347,6 +1507,7 @@ def _run_completion(
     checkpoint_dir: Path,
     impute_analysis_ids: set[str] | None,
     region_cap_bp: int | None,
+    regions: dict[int, tuple[Region, ...]],
 ) -> CompletionResult:
     """The shared core: block discovery, checkpointed LD-block completion and
     CSR assembly, encoding, metadata and manifest, sequenced inside the
@@ -1355,7 +1516,7 @@ def _run_completion(
 
     with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
         state = _read_source_state(src, impute_analysis_ids)
-        plan = _plan_blocks(state, ld_dir, ancestry, cis_window_bp)
+        plan = _plan_blocks(state, ld_dir, ancestry, regions)
         axis = _merged_axis(state, plan.new_alids)
         _write_variant_axis(staged.path, state, axis)
         encode_plan = _encode_plan(src, ld_dir, ancestry, manifest, axis, state.n_analyses)
@@ -1389,7 +1550,7 @@ def _run_completion(
                 se_exceptions=se_exceptions,
             )
         )
-        result = _completion_result(dst, state, axis, csr)
+        result = _completion_result(dst, state, axis, csr, plan)
     return result
 
 

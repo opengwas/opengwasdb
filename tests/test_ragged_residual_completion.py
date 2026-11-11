@@ -43,6 +43,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from logged_warnings import logged_warnings
+from region_tables import NO_SIGNIFICANT_REGIONS, write_region_table
 from stored_rows import stored_rows
 
 from opengwasdb import StoreManifest, open_store
@@ -236,6 +237,7 @@ class RaggedResidualScenario:
                 cis_window_bp=1_000_000,
                 min_cor=0.0,
                 release_id="comp",
+                regions=write_region_table(root / "regions.tsv", NO_SIGNIFICANT_REGIONS),
             )
         self.warnings = warnings
 

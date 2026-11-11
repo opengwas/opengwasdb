@@ -21,6 +21,7 @@ import test_hybrid_completion as thc
 import test_ragged_completion as trc
 import zarr
 from dense_sources import build_dense_fixture
+from region_tables import NO_SIGNIFICANT_REGIONS, write_region_table
 from stored_rows import stored_rows
 from test_dense_vcf_build import HG19_POS_1, HG19_POS_3, _make_manifest, _make_vcf
 
@@ -277,6 +278,7 @@ def test_ragged_completion_keeps_only_the_rows_it_stores(
     complete_ragged_store(
         observed, completed, trc._make_ld_panel(tmp_path, "1", 900_000, 1_300_000),
         ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp",
+        regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
     )
 
     seen = _judged_at(judged, "complete-ragged", 0.05)

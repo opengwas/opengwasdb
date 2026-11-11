@@ -198,6 +198,7 @@ def check_observed_view(
     n_random: int = 1000,
     ld_panel: str | Path | None = None,
     ancestry: str | None = None,
+    regions: str | Path | None = None,
 ) -> ObservedViewVerdict:
     """Compare an Observed-Only Store with the Reference-Completed one made from it.
 
@@ -212,9 +213,10 @@ def check_observed_view(
     `seed` is required so that every verdict can be reproduced from its record.
     `n_random` chunk-rows are drawn uniformly; a grid with fewer is sampled in
     full (a Hybrid pair also compares `n_random` Overflow Analyses; a Ragged pair
-    samples `n_random` Analyses). `ld_panel` and `ancestry` belong to a Ragged pair
-    alone, whose retained regions are rebuilt from them: a Dense or Hybrid pair
-    given either is refused, not ignored.
+    samples `n_random` Analyses). `ld_panel`, `ancestry` and `regions` (the region
+    table `complete-ragged` was given) belong to a Ragged pair alone, whose retained
+    regions are rebuilt from them: a Dense or Hybrid pair given any is refused, not
+    ignored.
     """
     if n_random < 0:
         raise ValueError(f"n_random must be >= 0, got {n_random}")
@@ -226,11 +228,12 @@ def check_observed_view(
         from opengwasdb.validation.observed_view_ragged import check_ragged
 
         return check_ragged(
-            source, target, seed=seed, n_random=n_random, ld_panel=ld_panel, ancestry=ancestry
+            source, target, seed=seed, n_random=n_random, ld_panel=ld_panel, ancestry=ancestry,
+            regions=regions,
         )
-    if ld_panel is not None or ancestry is not None:
+    if ld_panel is not None or ancestry is not None or regions is not None:
         raise ObservedViewRefused(
-            "--ld-panel and --ancestry are only for a Ragged pair, "
+            "--ld-panel, --ancestry and --regions are only for a Ragged pair, "
             f"not a {_LAYOUT_NAMES[layout]} one"
         )
     if layout is PrimaryStorageLayout.DENSE:

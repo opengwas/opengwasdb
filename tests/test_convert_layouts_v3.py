@@ -29,6 +29,7 @@ import numpy as np
 import pytest
 from dense_sources import build_dense_fixture
 from legacy_fixtures import relayout_as_0_1_0
+from region_tables import NO_SIGNIFICANT_REGIONS, write_region_table
 from test_dense_completion import SOURCE_HEADER, SOURCE_ROWS
 from test_dense_completion import _make_ld_panel as _make_dense_ld_panel
 from test_hybrid_build import (
@@ -101,6 +102,7 @@ def ragged_completed(tmp_path_factory: pytest.TempPathFactory) -> Path:
         cis_window_bp=500_000,
         min_cor=0.0,
         release_id="rc-v1",
+        regions=write_region_table(root / "regions.tsv", NO_SIGNIFICANT_REGIONS),
     )
     return relayout_as_0_1_0(completed, root / "ragged-rc.opengwasdb")
 

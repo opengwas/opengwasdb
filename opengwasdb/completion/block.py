@@ -155,6 +155,13 @@ def complete_block_for_analysis(
     )
 
 
+def panel_positions(block: LDBlock) -> np.ndarray:
+    """Each of a block's panel variants' positions, in block order: the positions
+    `run_block` fits and caps by, and Ragged completion bounds to an Analysis's
+    regions (`completion.regions.inside`)."""
+    return np.array([_snp_position(s) for s in block.snp_ids], dtype=np.int64)
+
+
 # An Analysis's observed z/se at one block's positions, as dense NaN-filled
 # arrays aligned with the block's own SNP order -- the seam ``run_block``
 # hands each layout to supply its own way of reading that.
@@ -205,7 +212,7 @@ def run_block(
     # its slot even when unmatched.
     canonical_alids = [canonical_panel_alid(s) for s in block.snp_ids]
     eaf = block.eaf
-    positions = np.array([_snp_position(s) for s in block.snp_ids], dtype=np.int64)
+    positions = panel_positions(block)
 
     analysis_indices, read_observed = make_reader(block, canonical_alids)
 
