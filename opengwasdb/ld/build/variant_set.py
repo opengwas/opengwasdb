@@ -107,9 +107,9 @@ class _Pending:
     ids: list[str] = field(default_factory=list)
     alleles: list[tuple[str, int, str, str]] = field(default_factory=list)
     alt_sum: list[npt.NDArray[np.float64]] = field(default_factory=list)
-    #: Each kept record's ALT frequency, the mean of its float32 dosages (all the PC Check
-    #: keeps of them: its genotypes are re-read per window, ogld#25), when the build scans.
-    frequency: list[npt.NDArray[np.float32]] = field(default_factory=list)
+    #: Which kept records are common (`pc_check.common`), all the PC Check keeps of their
+    #: genotypes: they are re-read per window (ogld#25), when the build scans.
+    common: list[npt.NDArray[np.bool_]] = field(default_factory=list)
 
 
 @dataclass
@@ -256,7 +256,7 @@ def _judge(
         pending.alleles.append((pending.name, int(block.pos[at]), block.ref[at], block.alt[at]))
     pending.alt_sum.append(run[picked].sum(axis=1))
     if state.settings.scan:
-        pending.frequency.append(run[picked].astype(np.float32).mean(axis=1) / 2)
+        pending.common.append(pc_check.common(run[picked]))
 
 
 def _check_alleles(block: Records, start: int, stop: int, panel: str) -> None:
@@ -367,7 +367,7 @@ def _scan(state: Pass, pending: _Pending, found: Chromosome, order: list[int]) -
     reader = state.reader
     if reader is None:  # pragma: no cover - the pass opens the fileset before it closes a run
         raise RuntimeError("the PC Check scans a chromosome while no fileset is open")
-    frequency = np.concatenate(pending.frequency)[order]
+    common = np.concatenate(pending.common)[order]
 
     def read(rows: npt.NDArray[np.intp]) -> npt.NDArray[np.float32]:
         return reader.rows(found.rows[rows]).astype(np.float32)
@@ -375,7 +375,7 @@ def _scan(state: Pass, pending: _Pending, found: Chromosome, order: list[int]) -
     state.windows[found.name] = pc_check.stream_windows(
         found.name,
         found.position,
-        pc_check.is_common(frequency),
+        common,
         read,
         state.samples,
         threads=state.settings.threads,

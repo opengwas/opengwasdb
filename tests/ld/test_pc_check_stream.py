@@ -10,7 +10,6 @@ implementation the stream must reproduce.
 from __future__ import annotations
 
 import tracemalloc
-from collections.abc import Callable
 from typing import Final
 
 import numpy as np
@@ -58,40 +57,99 @@ class Reads:
 
 
 def _streamed(
-    pos: npt.NDArray[np.int64],
-    read: Callable[..., npt.NDArray[np.float32]],
-    g_mean: npt.NDArray[np.float32],
-    threads: int,
+    pos: npt.NDArray[np.int64], read: Reads, g: npt.NDArray[np.float32], threads: int
 ) -> pc_check.Windows:
-    selected = pc_check.is_common(g_mean)
-    return pc_check.stream_windows("5", pos, selected, read, SAMPLES, threads=threads)
+    return pc_check.stream_windows("5", pos, pc_check.common(g), read, g.shape[1], threads=threads)
 
 
-@pytest.mark.parametrize("threads", [1, 2, 4, 7])
-def test_the_stream_finds_the_windows_the_whole_matrix_does(thin: int, threads: int) -> None:
+@pytest.mark.parametrize("threads", [2, 4, 7])
+def test_the_chunking_of_windows_by_threads_changes_no_window(thin: int, threads: int) -> None:
     pos, g = _chromosome(3_000)
-    whole = pc_check.windows(np.full(len(pos), "5"), pos, g, threads=threads)
+    alone = _streamed(pos, Reads(g), g, 1)
     reads = Reads(g)
-    streamed = _streamed(pos, reads, g.mean(axis=1) / 2, threads)
-    # The fixture must reach what the stream does differently: thinned windows, the partial last
-    # window, rare rows left out, and a window count that no thread count divides evenly.
-    assert max(len(r) for r in _inside(pos, g)) > thin, "no window is thinned"
+    streamed = _streamed(pos, reads, g, threads)
+    # The fixture must reach what the chunking does: thinned windows, rare rows left out, the
+    # partial last window, and a window count that no thread count above one divides.
+    assert max(reads.sizes) == thin, "no window is thinned"
     assert not pc_check.common(g).all(), "no rare row to leave out"
-    assert len(whole.where) == 9, "nine windows: no thread count above one divides them"
-    assert whole.where[-1][1] + pc_check.WINDOW_BP > int(pos[-1]) + pc_check.STEP_BP
-    assert streamed.where == whole.where
-    np.testing.assert_array_equal(streamed.basis, whole.basis)
+    assert len(alone.where) == 9, "nine windows: no thread count above one divides them"
+    assert alone.where[-1][1] + pc_check.WINDOW_BP > int(pos[-1]) + pc_check.STEP_BP
+    assert streamed.where == alone.where
+    np.testing.assert_array_equal(streamed.basis, alone.basis)
 
 
-def _inside(pos: npt.NDArray[np.int64], g: npt.NDArray[np.float32]) -> list[npt.NDArray[np.intp]]:
-    keep = np.flatnonzero(pc_check.common(g))
-    return pc_check._layout(np.full(len(keep), "5"), pos[keep])[1]
+def test_windows_over_the_whole_matrix_is_the_stream_per_chromosome(thin: int) -> None:
+    first, g1 = _chromosome(3_000)
+    second, g2 = _chromosome(2_000, seed=9)
+    chrom = np.array(["5"] * len(first) + ["7"] * len(second))
+    pos, g = np.concatenate([first, second]), np.concatenate([g1, g2])
+    both = pc_check.windows(chrom, pos, g, threads=3)
+    parts = [
+        _streamed(first, Reads(g1), g1, 1),
+        pc_check.stream_windows("7", second, pc_check.common(g2), Reads(g2), SAMPLES),
+    ]
+    expected = pc_check.merge(parts)
+    assert {c for c, _ in both.where} == {"5", "7"}, "one chromosome only proves little"
+    assert both.where == expected.where
+    np.testing.assert_array_equal(both.basis, expected.basis)
+
+
+def test_a_chromosome_with_no_common_variant_has_no_windows(thin: int) -> None:
+    pos, g = _chromosome(300)
+    rare = np.zeros_like(g)
+    rare[:, :2] = 1
+    assert not pc_check.common(rare).any()
+    streamed = pc_check.stream_windows("5", pos, pc_check.common(rare), Reads(rare), SAMPLES)
+    assert streamed.where == []
+    assert streamed.basis.shape == (SAMPLES, 0)
+    both = pc_check.windows(
+        np.array(["5"] * 300 + ["6"] * len(pos)), np.tile(pos, 2), np.concatenate([rare, g])
+    )
+    assert {c for c, _ in both.where} == {"6"}, "the chromosome with no common variant is skipped"
+
+
+def test_the_common_rule_at_its_edges() -> None:
+    n = 100
+    exactly = np.zeros((1, n), dtype=np.float32)
+    exactly[0, :10] = 1  # MAF exactly 0.05: common, since the rule is >=
+    # Non-integer dosages summing to 9.999999999999998 in float64, whose float64 mean is below
+    # 0.05 and whose float32 mean is not: the scan's float32 decides.
+    dosages = np.zeros((1, n))
+    dosages[0, :20] = [
+        0.7,
+        0.5,
+        0.4,
+        0.7,
+        0.2,
+        0.1,
+        0.3,
+        0.7,
+        0.4,
+        0.5,
+        0.3,
+        0.7,
+        0.5,
+        0.5,
+        0.7,
+        0.2,
+        0.5,
+        0.7,
+        0.7,
+        0.7,
+    ]
+    assert dosages[0].mean() / 2 < pc_check.COMMON_MAF, "the fixture must straddle the threshold"
+    below = np.zeros((1, n), dtype=np.float32)
+    below[0, :9] = 1  # MAF 0.045
+    assert pc_check.common(exactly).tolist() == [True]
+    assert pc_check.common(dosages).tolist() == [True]
+    assert pc_check.common(below).tolist() == [False]
+    assert pc_check.common(dosages.astype(np.float32)).tolist() == [True]
 
 
 def test_a_window_reads_only_its_thinned_rows(thin: int) -> None:
     pos, g = _chromosome(3_000)
     reads = Reads(g)
-    _streamed(pos, reads, g.mean(axis=1) / 2, 3)
+    _streamed(pos, reads, g, 3)
     assert reads.sizes, "the stream read nothing"
     assert max(reads.sizes) <= thin
     assert sum(reads.sizes) < pc_check.common(g).sum() * 2, "it read more than the windows need"
@@ -100,7 +158,7 @@ def test_a_window_reads_only_its_thinned_rows(thin: int) -> None:
 def test_a_chromosome_with_no_window_reads_nothing(thin: int) -> None:
     pos, g = _chromosome(4, span=1_000_000)
     reads = Reads(g)
-    streamed = _streamed(pos, reads, np.full(4, 0.3), 2)
+    streamed = _streamed(pos, reads, g, 2)
     assert streamed.where == []
     assert streamed.basis.shape == (SAMPLES, 0)
     assert reads.sizes == []

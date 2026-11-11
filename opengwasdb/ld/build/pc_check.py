@@ -113,13 +113,12 @@ class Checked:
 
 
 def common(dosages: npt.NDArray[np.floating] | npt.NDArray[np.integer]) -> npt.NDArray[np.bool_]:
-    """Which rows of ALT dosages (variants × samples) have MAF ≥ 0.05 on those samples."""
-    return is_common(dosages.mean(axis=1) / 2)
+    """Which rows of ALT dosages (variants × samples) have MAF ≥ 0.05 on those samples.
 
-
-def is_common(frequency: npt.NDArray[np.floating]) -> npt.NDArray[np.bool_]:
-    """Which ALT frequencies have MAF ≥ 0.05. A streaming caller takes each row's float32 mean
-    as `common` would, so the same variants are selected."""
+    The one frequency rule, and the one place the scan's float32 is decided: a row's frequency
+    is the mean of its float32 dosages, so whatever holds a build's genotypes (float64 from the
+    pgen) and whatever holds a script's select the same variants (ogld#25)."""
+    frequency = dosages.astype(np.float32, copy=False).mean(axis=1) / 2
     selected: npt.NDArray[np.bool_] = np.minimum(frequency, 1 - frequency) >= COMMON_MAF
     return selected
 
@@ -134,14 +133,22 @@ def windows(
     """The scan's windows over variants `g` (variants × samples, complete), in position order
     within each chromosome. Only the common ones are used (MAF ≥ 0.05, `common`).
 
-    For a caller that holds every genotype. A build does not: it uses `stream_windows`, which
-    reads each window's thinned variants when it is scanned (ogld#25)."""
-    keep = common(g)
-    chrom, pos, g = chrom[keep], pos[keep], g[keep]
-    where, rows = _layout(chrom, pos)
-    with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
-        blocks = list(pool.map(lambda inside: _basis(g[inside[_pick(len(inside))]]), rows))
-    return _stacked(where, blocks, g.shape[1])
+    For a caller that holds every genotype: `stream_windows` per chromosome, reading from `g`,
+    so a script and a build run one scan loop (ogld#25)."""
+    parts = []
+    for c in dict.fromkeys(chrom.tolist()):
+        on = np.flatnonzero(chrom == c)
+        parts.append(
+            stream_windows(
+                str(c),
+                pos[on],
+                common(g[on]),
+                lambda rows, on=on: g[on[rows]],
+                g.shape[1],
+                threads=threads,
+            )
+        )
+    return merge(parts) if parts else Windows([], np.empty((g.shape[1], 0)))
 
 
 def stream_windows(
@@ -153,14 +160,19 @@ def stream_windows(
     *,
     threads: int = 1,
 ) -> Windows:
-    """One chromosome's windows, as `windows` finds them, without its genotypes in memory.
+    """One chromosome's windows without its genotypes in memory.
 
     `pos` are the chromosome's variants in position order, `selected` marks the common ones
-    (`is_common` of their frequencies) and `read(rows)` returns the float32 genotypes of those
-    positions' rows, (len(rows), samples). A window uses at most `MAX_VARIANTS` of its variants,
-    chosen by position alone, so only those are read, `threads` windows at a time: what is held
-    is bounded by `threads` windows, not by the chromosome (ogld#25)."""
+    (`common` of their dosages) and `read(rows)` returns the genotypes of those positions' rows,
+    (len(rows), samples). A window uses at most `MAX_VARIANTS` of its variants, chosen by
+    position alone, so only those are read, `threads` windows at a time: what is held is bounded
+    by `threads` windows, not by the chromosome (ogld#25).
+
+    Every `read` runs on the calling thread, never in the pool: a build's `read` uses one pgen
+    reader, which is not safe to share between threads. Only `_basis` runs on workers."""
     common_rows = np.flatnonzero(selected)
+    if not len(common_rows):
+        return Windows([], np.empty((samples, 0)))
     where, rows = _layout(np.full(len(common_rows), chrom), pos[common_rows])
     blocks: list[npt.NDArray[np.float64]] = []
     with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
@@ -352,7 +364,6 @@ __all__ = [
     "Windows",
     "check",
     "common",
-    "is_common",
     "is_local",
     "merge",
     "stream_windows",

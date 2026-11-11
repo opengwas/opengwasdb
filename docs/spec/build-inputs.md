@@ -250,14 +250,18 @@ ratio cannot fall much below 5 / (n × `window_share`): below about 100 samples 
 drop any PC. Every HGDP+1kGP panel keeps at least 341 samples, AMR's unrelated ones (§10).
 
 **What the PC Check holds in memory.** Not a chromosome's genotypes (ogld#25). The variant pass
-keeps, for each variant that passes, its float32 ALT frequency, which selects the common ones.
-When a chromosome closes, each window's variants are thinned by position alone, so only those at
-most 5,000 are read again from the pgen, `threads` windows at a time, and what the scan holds
-is those windows' genotypes and the stacked bases (5 × samples per window). That does not grow with
-the chromosome's rows. The scan is the one a whole genotype matrix gives, window for window. The
-check before the tiles, that some pair within 100 kb lies outside the Long-Range LD Regions, lists
-a tile of rows' pairs at a time. On EUR chr6 at k = 10 on 8 threads (n = 665) the pass peaks at
-1.4 GB, against 6.1 GB, and the build's peak before the tiles is 2.0 GB, against 10.4 GB.
+keeps, for each variant that passes, whether it is common (`pc_check.common`, the one frequency
+rule, on the float32 dosages). When a chromosome closes, each window's variants are thinned by
+position alone, so only those, at most 5,000, are read again from the pgen, `threads` windows at
+a time. The scan holds those windows' genotypes, about `threads` × 5,000 × n × 25 B, and the
+genome's bases, 5 × n × 8 B for each of about 1,400 windows. That is bounded by a window, not by
+a chromosome's rows, but it grows linearly with the samples n: at n = 49,766 about 25 GB on 4
+threads and 50 GB on 8, besides the bases' 2.8 GB (measured at n = 1,000 and 4,000: 0.53 and
+2.00 GB). The scan is the one a whole genotype matrix gives, window for window, and
+`pc_check.windows` runs it. The check before the tiles, that some pair within 100 kb lies outside
+the Long-Range LD Regions, lists a tile of rows' pairs at a time. On EUR chr6 at k = 10 on 8
+threads (n = 665) the pass peaks at 1.4 GB, against 6.1 GB, and the build's peak before the tiles
+is 2.0 GB, against 10.4 GB.
 
 **The covariates** are the first `k` = 10 (`BuildInputs.k`) PCs of the PC File that are not local,
 in PC order. If fewer than 10 survive, the build uses all that do, as long as at least
