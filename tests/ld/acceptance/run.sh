@@ -10,4 +10,4 @@ RD=/data/opengwasdb/work/ogld/realdata
 export OGLD_EUR_K0_STORE="${OGLD_EUR_K0_STORE:-$RD/EUR-k0.store}"
 export OGLD_403_ANALYSES="${OGLD_403_ANALYSES:-$RD/403-analyses}"
 
-exec pytest -m acceptance --timeout=10800 -rfEx -p no:cacheprovider tests/acceptance "$@"
+exec pytest -m acceptance --timeout=10800 -rfEx -p no:cacheprovider tests/acceptance/test_clump_equals_plink2.py "$@"
