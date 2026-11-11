@@ -349,34 +349,50 @@ def _eaf_exception_table(group: Any, label: str) -> Iterator[str]:
             f"{label} eaf exception table has {entries} positions but {values} values"
         )
         return
-    unsorted = False
-    not_a_frequency = False
-    previous: int | None = None
-    for start in range(0, entries, EAF_TABLE_PAGE):
-        page = np.asarray(
-            index_array[start : start + EAF_TABLE_PAGE], dtype=np.int64
-        )
-        if len(page):
-            if previous is not None and int(page[0]) <= previous:
-                unsorted = True
-            elif len(page) > 1 and bool(np.any(page[1:] <= page[:-1])):
-                unsorted = True
-            previous = int(page[-1])
-        page_values = np.asarray(
-            value_array[start : start + EAF_TABLE_PAGE], dtype=np.float32
-        )
-        if len(page_values) and not bool(
-            np.all(
-                np.isfinite(page_values)
-                & (page_values >= 0.0)
-                & (page_values <= 1.0)
-            )
-        ):
-            not_a_frequency = True
+    unsorted, not_a_frequency = _eaf_table_pages(index_array, value_array, entries)
     if unsorted:
         yield f"{label} eaf exception table is not sorted by position, or repeats one"
     elif not_a_frequency:
         yield f"{label} eaf exception table holds a value that is not a frequency in [0, 1]"
+
+
+def _eaf_table_pages(
+    index_array: Any, value_array: Any, entries: int
+) -> tuple[bool, bool]:
+    """Whether the table is unsorted or repeats a position, and whether a value is
+    not a frequency, judged page by page with the last position carried across.
+
+    Both questions are answered over the whole table, not the page that raised
+    them, so the findings keep the order they had when it was read at once.
+    """
+    unsorted = False
+    not_a_frequency = False
+    previous: int | None = None
+    for start in range(0, entries, EAF_TABLE_PAGE):
+        page = np.asarray(index_array[start : start + EAF_TABLE_PAGE], dtype=np.int64)
+        unsorted, previous = _page_order(page, previous, unsorted)
+        not_a_frequency = not_a_frequency or _page_is_not_frequencies(value_array, start)
+    return unsorted, not_a_frequency
+
+
+def _page_order(
+    page: np.ndarray, previous: int | None, unsorted: bool
+) -> tuple[bool, int | None]:
+    """Whether the pages so far are unsorted, and this page's last position."""
+    if not len(page):
+        return unsorted, previous
+    broke = (previous is not None and int(page[0]) <= previous) or (
+        len(page) > 1 and bool(np.any(page[1:] <= page[:-1]))
+    )
+    return unsorted or broke, int(page[-1])
+
+
+def _page_is_not_frequencies(value_array: Any, start: int) -> bool:
+    """Whether the page's values hold anything that is not a frequency in [0, 1]."""
+    values = np.asarray(value_array[start : start + EAF_TABLE_PAGE], dtype=np.float32)
+    if not len(values):
+        return False
+    return not bool(np.all(np.isfinite(values) & (values >= 0.0) & (values <= 1.0)))
 
 
 def _eaf_reference(group: Any, read: _Read, declared: Any, label: str) -> Iterator[str]:

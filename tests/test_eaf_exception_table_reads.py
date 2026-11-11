@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from shutil import copytree
+from typing import Any
 
 import numpy as np
 import zarr
@@ -238,16 +239,17 @@ def _no_whole_table(monkeypatch: MonkeyPatch) -> list[str]:
     A subset's own copy of the table is `O(exception count)` and small; the
     release's is the shard this ticket is about.
     """
-    original = side_tables.EafExceptionTable.read
+    table_type = side_tables.EafExceptionTable
+    original = table_type.read
     whole: list[str] = []
 
-    def read(group: object) -> object:
+    def read(group: Any) -> Any:
         if INDEXED_SUBSETS_GROUP in str(getattr(group, "store_path", "")):
-            return original(group)  # type: ignore[arg-type]
+            return original(group)
         whole.append(str(getattr(group, "store_path", group)))
         raise AssertionError("the release's whole eaf exception table was read")
 
-    monkeypatch.setattr(side_tables.EafExceptionTable, "read", read)
+    monkeypatch.setattr(table_type, "read", read)
     return whole
 
 
