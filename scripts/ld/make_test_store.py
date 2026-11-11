@@ -106,15 +106,19 @@ def variant_set() -> VariantSet:
     return VariantSet(rows, table, np.where(is_alt, 1.0, -1.0), len(dropped))
 
 
-def alt_counts(rows: npt.NDArray[np.int64]) -> npt.NDArray[np.int8]:
-    """The ALT allele count (0, 1, 2) of each Test Panel row, for the kept samples: [rows,
-    samples], read by the build's own reader (`ogld.build.genotypes`)."""
+def alt_counts(rows: npt.NDArray[np.int64], pgen: Path | None = None) -> npt.NDArray[np.int8]:
+    """The ALT allele count (0, 1, 2) of each row of the Test Panel (or of `pgen`, a fileset
+    of rows of it), for the kept samples: [rows, samples], read by the build's own reader
+    (`ogld.build.genotypes`). A missing call is refused, never averaged in (ADR 0002)."""
     panel = panel_data().panel()
     name = "the Test Panel"
-    kept = read_keep(panel.keep, name)
-    first = fileset(panel.pgen, kept, None, name)
+    first = fileset(pgen or panel.pgen, read_keep(panel.keep, name), None, name)
     with Genotypes(first) as genotypes:
-        return genotypes.rows(rows).astype(np.int8)
+        counts = genotypes.rows(rows)
+    missing = np.flatnonzero((counts < 0).any(axis=1))
+    if len(missing):
+        raise ogld.InputError(f"missing call in row {int(rows[missing[0]])} of {name}")
+    return counts.astype(np.int8)
 
 
 def a1_frequency(

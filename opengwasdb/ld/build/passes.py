@@ -42,7 +42,13 @@ from ogld.build.inputs import (
 )
 from ogld.build.variant_set import Chromosome, Pass
 from ogld.format import Counts, InputError
-from ogld.format.geometry import chromosome_index, chromosome_ranges, local_rows
+from ogld.format.geometry import (
+    chromosome_index,
+    chromosome_ranges,
+    global_rows,
+    local_rows,
+    windows,
+)
 from ogld.identity import Orientation
 from ogld.store import StoreWriter, Variants
 
@@ -102,8 +108,8 @@ def _blocks(
 ) -> Iterator[tuple[int, npt.NDArray[np.float64]]]:
     """A chromosome's genotypes in Variant Set order, a block at a time: (first row, dosages)."""
     with Genotypes(the_plan.filesets[chromosome.fileset]) as genotypes:
-        for first in range(0, len(chromosome), CHUNK_RECORDS):
-            yield first, genotypes.rows(chromosome.rows[first : first + CHUNK_RECORDS])
+        for first, stop in windows(0, len(chromosome), CHUNK_RECORDS):
+            yield first, genotypes.rows(chromosome.rows[first:stop])
 
 
 def drop_flat(the_plan: Plan, found: Pass, chosen: Covariates) -> list[Chromosome]:
@@ -151,6 +157,11 @@ def _units(the_plan: Plan, chromosome: Chromosome, chosen: Covariates) -> npt.ND
         stop = first + len(dosages)
         out[first:stop] = unit_vectors(dosages, chosen, chromosome.a1_is_alt[first:stop])
     return out
+
+
+def _global(local: int, start: int) -> int:
+    """A chromosome's local row as the Variant Set's global row (spec §2)."""
+    return int(global_rows(local, start))
 
 
 def _labels(chromosomes: list[Chromosome]) -> npt.NDArray[np.str_]:
@@ -210,7 +221,7 @@ def write_ld(
         # writer then holds whole while it writes it (ogld#4): the two largest arrays a
         # chromosome makes are never held at once.
         del inputs
-        writer.write_near(start + last.first, last.lengths, last.codes)
+        writer.write_near(_global(last.first, start), last.lengths, last.codes)
         entries = tiles.Entries.of(*found)
         del found
         indptr, partner, codes = entries.both_directions(rows, start)
@@ -250,7 +261,7 @@ def _write_band(
     held: tiles.Tile | None = None
     for tile in tiles.tiles(inputs, threads):
         if held is not None:
-            writer.write_near(start + held.first, held.lengths, held.codes)
+            writer.write_near(_global(held.first, start), held.lengths, held.codes)
         held = tile
         found[0].append(tile.lo)
         found[1].append(tile.hi)

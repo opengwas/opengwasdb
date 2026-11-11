@@ -24,7 +24,7 @@ import numpy as np
 import numpy.typing as npt
 
 from ogld.format import R_SCALE, quantise
-from ogld.format.geometry import indptr_of, near_row_lengths, owners, spans, stop_within
+from ogld.format.geometry import indptr_of, near_row_lengths, owners, spans, stop_within, windows
 
 #: Rows a tile computes: a tile is TILE_ROWS × (variants within far_bp) float64.
 TILE_ROWS: Final = 256
@@ -37,6 +37,7 @@ class Band:
     `ogld.format.geometry` (spec §4, §5)."""
 
     near_length: npt.NDArray[np.int64]
+    change_length: npt.NDArray[np.int64]
     near_stop: npt.NDArray[np.int64]
     far_stop: npt.NDArray[np.int64]
     change_stop: npt.NDArray[np.int64]
@@ -45,6 +46,7 @@ class Band:
     def of(cls, position: npt.NDArray[np.int64], near_bp: int, far_bp: int, change_bp: int) -> Band:
         return cls(
             near_row_lengths(position, near_bp),
+            near_row_lengths(position, change_bp),
             stop_within(position, near_bp),
             stop_within(position, far_bp),
             stop_within(position, change_bp),
@@ -89,8 +91,8 @@ def _ragged(
 ) -> npt.NDArray[np.float64]:
     """Row t's columns starts[t] … stops[t] − 1 of `block`, whose column 0 is row `first`,
     row after row. Each row's run is one slice: five times faster than a fancy index here."""
-    spans = enumerate(zip(starts, stops, strict=True))
-    runs = [block[t, s - first : e - first] for t, (s, e) in spans]
+    rows = enumerate(zip(starts, stops, strict=True))
+    runs = [block[t, s - first : e - first] for t, (s, e) in rows]
     return np.concatenate(runs) if runs else np.empty(0)
 
 
@@ -137,7 +139,7 @@ def change_pairs(
     (spec §7): the tiles measure the change on them, and the build refuses a Variant Set with
     none before it writes (`diagnostic.require_change_pairs`)."""
     starts = np.arange(first + 1, last + 1, dtype=np.int64)
-    length = band.change_stop[first:last] - starts
+    length = band.change_length[first:last]
     t, partner = owners(length), spans(starts, length)
     return t, partner, outside[first + t] & outside[partner]
 
@@ -147,37 +149,37 @@ def _change(
 ) -> npt.NDArray[np.float64]:
     """Adjusted minus unadjusted r for the tile's pairs within `change_bp`, both variants outside
     the Long-Range LD Regions; at k = 0 the two are one and every change is 0."""
-    starts = np.arange(first + 1, last + 1, dtype=np.int64)
-    stops = inputs.band.change_stop[first:last]
-    clear = change_pairs(inputs.band, inputs.outside, first, last)[2]
-    after = _ragged(r, first, starts, stops)[clear]
+    t, partner, clear = change_pairs(inputs.band, inputs.outside, first, last)
+    t, column = t[clear], partner[clear] - first
+    after = r[t, column]
     if inputs.unadjusted is None:
         return np.zeros_like(after)
     u0 = inputs.unadjusted
-    r0 = u0[first:last] @ u0[first : int(stops.max())].T
-    return after - _ragged(r0, first, starts, stops)[clear]
+    reach = int(inputs.band.change_stop[first:last].max())
+    r0 = u0[first:last] @ u0[first:reach].T
+    return after - r0[t, column]
 
 
 def tiles(inputs: Inputs, threads: int) -> Iterator[Tile]:
     """Every tile of the chromosome, in row order, computed on `threads` threads."""
     n = len(inputs.units)
-    spans = [(first, min(first + TILE_ROWS, n)) for first in range(0, n, TILE_ROWS)]
+    blocks = list(windows(0, n, TILE_ROWS))
     if threads <= 1:
-        yield from (_tile(inputs, first, last) for first, last in spans)
+        yield from (_tile(inputs, first, last) for first, last in blocks)
         return
     with ThreadPoolExecutor(max_workers=threads) as pool:
-        yield from _in_order(pool, lambda span: _tile(inputs, *span), spans, 2 * threads)
+        yield from _in_order(pool, lambda span: _tile(inputs, *span), blocks, 2 * threads)
 
 
 def _in_order(
     pool: ThreadPoolExecutor,
     work: Callable[[tuple[int, int]], Tile],
-    spans: list[tuple[int, int]],
+    blocks: list[tuple[int, int]],
     ahead: int,
 ) -> Iterator[Tile]:
-    """`work` of each span, in order, with at most `ahead` in flight: bounded memory."""
+    """`work` of each block, in order, with at most `ahead` in flight: bounded memory."""
     pending: deque[Future[Tile]] = deque()
-    for span in spans:
+    for span in blocks:
         pending.append(pool.submit(work, span))
         if len(pending) >= ahead:
             yield pending.popleft().result()

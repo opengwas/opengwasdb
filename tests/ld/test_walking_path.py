@@ -1,7 +1,8 @@
 """The whole path, once: Test Panel pgen → k = 0 Near Band → `StoreWriter` → `ogld.open` → one pair.
 
 Nothing in it comes from `reference_r` except the expected value: the codes the store answers with
-were computed from the pgen's genotypes by the build's own k = 0 path (ogld#12).
+were computed from the pgen's genotypes, read by `ogld.build.genotypes`, by this file's own plain
+k = 0 band (`k0_near_band`), not by the builder's tiles.
 """
 
 from __future__ import annotations
@@ -9,8 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import build_fixtures as fx
 import numpy as np
 import numpy.typing as npt
+import pytest
 import testdata
 from script_modules import load_script
 
@@ -36,7 +39,7 @@ class NearBand:
 
 
 def k0_near_band(
-    alt: npt.NDArray[np.float64], a1_is_alt: npt.NDArray[np.bool_], positions: npt.NDArray[np.int64]
+    alt: npt.NDArray[np.int8], a1_is_alt: npt.NDArray[np.bool_], positions: npt.NDArray[np.int64]
 ) -> NearBand:
     """The k = 0 Near Band, written out plainly from standardised A1 dosages: this test's own
     oracle for the path, where `ogld.build` tiles the same product."""
@@ -118,3 +121,23 @@ def test_a_pair_from_the_pgen_is_answered_by_the_store_it_wrote(tmp_path: Path) 
     got = StoreReader.open(out).pair_r(mine)[0, 1]
     assert abs(got - ref.r[pick] * sign[i] * sign[j]) <= HALF_STEP + 1e-9
     assert store.near_bp == NEAR_BP
+
+
+def test_the_test_store_script_refuses_a_missing_call_rather_than_average_it(
+    tmp_path: Path,
+) -> None:
+    script = load_script("make_test_store")
+    rows = np.arange(5, dtype=np.int64)
+    calls = fx.hard_calls()[rows].copy()
+    calls[2, 7] = -9
+    pgen = fx.write_fileset(tmp_path / "gappy", rows, genotypes=calls)
+    with pytest.raises(ogld.InputError, match="missing call"):
+        script.alt_counts(rows, pgen)
+    np.testing.assert_array_equal(script.alt_counts(rows[:2], pgen), calls[:2][:, _kept()])
+
+
+def _kept() -> npt.NDArray[np.int64]:
+    """The psam columns of the Test Panel's kept samples (every sample, in psam order)."""
+    iids = [line.split("\t")[0] for line in testdata.panel().psam.read_text().splitlines()[1:]]
+    kept = set(testdata.panel().keep.read_text().splitlines()[1:])
+    return np.array([i for i, iid in enumerate(iids) if iid in kept], dtype=np.int64)
