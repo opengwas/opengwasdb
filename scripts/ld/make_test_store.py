@@ -5,10 +5,11 @@ The Test Store is the LD Store of the Test Panel (`CONTEXT.md`), written from th
 independent `reference_r(10)`, so a reader's tests have real data in the real format before any
 builder exists. Its variants are the rows that pass the build's filters, with the engine's ALID,
 A1 and A2 (`ogld.identity`), reversed indels resolved by the engine's rule; its r is the
-reference r signed to A1 and quantised at × 511, HGDP+1kGP EUR's encoding (spec §3; ADR 0004);
-its Near Band is every pair within 3 Mb and its Proxy Index every pair within 10 Mb whose Stored
-r reaches t_far for n = 771 and the k it was written at (spec §4, §5). It is deterministic: the
-same inputs write the same bytes.
+reference r signed to A1. The script supplies that r and what only its source knows; the store
+makes the rest of it (`StoreWriter`, ogld#17): the codes at × 511, HGDP+1kGP EUR's encoding
+(spec §3; ADR 0004), the Near Band, the Proxy Index at t_far for n = 771 and the k it was written
+at (spec §4, §5), and the counts. It is "import a precomputed r" in miniature. It is
+deterministic: the same inputs write the same bytes.
 
     pixi run -e dev python scripts/make_test_store.py --r-scale 511 [--k 10] [--force] [out]
 
@@ -42,24 +43,8 @@ import ogld
 from ogld.build.diagnostic import long_range_ld_regions
 from ogld.build.genotypes import Genotypes
 from ogld.build.inputs import fileset, read_keep
-from ogld.format import (
-    FAR_BP,
-    FORMAT_VERSION,
-    NEAR_BP,
-    T_FAR_Q,
-    Codes,
-    Provenance,
-    REncoding,
-    t_far,
-)
-from ogld.format.geometry import (
-    chromosome_ranges,
-    global_rows,
-    indptr_of,
-    local_rows,
-    near_row_lengths,
-    within,
-)
+from ogld.format import FAR_BP, NEAR_BP, REncoding, Sourced
+from ogld.format.geometry import chromosome_ranges, local_rows
 from ogld.identity import Orientation, orient, resolve_reversed_indels, variant_order_key
 from ogld.store import StoreWriter, Variants
 
@@ -142,11 +127,13 @@ def variants_table(oriented: list[Orientation], frequency: npt.NDArray[np.float6
     )
 
 
-def code_matrices(
-    vs: VariantSet, k: int, ranges: dict[str, tuple[int, int]], encoding: REncoding
-) -> dict[str, tuple[Codes, npt.NDArray[np.bool_]]]:
-    """Per chromosome, the reference r as `encoding`'s codes for local rows (lo, hi), lo < hi,
-    and where held."""
+def r_matrices(
+    vs: VariantSet, k: int, ranges: dict[str, tuple[int, int]]
+) -> dict[str, npt.NDArray[np.float64]]:
+    """Per chromosome, the reference r signed to A1 as a matrix over its rows: r[lo, hi] for each
+    pair the reference holds, lo < hi, and NaN for every pair it does not. The store cuts each
+    whole; a NaN within far_bp of its row is refused there, so a pair the reference lacks is never
+    read as a Bound."""
     ref = panel_data().reference_r(k)
     store_row = np.full(len(panel_data().variants()), -1, dtype=np.int64)
     store_row[vs.panel_rows] = np.arange(len(vs.panel_rows))
@@ -155,51 +142,13 @@ def code_matrices(
         raise ValueError("reference pairs name a row the Variant Set does not hold")
     r = ref.r * vs.sign[a] * vs.sign[b]
     lo, hi = np.minimum(a, b), np.maximum(a, b)
-    codes = encoding.quantise(r)
     out = {}
     for chrom, (start, stop) in ranges.items():
         mine = (lo >= start) & (lo < stop)
-        size = stop - start
-        dense = np.full((size, size), encoding.reserved_code, dtype=encoding.dtype)
-        held = np.zeros((size, size), dtype=np.bool_)
-        dense[local_rows(lo[mine], start), local_rows(hi[mine], start)] = codes[mine]
-        held[local_rows(lo[mine], start), local_rows(hi[mine], start)] = True
-        out[chrom] = (dense, held)
+        dense = np.full((stop - start, stop - start), np.nan)
+        dense[local_rows(lo[mine], start), local_rows(hi[mine], start)] = r[mine]
+        out[chrom] = dense
     return out
-
-
-def require_every_pair(
-    held: npt.NDArray[np.bool_], position: npt.NDArray[np.int64], chrom: str
-) -> None:
-    """Every pair within far_bp must have a reference r, or a Bound would hide a missing one."""
-    gap = position[None, :] - position[:, None]
-    wanted = np.triu(within(gap, FAR_BP), k=1)
-    if (wanted & ~held).any():
-        raise ValueError(f"the reference lacks a pair within {FAR_BP} bp on chromosome {chrom}")
-
-
-def write_chromosome(
-    writer: StoreWriter,
-    chrom: str,
-    start: int,
-    position: npt.NDArray[np.int64],
-    dense: Codes,
-    held: npt.NDArray[np.bool_],
-    floor: int,
-) -> tuple[int, int, int, int]:
-    """Write one chromosome's Near Band and Proxy Index; return the counts provenance records."""
-    require_every_pair(held, position, chrom)
-    lengths = near_row_lengths(position, NEAR_BP)
-    codes = np.concatenate([dense[row, row + 1 : row + 1 + n] for row, n in enumerate(lengths)])
-    writer.write_near(start, lengths, codes)
-    both = held | held.T
-    symmetric = np.where(held, dense, dense.T)
-    keep = both & (np.abs(symmetric.astype(np.int32)) >= floor)
-    partner = global_rows(np.nonzero(keep)[1], start)
-    indptr = indptr_of(keep.sum(axis=1))
-    writer.write_index(chrom, indptr, partner, symmetric[keep])
-    far = np.triu(~within(position[None, :] - position[:, None], NEAR_BP), k=1) & held
-    return len(codes), int(far.sum()), int((far & keep).sum()), int(keep.sum())
 
 
 INPUTS = ("panel.pgen", "panel.pvar", "panel.psam", "panel.keep", "reference/r.npz")
@@ -283,38 +232,19 @@ def provenance_inputs(k: int) -> dict[str, object]:
     }
 
 
-def provenance(
-    k: int,
-    vs: VariantSet,
-    counts: tuple[int, int, int, int],
-    diagnostic: dict[str, object] | None,
-    build: dict[str, object],
-    encoding: REncoding,
-) -> Provenance:
-    far_t = t_far(panel_data().panel().n_samples, k)
-    near, candidates, far_pairs, entries = counts
+def sourced(
+    k: int, vs: VariantSet, diagnostic: dict[str, object] | None, build: dict[str, object]
+) -> Sourced:
+    """What only the Test Store's source knows of its provenance; `StoreWriter.finish` adds what
+    the store derives from itself (ogld#17)."""
     record: dict[str, object] = {
-        "format_version": FORMAT_VERSION,
-        "encoding": encoding.record(),
         **provenance_inputs(k),
         "variants_dropped": {
             "zero_variance": 0,
             "duplicate_reversed_indel": vs.dropped_reversed,
         },
-        "n_variants": len(vs.panel_rows),
-        "near_bp": NEAR_BP,
-        "far_bp": FAR_BP,
         "adjustment": adjustment(k),
-        "t_far": far_t,
-        "t_far_q": T_FAR_Q,
-        "far_code_floor": encoding.far_code_floor(far_t),
         "pc_diagnostic": diagnostic,
-        "counts": {
-            "near_pairs": near,
-            "far_candidates": candidates,
-            "far_pairs": far_pairs,
-            "index_entries": entries,
-        },
         "software": {
             "ogld": ogld.__version__,
             "numpy": np.__version__,
@@ -322,7 +252,7 @@ def provenance(
         },
         "build": build,
     }
-    return cast(Provenance, record)
+    return cast(Sourced, record)
 
 
 def build_record(started: float) -> dict[str, object]:
@@ -412,21 +342,21 @@ def write_test_store(k: int, out: str | Path, r_scale: int) -> Path:
     """Write the Test Store at `out` from the Test Panel's reference r at `k`, at × `r_scale`;
     return `out`."""
     started = time.perf_counter()
-    encoding = REncoding(r_scale)
     vs = variant_set()
     writer = StoreWriter.create(
-        out, variants=vs.variants, near_bp=NEAR_BP, far_bp=FAR_BP, encoding=encoding
+        out,
+        variants=vs.variants,
+        encoding=REncoding(r_scale),
+        near_bp=NEAR_BP,
+        far_bp=FAR_BP,
+        n=panel_data().panel().n_samples,
+        k=k,
     )
     ranges = chromosome_ranges(vs.variants.chrom)
-    floor = encoding.far_code_floor(t_far(panel_data().panel().n_samples, k))
-    totals = np.zeros(4, dtype=np.int64)
-    for chrom, (dense, held) in code_matrices(vs, k, ranges, encoding).items():
-        start, stop = ranges[chrom]
-        position = vs.variants.position[start:stop]
-        totals += write_chromosome(writer, chrom, start, position, dense, held, floor)
-    counts = (int(totals[0]), int(totals[1]), int(totals[2]), int(totals[3]))
+    for chrom, r in r_matrices(vs, k, ranges).items():
+        writer.write(writer.cut(ranges[chrom][0], r))
     diagnostic = pc_diagnostic(vs, k)
-    writer.finish(provenance(k, vs, counts, diagnostic, build_record(started), encoding))
+    writer.finish(sourced(k, vs, diagnostic, build_record(started)))
     return Path(out)
 
 

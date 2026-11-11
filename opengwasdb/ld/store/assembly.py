@@ -1,52 +1,68 @@
 """What goes in an LD Store, from the r its producer supplies (spec §3–§7, §12; ogld#17).
 
-PROPOSED, ogld#17 step 1: signatures for the owner to confirm before any producer moves. Nothing
-calls this module yet and every body raises NotImplementedError. The annotations use today's
-`Encoding` record and int16 arrays; once ogld#16 merges they become its encoding value and its
-`Codes`, and this module names no scale, dtype or reserved code of its own.
+`StoreWriter` is the seam a producer calls. This module, behind it, owns what goes in a store
+(owner, 10 November 2026; `docs/architecture/ownership.md`, "Provenance and what goes in a
+store"). It handles:
 
-`StoreWriter` is the seam a producer calls (its proposed methods are `_StoreWriterProposal` in
-`ogld/store/writer.py`). This module, behind it, owns what goes in a store (owner, 10 November
-2026; `docs/architecture/ownership.md`, "Provenance and what goes in a store"):
-
-- quantising r at the store's encoding (spec §3);
+- quantising r at the store's encoding, through `ogld.format.REncoding` (spec §3);
 - the Near Band's row lengths and `indptr`, from the positions (spec §4);
 - the threshold at the far code floor, judged on codes, for every pair within far_bp (§3, §5);
 - both directions of the Proxy Index, partners ascending, one code per pair (spec §5);
-- the counts, and the rest of the provenance a store derives from itself (spec §7);
-- and validation at `finish`, as today: `validate_group`, all 18 rules (spec §12).
+- the counts, and the rest of the provenance a store derives from itself (spec §7).
 
-A producer supplies r for blocks of rows in order, and at `finish` what only the source knows
-(`ogld.format.Sourced`).
+Validation at `finish` stays as it was, all 18 rules of spec §12 through `validate_group`. A
+producer supplies r for blocks of rows in order, and at `finish` it supplies what only the
+source knows (`ogld.format.Sourced`).
 
-**Memory is bounded by the block and the far_bp window, never the chromosome.** On chr6 of the
-whole EUR panel (lane #5's `EUR-k10-t16.store`, n = 771: 602,466 rows, 6,826,805,033 Near Band
-codes, 731,767,394 Proxy Index entries), measured from that store's arrays:
+**Memory is bounded by the block and the far_bp window, never the chromosome.** These are
+measured on chr6 of lane #5's whole-EUR store (602,466 rows, 6,826,805,033 Near Band codes,
+731,767,394 Proxy Index entries). What is held:
 
-- Near Band carry: less than one shard of `r`, 67,108,864 codes: 128 MiB.
-- Proxy Index carry: the pairs whose later row is not yet written, at most those spanning one
-  row within far_bp: 33,869,608 pairs at 10 B, 323 MiB, at the MHC.
-- Proxy Index output: less than one shard of `partner` and `r` (1,048,576 entries), 6 MiB, and
-  one block's rows, at most 2,612,379 entries, 25 MiB.
-- Per-row arrays: both `indptr`s and the stops, n_c + 1 int64 each: 18 MiB.
-- Each block in flight: its codes and pairs, at most 8,878,531 and 1,468,811 in a 256-row
-  block: 31 MiB.
-
-About 0.5 GiB, plus 31 MiB for each block a producer holds between cutting and writing it. Today
-the writer holds chr6's band twice, 2 × 13.65 GB, and the builder lays its Proxy Index out whole:
-365,883,697 pairs at 10 B, 731,767,394 entries at 10 B and a 2.9 GB sort order, 13.9 GB at once.
+- **The Near Band carry:** less than one shard of `r`, 67,108,864 codes, so 128 MiB.
+- **The Proxy Index carry:** the pairs whose later row is not yet written. At most these are
+  the pairs spanning one row within far_bp, plus one bucket of `CARRY_ROWS` rows. At the MHC
+  that is 33,869,608 pairs at 10 B, 323 MiB.
+- **The Proxy Index output:** less than one shard each of `partner` and `r`, 6 MiB.
+- **Per-row arrays:** each `indptr`, n_c + 1 int64.
+- **A cut in flight,** between a producer's worker and `write`: at most 31 MiB for a 256-row
+  block.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final, cast
 
 import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import Counts, Encoding, Provenance, Sourced
+from ogld.format import (
+    FORMAT_VERSION,
+    T_FAR_Q,
+    Codes,
+    Counts,
+    Provenance,
+    REncoding,
+    Sourced,
+    t_far,
+)
+from ogld.format.geometry import (
+    chromosome_index,
+    indptr_of,
+    near_row_lengths,
+    spans_at,
+    stop_within,
+)
+from ogld.store import layout
+
+#: The rows of one bucket of the Proxy Index's carried pairs. Pairs are carried by the bucket
+#: their later row falls in, so a bucket is freed once its rows are written. Only the pairs of
+#: one partly written bucket are held beyond those spanning the row being written.
+CARRY_ROWS: Final = 256
+
+_Rows = npt.NDArray[np.int32]
 
 
 @dataclass(frozen=True)
@@ -54,11 +70,12 @@ class Cut:
     """A block of rows cut from its producer's r: what `StoreWriter.write` writes.
 
     `first` is the block's first global row and `rows` how many it holds, all on one chromosome.
-    `near` holds their Near Band codes, row after row (spec §4). `lo`, `hi` and `codes` are
-    their Proxy Index pairs, as local rows lo < hi: each partner hi within far_bp of row lo whose
-    code reaches the far code floor, once, with its one code (spec §3, §5), ascending by
-    (lo, hi). `far_candidates` counts the block's pairs more than near_bp and at most far_bp
-    apart, all judged, and `far_pairs` those of them kept (spec §7).
+    `near` holds their Near Band codes, row after row (spec §4). `lo`, `hi` and `codes` are their
+    Proxy Index pairs, as local rows lo < hi: each partner hi within far_bp of row lo whose code
+    reaches the far code floor, once, with its one code (spec §3, §5), ascending by (lo, hi).
+    `far_candidates` counts the block's pairs more than near_bp and at most far_bp apart, all
+    judged, and `far_pairs` those of them kept (spec §7). `by` is the `Cutter` that cut it, so a
+    cut is written only by its own store.
 
     A producer neither builds nor reads one: it hands what `StoreWriter.cut` returned to
     `StoreWriter.write`.
@@ -66,12 +83,13 @@ class Cut:
 
     first: int
     rows: int
-    near: npt.NDArray[np.int16]
-    lo: npt.NDArray[np.int32]
-    hi: npt.NDArray[np.int32]
-    codes: npt.NDArray[np.int16]
+    near: Codes
+    lo: _Rows
+    hi: _Rows
+    codes: Codes
     far_candidates: int
     far_pairs: int
+    by: Cutter
 
 
 class Cutter:
@@ -85,89 +103,336 @@ class Cutter:
         position: npt.NDArray[np.int64],
         ranges: dict[str, tuple[int, int]],
         distances: tuple[int, int],
-        encoding: Encoding,
+        encoding: REncoding,
         adjusted: tuple[int, int],
     ) -> None:
-        """`adjusted` is (n, k): t_far = `ogld.format.t_far(n, k)`, and the floor is the
-        encoding's for it. Blocks are thresholded as they arrive, so both are fixed before the
-        first; an n and k t_far refuses (n − k − 1 ≤ q) are refused here, before any row."""
-        raise NotImplementedError
+        """`adjusted` is (n, k). Blocks are thresholded as they arrive, so t_far(n, k) and its
+        floor are fixed here, before the first; an n and k with no t_far raise here."""
+        n, k = adjusted
+        self.t_far = t_far(n, k)
+        self.floor = encoding.far_code_floor(self.t_far)
+        self.encoding = encoding
+        self.adjusted = adjusted
+        self.near_bp, self.far_bp = distances
+        self._least = encoding.least_r(self.floor)
+        self._position = position
+        self._ranges = ranges
+        self._names = list(ranges)
+        self._stops = [stop for _, stop in ranges.values()]
 
-    @property
-    def t_far(self) -> float:
-        raise NotImplementedError
+    def chromosome(self, row: int) -> tuple[str, int, int]:
+        """The chromosome of global `row`, its first row and its stop; a row outside the
+        Variant Set raises."""
+        name = self._names[int(chromosome_index(self._stops, [row])[0])]
+        return (name, *self._ranges[name])
 
-    @property
-    def floor(self) -> int:
-        """The far code floor: a pair within far_bp is in the Proxy Index exactly when
-        |code| reaches it (spec §3, §5)."""
-        raise NotImplementedError
+    def positions(self, name: str) -> npt.NDArray[np.int64]:
+        start, stop = self._ranges[name]
+        return self._position[start:stop]
 
     def cut(self, first: int, r: npt.NDArray[np.floating[Any]]) -> Cut:
         """`StoreWriter.cut`'s work, which says what `r` holds.
 
-        For each row l of the block it reads r(l, m) for l < m < far stop(l) only. Every m
-        within near_bp is quantised, in order, for the Near Band. Beyond near_bp only a pair
-        whose |r| can reach the floor is quantised, to judge it on its code; a value that is not
-        a number is such a pair, so quantising refuses it rather than let it pass as below the
-        floor. So a pair the producer did not measure is refused, never stored or read as a
-        Bound (spec §8).
+        For each row l of the block it reads r(l, m) only for l < m < far stop(l). Every m within
+        near_bp is quantised, in order, for the Near Band. Beyond near_bp a pair is quantised,
+        to judge it on its code, only when its |r| can reach the floor. A value that is not a
+        number is such a pair, so quantising refuses it rather than let it pass as below the
+        floor. So a pair the producer did not measure is refused, never stored and never read as
+        a Bound (spec §8).
         """
-        raise NotImplementedError
+        name, start, stop = self.chromosome(first)
+        if r.ndim != 2 or len(r) == 0:
+            raise ValueError(f"r for a block of rows is a matrix with a row each, not {r.shape}")
+        rows, width = r.shape
+        if first + rows > stop:
+            raise ValueError(
+                f"rows {first}–{first + rows - 1} run past the end of chromosome {name} at "
+                f"row {stop - 1}: a block of rows is on one chromosome"
+            )
+        local = first - start
+        near_stop, far_stop = self._stops_of(name, local, rows, width)
+        near = self._near(first, r, near_stop)
+        lo, hi, codes = self._pairs(first, r, far_stop)
+        return Cut(
+            first,
+            rows,
+            near,
+            (local + lo).astype(np.int32),
+            (local + hi).astype(np.int32),
+            codes,
+            int((far_stop - near_stop).sum()),
+            int((hi >= near_stop[lo]).sum()),
+            self,
+        )
+
+    def _stops_of(
+        self, name: str, local: int, rows: int, width: int
+    ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+        """The near and far stops of the block's rows, counted from its first row; refuse an r
+        that is not exactly as wide as its last row's far stop (spec §4, §5)."""
+        position = self.positions(name)
+        reach = position[local : local + width + 1]
+        far_stop = stop_within(reach, self.far_bp)[:rows]
+        if far_stop[-1] != width:
+            last = local + rows - 1
+            want = int(stop_within(position[last:], self.far_bp)[0]) + last - local
+            raise ValueError(
+                f"r for rows {local}–{last} of chromosome {name} has {width} columns; it needs "
+                f"{want} columns from its first row, to the last variant within far_bp = "
+                f"{self.far_bp:,} of its last row (spec §5)"
+            )
+        return stop_within(reach, self.near_bp)[:rows], far_stop
+
+    def _near(
+        self, first: int, r: npt.NDArray[np.floating[Any]], near_stop: npt.NDArray[np.int64]
+    ) -> Codes:
+        """The block's Near Band codes, row after row. Each row's run is one slice: five times
+        faster than a fancy index (lane #5)."""
+        runs = [r[t, t + 1 : stop] for t, stop in enumerate(near_stop)]
+        values = np.concatenate(runs)
+        lengths = near_stop - np.arange(1, len(near_stop) + 1)
+
+        def pair(at: int) -> tuple[int, int]:
+            t, m = spans_at(np.arange(1, len(near_stop) + 1), lengths, [at])
+            return first + int(t[0]), first + int(m[0])
+
+        return self._quantised(values, pair)
+
+    def _pairs(
+        self, first: int, r: npt.NDArray[np.floating[Any]], far_stop: npt.NDArray[np.int64]
+    ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], Codes]:
+        """The block's pairs (t, c), t < c < far stop(t), whose code reaches the floor, as
+        offsets from its first row, ascending by (t, c), with their codes. Only those whose |r|
+        is not below the encoding's `least_r(floor)` are quantised, which keeps every pair whose
+        code can reach the floor; NaN is never below it."""
+        t, c = np.nonzero(~(np.abs(r) < self._least))
+        inside = (c > t) & (c < far_stop[t])
+        t, c = t[inside], c[inside]
+        codes = self._quantised(r[t, c], lambda at: (first + int(t[at]), first + int(c[at])))
+        keep = np.abs(codes.astype(np.int32)) >= self.floor
+        return t[keep], c[keep], codes[keep]
+
+    def _quantised(
+        self, values: npt.NDArray[np.floating[Any]], pair: Callable[[int], tuple[int, int]]
+    ) -> Codes:
+        """`values` as the encoding's codes. The encoding refuses one that is not a correlation;
+        the refusal then names its pair, found by halving."""
+        try:
+            return self.encoding.quantise(values)
+        except ValueError as refused:
+            lo, hi = 0, len(values)
+            while hi - lo > 1:
+                mid = (lo + hi) // 2
+                try:
+                    self.encoding.quantise(values[lo:mid])
+                    lo = mid
+                except ValueError:
+                    hi = mid
+            row, partner = pair(lo)
+            raise ValueError(
+                f"r({row}, {partner}) = {values[lo]} is not a correlation: a pair within far_bp "
+                "that was not measured, or a fault in computing it. Nothing is stored for it, "
+                "and it is never read as a Bound (spec §3, §8)"
+            ) from refused
+
+
+class Appender:
+    """A 1-D array whose length is known only at its end, written a whole shard at a time.
+
+    Zarr writes a shard without reading it back only when a write covers it whole (zarr 3.4.2,
+    `_is_complete_shard_write`). So whole shards are written as they fill, and less than one is
+    carried. The array is created at one shard when the first fills and grows by `resize`. An
+    array under one shard is made at its end, at its clipped shape (spec §6). Either way its
+    shard files and metadata are those of the array written whole (checked on zarr 3.4.2).
+    """
+
+    def __init__(
+        self, make: Callable[[int], zarr.Array[Any]], dtype: npt.DTypeLike, shard: int
+    ) -> None:
+        self._make = make
+        self._buffer = np.empty(shard, dtype=dtype)
+        self._held = 0
+        self._written = 0
+        self._array: zarr.Array[Any] | None = None
+
+    def add(self, values: npt.NDArray[np.generic]) -> None:
+        shard, at = len(self._buffer), 0
+        while at < len(values):
+            take = min(shard - self._held, len(values) - at)
+            self._buffer[self._held : self._held + take] = values[at : at + take]
+            self._held += take
+            at += take
+            if self._held == shard:
+                self._flush()
+
+    def _flush(self) -> None:
+        shard = len(self._buffer)
+        if self._array is None:
+            self._array = self._make(shard)
+        else:
+            self._array.resize((self._written + shard,))
+        self._array[self._written : self._written + shard] = self._buffer
+        self._written += shard
+        self._held = 0
+
+    def close(self) -> int:
+        """Write what is carried; return the array's length."""
+        total = self._written + self._held
+        if self._array is None:
+            self._array = self._make(total)
+        elif self._held:
+            self._array.resize((total,))
+        if self._held:
+            self._array[self._written : total] = self._buffer[: self._held]
+        return total
 
 
 class NearBandStream:
     """One chromosome's Near Band, written as its blocks arrive (spec §4, §6).
 
-    Lane #4's measured design (comment on ogld#17). `r`'s length, the sum of the row lengths,
-    is known from the positions before any code arrives. So `indptr` is written whole, and `r`
-    is created at its full length, when the chromosome's first block arrives. Codes are written
-    in whole shards of `r`, the only writes zarr makes without reading a shard back (zarr 3.4.2,
-    `_is_complete_shard_write`), and less than one shard is carried to the next block. The last
-    shard is written when the last row arrives.
+    This is lane #4's measured design (comment on ogld#17). `r`'s length, the sum of the row
+    lengths, is known from the positions before any code arrives. So `indptr` is written whole,
+    and `r` is created at its full length, when the chromosome's first block arrives. Codes
+    are written in whole shards of `r`, the only writes zarr makes without reading a shard
+    back, and less than one shard is carried to the next block. The last shard is written when
+    the last row arrives.
     """
 
-    def __init__(self, group: zarr.Group, lengths: npt.NDArray[np.int64]) -> None:
-        raise NotImplementedError
+    def __init__(self, group: zarr.Group, lengths: npt.NDArray[np.int64], encoding: REncoding):
+        indptr = indptr_of(lengths)
+        layout.put_numbers(group, "indptr", indptr, layout.INT64_FILL)
+        self._total = int(indptr[-1])
+        self._array = layout.new_r_array(group, "r", self._total, layout.NEAR_R, encoding)
+        shard = layout.clipped(self._total, *layout.NEAR_R)[1]
+        self._buffer = np.empty(min(shard, self._total), dtype=encoding.dtype)
+        self._held = 0
+        self._written = 0
 
-    def add(self, codes: npt.NDArray[np.int16]) -> None:
-        """Append the next rows' codes; write each shard they complete."""
-        raise NotImplementedError
+    def add(self, codes: Codes) -> None:
+        """Append the next rows' codes, writing each shard they complete."""
+        if self._written + self._held + len(codes) > self._total:
+            raise ValueError("more Near Band codes than the chromosome's rows hold (spec §4)")
+        shard, at = len(self._buffer), 0
+        while at < len(codes):
+            take = min(shard - self._held, len(codes) - at)
+            self._buffer[self._held : self._held + take] = codes[at : at + take]
+            self._held += take
+            at += take
+            if self._held == shard:
+                self._array[self._written : self._written + shard] = self._buffer
+                self._written += shard
+                self._held = 0
 
     def close(self) -> None:
         """Write the carried codes; refuse a band whose codes are not the sum of its lengths."""
-        raise NotImplementedError
+        if self._written + self._held != self._total:
+            raise ValueError(
+                f"the Near Band holds {self._written + self._held} codes of {self._total}"
+            )
+        if self._held:
+            self._array[self._written :] = self._buffer[: self._held]
+
+
+_Pairs = tuple[_Rows, _Rows, Codes]
+
+
+def _by_later_row(pairs: list[_Pairs]) -> _Pairs:
+    """Pieces whose earlier rows ascend from piece to piece, each sorted by (hi, lo), as one
+    array sorted by (hi, lo): a stable sort by hi keeps lo ascending within each hi."""
+    lo, hi, codes = (np.concatenate([p[i] for p in pairs]) for i in range(3))
+    order = np.argsort(hi, kind="stable")
+    return lo[order], hi[order], codes[order]
 
 
 class ProxyIndexStream:
     """One chromosome's Proxy Index, both directions, written row by row as blocks arrive (§5).
 
-    Row l holds every pair (m, l) with m < l, from earlier blocks, then every pair (l, m) with
-    m > l, from l's own block. So row l is complete when its own block arrives, and each block's
-    rows are written then: partners below ascending, then partners above, each with its pair's
-    one code. The block's pairs whose later row is still to come are carried: at most the pairs
-    spanning one row within far_bp, however long the chromosome.
+    Row l holds every pair (m, l) with m < l, which come from earlier blocks or its own, then
+    every pair (l, m) with m > l, which come from its own block. So row l is complete when its
+    own block arrives, and each block's rows are written then: partners below ascending, then
+    partners above, each with its pair's one code. A block's pairs whose later row is still to
+    come are carried, in buckets of `CARRY_ROWS` rows by that later row. That is at most the
+    pairs spanning one row within far_bp and one bucket, however long the chromosome.
 
-    `partner` and `r` are written in whole shards. Their length is known only at the
-    chromosome's end, so they grow shard by shard (`zarr.Array.resize`); an index under one
-    shard is written at its clipped shape at the end (spec §6). Step 1 checked on zarr 3.4.2
-    that a grown array's shard files and metadata are byte-identical to the same array written
-    whole, and that no whole-shard write reads a shard back. `indptr` is held and written at the
-    end.
+    `partner` and `r` grow shard by shard (`Appender`). `indptr` is held, n_c + 1 int64, and
+    written at the end.
     """
 
-    def __init__(self, group: zarr.Group, rows: int) -> None:
-        raise NotImplementedError
+    def __init__(self, group: zarr.Group, rows: int, encoding: REncoding) -> None:
+        self._counts = np.zeros(rows, dtype=np.int64)
+        self._group = group
+        self._next = 0
+        self._carried: dict[int, list[_Pairs]] = {}
+        shard = layout.SIDE[1]
+        side = layout.SIDE
+        self._partner = Appender(
+            lambda n: layout.new_numbers(group, "partner", n, np.int32, layout.PARTNER_FILL, side),
+            np.int32,
+            shard,
+        )
+        self._codes = Appender(
+            lambda n: layout.new_r_array(group, "r", n, side, encoding), encoding.dtype, shard
+        )
 
     def add(self, cut: Cut) -> None:
         """Write the rows of `cut`, which continue the rows already written, and carry its
         pairs whose later row is still to come."""
-        raise NotImplementedError
+        a, b = self._next, self._next + cut.rows
+        closing = cut.hi < b
+        below = [*self._take(b), (cut.lo[closing], cut.hi[closing], cut.codes[closing])]
+        lo, hi, codes = _by_later_row(below)
+        self._carry(cut.lo[~closing], cut.hi[~closing], cut.codes[~closing])
+        owner = np.concatenate([hi, cut.lo])
+        partner = np.concatenate([lo, cut.hi])
+        order = np.argsort(owner, kind="stable")
+        self._counts[a:b] = np.bincount(owner - a, minlength=b - a)
+        self._partner.add(partner[order])
+        self._codes.add(np.concatenate([codes, cut.codes])[order])
+        self._next = b
+
+    def _carry(self, lo: _Rows, hi: _Rows, codes: Codes) -> None:
+        """Keep pairs whose later row is still to come, sorted by (hi, lo), in the bucket of
+        that row: a copy each, so a bucket's memory goes when it is written."""
+        if not len(hi):
+            return
+        lo, hi, codes = _by_later_row([(lo, hi, codes)])
+        bucket = hi // CARRY_ROWS
+        edges = np.flatnonzero(np.diff(bucket)) + 1
+        for part in np.split(np.arange(len(hi)), edges):
+            key = int(bucket[part[0]])
+            span = slice(int(part[0]), int(part[-1]) + 1)
+            piece = (lo[span].copy(), hi[span].copy(), codes[span].copy())
+            self._carried.setdefault(key, []).append(piece)
+
+    def _take(self, b: int) -> list[_Pairs]:
+        """The carried pairs whose later row is below `b`, removed from the carry, bucket by
+        bucket in order."""
+        taken: list[_Pairs] = []
+        for key in sorted(k for k in self._carried if k * CARRY_ROWS < b):
+            pieces = self._carried.pop(key)
+            if (key + 1) * CARRY_ROWS <= b:
+                taken += pieces
+                continue
+            kept = []
+            for lo, hi, codes in pieces:
+                at = int(np.searchsorted(hi, b))
+                taken.append((lo[:at], hi[:at], codes[:at]))
+                if at < len(hi):
+                    kept.append((lo[at:], hi[at:], codes[at:]))
+            if kept:
+                self._carried[key] = kept
+        return taken
 
     def close(self) -> int:
         """Write `indptr` and the last entries; return the entries written. A carried pair left
         over would be a row never written, and is refused."""
-        raise NotImplementedError
+        if self._carried or self._next != len(self._counts):
+            raise ValueError("the Proxy Index has rows not written: a store assembly fault")
+        layout.put_numbers(self._group, "indptr", indptr_of(self._counts), layout.INT64_FILL)
+        total = self._partner.close()
+        if self._codes.close() != total:
+            raise ValueError("the Proxy Index's partners and codes disagree: an assembly fault")
+        return total
 
 
 @dataclass
@@ -180,15 +445,80 @@ class Tally:
     index_entries: int = 0
 
     def add(self, cut: Cut) -> None:
-        raise NotImplementedError
+        self.near_pairs += len(cut.near)
+        self.far_candidates += cut.far_candidates
+        self.far_pairs += cut.far_pairs
 
     def counts(self) -> Counts:
-        raise NotImplementedError
+        return {
+            "near_pairs": self.near_pairs,
+            "far_candidates": self.far_candidates,
+            "far_pairs": self.far_pairs,
+            "index_entries": self.index_entries,
+        }
+
+
+class Chromosome:
+    """One chromosome being written: its Near Band and its Proxy Index."""
+
+    def __init__(self, root: zarr.Group, cutter: Cutter, name: str) -> None:
+        self.name = name
+        position = cutter.positions(name)
+        self.near = NearBandStream(
+            root.require_group(f"near/{name}"),
+            near_row_lengths(position, cutter.near_bp),
+            cutter.encoding,
+        )
+        self.index = ProxyIndexStream(
+            root.require_group(f"index/{name}"), len(position), cutter.encoding
+        )
+
+    def add(self, cut: Cut) -> None:
+        self.near.add(cut.near)
+        self.index.add(cut)
+
+    def close(self) -> int:
+        """Finish both; return the Proxy Index's entries."""
+        self.near.close()
+        return self.index.close()
+
+
+_PRODUCER_KEYS: Final = frozenset(Sourced.__required_keys__)
 
 
 def provenance(sourced: Sourced, cutter: Cutter, n_variants: int, tally: Tally) -> Provenance:
-    """The store's provenance: the producer's `sourced`, and what the store derives from itself:
-    `format_version`, `encoding`, `n_variants`, `near_bp`, `far_bp`, `t_far`, `t_far_q`,
-    `far_code_floor` and `counts` (spec §7). Refuses a `sourced` whose `panel.n` or
-    `adjustment.k` is not the n and k the store was thresholded with, naming both."""
-    raise NotImplementedError
+    """The store's provenance, in spec §7's order. It is the producer's `sourced` plus what the
+    store derives from itself: `format_version`, `encoding`, `n_variants`, `near_bp`, `far_bp`,
+    `t_far`, `t_far_q`, `far_code_floor` and `counts`. A `sourced` that carries a key of the
+    store's, lacks one of the producer's, or records an n or k other than the threshold's is
+    refused."""
+    given = dict(sourced)
+    ours = sorted(set(given) - _PRODUCER_KEYS)
+    if ours:
+        raise ValueError(
+            f"{', '.join(ours)}: the store derives these itself; a producer gives only "
+            f"{sorted(_PRODUCER_KEYS)} (spec §7)"
+        )
+    missing = sorted(_PRODUCER_KEYS - set(given))
+    if missing:
+        raise ValueError(f"provenance lacks {', '.join(missing)}, which only its producer knows")
+    n, k = cutter.adjusted
+    said = (sourced["panel"]["n"], sourced["adjustment"]["k"])
+    if said != (n, k):
+        raise ValueError(
+            f"provenance records n = {said[0]} and k = {said[1]}, but the store was "
+            f"thresholded at t_far for n = {n} and k = {k} (spec §3)"
+        )
+    derived: dict[str, Any] = {
+        "format_version": FORMAT_VERSION,
+        "encoding": cutter.encoding.record(),
+        "n_variants": n_variants,
+        "near_bp": cutter.near_bp,
+        "far_bp": cutter.far_bp,
+        "t_far": cutter.t_far,
+        "t_far_q": T_FAR_Q,
+        "far_code_floor": cutter.floor,
+        "counts": tally.counts(),
+    }
+    order = Provenance.__annotations__
+    return cast(Provenance, {key: derived.get(key, given.get(key)) for key in order})

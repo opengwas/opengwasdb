@@ -188,14 +188,12 @@ class Provenance(TypedDict):
 
 
 class Sourced(TypedDict):
-    """PROPOSED (ogld#17, step 1): the provenance only a store's producer knows (spec §7; owner,
-    10 November 2026): what r was computed from, how, by what software and at what cost.
+    """The provenance only a store's producer knows (spec §7; owner, 10 November 2026): what r
+    was computed from and how, by what software, and at what cost.
 
     A producer hands this to `StoreWriter.finish`, which adds what the store derives from itself:
     `format_version`, `encoding`, `n_variants`, `near_bp`, `far_bp`, `t_far`, `t_far_q`,
-    `far_code_floor` and `counts`. Together they are `Provenance`, key for key; a test will hold
-    the two halves to `REQUIRED_KEYS`. `reference_assembly`, `variants_dropped` and `software`
-    have no row on the ownership page today; this proposal gives them to the producer.
+    `far_code_floor` and `counts`. Together they are `Provenance`, key for key.
     """
 
     source: Source

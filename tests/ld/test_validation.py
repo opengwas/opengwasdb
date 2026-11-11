@@ -28,8 +28,8 @@ from store_copies import FLOOR, R_SCALE, TEST_STORE, arrays, copy_store
 
 import ogld
 from ogld import cli
-from ogld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError, Provenance, REncoding
-from ogld.store import StoreReader, StoreWriter, validation
+from ogld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError, REncoding, Sourced
+from ogld.store import StoreReader, StoreWriter, Variants, validation
 from ogld.store.validation import ValidationFailed, validate_group
 
 #: The rules that read the Near Band, the Proxy Index or the variant columns in windows.
@@ -593,33 +593,6 @@ def test_an_indptr_that_ends_past_its_array_is_a_finding_not_a_crash(
     assert peak < 64 << 20, f"validation held {peak:,} bytes"
 
 
-@pytest.mark.parametrize(
-    ("change", "message"),
-    [
-        ({"n_variants": 5}, "n_variants"),
-        ({"far_bp": 9_000_000}, "near_bp and far_bp"),
-        ({"encoding": {"r_scale": 1}}, "encoding"),
-        # An encoding the format admits, but not the one the codes were written in.
-        (
-            {
-                "encoding": {
-                    "r_dtype": "int16",
-                    "r_scale": 2047,
-                    "r_reserved_code": -32768,
-                    "rounding": "half_to_even",
-                }
-            },
-            f"written at × {R_SCALE}",
-        ),
-    ],
-)
-def test_finish_refuses_a_provenance_that_disagrees_with_what_was_written(
-    tmp_path: Path, change: dict[str, Any], message: str
-) -> None:
-    with pytest.raises(ValueError, match=message):
-        four_rows(tmp_path, "disagree").finish(provenance(**change))
-
-
 def test_a_finding_names_five_elements_and_counts_the_rest(tmp_path: Path) -> None:
     copy = copy_store(tmp_path / "store")
     frequency = zarr.open_array(copy / "variants" / "a1_frequency", mode="r+")
@@ -674,36 +647,57 @@ def test_ogld_validate_exits_1_naming_the_rule_a_store_breaks(
 # ------------------------------------------------------------------ on write
 
 
-def four_rows(tmp_path: Path, name: str) -> StoreWriter:
+#: The Store-derived keys `finish` adds itself (ogld#17); the rest of provenance is the
+#: producer's.
+DERIVED = (
+    "format_version",
+    "encoding",
+    "n_variants",
+    "near_bp",
+    "far_bp",
+    "t_far",
+    "t_far_q",
+    "far_code_floor",
+    "counts",
+)
+
+
+def four_rows(tmp_path: Path, name: str, frequency: float | None = None) -> StoreWriter:
     """A writer over the Test Store's first four variants, chr21, each within 3 Mb of the rest,
-    with their Near Band written below the far code floor and so an empty Proxy Index."""
+    with their r written below the far code floor, so an empty Proxy Index. `frequency`, when
+    given, replaces every A1 frequency."""
     variants = StoreReader.open(TEST_STORE).variants(np.arange(4))
     assert set(variants.chrom) == {"21"}, "the four rows must share a chromosome"
     assert np.ptp(variants.position) <= 3_000_000, "and all lie within near_bp"
+    if frequency is not None:
+        v = variants
+        variants = Variants(v.chrom, v.position, v.alid, v.a1, v.a2, np.full(4, frequency))
     writer = StoreWriter.create(
         tmp_path / name,
         variants=variants,
+        encoding=REncoding(R_SCALE),
         near_bp=3_000_000,
         far_bp=10_000_000,
-        encoding=REncoding(R_SCALE),
+        n=771,
+        k=10,
     )
-    writer.write_near(0, np.array([3, 2, 1, 0]), np.array([10, -20, 30, 40, -50, 60], np.int16))
-    writer.write_index(
-        "21", np.zeros(5, dtype=np.int64), np.empty(0, np.int64), np.empty(0, np.int16)
-    )
+    r = np.full((4, 4), np.nan)
+    r[np.triu_indices(4, k=1)] = np.array([10, -20, 30, 40, -50, 60]) / R_SCALE
+    writer.write(writer.cut(0, r))
     return writer
 
 
-def provenance(**changes: Any) -> Provenance:
-    """The Test Store's provenance for the four rows, with `changes`."""
+def sourced(**changes: Any) -> Sourced:
+    """The Test Store's provenance without the keys the store derives, with `changes`."""
     p: dict[str, Any] = json.loads(json.dumps(StoreReader.open(TEST_STORE).provenance))
-    p["n_variants"] = 4
+    for key in DERIVED:
+        del p[key]
     p.update(changes)
-    return cast(Provenance, p)
+    return cast(Sourced, p)
 
 
 def test_finish_writes_the_provenance_of_a_store_that_passes_every_rule(tmp_path: Path) -> None:
-    written = four_rows(tmp_path, "good").finish(provenance(), threads=2)
+    written = four_rows(tmp_path, "good").finish(sourced(), threads=2)
     assert written["n_variants"] == 4
     assert not any(ogld.validate(tmp_path / "good").values())
     store = ogld.open(tmp_path / "good")
@@ -714,16 +708,20 @@ def test_finish_writes_the_provenance_of_a_store_that_passes_every_rule(tmp_path
 def test_finish_refuses_a_store_that_breaks_a_rule_and_leaves_it_unreadable(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(ValidationFailed, match=r"provenance\.threshold at t_far") as failed:
-        four_rows(tmp_path, "bad").finish(provenance(t_far=0.02))
+    # The store derives t_far itself (ogld#17), so a rule is broken here through what the
+    # producer supplies: an A1 frequency of 1, which no variant of an LD Store has.
+    with pytest.raises(ValidationFailed, match=r"variants\.frequency") as failed:
+        four_rows(tmp_path, "bad", frequency=1.0).finish(sourced())
     assert [rule for rule, found in failed.value.findings.items() if found] == [
-        "provenance.threshold"
+        "variants.frequency"
     ]
     with pytest.raises(InputError, match="provenance"):
         StoreReader.open(tmp_path / "bad")
 
 
 def test_finish_refuses_a_provenance_json_cannot_hold(tmp_path: Path) -> None:
+    dropped = {"zero_variance": np.int64(0), "duplicate_reversed_indel": 0}
+    writer = four_rows(tmp_path, "numpy")
     with pytest.raises(ValueError, match="plain JSON"):
-        four_rows(tmp_path, "numpy").finish(provenance(n_variants=np.int64(4)))
+        writer.finish(sourced(variants_dropped=dropped))
     assert "ld_store" not in zarr.open_group(tmp_path / "numpy", mode="r").attrs

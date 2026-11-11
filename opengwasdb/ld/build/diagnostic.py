@@ -30,7 +30,7 @@ import numpy as np
 import numpy.typing as npt
 
 from ogld.build import tiles
-from ogld.format import FAR_BP, NEAR_BP, InputError, PcDiagnostic
+from ogld.format import FAR_BP, InputError, PcDiagnostic
 
 SEED: Final = 405
 MAX_VARIANTS: Final = 3_000
@@ -84,7 +84,7 @@ def require_change_pairs(
     an MHC-only slice: its change in r cannot be measured (spec §7). Each chromosome's sorted
     positions say so before the build writes anything, so nothing is left half-written."""
     for chrom, position in positions:
-        band = tiles.Band.of(position, NEAR_BP, FAR_BP, CHANGE_BP)
+        band = tiles.Band.of(position, FAR_BP, CHANGE_BP)
         clear = tiles.change_pairs(band, outside_regions(chrom, position), 0, len(position))[2]
         if clear.any():
             return

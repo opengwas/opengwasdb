@@ -1,9 +1,9 @@
-"""What a build records about itself: its inputs, settings, counts and cost (spec §7).
+"""What a build records about itself: its inputs, settings, diagnostic and cost (spec §7).
 
-The provenance is assembled in one place and handed to `StoreWriter.finish`, the call that
-writes it beside the arrays it describes (CONTRIBUTING.md, "When a coupled operation can be
-half-done, make it one function"). It holds counts, hashes and settings, never a sample
-identifier or a per-sample value.
+What only the build knows is assembled in one place and handed to `StoreWriter.finish`, which
+adds what the store derives from itself and writes it beside the arrays it describes
+(CONTRIBUTING.md, "When a coupled operation can be half-done, make it one function"). It holds
+counts, hashes and settings, never a sample identifier or a per-sample value.
 """
 
 from __future__ import annotations
@@ -22,17 +22,13 @@ import zarr
 
 from ogld.build.variant_set import PASSING_FILTERS
 from ogld.format import (
-    FORMAT_VERSION,
-    T_FAR_Q,
     Adjustment,
     Build,
-    Counts,
     Panel,
     PcCheck,
     PcDiagnostic,
-    Provenance,
-    REncoding,
     Source,
+    Sourced,
     VariantFilters,
 )
 from ogld.version import __version__
@@ -143,11 +139,9 @@ class Head:
 
 @dataclass(frozen=True)
 class Made:
-    """What the build made: the Variant Set's size and drops, its counts and diagnostic."""
+    """What the build made that only it knows: the Variant Set's drops and the PC Diagnostic."""
 
-    n_variants: int
     dropped: dict[str, int]
-    counts: Counts
     diagnostic: PcDiagnostic
 
 
@@ -160,35 +154,18 @@ def software() -> dict[str, str]:
     }
 
 
-def provenance(
-    head: Head,
-    adjusted: Adjustment,
-    made: Made,
-    measured: tuple[int, int, float, int],
-    build: Build,
-    encoding: REncoding,
-) -> Provenance:
-    """The whole `ld_store` attribute. `measured` is what the build applied: (near_bp, far_bp,
-    t_far, far code floor), so provenance records the threshold the Proxy Index was cut at,
-    computed once, never a second computation of it; and `encoding` the scale it was given."""
-    near_bp, far_bp, far_t, floor = measured
+def sourced(head: Head, adjusted: Adjustment, made: Made, build: Build) -> Sourced:
+    """What only the build knows of the store's provenance (spec §7). `StoreWriter.finish` adds
+    what the store derives from itself: the encoding, the distances, t_far and its floor, the
+    counts and the Variant Set's size (ogld#17)."""
     return {
-        "format_version": FORMAT_VERSION,
-        "encoding": encoding.record(),
         "source": head.source,
         "panel": head.panel,
         "reference_assembly": "GRCh38",
         "variant_filters": head.variant_filters,
         "variants_dropped": dict(made.dropped),
-        "n_variants": made.n_variants,
-        "near_bp": near_bp,
-        "far_bp": far_bp,
         "adjustment": adjusted,
-        "t_far": far_t,
-        "t_far_q": T_FAR_Q,
-        "far_code_floor": floor,
         "pc_diagnostic": made.diagnostic,
-        "counts": made.counts,
         "software": software(),
         "build": build,
     }
