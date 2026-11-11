@@ -65,10 +65,11 @@ def counted(where: object) -> tuple[StoreReader, Counting]:
 
 def reference_greedy(
     score: npt.NDArray[np.float64], r2: float, kb: float
-) -> tuple[npt.NDArray[np.int64], int]:
+) -> tuple[npt.NDArray[np.int64], int, int]:
     """plink2's greedy over the Test Store's variants from the reference r, quantised: each
-    variant's lead, and the pairs the leads need, each lead with every hit still open within
-    W on its chromosome. Ties go to the row, the engine's order (spec §2)."""
+    variant's lead; the pairs the leads need, each lead with every hit still open within W
+    on its chromosome; and the entries of the leads' Proxy Index rows, every partner within
+    far_bp whose code reaches the floor (spec §5). Ties go to the row, the engine's order."""
     rows = passing_rows()
     pos = panel_data().variants().pos.astype(np.int64)[rows]
     chrom = np.asarray(panel_data().variants().chrom)[rows]
@@ -76,35 +77,47 @@ def reference_greedy(
     held = ~np.isnan(ref)
     r = np.full(ref.shape, np.nan)
     r[held] = dequantise(support.quantise(ref[held]))
+    code = np.zeros(ref.shape, dtype=np.int64)
+    code[held] = np.abs(support.quantise(ref[held]).astype(np.int64))
     lead = np.full(len(rows), -1, dtype=np.int64)
-    needed = 0
+    needed = indexed = 0
     for i in np.lexsort((np.arange(len(rows)), -score)):
         if lead[i] >= 0:
             continue
         lead[i] = i
-        open_near = (lead < 0) & (chrom == chrom[i]) & (np.abs(pos - pos[i]) < kb * 1000)
+        same = chrom == chrom[i]
+        open_near = (lead < 0) & same & (np.abs(pos - pos[i]) < kb * 1000)
         needed += int(open_near.sum())
+        far = same & (np.abs(pos - pos[i]) <= 10_000_000) & (code[i] >= support.FLOOR)
+        indexed += int(far.sum()) - int(far[i])
         lead[open_near & (r[i] * r[i] > r2)] = i
-    return lead, needed
+    return lead, needed, indexed
 
 
 #: What the leads need, on the Test Store at f0e90de: the tip's square read resolved 1,495,403
 #: pairs at r² 0.1 (64 times as many), and 33,187 Near Band entries are the leads' whole rows
 #: and columns at r² 0.01, below t_far.
 NEEDED = {0.1: 23_327, 0.01: 7_246}
+#: What the reader takes (spec §10): at r² 0.1 ≥ t_far the 439 leads' Proxy Index rows, and
+#: below t_far exactly the pairs the leads need. An exact count, so a counter that saw nothing
+#: fails the test rather than passing under its bound.
+RESOLVED = {0.1: 3_119, 0.01: 7_246}
 
 
 @pytest.mark.parametrize("r2", sorted(NEEDED))
 def test_clump_resolves_at_most_twice_the_pairs_it_needs(r2: float) -> None:
     rows = passing_rows()
     z = np.abs(panel_data().gwas().z)[rows]
-    lead, needed = reference_greedy(z, r2, 3000)
+    lead, needed, indexed = reference_greedy(z, r2, 3000)
     assert needed == NEEDED[r2], "the leads' candidates, as the tip counted them"
     assert len(np.unique(lead)) > 200, "many leads, each reading its own pairs"
+    taken = indexed if r2 >= support.T_FAR else needed
+    assert taken == RESOLVED[r2], "the leads' index rows above t_far, their pairs below it"
     reader, cache = counted(support.TEST_STORE)
     ours = clumping.clump(reader, alids(rows), z, r2=r2, kb=3000)
     assert list(ours.lead) == alids(rows[lead])
-    assert cache.resolved() <= 2 * needed, f"resolved {cache.resolved()} for {needed} needed"
+    assert cache.resolved() == taken, f"resolved {cache.resolved()} for {needed} needed"
+    assert cache.resolved() <= 2 * needed
 
 
 #: The Variant Set's string columns (spec §2).

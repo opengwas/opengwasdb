@@ -144,6 +144,7 @@ def test_clump_reads_pairs_within_the_window_only_and_the_leads_are_unchanged() 
     reader = StoreReader.open(support.TEST_STORE)
     reader._cache = spy = Largest()
     narrow = clumping.clump(reader, alids(rows), z, r2=0.01, kb=100)
+    assert spy.largest > 0, "the reads must be counted for this to mean anything"
     assert spy.largest < len(rows) // 4, "a 100 kb window must not read an n × n matrix"
     assert list(narrow.lead) == alids(rows[greedy(rows, z, 0.01, 100)])
 
