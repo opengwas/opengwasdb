@@ -7,6 +7,6 @@
   recovery, the same rows dropped and faults named, and the same indels placed
   by `hm_code` (ADR 0079). A block the columns cannot show they read as the
   per-row rules do is read by those rules, and logged once per source with its
-  byte offset and why; a source with a declared imputation score is read row by
-  row throughout. Stores and Admission records are unchanged. FinnGen's
+  byte offset and why. A declared imputation score is read in columns too, with
+  the per-row reader's statuses. Stores and Admission records are unchanged. FinnGen's
   columnar engine now lives in `opengwasdb.readers.columnar`, shared by both.
