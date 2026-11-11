@@ -281,8 +281,11 @@ class StoreReader:
           `among`, one element of `near/<c>/r` per pair of a row and a member of `among` within
           the window, and nothing else.
 
-        Memory: the kept entries, 32 bytes each, and one block of at most `_PAIRS_PER_STEP`
-        entries read before they are judged.
+        Memory: 48 bytes per kept entry, its partner, r and distance held once as read and
+        once in the result while they are put in order. Beside them, one block at a time as
+        it is read and judged: at most `_PAIRS_PER_STEP` entries (or one row's, if more) of at
+        most 72 bytes each, measured at 30 for the index and 53–70 for the Near Band, and some
+        600 bytes of bookkeeping a block. `tests/test_partner_reads.py` holds the bound.
         """
         p = self._provenance
         judge_window(
@@ -301,10 +304,13 @@ class StoreReader:
         else:
             read = partial(self._listed_entries, reach=reach, listed=listed)
 
-        def entries(c: _Chromosome, local: npt.NDArray[np.int64]) -> _RowEntries:
-            return self._judged(c, local, (read, estimate), r2=r2, reach=reach, listed=listed)
+        def judge(
+            gap: npt.NDArray[np.int64], partner: npt.NDArray[np.int64], r: npt.NDArray[np.float64]
+        ) -> npt.NDArray[np.bool_]:
+            kept = within(gap, reach) & (r * r >= r2)
+            return kept if listed is None else kept & _member(partner, listed)
 
-        return self._gather(rows, entries)
+        return self._gather(rows, (read, estimate), judge)
 
     def r_of_pairs(
         self, first: npt.NDArray[np.int64], second: npt.NDArray[np.int64]
@@ -318,10 +324,25 @@ class StoreReader:
         its earlier variant. `partners` (below t_far, with `among`) and `pair_r` resolve
         their pairs as it does, so a pair is resolved in one place.
 
-        Memory: the result, and at most `_PAIRS_PER_STEP` pairs' addresses at a time with the
-        index rows of that step's earlier variants.
+        Memory: the result, 8 bytes a pair, and one step of at most `_PAIRS_PER_STEP` pairs
+        at a time, about 60 bytes each (58 measured), with the index rows of that step's
+        earlier variants. The broadcast is never copied, so one row against many holds its
+        result and one step. `tests/test_partner_reads.py` holds the bound.
         """
-        a, b = (self._checked(x.ravel()) for x in np.broadcast_arrays(first, second))
+        # Views of the broadcast, never copies: one row against many is one row, repeated by a
+        # stride of 0, and each step reads its own slice of them.
+        each, other = np.broadcast_arrays(np.asarray(first, np.int64), np.asarray(second, np.int64))
+        if each.ndim != 1:
+            raise ValueError(f"pairs are one-dimensional lists of rows, not of shape {each.shape}")
+        out = np.full(len(each), np.nan)
+        for s, e in windows(0, len(out), _PAIRS_PER_STEP):
+            out[s:e] = self._step_r(self._checked(each[s:e]), self._checked(other[s:e]))
+        return out
+
+    def _step_r(
+        self, a: npt.NDArray[np.int64], b: npt.NDArray[np.int64]
+    ) -> npt.NDArray[np.float64]:
+        """The Stored r of one step of global pairs, NaN across chromosomes."""
         out = np.full(len(a), np.nan)
         which = chromosome_index(self._stops, a)
         same = which == chromosome_index(self._stops, b)
@@ -369,7 +390,7 @@ class StoreReader:
         """Each row's Proxy Index entries: every partner within far_bp, either side, with
         r̂² ≥ t_far, and its Stored r (spec §5). One sparse row per variant (§10). The stored
         part as it is: no query calls it, `partners` chooses it."""
-        return self._gather(rows, self._index_entries)
+        return self._gather(rows, (self._index_entries, _index_length))
 
     def band(self, rows: npt.NDArray[np.int64]) -> Partners:
         """Each row's Near Band partners on both sides, with their Stored r (spec §4, §10).
@@ -378,7 +399,9 @@ class StoreReader:
         each row of the preceding near_bp. It is the slow read the Proxy Index exists to
         avoid. The stored part as it is: no query calls it, `partners` chooses it.
         """
-        return self._gather(rows, partial(self._band_entries, reach=self._provenance["near_bp"]))
+        near_bp = self._provenance["near_bp"]
+        part = (partial(self._band_entries, reach=near_bp), partial(_window_rows, reach=near_bp))
+        return self._gather(rows, part)
 
     # ------------------------------------------------------------ resolving pairs
 
@@ -508,60 +531,49 @@ class StoreReader:
         length = np.bincount(which, minlength=len(local)).astype(np.int64)
         return length, partner, self._local_r(c, local[which], partner)
 
-    def _judged(
+    def _blocks(
         self,
         c: _Chromosome,
         local: npt.NDArray[np.int64],
         part: tuple[_Read, _Estimate],
-        *,
-        r2: float,
-        reach: int,
-        listed: npt.NDArray[np.int64] | None,
-    ) -> _RowEntries:
-        """The entries a part's read gives `local` rows, kept where d ≤ reach and r̂² ≥ r2
-        (and in `listed`, when given): a block of rows at a time, by the part's estimate of
-        each row's entries, so what is held before it is judged stays near
-        `_PAIRS_PER_STEP` entries."""
+        judge: _Judge | None,
+    ) -> Iterator[tuple[int, int, _Kept]]:
+        """The entries a part's read gives `local` rows, a block of rows [a, b) at a time, by
+        the part's estimate of each row's entries: each block's partners as global rows, with
+        Stored r and distance, and kept only where `judge` says, when one is given. So what is
+        held before it is judged stays near `_PAIRS_PER_STEP` entries, and no block is joined
+        to another."""
         read, estimate = part
-        lengths, partners, rs = [], [], []
         for a, b in blocks((indptr_of(estimate(c, local)), _PAIRS_PER_STEP)):
             length, partner, r = read(c, local[a:b])
-            which = owners(length)
-            gap = c.position[partner] - c.position[local[a:b][which]]
-            keep = within(gap, reach) & (r * r >= r2)
-            if listed is not None:
-                keep &= _member(global_rows(partner, c.start), listed)
-            lengths.append(np.bincount(which[keep], minlength=b - a).astype(np.int64))
-            partners.append(partner[keep])
-            rs.append(r[keep])
-        return np.concatenate(lengths), np.concatenate(partners), np.concatenate(rs)
+            gap = c.position[partner] - c.position[owners(length, local[a:b])]
+            np.abs(gap, out=gap)
+            partner = global_rows(partner, c.start)
+            if judge is not None:
+                kept = judge(gap, partner, r)
+                length = np.bincount(owners(length)[kept], minlength=b - a).astype(np.int64)
+                partner, r, gap = partner[kept], r[kept], gap[kept]
+            yield a, b, (length, partner, r, gap)
 
     def _gather(
         self,
         rows: npt.NDArray[np.int64],
-        entries: Callable[[_Chromosome, npt.NDArray[np.int64]], _RowEntries],
+        part: tuple[_Read, _Estimate],
+        judge: _Judge | None = None,
     ) -> Partners:
-        """The partners `entries` gives each of `rows`, as global rows, in CSR form, with each
-        one's distance from the positions the reader keeps."""
+        """The partners a part's read gives each of `rows`, in CSR form in the order asked.
+
+        Each block is held as read until every row's length is known, then put in its place
+        in the result and let go: the kept entries are held twice only while they are put in
+        order (see `partners`)."""
         rows = self._checked(rows)
         length = np.empty(len(rows), dtype=np.int64)
-        found: list[tuple[npt.NDArray[np.int64], _RowEntries, npt.NDArray[np.int64]]] = []
+        found: list[tuple[npt.NDArray[np.int64], _Kept]] = []
         for c, members in self._by_chromosome(rows):
-            local = local_rows(rows[members], c.start)
-            got = entries(c, local)
-            length[members] = got[0]
-            gap = c.position[got[1]] - c.position[owners(got[0], local)]
-            found.append((members, (got[0], global_rows(got[1], c.start), got[2]), np.abs(gap)))
-        indptr = indptr_of(length)
-        partner = np.empty(int(indptr[-1]), dtype=np.int64)
-        r = np.empty(int(indptr[-1]), dtype=np.float64)
-        distance = np.empty(int(indptr[-1]), dtype=np.int64)
-        for members, (lengths, partners, values), gaps in found:
-            where = spans(indptr[members], lengths)
-            partner[where] = partners
-            r[where] = values
-            distance[where] = gaps
-        return Partners(indptr, partner, r, distance)
+            for a, b, kept in self._blocks(c, local_rows(rows[members], c.start), part, judge):
+                length[members[a:b]] = kept[0]
+                found.append((members[a:b], kept))
+        return _placed_in_order(length, found)
 
     def _listed(self, among: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
         """`among`, if it is ascending, distinct rows of the Variant Set."""
@@ -644,8 +656,16 @@ class StoreReader:
         return rows
 
 
-#: What `_gather` asks for each chromosome: row lengths, partners (local rows) and Stored r.
+#: What a stored part's read gives some rows: row lengths, partners (local rows), Stored r.
 _RowEntries = tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.float64]]
+#: A block's kept entries: row lengths, partners (global rows), Stored r and distance.
+_Kept = tuple[
+    npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.float64], npt.NDArray[np.int64]
+]
+#: Which of a block's entries `partners` keeps, from their distance, partner and Stored r.
+_Judge = Callable[
+    [npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.float64]], npt.NDArray[np.bool_]
+]
 #: A stored part's read of some local rows of one chromosome, and its estimate of each row's
 #: entries before they are judged, which sizes the blocks `partners` reads.
 _Read = Callable[["_Chromosome", npt.NDArray[np.int64]], _RowEntries]
@@ -663,6 +683,22 @@ def _window_rows(
     """How many rows lie within `reach` of each local row, on both sides, itself included."""
     lo, hi = position_rows(c.position, c.position[local] - reach, c.position[local] + reach)
     return hi - lo
+
+
+def _placed_in_order(
+    length: npt.NDArray[np.int64], found: list[tuple[npt.NDArray[np.int64], _Kept]]
+) -> Partners:
+    """The CSR result of rows of `length` entries, from blocks of rows held in `found`: each
+    block is copied to its place, then dropped, so it is not held beside the whole result."""
+    indptr = indptr_of(length)
+    partner = np.empty(int(indptr[-1]), dtype=np.int64)
+    r = np.empty(int(indptr[-1]), dtype=np.float64)
+    distance = np.empty(int(indptr[-1]), dtype=np.int64)
+    while found:
+        members, (lengths, partners, values, gaps) = found.pop()
+        where = spans(indptr[members], lengths)
+        partner[where], r[where], distance[where] = partners, values, gaps
+    return Partners(indptr, partner, r, distance)
 
 
 def _member(rows: npt.NDArray[np.int64], listed: npt.NDArray[np.int64]) -> npt.NDArray[np.bool_]:

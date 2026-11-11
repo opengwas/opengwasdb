@@ -195,3 +195,52 @@ def test_a_matrix_query_holds_one_float64_copy_of_its_result(
     # Two float64 copies alone would be twice the result; the rest is the mask, one step's
     # pairs and the variant table's strings.
     assert peak < 2 * r.nbytes, f"peak {peak:,} bytes for a {r.nbytes:,}-byte result"
+
+
+@pytest.mark.parametrize("among", [False, True])
+def test_partners_holds_what_its_docstring_states(
+    among: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # partners() states 48 bytes per kept entry, once as read and once in the result, beside
+    # one block of at most _PAIRS_PER_STEP entries, 72 bytes each, and some 600 bytes of
+    # bookkeeping a block (ogld#14). A block holds a row at least, so at a step of 997 the
+    # block terms are under a kilobyte a row.
+    monkeypatch.setattr(reader_module, "_PAIRS_PER_STEP", 997)
+    reader = StoreReader.open(str(support.TEST_STORE))
+    rows = np.arange(1056)
+    listed = np.arange(0, 1056, 2) if among else None
+
+    def run() -> Any:
+        return reader.partners(rows, r2=0.0, window_bp=3_000_000, among=listed)
+
+    run()  # warm: the chunks are read and kept before anything is measured
+    tracemalloc.start()
+    try:
+        kept = len(run().partner)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert kept > 90_000, "many kept entries, so the per-entry term is what is measured"
+    bound = 48 * kept + 1024 * len(rows) + 64 * 1024
+    assert peak <= bound, f"peak {peak:,} bytes for {kept:,} kept entries, bound {bound:,}"
+
+
+@pytest.mark.parametrize("one_against_many", [False, True])
+def test_r_of_pairs_holds_what_its_docstring_states(
+    one_against_many: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The result, 8 bytes a pair, and one step of pairs, 64 bytes each, with its index rows
+    # (ogld#14): the broadcast is never copied, so one row against many costs its result.
+    monkeypatch.setattr(reader_module, "_PAIRS_PER_STEP", 997)
+    reader = StoreReader.open(str(support.TEST_STORE))
+    rng = np.random.default_rng(14)
+    second = rng.integers(0, 1056, 150_000)
+    first = np.array([500]) if one_against_many else rng.integers(0, 1056, 150_000)
+    reader.r_of_pairs(first, second)
+    tracemalloc.start()
+    try:
+        r = reader.r_of_pairs(first, second)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak <= 1.25 * r.nbytes + 64 * 1024, f"peak {peak:,} for a {r.nbytes:,}-byte result"
