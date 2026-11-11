@@ -25,7 +25,7 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import ENCODING, RESERVED_CODE, Provenance
+from ogld.format import ENCODING, RESERVED_CODE, Encoding, Provenance, Sourced
 from ogld.format.geometry import (
     chromosome_index,
     chromosome_ranges,
@@ -34,6 +34,7 @@ from ogld.format.geometry import (
     near_row_lengths,
 )
 from ogld.store import layout
+from ogld.store.assembly import Cut
 from ogld.store.tables import Variants
 from ogld.store.validation import ValidationFailed, validate_group
 
@@ -223,6 +224,110 @@ class StoreWriter:
             raise ValueError("provenance near_bp and far_bp are not the distances written with")
         if provenance["encoding"] != ENCODING:
             raise ValueError("provenance records an encoding this writer does not write (spec §3)")
+
+
+class _StoreWriterProposal:
+    """PROPOSED (ogld#17, step 1): `StoreWriter` once the owner confirms, with these four methods;
+    `write_near` and `write_index` go. Producers supply r and what only the source knows, and
+    the store assembly behind this seam (`ogld/store/assembly.py`) does the rest.
+
+    How each producer calls it:
+
+    - **The builder** creates the writer with its encoding, `NEAR_BP`, `FAR_BP`, the kept
+      samples' n and the covariates' k. Each of its `threads` workers computes a 256-row tile's
+      product, `r = units[first:last] @ units[first:stop].T`, where `stop` is the far stop of row
+      `last − 1`. It cuts the tile, `writer.cut(start + first, r)`, and measures its own change
+      in r for the PC Diagnostic on the same `r`. The build's thread writes the cuts in row
+      order, `writer.write(cut)`, then calls `writer.finish(sourced, threads=threads)`. Its
+      tiles' quantising and thresholding, `Entries`, `_Layout` and `_count` go.
+    - **The Test Store's script** creates the writer with n = 771 and k. It cuts each
+      chromosome whole, `writer.write(writer.cut(start, r))`, from the reference r as a dense
+      matrix, NaN where the reference holds no pair, and finishes with what the Test Panel's
+      manifest knows. Its quantising, `require_every_pair`, mirroring and counts go: a pair it
+      lacks within far_bp is refused by `cut`. `tests/test_walking_path.py` does the same, from
+      its own k = 0 r.
+    - **A Pan-UKB import (later)** creates the writer with the far_bp its lift to GRCh38 leaves
+      whole, its N and k = 15. It cuts blocks of rows from the published block matrix, float32,
+      and finishes with `source.kind = "ld_matrix"`, `pc_diagnostic` null.
+    """
+
+    @classmethod
+    def create(
+        cls,
+        location: str | os.PathLike[str],
+        *,
+        variants: Variants,
+        encoding: Encoding,
+        near_bp: int,
+        far_bp: int,
+        n: int,
+        k: int,
+    ) -> _StoreWriterProposal:
+        """Start a store at a new `location`: write the Variant Set, in engine order, and its
+        chromosome ranges (spec §2), and fix what every block is cut by. That is the encoding
+        (spec §3; ogld#16's encoding value), the distances (§4, §5), and t_far for `n` samples
+        and `k` covariates with its far code floor (§3).
+
+        `n` and `k` are given here because the threshold is applied as blocks arrive; `finish`
+        refuses a `Sourced` whose `panel.n` or `adjustment.k` differs. Refuses a location that
+        exists, and an n and k for which t_far is undefined.
+
+        Holds the Variant Set's positions (8 B a row) and its chromosome ranges.
+        """
+        raise NotImplementedError
+
+    def cut(self, first: int, r: npt.NDArray[np.floating[Any]]) -> Cut:
+        """Cut the block of rows `first`, `first + 1`, … `first + len(r) − 1` (global rows, one
+        chromosome) from their r, ready to `write` (spec §3–§5).
+
+        `r[t, c]` is r(first + t, first + c), signed to A1 after PC Adjustment (spec §3), for
+        every column c up to the last variant within far_bp of the block's last row, and no
+        further: `r.shape[1]` is that variant's row + 1 − first. That is what a product of the
+        block's unit vectors with those of the rows from `first` to there gives, and the
+        chromosome's whole matrix for a block of all its rows. Only each row's later partners
+        within far_bp are read. On and below the diagonal, and past a row's own far stop, `r` may
+        hold anything, NaN included. Any floating dtype.
+
+        Quantises every pair within near_bp at the store's encoding, for the Near Band, and keeps
+        every pair within far_bp whose code reaches the far code floor, for the Proxy Index.
+        Refuses a block that leaves its chromosome, an `r` of another width, and an r within a
+        row's far_bp that is NaN, infinite or past ±1, naming the pair. So a pair the producer
+        did not measure is refused, never stored and never read as a Bound.
+
+        Pure and thread-safe: it reads only what `create` fixed, so a producer cuts blocks on
+        its own worker threads. Holds the block's `r`, the producer's, and returns its cut:
+        ≤ 31 MiB for a 256-row block on chr6 of the whole EUR panel.
+        """
+        raise NotImplementedError
+
+    def write(self, cut: Cut) -> None:
+        """Write a cut's rows. They continue where the last cut stopped, in global row order, so
+        each chromosome is finished before the next begins.
+
+        The Near Band's codes are written in whole shards of `near/<chrom>/r`, the rest carried;
+        its `indptr` is written from the positions when the chromosome's first cut arrives
+        (spec §4). The Proxy Index is written row by row, both directions: a row is complete
+        once its own cut arrives (spec §5). The counts are added up. When the chromosome's last
+        row arrives, what is carried is written and the chromosome is complete.
+
+        Refuses a cut out of order, naming the row expected. Holds about 0.5 GiB on chr6 of the
+        whole EUR panel (`ogld/store/assembly.py`), however long the chromosome.
+        """
+        raise NotImplementedError
+
+    def finish(self, sourced: Sourced, *, threads: int = 1) -> Provenance:
+        """Assemble the provenance, validate the store and write it; return it as written
+        (spec §7, §12).
+
+        `sourced` is what only the producer knows (`ogld.format.Sourced`). The writer adds what
+        the store derives from itself: `format_version`, `encoding`, `n_variants`, `near_bp`,
+        `far_bp`, `t_far`, `t_far_q`, `far_code_floor` and `counts`. Refuses, naming the
+        chromosome, a store with rows not written, and a `sourced` whose `panel.n` or
+        `adjustment.k` is not what `create` thresholded with. Then it runs every rule of spec
+        §12 on `threads` workers and writes the provenance only if all pass, as today: a store
+        without one is never read.
+        """
+        raise NotImplementedError
 
 
 def _as_json(provenance: Provenance) -> dict[str, Any]:

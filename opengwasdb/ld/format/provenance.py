@@ -193,6 +193,28 @@ class Provenance(TypedDict):
     build: Build
 
 
+class Sourced(TypedDict):
+    """PROPOSED (ogld#17, step 1): the provenance only a store's producer knows (spec §7; owner,
+    10 November 2026): what r was computed from, how, by what software and at what cost.
+
+    A producer hands this to `StoreWriter.finish`, which adds what the store derives from itself:
+    `format_version`, `encoding`, `n_variants`, `near_bp`, `far_bp`, `t_far`, `t_far_q`,
+    `far_code_floor` and `counts`. Together they are `Provenance`, key for key; a test will hold
+    the two halves to `REQUIRED_KEYS`. `reference_assembly`, `variants_dropped` and `software`
+    have no row on the ownership page today; this proposal gives them to the producer.
+    """
+
+    source: Source
+    panel: Panel
+    reference_assembly: str
+    variant_filters: VariantFilters
+    variants_dropped: dict[str, int]
+    adjustment: Adjustment
+    pc_diagnostic: PcDiagnostic | None
+    software: dict[str, str]
+    build: Build
+
+
 #: Every key spec §7 requires, dotted where it is nested. `provenance.complete` checks them.
 REQUIRED_KEYS: Final = (
     "format_version",
