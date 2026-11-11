@@ -22,7 +22,8 @@ TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
 R_SCALE = 511
 #: Half a step: |r̂ − r| never exceeds it.
 HALF_STEP = 1 / (2 * R_SCALE)
-#: The far code floor at R_SCALE for n = 771 (spec §3's table): FLOOR at the Test Store's
+#: The far code floor at R_SCALE for the Test Panel's n = 771, all of EUR's v2 members by the
+#: owner's ruling, where a panel's build keeps 665 (spec §3's table): FLOOR at the Test Store's
 #: k = 10, FLOOR_K0 at k = 0, and FLOOR_K7 at k = 7, where a build that drops a local PC lands.
 #: At × 511 the three t_far (0.0274211, 0.0270649, 0.0273132) share a floor; at × 32767 they
 #: were 5426, 5391 and 5416.

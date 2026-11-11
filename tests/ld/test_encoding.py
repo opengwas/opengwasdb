@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 import zarr
 from script_modules import load_script
-from store_copies import TEST_STORE
+from store_copies import R_SCALE, TEST_STORE
 
 import ogld
 from ogld import cli
@@ -31,7 +31,8 @@ from ogld.format import RefusalReason
 CONTRACT = Path(__file__).resolve().parent / "contract"
 REPOSITORY = Path(__file__).resolve().parents[1]
 SCALES = (511, 2047, 32767)
-#: The far code floor at HGDP+1kGP EUR's t_far(771, 10) = 0.0274211, per scale (spec §3).
+#: The far code floor at the Test Panel's t_far(771, 10) = 0.0274211, per scale (spec §3; the
+#: Test Panel keeps all 771 EUR members by the owner's ruling).
 FLOORS = {511: 85, 2047: 339, 32767: 5426}
 SLACK = 1e-9
 
@@ -48,7 +49,10 @@ _STORES: dict[int, Path] = {}
 
 
 def store_at(scale: int, factory: pytest.TempPathFactory) -> Path:
-    """The Test Panel's reference r at k = 10 written at × `scale`, once per worker."""
+    """The Test Panel's reference r at k = 10 at × `scale`: the committed Test Store at its own
+    scale, and otherwise written once per worker by the script that wrote it."""
+    if scale == R_SCALE:
+        return TEST_STORE
     if scale not in _STORES:
         out = factory.mktemp(f"x{scale}") / "store"
         _STORES[scale] = load_script("make_test_store").write_test_store(10, out, scale)
@@ -259,10 +263,36 @@ OWNED = re.compile(
 )
 #: The encoding's owner (spec §3; docs/architecture/ownership.md).
 OWNER = "ogld/format/encoding.py"
-#: Scripts that name a scale on purpose, as data: the Test Panel's selection records the scale
-#: it judged Stored r at, and the Test Store's script documents the scale it is run at.
-NAMED_ON_PURPOSE = {"scripts/test_panel/params.py", "scripts/make_test_store.py"}
+#: The phrases that name a scale on purpose, per file: the scale the Test Panel's selection judged
+#: Stored r at, and the Test Store script's documentation of the scale it is run at. A literal is
+#: let through only inside one of these phrases on its line; any other, such as a code written as
+#: `r * 511`, fails.
+NAMED_ON_PURPOSE = {
+    "scripts/test_panel/params.py": (
+        "× 32767, the one encoding there was",
+        "The Test Store is × 511 (ogld#16, ADR 0004)",
+        "r_scale: int = 32767",
+    ),
+    "scripts/make_test_store.py": (
+        "quantised at × 511, HGDP+1kGP EUR's encoding",
+        "make_test_store.py --r-scale 511 [--k 10]",
+        "the committed Test Store is × 511, and tests write × 2047 and",
+        "× 32767 stores beside it.",
+        "511 for the committed Test Store, HGDP+1kGP EUR's",
+    ),
+}
 SCALE_LITERAL = re.compile(r"\b(?:511|2047|32767)\b")
+
+
+def on_purpose(name: str, line: str, match: re.Match[str]) -> bool:
+    """Whether `match` is a scale literal inside one of `name`'s phrases on `line`."""
+    if not SCALE_LITERAL.fullmatch(match.group()):
+        return False
+    for phrase in NAMED_ON_PURPOSE.get(name, ()):
+        at = line.find(phrase)
+        if at >= 0 and at <= match.start() and match.end() <= at + len(phrase):
+            return True
+    return False
 
 
 def test_no_module_outside_the_encoding_names_a_scale_a_dtype_or_a_reserved_code() -> None:
@@ -273,8 +303,9 @@ def test_no_module_outside_the_encoding_names_a_scale_a_dtype_or_a_reserved_code
         if name == OWNER:
             continue
         for number, line in enumerate(path.read_text().splitlines(), start=1):
-            for match in OWNED.finditer(line):
-                if name in NAMED_ON_PURPOSE and SCALE_LITERAL.fullmatch(match.group()):
-                    continue
-                found.append(f"{name}:{number}: {match.group()}")
+            found += [
+                f"{name}:{number}: {match.group()}"
+                for match in OWNED.finditer(line)
+                if not on_purpose(name, line, match)
+            ]
     assert found == []

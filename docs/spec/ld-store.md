@@ -137,8 +137,8 @@ quantisation error at most half of it, 1/(2s):
 A build takes its scale as an input (`BuildInputs.r_scale`, `docs/spec/build-inputs.md` §1), and
 there is no default: a build that was not given one is refused. The issue's measurement on real
 HGDP+1kGP EUR chr22 chose the widths: at × 511 the error is 0.03 of r's sampling error at
-n = 771, and the Near Band costs 1.70× fewer bits a pair than at × 32767; a whole chr22 build
-at k = 10 measured 1.68× (§6).
+n = 771, all of EUR's v2 members (0.025 at the 665 a build keeps), and the Near Band costs 1.70×
+fewer bits a pair than at × 32767; a whole chr22 build at k = 10 measured 1.68× (§6).
 
 - **Every encoding shares one container**: `int16` codes, −32768 reserved, half-to-even rounding.
   The scale is symmetric, so negating a code to flip an allele never overflows, and r = ±1 is
@@ -187,36 +187,38 @@ It is recorded in provenance, and validation recomputes it at the recorded scale
 Pair when that reaches the floor, and reads as the Bound when it does not. In true r², the cut
 between the two is ((`far_code_floor` − ½) / s)². That cut lies within about √t_far / s of
 t_far, on either side. So a pair whose true r² is up to that much above t_far can read
-"r² < t_far". The table gives each panel at its own scale, on the phased HGDP+1kGP v2 callset's
-sample counts, which the builds read (ADR 0002): EUR 771, AFR 801, EAS 816, SAS 782 and AMR 345.
-The method is the prototype's
+"r² < t_far". The table gives each panel at its own scale, on the samples each build keeps: the
+unrelated ones (ADR 0002, decision 11), EUR 665, AFR 608, EAS 724, SAS 672 and AMR 341. The Test
+Panel keeps all 771 EUR members (owner's ruling), so the Test Store has a row of its own. The
+method is the prototype's
 (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/t_far_edge.tsv`, on the
 gnomAD v3.1.2 counts, at × 32767); each value was computed in 50-digit decimal arithmetic outside
 ogld, and `tests/test_format.py` holds the code to every row.
 
-| LD Store | scale | k | t_far | √t_far × s | far code floor | a pair at exactly t_far | true r² cut |
-|---|---|---|---|---|---|---|---|
-| UK Biobank EUR | 2047 | 0 or 10 | 0.001 | 64.73 → 65 | 65 | stored | 0.0009929 |
-| HGDP+1kGP EUR | 511 | 0 | 0.0270649 | 84.07 → 84 | 85 | **the Bound** | 0.0273446 |
-| HGDP+1kGP EUR | 511 | 10 | 0.0274211 | 84.62 → 85 | 85 | stored | 0.0273446 |
-| HGDP+1kGP AFR | 511 | 0 | 0.0260500 | 82.48 → 82 | 83 | **the Bound** | 0.0260655 |
-| HGDP+1kGP AFR | 511 | 10 | 0.0263797 | 83.00 → 83 | 83 | stored | 0.0260655 |
-| HGDP+1kGP EAS | 511 | 0 | 0.0255706 | 81.71 → 82 | 82 | stored | 0.0254374 |
-| HGDP+1kGP EAS | 511 | 10 | 0.0258882 | 82.22 → 82 | 83 | **the Bound** | 0.0260655 |
-| HGDP+1kGP SAS | 511 | 0 | 0.0266837 | 83.47 → 83 | 84 | **the Bound** | 0.0267012 |
-| HGDP+1kGP SAS | 511 | 10 | 0.0270298 | 84.01 → 84 | 85 | **the Bound** | 0.0273446 |
-| HGDP+1kGP AMR | 511 | 0 | 0.0605814 | 125.77 → 126 | 126 | stored | 0.0603178 |
-| HGDP+1kGP AMR | 511 | 10 | 0.0623952 | 127.64 → 128 | 128 | stored | 0.0622556 |
+| LD Store | scale | n | k | t_far | √t_far × s | far code floor | a pair at exactly t_far | true r² cut |
+|---|---|---|---|---|---|---|---|---|
+| UK Biobank EUR | 2047 | 49,766 | 0 or 10 | 0.001 | 64.73 → 65 | 65 | stored | 0.0009929 |
+| HGDP+1kGP EUR | 511 | 665 | 0 | 0.0313855 | 90.53 → 91 | 91 | stored | 0.0313657 |
+| HGDP+1kGP EUR | 511 | 665 | 10 | 0.0318654 | 91.22 → 91 | 92 | **the Bound** | 0.0320627 |
+| HGDP+1kGP AFR | 511 | 608 | 0 | 0.0343328 | 94.68 → 95 | 95 | stored | 0.0341997 |
+| HGDP+1kGP AFR | 511 | 608 | 10 | 0.0349079 | 95.47 → 95 | 96 | **the Bound** | 0.0349273 |
+| HGDP+1kGP EAS | 511 | 724 | 0 | 0.0288243 | 86.76 → 87 | 87 | stored | 0.0286543 |
+| HGDP+1kGP EAS | 511 | 724 | 10 | 0.0292286 | 87.36 → 87 | 88 | **the Bound** | 0.0293207 |
+| HGDP+1kGP SAS | 511 | 672 | 0 | 0.0310581 | 90.06 → 90 | 91 | **the Bound** | 0.0313657 |
+| HGDP+1kGP SAS | 511 | 672 | 10 | 0.0315280 | 90.73 → 91 | 91 | stored | 0.0313657 |
+| HGDP+1kGP AMR | 511 | 341 | 0 | 0.0612941 | 126.51 → 127 | 127 | stored | 0.0612829 |
+| HGDP+1kGP AMR | 511 | 341 | 10 | 0.0631515 | 128.41 → 128 | 129 | **the Bound** | 0.0632360 |
+| the Test Store | 511 | 771 | 10 | 0.0274211 | 84.62 → 85 | 85 | stored | 0.0273446 |
 
-At k = 10, the default, a pair at exactly t_far is a Far Pair on HGDP+1kGP EUR, AFR and AMR, and
-so is a pair a little below it, down to the cut: 0.0273446 on EUR, against t_far 0.0274211. On EAS
-and SAS it reads as the Bound: a true r² up to 0.0260655 on EAS, and 0.0273446 on SAS, reads
-"r² < t_far". On UK Biobank EUR a pair at exactly t_far is stored, and so is one down to
-0.0009929. At × 32767 the same rule gave floors of 1037 (UK Biobank EUR) and 5426 (HGDP+1kGP EUR,
-k = 10) and cuts within 8×10⁻⁶ of t_far; `tests/test_format.py` keeps those floors too. The
-walkthrough "A pair at exactly t_far" in
-`proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html` steps through these cases at
-× 32767 on the gnomAD v3.1.2 counts.
+At k = 10, the default, a pair at exactly t_far is a Far Pair only on HGDP+1kGP SAS, and so is a
+pair a little below it, down to the cut: 0.0313657, against t_far 0.0315280. On EUR, AFR, EAS and
+AMR it reads as the Bound: a true r² up to 0.0320627 on EUR, 0.0349273 on AFR, 0.0293207 on EAS
+and 0.0632360 on AMR reads "r² < t_far". On UK Biobank EUR a pair at exactly t_far is stored, and
+so is one down to 0.0009929. At × 32767 the same rule gives floors of 1037 (UK Biobank EUR) and
+5850 (HGDP+1kGP EUR, k = 10, which the × 32767 chr22 build of §6 records), and cuts within
+8×10⁻⁶ of t_far; `tests/test_format.py` keeps those floors too. The walkthrough "A pair at
+exactly t_far" in `proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html` steps
+through these cases at × 32767 on the gnomAD v3.1.2 counts.
 
 **t_far's k counts covariates.** t_far = max(0.001, q / (n − k − 1)), where k is the number of
 covariates regressed out, named in `adjustment.covariates` (§7); the 1 is the intercept. For a
@@ -448,8 +450,8 @@ That list is a subset of the MAC ≥ 20 set and cannot count it.
   density. Twice the list's variants gives about 729 GB, and three times gives 1.64 TB, at
   × 32767; about 542 GB and 1.22 TB at × 2047
   (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/panel_sizes_inner262144.tsv`).
-- The Far Pairs at t_far = 0.001 cannot be measured at n = 771. There, the mean r² at 3–10 Mb
-  (0.0012945) is no higher than sampling alone predicts (1/n = 0.0012970;
+- The Far Pairs at t_far = 0.001 cannot be measured at n = 771, the prototype's EUR. There, the
+  mean r² at 3–10 Mb (0.0012945) is no higher than sampling alone predicts (1/n = 0.0012970;
   `proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/s08_meta.json`). At an
   assumed 1–5% of 3–10 Mb pairs, the list's Far Pairs would be 6–30 GB, and the Proxy Index,
   which holds each twice beside the Near Band's pairs at r² ≥ 0.001, more than twice that.
@@ -554,7 +556,8 @@ hash and declared source and the whole scan, not a PCA method or LD pruning. A P
 region the rest of the genome also explains, such as EUR's north–south axis through LCT (ratio
 0.104), is ancestry and is kept; an inversion's karyotype axis (ratio 0.007–0.019) is dropped
 (ADR 0002 has the evidence). The ratio cannot fall much below 5 / (n × window share), so the rule
-needs a few hundred samples: every HGDP+1kGP panel has n ≥ 345.
+needs a few hundred samples: every HGDP+1kGP panel keeps at least 341, AMR's unrelated samples
+(ADR 0002, decision 11), well above the about 100 below which no ratio reaches 0.05.
 
 **Genotypes are complete.** The builds read the phased HGDP+1kGP v2 callset, which has no missing
 calls, and a build refuses any input with one. So there is no imputation of missing calls and no
@@ -581,8 +584,8 @@ The boundaries, exactly:
   which variants are Absent, distinct from pairs that are Not Measured.
 - The Bound states t_far, the value recorded in provenance. It is judged on the Stored r: it
   means r̂² < t_far. So a pair whose true r² is up to about √t_far / s above t_far, at the store's
-  scale s, can read as the Bound. On HGDP+1kGP SAS at k = 10, a true r² up to 0.0273446 reads
-  "r² < 0.0270298" (§3).
+  scale s, can read as the Bound. On HGDP+1kGP EUR at k = 10, a true r² up to 0.0320627 reads
+  "r² < 0.0318654" (§3).
 
 ```mermaid
 flowchart TD

@@ -247,7 +247,7 @@ nothing.
 
 **Its limit.** By chance alone a window holds about 5 / n of any vector's variance, so a PC's
 ratio cannot fall much below 5 / (n × `window_share`): below about 100 samples the rule cannot
-drop any PC. Every HGDP+1kGP panel has n ≥ 345.
+drop any PC. Every HGDP+1kGP panel keeps at least 341 samples, AMR's unrelated ones (§10).
 
 **The covariates** are the first `k` = 10 (`BuildInputs.k`) PCs of the PC File that are not local,
 in PC order. If fewer than 10 survive, the build uses all that do, as long as at least

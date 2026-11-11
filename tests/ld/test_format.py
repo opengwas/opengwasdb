@@ -214,22 +214,24 @@ def test_an_encoding_ogld_does_not_implement_is_refused_naming_it(case: str) -> 
 
 # (n, k, the store's scale, t_far as the spec's §3 table prints it, far code floor, code of a
 # pair at exactly t_far, whether that pair is stored, the true r² cut). From docs/spec/ld-store.md
-# §3, each panel at its own scale (ADR 0004), on the phased v2 callset's sample counts (EUR 771,
-# AFR 801, EAS 816, SAS 782, AMR 345). The values were computed in 50-digit decimal arithmetic,
-# outside ogld.
+# §3, each panel at its own scale (ADR 0004), on the samples each build keeps: the unrelated ones
+# (ADR 0002, decision 11), EUR 665, AFR 608, EAS 724, SAS 672, AMR 341. The Test Panel keeps all
+# 771 EUR members (owner's ruling), so the Test Store's rows are its own. The values were computed
+# in 50-digit decimal arithmetic, outside ogld.
 T_FAR_TABLE = [
     ("UK Biobank EUR", 49766, 0, 2047, 0.001, 65, 65, True, 0.0009929),
     ("UK Biobank EUR", 49766, 10, 2047, 0.001, 65, 65, True, 0.0009929),
-    ("HGDP+1kGP EUR", 771, 0, 511, 0.0270649, 85, 84, False, 0.0273446),
-    ("HGDP+1kGP EUR", 771, 10, 511, 0.0274211, 85, 85, True, 0.0273446),
-    ("HGDP+1kGP AFR", 801, 0, 511, 0.0260500, 83, 82, False, 0.0260655),
-    ("HGDP+1kGP AFR", 801, 10, 511, 0.0263797, 83, 83, True, 0.0260655),
-    ("HGDP+1kGP EAS", 816, 0, 511, 0.0255706, 82, 82, True, 0.0254374),
-    ("HGDP+1kGP EAS", 816, 10, 511, 0.0258882, 83, 82, False, 0.0260655),
-    ("HGDP+1kGP SAS", 782, 0, 511, 0.0266837, 84, 83, False, 0.0267012),
-    ("HGDP+1kGP SAS", 782, 10, 511, 0.0270298, 85, 84, False, 0.0273446),
-    ("HGDP+1kGP AMR", 345, 0, 511, 0.0605814, 126, 126, True, 0.0603178),
-    ("HGDP+1kGP AMR", 345, 10, 511, 0.0623952, 128, 128, True, 0.0622556),
+    ("HGDP+1kGP EUR", 665, 0, 511, 0.0313855, 91, 91, True, 0.0313657),
+    ("HGDP+1kGP EUR", 665, 10, 511, 0.0318654, 92, 91, False, 0.0320627),
+    ("HGDP+1kGP AFR", 608, 0, 511, 0.0343328, 95, 95, True, 0.0341997),
+    ("HGDP+1kGP AFR", 608, 10, 511, 0.0349079, 96, 95, False, 0.0349273),
+    ("HGDP+1kGP EAS", 724, 0, 511, 0.0288243, 87, 87, True, 0.0286543),
+    ("HGDP+1kGP EAS", 724, 10, 511, 0.0292286, 88, 87, False, 0.0293207),
+    ("HGDP+1kGP SAS", 672, 0, 511, 0.0310581, 91, 90, False, 0.0313657),
+    ("HGDP+1kGP SAS", 672, 10, 511, 0.0315280, 91, 91, True, 0.0313657),
+    ("HGDP+1kGP AMR", 341, 0, 511, 0.0612941, 127, 127, True, 0.0612829),
+    ("HGDP+1kGP AMR", 341, 10, 511, 0.0631515, 129, 128, False, 0.0632360),
+    ("the Test Store (n = 771)", 771, 10, 511, 0.0274211, 85, 85, True, 0.0273446),
 ]
 
 
@@ -263,10 +265,12 @@ def test_t_far_and_its_floor_match_the_spec_table(
     assert int(encoding.quantise(math.sqrt(cut - 1e-7))) < floor
 
 
-# The floors of spec §3's table before ogld#16, when every store was × 32767: the floor is the
-# encoding's, so one t_far gives each scale its own.
+# The floors at × 32767, the one scale before ogld#16: the floor is the encoding's, so one t_far
+# gives each scale its own. 5850 is what the real EUR chr22 build at × 32767 records (spec §6);
+# the rows at 771, 816 and 345 are spec §3's former table, on all of each panel's v2 members.
 WIDEST_FLOORS = [
     (49766, 10, 1037),
+    (665, 10, 5850),
     (771, 0, 5391),
     (771, 10, 5426),
     (816, 10, 5273),
@@ -357,8 +361,9 @@ def test_every_r_whose_code_reaches_the_floor_is_above_least_r(
 
 # ------------------------------------------------------------------ §8 pair answers
 
-EUR_K10 = fmt.t_far(771, 10)
-AMR_K10 = fmt.t_far(345, 10)
+#: t_far at k = 10 on the samples the EUR and AMR builds keep (ADR 0002, decision 11).
+EUR_K10 = fmt.t_far(665, 10)
+AMR_K10 = fmt.t_far(341, 10)
 #: The HGDP+1kGP stores' encoding, in which §8's walkthroughs read r (ADR 0004).
 HGDP_R = fmt.REncoding(511)
 
@@ -409,13 +414,13 @@ def test_two_records_at_one_position_are_a_near_band_pair() -> None:
 
 
 def test_r_squared_equal_to_t_far_is_stored_one_code_below_is_the_bound() -> None:
-    # The walkthrough "r² equal to t_far": EUR k = 10's floor is 85 at × 511 (§3).
-    assert kind(5_000_000, 85 / 511) is fmt.AnswerKind.STORED
-    assert kind(5_000_000, 84 / 511) is fmt.AnswerKind.BOUND
-    assert kind(5_000_000, -85 / 511) is fmt.AnswerKind.STORED
-    # At × 32767 it was 5426, and the rule is the same: r̂² ≥ t_far.
-    assert kind(5_000_000, 5426 / 32767) is fmt.AnswerKind.STORED
-    assert kind(5_000_000, 5425 / 32767) is fmt.AnswerKind.BOUND
+    # The walkthrough "r² equal to t_far": EUR k = 10's floor is 92 at × 511 (§3).
+    assert kind(5_000_000, 92 / 511) is fmt.AnswerKind.STORED
+    assert kind(5_000_000, 91 / 511) is fmt.AnswerKind.BOUND
+    assert kind(5_000_000, -92 / 511) is fmt.AnswerKind.STORED
+    # At × 32767 it is 5850, and the rule is the same: r̂² ≥ t_far.
+    assert kind(5_000_000, 5850 / 32767) is fmt.AnswerKind.STORED
+    assert kind(5_000_000, 5849 / 32767) is fmt.AnswerKind.BOUND
 
 
 def test_amr_s_t_far_bounds_a_pair_eur_stores() -> None:

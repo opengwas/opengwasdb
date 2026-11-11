@@ -5,11 +5,11 @@ The Test Store is the LD Store of the Test Panel (`CONTEXT.md`), written from th
 independent `reference_r(10)`, so a reader's tests have real data in the real format before any
 builder exists. Its variants are the rows that pass the build's filters, with the engine's ALID,
 A1 and A2 (`ogld.identity`), reversed indels resolved by the engine's rule; its r is the
-reference r signed to A1. The script supplies that r and what only its source knows; the store
-makes the rest of it (`StoreWriter`, ogld#17): the codes at × 511, HGDP+1kGP EUR's encoding
-(spec §3; ADR 0004), the Near Band, the Proxy Index at t_far for n = 771 and the k it was written
-at (spec §4, §5), and the counts. It is "import a precomputed r" in miniature. It is
-deterministic: the same inputs write the same bytes.
+reference r signed to A1. The script supplies that r and what only its source knows, and the
+store makes the rest (`StoreWriter`, ogld#17). That is its codes,
+quantised at × 511, HGDP+1kGP EUR's encoding (spec §3; ADR 0004), the Near Band, the Proxy Index
+at t_far for n = 771 and the k it was written at (spec §4, §5), and the counts. It is "import a
+precomputed r" in miniature. It is deterministic: the same inputs write the same bytes.
 
     pixi run -e dev python scripts/make_test_store.py --r-scale 511 [--k 10] [--force] [out]
 
