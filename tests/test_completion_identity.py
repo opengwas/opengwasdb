@@ -14,6 +14,12 @@ observed exception carried exactly; the ancestry-match filter admitting one
 Analysis or none; a release whose only frequencies are the panel's; an Analysis
 with no Trait position; and LD blocks that fill one variant twice, agreeing at
 one and disagreeing at another (D5).
+
+Two manifest entries are pinned as the code writes them since #381 rather than
+as `1ab2b09` wrote them (ADR 0079): `format_version` is 0.2.1, and the
+completion record states how the panel placed its rows (`panel_indels`,
+`panel_snvs_unplaced`). Each fixture's panel places every row, so those counts
+hold no unplaced row, and every other value in a pin is `1ab2b09`'s.
 """
 
 from __future__ import annotations
@@ -181,12 +187,32 @@ def test_the_pins_are_not_vacuous():
     assert completion("ragged_nothing_imputed")["n_imputed"] == 0
     assert completion("ragged_out_of_range")["se_exceptions"]["over_budget"] == ["b"]
     assert pins["dense"]["totals"]["n_imputed"] > 0
+    for name in pins:
+        assert _unplaced(completion(name)) == {}, name
+
+
+def _completion_record(store: Path) -> dict:
+    """A completed release's `provenance.completion`."""
+    import json
+
+    manifest = json.loads((store / "manifest.json").read_text(encoding="utf-8"))
+    return manifest["provenance"]["completion"]
+
+
+def _unplaced(completion: dict) -> dict[tuple[str, str], int]:
+    """The panel rows a completion record says were not placed, by kind and reason."""
+    counts = {
+        **{("snv", reason): n for reason, n in completion["panel_snvs_unplaced"].items()},
+        **{("indel", reason): n for reason, n in completion["panel_indels"]["unplaced"].items()},
+    }
+    return {key: n for key, n in counts.items() if n}
 
 
 def test_the_overlapping_blocks_fill_one_variant_twice(overlapping_completion):
     """Both D5 outcomes are reached: `AGREED` is imputed once, and `DISPUTED`,
     which the blocks disagree on, is held missing."""
     store, _ = overlapping_completion
+    assert _unplaced(_completion_record(store)) == {}, "the panel must place every row"
     rows = stored_rows(store, 0)
     axis = VariantAxis(store)
     try:

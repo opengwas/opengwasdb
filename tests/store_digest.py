@@ -21,7 +21,9 @@ That file was written by the code at `1ab2b09` (issue #424), before
 completion's Phase 3 streamed: running the identity tests with
 `OPENGWASDB_WRITE_PINS` set to a directory writes each fixture's digest there
 instead of comparing it, and the pins are those files, merged. A test compares
-the new code with the old one, never the new code with itself.
+the new code with the old one, never the new code with itself. The two manifest
+entries #381 changed are the one exception: each pin carries them as that code
+writes them (`test_completion_identity`).
 """
 
 from __future__ import annotations

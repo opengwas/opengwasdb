@@ -117,10 +117,17 @@ def _panel_eaf_text(value: float) -> str:
 
 
 def _write_panel(block_dir: Path, rows: list[tuple[str, float, int]], seed: int) -> None:
-    """One chr-1 LD block: its variant table and a precomputed eigendecomposition."""
+    """One chr-1 LD block: its variant table and a precomputed eigendecomposition.
+
+    Each row's LD and `EAF` are coded on its ALID's A1, which it names as its
+    `EA`; a panel row whose `EA` is neither allele is not placed (ADR 0079).
+    """
     block_dir.mkdir(parents=True)
     lines = ["CHR\tSNP\tOA\tEA\tEAF\tBP"]
-    lines += [f"1\t{alid}\tG\tA\t{_panel_eaf_text(eaf)}\t{bp}" for alid, eaf, bp in rows]
+    lines += [
+        f"1\t{alid}\t{alid.split(':')[3]}\t{alid.split(':')[2]}\t{_panel_eaf_text(eaf)}\t{bp}"
+        for alid, eaf, bp in rows
+    ]
     (block_dir / "skewed.tsv").write_text("\n".join(lines) + "\n", encoding="utf-8")
     n = len(rows)
     noise = np.random.default_rng(seed).normal(size=(n, n))
