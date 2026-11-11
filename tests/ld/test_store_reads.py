@@ -108,6 +108,96 @@ def test_index_and_band_rows_read_the_same_from_any_layout(
         np.testing.assert_array_equal(mine.r, theirs.r)
 
 
+def stored_positions() -> tuple[np.ndarray, np.ndarray]:
+    """The chromosome and position of each Test Store row, from the Test Panel."""
+    rows = support.passing_rows()
+    variants = support.panel_data().variants()
+    return np.asarray(variants.chrom)[rows], variants.pos.astype(np.int64)[rows]
+
+
+def test_r_of_pairs_is_the_reference_r_of_each_pair_and_of_one_row_against_many(
+    small_chunks: Path,
+) -> None:
+    rows = np.arange(1056)
+    expected = reference_pairs(rows)
+    chrom, pos = stored_positions()
+    rng = np.random.default_rng(14)
+    i, j = rng.integers(0, len(rows), 6000), rng.integers(0, len(rows), 6000)
+    i[:10] = j[:10]
+    # The Far Pairs are rare: every one the reference holds is added, in both orders.
+    far_i, far_j = np.nonzero(~np.isnan(expected) & (np.abs(pos[:, None] - pos) > 3_000_000))
+    i, j = np.concatenate([i, far_i]), np.concatenate([j, far_j])
+    gap = np.abs(pos[rows[i]] - pos[rows[j]])
+    same = chrom[rows[i]] == chrom[rows[j]]
+    want = expected[i, j]
+    assert (~np.isnan(want) & same & (gap > 3_000_000)).sum() > 10, "Far Pairs among them"
+    assert (np.isnan(want) & same & (gap <= 10_000_000)).sum() > 100, "and the Bound"
+    assert (~same).sum() > 1000, "and pairs across chromosomes"
+    reader = StoreReader.open(small_chunks)
+    np.testing.assert_array_equal(reader.r_of_pairs(rows[i], rows[j]), want)
+    np.testing.assert_array_equal(reader.r_of_pairs(rows[3:4], rows), expected[3])
+
+
+@pytest.mark.parametrize(
+    ("r2", "kb", "listed"),
+    [(0.05, 10_000, False), (support.T_FAR, 3000, True), (0.01, 3000, False), (0.0, 500, True)],
+)
+def test_partners_are_the_reference_pairs_at_r2_within_the_window(
+    small_chunks: Path, r2: float, kb: float, listed: bool
+) -> None:
+    every = np.arange(1056)
+    expected = reference_pairs(every)
+    chrom, pos = stored_positions()
+    rows = np.concatenate([np.arange(0, 1056, 11), [33, 33]])
+    among = np.arange(0, 1056, 3) if listed else None
+    got = StoreReader.open(small_chunks).partners(rows, r2=r2, window_bp=kb * 1000, among=among)
+    for k, row in enumerate(rows):
+        r = expected[row]
+        keep = ~np.isnan(r) & (r * r >= r2) & (np.abs(pos - pos[row]) <= kb * 1000)
+        keep &= (chrom == chrom[row]) & (every != row)
+        if among is not None:
+            keep &= np.isin(every, among)
+        part = slice(got.indptr[k], got.indptr[k + 1])
+        np.testing.assert_array_equal(got.partner[part], every[keep])
+        np.testing.assert_array_equal(got.r[part], r[keep])
+        np.testing.assert_array_equal(got.distance[part], np.abs(pos[keep] - pos[row]))
+    assert len(got.partner) > 500, "many partners in all"
+
+
+def test_partners_refuses_a_window_past_the_part_it_reads() -> None:
+    reader = StoreReader.open(TEST_STORE)
+    rows = np.array([10, 600])
+    assert len(reader.partners(rows, r2=0.01, window_bp=3_000_000.9).indptr) == 3, "3 Mb is in"
+    with pytest.raises(ValueError, match="Not Measured"):
+        reader.partners(rows, r2=0.5, window_bp=10_000_001)
+    with pytest.raises(ValueError, match="only the Bound"):
+        reader.partners(rows, r2=0.01, window_bp=3_000_001)
+    with pytest.raises(ValueError, match="ascending, distinct"):
+        reader.partners(rows, r2=0.5, window_bp=1000, among=np.array([5, 5]))
+    with pytest.raises(ValueError, match="Absent ALID"):
+        reader.partners(rows, r2=0.5, window_bp=1000, among=np.array([-1, 5]))
+
+
+def test_a_region_reads_the_same_from_any_layout(small_chunks: Path) -> None:
+    # One run per row, across the copy's 512-code chunks; a whole chromosome is wider than
+    # far_bp, so its Far Pairs are scattered from the index and the rest is NaN.
+    reader = StoreReader.open(small_chunks)
+    for start, stop in ((468, 1056), (0, 468), (500, 520)):
+        np.testing.assert_array_equal(
+            reader.region_r(start, stop), reference_pairs(np.arange(start, stop))
+        )
+
+
+def test_a_region_is_a_span_of_one_chromosome() -> None:
+    reader = StoreReader.open(TEST_STORE)
+    assert reader.region_r(5, 5).shape == (0, 0)
+    with pytest.raises(ValueError, match="leave their chromosome"):
+        reader.region_r(460, 470)
+    for start, stop in ((1000, 1100), (-1, 3), (5, 4)):
+        with pytest.raises(ValueError, match="not a span"):
+            reader.region_r(start, stop)
+
+
 def retained(cache: location.ChunkCache) -> int:
     """The bytes the cache's kept chunks actually hold alive: each one's owning buffer, once."""
     owners = {}
