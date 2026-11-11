@@ -49,4 +49,9 @@ def test_a_chromosome_the_engine_does_not_rank_has_no_key() -> None:
     with pytest.raises(KeyError):
         variant_order_key(orient("HLA-A", 5, "A", "C"))
     with pytest.raises(KeyError):
-        order_key("chr1", 5, "1:5:A:C")
+        order_key("HLA-A", 5, "HLA-A:5:A:C")
+
+
+def test_order_key_reads_a_chr_prefix_as_the_engine_does() -> None:
+    assert order_key("chr1", 5, "1:5:A:C") == order_key("1", 5, "1:5:A:C")
+    assert order_key("chrX", 5, "X:5:A:C") > order_key("chr22", 9, "22:9:A:C")

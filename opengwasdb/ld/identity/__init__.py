@@ -161,12 +161,13 @@ _CHROMOSOME_RANK = {
 def order_key(chrom: str, position: int, alid: str) -> tuple[int, int, str]:
     """The engine's variant order, as a sort key: chromosome (`1`–`22`, `X`, `Y`, `MT`), then
     position ascending, then ALID ascending (bytewise: an ALID is ASCII) at one position
-    (spec §2). A chromosome off that list has no rank and raises KeyError.
+    (spec §2). The label passes through `normalise_chromosome` first, so `chr1` ranks as
+    `1`; a chromosome off that list has no rank and raises KeyError.
 
     It takes the three fields the order is defined on, so a caller holding them, as a
     clumping's result does, orders by the engine's rule without re-forming an identity
     from the ALID's alleles (ogld#14)."""
-    return _CHROMOSOME_RANK[chrom], int(position), alid
+    return _CHROMOSOME_RANK[normalise_chromosome(chrom)], int(position), alid
 
 
 def variant_order_key(o: Orientation) -> tuple[int, int, str]:
