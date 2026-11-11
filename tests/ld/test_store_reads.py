@@ -214,6 +214,20 @@ def test_a_region_reads_the_same_from_any_layout(small_chunks: Path) -> None:
         )
 
 
+@pytest.mark.parametrize(("start", "stop"), [(6, 39), (36, 221), (840, 1020)])
+def test_a_region_keeps_none_of_its_rows_far_pairs_that_leave_it(start: int, stop: int) -> None:
+    # Each span has rows with a Far Pair outside it, which the scatter must not place on a
+    # row inside it; (840, 1020) also holds one inside (spec §10; ogld#14).
+    every = np.arange(1056)
+    expected = reference_pairs(every)
+    _, pos = stored_positions()
+    far = ~np.isnan(expected) & (np.abs(pos[:, None] - pos) > 3_000_000)
+    inside = (every >= start) & (every < stop)
+    assert far[inside][:, ~inside].any(), "a Far Pair leaving the region"
+    got = StoreReader.open(TEST_STORE).region_r(start, stop)
+    np.testing.assert_array_equal(got, expected[start:stop, start:stop])
+
+
 def test_a_region_is_a_span_of_one_chromosome() -> None:
     reader = StoreReader.open(TEST_STORE)
     assert reader.region_r(5, 5).shape == (0, 0)
