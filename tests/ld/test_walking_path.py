@@ -6,6 +6,7 @@ were computed from the pgen's genotypes by the build's own k = 0 path (ogld#12).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -14,11 +15,38 @@ import testdata
 from script_modules import load_script
 
 import ogld
-from ogld.build.near_band import NearBand, read_alt_counts, unadjusted_near_band
-from ogld.format import FAR_BP, NEAR_BP, far_code_floor, t_far
+from ogld.format import FAR_BP, NEAR_BP, far_code_floor, near_row_lengths, quantise, t_far
+from ogld.format.geometry import indptr_of, stop_within
 from ogld.store import StoreReader, StoreWriter, Variants
 
 HALF_STEP = 1 / 65534
+
+
+@dataclass(frozen=True)
+class NearBand:
+    """One chromosome's Near Band as `StoreWriter.write_near` takes it: row l's codes are
+    `codes[indptr[l]:indptr[l + 1]]`, its partners l + 1, l + 2, …"""
+
+    indptr: npt.NDArray[np.int64]
+    codes: npt.NDArray[np.int16]
+
+    @property
+    def lengths(self) -> npt.NDArray[np.int64]:
+        return np.diff(self.indptr)
+
+
+def k0_near_band(
+    alt: npt.NDArray[np.float64], a1_is_alt: npt.NDArray[np.bool_], positions: npt.NDArray[np.int64]
+) -> NearBand:
+    """The k = 0 Near Band, written out plainly from standardised A1 dosages: this test's own
+    oracle for the path, where `ogld.build` tiles the same product."""
+    z = alt - alt.mean(axis=1, keepdims=True)
+    z /= np.sqrt((z * z).sum(axis=1, keepdims=True))
+    z[~a1_is_alt] *= -1
+    stop = stop_within(positions, NEAR_BP)
+    indptr = indptr_of(near_row_lengths(positions, NEAR_BP))
+    codes = np.concatenate([quantise(z[i] @ z[i + 1 : stop[i]].T) for i in range(len(z))])
+    return NearBand(indptr, codes.astype(np.int16))
 
 
 def band_index(
@@ -44,6 +72,8 @@ def test_a_pair_from_the_pgen_is_answered_by_the_store_it_wrote(tmp_path: Path) 
     on22 = vs.variants.chrom == "22"
     assert on22.any(), "the Test Store must hold chr22"
     assert (~on22).any(), "and another chromosome"
+    assert (vs.sign[on22] < 0).any(), "chr22 must hold a variant whose A1 is REF"
+    assert (vs.sign[on22] > 0).any(), "and one whose A1 is ALT"
     rows = vs.panel_rows[on22]
     v = vs.variants
     table = Variants(
@@ -54,9 +84,7 @@ def test_a_pair_from_the_pgen_is_answered_by_the_store_it_wrote(tmp_path: Path) 
         a2=v.a2[on22],
         a1_frequency=v.a1_frequency[on22],
     )
-    panel = testdata.panel()
-    alt = read_alt_counts(panel.pgen, panel.psam, panel.keep, rows)
-    band = unadjusted_near_band(alt, vs.sign[on22] > 0, table.position, NEAR_BP)
+    band = k0_near_band(script.alt_counts(rows), vs.sign[on22] > 0, table.position)
     out = tmp_path / "walk"
     writer = StoreWriter.create(out, variants=table, near_bp=NEAR_BP, far_bp=FAR_BP)
     writer.write_near(0, band.lengths, band.codes)

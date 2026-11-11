@@ -23,7 +23,8 @@ from typing import Final
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import R_SCALE, near_row_lengths, quantise
+from ogld.format import R_SCALE, quantise
+from ogld.format.geometry import indptr_of, near_row_lengths, owners, spans, stop_within
 
 #: Rows a tile computes: a tile is TILE_ROWS × (variants within far_bp) float64.
 TILE_ROWS: Final = 256
@@ -32,19 +33,22 @@ TILE_ROWS: Final = 256
 @dataclass(frozen=True)
 class Band:
     """One chromosome's geometry: for each local row l, the first row past near_bp, past
-    far_bp and past `change_bp` (exclusive stops), from its positions (spec §4)."""
+    far_bp and past `change_bp` (exclusive stops), and the Near Band's row lengths, all from
+    `ogld.format.geometry` (spec §4, §5)."""
 
+    near_length: npt.NDArray[np.int64]
     near_stop: npt.NDArray[np.int64]
     far_stop: npt.NDArray[np.int64]
     change_stop: npt.NDArray[np.int64]
 
     @classmethod
     def of(cls, position: npt.NDArray[np.int64], near_bp: int, far_bp: int, change_bp: int) -> Band:
-        rows = np.arange(len(position), dtype=np.int64)
-        near = rows + 1 + near_row_lengths(position, near_bp)
-        far = np.searchsorted(position, position + far_bp, side="right").astype(np.int64)
-        change = np.searchsorted(position, position + change_bp, side="right").astype(np.int64)
-        return cls(near, far, change)
+        return cls(
+            near_row_lengths(position, near_bp),
+            stop_within(position, near_bp),
+            stop_within(position, far_bp),
+            stop_within(position, change_bp),
+        )
 
 
 @dataclass(frozen=True)
@@ -77,18 +81,6 @@ class Tile:
     change: npt.NDArray[np.float64]
 
 
-def _cells(
-    starts: npt.NDArray[np.int64], stops: npt.NDArray[np.int64]
-) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
-    """For rows t = 0, 1, …, the columns starts[t] … stops[t] − 1, row after row, as (t, column)."""
-    lengths = stops - starts
-    t = np.repeat(np.arange(len(starts), dtype=np.int64), lengths)
-    offset = np.arange(int(lengths.sum()), dtype=np.int64) - np.repeat(
-        np.cumsum(lengths) - lengths, lengths
-    )
-    return t, np.repeat(starts, lengths) + offset
-
-
 def _ragged(
     block: npt.NDArray[np.float64],
     first: int,
@@ -112,7 +104,7 @@ def _tile(inputs: Inputs, first: int, last: int) -> Tile:
     lo, hi, entry_codes = _entries(r, first, band.far_stop, inputs.floor)
     return Tile(
         first,
-        band.near_stop[first:last] - rows - 1,
+        band.near_length[first:last],
         codes,
         lo,
         hi,
@@ -145,7 +137,8 @@ def change_pairs(
     (spec §7): the tiles measure the change on them, and the build refuses a Variant Set with
     none before it writes (`diagnostic.require_change_pairs`)."""
     starts = np.arange(first + 1, last + 1, dtype=np.int64)
-    t, partner = _cells(starts, band.change_stop[first:last])
+    length = band.change_stop[first:last] - starts
+    t, partner = owners(length), spans(starts, length)
     return t, partner, outside[first + t] & outside[partner]
 
 
@@ -236,7 +229,7 @@ class Entries:
         """
         up = np.bincount(self.lo, minlength=rows)
         down = np.bincount(self.hi, minlength=rows)
-        indptr = np.concatenate([[0], np.cumsum(up + down)]).astype(np.int64)
+        indptr = indptr_of(up + down)
         out = _Layout(
             np.empty(int(indptr[-1]), dtype=np.int64),
             np.empty(int(indptr[-1]), dtype=self.codes.dtype),

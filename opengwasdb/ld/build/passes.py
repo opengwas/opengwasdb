@@ -42,6 +42,7 @@ from ogld.build.inputs import (
 )
 from ogld.build.variant_set import Chromosome, Pass
 from ogld.format import Counts, InputError
+from ogld.format.geometry import chromosome_index, chromosome_ranges, local_rows
 from ogld.identity import Orientation
 from ogld.store import StoreWriter, Variants
 
@@ -124,11 +125,10 @@ def drop_flat(the_plan: Plan, found: Pass, chosen: Covariates) -> list[Chromosom
 
 
 def variants_table(chromosomes: list[Chromosome]) -> Variants:
-    """The store's variant table (spec §2): the chromosomes in order, strings of any length.
-    The chromosome labels are short and fixed-width, the type `ogld.format.geometry` reads."""
+    """The store's variant table (spec §2): the chromosomes in order, strings of any length."""
     oriented = [o for c in chromosomes for o in c.oriented]
     return Variants(
-        chrom=np.array([o.chrom for o in oriented], dtype=np.str_),
+        chrom=_strings(oriented, "chrom"),
         position=np.concatenate([c.position for c in chromosomes]),
         alid=_strings(oriented, "alid"),
         a1=_strings(oriented, "a1"),
@@ -153,16 +153,23 @@ def _units(the_plan: Plan, chromosome: Chromosome, chosen: Covariates) -> npt.ND
     return out
 
 
+def _labels(chromosomes: list[Chromosome]) -> npt.NDArray[np.str_]:
+    """The chromosome of each row of the Variant Set, in its order."""
+    return np.concatenate([np.full(len(c), c.name) for c in chromosomes])
+
+
 def chance(the_plan: Plan, chromosomes: list[Chromosome], chosen: Covariates) -> ChanceRates:
     """#405's chance-LD rates over the Variant Set (`ogld.build.diagnostic`)."""
-    labels = np.concatenate([np.full(len(c), c.name) for c in chromosomes])
-    start = np.cumsum([0] + [len(c) for c in chromosomes])
+    labels = _labels(chromosomes)
+    ranges = list(chromosome_ranges(labels).values())
+    stops = [stop for _, stop in ranges]
     unadjusted = covariates([], None, the_plan.samples.n)
 
     def units_of(rows: npt.NDArray[np.int64]) -> tuple[npt.NDArray[np.float64], ...]:
         both: tuple[list[npt.NDArray[np.float64]], ...] = ([], [])
         for i, c in enumerate(chromosomes):
-            mine = rows[(rows >= start[i]) & (rows < start[i + 1])] - start[i]
+            own = chromosome_index(stops, rows) == i
+            mine = local_rows(rows[own], ranges[i][0])
             picked = c.without(~np.isin(np.arange(len(c)), mine))
             for out, cov in zip(both, (unadjusted, chosen), strict=True):
                 out.append(_units(the_plan, picked, cov))
@@ -193,8 +200,9 @@ def write_ld(
         {"near_pairs": 0, "far_candidates": 0, "far_pairs": 0, "index_entries": 0},
         ChangeHistogram(),
     )
-    start = 0
+    ranges = chromosome_ranges(_labels(chromosomes))
     for chromosome in chromosomes:
+        start = ranges[chromosome.name][0]
         inputs = _inputs(the_plan, chromosome, chosen, floor, distances)
         band, rows = inputs.band, len(inputs.units)
         last, found = _write_band(writer, start, inputs, threads, written)
@@ -208,7 +216,6 @@ def write_ld(
         indptr, partner, codes = entries.both_directions(rows, start)
         writer.write_index(chromosome.name, indptr, partner, codes)
         _count(written, band, entries, len(partner))
-        start += rows
     return written
 
 

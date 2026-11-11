@@ -37,7 +37,8 @@ import zarr
 
 import ogld
 from ogld.build.diagnostic import long_range_ld_regions
-from ogld.build.near_band import read_alt_counts
+from ogld.build.genotypes import Genotypes
+from ogld.build.inputs import fileset, read_keep
 from ogld.format import (
     ENCODING,
     FAR_BP,
@@ -105,12 +106,22 @@ def variant_set() -> VariantSet:
     return VariantSet(rows, table, np.where(is_alt, 1.0, -1.0), len(dropped))
 
 
+def alt_counts(rows: npt.NDArray[np.int64]) -> npt.NDArray[np.int8]:
+    """The ALT allele count (0, 1, 2) of each Test Panel row, for the kept samples: [rows,
+    samples], read by the build's own reader (`ogld.build.genotypes`)."""
+    panel = panel_data().panel()
+    name = "the Test Panel"
+    kept = read_keep(panel.keep, name)
+    first = fileset(panel.pgen, kept, None, name)
+    with Genotypes(first) as genotypes:
+        return genotypes.rows(rows).astype(np.int8)
+
+
 def a1_frequency(
     rows: npt.NDArray[np.int64], is_alt: npt.NDArray[np.bool_]
 ) -> npt.NDArray[np.float64]:
     """A1's frequency among the kept samples: the ALT frequency, or its complement."""
-    panel = panel_data().panel()
-    alt = read_alt_counts(panel.pgen, panel.psam, panel.keep, rows)
+    alt = alt_counts(rows)
     alt_frequency = alt.mean(axis=1) / 2
     return np.where(is_alt, alt_frequency, 1 - alt_frequency)
 
@@ -322,9 +333,7 @@ def build_record(started: float) -> dict[str, object]:
 def unit_columns(vs: VariantSet, k: int) -> npt.NDArray[np.float64]:
     """Each variant's A1 dosages across the kept samples, after regressing out an intercept and
     the first `k` PCs, as a unit vector: a row product is r signed to A1 (spec §3)."""
-    data = panel_data()
-    panel = data.panel()
-    alt = read_alt_counts(panel.pgen, panel.psam, panel.keep, vs.panel_rows).astype(np.float64)
+    alt = alt_counts(vs.panel_rows).astype(np.float64)
     z = alt - alt.mean(axis=1, keepdims=True)
     if k:
         z = z - residual_fit(z, kept_pcs(k))
