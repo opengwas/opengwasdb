@@ -40,10 +40,12 @@ import numpy.typing as npt
 import zarr
 
 import ogld
+from ogld.build import record
 from ogld.build.diagnostic import long_range_ld_regions
 from ogld.build.genotypes import Genotypes
 from ogld.build.inputs import fileset, read_keep
-from ogld.format import FAR_BP, NEAR_BP, REncoding, Sourced
+from ogld.build.pc_check import K_MIN
+from ogld.format import FAR_BP, NEAR_BP, Adjustment, PcCheck, REncoding, Sourced
 from ogld.format.geometry import chromosome_ranges, local_rows
 from ogld.identity import Orientation, orient, resolve_reversed_indels, variant_order_key
 from ogld.store import StoreWriter, Variants
@@ -158,27 +160,21 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def adjustment(k: int) -> dict[str, object]:
+def adjustment(k: int) -> Adjustment:
+    """The `adjustment` record a build makes (`ogld.build.record.adjustment`) of the Test Panel's
+    first k PCs, which its manifest's PC Check kept."""
     if k == 0:
-        return {
-            "covariates": [],
-            "k": 0,
-            "k_target": 0,
-            "k_min": None,
-            "pc_file": None,
-            "pc_check": None,
-        }
+        return record.adjustment([], 0, K_MIN, None, None)
     manifest = panel_data().manifest()
     check = {key: manifest["pc_check"][key] for key in _PC_CHECK_KEYS}
     pcs = manifest["inputs"]["pcs"]
-    return {
-        "covariates": [f"PC{i}" for i in range(1, k + 1)],
-        "k": k,
-        "k_target": k,
-        "k_min": 5,
-        "pc_file": {"sha256": pcs["sha256"], "source": pcs["declared_source"]},
-        "pc_check": _plain(check),
-    }
+    return record.adjustment(
+        [f"PC{i}" for i in range(1, k + 1)],
+        k,
+        K_MIN,
+        (pcs["sha256"], pcs["declared_source"]),
+        cast(PcCheck, _plain(check)),
+    )
 
 
 _PC_CHECK_KEYS = (
@@ -223,12 +219,7 @@ def provenance_inputs(k: int) -> dict[str, object]:
             "samples_sha256": hashlib.sha256(("\n".join(iids) + "\n").encode()).hexdigest(),
         },
         "reference_assembly": "GRCh38",
-        "variant_filters": {
-            "filter": ["PASS", "."],
-            "mac_min": 20,
-            "info_min": None,
-            "autosomes_only": True,
-        },
+        "variant_filters": record.variant_filters(20, None),
     }
 
 
