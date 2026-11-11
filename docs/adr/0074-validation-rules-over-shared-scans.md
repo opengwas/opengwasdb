@@ -303,28 +303,25 @@ count, which are metadata, and reports exactly what it did before.
 
 Measured, each side's peak read from its own `VmHWM`:
 
-| | base `df000b4` | head |
-|---|---|---|
-| OGS-00016's HapMap3 subset, the subset rule's high-water mark | 12.12 GiB | 0.60 GiB |
-| OGS-00011's HapMap3 subset, the subset rule's high-water mark | 57.37 GiB | 1.60 GiB |
-| OGS-00011's HapMap3 subset, one comparison band | 26.4 s | 14.6 s |
-| OGS-00016, a full `validate`, wall time | 21,056 s | 20,436 s |
-| OGS-00016, a full `validate`, peak RSS | 14.55 GiB | 3.92 GiB |
-| OGS-00011, a full `validate`, wall time | 40,998 s | 33,219 s |
-| OGS-00011, a full `validate`, peak RSS | 68.53 GiB | 18.15 GiB |
+| | base `df000b4` | head, round 1 | head, round 2 |
+|---|---|---|---|
+| OGS-00016's HapMap3 subset, the subset rule's high-water mark | 12.12 GiB | 0.60 GiB | |
+| OGS-00011's HapMap3 subset, the subset rule's high-water mark | 57.37 GiB | 1.60 GiB | |
+| OGS-00011's HapMap3 subset, one comparison band | 26.4 s | 14.6 s | |
+| OGS-00016, a full `validate`, wall time | 21,056 s | 20,436 s | |
+| OGS-00016, a full `validate`, peak RSS | 14.55 GiB | 3.92 GiB | |
+| OGS-00011, a full `validate`, wall time | 40,998 s | 33,219 s | 32,279 s |
+| OGS-00011, a full `validate`, peak RSS | 68.53 GiB | 18.15 GiB | 8.30 GiB |
 
 The two full runs on each Store were started at the same moment, so they saw the
-same load. On OGS-00016 the base peak is the scan's last minute, where the
-side-table judge read the whole table beside every marked position, and head never
-reaches it: its 3.92 GiB is the plan rule's read of the 2.65 GiB table, one page at
-a time, before this round paged it. On OGS-00011 head's 18.15 GiB is that same
-plan rule's 12.7 GiB read; after this round's paging, a re-run of head at
-`<ogs11-head-commit>` peaks at `<ogs11-head-peak>` (<ogs11-head-source>).
-
-`validate`'s report was byte-identical across every base-against-head pair on
-OGS-00011. On OGS-00016 the two differ by one record and no other: head carries
-355-build's `side_tables.se_exceptions_rounded` warning, a rule `df000b4`
-predates.
+same load; the round-2 run on OGS-00011 is head alone, against a base figure
+measured on the same Store. Base's OGS-00016 peak is the scan's last minute, where
+the side-table judge read the whole table beside every marked position. Round 1's
+peaks are reads of the table: 3.92 GiB is the plan rule's read of the 2.65 GiB
+table on OGS-00016 and 18.15 GiB its read of the 12.7 GiB one on OGS-00011. After
+round 2 pages that read, nothing head does reads the table whole, and its 8.30 GiB
+is the Dense association scan's own working set, reached as that scan finished at
+14:45:28 rather than by any read of the table.
 
 The paragraphs in "Time and memory" above that call the subset check's table read
 the peak of a full run, and that call the scan's held folds the reason its later
