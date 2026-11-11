@@ -44,8 +44,10 @@ A build reads PLINK 2 pgen filesets only (ADR 0002, decision 1).
 - **Assembly.** GRCh38. Positions are 1-based. The builder cannot check the assembly from the
   file; `genotype_source` names it, and an LD Store records `reference_assembly` GRCh38.
 - **Filesets.** One fileset per chromosome, or one for the genome. A chromosome MUST NOT appear in
-  two filesets. Every fileset's `.psam` MUST hold every keep-file sample; extra samples are
-  ignored, and order does not matter.
+  two filesets, and within a fileset its records MUST be one contiguous run. No two filesets may
+  share a file name, since provenance names each file by its name. Every fileset's `.psam` MUST
+  hold every keep-file sample; extra samples are ignored, and order does not matter: the build
+  puts every fileset's samples, and the PC File's, in one order, the first fileset's.
 - **Records.** Biallelic: one ALT per record. A split multi-allelic site is several records at
   one position, each its own variant, and their pair at distance 0 is an ordinary pair. REF and
   ALT MUST be strings of `A`, `C`, `G` or `T`, in either case; the builder passes them unchanged
@@ -60,9 +62,10 @@ A build reads PLINK 2 pgen filesets only (ADR 0002, decision 1).
   naming the chromosome. The reason: a male's X and Y genotypes are hemizygous, and the diploid
   dosage model has no rule for coding them, and the HGDP+1kGP psam files carry no sex to apply one.
   `ld-store.md` already names `X`, `Y` and `MT`, so the format is ready when the owner rules.
-- **Columns.** The `.pvar` MUST have `#CHROM POS ID REF ALT FILTER`; INFO is read only when
-  `info_min` is set (§6). The FILTER column MUST be present even when every value is `.`, so that
-  "nothing to filter" is said by the file, not assumed from a missing column.
+- **Columns.** The `.pvar` (plain, or zstd-compressed as plink2's `.pvar.zst`) MUST have
+  `#CHROM POS ID REF ALT FILTER`, found by name, with one record per pgen variant; INFO is read
+  only when `info_min` is set (§6). The FILTER column MUST be present even when every value is
+  `.`, so that "nothing to filter" is said by the file, not assumed from a missing column.
 - **IDs.** Set at conversion to `chrom:pos:REF:ALT` (§3). The builder never keys by ID, which
   can repeat; it names a variant by ID in a refusal.
 - **Genotypes.** Hard calls, or dosages where the pgen carries them; they MUST be complete (§7).
@@ -120,12 +123,20 @@ after the header. Every listed sample MUST be in every fileset's `.psam` and hav
 a duplicate IID is refused. The keep file's SHA-256 of sorted IDs is `panel.samples_sha256`
 (`ld-store.md` §7).
 
+**A Source Panel's samples are unrelated** (owner, 10 November 2026; ADR 0002, decision 11): its
+keep file holds no first- or second-degree pair. Relatives share long haplotypes on every
+chromosome, so they put LD between unlinked variants that n does not predict: with the
+HGDP+1kGP members files' 1kGP trios (197 first-degree pairs among EUR's 771), the share of
+seeded cross-chromosome pairs at r² ≥ 0.01 was 1.76 times what sampling predicts at k = 0, and
+1.07 times among the 665 unrelated. The builder cannot judge relatedness from genotypes it does
+not otherwise model, so the rule is the keep file's: §10 says how the HGDP+1kGP ones are made.
+
 ## 5. The PC File
 
 plink2's `.eigenvec` layout: tab-separated text, a header `#IID PC1 PC2 … PCm` (plink2 also
 writes `#FID IID PC1 …`, which is accepted: samples are matched by IID), and one row per sample.
 
-- **PCs used:** PC1…PCm in order; the covariates are the first k of them the PC Check keeps (§8),
+- **PCs used:** PC1…PCm in order, and the header MUST name them so; the covariates are the first k of them the PC Check keeps (§8),
   or all it keeps if fewer, and at least 5 MUST survive. The HGDP+1kGP PC Files have m = 20.
 - **Samples:** every keep-file sample MUST have a row; extra rows are ignored; a duplicate IID is
   refused.
@@ -148,7 +159,7 @@ it fails, in `variants_dropped.<reason>`. Every setting is in `variant_filters` 
 | 1 | FILTER is `PASS` or `.` | always | `filter` |
 | 2 | MAC ≥ `mac_min`, counted on the kept samples | 20 | `mac` |
 | 3 | INFO > `info_min`, from the pvar INFO subfield `R2` (Minimac) or `INFO` (IMPUTE); a pgen with neither, with `info_min` set, is refused; with both, refused | 0.8, or None | `info` |
-| 4 | nonzero genotype variance on the kept samples (after PC Adjustment, nonzero residual variance) | always | `zero_variance` |
+| 4 | nonzero genotype variance on the kept samples (after PC Adjustment, nonzero residual variance: a residual sum of squares above 10⁻¹² of the centred dosages', judged once the PC Check has chosen the covariates, so after filter 5) | always | `zero_variance` |
 | 5 | one record per ALID: of a reversed-indel pair, the record whose REF the ALID spells first | always | `duplicate_reversed_indel` |
 
 Biallelic records are the conversion's job (§3). There is no call-rate filter (§7).
@@ -180,7 +191,22 @@ EUR's would be about 26% of the 308 GB in `ld-store.md`, near 80 GB; ogld#7 meas
 
 **Rule: genotypes MUST be complete.** A build refuses an input with any missing genotype among
 the kept samples, naming the number of missing genotypes, the first variant by ID and the panel.
-No genotype is imputed and there is no call-rate floor (ADR 0002, decision 2).
+No genotype is imputed and there is no call-rate floor (ADR 0002, decision 2). A build reads the
+records in blocks of 65,536, in file order, and refuses the first fault it meets, in this order:
+
+- **A malformed pvar line** (fields that do not match the header, a POS that is not an integer)
+  is refused as its block is read, naming the line, whether or not a missing call came before.
+- **Missing calls.** It checks each block's genotypes for missing calls before it applies the
+  other rules to that block, and once it has found one it only counts missing calls in the rest,
+  so the refusal counts every one from the first.
+- **A block before the first missing call is judged in full:** a fault there, such as a missing
+  FILTER column or a record on chrX, is refused first, and the missing calls after it are never
+  counted.
+- **A pvar whose record count differs from its pgen's** is refused when that fileset has been
+  read, before the missing calls are, since the counts would describe the wrong records.
+
+So an input whose first block has a missing call, as the shipped gnomAD v3.1.2 pgens' do, is
+refused for its missing calls even though it has no FILTER column either.
 
 **Why.** `plink2 --r-unphased` computes each pair's r on the samples called at both variants
 (pairwise-complete): on 2.74 M EUR chr22 pairs of the gnomAD v3.1.2 VCF its float64 r equals
@@ -234,7 +260,9 @@ the number of covariates actually used (owner, 7 November 2026; ADR 0002, decisi
   so every stretch of up to 2 Mb lies wholly in one window. A window's variants are thinned evenly
   to at most 5,000; a window with fewer than 5 is skipped.
 - **A window's basis:** its top min(5, m) sample-space principal components: the leading
-  eigenvectors of XᵀX, X the window's genotypes standardised per variant.
+  eigenvectors of XᵀX, X the window's genotypes standardised per variant. A window whose
+  genotypes have rank below 5, such as one of five variants two of which are identical, has
+  only that many: no direction its genotypes do not span is added to its basis.
 - **Share:** a PC's share in a window is the fraction of its centred variance in the span of
   the window's basis.
 - **Per PC** (`PcScan` in provenance): `window`, the window with the largest share, as
@@ -253,7 +281,13 @@ and `seed`, and `quantile`). `adjustment`
 records `k_target` (10), `k_min` (5) and `k`, the number used, and `covariates` names them. At
 `k` = 0 no PC Check runs: `pc_file`, `pc_check` and `k_min` are null, and `k_target` = k = 0.
 
-**What it found on the HGDP+1kGP PC Files** (`proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pc_check_v2_scan.tsv` and `proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pcs_v2/<panel>.json`, `scripts/make_pcs.py --scan-only`'s reports):
+**What it found on the HGDP+1kGP PC Files** (the JSON report beside each PC File in
+`/data/opengwasdb/work/ogld/pcs/` on the IEU nodes, each naming the commit that made it: `scripts/make_pcs.py` at `bb38fbb`, run whole on all
+five panels on 10 November 2026 with the adopted `ogld.build.pc_check`, which selects the MAF ≥
+0.05 variants itself. It wrote the five PC Files again byte for byte, and its scans equal the
+earlier `--scan-only` reports, `proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pcs_v2/<panel>.json` and
+`proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pc_check_v2_scan.tsv`, to 4×10⁻¹⁶ in every share, null and
+ratio, with the same best windows):
 
 | panel | samples (PCA + projected) | windows | local PCs | kept | k used | largest window share among PC1–PC10 (window null), and its ratio | smallest ratio of any PC |
 |---|---|---|---|---|---|---|---|
@@ -289,9 +323,12 @@ PC1–PC9 and scanned as if each were a PC: they are what a PC that tracks an in
   0.055–0.085 against window nulls of 0.080–0.098; without it, one crossing 0.10 by chance would
   meet the first condition.
 - **Two implementations agree** on the shares: the prototype's `proto/1-build-inputs@28b5380:prototypes/build-inputs/m10_local_pc_rule.py`, written
-  separately, gives the same windows, window shares and rest shares on EUR as
-  `scripts/test_panel/pc_check.py` to every printed digit. `tests/test_pc_check.py` holds the rule
-  to the three real verdicts above (EUR 17q21.31 dropped, EUR PC2 kept, AMR PC7 kept).
+  separately, gives the same windows, window shares and rest shares on EUR as lane 2d's reference
+  to every printed digit. ogld#5 adopted that reference as `ogld/build/pc_check.py`, the one
+  implementation: the builder, `scripts/make_pcs.py` and the Test Panel's script all run it, and
+  it selects the MAF ≥ 0.05 variants itself. `tests/test_pc_check.py` holds it to the three real
+  verdicts above (EUR 17q21.31 dropped, EUR PC2 kept, AMR PC7 kept), and to the Test Panel's
+  scan as the reference made it before the adoption (its manifest's `pc_check`), to 10⁻¹².
 
 **The rule it replaces.** The first rule failed a PC when one of four named regions explained
 ≥ 10% of it and ≥ 2× the most any of 47 random 4 Mb windows did. It failed EUR PC2 on LCT, with
@@ -303,7 +340,8 @@ rest of the genome explains the PC, and keeps it.
 
 ## 9. Long-Range LD Regions
 
-[`long-range-ld-regions-grch38.tsv`](./long-range-ld-regions-grch38.tsv) lists the regions in
+[`ogld/build/long-range-ld-regions-grch38.tsv`](../../ogld/build/long-range-ld-regions-grch38.tsv),
+data of the package, which owns it, lists the regions in
 GRCh38, 1-based inclusive, each with its source and its source coordinates:
 
 - the 24 autosomal regions of Price et al. (2008, _AJHG_ 83:132) and Weale (2010), from the GRCh37
@@ -338,8 +376,16 @@ pruning window. The regions also define "outside the excluded regions" for ogld#
   ogld#7 decides their permanent home.
 - **Samples:** the members files under `/data/opengwasdb/reference/hgdp1kgp-hg38*/members/`; the
   v2 counts are EUR 771, AFR 801, EAS 816, SAS 782, AMR 345 (ADR 0002 lists the five absent).
+  These are the PC Files' samples (below).
+- **Keep files:** `scripts/make_keeps.py` writes `/data/opengwasdb/work/ogld/keep/<panel>.keep`
+  (`$OGLD_KEEP`), plink2's `#IID` layout: each panel's PC File samples that gnomAD v3.1.2's sample
+  metadata does not mark related (`relatedness_inference.related` false, its maximal set of
+  unrelated samples), in the PC File's order. A sample the metadata lacks is refused. EUR 665,
+  AFR 608, EAS 724, SAS 672, AMR 341. A build reads these (§4); the members files are the PC
+  Files' input only.
 - **PC Files:** `scripts/make_pcs.py` writes `/data/opengwasdb/work/ogld/pcs/<panel>.eigenvec`
-  and, beside it, the PC Check's JSON report; declared source "ogld scripts/make_pcs.py on HGDP+1kGP v2" with its commit.
+  (`$OGLD_PCS`) and, beside it, the PC Check's JSON report, which names that file by its root
+  variable and its SHA-256; declared source "ogld scripts/make_pcs.py on HGDP+1kGP v2" with its commit.
 - **Conversion:** §3's BCF command, one fileset per chromosome.
 
 ## 11. The Test Panel

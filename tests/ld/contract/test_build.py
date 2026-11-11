@@ -27,6 +27,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+import build_fixtures
 import numpy as np
 import numpy.typing as npt
 import pytest
@@ -35,7 +36,6 @@ from support import (
     PANEL,
     alids,
     check_panel_paths,
-    contract,
     panel_data,
     passing_rows,
     reference,
@@ -46,9 +46,7 @@ import ogld
 from ogld import cli
 from ogld.format import far_code_floor, t_far
 
-OGLD_5 = contract("ogld#5")
 PANEL_ID = "test-panel-hgdp1kgp-EUR"
-_BUILT: dict[int, tuple[ogld.Provenance, Path]] = {}
 _WITH_A_LOCAL_PC: list[ogld.Provenance] = []
 
 
@@ -69,13 +67,11 @@ def inputs(k: int = support.K, **overrides: Any) -> ogld.BuildInputs:
 
 
 def built(k: int, tmp_path_factory: pytest.TempPathFactory) -> tuple[ogld.Provenance, Path]:
-    """The Test Panel built at k, once per worker; the first call is where a test stops
-    until ogld#5 lands."""
-    if k not in _BUILT:
-        out = tmp_path_factory.mktemp(f"built-k{k}") / "store"
-        _BUILT[k] = (ogld.build(inputs(k), out), out)
-        check_panel_paths()
-    return _BUILT[k]
+    """The Test Panel built at k, once per worker and shared with ogld#5's own tests
+    (tests/build_fixtures.py); the first call is where a test stops until ogld#5 lands."""
+    found = build_fixtures.test_panel_build(k, tmp_path_factory)
+    check_panel_paths()
+    return found
 
 
 def near_band_matches(store: ogld.LDStore, k: int) -> int:
@@ -92,7 +88,6 @@ def near_band_matches(store: ogld.LDStore, k: int) -> int:
     return int(near.sum())
 
 
-@OGLD_5
 def test_the_near_band_at_k10_matches_the_reference(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -100,7 +95,6 @@ def test_the_near_band_at_k10_matches_the_reference(
     assert near_band_matches(ogld.open(out), 10) > 1000
 
 
-@OGLD_5
 def test_the_near_band_at_k0_matches_the_reference(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -109,7 +103,6 @@ def test_the_near_band_at_k0_matches_the_reference(
     assert near_band_matches(ogld.open(out), 0) > 1000
 
 
-@OGLD_5
 def test_the_far_pairs_kept_are_the_reference_s(tmp_path_factory: pytest.TempPathFactory) -> None:
     _, out = built(10, tmp_path_factory)
     ref = reference(10)
@@ -127,7 +120,6 @@ def test_the_far_pairs_kept_are_the_reference_s(tmp_path_factory: pytest.TempPat
     assert ((kept == expected) | edge).all(), "a Far Pair was kept or dropped against the reference"
 
 
-@OGLD_5
 def test_the_provenance_records_what_was_built(tmp_path_factory: pytest.TempPathFactory) -> None:
     provenance, _ = built(10, tmp_path_factory)
     assert provenance["panel"]["n"] == support.N_SAMPLES == panel_data().panel().n_samples
@@ -162,7 +154,6 @@ def test_the_provenance_records_what_was_built(tmp_path_factory: pytest.TempPath
     assert provenance["counts"]["index_entries"] >= 2 * provenance["counts"]["far_pairs"]
 
 
-@OGLD_5
 def test_an_unadjusted_build_records_k0_and_no_minimum(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -178,7 +169,6 @@ def test_an_unadjusted_build_records_k0_and_no_minimum(
     assert provenance["t_far"] == t_far(771, 0)
 
 
-@OGLD_5
 def test_the_provenance_records_the_diagnostic_and_the_cost(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -201,7 +191,6 @@ def test_the_provenance_records_the_diagnostic_and_the_cost(
     assert build["threads"] >= 1
 
 
-@OGLD_5
 def test_the_variant_set_is_the_test_panel_s_passing_rows(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -213,14 +202,12 @@ def test_the_variant_set_is_the_test_panel_s_passing_rows(
     assert set(m.absent) == set(alids(failing))
 
 
-@OGLD_5
 def test_a_pgen_without_info_refuses_an_info_floor(tmp_path: Path) -> None:
     # A sequenced panel has no INFO: info_min must be None, said on purpose, not skipped.
     with pytest.raises(ogld.InputError, match="INFO"):
         ogld.build(inputs(10, info_min=0.8), tmp_path / "store")
 
 
-@OGLD_5
 def test_ogld_build_writes_a_store_that_validates(tmp_path: Path) -> None:
     out = tmp_path / "store"
     argv = ["build", str(out), "--pgen", str(PANEL.pgen), "--keep", str(PANEL.keep)]
@@ -357,7 +344,6 @@ def with_a_local_pc(tmp_path_factory: pytest.TempPathFactory) -> ogld.Provenance
     return _WITH_A_LOCAL_PC[0]
 
 
-@OGLD_5
 def test_an_input_with_a_missing_call_is_refused(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
@@ -373,7 +359,6 @@ def test_an_input_with_a_missing_call_is_refused(
     assert PANEL_ID in str(refused.value), "it names the panel"
 
 
-@OGLD_5
 def test_a_reversed_indel_pair_keeps_the_record_whose_ref_the_alid_spells_first(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
@@ -403,7 +388,6 @@ def test_a_reversed_indel_pair_keeps_the_record_whose_ref_the_alid_spells_first(
     assert store.matrix([kept]).absent == (), "the insertion, REF = A1, is in the Variant Set"
 
 
-@OGLD_5
 def test_a_local_pc_is_dropped_and_an_ancestry_pc_with_a_strong_window_is_kept(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -420,7 +404,6 @@ def test_a_local_pc_is_dropped_and_an_ancestry_pc_with_a_strong_window_is_kept(
     assert provenance["adjustment"]["covariates"][0] == "PC2"
 
 
-@OGLD_5
 def test_seven_surviving_pcs_are_used_with_t_far_at_k7(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -435,7 +418,6 @@ def test_seven_surviving_pcs_are_used_with_t_far_at_k7(
     assert provenance["far_code_floor"] == far_code_floor(t_far(771, 7))
 
 
-@OGLD_5
 def test_fewer_than_five_surviving_pcs_are_refused(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
