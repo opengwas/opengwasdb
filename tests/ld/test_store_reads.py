@@ -228,6 +228,16 @@ def test_a_region_keeps_none_of_its_rows_far_pairs_that_leave_it(start: int, sto
     np.testing.assert_array_equal(got, expected[start:stop, start:stop])
 
 
+def test_alids_of_names_each_row_as_the_test_panel_does() -> None:
+    # The one string column `proxies` reads (ogld#14), in the order asked, repeats kept.
+    reader = StoreReader.open(TEST_STORE)
+    rows = np.array([1055, 0, 467, 468, 0, 700])
+    assert list(reader.alids_of(rows)) == support.alids(support.passing_rows()[rows])
+    assert reader.alids_of(np.array([], dtype=np.int64)).shape == (0,)
+    with pytest.raises(ValueError, match="Absent ALID"):
+        reader.alids_of(np.array([3, -1]))
+
+
 def test_a_region_is_a_span_of_one_chromosome() -> None:
     reader = StoreReader.open(TEST_STORE)
     assert reader.region_r(5, 5).shape == (0, 0)
