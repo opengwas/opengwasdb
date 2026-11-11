@@ -26,6 +26,7 @@ import numpy.typing as npt
 import zarr
 
 from ogld.format import InputError
+from ogld.format.geometry import spans
 
 #: Decoded inner chunks a reader keeps, in bytes. At layout C a Near Band chunk is 512 KiB.
 CACHE_BYTES: Final = 1 << 28
@@ -83,6 +84,29 @@ class ChunkCache:
         ]
         return found
 
+    def runs(
+        self, array: zarr.Array[Any], first: npt.ArrayLike, length: npt.ArrayLike
+    ) -> list[npt.NDArray[Any]]:
+        """The runs first[i] … first[i] + length[i] − 1 of a 1-D array, each as one slice of
+        the inner chunks that hold it, read whole, once, as `take` reads them.
+
+        A run in one chunk is a read-only view of the kept chunk, and one across chunks is
+        joined; no coordinate is built per element. So a region's Near Band rows read as
+        contiguous slices, one per row (spec §10; ogld#14)."""
+        start = np.asarray(first, dtype=np.int64)
+        count = np.asarray(length, dtype=np.int64)
+        size = int(array.chunks[0])
+        some = count > 0
+        lo = start[some] // size
+        hi = (start[some] + count[some] - 1) // size
+        wanted = np.unique(spans(lo, hi - lo + 1))
+        chunks = dict(zip(wanted.tolist(), self._chunks(array, wanted, size), strict=True))
+        empty = np.asarray(array[0:0])
+        return [
+            _run(chunks, s, n, size) if n else empty
+            for s, n in zip(start.tolist(), count.tolist(), strict=True)
+        ]
+
     def _chunks(
         self, array: zarr.Array[Any], wanted: npt.NDArray[np.int64], size: int
     ) -> list[npt.NDArray[Any]]:
@@ -131,6 +155,21 @@ class ChunkCache:
             _, (_, dropped) = self._kept.popitem(last=False)
             self._bytes -= dropped
         return chunk
+
+
+def _run(
+    chunks: dict[int, npt.NDArray[Any]], start: int, length: int, size: int
+) -> npt.NDArray[Any]:
+    """Elements start … start + length − 1 from the decoded `chunks` of `size` elements each."""
+    stop = start + length
+    pieces = [
+        chunks[k][max(start, k * size) - k * size : min(stop, (k + 1) * size) - k * size]
+        for k in range(start // size, (stop - 1) // size + 1)
+    ]
+    run = pieces[0] if len(pieces) == 1 else np.concatenate(pieces)
+    view = run.view()
+    view.flags.writeable = False
+    return view
 
 
 #: numpy's variable-width strings (StringDType, what zarr returns for a string array) keep a

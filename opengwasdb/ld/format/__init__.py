@@ -48,6 +48,7 @@ from ogld.format.semantics import (
     answer_kinds,
     judge_region,
     judge_request,
+    judge_window,
 )
 
 __all__ = [
@@ -84,6 +85,7 @@ __all__ = [
     "answer_kinds",
     "judge_region",
     "judge_request",
+    "judge_window",
     "near_row_lengths",
     "t_far",
 ]

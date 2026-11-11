@@ -165,13 +165,30 @@ def judge_request(*, r2: float, kb: float, t_far: float, near_bp: int, far_bp: i
     store left out there has r̂² < t_far ≤ r2. r2 = t_far exactly is answered. The
     distances and t_far are the store's recorded ones.
     """
-    if not (math.isfinite(r2) and 0.0 <= r2 <= 1.0 and math.isfinite(kb) and kb >= 0):
+    if not (math.isfinite(kb) and kb >= 0):
         return Decision(
             RefusalReason.INVALID,
             f"r2 must be in [0, 1] and kb finite and ≥ 0: r2={r2}, kb={kb}",
             math.nan,
         )
-    window = kb * 1000
+    return judge_window(r2=r2, window_bp=kb * 1000, t_far=t_far, near_bp=near_bp, far_bp=far_bp)
+
+
+def judge_window(
+    *, r2: float, window_bp: float, t_far: float, near_bp: int, far_bp: int
+) -> Decision:
+    """`judge_request` for a window already in bp, W: the same rule, one copy of it.
+
+    The reader asks this before it reads a variant's partners (ogld#14), so a window it is
+    handed is answered or refused exactly as the request that made it was, never re-decided
+    at another edge."""
+    window = window_bp
+    if not (math.isfinite(r2) and 0.0 <= r2 <= 1.0 and math.isfinite(window) and window >= 0):
+        return Decision(
+            RefusalReason.INVALID,
+            f"r2 must be in [0, 1] and the window finite and ≥ 0: r2={r2}, W={window} bp",
+            math.nan,
+        )
     if window > far_bp:
         detail = (
             f"a {window:,.0f} bp window reaches past {far_bp:,} bp, where pairs are Not Measured"

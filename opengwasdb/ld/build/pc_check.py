@@ -30,7 +30,7 @@ holds about 5 / n of any vector's variance, so below about 100 samples no ratio 
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Final
@@ -40,6 +40,8 @@ import numpy.typing as npt
 
 from ogld.format import InputError, PcCheck, PcNull, PcScan
 
+#: Dosages (variants × samples), whatever their dtype: the scan casts them (`common`, `_basis`).
+Dosages = npt.NDArray[np.floating] | npt.NDArray[np.integer]
 WINDOW_BP: Final = 4_000_000
 STEP_BP: Final = 2_000_000
 MAX_VARIANTS: Final = 5_000
@@ -113,8 +115,12 @@ class Checked:
 
 
 def common(dosages: npt.NDArray[np.floating] | npt.NDArray[np.integer]) -> npt.NDArray[np.bool_]:
-    """Which rows of ALT dosages (variants × samples) have MAF ≥ 0.05 on those samples."""
-    frequency = dosages.mean(axis=1) / 2
+    """Which rows of ALT dosages (variants × samples) have MAF ≥ 0.05 on those samples.
+
+    The one frequency rule, and the one place the scan's float32 is decided: a row's frequency
+    is the mean of its float32 dosages, so whatever holds a build's genotypes (float64 from the
+    pgen) and whatever holds a script's select the same variants (ogld#25)."""
+    frequency = dosages.astype(np.float32, copy=False).mean(axis=1) / 2
     selected: npt.NDArray[np.bool_] = np.minimum(frequency, 1 - frequency) >= COMMON_MAF
     return selected
 
@@ -127,9 +133,75 @@ def windows(
     threads: int = 1,
 ) -> Windows:
     """The scan's windows over variants `g` (variants × samples, complete), in position order
-    within each chromosome. Only the common ones are used (MAF ≥ 0.05, `common`)."""
-    keep = common(g)
-    chrom, pos, g = chrom[keep], pos[keep], g[keep]
+    within each chromosome. Only the common ones are used (MAF ≥ 0.05, `common`).
+
+    For a caller that holds every genotype: `stream_windows` per chromosome, reading from `g`,
+    so a script and a build run one scan loop (ogld#25)."""
+    parts = []
+    for c in dict.fromkeys(chrom.tolist()):
+        on = np.flatnonzero(chrom == c)
+        parts.append(
+            stream_windows(
+                str(c),
+                pos[on],
+                common(g[on]),
+                _rows_of(g, on),
+                g.shape[1],
+                threads=threads,
+            )
+        )
+    return merge(parts) if parts else Windows([], np.empty((g.shape[1], 0)))
+
+
+def _rows_of(
+    g: npt.NDArray[np.floating] | npt.NDArray[np.integer], on: npt.NDArray[np.intp]
+) -> Callable[[npt.NDArray[np.intp]], Dosages]:
+    """A `read` of the rows `on` of `g`, as `stream_windows` asks for them."""
+
+    def read(rows: npt.NDArray[np.intp]) -> Dosages:
+        return g[on[rows]]
+
+    return read
+
+
+def stream_windows(
+    chrom: str,
+    pos: npt.NDArray[np.int64],
+    selected: npt.NDArray[np.bool_],
+    read: Callable[[npt.NDArray[np.intp]], Dosages],
+    samples: int,
+    *,
+    threads: int = 1,
+) -> Windows:
+    """One chromosome's windows without its genotypes in memory.
+
+    `pos` are the chromosome's variants in position order, `selected` marks the common ones
+    (`common` of their dosages) and `read(rows)` returns the genotypes of those positions' rows,
+    (len(rows), samples). A window uses at most `MAX_VARIANTS` of its variants, chosen by
+    position alone, so only those are read, `threads` windows at a time: what is held is bounded
+    by `threads` windows, not by the chromosome (ogld#25).
+
+    Every `read` runs on the calling thread, never in the pool: a build's `read` uses one pgen
+    reader, which is not safe to share between threads. Only `_basis` runs on workers."""
+    common_rows = np.flatnonzero(selected)
+    if not len(common_rows):
+        return Windows([], np.empty((samples, 0)))
+    where, rows = _layout(np.full(len(common_rows), chrom), pos[common_rows])
+    blocks: list[npt.NDArray[np.float64]] = []
+    with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
+        for first in range(0, len(rows), max(1, threads)):
+            wanted = [common_rows[r[_pick(len(r))]] for r in rows[first : first + max(1, threads)]]
+            held = [np.asarray(read(w), dtype=np.float32) for w in wanted]
+            blocks += pool.map(_basis, held)
+            del held
+    return _stacked(where, blocks, samples)
+
+
+def _layout(
+    chrom: npt.NDArray[np.str_], pos: npt.NDArray[np.int64]
+) -> tuple[list[tuple[str, int]], list[npt.NDArray[np.intp]]]:
+    """The windows (chromosome, start) with at least `N_LOCAL` of the variants at `pos`, and
+    each one's variants, as indices into `pos`. `pos` is in position order within a chromosome."""
     where: list[tuple[str, int]] = []
     rows: list[npt.NDArray[np.intp]] = []
     for c in dict.fromkeys(chrom.tolist()):
@@ -139,11 +211,21 @@ def windows(
             if len(inside) >= N_LOCAL:
                 where.append((str(c), start))
                 rows.append(inside)
-    with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
-        blocks = list(pool.map(lambda inside: _basis(g[inside]), rows))
-    samples = g.shape[1]
+    return where, rows
+
+
+def _stacked(
+    where: list[tuple[str, int]], blocks: list[npt.NDArray[np.float64]], samples: int
+) -> Windows:
     basis = np.concatenate(blocks, axis=1) if blocks else np.empty((samples, 0))
     return Windows(where, basis)
+
+
+def _pick(m: int) -> npt.NDArray[np.intp]:
+    """Which of a window's `m` variants are used: evenly thinned to at most `MAX_VARIANTS`."""
+    evenly = np.linspace(0, m - 1, min(MAX_VARIANTS, m)).astype(int)
+    picked: npt.NDArray[np.intp] = np.unique(evenly)
+    return picked
 
 
 def merge(parts: Sequence[Windows]) -> Windows:
@@ -155,9 +237,9 @@ def merge(parts: Sequence[Windows]) -> Windows:
 
 
 def _basis(g: npt.NDArray[np.floating] | npt.NDArray[np.integer]) -> npt.NDArray[np.float64]:
-    """A window's top min(5, rank) sample-space components, padded with zero columns to 5."""
-    picked = np.unique(np.linspace(0, len(g) - 1, min(MAX_VARIANTS, len(g))).astype(int))
-    x = g[picked].astype(np.float64)
+    """A window's top min(5, rank) sample-space components, padded with zero columns to 5, from
+    the genotypes `g` of the variants `_pick` chose."""
+    x = g.astype(np.float64)
     x -= x.mean(axis=1, keepdims=True)
     sd = np.sqrt((x * x).sum(axis=1))
     x = x[sd > 0] / sd[sd > 0, None]
@@ -297,5 +379,6 @@ __all__ = [
     "common",
     "is_local",
     "merge",
+    "stream_windows",
     "windows",
 ]

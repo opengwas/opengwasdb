@@ -107,7 +107,9 @@ class _Pending:
     ids: list[str] = field(default_factory=list)
     alleles: list[tuple[str, int, str, str]] = field(default_factory=list)
     alt_sum: list[npt.NDArray[np.float64]] = field(default_factory=list)
-    genotypes: list[npt.NDArray[np.float32]] = field(default_factory=list)
+    #: Which kept records are common (`pc_check.common`), all the PC Check keeps of their
+    #: genotypes: they are re-read per window (ogld#25), when the build scans.
+    common: list[npt.NDArray[np.bool_]] = field(default_factory=list)
 
 
 @dataclass
@@ -123,6 +125,8 @@ class Pass:
     windows: dict[str, pc_check.Windows] = field(default_factory=dict)
     seen: set[str] = field(default_factory=set)
     pending: _Pending | None = None
+    #: The fileset being read, open: the PC Check re-reads its windows' genotypes from it.
+    reader: Genotypes | None = None
 
     @property
     def panel(self) -> str:
@@ -136,16 +140,18 @@ def variant_set(filesets: list[Fileset], settings: Settings, samples: int) -> Pa
     state = Pass(settings, samples)
     for index, fileset in enumerate(filesets):
         with Genotypes(fileset) as genotypes:
+            state.reader = genotypes
             read = _read_fileset(state, index, fileset, genotypes)
-        if read != genotypes.variant_count:
-            raise InputError(
-                f"panel {state.panel}: {fileset.pvar.name} has {read} records but "
-                f"{fileset.pgen.name} has {genotypes.variant_count} variants"
-            )
-        if state.missing_calls:
-            state.pending = None  # a missing call is refused before anything it would hide
-        else:
-            _close_pending(state)
+            if read != genotypes.variant_count:
+                raise InputError(
+                    f"panel {state.panel}: {fileset.pvar.name} has {read} records but "
+                    f"{fileset.pgen.name} has {genotypes.variant_count} variants"
+                )
+            if state.missing_calls:
+                state.pending = None  # a missing call is refused before anything it would hide
+            else:
+                _close_pending(state)
+            state.reader = None
     _refuse_missing_calls(state)
     if not state.chromosomes:
         raise InputError(f"panel {state.panel}: no variant passes the filters (build-inputs §6)")
@@ -250,7 +256,7 @@ def _judge(
         pending.alleles.append((pending.name, int(block.pos[at]), block.ref[at], block.alt[at]))
     pending.alt_sum.append(run[picked].sum(axis=1))
     if state.settings.scan:
-        pending.genotypes.append(run[picked].astype(np.float32))
+        pending.common.append(pc_check.common(run[picked]))
 
 
 def _check_alleles(block: Records, start: int, stop: int, panel: str) -> None:
@@ -352,12 +358,28 @@ def _close_pending(state: Pass) -> None:
     found = _chromosome_of(pending, oriented, order, state.samples)
     state.chromosomes.append(found)
     if state.settings.scan:
-        # The PC Check's windows, from this chromosome's genotypes, which are then let go.
-        genotypes = np.concatenate(pending.genotypes)[order]
-        labels = np.full(len(found), found.name)
-        state.windows[found.name] = pc_check.windows(
-            labels, found.position, genotypes, threads=state.settings.threads
-        )
+        _scan(state, pending, found, order)
+
+
+def _scan(state: Pass, pending: _Pending, found: Chromosome, order: list[int]) -> None:
+    """The PC Check's windows of the chromosome `found`, reading each window's genotypes from
+    the open fileset when it is scanned, so no chromosome's genotypes are held (ogld#25)."""
+    reader = state.reader
+    if reader is None:  # pragma: no cover - the pass opens the fileset before it closes a run
+        raise RuntimeError("the PC Check scans a chromosome while no fileset is open")
+    common = np.concatenate(pending.common)[order]
+
+    def read(rows: npt.NDArray[np.intp]) -> npt.NDArray[np.float32]:
+        return reader.rows(found.rows[rows]).astype(np.float32)
+
+    state.windows[found.name] = pc_check.stream_windows(
+        found.name,
+        found.position,
+        common,
+        read,
+        state.samples,
+        threads=state.settings.threads,
+    )
 
 
 def _chromosome_of(

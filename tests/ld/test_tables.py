@@ -45,17 +45,21 @@ def test_a_table_refuses_columns_of_different_lengths() -> None:
 
 
 def test_partners_refuses_an_indptr_that_does_not_end_at_its_entries() -> None:
+    one = np.array([5], dtype=np.int64)
     ok = Partners(
-        indptr=np.array([0, 1, 1], dtype=np.int64),
-        partner=np.array([5], dtype=np.int64),
-        r=np.array([0.5]),
+        indptr=np.array([0, 1, 1], dtype=np.int64), partner=one, r=np.array([0.5]), distance=one
     )
     assert len(ok) == 2
     with pytest.raises(ValueError, match="indptr"):
         Partners(
-            indptr=np.array([0, 2], dtype=np.int64),
-            partner=np.array([5], dtype=np.int64),
+            indptr=np.array([0, 2], dtype=np.int64), partner=one, r=np.array([0.5]), distance=one
+        )
+    with pytest.raises(ValueError, match="distance"):
+        Partners(
+            indptr=np.array([0, 1], dtype=np.int64),
+            partner=one,
             r=np.array([0.5]),
+            distance=np.array([5, 6], dtype=np.int64),
         )
 
 
@@ -115,6 +119,25 @@ def build_inputs(**overrides: Any) -> ogld.BuildInputs:
         "r_scale": 511,
     }
     return ogld.BuildInputs(**{**fields, **overrides})
+
+
+def test_a_hand_built_clumping_orders_its_leads_on_chr_prefixed_labels() -> None:
+    # The engine reads `chr1` as `1` (normalise_chromosome), and so does leads(), as it did
+    # before order_key (ogld#14): ties by chromosome rank, then position, then ALID.
+    names = ["chr10:5:A:C", "chr2:50:A:C", "chr1:500:A:C", "chr1:100:A:G", "chr1:100:A:C"]
+    clumps = ogld.Clumps(
+        alid=np.array(names),
+        chrom=np.array(["chr10", "chr2", "chr1", "chr1", "chr1"]),
+        position=np.array([5, 50, 500, 100, 100], dtype=np.int64),
+        score=np.array([5.0, 5.0, 3.0, 5.0, 5.0]),
+        lead=np.array(names),
+        r=np.ones(5),
+        absent=(),
+        r2=0.1,
+        window_bp=1000.0,
+    )
+    expected = ["chr1:100:A:C", "chr1:100:A:G", "chr2:50:A:C", "chr10:5:A:C", "chr1:500:A:C"]
+    assert list(clumps.leads()) == expected
 
 
 def test_build_inputs_defaults_are_the_owner_s() -> None:
