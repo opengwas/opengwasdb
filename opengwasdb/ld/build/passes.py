@@ -41,7 +41,7 @@ from ogld.build.inputs import (
     read_pc_file,
 )
 from ogld.build.variant_set import Chromosome, Pass
-from ogld.format import Counts, InputError
+from ogld.format import Codes, Counts, InputError, REncoding
 from ogld.format.geometry import (
     chromosome_index,
     chromosome_ranges,
@@ -205,8 +205,10 @@ def write_ld(
     floor: int,
     distances: tuple[int, int],
     threads: int,
+    encoding: REncoding,
 ) -> Written:
-    """Each chromosome's Near Band and Proxy Index, through `writer` (spec §4, §5)."""
+    """Each chromosome's Near Band and Proxy Index, through `writer`, as `encoding`'s codes
+    (spec §3, §4, §5)."""
     written = Written(
         {"near_pairs": 0, "far_candidates": 0, "far_pairs": 0, "index_entries": 0},
         ChangeHistogram(),
@@ -214,7 +216,7 @@ def write_ld(
     ranges = chromosome_ranges(_labels(chromosomes))
     for chromosome in chromosomes:
         start = ranges[chromosome.name][0]
-        inputs = _inputs(the_plan, chromosome, chosen, floor, distances)
+        inputs = _inputs(the_plan, chromosome, chosen, floor, distances, encoding)
         band, rows = inputs.band, len(inputs.units)
         last, found = _write_band(writer, start, inputs, threads, written)
         # The unit vectors go before the chromosome's last rows complete its band, which the
@@ -236,6 +238,7 @@ def _inputs(
     chosen: Covariates,
     floor: int,
     distances: tuple[int, int],
+    encoding: REncoding,
 ) -> tiles.Inputs:
     """What every tile of `chromosome` reads: its unit vectors, adjusted and (at k > 0) not."""
     adjusted = _units(the_plan, chromosome, chosen)
@@ -244,12 +247,10 @@ def _inputs(
         unadjusted = _units(the_plan, chromosome, covariates([], None, the_plan.samples.n))
     band = tiles.Band.of(chromosome.position, *distances, CHANGE_BP)
     outside = outside_regions(chromosome.name, chromosome.position)
-    return tiles.Inputs(adjusted, unadjusted, outside, band, floor)
+    return tiles.Inputs(adjusted, unadjusted, outside, band, floor, encoding)
 
 
-_Found = tuple[
-    list[npt.NDArray[np.int32]], list[npt.NDArray[np.int32]], list[npt.NDArray[np.int16]]
-]
+_Found = tuple[list[npt.NDArray[np.int32]], list[npt.NDArray[np.int32]], list[Codes]]
 
 
 def _write_band(

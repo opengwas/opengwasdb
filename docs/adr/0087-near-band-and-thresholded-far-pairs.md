@@ -1,5 +1,12 @@
 # LD Stores hold a 3 Mb Near Band and thresholded Far Pairs
 
+> **Decision 2's "quantised to `int16`" is superseded by [ADR 0004](./0004-per-store-encoding.md)**
+> (owner, 10 November 2026). Each LD Store records its own encoding: a symmetric scale in an
+> `int16` container, × 511 for the five HGDP+1kGP stores and × 2047 for UK Biobank EUR, where
+> this ADR's format read one scale, × 32767, for all. So the consequence below on where a pair at
+> exactly t_far lands is now spec §3's table at each store's own scale. The rest of decision 2
+> stands.
+
 > **Clarified on 7 November 2026** (see "Clarification, 7 November 2026" at the end). The
 > upstream half is settled as a Proxy Index; a matrix query returns NaN for an unstored pair and a
 > number only through the caller's `fill`; and the PC part of decision 4 is superseded by

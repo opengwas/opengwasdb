@@ -33,7 +33,16 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from ogld.format import far_code_floor, quantise, t_far
+# The Test Store's encoding as the tests compute it, re-exported: the contract tests read it here.
+from store_copies import FLOOR as FLOOR
+from store_copies import FLOOR_K0 as FLOOR_K0
+from store_copies import FLOOR_K7 as FLOOR_K7
+from store_copies import HALF_STEP as HALF_STEP
+from store_copies import R_SCALE as R_SCALE
+from store_copies import codes_at as codes_at
+from store_copies import stored_at as stored_at
+
+from ogld.format import t_far
 from ogld.identity import orient
 
 TESTS = Path(__file__).resolve().parents[1]
@@ -44,8 +53,6 @@ TEST_STORE = TEST_PANEL / "store"
 N_SAMPLES = 771
 K = 10
 T_FAR = t_far(N_SAMPLES, K)
-FLOOR = far_code_floor(T_FAR)
-HALF_STEP = 1 / 65534
 #: Two independent float64 computations of one r may differ by a few ulps before rounding.
 SLACK = 1e-9
 
@@ -121,8 +128,8 @@ class Pairs:
     r: npt.NDArray[np.float64]
 
     @property
-    def code(self) -> npt.NDArray[np.int16]:
-        return quantise(self.r)
+    def code(self) -> npt.NDArray[np.int64]:
+        return codes_at(self.r)
 
     def where(self, mask: npt.NDArray[np.bool_], what: str) -> Pairs:
         """The pairs `mask` keeps. An empty fixture proves nothing, so there must be one."""

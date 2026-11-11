@@ -27,7 +27,7 @@ from numpy.dtypes import StringDType
 from store_copies import TEST_STORE, copy_store, resharded
 
 import ogld
-from ogld.format import InputError, quantise
+from ogld.format import InputError
 from ogld.store import StoreReader, location, reader
 from ogld.store.validation import validate_group
 
@@ -67,9 +67,9 @@ def reference_pairs(rows: np.ndarray) -> np.ndarray:
     variants = StoreReader.open(TEST_STORE).variants(rows)
     ref = support.reference_matrix(support.K, tuple(panel[a] for a in variants.alid))
     gap = np.abs(variants.position[:, None] - variants.position[None, :])
-    codes = quantise(np.where(np.isnan(ref), 0.0, ref)).astype(np.int32)
+    codes = support.codes_at(np.where(np.isnan(ref), 0.0, ref))
     held = ~np.isnan(ref) & ((gap <= 3_000_000) | (np.abs(codes) >= support.FLOOR))
-    expected = np.where(held, codes / 32767, np.nan)
+    expected = np.where(held, codes / support.R_SCALE, np.nan)
     np.fill_diagonal(expected, 1.0)
     return expected
 

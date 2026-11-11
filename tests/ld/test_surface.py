@@ -47,8 +47,9 @@ SURFACE: dict[str, tuple[Callable[..., Any], str]] = {
     "ogld.BuildInputs": (
         ogld.BuildInputs,
         "(pgen: 'tuple[Path, ...]', keep: 'Path', pcs: 'Path | None', pc_source: 'str | None', "
-        "panel_id: 'str', ancestry: 'str', genotype_source: 'str', k: 'int' = 10, "
-        "k_min: 'int' = 5, mac_min: 'int' = 20, info_min: 'float | None' = 0.8) -> None",
+        "panel_id: 'str', ancestry: 'str', genotype_source: 'str', r_scale: 'int', "
+        "k: 'int' = 10, k_min: 'int' = 5, mac_min: 'int' = 20, "
+        "info_min: 'float | None' = 0.8) -> None",
     ),
     "ogld.LDStore.matrix": (
         ogld.LDStore.matrix,

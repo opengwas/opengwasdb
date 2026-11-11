@@ -10,25 +10,19 @@ from __future__ import annotations
 
 from typing import Final, Literal, TypedDict
 
-from ogld.format.encoding import R_SCALE, RESERVED_CODE
-
 FORMAT_VERSION: Final = "0.1.0"
 
 
 class Encoding(TypedDict):
-    r_dtype: Literal["int16"]
+    """How the store's `r` arrays hold r (spec §3, §7). A store may record any values here;
+    `ogld.format.REncoding.of` says whether this package implements them, and a reader refuses
+    a store whose encoding it does not (spec §13)."""
+
+    r_dtype: str
     r_scale: int
     r_reserved_code: int
-    rounding: Literal["half_to_even"]
+    rounding: str
 
-
-#: The only encoding this package reads or writes (spec §3). A reader refuses any other.
-ENCODING: Final[Encoding] = {
-    "r_dtype": "int16",
-    "r_scale": R_SCALE,
-    "r_reserved_code": RESERVED_CODE,
-    "rounding": "half_to_even",
-}
 
 SourceKind = Literal["genotypes", "ld_matrix"]
 

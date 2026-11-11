@@ -1,8 +1,9 @@
 """Writing an LD Store: the seam the builder writes through (spec §1–§7, §12; ogld#4).
 
-`StoreWriter` takes Stored r as int16 codes the builder quantised with
-`ogld.format.quantise`, chromosome by chromosome and the Near Band in row blocks, because
-one chromosome's band can exceed 70 GB raw (spec §4). A store is not one until `finish`
+`StoreWriter` is created with the store's encoding, `ogld.format.REncoding`, and takes Stored r
+as that encoding's codes, chromosome by chromosome and the Near Band in row blocks, because one
+chromosome's band can exceed 70 GB raw (spec §4). Every `r` array takes the encoding's dtype and
+fill value, and every code is held to its scale. A store is not one until `finish`
 writes its provenance; a reader refuses a directory without provenance, so a half-written
 store cannot be read as a short one.
 
@@ -25,7 +26,7 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import ENCODING, RESERVED_CODE, Encoding, Provenance, Sourced
+from ogld.format import Codes, Provenance, REncoding, Sourced
 from ogld.format.geometry import (
     chromosome_index,
     chromosome_ranges,
@@ -49,15 +50,17 @@ class StoreWriter:
         ranges: dict[str, tuple[int, int]],
         near_bp: int,
         far_bp: int,
+        encoding: REncoding,
     ) -> None:
         self._root = root
+        self._encoding = encoding
         self._position = variants.position
         self._ranges = ranges
         self._names = list(ranges)
         self._stops = [stop for _, stop in ranges.values()]
         self._near_bp = near_bp
         self._far_bp = far_bp
-        self._pending: dict[str, list[tuple[npt.NDArray[np.int64], npt.NDArray[np.int16]]]] = {}
+        self._pending: dict[str, list[tuple[npt.NDArray[np.int64], Codes]]] = {}
         self._next_row = {chrom: start for chrom, (start, _) in ranges.items()}
         self._lengths: dict[str, npt.NDArray[np.int64]] = {}
         self._near_done: set[str] = set()
@@ -65,10 +68,16 @@ class StoreWriter:
 
     @classmethod
     def create(
-        cls, location: str | os.PathLike[str], *, variants: Variants, near_bp: int, far_bp: int
+        cls,
+        location: str | os.PathLike[str],
+        *,
+        variants: Variants,
+        near_bp: int,
+        far_bp: int,
+        encoding: REncoding,
     ) -> StoreWriter:
-        """Start a store at a new `location`: write the Variant Set, in engine order, and
-        its chromosome ranges (spec §2). Refuses a location that exists (ogld#4)."""
+        """Start a store at a new `location` in `encoding`: write the Variant Set, in engine
+        order, and its chromosome ranges (spec §2). Refuses a location that exists (ogld#4)."""
         path = Path(location)
         if path.exists():
             raise FileExistsError(f"{path} exists: a store is never written over another")
@@ -86,15 +95,13 @@ class StoreWriter:
             layout.FREQUENCY_FILL,
         )
         group.attrs["chromosomes"] = layout.chromosomes_record(ranges)
-        return cls(root, variants, ranges, near_bp, far_bp)
+        return cls(root, variants, ranges, near_bp, far_bp, encoding)
 
     def _chromosome_of(self, row: int) -> str:
         """The chromosome of global `row`; a row outside the Variant Set raises."""
         return self._names[int(chromosome_index(self._stops, [row])[0])]
 
-    def write_near(
-        self, first_row: int, lengths: npt.NDArray[np.int64], codes: npt.NDArray[np.int16]
-    ) -> None:
+    def write_near(self, first_row: int, lengths: npt.NDArray[np.int64], codes: Codes) -> None:
         """Append the Near Band rows `first_row`, `first_row + 1`, … (global rows, one
         chromosome, in order): `lengths[i]` codes for each, back to back (spec §4)."""
         if len(lengths) == 0:
@@ -106,7 +113,7 @@ class StoreWriter:
                 f"Near Band rows of chromosome {chrom} must be written in order: "
                 f"expected row {self._next_row[chrom]}, got {first_row}"
             )
-        _check_dtype(codes)
+        self._check_codes(codes)
         self._check_near(first_row, stop, lengths, codes)
         self._pending.setdefault(chrom, []).append((lengths.astype(np.int64), codes))
         self._next_row[chrom] = first_row + len(lengths)
@@ -118,17 +125,15 @@ class StoreWriter:
         first_row: int,
         stop: int,
         lengths: npt.NDArray[np.int64],
-        codes: npt.NDArray[np.int16],
+        codes: Codes,
     ) -> None:
-        """Refuse Near Band rows that run past their chromosome, disagree with their codes,
-        hold the reserved code or are not the rows spec §4 gives."""
+        """Refuse Near Band rows that run past their chromosome, disagree with their codes or
+        are not the rows spec §4 gives."""
         chrom = self._chromosome_of(first_row)
         if first_row + len(lengths) > stop:
             raise ValueError(f"Near Band rows run past the end of chromosome {chrom}")
         if int(lengths.sum()) != len(codes):
             raise ValueError("the Near Band's lengths and codes disagree on how many codes")
-        if (codes == RESERVED_CODE).any():
-            raise ValueError(f"code {RESERVED_CODE} is reserved and never a correlation (spec §3)")
         expected = self._near_lengths(first_row, first_row + len(lengths))
         if not np.array_equal(lengths, expected):
             raise ValueError(
@@ -153,9 +158,7 @@ class StoreWriter:
         indptr = indptr_of(lengths)
         group = self._root.require_group(f"near/{chrom}")
         layout.put_numbers(group, "indptr", indptr, layout.INT64_FILL)
-        array = layout.new_r_array(group, "r", len(codes), layout.NEAR_R)
-        if len(codes):
-            array[:] = codes
+        layout.put_codes(group, "r", codes, self._encoding, layout.NEAR_R)
         self._near_done.add(chrom)
 
     def write_index(
@@ -163,17 +166,17 @@ class StoreWriter:
         chrom: str,
         indptr: npt.NDArray[np.int64],
         partner: npt.NDArray[np.int64],
-        codes: npt.NDArray[np.int16],
+        codes: Codes,
     ) -> None:
         """Write one chromosome's Proxy Index in CSR form over its rows, partners as
         global rows ascending within each row, both directions of every pair (spec §5)."""
-        _check_dtype(codes)
+        self._check_codes(codes)
         start = self._check_index(chrom, indptr, partner, codes)
         group = self._root.require_group(f"index/{chrom}")
         layout.put_numbers(group, "indptr", indptr.astype(np.int64), layout.INT64_FILL)
         local = local_rows(partner, start).astype(np.int32)
         layout.put_numbers(group, "partner", local, layout.PARTNER_FILL)
-        layout.put_numbers(group, "r", codes, RESERVED_CODE)
+        layout.put_codes(group, "r", codes, self._encoding)
         self._index_done.add(chrom)
 
     def _check_index(
@@ -181,7 +184,7 @@ class StoreWriter:
         chrom: str,
         indptr: npt.NDArray[np.int64],
         partner: npt.NDArray[np.int64],
-        codes: npt.NDArray[np.int16],
+        codes: Codes,
     ) -> int:
         """Refuse a Proxy Index that does not fit its chromosome; return its first row."""
         if chrom not in self._ranges:
@@ -222,8 +225,27 @@ class StoreWriter:
             raise ValueError("provenance n_variants is not the Variant Set's size")
         if (provenance["near_bp"], provenance["far_bp"]) != (self._near_bp, self._far_bp):
             raise ValueError("provenance near_bp and far_bp are not the distances written with")
-        if provenance["encoding"] != ENCODING:
-            raise ValueError("provenance records an encoding this writer does not write (spec §3)")
+        if provenance["encoding"] != self._encoding.record():
+            raise ValueError(
+                f"provenance records the encoding {provenance['encoding']!r}, but this store was "
+                f"written at × {self._encoding.scale} (spec §3)"
+            )
+
+    def _check_codes(self, codes: Codes) -> None:
+        """Codes are stored as they come, so they must be the encoding's: any other dtype would
+        wrap, and a reserved code or one past the scale is no correlation (spec §3)."""
+        if codes.dtype != self._encoding.dtype:
+            raise ValueError(
+                f"codes must be {self._encoding.dtype} as `REncoding.quantise` makes them, not "
+                f"{codes.dtype}: a cast would wrap an out-of-range code into a wrong r (spec §3)"
+            )
+        held = self._encoding.holds(codes)
+        if not held.all():
+            raise ValueError(
+                f"codes {codes[~held][:5].tolist()} are not codes of r at × "
+                f"{self._encoding.scale}: {self._encoding.reserved_code} is reserved and never a "
+                "correlation, and any other is past the scale (spec §3)"
+            )
 
 
 class _StoreWriterProposal:
@@ -257,7 +279,7 @@ class _StoreWriterProposal:
         location: str | os.PathLike[str],
         *,
         variants: Variants,
-        encoding: Encoding,
+        encoding: REncoding,
         near_bp: int,
         far_bp: int,
         n: int,
@@ -343,24 +365,13 @@ def _check_entries(
     chrom: str,
     rows: tuple[int, int],
     partner: npt.NDArray[np.int64],
-    codes: npt.NDArray[np.int16],
+    codes: Codes,
 ) -> None:
-    """Refuse entries that disagree in number, leave the chromosome or hold the reserved code."""
+    """Refuse entries that disagree in number or leave the chromosome."""
     if len(partner) != len(codes):
         raise ValueError("the Proxy Index's partners and codes disagree on how many entries")
     if len(partner) and (partner.min() < rows[0] or partner.max() >= rows[1]):
         raise ValueError(f"a Proxy Index partner lies outside chromosome {chrom}")
-    if (codes == RESERVED_CODE).any():
-        raise ValueError(f"code {RESERVED_CODE} is reserved and never a correlation (spec §3)")
-
-
-def _check_dtype(codes: npt.NDArray[np.int16]) -> None:
-    """Codes are stored as they come: any dtype but the encoding's would wrap, so it is refused."""
-    if codes.dtype != layout.R_DTYPE:
-        raise ValueError(
-            f"codes must be {layout.R_DTYPE} as `ogld.format.quantise` makes them, not "
-            f"{codes.dtype}: a cast would wrap an out-of-range code into a wrong r (spec §3)"
-        )
 
 
 def _positions(position: npt.NDArray[np.int64]) -> npt.NDArray[np.int32]:
