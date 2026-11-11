@@ -38,7 +38,9 @@ def test_a_chromosome_is_checked_a_tile_at_a_time(monkeypatch: pytest.MonkeyPatc
     calls: list[int] = []
     real = tiles.change_pairs
 
-    def spy(band: tiles.Band, outside: npt.NDArray[np.bool_], first: int, last: int):  # type: ignore[no-untyped-def]
+    def spy(
+        band: tiles.Band, outside: npt.NDArray[np.bool_], first: int, last: int
+    ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.bool_]]:
         calls.append(last - first)
         return real(band, outside, first, last)
 

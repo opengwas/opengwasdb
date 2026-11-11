@@ -60,10 +60,10 @@ class Reads:
 def _streamed(
     pos: npt.NDArray[np.int64],
     read: Callable[..., npt.NDArray[np.float32]],
-    g_mean: object,
+    g_mean: npt.NDArray[np.float32],
     threads: int,
 ) -> pc_check.Windows:
-    selected = pc_check.is_common(g_mean)  # type: ignore[arg-type]
+    selected = pc_check.is_common(g_mean)
     return pc_check.stream_windows("5", pos, selected, read, SAMPLES, threads=threads)
 
 
