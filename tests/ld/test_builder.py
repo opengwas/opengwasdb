@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import build_fixtures as fixtures
 import numpy as np
@@ -218,20 +219,25 @@ def test_zarr_s_pool_is_held_to_the_build_s_threads_and_released(
     assert zarr.config.get("threading.max_workers") == before
 
 
+#: 64 rows of three-sample unit vectors, each row its own number, and the unadjusted ones negated.
+WINDOW_SOURCE = np.column_stack([np.arange(64.0), np.arange(64.0) + 0.5, -np.arange(64.0)])
+
+
+def window_blocks(firsts: range | list[int] = range(0, 64, 8)) -> Iterator[tuple[int, Any, Any]]:
+    """WINDOW_SOURCE as the build reads it, 8 rows a block, starting at each of `firsts`."""
+    for first in firsts:
+        rows = WINDOW_SOURCE[first : first + 8]
+        yield first, rows.copy(), -rows
+
+
 def test_the_window_of_unit_vectors_moves_the_rows_still_needed_and_spares_a_tile_s_view() -> None:
     # The builder holds a window of a chromosome's unit vectors, never the chromosome (ogld#17).
     # When its array is full, the rows from the oldest tile in flight on move to a new one; a tile
     # still reading the old array must see it unchanged.
     from ogld.build import tiles
 
-    rows = np.arange(64, dtype=np.float64)
-    source = np.column_stack([rows, rows + 0.5, -rows])
-
-    def blocks() -> Iterator[tiles.UnitBlock]:
-        for first in range(0, 64, 8):
-            yield first, source[first : first + 8].copy(), -source[first : first + 8]
-
-    window = tiles.Window(blocks(), capacity=20)
+    source = WINDOW_SOURCE
+    window = tiles.Window(window_blocks(), capacity=20)
     window.reach(10, keep=0)
     in_flight = window.rows(4, 12)
     np.testing.assert_array_equal(in_flight, source[4:12])
@@ -242,3 +248,52 @@ def test_the_window_of_unit_vectors_moves_the_rows_still_needed_and_spares_a_til
     window.reach(36, keep=20)
     np.testing.assert_array_equal(window.rows(20, 36), source[20:36])
     np.testing.assert_array_equal(in_flight, source[4:12])
+
+
+@pytest.mark.parametrize(("first", "stop"), [(4, 12), (16, 26), (12, 10)])
+def test_the_window_refuses_rows_it_does_not_hold(first: int, stop: int) -> None:
+    # Review of #17 (standards a5): an assert guarded this, which `python -O` drops, and the
+    # wrong rows of the array would then be read as unit vectors: plausible r, never a refusal.
+    from ogld.build import tiles
+
+    window = tiles.Window(window_blocks(), capacity=20)
+    window.reach(10, keep=0)
+    window.reach(24, keep=8)  # holds rows 8 … 23
+    np.testing.assert_array_equal(window.rows(8, 24), WINDOW_SOURCE[8:24])
+    with pytest.raises(ValueError, match=f"rows {first}–{stop - 1} .*rows 8–23"):
+        window.rows(first, stop)
+
+
+def test_the_window_refuses_a_block_that_does_not_start_where_the_last_ended() -> None:
+    # A gap would leave rows of the array unwritten, and an overlap would write rows twice; either
+    # way some tile would read rows that are not the chromosome's.
+    from ogld.build import tiles
+
+    window = tiles.Window(window_blocks([0, 8, 24]), capacity=40)
+    window.reach(16, keep=0)
+    with pytest.raises(ValueError, match="starts at row 24, not 16"):
+        window.reach(30, keep=0)
+
+
+@pytest.mark.parametrize(("k", "threads"), [(0, 1), (0, 4), (K, 1), (K, 4)])
+def test_a_build_whose_window_of_unit_vectors_moves_writes_the_same_store(
+    built: Built, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, k: int, threads: int
+) -> None:
+    # Review of #17 (standards a4): no Test Panel chromosome is long enough to move the window at
+    # the build's own sizes. With 16-row tiles and 40-row genotype blocks (468 and 588 rows end in
+    # a partial block of 28) it moves, and the store must be the one built without a move.
+    from ogld.build import tiles
+
+    moves: list[int] = []
+    real = tiles.Window._move
+
+    def spy(self: tiles.Window, keep: int) -> None:
+        moves.append(keep)
+        real(self, keep)
+
+    monkeypatch.setattr(tiles, "TILE_ROWS", 16)
+    monkeypatch.setattr(tiles, "UNIT_ROWS", 40)
+    monkeypatch.setattr(tiles.Window, "_move", spy)
+    ogld.build(fixtures.inputs(testdata.panel().pgen, k), tmp_path / "store", threads=threads)
+    assert len(moves) >= 2, f"the window must move more than once, not {len(moves)} times"
+    fixtures.same_store(built[k], tmp_path / "store")

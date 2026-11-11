@@ -74,49 +74,61 @@ class Window:
     def __init__(self, blocks: Iterator[UnitBlock], capacity: int) -> None:
         self._blocks = blocks
         self._capacity = capacity
-        self._held: tuple[_Units, _Units | None] | None = None
+        self._units: _Units | None = None
+        self._unadjusted: _Units | None = None
         self._base = 0
         self._end = 0
 
     def reach(self, stop: int, keep: int) -> None:
-        """Read blocks until rows below `stop` are held, keeping the rows from `keep` on."""
+        """Read blocks until rows below `stop` are held, keeping the rows from `keep` on. A block
+        must start where the last ended: a gap or an overlap would leave rows of the array that are
+        not the chromosome's."""
         while self._end < stop:
             first, units, unadjusted = next(self._blocks)
-            if self._held is None:
-                self._held = (
-                    np.empty((self._capacity, units.shape[1])),
-                    None if unadjusted is None else np.empty((self._capacity, units.shape[1])),
+            if first != self._end:
+                raise ValueError(
+                    f"a block of unit vectors starts at row {first}, not {self._end}: the window "
+                    "holds a chromosome's rows in order, with none missing (a builder fault)"
                 )
             if first + len(units) - self._base > self._capacity:
                 self._move(keep)
-            at = first - self._base
-            self._held[0][at : at + len(units)] = units
-            if unadjusted is not None and self._held[1] is not None:
-                self._held[1][at : at + len(units)] = unadjusted
+            self._units = self._put(self._units, units)
+            if unadjusted is not None:
+                self._unadjusted = self._put(self._unadjusted, unadjusted)
             self._end = first + len(units)
+
+    def _put(self, held: _Units | None, block: _Units) -> _Units:
+        """Write `block` at the window's end, making the array at the first block."""
+        if held is None:
+            held = np.empty((self._capacity, block.shape[1]))
+        at = self._end - self._base
+        held[at : at + len(block)] = block
+        return held
 
     def _move(self, keep: int) -> None:
         """Move rows `keep` … end to the start of new arrays."""
-        assert self._held is not None
         live = slice(keep - self._base, self._end - self._base)
-        moved = tuple(
-            None if old is None else _fresh(old, live, self._capacity) for old in self._held
-        )
-        assert moved[0] is not None
-        self._held = (moved[0], moved[1])
+        if self._units is not None:
+            self._units = _fresh(self._units, live, self._capacity)
+        if self._unadjusted is not None:
+            self._unadjusted = _fresh(self._unadjusted, live, self._capacity)
         self._base = keep
 
     def rows(self, first: int, stop: int, unadjusted: bool = False) -> _Units:
-        """Rows `first` … `stop − 1`, a view; the unadjusted ones when asked."""
-        assert self._held is not None, "no block has been read"
-        assert self._base <= first <= stop <= self._end, "rows outside the window"
-        held = self._held[1] if unadjusted else self._held[0]
-        assert held is not None, "unadjusted vectors are held only at k > 0"
+        """Rows `first` … `stop − 1`, a view; the unadjusted ones when asked. Rows the window does
+        not hold are refused: the array's other rows are some other variants' vectors."""
+        held = self._unadjusted if unadjusted else self._units
+        if held is None or not self._base <= first <= stop <= self._end:
+            kind = "unadjusted " if unadjusted else ""
+            raise ValueError(
+                f"rows {first}–{stop - 1} are not in the window of {kind}unit vectors, which holds "
+                f"rows {self._base}–{self._end - 1}{'' if held is not None else ' (none at k = 0)'}"
+            )
         return held[first - self._base : stop - self._base]
 
     @property
     def unadjusted(self) -> bool:
-        return self._held is not None and self._held[1] is not None
+        return self._unadjusted is not None
 
 
 def _fresh(old: _Units, live: slice, capacity: int) -> _Units:
