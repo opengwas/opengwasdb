@@ -285,6 +285,8 @@ def test_the_writer_refuses_a_location_that_exists(tmp_path: Path) -> None:
             near_bp=3_000_000,
             far_bp=10_000_000,
             encoding=REncoding(support.R_SCALE),
+            n=771,
+            k=10,
         )
     assert sorted(p.relative_to(copy) for p in copy.rglob("*")) == before
 

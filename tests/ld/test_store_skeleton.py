@@ -163,40 +163,11 @@ def test_a_store_without_its_provenance_is_not_read_as_a_short_one(
         near_bp=NEAR_BP,
         far_bp=10_000_000,
         encoding=TEST_STORE_ENCODING,
+        n=771,
+        k=K,
     )
     with pytest.raises(ValueError, match="provenance"):
         StoreReader.open(tmp_path / "half")
-
-
-def test_the_writer_refuses_an_unfinished_chromosome_naming_it(
-    tmp_path: Path, written: Path
-) -> None:
-    reader = StoreReader.open(written)
-    writer = StoreWriter.create(
-        tmp_path / "s",
-        variants=reader.variants(np.arange(3)),
-        near_bp=NEAR_BP,
-        far_bp=10_000_000,
-        encoding=TEST_STORE_ENCODING,
-    )
-    with pytest.raises(ValueError, match=r"Near Band of chromosome 21"):
-        writer.finish(reader.provenance)
-
-
-def test_the_writer_refuses_a_near_band_row_of_the_wrong_length(
-    tmp_path: Path, written: Path
-) -> None:
-    reader = StoreReader.open(written)
-    rows = np.arange(4)
-    writer = StoreWriter.create(
-        tmp_path / "s",
-        variants=reader.variants(rows),
-        near_bp=NEAR_BP,
-        far_bp=10_000_000,
-        encoding=TEST_STORE_ENCODING,
-    )
-    with pytest.raises(ValueError, match="every later variant within near_bp"):
-        writer.write_near(0, np.array([1, 1, 1, 0]), np.zeros(3, dtype=np.int16))
 
 
 def test_the_script_writes_the_same_arrays_and_the_same_provenance_again(tmp_path: Path) -> None:
@@ -220,90 +191,6 @@ def measured_free(provenance: dict[str, Any]) -> dict[str, Any]:
     return kept
 
 
-def four_row_writer(tmp_path: Path, written: Path) -> StoreWriter:
-    """A writer over the Test Store's first four rows, all on chromosome 21, 300 kb apart."""
-    variants = StoreReader.open(written).variants(np.arange(4))
-    assert set(variants.chrom) == {"21"}, "the fixture's first rows must share a chromosome"
-    return StoreWriter.create(
-        tmp_path / "s",
-        variants=variants,
-        near_bp=NEAR_BP,
-        far_bp=10_000_000,
-        encoding=TEST_STORE_ENCODING,
-    )
-
-
-GOOD_LENGTHS = np.array([3, 2, 1, 0], dtype=np.int64)
-SIX_CODES = np.arange(6, dtype=np.int16)
-
-
-@pytest.mark.parametrize(
-    ("first_row", "lengths", "codes", "message"),
-    [
-        (1, GOOD_LENGTHS[1:], SIX_CODES[:3], "in order"),
-        (0, np.append(GOOD_LENGTHS, 0), SIX_CODES, "past the end"),
-        (0, GOOD_LENGTHS, SIX_CODES[:5], "disagree"),
-        (0, GOOD_LENGTHS, np.full(6, -32768, dtype=np.int16), "reserved"),
-        # One past the Test Store's scale: an int16 the container holds, but r̂ = 512 / 511.
-        (
-            0,
-            GOOD_LENGTHS,
-            np.array([1, 2, R_SCALE + 1, 4, 5, 6], dtype=np.int16),
-            rf"\[{R_SCALE + 1}\].*past the scale",
-        ),
-    ],
-)
-def test_the_writer_refuses_a_near_band_write_that_is_out_of_order_or_unsound(
-    tmp_path: Path,
-    written: Path,
-    first_row: int,
-    lengths: np.ndarray,
-    codes: np.ndarray,
-    message: str,
-) -> None:
-    writer = four_row_writer(tmp_path, written)
-    with pytest.raises(ValueError, match=message):
-        writer.write_near(first_row, lengths, codes)
-
-
-def test_the_writer_accepts_the_near_band_these_refusals_are_the_exception_to(
-    tmp_path: Path, written: Path
-) -> None:
-    writer = four_row_writer(tmp_path, written)
-    writer.write_near(0, GOOD_LENGTHS, SIX_CODES)
-    assert (tmp_path / "s" / "near" / "21" / "r").is_dir()
-
-
-@pytest.mark.parametrize(
-    ("chrom", "indptr", "partner", "codes", "message"),
-    [
-        ("7", [0] * 5, [], [], "not in the Variant Set"),
-        ("21", [0, 0], [], [], "indptr must span"),
-        ("21", [0, 1, 1, 1, 1], [1], [], "disagree"),
-        ("21", [0, 1, 1, 1, 1], [9], [5], "outside chromosome 21"),
-        ("21", [0, 1, 1, 1, 1], [1], [-32768], "reserved"),
-        ("21", [0, 1, 1, 1, 1], [1], [-(R_SCALE + 1)], rf"\[{-(R_SCALE + 1)}\].*past the scale"),
-    ],
-)
-def test_the_writer_refuses_a_proxy_index_that_does_not_fit_its_chromosome(
-    tmp_path: Path,
-    written: Path,
-    chrom: str,
-    indptr: list[int],
-    partner: list[int],
-    codes: list[int],
-    message: str,
-) -> None:
-    writer = four_row_writer(tmp_path, written)
-    with pytest.raises(ValueError, match=message):
-        writer.write_index(
-            chrom,
-            np.array(indptr, dtype=np.int64),
-            np.array(partner, dtype=np.int64),
-            np.array(codes, dtype=np.int16),
-        )
-
-
 # ------------------------------------------------------------------ fix round 1
 
 
@@ -312,24 +199,6 @@ def store_rows() -> npt.NDArray[np.int64]:
     where = np.full(len(testdata.variants()), -1, dtype=np.int64)
     where[passing()] = np.arange(len(passing()))
     return where
-
-
-@pytest.mark.parametrize("value", [40_000, 32_768])
-def test_the_writer_never_wraps_a_code_into_int16(
-    tmp_path: Path, written: Path, value: int
-) -> None:
-    # 40,000 wraps to −25,536 (r −0.78); 32,768 wraps to the reserved code. Both must be refused.
-    writer = four_row_writer(tmp_path, written)
-    wide = np.full(6, value, dtype=np.int32)
-    with pytest.raises(ValueError, match="int16"):
-        writer.write_near(0, GOOD_LENGTHS, wide)
-    with pytest.raises(ValueError, match="int16"):
-        writer.write_index(
-            "21",
-            np.array([0, 1, 1, 1, 1], dtype=np.int64),
-            np.array([1], dtype=np.int64),
-            wide[:1],
-        )
 
 
 @pytest.mark.parametrize("rows", [[-1, 5], [0, 1056], [-1054, 2]])

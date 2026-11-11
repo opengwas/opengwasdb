@@ -1,16 +1,14 @@
-"""One chromosome's LD, tile by tile: the Near Band exactly, the Proxy Index at t_far.
+"""One chromosome's r, tile by tile, from a window of its unit vectors (ogld#5, ogld#17).
 
 A tile is a block of rows against every later variant within `far_bp`: one matrix product of
-unit vectors (`ogld.build.adjust`). From it come the tile's Near Band rows, every code
-(spec §4), and its upper-triangle Proxy Index entries, the pairs within `far_bp` whose code
-reaches the far code floor (spec §3, §5), one quantisation for both, so the index's near half
-carries the band's own codes (`index.near`, spec §12). Tiles are computed on `threads` worker
+unit vectors (`ogld.build.adjust`). The build hands the product to the store, `StoreWriter.cut`,
+which quantises, thresholds and counts (ogld#17). The build keeps only its own diagnostic, the
+change in r from PC Adjustment within `change_bp`. Tiles are computed on `threads` worker
 threads and written in row order, so the store is the same for any thread count.
 
-The far code floor is judged on codes, not on r: a pair is kept exactly when |code| ≥ the
-floor. Only pairs with |r| at least the encoding's `least_r(floor)` are quantised to judge,
-which keeps every pair whose code can reach the floor, since rounding moves r × scale by at
-most ½. Every code is the store's encoding's (`ogld.format.REncoding`).
+The unit vectors are held for a window of rows, never the whole chromosome (`Window`). The
+window runs from the first row of the oldest tile in flight to the far stop of the newest, plus
+the genotype block being read (`UNIT_ROWS` rows).
 """
 
 from __future__ import annotations
@@ -24,116 +22,158 @@ from typing import Final
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import Codes, REncoding
-from ogld.format.geometry import indptr_of, near_row_lengths, owners, spans, stop_within, windows
+from ogld.format.geometry import near_row_lengths, owners, spans, stop_within, windows
+from ogld.store import Cut
 
 #: Rows a tile computes: a tile is TILE_ROWS × (variants within far_bp) float64.
 TILE_ROWS: Final = 256
+#: Rows of genotypes read and adjusted at a time into the window of unit vectors: 8,192 rows of
+#: 665 samples are 44 MB, where `ogld.build.inputs.CHUNK_RECORDS` rows would be 350 MB.
+UNIT_ROWS: Final = 8_192
+
+_Units = npt.NDArray[np.float64]
+#: One block of a chromosome's unit vectors: (first local row, adjusted, unadjusted or None).
+UnitBlock = tuple[int, _Units, _Units | None]
 
 
 @dataclass(frozen=True)
 class Band:
-    """One chromosome's geometry: for each local row l, the first row past near_bp, past
-    far_bp and past `change_bp` (exclusive stops), and the Near Band's row lengths, all from
-    `ogld.format.geometry` (spec §4, §5)."""
+    """One chromosome's geometry for the build: for each local row l, the first row past far_bp
+    and past `change_bp` (exclusive stops), and how many later rows lie within `change_bp`, all
+    from `ogld.format.geometry` (spec §5; §7's change in r)."""
 
-    near_length: npt.NDArray[np.int64]
     change_length: npt.NDArray[np.int64]
-    near_stop: npt.NDArray[np.int64]
     far_stop: npt.NDArray[np.int64]
     change_stop: npt.NDArray[np.int64]
 
     @classmethod
-    def of(cls, position: npt.NDArray[np.int64], near_bp: int, far_bp: int, change_bp: int) -> Band:
+    def of(cls, position: npt.NDArray[np.int64], far_bp: int, change_bp: int) -> Band:
         return cls(
-            near_row_lengths(position, near_bp),
             near_row_lengths(position, change_bp),
-            stop_within(position, near_bp),
             stop_within(position, far_bp),
             stop_within(position, change_bp),
         )
 
+    def reach(self) -> int:
+        """The most rows one tile spans: from its first row to its last row's far stop."""
+        first = np.arange(0, len(self.far_stop), TILE_ROWS)
+        last = np.minimum(first + TILE_ROWS, len(self.far_stop)) - 1
+        return int((self.far_stop[last] - first).max()) if len(first) else 0
+
+
+class Window:
+    """A window of one chromosome's unit vectors, adjusted and (at k > 0) unadjusted.
+
+    The vectors arrive block by block in row order. They are held in one array, so that every
+    tile's product is the same call on contiguous rows that it was on the whole chromosome's,
+    and the store the same to the bit. When the array is full, the rows still needed move to a
+    new one. A tile in flight keeps its view of the old one until it finishes, so nothing it
+    reads is ever overwritten.
+    """
+
+    def __init__(self, blocks: Iterator[UnitBlock], capacity: int) -> None:
+        self._blocks = blocks
+        self._capacity = capacity
+        self._units: _Units | None = None
+        self._unadjusted: _Units | None = None
+        self._base = 0
+        self._end = 0
+
+    def reach(self, stop: int, keep: int) -> None:
+        """Read blocks until rows below `stop` are held, keeping the rows from `keep` on. A block
+        must start where the last ended: a gap or an overlap would leave rows of the array that are
+        not the chromosome's."""
+        while self._end < stop:
+            first, units, unadjusted = next(self._blocks)
+            if first != self._end:
+                raise ValueError(
+                    f"a block of unit vectors starts at row {first}, not {self._end}: the window "
+                    "holds a chromosome's rows in order, with none missing (a builder fault)"
+                )
+            if first + len(units) - self._base > self._capacity:
+                self._move(keep)
+            self._units = self._put(self._units, units)
+            if unadjusted is not None:
+                self._unadjusted = self._put(self._unadjusted, unadjusted)
+            self._end = first + len(units)
+
+    def _put(self, held: _Units | None, block: _Units) -> _Units:
+        """Write `block` at the window's end, making the array at the first block."""
+        if held is None:
+            held = np.empty((self._capacity, block.shape[1]))
+        at = self._end - self._base
+        held[at : at + len(block)] = block
+        return held
+
+    def _move(self, keep: int) -> None:
+        """Move rows `keep` … end to the start of new arrays."""
+        live = slice(keep - self._base, self._end - self._base)
+        if self._units is not None:
+            self._units = _fresh(self._units, live, self._capacity)
+        if self._unadjusted is not None:
+            self._unadjusted = _fresh(self._unadjusted, live, self._capacity)
+        self._base = keep
+
+    def rows(self, first: int, stop: int, unadjusted: bool = False) -> _Units:
+        """Rows `first` … `stop − 1`, a view; the unadjusted ones when asked. Rows the window does
+        not hold are refused: the array's other rows are some other variants' vectors."""
+        held = self._unadjusted if unadjusted else self._units
+        if held is None or not self._base <= first <= stop <= self._end:
+            kind = "unadjusted " if unadjusted else ""
+            raise ValueError(
+                f"rows {first}–{stop - 1} are not in the window of {kind}unit vectors, which holds "
+                f"rows {self._base}–{self._end - 1}{'' if held is not None else ' (none at k = 0)'}"
+            )
+        return held[first - self._base : stop - self._base]
+
+    @property
+    def unadjusted(self) -> bool:
+        return self._unadjusted is not None
+
+
+def _fresh(old: _Units, live: slice, capacity: int) -> _Units:
+    new = np.empty((capacity, old.shape[1]))
+    new[: live.stop - live.start] = old[live]
+    return new
+
 
 @dataclass(frozen=True)
 class Inputs:
-    """What every tile of one chromosome reads.
+    """What every tile of one chromosome reads besides its unit vectors: its geometry, which
+    variants lie outside the Long-Range LD Regions (whose pairs within `change_bp` the PC
+    diagnostic's change in r is measured on), its first global row, and the store's `cut`."""
 
-    `units` are the PC-adjusted unit vectors, `unadjusted` the k = 0 ones (None at k = 0, where
-    the two are one), and `outside` marks the variants outside the Long-Range LD Regions, whose
-    pairs within `change_bp` the PC diagnostic's change in r is measured on.
-    """
-
-    units: npt.NDArray[np.float64]
-    unadjusted: npt.NDArray[np.float64] | None
-    outside: npt.NDArray[np.bool_]
     band: Band
-    floor: int
-    encoding: REncoding
+    outside: npt.NDArray[np.bool_]
+    start: int
+    cut: Callable[[int, _Units], Cut]
 
 
 @dataclass(frozen=True)
-class Tile:
-    """One tile's rows `first` … : their Near Band row lengths and codes, their Proxy Index
-    entries (local rows lo < hi, codes), and the change in r within `change_bp`."""
+class Work:
+    """One tile's rows `first` … `last − 1` (local) and the unit vectors it reads: its own rows
+    and those up to its far stop, and, at k > 0, the unadjusted ones up to `change_bp`."""
 
     first: int
-    lengths: npt.NDArray[np.int64]
-    codes: Codes
-    lo: npt.NDArray[np.int32]
-    hi: npt.NDArray[np.int32]
-    entry_codes: Codes
-    change: npt.NDArray[np.float64]
+    last: int
+    rows: _Units
+    span: _Units
+    unadjusted: tuple[_Units, _Units] | None
 
 
-def _ragged(
-    block: npt.NDArray[np.float64],
-    first: int,
-    starts: npt.NDArray[np.int64],
-    stops: npt.NDArray[np.int64],
-) -> npt.NDArray[np.float64]:
-    """Row t's columns starts[t] … stops[t] − 1 of `block`, whose column 0 is row `first`,
-    row after row. Each row's run is one slice: five times faster than a fancy index here."""
-    rows = enumerate(zip(starts, stops, strict=True))
-    runs = [block[t, s - first : e - first] for t, (s, e) in rows]
-    return np.concatenate(runs) if runs else np.empty(0)
-
-
-def _tile(inputs: Inputs, first: int, last: int) -> Tile:
-    """Rows `first` … `last − 1` of one chromosome (local rows)."""
-    band = inputs.band
+def _work(window: Window, band: Band, first: int, last: int) -> Work:
     stop = int(band.far_stop[last - 1])
-    r = inputs.units[first:last] @ inputs.units[first:stop].T
-    rows = np.arange(first, last, dtype=np.int64)
-    codes = inputs.encoding.quantise(_ragged(r, first, rows + 1, band.near_stop[first:last]))
-    lo, hi, entry_codes = _entries(r, first, band.far_stop, inputs.floor, inputs.encoding)
-    return Tile(
-        first,
-        band.near_length[first:last],
-        codes,
-        lo,
-        hi,
-        entry_codes,
-        _change(inputs, r, first, last),
-    )
+    unadjusted = None
+    if window.unadjusted:
+        reach = int(band.change_stop[first:last].max())
+        unadjusted = (window.rows(first, last, True), window.rows(first, reach, True))
+    return Work(first, last, window.rows(first, last), window.rows(first, stop), unadjusted)
 
 
-def _entries(
-    r: npt.NDArray[np.float64],
-    first: int,
-    far_stop: npt.NDArray[np.int64],
-    floor: int,
-    encoding: REncoding,
-) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int32], Codes]:
-    """The tile's pairs lo < hi within far_bp whose code reaches `floor` (spec §5), as local
-    rows in int32: a chromosome holds far fewer than 2³¹ rows (spec §5, `partner`), and a dense
-    one such as chr6, the MHC's, has hundreds of millions of these entries."""
-    t, c = np.nonzero(np.abs(r) >= encoding.least_r(floor))
-    lo, hi = first + t.astype(np.int64), first + c.astype(np.int64)
-    inside = (hi > lo) & (hi < far_stop[lo])
-    t, c, lo, hi = t[inside], c[inside], lo[inside], hi[inside]
-    codes = encoding.quantise(r[t, c])
-    reach = np.abs(codes.astype(np.int64)) >= floor
-    return lo[reach].astype(np.int32), hi[reach].astype(np.int32), codes[reach]
+def _tile(inputs: Inputs, work: Work) -> tuple[Cut, npt.NDArray[np.float64]]:
+    """A tile's cut and its change in r."""
+    r = work.rows @ work.span.T
+    return inputs.cut(inputs.start + work.first, r), _change(inputs, work, r)
 
 
 def change_pairs(
@@ -150,131 +190,36 @@ def change_pairs(
     return t, partner, outside[first + t] & outside[partner]
 
 
-def _change(
-    inputs: Inputs, r: npt.NDArray[np.float64], first: int, last: int
-) -> npt.NDArray[np.float64]:
+def _change(inputs: Inputs, work: Work, r: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """Adjusted minus unadjusted r for the tile's pairs within `change_bp`, both variants outside
     the Long-Range LD Regions; at k = 0 the two are one and every change is 0."""
-    t, partner, clear = change_pairs(inputs.band, inputs.outside, first, last)
-    t, column = t[clear], partner[clear] - first
+    t, partner, clear = change_pairs(inputs.band, inputs.outside, work.first, work.last)
+    t, column = t[clear], partner[clear] - work.first
     after = r[t, column]
-    if inputs.unadjusted is None:
+    if work.unadjusted is None:
         return np.zeros_like(after)
-    u0 = inputs.unadjusted
-    reach = int(inputs.band.change_stop[first:last].max())
-    r0 = u0[first:last] @ u0[first:reach].T
-    return after - r0[t, column]
+    rows, span = work.unadjusted
+    return after - (rows @ span.T)[t, column]
 
 
-def tiles(inputs: Inputs, threads: int) -> Iterator[Tile]:
-    """Every tile of the chromosome, in row order, computed on `threads` threads."""
-    n = len(inputs.units)
-    blocks = list(windows(0, n, TILE_ROWS))
-    if threads <= 1:
-        yield from (_tile(inputs, first, last) for first, last in blocks)
-        return
-    with ThreadPoolExecutor(max_workers=threads) as pool:
-        yield from _in_order(pool, lambda span: _tile(inputs, *span), blocks, 2 * threads)
+Tiled = tuple[Cut, npt.NDArray[np.float64]]
 
 
-def _in_order(
-    pool: ThreadPoolExecutor,
-    work: Callable[[tuple[int, int]], Tile],
-    blocks: list[tuple[int, int]],
-    ahead: int,
-) -> Iterator[Tile]:
-    """`work` of each block, in order, with at most `ahead` in flight: bounded memory."""
-    pending: deque[Future[Tile]] = deque()
-    for span in blocks:
-        pending.append(pool.submit(work, span))
-        if len(pending) >= ahead:
-            yield pending.popleft().result()
-    while pending:
-        yield pending.popleft().result()
-
-
-#: Entries placed at a time when the Proxy Index is laid out: bounds its index arrays.
-PLACE_CHUNK: Final = 1 << 24
-
-
-@dataclass(frozen=True)
-class Entries:
-    """A chromosome's Proxy Index entries, each pair once: local rows lo < hi and its code, in
-    the order the tiles found them, which is ascending by (lo, hi)."""
-
-    lo: npt.NDArray[np.int32]
-    hi: npt.NDArray[np.int32]
-    codes: Codes
-
-    @classmethod
-    def of(
-        cls,
-        lo: list[npt.NDArray[np.int32]],
-        hi: list[npt.NDArray[np.int32]],
-        codes: list[Codes],
-    ) -> Entries:
-        found = cls(np.concatenate(lo), np.concatenate(hi), np.concatenate(codes))
-        found.require_order()
-        return found
-
-    def require_order(self) -> None:
-        """The layout below needs (lo, hi) ascending, as tiles in row order give them."""
-        step = np.diff(self.lo.astype(np.int64))
-        later = np.diff(self.hi.astype(np.int64)) > 0
-        if not ((self.lo < self.hi).all() and ((step > 0) | ((step == 0) & later)).all()):
-            raise ValueError("Proxy Index entries are not in (lo, hi) order: a builder fault")
-
-    def both_directions(
-        self, rows: int, offset: int
-    ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], Codes]:
-        """The Proxy Index in CSR form over `rows` local rows, partners as global rows (local +
-        `offset`): each pair in both its rows with one code, partners ascending (spec §5).
-
-        Row l's partners below it all precede those above it, so each half is placed where it
-        goes rather than the 2N entries sorted: a stable sort by hi lays out the lower halves,
-        and the upper halves are already in order. That holds the transient arrays to one
-        index of N and a chunk, where a lexsort of 2N needed several of 2N.
-        """
-        up = np.bincount(self.lo, minlength=rows)
-        down = np.bincount(self.hi, minlength=rows)
-        indptr = indptr_of(up + down)
-        out = _Layout(
-            np.empty(int(indptr[-1]), dtype=np.int64),
-            np.empty(int(indptr[-1]), dtype=self.codes.dtype),
-            offset,
-        )
-        below = np.argsort(self.hi, kind="stable")
-        out.place(indptr[:-1], down, self.hi, self.lo, self.codes, below)
-        del below
-        out.place(indptr[:-1] + down, up, self.lo, self.hi, self.codes, None)
-        return indptr, out.partner, out.codes
-
-
-@dataclass(frozen=True)
-class _Layout:
-    """The CSR arrays being filled: global partner rows and their codes."""
-
-    partner: npt.NDArray[np.int64]
-    codes: Codes
-    offset: int
-
-    def place(
-        self,
-        base: npt.NDArray[np.int64],
-        counts: npt.NDArray[np.int64],
-        row: npt.NDArray[np.int32],
-        other: npt.NDArray[np.int32],
-        codes: Codes,
-        order: npt.NDArray[np.intp] | None,
-    ) -> None:
-        """Put each entry's `other` row and code in its `row`'s block, which starts at
-        base[row]. `order` lists the entries by row (None: they already are); an entry's place
-        in its block is its rank there. A chunk at a time, to bound the index arrays."""
-        starts = np.cumsum(counts) - counts
-        for first in range(0, len(row), PLACE_CHUNK):
-            stop = min(first + PLACE_CHUNK, len(row))
-            picked = np.arange(first, stop) if order is None else order[first:stop]
-            owner = row[picked].astype(np.int64)
-            at = base[owner] + np.arange(first, stop) - starts[owner]
-            self.partner[at] = other[picked].astype(np.int64) + self.offset
-            self.codes[at] = codes[picked]
+def tiles(inputs: Inputs, units: Iterator[UnitBlock], threads: int) -> Iterator[Tiled]:
+    """Every tile of the chromosome, in row order, computed on `threads` threads, each as its
+    store cut and its change in r. At most 2 × `threads` tiles are in flight, and the unit
+    vectors are held for those tiles' window only."""
+    n = len(inputs.band.far_stop)
+    ahead = 2 * threads if threads > 1 else 1
+    window = Window(units, min(n, inputs.band.reach() + ahead * TILE_ROWS + UNIT_ROWS))
+    pending: deque[tuple[int, Future[Tiled]]] = deque()
+    with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
+        for first, last in windows(0, n, TILE_ROWS):
+            keep = pending[0][0] if pending else first
+            window.reach(int(inputs.band.far_stop[last - 1]), keep)
+            work = _work(window, inputs.band, first, last)
+            pending.append((first, pool.submit(_tile, inputs, work)))
+            if len(pending) >= ahead:
+                yield pending.popleft()[1].result()
+        while pending:
+            yield pending.popleft()[1].result()

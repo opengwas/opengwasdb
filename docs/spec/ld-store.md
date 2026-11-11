@@ -312,6 +312,25 @@ valid store never holds in that array: −32768 in an `r` array, a negative numb
 `partner`, a position ≤ 0, `""` in a string column, and a frequency outside (0, 1) or NaN. A reader
 refuses an array whose fill value is not, and `envelope.fill` fails it (§12).
 
+**How a store is written** (ogld#17, ADR 0005). Every producer, a build or an import of a
+published r, writes through `StoreWriter`, and the store makes its arrays from the r it is given,
+block of rows by block of rows, in row order. Every pair within a row's `far_bp` is judged as it
+is written. A value that is NaN, infinite, or past ±1 beyond §3's float allowance is refused,
+naming the pair. So a pair the producer did not measure is never stored, and never read as a Bound
+because it was taken to lie below the floor. A chromosome's Near Band `r` and `indptr` are created at its first
+block, since their lengths follow from the positions (§4). Its codes are written a whole shard at
+a time, the only write zarr makes without reading a shard back, and less than one shard is carried
+to the next block. A row of the Proxy Index is complete when its own block arrives: its partners
+below it come from earlier blocks, its partners above from its own. So the index is written row by
+row too, carrying only the pairs whose later row is still to come. `partner` and `r` grow a whole
+shard at a time, and an index under one shard is written at its clipped shape at the end. While
+a build writes its store it holds a shard of each array and the pairs and unit vectors within
+`far_bp` of the rows being written, never a chromosome. On HGDP+1kGP EUR chr6, the MHC's, the band
+carry is 128 MiB, the index carry at most 33,869,608 pairs (323 MiB), and the writing peaks at
+4.8 GB on 8 threads, against 31.4 GB when the writer held the chromosome. The PC Check's pass
+before it still holds a chromosome's genotypes, 10.4 GB on chr6 at k = 10; ogld#25 bounds it. A
+store written in any blocks, on any number of threads, holds the same arrays.
+
 **Why zstd level 3.** int16 r codes are mostly sampling noise around 0, so they compress little,
 and the codec was chosen on measured ratio and speed. These are the measurements on EUR chr22's
 real Near Band, by inner chunk (elements). Speeds are per core, in MB/s of raw data
@@ -448,6 +467,14 @@ The root group attribute `ld_store` is a JSON object. Every key below is REQUIRE
 shown. A value may be null only where the table says so. Other keys MAY appear, and a reader
 ignores the ones it does not know. The types are `ogld.format.Provenance`, and
 `ogld.format.REQUIRED_KEYS` lists the keys.
+
+**Who records what** (owner, 10 November 2026; ogld#17, ADR 0005). A store's producer gives the keys only
+its source knows, `ogld.format.Sourced`: `source`, `panel`, `reference_assembly`,
+`variant_filters`, `variants_dropped`, `adjustment`, `pc_diagnostic`, `software` and `build`. The
+store derives the rest from itself when it is finished: `format_version`, `encoding`, `n_variants`,
+`near_bp`, `far_bp`, `t_far`, `t_far_q`, `far_code_floor` and `counts`. It takes t_far's n and k
+when it is created, since it thresholds as rows arrive, and refuses a producer's `panel.n` or
+`adjustment.k` that differs. So no producer computes a threshold or a count of its own.
 
 | key | type | meaning |
 |---|---|---|
@@ -874,8 +901,8 @@ an independent reference on the Test Panel. Each rule has a store that breaks it
 **On write and on demand** (ogld#4). `ogld.validate(location)` runs the rules on a store on disk
 or over HTTP and returns every rule's findings, an empty list for a rule the store passes.
 `StoreWriter.finish` runs them on the store it wrote, on the threads the builder gives it, judged
-with the provenance it was given as JSON will hold it, and writes that provenance only when all 18
-pass. Otherwise it raises
+with the provenance it assembled (§7) as JSON will hold it, and writes that provenance only when
+all 18 pass. Otherwise it raises
 `ValidationFailed`, naming each failing rule and where, and the store keeps no provenance, so a
 reader refuses it (§13) rather than read it as a short one.
 
@@ -900,7 +927,7 @@ however dense the index is.
 The seven rules that read codes and entries one by one, `near.codes` and the six `index.*` rules,
 share one pass over each chromosome: each block is read once and handed to all seven, so each code
 and entry of a store that passes is decoded once per validation. A caller may give the pass t
-threads (`ogld validate --threads t`, or `StoreWriter.finish(provenance, threads=t)`); t blocks are
+threads (`ogld validate --threads t`, or `StoreWriter.finish(sourced, threads=t)`); t blocks are
 then read and checked at once, and no more are held. `near.codes` and `index.codes` read their
 `r` array in windows of their own instead when its `indptr` cannot delimit the rows or does not end
 at `r`'s length, as when it ends short of `r`: windows of 8,388,608 elements, codes or entries

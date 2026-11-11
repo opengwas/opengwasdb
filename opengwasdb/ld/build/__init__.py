@@ -28,7 +28,6 @@ from ogld.format import (
     InputError,
     Provenance,
     REncoding,
-    t_far,
 )
 from ogld.store import StoreWriter
 
@@ -146,33 +145,20 @@ def _build(inputs: BuildInputs, target: Path, threads: int, cost: record.Cost) -
     diagnostic.require_change_pairs([(c.name, c.position) for c in chromosomes], plan.panel)
     k = chosen.covariates.k
     rates = passes.chance(plan, chromosomes, chosen.covariates)
-    encoding = inputs.encoding()
     writer = StoreWriter.create(
         target,
         variants=passes.variants_table(chromosomes),
+        encoding=inputs.encoding(),
         near_bp=NEAR_BP,
         far_bp=FAR_BP,
-        encoding=encoding,
+        n=plan.samples.n,
+        k=k,
     )
-    far_t = t_far(plan.samples.n, k)
-    floor = encoding.far_code_floor(far_t)
-    written = passes.write_ld(
-        writer, plan, chromosomes, chosen.covariates, floor, (NEAR_BP, FAR_BP), threads, encoding
-    )
-    made = record.Made(
-        sum(len(c) for c in chromosomes),
-        found.dropped,
-        written.counts,
-        diagnostic.pc_diagnostic(rates, plan.samples.n, k, written.change),
-    )
+    change = passes.write_ld(writer, plan, chromosomes, chosen.covariates, threads)
+    made = record.Made(found.dropped, diagnostic.pc_diagnostic(rates, plan.samples.n, k, change))
     return writer.finish(
-        record.provenance(
-            _head(inputs, plan),
-            _adjustment(inputs, plan, chosen),
-            made,
-            (NEAR_BP, FAR_BP, far_t, floor),
-            cost.record(threads),
-            encoding,
+        record.sourced(
+            _head(inputs, plan), _adjustment(inputs, plan, chosen), made, cost.record(threads)
         ),
         threads=threads,
     )
