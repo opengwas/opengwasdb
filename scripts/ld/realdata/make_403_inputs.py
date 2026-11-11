@@ -174,7 +174,12 @@ def plink2_exe() -> Path:
 
 
 def plink2_version() -> str:
+    """plink2's version line; a plink2 that will not give one is refused."""
     done = subprocess.run([str(plink2_exe()), "--version"], capture_output=True, text=True)
+    if done.returncode != 0 or not done.stdout.strip():
+        raise SystemExit(
+            f"{plink2_exe()} --version failed ({done.returncode}): {done.stderr[-300:]}"
+        )
     return done.stdout.strip()
 
 
@@ -187,25 +192,36 @@ def sha256_of(path: Path) -> str:
 
 
 def keep_sha256(keep: Path) -> str:
-    """The builder's `panel.samples_sha256` of a keep file (spec §7), by its own `Samples`. A keep
-    file has a header line and the IID in its first column."""
-    from ogld.build.inputs import Samples
+    """The builder's `panel.samples_sha256` of a keep file (spec §7), through its own reader and
+    `Samples`, so a keep file the builder refuses is refused here."""
+    from ogld.build.inputs import Samples, read_keep
 
-    lines = keep.read_text().splitlines()
-    return Samples(tuple(line.split()[0] for line in lines if not line.startswith("#"))).sha256()
+    return Samples(tuple(read_keep(keep, keep.stem))).sha256()
+
+
+def provenance_sha256(provenance: Any) -> str:
+    """A hash of a store's provenance as recorded: it names the build, not just the panel."""
+    text = json.dumps(dict(provenance), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def check_pins(provenance: dict[str, Any], genotypes: Path, keep: Path) -> dict[str, str]:
     """Refuse genotypes or a keep file other than the ones the store was built from: the store's
-    `source.sha256` names each pgen, pvar and psam, and `panel.samples_sha256` the samples. The
-    store is the truth; a comparison on other inputs would compare different panels."""
-    recorded = provenance["source"]["sha256"]
-    for name, digest in recorded.items():
-        if sha256_of(genotypes / name) != digest:
-            raise SystemExit(f"{genotypes / name} is not the file the store was built from")
+    `source.sha256` names each pgen, pvar and psam, and the keep file by its own name (spec §7),
+    and `panel.samples_sha256` the samples. The store is the truth; a comparison on other inputs
+    would compare different panels."""
+    for name, digest in provenance["source"]["sha256"].items():
+        file = keep if name == keep.name else genotypes / name
+        if sha256_of(file) != digest:
+            raise SystemExit(f"{file} is not the file the store was built from")
     if keep_sha256(keep) != provenance["panel"]["samples_sha256"]:
         raise SystemExit(f"{keep} is not the sample list the store was built from")
-    return {"genotypes": str(genotypes), "keep": str(keep), "keep_sha256": keep_sha256(keep)}
+    return {
+        "genotypes": str(genotypes),
+        "keep": str(keep),
+        "keep_sha256": keep_sha256(keep),
+        "provenance_sha256": provenance_sha256(provenance),
+    }
 
 
 class Record(NamedTuple):
@@ -496,6 +512,7 @@ def clump(out: Path, store: Path, jobs: int) -> None:
         "genotypes": str(GENOTYPES),
         "keep": str(KEEP),
         "keep_sha256": keep_sha256(KEEP),
+        "provenance_sha256": provenance_sha256(reader.provenance),
         "plink2": str(plink2_exe()),
         "plink2_version": plink2_version(),
         "opengwasdb_branch": selection["source"],

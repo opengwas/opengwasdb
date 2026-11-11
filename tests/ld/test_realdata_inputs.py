@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 from script_modules import load_script
 
+import ogld
+
 script = load_script("realdata/make_403_inputs")
 Record = script.Record
 
@@ -80,9 +82,15 @@ def test_of_an_insertion_and_a_deletion_the_store_s_a1_frequency_names_the_one_i
         script.pick("1:10:C:CT", pair(), counts, 0.5)
 
 
-def test_a_record_is_picked_by_frequency_when_both_pass_and_the_rule_prefers_ref_is_a1() -> None:
-    same = {"ins": (300, 1330), "del": (300, 1330)}
-    assert script.pick("1:10:C:CT", pair(), same, 1 - 300 / 1330) == "ins"
+def test_when_both_records_match_the_stores_frequency_the_reversed_indel_rule_decides() -> None:
+    # ins (C>CT) has A1 = C = REF: frequency 1 − 300/1330. del (CT>C) has A1 = C = ALT: 1030/1330.
+    # The two are the same number, so the store cannot tell them apart, and the rule (REF = A1,
+    # ogld.identity.resolve_reversed_indels) decides: ins, whichever order the records came in.
+    counts = {"ins": (300, 1330), "del": (1030, 1330)}
+    stored = 1 - 300 / 1330
+    assert stored == pytest.approx(1030 / 1330)
+    assert script.pick("1:10:C:CT", list(reversed(pair())), counts, stored) == "ins"
+    assert script.pick("1:10:C:CT", pair(), counts, stored) == "ins"
 
 
 def test_resolve_asks_for_counts_only_of_the_records_of_a_shared_alid() -> None:
@@ -117,17 +125,49 @@ def test_a_keep_file_is_hashed_as_the_builder_hashes_its_samples(tmp_path: Path)
 
 
 def test_inputs_that_are_not_the_ones_the_store_was_built_from_are_refused(tmp_path: Path) -> None:
-    keep = tmp_path / "EUR.keep"
+    # The store's source.sha256 keys the keep file beside the pgens, as spec §7 says.
+    keep = tmp_path / "keep" / "EUR.keep"
+    keep.parent.mkdir()
     keep.write_text("#IID\nHG1\nHG2\n")
-    (tmp_path / "chr1.pgen").write_bytes(b"pgen")
+    genotypes = tmp_path / "geno"
+    genotypes.mkdir()
+    (genotypes / "chr1.pgen").write_bytes(b"pgen")
     good = {
-        "source": {"sha256": {"chr1.pgen": hashlib.sha256(b"pgen").hexdigest()}},
+        "source": {
+            "sha256": {
+                "chr1.pgen": hashlib.sha256(b"pgen").hexdigest(),
+                "EUR.keep": hashlib.sha256(keep.read_bytes()).hexdigest(),
+            }
+        },
         "panel": {"samples_sha256": script.keep_sha256(keep)},
     }
-    assert script.check_pins(good, tmp_path, keep)["keep_sha256"] == script.keep_sha256(keep)
-    wrong_file = {**good, "source": {"sha256": {"chr1.pgen": "0" * 64}}}
+    assert script.check_pins(good, genotypes, keep)["keep_sha256"] == script.keep_sha256(keep)
+    wrong_file = {**good, "source": {"sha256": {**good["source"]["sha256"], "chr1.pgen": "0" * 64}}}
     with pytest.raises(SystemExit, match="not the file the store was built from"):
-        script.check_pins(wrong_file, tmp_path, keep)
+        script.check_pins(wrong_file, genotypes, keep)
+    wrong_keep = {**good, "source": {"sha256": {**good["source"]["sha256"], "EUR.keep": "0" * 64}}}
+    with pytest.raises(SystemExit, match="not the file the store was built from"):
+        script.check_pins(wrong_keep, genotypes, keep)
     wrong_samples = {**good, "panel": {"samples_sha256": "0" * 64}}
     with pytest.raises(SystemExit, match="not the sample list"):
-        script.check_pins(wrong_samples, tmp_path, keep)
+        script.check_pins(wrong_samples, genotypes, keep)
+
+
+def test_a_keep_file_without_the_iid_header_is_refused_as_the_builder_refuses_it(
+    tmp_path: Path,
+) -> None:
+    keep = tmp_path / "EUR.keep"
+    keep.write_text("HG1\nHG2\n")
+    with pytest.raises(ogld.InputError, match="#IID"):
+        script.keep_sha256(keep)
+
+
+def test_a_plink2_that_will_not_say_its_version_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    broken = tmp_path / "plink2"
+    broken.write_text("#!/bin/sh\necho 'not a version' >&2\nexit 3\n")
+    broken.chmod(0o755)
+    monkeypatch.setenv("OGLD_PLINK2", str(broken))
+    with pytest.raises(SystemExit, match="--version"):
+        script.plink2_version()
