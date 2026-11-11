@@ -17,7 +17,8 @@ The Near Band is about 96% of every LD Store, and at `int16` × 32767 each of it
 12 bits after zstd. That step records r to about 1/1,180 of its own sampling error at n = 771,
 precision no use of an HGDP+1kGP store can see. Measured on real HGDP+1kGP EUR chr22 (24–30 Mb,
 the MAC ≥ 50 pgen, k = 0, 140 M Near Band pairs, zstd level 3 at 262,144-code chunks; the issue's
-table):
+table). Its n = 771 is all of EUR's v2 members; a build keeps the 665 unrelated ones (ADR 0002,
+decision 11), where each share below is about 7% smaller:
 
 | encoding | bits per pair | against × 32767 | max error in r | as a share of r's sampling SE at n = 771 |
 |---|---|---|---|---|
@@ -44,7 +45,8 @@ store at any other scale could be neither written nor read.
    and half-to-even rounding. So the dtype, the reserved code and the fill value never change;
    r = ±1 stays exact; negating a code never overflows; and a lost chunk still reads as a code
    that is never a correlation. A code past the scale, which the container can hold, is no
-   correlation either: the reader refuses it, and `near.codes` and `index.codes` fail it.
+   correlation either: the reader and the writer refuse it, and `near.codes` and `index.codes`
+   fail it.
 4. **A build takes its scale as an input** (`BuildInputs.r_scale`, `ogld build --r-scale`) and
    records it. There is no default a build could fall back on silently.
 
@@ -66,7 +68,7 @@ store at any other scale could be neither written nor read.
   reserved code and one fill value for every store, so a reader, validation and every fill-value
   rule have one case.
 - **One scale for every store.** Rejected: UK Biobank EUR's n = 49,766 makes r's sampling error
-  about eight times smaller than at n = 771, so the step that suits HGDP+1kGP would be coarse
+  about nine times smaller than at HGDP+1kGP EUR's n = 665, so the step that suits HGDP+1kGP would be coarse
   there, and the one that suits UK Biobank would waste HGDP+1kGP's bytes.
 - **A default scale for builds.** Rejected: a build that was not told its panel's scale would
   write one silently, which is the plausible wrong answer this project exists to refuse.
@@ -79,10 +81,11 @@ store at any other scale could be neither written nor read.
   self-consistent. A wider step widens the band of pairs that can fall on either side of a
   threshold, to about 2|r| × half a step. The comparisons with plink2 list such pairs, and use
   the store's own step.
-- **The far code floor moves with the scale.** At × 511 the floor for HGDP+1kGP EUR at k = 10 is
-  85, against 5426 at × 32767, and the true r² a pair at the floor's edge stands for moves with
-  it: spec §3's table gives it per panel at its own scale. A pair at exactly t_far is stored on
-  EUR, AFR and AMR at k = 10 and on UK Biobank EUR, and reads as the Bound on EAS and SAS.
+- **The far code floor moves with the scale.** At × 511 the floor for HGDP+1kGP EUR at k = 10
+  (n = 665) is 92, against 5850 at × 32767, and the true r² a pair at the floor's edge stands for
+  moves with it: spec §3's table gives it per panel at its own scale, on the samples each build
+  keeps. At k = 10 a pair at exactly t_far is stored on SAS and on UK Biobank EUR, and reads as
+  the Bound on EUR, AFR, EAS and AMR, for a true r² up to 2×10⁻⁵–2×10⁻⁴ above t_far.
 - **The Test Store is × 511**, HGDP+1kGP EUR's encoding, and the tests write × 2047 and × 32767
   stores beside it from the same reference r. At × 511 its clumping at r² 0.1 has 438 clumps
   where × 32767 had 439: five pairs whose true r² lies 3–7×10⁻⁵ below 0.1, within the band, read
