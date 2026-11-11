@@ -14,6 +14,7 @@ from dense_sources import build_dense_fixture, write_dense_manifest
 
 from opengwasdb.admission import NotAdmitted
 from opengwasdb.associations import Cells, InvalidAssociations
+from opengwasdb.completion import fill_shards
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.completion.ld_panel import (
     LdPanelNotFoundError,
@@ -1179,7 +1180,7 @@ class TestCompletedBandWriter:
     """Exact counters and error semantics of the dense band writer."""
 
     def _write_fill_shard(self, shard_dir: Path, records: np.ndarray) -> None:
-        with open(complete_module._fill_shard_path(shard_dir, 0), "wb") as fh:
+        with open(fill_shards.fill_shard_path(shard_dir, 0), "wb") as fh:
             records.tofile(fh)
 
     def _call_writer(
@@ -1262,7 +1263,7 @@ class TestCompletedBandWriter:
         on_panel = np.ones(n_variants, dtype=bool)
         on_panel[12] = False
 
-        records = np.zeros(3, dtype=complete_module._FILL_RECORD_DTYPE)
+        records = np.zeros(3, dtype=fill_shards.FILL_RECORD_DTYPE)
         records["row"] = [6, 13, 0]
         records["ai"] = [0, 0, 0]
         records["z"] = [7.5, -2.5, 0.25]
@@ -1303,7 +1304,7 @@ class TestCompletedBandWriter:
         n_variants = 3
         on_panel = np.ones(n_variants, dtype=bool)
         out_to_src = np.arange(n_variants, dtype=np.int64)
-        records = np.zeros(1, dtype=complete_module._FILL_RECORD_DTYPE)
+        records = np.zeros(1, dtype=fill_shards.FILL_RECORD_DTYPE)
         records["row"] = [0]
         records["ai"] = [1]  # analysis 1 is masked out below
         records["z"] = [5.0]
@@ -1322,7 +1323,7 @@ class TestCompletedBandWriter:
         out_to_src = np.full(n_variants, -1, dtype=np.int64)
         observed = [i for i in range(n_variants) if i != _SIGNAL_MISSING_IDX]
         out_to_src[observed] = np.arange(len(observed))
-        records = np.zeros(1, dtype=complete_module._FILL_RECORD_DTYPE)
+        records = np.zeros(1, dtype=fill_shards.FILL_RECORD_DTYPE)
         records["row"], records["ai"], records["z"], records["se"] = [6], [0], [z], [se]
         return self._call_writer(
             tmp_path, store, n_variants, np.ones(n_variants, dtype=bool), out_to_src,

@@ -1,0 +1,9 @@
+{
+  "commit": "bd046986ed2dd3320dfaebc56d09763be751cacd",
+  "measured_at": "2026-11-08T01:25:30.206317+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/odb424/wt/opengwasdb",
+  "opengwasdb_fingerprint": "53045692108ac356ed28e12df71f2963d2456931d47eb03c66a47823e29dda1f",
+  "shard_bytes": 536870912,
+  "peak_per_shard_byte": 3.5,
+  "held_per_shard_byte": 1.0
+}

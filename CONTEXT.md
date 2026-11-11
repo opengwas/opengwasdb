@@ -115,7 +115,7 @@ The canonical variant set defined by an LD Reference Panel for a Reference-Compl
 Store variant metadata indicating whether a variant belongs to the Reference Variant Set for a Reference-Completed release. It distinguishes reference-panel variants from observed off-panel variants.
 
 **Reference Completion Region**:
-A genomic interval within which a Ragged Cis-and-Signals Store attempts reference completion. A completed region contains every Reference Variant Set variant inside its boundary plus observed off-panel variants in the same boundary; singleton suggestive associations are not expanded.
+A genomic interval within which a Ragged Cis-and-Signals Store attempts reference completion. A completed region contains every Reference Variant Set variant inside its boundary plus observed off-panel variants in the same boundary; singleton suggestive associations are not expanded. An Analysis's regions are its cis region, where it has a Trait position, and its significant trans regions, with the boundaries its build recorded in the Release Bundle's region table; suggestive leads and QC-panel rows never make one (ADR 0039, issue #430).
 
 **Reference Completion Method**:
 The release-level algorithm and parameters used to infer imputed Z and SE values from observed associations and the LD Reference Panel. It is recorded as provenance for a Reference-Completed release rather than repeated per association.

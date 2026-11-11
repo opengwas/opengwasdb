@@ -83,7 +83,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-from zarr3_fixture_trees import use_checkout
+from benchmarks.zarr3_fixture_trees import use_checkout
 
 #: Length of every fixture chromosome in the chain file, in bp.
 CHAIN_SIZE = 1_000_000
@@ -669,26 +669,40 @@ def _files(case_dir: Path) -> set[Path]:
     return {p.relative_to(case_dir) for p in case_dir.rglob("*") if p.is_file()}
 
 
-def _same(left: Path, right: Path, *, resumed: bool) -> str:
-    """'' when two files hold the same content; otherwise how they differ.
+def comparable(path: Path, *, dump_sqlite: bool) -> Any:
+    """What of a file two builds must agree on.
 
-    A manifest is compared without its `created_at`, and a gzip file
-    decompressed, because its header records when it was written. An SQLite
-    file is compared by its dump only when `resumed`: a resumed build rewrites
-    the index metadata, which a fresh build writes once.
+    A manifest without its `created_at`, and a gzip file decompressed, because
+    its header records when it was written. An SQLite file as its dump when
+    `dump_sqlite`: a resumed build rewrites the index metadata, which a fresh
+    build writes once. Any other file, its bytes. `tests/store_digest.py`
+    digests a Store Release by the same rules.
     """
-    a, b = left.read_bytes(), right.read_bytes()
-    if a == b:
+    data = path.read_bytes()
+    if path.name == "manifest.json":
+        manifest = json.loads(data)
+        manifest.pop("created_at", None)
+        return manifest
+    if path.suffix == ".gz":
+        return gzip.decompress(data)
+    if dump_sqlite and path.suffix == ".sqlite":
+        return _sqlite_dump(path)
+    return data
+
+
+def _same(left: Path, right: Path, *, resumed: bool) -> str:
+    """'' when two files hold the same content (`comparable`); otherwise how
+    they differ. An SQLite file is compared by its dump only when `resumed`."""
+    if left.read_bytes() == right.read_bytes():
+        return ""
+    if comparable(left, dump_sqlite=resumed) == comparable(right, dump_sqlite=resumed):
         return ""
     if left.name == "manifest.json":
-        ja, jb = json.loads(a), json.loads(b)
-        ja.pop("created_at", None)
-        jb.pop("created_at", None)
-        return "" if ja == jb else "manifest content"
+        return "manifest content"
     if left.suffix == ".gz":
-        return "" if gzip.decompress(a) == gzip.decompress(b) else "decompressed bytes"
+        return "decompressed bytes"
     if resumed and left.suffix == ".sqlite":
-        return "" if _sqlite_dump(left) == _sqlite_dump(right) else "SQLite content"
+        return "SQLite content"
     return "bytes"
 
 

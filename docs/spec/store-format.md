@@ -1900,22 +1900,52 @@ For Ragged Cis-and-Signals molecular Stores, Reference Completion is bounded to 
 
 - complete cis regions within existing cis boundaries;
 - complete significant trans regions within existing trans-region boundaries;
-- do not expand singleton suggestive associations.
+- do not expand singleton suggestive associations, nor any other row kept for a
+  reason other than a signal.
 
-A **region** is identified from the Analysis's Trait position where it has one.
-Not every Store Family has one: a family with no single encoding gene per
-Analysis (small-molecule metabolomics, say) carries no `trait_chr`/`trait_bp`
-at all, by design. For those Analyses the retained regions are identified from
-**the Analysis's own retained associations** instead: an LD block is a region
-of that Analysis when the Analysis already holds at least
-`impute.min_observed_points()` observations at that block's own panel
-variants. Below that threshold the block cannot be fitted, so completing it
-would add its panel variants as missing rows and impute none of them; the
-"do not expand singleton suggestive associations" rule above is the same
-threshold seen from the other side. Counting a variant that merely falls
-inside a block's base-pair extent, rather than one of the block's own panel
-variants, is not the same count and MUST NOT be substituted for it (ADR 0039,
-issue #102).
+An Analysis's **regions** are its cis region, where it has a Trait position, and
+its significant trans regions, each completed only within its own boundary: an
+inclusive `[start, end]` on one chromosome, in the Store's assembly (GRCh38).
+Their boundaries are the ones the Store's build recorded, in its **region table**
+(a Release Bundle's `sidecars/sparse_regions.tsv`: one row per region, read by
+its `analysis_id`, `region_id`, `region_kind`, `chromosome`, `start`, `end` and
+`source_genome_build` columns). A Store does not record the table, so
+`complete-ragged --regions` and the Observed-View Check's `--regions` take it as
+an input (ADR 0039 as amended, issue #430). It is required unless the source's
+Association Coverage is `cis`: any other coverage may hold significant regions
+only the table records, which completing without it would leave out.
+
+- the cis region's boundary is the table's `cis` row for the Analysis where it
+  has one, and otherwise its Trait position plus or minus `cis_window_bp`
+  (`complete-ragged --cis-window-bp`, recorded as
+  `provenance.completion.cis_window_bp`); a `cis` Store whose build records no
+  table is completed this way;
+- each significant trans region's boundary is a `significant_trans` row;
+- `suggestive_trans` and `qc_panel` rows never make a region, however many of
+  them fall in one LD block: they stay observed associations, and a QC panel's
+  rows across the genome complete nothing;
+- a row of any other kind, a row in another assembly, and a row naming an
+  Analysis the Store does not hold refuse the completion.
+
+Not every Store Family has a Trait position: a family with no single encoding
+gene per Analysis (small-molecule metabolomics, say) carries no
+`trait_chr`/`trait_bp` at all, by design. Such an Analysis's regions come from
+the table alone, so completing one the table says nothing of MUST be refused,
+never completed by another rule; one the table gives no significant region is
+carried Observed-Only.
+
+An LD block is completed for an Analysis when its extent overlaps one of the
+Analysis's regions. A region no block overlaps, in a gap of the panel or on a
+chromosome it lacks, is completed nowhere; that is not refused, and the
+completion names it by `region_id` in its summary (`regions_without_block`). The fit uses the Analysis's observations at all of that
+block's panel variants, inside the regions or not, as `completion.block.run_block`
+fits; only the panel variants inside a region's boundary become imputed or
+missing rows, and observed rows outside every region stay exactly as the source
+holds them. A block that holds only suggestive or QC-panel rows of an Analysis
+gains it no row. Before issue #430, an Analysis with no Trait position was
+completed in every block holding `impute.min_observed_points()` of its
+observations, whole, and one with a Trait position in every block touching its
+cis window, whole; both rules are withdrawn.
 
 Each completed region contains:
 
@@ -2483,7 +2513,7 @@ pairing fails the axis or cell checks.
 #### Ragged scope
 
 `check-observed-view SOURCE TARGET --seed N --output verdict.json --ld-panel DIR [--ancestry EUR]
-[--n-random 1000]` also checks an Observed-Only **Ragged** release `SOURCE` against the
+[--regions TABLE] [--n-random 1000]` also checks an Observed-Only **Ragged** release `SOURCE` against the
 `complete-ragged` output `TARGET` (issue #296). A Ragged release has no grid to sample, and
 completion rebuilds the union variant axis, so every comparison is by variant identity (ALID),
 never by index. The exit codes, the required `--seed` and the verdict's `seed`, `n_random`,
@@ -2503,26 +2533,32 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   `TARGET` with identical decoded Z, SE and EAF (NaN equal to NaN) and `imputed == 0`;
   `TARGET` holds no association with Z and SE both present and `imputed == 0` that `SOURCE`
   lacks (`target_observed_not_in_source`); every `imputed` value is 0 or 1; every imputed
-  association lies inside one of the Analysis's **retained regions**; a non-admitted Analysis
-  holds no imputed cell (`imputed_in_non_admitted`). Rows that are neither observed nor imputed
-  (NaN, read through each plane's missing marker: panel positions inside a region that
-  completion could not fill) are counted as `nan_rows` and fail nothing; an infinite value is
-  not one of them.
-- **Retained regions need the LD panel.** A release stores no region coordinates, only block ids
-  and counts in `completion_quality`; block extents live in the panel. The check rebuilds each
-  sampled admitted Analysis's blocks as `complete-ragged` chose them (ADR 0014, ADR 0039): the
-  blocks touching its Trait position plus or minus the manifest's
-  `provenance.completion.cis_window_bp`, or, with no Trait position, the blocks holding enough of
-  its own observations; a region is the panel positions of those blocks. `--ld-panel` (the
-  directory `complete-ragged` was given) is therefore required for a Ragged pair, and `--ancestry`
-  must equal `provenance.completion.ancestry` when given. There is no panel-free fallback.
-  A `completion_quality` block the rebuilt regions lack is `quality_blocks_not_in_regions`, so a
-  panel other than the one used is noticed. `--ld-panel` for a Dense or Hybrid pair is refused.
+  association lies inside one of the Analysis's **retained regions**
+  (`imputed_outside_retained`), and so does every missing association completion added, one no
+  source association maps to (`missing_outside_retained`); a non-admitted Analysis holds no
+  imputed cell (`imputed_in_non_admitted`). Rows that are neither observed nor imputed (NaN,
+  read through each plane's missing marker: panel positions inside a region that completion
+  could not fill, or a source's own missing rows) are counted as `nan_rows`; an infinite value
+  is not one of them.
+- **Retained regions need the LD panel and the region table.** A release stores no region
+  coordinates, only block ids and counts in `completion_quality`. The check rebuilds each sampled
+  admitted Analysis's regions as `complete-ragged` chose them, by the same call (section 17,
+  ADR 0039 as amended, issue #430): its region table's `cis` and `significant_trans` rows, and,
+  for an Analysis with a Trait position and no `cis` row, its Trait position plus or minus the
+  manifest's `provenance.completion.cis_window_bp`. A region's rows are the panel variants of the
+  blocks it overlaps that lie inside its boundary. `--ld-panel` (the directory `complete-ragged`
+  was given) is therefore required for a Ragged pair, `--regions` (the table it was given) is
+  required unless `SOURCE`'s Association Coverage is `cis`, and `--ancestry` must equal
+  `provenance.completion.ancestry` when given. There is no panel-free fallback. A
+  `completion_quality` block the rebuilt regions lack is `quality_blocks_not_in_regions`, so a
+  panel other than the one used is noticed. The verdict's `regions` names the table and its
+  SHA-256, or is `null`. `--ld-panel` or `--regions` for a Dense or Hybrid pair is refused.
 - **Totals.** `observed_in_source`, `imputed`, `nan_rows`, `regions` (retained
   Analysis-by-block regions) and `infinite_cells` (present-but-infinite cells, in `SOURCE` or
   `TARGET`, which never fail the check) are informational. Failing: `z_mismatch`, `se_mismatch`,
   `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_target`,
-  `target_observed_not_in_source`, `imputed_outside_retained`, `imputed_in_non_admitted`,
+  `target_observed_not_in_source`, `imputed_outside_retained`, `missing_outside_retained`,
+  `imputed_in_non_admitted`,
   `imputed_mask_invalid`, `z_se_missingness_mismatch`, `non_canonical_marker` (a cell, in
   `SOURCE` or `TARGET`, whose Z or SE holds a NaN other than the canonical one: an invalid
   state, not a `nan_rows` row — issue #373), `target_variants_unordered` (an Analysis's
@@ -2535,8 +2571,9 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   with no chromosomes for the ancestry, an ancestry other than the one recorded, a `TARGET`
   completed against an ancestry other than the panel's, a `TARGET` with no completion ancestry
   or `cis_window_bp` recorded, a release that cannot be opened or decoded (a missing array
-  group or EAF array included), and either `--ld-panel` or `--ancestry` for a Dense or Hybrid
-  pair.
+  group or EAF array included), a region table `complete-ragged` would refuse, no `--regions`
+  where `SOURCE`'s Association Coverage is not `cis`, and any of `--ld-panel`,
+  `--ancestry` or `--regions` for a Dense or Hybrid pair.
 - **Residual-coded SE is compared exactly too.** SE is compared for exact equality, as the
   contract in section 12 states, whether it is `float16` or `int8_residual` (owner ruling,
   2026-10-22). Ragged completion used to refit `se_coefficients` over the completed Analysis,

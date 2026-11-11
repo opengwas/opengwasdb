@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from region_tables import NO_SIGNIFICANT_REGIONS, every_analysis, write_region_table
 from stored_rows import stored_rows
 
 from opengwasdb.completion.ld_panel import LdPanelNotFoundError
@@ -198,6 +199,7 @@ def _completed_store_seed(
     complete_ragged_store(
         observed, dst, panel,
         ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
+        regions=write_region_table(root / "regions.tsv", NO_SIGNIFICANT_REGIONS),
     )
     return dst
 
@@ -254,6 +256,7 @@ class TestTopHitCountsRefreshedByCompletion:
         dst = tmp_path / "comp_stale.opengwasdb"
         complete_ragged_store(
             observed_store, dst, ld_panel, ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+            regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
         )
 
         dst_rows = sorted(
@@ -367,6 +370,7 @@ class TestCompletionFiles:
         complete_ragged_store(
             source, completed, ld_panel,
             ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+            regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
         )
 
         manifest = json.loads((completed / "manifest.json").read_text())
@@ -395,18 +399,22 @@ class TestCompletionFiles:
         ] == "signals_only"
 
         completed = tmp_path / "completed.opengwasdb"
+        # A signals_only Store's regions are its build's to say (issue #430):
+        # here none but its Analyses' cis windows.
         result = CliRunner().invoke(
             app,
             [
                 "complete-ragged", str(source), str(completed),
                 "--ld-panel", str(ld_panel), "--min-cor", "0.0",
                 "--cis-window-bp", "500000",
+                "--regions", str(write_region_table(tmp_path / "t.tsv", [])),
             ],
         )
 
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output.strip().splitlines()[-1])
         assert payload["association_coverage"] == "signals_only"
+        assert (payload["n_regions_without_block"], payload["regions_without_block"]) == (0, [])
         assert json.loads((completed / "manifest.json").read_text())[
             "association_coverage"
         ] == "signals_only"
@@ -478,9 +486,11 @@ class TestCompletionFiles:
             fh.write("1\t1000000\tA\tG\t0.1\t0.02\t0.3\n")
             fh.write("1\t1100000\tC\tT\t-0.2\t0.03\t0.45\n")
         manifest = tmp_path / "ssf_manifest.tsv"
+        # A Trait position, so the Analysis is completed in a cis region (issue #430).
         manifest.write_text(
-            "analysis_index\tanalysis_id\tfiltered_file\tn\tassigned_ancestry\tsource_genome_build\n"
-            "0\tanalysis_a\ta.tsv.gz\t1000\tEUR\tGRCh38\n",
+            "analysis_index\tanalysis_id\tfiltered_file\tn\tassigned_ancestry"
+            "\tsource_genome_build\ttrait_chr\ttrait_bp\n"
+            "0\tanalysis_a\ta.tsv.gz\t1000\tEUR\tGRCh38\t1\t1050000\n",
             encoding="utf-8",
         )
         observed = tmp_path / "ssf_obs.opengwasdb"
@@ -501,6 +511,7 @@ class TestCompletionFiles:
         complete_ragged_store(
             observed, completed, ld_panel,
             ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp",
+            regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
         )
 
         from opengwasdb.variants.axis import VariantAxis
@@ -532,7 +543,9 @@ class TestCompletionFiles:
         self, tmp_path, observed_store, ld_panel, completed_store
     ):
         with pytest.raises(FileExistsError):
-            complete_ragged_store(observed_store, completed_store, ld_panel, min_cor=0.0)
+            complete_ragged_store(observed_store, completed_store, ld_panel, min_cor=0.0,
+                regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
+            )
 
     def test_ld_dir_already_holding_the_ancestry_directory_raises(
         self, tmp_path, observed_store, ld_panel
@@ -588,6 +601,24 @@ class TestPanelAlidCanonicalisation:
                 gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
         (panel_dir / "block.unphased.vcor1.gz").write_bytes(buf.getvalue())
 
+    @classmethod
+    def completed_on_underscore_panel(
+        cls, tmp_path: Path, observed_store: Path, observed_bp: list[int]
+    ) -> Path:
+        """`observed_store` completed against one chr1 block in the underscore form,
+        over `observed_bp` and the panel-only 1:1050000:C:T, in its cis windows."""
+        cls._write_underscore_panel(
+            tmp_path / "ld_panel_us" / "EUR" / "1",
+            [(bp, "A", "G", 0.35) for bp in observed_bp] + [(1_050_000, "C", "T", 0.40)],
+        )
+        completed_store = tmp_path / "comp.opengwasdb"
+        complete_ragged_store(
+            observed_store, completed_store, tmp_path / "ld_panel_us",
+            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
+            regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
+        )
+        return completed_store
+
     def test_new_panel_variant_in_underscore_form_is_imputed(self, tmp_path):
         from opengwasdb.variants import parse_canonical_alid
         from opengwasdb.variants.axis import VariantAxis
@@ -617,17 +648,7 @@ class TestPanelAlidCanonicalisation:
             association_coverage="cis_and_signals",
         )
 
-        panel_dir = tmp_path / "ld_panel_us" / "EUR" / "1"
-        self._write_underscore_panel(
-            panel_dir,
-            [(bp, "A", "G", 0.35) for bp in observed_bp] + [(1_050_000, "C", "T", 0.40)],
-        )
-
-        completed_store = tmp_path / "comp.opengwasdb"
-        complete_ragged_store(
-            observed_store, completed_store, tmp_path / "ld_panel_us",
-            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
-        )
+        completed_store = self.completed_on_underscore_panel(tmp_path, observed_store, observed_bp)
 
         comp_ax = VariantAxis(completed_store)
         rec = comp_ax.by_alid(parse_canonical_alid("1:1050000:C:T"))
@@ -835,6 +856,7 @@ class TestCompletedStoreKeepsObservedStatistics:
         complete_ragged_store(
             observed, completed, tmp_path / "panel", ancestry="EUR",
             cis_window_bp=500_000, min_cor=0.0, release_id="comp",
+            regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
         )
 
         comp = stored_rows(completed, 0)
@@ -917,16 +939,8 @@ class TestAncestryMatchedRaggedCompletion:
         rows = {r["analysis_id"]: r["assigned_ancestry"] for r in obs_table.rows}
         assert rows == {"eur_trait": "EUR", "afr_trait": "AFR"}
 
-        panel_dir = tmp_path / "ld_panel_us" / "EUR" / "1"
-        TestPanelAlidCanonicalisation._write_underscore_panel(
-            panel_dir,
-            [(bp, "A", "G", 0.35) for bp in observed_bp] + [(1_050_000, "C", "T", 0.40)],
-        )
-
-        completed_store = tmp_path / "comp.opengwasdb"
-        complete_ragged_store(
-            observed_store, completed_store, tmp_path / "ld_panel_us",
-            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
+        completed_store = TestPanelAlidCanonicalisation.completed_on_underscore_panel(
+            tmp_path, observed_store, observed_bp
         )
 
         comp_table = read_analyses(completed_store / "analyses.tsv")
@@ -990,12 +1004,14 @@ class TestParallelAndResume:
         serial = complete_ragged_store(
             observed_store, serial_dst, ld_panel,
             ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="serial",
+            regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
         )
         parallel_dst = tmp_path / "parallel.opengwasdb"
         parallel = complete_ragged_store(
             observed_store, parallel_dst, ld_panel,
             ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="parallel",
             n_workers=2,
+            regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
         )
         assert parallel.n_variants == serial.n_variants
         assert parallel.n_imputed == serial.n_imputed
@@ -1018,6 +1034,7 @@ class TestParallelAndResume:
                 "complete-ragged", str(observed_store), str(tmp_path / "cli.opengwasdb"),
                 "--ld-panel", str(ld_panel), "--min-cor", "0.0",
                 "--cis-window-bp", "500000", "--n-workers", "2",
+                "--regions", str(write_region_table(tmp_path / "regions.tsv", [])),
             ],
         )
 
@@ -1025,15 +1042,18 @@ class TestParallelAndResume:
         assert "(n_workers=2)" in result.output
 
     def test_resume_matches_fresh_run(self, tmp_path, observed_store, ld_panel):
+        import hashlib
         import json
 
         from opengwasdb.completion.checkpoint import checkpoint_dir_for
         from opengwasdb.layouts.ragged.complete import resume_ragged_completion
 
+        table = write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS)
         fresh_dst = tmp_path / "fresh.opengwasdb"
         fresh = complete_ragged_store(
             observed_store, fresh_dst, ld_panel,
             ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+            regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
         )
 
         resumable_dst = tmp_path / "resumable.opengwasdb"
@@ -1049,6 +1069,8 @@ class TestParallelAndResume:
                 "min_cor": 0.0, "thresh": 0.9,
                 "release_id": None, "ld_panel_id": "eur-hg38-gpm",
                 "impute_analysis_ids": None, "region_cap_bp": 1_000_000,
+                "regions": str(table),
+                "regions_sha256": hashlib.sha256(table.read_bytes()).hexdigest(),
             }),
             encoding="utf-8",
         )
@@ -1086,10 +1108,43 @@ class TestParallelAndResume:
             complete_ragged_store(
                 observed_store, dst, ld_panel,
                 ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+                regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
             )
         monkeypatch.undo()
 
         assert_a_resume_refuses_an_older_checkpoint(dst, resume_ragged_completion)
+
+    def test_a_resume_refuses_a_checkpoint_written_before_the_region_rule(
+        self, tmp_path, observed_store, ld_panel
+    ):
+        """A checkpoint from before issue #430 holds whole blocks' fills and counts:
+        resumed beside ones bounded to the regions, its fills outside them would be
+        counted in `completion_quality` and stored nowhere. Its build parameters
+        record no region table, which is how a resume tells it apart."""
+        import json
+
+        from opengwasdb.completion.checkpoint import checkpoint_dir_for
+        from opengwasdb.layouts.ragged.complete import resume_ragged_completion
+
+        dst = tmp_path / "resumed.opengwasdb"
+        checkpoint_dir = checkpoint_dir_for(dst)
+        (checkpoint_dir / "blocks").mkdir(parents=True)
+        (checkpoint_dir / "build_params.json").write_text(
+            json.dumps({
+                "source_path": str(Path(observed_store).resolve()),
+                "dest_path": str(dst.resolve()),
+                "ld_dir": str(Path(ld_panel).resolve()),
+                "ancestry": "EUR", "cis_window_bp": 500_000,
+                "min_cor": 0.0, "thresh": 0.9,
+                "release_id": None, "ld_panel_id": "eur-hg38-gpm",
+                "impute_analysis_ids": None, "region_cap_bp": 1_000_000,
+            }),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="issue #430"):
+            resume_ragged_completion(checkpoint_dir)
+        assert not dst.exists()
 
 
 class TestValidation:
@@ -1600,16 +1655,19 @@ class TestGeneTargetLessAnalyses:
     for those families Reference Completion was a **complete no-op**: 0 blocks
     enumerated, 0 new panel variants, 0 imputed, and a release stamped
     `reference_completed` whose associations are byte-identical to its
-    observed-only source. All four of opengwasdb-stores'
-    `metabolome-plasma-2023` full releases (4,443 real Analyses) completed
-    this way and did nothing.
+    observed-only source.
+
+    Issue #430 then found the rule #102 chose, any block holding four of the
+    Analysis's observations, completing a QC panel's every block. Such an
+    Analysis is now completed inside the significant regions its build's region
+    table records (`test_ragged_completion_regions.py`); these tests keep #102's
+    question, whether the block is reached at all, asked of that rule.
 
     These tests assert on **block enumeration** -- did the store gain the
     panel-only variants of a block it should have completed -- rather than on
     imputed counts, because whether `ElasticNetCV` converges on a fixture this
     small is not deterministic (`test_dense_completion.py` notes the same
-    fragility). Enumeration is what #102 is about: the blocks were never
-    reached at all.
+    fragility).
     """
 
     #: In the fixture's panel block and never observed by the store, so it can
@@ -1678,10 +1736,11 @@ class TestGeneTargetLessAnalyses:
         complete_ragged_store(
             rich_observed_store, dst, rich_panel,
             ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+            regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
         )
         assert self.PANEL_ONLY_ALID in self._alids(dst)
 
-    def test_an_analysis_with_no_trait_position_is_completed_from_its_own_variants(
+    def test_an_analysis_with_no_trait_position_is_completed_in_its_significant_region(
         self, tmp_path, rich_observed_store, rich_panel
     ):
         self._drop_trait_positions(rich_observed_store)
@@ -1690,6 +1749,9 @@ class TestGeneTargetLessAnalyses:
         complete_ragged_store(
             rich_observed_store, dst, rich_panel,
             ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+            regions=write_region_table(tmp_path / "t.tsv", every_analysis(
+                rich_observed_store, "significant_trans", "1", 900_000, 1_150_000
+            )),
         )
 
         assert self.PANEL_ONLY_ALID in self._alids(dst), (
@@ -1697,75 +1759,33 @@ class TestGeneTargetLessAnalyses:
             "completion did nothing but relabel the store"
         )
 
-    def test_a_block_the_analysis_barely_touches_is_not_enumerated(
-        self, tmp_path, rich_observed_store, rich_panel
-    ):
-        """Below `min_observed_points()` the block cannot be fitted, so
-        enumerating it would add its panel variants as missing rows and impute
-        none of them -- and spec §17 forbids expanding a suggestive singleton
-        into a whole region. Here the Analysis keeps only two of the block's
-        SNPs."""
-        from opengwasdb.model.analyses import read_analyses, write_analyses
-        from opengwasdb.variants.axis import VariantAxis
-
-        self._drop_trait_positions(rich_observed_store)
-        # Rebuild the source with only two of the block's panel SNPs observed.
-        thin = tmp_path / "thin_fixture"
-        thin.mkdir()
-        snps = []
-        for alid, _eaf, bp in _RICH_OBSERVED[:2]:
-            chrom, pos, a1, a2 = alid.split(":")
-            snps.append({"chr": chrom, "snp_id": f"rs{pos}", "bp": bp, "a1": a1, "a2": a2})
-        _write_esi(thin / "test.esi", snps)
-        _write_epi(thin / "test.epi", [
-            {"chr": "1", "probe_id": "ENSG00000000001", "bp": 1_050_000, "gene": "GENE1"}
-        ])
-        _write_besd_sparse_3f(
-            thin / "test.besd", 1, [[(0, 0.1, 0.02), (1, 0.3, 0.02)]]
-        )
-        thin_store = tmp_path / "thin_obs.opengwasdb"
-        build_ragged_from_besd(
-            thin / "test", thin_store, store_id="test", release_id="obs-v1", tissue="Blood",
-            association_coverage="cis_and_signals",
-        )
-        table = read_analyses(thin_store / "analyses.tsv")
-        write_analyses(
-            thin_store / "analyses.tsv",
-            type(table)(
-                fieldnames=table.fieldnames,
-                rows=tuple({**r, "trait_chr": "", "trait_bp": ""} for r in table.rows),
-            ),
-        )
-
-        dst = tmp_path / "thin_completed.opengwasdb"
-        result = complete_ragged_store(
-            thin_store, dst, rich_panel, ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
-        )
-
-        assert result.n_imputed == 0
-        axis = VariantAxis(dst)
-        try:
-            assert self.PANEL_ONLY_ALID not in {v.alid for v in axis.all()}
-        finally:
-            axis.close()
-
-    def test_an_analysis_whose_variants_touch_no_block_is_left_alone(
+    def test_an_analysis_whose_region_touches_no_block_is_left_alone(
         self, tmp_path, rich_observed_store
     ):
-        """The pass-through path still exists -- it is now reached by holding
-        no completable region, rather than by having no gene target."""
+        """The pass-through path still exists: a region the panel has no block
+        under completes nothing. It is not refused, since a panel gap is real,
+        and it is not silent: the result names it (issue #430)."""
+        import csv
+
         self._drop_trait_positions(rich_observed_store)
         empty_panel = tmp_path / "empty_panel"
         (empty_panel / "EUR" / "22").mkdir(parents=True)
         dst = tmp_path / "no_blocks.opengwasdb"
+        table = write_region_table(tmp_path / "t.tsv", every_analysis(
+            rich_observed_store, "significant_trans", "1", 900_000, 1_150_000
+        ))
+        with open(table, encoding="utf-8") as fh:
+            region_ids = tuple(row["region_id"] for row in csv.DictReader(fh, delimiter="\t"))
+        assert len(region_ids) == 1, "the fixture must hold a region for the panel to miss"
 
         result = complete_ragged_store(
             rich_observed_store, dst, empty_panel,
-            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, regions=table,
         )
 
         assert result.n_imputed == 0
         assert self._alids(dst) == self._alids(rich_observed_store)
+        assert result.regions_without_block == region_ids
 
 
 class TestRaggedLookupSeam:
@@ -1884,11 +1904,9 @@ class TestObservedDuplicates:
             0,
             source=SimpleNamespace(read=lambda cells: self._observed()),
             src_alids=self._ALIDS,
-            src_idx_remap=[0, 1, 2],
-            new_alid_to_idx={alid: i for i, alid in enumerate(self._ALIDS)},
-            block_ids=[],
-            block_canonical_alids={},
-            fills={},
+            axis=_axis(self._ALIDS),
+            reference=[],
+            fills=_fills([]),
         )
 
         assert completed.vi.tolist() == [0, 2]
@@ -1896,13 +1914,16 @@ class TestObservedDuplicates:
         assert completed.eaf.tolist() == [0.25, 0.5]
         assert "2 observed row(s) at 1 variant(s) disagree" in caplog.text
 
-    def test_fills_two_blocks_disagree_on_are_dropped(self, tmp_path):
-        fills_by_analysis = _merged_fills(
-            tmp_path,
+    def test_fills_two_blocks_disagree_on_are_dropped(self):
+        completed = _completed_from_fills(
+            self._ALIDS[:2],
             {z: [("1:100:A:G", 1.0, 0.25), ("1:200:C:T", z, 0.5)] for z in (1.5, 2.5)},
         )
 
-        assert fills_by_analysis == {0: {"1:100:A:G": (1.0, 0.25)}}
+        assert completed.vi.tolist() == [0, 1]
+        assert (completed.z[0], completed.se[0], completed.imp[0]) == (1.0, 0.25, 1)
+        assert np.isnan(completed.z[1]) and completed.imp[1] == 0
+        assert (completed.n_imputed, completed.n_missing) == (1, 1)
 
 
 def test_a_half_missing_source_cell_is_refused_even_where_no_block_completes(observed_store):
@@ -1927,11 +1948,9 @@ def test_a_half_missing_source_cell_is_refused_even_where_no_block_completes(obs
             0,
             source=CsrReader.open(observed_store),
             src_alids=alids,
-            src_idx_remap=list(range(len(alids))),
-            new_alid_to_idx={alid: i for i, alid in enumerate(alids)},
-            block_ids=[],
-            block_canonical_alids={},
-            fills={},
+            axis=_axis(alids),
+            reference=[],
+            fills=_fills([]),
         )
 
 
@@ -1951,10 +1970,13 @@ def test_a_block_cedes_its_end_only_for_an_analysis_completed_against_the_next()
     plan = _BlockPlan(
         source=None,
         state=None,
+        regions={},
         analysis_to_blocks={0: ["1/100-200", "1/200-300"], 1: ["1/100-200"]},
         block_to_tsv={},
         block_to_analyses={"1/100-200": [0, 1], "1/200-300": [0]},
+        block_chromosome={},
         block_canonical_alids={},
+        block_positions={},
         new_alids=set(),
         panel_placement={},
         endpoints={"1/100-200": SharedEndpoint("1/200-300", endpoint)},
@@ -1975,39 +1997,67 @@ def _logged_drops(caplog) -> list[tuple[str, str]]:
     return drops
 
 
-def _merged_fills(tmp_path, blocks: dict[float, list[tuple[str, float, float]]]) -> dict:
-    """What `_merge_checkpoint_rows` makes of one block checkpoint per entry,
-    each holding Analysis 0's ``(alid, z, se)`` fills."""
-    import sqlite3
+def _axis(alids: list[str]):
+    """A merged axis holding exactly `alids`, each source row its own row."""
+    from opengwasdb.layouts.ragged.complete import _MergedAxis
+    from opengwasdb.variants import CanonicalVariant
 
-    from opengwasdb.completion.checkpoint import (
-        BlockCompletionResult,
-        FillRow,
-        write_block_checkpoint,
+    fields = [alid.split(":") for alid in alids]
+    variants = [CanonicalVariant(chrom, int(pos), a1, a2) for chrom, pos, a1, a2 in fields]
+    return _MergedAxis(
+        variants=variants,
+        new_variants=[],
+        new_alid_to_idx={alid: i for i, alid in enumerate(alids)},
+        src_idx_remap=np.arange(len(alids)),
     )
-    from opengwasdb.completion.schema import create_completion_quality_table
-    from opengwasdb.layouts.ragged.complete import _merge_checkpoint_rows
-
-    directory = tmp_path / "blocks"
-    directory.mkdir()
-    for i, fills in enumerate(blocks.values()):
-        rows = [FillRow(alid, 0, z, se) for alid, z, se in fills]
-        write_block_checkpoint(directory / f"{i}.npz", BlockCompletionResult(str(i), [], rows))
-    db = sqlite3.connect(tmp_path / "index.sqlite")
-    create_completion_quality_table(db)
-    fills_by_analysis, _ = _merge_checkpoint_rows(directory, db)
-    return fills_by_analysis
 
 
-def test_every_fill_completion_drops_is_logged(tmp_path, caplog):
+def _fills(rows: list[tuple[int, float, float]]) -> np.ndarray:
+    """Analysis 0's fill records, as a batch's fill shard gives them."""
+    from opengwasdb.completion.fill_shards import FILL_RECORD_DTYPE
+
+    records = np.zeros(len(rows), dtype=FILL_RECORD_DTYPE)
+    for i, (row, z, se) in enumerate(rows):
+        records[i] = (row, 0, z, se)
+    return records
+
+
+def _completed_from_fills(alids: list[str], blocks: dict[float, list[tuple[str, float, float]]]):
+    """Analysis 0, observing nothing and completed against `alids`, given one
+    block's ``(alid, z, se)`` fills per entry, in block order."""
+    from types import SimpleNamespace
+
+    from opengwasdb.associations import Associations
+    from opengwasdb.layouts.ragged.complete import _completed_analysis
+
+    nothing = Associations.from_decoded(
+        variant_index=np.empty(0, dtype=np.int32),
+        analysis_index=0,
+        z=np.empty(0, dtype=np.float32),
+        se=np.empty(0, dtype=np.float32),
+        eaf=np.empty(0, dtype=np.float32),
+    )
+    row = {alid: i for i, alid in enumerate(alids)}
+    return _completed_analysis(
+        0,
+        source=SimpleNamespace(read=lambda cells: nothing),
+        src_alids=[],
+        axis=_axis(alids),
+        reference=[np.arange(len(alids))],
+        fills=_fills([(row[a], z, se) for fills in blocks.values() for a, z, se in fills]),
+    )
+
+
+def test_every_fill_completion_drops_is_logged(caplog):
     """D8 (issue #357): a row dropped for a reason other than a declared filter
     is logged, every one, where completion logs its drops. Six variants two LD
     blocks fill differently drop twelve fills, and the log names all twelve."""
-    fills_by_analysis = _merged_fills(
-        tmp_path, {z: [(alid, z, 0.5) for alid in _SIX] for z in (1.5, 2.5)}
+    completed = _completed_from_fills(
+        _SIX, {z: [(alid, z, 0.5) for alid in _SIX] for z in (1.5, 2.5)}
     )
 
-    assert fills_by_analysis == {0: {}}
+    assert completed.n_imputed == 0 and completed.n_missing == 6
+    assert np.isnan(completed.z).all()
     assert sorted(_logged_drops(caplog)) == sorted(
         (alid, "duplicate_conflicting") for alid in _SIX * 2
     )
@@ -2033,14 +2083,116 @@ def test_every_observed_row_completion_drops_is_logged(caplog):
         0,
         source=SimpleNamespace(read=lambda cells: observed),
         src_alids=_SIX,
-        src_idx_remap=list(range(6)),
-        new_alid_to_idx={alid: i for i, alid in enumerate(_SIX)},
-        block_ids=[],
-        block_canonical_alids={},
-        fills={},
+        axis=_axis(_SIX),
+        reference=[],
+        fills=_fills([]),
     )
 
     assert completed.vi.tolist() == []
     assert sorted(_logged_drops(caplog)) == sorted(
         (alid, "duplicate_conflicting") for alid in _SIX * 2
+    )
+
+
+def test_a_carried_analysis_is_written_in_the_completed_axis_order(tmp_path):
+    """Issue #424: an Analysis completion carries through unchanged is remapped
+    onto the completed axis, whose order at one position can differ from its
+    source's. `build_ragged_from_ssf` keeps two variants at one position in the
+    order its file gave them; the completed axis orders them by allele. The
+    remapped rows were written unsorted -- 265 descending pairs in 176 of
+    OGS-00006's Analyses, a release `validate` refuses (spec §11) and whose
+    variant-side lookups binary-search to a wrong row (#252). Each Analysis's
+    segment is now written in variant order, the rows unchanged."""
+    from contextlib import closing
+
+    from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+    from opengwasdb.validation.rules.sequence import segment_order_errors
+    from opengwasdb.variants.axis import VariantAxis
+
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    rows = [(1_000_000, "C", "T", 2.0), (1_000_000, "A", "C", -3.0), (1_100_000, "A", "G", 1.0)]
+    _write_ssf_filtered(filtered / "t.tsv.gz", [
+        {"chromosome": "1", "base_pair_location": bp, "effect_allele": ea, "other_allele": oa,
+         "beta": z * 0.1, "standard_error": 0.1, "rsid": f"rs{i}"}
+        for i, (bp, ea, oa, z) in enumerate(rows)
+    ])
+    manifest = tmp_path / "manifest.tsv"
+    _write_ssf_manifest(manifest, [
+        {"analysis_index": 0, "analysis_id": "t", "trait_id": "T", "trait_chr": "1",
+         "trait_bp": 1_050_000, "n": 1000, "mhc": "FALSE", "filtered_file": "t.tsv.gz",
+         "source_genome_build": "GRCh38"},
+    ])
+    observed = tmp_path / "obs.opengwasdb"
+    build_ragged_from_ssf(
+        manifest, filtered, observed, store_id="t", release_id="obs",
+        association_coverage="cis_and_signals",
+    )
+    with closing(VariantAxis(observed)) as axis:
+        source_order = [v.alid for v in axis.all()]
+    assert source_order[:2] == ["1:1000000:C:T", "1:1000000:A:C"], "fixture: file order kept"
+    completed = tmp_path / "comp.opengwasdb"
+
+    complete_ragged_store(
+        observed, completed, _make_ld_panel(tmp_path, "1", 900_000, 1_300_000),
+        ancestry="EUR", cis_window_bp=500_000, release_id="comp", impute_analysis_ids=set(),
+        regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
+    )
+
+    ragged = zarr.open_group(str(completed / RAGGED_ZARR_PATH), mode="r")
+    offsets = ragged["offsets"][:]
+    errors: list[str] = []
+    segment_order_errors(ragged, offsets, int(offsets[-1]), errors, "data.zarr/ragged")
+    assert errors == []
+    with closing(VariantAxis(completed)) as axis:
+        alids = [axis.by_index(int(v)).alid for v in stored_rows(completed, 0).variant_index]
+    assert alids == ["1:1000000:A:C", "1:1000000:C:T", "1:1100000:A:G"]
+    np.testing.assert_allclose(stored_rows(completed, 0).z, [-3.0, 2.0, 1.0], atol=1e-3)
+
+
+#: What 1ab2b09 wrote for `test_a_stored_missing_observed_row_is_never_filled`.
+_STORED_MISSING_TOTALS = {"n_imputed": 10, "n_missing": 2}
+
+
+def test_a_stored_missing_observed_row_is_never_filled(tmp_path):
+    """Issue #424: a source Analysis may hold a row whose z and SE are both
+    missing, which the Association Reader returns as a missing association.
+    Completion's block reader sees that position unobserved, so a block fills
+    it; but the row is the source's, and completion carries every source row
+    as it stands (ADR 0036). It stays missing, counted neither imputed nor
+    missing, as 1ab2b09 kept it; the totals are 1ab2b09's."""
+    from contextlib import closing
+
+    from test_ragged_residual_completion import build_residual_ssf_source, write_eaf_carrying_panel
+
+    from opengwasdb.encoding.plan import EAF_ABSENT, SE_MISSING, Z_MISSING
+    from opengwasdb.variants.axis import VariantAxis
+
+    observed, _ = build_residual_ssf_source(tmp_path / "source")
+    ragged = zarr.open_group(str(observed / RAGGED_ZARR_PATH), mode="r+")
+    with closing(VariantAxis(observed)) as axis:
+        row = axis.by_identifier("1:1030000:A:G").variant_index  # source row 30, in the block
+    start, stop = (int(x) for x in ragged["offsets"][1:3])
+    at = start + int(np.flatnonzero(ragged["variant_index"][start:stop] == row)[0])
+    ragged["z"][at], ragged["se"][at], ragged["eaf"][at] = Z_MISSING, SE_MISSING, EAF_ABSENT
+    held = stored_rows(observed, 1)
+    assert np.isnan(held.z[held.variant_index == row]).all(), "fixture: a stored missing row"
+    completed = tmp_path / "comp.opengwasdb"
+
+    result = complete_ragged_store(
+        observed, completed, write_eaf_carrying_panel(tmp_path / "ld_panel"), ancestry="EUR",
+        cis_window_bp=1_000_000, min_cor=0.0, release_id="comp",
+        regions=write_region_table(tmp_path / "regions.tsv", NO_SIGNIFICANT_REGIONS),
+    )
+
+    with closing(VariantAxis(completed)) as axis:
+        out_row = axis.by_identifier("1:1030000:A:G").variant_index
+    rows = stored_rows(completed, 1)
+    at_row = rows.variant_index == out_row
+    assert at_row.sum() == 1 and np.isnan(rows.z[at_row]).all() and np.isnan(rows.se[at_row]).all()
+    group = zarr.open_group(str(completed / RAGGED_ZARR_PATH), mode="r")
+    first = int(group["offsets"][1]) + int(np.flatnonzero(at_row)[0])
+    assert group["imputed"][first] == 0
+    assert {"n_imputed": result.n_imputed, "n_missing": result.n_missing} == (
+        _STORED_MISSING_TOTALS
     )
