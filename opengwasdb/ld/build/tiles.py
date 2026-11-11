@@ -8,7 +8,7 @@ threads and written in row order, so the store is the same for any thread count.
 
 The unit vectors are held for a window of rows, never the whole chromosome (`Window`). The
 window runs from the first row of the oldest tile in flight to the far stop of the newest, plus
-the genotype block being read (`ogld.build.inputs.CHUNK_RECORDS` rows).
+the genotype block being read (`UNIT_ROWS` rows).
 """
 
 from __future__ import annotations
@@ -22,12 +22,14 @@ from typing import Final
 import numpy as np
 import numpy.typing as npt
 
-from ogld.build.inputs import CHUNK_RECORDS
 from ogld.format.geometry import near_row_lengths, owners, spans, stop_within, windows
 from ogld.store import Cut
 
 #: Rows a tile computes: a tile is TILE_ROWS × (variants within far_bp) float64.
 TILE_ROWS: Final = 256
+#: Rows of genotypes read and adjusted at a time into the window of unit vectors: 8,192 rows of
+#: 665 samples are 44 MB, where `ogld.build.inputs.CHUNK_RECORDS` rows would be 350 MB.
+UNIT_ROWS: Final = 8_192
 
 _Units = npt.NDArray[np.float64]
 #: One block of a chromosome's unit vectors: (first local row, adjusted, unadjusted or None).
@@ -197,7 +199,7 @@ def tiles(inputs: Inputs, units: Iterator[UnitBlock], threads: int) -> Iterator[
     vectors are held for those tiles' window only."""
     n = len(inputs.band.far_stop)
     ahead = 2 * threads if threads > 1 else 1
-    window = Window(units, min(n, inputs.band.reach() + ahead * TILE_ROWS + CHUNK_RECORDS))
+    window = Window(units, min(n, inputs.band.reach() + ahead * TILE_ROWS + UNIT_ROWS))
     pending: deque[tuple[int, Future[Tiled]]] = deque()
     with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
         for first, last in windows(0, n, TILE_ROWS):

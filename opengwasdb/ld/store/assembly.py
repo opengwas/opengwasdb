@@ -204,8 +204,11 @@ class Cutter:
         """The block's pairs (t, c), t < c < far stop(t), whose code reaches the floor, as
         offsets from its first row, ascending by (t, c), with their codes. Only those whose |r|
         is not below the encoding's `least_r(floor)` are quantised, which keeps every pair whose
-        code can reach the floor; NaN is never below it."""
-        t, c = np.nonzero(~(np.abs(r) < self._least))
+        code can reach the floor; NaN is never below it. The test is two comparisons, not |r|,
+        which would copy the block's r: 133 MB a worker on chr6's widest tile."""
+        below = (r > -self._least) & (r < self._least)
+        t, c = np.nonzero(~below)
+        del below
         inside = (c > t) & (c < far_stop[t])
         t, c = t[inside], c[inside]
         codes = self._quantised(r[t, c], lambda at: (first + int(t[at]), first + int(c[at])))

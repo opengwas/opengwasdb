@@ -104,11 +104,11 @@ def choose(the_plan: Plan, found: Pass, k_target: int, k_min: int) -> Choice:
 
 
 def _blocks(
-    the_plan: Plan, chromosome: Chromosome
+    the_plan: Plan, chromosome: Chromosome, rows: int = CHUNK_RECORDS
 ) -> Iterator[tuple[int, npt.NDArray[np.float64]]]:
-    """A chromosome's genotypes in Variant Set order, a block at a time: (first row, dosages)."""
+    """A chromosome's genotypes in Variant Set order, `rows` at a time: (first row, dosages)."""
     with Genotypes(the_plan.filesets[chromosome.fileset]) as genotypes:
-        for first, stop in windows(0, len(chromosome), CHUNK_RECORDS):
+        for first, stop in windows(0, len(chromosome), rows):
             yield first, genotypes.rows(chromosome.rows[first:stop])
 
 
@@ -218,7 +218,7 @@ def _unit_blocks(
     """The chromosome's unit vectors, a genotype block at a time, in Variant Set order: after PC
     Adjustment by `chosen`, and at k > 0 also unadjusted, for the PC Diagnostic."""
     plain = covariates([], None, the_plan.samples.n) if chosen.k else None
-    for first, dosages in _blocks(the_plan, chromosome):
+    for first, dosages in _blocks(the_plan, chromosome, tiles.UNIT_ROWS):
         a1_is_alt = chromosome.a1_is_alt[first : first + len(dosages)]
         adjusted = unit_vectors(dosages, chosen, a1_is_alt)
         unadjusted = None if plain is None else unit_vectors(dosages, plain, a1_is_alt)
