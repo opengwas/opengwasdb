@@ -18,7 +18,7 @@ import pytest
 
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.gwas_vcf import GwasVcfReader, _record_rows
-from opengwasdb.readers.interface import ReferenceAllele, StreamTally
+from opengwasdb.readers.interface import StreamTally
 from opengwasdb.variants.normalise import (
     VariantNormalisationError,
     orient_to_canonical,
@@ -53,7 +53,6 @@ def test_a_reported_ez_is_the_stored_z_bit_for_bit(tmp_path: Path) -> None:
     _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tEZ:ES:SE\t5.25:0.5:0.1\n")
     (association,) = _associations(vcf)
     assert association.z == -5.25
-    assert association.reference is ReferenceAllele.REF
 
 
 @pytest.mark.parametrize(

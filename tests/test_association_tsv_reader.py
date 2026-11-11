@@ -13,7 +13,6 @@ from typer.testing import CliRunner, Result
 
 from opengwasdb.cli.main import app
 from opengwasdb.model.enums import StoredEffectScale
-from opengwasdb.readers import ReferenceAllele
 from opengwasdb.readers.association_tsv import (
     ASSOCIATION_TSV_CAPABILITY,
     AssociationTsvReader,
@@ -114,7 +113,6 @@ def test_the_reader_yields_what_the_combined_loop_yielded_field_for_field(cases:
         ("1", 100, "G", "A"), ("1", 200, "C", "T"), ("2", 300, "A", "G"),
     ]
     assert {a.stored_effect_scale for a in associations} == {StoredEffectScale.SD}
-    assert {a.reference for a in associations} == {ReferenceAllele.UNDECLARED}
     for association, (_alid, z, se, eaf, _rsid) in zip(associations, EXPECTED, strict=True):
         assert _same(association.z, z)
         assert _same(association.se, se)

@@ -22,7 +22,7 @@ import pytest
 from admission_helpers import record_analyses
 
 from opengwasdb.model.enums import StoredEffectScale
-from opengwasdb.readers.interface import ReaderAssociation, ReferenceAllele
+from opengwasdb.readers.interface import ReaderAssociation
 from opengwasdb.variants.routing import RouteTable
 from opengwasdb.variants.routing import keys as routing_keys
 from opengwasdb.variants.routing.keys import MAX_CHROMOSOMES, IntegerKeyCodec, routing_key
@@ -144,7 +144,7 @@ _ABSENT = ("1", 100, "A", "AG")
 def _association(site: tuple[str, int, str, str], z: float) -> ReaderAssociation:
     chrom, pos, ref, alt = site
     return ReaderAssociation(
-        chrom, pos, ref, alt, z, 0.1, StoredEffectScale.SD, reference=ReferenceAllele.REF
+        chrom, pos, ref, alt, z, 0.1, StoredEffectScale.SD
     )
 
 

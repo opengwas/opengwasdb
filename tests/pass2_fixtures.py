@@ -185,15 +185,22 @@ def pinned(spills: Spills, alids: list[str]) -> dict[str, object]:
     }
 
 
-def _write_golden() -> None:
+def write_golden(path: Path, builds: tuple[str, ...], build_one, capture, axis_of, pin) -> None:
+    """Build each of ``builds`` with ``build_one`` under ``capture``, and write
+    what ``pin`` records of its spills and axis to ``path``. Both golden files'
+    generators call this with their own build, capture and pin."""
     golden = {}
     with tempfile.TemporaryDirectory() as tmp, pytest.MonkeyPatch.context() as patch:
-        for which in BUILDS:
-            with captured_spills(patch) as spills:
-                store = build(Path(tmp) / which, which)
-            golden[which] = pinned(spills, axis(store))
-    GOLDEN.write_text(json.dumps(golden, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-    print(f"wrote {GOLDEN}")
+        for which in builds:
+            with capture(patch) as spills:
+                store = build_one(Path(tmp) / which, which)
+            golden[which] = pin(spills, axis_of(store))
+    path.write_text(json.dumps(golden, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"wrote {path}")
+
+
+def _write_golden() -> None:
+    write_golden(GOLDEN, BUILDS, build, captured_spills, axis, pinned)
 
 
 if __name__ == "__main__":

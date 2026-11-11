@@ -32,7 +32,6 @@ from opengwasdb.readers import (
     GwasSsfReader,
     GwasVcfReader,
     ReaderAssociation,
-    ReferenceAllele,
     SiteMetrics,
     UnsignedZScoreError,
     af_only,
@@ -223,7 +222,6 @@ def _fake_reader() -> FakeReader:
                 z=-2.0,
                 se=0.5,
                 stored_effect_scale=StoredEffectScale.SD,
-                reference=ReferenceAllele.UNDECLARED,
             ),
             ReaderAssociation(
                 chromosome="1",
@@ -233,7 +231,6 @@ def _fake_reader() -> FakeReader:
                 z=2.0,
                 se=0.5,
                 stored_effect_scale=StoredEffectScale.SD,
-                reference=ReferenceAllele.UNDECLARED,
             ),
         ],
         sites={
@@ -279,7 +276,6 @@ def _malformed_fake_reader() -> FakeReader:
                 se=0.5,
                 stored_effect_scale=StoredEffectScale.SD,
                 eaf=1.5,
-                reference=ReferenceAllele.UNDECLARED,
             )
         ]
     )
@@ -946,7 +942,6 @@ def test_fake_reader_needs_no_bcftools_or_fixture_vcf():
                 z=1.0,
                 se=0.1,
                 stored_effect_scale=StoredEffectScale.SD,
-                reference=ReferenceAllele.UNDECLARED,
             )
         ]
     )

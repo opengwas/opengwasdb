@@ -272,11 +272,6 @@ def _probe_rows(epi: Path) -> dict[str, int]:
     return probes
 
 
-#: A BESD names an effect allele `a1` and another `a2`, and declares neither
-#: the genome's reference: every projection of every probe carries this.
-_REFERENCE = interface.ReferenceAllele.UNDECLARED
-
-
 @dataclass(frozen=True)
 class BesdProbeReader:
     """The Source Reader for one probe of a BESD file set: one Analysis.
@@ -364,7 +359,6 @@ class BesdProbeReader:
             rsid=np.array([s if s.startswith("rs") else "" for s in snp_ids], dtype=object),
             ref=source.a2[rows],
             alt=source.a1[rows],
-            reference=_REFERENCE,
             key_prefix="esi:",
         )
 
@@ -408,7 +402,6 @@ class BesdProbeReader:
                     se=se,
                     stored_effect_scale=self.stored_effect_scale,
                     eaf=None if math.isnan(eaf) else eaf,
-                    reference=batch.reference,
                 )
 
     def stream_variants(self) -> Iterator[interface.SourceVariant]:

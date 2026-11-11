@@ -1142,7 +1142,10 @@ from the inputs they were assembled from and writes one JSON artifact:
    interleaved round by round in fresh interpreters: the current reader, a
    control reader exported with `git archive` from `--control-revision` (the
    epic measured at `d405de0`, and both readers changed after it), and the parse
-   floor. The floor
+   floor. A reader side reads the associations as Pass 2 does: as the reader's
+   association batches where it offers them (FinnGen, since #318), else one at
+   a time, so against a control from before #318 the A/B is batches against
+   rows. The floor
    is recorded by its method: a `pandas` C-engine read of the seven columns a
    tabular association row is built from plus `z = beta / sebeta`, or the
    GWAS-VCF reader's own `bcftools query` format with no per-record Python. Both

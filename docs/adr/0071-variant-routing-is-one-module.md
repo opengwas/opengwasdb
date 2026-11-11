@@ -74,7 +74,11 @@ routing is a value:
   axis's rows with the last occurrence of each index kept and conflicting
   repeats named, and what no axis holds. An `admit` callable judges each batch
   before it is matched and must return a boolean mask; Association Admission
-  (#357) plugs in there.
+  (#357) plugs in there. *Extended 10 Nov 2026 (#318):* `route_column` reads
+  its associations into `AssociationBatch`es and routes them with
+  `route_batches`, which also takes a reader's own batches; `route_reader`
+  routes a reader by whichever it offers (ADR 0076), and is Dense and Hybrid
+  Pass 2's call.
 - `place_sites(sites_by_assembly, *, chain_file, failure_threshold)` is the one
   lift. It is the only public stage, because the Hybrid fold is a second
   caller: it returns each placed site's ALID and the sites a reverse-strand
@@ -106,8 +110,10 @@ a `SourceReader`. Routing calls only its `stream_variants()`, which yields
 each record's chromosome, position, REF, ALT and rsid in the assembly the spec
 declares. Routing groups sources by that declaration and never asks the reader
 for it. Pass 2's `route_column` takes the `ReaderAssociation`s a builder
-streams through the same registry. #56 changes which readers sit behind
-`open_source` and how one is chosen; routing does not change with it.
+streams through the same registry, and `route_reader` the reader itself,
+reading its association batches where it offers them (#318). #56 changes
+which readers sit behind `open_source` and how one is chosen; routing does not
+change with it.
 
 `opengwasdb.variants` does not import the routing package, which imports the
 Source Readers. `variants/reference.py` keeps only the artifact format and the
