@@ -534,7 +534,8 @@ hash and declared source and the whole scan, not a PCA method or LD pruning. A P
 region the rest of the genome also explains, such as EUR's north–south axis through LCT (ratio
 0.104), is ancestry and is kept; an inversion's karyotype axis (ratio 0.007–0.019) is dropped
 (ADR 0002 has the evidence). The ratio cannot fall much below 5 / (n × window share), so the rule
-needs a few hundred samples: every HGDP+1kGP panel has n ≥ 345.
+needs a few hundred samples: every HGDP+1kGP panel keeps at least 341, AMR's unrelated samples
+(ADR 0002, decision 11), well above the about 100 below which no ratio reaches 0.05.
 
 **Genotypes are complete.** The builds read the phased HGDP+1kGP v2 callset, which has no missing
 calls, and a build refuses any input with one. So there is no imputation of missing calls and no
