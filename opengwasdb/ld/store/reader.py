@@ -80,6 +80,16 @@ class _Chromosome:
     index_r: zarr.Array[Any]
 
 
+@dataclass(frozen=True)
+class _Placed:
+    """Ascending, distinct local rows of one chromosome, the row and column of each in a
+    square result, and that result: what `pair_r` and `region_r` write their pairs into."""
+
+    local: npt.NDArray[np.int64]
+    at: npt.NDArray[np.int64]
+    out: npt.NDArray[np.float64]
+
+
 class StoreReader:
     """An opened LD Store, local or over HTTP (spec §2, §10).
 
@@ -221,10 +231,10 @@ class StoreReader:
             local, first, back = np.unique(
                 local_rows(rows[members], c.start), return_index=True, return_inverse=True
             )
-            at = members[first]
-            self._near_square(c, local, at, out)
-            self._scatter_far(c, local, at, out)
-            source[members] = at[back]
+            placed = _Placed(local, members[first], out)
+            self._near_square(c, placed)
+            self._scatter_far(c, placed)
+            source[members] = placed.at[back]
         repeat = np.flatnonzero(source != np.arange(len(rows)))
         # Every row first, then every column: a column copied before its rows would miss them.
         out[repeat] = out[source[repeat]]
@@ -340,7 +350,7 @@ class StoreReader:
                 r = dequantise(codes)
                 out[i, i + 1 : i + 1 + len(r)] = r
                 out[i + 1 : i + 1 + len(r), i] = r
-        self._scatter_far(c, local, np.arange(len(local), dtype=np.int64), out)
+        self._scatter_far(c, _Placed(local, np.arange(len(local), dtype=np.int64), out))
         return out
 
     def index(self, rows: npt.NDArray[np.int64]) -> Partners:
@@ -388,15 +398,9 @@ class StoreReader:
             r[far[held]] = dequantise(codes[held])
         return r
 
-    def _near_square(
-        self,
-        c: _Chromosome,
-        local: npt.NDArray[np.int64],
-        at: npt.NDArray[np.int64],
-        out: npt.NDArray[np.float64],
-    ) -> None:
-        """Write the Stored r of every pair of ascending, distinct `local` rows within
-        near_bp into `out`, at the rows and columns `at`."""
+    def _near_square(self, c: _Chromosome, placed: _Placed) -> None:
+        """Write the Stored r of every pair of the placed rows within near_bp into the square."""
+        local, at, out = placed.local, placed.at, placed.out
         near = stop_within(c.position[local], self._provenance["near_bp"])
         first = np.arange(1, len(local) + 1, dtype=np.int64)
         for i, j in row_pairs(first, near, _PAIRS_PER_STEP):
@@ -404,16 +408,11 @@ class StoreReader:
             out[at[i], at[j]] = r
             out[at[j], at[i]] = r
 
-    def _scatter_far(
-        self,
-        c: _Chromosome,
-        local: npt.NDArray[np.int64],
-        at: npt.NDArray[np.int64],
-        out: npt.NDArray[np.float64],
-    ) -> None:
-        """Write the Far Pairs among ascending, distinct `local` rows into `out`, at `at`:
-        each earlier row's Proxy Index entries that are later listed rows beyond near_bp.
-        Pairs beyond near_bp that the index lacks stay NaN: the Bound, or Not Measured."""
+    def _scatter_far(self, c: _Chromosome, placed: _Placed) -> None:
+        """Write the Far Pairs among the placed rows into the square: each earlier row's
+        Proxy Index entries that are later placed rows beyond near_bp. Pairs beyond near_bp
+        that the index lacks stay NaN: the Bound, or Not Measured."""
+        local, at, out = placed.local, placed.at, placed.out
         near_bp = self._provenance["near_bp"]
         position = c.position[local]
         if len(local) == 0 or within(position[-1] - position[0], near_bp):
@@ -674,10 +673,10 @@ def _window_rows(
 
 def _member(rows: npt.NDArray[np.int64], listed: npt.NDArray[np.int64]) -> npt.NDArray[np.bool_]:
     """Whether each of `rows` is in `listed`, which is ascending and distinct."""
-    if len(listed) == 0:
-        return np.zeros(len(rows), dtype=bool)
-    at = np.minimum(np.searchsorted(listed, rows), len(listed) - 1)
-    return np.asarray(listed[at] == rows)
+    at = np.searchsorted(listed, rows)
+    found = at < len(listed)
+    found[found] = listed[at[found]] == rows[found]
+    return found
 
 
 def _loci(
