@@ -76,13 +76,17 @@ def _greedy(
             continue
         lead[i], r_lead[i] = i, 1.0
         # The same variant asked again is r = 1 at d = 0, and joins on the same edges.
-        if _joins(np.ones(1), np.zeros(1, dtype=np.int64), r2=r2, window=window).all():
+        if _joins(*_ITSELF, r2=r2, window=window).all():
             hits.join(lead, r_lead, i, np.array([rows[i]]), np.ones(1))
         hits.close(rows[i], lead)
         found = reader.partners(rows[i : i + 1], r2=r2, window_bp=window, among=hits.open())
         joins = _joins(found.r, found.distance, r2=r2, window=window)
         hits.join(lead, r_lead, i, found.partner[joins], found.r[joins])
     return lead, r_lead
+
+
+#: A variant with itself, as a pair: r = 1 at distance 0 (spec §8).
+_ITSELF = (np.ones(1), np.array([0], dtype=np.int64))
 
 
 def _joins(

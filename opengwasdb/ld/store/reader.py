@@ -295,22 +295,20 @@ class StoreReader:
         # d ≤ W is d ≤ ⌊W⌋ for a whole d; the window is answered, so ⌊W⌋ is within the part.
         reach = math.floor(window_bp)
         listed = None if among is None else self._listed(among)
-        read: _Read
-        estimate: _Estimate = partial(_window_rows, reach=reach)
+        part = self._part(index=index, reach=reach, listed=listed)
+        return self._gather(rows, part, partial(_judged, r2=r2, reach=reach, listed=listed))
+
+    def _part(
+        self, *, index: bool, reach: int, listed: npt.NDArray[np.int64] | None
+    ) -> tuple[_Read, _Estimate]:
+        """The stored part `partners` reads, with its estimate of each row's entries: the
+        Proxy Index rows, the Near Band rows and columns, or the Near Band pairs with a list."""
         if index:
-            read, estimate = self._index_entries, _index_length
-        elif listed is None:
-            read = partial(self._band_entries, reach=reach)
-        else:
-            read = partial(self._listed_entries, reach=reach, listed=listed)
-
-        def judge(
-            gap: npt.NDArray[np.int64], partner: npt.NDArray[np.int64], r: npt.NDArray[np.float64]
-        ) -> npt.NDArray[np.bool_]:
-            kept = within(gap, reach) & (r * r >= r2)
-            return kept if listed is None else kept & _member(partner, listed)
-
-        return self._gather(rows, (read, estimate), judge)
+            return self._index_entries, _index_length
+        estimate = partial(_window_rows, reach=reach)
+        if listed is None:
+            return partial(self._band_entries, reach=reach), estimate
+        return partial(self._listed_entries, reach=reach, listed=listed), estimate
 
     def r_of_pairs(
         self, first: npt.NDArray[np.int64], second: npt.NDArray[np.int64]
@@ -707,6 +705,21 @@ def _placed_in_order(
         where = spans(indptr[members], lengths)
         partner[where], r[where], distance[where] = partners, values, gaps
     return Partners(indptr, partner, r, distance)
+
+
+def _judged(
+    gap: npt.NDArray[np.int64],
+    partner: npt.NDArray[np.int64],
+    r: npt.NDArray[np.float64],
+    *,
+    r2: float,
+    reach: int,
+    listed: npt.NDArray[np.int64] | None,
+) -> npt.NDArray[np.bool_]:
+    """Which entries `partners` keeps: d ≤ reach and r̂² ≥ r2, the inclusive edges every
+    query narrows from (spec §9), and in `listed` when there is one."""
+    kept = within(gap, reach) & (r * r >= r2)
+    return kept if listed is None else kept & _member(partner, listed)
 
 
 def _member(rows: npt.NDArray[np.int64], listed: npt.NDArray[np.int64]) -> npt.NDArray[np.bool_]:
