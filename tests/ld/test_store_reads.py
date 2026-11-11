@@ -28,6 +28,8 @@ from store_copies import TEST_STORE, copy_store, resharded
 
 import ogld
 from ogld.format import InputError, quantise
+from ogld.query import clumping
+from ogld.query import proxies as proxies_query
 from ogld.store import StoreReader, location, reader
 from ogld.store.validation import validate_group
 
@@ -379,6 +381,27 @@ def test_a_repeated_read_fetches_its_chunks_once(
     assert once > 0, "the first read must fetch Near Band chunks"
     np.testing.assert_array_equal(store.matrix(names).r, first)
     assert (near_bytes() > once) is again
+
+
+@pytest.mark.parametrize("query", ["clump", "proxies"])
+def test_at_r2_at_or_above_t_far_no_near_band_chunk_is_fetched(query: str) -> None:
+    # At r2 ≥ t_far a variant's partners are its Proxy Index row, both sides, and the reader
+    # chooses that part for both queries (spec §10; ogld#14). r2 is t_far exactly, the edge.
+    # The committed store holds each array in one chunk, so any Near Band read fetches one.
+    rows = support.passing_rows()
+    names = support.alids(rows)
+    with serving(TEST_STORE) as (url, sent):
+        reader = StoreReader.open(url)
+        if query == "clump":
+            z = np.abs(support.panel_data().gwas().z)[rows]
+            clumping.clump(reader, names, z, r2=support.T_FAR, kb=3000)
+        else:
+            proxies_query.proxies(reader, names[::5], r2=support.T_FAR, kb=10_000)
+    fetched = {path for path, _ in reader._cache._kept}
+    assert {"index/21/r", "index/22/r"} <= fetched, "the Proxy Index rows must be read"
+    assert not [path for path in fetched if path.startswith("near/")], "no Near Band chunk"
+    chunks = ("/near/21/r/c/", "/near/22/r/c/")
+    assert not [path for path, _ in sent if path.startswith(chunks)], "nor any Near Band byte"
 
 
 def test_the_test_store_passes_every_rule_over_http() -> None:
