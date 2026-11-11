@@ -375,3 +375,21 @@ def test_chromosome_ranges_reads_numpy_variable_width_labels() -> None:
     labels = np.array(["21", "21", "22", "22", "22", "X"], dtype=np.dtypes.StringDType())
     assert chromosome_ranges(labels) == {"21": (0, 2), "22": (2, 5), "X": (5, 6)}
     assert chromosome_ranges(labels[:0]) == {}
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        np.dtype("U3"),
+        np.dtype("S3"),
+        np.dtype(object),
+        np.dtypes.StringDType(),
+        np.dtypes.StringDType(na_object=None),
+    ],
+    ids=["U", "S", "object", "StringDType", "StringDType-na"],
+)
+def test_chromosome_ranges_names_are_str_whatever_the_labels_dtype(dtype: np.dtype) -> None:
+    labels = np.array(["21", "21", "22", "X"], dtype=dtype)
+    ranges = chromosome_ranges(labels)
+    assert ranges == {"21": (0, 2), "22": (2, 3), "X": (3, 4)}
+    assert all(type(name) is str for name in ranges)
