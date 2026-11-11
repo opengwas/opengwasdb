@@ -8,6 +8,7 @@ What a query needs comes from an independent greedy over the Test Panel's refere
 
 from __future__ import annotations
 
+import tracemalloc
 from collections import Counter
 from typing import Any
 
@@ -19,9 +20,10 @@ from contract import support
 from contract.support import alids, panel_data, passing_rows
 
 from ogld.format import dequantise
-from ogld.query import clumping
+from ogld.query import clumping, matrices
 from ogld.query import proxies as proxies_query
 from ogld.store import StoreReader, location
+from ogld.store import reader as reader_module
 
 
 class Counting(location.ChunkCache):
@@ -30,10 +32,22 @@ class Counting(location.ChunkCache):
     def __init__(self) -> None:
         super().__init__()
         self.taken: Counter[str] = Counter()
+        self.gathered: Counter[str] = Counter()
+        self.sliced: dict[str, list[tuple[int, int]]] = {}
 
     def take(self, array: zarr.Array[Any], coords: npt.ArrayLike) -> npt.NDArray[Any]:
         got = super().take(array, coords)
         self.taken[array.path] += len(got)
+        self.gathered[array.path] += len(got)
+        return got
+
+    def runs(
+        self, array: zarr.Array[Any], first: npt.ArrayLike, length: npt.ArrayLike
+    ) -> list[npt.NDArray[Any]]:
+        got = super().runs(array, first, length)
+        self.taken[array.path] += sum(len(run) for run in got)
+        pairs = zip(np.asarray(first).tolist(), np.asarray(length).tolist(), strict=True)
+        self.sliced.setdefault(array.path, []).extend(pairs)
         return got
 
     def resolved(self) -> int:
@@ -116,3 +130,55 @@ def test_a_warm_proxies_decodes_no_string_column_before_its_rows_are_chosen(
     assert len(found) > 0, "and some kept"
     strings = {path: n for path, n in cache.taken.items() if path in STRING_COLUMNS}
     assert strings == {"variants/alid": at_queries + len(found)}
+
+
+@pytest.mark.parametrize(("centre", "radius"), [(20_771_005, 1_000_000), (21_021_005, 5_000_000)])
+def test_a_region_reads_each_row_as_one_contiguous_slice(centre: int, radius: int) -> None:
+    reader, cache = counted(support.TEST_STORE)
+    got = matrices.region(reader, "22", centre, radius, fill=None)
+    # Where each of chr22's rows begins in near/22/r, and which are in the region, from the
+    # Test Panel's positions and near_bp alone (spec §4).
+    pos = panel_data().variants().pos.astype(np.int64)[passing_rows()]
+    chrom = np.asarray(panel_data().variants().chrom)[passing_rows()]
+    pos = pos[chrom == "22"]
+    later = (pos[None, :] - pos[:, None] <= 3_000_000) & (
+        np.arange(len(pos))[None, :] > np.arange(len(pos))[:, None]
+    )
+    begins = np.concatenate([[0], np.cumsum(later.sum(axis=1))[:-1]])
+    inside = np.flatnonzero(np.abs(pos - centre) <= radius)
+    assert len(inside) > 50, "a region of many rows"
+    expected = [(int(begins[i]), int(later[i, inside].sum())) for i in inside]
+    assert sum(n for _, n in expected) > 1000, "holding many Near Band pairs"
+    assert got.r.shape == (len(inside), len(inside))
+    assert cache.sliced.get("near/22/r") == expected, "one slice per row, inside the region"
+    assert cache.gathered["near/22/r"] == 0, "and no Near Band pair gathered one by one"
+
+
+@pytest.mark.parametrize("query", ["matrix", "region"])
+def test_a_matrix_query_holds_one_float64_copy_of_its_result(
+    query: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The matrix is written in place and filled in place (ogld#14): never a second n × n
+    # float64 beside the result. A step of 97 pairs keeps the working memory, which the step
+    # bounds (spec §10), out of the measurement.
+    monkeypatch.setattr(reader_module, "_PAIRS_PER_STEP", 97)
+    reader = StoreReader.open(str(support.TEST_STORE))
+    rows = passing_rows()[468:]  # chr22, so pair_r's per-chromosome block would be n × n
+
+    def run() -> npt.NDArray[np.float64]:
+        if query == "matrix":
+            return matrices.matrix(reader, alids(rows), fill=0.0).r
+        return matrices.region(reader, "22", 21_021_005, 5_000_000, fill=0.0).r
+
+    run()  # warm: the chunks are read and kept before anything is measured
+    tracemalloc.start()
+    try:
+        r = run()
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert r.shape[0] > 300, "a matrix of many rows"
+    assert not np.isnan(r).any(), "every unstored pair filled"
+    # Two float64 copies alone would be twice the result; the rest is the mask, one step's
+    # pairs and the variant table's strings.
+    assert peak < 2 * r.nbytes, f"peak {peak:,} bytes for a {r.nbytes:,}-byte result"
