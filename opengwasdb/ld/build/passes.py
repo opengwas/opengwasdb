@@ -7,12 +7,13 @@
    (build-inputs §6, filter 4). It needs the covariates, which need every chromosome's windows,
    and the Variant Set must be final before the store's variant table is written, so at k > 0
    it is a pass of its own.
-5. `write_ld`: each chromosome's Near Band and Proxy Index, through `StoreWriter`.
+5. `write_ld`: each chromosome's r, tile by tile, through `StoreWriter`, which makes the store of
+   it (ogld#17).
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -41,11 +42,10 @@ from ogld.build.inputs import (
     read_pc_file,
 )
 from ogld.build.variant_set import Chromosome, Pass
-from ogld.format import Codes, Counts, InputError, REncoding
+from ogld.format import InputError
 from ogld.format.geometry import (
     chromosome_index,
     chromosome_ranges,
-    global_rows,
     local_rows,
     windows,
 )
@@ -104,11 +104,11 @@ def choose(the_plan: Plan, found: Pass, k_target: int, k_min: int) -> Choice:
 
 
 def _blocks(
-    the_plan: Plan, chromosome: Chromosome
+    the_plan: Plan, chromosome: Chromosome, rows: int = CHUNK_RECORDS
 ) -> Iterator[tuple[int, npt.NDArray[np.float64]]]:
-    """A chromosome's genotypes in Variant Set order, a block at a time: (first row, dosages)."""
+    """A chromosome's genotypes in Variant Set order, `rows` at a time: (first row, dosages)."""
     with Genotypes(the_plan.filesets[chromosome.fileset]) as genotypes:
-        for first, stop in windows(0, len(chromosome), CHUNK_RECORDS):
+        for first, stop in windows(0, len(chromosome), rows):
             yield first, genotypes.rows(chromosome.rows[first:stop])
 
 
@@ -159,11 +159,6 @@ def _units(the_plan: Plan, chromosome: Chromosome, chosen: Covariates) -> npt.ND
     return out
 
 
-def _global(local: int, start: int) -> int:
-    """A chromosome's local row as the Variant Set's global row (spec §2)."""
-    return int(global_rows(local, start))
-
-
 def _labels(chromosomes: list[Chromosome]) -> npt.NDArray[np.str_]:
     """The chromosome of each row of the Variant Set, in its order."""
     return np.concatenate([np.full(len(c), c.name) for c in chromosomes])
@@ -189,93 +184,42 @@ def chance(the_plan: Plan, chromosomes: list[Chromosome], chosen: Covariates) ->
     return chance_rates(labels, units_of)
 
 
-@dataclass
-class Written:
-    """What `write_ld` wrote, counted for provenance, and the change in r it measured."""
-
-    counts: Counts
-    change: ChangeHistogram
-
-
 def write_ld(
     writer: StoreWriter,
     the_plan: Plan,
     chromosomes: list[Chromosome],
     chosen: Covariates,
-    floor: int,
-    distances: tuple[int, int],
     threads: int,
-    encoding: REncoding,
-) -> Written:
-    """Each chromosome's Near Band and Proxy Index, through `writer`, as `encoding`'s codes
-    (spec §3, §4, §5)."""
-    written = Written(
-        {"near_pairs": 0, "far_candidates": 0, "far_pairs": 0, "index_entries": 0},
-        ChangeHistogram(),
-    )
+) -> ChangeHistogram:
+    """Each chromosome's r, tile by tile, through `writer`, which makes the store of it (spec §3,
+    §4, §5); return the change in r PC Adjustment made, for the PC Diagnostic (§7)."""
+    change = ChangeHistogram()
     ranges = chromosome_ranges(_labels(chromosomes))
     for chromosome in chromosomes:
-        start = ranges[chromosome.name][0]
-        inputs = _inputs(the_plan, chromosome, chosen, floor, distances, encoding)
-        band, rows = inputs.band, len(inputs.units)
-        last, found = _write_band(writer, start, inputs, threads, written)
-        # The unit vectors go before the chromosome's last rows complete its band, which the
-        # writer then holds whole while it writes it (ogld#4): the two largest arrays a
-        # chromosome makes are never held at once.
-        del inputs
-        writer.write_near(_global(last.first, start), last.lengths, last.codes)
-        entries = tiles.Entries.of(*found)
-        del found
-        indptr, partner, codes = entries.both_directions(rows, start)
-        writer.write_index(chromosome.name, indptr, partner, codes)
-        _count(written, band, entries, len(partner))
-    return written
+        inputs = tiles.Inputs(
+            tiles.Band.of(chromosome.position, writer.far_bp, CHANGE_BP),
+            outside_regions(chromosome.name, chromosome.position),
+            ranges[chromosome.name][0],
+            writer.cut,
+        )
+        units = _unit_blocks(the_plan, chromosome, chosen)
+        try:
+            for cut, changed in tiles.tiles(inputs, units, threads):
+                writer.write(cut)
+                change.add(changed)
+        finally:
+            units.close()
+    return change
 
 
-def _inputs(
-    the_plan: Plan,
-    chromosome: Chromosome,
-    chosen: Covariates,
-    floor: int,
-    distances: tuple[int, int],
-    encoding: REncoding,
-) -> tiles.Inputs:
-    """What every tile of `chromosome` reads: its unit vectors, adjusted and (at k > 0) not."""
-    adjusted = _units(the_plan, chromosome, chosen)
-    unadjusted = None
-    if chosen.k:
-        unadjusted = _units(the_plan, chromosome, covariates([], None, the_plan.samples.n))
-    band = tiles.Band.of(chromosome.position, *distances, CHANGE_BP)
-    outside = outside_regions(chromosome.name, chromosome.position)
-    return tiles.Inputs(adjusted, unadjusted, outside, band, floor, encoding)
-
-
-_Found = tuple[list[npt.NDArray[np.int32]], list[npt.NDArray[np.int32]], list[Codes]]
-
-
-def _write_band(
-    writer: StoreWriter, start: int, inputs: tiles.Inputs, threads: int, written: Written
-) -> tuple[tiles.Tile, _Found]:
-    """Write every tile's Near Band rows but the last tile's, which is returned, and collect
-    every tile's Proxy Index entries."""
-    found: _Found = ([], [], [])
-    held: tiles.Tile | None = None
-    for tile in tiles.tiles(inputs, threads):
-        if held is not None:
-            writer.write_near(_global(held.first, start), held.lengths, held.codes)
-        held = tile
-        found[0].append(tile.lo)
-        found[1].append(tile.hi)
-        found[2].append(tile.entry_codes)
-        written.change.add(tile.change)
-        written.counts["near_pairs"] += len(tile.codes)
-    assert held is not None, "a chromosome of the Variant Set has at least one variant"
-    return held, found
-
-
-def _count(written: Written, band: tiles.Band, entries: tiles.Entries, index_entries: int) -> None:
-    """Add one chromosome to the counts provenance records (spec §7)."""
-    written.counts["far_candidates"] += int((band.far_stop - band.near_stop).sum())
-    far = entries.hi.astype(np.int64) >= band.near_stop[entries.lo]
-    written.counts["far_pairs"] += int(far.sum())
-    written.counts["index_entries"] += index_entries
+def _unit_blocks(
+    the_plan: Plan, chromosome: Chromosome, chosen: Covariates
+) -> Generator[tiles.UnitBlock, None, None]:
+    """The chromosome's unit vectors, a genotype block at a time, in Variant Set order: after PC
+    Adjustment by `chosen`, and at k > 0 also unadjusted, for the PC Diagnostic."""
+    plain = covariates([], None, the_plan.samples.n) if chosen.k else None
+    for first, dosages in _blocks(the_plan, chromosome, tiles.UNIT_ROWS):
+        a1_is_alt = chromosome.a1_is_alt[first : first + len(dosages)]
+        adjusted = unit_vectors(dosages, chosen, a1_is_alt)
+        unadjusted = None if plain is None else unit_vectors(dosages, plain, a1_is_alt)
+        yield first, adjusted, unadjusted

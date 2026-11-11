@@ -14,7 +14,9 @@ builder to the reference whether or not ogld#4 has landed.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import build_fixtures as fixtures
 import numpy as np
@@ -137,32 +139,6 @@ def test_a_copied_fileset_is_the_same_input(built: Built, tmp_path: Path) -> Non
     fixtures.same_store(built[0], tmp_path / "store")
 
 
-def test_the_proxy_index_layout_is_both_directions_sorted(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # The layout places each half where it goes instead of sorting 2N entries; it must equal
-    # the sort, across several placement chunks.
-    from ogld.build import tiles
-
-    rng = np.random.default_rng(9)
-    rows = 300
-    pairs = {(int(a), int(b)) for a, b in rng.integers(0, rows, (4_000, 2)) if a < b}
-    lo, hi = (np.array(x, dtype=np.int32) for x in zip(*sorted(pairs), strict=True))
-    codes = rng.integers(-32767, 32768, len(lo)).astype(np.dtype("int16"))
-    monkeypatch.setattr(tiles, "PLACE_CHUNK", 97)
-    indptr, partner, placed = tiles.Entries.of([lo], [hi], [codes]).both_directions(rows, 1_000)
-    row = np.concatenate([lo, hi]).astype(np.int64)
-    other = np.concatenate([hi, lo]).astype(np.int64)
-    order = np.lexsort((other, row))
-    assert np.array_equal(partner, other[order] + 1_000)
-    assert np.array_equal(placed, np.concatenate([codes, codes])[order])
-    assert np.array_equal(
-        indptr, np.concatenate([[0], np.cumsum(np.bincount(row, minlength=rows))])
-    )
-    with pytest.raises(ValueError, match="not in"):
-        tiles.Entries.of([lo[::-1]], [hi[::-1]], [codes])
-
-
 def test_blas_runs_one_thread_in_each_worker_while_tiling(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -176,10 +152,10 @@ def test_blas_runs_one_thread_in_each_worker_while_tiling(
     seen: list[int] = []
     real = tiles._tile
 
-    def spy(inputs: tiles.Inputs, first: int, last: int) -> tiles.Tile:
+    def spy(inputs: tiles.Inputs, work: tiles.Work) -> tiles.Tiled:
         pools = [p["num_threads"] for p in threadpool_info() if p["user_api"] == "blas"]
         seen.append(max(pools))
-        return real(inputs, first, last)
+        return real(inputs, work)
 
     monkeypatch.setattr(tiles, "_tile", spy)
     pgen = fixtures.write_fileset(
@@ -223,26 +199,101 @@ def test_zarr_s_pool_is_held_to_the_build_s_threads_and_released(
     # and the caller's own setting is back when the build returns.
     import zarr
 
-    from ogld.store import StoreWriter
+    from ogld.store import Cut, StoreWriter
 
     seen: list[object] = []
-    real = StoreWriter.write_index
+    real = StoreWriter.write
 
-    def spy(
-        self: StoreWriter,
-        chrom: str,
-        indptr: npt.NDArray[np.int64],
-        partner: npt.NDArray[np.int64],
-        codes: npt.NDArray[np.int16],
-    ) -> None:
+    def spy(self: StoreWriter, cut: Cut) -> None:
         seen.append(zarr.config.get("threading.max_workers"))
-        real(self, chrom, indptr, partner, codes)
+        real(self, cut)
 
-    monkeypatch.setattr(StoreWriter, "write_index", spy)
+    monkeypatch.setattr(StoreWriter, "write", spy)
     before = zarr.config.get("threading.max_workers")
     pgen = fixtures.write_fileset(
         tmp_path / "chr22", np.flatnonzero(testdata.variants().chrom == "22")
     )
     ogld.build(fixtures.inputs(pgen), tmp_path / "store", threads=3)
-    assert seen == [3]
+    assert len(seen) > 1, "the spy must see every cut the build writes"
+    assert set(seen) == {3}
     assert zarr.config.get("threading.max_workers") == before
+
+
+#: 64 rows of three-sample unit vectors, each row its own number, and the unadjusted ones negated.
+WINDOW_SOURCE = np.column_stack([np.arange(64.0), np.arange(64.0) + 0.5, -np.arange(64.0)])
+
+
+def window_blocks(firsts: range | list[int] = range(0, 64, 8)) -> Iterator[tuple[int, Any, Any]]:
+    """WINDOW_SOURCE as the build reads it, 8 rows a block, starting at each of `firsts`."""
+    for first in firsts:
+        rows = WINDOW_SOURCE[first : first + 8]
+        yield first, rows.copy(), -rows
+
+
+def test_the_window_of_unit_vectors_moves_the_rows_still_needed_and_spares_a_tile_s_view() -> None:
+    # The builder holds a window of a chromosome's unit vectors, never the chromosome (ogld#17).
+    # When its array is full, the rows from the oldest tile in flight on move to a new one; a tile
+    # still reading the old array must see it unchanged.
+    from ogld.build import tiles
+
+    source = WINDOW_SOURCE
+    window = tiles.Window(window_blocks(), capacity=20)
+    window.reach(10, keep=0)
+    in_flight = window.rows(4, 12)
+    np.testing.assert_array_equal(in_flight, source[4:12])
+    window.reach(24, keep=8)  # 24 rows from row 0 do not fit 20: rows 8 … 15 move
+    np.testing.assert_array_equal(window.rows(8, 24), source[8:24])
+    np.testing.assert_array_equal(window.rows(8, 24, unadjusted=True), -source[8:24])
+    np.testing.assert_array_equal(in_flight, source[4:12])
+    window.reach(36, keep=20)
+    np.testing.assert_array_equal(window.rows(20, 36), source[20:36])
+    np.testing.assert_array_equal(in_flight, source[4:12])
+
+
+@pytest.mark.parametrize(("first", "stop"), [(4, 12), (16, 26), (12, 10)])
+def test_the_window_refuses_rows_it_does_not_hold(first: int, stop: int) -> None:
+    # Review of #17 (standards a5): an assert guarded this, which `python -O` drops, and the
+    # wrong rows of the array would then be read as unit vectors: plausible r, never a refusal.
+    from ogld.build import tiles
+
+    window = tiles.Window(window_blocks(), capacity=20)
+    window.reach(10, keep=0)
+    window.reach(24, keep=8)  # holds rows 8 … 23
+    np.testing.assert_array_equal(window.rows(8, 24), WINDOW_SOURCE[8:24])
+    with pytest.raises(ValueError, match=f"rows {first}–{stop - 1} .*rows 8–23"):
+        window.rows(first, stop)
+
+
+def test_the_window_refuses_a_block_that_does_not_start_where_the_last_ended() -> None:
+    # A gap would leave rows of the array unwritten, and an overlap would write rows twice; either
+    # way some tile would read rows that are not the chromosome's.
+    from ogld.build import tiles
+
+    window = tiles.Window(window_blocks([0, 8, 24]), capacity=40)
+    window.reach(16, keep=0)
+    with pytest.raises(ValueError, match="starts at row 24, not 16"):
+        window.reach(30, keep=0)
+
+
+@pytest.mark.parametrize(("k", "threads"), [(0, 1), (0, 4), (K, 1), (K, 4)])
+def test_a_build_whose_window_of_unit_vectors_moves_writes_the_same_store(
+    built: Built, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, k: int, threads: int
+) -> None:
+    # Review of #17 (standards a4): no Test Panel chromosome is long enough to move the window at
+    # the build's own sizes. With 16-row tiles and 40-row genotype blocks (468 and 588 rows end in
+    # a partial block of 28) it moves, and the store must be the one built without a move.
+    from ogld.build import tiles
+
+    moves: list[int] = []
+    real = tiles.Window._move
+
+    def spy(self: tiles.Window, keep: int) -> None:
+        moves.append(keep)
+        real(self, keep)
+
+    monkeypatch.setattr(tiles, "TILE_ROWS", 16)
+    monkeypatch.setattr(tiles, "UNIT_ROWS", 40)
+    monkeypatch.setattr(tiles.Window, "_move", spy)
+    ogld.build(fixtures.inputs(testdata.panel().pgen, k), tmp_path / "store", threads=threads)
+    assert len(moves) >= 2, f"the window must move more than once, not {len(moves)} times"
+    fixtures.same_store(built[k], tmp_path / "store")

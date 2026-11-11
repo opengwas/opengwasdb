@@ -52,14 +52,17 @@ chromosome, so chromosomes are run apart, in parallel (`--jobs`, one thread each
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
+import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 OPENGWASDB = Path.home() / "repo" / "opengwasdb"
 BRANCH = "origin/orch/62-locus-leads"
@@ -68,7 +71,6 @@ SWEEP = "docs/benchmark-output/locus_leads/eur_sweep.json"
 STORES = Path("/data/opengwasdb/stores")
 GENOTYPES = Path("/data/opengwasdb/work/ogld/scratch/5/v2-EUR")
 KEEP = Path("/data/opengwasdb/work/ogld/keep/EUR.keep")
-PLINK2 = Path.home() / "repo" / "opengwasdb-stores/.pixi/envs/dev/bin/plink2"
 THRESHOLD = 5e-8
 R2S = (0.01, 0.001)
 KB = 3000
@@ -88,14 +90,16 @@ def minus_log10_p(abs_z: float) -> float:
     return (z * z / 2 + math.log(z * math.sqrt(2 * math.pi) / 2) - math.log(series)) / math.log(10)
 
 
-def git_json(path: str) -> Any:
-    shown = subprocess.run(
-        ["git", "-C", str(OPENGWASDB), "show", f"{BRANCH}:{path}"],
-        check=True,
-        capture_output=True,
-        text=True,
+def git_output(*args: str) -> str:
+    """`git <args>` in the opengwasdb repository, read-only."""
+    done = subprocess.run(
+        ["git", "-C", str(OPENGWASDB), *args], check=True, capture_output=True, text=True
     )
-    return json.loads(shown.stdout)
+    return done.stdout.strip()
+
+
+def git_json(path: str) -> Any:
+    return json.loads(git_output("show", f"{BRANCH}:{path}"))
 
 
 def analysis_dir(out: Path, store: str, analysis_id: str) -> Path:
@@ -130,6 +134,7 @@ def select(out: Path) -> list[dict[str, Any]]:
     out.mkdir(parents=True, exist_ok=True)
     record = {
         "source": f"{OPENGWASDB} {BRANCH}",
+        "source_sha": git_output("rev-parse", BRANCH),
         "files": [SELECTION, SWEEP],
         "analyses": kept,
         "left_out": left,
@@ -160,6 +165,76 @@ def extract(out: Path) -> None:
         print(f"{store} {analysis_id}: {len(rows)} rows", flush=True)
 
 
+def plink2_exe() -> Path:
+    """The one plink2 every step runs: `$OGLD_PLINK2`, else the one on PATH (CONTRIBUTING)."""
+    found = os.environ.get("OGLD_PLINK2") or shutil.which("plink2")
+    if not found or not Path(found).exists():
+        raise SystemExit("plink2 not found: set OGLD_PLINK2 (tests/realdata/run.sh finds one)")
+    return Path(found)
+
+
+def plink2_version() -> str:
+    """plink2's version line; a plink2 that will not give one is refused."""
+    done = subprocess.run([str(plink2_exe()), "--version"], capture_output=True, text=True)
+    if done.returncode != 0 or not done.stdout.strip():
+        raise SystemExit(
+            f"{plink2_exe()} --version failed ({done.returncode}): {done.stderr[-300:]}"
+        )
+    return done.stdout.strip()
+
+
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 24), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def keep_sha256(keep: Path) -> str:
+    """The builder's `panel.samples_sha256` of a keep file (spec §7), through its own reader and
+    `Samples`, so a keep file the builder refuses is refused here."""
+    from ogld.build.inputs import Samples, read_keep
+
+    return Samples(tuple(read_keep(keep, keep.stem))).sha256()
+
+
+def provenance_sha256(provenance: Any) -> str:
+    """A hash of a store's provenance as recorded: it names the build, not just the panel."""
+    text = json.dumps(dict(provenance), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def check_pins(provenance: dict[str, Any], genotypes: Path, keep: Path) -> dict[str, str]:
+    """Refuse genotypes or a keep file other than the ones the store was built from: the store's
+    `source.sha256` names each pgen, pvar and psam, and the keep file by its own name (spec §7),
+    and `panel.samples_sha256` the samples. The store is the truth; a comparison on other inputs
+    would compare different panels."""
+    for name, digest in provenance["source"]["sha256"].items():
+        file = keep if name == keep.name else genotypes / name
+        if sha256_of(file) != digest:
+            raise SystemExit(f"{file} is not the file the store was built from")
+    if keep_sha256(keep) != provenance["panel"]["samples_sha256"]:
+        raise SystemExit(f"{keep} is not the sample list the store was built from")
+    return {
+        "genotypes": str(genotypes),
+        "keep": str(keep),
+        "keep_sha256": keep_sha256(keep),
+        "provenance_sha256": provenance_sha256(provenance),
+    }
+
+
+class Record(NamedTuple):
+    """One pvar record, with the orientation its ALID gives it."""
+
+    name: str
+    chrom: str
+    position: int
+    ref: str
+    alt: str
+    a1: str
+
+
 def pvar_records(pvar: Path) -> Iterable[tuple[str, int, str, str, str]]:
     """(chrom, position, ref, alt, id) of each record of a pvar."""
     with pvar.open() as handle:
@@ -169,78 +244,100 @@ def pvar_records(pvar: Path) -> Iterable[tuple[str, int, str, str, str]]:
                 yield f[0], int(f[1]), f[3], f[4], f[2]
 
 
-def records_by_alid(pvar: Path, alids: set[str]) -> dict[str, list[tuple[str, str, str]]]:
-    """The pvar records whose ALID the store holds: {ALID: [(pvar id, REF, A1)]}."""
+def records_by_alid(pvar: Path, alids: set[str]) -> tuple[dict[str, list[Record]], int]:
+    """The pvar records whose ALID the store holds, by ALID, and how many records have no ALID
+    (an allele ogld refuses, `IdentityError`): the store can hold none of those, so they are
+    counted, and the caller reports the count."""
     from ogld.identity import IdentityError, orient
 
-    found: dict[str, list[tuple[str, str, str]]] = {}
+    found: dict[str, list[Record]] = {}
+    skipped = 0
     for chrom, position, ref, alt, name in pvar_records(pvar):
         try:
             o = orient(chrom, position, ref, alt)
         except IdentityError:
+            skipped += 1
             continue
         if o.alid in alids:
-            found.setdefault(o.alid, []).append((name, ref, o.a1))
-    return found
+            found.setdefault(o.alid, []).append(Record(name, chrom, position, ref, alt, o.a1))
+    return found, skipped
 
 
-def minor_counts(pgen: Path, names: list[str], work: Path) -> dict[str, int]:
-    """The minor allele count of each of the pvar `names` on the kept samples, by plink2."""
+def parse_acount(text: str) -> dict[str, tuple[int, int]]:
+    """{ID: (ALT_CTS, OBS_CT)} of plink2's `--freq counts` table, the columns found by name: their
+    order is plink2's to change, and a count read from the wrong column is a wrong answer."""
+    lines = [line.split() for line in text.splitlines() if line.strip()]
+    head = [name.lstrip("#") for name in lines[0]]
+    for needed in ("ID", "ALT_CTS", "OBS_CT"):
+        if needed not in head:
+            raise SystemExit(f"plink2's allele counts have no {needed} column: {head}")
+    column = {name: head.index(name) for name in ("ID", "ALT_CTS", "OBS_CT")}
+    return {
+        row[column["ID"]]: (int(float(row[column["ALT_CTS"]])), int(row[column["OBS_CT"]]))
+        for row in lines[1:]
+    }
+
+
+def allele_counts(
+    source: Path, keep: Path, names: list[str], work: Path
+) -> dict[str, tuple[int, int]]:
+    """plink2's (ALT_CTS, OBS_CT) of the pvar `names` on the kept samples."""
     work.mkdir(parents=True, exist_ok=True)
     (work / "shared.ids").write_text("".join(f"{n}\n" for n in names))
-    run([PLINK2, "--pfile", pgen, "--keep", KEEP, "--extract", work / "shared.ids",
+    run([plink2_exe(), "--pfile", source, "--keep", keep, "--extract", work / "shared.ids",
          "--freq", "counts", "--threads", 1, "--out", work / "shared"])  # fmt: skip
-    rows = [line.split() for line in (work / "shared.acount").read_text().splitlines()[1:]]
-    return {r[1]: min(int(float(r[4])), int(r[5]) - int(float(r[4]))) for r in rows}
+    return parse_acount((work / "shared.acount").read_text())
 
 
-def survivors(
-    records: list[tuple[str, str, str]], mac: dict[str, int], mac_min: int
-) -> list[tuple[str, str, str]]:
-    """The records of one ALID that pass the MAC floor (a lone record passed it already)."""
+def a1_frequency(record: Record, counts: tuple[int, int]) -> float:
+    """The frequency of the record's A1, the allele its ALID spells first: ALT when the ALID
+    reversed the record's alleles, REF otherwise."""
+    alt, observed = counts
+    return alt / observed if record.a1 == record.alt else 1 - alt / observed
+
+
+def pick(
+    alid: str, records: list[Record], counts: dict[str, tuple[int, int]], stored: float
+) -> str:
+    """The pvar id of the record the Variant Set holds for `alid`.
+
+    One record is that one. Of an insertion and a deletion of one site, the rule keeps the record
+    whose REF is A1 (`ogld.identity.resolve_reversed_indels`), unless the builder's filters had
+    dropped it; the store says which it held: the record whose A1 frequency is the store's
+    `a1_frequency` (within the five digits plink2's counts and the store's float32 share). If the
+    rule's record is one, it is taken; if neither is, the store holds neither and this stops.
+    """
+    from ogld.identity import resolve_reversed_indels
+
     if len(records) == 1:
-        return records
-    return [r for r in records if mac[r[0]] >= mac_min]
-
-
-def pick(alid: str, records: list[tuple[str, str, str]], mac: dict[str, int], mac_min: int) -> str:
-    """The pvar id of the record the Variant Set holds for `alid`."""
-    alive = survivors(records, mac, mac_min)
-    spelled_first = [r for r in alive if r[1] == r[2]]
-    chosen = spelled_first if len(spelled_first) == 1 else alive
-    if len(chosen) != 1:
-        raise SystemExit(f"{alid}: records {[r[0] for r in records]} are not a reversed-indel pair")
-    return chosen[0][0]
+        return records[0].name
+    kept, _ = resolve_reversed_indels([(r.chrom, r.position, r.ref, r.alt) for r in records])
+    order = [records[i] for i in kept] + [r for i, r in enumerate(records) if i not in kept]
+    for record in order:
+        if abs(a1_frequency(record, counts[record.name]) - stored) <= 1e-6:
+            return record.name
+    raise SystemExit(f"{alid}: no record has the store's A1 frequency {stored}")
 
 
 def resolve(
-    found: dict[str, list[tuple[str, str, str]]], pgen: Path, work: Path, mac_min: int
+    found: dict[str, list[Record]], counts_of: Any, stored: dict[str, float]
 ) -> dict[str, str]:
-    """{pvar id: ALID} of the records the store's Variant Set holds, one per ALID.
-
-    The builder judges its filters first and then keeps, of records sharing an ALID (an
-    insertion and a deletion of one site), the one whose REF the ALID spells first (spec §2).
-    The MAC floor is the store's `variant_filters.mac_min`; it can only matter where records
-    share an ALID, because a lone record of an ALID the store holds passed it already.
-    """
-    shared = [name for records in found.values() if len(records) > 1 for name, _, _ in records]
-    mac = minor_counts(pgen, shared, work) if shared else {}
-    return {pick(alid, records, mac, mac_min): alid for alid, records in found.items()}
+    """{pvar id: ALID} of the records the Variant Set holds, one per ALID. `counts_of(names)`
+    reads plink2's allele counts, asked only for the records of a shared ALID."""
+    shared = [r.name for records in found.values() if len(records) > 1 for r in records]
+    counts = counts_of(shared) if shared else {}
+    return {pick(alid, rs, counts, stored[alid]): alid for alid, rs in found.items()}
 
 
-def store_alids(store: Path) -> dict[str, set[str]]:
-    """The store's ALIDs by chromosome."""
+def store_chromosome(reader: Any, chrom: str) -> dict[str, float]:
+    """{ALID: a1_frequency} of the store's variants on one chromosome."""
     import numpy as np
 
-    from ogld.store import StoreReader
-
-    reader = StoreReader.open(store)
-    by_chrom: dict[str, set[str]] = {}
-    for chrom in map(str, range(1, 23)):
-        rows = reader.rows_in(chrom, 0, 2**31 - 1)
-        if len(rows):
-            by_chrom[chrom] = {str(a) for a in reader.variants(np.asarray(rows)).alid}
-    return by_chrom
+    rows = reader.rows_in(chrom, 0, 2**31 - 1)
+    if not len(rows):
+        return {}
+    variants = reader.variants(np.asarray(rows))
+    return {str(a): float(f) for a, f in zip(variants.alid, variants.a1_frequency, strict=True)}
 
 
 def run(command: Sequence[str | Path]) -> None:
@@ -251,40 +348,68 @@ def run(command: Sequence[str | Path]) -> None:
         )
 
 
-def prepare_chromosome(out: Path, chrom: str, alids: set[str], mac_min: int) -> int:
-    """`<out>/EUR-k0.plink2/chr<chrom>`: the store's records of one chromosome, IDs set to ALIDs."""
-    target = out / "EUR-k0.plink2"
+class Prepared(NamedTuple):
+    """What one chromosome's preparation found: records written, store variants, records skipped."""
+
+    written: int
+    held: int
+    skipped: int
+
+
+def prepare_chromosome(
+    source: Path, keep: Path, target: Path, chrom: str, stored: dict[str, float]
+) -> Prepared:
+    """`<target>/chr<chrom>`: the store's records of one chromosome from the pgen `source`, IDs
+    set to ALIDs. Refuses a store ALID the pgen has no record for."""
     target.mkdir(parents=True, exist_ok=True)
-    found = records_by_alid(GENOTYPES / f"chr{chrom}.pvar", alids)
-    wanted = resolve(found, GENOTYPES / f"chr{chrom}", target / f"chr{chrom}.shared", mac_min)
+    found, skipped = records_by_alid(Path(f"{source}.pvar"), set(stored))
+    missing = sorted(set(stored) - set(found))
+    if missing:
+        raise SystemExit(
+            f"chr{chrom}: {len(missing)} store ALIDs have no pgen record: {missing[:5]}"
+        )
+    work = target / f"chr{chrom}.shared"
+    wanted = resolve(found, lambda names: allele_counts(source, keep, names, work), stored)
     # Two steps, because plink2 renames before it filters: one record's old ID can be another's
     # new ALID (an insertion and a deletion of one site), so extract on the old IDs first.
     (target / f"chr{chrom}.ids").write_text("".join(f"{old}\n" for old in wanted))
     (target / f"chr{chrom}.rename").write_text("".join(f"{o}\t{n}\n" for o, n in wanted.items()))
     picked, ids = target / f"chr{chrom}.picked", target / f"chr{chrom}.ids"
-    source = GENOTYPES / f"chr{chrom}"
-    run([PLINK2, "--pfile", source, "--keep", KEEP, "--extract", ids, "--make-pgen",
+    run([plink2_exe(), "--pfile", source, "--keep", keep, "--extract", ids, "--make-pgen",
          "--threads", 1, "--out", picked])  # fmt: skip
-    run([PLINK2, "--pfile", picked, "--update-name", target / f"chr{chrom}.rename", "--make-pgen",
-         "--threads", 1, "--out", target / f"chr{chrom}"])  # fmt: skip
+    run([plink2_exe(), "--pfile", picked, "--update-name", target / f"chr{chrom}.rename",
+         "--make-pgen", "--threads", 1, "--out", target / f"chr{chrom}"])  # fmt: skip
     for suffix in (".pgen", ".pvar", ".psam", ".log"):
         Path(f"{picked}{suffix}").unlink()
-    return len(wanted)
+    return Prepared(len(wanted), len(stored), skipped)
 
 
-def prepare(out: Path, store: Path, jobs: int) -> None:
+def prepare(out: Path, store: Path, jobs: int) -> dict[str, str]:
     from ogld.store import StoreReader
 
-    by_chrom = store_alids(store)
-    mac_min = StoreReader.open(store).provenance["variant_filters"]["mac_min"]
+    reader = StoreReader.open(store)
+    pins = check_pins(reader.provenance, GENOTYPES, KEEP)
+    stored = {c: store_chromosome(reader, c) for c in map(str, range(1, 23))}
+    stored = {c: v for c, v in stored.items() if v}
     with ThreadPoolExecutor(jobs) as pool:
         counts = list(
-            pool.map(lambda c: prepare_chromosome(out, c, by_chrom[c], mac_min), by_chrom)
+            pool.map(
+                lambda c: prepare_chromosome(
+                    GENOTYPES / f"chr{c}", KEEP, out / "EUR-k0.plink2", c, stored[c]
+                ),
+                stored,
+            )
         )
-    for chrom, count in zip(by_chrom, counts, strict=True):
+    for chrom, done in zip(stored, counts, strict=True):
         print(
-            f"chr{chrom}: {count} of {len(by_chrom[chrom])} store variants in the pgen", flush=True
+            f"chr{chrom}: {done.written} of {done.held} store variants in the pgen, "
+            f"{done.skipped} records with no ALID",
+            flush=True,
         )
+    (out / "EUR-k0.plink2" / "pins.json").write_text(
+        json.dumps({**pins, "plink2": str(plink2_exe()), "plink2_version": plink2_version()}) + "\n"
+    )
+    return pins
 
 
 def read_hits(path: Path) -> list[tuple[str, float, str]]:
@@ -294,14 +419,14 @@ def read_hits(path: Path) -> list[tuple[str, float, str]]:
 
 
 def clump_chromosome(
-    out: Path, work: Path, chrom: str, hits: list[tuple[str, float]], r2: float
+    pfile: Path, work: Path, chrom: str, hits: list[tuple[str, float]], r2: float
 ) -> list[str]:
-    """plink2's index variants for one chromosome's hits at one r²."""
+    """plink2's index variants for one chromosome's hits at one r², on the pgen `pfile`."""
     report = work / f"chr{chrom}.hits"
     report.write_text("ID\tLOG10P\n" + "".join(f"{a}\t{minus_log10_p(z)!r}\n" for a, z in hits))
     prefix = work / f"chr{chrom}.r2_{r2}"
     run([
-        PLINK2, "--pfile", out / "EUR-k0.plink2" / f"chr{chrom}", "--clump", report,
+        plink2_exe(), "--pfile", pfile, "--clump", report,
         "--clump-log10", "input-only", "--clump-p-field", "LOG10P",
         "--clump-log10-p1", 0, "--clump-log10-p2", 0, "--clump-r2", r2, "--clump-kb", KB,
         "--clump-unphased", "--threads", 1, "--memory", 4000, "--out", prefix,
@@ -320,24 +445,36 @@ def matched(
 
 
 def leads_at(
-    out: Path, work: Path, kept: list[tuple[str, float, str]], r2: float, pool: ThreadPoolExecutor
+    pfiles: Path,
+    work: Path,
+    kept: list[tuple[str, float, str]],
+    r2: float,
+    pool: ThreadPoolExecutor,
 ) -> list[str]:
-    """plink2's index variants at one r², chromosome by chromosome in the pool."""
+    """plink2's index variants at one r², chromosome by chromosome in the pool; `pfiles` holds
+    `chr<N>.pgen`."""
     chroms = sorted({c for _, _, c in kept})
     futures = [
-        pool.submit(clump_chromosome, out, work, c, [(a, z) for a, z, k in kept if k == c], r2)
+        pool.submit(
+            clump_chromosome,
+            pfiles / f"chr{c}",
+            work,
+            c,
+            [(a, z) for a, z, k in kept if k == c],
+            r2,
+        )
         for c in chroms
     ]
     return [lead for f in futures for lead in f.result()]
 
 
 def lead_files(
-    out: Path, target: Path, kept: list[tuple[str, float, str]], pool: ThreadPoolExecutor
+    pfiles: Path, target: Path, kept: list[tuple[str, float, str]], pool: ThreadPoolExecutor
 ) -> dict[str, int]:
     """plink2's leads for one Analysis at each r², written as `leads_r2_<r2>.txt`; their counts."""
     work = target / "plink2"
     work.mkdir(exist_ok=True)
-    found = {r2: leads_at(out, work, kept, r2, pool) for r2 in R2S}
+    found = {r2: leads_at(pfiles, work, kept, r2, pool) for r2 in R2S}
     for r2, leads in found.items():
         (target / f"leads_r2_{r2}.txt").write_text("".join(f"{lead}\n" for lead in leads))
     return {f"leads_r2_{r2}": len(leads) for r2, leads in found.items()}
@@ -349,7 +486,7 @@ def clump_analysis(
     target = analysis_dir(out, entry["store"], entry["analysis_id"])
     kept, unmatched = matched(read_hits(target / "hits.all.tsv"), present)
     (target / "hits.tsv").write_text("alid\tz\n" + "".join(f"{a}\t{z!r}\n" for a, z, _ in kept))
-    counts = lead_files(out, target, kept, pool)
+    counts = lead_files(out / "EUR-k0.plink2", target, kept, pool)
     return {
         **entry,
         "rows": len(kept) + unmatched,
@@ -360,7 +497,10 @@ def clump_analysis(
 
 
 def clump(out: Path, store: Path, jobs: int) -> None:
-    present = {a for alids in store_alids(store).values() for a in alids}
+    from ogld.store import StoreReader
+
+    reader = StoreReader.open(store)
+    present = {a for c in map(str, range(1, 23)) for a in store_chromosome(reader, c)}
     selection = json.loads((out / "selection.json").read_text())
     records = []
     with ThreadPoolExecutor(jobs) as pool:
@@ -370,13 +510,34 @@ def clump(out: Path, store: Path, jobs: int) -> None:
     manifest = {
         "store": str(store),
         "genotypes": str(GENOTYPES),
-        "plink2": str(PLINK2),
+        "keep": str(KEEP),
+        "keep_sha256": keep_sha256(KEEP),
+        "provenance_sha256": provenance_sha256(reader.provenance),
+        "plink2": str(plink2_exe()),
+        "plink2_version": plink2_version(),
+        "opengwasdb_branch": selection["source"],
+        "opengwasdb_sha": selection["source_sha"],
         "kb": KB,
         "r2": R2S,
         "left_out": selection["left_out"],
         "analyses": records,
     }
     (out / "403-analyses" / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
+
+
+def unphased_r2(pfile: Path, alids: Sequence[str], work: Path) -> Any:
+    """plink2's unphased r² among `alids` of the pgen `pfile`, as a square matrix in their order."""
+    import numpy as np
+
+    work.mkdir(parents=True, exist_ok=True)
+    (work / "r2.ids").write_text("".join(f"{a}\n" for a in alids))
+    run([plink2_exe(), "--pfile", pfile, "--extract", work / "r2.ids", "--r2-unphased", "square",
+         "--threads", 1, "--memory", 4000, "--out", work / "r2"])  # fmt: skip
+    names = (work / "r2.unphased.vcor2.vars").read_text().split()
+    matrix = np.loadtxt(work / "r2.unphased.vcor2", ndmin=2)
+    where = {name: i for i, name in enumerate(names)}
+    order = [where[a] for a in alids]
+    return matrix[np.ix_(order, order)]
 
 
 def main(argv: Sequence[str] | None = None) -> None:

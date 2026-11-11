@@ -30,13 +30,10 @@ export OGLD_V2_EUR_CHR22="${OGLD_V2_EUR_CHR22:-$V2/hgdp1kgp_chr22.filtered.SNV_I
 export OGLD_EUR_PC_FILE="${OGLD_EUR_PC_FILE:-/data/opengwasdb/work/ogld/pcs/EUR.eigenvec}"
 # EUR's 665 unrelated samples, which scripts/make_keeps.py writes (ADR 0002, decision 11).
 export OGLD_EUR_KEEP="${OGLD_EUR_KEEP:-/data/opengwasdb/work/ogld/keep/EUR.keep}"
-# The k = 0 EUR LD Store and #403's 37 Analyses with plink2's leads, which scripts/realdata/make_403_inputs.py makes
-# (tests/realdata/test_query_panel.py says the layout). A test whose input is unset, or names
-# nothing, stops as an expected failure naming it (tests/realdata/realdata_inputs.py): a
-# missing input is not a defect of ogld. `-rfEx` prints every such reason.
-RD=/data/opengwasdb/work/ogld/realdata
-export OGLD_EUR_K0_STORE="${OGLD_EUR_K0_STORE:-$RD/EUR-k0.store}"
-export OGLD_403_ANALYSES="${OGLD_403_ANALYSES:-$RD/403-analyses}"
+# #403's 37 Analyses' hits, which scripts/realdata/make_403_inputs.py makes (tests/realdata/
+# test_query_panel.py says the layout). A test whose input is unset, or names nothing, stops as an
+# expected failure naming it (tests/realdata/realdata_inputs.py): a missing input is not a defect
+# of ogld. `-rfEx` prints every such reason.
+export OGLD_403_ANALYSES="${OGLD_403_ANALYSES:-/data/opengwasdb/work/ogld/realdata/403-analyses}"
 
-# The comparison clumps 37 Analyses on 8.6M variants: about 49 min at r² 0.01 and 24 min at 0.001.
-exec pytest -m realdata --timeout=7200 -rfEx -p no:cacheprovider "${PREFLIGHT[@]}" "$@"
+exec pytest -m realdata --timeout=300 -rfEx -p no:cacheprovider "${PREFLIGHT[@]}" "$@"

@@ -5,12 +5,14 @@ The store layer knows Zarr and the codes; nothing above it does. Queries read th
 named rules. It imports `ogld.format` and `ogld.identity` only.
 """
 
+from ogld.store.assembly import Cut
 from ogld.store.reader import StoreReader
 from ogld.store.tables import Partners, Variants
 from ogld.store.validation import Finding, ValidationFailed, validate
 from ogld.store.writer import StoreWriter
 
 __all__ = [
+    "Cut",
     "Finding",
     "Partners",
     "StoreReader",

@@ -7,12 +7,15 @@ directory means a test placed here cannot run in the default tier by forgetting 
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 from realdata_inputs import installed_mismatch
 
 HERE = Path(__file__).resolve().parent
+# The tier's tests import the scripts they exercise (`clump_rule`, `make_403_inputs`) by name.
+sys.path.insert(0, str(HERE.parents[1] / "scripts" / "realdata"))
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
