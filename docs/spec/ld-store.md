@@ -312,9 +312,12 @@ valid store never holds in that array: −32768 in an `r` array, a negative numb
 `partner`, a position ≤ 0, `""` in a string column, and a frequency outside (0, 1) or NaN. A reader
 refuses an array whose fill value is not, and `envelope.fill` fails it (§12).
 
-**How a store is written** (ogld#17). Every producer, a build or an import of a published r,
-writes through `StoreWriter`, and the store makes its arrays from the r it is given, block of rows
-by block of rows, in row order. A chromosome's Near Band `r` and `indptr` are created at its first
+**How a store is written** (ogld#17, ADR 0005). Every producer, a build or an import of a
+published r, writes through `StoreWriter`, and the store makes its arrays from the r it is given,
+block of rows by block of rows, in row order. Every pair within a row's `far_bp` is judged as it
+is written. A value that is NaN, infinite, or past ±1 beyond §3's float allowance is refused,
+naming the pair. So a pair the producer did not measure is never stored, and never read as a Bound
+because it was taken to lie below the floor. A chromosome's Near Band `r` and `indptr` are created at its first
 block, since their lengths follow from the positions (§4). Its codes are written a whole shard at
 a time, the only write zarr makes without reading a shard back, and less than one shard is carried
 to the next block. A row of the Proxy Index is complete when its own block arrives: its partners
@@ -324,8 +327,9 @@ shard at a time, and an index under one shard is written at its clipped shape at
 a build writes its store it holds a shard of each array and the pairs and unit vectors within
 `far_bp` of the rows being written, never a chromosome. On HGDP+1kGP EUR chr6, the MHC's, the band
 carry is 128 MiB, the index carry at most 33,869,608 pairs (323 MiB), and the writing peaks at
-4.8 GB on 8 threads, against 31.4 GB when the writer held the chromosome. A store written in any
-blocks, on any number of threads, holds the same arrays.
+4.8 GB on 8 threads, against 31.4 GB when the writer held the chromosome. The PC Check's pass
+before it still holds a chromosome's genotypes, 10.4 GB on chr6 at k = 10; ogld#25 bounds it. A
+store written in any blocks, on any number of threads, holds the same arrays.
 
 **Why zstd level 3.** int16 r codes are mostly sampling noise around 0, so they compress little,
 and the codec was chosen on measured ratio and speed. These are the measurements on EUR chr22's
@@ -464,7 +468,7 @@ shown. A value may be null only where the table says so. Other keys MAY appear, 
 ignores the ones it does not know. The types are `ogld.format.Provenance`, and
 `ogld.format.REQUIRED_KEYS` lists the keys.
 
-**Who records what** (owner, 10 November 2026; ogld#17). A store's producer gives the keys only
+**Who records what** (owner, 10 November 2026; ogld#17, ADR 0005). A store's producer gives the keys only
 its source knows, `ogld.format.Sourced`: `source`, `panel`, `reference_assembly`,
 `variant_filters`, `variants_dropped`, `adjustment`, `pc_diagnostic`, `software` and `build`. The
 store derives the rest from itself when it is finished: `format_version`, `encoding`, `n_variants`,
@@ -797,7 +801,7 @@ and `proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/access_t
 - **a symmetric band**: row i holds its upstream partners, then its downstream ones, so a column
   is a row. Near Band bytes ×2.0: 3.33 GB against 1.65 GB on the slice;
 - **a sparse symmetric proxy index**: per variant, every partner within 10 Mb on either side with
-  r̂² ≥ t_far. It answers `proxies(r2 ≥ t_far)` with one row, and adds 5.2% to the slice's byte.
+  r̂² ≥ t_far. It answers `proxies(r2 ≥ t_far)` with one row, and adds 5.2% to the slice's bytes
   (85 MB against 1,648 MB). A proxies request at r2 below t_far still reads the column.
 
 These were measured on layout B:
