@@ -315,13 +315,28 @@ Measured, each side's peak read from its own `VmHWM`:
 
 The two full runs on each Store were started at the same moment, so they saw the
 same load; the round-2 run on OGS-00011 is head alone, against a base figure
-measured on the same Store. Base's OGS-00016 peak is the scan's last minute, where
-the side-table judge read the whole table beside every marked position. Round 1's
-peaks are reads of the table: 3.92 GiB is the plan rule's read of the 2.65 GiB
-table on OGS-00016 and 18.15 GiB its read of the 12.7 GiB one on OGS-00011. After
-round 2 pages that read, nothing head does reads the table whole, and its 8.30 GiB
-is the Dense association scan's own working set, reached as that scan finished at
-14:45:28 rather than by any read of the table.
+measured on the same Store. Base's OGS-00016 peak rises from 4.88 GiB at 16:59:16 to 14.55 GiB at 16:59:46, a
+window that holds both the side-table judge's whole read and the subset check's —
+16:59:27 to 16:59:39, 12.12 GiB on its own — so the samples cannot say which of
+the two took it over the other. Round 1's peaks are reads of the table: 3.92 GiB
+is the plan rule's read of the 2.65 GiB table on OGS-00016, and 18.15 GiB its read
+of the 12.7 GiB one on OGS-00011. After round 2 pages that read, nothing head does
+reads the table whole: its 8.30 GiB is the Dense association scan's own working
+set, 8.10 GiB of it reached two minutes into that scan and 0.2 GiB gained over the
+four hours that followed.
+
+`validate`'s report is the same to the byte across base and head on OGS-00011 and on
+every published Store and fixture this change was run over; on OGS-00016 it differs
+by one record, 355-build's `side_tables.se_exceptions_rounded` warning, which
+`df000b4` predates. **The one report that did change is a release no earlier
+version could judge.** A release whose own EAF exception table is disordered,
+duplicated or unpaired used to abort the rule, in `EafExceptionTable.__post_init__`,
+with `validation failed: eaf exception table index must be sorted and unique` or
+`… index and value must be parallel 1-D arrays`, and `_eaf_reference` never ran. It
+now gets a finding — `… eaf exception table is not sorted by position, or repeats
+one`, or `… eaf exception table has 3 positions but 2 values` — and the entries
+after it are still judged, which is round 1's "a corrupt table is a finding, not an
+abort".
 
 The paragraphs in "Time and memory" above that call the subset check's table read
 the peak of a full run, and that call the scan's held folds the reason its later

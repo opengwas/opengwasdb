@@ -479,11 +479,14 @@ def _plan_errors(store: Path, monkeypatch: MonkeyPatch) -> list[str]:
 def test_the_plan_rule_judges_across_a_page_boundary(
     small_copy: Path, monkeypatch: MonkeyPatch, change: str, message: str
 ) -> None:
-    """A defect across the seam between two pages is judged as reading whole was.
+    """A defect across the seam between two pages is named, as reading whole did.
 
     Every one of these sits at the first page boundary, so a rule that judged one
     page at a time would miss it; each is also read with no single read larger
-    than a page.
+    than a page. The wording is the plan rule's own: before this change such a
+    table aborted the rule inside `EafExceptionTable.__post_init__`
+    (`validation failed: eaf exception table index must be sorted and unique`),
+    and now it is the finding below.
     """
     root = zarr.open_group(str(small_copy / "data.zarr"), mode="r+")
     positions = np.asarray(root[EAF_EXCEPTION_INDEX][:], dtype=np.int64)

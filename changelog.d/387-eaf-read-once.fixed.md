@@ -7,13 +7,23 @@
   judge read it beside the 1.14 billion positions the association scan had marked
   and kept, 8.5 GiB. Each now streams it in pages and holds one page at most; the
   subset check hands the cells it kept to the value comparison, so the plane no
-  longer consults the table per band. A full `validate`'s peak, read from each
-  validating process's own `VmHWM`, falls from 14.55 GiB to 3.92 GiB on OGS-00016
-  and from 68.53 GiB to 18.15 GiB on OGS-00011, and its wall time from 21,056 s to
-  20,436 s and from 40,998 s to 33,219 s; on OGS-00011's HapMap3 subset the
-  check's own high-water mark falls from 57.37 GiB to 1.60 GiB and one comparison
-  band from 26.4 s to 14.6 s. A shared scan's folds are also judged after the
-  memory it held for them — chiefly the Top-Hit Index's tiers — is released, from
-  each tier's key and cell count, which are metadata. `validate`'s report is
-  byte-identical in text and in JSON; the one difference on OGS-00016 is a warning
-  another rule added in the meantime.
+  longer consults the table per band. A full `validate` of OGS-00011, its peak read
+  from the validating process's own `VmHWM`, falls from 68.53 GiB to 8.30 GiB and
+  its wall time from 40,998 s to 32,279 s; on OGS-00016, whose 3.92 GiB is the
+  figure before `encoding.eaf` was paged (it was not re-run after), the peak was
+  14.55 GiB. On OGS-00011's HapMap3 subset the check's own high-water mark falls
+  from 57.37 GiB to 1.60 GiB and one comparison band from 26.4 s to 14.6 s. A
+  shared scan's folds are also judged after the memory it held for them — chiefly
+  the Top-Hit Index's tiers — is released, from each tier's key and cell count,
+  which are metadata.
+
+  A clean or ordinarily corrupted release's report is byte-identical: every
+  published Store and every fixture `validate` is run over gives the same text and
+  JSON. A release whose own EAF exception table is disordered, duplicated or
+  unpaired is the one difference, and it is a release no previous version could
+  judge: it used to abort with `validation failed: eaf exception table index must
+  be sorted and unique` (a disorder or a repeat) or `… must be parallel 1-D
+  arrays` (lengths that disagree), and skip everything after it. It now gets a
+  finding — `… eaf exception table is not sorted by position, or repeats one`, or
+  `… eaf exception table has 3 positions but 2 values` — and the rest of that
+  release is still judged.
