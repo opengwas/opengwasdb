@@ -27,7 +27,9 @@ from numpy.dtypes import StringDType
 from store_copies import TEST_STORE, copy_store, resharded
 
 import ogld
-from ogld.format import InputError
+from ogld.format import InputError, Refusal, RefusalReason, judge_request
+from ogld.query import clumping
+from ogld.query import proxies as proxies_query
 from ogld.store import StoreReader, location, reader
 from ogld.store.validation import validate_group
 
@@ -104,6 +106,146 @@ def test_index_and_band_rows_read_the_same_from_any_layout(
         np.testing.assert_array_equal(mine.indptr, theirs.indptr)
         np.testing.assert_array_equal(mine.partner, theirs.partner)
         np.testing.assert_array_equal(mine.r, theirs.r)
+
+
+def stored_positions() -> tuple[np.ndarray, np.ndarray]:
+    """The chromosome and position of each Test Store row, from the Test Panel."""
+    rows = support.passing_rows()
+    variants = support.panel_data().variants()
+    return np.asarray(variants.chrom)[rows], variants.pos.astype(np.int64)[rows]
+
+
+def test_r_of_pairs_is_the_reference_r_of_each_pair_and_of_one_row_against_many(
+    small_chunks: Path,
+) -> None:
+    rows = np.arange(1056)
+    expected = reference_pairs(rows)
+    chrom, pos = stored_positions()
+    rng = np.random.default_rng(14)
+    i, j = rng.integers(0, len(rows), 6000), rng.integers(0, len(rows), 6000)
+    i[:10] = j[:10]
+    # The Far Pairs are rare: every one the reference holds is added, in both orders.
+    far_i, far_j = np.nonzero(~np.isnan(expected) & (np.abs(pos[:, None] - pos) > 3_000_000))
+    i, j = np.concatenate([i, far_i]), np.concatenate([j, far_j])
+    gap = np.abs(pos[rows[i]] - pos[rows[j]])
+    same = chrom[rows[i]] == chrom[rows[j]]
+    want = expected[i, j]
+    assert (~np.isnan(want) & same & (gap > 3_000_000)).sum() > 10, "Far Pairs among them"
+    assert (np.isnan(want) & same & (gap <= 10_000_000)).sum() > 100, "and the Bound"
+    assert (~same).sum() > 1000, "and pairs across chromosomes"
+    reader = StoreReader.open(small_chunks)
+    np.testing.assert_array_equal(reader.r_of_pairs(rows[i], rows[j]), want)
+    np.testing.assert_array_equal(reader.r_of_pairs(rows[3:4], rows), expected[3])
+
+
+@pytest.mark.parametrize(
+    ("r2", "kb", "listed"),
+    [(0.05, 10_000, False), (support.T_FAR, 3000, True), (0.01, 3000, False), (0.0, 500, True)],
+)
+def test_partners_are_the_reference_pairs_at_r2_within_the_window(
+    small_chunks: Path, r2: float, kb: float, listed: bool
+) -> None:
+    every = np.arange(1056)
+    expected = reference_pairs(every)
+    chrom, pos = stored_positions()
+    rows = np.concatenate([np.arange(0, 1056, 11), [33, 33]])
+    among = np.arange(0, 1056, 3) if listed else None
+    got = StoreReader.open(small_chunks).partners(rows, r2=r2, window_bp=kb * 1000, among=among)
+    for k, row in enumerate(rows):
+        r = expected[row]
+        keep = ~np.isnan(r) & (r * r >= r2) & (np.abs(pos - pos[row]) <= kb * 1000)
+        keep &= (chrom == chrom[row]) & (every != row)
+        if among is not None:
+            keep &= np.isin(every, among)
+        part = slice(got.indptr[k], got.indptr[k + 1])
+        np.testing.assert_array_equal(got.partner[part], every[keep])
+        np.testing.assert_array_equal(got.r[part], r[keep])
+        np.testing.assert_array_equal(got.distance[part], np.abs(pos[keep] - pos[row]))
+    assert len(got.partner) > 500, "many partners in all"
+
+
+@pytest.mark.parametrize(
+    ("r2", "window_bp", "reason"),
+    [
+        (0.01, 3_000_000.9, RefusalReason.THRESHOLD_BELOW_T_FAR),
+        (0.01, 3_000_001, RefusalReason.THRESHOLD_BELOW_T_FAR),
+        (0.5, 10_000_000.5, RefusalReason.WINDOW_OVER_FAR),
+        (0.5, -1.0, RefusalReason.INVALID),
+        (1.5, 1000.0, RefusalReason.INVALID),
+    ],
+)
+def test_partners_refuses_what_judge_request_refuses(
+    r2: float, window_bp: float, reason: RefusalReason
+) -> None:
+    # One rule (spec §9): the reader asks ogld.format, so a window 0.9 bp past near_bp below
+    # t_far is refused there as it is by judge_request, not answered to ⌊W⌋ (ogld#14).
+    t_far = StoreReader.open(TEST_STORE).provenance["t_far"]
+    judged = judge_request(r2=r2, kb=window_bp / 1000, t_far=t_far, near_bp=3_000_000,
+                           far_bp=10_000_000)  # fmt: skip
+    assert judged.refusal is reason, "judge_request refuses it so"
+    with pytest.raises(Refusal) as refused:
+        StoreReader.open(TEST_STORE).partners(np.array([10, 600]), r2=r2, window_bp=window_bp)
+    assert refused.value.reason is reason
+
+
+def test_partners_answers_exactly_near_bp_below_t_far_and_far_bp_above() -> None:
+    reader = StoreReader.open(TEST_STORE)
+    rows = np.array([10, 600])
+    assert len(reader.partners(rows, r2=0.01, window_bp=3_000_000).indptr) == 3
+    assert len(reader.partners(rows, r2=0.5, window_bp=10_000_000).indptr) == 3
+
+
+def test_partners_refuses_a_list_that_is_not_ascending_distinct_rows() -> None:
+    reader = StoreReader.open(TEST_STORE)
+    rows = np.array([10, 600])
+    with pytest.raises(ValueError, match="ascending, distinct"):
+        reader.partners(rows, r2=0.5, window_bp=1000, among=np.array([5, 5]))
+    with pytest.raises(ValueError, match="Absent ALID"):
+        reader.partners(rows, r2=0.5, window_bp=1000, among=np.array([-1, 5]))
+
+
+def test_a_region_reads_the_same_from_any_layout(small_chunks: Path) -> None:
+    # One run per row, across the copy's 512-code chunks; a whole chromosome is wider than
+    # far_bp, so its Far Pairs are scattered from the index and the rest is NaN.
+    reader = StoreReader.open(small_chunks)
+    for start, stop in ((468, 1056), (0, 468), (500, 520)):
+        np.testing.assert_array_equal(
+            reader.region_r(start, stop), reference_pairs(np.arange(start, stop))
+        )
+
+
+@pytest.mark.parametrize(("start", "stop"), [(6, 39), (36, 221), (840, 1020)])
+def test_a_region_keeps_none_of_its_rows_far_pairs_that_leave_it(start: int, stop: int) -> None:
+    # Each span has rows with a Far Pair outside it, which the scatter must not place on a
+    # row inside it; (840, 1020) also holds one inside (spec §10; ogld#14).
+    every = np.arange(1056)
+    expected = reference_pairs(every)
+    _, pos = stored_positions()
+    far = ~np.isnan(expected) & (np.abs(pos[:, None] - pos) > 3_000_000)
+    inside = (every >= start) & (every < stop)
+    assert far[inside][:, ~inside].any(), "a Far Pair leaving the region"
+    got = StoreReader.open(TEST_STORE).region_r(start, stop)
+    np.testing.assert_array_equal(got, expected[start:stop, start:stop])
+
+
+def test_alids_of_names_each_row_as_the_test_panel_does() -> None:
+    # The one string column `proxies` reads (ogld#14), in the order asked, repeats kept.
+    reader = StoreReader.open(TEST_STORE)
+    rows = np.array([1055, 0, 467, 468, 0, 700])
+    assert list(reader.alids_of(rows)) == support.alids(support.passing_rows()[rows])
+    assert reader.alids_of(np.array([], dtype=np.int64)).shape == (0,)
+    with pytest.raises(ValueError, match="Absent ALID"):
+        reader.alids_of(np.array([3, -1]))
+
+
+def test_a_region_is_a_span_of_one_chromosome() -> None:
+    reader = StoreReader.open(TEST_STORE)
+    assert reader.region_r(5, 5).shape == (0, 0)
+    with pytest.raises(ValueError, match="leave their chromosome"):
+        reader.region_r(460, 470)
+    for start, stop in ((1000, 1100), (-1, 3), (5, 4)):
+        with pytest.raises(ValueError, match="not a span"):
+            reader.region_r(start, stop)
 
 
 def retained(cache: location.ChunkCache) -> int:
@@ -379,6 +521,27 @@ def test_a_repeated_read_fetches_its_chunks_once(
     assert once > 0, "the first read must fetch Near Band chunks"
     np.testing.assert_array_equal(store.matrix(names).r, first)
     assert (near_bytes() > once) is again
+
+
+@pytest.mark.parametrize("query", ["clump", "proxies"])
+def test_at_r2_at_or_above_t_far_no_near_band_chunk_is_fetched(query: str) -> None:
+    # At r2 ≥ t_far a variant's partners are its Proxy Index row, both sides, and the reader
+    # chooses that part for both queries (spec §10; ogld#14). r2 is t_far exactly, the edge.
+    # The committed store holds each array in one chunk, so any Near Band read fetches one.
+    rows = support.passing_rows()
+    names = support.alids(rows)
+    with serving(TEST_STORE) as (url, sent):
+        reader = StoreReader.open(url)
+        if query == "clump":
+            z = np.abs(support.panel_data().gwas().z)[rows]
+            clumping.clump(reader, names, z, r2=support.T_FAR, kb=3000)
+        else:
+            proxies_query.proxies(reader, names[::5], r2=support.T_FAR, kb=10_000)
+    fetched = {path for path, _ in reader._cache._kept}
+    assert {"index/21/r", "index/22/r"} <= fetched, "the Proxy Index rows must be read"
+    assert not [path for path in fetched if path.startswith("near/")], "no Near Band chunk"
+    chunks = ("/near/21/r/c/", "/near/22/r/c/")
+    assert not [path for path, _ in sent if path.startswith(chunks)], "nor any Near Band byte"
 
 
 def test_the_test_store_passes_every_rule_over_http() -> None:

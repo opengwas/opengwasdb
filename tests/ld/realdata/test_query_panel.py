@@ -32,8 +32,7 @@ from test_build_panel import HGDP_SCALE, eur_keep, inputs, v2_slice
 
 import ogld
 from ogld.format import REncoding
-from ogld.identity import alid_locus
-from ogld.query.results import strongest_first
+from ogld.identity import alid_locus, order_key
 
 KB = 3000
 #: Fewest Analyses with hits on the slice for the comparison to mean anything.
@@ -77,7 +76,8 @@ def explained(
     loci = [alid_locus(a) for a in alid]
     assert all(locus is not None and locus[0] == "22" for locus in loci), "hits are chr22 ALIDs"
     position = np.array([locus[1] for locus in loci if locus is not None], dtype=np.int64)
-    key = [strongest_first(z, "22", position[i], a) for i, (a, z) in enumerate(hits)]
+    # Strongest first, then the engine's order, as `clump` takes them (ogld#14).
+    key = [(-z, *order_key("22", int(position[i]), a)) for i, (a, z) in enumerate(hits)]
     order = sorted(range(len(alid)), key=key.__getitem__)
     got = clump_rule.explain(
         order=order,

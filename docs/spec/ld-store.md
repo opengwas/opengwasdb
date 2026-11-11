@@ -697,15 +697,47 @@ equal to t_far, rounding onto a threshold, AMR's t_far, a pair at exactly t_far,
 
 _Informative._ A reader keeps a chromosome's `position` range and its two `indptr` arrays once it
 has opened that chromosome. For all of HGDP+1kGP EUR that is 51 MB of positions and 206 MB of
-`indptr`, raw. The reads map onto the arrays as follows.
+`indptr`, raw. Each query makes one of the reader's reads (`ogld.store.StoreReader`, ogld#14),
+and the reads map onto the arrays as follows.
 
-| read | arrays it touches |
-|---|---|
-| a row range (an LD matrix of a region) | one contiguous slice of `near/<c>/r`, `indptr[a] … indptr[b]`, which includes each row's partners past the range; and the Proxy Index rows of the region's variants, for its pairs beyond `near_bp` |
-| a submatrix for any variant list | one element of `near/<c>/r` per pair within `near_bp`; the Proxy Index rows of the listed variants, for the pairs beyond it |
-| a single pair | one element of the Near Band, or one Proxy Index row |
-| a variant's proxies at r2 ≥ t_far | its Proxy Index row: both sides, up to `far_bp`, in one piece |
-| a variant's Near Band partners on both sides (proxies below t_far, W ≤ `near_bp`) | its Near Band row, and its column: one element in each row of the preceding `near_bp` (§11) |
+| read | reader | made by | arrays it touches |
+|---|---|---|---|
+| a region | `region_r` | `region` | for each of its rows, one contiguous slice of `near/<c>/r`, from the row's first code to its last partner inside the region, never its partners past the region; for its pairs beyond `near_bp`, the Proxy Index rows of its variants, each entry inside the region scattered into the matrix |
+| a submatrix for any variant list | `pair_r` | `matrix` | one element of `near/<c>/r` per pair within `near_bp`; for the pairs beyond it, the Proxy Index rows of the listed variants, each entry scattered onto the listed pairs |
+| a list of pairs, or one row against many | `r_of_pairs` | `partners` below t_far with `among`; `pair_r`, within `near_bp` only | one element of `near/<c>/r` per pair within `near_bp`; the Proxy Index row of each farther pair's earlier variant, searched. `pair_r`'s pairs beyond `near_bp` are not looked up this way: they are scattered from index rows, as its own row says |
+| partners at r2 ≥ t_far | `partners` | `proxies`; `clump` | each variant's Proxy Index row: both sides, up to `far_bp`, in one piece. No chunk of `near/<c>/r` |
+| partners below t_far, W ≤ `near_bp` | `partners` | `proxies` | each variant's Near Band row up to W, and its column within W: one element in each row of the preceding W (§11) |
+| partners below t_far among a list, W ≤ `near_bp` | `partners`, `among` | `clump` | one element of `near/<c>/r` per pair of a variant and a listed variant within W, and nothing else |
+
+So the stored part a query reads depends on its threshold, and the reader chooses it; no query
+compares r2 with t_far itself:
+
+| query | r2 ≥ t_far | r2 < t_far (answered only for W ≤ `near_bp`, §9) |
+|---|---|---|
+| `matrix`, `region` | no threshold: the Near Band within `near_bp`, the Proxy Index beyond it | |
+| `proxies` | the Proxy Index row of each query variant | the Near Band row and column of each query variant, within W |
+| `clump` | the Proxy Index row of each lead, among the hits still unclumped | one Near Band element for each lead and each hit still unclumped within W |
+
+`clump` asks for one lead's partners at a time, among the hits no stronger lead has taken, and
+never for a square among a lead and its m candidates, which resolves every pair among them. On the
+Test Store's 1,056 hits within 3 Mb, at its × 511 encoding, the leads need 23,228 pairs at r² 0.1.
+The squares resolved 1,489,250 of them and took 1,587,155 Stored r from the chunk cache; `partners`
+takes 3,122, the 438 leads' Proxy Index rows. At r² 0.01, below t_far, the leads need 7,311 pairs
+and `partners` takes exactly those. `tests/test_partner_reads.py` holds both, and `proxies`
+reading no string column but the ALIDs it returns. A chromosome's `near/<c>/indptr` is still read when a request first
+touches it, as below, at any threshold.
+
+What the reads hold, measured with tracemalloc and held by `tests/test_partner_reads.py`:
+
+- `partners`: 48 bytes per kept entry, its partner, r and distance held once as read and once
+  in the result while they are put in order. Beside them, one block as it is read and judged:
+  at most `_PAIRS_PER_STEP` entries (about 4 million), or one row's if it holds more, at most
+  72 bytes each. The index's entries take 30 bytes each and the Near Band's 53–70.
+- `r_of_pairs`: its result, 8 bytes a pair, and one step of pairs, about 60 bytes each, with
+  that step's index rows. One row against many is never copied out to a full list.
+- `pair_r` and `region_r`: their n × n float64 result, written in place, and one step or block
+  beside it. `matrix` and `region` apply a `fill` in place, so each holds one float64 copy of
+  its result.
 
 The prototype timed each read on the EUR chr22 slice, a real Zarr v3 sharded LD Store (1.65 GB,
 65,035 variants), under the three layouts of §6. It read from local disk, and over HTTP from a

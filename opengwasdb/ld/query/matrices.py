@@ -28,7 +28,8 @@ def matrix(reader: StoreReader, alids: Sequence[str], *, fill: float | None) -> 
     """
     found = reader.rows_of(alids)
     absent = tuple(alid for alid, row in zip(alids, found, strict=True) if row < 0)
-    return _ld_matrix(reader, found[found >= 0], absent, fill)
+    rows = found[found >= 0]
+    return _ld_matrix(reader, rows, reader.pair_r(rows), absent, fill)
 
 
 def region(
@@ -38,16 +39,22 @@ def region(
     in genomic order (spec §8; ogld#4). Refused unless 2 × radius ≤ far_bp."""
     judge_region(radius=radius, far_bp=reader.provenance["far_bp"]).raise_if_refused()
     rows = reader.rows_in(normalise_chromosome(chrom), centre - radius, centre + radius)
-    return _ld_matrix(reader, rows, (), fill)
+    # The region's rows are contiguous, so the reader reads each one as one slice (ogld#14).
+    start, stop = (int(rows[0]), int(rows[-1]) + 1) if len(rows) else (0, 0)
+    return _ld_matrix(reader, rows, reader.region_r(start, stop), (), fill)
 
 
 def _ld_matrix(
-    reader: StoreReader, rows: npt.NDArray[np.int64], absent: tuple[str, ...], fill: float | None
+    reader: StoreReader,
+    rows: npt.NDArray[np.int64],
+    r: npt.NDArray[np.float64],
+    absent: tuple[str, ...],
+    fill: float | None,
 ) -> LDMatrix:
-    """The matrix of `rows`, with the caller's `fill`, if any, in place of every NaN."""
-    r = reader.pair_r(rows)
+    """The matrix `r` of `rows`, with the caller's `fill`, if any, in place of every NaN:
+    written in place, so a query holds one float64 copy of its result (ogld#14)."""
     if fill is not None:
-        r = np.where(np.isnan(r), float(fill), r)
+        r[np.isnan(r)] = float(fill)
     p = reader.provenance
     return LDMatrix(
         r=r,
