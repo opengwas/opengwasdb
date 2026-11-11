@@ -341,7 +341,7 @@ def _judge_indel_order(_target: Target, found: _IndelOrder) -> Iterator[str]:
 
 
 def _spells_indels_reference_first(target: Target) -> bool:
-    """A Store from format 0.2.1 on; an earlier one sorts an indel's alleles."""
+    """A Store from format 0.2.2 on; an earlier one, 0.2.1 included, sorts its indels."""
     return indels_reference_first(target.store.manifest.format_version)
 
 
@@ -400,7 +400,7 @@ def _judge_lifted_off_primary(_target: Target, found: _LiftedOffPrimary) -> Iter
 @dataclass(frozen=True, kw_only=True)
 class _ErrorFromFormat(Fold[TableBlock, _LiftedOffPrimary]):
     """A fold that fails a release of a format whose builders cannot write what it finds
-    (0.2.1 or later, `indels_reference_first`) and warns on an earlier one, which says
+    (0.2.2 or later, `indels_reference_first`) and warns on an earlier one, which says
     what the release is without failing a Store nobody can fix in place (#376, #367).
 
     Where it finds nothing but cannot judge some rows, it warns that it did not."""

@@ -30,22 +30,31 @@ carry the same layout. `0.1.0` (Zarr v2) stays readable; a 0.1.0 source is no
 longer writable, which is why completion refuses it and names the converter.
 Deleting the v2 reader is a later decision (ADR 0057).
 
-**#381 moves `format_version` to 0.2.1 (ADR 0079).** An indel's ALID spells its
-reference allele first, so a deletion is `1:827587:GGGGCC:G` where 0.2.0 spelt
-it like the insertion, `1:827587:G:GGGGCC`, and its statistic is signed for the
-reference allele; SNVs, substitutions and insertions keep their spelling. The
-arrays and encodings are 0.2.0's, so it is the compatible remainder: a package
-that knows only 0.2.0 reads a 0.2.1 Store correctly and warns that it is newer.
-It must not complete one, since it would spell the panel's indels sorted beside
-the Store's own deletions. A 0.2.0 Store is read as before and never rewritten;
-this package refuses to complete it (rebuild it, then complete), and spells a
-source's indels sorted when it checks source fidelity against it. The converter
-writes 0.2.0 from a 0.1.0 Store, whose indels it cannot re-spell. #338's
-reference branch also used 0.2.1; if it lands after #381 it takes 0.2.2.
-A Reference-Completed 0.2.1 release also records, in
-`provenance.completion.panel_indels`, how its panel's indels took their
-reference; a package that does not know the key reads it as any other
-provenance.
+**#381 moves `format_version` to 0.2.2 (ADR 0079).** An indel's ALID spells its
+reference allele first, so a deletion is `1:827587:GGGGCC:G` where 0.2.0 and
+0.2.1 spelt it like the insertion, `1:827587:G:GGGGCC`, and its statistic is
+signed for the reference allele; SNVs, substitutions and insertions keep their
+spelling. #381 took 0.2.1 on #307's integration branch, but #430 released 0.2.1
+first, in package 0.9.0, for a Ragged release carrying `regions.tsv`; a released
+format keeps its meaning, so #381 is 0.2.2, the next unused version (the
+orchestrator's ruling of 11 Nov, ADR 0079's note). On #430's scheme a release is
+stamped the lowest version its features use, and every build of this package
+spells its indels reference first, so every build and every completion writes
+0.2.2, with or without `regions.tsv`. The arrays and encodings are 0.2.0's, so it
+is the compatible remainder: a package that knows only 0.2.0 or 0.2.1 (0.9.0
+included) reads a 0.2.2 Store correctly and warns that it is newer. It must not
+complete one, and does not: 0.2.2 is not a format it writes, and completing it
+would spell the panel's indels sorted beside the Store's own deletions. A 0.2.0 or
+0.2.1 Store is read and validated as before and never rewritten: the rules this
+package gates at 0.2.2 (`variant_table.indel_order`, `variant_table.lifted_contig`
+as an error, the exact-SE share rule) do not judge it. This package refuses to
+complete it (rebuild it, then complete), and spells a source's indels sorted
+when it checks source fidelity against it. The converter writes 0.2.0 from a
+0.1.0 Store, whose indels it cannot re-spell. #338's reference branch also used
+0.2.1; if it lands after #381 it takes 0.2.3. A Reference-Completed 0.2.2
+release also records, in `provenance.completion.panel_indels`, how its panel's
+indels took their reference; a package that does not know the key reads it as
+any other provenance.
 
 **#298 renames one manifest value without moving `format_version`, under spec
 §21.0.** A release written since it says `association_coverage: gwas` where an

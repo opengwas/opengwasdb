@@ -102,8 +102,9 @@ one row per region it kept rows for, of four kinds, of which only `cis` and
 `significant_trans` rows are the regions Reference Completion fills (§17, issue
 #430). It is a tab-separated text table beside `analyses.tsv`, written by the
 same writer, and declared by the manifest's `regions` entry (§2), through which
-a reader finds it; a release that carries it is stamped `format_version` 0.2.1
-(§21.3), and a release whose Association Coverage is not `cis` cannot be
+a reader finds it; a release that carries it is stamped `format_version` 0.2.1 by
+package 0.9.0 and 0.2.2 by every build since #381, whose indels are spelt reference
+first (§21.3), and a release whose Association Coverage is not `cis` cannot be
 completed without it.
 
 This is the complete envelope for a standalone Dense or Ragged Store Release.
@@ -211,7 +212,7 @@ where:
 - where the two alleles are one length — an SNV, or a substitution of several
   bases — `A1` is alphabetically first and `A2` the other allele;
 - where their lengths differ — an indel — `A1` is the **reference allele** and
-  `A2` the alternate (format `0.2.1`, issue #381, ADR 0079).
+  `A2` the alternate (format `0.2.2`, issue #381, ADR 0079).
 
 An indel is written reference first because a sorted ALID cannot tell an
 insertion from the deletion of the same sequence. At a repeat both are real:
@@ -1278,7 +1279,7 @@ Recommended compression for initial implementation is Zarr with Zstandard and bi
 
 ## 10a. `data.zarr` physical layout in the 0.2 series
 
-The 0.2 series (`0.2.0` and `0.2.1`) stores every array as **Zarr v3 with the sharding codec**. The
+The 0.2 series (`0.2.0`, `0.2.1` and `0.2.2`) stores every array as **Zarr v3 with the sharding codec**. The
 arrays, dtypes, fill values and encodings are exactly those of 0.1.0 (§10); only
 the physical layout changes. A 0.2 release exists because the unit a query
 reads — the **inner chunk** — is decoupled from the unit stored as a file — the
@@ -1288,7 +1289,8 @@ multiplying the file count (ADR 0057, ADR 0021).
 ```text
 format_version 0.1.0   Zarr v2   .zarray / .zgroup, one file per chunk
 format_version 0.2.0   Zarr v3   zarr.json, one file per shard
-format_version 0.2.1   Zarr v3   the same; an indel's ALID spelt reference first (§4)
+format_version 0.2.1   Zarr v3   the same; a Ragged release's optional regions.tsv (§1)
+format_version 0.2.2   Zarr v3   the same; an indel's ALID spelt reference first (§4)
 ```
 
 **Shards are bounded on both axes.** The Dense VCF builder writes `[all variants
@@ -2097,7 +2099,7 @@ Validators MUST check at least:
 - `regions.tsv`, when a Ragged release carries or declares one, is declared by the manifest's `regions` entry exactly when it is present, has the SHA-256 that entry names, parses as a region table and names only Analyses the release holds (§2, §17, issue #430);
 - `index.sqlite` does not contain an `analyses` table, nor a `variants` table (§1, issue #128);
 - `variant_alid_bytes.npy` holds one entry per ALID narrow enough to index, and no key in it is shared by two variants — a shared key is what silently truncating an over-wide ALID produced, and it makes one variant answer another's lookup (issue #127);
-- from `format_version` 0.2.1, every indel row of the Store Variant Table spells its ALID as the row records its orientation: `A1` is its `effect_allele` and `A2` its `other_allele`, and a lifted variant's `source_alid` spells the same allele first, a lift complementing an allele but never changing its length (§4, ADR 0079). An indel spelt sorted where its reference sorts second reads as the insertion of the same sequence; a 0.2.0 or 0.1.0 release, which sorts every indel, is not judged by this rule;
+- from `format_version` 0.2.2, every indel row of the Store Variant Table spells its ALID as the row records its orientation: `A1` is its `effect_allele` and `A2` its `other_allele`, and a lifted variant's `source_alid` spells the same allele first, a lift complementing an allele but never changing its length (§4, ADR 0079). An indel spelt sorted where its reference sorts second reads as the insertion of the same sequence; a 0.2.0 or 0.1.0 release, which sorts every indel, is not judged by this rule;
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
@@ -2148,15 +2150,15 @@ change to this table, which the test suite holds to the registry, in its order.
 | `envelope.required` | release | check | every entry the layout requires is present |
 | `envelope.closed` | release | check | no entry the layout does not produce is present |
 | `manifest.coverage` | release | check | the declared association coverage is one the layout can carry |
-| `manifest.format_stamp` | release | check | a 0.2 release is stamped the lowest `format_version` its features use: 0.2.1 when it declares `regions.tsv`, 0.2.0 otherwise (§21.3) |
+| `manifest.format_stamp` | release | check | a 0.2 release is stamped the lowest `format_version` its features use: 0.2.2 when its indels are spelt reference first, whether or not it declares `regions.tsv`; otherwise 0.2.1 when it declares `regions.tsv`, 0.2.0 when it does not (§21.3) |
 | `sqlite.analyses_table` | release | check | `index.sqlite` holds no `analyses` table |
 | `variant_table.rows` | release | fold | the Store Variant Table has as many rows as its offset sidecar |
 | `variant_table.alid_index` | release | fold | the ALID search index covers exactly the indexable ALIDs, collision-free |
 | `variant_table.rsid_index` | release | fold | every rsid in the table resolves through the rsid search index |
 | `variant_table.sequence` | release | fold | rows are in `variant_index` order, one per canonical variant |
 | `variant_table.representatives` | release | fold | the offset sidecar and the tabix index find the rows the table holds |
-| `variant_table.indel_order` | release | fold | from format 0.2.1, every indel row's ALID spells its alleles as the row records them: its `effect_allele` then its `other_allele`, and, for a lifted variant, its reference first as its `source_alid` does; not judged on a 0.2.0 or 0.1.0 release, which sorts an indel's alleles |
-| `variant_table.lifted_contig` | release | fold | no row on an alt, random or unplaced contig has a `source_alid` on another contig: a lift left no variant there (§4); an error from format 0.2.1, a warning on an earlier release, which #367 owns; a row with no `source_alid` is not judged |
+| `variant_table.indel_order` | release | fold | from format 0.2.2, every indel row's ALID spells its alleles as the row records them: its `effect_allele` then its `other_allele`, and, for a lifted variant, its reference first as its `source_alid` does; not judged on a 0.2.1, 0.2.0 or 0.1.0 release, which sorts an indel's alleles |
+| `variant_table.lifted_contig` | release | fold | no row on an alt, random or unplaced contig has a `source_alid` on another contig: a lift left no variant there (§4); an error from format 0.2.2, a warning on an earlier release, 0.9.0's 0.2.1 included, which #367 owns; a row with no `source_alid` is not judged |
 | `sqlite.variant_aliases` | release | check | every alias names a variant the table holds; skipped where there is no alias table |
 | `analyses.readable` | release | check | `analyses.tsv` parses |
 | `analyses.retired_columns` | release | check | no retired column is present |
@@ -2208,7 +2210,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `side_tables.z_overflow` | grid, sequence | fold | the `z` overflow table describes exactly the overflow cells |
 | `side_tables.eaf_exceptions` | grid, sequence | fold | the `eaf` exception table describes exactly the exception cells, and a plane that cannot be decoded is reported |
 | `side_tables.se_exceptions` | grid, sequence | fold | the `se` exception table describes exactly the exception cells |
-| `side_tables.se_exceptions_rounded` | grid, sequence | check | no more than 1% of the `se` exception table is a value a `float16` plane stores, which is what a plane rounded before its plan was chosen holds; an error from `format_version` 0.2.1 and a warning before it |
+| `side_tables.se_exceptions_rounded` | grid, sequence | check | no more than 1% of the `se` exception table is a value a `float16` plane stores, which is what a plane rounded before its plan was chosen holds; an error from `format_version` 0.2.2 and a warning before it, 0.9.0's 0.2.1 included |
 | `sample_size.codes` | sequence | fold | every `n` code is a sample size or the missing code, and some cell holds a size |
 | `sample_size.scope` | sequence | fold | an Analysis holding per-association N declares `variant_level` scope |
 | `top_hits.arrays` | grid, sequence | check | every tier carries the arrays a tier is made of |
@@ -2275,7 +2277,7 @@ Command-line validation (`ogdb validate`) and inspection (`ogdb info`) provide b
   {
     "store_id": "...",
     "release_id": "...",
-    "format_version": "0.2.1",
+    "format_version": "0.2.2",
     "primary_layout": "dense",
     "association_coverage": "gwas",
     "completion_state": "observed_only",
@@ -2719,6 +2721,7 @@ The distinction is defined by **what a reader that does not know about the chang
 | a new optional array (e.g. `eaf`, ADR 0036) | patch |
 | a new `analyses.tsv` column | patch |
 | a new optional, manifest-declared sidecar (`regions.tsv`, 0.2.1, issue #430) | patch |
+| an indel's ALID spelt reference first, its statistic signed for that allele (0.2.2, issue #381, ADR 0079) | patch |
 | a required column removed or renamed (ADR 0034) | **minor** |
 | the encoding of `z`, `se` or `eaf` changes (ADR 0037) | **minor** |
 

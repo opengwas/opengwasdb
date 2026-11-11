@@ -197,11 +197,11 @@ def test_validation_reports_a_pre_reset_release_as_an_error_not_a_crash(dense_st
 # --- writing is narrower than reading (ADR 0041 §3) ------------------------
 
 
-@pytest.mark.parametrize("version", ["0.2.0", "0.2.1"])
-def test_every_version_this_build_writes_is_writable(version):
-    """Their arrays are encoded identically, so completing a 0.2.0 or a 0.2.1 release
-    writes it in its own format (ADR 0038 §4)."""
-    assert store_open.check_writable_format_version(version) == version
+def test_the_version_this_build_completes_is_writable():
+    """0.2.0, 0.2.1 and 0.2.2 are encoded identically, but only a 0.2.2 release spells
+    its indels as this build's panel does, so it is the one a completion writes into, in
+    its own format (ADR 0038 §4, ADR 0079)."""
+    assert store_open.check_writable_format_version("0.2.2") == "0.2.2"
 
 
 def test_the_converter_stamps_by_the_builders_rule_and_keeps_sorted_indels():
@@ -220,18 +220,20 @@ def test_the_converter_stamps_by_the_builders_rule_and_keeps_sorted_indels():
 
 @pytest.mark.parametrize(
     ("version", "reference_first"),
-    [("0.1.0", False), ("0.2.0", False), ("0.2.1", True), ("0.2.2", True)],
+    [("0.1.0", False), ("0.2.0", False), ("0.2.1", False), ("0.2.2", True), ("0.2.3", True)],
 )
-def test_a_store_spells_its_indels_reference_first_from_0_2_1(version, reference_first):
+def test_a_store_spells_its_indels_reference_first_from_0_2_2(version, reference_first):
+    """0.2.1 is package 0.9.0's region table, its indels still sorted; #381's reference-
+    first spelling is 0.2.2 (ADR 0079)."""
     assert store_open.indels_reference_first(version) is reference_first
 
 
-@pytest.mark.parametrize("version", ["0.1.0", "0.2.0"])
+@pytest.mark.parametrize("version", ["0.1.0", "0.2.0", "0.2.1"])
 def test_a_store_that_sorts_its_indels_is_readable_but_not_writable(version):
-    """This build reads 0.1.0 and 0.2.0 and writes only 0.2.1.
+    """This build reads 0.1.0, 0.2.0 and 0.2.1 and completes only 0.2.2.
 
-    Completion writes into the source's arrays and keeps its format, so either
-    source is refused. Both sort an indel's alleles, and a completion would add
+    Completion writes into the source's arrays and keeps its format, so each
+    source is refused. Each sorts an indel's alleles, and a completion would add
     panel ALIDs spelt reference first beside them, so the remedy is a rebuild:
     a conversion keeps the sorted spelling (ADR 0079).
     """
@@ -240,28 +242,21 @@ def test_a_store_that_sorts_its_indels_is_readable_but_not_writable(version):
         store_open.check_writable_format_version(version, source="source release X")
 
 
-def test_a_readable_but_unwritable_version_is_refused(monkeypatch):
-    """Unreachable by construction today -- this build reads exactly the
-    version it writes -- and kept because the invariant is about the *next*
-    format. Monkeypatching is what makes it observable at all: the state it
-    guards arrives with a second readable version, not before, and a guard
-    that has never been executed is a guess.
-    """
-    monkeypatch.setattr(store_open, "CURRENT_FORMAT_VERSION", "0.1.1")
-    monkeypatch.setattr(store_open, "WRITTEN_FORMAT_VERSIONS", ("0.1.1",))
-    monkeypatch.setattr(store_open, "SUPPORTED_FORMAT_VERSIONS", {(0, 1): (1,)})
-
-    store_open.check_format_version("0.1.0")  # still readable
+def test_a_readable_but_unwritable_version_is_refused():
+    """A newer remainder of a known series is read, with a warning (§21.2), but not
+    written: 0.2.3 spells its indels as 0.2.2 does and is still refused, since this
+    build does not know what else it adds."""
+    store_open.check_format_version("0.2.3")  # still readable, logged as newer
     with pytest.raises(store_open.UnsupportedFormatVersion, match="reads but cannot write"):
-        store_open.check_writable_format_version("0.1.0", source="source release X")
+        store_open.check_writable_format_version("0.2.3", source="source release X")
 
 
-@pytest.mark.parametrize("version", ["0.1.0", "0.2.0"])
+@pytest.mark.parametrize("version", ["0.1.0", "0.2.0", "0.2.1"])
 def test_completion_refuses_a_source_that_sorts_its_indels(tmp_path, dense_store_path, version):
     """The guard ADR 0038 §4 added for exactly this moment now fires.
 
-    A 0.1.0 or 0.2.0 source is readable but not writable by a build that writes
-    0.2.1, and completion preserves its source's format rather than re-encoding
+    A 0.1.0, 0.2.0 or 0.2.1 source is readable but not writable by a build that
+    writes 0.2.2, and completion preserves its source's format rather than re-encoding
     it. Its deletions are spelt like insertions, so the refusal names a rebuild
     (ADR 0079).
     """
@@ -313,10 +308,11 @@ def test_a_writer_reads_the_layout_from_the_series_not_the_current_version():
     in, so the decision is `ZARR_FORMAT_BY_SERIES`' (issue #313). `0.1.x` is Zarr
     v2 and is refused; every `0.2.x` is Zarr v3 and is accepted -- including one
     the constant has not reached yet, because `CURRENT_FORMAT_VERSION` moves
-    *within* a series (issue #381 takes it to `0.2.1`).
+    *within* a series (issue #381 takes it to `0.2.2`).
     """
     assert store_open.check_writable_zarr_layout("0.2.0") == 3
     assert store_open.check_writable_zarr_layout("0.2.1") == 3
+    assert store_open.check_writable_zarr_layout("0.2.2") == 3
     with pytest.raises(store_open.UnsupportedFormatVersion, match="convert_store_to_0_2_0"):
         store_open.check_writable_zarr_layout("0.1.0", source="release at /tmp/x")
     with pytest.raises(store_open.UnsupportedFormatVersion, match="Zarr format 2"):

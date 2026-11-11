@@ -3662,8 +3662,7 @@ def _write_hybrid_manifest(
         encoding=encoding,
         store_id=store_id,
         release_id=release_id,
-        # A Hybrid release carries no region table, and spells an indel's ALID
-        # reference first like every build (spec §21.3, ADR 0079).
+        # No region table; indels reference first, as every build (§21.3, ADR 0079).
         format_version=format_version_for(carries_regions=False, reference_first_indels=True),
         primary_layout=PrimaryStorageLayout.HYBRID,
         association_coverage=association_coverage,

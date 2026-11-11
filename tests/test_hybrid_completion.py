@@ -176,20 +176,19 @@ def completed_hybrid(
 def test_a_hybrid_stamped_0_2_1_without_a_region_table_is_refused(
     tmp_path: Path, completed_hybrid: tuple[Path, Path, HybridCompletionResult]
 ) -> None:
-    """Spec §21.3: completion refuses a source stamped other than its features give,
-    rather than publish another; a Hybrid carries no region table, so it is 0.2.0."""
+    """A Hybrid build is 0.2.2, its indels spelt reference first (spec §21.3, ADR 0079).
+    Stamped 0.2.1, it claims sorted indels, which completion refuses before it reads the
+    stamp's other feature, rather than spell the panel's indels beside them."""
     from region_tables import edit_manifest
 
     from opengwasdb.store.open import UnsupportedFormatVersion
 
     src, _, _ = completed_hybrid
-    assert StoreManifest.load(src).format_version == "0.2.0"
+    assert StoreManifest.load(src).format_version == "0.2.2"
     edit_manifest(src, lambda manifest: {**manifest, "format_version": "0.2.1"})
     dst = tmp_path / "restamped-dst.opengwasdb"
 
-    with pytest.raises(
-        UnsupportedFormatVersion, match="stamped 0.2.1, but a release carrying no region table"
-    ):
+    with pytest.raises(UnsupportedFormatVersion, match="0.2.1 Store sorts an indel's alleles"):
         complete_hybrid_store(src, dst, _make_ld_panel(tmp_path), min_cor=0.0, thresh=0.9)
     assert not dst.exists()
 

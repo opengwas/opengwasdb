@@ -538,7 +538,8 @@ def test_the_build_writes_the_table_into_the_store_as_regions_tsv(tabled, tmp_pa
 
 def test_a_build_given_a_table_differs_from_one_without_only_by_regions_tsv(tmp_path):
     """The table changes nothing else a build writes: the file, and the manifest entry
-    that declares it, are the whole difference."""
+    that declares it, are the whole difference. Both are 0.2.2, the table or not, since
+    every build spells an indel reference first (spec §21.3)."""
     from store_digest import store_digest
 
     table = write_region_table(tmp_path / "t.tsv", TABLE)
@@ -548,11 +549,11 @@ def test_a_build_given_a_table_differs_from_one_without_only_by_regions_tsv(tmp_
     assert tabled["files"] == sorted([*bare["files"], "regions.tsv"])
     assert "regions" not in bare["manifest.json"]
     assert (bare["manifest.json"]["format_version"], tabled["manifest.json"]["format_version"]) == (
-        "0.2.0", "0.2.1"
+        "0.2.2", "0.2.2"
     )
     assert {
-        k: v for k, v in tabled["manifest.json"].items() if k not in ("regions", "format_version")
-    } == {k: v for k, v in bare["manifest.json"].items() if k != "format_version"}
+        k: v for k, v in tabled["manifest.json"].items() if k != "regions"
+    } == bare["manifest.json"]
     assert {
         k: v for k, v in tabled.items() if k not in ("files", "regions.tsv", "manifest.json")
     } == {k: v for k, v in bare.items() if k not in ("files", "manifest.json")}
@@ -577,45 +578,72 @@ def _format_version(store: Path) -> str:
 
 
 def test_a_build_is_stamped_the_lowest_format_version_its_features_use(tabled, cis_only):
-    """0.2.1 adds only the optional `regions.tsv` (spec §21.3): a Store carrying it is
-    0.2.1, and one without it 0.2.0, as every Store before it."""
-    assert _format_version(tabled[0]) == "0.2.1"
-    assert _format_version(cis_only[0]) == "0.2.0"
+    """0.2.1 adds only the optional `regions.tsv`, and 0.2.2 an indel spelt reference
+    first, which every build of this package does (spec §21.3, ADR 0079): a build is
+    0.2.2 whether or not it carries the table."""
+    assert _format_version(tabled[0]) == "0.2.2"
+    assert _format_version(cis_only[0]) == "0.2.2"
 
 
 def test_a_completion_keeps_its_sources_format_version(tabled, cis_only):
     """It carries the source's `regions.tsv`, or carries none, and so its version."""
-    assert _format_version(tabled[1]) == "0.2.1"
-    assert _format_version(cis_only[1]) == "0.2.0"
+    assert _format_version(tabled[1]) == "0.2.2"
+    assert _format_version(cis_only[1]) == "0.2.2"
 
 
-def test_validate_accepts_a_0_2_0_and_a_0_2_1_store(tabled, cis_only):
+def _as_0_9_0_wrote_it(store: Path, tmp_path: Path) -> Path:
+    """A copy of `store` stamped as package 0.9.0 stamps it: 0.2.1 with its region table,
+    0.2.0 without. These fixtures hold no indel, so their ALIDs are 0.9.0's too."""
+    import shutil
+
+    from opengwasdb.variants.axis import iter_variant_records
+
+    assert not any(
+        len(r.effect_allele) != len(r.other_allele)
+        for r in iter_variant_records(store / "variants.tsv.gz")
+    ), "the restamp is honest only for a Store without indels"
+    copy = shutil.copytree(store, tmp_path / f"{store.parent.name}-{store.name}")
+    version = "0.2.1" if (copy / "regions.tsv").exists() else "0.2.0"
+    edit_manifest(copy, lambda m: {**m, "format_version": version})
+    return copy
+
+
+def test_validate_accepts_this_builds_stores_and_0_9_0s(tmp_path, tabled, cis_only):
+    """This build's 0.2.2 Stores, with the table and without, and the same Stores as
+    package 0.9.0 stamps them, 0.2.1 and 0.2.0, all validate: the rules this branch
+    gates at 0.2.2 do not touch a 0.9.0 Store (spec §21.3)."""
     from opengwasdb.validation.validate import validate_store
 
-    for store in (*tabled, *cis_only):
-        assert _format_version(store) in ("0.2.0", "0.2.1")
+    stores = [*tabled, *cis_only]
+    stores += [_as_0_9_0_wrote_it(store, tmp_path) for store in (tabled[0], cis_only[0])]
+    for store in stores:
         result = validate_store(store)
         assert result.ok, (store, result.errors)
-    assert {_format_version(store) for store in (*tabled, *cis_only)} == {"0.2.0", "0.2.1"}
+    assert sorted(_format_version(store) for store in stores) == [
+        "0.2.0", "0.2.1", "0.2.2", "0.2.2", "0.2.2", "0.2.2"
+    ]
 
 
-def test_the_variant_index_is_rebuilt_on_a_0_2_1_store(tmp_path, tabled):
-    """Its arrays are a 0.2.0 Store's, so the in-place index build accepts it alike."""
+@pytest.mark.parametrize("stamp", ["0.2.2", "0.2.1"])
+def test_the_variant_index_is_rebuilt_on_a_store_carrying_regions_tsv(tmp_path, tabled, stamp):
+    """Its arrays are a 0.2.0 Store's, so the in-place index build accepts it alike, as
+    this build writes it and as package 0.9.0 stamps it."""
     import shutil
 
     from opengwasdb.layouts.ragged.by_variant import add_variant_index
 
     source = shutil.copytree(tabled[0], tmp_path / "obs.opengwasdb")
-    assert _format_version(source) == "0.2.1"
+    edit_manifest(source, lambda m: {**m, "format_version": stamp})
 
     add_variant_index(source, force=True)
 
-    assert _format_version(source) == "0.2.1"
+    assert _format_version(source) == stamp
 
 
 def test_a_completion_refuses_a_source_stamped_other_than_its_features(tmp_path, cis_only):
     """A Store stamped other than the lowest version its features use disagrees with
-    itself; completion refuses it rather than re-stamp it either way."""
+    itself; completion refuses it rather than re-stamp it either way. Stamped 0.2.1, it
+    also claims sorted indels, which completion refuses first (ADR 0079)."""
     import shutil
 
     from opengwasdb.store.open import UnsupportedFormatVersion
@@ -623,7 +651,7 @@ def test_a_completion_refuses_a_source_stamped_other_than_its_features(tmp_path,
     source = shutil.copytree(cis_only[0], tmp_path / "restamped.opengwasdb")
     edit_manifest(source, lambda m: {**m, "format_version": "0.2.1"})
 
-    with pytest.raises(UnsupportedFormatVersion, match="stamped 0.2.1, but a release carrying no"):
+    with pytest.raises(UnsupportedFormatVersion, match="0.2.1 Store sorts an indel's alleles"):
         complete_ragged_store(
             source, tmp_path / "comp.opengwasdb", _write_panel(tmp_path), ancestry="EUR",
             cis_window_bp=WINDOW, min_cor=0.0,

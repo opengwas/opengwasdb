@@ -12,6 +12,14 @@
 > every writer stamps by it, and both 0.2.0 and 0.2.1 are writable (§4). The rest
 > of §3 holds: there is no option to write a format whose encoders are retired.
 >
+> **The same rule, 2026-11-11 (epic #307's merge of #432, ADR 0079's note):**
+> `0.2.2` is `0.2.1` with an indel's ALID spelt reference first, `regions.tsv` still
+> optional. Every build of this package uses that feature, so it stamps every release
+> it builds or completes 0.2.2, and only a converted one 0.2.0. 0.2.0, 0.2.1 and 0.2.2
+> stay written by the same encoders, but completion writes only into a 0.2.2 source:
+> one that sorts its indels would gain the panel's reference-first ones beside its
+> own (§4, ADR 0079).
+>
 > **Amended by [ADR 0064](0064-association-coverage-is-a-build-input.md)
 > (issue #298, spec §21.0):** before `format_version` 1.0, a change confined to
 > a manifest vocabulary or to required metadata does **not** move the version.

@@ -270,7 +270,7 @@ def alid_allele_arrays(
 
 
 def sorted_alid_alleles(ref: str, alt: str) -> tuple[str, str]:
-    """``(A1, A2)`` as a Store before format 0.2.1 spells them: every pair
+    """``(A1, A2)`` as a Store before format 0.2.2 spells them: every pair
     sorted, an indel's too (ADR 0079 §5). For reading such a Store; nothing
     writes this spelling."""
     a1, a2 = sorted((identity_allele(ref), identity_allele(alt)))

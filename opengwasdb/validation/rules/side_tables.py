@@ -172,10 +172,11 @@ FLOAT16_EXACT_SHARE = 0.01
 #: rounded plane, so the rule says nothing rather than guessing.
 FLOAT16_EXACT_MINIMUM = 1_000
 #: The first `format_version` whose builders hold an SE exception at the source's
-#: `float32` (issue #355). A release written before it may hold a rounded table,
-#: so the rule reports that one and does not fail it: #367 owns re-validating the
+#: `float32` (issue #355): this package's, which write 0.2.2 (spec §21.3). A release
+#: written before it, package 0.9.0's 0.2.1 among them, may hold a rounded table, so
+#: the rule reports that one and does not fail it: #367 owns re-validating the
 #: published Stores.
-SE_EXCEPTIONS_EXACT_SINCE = (0, 2, 1)
+SE_EXCEPTIONS_EXACT_SINCE = (0, 2, 2)
 
 
 def _se_exceptions_judged(target: Target) -> bool:

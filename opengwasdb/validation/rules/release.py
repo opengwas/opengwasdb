@@ -318,9 +318,10 @@ def _reject_stray_analyses_table(connection: sqlite3.Connection, errors: list[st
 
 def format_stamp(target: Target) -> list[str]:
     """The release is stamped the lowest `format_version` its features use (spec §21.3):
-    0.2.1 when its manifest declares `regions.tsv`, 0.2.0 otherwise. One stamped otherwise
-    disagrees with itself: an older reader takes a 0.2.0 one as fully understood, and no
-    writer stamps a 0.2.1 one without the table."""
+    0.2.2 when its indels are spelt reference first, which its stamp declares, the table
+    or not; otherwise 0.2.1 when its manifest declares `regions.tsv`, 0.2.0 when it does
+    not. One stamped otherwise disagrees with itself: an older reader takes a 0.2.0 one as
+    fully understood, and no writer stamps a 0.2.1 one without the table."""
     manifest = target.store.manifest
     try:
         check_format_version_stamp(

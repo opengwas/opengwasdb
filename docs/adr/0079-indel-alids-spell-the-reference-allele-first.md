@@ -4,9 +4,23 @@ Issue [#381](https://github.com/opengwas/opengwasdb/issues/381), under epic #367
 built in epic #307's run because #316's integer key join keys on the ALID it
 defines. The owner decided the rule and where the reference comes from on 4 Nov
 2026, and the two points left open then, and the format version, on 7 Nov.
-Format `0.2.1`. Amends ADR 0072 (its reversed-indel rule and its identity
-rules) and ADR 0036 §2 (its statement of the ALID convention). Points 6 and 7
-record the owner's rulings of 7 Nov on panel and GWAS-SSF indels.
+Format `0.2.2` (first numbered `0.2.1`; see the note below). Amends ADR 0072
+(its reversed-indel rule and its identity rules) and ADR 0036 §2 (its statement
+of the ALID convention). Points 6 and 7 record the owner's rulings of 7 Nov on
+panel and GWAS-SSF indels.
+
+> **Amended 11 Nov 2026 (the orchestrator's ruling, epic #307's merge of #432):
+> this decision's format is `0.2.2`.** It took `0.2.1` on #307's integration
+> branch, but main's #430 released `0.2.1` first, in package 0.9.0, as "a Ragged
+> release carrying `regions.tsv`", and a released format cannot change its meaning.
+> So reference-first indels take `0.2.2`, the next unused version, on #430's scheme
+> of stamping each release the lowest version its features use (spec §21.3). Every
+> build of this package spells indels reference first, so it writes `0.2.2`, with or
+> without `regions.tsv`. The converter stamps `0.2.0`, keeping a `0.1.0` source's
+> sorted indels. A `0.2.1` Store, like a `0.2.0` one, sorts its indels: it is read
+> and validated as package 0.9.0 reads it, and completion refuses it (see 5). Every
+> rule below that this decision gated at 0.2.1 is gated at 0.2.2, and the text below
+> now says 0.2.2 wherever it means this decision's format.
 
 ## Context
 
@@ -57,7 +71,7 @@ sites and keys, the lift (`statistics_swap`), Variant Reference extraction and
 reading, the Hybrid fold's key table, the Indexed Variant Subset list reader,
 the phenotype-SD pipeline and source fidelity. An LD panel's ids are keyed and
 placed by `canonical_panel_alid` and `indel_key` (see 6), which the panel
-table's builder imports. The one other spelling is a Store's from before 0.2.1,
+table's builder imports. The one other spelling is a Store's from before 0.2.2,
 `sorted_alid_alleles`, which only reads such a Store (see 5).
 
 `variant_table.indel_order` (see 5) forms no ALID. It judges a Store's own
@@ -93,7 +107,7 @@ reverse-strand chain block. A lift therefore never re-orients an indel.
 **4. Equal-length multi-base substitutions stay sorted**, like SNVs: the
 genome holds one sequence there, so their two orders are one variant.
 
-**5. `format_version` steps to `0.2.1`**, the compatible remainder (spec
+**5. `format_version` steps to `0.2.2`**, the compatible remainder (spec
 §21.1). The arrays are 0.2.0's; only an indel's ALID and the sign of its
 statistic change.
 
@@ -103,21 +117,22 @@ statistic change.
   signs them with it (`validate --source`).
 - **The converter writes 0.2.0**, not the current version: a 0.1.0 Store
   sorts its indels and says nowhere which allele is the reference, so its copy
-  cannot honestly be stamped 0.2.1 (`TARGET_FORMAT_VERSION`).
-- **Completion refuses a 0.2.0 or 0.1.0 source.** It writes into its source's
+  cannot honestly be stamped 0.2.2 (`format_version_for` with
+  `reference_first_indels=False`).
+- **Completion refuses a 0.2.1, 0.2.0 or 0.1.0 source.** It writes into its source's
   arrays and keeps its format (ADR 0038 §4), and completing such a source would
   add panel ALIDs spelt by this rule beside the source's own deletions spelt
   like insertions. The source is rebuilt, then completed.
 - **A new Validation Rule, `variant_table.indel_order`**, judges a Store from
-  0.2.1 on: each indel row's ALID spells its alleles as the row records them,
+  0.2.2 on: each indel row's ALID spells its alleles as the row records them,
   its `effect_allele` then `other_allele`, and a lifted variant's
   `source_alid` spells the same allele first, a lift never changing an
-  allele's length. A 0.2.0 or 0.1.0 Store is not judged by it. What it cannot
+  allele's length. A 0.2.1, 0.2.0 or 0.1.0 Store is not judged by it. What it cannot
   see is a same-assembly Store whose builder spelt a deletion sorted
   throughout, table columns included: nothing in such a Store records the
   reference apart from the ALID itself.
 - **#338's reference branch also used 0.2.1.** If it lands after this, it
-  takes the next step, `0.2.2`.
+  takes the next step, `0.2.3`.
 
 **6. An LD Reference Panel places an indel by a declared reference, settled
 by GRCh38 evidence where the panel declares none** (owner, 7 Nov). A panel
@@ -164,7 +179,7 @@ The HGDP+1kGP AMR panel needs no table: its `REF` column places all of its
 indels, 2,660,493 unique keys (2,660,509 summed over LD blocks, as a completion
 record counts them; see below). Of UKB's settled indels, 409,287 are
 deletions; 367,799 of them are deletions OGS-00017 (FinnGen R13) observes, and
-a rebuild of it at 0.2.1 spells each as the panel does, where completing its
+a rebuild of it at 0.2.2 spells each as the panel does, where completing its
 0.2.0 Store with the sorted rule would have put 364,124 of them under a second
 spelling.
 
@@ -325,11 +340,11 @@ position (ADR 0072's clarification of 7 Nov).
   counts them as kept, and nothing refuses it. No build manifest names one
   today, and opengwasdb-stores#455 must land before anything rebuilds
   OGS-00011.
-- A package that knows only 0.2.0 reads a 0.2.1 Store correctly and warns that
-  it is newer; a completion it ran would spell its panel's indels sorted beside
-  the Store's reference-first deletions. Only a package that knows 0.2.1
+- A package that knows only 0.2.0 or 0.2.1 reads a 0.2.2 Store correctly and
+  warns that it is newer; a completion it ran would spell its panel's indels sorted
+  beside the Store's reference-first deletions. Only a package that knows 0.2.2
   completes one.
-- A Variant Reference or variant list written before 0.2.1 names an indel by
+- A Variant Reference or variant list written before 0.2.2 names an indel by
   its sorted spelling, which this build reads as the insertion: a source's
   deletion at that site is off the reference.
 - Breaking for Python callers: `orient_to_canonical`, `oriented_alid`,

@@ -32,13 +32,14 @@ from opengwasdb.variants import CanonicalVariant
 @pytest.mark.parametrize("fixture", ["dense_store_path", "ragged_store_path", "hybrid_store_path"])
 def test_a_release_stamped_0_2_1_without_a_region_table_fails_its_stamp(request, fixture):
     """Spec §21.3: a release is stamped the lowest version its features use, so one
-    without `regions.tsv` is 0.2.0, and one stamped otherwise disagrees with itself. For
-    a Hybrid, the outer release's manifest is the one restamped."""
+    whose indels are sorted and that has no `regions.tsv` is 0.2.0, and one stamped
+    0.2.1 without the table disagrees with itself. For a Hybrid, the outer release's
+    manifest is the one restamped."""
     from region_tables import edit_manifest
 
     store = request.getfixturevalue(fixture)
     assert validate_store(store).ok, "the fixture must validate before it is restamped"
-    assert open_store(store).manifest.format_version == "0.2.0"
+    assert open_store(store).manifest.format_version == "0.2.2"
     edit_manifest(store, lambda manifest: {**manifest, "format_version": "0.2.1"})
 
     result = validate_store(store)
@@ -182,8 +183,8 @@ def test_the_zarr_format_rule_reports_nodes_in_name_order(
 
     assert result.failed() == {"zarr.format"}
     assert result.errors == [
-        f"data.zarr/{node}: Zarr v2 metadata ['.zarray'] under format_version 0.2.1; a "
-        "0.2.1 release is Zarr v3, and a half-converted release is invalid (issue #245)"
+        f"data.zarr/{node}: Zarr v2 metadata ['.zarray'] under format_version 0.2.2; a "
+        "0.2.2 release is Zarr v3, and a half-converted release is invalid (issue #245)"
         for node in ("se", "z")
     ]
 
@@ -1059,7 +1060,7 @@ def test_an_exact_se_exception_table_passes_the_precision_rule(
     assert result.ok, result.errors
 
 
-def test_a_rounded_se_exception_table_fails_a_0_2_1_release(
+def test_a_rounded_se_exception_table_fails_a_0_2_2_release(
     se_exception_stores: tuple[Path, Path],
 ) -> None:
     """Issue #355: every entry of a rounded table is what a `float16` plane stores.
@@ -1082,6 +1083,29 @@ def test_a_rounded_se_exception_table_fails_a_0_2_1_release(
     assert f"{len(values)} of {len(values)} se exceptions" in message
     assert "float16 plane stores" in message
     assert "rebuild the release" in message
+
+
+@pytest.mark.parametrize(
+    ("format_version", "severity"),
+    [("0.2.2", "error"), ("0.3.0", "error"), ("0.2.1", "warning"), ("0.2.0", "warning")],
+)
+def test_the_rounded_se_rule_fails_only_a_release_its_builders_make(format_version, severity):
+    """The exact-SE fix is this package's, which writes 0.2.2. Package 0.9.0's 0.2.1 (a
+    Ragged release carrying `regions.tsv`) predates it, so a rounded table there is
+    reported, not failed (issues #355, #367)."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from opengwasdb.validation.rules.side_tables import RULES
+
+    rule = next(r for r in RULES if r.name == "side_tables.se_exceptions_rounded")
+    rule = replace(rule, run=lambda _target: iter(["rounded"]))
+    target = SimpleNamespace(
+        store=SimpleNamespace(manifest=SimpleNamespace(format_version=format_version)),
+        label=".",
+    )
+    (finding,) = rule.findings(target)
+    assert finding.severity.value == severity
 
 
 def test_a_rounded_se_exception_table_warns_on_an_earlier_release(

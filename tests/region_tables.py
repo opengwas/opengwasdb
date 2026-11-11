@@ -76,7 +76,7 @@ def with_regions(store: Path, rows: Iterable[Row]) -> Path:
     uses (`model.regions.store_regions`), for a fixture whose builder takes no table, the
     BESD one, or a test that changes the table a Store holds."""
     from opengwasdb.model.regions import read_region_table, store_regions
-    from opengwasdb.store.open import format_version_for
+    from opengwasdb.store.open import format_version_for, indels_reference_first
 
     table = write_region_table(store.parent / f"{store.name}.regions-input.tsv", rows)
     entry = store_regions(store, read_region_table(table, "GRCh38"))
@@ -85,7 +85,11 @@ def with_regions(store: Path, rows: Iterable[Row]) -> Path:
         lambda manifest: {
             **manifest,
             "regions": entry.to_manifest(),
-            "format_version": format_version_for(carries_regions=True),
+            # The Store's own indel spelling stays what its stamp says (ADR 0079).
+            "format_version": format_version_for(
+                carries_regions=True,
+                reference_first_indels=indels_reference_first(manifest["format_version"]),
+            ),
         },
     )
     return store
