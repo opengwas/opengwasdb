@@ -308,13 +308,13 @@ def test_every_reader_spells_an_indel_by_its_declared_reference_or_drops_it(
 
 
 def _complete_an_observed_deletion(tmp_path, *, reference: str | None):
-    """A 0.2.1 Dense Store from FinnGen holding the deletion `1:950000:GGGGCC:G`,
+    """A 0.2.2 Dense Store from FinnGen holding the deletion `1:950000:GGGGCC:G`,
     completed against a panel naming the same indel by its sorted id: by an
     indel-reference table settling it as ``reference``, or by nothing.
     Returns the observed and completed Stores."""
-    import test_dense_completion as tdc
     import test_indel_pairs as pair
     import test_panel_indels as panel_fixture
+    from ld_blocks import write_ld_block
 
     from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
     from opengwasdb.layouts.dense.complete import complete_dense_store
@@ -332,7 +332,7 @@ def _complete_an_observed_deletion(tmp_path, *, reference: str | None):
         store_id="s", release_id="r",
     )
     panel = tmp_path / "ld_panel"
-    tdc._write_ld_block(
+    write_ld_block(
         panel / "EUR" / "1", "900000-1300000",
         [
             ("1:900000:A:G", 0.35, 900_000),
@@ -448,12 +448,12 @@ def test_a_panel_insertion_beside_an_observed_deletion_is_a_new_variant(tmp_path
 # --- validate: an indel ALID against the table's own orientation --------------
 
 
-#: Each layout's 0.2.1 Store of one observed deletion.
+#: Each layout's 0.2.2 Store of one observed deletion.
 LAYOUTS = ["dense", "ragged", "hybrid"]
 
 
 def _observed_deletion_store(tmp_path, layout: str = "dense"):
-    """A 0.2.1 Store whose variant table holds a deletion: Dense from FinnGen,
+    """A 0.2.2 Store whose variant table holds a deletion: Dense from FinnGen,
     Ragged from GWAS-SSF (harmoniser code 10), Hybrid from GWAS-VCF with the
     deletion in its Ragged Overflow, off the Dense Component's axis."""
     import test_indel_pairs as pair
@@ -531,11 +531,15 @@ def _sorted_deletion(line: str, *, source_alid: str | None = None) -> str:
 
 
 @pytest.mark.parametrize("layout", LAYOUTS)
-def test_a_0_2_1_store_passes_the_indel_order_rule(tmp_path, layout: str) -> None:
+def test_a_build_is_0_2_2_and_passes_the_indel_order_rule(tmp_path, layout: str) -> None:
+    """Every build spells an indel reference first, so stamps 0.2.2 (spec §21.3) and is
+    held to the rule (ADR 0079)."""
+    from opengwasdb.store.open import open_store
     from opengwasdb.validation.validate import validate_store
 
     store = _observed_deletion_store(tmp_path, layout)
     assert DELETION_AT_950000 in _alids_at_950000(store), "the fixture must hold the deletion"
+    assert open_store(store).manifest.format_version == "0.2.2"
 
     result = validate_store(store, rules={"variant_table.indel_order"})
 
@@ -570,6 +574,45 @@ def test_a_sorted_deletion_its_source_alid_spells_reference_first_fails(tmp_path
 
     assert result.failed() == {"variant_table.indel_order"}
     assert "source_alid 1:949000:GGGGCC:G" in result.errors[0]
+
+
+def test_a_0_9_0_store_with_regions_and_sorted_indels_reads_and_validates(tmp_path, caplog):
+    """Package 0.9.0 stamps a Ragged Store carrying `regions.tsv` 0.2.1, its indels
+    sorted. This build reads one without calling it newer and validates it as 0.9.0
+    does: the rules it gates at 0.2.2 (indel order, the lifted contig, exact SE
+    exceptions) leave it alone (ADR 0079, spec §21.3). The stamp is what spares it: a
+    row whose sorted ALID contradicts its own effect allele passes at 0.2.1 and fails
+    the indel-order rule at 0.2.2. A row sorted throughout reads as the insertion of
+    the same sequence, which no rule can tell apart (spec §4)."""
+    import logging
+
+    from region_tables import with_regions
+
+    from opengwasdb.store.open import open_store
+    from opengwasdb.validation.validate import validate_store
+
+    store = _observed_deletion_store(tmp_path, "ragged")
+    with_regions(store, [("trait_a", "significant_trans", "1", 800_000, 1_000_000)])
+    _rewrite_table(store, lambda line: _sorted_deletion(line, source_alid="."))
+    _set_format_version(store, "0.2.1")
+    assert _alids_at_950000(store) == ["1:950000:G:GGGGCC"], "the deletion is spelt sorted"
+    assert (store / "regions.tsv").is_file()
+
+    with caplog.at_level(logging.WARNING):
+        assert open_store(store).manifest.format_version == "0.2.1"
+        result = validate_store(store)
+
+    assert not any("newer" in record.getMessage() for record in caplog.records)
+    assert result.ok, result.errors
+
+    (tmp_path / "contradicting").mkdir()
+    other = _observed_deletion_store(tmp_path / "contradicting", "ragged")
+    with_regions(other, [("trait_a", "significant_trans", "1", 800_000, 1_000_000)])
+    _rewrite_table(other, _sorted_deletion)
+    _set_format_version(other, "0.2.1")
+    assert validate_store(other).ok
+    _set_format_version(other, "0.2.2")
+    assert validate_store(other).failed() == {"variant_table.indel_order"}
 
 
 def test_a_0_2_0_store_is_not_judged_by_the_indel_order_rule(tmp_path) -> None:

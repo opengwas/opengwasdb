@@ -1,0 +1,13 @@
+{
+  "commit": "b8975330aaa5df266fcdcd32b12ad62614fd164c",
+  "measured_at": "2026-11-11T12:55:35.148578+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/odb430/wt/opengwasdb",
+  "opengwasdb_fingerprint": "f3abcd4184e8d208a31870b881928601d356755428fb7958aa0230b13bcbfd74",
+  "records": 810,
+  "batches": 1,
+  "seconds": {
+    "one_batch": 0.0,
+    "full_batches": 0.0
+  },
+  "extra_seconds_per_checkpoint": 0.0
+}

@@ -73,6 +73,36 @@ def normalise_coverage(data: dict[str, Any]) -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
+class RegionsEntry:
+    """The manifest's `regions` entry: the region table a Ragged Store Release carries
+    (`regions.tsv`, spec §17), by its path in the release and the SHA-256 of its bytes.
+
+    It is how a reader finds the table (spec §21.2's manifest-based feature discovery),
+    as `encoding` declares the planes: a release carrying no table has no entry, and its
+    manifest is the one it would have been without this field.
+    """
+
+    path: str
+    sha256: str
+
+    def to_manifest(self) -> dict[str, str]:
+        return {"path": self.path, "sha256": self.sha256}
+
+    @classmethod
+    def from_manifest(cls, data: Any) -> RegionsEntry:
+        """Read a declared entry, refusing one that is not `{path, sha256}`."""
+        if (
+            not isinstance(data, dict)
+            or set(data) != {"path", "sha256"}
+            or not all(isinstance(value, str) for value in data.values())
+        ):
+            raise ValueError(
+                f"manifest.json's regions entry {data!r} is not {{path, sha256}} (spec §17)"
+            )
+        return cls(path=data["path"], sha256=data["sha256"])
+
+
+@dataclass(frozen=True)
 class StoreManifest:
     """Minimal manifest required to identify and open a Store Release."""
 
@@ -92,6 +122,9 @@ class StoreManifest:
     encoding: StoreEncoding
     created_at: str | None = None
     provenance: dict[str, Any] = field(default_factory=dict)
+    #: The region table the release carries (`RegionsEntry`); `None` when it carries
+    #: none, and then omitted from the manifest entirely, as an absent `encoding.n` is.
+    regions: RegionsEntry | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> StoreManifest:
@@ -106,6 +139,9 @@ class StoreManifest:
             reference_assembly=str(data["reference_assembly"]),
             created_at=data.get("created_at"),
             provenance=dict(data.get("provenance", {})),
+            regions=(
+                RegionsEntry.from_manifest(data["regions"]) if "regions" in data else None
+            ),
         )
 
     @classmethod
@@ -130,4 +166,6 @@ class StoreManifest:
             "provenance": self.provenance,
             "encoding": self.encoding.to_manifest(),
         }
+        if self.regions is not None:
+            data["regions"] = self.regions.to_manifest()
         return data

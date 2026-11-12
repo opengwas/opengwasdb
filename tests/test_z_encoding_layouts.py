@@ -41,7 +41,6 @@ from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.query import query_store
 from opengwasdb.stats import log10_p_two_sided
 from opengwasdb.store.open import (
-    CURRENT_FORMAT_VERSION,
     UnsupportedFormatVersion,
     open_store,
 )
@@ -135,7 +134,9 @@ def test_dense_missing_cells_still_read_as_absent(dense_store):
 
 def test_dense_declares_its_encoding_and_validates_against_it(dense_store):
     manifest = json.loads((dense_store / "manifest.json").read_text())
-    assert manifest["format_version"] == CURRENT_FORMAT_VERSION
+    # Every build spells an indel reference first, which 0.2.2 adds; a Dense Store
+    # carries no region table (spec §21.3).
+    assert manifest["format_version"] == "0.2.2"
     assert manifest["encoding"]["z"] == {"kind": "int16_fixed", "scale": 1024}
     assert manifest["encoding"]["se"] == {"kind": "float16"}
     assert validate_store(dense_store).ok

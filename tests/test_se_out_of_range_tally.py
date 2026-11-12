@@ -139,7 +139,7 @@ def test_ragged_completion_logs_each_analysis_s_out_of_range_ses_once(tmp_path, 
     observed = tmp_path / "obs.opengwasdb"
     trc.build_ragged_from_besd(
         fixture / "test", observed, store_id="t", release_id="obs", tissue="Blood",
-        association_coverage="cis_and_signals",
+        association_coverage="cis",
     )
     with caplog.at_level(logging.WARNING):
         trc.complete_ragged_store(

@@ -793,7 +793,7 @@ def test_the_per_variant_rule_judges_the_inner_chunk_not_the_shard(
 
 def test_completion_refuses_a_converted_0_2_0_source(converted_dense_store: Path):
     """A converted release keeps its 0.1.0 source's sorted indel ALIDs, so it is
-    0.2.0, and a build that writes 0.2.1 refuses to complete it (ADR 0038 §4,
+    0.2.0, and a build that writes 0.2.2 refuses to complete it (ADR 0038 §4,
     ADR 0079): it is rebuilt first."""
     version = store_open.open_store(converted_dense_store).manifest.format_version
     assert version == "0.2.0"

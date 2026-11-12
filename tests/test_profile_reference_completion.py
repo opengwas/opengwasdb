@@ -211,6 +211,7 @@ def test_bands_artifact_splits_each_pass_and_scales_to_the_full_run(
     stages = {entry["stage"] for entry in artifact["stages"]}
     assert {
         "axis_construction_full", "ld_block_phase_slice", "merge_shard_fills_and_quality",
+        "merge_union_map", "merge_reference_eaf", "merge_create_planes",
         "stat_read_source", "stat_read_fills", "stat_compute_judge", "stat_write",
         "eaf_read_source", "eaf_compute_encode", "eaf_write",
     } <= stages

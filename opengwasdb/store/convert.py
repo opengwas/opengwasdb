@@ -83,8 +83,9 @@ from opengwasdb.store.arrays import (
     sharded_compressor,
 )
 from opengwasdb.store.open import (
-    CURRENT_FORMAT_VERSION,
+    WRITTEN_FORMAT_VERSIONS,
     OpenGWASDBStore,
+    format_version_for,
 )
 from opengwasdb.validation import validate_store
 
@@ -93,16 +94,10 @@ from opengwasdb.validation import validate_store
 SUPPORTED_LAYOUTS = frozenset({"dense", "ragged", "hybrid"})
 
 #: The `format_version` the converter reads: Zarr v2, one chunk per file.  It is
-#: deliberately *not* `CURRENT_FORMAT_VERSION`: once `0.1.0` stops being
+#: deliberately *not* one this build writes (`WRITTEN_FORMAT_VERSIONS`): the converter
+#: derives the current format from this one, and once `0.1.0` stops being
 #: readable this is the constant that says so.
 SOURCE_FORMAT_VERSION = "0.1.0"
-
-#: The `format_version` the converter writes: Zarr v3 with sharding, holding the
-#: source's stored codes and ALIDs unchanged. It is `0.2.0`, not
-#: `CURRENT_FORMAT_VERSION` (`0.2.1` since #381): a `0.1.0` Store sorts an
-#: indel's alleles, and nothing in it says which of them is the reference, so
-#: its ALIDs are `0.2.0`'s and cannot honestly be stamped `0.2.1` (ADR 0079).
-TARGET_FORMAT_VERSION = "0.2.0"
 
 #: The `ArrayRole`s whose inner chunk narrows on the Analysis axis and whose
 #: shard is the conversion's `(V_s, A_s)` parameter.  The manifest's recorded
@@ -219,7 +214,7 @@ def _refuse_unconvertible(source: Path) -> list[_Component]:
         raise ConversionError(f"{source}: no manifest.json; this is not a Store Release")
     for path in manifests:
         version = str(json.loads(path.read_text(encoding="utf-8")).get("format_version"))
-        if version in {TARGET_FORMAT_VERSION, CURRENT_FORMAT_VERSION}:
+        if version in WRITTEN_FORMAT_VERSIONS:
             raise ConversionError(
                 f"{path}: format_version is already {version!r}; this "
                 "release is already converted (issue #245)"
@@ -228,7 +223,7 @@ def _refuse_unconvertible(source: Path) -> list[_Component]:
             raise ConversionError(
                 f"{path}: format_version is {version!r}, not "
                 f"{SOURCE_FORMAT_VERSION!r}. The converter derives a "
-                f"{TARGET_FORMAT_VERSION} release from a {SOURCE_FORMAT_VERSION} one and "
+                f"0.2 release from a {SOURCE_FORMAT_VERSION} one and "
                 "is not a general migration tool; every other format is rebuilt (ADR 0041, "
                 "spec §21.4)."
             )
@@ -653,6 +648,7 @@ def _conversion_provenance(
     top_hit_shard_chunks: int,
     now: str,
     source_release_id: str,
+    to_format_version: str,
 ) -> dict[str, Any]:
     """The `zarr_v3_conversion` block one converted component records.
 
@@ -662,7 +658,7 @@ def _conversion_provenance(
     return {
         "source_release_id": source_release_id,
         "from_format_version": SOURCE_FORMAT_VERSION,
-        "to_format_version": TARGET_FORMAT_VERSION,
+        "to_format_version": to_format_version,
         "source_zarr_format": 2,
         "target_zarr_format": 3,
         "tool": "scripts/convert_store_to_0_2_0.py",
@@ -707,7 +703,13 @@ def _rewrite_manifest(
     data = json.loads(path.read_text(encoding="utf-8"))
     data["release_id"] = release_id
     data["created_at"] = now
-    data["format_version"] = TARGET_FORMAT_VERSION
+    # Stamped by the builders' one rule (spec §21.3). A 0.1.0 release carries no
+    # region table, and it sorts an indel's alleles with nothing to say which is the
+    # reference, so it converts to 0.2.0: its ALIDs are 0.2.0's, never 0.2.2's
+    # reference-first ones (ADR 0079).
+    data["format_version"] = format_version_for(
+        carries_regions="regions" in data, reference_first_indels=False
+    )
     provenance = {**data.get("provenance", {})}
     if component.kind in {"dense", "hybrid"} and dense_plane is not None:
         key = "dense" if component.kind == "dense" else "hybrid"
@@ -725,6 +727,7 @@ def _rewrite_manifest(
         top_hit_shard_chunks=top_hit_shard_chunks,
         now=now,
         source_release_id=source_release_id,
+        to_format_version=data["format_version"],
     )
     data["provenance"] = provenance
     # A converted release is a new release, so it states the coverage vocabulary
@@ -1083,7 +1086,8 @@ def convert_release(
         top_hit_shard_chunks=int(top_hit_shard_chunks),
         workers=int(workers),
     )
-    print(f"Published {destination} as {TARGET_FORMAT_VERSION}", flush=True)
+    published = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+    print(f"Published {destination} as {published['format_version']}", flush=True)
     return destination
 
 

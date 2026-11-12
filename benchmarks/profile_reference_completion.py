@@ -207,7 +207,8 @@ def profile_block(
     require_new_directory(work)
     task = dense._BlockTask(
         tsv_path=tsv_path, source_path=source, min_cor=DEFAULT_MIN_COR, thresh=DEFAULT_THRESH,
-        checkpoint_path=work / "profile-block.npz", ceded=panel.ceded.get(tsv_path, frozenset()),
+        checkpoint_path=work / "profile-block.npz", placement=panel.blocks[tsv_path],
+        ceded=panel.ceded.get(tsv_path, frozenset()),
     )
     stages = StageClock(clock)
     captured: dict[str, Any] = {}
@@ -354,10 +355,10 @@ def _band_write_table(dense: Any) -> list[tuple[Any, str, str]]:
 
 
 _MERGE_TABLE = (
-    ("_sorted_union_map", "merge_union_map"),
+    ("sorted_union_map", "merge_union_map"),
     ("panel_reference_eaf", "merge_reference_eaf"),
     ("_create_completed_zarr", "merge_create_planes"),
-    ("_shard_checkpoint_fills_by_band", "merge_shard_fills_and_quality"),
+    ("shard_checkpoint_fills", "merge_shard_fills_and_quality"),
 )
 
 
@@ -463,7 +464,7 @@ def _merge_and_write(
     originals = {
         name: getattr(dense, name)
         for name in ("_write_completed_statistic_bands", "_write_completed_eaf_bands",
-                     "_rewrite_completed_residual_se", "_iter_fill_records")
+                     "_rewrite_completed_residual_se", "iter_fill_records")
     }
 
     def statistic(root: Any, *args: Any, **kwargs: Any) -> Any:
@@ -493,8 +494,8 @@ def _merge_and_write(
     dense._write_completed_statistic_bands = statistic
     dense._write_completed_eaf_bands = eaf
     dense._rewrite_completed_residual_se = se_rewrite
-    dense._iter_fill_records = _timed_generator(
-        stages, "stat_read_fills", originals["_iter_fill_records"]
+    dense.iter_fill_records = _timed_generator(
+        stages, "stat_read_fills", originals["iter_fill_records"]
     )
     try:
         with _patched(merge, stages), _patched(band, stages):

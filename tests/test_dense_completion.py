@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import gzip
-import io
 import re
 from pathlib import Path
 from shutil import copytree
@@ -11,11 +9,14 @@ from shutil import copytree
 import numpy as np
 import pytest
 from dense_sources import build_dense_fixture, write_dense_manifest
+from ld_blocks import write_ld_block
 
 from opengwasdb.admission import NotAdmitted
 from opengwasdb.associations import Cells, InvalidAssociations
+from opengwasdb.completion import fill_shards
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.completion.ld_panel import (
+    BlockPlacement,
     LdPanelNotFoundError,
     SharedEndpoint,
     canonical_panel_alid,
@@ -124,61 +125,10 @@ SOURCE_ROWS = [
 ]
 
 
-def _write_ld_block(
-    block_dir: Path,
-    block_name: str,
-    snps: list[tuple[str, float, int]],
-    seed: int = 0,
-    *,
-    write_matrix: bool = True,
-    write_npz: bool = False,
-    npz_k: int | None = None,
-    snp_id_style: str = "alid",
-) -> None:
-    """Write one flat-layout LD block.
-
-    A block may carry an LD matrix, an eigendecomposition, or both — panels built
-    under ADR 0031 ship only the decomposition, so tests need to construct each
-    combination. ``npz_k`` truncates the stored eigenvectors to force the
-    under-resolved case. ``snp_id_style`` selects the panel's identifier
-    convention: canonical ALIDs, or the legacy ``chr:pos_ref_alt`` form used by the
-    production UKB EUR panel.
-    """
-    block_dir.mkdir(parents=True, exist_ok=True)
-    n = len(snps)
-
-    tsv_lines = ["CHR\tSNP\tOA\tEA\tEAF\tBP"]
-    for alid, eaf, bp in snps:
-        chrom, pos, a1, a2 = alid.split(":")
-        snp_id = alid if snp_id_style == "alid" else f"{chrom}:{pos}_{a1}_{a2}"
-        tsv_lines.append(f"{chrom}\t{snp_id}\t{a2}\t{a1}\t{eaf}\t{bp}")
-    (block_dir / f"{block_name}.tsv").write_text("\n".join(tsv_lines) + "\n")
-
-    rng = np.random.default_rng(seed)
-    A = rng.standard_normal((n, n))
-    ld = A @ A.T + np.eye(n) * n * 0.1
-
-    if write_matrix:
-        buf = io.BytesIO()
-        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
-            for row in ld:
-                gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
-        (block_dir / f"{block_name}.unphased.vcor1.gz").write_bytes(buf.getvalue())
-
-    if write_npz:
-        vals, vecs = np.linalg.eigh(ld)
-        vals = vals[::-1]
-        vecs = vecs[:, ::-1]
-        k = vecs.shape[1] if npz_k is None else min(npz_k, vecs.shape[1])
-        np.savez_compressed(
-            block_dir / f"{block_name}.ldeig", values=vals, vectors=vecs[:, :k]
-        )
-
-
 def _make_ld_panel(tmp_path: Path) -> Path:
     """Two blocks: chr1 (mixes observed + one new panel SNP) and chr2 (pure panel-only)."""
     root = tmp_path / "ld_panel"
-    _write_ld_block(
+    write_ld_block(
         root / "EUR" / "1", "900000-1300000",
         [
             ("1:900000:A:G", 0.35, 900_000),     # observed by a1
@@ -189,7 +139,7 @@ def _make_ld_panel(tmp_path: Path) -> Path:
         ],
         seed=0,
     )
-    _write_ld_block(
+    write_ld_block(
         root / "EUR" / "2", "1-500000",
         [
             ("2:100000:A:G", 0.20, 100_000),  # new — not observed by anyone
@@ -1179,7 +1129,7 @@ class TestCompletedBandWriter:
     """Exact counters and error semantics of the dense band writer."""
 
     def _write_fill_shard(self, shard_dir: Path, records: np.ndarray) -> None:
-        with open(complete_module._fill_shard_path(shard_dir, 0), "wb") as fh:
+        with open(fill_shards.fill_shard_path(shard_dir, 0), "wb") as fh:
             records.tofile(fh)
 
     def _call_writer(
@@ -1262,7 +1212,7 @@ class TestCompletedBandWriter:
         on_panel = np.ones(n_variants, dtype=bool)
         on_panel[12] = False
 
-        records = np.zeros(3, dtype=complete_module._FILL_RECORD_DTYPE)
+        records = np.zeros(3, dtype=fill_shards.FILL_RECORD_DTYPE)
         records["row"] = [6, 13, 0]
         records["ai"] = [0, 0, 0]
         records["z"] = [7.5, -2.5, 0.25]
@@ -1303,7 +1253,7 @@ class TestCompletedBandWriter:
         n_variants = 3
         on_panel = np.ones(n_variants, dtype=bool)
         out_to_src = np.arange(n_variants, dtype=np.int64)
-        records = np.zeros(1, dtype=complete_module._FILL_RECORD_DTYPE)
+        records = np.zeros(1, dtype=fill_shards.FILL_RECORD_DTYPE)
         records["row"] = [0]
         records["ai"] = [1]  # analysis 1 is masked out below
         records["z"] = [5.0]
@@ -1322,7 +1272,7 @@ class TestCompletedBandWriter:
         out_to_src = np.full(n_variants, -1, dtype=np.int64)
         observed = [i for i in range(n_variants) if i != _SIGNAL_MISSING_IDX]
         out_to_src[observed] = np.arange(len(observed))
-        records = np.zeros(1, dtype=complete_module._FILL_RECORD_DTYPE)
+        records = np.zeros(1, dtype=fill_shards.FILL_RECORD_DTYPE)
         records["row"], records["ai"], records["z"], records["se"] = [6], [0], [z], [se]
         return self._call_writer(
             tmp_path, store, n_variants, np.ones(n_variants, dtype=bool), out_to_src,
@@ -1392,7 +1342,7 @@ class TestPanelArtifacts:
 
     @staticmethod
     def _block(tmp_path: Path, name: str, **kwargs) -> Path:
-        _write_ld_block(
+        write_ld_block(
             tmp_path / "panel" / "EUR" / "1", name,
             [
                 ("1:900000:A:G", 0.35, 900_000),
@@ -1491,7 +1441,7 @@ class TestPanelFormatIndependence:
 
     @staticmethod
     def _panel(root: Path, **kwargs) -> Path:
-        _write_ld_block(
+        write_ld_block(
             root / "EUR" / "1", "900000-1300000",
             [
                 ("1:900000:A:G", 0.35, 900_000),
@@ -1502,7 +1452,7 @@ class TestPanelFormatIndependence:
             ],
             seed=0, **kwargs,
         )
-        _write_ld_block(
+        write_ld_block(
             root / "EUR" / "2", "1-500000",
             [
                 ("2:100000:A:G", 0.20, 100_000),
@@ -1629,6 +1579,26 @@ class TestEigendecompositionOnlyPanelImputesRealCells:
 
         root = open_store(dst).arrays(mode="r")
         assert root["imputed"][:].sum() > 0
+
+    def test_a_worker_that_reads_a_block_otherwise_than_the_plan_stops_the_completion(
+        self, tmp_path, signal_observed_store, signal_panel_npz_only, monkeypatch
+    ):
+        """The union axis and the completion record come from the plan's read of
+        the panel, and each block is read again where it is completed. A read that
+        names a row the plan's named differently stops the completion rather than
+        fill a panel the record does not describe."""
+        from dataclasses import replace
+
+        from block_rereads import reread_with
+
+        from opengwasdb.completion.ld_panel import PanelReadMismatchError
+
+        reread_with(monkeypatch, lambda block: replace(block, alids=[None, *block.alids[1:]]))
+        with pytest.raises(PanelReadMismatchError, match=r"names \d+ of \d+ rows"):
+            complete_dense_store(
+                signal_observed_store, tmp_path / "comp.opengwasdb", signal_panel_npz_only,
+                ancestry="EUR", min_cor=0.0, release_id="comp-signal-v1",
+            )
 
 
 # ── The declaration and the arrays are two accounts of the same cells ────────
@@ -1806,6 +1776,7 @@ class TestReaderSeam:
             min_cor=0.0,
             thresh=1e-5,
             checkpoint_path=observed_store / "unused-checkpoint",
+            placement=BlockPlacement(len(alids), 2, 0, "unused: no block is read"),
         )
         analysis_range, read = complete_module._make_reader(task)(None, alids)
         n_analyses = len(analysis_range)
@@ -1963,8 +1934,8 @@ def _stub_fits(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _boundary_panel(root: Path, ending: str, starting: str) -> Path:
-    _write_ld_block(root / "EUR" / "1", ending, _ENDING_AT, seed=0)
-    _write_ld_block(root / "EUR" / "1", starting, _STARTING_AT, seed=1)
+    write_ld_block(root / "EUR" / "1", ending, _ENDING_AT, seed=0)
+    write_ld_block(root / "EUR" / "1", starting, _STARTING_AT, seed=1)
     return root
 
 
@@ -1995,7 +1966,7 @@ def _imputed_by_block(store: Path, analysis: int) -> dict[str, int]:
 
 def test_shared_endpoints_name_the_block_that_starts_there(tmp_path: Path):
     panel = _boundary_panel(tmp_path, "900000-1050000", "1050000-1200000")
-    _write_ld_block(panel / "EUR" / "2", "1-500000", [("2:100000:A:G", 0.2, 100_000)])
+    write_ld_block(panel / "EUR" / "2", "1-500000", [("2:100000:A:G", 0.2, 100_000)])
 
     endpoints = shared_endpoints(
         list_all_blocks(panel, "EUR", "1") + list_all_blocks(panel, "EUR", "2")
@@ -2062,6 +2033,57 @@ def test_a_shared_endpoint_is_filled_by_the_block_that_starts_there_and_counted_
     assert a1["completion_n_imputed_total"] == "1"
 
 
+#: An indel at the shared endpoint that the panel declares no reference for, in both
+#: blocks: no ALID names it (ADR 0079), so it is never a cell of the Store.
+_UNNAMED_AT_END = ("1:1050000:A:AT", 0.2, 1_050_000)
+
+
+def _quality(store: Path) -> dict[tuple[int, str], tuple[int, int]]:
+    import sqlite3
+
+    with sqlite3.connect(str(store / "index.sqlite")) as conn:
+        return {
+            (int(a), str(b)): (int(i), int(m))
+            for a, b, i, m in conn.execute(
+                "SELECT analysis_index, block_id, n_imputed, n_missing FROM completion_quality"
+            )
+        }
+
+
+def test_a_panel_row_no_alid_names_is_counted_by_no_block(
+    tmp_path: Path, observed_store: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`completion_quality` counts only cells the Store holds (the owner's ruling of 11
+    Nov 2026, ADR 0039). An unnamed indel at the shared endpoint is in both blocks, and
+    ceding by ALID cannot reach it, so each block once counted it missing. Neither does
+    now: the counts are those of the same completion without it, and each quality row
+    counts exactly the cells its block owns, the named endpoint left to the block that
+    starts there (ADR 0072)."""
+    from completion_counts import assert_dense_counts_are_cells
+
+    _stub_fits(monkeypatch)
+    plain = _boundary_panel(tmp_path / "plain", "900000-1050000", "1050000-1200000")
+    unnamed = tmp_path / "unnamed"
+    write_ld_block(unnamed / "EUR" / "1", "900000-1050000", [*_ENDING_AT, _UNNAMED_AT_END])
+    write_ld_block(
+        unnamed / "EUR" / "1", "1050000-1200000", [_UNNAMED_AT_END, *_STARTING_AT], seed=1
+    )
+    counts = {}
+    for name, panel in (("plain", plain), ("unnamed", unnamed)):
+        dst = tmp_path / f"{name}.opengwasdb"
+        complete_dense_store(
+            observed_store, dst, panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+        )
+        counts[name] = _quality(dst)
+        assert_dense_counts_are_cells(dst, panel)
+        record = open_store(dst).manifest.provenance["completion"]
+        unplaced = record["panel_indels"]["unplaced"]["no_reference"]
+        assert unplaced == (2 if name == "unnamed" else 0), (name, record["panel_indels"])
+
+    assert counts["plain"], "the completion records no quality row"
+    assert counts["unnamed"] == counts["plain"]
+
+
 def test_a_shared_endpoint_does_not_depend_on_block_order(
     tmp_path: Path, observed_store: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -2103,7 +2125,7 @@ def test_two_overlapping_blocks_filling_one_cell_leave_it_missing_and_log_both(
         ("1:1050000:C:T", 0.40, 1_050_000),
         ("1:1100000:A:C", 0.45, 1_100_000),
     ]
-    _write_ld_block(ld_panel / "EUR" / "1", "1000000-1100000", overlapping, seed=2)
+    write_ld_block(ld_panel / "EUR" / "1", "1000000-1100000", overlapping, seed=2)
     # Fixture first: both blocks hold the cell's variant, at no shared endpoint.
     blocks = list_all_blocks(ld_panel, "EUR", "1")
     assert [len(b.snp_ids) for b in blocks] == [3, 5]

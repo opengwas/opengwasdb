@@ -13,24 +13,29 @@ Analyses, never by index.
 * **Sampled Analysis check.** For each sampled Analysis, every source-observed
   association is in the completed Store with identical decoded Z, SE and EAF and not
   marked imputed; the completed Store holds no observed association the source lacks;
-  and every imputed association lies inside one of the Analysis's retained regions.
-  An Analysis the ancestry filter did not admit is carried through observed-only
-  (ADR 0028), so it must hold no imputed cell at all.
+  every imputed association, and every missing one completion added, lies inside one
+  of the Analysis's retained regions. An Analysis the ancestry filter did not admit is
+  carried through observed-only (ADR 0028), so it must hold no imputed cell at all.
 
-**Retained regions** (ADR 0014, ADR 0039) are not stored as coordinates: a Store records
-only block ids and counts in `completion_quality`, and block extents live in the LD
-panel. They are rebuilt here the way completion chose them, from the panel, the
-Analysis's Trait position (or, with none, the blocks it already holds enough
-observations in) and the `cis_window_bp` the manifest records. The check therefore
-takes the panel and refuses without it: a check that quietly skipped the region
-criterion would pass a Store whose imputed cells sit anywhere. Block ids that
-`completion_quality` records but the rebuilt regions lack fail the check, so a panel
-other than the one completion used is noticed rather than trusted.
+**Retained regions** (ADR 0014, ADR 0039, issue #430) are rebuilt here by the call
+completion makes (`completion.regions`), from the region table the source's manifest
+declares (`regions.tsv`) and the LD panel: an Analysis's cis region, from its `cis` row
+or else its Trait position and the `cis_window_bp` the manifest records, and its
+significant trans regions, from its `significant_trans` rows. A Store's arrays hold no
+region, only block ids and counts in `completion_quality`, and which panel variants lie
+inside a region is the panel's to say. The check refuses what completion refuses, a
+source whose coverage is not `cis` and that declares no `regions.tsv`, and takes the
+panel, refusing without it: a check that quietly skipped the region criterion would pass
+a Store whose imputed cells sit anywhere. A
+region's rows are the panel variants of the blocks it overlaps that lie inside it. Block
+ids that `completion_quality` records but the rebuilt regions lack fail the check, so a
+panel other than the one completion used is noticed rather than trusted.
 
 Rows completion writes inside a retained region that are neither observed nor imputed
 (NaN, the panel positions it could not fill) are counted in the verdict and fail
-nothing. The verdict records the seed, the sample and the counts, so a pass is a
-measured zero; a refusal (`ObservedViewRefused`) writes none.
+nothing; one outside every region fails (`missing_outside_retained`). The verdict
+records the seed, the sample and the counts, so a pass is a measured zero; a refusal
+(`ObservedViewRefused`) writes none.
 """
 
 from __future__ import annotations
@@ -46,19 +51,22 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.associations import Cells, CsrReader, Inspection, State, Tally
+from opengwasdb.completion.block import panel_positions
 from opengwasdb.completion.ld_panel import (
     LDBlock,
     LdPanelNotFoundError,
     check_panel_has_chromosomes,
 )
 from opengwasdb.completion.regions import (
-    blocks_for_analysis,
+    analysis_regions,
     has_trait_position,
-    trait_less_blocks,
+    inside,
+    region_blocks,
 )
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
 from opengwasdb.model.analyses import Analysis, read_analysis_records
-from opengwasdb.model.enums import CompletionState
+from opengwasdb.model.enums import AssociationCoverage, CompletionState
+from opengwasdb.model.regions import Region, RegionTable, RegionTableError, read_store_regions
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.validation.observed_view import (
@@ -92,6 +100,7 @@ FAILING_COUNTERS = (
     "observed_missing_in_target",
     "target_observed_not_in_source",
     "imputed_outside_retained",
+    "missing_outside_retained",
     "imputed_in_non_admitted",
     "imputed_mask_invalid",
     "z_se_missingness_mismatch",
@@ -122,14 +131,16 @@ def check_ragged(
     """Compare an Observed-Only Ragged Store with the Reference-Completed one made from it.
 
     Raises `ObservedViewRefused` when the pair cannot be checked (mixed layouts, a source
-    that is not Observed-Only, a target that is not Reference-Completed, no LD panel, or
-    a panel or ancestry the completion was not run with). `ancestry` defaults to the one
-    the completed manifest records. A mismatch is a verdict with `passed` false.
+    that is not Observed-Only, a target that is not Reference-Completed, no LD panel, a
+    panel or ancestry the completion was not run with, or a source `regions.tsv` completion
+    would refuse, its absence from a source whose coverage is not `cis` among them).
+    `ancestry` defaults to the one the completed manifest records. A mismatch is a verdict
+    with `passed` false.
     """
     started = time.time()
     pair = _open_pair(Path(source_path), Path(target_path))
     completion = _completion_provenance(pair.target, pair.target_path)
-    panel = _open_panel(ld_panel, ancestry, completion)
+    panel = _open_panel(ld_panel, ancestry, completion, pair.source_path, pair.source)
     analyses = _analyses_record(pair)
     axis = _map_axis(pair.source_path, pair.target_path, pair.n_source_rows, pair.n_target_rows)
     record: dict[str, Any] = {
@@ -143,6 +154,9 @@ def check_ragged(
             "path": str(panel.path),
             "ancestry": panel.ancestry,
             "cis_window_bp": panel.cis_window_bp,
+        },
+        "regions": None if panel.table is None else {
+            "path": str(panel.table.path), "sha256": panel.table.sha256,
         },
         "failing_counters": list(FAILING_COUNTERS),
     }
@@ -219,19 +233,28 @@ def _completion_provenance(target: OpenGWASDBStore, path: Path) -> dict[str, Any
 
 @dataclass(frozen=True)
 class _Panel:
+    """What the retained regions are rebuilt from: the panel, the region table, and the
+    source's Association Coverage, which says whether the table may be absent."""
+
     path: Path
     ancestry: str
     cis_window_bp: int
+    table: RegionTable | None
+    coverage: AssociationCoverage
 
 
 def _open_panel(
-    ld_panel: str | Path | None, ancestry: str | None, completion: dict[str, Any]
+    ld_panel: str | Path | None,
+    ancestry: str | None,
+    completion: dict[str, Any],
+    source_path: Path,
+    source: OpenGWASDBStore,
 ) -> _Panel:
     if ld_panel is None:
         raise ObservedViewRefused(
-            "a Ragged pair needs --ld-panel: its retained regions are not stored as "
-            "coordinates, so they are rebuilt from the LD panel (and --ancestry) that "
-            "complete-ragged was run with"
+            "a Ragged pair needs --ld-panel: its retained regions' rows are the panel "
+            "variants inside them, so they are rebuilt from the LD panel (and --ancestry) "
+            "that complete-ragged was run with"
         )
     recorded = str(completion["ancestry"])
     if ancestry is not None and ancestry != recorded:
@@ -242,7 +265,14 @@ def _open_panel(
         check_panel_has_chromosomes(ld_panel, recorded)
     except LdPanelNotFoundError as exc:
         raise ObservedViewRefused(f"LD panel {ld_panel}: {exc}") from exc
-    return _Panel(Path(ld_panel), recorded, int(completion["cis_window_bp"]))
+    try:
+        table = read_store_regions(source_path)
+    except (OSError, RegionTableError) as exc:
+        raise ObservedViewRefused(f"source store {source_path}: {exc}") from exc
+    return _Panel(
+        Path(ld_panel), recorded, int(completion["cis_window_bp"]), table,
+        source.manifest.association_coverage,
+    )
 
 
 def _analyses_record(pair: _Pair) -> dict[str, Any]:
@@ -315,78 +345,67 @@ class _TargetRows:
             with closing(VariantAxis(target_path)) as axis:
                 self._loose = {r.alid: row for row, r in axis.by_indices(loose.tolist()).items()}
 
-    def rows(self, alids: Sequence[str]) -> np.ndarray:
-        found = [self._loose[a] for a in alids if a in self._loose]
-        indexed = [a for a in alids if is_indexable_alid(a)]
+    def aligned(self, alids: Sequence[str | None]) -> np.ndarray:
+        """Each ALID's completed-axis row, or -1 where the completed axis holds none."""
+        named = [(k, a) for k, a in enumerate(alids) if a is not None]
+        found = np.full(len(alids), -1, dtype=np.int64)
+        for k, a in named:
+            found[k] = self._loose.get(a, -1)
+        indexed = [(k, a) for k, a in named if is_indexable_alid(a)]
         if indexed and self._index.alids.size:
-            keys = np.array([a.encode("utf-8") for a in indexed], dtype=self._index.alids.dtype)
-            slot = np.minimum(np.searchsorted(self._index.alids, keys), self._index.alids.size - 1)
-            hit = self._index.alids[slot] == keys
-            found.extend(np.asarray(self._index.rows)[slot[hit]].tolist())
-        return np.unique(np.asarray(found, dtype=np.int64))
+            at, rows = self._indexed_rows(indexed)
+            found[at] = rows
+        return found
+
+    def _indexed_rows(self, indexed: list[tuple[int, str]]) -> tuple[np.ndarray, np.ndarray]:
+        """The positions among `indexed` the index holds, and their rows."""
+        keys = np.array([a.encode("utf-8") for _k, a in indexed], dtype=self._index.alids.dtype)
+        slot = np.minimum(np.searchsorted(self._index.alids, keys), self._index.alids.size - 1)
+        hit = self._index.alids[slot] == keys
+        at = np.array([k for k, _a in indexed], dtype=np.int64)[hit]
+        return at, np.asarray(self._index.rows)[slot[hit]]
 
 
-def _retained_blocks(
-    pair: _Pair, analyses: Sequence[Analysis], sampled: Sequence[int],
-    admitted: np.ndarray, panel: _Panel,
-) -> dict[int, list[LDBlock]]:
-    """Each sampled admitted Analysis's retained blocks, from the derivation completion uses.
+@dataclass(frozen=True)
+class _Retained:
+    """The sampled admitted Analyses' regions and the blocks those regions overlap."""
 
-    The trait-less ones are resolved together first (`trait_less_blocks`, one pass over the
-    panel); `blocks_for_analysis` then picks, per Analysis, its cis window or those blocks.
-    """
-    wanted = [i for i in sampled if admitted[i]]
-    held = _held_associations(pair, [i for i in wanted if not has_trait_position(analyses[i])])
-    own = trait_less_blocks(held, panel.path, panel.ancestry) if held else {}
-    by_window: dict[tuple[str, int], list[LDBlock]] = {}
-    return {i: _blocks_of(analyses[i], own.get(i, []), panel, by_window) for i in wanted}
+    regions: dict[int, tuple[Region, ...]]
+    blocks: dict[int, list[LDBlock]]
 
 
-def _blocks_of(
-    a: Analysis,
-    own: list[LDBlock],
-    panel: _Panel,
-    by_window: dict[tuple[str, int], list[LDBlock]],
-) -> list[LDBlock]:
-    """One Analysis's blocks; Analyses sharing a Trait position share one panel scan."""
-    if not has_trait_position(a):
-        return blocks_for_analysis(a, own, panel.path, panel.ancestry, panel.cis_window_bp)
-    window = (a.trait_chr, int(a.trait_bp))
-    if window not in by_window:
-        by_window[window] = blocks_for_analysis(
-            a, [], panel.path, panel.ancestry, panel.cis_window_bp
+def _retained(
+    analyses: Sequence[Analysis], sampled: Sequence[int], admitted: np.ndarray, panel: _Panel,
+) -> _Retained:
+    """Each sampled admitted Analysis's regions and blocks, by the calls completion makes
+    (`analysis_regions`, `region_blocks`), refused where completion would refuse."""
+    try:
+        regions = analysis_regions(
+            analyses, [i for i in sampled if admitted[i]], panel.table, panel.cis_window_bp,
+            panel.coverage,
         )
-    return by_window[window]
-
-
-def _held_associations(
-    pair: _Pair, indices: Sequence[int]
-) -> dict[int, list[tuple[str, str]]]:
-    """The `(ALID, chromosome)` of every source association of the given Analyses."""
-    sequence = pair.source_reader.structure
-    rows = {i: sequence.variant_index(*sequence.span(i)) for i in indices}
-    wanted = sorted({int(v) for r in rows.values() for v in r})
-    with closing(VariantAxis(pair.source_path)) as axis:
-        records = axis.by_indices(wanted)
-    return {
-        i: [(records[v].alid, records[v].chromosome) for v in r.tolist()] for i, r in rows.items()
-    }
+    except RegionTableError as exc:
+        raise ObservedViewRefused(str(exc)) from exc
+    return _Retained(regions, region_blocks(regions, panel.path, panel.ancestry).blocks)
 
 
 class _RegionRows:
-    """The completed-axis rows of each block's panel positions, resolved once per block."""
+    """The completed-axis rows of an Analysis's regions: the panel variants of the blocks
+    they overlap that lie inside them, each block's rows and positions resolved once."""
 
     def __init__(self, target_rows: _TargetRows) -> None:
         self._target_rows = target_rows
-        self._by_block: dict[str, np.ndarray] = {}
+        self._by_block: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
-    def of(self, blocks: Sequence[LDBlock]) -> np.ndarray:
+    def of(self, blocks: Sequence[LDBlock], regions: Sequence[Region]) -> np.ndarray:
         parts = []
         for block in blocks:
             if block.block_id not in self._by_block:
-                alids = [a for a in block.alids if a is not None]
-                self._by_block[block.block_id] = self._target_rows.rows(alids)
-            parts.append(self._by_block[block.block_id])
+                self._by_block[block.block_id] = (
+                    self._target_rows.aligned(block.alids), panel_positions(block)
+                )
+            rows, positions = self._by_block[block.block_id]
+            parts.append(rows[inside(regions, block.chrom, positions) & (rows >= 0)])
         return np.unique(np.concatenate(parts)) if parts else np.empty(0, dtype=np.int64)
 
 
@@ -429,8 +448,8 @@ class _Sample:
     """What the per-Analysis comparison needs beyond the pair: the regions."""
 
     admitted: np.ndarray
-    blocks: dict[int, list[LDBlock]]
-    regions: _RegionRows
+    retained: _Retained
+    rows: _RegionRows
     quality: dict[int, set[str]]
 
 
@@ -445,8 +464,8 @@ def _sample_and_compare(
     sampled = sorted(chosen)
     sample = _Sample(
         admitted=admitted,
-        blocks=_retained_blocks(pair, source, sampled, admitted, panel),
-        regions=_RegionRows(_TargetRows(pair.target_path, pair.n_target_rows)),
+        retained=_retained(source, sampled, admitted, panel),
+        rows=_RegionRows(_TargetRows(pair.target_path, pair.n_target_rows)),
         quality=_quality_blocks(pair.target),
     )
     totals = dict.fromkeys(_TOTAL_KEYS, 0)
@@ -459,7 +478,7 @@ def _sample_and_compare(
         for plane in _DIFF_PLANES:
             max_diff[plane] = max(max_diff[plane], diffs[plane])
         entry = _listing_entry(source[i], i, chosen[i], bool(admitted[i]), counts)
-        entry["blocks"] = sorted(b.block_id for b in sample.blocks.get(i, []))
+        entry["blocks"] = sorted(b.block_id for b in sample.retained.blocks.get(i, []))
         listing.append(entry)
     return {
         "sample": {
@@ -476,10 +495,10 @@ def _sample_and_compare(
 def _compare_analysis(
     pair: _Pair, axis: _AxisMap, sample: _Sample, analysis: int
 ) -> tuple[dict[str, int], dict[str, float]]:
-    retained = sample.blocks.get(analysis, [])
+    retained = sample.retained.blocks.get(analysis, [])
+    region = sample.rows.of(retained, sample.retained.regions.get(analysis, ()))
     counts, diffs = _check_analysis(
-        pair, axis, analysis,
-        admitted=bool(sample.admitted[analysis]), region=sample.regions.of(retained),
+        pair, axis, analysis, admitted=bool(sample.admitted[analysis]), region=region,
     )
     counts["regions"] = len(retained)
     counts["quality_blocks_not_in_regions"] = len(
@@ -589,6 +608,7 @@ def _check_analysis(
     both = source_observed & present
     matched = np.zeros(len(target_vi), dtype=bool)
     matched[at[both]] = True
+    outside, added = ~np.isin(target_vi, region), _added(len(target_vi), at[present])
     # The target's States and counts are the readers' own (spec §15, ADR 0070).
     source_tally, target_tally = src.tally(), tgt.tally()
     clean = tgt.state == State.OBSERVED
@@ -608,9 +628,8 @@ def _check_analysis(
         "observed_marked_imputed": int((both & (gather(imputed) != 0)).sum()),
         "target_observed_not_in_source": int((clean & ~matched).sum()),
         "imputed_in_non_admitted": 0 if admitted else int(is_imputed.sum()),
-        "imputed_outside_retained": (
-            int((is_imputed & ~np.isin(target_vi, region)).sum()) if admitted else 0
-        ),
+        "imputed_outside_retained": int((is_imputed & outside).sum()) if admitted else 0,
+        "missing_outside_retained": int((added & (tgt.state == State.MISSING) & outside).sum()),
     }
     diffs: dict[str, float] = {}
     for plane in _DIFF_PLANES:
@@ -618,6 +637,18 @@ def _check_analysis(
             getattr(source_cells, plane)[both], getattr(target_cells, plane)[at[both]]
         )
     return counts, diffs
+
+
+def _added(n_target: int, from_source: np.ndarray) -> np.ndarray:
+    """Which target rows completion added: those no source row maps to (`from_source`).
+
+    A missing target row is either a source's stored missing row, which completion
+    carries wherever it lies, or one completion added, which must lie inside one of the
+    Analysis's regions (issue #430).
+    """
+    added = np.ones(n_target, dtype=bool)
+    added[from_source] = False
+    return added
 
 
 def _marker_counts(source: Tally, target: Tally) -> dict[str, int]:

@@ -116,7 +116,7 @@ def ragged_completion_n2(out: Path) -> None:
     prefix = trc._make_besd_fixture(d)
     build_ragged_from_besd(
         prefix, observed, store_id="test", release_id="obs-v1", tissue="Blood",
-        association_coverage="cis_and_signals",
+        association_coverage="cis",
     )
     panel = trc._make_ld_panel(d, "1", 900_000, 1_300_000)
     kwargs = {"ancestry": "EUR", "cis_window_bp": 500_000, "min_cor": 0.0, "release_id": "comp-v1"}

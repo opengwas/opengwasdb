@@ -69,6 +69,7 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store import check_format_version_stamp
 from opengwasdb.store.arrays import open_group, open_group_for_write
 from opengwasdb.store.open import (
     OpenGWASDBStore,
@@ -157,10 +158,14 @@ class _SharedAxis:
 
 def _open_observed_hybrid_source(source_path: Path) -> StoreManifest:
     """Open the source release and refuse anything but an Observed-Only
-    Hybrid in a writable format -- before any work begins (ADR 0038 §4)."""
+    Hybrid in a writable format, stamped as its features give -- before any
+    work begins (ADR 0038 §4, spec §21.3)."""
     src_manifest = open_store(source_path).manifest
-    check_writable_format_version(
-        src_manifest.format_version, source=f"source release {source_path}"
+    where = f"source release {source_path}"
+    check_format_version_stamp(
+        check_writable_format_version(src_manifest.format_version, source=where),
+        carries_regions=src_manifest.regions is not None,
+        source=where,
     )
     if src_manifest.primary_layout is not PrimaryStorageLayout.HYBRID:
         raise ValueError(
@@ -709,8 +714,11 @@ def _write_completed_manifest(
         store_id=src_manifest.store_id,
         release_id=release_id,
         # Preserved, not re-stamped -- see ADR 0038 §4 and the dense path,
-        # which checked it writable before any work began.
-        format_version=src_manifest.format_version,
+        # which checked it writable before any work began -- and the stamp its
+        # features give (spec §21.3), as the source was checked to be.
+        format_version=check_format_version_stamp(
+            src_manifest.format_version, carries_regions=src_manifest.regions is not None
+        ),
         primary_layout=PrimaryStorageLayout.HYBRID,
         # Preserved, not re-decided: a completion fills the Dense Component's
         # missing cells, so it neither widens nor narrows what the release

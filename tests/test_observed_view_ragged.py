@@ -13,9 +13,14 @@ Analysis        ancestry   source associations          completed against the on
 =============== ========== ============================= =====================================
 `eur_rich`      EUR, cis   5 on the block + 1:400000     the panel-only SNP is imputed (1)
 `eur_sparse`    EUR, cis   2 on the block                too few to fit: 4 NaN rows
-`eur_traitless` EUR, none  5 on the block                block found by its own variants; 1 imputed
+`eur_traitless` EUR, none  5 on the block                its significant region spans it; 1 imputed
 `afr_other`     AFR        5 on the block                not admitted: carried through
 =============== ========== ============================= =====================================
+
+`eur_traitless` has no Trait position, so the source is built with the region table
+(`TABLE`) that gives it its one significant region, as `regions.tsv`, which completion and
+the check both read (issue #430); the others are completed in their Trait position's cis
+window.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ import test_ragged_completion as trc
 import zarr
 from cli_output import normalize_cli_output
 from presence_fixtures import RAGGED_Z_GROUP, float_plane_z, plant_payload_nan
+from region_tables import edit_manifest, with_regions, write_region_table
 from stored_rows import stored_rows
 from typer.testing import CliRunner
 
@@ -65,6 +71,9 @@ ANALYSES = [
     {"analysis_id": "eur_traitless", "ancestry": "EUR"},
     {"analysis_id": "afr_other", "trait_chr": "1", "trait_bp": 1_050_000, "ancestry": "AFR"},
 ]
+#: The region table completion and the check are given: `eur_traitless`'s significant region
+#: spans the block's six panel SNPs, 900,000-1,150,000.
+TABLE = [("eur_traitless", "significant_trans", "1", 900_000, 1_150_000)]
 # Hand counts: source associations 6 + 2 + 5 + 5; the one panel-only SNP imputed for the two
 # Analyses that observe five block SNPs; the four block positions `eur_sparse` cannot fit are
 # NaN rows; one retained region (the block) for each of the three admitted Analyses.
@@ -91,6 +100,7 @@ def _build_source(
     root: Path,
     sources: dict[str, list[tuple[int, str, str]]],
     analyses: list[dict] = ANALYSES,
+    regions: list[tuple[str, str, str, int, int]] = TABLE,
 ) -> Path:
     filtered = root / "filtered"
     filtered.mkdir(parents=True)
@@ -113,6 +123,7 @@ def _build_source(
     build_ragged_from_ssf(
         manifest, filtered, observed, store_id="test", release_id="obs-v1",
         association_coverage="cis_and_signals",
+        regions=write_region_table(root / "sparse_regions.tsv", regions),
     )
     return observed
 
@@ -326,6 +337,46 @@ def test_an_imputed_association_outside_the_retained_regions_fails(tmp_path, pai
     assert "imputed_outside_retained" in verdict["failures"]
 
 
+#: A narrower table than the source was completed with (issue #430): `eur_traitless`'s
+#: significant region stops short of the SNP completion imputed for it, 1:1050500, and
+#: `eur_sparse` gets a cis row that leaves three of its four NaN rows (1,050,500, 1,100,000
+#: and 1,150,000) outside.
+NARROWER = [
+    ("eur_traitless", "significant_trans", "1", 900_000, 1_000_000),
+    ("eur_sparse", "cis", "1", 900_000, 1_000_000),
+]
+
+
+def test_imputed_and_missing_rows_outside_the_regions_fail(tmp_path, pair):
+    """The Store's added rows checked against regions they leave: the imputed one and the
+    missing ones each fail, though the panel holds every one of them."""
+    observed, completed, panel = pair
+    out = tmp_path / "verdict.json"
+    with_regions(observed, NARROWER)
+
+    result = _run(observed, completed, out, panel=panel)
+
+    assert result.exit_code == 1, result.output
+    verdict = _verdict(result, out)
+    assert verdict["totals"]["imputed_outside_retained"] == 1, verdict["totals"]
+    assert verdict["totals"]["missing_outside_retained"] == 3, verdict["totals"]
+    assert {"imputed_outside_retained", "missing_outside_retained"} <= set(verdict["failures"])
+
+
+def test_a_source_whose_coverage_is_not_cis_is_refused_without_regions_tsv(tmp_path, pair):
+    """As completion refuses it (issue #430): the source is `cis_and_signals`, whose regions
+    only the `regions.tsv` its build recorded holds."""
+    observed, completed, panel = pair
+    (observed / "regions.tsv").unlink()
+    edit_manifest(observed, lambda m: {k: v for k, v in m.items() if k != "regions"})
+    out = tmp_path / "verdict.json"
+
+    _assert_refused(
+        _run(observed, completed, out, panel=panel), out,
+        "Association Coverage is cis_and_signals and it holds no regions.tsv",
+    )
+
+
 def test_an_imputed_cell_in_a_non_admitted_analysis_fails(tmp_path, pair):
     _, completed, _ = pair
     position = _flat(completed, 3, "1:900000:A:G")
@@ -514,28 +565,26 @@ def test_a_target_that_is_not_reference_completed_is_refused(tmp_path, pair):
     )
 
 
-def _dense_pair(tmp_path: Path) -> tuple[Path, Path]:
-    root = tmp_path / "dense"
-    root.mkdir()
-    return tcov._build_pair(root, tcov.ROWS, tdc._make_ld_panel(root))
-
-
-def _hybrid_pair(tmp_path: Path) -> tuple[Path, Path]:
+@pytest.fixture(scope="module")
+def _other_layout_pairs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[Path, Path]]:
+    """A Dense and a Hybrid pair, built once: a refusal reads neither Store's cells."""
     import test_observed_view_hybrid as toh
 
-    root = tmp_path / "hybrid"
-    root.mkdir()
-    observed = toh._build_observed(root, chunk_shape=(2, 1))
-    return observed, toh._complete(observed, root)
+    dense, hybrid = tmp_path_factory.mktemp("dense"), tmp_path_factory.mktemp("hybrid")
+    hybrid_observed = toh._build_observed(hybrid, chunk_shape=(2, 1))
+    return {
+        "dense": tcov._build_pair(dense, tcov.ROWS, tdc._make_ld_panel(dense)),
+        "hybrid": (hybrid_observed, toh._complete(hybrid_observed, hybrid)),
+    }
 
 
 @pytest.mark.parametrize("layout", ["dense", "hybrid"])
 @pytest.mark.parametrize("option", ["--ld-panel", "--ancestry"])
 def test_a_ragged_only_option_is_refused_for_a_dense_or_hybrid_pair(
-    tmp_path, pair, layout, option
+    tmp_path, pair, layout, option, _other_layout_pairs
 ):
     _, _, panel = pair
-    source, target = (_dense_pair if layout == "dense" else _hybrid_pair)(tmp_path)
+    source, target = _other_layout_pairs[layout]
     out = tmp_path / "verdict.json"
     value = str(panel) if option == "--ld-panel" else "EUR"
 
@@ -627,8 +676,10 @@ def test_the_same_seed_gives_the_same_verdict(tmp_path, pair):
 #   1/300000-380000  starts exactly where the window ends       -> region
 #   1/300001-350001  starts one base after the window ends      -> outside
 #   1/400000-480000  far outside                                -> outside
-# Without a Trait position a block is a region once the Analysis holds `min_observed_points()`
-# = 4 observations at its panel SNPs.
+# Without a Trait position an Analysis's regions are its region table's significant ones
+# (`REGION_TABLE`, issue #430): `tl_significant`'s, 110,000-130,000, overlaps the first block
+# alone. `tl_suggestive` holds five of that block's panel SNPs, which the rule before #430 made
+# a region, but the table gives it only a suggestive lead and QC-panel rows, so it has none.
 BLOCKS = {
     "100000-199999": [100_000, 110_000, 130_000, 190_000, 199_999],
     "150000-200000": [150_000, 160_000, 170_000, 180_000, 200_000],
@@ -640,8 +691,8 @@ BLOCKS = {
 CIS_WINDOW_BP = 50_000
 REGION_ANALYSES = [
     {"analysis_id": "cis", "trait_chr": "1", "trait_bp": 250_000, "ancestry": "EUR"},
-    {"analysis_id": "tl_at_threshold", "ancestry": "EUR"},
-    {"analysis_id": "tl_below_threshold", "ancestry": "EUR"},
+    {"analysis_id": "tl_significant", "ancestry": "EUR"},
+    {"analysis_id": "tl_suggestive", "ancestry": "EUR"},
     {"analysis_id": "tl_off_panel", "ancestry": "EUR"},
     {"analysis_id": NO_EAF, "trait_chr": "1", "trait_bp": 250_000, "ancestry": "AFR"},
 ]
@@ -653,18 +704,25 @@ def _snps(positions: list[int]) -> list[tuple[int, str, str]]:
 
 REGION_SOURCES = {
     "cis": _snps(BLOCKS["220000-280000"]),
-    # 4 panel SNPs of the first block: exactly at the threshold
-    "tl_at_threshold": _snps(BLOCKS["100000-199999"][:4]),
-    # 3 panel SNPs of the first block: one below it
-    "tl_below_threshold": _snps(BLOCKS["100000-199999"][:3]),
+    # 4 panel SNPs of the first block
+    "tl_significant": _snps(BLOCKS["100000-199999"][:4]),
+    # all 5 panel SNPs of the first block, none of them in a significant region
+    "tl_suggestive": _snps(BLOCKS["100000-199999"]),
     # 3 panel SNPs of the last block plus one variant inside its extent that is not a panel SNP
     "tl_off_panel": _snps([*BLOCKS["400000-480000"][:3], 450_000]),
     NO_EAF: _snps(BLOCKS["220000-280000"]),
 }
+REGION_TABLE = [
+    ("tl_significant", "significant_trans", "1", 110_000, 130_000),
+    ("tl_significant", "qc_panel", "1", 100_000, 480_000),
+    ("tl_suggestive", "suggestive_trans", "1", 110_000, 110_000),
+    ("tl_suggestive", "qc_panel", "1", 100_000, 480_000),
+    ("tl_off_panel", "qc_panel", "1", 400_000, 480_000),
+]
 EXPECTED_BLOCKS = {
     "cis": ["1/150000-200000", "1/220000-280000", "1/300000-380000"],
-    "tl_at_threshold": ["1/100000-199999"],
-    "tl_below_threshold": [],
+    "tl_significant": ["1/100000-199999"],
+    "tl_suggestive": [],
     "tl_off_panel": [],
     NO_EAF: [],
 }
@@ -688,7 +746,7 @@ def _write_multi_block_panel(root: Path) -> Path:
 @pytest.fixture(scope="module")
 def _region_pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path, Path]:
     root = tmp_path_factory.mktemp("observed-view-ragged-regions")
-    observed = _build_source(root, REGION_SOURCES, REGION_ANALYSES)
+    observed = _build_source(root, REGION_SOURCES, REGION_ANALYSES, REGION_TABLE)
     panel = _write_multi_block_panel(root)
     completed = root / "comp.opengwasdb"
     complete_ragged_store(
@@ -713,7 +771,8 @@ def test_retained_regions_follow_the_hand_derived_block_table(tmp_path, _region_
 
 def test_completion_used_no_block_outside_the_hand_derived_table(_region_pair_seed):
     """The completed Store's own record of its blocks agrees with the hand table, independently
-    of the check: neither the 199,999 block nor the 3-observation blocks were completed."""
+    of the check: neither the 199,999 block nor a block holding no significant region was
+    completed."""
     _, completed, _ = _region_pair_seed
     ids = [a.analysis_id for a in read_analysis_records(completed / "analyses.tsv")]
     root = completed / "index.sqlite"
@@ -727,4 +786,4 @@ def test_completion_used_no_block_outside_the_hand_derived_table(_region_pair_se
     for name, expected in EXPECTED_BLOCKS.items():
         assert used[name] <= set(expected), (name, used[name])
     assert used["cis"] == set(EXPECTED_BLOCKS["cis"])
-    assert used["tl_at_threshold"] == set(EXPECTED_BLOCKS["tl_at_threshold"])
+    assert used["tl_significant"] == set(EXPECTED_BLOCKS["tl_significant"])

@@ -580,6 +580,159 @@ do.
 
 ---
 
+### `benchmark_ragged_completion_streams.py` (#424)
+
+Times each phase of `complete-ragged` on a subset of a real Ragged Store and
+projects Phase 3 to the full Store: everything after the blocks, the shard
+pass, the assembly, the CSR write with its variant index, and the top hits. Written for
+OGS-00006 (1,400 Analyses, 10.0B fills), whose first completion held 178 GB
+at 11% of its merge. The subset uses two existing mechanisms and nothing new
+in the package: `impute_analysis_ids` completes the first `--n-analyses`
+Analyses and carries the rest observed-only, and `--ld-dir` may be a directory
+of a few chromosomes symlinked from the real panel. Phases are timed by
+wrapping the completion module's own phase functions under either
+generation's names, so one script times the code before #424 and after it;
+RSS is sampled per phase with `benchmarks/_rss.py`, and the run goes under
+`/usr/bin/time -v` for the lifetime peak. Each artifact records the commit of
+the tree whose package it measured, and a run refuses a tree with uncommitted
+changes under `opengwasdb/`.
+
+Two Phase 3 costs a subset cannot show are measured apart. `shard-append`: the
+shard pass files each checkpoint's records a batch at a time, and a subset has
+one batch where the full Store has its whole batch count. `batch-peak`: what
+reading one batch shard allocates per byte of shard, and what stays held while
+the next is read, since a subset never holds a full batch. `project` combines
+two runs and both: time off the line through the two runs' Phase 3 against
+fills plus the extra filing cost per checkpoint, memory from its parts
+(`_memory_model`), set beside the larger run's measured peaks.
+
+The artifacts of the #424 runs are in
+`docs/benchmark-output/ragged_completion_streams/`. They were run at `1ab2b09`
+and `bd04698`, on the published Observed-Only Store as it then was (format
+0.2.0), before #430 bounded completion to regions and #381 made completion
+refuse a 0.2.0 source. The commands below are those runs; they reproduce them
+only from a worktree of those commits (see the paragraph after them). At today's
+code, use the #430 recipe below, whose source and panel completion accepts.
+
+```bash
+# A chr15-22 panel: the real panel's chromosome directories, linked, and the
+# files beside them, the indel-reference table among them.
+mkdir -p /data/opengwasdb/work/odb424/panel-chr15-22/EUR
+for f in /data/opengwasdb/reference/ld/EUR/*; do b=$(basename "$f")
+  if [[ ! "$b" =~ ^[0-9]+$ ]] || (( b >= 15 )); then
+    ln -sfn "$f" /data/opengwasdb/work/odb424/panel-chr15-22/EUR/"$b"; fi; done
+
+for n in 25 100; do
+  /usr/bin/time -v pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py \
+      run --source /data/opengwasdb/stores/OGS-00006/store.opengwasdb \
+      --ld-dir /data/opengwasdb/work/odb424/panel-chr15-22 --n-analyses $n --n-workers 16 \
+      --dest /data/opengwasdb/work/odb424/runs/head-$n.opengwasdb \
+      --output docs/benchmark-output/ragged_completion_streams/head-$n.json
+done
+pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py shard-append \
+    --batches 47 --output docs/benchmark-output/ragged_completion_streams/shard-append.json
+pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py batch-peak \
+    --output docs/benchmark-output/ragged_completion_streams/batch-peak.json
+pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py project \
+    docs/benchmark-output/ragged_completion_streams/head-25.json \
+    docs/benchmark-output/ragged_completion_streams/head-100.json \
+    --full-fills 10001552498 --full-checkpoints 1348 \
+    --shard-append docs/benchmark-output/ragged_completion_streams/shard-append.json \
+    --batch-peak docs/benchmark-output/ragged_completion_streams/batch-peak.json \
+    --output docs/benchmark-output/ragged_completion_streams/projection.json
+```
+
+`--batches 47` is the full Store's count: 12.36B cells at 2**28 records a
+batch; `project` refuses a measurement of fewer. To time the code before #424,
+run `run` from a detached worktree of that commit (`git worktree add --detach`)
+with `PYTHONPATH` set to it and `python -P`, so its package is imported
+instead of the checkout's and the artifact names its commit.
+
+**Since #430** completion fills each Analysis only inside the regions its source
+Store records in `regions.tsv`, so OGS-00006, whose coverage is `signals_only`,
+runs from an Observed-Only source built with its bundle's region table
+(`build-ragged-ssf --regions .../stores/OGS-00006/sidecars/sparse_regions.tsv`;
+the published Store is now Reference-Completed, and was built without one). **Since
+#381** that source must also be a build of this package: completion refuses a Store
+whose indels are sorted (format 0.2.1 or earlier, ADR 0079), and every build of this
+package writes 0.2.2. A 0.2.2 build of OGS-00006 has no indel at all: its GWAS-SSF
+sources carry no harmoniser columns, so the build drops their 594,623 indel variants
+(`indel_ssf_unharmonised`) and keeps the same 11,491,840 SNVs. A run from a source
+carrying `regions.tsv` adds `region_accounting`: per completed Analysis, its
+significant regions and their extent on the run's panel, and the cells completion
+added it, read back from both Stores and tested against the table here rather than
+by the package's own region code; `added_outside_regions` and `observed_rows_lost`
+must be 0. `regions-projection` counts, for every Analysis, the panel variants inside
+its regions that it does not observe, which is what a completion adds it: on a run's
+panel it is checked against that run, Analysis by Analysis
+(`checked_against_run.disagreeing` must be empty), and on the full panel it is the
+full Store's cells, the `--full-fills` for `project`. The #430 artifacts are
+`regions-*.json` in the same directory.
+
+The chr15-22 panel holds the real panel's chromosome directories 15 to 22 and its
+indel-reference table (`indel_reference.tsv.gz`, its index and its provenance),
+linked. Without the table the panel places no indel and the runs complete none
+(ADR 0079). `STORES` is a checkout of opengwasdb-stores, whose bundle holds the
+region table, and the source is built from the bundle's own build argv (the
+published Store's `records/build.json`) with `--admission-record`, required since
+#357, and `--regions` added.
+
+```bash
+STORES=path/to/opengwasdb-stores
+SRC=/data/opengwasdb/work/odb430/OGS-00006-0.2.2.opengwasdb
+PANEL=/data/opengwasdb/work/odb430/panel-chr15-22
+OUT=docs/benchmark-output/ragged_completion_streams
+pixi run -e dev opengwasdb build-ragged-ssf /data/opengwasdb/stores/OGS-00006/work/analyses.tsv \
+    /data/opengwasdb/stores/OGS-00006/source $SRC --store-id OGS-00006 --release-id OGS-00006 \
+    --association-coverage signals_only --stored-effect-scale sd \
+    --admission-record $SRC.admission \
+    --regions $STORES/stores/OGS-00006/sidecars/sparse_regions.tsv
+mkdir -p $PANEL/EUR
+for c in $(seq 15 22); do ln -sfn /data/opengwasdb/reference/ld/EUR/$c $PANEL/EUR/$c; done
+for f in indel_reference.tsv.gz indel_reference.tsv.gz.tbi indel_reference.json; do
+  ln -sfn /data/opengwasdb/reference/ld/EUR/$f $PANEL/EUR/$f; done
+for n in 25 100; do
+  /usr/bin/time -v pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py \
+      run --source $SRC --n-analyses $n --n-workers 16 --ld-dir $PANEL \
+      --dest /data/opengwasdb/work/odb430/runs/head-$n.opengwasdb --output $OUT/regions-head-$n.json
+done
+for panel in $PANEL /data/opengwasdb/reference/ld; do
+  pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py regions-projection \
+      --source $SRC --ld-dir $panel --run $OUT/regions-head-100.json \
+      --output $OUT/regions-projection-$(basename $panel).json
+done
+# The full Store's shape: 1,038,245 cells over 1,286 blocks, one batch.
+pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py shard-append \
+    --analyses 6 --fills-per-block 135 --batches 1 --output $OUT/regions-shard-append.json
+pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py project \
+    $OUT/regions-head-25.json $OUT/regions-head-100.json \
+    --full-fills 1038245 --full-checkpoints 1286 \
+    --shard-append $OUT/regions-shard-append.json --batch-peak $OUT/batch-peak.json \
+    --output $OUT/regions-projection-phase3.json
+```
+
+`regions-head-*.json`, `regions-projection-*.json` and `regions-shard-append.json`
+were measured at `b897533` (#432), on a build of package 0.9.0 carrying
+`regions.tsv`: format 0.2.1, its indels sorted and the panel read as before #381,
+every indel named by its sorted alleles and none re-signed. On that reading the full
+Store adds 1,038,245 cells (`regions-projection-ld.json`), where its first completion
+added 10,001,552,498; the subsets imputed every cell they added, and the chr15-22
+projection agrees with the 100-Analysis run for all 100 Analyses. `project` reads
+Phase 3's time off a line through two runs 17,191 fills apart, both carrying the
+same 58M observed rows, so host noise sets its slope: here the 100-Analysis run's
+Phase 3 took 184 s and the 25-Analysis run's 192 s, so `project` records no time
+(`phase3_not_fitted`) rather than extrapolate a negative one. The full Store holds
+59.1M cells, 1.7% more than the 100-Analysis run's 58.1M; the memory model puts it
+at 9.4 GB at assembly and 12.8 GB at write.
+
+`regions-0.2.1-*.json` were measured at `48c0576`, before #432, on a build of this
+branch whose indels were spelt reference first: format 0.2.1 as #381 first numbered
+it, 0.2.2 since main's #432 took 0.2.1. The 100-Analysis run imputes 38,861 cells,
+none outside a region, and loses no observed row; on chromosomes 15-22 the
+projection agrees with it Analysis by Analysis; on the full panel the full Store
+adds 2,160,436 cells, about twice the sorted figure, because the build drops the
+Store's indels and every panel indel inside a region becomes a cell completion adds.
+
 ### `benchmark_store_comparison.py`
 
 Compares several Store Releases holding **the same data in different physical

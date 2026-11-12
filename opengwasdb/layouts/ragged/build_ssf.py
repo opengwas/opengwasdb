@@ -60,10 +60,17 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
     StoredEffectScale,
 )
+from opengwasdb.model.manifest import RegionsEntry
 from opengwasdb.model.manifest_columns import (
     ManifestColumns,
     require_columns,
     resolve_manifest_columns,
+)
+from opengwasdb.model.regions import (
+    RegionTable,
+    check_region_table,
+    read_region_table,
+    store_regions,
 )
 from opengwasdb.readers.assembly import declared_build
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
@@ -331,6 +338,7 @@ def build_ragged_from_ssf(
     admission_record: str | Path | None = None,
     chain_file: str | Path | None = None,
     liftover_failure_threshold: float = 0.01,
+    regions: str | Path | None = None,
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from filtered GWAS-SSF inputs.
 
@@ -347,10 +355,12 @@ def build_ragged_from_ssf(
 
     Memory: a build with any non-GRCh38 source holds every Analysis's admitted
     rows until the lift has placed them; a GRCh38-only build reads one Analysis
-    at a time.
+    at a time. ``regions``, the bundle's region table, is refused whole before
+    anything is built and written into the Store as `regions.tsv` (issue #430).
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     _validate_stored_effect_scale(stored_effect_scale)
+    table = None if regions is None else read_region_table(regions, RAGGED_REFERENCE_ASSEMBLY)
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         return _build_ssf_release(
@@ -369,6 +379,7 @@ def build_ragged_from_ssf(
                 lift=LiftOptions(
                     None if chain_file is None else Path(chain_file), liftover_failure_threshold
                 ),
+                regions=table,
             ),
         )
 
@@ -386,6 +397,8 @@ class _SsfBuildRequest:
     allow_unverified_eaf: bool
     admission_record: Path
     lift: LiftOptions
+    #: The Release Bundle's region table, written into the Store as `regions.tsv`.
+    regions: RegionTable | None = None
 
 
 def _build_ssf_release(
@@ -422,6 +435,10 @@ def _build_ssf_release(
         eaf_report=eaf_report,
         stored_effect_scale=request.stored_effect_scale,
     )
+    regions = None
+    if request.regions is not None:
+        print("Writing regions.tsv...")
+        regions = store_regions(staged.path, request.regions)
     _write_manifest(
         staged,
         request.store_id,
@@ -438,6 +455,7 @@ def _build_ssf_release(
             allow_unverified=request.allow_unverified_eaf
         ),
         lift=ingested.lift,
+        regions=regions,
     )
     return _finalise_result(
         out, len(variants), len(analytes), csr.n_associations, request.coverage
@@ -450,6 +468,8 @@ def _read_sources(
     """Phase 1: the manifest, the lift refused if it cannot be done, and every source read."""
     analytes = _read_manifest(manifest_path, filtered_dir)
     require_liftable([(a.analysis_id, a.source_build) for a in analytes], request.lift.chain_file)
+    if request.regions is not None:
+        check_region_table(request.regions, (a.analysis_id for a in analytes))
     print(f"Manifest: {len(analytes)} analyses")
     record = admission.AdmissionRecord.open(
         request.admission_record,
@@ -958,10 +978,12 @@ def _write_manifest(
     encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
     lift: dict[str, object] | None = None,
+    regions: RegionsEntry | None = None,
 ) -> None:
     staged.write_manifest(
         observed_only_release_manifest(
             PrimaryStorageLayout.RAGGED,
+            regions=regions,
             reference_assembly=RAGGED_REFERENCE_ASSEMBLY,
             store_id=store_id,
             release_id=release_id,
