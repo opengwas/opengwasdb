@@ -483,17 +483,19 @@ def regions(b: Bench, store: str, widths: tuple[int, ...]) -> None:
             del opened
 
 
-def scattered(b: Bench, store: str, sample: Sample, chroms: tuple[str | None, ...]) -> None:
+def scattered(
+    b: Bench, store: str, sample: Sample, chroms: tuple[str | None, ...], seeds: int
+) -> None:
     for chrom in chroms:
-        for seed in (SEED, SEED + 1, SEED + 2):
+        for seed in range(SEED, SEED + seeds):
             alids = sample.alids(sample.rows(500, chrom, seed))
             meta = {"case": "scattered", "chrom": chrom or "genome", "seed": seed}
             three_states(b, store, matrix_query(alids), **meta)
 
 
-def proxies(b: Bench, store: str, sample: Sample) -> None:
+def proxies(b: Bench, store: str, sample: Sample, seeds: int) -> None:
     for count in (1, 10, 100):
-        for seed in range(SEED, SEED + (10 if count == 1 else 3)):
+        for seed in range(SEED, SEED + (10 if count == 1 else seeds)):
             alids = sample.alids(sample.rows(count, None, seed))
             meta = {"case": "proxies", "variants": count, "seed": seed}
             three_states(b, store, proxies_query(alids), **meta)
@@ -515,9 +517,9 @@ def step1(b: Bench, args: argparse.Namespace) -> None:
     sample = Sample(STORES / EUR)
     cases = set(args.case or ("proxies", "scattered", "region", "clump"))
     if "proxies" in cases:
-        proxies(b, EUR, sample)
+        proxies(b, EUR, sample, args.seeds)
     if "scattered" in cases:
-        scattered(b, EUR, sample, ("22", None))
+        scattered(b, EUR, sample, ("22", None), args.seeds)
     if "region" in cases:
         regions(b, EUR, (3, 10))
     if "clump" in cases:
@@ -525,18 +527,19 @@ def step1(b: Bench, args: argparse.Namespace) -> None:
 
 
 def step2(b: Bench, args: argparse.Namespace) -> None:
-    for layout in args.layout:
-        store = f"chr22-{layout}.store"
-        sample = Sample(LAYOUT_DIR / store)
-        cases = set(args.case or ("pair", "scattered", "region", "clump"))
-        if "pair" in cases:
-            single_pairs(b, store, sample)
-        if "scattered" in cases:
-            scattered(b, store, sample, ("22",))
-        if "region" in cases:
-            regions(b, store, (3,))
-        if "clump" in cases:
-            clump_each(b, store, args, "22")
+    """Each case on every layout in turn, so the node's load drifts over all of them alike.
+    The layouts hold the same data (`build_layouts.py --check`), so one sample serves all."""
+    stores = [f"chr22-{layout}.store" for layout in args.layout]
+    sample = Sample(LAYOUT_DIR / stores[0])
+    cases: dict[str, Callable[[str], None]] = {
+        "pair": lambda store: single_pairs(b, store, sample),
+        "scattered": lambda store: scattered(b, store, sample, ("22",), args.seeds),
+        "region": lambda store: regions(b, store, (3,)),
+        "clump": lambda store: clump_each(b, store, args, "22"),
+    }
+    for name in args.case or cases:
+        for store in stores:
+            cases[name](store)
 
 
 PLANS: Final = {"step1": (step1, STORES), "step2": (step2, LAYOUT_DIR)}
@@ -594,6 +597,9 @@ def main() -> None:
     parser.add_argument("--analyses", nargs="+", help="the Analyses to clump; all 37 if omitted")
     parser.add_argument("--r2", nargs="+", type=float, default=[0.01, 0.001])
     parser.add_argument("--cold-only", action="store_true", help="clump cold only, not warm")
+    parser.add_argument(
+        "--seeds", type=int, default=3, help="draws of 500 scattered, 10 and 100 proxy variants"
+    )
     parser.add_argument("--zarr-threads", type=int, default=6)
     parser.add_argument(
         "--reader",

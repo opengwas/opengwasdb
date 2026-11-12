@@ -16,6 +16,7 @@ import json
 import statistics
 from collections import defaultdict
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +70,11 @@ def array_bytes(record: Record, prefix: str) -> float:
     else:
         found = record["client"]["get_bytes"]
     return float(sum(v for k, v in found.items() if k.startswith(prefix)))
+
+
+def index_row_bytes(record: Record) -> float:
+    """The bytes of Proxy Index rows read: `partner` and `r`, not the `indptr` a load reads."""
+    return array_bytes(record, "index/partner") + array_bytes(record, "index/r")
 
 
 def load_range(records: list[Record]) -> str:
@@ -171,14 +177,22 @@ def median_rows(
 
     def sort_key(item: tuple[tuple[Any, ...], list[Record]]) -> tuple[Any, ...]:
         key = item[0]
-        return tuple(
-            order_key(v) if k == "target" else (STATES.index(v) if k == "state" else str(v))
-            for k, v in zip(keys, key, strict=True)
-        )
+        return tuple(column_key(k, v) for k, v in zip(keys, key, strict=True))
 
     for key, found in sorted(groups.items(), key=sort_key):
         rows.append([str(v) for v in key] + [column(found) for column in columns])
     return rows
+
+
+def column_key(name: str, value: Any) -> tuple[Any, ...]:
+    """Targets in latency order, states cold to warm, numbers as numbers, the rest as text."""
+    if name == "target":
+        return order_key(value)
+    if name == "state":
+        return (STATES.index(value), "")
+    if isinstance(value, int | float):
+        return (value, "")
+    return (float("inf"), str(value))
 
 
 def common_columns() -> list[Callable[[list[Record]], str]]:
@@ -202,7 +216,7 @@ def region_columns() -> list[Callable[[list[Record]], str]]:
         lambda f: f"{median_of(f, lambda r: r['result']['variants']):,.0f}",
         *common_columns(),
         lambda f: megabytes(median_of(f, lambda r: array_bytes(r, "near/r"))),
-        lambda f: megabytes(median_of(f, lambda r: array_bytes(r, "index/"))),
+        lambda f: megabytes(median_of(f, index_row_bytes)),
         lambda f: seconds(median_of(f, lambda r: spent(r, "far_scatter"))),
         load_range,
     ]
@@ -212,7 +226,7 @@ REGION_HEADER = [
     "variants",
     *COMMON_HEADER,
     "MB of `near/r`",
-    "MB of `index/*`",
+    "MB of index rows",
     "far-pair scatter",
     "load",
 ]
@@ -242,6 +256,8 @@ LIST_HEADER = [
 def step1(records: list[Record]) -> list[str]:
     of = grouped(records, "case")
     out = ["## Step 1: the published EUR store (× 511, k = 10, layout C)", ""]
+    out += ["### Summary: time per target, ogld's reader", ""]
+    out += summary(records, STEP1_READS, "ogld")
     out += ["### Clumping #403's 37 Analyses, 5e-8 tier, 3 Mb window", ""]
     out += [table(CLUMP_HEADER, clump_rows(of.get(("clump",), []))), ""]
     out += ["### Region matrices on chr22, centred at 25, 32 and 40 Mb", ""]
@@ -257,6 +273,98 @@ def step1(records: list[Record]) -> list[str]:
     rows = median_rows(of.get(("proxies",), []), keys, list_columns())
     out += [table(["reader", "variants", "target", "state", *LIST_HEADER], rows), ""]
     return out
+
+
+# ------------------------------------------------------------------ the summary
+
+
+@dataclass(frozen=True)
+class Read:
+    """One row of a summary: which records, what names a draw, and sum or median."""
+
+    label: str
+    keep: Callable[[Record], bool]
+    draw: str
+    summed: bool
+
+
+def case_is(case: str, **fields: Any) -> Callable[[Record], bool]:
+    return lambda r: r.get("case") == case and all(r.get(k) == v for k, v in fields.items())
+
+
+STEP1_READS = [
+    Read("clump, r² 0.01", case_is("clump", r2=0.01), "analysis", True),
+    Read("clump, r² 0.001", case_is("clump", r2=0.001), "analysis", True),
+    Read("region 3 Mb", case_is("region", width_mb=3), "centre", False),
+    Read("region 10 Mb", case_is("region", width_mb=10), "centre", False),
+    Read("500 scattered, chr22", case_is("scattered", chrom="22"), "seed", False),
+    Read("500 scattered, genome", case_is("scattered", chrom="genome"), "seed", False),
+    Read("proxies, 1 variant", case_is("proxies", variants=1), "seed", False),
+    Read("proxies, 10 variants", case_is("proxies", variants=10), "seed", False),
+    Read("proxies, 100 variants", case_is("proxies", variants=100), "seed", False),
+]
+
+
+def aggregate(found: list[Record], summed: bool, value: Callable[[Record], float]) -> float:
+    return sum(value(r) for r in found) if summed else median_of(found, value)
+
+
+def summary_row(read: Read, label: str, by_target: dict[str, list[Record]]) -> list[str]:
+    """Each target's time over the draws given, and the bytes and requests of the first."""
+    cells = [
+        seconds(aggregate(by_target[t], read.summed, lambda r: r["seconds"]))
+        if by_target.get(t)
+        else "—"
+        for t in TARGET_ORDER
+    ]
+    first = next(by_target[t] for t in TARGET_ORDER if by_target.get(t))
+    data = aggregate(first, read.summed, lambda r: wire_or_client(r, "bytes"))
+    requests = aggregate(first, read.summed, lambda r: wire_or_client(r, "requests"))
+    return [label, *cells, megabytes(data), f"{requests:,.0f}"]
+
+
+def by_target(records: list[Record]) -> dict[str, list[Record]]:
+    found: dict[str, list[Record]] = defaultdict(list)
+    for r in records:
+        found[r["target"]].append(r)
+    return found
+
+
+def only(found: dict[str, list[Record]], draw: str, kept: set[Any]) -> dict[str, list[Record]]:
+    """Each target's records of the draws `kept`."""
+    return {t: [r for r in records if r[draw] in kept] for t, records in found.items()}
+
+
+def summary_rows(read: Read, state: str, records: list[Record]) -> list[list[str]]:
+    """The read's row over every draw, for the targets that timed them all; and, when the
+    slower targets timed fewer, a row over the draws every target timed."""
+    found = by_target(records)
+    draws = {t: {r[read.draw] for r in each} for t, each in found.items()}
+    every = set().union(*draws.values())
+    common = set.intersection(*draws.values())
+    how = "sum" if read.summed else "median"
+    complete = {t: each for t, each in found.items() if draws[t] == every}
+    rows = [summary_row(read, f"{read.label}, {state}, {how} of {len(every)}", complete)]
+    if common and common != every:
+        label = f"{read.label}, {state}, {how} of {len(common)}"
+        rows.append(summary_row(read, label, only(found, read.draw, common)))
+    return rows
+
+
+def read_rows(read: Read, records: list[Record]) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for state in STATES:
+        in_state = [r for r in records if r["state"] == state]
+        if in_state:
+            rows += summary_rows(read, state, in_state)
+    return rows
+
+
+def summary(records: list[Record], reads: list[Read], reader: str) -> list[str]:
+    mine = [r for r in records if r["reader"] == reader]
+    rows = [row for read in reads for row in read_rows(read, list(filter(read.keep, mine)))]
+    header = ["read", *TARGET_ORDER, "MB read", "requests"]
+    return [table(header, rows), ""]
 
 
 # ------------------------------------------------------------------ step 2
