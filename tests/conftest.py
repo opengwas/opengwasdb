@@ -159,3 +159,20 @@ def panel_only_eaf_ragged_store(tmp_path_factory: pytest.TempPathFactory) -> Pat
     return shared_releases.panel_only_eaf_ragged(
         tmp_path_factory.mktemp("panel-only-eaf-ragged")
     )
+
+
+@pytest.fixture(scope="module")
+def small_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A release whose EAF exception table crosses pages, with a subset of every
+    variant: its table is 400 entries over a grid of 4,000 variants (#387, #314)."""
+    from eaf_tables import SMALL_VARIANTS, build_table_store, publish_every_variant
+
+    root = tmp_path_factory.mktemp("eaf-small")
+    store = build_table_store(root / "store.opengwasdb", SMALL_VARIANTS, "eaf-small")
+    return publish_every_variant(store, SMALL_VARIANTS)
+
+
+@pytest.fixture
+def small_copy(tmp_path: Path, small_seed: Path) -> Path:
+    """A copy of the small release, so a test cannot change the module's."""
+    return copytree(small_seed, tmp_path / "store.opengwasdb")

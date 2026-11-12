@@ -11,7 +11,8 @@ against the table once it is done; both tables are small. The `eaf` table is not
 it is one Zarr v3 shard of up to 1,136,991,041 entries, so that rule reconciles
 each block against the span of the table it must occupy as the scan reaches it,
 holding one page rather than every marked position and the whole table beside
-them (issue #387).
+them (issue #387). The span is the one the block's own decode took from the
+pass's single read of the table, so the rule reads none of it again (issue #314).
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import numpy as np
-import zarr
 
 from opengwasdb.encoding import (
     EAF_EXCEPTION,
@@ -31,7 +31,6 @@ from opengwasdb.encoding import (
     StoreCodec,
     ZOverflowTable,
 )
-from opengwasdb.encoding.codec import SparseExactTable
 from opengwasdb.store.arrays import array_length
 from opengwasdb.store.open import parse_format_version
 from opengwasdb.validation.rule import (
@@ -114,57 +113,6 @@ def _judge_z_overflow(target: Target, marked: Marked) -> Iterator[str]:
     yield from errors
 
 
-#: Entries of a side table one page of a block-by-block read takes.  A Dense band
-#: of OGS-00011's grid marks about 239,000 cells, so one page covers a band and its
-#: tail carries into the next; the table itself is 1,136,991,041 entries, 12.7 GiB
-#: of `int64` and `float32`.
-SPAN_PAGE = 262_144
-
-
-class _Spans:
-    """A sorted side table, read in order, one block's span at a time.
-
-    A block's cells are one contiguous range of flat positions and the table is
-    sorted by them, so the entries a block must describe start where the previous
-    block's ended: reading them in that order visits every entry once and holds
-    one page at most.  It is what a judge can no longer do -- that read the whole
-    table and sorted every marked position beside it, which on OGS-00011 was
-    12.7 GiB and 8.5 GiB against a 1 GiB budget (issue #387).
-    """
-
-    def __init__(self, group: zarr.Group, table_type: type[SparseExactTable]) -> None:
-        self.index_array = group[table_type.index_name]
-        self.value_array = group[table_type.value_name]
-        self.total = array_length(self.index_array)
-        self.returned = 0
-        self._taken = 0
-        self._page_index = np.empty(0, dtype=np.int64)
-        self._page_value = np.empty(0, dtype=np.float32)
-
-    def take(self, until: int) -> tuple[np.ndarray, np.ndarray]:
-        """Every entry with a position below `until` that no block has taken yet."""
-        index_parts: list[np.ndarray] = []
-        value_parts: list[np.ndarray] = []
-        while True:
-            below = int(np.searchsorted(self._page_index, until, side="left"))
-            if below:
-                index_parts.append(self._page_index[:below])
-                value_parts.append(self._page_value[:below])
-                self._page_index = self._page_index[below:]
-                self._page_value = self._page_value[below:]
-                self.returned += below
-            if len(self._page_index) or self._taken >= self.total:
-                break
-            stop = min(self._taken + SPAN_PAGE, self.total)
-            self._page_index = np.asarray(self.index_array[self._taken:stop], dtype=np.int64)
-            self._page_value = np.asarray(self.value_array[self._taken:stop], dtype=np.float32)
-            self._taken = stop
-        return (
-            np.concatenate(index_parts) if index_parts else np.empty(0, dtype=np.int64),
-            np.concatenate(value_parts) if value_parts else np.empty(0, dtype=np.float32),
-        )
-
-
 @dataclass(frozen=True)
 class Reconciled:
     """How a plane's marks and its side table disagreed, block by block, so far.
@@ -202,15 +150,6 @@ def _first(one: int | None, other: int | None) -> int | None:
     return min(one, other)
 
 
-def _spans(target: Target) -> _Spans:
-    """The table this target's eaf marks are reconciled against, read once per pass."""
-    return target.remember(
-        f"{EAF_EXCEPTIONS}/spans",
-        lambda: _Spans(target.group, EafExceptionTable),
-        until=ASSOCIATIONS.name,
-    )
-
-
 def _eaf_exceptions(target: Target, block: Block) -> Reconciled:
     """One block's marked cells, against the table span they must occupy.
 
@@ -220,9 +159,14 @@ def _eaf_exceptions(target: Target, block: Block) -> Reconciled:
     """
     if block.eaf_codes is None or not target.encoding.eaf.is_residual:
         return Reconciled(undecodable=block.eaf_undecodable)
-    spans = _spans(target)
+    if block.eaf_span is None:
+        # A residual plane with no table to take a span of: the plan rule says so,
+        # and this rule meets the absent array as it always has.
+        target.group[EafExceptionTable.index_name]
+        target.group[EafExceptionTable.value_name]
+        raise KeyError(EafExceptionTable.index_name)
     marked = block.positions(block.eaf_codes == EAF_EXCEPTION)
-    span, _values = spans.take(block.offset + int(block.z_codes.size))
+    span = block.eaf_span[0]
     orphan = np.setdiff1d(marked, span)
     stray = np.setdiff1d(span, marked)
     return Reconciled(
@@ -231,7 +175,7 @@ def _eaf_exceptions(target: Target, block: Block) -> Reconciled:
         stray=len(stray),
         stray_first=int(stray[0]) if len(stray) else None,
         undecodable=block.eaf_undecodable,
-        returned=spans.returned,
+        returned=block.eaf_taken,
     )
 
 
