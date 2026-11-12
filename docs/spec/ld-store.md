@@ -391,8 +391,10 @@ proxy lookups. If the clients that read static Zarr, an option for ogld#9, are l
 bandwidth rather than by requests, B's 2.5–7× fewer bytes on small reads could outweigh C's lead
 on many-chunk reads. A change of chunk or shard shape is not a format version change (§13).
 
-A C shard is 256 inner chunks: 128 MiB raw, about 106 MiB on disk. That is 1,346 files for
-HGDP+1kGP EUR's Near Band, and 3,548 for AFR's, as built. The other arrays use one shape, 16,384 inner and
+A C shard is 256 inner chunks: 128 MiB raw. As built (ogld#7, k = 10, × 511), a Near Band shard's
+median on disk is 51 to 63 MiB by panel, and its largest 73 MiB. That is 1,257 shards for
+HGDP+1kGP EUR's Near Band and 3,457 for AFR's, against the 2,800 and 7,200 the earlier estimate
+gave at × 32767. The other arrays use one shape, 16,384 inner and
 1,048,576 to a shard. These arrays are read whole, by row range, or one sparse row at a time, and
 the prototype's stores used this shape for them. At EUR's 5.3×10⁹ index entries that is about
 5,000 shards for each of `partner` and `r`; ogld#8 may coarsen the shard, which changes no reader.
@@ -412,7 +414,7 @@ together.
 
 The issue's own measurement, on a k = 0 slice of the MAC ≥ 50 pgen (24–30 Mb, 140 M pairs), gave
 7.11, 9.04 and 12.06 bits: 1.70× and 1.33×. The whole chromosome at k = 10 agrees with those ratios
-to within 1.5%, though not with their bits, so the sizes below carry the ratios over. The index holds slightly fewer entries at × 511
+to within 1.5%, though not with their bits. The index holds slightly fewer entries at × 511
 because the far code floor's cut moves with the scale (§3): 101,886 Far Pairs against 105,272.
 
 **Sizes, measured** (ogld#7). The five stores as built: the phased v2 callset converted by
@@ -431,8 +433,7 @@ AMR 341), MAC ≥ 20, k = 10, × 511, 16 threads, on the provisional layout, at 
 | HGDP+1kGP AMR | 7.56 M | 65,192,230,001 | 58.6 GB | 7.19 | 3,337,986,118 | 5.4 GB | 13.05 | 64.1 GB |
 | **Total** | 47.2 M | 539,567,716,377 | 486.1 GB | 7.21 | 24,516,005,900 | 45.2 GB | 14.76 | 531.9 GB |
 
-The five total 532 GB, 0.53 TB. A Near Band is 3,548 files for AFR and 1,346 for EUR (shards and
-their `indptr`s), against the 7,200 and 2,800 the estimate gave.
+The five total 532 GB, 0.53 TB.
 
 **Why the earlier estimate (1.20 TB at × 511) was high.** It was 2.3 times the measurement, for two
 reasons. Variants: it took gnomAD v3.1.2's MAC ≥ 20 sites, non-PASS sites included (about 25% of
@@ -443,7 +444,7 @@ that, so it came out 1.7 to 2.3 times fewer than estimated (EUR 8.4×10¹⁰ aga
 2.3×10¹¹ against 4.8×10¹¹; AMR, whose estimate was measured genome-wide, 6.5×10¹⁰ against
 1.09×10¹¹). Bits per pair: the estimate carried the prototype's k = 0 sizes (7.9 bits per pair on
 EUR) over at a ratio measured on chr22 alone; the builds measure 6.4 to 7.8 (AFR's 7.81 is the one near it). The Proxy
-Index came out 16–55% below the estimate's (AMR's the most).
+Index came out 16–55% below the estimate's in bytes and 4–47% in entries (AMR's the most).
 
 **UK Biobank EUR's size is ogld#10's measurement.** No UK Biobank genotype was read for this
 spec. At n = 49,766, MAC ≥ 20 is MAF ≥ 2.0×10⁻⁴. The only UK Biobank variant list under
