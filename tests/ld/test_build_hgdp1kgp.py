@@ -4,6 +4,7 @@ one chosen way (`FAKE_PLINK2`)."""
 
 from __future__ import annotations
 
+import importlib
 import json
 import stat
 import sys
@@ -15,7 +16,7 @@ from script_modules import SCRIPTS, load_script
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 recipe = load_script("build_hgdp1kgp")
-from test_panel import tools  # noqa: E402
+tools = importlib.import_module("test_panel.tools")
 
 FAKE = """#!/bin/sh
 # argv goes to $FAKE_ARGV; $FAKE_PLINK2 is ok, short (a sample missing), swap (another sample),
