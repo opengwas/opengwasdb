@@ -13,6 +13,7 @@ land in most bands. Its source codes SE as residuals against its EAF and holds
 an entry in every side table (Z overflow, EAF and SE exceptions), so each plane
 and table the band write produces is compared. Each test checks that before
 relying on it.
+
 "Identical" is `completion_releases.assert_same_release`'s: what the release
 comparison tool compares, not the stored bytes.
 """
