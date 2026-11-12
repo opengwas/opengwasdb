@@ -93,7 +93,7 @@ store at any other scale could be neither written nor read.
   way, and move no lead.
 - **The sizes are re-derived** from the bits per pair measured on a real EUR chr22 build at
   k = 10: 6.88 a Near Band pair at × 511, 8.58 at × 2047 and 11.53 at × 32767. The five
-  HGDP+1kGP stores come to about 1.20 TB, from 1.99 TB (spec §6).
+  HGDP+1kGP stores were estimated at about 1.20 TB, from 1.99 TB; built (ogld#7), they come to 0.53 TB (spec §6).
 - **The public API changes.** `BuildInputs` gains the required `r_scale`. `ogld.format` loses
   `ENCODING`, `R_SCALE`, `RESERVED_CODE`, `QUANTISATION_ERROR` and the module functions
   `quantise`, `dequantise` and `far_code_floor`, whose one scale was the default this decision
