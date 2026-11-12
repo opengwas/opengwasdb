@@ -26,6 +26,7 @@ from benchmarks.profile_reference_completion import (
     require_new_directory,
     scale_to_full_run,
 )
+from opengwasdb.completion.fill_shards import resolve_unit_bytes
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.variants import CanonicalVariant
 
@@ -262,21 +263,31 @@ def test_a_band_write_on_the_pool_is_timed_as_one_stage(
     memory = artifact["write_pool_memory"]
     assert memory["workers_sampled"] >= 1, "the pool's workers were never sampled"
     assert 0 < memory["peak_private_bytes"] < artifact["band_worker_estimate_bytes"]
+    assert artifact["largest_checkpoint_bytes"] > 0
+    assert artifact["merge_worker_estimate_bytes"] == resolve_unit_bytes(
+        artifact["largest_checkpoint_bytes"]
+    )
+    pool = artifact["scaled_to_full_run"]["stages"]["band_write_pool"]
+    assert pool["rule"] == "waves" and pool["factor"] == 1.0
 
 
 def test_a_pooled_slice_with_fewer_bands_than_workers_is_refused(
     inputs: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Two bands on four workers take one band's time, and scaled by bands they
-    would claim twice the full run's write: refused, before anything is built."""
+    """Two bands on four workers take one band's time, and scaled they would
+    claim twice the full run's write; five on four would claim a wave more than
+    they ran. Both are refused before anything is built, and a slice the axis
+    cuts short of its pool after it."""
     observed, panel = inputs
     _narrow_bands(monkeypatch)
     work = tmp_path / "refused-work"
+    for n_bands, write_workers in ((2, 4), (5, 4)):
+        with pytest.raises(SystemExit, match="leaves workers idle"):
+            profiler.profile_bands(observed, panel, "EUR", work, n_bands, 1,
+                                   write_workers=write_workers)
+        assert not work.exists()
     with pytest.raises(SystemExit, match="leaves workers idle"):
-        profiler.profile_bands(observed, panel, "EUR", work, 2, 1, write_workers=4)
-    assert not work.exists()
-    with pytest.raises(SystemExit, match="leaves workers idle"):
-        profiler.profile_bands(observed, panel, "EUR", work, 9, 1, write_workers=8)
+        profiler.profile_bands(observed, panel, "EUR", work, 8, 1, write_workers=8)
     assert not work.exists(), "a slice the axis cuts short is refused, and cleaned up"
 
 
@@ -296,6 +307,25 @@ def test_scaling_follows_bands_and_rows() -> None:
     assert scaled["stages"]["merge_shard_fills_and_quality"]["seconds"] == 2800.0
     assert "axis_construction_full" not in scaled["stages"]
     assert scaled["band_write_seconds"] == 420.0
+
+
+@pytest.mark.parametrize(
+    ("write_workers", "bands_run", "factor"),
+    [(4, 8, 7.0), (3, 6, 9.5), (8, 8, 7.0)],
+)
+def test_a_pooled_band_write_scales_by_the_pools_waves(
+    write_workers: int, bands_run: int, factor: float
+) -> None:
+    """56 bands on 3 workers are 19 waves, the last one partial: a 6-band slice
+    is 2 of them, so it scales by 9.5, not by the 9.33 its bands would give."""
+    summary = {
+        "bands_in_full_matrix": 56, "bands_run": bands_run, "write_workers": write_workers,
+        "union_variants": 11_200_000, "slice_rows": bands_run * 200_000,
+        "stages": [{"stage": "band_write_pool", "seconds": 100.0}],
+    }
+    pool = scale_to_full_run(summary)["stages"]["band_write_pool"]
+    assert (pool["rule"], pool["factor"]) == ("waves", factor)
+    assert pool["seconds"] == pytest.approx(100.0 * factor)
 
 
 def test_recorded_full_run_reads_the_figures_from_the_step_record(tmp_path: Path) -> None:

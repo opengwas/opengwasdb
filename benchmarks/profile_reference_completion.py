@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import math
 import re
 import sys
 import threading
@@ -58,6 +59,7 @@ from pathlib import Path
 from typing import Any
 
 from benchmarks._artifact import LoadSampler, artifact_header, host_load, write_artifact
+from opengwasdb.completion.fill_shards import resolve_unit_bytes
 from opengwasdb.encoding.timing import PhaseTimer
 
 DEFAULT_MIN_COR = 0.7
@@ -425,17 +427,18 @@ def _blocks_covering(axis: Any, n_rows: int) -> list[Path]:
 
 
 def require_slice_fills_pool(n_bands: int, write_workers: int) -> None:
-    """Refuse a pooled band write over fewer bands than workers.
+    """Refuse a pooled band write whose last wave leaves workers idle.
 
-    Its wall time is scaled to the full run by bands, which holds only while
-    every worker has a band: two bands on four workers take one band's time,
-    and scaled by bands they would claim twice the full run's write.
+    Its wall time is scaled to the full run by waves of the pool, which holds
+    only while every wave of the slice has a band for every worker: two bands
+    on four workers take one band's time and would claim twice the full run's
+    write, and five on four would claim one wave more than they ran.
     """
-    if write_workers > 1 and n_bands < write_workers:
+    if write_workers > 1 and (n_bands < write_workers or n_bands % write_workers):
         raise SystemExit(
             f"a slice of {n_bands} band(s) on {write_workers} write workers leaves workers "
-            "idle, so its wall time cannot be scaled by bands; ask for at least as many "
-            "bands as write workers"
+            "idle, so its wall time cannot be scaled by waves; ask for a whole number of "
+            "bands per write worker"
         )
 
 
@@ -478,6 +481,7 @@ def profile_bands(
                     dataclasses.replace(axis, tsv_paths=blocks), source, work / "checkpoints",
                     min_cor=DEFAULT_MIN_COR, thresh=DEFAULT_THRESH, n_workers=n_workers,
                 )
+            largest = max((path.stat().st_size for path in blocks_dir.glob("*.npz")), default=0)
             sliced = dataclasses.replace(
                 axis,
                 n_variants=slice_rows,
@@ -501,6 +505,8 @@ def profile_bands(
                 "slice_imputed_cells": int(tallies.total_imputed),
                 "slice_cells": slice_rows * axis.n_analyses,
                 "band_worker_estimate_bytes": dense._band_bytes(axis.n_analyses, band_rows),
+                "largest_checkpoint_bytes": largest,
+                "merge_worker_estimate_bytes": resolve_unit_bytes(largest),
                 "write_pool_memory": memory.summary(),
             }
             raise _DiscardSlice
@@ -571,15 +577,22 @@ def scale_to_full_run(summary: dict[str, Any]) -> dict[str, Any]:
     same); the merge's fill sharding and reference-EAF read scale with rows; axis
     construction already ran on the full axis. LD-block time depends on block size
     and is left unscaled here; the recorded run's figure is the evidence for it.
-    A band write on the pool (``band_write_pool``) scales the same way, which
-    holds while the slice has at least as many bands as the pool has workers.
+    A band write on the pool (``band_write_pool``) scales by the pool's waves:
+    the full run's ``ceil(bands / workers)`` against the slice's, whose bands
+    fill every wave (`require_slice_fills_pool`).
     """
     bands = summary["bands_in_full_matrix"] / summary["bands_run"]
+    workers = int(summary.get("write_workers", 1))
+    waves = math.ceil(summary["bands_in_full_matrix"] / workers) / math.ceil(
+        summary["bands_run"] / workers
+    )
     rows = summary["union_variants"] / summary["slice_rows"]
     scaled: dict[str, Any] = {}
     for entry in summary["stages"]:
         name, seconds = entry["stage"], entry["seconds"]
-        if name.startswith(_SCALE_BY_BANDS):
+        if name == "band_write_pool":
+            scaled[name] = {"factor": waves, "rule": "waves", "seconds": seconds * waves}
+        elif name.startswith(_SCALE_BY_BANDS):
             scaled[name] = {"factor": bands, "rule": "bands", "seconds": seconds * bands}
         elif name in _SCALE_BY_ROWS:
             scaled[name] = {"factor": rows, "rule": "rows", "seconds": seconds * rows}
