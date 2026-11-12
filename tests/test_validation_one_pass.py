@@ -307,13 +307,16 @@ def test_a_value_moved_to_another_analysis_of_its_unit_is_found(
 def test_no_finding_depends_on_the_run_s_key(
     varied: Path, narrow: None, monkeypatch: pytest.MonkeyPatch, corrupt: bool
 ) -> None:
-    """The key is drawn per run; the report is the same under any key."""
+    """The key is drawn per run; the report is the same under any key.
+
+    Only the subset check digests anything, so it alone is run under each key.
+    """
     if corrupt:
         _swap(varied, "z", (0, SWAPPED[0]), (0, SWAPPED[1]))
     reports = []
     for key in (0, 1, 2**63 + 12_345, 2**64 - 1):
         monkeypatch.setattr(indexed_subsets, "run_key", lambda key=key: key)
-        findings = validate_store(varied).findings
+        findings = validate_store(varied, rules={"subsets.indexed"}).findings
         reports.append([(f.rule, f.severity, f.message) for f in findings])
     assert all(report == reports[0] for report in reports[1:])
     assert (Z_DIFFER in [message for _rule, _severity, message in reports[0]]) is corrupt
