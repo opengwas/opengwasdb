@@ -8,16 +8,20 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
 
-# ALID strings are short and fixed-format (chr:pos:a1:a2); a bounded numpy
-# byte-string dtype avoids the overhead of an object array in a checkpoint
-# that may hold millions of fill rows.
+#: Most ALIDs are short (chr:pos:a1:a2), and a fixed-width byte string holds
+#: millions of them compactly. An ALID of more bytes than this (a long indel,
+#: ADR 0079) is never cut to fit: it is held whole beside them (`split_alids`),
+#: because a width taken from the longest ALID would give every row of a
+#: Store's axis that width (OGS-00013's longest is 761 bytes, its median 15).
 ALID_DTYPE = "S64"
+ALID_WIDTH = 64
 
 #: The format a block checkpoint records (``format`` in its ``.npz``). A resume
 #: refuses a directory holding a checkpoint without it, or under another number:
@@ -28,7 +32,11 @@ ALID_DTYPE = "S64"
 #: that wrote no format) fills and counts it, so resumed beside the next
 #: block's it puts two fills on one cell and counts both. Nothing in it says
 #: which rule wrote it, so it is refused, and the completion starts again.
-CHECKPOINT_FORMAT = 2
+#:
+#: **3** (#361): a fill's ALID is held whole. Format 2 cut it to 64 bytes, so
+#: a checkpoint of it that holds a longer ALID has already lost which variant
+#: each such fill was for, and cannot be read right.
+CHECKPOINT_FORMAT = 3
 
 
 def checkpoint_dir_for(dest_path: Path) -> Path:
@@ -87,9 +95,10 @@ def require_current_checkpoints(checkpoint_dir: Path) -> None:
             f"The checkpoint directory {checkpoint_dir} holds {len(stale):,} of "
             f"{len(written):,} block checkpoint(s) not written in format "
             f"{CHECKPOINT_FORMAT} (first {stale[0].name}): an older package wrote them, "
-            "before a variant two LD blocks share had one owner (ADR 0072), and they "
-            "cannot be resumed. To start the completion again, delete it, or rerun the "
-            "completion with --overwrite (overwrite=True) to discard it."
+            "before a variant two LD blocks share had one owner (ADR 0072) or before "
+            "an ALID over 64 bytes was kept whole (#361), and they cannot be resumed. "
+            "Restart the completion: delete it, or rerun the completion with "
+            "--overwrite (overwrite=True) to discard it."
         )
 
 
@@ -158,9 +167,27 @@ def _quality_arrays(rows: list[QualityRow]) -> dict[str, np.ndarray]:
     }
 
 
+def split_alids(alids: Iterable[str]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``alids`` as ``(short, long_at, long)``, none of them cut.
+
+    ``short`` holds each ALID of `ALID_WIDTH` bytes or fewer, and is empty at
+    the position of a longer one; ``long_at`` is the positions of those, and
+    ``long`` their ALIDs, as wide as the longest. ALIDs are UTF-8, as the
+    Store's variant table writes them.
+    """
+    encoded = [alid.encode("utf-8") for alid in alids]
+    at = [i for i, b in enumerate(encoded) if len(b) > ALID_WIDTH]
+    short = np.array([b if len(b) <= ALID_WIDTH else b"" for b in encoded], dtype=ALID_DTYPE)
+    long_ = np.array([encoded[i] for i in at], dtype="S1" if not at else None)
+    return short, np.array(at, dtype=np.int64), long_
+
+
 def _fill_arrays(fills: list[FillRow]) -> dict[str, np.ndarray]:
+    short, long_at, long_ = split_alids(r.alid for r in fills)
     return {
-        "f_alid": np.array([r.alid.encode("ascii") for r in fills], dtype=ALID_DTYPE),
+        "f_alid": short,
+        "f_long_at": long_at,
+        "f_long_alid": long_,
         "f_ai": np.array([r.analysis_index for r in fills], dtype=np.int32),
         "f_z": np.array([r.z for r in fills], dtype=np.float32),
         "f_se": np.array([r.se for r in fills], dtype=np.float32),

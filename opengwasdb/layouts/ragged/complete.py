@@ -1041,7 +1041,7 @@ def _checkpoint_and_assemble(
         region_cap_bp=region_cap_bp,
     )
     print("Merging block results from checkpoints...")
-    union_alids_s, union_rows_s = fill_shards.sorted_union_map(axis.new_alid_to_idx)
+    union = fill_shards.sorted_union_map(axis.new_alid_to_idx)
     block_rows = _block_rows(plan, axis)
     batch_of = _analysis_batches(plan, block_rows)
     # No impute_mask here: Phase 1 is where the ancestry-match filter applies
@@ -1050,8 +1050,7 @@ def _checkpoint_and_assemble(
     fill_shard_dir, quality_count = fill_shards.shard_checkpoint_fills(
         checkpoint_dir / "blocks",
         staged,
-        union_alids_s,
-        union_rows_s,
+        union,
         len(axis.variants),
         fill_shards.by_analysis_batch(batch_of),
     )
