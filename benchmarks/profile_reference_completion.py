@@ -21,9 +21,10 @@ real input, without running a completion:
     figures OGS-00009's own run recorded.
 
     The stages are read in this process, so the band write runs here, on one
-    worker, unless ``--write-workers`` asks for more: then the bands run on the
-    write pool and only the band write's wall time is known, as
-    ``band_write_pool``. The phases are called directly, below the source
+    worker, unless ``--write-workers`` asks for more: then the merge's
+    checkpoints and the bands run on the write pool, only the band write's wall
+    time is known, as ``band_write_pool``, and each pool worker's private
+    memory is recorded. The phases are called directly, below the source
     format check `complete_dense_store` makes, so a 0.2.0 Store such as
     OGS-00009 is profiled as it is; nothing the profile writes is published.
 
@@ -504,10 +505,11 @@ def _merge_and_write(
 ) -> Any:
     """The merge, then the band write, split into read, compute and write.
 
-    The merge runs on one worker, as it did when it was serial, so its stages
-    are this process's. On more than one write worker the bands run in the
-    pool's processes, where this clock cannot follow them: the band write is
-    then one stage, ``band_write_pool``.
+    The merge's checkpoints and the bands run on ``write_workers``. The merge's
+    stages are timed around its calls, in this process, either way. On more
+    than one write worker the bands run in the pool's processes, where this
+    clock cannot follow them: the band write is then one stage,
+    ``band_write_pool``.
     """
     merge = [(dense, name, stage) for name, stage in _MERGE_TABLE]
     band = _band_write_table(dense) if write_workers <= 1 else []
@@ -517,7 +519,7 @@ def _merge_and_write(
         with _patched(merge, stages), _patched(band, stages):
             with stages.stage("merge_other"):
                 encoding, _, effective_chunks, fill_dir = dense._merge_checkpoint_fills(
-                    staged, sliced, blocks_dir, ld_dir, ancestry, source_encoding
+                    staged, sliced, blocks_dir, ld_dir, ancestry, source_encoding, write_workers
                 )
             assert dense.completion_band_rows(
                 dense._dense_shard_rows(staged, effective_chunks)
