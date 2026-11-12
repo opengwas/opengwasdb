@@ -1,0 +1,90 @@
+{
+ "compare-base-1-r1-head-1-r1.json": {
+  "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/base-1-r1.opengwasdb",
+  "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-1-r1.opengwasdb",
+  "n_arrays": [
+   41,
+   41
+  ],
+  "arrays_only_left": [],
+  "arrays_only_right": [],
+  "arrays_with_metadata_differences": [],
+  "arrays_with_value_differences": [],
+  "analyses_tsv_differing": {},
+  "variants_tsv_gz_identical": true,
+  "encoding_plans_equal": true,
+  "completion_quality_rows_equal": true,
+  "n_completion_quality_rows": 13570,
+  "manifest_equal_but_created_at": true,
+  "total_bytes_on_disk": [
+   761909445,
+   761909445
+  ]
+ },
+ "compare-base-1-r1-head-16-r1.json": {
+  "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/base-1-r1.opengwasdb",
+  "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-16-r1.opengwasdb",
+  "n_arrays": [
+   41,
+   41
+  ],
+  "arrays_only_left": [],
+  "arrays_only_right": [],
+  "arrays_with_metadata_differences": [],
+  "arrays_with_value_differences": [],
+  "analyses_tsv_differing": {},
+  "variants_tsv_gz_identical": true,
+  "encoding_plans_equal": true,
+  "completion_quality_rows_equal": true,
+  "n_completion_quality_rows": 13570,
+  "manifest_equal_but_created_at": true,
+  "total_bytes_on_disk": [
+   761909445,
+   761909445
+  ]
+ },
+ "compare-head-1-r1-head-16-r1.json": {
+  "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-1-r1.opengwasdb",
+  "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-16-r1.opengwasdb",
+  "n_arrays": [
+   41,
+   41
+  ],
+  "arrays_only_left": [],
+  "arrays_only_right": [],
+  "arrays_with_metadata_differences": [],
+  "arrays_with_value_differences": [],
+  "analyses_tsv_differing": {},
+  "variants_tsv_gz_identical": true,
+  "encoding_plans_equal": true,
+  "completion_quality_rows_equal": true,
+  "n_completion_quality_rows": 13570,
+  "manifest_equal_but_created_at": true,
+  "total_bytes_on_disk": [
+   761909445,
+   761909445
+  ]
+ },
+ "compare-head-16-r1-head-16-r2.json": {
+  "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-16-r1.opengwasdb",
+  "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-16-r2.opengwasdb",
+  "n_arrays": [
+   41,
+   41
+  ],
+  "arrays_only_left": [],
+  "arrays_only_right": [],
+  "arrays_with_metadata_differences": [],
+  "arrays_with_value_differences": [],
+  "analyses_tsv_differing": {},
+  "variants_tsv_gz_identical": true,
+  "encoding_plans_equal": true,
+  "completion_quality_rows_equal": true,
+  "n_completion_quality_rows": 13570,
+  "manifest_equal_but_created_at": true,
+  "total_bytes_on_disk": [
+   761909445,
+   761909445
+  ]
+ }
+}

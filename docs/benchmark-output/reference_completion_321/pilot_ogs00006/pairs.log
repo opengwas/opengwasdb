@@ -1,0 +1,9 @@
+pairs start 2026-11-12T17:16:40+00:00  17:16:40 up 7 days, 22:39,  1 user,  load average: 5.83, 5.83, 6.09
+base-1-r1 done 2026-11-12T17:22:37+00:00  17:22:37 up 7 days, 22:45,  1 user,  load average: 5.75, 5.94, 6.07
+head-1-r1 done 2026-11-12T17:28:09+00:00  17:28:09 up 7 days, 22:50,  1 user,  load average: 5.83, 5.88, 5.99
+head-16-r1 done 2026-11-12T17:32:24+00:00  17:32:24 up 7 days, 22:55,  1 user,  load average: 6.71, 6.37, 6.15
+base-1-r2 done 2026-11-12T17:38:24+00:00  17:38:24 up 7 days, 23:01,  1 user,  load average: 6.55, 6.19, 6.09
+head-1-r2 done 2026-11-12T17:44:00+00:00  17:44:00 up 7 days, 23:06,  1 user,  load average: 6.38, 6.21, 6.10
+head-16-r2 done 2026-11-12T17:48:14+00:00  17:48:14 up 7 days, 23:11,  1 user,  load average: 7.29, 6.80, 6.35
+pairs end 2026-11-12T17:48:14+00:00  17:48:14 up 7 days, 23:11,  1 user,  load average: 7.29, 6.80, 6.35
+ALLDONE

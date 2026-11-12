@@ -1,0 +1,51 @@
+{
+  "package": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/head-25530c9/opengwasdb/__init__.py",
+  "layout": "dense",
+  "template": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/merged/.ogs3-blocks.opengwasdb.checkpoint",
+  "dest": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-1-r2.opengwasdb",
+  "n_workers": 1,
+  "wall_seconds": 571.5650266329758,
+  "phase_seconds": {
+    "_build_union_axis": 320.58141210803296,
+    "_complete_pending_blocks": 0.1804923159070313,
+    "_merge_checkpoint_fills": 122.71918369689956,
+    "_write_completed_bands": 81.79000201507006,
+    "_write_completed_manifest": 0.006159628974273801,
+    "_completed_analysis_rows": 0.024802980944514275,
+    "_finalise_release": 43.09884472005069
+  },
+  "pool_worker_memory": {
+    "_merge_checkpoint_fills": {
+      "workers_sampled": 0,
+      "peak_private_bytes": 0,
+      "peak_private_bytes_by_worker": []
+    },
+    "_write_completed_bands": {
+      "workers_sampled": 0,
+      "peak_private_bytes": 0,
+      "peak_private_bytes_by_worker": []
+    }
+  },
+  "peak_scratch_bytes": {
+    "total": 2807202558,
+    "checkpoint": 226075452,
+    "staged": 2581127106,
+    "fill_shards": 46668144
+  },
+  "release_bytes": 2614532729,
+  "uptime": [
+    6.73,
+    6.13,
+    6.4
+  ],
+  "ru_maxrss_kib_self": 24495484,
+  "ru_maxrss_kib_children": 0,
+  "result": {
+    "output_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-1-r2.opengwasdb",
+    "n_variants": 21618934,
+    "n_analyses": 10,
+    "n_imputed": 2916759,
+    "n_missing_off_panel": 6188,
+    "n_missing_imputation_failed": 2161
+  }
+}

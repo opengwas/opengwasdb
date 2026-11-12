@@ -24,6 +24,7 @@ from opengwasdb.encoding.codec import (
     require_parallel,
     se_float16,
     se_residual_codes,
+    table_end_to_end,
 )
 from opengwasdb.encoding.measure import packed_chunk_bytes, solve_log_se
 from opengwasdb.encoding.plan import (
@@ -915,6 +916,29 @@ def _run_rewrite_bands(sink: _RewriteSink, starts: range, n_workers: int, timer:
     return cursor
 
 
+def write_dense_se_side_arrays(
+    group: Any, tables: list[SeExceptionTable], coefficients: np.ndarray
+) -> None:
+    """A residual Dense SE plane's exception table and model, as the rewrite writes them.
+
+    For a writer that coded the plane itself, row band by row band, rather than
+    rewriting a `float32` scratch plane (Reference Completion, #321). `tables`
+    are the bands' exception runs in row order: each band's flat positions are
+    one contiguous run, so laid end to end they are already the sorted table
+    (`table_end_to_end`), and runs out of order are refused rather than sorted
+    into place. The arrays are made exactly as `_rewrite_arrays` and
+    `_finish_rewrite` make them, sized to the count and written once (#249), so
+    the release is the one the rewrite wrote.
+    """
+    table = table_end_to_end(SeExceptionTable, tables)
+    index, value = table.index, table.value
+    seam = compressor()
+    exception_index, exception_value = _empty_exception_arrays(group, len(index), seam)
+    exception_index[0 : len(index)] = index
+    exception_value[0 : len(index)] = value
+    write_se_coefficients(group, np.asarray(coefficients, dtype=np.float32), compressor=seam)
+
+
 def _finish_rewrite(
     group: Any, coefficients: np.ndarray, cursor: int, exception_count: int, compressor: Any
 ) -> None:
@@ -1675,30 +1699,3 @@ def _narrow_dense_se_to_float16(group: Any, timer: PhaseTimer | None = None) -> 
 def optimise_dense_se(group: Any, encoding: StoreEncoding, n_workers: int = 1) -> StoreEncoding:
     """Measure, select, and rewrite a Dense SE plane by physical chunks."""
     return optimise_dense_se_joint(group, encoding, n_workers=n_workers)[0]
-
-
-def rewrite_dense_se(
-    group: Any,
-    encoding: StoreEncoding,
-    coefficients: np.ndarray | None = None,
-    timer: PhaseTimer | None = None,
-    n_workers: int = 1,
-) -> None:
-    """Encode a float32 Dense scratch plane under an already-decided plan."""
-    timer = timer or PhaseTimer()
-    source = group["se"]
-    n_analyses = int(source.shape[1])
-    if not encoding.se.is_residual:
-        _narrow_dense_se_to_float16(group, timer)
-        return
-    if coefficients is None:
-        raise ValueError("residual SE needs se_coefficients")
-    stored_coefficients = np.asarray(coefficients, dtype=np.float32)
-    if stored_coefficients.shape != (n_analyses, 2) or not np.all(np.isfinite(stored_coefficients)):
-        raise ValueError(f"se_coefficients must have finite shape ({n_analyses}, 2)")
-    eaf_plane = DenseEafPlane.open(group, encoding)
-    assert encoding.se.residual_range is not None
-    exception_count = _count_dense_exceptions(
-        source, eaf_plane, stored_coefficients, encoding.se.residual_range, timer, n_workers
-    )
-    _rewrite_dense(group, encoding, stored_coefficients, exception_count, timer, n_workers)

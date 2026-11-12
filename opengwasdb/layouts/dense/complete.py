@@ -11,9 +11,10 @@ Pipeline shape:
   Phase 2 (parallel, n_workers processes over LD blocks): each worker opens
     the source store and LD panel itself, imputes serially per Analysis
     within its block, and writes its own checkpoint file.
-  Phase 3 (sequential): merge all block results into the seeded z/se arrays,
-    write the final zarr, completion_quality rows, top-hit indexes, and
-    manifest.
+  Phase 3: shard the block results' fills by row band and write the
+    completed planes a band at a time, across the same worker count (each band
+    read once, completed and encoded whole, #321); then completion_quality
+    rows, top-hit indexes, and manifest.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ from opengwasdb.completion.checkpoint import (
 )
 from opengwasdb.completion.fill_shards import (
     CONFLICTED,
+    FILL_RECORD_DTYPE,
     apply_fill_batch,
     by_row_band,
     clear_conflicted,
@@ -65,23 +67,30 @@ from opengwasdb.completion.manifest import (
     build_completion_provenance,
     completed_release_manifest,
 )
-from opengwasdb.completion.parallel import run_block_tasks
+from opengwasdb.completion.parallel import ordered_write, run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
     EAF_BASELINE,
-    DenseEafPlane,
+    EAF_REFERENCE,
+    SE_MISSING,
+    AssociationCodec,
     EafExceptionBuilder,
+    EafExceptionTable,
+    SeExceptionBuilder,
+    SeExceptionTable,
     StoreCodec,
     StoreEncoding,
     ZOverflowBuilder,
-    positions_row_band,
-    rewrite_dense_se,
+    ZOverflowTable,
+    write_dense_se_side_arrays,
     write_eaf_baseline,
     write_eaf_reference,
 )
-from opengwasdb.encoding.association_codec import CellValues, log_se_out_of_range, storable
-from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase
+from opengwasdb.encoding.association_codec import CellValues, Placement, log_se_out_of_range
+from opengwasdb.encoding.codec import SideTables, table_end_to_end
+from opengwasdb.encoding.memory import pool_workers
+from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase, log_progress
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.constants import (
@@ -681,6 +690,7 @@ def _merge_checkpoint_fills(
     ld_dir: Path,
     ancestry: str,
     source_encoding: StoreEncoding,
+    n_workers: int = 1,
 ) -> tuple[StoreEncoding, bool, tuple[int, int], Path]:
     """Resolve every block checkpoint's fills to union rows and shard them by
     output row-band on disk, creating the empty completed planes alongside.
@@ -720,6 +730,7 @@ def _merge_checkpoint_fills(
         axis.n_variants,
         by_row_band(band_rows),
         impute_mask=axis.impute_mask,
+        n_workers=n_workers,
     )
     print(f"Wrote {quality_count:,} completion quality rows")
     return encoding, eaf_reference is not None, effective_chunks, fill_shard_dir
@@ -734,14 +745,17 @@ def _stream_completed_arrays(
     ancestry: str,
     source_encoding: StoreEncoding,
     timer: PhaseTimer,
+    n_workers: int = 1,
 ) -> _CompletedArrays:
     """Phase 3 — stream the completed z/se/imputed matrix out of the sharded
-    checkpoints into row-band writes (issue 044), returning the counts the
-    metadata phases must state. The merge and the band write are charged to
-    ``timer`` separately."""
+    checkpoints into row-band writes (issue 044), across ``n_workers`` (#321),
+    returning the counts the metadata phases must state. The merge and the
+    band write are charged to ``timer`` separately."""
     with _completion_phase(timer, MERGE_PHASE):
         encoding, eaf_reference_present, effective_chunks, fill_shard_dir = (
-            _merge_checkpoint_fills(staged, axis, blocks_dir, ld_dir, ancestry, source_encoding)
+            _merge_checkpoint_fills(
+                staged, axis, blocks_dir, ld_dir, ancestry, source_encoding, n_workers
+            )
         )
     print("Writing data.zarr (band-streamed)...")
     with _completion_phase(timer, BAND_PHASE):
@@ -758,8 +772,16 @@ def _stream_completed_arrays(
             encoding,
             impute_mask=axis.impute_mask,
             name_row=lambda row: axis.merged_variants[row].alid,
+            n_workers=n_workers,
         )
     shutil.rmtree(fill_shard_dir, ignore_errors=True)
+    return _completed_arrays(axis, tallies, encoding, eaf_reference_present)
+
+
+def _completed_arrays(
+    axis: _UnionAxis, tallies: _BandTallies, encoding: StoreEncoding, eaf_reference_present: bool
+) -> _CompletedArrays:
+    """The band write's counts, said once and returned for the metadata phases."""
     log_se_out_of_range(
         tallies.se_out_of_range,
         [analysis.analysis_id for analysis in axis.src_analyses],
@@ -984,7 +1006,8 @@ def _run_completion(
                 axis, src, checkpoint_dir, min_cor=min_cor, thresh=thresh, n_workers=n_workers
             )
         arrays = _stream_completed_arrays(
-            staged, src_root, axis, blocks_dir, ld_dir, ancestry, manifest.encoding, timer
+            staged, src_root, axis, blocks_dir, ld_dir, ancestry, manifest.encoding, timer,
+            n_workers,
         )
         _write_completed_manifest(
             staged,
@@ -1047,6 +1070,10 @@ def _create_completed_planes(
     the observed store carried one (ADR 0036) -- completion adds panel rows, it
     does not invent frequencies the source never reported.  Each plane gets its
     own missing marker (spec §15).
+
+    SE is created in the destination's own dtype and coded as each band is
+    written (#321), not staged as a `float32` plane and rewritten: the plane,
+    and its fresh seam compressor, are the ones the rewrite made (issue #326).
     """
     grid = (n_variants, n_analyses)
 
@@ -1068,10 +1095,17 @@ def _create_completed_planes(
     # The role's layout policy clipped the chunk shape to the array dimensions
     # (ADR 0021); read the effective chunks back for the band writers.
     effective_chunks = (int(z_array.chunks[0]), int(z_array.chunks[1]))
-    # Scratch in float32 so an exact residual exception is not rounded before
-    # the destination's final SE encoding is written below.  Never float16 --
-    # see `build_vcf._create_eaf_array` for why it cannot hold an EAF near 1.
-    plane("se", ArrayRole.DENSE_STATISTIC_PLANE, "float32", float("nan"), effective_chunks)
+    residual = codec.encoding.se.is_residual
+    create_array(
+        root,
+        "se",
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        shape=grid,
+        dtype=codec.encoding.se.dtype,
+        fill_value=SE_MISSING if residual else float("nan"),
+        compressor=compressor(),
+        hint=effective_chunks,
+    )
     plane("imputed", ArrayRole.DENSE_IMPUTED_MASK, "uint8", 0, effective_chunks)
     if src_has_eaf:
         plane(
@@ -1124,15 +1158,56 @@ def _create_completed_zarr(
     return effective_chunks
 
 
-# ── completed-band writer phases ─────────────────────────────────────────
+# ── the completed-band write ──────────────────────────────────────────────
 #
-# `_write_completed_bands` splits the write into cohesive phases so each stays
-# small enough to hold in the head at once: a statistic pass (seed z and SE,
-# fill both, judge each band's cells whole, count missingness, write z with its
-# overflow table, the imputed mask and the scratch SE), an eaf pass that carries
-# observed frequencies across the row remap, and the residual-SE rewrite that
-# finalises the scratch se plane. Every pass streams row bands, so peak memory
-# is two float32 bands rather than the whole grid (issue 044).
+# Each row band is written whole by one call, `_complete_band`: it reads the
+# band's source rows once (z, SE, and the EAF the SE was decoded against),
+# lands the band's fills, counts what is still missing, and encodes and writes
+# every plane in the destination's encoding (`AssociationCodec`: z, then EAF,
+# then SE against the EAF a reader decodes). A band is whole Dense shards, so
+# the bands run on the completion write pool and each worker writes only the
+# shards its band owns; the parent adds the bands' counts and side-table
+# entries in band order (#321). A band holds its own cells and codes whole --
+# its fills land anywhere in it -- and every read, count and encode inside it
+# steps through `_STEP_CELLS` at a time.
+
+#: Cells one step of a band's read, count and encode holds at a time, so their
+#: decoded and `float64` intermediates are bounded whatever the band's width.
+_STEP_CELLS = 1 << 24
+
+#: A band worker's fixed footprint and its footprint per cell of its band, in
+#: bytes: what the write pool divides the host's budget by (`_band_bytes`). A
+#: band holds its z, SE and EAF (`float32`), its imputed mask and its codes,
+#: 18 bytes a cell; the fixed part is a step's intermediates and the fork's floor.
+_BAND_FIXED_BYTES = 4 * 1024**3
+_BAND_BYTES_PER_CELL = 24
+
+
+def _band_bytes(n_analyses: int, band_rows: int) -> int:
+    """Bytes one band's worker holds."""
+    return _BAND_FIXED_BYTES + _BAND_BYTES_PER_CELL * n_analyses * band_rows
+
+
+#: What the parent holds of one band's outcome until it takes it: two counts a
+#: band per Analysis, and the band's table entries, 12 bytes each, pickled and
+#: unpickled. OGS-00009's completed release holds 6e-5 of its cells as SE
+#: exceptions (about 30,000 a band) and far fewer z and EAF ones; a fortieth of
+#: a byte a cell is room for 10^-3 of the cells (#321).
+_BAND_RESULT_BYTES_PER_ANALYSIS = 16
+_BAND_RESULT_CELLS_PER_BYTE = 40
+
+
+def _band_result_bytes(n_analyses: int, band_rows: int) -> int:
+    """Bytes the parent holds of one band's outcome."""
+    return (
+        _BAND_RESULT_BYTES_PER_ANALYSIS * n_analyses
+        + n_analyses * band_rows // _BAND_RESULT_CELLS_PER_BYTE
+    )
+
+
+def _step_rows(n_analyses: int) -> int:
+    """Rows of a band one step reads, counts or encodes."""
+    return max(1, _STEP_CELLS // max(n_analyses, 1))
 
 
 def _band_source_rows(
@@ -1142,6 +1217,120 @@ def _band_source_rows(
     they map to."""
     valid = np.where(out_to_src[r0:r1] >= 0)[0]
     return valid, out_to_src[r0:r1][valid]
+
+
+@dataclass(frozen=True)
+class _BandPlan:
+    """What every band of the write reads: opened by the parent before the
+    write pool forks, and inherited by its workers rather than pickled
+    (`ordered_write`)."""
+
+    root: Any
+    source: DenseGridReader
+    out_to_src: np.ndarray
+    on_panel: np.ndarray
+    fill_shard_dir: Path
+    codec: AssociationCodec
+    impute_mask: np.ndarray | None
+    band_rows: int
+    n_variants: int
+    n_analyses: int
+    #: Whether the source's frequencies are carried into the `eaf` plane.
+    carries_eaf: bool
+
+    def rows(self, band: int) -> tuple[int, int]:
+        r0 = band * self.band_rows
+        return r0, min(r0 + self.band_rows, self.n_variants)
+
+    def steps(self, n_rows: int) -> Iterator[tuple[int, int]]:
+        """``[0, n_rows)`` a step at a time."""
+        step = _step_rows(self.n_analyses)
+        for s0 in range(0, n_rows, step):
+            yield s0, min(s0 + step, n_rows)
+
+
+@dataclass(frozen=True)
+class _BandOutcome:
+    """What one band's write counted, and the side-table entries it owes."""
+
+    band: int
+    n_missing_off_panel: np.ndarray
+    se_out_of_range: np.ndarray
+    n_imputed: int
+    n_missing_imputation_failed: int
+    tables: SideTables
+    #: The fill records at the cells two fills disagree on, none of them kept
+    #: (D5), for the parent to log (D8), and how many cells they are at.
+    dropped: np.ndarray
+    n_conflicted_cells: int
+
+
+def _complete_band(plan: _BandPlan, band: int) -> _BandOutcome:
+    """Read, fill, count, encode and write one row band; runs in a pool worker.
+
+    The source's cells are judged as they are read, before any fill, and every
+    completed cell is judged whole (`storable`) before any plane holds it.
+    """
+    r0, r1 = plan.rows(band)
+    cells = _seed_band(plan, r0, r1)
+    n_missing_off_panel = np.zeros(plan.n_analyses, dtype=np.int64)
+    _count_band_off_panel_missing(n_missing_off_panel, cells.z, plan.on_panel, r0, r1)
+    assert cells.imputed is not None
+    n_imputed, dropped, n_conflicted = _apply_fill_shard_records(
+        cells.z, cells.se, cells.imputed, fill_shard_path(plan.fill_shard_dir, band), r0,
+        impute_mask=plan.impute_mask,
+    )
+    n_failed = _count_band_imputation_failed(cells.z, plan.on_panel, r0, r1)
+    codes, tables, se_out_of_range = _encode_band(plan, cells, r0)
+    del cells
+    _write_band(plan, codes, r0, r1)
+    return _BandOutcome(
+        band, n_missing_off_panel, se_out_of_range, n_imputed, n_failed, tables, dropped,
+        n_conflicted,
+    )
+
+
+def _seed_band(plan: _BandPlan, r0: int, r1: int) -> CellValues:
+    """The band's source cells, missing on every row no source cell maps to, and
+    an imputed mask with nothing imputed yet."""
+    shape = (r1 - r0, plan.n_analyses)
+    z = np.full(shape, np.nan, dtype=np.float32)
+    se = np.full(shape, np.nan, dtype=np.float32)
+    eaf = np.full(shape, np.nan, dtype=np.float32) if plan.carries_eaf else None
+    valid, rows = _band_source_rows(plan.out_to_src, r0, r1)
+    for s0, s1 in plan.steps(len(valid)):
+        _seed_paired_bands(z, se, eaf, plan.source, valid[s0:s1], rows[s0:s1])
+    return CellValues(z, se, eaf, imputed=np.zeros(shape, dtype=np.uint8))
+
+
+def _seed_paired_bands(
+    zb: np.ndarray,
+    sb: np.ndarray,
+    eb: np.ndarray | None,
+    source: DenseGridReader,
+    valid: np.ndarray,
+    rows: np.ndarray,
+) -> None:
+    """Seed band rows ``valid`` with source rows ``rows``: z, SE, and -- where
+    the release carries them -- the frequencies, refusing a source cell the
+    presence rule calls invalid (`InvalidAssociations`, ADR 0070).
+
+    A fill lands where z is missing, so a half-missing source cell (spec §15)
+    would come out with an imputed z beside an observed SE, or with its SE
+    replaced by an imputed one. A missing marker other than the canonical NaN
+    would be read as missing and, where nothing fills the cell, written into
+    the completed planes as itself.
+
+    One read: the frequencies are the ones the reader decoded the SE against,
+    so the source's `eaf` plane is read once, not again for the `eaf` plane.
+    """
+    if not len(valid):
+        return
+    cells = source.inspect(Cells.variants(rows)).associations(_SOURCE)
+    zb[valid, :] = _by_row(cells.z, source.n_analyses)
+    sb[valid, :] = _by_row(cells.se, source.n_analyses)
+    if eb is not None:
+        eb[valid, :] = _by_row(cells.eaf, source.n_analyses)
 
 
 def _count_band_off_panel_missing(
@@ -1157,19 +1346,27 @@ def _count_band_off_panel_missing(
     the fills are applied and after would give the same answer; counting them
     here keeps the fills and the two missingness accounts in the same pass.
     """
-    off_local = np.where(on_panel[r0:r1] == 0)[0]
-    if len(off_local):
-        n_missing_off_panel += np.isnan(band[off_local, :]).sum(axis=0).astype(np.int64)
+    step = _step_rows(band.shape[1])
+    for s0 in range(0, r1 - r0, step):
+        off_local = s0 + np.flatnonzero(on_panel[r0 + s0 : min(r0 + s0 + step, r1)] == 0)
+        if len(off_local):
+            n_missing_off_panel += np.isnan(band[off_local, :]).sum(axis=0).astype(np.int64)
 
 
 def _count_band_imputation_failed(
     band: np.ndarray, on_panel: np.ndarray, r0: int, r1: int
 ) -> int:
     """On-panel cells still missing once this band's fills were applied."""
-    on_local = np.where(on_panel[r0:r1] == 1)[0]
-    if len(on_local):
-        return int(np.isnan(band[on_local, :]).sum())
-    return 0
+    step = _step_rows(band.shape[1])
+    failed = 0
+    for s0 in range(0, r1 - r0, step):
+        on_local = s0 + np.flatnonzero(on_panel[r0 + s0 : min(r0 + s0 + step, r1)] == 1)
+        if len(on_local):
+            failed += int(np.isnan(band[on_local, :]).sum())
+    return failed
+
+
+_NO_FILLS = np.empty(0, dtype=FILL_RECORD_DTYPE)
 
 
 def _apply_fill_shard_records(
@@ -1180,20 +1377,19 @@ def _apply_fill_shard_records(
     r0: int,
     *,
     impute_mask: np.ndarray | None = None,
-    name_row: Callable[[int], str] = str,
-) -> int:
+) -> tuple[int, np.ndarray, int]:
     """Stream one band's fill-shard records into its NaN-seeded z and SE bands.
 
     A record lands only in a cell the source left missing -- it never
     overwrites an observed value -- and fills z and SE together and marks the
-    cell imputed; the count of cells filled is returned.
+    cell imputed. Returns the count of cells filled, the records at cells two
+    fills disagree on, and how many cells those are.
 
     A cell two records fill is resolved by Association Admission's duplicate
     rule (D5): fills that agree on z and SE are one, and fills that disagree
-    are all dropped, leaving the cell missing, each logged by its variant
-    (``name_row``), z and SE (D8). The block that starts at a shared endpoint
-    alone fills it (`shared_endpoints`), so two fills reach a cell only where
-    two blocks overlap elsewhere.
+    are all dropped, leaving the cell missing; the caller logs each (D8). The
+    block that starts at a shared endpoint alone fills it (`shared_endpoints`),
+    so two fills reach a cell only where two blocks overlap elsewhere.
 
     It enforces the ancestry-match filter: a nonmatching Analysis reaching the
     write means the filter applied at checkpoint resolution and the one applied
@@ -1211,33 +1407,38 @@ def _apply_fill_shard_records(
                 "checkpoint resolution and the one applied here disagree"
             )
         filled += apply_fill_batch(zb, sb, imputed_band, lr, ai, records["z"], records["se"])
+    if imputed_band.max(initial=0) < CONFLICTED:
+        return filled, _NO_FILLS, 0
     conflicted = imputed_band == CONFLICTED
-    if conflicted.any():
-        _log_conflicting_fills(shard_path, conflicted, r0, name_row)
-        clear_conflicted(zb, sb, imputed_band, conflicted)
-    return filled
+    dropped = _conflicting_fill_records(shard_path, conflicted, r0)
+    clear_conflicted(zb, sb, imputed_band, conflicted)
+    return filled, dropped, int(conflicted.sum())
+
+
+def _conflicting_fill_records(shard_path: Path, conflicted: np.ndarray, r0: int) -> np.ndarray:
+    """Every fill record at a conflicted cell, in the shard's order."""
+    parts = [
+        records[conflicted[records["row"] - r0, records["ai"]]]
+        for records in iter_fill_records(shard_path)
+    ]
+    return np.concatenate(parts) if parts else _NO_FILLS
 
 
 def _log_conflicting_fills(
-    shard_path: Path, conflicted: np.ndarray, r0: int, name_row: Callable[[int], str]
+    dropped: np.ndarray, n_cells: int, name_row: Callable[[int], str]
 ) -> None:
     """Log every fill record at a conflicted cell, one line each (D8).
 
     A completion writes no Admission Record (ADR 0072), so its log is where
     the fills it drops are named, all of them.
     """
-    n_cells = int(conflicted.sum())
-    n_rows = 0
-    for records in iter_fill_records(shard_path):
-        lr = records["row"] - r0
-        at = conflicted[lr, records["ai"]]
-        n_rows += log_dropped("fill", (
-            (analysis, name_row(row), z, se)
-            for row, analysis, z, se in zip(
-                records["row"][at].tolist(), records["ai"][at].tolist(),
-                records["z"][at].tolist(), records["se"][at].tolist(), strict=True,
-            )
-        ))
+    n_rows = log_dropped("fill", (
+        (analysis, name_row(row), z, se)
+        for row, analysis, z, se in zip(
+            dropped["row"].tolist(), dropped["ai"].tolist(),
+            dropped["z"].tolist(), dropped["se"].tolist(), strict=True,
+        )
+    ))
     log.warning(
         "complete-dense: %d fill(s) at %d cell(s) disagree, so none is kept "
         "(duplicate_conflicting)",
@@ -1245,123 +1446,88 @@ def _log_conflicting_fills(
     )
 
 
-def _seed_paired_bands(
-    zb: np.ndarray,
-    sb: np.ndarray,
-    source: DenseGridReader,
-    out_to_src: np.ndarray,
-    r0: int,
-) -> None:
-    """Seed one band of z and SE from the source, refusing a source cell the
-    presence rule calls invalid (`InvalidAssociations`, ADR 0070).
+def _band_planes(plan: _BandPlan) -> tuple[str, ...]:
+    return ("z", "se", "imputed", "eaf") if plan.carries_eaf else ("z", "se", "imputed")
 
-    A fill lands where z is missing, so a half-missing source cell (spec §15)
-    would come out with an imputed z beside an observed SE, or with its SE
-    replaced by an imputed one. A missing marker other than the canonical NaN
-    would be read as missing and, where nothing fills the cell, written into
-    the completed planes as itself.
 
-    The source's cells are judged as they are read, before any fill; a row no
-    source cell maps to keeps the canonical NaN it was filled with.
+def _encode_band(
+    plan: _BandPlan, cells: CellValues, r0: int
+) -> tuple[dict[str, np.ndarray], SideTables, np.ndarray]:
+    """Judge and encode the band a step at a time: each plane's codes, the
+    band's side-table entries, and its SEs above `float16`'s range per Analysis.
+
+    Each step is placed at its own rows, so a cell's code and its side-table
+    entry are the ones a whole-band encode gives it.
     """
-    valid, rows = _band_source_rows(out_to_src, r0, r0 + len(zb))
-    if not len(valid):
-        return
-    cells = source.inspect(Cells.variants(rows)).associations(_SOURCE)
-    zb[valid, :] = _by_row(cells.z, source.n_analyses)
-    sb[valid, :] = _by_row(cells.se, source.n_analyses)
+    n_rows = len(cells.z)
+    dtypes = {name: plan.root[name].dtype for name in _band_planes(plan)}
+    codes = {name: np.empty((n_rows, plan.n_analyses), dtype=dt) for name, dt in dtypes.items()}
+    z_overflow, eaf_exceptions, se_exceptions = (
+        ZOverflowBuilder(), EafExceptionBuilder(), SeExceptionBuilder()
+    )
+    se_out_of_range = np.zeros(plan.n_analyses, dtype=np.int64)
+    for s0, s1 in plan.steps(n_rows):
+        step = CellValues(
+            cells.z[s0:s1],
+            cells.se[s0:s1],
+            None if cells.eaf is None else cells.eaf[s0:s1],
+            imputed=None if cells.imputed is None else cells.imputed[s0:s1],
+        )
+        encoded = plan.codec.encode(
+            step,
+            Placement.band(r0 + s0, r0 + s1, plan.n_analyses),
+            where=f"complete-dense, rows {r0 + s0:,} to {r0 + s1:,}",
+        )
+        se_out_of_range += encoded.storable.se_out_of_range
+        held = {"z": encoded.z, "se": encoded.se, "imputed": encoded.imputed, "eaf": encoded.eaf}
+        for name in codes:
+            codes[name][s0:s1] = held[name]
+        for builder, table in (
+            (z_overflow, encoded.tables.z_overflow),
+            (eaf_exceptions, encoded.tables.eaf_exceptions),
+            (se_exceptions, encoded.tables.se_exceptions),
+        ):
+            builder.add(table.index, table.value)
+    tables = SideTables(z_overflow.table(), eaf_exceptions.table(), se_exceptions.table())
+    return codes, tables, se_out_of_range
+
+
+def _write_band(plan: _BandPlan, codes: dict[str, np.ndarray], r0: int, r1: int) -> None:
+    """Each plane's rows of this band, written once: whole shards, which no
+    other band's worker writes."""
+    for name, values in codes.items():
+        plan.root[name][r0:r1] = values
 
 
 @dataclass
 class _BandTallies:
-    """What the band pass counts as it writes, per Analysis or in total."""
+    """What the band write counts, per Analysis or in total."""
 
     n_missing_off_panel: np.ndarray
     se_out_of_range: np.ndarray
     total_imputed: int = 0
     n_missing_imputation_failed: int = 0
-    #: Flat positions of the cells `storable` does not store, whose
-    #: frequencies the eaf pass must not carry.
-    not_stored: list[np.ndarray] = field(default_factory=list)
 
-    def not_stored_positions(self) -> np.ndarray:
-        if not self.not_stored:
-            return np.empty(0, dtype=np.int64)
-        return np.concatenate(self.not_stored)
+    def add(self, outcome: _BandOutcome) -> None:
+        self.n_missing_off_panel += outcome.n_missing_off_panel
+        self.se_out_of_range += outcome.se_out_of_range
+        self.total_imputed += outcome.n_imputed
+        self.n_missing_imputation_failed += outcome.n_missing_imputation_failed
 
 
-def _write_completed_statistic_bands(
-    root: Any,
-    source: DenseGridReader,
-    out_to_src: np.ndarray,
-    on_panel: np.ndarray,
-    fill_shard_dir: Path,
-    codec: StoreCodec,
-    overflow: ZOverflowBuilder,
-    band_rows: int,
-    impute_mask: np.ndarray | None,
-    name_row: Callable[[int], str] = str,
-) -> _BandTallies:
-    """Seed z and SE from the source, apply the fills, and write z, the
-    imputed mask and the scratch float32 SE, one row-band at a time.
+@dataclass
+class _BandTables:
+    """The bands' side-table entries, each band's a run kept in band order: laid
+    end to end they are the tables (`table_end_to_end`), never sorted into place."""
 
-    One pass, so each completed cell is judged whole (`storable`) before any
-    plane holds it, and the fills land in z and SE together. Missingness is
-    accounted in the pass that sees the fills land: per-Analysis off-panel
-    missing, and on-panel cells still missing after the fills (the imputation
-    failures). Out-of-range z cells go into ``overflow``, which the caller
-    writes once, after the whole pass. The SE band is written as-is; the
-    residual-SE rewrite finalises it afterwards.
-    """
-    n_variants, n_analyses = (int(size) for size in root["z"].shape)
-    tallies = _BandTallies(
-        n_missing_off_panel=np.zeros(n_analyses, dtype=np.int64),
-        se_out_of_range=np.zeros(n_analyses, dtype=np.int64),
-    )
-    z_band = np.empty((band_rows, n_analyses), dtype=np.float32)
-    se_band = np.empty((band_rows, n_analyses), dtype=np.float32)
-    for band_index, r0 in enumerate(range(0, n_variants, band_rows)):
-        r1 = min(r0 + band_rows, n_variants)
-        zb, sb = z_band[: r1 - r0], se_band[: r1 - r0]
-        zb[:] = np.nan
-        sb[:] = np.nan
-        imp_band = np.zeros((r1 - r0, n_analyses), dtype=np.uint8)
-        _seed_paired_bands(zb, sb, source, out_to_src, r0)
-        _count_band_off_panel_missing(tallies.n_missing_off_panel, zb, on_panel, r0, r1)
-        tallies.total_imputed += _apply_fill_shard_records(
-            zb, sb, imp_band, fill_shard_path(fill_shard_dir, band_index), r0,
-            impute_mask=impute_mask, name_row=name_row,
-        )
-        tallies.n_missing_imputation_failed += _count_band_imputation_failed(
-            zb, on_panel, r0, r1
-        )
-        _write_judged_band(root, CellValues(zb, sb, imputed=imp_band), r0, codec, overflow, tallies)
-    return tallies
+    z_overflow: list[ZOverflowTable] = field(default_factory=list)
+    eaf_exceptions: list[EafExceptionTable] = field(default_factory=list)
+    se_exceptions: list[SeExceptionTable] = field(default_factory=list)
 
-
-def _write_judged_band(
-    root: Any,
-    band: CellValues,
-    r0: int,
-    codec: StoreCodec,
-    overflow: ZOverflowBuilder,
-    tallies: _BandTallies,
-) -> None:
-    """Judge one completed band whole (`storable`), then write z, the imputed
-    mask and the scratch SE from what it keeps, counting what it does not."""
-    n_analyses = int(root["z"].shape[1])
-    r1 = r0 + len(band.z)
-    kept = storable(
-        band, np.arange(n_analyses), n_analyses, where=f"complete-dense, rows {r0:,} to {r1:,}"
-    )
-    tallies.se_out_of_range += kept.se_out_of_range
-    if not kept.stored.all():
-        tallies.not_stored.append(np.flatnonzero(~kept.stored) + r0 * n_analyses)
-    root["z"][r0:r1] = codec.encode_z(
-        kept.cells.z, positions=positions_row_band(r0, n_analyses), overflow=overflow
-    )
-    root["imputed"][r0:r1] = kept.cells.imputed
-    root["se"][r0:r1] = kept.cells.se
+    def add(self, tables: SideTables) -> None:
+        self.z_overflow.append(tables.z_overflow)
+        self.eaf_exceptions.append(tables.eaf_exceptions)
+        self.se_exceptions.append(tables.se_exceptions)
 
 
 def _carried_eaf_baseline(
@@ -1385,76 +1551,25 @@ def _carried_eaf_baseline(
     return out_baseline
 
 
-def _write_completed_eaf_bands(
-    root: Any,
-    src_root: Any,
-    out_to_src: np.ndarray,
-    source_encoding: StoreEncoding,
-    encoding: StoreEncoding,
-    n_variants: int,
-    n_analyses: int,
-    band_rows: int,
-    not_stored: np.ndarray,
-) -> None:
-    """Carry observed frequencies across the row remap, one row-band at a time.
-
-    Observed cells keep their source value and nothing else: an imputed cell's
-    frequency is the panel's (stored once per variant and applied on read), an
-    observed cell whose source reported none stays absent, and so does one the
-    statistic pass did not store (``not_stored``, flat positions). The exception
-    side table is written only when the release carries a baseline -- a
-    baseline-less eaf plane has no residual codes to make exceptions for.
-    """
-    src_eaf_plane = DenseEafPlane.open(src_root, source_encoding)
-    eaf_codec = StoreCodec(encoding)
-    exceptions = EafExceptionBuilder()
-    out_baseline = _carried_eaf_baseline(src_root, out_to_src, n_variants)
-    eaf_arr = root["eaf"]
-    eaf_band = np.empty((band_rows, n_analyses), dtype=np.float32)
-    for r0 in range(0, n_variants, band_rows):
-        r1 = min(r0 + band_rows, n_variants)
-        eb = eaf_band[: r1 - r0]
-        eb[:] = np.nan
-        valid = np.where(out_to_src[r0:r1] >= 0)[0]
-        if len(valid):
-            eb[valid, :] = src_eaf_plane.points(
-                np.repeat(out_to_src[r0:r1][valid], n_analyses),
-                np.tile(np.arange(n_analyses, dtype=np.int64), len(valid)),
-            ).reshape(len(valid), n_analyses)
-        lo, hi = np.searchsorted(not_stored, [r0 * n_analyses, r1 * n_analyses])
-        eb.reshape(-1)[not_stored[lo:hi] - r0 * n_analyses] = np.nan
-        band_baseline = (
-            None
-            if out_baseline is None
-            else np.repeat(out_baseline[r0:r1, None], n_analyses, axis=1)
-        )
-        eaf_arr[r0:r1] = eaf_codec.encode_eaf(
-            eb,
-            baseline=band_baseline,
-            positions=positions_row_band(r0, n_analyses),
-            exceptions=exceptions,
-        )
-    if out_baseline is not None:
-        write_eaf_baseline(root, out_baseline, compressor=_COMPRESSOR)
-        exceptions.table().write(root)
+def _source_se_coefficients(
+    src_root: Any, encoding: StoreEncoding, n_analyses: int
+) -> np.ndarray | None:
+    """The source's SE model, which every completed SE is coded against under a
+    residual plan, never refitted (issue #301); ``None`` for a `float16` plan."""
+    if not encoding.se.is_residual:
+        return None
+    coefficients = np.asarray(src_root["se_coefficients"][:], dtype=np.float32)
+    if coefficients.shape != (n_analyses, 2) or not np.all(np.isfinite(coefficients)):
+        raise ValueError(f"se_coefficients must have finite shape ({n_analyses}, 2)")
+    return coefficients
 
 
-def _rewrite_completed_residual_se(
-    root: Any, src_root: Any, encoding: StoreEncoding
-) -> None:
-    """Finalise the scratch float32 se plane under the destination's plan.
-
-    A residual plan needs the source release's per-Analysis coefficients (the
-    prediction each cell's stored int8 residual is measured against); a
-    non-residual plan is narrowed to float16. Either way the source
-    coefficients are read only when the plan is residual.
-    """
-    source_coefficients = (
-        np.asarray(src_root["se_coefficients"][:], dtype=np.float32)
-        if encoding.se.is_residual
-        else None
-    )
-    rewrite_dense_se(root, encoding, source_coefficients)
+def _held_eaf_reference(root: Any) -> np.ndarray | None:
+    """The panel frequencies as the release stores them, which an imputed
+    cell's SE is coded against (ADR 0037 §4)."""
+    if EAF_REFERENCE not in root:
+        return None
+    return np.asarray(root[EAF_REFERENCE][:], dtype=np.float32)
 
 
 def _write_completed_bands(
@@ -1470,56 +1585,97 @@ def _write_completed_bands(
     encoding: StoreEncoding,
     impute_mask: np.ndarray | None = None,
     name_row: Callable[[int], str] = str,
+    n_workers: int = 1,
 ) -> _BandTallies:
-    """Seed z/se from the source, apply the imputed fills, and write
-    z/se/imputed one row-band at a time, in cohesive phases: the statistic
-    pass seeds z and SE from the source, applies the fills to both, judges
-    each band's cells whole, and accounts missingness while validating the
-    fill shards against the ancestry-match filter; the eaf pass carries
-    observed frequencies across the row remap; and the residual-SE rewrite
-    finalises the scratch float32 se plane. The statistic pass holds a z and
-    an SE band, the others one band each. Fill records are read from
-    per-band shard files in bounded chunks.
+    """Write every row band of the completed planes, across the write pool, and
+    then the side tables and per-variant arrays the bands' codes need.
+
+    Source z, SE and EAF are read decoded and written re-encoded through the
+    source's plan -- completion moves values between two planes, it does not
+    reinterpret them -- with the per-variant EAF baseline carried across the
+    row remap and SE coded against the source's model. Fill records are read
+    from per-band shard files in bounded chunks.
 
     ``impute_mask`` (bool per analysis; ``None`` = impute all) is the
     per-Analysis ancestry-match filter (ADR 0028): a masked-out analysis stays
     observed-only (NaN, ``imputed=0``) -- never imputed against a
     non-matching-ancestry panel. It is applied at checkpoint resolution, not
     here, so that ``completion_quality`` and the arrays are filtered by the
-    same act; this function only checks that the shards it reads honour it.
+    same act; the band write only checks that the shards it reads honour it.
     """
     root = staged.arrays(mode="a")
-    overflow = ZOverflowBuilder()
-    band_rows = completion_band_rows(_dense_shard_rows(staged, effective_chunks))
-    # Source z is read decoded and written re-encoded, through the same plan --
-    # completion moves values between two planes, it does not reinterpret them.
-    tallies = _write_completed_statistic_bands(
-        root,
-        DenseGridReader.open(src_root, source_encoding, source=_SOURCE),
-        out_to_src,
-        on_panel,
-        fill_shard_dir,
-        StoreCodec(encoding),
-        overflow,
-        band_rows,
-        impute_mask,
-        name_row,
-    )
-    overflow.table().write(root)
-
-    if "eaf" in root and "eaf" in src_root:
-        _write_completed_eaf_bands(
-            root,
-            src_root,
-            out_to_src,
-            source_encoding,
+    carries_eaf = "eaf" in root and "eaf" in src_root
+    baseline = _carried_eaf_baseline(src_root, out_to_src, n_variants) if carries_eaf else None
+    coefficients = _source_se_coefficients(src_root, encoding, n_analyses)
+    plan = _BandPlan(
+        root=root,
+        source=DenseGridReader.open(src_root, source_encoding, source=_SOURCE),
+        out_to_src=out_to_src,
+        on_panel=on_panel,
+        fill_shard_dir=fill_shard_dir,
+        codec=AssociationCodec(
             encoding,
-            n_variants,
-            n_analyses,
-            band_rows,
-            np.sort(tallies.not_stored_positions()),
-        )
-
-    _rewrite_completed_residual_se(root, src_root, encoding)
-
+            eaf_baseline=baseline,
+            eaf_reference=_held_eaf_reference(root),
+            se_coefficients=coefficients,
+        ),
+        impute_mask=impute_mask,
+        band_rows=completion_band_rows(_dense_shard_rows(staged, effective_chunks)),
+        n_variants=n_variants,
+        n_analyses=n_analyses,
+        carries_eaf=carries_eaf,
+    )
+    tallies, tables = _run_bands(plan, n_workers, name_row)
+    _write_side_arrays(root, tables, baseline, coefficients)
     return tallies
+
+
+def _run_bands(
+    plan: _BandPlan, n_workers: int, name_row: Callable[[int], str]
+) -> tuple[_BandTallies, _BandTables]:
+    """Every band across the write pool, its outcome taken in band order: the
+    counts added, the side-table entries kept, and the fills a band dropped
+    logged by their variant (D8)."""
+    tallies = _BandTallies(
+        n_missing_off_panel=np.zeros(plan.n_analyses, dtype=np.int64),
+        se_out_of_range=np.zeros(plan.n_analyses, dtype=np.int64),
+    )
+    tables = _BandTables()
+    n_bands = -(-plan.n_variants // plan.band_rows)
+    workers = pool_workers(
+        n_workers,
+        _band_bytes(plan.n_analyses, plan.band_rows),
+        what=BAND_PHASE,
+        unit=f"{plan.band_rows:,}-row band of {plan.n_analyses:,} Analyses",
+        units=n_bands,
+        result_bytes=_band_result_bytes(plan.n_analyses, plan.band_rows),
+    )
+    started = time.monotonic()
+    outcomes = ordered_write(_complete_band, plan, range(n_bands), workers)
+    for band, outcome in enumerate(outcomes):
+        if outcome.band != band:
+            raise RuntimeError(f"band {outcome.band} arrived where band {band} belongs")
+        tallies.add(outcome)
+        tables.add(outcome.tables)
+        if outcome.n_conflicted_cells:
+            _log_conflicting_fills(outcome.dropped, outcome.n_conflicted_cells, name_row)
+        log_progress(log, BAND_PHASE, band + 1, n_bands, started, every=max(1, n_bands // 20))
+    return tallies, tables
+
+
+def _write_side_arrays(
+    root: Any,
+    tables: _BandTables,
+    baseline: np.ndarray | None,
+    coefficients: np.ndarray | None,
+) -> None:
+    """The arrays the bands' codes cannot be decoded without: z's overflow
+    table; the carried EAF baseline and its exception table, when the release
+    carries one (a baseline-less plane has no residual codes to make exceptions
+    for); and a residual SE plane's exception table and model."""
+    table_end_to_end(ZOverflowTable, tables.z_overflow).write(root)
+    if baseline is not None:
+        write_eaf_baseline(root, baseline, compressor=_COMPRESSOR)
+        table_end_to_end(EafExceptionTable, tables.eaf_exceptions).write(root)
+    if coefficients is not None:
+        write_dense_se_side_arrays(root, tables.se_exceptions, coefficients)

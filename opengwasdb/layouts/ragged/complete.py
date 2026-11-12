@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -64,7 +65,7 @@ from opengwasdb.completion.manifest import (
     build_completion_provenance,
     completed_release_manifest,
 )
-from opengwasdb.completion.parallel import run_block_tasks
+from opengwasdb.completion.parallel import ordered_write, run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.regions import analysis_regions, inside, region_blocks
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
@@ -73,6 +74,7 @@ from opengwasdb.encoding import (
     SE_EXCEPTION_BUDGET,
     StoreEncoding,
 )
+from opengwasdb.encoding.memory import pool_workers, resident_bytes
 from opengwasdb.encoding.planes import SE_COEFFICIENTS
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -989,20 +991,35 @@ def _region_rows(plan: _BlockPlan, block_rows: dict[str, _BlockRows], ai: int) -
     return out
 
 
+def _analysis_cells(plan: _BlockPlan, block_rows: dict[str, _BlockRows]) -> np.ndarray:
+    """Each Analysis's block positions inside its regions: the most fills it can
+    have, and the most rows completion adds to it."""
+    return np.array(
+        [
+            sum(len(rows) for rows in _region_rows(plan, block_rows, ai))
+            for ai in range(plan.state.n_analyses)
+        ],
+        dtype=np.int64,
+    )
+
+
 def _analysis_batches(
-    plan: _BlockPlan, block_rows: dict[str, _BlockRows], budget: int = _FILL_BATCH_CELLS
+    plan: _BlockPlan,
+    block_rows: dict[str, _BlockRows],
+    budget: int = _FILL_BATCH_CELLS,
+    cells: np.ndarray | None = None,
 ) -> np.ndarray:
     """Each Analysis's fill-shard batch: consecutive Analyses, as many as fit
     `budget` cells. An Analysis has at most one fill per position of each block
-    it is completed against, so that count bounds its shard's records."""
+    it is completed against, so that count (`cells`) bounds its shard's records."""
+    per_analysis = _analysis_cells(plan, block_rows) if cells is None else cells
     batch_of = np.zeros(plan.state.n_analyses, dtype=np.int64)
     batch, held = 0, 0
-    for ai in range(plan.state.n_analyses):
-        cells = sum(len(rows) for rows in _region_rows(plan, block_rows, ai))
-        if held and held + cells > budget:
+    for ai, count in enumerate(per_analysis.tolist()):
+        if held and held + count > budget:
             batch, held = batch + 1, 0
         batch_of[ai] = batch
-        held += cells
+        held += count
     return batch_of
 
 
@@ -1043,7 +1060,8 @@ def _checkpoint_and_assemble(
     print("Merging block results from checkpoints...")
     union = fill_shards.sorted_union_map(axis.new_alid_to_idx)
     block_rows = _block_rows(plan, axis)
-    batch_of = _analysis_batches(plan, block_rows)
+    cells = _analysis_cells(plan, block_rows)
+    batch_of = _analysis_batches(plan, block_rows, cells=cells)
     # No impute_mask here: Phase 1 is where the ancestry-match filter applies
     # (ADR 0028), since an Analysis it excludes is given no block, so its
     # checkpoints hold neither fills nor completion_quality rows to drop.
@@ -1053,12 +1071,83 @@ def _checkpoint_and_assemble(
         union,
         len(axis.variants),
         fill_shards.by_analysis_batch(batch_of),
+        n_workers=n_workers,
     )
     print(f"Wrote {quality_count:,} completion quality rows")
-    csr = _assemble_completed_csr(plan, axis, block_rows, fill_shard_dir, batch_of, eaf_reference)
+    csr = _assemble_completed_csr(
+        _Assembly(plan, axis, block_rows), fill_shard_dir, batch_of, eaf_reference, n_workers,
+        added_cells=int(cells.sum()),
+        largest_added=int(cells.max()) if len(cells) else 0,
+    )
     shutil.rmtree(fill_shard_dir)
     print(f"Completion done: {csr.total_imputed:,} imputed, {csr.total_missing:,} missing")
     return csr
+
+
+@dataclass(frozen=True)
+class _Assembly:
+    """What assembling any Analysis reads: made by the parent before the write
+    pool forks, and inherited by its workers rather than pickled
+    (`ordered_write`)."""
+
+    plan: _BlockPlan
+    axis: _MergedAxis
+    block_rows: dict[str, _BlockRows]
+
+
+#: An Analysis's worker holds a few masks and an `int64` position over the
+#: whole merged axis, and per row of its Analysis its read and its completed
+#: arrays. Measured on the OGS-00006 100-Analysis subset (11.5 M variants), its
+#: workers held 122 MB private for a typical Analysis -- 10.6 bytes a variant --
+#: and 264 MB for its largest, 6.69 M rows: 21 bytes a row more (#321). Each is
+#: rounded up by half again, since a 0.2 s sample can miss a short peak, and the
+#: fixed part covers the fork's floor.
+_ASSEMBLY_FIXED_BYTES = 256 * 1024**2
+_ASSEMBLY_BYTES_PER_VARIANT = 16
+_ASSEMBLY_BYTES_PER_ROW = 32
+
+
+#: What the parent's writer holds for each completed row: its variant index,
+#: z, SE and EAF, and its imputed flag.
+_HELD_BYTES_PER_CELL = 17
+#: What the parent holds of one completed Analysis until the writer takes it:
+#: the same 17 bytes a row, pickled and unpickled.
+_RESULT_BYTES_PER_ROW = 2 * _HELD_BYTES_PER_CELL
+
+
+def _assembly_bytes(n_variants: int, max_rows: int) -> int:
+    """Bytes one Analysis's worker holds, for the largest Analysis."""
+    return (
+        _ASSEMBLY_FIXED_BYTES
+        + _ASSEMBLY_BYTES_PER_VARIANT * n_variants
+        + _ASSEMBLY_BYTES_PER_ROW * max_rows
+    )
+
+
+def _complete_analysis(
+    assembly: _Assembly, item: tuple[int, np.ndarray]
+) -> tuple[int, _AnalysisCompleted]:
+    """One Analysis's index and completed rows; runs in a write-pool worker."""
+    ai, fills = item
+    return ai, _completed_analysis(
+        ai,
+        source=assembly.plan.source,
+        src_alids=assembly.plan.state.src_alids,
+        axis=assembly.axis,
+        reference=_region_rows(assembly.plan, assembly.block_rows, ai),
+        fills=fills,
+    )
+
+
+def _analysis_fills(
+    fill_shard_dir: Path, batch_of: np.ndarray
+) -> Iterator[tuple[int, np.ndarray]]:
+    """Each Analysis in order with its fills, one batch's shard read at a time."""
+    no_fills = np.empty(0, dtype=fill_shards.FILL_RECORD_DTYPE)
+    for batch in range(int(batch_of[-1]) + 1 if len(batch_of) else 0):
+        fills = _batch_fills(fill_shard_dir, batch)
+        for ai in np.flatnonzero(batch_of == batch).tolist():
+            yield ai, fills.pop(ai, no_fills)
 
 
 def _batch_fills(fill_shard_dir: Path, batch: int) -> dict[int, np.ndarray]:
@@ -1076,50 +1165,74 @@ def _batch_fills(fill_shard_dir: Path, batch: int) -> dict[int, np.ndarray]:
 
 
 def _assemble_completed_csr(
-    plan: _BlockPlan,
-    axis: _MergedAxis,
-    block_rows: dict[str, _BlockRows],
+    assembly: _Assembly,
     fill_shard_dir: Path,
     batch_of: np.ndarray,
     eaf_reference: np.ndarray | None,
+    n_workers: int = 1,
+    added_cells: int = 0,
+    largest_added: int = 0,
 ) -> _CompletedCsr:
     """Phase 3 assembly: each Analysis's completed rows -- remapped observed
     rows, its fills and its missing block positions, sorted by variant index --
     added to the writer in Analysis order, one batch's fill shard read at a
     time. The writer judges each Analysis whole (`storable`); as a completion's
     (`ReferenceCompletion`), it logs the SEs above `float16`'s range once, as
-    it writes, naming every Analysis."""
+    it writes, naming every Analysis.
+
+    The Analyses are completed across ``n_workers`` (#321), each reading its
+    own source rows; the parent adds them to the writer in Analysis order, so
+    the sequence, its offsets and every side table keyed on a flat position are
+    the ones one worker writes. The writer holds every completed row by the
+    end, at most the source's rows and ``added_cells`` more, and the pool is
+    sized beside that."""
     print("Assembling completed CSR per analysis...")
+    plan, axis = assembly.plan, assembly.axis
     analysis_ids = [a.analysis_id for a in plan.state.src_analyses]
     writer = RaggedCSRWriter(
         len(axis.variants),
         ReferenceCompletion(tuple(analysis_ids), eaf_reference, where="complete-ragged"),
     )
+    largest = _largest_analysis(plan.source)
+    workers = pool_workers(
+        n_workers,
+        _assembly_bytes(len(axis.variants), largest),
+        what="Assembly",
+        unit=f"completed Analysis over {len(axis.variants):,} variants",
+        units=plan.state.n_analyses,
+        parent_bytes=resident_bytes()
+        + _HELD_BYTES_PER_CELL * (_source_cells(plan.source) + added_cells),
+        result_bytes=_RESULT_BYTES_PER_ROW * (largest + largest_added),
+    )
     total_imputed = total_missing = 0
-    no_fills = np.empty(0, dtype=fill_shards.FILL_RECORD_DTYPE)
-    for batch in range(int(batch_of[-1]) + 1 if len(batch_of) else 0):
-        fills = _batch_fills(fill_shard_dir, batch)
-        for ai in np.flatnonzero(batch_of == batch).tolist():
-            completed = _completed_analysis(
-                ai,
-                source=plan.source,
-                src_alids=plan.state.src_alids,
-                axis=axis,
-                reference=_region_rows(plan, block_rows, ai),
-                fills=fills.get(ai, no_fills),
+    items = _analysis_fills(fill_shard_dir, batch_of)
+    outcomes = ordered_write(_complete_analysis, assembly, items, workers)
+    for expected, (ai, completed) in enumerate(outcomes):
+        if ai != expected:
+            raise RuntimeError(f"Analysis {ai} arrived where Analysis {expected} belongs")
+        writer.add_analysis(
+            completed.vi, completed.z, completed.se, eaf=completed.eaf,
+            imputed=completed.imp, where=f"complete-ragged, Analysis {analysis_ids[ai]}",
+        )
+        total_imputed += completed.n_imputed
+        total_missing += completed.n_missing
+        if (ai + 1) % 500 == 0:
+            print(
+                f"  {ai + 1:,} / {plan.state.n_analyses:,} analyses | "
+                f"imputed {total_imputed:,} | missing {total_missing:,}"
             )
-            writer.add_analysis(
-                completed.vi, completed.z, completed.se, eaf=completed.eaf,
-                imputed=completed.imp, where=f"complete-ragged, Analysis {analysis_ids[ai]}",
-            )
-            total_imputed += completed.n_imputed
-            total_missing += completed.n_missing
-            if (ai + 1) % 500 == 0:
-                print(
-                    f"  {ai + 1:,} / {plan.state.n_analyses:,} analyses | "
-                    f"imputed {total_imputed:,} | missing {total_missing:,}"
-                )
     return _CompletedCsr(writer=writer, total_imputed=total_imputed, total_missing=total_missing)
+
+
+def _largest_analysis(source: CsrReader) -> int:
+    """The most rows any one source Analysis holds."""
+    offsets = np.asarray(source.structure.offsets, dtype=np.int64)
+    return int(np.diff(offsets).max()) if len(offsets) > 1 else 0
+
+
+def _source_cells(source: CsrReader) -> int:
+    """Every row the source holds."""
+    return int(source.structure.offsets[-1]) if len(source.structure.offsets) else 0
 
 
 def _observed_rows(
@@ -1329,14 +1442,16 @@ def _write_completed_zarr(
     csr: _CompletedCsr,
     analyses: list[Analysis],
     n_variants: int,
+    n_workers: int = 1,
 ) -> dict[str, Any] | None:
     """Phase 4: write the completed CSR as the store's ragged zarr group, then
     its variant-centric index (ADR 0060). Returns the SE exception record of a
     residual plane, reported here (issue #301).
 
-    Written through the builders' writer, region by region (issue #424), with
-    the source's plan: completion writes into the source's arrays, so it
-    encodes with the source's plan (ADR 0038 §4), the one addition being
+    Written through the builders' writer, region by region (issue #424), the
+    regions across ``n_workers`` (#321), with the source's plan: completion
+    writes into the source's arrays, so it encodes with the source's plan (ADR
+    0038 §4), the one addition being
     `eaf_reference`. Observed frequencies only: an imputed cell's frequency is
     the panel's, stored once per variant and applied on read (ADR 0037 §4).
     The per-variant baseline travels with the values across the variant remap
@@ -1357,11 +1472,12 @@ def _write_completed_zarr(
     cells, so a copied index would answer with the source's rows.
     """
     print("Writing zarr CSR...")
-    counts = csr.writer.flush(
+    counts = csr.writer.flush_regions(
         staged.path,
         encode_plan.encoding,
         eaf_baseline=encode_plan.out_baseline,
         se_coefficients=encode_plan.se_coefficients,
+        n_workers=n_workers,
     )
     se_exceptions = (
         None
@@ -1539,7 +1655,7 @@ def _run_completion(
             eaf_reference=encode_plan.eaf_reference,
         )
         se_exceptions = _write_completed_zarr(
-            staged, encode_plan, csr, state.src_analyses, len(axis.variants)
+            staged, encode_plan, csr, state.src_analyses, len(axis.variants), n_workers
         )
         _write_top_hits_and_analyses(staged, state, encode_plan, ancestry=ancestry)
         staged.write_manifest(

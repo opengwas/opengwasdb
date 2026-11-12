@@ -1504,6 +1504,23 @@ def calibrate_ancestry_command(
         )
 
 
+#: What `--n-workers` sizes in each completion (#321): the LD-block pool, then
+#: the pools of the write after it, which run fewer workers when a quarter of
+#: the host's available memory holds fewer.
+_DENSE_WORKERS_HELP = (
+    "Process-pool size for the LD blocks, then for the checkpoint merge and the band "
+    "write, which run fewer when a quarter of available memory holds fewer"
+)
+_HYBRID_WORKERS_HELP = (
+    "Process-pool size for the Dense Component's LD blocks, checkpoint merge and band "
+    "write; the last two run fewer when a quarter of available memory holds fewer"
+)
+_RAGGED_WORKERS_HELP = (
+    "Process-pool size for the LD blocks, then for the checkpoint merge, the Analyses' "
+    "assembly and the CSR write, which run fewer when a quarter of available memory holds fewer"
+)
+
+
 @app.command("complete-hybrid")
 def complete_hybrid_command(
     source_path: Path,
@@ -1513,7 +1530,7 @@ def complete_hybrid_command(
     min_cor: float = typer.Option(0.7),
     thresh: float = typer.Option(0.9),
     release_id: str = typer.Option(None),
-    n_workers: int = typer.Option(1, help="LD-block process-pool size"),
+    n_workers: int = typer.Option(1, help=_HYBRID_WORKERS_HELP),
     overwrite: bool = typer.Option(False),
 ) -> None:
     """Reference-complete a Hybrid store — impute only the Dense Component."""
@@ -1675,7 +1692,7 @@ def complete_ragged_command(
     cis_window_bp: int = typer.Option(1_000_000),
     min_cor: float = typer.Option(0.7),
     release_id: str = typer.Option(None),
-    n_workers: int = typer.Option(1, help="LD-block process-pool size"),
+    n_workers: int = typer.Option(1, help=_RAGGED_WORKERS_HELP),
     overwrite: bool = typer.Option(False),
 ) -> None:
     """Produce a Reference-Completed ragged store from an observed-only store.
@@ -1746,7 +1763,7 @@ def complete_dense_command(
     min_cor: float = typer.Option(0.7),
     thresh: float = typer.Option(0.9),
     release_id: str = typer.Option(None),
-    n_workers: int = typer.Option(1, help="LD-block process-pool size"),
+    n_workers: int = typer.Option(1, help=_DENSE_WORKERS_HELP),
     overwrite: bool = typer.Option(False),
 ) -> None:
     """Produce a Reference-Completed Dense store from a `gwas`-coverage observed-only store."""
@@ -1770,7 +1787,7 @@ def complete_dense_command(
 @app.command("complete-dense-resume")
 def complete_dense_resume_command(
     checkpoint_dir: Path,
-    n_workers: int = typer.Option(1, help="LD-block process-pool size"),
+    n_workers: int = typer.Option(1, help=_DENSE_WORKERS_HELP),
 ) -> None:
     """Resume an interrupted complete-dense run from its checkpoint directory.
 

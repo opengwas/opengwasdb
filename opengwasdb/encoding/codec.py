@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, NoReturn, Self, cast
+from typing import Any, ClassVar, NoReturn, Self, TypeVar, cast
 
 import numpy as np
 
@@ -634,6 +634,9 @@ class SparseExactBuilder:
         return cls(index=index, value=value)
 
 
+_Table = TypeVar("_Table", bound=SparseExactTable)
+
+
 @dataclass(frozen=True)
 class ZOverflowTable(SparseExactTable):
     """Exact `float32` z for the cells the fixed-point plane cannot hold.
@@ -680,6 +683,23 @@ class EafExceptionBuilder(SparseExactBuilder):
         return cast(EafExceptionTable, super().table())
 
 
+def table_end_to_end(table_type: type[_Table], runs: Sequence[_Table]) -> _Table:
+    """One table from runs of entries, each a contiguous range of flat positions,
+    laid end to end in the order given -- a Dense row band's, a Ragged region's.
+
+    Not sorted: the order the runs are given in is the table, so a caller that
+    assembled them in the order its workers *finished* is refused by the table's
+    own rule (its index would no longer ascend) instead of writing a table no
+    lookup can read (#321, as `eaf_exception_table` for the Dense build).
+    """
+    if not runs:
+        return table_type(index=np.empty(0, dtype=np.int64), value=np.empty(0, dtype=np.float32))
+    return table_type(
+        index=np.concatenate([run.index for run in runs]),
+        value=np.concatenate([run.value for run in runs]),
+    )
+
+
 def eaf_exception_table(bands: Sequence[EafExceptionTable]) -> EafExceptionTable:
     """One table from a grid encode's per-band ones, in the order they arrive.
 
@@ -691,12 +711,7 @@ def eaf_exception_table(bands: Sequence[EafExceptionTable]) -> EafExceptionTable
     order its workers *finished* is refused by the table's own rule (the index
     would no longer ascend), instead of writing a table no lookup can read.
     """
-    if not bands:
-        return EafExceptionTable.empty()
-    return EafExceptionTable(
-        index=np.concatenate([band.index for band in bands]),
-        value=np.concatenate([band.value for band in bands]),
-    )
+    return table_end_to_end(EafExceptionTable, bands)
 
 
 @dataclass(frozen=True)

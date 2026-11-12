@@ -40,12 +40,10 @@ READERS = (
 #: writer by its private name (#391).
 OWN_NAMES_ONLY = ("layouts/hybrid/complete.py",)
 
-#: The planes a reader module reaches that hold no association, and why.
-READER_PLANES = {
-    ("layouts/dense/complete.py", "imports DenseEafPlane"):
-        "the frequency pass carries each observed cell's stored frequency across the "
-        "row remap, after the statistic pass has read and judged the cell through the reader",
-}
+#: The planes a reader module reaches that hold no association, and why. Dense
+#: completion's frequency pass read the source's `eaf` plane here until #321
+#: read each band's frequencies with its z and SE, through the reader.
+READER_PLANES: dict[tuple[str, str], str] = {}
 
 #: The one SE decode in a reader module: it reads no plane, but re-encodes the
 #: source's crossover cells and decodes them, to predict what completion stored.

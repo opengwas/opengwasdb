@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from dense_sources import build_dense_from_records
+from pool_budget import pin_pool_units
 from test_dense_completion import _make_ld_panel
 
 from benchmarks import profile_reference_completion as profiler
@@ -25,6 +26,7 @@ from benchmarks.profile_reference_completion import (
     require_new_directory,
     scale_to_full_run,
 )
+from opengwasdb.completion.fill_shards import resolve_unit_bytes
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.variants import CanonicalVariant
 
@@ -203,7 +205,8 @@ def test_bands_artifact_splits_each_pass_and_scales_to_the_full_run(
     artifact = _run(tmp_path, "bands", observed, panel, "--bands", "1", "--n-workers", "1")
 
     assert artifact["bands_run"] == 1
-    assert artifact["blocks_run"] == 1, "only chromosome 1's block starts in the first band"
+    # One band holds all 7 rows, so both chromosomes' blocks fill it.
+    assert artifact["blocks_run"] == 2
     assert artifact["blocks_in_panel"] == 2
     assert artifact["accounted_seconds"] == pytest.approx(
         artifact["wall_seconds"], rel=0.05, abs=0.05
@@ -212,13 +215,80 @@ def test_bands_artifact_splits_each_pass_and_scales_to_the_full_run(
     assert {
         "axis_construction_full", "ld_block_phase_slice", "merge_shard_fills_and_quality",
         "merge_union_map", "merge_reference_eaf", "merge_create_planes",
-        "stat_read_source", "stat_read_fills", "stat_compute_judge", "stat_write",
-        "eaf_read_source", "eaf_compute_encode", "eaf_write",
+        "band_read_source", "band_read_fills", "band_compute_apply_fills",
+        "band_compute_judge", "band_compute_encode_z", "band_compute_encode_eaf",
+        "band_compute_encode_se", "band_write", "band_side_arrays",
     } <= stages
-    assert any(stage.startswith("se_rewrite.") for stage in stages)
+    assert "band_write_pool" not in stages
     full = artifact["scaled_to_full_run"]
-    assert full["stages"]["stat_write"]["factor"] == 1.0
+    assert full["stages"]["band_write"]["factor"] == 1.0
     assert not (tmp_path / "bands-work").exists()
+
+
+def _narrow_bands(patch: pytest.MonkeyPatch) -> None:
+    """Two-row Dense shards and bands, so the fixture's 7 rows are 4 bands, the
+    last two on chromosome 2; and pool units a fixture's size (`pool_budget`)."""
+    import opengwasdb.layouts.dense.complete as complete_module
+    import opengwasdb.store.arrays as arrays_module
+
+    patch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (2, 2))
+    patch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (1, 1))
+    patch.setattr(complete_module, "DEFAULT_CHUNK_SHAPE", (1, 1))
+    patch.setattr(complete_module, "_BAND_ROWS", 2)
+    pin_pool_units(patch)
+
+
+def test_a_band_write_on_the_pool_is_timed_as_one_stage(
+    inputs: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pool's workers run the bands where this process's clock cannot see,
+    so their time is one stage, and the wall check still holds. The slice spans
+    both chromosomes, so both blocks are completed."""
+    observed, panel = inputs
+    _narrow_bands(monkeypatch)
+    artifact = _run(
+        tmp_path, "bands", observed, panel, "--bands", "4", "--n-workers", "1",
+        "--write-workers", "2", "--memory-period", "0.001",
+    )
+
+    assert artifact["write_workers"] == 2
+    assert artifact["bands_run"] == 4 and artifact["slice_rows"] == artifact["union_variants"]
+    assert artifact["blocks_run"] == artifact["blocks_in_panel"] == 2
+    stages = {entry["stage"] for entry in artifact["stages"]}
+    assert "band_write_pool" in stages
+    assert not {"band_read_source", "band_write", "band_write_other"} & stages
+    assert artifact["accounted_seconds"] == pytest.approx(
+        artifact["wall_seconds"], rel=0.05, abs=0.05
+    )
+    memory = artifact["write_pool_memory"]
+    assert memory["workers_sampled"] >= 1, "the pool's workers were never sampled"
+    assert 0 < memory["peak_private_bytes"] < artifact["band_worker_estimate_bytes"]
+    assert artifact["largest_checkpoint_bytes"] > 0
+    assert artifact["merge_worker_estimate_bytes"] == resolve_unit_bytes(
+        artifact["largest_checkpoint_bytes"]
+    )
+    pool = artifact["scaled_to_full_run"]["stages"]["band_write_pool"]
+    assert pool["rule"] == "waves" and pool["factor"] == 1.0
+
+
+def test_a_pooled_slice_with_fewer_bands_than_workers_is_refused(
+    inputs: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two bands on four workers take one band's time, and scaled they would
+    claim twice the full run's write; five on four would claim a wave more than
+    they ran. Both are refused before anything is built, and a slice the axis
+    cuts short of its pool after it."""
+    observed, panel = inputs
+    _narrow_bands(monkeypatch)
+    work = tmp_path / "refused-work"
+    for n_bands, write_workers in ((2, 4), (5, 4)):
+        with pytest.raises(SystemExit, match="leaves workers idle"):
+            profiler.profile_bands(observed, panel, "EUR", work, n_bands, 1,
+                                   write_workers=write_workers)
+        assert not work.exists()
+    with pytest.raises(SystemExit, match="leaves workers idle"):
+        profiler.profile_bands(observed, panel, "EUR", work, 8, 1, write_workers=8)
+    assert not work.exists(), "a slice the axis cuts short is refused, and cleaned up"
 
 
 def test_scaling_follows_bands_and_rows() -> None:
@@ -226,17 +296,36 @@ def test_scaling_follows_bands_and_rows() -> None:
         "bands_in_full_matrix": 56, "bands_run": 2, "union_variants": 11_200_000,
         "slice_rows": 400_000,
         "stages": [
-            {"stage": "stat_write", "seconds": 10.0},
-            {"stage": "se_rewrite.read", "seconds": 5.0},
+            {"stage": "band_write", "seconds": 10.0},
+            {"stage": "band_read_source", "seconds": 5.0},
             {"stage": "merge_shard_fills_and_quality", "seconds": 100.0},
             {"stage": "axis_construction_full", "seconds": 250.0},
         ],
     }
     scaled = scale_to_full_run(summary)
-    assert scaled["stages"]["stat_write"]["seconds"] == 280.0
+    assert scaled["stages"]["band_write"]["seconds"] == 280.0
     assert scaled["stages"]["merge_shard_fills_and_quality"]["seconds"] == 2800.0
     assert "axis_construction_full" not in scaled["stages"]
     assert scaled["band_write_seconds"] == 420.0
+
+
+@pytest.mark.parametrize(
+    ("write_workers", "bands_run", "factor"),
+    [(4, 8, 7.0), (3, 6, 9.5), (8, 8, 7.0)],
+)
+def test_a_pooled_band_write_scales_by_the_pools_waves(
+    write_workers: int, bands_run: int, factor: float
+) -> None:
+    """56 bands on 3 workers are 19 waves, the last one partial: a 6-band slice
+    is 2 of them, so it scales by 9.5, not by the 9.33 its bands would give."""
+    summary = {
+        "bands_in_full_matrix": 56, "bands_run": bands_run, "write_workers": write_workers,
+        "union_variants": 11_200_000, "slice_rows": bands_run * 200_000,
+        "stages": [{"stage": "band_write_pool", "seconds": 100.0}],
+    }
+    pool = scale_to_full_run(summary)["stages"]["band_write_pool"]
+    assert (pool["rule"], pool["factor"]) == ("waves", factor)
+    assert pool["seconds"] == pytest.approx(100.0 * factor)
 
 
 def test_recorded_full_run_reads_the_figures_from_the_step_record(tmp_path: Path) -> None:
