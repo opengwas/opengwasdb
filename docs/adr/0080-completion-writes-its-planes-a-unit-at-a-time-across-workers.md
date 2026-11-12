@@ -67,12 +67,14 @@ completed whole; the parent takes the units' results in unit order.**
 - **The pool is `--n-workers`, capped by memory** (`completion.parallel`). The
   cap is a quarter of `MemAvailable` at the phase's start, divided by one
   unit's working set, as for the Dense build's EAF encode (#320). A Dense band
-  is budgeted at 4 GiB plus 24 bytes a cell. A Ragged Analysis is budgeted at
-  256 MiB, plus 16 bytes a merged-axis variant, plus 96 bytes a row of the
-  source's largest Analysis. A Ragged region is budgeted at 256 MiB plus 128
-  bytes a cell, against #249's measured 79 for the split flush. A checkpoint is
-  budgeted at 256 MiB plus twice the largest checkpoint file. The Dense band
-  and Ragged Analysis pools log the worker count they ran with.
+  is budgeted at 4 GiB plus 24 bytes a cell: 16.4 GB for a 200,000-row band of
+  OGS-00009's 2,514 Analyses, whose workers held at most 10.2 GB private. A
+  Ragged Analysis is budgeted at 256 MiB, plus 16 bytes a merged-axis variant,
+  plus 96 bytes a row of the source's largest Analysis. A Ragged region is
+  budgeted at 256 MiB plus 128 bytes a cell, against #249's measured 79 for the
+  split flush. A checkpoint is budgeted at 256 MiB plus four times the largest
+  checkpoint file; OGS-00009's merge workers held up to 3.9 GB. The band,
+  Analysis and checkpoint pools log the worker count they ran with.
 - **Resume is unchanged: it redoes the write.** Only LD blocks are
   checkpointed. A failure in the write discards the staged release (ADR 0043),
   and a resume runs the merge and the whole write again from the block
