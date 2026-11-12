@@ -48,6 +48,7 @@ import dataclasses
 import json
 import re
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -299,6 +300,66 @@ def _timed_generator(clock: StageClock, stage: str, original: Callable[..., Any]
     return wrapped
 
 
+class WorkerMemory:
+    """The private memory each child of this process holds, sampled on a thread.
+
+    A forked pool worker shares its parent's pages until it writes them, so its
+    RSS counts the parent's resident set too; what it adds to the host is its
+    private memory (`Private_Clean` + `Private_Dirty` in `smaps_rollup`). The
+    peak per worker is what the write pool's per-unit estimate has to bound.
+    """
+
+    def __init__(self, period_s: float = 0.5) -> None:
+        self.period_s = period_s
+        self.peaks: dict[int, int] = {}
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    @staticmethod
+    def _children() -> list[int]:
+        pids: list[int] = []
+        for task in Path("/proc/self/task").iterdir():
+            try:
+                pids += [int(pid) for pid in (task / "children").read_text().split()]
+            except OSError:
+                continue
+        return pids
+
+    @staticmethod
+    def private_bytes(pid: int) -> int | None:
+        try:
+            text = Path(f"/proc/{pid}/smaps_rollup").read_text()
+        except OSError:
+            return None
+        fields = dict(line.split(":", 1) for line in text.splitlines()[1:] if ":" in line)
+        return sum(int(fields[key].split()[0]) * 1024 for key in ("Private_Clean", "Private_Dirty"))
+
+    def _sample(self) -> None:
+        for pid in self._children():
+            held = self.private_bytes(pid)
+            if held is not None:
+                self.peaks[pid] = max(self.peaks.get(pid, 0), held)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.period_s):
+            self._sample()
+
+    def __enter__(self) -> WorkerMemory:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        self._thread.join()
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "workers_sampled": len(self.peaks),
+            "peak_private_bytes": max(self.peaks.values(), default=0),
+            "peak_private_bytes_by_worker": sorted(self.peaks.values(), reverse=True),
+        }
+
+
 class _DiscardSlice(Exception):
     """Ends the staging block of a profile run, so nothing is published."""
 
@@ -362,6 +423,7 @@ def _blocks_covering(axis: Any, n_rows: int) -> list[Path]:
 def profile_bands(
     source: Path, ld_dir: Path, ancestry: str, work: Path, n_bands: int, n_workers: int,
     clock: Callable[[], float] = time.perf_counter, write_workers: int = 1,
+    memory_period: float = 0.5,
 ) -> dict[str, Any]:
     """Run the merge and the band write over the first ``n_bands`` of the axis.
 
@@ -401,9 +463,10 @@ def profile_bands(
                 out_to_src=axis.out_to_src[:slice_rows],
             )
             src_root = open_store(source).arrays(mode="r")
-            tallies = _merge_and_write(dense, stages, staged, sliced, src_root, blocks_dir,
-                                       ld_dir, ancestry, manifest.encoding, band_rows,
-                                       write_workers)
+            with WorkerMemory(memory_period) as memory:
+                tallies = _merge_and_write(dense, stages, staged, sliced, src_root, blocks_dir,
+                                           ld_dir, ancestry, manifest.encoding, band_rows,
+                                           write_workers)
             out = {
                 "kind": "bands", "source": str(source), "ld_panel": str(ld_dir),
                 "ancestry": ancestry, "n_workers": n_workers, "write_workers": write_workers,
@@ -414,6 +477,8 @@ def profile_bands(
                 "blocks_run": len(blocks), "blocks_in_panel": len(axis.tsv_paths),
                 "slice_imputed_cells": int(tallies.total_imputed),
                 "slice_cells": slice_rows * axis.n_analyses,
+                "band_worker_estimate_bytes": dense._band_bytes(axis.n_analyses, band_rows),
+                "write_pool_memory": memory.summary(),
             }
             raise _DiscardSlice
     except _DiscardSlice:
@@ -551,6 +616,8 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--n-workers", type=int, default=32)
             p.add_argument("--write-workers", type=int, default=1,
                            help="workers for the band write; above 1 it is timed as one stage")
+            p.add_argument("--memory-period", type=float, default=0.5,
+                           help="seconds between samples of the band workers' private memory")
             p.add_argument("--record", type=Path, help="the full run's step record to compare")
     args = parser.parse_args(args_in)
     header = artifact_header("benchmarks/profile_reference_completion.py",
@@ -565,7 +632,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             body = profile_bands(
                 args.source, args.ld_panel, args.ancestry, args.work, args.bands, args.n_workers,
-                write_workers=args.write_workers,
+                write_workers=args.write_workers, memory_period=args.memory_period,
             )
             body["scaled_to_full_run"] = scale_to_full_run(body)
             if args.record is not None:

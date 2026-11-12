@@ -230,13 +230,16 @@ def test_a_band_write_on_the_pool_is_timed_as_one_stage(
     observed, panel = inputs
     artifact = _run(
         tmp_path, "bands", observed, panel, "--bands", "1", "--n-workers", "1",
-        "--write-workers", "2",
+        "--write-workers", "2", "--memory-period", "0.001",
     )
 
     assert artifact["write_workers"] == 2
     stages = {entry["stage"] for entry in artifact["stages"]}
     assert "band_write_pool" in stages
     assert not {"band_read_source", "band_write", "band_write_other"} & stages
+    memory = artifact["write_pool_memory"]
+    assert memory["workers_sampled"] >= 1, "the pool's workers were never sampled"
+    assert 0 < memory["peak_private_bytes"] < artifact["band_worker_estimate_bytes"]
     assert artifact["accounted_seconds"] == pytest.approx(
         artifact["wall_seconds"], rel=0.05, abs=0.05
     )
