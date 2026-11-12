@@ -45,12 +45,14 @@ from opengwasdb.encoding.association_codec import (
     log_se_out_of_range,
     storable,
 )
-from opengwasdb.encoding.codec import SideTables, require_parallel
-from opengwasdb.encoding.memory import (
-    available_memory_bytes,
-    memory_budget_bytes,
-    workers_within_memory,
+from opengwasdb.encoding.codec import (
+    EafExceptionTable,
+    SeExceptionTable,
+    SideTables,
+    require_parallel,
+    table_end_to_end,
 )
+from opengwasdb.encoding.memory import pool_workers
 from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.model.enums import CompletionState
@@ -1045,18 +1047,22 @@ class RaggedCSRWriter:
     ) -> SeExceptionCounts | None:
         """The side tables and per-variant arrays, then the attributes that mark
         the component written, last."""
-        tables.z_overflow.table().write(root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
+        table_end_to_end(ZOverflowTable, tables.z_overflow).write(
+            root, role=ArrayRole.RAGGED_EXCEPTION_TABLE
+        )
         if encoding.eaf.is_residual:
             assert plan.baseline is not None
             write_eaf_baseline(
                 root, plan.baseline, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_PER_VARIANT
             )
-            tables.eaf_exceptions.table().write(root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
+            table_end_to_end(EafExceptionTable, tables.eaf_exceptions).write(
+                root, role=ArrayRole.RAGGED_EXCEPTION_TABLE
+            )
         counts = None
         if encoding.se.is_residual:
             assert se_coefficients is not None
             write_se_coefficients(root, se_coefficients, compressor=_COMPRESSOR)
-            tables.se_exceptions.table().write(
+            table_end_to_end(SeExceptionTable, tables.se_exceptions).write(
                 root, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_EXCEPTION_TABLE
             )
             counts = tables.counts
@@ -1157,16 +1163,17 @@ _REGION_FIXED_BYTES = 256 * 1024**2
 
 
 def _region_workers(n_workers: int, regions: list[tuple[int, int]]) -> int:
-    """The flush's worker count: a quarter of `MemAvailable`, one region a
-    worker, as the completion write pool is sized (`completion.parallel`)."""
-    if n_workers <= 1 or len(regions) <= 1:
+    """The flush's worker count: no more than it has regions, and as many as a
+    quarter of `MemAvailable` holds beside the parent, one region a worker
+    (`pool_workers`, as every completion write pool is sized)."""
+    if len(regions) <= 1:
         return 1
     largest = max(hi - lo for lo, hi in regions)
-    budget = memory_budget_bytes(available_memory_bytes())
-    return workers_within_memory(
+    return pool_workers(
         min(n_workers, len(regions)),
         _REGION_FIXED_BYTES + _REGION_BYTES_PER_CELL * largest,
-        budget,
+        what="CSR flush",
+        unit=f"region of up to {largest:,} cells",
     )
 
 
@@ -1198,20 +1205,19 @@ class _RegionOutcome:
 
 @dataclass
 class _RegionTables:
-    """The regions' side-table entries and counts, gathered in region order."""
+    """The regions' side-table entries and counts, gathered in region order: each
+    region's entries are a run, laid end to end they are the tables
+    (`table_end_to_end`), never sorted into place."""
 
     counts: SeExceptionCounts
-    z_overflow: ZOverflowBuilder = field(default_factory=ZOverflowBuilder)
-    eaf_exceptions: EafExceptionBuilder = field(default_factory=EafExceptionBuilder)
-    se_exceptions: SeExceptionBuilder = field(default_factory=SeExceptionBuilder)
+    z_overflow: list[ZOverflowTable] = field(default_factory=list)
+    eaf_exceptions: list[EafExceptionTable] = field(default_factory=list)
+    se_exceptions: list[SeExceptionTable] = field(default_factory=list)
 
     def add(self, outcome: _RegionOutcome) -> None:
-        for builder, table in (
-            (self.z_overflow, outcome.tables.z_overflow),
-            (self.eaf_exceptions, outcome.tables.eaf_exceptions),
-            (self.se_exceptions, outcome.tables.se_exceptions),
-        ):
-            builder.add(table.index, table.value)
+        self.z_overflow.append(outcome.tables.z_overflow)
+        self.eaf_exceptions.append(outcome.tables.eaf_exceptions)
+        self.se_exceptions.append(outcome.tables.se_exceptions)
         for total, part in (
             (self.counts.n_se, outcome.se_counts.n_se),
             (self.counts.n_exceptions, outcome.se_counts.n_exceptions),

@@ -29,7 +29,8 @@ from typing import Any, NamedTuple
 import numpy as np
 
 from opengwasdb.completion.checkpoint import ALID_DTYPE, is_long
-from opengwasdb.completion.parallel import ordered_write, write_workers
+from opengwasdb.completion.parallel import ordered_write
+from opengwasdb.encoding.memory import pool_workers
 from opengwasdb.variants.routing import collapse_duplicates
 
 log = logging.getLogger(__name__)
@@ -256,7 +257,7 @@ def _resolve_workers(checkpoints: list[Path], n_workers: int) -> int:
     """The checkpoint merge's worker count: a worker holds a few times its
     checkpoint, the largest of which bounds them all."""
     largest = max((ckpt.stat().st_size for ckpt in checkpoints), default=0)
-    return write_workers(
+    return pool_workers(
         n_workers,
         _RESOLVE_FIXED_BYTES + _RESOLVE_BYTES_PER_CHECKPOINT_BYTE * largest,
         what="Checkpoint merge",

@@ -65,7 +65,7 @@ from opengwasdb.completion.manifest import (
     build_completion_provenance,
     completed_release_manifest,
 )
-from opengwasdb.completion.parallel import ordered_write, run_block_tasks, write_workers
+from opengwasdb.completion.parallel import ordered_write, run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.regions import analysis_regions, inside, region_blocks
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
@@ -74,6 +74,7 @@ from opengwasdb.encoding import (
     SE_EXCEPTION_BUDGET,
     StoreEncoding,
 )
+from opengwasdb.encoding.memory import pool_workers, resident_bytes
 from opengwasdb.encoding.planes import SE_COEFFICIENTS
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -990,20 +991,35 @@ def _region_rows(plan: _BlockPlan, block_rows: dict[str, _BlockRows], ai: int) -
     return out
 
 
+def _analysis_cells(plan: _BlockPlan, block_rows: dict[str, _BlockRows]) -> np.ndarray:
+    """Each Analysis's block positions inside its regions: the most fills it can
+    have, and the most rows completion adds to it."""
+    return np.array(
+        [
+            sum(len(rows) for rows in _region_rows(plan, block_rows, ai))
+            for ai in range(plan.state.n_analyses)
+        ],
+        dtype=np.int64,
+    )
+
+
 def _analysis_batches(
-    plan: _BlockPlan, block_rows: dict[str, _BlockRows], budget: int = _FILL_BATCH_CELLS
+    plan: _BlockPlan,
+    block_rows: dict[str, _BlockRows],
+    budget: int = _FILL_BATCH_CELLS,
+    cells: np.ndarray | None = None,
 ) -> np.ndarray:
     """Each Analysis's fill-shard batch: consecutive Analyses, as many as fit
     `budget` cells. An Analysis has at most one fill per position of each block
-    it is completed against, so that count bounds its shard's records."""
+    it is completed against, so that count (`cells`) bounds its shard's records."""
+    per_analysis = _analysis_cells(plan, block_rows) if cells is None else cells
     batch_of = np.zeros(plan.state.n_analyses, dtype=np.int64)
     batch, held = 0, 0
-    for ai in range(plan.state.n_analyses):
-        cells = sum(len(rows) for rows in _region_rows(plan, block_rows, ai))
-        if held and held + cells > budget:
+    for ai, count in enumerate(per_analysis.tolist()):
+        if held and held + count > budget:
             batch, held = batch + 1, 0
         batch_of[ai] = batch
-        held += cells
+        held += count
     return batch_of
 
 
@@ -1044,7 +1060,8 @@ def _checkpoint_and_assemble(
     print("Merging block results from checkpoints...")
     union = fill_shards.sorted_union_map(axis.new_alid_to_idx)
     block_rows = _block_rows(plan, axis)
-    batch_of = _analysis_batches(plan, block_rows)
+    cells = _analysis_cells(plan, block_rows)
+    batch_of = _analysis_batches(plan, block_rows, cells=cells)
     # No impute_mask here: Phase 1 is where the ancestry-match filter applies
     # (ADR 0028), since an Analysis it excludes is given no block, so its
     # checkpoints hold neither fills nor completion_quality rows to drop.
@@ -1058,7 +1075,8 @@ def _checkpoint_and_assemble(
     )
     print(f"Wrote {quality_count:,} completion quality rows")
     csr = _assemble_completed_csr(
-        _Assembly(plan, axis, block_rows), fill_shard_dir, batch_of, eaf_reference, n_workers
+        _Assembly(plan, axis, block_rows), fill_shard_dir, batch_of, eaf_reference, n_workers,
+        added_cells=int(cells.sum()),
     )
     shutil.rmtree(fill_shard_dir)
     print(f"Completion done: {csr.total_imputed:,} imputed, {csr.total_missing:,} missing")
@@ -1082,6 +1100,11 @@ class _Assembly:
 _ASSEMBLY_FIXED_BYTES = 256 * 1024**2
 _ASSEMBLY_BYTES_PER_VARIANT = 16
 _ASSEMBLY_BYTES_PER_ROW = 96
+
+
+#: What the parent's writer holds for each completed row: its variant index,
+#: z, SE and EAF, and its imputed flag.
+_HELD_BYTES_PER_CELL = 17
 
 
 def _assembly_bytes(n_variants: int, max_rows: int) -> int:
@@ -1139,6 +1162,7 @@ def _assemble_completed_csr(
     batch_of: np.ndarray,
     eaf_reference: np.ndarray | None,
     n_workers: int = 1,
+    added_cells: int = 0,
 ) -> _CompletedCsr:
     """Phase 3 assembly: each Analysis's completed rows -- remapped observed
     rows, its fills and its missing block positions, sorted by variant index --
@@ -1150,7 +1174,9 @@ def _assemble_completed_csr(
     The Analyses are completed across ``n_workers`` (#321), each reading its
     own source rows; the parent adds them to the writer in Analysis order, so
     the sequence, its offsets and every side table keyed on a flat position are
-    the ones one worker writes."""
+    the ones one worker writes. The writer holds every completed row by the
+    end, at most the source's rows and ``added_cells`` more, and the pool is
+    sized beside that."""
     print("Assembling completed CSR per analysis...")
     plan, axis = assembly.plan, assembly.axis
     analysis_ids = [a.analysis_id for a in plan.state.src_analyses]
@@ -1158,11 +1184,13 @@ def _assemble_completed_csr(
         len(axis.variants),
         ReferenceCompletion(tuple(analysis_ids), eaf_reference, where="complete-ragged"),
     )
-    workers = write_workers(
+    workers = pool_workers(
         n_workers,
         _assembly_bytes(len(axis.variants), _largest_analysis(plan.source)),
         what="Assembly",
         unit=f"completed Analysis over {len(axis.variants):,} variants",
+        parent_bytes=resident_bytes()
+        + _HELD_BYTES_PER_CELL * (_source_cells(plan.source) + added_cells),
     )
     total_imputed = total_missing = 0
     items = _analysis_fills(fill_shard_dir, batch_of)
@@ -1188,6 +1216,11 @@ def _largest_analysis(source: CsrReader) -> int:
     """The most rows any one source Analysis holds."""
     offsets = np.asarray(source.structure.offsets, dtype=np.int64)
     return int(np.diff(offsets).max()) if len(offsets) > 1 else 0
+
+
+def _source_cells(source: CsrReader) -> int:
+    """Every row the source holds."""
+    return int(source.structure.offsets[-1]) if len(source.structure.offsets) else 0
 
 
 def _observed_rows(

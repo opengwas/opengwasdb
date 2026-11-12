@@ -67,7 +67,7 @@ from opengwasdb.completion.manifest import (
     build_completion_provenance,
     completed_release_manifest,
 )
-from opengwasdb.completion.parallel import ordered_write, run_block_tasks, write_workers
+from opengwasdb.completion.parallel import ordered_write, run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
@@ -76,17 +76,20 @@ from opengwasdb.encoding import (
     SE_MISSING,
     AssociationCodec,
     EafExceptionBuilder,
+    EafExceptionTable,
     SeExceptionBuilder,
     SeExceptionTable,
     StoreCodec,
     StoreEncoding,
     ZOverflowBuilder,
+    ZOverflowTable,
     write_dense_se_side_arrays,
     write_eaf_baseline,
     write_eaf_reference,
 )
 from opengwasdb.encoding.association_codec import CellValues, Placement, log_se_out_of_range
-from opengwasdb.encoding.codec import SideTables
+from opengwasdb.encoding.codec import SideTables, table_end_to_end
+from opengwasdb.encoding.memory import pool_workers
 from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase, log_progress
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import write_analyses_tsv
@@ -1497,15 +1500,16 @@ class _BandTallies:
 
 @dataclass
 class _BandTables:
-    """The bands' side-table entries, in band order."""
+    """The bands' side-table entries, each band's a run kept in band order: laid
+    end to end they are the tables (`table_end_to_end`), never sorted into place."""
 
-    z_overflow: ZOverflowBuilder = field(default_factory=ZOverflowBuilder)
-    eaf_exceptions: EafExceptionBuilder = field(default_factory=EafExceptionBuilder)
+    z_overflow: list[ZOverflowTable] = field(default_factory=list)
+    eaf_exceptions: list[EafExceptionTable] = field(default_factory=list)
     se_exceptions: list[SeExceptionTable] = field(default_factory=list)
 
     def add(self, tables: SideTables) -> None:
-        self.z_overflow.add(tables.z_overflow.index, tables.z_overflow.value)
-        self.eaf_exceptions.add(tables.eaf_exceptions.index, tables.eaf_exceptions.value)
+        self.z_overflow.append(tables.z_overflow)
+        self.eaf_exceptions.append(tables.eaf_exceptions)
         self.se_exceptions.append(tables.se_exceptions)
 
 
@@ -1621,7 +1625,7 @@ def _run_bands(
     )
     tables = _BandTables()
     n_bands = -(-plan.n_variants // plan.band_rows)
-    workers = write_workers(
+    workers = pool_workers(
         n_workers,
         _band_bytes(plan.n_analyses, plan.band_rows),
         what=BAND_PHASE,
@@ -1650,9 +1654,9 @@ def _write_side_arrays(
     table; the carried EAF baseline and its exception table, when the release
     carries one (a baseline-less plane has no residual codes to make exceptions
     for); and a residual SE plane's exception table and model."""
-    tables.z_overflow.table().write(root)
+    table_end_to_end(ZOverflowTable, tables.z_overflow).write(root)
     if baseline is not None:
         write_eaf_baseline(root, baseline, compressor=_COMPRESSOR)
-        tables.eaf_exceptions.table().write(root)
+        table_end_to_end(EafExceptionTable, tables.eaf_exceptions).write(root)
     if coefficients is not None:
         write_dense_se_side_arrays(root, tables.se_exceptions, coefficients)

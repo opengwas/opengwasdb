@@ -20,6 +20,7 @@ from __future__ import annotations
 import multiprocessing
 import os
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ import pytest
 import zarr
 from completion_releases import CompletionInputs, assert_same_release
 from fork_order import CompletionOrder
+from pool_budget import pin_pool_units
 from test_ragged_residual_completion import (
     _FREQS,
     _TRAIT_BP,
@@ -39,13 +41,15 @@ from test_ragged_residual_completion import (
     write_eaf_carrying_panel,
 )
 
+import opengwasdb.encoding.memory as memory
 import opengwasdb.layouts.ragged.complete as complete_module
 import opengwasdb.layouts.ragged.zarr_csr as zarr_csr
 import opengwasdb.store.arrays as store_arrays
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
+from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store, resume_ragged_completion
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
+from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRWriter
 from opengwasdb.model.manifest import StoreManifest
 
 N_WORKERS = 3
@@ -60,6 +64,10 @@ ANALYSES = {
 #: The source row of each Analysis whose SE is a full log-unit off its model,
 #: which only an exact exception holds.
 EXACT = 12
+#: Frequencies far from their variant's baseline, which only an EAF exception
+#: holds: one in the first Analysis, and so in the sequence's first region, and
+#: one in a later region.
+EAF_OUTLIERS = {("a", 3), ("c", 7)}
 
 
 def _build_source(root: Path) -> Path:
@@ -73,7 +81,12 @@ def _build_source(root: Path) -> Path:
         se = _expected_se(_FREQS, offset)
         se[EXACT] *= float(np.exp(1.0))
         rows = [
-            (_source_bp(k), _source_z(k) * float(se[k]), float(se[k]), float(_FREQS[k]))
+            (
+                _source_bp(k),
+                _source_z(k) * float(se[k]),
+                float(se[k]),
+                0.002 if (analysis_id, k) in EAF_OUTLIERS else float(_FREQS[k]),
+            )
             for k in range(N_SOURCE)
             if k not in unobserved
         ]
@@ -110,6 +123,11 @@ def _assert_fixture_is_meaningful(inputs: CompletionInputs) -> None:
     ]
     assert len(filled) >= 3, filled
     assert int(group["se_exception_index"].shape[0]) >= 1
+
+
+@pytest.fixture(autouse=True)
+def small_units(monkeypatch: pytest.MonkeyPatch) -> None:
+    pin_pool_units(monkeypatch)
 
 
 @pytest.fixture(scope="module")
@@ -204,6 +222,12 @@ def test_a_write_interrupted_after_some_analyses_resumes_to_the_same_release(
 
     assert _ASSEMBLED.value >= 2
     assert _CRASHED_IN_PID.value not in (0, os.getpid()), "the Analysis ran in the parent"
+    _assert_resumes_to(dst, completion.serial)
+
+
+def _assert_resumes_to(dst: Path, serial: Path) -> None:
+    """The failed completion left its LD blocks' checkpoints and no staged
+    release, and resuming them writes the release one worker writes."""
     checkpoint_dir = checkpoint_dir_for(dst)
     assert list((checkpoint_dir / "blocks").glob("*.npz"))
     assert not dst.exists()
@@ -212,7 +236,7 @@ def test_a_write_interrupted_after_some_analyses_resumes_to_the_same_release(
     resume_ragged_completion(checkpoint_dir, n_workers=N_WORKERS)
 
     assert not checkpoint_dir.exists()
-    assert_same_release(completion.serial, dst)
+    assert_same_release(serial, dst)
 
 
 # ── the sequence written a region at a time, a region finishing out of order ──
@@ -240,6 +264,9 @@ def narrow_serial(completion: CompletionInputs, tmp_path_factory: pytest.TempPat
     group = zarr.open_group(str(release / RAGGED_ZARR_PATH), mode="r")
     assert tuple(group["z"].shards) == (SHARD_CELLS,)
     assert int(group["z"].shape[0]) > 3 * SHARD_CELLS, "fixture: at least four regions"
+    for table in ("eaf_exception_index", "se_exception_index"):
+        positions = np.asarray(group[table][:])
+        assert (positions < SHARD_CELLS).any() and (positions >= SHARD_CELLS).any(), table
     return release
 
 
@@ -277,3 +304,116 @@ def test_a_sequence_written_a_region_a_worker_is_the_one_one_worker_writes(
     assert sorted(finished) == [0, 1, 2], "the regions were not written on a pool"
     assert finished[-1] == 0
     assert_same_release(narrow_serial, parallel)
+
+
+# ── refusals, and the region pool's size ──────────────────────────────────
+
+
+def test_a_completed_analysis_out_of_place_is_refused(
+    completion: CompletionInputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An Analysis's rows that name another Analysis are refused, not appended
+    under the offsets of the one the writer expects next."""
+    real = complete_module._complete_analysis
+
+    def mislabelled(assembly: Any, item: tuple[int, Any]) -> Any:
+        ai, completed = real(assembly, item)
+        return ai + 1, completed
+
+    monkeypatch.setattr(complete_module, "_complete_analysis", mislabelled)
+    with pytest.raises(RuntimeError, match="Analysis 1 arrived where Analysis 0 belongs"):
+        completion.complete(tmp_path / "refused.opengwasdb", n_workers=1)
+
+
+def test_a_region_outcome_out_of_place_is_refused(
+    completion: CompletionInputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A region's table runs and counts that name another region are refused."""
+    _narrow_shards(monkeypatch)
+    real = zarr_csr._write_region
+
+    def mislabelled(plan: Any, region: tuple[int, int]) -> Any:
+        return replace(real(plan, region), lo=region[0] + 1)
+
+    monkeypatch.setattr(zarr_csr, "_write_region", mislabelled)
+    with pytest.raises(RuntimeError, match="region 1 arrived where region 0 belongs"):
+        completion.complete(tmp_path / "refused.opengwasdb", n_workers=1)
+
+
+def test_the_region_pool_is_no_larger_than_its_regions_or_the_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """At most one worker a region, and no more than the memory budget holds:
+    16 GiB available is 4 GiB, a parent of 1 GiB leaves room for three regions'
+    workers at the pinned 16 MiB plus 128 bytes a cell of a 2^23-cell region."""
+    monkeypatch.setattr(memory, "resident_bytes", lambda path=memory.SELF_STATUS: 1024**3)
+    monkeypatch.setattr(
+        memory, "available_memory_bytes", lambda path=memory.MEMINFO: 16 * 1024**3
+    )
+    regions = [(0, 500), (500, 1000), (1000, 1200)]
+    assert zarr_csr._region_workers(8, regions) == 3
+    assert zarr_csr._region_workers(2, regions) == 2
+    assert zarr_csr._region_workers(8, regions[:1]) == 1
+    cells = 1 << 23
+    big = [(k * cells, (k + 1) * cells) for k in range(8)]
+    per_region = zarr_csr._REGION_FIXED_BYTES + zarr_csr._REGION_BYTES_PER_CELL * cells
+    assert zarr_csr._region_workers(8, big) == min(8, (3 * 1024**3) // per_region)
+
+
+def test_a_flush_of_regions_refuses_a_residual_plan_with_no_model(tmp_path: Path) -> None:
+    """Regions code SE against a model they are given; a writer that would fit
+    its own needs the whole frequency plane first, which `flush` writes."""
+    writer = RaggedCSRWriter(4)
+    writer.add_analysis(
+        np.arange(4), np.ones(4), np.full(4, 0.1), eaf=np.full(4, 0.3, np.float32)
+    )
+    plan = StoreEncoding(
+        z=ZEncoding("float16"), se=SeEncoding("int8_residual", 0.5), eaf=EafEncoding("float32")
+    )
+    with pytest.raises(ValueError, match="codes SE against a given model"):
+        writer.flush_regions(tmp_path / "refused.opengwasdb", plan, n_workers=2)
+
+
+_REGIONS_WRITTEN = _FORK.Value("i", 0)
+_CRASHED_REGION_PID = _FORK.Value("i", 0)
+_CRASHING_REGION = 2
+
+
+def _region_crashing_after_two_others(plan: Any, region: tuple[int, int]) -> Any:
+    """The region writer, failing on one region once two others are in the planes."""
+    if region[0] // SHARD_CELLS == _CRASHING_REGION:
+        deadline = time.monotonic() + CompletionOrder.WAIT_SECONDS
+        while _REGIONS_WRITTEN.value < 2:
+            if time.monotonic() > deadline:
+                raise AssertionError("no two regions were written beside the failing one")
+            os.sched_yield()
+        _CRASHED_REGION_PID.value = os.getpid()
+        raise RuntimeError("simulated crash in the CSR write")
+    assert _REAL_WRITE_REGION is not None
+    outcome = _REAL_WRITE_REGION(plan, region)
+    with _REGIONS_WRITTEN.get_lock():
+        _REGIONS_WRITTEN.value += 1
+    return outcome
+
+
+def test_a_sequence_write_interrupted_after_some_regions_resumes_to_the_same_release(
+    completion: CompletionInputs,
+    narrow_serial: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A worker fails once two regions' planes are on disk: the staged release
+    goes with them, the LD blocks' checkpoints stay, and the resumed completion
+    is the release one worker writes."""
+    _narrow_shards(monkeypatch)
+    dst = tmp_path / "resumed.opengwasdb"
+    _REGIONS_WRITTEN.value = 0
+    _CRASHED_REGION_PID.value = 0
+    with monkeypatch.context() as crash:
+        crash.setattr(zarr_csr, "_write_region", _region_crashing_after_two_others)
+        with pytest.raises(RuntimeError, match="simulated crash in the CSR write"):
+            completion.complete(dst, n_workers=N_WORKERS)
+
+    assert _REGIONS_WRITTEN.value >= 2
+    assert _CRASHED_REGION_PID.value not in (0, os.getpid()), "the region ran in the parent"
+    _assert_resumes_to(dst, narrow_serial)

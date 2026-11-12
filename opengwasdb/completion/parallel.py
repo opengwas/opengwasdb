@@ -8,7 +8,7 @@ and computes its own unit, the parent takes the results in unit order, so what
 the parent assembles from them (side tables, counts, a CSR sequence) is the
 serial pass's whichever worker finished first. A unit holds its cells in
 memory, so the write runs no more workers than a quarter of the host's
-available memory holds (`write_workers`).
+available memory holds beside the parent (`encoding.memory.pool_workers`).
 """
 from __future__ import annotations
 
@@ -21,12 +21,6 @@ from typing import Any, TypeVar
 from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]
 
 from opengwasdb.build.ordered_pool import ordered_map
-from opengwasdb.encoding.memory import (
-    MEMINFO,
-    available_memory_bytes,
-    memory_budget_bytes,
-    workers_within_memory,
-)
 from opengwasdb.encoding.timing import log_progress
 
 P = TypeVar("P")
@@ -80,40 +74,6 @@ def run_block_tasks(
             for i, fut in enumerate(as_completed(futures)):
                 fut.result()  # propagate worker errors; result is on disk
                 log_progress(log, label, i + 1, total, started, every=every)
-
-
-def write_workers(requested: int, unit_bytes: int, *, what: str, unit: str) -> int:
-    """How many of ``requested`` workers a completion write runs, and the line saying why.
-
-    ``unit_bytes`` is what one worker holds while it writes one ``unit``. The
-    budget is a quarter of `MemAvailable` at the phase's start, one unit a
-    worker within it, as for the Dense build's EAF encode: a pool sized from
-    ``--n-workers`` alone, which also sizes the LD-block pool, could exhaust a
-    shared host. An unreadable host gets one worker rather than a guess --
-    silently at one worker, where the reading changes nothing.
-    """
-    if requested <= 1:
-        return 1
-    budget = memory_budget_bytes(available_memory_bytes())
-    if budget is None:
-        log.warning(
-            "%s: cannot read %s, so no memory budget can be set under %d worker(s); "
-            "writing on one worker",
-            what, MEMINFO, requested,
-        )
-    elif budget < unit_bytes:
-        log.warning(
-            "%s: a %s needs %d MiB a worker, and the budget is %d MiB, less than one; "
-            "writing on one worker, which will overrun it",
-            what, unit, unit_bytes >> 20, budget >> 20,
-        )
-    workers = workers_within_memory(requested, unit_bytes, budget)
-    log.info(
-        "%s: %d of %d worker(s); a %s is %d MiB a worker, against a budget of %s",
-        what, workers, requested, unit, unit_bytes >> 20,
-        "unknown" if budget is None else f"{budget >> 20} MiB",
-    )
-    return workers
 
 
 def ordered_write(

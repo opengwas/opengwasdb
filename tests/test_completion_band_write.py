@@ -24,6 +24,7 @@ import multiprocessing
 import os
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -33,15 +34,17 @@ from completion_releases import CompletionInputs, assert_same_release
 from dense_sources import build_dense_from_records
 from fork_order import CompletionOrder
 from ld_blocks import write_ld_block
+from pool_budget import pin_pool_units
 from zarr.storage import LocalStore
 
 import opengwasdb.layouts.dense.complete as complete_module
 import opengwasdb.store.arrays as arrays_module
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
+from opengwasdb.encoding import SeExceptionTable, write_dense_se_side_arrays
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.complete import complete_dense_store, resume_dense_completion
 from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.arrays import open_group
+from opengwasdb.store.arrays import open_group, open_group_for_write
 from opengwasdb.variants import CanonicalVariant
 
 N_VARIANTS = 120
@@ -55,18 +58,24 @@ N_WORKERS = 3
 UNOBSERVED = {"a": {7, 61}, "b": {15, 33, 70, 101}, "c": {44, 88, 118}}
 
 
+#: The cells each side table must hold, two apiece: one in band 0, which the
+#: order tests hold back, and one in a later band. An EAF far from its variant's
+#: baseline, an SE far from its prediction, and a Z beyond the fixed-point range.
+EAF_OUTLIERS = {("c", 3), ("c", 20)}
+SE_OUTLIERS = {("b", 5), ("b", 50)}
+Z_OUTLIERS = {("a", 2), ("a", 90)}
+
+
 def _records() -> list[NormalisedAssociation]:
     """Three Analyses whose SE tracks its MAF-predicted value, so the source
-    codes it as residuals, with one cell for each side table: an EAF far from its
-    variant's baseline, an SE far from its prediction, and a Z beyond the
-    fixed-point range."""
+    codes it as residuals, with cells for each side table (`*_OUTLIERS`)."""
     frequencies = np.linspace(0.05, 0.95, N_VARIANTS, dtype=np.float32)
     records = []
     for col, analysis_id in enumerate(ANALYSES):
         for row in range(N_VARIANTS):
             if row in UNOBSERVED[analysis_id]:
                 continue
-            eaf = 0.002 if (analysis_id, row) == ("c", 20) else float(frequencies[row])
+            eaf = 0.002 if (analysis_id, row) in EAF_OUTLIERS else float(frequencies[row])
             se = float(
                 np.exp(
                     (-3.0 + col * 0.2)
@@ -74,10 +83,10 @@ def _records() -> list[NormalisedAssociation]:
                     + 0.12 * np.sin(row * (0.07 + col * 0.01))
                 )
             )
-            if (analysis_id, row) == ("b", 50):
+            if (analysis_id, row) in SE_OUTLIERS:
                 se *= 40.0
             z = 8.0 if row % 40 == 0 else 1.0 + 0.01 * row
-            if (analysis_id, row) == ("a", 90):
+            if (analysis_id, row) in Z_OUTLIERS:
                 z = 120.0
             records.append(
                 NormalisedAssociation(
@@ -146,7 +155,8 @@ def serial_release(inputs: tuple[Path, Path], tmp_path_factory: pytest.TempPathF
 
 
 def _assert_fixture_is_meaningful(source: Path, release: Path) -> None:
-    """Several bands, fills in more than one, and every side table in use."""
+    """Several bands, fills in more than one, and every side table holding an
+    entry in band 0 and one beyond it, so a band taken out of order moves one."""
     root = open_group(release / "data.zarr", "r")
     assert tuple(int(size) for size in root["z"].shards)[0] == BAND_ROWS
     assert complete_module.completion_band_rows(BAND_ROWS) == BAND_ROWS
@@ -157,8 +167,10 @@ def _assert_fixture_is_meaningful(source: Path, release: Path) -> None:
     plan = StoreManifest.load(source).encoding
     assert plan.se.is_residual and plan.eaf.is_residual
     assert StoreManifest.load(release).encoding.eaf.reference
+    band_0 = BAND_ROWS * len(ANALYSES)
     for table in ("z_overflow_index", "eaf_exception_index", "se_exception_index"):
-        assert int(root[table].shape[0]) >= 1, table
+        positions = np.asarray(root[table][:])
+        assert (positions < band_0).any() and (positions >= band_0).any(), (table, positions)
 
 
 @pytest.fixture
@@ -168,6 +180,7 @@ def completion(
     """The fixture, checked, with the bands narrowed for the test's own completion."""
     source, panel = inputs
     _narrow_bands(monkeypatch)
+    pin_pool_units(monkeypatch)
     _assert_fixture_is_meaningful(source, serial_release)
     return CompletionInputs(source, panel, serial_release, _complete)
 
@@ -358,3 +371,41 @@ def test_the_band_write_holds_no_plane_the_release_does_not(
         )
         peaks[n_workers] = total
     assert peaks[N_WORKERS] <= peaks[1], peaks
+
+
+# ── refusals ───────────────────────────────────────────────────────────────
+
+
+def _mislabelled(real: Callable[..., Any]) -> Callable[..., Any]:
+    """The band worker, its outcome naming the band after its own."""
+
+    def worker(plan: Any, band: int) -> Any:
+        return replace(real(plan, band), band=band + 1)
+
+    return worker
+
+
+def test_a_band_outcome_out_of_place_is_refused(
+    completion: CompletionInputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The parent takes each band's counts and table runs where the pool hands
+    them over, so one that names another band is refused, not filed under it."""
+    monkeypatch.setattr(
+        complete_module, "_complete_band", _mislabelled(complete_module._complete_band)
+    )
+    with pytest.raises(RuntimeError, match="band 1 arrived where band 0 belongs"):
+        completion.complete(tmp_path / "refused.opengwasdb", n_workers=1)
+
+
+def test_se_exception_runs_out_of_band_order_are_refused(tmp_path: Path) -> None:
+    """Each band's SE exceptions are a run of flat positions; laid end to end out
+    of band order they are no table a lookup can read, so they are refused."""
+    root = open_group_for_write(tmp_path / "data.zarr", "w", zarr_format=3)
+    early = SeExceptionTable(np.array([3, 7], np.int64), np.array([0.5, 0.25], np.float32))
+    late = SeExceptionTable(np.array([60], np.int64), np.array([2.0], np.float32))
+    coefficients = np.zeros((3, 2), np.float32)
+
+    write_dense_se_side_arrays(root, [early, late], coefficients)
+    assert list(np.asarray(root["se_exception_index"][:])) == [3, 7, 60]
+    with pytest.raises(ValueError, match="do not ascend"):
+        write_dense_se_side_arrays(root, [late, early], coefficients)

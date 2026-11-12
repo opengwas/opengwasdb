@@ -9,14 +9,18 @@ host a phase may take.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
 
+import opengwasdb.encoding.memory as memory
 from opengwasdb.encoding.memory import (
     MEMORY_BUDGET_DIVISOR,
     available_memory_bytes,
     memory_budget_bytes,
+    pool_workers,
+    resident_bytes,
     workers_within_memory,
 )
 
@@ -87,3 +91,82 @@ def test_workers_are_capped_by_the_budget_and_never_zero() -> None:
     assert workers_within_memory(8, per_band, 0) == 1
     # An unknown budget cannot be planned against.
     assert workers_within_memory(8, per_band, None) == 1
+
+
+# ── the completion write pools' count (#321) ─────────────────────────────────
+
+GIB = 1024**3
+
+
+def _host(monkeypatch: pytest.MonkeyPatch, available: int | None, parent: int) -> None:
+    """A host with `available` bytes available, and a parent holding `parent`."""
+    monkeypatch.setattr(memory, "available_memory_bytes", lambda path=memory.MEMINFO: available)
+    monkeypatch.setattr(memory, "resident_bytes", lambda path=memory.SELF_STATUS: parent)
+
+
+def _pool(caplog: pytest.LogCaptureFixture, requested: int, unit: int, **kwargs) -> int:
+    with caplog.at_level(logging.INFO, logger=memory.log.name):
+        return pool_workers(requested, unit, what="Band write", unit="band", **kwargs)
+
+
+def test_the_pool_is_what_the_budget_holds_beside_the_parent(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """16 GiB available is a 4 GiB budget; the parent holds 1 GiB of it, so
+    three 1 GiB workers fit of the eight asked for, and the line says so."""
+    _host(monkeypatch, 16 * GIB, 1 * GIB)
+
+    assert _pool(caplog, 8, 1 * GIB) == 3
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert "Band write: 3 of 8 worker(s)" in caplog.text
+    assert "beside the parent's 1024 MiB, against a budget of 4096 MiB" in caplog.text
+
+
+def test_the_parent_given_is_counted_rather_than_its_resident_set(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A parent that will grow (a Ragged writer filling) is counted at its peak."""
+    _host(monkeypatch, 16 * GIB, 0)
+
+    assert _pool(caplog, 8, 1 * GIB) == 4
+    assert _pool(caplog, 8, 1 * GIB, parent_bytes=2 * GIB) == 2
+
+
+def test_a_host_that_cannot_be_read_gets_one_worker_and_says_why(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _host(monkeypatch, None, 0)
+
+    assert _pool(caplog, 8, 1) == 1
+    assert "cannot read /proc/meminfo" in caplog.text
+    assert "1 of 8 worker(s)" in caplog.text
+
+
+def test_a_budget_the_parent_and_one_worker_overrun_is_one_worker_with_a_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _host(monkeypatch, 16 * GIB, 3 * GIB + GIB // 2)
+
+    assert _pool(caplog, 8, 1 * GIB) == 1
+    assert "which will overrun it" in caplog.text
+
+
+def test_one_worker_asked_for_reads_nothing_and_says_nothing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def unread(path: Path = memory.MEMINFO) -> int:
+        raise AssertionError("one worker needs no reading")
+
+    monkeypatch.setattr(memory, "available_memory_bytes", unread)
+    assert _pool(caplog, 1, 1 * GIB) == 1
+    assert caplog.text == ""
+
+
+def test_the_resident_set_is_vmrss_in_bytes(tmp_path: Path) -> None:
+    status = tmp_path / "status"
+    status.write_text("VmPeak:\t 9999 kB\nVmRSS:\t   2048 kB\nVmHWM:\t 4096 kB\n")
+    assert resident_bytes(status) == 2048 * 1024
+    status.write_text("VmRSS:\t   lots\n")
+    assert resident_bytes(status) == 0
+    assert resident_bytes(tmp_path / "absent") == 0
+    assert resident_bytes() > 0, "this process's own status is readable"
