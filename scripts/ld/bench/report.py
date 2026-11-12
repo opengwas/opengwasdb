@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render `latency.py`'s records as the tables of `docs/benchmarks/latency-tables.md` (ogld#8).
 
-    pixi run -e dev python scripts/bench/report.py docs/benchmarks/results/*.jsonl \
+    pixi run -e dev python scripts/bench/report.py docs/benchmarks/results/*.jsonl.gz \
         --layouts /data/opengwasdb/work/ogld/scratch/8/layouts > docs/benchmarks/latency-tables.md
 
 Every number in the tables is a record's, aggregated as each table says: a sum over the 37
@@ -12,6 +12,7 @@ Analyses for clumping, a median over its repeats for everything else. Each row g
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import statistics
 from collections import defaultdict
@@ -26,16 +27,43 @@ TARGET_ORDER = ("local", "http0", "http10", "http50")
 
 
 def read(paths: Iterable[Path]) -> tuple[list[Record], list[Record]]:
-    """The timing records and the environment records of every file."""
+    """The timing records and the environment records of every file. Each timing is tagged
+    with the start of the run that wrote it, and a later run's record of the same read
+    supersedes an earlier one's (`latest`)."""
     timings, environments = [], []
     for path in paths:
-        for line in path.read_text().splitlines():
+        started = ""
+        for line in text_of(path).splitlines():
             record = json.loads(line)
             if record.get("kind") == "environment":
                 environments.append(record)
+                started = record["started"]
             else:
-                timings.append({**record, "reader": reader_label(record)})
-    return timings, environments
+                timings.append({**record, "reader": reader_label(record), "run": started})
+    return latest(timings), environments
+
+
+def text_of(path: Path) -> str:
+    """A records file, as `latency.py` writes it or gzipped, as `docs/benchmarks/results/` keeps
+    it (4 MB of JSON lines are 0.35 MB gzipped)."""
+    return gzip.decompress(path.read_bytes()).decode() if path.suffix == ".gz" else path.read_text()
+
+
+#: What names one read: a later run's record with all of these equal replaces an earlier one's.
+SAME_READ = (
+    "step", "reader", "target", "store", "case", "state", "r2", "analysis", "width_mb",
+    "centre", "chrom", "seed", "variants", "pair",
+)  # fmt: skip
+
+
+def latest(timings: list[Record]) -> list[Record]:
+    """Each read's records from the latest run that timed it: a re-run under a lower load
+    supersedes the first, which stays in its file."""
+    newest: dict[tuple[Any, ...], str] = {}
+    for r in timings:
+        key = tuple(r.get(k) for k in SAME_READ)
+        newest[key] = max(newest.get(key, ""), r["run"])
+    return [r for r in timings if r["run"] == newest[tuple(r.get(k) for k in SAME_READ)]]
 
 
 def reader_label(record: Record) -> str:
