@@ -161,6 +161,19 @@ class Tier:
     eaf: np.ndarray | None
 
 
+@dataclass(frozen=True)
+class TierFact:
+    """What judging a tier needs once its arrays are gone: its name and its size.
+
+    The folds are judged after the scan's read is released (issue #387), so a
+    judge cannot hold the tier itself: the arrays are most of the 1.6 GiB the
+    pass keeps, and every finding is worded from the key and the cell count.
+    """
+
+    key: str
+    n_cells: int
+
+
 def sound_tiers(target: Target) -> list[Tier]:
     """The tiers the value rules check: those with every array and a sound structure.
 
@@ -169,6 +182,19 @@ def sound_tiers(target: Target) -> list[Tier]:
     line up would only repeat that finding as a value one.
     """
     return target.remember("top_hits/sound", lambda: _sound(target), until=ASSOCIATIONS.name)
+
+
+def tier_facts(target: Target) -> list[TierFact]:
+    """The sound tiers' names and sizes, from metadata, for the judges.
+
+    A tier's `variant_index` length is its cell count and its key is its name, so
+    a judge reads neither the arrays the pass held nor anything the pass released.
+    """
+    index = top_hits.index_group(tier_root(target))
+    return [
+        TierFact(key, int(index[key]["variant_index"].shape[0]))
+        for key in _sound_keys(target)
+    ]
 
 
 def _sound(target: Target) -> list[Tier]:
@@ -352,9 +378,9 @@ def _judged(grid: str, sequence: str) -> Callable[[Target, Counter[str]], Iterat
 
     def judge(target: Target, wrong: Counter[str]) -> Iterator[str]:
         wording = grid if target.kind is Kind.GRID else sequence
-        for tier in sound_tiers(target):
-            if wrong[tier.key]:
-                yield f"top-hit index {tier.key} {wording}"
+        for fact in tier_facts(target):
+            if wrong[fact.key]:
+                yield f"top-hit index {fact.key} {wording}"
 
     return judge
 
@@ -364,9 +390,9 @@ def _judge_z(target: Target, wrong: Counter[str]) -> Iterator[str]:
         "contains z value inconsistent with z array", "z value inconsistent with CSR"
     )(target, wrong)
     if target.kind is Kind.CSR:
-        for tier in sound_tiers(target):
-            if wrong[f"{tier.key}{_BELOW}"]:
-                yield f"top-hit index {tier.key} contains association above threshold"
+        for fact in tier_facts(target):
+            if wrong[f"{fact.key}{_BELOW}"]:
+                yield f"top-hit index {fact.key} contains association above threshold"
 
 
 def _judge_held(target: Target, held: Counter[str]) -> Iterator[str]:
@@ -375,9 +401,9 @@ def _judge_held(target: Target, held: Counter[str]) -> Iterator[str]:
     A grid holds every cell its axes span, which the tier's structure already
     checks; a sequence holds only the cells it lists.
     """
-    for tier in sound_tiers(target):
-        if held[tier.key] != len(tier.cells.rows):
-            yield f"top-hit index {tier.key} references missing association"
+    for fact in tier_facts(target):
+        if held[fact.key] != fact.n_cells:
+            yield f"top-hit index {fact.key} references missing association"
 
 
 def abs_z(target: Target) -> Iterator[str]:
@@ -389,9 +415,9 @@ def abs_z(target: Target) -> Iterator[str]:
 
 def _judge_complete(target: Target, passing: Counter[str]) -> Iterator[str]:
     """A tier holds every cell whose |z| clears its cutoff, and no other."""
-    for tier in sound_tiers(target):
-        if len(tier.cells.rows) != passing[tier.key]:
-            yield f"top-hit index {tier.key} does not match stored z values"
+    for fact in tier_facts(target):
+        if fact.n_cells != passing[fact.key]:
+            yield f"top-hit index {fact.key} does not match stored z values"
 
 
 def _against_planes(

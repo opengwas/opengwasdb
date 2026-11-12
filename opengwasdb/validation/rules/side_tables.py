@@ -4,9 +4,14 @@ A plane that says "look in the table" for a cell the table does not describe has
 lost that association outright, and a table entry for a cell that is not marked
 is never read. For `z` the lost cell is the *largest* |z| in the store, for
 `eaf` the frequency furthest from its baseline, and for a residual `se` an
-exception the coding could not express. Each rule folds the marked cells'
-positions out of the association scan and matches them against the table once
-the scan is done.
+exception the coding could not express.
+
+`z` and `se` fold the marked positions out of the association scan and match them
+against the table once it is done; both tables are small. The `eaf` table is not:
+it is one Zarr v3 shard of up to 1,136,991,041 entries, so that rule reconciles
+each block against the span of the table it must occupy as the scan reaches it,
+holding one page rather than every marked position and the whole table beside
+them (issue #387).
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import numpy as np
+import zarr
 
 from opengwasdb.encoding import (
     EAF_EXCEPTION,
@@ -25,6 +31,7 @@ from opengwasdb.encoding import (
     StoreCodec,
     ZOverflowTable,
 )
+from opengwasdb.encoding.codec import SparseExactTable
 from opengwasdb.store.arrays import array_length
 from opengwasdb.store.open import parse_format_version
 from opengwasdb.validation.rule import (
@@ -107,14 +114,146 @@ def _judge_z_overflow(target: Target, marked: Marked) -> Iterator[str]:
     yield from errors
 
 
-def _eaf_exceptions(target: Target, block: Block) -> Marked:
+#: Entries of a side table one page of a block-by-block read takes.  A Dense band
+#: of OGS-00011's grid marks about 239,000 cells, so one page covers a band and its
+#: tail carries into the next; the table itself is 1,136,991,041 entries, 12.7 GiB
+#: of `int64` and `float32`.
+SPAN_PAGE = 262_144
+
+
+class _Spans:
+    """A sorted side table, read in order, one block's span at a time.
+
+    A block's cells are one contiguous range of flat positions and the table is
+    sorted by them, so the entries a block must describe start where the previous
+    block's ended: reading them in that order visits every entry once and holds
+    one page at most.  It is what a judge can no longer do -- that read the whole
+    table and sorted every marked position beside it, which on OGS-00011 was
+    12.7 GiB and 8.5 GiB against a 1 GiB budget (issue #387).
+    """
+
+    def __init__(self, group: zarr.Group, table_type: type[SparseExactTable]) -> None:
+        self.index_array = group[table_type.index_name]
+        self.value_array = group[table_type.value_name]
+        self.total = array_length(self.index_array)
+        self.returned = 0
+        self._taken = 0
+        self._page_index = np.empty(0, dtype=np.int64)
+        self._page_value = np.empty(0, dtype=np.float32)
+
+    def take(self, until: int) -> tuple[np.ndarray, np.ndarray]:
+        """Every entry with a position below `until` that no block has taken yet."""
+        index_parts: list[np.ndarray] = []
+        value_parts: list[np.ndarray] = []
+        while True:
+            below = int(np.searchsorted(self._page_index, until, side="left"))
+            if below:
+                index_parts.append(self._page_index[:below])
+                value_parts.append(self._page_value[:below])
+                self._page_index = self._page_index[below:]
+                self._page_value = self._page_value[below:]
+                self.returned += below
+            if len(self._page_index) or self._taken >= self.total:
+                break
+            stop = min(self._taken + SPAN_PAGE, self.total)
+            self._page_index = np.asarray(self.index_array[self._taken:stop], dtype=np.int64)
+            self._page_value = np.asarray(self.value_array[self._taken:stop], dtype=np.float32)
+            self._taken = stop
+        return (
+            np.concatenate(index_parts) if index_parts else np.empty(0, dtype=np.int64),
+            np.concatenate(value_parts) if value_parts else np.empty(0, dtype=np.float32),
+        )
+
+
+@dataclass(frozen=True)
+class Reconciled:
+    """How a plane's marks and its side table disagreed, block by block, so far.
+
+    Counts and the first position of each kind, not the positions themselves: a
+    block's marks and the span it must occupy are compared as the scan reaches
+    them, so nothing accumulates but this.
+    """
+
+    orphan: int = 0
+    orphan_first: int | None = None
+    stray: int = 0
+    stray_first: int | None = None
+    undecodable: bool = False
+    #: Entries of the table the scan has taken, in order.
+    returned: int = 0
+
+    def __add__(self, other: Reconciled) -> Reconciled:
+        return Reconciled(
+            orphan=self.orphan + other.orphan,
+            orphan_first=_first(self.orphan_first, other.orphan_first),
+            stray=self.stray + other.stray,
+            stray_first=_first(self.stray_first, other.stray_first),
+            undecodable=self.undecodable or other.undecodable,
+            returned=max(self.returned, other.returned),
+        )
+
+
+def _first(one: int | None, other: int | None) -> int | None:
+    """The first of two flat positions in block order, either of which may be absent."""
+    if one is None:
+        return other
+    if other is None:
+        return one
+    return min(one, other)
+
+
+def _spans(target: Target) -> _Spans:
+    """The table this target's eaf marks are reconciled against, read once per pass."""
+    return target.remember(
+        f"{EAF_EXCEPTIONS}/spans",
+        lambda: _Spans(target.group, EafExceptionTable),
+        until=ASSOCIATIONS.name,
+    )
+
+
+def _eaf_exceptions(target: Target, block: Block) -> Reconciled:
+    """One block's marked cells, against the table span they must occupy.
+
+    The comparison is made here rather than in the judge because here the block's
+    cells and the table's span are both in hand: the judge would have to hold every
+    marked position until the scan ended and then read the table whole.
+    """
     if block.eaf_codes is None or not target.encoding.eaf.is_residual:
-        return Marked(undecodable=block.eaf_undecodable)
-    found = block.positions(block.eaf_codes == EAF_EXCEPTION)
-    return Marked((found,), block.eaf_undecodable)
+        return Reconciled(undecodable=block.eaf_undecodable)
+    spans = _spans(target)
+    marked = block.positions(block.eaf_codes == EAF_EXCEPTION)
+    span, _values = spans.take(block.offset + int(block.z_codes.size))
+    orphan = np.setdiff1d(marked, span)
+    stray = np.setdiff1d(span, marked)
+    return Reconciled(
+        orphan=len(orphan),
+        orphan_first=int(orphan[0]) if len(orphan) else None,
+        stray=len(stray),
+        stray_first=int(stray[0]) if len(stray) else None,
+        undecodable=block.eaf_undecodable,
+        returned=spans.returned,
+    )
 
 
-def _judge_eaf_exceptions(target: Target, marked: Marked) -> Iterator[str]:
+def _left_behind(target: Target, total: Reconciled) -> tuple[int, int | None]:
+    """The table entries after the last block's span, and the first of them.
+
+    A table that describes a cell past the last one the scan read leaves them
+    here: the scan never reaches them, and the rule is that no entry is stray.
+    """
+    # The table's own length, not the scan's count of it: a component with no cell
+    # to read takes nothing, and every entry it holds is then past the last span.
+    left = array_length(target.group[EafExceptionTable.index_name]) - total.returned
+    if left <= 0:
+        return 0, None
+    first = np.asarray(
+        target.group[EafExceptionTable.index_name][total.returned : total.returned + 1],
+        dtype=np.int64,
+    )
+    return left, int(first[0]) if len(first) else None
+
+
+def _judge_eaf_exceptions(target: Target, total: Reconciled) -> Iterator[str]:
     """Every eaf exception cell has an exact table entry, and no entry is stray.
 
     An undecodable band is only reported once the positions have been reconciled:
@@ -125,21 +264,40 @@ def _judge_eaf_exceptions(target: Target, marked: Marked) -> Iterator[str]:
     """
     label = plane_label(target, "eaf")
     if not target.encoding.eaf.is_residual or "eaf" not in target.group:
-        if marked.undecodable:
+        if total.undecodable:
             yield f"{label} cannot be decoded under the declared plan"
         return
     errors: list[str] = []
-    positions_match(
-        label,
-        marked.positions,
-        EafExceptionTable.read(target.group),
-        errors,
-        what="eaf exception",
-        table_name="eaf exception",
+    left, left_first = _left_behind(target, total)
+    errors.extend(
+        _reconciled_errors(
+            label,
+            Reconciled(
+                orphan=total.orphan,
+                orphan_first=total.orphan_first,
+                stray=total.stray + left,
+                stray_first=_first(total.stray_first, left_first),
+                undecodable=total.undecodable,
+            ),
+        )
     )
-    if marked.undecodable and not errors:
+    if total.undecodable and not errors:
         errors.append(f"{label} cannot be decoded under the declared plan")
     yield from errors
+
+
+def _reconciled_errors(label: str, reconciled: Reconciled) -> Iterator[str]:
+    """The words a plane's disagreement with its table has always been reported in."""
+    if reconciled.orphan:
+        yield (
+            f"{label}: {reconciled.orphan} eaf exception cell(s) have no entry in the "
+            f"eaf exception table (first at flat position {reconciled.orphan_first})"
+        )
+    if reconciled.stray:
+        yield (
+            f"{label}: eaf exception table describes {reconciled.stray} cell(s) that are "
+            f"not marked eaf exception (first at flat position {reconciled.stray_first})"
+        )
 
 
 def _se_exceptions(target: Target, block: Block) -> Marked:
@@ -268,7 +426,7 @@ RULES: tuple[Rule, ...] = (
         kinds=VALUE_KINDS,
         after=VALUES_AFTER,
         scan=ASSOCIATIONS,
-        zero=Marked(),
+        zero=Reconciled(),
         measure=_eaf_exceptions,
         judge=_judge_eaf_exceptions,
     ),

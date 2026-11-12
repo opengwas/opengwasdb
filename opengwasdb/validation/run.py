@@ -261,6 +261,12 @@ class _Run:
                     # timed apart: naming them says which rules the phase serves.
                     log.info("%s: %s", label, ", ".join(fold.name for fold in ready))
                     done.drive()
+                    # The read is over, so what the folds held to measure with goes
+                    # before they are judged, not after: on a full-size release the
+                    # pass keeps 1.6 GiB, chiefly the Top-Hit Index's tiers, and a
+                    # judge words its findings from the totals and the small facts
+                    # kept beside them (issue #387).
+                    target.release(scan.name)
                     self.conclude(done, i, target)
         finally:  # an interruption still ends the pass, and what it held goes with it
             target.release(scan.name)
