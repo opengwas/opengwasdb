@@ -27,6 +27,8 @@ from contract import support
 from contract.support import RangeHandler
 from numpy.dtypes import StringDType
 from store_copies import TEST_STORE, copy_store, resharded
+from zarr.abc.store import SuffixByteRequest
+from zarr.storage import LocalStore
 
 import ogld
 from ogld.format import InputError, Refusal, RefusalReason, judge_request
@@ -542,6 +544,60 @@ def test_a_repeated_read_fetches_its_chunks_once(
     assert once > 0, "the first read must fetch Near Band chunks"
     np.testing.assert_array_equal(store.matrix(names).r, first)
     assert (near_bytes() > once) is again
+
+
+@pytest.mark.parametrize(("budget", "requests"), [(1 << 28, 3), (0, 4)])
+def test_a_shard_index_is_fetched_once_and_kept_in_the_budget(
+    served: Served, budget: int, requests: int
+) -> None:
+    # Two reads of one shard, of chunks that are not neighbours: each fetches its chunk, and
+    # the first the shard's index too, which the second finds kept. Kept nothing, the second
+    # fetches the index again: two round trips a read, not one (spec §10; ogld#32).
+    url, sent = served
+    cache = location.ChunkCache(budget)
+    near = location.open_group(url, cache=cache)["near/22/r"]
+    assert isinstance(near, zarr.Array)
+    assert near.shards == (PER_SHARD * INNER,), "four chunks a shard, for this to mean anything"
+    before = len(sent)
+    for chunk in (20, 22):  # shard 5's first and third chunks
+        cache.take(near, [chunk * INNER])
+    assert [path for path, _ in sent[before:]] == ["/near/22/r/c/5"] * requests
+    indexes = [kept for key, kept in cache._kept.items() if key[0] == "near/22/r/c/5"]
+    assert sum(held.nbytes for held, _ in indexes) == sum(n for _, n in indexes) <= budget
+
+
+@pytest.mark.parametrize("pipeline", ["BatchedCodecPipeline", "FusedCodecPipeline"])
+def test_a_local_shard_index_is_read_once_and_kept(
+    small_chunks: Path, monkeypatch: pytest.MonkeyPatch, pipeline: str
+) -> None:
+    # zarr's default pipeline reads a local shard's index asynchronously, as it reads HTTP; its
+    # fused pipeline reads it synchronously. The index is kept either way.
+    everything = np.asarray(zarr.open_array(small_chunks / "near" / "22" / "r", mode="r")[:])
+    suffixes: list[tuple[str, str]] = []
+    read, read_sync = LocalStore.get, LocalStore.get_sync
+
+    async def counting(self: LocalStore, key: str, *args: Any, **kwargs: Any) -> Any:
+        if any(isinstance(a, SuffixByteRequest) for a in (*args, *kwargs.values())):
+            suffixes.append(("get", key))
+        return await read(self, key, *args, **kwargs)
+
+    def counting_sync(self: LocalStore, key: str, **kwargs: Any) -> Any:
+        if isinstance(kwargs.get("byte_range"), SuffixByteRequest):
+            suffixes.append(("get_sync", key))
+        return read_sync(self, key, **kwargs)
+
+    monkeypatch.setattr(LocalStore, "get", counting)
+    monkeypatch.setattr(LocalStore, "get_sync", counting_sync)
+    with zarr.config.set({"codec_pipeline.path": f"zarr.core.codec_pipeline.{pipeline}"}):
+        cache = location.ChunkCache(1 << 28)
+        near = location.open_group(small_chunks, cache=cache)["near/22/r"]
+        assert isinstance(near, zarr.Array)
+        for chunk in (20, 22, 21):
+            got = cache.take(near, [chunk * INNER + 7])
+            np.testing.assert_array_equal(got, everything[[chunk * INNER + 7]])
+    assert len(suffixes) == 1, "the shard's index, read once for three reads"
+    assert {key for _, key in suffixes} == {"near/22/r/c/5"}
+    assert len({how for how, _ in suffixes}) == 1, f"read one way under {pipeline}"
 
 
 @pytest.mark.parametrize("size", [-1, 1.5, True, "4GiB"])

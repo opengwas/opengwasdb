@@ -135,7 +135,7 @@ class StoreReader:
         """Open the LD Store at a local path or an HTTP(S) URL (ogld#4), keeping at most
         `cache_bytes` of its chunks (spec §10; the default if None, ogld#32)."""
         cache = ChunkCache(cache_bytes)
-        root = open_group(location)
+        root = open_group(location, cache=cache)
         recorded = root.attrs.get("ld_store")
         if root.metadata.zarr_format != 3:
             raise InputError(

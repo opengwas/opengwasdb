@@ -799,9 +799,19 @@ what a chunk held. It visits no string in Python (ogld#32): numpy counts each st
 and one fixed-width copy of the chunk, at most 256 bytes wide, proves the strings of at most 256
 characters ASCII, a byte a character, so their bytes are counted exactly. Every other string counts
 4 bytes a character, UTF-8's most. No ALID or allele the engine forms needs that. On 16,384 ALIDs
-the count takes 1.6 ms, against 2.4 ms string by string. Fixed-width text would be counted exactly, but one 2,000-character indel ALID
-would make its 16,384-row chunk 131 MB. One lock guards the cache, so threads sharing a reader keep
-one copy of a chunk. Validation's rules read through Zarr directly, in bounded windows: one pass
+the count takes 1.6 ms, against 2.4 ms string by string. Fixed-width text would be counted
+exactly, but one 2,000-character indel ALID would make its 16,384-row chunk 131 MB. One lock guards
+the cache, so threads sharing a reader keep one copy of a chunk.
+
+**The cache keeps shard indexes too** (ogld#32). zarr reads a shard's index before the chunks it
+needs from that shard, and reads it again on every read. Over HTTP, then, each read of a shard
+waited two round trips. The reader opens its store through a wrapper that keeps each index it
+fetches in the chunk cache, in the same budget and the same least-recently-used order, counted at
+its bytes. §6 puts the index at the shard's end. zarr reads it as the shard's suffix and reads
+nothing else that way, so the wrapper keeps suffix reads and passes every other read through. A
+read of a shard read before then pays one round trip; the first read of a shard still pays two,
+since the index says where the chunks are. A Near Band shard's index at layout C is 4,100 bytes:
+256 chunks × 16, and a 4-byte checksum. Validation's rules read through Zarr directly, in bounded windows: one pass
 over each chromosome, and a second read of the blocks `index.near` flags in a store it fails (§12). So a query that reads a few pairs at a time fetches each chunk once: clumping the Test
 Store's 1,056 variants, one read per lead, took 3.6 s reading through Zarr call by call and 0.7 s
 with the cache, against 0.6 s for the walking skeleton's arrays held whole. A matrix resolves its

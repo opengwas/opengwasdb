@@ -24,6 +24,9 @@ from typing import Any, Final
 import numpy as np
 import numpy.typing as npt
 import zarr
+from zarr.abc.store import ByteRequest, Store, SuffixByteRequest
+from zarr.core.buffer import Buffer, BufferPrototype, default_buffer_prototype
+from zarr.storage import StorePath, WrapperStore
 
 from ogld.format import InputError
 from ogld.format.geometry import spans
@@ -32,13 +35,25 @@ from ogld.format.geometry import spans
 CACHE_BYTES: Final = 1 << 28
 
 
-def open_group(location: str | os.PathLike[str]) -> zarr.Group:
-    """The root group of the hierarchy at `location`, read-only, whatever its Zarr format.
+def open_group(location: str | os.PathLike[str], *, cache: ChunkCache | None = None) -> zarr.Group:
+    """The root group of the hierarchy at `location`, read-only, whatever its Zarr format,
+    with every shard index its arrays read kept in `cache` when one is given (ogld#32).
 
     A location with no Zarr group at all, or whose root metadata will not parse, is an
     `InputError` naming it. A Zarr v2 group opens,
     so validation can say it is not v3 (spec §12, `envelope.arrays`) rather than not there.
     """
+    root = _opened(location)
+    if cache is None:
+        return root
+    # zarr chose the store for `location`, as it chooses for any location; the same group is
+    # put on that store, wrapped, from the metadata already read, so wrapping reads nothing.
+    kept = _KeptIndexes(root.store, cache)
+    return zarr.Group(zarr.AsyncGroup(root.metadata, StorePath(kept, root.path)))
+
+
+def _opened(location: str | os.PathLike[str]) -> zarr.Group:
+    """`open_group` of `location` as zarr opens it, its failures named."""
     try:
         return zarr.open_group(str(location), mode="r")
     except FileNotFoundError as missing:
@@ -145,6 +160,24 @@ class ChunkCache:
         with self._lock:
             return {k: self._keep((array.path, k), *entry) for k, entry in read.items()}
 
+    def index(self, key: str, size: int) -> bytes | None:
+        """The kept index of the shard at store key `key`, its last `size` bytes, if kept,
+        marked as just used. A shard index is kept beside the chunks, as (`key`, −`size`)."""
+        with self._lock:
+            kept = self._kept.get((key, -size))
+            if kept is None:
+                return None
+            self._kept.move_to_end((key, -size))
+        return kept[0].tobytes()
+
+    def keep_index(self, key: str, size: int, data: bytes) -> bytes:
+        """Keep the index `data` of the shard at store key `key`, its last `size` bytes, in
+        the budget as a chunk is kept, and give it back."""
+        held = np.frombuffer(data, dtype=np.uint8).copy()
+        with self._lock:
+            self._keep((key, -size), held, held.nbytes)
+        return data
+
     def _keep(
         self, key: tuple[str, int], chunk: npt.NDArray[Any], counted: int
     ) -> npt.NDArray[Any]:
@@ -159,6 +192,55 @@ class ChunkCache:
             _, (_, dropped) = self._kept.popitem(last=False)
             self._bytes -= dropped
         return chunk
+
+
+class _KeptIndexes(WrapperStore[Store]):
+    """A store whose shard indexes a `ChunkCache` keeps, in its budget (spec §6, §10; ogld#32).
+
+    zarr reads a shard's index before the chunks a read needs from it, and again on every
+    read: over HTTP, a round trip before the one that fetches the chunks. Spec §6 puts an LD
+    Store's shard index at the shard's end, which zarr reads as a suffix of the shard, and
+    reads nothing else that way. So each suffix read is answered from the cache when it holds
+    it, and kept when it is fetched; every other read passes through. A missing shard is not
+    kept, and reads as zarr reads it, its array's fill value, which the reader refuses.
+    """
+
+    def __init__(self, store: Store, cache: ChunkCache) -> None:
+        super().__init__(store)
+        self._cache = cache
+
+    def _with_store(self, store: Store) -> _KeptIndexes:
+        return type(self)(store, self._cache)
+
+    async def get(
+        self, key: str, prototype: BufferPrototype, byte_range: ByteRequest | None = None
+    ) -> Buffer | None:
+        if not isinstance(byte_range, SuffixByteRequest):
+            return await self._store.get(key, prototype, byte_range)
+        kept = self._cache.index(key, byte_range.suffix)
+        if kept is None:
+            fetched = await self._store.get(key, prototype, byte_range)
+            if fetched is None:
+                return None
+            kept = self._cache.keep_index(key, byte_range.suffix, fetched.to_bytes())
+        return prototype.buffer.from_bytes(kept)
+
+    def get_sync(
+        self,
+        key: str,
+        *,
+        prototype: BufferPrototype | None = None,
+        byte_range: ByteRequest | None = None,
+    ) -> Buffer | None:
+        if not isinstance(byte_range, SuffixByteRequest):
+            return super().get_sync(key, prototype=prototype, byte_range=byte_range)
+        kept = self._cache.index(key, byte_range.suffix)
+        if kept is None:
+            fetched = super().get_sync(key, prototype=prototype, byte_range=byte_range)
+            if fetched is None:
+                return None
+            kept = self._cache.keep_index(key, byte_range.suffix, fetched.to_bytes())
+        return (prototype or default_buffer_prototype()).buffer.from_bytes(kept)
 
 
 def _run(
