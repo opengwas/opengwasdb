@@ -273,11 +273,7 @@ NAMED_ON_PURPOSE = {
         "The Test Store is × 511 (ogld#16, ADR 0004)",
         "r_scale: int = 32767",
     ),
-    "scripts/build_hgdp1kgp.py": (
-        "`ogld build --k 10 --r-scale 511` (ADR 0004)",
-        "PANEL_SCALE = 511",
-        "k = 10, r scale 511, the unrelated keep",
-    ),
+    "scripts/build_hgdp1kgp.py": ("PANEL_SCALE = 511",),
     "scripts/make_test_store.py": (
         "quantised at × 511, HGDP+1kGP EUR's encoding",
         "make_test_store.py --r-scale 511 [--k 10]",

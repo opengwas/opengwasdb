@@ -4,38 +4,47 @@
     pixi run -e dev python scripts/build_hgdp1kgp.py convert  [--panel AFR ...] [--jobs 8]
     pixi run -e dev python scripts/build_hgdp1kgp.py build    [--panel AFR ...] [--builds 2]
 
-`convert` turns each panel's 22 phased v2 BCFs into one pgen fileset per chromosome with
-build-inputs §3's flags and the panel's unrelated keep file (§10, ADR 0002 decision 11). It is
-idempotent: a fileset is skipped when its plink2 log finished, records the same options, and the
-`.psam` holds exactly the keep file's samples; anything else is converted again. A conversion
-whose sample count differs from the keep file's stops the run.
+`convert` turns each panel's 22 phased v2 BCFs into one pgen fileset per chromosome. The command
+is `test_panel.tools.conversion_args`, build-inputs §3's, with the panel's unrelated keep file
+(§10, ADR 0002 decision 11); this script adds only plink2's threads and memory. A fileset is
+current only when its stamp (`<prefix>.stamp.json`, `tools.stamp_matches`) records today's
+command, source checksum, keep file hash and plink2 version. The stamp is written after plink2
+exits 0 and the fileset holds exactly the keep file's samples, so a conversion that failed, or
+was cut short, has none and is converted again. A conversion that finishes with other samples
+than the keep file's stops the run.
 
-`build` runs `ogld build --k 10 --r-scale 511` (ADR 0004) with the panel's PC File, keep file and
-panel id, then `ogld validate`, each at `--threads` (16) threads, `--builds` (2) panels at once.
-It refuses a store that already exists, and stops on a failed build or validation rather than
-going on to the next chromosome's or panel's: a build that cannot do the right thing says so.
+`build` runs `ogld build` with `--k` K and `--r-scale` PANEL_SCALE (ADR 0004), the panel's PC File,
+keep file and panel id, then `ogld validate`, each at `--threads` (16) threads, `--builds` (2)
+panels at once. It refuses a store that already exists. When a panel fails, panels not yet
+started are cancelled and the one still running finishes; the run then stops with that failure.
 
-Where things live, each overridable: `$OGLD_PHASED_V2`, `$OGLD_PCS`, `$OGLD_KEEP`, `$OGLD_PLINK2`
-(scripts/test_panel/roots.py); `$OGLD_PGEN_V2` (default
-`/data/opengwasdb/work/ogld/phased_v2_pgen`), `$OGLD_STORES`
-(`/data/opengwasdb/work/ogld/stores`), `$OGLD_SCRATCH` (`/data/opengwasdb/work/ogld/scratch/7`,
-the logs; each timing line carries `uptime`).
+Where things live, each overridable and each in `scripts/test_panel/roots.py`: `$OGLD_PHASED_V2`,
+`$OGLD_PCS`, `$OGLD_KEEP`, `$OGLD_PLINK2`, and the recipe's `$OGLD_PGEN_V2` (the filesets),
+`$OGLD_STORES` and `$OGLD_SCRATCH` (the logs; each timing line carries `uptime`).
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from test_panel.roots import root, tool
+from test_panel.tools import (
+    conversion_args,
+    conversion_inputs,
+    run_plink2,
+    stamp_matches,
+    write_stamp,
+)
 
 #: AFR first: it has the most variants, so its chr6 is the memory to watch.
 PANELS = ("AFR", "EUR", "EAS", "SAS", "AMR")
 CHROMS = tuple(range(1, 23))
+#: The stores' encoding (ADR 0004): `BuildInputs.r_scale` has no default, so the recipe names it.
 PANEL_SCALE = 511
 K = 10
 CONVERT_THREADS = 4
@@ -44,75 +53,30 @@ BUILD_THREADS = 16
 MAX_CONVERSIONS = 8
 MAX_BUILDS = 2
 BCF = "hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf"
-#: The options a log must record for a fileset to count as this conversion's; `--threads`,
-#: `--memory` and `--out` do not change what is written.
-IGNORED_OPTIONS = {"--threads", "--memory", "--out"}
-
-
-def directory(variable: str, default: str) -> Path:
-    return Path(os.environ.get(variable, default))
-
-
-def pgen_root() -> Path:
-    return directory("OGLD_PGEN_V2", "/data/opengwasdb/work/ogld/phased_v2_pgen")
-
-
-def stores_root() -> Path:
-    return directory("OGLD_STORES", "/data/opengwasdb/work/ogld/stores")
-
-
-def scratch_root() -> Path:
-    return directory("OGLD_SCRATCH", "/data/opengwasdb/work/ogld/scratch/7")
+#: The program that reports a command's peak memory (`-v`) to a file (`-o`).
+TIME = "/usr/bin/time"
 
 
 def prefix(panel: str, chrom: int) -> Path:
-    return pgen_root() / panel / f"chr{chrom}"
+    return root("OGLD_PGEN_V2") / panel / f"chr{chrom}"
 
 
 def keep_file(panel: str) -> Path:
     return root("OGLD_KEEP") / f"{panel}.keep"
 
 
+def panel_id(panel: str) -> str:
+    return f"hgdp1kgp-v2-{panel}"
+
+
 def store_path(panel: str) -> Path:
-    return stores_root() / f"hgdp1kgp-v2-{panel}-k{K}.store"
-
-
-def conversion_command(
-    plink2: Path,
-    bcf: Path,
-    keep: Path,
-    out: Path,
-    threads: int = CONVERT_THREADS,
-    memory_mb: int = CONVERT_MEMORY_MB,
-) -> list[str]:
-    """build-inputs §3's BCF conversion, restricted to the keep file's samples."""
-    return [
-        str(plink2),
-        "--bcf",
-        str(bcf),
-        "--keep",
-        str(keep),
-        "--max-alleles",
-        "2",
-        "--set-all-var-ids",
-        "@:#:$r:$a",
-        "--new-id-max-allele-len",
-        "1000",
-        "--make-pgen",
-        "pvar-cols=filter",
-        "--out",
-        str(out),
-        "--threads",
-        str(threads),
-        "--memory",
-        str(memory_mb),
-    ]
+    return root("OGLD_STORES") / f"{panel_id(panel)}-k{K}.store"
 
 
 def build_command(
     panel: str, pgens: list[Path], store: Path, keep: Path, pcs: Path, threads: int
 ) -> list[str]:
-    """`ogld build` for one panel: k = 10, r scale 511, the unrelated keep, its PC File."""
+    """`ogld build` for one panel: k = K, r scale PANEL_SCALE, the unrelated keep, its PC File."""
     command = ["ogld", "build", str(store)]
     for pgen in pgens:
         command += ["--pgen", str(pgen)]
@@ -125,7 +89,7 @@ def build_command(
         "--pc-source",
         f"ogld scripts/make_pcs.py on HGDP+1kGP v2 {panel} (ADR 0002)",
         "--panel-id",
-        f"hgdp1kgp-v2-{panel}",
+        panel_id(panel),
         "--ancestry",
         panel,
         "--genotype-source",
@@ -145,38 +109,6 @@ def validate_command(store: Path, threads: int) -> list[str]:
     return ["ogld", "validate", "--threads", str(threads), str(store)]
 
 
-def options_in(tokens: list[str]) -> dict[str, str]:
-    """A command line's `--flag value` pairs, without the options that do not change the output."""
-    found: dict[str, str] = {}
-    flag: str | None = None
-    for token in tokens:
-        if token.startswith("--"):
-            flag = token
-            found[flag] = ""
-        elif flag is not None:
-            found[flag] = (found[flag] + " " + token).strip()
-    return {f: v for f, v in found.items() if f not in IGNORED_OPTIONS}
-
-
-def logged_options(log_text: str) -> dict[str, str] | None:
-    """The options plink2's log records, or None when the run did not finish ("End time")."""
-    if "\nEnd time:" not in log_text:
-        return None
-    block = log_text.split("Options in effect:\n", 1)[-1].split("\n\n", 1)[0]
-    lines = [line.strip() for line in block.splitlines() if line.strip().startswith("--")]
-    return options_in(_split(lines))
-
-
-def _split(lines: list[str]) -> list[str]:
-    tokens: list[str] = []
-    for line in lines:
-        flag, _, value = line.partition(" ")
-        tokens.append(flag)
-        if value:
-            tokens.append(value)
-    return tokens
-
-
 def keep_iids(keep: Path) -> list[str]:
     """A keep file's IIDs: one per line under the `#IID` header."""
     lines = keep.read_text().splitlines()
@@ -194,55 +126,67 @@ def psam_iids(psam: Path) -> list[str]:
     return [row.split("\t")[at] for row in rows[1:]]
 
 
-def conversion_current(command: list[str], out: Path, keep: Path) -> bool:
-    """True when `out` is a finished conversion made with `command`'s options of exactly the keep
-    file's samples: its log finished and records the same options, and its files exist."""
-    log = Path(f"{out}.log")
-    if not (
-        log.exists() and all(Path(f"{out}.{ext}").exists() for ext in ("pgen", "pvar", "psam"))
-    ):
-        return False
-    logged = logged_options(log.read_text())
-    if logged is None or logged != options_in(command):
-        return False
-    return sorted(psam_iids(Path(f"{out}.psam"))) == sorted(keep_iids(keep))
-
-
 def uptime() -> str:
     return subprocess.run(["uptime"], capture_output=True, text=True, check=True).stdout.strip()
 
 
 def log_line(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as handle:
         handle.write(text + "\n")
 
 
+def fileset_files(out: Path) -> list[Path]:
+    return [Path(f"{out}.{ext}") for ext in ("pgen", "pvar", "psam")]
+
+
+def check_fileset(name: str, out: Path, keep: Path) -> None:
+    """A finished conversion has all three files and exactly the keep file's samples."""
+    for path in fileset_files(out):
+        if not path.exists():
+            raise SystemExit(f"{name}: plink2 exited 0 but {path} is missing")
+    got, want = psam_iids(Path(f"{out}.psam")), keep_iids(keep)
+    if len(got) != len(want):
+        raise SystemExit(f"{name}: converted {len(got)} samples; the keep file has {len(want)}")
+    if sorted(got) != sorted(want):
+        raise SystemExit(f"{name}: the converted samples are not the keep file's")
+
+
 def convert_one(plink2: Path, panel: str, chrom: int, threads: int, memory_mb: int) -> str:
-    out = prefix(panel, chrom)
-    keep = keep_file(panel)
+    out, keep = prefix(panel, chrom), keep_file(panel)
     bcf = root("OGLD_PHASED_V2") / BCF.format(chrom=chrom)
     if not bcf.exists():
         raise SystemExit(f"{bcf}: missing")
-    command = conversion_command(plink2, bcf, keep, out, threads, memory_mb)
+    args = conversion_args(bcf, keep, out)
+    inputs = conversion_inputs(plink2, args, bcf, keep)
     name = f"{panel} chr{chrom}"
-    if conversion_current(command, out, keep):
-        return f"{name}: skipped, current"
+    if stamp_matches(out, inputs) and all(p.exists() for p in fileset_files(out)):
+        return f"{name}: skipped, stamp matches"
+    Path(f"{out}.stamp.json").unlink(missing_ok=True)
     out.parent.mkdir(parents=True, exist_ok=True)
-    timing = scratch_root() / "convert.log"
-    timing.parent.mkdir(parents=True, exist_ok=True)
+    timing = root("OGLD_SCRATCH") / "convert.log"
     log_line(timing, f"{name} start {uptime()}")
-    done = subprocess.run(command, capture_output=True, text=True, check=False)
-    log_line(timing, f"{name} end rc={done.returncode} {uptime()}")
-    if done.returncode != 0:
-        raise SystemExit(
-            f"{name}: plink2 failed ({done.returncode}):\n{done.stderr or done.stdout}"
-        )
-    got, want = len(psam_iids(Path(f"{out}.psam"))), len(keep_iids(keep))
-    if got != want:
-        raise SystemExit(f"{name}: converted {got} samples; the keep file has {want}")
-    if not conversion_current(command, out, keep):
-        raise SystemExit(f"{name}: the finished conversion does not match its command")
-    return f"{name}: converted, {got} samples"
+    try:
+        run_plink2(plink2, args, root("OGLD_SCRATCH") / "convert" / f"{panel}.chr{chrom}.log",
+                   threads, memory_mb)  # fmt: skip
+    finally:
+        log_line(timing, f"{name} end {uptime()}")
+    check_fileset(name, out, keep)
+    write_stamp(out, inputs)
+    return f"{name}: converted, {len(keep_iids(keep))} samples"
+
+
+def run_all[T](work: Sequence[T], fn: Callable[[T], str], workers: int) -> None:
+    """`fn` over `work`, `workers` at a time, each result printed as it arrives. On the first
+    failure the items not yet started are cancelled, those running finish, and it is raised."""
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(fn, item) for item in work]
+        for done in as_completed(futures):
+            try:
+                print(done.result(), flush=True)
+            except BaseException:
+                pool.shutdown(wait=False, cancel_futures=True)
+                raise
 
 
 def convert(panels: list[str], jobs: int, threads: int, memory_mb: int) -> None:
@@ -250,19 +194,17 @@ def convert(panels: list[str], jobs: int, threads: int, memory_mb: int) -> None:
         raise SystemExit(f"--jobs must be 1 to {MAX_CONVERSIONS} (the node is shared)")
     plink2 = tool("plink2")
     work = [(p, c) for p in panels for c in CHROMS]
-    with ThreadPoolExecutor(max_workers=jobs) as pool:
-        for message in pool.map(lambda w: convert_one(plink2, *w, threads, memory_mb), work):
-            print(message, flush=True)
+    run_all(work, lambda w: convert_one(plink2, *w, threads, memory_mb), jobs)
 
 
 def timed(command: list[str], log: Path, stage: str) -> None:
-    """Run `command` under /usr/bin/time -v, its stdout and the time report in `log`'s siblings,
-    with `uptime` before and after; a non-zero exit stops the run."""
+    """Run `command` under `TIME -v`, its stdout and the time report beside `log`, with `uptime`
+    before and after; a non-zero exit stops the run."""
     stem = log.with_suffix("")
     log_line(log, f"{stage} start {uptime()}")
     with Path(f"{stem}.{stage}.out").open("w") as out:
         done = subprocess.run(
-            ["/usr/bin/time", "-v", "-o", f"{stem}.{stage}.time", *command],
+            [TIME, "-v", "-o", f"{stem}.{stage}.time", *command],
             stdout=out,
             stderr=subprocess.STDOUT,
             check=False,
@@ -282,8 +224,7 @@ def build_one(panel: str, threads: int) -> str:
     if store.exists():
         raise SystemExit(f"{store} exists; move it away or build under another $OGLD_STORES")
     store.parent.mkdir(parents=True, exist_ok=True)
-    scratch_root().mkdir(parents=True, exist_ok=True)
-    log = scratch_root() / f"{panel}.log"
+    log = root("OGLD_SCRATCH") / f"{panel}.log"
     timed(build_command(panel, pgens, store, keep, pcs, threads), log, "build")
     timed(validate_command(store, threads), log, "validate")
     return f"{panel}: built and validated, {store}"
@@ -294,9 +235,7 @@ def build(panels: list[str], builds: int, threads: int) -> None:
         raise SystemExit(f"--builds must be 1 to {MAX_BUILDS} (the node is shared)")
     if not 1 <= threads <= BUILD_THREADS:
         raise SystemExit(f"--threads must be 1 to {BUILD_THREADS} (the node is shared)")
-    with ThreadPoolExecutor(max_workers=builds) as pool:
-        for message in pool.map(lambda p: build_one(p, threads), panels):
-            print(message, flush=True)
+    run_all(panels, lambda p: build_one(p, threads), builds)
 
 
 def parse(argv: list[str] | None) -> argparse.Namespace:
