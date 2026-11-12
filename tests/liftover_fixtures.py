@@ -33,6 +33,21 @@ def write_two_strand_chain(path: Path) -> Path:
     return path
 
 
+def write_cross_chromosome_chain(path: Path) -> Path:
+    """A chain that moves hg19 chr1:1-1000 onto hg38 chr2 (same offsets) and keeps chr3.
+
+    A position on chr1 inside the block lifts, but onto another chromosome: the
+    case a Trait's position must not accept. chr3 is the identity.
+    """
+    size = STRAND_CHAIN_SIZE
+    path.write_text(
+        f"chain 1000 chr1 {size} + 0 1000 chr2 {size} + 0 1000 1\n1000\n\n"
+        f"chain 1000 chr3 {size} + 0 {size} chr3 {size} + 0 {size} 2\n{size}\n\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def write_collision_chain(path: Path) -> Path:
     """A real chain file whose two chains image overlapping target intervals.
 

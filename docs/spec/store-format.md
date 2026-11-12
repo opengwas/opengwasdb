@@ -905,6 +905,19 @@ n_hits_5e6   (count of associations at p <= 5e-6, suggestive)
 n_hits_5e4   (count of associations at p <= 5e-4, nominal)
 ```
 
+`trait_chr`/`trait_bp` are in the Store's `reference_assembly`, as every
+variant coordinate is. A builder that lifts a source's variants lifts these
+with them, through the same build and chain (issue #433), for `build-ragged-besd`. A position the
+chain places nowhere, or on a different chromosome, is not kept in the source's
+assembly: the Analysis's `trait_chr`/`trait_bp` are left blank, and the build
+records the loss outside the Store, as ADR 0072 keeps a Store's bytes
+independent of its record: the printed build summary counts the Analyses and
+names them, and `trait_positions_unlifted.tsv` beside the Admission record's
+`admission.json` names every one (the record's reset removes it, so it always
+describes the build that wrote the record). Nothing is added to the manifest. A
+build whose unlifted share exceeds the variant lift's failure threshold is
+refused. `build-dense-vcf` and `build-hybrid` carry no Trait position.
+
 Every column beyond `analysis_index`/`analysis_id` MAY be blank for an
 individual row when genuinely unknown or not applicable — a phenotype-level
 Analysis leaves `trait_chr`/`trait_bp` blank; a Trait with no clean ontology

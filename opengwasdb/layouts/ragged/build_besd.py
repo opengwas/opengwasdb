@@ -56,6 +56,11 @@ from opengwasdb.layouts.ragged.by_variant import build_variant_index
 from opengwasdb.layouts.ragged.provenance import ragged_provenance
 from opengwasdb.layouts.ragged.sample_size_table import SampleSizeTable, SampleSizeTableError
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
+from opengwasdb.layouts.ragged.trait_positions import (
+    LiftedTraitPositions,
+    lift_trait_positions,
+    write_unlifted,
+)
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, PassthroughMetadata, write_analysis_records
@@ -220,7 +225,8 @@ def _build_besd_release(
     eaf_report = _verify_eaf(axis, request)
     write_variant_axis(staged.path, axis.variants, axis.rsid_by_alid)
     # Phase 3 — Analysis metadata from the EPI records (optional manifest overlay).
-    analyses = _analysis_records(axis.probes, request.tissue, request.analyses_path)
+    positions, trait_lift = _trait_positions(axis, request)
+    analyses = _analysis_records(axis.probes, request.tissue, request.analyses_path, positions)
     staged.index_connection().close()
     # Phase 4 — CSR ingestion and the encoding plan it decides.
     sample_sizes = (
@@ -233,6 +239,7 @@ def _build_besd_release(
         [analysis.analysis_id for analysis in analyses],
         command="build-ragged-besd",
     )
+    write_unlifted(trait_lift, record.directory)
     rules = _besd_rules(request.analyses_path, analyses, axis)
     csr, encoding, scopes = _ingest_besd(
         _ProbeSources(prefix, request.source_build), axis, staged.path, sample_sizes,
@@ -864,7 +871,7 @@ def _overlay_sd(
 def _overlay_probe_analysis(
     probe: ProbeRecord,
     tissue: str | None,
-    probe_chr: str | None,
+    position: _TraitPosition,
     manifest_row: dict[str, str],
     analyses_path: str | Path | None = None,
 ) -> Analysis:
@@ -889,8 +896,8 @@ def _overlay_probe_analysis(
         trait_ontology_label=ont_label,
         tissue=tissue_val,
         context=_opt(r.get("context")),
-        trait_chr=probe_chr,
-        trait_bp=probe.probe_bp if probe.probe_bp > 0 else None,
+        trait_chr=position[0],
+        trait_bp=position[1],
         n=n,
         stored_effect_scale=_opt(r.get("stored_effect_scale")) or "",
         assigned_ancestry=_opt(r.get("assigned_ancestry")) or "",
@@ -904,15 +911,16 @@ def _analysis_record_for_probe(
     tissue: str | None,
     manifest_row: dict[str, str] | None,
     analyses_path: str | Path | None = None,
+    trait_position: _TraitPosition | None = None,
 ) -> Analysis:
-    """Build one Analysis record for a probe, optionally overlaying manifest metadata."""
-    try:
-        probe_chr = normalise_chromosome(probe.chromosome)
-    except VariantNormalisationError:
-        probe_chr = None
+    """Build one Analysis record for a probe, optionally overlaying manifest metadata.
 
+    ``trait_position`` is the Trait position in the Store's assembly; ``None``
+    takes the probe's own, which is right only when the source is that assembly.
+    """
+    position = _source_trait_position(probe) if trait_position is None else trait_position
     if manifest_row is not None:
-        return _overlay_probe_analysis(probe, tissue, probe_chr, manifest_row, analyses_path)
+        return _overlay_probe_analysis(probe, tissue, position, manifest_row, analyses_path)
 
     analysis_id = f"{probe.probe_id}::{tissue}" if tissue else probe.probe_id
     is_ensembl = probe.probe_id.startswith("ENSG")
@@ -923,31 +931,89 @@ def _analysis_record_for_probe(
         trait_ontology_label="Ensembl" if is_ensembl else None,
         tissue=tissue,
         context=None,
-        trait_chr=probe_chr,
-        trait_bp=probe.probe_bp if probe.probe_bp > 0 else None,
+        trait_chr=position[0],
+        trait_bp=position[1],
         n=None,
     )
+
+
+#: An Analysis's Trait position: ``(chromosome, bp)``, both ``None`` when it has none.
+_TraitPosition = tuple[str | None, int | None]
+
+
+def _source_trait_position(probe: ProbeRecord) -> _TraitPosition:
+    """The position the EPI declares for a probe, in the source's own assembly."""
+    try:
+        chromosome: str | None = normalise_chromosome(probe.chromosome)
+    except VariantNormalisationError:
+        chromosome = None
+    return chromosome, probe.probe_bp if probe.probe_bp > 0 else None
+
+
+def _trait_positions(
+    axis: _EsiAxis, request: _BesdBuildRequest
+) -> tuple[dict[str, _TraitPosition] | None, LiftedTraitPositions | None]:
+    """Each probe's Trait position in the Store's assembly (issue #433).
+
+    ``(None, None)`` when the source already is that assembly: its EPI positions
+    are used as read. Otherwise every probe position is lifted with the variants'
+    build and chain; one that does not lift leaves its Analysis with no Trait
+    position (never the source's) and the build says which: the printed summary
+    now, `trait_positions_unlifted.tsv` once the Admission record is open.
+    """
+    if axis.lift is None:
+        return None, None
+    ids = [_analysis_id(probe, request.tissue) for probe in axis.probes]
+    declared = [
+        (analysis_id, chromosome, bp)
+        for analysis_id, probe in zip(ids, axis.probes, strict=True)
+        for chromosome, bp in [_source_trait_position(probe)]
+        if chromosome is not None and bp is not None
+    ]
+    lifted = lift_trait_positions(
+        declared, chain_file=request.chain_file, failure_threshold=_LIFTOVER_FAILURE_THRESHOLD
+    )
+    lifted.report()
+    return {
+        analysis_id: lifted.positions.get(analysis_id, (None, None)) for analysis_id in ids
+    }, lifted
+
+
+def _analysis_id(probe: ProbeRecord, tissue: str | None) -> str:
+    return f"{probe.probe_id}::{tissue}" if tissue else probe.probe_id
 
 
 def _analysis_records(
     probes: list[ProbeRecord],
     tissue: str | None,
     analyses_path: str | Path | None = None,
+    trait_positions: dict[str, _TraitPosition] | None = None,
 ) -> list[Analysis]:
-    """One Analysis per EPI probe, optionally overlaid with manifest metadata (issue #173)."""
-    if analyses_path is None:
-        return [_analysis_record_for_probe(probe, tissue, None) for probe in probes]
+    """One Analysis per EPI probe, optionally overlaid with manifest metadata (issue #173).
 
-    expected_ids = [
-        f"{probe.probe_id}::{tissue}" if tissue else probe.probe_id for probe in probes
-    ]
+    ``trait_positions`` maps each Analysis id to its Trait position in the
+    Store's assembly; ``None`` takes the EPI's own.
+    """
+    positions = trait_positions or {}
+
+    def position_of(probe: ProbeRecord) -> _TraitPosition | None:
+        return positions.get(_analysis_id(probe, tissue))
+
+    if analyses_path is None:
+        return [
+            _analysis_record_for_probe(probe, tissue, None, trait_position=position_of(probe))
+            for probe in probes
+        ]
+
+    expected_ids = [_analysis_id(probe, tissue) for probe in probes]
     overlay_by_id = _load_analyses_overlay(analyses_path, expected_ids)
     return [
         _analysis_record_for_probe(
             probe,
             tissue,
-            overlay_by_id[f"{probe.probe_id}::{tissue}" if tissue else probe.probe_id],
+            overlay_by_id[_analysis_id(probe, tissue)],
             analyses_path,
+            position_of(probe),
         )
         for probe in probes
     ]
