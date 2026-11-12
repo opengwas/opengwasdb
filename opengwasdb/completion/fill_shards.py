@@ -27,7 +27,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from opengwasdb.completion.checkpoint import ALID_DTYPE, ALID_WIDTH
+from opengwasdb.completion.checkpoint import ALID_DTYPE, is_long
 from opengwasdb.variants.routing import collapse_duplicates
 
 log = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ def sorted_union_map(new_alid_to_idx: dict[str, int]) -> UnionMap:
     record ALIDs, not rows) resolve to union rows by binary search."""
     # The lists hold references to the axis's own strings, not copies: the axis
     # has tens of millions of ALIDs and only a few thousand are long.
-    long_ = [a for a in new_alid_to_idx if len(a.encode("utf-8")) > ALID_WIDTH]
+    long_ = [a for a in new_alid_to_idx if is_long(a.encode("utf-8"))]
     long_set = set(long_)
     short = [a for a in new_alid_to_idx if a not in long_set]
     return UnionMap(*_sorted_keys(short, new_alid_to_idx, ALID_DTYPE),

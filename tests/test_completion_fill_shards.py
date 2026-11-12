@@ -226,7 +226,8 @@ def test_each_long_alid_fill_reaches_its_own_row(tmp_path) -> None:
     blocks = tmp_path / "blocks"
     blocks.mkdir()
     write_block_checkpoint(
-        blocks / "2__1-9.npz", BlockCompletionResult("2/1-9", [QualityRow(0, 0.5, 3, 0)], _long_fills())
+        blocks / "2__1-9.npz",
+        BlockCompletionResult("2/1-9", [QualityRow(0, 0.5, 3, 0)], _long_fills()),
     )
     union = fill_shards.sorted_union_map(LONG_AXIS)
     dst = tmp_path / "out.opengwasdb"
@@ -242,7 +243,9 @@ def test_each_long_alid_fill_reaches_its_own_row(tmp_path) -> None:
             for path in sorted(shard_dir.glob("*.bin"))
         }
 
-    assert _records(shards) == [(1, 0, 1.0, 0.5), (2, 0, 2.0, 0.5), (3, 1, 4.0, 0.25), (4, 1, 3.0, 0.25)]
+    assert _records(shards) == [
+        (1, 0, 1.0, 0.5), (2, 0, 2.0, 0.5), (3, 1, 4.0, 0.25), (4, 1, 3.0, 0.25)
+    ]
 
 
 def test_a_format_2_checkpoint_is_refused_with_a_restart_not_read(tmp_path) -> None:
@@ -268,6 +271,63 @@ def test_a_format_2_checkpoint_is_refused_with_a_restart_not_read(tmp_path) -> N
     with open(path, "wb") as fh:
         np.savez(fh, **arrays)
 
-    with pytest.raises(ValueError, match=rf"{re.escape(str(checkpoint_dir))}.*Restart the completion"):
+    with pytest.raises(
+        ValueError, match=rf"{re.escape(str(checkpoint_dir))}.*Restart the completion"
+    ):
         checkpoint_blocks_dir(checkpoint_dir)
     assert path.exists()
+
+
+# --- ALIDs of 63, 64 and 65 bytes, and a 64-byte one a longer one begins with --
+
+
+def _alid_of(n_bytes: int, tail: str) -> str:
+    """A `3:<pos>:A:<alt>` ALID of exactly ``n_bytes`` bytes ending in ``tail``."""
+    head = "3:7000:A:"
+    alid = head + "C" * (n_bytes - len(head) - len(tail)) + tail
+    assert len(alid.encode()) == n_bytes
+    return alid
+
+
+#: A 64-byte ALID, the 65-byte ALID that begins with it, and 63- and 65-byte
+#: ALIDs of their own: the widths either side of the one the short array holds.
+SIXTY_FOUR = _alid_of(64, "GG")
+SIXTY_FIVE = SIXTY_FOUR + "T"
+SIXTY_THREE = _alid_of(63, "TT")
+OTHER_SIXTY_FIVE = _alid_of(65, "AA")
+EDGE_AXIS = {
+    "3:6000:A:G": 0, SIXTY_THREE: 1, SIXTY_FOUR: 2, SIXTY_FIVE: 3, OTHER_SIXTY_FIVE: 4,
+}
+
+
+def test_the_edge_fixture_has_the_widths_it_names() -> None:
+    assert [len(a.encode()) for a in (SIXTY_THREE, SIXTY_FOUR, SIXTY_FIVE, OTHER_SIXTY_FIVE)] == [
+        63, 64, 65, 65
+    ]
+    assert SIXTY_FIVE.encode()[:64] == SIXTY_FOUR.encode()
+    assert len(set(EDGE_AXIS.values())) == len(EDGE_AXIS)
+
+
+def test_alids_of_63_64_and_65_bytes_each_reach_their_own_row(tmp_path) -> None:
+    """The 64-byte ALID is the first 64 bytes of the 65-byte one: cut, the two
+    are one key. Each of the four fills reaches the row of its own ALID."""
+    fills = [FillRow(a, 0, float(row), 0.5) for a, row in EDGE_AXIS.items() if row]
+    blocks = tmp_path / "blocks"
+    blocks.mkdir()
+    write_block_checkpoint(
+        blocks / "3__1-9.npz", BlockCompletionResult("3/1-9", [], fills)
+    )
+    union = fill_shards.sorted_union_map(EDGE_AXIS)
+    with OpenGWASDBStore.staging(tmp_path / "out.opengwasdb", overwrite=True) as staged:
+        with closing(staged.index_connection()) as db:
+            create_completion_quality_table(db)
+            db.commit()
+        shard_dir, _ = fill_shards.shard_checkpoint_fills(
+            blocks, staged, union, len(EDGE_AXIS), fill_shards.by_row_band(100)
+        )
+        shards = {
+            int(path.stem.split("-")[1]): np.concatenate(list(fill_shards.iter_fill_records(path)))
+            for path in sorted(shard_dir.glob("*.bin"))
+        }
+
+    assert _records(shards) == [(row, 0, float(row), 0.5) for row in (1, 2, 3, 4)]

@@ -20,8 +20,15 @@ import numpy as np
 #: ADR 0079) is never cut to fit: it is held whole beside them (`split_alids`),
 #: because a width taken from the longest ALID would give every row of a
 #: Store's axis that width (OGS-00013's longest is 761 bytes, its median 15).
-ALID_DTYPE = "S64"
 ALID_WIDTH = 64
+ALID_DTYPE = f"S{ALID_WIDTH}"
+
+
+def is_long(encoded: bytes) -> bool:
+    """Whether an encoded ALID is held in the wide array, not cut to `ALID_DTYPE`.
+    The one place the rule is written: checkpoints and the union map both ask it."""
+    return len(encoded) > ALID_WIDTH
+
 
 #: The format a block checkpoint records (``format`` in its ``.npz``). A resume
 #: refuses a directory holding a checkpoint without it, or under another number:
@@ -176,8 +183,8 @@ def split_alids(alids: Iterable[str]) -> tuple[np.ndarray, np.ndarray, np.ndarra
     Store's variant table writes them.
     """
     encoded = [alid.encode("utf-8") for alid in alids]
-    at = [i for i, b in enumerate(encoded) if len(b) > ALID_WIDTH]
-    short = np.array([b if len(b) <= ALID_WIDTH else b"" for b in encoded], dtype=ALID_DTYPE)
+    at = [i for i, b in enumerate(encoded) if is_long(b)]
+    short = np.array([b"" if is_long(b) else b for b in encoded], dtype=ALID_DTYPE)
     long_ = np.array([encoded[i] for i in at], dtype="S1" if not at else None)
     return short, np.array(at, dtype=np.int64), long_
 

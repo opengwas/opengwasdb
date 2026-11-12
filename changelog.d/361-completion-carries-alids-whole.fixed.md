@@ -9,5 +9,8 @@
   longest ALID's width on every row. The block checkpoint format moves to 3: a
   resume of a directory written by an earlier package is refused, naming the
   directory and saying to restart the completion. Store `format_version` is
-  unchanged, and no cell of an ALID of 64 bytes or fewer moves. Releases
-  already published are counted under #367.
+  unchanged. No cell of an ALID that shares no first 64 bytes with another
+  moves. The cells that do move are those of an ALID of exactly 64 bytes that
+  is also the first 64 bytes of a longer one: cut, the two shared a key, so
+  fills of the shorter could land on the longer's row, and now each lands on its
+  own. Releases already published are counted under #367.

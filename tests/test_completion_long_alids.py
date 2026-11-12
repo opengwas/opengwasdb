@@ -2,7 +2,8 @@
 
 Two insertions at one site whose ALIDs share their first 64 bytes are two
 variants. Completion once cut each fill's ALID to 64 bytes, so both fills
-resolved to one axis row and the other row stayed empty. Each fixture is
+resolved to one axis row, where the duplicate rule dropped the pair as two
+disagreeing fills and both cells ended empty. Each fixture is
 completed twice from one panel: its long ALIDs, and short ALIDs at the same
 positions, which give each variant's right cell.
 """
@@ -24,8 +25,14 @@ LONG = {
     "a": f"1:950000:G:G{PREFIX_ALLELE}TT",
     "b": f"1:950000:G:G{PREFIX_ALLELE}CC",
     "c": f"1:1050000:C:C{'GATTACA' * 12}",
+    # 64 bytes, and the first 64 bytes of "a" and "b": cut, all three are one key.
+    "d": f"1:950000:G:G{PREFIX_ALLELE[:52]}",
 }
-SHORT = {"a": "1:950000:G:GTT", "b": "1:950000:G:GCC", "c": "1:1050000:C:CGA"}
+SHORT = {
+    "a": "1:950000:G:GTT", "b": "1:950000:G:GCC", "c": "1:1050000:C:CGA", "d": "1:950000:G:GAA",
+}
+#: A seed whose LD matrix completion can impute every variant of the site from.
+SEED = 1
 OBSERVED = [
     ("1", "900000", "A", "G", "0.2", "0.1", "0.3"),
     ("1", "1000000", "A", "G", "-0.25", "0.1", "0.4"),
@@ -45,15 +52,17 @@ def _panel(root: Path, alids: dict[str, str]) -> Path:
             ("1:900000:A:G", 0.35, 900_000),
             (alids["a"], 0.2, 950_000),
             (alids["b"], 0.25, 950_000),
+            (alids["d"], 0.3, 950_000),
             ("1:1000000:A:G", 0.30, 1_000_000),
             (alids["c"], 0.4, 1_050_000),
             ("1:1100000:A:C", 0.45, 1_100_000),
             ("1:1200000:C:T", 0.3, 1_200_000),
         ],
+        seed=SEED,
     )
     table = panel / "EUR" / "indel_reference.tsv"
     lines = ["#chromosome\tposition\tallele1\tallele2\treference\toutcome"]
-    for alid in alids.values():
+    for alid in sorted(alids.values(), key=lambda a: int(a.split(":")[1])):
         _chrom, pos, a1, a2 = alid.split(":")
         lines.append(f"1\t{pos}\t{a1}\t{a2}\t{a1}\tsettled_agree")
     table.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -99,13 +108,56 @@ def _z_of(store: Path, alids: list[str]) -> list[float]:
         return q.lookup(alids, [analysis])["z"].tolist()
 
 
+LAYOUTS = [_dense, _ragged]
+
+
+def _release(layout, root: Path, alids: dict[str, str], *, interrupt: bool) -> Path:
+    """``layout``'s completion of ``alids``; with ``interrupt``, one that fails
+    after its block checkpoints are written and is then resumed from them."""
+    if not interrupt:
+        return layout(root, alids)
+    def crash(*_args, **_kwargs):
+        raise RuntimeError("simulated crash")
+
+    mp = pytest.MonkeyPatch()
+    target = (
+        "opengwasdb.layouts.dense.complete.shard_checkpoint_fills" if layout is _dense
+        else "opengwasdb.completion.fill_shards.shard_checkpoint_fills"
+    )
+    mp.setattr(target, crash)
+    try:
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            layout(root, alids)
+    finally:
+        mp.undo()
+    return _resume(layout, root)
+
+
+def _resume(layout, root: Path) -> Path:
+    from opengwasdb.completion.checkpoint import checkpoint_dir_for
+
+    dst = root / "completed.opengwasdb"
+    checkpoint_dir = checkpoint_dir_for(dst)
+    blocks = list((checkpoint_dir / "blocks").glob("*.npz"))
+    assert len(blocks) == 1
+    with np.load(blocks[0], allow_pickle=False) as c:
+        held = {a.decode() for a in c["f_long_alid"]}
+    assert held & set(LONG.values()), "the checkpoint must hold long ALIDs, whole"
+    if layout is _dense:
+        from opengwasdb.layouts.dense.complete import resume_dense_completion as resume
+    else:
+        from opengwasdb.layouts.ragged.complete import resume_ragged_completion as resume
+    resume(checkpoint_dir)
+    return dst
+
+
 def test_the_long_fixture_is_over_64_bytes_and_shares_a_prefix() -> None:
-    a, b, c = (LONG[k].encode() for k in "abc")
-    assert min(len(a), len(b), len(c)) > 64
-    assert a[:64] == b[:64] and a != b
+    a, b, c, d = (LONG[k].encode() for k in "abcd")
+    assert min(len(a), len(b), len(c)) > 64 and len(d) == 64
+    assert a[:64] == b[:64] == d and a != b
 
 
-@pytest.mark.parametrize("layout", [_dense, _ragged], ids=["dense", "ragged"])
+@pytest.mark.parametrize("layout", LAYOUTS, ids=["dense", "ragged"])
 def test_each_long_alid_is_completed_at_its_own_cell(tmp_path, layout) -> None:
     short_root, long_root = tmp_path / "short", tmp_path / "long"
     short_root.mkdir()
@@ -116,5 +168,22 @@ def test_each_long_alid_is_completed_at_its_own_cell(tmp_path, layout) -> None:
     on_axis = {r.alid for r in iter_variant_records(long_ / "variants.tsv.gz")}
     assert set(LONG.values()) <= on_axis, "the fixture must put every long ALID on the axis"
     expected = _z_of(short, list(SHORT.values()))
-    assert all(np.isfinite(expected)) and expected[0] != expected[1], "fixture: distinct cells"
+    assert all(np.isfinite(expected)) and len(set(expected)) == len(expected), "fixture: four cells"
     assert _z_of(long_, list(LONG.values())) == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize("layout", LAYOUTS, ids=["dense", "ragged"])
+def test_a_resume_from_long_alid_checkpoints_gives_the_uninterrupted_release(
+    tmp_path, layout
+) -> None:
+    whole_root, resumed_root = tmp_path / "whole", tmp_path / "resumed"
+    whole_root.mkdir()
+    resumed_root.mkdir()
+    whole = _release(layout, whole_root, LONG, interrupt=False)
+    resumed = _release(layout, resumed_root, LONG, interrupt=True)
+
+    keys = list(LONG.values())
+    expected = _z_of(whole, keys)
+    assert all(np.isfinite(expected)), "fixture: every long ALID is completed"
+    assert _z_of(resumed, keys) == expected
+    assert _z_of(resumed, ["1:1000000:A:G"]) == _z_of(whole, ["1:1000000:A:G"])
