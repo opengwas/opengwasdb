@@ -24,6 +24,11 @@ but empties its chunk cache and evicts the pages, as a long-lived service meets 
 
     pixi run -e dev bench-latency step1 --target local http0 --out results.jsonl
 
+`--without` turns off ogld#32's reader levers, each as it was before that ticket, from outside
+`ogld/`: `concurrency` (each run of chunks its own Zarr call, one after another), `indexes`
+(shard indexes unkept), `count` (string chunks counted one string at a time) and `cache` (the
+256 MiB budget). All four off is the reader #8 measured.
+
 Threads: zarr's pool is `--zarr-threads` (6), BLAS 1; the static host and the proxy run one
 event loop and at most two worker threads each. So a timing uses at most 8 threads busy at once
 over HTTP, and 7 locally. Every record carries the node's load average before and after.
@@ -95,14 +100,16 @@ def _counting_get(original: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def _counting_run(original: Callable[..., Any]) -> Callable[..., Any]:
-    def read_run(self: Any, array: Any, first: int, stop: int, size: int) -> Any:
-        name = http_static.array_of(array.path + "/c/0")
+    """Count each run of chunks the cache fetches and keeps (`ChunkCache._keep_run`, ogld#32)."""
+
+    def keep_run(self: Any, path: str, first: int, stop: int, size: int, data: Any) -> Any:
+        name = http_static.array_of(path + "/c/0")
         TALLY.cache_reads[name] += 1
         TALLY.chunks[name] += stop - first
-        TALLY.decoded_bytes[name] += (stop - first) * size * array.dtype.itemsize
-        return original(self, array, first, stop, size)
+        TALLY.decoded_bytes[name] += (stop - first) * size * data.dtype.itemsize
+        return original(self, path, first, stop, size, data)
 
-    return read_run
+    return keep_run
 
 
 def _timing(original: Callable[..., Any], label: str) -> Callable[..., Any]:
@@ -179,6 +186,60 @@ def _kept_run(
         return {k: cache._keep((array.path, k), *entry) for k, entry in read.items()}
 
 
+#: The reader levers ogld#32 added, each of which `--without` turns off from outside `ogld/`.
+LEVERS: Final = ("concurrency", "indexes", "count", "cache")
+#: The chunk cache's budget before ogld#32.
+CACHE_MIB_BEFORE: Final = 256
+
+
+def _sequential_chunks(self: Any, array: Any, wanted: np.ndarray, size: int) -> list[np.ndarray]:
+    """`ChunkCache._chunks` as it was before ogld#32 (`--without concurrency`): each run of
+    neighbouring missing chunks in its own Zarr call, one after another."""
+    found = self._kept_chunks(array.path, wanted.tolist())
+    missing = np.array([k for k in wanted.tolist() if k not in found], dtype=np.int64)
+    for run in np.split(missing, np.flatnonzero(np.diff(missing) != 1) + 1):
+        if len(run):
+            first, stop = int(run[0]), int(run[-1]) + 1
+            data = np.asarray(array[first * size : stop * size])
+            found.update(self._keep_run(array.path, first, stop, size, data))
+    return [found[k] for k in wanted.tolist()]
+
+
+def _counted_per_string(chunk: np.ndarray) -> int:
+    """`location._counted` as it was before ogld#32 (`--without count`): each string's UTF-8
+    bytes, one string at a time."""
+    import math
+
+    if chunk.dtype.kind != "T":
+        return int(chunk.nbytes)
+    long = [n for n in (len(s.encode("utf-8")) for s in chunk.tolist()) if n > 15]
+    return int(chunk.nbytes) + math.ceil(1.25 * (sum(long) + 8 * len(long))) + 512
+
+
+def without(levers: list[str], cache_mib: int | None) -> int | None:
+    """Turn `levers` off, each as it was before ogld#32, from outside `ogld/`; the cache's budget
+    in MiB that leaves. Shard indexes pass through the store unkept."""
+    from ogld.store import location
+
+    if "concurrency" in levers:
+        location.ChunkCache._chunks = _sequential_chunks
+    if "indexes" in levers:
+
+        async def get(self: Any, key: str, prototype: Any, byte_range: Any = None) -> Any:
+            return await self._store.get(key, prototype, byte_range)
+
+        def get_sync(self: Any, key: str, *, prototype: Any = None, byte_range: Any = None) -> Any:
+            return self._store.get_sync(key, prototype=prototype, byte_range=byte_range)
+
+        location._KeptIndexes.get = get
+        location._KeptIndexes.get_sync = get_sync
+    if "count" in levers:
+        location._counted = _counted_per_string
+    if "cache" in levers and cache_mib is None:
+        return CACHE_MIB_BEFORE
+    return cache_mib
+
+
 def instrument(zarr_threads: int, reader: str, cache_mib: int | None) -> None:
     """Bound zarr's threads and count what each timing reads. The counting wraps the store's
     reads from outside ogld: the benchmark measures the reader, it does not change it, except
@@ -198,7 +259,7 @@ def instrument(zarr_threads: int, reader: str, cache_mib: int | None) -> None:
         ChunkCache._chunks = _concurrent_chunks
     _wrap(LocalStore, "get", _counting_get)
     _wrap(FsspecStore, "get", _counting_get)
-    _wrap(ChunkCache, "_read_run", _counting_run)
+    _wrap(ChunkCache, "_keep_run", _counting_run)
     _wrap(StoreReader, "_chromosome", _loading)
     for owner, name, label in (
         (StoreReader, "_scatter_far", "far_scatter"),
@@ -291,6 +352,7 @@ class Bench:
     out: TextIO
     step: str
     reader: str
+    without: tuple[str, ...] = ()
 
     def location(self, store: str) -> str:
         if self.host is None:
@@ -309,6 +371,7 @@ class Bench:
         record = {
             "step": self.step,
             "reader": self.reader,
+            "without": list(self.without),
             "cache_bytes": _cache_bytes(),
             "target": self.target.name,
             "latency_ms": self.target.latency_ms,
@@ -342,9 +405,11 @@ class Bench:
         """Run `query` on the opened store: `open` with its chunk cache emptied and the pages
         evicted, `warm` as the last run left it."""
         if state == "open":
-            from ogld.store.location import ChunkCache
-
-            opened._reader._cache = ChunkCache()
+            # Emptied in place: the store's wrapper keeps shard indexes in this same cache.
+            cache = opened._reader._cache
+            with cache._lock:
+                cache._kept.clear()
+                cache._bytes = 0
             evict(self.root / store)
         self.timed(lambda: query(opened), store=store, state=state, **meta)
 
@@ -608,17 +673,25 @@ def main() -> None:
         help="ogld's reader as it is, or with the benchmark's concurrent chunk-run reads",
     )
     parser.add_argument(
-        "--cache-mib", type=int, help="the chunk cache's budget; ogld's 256 MiB if omitted"
+        "--cache-mib", type=int, help="the chunk cache's budget; ogld's default if omitted"
+    )
+    parser.add_argument(
+        "--without",
+        nargs="+",
+        choices=LEVERS,
+        default=[],
+        help="ogld#32's reader levers to turn off, each as it was before that ticket",
     )
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    instrument(args.zarr_threads, args.reader, args.cache_mib)
+    instrument(args.zarr_threads, args.reader, without(args.without, args.cache_mib))
     plan, root = PLANS[args.plan]
     with args.out.open("a") as out:
         out.write(json.dumps(environment(args)) + "\n")
         for target in args.target:
             with hosted(root, target) as host:
-                plan(Bench(root, target, host, out, args.plan, args.reader), args)
+                bench = Bench(root, target, host, out, args.plan, args.reader, tuple(args.without))
+                plan(bench, args)
 
 
 if __name__ == "__main__":
