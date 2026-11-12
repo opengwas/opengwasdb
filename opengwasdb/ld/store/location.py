@@ -62,6 +62,10 @@ class ChunkCache:
     """
 
     def __init__(self, budget: int | None = None) -> None:
+        if budget is not None and (
+            isinstance(budget, bool) or not isinstance(budget, int) or budget < 0
+        ):
+            raise InputError(f"cache_bytes is a count of bytes, an int ≥ 0, not {budget!r}")
         self._budget = CACHE_BYTES if budget is None else budget
         self._bytes = 0
         self._kept: OrderedDict[tuple[str, int], tuple[npt.NDArray[Any], int]] = OrderedDict()

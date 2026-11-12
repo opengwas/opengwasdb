@@ -501,16 +501,12 @@ def test_a_few_pairs_over_http_fetch_a_small_part_of_the_near_band(
 
 @pytest.mark.parametrize(("budget", "again"), [(1 << 28, False), (0, True)])
 def test_a_repeated_read_fetches_its_chunks_once(
-    served: Served,
-    small_chunks: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    budget: int,
-    again: bool,
+    served: Served, small_chunks: Path, budget: int, again: bool
 ) -> None:
-    # Clumping reads a few pairs per lead, many times over: each chunk is fetched once and kept.
+    # Clumping reads a few pairs per lead, many times over: each chunk is fetched once and kept,
+    # by a reader opened with room for them. One opened with none fetches them again.
     url, sent = served
-    monkeypatch.setattr(location, "CACHE_BYTES", budget)
-    store = ogld.open(url)
+    store = ogld.LDStore(StoreReader.open(url, cache_bytes=budget))
     names = list(StoreReader.open(small_chunks).variants(np.arange(500, 560, 3)).alid)
 
     def near_bytes() -> int:
@@ -521,6 +517,12 @@ def test_a_repeated_read_fetches_its_chunks_once(
     assert once > 0, "the first read must fetch Near Band chunks"
     np.testing.assert_array_equal(store.matrix(names).r, first)
     assert (near_bytes() > once) is again
+
+
+@pytest.mark.parametrize("size", [-1, 1.5, True, "4GiB"])
+def test_a_cache_size_that_is_not_a_count_of_bytes_is_refused(size: object) -> None:
+    with pytest.raises(InputError, match="cache_bytes"):
+        StoreReader.open(TEST_STORE, cache_bytes=size)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("query", ["clump", "proxies"])
