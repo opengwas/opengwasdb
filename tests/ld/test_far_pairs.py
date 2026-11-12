@@ -1,0 +1,147 @@
+"""The Far Pairs beside the Proxy Index (ogld#31; spec §5, §8, §10; ADR 0006).
+
+Each chromosome's `far/<chrom>/` holds its pairs more than near_bp and at most far_bp apart whose
+code reaches the far code floor, once each, in the earlier variant's row: exactly the Proxy
+Index's entries beyond near_bp, in their earlier rows. `matrix` and `region` read those pairs
+from the Far Pairs and never from the index, which `proxies` and `clump` keep reading.
+
+Every expected value here is read from the store's own arrays with zarr, or is the answer the
+committed Test Store gives with its Proxy Index whole; never the reader's far part.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+from pathlib import Path
+
+import numpy as np
+import numpy.typing as npt
+import pytest
+import zarr
+from store_copies import TEST_STORE, copy_store, resharded
+
+import ogld
+from ogld.store import StoreReader
+
+#: Inner chunks of 512 elements, 4 to a shard, as `test_store_reads.py` re-shards the Test Store.
+INNER, PER_SHARD = 512, 4
+
+_Pairs = tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.int64]]
+
+
+def provenance(store: Path) -> dict[str, object]:
+    found: dict[str, object] = json.loads((store / "zarr.json").read_text())["attributes"][
+        "ld_store"
+    ]
+    return found
+
+
+def chromosomes(store: Path) -> list[tuple[str, int, int]]:
+    ranges = zarr.open_group(store / "variants", mode="r").attrs["chromosomes"]
+    return [(c["name"], c["row_start"], c["row_stop"]) for c in ranges]
+
+
+def rows_of(store: Path, kind: str, chrom: str) -> _Pairs:
+    """`kind/<chrom>/`'s entries as (row, partner, code), local rows, in stored order."""
+    group = zarr.open_group(store / kind / chrom, mode="r")
+    indptr = np.asarray(group["indptr"][:]).astype(np.int64)
+    owner = np.repeat(np.arange(len(indptr) - 1), np.diff(indptr))
+    partner = np.asarray(group["partner"][:]).astype(np.int64)
+    return owner, partner, np.asarray(group["r"][:]).astype(np.int64)
+
+
+def index_far_half(store: Path, chrom: str, start: int, stop: int) -> _Pairs:
+    """The Proxy Index's entries more than near_bp apart, in each pair's earlier row."""
+    near_bp = provenance(store)["near_bp"]
+    assert isinstance(near_bp, int)
+    position = np.asarray(zarr.open_array(store / "variants" / "position", mode="r")[start:stop])
+    owner, partner, code = rows_of(store, "index", chrom)
+    gap = position[partner].astype(np.int64) - position[owner]
+    far = (partner > owner) & (np.abs(gap) > near_bp)
+    return owner[far], partner[far], code[far]
+
+
+# ------------------------------------------------------------------ what the store holds
+
+
+def test_the_test_store_holds_the_index_s_far_pairs_once_each() -> None:
+    counts = provenance(TEST_STORE)["counts"]
+    assert isinstance(counts, dict)
+    assert counts["far_pairs"] > 0, "the Test Store must hold Far Pairs for this to mean anything"
+    held = 0
+    for chrom, start, stop in chromosomes(TEST_STORE):
+        owner, partner, code = rows_of(TEST_STORE, "far", chrom)
+        want = index_far_half(TEST_STORE, chrom, start, stop)
+        np.testing.assert_array_equal(owner, want[0], err_msg=chrom)
+        np.testing.assert_array_equal(partner, want[1], err_msg=chrom)
+        np.testing.assert_array_equal(code, want[2], err_msg=chrom)
+        held += len(owner)
+    assert held == counts["far_pairs"], "each Far Pair once, as provenance counts them"
+
+
+# ------------------------------------------------------------------ what a matrix reads
+
+
+@pytest.fixture(scope="module")
+def small_chunks(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return resharded(tmp_path_factory.mktemp("resharded") / "store", INNER, PER_SHARD)
+
+
+def every_alid() -> list[str]:
+    reader = StoreReader.open(TEST_STORE)
+    return list(reader.variants(np.arange(reader.provenance["n_variants"])).alid)
+
+
+#: Regions 10 Mb wide whose variants hold Far Pairs among them: chr21's two at 26.0 and 33.8 Mb,
+#: and chr22's three at 33.5–42.3 Mb.
+WIDE_REGIONS = (("21", 29_000_000, 5_000_000), ("22", 38_000_000, 5_000_000))
+
+
+def far_stored(m: ogld.LDMatrix) -> int:
+    """The pairs of `m` more than 3 Mb apart that hold a Stored r."""
+    gap = np.abs(m.variants.position[:, None] - m.variants.position[None, :])
+    return int(((m.kinds() == "stored") & (gap > 3_000_000)).sum()) // 2
+
+
+def test_a_matrix_and_a_region_read_far_pairs_from_the_far_pairs_alone(
+    small_chunks: Path, tmp_path: Path
+) -> None:
+    # Every Proxy Index chunk lost, so a read of any index entry is refused (spec §6): a matrix
+    # and a region still answer, exactly as the store with its index whole does.
+    copy = tmp_path / "no-index-entries"
+    shutil.copytree(small_chunks, copy)
+    lost = 0
+    for chrom, _, _ in chromosomes(copy):
+        for name in ("partner", "r"):
+            shutil.rmtree(copy / "index" / chrom / name / "c")
+            lost += 1
+    assert lost == 4, "both chromosomes' index entries must be lost"
+    whole, plain = ogld.open(TEST_STORE), ogld.open(copy)
+    names = every_alid()
+    expected = whole.matrix(names)
+    assert far_stored(expected) == 7, "the matrix must hold the Test Store's seven Far Pairs"
+    np.testing.assert_array_equal(plain.matrix(names).r, expected.r)
+    for chrom, centre, radius in WIDE_REGIONS:
+        region = whole.region(chrom, centre, radius)
+        assert far_stored(region) >= 2, f"the chr{chrom} region must hold Far Pairs"
+        np.testing.assert_array_equal(plain.region(chrom, centre, radius).r, region.r)
+
+
+def test_a_matrix_fetches_far_chunks_and_no_index_chunk(small_chunks: Path) -> None:
+    # Counted at the chunk cache, which keeps every chunk it fetched at its default budget.
+    reader = StoreReader.open(small_chunks)
+    rows = np.arange(reader.provenance["n_variants"])
+    reader.pair_r(rows)
+    for _, start, stop in chromosomes(small_chunks):
+        reader.region_r(start, stop)
+    fetched = {path for path, _ in reader._cache._kept}
+    assert {"far/21/partner", "far/22/partner", "far/21/r", "far/22/r"} <= fetched
+    assert not [path for path in fetched if path.startswith("index/")], sorted(fetched)
+
+
+def test_a_store_without_far_pairs_is_refused_naming_them(tmp_path: Path) -> None:
+    copy = copy_store(tmp_path / "store")
+    shutil.rmtree(copy / "far")
+    with pytest.raises(ValueError, match=r"far/2[12]/indptr is missing"):
+        ogld.open(copy).matrix(every_alid())

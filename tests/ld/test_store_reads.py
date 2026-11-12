@@ -368,28 +368,34 @@ def test_a_lost_shard_refuses_the_pairs_it_held_and_no_others(
 
 
 @pytest.mark.parametrize(
-    ("path", "fill"),
+    ("path", "fill", "query"),
     [
-        ("variants/alid", '""'),
-        ("variants/position", "0"),
-        ("index/22/partner", "-1"),
-        ("index/22/r", "-32768"),
-        ("near/22/indptr", "-1"),
+        ("variants/alid", '""', "matrix"),
+        ("variants/position", "0", "matrix"),
+        ("far/22/partner", "-1", "matrix"),
+        ("far/22/r", "-32768", "matrix"),
+        ("far/22/indptr", "-1", "matrix"),
+        ("index/22/partner", "-1", "proxies"),
+        ("index/22/r", "-32768", "proxies"),
+        ("near/22/indptr", "-1", "matrix"),
     ],
 )
 def test_a_lost_chunk_of_any_array_is_refused_never_read_as_data(
-    small_chunks: Path, tmp_path: Path, path: str, fill: str
+    small_chunks: Path, tmp_path: Path, path: str, fill: str, query: str
 ) -> None:
     # An ALID that read as "" would make a present variant Absent; a partner of −1 would name
-    # the last variant. Each is refused, naming the array.
+    # the last variant. Each is refused, naming the array, by a query that reads it: a matrix
+    # reads the Far Pairs, and proxies at r2 ≥ t_far the Proxy Index (ADR 0006).
     copy = tmp_path / "lost"
     shutil.copytree(small_chunks, copy)
     every = list(StoreReader.open(copy).variants(np.arange(1056)).alid)
     for shard in sorted((copy / path / "c").iterdir()):
         shard.unlink()
     message = rf"{path} read \d+ element\(s\) no LD Store holds there, as its fill value {fill} is"
+    store = ogld.open(copy)
+    read = partial(store.matrix, every) if query == "matrix" else partial(store.proxies, every)
     with pytest.raises(ValueError, match=message):
-        ogld.open(copy).matrix(every)
+        read()
 
 
 def fill_findings(store: Path) -> list[ogld.Finding]:

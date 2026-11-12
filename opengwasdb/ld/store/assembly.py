@@ -8,11 +8,13 @@ store"). It handles:
 - the Near Band's row lengths and `indptr`, from the positions (spec §4);
 - the threshold at the far code floor, judged on codes, for every pair within far_bp (§3, §5);
 - both directions of the Proxy Index, partners ascending, one code per pair (spec §5);
+- the Far Pairs: the index's pairs beyond near_bp, once each, in the earlier row (spec §5;
+  ADR 0006), from the pairs a cut already keeps, with no second pass over r;
 - the counts, and the rest of the provenance a store derives from itself (spec §7).
 
-Validation at `finish` stays as it was, all 18 rules of spec §12 through `validate_group`. A
-producer supplies r for blocks of rows in order, and at `finish` it supplies what only the
-source knows (`ogld.format.Sourced`).
+Validation at `finish` runs every rule of spec §12 through `validate_group`. A producer supplies r
+for blocks of rows in order, and at `finish` it supplies what only the source knows
+(`ogld.format.Sourced`).
 
 **Memory is bounded by the block and the far_bp window, never the chromosome.** These are
 measured on chr6 of lane #5's whole-EUR store (602,466 rows, 6,826,805,033 Near Band codes,
@@ -23,6 +25,8 @@ measured on chr6 of lane #5's whole-EUR store (602,466 rows, 6,826,805,033 Near 
   the pairs spanning one row within far_bp, plus one bucket of `CARRY_ROWS` rows. At the MHC
   that is 33,869,608 pairs at 10 B, 323 MiB.
 - **The Proxy Index output:** less than one shard each of `partner` and `r`, 6 MiB.
+- **The Far Pairs output:** the same, 6 MiB. Nothing is carried: a row's Far Pairs are all in
+  its own block.
 - **Per-row arrays:** each `indptr`, n_c + 1 int64.
 - **A cut in flight,** between a producer's worker and `write`: at most 31 MiB for a 256-row
   block.
@@ -73,9 +77,10 @@ class Cut:
     `near` holds their Near Band codes, row after row (spec §4). `lo`, `hi` and `codes` are their
     Proxy Index pairs, as local rows lo < hi: each partner hi within far_bp of row lo whose code
     reaches the far code floor, once, with its one code (spec §3, §5), ascending by (lo, hi).
-    `far_candidates` counts the block's pairs more than near_bp and at most far_bp apart, all
-    judged, and `far_pairs` those of them kept (spec §7). `by` is the `Cutter` that cut it, so a
-    cut is written only by its own store.
+    `far` marks those more than near_bp apart: the block's Far Pairs (spec §5). `far_candidates`
+    counts the block's pairs more than near_bp and at most far_bp apart, all judged, and
+    `far_pairs` those of them kept (spec §7). `by` is the `Cutter` that cut it, so a cut is
+    written only by its own store.
 
     A producer neither builds nor reads one: it hands what `StoreWriter.cut` returned to
     `StoreWriter.write`.
@@ -87,9 +92,13 @@ class Cut:
     lo: _Rows
     hi: _Rows
     codes: Codes
+    far: npt.NDArray[np.bool_]
     far_candidates: int
-    far_pairs: int
     by: Cutter
+
+    @property
+    def far_pairs(self) -> int:
+        return int(self.far.sum())
 
 
 class Cutter:
@@ -163,8 +172,8 @@ class Cutter:
             (local + lo).astype(np.int32),
             (local + hi).astype(np.int32),
             codes,
+            hi >= near_stop[lo],
             int((far_stop - near_stop).sum()),
-            int((hi >= near_stop[lo]).sum()),
             self,
         )
 
@@ -356,6 +365,20 @@ class NearBandStream:
 _Pairs = tuple[_Rows, _Rows, Codes]
 
 
+def _entries(group: zarr.Group, encoding: REncoding) -> tuple[Appender, Appender]:
+    """A sparse component's `partner` and `r` (spec §5, §6), each grown a whole shard at a time."""
+    side = layout.SIDE
+    partner = Appender(
+        lambda n: layout.new_numbers(group, "partner", n, np.int32, layout.PARTNER_FILL, side),
+        np.int32,
+        side[1],
+    )
+    codes = Appender(
+        lambda n: layout.new_r_array(group, "r", n, side, encoding), encoding.dtype, side[1]
+    )
+    return partner, codes
+
+
 def _by_later_row(pairs: list[_Pairs]) -> _Pairs:
     """Pieces whose earlier rows ascend from piece to piece, each sorted by (hi, lo), as one
     array sorted by (hi, lo): a stable sort by hi keeps lo ascending within each hi."""
@@ -385,16 +408,7 @@ class ProxyIndexStream:
         self._group = group
         self._next = 0
         self._carried: dict[int, list[_Pairs]] = {}
-        shard = layout.SIDE[1]
-        side = layout.SIDE
-        self._partner = Appender(
-            lambda n: layout.new_numbers(group, "partner", n, np.int32, layout.PARTNER_FILL, side),
-            np.int32,
-            shard,
-        )
-        self._codes = Appender(
-            lambda n: layout.new_r_array(group, "r", n, side, encoding), encoding.dtype, shard
-        )
+        self._partner, self._codes = _entries(group, encoding)
 
     def add(self, cut: Cut) -> None:
         """Write the rows of `cut`, which continue the rows already written, and carry its
@@ -455,6 +469,48 @@ class ProxyIndexStream:
         self._codes.close()
 
 
+class FarPairsStream:
+    """One chromosome's Far Pairs, written row by row as blocks arrive (spec §5; ADR 0006).
+
+    Row l holds every pair (l, m), m > l, more than near_bp and at most far_bp apart whose code
+    reaches the far code floor, ascending in m: the Proxy Index's entries beyond near_bp in their
+    earlier row, once each. They all come from row l's own block, so each block's rows are
+    complete when it arrives, and nothing is carried. `partner` and `r` grow shard by shard
+    (`Appender`). `indptr` is held, n_c + 1 int64, and written at the end.
+    """
+
+    def __init__(self, group: zarr.Group, rows: int, encoding: REncoding) -> None:
+        #: Each row's pairs once written; −1 until then, so a row never written is never read as a
+        #: row with no Far Pairs.
+        self._counts = np.full(rows, -1, dtype=np.int64)
+        self._group = group
+        self._next = 0
+        self._partner, self._codes = _entries(group, encoding)
+
+    def add(self, rows: int, lo: _Rows, hi: _Rows, codes: Codes) -> None:
+        """Write the next `rows` rows: their Far Pairs (lo, hi), lo among those rows, ascending
+        by (lo, hi), with their codes."""
+        a, b = self._next, self._next + rows
+        if len(lo) and not (a <= int(lo[0]) and int(lo[-1]) < b):
+            raise ValueError(
+                f"Far Pairs of rows {int(lo[0])}–{int(lo[-1])} written as rows {a}–{b - 1}: "
+                "a store assembly fault"
+            )
+        self._counts[a:b] = np.bincount(lo - a, minlength=rows)
+        self._partner.add(hi)
+        self._codes.add(codes)
+        self._next = b
+
+    def close(self) -> None:
+        """Write `indptr` and the last pairs. A row not written would be a row the Far Pairs
+        lack, read as one with none, and is refused."""
+        if (self._counts < 0).any():
+            raise ValueError("the Far Pairs have rows not written: a store assembly fault")
+        layout.put_numbers(self._group, "indptr", indptr_of(self._counts), layout.INT64_FILL)
+        self._partner.close()
+        self._codes.close()
+
+
 @dataclass
 class Tally:
     """The counts provenance records (spec §7), added up block by block."""
@@ -482,7 +538,7 @@ class Tally:
 
 
 class Chromosome:
-    """One chromosome being written: its Near Band and its Proxy Index."""
+    """One chromosome being written: its Near Band, its Proxy Index and its Far Pairs."""
 
     def __init__(self, root: zarr.Group, cutter: Cutter, name: str) -> None:
         self.name = name
@@ -495,15 +551,18 @@ class Chromosome:
         self.index = ProxyIndexStream(
             root.require_group(f"index/{name}"), len(position), cutter.encoding
         )
+        self.far = FarPairsStream(root.require_group(f"far/{name}"), len(position), cutter.encoding)
 
     def add(self, cut: Cut) -> None:
         self.near.add(cut.near)
         self.index.add(cut)
+        self.far.add(cut.rows, cut.lo[cut.far], cut.hi[cut.far], cut.codes[cut.far])
 
     def close(self) -> None:
-        """Finish both."""
+        """Finish all three."""
         self.near.close()
         self.index.close()
+        self.far.close()
 
 
 _PRODUCER_KEYS: Final = frozenset(Sourced.__required_keys__)

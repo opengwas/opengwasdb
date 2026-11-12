@@ -3,7 +3,8 @@
 Every expected array here is brute force over pairs, written in this file: for each pair (l, m)
 of one chromosome, its code by spec §3's formula (`store_copies.codes_at`, not ogld's), kept in
 the Near Band when the two lie within near_bp and in the Proxy Index, both ways, when they lie
-within far_bp and |code| reaches the far code floor, spec §3's literal for n = 771 at × 511. The
+within far_bp and |code| reaches the far code floor, spec §3's literal for n = 771 at × 511, and in
+the Far Pairs, once, in the earlier row, when such a pair also lies beyond near_bp. The
 variants are the Test Store's, real positions on chr21 and chr22; r is a structured synthetic
 correlation matrix, so far more pairs reach the floor than in the Test Panel's own.
 """
@@ -86,6 +87,9 @@ class Expected:
     index_indptr: npt.NDArray[np.int64]
     partner: npt.NDArray[np.int64]
     index_r: npt.NDArray[np.int64]
+    far_indptr: npt.NDArray[np.int64]
+    far_partner: npt.NDArray[np.int64]
+    far_r: npt.NDArray[np.int64]
     far_candidates: int
     far_pairs: int
 
@@ -93,11 +97,12 @@ class Expected:
 @cache
 def expected(chrom: str) -> Expected:
     """One chromosome's arrays, row by row: each later variant's gap and code, from positions.
-    The index is every kept pair in both its rows, sorted by (row, partner)."""
+    The index is every kept pair in both its rows, sorted by (row, partner); the Far Pairs are
+    the kept pairs beyond near_bp, in the earlier row, row after row."""
     start, stop = chromosomes()[chrom]
     position = variants().position[start:stop].astype(np.int64)
     r = r_of(chrom)
-    near, lengths, kept_pairs = [], [], []
+    near, lengths, kept_pairs, far_rows = [], [], [], []
     candidates = far = 0
     for lo in range(len(position)):
         later = np.arange(lo + 1, len(position))
@@ -111,6 +116,7 @@ def expected(chrom: str) -> Expected:
         kept = np.abs(code) >= FLOOR
         far += int((kept & ~close).sum())
         kept_pairs.append((np.full(kept.sum(), lo), later[kept], code[kept]))
+        far_rows.append((later[kept & ~close], code[kept & ~close]))
     lo, hi, code = (np.concatenate([k[i] for k in kept_pairs]) for i in range(3))
     owner, partner = np.concatenate([lo, hi]), np.concatenate([hi, lo])
     order = np.lexsort((partner, owner))
@@ -120,6 +126,9 @@ def expected(chrom: str) -> Expected:
         np.concatenate([[0], np.cumsum(np.bincount(owner, minlength=len(position)))]),
         partner[order],
         np.concatenate([code, code])[order],
+        np.concatenate([[0], np.cumsum([len(m) for m, _ in far_rows])]),
+        np.concatenate([m for m, _ in far_rows]),
+        np.concatenate([c for _, c in far_rows]),
         candidates,
         far,
     )
@@ -183,6 +192,8 @@ def test_the_fixture_reaches_every_case() -> None:
         assert len(e.near_r) > 10_000, "the Near Band must hold many pairs"
         assert e.far_candidates > 5_000, "there must be pairs between near_bp and far_bp"
         assert 100 < e.far_pairs < e.far_candidates, "some, not all, must be Far Pairs"
+        assert len(e.far_partner) == e.far_pairs, "each Far Pair once"
+        assert (np.diff(e.far_indptr) > 1).any(), "a row with several Far Pairs"
         near_entries = (len(e.partner) - 2 * e.far_pairs) // 2
         assert 0 < near_entries < len(e.near_r), "some, not all, near pairs reach the floor"
         assert (np.abs(e.near_r) < FLOOR).any()
@@ -221,6 +232,9 @@ def test_a_store_cut_in_blocks_holds_the_arrays_brute_force_gives(
         np.testing.assert_array_equal(root[f"index/{chrom}/indptr"][:], e.index_indptr)
         np.testing.assert_array_equal(root[f"index/{chrom}/partner"][:], e.partner)
         np.testing.assert_array_equal(root[f"index/{chrom}/r"][:], e.index_r)
+        np.testing.assert_array_equal(root[f"far/{chrom}/indptr"][:], e.far_indptr)
+        np.testing.assert_array_equal(root[f"far/{chrom}/partner"][:], e.far_partner)
+        np.testing.assert_array_equal(root[f"far/{chrom}/r"][:], e.far_r)
         if shards is not None:
             assert root[f"near/{chrom}/r"].shards == (shards[0][1],)
             assert root[f"index/{chrom}/partner"].shards == (shards[1][1],)
@@ -268,7 +282,7 @@ def test_the_writer_writes_only_whole_shards_but_at_an_array_s_end(
 
     monkeypatch.setattr(zarr.Array, "__setitem__", spy)
     write_all(create(tmp_path / "s"), 5)
-    assert len({w[0] for w in writes}) == 6, "every r and partner array must be seen"
+    assert len({w[0] for w in writes}) == 10, "every r and partner array must be seen"
     assert len(writes) > 40, "and many writes to each"
     for path, start, stop, shard, length in writes:
         assert start % shard == 0, (path, start)
@@ -356,11 +370,17 @@ def test_a_chromosome_with_an_empty_near_band_holds_only_its_far_pairs(tmp_path:
         "index/1/indptr": [0, 2, 3, 4],
         "index/1/partner": [1, 2, 0, 0],
         "index/1/r": [one, three, one, three],
+        "far/1/indptr": [0, 2, 2, 2],
+        "far/1/partner": [1, 2],
+        "far/1/r": [one, three],
         "near/2/indptr": [0, 0],
         "near/2/r": [],
         "index/2/indptr": [0, 0],
         "index/2/partner": [],
         "index/2/r": [],
+        "far/2/indptr": [0, 0],
+        "far/2/partner": [],
+        "far/2/r": [],
     }
     for path, values in expected.items():
         np.testing.assert_array_equal(root[path][:], values, err_msg=path)
