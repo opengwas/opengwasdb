@@ -184,14 +184,42 @@ _INLINE: Final = 15
 _HEADER: Final = 8
 _GROWTH: Final = 1.25
 _ARENA_FIXED: Final = 512
+#: UTF-8 takes at most 4 bytes a character. The count proves a string ASCII, a byte a
+#: character, over at most its first `_ASCII_CHECKED` characters, in one fixed-width copy of
+#: the chunk that many bytes wide: 4 MiB for 16,384 strings (ogld#32).
+_UTF8_MOST: Final = 4
+_ASCII_CHECKED: Final = 256
 
 
 def _counted(chunk: npt.NDArray[Any]) -> int:
     """An upper bound on the bytes `chunk` holds: a numeric chunk's buffer, and for a string
     chunk its buffer and arena. Measured against tracemalloc on 72 chunks of 1–16,384 strings
-    of 1–20,000 characters, ASCII and not, the count was never below what a chunk held."""
+    of 1–20,000 characters, ASCII and not, the count was never below what a chunk held.
+
+    No string is visited in Python (ogld#32): numpy counts each string's characters, and an
+    ASCII chunk's strings take a byte each, so it counts their bytes exactly. Any other string
+    counts 4 bytes a character, UTF-8's most: an upper bound, and no ALID or allele the engine
+    forms needs it."""
     if chunk.dtype.kind != "T":
         return int(chunk.nbytes)
-    long = [n for n in (len(s.encode("utf-8")) for s in chunk.tolist()) if n > _INLINE]
-    arena = math.ceil(_GROWTH * (sum(long) + _HEADER * len(long))) + _ARENA_FIXED
+    characters = np.strings.str_len(chunk).astype(np.int64)
+    utf8 = characters * _bytes_per_character(chunk, characters)
+    long = utf8[utf8 > _INLINE]
+    arena = math.ceil(_GROWTH * (int(long.sum()) + _HEADER * len(long))) + _ARENA_FIXED
     return int(chunk.nbytes) + arena
+
+
+def _bytes_per_character(
+    chunk: npt.NDArray[Any], characters: npt.NDArray[np.int64]
+) -> npt.NDArray[np.int64] | int:
+    """1 for each string of `chunk` proved ASCII, and `_UTF8_MOST` for every other.
+
+    numpy casts variable-width strings to fixed-width bytes only when every character it keeps
+    is ASCII, and raises otherwise; the cast keeps each string's first `width` characters. So
+    one cast proves every string of at most `width` characters ASCII, or proves nothing."""
+    width = min(int(characters.max(initial=0)), _ASCII_CHECKED)
+    try:
+        chunk.astype(np.dtype(f"S{max(width, 1)}"))
+    except UnicodeEncodeError:
+        return _UTF8_MOST
+    return np.where(characters <= width, 1, _UTF8_MOST)

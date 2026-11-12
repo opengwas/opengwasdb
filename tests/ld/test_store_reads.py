@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import http.server
 import json
+import math
 import shutil
 import threading
 import tracemalloc
@@ -295,11 +296,21 @@ def text(i: int, length: int) -> str:
 
 #: Chunks of 512 strings: all 8 characters, held inside the array; all 200, each in the arena;
 #: and every tenth 200 among 8s. Each budget keeps a few chunks.
-STRINGS = {
+ASCII = {
     "short 8": (lambda i: text(i, 8), 40_000),
     "long 200": (lambda i: text(i, 200), 450_000),
     "mixed": (lambda i: text(i, 200 if i % 10 == 0 else 8), 100_000),
 }
+#: Strings whose UTF-8 is longer than their characters: 10 characters in 16 bytes, in the arena
+#: although 10 characters would fit inside the array; 4 emoji in 17; one such string every 50
+#: among ASCII 8s; and ASCII too long for the count to check, 400 characters.
+WIDER = {
+    "two-byte 10": (lambda i: f"{i % 10_000:04d}" + "é" * 6, 100_000),
+    "four-byte 5": (lambda i: f"{i % 10}" + "\N{GRINNING FACE}" * 4, 80_000),
+    "one in 50": (lambda i: "é" * 9 if i % 50 == 0 else text(i, 8), 100_000),
+    "ascii 400": (lambda i: text(i, 400), 3_000_000),
+}
+STRINGS = ASCII | WIDER
 
 
 @pytest.mark.parametrize("kind", list(STRINGS))
@@ -320,6 +331,19 @@ def test_string_chunks_count_an_upper_bound_on_what_they_hold(tmp_path: Path, ki
         assert measured(chunk) <= counted, "a chunk counts at least what it holds"
     assert sum(measured(chunk) for chunk, _ in kept) <= cache._bytes <= budget
     assert cache._bytes == sum(counted for _, counted in kept)
+
+
+@pytest.mark.parametrize("kind", list(ASCII))
+def test_an_ascii_string_chunk_counts_its_strings_bytes_exactly(kind: str) -> None:
+    # ALIDs and alleles are ASCII, a byte a character: counted at their size, not at UTF-8's
+    # four-byte most, so a budget holds as many string chunks as it has room for (ogld#32).
+    make, _ = ASCII[kind]
+    chunk = np.array([make(i) for i in range(512)], dtype=StringDType())
+    sizes = [len(s) for s in chunk.tolist()]
+    assert min(sizes) * 4 > 15, "counted four bytes a character, every string would be long"
+    long = [n for n in sizes if n > 15]
+    arena = math.ceil(1.25 * (sum(long) + 8 * len(long))) + 512
+    assert location._counted(chunk) == chunk.nbytes + arena
 
 
 def test_threads_missing_one_chunk_store_it_once(small_chunks: Path) -> None:

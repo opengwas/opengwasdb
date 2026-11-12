@@ -795,7 +795,11 @@ UTF-8 bytes in an arena that `nbytes` leaves out (about 2.2 times `nbytes` for 1
 ALIDs). So it counts `nbytes` + 1.25 × Σ(bytes + 8) over those strings + 512: the arena grows by a
 quarter at a time, a string's size header is at most 8 bytes, and the allocator takes 328. Measured
 by tracemalloc on 72 chunks of 1–16,384 strings of 1–20,000 characters, the count was never below
-what a chunk held. Fixed-width text would be counted exactly, but one 2,000-character indel ALID
+what a chunk held. It visits no string in Python (ogld#32): numpy counts each string's characters,
+and one fixed-width copy of the chunk, at most 256 bytes wide, proves the strings of at most 256
+characters ASCII, a byte a character, so their bytes are counted exactly. Every other string counts
+4 bytes a character, UTF-8's most. No ALID or allele the engine forms needs that. On 16,384 ALIDs
+the count takes 1.6 ms, against 2.4 ms string by string. Fixed-width text would be counted exactly, but one 2,000-character indel ALID
 would make its 16,384-row chunk 131 MB. One lock guards the cache, so threads sharing a reader keep
 one copy of a chunk. Validation's rules read through Zarr directly, in bounded windows: one pass
 over each chromosome, and a second read of the blocks `index.near` flags in a store it fails (§12). So a query that reads a few pairs at a time fetches each chunk once: clumping the Test
