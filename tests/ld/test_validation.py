@@ -34,7 +34,7 @@ from ogld.store.validation import ValidationFailed, validate_group
 
 #: The rules that read the Near Band, the Proxy Index or the variant columns in windows.
 WINDOWED = [
-    rule for rule in VALIDATION_RULES if rule.split(".")[0] in {"variants", "near", "index"}
+    rule for rule in VALIDATION_RULES if rule.split(".")[0] in {"variants", "near", "index", "far"}
 ]
 WINDOWED.remove("variants.chromosomes")
 #: The windowed rules that carry state from one block to the next: the contract breaks each
@@ -53,6 +53,11 @@ SCANNED = [
     "index.threshold",
     "index.symmetric",
     "index.near",
+    "far.rows",
+    "far.codes",
+    "far.distance",
+    "far.threshold",
+    "far.index",
 ]
 
 
@@ -159,6 +164,17 @@ def negate_a_later_entry(store: Path) -> None:
     owner, partner, _ = contract().index22(store)
     within = np.abs(pos[partner] - pos[owner]) <= 3_000_000
     negate("index/22/r", int(np.flatnonzero(within & (partner < owner))[0]))(store)
+
+
+def first_far_pair(store: Path) -> tuple[int, int]:
+    """chr22's first Far Pair, (row, partner), local rows."""
+    owner, partner, _ = contract().far22(store)
+    assert len(owner), "chr22 must hold a Far Pair for this to mean anything"
+    return int(owner[0]), int(partner[0])
+
+
+def a_far_pair_within_near_bp(store: Path) -> None:
+    contract().add_far_pair(lambda gap: (gap > 0) & (gap <= 3_000_000), lambda floor: floor)(store)
 
 
 #: One edit per way a rule says a store breaks it, and what that rule's finding then says.
@@ -323,6 +339,41 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
         negate_a_later_entry,
         "entries whose code is not the Near Band's: (",
     ),
+    "a Far Pair held in its later row": (
+        "far.rows",
+        lambda store: contract().move_a_far_pair_to_its_later_row(store),
+        "a partner outside [0, n_c) or not above its row at 2",
+    ),
+    "a far indptr that ends past its pairs": (
+        "far.rows",
+        write_array("far/22/indptr", slice(-1, None), 4),
+        "ends at 4, but its rows' arrays hold 3 elements",
+    ),
+    "a Far Pair within near_bp": (
+        "far.distance",
+        a_far_pair_within_near_bp,
+        "a Far Pair not more than 3,000,000 and at most 10,000,000 bp apart at",
+    ),
+    "a Far Pair beyond 10 Mb": (
+        "far.distance",
+        lambda store: contract().BREAKERS["far.distance"](store),
+        "a Far Pair not more than 3,000,000 and at most 10,000,000 bp apart at",
+    ),
+    "a Far Pair below the floor": (
+        "far.threshold",
+        lambda store: contract().BREAKERS["far.threshold"](store),
+        f"|code| below far_code_floor {FLOOR} at",
+    ),
+    "an index pair beyond near_bp that the Far Pairs lack": (
+        "far.index",
+        lambda store: contract().drop_a_far_pair(store),
+        "not the Proxy Index's pairs beyond near_bp: (375, 559)",
+    ),
+    "a Far Pair whose code is not the index's": (
+        "far.index",
+        negate("far/22/r", 0),
+        "not the Proxy Index's pairs beyond near_bp: (375, 559)",
+    ),
 }
 
 
@@ -363,7 +414,10 @@ def corrupt(store: Path, path: str) -> None:
     ("path", "needs"),
     [
         ("near/22/r", ["near.codes", "index.near"]),
-        ("index/22/partner", ["index.rows", "index.distance", "index.symmetric", "index.near"]),
+        (
+            "index/22/partner",
+            ["index.rows", "index.distance", "index.symmetric", "index.near", "far.index"],
+        ),
         ("variants/alid", ["variants.order", "variants.identity"]),
     ],
 )
@@ -446,7 +500,7 @@ def counted_reads(monkeypatch: pytest.MonkeyPatch) -> Counter[str]:
     def counting(method: Callable[..., Any]) -> Callable[..., Any]:
         def counted(array: zarr.Array, *args: Any, **kwargs: Any) -> Any:
             values = method(array, *args, **kwargs)
-            if array.path.split("/")[0] in {"near", "index"} and "indptr" not in array.path:
+            if array.path.split("/")[0] in {"near", "index", "far"} and "indptr" not in array.path:
                 with lock:
                     read[array.path] += np.asarray(values).size
                     read[f"thread {threading.get_ident()}"] = 1
@@ -463,21 +517,25 @@ def counted_reads(monkeypatch: pytest.MonkeyPatch) -> Counter[str]:
 def test_every_code_and_entry_is_read_once_by_all_the_rules_together(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Spec §12: the rules that read the band and the index element by element share one pass.
+    # Spec §12: the rules that read the band, the index and the Far Pairs element by element
+    # share one pass.
     group = zarr.open_group(TEST_STORE, mode="r")
     held = {
         path: array.shape[0]
         for path, array in arrays(group)
-        if path.split("/")[0] in {"near", "index"} and "indptr" not in path
+        if path.split("/")[0] in {"near", "index", "far"} and "indptr" not in path
     }
+    assert {"far/21/partner", "far/22/r"} <= set(held), "the Far Pairs must be counted"
     read = counted_reads(monkeypatch)
     assert not any(ogld.validate(TEST_STORE).values())
     assert {path: n for path, n in read.items() if not path.startswith("thread")} == held
 
 
 def faults_in_every_block(store: Path) -> None:
-    """Breaks all seven scanned rules all along chr22: every 1,500th band code reserved; every
-    700th index entry's code reserved or 1, by turns, and every 900th partner the last row."""
+    """Breaks all twelve scanned rules: all along chr22, every 1,500th band code reserved; every
+    700th index entry's code reserved or 1, by turns, and every 900th partner the last row. Of
+    chr22's three Far Pairs, the first's code reserved, the second's 1, and the third's partner
+    its own row."""
     band = zarr.open_array(store / "near/22/r", mode="r+")
     band[::1500] = RESERVED
     code = zarr.open_array(store / "index/22/r", mode="r+")
@@ -486,9 +544,14 @@ def faults_in_every_block(store: Path) -> None:
     code[::700] = values
     partner = zarr.open_array(store / "index/22/partner", mode="r+")
     partner[::900] = len(contract().chr22(store)[1]) - 1
+    owner, _, _ = contract().far22(store)
+    far_code = zarr.open_array(store / "far/22/r", mode="r+")
+    far_code[0:2] = np.array([RESERVED, 1], dtype=np.int16)
+    zarr.open_array(store / "far/22/partner", mode="r+")[2] = owner[2]
 
 
-#: The rules whose findings come one per block they fault; the other two report at the end.
+#: The rules whose findings come one per block they fault; index.symmetric and index.near report
+#: at the end, and the Far Pairs' rules find chr22's three in one block.
 PER_BLOCK = ["near.codes", "index.rows", "index.codes", "index.distance", "index.threshold"]
 
 
@@ -569,8 +632,12 @@ def test_validation_needs_a_thread() -> None:
 @pytest.mark.parametrize(
     ("path", "needs"),
     [
-        ("index/22/indptr", ["index.distance", "index.threshold", "index.symmetric", "index.near"]),
+        (
+            "index/22/indptr",
+            ["index.distance", "index.threshold", "index.symmetric", "index.near", "far.index"],
+        ),
         ("near/22/indptr", ["index.near"]),
+        ("far/22/indptr", ["far.distance", "far.threshold", "far.index"]),
     ],
 )
 def test_an_indptr_that_ends_past_its_array_is_a_finding_not_a_crash(

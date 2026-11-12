@@ -958,7 +958,7 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 
 | rule | checks |
 |---|---|
-| `envelope.arrays` | the hierarchy is Zarr v3, and every §1 array exists with its §1 dtype and the length §2, §4 and §5 give it; `n_variants` is the variant table's length |
+| `envelope.arrays` | the hierarchy is Zarr v3, and every §1 array exists with its §1 dtype and the length §2, §4 and §5 give it, the Far Pairs' included; `n_variants` is the variant table's length |
 | `envelope.fill` | the fill value of every array is one a valid store never holds there (§6): −32768 in every `r` array, at every scale, so an unwritten chunk can never read as r = 0, and so on for the others |
 | `provenance.complete` | every §7 key is present with its type, null only where §7 allows; other keys are allowed |
 | `provenance.encoding` | `format_version` is one this package reads, and `encoding` is one it implements: exactly the four keys, `int16`, −32768 reserved, `half_to_even`, and a whole `r_scale` from 1 to 32767 (§3). A reader refuses any other before decoding (§13) |
@@ -976,17 +976,22 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 | `index.threshold` | every entry's \|code\| ≥ `far_code_floor` |
 | `index.symmetric` | (l, m) is an entry with code c exactly when (m, l) is an entry with code c |
 | `index.near` | every entry within `near_bp` carries the Near Band's code for that pair, and every Near Band code with \|code\| ≥ `far_code_floor` is an entry: the index's near half is the band, thresholded |
+| `far.rows` | `indptr` starts at 0, has n_c + 1 entries and ends at the length of `partner` and `r`; within a row partners are strictly ascending, in [0, n_c), and each above the row: each Far Pair is in its earlier variant's row |
+| `far.codes` | every code is one of the store's encoding, as for `near.codes` |
+| `far.distance` | every Far Pair lies more than `near_bp` and at most `far_bp` apart |
+| `far.threshold` | every Far Pair's \|code\| ≥ `far_code_floor` |
+| `far.index` | the Far Pairs are exactly the Proxy Index's entries beyond `near_bp` in each pair's earlier row, with the same codes: every such entry is a Far Pair and every Far Pair is such an entry. With `index.symmetric`, they are the index's far pairs, once each |
 
 No rule checks chunk shapes, shards or codecs (§6). No rule can
 check that every Far Pair was found: that needs the genotypes, and ogld#5's tests check it against
 an independent reference on the Test Panel. Each rule has a store that breaks it, in
-`tests/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 18.
+`tests/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 23.
 
 **On write and on demand** (ogld#4). `ogld.validate(location)` runs the rules on a store on disk
 or over HTTP and returns every rule's findings, an empty list for a rule the store passes.
 `StoreWriter.finish` runs them on the store it wrote, on the threads the builder gives it, judged
 with the provenance it assembled (§7) as JSON will hold it, and writes that provenance only when
-all 18 pass. Otherwise it raises
+all 23 pass. Otherwise it raises
 `ValidationFailed`, naming each failing rule and where, and the store keeps no provenance, so a
 reader refuses it (§13) rather than read it as a short one.
 
@@ -996,8 +1001,8 @@ a finding that it cannot be checked, naming what it needed. An array that will n
 metadata declares is a finding that it cannot be read. Neither passes the rule, and neither stops
 the other rules. So one fault can fail several rules; the breakers' tests assert only that each
 fails its own, and that a breaker fails the same rules on a × 511 and a × 2047 store. The rules
-that judge a code against the scale, `near.codes`, `index.codes` and `provenance.threshold`'s far
-code floor, need the store's encoding: with one this package does not implement they cannot be
+that judge a code against the scale, `near.codes`, `index.codes`, `far.codes` and
+`provenance.threshold`'s far code floor, need the store's encoding: with one this package does not implement they cannot be
 checked, as `provenance.encoding` fails.
 
 **How the rules read.** The rules read through Zarr directly. A chromosome's positions and
@@ -1006,13 +1011,16 @@ entries are read in blocks of rows holding at most 8,388,608 codes and 1,048,576
 variant columns 1,048,576 rows at a time, so no rule loads a whole Near Band or Proxy Index. An
 entry holds an eighth as many as a code because the rules work on each entry through about 100
 bytes of arrays, and on each code through about 6: a block's working arrays stay near 150 MiB
-however dense the index is.
+however dense the index is. A block holds at most as many Far Pairs as entries, a bound that binds
+only in a store that fails `far.index`: a valid row holds fewer Far Pairs than index entries.
 
-The seven rules that read codes and entries one by one, `near.codes` and the six `index.*` rules,
-share one pass over each chromosome: each block is read once and handed to all seven, so each code
-and entry of a store that passes is decoded once per validation. A caller may give the pass t
+The twelve rules that read codes and entries one by one, `near.codes`, the six `index.*` rules and
+the five `far.*` rules, share one pass over each chromosome: each block of rows is read once and
+handed to all twelve, so each code, entry and Far Pair of a store that passes is decoded once per
+validation. `far.index` compares each block's Far Pairs with that block's index entries beyond
+`near_bp` in their earlier rows, so it carries nothing from one block to the next. A caller may give the pass t
 threads (`ogld validate --threads t`, or `StoreWriter.finish(sourced, threads=t)`); t blocks are
-then read and checked at once, and no more are held. `near.codes` and `index.codes` read their
+then read and checked at once, and no more are held. `near.codes`, `index.codes` and `far.codes` read their
 `r` array in windows of their own instead when its `indptr` cannot delimit the rows or does not end
 at `r`'s length, as when it ends short of `r`: windows of 8,388,608 elements, codes or entries
 alike, t of them at once.

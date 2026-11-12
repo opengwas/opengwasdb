@@ -356,6 +356,23 @@ def write_index22(store: Path, owner: np.ndarray, partner: np.ndarray, code: np.
     rewrite(store, "index/22/r", lambda _: code[order].astype(np.int16))
 
 
+def far22(store: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """chr22's Far Pairs as entries: row, partner (local rows) and code."""
+    group = zarr.open_group(store / "far" / "22", mode="r")
+    indptr = np.asarray(group["indptr"][:])
+    owner = np.repeat(np.arange(len(indptr) - 1), np.diff(indptr))
+    return owner, np.asarray(group["partner"][:]).astype(np.int64), np.asarray(group["r"][:])
+
+
+def write_far22(store: Path, owner: np.ndarray, partner: np.ndarray, code: np.ndarray) -> None:
+    """Write chr22's Far Pairs from entries, in row order and ascending partner."""
+    order = np.lexsort((partner, owner))
+    counts = np.bincount(owner, minlength=len(chr22(store)[1]))
+    rewrite(store, "far/22/indptr", lambda _: np.concatenate([[0], np.cumsum(counts)]))
+    rewrite(store, "far/22/partner", lambda _: partner[order].astype(np.int32))
+    rewrite(store, "far/22/r", lambda _: code[order].astype(np.int16))
+
+
 def floor_of(store: Path) -> int:
     """The far code floor the copy records: a breaker sets a code by its own store's floor."""
     floor: int = json.loads((store / "zarr.json").read_text())["attributes"]["ld_store"][
@@ -381,6 +398,35 @@ def add_pair(
         write_index22(store, *both, np.append(codes, [code, code]).astype(np.int16))
 
     return breaker
+
+
+def add_far_pair(
+    gap: Callable[[np.ndarray], np.ndarray], coded: Callable[[int], int]
+) -> Callable[[Path], None]:
+    """A breaker adding to chr22's Far Pairs, in its earlier row, the first pair not among them
+    whose distance `gap` accepts, with the code `coded` gives for the store's far code floor."""
+
+    def breaker(store: Path) -> None:
+        _, pos = chr22(store)
+        owner, partner, codes = far22(store)
+        held = set(zip(owner.tolist(), partner.tolist(), strict=True))
+        apart = np.argwhere(np.triu(gap(pos[None, :] - pos[:, None]), k=1))
+        lo, hi = next((int(a), int(b)) for a, b in apart if (int(a), int(b)) not in held)
+        code = np.append(codes, coded(floor_of(store))).astype(np.int16)
+        write_far22(store, np.append(owner, lo), np.append(partner, hi), code)
+
+    return breaker
+
+
+def move_a_far_pair_to_its_later_row(store: Path) -> None:
+    owner, partner, codes = far22(store)
+    owner[0], partner[0] = partner[0], owner[0]
+    write_far22(store, owner, partner, codes)
+
+
+def drop_a_far_pair(store: Path) -> None:
+    owner, partner, codes = far22(store)
+    write_far22(store, owner[1:], partner[1:], codes[1:])
 
 
 def drop_entry(near: bool) -> Callable[[Path], None]:
@@ -485,6 +531,18 @@ BREAKERS: dict[str, Callable[[Path], None]] = {
     "index.symmetric": drop_entry(near=False),
     # drops an index entry within 3 Mb whose Near Band code reaches the floor
     "index.near": drop_entry(near=True),
+    # holds one chr22 Far Pair in its later row
+    "far.rows": move_a_far_pair_to_its_later_row,
+    # writes −32768 into far/22/r
+    "far.codes": set_element("far/22/r", 0, -32768),
+    # adds a Far Pair 10,000,001 bp apart, with a code above the floor
+    "far.distance": add_far_pair(lambda gap: gap == 10_000_001, lambda floor: floor + 100),
+    # adds a Far Pair 3–10 Mb apart with |code| = far_code_floor − 1
+    "far.threshold": add_far_pair(
+        lambda gap: (gap > 3_000_000) & (gap <= 10_000_000), lambda floor: -(floor - 1)
+    ),
+    # drops a Far Pair the index holds
+    "far.index": drop_a_far_pair,
 }
 
 

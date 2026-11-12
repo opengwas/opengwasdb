@@ -103,6 +103,9 @@ is what they need.
   `far.index` and `index.symmetric` hold them to one code per pair; `index.near` holds the band
   and the index to one. A store that breaks any of them is refused before its provenance is
   written (spec §12).
+- **Validation has 23 rules.** The five `far.*` rules join the pass that reads the band and the
+  index one block of rows at a time, so each Far Pair is decoded once per validation, and
+  `far.index` compares a block's Far Pairs with that block's index entries, carrying nothing.
 - **A reader that has read matrices on every chromosome** keeps a third `indptr`, 8 bytes a
   variant: 69 MB for HGDP+1kGP EUR.
 - **The Test Store holds 7 Far Pairs** (4 on chr21, 3 on chr22), 7.7 KB in `far/`. Every other
