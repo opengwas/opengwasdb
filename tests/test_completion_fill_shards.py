@@ -78,14 +78,14 @@ def _blocks_dir(tmp_path: Path) -> Path:
 def _shard(tmp_path: Path, key: fill_shards.ShardKey, impute_mask=None):
     """Run the shared pass into a staged release; return its shards and quality rows."""
     blocks = _blocks_dir(tmp_path)
-    union_alids, union_rows = fill_shards.sorted_union_map(AXIS)
+    union = fill_shards.sorted_union_map(AXIS)
     dst = tmp_path / "out.opengwasdb"
     with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
         with closing(staged.index_connection()) as db:
             create_completion_quality_table(db)
             db.commit()
         shard_dir, n_quality = fill_shards.shard_checkpoint_fills(
-            blocks, staged, union_alids, union_rows, len(AXIS), key, impute_mask=impute_mask
+            blocks, staged, union, len(AXIS), key, impute_mask=impute_mask
         )
         shards = {
             int(path.stem.split("-")[1]): np.concatenate(
@@ -181,3 +181,153 @@ def test_agreeing_fills_are_one_and_disagreeing_fills_are_all_dropped(tmp_path, 
     assert np.isnan(z[2, 0]) and np.isnan(se[2, 0]) and imputed[2, 0] == 0
     assert (z[4, 0], imputed[4, 0]) == (7.0, 0)
     assert filled == int((imputed == 1).sum()) == 4  # 1:100 and 1:200 of 0; 1:300, 1:400 of 2
+
+
+# --- ALIDs over 64 bytes are carried whole (#361) -----------------------------
+
+#: Two indel ALIDs that share their first 64 bytes and differ after, as repeat
+#: insertions at one position do, and a third long one alone at its prefix.
+LONG_PREFIX = "2:5000:A:" + "ACGT" * 15
+LONG_A = LONG_PREFIX + "TT"
+LONG_B = LONG_PREFIX + "GG"
+LONG_C = "2:6000:A:" + "ACGT" * 40
+LONG_AXIS = {"2:4000:A:G": 0, LONG_A: 1, LONG_B: 2, "2:5500:C:T": 3, LONG_C: 4}
+
+
+def _long_fills() -> list[FillRow]:
+    return [
+        FillRow(LONG_A, 0, 1.0, 0.5),
+        FillRow(LONG_B, 0, 2.0, 0.5),
+        FillRow(LONG_C, 1, 3.0, 0.25),
+        FillRow("2:5500:C:T", 1, 4.0, 0.25),
+        FillRow(LONG_PREFIX + "CC", 0, 9.0, 0.5),  # shares the prefix; on no axis row
+    ]
+
+
+def test_the_long_fixture_is_over_64_bytes_and_shares_a_prefix() -> None:
+    long_alids = [LONG_A, LONG_B, LONG_C]
+    assert all(len(a.encode()) > 64 for a in long_alids)
+    assert LONG_A.encode()[:64] == LONG_B.encode()[:64] and LONG_A != LONG_B
+    assert len(set(LONG_AXIS.values())) == len(LONG_AXIS)
+
+
+def test_the_union_map_keeps_two_alids_that_share_64_bytes_as_two_keys() -> None:
+    union = fill_shards.sorted_union_map(LONG_AXIS)
+
+    assert len(union.alids) + len(union.long_alids) == len(LONG_AXIS)
+    assert sorted(union.long_rows.tolist()) == [1, 2, 4]
+    assert sorted(a.decode() for a in union.long_alids) == sorted([LONG_A, LONG_B, LONG_C])
+
+
+def test_each_long_alid_fill_reaches_its_own_row(tmp_path) -> None:
+    """A fill of an ALID over 64 bytes names the row of that ALID, not the row
+    of whichever ALID shares its first 64 bytes; a fill of an ALID no row has
+    is dropped, though it shares that prefix."""
+    blocks = tmp_path / "blocks"
+    blocks.mkdir()
+    write_block_checkpoint(
+        blocks / "2__1-9.npz",
+        BlockCompletionResult("2/1-9", [QualityRow(0, 0.5, 3, 0)], _long_fills()),
+    )
+    union = fill_shards.sorted_union_map(LONG_AXIS)
+    dst = tmp_path / "out.opengwasdb"
+    with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
+        with closing(staged.index_connection()) as db:
+            create_completion_quality_table(db)
+            db.commit()
+        shard_dir, _ = fill_shards.shard_checkpoint_fills(
+            blocks, staged, union, len(LONG_AXIS), fill_shards.by_row_band(100)
+        )
+        shards = {
+            int(path.stem.split("-")[1]): np.concatenate(list(fill_shards.iter_fill_records(path)))
+            for path in sorted(shard_dir.glob("*.bin"))
+        }
+
+    assert _records(shards) == [
+        (1, 0, 1.0, 0.5), (2, 0, 2.0, 0.5), (3, 1, 4.0, 0.25), (4, 1, 3.0, 0.25)
+    ]
+
+
+def test_a_format_2_checkpoint_is_refused_with_a_restart_not_read(tmp_path) -> None:
+    """Format 2 cut an ALID to 64 bytes. A resume reading one would take a
+    cut fill for the variant it was not, so it is refused by message."""
+    import re
+
+    from opengwasdb.completion.checkpoint import (
+        CHECKPOINT_FORMAT,
+        checkpoint_blocks_dir,
+        checkpoint_dir_for,
+    )
+
+    checkpoint_dir = checkpoint_dir_for(tmp_path / "out.opengwasdb")
+    blocks = checkpoint_blocks_dir(checkpoint_dir)
+    path = blocks / "2__1-9.npz"
+    write_block_checkpoint(path, BlockCompletionResult("2/1-9", [], _long_fills()))
+    checkpoint_blocks_dir(checkpoint_dir)  # a current one resumes
+    with np.load(path, allow_pickle=False) as c:
+        arrays = {k: c[k] for k in c.files}
+    assert CHECKPOINT_FORMAT == 3 and arrays["format"][0] == 3
+    arrays["format"] = np.array([2], dtype=np.int32)
+    with open(path, "wb") as fh:
+        np.savez(fh, **arrays)
+
+    with pytest.raises(
+        ValueError, match=rf"{re.escape(str(checkpoint_dir))}.*Restart the completion"
+    ):
+        checkpoint_blocks_dir(checkpoint_dir)
+    assert path.exists()
+
+
+# --- ALIDs of 63, 64 and 65 bytes, and a 64-byte one a longer one begins with --
+
+
+def _alid_of(n_bytes: int, tail: str) -> str:
+    """A `3:<pos>:A:<alt>` ALID of exactly ``n_bytes`` bytes ending in ``tail``."""
+    head = "3:7000:A:"
+    alid = head + "C" * (n_bytes - len(head) - len(tail)) + tail
+    assert len(alid.encode()) == n_bytes
+    return alid
+
+
+#: A 64-byte ALID, the 65-byte ALID that begins with it, and 63- and 65-byte
+#: ALIDs of their own: the widths either side of the one the short array holds.
+SIXTY_FOUR = _alid_of(64, "GG")
+SIXTY_FIVE = SIXTY_FOUR + "T"
+SIXTY_THREE = _alid_of(63, "TT")
+OTHER_SIXTY_FIVE = _alid_of(65, "AA")
+EDGE_AXIS = {
+    "3:6000:A:G": 0, SIXTY_THREE: 1, SIXTY_FOUR: 2, SIXTY_FIVE: 3, OTHER_SIXTY_FIVE: 4,
+}
+
+
+def test_the_edge_fixture_has_the_widths_it_names() -> None:
+    assert [len(a.encode()) for a in (SIXTY_THREE, SIXTY_FOUR, SIXTY_FIVE, OTHER_SIXTY_FIVE)] == [
+        63, 64, 65, 65
+    ]
+    assert SIXTY_FIVE.encode()[:64] == SIXTY_FOUR.encode()
+    assert len(set(EDGE_AXIS.values())) == len(EDGE_AXIS)
+
+
+def test_alids_of_63_64_and_65_bytes_each_reach_their_own_row(tmp_path) -> None:
+    """The 64-byte ALID is the first 64 bytes of the 65-byte one: cut, the two
+    are one key. Each of the four fills reaches the row of its own ALID."""
+    fills = [FillRow(a, 0, float(row), 0.5) for a, row in EDGE_AXIS.items() if row]
+    blocks = tmp_path / "blocks"
+    blocks.mkdir()
+    write_block_checkpoint(
+        blocks / "3__1-9.npz", BlockCompletionResult("3/1-9", [], fills)
+    )
+    union = fill_shards.sorted_union_map(EDGE_AXIS)
+    with OpenGWASDBStore.staging(tmp_path / "out.opengwasdb", overwrite=True) as staged:
+        with closing(staged.index_connection()) as db:
+            create_completion_quality_table(db)
+            db.commit()
+        shard_dir, _ = fill_shards.shard_checkpoint_fills(
+            blocks, staged, union, len(EDGE_AXIS), fill_shards.by_row_band(100)
+        )
+        shards = {
+            int(path.stem.split("-")[1]): np.concatenate(list(fill_shards.iter_fill_records(path)))
+            for path in sorted(shard_dir.glob("*.bin"))
+        }
+
+    assert _records(shards) == [(row, 0, float(row), 0.5) for row in (1, 2, 3, 4)]
