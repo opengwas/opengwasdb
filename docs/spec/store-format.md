@@ -2138,7 +2138,11 @@ before it, is stopped only by one that failed. A *fold* is judged from one strea
 target that every fold on it shares; a *check* reads what it needs. A fold may run after an
 earlier fold on the same read: that prerequisite is decided when the read ends, the
 folds are judged in this table's order, and whether the later fold applies is asked
-before the read.
+before the read. A check may take part of what it reads from that streamed read instead
+of reading it again (`encoding.eaf` the EAF exception table, `subsets.indexed` the
+planes); it reports exactly what it would have reported reading for itself. One listed
+before the read's first fold is then decided when the read ends, and every rule that
+runs after it is judged as if it had been decided first.
 
 `validate_store(path, rules={...})` runs the named rules and the rules they run after,
 and refuses a name this table does not list. `ValidationResult.failed()` names the

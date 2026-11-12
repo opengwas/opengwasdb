@@ -284,7 +284,8 @@ A table that is not sorted and unique, or whose values are not parallel with its
 positions, is the subset's finding rather than an exception that ends the rule
 before the entries after it are judged.
 
-**A pass still streams the table several times**, which is not the same as reading
+**A pass still streams the table several times** (superseded by the amendment for
+issue #314 below, which reads it once a pass), which is not the same as reading
 it whole: once in `encoding.eaf`, once in `side_tables.eaf_exceptions`, once in
 `subsets.indexed`, and once per band in the association scan's own decode. Each
 stream is bounded, and each rule needs its own view. Merging them into one pass is
@@ -341,6 +342,91 @@ abort".
 The paragraphs in "Time and memory" above that call the subset check's table read
 the peak of a full run, and that call the scan's held folds the reason its later
 stage starts higher, describe the code before this amendment.
+
+## Amendment: a check rides the association scan, and the scan reads the table once (issue #314)
+
+Two passes crossed a Dense grid's statistic planes: the association scan, which every
+value fold and the Top-Hit Index verification share, and the Indexed Variant Subset
+comparison, which read the primary planes again for each unit it compared -- an index
+write band by a tile of Analyses. On OGS-00009 the comparison was 11,030.5 s of a
+16,973.9 s validation and the scan 5,886.3 s (issue #308's phase report). Beside them
+the release's EAF exception table was streamed four times a pass: by the scan's
+per-band lookup, `side_tables.eaf_exceptions`, `encoding.eaf` and the subset check.
+
+**A check may ride a scan** (`Ride`). It boards before the pass over a target, is
+handed each block after the folds, and is judged as a check in its own place in the
+registry, from what the pass left on the target. A ride that fails, and a check that no
+pass carried -- a selection without the scan's folds, or a target on which no fold is
+ready -- reads for itself, exactly as before. A ride can save a read; it cannot change a
+finding.
+
+**`subsets.indexed` rides the association scan.** The pass hands each band to every
+published subset's ride, which folds the subset's cells of the band into one 64-bit
+digest per comparison unit: per cell, MurmurHash3's finaliser over the cell's key and
+then each compared plane's value -- decoded Z, SE and EAF and the stored imputed mask,
+with every NaN and -0 folded to one pattern, as `np.array_equal(..., equal_nan=True)`
+compares them -- summed over the unit. The rule then reads only the index, digests each
+unit the same way, and compares. A unit whose digests differ, that either side could
+not decode, or whose index is wrong on its own (Z and SE missing apart, a mask that is
+no mask) is compared cell by cell by the comparison it always used, in the order it
+always walked, so the finding, its words and the unit it comes from are unchanged. The
+pass also hands each ride the release's exception table, page by page, of which it
+keeps the subset's cells, and the subset's share of `eaf_baseline` and `eaf_reference`.
+
+**The cost is a collision.** A unit whose index differs from the primary is reported
+unless the two sums of 64-bit mixed digests are equal, which for any difference has
+probability about 2^-64 per unit. That was weighed against the two exact designs:
+
+- *Hold one side.* The index is Analysis-major in inner chunks of `[1, 65,536]`, and the
+  scan reads primary bands of a few thousand rows across every Analysis, so pairing
+  cells exactly means holding a whole index chunk-column for every Analysis: 2,514 x
+  65,536 cells x 5 bytes of codes, 824 MB, on OGS-00009, and 1.04 GB on OGS-00011's
+  Dense Component, beside a decoded band of 1 GiB.
+- *Re-read the index per band.* Every index chunk would be decoded once per band its
+  slots fall in, about 150 times on OGS-00009.
+
+**The table is read once a pass** (`TablePages`). Each block takes its span of the
+sorted table as it decodes -- every entry its cells can name, read a page of 262,144
+entries at a time -- in place of the per-band lookup, which also read the two 200,000-
+entry inner chunks it bisected to. `side_tables.eaf_exceptions` reconciles the block
+against that span, and `encoding.eaf` and every subset's ride watch the pages go by;
+the entries past the last block are read for them once the blocks are.
+
+**`encoding.eaf` waits for the pass.** It is registered before the scan's first fold
+and decides whether the value folds run, so where the table is there to walk it is
+decided when the read ends, before any fold is judged. A fold standing on it is judged
+as if it had been decided first: one it would have stopped measures provisionally and
+is skipped behind it with every reason it would have named, in the order of its
+`after`, and nothing the fold met in the read is reported; one already stopped by
+another prerequisite, or whose `when` declines or raises, is recorded once it is
+decided, as it would have been. On a target no fold reads, its own read is the same
+page walk.
+
+**Measured**, base `723cac0` against head `a3c7355`, each pair started at the same
+moment on a shared host (load average 2 to 33 over the runs), `uptime` sampled every
+five minutes and each process's own `VmHWM` every 30 seconds:
+
+| | base | head |
+|---|---|---|
+| OGS-00009 (11,191,070 variants x 2,514 Analyses), a full `validate` | 12,342 s | 4,836 s |
+| its `subsets.indexed` | 8,230.2 s | 621.4 s |
+| its Dense association scan | 4,069.8 s | 4,149.7 s |
+| its peak RSS | 2.61 GiB | 2.58 GiB |
+| OGS-00015 (11,650,615 x 241), a full `validate` | 1,243 s | 407 s |
+| its `subsets.indexed` | 896.0 s | 63.1 s |
+| its Dense association scan | 310.2 s | 306.9 s |
+| its EAF exception table, bytes read in the pass | 191,843,168 in 1,525 reads | 375,672 in 2 reads |
+
+Head's `subsets.indexed` is the read of the index alone; the planes are read once, by
+the scan, which the digests cost 2% on OGS-00009. OGS-00015's 31,306-entry table is
+one inner chunk, so base's per-band lookups read it whole for every band: 511 times
+its size. Head reads each entry once, as it reads OGS-00009's 8,621 (103,452 bytes).
+Both peaks are the association scan's working set, reached in its first half hour;
+nothing the rides hold -- a digest per unit, the subset's exception cells and its
+share of the per-variant arrays -- moved them. `validate --format json` is the same to
+the byte on both Stores, on the seven published Stores #387 compared (OGS-00001 to
+-00006 and -00008, text and JSON), and on #387's ten Indexed Variant Subset fixtures,
+clean and corrupted, Dense and Hybrid.
 
 ## Alternatives considered
 
