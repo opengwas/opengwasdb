@@ -105,6 +105,11 @@ def index_row_bytes(record: Record) -> float:
     return array_bytes(record, "index/partner") + array_bytes(record, "index/r")
 
 
+def far_row_bytes(record: Record) -> float:
+    """The bytes of Far Pairs rows read, as `index_row_bytes` counts the index's (ogld#31)."""
+    return array_bytes(record, "far/partner") + array_bytes(record, "far/r")
+
+
 def load_range(records: list[Record]) -> str:
     values = [r["load_before"][0] for r in records] + [r["load_after"][0] for r in records]
     return f"{min(values):.0f}–{max(values):.0f}"
@@ -245,6 +250,7 @@ def region_columns() -> list[Callable[[list[Record]], str]]:
         *common_columns(),
         lambda f: megabytes(median_of(f, lambda r: array_bytes(r, "near/r"))),
         lambda f: megabytes(median_of(f, index_row_bytes)),
+        lambda f: megabytes(median_of(f, far_row_bytes)),
         lambda f: seconds(median_of(f, lambda r: spent(r, "far_scatter"))),
         load_range,
     ]
@@ -255,6 +261,7 @@ REGION_HEADER = [
     *COMMON_HEADER,
     "MB of `near/r`",
     "MB of index rows",
+    "MB of Far Pairs rows",
     "far-pair scatter",
     "load",
 ]
@@ -265,6 +272,7 @@ def list_columns() -> list[Callable[[list[Record]], str]]:
         *common_columns(),
         lambda f: f"{median_of(f, lambda r: chunk_count(r, 'near')):,.0f}",
         lambda f: f"{median_of(f, lambda r: chunk_count(r, 'index')):,.0f}",
+        lambda f: f"{median_of(f, lambda r: chunk_count(r, 'far')):,.0f}",
         lambda f: seconds(median_of(f, lambda r: spent(r, "far_scatter"))),
         lambda f: seconds(median_of(f, lambda r: spent(r, "chromosome_loads"))),
         load_range,
@@ -275,6 +283,7 @@ LIST_HEADER = [
     *COMMON_HEADER,
     "Near Band chunks",
     "index chunks",
+    "Far Pairs chunks",
     "far-pair scatter",
     "chromosome loads",
     "load",
