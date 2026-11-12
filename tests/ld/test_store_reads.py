@@ -17,6 +17,7 @@ import tracemalloc
 from collections.abc import Iterator
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -520,9 +521,10 @@ def test_a_repeated_read_fetches_its_chunks_once(
 
 
 @pytest.mark.parametrize("size", [-1, 1.5, True, "4GiB"])
-def test_a_cache_size_that_is_not_a_count_of_bytes_is_refused(size: object) -> None:
+def test_a_cache_size_that_is_not_a_count_of_bytes_is_refused(size: Any) -> None:
+    # A caller's value, whatever it is: an untyped caller can pass any of these.
     with pytest.raises(InputError, match="cache_bytes"):
-        StoreReader.open(TEST_STORE, cache_bytes=size)  # type: ignore[arg-type]
+        StoreReader.open(TEST_STORE, cache_bytes=size)
 
 
 @pytest.mark.parametrize("query", ["clump", "proxies"])
