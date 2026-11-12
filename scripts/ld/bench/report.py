@@ -255,7 +255,7 @@ LIST_HEADER = [
 
 def step1(records: list[Record]) -> list[str]:
     of = grouped(records, "case")
-    out = ["## Step 1: the published EUR store (× 511, k = 10, layout C)", ""]
+    out = ["## Step 1: the published EUR store (k = 10, layout C)", ""]
     out += ["### Summary: time per target, ogld's reader", ""]
     out += summary(records, STEP1_READS, "ogld")
     out += ["### Clumping #403's 37 Analyses, 5e-8 tier, 3 Mb window", ""]
@@ -420,7 +420,7 @@ def layout_cell(found: list[Record], summed: bool) -> str:
         total = median_of(found, lambda r: r["seconds"])
         data = median_of(found, lambda r: wire_or_client(r, "bytes"))
         requests = median_of(found, lambda r: wire_or_client(r, "requests"))
-    return f"{seconds(total)} · {megabytes(data)} MB · {requests:,.0f} req"
+    return f"{seconds(total)} · {megabytes(data)} MB · {requests:,.0f} req · n {len(found)}"
 
 
 def step2_case(records: list[Record], name: str, summed: bool) -> list[list[str]]:
@@ -438,17 +438,19 @@ def step2_case(records: list[Record], name: str, summed: bool) -> list[list[str]
 
 
 def step2(records: list[Record], layouts: Path | None) -> list[str]:
-    out = ["## Step 2: EUR chr22 in layouts A, B and C (× 511, k = 10)", "", *builds(layouts)]
+    out = ["## Step 2: EUR chr22 in layouts A, B and C (the published build)", "", *builds(layouts)]
     of = grouped(records, "case")
     rows: list[list[str]] = []
     for r2 in (0.01, 0.001):
         clumps = [r for r in of.get(("clump",), []) if r["r2"] == r2]
-        rows += step2_case(clumps, f"clump chr22 hits, r² {r2:g} (sum)", summed=True)
-    rows += step2_case(of.get(("region",), []), "3 Mb region (median of 3)", summed=False)
-    rows += step2_case(of.get(("scattered",), []), "500 scattered (median of 3)", summed=False)
-    rows += step2_case(of.get(("pair",), []), "single pair (median)", summed=False)
+        rows += step2_case(clumps, f"clump chr22 hits, r² {r2:g} (sum over Analyses)", summed=True)
+    rows += step2_case(of.get(("region",), []), "3 Mb region (median over centres)", summed=False)
+    scattered = of.get(("scattered",), [])
+    rows += step2_case(scattered, "500 scattered (median over draws)", summed=False)
+    rows += step2_case(of.get(("pair",), []), "single pair (median over pairs)", summed=False)
     header = ["read", "reader", "target", "state", "A", "B", "C", "load"]
-    out += ["### Reads, each cell time · MB read · requests", "", table(header, rows), ""]
+    title = "### Reads, each cell time · MB read · requests · records aggregated"
+    out += [title, "", table(header, rows), ""]
     return out
 
 

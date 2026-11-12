@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Build HGDP+1kGP EUR chr22 at × 511, k = 10, in each Near Band layout of spec §6 (ogld#8).
+"""Build HGDP+1kGP EUR chr22 as the published store was built, in each Near Band layout (ogld#8).
 
 Spec §6 names three layouts of `near/<c>/r` as (inner chunk, shard) in codes: A (4,096,
 4,194,304), B (32,768, 16,777,216) and C (262,144, 67,108,864), C provisionally. They differ
 only in that array; every other array keeps its one shape. ogld#8 times the reads that remain
 on each, so each layout is a real build, by `ogld build`, of the same inputs the published EUR
-store read for chr22, with `ogld.store.layout.NEAR_R` set for the run, as `tests/test_assembly.py`
-sets it. Nothing in `ogld/` changes: the layout is the owner's decision, and this only measures.
+store read for chr22, at the encoding that store records (ADR 0004) and k = 10, with
+`ogld.store.layout.NEAR_R` set for the run, as `tests/test_assembly.py` sets it. Nothing in
+`ogld/` changes: the layout is the owner's decision, and this only measures.
 
     pixi run -e dev python scripts/bench/build_layouts.py OUT [--layout A B C] [--threads 8]
 
@@ -35,7 +36,9 @@ LAYOUTS: Final = {
     "C": (262_144, 67_108_864),
 }
 
-#: The inputs `hgdp1kgp-v2-EUR-k10.store` recorded for chr22 (its `source.sha256`).
+#: The published EUR store, whose encoding each build takes, and the inputs it recorded for chr22
+#: (its `source.sha256`).
+_PUBLISHED: Final = Path("/data/opengwasdb/work/ogld/stores/hgdp1kgp-v2-EUR-k10.store")
 _INPUTS: Final = Path("/data/opengwasdb/work/ogld")
 _BUILD_ARGS: Final = (
     "--pgen",
@@ -52,8 +55,6 @@ _BUILD_ARGS: Final = (
     "EUR",
     "--genotype-source",
     "HGDP+1kGP phased v2 (Koenig et al. 2024), EUR chr22, converted by build-inputs §3",
-    "--r-scale",
-    "511",
     "--k",
     "10",
     "--info-min",
@@ -71,6 +72,15 @@ def store_bytes(path: Path) -> int:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
 
 
+def published_scale() -> int:
+    """The scale the published EUR store records: a build carries its store's encoding, and
+    the encoding has one owner (`ogld.format.REncoding`; ADR 0004)."""
+    import ogld
+    from ogld.format import REncoding
+
+    return REncoding.of(ogld.open(_PUBLISHED).provenance["encoding"]).scale
+
+
 def build_one(layout: str, out: Path, threads: int) -> None:
     """Build chr22 in `layout`, in this process: `NEAR_R` is set before `ogld build` runs."""
     from ogld import cli
@@ -80,9 +90,11 @@ def build_one(layout: str, out: Path, threads: int) -> None:
     store = out / f"chr22-{layout}.store"
     if store.exists():
         shutil.rmtree(store)
+    scale = published_scale()
     with (out / f"chr22-{layout}.json").open("w") as provenance:
         sys.stdout = provenance
-        status = cli.main(["build", str(store), *_BUILD_ARGS, "--threads", str(threads)])
+        args = [*_BUILD_ARGS, "--r-scale", str(scale), "--threads", str(threads)]
+        status = cli.main(["build", str(store), *args])
         sys.stdout = sys.__stdout__
     if status:
         raise SystemExit(f"ogld build of layout {layout} exited {status}")
