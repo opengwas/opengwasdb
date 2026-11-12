@@ -342,7 +342,10 @@ class Ride(Generic[B]):
     block, or None when the check reads nothing from the blocks themselves (a side
     table the scan streams, say). What it reads it leaves on the target, where the
     check finds it; a check whose ride failed, or that no pass carried, reads for
-    itself, so a ride can save a read and never change a finding.
+    itself. What a ride hands a check is the data itself, except the primary planes
+    `subsets.indexed` takes as digests: there a change to one value of one cell is
+    always found, and a corruption of several cells or planes in one comparison unit
+    is missed with probability about 2^-64 per unit, under a key drawn per run.
 
     A check registered before its scan's first fold rides a pass that has not
     happened yet, so it is judged when that pass ends, and the folds on the scan

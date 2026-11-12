@@ -357,8 +357,9 @@ per-band lookup, `side_tables.eaf_exceptions`, `encoding.eaf` and the subset che
 handed each block after the folds, and is judged as a check in its own place in the
 registry, from what the pass left on the target. A ride that fails, and a check that no
 pass carried -- a selection without the scan's folds, or a target on which no fold is
-ready -- reads for itself, exactly as before. A ride can save a read; it cannot change a
-finding.
+ready -- reads for itself, exactly as before. A ride that hands a check the data itself,
+as `encoding.eaf`'s does, saves a read and changes no finding. `subsets.indexed`'s
+hands it digests of the planes instead, and its guarantee is probabilistic, below.
 
 **`subsets.indexed` rides the association scan.** The pass hands each band to every
 published subset's ride, which folds the subset's cells of the band into one 64-bit
@@ -373,9 +374,18 @@ always walked, so the finding, its words and the unit it comes from are unchange
 pass also hands each ride the release's exception table, page by page, of which it
 keeps the subset's cells, and the subset's share of `eaf_baseline` and `eaf_reference`.
 
-**The cost is a collision.** A unit whose index differs from the primary is reported
-unless the two sums of 64-bit mixed digests are equal, which for any difference has
-probability about 2^-64 per unit. That was weighed against the two exact designs:
+**The cost is a collision, so the guarantee is probabilistic.** Each step of a cell's
+digest is a bijection, so a change to one value of one cell always changes its unit's
+sum and is always found. A unit in which several cells or planes differ is missed only
+if the two sums are equal, about 2^-64 per unit for an accidental corruption. MurmurHash3's
+finaliser is public and invertible, so under a fixed key a colliding corruption could be
+built in advance (the review built a two-cell one in 13 s); the key is therefore drawn at
+random once per run (`run_key`), and no finding depends on it. **The owner ruled on
+12 Nov 2026 to keep the full digest**: every subset cell stays covered by its unit's
+digest, with no sampling and no exact hold of the index, keyed per run, and the
+comparison logs, per subset, how many units it compared cell by cell and why, so a
+digest that never matches shows as a number rather than only as lost time. That was
+weighed against the two exact designs:
 
 - *Hold one side.* The index is Analysis-major in inner chunks of `[1, 65,536]`, and the
   scan reads primary bands of a few thousand rows across every Analysis, so pairing

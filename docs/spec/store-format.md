@@ -2140,7 +2140,12 @@ earlier fold on the same read: that prerequisite is decided when the read ends, 
 folds are judged in this table's order, and whether the later fold applies is asked
 before the read. A check may take part of what it reads from that streamed read instead
 of reading it again (`encoding.eaf` the EAF exception table, `subsets.indexed` the
-planes); it reports exactly what it would have reported reading for itself. One listed
+planes). `encoding.eaf` reports exactly what it would have reported reading the table
+for itself. `subsets.indexed` takes the planes as one 64-bit digest per comparison unit,
+under a key drawn at random once per run, and compares a unit cell by cell where the
+digests disagree: a change to one value of one cell is always found, and a corruption
+of several cells or planes in one unit is missed with probability about 2^-64 per unit,
+whatever the key; no finding depends on the key. One listed
 before the read's first fold is then decided when the read ends, and every rule that
 runs after it is judged as if it had been decided first.
 

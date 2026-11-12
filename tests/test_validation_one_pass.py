@@ -26,6 +26,7 @@ from shutil import copytree as copy_release
 import numpy as np
 import pytest
 import zarr
+from dense_sources import build_dense_from_records
 from eaf_tables import rewrite_primary_table
 from residual_stores import dense_completed
 from store_reads import element_reads, times_read
@@ -34,10 +35,11 @@ from test_indexed_subsets import _build, _index_group, _root
 from opengwasdb.encoding import banding
 from opengwasdb.encoding.codec import EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE, Z_OVERFLOW
 from opengwasdb.layouts.dense import indexed_subsets
+from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.store.arrays import inner_chunk_of
 from opengwasdb.validation import scans, validate_store
 from opengwasdb.validation.rule import Severity
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants import CanonicalVariant, VariantAxis
 
 NAME = "hm3"
 #: Forty-row bands of the two-Analysis grid: five over its 200 variants.
@@ -214,13 +216,136 @@ def test_a_cell_the_index_cannot_decode_is_named_as_before(
     ]
 
 
+# ── The digest's key: where a value sits, and the run's key ─────────────────
+
+#: A release whose every cell holds its own Z, so moving a value moves something.
+VARIED_VARIANTS = 120
+
+
+@pytest.fixture(scope="module")
+def varied_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """120 variants by two Analyses, each cell a different Z, with a subset of every
+    other variant: three bands of the grid, six comparison units."""
+    root = tmp_path_factory.mktemp("varied")
+    records = [
+        NormalisedAssociation(
+            analysis_id=f"a{col}",
+            variant=CanonicalVariant("1", row + 1, "A", "G"),
+            z=0.01 + 0.03 * row + 0.5 * col,
+            se=0.2,
+            eaf=0.3,
+        )
+        for col in range(2)
+        for row in range(VARIED_VARIANTS)
+    ]
+    store = root / "store.opengwasdb"
+    build_dense_from_records(
+        records, store, store_id="varied", release_id="varied-v1",
+        reference_assembly="GRCh38", chunk_shape=(VARIED_VARIANTS, 2),
+    )
+    listing = root / "subset.alid.txt"
+    listing.write_text(
+        "\n".join(f"1:{row + 1}:A:G" for row in range(0, VARIED_VARIANTS, 2)) + "\n",
+        encoding="utf-8",
+    )
+    _build(store, NAME, listing)
+    return store
+
+
+@pytest.fixture
+def varied(tmp_path: Path, varied_seed: Path) -> Path:
+    return copy_release(varied_seed, tmp_path / "store.opengwasdb")
+
+
+def _swap(store: Path, plane: str, one: tuple[int, int], other: tuple[int, int]) -> None:
+    """Exchange two cells' codes: the unit holds the same values, in other cells."""
+    group = _index_group(store, NAME)
+    codes = np.asarray(group[plane][:])
+    assert codes[one] != codes[other], "the swap must move two different values"
+    codes[one], codes[other] = codes[other], codes[one]
+    group[plane][:] = codes
+
+
+#: Two slots of the index's third write band, whose primary rows the scan reads in
+#: its third band.
+SWAPPED = (2 * WRITE_UNIT + 1, 2 * WRITE_UNIT + 5)
+
+
+def test_the_varied_release_spans_bands_and_units(varied: Path, narrow: None) -> None:
+    subset = _subset(varied)
+    group = _index_group(varied, NAME)
+    assert len(subset) == VARIED_VARIANTS // 2
+    bands, tiles = indexed_subsets._comparison_units(group, len(subset), 2)
+    assert (len(bands), len(tiles)) == (3, 2)
+    assert all(subset[slot] >= 2 * BAND_ROWS for slot in SWAPPED)
+    z = np.asarray(group["z"][:])
+    assert len(np.unique(z)) == z.size, "every cell must hold its own value"
+
+
+def test_two_cells_swapped_inside_one_unit_are_found(varied: Path, narrow: None) -> None:
+    """Every value the unit held is still there, two of them in each other's cell: a
+    digest of the values alone would agree, and only the cells' keys tell them apart."""
+    _swap(varied, "z", (0, SWAPPED[0]), (0, SWAPPED[1]))
+
+    assert validate_store(varied).errors == [Z_DIFFER]
+
+
+def test_a_value_moved_to_another_analysis_of_its_unit_is_found(
+    varied: Path, narrow: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With both Analyses in one unit, a value exchanged across them is found too."""
+    monkeypatch.setattr(indexed_subsets, "EXHAUSTIVE_VALIDATION_BAND_CELLS", 2 * WRITE_UNIT)
+    group = _index_group(varied, NAME)
+    _bands, tiles = indexed_subsets._comparison_units(group, len(_subset(varied)), 2)
+    assert tiles == [(0, 2)], "both Analyses must share the unit"
+    _swap(varied, "z", (0, SWAPPED[0]), (1, SWAPPED[0]))
+
+    assert validate_store(varied).errors == [Z_DIFFER]
+
+
+@pytest.mark.parametrize("corrupt", [False, True], ids=["clean", "corrupted"])
+def test_no_finding_depends_on_the_run_s_key(
+    varied: Path, narrow: None, monkeypatch: pytest.MonkeyPatch, corrupt: bool
+) -> None:
+    """The key is drawn per run; the report is the same under any key."""
+    if corrupt:
+        _swap(varied, "z", (0, SWAPPED[0]), (0, SWAPPED[1]))
+    reports = []
+    for key in (0, 1, 2**63 + 12_345, 2**64 - 1):
+        monkeypatch.setattr(indexed_subsets, "run_key", lambda key=key: key)
+        findings = validate_store(varied).findings
+        reports.append([(f.rule, f.severity, f.message) for f in findings])
+    assert all(report == reports[0] for report in reports[1:])
+    assert (Z_DIFFER in [message for _rule, _severity, message in reports[0]]) is corrupt
+
+
+def test_the_comparison_says_how_many_units_it_compared_cell_by_cell(
+    completed: Path, narrow: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Every unit the digests vouch for is one the primary is not read again for; the
+    others are counted, by why, so a digest that never matches shows as a number."""
+    clean = "0 of 8 units compared cell by cell (0 whose digests disagreed, 0 the pass "
+    clean += "could not digest, 0 the index could not be digested alone); 8 units in all"
+    with caplog.at_level("INFO", logger=indexed_subsets.__name__):
+        validate_store(completed)
+    assert any(record.getMessage().endswith(clean) for record in caplog.records)
+
+    caplog.clear()
+    _bump(completed, "z", 0, _ordinary_cell(completed, 2 * WRITE_UNIT + 1, 0))
+    with caplog.at_level("INFO", logger=indexed_subsets.__name__):
+        validate_store(completed)
+    found = "1 of 5 units compared cell by cell (1 whose digests disagreed, 0 the pass "
+    found += "could not digest, 0 the index could not be digested alone); 8 units in all"
+    assert any(record.getMessage().endswith(found) for record in caplog.records)
+
+
 # ── The exception table, once per pass ───────────────────────────────────────
 
 
 def _pages(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sixteen bands of the small release, and its table in pages of 64."""
     monkeypatch.setattr(banding, "DECODED_BAND_BYTES", 48_000)
-    monkeypatch.setattr(scans, "SPAN_PAGE", 64, raising=False)
+    monkeypatch.setattr(scans, "SPAN_PAGE", 64)
 
 
 def test_the_exception_table_is_read_once_per_pass(

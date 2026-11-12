@@ -62,9 +62,11 @@ import hashlib
 import logging
 import os
 import re
+import secrets
 import shutil
 import time
 import uuid
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -3476,25 +3478,64 @@ def _compare_indexed_values(
     if context is None:
         return
     bands, tiles = _comparison_units(group, len(subset), n_analyses)
-    total = len(bands) * len(tiles)
-    started = time.monotonic()
-    done = 0
-    label = f"Indexed Variant Subset {name!r} comparison"
-    with log_phase(log, label):
+    walk = _Walk(f"Indexed Variant Subset {name!r} comparison", len(bands) * len(tiles))
+    with log_phase(log, walk.label):
         if ride is not None:
-            log.info("%s: against the association scan's digests of the primary planes", label)
-        for w, (start, stop) in enumerate(bands):
-            for t, (a0, a1) in enumerate(tiles):
-                unit = _Unit(start, stop, a0, a1)
-                if ride is None or not ride.vouches(w, t, context, group, encoding, unit):
-                    message = _compare_indexed_band(
-                        name, context, group, encoding, subset, start, stop, a0, a1
-                    )
-                    if message is not None:
-                        errors.append(message)
-                        return
-                done += 1
-                log_progress(log, label, done, total, started, every=progress_every(total))
+            log.info(
+                "%s: against the association scan's digests of the primary planes", walk.label
+            )
+        try:
+            message = _walk_units(
+                name, (context, group, encoding), subset, (bands, tiles), ride, walk
+            )
+        finally:
+            # A digest that never matches would show only as lost time: say so.
+            if ride is not None:
+                log.info("%s: %s", walk.label, ride.fallback_line(walk.reached, walk.total))
+        if message is not None:
+            errors.append(message)
+
+
+class _Walk:
+    """How far the comparison has walked its units, for its progress lines."""
+
+    def __init__(self, label: str, total: int) -> None:
+        self.label, self.total = label, total
+        self.started = time.monotonic()
+        self.reached = self.done = 0
+
+    def compared(self) -> None:
+        self.done += 1
+        log_progress(
+            log, self.label, self.done, self.total, self.started,
+            every=progress_every(self.total),
+        )
+
+
+def _walk_units(
+    name: str,
+    decoding: tuple[_DecodeContext, Any, StoreEncoding],
+    subset: np.ndarray,
+    units: tuple[list[tuple[int, int]], list[tuple[int, int]]],
+    ride: SubsetRide | None,
+    walk: _Walk,
+) -> str | None:
+    """Each unit in the comparison's order: vouched for by the pass's digests, or
+    compared cell by cell. The first finding ends the walk and is returned."""
+    context, group, encoding = decoding
+    bands, tiles = units
+    for w, (start, stop) in enumerate(bands):
+        for t, (a0, a1) in enumerate(tiles):
+            walk.reached += 1
+            unit = _Unit(start, stop, a0, a1)
+            if ride is None or not ride.vouches(w, t, context, group, encoding, unit):
+                message = _compare_indexed_band(
+                    name, context, group, encoding, subset, start, stop, a0, a1
+                )
+                if message is not None:
+                    return message
+            walk.compared()
+    return None
 
 
 def _comparison_units(
@@ -3534,7 +3575,6 @@ class _Unit:
 #: The planes a cell's digest covers, folded in this order: what the cell-by-cell
 #: comparison compares, decoded Z, SE and EAF and the stored imputed mask.
 _PLANES = ("z", "se", "eaf", "imputed")
-_DIGEST_SEED = np.uint64(0x9E3779B97F4A7C15)
 _FMIX_ONE = np.uint64(0xFF51AFD7ED558CCD)
 _FMIX_TWO = np.uint64(0xC4CEB9FE1A85EC53)
 _FMIX_SHIFT = np.uint64(33)
@@ -3568,12 +3608,29 @@ def _value_bits(values: np.ndarray) -> np.ndarray:
     raise TypeError(f"no digest of a {v.dtype} plane")
 
 
-def _cell_digests(keys: np.ndarray, planes: list[np.ndarray]) -> np.ndarray:
-    """One 64-bit digest per cell: of its key, then of each plane's value there."""
-    digest = _fmix(np.asarray(keys, dtype=np.int64).astype(np.uint64) + _DIGEST_SEED)
+def _cell_digests(keys: np.ndarray, planes: list[np.ndarray], run_key: int) -> np.ndarray:
+    """One 64-bit digest per cell: of its key under the run's, then of each plane's
+    value there.
+
+    Each step is a bijection of the digest so far, so a change to one value of one
+    cell always changes that cell's digest, and so its unit's sum. The cell's key --
+    its Analysis and slot -- makes a value moved to another cell a change too.
+    """
+    digest = _fmix(np.asarray(keys, dtype=np.int64).astype(np.uint64) ^ np.uint64(run_key))
     for plane in planes:
         digest = _fmix(digest ^ _value_bits(plane))
     return digest
+
+
+def run_key() -> int:
+    """The key one validation run digests every cell under, drawn once per run.
+
+    `_fmix` is public and invertible, so with a fixed key a corruption whose digests
+    collide could be built in advance; drawn at random each run, it cannot. Nothing a
+    run reports depends on it: a key changes only which digests two different units
+    would share, about 2^-64 of them.
+    """
+    return secrets.randbits(64)
 
 
 def _ride_facts(group: Any, root: Any, encoding: StoreEncoding) -> tuple[bool, ...]:
@@ -3627,8 +3684,11 @@ class SubsetRide:
     A unit whose digests differ, that either side could not decode, or whose index
     is wrong on its own is compared cell by cell by `_compare_indexed_band`, in the
     order the comparison has always walked, so the finding, its words and the unit
-    it names are the ones it always reported. A unit whose digests agree holds the
-    same cells unless two different sets of cells collide in 64 bits.
+    it names are the ones it always reported. A change to one value of one cell
+    always changes its unit's digest; a unit in which several cells or planes differ
+    is missed only if the two sums collide, about 2^-64 per unit under a key drawn
+    once per run (`run_key`), so the guarantee is probabilistic, as the owner ruled
+    on 12 Nov 2026.
 
     The pass also hands it the release's EAF exception table, a page at a time
     (`watch`), from which it keeps the subset's own cells, and the subset's share of
@@ -3637,9 +3697,10 @@ class SubsetRide:
 
     def __init__(
         self, subset: np.ndarray, group: Any, root: Any, encoding: StoreEncoding,
-        n_analyses: int,
+        n_analyses: int, key: int,
     ) -> None:
         self.subset = subset
+        self.key = key
         self.n_analyses = n_analyses
         self.n_rows = int(root["z"].shape[0])
         self.encoding = encoding
@@ -3651,6 +3712,8 @@ class SubsetRide:
         self.suspect = np.full(shape, every, dtype=bool)
         self.rows_seen = 0
         self.broken = False
+        #: Units compared cell by cell, by why the digests could not vouch for them.
+        self.fell_back: Counter[str] = Counter()
         self.baseline: np.ndarray | None = None
         self.reference: np.ndarray | None = None
         #: Whether the pass's read of the table handed `watch` every page.
@@ -3683,7 +3746,7 @@ class SubsetRide:
                 self.suspect[w, :] = True
             return
         keys = np.arange(s0, s1, dtype=np.int64)[:, None] + self._analysis_keys[None, :]
-        self._fold(s0, s1, _cell_digests(keys, values))
+        self._fold(s0, s1, _cell_digests(keys, values, self.key))
 
     def _fold(self, s0: int, s1: int, cells: np.ndarray) -> None:
         """Add slots `[s0, s1)`'s cell digests to the units they fall in."""
@@ -3746,18 +3809,46 @@ class SubsetRide:
         encoding: StoreEncoding,
         unit: _Unit,
     ) -> bool:
-        """Whether unit `(w, t)` of the index holds what the pass read of the primary."""
+        """Whether unit `(w, t)` of the index holds what the pass read of the primary.
+
+        A unit it cannot vouch for is counted by why, for the comparison's log line.
+        """
         if self.suspect[w, t]:
+            self.fell_back[_UNDIGESTED] += 1
             return False
-        digest = _index_digest(context, group, encoding, self.planes, len(self.subset), unit)
-        return digest is not None and digest == int(self.digests[w, t])
+        digest = _index_digest(
+            context, group, encoding, (self.planes, self.key), len(self.subset), unit
+        )
+        if digest is None:
+            self.fell_back[_INDEX_ALONE] += 1
+            return False
+        if digest != int(self.digests[w, t]):
+            self.fell_back[_DISAGREED] += 1
+            return False
+        return True
+
+    def fallback_line(self, reached: int, total: int) -> str:
+        """How many units were compared cell by cell, and why, of those reached."""
+        fell = sum(self.fell_back.values())
+        why = ", ".join(f"{self.fell_back[reason]} {reason}" for reason in _FALLBACKS)
+        return (
+            f"{fell} of {reached} units compared cell by cell ({why}); {total} units "
+            "in all"
+        )
+
+
+#: Why a unit is compared cell by cell rather than vouched for by its digests.
+_DISAGREED = "whose digests disagreed"
+_UNDIGESTED = "the pass could not digest"
+_INDEX_ALONE = "the index could not be digested alone"
+_FALLBACKS = (_DISAGREED, _UNDIGESTED, _INDEX_ALONE)
 
 
 def _index_digest(
     context: _DecodeContext,
     group: Any,
     encoding: StoreEncoding,
-    planes: tuple[str, ...],
+    digested: tuple[tuple[str, ...], int],
     n_subset: int,
     unit: _Unit,
 ) -> int | None:
@@ -3774,7 +3865,9 @@ def _index_digest(
             np.arange(unit.a0, unit.a1, dtype=np.int64)[:, None] * n_subset
             + np.arange(unit.start, unit.stop, dtype=np.int64)[None, :]
         )
-        return int(_cell_digests(keys, [values[plane] for plane in planes]).sum(dtype=np.uint64))
+        planes, key = digested
+        cells = _cell_digests(keys, [values[plane] for plane in planes], key)
+        return int(cells.sum(dtype=np.uint64))
     except Exception:  # the cell-by-cell comparison meets it, in its own words
         return None
 
@@ -3822,11 +3915,12 @@ def subset_rides(root: Any, encoding: StoreEncoding, n_analyses: int) -> dict[st
     if INDEXED_SUBSETS_GROUP not in root:
         return rides
     namespace = root[INDEXED_SUBSETS_GROUP]
+    key = run_key()
     for entry in sorted(namespace.group_keys()):
         if _is_staging_name(entry) or not is_valid_indexed_subset_name(entry):
             continue
         try:
-            ride = _ride(namespace[entry], root, encoding, n_analyses)
+            ride = _ride(namespace[entry], root, encoding, n_analyses, key)
         except Exception:  # its validation says what is wrong with it
             continue
         if ride is not None:
@@ -3834,14 +3928,16 @@ def subset_rides(root: Any, encoding: StoreEncoding, n_analyses: int) -> dict[st
     return rides
 
 
-def _ride(group: Any, root: Any, encoding: StoreEncoding, n_analyses: int) -> SubsetRide | None:
+def _ride(
+    group: Any, root: Any, encoding: StoreEncoding, n_analyses: int, key: int
+) -> SubsetRide | None:
     """A ride for one subset, unless its Variant Index is not strictly ascending
     inside the grid, which the pass could not digest it by."""
     subset = np.asarray(group["variant_index"][:], dtype=np.int64)
     n_rows = int(root["z"].shape[0])
     if len(subset) and (subset[0] < 0 or subset[-1] >= n_rows or np.any(np.diff(subset) <= 0)):
         return None
-    return SubsetRide(subset, group, root, encoding, n_analyses)
+    return SubsetRide(subset, group, root, encoding, n_analyses, key)
 
 
 def _compare_indexed_band(
