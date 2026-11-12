@@ -698,7 +698,7 @@ def _merge_checkpoint_fills(
     left ``completion_quality`` -- and through it ``analyses.tsv`` -- counting
     cells the release does not hold."""
     print("Merging block results from checkpoints...")
-    union_alids_s, union_rows_s = sorted_union_map(axis.new_alid_to_idx)
+    union = sorted_union_map(axis.new_alid_to_idx)
 
     # Reference EAF for imputed cells (ADR 0037 §4): an imputed cell's
     # frequency *is* the panel's -- one `float32` per variant, never a fallback
@@ -723,8 +723,7 @@ def _merge_checkpoint_fills(
     fill_shard_dir, quality_count = shard_checkpoint_fills(
         blocks_dir,
         staged,
-        union_alids_s,
-        union_rows_s,
+        union,
         axis.n_variants,
         by_row_band(band_rows),
         impute_mask=axis.impute_mask,
