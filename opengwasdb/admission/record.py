@@ -51,6 +51,9 @@ __all__ = [
 ADMISSION_RULES = "admission/11"
 
 SUMMARY = "admission.json"
+#: The Analyses whose Trait position a lifting build could not lift (#433); written
+#: by the build beside the summary, and cleared with the rest of a record.
+UNLIFTED_TRAIT_POSITIONS = "trait_positions_unlifted.tsv"
 _PARTS = "parts"
 _DROPPED = "dropped"
 
@@ -163,6 +166,7 @@ class AdmissionRecord:
 
     def _clear(self) -> None:
         (self.directory / SUMMARY).unlink(missing_ok=True)
+        (self.directory / UNLIFTED_TRAIT_POSITIONS).unlink(missing_ok=True)
         for name in (_PARTS, _DROPPED):
             shutil.rmtree(self.directory / name, ignore_errors=True)
 

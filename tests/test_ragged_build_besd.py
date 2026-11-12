@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,7 @@ from cli_output import normalize_cli_output
 from liftover_fixtures import (
     STRAND_CHAIN_SIZE,
     write_collision_chain,
+    write_cross_chromosome_chain,
     write_two_strand_chain,
 )
 from stored_rows import stored_rows
@@ -448,7 +450,8 @@ def test_hg19_source_build_lifts_variant_coordinates(tmp_path):
         {"chr": "1", "snp_id": "rs1002", "bp": 1_000_000, "a1": "C", "a2": "T"},
     ]
     probes = [
-        {"chr": "1", "probe_id": "ENSG00000000001", "bp": 500_000, "gene": "GENE1"}
+        # hg19 1:500000 is in a gap; since #433 a probe that cannot lift is refused.
+        {"chr": "1", "probe_id": "ENSG00000000001", "bp": 100_000, "gene": "GENE1"}
     ]
     # Both ESI rows lift to distinct hg38 positions (100000 vs 1064620); the
     # fixture must span a real translation or the assertion proves nothing.
@@ -1028,3 +1031,203 @@ def test_same_assembly_duplicate_variant_is_dropped_and_counted_at_the_root(
 
     validated = validate_store(out)
     assert validated.ok, validated.errors
+
+
+# ── hg19 lift: each Analysis's Trait position (issue #433) ───────────────────
+#
+# Positions are the pair test_liftover.py locks: hg19 1:100000 → hg38 1:100000
+# (identity) and hg19 1:1000000 → hg38 1:1064620; hg19 1:200000 sits in a gap
+# and never lifts. The lifted values are the chain's, not this code's.
+
+
+def _write_trait_position_fixture(root: Path, probe_bps: list[int]) -> Path:
+    """One probe per ``probe_bps`` entry on chr1, each with one association."""
+    fixture = root / "fixture_trait_positions"
+    fixture.mkdir()
+    # Both SNPs lift, so only the probes' own positions can fail the build.
+    snps = [
+        {"chr": "1", "snp_id": "rs1001", "bp": 100_000, "a1": "A", "a2": "G"},
+        {"chr": "1", "snp_id": "rs1002", "bp": 1_000_000, "a1": "C", "a2": "T"},
+    ]
+    probes = [
+        {"chr": "1", "probe_id": f"ENSG0000000000{i + 1}", "bp": bp, "gene": f"GENE{i + 1}"}
+        for i, bp in enumerate(probe_bps)
+    ]
+    write_esi(fixture / "test.esi", snps)
+    write_epi(fixture / "test.epi", probes)
+    write_besd_sparse_3f(
+        fixture / "test.besd", len(probes), [[(0, 0.1, 0.02)] for _ in probes]
+    )
+    return fixture / "test"
+
+
+def _trait_positions(store: Path) -> dict[str, tuple[str, str]]:
+    from opengwasdb.model.analyses import read_analysis_records
+
+    return {
+        a.analysis_id: (a.trait_chr, a.trait_bp)
+        for a in read_analysis_records(store / "analyses.tsv")
+    }
+
+
+def test_hg19_trait_positions_are_lifted_with_the_variants(tmp_path):
+    """An hg19 source's Trait positions are in the Store's assembly: a probe at
+    hg19 1:1000000 is recorded at 1:1064620, never at its GRCh37 position."""
+    prefix = _write_trait_position_fixture(tmp_path, [100_000, 1_000_000])
+    out = tmp_path / "out.opengwasdb"
+
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1",
+        source_build="hg19", association_coverage="cis_and_signals",
+    )
+
+    assert _trait_positions(out) == {
+        "ENSG00000000001": ("1", "100000"),
+        "ENSG00000000002": ("1", "1064620"),
+    }
+    assert "trait_positions" not in json.loads((out / "manifest.json").read_text())[
+        "provenance"
+    ]["lift"]
+
+
+def test_unliftable_trait_position_is_blank_counted_and_named(tmp_path, monkeypatch, capsys):
+    """A probe at hg19 1:200000 (a gap) gets no Trait position -- not its GRCh37
+    one -- and the build says so in its summary, manifest and admission record."""
+    from opengwasdb.layouts.ragged import build_besd
+
+    monkeypatch.setattr(build_besd, "_LIFTOVER_FAILURE_THRESHOLD", 0.5)
+    prefix = _write_trait_position_fixture(tmp_path, [1_000_000, 200_000])
+    out = tmp_path / "out.opengwasdb"
+    record = tmp_path / "record"
+
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1", source_build="hg19",
+        association_coverage="cis_and_signals", admission_record=record,
+    )
+
+    assert _trait_positions(out) == {
+        "ENSG00000000001": ("1", "1064620"),
+        "ENSG00000000002": ("", ""),
+    }
+    assert (record / "trait_positions_unlifted.tsv").read_text() == (
+        "analysis_id\nENSG00000000002\n"
+    )
+    summary = capsys.readouterr().out
+    assert "Trait positions lifted: 1/2; 1 Analyses have no Trait position" in summary
+    assert "ENSG00000000002" in summary
+    assert "trait_positions" not in json.loads((out / "manifest.json").read_text())[
+        "provenance"
+    ]["lift"]
+
+
+def test_trait_positions_that_mostly_fail_to_lift_refuse_the_build(tmp_path):
+    """One probe in two unlifted is past the variant lift's threshold: refused."""
+    from opengwasdb.build.liftover import LiftoverFailureError
+
+    prefix = _write_trait_position_fixture(tmp_path, [1_000_000, 200_000])
+
+    with pytest.raises(LiftoverFailureError, match="Trait-position"):
+        build_ragged_from_besd(
+            prefix, tmp_path / "out.opengwasdb", store_id="test", release_id="v1",
+            source_build="hg19", association_coverage="cis_and_signals",
+        )
+
+
+def test_grch38_trait_positions_are_the_epis_and_nothing_is_recorded(tmp_path):
+    """A GRCh38 source is untouched: the EPI's positions, no lift block, no list."""
+    prefix = _write_trait_position_fixture(tmp_path, [1_000_000, 200_000])
+    out = tmp_path / "out.opengwasdb"
+    record = tmp_path / "record"
+
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals", admission_record=record,
+    )
+
+    assert _trait_positions(out) == {
+        "ENSG00000000001": ("1", "1000000"),
+        "ENSG00000000002": ("1", "200000"),
+    }
+    assert "lift" not in json.loads((out / "manifest.json").read_text())["provenance"]
+    assert not (record / "trait_positions_unlifted.tsv").exists()
+
+
+def test_a_reused_admission_directory_keeps_no_stale_loss_list(tmp_path, monkeypatch):
+    """The loss list describes the build that wrote the record: a GRCh38 build
+    that reuses an hg19 build's Admission directory does not inherit its list."""
+    from opengwasdb.layouts.ragged import build_besd
+
+    monkeypatch.setattr(build_besd, "_LIFTOVER_FAILURE_THRESHOLD", 0.5)
+    prefix = _write_trait_position_fixture(tmp_path, [1_000_000, 200_000])
+    record = tmp_path / "record"
+    build_ragged_from_besd(
+        prefix, tmp_path / "hg19.opengwasdb", store_id="test", release_id="v1",
+        source_build="hg19", association_coverage="cis_and_signals", admission_record=record,
+    )
+    assert (record / "trait_positions_unlifted.tsv").exists()
+
+    build_ragged_from_besd(
+        prefix, tmp_path / "hg38.opengwasdb", store_id="test", release_id="v1",
+        association_coverage="cis_and_signals", admission_record=record,
+    )
+
+    assert not (record / "trait_positions_unlifted.tsv").exists()
+
+
+def _write_cross_chromosome_fixture(root: Path) -> Path:
+    """A probe the chain keeps on chr3 and one it moves from chr1 to chr2."""
+    fixture = root / "fixture_cross_chromosome"
+    fixture.mkdir()
+    snps = [
+        {"chr": "3", "snp_id": "rs3001", "bp": 1_000, "a1": "A", "a2": "G"},
+        {"chr": "3", "snp_id": "rs3002", "bp": 2_000, "a1": "C", "a2": "T"},
+    ]
+    probes = [
+        {"chr": "3", "probe_id": "ENSG00000000001", "bp": 1_000, "gene": "GENE1"},
+        {"chr": "1", "probe_id": "ENSG00000000002", "bp": 500, "gene": "GENE2"},
+    ]
+    write_esi(fixture / "test.esi", snps)
+    write_epi(fixture / "test.epi", probes)
+    write_besd_sparse_3f(fixture / "test.besd", 2, [[(0, 0.1, 0.02)], [(1, 0.1, 0.02)]])
+    return fixture / "test"
+
+
+def test_a_position_the_chain_moves_to_another_chromosome_gets_no_trait_position(
+    tmp_path, monkeypatch, capsys
+):
+    """The chain maps chr1:500 onto chr2:500. That is a lift, but not of a Trait
+    that sits on chr1: the Analysis is blank, counted and named, never at 2:500."""
+    from opengwasdb.layouts.ragged import build_besd
+
+    chain = write_cross_chromosome_chain(tmp_path / "cross.chain")
+    monkeypatch.setattr(build_besd, "_LIFTOVER_FAILURE_THRESHOLD", 0.5)
+    prefix = _write_cross_chromosome_fixture(tmp_path)
+    out = tmp_path / "out.opengwasdb"
+    record = tmp_path / "record"
+
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1", source_build="hg19",
+        chain_file=chain, association_coverage="cis_and_signals", admission_record=record,
+    )
+
+    assert _trait_positions(out) == {
+        "ENSG00000000001": ("3", "1000"),
+        "ENSG00000000002": ("", ""),
+    }
+    assert (record / "trait_positions_unlifted.tsv").read_text() == (
+        "analysis_id\nENSG00000000002\n"
+    )
+    assert "ENSG00000000002" in capsys.readouterr().out
+
+
+def test_trait_positions_the_chain_moves_to_other_chromosomes_refuse_the_build(tmp_path):
+    from opengwasdb.build.liftover import LiftoverFailureError
+
+    chain = write_cross_chromosome_chain(tmp_path / "cross.chain")
+    prefix = _write_cross_chromosome_fixture(tmp_path)
+
+    with pytest.raises(LiftoverFailureError, match="Trait-position"):
+        build_ragged_from_besd(
+            prefix, tmp_path / "out.opengwasdb", store_id="test", release_id="v1",
+            source_build="hg19", chain_file=chain, association_coverage="cis_and_signals",
+        )

@@ -19,7 +19,7 @@ import csv
 import math
 from collections.abc import Mapping
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -37,7 +37,7 @@ from opengwasdb.build.eaf_orientation import (
     select_sites,
 )
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
-from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
+from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult, trait_positions
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.by_variant import build_variant_index
 from opengwasdb.layouts.ragged.provenance import ragged_provenance
@@ -481,7 +481,55 @@ def _read_sources(
         command="build-ragged-ssf",
     )
     rules = declared_rules(manifest_path, {a.analysis_id: GWAS_SSF_CAPABILITY for a in analytes})
+    return _ingest_with_trait_positions(analytes, record, rules, request)
+
+
+def _ingest_with_trait_positions(
+    analytes: list[AnalyteInput],
+    record: admission.AdmissionRecord,
+    rules: Mapping[str, admission.AnalysisRules],
+    request: _SsfBuildRequest,
+) -> tuple[list[AnalyteInput], _Ingested]:
+    """Lift the Trait positions (#433), then ingest the sources."""
+    analytes, trait_lift = _lifted_trait_positions(analytes, request)
+    trait_positions.write_unlifted(trait_lift, record.directory)
     return analytes, _ingest_ssf_sources(analytes, record, rules, request)
+
+
+def _lifted_trait_positions(
+    analytes: list[AnalyteInput], request: _SsfBuildRequest
+) -> tuple[list[AnalyteInput], trait_positions.LiftedTraitPositions | None]:
+    """Each lifted source's Trait position, in the Store's assembly (issue #433).
+
+    A manifest row declares its Trait position in its source's build, as its
+    variants are. For an Analysis whose source is lifted, the position goes
+    through the same lift (`lift_trait_positions`); one that does not lift
+    leaves the Analysis with no Trait position. A GRCh38 row is untouched.
+    """
+    declared = [
+        (a.analysis_id, a.trait_chr or "", a.trait_bp)
+        for a in analytes
+        if a.source_build != STORE_BUILD and a.trait_bp is not None
+    ]
+    if not declared:
+        return analytes, None
+    lifted = trait_positions.lift_trait_positions(
+        declared,
+        chain_file=request.lift.chain_file,
+        failure_threshold=request.lift.failure_threshold,
+    )
+    lifted.report()
+    return [_with_trait_position(a, lifted) for a in analytes], lifted
+
+
+def _with_trait_position(
+    a: AnalyteInput, lifted: trait_positions.LiftedTraitPositions
+) -> AnalyteInput:
+    """``a`` with the Trait position the lift gave it, or none if it did not lift."""
+    if a.source_build == STORE_BUILD or a.trait_bp is None:
+        return a
+    chromosome, bp = lifted.positions.get(a.analysis_id, (None, None))
+    return replace(a, trait_chr=chromosome, trait_bp=bp)
 
 
 def _finalise_result(

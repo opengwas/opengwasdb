@@ -269,20 +269,49 @@ def lifted_rows(
     failures = 0
     for chrom, pos, ref, alt in variants:
         attempts += 1
-        bare = chrom[3:] if chrom.lower().startswith("chr") else chrom
-        mapped = engine.convert_coordinate(f"chr{bare}", pos - 1)  # 1-based → 0-based
-        if not mapped:
+        placed = _place(engine, chrom, pos)
+        if placed is None:
             failures += 1
             continue
-        new_chrom_full: str = mapped[0][0]
-        new_pos = int(mapped[0][1]) + 1  # 0-based → 1-based
-        strand: str = mapped[0][2]
-        new_bare = new_chrom_full
-        if new_bare.lower().startswith("chr"):
-            new_bare = new_bare[3:]
+        new_bare, new_pos, strand = placed
         effect, other = project_lifted_alleles(strand, ref, alt)
         result[(chrom, pos, ref, alt)] = LiftedRow(new_bare, new_pos, effect, other, strand)
     return result, attempts, failures
+
+
+def _place(engine: Any, chrom: str, pos: int) -> tuple[str, int, str] | None:
+    """Where the chain puts one 1-based position: ``(bare chrom, 1-based pos, strand)``,
+    or ``None`` when it places it nowhere. The one place a position is converted."""
+    bare = chrom[3:] if chrom.lower().startswith("chr") else chrom
+    mapped = engine.convert_coordinate(f"chr{bare}", pos - 1)  # 1-based → 0-based
+    if not mapped:
+        return None
+    new_bare: str = mapped[0][0]
+    if new_bare.lower().startswith("chr"):
+        new_bare = new_bare[3:]
+    return new_bare, int(mapped[0][1]) + 1, str(mapped[0][2])  # 0-based → 1-based
+
+
+def lifted_positions(
+    positions: Iterable[tuple[str, int]],
+    *,
+    from_build: str = "hg19",
+    to_build: str = "hg38",
+    chain_file: str | Path | None = None,
+) -> list[tuple[str, int] | None]:
+    """Lift bare ``(chrom, pos)`` positions with the same engine and chain as `lifted_rows`.
+
+    One entry per input, in order: the lifted ``(bare chrom, pos)``, or ``None``
+    where the chain places it nowhere. There are no alleles and no strand, for a
+    caller (a Trait's position) that lifts a place rather than a variant. The
+    threshold is the caller's to apply, as it is for `lifted_rows`.
+    """
+    engine = _liftover_engine(from_build, to_build, chain_file)
+    out: list[tuple[str, int] | None] = []
+    for chrom, pos in positions:
+        placed = _place(engine, chrom, pos)
+        out.append(None if placed is None else (placed[0], placed[1]))
+    return out
 
 
 def liftover_batch(
