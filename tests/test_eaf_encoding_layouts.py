@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from region_tables import write_region_table
 from store_assertions import replace_exception_table
 
 from opengwasdb.encoding import (
@@ -260,7 +261,7 @@ def test_a_build_with_frequencies_declares_the_residual_coding(
     manifest = json.loads((store / "manifest.json").read_text())
     assert manifest["encoding"]["eaf"]["kind"] == "int8_residual"
     assert manifest["encoding"]["eaf"]["residual_range"] in (0.5, 1.0, 2.0)
-    assert manifest["format_version"] == "0.2.1"
+    assert manifest["format_version"] == "0.2.2"
 
 
 @pytest.mark.parametrize("layout", ["dense", "ragged"])
@@ -915,9 +916,14 @@ def _ragged_store_with_no_frequencies_seed(
         filtered, seed_path / "ssf_nofreq_manifest.tsv", frequencies=False
     )
     out = seed_path / "ragged-nofreq.opengwasdb"
+    # Its Analyses have no Trait position, so the build records their regions (#430).
+    regions = write_region_table(
+        seed_path / "sparse_regions.tsv",
+        [(a, "significant_trans", "1", 100, 900) for a in _ANALYSES],
+    )
     build_ragged_from_ssf(
         manifest, filtered, out, store_id="nofreq", release_id="v1", allow_unverified_eaf=True,
-        association_coverage="cis_and_signals",
+        association_coverage="cis_and_signals", regions=regions,
     )
     return out
 

@@ -89,7 +89,7 @@ def ragged_completed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     observed = root / "ragged-obs.opengwasdb"
     build_ragged_from_besd(
         prefix, observed, store_id="ragged-rc", release_id="obs-v1", tissue="Blood",
-        association_coverage="cis_and_signals",
+        association_coverage="cis",
     )
     panel = _make_ragged_ld_panel(root, "1", 900_000, 1_300_000)
     completed = root / "ragged-rc-built.opengwasdb"

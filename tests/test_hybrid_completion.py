@@ -173,6 +173,26 @@ def completed_hybrid(
     )
 
 
+def test_a_hybrid_stamped_0_2_1_without_a_region_table_is_refused(
+    tmp_path: Path, completed_hybrid: tuple[Path, Path, HybridCompletionResult]
+) -> None:
+    """A Hybrid build is 0.2.2, its indels spelt reference first (spec §21.3, ADR 0079).
+    Stamped 0.2.1, it claims sorted indels, which completion refuses before it reads the
+    stamp's other feature, rather than spell the panel's indels beside them."""
+    from region_tables import edit_manifest
+
+    from opengwasdb.store.open import UnsupportedFormatVersion
+
+    src, _, _ = completed_hybrid
+    assert StoreManifest.load(src).format_version == "0.2.2"
+    edit_manifest(src, lambda manifest: {**manifest, "format_version": "0.2.1"})
+    dst = tmp_path / "restamped-dst.opengwasdb"
+
+    with pytest.raises(UnsupportedFormatVersion, match="0.2.1 Store sorts an indel's alleles"):
+        complete_hybrid_store(src, dst, _make_ld_panel(tmp_path), min_cor=0.0, thresh=0.9)
+    assert not dst.exists()
+
+
 def test_cli_complete_hybrid_reports_the_sources_coverage(tmp_path: Path) -> None:
     """#294's `register` reads `association_coverage` off the completion's stdout
     JSON, so the command prints the value the completed release carries (#298).

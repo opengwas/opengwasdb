@@ -1,17 +1,20 @@
 # OpenGWASDB Store Format Specification
 
 Status: draft  
-Format version described: `0.2.1` (Zarr v3 with sharding, §10a; an indel's ALID spelt reference first, §4; what every builder writes)  
-Also readable: `0.2.0` (the same layout, indel ALIDs sorted; what the converter writes) and `0.1.0` (Zarr v2); nothing else (§21)
+Format version described: `0.2.2` (Zarr v3 with sharding, §10a; an indel's ALID spelt reference first, §4; what every builder writes, each release stamped the lowest its features use, §21.3)  
+Also readable: `0.2.1` and `0.2.0` (the same layout, indel ALIDs sorted), and `0.1.0` (Zarr v2); nothing else (§21)
 
 This document defines the contract for valid OpenGWASDB Store Releases. It
-describes `format_version` **0.2.1**, what every builder writes since #381;
-**0.2.0**, the same physical layout (§10a: Zarr v3 with the sharding codec)
-with an indel's two alleles sorted in its ALID (§4), which every builder wrote
-from #247 and the converter still writes; and **0.1.0** (Zarr v2), which a
-reader still reads and a builder no longer writes. The two 0.2 releases are
-"the 0.2 series" below wherever the layout is meant. Everything below that is
-not about the physical layout or the indel ALID holds for all three: statistic planes carry a
+describes `format_version` **0.2.2**, what every builder of this package writes
+since #381: Zarr v3 with the sharding codec (§10a), an indel's ALID spelt reference
+first (§4, ADR 0079), and a Ragged release's optional `regions.tsv` (§1, §17);
+**0.2.1**, which package 0.9.0 stamps a Ragged release carrying `regions.tsv`, its
+indels sorted (issue #430); **0.2.0**, the same layout with neither, which every
+builder wrote from #247 and the converter still writes; and **0.1.0** (Zarr v2),
+which a reader still reads and a builder no longer writes. The three 0.2 releases
+are "the 0.2 series" below wherever the layout is meant. Everything below that is
+not about the physical layout, the indel ALID or the region table holds for all
+four: statistic planes carry a
 declared encoding (§6a), `z` is `int16` fixed point rather than `float16`, `eaf`
 is a per-variant baseline plus a per-cell `int8` logit residual rather than a
 `float32` plane, and `se` is either `float16` or — when the build measures the
@@ -54,6 +57,7 @@ variant_alid_bytes.npy
 variant_alid_rows.npy
 variant_rsid_bytes.npy
 variant_rsid_rows.npy
+regions.tsv            (Ragged only, optional)
 ```
 
 `manifest.json` identifies the release and declares how to interpret it.
@@ -93,6 +97,16 @@ ALID omitted this way stays reachable, resolved by exact scan over its position;
 an rsid omitted this way is not resolvable by name, which is why the widths are
 chosen from measured data and the omission is reported at build time.
 
+A Ragged release MAY carry `regions.tsv`, the region table its build recorded:
+one row per region it kept rows for, of four kinds, of which only `cis` and
+`significant_trans` rows are the regions Reference Completion fills (§17, issue
+#430). It is a tab-separated text table beside `analyses.tsv`, written by the
+same writer, and declared by the manifest's `regions` entry (§2), through which
+a reader finds it; a release that carries it is stamped `format_version` 0.2.1 by
+package 0.9.0 and 0.2.2 by every build since #381, whose indels are spelt reference
+first (§21.3), and a release whose Association Coverage is not `cis` cannot be
+completed without it.
+
 This is the complete envelope for a standalone Dense or Ragged Store Release.
 A Hybrid release additionally nests a `dense/` Dense Component directory
 holding a self-contained Dense Store Release of its own (same envelope as
@@ -121,6 +135,13 @@ Required fields:
 | `created_at` | Release creation timestamp |
 | `provenance` | Source and build provenance object |
 | `encoding` | How the statistic planes are encoded (§6a). Required in every readable release; the pre-reset formats that omitted it are refused (ADR 0041) |
+
+A Ragged release that carries `regions.tsv` (§1, §17) MUST also declare it, and a
+release that carries none MUST NOT have the field:
+
+| Field | Meaning |
+|---|---|
+| `regions` | The region table: `{"path": "regions.tsv", "sha256": <hex SHA-256 of the file's bytes>}`. A Reference-Completed release declares its source's entry unchanged, since it carries the file byte for byte |
 
 Reference-Completed releases MUST additionally declare:
 
@@ -191,7 +212,7 @@ where:
 - where the two alleles are one length — an SNV, or a substitution of several
   bases — `A1` is alphabetically first and `A2` the other allele;
 - where their lengths differ — an indel — `A1` is the **reference allele** and
-  `A2` the alternate (format `0.2.1`, issue #381, ADR 0079).
+  `A2` the alternate (format `0.2.2`, issue #381, ADR 0079).
 
 An indel is written reference first because a sorted ALID cannot tell an
 insertion from the deletion of the same sequence. At a repeat both are real:
@@ -1258,7 +1279,7 @@ Recommended compression for initial implementation is Zarr with Zstandard and bi
 
 ## 10a. `data.zarr` physical layout in the 0.2 series
 
-The 0.2 series (`0.2.0` and `0.2.1`) stores every array as **Zarr v3 with the sharding codec**. The
+The 0.2 series (`0.2.0`, `0.2.1` and `0.2.2`) stores every array as **Zarr v3 with the sharding codec**. The
 arrays, dtypes, fill values and encodings are exactly those of 0.1.0 (§10); only
 the physical layout changes. A 0.2 release exists because the unit a query
 reads — the **inner chunk** — is decoupled from the unit stored as a file — the
@@ -1268,7 +1289,8 @@ multiplying the file count (ADR 0057, ADR 0021).
 ```text
 format_version 0.1.0   Zarr v2   .zarray / .zgroup, one file per chunk
 format_version 0.2.0   Zarr v3   zarr.json, one file per shard
-format_version 0.2.1   Zarr v3   the same; an indel's ALID spelt reference first (§4)
+format_version 0.2.1   Zarr v3   the same; a Ragged release's optional regions.tsv (§1)
+format_version 0.2.2   Zarr v3   the same; an indel's ALID spelt reference first (§4)
 ```
 
 **Shards are bounded on both axes.** The Dense VCF builder writes `[all variants
@@ -1767,7 +1789,11 @@ declares (ADR 0079):
   otherwise, and never replaces either.
 
 An indel neither settles names no ALID, is neither matched to a source's indel
-nor filled, and stays in its block's LD; a fill there counts as missing. A
+nor filled, and stays in its block's LD; a fill there is dropped, and
+`completion_quality` counts it neither imputed nor missing, since it counts only
+rows the Store holds (the owner's ruling of 11 Nov 2026, ADR 0079's note). The
+completion record counts it, in `provenance.completion.panel_indels`
+(`unplaced.no_reference`). A
 panel's eigenvectors and `EAF` are for each row's `EA`, and a Store's
 statistics for its ALID's `A1`, so a row whose `A1` is not its `EA` -- a settled
 panel deletion -- has its eigenvector row negated and its frequency complemented
@@ -1900,22 +1926,66 @@ For Ragged Cis-and-Signals molecular Stores, Reference Completion is bounded to 
 
 - complete cis regions within existing cis boundaries;
 - complete significant trans regions within existing trans-region boundaries;
-- do not expand singleton suggestive associations.
+- do not expand singleton suggestive associations, nor any other row kept for a
+  reason other than a signal.
 
-A **region** is identified from the Analysis's Trait position where it has one.
-Not every Store Family has one: a family with no single encoding gene per
-Analysis (small-molecule metabolomics, say) carries no `trait_chr`/`trait_bp`
-at all, by design. For those Analyses the retained regions are identified from
-**the Analysis's own retained associations** instead: an LD block is a region
-of that Analysis when the Analysis already holds at least
-`impute.min_observed_points()` observations at that block's own panel
-variants. Below that threshold the block cannot be fitted, so completing it
-would add its panel variants as missing rows and impute none of them; the
-"do not expand singleton suggestive associations" rule above is the same
-threshold seen from the other side. Counting a variant that merely falls
-inside a block's base-pair extent, rather than one of the block's own panel
-variants, is not the same count and MUST NOT be substituted for it (ADR 0039,
-issue #102).
+An Analysis's **regions** are its cis region, where it has a Trait position, and
+its significant trans regions, each completed only within its own boundary: an
+inclusive `[start, end]` on one chromosome, in the Store's assembly (GRCh38).
+Their boundaries are the ones the Store's build recorded, in its **region table**,
+`regions.tsv` (§1; ADR 0039 as amended, issue #430). It is the table a Release
+Bundle's prep filter writes as `sidecars/sparse_regions.tsv`: a header row and
+one row per region the build kept rows for, read by its `analysis_id`,
+`region_id`, `region_kind`, `chromosome`, `start`, `end` and
+`source_genome_build` columns; any other column is carried and not read.
+`build-ragged-ssf --regions TABLE` refuses a table that breaks any rule below,
+before building, and writes it into the Store with every row it holds, declaring it in the
+manifest's `regions` entry by path and SHA-256 (§2). Reference Completion and the
+Observed-View Check find it through that entry in the Observed-Only source, never
+by the file alone, and refuse a source whose `regions.tsv` the manifest does not
+declare, whose declared file is missing, or whose bytes are not the declared
+SHA-256; the completed release carries the file unchanged, byte for byte, and the
+entry with it. `validate` checks it when present or declared (§20). A Ragged
+release whose Association Coverage is not `cis` and that declares no
+`regions.tsv` MUST NOT be completed: it may hold significant regions
+only the table records, which completing without it would leave out, so it is
+refused and must be rebuilt with the table. A `cis` release without one is
+completed on its Trait positions.
+
+- `region_kind` is one of `cis`, `significant_trans`, `suggestive_trans` and
+  `qc_panel`, and **only `cis` and `significant_trans` rows are completion
+  regions**;
+- the cis region's boundary is the table's `cis` row for the Analysis where it
+  has one, and otherwise its Trait position plus or minus `cis_window_bp`
+  (`complete-ragged --cis-window-bp`, recorded as
+  `provenance.completion.cis_window_bp`);
+- each significant trans region's boundary is a `significant_trans` row;
+- `suggestive_trans` and `qc_panel` rows never make a region, however many of
+  them fall in one LD block: they stay observed associations, and a QC panel's
+  rows across the genome complete nothing;
+- a row of any other kind, a row in another assembly than the release's, a row
+  whose `start` is not between 1 and its `end`, a table missing a column above,
+  and a row naming an Analysis the release does not hold are refused.
+
+Not every Store Family has a Trait position: a family with no single encoding
+gene per Analysis (small-molecule metabolomics, say) carries no
+`trait_chr`/`trait_bp` at all, by design. Such an Analysis's regions come from
+`regions.tsv` alone, so completing one the table says nothing of MUST be refused,
+never completed by another rule; one the table gives no significant region is
+carried Observed-Only.
+
+An LD block is completed for an Analysis when its extent overlaps one of the
+Analysis's regions. A region no block overlaps, in a gap of the panel or on a
+chromosome it lacks, is completed nowhere; that is not refused, and the
+completion names it by `region_id` in its summary (`regions_without_block`). The fit uses the Analysis's observations at all of that
+block's panel variants, inside the regions or not, as `completion.block.run_block`
+fits; only the panel variants inside a region's boundary become imputed or
+missing rows, and observed rows outside every region stay exactly as the source
+holds them. A block that holds only suggestive or QC-panel rows of an Analysis
+gains it no row. Before issue #430, an Analysis with no Trait position was
+completed in every block holding `impute.min_observed_points()` of its
+observations, whole, and one with a Trait position in every block touching its
+cis window, whole; both rules are withdrawn.
 
 Each completed region contains:
 
@@ -2030,9 +2100,10 @@ Validators MUST check at least:
 - Ragged Reference-Completed regions include all Reference Variant Set variants within completed boundaries;
 - top-hit indexes, when present, are consistent with the **decoded** `z`, `se` and `eaf` planes — decoded, because an index built from raw codes and one built from values a query returns are indistinguishable until they are compared against the plane the query reads;
 - `analyses.tsv` contains exactly one row per Analysis, covering every `analysis_index` referenced by `index.sqlite` (this is the one place SQLite cannot enforce the relationship as a foreign key, since `analyses.tsv` is a separate file);
+- `regions.tsv`, when a Ragged release carries or declares one, is declared by the manifest's `regions` entry exactly when it is present, has the SHA-256 that entry names, parses as a region table and names only Analyses the release holds (§2, §17, issue #430);
 - `index.sqlite` does not contain an `analyses` table, nor a `variants` table (§1, issue #128);
 - `variant_alid_bytes.npy` holds one entry per ALID narrow enough to index, and no key in it is shared by two variants — a shared key is what silently truncating an over-wide ALID produced, and it makes one variant answer another's lookup (issue #127);
-- from `format_version` 0.2.1, every indel row of the Store Variant Table spells its ALID as the row records its orientation: `A1` is its `effect_allele` and `A2` its `other_allele`, and a lifted variant's `source_alid` spells the same allele first, a lift complementing an allele but never changing its length (§4, ADR 0079). An indel spelt sorted where its reference sorts second reads as the insertion of the same sequence; a 0.2.0 or 0.1.0 release, which sorts every indel, is not judged by this rule;
+- from `format_version` 0.2.2, every indel row of the Store Variant Table spells its ALID as the row records its orientation: `A1` is its `effect_allele` and `A2` its `other_allele`, and a lifted variant's `source_alid` spells the same allele first, a lift complementing an allele but never changing its length (§4, ADR 0079). An indel spelt sorted where its reference sorts second reads as the insertion of the same sequence; a 0.2.0 or 0.1.0 release, which sorts every indel, is not judged by this rule;
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
@@ -2044,7 +2115,8 @@ Validators MUST check at least:
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
 - each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
-- the Zarr on-disk format matches `format_version`: a 0.1.0 release has Zarr v2 metadata (`.zarray`/`.zgroup`, `zarr_format: 2`) and no `zarr.json` anywhere; a 0.2 release (`0.2.0` or `0.2.1`) has Zarr v3 metadata (`zarr.json`, `zarr_format: 3`) and no v2 metadata anywhere, and every array uses the `sharding_indexed` codec. A half-converted release — one manifest, two formats — is invalid (§10a, ADR 0057);
+- the Zarr on-disk format matches `format_version`: a 0.1.0 release has Zarr v2 metadata (`.zarray`/`.zgroup`, `zarr_format: 2`) and no `zarr.json` anywhere; a 0.2 release (`0.2.0`, `0.2.1` or `0.2.2`) has Zarr v3 metadata (`zarr.json`, `zarr_format: 3`) and no v2 metadata anywhere, and every array uses the `sharding_indexed` codec. A half-converted release — one manifest, two formats — is invalid (§10a, ADR 0057);
+- a 0.2 release is stamped the lowest `format_version` its features use, for every release and component, a Hybrid's outer release included: 0.2.2 when its indel ALIDs are spelt reference first (which its stamp declares and `variant_table.indel_order` holds it to), whether or not it carries `regions.tsv`; otherwise 0.2.1 when its manifest declares `regions.tsv`, and 0.2.0 when it does not (§21.3, issues #430, #381);
 - an Indexed Variant Subset, when present, is self-describing and agrees with the release it indexes (§10b): the only entries under `data.zarr/indexed_subsets` are published subset groups — no staging or replacement directory, no unknown name, no non-group entry and no explicit empty group — and each group records a name, profile, encoding and source identity matching the release. It carries exactly the arrays its declared encoding and the release's Completion State define — an Observed-Only release's index has no `imputed`, a Reference-Completed release's must; a release declaring reference EAF carries `eaf_reference`, and one that does not carries none; `imputed` holds only 0 and 1; `variant_index` is stored `int32` and is non-empty, sorted ascending, unique and in `[0, n_variants)` — a zero-variant subset is not an index and is rejected even when its planes are zero-length; every array's inner chunk and shard match the format's `ArrayRole` policy (the layout is derived, never an attribute); its Analysis-major planes have shape `(n_analyses, n_subset_variants)` and the declared dtypes; `eaf_reference` holds one entry per indexed variant when declared; its side tables are sorted, unique and in range; Z and SE missingness agree within the index; no imputed cell is missing; the `imputed` mask and `eaf_reference` equal the release's own; and every **decoded** indexed Z, SE and EAF equals the authoritative primary-plane cell at that Store Variant Index. This is the **standalone** `validate` contract and it is exhaustive. The build's own staged publication gate is narrower and documented: exhaustively it checks only the enumerated structural rules -- self-describing identity and attributes, the exact array set, shapes and dtypes, the inner-chunk/shard layout, the full Variant Index (dtype, non-empty, sorted, unique, in bounds), counts and provenance, and the small side tables' structure and remapping (with the per-variant `eaf_baseline`/`eaf_reference`) -- while the `imputed` mask domain and agreement, Z/SE missingness, and decoded Z/SE/EAF values are compared over a documented deterministic, bounded, input-checksum-seeded sample (the endpoints of both axes, a spread of physical write-unit and inner-chunk boundaries, a spread of Analyses and seeded cells). The build records `validation_mode`, the sample strategy, seed and cell count, and its duration, and an isolated unsampled corruption is caught by the exhaustive standalone audit instead. A release with no `indexed_subsets` group stays valid and unchanged, and a reader MUST refuse a subset whose recorded source release, store, format, assembly or encoding does not match the release, before decoding any value (ADR 0061, issue #264, #266);
 - the recorded layout matches the arrays: the Dense planes' `chunk_shape` and `shard_shape` in `manifest.json` `provenance.dense`, in the `index.sqlite` `dense` blob and in the `data.zarr` root attributes each clip to the plane's dimensions to equal the plane's actual **inner** chunk, and name its actual shard, and the three compressors agree. A manifest that describes one shape over arrays of another is a silent failure class (§10a);
 - the per-variant chunking rule applies to the **inner** chunk of a sharded array, not to the shard (§6, §10a);
@@ -2082,14 +2154,15 @@ change to this table, which the test suite holds to the registry, in its order.
 | `envelope.required` | release | check | every entry the layout requires is present |
 | `envelope.closed` | release | check | no entry the layout does not produce is present |
 | `manifest.coverage` | release | check | the declared association coverage is one the layout can carry |
+| `manifest.format_stamp` | release | check | a 0.2 release is stamped the lowest `format_version` its features use: 0.2.2 when its indels are spelt reference first, whether or not it declares `regions.tsv`; otherwise 0.2.1 when it declares `regions.tsv`, 0.2.0 when it does not (§21.3); a release newer than 0.2.2 is not judged, and the rule warns that the package must be upgraded (§21.2) |
 | `sqlite.analyses_table` | release | check | `index.sqlite` holds no `analyses` table |
 | `variant_table.rows` | release | fold | the Store Variant Table has as many rows as its offset sidecar |
 | `variant_table.alid_index` | release | fold | the ALID search index covers exactly the indexable ALIDs, collision-free |
 | `variant_table.rsid_index` | release | fold | every rsid in the table resolves through the rsid search index |
 | `variant_table.sequence` | release | fold | rows are in `variant_index` order, one per canonical variant |
 | `variant_table.representatives` | release | fold | the offset sidecar and the tabix index find the rows the table holds |
-| `variant_table.indel_order` | release | fold | from format 0.2.1, every indel row's ALID spells its alleles as the row records them: its `effect_allele` then its `other_allele`, and, for a lifted variant, its reference first as its `source_alid` does; not judged on a 0.2.0 or 0.1.0 release, which sorts an indel's alleles |
-| `variant_table.lifted_contig` | release | fold | no row on an alt, random or unplaced contig has a `source_alid` on another contig: a lift left no variant there (§4); an error from format 0.2.1, a warning on an earlier release, which #367 owns; a row with no `source_alid` is not judged |
+| `variant_table.indel_order` | release | fold | from format 0.2.2, every indel row's ALID spells its alleles as the row records them: its `effect_allele` then its `other_allele`, and, for a lifted variant, its reference first as its `source_alid` does; not judged on a 0.2.1, 0.2.0 or 0.1.0 release, which sorts an indel's alleles |
+| `variant_table.lifted_contig` | release | fold | no row on an alt, random or unplaced contig has a `source_alid` on another contig: a lift left no variant there (§4); an error from format 0.2.2, a warning on an earlier release, 0.9.0's 0.2.1 included, which #367 owns; a row with no `source_alid` is not judged |
 | `sqlite.variant_aliases` | release | check | every alias names a variant the table holds; skipped where there is no alias table |
 | `analyses.readable` | release | check | `analyses.tsv` parses |
 | `analyses.retired_columns` | release | check | no retired column is present |
@@ -2098,6 +2171,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `analyses.completion_declared` | release | check | every `completion_n_imputed_total` is an integer, and an Analysis completed against no ancestry declares no imputed cells |
 | `analyses.vocabularies` | release | check | each controlled column holds only its vocabulary's values |
 | `analyses.top_hit_count_columns` | release | check | the Top-Hit Count columns are present and non-negative integers |
+| `regions.table` | release | check | `regions.tsv`, when present or declared, is declared by the manifest's `regions` entry, has its SHA-256, parses as a region table and names only Analyses the release holds (§2, §17) |
 | `csr.arrays` | sequence | check | `offsets`, `variant_index`, `z` and `se` are present |
 | `csr.lengths` | sequence | check | each parallel array, `eaf` included, holds one entry per association |
 | `csr.analyses` | sequence | check | `analyses.tsv` has one row per segment `offsets` bounds |
@@ -2140,7 +2214,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `side_tables.z_overflow` | grid, sequence | fold | the `z` overflow table describes exactly the overflow cells |
 | `side_tables.eaf_exceptions` | grid, sequence | fold | the `eaf` exception table describes exactly the exception cells, and a plane that cannot be decoded is reported |
 | `side_tables.se_exceptions` | grid, sequence | fold | the `se` exception table describes exactly the exception cells |
-| `side_tables.se_exceptions_rounded` | grid, sequence | check | no more than 1% of the `se` exception table is a value a `float16` plane stores, which is what a plane rounded before its plan was chosen holds; an error from `format_version` 0.2.1 and a warning before it |
+| `side_tables.se_exceptions_rounded` | grid, sequence | check | no more than 1% of the `se` exception table is a value a `float16` plane stores, which is what a plane rounded before its plan was chosen holds; an error from `format_version` 0.2.2 and a warning before it, 0.9.0's 0.2.1 included |
 | `sample_size.codes` | sequence | fold | every `n` code is a sample size or the missing code, and some cell holds a size |
 | `sample_size.scope` | sequence | fold | an Analysis holding per-association N declares `variant_level` scope |
 | `top_hits.arrays` | grid, sequence | check | every tier carries the arrays a tier is made of |
@@ -2207,7 +2281,7 @@ Command-line validation (`ogdb validate`) and inspection (`ogdb info`) provide b
   {
     "store_id": "...",
     "release_id": "...",
-    "format_version": "0.2.1",
+    "format_version": "0.2.2",
     "primary_layout": "dense",
     "association_coverage": "gwas",
     "completion_state": "observed_only",
@@ -2503,26 +2577,34 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   `TARGET` with identical decoded Z, SE and EAF (NaN equal to NaN) and `imputed == 0`;
   `TARGET` holds no association with Z and SE both present and `imputed == 0` that `SOURCE`
   lacks (`target_observed_not_in_source`); every `imputed` value is 0 or 1; every imputed
-  association lies inside one of the Analysis's **retained regions**; a non-admitted Analysis
-  holds no imputed cell (`imputed_in_non_admitted`). Rows that are neither observed nor imputed
-  (NaN, read through each plane's missing marker: panel positions inside a region that
-  completion could not fill) are counted as `nan_rows` and fail nothing; an infinite value is
-  not one of them.
-- **Retained regions need the LD panel.** A release stores no region coordinates, only block ids
-  and counts in `completion_quality`; block extents live in the panel. The check rebuilds each
-  sampled admitted Analysis's blocks as `complete-ragged` chose them (ADR 0014, ADR 0039): the
-  blocks touching its Trait position plus or minus the manifest's
-  `provenance.completion.cis_window_bp`, or, with no Trait position, the blocks holding enough of
-  its own observations; a region is the panel positions of those blocks. `--ld-panel` (the
-  directory `complete-ragged` was given) is therefore required for a Ragged pair, and `--ancestry`
-  must equal `provenance.completion.ancestry` when given. There is no panel-free fallback.
-  A `completion_quality` block the rebuilt regions lack is `quality_blocks_not_in_regions`, so a
-  panel other than the one used is noticed. `--ld-panel` for a Dense or Hybrid pair is refused.
+  association lies inside one of the Analysis's **retained regions**
+  (`imputed_outside_retained`), and so does every missing association completion added, one no
+  source association maps to (`missing_outside_retained`); a non-admitted Analysis holds no
+  imputed cell (`imputed_in_non_admitted`). Rows that are neither observed nor imputed (NaN,
+  read through each plane's missing marker: panel positions inside a region that completion
+  could not fill, or a source's own missing rows) are counted as `nan_rows`; an infinite value
+  is not one of them.
+- **Retained regions need the LD panel and the source's region table.** A release's arrays
+  hold no region, only block ids and counts in `completion_quality`; the regions are the
+  `regions.tsv` `SOURCE`'s manifest declares (section 17), and their rows the panel's.
+  The check rebuilds each sampled admitted Analysis's regions as `complete-ragged` chose them,
+  by the same call (section 17, ADR 0039 as amended, issue #430), from `SOURCE`'s
+  `regions.tsv`: its `cis` and `significant_trans` rows, and, for an Analysis with a Trait
+  position and no `cis` row, its Trait position plus or minus the manifest's
+  `provenance.completion.cis_window_bp`. A region's rows are the panel variants of the blocks
+  it overlaps that lie inside its boundary. `--ld-panel` (the directory `complete-ragged` was
+  given) is therefore required for a Ragged pair, and `--ancestry` must equal
+  `provenance.completion.ancestry` when given. There is no panel-free fallback. A
+  `completion_quality` block the rebuilt regions lack is `quality_blocks_not_in_regions`, so a
+  panel other than the one used is noticed. The verdict's `regions` names `SOURCE`'s
+  `regions.tsv` and its SHA-256, or is `null`. `--ld-panel` for a Dense or Hybrid pair is
+  refused.
 - **Totals.** `observed_in_source`, `imputed`, `nan_rows`, `regions` (retained
   Analysis-by-block regions) and `infinite_cells` (present-but-infinite cells, in `SOURCE` or
   `TARGET`, which never fail the check) are informational. Failing: `z_mismatch`, `se_mismatch`,
   `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_target`,
-  `target_observed_not_in_source`, `imputed_outside_retained`, `imputed_in_non_admitted`,
+  `target_observed_not_in_source`, `imputed_outside_retained`, `missing_outside_retained`,
+  `imputed_in_non_admitted`,
   `imputed_mask_invalid`, `z_se_missingness_mismatch`, `non_canonical_marker` (a cell, in
   `SOURCE` or `TARGET`, whose Z or SE holds a NaN other than the canonical one: an invalid
   state, not a `nan_rows` row — issue #373), `target_variants_unordered` (an Analysis's
@@ -2535,8 +2617,9 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   with no chromosomes for the ancestry, an ancestry other than the one recorded, a `TARGET`
   completed against an ancestry other than the panel's, a `TARGET` with no completion ancestry
   or `cis_window_bp` recorded, a release that cannot be opened or decoded (a missing array
-  group or EAF array included), and either `--ld-panel` or `--ancestry` for a Dense or Hybrid
-  pair.
+  group or EAF array included), a `SOURCE` `regions.tsv` `complete-ragged` would refuse, or
+  none where `SOURCE`'s Association Coverage is not `cis`, and either `--ld-panel` or
+  `--ancestry` for a Dense or Hybrid pair.
 - **Residual-coded SE is compared exactly too.** SE is compared for exact equality, as the
   contract in section 12 states, whether it is `float16` or `int8_residual` (owner ruling,
   2026-10-22). Ragged completion used to refit `se_coefficients` over the completed Analysis,
@@ -2641,6 +2724,8 @@ The distinction is defined by **what a reader that does not know about the chang
 |---|---|
 | a new optional array (e.g. `eaf`, ADR 0036) | patch |
 | a new `analyses.tsv` column | patch |
+| a new optional, manifest-declared sidecar (`regions.tsv`, 0.2.1, issue #430) | patch |
+| an indel's ALID spelt reference first, its statistic signed for that allele (0.2.2, issue #381, ADR 0079) | patch |
 | a required column removed or renamed (ADR 0034) | **minor** |
 | the encoding of `z`, `se` or `eaf` changes (ADR 0037) | **minor** |
 
@@ -2664,9 +2749,9 @@ For a release at `M.m.p`, a reader that fully understands that release series up
 
 Accepting a newer remainder follows from the definition of a compatible change: if an older reader could not read it correctly, the change was incompatible and was classified wrong. The warning is what makes such a misclassification visible instead of silently returning partial data.
 
-This build reads two series, `0.1` (Zarr v2, readable but no longer written) and `0.2` (Zarr v3 with sharding, §10a). `0.1.0` is the only 0.1 release. The 0.2 series has two: `0.2.0`, which every builder wrote from #247 and the converter still writes, and `0.2.1`, which every builder writes since #381 and which spells an indel's ALID reference first (§4, ADR 0079); a further remainder is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
+This build reads two series, `0.1` (Zarr v2, readable but no longer written) and `0.2` (Zarr v3 with sharding, §10a, what every builder writes since #247). The 0.2 series has three releases, `0.2.0`, `0.2.1` and `0.2.2` (§21.3), and `0.1.0` is the only 0.1 release; another remainder in either series is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
 
-`0.2.1` moves the remainder, not the series. A reader that knows only `0.2.0` reads a `0.2.1` release correctly — an ALID is a string it looks up as given, and a statistic is signed for the ALID's `A1` in both — and warns that the release is newer. What such a reader does not know is how a `0.2.1` builder spells an indel: a completion run by it would spell its panel's indels sorted, beside the release's reference-first deletions. Only a build that knows `0.2.1` completes one.
+`0.2.2` moves the remainder, not the series. A reader that knows only `0.2.0` or `0.2.1` reads a `0.2.2` release's data as written — an ALID is a string it looks up as given, and a statistic is signed for the ALID's `A1` in all three — and warns that the release is newer. What such a reader does not know is how a `0.2.2` builder spells an indel: a completion run by it would spell its panel's indels sorted, beside the release's reference-first deletions. Only a build that knows `0.2.2` completes one. Nor does it know which stamp a `0.2.2` release's features give: package 0.9.0's `validate` fails every `0.2.2` release with one error, `release is stamped 0.2.2, but a release carrying no region table is 0.2.0` (`… carrying regions.tsv is 0.2.1` with the table). The remedy is to upgrade the package, never to re-stamp the release: re-stamped, it passes 0.9.0's `validate`, and 0.9.0 completes it. So this build does not judge the stamp of a release newer than every version it writes: `manifest.format_stamp` warns that the package must be upgraded (§20).
 
 A reader meeting a feature it does not implement — an encoding kind, an index type, or a value in a controlled vocabulary it does not know — MUST reject the release rather than guess or fall back. Before `1.0.0` that refusal is exactly what a §21.0 vocabulary change produces in an older package: the "MUST accept a newer remainder" rows above govern a release whose *content* a reader understands, and §21.0 is the pre-release substitute for the version bump those rows would otherwise require.
 
@@ -2674,9 +2759,18 @@ Future format versions may add fields, arrays, or indexes, but MUST preserve exp
 
 ### 21.3 Writing
 
-A build writes exactly one `format_version` and reads every series it implements. There is no facility for writing an older format: a store that needs to be in an older format already exists in that format.
+**A build stamps each release the lowest `format_version` whose features it uses**, and reads every series it implements (the owner's decision of 2026-11-11, issue #430, amending ADR 0038 §3). Within the 0.2 series the releases are written by the same encoders, so a 0.2.0 release is a 0.2.1 release without its optional file, and the lowest version is the true one: a reader that knows only 0.2.0 reads every release that uses nothing newer without a warning, and is warned (§21.2) by exactly the releases that hold something it does not know. One function decides the stamp (`format_version_for`), and every writer stamps by it: the builders, Reference Completion, the converter. A release stamped other than its features give disagrees with itself; `validate` fails it and completion refuses it. A release newer than every version a build writes is not judged by that build's rule, which is a later package's to state: `validate` warns that the package must be upgraded, and completion refuses the release as a format it cannot write (§21.2). There is no facility for writing an older format: a store that needs to be in an older format already exists in that format.
 
-**Since #381**, every builder writes `0.2.1` (`CURRENT_FORMAT_VERSION`). The converter (§21.4) writes `0.2.0` (`TARGET_FORMAT_VERSION`) from a `SOURCE_FORMAT_VERSION = "0.1.0"` release: it copies the source's stored codes and ALIDs, and a `0.1.0` release sorts an indel's alleles without saying which is the reference, so its copy is honestly `0.2.0`, not `0.2.1`. From #247 to #381 both wrote `0.2.0`, which is what let #249 check a built and a converted release's identity; a built release and a converted one now differ in their indel ALIDs and in `format_version`, and carry the same layout. `0.1.0` stays readable; deleting the v2 reader is a later decision (ADR 0057). Because completion writes into its source's arrays and keeps its `format_version`, a `0.1.0` or `0.2.0` source cannot be Reference-Completed by this build: completing one would add panel ALIDs spelt by §4 beside its own deletions spelt like insertions, and nothing in it says which of its indels are deletions. **The one executable order is to rebuild the release and complete the rebuilt one.** Completion refuses such a source and says so.
+| `format_version` | adds | stamped on |
+|---|---|---|
+| `0.1.0` | the reset (ADR 0041): Zarr v2 | no release this build writes |
+| `0.2.0` | Zarr v3 with sharding (§10a, ADR 0057) | a release this build converts from `0.1.0`, which carries no `regions.tsv` and sorts its indels |
+| `0.2.1` | a Ragged release's optional `regions.tsv`, declared by the manifest's `regions` entry (§1, §2, §17; issue #430) | no release this build writes: package 0.9.0's, for a Ragged release carrying one |
+| `0.2.2` | an indel's ALID spelt reference first (§4, ADR 0079; issue #381), `regions.tsv` still optional | every release this build builds or completes |
+
+A package before 0.2.1 reads a 0.2.1 release, warned that it is newer than it fully understands (§21.2), and ignores the `regions` entry; its `validate` refuses `regions.tsv` as an entry outside the envelope, and its completion refuses the release, whose format it reads but cannot write (§21.4), so it cannot complete one outside its regions or drop its table (`docs/store-format-compatibility.md`). A package before 0.2.2 reads a 0.2.2 release the same way, warned, and its completion refuses it too, so it cannot spell its panel's indels sorted beside the release's reference-first ones. Package 0.9.0's `validate` also fails a 0.2.2 release, on its stamp rule (§21.2): upgrade the package, do not re-stamp the release.
+
+**Since #381**, every builder and Reference Completion write `0.2.2` (`CURRENT_FORMAT_VERSION` for a release without `regions.tsv`). The converter (§21.4) stamps by the same rule from a `SOURCE_FORMAT_VERSION = "0.1.0"` release: it copies the source's stored codes and ALIDs, and a `0.1.0` release carries no `regions.tsv` and sorts an indel's alleles without saying which is the reference, so its copy is honestly `0.2.0`. From #247 to #381 a built and a converted release both declared `0.2.0`, which is what let #249 check their identity; they now differ in their indel ALIDs and in `format_version`, and carry the same layout. `0.1.0` stays readable; deleting the v2 reader is a later decision (ADR 0057). Because completion writes into its source's arrays and keeps its `format_version`, a `0.1.0`, `0.2.0` or `0.2.1` source cannot be Reference-Completed by this build: completing one would add panel ALIDs spelt by §4 beside its own deletions spelt like insertions, and nothing in it says which of its indels are deletions. **The one executable order is to rebuild the release, with its region table where it has one, and complete the rebuilt one.** Completion refuses such a source and says so. A completed release keeps its source's version, since it carries every feature its source has.
 
 ### 21.4 I have an old store — now what?
 

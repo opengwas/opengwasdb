@@ -922,7 +922,7 @@ def add_variant_index(
     force: bool = False,
     spill_dir: str | Path | None = None,
 ) -> VariantIndexResult:
-    """Add the by-variant index to an existing 0.2.0 Ragged or Hybrid release.
+    """Add the by-variant index to an existing 0.2 Ragged or Hybrid release.
 
     The release is written in place.  The group is built under
     `by_variant.building`, renamed into place, and only then are the manifest and
@@ -991,16 +991,16 @@ def _recover_interrupted_install(ragged: Path) -> None:
 def _augment_target(store_path: str | Path, force: bool) -> tuple[Any, Path, Path]:
     """Open the release and settle the preconditions for an in-place augment."""
     from opengwasdb.store import open_store
-    from opengwasdb.store.open import zarr_format_for_version
+    from opengwasdb.store.open import WRITTEN_FORMAT_VERSIONS
 
     store = open_store(store_path)
-    # Any 0.2 release: 0.2.1 changed how an indel's ALID is spelt, not the
-    # layout the index is written in (ADR 0079).
-    if zarr_format_for_version(store.manifest.format_version) != 3:
+    # Any release this build writes: 0.2.1 adds a region table and 0.2.2 spells an
+    # indel's ALID reference first (ADR 0079), neither the layout the index is in.
+    if store.manifest.format_version not in WRITTEN_FORMAT_VERSIONS:
         raise VariantIndexError(
             f"{store_path}: format_version is {store.manifest.format_version!r}; the index "
-            "is added to a 0.2 release. Convert a 0.1.0 release "
-            "first with scripts/convert_store_to_0_2_0.py."
+            f"is added to a release this build writes ({', '.join(WRITTEN_FORMAT_VERSIONS)}). "
+            "Convert a 0.1.0 release first with scripts/convert_store_to_0_2_0.py."
         )
     ragged = store.data_path / "ragged"
     if not ragged.exists():

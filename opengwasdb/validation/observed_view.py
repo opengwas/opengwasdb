@@ -213,8 +213,8 @@ def check_observed_view(
     `n_random` chunk-rows are drawn uniformly; a grid with fewer is sampled in
     full (a Hybrid pair also compares `n_random` Overflow Analyses; a Ragged pair
     samples `n_random` Analyses). `ld_panel` and `ancestry` belong to a Ragged pair
-    alone, whose retained regions are rebuilt from them: a Dense or Hybrid pair
-    given either is refused, not ignored.
+    alone, whose retained regions are rebuilt from them and from the source's
+    `regions.tsv`: a Dense or Hybrid pair given either is refused, not ignored.
     """
     if n_random < 0:
         raise ValueError(f"n_random must be >= 0, got {n_random}")

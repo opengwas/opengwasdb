@@ -1,0 +1,35 @@
+{
+  "commit": "b8975330aaa5df266fcdcd32b12ad62614fd164c",
+  "measured_at": "2026-11-11T12:53:19.220117+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/odb430/wt/opengwasdb",
+  "opengwasdb_fingerprint": "f3abcd4184e8d208a31870b881928601d356755428fb7958aa0230b13bcbfd74",
+  "argv": [
+    "benchmarks/benchmark_ragged_completion_streams.py",
+    "regions-projection",
+    "--source",
+    "/data/opengwasdb/work/odb430/ogs6/store.opengwasdb",
+    "--ld-dir",
+    "/data/opengwasdb/work/odb430/panel-chr15-22",
+    "--run",
+    "docs/benchmark-output/ragged_completion_streams/regions-head-100.json",
+    "--output",
+    "docs/benchmark-output/ragged_completion_streams/regions-projection-panel-chr15-22.json"
+  ],
+  "seconds": 294.2,
+  "analyses": 1400,
+  "with_region": 1101,
+  "blocks_touched": 249,
+  "analysis_blocks": 1718,
+  "added_cells": 282156,
+  "added_cells_per_analysis": {
+    "median": 0.0,
+    "max": 37309
+  },
+  "imputed_share_from_run": 1.0,
+  "imputed_cells": 282156,
+  "missing_cells": 0,
+  "checked_against_run": {
+    "analyses": 100,
+    "disagreeing": {}
+  }
+}

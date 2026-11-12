@@ -54,7 +54,7 @@ from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.model.analyses import read_analyses
+from opengwasdb.model.analyses import read_analyses, read_analysis_records
 from opengwasdb.model.enums import (
     COVERAGES_BY_LAYOUT,
     AssociationCoverage,
@@ -474,6 +474,25 @@ def _written_association_coverage(store_path: Path) -> str:
     return manifest.association_coverage.value
 
 
+def _regions_summary(store_path: Path) -> dict[str, Any] | None:
+    """What a Store's `regions.tsv` holds (`completion.regions.region_summary`), or None."""
+    from opengwasdb.completion.regions import region_summary
+    from opengwasdb.model.regions import read_store_regions
+
+    table = read_store_regions(store_path)
+    if table is None:
+        return None
+    return dict(region_summary(table, read_analysis_records(store_path / "analyses.tsv")))
+
+
+def _regions_line(regions: dict[str, Any]) -> str:
+    kinds = ", ".join(f"{kind} {n:,}" for kind, n in regions["rows_by_kind"].items())
+    return (
+        f"regions: {kinds}; {regions['analyses_with_region']:,} Analyses have a "
+        f"completion region, {regions['analyses_without_region']:,} have none"
+    )
+
+
 @app.command()
 def info(
     store_path: Path,
@@ -483,6 +502,7 @@ def info(
 
     store = open_store(store_path)
     manifest = store.manifest
+    regions = _regions_summary(store_path)
     if output_format is ReportFormat.json:
         payload = {
             "store_id": manifest.store_id,
@@ -494,6 +514,7 @@ def info(
             "reference_assembly": manifest.reference_assembly,
             "encoding": manifest.encoding.to_manifest(),
             "opengwasdb_version": __version__,
+            **({} if regions is None else {"regions": regions}),
         }
         typer.echo(json.dumps(payload, sort_keys=True))
         return
@@ -521,6 +542,8 @@ def info(
     typer.echo(
         f"encoding: z={encoding.z.kind}{scale}, se={encoding.se.kind}, eaf={eaf}{n}"
     )
+    if regions is not None:
+        typer.echo(_regions_line(regions))
     # The package version, not the store's: it names the build that will read
     # this release, which is what a bug report needs and what a release
     # checkout and a nightly one differ in (issue #333). Last, so the lines a
@@ -644,6 +667,13 @@ _OBSERVED_VIEW_ANCESTRY_HELP = (
     "Ragged only: the --ancestry complete-ragged was run with; defaults to the target "
     "manifest's, and is refused if it differs. Refused (exit 2) for a Dense or Hybrid pair"
 )
+_BUILD_RAGGED_REGIONS_HELP = (
+    "The Release Bundle's region table (sidecars/sparse_regions.tsv; columns analysis_id, "
+    "region_id, region_kind, chromosome, start, end, source_genome_build), checked and "
+    "written into the Store as regions.tsv. Its cis and significant_trans rows are the "
+    "regions complete-ragged fills; a Store whose coverage is not cis is not completed "
+    "without it"
+)
 
 
 @app.command("check-observed-view")
@@ -667,23 +697,23 @@ def check_observed_view_command(
     association that completion moved onto a panel row it added, which must equal
     its source value through the Dense Component's codec.
 
-    A Ragged pair is compared by ALID over a seeded sample of Analyses, not
-    chunk-rows: each source-observed association must be in the target with
-    identical Z, SE and EAF, the target must hold no observed association the
-    source lacks, and every imputed association must lie in one of its Analysis's
-    retained regions (a non-admitted Analysis holds none). Those regions are
-    rebuilt from the LD panel, so --ld-panel (the root complete-ragged was given)
-    is required for a Ragged pair, and --ancestry, if given, must be the one the
-    target records (the default). Neither option is accepted for a Dense or Hybrid
-    pair: it is refused (exit 2), not ignored.
+    A Ragged pair is compared by ALID over a seeded sample of Analyses: each
+    source-observed association must be in the target with identical Z, SE and
+    EAF, the target must hold no observed association the source lacks, and each
+    imputed or added missing association must lie in one of its Analysis's
+    regions (a non-admitted Analysis holds none), rebuilt as complete-ragged built
+    them from the source's regions.tsv: --ld-panel is required, and --ancestry, if
+    given, must be the target's. Neither is accepted for a Dense or Hybrid pair:
+    it is refused (exit 2), not ignored.
 
     Exits 0 when everything agrees and 1 when anything does not; the verdict is
     written to --output either way. Exits 2 without a verdict when the pair
     cannot be checked: a mixed-layout pair, or a layout the check does not
     support (it checks Dense, Hybrid and Ragged pairs), a source that is not
     Observed-Only, a target that is not Reference-Completed, a Store whose arrays
-    cannot be opened or decoded, or, for a Ragged pair, no --ld-panel, or a panel
-    or ancestry the target does not record.
+    cannot be opened or decoded, or, for a Ragged pair, no --ld-panel, a panel
+    or ancestry the target does not record, or a source regions.tsv complete-ragged
+    would refuse, or none where the source's coverage is not cis.
     """
     from opengwasdb.validation.observed_view import ObservedViewRefused, check_observed_view
 
@@ -1590,6 +1620,7 @@ def build_ragged_ssf_command(
     admission_record: Path = _ADMISSION_RECORD_OPTION,
     chain_file: _CHAIN_FILE_OPTION = None,
     liftover_failure_threshold: _LIFTOVER_FAILURE_THRESHOLD_OPTION = 0.01,
+    regions: Annotated[Path | None, typer.Option(help=_BUILD_RAGGED_REGIONS_HELP)] = None,
 ) -> None:
     """Build a Ragged Observed-Only store from filtered GWAS-SSF files.
 
@@ -1613,6 +1644,7 @@ def build_ragged_ssf_command(
     --association-coverage is required: the filter that produced FILTERED_DIR
     decided what the release retains, and the manifest cannot recover it (#298).
     --admission-record names where Association Admission's record goes (#357).
+    --regions is the bundle's region table, written as regions.tsv (#430).
     """
     result = build_ragged_from_ssf(
         manifest_path,
@@ -1629,6 +1661,7 @@ def build_ragged_ssf_command(
         admission_record=admission_record,
         chain_file=chain_file,
         liftover_failure_threshold=liftover_failure_threshold,
+        regions=regions,
     )
     _echo_ragged_summary(result)
 
@@ -1645,7 +1678,15 @@ def complete_ragged_command(
     n_workers: int = typer.Option(1, help="LD-block process-pool size"),
     overwrite: bool = typer.Option(False),
 ) -> None:
-    """Produce a Reference-Completed ragged store from an observed-only store."""
+    """Produce a Reference-Completed ragged store from an observed-only store.
+
+    Each Analysis is completed only inside its regions (issue #430), read from
+    the source's regions.tsv: its cis region, the table's cis row or else the
+    Trait position +/- --cis-window-bp, and its significant_trans rows. A source
+    whose association_coverage is not cis must hold regions.tsv. An Analysis
+    with no region is carried observed-only; a region no LD block overlaps is
+    listed in the summary (regions_without_block).
+    """
     import time
     t0 = time.time()
     result = complete_ragged_store(
@@ -1667,6 +1708,8 @@ def complete_ragged_command(
             "n_associations": result.n_associations,
             "n_imputed": result.n_imputed,
             "n_missing": result.n_missing,
+            "n_regions_without_block": len(result.regions_without_block),
+            "regions_without_block": list(result.regions_without_block),
             "association_coverage": _written_association_coverage(result.output_path),
             "elapsed_s": round(time.time() - t0, 1),
         }

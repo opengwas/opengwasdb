@@ -1,5 +1,25 @@
 # Store format versioning, reader obligations, and migration expectations
 
+> **§3 amended by the owner's decision of 2026-11-11 (issue #430, spec §21.3):**
+> a build stamps each release **the lowest `format_version` whose features it
+> uses**, rather than one version for everything it writes. `0.2.1` is `0.2.0`
+> plus a Ragged release's optional, manifest-declared `regions.tsv`, and the two
+> are written by the same encoders, so a 0.2.0 release is a 0.2.1 release without
+> the file: a release that carries it is 0.2.1, and every other is 0.2.0, exactly
+> as before. A reader that knows only 0.2.0 then reads every release that uses
+> nothing newer without a warning, and is warned by exactly the ones that hold
+> what it does not know. One function decides the stamp (`format_version_for`),
+> every writer stamps by it, and both 0.2.0 and 0.2.1 are writable (§4). The rest
+> of §3 holds: there is no option to write a format whose encoders are retired.
+>
+> **The same rule, 2026-11-11 (epic #307's merge of #432, ADR 0079's note):**
+> `0.2.2` is `0.2.1` with an indel's ALID spelt reference first, `regions.tsv` still
+> optional. Every build of this package uses that feature, so it stamps every release
+> it builds or completes 0.2.2, and only a converted one 0.2.0. 0.2.0, 0.2.1 and 0.2.2
+> stay written by the same encoders, but completion writes only into a 0.2.2 source:
+> one that sorts its indels would gain the panel's reference-first ones beside its
+> own (§4, ADR 0079).
+>
 > **Amended by [ADR 0064](0064-association-coverage-is-a-build-input.md)
 > (issue #298, spec §21.0):** before `format_version` 1.0, a change confined to
 > a manifest vocabulary or to required metadata does **not** move the version.
@@ -122,6 +142,8 @@ it has ever seen; it carries the majors it implements.
 
 A build **reads** every major it implements and **writes** exactly one version:
 `CURRENT_FORMAT_VERSION`. There is no option to write an older format.
+(Amended, issue #430: a build stamps each release the lowest version whose
+features it uses; see the note at the top.)
 
 This is what makes rule 4 tractable. Supporting *writing* of historical formats
 would mean keeping every retired encoder alive and tested forever, which is a

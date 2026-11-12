@@ -165,21 +165,3 @@ def _fill_arrays(fills: list[FillRow]) -> dict[str, np.ndarray]:
         "f_z": np.array([r.z for r in fills], dtype=np.float32),
         "f_se": np.array([r.se for r in fills], dtype=np.float32),
     }
-
-
-def read_block_checkpoint(path: Path) -> BlockCompletionResult:
-    with np.load(path, allow_pickle=False) as d:
-        block_id = str(d["block_id"][0])
-        quality_rows = [
-            QualityRow(int(ai), None if not np.isfinite(p) else float(p), int(ni), int(nm))
-            for ai, p, ni, nm in zip(
-                d["q_ai"], d["q_pearson"], d["q_nimp"], d["q_nmiss"], strict=True
-            )
-        ]
-        f_alid = d["f_alid"]
-        alids = [a.decode("ascii") if isinstance(a, bytes) else str(a) for a in f_alid]
-        fills = [
-            FillRow(alid, int(ai), float(z), float(se))
-            for alid, ai, z, se in zip(alids, d["f_ai"], d["f_z"], d["f_se"], strict=True)
-        ]
-    return BlockCompletionResult(block_id=block_id, quality_rows=quality_rows, fills=fills)

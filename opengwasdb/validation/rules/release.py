@@ -1,7 +1,8 @@
 """Rules that read a Store Release's directory and manifest (ADR 0074).
 
 The Zarr format, the release's required entries, its closed envelope, the coverage
-its layout can carry, and the retired SQL `analyses` table. One rule each, for
+its layout can carry, its `format_version` stamp, and the retired SQL `analyses`
+table. One rule each, for
 every kind of release: a Dense release, a Ragged one, a Hybrid's outer release and
 its Dense Component differ only in the entries and envelope their layout names.
 """
@@ -12,6 +13,7 @@ import json
 import os
 import sqlite3
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +24,15 @@ from opengwasdb.store.open import (
     HYBRID_DENSE_COMPONENT_ENVELOPE,
     HYBRID_ENVELOPE,
     RAGGED_ENVELOPE,
+    WRITTEN_FORMAT_VERSIONS,
     UnsupportedFormatVersion,
+    check_format_version_stamp,
+    newer_than_written,
+    newer_than_written_text,
+    split_format_version,
     zarr_format_for_version,
 )
-from opengwasdb.validation.rule import Check, Kind, Rule, Target
+from opengwasdb.validation.rule import Check, Finding, Kind, Rule, Severity, Target
 from opengwasdb.variants import (
     variant_alid_bytes_path,
     variant_alid_rows_path,
@@ -312,6 +319,48 @@ def _reject_stray_analyses_table(connection: sqlite3.Connection, errors: list[st
         )
 
 
+def format_stamp(target: Target) -> list[str]:
+    """The release is stamped the lowest `format_version` its features use (spec §21.3):
+    0.2.2 when its indels are spelt reference first, which its stamp declares, the table
+    or not; otherwise 0.2.1 when its manifest declares `regions.tsv`, 0.2.0 when it does
+    not. One stamped otherwise disagrees with itself: an older reader takes a 0.2.0 one as
+    fully understood, and no writer stamps a 0.2.1 one without the table. A release
+    newer than this build writes is not judged here (`_FormatStamp`)."""
+    manifest = target.store.manifest
+    try:
+        check_format_version_stamp(
+            manifest.format_version, carries_regions=manifest.regions is not None
+        )
+    except UnsupportedFormatVersion as exc:
+        return [str(exc)]
+    return []
+
+
+@dataclass(frozen=True, kw_only=True)
+class _FormatStamp(Check):
+    """`format_stamp`, except on a release newer than every version this build writes.
+
+    Such a release is a later package's format, and which stamp its features give is
+    that package's rule: judged by this one's, a 0.2.3 release would be told it "is
+    0.2.2", and re-stamped so it is a release this build completes, whatever 0.2.3
+    changed -- what package 0.9.0's rule tells a 0.2.2 release. It is read with the
+    newer-remainder warning, and this rule warns that the package must be upgraded.
+    """
+
+    def findings(self, target: Target) -> Iterator[Finding]:
+        version = target.store.manifest.format_version
+        if newer_than_written(version):
+            yield self.finding(target, newer_than_written_text(version), Severity.WARNING)
+            return
+        yield from super().findings(target)
+
+
+def _written_series(target: Target) -> bool:
+    """A release of the series this build writes; a 0.1.0 one predates the stamp rule."""
+    series = {split_format_version(version)[0] for version in WRITTEN_FORMAT_VERSIONS}
+    return split_format_version(target.store.manifest.format_version)[0] in series
+
+
 def _not_ragged(target: Target) -> bool:
     return target.layout is not PrimaryStorageLayout.RAGGED
 
@@ -321,6 +370,9 @@ RULES: tuple[Rule, ...] = (
     Check(name=REQUIRED, kinds=Kind.RELEASE, run=required_entries),
     Check(name="envelope.closed", kinds=Kind.RELEASE, run=closed_envelope),
     Check(name="manifest.coverage", kinds=Kind.RELEASE, when=_not_ragged, run=coverage),
+    _FormatStamp(
+        name="manifest.format_stamp", kinds=Kind.RELEASE, when=_written_series, run=format_stamp
+    ),
     Check(
         name="sqlite.analyses_table",
         kinds=Kind.RELEASE,

@@ -27,6 +27,7 @@ import csv
 import hashlib
 import json
 import logging
+import os
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -243,6 +244,13 @@ def _open_indel_reference(path: str) -> _IndelReference:
     return _IndelReference(pysam.TabixFile(path), digest, provenance)
 
 
+# An opened table is its process's own. A block pool forks after the parent has
+# read the table, and a child reading through the parent's handle shares one file
+# offset with the parent and every other child, so their fetches read each other's
+# bytes: a fetch fails, splits a line, or ends early and leaves indels unplaced.
+os.register_at_fork(after_in_child=_open_indel_reference.cache_clear)
+
+
 def _table_references(
     table: Path, chrom: str, start_bp: int, end_bp: int
 ) -> dict[IndelKey, str]:
@@ -260,15 +268,58 @@ def _table_references(
     return settled
 
 
+class PanelReadMismatchError(RuntimeError):
+    """A block read where it is completed named its rows otherwise than the read
+    the completion was planned from."""
+
+
+@dataclass(frozen=True)
+class BlockPlacement:
+    """What one read of a block named: its rows, the rows it gave an ALID, the
+    indels it placed, and a digest of every row's ALID and whether it is
+    re-signed. A completion records the panel as its plan read it, and fills
+    from each block as a worker reads it again; the two must be one reading.
+    """
+
+    n_rows: int
+    n_named: int
+    n_indels_placed: int
+    digest: str
+
+    @classmethod
+    def of(cls, block: LDBlock) -> BlockPlacement:
+        named = "\n".join("" if alid is None else alid for alid in block.alids)
+        digest = hashlib.sha256(named.encode() + block.flipped.tobytes()).hexdigest()
+        return cls(
+            len(block.alids), sum(alid is not None for alid in block.alids),
+            block.n_indels_placed, digest,
+        )
+
+    def require(self, block: LDBlock) -> None:
+        """Raise `PanelReadMismatchError` where ``block``, read again, is not
+        this reading: a read that places fewer indels, as a worker reading the
+        indel table through another process's handle once did, would fill a
+        panel the completion record does not describe."""
+        again = BlockPlacement.of(block)
+        if again != self:
+            raise PanelReadMismatchError(
+                f"LD block {block.block_id}: this read names {again.n_named} of "
+                f"{again.n_rows} rows and places {again.n_indels_placed} indels, where "
+                f"the read the completion was planned from named {self.n_named} of "
+                f"{self.n_rows} and placed {self.n_indels_placed}"
+            )
+
+
 class PanelPlacement:
     """How a completion's panel blocks placed their rows, for its log and its
     record (`provenance.completion.panel_indels` and `panel_snvs_unplaced`,
-    ADR 0079).
+    ADR 0079), and each block's own placement, which the read that completes
+    it must repeat (`BlockPlacement`).
 
     A panel with neither a `REF` column nor an indel-reference table places no
-    indel; its blocks are still read, its indels count as missing where a fill
-    would land, and the record says why. Every count is summed over LD blocks:
-    an indel on a block boundary counts once per block.
+    indel; its blocks are still read, its indels are no row of the Store, so
+    `completion_quality` counts them nowhere, and this record says why. Every count
+    is summed over LD blocks: an indel on a block boundary counts once per block.
     """
 
     def __init__(self) -> None:
@@ -278,8 +329,10 @@ class PanelPlacement:
         self.n_placed = 0
         self.unplaced_indels = Counter({reason: 0 for reason in INDEL_UNPLACED_REASONS})
         self.unplaced_snvs = Counter({reason: 0 for reason in SNV_UNPLACED_REASONS})
+        self.blocks: dict[Path, BlockPlacement] = {}
 
     def add(self, block: LDBlock) -> None:
+        self.blocks[block.tsv_path] = BlockPlacement.of(block)
         self.sources.add(block.indel_reference)
         if block.indel_reference == "table":
             table = indel_reference_table(block.tsv_path.parent.parent)
@@ -610,22 +663,6 @@ def load_block(tsv_path: Path) -> LDBlock | None:
     )
 
 
-def find_blocks(
-    ld_dir: str | Path,
-    ancestry: str,
-    chrom: str,
-    start_bp: int,
-    end_bp: int,
-) -> list[LDBlock]:
-    """Return all LD blocks whose genomic extent intersects [start_bp, end_bp]."""
-    blocks: list[LDBlock] = []
-    for block in list_all_blocks(ld_dir, ancestry, chrom):
-        if block.end_bp < start_bp or block.start_bp > end_bp:
-            continue
-        blocks.append(block)
-    return blocks
-
-
 def blocks_over_variants(
     ld_dir: str | Path,
     ancestry: str,
@@ -761,8 +798,8 @@ class LdPanelNotFoundError(Exception):
 def check_panel_has_chromosomes(ld_dir: str | Path, ancestry: str) -> None:
     """Raise if the panel has no chromosome directory for *ancestry*.
 
-    `list_all_blocks`/`find_blocks` treat a missing `ld_dir/{ancestry}/{chr}`
-    as "no blocks here" and return `[]` -- correct when scanning one
+    `list_all_blocks` treats a missing `ld_dir/{ancestry}/{chr}`
+    as "no blocks here" and returns `[]` -- correct when scanning one
     chromosome a real panel simply has nothing on, wrong when `ld_dir` or
     `ancestry` is misconfigured: every chromosome then reports the same empty
     result, and completion runs to a successful finish with the "0 imputed"

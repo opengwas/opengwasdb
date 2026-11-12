@@ -185,8 +185,12 @@ that is the unit a query reads.
 Decision 2 above held `CURRENT_FORMAT_VERSION` at `0.1.0` "until #247". This
 addendum records what #247 did, and one decision the ticket left open.
 
-**One version constant.** `CURRENT_FORMAT_VERSION` is `0.2.0` and is what the
-converter *writes*; the converter's source version is its own
+**One version constant.** (Amended by issue #430: a build now stamps each release
+the lowest version its features use, `format_version_for` (ADR 0038 §3 as amended,
+spec §21.3); the converter stamps by the same rule, `0.2.0` for every release it
+converts, and `CURRENT_FORMAT_VERSION` stays `0.2.0`, the stamp of a release that uses
+no optional feature.)
+`CURRENT_FORMAT_VERSION` is `0.2.0` and is what the converter *writes*; the converter's source version is its own
 `SOURCE_FORMAT_VERSION = "0.1.0"`.  There is no second target constant.  A
 built release and a converted release therefore declare the same format and
 carry the same physical layout, which is what #249 checks.  The interim of

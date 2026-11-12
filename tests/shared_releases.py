@@ -67,6 +67,7 @@ def panel_only_eaf_ragged(root: Path) -> Path:
     its panel are `test_eaf_encoding_layouts`' fixtures, and that module's
     completion tests read the same pair.
     """
+    from region_tables import every_analysis, with_regions
     from test_eaf_encoding_layouts import _ld_panel, _write_ssf_sources
 
     filtered = root / "ssf-nofreq"
@@ -81,6 +82,8 @@ def panel_only_eaf_ragged(root: Path) -> Path:
         allow_unverified_eaf=True,
         association_coverage="cis_and_signals",
     )
+    # Its Analyses have no Trait position: their regions are its regions.tsv's (#430).
+    with_regions(source, every_analysis(source, "significant_trans", "1", 100, 900))
     completed = root / "completed.opengwasdb"
     complete_ragged_store(
         source, completed, _ld_panel(root), ancestry="EUR", min_cor=0.0, thresh=0.99

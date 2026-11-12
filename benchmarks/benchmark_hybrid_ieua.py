@@ -38,7 +38,7 @@ from scipy.special import erfc
 
 from opengwasdb.completion.ld_panel import list_all_blocks, list_chromosomes
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
-from opengwasdb.layouts.dense.complete import _canonical_panel_alid, complete_dense_store
+from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.query import query_store
@@ -79,16 +79,14 @@ def _write_manifest(work: Path) -> Path:
 
 def _extract_panel(ld_dir: Path, ancestry: str, out_path: Path) -> int:
     """Write the reference-panel ALID list (the Dense Component axis) from the LD
-    reference panel, so 'dense' == 'imputable' exactly."""
+    reference panel, so 'dense' == 'imputable' exactly: each block's ALIDs as
+    completion names them (`LDBlock.alids`, an indel spelt reference first)."""
     if out_path.exists():
         return sum(1 for _ in out_path.open())
     alids: set[str] = set()
     for chrom in list_chromosomes(ld_dir, ancestry):
         for block in list_all_blocks(ld_dir, ancestry, chrom):
-            for snp_id in block.snp_ids:
-                ca = _canonical_panel_alid(snp_id)
-                if ca is not None:
-                    alids.add(ca)
+            alids.update(alid for alid in block.alids if alid is not None)
     with out_path.open("w") as fh:
         for a in sorted(alids):
             fh.write(a + "\n")

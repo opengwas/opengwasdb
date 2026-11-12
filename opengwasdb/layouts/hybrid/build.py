@@ -187,7 +187,7 @@ from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.readers.column_map import ColumnMap, as_column_map, load_column_map
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import open_source
-from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
+from opengwasdb.store.open import OpenGWASDBStore, StagedRelease, format_version_for
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.axis import sorted_alids
@@ -3662,7 +3662,8 @@ def _write_hybrid_manifest(
         encoding=encoding,
         store_id=store_id,
         release_id=release_id,
-        format_version=CURRENT_FORMAT_VERSION,
+        # No region table; indels reference first, as every build (§21.3, ADR 0079).
+        format_version=format_version_for(carries_regions=False, reference_first_indels=True),
         primary_layout=PrimaryStorageLayout.HYBRID,
         association_coverage=association_coverage,
         completion_state=CompletionState.OBSERVED_ONLY,
