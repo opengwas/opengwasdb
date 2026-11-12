@@ -62,6 +62,19 @@ def shown_fill(fill: object) -> str:
     return f'"{fill}"' if isinstance(fill, str) else str(fill)
 
 
+def refused_if_lost(array: zarr.Array[Any], values: npt.NDArray[Any]) -> npt.NDArray[Any]:
+    """`values` read from `array`, unless one is a value no LD Store holds there, as its fill
+    value is: that is a chunk the store lost, and decoding it would be inventing data."""
+    lost = never_data(array.path, values)
+    if lost.any():
+        raise ValueError(
+            f"{array.path} read {int(lost.sum())} element(s) no LD Store holds there, as its "
+            f"fill value {shown_fill(array.fill_value)} is: a chunk the store lost, never data "
+            "(spec §3, §6)"
+        )
+    return values
+
+
 #: The keys of one record of `variants.attrs["chromosomes"]` (spec §2).
 CHROMOSOME_KEYS: Final = ("name", "row_start", "row_stop")
 

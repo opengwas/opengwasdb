@@ -48,7 +48,7 @@ from ogld.format.geometry import (
     within,
 )
 from ogld.identity import alid_locus
-from ogld.store.layout import chromosomes_listed, never_data, shown_fill
+from ogld.store.layout import chromosomes_listed, never_data, refused_if_lost, shown_fill
 from ogld.store.location import ChunkCache, open_group
 from ogld.store.tables import Partners, Variants
 
@@ -616,7 +616,7 @@ class StoreReader:
     ) -> list[npt.NDArray[Any]]:
         """The ragged runs of `array` (spec §10), each one slice, through the chunk cache;
         a lost chunk refused."""
-        return [_refused_if_lost(array, run) for run in self._cache.runs(array, first, length)]
+        return [refused_if_lost(array, run) for run in self._cache.runs(array, first, length)]
 
     def _chromosome(self, name: str) -> _Chromosome:
         """One chromosome's kept arrays, read on first use (spec §10). Each of its five arrays'
@@ -632,7 +632,7 @@ class StoreReader:
                 name,
                 start,
                 stop,
-                _refused_if_lost(position, np.asarray(position[start:stop])).astype(np.int64),
+                refused_if_lost(position, np.asarray(position[start:stop])).astype(np.int64),
                 _indptr(near_indptr),
                 near_r,
                 _Sparse(_indptr(index_indptr), index_partner, index_r),
@@ -667,7 +667,7 @@ class StoreReader:
 
     def _read(self, array: zarr.Array[Any], coords: npt.NDArray[np.int64]) -> npt.NDArray[Any]:
         """The elements of `array` at `coords`, through the chunk cache; a lost chunk refused."""
-        return _refused_if_lost(array, self._cache.take(array, coords))
+        return refused_if_lost(array, self._cache.take(array, coords))
 
     def _checked(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
         """`rows`, if every one is a row of the Variant Set. An Absent ALID is −1 from `rows_of`
@@ -776,19 +776,6 @@ def _loci(
     }
 
 
-def _refused_if_lost(array: zarr.Array[Any], values: npt.NDArray[Any]) -> npt.NDArray[Any]:
-    """`values` read from `array`, unless one is a value no LD Store holds there, as its fill
-    value is: that is a chunk the store lost, and decoding it would be inventing data."""
-    lost = never_data(array.path, values)
-    if lost.any():
-        raise ValueError(
-            f"{array.path} read {int(lost.sum())} element(s) no LD Store holds there, as its "
-            f"fill value {shown_fill(array.fill_value)} is: a chunk the store lost, never data "
-            "(spec §3, §6)"
-        )
-    return values
-
-
 def _group(root: zarr.Group, path: str) -> zarr.Group:
     member = root[path]
     assert isinstance(member, zarr.Group)
@@ -819,4 +806,4 @@ def _kept_array(root: zarr.Group, path: str) -> zarr.Array[Any]:
 
 
 def _indptr(array: zarr.Array[Any]) -> npt.NDArray[np.int64]:
-    return _refused_if_lost(array, np.asarray(array[:]).astype(np.int64))
+    return refused_if_lost(array, np.asarray(array[:]).astype(np.int64))

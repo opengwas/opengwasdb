@@ -53,14 +53,20 @@ from ogld.format import (
     t_far,
 )
 from ogld.format.geometry import (
+    blocks,
     chromosome_index,
     indptr_of,
     near_row_lengths,
+    owners,
     spans_at,
     stop_within,
+    within,
 )
 from ogld.store import layout
 
+#: Proxy Index entries `derive_far_pairs` reads at once, or one row's when it holds more: 8 Mi
+#: entries are 48 MiB of `partner` and `r`, and about 200 MiB as they are judged.
+DERIVE_ENTRIES: Final = 1 << 23
 #: The rows of one bucket of the Proxy Index's carried pairs. Pairs are carried by the bucket
 #: their later row falls in, so a bucket is freed once its rows are written. Only the pairs of
 #: one partly written bucket are held beyond those spanning the row being written.
@@ -509,6 +515,41 @@ class FarPairsStream:
         layout.put_numbers(self._group, "indptr", indptr_of(self._counts), layout.INT64_FILL)
         self._partner.close()
         self._codes.close()
+
+
+def derive_far_pairs(
+    root: zarr.Group, name: str, position: npt.NDArray[np.int64], near_bp: int, encoding: REncoding
+) -> int:
+    """Write chromosome `name`'s Far Pairs from its own Proxy Index, for a store written before
+    they came back (ADR 0006), and return how many. They are its entries beyond near_bp in each
+    pair's earlier row (spec §5), read a block of rows at a time and written in row order through
+    `FarPairsStream`, as a store being built writes them, so the arrays are a build's, byte for
+    byte. The index is not changed. An index element no store holds, which is what a lost chunk
+    reads as, is refused, naming its array, rather than read as a row without Far Pairs.
+    """
+    index = root[f"index/{name}"]
+    assert isinstance(index, zarr.Group)
+    indptr = _whole(index, "indptr")
+    stream = FarPairsStream(root.require_group(f"far/{name}"), len(indptr) - 1, encoding)
+    written = 0
+    for a, b in blocks((indptr, DERIVE_ENTRIES)):
+        span = slice(int(indptr[a]), int(indptr[b]))
+        partner, codes = _whole(index, "partner", span), _whole(index, "r", span)
+        owner = owners(np.diff(indptr[a : b + 1]), np.arange(a, b, dtype=np.int64))
+        far = (partner > owner) & ~within(position[partner] - position[owner], near_bp)
+        stream.add(b - a, owner[far].astype(np.int32), partner[far].astype(np.int32), codes[far])
+        written += int(far.sum())
+    stream.close()
+    return written
+
+
+def _whole(group: zarr.Group, name: str, span: slice = slice(None)) -> npt.NDArray[Any]:
+    """Elements `span` of the array `name`, refused where one is a value no store holds there;
+    an `indptr` or a `partner` as int64."""
+    array = group[name]
+    assert isinstance(array, zarr.Array)
+    values = layout.refused_if_lost(array, np.asarray(array[span]))
+    return values if name == "r" else values.astype(np.int64)
 
 
 @dataclass

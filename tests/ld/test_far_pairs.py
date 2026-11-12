@@ -19,6 +19,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 import zarr
+from script_modules import load_script
 from store_copies import TEST_STORE, copy_store, resharded
 
 import ogld
@@ -145,3 +146,51 @@ def test_a_store_without_far_pairs_is_refused_naming_them(tmp_path: Path) -> Non
     shutil.rmtree(copy / "far")
     with pytest.raises(ValueError, match=r"far/2[12]/indptr is missing"):
         ogld.open(copy).matrix(every_alid())
+
+
+# ------------------------------------------------------------------ stores written before them
+
+
+def files(store: Path, under: str = "") -> dict[str, bytes]:
+    """Every file of `store` under `under`, by path, with its bytes."""
+    root = store / under
+    return {str(p.relative_to(store)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+def without_far_pairs(to: Path) -> Path:
+    """A copy of the Test Store as a store written before ADR 0006 holds it: no far/."""
+    copy = copy_store(to)
+    shutil.rmtree(copy / "far")
+    return copy
+
+
+def test_far_pairs_derived_from_the_index_are_the_ones_the_store_writes(tmp_path: Path) -> None:
+    # The five HGDP+1kGP stores were written before the Far Pairs came back; deriving theirs
+    # from each store's own index must write what a build writes, byte for byte, and nothing
+    # else: not an array, and not the provenance.
+    committed = files(TEST_STORE, "far")
+    assert len(committed) == 15, "the Test Store's far/ must be compared whole"
+    copy = without_far_pairs(tmp_path / "store")
+    before = files(copy)
+    assert load_script("derive_far_pairs").derive(copy) == 7, "the Test Store's seven"
+    after = files(copy)
+    assert {path: data for path, data in after.items() if not path.startswith("far/")} == before
+    assert {path: data for path, data in after.items() if path.startswith("far/")} == committed
+    assert not any(ogld.validate(copy).values())
+
+
+def test_a_store_that_holds_far_pairs_is_not_derived_again(tmp_path: Path) -> None:
+    copy = copy_store(tmp_path / "store")
+    before = files(copy)
+    with pytest.raises(SystemExit, match="far/ already"):
+        load_script("derive_far_pairs").derive(copy)
+    assert files(copy) == before
+
+
+def test_a_lost_index_chunk_is_refused_never_read_as_no_far_pair(tmp_path: Path) -> None:
+    # A lost chunk reads as the fill value, partner −1, which is no pair above its row: read as
+    # data, it would silently drop the Far Pairs it held.
+    copy = without_far_pairs(tmp_path / "store")
+    shutil.rmtree(copy / "index" / "22" / "partner" / "c")
+    with pytest.raises(ValueError, match=r"index/22/partner read .* fill value -1"):
+        load_script("derive_far_pairs").derive(copy)
