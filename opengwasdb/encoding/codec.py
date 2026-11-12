@@ -711,12 +711,7 @@ def eaf_exception_table(bands: Sequence[EafExceptionTable]) -> EafExceptionTable
     order its workers *finished* is refused by the table's own rule (the index
     would no longer ascend), instead of writing a table no lookup can read.
     """
-    if not bands:
-        return EafExceptionTable.empty()
-    return EafExceptionTable(
-        index=np.concatenate([band.index for band in bands]),
-        value=np.concatenate([band.value for band in bands]),
-    )
+    return table_end_to_end(EafExceptionTable, bands)
 
 
 @dataclass(frozen=True)

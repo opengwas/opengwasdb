@@ -24,6 +24,7 @@ from opengwasdb.encoding.codec import (
     require_parallel,
     se_float16,
     se_residual_codes,
+    table_end_to_end,
 )
 from opengwasdb.encoding.measure import packed_chunk_bytes, solve_log_se
 from opengwasdb.encoding.plan import (
@@ -923,31 +924,14 @@ def write_dense_se_side_arrays(
     For a writer that coded the plane itself, row band by row band, rather than
     rewriting a `float32` scratch plane (Reference Completion, #321). `tables`
     are the bands' exception runs in row order: each band's flat positions are
-    one contiguous run, so laid end to end they are already the sorted table,
-    and one written out of order is refused rather than sorted into place. The
-    arrays are made exactly as `_rewrite_arrays` and `_finish_rewrite` make
-    them, sized to the count and written once (#249), so the release is the
-    one the rewrite wrote.
+    one contiguous run, so laid end to end they are already the sorted table
+    (`table_end_to_end`), and runs out of order are refused rather than sorted
+    into place. The arrays are made exactly as `_rewrite_arrays` and
+    `_finish_rewrite` make them, sized to the count and written once (#249), so
+    the release is the one the rewrite wrote.
     """
-    index = (
-        np.concatenate([table.index for table in tables])
-        if tables
-        else np.empty(0, dtype=np.int64)
-    )
-    value = (
-        np.concatenate([table.value for table in tables])
-        if tables
-        else np.empty(0, dtype=np.float32)
-    )
-    require_parallel(
-        (("se_exception_index", index), ("se_exception_value", value)),
-        where="the Dense SE plane's exception table",
-    )
-    if len(index) > 1 and np.any(index[1:] <= index[:-1]):
-        raise ValueError(
-            "the SE exception runs do not ascend: the bands were laid end to end out of "
-            "row order, or one cell was coded twice"
-        )
+    table = table_end_to_end(SeExceptionTable, tables)
+    index, value = table.index, table.value
     seam = compressor()
     exception_index, exception_value = _empty_exception_arrays(group, len(index), seam)
     exception_index[0 : len(index)] = index

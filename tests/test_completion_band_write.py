@@ -407,5 +407,5 @@ def test_se_exception_runs_out_of_band_order_are_refused(tmp_path: Path) -> None
 
     write_dense_se_side_arrays(root, [early, late], coefficients)
     assert list(np.asarray(root["se_exception_index"][:])) == [3, 7, 60]
-    with pytest.raises(ValueError, match="do not ascend"):
+    with pytest.raises(ValueError, match="se exception table index must be sorted"):
         write_dense_se_side_arrays(root, [late, early], coefficients)
