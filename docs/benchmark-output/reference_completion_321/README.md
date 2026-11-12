@@ -6,7 +6,12 @@ at `3fe26e9`, before #361 merged in, as the artifacts record; the branch was
 then rebuilt so that each commit passes its tests, and that commit is now
 `5ef19c2`, with the same `opengwasdb/` tree (`3360f41`) and `benchmarks/` tree
 (`8a87126`). The 8-band OGS-00009 profile, the pilots and the pool-memory run
-ran at `25530c9`, after #361 merged in.
+ran at `25530c9`, after #361 merged in, as their artifacts record. That commit
+was rebuilt too, so that each commit passes the array-creation guard, and is
+now `7a50a8d`: its `benchmarks/` tree is the same (`ff354cf`), and its
+`opengwasdb/` tree differs in one line, the empty table `table_end_to_end`
+returns for no runs at all, which no measured run reached (each had at least
+one band or region).
 Each timing pair ran in fresh processes. The pilots ran interleaved under the
 run's timing lock. The OGS-00009 profiles ran base beside head, at the same
 moment. Each artifact records the host load it ran under.
