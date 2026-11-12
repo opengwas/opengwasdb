@@ -613,51 +613,46 @@ def test_a_ragged_sequence_shard_is_written_exactly_once(
 
 
 def test_the_dense_se_exception_tables_are_written_once(tmp_path: Path) -> None:
-    """The Dense SE rewrite writes each exception table in one whole-array write (#249).
+    """Dense completion writes each SE exception table in one whole-array write (#249).
 
-    `se_exception_index`/`_value` are single-shard tables. Before this fix the
-    rewrite wrote each band's exception run into them, one read-modify-write of
-    the whole table per band (about 99 on OGS-00008's 9.85 M rows). Three bands,
-    each with an exact exception, must now produce one write per table.
+    `se_exception_index`/`_value` are single-shard tables, so a write per row
+    band would be a read-modify-write of the whole table per band (about 99 on
+    OGS-00008's 9.85 M rows). The band write codes SE band by band and hands
+    the bands' runs to `write_dense_se_side_arrays`, which writes each table
+    once (#321): three bands, each with an exact exception, make one write per
+    table.
     """
-    from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
-    from opengwasdb.encoding.se import rewrite_dense_se
+    from opengwasdb.encoding import SeExceptionTable, write_dense_se_side_arrays
 
-    n_rows = 250_000
-    plan = StoreEncoding(
-        z=ZEncoding("float16"), se=SeEncoding("int8_residual", 0.5), eaf=EafEncoding("float32")
-    )
     root = open_group_for_write(tmp_path / "data.zarr", "w", zarr_format=3)
-    eaf = np.linspace(0.1, 0.9, n_rows, dtype="float32")[:, None]
-    coefficients = np.array([[np.log(0.03), -0.5]], dtype="float32")
-    predictor = np.log(2 * eaf[:, 0] * (1 - eaf[:, 0]))
-    se = np.exp(coefficients[0, 0] + coefficients[0, 1] * predictor).astype("float32")[:, None]
-    # One exact exception (0.0) in each of the three 100,000-row shard bands.
-    se[[5, 150_000, 240_000], 0] = 0.0
-    for name, values in (("eaf", eaf), ("se", se), ("z", np.ones_like(se, dtype="float16"))):
-        array = create_array(
-            root,
-            name,
-            ArrayRole.DENSE_STATISTIC_PLANE,
-            shape=(n_rows, 1),
-            dtype=str(values.dtype),
-            compressor=sharded_compressor(),
-        )
-        array[:] = values
-    # Assert the fixture is three shard-aligned bands before counting anything.
-    assert tuple(int(size) for size in root["se"].shards) == (100_000, 1)
+    runs = [
+        SeExceptionTable(np.array([position], np.int64), np.array([0.0], np.float32))
+        for position in (5, 150_000, 240_000)
+    ]
     with count_shard_writes() as recorder:
-        rewrite_dense_se(root, plan, coefficients)
+        write_dense_se_side_arrays(root, runs, np.array([[np.log(0.03), -0.5]], "float32"))
     written = recorder.chunk_writes()
     for name in ("se_exception_index", "se_exception_value"):
         assert written.get(name), (name, written)
         assert set(written[name].values()) == {1}, (name, written[name])
     assert list(np.asarray(root["se_exception_index"][:])) == [5, 150_000, 240_000]
-    # The residual rewrite must resolve each array's Blosc `typesize` from its
-    # own dtype, not the float32 scratch plane it replaced (issue #326).
-    assert int(root["se"].compressors[0].typesize) == 1, (
-        root["se"].compressors[0].typesize
+
+
+def test_the_completed_se_plane_is_compressed_for_its_own_dtype(tmp_path: Path) -> None:
+    """Dense completion creates its `int8` SE plane directly, with the seam's
+    compressor resolved for that dtype: its Blosc `typesize` is the plane's own
+    itemsize, not a `float32` scratch plane's (issue #326)."""
+    from opengwasdb.encoding import StoreCodec
+    from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+    from opengwasdb.layouts.dense.complete import _create_completed_planes
+
+    plan = StoreEncoding(
+        z=ZEncoding("float16"), se=SeEncoding("int8_residual", 0.5), eaf=EafEncoding("float32")
     )
-    assert int(root["se_exception_index"].compressors[0].typesize) == 8, (
-        root["se_exception_index"].compressors[0].typesize
-    )
+    root = open_group_for_write(tmp_path / "data.zarr", "w", zarr_format=3)
+    _create_completed_planes(root, StoreCodec(plan), 250_000, 1, (1000, 1), src_has_eaf=True)
+
+    assert root["se"].dtype == np.int8
+    assert int(root["se"].compressors[0].typesize) == 1, root["se"].compressors[0].typesize
+
+
