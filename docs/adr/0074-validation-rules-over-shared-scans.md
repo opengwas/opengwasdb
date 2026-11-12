@@ -413,8 +413,11 @@ decided, as it would have been. On a target no fold reads, its own read is the s
 page walk.
 
 **Measured**, base `723cac0` against head `a3c7355`, each pair started at the same
-moment on a shared host (load average 2 to 33 over the runs), `uptime` sampled every
-five minutes and each process's own `VmHWM` every 30 seconds:
+moment on a shared host, `uptime` sampled every five minutes and each process's own
+`VmHWM` every 30 seconds. OGS-00009's pair ran from 04:32 to 07:58 UTC, inside the
+nightly backup window (load average 1.5 to 83 in its five-minute samples), so its
+absolute times are inflated by that load; base and head ran side by side and saw the
+same load, so their ratio stands, and #322 re-measures validation end to end:
 
 | | base | head |
 |---|---|---|
@@ -431,12 +434,42 @@ Head's `subsets.indexed` is the read of the index alone; the planes are read onc
 the scan, which the digests cost 2% on OGS-00009. OGS-00015's 31,306-entry table is
 one inner chunk, so base's per-band lookups read it whole for every band: 511 times
 its size. Head reads each entry once, as it reads OGS-00009's 8,621 (103,452 bytes).
-Both peaks are the association scan's working set, reached in its first half hour;
-nothing the rides hold -- a digest per unit, the subset's exception cells and its
-share of the per-variant arrays -- moved them. `validate --format json` is the same to
-the byte on both Stores, on the seven published Stores #387 compared (OGS-00001 to
--00006 and -00008, text and JSON), and on #387's ten Indexed Variant Subset fixtures,
-clean and corrupted, Dense and Hybrid.
+Both peaks are the association scan's working set, reached in its first half hour.
+`validate --format json` is the same to the byte on both Stores, on the seven published
+Stores #387 compared (OGS-00001 to -00006 and -00008, text and JSON), and on #387's ten
+Indexed Variant Subset fixtures, clean and corrupted, Dense and Hybrid.
+
+Measured again once the key was drawn per run, head `05d1f52` against the integration
+tip `b49c1cb`, side by side from 14:09 UTC on 12 Nov (load average 4 to 43), sampled as
+above, with a counter of every read of the release's EAF exception table:
+
+| | tip | head |
+|---|---|---|
+| OGS-00016 (27,929,380 x 1,691), a full `validate` | 18,080 s | 8,951 s |
+| its `subsets.indexed` | 9,313.6 s | 318.8 s |
+| its Dense association scan | 8,650.8 s | 8,526.2 s |
+| its peak RSS | 3.03 GiB | 3.01 GiB |
+| its EAF exception table, bytes read in the pass | 35,615,471,496 in 32,796 reads | 2,844,330,264 in 1,810 reads |
+| OGS-00011's Dense Component (14,267,257 x 3,169), head alone | | 16,250 s |
+| its `subsets.indexed` | 16,904.3 s at #387's head | 874.6 s |
+| its Dense association scan | 14,677.1 s at #387's head | 14,497.2 s |
+| its peak RSS | 8.30 GiB at #387's head | 8.24 GiB |
+| its EAF exception table, bytes read in the pass | | 13,643,892,492 in 8,676 reads |
+
+OGS-00016's table, 237,027,522 entries, is read once in 905 pages, where the tip read it
+12.5 times over; OGS-00011's 1,136,991,041 are read once in 4,338. On both, every unit's
+digests agreed (0 of 1,128 and 0 of 2,114 compared cell by cell). OGS-00011's ride keeps
+its HapMap3 subset's 21,157,534 exception cells, about 254 MB, through the whole scan
+rather than after it, and its peak, reached as the scan ends, is #387's. Both JSON reports
+are byte-identical: OGS-00016's tip and head (661 bytes), OGS-00011's head and #387's
+(1,687 bytes). On OGS-00011's Overflow the pass reads its 124,961,622-entry table once
+too; `by_variant.sample` still looks entries up in it for its sample, outside the pass.
+
+A corrupted real subset is found as before: in scratch copies of OGS-00015, one Z cell
+of `hm3` bumped by a code, at a slot whose primary row the scan reads in its 138th band,
+and separately two Z cells of one unit exchanged, each give the tip's finding, its JSON
+byte-identical; head compares one of the three units it reaches cell by cell, the one
+whose digests disagreed.
 
 ## Alternatives considered
 
