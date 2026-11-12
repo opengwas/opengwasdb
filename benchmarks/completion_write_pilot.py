@@ -121,15 +121,32 @@ class ScratchPeak:
         self._thread.join()
 
 
-def _timed(owner, name: str, timings: dict) -> None:
+#: The phases whose pool workers' private memory is sampled, every 0.2 s.
+_POOLED = (
+    "_merge_checkpoint_fills", "_write_completed_bands", "shard_checkpoint_fills",
+    "_assemble_completed_csr", "flush_regions",
+)
+
+
+def _timed(owner, name: str, timings: dict, memory: dict | None = None) -> None:
+    """Charge `owner.name`'s wall time to `timings`, and for a pooled phase its
+    workers' peak private memory to `memory`."""
+    from benchmarks.profile_reference_completion import WorkerMemory
+
     original = getattr(owner, name)
 
     def wrapped(*args, **kwargs):
         started = time.monotonic()
+        sampler = WorkerMemory(0.2) if memory is not None and name in _POOLED else None
         try:
-            return original(*args, **kwargs)
+            if sampler is None:
+                return original(*args, **kwargs)
+            with sampler:
+                return original(*args, **kwargs)
         finally:
             timings[name] = timings.get(name, 0.0) + time.monotonic() - started
+            if sampler is not None:
+                memory[name] = sampler.summary()
 
     setattr(owner, name, wrapped)
 
@@ -147,6 +164,7 @@ def resume(template: Path, dst: Path, n_workers: int, out: Path) -> None:
     params["dest_path"] = str(dst.resolve())
     params_path.write_text(json.dumps(params, indent=2, sort_keys=True) + "\n")
     timings: dict[str, float] = {}
+    memory: dict[str, dict] = {}
     layout = _layout(params)
     if layout == "dense":
         from opengwasdb.layouts.dense import complete as module
@@ -154,7 +172,7 @@ def resume(template: Path, dst: Path, n_workers: int, out: Path) -> None:
         for name in ("_build_union_axis", "_complete_pending_blocks", "_merge_checkpoint_fills",
                      "_write_completed_bands", "_write_completed_manifest",
                      "_completed_analysis_rows", "_finalise_release"):
-            _timed(module, name, timings)
+            _timed(module, name, timings, memory)
         resume_fn = module.resume_dense_completion
     else:
         from opengwasdb.layouts.ragged import complete as module
@@ -162,14 +180,14 @@ def resume(template: Path, dst: Path, n_workers: int, out: Path) -> None:
         for name in ("_read_source_state", "_plan_blocks", "_merged_axis", "_encode_plan",
                      "_run_pending_blocks", "_analysis_batches", "_assemble_completed_csr",
                      "_write_completed_zarr", "_write_top_hits_and_analyses"):
-            _timed(module, name, timings)
-        _timed(fill_shards, "shard_checkpoint_fills", timings)
+            _timed(module, name, timings, memory)
+        _timed(fill_shards, "shard_checkpoint_fills", timings, memory)
         _timed(module, "build_variant_index", timings)
         from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 
         for name in ("write_eaf_plane", "_write_n_plane", "flush_se", "flush_regions"):
             if hasattr(RaggedCSRWriter, name):
-                _timed(RaggedCSRWriter, name, timings)
+                _timed(RaggedCSRWriter, name, timings, memory)
         resume_fn = module.resume_ragged_completion
     started = time.monotonic()
     with ScratchPeak(dst) as scratch:
@@ -183,6 +201,7 @@ def resume(template: Path, dst: Path, n_workers: int, out: Path) -> None:
         "n_workers": n_workers,
         "wall_seconds": wall,
         "phase_seconds": timings,
+        "pool_worker_memory": memory,
         "peak_scratch_bytes": scratch.peak,
         "release_bytes": _tree_bytes(dst),
         "uptime": os.getloadavg(),

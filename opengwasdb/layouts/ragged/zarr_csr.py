@@ -1155,10 +1155,11 @@ class RaggedCSRWriter:
             plane[lo:hi] = self._gather_imputed(offsets, lo, hi)
 
 
-#: What one region's worker holds a cell, measured on the old split flush at
-#: 79 bytes (#249) and rounded up for the one-pass encode's `float64`
-#: intermediates; and the fork's floor.
-_REGION_BYTES_PER_CELL = 128
+#: What one region's worker holds a cell, and the fork's floor. Measured on the
+#: OGS-00006 100-Analysis subset, a region worker held 5.15 GB private for a
+#: 50 M-cell region and 0.55 GB for a 5.3 M-cell one: 103 bytes a cell, with
+#: next to nothing fixed (#321). Rounded up by a sixth.
+_REGION_BYTES_PER_CELL = 120
 _REGION_FIXED_BYTES = 256 * 1024**2
 
 

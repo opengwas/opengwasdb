@@ -1094,12 +1094,16 @@ class _Assembly:
     block_rows: dict[str, _BlockRows]
 
 
-#: An Analysis's worker holds, beside the cells it reads and completes, a few
-#: masks and an `int64` position over the whole merged axis: about 11 bytes a
-#: variant, rounded up here, and per completed row its read and its arrays.
+#: An Analysis's worker holds a few masks and an `int64` position over the
+#: whole merged axis, and per row of its Analysis its read and its completed
+#: arrays. Measured on the OGS-00006 100-Analysis subset (11.5 M variants), its
+#: workers held 122 MB private for a typical Analysis -- 10.6 bytes a variant --
+#: and 264 MB for its largest, 6.69 M rows: 21 bytes a row more (#321). Each is
+#: rounded up by half again, since a 0.2 s sample can miss a short peak, and the
+#: fixed part covers the fork's floor.
 _ASSEMBLY_FIXED_BYTES = 256 * 1024**2
 _ASSEMBLY_BYTES_PER_VARIANT = 16
-_ASSEMBLY_BYTES_PER_ROW = 96
+_ASSEMBLY_BYTES_PER_ROW = 32
 
 
 #: What the parent's writer holds for each completed row: its variant index,
