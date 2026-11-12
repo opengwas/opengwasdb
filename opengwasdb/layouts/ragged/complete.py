@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -64,7 +65,7 @@ from opengwasdb.completion.manifest import (
     build_completion_provenance,
     completed_release_manifest,
 )
-from opengwasdb.completion.parallel import run_block_tasks
+from opengwasdb.completion.parallel import ordered_write, run_block_tasks, write_workers
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.regions import analysis_regions, inside, region_blocks
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
@@ -1054,12 +1055,67 @@ def _checkpoint_and_assemble(
         union_rows_s,
         len(axis.variants),
         fill_shards.by_analysis_batch(batch_of),
+        n_workers=n_workers,
     )
     print(f"Wrote {quality_count:,} completion quality rows")
-    csr = _assemble_completed_csr(plan, axis, block_rows, fill_shard_dir, batch_of, eaf_reference)
+    csr = _assemble_completed_csr(
+        _Assembly(plan, axis, block_rows), fill_shard_dir, batch_of, eaf_reference, n_workers
+    )
     shutil.rmtree(fill_shard_dir)
     print(f"Completion done: {csr.total_imputed:,} imputed, {csr.total_missing:,} missing")
     return csr
+
+
+@dataclass(frozen=True)
+class _Assembly:
+    """What assembling any Analysis reads: made by the parent before the write
+    pool forks, and inherited by its workers rather than pickled
+    (`ordered_write`)."""
+
+    plan: _BlockPlan
+    axis: _MergedAxis
+    block_rows: dict[str, _BlockRows]
+
+
+#: An Analysis's worker holds, beside the cells it reads and completes, a few
+#: masks and an `int64` position over the whole merged axis: about 11 bytes a
+#: variant, rounded up here, and per completed row its read and its arrays.
+_ASSEMBLY_FIXED_BYTES = 256 * 1024**2
+_ASSEMBLY_BYTES_PER_VARIANT = 16
+_ASSEMBLY_BYTES_PER_ROW = 96
+
+
+def _assembly_bytes(n_variants: int, max_rows: int) -> int:
+    """Bytes one Analysis's worker holds, for the largest Analysis."""
+    return (
+        _ASSEMBLY_FIXED_BYTES
+        + _ASSEMBLY_BYTES_PER_VARIANT * n_variants
+        + _ASSEMBLY_BYTES_PER_ROW * max_rows
+    )
+
+
+def _complete_analysis(assembly: _Assembly, item: tuple[int, np.ndarray]) -> _AnalysisCompleted:
+    """One Analysis's completed rows; runs in a write-pool worker."""
+    ai, fills = item
+    return _completed_analysis(
+        ai,
+        source=assembly.plan.source,
+        src_alids=assembly.plan.state.src_alids,
+        axis=assembly.axis,
+        reference=_region_rows(assembly.plan, assembly.block_rows, ai),
+        fills=fills,
+    )
+
+
+def _analysis_fills(
+    fill_shard_dir: Path, batch_of: np.ndarray
+) -> Iterator[tuple[int, np.ndarray]]:
+    """Each Analysis in order with its fills, one batch's shard read at a time."""
+    no_fills = np.empty(0, dtype=fill_shards.FILL_RECORD_DTYPE)
+    for batch in range(int(batch_of[-1]) + 1 if len(batch_of) else 0):
+        fills = _batch_fills(fill_shard_dir, batch)
+        for ai in np.flatnonzero(batch_of == batch).tolist():
+            yield ai, fills.pop(ai, no_fills)
 
 
 def _batch_fills(fill_shard_dir: Path, batch: int) -> dict[int, np.ndarray]:
@@ -1077,50 +1133,57 @@ def _batch_fills(fill_shard_dir: Path, batch: int) -> dict[int, np.ndarray]:
 
 
 def _assemble_completed_csr(
-    plan: _BlockPlan,
-    axis: _MergedAxis,
-    block_rows: dict[str, _BlockRows],
+    assembly: _Assembly,
     fill_shard_dir: Path,
     batch_of: np.ndarray,
     eaf_reference: np.ndarray | None,
+    n_workers: int = 1,
 ) -> _CompletedCsr:
     """Phase 3 assembly: each Analysis's completed rows -- remapped observed
     rows, its fills and its missing block positions, sorted by variant index --
     added to the writer in Analysis order, one batch's fill shard read at a
     time. The writer judges each Analysis whole (`storable`); as a completion's
     (`ReferenceCompletion`), it logs the SEs above `float16`'s range once, as
-    it writes, naming every Analysis."""
+    it writes, naming every Analysis.
+
+    The Analyses are completed across ``n_workers`` (#321), each reading its
+    own source rows; the parent adds them to the writer in Analysis order, so
+    the sequence, its offsets and every side table keyed on a flat position are
+    the ones one worker writes."""
     print("Assembling completed CSR per analysis...")
+    plan, axis = assembly.plan, assembly.axis
     analysis_ids = [a.analysis_id for a in plan.state.src_analyses]
     writer = RaggedCSRWriter(
         len(axis.variants),
         ReferenceCompletion(tuple(analysis_ids), eaf_reference, where="complete-ragged"),
     )
+    workers = write_workers(
+        n_workers,
+        _assembly_bytes(len(axis.variants), _largest_analysis(plan.source)),
+        what="Assembly",
+        unit=f"completed Analysis over {len(axis.variants):,} variants",
+    )
     total_imputed = total_missing = 0
-    no_fills = np.empty(0, dtype=fill_shards.FILL_RECORD_DTYPE)
-    for batch in range(int(batch_of[-1]) + 1 if len(batch_of) else 0):
-        fills = _batch_fills(fill_shard_dir, batch)
-        for ai in np.flatnonzero(batch_of == batch).tolist():
-            completed = _completed_analysis(
-                ai,
-                source=plan.source,
-                src_alids=plan.state.src_alids,
-                axis=axis,
-                reference=_region_rows(plan, block_rows, ai),
-                fills=fills.get(ai, no_fills),
+    items = _analysis_fills(fill_shard_dir, batch_of)
+    for ai, completed in enumerate(ordered_write(_complete_analysis, assembly, items, workers)):
+        writer.add_analysis(
+            completed.vi, completed.z, completed.se, eaf=completed.eaf,
+            imputed=completed.imp, where=f"complete-ragged, Analysis {analysis_ids[ai]}",
+        )
+        total_imputed += completed.n_imputed
+        total_missing += completed.n_missing
+        if (ai + 1) % 500 == 0:
+            print(
+                f"  {ai + 1:,} / {plan.state.n_analyses:,} analyses | "
+                f"imputed {total_imputed:,} | missing {total_missing:,}"
             )
-            writer.add_analysis(
-                completed.vi, completed.z, completed.se, eaf=completed.eaf,
-                imputed=completed.imp, where=f"complete-ragged, Analysis {analysis_ids[ai]}",
-            )
-            total_imputed += completed.n_imputed
-            total_missing += completed.n_missing
-            if (ai + 1) % 500 == 0:
-                print(
-                    f"  {ai + 1:,} / {plan.state.n_analyses:,} analyses | "
-                    f"imputed {total_imputed:,} | missing {total_missing:,}"
-                )
     return _CompletedCsr(writer=writer, total_imputed=total_imputed, total_missing=total_missing)
+
+
+def _largest_analysis(source: CsrReader) -> int:
+    """The most rows any one source Analysis holds."""
+    offsets = np.asarray(source.structure.offsets, dtype=np.int64)
+    return int(np.diff(offsets).max()) if len(offsets) > 1 else 0
 
 
 def _observed_rows(

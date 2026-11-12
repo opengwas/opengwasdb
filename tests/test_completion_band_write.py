@@ -13,29 +13,22 @@ land in most bands. Its source codes SE as residuals against its EAF and holds
 an entry in every side table (Z overflow, EAF and SE exceptions), so each plane
 and table the band write produces is compared. Each test checks that before
 relying on it.
-
-"Identical" is what the release comparison tool compares: every array's
-metadata (on-disk size included) and decoded values, `analyses.tsv` and
-`variants.tsv.gz`, with the completion quality rows and the manifest but for
-when it was written. Stored bytes are not compared: a chunk the parent
-compresses with Blosc threads writes its blocks in the order they finish (ADR
-0056), so two runs of the same code already differ there.
+"Identical" is `completion_releases.assert_same_release`'s: what the release
+comparison tool compares, not the stored bytes.
 """
 
 from __future__ import annotations
 
-import json
 import multiprocessing
 import os
-import sqlite3
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
+from completion_releases import CompletionInputs, assert_same_release
 from dense_sources import build_dense_from_records
 from fork_order import CompletionOrder
 from ld_blocks import write_ld_block
@@ -43,7 +36,6 @@ from zarr.storage import LocalStore
 
 import opengwasdb.layouts.dense.complete as complete_module
 import opengwasdb.store.arrays as arrays_module
-from benchmarks.compare_store_releases import compare_releases
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.complete import complete_dense_store, resume_dense_completion
@@ -168,51 +160,15 @@ def _assert_fixture_is_meaningful(source: Path, release: Path) -> None:
         assert int(root[table].shape[0]) >= 1, table
 
 
-@dataclass(frozen=True)
-class _Inputs:
-    """A completion's source and panel, and the release one worker makes of them."""
-
-    source: Path
-    panel: Path
-    serial: Path
-
-    def complete(self, dst: Path, n_workers: int) -> Path:
-        return _complete(self.source, self.panel, dst, n_workers)
-
-
 @pytest.fixture
 def completion(
     inputs: tuple[Path, Path], serial_release: Path, monkeypatch: pytest.MonkeyPatch
-) -> _Inputs:
+) -> CompletionInputs:
     """The fixture, checked, with the bands narrowed for the test's own completion."""
     source, panel = inputs
     _narrow_bands(monkeypatch)
     _assert_fixture_is_meaningful(source, serial_release)
-    return _Inputs(source, panel, serial_release)
-
-
-def _quality_rows(release: Path) -> list[tuple[Any, ...]]:
-    with sqlite3.connect(release / "index.sqlite") as db:
-        return db.execute("SELECT * FROM completion_quality ORDER BY rowid").fetchall()
-
-
-def _manifest_without_timestamp(release: Path) -> dict[str, Any]:
-    manifest = json.loads((release / "manifest.json").read_text(encoding="utf-8"))
-    manifest.pop("created_at")
-    return manifest
-
-
-def _assert_same_release(left: Path, right: Path) -> None:
-    """The release comparison tool finds nothing, and neither does the rest."""
-    report = compare_releases(left, right)
-    assert report["arrays_only_left"] == [] and report["arrays_only_right"] == []
-    assert report["arrays_with_metadata_differences"] == []
-    assert report["arrays_with_value_differences"] == []
-    assert report["analyses_tsv"]["differing_cells_by_column"] == {}
-    assert report["variants_tsv_gz"]["identical"]
-    assert report["encoding_plan"]["left"] == report["encoding_plan"]["right"]
-    assert _quality_rows(left) == _quality_rows(right)
-    assert _manifest_without_timestamp(left) == _manifest_without_timestamp(right)
+    return CompletionInputs(source, panel, serial_release, _complete)
 
 
 # ── one worker against several, a band finishing out of order ─────────────
@@ -235,7 +191,7 @@ def _first_band_finishing_last(plan: Any, band: int) -> Any:
 
 
 def test_a_release_completed_on_three_workers_is_the_one_completed_on_one(
-    completion: _Inputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    completion: CompletionInputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The first band is held until two others have finished, so a write that
     took the pool's bands in the order they finished would put one band's
@@ -250,7 +206,7 @@ def test_a_release_completed_on_three_workers_is_the_one_completed_on_one(
     finished = _ORDER.order()
     assert sorted(finished) == [0, 1, 2], "the bands did not run on a pool"
     assert finished[-1] == 0
-    _assert_same_release(completion.serial, parallel)
+    assert_same_release(completion.serial, parallel)
 
 
 # ── an interrupted band write ──────────────────────────────────────────────
@@ -279,7 +235,7 @@ def _band_crashing_after_two_others(plan: Any, band: int) -> Any:
 
 
 def test_a_band_write_interrupted_after_some_bands_resumes_to_the_same_release(
-    completion: _Inputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    completion: CompletionInputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A worker fails once other bands are already in the planes: the staged
     release goes, every LD block's checkpoint stays, and the resumed completion,
@@ -304,7 +260,7 @@ def test_a_band_write_interrupted_after_some_bands_resumes_to_the_same_release(
     resume_dense_completion(checkpoint_dir, n_workers=N_WORKERS)
 
     assert not checkpoint_dir.exists()
-    _assert_same_release(completion.serial, dst)
+    assert_same_release(completion.serial, dst)
 
 
 # ── scratch disk ───────────────────────────────────────────────────────────
@@ -373,7 +329,7 @@ def _planes_bytes(release: Path) -> int:
 
 
 def test_the_band_write_holds_no_plane_the_release_does_not(
-    completion: _Inputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    completion: CompletionInputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Peak scratch disk is the LD blocks' checkpoints and the fill shards beside
     the release's own planes, at one worker and at three.
