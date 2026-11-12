@@ -1,0 +1,39 @@
+{
+  "package": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/head-37db027/opengwasdb/__init__.py",
+  "layout": "dense",
+  "template": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/.ogs3-blocks.opengwasdb.checkpoint",
+  "dest": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/ogs3/head-1-r1.opengwasdb",
+  "n_workers": 1,
+  "wall_seconds": 578.3219220930478,
+  "phase_seconds": {
+    "_build_union_axis": 311.5793362199329,
+    "_complete_pending_blocks": 0.18957909394521266,
+    "_merge_checkpoint_fills": 112.32811226102058,
+    "_write_completed_bands": 94.99129830894526,
+    "_write_completed_manifest": 0.006756835966371,
+    "_completed_analysis_rows": 0.02494815201498568,
+    "_finalise_release": 53.653816887992434
+  },
+  "peak_scratch_bytes": {
+    "total": 2811058502,
+    "checkpoint": 225391523,
+    "staged": 2585666979,
+    "fill_shards": 46668144
+  },
+  "release_bytes": 2614532729,
+  "uptime": [
+    2.5,
+    2.48,
+    3.81
+  ],
+  "ru_maxrss_kib_self": 24489828,
+  "ru_maxrss_kib_children": 0,
+  "result": {
+    "output_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/ogs3/head-1-r1.opengwasdb",
+    "n_variants": 21618934,
+    "n_analyses": 10,
+    "n_imputed": 2916759,
+    "n_missing_off_panel": 6188,
+    "n_missing_imputation_failed": 2161
+  }
+}
