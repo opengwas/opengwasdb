@@ -403,22 +403,40 @@ _MERGE_TABLE = (
 
 
 def _blocks_covering(axis: Any, n_rows: int) -> list[Path]:
-    """The LD blocks, in panel order, that start at or before the last slice row.
+    """The LD blocks, in panel order, whose fills can land in the slice's rows.
 
     The union axis is sorted by chromosome and position, so a prefix of its rows
-    is the start of one chromosome and these blocks are the ones whose fills land
-    in it. Fills a block places beyond the prefix are dropped by the merge.
+    is every chromosome before the last row's whole, and that one up to the last
+    row: each block of those, and each block of the last row's chromosome that
+    starts at or before it. Fills a block places beyond the prefix are dropped by
+    the merge.
     """
     last = axis.merged_variants[n_rows - 1]
-    chosen: list[Path] = []
-    for path in axis.tsv_paths:
-        if path.parent.name != str(last.chromosome):
-            if chosen:
-                break
-            continue
-        if int(path.stem.split("-")[0]) <= last.position:
-            chosen.append(path)
-    return chosen
+    whole = {str(v.chromosome) for v in axis.merged_variants[:n_rows]} - {str(last.chromosome)}
+    return [
+        path
+        for path in axis.tsv_paths
+        if path.parent.name in whole
+        or (
+            path.parent.name == str(last.chromosome)
+            and int(path.stem.split("-")[0]) <= last.position
+        )
+    ]
+
+
+def require_slice_fills_pool(n_bands: int, write_workers: int) -> None:
+    """Refuse a pooled band write over fewer bands than workers.
+
+    Its wall time is scaled to the full run by bands, which holds only while
+    every worker has a band: two bands on four workers take one band's time,
+    and scaled by bands they would claim twice the full run's write.
+    """
+    if write_workers > 1 and n_bands < write_workers:
+        raise SystemExit(
+            f"a slice of {n_bands} band(s) on {write_workers} write workers leaves workers "
+            "idle, so its wall time cannot be scaled by bands; ask for at least as many "
+            "bands as write workers"
+        )
 
 
 def profile_bands(
@@ -436,6 +454,7 @@ def profile_bands(
     from opengwasdb.layouts.dense.constants import dense_layout_records
     from opengwasdb.store.open import OpenGWASDBStore, open_store
 
+    require_slice_fills_pool(n_bands, write_workers)
     require_new_directory(work)
     stages = StageClock(clock)
     manifest = open_store(source).manifest
@@ -446,9 +465,12 @@ def profile_bands(
             with stages.stage("axis_construction_full"):
                 axis = dense._build_union_axis(source, staged, ld_dir, ancestry, None)
             # The completed planes' shard height, as the full run would write it.
-            layout = dense_layout_records((axis.n_variants, axis.n_analyses))
+            layout = dense_layout_records(
+                (axis.n_variants, axis.n_analyses), hint=dense.DEFAULT_CHUNK_SHAPE
+            )
             band_rows = dense.completion_band_rows(int(layout["shard_shape"][0]))
             slice_rows = min(n_bands * band_rows, axis.n_variants)
+            require_slice_fills_pool(-(-slice_rows // band_rows), write_workers)
             blocks = _blocks_covering(axis, slice_rows)
             # The real scheduler, over the blocks the slice needs.
             with stages.stage("ld_block_phase_slice"):

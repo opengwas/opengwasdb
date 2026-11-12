@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from dense_sources import build_dense_from_records
+from pool_budget import pin_pool_units
 from test_dense_completion import _make_ld_panel
 
 from benchmarks import profile_reference_completion as profiler
@@ -203,7 +204,8 @@ def test_bands_artifact_splits_each_pass_and_scales_to_the_full_run(
     artifact = _run(tmp_path, "bands", observed, panel, "--bands", "1", "--n-workers", "1")
 
     assert artifact["bands_run"] == 1
-    assert artifact["blocks_run"] == 1, "only chromosome 1's block starts in the first band"
+    # One band holds all 7 rows, so both chromosomes' blocks fill it.
+    assert artifact["blocks_run"] == 2
     assert artifact["blocks_in_panel"] == 2
     assert artifact["accounted_seconds"] == pytest.approx(
         artifact["wall_seconds"], rel=0.05, abs=0.05
@@ -222,27 +224,60 @@ def test_bands_artifact_splits_each_pass_and_scales_to_the_full_run(
     assert not (tmp_path / "bands-work").exists()
 
 
+def _narrow_bands(patch: pytest.MonkeyPatch) -> None:
+    """Two-row Dense shards and bands, so the fixture's 7 rows are 4 bands, the
+    last two on chromosome 2; and pool units a fixture's size (`pool_budget`)."""
+    import opengwasdb.layouts.dense.complete as complete_module
+    import opengwasdb.store.arrays as arrays_module
+
+    patch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (2, 2))
+    patch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (1, 1))
+    patch.setattr(complete_module, "DEFAULT_CHUNK_SHAPE", (1, 1))
+    patch.setattr(complete_module, "_BAND_ROWS", 2)
+    pin_pool_units(patch)
+
+
 def test_a_band_write_on_the_pool_is_timed_as_one_stage(
-    inputs: tuple[Path, Path], tmp_path: Path
+    inputs: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The pool's workers run the bands where this process's clock cannot see,
-    so their time is one stage, and the wall check still holds."""
+    so their time is one stage, and the wall check still holds. The slice spans
+    both chromosomes, so both blocks are completed."""
     observed, panel = inputs
+    _narrow_bands(monkeypatch)
     artifact = _run(
-        tmp_path, "bands", observed, panel, "--bands", "1", "--n-workers", "1",
+        tmp_path, "bands", observed, panel, "--bands", "4", "--n-workers", "1",
         "--write-workers", "2", "--memory-period", "0.001",
     )
 
     assert artifact["write_workers"] == 2
+    assert artifact["bands_run"] == 4 and artifact["slice_rows"] == artifact["union_variants"]
+    assert artifact["blocks_run"] == artifact["blocks_in_panel"] == 2
     stages = {entry["stage"] for entry in artifact["stages"]}
     assert "band_write_pool" in stages
     assert not {"band_read_source", "band_write", "band_write_other"} & stages
-    memory = artifact["write_pool_memory"]
-    assert memory["workers_sampled"] >= 1, "the pool's workers were never sampled"
-    assert 0 < memory["peak_private_bytes"] < artifact["band_worker_estimate_bytes"]
     assert artifact["accounted_seconds"] == pytest.approx(
         artifact["wall_seconds"], rel=0.05, abs=0.05
     )
+    memory = artifact["write_pool_memory"]
+    assert memory["workers_sampled"] >= 1, "the pool's workers were never sampled"
+    assert 0 < memory["peak_private_bytes"] < artifact["band_worker_estimate_bytes"]
+
+
+def test_a_pooled_slice_with_fewer_bands_than_workers_is_refused(
+    inputs: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two bands on four workers take one band's time, and scaled by bands they
+    would claim twice the full run's write: refused, before anything is built."""
+    observed, panel = inputs
+    _narrow_bands(monkeypatch)
+    work = tmp_path / "refused-work"
+    with pytest.raises(SystemExit, match="leaves workers idle"):
+        profiler.profile_bands(observed, panel, "EUR", work, 2, 1, write_workers=4)
+    assert not work.exists()
+    with pytest.raises(SystemExit, match="leaves workers idle"):
+        profiler.profile_bands(observed, panel, "EUR", work, 9, 1, write_workers=8)
+    assert not work.exists(), "a slice the axis cuts short is refused, and cleaned up"
 
 
 def test_scaling_follows_bands_and_rows() -> None:
