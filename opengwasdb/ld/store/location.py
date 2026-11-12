@@ -34,8 +34,10 @@ from zarr.storage import StorePath, WrapperStore
 from ogld.format import InputError
 from ogld.format.geometry import spans
 
-#: Decoded inner chunks a reader keeps, in bytes. At layout C a Near Band chunk is 512 KiB.
-CACHE_BYTES: Final = 1 << 28
+#: The decoded inner chunks and shard indexes a reader keeps unless its caller says otherwise,
+#: in bytes: 8,192 of layout C's 512 KiB Near Band chunks. ogld#8 measured repeated reads
+#: warm at this budget, and not at 256 MiB, which held 512 (owner, 12 November 2026; ogld#32).
+CACHE_BYTES: Final = 1 << 32
 #: The decoded bytes one read has in flight at once, beside at most zarr's `async.concurrency`
 #: (10 by default) pieces of runs: two of layout C's 128 MiB Near Band shards (ogld#32).
 _FETCH_BYTES: Final = 1 << 28

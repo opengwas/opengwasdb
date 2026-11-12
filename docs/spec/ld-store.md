@@ -786,46 +786,69 @@ refuses a `format_version` or `encoding` it does not implement (§13). A chromos
 range and its two `indptr` arrays are read the first time a request touches that chromosome, and
 kept. Every other read the reader makes goes through its cache of decoded inner chunks
 (`ogld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request
-needs, whole, which is what Zarr fetches and decodes in any case. It keeps them up to 256 MiB per
-opened store, dropping the least recently used first.
+needs, whole, which is what Zarr fetches and decodes in any case. So a query that reads a few
+pairs at a time fetches each chunk once: clumping the Test Store's 1,056 variants, one read per
+lead, took 3.6 s reading through Zarr call by call and 0.7 s with the cache, against 0.6 s for the
+walking skeleton's arrays held whole. A matrix resolves its pairs about 4 million at a time,
+which bounds its working memory beside the matrix itself. Validation's rules read through Zarr
+directly, in bounded windows: one pass over each chromosome, and a second read of the blocks
+`index.near` flags in a store it fails (§12).
+
+**The cache and its bound** (ogld#4, ogld#32). An opened store's cache keeps decoded chunks and
+shard indexes up to `cache_bytes`, dropping the least recently used first. The caller sets it
+when opening the store, `ogld.open(location, cache_bytes=...)`: 4 GiB by default, and `0` keeps
+nothing, so every read fetches its chunks and shard indexes again. Anything but an int ≥ 0 is an
+`InputError`. 4 GiB holds 8,192 of layout C's 512 KiB Near Band chunks. At that size ogld#8
+measured repeated reads warm, and at the earlier 256 MiB not (owner, 12 November 2026):
+
+- four Analyses clumped again in 38 s, against 80 s cold;
+- 500 chr22 variants read again in 0.13 s, against 1.7–2.9 s.
+
+A single cold pass reads distinct chunks, which no budget saves.
+
+Each kept chunk owns its memory, copied out of the read that fetched it, and counts an upper bound
+on what it holds. So the budget bounds the memory kept. A numeric chunk counts its buffer, and a
+shard index its bytes. A string chunk stays numpy's variable-width strings, as zarr returns them,
+which keep each string over 15 UTF-8 bytes in an arena that `nbytes` leaves out (about 2.2 times
+`nbytes` for 16-character ALIDs). So it counts `nbytes` + 1.25 × Σ(bytes + 8) + 512, the sum over
+those strings: the arena grows by a quarter at a time, a string's size header is at most 8 bytes,
+and the allocator takes 328. Measured by tracemalloc on 72 chunks of 1–16,384 strings of 1–20,000
+characters, the count was never below what a chunk held.
+
+The count visits no string in Python (ogld#32). numpy counts each string's characters, and one
+fixed-width copy of the chunk, at most 256 bytes wide, proves the strings of at most 256
+characters ASCII, a byte a character, so their bytes are counted exactly. Every other string
+counts 4 bytes a character, UTF-8's most; no ALID or allele the engine forms needs that. On 16,384
+ALIDs the count takes 1.6 ms, against 2.4 ms string by string. Fixed-width text would be counted
+exactly, but one 2,000-character indel ALID would make its 16,384-row chunk 131 MB.
+
+One lock guards the cache, so threads sharing a reader keep one copy of a chunk, and the count
+stays the sum of what is kept. `tests/test_store_reads.py` measures what the cache holds each
+time it keeps a chunk or an index, while 16 threads fetch overlapping runs, and holds it to the
+budget. The bound is the cache's, and per opened store, so a process with the five HGDP+1kGP
+stores open keeps up to 5 × `cache_bytes`. Beside it a reader holds:
+
+- each chromosome's positions and `indptr` arrays it has touched (above);
+- what a read in progress holds: the chunks it asked for, at most one batch of fetches in flight
+  (256 MiB decoded, below) with its copy into kept chunks, and its result.
+
+**The cache keeps shard indexes** (ogld#32). zarr reads a shard's index before the chunks it
+needs from that shard, and reads it again on every read. Over HTTP, then, each read of a shard
+waited two round trips. The reader opens its store through a wrapper that keeps each index it
+fetches in the chunk cache, in the same budget and the same least-recently-used order. §6 puts
+the index at the shard's end. zarr reads it as the shard's suffix and reads nothing else that
+way, so the wrapper keeps suffix reads and passes every other read through. A read of a shard
+read before then pays one round trip; the first read of a shard still pays two, since the index
+says where the chunks are. A Near Band shard's index at layout C is 4,100 bytes: 256 chunks × 16,
+and a 4-byte checksum.
 
 **A read fetches its runs together** (ogld#32). The chunks a read needs and the cache does not
 hold fall into runs of neighbouring chunks. Each run is cut where a shard ends, so each piece
 reads one shard. The pieces are fetched in batches, every piece of a batch at once on zarr's event
 loop. A batch holds at most zarr's `async.concurrency` pieces (10 by default) and at most 256 MiB
-decoded, two of layout C's Near Band shards. So a read waits about one round trip per batch,
-not one per run. Before, each run was its own Zarr call, one after another, and each call waited
-for the shard index and then for the chunks. Beside the cache's budget, a read holds the chunks it
-asked for, and at most one batch as it was fetched: 256 MiB decoded, and its copy into kept
-chunks.
-Each kept chunk owns its memory, copied out of the read that fetched it, and counts an upper bound
-on what is held, so the budget bounds the memory kept. A numeric chunk counts its buffer. A string
-chunk stays numpy's variable-width strings, as zarr returns them, which keep each string over 15
-UTF-8 bytes in an arena that `nbytes` leaves out (about 2.2 times `nbytes` for 16-character
-ALIDs). So it counts `nbytes` + 1.25 × Σ(bytes + 8) over those strings + 512: the arena grows by a
-quarter at a time, a string's size header is at most 8 bytes, and the allocator takes 328. Measured
-by tracemalloc on 72 chunks of 1–16,384 strings of 1–20,000 characters, the count was never below
-what a chunk held. It visits no string in Python (ogld#32): numpy counts each string's characters,
-and one fixed-width copy of the chunk, at most 256 bytes wide, proves the strings of at most 256
-characters ASCII, a byte a character, so their bytes are counted exactly. Every other string counts
-4 bytes a character, UTF-8's most. No ALID or allele the engine forms needs that. On 16,384 ALIDs
-the count takes 1.6 ms, against 2.4 ms string by string. Fixed-width text would be counted
-exactly, but one 2,000-character indel ALID would make its 16,384-row chunk 131 MB. One lock guards
-the cache, so threads sharing a reader keep one copy of a chunk.
-
-**The cache keeps shard indexes too** (ogld#32). zarr reads a shard's index before the chunks it
-needs from that shard, and reads it again on every read. Over HTTP, then, each read of a shard
-waited two round trips. The reader opens its store through a wrapper that keeps each index it
-fetches in the chunk cache, in the same budget and the same least-recently-used order, counted at
-its bytes. §6 puts the index at the shard's end. zarr reads it as the shard's suffix and reads
-nothing else that way, so the wrapper keeps suffix reads and passes every other read through. A
-read of a shard read before then pays one round trip; the first read of a shard still pays two,
-since the index says where the chunks are. A Near Band shard's index at layout C is 4,100 bytes:
-256 chunks × 16, and a 4-byte checksum. Validation's rules read through Zarr directly, in bounded windows: one pass
-over each chromosome, and a second read of the blocks `index.near` flags in a store it fails (§12). So a query that reads a few pairs at a time fetches each chunk once: clumping the Test
-Store's 1,056 variants, one read per lead, took 3.6 s reading through Zarr call by call and 0.7 s
-with the cache, against 0.6 s for the walking skeleton's arrays held whole. A matrix resolves its
-pairs about 4 million at a time, which bounds its working memory beside the matrix itself.
+decoded, two of layout C's Near Band shards; a larger run is cut to fit. So a read waits about
+one round trip per batch, not one per run. Before, each run was its own Zarr call, one after
+another, and each call waited for the shard index and then for the chunks.
 
 - **Over HTTP** a store is opened through zarr's fsspec store, whose HTTP filesystem uses aiohttp.
   Both are runtime dependencies. A static host that honours byte ranges is enough: no node is
@@ -841,8 +864,11 @@ pairs about 4 million at a time, which bounds its working memory beside the matr
 - **Measured on the Test Store, re-sharded** into 512-element inner chunks, 4 to a shard, which
   reads exactly as the committed one (`tests/test_store_reads.py`). On the × 511 Test Store
   (ogld#16), a 3-variant matrix over HTTP fetched 759 of chr22's 97,699 Near Band bytes, in 2
-  requests (41,290 bytes in 28 requests in all, most of it metadata documents); a reader that read
-  whole arrays fetched 96,582 Near Band bytes. The same read again fetched none. Read latency at scale is ogld#8's to measure.
+  requests, a shard's index and then its chunk. In all, opening the store and the matrix took 36
+  requests and 44,824 bytes, most of it metadata documents, before ogld#32 and after it alike:
+  each shard is read once, so no kept index is used. A reader that read whole arrays fetched
+  96,582 Near Band bytes. The same read again fetched none. Read latency at scale is ogld#8's
+  and ogld#32's to measure.
 
 ## 11. The upstream half: the Proxy Index
 

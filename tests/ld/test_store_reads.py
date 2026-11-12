@@ -675,7 +675,7 @@ def test_a_repeated_read_fetches_its_chunks_once(
     # Clumping reads a few pairs per lead, many times over: each chunk is fetched once and kept,
     # by a reader opened with room for them. One opened with none fetches them again.
     url, sent = served
-    store = ogld.LDStore(StoreReader.open(url, cache_bytes=budget))
+    store = ogld.open(url, cache_bytes=budget)
     names = list(StoreReader.open(small_chunks).variants(np.arange(500, 560, 3)).alid)
 
     def near_bytes() -> int:
@@ -746,7 +746,13 @@ def test_a_local_shard_index_is_read_once_and_kept(
 def test_a_cache_size_that_is_not_a_count_of_bytes_is_refused(size: Any) -> None:
     # A caller's value, whatever it is: an untyped caller can pass any of these.
     with pytest.raises(InputError, match="cache_bytes"):
-        StoreReader.open(TEST_STORE, cache_bytes=size)
+        ogld.open(TEST_STORE, cache_bytes=size)
+
+
+def test_a_store_keeps_4_gib_of_its_chunks_unless_told_otherwise() -> None:
+    # The owner's default (ogld#32), at which #8 measured repeated reads warm.
+    assert ogld.open(TEST_STORE)._reader._cache._budget == 4 << 30
+    assert ogld.open(TEST_STORE, cache_bytes=12_345)._reader._cache._budget == 12_345
 
 
 @pytest.mark.parametrize("query", ["clump", "proxies"])

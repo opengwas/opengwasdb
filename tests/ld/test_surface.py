@@ -34,7 +34,10 @@ from ogld import cli, identity
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
 
 SURFACE: dict[str, tuple[Callable[..., Any], str]] = {
-    "ogld.open": (ogld.open, "(location: 'str | os.PathLike[str]') -> 'LDStore'"),
+    "ogld.open": (
+        ogld.open,
+        "(location: 'str | os.PathLike[str]', *, cache_bytes: 'int | None' = None) -> 'LDStore'",
+    ),
     "ogld.build": (
         ogld.build,
         "(inputs: 'BuildInputs', out: 'str | os.PathLike[str]', *, threads: 'int' = 1)"
