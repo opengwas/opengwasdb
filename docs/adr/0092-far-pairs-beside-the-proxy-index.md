@@ -95,6 +95,12 @@ is what they need.
 - **A smaller inner chunk for the index.** Rejected: 500 rows would still touch about 890
   chunks, each smaller, and a request each over HTTP; and `proxies` would read more chunks per
   row.
+- **Rebuilding the five HGDP+1kGP stores** with `scripts/build_hgdp1kgp.py`, about 3.5 hours of
+  two 16-thread builds, after deleting them. Not done: their Far Pairs were derived in place
+  from each store's own index (below), which writes only new files, so the stores stayed
+  readable throughout by the work reading them then (ogld#32, a review of ogld#8). The ticket
+  allowed it on one condition, met first on chr22: a derived store byte-identical to a rebuilt
+  one.
 
 ## Consequences
 
