@@ -13,6 +13,7 @@ corrupt (test_validation.py, test_validate_presence.py, test_dense_completion.py
 from __future__ import annotations
 
 import pathlib
+import tracemalloc
 from collections.abc import Sequence
 from itertools import permutations
 from types import SimpleNamespace
@@ -446,6 +447,24 @@ def test_a_band_locates_the_cells_it_holds_by_their_grid_coordinates() -> None:
 
     assert found.tolist() == [1, 2, 3]
     assert flat.tolist() == [2, 3, 4]
+
+
+def test_a_band_finds_its_tier_cells_without_copying_the_tier() -> None:
+    """A band's share of a Top-Hit tier costs what the band holds: the tier's rows
+    are searched in their own dtype, not copied to `int64` for every band."""
+    rows = np.repeat(np.arange(2_000_000, dtype=np.uint32), 2)
+    cells = CellIndex(rows, np.zeros(len(rows), dtype=np.uint32))
+    assert cells.by_row[0] is None, "the tier's rows are held in row order"
+    band = Block.of(np.zeros((10, 1)), np.ones((10, 1)), offset=1_000_000)
+    tracemalloc.start()
+    try:
+        found, flat = band.locate(cells)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert list(found) == list(range(2_000_000, 2_000_020))
+    assert list(flat) == [index // 2 for index in range(20)]
+    assert peak < rows.nbytes // 10, f"{peak} bytes to find 20 cells in a {rows.nbytes}-byte tier"
 
 
 def test_a_tier_flag_is_held_to_a_stored_mask_whatever_the_completion_state(

@@ -350,7 +350,11 @@ class Block:
             return self._locate_in_sequence(cells)
         r0 = self.offset // self.n_analyses
         order, sorted_rows = cells.by_row
-        lo, hi = np.searchsorted(sorted_rows, (r0, r0 + self.rows))
+        # Bounds of the rows' own dtype: searched for with Python ints, numpy would copy
+        # every row of the tier to `int64` first -- 1.12 GB a call for OGS-00011's
+        # 140,478,063-cell tier, which each band's folds search several times.
+        bounds = np.asarray((r0, r0 + self.rows), dtype=sorted_rows.dtype)
+        lo, hi = np.searchsorted(sorted_rows, bounds)
         found = np.arange(lo, hi, dtype=np.int64) if order is None else order[lo:hi]
         flat = (cells.rows[found].astype(np.int64) - r0) * self.n_analyses + cells.cols[found]
         return found, flat
