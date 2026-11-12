@@ -80,8 +80,9 @@ ALLOWED = {
     # The planes those decodes read, and the decoders the readers stand on.
     ("layouts/dense/indexed_subsets.py", "_decode_se_column"):
         "the subset's own decoder, which `SubsetReader` reads through",
-    ("layouts/dense/indexed_subsets.py", "_se_band_error"):
-        "the publication gate decoding the subset's own SE band against the primary's",
+    ("layouts/dense/indexed_subsets.py", "_decode_index_se"):
+        "the subset's own SE band, decoded against its own EAF, which the comparison and "
+        "the digest of a unit it vouches for both compare against the primary's",
     ("layouts/dense/indexed_subsets.py", "_open_decode_context"):
         "opens the primary SE plane the two comparisons above decode",
     ("layouts/dense/indexed_subsets.py", "_DecodeContext"):

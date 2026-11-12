@@ -3,8 +3,7 @@
 The rules live in `validation/rules/`, one module to a subject; their names, in
 the order they run, are spec §20.0's. Beside the registry here are the rules that
 stay with code of this module: the manifest, the Dense Component opening (both
-through `_load_manifest`), the Indexed Variant Subsets, and source fidelity,
-whose read is one function (#56).
+through `_load_manifest`), and source fidelity, whose read is one function (#56).
 """
 
 from __future__ import annotations
@@ -21,7 +20,6 @@ from opengwasdb.encoding import (
     StoreCodec,
 )
 from opengwasdb.layouts.build_manifest import apply_se_divisor
-from opengwasdb.layouts.dense.indexed_subsets import validate_indexed_subsets
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.analyses import (
     read_analyses,
@@ -60,9 +58,9 @@ from opengwasdb.validation.rules import rho as rho_rules
 from opengwasdb.validation.rules import sample_size as sample_size_rules
 from opengwasdb.validation.rules import sequence as sequence_rules
 from opengwasdb.validation.rules import side_tables as side_table_rules
+from opengwasdb.validation.rules import subsets as subset_rules
 from opengwasdb.validation.rules import top_hits as top_hit_rules
 from opengwasdb.validation.rules import variants as variant_rules
-from opengwasdb.validation.rules.associations import grid_counts
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.run import evaluate, selected
 from opengwasdb.variants import (
@@ -159,25 +157,6 @@ def _component_opens(target: Target) -> Iterator[str]:
         )
 
 
-def _indexed_subsets(target: Target) -> Iterator[str]:
-    """Every published Indexed Variant Subset is self-consistent and value-equal.
-
-    The rules are the ones the build's publication gate runs on a subset before
-    publishing it, there over a deterministic sample and here over every cell
-    (#270).
-    """
-    errors: list[str] = []
-    store = target.store
-    n_variants, n_analyses = grid_counts(target)
-    # The optional indexed-subset namespace (ADR 0061, #264).  A release without it
-    # stays valid and unchanged; a release with it must hold only published,
-    # self-consistent, value-equal subsets.
-    validate_indexed_subsets(
-        store.path, target.group, store.manifest, n_variants, n_analyses, errors
-    )
-    yield from errors
-
-
 def _top_level_dense_grid(target: Target) -> bool:
     return target.layout is PrimaryStorageLayout.DENSE and not target.is_component
 
@@ -237,7 +216,7 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
     *completion_rules.METADATA_RULES,
     *rho_rules.RULES,
     *layout_rules.RULES,
-    Check(name="subsets.indexed", kinds=Kind.GRID, after=(REQUIRED,), run=_indexed_subsets),
+    *subset_rules.RULES,
     *analyses_rules.ORIENTATION_RULES,
 )
 

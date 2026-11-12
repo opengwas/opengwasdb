@@ -11,12 +11,18 @@ decoded size).
 SE and Z are decoded on first use, so a plane that cannot be decoded reaches only
 the rules that read it (`Unreadable`).
 
+The EAF exception table is streamed once per pass too (`TablePages`): each block
+takes its span of the sorted table as it decodes, and every rule that reads the
+table -- the plan rule, the side-table rule and the Indexed Variant Subset check --
+watches the same pages go by (issue #314).
+
 A `Block` is the seam: `dense_bands` makes one from a grid band, `sequence_windows`
 from a run of a sequence, and `Block.of` from arrays a test holds.
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from functools import cached_property, partial
@@ -31,6 +37,7 @@ from opengwasdb.encoding.codec import (
     EAF_REFERENCE,
     EafExceptionTable,
     SeExceptionTable,
+    SparseExactTable,
     StoreCodec,
     ZOverflowTable,
     positions_flat,
@@ -45,6 +52,8 @@ from opengwasdb.encoding.planes import (
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store.arrays import SE_COEFFICIENTS, array_length, inner_chunk_of
 from opengwasdb.validation.rule import Kind, Scan, Target, Unreadable
+
+log = logging.getLogger(__name__)
 
 # Dense validation decodes several raw, float32/float64 and boolean views of a
 # cell at once, so its bands come from the shared decoded-byte budget
@@ -69,6 +78,151 @@ SCAN_NAME = "associations"
 
 class Undecodable(Unreadable):
     """A block whose planes the declared plan cannot decode; the message says which."""
+
+
+#: Entries of a side table one page of a pass's read takes.  A Dense band of
+#: OGS-00011's grid marks about 239,000 cells, so one page covers a band and its
+#: tail carries into the next; the table itself is 1,136,991,041 entries, 12.7 GiB
+#: of `int64` and `float32`.
+SPAN_PAGE = 262_144
+
+#: Watches every page of a side table a pass reads: its first entry's ordinal, then
+#: the page's positions and values.
+TableWatcher = Callable[[int, np.ndarray, np.ndarray], None]
+
+
+class TablePages:
+    """A sorted side table, read once per pass, in order, a page at a time.
+
+    A block's cells are one contiguous range of flat positions and the table is
+    sorted by them, so the entries a block's cells can name start where the
+    previous block's ended: `take` hands each block its span, reading pages only as
+    the blocks reach them, and holds one page at most.  Every rule that reads the
+    table watches the same pages go by (`watch`), so however many rules read it the
+    table is streamed once per pass -- where the scan's lookup, the side-table rule,
+    the plan rule and the Indexed Variant Subset check each streamed it before, one
+    of them once per band (issue #314).  `finish` reads what no block reached:
+    entries past the last cell, which a watcher of the whole table still sees.
+
+    A table that is not sorted is read the same way: each page is still read once,
+    in order, and a watcher still sees every entry, so the plan rule names the
+    disorder however the spans fall.
+    """
+
+    def __init__(self, group: Any, table_type: type[SparseExactTable]) -> None:
+        self.index_array = group[table_type.index_name]
+        self.value_array = group[table_type.value_name]
+        self.total = array_length(self.index_array)
+        #: Entries handed to blocks, in order.
+        self.taken = 0
+        #: Entries read from the table, and the pages they came in.
+        self.read = 0
+        self.pages = 0
+        #: Whether every page has been read, so a watcher has seen the whole table.
+        self.complete = False
+        self.watchers: list[TableWatcher] = []
+        self._page_index = np.empty(0, dtype=np.int64)
+        self._page_value = np.empty(0, dtype=np.float32)
+
+    def watch(self, watcher: TableWatcher) -> None:
+        """Hand `watcher` every page from the first; one that raises is handed no more."""
+        if self.read:
+            raise ValueError("a watcher must see a side table from its first page")
+        self.watchers.append(watcher)
+
+    def saw_all(self, watcher: TableWatcher) -> bool:
+        """Whether `watcher` was handed every page of the table, and is still watching."""
+        return self.complete and watcher in self.watchers
+
+    def take(self, until: int) -> tuple[np.ndarray, np.ndarray]:
+        """Every entry with a position below `until` that no block has taken yet."""
+        index_parts: list[np.ndarray] = []
+        value_parts: list[np.ndarray] = []
+        while True:
+            below = int(np.searchsorted(self._page_index, until, side="left"))
+            if below:
+                index_parts.append(self._page_index[:below])
+                value_parts.append(self._page_value[:below])
+                self._page_index = self._page_index[below:]
+                self._page_value = self._page_value[below:]
+                self.taken += below
+            if len(self._page_index) or self.read >= self.total:
+                break
+            self._page_index, self._page_value = self._next_page()
+        return (
+            np.concatenate(index_parts) if index_parts else np.empty(0, dtype=np.int64),
+            np.concatenate(value_parts) if value_parts else np.empty(0, dtype=np.float32),
+        )
+
+    def finish(self) -> None:
+        """Read the pages no block reached, for the watchers of the whole table."""
+        while self.read < self.total:
+            self._next_page()
+        self.complete = True
+
+    @property
+    def bytes_read(self) -> int:
+        """The bytes of positions and values the pass has read: each entry once."""
+        width = int(self.index_array.dtype.itemsize) + int(self.value_array.dtype.itemsize)
+        return self.read * width
+
+    def _next_page(self) -> tuple[np.ndarray, np.ndarray]:
+        start = self.read
+        stop = min(start + SPAN_PAGE, self.total)
+        index = np.asarray(self.index_array[start:stop], dtype=np.int64)
+        value = np.asarray(self.value_array[start:stop], dtype=np.float32)
+        self.read, self.pages = stop, self.pages + 1
+        for watcher in list(self.watchers):
+            try:
+                watcher(start, index, value)
+            except Exception:  # that rule reads the table for itself instead
+                self.watchers.remove(watcher)
+        return index, value
+
+
+#: Where a pass keeps the EAF exception table it streams, for the blocks and watchers.
+EAF_TABLE = f"{SCAN_NAME}/eaf_exception_table"
+
+
+def eaf_table(target: Target) -> TablePages | None:
+    """The component's EAF exception table, streamed once for this pass.
+
+    None where the plan codes no exception or the group carries no table; a plan
+    rule says which.
+    """
+    group = target.group
+    if not target.encoding.eaf.is_residual:
+        return None
+    if EafExceptionTable.index_name not in group or EafExceptionTable.value_name not in group:
+        return None
+    return target.remember(
+        EAF_TABLE, lambda: TablePages(group, EafExceptionTable), until=SCAN_NAME
+    )
+
+
+def _finish_tables(target: Target) -> None:
+    """Read the rest of the table the pass streamed, for the rules watching all of it."""
+    table: TablePages | None = target.recalled(EAF_TABLE)
+    if table is None:
+        return
+    table.finish()
+    log.info(
+        "%s: eaf exception table read once, %d of %d entries (%d bytes) in %d pages",
+        target.label,
+        table.read,
+        table.total,
+        table.bytes_read,
+        table.pages,
+    )
+
+
+def _span_codec(encoding: Any, span: tuple[np.ndarray, np.ndarray]) -> StoreCodec:
+    """A codec whose exception table is one block's span: every entry its cells can name.
+
+    Raises `ValueError` for a span that is not sorted and unique, or not parallel,
+    which the plan rule reports as the table's own defect.
+    """
+    return StoreCodec(encoding, eaf_exceptions=EafExceptionTable(index=span[0], value=span[1]))
 
 
 @dataclass(frozen=True, eq=False)
@@ -106,6 +260,11 @@ class Block:
     se_decoder: Callable[[np.ndarray], np.ndarray] | None = field(default=None, repr=False)
     #: Reads the block's `n` codes, when the component holds a sample-size plane.
     read_n: Callable[[], np.ndarray] | None = field(default=None, repr=False)
+    #: The EAF exception table's entries this block's cells can name -- its span of
+    #: the sorted table, as the pass's one read of it handed it over -- and how many
+    #: entries the pass had handed out once it did. None where the plan codes none.
+    eaf_span: tuple[np.ndarray, np.ndarray] | None = field(default=None, repr=False)
+    eaf_taken: int = 0
     rows: int = field(init=False)
 
     def __post_init__(self) -> None:
@@ -298,6 +457,9 @@ class _DenseGrid:
         )
         self.decodes_eaf = holds_frequencies(target)
         self.eaf_codec = StoreCodec(encoding, eaf_exceptions=EafExceptionTable.open(group))
+        # Each band takes its span of the exception table from the pass's one read of
+        # it, rather than looking the table up again (issue #314).
+        self.eaf_table = None if self.eaf_array is None else eaf_table(target)
         self.se_codec = StoreCodec(encoding, se_exceptions=SeExceptionTable.open(group))
         self.z_codec = StoreCodec(encoding, z_overflow=ZOverflowTable.open(group))
         self.coefficients = (
@@ -313,7 +475,8 @@ class _DenseGrid:
         se_codes = np.asarray(self.se_array[r0:r1])
         eaf_codes = None if self.eaf_array is None else np.asarray(self.eaf_array[r0:r1])
         imputed = None if self.imputed is None else np.asarray(self.imputed[r0:r1])
-        eaf, failure = self._eaf(eaf_codes, imputed, r0, r1)
+        span = None if self.eaf_table is None else self.eaf_table.take(r1 * self.shape[1])
+        eaf, failure = self._eaf(eaf_codes, imputed, r0, r1, span)
         return Block(
             offset=r0 * self.shape[1],
             n_analyses=self.shape[1],
@@ -322,6 +485,8 @@ class _DenseGrid:
             on_panel=None if self.on_panel is None else self.on_panel[r0:r1],
             z_decoder=partial(self._z, r0, r1),
             se_decoder=partial(_dense_band_se, self, eaf=eaf, eaf_failure=failure, r0=r0, r1=r1),
+            eaf_span=span,
+            eaf_taken=0 if self.eaf_table is None else self.eaf_table.taken,
         )
 
     def _z(self, r0: int, r1: int, codes: np.ndarray) -> np.ndarray:
@@ -329,18 +494,28 @@ class _DenseGrid:
         return DenseZPlane(_RowWindow(codes, r0, self.shape), self.z_codec).band(r0, r1)
 
     def _eaf(
-        self, codes: np.ndarray | None, imputed: np.ndarray | None, r0: int, r1: int
+        self,
+        codes: np.ndarray | None,
+        imputed: np.ndarray | None,
+        r0: int,
+        r1: int,
+        span: tuple[np.ndarray, np.ndarray] | None,
     ) -> tuple[np.ndarray | None, ValueError | None]:
         """The band's decoded frequencies, from the codes it holds, or why they cannot be.
 
-        A decode that cannot resolve a cell is not reported from here: the
-        exception-table rule says exactly which cell and why.
+        `span` is the band's share of the exception table, which is every entry its
+        cells can name. A decode that cannot resolve a cell is not reported from
+        here: the exception-table rule says exactly which cell and why.
         """
         if not self.decodes_eaf:
             return None, None
+        try:
+            codec = self.eaf_codec if span is None else _span_codec(self.encoding, span)
+        except ValueError as exc:
+            return None, exc
         plane = DenseEafPlane(
             None if codes is None else _RowWindow(codes, r0, self.shape),
-            self.eaf_codec,
+            codec,
             baseline=self.baseline,
             reference=self.reference,
             imputed=None if imputed is None else _RowWindow(imputed, r0, self.shape),
@@ -565,6 +740,11 @@ class _Sequence:
         return StoreCodec(self.encoding, eaf_exceptions=EafExceptionTable.open(self.group))
 
     @cached_property
+    def eaf_table(self) -> TablePages | None:
+        """The exception table each window takes its span of, opened on first decode."""
+        return eaf_table(self.target)
+
+    @cached_property
     def se_codec(self) -> StoreCodec:
         return StoreCodec(self.encoding, se_exceptions=SeExceptionTable.open(self.group))
 
@@ -581,7 +761,8 @@ class _Sequence:
         variant = np.asarray(self.variant_index[lo:hi])
         imputed = None if self.imputed is None else np.asarray(self.imputed[lo:hi])
         eaf_codes = None if self.eaf_array is None else np.asarray(self.eaf_array[lo:hi])
-        eaf, failure = self._eaf(eaf_codes, variant, imputed, lo, hi)
+        span: list[tuple[np.ndarray, np.ndarray] | None] = [None]
+        eaf, failure = self._eaf(eaf_codes, variant, imputed, (lo, hi), span)
         analysis = analyses_of(self.offsets, lo, hi)
         return Block(
             offset=lo,
@@ -596,7 +777,14 @@ class _Sequence:
                 _sequence_window_se, self, eaf=eaf, eaf_failure=failure, analysis=analysis, lo=lo
             ),
             read_n=None if self.n_array is None else partial(self._n, lo, hi),
+            eaf_span=span[0],
+            eaf_taken=self._taken(),
         )
+
+    def _taken(self) -> int:
+        """The table entries the pass has handed to windows so far, if it read any."""
+        table: TablePages | None = self.__dict__.get("eaf_table")
+        return 0 if table is None else table.taken
 
     def _z(self, lo: int, codes: np.ndarray) -> np.ndarray:
         return self.z_codec.decode_z(codes, positions=positions_flat(lo))
@@ -610,8 +798,8 @@ class _Sequence:
         codes: np.ndarray | None,
         variant: np.ndarray,
         imputed: np.ndarray | None,
-        lo: int,
-        hi: int,
+        bounds: tuple[int, int],
+        span: list[tuple[np.ndarray, np.ndarray] | None],
     ) -> tuple[np.ndarray | None, Exception | None]:
         """The window's decoded frequencies, from the codes it holds, or why they cannot be.
 
@@ -619,13 +807,21 @@ class _Sequence:
         substitutes the panel's frequency cannot be decoded either; the mask's own
         rule says why. A side array the plan names and the group lacks is a plan
         rule's finding, and leaves the window's frequencies undecodable here.
+
+        The window's span of the exception table, every entry its cells can name, is
+        taken from the pass's one read of it and left in `span` for the side-table
+        rule (issue #314).
         """
         if not self.decodes_eaf:
             return None, None
+        lo, hi = bounds
         try:
+            table = self.eaf_table if codes is not None else None
+            span[0] = None if table is None else table.take(hi)
+            codec = self.eaf_codec if span[0] is None else _span_codec(self.encoding, span[0])
             plane = RaggedEafPlane(
                 None if codes is None else _RowWindow(codes, lo, self.shape),
-                self.eaf_codec,
+                codec,
                 _RowWindow(variant, lo, self.shape),
                 baseline=self.baseline,
                 reference=self.reference,
@@ -725,4 +921,6 @@ def _association_blocks(target: Target) -> int:
     return 0 if banding is None else sum(1 for _ in banding.limits(target))
 
 
-ASSOCIATIONS: Scan[Block] = Scan(SCAN_NAME, _blocks, _read_failure, _association_blocks)
+ASSOCIATIONS: Scan[Block] = Scan(
+    SCAN_NAME, _blocks, _read_failure, _association_blocks, finish=_finish_tables
+)
