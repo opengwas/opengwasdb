@@ -6,6 +6,9 @@ missing block positions -- and the writer lays them end to end in Analysis
 order. The Analyses are assembled in a fork pool, as Dense writes its bands
 there, and the worker count must change nothing in the Store Release.
 
+The writer then writes the sequence a region of whole shards at a time, and
+the regions run in the same pool, each worker writing its own shards.
+
 The fixture is a residual-SE source of four Analyses over one LD block, each
 leaving different block positions unobserved, and a panel that adds positions
 the source never held, so every Analysis gains fills. Each test checks that
@@ -37,6 +40,8 @@ from test_ragged_residual_completion import (
 )
 
 import opengwasdb.layouts.ragged.complete as complete_module
+import opengwasdb.layouts.ragged.zarr_csr as zarr_csr
+import opengwasdb.store.arrays as store_arrays
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store, resume_ragged_completion
@@ -208,3 +213,67 @@ def test_a_write_interrupted_after_some_analyses_resumes_to_the_same_release(
 
     assert not checkpoint_dir.exists()
     assert_same_release(completion.serial, dst)
+
+
+# ── the sequence written a region at a time, a region finishing out of order ──
+
+#: A sequence shard of 500 cells, so the fixture's sequence is several regions.
+SHARD_CELLS = 500
+
+
+def _narrow_shards(patch: pytest.MonkeyPatch) -> None:
+    """500-cell shards, each its own region: a region is otherwise at least
+    `DEFAULT_FLUSH_REGION_CELLS`, which holds the whole fixture."""
+    patch.setattr(store_arrays, "RAGGED_SEQUENCE_SHARD_ELEMENTS", SHARD_CELLS)
+    patch.setattr(store_arrays, "ASSOCIATION_SEQUENCE_CHUNK", 100)
+    patch.setattr(zarr_csr, "sequence_region_step", lambda _total, _cells: SHARD_CELLS)
+
+
+@pytest.fixture(scope="module")
+def narrow_serial(completion: CompletionInputs, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The release one worker writes with 500-cell shards: one region a shard."""
+    with pytest.MonkeyPatch.context() as patch:
+        _narrow_shards(patch)
+        release = completion.complete(
+            tmp_path_factory.mktemp("narrow") / "serial.opengwasdb", n_workers=1
+        )
+    group = zarr.open_group(str(release / RAGGED_ZARR_PATH), mode="r")
+    assert tuple(group["z"].shards) == (SHARD_CELLS,)
+    assert int(group["z"].shape[0]) > 3 * SHARD_CELLS, "fixture: at least four regions"
+    return release
+
+
+_REGIONS = CompletionOrder(3)
+_REAL_WRITE_REGION = getattr(zarr_csr, "_write_region", None)
+
+
+def _first_region_finishing_last(plan: Any, region: tuple[int, int]) -> Any:
+    index = region[0] // SHARD_CELLS
+    if index == 0:
+        _REGIONS.wait_for_the_rest()
+    assert _REAL_WRITE_REGION is not None
+    outcome = _REAL_WRITE_REGION(plan, region)
+    if index < 3:
+        _REGIONS.claim(index)
+    return outcome
+
+
+def test_a_sequence_written_a_region_a_worker_is_the_one_one_worker_writes(
+    completion: CompletionInputs,
+    narrow_serial: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first region is held until two others are written, so a writer that
+    took the regions' side-table entries or exception counts in the order the
+    pool finished would file them under another region's cells."""
+    _narrow_shards(monkeypatch)
+    _REGIONS.reset()
+    monkeypatch.setattr(zarr_csr, "_write_region", _first_region_finishing_last, raising=False)
+
+    parallel = completion.complete(tmp_path / "parallel.opengwasdb", n_workers=N_WORKERS)
+
+    finished = _REGIONS.order()
+    assert sorted(finished) == [0, 1, 2], "the regions were not written on a pool"
+    assert finished[-1] == 0
+    assert_same_release(narrow_serial, parallel)

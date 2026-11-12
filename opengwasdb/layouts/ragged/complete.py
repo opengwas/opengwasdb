@@ -1393,14 +1393,16 @@ def _write_completed_zarr(
     csr: _CompletedCsr,
     analyses: list[Analysis],
     n_variants: int,
+    n_workers: int = 1,
 ) -> dict[str, Any] | None:
     """Phase 4: write the completed CSR as the store's ragged zarr group, then
     its variant-centric index (ADR 0060). Returns the SE exception record of a
     residual plane, reported here (issue #301).
 
-    Written through the builders' writer, region by region (issue #424), with
-    the source's plan: completion writes into the source's arrays, so it
-    encodes with the source's plan (ADR 0038 §4), the one addition being
+    Written through the builders' writer, region by region (issue #424), the
+    regions across ``n_workers`` (#321), with the source's plan: completion
+    writes into the source's arrays, so it encodes with the source's plan (ADR
+    0038 §4), the one addition being
     `eaf_reference`. Observed frequencies only: an imputed cell's frequency is
     the panel's, stored once per variant and applied on read (ADR 0037 §4).
     The per-variant baseline travels with the values across the variant remap
@@ -1421,11 +1423,12 @@ def _write_completed_zarr(
     cells, so a copied index would answer with the source's rows.
     """
     print("Writing zarr CSR...")
-    counts = csr.writer.flush(
+    counts = csr.writer.flush_regions(
         staged.path,
         encode_plan.encoding,
         eaf_baseline=encode_plan.out_baseline,
         se_coefficients=encode_plan.se_coefficients,
+        n_workers=n_workers,
     )
     se_exceptions = (
         None
@@ -1603,7 +1606,7 @@ def _run_completion(
             eaf_reference=encode_plan.eaf_reference,
         )
         se_exceptions = _write_completed_zarr(
-            staged, encode_plan, csr, state.src_analyses, len(axis.variants)
+            staged, encode_plan, csr, state.src_analyses, len(axis.variants), n_workers
         )
         _write_top_hits_and_analyses(staged, state, encode_plan, ancestry=ancestry)
         staged.write_manifest(

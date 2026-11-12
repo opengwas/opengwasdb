@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import zarr
 
+from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.encoding import (
     SE_EXCEPTION,
     SE_MISSING,
@@ -44,7 +45,12 @@ from opengwasdb.encoding.association_codec import (
     log_se_out_of_range,
     storable,
 )
-from opengwasdb.encoding.codec import require_parallel
+from opengwasdb.encoding.codec import SideTables, require_parallel
+from opengwasdb.encoding.memory import (
+    available_memory_bytes,
+    memory_budget_bytes,
+    workers_within_memory,
+)
 from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.model.enums import CompletionState
@@ -883,6 +889,12 @@ class RaggedCSRWriter:
             root, codec, encoding, offsets_arr, se_coefficients, self.n_associations,
             region_cells,
         )
+        self._mark_written(root)
+        return counts
+
+    def _mark_written(self, root: Any) -> None:
+        """The attributes that say the component is whole, written last: a group
+        without them is one a failed write left (issue #232)."""
         root.attrs["layout"] = "ragged"
         state = (
             CompletionState.OBSERVED_ONLY if self._completion is None else self._completion.state
@@ -890,7 +902,6 @@ class RaggedCSRWriter:
         root.attrs["completion_state"] = state.value
         root.attrs["n_analyses"] = self.n_analyses
         root.attrs["n_associations"] = self.n_associations
-        return counts
 
     def flush(
         self,
@@ -921,6 +932,136 @@ class RaggedCSRWriter:
         return self.flush_se(
             store_path, encoding, se_coefficients=se_coefficients, region_cells=region_cells
         )
+
+    def flush_regions(
+        self,
+        store_path: str | Path,
+        encoding: StoreEncoding,
+        *,
+        eaf_baseline: np.ndarray | None = None,
+        se_coefficients: np.ndarray | None = None,
+        n_workers: int = 1,
+        region_cells: int = DEFAULT_FLUSH_REGION_CELLS,
+    ) -> SeExceptionCounts | None:
+        """Write the whole CSR a region at a time, each region whole, across
+        ``n_workers`` (#321): what `flush` writes, for a writer whose SE model is
+        given (a Reference Completion's, issue #301) or whose plan is `float16`.
+
+        A region is whole sequence shards (`_flat_regions`), so a forked worker
+        writes every plane of its own region and no other worker touches those
+        shards. It codes its cells once, through `AssociationCodec`: z, then
+        EAF, then SE against the EAF a reader decodes, the panel's on an
+        imputed cell -- the frequency `flush_se` reads back from the written
+        plane. The parent takes the regions' side-table entries and exception
+        counts in region order and writes each table once. A plan whose SE
+        model this writer must fit itself needs the whole frequency plane
+        first, so it is refused here and written by `flush`.
+        """
+        if encoding.se.is_residual and se_coefficients is None:
+            raise ValueError(
+                "flush_regions codes SE against a given model; a writer that fits its own "
+                "is written by flush"
+            )
+        self._log_completion_out_of_range()
+        root = store_arrays.open_group_for_write(Path(store_path) / RAGGED_ZARR_PATH, "w")
+        offsets = np.asarray(self._offsets, dtype=np.int64)
+        store_arrays.create_array(
+            root, "offsets", ArrayRole.ASSOCIATION_OFFSETS, data=offsets, dtype=np.int64,
+            compressor=_COMPRESSOR,
+        )
+        plan = self._region_plan(root, encoding, offsets, eaf_baseline, se_coefficients)
+        tables = _RegionTables(SeExceptionCounts.zeros(self.n_analyses))
+        regions = list(self._flat_regions(self.n_associations, region_cells))
+        workers = _region_workers(n_workers, regions)
+        for (lo, _hi), outcome in zip(
+            regions, ordered_map(_write_region, regions, workers, shared=plan), strict=True
+        ):
+            if outcome.lo != lo:
+                raise RuntimeError(f"region {outcome.lo} arrived where region {lo} belongs")
+            tables.add(outcome)
+        return self._finish_regions(root, encoding, plan, tables, se_coefficients)
+
+    def _region_plan(
+        self,
+        root: Any,
+        encoding: StoreEncoding,
+        offsets: np.ndarray,
+        eaf_baseline: np.ndarray | None,
+        se_coefficients: np.ndarray | None,
+    ) -> _RegionPlan:
+        """Every plane, created empty at full length, and what each region reads."""
+        total = self.n_associations
+        codec = StoreCodec(encoding)
+        reference = None if self._completion is None else self._completion.eaf_reference
+        if reference is not None:
+            write_eaf_reference(
+                root, reference, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_PER_VARIANT
+            )
+        planes = self._region_planes(encoding, codec)
+        for name, dtype in planes.items():
+            self._plane(root, name, total, dtype)
+        baseline = self._flush_baseline(encoding, eaf_baseline)
+        return _RegionPlan(
+            writer=self,
+            root=root,
+            offsets=offsets,
+            planes=tuple(planes),
+            codec=AssociationCodec(
+                encoding,
+                eaf_baseline=baseline,
+                eaf_reference=reference,
+                se_coefficients=se_coefficients,
+            ),
+            baseline=baseline,
+            carried=self._completion is not None,
+        )
+
+    def _region_planes(self, encoding: StoreEncoding, codec: StoreCodec) -> dict[str, Any]:
+        """The planes the plan and the held cells call for, by name, with dtypes:
+        as `flush` writes them, `imputed` only when an Analysis was given flags
+        and `n` only when the plan declares it."""
+        planes: dict[str, Any] = {"variant_index": np.int32, "z": codec.z_dtype}
+        if not encoding.eaf.is_absent:
+            planes["eaf"] = codec.eaf_dtype
+        if any(flags is not None for flags in self._imputed):
+            planes["imputed"] = np.uint8
+        if encoding.n is not None:
+            planes["n"] = encoding.n.dtype
+        elif any(codes is not None for codes in self._ns):
+            raise ValueError(
+                "this writer holds per-association sample sizes but the plan declares "
+                "no n plane; flushing would drop them (ADR 0067)"
+            )
+        planes["se"] = encoding.se.dtype
+        return planes
+
+    def _finish_regions(
+        self,
+        root: Any,
+        encoding: StoreEncoding,
+        plan: _RegionPlan,
+        tables: _RegionTables,
+        se_coefficients: np.ndarray | None,
+    ) -> SeExceptionCounts | None:
+        """The side tables and per-variant arrays, then the attributes that mark
+        the component written, last."""
+        tables.z_overflow.table().write(root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
+        if encoding.eaf.is_residual:
+            assert plan.baseline is not None
+            write_eaf_baseline(
+                root, plan.baseline, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_PER_VARIANT
+            )
+            tables.eaf_exceptions.table().write(root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
+        counts = None
+        if encoding.se.is_residual:
+            assert se_coefficients is not None
+            write_se_coefficients(root, se_coefficients, compressor=_COMPRESSOR)
+            tables.se_exceptions.table().write(
+                root, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_EXCEPTION_TABLE
+            )
+            counts = tables.counts
+        self._mark_written(root)
+        return counts
 
     def _write_n_plane(
         self, store_path: str | Path, encoding: StoreEncoding, region_cells: int
@@ -1006,6 +1147,109 @@ class RaggedCSRWriter:
         plane = self._plane(root, "imputed", total, np.uint8)
         for lo, hi in self._flat_regions(total, region_cells):
             plane[lo:hi] = self._gather_imputed(offsets, lo, hi)
+
+
+#: What one region's worker holds a cell, measured on the old split flush at
+#: 79 bytes (#249) and rounded up for the one-pass encode's `float64`
+#: intermediates; and the fork's floor.
+_REGION_BYTES_PER_CELL = 128
+_REGION_FIXED_BYTES = 256 * 1024**2
+
+
+def _region_workers(n_workers: int, regions: list[tuple[int, int]]) -> int:
+    """The flush's worker count: a quarter of `MemAvailable`, one region a
+    worker, as the completion write pool is sized (`completion.parallel`)."""
+    if n_workers <= 1 or len(regions) <= 1:
+        return 1
+    largest = max(hi - lo for lo, hi in regions)
+    budget = memory_budget_bytes(available_memory_bytes())
+    return workers_within_memory(
+        min(n_workers, len(regions)),
+        _REGION_FIXED_BYTES + _REGION_BYTES_PER_CELL * largest,
+        budget,
+    )
+
+
+@dataclass(frozen=True)
+class _RegionPlan:
+    """What every region of `RaggedCSRWriter.flush_regions` reads -- the writer
+    and its held Analyses among it -- inherited by the forked workers, never
+    pickled."""
+
+    writer: RaggedCSRWriter
+    root: Any
+    offsets: np.ndarray
+    planes: tuple[str, ...]
+    codec: AssociationCodec
+    baseline: np.ndarray | None
+    #: Whether a cell not flagged imputed is carried from another Store, and
+    #: so must decode to exactly its value (issue #301).
+    carried: bool
+
+
+@dataclass(frozen=True)
+class _RegionOutcome:
+    """One region's side-table entries and its SE codes' counts, per Analysis."""
+
+    lo: int
+    tables: SideTables
+    se_counts: SeExceptionCounts
+
+
+@dataclass
+class _RegionTables:
+    """The regions' side-table entries and counts, gathered in region order."""
+
+    counts: SeExceptionCounts
+    z_overflow: ZOverflowBuilder = field(default_factory=ZOverflowBuilder)
+    eaf_exceptions: EafExceptionBuilder = field(default_factory=EafExceptionBuilder)
+    se_exceptions: SeExceptionBuilder = field(default_factory=SeExceptionBuilder)
+
+    def add(self, outcome: _RegionOutcome) -> None:
+        for builder, table in (
+            (self.z_overflow, outcome.tables.z_overflow),
+            (self.eaf_exceptions, outcome.tables.eaf_exceptions),
+            (self.se_exceptions, outcome.tables.se_exceptions),
+        ):
+            builder.add(table.index, table.value)
+        for total, part in (
+            (self.counts.n_se, outcome.se_counts.n_se),
+            (self.counts.n_exceptions, outcome.se_counts.n_exceptions),
+            (self.counts.n_imputed_se, outcome.se_counts.n_imputed_se),
+            (self.counts.n_imputed_exceptions, outcome.se_counts.n_imputed_exceptions),
+        ):
+            total += part
+
+
+def _write_region(plan: _RegionPlan, region: tuple[int, int]) -> _RegionOutcome:
+    """Code and write every plane of flat cells ``[lo, hi)``; runs in a worker."""
+    lo, hi = region
+    writer, offsets = plan.writer, plan.offsets
+    indices, scores, errors, frequencies = writer._gather_region(offsets, lo, hi)
+    analyses = writer._region_analysis_indices(offsets, lo, hi)
+    imputed = writer._gather_imputed(offsets, lo, hi)
+    encoded = plan.codec.encode(
+        CellValues(
+            scores, errors, frequencies if "eaf" in plan.planes else None, imputed=imputed
+        ),
+        Placement.sequence(lo, indices, analyses, writer.n_analyses),
+        where=f"the Ragged writer, cells {lo:,} to {hi:,}",
+        carried=imputed == 0 if plan.carried else None,
+    )
+    written = {
+        "variant_index": indices,
+        "z": encoded.z,
+        "eaf": encoded.eaf,
+        "imputed": imputed,
+        "n": writer._gather_n(offsets, lo, hi) if "n" in plan.planes else None,
+        "se": encoded.se,
+    }
+    for name in plan.planes:
+        plan.root[name][lo:hi] = written[name]
+    counts = SeExceptionCounts.zeros(writer.n_analyses)
+    if plan.codec.plan.se.is_residual:
+        counts.add(encoded.se, analyses, imputed)
+    return _RegionOutcome(lo, encoded.tables, counts)
 
 
 class RaggedCSRReader:
