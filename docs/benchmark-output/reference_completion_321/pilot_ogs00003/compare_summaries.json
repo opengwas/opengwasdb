@@ -1,7 +1,7 @@
 {
  "compare-base-1-r1-head-1-r1.json": {
-  "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/ogs3/base-1-r1.opengwasdb",
-  "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/ogs3/head-1-r1.opengwasdb",
+  "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/base-1-r1.opengwasdb",
+  "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-1-r1.opengwasdb",
   "n_arrays": [
    41,
    41
@@ -22,8 +22,8 @@
   ]
  },
  "compare-base-1-r1-head-16-r1.json": {
-  "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/ogs3/base-1-r1.opengwasdb",
-  "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/ogs3/head-16-r1.opengwasdb",
+  "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/base-1-r1.opengwasdb",
+  "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-16-r1.opengwasdb",
   "n_arrays": [
    41,
    41
@@ -44,8 +44,8 @@
   ]
  },
  "compare-head-1-r1-head-16-r1.json": {
-  "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/ogs3/head-1-r1.opengwasdb",
-  "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/ogs3/head-16-r1.opengwasdb",
+  "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-1-r1.opengwasdb",
+  "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-16-r1.opengwasdb",
   "n_arrays": [
    41,
    41
@@ -66,8 +66,8 @@
   ]
  },
  "compare-head-16-r1-head-16-r2.json": {
-  "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/ogs3/head-16-r1.opengwasdb",
-  "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/ogs3/head-16-r2.opengwasdb",
+  "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-16-r1.opengwasdb",
+  "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-16-r2.opengwasdb",
   "n_arrays": [
    41,
    41

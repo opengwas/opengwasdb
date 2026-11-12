@@ -129,11 +129,12 @@ differ there.
 - Peak scratch disk falls by the `float32` SE plane and its `int8` copy. At
   every array write the staged planes hold no more than the release they
   become (`tests/test_completion_band_write.py`). The tiers #200 targets, the
-  block checkpoints and the fill shards, do not change: on OGS-00003 they are
-  77.3 and 16.0 bytes per imputed cell, 93.3 together at base and at head,
-  where #200 measured 92 on OGS-00010 and sets a target of 16 or fewer. That
-  target is #200's work (one ALID per block, no second copy of the fills),
-  not this decision's.
+  block checkpoints and the fill shards, this decision does not change: on
+  OGS-00003 the checkpoints are 77.3 bytes per imputed cell at base and 77.5
+  at head (#361's checkpoints carry long ALIDs whole), and the fill shards
+  16.0 at both, so 93.3 and 93.5 together. #200 measured 92 on OGS-00010 and
+  sets a target of 16 or fewer; reaching it is #200's work (one ALID per
+  block, no second copy of the fills), not this decision's.
 - A Dense band worker holds its band whole: 18 bytes a cell of values and
   codes, and its reads' and encodes' steps beside them, measured at 10.2 GB
   private for a 200,000-row band of OGS-00009's 2,514 Analyses.

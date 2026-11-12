@@ -2,34 +2,46 @@
   "package": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/base-9dab184/opengwasdb/__init__.py",
   "layout": "dense",
   "template": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/.ogs3-blocks.opengwasdb.checkpoint",
-  "dest": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/ogs3/base-1-r2.opengwasdb",
+  "dest": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/base-1-r2.opengwasdb",
   "n_workers": 1,
-  "wall_seconds": 988.7850311460206,
+  "wall_seconds": 850.8202645370038,
   "phase_seconds": {
-    "_build_union_axis": 311.03518976899795,
-    "_complete_pending_blocks": 0.17608773009851575,
-    "_merge_checkpoint_fills": 112.29961962695234,
-    "_write_completed_bands": 502.3765214990126,
-    "_write_completed_manifest": 0.013549156952649355,
-    "_completed_analysis_rows": 0.027226538979448378,
-    "_finalise_release": 57.052865348989144
+    "_build_union_axis": 318.5418341640616,
+    "_complete_pending_blocks": 0.18308209895621985,
+    "_merge_checkpoint_fills": 119.53338907798752,
+    "_write_completed_bands": 358.9884966800455,
+    "_write_completed_manifest": 0.00788492092397064,
+    "_completed_analysis_rows": 0.10481937194708735,
+    "_finalise_release": 48.841633238014765
+  },
+  "pool_worker_memory": {
+    "_merge_checkpoint_fills": {
+      "workers_sampled": 0,
+      "peak_private_bytes": 0,
+      "peak_private_bytes_by_worker": []
+    },
+    "_write_completed_bands": {
+      "workers_sampled": 0,
+      "peak_private_bytes": 0,
+      "peak_private_bytes_by_worker": []
+    }
   },
   "peak_scratch_bytes": {
-    "total": 3527414895,
-    "checkpoint": 225391523,
-    "staged": 3302023372,
+    "total": 3524570861,
+    "checkpoint": 225391524,
+    "staged": 3299179337,
     "fill_shards": 46668144
   },
   "release_bytes": 2614532729,
   "uptime": [
-    2.43,
-    2.32,
-    2.59
+    5.76,
+    5.82,
+    6.68
   ],
-  "ru_maxrss_kib_self": 24495508,
+  "ru_maxrss_kib_self": 24488788,
   "ru_maxrss_kib_children": 0,
   "result": {
-    "output_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/ogs3/base-1-r2.opengwasdb",
+    "output_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/base-1-r2.opengwasdb",
     "n_variants": 21618934,
     "n_analyses": 10,
     "n_imputed": 2916759,

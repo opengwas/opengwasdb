@@ -17,17 +17,23 @@
   metadata and on-disk sizes, `analyses.tsv`, `variants.tsv.gz`,
   `completion_quality` rows and manifest are all unchanged. The pool runs
   `--n-workers` workers, fewer when a quarter of `MemAvailable` holds fewer
-  units, and logs how many. A Dense band is budgeted at 4 GiB + 24 bytes a
-  cell. On OGS-00009 the budget is 16.4 GB, and a band worker held at most
-  10.2 GB private. Resume still keeps the LD blocks and redoes the write.
+  units beside the parent, and logs how many. A Dense band is budgeted at
+  4 GiB + 24 bytes a cell. On OGS-00009 the budget is 16.4 GB, and a band
+  worker held at most 10.2 GB private. Resume still keeps the LD blocks and
+  redoes the write. `--n-workers`' help now names every pool it sizes.
 
   On OGS-00009, #309's profiler ran 2 of 56 bands with real fills, base and
   head side by side, twice. On one worker the one pass alone brings the band
   write, scaled to the full run, from 19,807 s and 19,422 s down to 10,722 s
-  and 9,404 s. On the OGS-00003 pilot the band write falls from 528 s and
-  502 s to 95 s on one worker and 12 s on 16. On the OGS-00006 100-Analysis
-  subset, Ragged's assembly falls from 165–189 s to 12–13 s, and its flush
-  from 30–32 s to 14 s. Peak scratch disk on OGS-00003 falls from 3.53 GB to
-  2.80 GB, against a 2.61 GB release. Base and head, at 1 and 16 workers, are
-  the same release by the release comparison tool. The full-size measurement
-  is #322's end-to-end rebuild.
+  and 9,404 s. Over 8 bands, head's write on 4 workers scales to 3,358 s
+  (56 min), against base's 20,485 s and #309's 21,179 s (5.9 h).
+
+  On the OGS-00003 pilot the band write falls from 372 s and 359 s to 78–82 s
+  on one worker and 12.8 s on 16. On the OGS-00006 100-Analysis subset,
+  Ragged's assembly falls from 103–104 s to 12.5 s on 16 workers, and its
+  flush from 30 s to 14–15 s on one worker (18–19 s on 16, where its two
+  regions compress single-threaded). Peak scratch disk on OGS-00003 falls
+  from 3.53 GB to 2.81–2.83 GB, against a 2.61 GB release; the checkpoint and
+  fill-shard tiers #200 targets do not change. Base and head, at 1 and 16
+  workers, are the same release by the release comparison tool. The
+  full-size measurement is #322's end-to-end rebuild.

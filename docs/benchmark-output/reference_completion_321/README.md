@@ -1,12 +1,12 @@
 # Reference Completion's write across workers (#321)
 
 Measurements behind ADR 0080, taken on 12 Nov 2026 on the 224-core shared
-host. Base is the integration tip `9dab184`. Head is #321's branch before #361
-merged into it: `3fe26e9` for the profiles and `37db027` for the pilots, as the
-artifacts record them. The branch was then rebuilt so that each commit passes
-its tests, and those commits are now `5ef19c2` and `9ce2776`, with the same
-`opengwasdb/` trees (`3360f41`, `fc8bf0b`) and `benchmarks/` tree (`8a87126`).
-The 8-band pool run and the head pilots ran at `25530c9`, after #361 merged in.
+host. Base is the integration tip `9dab184`. The 2-band OGS-00009 profiles ran
+at `3fe26e9`, before #361 merged in, as the artifacts record; the branch was
+then rebuilt so that each commit passes its tests, and that commit is now
+`5ef19c2`, with the same `opengwasdb/` tree (`3360f41`) and `benchmarks/` tree
+(`8a87126`). The 8-band OGS-00009 profile, the pilots and the pool-memory run
+ran at `25530c9`, after #361 merged in.
 Each timing pair ran in fresh processes. The pilots ran interleaved under the
 run's timing lock. The OGS-00009 profiles ran base beside head, at the same
 moment. Each artifact records the host load it ran under.
@@ -57,28 +57,41 @@ to fill and shard than head's, which favours base. #309 recorded 21,179 s
 
 `pilot_ogs00003/` is the FinnGen R13 pilot: 21,618,934 variants, 10 Analyses,
 format 0.2.2. `pilot_ogs00006/` is the first 100 of OGS-00006's 1,400
-Analyses, chromosomes 15–22, with its regions: 55,327,252 associations. Each
+Analyses, chromosomes 15–22, with its regions: 55,327,252 associations. Base
+(`9dab184`) resumes LD-block checkpoints it wrote, format 2; head (`25530c9`)
+resumes ones written after #361, format 3. Each
 `<side>-<workers>-r<round>.json` comes from `benchmarks/completion_write_pilot.py
 resume`. It records each post-block phase's seconds, the peak scratch disk
-(checkpoint plus staged release, sampled every second), and the release's
-size. `compare_summaries.json` is the release comparison tool's verdict on
-each pair: every pair is identical in array metadata (on-disk size included),
-decoded values, `analyses.tsv`, `variants.tsv.gz`, `completion_quality` rows,
-and the manifest but for `created_at`.
+(checkpoint plus staged release, sampled every second), each pooled phase's
+workers' private memory, and the release's size. `compare_summaries.json` is
+the release comparison tool's verdict on four pairs, base at 1 worker against
+head at 1 and 16, and head at 1 against 16 and against itself. Every pair is
+identical in array metadata (on-disk size included), decoded values,
+`analyses.tsv`, `variants.tsv.gz`, `completion_quality` rows, and the manifest
+but for `created_at`.
 
 | pilot, phase (s) | base, 1 | head, 1 | head, 16 |
 |---|---|---|---|
-| OGS-00003 band write, r1 / r2 | 528 / 502 | 95 / 94 | 11.6 / 11.9 |
-| OGS-00003 checkpoint merge, r1 / r2 | 111 / 112 | 112 / 113 | 114 / 116 |
-| OGS-00003 peak scratch (GB), r1 | 3.53 | 2.81 | 2.80 |
-| OGS-00006 assembly, r1 / r2 | 189 / 165 | 163 / 191 | 12.1 / 12.7 |
-| OGS-00006 CSR flush, r1 / r2 | 32.2 / 29.8 | 16.9 / 16.9 | 14.0 / 14.3 |
-| OGS-00006 peak scratch (GB), r1 | 1.42 | 1.42 | 1.42 |
+| OGS-00003 band write, r1 / r2 | 372 / 359 | 78 / 82 | 12.8 / 12.8 |
+| OGS-00003 checkpoint merge, r1 / r2 | 121 / 120 | 126 / 123 | 124 / 123 |
+| OGS-00003 peak scratch (GB), r1 / r2 | 3.53 / 3.52 | 2.82 / 2.81 | 2.82 / 2.83 |
+| OGS-00006 assembly, r1 / r2 | 104 / 103 | 98 / 102 | 12.5 / 12.5 |
+| OGS-00006 CSR flush, r1 / r2 | 29.6 / 30.0 | 15.2 / 14.4 | 18.7 / 17.8 |
+| OGS-00006 peak scratch (GB), r1 / r2 | 1.42 / 1.43 | 1.41 / 1.42 | 1.42 / 1.43 |
 
 OGS-00003's release is 2.61 GB. Base's peak held a `float32` SE plane beside
-it, while head's staged planes never exceed the release. OGS-00003's merge is
-no shorter at 16 workers: it has 2.9 M fills to shard, and the rest of the
-merge (the panel's reference EAF, the union map, the empty planes) is not on
-the pool. On OGS-00006 the flush is two 50 M-cell regions, so two workers is
-all it can use. At head the variant index (64–80 s) is most of the Ragged
-write that remains.
+it, while head's staged planes never exceed the release. The scratch #200
+counts per imputed cell, checkpoints and fill shards, is 93.3 bytes at base
+and 93.5 at head (head's checkpoints carry #361's long ALIDs), against #200's
+16-byte target, which is #200's work.
+
+OGS-00003's merge is no shorter at 16 workers: it has 2.9 M fills to shard,
+and the rest of the merge (the panel's reference EAF, the union map, the empty
+planes) is not on the pool. OGS-00006's flush is two 50 M-cell regions, so two
+workers is all it can use, and each compresses with single-threaded Blosc, so
+it is slower on the pool than in the parent, which compresses with threads. At
+head the variant index (46–49 s) is most of the Ragged write that remains.
+
+`pool_memory/ogs00006_subset_head-16.json` is the run that measured the
+Ragged assembly and region workers' private memory, from which their budgets
+are set.
