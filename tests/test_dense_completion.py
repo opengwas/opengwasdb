@@ -2056,7 +2056,11 @@ def test_a_panel_row_no_alid_names_is_counted_by_no_block(
     """`completion_quality` counts only cells the Store holds (the owner's ruling of 11
     Nov 2026, ADR 0039). An unnamed indel at the shared endpoint is in both blocks, and
     ceding by ALID cannot reach it, so each block once counted it missing. Neither does
-    now: the counts are those of the same completion without it."""
+    now: the counts are those of the same completion without it, and each quality row
+    counts exactly the cells its block owns, the named endpoint left to the block that
+    starts there (ADR 0072)."""
+    from completion_counts import assert_dense_counts_are_cells
+
     _stub_fits(monkeypatch)
     plain = _boundary_panel(tmp_path / "plain", "900000-1050000", "1050000-1200000")
     unnamed = tmp_path / "unnamed"
@@ -2071,6 +2075,7 @@ def test_a_panel_row_no_alid_names_is_counted_by_no_block(
             observed_store, dst, panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
         )
         counts[name] = _quality(dst)
+        assert_dense_counts_are_cells(dst, panel)
         record = open_store(dst).manifest.provenance["completion"]
         unplaced = record["panel_indels"]["unplaced"]["no_reference"]
         assert unplaced == (2 if name == "unnamed" else 0), (name, record["panel_indels"])

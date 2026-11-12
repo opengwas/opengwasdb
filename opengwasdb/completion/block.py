@@ -322,6 +322,10 @@ def _owned_rows(
             n_missing += 1  # counted out with the left-alone positions above
             continue
         if alid is None:
+            # A guard, not a branch: `_left_alone` leaves every unnamed position alone,
+            # so nothing reaches here unless that mask and this loop stop agreeing, and
+            # then a fill with no ALID must stop the run rather than be counted. The
+            # package has no error type of its own for a broken invariant.
             raise AssertionError(f"block position {local_idx} names no ALID but was not left alone")
         fills.append(FillRow(alid, ai, zv, sev))
     return fills, QualityRow(ai, result.pearson_r, len(fills), n_missing)

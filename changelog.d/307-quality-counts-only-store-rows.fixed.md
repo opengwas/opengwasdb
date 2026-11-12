@@ -12,4 +12,8 @@
   Dense OGS-00003's quality rows went from 565,881 missing to 2,161. Published
   Stores are untouched. The unnamed indels stay counted in
   `provenance.completion.panel_indels`: `unplaced.no_reference`, and `n_indels`
-  less `n_placed`.
+  less `n_placed`. The rule is any panel row no ALID names, not only an indel, so
+  a panel SNV or substitution completion cannot place (no `EA`, or an `EA` that is
+  neither of its alleles) is no longer counted missing either. The record counts
+  those in `provenance.completion.panel_snvs_unplaced`; all three completions
+  measured above have none.

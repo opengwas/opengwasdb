@@ -300,12 +300,15 @@ def test_every_ragged_completion_counts_the_rows_it_added(name, request):
     assert_counts_are_rows(*_completion_inputs(name, request))
 
 
-def test_the_dense_completion_counts_the_cells_it_added(dense_completion):
-    """Dense's counts are its cells: every imputed cell and every one left missing
-    where a fill failed, each counted by the one block that owns it."""
-    from completion_counts import quality_rows
+def test_the_dense_completion_counts_the_cells_it_added(dense_completion, signal_panel_npz_only):
+    """Dense's counts are its cells, quality row by quality row: `n_imputed` the
+    cells of the block's own rows completion imputed, `n_missing` those it left
+    without a value, and together every imputed cell and every one left missing
+    where a fill failed."""
+    from completion_counts import assert_dense_counts_are_cells, quality_rows
 
     store, totals = dense_completion
-    counted = quality_rows(store)
     assert totals["n_imputed"] > 0, "nothing was imputed, so nothing is under test"
+    assert_dense_counts_are_cells(store, signal_panel_npz_only)
+    counted = quality_rows(store)
     assert sum(counted.values()) == totals["n_imputed"] + totals["n_missing_imputation_failed"]
