@@ -1188,6 +1188,23 @@ def _band_bytes(n_analyses: int, band_rows: int) -> int:
     return _BAND_FIXED_BYTES + _BAND_BYTES_PER_CELL * n_analyses * band_rows
 
 
+#: What the parent holds of one band's outcome until it takes it: two counts a
+#: band per Analysis, and the band's table entries, 12 bytes each, pickled and
+#: unpickled. OGS-00009's completed release holds 6e-5 of its cells as SE
+#: exceptions (about 30,000 a band) and far fewer z and EAF ones; a fortieth of
+#: a byte a cell is room for 10^-3 of the cells (#321).
+_BAND_RESULT_BYTES_PER_ANALYSIS = 16
+_BAND_RESULT_CELLS_PER_BYTE = 40
+
+
+def _band_result_bytes(n_analyses: int, band_rows: int) -> int:
+    """Bytes the parent holds of one band's outcome."""
+    return (
+        _BAND_RESULT_BYTES_PER_ANALYSIS * n_analyses
+        + n_analyses * band_rows // _BAND_RESULT_CELLS_PER_BYTE
+    )
+
+
 def _step_rows(n_analyses: int) -> int:
     """Rows of a band one step reads, counts or encodes."""
     return max(1, _STEP_CELLS // max(n_analyses, 1))
@@ -1630,6 +1647,8 @@ def _run_bands(
         _band_bytes(plan.n_analyses, plan.band_rows),
         what=BAND_PHASE,
         unit=f"{plan.band_rows:,}-row band of {plan.n_analyses:,} Analyses",
+        units=n_bands,
+        result_bytes=_band_result_bytes(plan.n_analyses, plan.band_rows),
     )
     started = time.monotonic()
     outcomes = ordered_write(_complete_band, plan, range(n_bands), workers)

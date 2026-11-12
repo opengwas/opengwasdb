@@ -344,20 +344,26 @@ def test_the_region_pool_is_no_larger_than_its_regions_or_the_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """At most one worker a region, and no more than the memory budget holds:
-    16 GiB available is 4 GiB, a parent of 1 GiB leaves room for three regions'
-    workers at the pinned 16 MiB plus 128 bytes a cell of a 2^23-cell region."""
+    16 GiB available is 4 GiB, and a parent of 1 GiB leaves 3 GiB for workers at
+    the pinned 16 MiB plus 120 bytes a cell of a 2^23-cell region, each with
+    the two results the parent may hold for it."""
     monkeypatch.setattr(memory, "resident_bytes", lambda path=memory.SELF_STATUS: 1024**3)
     monkeypatch.setattr(
         memory, "available_memory_bytes", lambda path=memory.MEMINFO: 16 * 1024**3
     )
     regions = [(0, 500), (500, 1000), (1000, 1200)]
-    assert zarr_csr._region_workers(8, regions) == 3
-    assert zarr_csr._region_workers(2, regions) == 2
-    assert zarr_csr._region_workers(8, regions[:1]) == 1
+    assert zarr_csr._region_workers(8, regions, 4) == 3
+    assert zarr_csr._region_workers(2, regions, 4) == 2
+    assert zarr_csr._region_workers(8, regions[:1], 4) == 1
     cells = 1 << 23
     big = [(k * cells, (k + 1) * cells) for k in range(8)]
-    per_region = zarr_csr._REGION_FIXED_BYTES + zarr_csr._REGION_BYTES_PER_CELL * cells
-    assert zarr_csr._region_workers(8, big) == min(8, (3 * 1024**3) // per_region)
+    per_region = (
+        zarr_csr._REGION_FIXED_BYTES
+        + zarr_csr._REGION_BYTES_PER_CELL * cells
+        + memory.RESULTS_HELD_PER_WORKER
+        * (zarr_csr._REGION_RESULT_BYTES_PER_ANALYSIS * 4 + cells // 40)
+    )
+    assert zarr_csr._region_workers(8, big, 4) == min(8, (3 * 1024**3) // per_region)
 
 
 def test_a_flush_of_regions_refuses_a_residual_plan_with_no_model(tmp_path: Path) -> None:

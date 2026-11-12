@@ -160,10 +160,24 @@ def insert_completion_quality_batch(db: Any, batch: list[_QualityRow]) -> None:
 #: checkpoint about 3.3 more. A fill is 76 bytes on disk (its 64-byte ALID, its
 #: Analysis, z and SE), loaded whole; the lookup gathers an ALID and three
 #: `int64`s a fill (89 bytes), the resolved fills and their shard key take 40,
-#: and pickling them back to the parent 48. Rounded up to 4: on OGS-00009 a
-#: merge worker held up to 3.9 GB private (#321).
+#: and pickling them back to the parent 48. Rounded up to 4 (#321).
 _RESOLVE_FIXED_BYTES = 256 * 1024**2
 _RESOLVE_BYTES_PER_CHECKPOINT_BYTE = 4
+#: What the parent holds of one checkpoint's result until it appends it: 24
+#: bytes a fill of records and shard key, pickled and unpickled, against the
+#: 76 a fill takes in the checkpoint.
+_RESULT_BYTES_PER_FILL = 48
+_CHECKPOINT_BYTES_PER_FILL = 76
+
+
+def resolve_unit_bytes(largest_checkpoint: int) -> int:
+    """Bytes a checkpoint-merge worker holds, for the largest checkpoint."""
+    return _RESOLVE_FIXED_BYTES + _RESOLVE_BYTES_PER_CHECKPOINT_BYTE * largest_checkpoint
+
+
+def resolve_result_bytes(largest_checkpoint: int) -> int:
+    """Bytes the parent holds of one resolved checkpoint, for the largest."""
+    return largest_checkpoint * _RESULT_BYTES_PER_FILL // _CHECKPOINT_BYTES_PER_FILL
 
 
 @dataclass(frozen=True)
@@ -259,9 +273,11 @@ def _resolve_workers(checkpoints: list[Path], n_workers: int) -> int:
     largest = max((ckpt.stat().st_size for ckpt in checkpoints), default=0)
     return pool_workers(
         n_workers,
-        _RESOLVE_FIXED_BYTES + _RESOLVE_BYTES_PER_CHECKPOINT_BYTE * largest,
+        resolve_unit_bytes(largest),
         what="Checkpoint merge",
         unit=f"checkpoint of up to {largest >> 20:,} MiB",
+        units=len(checkpoints),
+        result_bytes=resolve_result_bytes(largest),
     )
 
 

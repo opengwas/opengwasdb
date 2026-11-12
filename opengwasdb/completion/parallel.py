@@ -21,6 +21,7 @@ from typing import Any, TypeVar
 from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]
 
 from opengwasdb.build.ordered_pool import ordered_map
+from opengwasdb.encoding.memory import RESULTS_HELD_PER_WORKER
 from opengwasdb.encoding.timing import log_progress
 
 P = TypeVar("P")
@@ -88,6 +89,9 @@ def ordered_write(
     ``plan`` is everything the units read, opened by the parent before the pool
     forks and inherited, never pickled (`ordered_map`'s ``shared``). A worker's
     error is raised here at its unit's position, and the units not yet started
-    are cancelled.
+    are cancelled. The parent holds at most `RESULTS_HELD_PER_WORKER` results a
+    worker, the share `pool_workers` budgets.
     """
-    return ordered_map(fn, units, workers, shared=plan)
+    return ordered_map(
+        fn, units, workers, max_in_flight=RESULTS_HELD_PER_WORKER * workers, shared=plan
+    )

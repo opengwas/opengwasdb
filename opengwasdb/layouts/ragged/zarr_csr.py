@@ -52,7 +52,7 @@ from opengwasdb.encoding.codec import (
     require_parallel,
     table_end_to_end,
 )
-from opengwasdb.encoding.memory import pool_workers
+from opengwasdb.encoding.memory import RESULTS_HELD_PER_WORKER, pool_workers
 from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.model.enums import CompletionState
@@ -974,9 +974,14 @@ class RaggedCSRWriter:
         plan = self._region_plan(root, encoding, offsets, eaf_baseline, se_coefficients)
         tables = _RegionTables(SeExceptionCounts.zeros(self.n_analyses))
         regions = list(self._flat_regions(self.n_associations, region_cells))
-        workers = _region_workers(n_workers, regions)
+        workers = _region_workers(n_workers, regions, self.n_analyses)
         for (lo, _hi), outcome in zip(
-            regions, ordered_map(_write_region, regions, workers, shared=plan), strict=True
+            regions,
+            ordered_map(
+                _write_region, regions, workers,
+                max_in_flight=RESULTS_HELD_PER_WORKER * workers, shared=plan,
+            ),
+            strict=True,
         ):
             if outcome.lo != lo:
                 raise RuntimeError(f"region {outcome.lo} arrived where region {lo} belongs")
@@ -1161,9 +1166,16 @@ class RaggedCSRWriter:
 #: next to nothing fixed (#321). Rounded up by a sixth.
 _REGION_BYTES_PER_CELL = 120
 _REGION_FIXED_BYTES = 256 * 1024**2
+#: What the parent holds of one region's result until it takes it: the
+#: region's four per-Analysis counts, and its table entries, 12 bytes each,
+#: pickled and unpickled. OGS-00009's completed release holds 6e-5 of its cells
+#: as SE exceptions and far fewer z and EAF ones; a fortieth of a byte a cell
+#: is room for 10^-3 of the cells (#321).
+_REGION_RESULT_BYTES_PER_ANALYSIS = 32
+_REGION_RESULT_CELLS_PER_BYTE = 40
 
 
-def _region_workers(n_workers: int, regions: list[tuple[int, int]]) -> int:
+def _region_workers(n_workers: int, regions: list[tuple[int, int]], n_analyses: int) -> int:
     """The flush's worker count: no more than it has regions, and as many as a
     quarter of `MemAvailable` holds beside the parent, one region a worker
     (`pool_workers`, as every completion write pool is sized)."""
@@ -1171,10 +1183,13 @@ def _region_workers(n_workers: int, regions: list[tuple[int, int]]) -> int:
         return 1
     largest = max(hi - lo for lo, hi in regions)
     return pool_workers(
-        min(n_workers, len(regions)),
+        n_workers,
         _REGION_FIXED_BYTES + _REGION_BYTES_PER_CELL * largest,
         what="CSR flush",
         unit=f"region of up to {largest:,} cells",
+        units=len(regions),
+        result_bytes=_REGION_RESULT_BYTES_PER_ANALYSIS * n_analyses
+        + largest // _REGION_RESULT_CELLS_PER_BYTE,
     )
 
 

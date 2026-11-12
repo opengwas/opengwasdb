@@ -122,6 +122,30 @@ def test_the_pool_is_what_the_budget_holds_beside_the_parent(
     assert "beside the parent's 1024 MiB, against a budget of 4096 MiB" in caplog.text
 
 
+def test_the_results_a_worker_leaves_with_the_parent_are_counted(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The ordered pool's parent holds two results a worker until it takes
+    them: 256 MiB results make each 1 GiB worker cost 1.5 GiB, so two fit
+    beside a 1 GiB parent in a 4 GiB budget, not three."""
+    _host(monkeypatch, 16 * GIB, 1 * GIB)
+
+    assert memory.RESULTS_HELD_PER_WORKER == 2
+    assert _pool(caplog, 8, 1 * GIB, result_bytes=GIB // 4) == 2
+    assert "512 MiB of results held by the parent" in caplog.text
+
+
+def test_no_more_workers_than_units(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Three bands at --n-workers 16 fork three workers, and the line says so."""
+    _host(monkeypatch, 1024 * GIB, 0)
+
+    assert _pool(caplog, 16, 1 * GIB, units=3) == 3
+    assert "3 of 3 worker(s)" in caplog.text
+    assert _pool(caplog, 16, 1 * GIB, units=1) == 1
+
+
 def test_the_parent_given_is_counted_rather_than_its_resident_set(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -162,11 +186,23 @@ def test_one_worker_asked_for_reads_nothing_and_says_nothing(
     assert caplog.text == ""
 
 
-def test_the_resident_set_is_vmrss_in_bytes(tmp_path: Path) -> None:
+def test_the_resident_set_is_vmrss_in_bytes(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     status = tmp_path / "status"
     status.write_text("VmPeak:\t 9999 kB\nVmRSS:\t   2048 kB\nVmHWM:\t 4096 kB\n")
     assert resident_bytes(status) == 2048 * 1024
-    status.write_text("VmRSS:\t   lots\n")
-    assert resident_bytes(status) == 0
-    assert resident_bytes(tmp_path / "absent") == 0
     assert resident_bytes() > 0, "this process's own status is readable"
+    assert caplog.text == ""
+
+
+@pytest.mark.parametrize("body", ["VmRSS:\t   lots\n", None], ids=["malformed", "missing"])
+def test_an_unreadable_resident_set_is_nothing_held_and_said(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, body: str | None
+) -> None:
+    status = tmp_path / "status"
+    if body is not None:
+        status.write_text(body)
+    with caplog.at_level(logging.WARNING, logger=memory.log.name):
+        assert resident_bytes(status) == 0
+    assert "cannot read this process's resident set" in caplog.text
