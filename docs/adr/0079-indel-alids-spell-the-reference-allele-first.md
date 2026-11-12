@@ -352,10 +352,16 @@ position (ADR 0072's clarification of 7 Nov).
   counts them as kept, and nothing refuses it. No build manifest names one
   today, and opengwasdb-stores#455 must land before anything rebuilds
   OGS-00011.
-- A package that knows only 0.2.0 or 0.2.1 reads a 0.2.2 Store correctly and
-  warns that it is newer; a completion it ran would spell its panel's indels sorted
-  beside the Store's reference-first deletions. Only a package that knows 0.2.2
-  completes one.
+- A package that knows only 0.2.0 or 0.2.1 reads a 0.2.2 Store's data as written
+  and warns that it is newer; a completion it ran would spell its panel's indels
+  sorted beside the Store's reference-first deletions. Only a package that knows
+  0.2.2 completes one. Package 0.9.0's `validate` also fails every 0.2.2 Store, on
+  its stamp rule: "release is stamped 0.2.2, but a release carrying no region table
+  is 0.2.0" (or "… regions.tsv is 0.2.1"). The fix is to upgrade the package, not
+  to re-stamp the Store, which would let 0.9.0 complete it. This package does not
+  judge the stamp of a Store newer than 0.2.2: it warns that the package must be
+  upgraded. (Amended 12 Nov 2026, epic #307's review: this point first said such a
+  package reads a 0.2.2 Store "correctly" and left out its `validate`.)
 - A Variant Reference or variant list written before 0.2.2 names an indel by
   its sorted spelling, which this build reads as the insertion: a source's
   deletion at that site is off the reference.

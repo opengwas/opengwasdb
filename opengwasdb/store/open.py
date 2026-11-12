@@ -117,7 +117,14 @@ def check_format_version_stamp(
     release's indels are spelt reference first (`indels_reference_first`), which
     `variant_table.indel_order` holds it to. Completion refuses a release stamped
     otherwise rather than re-stamp it, and `validate` fails it (spec §21.3).
+
+    A version newer than every one this build writes (`newer_than_written`) is not
+    judged: which stamp its features give is the rule of the package that writes it,
+    and naming this build's stamp would send its owner to re-stamp it, the wrong fix,
+    instead of upgrading (as package 0.9.0 tells a 0.2.2 release it "is 0.2.1").
     """
+    if newer_than_written(version):
+        raise UnsupportedFormatVersion(newer_than_written_text(version, source=source))
     stamp = format_version_for(
         carries_regions=carries_regions,
         reference_first_indels=indels_reference_first(version),
@@ -129,6 +136,23 @@ def check_format_version_stamp(
             "(spec §21.3)"
         )
     return version
+
+
+def newer_than_written(version: str) -> bool:
+    """Whether `version` is newer than every `format_version` this build writes: a
+    newer remainder of a series it reads (ADR 0041 §2), which a later package writes."""
+    return parse_format_version(version) > parse_format_version(WRITTEN_FORMAT_VERSIONS[-1])
+
+
+def newer_than_written_text(version: str, *, source: str = "release") -> str:
+    """What this build says of a release newer than it writes: upgrade, not re-stamp."""
+    return (
+        f"{source} is stamped {version}, newer than any format_version this build writes "
+        f"({WRITTEN_FORMAT_VERSIONS[-1]}), so which stamp its features give is the rule of "
+        "the package that wrote it. Upgrade opengwasdb to judge its stamp or to complete "
+        "it; do not re-stamp the release (spec §21.3)."
+    )
+
 
 #: The Zarr on-disk format each readable release series is stored in.  The
 #: series-to-layout coupling is part of the format contract, so it lives beside

@@ -51,6 +51,38 @@ def test_a_release_stamped_0_2_1_without_a_region_table_fails_its_stamp(request,
     ), result.errors
 
 
+@pytest.mark.parametrize("fixture", ["dense_store_path", "ragged_store_path", "hybrid_store_path"])
+def test_a_release_stamped_newer_than_this_build_writes_is_told_to_upgrade(
+    request, fixture, caplog
+):
+    """A 0.2.3 release is a later package's format: its stamp rule is that package's.
+    `validate` reads it with the newer-remainder warning, and `manifest.format_stamp`
+    warns that the package must be upgraded instead of judging the stamp -- never that
+    the stamp is wrong: re-stamped 0.2.2 as such an error would say, it is a release
+    this build completes, whatever 0.2.3 changed. A warning, not a skip, because the
+    text report prints warnings and not skips."""
+    import logging
+
+    from region_tables import edit_manifest
+
+    store = request.getfixturevalue(fixture)
+    assert validate_store(store).ok, "the fixture must validate before it is restamped"
+    edit_manifest(store, lambda manifest: {**manifest, "format_version": "0.2.3"})
+
+    with caplog.at_level(logging.WARNING):
+        result = validate_store(store)
+
+    assert result.ok, result.errors
+    assert "newer compatible version" in caplog.text, caplog.text
+    said = result.of("manifest.format_stamp")
+    assert said, "the stamp rule recorded nothing, so the release reads as judged"
+    for finding in said:
+        assert finding.severity is Severity.WARNING, finding
+        assert "Upgrade opengwasdb" in finding.message, finding
+        assert "do not re-stamp" in finding.message, finding
+        assert "but a release carrying" not in finding.message, finding
+
+
 def test_validator_rejects_missing_required_array(dense_store_path):
     root = open_store(dense_store_path).arrays(mode="a")
     del root["se"]

@@ -251,6 +251,19 @@ def test_a_readable_but_unwritable_version_is_refused():
         store_open.check_writable_format_version("0.2.3", source="source release X")
 
 
+@pytest.mark.parametrize("carries_regions", [False, True])
+def test_a_newer_stamp_is_not_judged_by_this_builds_rule(carries_regions):
+    """A 0.2.3 release is a later package's format (#338's would be): which stamp its
+    features give is that package's rule. This build says to upgrade, never that the
+    stamp is wrong, since re-stamping it 0.2.2 would let this build complete a format
+    it does not know -- as package 0.9.0 tells a 0.2.2 Store it "is 0.2.1"."""
+    with pytest.raises(store_open.UnsupportedFormatVersion) as refused:
+        store_open.check_format_version_stamp("0.2.3", carries_regions=carries_regions)
+    message = str(refused.value)
+    assert "Upgrade opengwasdb" in message and "do not re-stamp" in message, message
+    assert "but a release carrying" not in message, message
+
+
 @pytest.mark.parametrize("version", ["0.1.0", "0.2.0", "0.2.1"])
 def test_completion_refuses_a_source_that_sorts_its_indels(tmp_path, dense_store_path, version):
     """The guard ADR 0038 §4 added for exactly this moment now fires.
