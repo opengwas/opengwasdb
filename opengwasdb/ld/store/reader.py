@@ -53,7 +53,7 @@ from ogld.store.location import ChunkCache, open_group
 from ogld.store.tables import Partners, Variants
 
 #: Each chromosome's arrays a request touching it opens (spec §1), in the order `_Chromosome`
-#: takes them. Its Far Pairs are opened apart, when a request first needs them (`_far`).
+#: takes them. Its Far Pairs are opened apart, when a request first needs them (`_far_pairs`).
 _CHROMOSOME_ARRAYS: Final = (
     ("near", "indptr"),
     ("near", "r"),

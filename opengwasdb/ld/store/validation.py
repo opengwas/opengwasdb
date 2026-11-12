@@ -869,9 +869,11 @@ class _Block:
 
 
 def _part(store: _Store, path: str, lo: int, hi: int) -> npt.NDArray[Any] | _Unchecked:
-    """Elements [lo, hi) of the array at `path`, an index's as int64; or why they cannot be read."""
+    """Elements [lo, hi) of the array at `path`, an index's or the Far Pairs' as int64; or why
+    they cannot be read. An empty span is not read: most blocks hold no Far Pair, and a read of
+    nothing still costs a Zarr call."""
     try:
-        values = store.read(path, lo, hi)
+        values = store.read(path, lo, hi) if hi > lo else np.empty(0, store.array(path).dtype)
     except _Unchecked as unread:
         return unread
     if len(values) != hi - lo:
