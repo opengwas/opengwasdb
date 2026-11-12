@@ -58,6 +58,13 @@ to fill and shard than head's, which favours base. #309 recorded 21,179 s
 (5.9 h). Head's four band workers held 10.1–10.2 GB private against the
 16.4 GB the pool budgets a band, and its four merge workers 3.2–4.6 GB.
 
+`bands_ogs00009_head-b8-w4-record.json` is the same 8-band slice on 4 write
+workers at `fe550d1`, run again to record what that one did not: the slice's
+largest LD-block checkpoint, 1,639,901,376 bytes, and the merge worker's
+budget for it, 256 MiB plus four times that, 6.83 GB. Its merge workers held
+3.56–4.57 GB private and its band workers 10.1–10.2 GB. It ran alone, with 20
+LD-block workers, so its times are not set against base.
+
 ## Pilots: one set of LD blocks, resumed by each revision
 
 `pilot_ogs00003/` is the FinnGen R13 pilot: 21,618,934 variants, 10 Analyses,

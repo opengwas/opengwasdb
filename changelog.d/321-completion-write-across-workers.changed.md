@@ -17,7 +17,8 @@
   metadata and on-disk sizes, `analyses.tsv`, `variants.tsv.gz`,
   `completion_quality` rows and manifest are all unchanged. The pool runs
   `--n-workers` workers, fewer when a quarter of `MemAvailable` holds fewer
-  units beside the parent, and logs how many. A Dense band is budgeted at
+  units beside the parent and the results it holds, never more than it has
+  units, and logs how many. A Dense band is budgeted at
   4 GiB + 24 bytes a cell. On OGS-00009 the budget is 16.4 GB, and a band
   worker held at most 10.2 GB private. Resume still keeps the LD blocks and
   redoes the write. `--n-workers`' help now names every pool it sizes.
@@ -26,7 +27,10 @@
   head side by side, twice. On one worker the one pass alone brings the band
   write, scaled to the full run, from 19,807 s and 19,422 s down to 10,722 s
   and 9,404 s. Over 8 bands, head's write on 4 workers scales to 3,358 s
-  (56 min), against base's 20,485 s and #309's 21,179 s (5.9 h).
+  (56 min), against base's 20,485 s and #309's 21,179 s (5.9 h). Base's
+  profiler covered only the slice's last chromosome, 89 LD blocks to head's
+  194 (737,774,600 imputed cells to 1,606,680,019), so the 6.1x is a floor.
+  The write beyond 4 workers is measured by #322's full-size rebuild.
 
   On the OGS-00003 pilot the band write falls from 372 s and 359 s to 78–82 s
   on one worker and 12.8 s on 16. On the OGS-00006 100-Analysis subset,

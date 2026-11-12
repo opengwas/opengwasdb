@@ -160,7 +160,9 @@ def insert_completion_quality_batch(db: Any, batch: list[_QualityRow]) -> None:
 #: checkpoint about 3.3 more. A fill is 76 bytes on disk (its 64-byte ALID, its
 #: Analysis, z and SE), loaded whole; the lookup gathers an ALID and three
 #: `int64`s a fill (89 bytes), the resolved fills and their shard key take 40,
-#: and pickling them back to the parent 48. Rounded up to 4 (#321).
+#: and pickling them back to the parent 48. Rounded up to 4 (#321): on an
+#: 8-band slice of OGS-00009, whose largest checkpoint is 1.64 GB, the budget
+#: is 6.83 GB and its merge workers held at most 4.57 GB private.
 _RESOLVE_FIXED_BYTES = 256 * 1024**2
 _RESOLVE_BYTES_PER_CHECKPOINT_BYTE = 4
 #: What the parent holds of one checkpoint's result until it appends it: 24

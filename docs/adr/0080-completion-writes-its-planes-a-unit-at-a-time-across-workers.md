@@ -79,12 +79,16 @@ completed whole; the parent takes the units' results in unit order.**
   | unit | budget | measured |
   |---|---|---|
   | Dense band | 4 GiB + 24 B a cell: 16.4 GB for a 200,000-row band of OGS-00009's 2,514 Analyses | 10.2 GB |
-  | checkpoint | 256 MiB + 4 x the largest checkpoint file | up to 3.9 GB on OGS-00009 |
+  | checkpoint | 256 MiB + 4 x the largest checkpoint file: 6.83 GB for OGS-00009's 8-band slice, whose largest is 1.64 GB | 4.57 GB (`bands_ogs00009_head-b8-w4-record.json`) |
   | Ragged Analysis | 256 MiB + 16 B a merged-axis variant + 32 B a row of the largest Analysis | 264 MB on the OGS-00006 subset (budget 666 MB) |
   | Ragged region | 256 MiB + 120 B a cell | 5.15 GB for a 50 M-cell region (budget 6.3 GB) |
 
-  On OGS-00009 a ~15 GB parent leaves room for 13 band workers of a 235 GB
-  budget. Each pool logs the count it ran with, the unit's figure, the
+  The parent's resident set is counted although `MemAvailable` already
+  leaves it out. That double count costs a worker on OGS-00009 (13 band
+  workers where 14 would fit in a 235 GB budget), and it is a margin kept on
+  purpose. The parent also counts the results it holds for its workers, two
+  a worker at most, and no pool forks more workers than it has units. Each
+  pool logs the count it ran with, the unit's figure, the results', the
   parent's, and the budget.
 - **Resume is unchanged: it redoes the write.** Only LD blocks are
   checkpointed. A failure in the write discards the staged release (ADR 0043),
@@ -126,6 +130,10 @@ differ there.
 
 - The write can run on fewer workers than `--n-workers`. The log line names
   how many, the unit's estimate, and the budget.
+- The pooled write was measured on OGS-00009 at 4 write workers: 8 bands in
+  480 s, 3,358 s scaled by the pool's waves to the full run, against #309's
+  21,179 s. How it scales beyond 4 workers, to the 13 a full run gets, is
+  measured by #322's full-size rebuild.
 - Peak scratch disk falls by the `float32` SE plane and its `int8` copy. At
   every array write the staged planes hold no more than the release they
   become (`tests/test_completion_band_write.py`). The tiers #200 targets, the
