@@ -907,7 +907,7 @@ n_hits_5e4   (count of associations at p <= 5e-4, nominal)
 
 `trait_chr`/`trait_bp` are in the Store's `reference_assembly`, as every
 variant coordinate is. A builder that lifts a source's variants lifts these
-with them, through the same build and chain (issue #433), for `build-ragged-besd`. A position the
+with them, through the same build and chain (issue #433), for `build-ragged-besd` and `build-ragged-ssf`. A position the
 chain places nowhere, or on a different chromosome, is not kept in the source's
 assembly: the Analysis's `trait_chr`/`trait_bp` are left blank, and the build
 records the loss outside the Store, as ADR 0072 keeps a Store's bytes

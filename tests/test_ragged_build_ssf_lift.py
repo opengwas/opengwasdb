@@ -333,3 +333,76 @@ def test_a_wholly_ambiguous_lift_is_refused_naming_each_analysis(tmp_path, chain
     assert "placed no variant" in str(refused.value)
     assert "analysis 'old': 0 lift_unmapped, 1 lift_ambiguous" in str(refused.value)
     assert "analysis 'new': 0 lift_unmapped, 1 lift_ambiguous" in str(refused.value)
+
+
+# ── Trait positions are lifted with the variants (issue #433) ─────────────────
+
+
+def _with_trait_positions(manifest: Path, positions: dict[str, tuple[str, int]]) -> None:
+    """Append `trait_chr`/`trait_bp` columns to a manifest `_inputs` wrote."""
+    lines = manifest.read_text(encoding="utf-8").splitlines()
+    out = [f"{lines[0]}\ttrait_chr\ttrait_bp"]
+    for line in lines[1:]:
+        chrom, bp = positions[line.split("\t")[1]]
+        out.append(f"{line}\t{chrom}\t{bp}")
+    manifest.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def _trait_build(tmp_path, analyses, positions, **options) -> Path:
+    manifest, source_dir = _stage(tmp_path, "in", analyses)
+    _with_trait_positions(manifest, positions)
+    out = tmp_path / "out.opengwasdb"
+    build_ragged_from_ssf(
+        manifest, source_dir, out, store_id="t", release_id="v1",
+        association_coverage="cis_and_signals", allow_unverified_eaf=True, **options,
+    )
+    return out
+
+
+def _stored_trait_positions(store: Path) -> dict[str, tuple[str, str]]:
+    from opengwasdb.model.analyses import read_analysis_records
+
+    return {
+        a.analysis_id: (a.trait_chr, a.trait_bp)
+        for a in read_analysis_records(store / "analyses.tsv")
+    }
+
+
+def test_a_grch37_trait_position_is_lifted_and_a_grch38_one_is_kept(tmp_path, chain):
+    """The chain mirrors chr2, so a GRCh37 Trait at 2:1000 is recorded at
+    2:SIZE-1000+1; a GRCh38 analysis's declared position is the Store's already."""
+    store = _trait_build(
+        tmp_path,
+        [("old", "GRCh37", _GRCH37_ROWS), ("new", "GRCh38", _GRCH38_ROWS)],
+        {"old": ("2", 1_000), "new": ("2", 1_000)},
+        chain_file=chain,
+    )
+    assert _stored_trait_positions(store) == {
+        "old": ("2", str(STRAND_CHAIN_SIZE - 1_000 + 1)),
+        "new": ("2", "1000"),
+    }
+    lift = json.loads((store / "manifest.json").read_text(encoding="utf-8"))["provenance"]["lift"]
+    assert "trait_positions" not in lift
+
+
+def test_an_unliftable_trait_position_is_blank_counted_and_named(tmp_path, chain):
+    """chr4 has no chain: that Analysis keeps its rows but gets no Trait position."""
+    store = _trait_build(
+        tmp_path,
+        [("ok", "GRCh37", _GRCH37_ROWS), ("lost", "GRCh37", _GRCH37_ROWS)],
+        {"ok": ("3", 1_000), "lost": ("4", 1_000)},
+        chain_file=chain, liftover_failure_threshold=0.5,
+    )
+    assert _stored_trait_positions(store) == {"ok": ("3", "1000"), "lost": ("", "")}
+    named = admission_record_for(store) / "trait_positions_unlifted.tsv"
+    assert named.read_text(encoding="utf-8") == "analysis_id\nlost\n"
+
+
+def test_most_trait_positions_failing_to_lift_refuse_the_build(tmp_path, chain):
+    manifest, source_dir = _stage(tmp_path, "in", [("a", "GRCh37", _GRCH37_ROWS)])
+    _with_trait_positions(manifest, {"a": ("4", 1_000)})
+    with pytest.raises(LiftoverFailureError, match="Trait-position"):
+        build_ragged_from_ssf(
+            manifest, source_dir, tmp_path / "out.opengwasdb", store_id="t", release_id="v1",
+            association_coverage="cis_and_signals", allow_unverified_eaf=True, chain_file=chain,
+        )
