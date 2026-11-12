@@ -212,13 +212,34 @@ def test_bands_artifact_splits_each_pass_and_scales_to_the_full_run(
     assert {
         "axis_construction_full", "ld_block_phase_slice", "merge_shard_fills_and_quality",
         "merge_union_map", "merge_reference_eaf", "merge_create_planes",
-        "stat_read_source", "stat_read_fills", "stat_compute_judge", "stat_write",
-        "eaf_read_source", "eaf_compute_encode", "eaf_write",
+        "band_read_source", "band_read_fills", "band_compute_apply_fills",
+        "band_compute_judge", "band_compute_encode_z", "band_compute_encode_eaf",
+        "band_compute_encode_se", "band_write", "band_side_arrays",
     } <= stages
-    assert any(stage.startswith("se_rewrite.") for stage in stages)
+    assert "band_write_pool" not in stages
     full = artifact["scaled_to_full_run"]
-    assert full["stages"]["stat_write"]["factor"] == 1.0
+    assert full["stages"]["band_write"]["factor"] == 1.0
     assert not (tmp_path / "bands-work").exists()
+
+
+def test_a_band_write_on_the_pool_is_timed_as_one_stage(
+    inputs: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """The pool's workers run the bands where this process's clock cannot see,
+    so their time is one stage, and the wall check still holds."""
+    observed, panel = inputs
+    artifact = _run(
+        tmp_path, "bands", observed, panel, "--bands", "1", "--n-workers", "1",
+        "--write-workers", "2",
+    )
+
+    assert artifact["write_workers"] == 2
+    stages = {entry["stage"] for entry in artifact["stages"]}
+    assert "band_write_pool" in stages
+    assert not {"band_read_source", "band_write", "band_write_other"} & stages
+    assert artifact["accounted_seconds"] == pytest.approx(
+        artifact["wall_seconds"], rel=0.05, abs=0.05
+    )
 
 
 def test_scaling_follows_bands_and_rows() -> None:
@@ -226,14 +247,14 @@ def test_scaling_follows_bands_and_rows() -> None:
         "bands_in_full_matrix": 56, "bands_run": 2, "union_variants": 11_200_000,
         "slice_rows": 400_000,
         "stages": [
-            {"stage": "stat_write", "seconds": 10.0},
-            {"stage": "se_rewrite.read", "seconds": 5.0},
+            {"stage": "band_write", "seconds": 10.0},
+            {"stage": "band_read_source", "seconds": 5.0},
             {"stage": "merge_shard_fills_and_quality", "seconds": 100.0},
             {"stage": "axis_construction_full", "seconds": 250.0},
         ],
     }
     scaled = scale_to_full_run(summary)
-    assert scaled["stages"]["stat_write"]["seconds"] == 280.0
+    assert scaled["stages"]["band_write"]["seconds"] == 280.0
     assert scaled["stages"]["merge_shard_fills_and_quality"]["seconds"] == 2800.0
     assert "axis_construction_full" not in scaled["stages"]
     assert scaled["band_write_seconds"] == 420.0

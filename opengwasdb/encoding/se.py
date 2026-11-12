@@ -915,6 +915,46 @@ def _run_rewrite_bands(sink: _RewriteSink, starts: range, n_workers: int, timer:
     return cursor
 
 
+def write_dense_se_side_arrays(
+    group: Any, tables: list[SeExceptionTable], coefficients: np.ndarray
+) -> None:
+    """A residual Dense SE plane's exception table and model, as the rewrite writes them.
+
+    For a writer that coded the plane itself, row band by row band, rather than
+    rewriting a `float32` scratch plane (Reference Completion, #321). `tables`
+    are the bands' exception runs in row order: each band's flat positions are
+    one contiguous run, so laid end to end they are already the sorted table,
+    and one written out of order is refused rather than sorted into place. The
+    arrays are made exactly as `_rewrite_arrays` and `_finish_rewrite` make
+    them, sized to the count and written once (#249), so the release is the
+    one the rewrite wrote.
+    """
+    index = (
+        np.concatenate([table.index for table in tables])
+        if tables
+        else np.empty(0, dtype=np.int64)
+    )
+    value = (
+        np.concatenate([table.value for table in tables])
+        if tables
+        else np.empty(0, dtype=np.float32)
+    )
+    require_parallel(
+        (("se_exception_index", index), ("se_exception_value", value)),
+        where="the Dense SE plane's exception table",
+    )
+    if len(index) > 1 and np.any(index[1:] <= index[:-1]):
+        raise ValueError(
+            "the SE exception runs do not ascend: the bands were laid end to end out of "
+            "row order, or one cell was coded twice"
+        )
+    seam = compressor()
+    exception_index, exception_value = _empty_exception_arrays(group, len(index), seam)
+    exception_index[0 : len(index)] = index
+    exception_value[0 : len(index)] = value
+    write_se_coefficients(group, np.asarray(coefficients, dtype=np.float32), compressor=seam)
+
+
 def _finish_rewrite(
     group: Any, coefficients: np.ndarray, cursor: int, exception_count: int, compressor: Any
 ) -> None:

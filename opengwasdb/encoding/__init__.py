@@ -97,6 +97,7 @@ from opengwasdb.encoding.se import (
     optimise_dense_se,
     optimise_dense_se_joint,
     rewrite_dense_se,
+    write_dense_se_side_arrays,
 )
 from opengwasdb.store.arrays import PER_VARIANT_CHUNK as DEFAULT_PER_VARIANT_CHUNK
 from opengwasdb.store.arrays import (
@@ -189,4 +190,5 @@ __all__ = [
     "optimise_dense_se",
     "optimise_dense_se_joint",
     "rewrite_dense_se",
+    "write_dense_se_side_arrays",
 ]

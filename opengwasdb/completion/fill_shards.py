@@ -22,12 +22,14 @@ from __future__ import annotations
 import logging
 import shutil
 from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from opengwasdb.completion.checkpoint import ALID_DTYPE
+from opengwasdb.completion.parallel import ordered_write, write_workers
 from opengwasdb.variants.routing import collapse_duplicates
 
 log = logging.getLogger(__name__)
@@ -109,6 +111,43 @@ def insert_completion_quality_batch(db: Any, batch: list[_QualityRow]) -> None:
     db.commit()
 
 
+#: What one checkpoint's resolution holds beside the checkpoint itself: its
+#: loaded arrays, the lookup's intermediates and the records it hands back.
+_RESOLVE_FIXED_BYTES = 256 * 1024**2
+
+
+@dataclass(frozen=True)
+class _ShardPlan:
+    """What resolving any checkpoint reads: made by the parent and inherited by
+    the pool's workers, so the union map is never pickled (#200, story 21)."""
+
+    union_alids_s: np.ndarray
+    union_rows_s: np.ndarray
+    n_variants: int
+    shard_key: ShardKey
+    impute_mask: np.ndarray | None
+
+
+@dataclass(frozen=True)
+class _ResolvedCheckpoint:
+    """One checkpoint's completion_quality rows and its fills, resolved and keyed."""
+
+    quality: list[_QualityRow]
+    fills: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None
+    shard_ids: np.ndarray | None
+
+
+def _resolve_checkpoint(plan: _ShardPlan, ckpt: Path) -> _ResolvedCheckpoint:
+    """Read one checkpoint and resolve its fills; runs in a pool worker."""
+    with np.load(ckpt, allow_pickle=False) as d:
+        quality = _checkpoint_quality_rows(d, plan.impute_mask)
+        fills = _resolved_fills(
+            d, plan.union_alids_s, plan.union_rows_s, plan.n_variants, plan.impute_mask
+        )
+    shard_ids = None if fills is None else plan.shard_key(fills[0], fills[1])
+    return _ResolvedCheckpoint(quality, fills, shard_ids)
+
+
 def shard_checkpoint_fills(
     blocks_dir: Path,
     staged: Any,
@@ -117,6 +156,7 @@ def shard_checkpoint_fills(
     n_variants: int,
     shard_key: ShardKey,
     impute_mask: np.ndarray | None = None,
+    n_workers: int = 1,
 ) -> tuple[Path, int]:
     """Resolve checkpoint fills into raw shard files, one per `shard_key` value.
 
@@ -124,6 +164,11 @@ def shard_checkpoint_fills(
     by the parent. This pass resolves those ALIDs once, writes compact
     ``(row, analysis, z, se)`` records to per-shard files, and streams
     completion_quality directly into SQLite.
+
+    The checkpoints are read and resolved across ``n_workers`` (#321); the
+    parent takes them back in checkpoint-name order and is the one writer of
+    the shard files and the table, so both hold exactly what one process
+    writes, in the same order.
 
     ``impute_mask`` (bool per analysis; ``None`` = impute all) is applied here,
     because this is where a worker's *candidate* fills become the release's.
@@ -142,23 +187,36 @@ def shard_checkpoint_fills(
 
     quality_count = 0
     quality_batch: list[_QualityRow] = []
+    checkpoints = sorted(blocks_dir.glob("*.npz"))
+    plan = _ShardPlan(union_alids_s, union_rows_s, n_variants, shard_key, impute_mask)
+    workers = _resolve_workers(checkpoints, n_workers)
 
     with staged.index_connection() as dst_db:
-        for ckpt in sorted(blocks_dir.glob("*.npz")):
-            with np.load(ckpt, allow_pickle=False) as d:
-                rows = _checkpoint_quality_rows(d, impute_mask)
-                quality_count += len(rows)
-                quality_batch.extend(rows)
-                if len(quality_batch) >= _QUALITY_BATCH_SIZE:
-                    insert_completion_quality_batch(dst_db, quality_batch)
-                    quality_batch.clear()
-                fills = _resolved_fills(d, union_alids_s, union_rows_s, n_variants, impute_mask)
-                if fills is not None:
-                    _append_to_shards(fill_shard_dir, fills, shard_key(fills[0], fills[1]))
+        for resolved in ordered_write(_resolve_checkpoint, plan, checkpoints, workers):
+            quality_count += len(resolved.quality)
+            quality_batch.extend(resolved.quality)
+            if len(quality_batch) >= _QUALITY_BATCH_SIZE:
+                insert_completion_quality_batch(dst_db, quality_batch)
+                quality_batch.clear()
+            if resolved.fills is not None:
+                assert resolved.shard_ids is not None
+                _append_to_shards(fill_shard_dir, resolved.fills, resolved.shard_ids)
 
         insert_completion_quality_batch(dst_db, quality_batch)
 
     return fill_shard_dir, quality_count
+
+
+def _resolve_workers(checkpoints: list[Path], n_workers: int) -> int:
+    """The checkpoint merge's worker count: a worker holds about twice its
+    checkpoint, the largest of which bounds them all."""
+    largest = max((ckpt.stat().st_size for ckpt in checkpoints), default=0)
+    return write_workers(
+        n_workers,
+        _RESOLVE_FIXED_BYTES + 2 * largest,
+        what="Checkpoint merge",
+        unit=f"checkpoint of up to {largest >> 20:,} MiB",
+    )
 
 
 def _checkpoint_quality_rows(d: Any, impute_mask: np.ndarray | None) -> list[_QualityRow]:

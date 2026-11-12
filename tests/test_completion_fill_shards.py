@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from fork_order import CompletionOrder
 
 from opengwasdb.completion import fill_shards
 from opengwasdb.completion.checkpoint import (
@@ -75,7 +76,7 @@ def _blocks_dir(tmp_path: Path) -> Path:
     return blocks
 
 
-def _shard(tmp_path: Path, key: fill_shards.ShardKey, impute_mask=None):
+def _shard(tmp_path: Path, key: fill_shards.ShardKey, impute_mask=None, **workers):
     """Run the shared pass into a staged release; return its shards and quality rows."""
     blocks = _blocks_dir(tmp_path)
     union_alids, union_rows = fill_shards.sorted_union_map(AXIS)
@@ -85,8 +86,11 @@ def _shard(tmp_path: Path, key: fill_shards.ShardKey, impute_mask=None):
             create_completion_quality_table(db)
             db.commit()
         shard_dir, n_quality = fill_shards.shard_checkpoint_fills(
-            blocks, staged, union_alids, union_rows, len(AXIS), key, impute_mask=impute_mask
+            blocks, staged, union_alids, union_rows, len(AXIS), key, impute_mask=impute_mask,
+            **workers,
         )
+        shard_bytes.clear()
+        shard_bytes.update({path.name: path.read_bytes() for path in shard_dir.glob("*.bin")})
         shards = {
             int(path.stem.split("-")[1]): np.concatenate(
                 list(fill_shards.iter_fill_records(path))
@@ -100,6 +104,10 @@ def _shard(tmp_path: Path, key: fill_shards.ShardKey, impute_mask=None):
         ).fetchall()
     assert n_quality == len(quality)
     return shards, quality
+
+
+#: The last `_shard` run's shard files, byte for byte, by name.
+shard_bytes: dict[str, bytes] = {}
 
 
 def _records(shards: dict[int, np.ndarray]) -> list[tuple]:
@@ -181,3 +189,45 @@ def test_agreeing_fills_are_one_and_disagreeing_fills_are_all_dropped(tmp_path, 
     assert np.isnan(z[2, 0]) and np.isnan(se[2, 0]) and imputed[2, 0] == 0
     assert (z[4, 0], imputed[4, 0]) == (7.0, 0)
     assert filled == int((imputed == 1).sum()) == 4  # 1:100 and 1:200 of 0; 1:300, 1:400 of 2
+
+
+#: The two checkpoints, in the order the pass reads them: the first is held
+#: until the second has been resolved.
+_ORDER = CompletionOrder(2)
+_REAL_RESOLVE = getattr(fill_shards, "_resolve_checkpoint", None)
+
+
+def _first_checkpoint_resolved_last(plan, checkpoint):
+    first = checkpoint.name == "1__100-300.npz"
+    if first:
+        _ORDER.wait_for_the_rest()
+    assert _REAL_RESOLVE is not None
+    resolved = _REAL_RESOLVE(plan, checkpoint)
+    _ORDER.claim(0 if first else 1)
+    return resolved
+
+
+def test_the_shards_are_the_ones_one_worker_writes_whichever_checkpoint_resolves_first(
+    tmp_path, monkeypatch
+):
+    """The checkpoints are resolved across the pool, the first held until the
+    second is done, and the shard files and completion_quality rows are the
+    ones one worker writes, byte for byte and row for row: the parent appends
+    in checkpoint order, not in the order the workers finish."""
+    key = fill_shards.by_row_band(2)
+    for run in ("serial", "parallel"):
+        (tmp_path / run).mkdir()
+    serial_shards, serial_quality = _shard(tmp_path / "serial", key)
+    serial_bytes = dict(shard_bytes)
+    assert len(serial_bytes) == 3, "fixture: fills in three row bands"
+
+    _ORDER.reset()
+    monkeypatch.setattr(
+        fill_shards, "_resolve_checkpoint", _first_checkpoint_resolved_last, raising=False
+    )
+    shards, quality = _shard(tmp_path / "parallel", key, n_workers=3)
+
+    assert _ORDER.order() == [1, 0], "the checkpoints were not resolved on a pool"
+    assert shard_bytes == serial_bytes
+    assert quality == serial_quality
+    assert _records(shards) == _records(serial_shards) == ON_AXIS

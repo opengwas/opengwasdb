@@ -1841,13 +1841,14 @@ def test_a_source_cell_with_one_of_z_and_se_missing_is_refused(
     assert not (tmp_path / "comp.opengwasdb").exists()
 
 
-def _seed_unjudged(zb, sb, source, out_to_src, r0):
-    """Seed a band from the source as completion does, judging none of its cells."""
-    valid, rows = complete_module._band_source_rows(out_to_src, r0, r0 + len(zb))
+def _seed_unjudged(zb, sb, eb, source, valid, rows):
+    """Seed band rows from the source as completion does, judging none of its cells."""
     if len(valid):
         cells = source.inspect(Cells.variants(rows))
         zb[valid, :] = cells.z.reshape(len(rows), -1)
         sb[valid, :] = cells.se.reshape(len(rows), -1)
+        if eb is not None:
+            eb[valid, :] = cells.eaf.reshape(len(rows), -1)
 
 
 @pytest.mark.parametrize(

@@ -14,10 +14,18 @@ real input, without running a completion:
 ``bands``
     The checkpoint merge and the band write over a prefix of the completed
     matrix's row bands, with real fills: it completes the LD blocks that cover the
-    prefix, shards their fills, and runs the statistic pass, the EAF pass and the
-    residual-SE rewrite on those bands only. Every pass is split into reading
-    source planes, computing, and writing. The artifact scales each stage to the
-    full run and sets the result beside the figures OGS-00009's own run recorded.
+    prefix, shards their fills, and writes those bands only. The band write is
+    split into reading source planes, computing, and writing (#321 writes each
+    band in one pass, which reads the source once and codes every plane). The
+    artifact scales each stage to the full run and sets the result beside the
+    figures OGS-00009's own run recorded.
+
+    The stages are read in this process, so the band write runs here, on one
+    worker, unless ``--write-workers`` asks for more: then the bands run on the
+    write pool and only the band write's wall time is known, as
+    ``band_write_pool``. The phases are called directly, below the source
+    format check `complete_dense_store` makes, so a 0.2.0 Store such as
+    OGS-00009 is profiled as it is; nothing the profile writes is published.
 
 Stages are *exclusive*: a stage entered inside another pauses it, so the stages
 add up to the wall time. The profile checks that against a separate reading of
@@ -275,41 +283,6 @@ def _checkpoint_fills(checkpoint: Path) -> int:
         return int(loaded["f_alid"].shape[0])
 
 
-class _TimedArray:
-    """An array whose assignments are charged to a stage; everything else passes through."""
-
-    def __init__(self, array: Any, clock: StageClock, stage: str) -> None:
-        self._array, self._clock, self._stage = array, clock, stage
-
-    def __setitem__(self, key: Any, value: Any) -> None:
-        with self._clock.stage(self._stage):
-            self._array[key] = value
-
-    def __getitem__(self, key: Any) -> Any:
-        return self._array[key]
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._array, name)
-
-
-class _TimedGroup:
-    """A zarr group whose named arrays are `_TimedArray`s; everything else passes through."""
-
-    def __init__(self, group: Any, clock: StageClock, stages: dict[str, str]) -> None:
-        self._group, self._clock, self._stages = group, clock, stages
-
-    def __getitem__(self, name: str) -> Any:
-        array = self._group[name]
-        stage = self._stages.get(name)
-        return array if stage is None else _TimedArray(array, self._clock, stage)
-
-    def __contains__(self, name: str) -> bool:
-        return name in self._group
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._group, name)
-
-
 def _timed_generator(clock: StageClock, stage: str, original: Callable[..., Any]) -> Any:
     """Charge only the time spent inside the generator's own `next`, to ``stage``."""
 
@@ -333,24 +306,29 @@ class _DiscardSlice(Exception):
 def _band_write_table(dense: Any) -> list[tuple[Any, str, str]]:
     """The band write's stages, as reading source planes, computing, and writing.
 
-    The statistic and EAF passes assign to zarr arrays through a proxy that
-    charges the assignment to a write stage; the SE rewrite times its own read,
-    encode and write and `_merge_and_write` folds those in.
+    One pass per band: its source read yields z, SE and the EAF the SE was
+    decoded against, and its encode codes z, EAF, and SE against the decoded
+    EAF (`_decoded_eaf` is the SE encode's own decode; the source's is the
+    read's). The side arrays written once, after every band, are their own stage.
     """
-    from opengwasdb.encoding import StoreCodec
-    from opengwasdb.encoding.planes import DenseEafPlane
+    from opengwasdb.encoding import StoreCodec, association_codec
 
     return [
-        (dense, "_seed_paired_bands", "stat_read_source"),
-        (dense, "_count_band_off_panel_missing", "stat_compute_counts"),
-        (dense, "_count_band_imputation_failed", "stat_compute_counts"),
-        (dense, "_apply_fill_shard_records", "stat_compute_apply_fills"),
-        (dense, "storable", "stat_compute_judge"),
-        (StoreCodec, "encode_z", "stat_compute_encode_z"),
-        (DenseEafPlane, "points", "eaf_read_source"),
-        (dense, "_carried_eaf_baseline", "eaf_read_source"),
-        (StoreCodec, "encode_eaf", "eaf_compute_encode"),
-        (dense, "write_eaf_baseline", "eaf_write"),
+        (dense, "_seed_band", "band_compute_seed"),
+        (dense, "_seed_paired_bands", "band_read_source"),
+        (dense, "_count_band_off_panel_missing", "band_compute_counts"),
+        (dense, "_count_band_imputation_failed", "band_compute_counts"),
+        (dense, "_apply_fill_shard_records", "band_compute_apply_fills"),
+        (association_codec, "storable", "band_compute_judge"),
+        (StoreCodec, "encode_z", "band_compute_encode_z"),
+        (StoreCodec, "encode_eaf", "band_compute_encode_eaf"),
+        (association_codec.AssociationCodec, "_decoded_eaf", "band_compute_encode_se"),
+        (StoreCodec, "encode_se", "band_compute_encode_se"),
+        (dense, "_encode_band", "band_compute_encode_other"),
+        (dense, "_write_band", "band_write"),
+        (dense, "_carried_eaf_baseline", "band_side_arrays"),
+        (dense, "_source_se_coefficients", "band_side_arrays"),
+        (dense, "_write_side_arrays", "band_side_arrays"),
     ]
 
 
@@ -383,7 +361,7 @@ def _blocks_covering(axis: Any, n_rows: int) -> list[Path]:
 
 def profile_bands(
     source: Path, ld_dir: Path, ancestry: str, work: Path, n_bands: int, n_workers: int,
-    clock: Callable[[], float] = time.perf_counter,
+    clock: Callable[[], float] = time.perf_counter, write_workers: int = 1,
 ) -> dict[str, Any]:
     """Run the merge and the band write over the first ``n_bands`` of the axis.
 
@@ -424,10 +402,11 @@ def profile_bands(
             )
             src_root = open_store(source).arrays(mode="r")
             tallies = _merge_and_write(dense, stages, staged, sliced, src_root, blocks_dir,
-                                       ld_dir, ancestry, manifest.encoding, band_rows)
+                                       ld_dir, ancestry, manifest.encoding, band_rows,
+                                       write_workers)
             out = {
                 "kind": "bands", "source": str(source), "ld_panel": str(ld_dir),
-                "ancestry": ancestry, "n_workers": n_workers,
+                "ancestry": ancestry, "n_workers": n_workers, "write_workers": write_workers,
                 "union_variants": axis.n_variants, "n_analyses": axis.n_analyses,
                 "band_rows": band_rows, "slice_rows": slice_rows,
                 "bands_run": -(-slice_rows // band_rows),
@@ -456,47 +435,19 @@ def _remove_made_tree(work: Path) -> None:
 
 def _merge_and_write(
     dense: Any, stages: StageClock, staged: Any, sliced: Any, src_root: Any, blocks_dir: Path,
-    ld_dir: Path, ancestry: str, source_encoding: Any, band_rows: int,
+    ld_dir: Path, ancestry: str, source_encoding: Any, band_rows: int, write_workers: int = 1,
 ) -> Any:
-    """The merge, then the band write, each pass split into read, compute and write."""
+    """The merge, then the band write, split into read, compute and write.
+
+    The merge runs on one worker, as it did when it was serial, so its stages
+    are this process's. On more than one write worker the bands run in the
+    pool's processes, where this clock cannot follow them: the band write is
+    then one stage, ``band_write_pool``.
+    """
     merge = [(dense, name, stage) for name, stage in _MERGE_TABLE]
-    band = _band_write_table(dense)
-    originals = {
-        name: getattr(dense, name)
-        for name in ("_write_completed_statistic_bands", "_write_completed_eaf_bands",
-                     "_rewrite_completed_residual_se", "iter_fill_records")
-    }
-
-    def statistic(root: Any, *args: Any, **kwargs: Any) -> Any:
-        proxy = _TimedGroup(root, stages, {k: "stat_write" for k in ("z", "imputed", "se")})
-        with stages.stage("stat_other"):
-            return originals["_write_completed_statistic_bands"](proxy, *args, **kwargs)
-
-    def eaf(root: Any, *args: Any, **kwargs: Any) -> Any:
-        proxy = _TimedGroup(root, stages, {"eaf": "eaf_write"})
-        with stages.stage("eaf_other"):
-            return originals["_write_completed_eaf_bands"](proxy, *args, **kwargs)
-
-    def se_rewrite(root: Any, source_root: Any, encoding: Any) -> None:
-        import numpy as np
-
-        coefficients = (
-            np.asarray(source_root["se_coefficients"][:], dtype=np.float32)
-            if encoding.se.is_residual else None
-        )
-        phases = PhaseTimer()
-        with stages.stage("se_rewrite_other"):
-            dense.rewrite_dense_se(root, encoding, coefficients, timer=phases)
-            for name, seconds in phases.seconds.items():
-                stages.add(f"se_rewrite.{name.removeprefix('rewrite.')}", seconds)
-
-    saved = dict(originals)
-    dense._write_completed_statistic_bands = statistic
-    dense._write_completed_eaf_bands = eaf
-    dense._rewrite_completed_residual_se = se_rewrite
-    dense.iter_fill_records = _timed_generator(
-        stages, "stat_read_fills", originals["iter_fill_records"]
-    )
+    band = _band_write_table(dense) if write_workers <= 1 else []
+    original_fills = dense.iter_fill_records
+    dense.iter_fill_records = _timed_generator(stages, "band_read_fills", original_fills)
     try:
         with _patched(merge, stages), _patched(band, stages):
             with stages.stage("merge_other"):
@@ -506,20 +457,21 @@ def _merge_and_write(
             assert dense.completion_band_rows(
                 dense._dense_shard_rows(staged, effective_chunks)
             ) == band_rows
-            with stages.stage("band_write_other"):
+            outer = "band_write_other" if write_workers <= 1 else "band_write_pool"
+            with stages.stage(outer):
                 return dense._write_completed_bands(
                     staged, src_root, sliced.out_to_src, sliced.on_panel, fill_dir,
                     effective_chunks, sliced.n_variants, sliced.n_analyses, source_encoding,
                     encoding, impute_mask=sliced.impute_mask,
                     name_row=lambda row: sliced.merged_variants[row].alid,
+                    n_workers=write_workers,
                 )
     finally:
-        for name, original in saved.items():
-            setattr(dense, name, original)
+        dense.iter_fill_records = original_fills
 
 
 # What a slice's stage seconds scale by in a full run: per band, per row, or not at all.
-_SCALE_BY_BANDS = ("stat_", "eaf_", "se_rewrite")
+_SCALE_BY_BANDS = ("band_",)
 _SCALE_BY_ROWS = ("merge_shard_fills_and_quality", "merge_reference_eaf", "merge_union_map")
 
 
@@ -530,6 +482,8 @@ def scale_to_full_run(summary: dict[str, Any]) -> dict[str, Any]:
     same); the merge's fill sharding and reference-EAF read scale with rows; axis
     construction already ran on the full axis. LD-block time depends on block size
     and is left unscaled here; the recorded run's figure is the evidence for it.
+    A band write on the pool (``band_write_pool``) scales the same way, which
+    holds while the slice has at least as many bands as the pool has workers.
     """
     bands = summary["bands_in_full_matrix"] / summary["bands_run"]
     rows = summary["union_variants"] / summary["slice_rows"]
@@ -544,14 +498,7 @@ def scale_to_full_run(summary: dict[str, Any]) -> dict[str, Any]:
         v["seconds"] for k, v in scaled.items() if k.startswith(_SCALE_BY_BANDS)
     )
     merge = sum(v["seconds"] for k, v in scaled.items() if k.startswith("merge_"))
-    return {
-        "stages": scaled,
-        "band_write_seconds": band_write,
-        "merge_seconds": merge,
-        "se_rewrite_seconds": sum(
-            v["seconds"] for k, v in scaled.items() if k.startswith("se_rewrite")
-        ),
-    }
+    return {"stages": scaled, "band_write_seconds": band_write, "merge_seconds": merge}
 
 
 _STAMP = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) ")
@@ -602,6 +549,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             p.add_argument("--bands", type=int, default=2)
             p.add_argument("--n-workers", type=int, default=32)
+            p.add_argument("--write-workers", type=int, default=1,
+                           help="workers for the band write; above 1 it is timed as one stage")
             p.add_argument("--record", type=Path, help="the full run's step record to compare")
     args = parser.parse_args(args_in)
     header = artifact_header("benchmarks/profile_reference_completion.py",
@@ -615,7 +564,8 @@ def main(argv: list[str] | None = None) -> int:
             body = profile_block(args.source, args.ld_panel, args.ancestry, args.work, args.block)
         else:
             body = profile_bands(
-                args.source, args.ld_panel, args.ancestry, args.work, args.bands, args.n_workers
+                args.source, args.ld_panel, args.ancestry, args.work, args.bands, args.n_workers,
+                write_workers=args.write_workers,
             )
             body["scaled_to_full_run"] = scale_to_full_run(body)
             if args.record is not None:
