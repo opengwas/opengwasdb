@@ -1094,10 +1094,12 @@ def _assembly_bytes(n_variants: int, max_rows: int) -> int:
     )
 
 
-def _complete_analysis(assembly: _Assembly, item: tuple[int, np.ndarray]) -> _AnalysisCompleted:
-    """One Analysis's completed rows; runs in a write-pool worker."""
+def _complete_analysis(
+    assembly: _Assembly, item: tuple[int, np.ndarray]
+) -> tuple[int, _AnalysisCompleted]:
+    """One Analysis's index and completed rows; runs in a write-pool worker."""
     ai, fills = item
-    return _completed_analysis(
+    return ai, _completed_analysis(
         ai,
         source=assembly.plan.source,
         src_alids=assembly.plan.state.src_alids,
@@ -1165,7 +1167,10 @@ def _assemble_completed_csr(
     )
     total_imputed = total_missing = 0
     items = _analysis_fills(fill_shard_dir, batch_of)
-    for ai, completed in enumerate(ordered_write(_complete_analysis, assembly, items, workers)):
+    outcomes = ordered_write(_complete_analysis, assembly, items, workers)
+    for expected, (ai, completed) in enumerate(outcomes):
+        if ai != expected:
+            raise RuntimeError(f"Analysis {ai} arrived where Analysis {expected} belongs")
         writer.add_analysis(
             completed.vi, completed.z, completed.se, eaf=completed.eaf,
             imputed=completed.imp, where=f"complete-ragged, Analysis {analysis_ids[ai]}",
