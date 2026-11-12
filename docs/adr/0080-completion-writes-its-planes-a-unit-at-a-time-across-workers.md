@@ -47,7 +47,9 @@ completed whole; the parent takes the units' results in unit order.**
   alignment ADR 0023 lacked. The worker returns its counts and its side-table
   entries. The parent adds the counts, lays the z overflow, EAF exception and
   SE exception entries end to end in band order, and writes each table once.
-  It also logs, by variant, the fills each band dropped (D8).
+  The entries are not sorted into place, so a band taken out of order makes a
+  table its own rule refuses. The parent also logs, by variant, the fills
+  each band dropped (D8).
 - **A Ragged worker completes one Analysis** (`_complete_analysis`): it reads
   the Analysis's source rows and lands its fills. The parent reads each batch's
   fill shard once, hands each Analysis its fills, and adds the completed rows
@@ -58,23 +60,32 @@ completed whole; the parent takes the units' results in unit order.**
   so its worker writes every plane of it; it codes its cells once, through
   `AssociationCodec`, SE against the EAF a reader decodes rather than against
   the frequency plane read back from disk. The parent lays the regions' side-
-  table entries and SE exception counts end to end in region order. A writer
+  table entries end to end in region order (`codec.table_end_to_end`), and adds
+  their SE exception counts. A writer
   that fits its own SE model, a Ragged build's, needs its whole frequency plane
   before it can code SE, so builds still write through `flush`.
 - **The fill-shard pass resolves its checkpoints on the same pool.** The
   parent stays the only writer of the shard files and of `completion_quality`,
   in checkpoint-name order.
-- **The pool is `--n-workers`, capped by memory** (`completion.parallel`). The
-  cap is a quarter of `MemAvailable` at the phase's start, divided by one
-  unit's working set, as for the Dense build's EAF encode (#320). A Dense band
-  is budgeted at 4 GiB plus 24 bytes a cell: 16.4 GB for a 200,000-row band of
-  OGS-00009's 2,514 Analyses, whose workers held at most 10.2 GB private. A
-  Ragged Analysis is budgeted at 256 MiB, plus 16 bytes a merged-axis variant,
-  plus 96 bytes a row of the source's largest Analysis. A Ragged region is
-  budgeted at 256 MiB plus 128 bytes a cell, against #249's measured 79 for the
-  split flush. A checkpoint is budgeted at 256 MiB plus four times the largest
-  checkpoint file; OGS-00009's merge workers held up to 3.9 GB. The band,
-  Analysis and checkpoint pools log the worker count they ran with.
+- **The pool is `--n-workers`, capped by memory** (`encoding.memory.pool_workers`,
+  one helper for every pool). The workers and the parent together stay within
+  a quarter of `MemAvailable` at the phase's start, as for the Dense build's
+  EAF encode (#320). The parent counts at its resident set when the pool
+  starts, and a Ragged assembly's parent also counts the 17 bytes a row its
+  writer will hold by the end. Each unit's working set was measured with
+  `--write-workers` above 1 (the profiler) or by the pilot harness, each worker's
+  private memory sampled:
+
+  | unit | budget | measured |
+  |---|---|---|
+  | Dense band | 4 GiB + 24 B a cell: 16.4 GB for a 200,000-row band of OGS-00009's 2,514 Analyses | 10.2 GB |
+  | checkpoint | 256 MiB + 4 x the largest checkpoint file | up to 3.9 GB on OGS-00009 |
+  | Ragged Analysis | 256 MiB + 16 B a merged-axis variant + 32 B a row of the largest Analysis | 264 MB on the OGS-00006 subset (budget 666 MB) |
+  | Ragged region | 256 MiB + 120 B a cell | 5.15 GB for a 50 M-cell region (budget 6.3 GB) |
+
+  On OGS-00009 a ~15 GB parent leaves room for 13 band workers of a 235 GB
+  budget. Each pool logs the count it ran with, the unit's figure, the
+  parent's, and the budget.
 - **Resume is unchanged: it redoes the write.** Only LD blocks are
   checkpointed. A failure in the write discards the staged release (ADR 0043),
   and a resume runs the merge and the whole write again from the block
@@ -117,12 +128,20 @@ differ there.
   how many, the unit's estimate, and the budget.
 - Peak scratch disk falls by the `float32` SE plane and its `int8` copy. At
   every array write the staged planes hold no more than the release they
-  become (`tests/test_completion_band_write.py`).
-- A Dense band worker holds its band whole, about 18 bytes a cell: 9 GB for a
-  200,000-row band of OGS-00009's 2,514 Analyses.
+  become (`tests/test_completion_band_write.py`). The tiers #200 targets, the
+  block checkpoints and the fill shards, do not change: on OGS-00003 they are
+  77.3 and 16.0 bytes per imputed cell, 93.3 together at base and at head,
+  where #200 measured 92 on OGS-00010 and sets a target of 16 or fewer. That
+  target is #200's work (one ALID per block, no second copy of the fills),
+  not this decision's.
+- A Dense band worker holds its band whole: 18 bytes a cell of values and
+  codes, and its reads' and encodes' steps beside them, measured at 10.2 GB
+  private for a 200,000-row band of OGS-00009's 2,514 Analyses.
 - `benchmarks/profile_reference_completion.py` attributes the one pass to
   reading, computing and writing. With `--write-workers` above 1 it times the
-  pool's band write as one stage and records each worker's private memory.
+  pool's band write as one stage, records each worker's private memory, and
+  refuses a slice with fewer bands than workers, whose time would not scale
+  by bands.
 - A Ragged Analysis's own warnings (an observed duplicate, a fill D5 drops)
   are logged by the worker that completes it, through the handlers it
   inherited. A Dense band's dropped fills are logged by the parent.

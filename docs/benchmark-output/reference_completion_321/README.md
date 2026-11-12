@@ -6,7 +6,7 @@ merged into it: `3fe26e9` for the profiles and `37db027` for the pilots, as the
 artifacts record them. The branch was then rebuilt so that each commit passes
 its tests, and those commits are now `5ef19c2` and `9ce2776`, with the same
 `opengwasdb/` trees (`3360f41`, `fc8bf0b`) and `benchmarks/` tree (`8a87126`).
-The 4-worker run's `0ca759f` is now `7cdc9bf` (`opengwasdb/` `117644f`).
+The 8-band pool run and the head pilots ran at `25530c9`, after #361 merged in.
 Each timing pair ran in fresh processes. The pilots ran interleaved under the
 run's timing lock. The OGS-00009 profiles ran base beside head, at the same
 moment. Each artifact records the host load it ran under.
@@ -31,15 +31,27 @@ Base's source reads are its statistic pass, its EAF pass (`points`), and the SE
 rewrite's count and read. Head's are its one `inspect` read per band step.
 #309 recorded 21,179 s at `703fb07`.
 
-`bands_ogs00009_head-w4.json` is head after #361 merged (`0ca759f`, now
-`7cdc9bf`) on 4
-write workers. The merge's checkpoints and both bands run on the pool, and
-each worker's private memory is sampled every 0.2 s. The two band workers held
-10.2 and 10.1 GB private, against the 16.4 GB the pool budgets a band. The four
-merge workers held 2.9–3.9 GB. The two bands took 203 s on the pool. One worker
-took 383 s (head r1) and 336 s (head r2) for the same stages. The fill
-sharding took 41 s on the pool, against 101–119 s on one worker. The host load
-is in each artifact.
+### The pool's write: 8 bands on 4 workers
+
+`bands_ogs00009_{base-b8,head-b8-w4}.json` ran 8 bands (1.6 M rows), base
+beside head at the same moment, from `9dab184` and `25530c9`. Head ran its
+merge and its band write on 4 write workers, sampling each worker's private
+memory every 0.2 s. `bands_ogs00009_b8_memory.log` is the host's available
+memory through both runs, never below 738 GB.
+
+| | base, serial | head, 4 workers |
+|---|---|---|
+| band write, slice (s) | 2,926 (stage sum) | 480 (`band_write_pool`) |
+| band write scaled to 56 bands (s) | 20,485 | 3,358 |
+| fill sharding, slice (s) | 205 | 143 |
+| LD blocks completed | 89 | 194 |
+| imputed cells in the slice | 737,774,600 | 1,606,680,019 |
+
+Base's profiler took only the blocks of the slice's last chromosome
+(chromosome 2), so its chromosome-1 bands carried no fills: 2.2× fewer cells
+to fill and shard than head's, which favours base. #309 recorded 21,179 s
+(5.9 h). Head's four band workers held 10.1–10.2 GB private against the
+16.4 GB the pool budgets a band, and its four merge workers 3.2–4.6 GB.
 
 ## Pilots: one set of LD blocks, resumed by each revision
 
