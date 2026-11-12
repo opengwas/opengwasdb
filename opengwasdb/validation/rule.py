@@ -185,6 +185,10 @@ class Target:
         """Drop one remembered value and return it; None if none was remembered."""
         return self._read.pop(key, None)
 
+    def recalled(self, key: str) -> Any:
+        """A value already remembered, or None: asking reads nothing."""
+        return self._read.get(key)
+
     def release(self, scan: str) -> None:
         """Drop what was remembered until `scan`'s pass over this target ended."""
         for key in self._until.pop(scan, set()):
@@ -287,9 +291,14 @@ class Skip(Exception):
 
 @dataclass(frozen=True, kw_only=True)
 class Check(Rule):
-    """A rule that reads what it needs for itself: metadata and small arrays."""
+    """A rule that reads what it needs for itself: metadata and small arrays.
+
+    A check with a `ride` reads part of what it judges from a scan's pass instead,
+    so that read is not made twice; it is judged as any other check (issue #314).
+    """
 
     run: Callable[[Target], Iterable[str]]
+    ride: Ride[Any] | None = None
 
     def findings(self, target: Target) -> Iterator[Finding]:
         for message in self.run(target):
@@ -316,6 +325,38 @@ class Scan(Generic[B]):
     #: How many blocks `blocks` will yield for a target, when that is known before
     #: the read; the runner reports progress against it. None silences progress.
     total: Callable[[Target], int] | None = None
+    #: Reads what the pass's riders asked for and the blocks did not reach -- a side
+    #: table's entries past the last block -- once the blocks are read.
+    finish: Callable[[Target], None] | None = None
+
+
+def _always_rides(_target: Target) -> bool:
+    return True
+
+
+@dataclass(frozen=True)
+class Ride(Generic[B]):
+    """What a `Check` takes from a scan's pass rather than reading it again (issue #314).
+
+    `board` is asked before a pass over a target, and returns what to hand each
+    block, or None when the check reads nothing from the blocks themselves (a side
+    table the scan streams, say). What it reads it leaves on the target, where the
+    check finds it; a check whose ride failed, or that no pass carried, reads for
+    itself. What a ride hands a check is the data itself, except the primary planes
+    `subsets.indexed` takes as digests: there a change to one value of one cell is
+    always found, and a corruption of several cells or planes in one comparison unit
+    is missed with probability about 2^-64 per unit, under a key drawn per run.
+
+    A check registered before its scan's first fold rides a pass that has not
+    happened yet, so it is judged when that pass ends, and the folds on the scan
+    that run after it are judged as if it had been decided first. `when` says
+    whether the pass carries anything the check reads; one that does not is judged
+    in its place.
+    """
+
+    scan: Scan[B]
+    board: Callable[[Target], Callable[[B], None] | None]
+    when: Callable[[Target], bool] = _always_rides
 
 
 @dataclass(frozen=True, kw_only=True)

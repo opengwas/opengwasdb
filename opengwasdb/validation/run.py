@@ -29,6 +29,7 @@ from opengwasdb.encoding.timing import (
     progress_every,
 )
 from opengwasdb.validation.rule import (
+    Check,
     Finding,
     Fold,
     Rule,
@@ -44,6 +45,11 @@ log = logging.getLogger(__name__)
 
 #: How a rule ended on one target, as the rules that run after it see it.
 _PASSED, _FAILED, _SKIPPED = "passed", "failed", "skipped"
+#: A riding check waiting for its scan's pass, which decides it (issue #314).
+_WAITING = "waiting"
+
+#: What one block is handed to, beside the folds: a riding check's share of the pass.
+_Rider = Callable[[Any], None]
 
 @cache
 def untimed_rules() -> frozenset[str]:
@@ -88,6 +94,8 @@ def evaluate(
             for rule in rules:
                 if rule.name in run.chosen:
                     run.judge(rule)
+            # A riding check whose scan no fold asked for is decided on its own read.
+            run.settle_all_waiting()
     finally:
         for target in targets:
             target.close()
@@ -132,9 +140,18 @@ class _Run:
         self.on_scan: dict[str, set[str]] = {}
         #: The wall time each rule and each scan pass accounted for.
         self.timer = PhaseTimer()
-        for rule in rules:
+        #: Where each scan's first fold is registered: a check riding the scan that is
+        #: registered before it waits for the pass (issue #314).
+        self.first_fold: dict[str, int] = {}
+        self.order = {rule.name: n for n, rule in enumerate(rules)}
+        #: The `(scan, target)` passes already asked for, whether or not one was read.
+        self.scanned: set[tuple[str, int]] = set()
+        #: The riding checks waiting for a pass, by `(scan, target)`.
+        self.waiting: dict[tuple[str, int], list[Check]] = {}
+        for n, rule in enumerate(rules):
             if isinstance(rule, Fold):
                 self.on_scan.setdefault(rule.scan.name, set()).add(rule.name)
+                self.first_fold.setdefault(rule.scan.name, n)
 
     def result(self) -> ValidationResult:
         """What the run recorded, in the order it judged: rule order, then target order."""
@@ -163,14 +180,71 @@ class _Run:
         if isinstance(rule, Fold):
             self.scan(rule.scan, i, target)
         elif self.ready(rule, i, target) and self.applies(rule, i, target):
-            timed = rule.name not in untimed_rules()
-            with _Phase(self.timer, _rule_label(rule, target), timed=timed) as phase:
-                outcome = _contained(rule, target, partial(rule.findings, target))
-                if isinstance(outcome, Skip):
-                    # It looked and found nothing to judge, so it is not charged: a row
-                    # for it would say a rule was judged that was not (issue #308).
-                    phase.drop()
-                self.settle(rule, i, outcome)
+            if isinstance(rule, Check) and rule.ride is not None and self.rides(rule, i, target):
+                return
+            self.run_check(rule, i, target)
+
+    def run_check(self, rule: Rule, i: int, target: Target) -> None:
+        """Judge a check, or any rule that is not a fold, timed as one phase."""
+        timed = rule.name not in untimed_rules()
+        with _Phase(self.timer, _rule_label(rule, target), timed=timed) as phase:
+            outcome = _contained(rule, target, partial(rule.findings, target))
+            if isinstance(outcome, Skip):
+                # It looked and found nothing to judge, so it is not charged: a row
+                # for it would say a rule was judged that was not (issue #308).
+                phase.drop()
+            self.settle(rule, i, outcome)
+
+    def rides(self, rule: Check, i: int, target: Target) -> bool:
+        """Whether `rule` waits for its scan's pass rather than being judged now.
+
+        A check registered before its scan's first fold rides a pass still to come;
+        one registered after it rides the pass already read, and a check whose scan
+        no fold asked for has its pass read for it here (issue #314).
+        """
+        assert rule.ride is not None
+        scan = rule.ride.scan
+        if (scan.name, i) in self.scanned:
+            return False
+        if self.order[rule.name] < self.first_fold.get(scan.name, len(self.rules)):
+            if _carries(rule, target):
+                self.states[(rule.name, i)] = _WAITING
+                self.waiting.setdefault((scan.name, i), []).append(rule)
+                return True
+            return False
+        self.scan(scan, i, target)
+        return False
+
+    def settle_waiting(self, scan: Scan[Any], i: int, target: Target) -> None:
+        """Judge the checks waiting for `scan`'s pass over target `i`, which is over.
+
+        A check that no pass carried reads for itself, through the scan's own
+        `finish`: it streams what the blocks would have handed it, and nothing else.
+        """
+        for rule in self.waiting.pop((scan.name, i), []):
+            del self.states[(rule.name, i)]
+            self.run_check(rule, i, target)
+
+    def settle_all_waiting(self) -> None:
+        """Decide every check still waiting: no fold on its scan ran on its target."""
+        for scan_name, i in list(self.waiting):
+            rules = self.waiting[(scan_name, i)]
+            scan = rules[0].ride.scan if rules[0].ride is not None else None
+            assert scan is not None
+            self.read_alone(scan, i, self.targets[i])
+
+    def read_alone(self, scan: Scan[Any], i: int, target: Target) -> None:
+        """The riders' share of a pass no fold reads: what `finish` streams, alone."""
+        self.scanned.add((scan.name, i))
+        if not self.waiting.get((scan.name, i)):
+            return
+        try:
+            for rule in self.waiting.get((scan.name, i), []):
+                _board(rule, target)
+            _finish(scan, target)
+            self.settle_waiting(scan, i, target)
+        finally:
+            target.release(scan.name)
 
     def decided(self, rule: Rule, i: int) -> bool:
         return (rule.name, i) in self.states or (rule.name, i) in self.declined
@@ -207,13 +281,26 @@ class _Run:
         for name in rule.after if prerequisites is None else prerequisites:
             owner: Target | None = target
             while owner is not None:
-                state = self.states.get((name, self.position.get(id(owner), -1)))
+                at = self.position.get(id(owner), -1)
+                state = self.states.get((name, at))
+                if state == _WAITING:
+                    # Asked for before its pass: it is decided on its own read now.
+                    self.read_alone(self.waiting_scan(name, at), at, owner)
+                    state = self.states.get((name, at))
                 if state is not None:
                     if _blocks(rule, state):
                         found.append(name)
                     break
                 owner = owner.parent
         return found
+
+    def waiting_scan(self, name: str, i: int) -> Scan[Any]:
+        """The scan the waiting check `name` rides on target `i`."""
+        for (_scan_name, at), rules in self.waiting.items():
+            for rule in rules:
+                if at == i and rule.name == name and rule.ride is not None:
+                    return rule.ride.scan
+        raise KeyError(f"{name!r} is not waiting on target {i}")
 
     def settle(self, rule: Rule, i: int, outcome: list[Finding] | Skip) -> None:
         if isinstance(outcome, Skip):
@@ -244,32 +331,130 @@ class _Run:
         log.info("%s on %s: skipped, %s", name, self.targets[i].label, record.message)
 
     def scan(self, scan: Scan[Any], i: int, target: Target) -> None:
-        """Read `scan` once on target `i` for every fold on it that can run there."""
-        ready = [
-            fold
-            for fold in self.folds_on(scan, i, target)
-            if self.ready(fold, i, target, self.before_read(fold)) and self.applies(fold, i, target)
-        ]
-        if not ready:
-            return  # nothing to measure, so nothing to read
-        done = _Pass(scan, target, ready)
+        """Read `scan` once on target `i` for every fold on it that can run there.
+
+        The checks riding the scan share the read. One waiting for this pass is
+        decided when the read ends, before any fold is judged, and a fold standing on
+        it is judged as if it had been decided before the read: skipped behind it with
+        every reason it would have named, or judged (issue #314).
+        """
+        self.scanned.add((scan.name, i))
+        waiting = {rule.name for rule in self.waiting.get((scan.name, i), [])}
+        ready, held = self.ready_folds(scan, i, target, waiting)
+        riders = self.board(scan, i, target, waiting=False)
+        if not ready and not riders:
+            # Nothing to measure, so no block to read; a waiting check reads alone.
+            self.read_alone(scan, i, target)
+            self.settle_held(held, i, target)
+            return
+        riders += self.board(scan, i, target, waiting=True)
+        done = _Pass(scan, target, ready, riders)
         label = _scan_label(scan, target)
         try:
             with log_phase(log, label):
                 with self.timer.phase(label):
                     # The folds share the one read, so they are charged to it, not
                     # timed apart: naming them says which rules the phase serves.
-                    log.info("%s: %s", label, ", ".join(fold.name for fold in ready))
+                    log.info("%s: %s", label, ", ".join(_serves(ready, riders)))
                     done.drive()
+                    _finish(scan, target)
+                    self.settle_waiting(scan, i, target)
+                    self.settle_held(held, i, target)
                     # The read is over, so what the folds held to measure with goes
                     # before they are judged, not after: on a full-size release the
                     # pass keeps 1.6 GiB, chiefly the Top-Hit Index's tiers, and a
                     # judge words its findings from the totals and the small facts
                     # kept beside them (issue #387).
                     target.release(scan.name)
-                    self.conclude(done, i, target)
+                    self.conclude(done, i, target, waiting)
         finally:  # an interruption still ends the pass, and what it held goes with it
             target.release(scan.name)
+
+    def ready_folds(
+        self, scan: Scan[Any], i: int, target: Target, waiting: set[str]
+    ) -> tuple[list[Fold[Any, Any]], list[tuple[Fold[Any, Any], object]]]:
+        """The folds that measure in this pass, and those held until it ends.
+
+        A fold standing on a waiting check measures provisionally, unless another
+        prerequisite already stops it or its `when` declines or raises; those are
+        held, and recorded once the waiting check is decided, as they would have been
+        had it been decided first.
+        """
+        ready: list[Fold[Any, Any]] = []
+        held: list[tuple[Fold[Any, Any], object]] = []
+        for fold in self.folds_on(scan, i, target):
+            before = self.before_read(fold)
+            if not waiting.intersection(before):
+                if self.ready(fold, i, target, before) and self.applies(fold, i, target):
+                    ready.append(fold)
+                continue
+            outcome = self.provisionally(fold, target, [n for n in before if n not in waiting])
+            if outcome is True:
+                ready.append(fold)
+            else:
+                held.append((fold, outcome))
+        return ready, held
+
+    def provisionally(self, fold: Fold[Any, Any], target: Target, before: list[str]) -> object:
+        """True if `fold` measures; else "blocked", "declined", or what its `when` raised."""
+        if self.blockers(fold, target, before):
+            return "blocked"
+        try:
+            return True if fold.when(target) else "declined"
+        except Exception as exc:  # this rule's failure, unless a prerequisite stops it
+            return exc
+
+    def settle_held(
+        self, held: list[tuple[Fold[Any, Any], object]], i: int, target: Target
+    ) -> None:
+        """Record the held folds now that every prerequisite read before the scan is
+        decided: skipped behind each that stops it, else declined, else failed."""
+        for fold, outcome in held:
+            behind = self.blockers(fold, target, self.before_read(fold))
+            if behind:
+                self.skip(fold.name, i, behind)
+            elif outcome == "declined":
+                self.declined.add((fold.name, i))
+            elif isinstance(outcome, Exception):
+                self.settle(fold, i, [_failure(fold, target, outcome)])
+
+    def board(self, scan: Scan[Any], i: int, target: Target, *, waiting: bool) -> list[_Boarded]:
+        """Board the checks riding `scan` on target `i`: those waiting for this pass,
+        or those judged after it that nothing has stopped. Returns what each hands
+        the blocks to, for those that read the blocks."""
+        boarded: list[_Boarded] = []
+        if waiting:
+            rules = self.waiting.get((scan.name, i), [])
+        else:
+            rules = [rule for rule in self.riders_on(scan) if self.may_ride(rule, i, target)]
+        for rule in rules:
+            rider = _board(rule, target)
+            if rider is not None:
+                boarded.append((rule.name, rider))
+        return boarded
+
+    def riders_on(self, scan: Scan[Any]) -> list[Check]:
+        return [
+            rule
+            for rule in self.rules
+            if isinstance(rule, Check) and rule.ride is not None and rule.ride.scan is scan
+        ]
+
+    def may_ride(self, rule: Check, i: int, target: Target) -> bool:
+        """A check judged after the pass rides it unless it is decided, or a
+        prerequisite already decided stops it; nothing undecided is decided here."""
+        if not self.undecided(rule, i, target):
+            return False
+        for name in rule.after:
+            owner: Target | None = target
+            while owner is not None:
+                state = self.states.get((name, self.position.get(id(owner), -1)))
+                if state is not None:
+                    if state != _WAITING and _blocks(rule, state):
+                        return False
+                    break
+                owner = owner.parent
+        return True
 
     def before_read(self, fold: Fold[Any, Any]) -> list[str]:
         """`fold`'s prerequisites decided before its scan is read: those not on the scan."""
@@ -279,13 +464,22 @@ class _Run:
         """`fold`'s prerequisites on its own scan, decided when the pass ends."""
         return [name for name in fold.after if name in self.on_scan[fold.scan.name]]
 
-    def conclude(self, done: _Pass, i: int, target: Target) -> None:
+    def conclude(self, done: _Pass, i: int, target: Target, waiting: set[str]) -> None:
         """Each fold of a finished pass, in registration order: skipped behind a
         prerequisite on the scan that did not pass, failed, skipped behind its blocker,
         or judged. A prerequisite on the scan is registered earlier, so it is decided
         here first; standing on it, the fold is not judged, as behind any other.
+
+        A fold that measured standing on a check that waited for this pass is
+        skipped behind it, if it failed, with the reasons it would have given before
+        the read, and nothing it met in the read is reported (issue #314).
         """
         for fold in done.folds:
+            if waiting.intersection(fold.after):
+                before = self.blockers(fold, target, self.before_read(fold))
+                if before:
+                    self.skip(fold.name, i, before)
+                    continue
             behind = self.blockers(fold, target, self.on_its_scan(fold))
             if behind:
                 self.skip(fold.name, i, behind)
@@ -316,6 +510,47 @@ def _blocks(rule: Rule, state: str) -> bool:
     return state != _PASSED
 
 
+#: A riding check boarded on a pass, by name, and what it hands each block to.
+_Boarded = tuple[str, _Rider]
+
+
+def _carries(rule: Check, target: Target) -> bool:
+    """Whether the pass carries anything `rule` reads; a `when` that raises says no,
+    and the check meets the same failure in its own place."""
+    assert rule.ride is not None
+    try:
+        return rule.ride.when(target)
+    except Exception:  # judged in its place, where it raises again as its own failure
+        return False
+
+
+def _board(rule: Check, target: Target) -> _Rider | None:
+    """What `rule` hands each block to; a ride that fails to board is no ride, and
+    the check reads for itself."""
+    assert rule.ride is not None
+    try:
+        return rule.ride.board(target)
+    except Exception as exc:  # the check reads for itself instead
+        log.info("%s on %s: rides no pass (%s)", rule.name, target.label, exc)
+        return None
+
+
+def _finish(scan: Scan[Any], target: Target) -> None:
+    """Read what the riders asked for past the last block; a failure leaves them to
+    read for themselves, and they meet it there as their own."""
+    if scan.finish is None:
+        return
+    try:
+        scan.finish(target)
+    except Exception as exc:  # each rider reads for itself instead
+        log.info("%s: the riders' remaining read failed (%s)", _scan_label(scan, target), exc)
+
+
+def _serves(folds: list[Fold[Any, Any]], riders: list[_Boarded]) -> list[str]:
+    """The rules one pass serves: its folds, then the checks riding it."""
+    return [fold.name for fold in folds] + [f"{name} (riding)" for name, _rider in riders]
+
+
 class _Pass:
     """One pass of a scan for its ready folds: each fold's total, failure or blocker.
 
@@ -325,10 +560,20 @@ class _Pass:
     cannot be decoded (`Unreadable`) is reported by the first fold that reads it
     and blocks only the folds that read it after; one that names the rule reporting
     it is skipped behind that rule, which reads the plane's codes, not its values.
+
+    The checks riding the pass are handed each block after the folds; they report
+    nothing here, and one that raises is handed no more blocks (issue #314).
     """
 
-    def __init__(self, scan: Scan[Any], target: Target, folds: list[Fold[Any, Any]]) -> None:
+    def __init__(
+        self,
+        scan: Scan[Any],
+        target: Target,
+        folds: list[Fold[Any, Any]],
+        riders: list[_Boarded] | None = None,
+    ) -> None:
         self.scan, self.target, self.folds = scan, target, folds
+        self.riders = list(riders or [])
         self.totals = {fold.name: fold.zero for fold in folds}
         self.failures: dict[str, Finding] = {}
         self.blocked: dict[str, str] = {}
@@ -351,6 +596,7 @@ class _Pass:
             for done, block in enumerate(self.scan.blocks(self.target), start=1):
                 for fold in self.measuring():
                     self.measure(fold, block)
+                self.hand(block)
                 overran = self.report_progress(label, done, total, started, overran)
         except Exception as exc:  # the read itself failed, so no fold saw all of it
             measuring = self.measuring()
@@ -393,6 +639,16 @@ class _Pass:
             overran = True
         log_progress(log, label, done, total, started, every=progress_every(total))
         return overran
+
+    def hand(self, block: Any) -> None:
+        """Hand the block to every riding check still reading; one that raises stops,
+        and judges without the pass, as if it had not ridden it."""
+        for name, rider in list(self.riders):
+            try:
+                rider(block)
+            except Exception as exc:  # that check reads for itself instead
+                log.info("%s on %s: left the pass (%s)", name, self.target.label, exc)
+                self.riders.remove((name, rider))
 
     def measure(self, fold: Fold[Any, Any], block: Any) -> None:
         """Add one block's measure to `fold`'s total; a fold that raises stops there."""

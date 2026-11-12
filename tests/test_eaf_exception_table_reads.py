@@ -26,7 +26,12 @@ from typing import Any
 
 import numpy as np
 import zarr
-from dense_sources import build_dense_from_records
+from eaf_tables import (
+    ANALYSES,
+    SMALL_VARIANTS,
+    build_table_store,
+    rewrite_primary_table,
+)
 from pytest import MonkeyPatch, TempPathFactory, approx, fixture, mark, param
 from store_reads import _SELECTIONS, largest_read
 from test_indexed_subsets import (
@@ -41,20 +46,15 @@ from opengwasdb.encoding import banding
 from opengwasdb.encoding import codec as codec_module
 from opengwasdb.encoding.codec import EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE, WindowedExactTable
 from opengwasdb.layouts.dense import indexed_subsets
-from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.indexed_subsets import (
     INDEXED_SUBSETS_GROUP,
     validate_indexed_subsets,
 )
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.arrays import create_array
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import scans, validate_store
 from opengwasdb.validation.rule import Kind, Target
-from opengwasdb.validation.rules import encoding as encoding_rules
-from opengwasdb.validation.rules import side_tables
-from opengwasdb.variants import CanonicalVariant
 
 NAME = "hm3"
 #: Wider than one Indexed Variant Subset inner chunk (65,536), so the index's
@@ -65,51 +65,10 @@ WIDE_ANALYSES = 2
 #: chunk of 65,536, which a subset of this width spans two of; narrowing the unit
 #: the comparison reads is what leaves several bands to tell apart.
 BAND_VARIANTS = 16_000
-#: Every twentieth variant carries, in one Analysis, a frequency no residual
-#: coding can express: 3,280 exact cells on the wide fixture and 400 on the small
-#: one, enough to span several pages without making the residual plan lose to a
-#: plain float32 plane.
-EXCEPTION_EVERY = 20
-SMALL_VARIANTS = 4_000
-ANALYSES = 2
-
-
-def _records(variants: int) -> list[NormalisedAssociation]:
-    freqs = np.linspace(0.05, 0.95, variants, dtype=np.float32)
-    records: list[NormalisedAssociation] = []
-    for col in range(ANALYSES):
-        for row in range(variants):
-            eaf = float(freqs[row])
-            if col == ANALYSES - 1 and row % EXCEPTION_EVERY == 0:
-                eaf = 0.999  # far from every baseline: an exception, stored exactly
-            records.append(
-                NormalisedAssociation(
-                    analysis_id=f"a{col}",
-                    variant=CanonicalVariant("1", row + 1, "A", "G"),
-                    z=1.0,
-                    se=0.2,
-                    eaf=eaf,
-                )
-            )
-    return records
-
-
-def _build_store(path: Path, variants: int, store_id: str) -> Path:
-    build_dense_from_records(
-        _records(variants),
-        path,
-        store_id=store_id,
-        release_id=f"{store_id}-v1",
-        reference_assembly="GRCh38",
-        chunk_shape=(1_000, ANALYSES),
-    )
-    return path
-
-
 @fixture(scope="module")
 def wide_seed(tmp_path_factory: TempPathFactory) -> Path:
     """The wide release with its HapMap3 subset, published once for the module."""
-    store = _build_store(
+    store = build_table_store(
         tmp_path_factory.mktemp("eaf-wide") / "store.opengwasdb", WIDE_VARIANTS, "eaf-wide"
     )
     listing = store.parent / "hm3.alid.txt"
@@ -126,24 +85,6 @@ def wide_subset(tmp_path: Path, wide_seed: Path) -> Path:
     return copytree(wide_seed, tmp_path / "store.opengwasdb")
 
 
-@fixture(scope="module")
-def small_seed(tmp_path_factory: TempPathFactory) -> Path:
-    """A release whose table crosses pages but whose grid is 16 bands wide."""
-    root = tmp_path_factory.mktemp("eaf-small")
-    store = _build_store(root / "store.opengwasdb", SMALL_VARIANTS, "eaf-small")
-    listing = root / "hm3.alid.txt"
-    listing.write_text(
-        "\n".join(f"1:{row + 1}:A:G" for row in range(SMALL_VARIANTS)) + "\n", encoding="utf-8"
-    )
-    _build(store, NAME, listing)
-    return store
-
-
-@fixture
-def small_copy(tmp_path: Path, small_seed: Path) -> Path:
-    return copytree(small_seed, tmp_path / "store.opengwasdb")
-
-
 @fixture
 def chunked_store(tmp_path: Path, monkeypatch: MonkeyPatch) -> Path:
     """A release whose exception table is stored in pages, not in one chunk.
@@ -154,7 +95,7 @@ def chunked_store(tmp_path: Path, monkeypatch: MonkeyPatch) -> Path:
     """
     monkeypatch.setattr(store_arrays, "EXCEPTION_TABLE_CHUNK", 64)
     monkeypatch.setattr(codec_module, "EXACT_TABLE_CHUNK", 64)
-    store = _build_store(tmp_path / "store.opengwasdb", SMALL_VARIANTS, "eaf-chunked")
+    store = build_table_store(tmp_path / "store.opengwasdb", SMALL_VARIANTS, "eaf-chunked")
     listing = tmp_path / "hm3.alid.txt"
     listing.write_text(
         "\n".join(f"1:{row + 1}:A:G" for row in range(SMALL_VARIANTS)) + "\n", encoding="utf-8"
@@ -177,23 +118,6 @@ def _table(store: Path) -> tuple[int, int]:
     entries = int(root[EAF_EXCEPTION_INDEX].shape[0])
     first = int(root[EAF_EXCEPTION_INDEX][0]) if entries else -1
     return entries, first
-
-
-def _rewrite_primary_table(store: Path, positions: np.ndarray, values: np.ndarray) -> None:
-    """Replace the release's own exception table, through the array seam."""
-    root = zarr.open_group(str(store / "data.zarr"), mode="r+")
-    for name, data, dtype in (
-        (EAF_EXCEPTION_INDEX, positions, "int64"),
-        (EAF_EXCEPTION_VALUE, values, "float32"),
-    ):
-        del root[name]
-        create_array(
-            root,
-            name,
-            store_arrays.ArrayRole.EXCEPTION_TABLE,
-            data=np.asarray(data, dtype=dtype),
-            compressor=None,
-        )
 
 
 # ── The subset check reads the table once, in windows ───────────────────────
@@ -243,8 +167,7 @@ def test_no_consumer_reads_the_whole_table(
     assert int(root[EAF_EXCEPTION_INDEX].chunks[0]) == page, "the table must be chunked by page"
     monkeypatch.setattr(indexed_subsets, "EXCEPTION_TABLE_WINDOW", page)
     monkeypatch.setattr(banding, "DECODED_BAND_BYTES", 48_000)
-    monkeypatch.setattr(side_tables, "SPAN_PAGE", page)
-    monkeypatch.setattr(encoding_rules, "EAF_TABLE_PAGE", page)
+    monkeypatch.setattr(scans, "SPAN_PAGE", page)
     # The scan's own lookup reads windows of the table, so its window is a page too;
     # otherwise the guard would be measuring zarr's granularity, not a rule's.
     monkeypatch.setattr(WindowedExactTable, "scan_window_entries", page)
@@ -338,11 +261,11 @@ def test_an_entry_missing_from_a_later_band_is_still_found(
 ) -> None:
     """A dropped table cell is named in the band that marks it, with its position."""
     monkeypatch.setattr(banding, "DECODED_BAND_BYTES", 48_000)  # 250 rows: 16 bands
-    monkeypatch.setattr(side_tables, "SPAN_PAGE", 64)
+    monkeypatch.setattr(scans, "SPAN_PAGE", 64)
     root = zarr.open_group(str(small_copy / "data.zarr"), mode="r+")
     dropped = int(np.asarray(root[EAF_EXCEPTION_INDEX][:])[-1])
     assert dropped >= 250 * ANALYSES, "the dropped cell must sit past the first band"
-    _drop_last_entry(root)
+    _drop_last_entry(small_copy)
 
     result = validate_store(small_copy, rules={"side_tables.eaf_exceptions"})
 
@@ -352,18 +275,14 @@ def test_an_entry_missing_from_a_later_band_is_still_found(
     ], result.errors
 
 
-def _drop_last_entry(root: zarr.Group) -> None:
-    """Rewrite one exception table without its last cell, through the array seam."""
-    for name, dtype in ((EAF_EXCEPTION_INDEX, "int64"), (EAF_EXCEPTION_VALUE, "float32")):
-        kept = np.asarray(root[name][:])[:-1]
-        del root[name]
-        create_array(
-            root,
-            name,
-            store_arrays.ArrayRole.EXCEPTION_TABLE,
-            data=np.asarray(kept, dtype=dtype),
-            compressor=None,
-        )
+def _drop_last_entry(store: Path) -> None:
+    """Rewrite the release's exception table without its last cell."""
+    root = zarr.open_group(str(store / "data.zarr"), mode="r")
+    rewrite_primary_table(
+        store,
+        np.asarray(root[EAF_EXCEPTION_INDEX][:])[:-1],
+        np.asarray(root[EAF_EXCEPTION_VALUE][:])[:-1],
+    )
 
 
 # ── The release's side table is judged block by block ───────────────────────
@@ -372,7 +291,7 @@ def _drop_last_entry(root: zarr.Group) -> None:
 def _side_table_errors(store: Path, monkeypatch: MonkeyPatch) -> list[str]:
     """The side-table rule alone, over sixteen bands and pages of 64 entries."""
     monkeypatch.setattr(banding, "DECODED_BAND_BYTES", 48_000)
-    monkeypatch.setattr(side_tables, "SPAN_PAGE", 64)
+    monkeypatch.setattr(scans, "SPAN_PAGE", 64)
     return validate_store(store, rules={"side_tables.eaf_exceptions"}).errors
 
 
@@ -389,7 +308,7 @@ def test_a_stray_entry_in_a_later_span_is_found(
     values = np.asarray(root[EAF_EXCEPTION_VALUE][:])
     stray = SMALL_VARIANTS * ANALYSES - 1
     assert stray > int(positions[-1]), "the stray must be past every real entry"
-    _rewrite_primary_table(
+    rewrite_primary_table(
         small_copy,
         np.concatenate((positions, [stray])),
         np.concatenate((values, np.float32([0.5]))),
@@ -409,7 +328,7 @@ def test_an_entry_past_the_last_span_is_found(
     positions = np.asarray(root[EAF_EXCEPTION_INDEX][:])
     values = np.asarray(root[EAF_EXCEPTION_VALUE][:])
     beyond = SMALL_VARIANTS * ANALYSES + 5
-    _rewrite_primary_table(
+    rewrite_primary_table(
         small_copy,
         np.concatenate((positions, [beyond])),
         np.concatenate((values, np.float32([0.5]))),
@@ -432,7 +351,7 @@ def test_a_pass_that_reads_no_cell_reports_every_entry_stray(
     entries, first = _table(small_copy)
     assert entries > 1
     monkeypatch.setattr(banding, "DECODED_BAND_BYTES", 48_000)
-    monkeypatch.setattr(side_tables, "SPAN_PAGE", 64)
+    monkeypatch.setattr(scans, "SPAN_PAGE", 64)
     monkeypatch.setattr(scans, "band_limits", _no_bands)
 
     assert validate_store(small_copy, rules={"side_tables.eaf_exceptions"}).errors == [
@@ -464,7 +383,7 @@ def _target(store: Path) -> Target:
 
 def _plan_errors(store: Path, monkeypatch: MonkeyPatch) -> list[str]:
     """The plan rule alone, over pages of 64 entries of a 400-entry table."""
-    monkeypatch.setattr(encoding_rules, "EAF_TABLE_PAGE", 64)
+    monkeypatch.setattr(scans, "SPAN_PAGE", 64)
     return validate_store(store, rules={"encoding.eaf"}).errors
 
 
@@ -498,8 +417,8 @@ def test_the_plan_rule_judges_across_a_page_boundary(
         positions[64] = positions[63]
     else:
         values[64] = np.float32(1.5)
-    _rewrite_primary_table(small_copy, positions, values)
-    monkeypatch.setattr(encoding_rules, "EAF_TABLE_PAGE", 64)
+    rewrite_primary_table(small_copy, positions, values)
+    monkeypatch.setattr(scans, "SPAN_PAGE", 64)
 
     with largest_read(monkeypatch) as largest:
         errors = validate_store(small_copy, rules={"encoding.eaf"}).errors
@@ -617,7 +536,7 @@ def test_a_primary_table_that_is_not_sorted_and_unique_is_a_finding(
         positions = np.concatenate((positions, positions[-1:]))
         values = np.concatenate((values, values[-1:]))
     (wide_subset / "data.zarr" / INDEXED_SUBSETS_GROUP / ".tmp").mkdir()
-    _rewrite_primary_table(wide_subset, positions, values)
+    rewrite_primary_table(wide_subset, positions, values)
 
     assert _subset_errors(wide_subset) == [_STAGING_FINDING, _NOT_THE_REMAPPING]
 
@@ -629,7 +548,7 @@ def test_a_table_whose_values_are_not_parallel_with_its_positions_is_a_finding(
     root = _root(wide_subset)
     positions = np.asarray(root[EAF_EXCEPTION_INDEX][:])
     values = np.asarray(root[EAF_EXCEPTION_VALUE][:])
-    _rewrite_primary_table(wide_subset, positions, np.concatenate((values, np.float32([0.5]))))
+    rewrite_primary_table(wide_subset, positions, np.concatenate((values, np.float32([0.5]))))
 
     assert _subset_errors(wide_subset) == [_NOT_THE_REMAPPING]
 
