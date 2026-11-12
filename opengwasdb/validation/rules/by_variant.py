@@ -186,14 +186,23 @@ class IndexWindow:
     previous: tuple[int, int] | None
 
 
+def _window_limits(n_rows: int) -> Iterator[tuple[int, int]]:
+    """Every window of an index of `n_rows` rows: the one place its size is set."""
+    for lo in range(0, n_rows, _WINDOW):
+        yield lo, min(lo + _WINDOW, n_rows)
+
+
+def _n_windows(target: Target) -> int:
+    """How many windows `_index_windows` reads for `target`, before a row is read."""
+    return sum(1 for _ in _window_limits(_n_assoc(target)))
+
+
 def _index_windows(target: Target) -> Iterator[IndexWindow]:
     """The index's `analysis_index`, read `_WINDOW` rows at a time, never whole."""
     column = _index(target)["analysis_index"]
     bounds = index_offsets(target)
-    n_rows = _n_assoc(target)
     previous: tuple[int, int] | None = None
-    for lo in range(0, n_rows, _WINDOW):
-        hi = min(lo + _WINDOW, n_rows)
+    for lo, hi in _window_limits(_n_assoc(target)):
         analysis = np.asarray(column[lo:hi], dtype=np.int64)
         rows = np.arange(lo, hi, dtype=np.int64)
         variant = np.searchsorted(bounds, rows, side="right") - 1
@@ -201,7 +210,7 @@ def _index_windows(target: Target) -> Iterator[IndexWindow]:
         previous = (int(variant[-1]), int(analysis[-1]))
 
 
-BY_VARIANT: Scan[IndexWindow] = Scan("by_variant", _index_windows)
+BY_VARIANT: Scan[IndexWindow] = Scan("by_variant", _index_windows, total=_n_windows)
 
 
 @dataclasses.dataclass(frozen=True)

@@ -3,8 +3,7 @@
 The rules live in `validation/rules/`, one module to a subject; their names, in
 the order they run, are spec §20.0's. Beside the registry here are the rules that
 stay with code of this module: the manifest, the Dense Component opening (both
-through `_load_manifest`), the Indexed Variant Subsets, and source fidelity,
-whose read is one function (#56).
+through `_load_manifest`), and source fidelity, whose read is one function (#56).
 """
 
 from __future__ import annotations
@@ -20,9 +19,7 @@ from opengwasdb.associations import present as present_cells
 from opengwasdb.encoding import (
     StoreCodec,
 )
-from opengwasdb.encoding.codec import se_float16
 from opengwasdb.layouts.build_manifest import apply_se_divisor
-from opengwasdb.layouts.dense.indexed_subsets import validate_indexed_subsets
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.analyses import (
     read_analyses,
@@ -33,6 +30,7 @@ from opengwasdb.model.enums import (
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     UnsupportedFormatVersion,
+    indels_reference_first,
     open_store,
 )
 from opengwasdb.top_hits import threshold_key
@@ -60,9 +58,9 @@ from opengwasdb.validation.rules import rho as rho_rules
 from opengwasdb.validation.rules import sample_size as sample_size_rules
 from opengwasdb.validation.rules import sequence as sequence_rules
 from opengwasdb.validation.rules import side_tables as side_table_rules
+from opengwasdb.validation.rules import subsets as subset_rules
 from opengwasdb.validation.rules import top_hits as top_hit_rules
 from opengwasdb.validation.rules import variants as variant_rules
-from opengwasdb.validation.rules.associations import grid_counts
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.run import evaluate, selected
 from opengwasdb.variants import (
@@ -159,25 +157,6 @@ def _component_opens(target: Target) -> Iterator[str]:
         )
 
 
-def _indexed_subsets(target: Target) -> Iterator[str]:
-    """Every published Indexed Variant Subset is self-consistent and value-equal.
-
-    The rules are the ones the build's publication gate runs on a subset before
-    publishing it, there over a deterministic sample and here over every cell
-    (#270).
-    """
-    errors: list[str] = []
-    store = target.store
-    n_variants, n_analyses = grid_counts(target)
-    # The optional indexed-subset namespace (ADR 0061, #264).  A release without it
-    # stays valid and unchanged; a release with it must hold only published,
-    # self-consistent, value-equal subsets.
-    validate_indexed_subsets(
-        store.path, target.group, store.manifest, n_variants, n_analyses, errors
-    )
-    yield from errors
-
-
 def _top_level_dense_grid(target: Target) -> bool:
     return target.layout is PrimaryStorageLayout.DENSE and not target.is_component
 
@@ -237,7 +216,7 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
     *completion_rules.METADATA_RULES,
     *rho_rules.RULES,
     *layout_rules.RULES,
-    Check(name="subsets.indexed", kinds=Kind.GRID, after=(REQUIRED,), run=_indexed_subsets),
+    *subset_rules.RULES,
     *analyses_rules.ORIENTATION_RULES,
 )
 
@@ -402,14 +381,22 @@ def _unnamed_units(
     return [_Unit(None, path, _is_vcf_path(path)) for path in paths]
 
 
-def _stream_unit(unit: _Unit) -> Iterator[tuple[str, str, int, str, str, float, float]]:
-    """Yield canonical (analysis_id, chrom, pos, a1, a2, z, se) from one source."""
+def _stream_unit(
+    unit: _Unit, *, reference_first: bool
+) -> Iterator[tuple[str, str, int, str, str, float, float]]:
+    """Yield canonical (analysis_id, chrom, pos, a1, a2, z, se) from one source.
+
+    ``reference_first`` is whether the Store spells an indel's ALID reference
+    first (`indels_reference_first`, ADR 0079). A Store before it sorts an
+    indel's alleles, so a deletion is spelt, and its z signed, as that Store
+    spells it: alleles sorted, z negated with them.
+    """
     from opengwasdb.model.enums import StoredEffectScale
     from opengwasdb.readers.association_tsv import ASSOCIATION_TSV_CAPABILITY
     from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
     from opengwasdb.readers.interface import StreamTally
     from opengwasdb.readers.registry import resolve_reader
-    from opengwasdb.variants.normalise import canonical_alid
+    from opengwasdb.variants.normalise import alid_alleles, sorted_alid_alleles
 
     analysis_id, path, is_vcf, se_divisor = unit
     if analysis_id is None:
@@ -420,17 +407,18 @@ def _stream_unit(unit: _Unit) -> Iterator[tuple[str, str, int, str, str, float, 
     reader = resolve_reader(capability, path, StoredEffectScale.SD)
     # Read as the build reads it: a row it dropped as malformed is not a failure.
     for association in reader.stream_associations(StreamTally()):
-        _chrom, _pos, a1, a2 = canonical_alid(
-            association.chromosome, association.position, association.ref, association.alt
-        ).split(":")
+        a1, a2 = alid_alleles(association.ref, association.alt)
+        z = association.z
+        if not reference_first and sorted_alid_alleles(a1, a2) != (a1, a2):
+            a1, a2, z = a2, a1, -z
         se = association.se
         if se_divisor != 1.0:
             se = float(apply_se_divisor(np.array([se], dtype=np.float32), se_divisor)[0])
-        yield (analysis_id, association.chromosome, association.position, a1, a2, association.z, se)
+        yield (analysis_id, association.chromosome, association.position, a1, a2, z, se)
 
 
 def _sample_sources(
-    units: list[_Unit], n_samples: int, rng: np.random.Generator
+    units: list[_Unit], n_samples: int, rng: np.random.Generator, *, reference_first: bool
 ) -> list[tuple[str, str, int, str, str, float, float]]:
     """Reservoir-sample up to ``n_samples`` associations across a random subset
     of source files (scan-capped per file so cost stays bounded)."""
@@ -441,7 +429,7 @@ def _sample_sources(
     seen = 0
     for u in order:
         scanned = 0
-        for item in _stream_unit(units[int(u)]):
+        for item in _stream_unit(units[int(u)], reference_first=reference_first):
             seen += 1
             scanned += 1
             if len(reservoir) < n_samples:
@@ -485,6 +473,7 @@ def _draw_fidelity_samples(
     *,
     n_samples: int,
     seed: int,
+    reference_first: bool,
 ) -> list[_FidelitySample] | None:
     """Sampling phase: deterministically reservoir-sample source associations.
 
@@ -499,7 +488,9 @@ def _draw_fidelity_samples(
         errors.append("source-fidelity: the source names no Analysis to check the store against")
     if errors or not units:
         return None
-    samples = _sample_sources(units, n_samples, np.random.default_rng(seed))
+    samples = _sample_sources(
+        units, n_samples, np.random.default_rng(seed), reference_first=reference_first
+    )
     if not samples:
         errors.append("source-fidelity: no associations could be read from the source")
         return None
@@ -629,10 +620,14 @@ def _compare_fidelity_cells(
 ) -> tuple[int, list[str]]:
     """Comparison phase: compare each matched cell against its source value.
 
-    The store's own codec quantises the source value before comparison, and a
-    cell whose store value is missing is skipped, not compared: a store holding
-    *no* finite value at any matched cell is a different failure (dropped
-    associations), reported by the caller.
+    The reference is what the store's plan promises to hold. `z` is quantised by
+    the store's own codec. Under a residual `se` plan it is the source's own
+    `float32`: an exact exception is that value, and an ordinary cell is within
+    the coding's tolerance of it (spec §6a). Under a `float16` plan it is the
+    codec's rounding of the source, because an SE of 65,520 or more is `+inf`
+    there (spec §15). A cell whose store value is missing is skipped, not
+    compared: a store holding *no* finite value at any matched cell is a
+    different failure (dropped associations), reported by the caller.
     """
     z_blk, se_blk, ri, ci = _fidelity_blocks(store, pairs)
     codec = StoreCodec(store.manifest.encoding)
@@ -646,7 +641,11 @@ def _compare_fidelity_cells(
             continue
         n_compared += 1
         z_ref = float(codec.quantise_z(np.array([z_src]))[0])
-        se_ref = float(se_float16(np.array([se_src]))[0])
+        se_ref = (
+            float(np.float32(se_src))
+            if codec.encoding.se.is_residual
+            else float(codec.float16_se(np.array([se_src]))[0])
+        )
         if not (
             np.isclose(sz, z_ref, rtol=_FIDELITY_RTOL, atol=_FIDELITY_ATOL)
             and np.isclose(sse, se_ref, rtol=_FIDELITY_RTOL, atol=_FIDELITY_ATOL)
@@ -694,7 +693,13 @@ def _validate_source_fidelity(
     resolution (assembly-dependent), Analysis matching, block comparison, and
     mismatch reporting -- each of which guards the read in front of it.
     """
-    samples = _draw_fidelity_samples(source, errors, n_samples=n_samples, seed=seed)
+    samples = _draw_fidelity_samples(
+        source,
+        errors,
+        n_samples=n_samples,
+        seed=seed,
+        reference_first=indels_reference_first(store.manifest.format_version),
+    )
     if samples is None:
         return
     store_asm = _normalise_assembly(store.manifest.reference_assembly)

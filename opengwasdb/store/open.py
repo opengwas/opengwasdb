@@ -27,7 +27,7 @@ import zarr
 
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest, normalise_coverage
-from opengwasdb.store.arrays import open_group
+from opengwasdb.store.arrays import STORE_ZARR_FORMAT, open_group
 
 if TYPE_CHECKING:
     from opengwasdb.query.facade import StoreQuery
@@ -40,10 +40,11 @@ if TYPE_CHECKING:
 #:
 #: Two entries since #245: `0.1` (Zarr v2, read but never written again) and
 #: `0.2` (Zarr v3 with sharding, what every builder writes from #247 on), read to
-#: 0.2.1 since #430. The four pre-reset versions are not in it and are not
+#: 0.2.2: `0.2.1` adds #430's region table, `0.2.2` #381's indel ALIDs spelt
+#: reference first (ADR 0079). The four pre-reset versions are not in it and are not
 #: readable -- see `PRE_RESET_FORMAT_VERSIONS`.
 SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingProxyType(
-    {(0, 1): (0,), (0, 2): (1,)}
+    {(0, 1): (0,), (0, 2): (2,)}
 )
 
 #: The format_versions this build writes, oldest first. A build stamps each release
@@ -55,28 +56,53 @@ SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingPr
 #:
 #: `0.2.0` since #247: Zarr v3 with the sharding codec (ADR 0057), at the Dense
 #: inner chunk and shard shapes ADR 0058 decided. The builders write it through
-#: `opengwasdb.store.arrays`, and the converter writes it from a `0.1.0` source
-#: (`opengwasdb.store.convert.SOURCE_FORMAT_VERSION`); `0.1.0` stays readable
-#: until a later decision deletes the v2 reader (ADR 0057). `0.2.1` since #430:
-#: 0.2.0 plus a Ragged release's optional, manifest-declared `regions.tsv`, so a
-#: 0.2.0 release is a 0.2.1 one without the file.
-WRITTEN_FORMAT_VERSIONS: tuple[str, ...] = ("0.2.0", "0.2.1")
-#: The format_version a release that uses no optional feature is stamped
-#: (`format_version_for`): what every builder has written since #247, and what
-#: opengwasdb-stores' engine update probes as the format a locked engine writes. The
-#: newest version written is `WRITTEN_FORMAT_VERSIONS[-1]`.
-CURRENT_FORMAT_VERSION = WRITTEN_FORMAT_VERSIONS[0]
+#: `opengwasdb.store.arrays`; `0.1.0` stays readable until a later decision deletes
+#: the v2 reader (ADR 0057). `0.2.1` since #430: 0.2.0 plus a Ragged release's
+#: optional, manifest-declared `regions.tsv`, so a 0.2.0 release is a 0.2.1 one
+#: without the file. `0.2.2` since #381: 0.2.1 with an indel's ALID spelt reference
+#: first rather than sorted (ADR 0079), `regions.tsv` still optional. Package
+#: v0.9.0 wrote 0.2.0 and 0.2.1 with sorted indels; this build writes 0.2.2 for
+#: every release it builds or completes, and 0.2.0 for one it converts from 0.1.0
+#: (`opengwasdb.store.convert`), whose indels it cannot re-spell.
+WRITTEN_FORMAT_VERSIONS: tuple[str, ...] = ("0.2.0", "0.2.1", "0.2.2")
+
+#: The first `format_version` whose indel ALIDs spell the reference allele first
+#: (ADR 0079). Every earlier one sorts an indel's alleles, so its deletion reads
+#: like the insertion of the same sequence; nothing rewrites such a Store.
+REFERENCE_FIRST_INDELS_SINCE = (0, 2, 2)
 
 
-def format_version_for(*, carries_regions: bool) -> str:
+def indels_reference_first(version: str) -> bool:
+    """Whether a Store of ``version`` spells an indel's ALID reference first.
+
+    A Store before `REFERENCE_FIRST_INDELS_SINCE` is read as it was written: its
+    indel ALIDs keep their sorted spelling, and a check or a join against it
+    spells a source's indel the same way (ADR 0079).
+    """
+    return parse_format_version(version) >= REFERENCE_FIRST_INDELS_SINCE
+
+
+def format_version_for(*, carries_regions: bool, reference_first_indels: bool) -> str:
     """The `format_version` a release this build writes is stamped: the lowest whose
     features it uses (spec §21.3). The one rule every writer stamps by -- the builders,
     completion, the converter -- so a release no older reader can fully read says so,
     and every other one reads exactly as before.
 
-    `carries_regions`: the release carries `regions.tsv`, the one feature 0.2.1 adds.
+    `carries_regions`: the release carries `regions.tsv`, which 0.2.1 adds.
+    `reference_first_indels`: its indel ALIDs spell the reference first, which 0.2.2
+    adds (ADR 0079); every release this build builds or completes does, one it
+    converts from 0.1.0 does not.
     """
+    if reference_first_indels:
+        return WRITTEN_FORMAT_VERSIONS[2]
     return WRITTEN_FORMAT_VERSIONS[1] if carries_regions else WRITTEN_FORMAT_VERSIONS[0]
+
+
+#: The format_version a release that uses no optional feature is stamped: what
+#: every build of this package writes for a release without `regions.tsv`, and
+#: what opengwasdb-stores' engine update probes as the format a locked engine
+#: writes.
+CURRENT_FORMAT_VERSION = format_version_for(carries_regions=False, reference_first_indels=True)
 
 
 def check_format_version_stamp(
@@ -87,10 +113,22 @@ def check_format_version_stamp(
 
     A release stamped otherwise disagrees with itself: a 0.2.0 release carrying
     `regions.tsv` is one an older reader takes as fully understood, and a 0.2.1 one
-    without it is not what any writer stamps. Completion refuses it rather than
-    re-stamp it either way, and `validate` fails it (spec §21.3).
+    without it is not what any writer stamps. The stamp itself says whether the
+    release's indels are spelt reference first (`indels_reference_first`), which
+    `variant_table.indel_order` holds it to. Completion refuses a release stamped
+    otherwise rather than re-stamp it, and `validate` fails it (spec §21.3).
+
+    A version newer than every one this build writes (`newer_than_written`) is not
+    judged: which stamp its features give is the rule of the package that writes it,
+    and naming this build's stamp would send its owner to re-stamp it, the wrong fix,
+    instead of upgrading (as package 0.9.0 tells a 0.2.2 release it "is 0.2.1").
     """
-    stamp = format_version_for(carries_regions=carries_regions)
+    if newer_than_written(version):
+        raise UnsupportedFormatVersion(newer_than_written_text(version, source=source))
+    stamp = format_version_for(
+        carries_regions=carries_regions,
+        reference_first_indels=indels_reference_first(version),
+    )
     if version != stamp:
         carried = "regions.tsv" if carries_regions else "no region table"
         raise UnsupportedFormatVersion(
@@ -98,6 +136,23 @@ def check_format_version_stamp(
             "(spec §21.3)"
         )
     return version
+
+
+def newer_than_written(version: str) -> bool:
+    """Whether `version` is newer than every `format_version` this build writes: a
+    newer remainder of a series it reads (ADR 0041 §2), which a later package writes."""
+    return parse_format_version(version) > parse_format_version(WRITTEN_FORMAT_VERSIONS[-1])
+
+
+def newer_than_written_text(version: str, *, source: str = "release") -> str:
+    """What this build says of a release newer than it writes: upgrade, not re-stamp."""
+    return (
+        f"{source} is stamped {version}, newer than any format_version this build writes "
+        f"({WRITTEN_FORMAT_VERSIONS[-1]}), so which stamp its features give is the rule of "
+        "the package that wrote it. Upgrade opengwasdb to judge its stamp or to complete "
+        "it; do not re-stamp the release (spec §21.3)."
+    )
+
 
 #: The Zarr on-disk format each readable release series is stored in.  The
 #: series-to-layout coupling is part of the format contract, so it lives beside
@@ -125,6 +180,32 @@ def zarr_format_for_version(version: str, *, source: str = "release") -> int:
             f"{_series_text(series)}, which this build reads but has no Zarr on-disk "
             "layout for; the version table and the layout table disagree"
         ) from None
+
+
+def check_writable_zarr_layout(version: str, *, source: str = "release") -> int:
+    """Return `version`'s Zarr on-disk format, refusing one this build cannot write.
+
+    A pass that adds arrays to a release's own data group has to write them in
+    the format that group already is: a Zarr v3 array in a `0.1.0` release --
+    Zarr v2 -- puts a `zarr.json` beside the release's `.zgroup`, which zarr 3
+    then reads as the group's format, hiding every v2 array it has (issue #313).
+
+    The series-to-layout rule is `zarr_format_for_version`'s and what this build
+    writes is `STORE_ZARR_FORMAT`'s. It is deliberately not a comparison with
+    `CURRENT_FORMAT_VERSION`: that constant moves *within* a series (#381, to
+    `0.2.2`), and a release of the same series stays writable when it does.
+    """
+    layout = zarr_format_for_version(version, source=source)
+    if layout != STORE_ZARR_FORMAT:
+        raise UnsupportedFormatVersion(
+            f"{source} declares format_version={version!r}, whose arrays are stored in "
+            f"Zarr format {layout}, and this build writes Zarr format {STORE_ZARR_FORMAT}: "
+            "arrays written here would sit beside metadata that says otherwise, hiding "
+            "every array the release has. Convert the 0.1.0 release with "
+            "scripts/convert_store_to_0_2_0.py and write to the converted release; or "
+            "rebuild the release from source."
+        )
+    return layout
 
 
 #: The versions the format carried before the reset, and what each one was.
@@ -266,27 +347,34 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
     in a version this build does not write (`WRITTEN_FORMAT_VERSIONS`) would
     otherwise be stamped a version onto arrays that are not in it -- a store that
     lies about its own encoding, which is the failure class this project exists
-    to avoid. 0.2.0 and 0.2.1 are written by the same encoders, so both are
-    writable (issue #430).
+    to avoid. 0.2.0, 0.2.1 and 0.2.2 are written by the same encoders (issue #430).
 
-    It is live since #247: this build writes the 0.2 series (Zarr v3 with
-    sharding), so completing a `0.1.0` source -- Zarr v2, written by every build before this
-    one -- is refused here.  The refusal names the conversion tool, because a
-    Dense 0.1.0 release whose values are right can be converted rather than
-    rebuilt (ADR 0057 §3).  Convert, then complete; converting later is not
-    possible, because completion writes into the source's arrays.
+    Since #381 a source whose indels are sorted -- `0.2.1`, `0.2.0`, or a `0.1.0`
+    Zarr v2 one -- is refused here: completing it would add panel ALIDs spelt
+    reference first (ADR 0079) beside the source's own deletions spelt like
+    insertions, one deletion under two ALIDs. Nothing in such a Store says which of
+    its indels are deletions, so it is rebuilt, not converted (the converter keeps
+    the sorted spelling), before it is completed.
     """
     check_format_version(version, source=source)
+    if not indels_reference_first(version):
+        # A completion would add panel ALIDs spelt by ADR 0079 to a Store whose
+        # own deletions are spelt like insertions: one deletion, two ALIDs.
+        raise UnsupportedFormatVersion(
+            f"{source} is format_version={version!r}, which this build reads but does "
+            f"not complete (it completes {CURRENT_FORMAT_VERSION!r} releases). A "
+            f"{version} Store sorts an indel's alleles, so a deletion in it is spelt "
+            "like the insertion of the same sequence; this build spells an indel "
+            "reference first (ADR 0079) and cannot tell which of its source's indels "
+            "are deletions. Rebuild the release from source with this build, then "
+            "complete the rebuilt release."
+        )
     if version not in WRITTEN_FORMAT_VERSIONS:
         raise UnsupportedFormatVersion(
             f"{source} is format_version={version!r}, which this build reads but cannot "
             f"write (it writes {', '.join(map(repr, WRITTEN_FORMAT_VERSIONS))}). "
-            "Completion preserves its "
-            "source's format rather than re-encoding it (ADR 0038 §4), so this release "
-            "cannot be completed by this build. The one order that works is: convert the "
-            f"0.1.0 source to {format_version_for(carries_regions=False)} with "
-            "scripts/convert_store_to_0_2_0.py (it accepts every converter-supported layout), "
-            "then complete the converted release; or rebuild the release from source."
+            "Completion preserves its source's format rather than re-encoding it "
+            "(ADR 0038 §4), so this release cannot be completed by this build."
         )
     return version
 

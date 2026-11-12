@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -45,19 +46,26 @@ from opengwasdb import top_hits
 from opengwasdb.associations import Associations, Cells, CsrReader
 from opengwasdb.completion import checkpoint, fill_shards
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
-from opengwasdb.completion.block import REGION_CAP_BP, panel_positions, run_block
+from opengwasdb.completion.block import (
+    REGION_CAP_BP,
+    panel_positions,
+    read_as_planned,
+    run_block,
+)
 from opengwasdb.completion.ld_panel import (
+    BlockPlacement,
     LDBlock,
+    PanelPlacement,
     SharedEndpoint,
-    canonical_panel_alid,
     check_panel_has_chromosomes,
+    panel_variant,
     shared_endpoints,
 )
 from opengwasdb.completion.manifest import (
     build_completion_provenance,
     completed_release_manifest,
 )
-from opengwasdb.completion.parallel import run_block_tasks
+from opengwasdb.completion.parallel import ordered_write, run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.regions import analysis_regions, inside, region_blocks
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
@@ -66,6 +74,7 @@ from opengwasdb.encoding import (
     SE_EXCEPTION_BUDGET,
     StoreEncoding,
 )
+from opengwasdb.encoding.memory import pool_workers, resident_bytes
 from opengwasdb.encoding.planes import SE_COEFFICIENTS
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -97,12 +106,7 @@ from opengwasdb.variants.axis import (
     VariantRecord,
     write_variant_axis,
 )
-from opengwasdb.variants.normalise import (
-    CanonicalVariant,
-    VariantNormalisationError,
-    chromosome_sort_key,
-    orient_to_canonical,
-)
+from opengwasdb.variants.normalise import CanonicalVariant, chromosome_sort_key
 from opengwasdb.variants.routing import Duplicates, collapse_duplicates
 
 log = logging.getLogger(__name__)
@@ -135,12 +139,12 @@ class _BlockTask:
     thresh: float
     region_cap_bp: int | None
     checkpoint_path: Path
-    #: The block's chromosome, and its canonical ALIDs and their positions in block order.
+    #: The block's chromosome.
     chromosome: str
-    alids: list[str | None]
-    positions: np.ndarray
     #: Each assigned Analysis's regions: only its variants inside one are filled or counted.
     regions: dict[int, tuple[Region, ...]]
+    #: How the plan's read of the block placed its rows, which the worker's must repeat.
+    placement: BlockPlacement
     #: Per Analysis, the variants at this block's end the next block owns.
     ceded: dict[int, frozenset[str]] = field(default_factory=dict)
 
@@ -278,25 +282,21 @@ def _make_reader(task: _BlockTask):
     return make_reader
 
 
-def _left_out(task: _BlockTask, analysis: int) -> frozenset[str]:
-    """The block's variants it neither fills nor counts for one Analysis: those outside
-    the Analysis's regions (issue #430), and those at its end the next block owns.
-
-    Both go through `run_block`'s one seam for the positions a block leaves alone, so
-    the fit still sees every observation in the block, and the checkpoint's fills and
-    `completion_quality` counts hold only the rows the Analysis is given.
-    """
-    outside = ~inside(task.regions[analysis], task.chromosome, task.positions)
-    return task.ceded.get(analysis, frozenset()) | frozenset(
-        a for a, out in zip(task.alids, outside.tolist(), strict=True) if out and a is not None
-    )
+def _outside(task: _BlockTask, analysis: int, positions: np.ndarray) -> np.ndarray:
+    """The block's rows outside the Analysis's regions (issue #430), by position: the
+    fit still sees every observation in the block, and the checkpoint's fills and
+    `completion_quality` counts hold only the rows the Analysis is given. A panel row
+    no ALID names is never one of those rows, inside or outside a region."""
+    return ~inside(task.regions[analysis], task.chromosome, positions)
 
 
 def _run_block(task: _BlockTask) -> checkpoint.BlockCompletionResult | None:
     """Complete one LD block for the Analyses one of whose regions it overlaps."""
     result = run_block(
-        task.tsv_path, task.thresh, task.min_cor, task.region_cap_bp, _make_reader(task),
-        ceded=lambda analysis: _left_out(task, analysis),
+        task.tsv_path, task.thresh, task.min_cor, task.region_cap_bp,
+        read_as_planned(task.placement, _make_reader(task)),
+        ceded=lambda analysis: task.ceded.get(analysis, frozenset()),
+        outside=lambda analysis, positions: _outside(task, analysis, positions),
     )
     if result is None:
         return None
@@ -511,10 +511,15 @@ class _BlockPlan:
     block_canonical_alids: dict[str, list[str | None]]
     block_positions: dict[str, np.ndarray]
     new_alids: set[str]
+    #: How the planned blocks placed their rows: the completion record's
+    #: `panel_indels` and `panel_snvs_unplaced` (`PanelPlacement.record`).
+    panel_placement: dict[str, dict[str, object]]
     #: Each block's end another planned block starts at (`shared_endpoints`).
     endpoints: dict[str, SharedEndpoint] = field(default_factory=dict)
     #: The `region_id` of each region no block overlaps (`RegionBlocks.uncovered`).
     uncovered: tuple[str, ...] = ()
+    #: Per planned block's TSV, how the plan's read placed its rows (`BlockPlacement`).
+    block_placement: dict[Path, BlockPlacement] = field(default_factory=dict)
 
     def ceded(self, block_id: str) -> dict[int, frozenset[str]]:
         """Per Analysis, the variants at ``block_id``'s end the next block owns.
@@ -714,10 +719,6 @@ def _imputable_analyses(state: _SourceState) -> list[tuple[int, Analysis]]:
     ]
 
 
-def _canonical_alids(block: LDBlock) -> list[str | None]:
-    return [canonical_panel_alid(s) for s in block.snp_ids]
-
-
 def _new_panel_alids(alids: list[str | None], source_alids: set[str]) -> set[str]:
     """The panel ALIDs among `alids` the source release never held."""
     return {a for a in alids if a is not None and a not in source_alids}
@@ -728,6 +729,8 @@ def _scan_block_maps(
     source: CsrReader,
     regions: dict[int, tuple[Region, ...]],
     blocks_of: dict[int, list[LDBlock]],
+    ld_dir: Path,
+    ancestry: str,
 ) -> _BlockPlan:
     """Map every imputable Analysis to the LD blocks its regions overlap and build
     the `_BlockPlan` Phase 2 runs and Phase 3 resolves: the block -> Analysis
@@ -742,6 +745,7 @@ def _scan_block_maps(
     block_positions: dict[str, np.ndarray] = {}
     analysis_to_blocks: dict[int, list[str]] = {}
     planned: list[LDBlock] = []
+    placement = PanelPlacement()
 
     for i, _a in _imputable_analyses(state):
         blocks = blocks_of.get(i, [])
@@ -752,9 +756,10 @@ def _scan_block_maps(
                 continue
             block_to_tsv[block.block_id] = block.tsv_path
             block_chromosome[block.block_id] = block.chrom
-            block_canonical_alids[block.block_id] = _canonical_alids(block)
+            block_canonical_alids[block.block_id] = block.alids
             block_positions[block.block_id] = panel_positions(block)
             planned.append(block)
+            placement.add(block)
 
     return _BlockPlan(
         source=source,
@@ -771,7 +776,16 @@ def _scan_block_maps(
             block_canonical_alids, block_positions,
         ),
         endpoints=shared_endpoints(planned),
+        block_placement=placement.blocks,
+        panel_placement=_logged_placement(placement, ld_dir, ancestry),
     )
+
+
+def _logged_placement(
+    placement: PanelPlacement, ld_dir: Path, ancestry: str
+) -> dict[str, dict[str, object]]:
+    placement.log(ld_dir, ancestry)
+    return placement.record()
 
 
 def _region_panel_alids(
@@ -814,7 +828,7 @@ def _plan_blocks(
     )
     print("Scanning the LD blocks the regions overlap + new panel variants...")
     found = region_blocks(regions, ld_dir, ancestry)
-    plan = _scan_block_maps(state, source, regions, found.blocks)
+    plan = _scan_block_maps(state, source, regions, found.blocks, ld_dir, ancestry)
     plan.uncovered = tuple(r.region_id for r in found.uncovered)
     print(_uncovered_line(plan.uncovered))
     print(f"New LD panel variants: {len(plan.new_alids):,}")
@@ -838,23 +852,16 @@ def _as_canonical(v: VariantRecord) -> CanonicalVariant:
 
 
 def _merged_axis(state: _SourceState, new_alids: set[str]) -> _MergedAxis:
-    """Merge the new panel ALIDs into the source axis: canonicalise, drop any
-    that collide with source variants, sort under the store's key, and build
-    the maps that translate source variant indices and panel ALIDs into the
-    union."""
+    """Merge the new panel ALIDs into the source axis: canonicalise
+    (`panel_variant`), drop any that collide with source variants, sort under
+    the store's key, and build the maps that translate source variant indices
+    and panel ALIDs into the union."""
     source_alids = set(state.src_alids)
     new_variants: list[CanonicalVariant] = []
     for alid in new_alids:
-        try:
-            parts = alid.split(":")
-            if len(parts) != 4:
-                continue
-            chrom, pos_str, a1, a2 = parts
-            cv_result = orient_to_canonical(chrom, int(pos_str), a1, a2)
-            if cv_result.variant.alid not in source_alids:
-                new_variants.append(cv_result.variant)
-        except (VariantNormalisationError, ValueError):
-            continue
+        variant = panel_variant(alid)
+        if variant is not None and variant.alid not in source_alids:
+            new_variants.append(variant)
     new_variants.sort(key=_sort_key)
     variants = sorted(
         [_as_canonical(v) for v in state.src_variants] + new_variants, key=_sort_key
@@ -923,9 +930,8 @@ def _run_pending_blocks(
                     region_cap_bp=region_cap_bp,
                     checkpoint_path=ckpt_path,
                     chromosome=plan.block_chromosome[block_id],
-                    alids=plan.block_canonical_alids[block_id],
-                    positions=plan.block_positions[block_id],
                     regions={i: plan.regions[i] for i in plan.block_to_analyses[block_id]},
+                    placement=plan.block_placement[tsv_path],
                     ceded=plan.ceded(block_id),
                 )
             )
@@ -985,20 +991,35 @@ def _region_rows(plan: _BlockPlan, block_rows: dict[str, _BlockRows], ai: int) -
     return out
 
 
+def _analysis_cells(plan: _BlockPlan, block_rows: dict[str, _BlockRows]) -> np.ndarray:
+    """Each Analysis's block positions inside its regions: the most fills it can
+    have, and the most rows completion adds to it."""
+    return np.array(
+        [
+            sum(len(rows) for rows in _region_rows(plan, block_rows, ai))
+            for ai in range(plan.state.n_analyses)
+        ],
+        dtype=np.int64,
+    )
+
+
 def _analysis_batches(
-    plan: _BlockPlan, block_rows: dict[str, _BlockRows], budget: int = _FILL_BATCH_CELLS
+    plan: _BlockPlan,
+    block_rows: dict[str, _BlockRows],
+    budget: int = _FILL_BATCH_CELLS,
+    cells: np.ndarray | None = None,
 ) -> np.ndarray:
     """Each Analysis's fill-shard batch: consecutive Analyses, as many as fit
     `budget` cells. An Analysis has at most one fill per position of each block
-    it is completed against, so that count bounds its shard's records."""
+    it is completed against, so that count (`cells`) bounds its shard's records."""
+    per_analysis = _analysis_cells(plan, block_rows) if cells is None else cells
     batch_of = np.zeros(plan.state.n_analyses, dtype=np.int64)
     batch, held = 0, 0
-    for ai in range(plan.state.n_analyses):
-        cells = sum(len(rows) for rows in _region_rows(plan, block_rows, ai))
-        if held and held + cells > budget:
+    for ai, count in enumerate(per_analysis.tolist()):
+        if held and held + count > budget:
             batch, held = batch + 1, 0
         batch_of[ai] = batch
-        held += cells
+        held += count
     return batch_of
 
 
@@ -1037,25 +1058,96 @@ def _checkpoint_and_assemble(
         region_cap_bp=region_cap_bp,
     )
     print("Merging block results from checkpoints...")
-    union_alids_s, union_rows_s = fill_shards.sorted_union_map(axis.new_alid_to_idx)
+    union = fill_shards.sorted_union_map(axis.new_alid_to_idx)
     block_rows = _block_rows(plan, axis)
-    batch_of = _analysis_batches(plan, block_rows)
+    cells = _analysis_cells(plan, block_rows)
+    batch_of = _analysis_batches(plan, block_rows, cells=cells)
     # No impute_mask here: Phase 1 is where the ancestry-match filter applies
     # (ADR 0028), since an Analysis it excludes is given no block, so its
     # checkpoints hold neither fills nor completion_quality rows to drop.
     fill_shard_dir, quality_count = fill_shards.shard_checkpoint_fills(
         checkpoint_dir / "blocks",
         staged,
-        union_alids_s,
-        union_rows_s,
+        union,
         len(axis.variants),
         fill_shards.by_analysis_batch(batch_of),
+        n_workers=n_workers,
     )
     print(f"Wrote {quality_count:,} completion quality rows")
-    csr = _assemble_completed_csr(plan, axis, block_rows, fill_shard_dir, batch_of, eaf_reference)
+    csr = _assemble_completed_csr(
+        _Assembly(plan, axis, block_rows), fill_shard_dir, batch_of, eaf_reference, n_workers,
+        added_cells=int(cells.sum()),
+        largest_added=int(cells.max()) if len(cells) else 0,
+    )
     shutil.rmtree(fill_shard_dir)
     print(f"Completion done: {csr.total_imputed:,} imputed, {csr.total_missing:,} missing")
     return csr
+
+
+@dataclass(frozen=True)
+class _Assembly:
+    """What assembling any Analysis reads: made by the parent before the write
+    pool forks, and inherited by its workers rather than pickled
+    (`ordered_write`)."""
+
+    plan: _BlockPlan
+    axis: _MergedAxis
+    block_rows: dict[str, _BlockRows]
+
+
+#: An Analysis's worker holds a few masks and an `int64` position over the
+#: whole merged axis, and per row of its Analysis its read and its completed
+#: arrays. Measured on the OGS-00006 100-Analysis subset (11.5 M variants), its
+#: workers held 122 MB private for a typical Analysis -- 10.6 bytes a variant --
+#: and 264 MB for its largest, 6.69 M rows: 21 bytes a row more (#321). Each is
+#: rounded up by half again, since a 0.2 s sample can miss a short peak, and the
+#: fixed part covers the fork's floor.
+_ASSEMBLY_FIXED_BYTES = 256 * 1024**2
+_ASSEMBLY_BYTES_PER_VARIANT = 16
+_ASSEMBLY_BYTES_PER_ROW = 32
+
+
+#: What the parent's writer holds for each completed row: its variant index,
+#: z, SE and EAF, and its imputed flag.
+_HELD_BYTES_PER_CELL = 17
+#: What the parent holds of one completed Analysis until the writer takes it:
+#: the same 17 bytes a row, pickled and unpickled.
+_RESULT_BYTES_PER_ROW = 2 * _HELD_BYTES_PER_CELL
+
+
+def _assembly_bytes(n_variants: int, max_rows: int) -> int:
+    """Bytes one Analysis's worker holds, for the largest Analysis."""
+    return (
+        _ASSEMBLY_FIXED_BYTES
+        + _ASSEMBLY_BYTES_PER_VARIANT * n_variants
+        + _ASSEMBLY_BYTES_PER_ROW * max_rows
+    )
+
+
+def _complete_analysis(
+    assembly: _Assembly, item: tuple[int, np.ndarray]
+) -> tuple[int, _AnalysisCompleted]:
+    """One Analysis's index and completed rows; runs in a write-pool worker."""
+    ai, fills = item
+    return ai, _completed_analysis(
+        ai,
+        source=assembly.plan.source,
+        src_alids=assembly.plan.state.src_alids,
+        axis=assembly.axis,
+        reference=_region_rows(assembly.plan, assembly.block_rows, ai),
+        fills=fills,
+    )
+
+
+def _analysis_fills(
+    fill_shard_dir: Path, batch_of: np.ndarray
+) -> Iterator[tuple[int, np.ndarray]]:
+    """Each Analysis in order with its fills, one batch's shard read at a time."""
+    no_fills = np.empty(0, dtype=fill_shards.FILL_RECORD_DTYPE)
+    for batch in range(int(batch_of[-1]) + 1 if len(batch_of) else 0):
+        fills = _batch_fills(fill_shard_dir, batch)
+        for ai in np.flatnonzero(batch_of == batch).tolist():
+            yield ai, fills.pop(ai, no_fills)
 
 
 def _batch_fills(fill_shard_dir: Path, batch: int) -> dict[int, np.ndarray]:
@@ -1073,50 +1165,74 @@ def _batch_fills(fill_shard_dir: Path, batch: int) -> dict[int, np.ndarray]:
 
 
 def _assemble_completed_csr(
-    plan: _BlockPlan,
-    axis: _MergedAxis,
-    block_rows: dict[str, _BlockRows],
+    assembly: _Assembly,
     fill_shard_dir: Path,
     batch_of: np.ndarray,
     eaf_reference: np.ndarray | None,
+    n_workers: int = 1,
+    added_cells: int = 0,
+    largest_added: int = 0,
 ) -> _CompletedCsr:
     """Phase 3 assembly: each Analysis's completed rows -- remapped observed
     rows, its fills and its missing block positions, sorted by variant index --
     added to the writer in Analysis order, one batch's fill shard read at a
     time. The writer judges each Analysis whole (`storable`); as a completion's
     (`ReferenceCompletion`), it logs the SEs above `float16`'s range once, as
-    it writes, naming every Analysis."""
+    it writes, naming every Analysis.
+
+    The Analyses are completed across ``n_workers`` (#321), each reading its
+    own source rows; the parent adds them to the writer in Analysis order, so
+    the sequence, its offsets and every side table keyed on a flat position are
+    the ones one worker writes. The writer holds every completed row by the
+    end, at most the source's rows and ``added_cells`` more, and the pool is
+    sized beside that."""
     print("Assembling completed CSR per analysis...")
+    plan, axis = assembly.plan, assembly.axis
     analysis_ids = [a.analysis_id for a in plan.state.src_analyses]
     writer = RaggedCSRWriter(
         len(axis.variants),
         ReferenceCompletion(tuple(analysis_ids), eaf_reference, where="complete-ragged"),
     )
+    largest = _largest_analysis(plan.source)
+    workers = pool_workers(
+        n_workers,
+        _assembly_bytes(len(axis.variants), largest),
+        what="Assembly",
+        unit=f"completed Analysis over {len(axis.variants):,} variants",
+        units=plan.state.n_analyses,
+        parent_bytes=resident_bytes()
+        + _HELD_BYTES_PER_CELL * (_source_cells(plan.source) + added_cells),
+        result_bytes=_RESULT_BYTES_PER_ROW * (largest + largest_added),
+    )
     total_imputed = total_missing = 0
-    no_fills = np.empty(0, dtype=fill_shards.FILL_RECORD_DTYPE)
-    for batch in range(int(batch_of[-1]) + 1 if len(batch_of) else 0):
-        fills = _batch_fills(fill_shard_dir, batch)
-        for ai in np.flatnonzero(batch_of == batch).tolist():
-            completed = _completed_analysis(
-                ai,
-                source=plan.source,
-                src_alids=plan.state.src_alids,
-                axis=axis,
-                reference=_region_rows(plan, block_rows, ai),
-                fills=fills.get(ai, no_fills),
+    items = _analysis_fills(fill_shard_dir, batch_of)
+    outcomes = ordered_write(_complete_analysis, assembly, items, workers)
+    for expected, (ai, completed) in enumerate(outcomes):
+        if ai != expected:
+            raise RuntimeError(f"Analysis {ai} arrived where Analysis {expected} belongs")
+        writer.add_analysis(
+            completed.vi, completed.z, completed.se, eaf=completed.eaf,
+            imputed=completed.imp, where=f"complete-ragged, Analysis {analysis_ids[ai]}",
+        )
+        total_imputed += completed.n_imputed
+        total_missing += completed.n_missing
+        if (ai + 1) % 500 == 0:
+            print(
+                f"  {ai + 1:,} / {plan.state.n_analyses:,} analyses | "
+                f"imputed {total_imputed:,} | missing {total_missing:,}"
             )
-            writer.add_analysis(
-                completed.vi, completed.z, completed.se, eaf=completed.eaf,
-                imputed=completed.imp, where=f"complete-ragged, Analysis {analysis_ids[ai]}",
-            )
-            total_imputed += completed.n_imputed
-            total_missing += completed.n_missing
-            if (ai + 1) % 500 == 0:
-                print(
-                    f"  {ai + 1:,} / {plan.state.n_analyses:,} analyses | "
-                    f"imputed {total_imputed:,} | missing {total_missing:,}"
-                )
     return _CompletedCsr(writer=writer, total_imputed=total_imputed, total_missing=total_missing)
+
+
+def _largest_analysis(source: CsrReader) -> int:
+    """The most rows any one source Analysis holds."""
+    offsets = np.asarray(source.structure.offsets, dtype=np.int64)
+    return int(np.diff(offsets).max()) if len(offsets) > 1 else 0
+
+
+def _source_cells(source: CsrReader) -> int:
+    """Every row the source holds."""
+    return int(source.structure.offsets[-1]) if len(source.structure.offsets) else 0
 
 
 def _observed_rows(
@@ -1326,14 +1442,16 @@ def _write_completed_zarr(
     csr: _CompletedCsr,
     analyses: list[Analysis],
     n_variants: int,
+    n_workers: int = 1,
 ) -> dict[str, Any] | None:
     """Phase 4: write the completed CSR as the store's ragged zarr group, then
     its variant-centric index (ADR 0060). Returns the SE exception record of a
     residual plane, reported here (issue #301).
 
-    Written through the builders' writer, region by region (issue #424), with
-    the source's plan: completion writes into the source's arrays, so it
-    encodes with the source's plan (ADR 0038 §4), the one addition being
+    Written through the builders' writer, region by region (issue #424), the
+    regions across ``n_workers`` (#321), with the source's plan: completion
+    writes into the source's arrays, so it encodes with the source's plan (ADR
+    0038 §4), the one addition being
     `eaf_reference`. Observed frequencies only: an imputed cell's frequency is
     the panel's, stored once per variant and applied on read (ADR 0037 §4).
     The per-variant baseline travels with the values across the variant remap
@@ -1354,11 +1472,12 @@ def _write_completed_zarr(
     cells, so a copied index would answer with the source's rows.
     """
     print("Writing zarr CSR...")
-    counts = csr.writer.flush(
+    counts = csr.writer.flush_regions(
         staged.path,
         encode_plan.encoding,
         eaf_baseline=encode_plan.out_baseline,
         se_coefficients=encode_plan.se_coefficients,
+        n_workers=n_workers,
     )
     se_exceptions = (
         None
@@ -1439,6 +1558,7 @@ def _completed_manifest(
     thresh: float,
     cis_window_bp: int,
     axis: _MergedAxis,
+    panel_placement: dict[str, dict[str, object]],
     csr: _CompletedCsr,
     encode_plan: _EncodePlan,
     se_exceptions: dict[str, Any] | None,
@@ -1461,6 +1581,7 @@ def _completed_manifest(
             cis_window_bp=cis_window_bp,
             n_imputed=csr.total_imputed,
             n_missing=csr.total_missing,
+            **panel_placement,
             **({} if se_exceptions is None else {"se_exceptions": se_exceptions}),
         ),
         by_variant=recorded_provenance(staged.path),
@@ -1534,7 +1655,7 @@ def _run_completion(
             eaf_reference=encode_plan.eaf_reference,
         )
         se_exceptions = _write_completed_zarr(
-            staged, encode_plan, csr, state.src_analyses, len(axis.variants)
+            staged, encode_plan, csr, state.src_analyses, len(axis.variants), n_workers
         )
         _write_top_hits_and_analyses(staged, state, encode_plan, ancestry=ancestry)
         staged.write_manifest(
@@ -1549,13 +1670,13 @@ def _run_completion(
                 thresh=thresh,
                 cis_window_bp=cis_window_bp,
                 axis=axis,
+                panel_placement=plan.panel_placement,
                 csr=csr,
                 encode_plan=encode_plan,
                 se_exceptions=se_exceptions,
             )
         )
-        result = _completion_result(dst, state, axis, csr, plan)
-    return result
+        return _completion_result(dst, state, axis, csr, plan)
 
 
 def _source_eaf_baseline(source_path: Path) -> np.ndarray | None:

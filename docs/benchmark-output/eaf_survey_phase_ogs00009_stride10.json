@@ -1,0 +1,208 @@
+{
+  "commit": "cfd84dc",
+  "measured_at": "2026-11-07T16:56:35.721711+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/310/opengwasdb",
+  "opengwasdb_fingerprint": "2efc9b49dd3f8b3bb32501619a6b9338135fb68290e820ea5f1d02d510a8be2b",
+  "worktree_clean": true,
+  "nproc": 224,
+  "argv": [
+    "benchmarks/profile_eaf_survey_phase.py",
+    "/data/opengwasdb/stores/OGS-00009/work/analyses.tsv",
+    "--stride",
+    "10",
+    "--work",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/310/ogs9-r10",
+    "--n-workers",
+    "32",
+    "--source-reader-capability",
+    "opengwasdb.gwas-vcf",
+    "--source-assembly",
+    "hg19",
+    "--output",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/310/ogs9-r10.json"
+  ],
+  "n_analyses_in_manifest": 2514,
+  "n_analyses_profiled": 252,
+  "scale_to_manifest": 9.976190476190476,
+  "n_workers": 32,
+  "wall_seconds_to_survey_end": 807.2873987149796,
+  "loadavg_before": [
+    17.36,
+    30.46,
+    38.28
+  ],
+  "loadavg_after": [
+    28.15,
+    47.68,
+    46.39
+  ],
+  "phases": {
+    "EAF survey and orientation verification": {
+      "start": 1794070556.027,
+      "done_in": "21s"
+    },
+    "EAF site hashes": {
+      "start": 1794070556.028,
+      "done_in": "6s"
+    },
+    "EAF survey": {
+      "start": 1794070563.008,
+      "done_in": "11s"
+    },
+    "EAF survey accumulation": {
+      "done_in": "3s"
+    },
+    "EAF orientation verification": {
+      "start": 1794070574.357,
+      "done_in": "2s"
+    }
+  },
+  "log": [
+    {
+      "t": 1794070556.027,
+      "message": "EAF survey and orientation verification: start"
+    },
+    {
+      "t": 1794070556.028,
+      "message": "EAF site hashes: start"
+    },
+    {
+      "t": 1794070563.008,
+      "message": "EAF site hashes: done in 6s"
+    },
+    {
+      "t": 1794070563.008,
+      "message": "EAF survey: start"
+    },
+    {
+      "t": 1794070566.847,
+      "message": "EAF survey: 25/252 \u2014 elapsed 3s, ETA 34s"
+    },
+    {
+      "t": 1794070567.557,
+      "message": "EAF survey: 50/252 \u2014 elapsed 4s, ETA 18s"
+    },
+    {
+      "t": 1794070568.449,
+      "message": "EAF survey: 75/252 \u2014 elapsed 5s, ETA 12s"
+    },
+    {
+      "t": 1794070569.074,
+      "message": "EAF survey: 100/252 \u2014 elapsed 6s, ETA 9s"
+    },
+    {
+      "t": 1794070569.859,
+      "message": "EAF survey: 125/252 \u2014 elapsed 6s, ETA 6s"
+    },
+    {
+      "t": 1794070570.809,
+      "message": "EAF survey: 150/252 \u2014 elapsed 7s, ETA 5s"
+    },
+    {
+      "t": 1794070571.381,
+      "message": "EAF survey: 175/252 \u2014 elapsed 8s, ETA 3s"
+    },
+    {
+      "t": 1794070572.477,
+      "message": "EAF survey: 200/252 \u2014 elapsed 9s, ETA 2s"
+    },
+    {
+      "t": 1794070572.74,
+      "message": "EAF survey: 225/252 \u2014 elapsed 9s, ETA 1s"
+    },
+    {
+      "t": 1794070573.595,
+      "message": "EAF survey: 250/252 \u2014 elapsed 10s, ETA 0s"
+    },
+    {
+      "t": 1794070573.609,
+      "message": "EAF survey: 252/252 \u2014 elapsed 10s, ETA 0s"
+    },
+    {
+      "t": 1794070573.986,
+      "message": "EAF survey accumulation: done in 3s across 252 Analyses"
+    },
+    {
+      "t": 1794070574.01,
+      "message": "EAF survey: done in 11s"
+    },
+    {
+      "t": 1794070574.357,
+      "message": "EAF orientation verification: start"
+    },
+    {
+      "t": 1794070577.231,
+      "message": "EAF orientation verification: done in 2s"
+    },
+    {
+      "t": 1794070577.232,
+      "message": "EAF survey and orientation verification: done in 21s"
+    }
+  ],
+  "column_split": [
+    {
+      "n_rows": 5349208,
+      "n_eaf_cells": 5349208,
+      "load_npz_and_cast": 0.08352064999053255,
+      "finite_filter": 0.029489445994840935,
+      "select_rows_by_hash": 0.04992526600835845,
+      "row_to_eaf_dict_and_gather": 0.6335436009976547
+    },
+    {
+      "n_rows": 1868356,
+      "n_eaf_cells": 1868356,
+      "load_npz_and_cast": 0.02183142601279542,
+      "finite_filter": 0.0071748529735486954,
+      "select_rows_by_hash": 0.016040943010011688,
+      "row_to_eaf_dict_and_gather": 0.2390934259747155
+    },
+    {
+      "n_rows": 8620851,
+      "n_eaf_cells": 8620851,
+      "load_npz_and_cast": 0.11001292802393436,
+      "finite_filter": 0.032076800998765975,
+      "select_rows_by_hash": 0.0597941140003968,
+      "row_to_eaf_dict_and_gather": 0.576975478004897
+    },
+    {
+      "n_rows": 2752327,
+      "n_eaf_cells": 2752327,
+      "load_npz_and_cast": 0.033941820001928136,
+      "finite_filter": 0.008649560011690482,
+      "select_rows_by_hash": 0.02093900099862367,
+      "row_to_eaf_dict_and_gather": 0.3050277339934837
+    },
+    {
+      "n_rows": 6093139,
+      "n_eaf_cells": 6093139,
+      "load_npz_and_cast": 0.07744717400055379,
+      "finite_filter": 0.02275671999086626,
+      "select_rows_by_hash": 0.038575755985220894,
+      "row_to_eaf_dict_and_gather": 0.5190495129791088
+    },
+    {
+      "n_rows": 3741296,
+      "n_eaf_cells": 3741296,
+      "load_npz_and_cast": 0.045019724988378584,
+      "finite_filter": 0.013158015004592016,
+      "select_rows_by_hash": 0.026883559010457247,
+      "row_to_eaf_dict_and_gather": 0.39153538801474497
+    },
+    {
+      "n_rows": 2079985,
+      "n_eaf_cells": 2079985,
+      "load_npz_and_cast": 0.02590504300314933,
+      "finite_filter": 0.006301360990619287,
+      "select_rows_by_hash": 0.015493704995606095,
+      "row_to_eaf_dict_and_gather": 0.23822402200312354
+    },
+    {
+      "n_rows": 4107872,
+      "n_eaf_cells": 4107872,
+      "load_npz_and_cast": 0.05151760298758745,
+      "finite_filter": 0.014936343999579549,
+      "select_rows_by_hash": 0.033300145994871855,
+      "row_to_eaf_dict_and_gather": 0.4300482480030041
+    }
+  ]
+}

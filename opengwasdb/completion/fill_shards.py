@@ -22,12 +22,15 @@ from __future__ import annotations
 import logging
 import shutil
 from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
-from opengwasdb.completion.checkpoint import ALID_DTYPE
+from opengwasdb.completion.checkpoint import ALID_DTYPE, is_long
+from opengwasdb.completion.parallel import ordered_write
+from opengwasdb.encoding.memory import pool_workers
 from opengwasdb.variants.routing import collapse_duplicates
 
 log = logging.getLogger(__name__)
@@ -69,17 +72,61 @@ def by_analysis_batch(batch_of: np.ndarray) -> ShardKey:
     return key
 
 
-def sorted_union_map(new_alid_to_idx: dict[str, int]) -> tuple[np.ndarray, np.ndarray]:
+class UnionMap(NamedTuple):
+    """The union ALID → row lookup, each half sorted by ALID: the ALIDs of
+    `ALID_WIDTH` bytes or fewer in a fixed-width array, those longer in another
+    as wide as the longest. Neither is cut, so two ALIDs that share their first
+    64 bytes are two keys."""
+
+    alids: np.ndarray
+    rows: np.ndarray
+    long_alids: np.ndarray
+    long_rows: np.ndarray
+
+    def resolve(self, d: Any) -> np.ndarray:
+        """The union row of each fill of one checkpoint, ``-1`` where no row has its ALID."""
+        short: np.ndarray = d["f_alid"]
+        rows = _lookup(self.alids, self.rows, short)
+        long_at: np.ndarray = d["f_long_at"]
+        rows[long_at] = _lookup(self.long_alids, self.long_rows, d["f_long_alid"])
+        return rows
+
+
+def _lookup(keys: np.ndarray, key_rows: np.ndarray, queries: np.ndarray) -> np.ndarray:
+    rows = np.full(len(queries), -1, dtype=np.int64)
+    if len(keys) and len(queries):
+        idx = np.minimum(np.searchsorted(keys, queries), len(keys) - 1)
+        hit = keys[idx] == queries
+        rows[hit] = key_rows[idx[hit]]
+    return rows
+
+
+def sorted_union_map(new_alid_to_idx: dict[str, int]) -> UnionMap:
     """The union ALID → row lookup, sorted by ALID, so checkpoint fills (which
     record ALIDs, not rows) resolve to union rows by binary search."""
-    union_alids = np.fromiter(
-        (alid.encode("ascii") for alid in new_alid_to_idx),
-        dtype=ALID_DTYPE,
-        count=len(new_alid_to_idx),
-    )
-    union_rows = np.fromiter(new_alid_to_idx.values(), dtype=np.int32, count=len(new_alid_to_idx))
-    o = np.argsort(union_alids)
-    return union_alids[o], union_rows[o]
+    # The lists hold references to the axis's own strings, not copies: the axis
+    # has tens of millions of ALIDs and only a few thousand are long.
+    long_ = [a for a in new_alid_to_idx if is_long(a.encode("utf-8"))]
+    long_set = set(long_)
+    short = [a for a in new_alid_to_idx if a not in long_set]
+    return UnionMap(*_sorted_keys(short, new_alid_to_idx, ALID_DTYPE),
+                    *_sorted_keys(long_, new_alid_to_idx, None))
+
+
+def _sorted_keys(
+    alids: list[str], rows_of: dict[str, int], dtype: str | None
+) -> tuple[np.ndarray, np.ndarray]:
+    """``alids`` as byte strings of ``dtype`` (the longest's width if ``None``),
+    sorted, with their rows."""
+    encoded = np.fromiter((a.encode("utf-8") for a in alids), dtype=dtype or f"S{_longest(alids)}",
+                          count=len(alids))
+    rows = np.fromiter((rows_of[a] for a in alids), dtype=np.int32, count=len(alids))
+    order = np.argsort(encoded, kind="stable")
+    return encoded[order], rows[order]
+
+
+def _longest(alids: list[str]) -> int:
+    return max((len(a.encode("utf-8")) for a in alids), default=1)
 
 
 def fill_shard_path(fill_shard_dir: Path, band_index: int) -> Path:
@@ -109,14 +156,69 @@ def insert_completion_quality_batch(db: Any, batch: list[_QualityRow]) -> None:
     db.commit()
 
 
+#: What one checkpoint's resolution holds: the fork's floor, and per byte of
+#: checkpoint about 3.3 more. A fill is 76 bytes on disk (its 64-byte ALID, its
+#: Analysis, z and SE), loaded whole; the lookup gathers an ALID and three
+#: `int64`s a fill (89 bytes), the resolved fills and their shard key take 40,
+#: and pickling them back to the parent 48. Rounded up to 4 (#321): on an
+#: 8-band slice of OGS-00009, whose largest checkpoint is 1.64 GB, the budget
+#: is 6.83 GB and its merge workers held at most 4.57 GB private.
+_RESOLVE_FIXED_BYTES = 256 * 1024**2
+_RESOLVE_BYTES_PER_CHECKPOINT_BYTE = 4
+#: What the parent holds of one checkpoint's result until it appends it: 24
+#: bytes a fill of records and shard key, pickled and unpickled, against the
+#: 76 a fill takes in the checkpoint.
+_RESULT_BYTES_PER_FILL = 48
+_CHECKPOINT_BYTES_PER_FILL = 76
+
+
+def resolve_unit_bytes(largest_checkpoint: int) -> int:
+    """Bytes a checkpoint-merge worker holds, for the largest checkpoint."""
+    return _RESOLVE_FIXED_BYTES + _RESOLVE_BYTES_PER_CHECKPOINT_BYTE * largest_checkpoint
+
+
+def resolve_result_bytes(largest_checkpoint: int) -> int:
+    """Bytes the parent holds of one resolved checkpoint, for the largest."""
+    return largest_checkpoint * _RESULT_BYTES_PER_FILL // _CHECKPOINT_BYTES_PER_FILL
+
+
+@dataclass(frozen=True)
+class _ShardPlan:
+    """What resolving any checkpoint reads: made by the parent and inherited by
+    the pool's workers, so the union map is never pickled (#200, story 21)."""
+
+    union: UnionMap
+    n_variants: int
+    shard_key: ShardKey
+    impute_mask: np.ndarray | None
+
+
+@dataclass(frozen=True)
+class _ResolvedCheckpoint:
+    """One checkpoint's completion_quality rows and its fills, resolved and keyed."""
+
+    quality: list[_QualityRow]
+    fills: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None
+    shard_ids: np.ndarray | None
+
+
+def _resolve_checkpoint(plan: _ShardPlan, ckpt: Path) -> _ResolvedCheckpoint:
+    """Read one checkpoint and resolve its fills; runs in a pool worker."""
+    with np.load(ckpt, allow_pickle=False) as d:
+        quality = _checkpoint_quality_rows(d, plan.impute_mask)
+        fills = _resolved_fills(d, plan.union, plan.n_variants, plan.impute_mask)
+    shard_ids = None if fills is None else plan.shard_key(fills[0], fills[1])
+    return _ResolvedCheckpoint(quality, fills, shard_ids)
+
+
 def shard_checkpoint_fills(
     blocks_dir: Path,
     staged: Any,
-    union_alids_s: np.ndarray,
-    union_rows_s: np.ndarray,
+    union: UnionMap,
     n_variants: int,
     shard_key: ShardKey,
     impute_mask: np.ndarray | None = None,
+    n_workers: int = 1,
 ) -> tuple[Path, int]:
     """Resolve checkpoint fills into raw shard files, one per `shard_key` value.
 
@@ -124,6 +226,11 @@ def shard_checkpoint_fills(
     by the parent. This pass resolves those ALIDs once, writes compact
     ``(row, analysis, z, se)`` records to per-shard files, and streams
     completion_quality directly into SQLite.
+
+    The checkpoints are read and resolved across ``n_workers`` (#321); the
+    parent takes them back in checkpoint-name order and is the one writer of
+    the shard files and the table, so both hold exactly what one process
+    writes, in the same order.
 
     ``impute_mask`` (bool per analysis; ``None`` = impute all) is applied here,
     because this is where a worker's *candidate* fills become the release's.
@@ -142,23 +249,38 @@ def shard_checkpoint_fills(
 
     quality_count = 0
     quality_batch: list[_QualityRow] = []
+    checkpoints = sorted(blocks_dir.glob("*.npz"))
+    plan = _ShardPlan(union, n_variants, shard_key, impute_mask)
+    workers = _resolve_workers(checkpoints, n_workers)
 
     with staged.index_connection() as dst_db:
-        for ckpt in sorted(blocks_dir.glob("*.npz")):
-            with np.load(ckpt, allow_pickle=False) as d:
-                rows = _checkpoint_quality_rows(d, impute_mask)
-                quality_count += len(rows)
-                quality_batch.extend(rows)
-                if len(quality_batch) >= _QUALITY_BATCH_SIZE:
-                    insert_completion_quality_batch(dst_db, quality_batch)
-                    quality_batch.clear()
-                fills = _resolved_fills(d, union_alids_s, union_rows_s, n_variants, impute_mask)
-                if fills is not None:
-                    _append_to_shards(fill_shard_dir, fills, shard_key(fills[0], fills[1]))
+        for resolved in ordered_write(_resolve_checkpoint, plan, checkpoints, workers):
+            quality_count += len(resolved.quality)
+            quality_batch.extend(resolved.quality)
+            if len(quality_batch) >= _QUALITY_BATCH_SIZE:
+                insert_completion_quality_batch(dst_db, quality_batch)
+                quality_batch.clear()
+            if resolved.fills is not None:
+                assert resolved.shard_ids is not None
+                _append_to_shards(fill_shard_dir, resolved.fills, resolved.shard_ids)
 
         insert_completion_quality_batch(dst_db, quality_batch)
 
     return fill_shard_dir, quality_count
+
+
+def _resolve_workers(checkpoints: list[Path], n_workers: int) -> int:
+    """The checkpoint merge's worker count: a worker holds a few times its
+    checkpoint, the largest of which bounds them all."""
+    largest = max((ckpt.stat().st_size for ckpt in checkpoints), default=0)
+    return pool_workers(
+        n_workers,
+        resolve_unit_bytes(largest),
+        what="Checkpoint merge",
+        unit=f"checkpoint of up to {largest >> 20:,} MiB",
+        units=len(checkpoints),
+        result_bytes=resolve_result_bytes(largest),
+    )
 
 
 def _checkpoint_quality_rows(d: Any, impute_mask: np.ndarray | None) -> list[_QualityRow]:
@@ -175,8 +297,7 @@ def _checkpoint_quality_rows(d: Any, impute_mask: np.ndarray | None) -> list[_Qu
 
 def _resolved_fills(
     d: Any,
-    union_alids_s: np.ndarray,
-    union_rows_s: np.ndarray,
+    union: UnionMap,
     n_variants: int,
     impute_mask: np.ndarray | None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
@@ -185,15 +306,13 @@ def _resolved_fills(
     f_alid = d["f_alid"]
     if not len(f_alid):
         return None
-    if f_alid.dtype.kind == "U":
-        f_alid = f_alid.astype(ALID_DTYPE)
 
-    idx = np.minimum(np.searchsorted(union_alids_s, f_alid), len(union_alids_s) - 1)
-    matched = union_alids_s[idx] == f_alid
+    resolved = union.resolve(d)
+    matched = resolved >= 0
     if not matched.any():
         return None
 
-    rows = union_rows_s[idx[matched]].astype(np.int32, copy=False)
+    rows = resolved[matched].astype(np.int32, copy=False)
     in_bounds = (rows >= 0) & (rows < n_variants)
     if not in_bounds.any():
         return None

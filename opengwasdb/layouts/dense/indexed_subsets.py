@@ -62,9 +62,11 @@ import hashlib
 import logging
 import os
 import re
+import secrets
 import shutil
 import time
 import uuid
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -98,6 +100,7 @@ from opengwasdb.encoding import (
     positions_flat,
     positions_rows_cols,
 )
+from opengwasdb.encoding.timing import log_phase, log_progress, progress_every
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
@@ -112,6 +115,7 @@ from opengwasdb.store.open import (
     zarr_format_for_version,
 )
 from opengwasdb.variants import VariantAxis, parse_canonical_alid
+from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.version import installed_version
 
 log = logging.getLogger(__name__)
@@ -137,6 +141,15 @@ DEFAULT_BAND_CELLS = 65_536_000
 #: pass hold 65.5M decoded cells.  The build's own publication gate is sampled
 #: and does not use this.
 EXHAUSTIVE_VALIDATION_BAND_CELLS = 4_000_000
+
+#: Exception-table entries one bounded read of a primary side table holds.  A
+#: full-size Store's EAF exception table is hundreds of millions of entries in one
+#: Zarr v3 shard -- 237,027,522 on OGS-00016, 1,136,991,041 on OGS-00011 -- so
+#: reading it whole costs 2.7 GiB and 12.7 GiB of resident memory.  Its inner
+#: chunks are 200,000 entries, which Zarr reads as byte ranges, so the table can
+#: be walked a window at a time instead (issue #387).  About 96 MB: the same
+#: window `WindowedExactTable` scatters over.
+EXCEPTION_TABLE_WINDOW = 8_000_000
 
 #: The build's publication gate validates the structural invariants exhaustively
 #: and a bounded deterministic sample of decoded cells.  Standalone `validate`
@@ -590,8 +603,11 @@ def _canonical_alid_or_none(candidate: str) -> str | None:
     parsed = parse_canonical_alid(candidate)
     if parsed is None:
         return None
-    effect, other = sorted((parsed.effect_allele, parsed.other_allele))
-    canonical = f"{parsed.chromosome}:{parsed.position}:{effect}:{other}"
+    # An indel's order is its meaning (its reference first, ADR 0079), so either
+    # order is canonical; alleles of one length must be sorted.
+    canonical = canonical_alid(
+        parsed.chromosome, parsed.position, parsed.effect_allele, parsed.other_allele
+    )
     return canonical if canonical == candidate else None
 
 
@@ -747,17 +763,38 @@ def _remap_side_table(
     value = np.asarray(source_value, dtype=np.float32)
     if len(index) == 0:
         return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float32)
-    source_variants = index // n_analyses
-    source_analyses = index % n_analyses
     n_subset = len(subset)
-    slots = np.searchsorted(subset, source_variants)
-    in_bounds = slots < n_subset
-    hit = np.zeros(len(index), dtype=bool)
-    hit[in_bounds] = subset[slots[in_bounds]] == source_variants[in_bounds]
-    new_index = source_analyses[hit] * n_subset + slots[hit]
+    slots = _subset_slots(index, subset, n_analyses)
+    hit = _subset_side_table_hits(index, slots, subset, n_analyses)
+    new_index = (index % n_analyses)[hit] * n_subset + slots[hit]
     new_value = value[hit]
     order = np.argsort(new_index, kind="stable")
     return new_index[order], new_value[order]
+
+
+def _subset_slots(
+    index: np.ndarray, subset: np.ndarray, n_analyses: int
+) -> np.ndarray:
+    """Where each primary cell's variant sits in the subset's Variant Index."""
+    slots: np.ndarray = np.searchsorted(subset, index // n_analyses)
+    return slots
+
+
+def _subset_side_table_hits(
+    index: np.ndarray, slots: np.ndarray, subset: np.ndarray, n_analyses: int
+) -> np.ndarray:
+    """Which of a primary side table's cells sit at a variant the subset holds.
+
+    A slot the search found can hold a different variant, so it is the match
+    itself that decides.  The writer's remap and the validator's read of it ask
+    this one question, so they ask it here.
+    """
+    in_bounds = slots < len(subset)
+    slot = np.full(len(index), 0, dtype=np.int64)
+    slot[in_bounds] = slots[in_bounds]
+    hit: np.ndarray = subset[slot] == index // n_analyses
+    hit[~in_bounds] = False
+    return hit
 
 
 def _read_side(root: Any, name: str) -> np.ndarray:
@@ -2446,6 +2483,7 @@ def validate_indexed_subsets(
     errors: list[str],
     *,
     exhaustive: bool = True,
+    rides: Mapping[str, SubsetRide] | None = None,
 ) -> None:
     """Validate the optional `data.zarr/indexed_subsets` namespace, if present.
 
@@ -2460,6 +2498,10 @@ def validate_indexed_subsets(
     this family of rules with ``exhaustive=False``, which keeps every structural
     invariant exhaustive and compares a bounded deterministic decoded sample
     (#270).
+
+    `rides` holds each subset's share of the association scan's pass, by name: what
+    it read of the primary for that subset, so the comparison reads only the index
+    (issue #314). A subset without one reads the primary for itself.
     """
     context = _SubsetValidation(
         Path(store_path),
@@ -2482,7 +2524,14 @@ def validate_indexed_subsets(
     # nothing about another, so it must not stop that one's value comparison.
     for entry in _namespace_entries(context.namespace_dir):
         found: list[str] = []
-        _validate_namespace_entry(context, namespace, entry, found, exhaustive=exhaustive)
+        # The rule's cost is dominated by the value comparison, which is minutes of
+        # decoding on a genome-wide release; the entry's phase says which subset that
+        # was (issue #308).
+        with log_phase(log, f"Indexed Variant Subset {entry!r}"):
+            _validate_namespace_entry(
+                context, namespace, entry, found, exhaustive=exhaustive,
+                ride=None if rides is None else rides.get(entry),
+            )
         errors.extend(found)
 
 
@@ -2511,6 +2560,7 @@ def _validate_namespace_entry(
     errors: list[str],
     *,
     exhaustive: bool = True,
+    ride: SubsetRide | None = None,
 ) -> None:
     """Judge one namespace entry and validate it when it is a published group."""
     if _is_staging_name(entry):
@@ -2532,7 +2582,9 @@ def _validate_namespace_entry(
     if not isinstance(member, zarr.Group):
         errors.append(f"indexed-subset entry {entry!r} is not a group")
         return
-    _validate_one_indexed_subset(context, entry, member, errors, exhaustive=exhaustive)
+    _validate_one_indexed_subset(
+        context, entry, member, errors, exhaustive=exhaustive, ride=ride
+    )
 
 
 def _namespace_member(namespace: Any, entry: str, errors: list[str]) -> Any:
@@ -2578,6 +2630,7 @@ def _validate_one_indexed_subset(
     errors: list[str],
     *,
     exhaustive: bool,
+    ride: SubsetRide | None = None,
 ) -> _SamplePlan | None:
     """Every rule one published Indexed Variant Subset must satisfy.
 
@@ -2592,18 +2645,29 @@ def _validate_one_indexed_subset(
     if prepared is None:
         return None
     declared, subset = prepared
+    if ride is not None and not ride.fits(
+        group, context.root, declared, subset, context.n_analyses
+    ):
+        ride = None  # the pass digested another subset than this one: read for itself
     # Cheap, high-value invariants that stay exhaustive even on the sampled
     # build path: the side tables are small, so their remapping and the
-    # per-variant baselines are compared in full rather than sampled.
-    _check_side_tables_against_primary(
-        name, group, context.root, declared, subset, context.n_analyses, errors
+    # per-variant baselines are compared in full rather than sampled.  The EAF
+    # exception cells that check keeps are what the value comparison decodes the
+    # primary plane with, so the table is read once here and not again per band
+    # (issue #387).
+    eaf_cells = _check_side_tables_against_primary(
+        name, group, context.root, declared, subset, context.n_analyses, errors, ride
     )
-    _eaf_reference_error(name, group, context.root, subset, declared, errors)
+    _eaf_reference_error(
+        name, group, context.root, subset, declared, errors,
+        primary=None if ride is None else ride.reference,
+    )
     if errors:
         return None
     if exhaustive:
         _compare_indexed_values(
-            name, context.root, group, declared, subset, context.n_analyses, errors
+            name, context.root, group, declared, subset, context.n_analyses, errors,
+            eaf_cells=eaf_cells, ride=ride,
         )
         return None
     sample = _validation_sample(
@@ -2613,7 +2677,9 @@ def _validate_one_indexed_subset(
         _physical_write_unit(group["z"]),
         int(group["z"].chunks[1]),
     )
-    _compare_indexed_sample(name, context.root, group, declared, subset, sample, errors)
+    _compare_indexed_sample(
+        name, context.root, group, declared, subset, sample, errors, eaf_cells=eaf_cells
+    )
     return sample
 
 
@@ -2949,14 +3015,23 @@ def _check_side_tables_against_primary(
     subset: np.ndarray,
     n_analyses: int,
     errors: list[str],
-) -> None:
+    ride: SubsetRide | None = None,
+) -> EafExceptionTable | None:
     """The index's small side tables are exactly the primary's, remapped.
 
     Exhaustive even on the sampled build path: the tables are O(exception
     count) or O(n_subset), not O(n_analyses * n_subset), and a wrong remap
     would move a decoded cell plausibly and wrongly (#270).  The full decoded
     matrix comparison is what sampling replaces; this is not.
+
+    Returns the subset's EAF exception cells keyed by the *primary's* flat
+    positions, or None when the plan codes no exceptions.  That read is what the
+    value comparison needs too, so it is handed them instead of making its own
+    (issue #387).  `ride` holds the primary's baseline and exception cells at the
+    subset's variants from the association scan's pass, which read both already
+    (issue #314).
     """
+    eaf_cells = None
     if encoding.z.is_fixed_point:
         _check_remapped_table(
             name, "z overflow", group, root,
@@ -2974,16 +3049,116 @@ def _check_side_tables_against_primary(
             _SE_EXCEPTION_INDEX, _SE_EXCEPTION_VALUE, subset, n_analyses, errors,
         )
     if encoding.eaf.is_residual:
+        eaf_cells = _check_eaf_side_tables(name, group, root, subset, n_analyses, errors, ride)
+    return eaf_cells
+
+
+def _check_eaf_side_tables(
+    name: str, group: Any, root: Any, subset: np.ndarray, n_analyses: int,
+    errors: list[str], ride: SubsetRide | None,
+) -> EafExceptionTable | None:
+    """A residual EAF plane's baseline and exception table are the primary's, remapped."""
+    expected_baseline = None if ride is None else ride.baseline
+    if expected_baseline is None:
         expected_baseline = np.asarray(root[EAF_BASELINE].oindex[subset], dtype=np.float32)
-        actual_baseline = np.asarray(group[EAF_BASELINE][:], dtype=np.float32)
-        if not np.array_equal(actual_baseline, expected_baseline, equal_nan=True):
-            errors.append(
-                f"indexed subset {name!r} eaf_baseline disagrees with the primary release"
-            )
-        _check_remapped_table(
-            name, "eaf exception", group, root,
-            EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE, subset, n_analyses, errors,
+    actual_baseline = np.asarray(group[EAF_BASELINE][:], dtype=np.float32)
+    if not np.array_equal(actual_baseline, expected_baseline, equal_nan=True):
+        errors.append(
+            f"indexed subset {name!r} eaf_baseline disagrees with the primary release"
         )
+    return _check_eaf_exceptions(
+        name, group, root, subset, n_analyses, errors,
+        cells=None if ride is None else ride.cells(),
+    )
+
+
+def _check_eaf_exceptions(
+    name: str,
+    group: Any,
+    root: Any,
+    subset: np.ndarray,
+    n_analyses: int,
+    errors: list[str],
+    *,
+    cells: tuple[np.ndarray, np.ndarray] | None = None,
+) -> EafExceptionTable | None:
+    """The index's EAF exception table is the primary's, remapped, in one bounded pass.
+
+    Returns the cells themselves, keyed by the *primary's* flat positions, which
+    is what the value comparison decodes the primary plane with: the cells the
+    subset holds are the only ones it can reach, so it never looks the table up
+    again (issue #387). None when the tables disagree, so no value is compared
+    against a table the index does not reproduce.
+
+    Each failure ends with the subset's one finding and nothing returned: an
+    entry judged with no comparison at all says more than the tables' contents
+    do.
+
+    `cells` are those same cells as the association scan's one read of the table
+    kept them, page by page (issue #314); without them the table is walked here.
+    """
+    if array_length(root[EAF_EXCEPTION_INDEX]) != array_length(
+        root[EAF_EXCEPTION_VALUE]
+    ):
+        # Positions and values that are not parallel are not a table an index can
+        # be the remapping of. Comparing the two lengths once says so; a window
+        # with no hit in it never looks at the values at all.
+        errors.append(_remapped_table_message(name, "eaf exception"))
+        return None
+    primary_index, primary_value = (
+        _subset_eaf_cells(root, subset, n_analyses) if cells is None else cells
+    )
+    expected_index, expected_value = _remap_side_table(
+        primary_index, primary_value, subset, n_analyses
+    )
+    error = _remapped_table_error(
+        name, "eaf exception", group, EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE,
+        expected_index, expected_value,
+    )
+    if error is not None:
+        errors.append(error)
+        return None
+    try:
+        return EafExceptionTable(index=primary_index, value=primary_value)
+    except ValueError:
+        # A primary table that is not sorted and unique is not one an index can be
+        # the remapping of, and a table that cannot be built must not abort the
+        # entries still to be judged.
+        errors.append(_remapped_table_message(name, "eaf exception"))
+        return None
+
+
+def _subset_eaf_cells(
+    root: Any, subset: np.ndarray, n_analyses: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """The primary's EAF exception cells at the subset's variants, in one bounded pass.
+
+    The table is walked one `EXCEPTION_TABLE_WINDOW` at a time rather than read
+    whole.  It is a single Zarr v3 shard of hundreds of millions of entries, so
+    `[:]` is 12.7 GiB of `int64` on OGS-00011 and its remapping held several
+    copies of that at once; the shard's inner chunks are 200,000 entries and
+    Zarr reads them as byte ranges, so the same bytes stream through in windows
+    of about 96 MB and what is kept is the subset's own cells.
+    """
+    entries = array_length(root[EAF_EXCEPTION_INDEX])
+    kept_index: list[np.ndarray] = []
+    kept_value: list[np.ndarray] = []
+    for start in range(0, entries, EXCEPTION_TABLE_WINDOW):
+        stop = min(start + EXCEPTION_TABLE_WINDOW, entries)
+        window_index = np.asarray(root[EAF_EXCEPTION_INDEX][start:stop], dtype=np.int64)
+        slots = _subset_slots(window_index, subset, n_analyses)
+        hit = _subset_side_table_hits(window_index, slots, subset, n_analyses)
+        if not np.any(hit):
+            continue
+        kept_index.append(window_index[hit])
+        kept_value.append(
+            np.asarray(root[EAF_EXCEPTION_VALUE][start:stop], dtype=np.float32)[hit]
+        )
+    return (
+        np.concatenate(kept_index) if kept_index else np.empty(0, dtype=np.int64),
+        np.concatenate(kept_value) if kept_value else np.empty(0, dtype=np.float32),
+    )
+
 
 
 def _check_remapped_table(
@@ -3001,16 +3176,36 @@ def _check_remapped_table(
     expected_index, expected_value = _remap_side_table(
         _read_side(root, index_name), _read_side(root, value_name), subset, n_analyses
     )
-    if not (
-        np.array_equal(_read_side(group, index_name), expected_index)
-        and np.array_equal(
-            _read_side(group, value_name), expected_value, equal_nan=True
-        )
+    error = _remapped_table_error(
+        name, what, group, index_name, value_name, expected_index, expected_value
+    )
+    if error is not None:
+        errors.append(error)
+
+
+def _remapped_table_error(
+    name: str,
+    what: str,
+    group: Any,
+    index_name: str,
+    value_name: str,
+    expected_index: np.ndarray,
+    expected_value: np.ndarray,
+) -> str | None:
+    """The finding for a table that is not the primary's remapping, or None."""
+    if np.array_equal(_read_side(group, index_name), expected_index) and np.array_equal(
+        _read_side(group, value_name), expected_value, equal_nan=True
     ):
-        errors.append(
-            f"indexed subset {name!r} {what} table is not the primary release's remapped "
-            "table; the index is stale or corrupt"
-        )
+        return None
+    return _remapped_table_message(name, what)
+
+
+def _remapped_table_message(name: str, what: str) -> str:
+    """What a table that is not the primary's remapping is reported as."""
+    return (
+        f"indexed subset {name!r} {what} table is not the primary release's remapped "
+        "table; the index is stale or corrupt"
+    )
 
 
 @dataclass
@@ -3027,9 +3222,20 @@ class _DecodeContext:
 
 
 def _open_decode_context(
-    name: str, group: Any, root: Any, encoding: StoreEncoding, errors: list[str]
+    name: str,
+    group: Any,
+    root: Any,
+    encoding: StoreEncoding,
+    errors: list[str],
+    *,
+    eaf_cells: EafExceptionTable | None = None,
 ) -> _DecodeContext | None:
-    """Open every decoder, or report that the index cannot be decoded at all."""
+    """Open every decoder, or report that the index cannot be decoded at all.
+
+    `eaf_cells` is the primary's EAF exception cells for this subset, already
+    read by `_check_side_tables_against_primary`; the plane consults it instead
+    of a view that would read the whole table again for every band (#387).
+    """
     try:
         codec = _codec(group, encoding)
         z_plane = DenseZPlane.open(root, encoding)
@@ -3037,7 +3243,7 @@ def _open_decode_context(
         # Opened even when the index carries no `eaf` array: a release whose
         # source reported no frequency still has imputed cells with the panel's
         # (issue #113), and those are exactly the values a naive skip would drop.
-        eaf_plane = DenseEafPlane.open(root, encoding)
+        eaf_plane = DenseEafPlane.open(root, encoding, exceptions=eaf_cells)
     except Exception as exc:
         errors.append(f"indexed subset {name!r} cannot be decoded: {exc}")
         return None
@@ -3246,6 +3452,9 @@ def _compare_indexed_values(
     subset: np.ndarray,
     n_analyses: int,
     errors: list[str],
+    *,
+    eaf_cells: EafExceptionTable | None = None,
+    ride: SubsetRide | None = None,
 ) -> None:
     """Stream decoded index bands and compare every one to the primary planes.
 
@@ -3254,28 +3463,481 @@ def _compare_indexed_values(
     reference EAF must equal the release's own; and missingness must agree
     within the index before the values are compared.  The build's publication
     gate uses the bounded sample in `_compare_indexed_sample` instead.
+
+    Each comparison logs a progress line with an ETA: `subsets.indexed` spent 11,030 s
+    of OGS-00009's 16,974 s validation here, so its bands are what an operator wants to
+    watch (issue #308).
+
+    `ride` is this subset's share of the association scan's pass, whose digests
+    stand in for the primary planes, so the planes are not read a second time; a
+    unit they cannot vouch for is compared cell by cell as before (issue #314).
     """
-    context = _open_decode_context(name, group, root, encoding, errors)
+    context = _open_decode_context(
+        name, group, root, encoding, errors, eaf_cells=eaf_cells
+    )
     if context is None:
         return
-    # Read the index in its own physical write units and tile the Analysis axis
-    # so each compressed output chunk (v2) or shard (v3) is decoded exactly
-    # once, while peak memory is one band of one plane.  The Analysis tile is
-    # the budget-derived one rather than the primary's read unit: validation
-    # decodes to float32, so a source-aligned 65,536-variant band held ~1.9 GB
-    # on the 20k probe (measured) and was no faster -- the decode and compare,
-    # not the primary re-read, is the work.
-    write_unit = _physical_write_unit(group["z"])
-    for start, stop in _output_write_bands(len(subset), write_unit):
-        for a0, a1 in _analysis_tiles(
-            n_analyses, write_unit, EXHAUSTIVE_VALIDATION_BAND_CELLS, 1
-        ):
-            message = _compare_indexed_band(
-                name, context, group, encoding, subset, start, stop, a0, a1
+    bands, tiles = _comparison_units(group, len(subset), n_analyses)
+    walk = _Walk(f"Indexed Variant Subset {name!r} comparison", len(bands) * len(tiles))
+    with log_phase(log, walk.label):
+        if ride is not None:
+            log.info(
+                "%s: against the association scan's digests of the primary planes", walk.label
             )
-            if message is not None:
-                errors.append(message)
-                return
+        try:
+            message = _walk_units(
+                name, (context, group, encoding), subset, (bands, tiles), ride, walk
+            )
+        finally:
+            # A digest that never matches would show only as lost time: say so.
+            if ride is not None:
+                log.info("%s: %s", walk.label, ride.fallback_line(walk.reached, walk.total))
+        if message is not None:
+            errors.append(message)
+
+
+class _Walk:
+    """How far the comparison has walked its units, for its progress lines."""
+
+    def __init__(self, label: str, total: int) -> None:
+        self.label, self.total = label, total
+        self.started = time.monotonic()
+        self.reached = self.done = 0
+
+    def compared(self) -> None:
+        self.done += 1
+        log_progress(
+            log, self.label, self.done, self.total, self.started,
+            every=progress_every(self.total),
+        )
+
+
+def _walk_units(
+    name: str,
+    decoding: tuple[_DecodeContext, Any, StoreEncoding],
+    subset: np.ndarray,
+    units: tuple[list[tuple[int, int]], list[tuple[int, int]]],
+    ride: SubsetRide | None,
+    walk: _Walk,
+) -> str | None:
+    """Each unit in the comparison's order: vouched for by the pass's digests, or
+    compared cell by cell. The first finding ends the walk and is returned."""
+    context, group, encoding = decoding
+    bands, tiles = units
+    for w, (start, stop) in enumerate(bands):
+        for t, (a0, a1) in enumerate(tiles):
+            walk.reached += 1
+            unit = _Unit(start, stop, a0, a1)
+            if ride is None or not ride.vouches(w, t, context, group, encoding, unit):
+                message = _compare_indexed_band(
+                    name, context, group, encoding, subset, start, stop, a0, a1
+                )
+                if message is not None:
+                    return message
+            walk.compared()
+    return None
+
+
+def _comparison_units(
+    group: Any, n_subset: int, n_analyses: int
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """The units the exhaustive comparison walks, in its order: index write bands by
+    Analysis tiles.
+
+    Read the index in its own physical write units and tile the Analysis axis so
+    each compressed output chunk (v2) or shard (v3) is decoded exactly once, while
+    peak memory is one band of one plane.  The Analysis tile is the budget-derived
+    one rather than the primary's read unit: validation decodes to float32, so a
+    source-aligned 65,536-variant band held ~1.9 GB on the 20k probe (measured) and
+    was no faster.  The comparison reports the first unit that disagrees, so these
+    units, in this order, are part of what it reports.
+    """
+    write_unit = _physical_write_unit(group["z"])
+    bands = _output_write_bands(n_subset, write_unit)
+    tiles = _analysis_tiles(n_analyses, write_unit, EXHAUSTIVE_VALIDATION_BAND_CELLS, 1)
+    return bands, tiles
+
+
+# ── One pass: the comparison rides the association scan (issue #314) ──────
+
+
+@dataclass(frozen=True)
+class _Unit:
+    """One unit of the exhaustive comparison: index slots `[start, stop)` by
+    Analyses `[a0, a1)`."""
+
+    start: int
+    stop: int
+    a0: int
+    a1: int
+
+
+#: The planes a cell's digest covers, folded in this order: what the cell-by-cell
+#: comparison compares, decoded Z, SE and EAF and the stored imputed mask.
+_PLANES = ("z", "se", "eaf", "imputed")
+_FMIX_ONE = np.uint64(0xFF51AFD7ED558CCD)
+_FMIX_TWO = np.uint64(0xC4CEB9FE1A85EC53)
+_FMIX_SHIFT = np.uint64(33)
+
+
+def _fmix(x: np.ndarray) -> np.ndarray:
+    """MurmurHash3's 64-bit finaliser: every bit of the input moves every bit out."""
+    x = x ^ (x >> _FMIX_SHIFT)
+    x = x * _FMIX_ONE
+    x = x ^ (x >> _FMIX_SHIFT)
+    x = x * _FMIX_TWO
+    mixed: np.ndarray = x ^ (x >> _FMIX_SHIFT)
+    return mixed
+
+
+def _value_bits(values: np.ndarray) -> np.ndarray:
+    """Each cell's value as the cell-by-cell comparison tells values apart.
+
+    `np.array_equal(..., equal_nan=True)` holds every NaN equal and -0 equal to 0,
+    so both are folded to one bit pattern first; any other difference in a value
+    is a difference in its bits.
+    """
+    v = np.asarray(values)
+    if v.dtype.kind == "f":
+        v = v + v.dtype.type(0)
+        v = np.where(np.isnan(v), v.dtype.type(np.nan), v)
+        bits: np.ndarray = v.view(np.dtype(f"u{v.dtype.itemsize}")).astype(np.uint64)
+        return bits
+    if v.dtype.kind in "biu":
+        return v.astype(np.uint64)
+    raise TypeError(f"no digest of a {v.dtype} plane")
+
+
+def _cell_digests(keys: np.ndarray, planes: list[np.ndarray], run_key: int) -> np.ndarray:
+    """One 64-bit digest per cell: of its key under the run's, then of each plane's
+    value there.
+
+    Each step is a bijection of the digest so far, so a change to one value of one
+    cell always changes that cell's digest, and so its unit's sum. The cell's key --
+    its Analysis and slot -- makes a value moved to another cell a change too.
+    """
+    digest = _fmix(np.asarray(keys, dtype=np.int64).astype(np.uint64) ^ np.uint64(run_key))
+    for plane in planes:
+        digest = _fmix(digest ^ _value_bits(plane))
+    return digest
+
+
+def run_key() -> int:
+    """The key one validation run digests every cell under, drawn once per run.
+
+    `_fmix` is public and invertible, so with a fixed key a corruption whose digests
+    collide could be built in advance; drawn at random each run, it cannot. Nothing a
+    run reports depends on it: a key changes only which digests two different units
+    would share, about 2^-64 of them.
+    """
+    return secrets.randbits(64)
+
+
+def _ride_facts(group: Any, root: Any, encoding: StoreEncoding) -> tuple[bool, ...]:
+    """What decides which planes the comparison compares: whether the index and the
+    release each report frequencies, and each carries an imputed mask."""
+    reference = bool(encoding.eaf.reference)
+    return (
+        "eaf" in group or reference,
+        _IMPUTED_MASK in group,
+        "eaf" in root or reference,
+        _IMPUTED_MASK in root,
+    )
+
+
+def _digest_planes(
+    facts: tuple[bool, ...], encoding: StoreEncoding
+) -> tuple[tuple[str, ...], bool]:
+    """The planes a cell's digest covers, and whether every unit fails before them.
+
+    Those are the planes the cell-by-cell comparison compares. An index that
+    reports frequencies beside a release that cannot, a residual SE with no index
+    frequency to decode it against, and an index mask beside a release with none
+    each fail every unit, so every unit is compared cell by cell and the first
+    says why.
+    """
+    index_eaf, index_mask, primary_eaf, primary_mask = facts
+    planes = tuple(
+        plane
+        for plane, compared in zip(_PLANES, (True, True, index_eaf, index_mask), strict=True)
+        if compared
+    )
+    every = (
+        (index_eaf and not primary_eaf)
+        or (encoding.se.is_residual and not index_eaf)
+        or (index_mask and not primary_mask)
+    )
+    return planes, every
+
+
+class SubsetRide:
+    """One Indexed Variant Subset's share of the association scan's pass (issue #314).
+
+    The exhaustive comparison read the primary planes again for every unit it
+    compared -- an index write band by a tile of Analyses -- so on OGS-00009 it spent
+    11,030 s of a 16,974 s validation decoding bands the scan had decoded already.
+    Now the scan hands each of its bands to `see`, which folds the subset's cells in
+    it into one digest per comparison unit: a 64-bit digest of every cell's key and
+    decoded values, summed over the unit. The comparison reads only the index,
+    digests the same cells of it the same way, and compares the two (`vouches`).
+
+    A unit whose digests differ, that either side could not decode, or whose index
+    is wrong on its own is compared cell by cell by `_compare_indexed_band`, in the
+    order the comparison has always walked, so the finding, its words and the unit
+    it names are the ones it always reported. A change to one value of one cell
+    always changes its unit's digest; a unit in which several cells or planes differ
+    is missed only if the two sums collide, about 2^-64 per unit under a key drawn
+    once per run (`run_key`), so the guarantee is probabilistic, as the owner ruled
+    on 12 Nov 2026.
+
+    The pass also hands it the release's EAF exception table, a page at a time
+    (`watch`), from which it keeps the subset's own cells, and the subset's share of
+    the per-variant arrays: what the side-table checks compare the index against.
+    """
+
+    def __init__(
+        self, subset: np.ndarray, group: Any, root: Any, encoding: StoreEncoding,
+        n_analyses: int, key: int,
+    ) -> None:
+        self.subset = subset
+        self.key = key
+        self.n_analyses = n_analyses
+        self.n_rows = int(root["z"].shape[0])
+        self.encoding = encoding
+        self.bands, self.tiles = _comparison_units(group, len(subset), n_analyses)
+        self.facts = _ride_facts(group, root, encoding)
+        self.planes, every = _digest_planes(self.facts, encoding)
+        shape = (len(self.bands), len(self.tiles))
+        self.digests = np.zeros(shape, dtype=np.uint64)
+        self.suspect = np.full(shape, every, dtype=bool)
+        self.rows_seen = 0
+        self.broken = False
+        #: Units compared cell by cell, by why the digests could not vouch for them.
+        self.fell_back: Counter[str] = Counter()
+        self.baseline: np.ndarray | None = None
+        self.reference: np.ndarray | None = None
+        #: Whether the pass's read of the table handed `watch` every page.
+        self.saw_table: Any = None
+        self._band_stops = np.asarray([stop for _start, stop in self.bands], dtype=np.int64)
+        self._tile_starts = np.asarray([a0 for a0, _a1 in self.tiles], dtype=np.int64)
+        self._analysis_keys = np.arange(n_analyses, dtype=np.int64) * len(subset)
+        self._cells: list[tuple[np.ndarray, np.ndarray]] = []
+        self._cells_seen = 0
+
+    def see(self, r0: int, r1: int, n_analyses: int, plane: Any) -> None:
+        """Fold primary rows `[r0, r1)` into the digests of the units they fall in.
+
+        `plane(name)` is the band's decoded plane, or raises where the band cannot
+        be decoded; the units it holds are then compared cell by cell, which meets
+        the same failure in its own words.
+        """
+        if (r0, n_analyses) != (self.rows_seen, self.n_analyses):
+            self.broken = True
+            raise ValueError(f"primary rows from {r0} after {self.rows_seen} were read")
+        self.rows_seen = r1
+        s0, s1 = (int(edge) for edge in np.searchsorted(self.subset, (r0, r1)))
+        if s1 == s0 or bool(self.suspect.all()):
+            return
+        local = self.subset[s0:s1] - r0
+        try:
+            values = [np.asarray(plane(name))[local] for name in self.planes]
+        except Exception:  # the cell-by-cell comparison meets it, in its own words
+            for w in self._bands_over(s0, s1):
+                self.suspect[w, :] = True
+            return
+        keys = np.arange(s0, s1, dtype=np.int64)[:, None] + self._analysis_keys[None, :]
+        self._fold(s0, s1, _cell_digests(keys, values, self.key))
+
+    def _fold(self, s0: int, s1: int, cells: np.ndarray) -> None:
+        """Add slots `[s0, s1)`'s cell digests to the units they fall in."""
+        for w in self._bands_over(s0, s1):
+            start, stop = self.bands[w]
+            per_analysis = cells[max(start, s0) - s0 : min(stop, s1) - s0].sum(
+                axis=0, dtype=np.uint64
+            )
+            self.digests[w] += np.add.reduceat(per_analysis, self._tile_starts)
+
+    def _bands_over(self, s0: int, s1: int) -> range:
+        """The index write bands that slots `[s0, s1)` fall in."""
+        first = int(np.searchsorted(self._band_stops, s0, side="right"))
+        last = int(np.searchsorted(self._band_stops, s1 - 1, side="right"))
+        return range(first, last + 1)
+
+    def watch(self, start: int, index: np.ndarray, value: np.ndarray) -> None:
+        """Keep the subset's cells of one page of the release's EAF exception table."""
+        if start != self._cells_seen:
+            raise ValueError(f"table page at entry {start} after {self._cells_seen} entries")
+        slots = _subset_slots(index, self.subset, self.n_analyses)
+        hit = _subset_side_table_hits(index, slots, self.subset, self.n_analyses)
+        if np.any(hit):
+            self._cells.append((index[hit], value[hit]))
+        self._cells_seen += len(index)
+
+    def cells(self) -> tuple[np.ndarray, np.ndarray] | None:
+        """The subset's cells of the release's table, if the pass read all of it."""
+        if self.saw_table is None or not self.saw_table():
+            return None
+        if not self._cells:
+            return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float32)
+        return (
+            np.concatenate([index for index, _value in self._cells]),
+            np.concatenate([value for _index, value in self._cells]),
+        )
+
+    def fits(
+        self, group: Any, root: Any, encoding: StoreEncoding, subset: np.ndarray,
+        n_analyses: int,
+    ) -> bool:
+        """Whether the pass digested this subset, every row of it, the way the
+        comparison now reads it; if not, the comparison reads the primary itself."""
+        return (
+            not self.broken
+            and self.rows_seen == self.n_rows
+            and encoding == self.encoding
+            and n_analyses == self.n_analyses
+            and np.array_equal(subset, self.subset)
+            and _comparison_units(group, len(subset), n_analyses) == (self.bands, self.tiles)
+            and _ride_facts(group, root, encoding) == self.facts
+        )
+
+    def vouches(
+        self,
+        w: int,
+        t: int,
+        context: _DecodeContext,
+        group: Any,
+        encoding: StoreEncoding,
+        unit: _Unit,
+    ) -> bool:
+        """Whether unit `(w, t)` of the index holds what the pass read of the primary.
+
+        A unit it cannot vouch for is counted by why, for the comparison's log line.
+        """
+        if self.suspect[w, t]:
+            self.fell_back[_UNDIGESTED] += 1
+            return False
+        digest = _index_digest(
+            context, group, encoding, (self.planes, self.key), len(self.subset), unit
+        )
+        if digest is None:
+            self.fell_back[_INDEX_ALONE] += 1
+            return False
+        if digest != int(self.digests[w, t]):
+            self.fell_back[_DISAGREED] += 1
+            return False
+        return True
+
+    def fallback_line(self, reached: int, total: int) -> str:
+        """How many units were compared cell by cell, and why, of those reached."""
+        fell = sum(self.fell_back.values())
+        why = ", ".join(f"{self.fell_back[reason]} {reason}" for reason in _FALLBACKS)
+        return (
+            f"{fell} of {reached} units compared cell by cell ({why}); {total} units "
+            "in all"
+        )
+
+
+#: Why a unit is compared cell by cell rather than vouched for by its digests.
+_DISAGREED = "whose digests disagreed"
+_UNDIGESTED = "the pass could not digest"
+_INDEX_ALONE = "the index could not be digested alone"
+_FALLBACKS = (_DISAGREED, _UNDIGESTED, _INDEX_ALONE)
+
+
+def _index_digest(
+    context: _DecodeContext,
+    group: Any,
+    encoding: StoreEncoding,
+    digested: tuple[tuple[str, ...], int],
+    n_subset: int,
+    unit: _Unit,
+) -> int | None:
+    """The index's digest of one unit, made as the pass made the primary's.
+
+    None for a unit the index alone says is wrong, or that cannot be read or
+    decoded: the cell-by-cell comparison then says what it always said.
+    """
+    try:
+        values = _index_unit_values(context, group, encoding, n_subset, unit)
+        if values is None:
+            return None
+        keys = (
+            np.arange(unit.a0, unit.a1, dtype=np.int64)[:, None] * n_subset
+            + np.arange(unit.start, unit.stop, dtype=np.int64)[None, :]
+        )
+        planes, key = digested
+        cells = _cell_digests(keys, [values[plane] for plane in planes], key)
+        return int(cells.sum(dtype=np.uint64))
+    except Exception:  # the cell-by-cell comparison meets it, in its own words
+        return None
+
+
+def _index_unit_values(
+    context: _DecodeContext, group: Any, encoding: StoreEncoding, n_subset: int, unit: _Unit
+) -> dict[str, np.ndarray] | None:
+    """One unit of the index, decoded as the cell-by-cell comparison decodes it, or
+    None where the index is wrong without the primary's help: an undecodable
+    frequency, Z and SE missing apart, or a mask that is no mask."""
+    start, stop, a0, a1 = unit.start, unit.stop, unit.a0, unit.a1
+    index_z_raw = np.asarray(group["z"][a0:a1, start:stop])
+    index_se_raw = np.asarray(group["se"][a0:a1, start:stop])
+    index_eaf, eaf_error = _decode_index_eaf("", context, group, encoding, start, stop, a0, a1)
+    if eaf_error is not None:
+        return None
+    if _missingness_error("", context, index_z_raw, index_se_raw, encoding):
+        return None
+    index_imputed = _index_imputed_band(group, start, stop, a0, a1)
+    if index_imputed is not None and _index_mask_error(
+        "", context, encoding, (index_z_raw, index_se_raw, index_imputed)
+    ):
+        return None
+    cols = np.arange(a0, a1)
+    positions = positions_rows_cols(cols, np.arange(start, stop), n_subset)
+    values = {
+        "z": context.codec.decode_z(index_z_raw, positions=positions),
+        "se": _decode_index_se(context, index_se_raw, index_eaf, encoding, cols, positions),
+    }
+    if index_eaf is not None:
+        values["eaf"] = index_eaf
+    if index_imputed is not None:
+        values["imputed"] = index_imputed
+    return values
+
+
+def subset_rides(root: Any, encoding: StoreEncoding, n_analyses: int) -> dict[str, SubsetRide]:
+    """A ride for every published subset a pass over `root`'s planes can digest.
+
+    An entry that is not a readable published group, or whose Variant Index is not
+    strictly ascending inside the grid, gets none: its validation finds out why,
+    and reads for itself if it gets as far as comparing values.
+    """
+    rides: dict[str, SubsetRide] = {}
+    if INDEXED_SUBSETS_GROUP not in root:
+        return rides
+    namespace = root[INDEXED_SUBSETS_GROUP]
+    key = run_key()
+    for entry in sorted(namespace.group_keys()):
+        if _is_staging_name(entry) or not is_valid_indexed_subset_name(entry):
+            continue
+        try:
+            ride = _ride(namespace[entry], root, encoding, n_analyses, key)
+        except Exception:  # its validation says what is wrong with it
+            continue
+        if ride is not None:
+            rides[entry] = ride
+    return rides
+
+
+def _ride(
+    group: Any, root: Any, encoding: StoreEncoding, n_analyses: int, key: int
+) -> SubsetRide | None:
+    """A ride for one subset, unless its Variant Index is not strictly ascending
+    inside the grid, which the pass could not digest it by."""
+    subset = np.asarray(group["variant_index"][:], dtype=np.int64)
+    n_rows = int(root["z"].shape[0])
+    if len(subset) and (subset[0] < 0 or subset[-1] >= n_rows or np.any(np.diff(subset) <= 0)):
+        return None
+    return SubsetRide(subset, group, root, encoding, n_analyses, key)
 
 
 def _compare_indexed_band(
@@ -3471,14 +4133,11 @@ def _imputed_mask_message(
     the primary labels observed cells imputed and vice versa, and a non-0/1
     value is not a mask at all.  Each is refused rather than decoded.
     """
-    se_missing = (
-        index_se_raw == SE_MISSING if encoding.se.is_residual else np.isnan(index_se_raw)
+    malformed = _index_mask_error(
+        name, context, encoding, (index_z_raw, index_se_raw, index_imputed)
     )
-    tally = Tally.of(context.codec.missing_mask(index_z_raw), se_missing, index_imputed)
-    if tally.flags_not_binary:
-        return f"indexed subset {name!r} imputed mask contains values other than 0 and 1"
-    if tally.imputed_z_missing or tally.imputed_se_missing:
-        return f"indexed subset {name!r} marks a missing Z/SE cell imputed"
+    if malformed is not None:
+        return malformed
     if primary_cells is None:
         return f"indexed subset {name!r} carries an imputed mask but the release has none"
     if not np.array_equal(index_imputed, primary_cells):
@@ -3489,6 +4148,26 @@ def _imputed_mask_message(
     return None
 
 
+def _index_mask_error(
+    name: str, context: _DecodeContext, encoding: StoreEncoding, cells: tuple[np.ndarray, ...]
+) -> str | None:
+    """What is wrong with the index's mask on its own: values that are not 0 or 1, or
+    a missing cell marked imputed. Neither needs the primary to say.
+
+    `cells` is the band's index codes, `(z, se, imputed)`.
+    """
+    index_z_raw, index_se_raw, index_imputed = cells
+    se_missing = (
+        index_se_raw == SE_MISSING if encoding.se.is_residual else np.isnan(index_se_raw)
+    )
+    tally = Tally.of(context.codec.missing_mask(index_z_raw), se_missing, index_imputed)
+    if tally.flags_not_binary:
+        return f"indexed subset {name!r} imputed mask contains values other than 0 and 1"
+    if tally.imputed_z_missing or tally.imputed_se_missing:
+        return f"indexed subset {name!r} marks a missing Z/SE cell imputed"
+    return None
+
+
 def _eaf_reference_error(
     name: str,
     group: Any,
@@ -3496,12 +4175,19 @@ def _eaf_reference_error(
     subset: np.ndarray,
     encoding: StoreEncoding,
     errors: list[str],
+    *,
+    primary: np.ndarray | None = None,
 ) -> None:
-    """The subset's reference EAF must be the release's restricted to its variants."""
+    """The subset's reference EAF must be the release's restricted to its variants.
+
+    `primary` is the release's reference at the subset's variants when the
+    association scan already holds it (issue #314); otherwise it is read here.
+    """
     if not encoding.eaf.reference:
         return
     index_reference = np.asarray(group[EAF_REFERENCE][:], dtype=np.float32)
-    primary = np.asarray(root[EAF_REFERENCE].oindex[subset], dtype=np.float32)
+    if primary is None:
+        primary = np.asarray(root[EAF_REFERENCE].oindex[subset], dtype=np.float32)
     if not np.array_equal(index_reference, primary, equal_nan=True):
         errors.append(
             f"indexed subset {name!r} eaf_reference disagrees with the primary release; "
@@ -3569,34 +4255,52 @@ def _se_band_error(
     cols: np.ndarray,
     positions: Any,
 ) -> str | None:
-    if encoding.se.is_residual:
-        if index_eaf is None:
-            return f"indexed subset {name!r} se cannot be decoded without its eaf plane"
-        analysis_index = np.asarray(cols, dtype=np.int64)
-        if index_se_raw.ndim == 2:
-            # A band is (Analysis, slot); the sample is a flat run of cells.
-            analysis_index = np.broadcast_to(analysis_index[:, None], index_se_raw.shape)
-        index_se = context.codec.decode_se(
-            index_se_raw,
-            eaf=index_eaf,
-            analysis_index=analysis_index,
-            coefficients=context.coefficients,
-            positions=positions,
-        )
-    else:
-        index_se = context.codec.decode_se(
-            index_se_raw,
-            eaf=np.empty(0, dtype=np.float32),
-            analysis_index=np.empty(0, dtype=np.int64),
-            coefficients=np.empty((0, 2), dtype=np.float32),
-            positions=positions,
-        )
+    if encoding.se.is_residual and index_eaf is None:
+        return f"indexed subset {name!r} se cannot be decoded without its eaf plane"
+    index_se = _decode_index_se(context, index_se_raw, index_eaf, encoding, cols, positions)
     if not np.array_equal(index_se.T, primary_se, equal_nan=True):
         return (
             f"indexed subset {name!r} se values differ from the primary plane or cannot "
             "be decoded; the index is stale or corrupt"
         )
     return None
+
+
+def _decode_index_se(
+    context: _DecodeContext,
+    index_se_raw: np.ndarray,
+    index_eaf: np.ndarray | None,
+    encoding: StoreEncoding,
+    cols: np.ndarray,
+    positions: Any,
+) -> np.ndarray:
+    """The index's own SE cells, decoded against the index's own frequencies.
+
+    A residual plane needs `index_eaf`; the caller has already said so when it is
+    missing.
+    """
+    if encoding.se.is_residual:
+        assert index_eaf is not None
+        analysis_index = np.asarray(cols, dtype=np.int64)
+        if index_se_raw.ndim == 2:
+            # A band is (Analysis, slot); the sample is a flat run of cells.
+            analysis_index = np.broadcast_to(analysis_index[:, None], index_se_raw.shape)
+        decoded: np.ndarray = context.codec.decode_se(
+            index_se_raw,
+            eaf=index_eaf,
+            analysis_index=analysis_index,
+            coefficients=context.coefficients,
+            positions=positions,
+        )
+        return decoded
+    plain: np.ndarray = context.codec.decode_se(
+        index_se_raw,
+        eaf=np.empty(0, dtype=np.float32),
+        analysis_index=np.empty(0, dtype=np.int64),
+        coefficients=np.empty((0, 2), dtype=np.float32),
+        positions=positions,
+    )
+    return plain
 
 
 # ── Sampled publication gate (#270) ─────────────────────────────────────────
@@ -3683,6 +4387,8 @@ def _compare_indexed_sample(
     subset: np.ndarray,
     sample: _SamplePlan,
     errors: list[str],
+    *,
+    eaf_cells: EafExceptionTable | None = None,
 ) -> None:
     """Decode and compare a bounded deterministic sample of index cells.
 
@@ -3694,7 +4400,9 @@ def _compare_indexed_sample(
     unsampled corruption can pass this gate by design and is left to the
     exhaustive standalone audit.
     """
-    context = _open_decode_context(name, group, root, encoding, errors)
+    context = _open_decode_context(
+        name, group, root, encoding, errors, eaf_cells=eaf_cells
+    )
     if context is None:
         return
     if sample.cells == 0:

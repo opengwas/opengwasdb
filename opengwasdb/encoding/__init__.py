@@ -33,6 +33,7 @@ from opengwasdb.encoding.codec import (
     eaf_baseline_from_grid,
     eaf_baseline_from_pairs,
     eaf_baseline_from_sorted_runs,
+    eaf_exception_table,
     encode_sample_sizes,
     expit,
     logit,
@@ -95,7 +96,7 @@ from opengwasdb.encoding.se import (
     OverflowCells,
     optimise_dense_se,
     optimise_dense_se_joint,
-    rewrite_dense_se,
+    write_dense_se_side_arrays,
 )
 from opengwasdb.store.arrays import PER_VARIANT_CHUNK as DEFAULT_PER_VARIANT_CHUNK
 from opengwasdb.store.arrays import (
@@ -168,6 +169,7 @@ __all__ = [
     "eaf_baseline_from_grid",
     "eaf_baseline_from_pairs",
     "eaf_baseline_from_sorted_runs",
+    "eaf_exception_table",
     "encode_sample_sizes",
     "expit",
     "logit",
@@ -186,5 +188,5 @@ __all__ = [
     "write_eaf_reference",
     "optimise_dense_se",
     "optimise_dense_se_joint",
-    "rewrite_dense_se",
+    "write_dense_se_side_arrays",
 ]

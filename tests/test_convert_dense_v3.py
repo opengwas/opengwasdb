@@ -791,18 +791,14 @@ def test_the_per_variant_rule_judges_the_inner_chunk_not_the_shard(
 # ── validation: 0.2.0 is readable but not yet writable ───────────────────────
 
 
-def test_completion_accepts_a_0_2_0_source(converted_dense_store: Path):
-    """Since #247 the current format is writable, so the guard does not fire.
-
-    Completion preserves its source's format *and* writes into its arrays; that
-    is only honest while this build writes that format, and from #247 it writes
-    0.2.0.  Until #247 the converted release was refused here (ADR 0038 §4);
-    now a 0.1.0 source is the one refused, with the conversion tool named
-    (`tests/test_format_version.py`).
-    """
+def test_completion_refuses_a_converted_0_2_0_source(converted_dense_store: Path):
+    """A converted release keeps its 0.1.0 source's sorted indel ALIDs, so it is
+    0.2.0, and a build that writes 0.2.2 refuses to complete it (ADR 0038 §4,
+    ADR 0079): it is rebuilt first."""
     version = store_open.open_store(converted_dense_store).manifest.format_version
     assert version == "0.2.0"
-    assert store_open.check_writable_format_version(version) == version
+    with pytest.raises(store_open.UnsupportedFormatVersion, match="Rebuild the release"):
+        store_open.check_writable_format_version(version)
 
 
 # ── the seam's shard policy is the one authority ─────────────────────────────

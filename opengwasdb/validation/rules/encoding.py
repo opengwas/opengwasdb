@@ -26,10 +26,10 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store.arrays import array_length, inner_chunk_of
-from opengwasdb.validation.rule import Check, Kind, Rule, Target
+from opengwasdb.validation.rule import Check, Kind, Ride, Rule, Target
 from opengwasdb.validation.rules.csr import ARRAYS
 from opengwasdb.validation.rules.release import REQUIRED
-from opengwasdb.validation.scans import per_variant
+from opengwasdb.validation.scans import ASSOCIATIONS, TablePages, eaf_table, per_variant
 
 #: The rules a component's values are decoded under: a decode needs every one.
 PLAN = (
@@ -305,7 +305,9 @@ def _eaf_stray_residual_arrays(group: Any, label: str) -> Iterator[str]:
         yield f"{label} carries an eaf exception table but declares no residual-coded eaf plane"
 
 
-def _eaf_residual_arrays(group: Any, read: _Read, label: str) -> Iterator[str]:
+def _eaf_residual_arrays(
+    group: Any, read: _Read, label: str, walked: _Walked | None = None
+) -> Iterator[str]:
     """A residual plane's baseline, in (0, 1), and its exception table, both present."""
     if EAF_BASELINE not in group:
         yield (
@@ -321,22 +323,86 @@ def _eaf_residual_arrays(group: Any, read: _Read, label: str) -> Iterator[str]:
             "of any cell the residual coding cannot express"
         )
     else:
-        yield from _eaf_exception_table(EafExceptionTable.read(group), label)
+        yield from _eaf_exception_table(group, label, walked)
 
 
-def _eaf_exception_table(table: EafExceptionTable, label: str) -> Iterator[str]:
-    """Positions pair with values, sorted and unrepeated; every value a frequency."""
-    if len(table.index) != len(table.value):
+def _eaf_exception_table(
+    group: Any, label: str, walked: _Walked | None = None
+) -> Iterator[str]:
+    """Positions pair with values, sorted and unrepeated; every value a frequency.
+
+    The table is walked a page at a time, carrying the last position across the
+    boundary, so the judgement is the same as reading it whole while nothing
+    larger than a page is held: it is one Zarr v3 shard of up to 1,136,991,041
+    entries, 12.7 GiB of `int64` and `float32` (issue #387).  The three findings
+    keep the order they had -- pairing, then sortedness, then the value range --
+    because a page that is walked early can only say what it saw.
+
+    `walked` is that walk made over the association scan's own read of the table,
+    which saw every page (issue #314); without it the rule walks the table itself,
+    in the same pages.
+    """
+    index_array = group[EAF_EXCEPTION_INDEX]
+    value_array = group[EAF_EXCEPTION_VALUE]
+    entries = array_length(index_array)
+    values = array_length(value_array)
+    if entries != values:
         yield (
-            f"{label} eaf exception table has {len(table.index)} positions but "
-            f"{len(table.value)} values"
+            f"{label} eaf exception table has {entries} positions but {values} values"
         )
-    elif len(table.index) > 1 and np.any(table.index[1:] <= table.index[:-1]):
+        return
+    if walked is None:
+        walked = _Walked()
+        table = TablePages(group, EafExceptionTable)
+        table.watch(walked)
+        table.finish()
+    if walked.unsorted:
         yield f"{label} eaf exception table is not sorted by position, or repeats one"
-    elif len(table.value) and not np.all(
-        np.isfinite(table.value) & (table.value >= 0.0) & (table.value <= 1.0)
-    ):
+    elif walked.not_a_frequency:
         yield f"{label} eaf exception table holds a value that is not a frequency in [0, 1]"
+
+
+class _Walked:
+    """The table's order and values, judged page by page in table order.
+
+    One page at a time, with the last position carried across the boundary, so
+    both questions are answered over the whole table, not the page that raised
+    them, and the findings keep the order they had when it was read at once. The
+    pages are the association scan's read of the table, which this watches when the
+    plan rule rides that pass (issue #314), or the rule's own read of them.
+    """
+
+    def __init__(self) -> None:
+        self.unsorted = False
+        self.not_a_frequency = False
+        self.previous: int | None = None
+        self.seen = 0
+
+    def __call__(self, start: int, positions: np.ndarray, values: np.ndarray) -> None:
+        if start != self.seen:
+            raise ValueError(f"table page at entry {start} after {self.seen} entries")
+        self.unsorted, self.previous = _page_order(positions, self.previous, self.unsorted)
+        self.not_a_frequency = self.not_a_frequency or _not_frequencies(values)
+        self.seen += len(positions)
+
+
+def _page_order(
+    page: np.ndarray, previous: int | None, unsorted: bool
+) -> tuple[bool, int | None]:
+    """Whether the pages so far are unsorted, and this page's last position."""
+    if not len(page):
+        return unsorted, previous
+    broke = (previous is not None and int(page[0]) <= previous) or (
+        len(page) > 1 and bool(np.any(page[1:] <= page[:-1]))
+    )
+    return unsorted or broke, int(page[-1])
+
+
+def _not_frequencies(values: np.ndarray) -> bool:
+    """Whether the page's values hold anything that is not a frequency in [0, 1]."""
+    if not len(values):
+        return False
+    return not bool(np.all(np.isfinite(values) & (values >= 0.0) & (values <= 1.0)))
 
 
 def _eaf_reference(group: Any, read: _Read, declared: Any, label: str) -> Iterator[str]:
@@ -392,10 +458,44 @@ def eaf_plan(target: Target) -> Iterator[str]:
 
     yield from _eaf_plane(group, declared, label)
     if declared.is_residual:
-        yield from _eaf_residual_arrays(group, read, label)
+        yield from _eaf_residual_arrays(group, read, label, _walked(target))
     else:
         yield from _eaf_stray_residual_arrays(group, label)
     yield from _eaf_reference(group, read, declared, label)
+
+
+#: Where the plan rule's watch over a pass's read of the table leaves what it saw.
+_TABLE_WALK = "encoding.eaf/table_walk"
+
+
+def _walks_table(target: Target) -> bool:
+    """Whether the plan rule reads the exception table page by page: a residual plan
+    whose table is there, positions and values paired. Only then does it ride the
+    association scan, whose read of the table it watches instead (issue #314)."""
+    group = target.group
+    if not target.encoding.eaf.is_residual:
+        return False
+    if EAF_EXCEPTION_INDEX not in group or EAF_EXCEPTION_VALUE not in group:
+        return False
+    return array_length(group[EAF_EXCEPTION_INDEX]) == array_length(group[EAF_EXCEPTION_VALUE])
+
+
+def _watch_table(target: Target) -> None:
+    """Watch the pass's read of the exception table; the rule reads no block."""
+    table = eaf_table(target)
+    if table is not None:
+        walk = _Walked()
+        table.watch(walk)
+        target.remember(_TABLE_WALK, lambda: (table, walk), until=ASSOCIATIONS.name)
+
+
+def _walked(target: Target) -> _Walked | None:
+    """The walk a pass's read of the table carried, if it saw every page."""
+    held = target.recalled(_TABLE_WALK)
+    if held is None:
+        return None
+    table, walk = held
+    return walk if table.saw_all(walk) else None
 
 
 def per_variant_chunks(target: Target) -> list[str]:
@@ -424,7 +524,12 @@ def z_plan(target: Target) -> list[str]:
 
 
 def _plan_rule(name: str, run: Callable[[Target], Iterable[str]]) -> Rule:
-    return Check(name=name, kinds=Kind.GRID | Kind.CSR, after=(REQUIRED, ARRAYS), run=run)
+    # The EAF plan rule's walk of the exception table rides the association scan's
+    # read of it, so a pass streams the table once (issue #314).
+    ride = Ride(ASSOCIATIONS, _watch_table, when=_walks_table) if run is eaf_plan else None
+    return Check(
+        name=name, kinds=Kind.GRID | Kind.CSR, after=(REQUIRED, ARRAYS), run=run, ride=ride
+    )
 
 
 RULES: tuple[Rule, ...] = tuple(

@@ -11,14 +11,17 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
+import zarr
 
 from opengwasdb import top_hits
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
+from opengwasdb.encoding.banding import band_rows, decoded_band_bytes
 from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store.open import check_writable_zarr_layout
 from opengwasdb.top_hits import TOP_HIT_CHUNK_SIZE, TOP_HIT_THRESHOLDS
 
 log = logging.getLogger(__name__)
@@ -148,6 +151,13 @@ def _scan_candidates(
                 for name, values in band.items():
                     if len(values):
                         parts[name].append(values)
+                log.debug(
+                    "Top-hit scan: band %d of %d, %d rows from variant %d",
+                    index,
+                    n_bands,
+                    min(band_rows, n_variants - (index - 1) * band_rows),
+                    (index - 1) * band_rows,
+                )
                 log_progress(
                     log, "Top-hit scan", index, n_bands, started,
                     every=max(1, n_bands // 20),
@@ -188,12 +198,90 @@ def _write_scan_harvest(
             )
 
 
+def _refuse_unwritable_layout(store_path: Path, version: str) -> None:
+    """Refuse a release whose Zarr layout this build cannot write (issue #313).
+
+    The decision is `store.open.check_writable_zarr_layout`'s, from the release's
+    `format_version`, so this module holds no version-to-layout rule of its own
+    (ADR 0057, #264). A `0.1.0` release is Zarr v2 and is refused: the index is
+    v3 arrays written into that release's own data group, so writing them there
+    would leave a `zarr.json` beside its `.zgroup` and hide every array it has.
+    """
+    check_writable_zarr_layout(version, source=f"release at {store_path}")
+
+
+class _ScanPlanes(NamedTuple):
+    """The planes one scan reads, opened once."""
+
+    z: DenseZPlane
+    se: DenseSePlane
+    imputed: zarr.Array | None
+    eaf: DenseEafPlane
+
+
+def _open_scan_planes(store_path: Path, encoding: StoreEncoding) -> _ScanPlanes:
+    root = store_arrays.open_group(store_path / "data.zarr")
+    return _ScanPlanes(
+        z=DenseZPlane.open(root, encoding),
+        se=DenseSePlane.open(root, encoding),
+        imputed=root["imputed"] if "imputed" in root else None,
+        eaf=DenseEafPlane.open(root, encoding),
+    )
+
+
+def _scan_band_rows(z_plane: DenseZPlane, working_bytes: int | None) -> int:
+    """The rows per band the scan will read, from the decoded-band budget."""
+    return band_rows(z_plane.n_analyses, int(z_plane.array.chunks[0]), working_bytes)
+
+
+def _log_scan_plan(
+    z_plane: DenseZPlane, band: int, n_workers: int, working_bytes: int | None
+) -> None:
+    """Say what the scan is about to read: its width, band and budget."""
+    log.info(
+        "Top-hit index: scanning %d variants over %d Analyses "
+        "(n_workers=%d, %d rows per band, %d-byte decoded-band budget)",
+        int(z_plane.array.shape[0]),
+        z_plane.n_analyses,
+        n_workers,
+        band,
+        decoded_band_bytes(working_bytes),
+    )
+
+
+def _run_scan(
+    store_path: Path,
+    planes: _ScanPlanes,
+    thresholds: tuple[float, ...],
+    n_workers: int,
+    working_bytes: int | None,
+    timer: PhaseTimer,
+) -> None:
+    """Scan the planes band by band, then write every tier from the harvest."""
+    n_variants = int(planes.z.array.shape[0])
+    band = _scan_band_rows(planes.z, working_bytes)
+    _log_scan_plan(planes.z, band, n_workers, working_bytes)
+    with timer.phase("top_hits.scan"):
+        parts = _scan_candidates(
+            planes.z,
+            planes.se,
+            planes.imputed,
+            planes.eaf,
+            n_variants,
+            band,
+            top_hits.z_critical(max(thresholds)),
+            n_workers,
+        )
+    _write_scan_harvest(store_path, parts, thresholds, planes.imputed, planes.eaf, timer)
+
+
 def build_top_hit_indexes(
     store_path: str | Path,
     thresholds: tuple[float, ...] = TOP_HIT_THRESHOLDS,
     encoding: StoreEncoding | None = None,
     timer: PhaseTimer | None = None,
     n_workers: int = 1,
+    working_bytes: int | None = None,
 ) -> None:
     """(Re)build ranked top-hit arrays by scanning the stored dense matrix.
 
@@ -209,6 +297,18 @@ def build_top_hit_indexes(
     ``encoding`` is the store's declared plan; when omitted it is read from the
     release's manifest, never re-derived from the arrays.
 
+    A release whose ``format_version`` is not stored in the Zarr format this
+    build writes -- every `0.1.0`, which is Zarr v2 -- is refused before anything
+    is scanned or written (issue #313).
+
+    A band decodes at most ``working_bytes`` bytes, so a worker's working set
+    does not grow with the release's number of Analyses: the row count comes from
+    `banding.band_rows`, whose budget the validation passes share. Left as
+    ``None`` the budget is `banding.DECODED_BAND_BYTES`, read at call time; the
+    band and the budget it came from are logged. What the budget bounds is one
+    band's decoded cells, not a whole worker process, which also carries its
+    interpreter, its fork's copy of the parent and zarr's buffers.
+
     A caller that passes a ``PhaseTimer`` gets the scan and the write charged
     separately, which is how the re-encoding passes of a store-wide rewrite are
     told apart from this one (issue #144): 63.5 s on the migrated FinnGen R13
@@ -216,29 +316,10 @@ def build_top_hit_indexes(
     """
     timer = timer or PhaseTimer()
     store_path = Path(store_path)
-    if encoding is None:
-        encoding = StoreManifest.load(store_path).encoding
-    root = store_arrays.open_group(store_path / "data.zarr")
-    z_plane = DenseZPlane.open(root, encoding)
-    imputed_arr = root["imputed"] if "imputed" in root else None
-    eaf_plane = DenseEafPlane.open(root, encoding)
-    log.info(
-        "Top-hit index: scanning %d variants (n_workers=%d)",
-        int(z_plane.array.shape[0]),
-        n_workers,
-    )
-    with timer.phase("top_hits.scan"):
-        parts = _scan_candidates(
-            z_plane,
-            DenseSePlane.open(root, encoding),
-            imputed_arr,
-            eaf_plane,
-            int(z_plane.array.shape[0]),
-            max(int(z_plane.array.chunks[0]), 250_000),
-            top_hits.z_critical(max(thresholds)),
-            n_workers,
-        )
-    _write_scan_harvest(store_path, parts, thresholds, imputed_arr, eaf_plane, timer)
+    manifest = StoreManifest.load(store_path)
+    _refuse_unwritable_layout(store_path, manifest.format_version)
+    planes = _open_scan_planes(store_path, encoding or manifest.encoding)
+    _run_scan(store_path, planes, thresholds, n_workers, working_bytes, timer)
     log.info("Top-hit phase timings:\n%s", timer.format_report())
 
 
@@ -273,10 +354,10 @@ def write_top_hit_indexes_for_store(
     with log_phase(log, "Top-hit EAF gather"):
         eaf = _collect_top_hit_eaf(store_path, rows, cols, encoding, n_workers)
     if encoding.se.is_residual:
-        # The harvested `se` is what the source reported; the plane now holds a
-        # residual of it. ADR 0040 asks the index to carry what a query reads
-        # back, so re-read it through the plane rather than keep the un-encoded
-        # value the band-writer happened to still be holding.
+        # A residual plane holds codes, so the harvested `se` -- the source's
+        # value, or its `float16` view -- is not what a query decodes at that
+        # cell. ADR 0040 asks the index to carry what a query reads back, so
+        # re-read it through the plane (issue #355).
         log.info("Re-reading top-hit se through the residual plane")
         with log_phase(log, "Top-hit se re-read"):
             se = _collect_top_hit_se(store_path, rows, cols, encoding, n_workers)

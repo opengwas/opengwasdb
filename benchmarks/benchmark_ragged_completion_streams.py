@@ -342,21 +342,20 @@ class _PanelChromosome:
 
 
 def _panel(ld_dir: Path, ancestry: str) -> dict[str, _PanelChromosome]:
-    from opengwasdb.completion.ld_panel import (
-        canonical_panel_alid,
-        list_all_blocks,
-        list_chromosomes,
-    )
+    """Each chromosome's panel variants as completion places them: each row's ALID
+    (`LDBlock.alids`, an indel's spelt reference first) at the position completion
+    bounds it to a region by (`panel_positions`)."""
+    from opengwasdb.completion.block import panel_positions
+    from opengwasdb.completion.ld_panel import list_all_blocks, list_chromosomes
 
     out = {}
     for chromosome in list_chromosomes(ld_dir, ancestry):
         blocks = list_all_blocks(ld_dir, ancestry, chromosome)
         found: dict[str, int] = {}
         for block in blocks:
-            for snp in block.snp_ids:
-                alid = canonical_panel_alid(snp)
+            for alid, position in zip(block.alids, panel_positions(block).tolist(), strict=True):
                 if alid is not None:
-                    found.setdefault(alid, int(alid.split(":")[1]))
+                    found.setdefault(alid, position)
         out[chromosome] = _PanelChromosome(
             np.array(list(found), dtype=object),
             np.fromiter(found.values(), dtype=np.int64, count=len(found)),

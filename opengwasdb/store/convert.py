@@ -703,9 +703,13 @@ def _rewrite_manifest(
     data = json.loads(path.read_text(encoding="utf-8"))
     data["release_id"] = release_id
     data["created_at"] = now
-    # Stamped by the builders' one rule (spec §21.3): a 0.1.0 release carries no region
-    # table, so it converts to 0.2.0, as a build of it would be.
-    data["format_version"] = format_version_for(carries_regions="regions" in data)
+    # Stamped by the builders' one rule (spec §21.3). A 0.1.0 release carries no
+    # region table, and it sorts an indel's alleles with nothing to say which is the
+    # reference, so it converts to 0.2.0: its ALIDs are 0.2.0's, never 0.2.2's
+    # reference-first ones (ADR 0079).
+    data["format_version"] = format_version_for(
+        carries_regions="regions" in data, reference_first_indels=False
+    )
     provenance = {**data.get("provenance", {})}
     if component.kind in {"dense", "hybrid"} and dense_plane is not None:
         key = "dense" if component.kind == "dense" else "hybrid"

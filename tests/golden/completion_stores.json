@@ -74,7 +74,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.0",
+    "format_version": "0.2.2",
     "primary_layout": "dense",
     "provenance": {
      "builder": "opengwasdb.v0.1_dense_observed",
@@ -88,6 +88,23 @@
       "n_missing_off_panel": 0,
       "n_variants_new": 1,
       "n_variants_total": 12,
+      "panel_indels": {
+       "n_indels": 0,
+       "n_placed": 0,
+       "reference_from": "none",
+       "tables": [],
+       "unplaced": {
+        "effect_allele_not_an_allele": 0,
+        "identity_invalid": 0,
+        "no_effect_allele": 0,
+        "no_reference": 0
+       }
+      },
+      "panel_snvs_unplaced": {
+       "effect_allele_not_an_allele": 0,
+       "identity_invalid": 0,
+       "no_effect_allele": 0
+      },
       "pca_thresh": 0.9
      },
      "dense": {
@@ -905,7 +922,7 @@
    "n_missing_off_panel": 0,
    "n_variants": 12
   },
-  "written_by": "1ab2b09"
+  "written_by": "1ab2b09; format_version and the panel placement record #381 writes"
  },
  "ragged_besd": {
   "store": {
@@ -969,7 +986,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.0",
+    "format_version": "0.2.2",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_besd",
@@ -983,6 +1000,23 @@
       "n_missing": 3,
       "n_variants_new": 1,
       "n_variants_total": 4,
+      "panel_indels": {
+       "n_indels": 0,
+       "n_placed": 0,
+       "reference_from": "none",
+       "tables": [],
+       "unplaced": {
+        "effect_allele_not_an_allele": 0,
+        "identity_invalid": 0,
+        "no_effect_allele": 0,
+        "no_reference": 0
+       }
+      },
+      "panel_snvs_unplaced": {
+       "effect_allele_not_an_allele": 0,
+       "identity_invalid": 0,
+       "no_effect_allele": 0
+      },
       "pca_thresh": 0.9
      },
      "n_analyses": 2,
@@ -1946,7 +1980,7 @@
    "n_missing": 3,
    "n_variants": 4
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes"
  },
  "ragged_nothing_imputed": {
   "store": {
@@ -2012,7 +2046,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.0",
+    "format_version": "0.2.2",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_ssf",
@@ -2026,6 +2060,23 @@
       "n_missing": 0,
       "n_variants_new": 0,
       "n_variants_total": 600,
+      "panel_indels": {
+       "n_indels": 0,
+       "n_placed": 0,
+       "reference_from": "none",
+       "tables": [],
+       "unplaced": {
+        "effect_allele_not_an_allele": 0,
+        "identity_invalid": 0,
+        "no_effect_allele": 0,
+        "no_reference": 0
+       }
+      },
+      "panel_snvs_unplaced": {
+       "effect_allele_not_an_allele": 0,
+       "identity_invalid": 0,
+       "no_effect_allele": 0
+      },
       "pca_thresh": 0.9,
       "se_exceptions": {
        "analyses": [
@@ -3291,7 +3342,7 @@
   "totals": {
    "n_imputed": 0
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes"
  },
  "ragged_off_grid": {
   "store": {
@@ -3357,7 +3408,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.0",
+    "format_version": "0.2.2",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_ssf",
@@ -3371,6 +3422,23 @@
       "n_missing": 2,
       "n_variants_new": 4,
       "n_variants_total": 604,
+      "panel_indels": {
+       "n_indels": 0,
+       "n_placed": 0,
+       "reference_from": "none",
+       "tables": [],
+       "unplaced": {
+        "effect_allele_not_an_allele": 0,
+        "identity_invalid": 0,
+        "no_effect_allele": 0,
+        "no_reference": 0
+       }
+      },
+      "panel_snvs_unplaced": {
+       "effect_allele_not_an_allele": 0,
+       "identity_invalid": 0,
+       "no_effect_allele": 0
+      },
       "pca_thresh": 0.9,
       "se_exceptions": {
        "analyses": [
@@ -4636,7 +4704,7 @@
   "totals": {
    "n_imputed": 10
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes"
  },
  "ragged_out_of_range": {
   "store": {
@@ -4702,7 +4770,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.0",
+    "format_version": "0.2.2",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_ssf",
@@ -4716,6 +4784,23 @@
       "n_missing": 0,
       "n_variants_new": 12,
       "n_variants_total": 612,
+      "panel_indels": {
+       "n_indels": 0,
+       "n_placed": 0,
+       "reference_from": "none",
+       "tables": [],
+       "unplaced": {
+        "effect_allele_not_an_allele": 0,
+        "identity_invalid": 0,
+        "no_effect_allele": 0,
+        "no_reference": 0
+       }
+      },
+      "panel_snvs_unplaced": {
+       "effect_allele_not_an_allele": 0,
+       "identity_invalid": 0,
+       "no_effect_allele": 0
+      },
       "pca_thresh": 0.9,
       "se_exceptions": {
        "analyses": [
@@ -5983,7 +6068,7 @@
   "totals": {
    "n_imputed": 16
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes"
  },
  "ragged_overlap": {
   "store": {
@@ -6048,7 +6133,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.1",
+    "format_version": "0.2.2",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_besd",
@@ -6062,6 +6147,23 @@
       "n_missing": 1,
       "n_variants_new": 2,
       "n_variants_total": 7,
+      "panel_indels": {
+       "n_indels": 0,
+       "n_placed": 0,
+       "reference_from": "none",
+       "tables": [],
+       "unplaced": {
+        "effect_allele_not_an_allele": 0,
+        "identity_invalid": 0,
+        "no_effect_allele": 0,
+        "no_reference": 0
+       }
+      },
+      "panel_snvs_unplaced": {
+       "effect_allele_not_an_allele": 0,
+       "identity_invalid": 0,
+       "no_effect_allele": 0
+      },
       "pca_thresh": 0.9
      },
      "n_analyses": 1,
@@ -6274,7 +6376,7 @@
      "shard": [
       7
      ],
-     "values": "4218ba0c456af75fc529e1e803cd5494ab780621da0efa55176a003d86123a49",
+     "values": "be2f4f846b7964e6f1f2d95caf4eed954f615bb214250a294d77cecbb5e5d434",
      "zarr_format": 3
     },
     "data.zarr/ragged/imputed": {
@@ -6512,7 +6614,7 @@
      "shard": [
       6
      ],
-     "values": "3fbf182a570eb06706b3baeed428958f3b6b85d6287e297dbc70426f6e116d3e",
+     "values": "9acc477ab62faf518d1629558560e4a744982c638185b477b15c3c5c0a568253",
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_04/imputed": {
@@ -6710,7 +6812,7 @@
      "shard": [
       6
      ],
-     "values": "3fbf182a570eb06706b3baeed428958f3b6b85d6287e297dbc70426f6e116d3e",
+     "values": "9acc477ab62faf518d1629558560e4a744982c638185b477b15c3c5c0a568253",
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_06/imputed": {
@@ -6908,7 +7010,7 @@
      "shard": [
       5
      ],
-     "values": "2ffbd5b3c0eac4559ab398e19b11bff746211e3f04fa71abd8b5c4806d3babb9",
+     "values": "65df05ee0f4060edfa17577d648e6dbd1793e99e22a22c050bc76f1d74b334e6",
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_08/imputed": {
@@ -7030,7 +7132,7 @@
    "n_missing": 1,
    "n_variants": 7
   },
-  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3)"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); re-derived at ea81c4a from the panel writer that names each row's A1 its EA; format_version and the panel placement record #381 writes"
  },
  "ragged_panel_only_eaf": {
   "store": {
@@ -7095,7 +7197,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.1",
+    "format_version": "0.2.2",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_ssf",
@@ -7109,6 +7211,23 @@
       "n_missing": 0,
       "n_variants_new": 1,
       "n_variants_total": 9,
+      "panel_indels": {
+       "n_indels": 0,
+       "n_placed": 0,
+       "reference_from": "none",
+       "tables": [],
+       "unplaced": {
+        "effect_allele_not_an_allele": 0,
+        "identity_invalid": 0,
+        "no_effect_allele": 0,
+        "no_reference": 0
+       }
+      },
+      "panel_snvs_unplaced": {
+       "effect_allele_not_an_allele": 0,
+       "identity_invalid": 0,
+       "no_effect_allele": 0
+      },
       "pca_thresh": 0.99
      },
      "eaf_orientation": {
@@ -8116,7 +8235,7 @@
    }
   },
   "totals": {},
-  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3)"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); format_version and the panel placement record #381 writes"
  },
  "ragged_residual": {
   "store": {
@@ -8182,7 +8301,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.0",
+    "format_version": "0.2.2",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_ssf",
@@ -8196,6 +8315,23 @@
       "n_missing": 2,
       "n_variants_new": 4,
       "n_variants_total": 604,
+      "panel_indels": {
+       "n_indels": 0,
+       "n_placed": 0,
+       "reference_from": "none",
+       "tables": [],
+       "unplaced": {
+        "effect_allele_not_an_allele": 0,
+        "identity_invalid": 0,
+        "no_effect_allele": 0,
+        "no_reference": 0
+       }
+      },
+      "panel_snvs_unplaced": {
+       "effect_allele_not_an_allele": 0,
+       "identity_invalid": 0,
+       "no_effect_allele": 0
+      },
       "pca_thresh": 0.9,
       "se_exceptions": {
        "analyses": [
@@ -9461,7 +9597,7 @@
   "totals": {
    "n_imputed": 10
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes"
  },
  "ragged_trait_less": {
   "store": {
@@ -9526,7 +9662,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.1",
+    "format_version": "0.2.2",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_besd",
@@ -9540,6 +9676,23 @@
       "n_missing": 0,
       "n_variants_new": 1,
       "n_variants_total": 6,
+      "panel_indels": {
+       "n_indels": 0,
+       "n_placed": 0,
+       "reference_from": "none",
+       "tables": [],
+       "unplaced": {
+        "effect_allele_not_an_allele": 0,
+        "identity_invalid": 0,
+        "no_effect_allele": 0,
+        "no_reference": 0
+       }
+      },
+      "panel_snvs_unplaced": {
+       "effect_allele_not_an_allele": 0,
+       "identity_invalid": 0,
+       "no_effect_allele": 0
+      },
       "pca_thresh": 0.9
      },
      "n_analyses": 1,
@@ -10508,6 +10661,6 @@
    "n_missing": 0,
    "n_variants": 6
   },
-  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3)"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); format_version and the panel placement record #381 writes"
  }
 }

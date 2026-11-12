@@ -994,12 +994,13 @@ def _augment_target(store_path: str | Path, force: bool) -> tuple[Any, Path, Pat
     from opengwasdb.store.open import WRITTEN_FORMAT_VERSIONS
 
     store = open_store(store_path)
+    # Any release this build writes: 0.2.1 adds a region table and 0.2.2 spells an
+    # indel's ALID reference first (ADR 0079), neither the layout the index is in.
     if store.manifest.format_version not in WRITTEN_FORMAT_VERSIONS:
         raise VariantIndexError(
             f"{store_path}: format_version is {store.manifest.format_version!r}; the index "
             f"is added to a release this build writes ({', '.join(WRITTEN_FORMAT_VERSIONS)}). "
-            "Convert a 0.1.0 release first with scripts/convert_store_to_0_2_0.py, as "
-            "completion does."
+            "Convert a 0.1.0 release first with scripts/convert_store_to_0_2_0.py."
         )
     ragged = store.data_path / "ragged"
     if not ragged.exists():

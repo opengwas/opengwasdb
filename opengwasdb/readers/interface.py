@@ -8,7 +8,8 @@ assembly unless the reader was opened aligned to another:
 
 - `stream_variants`, every variant, for a builder's union-variant pass;
 - `stream_associations`, one association per row, for Variant Routing's Pass 2;
-- `stream_batches`, the same associations as columns, for a Ragged build;
+- `stream_batches`, the same associations as columns with each row's ALID,
+  for a Ragged build;
 - `stream_metric_chunks`, identity and statistics in blocks, for the resolver;
 - `extract_at_sites`, A1 frequency and SE at requested sites, for ancestry
   assignment and phenotype-SD estimation.
@@ -17,15 +18,24 @@ Every reader presents them from its rows through `opengwasdb.readers.rows`, so
 each is oriented to A1 by one rule. The interface is structural
 (`typing.Protocol`), not an ABC: every reader and `FakeReader` satisfy it
 without a shared base class.
+
+A reader may also offer `stream_association_batches` (`BatchedReader`, issue
+#318): its associations as `AssociationBatch` columns, parsed a block at a
+time rather than built one association at a time. Pass 2 routes a reader's
+batches when it offers them (`association_batches`), and its associations one
+at a time otherwise. The per-row stream stays the reference: a reader's
+batches hold exactly its associations, in order, bit for bit, and fill the
+same `StreamTally`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
+import math
+from collections.abc import Iterable, Iterator, Sequence
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -115,20 +125,20 @@ def parse_imputation_score(value: str | None, *, declared: bool) -> ImputationSc
 
 
 class ReferenceAllele(StrEnum):
-    """Which of a row's two alleles its source declares to be the genome's reference.
+    """Whether a tabular source's `ref` column is the genome's reference allele.
 
-    Declared by the format, never inferred: GWAS-VCF's `REF` and FinnGen's
-    `ref` are the reference allele (`REF`, the row's own `ref`), while
-    GWAS-SSF, BESD and an effect/other Column Map name an effect allele and an
-    other one, which need not be the reference (`UNDECLARED`). `ALT` is a row
-    whose `alt` its source declares the reference. Association Admission reads
-    it only to tell the two alleles of an indel apart when an insertion and a
-    deletion share one ALID (issue #357).
+    Declared, never inferred: a Column Map's allele convention says it (`REF`
+    for a `ref_alt_effect_is_alt` map such as FinnGen's, `UNDECLARED` for one
+    that names an effect allele and another that need not be the reference),
+    and `tabular.declared_reference` turns it into the `DeclaredReference` the
+    read places indels by. An indel's ALID is formed from the declaration when
+    the row is read (ADR 0079), and one whose source declares none is dropped
+    there. Every other reader applies its format's declaration as it reads a
+    row, and no association or batch carries it (#318).
     """
 
     UNDECLARED = "undeclared"
     REF = "ref"
-    ALT = "alt"
 
     @property
     def declared(self) -> bool:
@@ -141,10 +151,11 @@ class ReaderAssociation:
     """One source association's position, effect, and precision.
 
     `ref`/`alt` are the source's own allele labelling, case included, not
-    reordered to canonical A1/A2 -- `z` is already sign-corrected to the
-    A1 = min(ref, alt) convention every reader in this package follows, the two
-    compared upper-cased (`opengwasdb.variants.normalise.identity_allele`, spec
-    §4: a lower-case base is the same base). `z` is NaN for a source row that
+    reordered to canonical A1/A2 -- `z` is already sign-corrected to the ALID's
+    A1 every reader in this package forms (`alid_alleles`: the two sorted, or an
+    indel's reference allele, which is then `ref`), the two compared upper-cased
+    (`opengwasdb.variants.normalise.identity_allele`, spec §4: a lower-case base
+    is the same base). `z` is NaN for a source row that
     reports no effect: such a row is not an association, and Association
     Admission drops and logs it (`effect_missing`). `eaf` follows `z`: it is
     the frequency of the *stored* effect allele, so a reader that negated `z`
@@ -156,9 +167,6 @@ class ReaderAssociation:
     source file itself (issue #17): it is Analytical Metadata a reader
     receives from its caller (ultimately the build manifest, validated
     against issue #16's schema) and attaches to every association it yields.
-    `reference` says which of `ref` and `alt` the source declares to be the
-    reference allele, if it declares one. It is keyword-only and has no
-    default: every reader states its format's declaration.
     """
 
     chromosome: str
@@ -171,7 +179,6 @@ class ReaderAssociation:
     eaf: float | None = None
     # Present only with an independent provider-backed declaration (#175).
     imputation_score: ImputationScore = ImputationScore()
-    reference: ReferenceAllele = field(kw_only=True)
 
     def __post_init__(self) -> None:
         # An unusable `se` (NaN, not positive, not finite) is the source's, as
@@ -226,11 +233,12 @@ class SiteMetrics:
 class StreamTally:
     """What one Source Reader stream did to the rows it read, for Association
     Admission to record (issue #357): the rows it dropped because no ALID can
-    spell their identity (#365), and the reported frequencies it made absent
-    (D7)."""
+    spell their identity (#365), the reported frequencies it made absent (D7),
+    and the indels a GWAS-SSF harmoniser code placed (#381)."""
 
     faults: IdentityFaults = field(default_factory=IdentityFaults)
     frequencies: FrequencyTally = field(default_factory=FrequencyTally)
+    indel_rows_kept_by_hm_code: int = 0
 
 
 class SourceReader(Protocol):
@@ -291,6 +299,160 @@ class SourceReader(Protocol):
         other reads the whole source, with the same answer.
         """
         ...
+
+
+@dataclass(frozen=True)
+class AssociationBatch:
+    """A block of one Source Reader's associations as columns, before routing.
+
+    The columnar form of `ReaderAssociation`: the same rows, in the reader's
+    order, each column as an association holds it. ``chromosome`` and
+    ``position`` are the identity rule's; ``ref`` and ``alt`` are the source's
+    own spelling, case included (ADR 0075); ``z`` and ``eaf`` are on A1;
+    ``se`` is the reported one, possibly unusable. ``eaf`` and
+    ``imputation_score`` are NaN where the association has none, and
+    ``imputation_status`` is each score's status. Variant Routing's Pass 2
+    routes one, and Association Admission judges it before any row is matched.
+
+    Unlike a Ragged build's `ReaderBatch`, it names no ALID and no rsid: Pass 2
+    matches a row by its Routing Key, so it never forms either. Every column
+    is positionally parallel, and a ragged batch is refused.
+    """
+
+    chromosome: Sequence[str]
+    position: Sequence[int]
+    ref: Sequence[str]
+    alt: Sequence[str]
+    z: np.ndarray
+    se: np.ndarray
+    eaf: np.ndarray
+    imputation_score: np.ndarray
+    imputation_status: np.ndarray
+
+    def __post_init__(self) -> None:
+        # One row filtered against another batch's mask either raises or, worse,
+        # silently keeps the wrong rows, so a ragged batch is refused (stores #175).
+        lengths = {len(values) for values in vars(self).values()}
+        if len(lengths) != 1:
+            raise ValueError(
+                f"association batch columns hold {sorted(lengths)} row(s); every "
+                "column must hold the batch's rows"
+            )
+
+    def __len__(self) -> int:
+        return len(self.z)
+
+    def take(self, keep: np.ndarray) -> AssociationBatch:
+        """The rows the boolean mask ``keep`` selects, in order.
+
+        A column held as a list stays a list, so a batch built one association
+        at a time keeps the Python values it was built from.
+        """
+        if bool(keep.all()):
+            return self
+        at = np.flatnonzero(keep)
+        taken = {name: _taken(values, keep, at) for name, values in vars(self).items()}
+        return replace(self, **taken)
+
+
+def _taken(values: Any, keep: np.ndarray, at: np.ndarray) -> Any:
+    if isinstance(values, np.ndarray):
+        return values[keep]
+    return [values[index] for index in at.tolist()]
+
+
+def batched(
+    associations: Iterable[ReaderAssociation], *, rows: int, scores: bool = True
+) -> Iterator[AssociationBatch]:
+    """``associations`` as `AssociationBatch`es of up to ``rows`` rows, in order.
+
+    How Pass 2 reads a reader that offers no batches of its own. Its columns
+    are lists, filled one association at a time; ``scores=False`` leaves each
+    association's imputation score uncollected and the batch carries every
+    row's as undeclared, which saves Pass 2 about a fifth of its per-row time
+    when the Analysis declared no score.
+    """
+    chroms: list[str] = []
+    poss: list[int] = []
+    refs: list[str] = []
+    alts: list[str] = []
+    zs: list[float] = []
+    ses: list[float] = []
+    eafs: list[float] = []
+    values: list[float | None] = []
+    statuses: list[ImputationScoreStatus] = []
+    for assoc in associations:
+        chroms.append(assoc.chromosome)
+        poss.append(assoc.position)
+        refs.append(assoc.ref)
+        alts.append(assoc.alt)
+        zs.append(assoc.z)
+        ses.append(assoc.se)
+        eafs.append(math.nan if assoc.eaf is None else assoc.eaf)
+        if scores:
+            values.append(assoc.imputation_score.value)
+            statuses.append(assoc.imputation_score.status)
+        if len(zs) >= rows:
+            yield _listed(chroms, poss, refs, alts, (zs, ses, eafs), values, statuses)
+            chroms, poss, refs, alts, zs, ses, eafs = [], [], [], [], [], [], []
+            values, statuses = [], []
+    if zs:
+        yield _listed(chroms, poss, refs, alts, (zs, ses, eafs), values, statuses)
+
+
+def _listed(
+    chroms: list[str],
+    poss: list[int],
+    refs: list[str],
+    alts: list[str],
+    statistics: tuple[list[float], list[float], list[float]],
+    values: list[float | None],
+    statuses: list[ImputationScoreStatus],
+) -> AssociationBatch:
+    """One batch from its lists; with no statuses collected, every score undeclared."""
+    zs, ses, eafs = statistics
+    if statuses:
+        score = np.asarray(values, dtype=np.float64)
+        status = np.asarray(statuses, dtype=object)
+    else:
+        score = np.full(len(zs), np.nan)
+        status = np.full(len(zs), ImputationScoreStatus.UNDECLARED, dtype=object)
+    return AssociationBatch(
+        chromosome=chroms,
+        position=poss,
+        ref=refs,
+        alt=alts,
+        z=np.asarray(zs, dtype=np.float64),
+        se=np.asarray(ses, dtype=np.float64),
+        eaf=np.asarray(eafs, dtype=np.float64),
+        imputation_score=score,
+        imputation_status=status,
+    )
+
+
+@runtime_checkable
+class BatchedReader(Protocol):
+    """A Source Reader that also reads its associations as columns (#318).
+
+    `stream_association_batches` yields `stream_associations`' associations as
+    `AssociationBatch`es: the same rows in the same order, bit for bit, with
+    the same rows dropped and the same ``tally``. The per-row stream is the
+    reference the batches are held to.
+    """
+
+    def stream_association_batches(
+        self, tally: StreamTally | None = None
+    ) -> Iterator[AssociationBatch]: ...
+
+
+def association_batches(
+    reader: SourceReader, tally: StreamTally
+) -> Iterator[AssociationBatch] | None:
+    """``reader``'s own association batches, or ``None`` for a reader that offers
+    none, which Pass 2 reads one association at a time."""
+    if isinstance(reader, BatchedReader):
+        return reader.stream_association_batches(tally)
+    return None
 
 
 def site_metrics_arrays(sites: dict[str, SiteMetrics]) -> tuple[np.ndarray, np.ndarray]:

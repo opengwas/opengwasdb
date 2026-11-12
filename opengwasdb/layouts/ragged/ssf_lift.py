@@ -29,8 +29,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -85,27 +86,31 @@ class SitePlacement:
 
     ``alid`` and ``reoriented`` are `place_sites`'. ``ambiguous`` holds the
     Routing Keys both a GRCh38 and a lifted source declare. ``n_unmapped`` is
-    the number of lifted sites the chain placed nowhere.
+    the number of lifted sites the chain placed nowhere, and ``off_primary`` the
+    sites it placed on an alt, random or unplaced contig (#376).
     """
 
     alid: dict[SourceKey, str]
     reoriented: set[SourceKey]
     ambiguous: frozenset[str]
     n_unmapped: int
+    off_primary: frozenset[SourceKey] = frozenset()
 
     def provenance(self, chain_file: Path | None) -> dict[str, object]:
         """The `provenance.lift` block, as `build-ragged-besd` records its lift.
 
         A lift here is never checked against a reference, so `reference` is
         ``null`` and its counts are too: an unchecked lift does not read as a
-        checked one. ``n_lifted`` counts the sites the chain placed, the
-        ambiguous ones among them.
+        checked one. ``n_lifted`` counts the sites the chain mapped, those it
+        placed off the primary assembly (``n_off_primary``) and the ambiguous
+        ones among them.
         """
         return {
             "source_build": "hg19",
             "chain_file": str(chain_file) if chain_file is not None else None,
-            "n_lifted": len(self.alid),
+            "n_lifted": len(self.alid) + len(self.off_primary),
             "n_unmapped": self.n_unmapped,
+            "n_off_primary": len(self.off_primary),
             "n_ambiguous": len(self.ambiguous),
             "reference": None,
             "n_alleles_verified": None,
@@ -131,11 +136,16 @@ def place_held_sources(
         failure_threshold=options.failure_threshold,
     )
     ambiguous = _both_builds_declare(
-        [batches for lifted, batches in held if not lifted], placement.alid.keys()
+        [batches for lifted, batches in held if not lifted],
+        placement.alid.keys() | placement.off_primary,
     )
     log_cross_assembly_drop(len(ambiguous))
     return SitePlacement(
-        placement.alid, placement.reoriented, frozenset(ambiguous), len(sites) - len(placement.alid)
+        placement.alid,
+        placement.reoriented,
+        frozenset(ambiguous),
+        len(sites) - len(placement.alid) - len(placement.off_primary),
+        frozenset(placement.off_primary),
     )
 
 
@@ -184,14 +194,15 @@ class PlacedBatch:
 
     ``batch`` holds the kept rows, their ALIDs on GRCh38 and their statistics
     on its A1. ``source_alid`` is each kept row's ALID as its own source spelt
-    it, which the rsid harvest compares by. ``unmapped`` and ``ambiguous`` name
-    the dropped rows by the source key Admission logs.
+    it, which the rsid harvest compares by. ``unmapped``, ``ambiguous`` and
+    ``off_primary`` name the dropped rows by the source key Admission logs.
     """
 
     batch: ReaderBatch
     source_alid: np.ndarray
     unmapped: list[str]
     ambiguous: list[str]
+    off_primary: list[str] = field(default_factory=list)
 
 
 def place_batch(batch: ReaderBatch, lifted: bool, placement: SitePlacement) -> PlacedBatch:
@@ -199,18 +210,19 @@ def place_batch(batch: ReaderBatch, lifted: bool, placement: SitePlacement) -> P
     row of an ambiguous Routing Key dropped, and a GRCh38 source's rows otherwise
     untouched."""
     if not lifted and not placement.ambiguous:
-        return PlacedBatch(batch, batch.alid, [], [])
+        return PlacedBatch(batch, batch.alid, [], [], [])
     sites = _sites(batch)
     ambiguous = [
         i for i, site in enumerate(sites) if routing_key(site) in placement.ambiguous
     ]
-    moves, unmapped = _moves(sites, set(ambiguous), placement) if lifted else ({}, [])
+    moved = _moves(sites, set(ambiguous), placement) if lifted else _Moves({}, [], [])
+    moves, unmapped, off_primary = moved.moves, moved.unmapped, moved.off_primary
     alid = batch.alid.copy()
     swapped = np.zeros(len(sites), dtype=bool)
-    for i, (moved, reoriented) in moves.items():
-        alid[i], swapped[i] = moved, reoriented
+    for i, (moved_alid, reoriented) in moves.items():
+        alid[i], swapped[i] = moved_alid, reoriented
     keep = np.ones(len(sites), dtype=bool)
-    keep[ambiguous + unmapped] = False
+    keep[ambiguous + unmapped + off_primary] = False
     z, eaf = swap(swapped, batch.z, batch.eaf)
     placed = replace(
         batch,
@@ -218,27 +230,38 @@ def place_batch(batch: ReaderBatch, lifted: bool, placement: SitePlacement) -> P
         flipped=batch.flipped ^ swapped,
         z=z,
         eaf=eaf,
-        ref_first=None if batch.ref_first is None else batch.ref_first ^ swapped,
     ).take(keep)
     return PlacedBatch(
         placed, batch.alid[keep], batch.keys_at(np.array(unmapped, dtype=np.int64)),
         batch.keys_at(np.array(ambiguous, dtype=np.int64)),
+        batch.keys_at(np.array(off_primary, dtype=np.int64)),
     )
+
+
+class _Moves(NamedTuple):
+    """`_moves`' result: each moved row's ALID and orientation, and the rows the
+    chain placed nowhere or off the primary assembly."""
+
+    moves: dict[int, tuple[str, bool]]
+    unmapped: list[int]
+    off_primary: list[int]
 
 
 def _moves(
     sites: list[SourceKey], skip: set[int], placement: SitePlacement
-) -> tuple[dict[int, tuple[str, bool]], list[int]]:
-    """Each lifted row's ALID on GRCh38 and whether the lift re-oriented it, and the
-    rows the chain placed nowhere. A row in ``skip`` is dropped already."""
+) -> _Moves:
+    """Each lifted row's ALID on GRCh38 and whether the lift re-oriented it, the
+    rows the chain placed nowhere, and those it placed off the primary assembly.
+    A row in ``skip`` is dropped already."""
     moves: dict[int, tuple[str, bool]] = {}
     unmapped: list[int] = []
+    off_primary: list[int] = []
     for i, site in enumerate(sites):
         if i in skip:
             continue
         moved = placement.alid.get(site)
         if moved is None:
-            unmapped.append(i)
+            (off_primary if site in placement.off_primary else unmapped).append(i)
         else:
             moves[i] = (moved, site in placement.reoriented)
-    return moves, unmapped
+    return _Moves(moves, unmapped, off_primary)

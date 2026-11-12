@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import gzip
 from pathlib import Path
 from shutil import copytree
 from typing import TYPE_CHECKING
 
 import pytest
 import shared_releases
+
+from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 
 if TYPE_CHECKING:
     from test_ragged_residual_completion import RaggedResidualScenario
@@ -39,6 +43,21 @@ SOURCE_ROWS = [
 ]
 
 
+#: Test modules whose every GWAS-SSF read is also made as batches and compared
+#: (`batch_fixtures.shadow_gwas_ssf`, #319): the ones that write their own sources.
+_SHADOWED_MODULES = {"test_readers", "test_effect_recovery"}
+
+
+@pytest.fixture(autouse=True)
+def _gwas_ssf_batches_match_the_associations(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if request.module.__name__ in _SHADOWED_MODULES:
+        import batch_fixtures
+
+        batch_fixtures.shadow_gwas_ssf(monkeypatch)
+
+
 @pytest.fixture
 def source_path(tmp_path: Path) -> Path:
     path = tmp_path / "associations.tsv"
@@ -58,6 +77,74 @@ def dense_store_path(tmp_path: Path, dense_fixture_store: Path) -> Path:
     return Path(copytree(dense_fixture_store, tmp_path / "store.opengwasdb"))
 
 
+@pytest.fixture
+def ragged_store_path(tmp_path):
+    """A minimal Ragged Observed-Only store (SSF ingestion path)."""
+    header = [
+        "chromosome", "base_pair_location", "effect_allele", "other_allele",
+        "beta", "standard_error", "rsid",
+    ]
+    rows = [
+        {"chromosome": "1", "base_pair_location": 100, "effect_allele": "A",
+         "other_allele": "G", "beta": 0.3, "standard_error": 0.1, "rsid": "rs1"},
+        {"chromosome": "1", "base_pair_location": 200, "effect_allele": "A",
+         "other_allele": "G", "beta": -0.2, "standard_error": 0.1, "rsid": "rs2"},
+    ]
+    filtered_dir = tmp_path / "filtered"
+    filtered_dir.mkdir()
+    with gzip.open(filtered_dir / "t1.tsv.gz", "wt", encoding="utf-8") as fh:
+        fh.write("\t".join(header) + "\n")
+        for row in rows:
+            fh.write("\t".join(str(row[c]) for c in header) + "\n")
+
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "analysis_index\tanalysis_id\ttrait_id\t"
+        "analysis_label\ttrait_ontology_id\ttrait_ontology_label\ttrait_chr\ttrait_bp\t"
+        "n\ttissue\tcontext\tmhc\tfiltered_file\tsource_genome_build\n"
+        "0\tt1\tT1\tGENE1\tENSEMBL:ENSG1\tEnsembl\t1\t150\t1000\tBlood\t\tFALSE\tt1.tsv.gz\tGRCh38\n",
+        encoding="utf-8",
+    )
+    store_path = tmp_path / "ragged.opengwasdb"
+    build_ragged_from_ssf(
+        manifest, filtered_dir, store_path, store_id="fixture", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
+    return store_path
+
+
+@pytest.fixture
+def hybrid_store_path(tmp_path):
+    """A minimal Hybrid store: two on-panel analyses, so its Dense Component
+    (dense_component_path) is where index.sqlite/analyses.tsv actually live."""
+    header = (
+        "##fileformat=VCFv4.2\n"
+        "##FORMAT=<ID=ES,Number=A,Type=Float,Description=\"Effect size\">\n"
+        "##FORMAT=<ID=SE,Number=A,Type=Float,Description=\"Standard error\">\n"
+        "##SAMPLE=<ID=S,StudyType=Continuous>\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS\n"
+    )
+    vcf_a = tmp_path / "trait_a.vcf"
+    vcf_a.write_text(header + "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n", encoding="utf-8")
+    vcf_b = tmp_path / "trait_b.vcf"
+    vcf_b.write_text(header + "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.4\n", encoding="utf-8")
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
+        "\toriginal_sd_method\toriginal_sd\n"
+        f"trait_a\t{vcf_a}\tTrait A\t1000\tsd\tdeclared_standardised\t\n"
+        f"trait_b\t{vcf_b}\tTrait B\t1000\tsd\tdeclared_standardised\t\n",
+        encoding="utf-8",
+    )
+    panel = tmp_path / "panel.txt"
+    panel.write_text("1:100000:A:G\n", encoding="utf-8")
+    store_path = tmp_path / "hybrid.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        manifest, store_path, reference_panel=panel, store_id="fixture", release_id="v1"
+    )
+    return store_path
+
+
 @pytest.fixture(scope="session")
 def residual_ragged_scenario(
     tmp_path_factory: pytest.TempPathFactory,
@@ -72,3 +159,20 @@ def panel_only_eaf_ragged_store(tmp_path_factory: pytest.TempPathFactory) -> Pat
     return shared_releases.panel_only_eaf_ragged(
         tmp_path_factory.mktemp("panel-only-eaf-ragged")
     )
+
+
+@pytest.fixture(scope="module")
+def small_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A release whose EAF exception table crosses pages, with a subset of every
+    variant: its table is 400 entries over a grid of 4,000 variants (#387, #314)."""
+    from eaf_tables import SMALL_VARIANTS, build_table_store, publish_every_variant
+
+    root = tmp_path_factory.mktemp("eaf-small")
+    store = build_table_store(root / "store.opengwasdb", SMALL_VARIANTS, "eaf-small")
+    return publish_every_variant(store, SMALL_VARIANTS)
+
+
+@pytest.fixture
+def small_copy(tmp_path: Path, small_seed: Path) -> Path:
+    """A copy of the small release, so a test cannot change the module's."""
+    return copytree(small_seed, tmp_path / "store.opengwasdb")

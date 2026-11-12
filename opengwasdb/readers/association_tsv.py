@@ -20,14 +20,16 @@ The columns, by name (case-insensitive; the first alias present wins):
 
 A `.csv` (or `.csv.gz`) file is comma-delimited, any other tab-delimited. The
 format names no reference allele: its effect and other alleles need not be the
-genome's REF and ALT (`interface.ReferenceAllele.UNDECLARED`). A cell of `.`, `NA`, `NaN`,
-`nan` or nothing is missing.
+genome's REF and ALT. A cell of `.`, `NA`, `NaN`, `nan` or nothing is missing.
 
 A row it cannot read refuses the whole read (`SourceRowError`): a missing
 required field, or a number that is not one. A row whose identity no ALID can
-spell (a missing chromosome, an allele outside A, C, G and T) is not an
-unreadable row but a malformed one (#365): with a ``tally`` it is left out and
-named there, for Association Admission to log; without one it is refused.
+spell (a missing chromosome, an allele outside A, C, G and T, or an indel,
+since the format declares no reference allele to spell first, ADR 0079) is
+not an unreadable row but a malformed one (#365): with a ``tally`` it is left
+out and named there, for Association Admission to log. Without one an indel
+is left out, as every reader's projections leave it, and any other malformed
+row is refused.
 """
 
 from __future__ import annotations
@@ -52,14 +54,16 @@ from opengwasdb.readers.tabular import (
 )
 from opengwasdb.stats import parse_af
 from opengwasdb.variants import VariantNormalisationError, orient_to_canonical
-from opengwasdb.variants.normalise import MalformedIdentity, Orientation, identity_fault
+from opengwasdb.variants.normalise import (
+    MalformedIdentity,
+    Orientation,
+    UndeclaredReference,
+    identity_fault,
+)
 
 __all__ = ["ASSOCIATION_TSV_CAPABILITY", "AssociationTsvReader", "SourceRowError"]
 
 ASSOCIATION_TSV_CAPABILITY = "opengwasdb.association-tsv"
-
-#: The format names no reference allele.
-_REFERENCE = interface.ReferenceAllele.UNDECLARED
 
 #: The sites an extraction asks for.
 _Sites = Iterable[str]
@@ -164,10 +168,14 @@ def _read_row(cells: _Cells, tally: interface.StreamTally | None) -> SourceRow |
     fault = _identity_fault(cells)
     if fault is not None:
         key, malformed = fault
-        if tally is None:
-            raise SourceRowError(f"row {cells.number}: {malformed}") from malformed
-        tally.faults.record(key, malformed)
-        return None
+        if tally is not None:
+            tally.faults.record(key, malformed)
+            return None
+        # An indel is a well-formed row the format cannot place (ADR 0079): a
+        # projection with no tally leaves it out, as every reader's does.
+        if isinstance(malformed, UndeclaredReference):
+            return None
+        raise SourceRowError(f"row {cells.number}: {malformed}") from malformed
 
     orientation, effect_allele, other_allele = _orientation(cells)
     se, z, beta = _effect(cells)
@@ -203,6 +211,7 @@ def _orientation(cells: _Cells) -> tuple[Orientation, str, str]:
             position=position,
             source_effect_allele=effect_allele,
             source_other_allele=other_allele,
+            other_is_reference=False,
         )
     except VariantNormalisationError as exc:
         raise SourceRowError(f"row {cells.number}: {exc}") from exc
@@ -233,7 +242,7 @@ def _identity_fault(cells: _Cells) -> tuple[str, MalformedIdentity] | None:
     """
     chromosome, position = cells.raw(_CHROMOSOME), cells.raw(_POSITION)
     effect, other = cells.raw(_EFFECT_ALLELE), cells.raw(_OTHER_ALLELE)
-    fault = identity_fault(chromosome, effect, other)
+    fault = identity_fault(chromosome, effect, other, other_is_reference=False)
     if fault is None:
         return None
     return f"{chromosome}:{position}:{other}:{effect}", fault
@@ -257,10 +266,10 @@ class AssociationTsvReader:
     def stream_associations(
         self, tally: interface.StreamTally | None = None
     ) -> Iterator[interface.ReaderAssociation]:
-        return stream_associations(self._rows(tally), self.stored_effect_scale, _REFERENCE)
+        return stream_associations(self._rows(tally), self.stored_effect_scale)
 
     def stream_batches(self, tally: interface.StreamTally | None = None) -> Iterator[ReaderBatch]:
-        return stream_batches(self._rows(tally), _REFERENCE)
+        return stream_batches(self._rows(tally))
 
     def stream_variants(self) -> Iterator[interface.SourceVariant]:
         return stream_variants(self._rows())

@@ -32,7 +32,6 @@ from opengwasdb.readers import (
     GwasSsfReader,
     GwasVcfReader,
     ReaderAssociation,
-    ReferenceAllele,
     SiteMetrics,
     UnsignedZScoreError,
     af_only,
@@ -223,7 +222,6 @@ def _fake_reader() -> FakeReader:
                 z=-2.0,
                 se=0.5,
                 stored_effect_scale=StoredEffectScale.SD,
-                reference=ReferenceAllele.UNDECLARED,
             ),
             ReaderAssociation(
                 chromosome="1",
@@ -233,7 +231,6 @@ def _fake_reader() -> FakeReader:
                 z=2.0,
                 se=0.5,
                 stored_effect_scale=StoredEffectScale.SD,
-                reference=ReferenceAllele.UNDECLARED,
             ),
         ],
         sites={
@@ -279,7 +276,6 @@ def _malformed_fake_reader() -> FakeReader:
                 se=0.5,
                 stored_effect_scale=StoredEffectScale.SD,
                 eaf=1.5,
-                reference=ReferenceAllele.UNDECLARED,
             )
         ]
     )
@@ -946,7 +942,6 @@ def test_fake_reader_needs_no_bcftools_or_fixture_vcf():
                 z=1.0,
                 se=0.1,
                 stored_effect_scale=StoredEffectScale.SD,
-                reference=ReferenceAllele.UNDECLARED,
             )
         ]
     )
@@ -1002,34 +997,40 @@ def _write_metrics_fixture(path: Path, rows: list[str], header: str | None = Non
 # cells). A projection tested only on well-formed rows would not have been
 # tested at all.
 _METRICS_FIXTURE_ROWS = [
-    "1\t100\tA\tC\t0.10\t0.20\t0.30",
-    "1\t200\tC\tA\t0.11\t0.21\t0.31",
-    "1\t300\ta\tc\t0.12\t0.22\t0.32",
-    "chr1\t400\tA\tC\t0.13\t0.23\t0.33",
-    "1\t500\tA\tCG\t0.14\t0.24\t0.34",
-    "1\t0\tA\tC\t0.15\t0.25\t0.35",
-    "1\t600\tA\tA\t0.16\t0.26\t0.36",
+    "1\t100\tA\tC\t0.10\t0.20\t0.30\t10",
+    "1\t200\tC\tA\t0.11\t0.21\t0.31\t10",
+    "1\t300\ta\tc\t0.12\t0.22\t0.32\t10",
+    "chr1\t400\tA\tC\t0.13\t0.23\t0.33\t10",
+    # Deletions whose harmoniser code, 11 or 10, declares the other allele the
+    # reference (ADR 0079), and an indel whose code 12 declares none.
+    "1\t500\tA\tCG\t0.14\t0.24\t0.34\t11",
+    "1\t550\tA\tCG\t0.14\t0.24\t0.34\t10",
+    "1\t560\tA\tCG\t0.14\t0.24\t0.34\t12",
+    "1\t0\tA\tC\t0.15\t0.25\t0.35\t10",
+    "1\t600\tA\tA\t0.16\t0.26\t0.36\t10",
     "1\t700\tA\tC\t0.17\t0.27",
-    "1\t800\tA\tC\tNA\t0.28\t1.4",
-    "1\t900\tA\tC\t0.19\tNA\t0.39",
+    "1\t800\tA\tC\tNA\t0.28\t1.4\t10",
+    "1\t900\tA\tC\t0.19\tNA\t0.39\t10",
 ]
 
 
 def test_gwas_ssf_metrics_projection_agrees_with_the_full_row_parser(tmp_path):
     path = tmp_path / "metrics.tsv"
-    _write_metrics_fixture(path, _METRICS_FIXTURE_ROWS)
+    _write_metrics_fixture(path, _METRICS_FIXTURE_ROWS, header="\t".join([*_SSF_HEADER, "hm_code"]))
 
     projected = _metrics_rows(path)
     reference = _reference_metrics_rows(path)
 
     # The fixture must actually reach the interesting rows before either stream
     # is compared: a fixture of dropped rows would compare two empty lists.
-    assert len(reference) == 8, "fixture must keep the rows it is meant to test"
+    assert len(reference) == 9, "fixture must keep the rows it is meant to test"
     assert any(row[5] for row in reference), "fixture must include a flipped row"
     assert any(row[0] == "1" and row[3] == "a" for row in reference), (
         "fixture must include a lowercase allele row"
     )
-    assert any(row[2] == "CG" for row in reference), "fixture must include an indel"
+    alids = {row[4] for row in reference}
+    assert {"1:500:CG:A", "1:550:CG:A"} <= alids, "a deletion is spelt reference first"
+    assert not any(row[1] == 560 for row in reference), "an undeclared indel names no ALID"
     assert projected == reference
 
 

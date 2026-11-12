@@ -47,6 +47,7 @@ from opengwasdb.variants.axis import (
     parse_canonical_alid,
     variant_table_path,
 )
+from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.variants.windows import DEFAULT_WINDOW_SIZE_MB, window_key, window_size_bp
 
 log = logging.getLogger(__name__)
@@ -476,20 +477,30 @@ def _read_header_and_lines(path: Path) -> tuple[list[str] | None, list[str]]:
 
 
 def _canonical_alid(token: str, path: Path) -> str:
-    """Normalise an ALID to ``chrom:pos:a1:a2`` or fail loudly."""
+    """Normalise an ALID to ``chrom:pos:a1:a2`` (`canonical_alid`) or fail loudly.
+
+    Alleles of one length are sorted. An indel's order is its meaning -- its
+    reference first (ADR 0079) -- so it is kept as written.
+    """
     parsed = parse_canonical_alid(token)
     if parsed is None:
         raise ValueError(f"variant reference {path} contains invalid ALID {token!r}")
-    a1, a2 = sorted((parsed.effect_allele, parsed.other_allele))
-    return f"{parsed.chromosome}:{parsed.position}:{a1}:{a2}"
+    return canonical_alid(
+        parsed.chromosome, parsed.position, parsed.effect_allele, parsed.other_allele
+    )
 
 
 def _identity_keys(alid: str) -> Iterator[SourceKey]:
-    """The two raw source tuples a canonical ALID can be reported as."""
+    """The raw source tuples a canonical ALID can be reported as.
+
+    An SNV or a substitution either way round; an indel only as its reference
+    then its alternate, since the other order is the other variant.
+    """
     chrom, position, a1, a2 = alid.split(":")
     pos = int(position)
     yield (chrom, pos, a1, a2)
-    yield (chrom, pos, a2, a1)
+    if len(a1) == len(a2):
+        yield (chrom, pos, a2, a1)
 
 
 def _identity_lookup(alids: Sequence[str]) -> dict[SourceKey, str]:

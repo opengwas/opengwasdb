@@ -219,7 +219,9 @@ request the index cannot satisfy.
   `validate_store`/`validate_indexed_subsets` remain **exhaustive** and decode
   every indexed cell, side table, imputed mask and reference EAF, so an
   isolated corruption the build sample can miss is refused by an explicit
-  audit. That pass uses its own `EXHAUSTIVE_VALIDATION_BAND_CELLS`
+  audit. (Since issue #314 `validate` compares each unit against digests the
+  association scan makes of the primary planes as it reads them, and compares a
+  unit cell by cell only where they disagree: ADR 0074's amendment for #314.) That pass uses its own `EXHAUSTIVE_VALIDATION_BAND_CELLS`
   (4,000,000 cells, unchanged from #267) so its float32 decode does not grow to
   the writer's 65,536,000-cell source block; the build records the mode, sample
   strategy, seed, cell count and sampled duration. The risk is documented rather
