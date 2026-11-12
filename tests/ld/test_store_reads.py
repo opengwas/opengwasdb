@@ -16,6 +16,7 @@ import shutil
 import threading
 import tracemalloc
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -377,6 +378,54 @@ def test_threads_missing_one_chunk_store_it_once(small_chunks: Path) -> None:
     assert cache._bytes <= budget
 
 
+class Measured(location.ChunkCache):
+    """A chunk cache that measures what it holds after every chunk or index it keeps, inside
+    the lock it keeps them under: the most it ever held, not a sample of it."""
+
+    def __init__(self, budget: int) -> None:
+        super().__init__(budget)
+        self.held: list[int] = []
+        self.kinds: set[str] = set()
+
+    def _keep(self, key: tuple[str, int], chunk: np.ndarray, counted: int) -> np.ndarray:
+        kept = super()._keep(key, chunk, counted)
+        self.held.append(retained(self))
+        self.kinds.update("index" if k < 0 else "chunk" for _, k in self._kept)
+        return kept
+
+
+def test_the_budget_holds_while_threads_fetch_runs_together(small_chunks: Path) -> None:
+    # 16 threads each read every other chunk of 16, eight runs fetched together, each thread's
+    # overlapping its neighbours': 54 chunks and their shards' indexes in all, into a budget of
+    # 24 chunks. What the cache holds is measured each time it keeps one (ogld#32).
+    near = zarr.open_array(small_chunks / "near" / "22" / "r", mode="r")
+    everything = np.asarray(near[:])
+    budget = 24 * INNER * near.dtype.itemsize
+    cache = Measured(budget)
+    served = location.open_group(small_chunks, cache=cache)["near/22/r"]
+    assert isinstance(served, zarr.Array)
+    start = threading.Barrier(16)
+    wrong: list[int] = []
+
+    def read(first: int) -> None:
+        start.wait()
+        coords = np.arange(first * INNER, (first + 16) * INNER, 2 * INNER) + first
+        if not np.array_equal(cache.take(served, coords), everything[coords]):
+            wrong.append(first)
+
+    workers = [threading.Thread(target=read, args=(3 * i,)) for i in range(16)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    assert wrong == []
+    assert len(cache.held) > 54, "every chunk and index kept, measured as it was kept"
+    assert cache.kinds == {"index", "chunk"}, "chunks and shard indexes held side by side"
+    assert cache._bytes == sum(size for _, size in cache._kept.values()) == retained(cache)
+    assert max(cache.held) <= budget
+    assert cache._bytes <= budget
+
+
 def test_a_lost_shard_refuses_the_pairs_it_held_and_no_others(
     small_chunks: Path, tmp_path: Path
 ) -> None:
@@ -503,6 +552,99 @@ def serving(directory: Path) -> Iterator[Served]:
         yield f"http://127.0.0.1:{server.server_address[1]}/", sent
         server.shutdown()
         worker.join()
+
+
+@dataclass
+class InFlight:
+    """The chunk requests a server is answering at once: now, and at most. Each is held until
+    `together` are in flight, or `patience` seconds pass, so requests made together are
+    answered together and requests made one after another each wait out the patience."""
+
+    together: int
+    patience: float = 0.3
+    now: int = 0
+    peak: int = 0
+    arrived: threading.Condition = field(default_factory=threading.Condition)
+
+    def start(self) -> None:
+        with self.arrived:
+            self.now += 1
+            self.peak = max(self.peak, self.now)
+            self.arrived.notify_all()
+            self.arrived.wait_for(lambda: self.now >= self.together, self.patience)
+
+    def end(self) -> None:
+        with self.arrived:
+            self.now -= 1
+
+
+@contextlib.contextmanager
+def holding(directory: Path, flight: InFlight) -> Iterator[str]:
+    """`directory` over HTTP, each chunk or shard-index request held as `flight` says."""
+
+    class Held(RangeHandler):
+        def send_head(self) -> Any:
+            if "/c/" not in self.path:
+                return super().send_head()
+            flight.start()
+            try:
+                return super().send_head()
+            finally:
+                flight.end()
+
+    handler = partial(Held, directory=str(directory))
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler) as server:
+        worker = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
+        worker.start()
+        yield f"http://127.0.0.1:{server.server_address[1]}/"
+        server.shutdown()
+        worker.join()
+
+
+#: Six chunks of chr22's Near Band, in six shards, none a neighbour of another: six runs.
+APART = [0, 8, 16, 24, 32, 40]
+
+
+def test_a_read_fetches_its_runs_together(small_chunks: Path) -> None:
+    # Fetched one after another, as before ogld#32, one request is ever in flight, and each
+    # waits out the server's patience. Together, the six shards' indexes are in flight at once,
+    # and then their six chunks.
+    everything = np.asarray(zarr.open_array(small_chunks / "near" / "22" / "r", mode="r")[:])
+    coords = np.array(APART) * INNER + 5
+    flight = InFlight(together=len(APART))
+    with holding(small_chunks, flight) as url:
+        cache = location.ChunkCache(1 << 28)
+        near = location.open_group(url, cache=cache)["near/22/r"]
+        assert isinstance(near, zarr.Array)
+        np.testing.assert_array_equal(cache.take(near, coords), everything[coords])
+    assert flight.peak == len(APART)
+
+
+@pytest.mark.parametrize("bound", ["runs", "bytes"])
+def test_a_read_fetches_at_most_its_bounds_at_once(
+    small_chunks: Path, monkeypatch: pytest.MonkeyPatch, bound: str
+) -> None:
+    # What one read has in flight is a batch: at most zarr's async concurrency of pieces, and
+    # at most the bytes in flight decoded. Each bound alone allows two of the six runs here.
+    near = zarr.open_array(small_chunks / "near" / "22" / "r", mode="r")
+    chunk_bytes = INNER * near.dtype.itemsize
+    if bound == "bytes":
+        monkeypatch.setattr(location, "_FETCH_BYTES", 2 * chunk_bytes)
+    batches: list[list[tuple[int, int]]] = []
+    fetched = location._fetched
+
+    def recording(array: zarr.Array[Any], pieces: list[tuple[int, int]], size: int) -> Any:
+        batches.append(pieces)
+        return fetched(array, pieces, size)
+
+    monkeypatch.setattr(location, "_fetched", recording)
+    coords = np.array(APART) * INNER + 5
+    with zarr.config.set({"async.concurrency": 2 if bound == "runs" else 10}):
+        got = location.ChunkCache(1 << 28).take(near, coords)
+    np.testing.assert_array_equal(got, np.asarray(near[:])[coords])
+    assert [first for batch in batches for first, _ in batch] == APART, "each run, once"
+    assert [len(batch) for batch in batches] == [2, 2, 2]
+    assert all(sum(b - a for a, b in batch) * chunk_bytes <= 2 * chunk_bytes for batch in batches)
 
 
 @pytest.fixture

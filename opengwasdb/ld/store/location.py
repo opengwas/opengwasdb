@@ -15,10 +15,12 @@ is read is decided here, in one place, which ogld#8 tunes when it times the read
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 import threading
 from collections import OrderedDict
+from collections.abc import Iterator
 from typing import Any, Final
 
 import numpy as np
@@ -26,6 +28,7 @@ import numpy.typing as npt
 import zarr
 from zarr.abc.store import ByteRequest, Store, SuffixByteRequest
 from zarr.core.buffer import Buffer, BufferPrototype, default_buffer_prototype
+from zarr.core.sync import sync
 from zarr.storage import StorePath, WrapperStore
 
 from ogld.format import InputError
@@ -33,6 +36,9 @@ from ogld.format.geometry import spans
 
 #: Decoded inner chunks a reader keeps, in bytes. At layout C a Near Band chunk is 512 KiB.
 CACHE_BYTES: Final = 1 << 28
+#: The decoded bytes one read has in flight at once, beside at most zarr's `async.concurrency`
+#: (10 by default) pieces of runs: two of layout C's 128 MiB Near Band shards (ogld#32).
+_FETCH_BYTES: Final = 1 << 28
 
 
 def open_group(location: str | os.PathLike[str], *, cache: ChunkCache | None = None) -> zarr.Group:
@@ -129,12 +135,16 @@ class ChunkCache:
     def _chunks(
         self, array: zarr.Array[Any], wanted: npt.NDArray[np.int64], size: int
     ) -> list[npt.NDArray[Any]]:
-        """The decoded chunks `wanted`, in order: kept ones from memory, the rest read."""
+        """The decoded chunks `wanted`, in order: kept ones from memory, the rest fetched
+        together, a batch of runs at a time (ogld#32)."""
         found = self._kept_chunks(array.path, wanted.tolist())
-        missing = np.array([k for k in wanted.tolist() if k not in found], dtype=np.int64)
-        for run in np.split(missing, np.flatnonzero(np.diff(missing) != 1) + 1):
-            if len(run):
-                found.update(self._read_run(array, int(run[0]), int(run[-1]) + 1, size))
+        missing = [k for k in wanted.tolist() if k not in found]
+        per_shard = (array.shards or array.chunks)[0] // size
+        most = max(1, _FETCH_BYTES // (size * array.dtype.itemsize))
+        concurrency = int(zarr.config.get("async.concurrency"))
+        for batch in _batches(_pieces(missing, per_shard, most), concurrency, most):
+            for (first, stop), data in zip(batch, _fetched(array, batch, size), strict=True):
+                found.update(self._keep_run(array.path, first, stop, size, data))
         return [found[k] for k in wanted.tolist()]
 
     def _kept_chunks(self, path: str, wanted: list[int]) -> dict[int, npt.NDArray[Any]]:
@@ -148,17 +158,17 @@ class ChunkCache:
                     self._kept.move_to_end((path, k))
         return found
 
-    def _read_run(
-        self, array: zarr.Array[Any], first: int, stop: int, size: int
+    def _keep_run(
+        self, path: str, first: int, stop: int, size: int, data: npt.NDArray[Any]
     ) -> dict[int, npt.NDArray[Any]]:
-        """Chunks first … stop − 1, read in one request, each copied out and kept."""
-        data = np.asarray(array[first * size : stop * size])
+        """Chunks first … stop − 1 of the array at `path`, fetched as `data`, each copied out
+        and kept."""
         copies = [
             data[(k - first) * size : (k - first + 1) * size].copy() for k in range(first, stop)
         ]
         read = {first + i: (chunk, _counted(chunk)) for i, chunk in enumerate(copies)}
         with self._lock:
-            return {k: self._keep((array.path, k), *entry) for k, entry in read.items()}
+            return {k: self._keep((path, k), *entry) for k, entry in read.items()}
 
     def index(self, key: str, size: int) -> bytes | None:
         """The kept index of the shard at store key `key`, its last `size` bytes, if kept,
@@ -192,6 +202,54 @@ class ChunkCache:
             _, (_, dropped) = self._kept.popitem(last=False)
             self._bytes -= dropped
         return chunk
+
+
+def _pieces(missing: list[int], per_shard: int, most: int) -> list[tuple[int, int]]:
+    """The runs of neighbouring chunks among `missing`, ascending, each cut where a shard ends
+    and at `most` chunks: (first, stop) of each piece, one shard's chunks each."""
+    pieces: list[tuple[int, int]] = []
+    for run in np.split(np.asarray(missing, dtype=np.int64), _breaks(missing)):
+        first, stop = (int(run[0]), int(run[-1]) + 1) if len(run) else (0, 0)
+        while first < stop:
+            end = min(stop, (first // per_shard + 1) * per_shard, first + most)
+            pieces.append((first, end))
+            first = end
+    return pieces
+
+
+def _breaks(missing: list[int]) -> npt.NDArray[np.intp]:
+    """Where a run of neighbouring chunks ends among the ascending `missing`."""
+    return np.flatnonzero(np.diff(np.asarray(missing, dtype=np.int64)) != 1) + 1
+
+
+def _batches(
+    pieces: list[tuple[int, int]], concurrency: int, most: int
+) -> Iterator[list[tuple[int, int]]]:
+    """`pieces` in order, as batches of at most `concurrency` pieces and `most` chunks: what
+    one read has in flight at once (spec §10; ogld#32)."""
+    batch: list[tuple[int, int]] = []
+    held = 0
+    for first, stop in pieces:
+        if batch and (len(batch) == concurrency or held + stop - first > most):
+            yield batch
+            batch, held = [], 0
+        batch.append((first, stop))
+        held += stop - first
+    if batch:
+        yield batch
+
+
+def _fetched(
+    array: zarr.Array[Any], pieces: list[tuple[int, int]], size: int
+) -> list[npt.NDArray[Any]]:
+    """The elements of each piece of `array`'s chunks, fetched together on zarr's event loop,
+    where `zarr.Array` runs each read it is asked for."""
+
+    async def together() -> list[Any]:
+        reads = (array.async_array.getitem(slice(a * size, b * size)) for a, b in pieces)
+        return list(await asyncio.gather(*reads))
+
+    return [np.asarray(data) for data in sync(together())]
 
 
 class _KeptIndexes(WrapperStore[Store]):

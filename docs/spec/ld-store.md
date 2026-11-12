@@ -786,8 +786,18 @@ refuses a `format_version` or `encoding` it does not implement (§13). A chromos
 range and its two `indptr` arrays are read the first time a request touches that chromosome, and
 kept. Every other read the reader makes goes through its cache of decoded inner chunks
 (`ogld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request
-needs, whole, which is what Zarr fetches and decodes in any case, each run of neighbouring chunks
-in one read. It keeps them up to 256 MiB per opened store, dropping the least recently used first.
+needs, whole, which is what Zarr fetches and decodes in any case. It keeps them up to 256 MiB per
+opened store, dropping the least recently used first.
+
+**A read fetches its runs together** (ogld#32). The chunks a read needs and the cache does not
+hold fall into runs of neighbouring chunks. Each run is cut where a shard ends, so each piece
+reads one shard. The pieces are fetched in batches, every piece of a batch at once on zarr's event
+loop. A batch holds at most zarr's `async.concurrency` pieces (10 by default) and at most 256 MiB
+decoded, two of layout C's Near Band shards. So a read waits about one round trip per batch,
+not one per run. Before, each run was its own Zarr call, one after another, and each call waited
+for the shard index and then for the chunks. Beside the cache's budget, a read holds the chunks it
+asked for, and at most one batch as it was fetched: 256 MiB decoded, and its copy into kept
+chunks.
 Each kept chunk owns its memory, copied out of the read that fetched it, and counts an upper bound
 on what is held, so the budget bounds the memory kept. A numeric chunk counts its buffer. A string
 chunk stays numpy's variable-width strings, as zarr returns them, which keep each string over 15
