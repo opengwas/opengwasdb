@@ -991,6 +991,18 @@ So the Far Pairs are their own component again (§1, §5). A matrix and a region
 index entry; `proxies` and `clump` read the index, as before; `far.index` holds the two to one
 code per pair (§12). The cost is the one this section's table gives.
 
+chr22 is the best case: 0.85 Far Pairs a variant, against EUR's 15.5 and chr11's 161.5 (ogld#8's
+review; `docs/benchmarks/results/far_pairs.json`). **Measured after** (ogld#31,
+`docs/benchmarks/far-pairs.md`), on the published EUR store with its Far Pairs derived, so before
+and after read the same bytes:
+- **500 variants on one chromosome** read 10 Far Pairs chunks on chr22 where they read 894
+  index chunks, and 102 on chr11 where they read 1,058. Requests fell by 61% and 62%, and the
+  read, cold at 50 ms a request, from 129 s to 53 s on chr22 and from 161 s to 63 s on chr11.
+- **A region 10 Mb wide** spends 12–491 ms on its pairs beyond `near_bp` where Far Pairs are
+  sparse, against 1.7–5.1 s; its total is its Near Band read. Where they are densest, chr11's
+  45–55 Mb, its rows hold 68.75 M Far Pairs against 196 M index entries: 203 MB of rows read
+  against 709 MB, and 12 s locally and 24 s at 50 ms against 30 s and 47 s.
+
 ## 12. Validation rules
 
 Each rule runs on write and on demand, by name. A rule reads in bounded windows and never loads a

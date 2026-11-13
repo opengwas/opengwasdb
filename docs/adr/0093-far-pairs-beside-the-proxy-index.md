@@ -124,6 +124,14 @@ is what they need.
   variant: 69 MB for HGDP+1kGP EUR.
 - **The Test Store holds 7 Far Pairs** (4 on chr21, 3 on chr22), 7.7 KB in `far/`. Every other
   array of it is byte-identical to the store written before this decision.
+- **What the reads gained, measured** (`docs/benchmarks/far-pairs.md`), on the published EUR
+  store, before and after reading the same bytes. A matrix of 500 variants on one chromosome
+  reads 10 Far Pairs chunks on chr22 and 102 on chr11, where it read 894 and 1,058 index chunks,
+  and at 50 ms a request takes 53 s and 63 s where it took 129 s and 161 s. chr22 is the best
+  case (0.85 Far Pairs a variant); chr11 the densest (161.5), so the gain there is 10 times in
+  chunks, not 80. A 10 Mb region's far part fell from 1.7–5.1 s to 12–491 ms where Far Pairs are
+  sparse; at chr11's 45–55 Mb its rows' 68.75 M Far Pairs are 203 MB read against the index
+  rows' 709 MB, and the region took 12 s locally where it took 30 s.
 - **The five HGDP+1kGP stores gained their Far Pairs in place** (12–13 November 2026), with
   `scripts/derive_far_pairs.py`: 628,713,731 in all, 1.46 GB, 0.27% of the 532 GB (EUR 0.32 GB,
   AFR 0.49, EAS 0.19, SAS 0.29, AMR 0.16; raw, at 6 bytes a pair, 0.53–1.15 GB, EUR's 0.80 GB
