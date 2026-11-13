@@ -52,7 +52,14 @@ def logged(caplog):
 
 
 def _messages(caplog) -> list[str]:
-    return [record.getMessage() for record in caplog.records]
+    """What the validation run logged, and nothing else that reached `caplog`.
+
+    A session Store first used by one of these tests is built while `caplog` listens,
+    and a builder's phases have the same `start` and `done in` lines. Whether they are
+    emitted depends on the root logger's level, which importing the CLI raises to INFO,
+    so the records are kept by logger rather than by what happened to be imported.
+    """
+    return [record.getMessage() for record in caplog.records if record.name in _LOGGERS]
 
 
 def _started(messages: list[str]) -> set[str]:
