@@ -77,11 +77,17 @@ is what they need.
 6. **The Far Pairs keep the index's array shape:** 16,384 entries an inner chunk, 64 chunks to
    a shard (spec §6). They were chosen on the chromosome where they are densest as well as on
    chr22, because they lie very unevenly: EUR chr22 holds 0.85 Far Pairs a variant, chr11 161.5,
-   nearly all in rows at 45–55 Mb. For a matrix of 500 variants on one chromosome, at 16,384 the
-   Far Pairs touch 5 chunks of each array in 1 run on chr22 and 51 in 28 on chr11, against the
-   index's 447 in 339 and 529 in 463. A chunk of 4,096 adds runs on chr11 (37); one of 65,536 or
-   262,144 removes few (26, 24) and decodes 2.6 and 8 times the bytes. A larger shard removes no
-   run there and enlarges the shard a writer holds.
+   nearly all in rows at 45–55 Mb. For a matrix of 500 variants drawn uniformly on one
+   chromosome (seed 8), at 16,384 the Far Pairs touch 5 chunks of each array in 1 run on chr22
+   and 51 in 28 on chr11, against the index's 447 in 339 and 529 in 463. A chunk of 4,096 adds
+   runs on chr11 (37); one of 65,536 or 262,144 removes few (26, 24) and decodes 2.6 and 8 times
+   the bytes. A list clustered where the Far Pairs are densest is the other end: 500 rows at
+   chr11's 45–55 Mb touch 440 chunks in 313 runs at 16,384, 198 runs at 65,536 for 3 times the
+   bytes, and 48 at 262,144 for 7 times (41, 123 and 294 MiB). The shape is kept for the
+   uniform lists, which a larger chunk does not help; ogld#32 fetches a read's runs together,
+   which takes their count off the critical path, and a chunk shape can change without a new
+   format version (spec §13) if served lists turn out clustered. A larger shard removes no run
+   and enlarges the shard a writer holds.
 7. **`format_version` stays `0.1.0`.** It is an unreleased draft (spec §13): no LD Store in it
    has been published, and the owner ruled that the Far Pairs come back before the first
    release.
@@ -128,8 +134,12 @@ is what they need.
   store, before and after reading the same bytes. A matrix of 500 variants on one chromosome
   reads 10 Far Pairs chunks on chr22 and 102 on chr11, where it read 894 and 1,058 index chunks,
   and at 50 ms a request takes 53 s and 63 s where it took 129 s and 161 s. chr22 is the best
-  case (0.85 Far Pairs a variant); chr11 the densest (161.5), so the gain there is 10 times in
-  chunks, not 80. A 10 Mb region's far part fell from 1.7–5.1 s to 12–491 ms where Far Pairs are
+  case (0.85 Far Pairs a variant); chr11 the densest (161.5). Those are single uniform draws: on
+  uniform draws of 500 rows, ogld#8 counted 10–91 times fewer chunks (10–29 times on the eight
+  chromosomes with more than 10 Far Pairs a variant, 88–91 on chr21 and chr22); on a list
+  clustered where the Far Pairs are densest, about 2–3 times (500 rows at chr11's 45–55 Mb: 880
+  against 1,496 chunks, 1.7 times; the spec review's list, 300 of its 500 rows at 44–56 Mb: 438
+  against 1,248, 2.8 times). A 10 Mb region's far part fell from 1.7–5.1 s to 12–491 ms where Far Pairs are
   sparse; at chr11's 45–55 Mb its rows' 68.75 M Far Pairs are 203 MB read against the index
   rows' 709 MB, and the region took 12 s locally where it took 30 s.
 - **The five HGDP+1kGP stores gained their Far Pairs in place** (12–13 November 2026), with

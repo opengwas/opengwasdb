@@ -436,17 +436,23 @@ EUR's 1.33×10⁸ Far Pairs are 140 shards of each array. They are read by row, 
 the chunks its rows touch and the runs of neighbouring chunks among them, each run one Zarr call
 (§10). The rows lie very unevenly: EUR chr22 holds 0.85 Far Pairs a variant, and chr11 161.5,
 68.75 M of its 69.0 M in rows at 45–55 Mb, up to 11,560 in one row. For a matrix of 500 variants
-drawn on one chromosome (ogld#8's draw, seed 8), counted from the EUR store's `indptr`:
+drawn uniformly on one chromosome (ogld#8's draw, seed 8), and one of 500 drawn at chr11's
+45–55 Mb, counted from the EUR store's `indptr`:
 
 | chromosome | the index, at 16,384 | Far Pairs at 4,096 | at 16,384 | at 65,536 | at 262,144 |
 |---|---|---|---|---|---|
 | 22 | 447 chunks in 339 runs | 15 in 1, 0.4 MiB | **5 in 1**, 0.5 MiB | 2 in 1, 0.8 MiB | 1 in 1, 1.5 MiB |
 | 11 | 529 in 463 | 98 in 37, 2.3 MiB | **51 in 28**, 4.8 MiB | 33 in 26, 12.4 MiB | 26 in 24, 39.0 MiB |
 | 6 | 526 in 476 | 74 in 46, 1.7 MiB | **45 in 21**, 4.2 MiB | 25 in 13, 9.4 MiB | 16 in 10, 24.0 MiB |
+| 11, clustered at 45–55 Mb | 748 in 427 | 725 in 348, 17 MiB | **440 in 313**, 41 MiB | 328 in 198, 123 MiB | 196 in 48, 294 MiB |
 
 Chunks and runs are each array's, `partner` and `r` alike; MiB is what the chunks decode to,
-both arrays. A smaller chunk adds runs where rows are long (37 against 28 on chr11); a larger one
-removes few (26 and 24) and decodes 2.6 and 8 times the bytes. A larger shard removes no run
+both arrays. On the uniform draws a smaller chunk adds runs where rows are long (37 against 28 on
+chr11), and a larger one removes few (26 and 24) and decodes 2.6 and 8 times the bytes. A list
+clustered where Far Pairs are densest is the other end: there a larger chunk removes runs (198
+and 48 against 313) for 3 and 7 times the bytes, and the Far Pairs save only 1.7 times the
+index's chunks. The shape is kept for the uniform lists; ogld#32 fetches a read's runs together,
+and a chunk shape is not a format version (§13). A larger shard removes no run
 here (chr11's list makes 28 runs within shards at 1,048,576 entries, and still 28 at 16,777,216),
 and a store's writer holds one shard of each array (§6, ogld#17).
 
@@ -995,9 +1001,13 @@ chr22 is the best case: 0.85 Far Pairs a variant, against EUR's 15.5 and chr11's
 review; `docs/benchmarks/results/far_pairs.json`). **Measured after** (ogld#31,
 `docs/benchmarks/far-pairs.md`), on the published EUR store with its Far Pairs derived, so before
 and after read the same bytes:
-- **500 variants on one chromosome** read 10 Far Pairs chunks on chr22 where they read 894
-  index chunks, and 102 on chr11 where they read 1,058. Requests fell by 61% and 62%, and the
-  read, cold at 50 ms a request, from 129 s to 53 s on chr22 and from 161 s to 63 s on chr11.
+- **500 variants drawn uniformly on one chromosome** (seed 8) read 10 Far Pairs chunks on
+  chr22 where they read 894 index chunks, and 102 on chr11 where they read 1,058. Requests fell
+  by 61% and 62%, and the read, cold at 50 ms a request, from 129 s to 53 s on chr22 and from
+  161 s to 63 s on chr11. Across ogld#8's uniform draws the Far Pairs touch 10–91 times fewer
+  chunks than the index (10–29 on the eight chromosomes with more than 10 Far Pairs a variant);
+  a list clustered where they are densest, about 2–3 times fewer (1.7 for 500 rows at chr11's
+  45–55 Mb, 2.8 for the spec review's list with 300 of its 500 there).
 - **A region 10 Mb wide** spends 12–491 ms on its pairs beyond `near_bp` where Far Pairs are
   sparse, against 1.7–5.1 s; its total is its Near Band read. Where they are densest, chr11's
   45–55 Mb, its rows hold 68.75 M Far Pairs against 196 M index entries: 203 MB of rows read
