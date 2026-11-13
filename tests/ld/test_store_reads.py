@@ -8,6 +8,7 @@ and a whole-array read differ, and are expected to: each asserts the copy has ma
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import http.server
 import json
@@ -15,10 +16,12 @@ import math
 import shutil
 import threading
 import tracemalloc
+import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -253,6 +256,16 @@ def test_a_region_is_a_span_of_one_chromosome() -> None:
             reader.region_r(start, stop)
 
 
+def kind(key: object) -> str:
+    """What the cache keeps under `key`: a shard's index, or a chunk."""
+    return "index" if isinstance(key, location._ShardIndex) else "chunk"
+
+
+def chunks_kept(cache: location.ChunkCache, path: str) -> set[int]:
+    """The chunks of the array at `path` the cache keeps."""
+    return {key[1] for key in cache._kept if isinstance(key, tuple) and key[0] == path}
+
+
 def retained(cache: location.ChunkCache) -> int:
     """The bytes the cache's kept chunks actually hold alive: each one's owning buffer, once."""
     owners = {}
@@ -390,14 +403,18 @@ class Measured(location.ChunkCache):
     def _keep(self, key: tuple[str, int], chunk: np.ndarray, counted: int) -> np.ndarray:
         kept = super()._keep(key, chunk, counted)
         self.held.append(retained(self))
-        self.kinds.update("index" if k < 0 else "chunk" for _, k in self._kept)
+        self.kinds.update(kind(key) for key in self._kept)
         return kept
 
 
 def test_the_budget_holds_while_threads_fetch_runs_together(small_chunks: Path) -> None:
     # 16 threads each read every other chunk of 16, eight runs fetched together, each thread's
-    # overlapping its neighbours': 54 chunks and their shards' indexes in all, into a budget of
-    # 24 chunks. What the cache holds is measured each time it keeps one (ogld#32).
+    # overlapping its neighbours': 58 chunks in 15 shards, and the 15 shards' indexes, into a
+    # budget of 24 chunks. What the cache holds is measured each time it keeps one (ogld#32).
+    firsts = [3 * i for i in range(16)]
+    chunks = {first + 2 * j for first in firsts for j in range(8)}
+    shards = {chunk // PER_SHARD for chunk in chunks}
+    assert (len(chunks), len(shards)) == (58, 15)
     near = zarr.open_array(small_chunks / "near" / "22" / "r", mode="r")
     everything = np.asarray(near[:])
     budget = 24 * INNER * near.dtype.itemsize
@@ -413,13 +430,13 @@ def test_the_budget_holds_while_threads_fetch_runs_together(small_chunks: Path) 
         if not np.array_equal(cache.take(served, coords), everything[coords]):
             wrong.append(first)
 
-    workers = [threading.Thread(target=read, args=(3 * i,)) for i in range(16)]
+    workers = [threading.Thread(target=read, args=(first,)) for first in firsts]
     for worker in workers:
         worker.start()
     for worker in workers:
         worker.join()
     assert wrong == []
-    assert len(cache.held) > 54, "every chunk and index kept, measured as it was kept"
+    assert len(cache.held) >= len(chunks) + len(shards), "every chunk and index, measured as kept"
     assert cache.kinds == {"index", "chunk"}, "chunks and shard indexes held side by side"
     assert cache._bytes == sum(size for _, size in cache._kept.values()) == retained(cache)
     assert max(cache.held) <= budget
@@ -620,6 +637,27 @@ def test_a_read_fetches_its_runs_together(small_chunks: Path) -> None:
     assert flight.peak == len(APART)
 
 
+def test_a_piece_that_fails_stops_the_others_of_its_batch() -> None:
+    # One piece of a batch fails: the others are cancelled, not left fetching on zarr's loop,
+    # and the read raises that piece's error (ogld#32).
+    cancelled: list[int] = []
+
+    async def getitem(selection: slice) -> np.ndarray:
+        if selection.start == 0:
+            raise OSError("the first piece's shard is unreadable")
+        try:
+            await asyncio.wait_for(asyncio.Event().wait(), timeout=5)
+        except asyncio.CancelledError:
+            cancelled.append(selection.start)
+            raise
+        return np.zeros(selection.stop - selection.start)
+
+    array: Any = SimpleNamespace(async_array=SimpleNamespace(getitem=getitem))
+    with pytest.raises(OSError, match="unreadable"):
+        location._fetched(array, [(0, 1), (2, 3), (4, 5)], 10)
+    assert sorted(cancelled) == [20, 40], "both other pieces stopped"
+
+
 def test_a_run_is_cut_where_a_shard_ends_and_at_the_bytes_in_flight() -> None:
     # Chunks 1–9 and 12, four a shard, three chunks' bytes in flight: 1–9 is cut at 4 and 8,
     # where shards end, and at 7, three chunks on from 4. Batches of two pieces and three chunks.
@@ -630,31 +668,87 @@ def test_a_run_is_cut_where_a_shard_ends_and_at_the_bytes_in_flight() -> None:
     assert location._pieces([], per_shard=4, most=3) == []
 
 
-@pytest.mark.parametrize("bound", ["runs", "bytes"])
-def test_a_read_fetches_at_most_its_bounds_at_once(
-    small_chunks: Path, monkeypatch: pytest.MonkeyPatch, bound: str
-) -> None:
-    # What one read has in flight is a batch: at most zarr's async concurrency of pieces, and
-    # at most the bytes in flight decoded. Each bound alone allows two of the six runs here.
-    near = zarr.open_array(small_chunks / "near" / "22" / "r", mode="r")
-    chunk_bytes = INNER * near.dtype.itemsize
-    if bound == "bytes":
-        monkeypatch.setattr(location, "_FETCH_BYTES", 2 * chunk_bytes)
-    batches: list[list[tuple[int, int]]] = []
+@dataclass
+class Held:
+    """What a read holds of what it fetched, measured each time it fetches a batch, as the
+    cache counts memory (`location._counted`): the pieces of earlier batches still alive, and
+    this batch's."""
+
+    earlier: list[int] = field(default_factory=list)
+    batches: list[int] = field(default_factory=list)
+    alive: list[weakref.ref[np.ndarray]] = field(default_factory=list)
+
+    def still_held(self) -> int:
+        return sum(location._counted(p) for p in (ref() for ref in self.alive) if p is not None)
+
+
+def measured_fetches(monkeypatch: pytest.MonkeyPatch) -> Held:
+    """Measure what every batch a read fetches holds, and what earlier batches still do."""
+    held = Held()
     fetched = location._fetched
 
     def recording(array: zarr.Array[Any], pieces: list[tuple[int, int]], size: int) -> Any:
-        batches.append(pieces)
-        return fetched(array, pieces, size)
+        held.earlier.append(held.still_held())
+        got = fetched(array, pieces, size)
+        held.batches.append(sum(location._counted(piece) for piece in got))
+        held.alive.extend(weakref.ref(piece) for piece in got)
+        return got
 
     monkeypatch.setattr(location, "_fetched", recording)
+    return held
+
+
+@pytest.mark.parametrize("bound", ["runs", "bytes"])
+def test_a_read_has_at_most_its_bounds_in_flight(
+    small_chunks: Path, monkeypatch: pytest.MonkeyPatch, bound: str
+) -> None:
+    # Six runs in six shards; zarr's async concurrency, or the bytes in flight, allows two at
+    # once. The server holds each request until three are in flight or 0.15 s pass, so it sees
+    # every request a batch makes at once, and no more: two. What the read holds is measured
+    # as it fetches each batch, the earlier batches' pieces gone (spec §10; ogld#32).
+    near = zarr.open_array(small_chunks / "near" / "22" / "r", mode="r")
+    everything = np.asarray(near[:])
+    chunk_bytes = INNER * near.dtype.itemsize
+    budget = 2 * chunk_bytes if bound == "bytes" else 1 << 28
+    monkeypatch.setattr(location, "_FETCH_BYTES", budget)
+    held = measured_fetches(monkeypatch)
     coords = np.array(APART) * INNER + 5
-    with zarr.config.set({"async.concurrency": 2 if bound == "runs" else 10}):
-        got = location.ChunkCache(1 << 28).take(near, coords)
-    np.testing.assert_array_equal(got, np.asarray(near[:])[coords])
-    assert [first for batch in batches for first, _ in batch] == APART, "each run, once"
-    assert [len(batch) for batch in batches] == [2, 2, 2]
-    assert all(sum(b - a for a, b in batch) * chunk_bytes <= 2 * chunk_bytes for batch in batches)
+    flight = InFlight(together=3, patience=0.15)
+    setting = {"async.concurrency": 2 if bound == "runs" else 10}
+    with zarr.config.set(setting), holding(small_chunks, flight) as url:
+        cache = location.ChunkCache(1 << 28)
+        served = location.open_group(url, cache=cache)["near/22/r"]
+        assert isinstance(served, zarr.Array)
+        np.testing.assert_array_equal(cache.take(served, coords), everything[coords])
+    assert len(held.batches) == 3, "three batches of two runs"
+    assert flight.peak == 2, "two requests in flight at once, never more"
+    assert held.earlier == [0, 0, 0], "no earlier batch's piece is held while the next fetches"
+    assert max(held.batches) <= 2 * chunk_bytes
+
+
+def test_a_read_of_strings_holds_at_most_the_bytes_in_flight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 200-character strings: a 512-string chunk holds about 18 times its 16 bytes a string, in
+    # the arena. Planned at 16 bytes a string, a batch of 16 chunks would be in flight where
+    # the bytes allow four (ogld#32).
+    names = np.array([text(i, 200) for i in range(16 * 512)], dtype=StringDType())
+    group = zarr.open_group(tmp_path / "g", mode="w")
+    alid = group.create_array(
+        "alid", shape=names.shape, dtype=str, chunks=(512,), shards=(2048,), fill_value=""
+    )
+    alid[:] = names
+    one = location._counted(names[:512])
+    assert one > 10 * 512 * 16, (
+        "a chunk must hold far more than its itemsize for this to mean anything"
+    )
+    monkeypatch.setattr(location, "_FETCH_BYTES", 4 * one)
+    held = measured_fetches(monkeypatch)
+    cache = location.ChunkCache(1 << 28)
+    np.testing.assert_array_equal(cache.take(alid, np.arange(len(names))), names)
+    assert max(held.batches) <= 4 * one
+    assert held.earlier == [0] * len(held.batches), "one batch held at a time"
+    assert len(held.batches) > 4, "and the read took several"
 
 
 @pytest.fixture
@@ -714,7 +808,10 @@ def test_a_shard_index_is_fetched_once_and_kept_in_the_budget(
     for chunk in (20, 22):  # shard 5's first and third chunks
         cache.take(near, [chunk * INNER])
     assert [path for path, _ in sent[before:]] == ["/near/22/r/c/5"] * requests
-    indexes = [kept for key, kept in cache._kept.items() if key[0] == "near/22/r/c/5"]
+    # A shard index is 16 bytes a chunk and a 4-byte checksum (spec §6).
+    shard = location._ShardIndex("near/22/r/c/5", PER_SHARD * 16 + 4)
+    indexes = [kept for key, kept in cache._kept.items() if key == shard]
+    assert len(indexes) == (1 if budget else 0), "kept when there is room, and only then"
     assert sum(held.nbytes for held, _ in indexes) == sum(n for _, n in indexes) <= budget
 
 
@@ -727,7 +824,7 @@ def test_runs_of_one_shard_fetched_together_fetch_its_index_once(served: Served)
     assert isinstance(near, zarr.Array)
     before = len(sent)
     cache.take(near, [20 * INNER, 22 * INNER])
-    assert sorted({k for _, k in cache._kept if k >= 0}) == [20, 22], "two runs, both fetched"
+    assert sorted(chunks_kept(cache, "near/22/r")) == [20, 22], "two runs, both fetched"
     assert [path for path, _ in sent[before:]] == ["/near/22/r/c/5"] * 3
 
 
@@ -774,8 +871,8 @@ def test_a_cache_size_that_is_not_a_count_of_bytes_is_refused(size: Any) -> None
 
 def test_a_store_keeps_4_gib_of_its_chunks_unless_told_otherwise() -> None:
     # The owner's default (ogld#32), at which #8 measured repeated reads warm.
-    assert ogld.open(TEST_STORE)._reader._cache._budget == 4 << 30
-    assert ogld.open(TEST_STORE, cache_bytes=12_345)._reader._cache._budget == 12_345
+    assert ogld.open(TEST_STORE)._reader.cache_bytes == 4 << 30
+    assert ogld.open(TEST_STORE, cache_bytes=12_345)._reader.cache_bytes == 12_345
 
 
 @pytest.mark.parametrize("query", ["clump", "proxies"])
@@ -792,7 +889,7 @@ def test_at_r2_at_or_above_t_far_no_near_band_chunk_is_fetched(query: str) -> No
             clumping.clump(reader, names, z, r2=support.T_FAR, kb=3000)
         else:
             proxies_query.proxies(reader, names[::5], r2=support.T_FAR, kb=10_000)
-    fetched = {path for path, _ in reader._cache._kept}
+    fetched = {key[0] for key in reader._cache._kept if kind(key) == "chunk"}
     assert {"index/21/r", "index/22/r"} <= fetched, "the Proxy Index rows must be read"
     assert not [path for path in fetched if path.startswith("near/")], "no Near Band chunk"
     chunks = ("/near/21/r/c/", "/near/22/r/c/")

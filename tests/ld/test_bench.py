@@ -303,7 +303,7 @@ def test_a_record_names_the_budget_of_the_cache_the_store_read_through(
     from ogld.store.location import ChunkCache
 
     latency.instrument(None, 3, patch=monkeypatch.setattr)
-    assert latency.opened(TEST_STORE)._reader._cache._budget == 3 << 20, "--cache-mib sets it"
+    assert latency.opened(TEST_STORE)._reader.cache_bytes == 3 << 20, "--cache-mib sets it"
     # A budget the module's default does not hold: the record must read the cache's own.
     store = latency.opened(TEST_STORE)
     store._reader._cache = ChunkCache(budget=5 << 20)
@@ -375,3 +375,15 @@ def test_the_fast_reader_tables_are_its_records_rendered(
     rendered = capsys.readouterr().out
     committed = (RESULTS.parent / "fast-reader-tables.md").read_text()
     assert rendered == committed, "re-render fast-reader-tables.md (scripts/bench/deltas.py)"
+
+
+def test_the_count_before_ogld_32_is_the_cache_s_rule_one_string_at_a_time() -> None:
+    # Both count an ASCII string's bytes exactly, so they agree on ALIDs short and long.
+    from numpy.dtypes import StringDType
+
+    from ogld.store import location
+
+    alids = [f"22:{i}:A:" + "C" * (i % 40) for i in range(2000)]
+    chunk = np.array(alids, dtype=StringDType())
+    assert sum(len(a) > 15 for a in alids) > 1000, "most in the arena, for this to mean anything"
+    assert latency._counted_per_string(chunk) == location._counted(chunk)

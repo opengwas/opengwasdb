@@ -160,6 +160,11 @@ class StoreReader:
         return reader
 
     @property
+    def cache_bytes(self) -> int:
+        """The bytes of chunks and shard indexes this reader keeps at most (spec §10)."""
+        return self._cache.budget
+
+    @property
     def provenance(self) -> Provenance:
         """The root group's `ld_store` attribute, as recorded (spec §7)."""
         return self._provenance

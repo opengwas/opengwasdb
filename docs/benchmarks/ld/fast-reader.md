@@ -31,8 +31,8 @@ ogld#32 made four changes to how the reader fetches, and none to an answer or a 
 
 - **Concurrent runs.** A read's missing runs of chunks are cut where a shard ends and fetched
   in batches, every piece of a batch at once on zarr's event loop: at most zarr's
-  `async.concurrency` pieces (10) and 256 MiB decoded a batch. Before, each run was its own Zarr
-  call, one after another.
+  `async.concurrency` pieces (10) and 256 MiB a batch, as the cache counts memory, one batch at a
+  time. Before, each run was its own Zarr call, one after another.
 - **Kept shard indexes.** The chunk cache keeps each shard index zarr reads, in its budget, so a
   read of a shard read before is one request, not two.
 - **A vectorised string count.** A string chunk's memory is counted without visiting its

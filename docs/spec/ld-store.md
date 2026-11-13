@@ -839,8 +839,10 @@ budget. The bound is the cache's, and per opened store, so a process with the fi
 stores open keeps up to 5 × `cache_bytes`. Beside it a reader holds:
 
 - each chromosome's positions and `indptr` arrays it has touched (above);
-- what a read in progress holds: the chunks it asked for, at most one batch of fetches in flight
-  (256 MiB decoded, below) with its copy into kept chunks, and its result.
+- what each read in progress holds: the chunks it asked for, one batch of fetches in flight
+  (at most 256 MiB, below) with its copy into kept chunks, and its result. The bound is per
+  read: reads on one store from several threads each hold a batch of their own, so n reads at
+  once hold up to n batches beside the budget.
 
 **The cache keeps shard indexes** (ogld#32). zarr reads a shard's index before the chunks it
 needs from that shard, and reads it again on every read. Over HTTP, then, each read of a shard
@@ -856,11 +858,23 @@ and a 4-byte checksum.
 hold fall into runs of neighbouring chunks. Each run is cut where a shard ends, so each piece
 reads one shard. The pieces are fetched in batches, every piece of a batch at once on zarr's event
 loop. A batch holds at most zarr's `async.concurrency` pieces (10 by default) and at most 256 MiB
-decoded, two of layout C's Near Band shards; a larger run is cut to fit. So a batch waits one
-round trip for its chunks, and one more before it when a shard's index is not yet kept, however
-many runs it holds. Two runs of one shard in a batch fetch its index once: the second awaits the
-first's fetch. Before, each run was its own Zarr call, one after another, and each call waited
-for the shard index and then for the chunks.
+as the cache counts memory, two of layout C's Near Band shards; a larger run is cut to fit. A
+read holds one batch at a time: it lets each piece go once its chunks are copied out, before it
+fetches the next batch.
+
+A numeric chunk's decoded size is its buffer, known before it is fetched. A string chunk's is not
+known until it is decoded: its strings may be any length. So a string array's batches are planned
+at the most an element has held, by the cache's own count, in any chunk of that array the reader
+has counted. The first time a reader reads a string array, it fetches one chunk alone to count
+it. A string batch then holds at most 256 MiB, unless one of its chunks holds more a string than
+any counted before. Then it holds more by that chunk's excess, and later batches are planned at
+the larger rate.
+
+A batch waits one round trip for its chunks, and one more before it when a shard's index is not
+yet kept, however many runs it holds. Two runs of one shard in a batch fetch its index once: the
+second awaits the first's fetch. A piece that fails cancels the others of its batch. Before
+ogld#32, each run was its own Zarr call, one after another, and each call waited for the shard
+index and then for the chunks.
 
 - **Over HTTP** a store is opened through zarr's fsspec store, whose HTTP filesystem uses aiohttp.
   Both are runtime dependencies. A static host that honours byte ranges is enough: no node is

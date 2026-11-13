@@ -23,6 +23,7 @@ import os
 import threading
 from collections import OrderedDict
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any, Final
 
 import numpy as np
@@ -40,8 +41,10 @@ from ogld.format.geometry import spans
 #: in bytes: 8,192 of layout C's 512 KiB Near Band chunks. ogld#8 measured repeated reads
 #: warm at this budget, and not at 256 MiB, which held 512 (owner, 12 November 2026; ogld#32).
 CACHE_BYTES: Final = 1 << 32
-#: The decoded bytes one read has in flight at once, beside at most zarr's `async.concurrency`
-#: (10 by default) pieces of runs: two of layout C's 128 MiB Near Band shards (ogld#32).
+#: The bytes, as the cache counts memory, one read has in flight at once, in at most zarr's
+#: `async.concurrency` (10 by default) pieces of runs: two of layout C's 128 MiB Near Band
+#: shards. The bound is per read: reads from several threads each hold a batch (ogld#32).
+#: A string chunk is planned at the most a string has held so far (`ChunkCache._chunk_bytes`).
 _FETCH_BYTES: Final = 1 << 28
 
 
@@ -75,6 +78,20 @@ def _opened(location: str | os.PathLike[str]) -> zarr.Group:
         ) from unreadable
 
 
+@dataclass(frozen=True)
+class _ShardIndex:
+    """The key a shard's index is kept under beside the chunks: the shard's store key, and the
+    bytes of its index, which zarr reads as the shard's suffix (spec §6). A chunk is kept under
+    (array path, chunk number); the two kinds of key are never equal."""
+
+    key: str
+    size: int
+
+
+#: What the cache keeps each thing under: a chunk, or a shard's index.
+_Key = tuple[str, int] | _ShardIndex
+
+
 class ChunkCache:
     """Decoded inner chunks of one store's 1-D arrays, read whole and kept to `budget` bytes,
     the least recently used dropped first.
@@ -93,7 +110,9 @@ class ChunkCache:
             raise InputError(f"cache_bytes is a count of bytes, an int ≥ 0, not {budget!r}")
         self._budget = CACHE_BYTES if budget is None else budget
         self._bytes = 0
-        self._kept: OrderedDict[tuple[str, int], tuple[npt.NDArray[Any], int]] = OrderedDict()
+        self._kept: OrderedDict[_Key, tuple[npt.NDArray[Any], int]] = OrderedDict()
+        #: The most bytes an element has held, as counted, in any chunk of each array read.
+        self._rates: dict[str, float] = {}
         self._lock = threading.Lock()
 
     def take(self, array: zarr.Array[Any], coords: npt.ArrayLike) -> npt.NDArray[Any]:
@@ -143,13 +162,39 @@ class ChunkCache:
         together, a batch of runs at a time (ogld#32)."""
         found = self._kept_chunks(array.path, wanted.tolist())
         missing = [k for k in wanted.tolist() if k not in found]
+        if missing and self._chunk_bytes(array, size) is None:
+            # A string array none of whose chunks has been counted: one alone, to count it.
+            found.update(self._fetch_batch(array, [(missing[0], missing[0] + 1)], size))
+            missing = missing[1:]
         per_shard = (array.shards or array.chunks)[0] // size
-        most = max(1, _FETCH_BYTES // (size * array.dtype.itemsize))
+        most = max(1, _FETCH_BYTES // (self._chunk_bytes(array, size) or 1))
         concurrency = int(zarr.config.get("async.concurrency"))
         for batch in _batches(_pieces(missing, per_shard, most), concurrency, most):
-            for (first, stop), data in zip(batch, _fetched(array, batch, size), strict=True):
-                found.update(self._keep_run(array.path, first, stop, size, data))
+            found.update(self._fetch_batch(array, batch, size))
         return [found[k] for k in wanted.tolist()]
+
+    def _chunk_bytes(self, array: zarr.Array[Any], size: int) -> int | None:
+        """What one chunk of `array` is planned to hold in flight: a numeric chunk's buffer,
+        which is what it holds. A string chunk's size is not known until it is decoded, so it
+        is planned at the most a string has held, as the cache counts it (`_counted`), in any
+        chunk of that array counted so far; None before any is."""
+        if array.dtype.kind != "T":
+            return size * int(array.dtype.itemsize)
+        with self._lock:
+            rate = self._rates.get(array.path)
+        return None if rate is None else math.ceil(rate * size)
+
+    def _fetch_batch(
+        self, array: zarr.Array[Any], batch: list[tuple[int, int]], size: int
+    ) -> dict[int, npt.NDArray[Any]]:
+        """The chunks of one batch, fetched together and kept. Each piece is let go once its
+        chunks are copied out, and none outlives the call, so a read holds one batch at a
+        time."""
+        pieces = _fetched(array, batch, size)
+        found: dict[int, npt.NDArray[Any]] = {}
+        for first, stop in batch:
+            found.update(self._keep_run(array.path, first, stop, size, pieces.pop(0)))
+        return found
 
     def _kept_chunks(self, path: str, wanted: list[int]) -> dict[int, npt.NDArray[Any]]:
         """Those of the chunks `wanted` that are kept, each marked as just used."""
@@ -171,30 +216,33 @@ class ChunkCache:
             data[(k - first) * size : (k - first + 1) * size].copy() for k in range(first, stop)
         ]
         read = {first + i: (chunk, _counted(chunk)) for i, chunk in enumerate(copies)}
+        rate = max(counted / max(1, len(chunk)) for chunk, counted in read.values())
         with self._lock:
+            self._rates[path] = max(rate, self._rates.get(path, 0.0))
             return {k: self._keep((path, k), *entry) for k, entry in read.items()}
 
-    def index(self, key: str, size: int) -> bytes | None:
-        """The kept index of the shard at store key `key`, its last `size` bytes, if kept,
-        marked as just used. A shard index is kept beside the chunks, as (`key`, −`size`)."""
+    @property
+    def budget(self) -> int:
+        """The bytes this cache keeps at most (spec §10)."""
+        return self._budget
+
+    def index(self, shard: _ShardIndex) -> bytes | None:
+        """The kept index of `shard`, if kept, marked as just used."""
         with self._lock:
-            kept = self._kept.get((key, -size))
+            kept = self._kept.get(shard)
             if kept is None:
                 return None
-            self._kept.move_to_end((key, -size))
+            self._kept.move_to_end(shard)
         return kept[0].tobytes()
 
-    def keep_index(self, key: str, size: int, data: bytes) -> bytes:
-        """Keep the index `data` of the shard at store key `key`, its last `size` bytes, in
-        the budget as a chunk is kept, and give it back."""
+    def keep_index(self, shard: _ShardIndex, data: bytes) -> bytes:
+        """Keep `shard`'s index `data` in the budget, as a chunk is kept, and give it back."""
         held = np.frombuffer(data, dtype=np.uint8).copy()
         with self._lock:
-            self._keep((key, -size), held, held.nbytes)
+            self._keep(shard, held, held.nbytes)
         return data
 
-    def _keep(
-        self, key: tuple[str, int], chunk: npt.NDArray[Any], counted: int
-    ) -> npt.NDArray[Any]:
+    def _keep(self, key: _Key, chunk: npt.NDArray[Any], counted: int) -> npt.NDArray[Any]:
         """Keep `chunk`, or the copy another thread kept first; the caller holds the lock."""
         kept = self._kept.get(key)
         if kept is not None:
@@ -247,11 +295,19 @@ def _fetched(
     array: zarr.Array[Any], pieces: list[tuple[int, int]], size: int
 ) -> list[npt.NDArray[Any]]:
     """The elements of each piece of `array`'s chunks, fetched together on zarr's event loop,
-    where `zarr.Array` runs each read it is asked for."""
+    where `zarr.Array` runs each read it is asked for. A piece that fails cancels the others
+    of its batch, rather than leaving them fetching, and its own error is raised."""
 
     async def together() -> list[Any]:
-        reads = (array.async_array.getitem(slice(a * size, b * size)) for a, b in pieces)
-        return list(await asyncio.gather(*reads))
+        try:
+            async with asyncio.TaskGroup() as group:
+                reads = [
+                    group.create_task(array.async_array.getitem(slice(a * size, b * size)))
+                    for a, b in pieces
+                ]
+        except BaseExceptionGroup as failed:
+            raise failed.exceptions[0] from failed
+        return [read.result() for read in reads]
 
     return [np.asarray(data) for data in sync(together())]
 
@@ -275,7 +331,7 @@ class _KeptIndexes(WrapperStore[Store]):
     def __init__(self, store: Store, cache: ChunkCache) -> None:
         super().__init__(store)
         self._cache = cache
-        self._pending: dict[tuple[str, int], asyncio.Future[bytes | None]] = {}
+        self._pending: dict[_ShardIndex, asyncio.Future[bytes | None]] = {}
 
     def _with_store(self, store: Store) -> _KeptIndexes:
         return type(self)(store, self._cache)
@@ -283,32 +339,12 @@ class _KeptIndexes(WrapperStore[Store]):
     async def get(
         self, key: str, prototype: BufferPrototype, byte_range: ByteRequest | None = None
     ) -> Buffer | None:
-        if not isinstance(byte_range, SuffixByteRequest):
+        shard, kept = self._looked_up(key, byte_range)
+        if shard is None:
             return await self._store.get(key, prototype, byte_range)
-        kept = self._cache.index(key, byte_range.suffix)
         if kept is None:
-            kept = await self._shared(key, prototype, byte_range)
-        return None if kept is None else prototype.buffer.from_bytes(kept)
-
-    async def _shared(
-        self, key: str, prototype: BufferPrototype, byte_range: SuffixByteRequest
-    ) -> bytes | None:
-        """The index at `key`, from the fetch of it in flight if there is one, else fetched
-        and kept; None for a missing shard."""
-        pending = self._pending.get((key, byte_range.suffix))
-        if pending is None:
-            pending = asyncio.ensure_future(self._fetched(key, prototype, byte_range))
-            self._pending[(key, byte_range.suffix)] = pending
-            pending.add_done_callback(lambda _: self._pending.pop((key, byte_range.suffix)))
-        return await asyncio.shield(pending)
-
-    async def _fetched(
-        self, key: str, prototype: BufferPrototype, byte_range: SuffixByteRequest
-    ) -> bytes | None:
-        fetched = await self._store.get(key, prototype, byte_range)
-        if fetched is None:
-            return None
-        return self._cache.keep_index(key, byte_range.suffix, fetched.to_bytes())
+            kept = await self._shared(shard, prototype)
+        return _buffer(prototype, kept)
 
     def get_sync(
         self,
@@ -317,15 +353,48 @@ class _KeptIndexes(WrapperStore[Store]):
         prototype: BufferPrototype | None = None,
         byte_range: ByteRequest | None = None,
     ) -> Buffer | None:
-        if not isinstance(byte_range, SuffixByteRequest):
+        shard, kept = self._looked_up(key, byte_range)
+        if shard is None:
             return super().get_sync(key, prototype=prototype, byte_range=byte_range)
-        kept = self._cache.index(key, byte_range.suffix)
         if kept is None:
             fetched = super().get_sync(key, prototype=prototype, byte_range=byte_range)
-            if fetched is None:
-                return None
-            kept = self._cache.keep_index(key, byte_range.suffix, fetched.to_bytes())
-        return (prototype or default_buffer_prototype()).buffer.from_bytes(kept)
+            kept = self._kept_from(shard, fetched)
+        return _buffer(prototype, kept)
+
+    def _looked_up(
+        self, key: str, byte_range: ByteRequest | None
+    ) -> tuple[_ShardIndex | None, bytes | None]:
+        """The shard index a read of `key` asks for, None for any other read, and that index
+        as the cache keeps it, None if it does not."""
+        if not isinstance(byte_range, SuffixByteRequest):
+            return None, None
+        shard = _ShardIndex(key, byte_range.suffix)
+        return shard, self._cache.index(shard)
+
+    def _kept_from(self, shard: _ShardIndex, fetched: Buffer | None) -> bytes | None:
+        """`shard`'s index as fetched, kept; None, and nothing kept, for a missing shard."""
+        return None if fetched is None else self._cache.keep_index(shard, fetched.to_bytes())
+
+    async def _shared(self, shard: _ShardIndex, prototype: BufferPrototype) -> bytes | None:
+        """`shard`'s index, from the fetch of it in flight if there is one, else fetched and
+        kept; None for a missing shard."""
+        pending = self._pending.get(shard)
+        if pending is None:
+            pending = asyncio.ensure_future(self._fetched(shard, prototype))
+            self._pending[shard] = pending
+            pending.add_done_callback(lambda _: self._pending.pop(shard))
+        return await asyncio.shield(pending)
+
+    async def _fetched(self, shard: _ShardIndex, prototype: BufferPrototype) -> bytes | None:
+        fetched = await self._store.get(shard.key, prototype, SuffixByteRequest(shard.size))
+        return self._kept_from(shard, fetched)
+
+
+def _buffer(prototype: BufferPrototype | None, kept: bytes | None) -> Buffer | None:
+    """A shard index as zarr asks for it, None for a missing shard."""
+    if kept is None:
+        return None
+    return (prototype or default_buffer_prototype()).buffer.from_bytes(kept)
 
 
 def _run(
@@ -381,9 +450,11 @@ def _bytes_per_character(
 ) -> npt.NDArray[np.int64] | int:
     """1 for each string of `chunk` proved ASCII, and `_UTF8_MOST` for every other.
 
-    numpy casts variable-width strings to fixed-width bytes only when every character it keeps
-    is ASCII, and raises otherwise; the cast keeps each string's first `width` characters. So
-    one cast proves every string of at most `width` characters ASCII, or proves nothing."""
+    The cast to fixed-width bytes `width` wide raises on any non-ASCII character. numpy 2.4
+    checks every character of a string, even those past `width` that the copy drops; the count
+    relies only on the characters the copy keeps. So one cast that does not raise proves every
+    string of at most `width` characters ASCII, and a string longer than that counts at UTF-8's
+    most, as one that raises counts every string."""
     width = min(int(characters.max(initial=0)), _ASCII_CHECKED)
     try:
         chunk.astype(np.dtype(f"S{max(width, 1)}"))

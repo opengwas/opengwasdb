@@ -180,13 +180,17 @@ def _sequential_chunks(self: Any, array: Any, wanted: np.ndarray, size: int) -> 
 
 def _counted_per_string(chunk: np.ndarray) -> int:
     """`location._counted` as it was before ogld#32 (`--without count`): each string's UTF-8
-    bytes, one string at a time."""
+    bytes, one string at a time, by the same rule and constants."""
     import math
+
+    from ogld.store import location
 
     if chunk.dtype.kind != "T":
         return int(chunk.nbytes)
-    long = [n for n in (len(s.encode("utf-8")) for s in chunk.tolist()) if n > 15]
-    return int(chunk.nbytes) + math.ceil(1.25 * (sum(long) + 8 * len(long))) + 512
+    utf8 = (len(s.encode("utf-8")) for s in chunk.tolist())
+    long = [n for n in utf8 if n > location._INLINE]
+    arena = math.ceil(location._GROWTH * (sum(long) + location._HEADER * len(long)))
+    return int(chunk.nbytes) + arena + location._ARENA_FIXED
 
 
 async def _index_passed(self: Any, key: str, prototype: Any, byte_range: Any = None) -> Any:
@@ -350,7 +354,7 @@ class Bench:
             "step": self.step,
             "reader": self.reader,
             "without": list(self.without),
-            "cache_bytes": int(store_of()._reader._cache._budget),
+            "cache_bytes": int(store_of()._reader.cache_bytes),
             "target": self.target.name,
             "latency_ms": self.target.latency_ms,
             **meta,
