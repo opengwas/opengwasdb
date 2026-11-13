@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tracemalloc
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,32 @@ def test_numeric_chunks_equal_zarr(tmp_path: Path, endian: str) -> None:
     assert location._NumericDecoder.of(array) is not None
     cache = location.ChunkCache()
     np.testing.assert_array_equal(cache.take(array, np.arange(len(data))), array[:])
+
+
+def test_a_sparse_warm_read_does_not_join_whole_chunks(tmp_path: Path) -> None:
+    # 8 MiB kept, one value per chunk returned: a full concatenate is not a read's result.
+    size = 65536
+    data = np.arange(32 * size, dtype=np.int32)
+    array = zarr.create_array(
+        store=tmp_path / "a",
+        shape=data.shape,
+        dtype=data.dtype,
+        chunks=(size,),
+        shards=(size * 8,),
+        compressors=[ZstdCodec()],
+    )
+    array[:] = data
+    cache = location.ChunkCache()
+    coords = np.arange(32) * size + 17
+    cache.take(array, coords)
+    tracemalloc.start()
+    try:
+        got = cache.take(array, coords[::-1])
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    np.testing.assert_array_equal(got, data[coords[::-1]])
+    assert peak < data.nbytes // 2, f"{peak} bytes held to return {got.nbytes}"
 
 
 def test_every_test_store_array_equals_zarr() -> None:

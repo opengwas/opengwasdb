@@ -129,11 +129,20 @@ class ChunkCache:
         which = at // size
         wanted = np.unique(which)
         chunks = self._chunks(array, wanted, size)
-        start = np.concatenate([[0], np.cumsum([len(c) for c in chunks])])
-        joined = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
-        found: npt.NDArray[Any] = joined[
-            start[np.searchsorted(wanted, which)] + (at - which * size)
-        ]
+        if len(chunks) == 1:
+            single: npt.NDArray[Any] = chunks[0][at - wanted[0] * size]
+            return single
+        # Joining full cached chunks copied gigabytes per sparse lead even on a cache hit
+        # (ogld#40). Gather only requested values, then undo the grouping's permutation.
+        order = np.argsort(which, kind="stable")
+        offsets = (at % size)[order]
+        starts = np.searchsorted(which[order], wanted)
+        stops = np.append(starts[1:], len(at))
+        grouped = np.concatenate(
+            [chunk[offsets[a:b]] for chunk, a, b in zip(chunks, starts, stops, strict=True)]
+        )
+        found = np.empty_like(grouped)
+        found[order] = grouped
         return found
 
     def runs(

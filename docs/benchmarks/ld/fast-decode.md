@@ -43,3 +43,15 @@ before the decoder was changed to check the decoded length.
 half the decoded-byte allowance for worker scratch; the cache budget is unchanged.
 The complete default tier passed 1,240 tests in 26.76 s with eight pytest workers at this
 slice. Tip: 1,227 tests in 16.77 s, load 1.47→4.30. Both are below 30 s.
+
+## Sparse gathers and chromosome scheduling
+
+The production decoder plus chromosome-local scheduling still took 75.023 s under profiling,
+with the same fingerprint and 33,394 Near Band chunks. This was a diagnostic run, not a
+clean timing (two small red/green tests also ran during it). Its profile exposed a further
+cost: every warm sparse `take` concatenated whole decoded chunks before selecting a handful
+of values. The regression test held 8,391,715 traced bytes to return 128 bytes; it failed
+before the gather was changed to select values inside each chunk first. The same test now
+passes without a full-chunk join. Interleaved chromosomes, tied scores, duplicate requests,
+absent ALIDs and thresholds 0 through 1 keep the same answers; the column-read test failed
+before removing the unused columns. The default tier then passed 1,247 tests in 20.24 s.

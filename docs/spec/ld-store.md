@@ -798,6 +798,13 @@ compares r2 with t_far itself:
 | `proxies` | the Proxy Index row of each query variant | the Near Band row and column of each query variant, within W |
 | `clump` | the Proxy Index row of each lead, among the hits still unclumped | one Near Band element for each lead and each hit still unclumped within W |
 
+`clump` visits one chromosome at a time, strongest first inside it, and scatters results
+back into the original request order, including duplicates (ogld#40; ADR 0009). A clump
+cannot cross chromosomes, so this changes no lead or member, but avoids evicting chunks to
+visit other chromosomes between leads. It reads ALIDs, chromosomes and positions, not the
+alleles or allele frequencies it never returns. A sparse chunk-cache read gathers only its
+requested elements, rather than concatenating whole cached chunks on every warm lead.
+
 `clump` asks for one lead's partners at a time, among the hits no stronger lead has taken, and
 never for a square among a lead and its m candidates, which resolves every pair among them. On the
 Test Store's 1,056 hits within 3 Mb, at its × 511 encoding, the leads need 23,228 pairs at r² 0.1.

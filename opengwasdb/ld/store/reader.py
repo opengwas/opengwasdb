@@ -230,14 +230,25 @@ class StoreReader:
         query names its rows by, read without the others (ogld#14)."""
         return self._strings("alid", self._checked(rows))
 
-    def variants(self, rows: npt.NDArray[np.int64]) -> Variants:
-        """The Variant Set's columns at `rows`, in the order given (spec §2)."""
+    def loci_of(
+        self, rows: npt.NDArray[np.int64]
+    ) -> tuple[npt.NDArray[np.str_], npt.NDArray[np.int64]]:
+        """Chromosomes and positions, without allele columns clump never returns (ogld#40).
+
+        This is a store-layer read, not a public query or a new caller setting. Geometry
+        and chromosome label dtypes stay identical to the full variant-table read.
+        """
         rows = self._checked(rows)
         position = np.empty(len(rows), dtype=np.int64)
         for c, members in self._by_chromosome(rows):
             position[members] = c.position[local_rows(rows[members], c.start)]
         names = np.array(self._names, dtype=np.str_)
-        chrom = names[chromosome_index(self._stops, rows)]
+        return names[chromosome_index(self._stops, rows)], position
+
+    def variants(self, rows: npt.NDArray[np.int64]) -> Variants:
+        """The Variant Set's columns at `rows`, in the order given (spec §2)."""
+        rows = self._checked(rows)
+        chrom, position = self.loci_of(rows)
         frequency = self._read(self._columns["a1_frequency"], rows)
         return Variants(
             chrom=chrom,

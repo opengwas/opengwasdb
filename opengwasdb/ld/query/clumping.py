@@ -37,20 +37,44 @@ def clump(
     present = found >= 0
     absent = tuple(alid for alid, ok in zip(alids, present, strict=True) if not ok)
     rows, scores = found[present], scores[present]
-    variants = reader.variants(rows)
+    chrom, position = reader.loci_of(rows)
+    names = reader.alids_of(rows)
 
-    lead, r_lead = _greedy(reader, rows, scores, r2=r2, window=window)
+    lead, r_lead = _chromosome_greedy(reader, rows, scores, chrom, r2=r2, window=window)
     return Clumps(
-        alid=variants.alid,
-        chrom=variants.chrom,
-        position=variants.position,
+        alid=names,
+        chrom=chrom,
+        position=position,
         score=scores,
-        lead=variants.alid[lead],
+        lead=names[lead],
         r=r_lead,
         absent=absent,
         r2=r2,
         window_bp=window,
     )
+
+
+def _chromosome_greedy(
+    reader: StoreReader,
+    rows: npt.NDArray[np.int64],
+    scores: npt.NDArray[np.float64],
+    chrom: npt.NDArray[np.str_],
+    *,
+    r2: float,
+    window: float,
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
+    """A clump cannot cross chromosomes: keep each one's chunks together (ADR 0009).
+
+    Scatter back into request order, including duplicates. Only the order of independent
+    chromosome passes changes, never strongest-first order inside one chromosome.
+    """
+    lead = np.empty(len(rows), dtype=np.int64)
+    r_lead = np.empty(len(rows), dtype=np.float64)
+    for name in np.unique(chrom):
+        members = np.flatnonzero(chrom == name)
+        local, values = _greedy(reader, rows[members], scores[members], r2=r2, window=window)
+        lead[members], r_lead[members] = members[local], values
+    return lead, r_lead
 
 
 def _greedy(
