@@ -74,7 +74,15 @@ is what they need.
    `far.index`, which holds the Far Pairs equal to the index's entries beyond `near_bp`, pair
    for pair and code for code. With `index.symmetric` that makes them the index's far pairs,
    once each.
-6. **`format_version` stays `0.1.0`.** It is an unreleased draft (spec §13): no LD Store in it
+6. **The Far Pairs keep the index's array shape:** 16,384 entries an inner chunk, 64 chunks to
+   a shard (spec §6). They were chosen on the chromosome where they are densest as well as on
+   chr22, because they lie very unevenly: EUR chr22 holds 0.85 Far Pairs a variant, chr11 161.5,
+   nearly all in rows at 45–55 Mb. For a matrix of 500 variants on one chromosome, at 16,384 the
+   Far Pairs touch 5 chunks of each array in 1 run on chr22 and 51 in 28 on chr11, against the
+   index's 447 in 339 and 529 in 463. A chunk of 4,096 adds runs on chr11 (37); one of 65,536 or
+   262,144 removes few (26, 24) and decodes 2.6 and 8 times the bytes. A larger shard removes no
+   run there and enlarges the shard a writer holds.
+7. **`format_version` stays `0.1.0`.** It is an unreleased draft (spec §13): no LD Store in it
    has been published, and the owner ruled that the Far Pairs come back before the first
    release.
 
@@ -116,3 +124,13 @@ is what they need.
   variant: 69 MB for HGDP+1kGP EUR.
 - **The Test Store holds 7 Far Pairs** (4 on chr21, 3 on chr22), 7.7 KB in `far/`. Every other
   array of it is byte-identical to the store written before this decision.
+- **The five HGDP+1kGP stores gained their Far Pairs in place** (12–13 November 2026), with
+  `scripts/derive_far_pairs.py`: 628,713,731 in all, 1.46 GB, 0.27% of the 532 GB (EUR 0.32 GB,
+  AFR 0.49, EAS 0.19, SAS 0.29, AMR 0.16; raw, at 6 bytes a pair, 0.53–1.15 GB, EUR's 0.80 GB
+  about 1% of its store). Each store's count equals the `counts.far_pairs` it recorded when built,
+  and none of its other files changed. The derivation writes them from each store's own index
+  through the stream a build writes them through. First, on EUR chr22 built twice from the
+  published store's inputs, a store derived in place from the tip's build was byte-identical to
+  this decision's build in all 136 files but the root document, 8 of them in `far/`, and their
+  provenance differed only in `build`. So the five carry what a rebuild would write; their
+  `software` names the ogld that built them before the Far Pairs, which wrote everything else.

@@ -426,6 +426,25 @@ gave at × 32767. The other arrays use one shape, 16,384 inner and
 the prototype's stores used this shape for them. At EUR's 5.3×10⁹ index entries that is about
 5,000 shards for each of `partner` and `r`; ogld#8 may coarsen the shard, which changes no reader.
 
+**The Far Pairs keep that shape** (ogld#31): 16,384 entries an inner chunk, 64 chunks to a shard.
+EUR's 1.33×10⁸ Far Pairs are 140 shards of each array. They are read by row, so what a read pays is
+the chunks its rows touch and the runs of neighbouring chunks among them, each run one Zarr call
+(§10). The rows lie very unevenly: EUR chr22 holds 0.85 Far Pairs a variant, and chr11 161.5,
+68.75 M of its 69.0 M in rows at 45–55 Mb, up to 11,560 in one row. For a matrix of 500 variants
+drawn on one chromosome (ogld#8's draw, seed 8), counted from the EUR store's `indptr`:
+
+| chromosome | the index, at 16,384 | Far Pairs at 4,096 | at 16,384 | at 65,536 | at 262,144 |
+|---|---|---|---|---|---|
+| 22 | 447 chunks in 339 runs | 15 in 1, 0.4 MiB | **5 in 1**, 0.5 MiB | 2 in 1, 0.8 MiB | 1 in 1, 1.5 MiB |
+| 11 | 529 in 463 | 98 in 37, 2.3 MiB | **51 in 28**, 4.8 MiB | 33 in 26, 12.4 MiB | 26 in 24, 39.0 MiB |
+| 6 | 526 in 476 | 74 in 46, 1.7 MiB | **45 in 21**, 4.2 MiB | 25 in 13, 9.4 MiB | 16 in 10, 24.0 MiB |
+
+Chunks and runs are each array's, `partner` and `r` alike; MiB is what the chunks decode to,
+both arrays. A smaller chunk adds runs where rows are long (37 against 28 on chr11); a larger one
+removes few (26 and 24) and decodes 2.6 and 8 times the bytes. A larger shard removes no run
+here (chr11's list makes 28 runs within shards at 1,048,576 entries, and still 28 at 16,777,216),
+and a store's writer holds one shard of each array (§6, ogld#17).
+
 **Bits per pair, measured** (ogld#16). A real build of HGDP+1kGP EUR chr22 at each scale: the
 phased v2 callset converted by `docs/spec/build-inputs.md` §3, the 665 unrelated samples of the EUR
 keep file, k = 10 from `/data/opengwasdb/work/ogld/pcs/EUR.eigenvec`, 8 threads, at ogld
@@ -460,7 +479,18 @@ AMR 341), MAC ≥ 20, k = 10, × 511, 16 threads, on the provisional layout, at 
 | HGDP+1kGP AMR | 7.56 M | 65,192,230,001 | 58.6 GB | 7.19 | 3,337,986,118 | 5.4 GB | 13.05 | 64.1 GB |
 | **Total** | 47.2 M | 539,567,716,377 | 486.1 GB | 7.21 | 24,516,005,900 | 45.2 GB | 14.76 | 531.9 GB |
 
-The five total 532 GB, 0.53 TB.
+The five total 532 GB, 0.53 TB, before their Far Pairs (ogld#31). Those were derived in place
+from each store's own index (ADR 0006) and add 1.46 GB, 0.27%: 18.5 bits a pair on disk, 3.2% of
+the index's bytes. Bytes are those of `far/`'s files; raw, a pair is 6 bytes.
+
+| LD Store | Far Pairs | per variant | `far/` | bits per pair | against the index | of the store |
+|---|---|---|---|---|---|---|
+| HGDP+1kGP EUR | 132,924,736 | 15.5 | 0.32 GB | 19.00 | 3.4% | 0.40% |
+| HGDP+1kGP AFR | 192,465,514 | 13.4 | 0.49 GB | 20.47 | 3.3% | 0.20% |
+| HGDP+1kGP EAS | 92,650,917 | 11.8 | 0.19 GB | 16.76 | 2.7% | 0.30% |
+| HGDP+1kGP SAS | 122,204,575 | 13.8 | 0.29 GB | 18.96 | 3.4% | 0.34% |
+| HGDP+1kGP AMR | 88,467,989 | 11.7 | 0.16 GB | 14.83 | 3.0% | 0.26% |
+| **Total** | 628,713,731 | 13.3 | 1.46 GB | 18.53 | 3.2% | 0.27% |
 
 **Why the earlier estimate (1.20 TB at × 511) was high.** It was 2.3 times the measurement, for two
 reasons. Variants: it took gnomAD v3.1.2's MAC ≥ 20 sites, non-PASS sites included (about 25% of
@@ -911,7 +941,7 @@ The trade-off, on the prototype's numbers at k = 0, as the owner weighed it on 8
 
 | | Near Band + Proxy Index (8–12 November) | Near Band + Far Pairs + Proxy Index (adopted 12 November) |
 |---|---|---|
-| bytes per panel | the index alone: 11.3–25.7 GB | also the Far Pairs, once more: 0.09 GB (EUR) to 1.39 GB (AMR), 0.03–0.76% of a store, and one more `indptr` per chromosome |
+| bytes per panel | the index alone: 11.3–25.7 GB | also the Far Pairs, once more: 0.09 GB (EUR) to 1.39 GB (AMR), 0.03–0.76% of a store, and one more `indptr` per chromosome. As built at k = 10 (§6): 0.16 GB (AMR) to 0.49 GB (AFR) on disk, 0.20–0.40% of a store; raw, at 6 bytes a pair, 0.53–1.15 GB, EUR's 0.80 GB about 1% of its store |
 | builder paths | one sparse output, symmetric, from the Near Band rows and the 3–10 Mb scan | two: the upper-triangle Far Pairs and the symmetric index, from the same scan |
 | validation rules | `index.*`: six rules (§12) | the six, the four `far.*` rules, and `far.index`, holding the Far Pairs equal to the index's far entries |
 | a pair beyond `near_bp` | binary search of one index row, about 485 entries on average for EUR (6.24×10⁹ entries over 12.9 M variants) | binary search of one Far Pairs row, about 3 entries for EUR |
