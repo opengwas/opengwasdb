@@ -1,7 +1,5 @@
 # LD is served by a separate service, ogld-api, from local disk; the LD Stores will also be public as static Zarr
 
-**Status: Accepted** (owner, 13 November 2026, on ogld#9).
-
 Issue [#9](https://github.com/opengwas/ogld/issues/9), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 The reads are in `docs/spec/ld-store.md` §10 and their compatibility in §13. The measurements
 are in `docs/benchmarks/latency.md` (ogld#8), `docs/benchmarks/fast-reader.md` (ogld#32),
@@ -9,10 +7,11 @@ are in `docs/benchmarks/latency.md` (ogld#8), `docs/benchmarks/fast-reader.md` (
 rendered from records under `docs/benchmarks/results/`. The terms are in `CONTEXT.md`.
 
 **Who decided.** The owner, on 13 November 2026, in the orchestrated run, recorded on ogld#9,
-from this ADR's proposal on `orch/1/9-serving` and the numbers in `docs/benchmarks/serving.md`.
-Their three rulings are the three decisions below. The proposal had recommended ogdb-api's job
-workers, with LD jobs in worker processes of their own; the owner chose a separate service, and
-that option is kept below with what it would have cost. They also answered the question this
+from this ADR's proposal on `orch/1/9-serving` and the numbers in `docs/benchmarks/serving.md`;
+this ticket drafted the proposal, and the owner's rulings made it a decision. Their three
+rulings are the three decisions below. The proposal had recommended ogdb-api's job workers, with
+LD jobs in worker processes of their own; the owner chose a separate service, and that option is
+kept below with what it would have cost. They also answered the question this
 record had left open: ogdb-api's live server runs on this IEU node, app-dc3-ogws-p0.
 
 ## The questions
@@ -100,7 +99,8 @@ bandwidth, so they leave out what the bytes cost on a real link (48.6 GB is 6.5 
 
 ogld-api runs `ogld` as a library against the LD Stores on local disk and answers LD queries
 (`clump`, `matrix`, `region`, `proxies`, and a presence lookup for ieugwasr's `reflookup`). Its
-epic, drafted in ogld#9's report, is filed in `opengwas/ogld-api` and placed in the LD
+epic, drafted in ogld#9's report, is filed in `opengwas/ogld-api` as
+[opengwas/ogld-api#1](https://github.com/opengwas/ogld-api/issues/1) and placed in the LD
 workstream, as ogld#9's acceptance criterion asks. It runs on the same
 node as ogdb-api and the stores, so it reads them from local disk: an Analysis's clump takes
 6.3 s at the median and 69 s at most, and a matrix of 500 chr22 variants 1.2 s, before the job's
@@ -153,7 +153,7 @@ confirm it. Until then, the stores are at `/data/opengwasdb/work/ogld/stores/` a
 | memory | one LD worker process: 1.5 GiB with the five stores' chromosomes loaded, 21.5 GiB with their caches full at the default 4 GiB; `cache_bytes` sets it | the same |
 | failure isolation | per process, with LD workers of their own; none without them | per service |
 | versioning | ogdb-api pins ogld beside opengwasdb; a reader change redeploys the API image | ogld-api pins ogld alone; deploys on its own |
-| top-hit clumps (opengwasdb#419) | the same process and pin | still ogld inside ogdb-api: two pins of ogld to keep in step |
+| top-hit clumps (opengwasdb#419) | the same process and pin | still ogld inside ogdb-api: two pins of ogld, both of which must read every served store |
 | gateway | `ogdb`'s paths, unchanged | a second namespace, or ogdb-api forwarding `/api/ld/*` |
 | to build | LD operations, an LD worker role, the readers kept open, a timeout per operation | a service, its deployment, and all of ogdb-api's job system again |
 
@@ -172,15 +172,17 @@ confirm it. Until then, the stores are at `/data/opengwasdb/work/ogld/stores/` a
 - **(a) with LD jobs in worker processes of their own.** This ticket's proposal; not chosen. It
   would have reused ogdb-api's job system whole and removed the three costs by process
   isolation, but LD would have been released with ogdb-api's image and its ogld pin. Two other
-  costs of sharing a process were measured and are small, and so did not decide it: while ogld
-  reads on a worker thread, an asyncio loop on the main thread wakes 1–16 ms late at the 99th
-  percentile and at most 116 ms late (0.4 ms idle); and under the zarr codec pipeline the engine
-  sets process-wide when imported (opengwasdb ADR 0056), a clump and a matrix took within the
-  run-to-run spread (−7% to +15%) and a 3 Mb region 15–17% longer.
-- **Synchronous LD endpoints, no job.** Rejected: a clump can run for minutes, and ogdb-api's
-  owner decided that every data query is a job and that direct routes go (6 November 2026, its
-  #11 and #14), with ieugwasr's and ieugwaspy's compatibility paths the one exception that waits
-  server-side, on a job.
+  costs of sharing a process were measured. While ogld reads on a worker thread, an asyncio loop
+  on the main thread wakes 2–16 ms late at the 99th percentile, and once in each of two settings
+  more than 100 ms late (at most 206 ms), against 0.2–0.3 ms idle. And under the zarr codec
+  pipeline the engine sets process-wide when imported (opengwasdb ADR 0056), every query took
+  longer, round against round: a clump 17% and 49%, a matrix 19% and 45%, a 3 Mb region 12% and
+  14%, with the same answers, at a node load of 55–94.
+- **Synchronous LD endpoints, no job.** Rejected by this record, not by the owner's ruling,
+  which chose the route: it infers from ogdb-api's rule that every data query is a job and that
+  direct routes go (its owner, 6 November 2026, its #11 and #14), with ieugwasr's and ieugwaspy's
+  compatibility paths the one exception that waits server-side, on a job. A clump can run for
+  minutes, which a direct route would hold open.
 
 ### Static Zarr
 
@@ -197,10 +199,10 @@ confirm it. Until then, the stores are at `/data/opengwasdb/work/ogld/stores/` a
 ### Where
 
 The owner chose local disk only, for now (decision 3). This table is kept as the record for the
-later choice of a public host. List prices read on 13 November 2026 from the providers' pages
-or, where those would not load, from third-party summaries, for 533 GB. "A full clump" is the
-48.6 GB, in 86,286 requests, that #403's 37 Analyses read at r² 0.01
-(`docs/benchmarks/serving.md`).
+later choice of a public host. List prices are for 533 GB, each read on 13 November 2026 from
+the source under the table; where the provider's own page would not load, the source is a
+third-party summary and says so. "A full clump" is the 48.6 GB, in 86,286 requests, that #403's
+37 Analyses read at r² 0.01 (`docs/benchmarks/serving.md`).
 
 | place | storage a month | egress | a full clump read remotely | access control | read locally by a service on the node |
 |---|---|---|---|---|---|
@@ -211,6 +213,29 @@ or, where those would not load, from third-party summaries, for 533 GB. "A full 
 | Backblaze B2 | about $3.70 | free to 3× stored a month (1.6 TB), then $0.01/GB | free within 1.6 TB | public bucket, or keys | no |
 | a CDN in front | the origin's | CloudFront about $0.085/GB in Europe after 1 TB free; Cloudflare's CDN terms restrict large non-HTML files not hosted on R2 | the origin's, less cache hits | the CDN's | no |
 | Zenodo | free | free | — | public | no |
+
+Sources, each read on 13 November 2026:
+
+- **Cloudflare R2:** the provider's page, <https://developers.cloudflare.com/r2/pricing/>:
+  $0.015 per GB-month, Class B reads $0.36 a million, egress free, 10 GB-month free.
+- **OCI Object Storage:** third-party summaries, because Oracle's pricing pages answered 403
+  (<https://www.activepieces.com/blog/oracle-cloud-infrastructure-pricing-2026-price-guide>, and
+  Oracle's <https://www.oracle.com/cloud/networking/virtual-cloud-network/pricing/> as search
+  results quote it): about $0.0255 per GB-month, 10 TB of egress a month free and then about
+  $0.0085/GB. One summary says the allowance changed in February 2026; unconfirmed.
+- **AWS S3 Standard:** the provider's page, <https://aws.amazon.com/s3/pricing/>, for GET requests
+  ($0.0004 per 1,000) and the 100 GB of free egress a month; third-party summaries for storage
+  ($0.023 per GB-month for the first 50 TB) and egress ($0.09/GB for the first 10 TB), as the
+  provider's page did not show them
+  (<https://www.cloudforecast.io/blog/aws-s3-pricing-and-optimization-guide>). The Open Data
+  Sponsorship Program: <https://aws.amazon.com/opendata/open-data-sponsorship-program/>.
+- **Backblaze B2:** the provider's page, <https://www.backblaze.com/cloud-storage/pricing>, as
+  search results quote it: $6.95 per TB-month, egress free to 3× the average stored, then $0.01/GB.
+- **A CDN:** CloudFront from search results quoting <https://aws.amazon.com/cloudfront/pricing/>
+  and third-party summaries ($0.085/GB in Europe after 1 TB a month free); Cloudflare's CDN terms
+  from <https://blog.cloudflare.com/updated-tos/>.
+- **Zenodo:** <https://help.zenodo.org/docs/deposit/manage-files/quota-increase>: 50 GB and 100
+  files a record, 200 GB on request.
 
 - **The IEU node.** Free, and where ogdb-api and ogld-api run; chosen as the served copy. As a
   public host it would make a compute node a public web host, which needs the University's
@@ -249,12 +274,19 @@ or, where those would not load, from third-party summaries, for 533 GB. "A full 
   for top-hit clumps (opengwasdb#419). Both read the same stores, and a reader refuses a
   `format_version` or encoding it does not implement (§13), so a store in a new format waits
   until both pins implement it, and is published under a new name beside the old.
+- **ogld inside the engine reads under the engine's zarr settings.** Route (b) keeps ogld-api's
+  reads under zarr's defaults, but the engine's on-the-fly top-hit clumps (opengwasdb#419) run
+  ogld in an engine process, under `FusedCodecPipeline` with one worker, where every query took
+  12–49% longer here. That is the engine's to weigh.
 - **The gateway gains a backend.** opengwas-gateway forwards `/{namespace}/{path}` to one backend
   per namespace; ogld-api is a second. Where ieugwasr's `/ld/*` paths go is the epic's question.
-- **The served copy and any public copy are the same immutable directories.** Each is checked by
-  `ogld.validate` after it is written, and a store is republished whole, under a new name, never
-  edited in place. Before a public copy is announced, `ogld.open` on its URL runs the realdata
-  reads: zarr reads a shard's index as a suffix range (§10).
+- **Immutable directories, once the path is ruled.** If the owner confirms the proposed
+  `/data/opengwasdb/ld-stores/`, the served copy and any public copy are the same immutable
+  directories: each is checked by `ogld.validate` after it is written, and a store is
+  republished whole, under a new name, never edited in place. Until then the stores are at
+  `/data/opengwasdb/work/ogld/stores/`, which is not that: the final lane replaces it by a swap.
+  Before a public copy is announced, `ogld.open` on its URL runs the realdata reads: zarr reads a
+  shard's index as a suffix range (§10).
 
 ## Open items this record does not settle
 
@@ -266,7 +298,7 @@ or, where those would not load, from third-party summaries, for 533 GB. "A full 
   which configuration each ancestry offers by default is opengwasdb#416's.
 - **Whether UK Biobank's LD Store (ogld#10) may be public as static Zarr.** This record covers
   the five HGDP+1kGP stores, whose genotypes are public (ADR 0002, decision 7).
-- **The public host,** and with it when decision 2 takes effect. The options are below.
+- **The public host,** and with it when decision 2 takes effect. The options are above.
 - **The served copy's directory:** `/data/opengwasdb/ld-stores/`, as proposed above, until the
   owner confirms it or names another.
 

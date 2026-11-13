@@ -1,8 +1,11 @@
 # What serving LD costs: a job's clump, a remote client's reads, a worker's memory (ogld#9)
 
-_Measured 13 November 2026 on the published HGDP+1kGP stores, at ogld `6bae783` (ogld#31's Far
-Pairs and ogld#32's reader, both merged). The records are in [`results/9/`](results/9/); ogld#8's
-method, targets and states are in [`latency.md`](latency.md). ADR 0008 uses these numbers._
+_Measured 13 November 2026 on the published HGDP+1kGP stores: the clump and read runs at ogld
+`6bae783` (ogld#31's Far Pairs and ogld#32's reader, both merged), the memory and lag runs at
+`1dcd548`, whose `ogld/` is the same. The records are in [`results/9/`](results/9/), and
+[`serving-tables.md`](serving-tables.md) is every one of them rendered by `bench-serving tables`.
+ogld#8's method, targets and states are in [`latency.md`](latency.md). ADR 0008 uses these
+numbers._
 
 ## In brief
 
@@ -17,12 +20,13 @@ method, targets and states are in [`latency.md`](latency.md). ADR 0008 uses thes
   to a third of which over HTTP is loading the touched chromosomes' positions and `indptr`
   arrays. `proxies` for one variant on an opened store takes 29 ms, 108 ms, 346 ms and 655 ms.
 - **One process holding the five stores** is 1.52 GiB resident once it has met every chromosome,
-  and 21.46 GiB with every chunk cache full at the default 4 GiB (peak 22.05 GiB). The caches
+  and 21.46 GiB with every chunk cache full at the default 4 GiB (peak 22.07 GiB). The caches
   counted 19.80 GiB of it: the bound holds in resident memory.
-- **Sharing a process costs little.** While ogld reads on a worker thread, an asyncio loop on
-  the main thread wakes 1–16 ms late at the 99th percentile, at most 116 ms. Under the zarr
-  settings the engine makes process-wide, a clump and a matrix take within the run-to-run
-  spread, and a 3 Mb region 15–17% longer.
+- **Sharing a process.** While ogld reads on a worker thread, an asyncio loop on the main thread
+  wakes 2–16 ms late at the 99th percentile, and once in each setting more than 100 ms late (at
+  most 206 ms). Under the zarr settings the engine makes process-wide when imported, every query
+  took longer than under zarr's defaults, round against round: a clump 17% and 49%, a matrix 19%
+  and 45%, a 3 Mb region 12% and 14%, at a node load of 55–94. The answers were the same.
 
 ## What was measured, and why
 
@@ -50,21 +54,24 @@ decision turns on were not measured:
   added to every request. **This is loopback with injected latency, not a real WAN.** 10, 50 and
   100 ms stand for a client within the UK, across Europe, and across the Atlantic; none was
   measured on a real path.
-- **Memory:** `pixi run -e dev python scripts/bench/serving.py memory`. One process opens the five
+- **Memory:** `pixi run -e dev bench-serving memory --out <file>`. One process opens the five
   stores with the default 4 GiB cache each (§10), loads every chromosome's positions and its Near
   Band, Proxy Index and Far Pairs `indptr` through the reader's own loaders, then reads 3 Mb
-  regions on each store until its cache holds 95% of its budget. `VmRSS` and `VmHWM` are read
-  from `/proc/self/status` after each step, beside each store's cache count.
-- **Sharing a process:** `pixi run -e dev python scripts/bench/serving.py lag`, then the same with
+  regions on each store until its cache holds 95% of its budget; a store that ran out of regions
+  first would stop the run. `VmRSS` and `VmHWM` are read from `/proc/self/status` after each step,
+  beside each store's cache count.
+- **Sharing a process:** `pixi run -e dev bench-serving lag --out <file>`, then the same with
   `--engine-zarr`. The main thread runs an asyncio loop whose task sleeps 5 ms and records how
   late it woke; the query runs on one worker thread (`run_in_executor`), cold: the EUR store's
-  pages evicted and the store opened on that thread. The queries: clumping GCST90319613 (one of
-  ogld#8's four) at r² 0.01 within 3 Mb, a matrix of 500 variants drawn genome-wide (seed 8), and
-  a 3 Mb region on chr22 at 32 Mb. `--engine-zarr` sets what `opengwasdb/store/arrays.py` sets on
-  import: `FusedCodecPipeline` with one worker, and `write_empty_chunks`.
+  pages evicted and the store opened on that thread. The queries are ogld#8's own
+  (`latency.clump_query`, `matrix_query`, `region_query`): clumping GCST90319613 (one of ogld#8's
+  four) at r² 0.01 within 3 Mb, a matrix of 500 variants drawn genome-wide (seed 8), and a 3 Mb
+  region on chr22 at 32 Mb. Each records what it answered: leads, or the pairs stored.
+  `--engine-zarr` sets what `opengwasdb/store/arrays.py` sets on import: `FusedCodecPipeline` with
+  one worker, and `write_empty_chunks`.
 
-Threads: zarr's pool 6, BLAS 1; the static host and proxy at most two each; `lag` one worker
-thread more. Every record carries the node's load before and after.
+Threads: zarr's pool 6, BLAS 1 (both tasks set it); the static host and proxy at most two each;
+`lag` one worker thread more. Every record carries the node's load.
 
 ## A clump job on the server
 
@@ -103,28 +110,34 @@ By the number of 5e-8 hits an Analysis has, at r² 0.01:
 
 ## One process holding the five stores
 
-`serving.py memory`, one process, the default `cache_bytes` (4 GiB a store). Resident memory
-after each step:
+`bench-serving memory`, one process, the default `cache_bytes` (4 GiB a store), one row a
+record, as `bench-serving tables` renders them. The node's load was 54–91.
 
-| step | resident | peak | chunk caches, counted |
-|---|---|---|---|
-| imported | 0.06 GiB | 0.06 GiB | 0 |
-| the five stores opened | 0.07 GiB | 0.07 GiB | 0 |
-| every chromosome loaded: AFR | 0.53 GiB | 0.53 GiB | 0 |
-| … EUR, EAS, SAS | 0.79, 1.02, 1.29 GiB | the same | 0 |
-| … AMR: all five | **1.52 GiB** | 1.52 GiB | 0 |
-| AFR's cache filled | 5.70 GiB | 7.35 GiB | 4.00 GiB |
-| EUR's too | 9.69 GiB | 11.21 GiB | 8.00 GiB |
-| EAS's too | 13.64 GiB | 14.52 GiB | 11.98 GiB |
-| SAS's too | 17.60 GiB | 18.27 GiB | 15.94 GiB |
-| AMR's too: all five full | **21.46 GiB** | 22.05 GiB | 19.80 GiB |
+| run | step | store | resident, GiB | peak, GiB | caches counted, GiB | chromosomes or regions | seconds | load |
+|---|---|---|---|---|---|---|---|---|
+| 05:33 | imported | — | 0.06 | 0.06 | 0.00 | — | — | 54.8 |
+| 05:33 | opened | AFR | 0.06 | 0.06 | 0.00 | — | 0.0 | 54.8 |
+| 05:33 | opened | EUR | 0.06 | 0.06 | 0.00 | — | 0.0 | 54.8 |
+| 05:33 | opened | EAS | 0.06 | 0.06 | 0.00 | — | 0.0 | 54.8 |
+| 05:33 | opened | SAS | 0.06 | 0.06 | 0.00 | — | 0.0 | 54.8 |
+| 05:33 | opened | AMR | 0.06 | 0.06 | 0.00 | — | 0.0 | 54.8 |
+| 05:33 | chromosomes | AFR | 0.53 | 0.53 | 0.00 | 22 | 2.0 | 54.8 |
+| 05:33 | chromosomes | EUR | 0.79 | 0.79 | 0.00 | 22 | 1.4 | 53.9 |
+| 05:33 | chromosomes | EAS | 1.02 | 1.02 | 0.00 | 22 | 1.2 | 53.9 |
+| 05:33 | chromosomes | SAS | 1.29 | 1.29 | 0.00 | 22 | 1.3 | 53.9 |
+| 05:33 | chromosomes | AMR | 1.52 | 1.52 | 0.00 | 22 | 1.3 | 53.9 |
+| 05:33 | filled | AFR | 5.71 | 7.35 | 4.00 | 11 | 34.2 | 82.1 |
+| 05:33 | filled | EUR | 9.69 | 11.25 | 8.00 | 26 | 33.0 | 91.0 |
+| 05:33 | filled | EAS | 13.64 | 14.52 | 11.98 | 29 | 29.3 | 78.7 |
+| 05:33 | filled | SAS | 17.60 | 18.27 | 15.94 | 25 | 29.3 | 67.9 |
+| 05:33 | filled | AMR | 21.46 | 22.07 | 19.80 | 31 | 30.2 | 60.4 |
 
 - **Opening is free; meeting every chromosome costs 1.45 GiB.** The 47.2 M variants' positions
   and three `indptr` arrays at 8 bytes each are 1.51 GB, which is what the step added. A
   long-lived worker reaches it once it has served a request on every chromosome of every store.
 - **The cache's bound holds in resident memory.** With every cache full, resident memory was
   19.94 GiB above the loaded chromosomes, against the 19.80 GiB the caches counted. The peaks
-  above it, up to 1.65 GiB, are a 3 Mb region's float64 matrix while it is built (AFR's hold
+  above it, up to 1.64 GiB, are a 3 Mb region's float64 matrix while it is built (AFR's hold
   about 15,000 variants) and the batch in flight (§10).
 - **So a worker's memory is 1.5 GiB + 5 × `cache_bytes` + its reads in progress.** At 4 GiB that
   is about 22 GiB. At 1 GiB a store it would be about 6.5 GiB, and a repeated read would then be
@@ -133,30 +146,45 @@ after each step:
 
 ## Sharing a process: the event loop and the engine's zarr settings
 
-`serving.py lag`, twice with zarr's defaults and twice with `--engine-zarr`, alternating. Each
-query cold. Lag is how late a 5 ms sleep on the main thread's event loop woke while the query
-ran on a worker thread.
+`bench-serving lag`, twice with zarr's defaults and twice with `--engine-zarr`, alternating, one
+row a record. Each query cold. Lag is how late a 5 ms sleep on the main thread's event loop woke
+while the query ran on a worker thread ("idle": with no query, for 5 s). The node's load was
+55–94, near the highest it reached through any run here.
 
-| query | zarr settings | query time, runs 1 and 2 | lag p50 | lag p99 | lag max | ticks over 100 ms |
-|---|---|---|---|---|---|---|
-| none (idle, 5 s) | default | — | 0.09 ms | 0.1–0.2 ms | 0.3–0.4 ms | 0 |
-| none (idle, 5 s) | engine's | — | 0.09–0.13 ms | 0.1–0.2 ms | 0.3–0.4 ms | 0 |
-| clump GCST90319613, r² 0.01 (13,513 hits, 226 leads) | default | 7.38 s, 7.51 s | 0.17–0.18 ms | 4.3–4.6 ms | 66–79 ms | 0 |
-| clump GCST90319613, r² 0.01 | engine's | 8.26 s, 7.63 s | 0.13–0.17 ms | 11.4–12.0 ms | 35–65 ms | 0 |
-| matrix of 500 variants genome-wide | default | 9.11 s, 9.60 s | 0.22–0.24 ms | 4.7–5.3 ms | 99–116 ms | 1 |
-| matrix of 500 variants genome-wide | engine's | 10.51 s, 8.91 s | 0.43 ms | 14.0–15.8 ms | 78–94 ms | 0 |
-| region 3 Mb, chr22 at 32 Mb (10,651 variants) | default | 1.50 s, 1.47 s | 0.10–0.13 ms | 2.1–2.6 ms | 2.9 ms | 0 |
-| region 3 Mb, chr22 at 32 Mb | engine's | 1.73 s, 1.72 s | 0.09–0.13 ms | 1.1–2.7 ms | 3.6–4.8 ms | 0 |
-
-The node's load was 16–44 through these runs.
+| run | zarr settings | query | query, s | lag p50, ms | lag p99, ms | lag max, ms | ticks over 100 ms | ticks | answer | load |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 05:31 | default | idle | — | 0.17 | 0.3 | 0.7 | 0 | 967 | — | 94.4 |
+| 05:31 | default | clump | 6.18 | 0.20 | 4.3 | 31.0 | 0 | 1,112 | hits 13,513, leads 226 | 91.3 |
+| 05:31 | default | matrix_500_genome | 7.74 | 0.27 | 4.7 | 107.6 | 1 | 1,338 | variants 500, stored 1,144 | 86.6 |
+| 05:31 | default | region_3mb_chr22 | 2.15 | 0.11 | 4.4 | 47.1 | 0 | 399 | variants 10,651, stored 113,443,801 | 86.6 |
+| 05:31 | engine's | idle | — | 0.09 | 0.2 | 0.5 | 0 | 981 | — | 83.4 |
+| 05:31 | engine's | clump | 9.19 | 0.18 | 11.8 | 206.1 | 1 | 1,474 | hits 13,513, leads 226 | 76.3 |
+| 05:31 | engine's | matrix_500_genome | 11.26 | 0.38 | 15.1 | 86.0 | 0 | 1,628 | variants 500, stored 1,144 | 72.2 |
+| 05:31 | engine's | region_3mb_chr22 | 2.40 | 0.10 | 2.3 | 3.9 | 0 | 463 | variants 10,651, stored 113,443,801 | 70.5 |
+| 05:32 | default | idle | — | 0.09 | 0.2 | 0.2 | 0 | 982 | — | 68.3 |
+| 05:32 | default | clump | 7.93 | 0.21 | 4.7 | 77.5 | 0 | 1,401 | hits 13,513, leads 226 | 64.5 |
+| 05:32 | default | matrix_500_genome | 9.23 | 0.26 | 4.3 | 76.5 | 0 | 1,586 | variants 500, stored 1,144 | 63.4 |
+| 05:32 | default | region_3mb_chr22 | 2.14 | 0.13 | 2.9 | 4.5 | 0 | 404 | variants 10,651, stored 113,443,801 | 62.4 |
+| 05:32 | engine's | idle | — | 0.09 | 0.2 | 0.4 | 0 | 981 | — | 60.7 |
+| 05:32 | engine's | clump | 9.31 | 0.18 | 10.4 | 70.4 | 0 | 1,524 | hits 13,513, leads 226 | 58.9 |
+| 05:32 | engine's | matrix_500_genome | 11.03 | 0.47 | 16.2 | 77.2 | 0 | 1,600 | variants 500, stored 1,144 | 56.0 |
+| 05:32 | engine's | region_3mb_chr22 | 2.43 | 0.11 | 2.5 | 5.2 | 0 | 466 | variants 10,651, stored 113,443,801 | 54.8 |
 
 - **ogld holds the interpreter's lock in short stretches.** A service's own requests, on the
-  event loop, would wait 1–16 ms at the 99th percentile while a query runs beside them, and at
-  most 116 ms once in four runs. That is a cost of sharing a process, not a reason to avoid it.
-- **The engine's zarr settings cost ogld little.** Under `FusedCodecPipeline` with one worker
-  the clump and the matrix took within the run-to-run spread of the defaults (−7% to +15%, round
-  against round), and the region 15–17% longer in both rounds. ogld's arrays are zstd, so the
-  engine's Blosc threads do not touch them.
+  event loop, would wait 2–16 ms at the 99th percentile while a query runs beside them, against
+  0.2–0.3 ms idle. One tick in each setting was more than 100 ms late: 108 ms under the
+  defaults and 206 ms under the engine's settings, both on a node at load 76–87. That is a cost of
+  sharing a process, not a reason to avoid it.
+- **The engine's zarr settings slow ogld.** Under `FusedCodecPipeline` with one worker, every
+  query took longer than under zarr's defaults, round against round: the clump 9.19 s against
+  6.18 s and 9.31 s against 7.93 s (+49%, +17%), the matrix +45% and +19%, the region +12% and
+  +14%. The answers were the same, as each record's answer column shows: 226 leads, 1,144 and
+  113,443,801 stored pairs. ogld's arrays are zstd, so the engine's Blosc threads do not touch
+  them. An earlier run at `6bae783` and a load of 16–44, whose records this one replaces because
+  `serving.py` was then uncommitted (they are kept outside the repository, under
+  `/data/opengwasdb/work/ogld/scratch/9/`), found the engine's settings slower in five of six
+  pairs, from −7% to +17%: the direction held, and the size moved with the load. It matters wherever ogld runs
+  inside an engine process: the engine's on-the-fly top-hit clumps (opengwasdb#419).
 
 ## A remote client reading static Zarr
 
@@ -197,24 +225,27 @@ its far pairs were a smaller share of it, and `proxies` reads no Far Pairs and i
 
 ## The runs
 
-Each file in [`results/9/`](results/9/) is one run, at `6bae783`. `step1-clump` ran on a clean
-checkout. The others ran with `scripts/bench/serving.py` untracked, as each record's `code`
-says; it was committed afterwards unchanged (SHA-256 `3f840ccf…5fdb0a`, before and after).
+Each file in [`results/9/`](results/9/) holds one or more runs, each starting with a record of
+the code that ran. `step1-clump` and `memory` and `lag` ran on a clean checkout. `step1-reads` ran
+`bench-latency` at `6bae783` with an earlier `serving.py` untracked beside it, which its record
+names; that process did not import it.
 
 | file | started (UTC) | load | command |
 |---|---|---|---|
 | `step1-clump` | 03:19 | 17.8 | `pixi run -e dev bench-latency step1 --target local --case clump --cold-only` |
-| `lag` | 03:33, 03:33, 03:34, 03:34 | 37.0, 28.7, 19.6, 28.4 | `pixi run -e dev python scripts/bench/serving.py lag`, then `--engine-zarr`, twice |
-| `memory` | 03:35 | 44.4 | `pixi run -e dev python scripts/bench/serving.py memory` |
 | `step1-reads` | 03:37 | 11.9 | `pixi run -e dev bench-latency step1 --target local http10 http50 http100 --case proxies scattered region --seeds 1` |
+| `lag` | 05:31, 05:31, 05:32, 05:32 | 93.5, 86.6, 70.5, 62.4 | `pixi run -e dev bench-serving lag`, then `--engine-zarr`, twice |
+| `memory` | 05:33 | 54.8 | `pixi run -e dev bench-serving memory` |
 
-`serving.py` ran with `OPENBLAS_NUM_THREADS=1` and its siblings, as the `bench-latency` task
-sets them. Each took `--out <file>.jsonl`; the files are kept gzipped. The tables were rendered
-by:
+Each took `--out <file>.jsonl`; the files are kept gzipped. Every table in
+[`serving-tables.md`](serving-tables.md) was rendered from them by:
 
 ```bash
-pixi run -e dev python scripts/bench/report.py docs/benchmarks/results/9/step1-*.jsonl.gz \
+pixi run -e dev bench-serving tables docs/benchmarks/results/9/*.jsonl.gz \
     > docs/benchmarks/serving-tables.md
 ```
 
-The memory and lag tables above are the records' own fields, one row a record.
+The memory and lag tables above are copied from it, one row a record. The clump, read and
+summary tables above gather those records, against ogld#8's and ogld#32's where they say so.
+`tests/test_bench_serving.py` holds `serving-tables.md` to the records, and this page's memory
+and lag tables to it.
