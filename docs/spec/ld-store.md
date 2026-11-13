@@ -846,9 +846,11 @@ and a 4-byte checksum.
 hold fall into runs of neighbouring chunks. Each run is cut where a shard ends, so each piece
 reads one shard. The pieces are fetched in batches, every piece of a batch at once on zarr's event
 loop. A batch holds at most zarr's `async.concurrency` pieces (10 by default) and at most 256 MiB
-decoded, two of layout C's Near Band shards; a larger run is cut to fit. So a read waits about
-one round trip per batch, not one per run. Before, each run was its own Zarr call, one after
-another, and each call waited for the shard index and then for the chunks.
+decoded, two of layout C's Near Band shards; a larger run is cut to fit. So a batch waits one
+round trip for its chunks, and one more before it when a shard's index is not yet kept, however
+many runs it holds. Two runs of one shard in a batch fetch its index once: the second awaits the
+first's fetch. Before, each run was its own Zarr call, one after another, and each call waited
+for the shard index and then for the chunks.
 
 - **Over HTTP** a store is opened through zarr's fsspec store, whose HTTP filesystem uses aiohttp.
   Both are runtime dependencies. A static host that honours byte ranges is enough: no node is
@@ -867,8 +869,10 @@ another, and each call waited for the shard index and then for the chunks.
   requests, a shard's index and then its chunk. In all, opening the store and the matrix took 36
   requests and 44,824 bytes, most of it metadata documents, before ogld#32 and after it alike:
   each shard is read once, so no kept index is used. A reader that read whole arrays fetched
-  96,582 Near Band bytes. The same read again fetched none. Read latency at scale is ogld#8's
-  and ogld#32's to measure.
+  96,582 Near Band bytes. The same read again fetched none.
+- **Read latency at scale** on the published EUR store, from local disk and over HTTP with
+  latency added, is ogld#8's `docs/benchmarks/latency.md`, and the reader after ogld#32's four
+  changes is `docs/benchmarks/fast-reader.md`.
 
 ## 11. The upstream half: the Proxy Index
 
