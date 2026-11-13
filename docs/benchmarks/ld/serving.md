@@ -14,8 +14,8 @@ method, targets and states are in [`latency.md`](latency.md). ADR 0008 uses thes
 - **A remote client reading static Zarr**, with ogld#31's Far Pairs and ogld#32's reader
   together: a matrix of 500 chr22 variants takes 1.2 s locally, 2.9 s at 10 ms a request, 6.8 s
   at 50 ms and 11.8 s at 100 ms, cold; drawn genome-wide, 8.3, 15.4, 36.7 and 61.2 s, a quarter
-  to a third of which over HTTP is loading the touched chromosomes' positions and `indptr` arrays. `proxies`
-  for one variant on an opened store takes 29 ms, 108 ms, 346 ms and 655 ms.
+  to a third of which over HTTP is loading the touched chromosomes' positions and `indptr`
+  arrays. `proxies` for one variant on an opened store takes 29 ms, 108 ms, 346 ms and 655 ms.
 - **One process holding the five stores** is 1.52 GiB resident once it has met every chromosome,
   and 21.46 GiB with every chunk cache full at the default 4 GiB (peak 22.05 GiB). The caches
   counted 19.80 GiB of it: the bound holds in resident memory.
@@ -155,8 +155,8 @@ The node's load was 16–44 through these runs.
   most 116 ms once in four runs. That is a cost of sharing a process, not a reason to avoid it.
 - **The engine's zarr settings cost ogld little.** Under `FusedCodecPipeline` with one worker
   the clump and the matrix took within the run-to-run spread of the defaults (−7% to +15%, round
-  against round), and the region 15–17% longer in both rounds. ogld's arrays are zstd, so the engine's Blosc
-  threads do not touch them.
+  against round), and the region 15–17% longer in both rounds. ogld's arrays are zstd, so the
+  engine's Blosc threads do not touch them.
 
 ## A remote client reading static Zarr
 
