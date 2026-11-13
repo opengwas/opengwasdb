@@ -18,9 +18,9 @@ import numpy.typing as npt
 import pytest
 import store_copies
 import testdata
+from contract import support
 
 import ogld
-from ogld.identity import orient
 from ogld.store import StoreReader
 
 #: The Test Panel is built at the Test Store's scale, so a build compares with it code for code.
@@ -133,22 +133,15 @@ def copy_panel(prefix: Path) -> Path:
     return prefix.with_name(prefix.name + ".pgen")
 
 
-@functools.cache
 def a1_signs() -> npt.NDArray[np.float64]:
-    """+1 where a Test Panel row's A1 is its ALT, −1 where it is REF (spec §3)."""
-    v = testdata.variants()
-    rows = zip(v.chrom, v.pos, v.ref, v.alt, strict=True)
-    return np.array(
-        [1.0 if orient(str(c), int(p), r, a).a1_is_alt else -1.0 for c, p, r, a in rows]
-    )
+    """+1 where a Test Panel row's A1 is its ALT, −1 where it is REF (spec §3): the test oracle's,
+    `tests/contract/support.py` (`docs/architecture/ownership.md`, "Test oracles")."""
+    return support.oriented()[1]
 
 
 def alids(rows: npt.ArrayLike) -> list[str]:
-    v = testdata.variants()
-    return [
-        orient(str(v.chrom[r]), int(v.pos[r]), str(v.ref[r]), str(v.alt[r])).alid
-        for r in np.atleast_1d(np.asarray(rows))
-    ]
+    """The ALIDs of Test Panel `rows`, from the test oracle (`support.alids`)."""
+    return support.alids(rows)
 
 
 def stored_r(store: Path, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
@@ -162,10 +155,10 @@ def stored_r(store: Path, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64
 def reference_pairs(
     k: int,
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.float64]]:
-    """The Test Panel's independent reference r at k, signed to A1: (row_i, row_j, r)."""
-    ref = testdata.reference_r(k)
-    sign = a1_signs()
-    return ref.row_i, ref.row_j, ref.r * sign[ref.row_i] * sign[ref.row_j]
+    """The Test Panel's independent reference r at k, signed to A1: (row_i, row_j, r), from the
+    test oracle (`support.reference`)."""
+    ref = support.reference(k)
+    return ref.row_i, ref.row_j, ref.r
 
 
 def store_arrays(store: Path) -> dict[str, npt.NDArray[Any]]:

@@ -16,6 +16,7 @@ import numpy.typing as npt
 import pytest
 import testdata
 import zarr
+from contract import support
 from script_modules import load_script
 from store_copies import FLOOR, R_SCALE, codes_at, stored_at
 
@@ -40,15 +41,8 @@ def passing() -> npt.NDArray[np.int64]:
 
 
 def signs() -> npt.NDArray[np.float64]:
-    v = testdata.variants()
-    return np.array(
-        [
-            1.0
-            if orient(str(v.chrom[r]), int(v.pos[r]), str(v.ref[r]), str(v.alt[r])).a1_is_alt
-            else -1.0
-            for r in range(len(v))
-        ]
-    )
+    """Each Test Panel row's A1 sign, from the test oracle (`support.oriented`)."""
+    return support.oriented()[1]
 
 
 def arrays(group: zarr.Group, prefix: str = "") -> Iterator[tuple[str, zarr.Array]]:
