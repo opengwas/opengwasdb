@@ -447,7 +447,8 @@ EVENING_MISS_REASONS: tuple[Reason, ...] = (
         "Reference Completion's LD-block phase, which no ticket in this epic changed, is the "
         "largest part of the run, and the run without it would fit in an evening: the block "
         "fits (one elastic-net fit with cross-validation per LD block and Analysis) are what "
-        "remains between this Store Release and the milestone",
+        "remains between this Store Release and the milestone, and a cheaper fit is a new "
+        "Reference Completion Method (#423)",
         _block_phase_fills_the_overrun,
     ),
 )
@@ -471,6 +472,8 @@ def store_release(
         "span_seconds": span,
     }
     reasons = _reasons(EVENING_MISS_REASONS, data) if verdict == "missed" else []
+    known = {k: v for k, v in data["attribution"]["phases"].items() if v is not None}
+    largest = max(known.items(), key=lambda item: item[1]) if known else None
     return {
         "steps": walls,
         "steps_summed_seconds": summed,
@@ -486,6 +489,15 @@ def store_release(
             "target_seconds": EVENING_SECONDS,
             "verdict": verdict,
             "reasons": reasons,
+            "largest_phase": (
+                None
+                if largest is None
+                else {
+                    "phase": largest[0],
+                    "seconds": largest[1],
+                    "rendered": format_duration(largest[1]),
+                }
+            ),
             "over_by_seconds": over,
             "over_by": format_duration(abs(over)) if over is not None else None,
             "measured_on": "the span from the first step's start to the last step's end",

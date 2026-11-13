@@ -33,6 +33,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 from benchmarks._artifact import is_ancestor
@@ -164,6 +165,8 @@ class Figure:
     epic_range: tuple[float, float] | None = None
     epic_like_for_like: LikeForLike | None = None
     reason: Reason | None = None
+    #: Tried in order when `reason` no longer holds; the first that holds is printed.
+    alternative_reasons: tuple[Reason, ...] = ()
     notes: tuple[Reason, ...] = ()
 
 
@@ -219,6 +222,29 @@ def _same_code_and_rows(detail: Mapping[str, Any]) -> bool:
         and rows is not None
         and detail.get("n_rows") == rows
     )
+
+
+def _epic_among_the_cold_reads(detail: Mapping[str, Any]) -> bool:
+    """The epic's reading lies among the cold samples, and the warm median below it."""
+    cold, epic = detail.get("cold_samples") or [], detail.get("epic_seconds")
+    warm, cold_median = detail.get("samples") or [], detail.get("cold_median")
+    if not cold or not warm or epic is None or cold_median is None:
+        return False
+    return min(cold) <= epic <= max(cold) and median(warm) < min(epic, cold_median)
+
+
+def _epic_ratio_is_the_cold_one(detail: Mapping[str, Any]) -> bool:
+    cold, warm, epic = detail.get("cold_ratio"), detail.get("ratio"), detail.get("epic_ratio")
+    if cold is None or warm is None or epic is None:
+        return False
+    return abs(cold - epic) < abs(warm - epic) / 2
+
+
+def _cache_does_not_reach_the_epic_ratio(detail: Mapping[str, Any]) -> bool:
+    cold, warm, epic = detail.get("cold_ratio"), detail.get("ratio"), detail.get("epic_ratio")
+    if cold is None or warm is None or epic is None:
+        return False
+    return min(abs(cold - epic), abs(warm - epic)) > abs(cold - warm)
 
 
 def _floor_fell_further_than_the_control(detail: Mapping[str, Any]) -> bool:
@@ -647,6 +673,7 @@ def _measure_reader(derive: Derive, evidence: Mapping[str, Any]) -> Measured:
     side = derive.side or ""
     seconds = source["medians"].get(side)
     control = source.get("control") or {}
+    cold = [s["seconds"] for s in source["samples"] if s["side"] == side + "_cold"]
     return Measured(
         seconds,
         seconds is not None,
@@ -654,6 +681,8 @@ def _measure_reader(derive: Derive, evidence: Mapping[str, Any]) -> Measured:
             "samples": [
                 sample["seconds"] for sample in source["samples"] if sample["side"] == side
             ],
+            "cold_samples": cold,
+            "cold_median": source["medians"].get(side + "_cold"),
             "epic_seconds": derive.epic_seconds,
             "n_rows": source["n_rows"],
             "epic_rows": derive.epic_rows,
@@ -712,11 +741,14 @@ def _measure_reader_ratio(derive: Derive, evidence: Mapping[str, Any]) -> Measur
         return Measured(
             None, False, {"reason": f"no control and floor medians for {derive.source}"}
         )
+    control_cold = source["medians"].get("reader_base_cold")
+    floor_cold = source["medians"].get("parse_floor_cold")
     return Measured(
         control / floor,
         True,
         {
             "ratio": control / floor,
+            "cold_ratio": control_cold / floor_cold if control_cold and floor_cold else None,
             "control_seconds": control,
             "floor_seconds": floor,
             "epic_control_seconds": epic_control,
@@ -870,9 +902,11 @@ def _reason(figure: Figure, measured: Measured, verdict: str) -> str | None:
     if verdict == "unavailable" and detail_reason and figure.derive.kind != "unavailable":
         return str(detail_reason)
     if figure.reason is not None:
-        text, holds = figure.reason
         data = {**measured.detail, "inside_window": measured.inside_window}
-        return text if holds(data) else "reason no longer holds"
+        for text, holds in (figure.reason, *figure.alternative_reasons):
+            if holds(data):
+                return text
+        return "reason no longer holds"
     if detail_reason:
         return str(detail_reason)
     return "the measurement differs from the epic's and no reason is recorded"
@@ -1083,9 +1117,18 @@ def _floor_row(
         method="the parse-floor side's median, same samples",
         unit="s",
         reason=(
-            f"every sample of the floor is faster than the epic's single reading, by the same "
-            f"{engine} method; this run does not attribute the difference",
-            _faster_than_the_epic,
+            "the epic's single reading lies among this run's readings of the file just evicted "
+            "from the page cache, and the warm median lies below both: every warm sample "
+            "follows an untimed warming read, so it measures a cached file, which the epic's "
+            "reading was not",
+            _epic_among_the_cold_reads,
+        ),
+        alternative_reasons=(
+            (
+                f"every sample of the floor is faster than the epic's single reading, by the "
+                f"same {engine} method; this run does not attribute the difference",
+                _faster_than_the_epic,
+            ),
         ),
     )
 
@@ -1108,9 +1151,25 @@ def _ratio_row(
         method="the control side's median over the parse-floor side's, same samples",
         unit="ratio",
         reason=(
-            "the parse floor ran faster than the epic's reading by a larger fraction than the "
-            "control reader did, so the control sits further above it; this run does not say why",
-            _floor_fell_further_than_the_control,
+            "the epic's ratio is the cold-cache one: read just after eviction, the control sits "
+            "above the floor about as far as the epic measured, and warm reads lift it, because "
+            "the floor's short read pays the file's disk read as a larger share of its time "
+            "than the reader's long one does",
+            _epic_ratio_is_the_cold_one,
+        ),
+        alternative_reasons=(
+            (
+                "evicting the file moves this ratio by less than its distance from the epic's in "
+                "either cache state, so the cache does not explain it; the epic took one reading "
+                "of each side and recorded no host load, so what remains cannot be separated",
+                _cache_does_not_reach_the_epic_ratio,
+            ),
+            (
+                "the parse floor ran faster than the epic's reading by a larger fraction than "
+                "the control reader did, so the control sits further above it; this run does "
+                "not say why",
+                _floor_fell_further_than_the_control,
+            ),
         ),
     )
 

@@ -1389,7 +1389,18 @@ rebuild meets its zero only when the after Store has no record of it. The
 block also attributes the run's unprojected phases (completion's five, #309;
 the EAF survey's, #310), sums every planned step, and judges milestone #388's
 "an evening" (9 h) on the span from the first step's start to the last step's
-end. No `--source` is needed: the after-measurement reads records only.
+end, with the largest attributed phase beside the verdict. The after-measurement
+reads records only; `--source` adds the reader A/B as before.
+
+`--cold` adds two sides to the reader A/B, `parse_floor_cold` and
+`reader_base_cold`: the same measurement on the file just evicted from the page
+cache (`posix_fadvise(POSIX_FADV_DONTNEED)`, no privilege needed), each sample
+marked `page_cache: evicted`. Every other sample follows an untimed warming read,
+so without them nothing says what a cold read costs, and the epic's single
+readings may have been cold ones. The floor and control-over-floor rows then
+check their reasons against both: the epic's reading among the cold samples, or
+the epic's ratio nearer the cold one; and where the cache moves the ratio less
+than its distance from the epic's, they say it cannot be separated.
 
 ```bash
 pixi run -e dev python benchmarks/measure_epic307_evidence.py \

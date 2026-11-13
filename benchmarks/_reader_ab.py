@@ -17,6 +17,12 @@ alternating and each sample in a fresh interpreter:
   orientation and Analysis admission, so they bound the gain rather than
   predict it.
 
+With `cold`, two more sides read the file after it has been evicted from the
+page cache (`posix_fadvise(POSIX_FADV_DONTNEED)`, which needs no privilege):
+`reader_base_cold` and `parse_floor_cold`. Every other sample follows an untimed
+warming read, so without them the run says nothing about a cold read, which is
+what a single reading taken on its own -- the epic's -- may have been (#322).
+
 The sides' imported code is fingerprinted (`_artifact.package_fingerprint`), so
 an artifact cannot claim a revision it did not run, and every reader side must
 stream the same number of associations: a reader that got faster by dropping
@@ -25,6 +31,7 @@ rows is a defect, not a speed-up.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -197,10 +204,28 @@ SOURCES: dict[str, Source] = {
 }
 
 
-def sides(control: dict[str, Any] | None) -> tuple[str, ...]:
+#: A side read with the file evicted from the page cache first.
+COLD = "_cold"
+
+
+def sides(control: dict[str, Any] | None, cold: bool = False) -> tuple[str, ...]:
     """The sides one run measures, in the order round 0 runs them."""
-    base: tuple[str, ...] = ("reader_head", "parse_floor")
-    return ("reader_head", "reader_base", "parse_floor") if control else base
+    measured: tuple[str, ...] = (
+        ("reader_head", "reader_base", "parse_floor") if control else ("reader_head", "parse_floor")
+    )
+    if cold:
+        measured += ("reader_base_cold",) if control else ()
+        measured += ("parse_floor_cold",)
+    return measured
+
+
+def evict(path: Path) -> None:
+    """Drop `path`'s clean pages from the page cache, so the next read meets the disk."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+    finally:
+        os.close(fd)
 
 
 def _reader(capability: str, path: Path) -> Any:
@@ -284,10 +309,18 @@ def _one_sample(
     control: dict[str, Any] | None,
     position: int,
 ) -> dict[str, Any]:
-    """Run one side in a fresh interpreter and record what it cost."""
+    """Run one side in a fresh interpreter and record what it cost.
+
+    A cold side runs its warm counterpart's measurement on a file just evicted
+    from the page cache.
+    """
+    cold = side.endswith(COLD)
+    run_side = side.removesuffix(COLD)
+    if cold:
+        evict(path)
     load_before = getloadavg()[0]
-    argv = ["--child", "--capability", capability, "--path", str(path), "--side", side]
-    if side == "reader_base":
+    argv = ["--child", "--capability", capability, "--path", str(path), "--side", run_side]
+    if run_side == "reader_base":
         if control is None:
             raise SystemExit("reader_base needs a control tree")
         argv += ["--module-path", str(control["module_path"])]
@@ -296,6 +329,7 @@ def _one_sample(
         "round": round_index,
         "position": position,
         "side": side,
+        "page_cache": "evicted" if cold else "warm",
         "seconds": float(child_record["seconds"]),
         "rows": int(child_record["rows"]),
         "peak_rss_kb": int(child_record["peak_rss_kb"]),
@@ -458,6 +492,7 @@ def measure_source(
     repetitions: int = MIN_ROUNDS,
     control: dict[str, Any] | None = None,
     warm: bool = True,
+    cold: bool = False,
 ) -> dict[str, Any]:
     """The sides, interleaved round by round; the row count too.
 
@@ -473,13 +508,15 @@ def measure_source(
         raise FileNotFoundError(source)
     if warm:
         _warm(capability, source)
-    measured_sides = sides(control)
+    measured_sides = sides(control, cold)
     samples: list[dict[str, Any]] = []
     for round_index in range(repetitions):
         for position, side in enumerate(round_order(measured_sides, round_index)):
             samples.append(_one_sample(capability, source, side, round_index, control, position))
     n_rows = _rows(samples, "parse_floor")
     reader_rows = _rows(samples, "reader_head")
+    if cold and _rows(samples, "parse_floor_cold") != n_rows:
+        raise SystemExit(f"{source}: the cold floor read a different number of rows")
     if reader_rows > n_rows:
         raise SystemExit(
             f"{source}: the reader streamed {reader_rows} associations from a {n_rows}-row file"
@@ -500,6 +537,7 @@ def measure_source(
         "reader_rows": reader_rows,
         "parse_floor": SOURCES[capability].floor_detail(source),
         "sides": list(measured_sides),
+        "cold": cold,
         "samples": samples,
         "medians": {
             side: round(median(_seconds(samples, side)), 4) for side in measured_sides
@@ -539,7 +577,9 @@ def _check_control(
     control sample reports, and the control must not be this checkout.
     """
     expected = control.get("opengwasdb_fingerprint")
-    imported = set(fingerprints.get("reader_base", []))
+    imported = set(fingerprints.get("reader_base", [])) | set(
+        fingerprints.get("reader_base_cold", [])
+    )
     if not expected:
         raise SystemExit("the control tree has no fingerprint to check")
     if imported != {expected}:
@@ -553,6 +593,9 @@ def _check_control(
             "--control-module-path did not take effect"
         )
     base_rows = _rows(samples, "reader_base")
+    cold_rows = [s["rows"] for s in samples if s["side"] == "reader_base_cold"]
+    if any(rows != base_rows for rows in cold_rows):
+        raise SystemExit(f"{source}: the cold control read a different number of rows")
     if base_rows != reader_rows:
         raise SystemExit(
             f"{source}: reader_base streamed {base_rows} associations where reader_head "

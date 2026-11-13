@@ -200,6 +200,12 @@ def _parser() -> argparse.ArgumentParser:
         help="rounds for one source, when its samples are cheap enough to afford more",
     )
     parser.add_argument(
+        "--cold",
+        action="store_true",
+        help="also read each source's floor, and the control, with the file evicted from the "
+        "page cache first (sides `parse_floor_cold`, `reader_base_cold`)",
+    )
+    parser.add_argument(
         "--after",
         metavar="LABEL",
         help="the --store holding an end-to-end run on the finished engine (#322): each phase "
@@ -319,6 +325,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 path,
                 repetitions=rounds.get(capability, args.repetitions),
                 control=control,
+                cold=args.cold,
             )
             for capability, path in sources
         ]
