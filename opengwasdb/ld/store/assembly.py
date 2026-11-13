@@ -178,7 +178,7 @@ class Cutter:
             (local + lo).astype(np.int32),
             (local + hi).astype(np.int32),
             codes,
-            hi >= near_stop[lo],
+            _beyond_near(self.positions(name), local + lo, local + hi, self.near_bp),
             int((far_stop - near_stop).sum()),
             self,
         )
@@ -517,28 +517,42 @@ class FarPairsStream:
         self._codes.close()
 
 
+def _beyond_near(
+    position: npt.NDArray[np.int64], lo: npt.ArrayLike, hi: npt.ArrayLike, near_bp: int
+) -> npt.NDArray[np.bool_]:
+    """Which of one chromosome's local pairs (lo[k], hi[k]) lie more than near_bp apart: of the
+    pairs the store keeps at the far code floor, its Far Pairs (spec §3, §5). The one test the
+    store writes them by, from a cut and from an index alike (ADR 0007); exactly near_bp apart is
+    within, the edge `ogld.format.geometry.within` holds."""
+    at = np.asarray(position, dtype=np.int64)
+    return ~within(at[np.asarray(hi)] - at[np.asarray(lo)], near_bp)
+
+
 def derive_far_pairs(
-    root: zarr.Group, name: str, position: npt.NDArray[np.int64], near_bp: int, encoding: REncoding
+    index: zarr.Group,
+    far: zarr.Group,
+    position: npt.NDArray[np.int64],
+    near_bp: int,
+    encoding: REncoding,
 ) -> int:
-    """Write chromosome `name`'s Far Pairs from its own Proxy Index, for a store written before
-    they came back (ADR 0007), and return how many. They are its entries beyond near_bp in each
-    pair's earlier row (spec §5), read a block of rows at a time and written in row order through
-    `FarPairsStream`, as a store being built writes them, so the arrays are a build's, byte for
-    byte. The index is not changed. An index element no store holds, which is what a lost chunk
-    reads as, is refused, naming its array, rather than read as a row without Far Pairs.
+    """Write one chromosome's Far Pairs into the empty group `far`, from its Proxy Index group
+    `index`, for a store written before they came back (ADR 0007), and return how many. They are
+    the index's entries beyond near_bp (`_beyond_near`) in each pair's earlier row (spec §5), read
+    a block of rows at a time and written in row order through `FarPairsStream`, as a store being
+    built writes them, so the arrays are a build's, byte for byte. The index is not changed. An
+    index element no store holds, which is what a lost chunk reads as, is refused, naming its
+    array, rather than read as a row without Far Pairs.
     """
-    index = root[f"index/{name}"]
-    assert isinstance(index, zarr.Group)
     indptr = _whole(index, "indptr")
-    stream = FarPairsStream(root.require_group(f"far/{name}"), len(indptr) - 1, encoding)
+    stream = FarPairsStream(far, len(indptr) - 1, encoding)
     written = 0
     for a, b in blocks((indptr, DERIVE_ENTRIES)):
         span = slice(int(indptr[a]), int(indptr[b]))
         partner, codes = _whole(index, "partner", span), _whole(index, "r", span)
         owner = owners(np.diff(indptr[a : b + 1]), np.arange(a, b, dtype=np.int64))
-        far = (partner > owner) & ~within(position[partner] - position[owner], near_bp)
-        stream.add(b - a, owner[far].astype(np.int32), partner[far].astype(np.int32), codes[far])
-        written += int(far.sum())
+        kept = (partner > owner) & _beyond_near(position, owner, partner, near_bp)
+        stream.add(b - a, owner[kept].astype(np.int32), partner[kept].astype(np.int32), codes[kept])
+        written += int(kept.sum())
     stream.close()
     return written
 

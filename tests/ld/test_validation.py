@@ -173,8 +173,10 @@ def first_far_pair(store: Path) -> tuple[int, int]:
     return int(owner[0]), int(partner[0])
 
 
-def a_far_pair_within_near_bp(store: Path) -> None:
-    contract().add_far_pair(lambda gap: (gap > 0) & (gap <= 3_000_000), lambda floor: floor)(store)
+def a_far_pair_exactly_near_bp_apart(store: Path) -> None:
+    """Adds chr22's one pair exactly 3,000,000 bp apart to its Far Pairs, at the floor: the edge
+    a Far Pair lies beyond (review of #31)."""
+    contract().add_far_pair(lambda gap: gap == 3_000_000, lambda floor: floor)(store)
 
 
 #: One edit per way a rule says a store breaks it, and what that rule's finding then says.
@@ -349,9 +351,9 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
         write_array("far/22/indptr", slice(-1, None), 4),
         "ends at 4, but its rows' arrays hold 3 elements",
     ),
-    "a Far Pair within near_bp": (
+    "a Far Pair exactly near_bp apart": (
         "far.distance",
-        a_far_pair_within_near_bp,
+        a_far_pair_exactly_near_bp_apart,
         "a Far Pair not more than 3,000,000 and at most 10,000,000 bp apart at",
     ),
     "a Far Pair beyond 10 Mb": (

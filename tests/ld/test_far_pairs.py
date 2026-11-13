@@ -194,3 +194,51 @@ def test_a_lost_index_chunk_is_refused_never_read_as_no_far_pair(tmp_path: Path)
     shutil.rmtree(copy / "index" / "22" / "partner" / "c")
     with pytest.raises(ValueError, match=r"index/22/partner read .* fill value -1"):
         load_script("derive_far_pairs").derive(copy)
+
+
+def test_a_derivation_that_fails_leaves_no_far_pairs_behind(tmp_path: Path) -> None:
+    # The Far Pairs are written under another name and renamed only when every chromosome's are
+    # written and counted, so a failure leaves the store as it was, and a run can begin again.
+    copy = without_far_pairs(tmp_path / "store")
+    meta = copy / "zarr.json"
+    doc = json.loads(meta.read_text())
+    doc["attributes"]["ld_store"]["counts"]["far_pairs"] = 8
+    meta.write_text(json.dumps(doc))
+    before = files(copy)
+    script = load_script("derive_far_pairs")
+    with pytest.raises(SystemExit, match="7 Far Pairs, but its provenance counts 8"):
+        script.derive(copy)
+    assert files(copy) == before, "nothing left behind: no far/, no partial far/"
+
+
+def test_a_partial_derivation_left_by_a_killed_run_is_replaced(tmp_path: Path) -> None:
+    copy = without_far_pairs(tmp_path / "store")
+    script = load_script("derive_far_pairs")
+    stale = copy / script.PARTIAL / "22" / "partner"
+    stale.mkdir(parents=True)
+    (stale / "zarr.json").write_text("{ not json")
+    assert script.derive(copy) == 7
+    assert not (copy / script.PARTIAL).exists()
+    assert files(copy, "far") == files(TEST_STORE, "far")
+
+
+def test_a_derivation_that_raises_part_way_leaves_nothing_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    copy = without_far_pairs(tmp_path / "store")
+    before = files(copy)
+    script = load_script("derive_far_pairs")
+    calls = []
+    real = script.derive_far_pairs
+
+    def second_fails(*args: object) -> int:
+        calls.append(1)
+        if len(calls) == 2:
+            raise OSError("disk full")
+        return int(real(*args))
+
+    monkeypatch.setattr(script, "derive_far_pairs", second_fails)
+    with pytest.raises(OSError, match="disk full"):
+        script.derive(copy)
+    assert len(calls) == 2, "chr21's Far Pairs were written before chr22's failed"
+    assert files(copy) == before, "nothing left behind: no far/, no partial far/"

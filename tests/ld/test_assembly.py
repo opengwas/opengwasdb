@@ -12,6 +12,7 @@ correlation matrix, so far more pairs reach the floor than in the Test Panel's o
 from __future__ import annotations
 
 import json
+import shutil
 import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -27,7 +28,7 @@ from store_copies import FLOOR, R_SCALE, TEST_STORE, codes_at
 
 from ogld.format import FAR_BP, NEAR_BP, REQUIRED_KEYS, Provenance, REncoding, Sourced
 from ogld.identity import orient
-from ogld.store import StoreReader, StoreWriter, Variants, layout
+from ogld.store import StoreReader, StoreWriter, Variants, assembly, layout
 
 N_SAMPLES, K = 771, 10
 #: t_far for the Test Store's n and k, spec §3: q / (n − k − 1) with q = 20.84.
@@ -334,6 +335,35 @@ def test_the_writer_holds_a_window_of_the_chromosome_not_the_chromosome(
     short = peak_writing(tmp_path, 2_000)
     long = peak_writing(tmp_path, 8_000)
     assert long < short + 400_000, (short, long)
+
+
+# ------------------------------------------------------------------ Far Pairs from an index
+
+
+def test_far_pairs_derived_from_an_index_are_the_brute_force_ones(tmp_path: Path) -> None:
+    # A store written before ADR 0007 gains its Far Pairs from its own index (ogld#31). chr22
+    # holds a kept pair exactly near_bp apart: in the index, and not a Far Pair. So deriving at
+    # any other edge than the one the store writes by fails here (review of #31).
+    writer = create(tmp_path / "s")
+    write_all(writer, 100_000)
+    writer.finish(sourced())
+    root = zarr.open_group(tmp_path / "s", mode="r+")
+    start, stop = chromosomes()["22"]
+    position = variants().position[start:stop].astype(np.int64)
+    lo, hi = np.nonzero(np.triu(position[None, :] - position[:, None] == NEAR_BP, k=1))
+    assert len(lo), "chr22 must hold a pair exactly near_bp apart for this to mean anything"
+    assert (np.abs(codes_at(r_of("22")[lo, hi])) >= FLOOR).any(), "and it must reach the floor"
+    shutil.rmtree(tmp_path / "s" / "far")
+    for chrom, (start, stop) in chromosomes().items():
+        here = variants().position[start:stop].astype(np.int64)
+        index, far = root[f"index/{chrom}"], root.require_group(f"far/{chrom}")
+        assert isinstance(index, zarr.Group)
+        count = assembly.derive_far_pairs(index, far, here, NEAR_BP, REncoding(R_SCALE))
+        e = expected(chrom)
+        assert count == e.far_pairs
+        np.testing.assert_array_equal(root[f"far/{chrom}/indptr"][:], e.far_indptr)
+        np.testing.assert_array_equal(root[f"far/{chrom}/partner"][:], e.far_partner)
+        np.testing.assert_array_equal(root[f"far/{chrom}/r"][:], e.far_r)
 
 
 # ------------------------------------------------------------------ empty bands
