@@ -24,15 +24,26 @@ but empties its chunk cache and evicts the pages, as a long-lived service meets 
 
     pixi run -e dev bench-latency step1 --target local http0 --out results.jsonl
 
+Where things are comes from their owners, never from here: the published EUR store is
+`build_hgdp1kgp.store_path("EUR")` under `$OGLD_STORES`, #403's Analyses are under
+`$OGLD_403_ANALYSES` and the layouts' builds under `$OGLD_LAYOUTS`, each with its default in
+`scripts/test_panel/roots.py`. Each run's first record says which commit's code ran and, through
+`test_panel.checkout.problem`, whether the checkout could be cited as that code.
+
 Threads: zarr's pool is `--zarr-threads` (6), BLAS 1; the static host and the proxy run one
 event loop and at most two worker threads each. So a timing uses at most 8 threads busy at once
 over HTTP, and 7 locally. Every record carries the node's load average before and after.
+
+`--reader concurrent` and `--cache-mib` measure two reader levers from outside `ogld/`. The first
+copies `ChunkCache._read_run`'s keeping of chunks (`_kept_run`), so it measures the cache as it
+was copied; ogld#32 implements concurrent fetching in the cache itself and removes the knob.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib
 import json
 import os
 import subprocess
@@ -49,11 +60,19 @@ import http_static
 import numpy as np
 
 HERE: Final = Path(__file__).resolve().parent
+#: `scripts/`, where the owners of the recipe's facts and of the roots live.
+SCRIPTS: Final = HERE.parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+recipe = importlib.import_module("build_hgdp1kgp")
+roots = importlib.import_module("test_panel.roots")
+checkout = importlib.import_module("test_panel.checkout")
 
-STORES: Final = Path("/data/opengwasdb/work/ogld/stores")
-EUR: Final = "hgdp1kgp-v2-EUR-k10.store"
-ANALYSES: Final = Path("/data/opengwasdb/work/ogld/realdata/403-analyses")
-LAYOUT_DIR: Final = Path("/data/opengwasdb/work/ogld/scratch/8/layouts")
+#: The cases each plan times, in the order it times them.
+CASES: Final = {
+    "step1": ("proxies", "scattered", "region", "clump"),
+    "step2": ("pair", "scattered", "region", "clump"),
+}
 #: The region centres on chr22: inside its band, each with 5 Mb either side on the chromosome.
 CENTRES: Final = (25_000_000, 32_000_000, 40_000_000)
 SEED: Final = 8
@@ -94,12 +113,17 @@ def _counting_get(original: Callable[..., Any]) -> Callable[..., Any]:
     return get
 
 
+def _tally_run(array: Any, first: int, stop: int, size: int) -> None:
+    """Count one chunk-cache read of chunks first … stop − 1 of `array`."""
+    name = http_static.array_of(array.path + "/c/0")
+    TALLY.cache_reads[name] += 1
+    TALLY.chunks[name] += stop - first
+    TALLY.decoded_bytes[name] += (stop - first) * size * array.dtype.itemsize
+
+
 def _counting_run(original: Callable[..., Any]) -> Callable[..., Any]:
     def read_run(self: Any, array: Any, first: int, stop: int, size: int) -> Any:
-        name = http_static.array_of(array.path + "/c/0")
-        TALLY.cache_reads[name] += 1
-        TALLY.chunks[name] += stop - first
-        TALLY.decoded_bytes[name] += (stop - first) * size * array.dtype.itemsize
+        _tally_run(array, first, stop, size)
         return original(self, array, first, stop, size)
 
     return read_run
@@ -166,20 +190,24 @@ def _fetched(array: Any, runs: list[tuple[int, int]], size: int) -> list[Any]:
 def _kept_run(
     cache: Any, array: Any, first: int, stop: int, size: int, data: np.ndarray
 ) -> dict[int, np.ndarray]:
-    """Chunks first … stop − 1 of `data`, copied out, counted and kept, as `_read_run` does."""
+    """Chunks first … stop − 1 of `data`, copied out, counted and kept, as `_read_run` does: a
+    copy of its keeping, which ogld#32 replaces with concurrent fetching in the cache."""
     from ogld.store import location
 
-    name = http_static.array_of(array.path + "/c/0")
-    TALLY.cache_reads[name] += 1
-    TALLY.chunks[name] += stop - first
-    TALLY.decoded_bytes[name] += (stop - first) * size * array.dtype.itemsize
+    _tally_run(array, first, stop, size)
     copies = [data[(k - first) * size : (k - first + 1) * size].copy() for k in range(first, stop)]
     read = {first + i: (chunk, location._counted(chunk)) for i, chunk in enumerate(copies)}
     with cache._lock:
         return {k: cache._keep((array.path, k), *entry) for k, entry in read.items()}
 
 
-def instrument(zarr_threads: int, reader: str, cache_mib: int | None) -> None:
+#: How `instrument` replaces an attribute: `setattr` in a run, a test's `monkeypatch.setattr`.
+Patch = Callable[[Any, str, Any], None]
+
+
+def instrument(
+    zarr_threads: int | None, reader: str, cache_mib: int | None, patch: Patch = setattr
+) -> None:
     """Bound zarr's threads and count what each timing reads. The counting wraps the store's
     reads from outside ogld: the benchmark measures the reader, it does not change it, except
     with `reader` "concurrent", the prototype `_concurrent_chunks`."""
@@ -190,16 +218,17 @@ def instrument(zarr_threads: int, reader: str, cache_mib: int | None) -> None:
     from ogld.store.location import ChunkCache
     from ogld.store.reader import StoreReader
 
-    zarr.config.set({"threading.max_workers": zarr_threads})
+    if zarr_threads is not None:
+        zarr.config.set({"threading.max_workers": zarr_threads})
     if cache_mib is not None:
         # A reader makes its cache with the module's budget when it opens (`ChunkCache()`).
-        location.CACHE_BYTES = cache_mib << 20
+        patch(location, "CACHE_BYTES", cache_mib << 20)
     if reader == "concurrent":
-        ChunkCache._chunks = _concurrent_chunks
-    _wrap(LocalStore, "get", _counting_get)
-    _wrap(FsspecStore, "get", _counting_get)
-    _wrap(ChunkCache, "_read_run", _counting_run)
-    _wrap(StoreReader, "_chromosome", _loading)
+        patch(ChunkCache, "_chunks", _concurrent_chunks)
+    _wrap(LocalStore, "get", _counting_get, patch)
+    _wrap(FsspecStore, "get", _counting_get, patch)
+    _wrap(ChunkCache, "_read_run", _counting_run, patch)
+    _wrap(StoreReader, "_chromosome", _loading, patch)
     for owner, name, label in (
         (StoreReader, "_scatter_far", "far_scatter"),
         # The string reads and the cache's per-string count, the 7% of #14's profile.
@@ -207,12 +236,12 @@ def instrument(zarr_threads: int, reader: str, cache_mib: int | None) -> None:
         (StoreReader, "variants", "variants"),
         (location, "_counted", "counted"),
     ):
-        _wrap(owner, name, lambda original, label=label: _timing(original, label))
+        _wrap(owner, name, lambda original, label=label: _timing(original, label), patch)
 
 
-def _wrap(owner: Any, name: str, wrapper: Callable[[Any], Any]) -> None:
+def _wrap(owner: Any, name: str, wrapper: Callable[[Any], Any], patch: Patch) -> None:
     """Replace `owner.name` with `wrapper` of it: how the benchmark counts, from outside."""
-    setattr(owner, name, wrapper(getattr(owner, name)))
+    patch(owner, name, wrapper(getattr(owner, name)))
 
 
 # ------------------------------------------------------------------ where a store is read from
@@ -297,8 +326,11 @@ class Bench:
             return str(self.root / store)
         return f"{self.host.url}/{store}/"
 
-    def timed(self, fn: Callable[[], dict[str, Any]], **meta: Any) -> dict[str, Any]:
-        """Run `fn` once, timed, and write its record: what it read, and the load around it."""
+    def timed(
+        self, fn: Callable[[], dict[str, Any]], store_of: Callable[[], Any], **meta: Any
+    ) -> dict[str, Any]:
+        """Run `fn` once, timed, and write its record: what it read, the load around it, and
+        the budget of the chunk cache the store `store_of` gives read through."""
         global TALLY
         TALLY = Tally()
         if self.host is not None:
@@ -309,7 +341,7 @@ class Bench:
         record = {
             "step": self.step,
             "reader": self.reader,
-            "cache_bytes": _cache_bytes(),
+            "cache_bytes": int(store_of()._reader._cache._budget),
             "target": self.target.name,
             "latency_ms": self.target.latency_ms,
             **meta,
@@ -331,34 +363,41 @@ class Bench:
 
         def run() -> dict[str, Any]:
             start = time.perf_counter()
-            held["store"] = _open(self.location(store))
-            opened = time.perf_counter() - start
-            return {"open_seconds": opened, **query(held["store"])}
+            held["store"] = opened(self.location(store))
+            took = time.perf_counter() - start
+            return {"open_seconds": took, **query(held["store"])}
 
-        self.timed(run, store=store, state="cold", **meta)
+        self.timed(run, lambda: held["store"], store=store, state="cold", **meta)
         return held["store"]
 
-    def again(self, store: str, opened: Any, query: Query, state: str, **meta: Any) -> None:
-        """Run `query` on the opened store: `open` with its chunk cache emptied and the pages
-        evicted, `warm` as the last run left it."""
+    def again(self, store: str, held: Any, query: Query, state: str, **meta: Any) -> None:
+        """Run `query` on the opened store `held`: `open` with its chunk cache emptied and the
+        pages evicted, `warm` as the last run left it."""
         if state == "open":
             from ogld.store.location import ChunkCache
 
-            opened._reader._cache = ChunkCache()
+            held._reader._cache = ChunkCache()
             evict(self.root / store)
-        self.timed(lambda: query(opened), store=store, state=state, **meta)
+        self.timed(lambda: query(held), lambda: held, store=store, state=state, **meta)
 
 
-def _cache_bytes() -> int:
-    from ogld.store import location
-
-    return int(location.CACHE_BYTES)
-
-
-def _open(location: str) -> Any:
+def opened(location: str | Path) -> Any:
+    """The LD Store at `location`, opened as a caller opens one."""
     import ogld
 
     return ogld.open(location)
+
+
+def published() -> Path:
+    """The published HGDP+1kGP EUR store, where the recipe that built it puts it (ogld#7)."""
+    path: Path = recipe.store_path("EUR")
+    return path
+
+
+def layouts() -> Path:
+    """Where `build_layouts.py` built EUR chr22 in each layout."""
+    path: Path = roots.root("OGLD_LAYOUTS")
+    return path
 
 
 # ------------------------------------------------------------------ the queries
@@ -423,33 +462,38 @@ class Sample:
     store: Path
 
     def rows(self, count: int, chrom: str | None, seed: int) -> np.ndarray:
-        import ogld
-
-        reader = ogld.open(self.store)._reader
+        reader = opened(self.store)._reader
         start, stop = reader._ranges[chrom] if chrom else (0, int(reader._stops[-1]))
         return np.sort(np.random.default_rng(seed).choice(np.arange(start, stop), count, False))
 
     def alids(self, rows: np.ndarray) -> list[str]:
-        import ogld
-
-        return [str(a) for a in ogld.open(self.store)._reader.alids_of(rows)]
+        return [str(a) for a in opened(self.store)._reader.alids_of(rows)]
 
     def near_pairs(self, count: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
-        """`count` chr22 pairs within near_bp: a random row, and a random later row within it."""
-        import ogld
+        """`count` chr22 pairs within the store's near_bp: a random row, and a random later
+        row within it, by the Near Band's own stop (`geometry.stop_within`, spec §4)."""
+        from ogld.format.geometry import stop_within
 
-        reader = ogld.open(self.store)._reader
+        reader = opened(self.store)._reader
         c = reader._chromosome("22")
         rng = np.random.default_rng(seed)
         local = rng.choice(len(c.position) - 1, count, replace=False)
-        stop = np.searchsorted(c.position, c.position[local] + 3_000_000, side="right")
+        stop = stop_within(c.position, reader.provenance["near_bp"])[local]
         other = np.array([rng.integers(i + 1, s) for i, s in zip(local, stop, strict=True)])
         return local + c.start, other + c.start
 
 
 def analyses(names: list[str] | None) -> list[Path]:
-    found = sorted(p for p in ANALYSES.iterdir() if p.is_dir())
-    return [p for p in found if names is None or p.name in names]
+    """#403's Analyses under `$OGLD_403_ANALYSES`: all of them, or those `names`, every one of
+    which must be there. A name that is not is refused, never dropped, so a run cannot time
+    fewer Analyses than it was asked for."""
+    found = sorted(p for p in roots.root("OGLD_403_ANALYSES").iterdir() if p.is_dir())
+    if names is None:
+        return found
+    unknown = sorted(set(names) - {p.name for p in found})
+    if unknown:
+        raise SystemExit(f"no such Analyses under $OGLD_403_ANALYSES: {', '.join(unknown)}")
+    return [p for p in found if p.name in names]
 
 
 # ------------------------------------------------------------------ the plans
@@ -524,37 +568,42 @@ def single_pairs(b: Bench, store: str, sample: Sample) -> None:
 
 
 def step1(b: Bench, args: argparse.Namespace) -> None:
-    sample = Sample(STORES / EUR)
-    cases = set(args.case or ("proxies", "scattered", "region", "clump"))
+    store = published().name
+    sample = Sample(published())
+    cases = set(args.case or CASES["step1"])
     if "proxies" in cases:
-        proxies(b, EUR, sample, args.seeds)
+        proxies(b, store, sample, args.seeds)
     # #8 drew lists on chr22 and genome-wide; another chromosome (#31: chr11) is drawn alone.
     lists = ("22", None) if args.chrom == "22" else (args.chrom,)
     if "scattered" in cases:
-        scattered(b, EUR, sample, lists, args.seeds)
+        scattered(b, store, sample, lists, args.seeds)
     if "region" in cases:
-        regions(b, EUR, tuple(args.widths), args.chrom, tuple(args.centres))
+        regions(b, store, tuple(args.widths), args.chrom, tuple(args.centres))
     if "clump" in cases:
-        clump_each(b, EUR, args, None)
+        clump_each(b, store, args, None)
 
 
 def step2(b: Bench, args: argparse.Namespace) -> None:
     """Each case on every layout in turn, so the node's load drifts over all of them alike.
     The layouts hold the same data (`build_layouts.py --check`), so one sample serves all."""
     stores = [f"chr22-{layout}.store" for layout in args.layout]
-    sample = Sample(LAYOUT_DIR / stores[0])
+    sample = Sample(layouts() / stores[0])
     cases: dict[str, Callable[[str], None]] = {
         "pair": lambda store: single_pairs(b, store, sample),
         "scattered": lambda store: scattered(b, store, sample, ("22",), args.seeds),
         "region": lambda store: regions(b, store, (3,)),
         "clump": lambda store: clump_each(b, store, args, "22"),
     }
-    for name in args.case or cases:
+    for name in args.case or CASES["step2"]:
         for store in stores:
             cases[name](store)
 
 
-PLANS: Final = {"step1": (step1, STORES), "step2": (step2, LAYOUT_DIR)}
+#: Each plan, and the directory its stores are in (and that the static host serves).
+PLANS: Final = {
+    "step1": (step1, lambda: published().parent),
+    "step2": (step2, layouts),
+}
 
 
 @contextlib.contextmanager
@@ -570,22 +619,35 @@ def hosted(root: Path, target: Target) -> Iterator[Host | None]:
         host.close()
 
 
+def code_state(installed: str) -> dict[str, Any]:
+    """Which commit's code a run ran, and why the checkout cannot be cited as that code ("" when
+    it can): `test_panel.checkout.problem`, the one guard `make_pcs.py` and the realdata tier
+    also use. It refuses an installed ogld that does not name HEAD, a changed tracked file under
+    `ogld/` or `scripts/`, and an untracked `.py` there."""
+    repository = SCRIPTS.parent
+    commit = subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"], capture_output=True, text=True
+    ).stdout.strip()
+    problem: str = checkout.problem(repository, installed)
+    return {"commit": commit, "installed": installed, "clean": not problem, "problem": problem}
+
+
 def environment(args: argparse.Namespace) -> dict[str, Any]:
-    """What a run ran on: the software, the thread bounds and the node's load when it began."""
+    """What a run ran on: the code, the software, the thread bounds and the node's load when it
+    began."""
     import aiohttp
     import fsspec
     import zarr
 
     import ogld
 
-    commit = subprocess.run(
-        ["git", "-C", str(HERE), "rev-parse", "HEAD"], capture_output=True, text=True
-    ).stdout.strip()
+    code = code_state(ogld.__version__)
     return {
         "kind": "environment",
         "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "argv": sys.argv[1:],
-        "commit": commit,
+        "commit": code["commit"],
+        "code": code,
         # The ogld a run imported: this checkout's, or another put first on PYTHONPATH, as #31
         # timed the tip's reader beside its own.
         "ogld_source": str(Path(ogld.__file__).resolve().parent),
@@ -634,13 +696,25 @@ def main() -> None:
     )
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    checked(args)
     instrument(args.zarr_threads, args.reader, args.cache_mib)
-    plan, root = PLANS[args.plan]
+    plan, root_of = PLANS[args.plan]
+    root = root_of()
     with args.out.open("a") as out:
         out.write(json.dumps(environment(args)) + "\n")
         for target in args.target:
             with hosted(root, target) as host:
                 plan(Bench(root, target, host, out, args.plan, args.reader), args)
+
+
+def checked(args: argparse.Namespace) -> None:
+    """Refuse, before anything is timed, a case the plan does not have or an Analysis that is
+    not there: a name dropped would time less than was asked for, and say nothing."""
+    unknown = sorted(set(args.case or ()) - set(CASES[args.plan]))
+    if unknown:
+        known = ", ".join(CASES[args.plan])
+        raise SystemExit(f"{args.plan} has no case {', '.join(unknown)}; its cases are {known}")
+    analyses(args.analyses)
 
 
 if __name__ == "__main__":

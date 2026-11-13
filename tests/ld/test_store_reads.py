@@ -385,7 +385,7 @@ def test_a_lost_chunk_of_any_array_is_refused_never_read_as_data(
 ) -> None:
     # An ALID that read as "" would make a present variant Absent; a partner of −1 would name
     # the last variant. Each is refused, naming the array, by a query that reads it: a matrix
-    # reads the Far Pairs, and proxies at r2 ≥ t_far the Proxy Index (ADR 0006).
+    # reads the Far Pairs, and proxies at r2 ≥ t_far the Proxy Index (ADR 0007).
     copy = tmp_path / "lost"
     shutil.copytree(small_chunks, copy)
     every = list(StoreReader.open(copy).variants(np.arange(1056)).alid)

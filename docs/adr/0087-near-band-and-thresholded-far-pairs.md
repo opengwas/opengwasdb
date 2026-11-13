@@ -8,7 +8,7 @@
 > stands.
 
 > **The merge of the Far Pairs into the Proxy Index, the clarification's note of 8 November 2026,
-> is superseded by [ADR 0006](./0006-far-pairs-beside-the-proxy-index.md)** (owner, 12 November
+> is superseded by [ADR 0007](./0007-far-pairs-beside-the-proxy-index.md)** (owner, 12 November
 > 2026, on ogld#8's measurements). The Far Pairs are again their own component beside the Proxy
 > Index: `matrix` and `region` read them, and `proxies` and `clump` read the index. Decision 3
 > stands as written.
@@ -194,7 +194,7 @@ region matrix wider than 3 Mb reads about 3–9% more bytes for it (spec §11). 
 cost before the first release.
 *12 November 2026:* reversed on ogld#8's measurements, before any store was published: a matrix
 of 500 variants on one chromosome read about 890 index chunks for its far pairs, where a Far
-Pairs component reads about 11 ([ADR 0006](./0006-far-pairs-beside-the-proxy-index.md)).
+Pairs component reads about 11 ([ADR 0007](./0007-far-pairs-beside-the-proxy-index.md)).
 
 **A matrix is one signed-r matrix, NaN where unstored** (decision 2). A matrix query returns the
 Stored r of every pair it holds and NaN for every other pair, the Bound and Not Measured alike.

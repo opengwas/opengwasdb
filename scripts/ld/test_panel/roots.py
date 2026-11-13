@@ -16,6 +16,12 @@ variable plus the rest of its path, and by hash, so no host path is committed.
 - `OGLD_STORES`, default `/data/opengwasdb/work/ogld/stores`: the five HGDP+1kGP LD Stores, staged
   there until ogld#9 chooses where they are published;
 - `OGLD_SCRATCH`, default `/data/opengwasdb/work/ogld/scratch/7`: that script's logs and timings;
+- `OGLD_403_ANALYSES`, default `/data/opengwasdb/work/ogld/realdata/403-analyses`: opengwasdb#403's
+  37 EUR Analyses, `scripts/realdata/make_403_inputs.py`'s output, which the realdata tier, the
+  acceptance run and `scripts/bench/latency.py` read (ogld#6, ogld#8);
+- `OGLD_LAYOUTS`, default `/data/opengwasdb/work/ogld/scratch/8/layouts`: EUR chr22 built once
+  per Near Band layout by `scripts/bench/build_layouts.py`, which `scripts/bench/latency.py`
+  times (ogld#8);
 - `OGLD_PLINK2`, `OGLD_BCFTOOLS`, `OGLD_BGZIP`, default the program on `PATH`: the tools.
 """
 
@@ -33,6 +39,8 @@ DEFAULTS = {
     "OGLD_PGEN_V2": "/data/opengwasdb/work/ogld/phased_v2_pgen",
     "OGLD_STORES": "/data/opengwasdb/work/ogld/stores",
     "OGLD_SCRATCH": "/data/opengwasdb/work/ogld/scratch/7",
+    "OGLD_403_ANALYSES": "/data/opengwasdb/work/ogld/realdata/403-analyses",
+    "OGLD_LAYOUTS": "/data/opengwasdb/work/ogld/scratch/8/layouts",
 }
 #: gnomAD v3.1.2's HGDP+1kGP sample metadata, under `OGLD_REFERENCE`.
 META_NAME = "hgdp1kgp-hg38/source/gnomad.genomes.v3.1.2.hgdp_1kg_subset_sample_meta.tsv.bgz"

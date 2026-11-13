@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Give an LD Store written before ADR 0006 its Far Pairs, derived from its own Proxy Index.
+"""Give an LD Store written before ADR 0007 its Far Pairs, derived from its own Proxy Index.
 
     pixi run -e dev python scripts/derive_far_pairs.py STORE [STORE ...] [--threads 8]
 
 ogld#7 wrote the five HGDP+1kGP stores before the owner brought the Far Pairs back beside the
-Proxy Index (ADR 0006, 12 November 2026). A store's Far Pairs are its index's entries beyond
+Proxy Index (ADR 0007, 12 November 2026). A store's Far Pairs are its index's entries beyond
 near_bp in each pair's earlier row (spec §5), so each chromosome's are derived from its own
 index by the store assembly (`ogld.store.assembly.derive_far_pairs`), which writes them through
 the stream a build writes them through. On HGDP+1kGP EUR chr22 the derived `far/` was

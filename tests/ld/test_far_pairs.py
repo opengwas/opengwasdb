@@ -1,4 +1,4 @@
-"""The Far Pairs beside the Proxy Index (ogld#31; spec §5, §8, §10; ADR 0006).
+"""The Far Pairs beside the Proxy Index (ogld#31; spec §5, §8, §10; ADR 0007).
 
 Each chromosome's `far/<chrom>/` holds its pairs more than near_bp and at most far_bp apart whose
 code reaches the far code floor, once each, in the earlier variant's row: exactly the Proxy
@@ -158,7 +158,7 @@ def files(store: Path, under: str = "") -> dict[str, bytes]:
 
 
 def without_far_pairs(to: Path) -> Path:
-    """A copy of the Test Store as a store written before ADR 0006 holds it: no far/."""
+    """A copy of the Test Store as a store written before ADR 0007 holds it: no far/."""
     copy = copy_store(to)
     shutil.rmtree(copy / "far")
     return copy

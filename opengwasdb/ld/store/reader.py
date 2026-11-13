@@ -242,7 +242,7 @@ class StoreReader:
         Pairs within near_bp come from the Near Band, resolved as `r_of_pairs` resolves
         them; farther ones from the Far Pairs rows of the listed variants, each pair whose
         partner is listed scattered into the matrix, rather than searched for pair by pair. No
-        Proxy Index entry is read (ADR 0006).
+        Proxy Index entry is read (ADR 0007).
         The diagonal is 1. Every pair the store does not hold, the Bound and Not Measured
         alike, is NaN. The matrix is written in place, so `matrix` holds one float64 copy of
         its result (ogld#14); a row asked for twice is copied from its first.
@@ -374,7 +374,7 @@ class StoreReader:
         `near/<c>/r`, from the row's first code to its last partner before `stop`, never a
         gather pair by pair, and never the row's partners past the region. The region's pairs
         beyond near_bp come from its rows' Far Pairs rows, each pair inside the region scattered
-        into the matrix (ADR 0006). The diagonal is 1 and every unstored pair is NaN. A span
+        into the matrix (ADR 0007). The diagonal is 1 and every unstored pair is NaN. A span
         that leaves its chromosome or the Variant Set raises; start == stop is 0 × 0.
 
         Memory: the n × n float64 result, and one block of rows at a time, at most

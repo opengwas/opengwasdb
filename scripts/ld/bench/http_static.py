@@ -31,6 +31,8 @@ from pathlib import Path
 
 from aiohttp import ClientSession, TCPConnector, web
 
+#: The proxy's client session, kept on its application.
+SESSION = web.AppKey("session", ClientSession)
 #: The headers a range response needs, passed through the proxy.
 _PASSED = ("Content-Range", "Content-Type", "Accept-Ranges", "Last-Modified", "ETag")
 
@@ -101,10 +103,10 @@ def proxy_app(upstream: str) -> web.Application:
     app = web.Application()
 
     async def start(app: web.Application) -> None:
-        app["session"] = ClientSession(connector=TCPConnector(limit=0), auto_decompress=False)
+        app[SESSION] = ClientSession(connector=TCPConnector(limit=0), auto_decompress=False)
 
     async def stop(app: web.Application) -> None:
-        await app["session"].close()
+        await app[SESSION].close()
 
     async def control(request: web.Request) -> web.Response:
         action = request.match_info["action"]
@@ -117,7 +119,7 @@ def proxy_app(upstream: str) -> web.Application:
     async def forward(request: web.Request) -> web.StreamResponse:
         await asyncio.sleep(state["latency"])
         headers = {k: v for k, v in request.headers.items() if k in ("Range", "Accept")}
-        session: ClientSession = request.app["session"]
+        session = request.app[SESSION]
         async with session.request(
             request.method, upstream + request.raw_path, headers=headers
         ) as r:
@@ -142,16 +144,21 @@ def proxy_app(upstream: str) -> web.Application:
     return app
 
 
+async def started(app: web.Application) -> tuple[web.AppRunner, int]:
+    """`app` running on a free loopback port: its runner, to clean up, and the port."""
+    runner = web.AppRunner(app, access_log=None)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    return runner, int(runner.addresses[0][1])
+
+
 async def _serve(app: web.Application) -> None:
     """Run `app` on a free loopback port, say which, and serve until killed."""
     asyncio.get_running_loop().set_default_executor(
         concurrent.futures.ThreadPoolExecutor(max_workers=2)
     )
-    runner = web.AppRunner(app, access_log=None)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    port = runner.addresses[0][1]
+    _, port = await started(app)
     print(f"ready {port}", flush=True)
     await asyncio.Event().wait()
 

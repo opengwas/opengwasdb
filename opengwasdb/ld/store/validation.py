@@ -1408,7 +1408,7 @@ class _IndexNear(_Scanned):
 @_scanned("far.index")
 class _FarIndex(_Scanned):
     """The Far Pairs are the index's entries beyond near_bp in their pairs' earlier rows, pair
-    for pair and code for code (spec §5; ADR 0006). Both are read by the same block of rows, so
+    for pair and code for code (spec §5; ADR 0007). Both are read by the same block of rows, so
     each block's Far Pairs are compared with that block's entries, both ways, and nothing is
     carried. That the index holds each such pair in its later row too is index.symmetric's to
     say."""

@@ -9,7 +9,7 @@ store"). It handles:
 - the threshold at the far code floor, judged on codes, for every pair within far_bp (§3, §5);
 - both directions of the Proxy Index, partners ascending, one code per pair (spec §5);
 - the Far Pairs: the index's pairs beyond near_bp, once each, in the earlier row (spec §5;
-  ADR 0006), from the pairs a cut already keeps, with no second pass over r;
+  ADR 0007), from the pairs a cut already keeps, with no second pass over r;
 - the counts, and the rest of the provenance a store derives from itself (spec §7).
 
 Validation at `finish` runs every rule of spec §12 through `validate_group`. A producer supplies r
@@ -476,7 +476,7 @@ class ProxyIndexStream:
 
 
 class FarPairsStream:
-    """One chromosome's Far Pairs, written row by row as blocks arrive (spec §5; ADR 0006).
+    """One chromosome's Far Pairs, written row by row as blocks arrive (spec §5; ADR 0007).
 
     Row l holds every pair (l, m), m > l, more than near_bp and at most far_bp apart whose code
     reaches the far code floor, ascending in m: the Proxy Index's entries beyond near_bp in their
@@ -521,7 +521,7 @@ def derive_far_pairs(
     root: zarr.Group, name: str, position: npt.NDArray[np.int64], near_bp: int, encoding: REncoding
 ) -> int:
     """Write chromosome `name`'s Far Pairs from its own Proxy Index, for a store written before
-    they came back (ADR 0006), and return how many. They are its entries beyond near_bp in each
+    they came back (ADR 0007), and return how many. They are its entries beyond near_bp in each
     pair's earlier row (spec §5), read a block of rows at a time and written in row order through
     `FarPairsStream`, as a store being built writes them, so the arrays are a build's, byte for
     byte. The index is not changed. An index element no store holds, which is what a lost chunk

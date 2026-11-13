@@ -8,8 +8,8 @@ quantised, the provenance an LD Store carries, what a reader answers for a pair,
 queries return, and when a request is refused. The decisions behind it are in ADR 0001
 (`docs/adr/0001-near-band-and-thresholded-far-pairs.md`), including its clarification of
 7 November 2026, each store's encoding of r in ADR 0004
-(`docs/adr/0004-per-store-encoding.md`), and the Far Pairs beside the Proxy Index in ADR 0006
-(`docs/adr/0006-far-pairs-beside-the-proxy-index.md`); the build inputs are in `docs/spec/build-inputs.md` (ADR 0002); the terms are in
+(`docs/adr/0004-per-store-encoding.md`), and the Far Pairs beside the Proxy Index in ADR 0007
+(`docs/adr/0007-far-pairs-beside-the-proxy-index.md`); the build inputs are in `docs/spec/build-inputs.md` (ADR 0002); the terms are in
 `CONTEXT.md`. **ALID**, its **A1** and **Reference Assembly** are the engine's
 (opengwas/opengwasdb `CONTEXT.md`, _Variant Identity_), not redefined here. The engine's glossary
 says an ALID is formed after "upper-casing, trimming and left alignment"; its code at `1ab2b09`
@@ -280,7 +280,7 @@ r reaches t_far (owner, 7 November 2026; §11):
   `index.near` holds the two to one code per pair (§12).
 
 **The Far Pairs** (`far/<chrom>/`) hold the index's pairs beyond `near_bp` again, once each, in
-the earlier variant's row, as the Near Band holds its pairs (owner, 12 November 2026; ADR 0006):
+the earlier variant's row, as the Near Band holds its pairs (owner, 12 November 2026; ADR 0007):
 
 - Row l holds every m > l with `near_bp` < p_m − p_l ≤ `far_bp` and |code(l, m)| ≥
   `far_code_floor` (§3), in ascending m: exactly row l's index entries above l and beyond
@@ -319,7 +319,7 @@ spec §10a. An inner chunk longer than its array is clipped to the array.
 | `variants/alid`, `a1`, `a2` | `string` | (V,) | 16,384 | 1,048,576 | `""` |
 | `variants/a1_frequency` | `float32` | (V,) | 16,384 | 1,048,576 | NaN |
 | `near/<chrom>/indptr` | `int64` | (n_c + 1,) | 16,384 | 1,048,576 | −1 |
-| `near/<chrom>/r` | `int16` | (indptr[n_c],) | **262,144**, provisional | **67,108,864**, provisional | −32768 |
+| `near/<chrom>/r` | `int16` | (indptr[n_c],) | **262,144** | **67,108,864** | −32768 |
 | `index/<chrom>/indptr` | `int64` | (n_c + 1,) | 16,384 | 1,048,576 | −1 |
 | `index/<chrom>/partner` | `int32` | (index_c,) | 16,384 | 1,048,576 | −1 |
 | `index/<chrom>/r` | `int16` | (index_c,) | 16,384 | 1,048,576 | −32768 |
@@ -412,11 +412,15 @@ against 3.13 s). What decides the layout now is the reads that remain.
   and 0.045 MB from local disk, 12 ms over HTTP and 97 ms with 20 ms added per request, in 4
   requests, on the shape in the table above (§11).
 
-**The layout is C, provisionally.** ogld#8 settles it. It times, from local disk and over HTTP
-from a static host: the 3 Mb LD matrix, 500 scattered variants, clumping #403's 37 Analyses, and
-proxy lookups. If the clients that read static Zarr, an option for ogld#9, are limited by
-bandwidth rather than by requests, B's 2.5–7× fewer bytes on small reads could outweigh C's lead
-on many-chunk reads. A change of chunk or shard shape is not a format version change (§13).
+**The layout is C** (owner, 12 November 2026, on ogld#8; ADR 0006). ogld#8 built HGDP+1kGP EUR
+chr22 in each layout and timed the reads that differ, locally and over HTTP from a static host
+with 0, 10 and 50 ms added to every request (`docs/benchmarks/latency.md`). Clumping below t_far,
+the read that costs most, was fastest on C at every latency: 12.3, 44 and 143 s locally, at 10 ms
+and at 50 ms for 27 Analyses' chr22 hits, against B's 17.1, 132 and 488 s, because GWAS hits are
+dense and a C chunk serves many of a lead's hits in one call. C read regions fastest and is the
+smallest, B 18.9% and A 32.4% larger at × 511. B read 3.2–5.6× fewer bytes on small reads, but
+those are bound by requests and took the same time on B and C. A change of chunk or shard shape is
+not a format version change (§13).
 
 A C shard is 256 inner chunks: 128 MiB raw. As built (ogld#7, k = 10, × 511), a Near Band shard's
 median on disk is 51 to 63 MiB by panel, and its largest 73 MiB. That is 1,257 shards for
@@ -424,7 +428,8 @@ HGDP+1kGP EUR's Near Band and 3,457 for AFR's, against the 2,800 and 7,200 the e
 gave at × 32767. The other arrays use one shape, 16,384 inner and
 1,048,576 to a shard. These arrays are read whole, by row range, or one sparse row at a time, and
 the prototype's stores used this shape for them. At EUR's 5.3×10⁹ index entries that is about
-5,000 shards for each of `partner` and `r`; ogld#8 may coarsen the shard, which changes no reader.
+5,000 shards for each of `partner` and `r`. Coarsening that shard would change no reader; ogld#8
+measured no read that needed it.
 
 **The Far Pairs keep that shape** (ogld#31): 16,384 entries an inner chunk, 64 chunks to a shard.
 EUR's 1.33×10⁸ Far Pairs are 140 shards of each array. They are read by row, so what a read pays is
@@ -448,7 +453,7 @@ and a store's writer holds one shard of each array (§6, ogld#17).
 **Bits per pair, measured** (ogld#16). A real build of HGDP+1kGP EUR chr22 at each scale: the
 phased v2 callset converted by `docs/spec/build-inputs.md` §3, the 665 unrelated samples of the EUR
 keep file, k = 10 from `/data/opengwasdb/work/ogld/pcs/EUR.eigenvec`, 8 threads, at ogld
-`88cb8e9`: 119,632 variants and 1,165,485,828 Near Band pairs, on the provisional layout. Bytes
+`88cb8e9`: 119,632 variants and 1,165,485,828 Near Band pairs, on layout C. Bytes
 are those of the arrays' files on disk; the Proxy Index's are its `indptr`, `partner` and `r`
 together.
 
@@ -465,7 +470,7 @@ because the far code floor's cut moves with the scale (§3): 101,886 Far Pairs a
 
 **Sizes, measured** (ogld#7). The five stores as built: the phased v2 callset converted by
 `docs/spec/build-inputs.md` §3, each panel's unrelated samples (EUR 665, AFR 608, EAS 724, SAS 672,
-AMR 341), MAC ≥ 20, k = 10, × 511, 16 threads, on the provisional layout, at ogld
+AMR 341), MAC ≥ 20, k = 10, × 511, 16 threads, on layout C, at ogld
 `0.0.1.dev230+g5d78804cb`. Bytes are those of each array group's files on disk (`near/`, `index/`;
 `variants/` adds 90–165 MB per store and is in the total). Bits per pair are the Near Band's bytes
 × 8 over its pairs; bits per entry are the Proxy Index's (`indptr`, `partner`, `r`) over its entries.
@@ -480,7 +485,7 @@ AMR 341), MAC ≥ 20, k = 10, × 511, 16 threads, on the provisional layout, at 
 | **Total** | 47.2 M | 539,567,716,377 | 486.1 GB | 7.21 | 24,516,005,900 | 45.2 GB | 14.76 | 531.9 GB |
 
 The five total 532 GB, 0.53 TB, before their Far Pairs (ogld#31). Those were derived in place
-from each store's own index (ADR 0006) and add 1.46 GB, 0.27%: 18.5 bits a pair on disk, 3.2% of
+from each store's own index (ADR 0007) and add 1.46 GB, 0.27%: 18.5 bits a pair on disk, 3.2% of
 the index's bytes. Bytes are those of `far/`'s files; raw, a pair is 6 bytes.
 
 | LD Store | Far Pairs | per variant | `far/` | bits per pair | against the index | of the store |
@@ -803,6 +808,11 @@ What the reads hold, measured with tracemalloc and held by `tests/test_partner_r
   beside it. `matrix` and `region` apply a `fill` in place, so each holds one float64 copy of
   its result.
 
+**The reads on the built stores are measured in `docs/benchmarks/latency.md`** (ogld#8): the
+published EUR store from local disk and over HTTP at 0, 10 and 50 ms added per request, and EUR
+chr22 built in each layout. Those numbers decided the layout (ADR 0006) and supersede the
+prototype's below, which are kept as the record of what chose layout C provisionally.
+
 The prototype timed each read on the EUR chr22 slice, a real Zarr v3 sharded LD Store (1.65 GB,
 65,035 variants), under the three layouts of §6. It read from local disk, and over HTTP from a
 static server that honours Range requests
@@ -845,7 +855,7 @@ refuses a `format_version` or `encoding` it does not implement (§13). A chromos
 range and its Near Band's and Proxy Index's `indptr` are read the first time a request touches
 that chromosome, and kept; its Far Pairs' `indptr` the first time a request needs its pairs
 beyond `near_bp`, so `proxies` and `clump`, which never do, read no more than they did before
-the Far Pairs (ADR 0006). Every other read the reader makes goes through its cache of decoded inner chunks
+the Far Pairs (ADR 0007). Every other read the reader makes goes through its cache of decoded inner chunks
 (`ogld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request
 needs, whole, which is what Zarr fetches and decodes in any case, each run of neighbouring chunks
 in one read. It keeps them up to 256 MiB per opened store, dropping the least recently used first.
@@ -880,14 +890,15 @@ pairs about 4 million at a time, which bounds its working memory beside the matr
   reads exactly as the committed one (`tests/test_store_reads.py`). On the × 511 Test Store
   (ogld#16), a 3-variant matrix over HTTP fetched 759 of chr22's 97,699 Near Band bytes, in 2
   requests (41,290 bytes in 28 requests in all, most of it metadata documents); a reader that read
-  whole arrays fetched 96,582 Near Band bytes. The same read again fetched none. Read latency at scale is ogld#8's to measure.
+  whole arrays fetched 96,582 Near Band bytes. The same read again fetched none. Read latency at
+  scale, on the built stores, is in `docs/benchmarks/latency.md` (ogld#8).
 
 ## 11. The upstream half: the Proxy Index
 
 **Settled** by the owner on 7 November 2026 (epic #1, comment of that date): a sparse symmetric
 Proxy Index (§5). This section keeps the measurements that decided it; the merge of the Far
 Pairs into the index that the owner made on 8 November 2026; and its reversal on 12 November
-2026, on ogld#8's measurements, which put the Far Pairs back beside the index (ADR 0006).
+2026, on ogld#8's measurements, which put the Far Pairs back beside the index (ADR 0007).
 
 **The problem.** The Near Band stores row i as r(i, i+1 … the last variant ≤ `near_bp` away): the
 upper triangle. So a variant's upstream partners, the ones before it, are scattered one per row
@@ -963,7 +974,7 @@ time. The reasoning was:
   Pairs row. That is about 3–9% more bytes than the Near Band read it already makes: the index's
   share of a store, about 5% for EUR and 9% for AMR.
 
-**Reversed** by the owner on 12 November 2026 (ogld#8, ruling 2; ADR 0006), before any LD Store
+**Reversed** by the owner on 12 November 2026 (ogld#8, ruling 2; ADR 0007), before any LD Store
 was published, on ogld#8's timings of the published HGDP+1kGP EUR store
 (`docs/benchmarks/latency.md`). The bytes held; the requests did not:
 - **A region 10 Mb wide** read 6.2–9.3% more bytes for its index rows, as estimated. But it
@@ -1095,4 +1106,4 @@ a store's scale: any whole scale from 1 to 32767 in the `int16` container is ver
 each store records its own (§3, §7). Version `0.1.0` is an unreleased draft: no LD Store in it
 has been published, so the owner's decisions of 7 November 2026, the Proxy Index among them, of
 10 November 2026, the per-store encoding (ADR 0004), and of 12 November 2026, the Far Pairs
-beside the index (ADR 0006), are part of `0.1.0` rather than a new version.
+beside the index (ADR 0007), are part of `0.1.0` rather than a new version.

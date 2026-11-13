@@ -40,7 +40,7 @@ def test_the_validation_rules_are_spec_section_12_s_in_order() -> None:
 
 
 def test_the_far_pairs_have_the_five_rules_section_11_named() -> None:
-    # The Far Pairs are their own component again (ADR 0006): the four far.* rules spec §11
+    # The Far Pairs are their own component again (ADR 0007): the four far.* rules spec §11
     # named before the merge, and far.index, holding them equal to the index's far entries.
     far = [rule for rule in fmt.VALIDATION_RULES if rule.startswith("far.")]
     assert far == ["far.rows", "far.codes", "far.distance", "far.threshold", "far.index"]
