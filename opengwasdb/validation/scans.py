@@ -739,12 +739,6 @@ def _dense_blocks(target: Target, limits: Iterable[tuple[int, int]]) -> Iterator
         yield split.read(band)
 
 
-#: What a forked worker holds beyond its band's decoded budget: its interpreter, the
-#: read's compressed chunks, the codecs' intermediates, and the pages of the parent's it
-#: writes to. A worker held 0.26-0.27 GiB of its own between bands on OGS-00011's Dense
-#: Component and OGS-00009 (#315), so this is about twice that. A band itself peaked at
-#: 54.7 and 56.2 bytes a cell there, inside the 96 `BYTES_PER_CELL` budgets.
-WORKER_FLOOR_BYTES = 512 * 1024**2
 #: The per-Analysis totals one band's outcome carries, at most: one for each fold
 #: that counts per Analysis, with room to spare.
 RESULT_TOTALS = 16
@@ -771,9 +765,11 @@ class GridSplit(Split[Block]):
 
     @property
     def unit_bytes(self) -> int:
-        """A band's decoded budget, its rows at `BYTES_PER_CELL` a cell, and a
-        worker's floor beside it."""
-        return WORKER_FLOOR_BYTES + self._rows() * self.grid.shape[1] * BYTES_PER_CELL
+        """A band's decoded budget, its rows at `BYTES_PER_CELL` a cell. A band
+        peaked at 54.7 and 56.2 bytes a cell on OGS-00011's Dense Component and
+        OGS-00009 (#315), inside the 96 that budget allows; the worker's floor
+        beside it is `pool_workers`'."""
+        return self._rows() * self.grid.shape[1] * BYTES_PER_CELL
 
     @property
     def result_bytes(self) -> int:

@@ -12,22 +12,22 @@ from __future__ import annotations
 
 import pytest
 
-import opengwasdb.completion.fill_shards as fill_shards
+import opengwasdb.encoding.memory as memory
 import opengwasdb.layouts.dense.complete as dense_complete
-import opengwasdb.layouts.ragged.complete as ragged_complete
-import opengwasdb.layouts.ragged.zarr_csr as zarr_csr
 
 #: A fixture's unit, whatever the pool: far above what its few cells hold.
 FIXTURE_UNIT_BYTES = 16 * 1024**2
 
 
+def pin_fork_floor(patch: pytest.MonkeyPatch) -> None:
+    """A forked worker's floor, which every pool adds to its unit, at a fixture's size."""
+    assert hasattr(memory, "FORK_FLOOR_BYTES"), "memory has no FORK_FLOOR_BYTES to pin"
+    patch.setattr(memory, "FORK_FLOOR_BYTES", FIXTURE_UNIT_BYTES)
+
+
 def pin_pool_units(patch: pytest.MonkeyPatch) -> None:
-    """Every completion write pool's per-unit fixed part, at a fixture's size."""
-    for module, name in (
-        (dense_complete, "_BAND_FIXED_BYTES"),
-        (fill_shards, "_RESOLVE_FIXED_BYTES"),
-        (ragged_complete, "_ASSEMBLY_FIXED_BYTES"),
-        (zarr_csr, "_REGION_FIXED_BYTES"),
-    ):
-        assert hasattr(module, name), f"{module.__name__} has no {name} to pin"
-        patch.setattr(module, name, FIXTURE_UNIT_BYTES)
+    """Every completion write pool's fixed part, at a fixture's size: the fork's
+    floor they share, and the Dense band's step on top of it."""
+    pin_fork_floor(patch)
+    assert hasattr(dense_complete, "_BAND_FIXED_BYTES"), "no _BAND_FIXED_BYTES to pin"
+    patch.setattr(dense_complete, "_BAND_FIXED_BYTES", FIXTURE_UNIT_BYTES)

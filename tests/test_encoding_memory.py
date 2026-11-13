@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+import opengwasdb.build.ordered_pool as ordered_pool
 import opengwasdb.encoding.memory as memory
 from opengwasdb.encoding.memory import (
     MEMORY_BUDGET_DIVISOR,
@@ -98,15 +99,31 @@ def test_workers_are_capped_by_the_budget_and_never_zero() -> None:
 GIB = 1024**3
 
 
-def _host(monkeypatch: pytest.MonkeyPatch, available: int | None, parent: int) -> None:
-    """A host with `available` bytes available, and a parent holding `parent`."""
+def _host(
+    monkeypatch: pytest.MonkeyPatch, available: int | None, parent: int, floor: int = 0
+) -> None:
+    """A host with `available` bytes available, a parent holding `parent`, and a
+    forked worker's floor of `floor` -- none, so the arithmetic below is the
+    unit's alone, unless a test is about the floor."""
     monkeypatch.setattr(memory, "available_memory_bytes", lambda path=memory.MEMINFO: available)
     monkeypatch.setattr(memory, "resident_bytes", lambda path=memory.SELF_STATUS: parent)
+    monkeypatch.setattr(memory, "FORK_FLOOR_BYTES", floor)
 
 
-def _pool(caplog: pytest.LogCaptureFixture, requested: int, unit: int, **kwargs) -> int:
+def _pool(
+    caplog: pytest.LogCaptureFixture,
+    requested: int,
+    unit: int,
+    *,
+    units: int = 1000,
+    result_bytes: int = 0,
+    **kwargs,
+) -> int:
     with caplog.at_level(logging.INFO, logger=memory.log.name):
-        return pool_workers(requested, unit, what="Band write", unit="band", **kwargs)
+        return pool_workers(
+            requested, unit, what="Band write", unit="band", units=units,
+            result_bytes=result_bytes, **kwargs,
+        )
 
 
 def test_the_pool_is_what_the_budget_holds_beside_the_parent(
@@ -122,6 +139,21 @@ def test_the_pool_is_what_the_budget_holds_beside_the_parent(
     assert "beside the parent's 1024 MiB, against a budget of 4096 MiB" in caplog.text
 
 
+def test_every_worker_carries_the_fork_s_floor(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A forked worker holds its interpreter and the parent's pages it writes to
+    before its first unit, whatever the pool: 16 GiB available is a 4 GiB budget,
+    and beside a 1 GiB parent a 1 GiB unit and the 512 MiB floor fit twice, not
+    three times. Every pool counts the same floor, from one definition."""
+    _host(monkeypatch, 16 * GIB, 1 * GIB, floor=memory.FORK_FLOOR_BYTES)
+
+    assert memory.FORK_FLOOR_BYTES == 512 * 1024**2
+    assert memory.worker_bytes(1 * GIB) == 1 * GIB + memory.FORK_FLOOR_BYTES
+    assert _pool(caplog, 8, 1 * GIB) == 2
+    assert "a band is 1536 MiB a worker" in caplog.text
+
+
 def test_the_results_a_worker_leaves_with_the_parent_are_counted(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -131,6 +163,8 @@ def test_the_results_a_worker_leaves_with_the_parent_are_counted(
     _host(monkeypatch, 16 * GIB, 1 * GIB)
 
     assert memory.RESULTS_HELD_PER_WORKER == 2
+    # The ordered pool's window is the share counted here: one constant.
+    assert memory.RESULTS_HELD_PER_WORKER is ordered_pool.RESULTS_HELD_PER_WORKER
     assert _pool(caplog, 8, 1 * GIB, result_bytes=GIB // 4) == 2
     assert "512 MiB of results held by the parent" in caplog.text
 

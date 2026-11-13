@@ -32,6 +32,7 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.associations import Cells, DenseGridReader
+from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, read_as_planned, run_block
 from opengwasdb.completion.checkpoint import (
@@ -67,7 +68,7 @@ from opengwasdb.completion.manifest import (
     build_completion_provenance,
     completed_release_manifest,
 )
-from opengwasdb.completion.parallel import ordered_write, run_block_tasks
+from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
@@ -89,7 +90,11 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.encoding.association_codec import CellValues, Placement, log_se_out_of_range
 from opengwasdb.encoding.codec import SideTables, table_end_to_end
-from opengwasdb.encoding.memory import pool_workers
+from opengwasdb.encoding.memory import (
+    EXCEPTION_CELLS_PER_RESULT_BYTE,
+    FORK_FLOOR_BYTES,
+    pool_workers,
+)
 from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase, log_progress
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import write_analyses_tsv
@@ -1178,30 +1183,29 @@ _STEP_CELLS = 1 << 24
 #: A band worker's fixed footprint and its footprint per cell of its band, in
 #: bytes: what the write pool divides the host's budget by (`_band_bytes`). A
 #: band holds its z, SE and EAF (`float32`), its imputed mask and its codes,
-#: 18 bytes a cell; the fixed part is a step's intermediates and the fork's floor.
-_BAND_FIXED_BYTES = 4 * 1024**3
+#: 18 bytes a cell; the fixed part is a step's intermediates. With the fork's
+#: floor, which `pool_workers` adds, a band's fixed part is the 4 GiB #321
+#: budgeted against OGS-00009, kept until #322 measures the write at full size.
+_BAND_FIXED_BYTES = 4 * 1024**3 - FORK_FLOOR_BYTES
 _BAND_BYTES_PER_CELL = 24
 
 
 def _band_bytes(n_analyses: int, band_rows: int) -> int:
-    """Bytes one band's worker holds."""
+    """Bytes one band's worker holds, beside the fork's floor."""
     return _BAND_FIXED_BYTES + _BAND_BYTES_PER_CELL * n_analyses * band_rows
 
 
 #: What the parent holds of one band's outcome until it takes it: two counts a
-#: band per Analysis, and the band's table entries, 12 bytes each, pickled and
-#: unpickled. OGS-00009's completed release holds 6e-5 of its cells as SE
-#: exceptions (about 30,000 a band) and far fewer z and EAF ones; a fortieth of
-#: a byte a cell is room for 10^-3 of the cells (#321).
+#: band per Analysis, and the band's table entries
+#: (`EXCEPTION_CELLS_PER_RESULT_BYTE`).
 _BAND_RESULT_BYTES_PER_ANALYSIS = 16
-_BAND_RESULT_CELLS_PER_BYTE = 40
 
 
 def _band_result_bytes(n_analyses: int, band_rows: int) -> int:
     """Bytes the parent holds of one band's outcome."""
     return (
         _BAND_RESULT_BYTES_PER_ANALYSIS * n_analyses
-        + n_analyses * band_rows // _BAND_RESULT_CELLS_PER_BYTE
+        + n_analyses * band_rows // EXCEPTION_CELLS_PER_RESULT_BYTE
     )
 
 
@@ -1223,7 +1227,7 @@ def _band_source_rows(
 class _BandPlan:
     """What every band of the write reads: opened by the parent before the
     write pool forks, and inherited by its workers rather than pickled
-    (`ordered_write`)."""
+    (`ordered_map`'s ``shared``)."""
 
     root: Any
     source: DenseGridReader
@@ -1651,7 +1655,7 @@ def _run_bands(
         result_bytes=_band_result_bytes(plan.n_analyses, plan.band_rows),
     )
     started = time.monotonic()
-    outcomes = ordered_write(_complete_band, plan, range(n_bands), workers)
+    outcomes = ordered_map(_complete_band, range(n_bands), workers, shared=plan)
     for band, outcome in enumerate(outcomes):
         if outcome.band != band:
             raise RuntimeError(f"band {outcome.band} arrived where band {band} belongs")

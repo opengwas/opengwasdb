@@ -5,8 +5,8 @@ whose results must be combined in input order: CSR offsets align with
 ``analysis_index``, overflow tables and top-hit harvests are ordered. A plain
 ``as_completed`` loop would reorder them silently, and ``pool.map`` over a list
 submits every item at once and holds every result. ``ordered_map`` does
-neither: it keeps at most ``max_in_flight`` items submitted, and yields results
-strictly in input order.
+neither: it keeps at most `RESULTS_HELD_PER_WORKER` items a worker submitted,
+and yields results strictly in input order.
 
 Workers are forked, so large read-only state the parent set up before the call
 (numpy arrays, not Python dicts, which fork copies page by page as reference
@@ -47,6 +47,13 @@ _sharing = False
 #: ``None`` is still shared rather than silently dropped.
 _NO_SHARED: Any = object()
 
+#: The results an ordered pool's parent holds for each worker at most: what it
+#: has submitted and not yet taken back. Two keep every worker busy while the
+#: parent waits on the result ahead of them. One window for every pool, so the
+#: memory a pool is sized against (`encoding.memory.pool_workers`) counts what
+#: the parent really holds.
+RESULTS_HELD_PER_WORKER = 2
+
 
 def fork_pool(n_workers: int) -> ProcessPoolExecutor:
     """A ``ProcessPoolExecutor`` pinned to the fork start method.
@@ -83,7 +90,6 @@ def ordered_map(
     fn: Callable[[T], R],
     items: Iterable[T],
     n_workers: int,
-    max_in_flight: int | None = None,
 ) -> Iterator[R]: ...
 
 
@@ -92,7 +98,6 @@ def ordered_map(
     fn: Callable[[S, T], R],
     items: Iterable[T],
     n_workers: int,
-    max_in_flight: int | None = None,
     *,
     shared: S,
 ) -> Iterator[R]: ...
@@ -102,7 +107,6 @@ def ordered_map(
     fn: Callable[..., R],
     items: Iterable[T],
     n_workers: int,
-    max_in_flight: int | None = None,
     *,
     shared: Any = _NO_SHARED,
 ) -> Iterator[R]:
@@ -114,10 +118,10 @@ def ordered_map(
     item. Not re-entrant in that form -- a second shared call while one has a
     pool open is refused, as it is for ``fork_each``.
 
-    At most ``max_in_flight`` items (default ``2 * n_workers``) are submitted
-    but not yet yielded, which bounds the results the parent holds. An
-    exception raised by ``fn`` propagates from the iteration at that item's
-    position; remaining submitted work is cancelled.
+    At most `RESULTS_HELD_PER_WORKER` items a worker are submitted but not yet
+    yielded, which bounds the results the parent holds. An exception raised by
+    ``fn`` propagates from the iteration at that item's position; remaining
+    submitted work is cancelled.
     """
     if n_workers <= 1:
         if shared is _NO_SHARED:
@@ -127,9 +131,7 @@ def ordered_map(
             for item in items:
                 yield fn(shared, item)
         return
-    limit = max_in_flight if max_in_flight is not None else 2 * n_workers
-    if limit < 1:
-        raise ValueError(f"max_in_flight must be >= 1, got {limit}")
+    limit = RESULTS_HELD_PER_WORKER * n_workers
     if shared is _NO_SHARED:
         with fork_pool(n_workers) as pool:
             yield from _in_input_order(partial(pool.submit, fn), items, limit)

@@ -532,7 +532,8 @@ were in flight, and `validate` ends with that error. It does not report a Store 
 about a read that never finished.
 
 **Memory.** A worker holds one band at a time: the decoded-band budget (#254), at 96
-bytes a cell, and 512 MiB beside it (`WORKER_FLOOR_BYTES`). The pool is sized by
+bytes a cell, and 512 MiB beside it, the fork's floor every pool shares
+(`encoding.memory.FORK_FLOOR_BYTES`). The pool is sized by
 `encoding.memory.pool_workers` (#321): no more workers than a quarter of the host's
 available memory holds beside the driver and the outcomes it holds in flight, no more
 than the bands left, and one on a host whose memory cannot be read.

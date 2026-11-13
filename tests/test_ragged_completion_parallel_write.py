@@ -358,10 +358,13 @@ def test_the_region_pool_is_no_larger_than_its_regions_or_the_budget(
     cells = 1 << 23
     big = [(k * cells, (k + 1) * cells) for k in range(8)]
     per_region = (
-        zarr_csr._REGION_FIXED_BYTES
+        memory.FORK_FLOOR_BYTES
         + zarr_csr._REGION_BYTES_PER_CELL * cells
         + memory.RESULTS_HELD_PER_WORKER
-        * (zarr_csr._REGION_RESULT_BYTES_PER_ANALYSIS * 4 + cells // 40)
+        * (
+            zarr_csr._REGION_RESULT_BYTES_PER_ANALYSIS * 4
+            + cells // memory.EXCEPTION_CELLS_PER_RESULT_BYTE
+        )
     )
     assert zarr_csr._region_workers(8, big, 4) == min(8, (3 * 1024**3) // per_region)
 

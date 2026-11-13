@@ -52,7 +52,7 @@ from opengwasdb.encoding.codec import (
     require_parallel,
     table_end_to_end,
 )
-from opengwasdb.encoding.memory import RESULTS_HELD_PER_WORKER, pool_workers
+from opengwasdb.encoding.memory import EXCEPTION_CELLS_PER_RESULT_BYTE, pool_workers
 from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.model.enums import CompletionState
@@ -977,10 +977,7 @@ class RaggedCSRWriter:
         workers = _region_workers(n_workers, regions, self.n_analyses)
         for (lo, _hi), outcome in zip(
             regions,
-            ordered_map(
-                _write_region, regions, workers,
-                max_in_flight=RESULTS_HELD_PER_WORKER * workers, shared=plan,
-            ),
+            ordered_map(_write_region, regions, workers, shared=plan),
             strict=True,
         ):
             if outcome.lo != lo:
@@ -1160,19 +1157,16 @@ class RaggedCSRWriter:
             plane[lo:hi] = self._gather_imputed(offsets, lo, hi)
 
 
-#: What one region's worker holds a cell, and the fork's floor. Measured on the
-#: OGS-00006 100-Analysis subset, a region worker held 5.15 GB private for a
-#: 50 M-cell region and 0.55 GB for a 5.3 M-cell one: 103 bytes a cell, with
-#: next to nothing fixed (#321). Rounded up by a sixth.
+#: What one region's worker holds a cell, beside the fork's floor
+#: (`FORK_FLOOR_BYTES`, which `pool_workers` adds). Measured on the OGS-00006
+#: 100-Analysis subset, a region worker held 5.15 GB private for a 50 M-cell
+#: region and 0.55 GB for a 5.3 M-cell one: 103 bytes a cell, with next to
+#: nothing fixed (#321). Rounded up by a sixth.
 _REGION_BYTES_PER_CELL = 120
-_REGION_FIXED_BYTES = 256 * 1024**2
 #: What the parent holds of one region's result until it takes it: the
-#: region's four per-Analysis counts, and its table entries, 12 bytes each,
-#: pickled and unpickled. OGS-00009's completed release holds 6e-5 of its cells
-#: as SE exceptions and far fewer z and EAF ones; a fortieth of a byte a cell
-#: is room for 10^-3 of the cells (#321).
+#: region's four per-Analysis counts, and its table entries
+#: (`EXCEPTION_CELLS_PER_RESULT_BYTE`).
 _REGION_RESULT_BYTES_PER_ANALYSIS = 32
-_REGION_RESULT_CELLS_PER_BYTE = 40
 
 
 def _region_workers(n_workers: int, regions: list[tuple[int, int]], n_analyses: int) -> int:
@@ -1184,12 +1178,12 @@ def _region_workers(n_workers: int, regions: list[tuple[int, int]], n_analyses: 
     largest = max(hi - lo for lo, hi in regions)
     return pool_workers(
         n_workers,
-        _REGION_FIXED_BYTES + _REGION_BYTES_PER_CELL * largest,
+        _REGION_BYTES_PER_CELL * largest,
         what="CSR flush",
         unit=f"region of up to {largest:,} cells",
         units=len(regions),
         result_bytes=_REGION_RESULT_BYTES_PER_ANALYSIS * n_analyses
-        + largest // _REGION_RESULT_CELLS_PER_BYTE,
+        + largest // EXCEPTION_CELLS_PER_RESULT_BYTE,
     )
 
 

@@ -2071,7 +2071,7 @@ def test_off_reference_resolution_folds_worker_results_as_they_arrive(monkeypatc
     spill paths; each must be loaded only when folded, and released after."""
     live = _LiveRuns(32)
 
-    def _fake_ordered_map(fn, items, n_workers, max_in_flight=None):
+    def _fake_ordered_map(fn, items, n_workers):
         for item in items:
             yield item[-1]
 

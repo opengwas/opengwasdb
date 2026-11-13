@@ -343,7 +343,8 @@ class Split(Generic[B]):
 
     `unit_bytes` is what one worker holds while it reads and measures one block:
     the decoded budget a block is sized by (issue #254), which a pass at N workers
-    holds N times, and the worker's own floor. `result_bytes` is what the driving
+    holds N times; the worker's own floor beside it is the pool's
+    (`encoding.memory.FORK_FLOOR_BYTES`). `result_bytes` is what the driving
     process holds of one block's outcome until it is added.
     """
 

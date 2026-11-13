@@ -24,7 +24,7 @@ import numpy as np
 import pytest
 import zarr
 from eaf_tables import EXCEPTION_EVERY, SMALL_VARIANTS, rewrite_primary_table
-from pool_budget import FIXTURE_UNIT_BYTES
+from pool_budget import pin_fork_floor
 
 from opengwasdb.encoding import banding
 from opengwasdb.encoding.codec import (
@@ -450,7 +450,7 @@ def worker_floor_pinned() -> object:
 
     @pytest.fixture(autouse=True)
     def _fixture_sized_workers(monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(scans, "WORKER_FLOOR_BYTES", FIXTURE_UNIT_BYTES)
+        pin_fork_floor(monkeypatch)
 
     return _fixture_sized_workers
 

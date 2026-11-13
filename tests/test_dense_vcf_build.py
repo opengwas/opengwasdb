@@ -1295,7 +1295,7 @@ class TestParallelBandWrite:
         order; this replaces it with a deliberately out-of-order reduction."""
         import opengwasdb.layouts.dense.build_vcf as build_vcf
 
-        def reversed_map(fn, items, n_workers, max_in_flight=None):
+        def reversed_map(fn, items, n_workers):
             results = [fn(item) for item in items]
             yield from reversed(results)
 

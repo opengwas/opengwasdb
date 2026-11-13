@@ -22,6 +22,7 @@ from fork_order import CompletionOrder
 from residual_fixtures import write_gwas_vcf_with_eaf, write_hg38_manifest
 from store_assertions import assert_same_band_arrays
 
+import opengwasdb.encoding.memory as memory
 import opengwasdb.layouts.dense.build_vcf as dense_build
 from opengwasdb.encoding import (
     EafEncoding,
@@ -238,55 +239,70 @@ def test_a_failed_band_leaves_the_staging_plane_in_place(tmp_path: Path) -> None
 # `test_the_eaf_encode_is_identical_across_worker_counts` already asserts.
 
 
-def _one_band() -> int:
-    """Bytes one worker holds for a fixture band, from the empirical model."""
-    return dense_build._eaf_band_bytes(len(_ANALYSES), _BAND_ROWS)
+def _one_worker() -> int:
+    """Bytes one worker costs the budget for a fixture band: the fork's floor and
+    the band's cells, and the two encoded bands the parent may hold for it."""
+    return memory.worker_bytes(
+        dense_build._eaf_band_bytes(len(_ANALYSES), _BAND_ROWS)
+    ) + memory.RESULTS_HELD_PER_WORKER * dense_build._eaf_band_result_bytes(
+        len(_ANALYSES), _BAND_ROWS
+    )
 
 
-def test_a_small_budget_lowers_the_worker_count(
+def _host(monkeypatch: pytest.MonkeyPatch, available: int | None, parent: int) -> None:
+    """A host with `available` bytes available, and a parent holding `parent`."""
+    monkeypatch.setattr(memory, "available_memory_bytes", lambda path=memory.MEMINFO: available)
+    monkeypatch.setattr(memory, "resident_bytes", lambda path=memory.SELF_STATUS: parent)
+
+
+def _encode_pool(caplog: pytest.LogCaptureFixture, requested: int) -> int:
+    with caplog.at_level(logging.INFO, logger=memory.log.name):
+        return dense_build._eaf_encode_pool(_fake_context(), requested)
+
+
+def test_the_parent_and_the_fork_s_floor_count_against_the_pool(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A host that can hold one band and a half gets one worker, not a crash."""
-    with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.build_vcf"):
-        monkeypatch.setattr(dense_build, "available_memory_bytes", lambda: 6 * _one_band())
-        workers = dense_build._eaf_encode_pool(len(_ANALYSES), _BAND_ROWS, requested=3)
+    """The encode is sized as every pool is (`pool_workers`): a budget of four
+    workers, half of it held by the parent, runs two of the three asked for."""
+    _host(monkeypatch, memory.MEMORY_BUDGET_DIVISOR * 4 * _one_worker(), 2 * _one_worker())
 
-    assert workers == 1
-    messages = [record.getMessage() for record in caplog.records]
-    assert any("1 of 3 worker(s)" in message for message in messages), messages
-    assert any(f"{_one_band() >> 20} MiB" in message for message in messages), messages
+    assert _encode_pool(caplog, 3) == 2
+    assert "Encode eaf: 2 of 3 worker(s)" in caplog.text
+    assert f"200-row band of {len(_ANALYSES)} analyses" in caplog.text
+
+
+def test_no_more_workers_than_bands(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _host(monkeypatch, 10**15, 0)
+
+    assert _encode_pool(caplog, 16) == _N_BANDS
+    assert f"{_N_BANDS} of {_N_BANDS} worker(s)" in caplog.text
 
 
 def test_a_budget_below_one_band_warns_and_still_runs_one_worker(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The overrun the cap exists for: less than a band's worth of the quarter.
+    """The overrun the cap exists for: less than a worker's worth of the quarter.
 
     One worker is still one band, so the encode runs -- but it runs into a
     budget it does not fit, and that is a warning, not a line of progress.
     """
-    with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.build_vcf"):
-        monkeypatch.setattr(dense_build, "available_memory_bytes", lambda: 2 * _one_band())
-        workers = dense_build._eaf_encode_pool(len(_ANALYSES), _BAND_ROWS, requested=3)
+    _host(monkeypatch, memory.MEMORY_BUDGET_DIVISOR * _one_worker() // 2, 0)
 
-    assert workers == 1, "the floor is one worker, never zero"
-    warnings = [
-        record.getMessage() for record in caplog.records if record.levelno == logging.WARNING
-    ]
-    assert any("one band" in message for message in warnings), warnings
+    assert _encode_pool(caplog, 3) == 1, "the floor is one worker, never zero"
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("which will overrun it" in message for message in warnings), warnings
 
 
 def test_an_unreadable_meminfo_runs_one_worker_and_says_why(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setattr(dense_build, "available_memory_bytes", lambda: None)
-    with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.build_vcf"):
-        workers = dense_build._eaf_encode_pool(len(_ANALYSES), _BAND_ROWS, requested=3)
+    _host(monkeypatch, None, 0)
 
-    assert workers == 1
-    warnings = [
-        record.getMessage() for record in caplog.records if record.levelno == logging.WARNING
-    ]
+    assert _encode_pool(caplog, 3) == 1
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert any("meminfo" in message and "one worker" in message for message in warnings), warnings
 
 
@@ -294,11 +310,9 @@ def test_an_unreadable_meminfo_is_silent_at_one_worker(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """At `--n-workers 1` the reading changes nothing, so it must not warn."""
-    monkeypatch.setattr(dense_build, "available_memory_bytes", lambda: None)
-    with caplog.at_level(logging.INFO, logger="opengwasdb.layouts.dense.build_vcf"):
-        workers = dense_build._eaf_encode_pool(len(_ANALYSES), _BAND_ROWS, requested=1)
+    _host(monkeypatch, None, 0)
 
-    assert workers == 1
+    assert _encode_pool(caplog, 1) == 1
     assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
 
 
@@ -334,22 +348,16 @@ def _fake_context() -> object:
     )
 
 
-def test_the_pool_is_bounded_to_one_band_per_worker(
-    monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The parent's window is the effective worker count, so it holds one band a worker."""
-    seen: list[tuple[int, int | None]] = []
+def test_the_bands_run_on_the_pool_the_budget_sized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The band loop forks the workers the budget allows, not the ones asked for."""
+    seen: list[int] = []
     real = dense_build.ordered_map
-    unset = object()
 
-    def spy(fn, items, n_workers, max_in_flight=None, *, shared=unset):
-        seen.append((n_workers, max_in_flight))
-        if shared is unset:
-            return real(fn, items, n_workers, max_in_flight)
-        return real(fn, items, n_workers, max_in_flight, shared=shared)
+    def spy(fn, items, n_workers, **kwargs):
+        seen.append(n_workers)
+        return real(fn, items, n_workers, **kwargs)
 
-    # Two and a half bands of budget: two workers fit, and no more.
-    monkeypatch.setattr(dense_build, "available_memory_bytes", lambda: 10 * _one_band())
+    _host(monkeypatch, memory.MEMORY_BUDGET_DIVISOR * 2 * _one_worker(), 0)
     monkeypatch.setattr(dense_build, "ordered_map", spy)
     plane = _Plane((_N_VARIANTS, len(_ANALYSES)))
     baseline = np.full(_N_VARIANTS, np.nan, dtype=np.float32)
@@ -358,8 +366,7 @@ def test_the_pool_is_bounded_to_one_band_per_worker(
 
     assert len(tables) == _N_BANDS
     assert np.isfinite(baseline).all(), "the bands' baselines were not written"
-    bounded = [call for call in seen if call[1] is not None]
-    assert bounded == [(2, 2)], f"the encode's pool was not bounded: {bounded}"
+    assert seen == [2], f"the encode did not run on the pool the budget sized: {seen}"
 
 
 def test_a_band_of_the_wrong_length_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -375,7 +382,6 @@ def test_a_band_of_the_wrong_length_is_refused(monkeypatch: pytest.MonkeyPatch) 
             exceptions=band.exceptions,
         )
 
-    monkeypatch.setattr(dense_build, "available_memory_bytes", lambda: 10**15)
     monkeypatch.setattr(dense_build, "_encode_eaf_band", truncating)
     plane = _Plane((_N_VARIANTS, len(_ANALYSES)))
     with pytest.raises(ValueError, match="rows"):

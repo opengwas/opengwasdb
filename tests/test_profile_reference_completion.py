@@ -27,6 +27,7 @@ from benchmarks.profile_reference_completion import (
     scale_to_full_run,
 )
 from opengwasdb.completion.fill_shards import resolve_unit_bytes
+from opengwasdb.encoding.memory import worker_bytes
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.variants import CanonicalVariant
 
@@ -264,8 +265,8 @@ def test_a_band_write_on_the_pool_is_timed_as_one_stage(
     assert memory["workers_sampled"] >= 1, "the pool's workers were never sampled"
     assert 0 < memory["peak_private_bytes"] < artifact["band_worker_estimate_bytes"]
     assert artifact["largest_checkpoint_bytes"] > 0
-    assert artifact["merge_worker_estimate_bytes"] == resolve_unit_bytes(
-        artifact["largest_checkpoint_bytes"]
+    assert artifact["merge_worker_estimate_bytes"] == worker_bytes(
+        resolve_unit_bytes(artifact["largest_checkpoint_bytes"])
     )
     pool = artifact["scaled_to_full_run"]["stages"]["band_write_pool"]
     assert pool["rule"] == "waves" and pool["factor"] == 1.0

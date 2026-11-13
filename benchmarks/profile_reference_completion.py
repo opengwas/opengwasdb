@@ -60,6 +60,7 @@ from typing import Any
 
 from benchmarks._artifact import LoadSampler, artifact_header, host_load, write_artifact
 from opengwasdb.completion.fill_shards import resolve_unit_bytes
+from opengwasdb.encoding.memory import worker_bytes
 from opengwasdb.encoding.timing import PhaseTimer
 
 DEFAULT_MIN_COR = 0.7
@@ -504,9 +505,11 @@ def profile_bands(
                 "blocks_run": len(blocks), "blocks_in_panel": len(axis.tsv_paths),
                 "slice_imputed_cells": int(tallies.total_imputed),
                 "slice_cells": slice_rows * axis.n_analyses,
-                "band_worker_estimate_bytes": dense._band_bytes(axis.n_analyses, band_rows),
+                "band_worker_estimate_bytes": worker_bytes(
+                    dense._band_bytes(axis.n_analyses, band_rows)
+                ),
                 "largest_checkpoint_bytes": largest,
-                "merge_worker_estimate_bytes": resolve_unit_bytes(largest),
+                "merge_worker_estimate_bytes": worker_bytes(resolve_unit_bytes(largest)),
                 "write_pool_memory": memory.summary(),
             }
             raise _DiscardSlice
