@@ -98,7 +98,8 @@ every target each applies to:
 - `VARIANT_TABLE` streams the Store Variant Table once.
 - `BY_VARIANT` reads a variant index's `analysis_index` once.
 
-A `Block` is the seam: `dense_bands`, `sequence_windows` and `Block.of` for tests.
+A `Block` is the seam: a grid band's (`GridSplit.read`, since #315), a sequence
+window's (`_Sequence.window`), and `Block.of` for tests.
 
 **One rule for both layouts.** Where a Dense rule and its Ragged twin judged the
 same thing, they are one rule, and each layout keeps the words it has always

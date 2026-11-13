@@ -413,9 +413,6 @@ class Rider(Generic[B]):
     def join(self, part: Any) -> None:
         raise NotImplementedError
 
-    def __call__(self, block: B) -> None:
-        self.join(self.part(block))
-
 
 @dataclass(frozen=True)
 class Ride(Generic[B]):

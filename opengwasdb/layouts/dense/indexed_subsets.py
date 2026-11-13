@@ -3742,17 +3742,13 @@ class SubsetRide:
         self._cells: list[tuple[np.ndarray, np.ndarray]] = []
         self._cells_seen = 0
 
-    def see(self, r0: int, r1: int, n_analyses: int, plane: Any) -> None:
-        """Fold primary rows `[r0, r1)` into the digests of the units they fall in.
+    def part(self, r0: int, r1: int, n_analyses: int, plane: Any) -> SeenRows:
+        """What primary rows `[r0, r1)` add to the digests of the units they fall in,
+        without adding it.
 
         `plane(name)` is the band's decoded plane, or raises where the band cannot
         be decoded; the units it holds are then compared cell by cell, which meets
         the same failure in its own words.
-        """
-        self.join(self.part(r0, r1, n_analyses, plane))
-
-    def part(self, r0: int, r1: int, n_analyses: int, plane: Any) -> SeenRows:
-        """What primary rows `[r0, r1)` add to the digests, without adding it.
 
         Made wherever the band was decoded -- a validation pass's forked worker, say
         (issue #315) -- under the key the ride was made with, which is the run's,

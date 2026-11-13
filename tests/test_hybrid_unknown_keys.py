@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from unknown_key_oracle import encode_keys
 
 from opengwasdb.layouts.hybrid import unknown_keys
 from opengwasdb.layouts.hybrid.build import _read_unknown_side_file, _spill_hybrid_column
@@ -19,7 +20,6 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
     decode_keys,
     encode_key,
-    encode_keys,
     hashed_lookup,
     is_hashed,
     unpack_key,

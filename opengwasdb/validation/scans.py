@@ -16,8 +16,8 @@ takes its span of the sorted table as it decodes, and every rule that reads the
 table -- the plan rule, the side-table rule and the Indexed Variant Subset check --
 watches the same pages go by (issue #314).
 
-A `Block` is the seam: `dense_bands` makes one from a grid band, `sequence_windows`
-from a run of a sequence, and `Block.of` from arrays a test holds.
+Every fold measures a `Block`: `GridSplit.read` makes one from a grid band,
+`_Sequence.window` from a run of a sequence, and `Block.of` from arrays a test holds.
 
 A Dense grid's pass can be read apart (`GridSplit`, issue #315): the process
 driving the pass cuts each band's span of the table from its one read of it, and a
@@ -723,11 +723,6 @@ _BANDING: dict[Kind, _Banding] = {
 }
 
 
-def dense_bands(target: Target) -> Iterator[Block]:
-    """A Dense grid's rows in byte-bounded bands aligned to its physical read unit."""
-    yield from _dense_blocks(target, _grid_limits(target))
-
-
 def _dense_blocks(target: Target, limits: Iterable[tuple[int, int]]) -> Iterator[Block]:
     """The bands `limits` names, read as the grid's own chunks.
 
@@ -1038,17 +1033,9 @@ def _sequence_window_se(
         raise Undecodable(f"{label} cannot be decoded under the declared plan: {exc}") from exc
 
 
-def sequence_windows(target: Target) -> Iterator[Block]:
-    """A sequence's cells in byte-bounded windows aligned to its physical read unit.
-
-    Each window carries the Analysis and variant of the cell before it, so a rule
-    about consecutive cells sees across a window's edge.
-    """
-    yield from _sequence_blocks(target, _sequence_limits(target))
-
-
 def _sequence_blocks(target: Target, limits: Iterable[tuple[int, int]]) -> Iterator[Block]:
-    """The windows `limits` names, each carrying the cell before it."""
+    """The windows `limits` names, each carrying the Analysis and variant of the cell
+    before it, so a rule about consecutive cells sees across a window's edge."""
     sequence = _Sequence(target)
     previous: tuple[int, int] | None = None
     for lo, hi in limits:

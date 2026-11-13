@@ -923,9 +923,10 @@ class RaggedCSRWriter:
         and never carries `n` (ADR 0067). `n` sits before the SE half because
         that half writes the completion marker, which must come last.
 
-        Reference Completion writes its completed sequence here too (issue
-        #424), through a writer made with a `ReferenceCompletion`, and records
-        the returned exception counts (#301).
+        A Ragged Reference Completion writes its completed sequence through
+        `flush_regions` instead, a region at a time across workers (#321); the
+        overflow rebuild here is a Hybrid completion's remap of the Overflow's
+        observed cells, with no `ReferenceCompletion`.
         """
         self.write_eaf_plane(
             store_path, encoding, eaf_baseline=eaf_baseline, region_cells=region_cells

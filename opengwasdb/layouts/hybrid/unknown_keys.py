@@ -45,7 +45,6 @@ __all__ = [
     "decode_spill",
     "encode_fields",
     "encode_key",
-    "encode_keys",
     "hashed_lookup",
     "placed_hashed_values",
     "validated_hashed_values",
@@ -215,42 +214,6 @@ class EncodedKeys:
         }
 
 
-def encode_keys(
-    keys: Sequence[str], *, hash_fn: HashFn | None = None
-) -> EncodedKeys:
-    """Encode one column's raw keys, refusing any hash collision.
-
-    The collision check is per column because the spill resolves a column's
-    repeated values as one association's duplicates (ADR 0072, D5): two
-    distinct raw keys sharing a value would otherwise be judged as one
-    association without a trace.
-    """
-    resolved = _resolve_hash_fn(hash_fn)
-    values = np.empty(len(keys), dtype=np.uint64)
-    hashed_index: list[int] = []
-    hashed_raw: list[str] = []
-    seen: dict[int, str] = {}
-    for index, key in enumerate(keys):
-        value = encode_key(key, hash_fn=resolved)
-        values[index] = value
-        if value & HASH_TAG:
-            existing = seen.get(value)
-            if existing is None:
-                seen[value] = key
-            elif existing != key:
-                raise UnknownKeyEncodingError(
-                    f"hash collision between off-reference keys {existing!r} and {key!r} "
-                    f"(both encode to {value}); refusing to merge them"
-                )
-            hashed_index.append(index)
-            hashed_raw.append(key)
-    return EncodedKeys(
-        values=values,
-        hashed_index=np.array(hashed_index, dtype=np.int64),
-        hashed_raw=hashed_raw,
-    )
-
-
 #: Each one-base allele a Routing Key spells as A, C, G or T: in either case,
 #: since a key upper-cases its alleles (`routing_key`).
 _KEY_ALLELE_CODES = {
@@ -266,14 +229,16 @@ def encode_fields(
     *,
     hash_fn: HashFn | None = None,
 ) -> EncodedKeys:
-    """`encode_keys` of the Routing Keys these rows' fields spell, without the keys.
+    """The Routing Keys these rows' fields spell, encoded (`encode_key`) without
+    forming the keys.
 
     A key is formed only for a row it hashes: an SNV on a canonical chromosome
     packs from its fields, and every other row's key is hashed, refused on a
-    collision and named in the side file exactly as `encode_keys` would. The
-    answer is `encode_keys`' for ``routing_key`` of each row, byte for byte,
-    which a test holds it to; a Hybrid off-reference spill no longer forms a
-    string a row to have it parsed back (#318).
+    collision with another key of the column (the spill resolves a column's
+    repeated values as one association's duplicates, ADR 0072 D5) and named in
+    the side file. The answer is `encode_key`'s for ``routing_key`` of each row,
+    byte for byte, which a test holds it to; a Hybrid off-reference spill no
+    longer forms a string a row to have it parsed back (#318).
     """
     count = len(chromosome)
     codes = np.fromiter(
@@ -305,7 +270,7 @@ def _hash_rows(
     values: np.ndarray, rows: np.ndarray, keys: Sequence[str], hash_fn: HashFn
 ) -> None:
     """Hash each of ``keys`` into its row of ``values``, refusing two keys that
-    share a value, as `encode_keys` does."""
+    share a value."""
     seen: dict[int, str] = {}
     for row, key in zip(rows.tolist(), keys, strict=True):
         value = _hashed_value(key, hash_fn)
