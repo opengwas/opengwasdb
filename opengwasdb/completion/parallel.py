@@ -14,28 +14,13 @@ from __future__ import annotations
 
 import logging
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from typing import Any
 
-from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]
-
+from opengwasdb.build.ordered_pool import single_threaded_fork_pool
 from opengwasdb.encoding.timing import log_progress
 
 log = logging.getLogger(__name__)
-
-# Kept alive for the worker's lifetime so the BLAS thread cap persists (a bare
-# threadpool_limits() call would reset on garbage collection).
-_worker_thread_limiter: Any = None
-
-
-def init_block_worker() -> None:
-    """Cap each pool worker's BLAS (OpenBLAS/MKL) to one thread. numpy's linear
-    algebra and sklearn otherwise spawn one thread per core *inside every worker*,
-    so n_workers processes each with ~n_core threads massively oversubscribe the
-    CPU (~1000 threads on 256 cores). One BLAS thread per worker gives clean
-    process-level parallelism — scale with n_workers, not threads."""
-    global _worker_thread_limiter
-    _worker_thread_limiter = threadpool_limits(limits=1)
 
 
 def run_block_tasks(
@@ -63,7 +48,10 @@ def run_block_tasks(
             run_block(task)
             log_progress(log, label, i + 1, total, started, every=every)
     else:
-        with ProcessPoolExecutor(max_workers=n_workers, initializer=init_block_worker) as pool:
+        # BLAS and OpenMP on one thread a worker, set before the workers fork
+        # (`single_threaded_fork_pool` says why not in each worker): one block
+        # a worker gives process-level parallelism that scales with n_workers.
+        with single_threaded_fork_pool(n_workers) as pool:
             futures = [pool.submit(run_block, task) for task in pending]
             for i, fut in enumerate(as_completed(futures)):
                 fut.result()  # propagate worker errors; result is on disk

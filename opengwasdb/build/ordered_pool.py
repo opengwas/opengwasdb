@@ -34,6 +34,8 @@ from contextlib import contextmanager
 from functools import partial
 from typing import Any, TypeVar, overload
 
+from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]
+
 T = TypeVar("T")
 R = TypeVar("R")
 S = TypeVar("S")
@@ -64,6 +66,29 @@ def fork_pool(n_workers: int) -> ProcessPoolExecutor:
     """
     fork_ctx = multiprocessing.get_context("fork")
     return ProcessPoolExecutor(max_workers=n_workers, mp_context=fork_ctx)
+
+
+@contextmanager
+def single_threaded_fork_pool(n_workers: int) -> Iterator[ProcessPoolExecutor]:
+    """A fork pool whose workers run BLAS and OpenMP on one thread each.
+
+    Without the cap, ``n_workers`` processes each start a thread per core in
+    numpy's linear algebra and sklearn: about a thousand threads on 256 cores.
+    The cap is set here, in the parent, for as long as the pool is open, and
+    every worker inherits it when it forks -- the fork start method launches
+    them all at the first submit. A worker never sets it itself: threadpoolctl
+    finds the libraries by walking the dynamic loader's list of loaded objects
+    (``dl_iterate_phdr``, through a ctypes callback), and a forked worker's
+    copy of that state is whatever the parent's other threads left it. From a
+    parent holding OpenBLAS's threads that had already used threadpoolctl, the
+    walk aborted or segfaulted a worker in 3 of 5 pools (13 Nov 2026), the
+    abort #321's full test run had seen; forked while another thread of the
+    parent was inside the loader, every worker waited on the loader's lock for
+    good. In the parent the walk is safe. Its own linear algebra runs on one
+    thread while the pool is open, which costs nothing: it waits on the workers.
+    """
+    with threadpool_limits(limits=1), fork_pool(n_workers) as pool:
+        yield pool
 
 
 @contextmanager

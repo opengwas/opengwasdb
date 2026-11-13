@@ -76,7 +76,7 @@ def read_block(args: tuple[str, int]) -> int:
 """
 
 
-def _run(tmp_path: Path, body: str) -> dict[str, object]:
+def _run(tmp_path: Path, body: str, env: dict[str, str] | None = None) -> dict[str, object]:
     script = tmp_path / "probe.py"
     script.write_text(_PRELUDE + textwrap.dedent(body), encoding="utf-8")
     # A session of its own, so a timeout can kill the probe's forked workers
@@ -87,6 +87,7 @@ def _run(tmp_path: Path, body: str) -> dict[str, object]:
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
+        env=env,
     )
     try:
         stdout, stderr = probe.communicate(timeout=_TIMEOUT_S)
@@ -230,3 +231,108 @@ def test_fork_pools_finish_after_the_parent_read_through_the_pipeline(tmp_path: 
     assert result["pipeline"] == "FusedCodecPipeline"
     assert result["chunks"] == 16
     assert result["sums"] == _BLOCK_SUMS * 4
+
+
+# ── Thread limits are set before the fork, not in the worker (#321) ──────────
+#
+# The LD-block and Rho pools cap BLAS and OpenMP at one thread a worker. A worker
+# that sets the cap itself finds the libraries the way threadpoolctl does: it walks
+# the dynamic loader's list of loaded objects (`dl_iterate_phdr`) and loads each
+# through ctypes. A forked worker's copy of the loader is whatever the parent's
+# other threads left it at the fork, so the walk can wait on a lock no thread of
+# its own will release -- or, as one full test run saw, abort.
+
+#: Seconds the probe waits for the pools once the loader is free; a pool that
+#: forked onto a held lock never finishes, so the margin hides nothing.
+_POOLS_WAIT_S = 30
+
+
+def test_block_pools_fork_while_another_thread_is_inside_the_loader(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        f"""
+        import ctypes
+        import os
+        import signal
+        import threading
+
+        from opengwasdb.completion.parallel import run_block_tasks
+        from opengwasdb.layouts.dense import rho
+
+        callback = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p)
+        inside, release = threading.Event(), threading.Event()
+
+        @callback
+        def hold(_info, _size, _data):
+            inside.set()
+            release.wait()
+            return 1
+
+        # Another thread of the parent is inside the loader, holding its lock, when
+        # the pools start: a thread importing an extension, or unwinding a C++
+        # exception, is in the same place.
+        holder = threading.Thread(
+            target=ctypes.CDLL(None).dl_iterate_phdr, args=(hold, None), daemon=True
+        )
+        holder.start()
+        assert inside.wait(10), "the holder never entered the loader"
+        done = {{}}
+
+        def pools() -> None:
+            done["held_at_start"] = not release.is_set()
+            run_block_tasks(list(range(6)), 3, abs)
+            done["blocks"] = True
+            a = np.array([1.0, 2.0, 3.0, 4.0])
+            done["rho"] = len(rho._estimate_all_pairs(a, 2 * a, a / 2, np.full(4, 60), 2.0, 1, 2))
+
+        runner = threading.Thread(target=pools, daemon=True)
+        runner.start()
+        runner.join(1.0)
+        release.set()
+        runner.join({_POOLS_WAIT_S})
+        if runner.is_alive():
+            for child in os.popen(f"pgrep -P {{os.getpid()}}").read().split():
+                os.kill(int(child), signal.SIGKILL)
+        print(json.dumps({{"finished": not runner.is_alive(), **done}}))
+        """,
+    )
+    assert result["finished"], f"a pool forked onto the held loader never finished: {result}"
+    assert result["held_at_start"], "the loader must be held when the pools start"
+    assert result["blocks"] is True and result["rho"] == 4
+
+
+def test_block_pool_workers_run_blas_on_one_thread(tmp_path: Path) -> None:
+    """The cap still reaches every worker, and the parent gets its own back after.
+
+    The probe keeps its BLAS threads (no `*_NUM_THREADS` in its environment, as a
+    `complete-dense` run outside the test task) and asks threadpoolctl about them
+    before the pool, as sklearn may. A worker reads its count through OpenBLAS's
+    own function, resolved in the parent, rather than through threadpoolctl.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.endswith("_NUM_THREADS")}
+    result = _run(
+        tmp_path,
+        """
+        import ctypes
+        import os
+
+        from threadpoolctl import threadpool_info
+
+        from opengwasdb.completion.parallel import run_block_tasks
+
+        openblas = [lib for lib in threadpool_info() if lib["internal_api"] == "openblas"]
+        threads = ctypes.CDLL(openblas[0]["filepath"]).openblas_get_num_threads
+
+        def report(_task: int) -> None:
+            (TMP / f"worker-{os.getpid()}").write_text(str(threads()))
+
+        before = threads()
+        run_block_tasks(list(range(4)), 2, report)
+        workers = [int(p.read_text()) for p in TMP.glob("worker-*")]
+        print(json.dumps({"before": before, "after": threads(), "workers": workers}))
+        """,
+        env=env,
+    )
+    assert result["before"] > 1, "the parent must have BLAS threads to cap, or this means nothing"
+    assert result["workers"] and set(result["workers"]) == {1}, result
+    assert result["after"] == result["before"]
