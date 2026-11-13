@@ -350,7 +350,12 @@ a time, the only write zarr makes without reading a shard back, and less than on
 to the next block. A row of the Proxy Index is complete when its own block arrives: its partners
 below it come from earlier blocks, its partners above from its own. So the index is written row by
 row too, carrying only the pairs whose later row is still to come. `partner` and `r` grow a whole
-shard at a time, and an index under one shard is written at its clipped shape at the end. While
+shard at a time, and an index under one shard is written at its clipped shape at the end. The
+Far Pairs are written beside the index, row by row (ADR 0007, decision 2): a cut already holds
+its block's pairs at the floor, ascending, and marks which lie beyond `near_bp`, and a row's Far
+Pairs all lie in its own block. So each block's rows of `far/<chrom>/` are complete when the
+block arrives, nothing is carried and r is not read twice; `partner` and `r` grow a whole shard at
+a time, as the index's do, and `indptr` is written at the end. While
 a build writes its store it holds a shard of each array and the pairs and unit vectors within
 `far_bp` of the rows being written, never a chromosome. On HGDP+1kGP EUR chr6, the MHC's, the band
 carry is 128 MiB, the index carry at most 33,869,608 pairs (323 MiB), and the writing peaks at
@@ -741,8 +746,8 @@ recorded (§7) and its recorded t_far:
 - A Refusal MUST name its reason. A request MUST NOT be answered approximately instead. A region
   wider than `far_bp` is refused as `region_over_far`, and a negative radius as `invalid`.
 - On UK Biobank EUR (t_far = 0.001) only W > 10 Mb is refused at r2 ≥ 0.001, so MR's r² 0.001
-  with a 10 Mb window is answered there and nowhere else. On HGDP+1kGP AMR (t_far 0.062 at
-  k = 10), r2 = 0.05 with a 5 Mb window is refused.
+  with a 10 Mb window is answered there and nowhere else. On HGDP+1kGP AMR (t_far 0.0631515 at
+  k = 10, §3), r2 = 0.05 with a 5 Mb window is refused.
 - **`proxies`.** The defaults, r2 = 0.8 and a 10,000 kb window, are answered on every store with
   `far_bp` = 10 Mb, because every t_far is below 0.8. A variant is never its own proxy. Rows are
   grouped by query, in request order, then by r̂² descending, distance ascending and proxy ALID. At
@@ -1021,15 +1026,16 @@ refusals:
   merge touches. `tests/test_format.py` holds the answer and refusal tables, and they do not
   change with the layout.
 
-The trade-off, on the prototype's numbers at k = 0, as the owner weighed it on 8 November:
+The trade-off as the owner weighed it on 8 November, on the prototype's numbers at k = 0, with the
+five stores' as built at k = 10 (§6) beside them:
 
 | | Near Band + Proxy Index (8–12 November) | Near Band + Far Pairs + Proxy Index (adopted 12 November) |
 |---|---|---|
 | bytes per panel | the index alone: 11.3–25.7 GB | also the Far Pairs, once more: 0.09 GB (EUR) to 1.39 GB (AMR), 0.03–0.76% of a store, and one more `indptr` per chromosome. As built at k = 10 (§6): 0.16 GB (AMR) to 0.49 GB (AFR) on disk, 0.20–0.40% of a store; raw, at 6 bytes a pair, 0.53–1.15 GB, EUR's 0.80 GB about 1% of its store |
 | builder paths | one sparse output, symmetric, from the Near Band rows and the 3–10 Mb scan | two: the upper-triangle Far Pairs and the symmetric index, from the same scan |
 | validation rules | `index.*`: six rules (§12) | the six, the four `far.*` rules, and `far.index`, holding the Far Pairs equal to the index's far entries |
-| a pair beyond `near_bp` | binary search of one index row, about 485 entries on average for EUR (6.24×10⁹ entries over 12.9 M variants) | binary search of one Far Pairs row, about 3 entries for EUR |
-| a matrix's far pairs | the index rows of the listed variants, about 2.9 KB each raw for EUR | the Far Pairs rows, a few bytes each |
+| a pair beyond `near_bp` | binary search of one index row: as built at k = 10, about 616 entries on average for EUR (5.29×10⁹ entries over 8.59 M variants, §6); the prototype's k = 0 figure, which the owner weighed, was 485 | binary search of one Far Pairs row: as built, 15.5 entries on average for EUR (§6); the prototype's figure was about 3 |
+| a matrix's far pairs | the index rows of the listed variants, about 3.7 KB each raw for EUR as built (2.9 KB on the prototype's figures) | the Far Pairs rows, about 93 bytes each raw for EUR as built |
 
 On 8 November the read costs looked to differ by kilobytes against a Near Band read of hundreds
 of megabytes (§10), so reads did not decide it. Both forms keep copies that must agree: the
