@@ -31,10 +31,13 @@ Truncated indexes and corrupt zstd frames raise, not fall back.
 
 Indexes and ranges use the store's async interface, through #32's wrapper, on local disk
 and HTTP alike. Only physically adjacent requested ranges are merged. The existing batch
-planner bounds each read's decoded fetch buffers and reserves an equal allowance for worker
-scratch chunks. A frame's decoded length is checked before copying into the output; decoding
-directly into a destination was rejected because numcodecs accepts a short frame without
-raising. At least one chunk can be read even when it exceeds the configured in-flight budget. The process shares one five-worker executor, reset after fork. A batch submits
+planner bounds each read's decoded buffers. Each native decoded chunk owns its buffer and
+transfers it to the cache without a second copy. The planner reserves one chunk for trimming
+a padded final chunk, or half the allowance for non-native byte-order conversion scratch.
+A frame's decoded length is checked before adoption: decoding directly into a destination
+was rejected because numcodecs accepts a short frame without raising. At least one chunk
+can be read even when it exceeds the allowance. The process shares one five-worker executor,
+reset after fork. A batch submits
 at most five jobs per range, not a pool per reader or chromosome. Cancellation drains
 already-running decode jobs before the read releases its buffers. The executor's standard
 Python shutdown waits for its workers. Applications still budget zarr's I/O helper threads
@@ -53,10 +56,13 @@ fallback reader and sole writer. numcodecs is already a direct runtime dependenc
 - A pool per chromosome or reader: rejected; it silently multiplies threads and working sets.
 - A symmetric Near Band or lower Proxy Index floor: held back by the owner; these change the
   format's cost, whereas this change removes implementation overhead without rebuilding.
+- Copy decoded numeric buffers into a run and then into the cache: rejected after a stage
+  measurement spent 14.54 s in `_keep_run` alone. Owned single-chunk buffers avoid both copies
+  without retaining uncounted neighbours; zarr's fallback runs still need to be copied.
 - Copy zarr's private sharding machinery: rejected; implementing this deliberately narrow
   published chain makes fallback explicit and avoids a private-API dependency.
 
 The cache budget is not an RSS limit. A read also holds requested chunks, its result, one
-batch of decoded buffers and their cache copies, compressed ranges, and small indexes/job
+batch of decoded buffers (and cache copies for fallback runs), compressed ranges, and small indexes/job
 bookkeeping. Concurrent reads each have their own batch. Compressed bytes are not counted
 as decoded bytes; a codec's encoded size is not in general bounded by its decoded size.

@@ -685,7 +685,13 @@ class Held:
     alive: list[weakref.ref[np.ndarray]] = field(default_factory=list)
 
     def still_held(self) -> int:
-        return sum(location._counted(p) for p in (ref() for ref in self.alive) if p is not None)
+        # Direct chunks transfer their sole buffers to the cache, so those references are
+        # kept chunks now, not a prior batch's uncounted run still pinned beside the cache.
+        return sum(
+            location._counted(p)
+            for p in (ref() for ref in self.alive)
+            if p is not None and not isinstance(p, location._DecodedChunk)
+        )
 
 
 def measured_fetches(monkeypatch: pytest.MonkeyPatch) -> Held:

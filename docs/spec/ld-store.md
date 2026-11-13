@@ -892,11 +892,13 @@ means an empty chunk, which reads the declared fill value, just like a missing s
 and zstd corruption raise. No private zarr codec/index API is called. Every other chain,
 including strings, goes through zarr unchanged. Zarr remains the format and the writer.
 
-The same per-read planner and cache budget apply to both paths. Direct decode reserves half
-its decoded-byte allowance for worker scratch chunks, and checks each frame's full decoded
-length before copying to the planned output. At least one chunk can be read even if its
-output plus scratch exceeds the allowance. No second decoded batch is queued. Each range
-submits at most five decode jobs. A failed piece cancels sibling fetches and drains running decode jobs before returning.
+The same per-read planner and cache budget apply to both paths. Each directly decoded native
+chunk owns its buffer and transfers it to the cache without copying. The planner reserves
+one chunk for trimming a padded tail, or half the allowance for non-native byte-order
+conversion scratch. Each frame's full decoded length is checked before adoption. At least
+one chunk can be read even when its buffers exceed the allowance. No second decoded batch
+is queued. Each range submits at most five decode jobs. A failed piece cancels sibling
+fetches and drains running decode jobs before returning.
 Compressed ranges and small index/job bookkeeping are additional to the decoded-byte bound;
 the cache budget does not bound RSS. The pool is reset after fork and shared across readers,
 not multiplied per chromosome. Applications budget zarr's I/O helpers separately.
@@ -913,8 +915,9 @@ measured repeated reads warm, and at the earlier 256 MiB not (owner, 12 November
 
 A single cold pass reads distinct chunks, which no budget saves.
 
-Each kept chunk owns its memory, copied out of the read that fetched it, and counts an upper bound
-on what it holds. So the budget bounds the memory kept. A numeric chunk counts its buffer, and a
+Each kept chunk owns its memory: adopted from a directly decoded single-chunk buffer, or
+copied out of a fallback run, never a view retaining uncounted neighbouring chunks. It counts
+an upper bound on what it holds. So the budget bounds the memory kept. A numeric chunk counts its buffer, and a
 shard index its bytes. A string chunk stays numpy's variable-width strings, as zarr returns them,
 which keep each string over 15 UTF-8 bytes in an arena that `nbytes` leaves out (about 2.2 times
 `nbytes` for 16-character ALIDs). So it counts `nbytes` + 1.25 × Σ(bytes + 8) + 512, the sum over

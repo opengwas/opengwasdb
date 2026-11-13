@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 import tracemalloc
 from pathlib import Path
 from typing import Any
@@ -59,6 +61,54 @@ def test_a_sparse_warm_read_does_not_join_whole_chunks(tmp_path: Path) -> None:
         tracemalloc.stop()
     np.testing.assert_array_equal(got, data[coords[::-1]])
     assert peak < data.nbytes // 2, f"{peak} bytes held to return {got.nbytes}"
+
+
+def test_decoded_chunks_transfer_their_memory_to_the_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    array = numbers(tmp_path)
+    fetched = location._fetched
+    held: list[np.ndarray] = []
+
+    def recording(*args: Any) -> Any:
+        result = fetched(*args)
+        held.extend(result)
+        return result
+
+    monkeypatch.setattr(location, "_fetched", recording)
+    cache = location.ChunkCache()
+    cache.take(array, np.arange(29))
+    kept = [entry[0] for key, entry in cache._kept.items() if isinstance(key, tuple)]
+    assert len(kept) == 4
+    assert all(any(np.shares_memory(chunk, source) for source in held) for chunk in kept)
+
+
+def test_cancelled_decode_drains_its_workers(monkeypatch: pytest.MonkeyPatch) -> None:
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+    decoder = location._NumericDecoder(1, 1, np.dtype("i4"), np.dtype("<u8"))
+
+    def held(*args: Any) -> None:
+        started.set()
+        assert release.wait(2), "the test must release its own worker"
+        finished.set()
+
+    monkeypatch.setattr(location._NumericDecoder, "_into", held)
+
+    async def run() -> None:
+        task = asyncio.create_task(decoder._decode(b"x", 0, [(0, 0, 1)], [None]))
+        while not started.is_set():
+            await asyncio.sleep(0.001)
+        task.cancel()
+        try:
+            await asyncio.sleep(0.01)
+            assert not task.done(), "a cancelled read must still own its worker's buffers"
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert finished.is_set()
+
+    asyncio.run(run())
 
 
 def test_every_test_store_array_equals_zarr() -> None:

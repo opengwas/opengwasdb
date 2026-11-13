@@ -40,7 +40,8 @@ larger destination was observed to pass silently in numcodecs; the regression te
 before the decoder was changed to check the decoded length.
 
 #32's HTTP flight and held-buffer tests run on the direct path. The planner now reserves
-half the decoded-byte allowance for worker scratch; the cache budget is unchanged.
+space inside the decoded-byte allowance for trimming or byte-order conversion; the cache
+budget is unchanged. Native decoded single-chunk buffers transfer to the cache without copying.
 The complete default tier passed 1,240 tests in 26.76 s with eight pytest workers at this
 slice. Tip: 1,227 tests in 16.77 s, load 1.47→4.30. Both are below 30 s.
 
@@ -55,3 +56,17 @@ before the gather was changed to select values inside each chunk first. The same
 passes without a full-chunk join. Interleaved chromosomes, tied scores, duplicate requests,
 absent ALIDs and thresholds 0 through 1 keep the same answers; the column-read test failed
 before removing the unused columns. The default tier then passed 1,247 tests in 20.24 s.
+
+The clean gathered run took 55.617 s (load 4.09→3.42), with identical bytes and chunks.
+A following stage-instrumented run took 54.611 s: 49.966 s in `take`, including 33.958 s
+waiting for `_fetched` and 14.544 s in `_keep_run`; `rows_of` took 4.544 s. Decode reached
+five workers. Worker elapsed seconds sum to 65.464 (overlapping), so these are not additive
+wall times. This motivated transferring each decoded chunk's own buffer directly to the
+cache rather than copying it into a run and then copying it again. The transfer test failed
+before that change. Removing cancellation draining also failed its test; a cancelled read
+must await workers still holding its buffers.
+
+A reproducible wrapper, `scripts/bench/fast_decode.py`, now runs #8's existing cases and
+records whole-clump SHA-256, distinct chunks counted at `_keep_run`, and full uptime beside
+every timing. The realdata tier samples first/middle/last chunks of every array in all five
+published stores against zarr; it requires `OGLD_STORES` to name their parent directory.

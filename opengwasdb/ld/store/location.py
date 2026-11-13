@@ -34,7 +34,7 @@ import zarr
 from zarr.abc.store import ByteRequest, RangeByteRequest, Store, SuffixByteRequest
 from zarr.codecs import BytesCodec, Crc32cCodec, ShardingCodec, ZstdCodec
 from zarr.core.buffer import Buffer, BufferPrototype, default_buffer_prototype
-from zarr.core.metadata.v3 import ArrayV3Metadata
+from zarr.core.metadata.v3 import ArrayV3Metadata, RegularChunkGridMetadata
 from zarr.core.sync import sync
 from zarr.storage import StorePath, WrapperStore
 
@@ -100,10 +100,11 @@ class ChunkCache:
     """Decoded inner chunks of one store's 1-D arrays, read whole and kept to `budget` bytes,
     the least recently used dropped first.
 
-    Each kept chunk owns its memory, copied out of the read that fetched it (a view would keep
-    that whole read alive), and counts an upper bound on what is held (`_counted`), so the
-    budget is a bound on the memory kept. One lock guards every lookup, insertion and eviction,
-    so threads sharing a reader keep one copy of a chunk they both missed, and the count stays
+    Each kept chunk owns its memory, adopted from a direct decode or copied out of a fallback
+    run (a view would keep that whole run alive), and counts an upper bound on what is held
+    (`_counted`), so the budget bounds the memory kept. One lock guards lookup, insertion
+    and eviction, so threads sharing a reader keep one copy of a chunk they both missed.
+    The count stays
     the sum of what is kept. Reads, and counting, run outside it.
     """
 
@@ -199,10 +200,10 @@ class ChunkCache:
         `async.concurrency` pieces and `_FETCH_BYTES` as one chunk is planned to hold."""
         per_shard = (array.shards or array.chunks)[0] // size
         most = max(1, _FETCH_BYTES // (self._chunk_bytes(array, size) or 1))
-        if _NumericDecoder.of(array) is not None:
-            # The pool holds at most one scratch chunk per output chunk. Reserve it inside
-            # the same decoded in-flight budget, rather than hide a second working set.
-            most = max(1, most // 2)
+        decoder = _NumericDecoder.of(array)
+        if decoder is not None:
+            # Reserve trimming the padded tail, or non-native byte-order conversion.
+            most = max(1, most - 1 if decoder.dtype.isnative else most // 2)
         concurrency = int(zarr.config.get("async.concurrency"))
         return _batches(_pieces(missing, per_shard, most), concurrency, most)
 
@@ -226,7 +227,11 @@ class ChunkCache:
         pieces = _fetched(array, batch, size)
         found: dict[int, npt.NDArray[Any]] = {}
         for first, stop in batch:
-            found.update(self._keep_run(array.path, first, stop, size, pieces.pop(0)))
+            if pieces and isinstance(pieces[0], _DecodedChunk):
+                for k in range(first, stop):
+                    found.update(self._keep_run(array.path, k, k + 1, size, pieces.pop(0)))
+            else:
+                found.update(self._keep_run(array.path, first, stop, size, pieces.pop(0)))
         return found
 
     def _kept_chunks(self, path: str, wanted: list[int]) -> dict[int, npt.NDArray[Any]]:
@@ -243,11 +248,17 @@ class ChunkCache:
     def _keep_run(
         self, path: str, first: int, stop: int, size: int, data: npt.NDArray[Any]
     ) -> dict[int, npt.NDArray[Any]]:
-        """Chunks first … stop − 1 of the array at `path`, fetched as `data`, each copied out
-        and kept."""
-        copies = [
-            data[(k - first) * size : (k - first + 1) * size].copy() for k in range(first, stop)
-        ]
+        """Chunks first … stop − 1, adopted if owned by the decoder, otherwise copied out.
+
+        The ownership token is only made for one chunk, so no neighbouring data is retained.
+        """
+        copies = (
+            [np.asarray(data)]
+            if isinstance(data, _DecodedChunk)
+            else [
+                data[(k - first) * size : (k - first + 1) * size].copy() for k in range(first, stop)
+            ]
+        )
         read = {first + i: (chunk, _counted(chunk)) for i, chunk in enumerate(copies)}
         rate = max(counted / max(1, len(chunk)) for chunk, counted in read.values())
         with self._lock:
@@ -348,7 +359,10 @@ def _fetched(
             raise failed.exceptions[0] from failed
         return [read.result() for read in reads]
 
-    return [np.asarray(data) for data in sync(together())]
+    fetched = sync(together())
+    if decoder is not None:
+        return [chunk for piece in fetched for chunk in piece]
+    return [np.asarray(data) for data in fetched]
 
 
 # Five decode workers leave room for the caller, zarr's loop and one I/O helper in an
@@ -367,6 +381,18 @@ def _reset_decode_pool() -> None:
 
 if hasattr(os, "register_at_fork"):
     os.register_at_fork(after_in_child=_reset_decode_pool)
+
+
+type _ChunkRanges = list[tuple[int, int, int]]
+type _Decoded = list[npt.NDArray[Any] | None]
+
+
+class _DecodedChunk(np.ndarray[Any, np.dtype[Any]]):
+    """Ownership token: one decoded chunk's buffer, never a view of a multi-chunk run.
+
+    Only the direct decoder constructs these; the cache can adopt them without copying,
+    unlike a zarr run whose views retain uncounted neighbouring chunks (ADR 0009).
+    """
 
 
 @dataclass(frozen=True)
@@ -401,13 +427,13 @@ class _NumericDecoder:
             np.dtype("u8").newbyteorder(_endian(index[0])),
         )
 
-    async def read(self, array: zarr.Array[Any], first: int, stop: int) -> npt.NDArray[Any]:
+    async def read(self, array: zarr.Array[Any], first: int, stop: int) -> list[npt.NDArray[Any]]:
         """One planned piece: the index, only its chunks' ranges, then bounded decode jobs."""
         key = array.metadata.encode_chunk_key((first // self.per_shard,))
         path = array.store_path / key
         prototype = default_buffer_prototype()
         index = await path.get(prototype, SuffixByteRequest(self.per_shard * 16 + 4))
-        out = np.full((stop - first) * self.size, array.fill_value, dtype=array.dtype)
+        out: _Decoded = [None] * (stop - first)
         if index is not None:
             entries = self._index(index.to_bytes())[
                 first % self.per_shard : first % self.per_shard + stop - first
@@ -416,8 +442,18 @@ class _NumericDecoder:
                 fetched = await path.get(prototype, RangeByteRequest(lo, hi))
                 if fetched is not None:
                     await self._decode(fetched.to_bytes(), lo, chunks, out)
-        # Zarr pads the last inner chunk; the cache keeps only actual array elements.
-        return out[: min(len(out), int(array.shape[0]) - first * self.size)]
+        return [self._owned(array, first + k, chunk) for k, chunk in enumerate(out)]
+
+    def _owned(
+        self, array: zarr.Array[Any], k: int, chunk: npt.NDArray[Any] | None
+    ) -> npt.NDArray[Any]:
+        length = min(self.size, int(array.shape[0]) - k * self.size)
+        if chunk is None:
+            chunk = np.full(length, array.fill_value, dtype=array.dtype)
+        elif length != self.size:
+            # A truncated view would keep the padded tail outside the counted budget.
+            chunk = chunk[:length].copy()
+        return chunk.view(_DecodedChunk)
 
     def _index(self, data: bytes) -> npt.NDArray[np.uint64]:
         expected = self.per_shard * 16 + 4
@@ -428,9 +464,7 @@ class _NumericDecoder:
         raw = _NUMCODECS.CRC32C().decode(data)
         return np.frombuffer(raw, dtype=self.index_dtype).reshape(self.per_shard, 2)
 
-    async def _decode(
-        self, data: bytes, offset: int, chunks: list[tuple[int, int, int]], out: npt.NDArray[Any]
-    ) -> None:
+    async def _decode(self, data: bytes, offset: int, chunks: _ChunkRanges, out: _Decoded) -> None:
         """At most five jobs per range. Drain running jobs even if another piece fails.
 
         Cancelling a future cannot stop zstd on a worker. Shielding and draining keeps that
@@ -453,23 +487,21 @@ class _NumericDecoder:
             if isinstance(result, BaseException):
                 raise result
 
-    def _into(
-        self, data: bytes, offset: int, chunks: list[tuple[int, int, int]], out: npt.NDArray[Any]
-    ) -> None:
+    def _into(self, data: bytes, offset: int, chunks: _ChunkRanges, out: _Decoded) -> None:
         codec = _NUMCODECS.Zstd()
         for k, start, length in chunks:
-            dest = out[k * self.size : (k + 1) * self.size]
             raw = codec.decode(memoryview(data)[start - offset : start - offset + length])
             decoded = np.frombuffer(raw, dtype=self.dtype)
             if len(decoded) != self.size:
                 raise ValueError(f"decoded chunk has {len(decoded)} elements, expected {self.size}")
-            dest[:] = decoded
-            del decoded, raw
+            out[k] = decoded.astype(self.dtype.newbyteorder("="), copy=False)
 
 
 def _numeric_shard(array: zarr.Array[Any]) -> ShardingCodec | None:
     meta = array.metadata
     if not isinstance(meta, ArrayV3Metadata) or array.ndim != 1:
+        return None
+    if not isinstance(meta.chunk_grid, RegularChunkGridMetadata):
         return None
     if array.dtype.kind not in "iuf" or len(meta.codecs) != 1:
         return None
