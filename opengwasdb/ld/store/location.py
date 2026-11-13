@@ -10,7 +10,8 @@ Every element a reader or a rule reads goes through a `ChunkCache`. It reads who
 chunks, which is what Zarr fetches and decodes in any case, keeps the decoded chunks up to a
 byte budget, and serves each request from them. So a query that reads a few pairs at a time,
 as clumping does once per lead, fetches each chunk once, from disk or over HTTP. How a store
-is read is decided here, in one place, which ogld#8 tunes when it times the reads.
+is read is decided here, in one place: ogld#8 measured it (`docs/benchmarks/latency.md`), and
+ogld#32 tunes it.
 """
 
 from __future__ import annotations

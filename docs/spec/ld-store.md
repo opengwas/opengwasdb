@@ -297,7 +297,7 @@ spec §10a. An inner chunk longer than its array is clipped to the array.
 | `variants/alid`, `a1`, `a2` | `string` | (V,) | 16,384 | 1,048,576 | `""` |
 | `variants/a1_frequency` | `float32` | (V,) | 16,384 | 1,048,576 | NaN |
 | `near/<chrom>/indptr` | `int64` | (n_c + 1,) | 16,384 | 1,048,576 | −1 |
-| `near/<chrom>/r` | `int16` | (indptr[n_c],) | **262,144**, provisional | **67,108,864**, provisional | −32768 |
+| `near/<chrom>/r` | `int16` | (indptr[n_c],) | **262,144** | **67,108,864** | −32768 |
 | `index/<chrom>/indptr` | `int64` | (n_c + 1,) | 16,384 | 1,048,576 | −1 |
 | `index/<chrom>/partner` | `int32` | (index_c,) | 16,384 | 1,048,576 | −1 |
 | `index/<chrom>/r` | `int16` | (index_c,) | 16,384 | 1,048,576 | −32768 |
@@ -385,11 +385,15 @@ against 3.13 s). What decides the layout now is the reads that remain.
   and 0.045 MB from local disk, 12 ms over HTTP and 97 ms with 20 ms added per request, in 4
   requests, on the shape in the table above (§11).
 
-**The layout is C, provisionally.** ogld#8 settles it. It times, from local disk and over HTTP
-from a static host: the 3 Mb LD matrix, 500 scattered variants, clumping #403's 37 Analyses, and
-proxy lookups. If the clients that read static Zarr, an option for ogld#9, are limited by
-bandwidth rather than by requests, B's 2.5–7× fewer bytes on small reads could outweigh C's lead
-on many-chunk reads. A change of chunk or shard shape is not a format version change (§13).
+**The layout is C** (owner, 12 November 2026, on ogld#8; ADR 0006). ogld#8 built HGDP+1kGP EUR
+chr22 in each layout and timed the reads that differ, locally and over HTTP from a static host
+with 0, 10 and 50 ms added to every request (`docs/benchmarks/latency.md`). Clumping below t_far,
+the read that costs most, was fastest on C at every latency: 12.3, 44 and 143 s locally, at 10 ms
+and at 50 ms for 27 Analyses' chr22 hits, against B's 17.1, 132 and 488 s, because GWAS hits are
+dense and a C chunk serves many of a lead's hits in one call. C read regions fastest and is the
+smallest, B 18.9% and A 32.4% larger at × 511. B read 3.2–5.6× fewer bytes on small reads, but
+those are bound by requests and took the same time on B and C. A change of chunk or shard shape is
+not a format version change (§13).
 
 A C shard is 256 inner chunks: 128 MiB raw. As built (ogld#7, k = 10, × 511), a Near Band shard's
 median on disk is 51 to 63 MiB by panel, and its largest 73 MiB. That is 1,257 shards for
@@ -397,12 +401,13 @@ HGDP+1kGP EUR's Near Band and 3,457 for AFR's, against the 2,800 and 7,200 the e
 gave at × 32767. The other arrays use one shape, 16,384 inner and
 1,048,576 to a shard. These arrays are read whole, by row range, or one sparse row at a time, and
 the prototype's stores used this shape for them. At EUR's 5.3×10⁹ index entries that is about
-5,000 shards for each of `partner` and `r`; ogld#8 may coarsen the shard, which changes no reader.
+5,000 shards for each of `partner` and `r`. Coarsening that shard would change no reader; ogld#8
+measured no read that needed it.
 
 **Bits per pair, measured** (ogld#16). A real build of HGDP+1kGP EUR chr22 at each scale: the
 phased v2 callset converted by `docs/spec/build-inputs.md` §3, the 665 unrelated samples of the EUR
 keep file, k = 10 from `/data/opengwasdb/work/ogld/pcs/EUR.eigenvec`, 8 threads, at ogld
-`88cb8e9`: 119,632 variants and 1,165,485,828 Near Band pairs, on the provisional layout. Bytes
+`88cb8e9`: 119,632 variants and 1,165,485,828 Near Band pairs, on layout C. Bytes
 are those of the arrays' files on disk; the Proxy Index's are its `indptr`, `partner` and `r`
 together.
 
@@ -419,7 +424,7 @@ because the far code floor's cut moves with the scale (§3): 101,886 Far Pairs a
 
 **Sizes, measured** (ogld#7). The five stores as built: the phased v2 callset converted by
 `docs/spec/build-inputs.md` §3, each panel's unrelated samples (EUR 665, AFR 608, EAS 724, SAS 672,
-AMR 341), MAC ≥ 20, k = 10, × 511, 16 threads, on the provisional layout, at ogld
+AMR 341), MAC ≥ 20, k = 10, × 511, 16 threads, on layout C, at ogld
 `0.0.1.dev230+g5d78804cb`. Bytes are those of each array group's files on disk (`near/`, `index/`;
 `variants/` adds 90–165 MB per store and is in the total). Bits per pair are the Near Band's bytes
 × 8 over its pairs; bits per entry are the Proxy Index's (`indptr`, `partner`, `r`) over its entries.
@@ -744,6 +749,11 @@ What the reads hold, measured with tracemalloc and held by `tests/test_partner_r
   beside it. `matrix` and `region` apply a `fill` in place, so each holds one float64 copy of
   its result.
 
+**The reads on the built stores are measured in `docs/benchmarks/latency.md`** (ogld#8): the
+published EUR store from local disk and over HTTP at 0, 10 and 50 ms added per request, and EUR
+chr22 built in each layout. Those numbers decided the layout (ADR 0006) and supersede the
+prototype's below, which are kept as the record of what chose layout C provisionally.
+
 The prototype timed each read on the EUR chr22 slice, a real Zarr v3 sharded LD Store (1.65 GB,
 65,035 variants), under the three layouts of §6. It read from local disk, and over HTTP from a
 static server that honours Range requests
@@ -818,7 +828,8 @@ pairs about 4 million at a time, which bounds its working memory beside the matr
   reads exactly as the committed one (`tests/test_store_reads.py`). On the × 511 Test Store
   (ogld#16), a 3-variant matrix over HTTP fetched 759 of chr22's 97,699 Near Band bytes, in 2
   requests (41,290 bytes in 28 requests in all, most of it metadata documents); a reader that read
-  whole arrays fetched 96,582 Near Band bytes. The same read again fetched none. Read latency at scale is ogld#8's to measure.
+  whole arrays fetched 96,582 Near Band bytes. The same read again fetched none. Read latency at
+  scale, on the built stores, is in `docs/benchmarks/latency.md` (ogld#8).
 
 ## 11. The upstream half: the Proxy Index
 
