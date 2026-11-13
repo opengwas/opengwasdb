@@ -318,11 +318,17 @@ LIST_HEADER = [
 
 
 def step1(records: list[Record]) -> list[str]:
-    of = grouped(records, "case")
     out = ["## Step 1: the published EUR store (k = 10, layout C)", ""]
     out += ["### Summary: time per target, ogld's reader", ""]
     out += summary(records, STEP1_READS, "ogld")
-    out += ["### Clumping #403's 37 Analyses, 5e-8 tier, 3 Mb window", ""]
+    return out + step1_tables(records)
+
+
+def step1_tables(records: list[Record]) -> list[str]:
+    """Step 1's table of each read, without the summary, whose rows are ogld#8's reader's: what
+    `scripts/bench/serving.py` renders a later run's step-1 records with (ogld#9)."""
+    of = grouped(records, "case")
+    out = ["### Clumping #403's 37 Analyses, 5e-8 tier, 3 Mb window", ""]
     out += [table(CLUMP_HEADER, clump_rows(of.get(("clump",), []))), ""]
     out += ["### Region matrices on chr22, centred at 25, 32 and 40 Mb", ""]
     keys = ("reader", "width_mb", "target", "state")
