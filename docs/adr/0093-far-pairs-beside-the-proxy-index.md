@@ -129,7 +129,8 @@ is what they need.
 - **A reader that has read matrices on every chromosome** keeps a third `indptr`, 8 bytes a
   variant: 69 MB for HGDP+1kGP EUR.
 - **The Test Store holds 7 Far Pairs** (4 on chr21, 3 on chr22), 7.7 KB in `far/`. Every other
-  array of it is byte-identical to the store written before this decision.
+  array of it is byte-identical to the store written before this decision, and its provenance
+  names the commit whose code wrote it, `far/` included.
 - **What the reads gained, measured** (`docs/benchmarks/far-pairs.md`), on the published EUR
   store, before and after reading the same bytes. A matrix of 500 variants on one chromosome
   reads 10 Far Pairs chunks on chr22 and 102 on chr11, where it read 894 and 1,058 index chunks,

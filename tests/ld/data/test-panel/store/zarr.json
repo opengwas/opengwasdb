@@ -306,14 +306,14 @@
         "index_entries": 36476
       },
       "software": {
-        "ogld": "0.0.1.dev235+g56d851625",
+        "ogld": "0.0.1.dev260+ga65843c81",
         "numpy": "2.4.6",
         "zarr": "3.4.2"
       },
       "build": {
-        "created_at": "2026-11-12T22:46:09Z",
-        "wall_seconds": 0.4099788849707693,
-        "peak_memory_bytes": 1956732928,
+        "created_at": "2026-11-13T02:58:59Z",
+        "wall_seconds": 0.3831817239988595,
+        "peak_memory_bytes": 1524080640,
         "threads": 1
       }
     }
