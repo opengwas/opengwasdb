@@ -1373,6 +1373,39 @@ epic's own (OGS-00009 and the full-size OGS-00016/17/11, plus OGS-00012/13 for
 its step rows); a Store re-encoded after its build still has the build's
 records, so these baselines are times, not bytes.
 
+**The after-measurement (#322).** `--after LABEL` names a `--store` holding an
+end-to-end run on the finished engine: OGS-00009 rebuilt from its own inputs and
+run as the Store Release Build plans it after opengwasdb-stores#357/#358 (the
+Dense build with its inline Top-Hit Index and no standalone rebuild, validation
+at the build's worker count, the hm3 subset, Reference Completion and the
+completed release's subset, overview, validation and Observed-View Check). The
+artifact gains an `after` block (`benchmarks/_epic307_after.py`): every row of
+the epic's OGS-00009 table with #311's baseline -- the same derivation over the
+published Store's October records -- the after value, their ratio, and each of
+the epic's projections for that row (after steps 2–4, and the two step-5
+scenarios) marked `met` or `missed`, a miss with its checked reason. A
+projection is met at most 5% (or one second) above it; the standalone Top-Hit
+rebuild meets its zero only when the after Store has no record of it. The
+block also attributes the run's unprojected phases (completion's five, #309;
+the EAF survey's, #310), sums every planned step, and judges milestone #388's
+"an evening" (9 h) on the span from the first step's start to the last step's
+end. No `--source` is needed: the after-measurement reads records only.
+
+```bash
+pixi run -e dev python benchmarks/measure_epic307_evidence.py \
+  --store OGS-00009=/data/opengwasdb/stores/OGS-00009 \
+  --store OGS-00009-322=<RD>/scratch/322/OGS-00009 \
+  --window 2026-10-22T01:06/2026-10-22T16:10 \
+  --daily-window 01:06-16:10 --tz Europe/London \
+  --daily-from 2026-10-14 --until 2026-11-02 \
+  --after OGS-00009-322 \
+  --output docs/benchmark-output/opengwasdb_epic307_after.json
+```
+
+| File | Description |
+|---|---|
+| `opengwasdb_epic307_after.json` | The evidence artifact's blocks for the two Stores, plus `after`: per row the baseline, the after value, their ratio and each projection's verdict; the run's unprojected phases and steps; the Store Release's span and milestone #388's verdict. |
+
 ---
 
 ### `compare_store_releases.py`

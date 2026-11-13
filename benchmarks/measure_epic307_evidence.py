@@ -70,6 +70,7 @@ from benchmarks._artifact import (
     provenance,
     write_artifact,
 )
+from benchmarks._epic307_after import compare_after
 from benchmarks._epic307_figures import compare, evidence
 from benchmarks._step_records import (
     Window,
@@ -199,6 +200,12 @@ def _parser() -> argparse.ArgumentParser:
         help="rounds for one source, when its samples are cheap enough to afford more",
     )
     parser.add_argument(
+        "--after",
+        metavar="LABEL",
+        help="the --store holding an end-to-end run on the finished engine (#322): each phase "
+        "is set beside OGS-00009's October records and the epic's projections",
+    )
+    parser.add_argument(
         "--control-revision",
         help="a commit of this repository to export with `git archive` as the control "
         "reader_base imports (the epic's d405de0)",
@@ -316,6 +323,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             for capability, path in sources
         ]
     spans = [store_span(store["records"]) for store in stores]
+    found = evidence(stores, windows, reader_ab)
     payload = {
         "artifact": "epic #307 evidence: step timings, window flags, reader A/B, epic comparison",
         "generator": "benchmarks/measure_epic307_evidence.py",
@@ -371,8 +379,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             for index, store in enumerate(stores)
         ],
         "reader_ab": reader_ab,
-        "comparison": compare(evidence(stores, windows, reader_ab)),
+        "comparison": compare(found),
     }
+    if args.after:
+        payload["after"] = compare_after(found, args.after)
     write_artifact(args.output, payload)
     _summarise(payload)
     return 0
@@ -405,6 +415,18 @@ def _summarise(payload: dict[str, Any]) -> None:
         counts[figure["verdict"]] = counts.get(figure["verdict"], 0) + 1
     summary = ", ".join(f"{count} {verdict}" for verdict, count in sorted(counts.items()))
     print(f"comparison: {len(figures)} epic figures — {summary}")
+    after = payload.get("after")
+    if after:
+        for row in after["rows"]:
+            verdicts = ", ".join(
+                f"{p['epic']} {p['verdict']}" for p in row["projections"]
+            )
+            print(f"after {row['phase']}: {row['baseline']['rendered']} -> "
+                  f"{row['after']['rendered']} ({verdicts})")
+        release = after["store_release"]
+        line = release["milestone_388"]
+        print(f"after Store Release: {release['span']} from first start to last end; "
+              f"#388 {line['verdict']} by {line['over_by']}")
 
 
 if __name__ == "__main__":
