@@ -66,12 +66,18 @@ def latest(timings: list[Record]) -> list[Record]:
     return [r for r in timings if r["run"] == newest[tuple(r.get(k) for k in SAME_READ)]]
 
 
+#: The chunk cache's budget ogld#8 measured as ogld's own, 256 MiB. A record that names no budget
+#: ran before the benchmark could change it, with this one. ogld#32 raised the reader's default to
+#: 4 GiB; a label is fixed by its record, never by the default of the ogld that renders it.
+MEASURED_BUDGET = 1 << 28
+
+
 def reader_label(record: Record) -> str:
-    """The reader a record ran: ogld's or the concurrent prototype, and its cache if not ogld's
-    256 MiB."""
-    cache = record.get("cache_bytes", 1 << 28)
+    """The reader a record ran: ogld's or the concurrent prototype, and its chunk cache's budget
+    when that is not the one ogld#8 measured as ogld's own (`MEASURED_BUDGET`)."""
+    cache = record.get("cache_bytes", MEASURED_BUDGET)
     label = str(record.get("reader", "ogld"))
-    return label if cache == 1 << 28 else f"{label}, cache {cache >> 20:,} MiB"
+    return label if cache == MEASURED_BUDGET else f"{label}, cache {cache >> 20:,} MiB"
 
 
 def seconds(value: float) -> str:

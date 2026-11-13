@@ -13,22 +13,25 @@ _Measured 12 November 2026. Every table below is rendered from the records in
 - **Layout C** clumps below t_far fastest at every latency: EUR chr22 in 12.3 s locally, 44 s at
   10 ms and 143 s at 50 ms, against B's 17.1, 132 and 488 s and A's 37.8, 585 and 2,243 s. It
   reads regions fastest and is the smallest store. B reads 3–6× fewer bytes on small reads, which
-  take the same time on every layout here. **Recommendation: keep C.**
+  take the same time on every layout here. **Decided: layout C is final** (ADR 0006).
 - **The Far Pairs, merged into the Proxy Index,** cost a 10 Mb region the 6–9% more bytes §11
-  estimated, and 13–30% of its time. They cost a matrix of 500 variants on one chromosome 58–60% of
-  its time over HTTP: about 890 index chunks, where a Far Pairs component reads about 11.
-  **Recommendation: bring the Far Pairs back before the first release.**
+  estimated, and 13–30% of its time. They cost a matrix of 500 variants on chr22 58–60% of its time
+  over HTTP: about 890 index chunks, where a Far Pairs component reads about 11. chr22 holds few
+  Far Pairs, but they cluster in few rows on every chromosome, so the component reads 10–16× fewer
+  chunks even on chr11, which holds 69 M of them. **Decided: the Far Pairs come back (ogld#31).**
 - **Reader levers**, measured, not implemented: fetching a read's runs of chunks together (5–9×
   faster lists and 2–3.3× faster clumping on C at 50 ms), the chunk cache's size (at 4 GiB a
   repeated read is warm), and `ChunkCache._counted` (6–22% of reads that touch strings).
 
-Both recommendations are format decisions, and they are the owner's.
+The owner ruled on 12 November 2026, on ogld#8: layout C is final, the Far Pairs come back as a
+component of their own (ogld#31), and the reader's speed-ups are ogld#32 ("Decisions", below).
 
 ## What was measured, and on what
 
 **Step 1** times the four queries on the published HGDP+1kGP EUR LD Store,
 `/data/opengwasdb/work/ogld/stores/hgdp1kgp-v2-EUR-k10.store`. It has 8,586,889 variants and is
-at × 511 and k = 10, in spec §6's provisional layout C. The queries:
+at × 511 and k = 10, in layout C, then spec §6's provisional choice and now its final one
+(ADR 0006). The queries:
 
 - clumping each of opengwas/opengwasdb#403's 37 Analyses' 5e-8 tiers at r² 0.01 and 0.001
   within 3 Mb, the inputs of ogld#6's acceptance run (`hits.tsv`, |z| as the score);
@@ -120,7 +123,13 @@ earlier one's in the tables.
 | `step1-cache4g` | 22:05 | 5.2 | `step1 --target local --case clump scattered --seeds 1 --cache-mib 4096 --analyses` (the four) |
 | `step1-local-reads` | 22:10 | 3.2 | `step1 --target local --case proxies scattered region` |
 
-Each takes `--out <file>.jsonl`; the files are kept gzipped. The four Analyses are
+Each takes `--out <file>.jsonl`; the files are kept gzipped. Each file's first record says which
+code ran and whether the checkout could be cited as that code (`code`, from
+`test_panel.checkout.problem`); for these eleven it was added after the runs, from the branch's
+history, and says so. None was clean: `step1-local` ran untracked scripts, and the installed ogld
+named `883eb03` throughout, whose `ogld/` is every later commit's. `results/far_pairs.json` is
+`pixi run -e dev python scripts/bench/far_pairs.py --out …`, run on 13 November, which times
+nothing. The four Analyses are
 `OGS-00009__ukb-b-4171 OGS-00011__GCST90319613 OGS-00011__GCST90025965 OGS-00011__GCST90029004`.
 The layouts were built, and the tables rendered, by:
 
@@ -131,6 +140,8 @@ pixi run -e dev python scripts/bench/report.py docs/benchmarks/results/*.jsonl.g
 ```
 
 `--reader concurrent` and `--cache-mib` measure two reader levers from outside `ogld/` (below).
+ogld#32 put concurrent fetching in the reader and removed `--reader`. Its own runs, and
+`--without`, which turns its levers off one at a time, are in [`fast-reader.md`](fast-reader.md).
 
 ## Step 1: the published EUR store, layout C
 
@@ -315,9 +326,8 @@ chunk, so the requests are the same". The first holds; the second does not.
 of 241–293 MB: **6.2–9.3% more bytes**, as §11 estimated. The time is larger. The far-pair
 scatter took 2.2–3.5 s of 7.6–19.7 s over the two local runs, **13–30%**, and 1.7–3.0 s at 0, 10
 and 50 ms (14–28%; at 50 ms the Near Band's round trips dominate the read). It reads every entry
-of every row,
-11.4–16.6 M of them, to place the 6,228–11,651 Far Pairs inside the region; 99.6% of those
-entries are copies of Near Band pairs within 3 Mb, which it drops. A separate Far Pairs component
+of every row, 11.4–16.6 M of them, to place the 6,228–11,651 Far Pairs inside the region; 99.6% of
+those entries are copies of Near Band pairs within 3 Mb, which it drops. A separate Far Pairs component
 holds 16,541–24,511 entries for the same rows, 0.13–0.21% as many.
 
 **A matrix for a list of variants on one chromosome.** Once the list spans more than 3 Mb,
@@ -338,10 +348,45 @@ chunk reads: about 0.2 s at 10 ms and 1 s at 50 ms with ogld's reader, estimated
 per request above. So the merge more than doubles a regional list matrix over a network,
 whichever reader reads it.
 
-**Genome-wide lists are less affected.** 500 variants drawn from the whole genome are about 23
-per chromosome, spread along it. The far part was 2.3–5.8 s of 15–23 s locally (15–30%), and the
-string columns cost more (below). How many chunks a Far Pairs component would save there depends
-on how many Far Pairs each chromosome holds, which this benchmark did not count.
+**chr22 holds few Far Pairs; the saving holds on every chromosome.** chr22 has 0.85 Far Pairs a
+row, where the store averages 15.5 and chr11 162 (`scripts/bench/far_pairs.py`, which counts
+every chromosome's from its Proxy Index; the counts sum to the 132,924,736 the store's
+provenance records). The review of ogld#8 estimated from those averages that a Far Pairs read
+would touch only 3–5× fewer chunks than the index on the dense chromosomes. Counted, it touches
+10–16× fewer even on chr11, because Far Pairs cluster in rows: on every chromosome only 14–19% of
+rows hold any (chr11's 69 M lie in 76,296 of its 427,295 rows), so most listed rows read nothing,
+and those that do share chunks. For three draws of 500 variants on each chromosome (seeds 8–10, as
+the benchmark draws them), the distinct chunks of one array each would read:
+
+| chromosome | Far Pairs | a row | rows holding any | index chunks | Far Pairs chunks | fewer |
+|---|---|---|---|---|---|---|
+| 1 | 816,962 | 1.23 | 16% | 501–507 | 28–29 | 17–18× |
+| 2 | 1,066,935 | 1.51 | 16% | 502–507 | 26–30 | 17–20× |
+| 3 | 2,321,033 | 3.81 | 17% | 504–512 | 33–37 | 14–16× |
+| 4 | 858,715 | 1.37 | 16% | 503–510 | 24–28 | 18–21× |
+| 5 | 6,560,407 | 11.88 | 17% | 508–512 | 31–32 | 16× |
+| 6 | 12,150,924 | 20.79 | 18% | 515–528 | 36–45 | 12–14× |
+| 7 | 5,626,236 | 11.03 | 17% | 505–513 | 23–29 | 17–22× |
+| 8 | 2,778,549 | 5.96 | 18% | 498–508 | 25–34 | 15–20× |
+| 9 | 335,049 | 0.90 | 16% | 491–501 | 16–17 | 29–31× |
+| 10 | 13,381,159 | 30.26 | 18% | 507–511 | 28–34 | 15–18× |
+| 11 | 69,017,129 | 161.52 | 18% | 522–529 | 32–51 | 10–16× |
+| 12 | 9,210,890 | 22.21 | 17% | 503–512 | 25–30 | 17–20× |
+| 13 | 271,424 | 0.84 | 16% | 498–503 | 14–16 | 31–36× |
+| 14 | 212,673 | 0.76 | 16% | 486–497 | 11–12 | 41–45× |
+| 15 | 138,945 | 0.58 | 16% | 470–482 | 9 | 52–54× |
+| 16 | 287,786 | 1.11 | 17% | 478–480 | 11–15 | 32–44× |
+| 17 | 1,512,699 | 6.55 | 16% | 475–483 | 14–15 | 32–34× |
+| 18 | 365,278 | 1.47 | 16% | 478–488 | 12–13 | 37–41× |
+| 19 | 3,520,100 | 17.48 | 19% | 470–484 | 16–27 | 18–29× |
+| 20 | 2,320,861 | 12.19 | 17% | 459–469 | 16–22 | 21–29× |
+| 21 | 69,096 | 0.58 | 14% | 439–457 | 5 | 88–91× |
+| 22 | 101,886 | 0.85 | 16% | 433–448 | 5–6 | 72–89× |
+
+A genome-wide list spreads its 500 rows over 22 chromosomes, about 23 each. Step 1's three draws
+touch 514–521 index chunks of each array and would touch 71–87 Far Pairs chunks, 5.9–7.3× fewer.
+Its far part took 2.3–5.8 s of 15–23 s locally (15–30%), and the string columns cost more
+(below).
 
 **Proxies and clumping are unaffected.** `proxies` reads one index row a variant, and so does
 `clump` at r² ≥ t_far: the index is what they need. Below t_far they read the Near Band.
@@ -384,10 +429,16 @@ against 129 s on chr22 and 44 s against 222 s genome-wide, and `proxies` for 100
 against 32 s, though its runs met a load of 3.7–34 against ogld's 1.7–9.1. Caching each shard's
 index would remove the first of the two round trips a call makes; that was not measured.
 
-## Recommendation, for the owner's decision
+## Decisions
 
-The layout and the Far Pairs are LD Store format decisions, and they are the owner's. Nothing in
-`ogld/`, the spec or the ADRs changes until they are made.
+The owner ruled on 12 November 2026, on ogld#8, from this benchmark's recommendations, which follow
+as they were made, with their numbers corrected where the review of ogld#8 found them wrong:
+
+1. **Layout C is final** (ADR 0006; spec §6).
+2. **The Far Pairs come back** as a component of their own, before the first release (ogld#31,
+   which rewrites spec §11).
+3. **The reader's speed-ups are ogld#32**: fetching a read's runs of chunks together, the chunk
+   cache's budget and `ChunkCache._counted`.
 
 **Keep layout C.** It is the fastest layout for the read that costs most, clumping below t_far,
 at every latency and with either reader: 1.3–3.4× faster than B with ogld's reader, and 1.25–1.6×
@@ -404,11 +455,13 @@ clumps take 2.6–15.7× C's time and its regions 7.9–147×.
 
 **Bring the Far Pairs back before the first release.** The merge costs a 10 Mb region the 6–9%
 more bytes §11 estimated, and 13–30% of its time, because the scatter walks every index entry
-to find 0.2% of them. It costs a matrix for a list of variants on one chromosome much more:
-about 890 index chunks where a Far Pairs component needs about 11. That is 58–60% of the read at
-10 and 50 ms with ogld's reader, and 52–58% with concurrent reads, so such a matrix takes more than
-twice as long over a network. Bringing them back costs what §11 listed: 0.03–0.76% more bytes per
-store, a second output from the same scan, and the four `far.*` rules plus one holding the Far
-Pairs equal to the index's far entries. `proxies` and `clump` would not change. If regional list
+to find 0.2% of them. It costs a matrix for a list of variants on one chromosome much more: on
+chr22 about 890 index chunks where a Far Pairs component needs about 11, and on the densest
+chromosome, chr11, still 10–16× as many. That is 58–60% of the chr22 read at 10 and 50 ms with
+ogld's reader, and 52–58% with concurrent reads, so such a matrix takes more than twice as long
+over a network. Bringing them back costs about 1% more bytes at k = 10 (EUR's 132.9 M Far Pairs
+are 0.80 GB raw beside a 78.9 GB store; §11's 0.03–0.76% was measured at k = 0), a second output
+from the same scan, and the four `far.*` rules plus one holding the Far Pairs equal to the index's
+far entries. `proxies` and `clump` would not change. If regional list
 matrices over HTTP are not something the first release serves, the merge can stay; this
 benchmark cannot weigh that use.

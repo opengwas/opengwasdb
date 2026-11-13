@@ -19,7 +19,7 @@ from ogld.format import REncoding
 
 #: (inner chunk, shard) in elements, for every array but the Near Band's `r`.
 SIDE: Final = (16_384, 1_048_576)
-#: The Near Band's `r`: layout C, provisional until ogld#8 settles it (spec §6).
+#: The Near Band's `r`: layout C (spec §6; ADR 0006).
 NEAR_R: Final = (262_144, 67_108_864)
 
 #: Each array's fill value: one a valid LD Store never holds (spec §6). The `r` arrays' is

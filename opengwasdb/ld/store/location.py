@@ -11,7 +11,8 @@ is what Zarr fetches and decodes in any case, keeps the decoded chunks and the s
 up to a byte budget, and serves each request from them. So a query that reads a few pairs at a
 time, as clumping does once per lead, fetches each chunk once, from disk or over HTTP. A read's
 missing runs of chunks are fetched together, a bounded batch at a time (ogld#32). How a store is
-read is decided here, in one place, which ogld#8 and ogld#32 measured over HTTP.
+read is decided here, in one place: ogld#8 measured it (`docs/benchmarks/latency.md`), and
+ogld#32 tuned it (`docs/benchmarks/fast-reader.md`).
 """
 
 from __future__ import annotations
