@@ -1,10 +1,17 @@
-"""Where each edge case is: the rows and values the README lists and the tests check."""
+"""Where each edge case is: the rows and values the README lists and the tests check.
+
+Which pairs are Far Pairs, Bound or beyond far_bp is the store's rule, so it is called rather
+than copied: the band's edges are `ogld.format.geometry.within`, and a Far Pair is a code that
+reaches the encoding's far code floor (`docs/architecture/ownership.md`). The r they are
+judged on is the reference's own (`test_panel.reference`), independent of ogld by design.
+"""
 
 from __future__ import annotations
 
 import numpy as np
 
 from ogld.format import NEAR_BP, REncoding
+from ogld.format.geometry import within
 from test_panel.answers import Answers
 from test_panel.assemble import Panel
 from test_panel.params import Params
@@ -90,9 +97,9 @@ def _exact(panel: Panel, a: Answers, d: np.ndarray) -> dict[str, object]:
 def _far(params: Params, panel: Panel, a: Answers, d: np.ndarray, n: int) -> dict[str, object]:
     t_far = params.t_far(n, 10)
     encoding = REncoding(params.r_scale)
-    stored = encoding.dequantise(encoding.quantise(a.r[10]))
-    band = (d > NEAR_BP) & (d <= params.far_bp)
-    far = band & (stored**2 >= t_far)
+    codes = encoding.quantise(a.r[10])
+    band = ~within(d, NEAR_BP) & within(d, params.far_bp)
+    far = band & (np.abs(codes.astype(np.int32)) >= encoding.far_code_floor(t_far))
     named = [
         (int(x), int(y))
         for x, y in zip(a.i[far], a.j[far], strict=True)
@@ -124,7 +131,7 @@ def _beyond(params: Params, panel: Panel) -> dict[str, object]:
     chrom = np.array(panel.chrom)[ok]
     pos = panel.pos[ok]
     i, j = np.triu_indices(len(ok), k=1)
-    same = (chrom[i] == chrom[j]) & (pos[j] - pos[i] > params.far_bp)
+    same = (chrom[i] == chrom[j]) & ~within(pos[j] - pos[i], params.far_bp)
     cross = chrom[i] != chrom[j]
     first_same, first_cross = np.flatnonzero(same)[0], np.flatnonzero(cross)[0]
     return {
