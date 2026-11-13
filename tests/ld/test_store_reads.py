@@ -726,10 +726,12 @@ def test_a_read_has_at_most_its_bounds_in_flight(
         served = location.open_group(url, cache=cache)["near/22/r"]
         assert isinstance(served, zarr.Array)
         np.testing.assert_array_equal(cache.take(served, coords), everything[coords])
-    assert len(held.batches) == 3, "three batches of two runs"
-    assert flight.peak == 2, "two requests in flight at once, never more"
-    assert held.earlier == [0, 0, 0], "no earlier batch's piece is held while the next fetches"
-    assert max(held.batches) <= 2 * chunk_bytes
+    # Direct decoding reserves a scratch chunk per output chunk inside the byte bound.
+    batches = 6 if bound == "bytes" else 3
+    assert len(held.batches) == batches
+    assert flight.peak == (1 if bound == "bytes" else 2)
+    assert held.earlier == [0] * batches, "no earlier batch survives into the next fetch"
+    assert max(held.batches) * 2 <= budget
 
 
 def test_a_read_of_strings_holds_at_most_the_bytes_in_flight(

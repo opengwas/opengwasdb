@@ -18,19 +18,23 @@ ogld#32 tuned it (`docs/benchmarks/fast-reader.md`).
 from __future__ import annotations
 
 import asyncio
+import importlib
 import math
 import os
 import threading
 from collections import OrderedDict
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 import numpy as np
 import numpy.typing as npt
 import zarr
-from zarr.abc.store import ByteRequest, Store, SuffixByteRequest
+from zarr.abc.store import ByteRequest, RangeByteRequest, Store, SuffixByteRequest
+from zarr.codecs import BytesCodec, Crc32cCodec, ShardingCodec, ZstdCodec
 from zarr.core.buffer import Buffer, BufferPrototype, default_buffer_prototype
+from zarr.core.metadata.v3 import ArrayV3Metadata
 from zarr.core.sync import sync
 from zarr.storage import StorePath, WrapperStore
 
@@ -186,6 +190,10 @@ class ChunkCache:
         `async.concurrency` pieces and `_FETCH_BYTES` as one chunk is planned to hold."""
         per_shard = (array.shards or array.chunks)[0] // size
         most = max(1, _FETCH_BYTES // (self._chunk_bytes(array, size) or 1))
+        if _NumericDecoder.of(array) is not None:
+            # The pool holds at most one scratch chunk per output chunk. Reserve it inside
+            # the same decoded in-flight budget, rather than hide a second working set.
+            most = max(1, most // 2)
         concurrency = int(zarr.config.get("async.concurrency"))
         return _batches(_pieces(missing, per_shard, most), concurrency, most)
 
@@ -314,11 +322,17 @@ def _fetched(
     where `zarr.Array` runs each read it is asked for. A piece that fails cancels the others
     of its batch, rather than leaving them fetching, and its own error is raised."""
 
+    decoder = _NumericDecoder.of(array) if isinstance(array, zarr.Array) else None
+
     async def together() -> list[Any]:
         try:
             async with asyncio.TaskGroup() as group:
                 reads = [
-                    group.create_task(array.async_array.getitem(slice(a * size, b * size)))
+                    group.create_task(
+                        decoder.read(array, a, b)
+                        if decoder is not None
+                        else array.async_array.getitem(slice(a * size, b * size))
+                    )
                     for a, b in pieces
                 ]
         except BaseExceptionGroup as failed:
@@ -326,6 +340,168 @@ def _fetched(
         return [read.result() for read in reads]
 
     return [np.asarray(data) for data in sync(together())]
+
+
+# Five decode workers leave room for the caller, zarr's loop and one I/O helper in an
+# eight-thread run. This is process-shared, never a pool per reader or per chromosome (ADR 0009).
+# numcodecs is a runtime dependency without type stubs, as in build.inputs.
+_NUMCODECS = importlib.import_module("numcodecs")
+_DECODE_WORKERS: Final = 5
+_DECODE_POOL = ThreadPoolExecutor(max_workers=_DECODE_WORKERS, thread_name_prefix="ogld_decode")
+
+
+def _reset_decode_pool() -> None:
+    """A fork inherits no live executor threads; it must not submit to their old queue."""
+    global _DECODE_POOL
+    _DECODE_POOL = ThreadPoolExecutor(max_workers=_DECODE_WORKERS, thread_name_prefix="ogld_decode")
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_decode_pool)
+
+
+@dataclass(frozen=True)
+class _NumericDecoder:
+    """Only the declared bytes/zstd chain, with a bytes/CRC32C suffix index (ADR 0009).
+
+    No zarr private codec or index API is called. Offsets are absolute uint64 byte offsets,
+    paired with lengths, and both all-ones means absent, as sharding_indexed specifies.
+    """
+
+    size: int
+    per_shard: int
+    dtype: np.dtype[Any]
+    index_dtype: np.dtype[Any]
+
+    @classmethod
+    def of(cls, array: zarr.Array[Any]) -> _NumericDecoder | None:
+        """Recognise the exact codec chain, not a path or a writer's default shape."""
+        shard = _numeric_shard(array)
+        if shard is None:
+            return None
+        inner, index = shard.codecs, shard.index_codecs
+        if not (_bytes_chain(inner, ZstdCodec) and _bytes_chain(index, Crc32cCodec)):
+            return None
+        if array.shards is None:
+            return None
+        size = int(array.chunks[0])
+        return cls(
+            size,
+            int(array.shards[0]) // size,
+            array.dtype.newbyteorder(_endian(inner[0])),
+            np.dtype("u8").newbyteorder(_endian(index[0])),
+        )
+
+    async def read(self, array: zarr.Array[Any], first: int, stop: int) -> npt.NDArray[Any]:
+        """One planned piece: the index, only its chunks' ranges, then bounded decode jobs."""
+        key = array.metadata.encode_chunk_key((first // self.per_shard,))
+        path = array.store_path / key
+        prototype = default_buffer_prototype()
+        index = await path.get(prototype, SuffixByteRequest(self.per_shard * 16 + 4))
+        out = np.full((stop - first) * self.size, array.fill_value, dtype=array.dtype)
+        if index is not None:
+            entries = self._index(index.to_bytes())[
+                first % self.per_shard : first % self.per_shard + stop - first
+            ]
+            for lo, hi, chunks in _byte_runs(entries):
+                fetched = await path.get(prototype, RangeByteRequest(lo, hi))
+                if fetched is not None:
+                    await self._decode(fetched.to_bytes(), lo, chunks, out)
+        # Zarr pads the last inner chunk; the cache keeps only actual array elements.
+        return out[: min(len(out), int(array.shape[0]) - first * self.size)]
+
+    def _index(self, data: bytes) -> npt.NDArray[np.uint64]:
+        expected = self.per_shard * 16 + 4
+        if len(data) != expected:
+            raise ValueError(
+                f"shard index is truncated or corrupt: {len(data)} bytes, expected {expected}"
+            )
+        raw = _NUMCODECS.CRC32C().decode(data)
+        return np.frombuffer(raw, dtype=self.index_dtype).reshape(self.per_shard, 2)
+
+    async def _decode(
+        self, data: bytes, offset: int, chunks: list[tuple[int, int, int]], out: npt.NDArray[Any]
+    ) -> None:
+        """At most five jobs per range. Drain running jobs even if another piece fails.
+
+        Cancelling a future cannot stop zstd on a worker. Shielding and draining keeps that
+        worker's buffers inside this read's lifetime and in-flight bound (ADR 0009).
+        """
+        loop = asyncio.get_running_loop()
+        jobs = [
+            loop.run_in_executor(
+                _DECODE_POOL, self._into, data, offset, chunks[i::_DECODE_WORKERS], out
+            )
+            for i in range(min(_DECODE_WORKERS, len(chunks)))
+        ]
+        pending = asyncio.gather(*jobs, return_exceptions=True)
+        try:
+            results = await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            await pending
+            raise
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+
+    def _into(
+        self, data: bytes, offset: int, chunks: list[tuple[int, int, int]], out: npt.NDArray[Any]
+    ) -> None:
+        codec = _NUMCODECS.Zstd()
+        for k, start, length in chunks:
+            dest = out[k * self.size : (k + 1) * self.size]
+            raw = codec.decode(memoryview(data)[start - offset : start - offset + length])
+            decoded = np.frombuffer(raw, dtype=self.dtype)
+            if len(decoded) != self.size:
+                raise ValueError(f"decoded chunk has {len(decoded)} elements, expected {self.size}")
+            dest[:] = decoded
+            del decoded, raw
+
+
+def _numeric_shard(array: zarr.Array[Any]) -> ShardingCodec | None:
+    meta = array.metadata
+    if not isinstance(meta, ArrayV3Metadata) or array.ndim != 1:
+        return None
+    if array.dtype.kind not in "iuf" or len(meta.codecs) != 1:
+        return None
+    shard = meta.codecs[0]
+    return shard if type(shard) is ShardingCodec and shard.index_location == "end" else None
+
+
+def _bytes_chain(codecs: tuple[Any, ...], last: type[Any]) -> bool:
+    return (
+        len(codecs) == 2
+        and type(codecs[0]) is BytesCodec
+        and type(codecs[1]) is last
+        and codecs[0].endian in {"little", "big"}
+    )
+
+
+def _endian(codec: Any) -> Literal["<", ">"]:
+    return "<" if codec.endian == "little" else ">"
+
+
+def _byte_runs(
+    entries: npt.NDArray[np.uint64],
+) -> Iterator[tuple[int, int, list[tuple[int, int, int]]]]:
+    """Merge only physically adjacent ranges, never read intervening unwanted chunks."""
+    absent = np.iinfo(np.uint64).max
+    chunks = sorted(
+        ((k, int(a), int(b)) for k, (a, b) in enumerate(entries) if (a, b) != (absent, absent)),
+        key=lambda entry: entry[1],
+    )
+    run: list[tuple[int, int, int]] = []
+    lo, hi = 0, 0
+    for k, start, length in chunks:
+        if run and start != hi:
+            yield lo, hi, run
+            run = []
+        if not run:
+            lo = start
+        hi = start + length
+        run.append((k, start, length))
+    if run:
+        yield lo, hi, run
 
 
 class _KeptIndexes(WrapperStore[Store]):

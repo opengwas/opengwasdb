@@ -1,0 +1,62 @@
+# Decode recognised numeric chunks directly on a bounded pool
+
+Issue [#40](https://github.com/opengwas/ogld/issues/40), part of epic
+[#1](https://github.com/opengwas/ogld/issues/1). Spec §6 defines the bytes; §10 defines reads.
+
+**Who decided.** The owner, 13 November 2026, on
+[epic #1's diagnosis](https://github.com/opengwas/ogld/issues/1#issuecomment-6866202125):
+decode numeric chunks directly and in parallel, clump chromosome by chromosome, and read
+only the variant columns clump returns. No format or public signature changes.
+
+## Context
+
+The diagnosis counted 51,641 fetches for GCST90476460, 33,394 distinct Near Band chunks.
+About 90% of clumping time was zarr's per-chunk machinery, serialised on its event loop;
+a direct zstd decode took 0.25–0.43 ms against about 2.4 ms through zarr. #32 already
+owns chunk planning, the cache budget, concurrent runs and kept shard indexes.
+
+## Decision
+
+`ogld/store/location.py` recognises a one-dimensional numeric array only when its declared
+codec chain is exactly sharding_indexed, with bytes then zstd internally and bytes then
+CRC32C in an end-located index. Both bytes codecs' declared endianness is honoured. Other
+chains, strings included, still use zarr. Shapes and keys come from the opened array's
+metadata, never the layout defaults or an array path.
+
+The decoder implements the published sharding_indexed index: a C-order array of uint64
+(offset, length) pairs, absolute offsets, with both fields all ones denoting an empty inner
+chunk. It verifies CRC32C with numcodecs before interpreting the index. Missing shards and
+empty inner chunks produce the array's fill value; the reader's existing refusal is unchanged.
+Truncated indexes and corrupt zstd frames raise, not fall back.
+
+Indexes and ranges use the store's async interface, through #32's wrapper, on local disk
+and HTTP alike. Only physically adjacent requested ranges are merged. The existing batch
+planner bounds each read's decoded fetch buffers and reserves an equal allowance for worker
+scratch chunks. A frame's decoded length is checked before copying into the output; decoding
+directly into a destination was rejected because numcodecs accepts a short frame without
+raising. At least one chunk can be read even when it exceeds the configured in-flight budget. The process shares one five-worker executor, reset after fork. A batch submits
+at most five jobs per range, not a pool per reader or chromosome. Cancellation drains
+already-running decode jobs before the read releases its buffers. The executor's standard
+Python shutdown waits for its workers. Applications still budget zarr's I/O helper threads
+separately; this is not a process-wide thread limit.
+
+The implementation was checked against zarr 3.4.2's `codecs/sharding.py`, especially
+`_ShardIndex`, `_get_index_chunk_spec`, `_shard_index_size` and `_shard_index_byte_range`.
+It calls none of those private methods. It uses public codec descriptions, metadata key
+encoding, StorePath.get and byte requests. Zarr remains the format, metadata parser,
+fallback reader and sole writer. numcodecs is already a direct runtime dependency.
+
+## Alternatives and costs
+
+- Keep zarr's per-chunk pipeline: rejected by the owner's diagnosis; it dominates the read.
+- Decode on zarr's event loop: rejected; zstd releases the GIL but would still run serially.
+- A pool per chromosome or reader: rejected; it silently multiplies threads and working sets.
+- A symmetric Near Band or lower Proxy Index floor: held back by the owner; these change the
+  format's cost, whereas this change removes implementation overhead without rebuilding.
+- Copy zarr's private sharding machinery: rejected; implementing this deliberately narrow
+  published chain makes fallback explicit and avoids a private-API dependency.
+
+The cache budget is not an RSS limit. A read also holds requested chunks, its result, one
+batch of decoded buffers and their cache copies, compressed ranges, and small indexes/job
+bookkeeping. Concurrent reads each have their own batch. Compressed bytes are not counted
+as decoded bytes; a codec's encoded size is not in general bounded by its decoded size.

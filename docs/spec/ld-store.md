@@ -876,6 +876,24 @@ which bounds its working memory beside the matrix itself. Validation's rules rea
 directly, in bounded windows: one pass over each chromosome, and a second read of the blocks
 `index.near` flags in a store it fails (§12).
 
+**Direct numeric decoding** (ogld#40; ADR 0009). For a one-dimensional numeric array whose
+metadata declares exactly sharding_indexed with bytes then zstd internally and bytes then
+CRC32C in an end-located shard index, `location.py` reads indexes and byte ranges through the
+store's async interface and decodes on one process-shared five-worker pool. Both declared
+byte orders are honoured. The index's uint64 offset/length pairs are absolute; both all ones
+means an empty chunk, which reads the declared fill value, just like a missing shard. CRC32C
+and zstd corruption raise. No private zarr codec/index API is called. Every other chain,
+including strings, goes through zarr unchanged. Zarr remains the format and the writer.
+
+The same per-read planner and cache budget apply to both paths. Direct decode reserves half
+its decoded-byte allowance for worker scratch chunks, and checks each frame's full decoded
+length before copying to the planned output. At least one chunk can be read even if its
+output plus scratch exceeds the allowance. No second decoded batch is queued. Each range
+submits at most five decode jobs. A failed piece cancels sibling fetches and drains running decode jobs before returning.
+Compressed ranges and small index/job bookkeeping are additional to the decoded-byte bound;
+the cache budget does not bound RSS. The pool is reset after fork and shared across readers,
+not multiplied per chromosome. Applications budget zarr's I/O helpers separately.
+
 **The cache and its bound** (ogld#4, ogld#32). An opened store's cache keeps decoded chunks and
 shard indexes up to `cache_bytes`, dropping the least recently used first. The caller sets it
 when opening the store, `ogld.open(location, cache_bytes=...)`: 4 GiB by default, and `0` keeps
