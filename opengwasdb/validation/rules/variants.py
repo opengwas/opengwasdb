@@ -20,10 +20,9 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.model.enums import PrimaryStorageLayout
-from opengwasdb.store.open import indels_reference_first
 from opengwasdb.validation import rule as validation_rule
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Skip, Target
-from opengwasdb.validation.rules.release import REQUIRED
+from opengwasdb.validation.rules.release import REQUIRED, current_builders_wrote, severity_owed
 from opengwasdb.variants import (
     VariantRecord,
     is_indexable_alid,
@@ -340,11 +339,6 @@ def _judge_indel_order(_target: Target, found: _IndelOrder) -> Iterator[str]:
         )
 
 
-def _spells_indels_reference_first(target: Target) -> bool:
-    """A Store from format 0.2.2 on; an earlier one, 0.2.1 included, sorts its indels."""
-    return indels_reference_first(target.store.manifest.format_version)
-
-
 @dataclass(frozen=True)
 class _LiftedOffPrimary:
     """How many table rows name a lifted variant on a non-primary contig, the first,
@@ -400,14 +394,14 @@ def _judge_lifted_off_primary(_target: Target, found: _LiftedOffPrimary) -> Iter
 @dataclass(frozen=True, kw_only=True)
 class _ErrorFromFormat(Fold[TableBlock, _LiftedOffPrimary]):
     """A fold that fails a release of a format whose builders cannot write what it finds
-    (0.2.2 or later, `indels_reference_first`) and warns on an earlier one, which says
+    (`current_builders_wrote`) and warns on an earlier one (`severity_owed`), which says
     what the release is without failing a Store nobody can fix in place (#376, #367).
 
     Where it finds nothing but cannot judge some rows, it warns that it did not."""
 
     def judged(self, target: Target, total: _LiftedOffPrimary) -> Iterator[validation_rule.Finding]:
         severity = validation_rule.Severity
-        level = severity.ERROR if _spells_indels_reference_first(target) else severity.WARNING
+        level = severity_owed(target, severity.ERROR)
         for message in self.judge(target, total):
             yield self.finding(target, message, level)
         if not total.n_rows and total.n_unjudged:
@@ -488,7 +482,8 @@ RULES: tuple[Rule, ...] = (
         name="variant_table.indel_order",
         kinds=Kind.RELEASE,
         after=(REQUIRED,),
-        when=_spells_indels_reference_first,
+        # A Store before 0.2.2, 0.2.1 included, sorts its indels (ADR 0079).
+        when=current_builders_wrote,
         scan=VARIANT_TABLE,
         zero=_IndelOrder(),
         measure=_indel_order,

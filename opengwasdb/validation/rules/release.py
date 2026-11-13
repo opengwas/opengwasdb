@@ -27,6 +27,7 @@ from opengwasdb.store.open import (
     WRITTEN_FORMAT_VERSIONS,
     UnsupportedFormatVersion,
     check_format_version_stamp,
+    indels_reference_first,
     newer_than_written,
     newer_than_written_text,
     split_format_version,
@@ -43,6 +44,27 @@ from opengwasdb.variants import (
 
 #: The rule every rule that opens a release's entries runs after.
 REQUIRED = "envelope.required"
+
+
+def current_builders_wrote(target: Target) -> bool:
+    """Whether the release is of a format this package's builders write: 0.2.2 on.
+
+    0.2.2 is the first format every build and every completion of this package
+    stamps (spec §21.3, ADR 0079). Such a release spells an indel's ALID
+    reference first (#381), holds an SE exception at the source's `float32`
+    (#355) and has dropped and counted every lift onto a non-primary contig
+    (#376). The rules judging those fixes ask this one question, so they move
+    together: a release before it was written by an earlier package, and nothing
+    rewrites it (#367).
+    """
+    return indels_reference_first(target.store.manifest.format_version)
+
+
+def severity_owed(target: Target, severity: Severity) -> Severity:
+    """``severity`` on a release `current_builders_wrote`; a warning on an earlier
+    one, which says what the release is without failing a Store nobody can fix in
+    place (#355, #376, #367)."""
+    return severity if current_builders_wrote(target) else Severity.WARNING
 
 
 def zarr_format(target: Target) -> list[str]:
