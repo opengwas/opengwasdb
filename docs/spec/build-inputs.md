@@ -185,8 +185,9 @@ ExcHet filter removes most; EUR chr21 and chr22 have none at MAC ≥ 20.
 **What the filters leave in HGDP+1kGP v2.** EUR chr22 has 1,093,149 records; 124,449 pass (all
 FILTER `.`, none without variance), 50.9% of the 244,656 that ADR 0001's sizes counted from the
 unfiltered gnomAD VCF. Those counts included non-PASS sites and applied no call-rate floor, for
-every panel but AMR. **Rough:** Near Band bytes go roughly with the square of variant density, so
-EUR's would be about 26% of the 308 GB in `ld-store.md`, near 80 GB; ogld#7 measures it.
+every panel but AMR. Near Band bytes go roughly with the square of variant density, so the builds
+came out well below what ADR 0001's counts predicted: ogld#7 measured EUR's Near Band at 69.4 GB,
+and the five stores at 532 GB in all (`ld-store.md` §6).
 
 ## 7. Missing genotypes and dosages
 
@@ -361,7 +362,7 @@ GRCh38, 1-based inclusive, each with its source and its source coordinates:
 
 - the 24 autosomal regions of Price et al. (2008, _AJHG_ 83:132) and Weale (2010), from the GRCh37
   table of the University of Michigan Genome Wiki, "Regions of high linkage disequilibrium (LD)"
-  (read 7 November 2026), as `ld-store.md` §7 recommends;
+  (read 7 November 2026);
 - the 17q21.31 inversion region, chr17:45,761,253–46,765,892, as Soto-Beasley et al. (2020,
   _Parkinsonism Relat Disord_, PMC7686230) give it in GRCh38;
 - the MHC (chr6:28,477,797–33,448,354 in GRCh37, the GRC's MHC) and the 8p23.1 inversion
@@ -370,7 +371,10 @@ GRCh38, 1-based inclusive, each with its source and its source coordinates:
   listed for their narrower sources.
 
 Each GRCh37 endpoint is lifted alone with UCSC's `hg19ToHg38.over.chain.gz`, so a region is never
-broken into fragments (the failure `ld-store.md` §7 describes in the widely copied GRCh38 table).
+broken into fragments. The widely copied GRCh38 table, plinkQC's `high-LD-regions-hg38-GRCh38.txt`
+and the Genome Wiki page's own, is such a fragmentary liftover: its only chr17 entry is 33 bp long,
+GRCh37's chr2:134.5–138 Mb becomes 119 bp, and chr3:89–97.5, chr5:98–100.5 and chr11:46–57 Mb are
+missing (both read 7 November 2026).
 No endpoint fell in a chain gap. Price's LCT region, chr2:134.5–138 Mb in GRCh37, is
 chr2:133,742,429–137,242,430.
 

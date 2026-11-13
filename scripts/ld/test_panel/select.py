@@ -3,6 +3,11 @@
 Every rule is deterministic: windows and anchors are parameters, and every choice among
 candidates takes the first by position (or the strongest, then the first). A component maps
 to the converted chromosome's record rows, so the README can say where each edge case is.
+
+A Far Pair chosen here is one a store keeps: its stops are `ogld.format.geometry`'s and its
+threshold the encoding's far code floor, called rather than copied
+(`docs/architecture/ownership.md`). The r it is judged on is the reference's own
+(`test_panel.reference`), which is independent of ogld by design.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from ogld.format import NEAR_BP, REncoding
+from ogld.format.geometry import stop_within
 from test_panel import pcs as pc_file
 from test_panel import reference
 from test_panel.params import Params
@@ -103,13 +109,17 @@ def _thin(pos: np.ndarray, eligible: np.ndarray, bp: int) -> list[int]:
 def _strong_far(
     z: np.ndarray, pos: np.ndarray, t_far: float, far_bp: int, encoding: REncoding
 ) -> list[tuple[float, int, int]]:
-    """(-Stored r^2, a, b) for every 3 Mb < d <= far_bp pair reaching t_far, strongest first."""
+    """(-Stored r^2, a, b) for every pair more than near_bp and at most far_bp apart whose code
+    reaches the far code floor (spec §3, §5), strongest first."""
     hits: list[tuple[float, int, int]] = []
+    near_stop, far_stop = stop_within(pos, NEAR_BP), stop_within(pos, far_bp)
+    floor = encoding.far_code_floor(t_far)
     for a in range(len(pos)):
-        lo = int(np.searchsorted(pos, pos[a] + NEAR_BP + 1))
-        hi = int(np.searchsorted(pos, pos[a] + far_bp, side="right"))
-        q2 = encoding.dequantise(encoding.quantise(z[lo:hi] @ z[a])) ** 2
-        hits += [(-float(q2[b]), a, lo + int(b)) for b in np.flatnonzero(q2 >= t_far)]
+        lo, hi = int(near_stop[a]), int(far_stop[a])
+        codes = encoding.quantise(z[lo:hi] @ z[a])
+        q2 = encoding.dequantise(codes) ** 2
+        kept = np.flatnonzero(np.abs(codes.astype(np.int32)) >= floor)
+        hits += [(-float(q2[b]), a, lo + int(b)) for b in kept]
     return sorted(hits)
 
 

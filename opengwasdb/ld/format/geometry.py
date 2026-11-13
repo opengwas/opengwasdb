@@ -78,17 +78,6 @@ def stop_within(position: npt.ArrayLike, distance: int) -> npt.NDArray[np.int64]
     return np.searchsorted(at, at + distance, side="right").astype(np.int64)
 
 
-def start_within(
-    position: npt.ArrayLike, distance: int, rows: npt.ArrayLike | None = None
-) -> npt.NDArray[np.int64]:
-    """For each of `rows` (all of them when None), the index of the first variant with
-    p_l − p_m ≤ distance: where the partners before it begin (spec §4). Exactly `distance`
-    away is within."""
-    at = np.asarray(position, dtype=np.int64)
-    of = at if rows is None else at[np.asarray(rows, dtype=np.int64)]
-    return np.searchsorted(at, of - distance, side="left").astype(np.int64)
-
-
 def within(gap: npt.ArrayLike, distance: int) -> npt.NDArray[np.bool_]:
     """Whether positions `gap` bp apart, either way round, are within `distance`: the edge
     the stops use, so exactly `distance` is within and one more is not."""

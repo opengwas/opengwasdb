@@ -33,14 +33,16 @@ from ogld.build.genotypes import Genotypes
 from ogld.build.inputs import Fileset, Records, records
 from ogld.format import InputError
 from ogld.identity import (
+    AUTOSOMES,
     IdentityError,
     Orientation,
+    chromosome_rank,
     normalise_chromosome,
     orient,
     resolve_reversed_indels,
+    variant_order_key,
 )
 
-AUTOSOMES: Final = tuple(str(n) for n in range(1, 23))
 PASSING_FILTERS: Final = ("PASS", ".")
 #: The reasons a record that passed the record rules is dropped, in the order they are judged.
 REASONS: Final = ("filter", "mac", "info", "zero_variance", "duplicate_reversed_indel")
@@ -155,7 +157,7 @@ def variant_set(filesets: list[Fileset], settings: Settings, samples: int) -> Pa
     _refuse_missing_calls(state)
     if not state.chromosomes:
         raise InputError(f"panel {state.panel}: no variant passes the filters (build-inputs §6)")
-    state.chromosomes.sort(key=lambda c: AUTOSOMES.index(c.name))
+    state.chromosomes.sort(key=lambda c: chromosome_rank(c.name))
     return state
 
 
@@ -354,7 +356,7 @@ def _close_pending(state: Pass) -> None:
         _orient(record, i, pending, state.panel) for i, record in enumerate(pending.alleles)
     ]
     kept = _one_per_alid(pending, oriented, state)
-    order = sorted(kept, key=lambda i: (oriented[i].position, oriented[i].alid))
+    order = sorted(kept, key=lambda i: variant_order_key(oriented[i]))
     found = _chromosome_of(pending, oriented, order, state.samples)
     state.chromosomes.append(found)
     if state.settings.scan:

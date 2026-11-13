@@ -7,8 +7,7 @@ into `tests/data/test-panel/store/`; the ticket runs it, and no test writes ther
 against real data in the format.
 
 These tests go through the store seam, `StoreReader`, not the queries, which are ogld#4's
-and ogld#6's. Paths the skeleton does not build raise NotImplementedError naming their
-ticket, so the other modules' contract tests keep failing for the right reason.
+and ogld#6's.
 """
 
 from __future__ import annotations

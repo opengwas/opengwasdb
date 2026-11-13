@@ -23,7 +23,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pytest
 import testdata
 
@@ -135,52 +134,35 @@ def test_the_top_level_names_are_the_public_surface() -> None:
         assert hasattr(ogld, name), name
 
 
-def no_rows() -> np.ndarray:
-    return np.array([0], dtype=np.int64)
-
-
-#: Every body that raises NotImplementedError, with the ticket that builds it. A ticket
-#: that builds one removes its entry, as it unmarks the contract tests it makes pass.
-UNBUILT: dict[str, tuple[Callable[[], object], str]] = {}
-
-
-@pytest.mark.parametrize("name", sorted(UNBUILT))
-def test_every_unbuilt_body_names_the_ticket_that_builds_it(name: str) -> None:
-    # A stub that raised a bare NotImplementedError would let a contract test xfail for the
-    # wrong ticket; each names its own.
-    call, ticket = UNBUILT[name]
-    with pytest.raises(NotImplementedError, match=rf"^{ticket}$"):
-        call()
-
-
-def test_the_list_of_unbuilt_bodies_is_complete() -> None:
+def test_no_body_in_ogld_is_a_stub() -> None:
+    # Epic #1 built every public body (#3–#6, #12–#17); a stub raising NotImplementedError(…)
+    # would be a call that looks wired and is not. An abstract method's bare
+    # `raise NotImplementedError` is not one.
     package = Path(ogld.__file__).parent
-    stubs = sum(
-        path.read_text().count("raise NotImplementedError(") for path in package.rglob("*.py")
-    )
-    assert stubs == len(UNBUILT), "every stub in ogld/ has an entry in UNBUILT, and no more"
+    stubs = [
+        f"{path.relative_to(package)}:{n}"
+        for path in sorted(package.rglob("*.py"))
+        for n, line in enumerate(path.read_text().splitlines(), start=1)
+        if "raise NotImplementedError(" in line
+    ]
+    assert stubs == [], f"stubs in ogld/: {stubs}"
 
 
 def test_ogld_imports_and_reads_the_test_store_without_pgenlib() -> None:
     # pgenlib is the builder's pgen reader. A reader-only install may lack it, so nothing
-    # outside the builder's read path may import it. Until the reader is built its stub
-    # raises NotImplementedError naming its ticket, the one error this lets through; once
-    # it is, the committed Test Store is opened and read, and any error fails the test.
+    # outside the builder's read path may import it: the committed Test Store is opened and
+    # read with pgenlib unimportable, and any error fails the test.
     code = (
         "import sys\n"
         "sys.modules['pgenlib'] = None\n"
         "import ogld\n"
-        "try:\n"
-        f"    store = ogld.open({str(TEST_STORE)!r})\n"
-        "    store.region('22', 30_000_000, 100_000)\n"
-        "except NotImplementedError as unbuilt:\n"
-        "    print('unbuilt', unbuilt)\n"
-        "else:\n"
-        "    print('read', store.provenance['n_variants'])\n"
+        f"store = ogld.open({str(TEST_STORE)!r})\n"
+        "store.region('22', 30_000_000, 100_000)\n"
+        "print('read', store.provenance['n_variants'])\n"
     )
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
-    assert re.fullmatch(r"unbuilt ogld#\d+|read \d+", done.stdout.strip()), done.stdout
+    assert re.fullmatch(r"read \d+", done.stdout.strip()), done.stdout
 
 
 def test_a_pgen_read_without_pgenlib_refuses_naming_the_extra() -> None:

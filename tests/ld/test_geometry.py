@@ -24,7 +24,6 @@ from ogld.format.geometry import (
     row_pairs,
     spans,
     spans_at,
-    start_within,
     stop_within,
     windows,
     within,
@@ -73,51 +72,33 @@ def test_a_near_row_holds_the_later_variants_within_near_bp(
     assert got.dtype == np.int64
 
 
-@given(data=st.data(), distance=distances)
-def test_the_near_start_is_the_first_variant_within_near_bp_before(
-    data: st.DataObject, distance: int
-) -> None:
-    position = data.draw(ascending(distance))
-    expected = [
-        min(m for m in range(len(position)) if position[row] - position[m] <= distance)
-        for row in range(len(position))
-    ]
-    assert start_within(position, distance).tolist() == expected
-    some = [row for row in range(len(position)) if row % 2 == 0][::-1]
-    assert start_within(position, distance, some).tolist() == [expected[row] for row in some]
-
-
 @pytest.mark.parametrize(("distance", "name"), [(NEAR_BP, "near_bp"), (FAR_BP, "far_bp")])
 def test_exactly_the_distance_apart_is_within_and_one_more_is_not(distance: int, name: str) -> None:
     position = [100, 100 + distance, 100 + distance + 1]
     # Row 0 reaches the variant exactly `distance` away, not the one 1 bp farther.
     assert stop_within(position, distance).tolist() == [2, 3, 3], name
     assert near_row_lengths(position, distance).tolist() == [1, 1, 0], name
-    assert start_within(position, distance).tolist() == [0, 0, 1], name
 
 
 def test_two_variants_at_one_position_see_each_other() -> None:
     position = [5, 5, 5, 9]
     assert stop_within(position, 3).tolist() == [3, 3, 3, 4]
     assert near_row_lengths(position, 3).tolist() == [2, 1, 0, 0]
-    assert start_within(position, 3).tolist() == [0, 0, 0, 3]
 
 
 def test_a_one_variant_chromosome_has_one_empty_row() -> None:
     assert stop_within([7], NEAR_BP).tolist() == [1]
     assert near_row_lengths([7], NEAR_BP).tolist() == [0]
-    assert start_within([7], NEAR_BP).tolist() == [0]
 
 
 def test_the_last_row_is_empty_and_its_stop_is_the_end() -> None:
     position = [1, 2, 3, 100]
     assert near_row_lengths(position, 10).tolist() == [2, 1, 0, 0]
     assert stop_within(position, 10).tolist()[-1] == len(position)
-    assert start_within(position, 10).tolist()[0] == 0
 
 
 def test_an_empty_chromosome_has_no_rows() -> None:
-    for got in (stop_within([], 5), start_within([], 5), near_row_lengths([], 5)):
+    for got in (stop_within([], 5), near_row_lengths([], 5)):
         assert got.tolist() == []
         assert got.dtype == np.int64
     lo, hi = position_rows([], [1, 4], [9, 6])

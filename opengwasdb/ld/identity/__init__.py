@@ -12,10 +12,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Final
 
+#: The autosomes, `1`–`22`, in the engine's order: the chromosomes a build reads (build-inputs §2).
+AUTOSOMES: Final = tuple(str(number) for number in range(1, 23))
 _VALID_BASES = frozenset("ACGT")
 _MISSING_CHROMOSOMES = frozenset({"", ".", "NA", "NAN", "NONE"})
-_AUTOSOMES = frozenset(str(number) for number in range(1, 23))
+_AUTOSOME_SET = frozenset(AUTOSOMES)
 _SEX_AND_MT = frozenset({"X", "Y", "MT"})
 _CHROMOSOME_ALIASES = {
     "23": "X",
@@ -81,7 +84,7 @@ def normalise_chromosome(label: str) -> str:
     canonical = _CHROMOSOME_ALIASES.get(chrom.upper())
     if canonical is not None:
         return canonical
-    if chrom in _AUTOSOMES:
+    if chrom in _AUTOSOME_SET:
         return chrom
     if chrom.upper() in _MISSING_CHROMOSOMES:
         raise IdentityError(f"chromosome is missing: {label!r}", "chromosome_missing")
@@ -150,24 +153,26 @@ def alid_locus(alid: str) -> tuple[str, int] | None:
     return chrom, int(pos)
 
 
-_CHROMOSOME_RANK = {
-    **{str(number): number for number in range(1, 23)},
-    "X": 23,
-    "Y": 24,
-    "MT": 25,
-}
+_CHROMOSOME_RANK = {name: rank for rank, name in enumerate((*AUTOSOMES, "X", "Y", "MT"), start=1)}
+
+
+def chromosome_rank(chrom: str) -> int:
+    """A chromosome's place in the engine's order, `1`–`22`, then `X`, `Y`, `MT` (spec §2): the
+    first field of `order_key`, so chromosomes are ordered by it alone, with no position or ALID
+    made up to call `order_key` with. The label passes through `normalise_chromosome` first, so
+    `chr1` ranks as `1`; a chromosome off that list has no rank and raises KeyError."""
+    return _CHROMOSOME_RANK[normalise_chromosome(chrom)]
 
 
 def order_key(chrom: str, position: int, alid: str) -> tuple[int, int, str]:
-    """The engine's variant order, as a sort key: chromosome (`1`–`22`, `X`, `Y`, `MT`), then
+    """The engine's variant order, as a sort key: chromosome (`chromosome_rank`), then
     position ascending, then ALID ascending (bytewise: an ALID is ASCII) at one position
-    (spec §2). The label passes through `normalise_chromosome` first, so `chr1` ranks as
-    `1`; a chromosome off that list has no rank and raises KeyError.
+    (spec §2). A chromosome with no rank raises KeyError.
 
     It takes the three fields the order is defined on, so a caller holding them, as a
     clumping's result does, orders by the engine's rule without re-forming an identity
     from the ALID's alleles (ogld#14)."""
-    return _CHROMOSOME_RANK[normalise_chromosome(chrom)], int(position), alid
+    return chromosome_rank(chrom), int(position), alid
 
 
 def variant_order_key(o: Orientation) -> tuple[int, int, str]:
@@ -176,7 +181,7 @@ def variant_order_key(o: Orientation) -> tuple[int, int, str]:
 
 
 def _is_canonical_chromosome(label: str) -> bool:
-    return label in _AUTOSOMES or label in _SEX_AND_MT
+    return label in _AUTOSOME_SET or label in _SEX_AND_MT
 
 
 def _is_canonical_position(text: str) -> bool:
@@ -226,9 +231,11 @@ def _require_a_split(o: Orientation, index: int, by_orientation: dict[bool, int]
 
 
 __all__ = [
+    "AUTOSOMES",
     "IdentityError",
     "Orientation",
     "alid_locus",
+    "chromosome_rank",
     "normalise_chromosome",
     "order_key",
     "orient",

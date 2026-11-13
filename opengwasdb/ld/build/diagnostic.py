@@ -151,7 +151,11 @@ def chance_rates(
 def _rate(
     units: npt.NDArray[np.float64], first: npt.NDArray[np.int64], second: npt.NDArray[np.int64]
 ) -> float:
-    r = (units @ units.T)[first, second]
+    return chance_rate((units @ units.T)[first, second])
+
+
+def chance_rate(r: npt.NDArray[np.float64]) -> float:
+    """The share of the pairs whose r is `r` at r² ≥ 0.01: a chance-LD rate (spec §7)."""
     return float((r * r >= RATE_R2).mean())
 
 

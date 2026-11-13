@@ -5,6 +5,13 @@ against: each passing variant's ALT count, residualised on an intercept and PC1.
 squares, then correlated. With k = 0 that is Pearson r. Genotypes are complete (ADR 0002), so no
 missing-call rule is involved. Signs are ALT-allele: the engine A1 is ogld#3's to form, and
 re-signing is the builder's job.
+
+**Independent by design.** This module imports nothing from ogld: the reference is what ogld's
+build, store and queries are tested against, so it must not share their code, or an off-by-one
+in an owner would be in the answer too. `pairs` therefore writes the far_bp edge out itself
+(at most far_bp apart is within), as a second computation of the rule
+`ogld.format.geometry` owns; the ownership page lists it under "Test oracles"
+(`docs/architecture/ownership.md`).
 """
 
 from __future__ import annotations
