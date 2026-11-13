@@ -24,7 +24,6 @@ import argparse
 import datetime
 import hashlib
 import importlib
-import math
 import resource
 import shutil
 import sys
@@ -40,8 +39,7 @@ import numpy.typing as npt
 import zarr
 
 import ogld
-from ogld.build import record
-from ogld.build.diagnostic import long_range_ld_regions
+from ogld.build import diagnostic, record, tiles
 from ogld.build.genotypes import Genotypes
 from ogld.build.inputs import fileset, read_keep
 from ogld.build.pc_check import K_MIN
@@ -54,11 +52,6 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = ROOT / "tests" / "data" / "test-panel" / "store"
 TEST_PANEL = ROOT / "tests" / "data" / "test-panel"
 PANEL_ID = "hgdp1kgp-v2-EUR-test-panel"
-#: The seed ogld#405's cross-chromosome pair set is drawn with (spec §7).
-DIAGNOSTIC_SEED = 405
-RATE_R2 = 0.01
-NEAR_100KB = 100_000
-QUANTILES = (0, 0.5, 0.9, 0.99, 1)
 
 
 @dataclass(frozen=True)
@@ -288,30 +281,33 @@ def residual_fit(z: npt.NDArray[np.float64], design: npt.NDArray[np.float64]) ->
     return (design @ beta).T
 
 
-def long_range_mask(vs: VariantSet) -> npt.NDArray[np.bool_]:
-    """True for each variant inside a Long-Range LD Region (build-inputs §9)."""
-    rows = long_range_ld_regions()
-    inside = np.zeros(len(vs.variants), dtype=np.bool_)
-    for _, chrom, start, end, *_ in rows:
-        on = (vs.variants.chrom == chrom) & (vs.variants.position >= int(start))
-        inside |= on & (vs.variants.position <= int(end))
-    return inside
+def change_pairs(vs: VariantSet) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+    """The PC Diagnostic's pairs for the change in r, as rows (i, j) of the Variant Set: within
+    100 kb, both variants outside the Long-Range LD Regions. The build's own definition, called
+    rather than copied: `tiles.change_pairs` over `diagnostic.outside_regions` (spec §7)."""
+    first, second = [], []
+    for chrom, (start, stop) in chromosome_ranges(vs.variants.chrom).items():
+        position = vs.variants.position[start:stop]
+        band = tiles.Band.of(position, FAR_BP, diagnostic.CHANGE_BP)
+        outside = diagnostic.outside_regions(chrom, position)
+        t, partner, clear = tiles.change_pairs(band, outside, 0, len(position))
+        first.append(start + t[clear])
+        second.append(start + partner[clear])
+    return np.concatenate(first), np.concatenate(second)
 
 
 def pc_diagnostic(vs: VariantSet, k: int) -> dict[str, object]:
     """What PC Adjustment did to chance LD, measured on the Test Panel (spec §7): every
     chr21 × chr22 pair, the share at r² ≥ 0.01 before and after, what sampling predicts, and the
-    quantiles of the change in r within 100 kb outside the Long-Range LD Regions."""
+    exact quantiles of the change in r over `change_pairs`. The rate, the window, the regions,
+    the quantiles and the sampling formula are `ogld.build.diagnostic`'s; only the pairs differ
+    from a build's, because the Test Panel holds every chr21 × chr22 pair and no other."""
     before, after = unit_columns(vs, 0), unit_columns(vs, k)
-    chrom, pos = vs.variants.chrom, vs.variants.position
+    chrom = vs.variants.chrom
     across = np.triu(chrom[:, None] != chrom[None, :], k=1)
     r_before, r_after = before @ before.T, after @ after.T
-    near = np.triu(
-        (chrom[:, None] == chrom[None, :]) & (pos[None, :] - pos[:, None] <= NEAR_100KB), k=1
-    )
-    outside = ~long_range_mask(vs)
-    near &= outside[:, None] & outside[None, :]
-    change = np.quantile((r_after - r_before)[near], QUANTILES)
+    i, j = change_pairs(vs)
+    change = np.quantile((r_after - r_before)[i, j], diagnostic.QUANTILES)
     n = panel_data().panel().n_samples
     return {
         "pairs": {
@@ -319,13 +315,15 @@ def pc_diagnostic(vs: VariantSet, k: int) -> dict[str, object]:
                 "every chr21 × chr22 pair of the Test Panel's variants: the Test Panel holds no "
                 "other cross-chromosome pairs, so none is drawn and the seed is recorded only"
             ),
-            "seed": DIAGNOSTIC_SEED,
+            "seed": diagnostic.SEED,
             "n_pairs": int(across.sum()),
         },
-        "rate_r2_ge_0_01_unadjusted": float((r_before[across] ** 2 >= RATE_R2).mean()),
-        "rate_r2_ge_0_01_adjusted": float((r_after[across] ** 2 >= RATE_R2).mean()),
-        "rate_r2_ge_0_01_sampling": math.erfc(math.sqrt(RATE_R2 * (n - k - 1) / 2)),
-        "near_100kb_change": {f"{q:g}": float(c) for q, c in zip(QUANTILES, change, strict=True)},
+        "rate_r2_ge_0_01_unadjusted": diagnostic.chance_rate(r_before[across]),
+        "rate_r2_ge_0_01_adjusted": diagnostic.chance_rate(r_after[across]),
+        "rate_r2_ge_0_01_sampling": diagnostic.sampling_rate(n, k),
+        "near_100kb_change": {
+            f"{q:g}": float(c) for q, c in zip(diagnostic.QUANTILES, change, strict=True)
+        },
     }
 
 

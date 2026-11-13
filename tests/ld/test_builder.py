@@ -23,6 +23,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 import testdata
+from contract import support
 from store_copies import FLOOR, codes_at
 
 import ogld
@@ -50,15 +51,9 @@ def passing() -> npt.NDArray[np.int64]:
 
 
 def reference_at(k: int, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
-    """The reference r among `rows`, signed to A1; NaN where the reference holds no pair."""
-    i, j, r = fixtures.reference_pairs(k)
-    where = np.full(len(testdata.variants()), -1)
-    where[rows] = np.arange(len(rows))
-    a, b = where[i], where[j]
-    out = np.full((len(rows), len(rows)), np.nan)
-    out[a, b] = out[b, a] = r
-    np.fill_diagonal(out, 1.0)
-    return out
+    """The reference r among `rows`, signed to A1; NaN where the reference holds no pair: the
+    test oracle's matrix (`support.reference_matrix`)."""
+    return support.reference_matrix(k, tuple(int(r) for r in rows))
 
 
 @pytest.mark.parametrize("k", [10, 0])

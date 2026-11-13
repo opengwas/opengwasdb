@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Each chromosome's Far Pairs, and the chunks a list matrix's far read touches (ogld#8).
 
-`pair_r` reads the Proxy Index row of every listed variant once a list spans more than near_bp
-(spec §10). A separate Far Pairs component, the upper triangle of the index's entries more than
-near_bp apart (ogld#31), would read only those. Per chromosome this counts the Far Pairs, and
-for the benchmark's 500-variant draws (`latency.Sample`, seeds 8–10) the distinct chunks of one
-array each would read: the index's as the store chunks it, and a Far Pairs array chunked as
-`ogld.store.layout` chunks the index. chr22 holds 0.85 Far Pairs a row and the store 15.5, so
-chr22 holds few of them; this says what the separate component saves elsewhere. Far Pairs
-cluster in a few rows (long-range LD), and a row with none touches no chunk, so the saving in
-chunks is set by how many listed rows hold any, not by the average a row.
+Before ogld#31, `pair_r` read the Proxy Index row of every listed variant once a list spanned
+more than near_bp (spec §10). This measured what a separate Far Pairs component, the index's
+entries more than near_bp apart in their earlier row, would save, and its output,
+`docs/benchmarks/results/far_pairs.json`, is the evidence `docs/benchmarks/latency.md`,
+`docs/benchmarks/far-pairs.md` and spec §11 cite for ogld#31's `far/`. It is kept so those
+figures can be made again. Per chromosome it counts the Far Pairs from the Proxy Index by the
+store's own rule (`_beyond_near`, which `far/` is written by), and for the benchmark's
+500-variant draws (`latency.Sample`, seeds 8–10) the distinct chunks of one array each would
+read: the index's as the store chunks it, and a Far Pairs array chunked as `ogld.store.layout`
+chunks the index. Far Pairs cluster in a few rows (long-range LD), and a row with none touches
+no chunk, so the saving in chunks is set by how many listed rows hold any, not by the average a
+row.
 
     pixi run -e dev python scripts/bench/far_pairs.py [--out far_pairs.json] [--chrom 6 11]
 
@@ -27,6 +30,7 @@ import latency
 import numpy as np
 
 from ogld.format.geometry import indptr_of, owners, spans
+from ogld.store.assembly import _beyond_near
 from ogld.store.layout import SIDE
 
 #: Index entries read at a time.
@@ -43,7 +47,7 @@ def far_lengths(c: Any, near_bp: int) -> np.ndarray:
         b = max(b, a + 1)
         partner = np.asarray(c.index_partner[ip[a] : ip[b]]).astype(np.int64)
         owner = owners(np.diff(ip[a : b + 1]), np.arange(a, b, dtype=np.int64))
-        far = (partner > owner) & (c.position[partner] - c.position[owner] > near_bp)
+        far = (partner > owner) & _beyond_near(c.position, owner, partner, near_bp)
         out += np.bincount(owner[far], minlength=len(out))
         a = b
     return out

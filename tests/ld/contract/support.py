@@ -1,21 +1,19 @@
-"""What the contract tests share: the Test Panel's paths, the Test Store, the marker, and the
-Test Panel read as ALIDs and as reference matrices.
+"""What the contract tests share: the Test Panel's paths, the Test Store, and the Test Panel
+read as ALIDs and as reference matrices.
 
-The contract tests are epic #1's tickets written as tests before the tickets start. Each is
-marked `contract("ogld#<n>")`: a strict xfail that expects NotImplementedError, so it fails
-until its ticket lands and errors the moment it passes while still marked. A ticket's job
-is to make its own module pass, unmarking each test it makes pass, without changing a
-public signature (tests/test_surface.py).
+The contract tests are epic #1's tickets written as tests before the tickets started, one module
+a ticket. Every ticket has landed, so each test now holds its ticket's behaviour as an ordinary
+test, with no mark, and none may change a public signature (tests/test_surface.py).
 
 Every test calls the ogld function it is about before it reads the Test Panel through lane
 2d's loader, `tests/testdata.py`. A build is given the Test Panel's paths, `PANEL`, which
 need no loader; `check_panel_paths` holds them to the loader's once the call has returned.
-So an unbuilt function surfaces as the expected failure, never as a missing loader or file.
+So a failing call surfaces as itself, never as a missing loader or file.
 The Test Store is written from `reference_r(10)` by the walking skeleton's script into
 `tests/data/test-panel/store/`; no test writes there.
 
 The expected-value helpers are vectorised and cached, so the default tier stays within its
-2 s per test once the stubs are real (CONTRIBUTING.md, "Tests").
+2 s per test (CONTRIBUTING.md, "Tests").
 """
 
 from __future__ import annotations
@@ -31,7 +29,6 @@ from typing import BinaryIO
 
 import numpy as np
 import numpy.typing as npt
-import pytest
 
 # The Test Store's encoding as the tests compute it, re-exported: the contract tests read it here.
 from store_copies import FLOOR as FLOOR
@@ -74,11 +71,6 @@ PANEL = PanelPaths(
     keep=TEST_PANEL / "panel.keep",
     pcs=TEST_PANEL / "pcs.eigenvec",
 )
-
-
-def contract(ticket: str) -> pytest.MarkDecorator:
-    """The mark every contract test carries: fails until `ticket` builds what it tests."""
-    return pytest.mark.xfail(strict=True, raises=NotImplementedError, reason=ticket)
 
 
 def panel_data() -> ModuleType:

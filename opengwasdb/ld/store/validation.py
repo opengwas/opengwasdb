@@ -45,7 +45,7 @@ from ogld.format.geometry import (
 )
 from ogld.format.provenance import FORMAT_VERSION, VALIDATION_RULES
 from ogld.format.semantics import InputError
-from ogld.identity import IdentityError, alid_locus, orient, variant_order_key
+from ogld.identity import IdentityError, alid_locus, chromosome_rank, orient
 from ogld.store.layout import chromosomes_listed, never_data, shown_fill
 from ogld.store.location import open_group
 
@@ -700,20 +700,16 @@ def _provenance_threshold(store: _Store) -> _Problems:
 # ------------------------------------------------------------------ variants
 
 
-def _rank(name: str) -> int:
-    return variant_order_key(orient(name, 1, "A", "C"))[0]
-
-
 @_rule("variants.chromosomes")
 def _variants_chromosomes(store: _Store) -> _Problems:
     ranges = store.chromosomes()
     expected, previous = 0, 0
     for name, start, stop in ranges:
-        if _rank(name) <= previous:
+        if chromosome_rank(name) <= previous:
             yield "variants", f"chromosome {name} is out of chromosome order (spec §2)"
         if start != expected:
             yield "variants", f"chromosome {name} starts at row {start:,}, not {expected:,}"
-        expected, previous = stop, _rank(name)
+        expected, previous = stop, chromosome_rank(name)
     size = store.array("variants/position").shape[0]
     if expected != size:
         yield "variants", f"the ranges cover {expected:,} rows of the {size:,} in variants/"

@@ -21,6 +21,13 @@
 > non-public panel; the public Test Panel slice is committed. The decisions below stand as written
 > otherwise.
 
+> **Clarified on 13 November 2026** (see "Clarification, 13 November 2026" at the end). Where a
+> pair at exactly t_far lands is spec §3's table, at each store's own scale ([ADR
+> 0004](./0004-per-store-encoding.md)) and on the unrelated samples each build keeps, with the Far
+> Pairs their own component ([ADR 0007](./0007-far-pairs-beside-the-proxy-index.md)). The
+> Context's "stored on every HGDP+1kGP panel at k = 10" and the 7 November clarification's "on
+> EAS and SAS it reads as the Bound" no longer describe it.
+
 Issue [#2](https://github.com/opengwas/ogld/issues/2), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 This ADR records the owner's decisions of 7 November 2026 (epic #1, "Decisions already taken"),
 and the options they rejected. It also records what the prototypes measured. The format itself is
@@ -253,3 +260,24 @@ table in decision 3 is left as it was decided.
 
 The format version stays `0.1.0`: no LD Store has been written in it yet.
 
+## Clarification, 13 November 2026
+
+Two statements above say where a pair whose true r² is exactly t_far lands, and neither holds
+now. The Context says it "is stored on every HGDP+1kGP panel at k = 10" and reads as the Bound
+on UK Biobank EUR; the 7 November clarification's "Panel sizes" says spec §3's table uses the
+phased callset's sizes and that on EAS and SAS the pair reads as the Bound. Both were worked at
+× 32767, on each panel's whole sample count. Since then three decisions moved the answer:
+
+- [ADR 0004](./0004-per-store-encoding.md) gave each store its own scale: × 511 for the five
+  HGDP+1kGP stores, × 2047 for UK Biobank EUR.
+- [ADR 0002](./0002-build-inputs.md), decision 11, builds each HGDP+1kGP store on its unrelated
+  samples: EUR 665, AFR 608, EAS 724, SAS 672 and AMR 341. AMR's t_far at k = 10 is therefore
+  0.0631515, not the Context's 0.062.
+- [ADR 0007](./0007-far-pairs-beside-the-proxy-index.md) made the Far Pairs their own component
+  again, so a pair beyond `near_bp` that is stored is a Far Pair in `far/<chrom>/`, as well as
+  an entry of the Proxy Index.
+
+Spec §3's table is the answer, and the only one: at k = 10 a pair at exactly t_far is a Far Pair
+on HGDP+1kGP SAS and on UK Biobank EUR, and reads as the Bound "r² < t_far" on HGDP+1kGP EUR,
+AFR, EAS and AMR. The Context, decision 3's table and the 7 November clarification are left as
+they were written.

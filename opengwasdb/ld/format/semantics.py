@@ -14,6 +14,8 @@ from enum import StrEnum
 import numpy as np
 import numpy.typing as npt
 
+from ogld.format.geometry import within
+
 
 class AnswerKind(StrEnum):
     """The Pair Answer for two Variant Set variants (spec §8, `CONTEXT.md`).
@@ -45,9 +47,9 @@ def answer_kind(
         raise ValueError(f"a distance is |p_j − p_i|, so never negative: {distance}")
     if not -1.0 <= r_hat <= 1.0:
         raise ValueError(f"r̂ must be a Stored r in [−1, 1]: {r_hat}")
-    if not same_chromosome or distance > far_bp:
+    if not same_chromosome or not within(distance, far_bp):
         return AnswerKind.NOT_MEASURED
-    if distance <= near_bp or r_hat * r_hat >= t_far:
+    if within(distance, near_bp) or r_hat * r_hat >= t_far:
         return AnswerKind.STORED
     return AnswerKind.BOUND
 
@@ -73,9 +75,10 @@ def answer_kinds(
     there is) each raise, as a fill or a broken read.
     """
     same = chrom[:, None] == chrom[None, :]
-    distance = np.abs(position[:, None].astype(np.int64) - position[None, :].astype(np.int64))
-    near = same & (distance <= near_bp)
-    far = same & (distance > near_bp) & (distance <= far_bp)
+    gap = position[:, None].astype(np.int64) - position[None, :].astype(np.int64)
+    in_near = within(gap, near_bp)
+    near = same & in_near
+    far = same & ~in_near & within(gap, far_bp)
     unstored = np.isnan(r)
     if (unstored & near).any():
         raise ValueError("a NaN within near_bp: the Near Band is complete, so the read is broken")

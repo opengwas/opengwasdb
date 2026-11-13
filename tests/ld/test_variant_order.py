@@ -1,11 +1,11 @@
-"""The engine's variant order, as `ogld.identity.order_key` and `variant_order_key` sort it
-(spec §2)."""
+"""The engine's variant order, as `ogld.identity.order_key` and `variant_order_key` sort it, and
+a chromosome's place in it, `chromosome_rank` (spec §2)."""
 
 from __future__ import annotations
 
 import pytest
 
-from ogld.identity import order_key, orient, variant_order_key
+from ogld.identity import AUTOSOMES, chromosome_rank, order_key, orient, variant_order_key
 
 RECORDS = [
     ("X", 5, "A", "C"),
@@ -55,3 +55,20 @@ def test_a_chromosome_the_engine_does_not_rank_has_no_key() -> None:
 def test_order_key_reads_a_chr_prefix_as_the_engine_does() -> None:
     assert order_key("chr1", 5, "1:5:A:C") == order_key("1", 5, "1:5:A:C")
     assert order_key("chrX", 5, "X:5:A:C") > order_key("chr22", 9, "22:9:A:C")
+
+
+def test_a_chromosome_s_rank_is_the_first_field_of_its_order() -> None:
+    # The Variant Set's chromosomes and validation's ranges are ordered by this alone, with no
+    # position or ALID made up to call order_key with (review of epic #1).
+    names = ["X", "22", "2", "MT", "10", "Y", "9", "1"]
+    assert sorted(names, key=chromosome_rank) == ["1", "2", "9", "10", "22", "X", "Y", "MT"]
+    for name in names:
+        assert chromosome_rank(name) == order_key(name, 5, f"{name}:5:A:C")[0]
+    assert chromosome_rank("chrX") == chromosome_rank("X")
+    with pytest.raises(KeyError):
+        chromosome_rank("HLA-A")
+
+
+def test_the_autosomes_are_1_to_22_in_the_engine_s_order() -> None:
+    assert tuple(str(n) for n in range(1, 23)) == AUTOSOMES
+    assert sorted(AUTOSOMES, key=chromosome_rank) == list(AUTOSOMES)

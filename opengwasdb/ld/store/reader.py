@@ -39,6 +39,7 @@ from ogld.format.geometry import (
     indptr_of,
     local_rows,
     near_address,
+    near_row_lengths,
     owners,
     position_rows,
     row_pairs,
@@ -397,11 +398,9 @@ class StoreReader:
         if c is None:
             return out
         local = local_rows(np.arange(start, stop, dtype=np.int64), c.start)
-        # Each row's partners inside the region and within near_bp: its stop among the
-        # region's own positions, so a row's slice ends at the region's last row.
-        length = stop_within(c.position[local], self._provenance["near_bp"]) - (
-            np.arange(len(local)) + 1
-        )
+        # Each row's partners inside the region and within near_bp: its Near Band row length
+        # among the region's own positions, so a row's slice ends at the region's last row.
+        length = near_row_lengths(c.position[local], self._provenance["near_bp"])
         first = c.near_indptr[local]
         for a, b in blocks((indptr_of(length), _PAIRS_PER_STEP)):
             for i, codes in enumerate(self._runs(c.near_r, first[a:b], length[a:b]), start=a):
