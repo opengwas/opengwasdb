@@ -2149,6 +2149,15 @@ whatever the key; no finding depends on the key. One listed
 before the read's first fold is then decided when the read ends, and every rule that
 runs after it is judged as if it had been decided first.
 
+A Dense grid's read may be spread across forked workers (`validate --n-workers`, §20.1,
+issue #315). Each band is measured wherever it is read and added in band order: every
+fold's total, the first failure on the read, a plane reported undecodable, and each
+riding check's share are the ones one process reaching the bands in order reaches, so
+the report is the same at any worker count. The EAF exception table is still read once
+a pass, by the process driving it, and the digest key is drawn there once and shared
+with every worker. An association sequence's read, and every check of the Store
+Variant Table, `analyses.tsv` and the envelope, run in one process.
+
 `validate_store(path, rules={...})` runs the named rules and the rules they run after,
 and refuses a name this table does not list. `ValidationResult.failed()` names the
 rules that reported an error. `validate --format json` reports each finding's rule,
@@ -2285,6 +2294,17 @@ Command-line validation (`ogdb validate`) and inspection (`ogdb info`) provide b
   remain the `message`s of the `error` and `warning` records in that order. Order is
   the one thing that changed: a release that named the same defects in a different
   order on each run names them in one.
+- `ogdb validate <store> --n-workers N` reads each Dense grid's association scan on N
+  forked workers, one band a worker at a time, and reports exactly what one process
+  reports: the same records, in the same order, text and JSON (§20.0, issue #315).
+  `N` is at least 1, and 1, the default, reads every band in one process. A worker
+  holds one band, which the decoded-band budget bounds (issue #254): a worker's cost is
+  its private memory, beside its proportional share (PSS); its `VmHWM` also counts the
+  pages it shares with the driver from the fork, which are the driver's. A failure of
+  the worker pool itself -- a worker that dies, a fork the host refuses -- ends the run
+  with an error naming the band whose result the pass was waiting for; no finding is
+  reported about a read that never finished. A worker's failure to read its own band is
+  a finding, as it is in one process.
 - `ogdb info <store> --format json` outputs a single JSON object on `stdout` representing the store release manifest with decomposed structured encoding:
   ```json
   {

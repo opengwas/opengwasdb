@@ -551,14 +551,30 @@ def info(
     typer.echo(f"opengwasdb_version: {__version__}")
 
 
+# Issue #315: validation's band pass. A module-level singleton, as above, so it adds
+# no B008 finding.
+_VALIDATE_WORKERS_OPTION = typer.Option(
+    1,
+    "--n-workers",
+    "--workers",
+    min=1,
+    help=(
+        "Fork process-pool size for each Dense grid's association scan, one band a "
+        "worker at a time, capped by a quarter of available memory; the report is "
+        "the same at any size. Other checks run in one process."
+    ),
+)
+
+
 @app.command("validate")
 def validate_command(
     store_path: Path,
     output_format: ReportFormat = _REPORT_FORMAT_OPTION,
+    n_workers: int = _VALIDATE_WORKERS_OPTION,
 ) -> None:
     """Validate a local Store Release."""
 
-    result = validate_store(store_path)
+    result = validate_store(store_path, n_workers=n_workers)
     if output_format is ReportFormat.json:
         # `findings` names the rule behind each record, and the skips beside the
         # failures and warnings: a rule that had nothing to judge is not a pass, and

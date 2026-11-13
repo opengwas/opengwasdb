@@ -12,7 +12,7 @@ only the index. A subset the pass could not carry is compared as before.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from functools import partial
 
 import numpy as np
@@ -20,11 +20,12 @@ import numpy as np
 from opengwasdb.encoding import EAF_BASELINE, EAF_REFERENCE
 from opengwasdb.layouts.dense.indexed_subsets import (
     INDEXED_SUBSETS_GROUP,
+    SeenRows,
     SubsetRide,
     subset_rides,
     validate_indexed_subsets,
 )
-from opengwasdb.validation.rule import Check, Kind, Ride, Rule, Target
+from opengwasdb.validation.rule import Check, Kind, Ride, Rider, Rule, Target
 from opengwasdb.validation.rules.associations import grid_counts
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.scans import ASSOCIATIONS, Block, eaf_table, per_variant
@@ -35,7 +36,7 @@ INDEXED = "subsets.indexed"
 _RIDES = f"{INDEXED}/rides"
 
 
-def _board(target: Target) -> Callable[[Block], None] | None:
+def _board(target: Target) -> Rider[Block] | None:
     """Ready a ride for every published subset, and say what each band is handed to."""
     group = target.group
     if INDEXED_SUBSETS_GROUP not in group:
@@ -51,7 +52,7 @@ def _board(target: Target) -> Callable[[Block], None] | None:
             table.watch(ride.watch)
             ride.saw_table = partial(table.saw_all, ride.watch)
     target.remember(_RIDES, lambda: rides)
-    return partial(_see, rides)
+    return _Subsets(rides)
 
 
 def _share_per_variant(target: Target, ride: SubsetRide) -> None:
@@ -63,13 +64,41 @@ def _share_per_variant(target: Target, ride: SubsetRide) -> None:
         ride.reference = per_variant(target, EAF_REFERENCE)[ride.subset]
 
 
-def _see(rides: Mapping[str, SubsetRide], block: Block) -> None:
-    """Hand one band to every subset's ride; one the band breaks reads for itself."""
-    r0 = block.offset // block.n_analyses
-    for ride in rides.values():
-        if not ride.broken:
+class _Subsets(Rider[Block]):
+    """Every subset's ride, handed one band at a time; one the band breaks reads for
+    itself.
+
+    A band's digests are made wherever the band was decoded and added here in band
+    order (issue #315): each ride refuses rows that do not follow the last it added.
+    """
+
+    def __init__(self, rides: Mapping[str, SubsetRide]) -> None:
+        self.rides = rides
+
+    def part(self, block: Block) -> dict[str, SeenRows | None]:
+        """Each unbroken ride's share of the band; None for one the band broke."""
+        r0 = block.offset // block.n_analyses
+        parts: dict[str, SeenRows | None] = {}
+        for name, ride in self.rides.items():
+            if not ride.broken:
+                try:
+                    parts[name] = ride.part(
+                        r0, r0 + block.rows, block.n_analyses, partial(_plane, block)
+                    )
+                except Exception:  # that subset is compared against a read of its own
+                    parts[name] = None
+        return parts
+
+    def join(self, part: dict[str, SeenRows | None]) -> None:
+        for name, ride in self.rides.items():
+            if ride.broken:
+                continue
+            seen = part.get(name)
+            if seen is None:
+                ride.broken = True
+                continue
             try:
-                ride.see(r0, r0 + block.rows, block.n_analyses, partial(_plane, block))
+                ride.join(seen)
             except Exception:  # that subset is compared against a read of its own
                 ride.broken = True
 

@@ -176,3 +176,122 @@ def small_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def small_copy(tmp_path: Path, small_seed: Path) -> Path:
     """A copy of the small release, so a test cannot change the module's."""
     return copytree(small_seed, tmp_path / "store.opengwasdb")
+
+
+@pytest.fixture(scope="module")
+def completed_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A Reference-Completed residual release of 200 variants by two Analyses, with
+    a published subset `hm3` of every third variant, built once (#314, #315)."""
+    from residual_stores import dense_completed
+    from test_indexed_subsets import _build
+
+    from opengwasdb.variants import VariantAxis
+
+    root = tmp_path_factory.mktemp("one-pass")
+    store, _observed, _panel = dense_completed(root)
+    axis = VariantAxis(store)
+    try:
+        alids = [axis.by_index(row).alid for row in range(0, axis.n_variants, 3)]
+    finally:
+        axis.close()
+    listing = root / "subset.alid.txt"
+    listing.write_text("\n".join(alids) + "\n", encoding="utf-8")
+    _build(store, "hm3", listing)
+    return store
+
+
+#: The varied release's variants: 120, by two Analyses.
+VARIED_VARIANTS = 120
+
+
+@pytest.fixture(scope="module")
+def varied_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """120 variants by two Analyses, each cell a different Z, with a published subset
+    `hm3` of every other variant (#314, #315). Its Z climbs past the loosest Top-Hit
+    cutoff in its last rows, so its Top-Hit Index holds cells there."""
+    from dense_sources import build_dense_from_records
+    from test_indexed_subsets import _build
+
+    from opengwasdb.layouts.dense.build import NormalisedAssociation
+    from opengwasdb.variants import CanonicalVariant
+
+    root = tmp_path_factory.mktemp("varied")
+    records = [
+        NormalisedAssociation(
+            analysis_id=f"a{col}",
+            variant=CanonicalVariant("1", row + 1, "A", "G"),
+            z=0.01 + 0.03 * row + 0.5 * col,
+            se=0.2,
+            eaf=0.3,
+        )
+        for col in range(2)
+        for row in range(VARIED_VARIANTS)
+    ]
+    store = root / "store.opengwasdb"
+    build_dense_from_records(
+        records, store, store_id="varied", release_id="varied-v1",
+        reference_assembly="GRCh38", chunk_shape=(VARIED_VARIANTS, 2),
+    )
+    listing = root / "subset.alid.txt"
+    listing.write_text(
+        "\n".join(f"1:{row + 1}:A:G" for row in range(0, VARIED_VARIANTS, 2)) + "\n",
+        encoding="utf-8",
+    )
+    _build(store, "hm3", listing)
+    return store
+
+
+@pytest.fixture(scope="module")
+def rich_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """#387's rich release, 320 variants by four Analyses -- residual SE, an overflow
+    Z, an EAF and an SE exception, missing cells -- with its standard subset."""
+    from test_indexed_subsets import _build, _write_standard_variant_list, build_rich_store
+
+    root = tmp_path_factory.mktemp("rich")
+    store = build_rich_store(root / "store.opengwasdb")
+    _build(store, "hm3", _write_standard_variant_list(root / "subset.alid.txt"))
+    return store
+
+
+#: The Hybrid seed's on-panel variants, and the off-panel ones each trait adds.
+PANEL_VARIANTS = 40
+OFF_PANEL = 4
+
+
+@pytest.fixture(scope="module")
+def hybrid_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A Hybrid release of three traits over a 40-variant panel, each with four
+    off-panel variants in its Overflow, and a subset of every other panel variant."""
+    from test_hybrid_build import _make_manifest, _make_vcf
+
+    from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
+
+    root = tmp_path_factory.mktemp("hybrid")
+    entries = []
+    for trait in range(3):
+        rows = [
+            f"1\t{1_000 * (i + 1)}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t"
+            f"{0.05 * (i + 1) * (trait + 1):.4f}:{0.1 + 0.01 * trait:.3f}:{0.1 + 0.015 * i:.4f}\n"
+            for i in range(PANEL_VARIANTS + (OFF_PANEL if trait else 0) * (trait + 1))
+        ]
+        entries.append((f"t{trait}", _make_vcf(root, f"t{trait}", rows), f"Trait {trait}"))
+    panel = root / "panel.txt"
+    panel.write_text(
+        "".join(f"1:{1_000 * (i + 1)}:A:G\n" for i in range(PANEL_VARIANTS)), encoding="utf-8"
+    )
+    store = root / "hybrid.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        _make_manifest(root, entries),
+        store,
+        reference_panel=panel,
+        store_id="h",
+        release_id="v1",
+        source_assembly="GRCh38",
+    )
+    listing = root / "subset.alid.txt"
+    listing.write_text(
+        "".join(f"1:{1_000 * (i + 1)}:A:G\n" for i in range(0, PANEL_VARIANTS, 2)),
+        encoding="utf-8",
+    )
+    build_indexed_subset(store, "hm3", listing, reference_assembly="GRCh38")
+    return store

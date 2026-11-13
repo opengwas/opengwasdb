@@ -18,11 +18,17 @@ watches the same pages go by (issue #314).
 
 A `Block` is the seam: `dense_bands` makes one from a grid band, `sequence_windows`
 from a run of a sequence, and `Block.of` from arrays a test holds.
+
+A Dense grid's pass can be read apart (`GridSplit`, issue #315): the process
+driving the pass cuts each band's span of the table from its one read of it, and a
+forked worker reads the band's planes from that alone. An association sequence's
+pass is read in one process.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from functools import cached_property, partial
@@ -31,7 +37,7 @@ from typing import Any, NamedTuple
 import numpy as np
 
 from opengwasdb.associations import Tally, non_canonical
-from opengwasdb.encoding.banding import band_limits, window_cells
+from opengwasdb.encoding.banding import BYTES_PER_CELL, band_limits, band_rows, window_cells
 from opengwasdb.encoding.codec import (
     EAF_BASELINE,
     EAF_REFERENCE,
@@ -51,7 +57,7 @@ from opengwasdb.encoding.planes import (
 )
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store.arrays import SE_COEFFICIENTS, array_length, inner_chunk_of
-from opengwasdb.validation.rule import Kind, Scan, Target, Unreadable
+from opengwasdb.validation.rule import Kind, Scan, Split, Target, Unreadable
 
 log = logging.getLogger(__name__)
 
@@ -350,7 +356,11 @@ class Block:
             return self._locate_in_sequence(cells)
         r0 = self.offset // self.n_analyses
         order, sorted_rows = cells.by_row
-        lo, hi = np.searchsorted(sorted_rows, (r0, r0 + self.rows))
+        # Bounds of the rows' own dtype: searched for with Python ints, numpy would copy
+        # every row of the tier to `int64` first -- 1.12 GB a call for OGS-00011's
+        # 140,478,063-cell tier, which each band's folds search several times.
+        bounds = np.asarray((r0, r0 + self.rows), dtype=sorted_rows.dtype)
+        lo, hi = np.searchsorted(sorted_rows, bounds)
         found = np.arange(lo, hi, dtype=np.int64) if order is None else order[lo:hi]
         flat = (cells.rows[found].astype(np.int64) - r0) * self.n_analyses + cells.cols[found]
         return found, flat
@@ -436,46 +446,128 @@ class _RowWindow:
         return self._band[rows.start - self._r0 : rows.stop - self._r0]
 
 
+class _Opened(NamedTuple):
+    """Every array a band reads, as one process opened them: the grid's group, its
+    planes, and the side tables its codecs look exceptions up in."""
+
+    group: Any
+    z: Any
+    se: Any
+    eaf: Any | None
+    imputed: Any | None
+    eaf_codec: StoreCodec
+    se_codec: StoreCodec
+    z_codec: StoreCodec
+
+    @classmethod
+    def of(cls, group: Any, encoding: Any) -> _Opened:
+        return cls(
+            group,
+            group["z"],
+            group["se"],
+            group["eaf"] if "eaf" in group else None,
+            group["imputed"] if "imputed" in group else None,
+            StoreCodec(encoding, eaf_exceptions=EafExceptionTable.open(group)),
+            StoreCodec(encoding, se_exceptions=SeExceptionTable.open(group)),
+            StoreCodec(encoding, z_overflow=ZOverflowTable.open(group)),
+        )
+
+
+@dataclass(frozen=True)
+class GridBand:
+    """One band of a Dense grid as a worker reads it (issue #315).
+
+    Its rows, and its span of the EAF exception table -- every entry its cells can
+    name -- cut from the pass's one read of the table where the pass is driven,
+    with how many entries the pass had handed out once it was cut.
+    """
+
+    r0: int
+    r1: int
+    span: tuple[np.ndarray, np.ndarray] | None = field(default=None, repr=False)
+    taken: int = 0
+
+
 class _DenseGrid:
-    """What every band of one Dense grid shares: arrays, codecs and per-variant vectors."""
+    """What every band of one Dense grid shares: arrays, codecs and per-variant vectors.
+
+    The per-variant vectors and the SE coefficients are read once, where the pass is
+    driven, and a forked worker inherits them as numbers. Every array a band reads
+    -- the planes, and the side tables the codecs look exceptions up in -- a worker
+    opens for itself after the fork, through the array seam, and the target's group
+    with them (issue #315, ADR 0056).
+    """
 
     def __init__(
         self, target: Target, on_panel: np.ndarray | None, completed: bool
     ) -> None:
         group = target.group
         encoding = target.encoding
-        self.group, self.encoding, self.on_panel = group, encoding, on_panel
+        self.encoding, self.on_panel = encoding, on_panel
         # The mask is read for the panel substitution whenever it is there, but only a
         # completed grid's mask flags imputed cells.
         self.completed = completed
-        self.z, self.se_array = group["z"], group["se"]
-        self.eaf_array = group["eaf"] if "eaf" in group else None
-        self.imputed = group["imputed"] if "imputed" in group else None
+        self._target = target
+        self._opened, self._pid = _Opened.of(group, encoding), os.getpid()
         self.baseline = per_variant(target, "eaf_baseline") if "eaf_baseline" in group else None
         self.reference = (
             per_variant(target, "eaf_reference") if "eaf_reference" in group else None
         )
         self.decodes_eaf = holds_frequencies(target)
-        self.eaf_codec = StoreCodec(encoding, eaf_exceptions=EafExceptionTable.open(group))
         # Each band takes its span of the exception table from the pass's one read of
         # it, rather than looking the table up again (issue #314).
-        self.eaf_table = None if self.eaf_array is None else eaf_table(target)
-        self.se_codec = StoreCodec(encoding, se_exceptions=SeExceptionTable.open(group))
-        self.z_codec = StoreCodec(encoding, z_overflow=ZOverflowTable.open(group))
+        self.eaf_table = None if self._opened.eaf is None else eaf_table(target)
         self.coefficients = (
             np.asarray(group["se_coefficients"][:], dtype=np.float32)
             if encoding.se.is_residual
             else None
         )
         self.missing = StoreCodec(encoding).missing_mask
-        self.shape = (int(self.z.shape[0]), int(self.z.shape[1]))
+        z = self._opened.z
+        self.shape = (int(z.shape[0]), int(z.shape[1]))
 
-    def band(self, r0: int, r1: int) -> Block:
-        z_codes = np.asarray(self.z[r0:r1])
-        se_codes = np.asarray(self.se_array[r0:r1])
-        eaf_codes = None if self.eaf_array is None else np.asarray(self.eaf_array[r0:r1])
-        imputed = None if self.imputed is None else np.asarray(self.imputed[r0:r1])
-        span = None if self.eaf_table is None else self.eaf_table.take(r1 * self.shape[1])
+    @property
+    def opened(self) -> _Opened:
+        """Every array a band reads, as this process opened them: a forked worker
+        opens its own, and reads nothing through the driver's handles."""
+        if os.getpid() != self._pid:
+            group = self._target.reopen()
+            self._opened, self._pid = _Opened.of(group, self.encoding), os.getpid()
+        return self._opened
+
+    @property
+    def group(self) -> Any:
+        return self.opened.group
+
+    @property
+    def eaf_codec(self) -> StoreCodec:
+        return self.opened.eaf_codec
+
+    @property
+    def se_codec(self) -> StoreCodec:
+        return self.opened.se_codec
+
+    @property
+    def z_codec(self) -> StoreCodec:
+        return self.opened.z_codec
+
+    def units(self, limits: Iterable[tuple[int, int]]) -> Iterator[GridBand]:
+        """Each band `limits` names, with its span of the table cut from the pass's read."""
+        for r0, r1 in limits:
+            if self.eaf_table is None:
+                yield GridBand(r0, r1)
+            else:
+                span = self.eaf_table.take(r1 * self.shape[1])
+                yield GridBand(r0, r1, span, self.eaf_table.taken)
+
+    def read(self, band: GridBand) -> Block:
+        """The band's planes, read as codes and decoded from them, in this process."""
+        r0, r1, span = band.r0, band.r1, band.span
+        opened = self.opened
+        z_codes = np.asarray(opened.z[r0:r1])
+        se_codes = np.asarray(opened.se[r0:r1])
+        eaf_codes = None if opened.eaf is None else np.asarray(opened.eaf[r0:r1])
+        imputed = None if opened.imputed is None else np.asarray(opened.imputed[r0:r1])
         eaf, failure = self._eaf(eaf_codes, imputed, r0, r1, span)
         return Block(
             offset=r0 * self.shape[1],
@@ -486,7 +578,7 @@ class _DenseGrid:
             z_decoder=partial(self._z, r0, r1),
             se_decoder=partial(_dense_band_se, self, eaf=eaf, eaf_failure=failure, r0=r0, r1=r1),
             eaf_span=span,
-            eaf_taken=0 if self.eaf_table is None else self.eaf_table.taken,
+            eaf_taken=band.taken,
         )
 
     def _z(self, r0: int, r1: int, codes: np.ndarray) -> np.ndarray:
@@ -616,10 +708,17 @@ class _Banding(NamedTuple):
 
     limits: Callable[[Target], Iterator[tuple[int, int]]]
     blocks: Callable[[Target, Iterator[tuple[int, int]]], Iterator[Block]]
+    #: The blocks as units forked workers read (issue #315); None reads the layout's
+    #: pass in one process.
+    split: Callable[[Target, Iterator[tuple[int, int]]], Split[Block]] | None = None
 
 
 _BANDING: dict[Kind, _Banding] = {
-    Kind.GRID: _Banding(_grid_limits, lambda target, limits: _dense_blocks(target, limits)),
+    Kind.GRID: _Banding(
+        _grid_limits,
+        lambda target, limits: _dense_blocks(target, limits),
+        lambda target, limits: GridSplit(target, limits),
+    ),
     Kind.CSR: _Banding(_sequence_limits, lambda target, limits: _sequence_blocks(target, limits)),
 }
 
@@ -630,16 +729,83 @@ def dense_bands(target: Target) -> Iterator[Block]:
 
 
 def _dense_blocks(target: Target, limits: Iterable[tuple[int, int]]) -> Iterator[Block]:
-    """The bands `limits` names, read as the grid's own chunks."""
-    group = target.group
-    on_panel = None
-    if "on_panel" in group:
-        on_panel = target.remember(
-            "on_panel", lambda: np.asarray(group["on_panel"][:]), until=SCAN_NAME
-        )
-    grid = _DenseGrid(target, on_panel, completed(target))
-    for r0, r1 in limits:
-        yield grid.band(r0, r1)
+    """The bands `limits` names, read as the grid's own chunks.
+
+    Through the same split a pass's workers read them by (issue #315): one process
+    reading every band reads exactly the bands the workers would.
+    """
+    split = GridSplit(target, limits)
+    for band in split.units():
+        yield split.read(band)
+
+
+#: What a forked worker holds beyond its band's decoded budget: its interpreter, the
+#: read's compressed chunks, the codecs' intermediates, and the pages of the parent's it
+#: writes to. A worker held 0.26-0.27 GiB of its own between bands on OGS-00011's Dense
+#: Component and OGS-00009 (#315), so this is about twice that. A band itself peaked at
+#: 54.7 and 56.2 bytes a cell there, inside the 96 `BYTES_PER_CELL` budgets.
+WORKER_FLOOR_BYTES = 512 * 1024**2
+#: The per-Analysis totals one band's outcome carries, at most: one for each fold
+#: that counts per Analysis, with room to spare.
+RESULT_TOTALS = 16
+
+
+class GridSplit(Split[Block]):
+    """A Dense grid's bands as units a forked worker reads alone (issue #315).
+
+    The pass's driver cuts each band's span of the EAF exception table from its one
+    read of the table, so the table is still read once a pass, in order, and every
+    rule watching it sees each page there; a worker is handed only its band's span.
+    A worker holds one band at a time, which the decoded-band budget bounds (#254).
+    """
+
+    def __init__(self, target: Target, limits: Iterable[tuple[int, int]]) -> None:
+        group = target.group
+        on_panel = None
+        if "on_panel" in group:
+            on_panel = target.remember(
+                "on_panel", lambda: np.asarray(group["on_panel"][:]), until=SCAN_NAME
+            )
+        self.limits = limits
+        self.grid = _DenseGrid(target, on_panel, completed(target))
+
+    @property
+    def unit_bytes(self) -> int:
+        """A band's decoded budget, its rows at `BYTES_PER_CELL` a cell, and a
+        worker's floor beside it."""
+        return WORKER_FLOOR_BYTES + self._rows() * self.grid.shape[1] * BYTES_PER_CELL
+
+    @property
+    def result_bytes(self) -> int:
+        """A band's outcome as the driving process holds it: a few totals per
+        Analysis for each fold, and the band's share of the EAF exception table."""
+        n_variants, n_analyses = self.grid.shape
+        table = self.grid.eaf_table
+        entries = 0 if table is None else table.total
+        bands = max(-(-n_variants // max(self._rows(), 1)), 1)
+        return RESULT_TOTALS * 8 * n_analyses + 12 * -(-entries // bands)
+
+    def _rows(self) -> int:
+        n_variants, n_analyses = self.grid.shape
+        rows = band_rows(n_analyses, inner_chunk_of(self.grid.opened.z)[0])
+        return min(rows, max(n_variants, 1))
+
+    def units(self) -> Iterator[GridBand]:
+        return self.grid.units(self.limits)
+
+    def read(self, unit: GridBand) -> Block:
+        return self.grid.read(unit)
+
+    def describe(self, unit: GridBand) -> str:
+        return f"rows {unit.r0:,} to {unit.r1:,}"
+
+
+def _split(target: Target) -> Split[Block] | None:
+    """The target's pass as units workers read, from its layout's entry in `_BANDING`."""
+    banding = _BANDING.get(target.kind)
+    if banding is None or banding.split is None:
+        return None
+    return banding.split(target, banding.limits(target))
 
 
 # --- an association sequence, a window of consecutive cells at a time ---
@@ -922,5 +1088,10 @@ def _association_blocks(target: Target) -> int:
 
 
 ASSOCIATIONS: Scan[Block] = Scan(
-    SCAN_NAME, _blocks, _read_failure, _association_blocks, finish=_finish_tables
+    SCAN_NAME,
+    _blocks,
+    _read_failure,
+    _association_blocks,
+    finish=_finish_tables,
+    split=_split,
 )

@@ -78,6 +78,7 @@ def validate_store(
     source_assembly: str | None = None,
     chain_file: str | Path | None = None,
     rules: Collection[str] | None = None,
+    n_workers: int = 1,
 ) -> ValidationResult:
     """Validate a Store Release directory by running every Validation Rule that applies.
 
@@ -89,11 +90,17 @@ def validate_store(
 
     ``rules`` runs only the named rules and the rules they run after; a name no
     rule has is refused before anything is read.
+
+    ``n_workers`` spreads the bands of each Dense grid's association scan across
+    that many forked workers (issue #315); the report is the one a single process
+    makes. Every other check, and an association sequence's scan, runs here.
     """
     if rules is not None:
         selected(RULES, rules)
+    if n_workers < 1:
+        raise ValueError(f"n_workers must be at least 1, got {n_workers}")
     options = ValidationOptions(
-        source, fidelity_samples, fidelity_seed, source_assembly, chain_file
+        source, fidelity_samples, fidelity_seed, source_assembly, chain_file, n_workers
     )
     errors: list[str] = []
     store = _load_manifest(Path(path), errors)

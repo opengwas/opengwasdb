@@ -10,16 +10,26 @@ ends, and the folds are judged in registration order, so the fold is judged afte
 it or skipped behind it. Its `when` is asked before the read. An exception,
 from a rule or from its `when`, fails the one rule that raised it; findings it
 made before are kept.
+
+A scan that can be read apart is spread over the run's `n_workers` forked workers
+(issue #315): each block is measured where it is read, and added here in block
+order, so the report is the one a single process makes at any worker count.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections import deque
+from collections.abc import Callable, Collection, Generator, Iterable, Iterator, Sequence
+from concurrent.futures import BrokenExecutor
+from contextlib import closing
+from dataclasses import dataclass, field
 from functools import cache, partial
 from typing import Any
 
+from opengwasdb.build.ordered_pool import ordered_map
+from opengwasdb.encoding.memory import pool_workers
 from opengwasdb.encoding.timing import (
     PhaseTimer,
     format_duration,
@@ -32,10 +42,12 @@ from opengwasdb.validation.rule import (
     Check,
     Finding,
     Fold,
+    Rider,
     Rule,
     Scan,
     Severity,
     Skip,
+    Split,
     Target,
     Unreadable,
     ValidationResult,
@@ -48,8 +60,6 @@ _PASSED, _FAILED, _SKIPPED = "passed", "failed", "skipped"
 #: A riding check waiting for its scan's pass, which decides it (issue #314).
 _WAITING = "waiting"
 
-#: What one block is handed to, beside the folds: a riding check's share of the pass.
-_Rider = Callable[[Any], None]
 
 @cache
 def untimed_rules() -> frozenset[str]:
@@ -511,7 +521,7 @@ def _blocks(rule: Rule, state: str) -> bool:
 
 
 #: A riding check boarded on a pass, by name, and what it hands each block to.
-_Boarded = tuple[str, _Rider]
+_Boarded = tuple[str, Rider[Any]]
 
 
 def _carries(rule: Check, target: Target) -> bool:
@@ -524,7 +534,7 @@ def _carries(rule: Check, target: Target) -> bool:
         return False
 
 
-def _board(rule: Check, target: Target) -> _Rider | None:
+def _board(rule: Check, target: Target) -> Rider[Any] | None:
     """What `rule` hands each block to; a ride that fails to board is no ride, and
     the check reads for itself."""
     assert rule.ride is not None
@@ -563,6 +573,13 @@ class _Pass:
 
     The checks riding the pass are handed each block after the folds; they report
     nothing here, and one that raises is handed no more blocks (issue #314).
+
+    A scan that can be read apart (`Scan.split`) is spread over the run's forked
+    workers (issue #315). Each block is measured wherever it is read, into what it
+    holds for the pass (`_Measured`), and added here in block order, through the
+    same code a pass read in this process adds it with: the totals, the first
+    failure, the plane reported unreadable and every rider's parts are the ones a
+    single process reaches, at any worker count.
     """
 
     def __init__(
@@ -578,10 +595,16 @@ class _Pass:
         self.failures: dict[str, Finding] = {}
         self.blocked: dict[str, str] = {}
         self.unreadable_by: str | None = None
+        #: The riders that left the pass, which no worker need hand a block again.
+        self.left: set[str] = set()
 
     def measuring(self) -> list[Fold[Any, Any]]:
         stopped = self.failures.keys() | self.blocked.keys()
         return [fold for fold in self.folds if fold.name not in stopped]
+
+    def stopped(self) -> frozenset[str]:
+        """The folds and riders this pass no longer adds a block's outcome to."""
+        return frozenset(self.failures.keys() | self.blocked.keys() | self.left)
 
     def drive(self) -> None:
         started = time.monotonic()
@@ -593,17 +616,68 @@ class _Pass:
         total = self.counted(label)
         overran = False
         try:
-            for done, block in enumerate(self.scan.blocks(self.target), start=1):
-                for fold in self.measuring():
-                    self.measure(fold, block)
-                self.hand(block)
-                overran = self.report_progress(label, done, total, started, overran)
+            with closing(self.measured(label, total)) as blocks:
+                for done, measured in enumerate(blocks, start=1):
+                    if measured.read_failure is not None:
+                        self.read_failed(measured.read_failure)
+                        return
+                    self.add(measured)
+                    overran = self.report_progress(label, done, total, started, overran)
+        except PoolFailure:  # the run's failure, not the Store's
+            raise
         except Exception as exc:  # the read itself failed, so no fold saw all of it
-            measuring = self.measuring()
-            if measuring:
-                self.report(measuring[0], exc)
-                for fold in measuring[1:]:
-                    self.blocked[fold.name] = measuring[0].name
+            self.read_failed(self.scan.failure(self.target, exc))
+
+    def measured(self, label: str, total: int | None) -> Generator[_Measured]:
+        """What each block holds for the pass, in block order: read here, or by workers."""
+        n_workers = self.target.options.n_workers
+        split = None
+        if n_workers > 1 and self.scan.split is not None:
+            split = self.scan.split(self.target)
+        if split is None:
+            for block in self.scan.blocks(self.target):
+                yield _measured(self.scan, self.target, self.measuring(), self.riders, block)
+            return
+        work = _Work(self.scan, self.target, split, list(self.folds), list(self.riders))
+        units = _units(split, self.scan, self.target)
+        first = next(units, None)
+        if first is None:
+            return
+        # The first block is read here, so what the folds and riders load on their
+        # first block -- a Top-Hit Index's tiers, say -- is loaded once, before the
+        # workers fork, and each inherits it rather than loading a copy of its own.
+        yield _measure_unit(work, (first, self.stopped()))
+        workers = _pool_size(n_workers, split, label, None if total is None else total - 1)
+        yield from self.spread(work, units, workers, label)
+
+    def spread(
+        self, work: _Work, units: Iterator[Any], workers: int, label: str
+    ) -> Generator[_Measured]:
+        """The blocks after the first, read by `workers` forked workers, in block order.
+
+        A worker's failure to read its band comes back as that band's outcome, a
+        finding like any other. Anything that escapes the pool itself fails the run
+        (`PoolFailure`), naming the band whose result the pass was waiting for: a
+        worker that died and broke the pool (`WorkerLost`), a fork the host refused.
+        The Store is not judged on a read that never finished.
+        """
+        in_flight: deque[tuple[int, Any]] = deque()
+
+        def items() -> Iterator[tuple[Any, frozenset[str]]]:
+            for band, unit in enumerate(units, start=1):
+                in_flight.append((band, unit))
+                yield unit, self.stopped()
+
+        try:
+            for outcome in ordered_map(_measure_unit, items(), workers, shared=work):
+                in_flight.popleft()
+                yield outcome
+        except BrokenExecutor as exc:
+            died = "a forked worker died"
+            raise WorkerLost(_awaited(label, died, work.split, in_flight)) from exc
+        except Exception as exc:  # the pool's own failure, not a band's
+            failed = f"the worker pool failed ({exc!r})"
+            raise PoolFailure(_awaited(label, failed, work.split, in_flight)) from exc
 
     def counted(self, label: str) -> int | None:
         """How many blocks the scan expects, or None where the count cannot be made.
@@ -640,36 +714,48 @@ class _Pass:
         log_progress(log, label, done, total, started, every=progress_every(total))
         return overran
 
-    def hand(self, block: Any) -> None:
-        """Hand the block to every riding check still reading; one that raises stops,
-        and judges without the pass, as if it had not ridden it."""
+    def add(self, measured: _Measured) -> None:
+        """Add what one block held to every fold still measuring, then to every rider."""
+        for fold in self.measuring():
+            outcome = measured.folds[fold.name]
+            if outcome.message is None:
+                try:
+                    self.totals[fold.name] = self.totals[fold.name] + outcome.measure
+                except Exception as exc:  # this fold's failure, and no other's
+                    self.failures[fold.name] = _failure(fold, self.target, exc)
+            elif outcome.unreadable:
+                self.unreadable(fold, outcome.reported_by, outcome.message)
+            else:
+                self.failures[fold.name] = fold.finding(
+                    self.target, outcome.message, Severity.ERROR
+                )
+        self.join(measured.parts)
+
+    def join(self, parts: dict[str, _Part]) -> None:
+        """Join each riding check's part of the block; one that raised, on either side,
+        leaves the pass and judges without it, as if it had not ridden it."""
         for name, rider in list(self.riders):
+            part = parts[name]
             try:
-                rider(block)
+                if part.raised is not None:
+                    raise part.raised
+                rider.join(part.value)
             except Exception as exc:  # that check reads for itself instead
                 log.info("%s on %s: left the pass (%s)", name, self.target.label, exc)
                 self.riders.remove((name, rider))
+                self.left.add(name)
 
-    def measure(self, fold: Fold[Any, Any], block: Any) -> None:
-        """Add one block's measure to `fold`'s total; a fold that raises stops there."""
-        try:
-            self.totals[fold.name] = self.totals[fold.name] + fold.measure(self.target, block)
-        except Unreadable as exc:
-            self.unreadable(fold, exc)
-        except Exception as exc:  # this fold's failure, and no other's
-            self.failures[fold.name] = _failure(fold, self.target, exc)
-
-    def unreadable(self, fold: Fold[Any, Any], exc: Unreadable) -> None:
+    def unreadable(self, fold: Fold[Any, Any], reported_by: str | None, message: str) -> None:
         """Skip `fold` behind the rule that reports the plane, or report it once here.
 
         A named reporter that is not measuring in this pass reports nothing, so the
         plane is reported here instead: an undecodable plane is never only a skip.
         """
-        if exc.reported_by is not None and exc.reported_by in self.reporting():
-            self.blocked[fold.name] = exc.reported_by
+        if reported_by is not None and reported_by in self.reporting():
+            self.blocked[fold.name] = reported_by
         elif self.unreadable_by is None:
             self.unreadable_by = fold.name
-            self.report(fold, exc)
+            self.failures[fold.name] = fold.finding(self.target, message, Severity.ERROR)
         else:
             self.blocked[fold.name] = self.unreadable_by
 
@@ -677,9 +763,165 @@ class _Pass:
         """The folds of this pass that are still measuring, or have failed: they report."""
         return {fold.name for fold in self.folds if fold.name not in self.blocked}
 
-    def report(self, fold: Fold[Any, Any], exc: Exception) -> None:
-        message = self.scan.failure(self.target, exc)
-        self.failures[fold.name] = fold.finding(self.target, message, Severity.ERROR)
+    def read_failed(self, message: str) -> None:
+        """The read stopped part-way: the first fold still measuring reports it, and
+        the others stand behind that one."""
+        measuring = self.measuring()
+        if measuring:
+            first = measuring[0]
+            self.failures[first.name] = first.finding(self.target, message, Severity.ERROR)
+            for fold in measuring[1:]:
+                self.blocked[fold.name] = first.name
+
+
+class PoolFailure(RuntimeError):
+    """The worker pool itself failed -- a fork the host refused, say -- so the pass
+    cannot finish: a failure of the run, not a finding about the Store (issue #315)."""
+
+
+class WorkerLost(PoolFailure):
+    """A forked worker died -- killed for memory, say -- and broke the pool."""
+
+
+def _awaited(
+    label: str, what: str, split: Split[Any], in_flight: deque[tuple[int, Any]]
+) -> str:
+    """Words for a pool failure: what failed, and the band whose result the pass was
+    waiting for -- the oldest still out, not necessarily the one a dead worker held."""
+    if not in_flight:
+        return f"{label}: {what} before any band was handed to it"
+    band, unit = in_flight[0]
+    return (
+        f"{label}: {what} while the pass was waiting for the result of band {band} "
+        f"({split.describe(unit)}), with {len(in_flight) - 1} more band(s) in flight; "
+        "the pass cannot say what they hold"
+    )
+
+
+@dataclass(frozen=True)
+class _Outcome:
+    """What one fold made of one block: its measure, its failure, or a plane it could
+    not read, worded where the block was read."""
+
+    measure: Any = None
+    #: The failure's words; for a plane it could not read, the scan's words for it.
+    message: str | None = None
+    unreadable: bool = False
+    #: The rule an unreadable plane names as reporting it, if any.
+    reported_by: str | None = None
+
+
+@dataclass(frozen=True)
+class _Part:
+    """What one riding check took from one block, or what it raised taking it."""
+
+    value: Any = None
+    raised: Exception | None = None
+
+
+@dataclass(frozen=True)
+class _Measured:
+    """What one block holds for a pass: each fold's outcome and each rider's part,
+    or why the block could not be read (issue #315).
+
+    It is made wherever the block was read and added where the pass is driven, so it
+    holds what the block adds to the totals, never the block itself.
+    """
+
+    folds: dict[str, _Outcome] = field(default_factory=dict)
+    parts: dict[str, _Part] = field(default_factory=dict)
+    read_failure: str | None = None
+
+
+def _measured(
+    scan: Scan[Any],
+    target: Target,
+    folds: Iterable[Fold[Any, Any]],
+    riders: Iterable[_Boarded],
+    block: Any,
+) -> _Measured:
+    """Measure one block for every fold given, and take every rider's part of it."""
+    outcomes: dict[str, _Outcome] = {}
+    for fold in folds:
+        try:
+            outcomes[fold.name] = _Outcome(measure=fold.measure(target, block))
+        except Unreadable as exc:
+            outcomes[fold.name] = _Outcome(
+                message=scan.failure(target, exc), unreadable=True, reported_by=exc.reported_by
+            )
+        except Exception as exc:  # this fold's failure, and no other's
+            outcomes[fold.name] = _Outcome(message=_failed_words(exc))
+    parts: dict[str, _Part] = {}
+    for name, rider in riders:
+        try:
+            parts[name] = _Part(value=rider.part(block))
+        except Exception as exc:  # that check reads for itself instead
+            parts[name] = _Part(raised=_Left(str(exc)))
+    return _Measured(outcomes, parts)
+
+
+class _Left(Exception):
+    """Why a rider left the pass, carried as words from the process that read the block."""
+
+
+@dataclass(frozen=True)
+class _Unsplit:
+    """A pass whose units stopped part-way: the scan's words for why."""
+
+    message: str
+
+
+def _units(split: Split[Any], scan: Scan[Any], target: Target) -> Iterator[Any]:
+    """The split's units, in block order, ending with why they stopped if they did.
+
+    The units are cut where the pass is driven -- a band's span of a side table among
+    them -- so a failure there is the read's failure at that block, after every block
+    before it has been added, exactly as it is when one process reads every block.
+    """
+    try:
+        yield from split.units()
+    except Exception as exc:  # the read stops at this block, after the ones before it
+        yield _Unsplit(scan.failure(target, exc))
+
+
+@dataclass(frozen=True)
+class _Work:
+    """What a pass's workers inherit at the fork: the scan, its target and split, and
+    the folds and riders each block is measured for."""
+
+    scan: Scan[Any]
+    target: Target
+    split: Split[Any]
+    folds: list[Fold[Any, Any]]
+    riders: list[_Boarded]
+
+
+def _measure_unit(work: _Work, item: tuple[Any, frozenset[str]]) -> _Measured:
+    """Read one unit and measure its block for every fold and rider not yet stopped."""
+    unit, stopped = item
+    if isinstance(unit, _Unsplit):
+        return _Measured(read_failure=unit.message)
+    try:
+        block = work.split.read(unit)
+    except Exception as exc:  # the read itself failed at this block
+        return _Measured(read_failure=work.scan.failure(work.target, exc))
+    folds = [fold for fold in work.folds if fold.name not in stopped]
+    riders = [(name, rider) for name, rider in work.riders if name not in stopped]
+    return _measured(work.scan, work.target, folds, riders, block)
+
+
+def _pool_size(n_workers: int, split: Split[Any], label: str, units: int | None) -> int:
+    """How many of `n_workers` the pass forks: no more than it has blocks left for,
+    and no more than fit a quarter of the host's available memory beside this
+    process, one block's working set a worker (issue #321's `pool_workers`)."""
+    return pool_workers(
+        n_workers,
+        split.unit_bytes,
+        what=label,
+        unit="band",
+        units=units,
+        result_bytes=split.result_bytes,
+    )
 
 
 class _Phase:
@@ -709,7 +951,12 @@ class _Phase:
 
 
 def _failure(rule: Rule, target: Target, exc: Exception) -> Finding:
-    return rule.finding(target, f"validation failed: {exc}", Severity.ERROR)
+    return rule.finding(target, _failed_words(exc), Severity.ERROR)
+
+
+def _failed_words(exc: Exception) -> str:
+    """How a rule that raised is reported: the one wording, wherever it raised."""
+    return f"validation failed: {exc}"
 
 
 def _contained(

@@ -471,6 +471,127 @@ and separately two Z cells of one unit exchanged, each give the tip's finding, i
 byte-identical; head compares one of the three units it reaches cell by cell, the one
 whose digests disagreed.
 
+## Amendment: a Dense grid's band pass is spread across forked workers (issue #315)
+
+With the planes read once (#314), the association scan was 86% of OGS-00009's
+validation, one process decoding 2,798 bands in turn. `validate --n-workers N` spreads
+those bands over the shared ordered fork pool the SE and Top-Hit Index phases use
+(#221), and the report is the one a single process makes.
+
+**One band a task, added in band order.** Every block is measured by one function
+wherever it is read (`_measured`), into what it adds to the pass: each fold's measure,
+or its failure, or a plane it could not read, each worded where the exception was
+raised; and each riding check's part. The driver adds those in band order through the
+same code a single process adds them with, so a fold's total is the same sum in the
+same order, the first failure reported is the first in band order, a plane reported
+undecodable is reported by the fold that meets it first in band order, and a read that
+stops part-way stops at the same band, with every band before it added. Workers do not
+know which folds the driver has stopped since it submitted their band; what they
+measure past a fold's failure is discarded.
+
+**The driver reads the first band.** What the folds load on their first block -- a
+Top-Hit Index's tiers, the most of what a full-size pass holds (#387) -- is then loaded
+once, before the pool forks, and every worker inherits it rather than loading a copy
+of its own.
+
+**A riding check rides in two steps** (`Rider`): `part`, where the block is read, says
+what the block adds without changing the check; `join`, in band order where the pass
+is driven, adds it. `subsets.indexed`'s ride makes each band's unit sums in the worker,
+under the key the driver drew once for the run (`run_key`) when it boarded the ride,
+and the join refuses rows that do not follow the last it added. A ride a part breaks,
+on either side, leaves the pass and reads for itself, as before.
+
+**The EAF exception table stays read once a pass.** The driver cuts each band's span
+from its one paged read of the table as it hands the band out (`GridSplit.units`), so
+`encoding.eaf` and every subset's ride still watch each page go by there, in order, and
+a worker is handed its band's span and nothing else. A worker reading its own span
+would first have to find where the span starts -- a search of the index -- and would
+read the page at each band's edge twice.
+
+**Workers open what they read after the fork.** A worker opens the grid's group again
+(`Target.reopen`), and through it the planes and the side tables its codecs look
+exceptions up in -- the SE exceptions, the Z overflow, the EAF exceptions where a band
+has no span -- so no read in a worker goes through a handle the driver opened. Reopening
+is not what keeps a forked reader from hanging: the hazard is process-wide. With the
+fused pipeline's thread pool on, a worker whose first read spans no more shards than
+the driver's reads left idle permits in the inherited pool queues its chunks to threads
+the fork did not copy, and never returns, whatever handle it reads through. The array
+seam's `max_workers = 1` (ADR 0056) is what prevents it. Reproduced at three workers on
+4,000 x 2 cells in shards of 2,000 x 1, whose bands, like OGS-00009's, read two shards
+side by side within one shard row: finished in 1.3 s and 1.8 s at `max_workers` 1,
+killed at 45 s, twice, at 8. One shard a band, or bands crossing a shard row, finish
+either way, so the test's fixture is shaped like the real one.
+
+**A failure of the pool fails the run.** A worker that fails to read its own band
+reports it as that band's outcome, a finding like any other. Anything that escapes the
+pool itself is the run's failure, not the Store's (`PoolFailure`): a worker killed
+mid-band -- for memory, say -- breaks the pool (`WorkerLost`), and a host out of
+processes refuses the fork. The pass names the band whose result it was waiting for --
+the oldest still out, not necessarily the one a dead worker held -- and how many more
+were in flight, and `validate` ends with that error. It does not report a Store finding
+about a read that never finished.
+
+**Memory.** A worker holds one band at a time: the decoded-band budget (#254), at 96
+bytes a cell, and 512 MiB beside it (`WORKER_FLOOR_BYTES`). The pool is sized by
+`encoding.memory.pool_workers` (#321): no more workers than a quarter of the host's
+available memory holds beside the driver and the outcomes it holds in flight, no more
+than the bands left, and one on a host whose memory cannot be read.
+
+A worker's budget is held against its private memory, with its PSS beside it (ruled on
+13 Nov 2026). Its `VmHWM` is not its own cost: it counts every page the worker maps,
+and a forked worker maps the driver's -- the Top-Hit tiers above all, 1.8 to 2.2 GiB on
+OGS-00009 and 6.5 to 6.9 GiB on OGS-00011 -- which it shares with the driver rather than
+holds, and which the pool's sizing counts once, as the driver's.
+
+The budget holds with a margin because of a fix. On OGS-00011 a worker first reached
+1.81 GiB (PSS) beside a band budgeted at 0.85 GiB, and that was not the band.
+`Block.locate` searched a Top-Hit tier's `uint32` rows with Python-int bounds, so numpy
+copied the whole tier to `int64` on every call: 1.12 GB for OGS-00011's 140,478,063-cell
+tier, several times a band, in the serial pass as well. The bounds now take the rows'
+own dtype. Measured band by band under tracemalloc, every fold in turn, the Top-Hit
+folds had reached 137.2 bytes a cell on OGS-00011 and 56.2 on OGS-00009; with the fix a
+band peaks in its own read, at 54.7 on OGS-00011 and 52.9 on OGS-00009, and between
+bands a worker holds 0.25 to 0.27 GiB of its own.
+
+**Still one process:** an association sequence's scan -- a Ragged release's, a Hybrid's
+Overflow -- whose windows each carry the cell before them; the Store Variant Table's and
+`by_variant`'s scans; and every check of `analyses.tsv`, the envelope and the side
+tables. `--n-workers 1` reads every band in process.
+
+**Measured** at the head, OGS-00009 at one worker and at 32 started at the same moment,
+side by side, from 00:35 to 01:40 UTC on 13 Nov 2026 (load average 4.8 to 17.9,
+available memory never below 913 GB; from 01:06 the runs were inside the hours of the
+backup window recorded on 22 Oct, whether or not it still runs). Each round read every
+process's `/proc/<pid>/status` and `smaps_rollup`: each driver about every 1.1 s, and
+each worker every 1.96 s on average. OGS-00011 ran at 32 workers the night before with
+the same code path (`c4402e7`; the head adds only the pool-failure handling), each
+worker sampled every 2.79 s on average:
+
+| | OGS-00009, 1 worker | OGS-00009, 32 workers | OGS-00011, 32 workers |
+|---|---|---|---|
+| a full `validate` | 3,857 s | 942 s | 1,955 s |
+| its Dense association scan | 2,904.6 s, 2,798 bands | 140.9 s | 274.9 s, 4,756 bands |
+| its `subsets.indexed`, read in the driver | 905.3 s | 757.8 s | 906.3 s |
+| the driver's peak `VmHWM` | 2.55 GiB | 2.24 GiB | 7.32 GiB |
+| a worker's budget | | 1,432 MiB | 1,382 MiB |
+| a worker's largest private memory, the budget's measure | | 0.66 GiB | 0.77 GiB |
+| a worker's largest PSS | | 0.71 GiB | 0.95 GiB |
+| a worker's largest `VmHWM`, the driver's pages included | | 2.29 GiB | 7.03 GiB |
+
+OGS-00009's two reports are byte-identical to each other and to #314's head's, and
+OGS-00011's to #314's; 0 of their 1,676 and 2,114 subset units were compared cell by
+cell, and the driver read OGS-00011's 1,136,991,041-entry EAF exception table once, in
+4,338 pages. #314's runs of OGS-00011 at one worker took 16,250 s, its Dense scan
+14,497.2 s. At 32 workers `subsets.indexed` is 757.8 s of OGS-00009's 942 s.
+
+Before the `locate` fix (`fef3914`, 12 Nov from 20:06 UTC, sampled every 30 s),
+OGS-00016 ran at 32 workers in 745 s, its Dense scan 351.0 s against #314's 8,526.2 s at
+one, its 237,027,522-entry table read once in 905 pages, and its report byte-identical
+to #314's. #314's two corrupted copies of OGS-00015 -- one Z cell of `hm3` bumped where
+the scan reads its 138th band, and two cells of one unit exchanged -- each gave #314's
+finding at 32 workers, their reports byte-identical. Those runs also found OGS-00011's
+workers over budget, which led to the `locate` fix above.
+
 ## Alternatives considered
 
 - **`check(release)` over a caching release** (the ticket's sketch). Simple
