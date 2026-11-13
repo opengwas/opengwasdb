@@ -292,7 +292,9 @@ stream is bounded, and each rule needs its own view. Merging them into one pass 
 #314's, which moves the subset comparison onto the scan's bands; the subset check's
 own read is once per Indexed Variant Subset today, and a release carries one.
 
-The per-band consult the association scan makes when it decodes a band stays: a
+The per-band consult the association scan makes when it decodes a band stays
+(superseded by the amendment for issue #314 below: each block now takes its span from
+the pass's one read of the table, `TablePages`, in place of the per-band lookup): a
 Dense band's exception cells are one contiguous span of the sorted table, so a
 band's lookup is one read of it already. A Dense grid reads the table in 4,756
 bands on OGS-00011, about 239,000 exception cells a band.
@@ -398,7 +400,8 @@ weighed against the two exact designs:
 **The table is read once a pass** (`TablePages`). Each block takes its span of the
 sorted table as it decodes -- every entry its cells can name, read a page of 262,144
 entries at a time -- in place of the per-band lookup, which also read the two 200,000-
-entry inner chunks it bisected to. `side_tables.eaf_exceptions` reconciles the block
+entry inner chunks it bisected to. This supersedes the #387 amendment's ruling above
+that the scan's per-band consult stays. `side_tables.eaf_exceptions` reconciles the block
 against that span, and `encoding.eaf` and every subset's ride watch the pages go by;
 the entries past the last block are read for them once the blocks are.
 
