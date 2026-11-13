@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
 """Build HGDP+1kGP EUR chr22 as the published store was built, in each Near Band layout (ogld#8).
 
-Spec §6 names three layouts of `near/<c>/r` as (inner chunk, shard) in codes: A (4,096,
-4,194,304), B (32,768, 16,777,216) and C (262,144, 67,108,864), C provisionally. They differ
-only in that array; every other array keeps its one shape. ogld#8 times the reads that remain
-on each, so each layout is a real build, by `ogld build`, of the same inputs the published EUR
-store read for chr22, at the encoding that store records (ADR 0004) and k = 10, with
-`ogld.store.layout.NEAR_R` set for the run, as `tests/test_assembly.py` sets it. Nothing in
-`ogld/` changes: the layout is the owner's decision, and this only measures.
+Spec §6 named three layouts of `near/<c>/r` as (inner chunk, shard) in codes: A (4,096,
+4,194,304), B (32,768, 16,777,216) and C (262,144, 67,108,864). They differ only in that array;
+every other array keeps its one shape. ogld#8 timed the reads on each, and the owner chose C
+(12 November 2026; ADR 0006). So each layout is a real build, by `ogld build`, of the published
+EUR store's chr22, with `ogld.store.layout.NEAR_R` set for the run, as `tests/test_assembly.py`
+sets it. The command is the recipe's (`build_hgdp1kgp.build_command`, which owns k, the scale,
+the panel id and the source strings), on its chr22 fileset, keep file and PC File.
 
-    pixi run -e dev python scripts/bench/build_layouts.py OUT [--layout A B C] [--threads 8]
+    pixi run -e dev python scripts/bench/build_layouts.py [OUT] [--layout A B C] [--threads 8]
 
-Each build runs in a child process, so its wall time and peak memory are its own, and writes
-`OUT/chr22-<layout>.store`, its provenance as `.json`, and `.time.json` with the wall time, the
-peak RSS and the node's load before and after. `--check` then holds every layout's decoded
-`near/22/r` and `index/22/*` equal to each other's, so a timing compares layouts, not data.
+OUT is `$OGLD_LAYOUTS` unless given (`scripts/test_panel/roots.py`). Each build runs in a child
+process, so its wall time and peak memory are its own, and writes `OUT/chr22-<layout>.store`,
+its provenance as `.json`, and `.time.json` with the wall time, the peak RSS and the node's load
+before and after. `--check` then holds every array of every layout, the variant columns
+included, equal to the first layout's, so a timing compares layouts, not data.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+import importlib
 import json
 import os
 import shutil
@@ -27,7 +30,14 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
+
+#: `scripts/`, where the recipe and the roots live.
+SCRIPTS: Final = Path(__file__).resolve().parent.parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+recipe = importlib.import_module("build_hgdp1kgp")
+roots = importlib.import_module("test_panel.roots")
 
 #: Spec §6's Near Band layouts, as (inner chunk, shard) in codes.
 LAYOUTS: Final = {
@@ -35,31 +45,21 @@ LAYOUTS: Final = {
     "B": (32_768, 16_777_216),
     "C": (262_144, 67_108_864),
 }
+#: The panel and the chromosome built, in the recipe's terms.
+PANEL: Final = "EUR"
+CHROM: Final = 22
 
-#: The published EUR store, whose encoding each build takes, and the inputs it recorded for chr22
-#: (its `source.sha256`).
-_PUBLISHED: Final = Path("/data/opengwasdb/work/ogld/stores/hgdp1kgp-v2-EUR-k10.store")
-_INPUTS: Final = Path("/data/opengwasdb/work/ogld")
-_BUILD_ARGS: Final = (
-    "--pgen",
-    str(_INPUTS / "phased_v2_pgen/EUR/chr22.pgen"),
-    "--keep",
-    str(_INPUTS / "keep/EUR.keep"),
-    "--pcs",
-    str(_INPUTS / "pcs/EUR.eigenvec"),
-    "--pc-source",
-    "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002)",
-    "--panel-id",
-    "hgdp1kgp-v2-EUR",
-    "--ancestry",
-    "EUR",
-    "--genotype-source",
-    "HGDP+1kGP phased v2 (Koenig et al. 2024), EUR chr22, converted by build-inputs §3",
-    "--k",
-    "10",
-    "--info-min",
-    "none",
-)
+
+def build_command(store: Path, threads: int) -> list[str]:
+    """The recipe's `ogld build` for the panel's one chromosome, without the program name."""
+    pgen = Path(f"{recipe.prefix(PANEL, CHROM)}.pgen")
+    pcs = roots.root("OGLD_PCS") / f"{PANEL}.eigenvec"
+    command: list[str] = recipe.build_command(
+        PANEL, [pgen], store, recipe.keep_file(PANEL), pcs, threads
+    )
+    if command[:2] != ["ogld", "build"]:
+        raise SystemExit(f"the recipe's build command is not `ogld build`: {command[:2]}")
+    return command[1:]
 
 
 def load() -> tuple[float, float, float]:
@@ -72,17 +72,9 @@ def store_bytes(path: Path) -> int:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
 
 
-def published_scale() -> int:
-    """The scale the published EUR store records: a build carries its store's encoding, and
-    the encoding has one owner (`ogld.format.REncoding`; ADR 0004)."""
-    import ogld
-    from ogld.format import REncoding
-
-    return REncoding.of(ogld.open(_PUBLISHED).provenance["encoding"]).scale
-
-
 def build_one(layout: str, out: Path, threads: int) -> None:
-    """Build chr22 in `layout`, in this process: `NEAR_R` is set before `ogld build` runs."""
+    """Build chr22 in `layout`, in this process: `NEAR_R` is set before `ogld build` runs. The
+    child process exits after, so no other build sees the layout."""
     from ogld import cli
     from ogld.store import layout as store_layout
 
@@ -90,12 +82,9 @@ def build_one(layout: str, out: Path, threads: int) -> None:
     store = out / f"chr22-{layout}.store"
     if store.exists():
         shutil.rmtree(store)
-    scale = published_scale()
-    with (out / f"chr22-{layout}.json").open("w") as provenance:
-        sys.stdout = provenance
-        args = [*_BUILD_ARGS, "--r-scale", str(scale), "--threads", str(threads)]
-        status = cli.main(["build", str(store), *args])
-        sys.stdout = sys.__stdout__
+    provenance = out / f"chr22-{layout}.json"
+    with provenance.open("w") as written, contextlib.redirect_stdout(written):
+        status = cli.main(build_command(store, threads))
     if status:
         raise SystemExit(f"ogld build of layout {layout} exited {status}")
 
@@ -127,13 +116,28 @@ def timed_child(layout: str, out: Path, threads: int) -> dict[str, object]:
     }
 
 
+def arrays(group: Any, prefix: str = "") -> list[str]:
+    """Every array under `group`, by path, sorted."""
+    import zarr
+
+    found = []
+    for name, member in group.members():
+        path = f"{prefix}{name}"
+        found += [path] if isinstance(member, zarr.Array) else arrays(member, f"{path}/")
+    return sorted(found)
+
+
 def same_data(out: Path, layouts: list[str]) -> None:
-    """Every layout's chr22 arrays decode to the same values, read in bounded windows."""
+    """Every array of every layout decodes to the first layout's values, read in bounded
+    windows: the Near Band and the Proxy Index, and the variant columns too."""
     import numpy as np
     import zarr
 
-    paths = ["near/22/r", "near/22/indptr", "index/22/indptr", "index/22/partner", "index/22/r"]
     first, *rest = (zarr.open_group(out / f"chr22-{name}.store", mode="r") for name in layouts)
+    paths = arrays(first)
+    for other, name in zip(rest, layouts[1:], strict=True):
+        if arrays(other) != paths:
+            raise SystemExit(f"{layouts[0]} and {name} hold different arrays")
     for path in paths:
         a = first[path]
         step = 1 << 26
@@ -147,12 +151,13 @@ def same_data(out: Path, layouts: list[str]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("out", type=Path)
+    parser.add_argument("out", type=Path, nargs="?", default=None)
     parser.add_argument("--layout", nargs="+", choices=sorted(LAYOUTS), default=sorted(LAYOUTS))
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--one", choices=sorted(LAYOUTS), help=argparse.SUPPRESS)
     parser.add_argument("--check", action="store_true", help="only compare the built layouts")
     args = parser.parse_args()
+    args.out = args.out or roots.root("OGLD_LAYOUTS")
     args.out.mkdir(parents=True, exist_ok=True)
     if args.one:
         build_one(args.one, args.out, args.threads)

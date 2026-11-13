@@ -67,11 +67,14 @@ def latest(timings: list[Record]) -> list[Record]:
 
 
 def reader_label(record: Record) -> str:
-    """The reader a record ran: ogld's or the concurrent prototype, and its cache if not ogld's
-    256 MiB."""
-    cache = record.get("cache_bytes", 1 << 28)
+    """The reader a record ran: ogld's or the concurrent prototype, and its chunk cache's budget
+    when that is not ogld's own (`ogld.store.location.CACHE_BYTES`). A record that names no
+    budget ran before the benchmark could change it, with ogld's."""
+    from ogld.store.location import CACHE_BYTES
+
+    cache = record.get("cache_bytes", CACHE_BYTES)
     label = str(record.get("reader", "ogld"))
-    return label if cache == 1 << 28 else f"{label}, cache {cache >> 20:,} MiB"
+    return label if cache == CACHE_BYTES else f"{label}, cache {cache >> 20:,} MiB"
 
 
 def seconds(value: float) -> str:
