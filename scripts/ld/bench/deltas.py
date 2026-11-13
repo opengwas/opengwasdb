@@ -3,8 +3,8 @@
 
     pixi run -e dev python scripts/bench/deltas.py \
         --before docs/benchmarks/results/step1-*.jsonl.gz \
-        --after docs/benchmarks/results/32-step1-*.jsonl.gz \
-        --levers docs/benchmarks/results/32-lever-*.jsonl.gz > docs/benchmarks/fast-reader-tables.md
+        --after docs/benchmarks/results/32/step1-*.jsonl.gz \
+        --levers docs/benchmarks/results/32/lever-*.jsonl.gz > docs/benchmarks/fast-reader-tables.md
 
 Records are read and aggregated by `report.py`, as ogld#8's tables are: a sum over the Analyses
 for clumping, a median over the draws for everything else. A read is compared on the draws both
@@ -139,7 +139,16 @@ def main() -> None:
     before = step1(report.read(args.before)[0], "ogld")
     after = [r for r in report.read(args.after)[0] if not r.get("without")]
     after = step1(after, after[0]["reader"])  # as `report.read` labelled it
-    out = ["## ogld#8's step-1 reads, before and after ogld#32", ""]
+    out = [
+        "# The fast reader's tables (ogld#32)",
+        "",
+        "_Rendered by `scripts/bench/deltas.py` from `results/32/` and ogld#8's step-1 records in",
+        "`results/`; see [`fast-reader.md`](fast-reader.md). Seconds before → after, and how many",
+        "times faster._",
+        "",
+        "## ogld#8's step-1 reads, before and after ogld#32",
+        "",
+    ]
     header = ["read", "requests", "local", "+10 ms", "+50 ms"]
     out += [report.table(header, delta_rows(before, after)), ""]
     if args.levers:

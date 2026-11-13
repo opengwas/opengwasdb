@@ -36,6 +36,7 @@ for _path in (SCRIPTS / "bench", SCRIPTS):
 http_static = importlib.import_module("http_static")
 latency = importlib.import_module("latency")
 report = importlib.import_module("report")
+deltas = importlib.import_module("deltas")
 
 TEST_STORE = TEST_PANEL / "store"
 RESULTS = SCRIPTS.parent / "docs" / "benchmarks" / "results"
@@ -354,3 +355,23 @@ def test_every_lever_off_reads_as_before_ogld_32_and_answers_the_same(
     assert np.isnan(on).any(), "the matrix must hold unstored pairs"
     assert np.isfinite(on).sum() > len(rows), "and stored ones beside the diagonal"
     np.testing.assert_array_equal(off, on)
+
+
+def test_the_fast_reader_tables_are_its_records_rendered(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # ogld#32's tables are its records against ogld#8's, as `deltas.py` renders them.
+    ours = sorted(str(p) for p in (RESULTS / "32").glob("*.jsonl.gz"))
+    assert len(ours) == 8, "the six lever runs and the two step-1 runs"
+    before = sorted(str(p) for p in RESULTS.glob("step1-*.jsonl.gz"))
+    after = [p for p in ours if "/step1-" in p]
+    levers = [p for p in ours if "/lever-" in p]
+    argv = ["deltas.py", "--before", *before, "--after", *after, "--levers", *levers]
+    old, sys.argv = sys.argv, argv
+    try:
+        deltas.main()
+    finally:
+        sys.argv = old
+    rendered = capsys.readouterr().out
+    committed = (RESULTS.parent / "fast-reader-tables.md").read_text()
+    assert rendered == committed, "re-render fast-reader-tables.md (scripts/bench/deltas.py)"
