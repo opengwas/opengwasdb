@@ -79,17 +79,19 @@ RESULTS_HELD_PER_WORKER = 2
 
 
 def resident_bytes(path: Path = SELF_STATUS) -> int:
-    """This process's resident set (`VmRSS`) in bytes; 0, said, when unreadable.
+    """This process's resident set (`VmRSS`) in bytes.
 
-    What a pool's parent already holds when the pool forks. An unreadable
-    figure counts as nothing held rather than refusing the pool -- the host's
-    own reading, which `pool_workers` does refuse to guess, still bounds it --
-    but the warning says the parent went uncounted.
+    What a pool's parent already holds when the pool forks. Linux always
+    publishes it, so a status file that does not give it as a whole number of
+    kilobytes is refused rather than counted as nothing held: a parent counted
+    at zero sizes its pool for memory the parent is already using (#321).
     """
     try:
         content = path.read_text(encoding="ascii")
-    except (OSError, UnicodeDecodeError):
-        content = ""
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RuntimeError(
+            f"cannot read this process's resident set from {path}: {exc}"
+        ) from exc
     for line in content.splitlines():
         key, _, rest = line.partition(":")
         if key.strip() != "VmRSS":
@@ -97,12 +99,11 @@ def resident_bytes(path: Path = SELF_STATUS) -> int:
         fields = rest.split()
         if len(fields) == 2 and fields[1] == "kB" and fields[0].isdigit():
             return int(fields[0]) * 1024
-    log.warning(
-        "cannot read this process's resident set from %s; a pool sized beside it "
-        "counts the parent as holding nothing",
-        path,
-    )
-    return 0
+        raise RuntimeError(
+            f"cannot read this process's resident set from {path}: VmRSS is {rest.strip()!r}, "
+            "not a whole number of kB"
+        )
+    raise RuntimeError(f"cannot read this process's resident set from {path}: it has no VmRSS")
 
 
 def pool_workers(

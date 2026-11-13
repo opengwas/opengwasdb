@@ -1075,9 +1075,8 @@ def _checkpoint_and_assemble(
     )
     print(f"Wrote {quality_count:,} completion quality rows")
     csr = _assemble_completed_csr(
-        _Assembly(plan, axis, block_rows), fill_shard_dir, batch_of, eaf_reference, n_workers,
-        added_cells=int(cells.sum()),
-        largest_added=int(cells.max()) if len(cells) else 0,
+        _Assembly(plan, axis, block_rows), fill_shard_dir, batch_of, eaf_reference,
+        n_workers=n_workers, added=cells,
     )
     shutil.rmtree(fill_shard_dir)
     print(f"Completion done: {csr.total_imputed:,} imputed, {csr.total_missing:,} missing")
@@ -1169,9 +1168,9 @@ def _assemble_completed_csr(
     fill_shard_dir: Path,
     batch_of: np.ndarray,
     eaf_reference: np.ndarray | None,
-    n_workers: int = 1,
-    added_cells: int = 0,
-    largest_added: int = 0,
+    *,
+    n_workers: int,
+    added: np.ndarray,
 ) -> _CompletedCsr:
     """Phase 3 assembly: each Analysis's completed rows -- remapped observed
     rows, its fills and its missing block positions, sorted by variant index --
@@ -1184,8 +1183,8 @@ def _assemble_completed_csr(
     own source rows; the parent adds them to the writer in Analysis order, so
     the sequence, its offsets and every side table keyed on a flat position are
     the ones one worker writes. The writer holds every completed row by the
-    end, at most the source's rows and ``added_cells`` more, and the pool is
-    sized beside that."""
+    end, at most the source's rows and the rows completion may add to each
+    Analysis (``added``, `_analysis_cells`), and the pool is sized beside that."""
     print("Assembling completed CSR per analysis...")
     plan, axis = assembly.plan, assembly.axis
     analysis_ids = [a.analysis_id for a in plan.state.src_analyses]
@@ -1201,8 +1200,8 @@ def _assemble_completed_csr(
         unit=f"completed Analysis over {len(axis.variants):,} variants",
         units=plan.state.n_analyses,
         parent_bytes=resident_bytes()
-        + _HELD_BYTES_PER_CELL * (_source_cells(plan.source) + added_cells),
-        result_bytes=_RESULT_BYTES_PER_ROW * (largest + largest_added),
+        + _HELD_BYTES_PER_CELL * (_source_cells(plan.source) + int(added.sum())),
+        result_bytes=_RESULT_BYTES_PER_ROW * (largest + int(added.max(initial=0))),
     )
     total_imputed = total_missing = 0
     items = _analysis_fills(fill_shard_dir, batch_of)

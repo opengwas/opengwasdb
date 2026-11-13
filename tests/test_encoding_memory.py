@@ -196,13 +196,28 @@ def test_the_resident_set_is_vmrss_in_bytes(
     assert caplog.text == ""
 
 
-@pytest.mark.parametrize("body", ["VmRSS:\t   lots\n", None], ids=["malformed", "missing"])
-def test_an_unreadable_resident_set_is_nothing_held_and_said(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, body: str | None
+@pytest.mark.parametrize(
+    ("body", "why"),
+    [
+        ("VmRSS:\t   lots\n", "VmRSS is 'lots', not a whole number of kB"),
+        ("VmRSS:\t   2048 MB\n", "VmRSS is '2048 MB', not a whole number of kB"),
+        ("VmPeak:\t 9999 kB\n", "it has no VmRSS"),
+        (None, "No such file"),
+    ],
+    ids=["malformed", "wrong-unit", "no-field", "missing"],
+)
+def test_an_unreadable_resident_set_is_refused_not_counted_as_nothing(
+    tmp_path: Path, body: str | None, why: str
 ) -> None:
+    """A parent counted as holding nothing sizes its pool for memory it is using.
+
+    Linux always publishes `VmRSS`, so a status file without it is not a host to
+    plan against: the reading fails and names the file and what it found.
+    """
     status = tmp_path / "status"
     if body is not None:
         status.write_text(body)
-    with caplog.at_level(logging.WARNING, logger=memory.log.name):
-        assert resident_bytes(status) == 0
-    assert "cannot read this process's resident set" in caplog.text
+    with pytest.raises(RuntimeError, match="cannot read this process's resident set") as raised:
+        resident_bytes(status)
+    assert str(status) in str(raised.value)
+    assert why in str(raised.value)
