@@ -2,7 +2,7 @@
 
 The public surface (`docs/spec/ld-store.md` §8, §9):
 
-    store = ogld.open(path_or_url)                    # LDStore
+    store = ogld.open(path_or_url, cache_bytes=None)  # LDStore; keeps 4 GiB of chunks
     store.matrix(alids, fill=None)                    # LDMatrix: signed r, NaN where unstored
     store.region(chrom, centre, radius, fill=None)    # LDMatrix; radius ≤ 5 Mb
     store.proxies(alids, r2=0.8, kb=10_000)           # Proxies

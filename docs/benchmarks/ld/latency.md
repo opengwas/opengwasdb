@@ -140,6 +140,8 @@ pixi run -e dev python scripts/bench/report.py docs/benchmarks/results/*.jsonl.g
 ```
 
 `--reader concurrent` and `--cache-mib` measure two reader levers from outside `ogld/` (below).
+ogld#32 put concurrent fetching in the reader and removed `--reader`. Its own runs, and
+`--without`, which turns its levers off one at a time, are in [`fast-reader.md`](fast-reader.md).
 
 ## Step 1: the published EUR store, layout C
 

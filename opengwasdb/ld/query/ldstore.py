@@ -66,6 +66,9 @@ class LDStore:
         return clumping.clump(self._reader, alids, score, r2=r2, kb=kb)
 
 
-def open(location: str | os.PathLike[str]) -> LDStore:
-    """Open the LD Store at a local path or an HTTP(S) URL (spec §1; ogld#4)."""
-    return LDStore(StoreReader.open(location))
+def open(location: str | os.PathLike[str], *, cache_bytes: int | None = None) -> LDStore:
+    """Open the LD Store at a local path or an HTTP(S) URL (spec §1; ogld#4).
+
+    The store keeps at most `cache_bytes` of the chunks and shard indexes its reads fetch, 4 GiB
+    if None, and none if 0; anything but an int ≥ 0 is an `InputError` (spec §10; ogld#32)."""
+    return LDStore(StoreReader.open(location, cache_bytes=cache_bytes))
