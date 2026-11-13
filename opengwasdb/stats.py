@@ -29,7 +29,11 @@ _LN10 = math.log(10.0)
 Z_975 = 1.959963984540054
 
 
-_MISSING_AF = {"", ".", "NA", "NaN", "nan", "None"}
+#: The cells a statistic or a frequency reads as missing, in every reader: per row
+#: (`parse_af`, `readers.tabular.parse_finite_float`) and in a batch's columns
+#: (`readers.columnar`, whose pandas parse names them as its `na_values`), so a
+#: cell is missing in a batch exactly where it is missing row by row.
+MISSING_STATISTICS = frozenset({"", ".", "NA", "NaN", "nan", "None"})
 
 
 @dataclass
@@ -68,7 +72,7 @@ def parse_af(value: str | float | None, tally: FrequencyTally | None = None) -> 
     if value is None:
         return None
     if isinstance(value, str):
-        if value.strip() in _MISSING_AF:
+        if value.strip() in MISSING_STATISTICS:
             return None
         try:
             af = float(value)

@@ -37,15 +37,22 @@ from opengwasdb.readers.interface import (
     ReaderAssociation,
     StreamTally,
 )
-from opengwasdb.stats import FrequencyTally
+from opengwasdb.stats import MISSING_STATISTICS, FrequencyTally
 from opengwasdb.variants.normalise import VariantNormalisationError
 
 #: Associations a batch holds once a source is handed to the per-row reader.
 ROW_BATCH = 250_000
 
-#: The cells a statistic reads as missing: `tabular.parse_finite_float`'s and
-#: `stats.parse_af`'s set, which a test holds this to.
-MISSING_STATISTICS = ("", ".", "NA", "NaN", "None", "nan")
+#: The cells a statistic reads as missing, as pandas' `na_values`: the per-row
+#: readers' own set (`stats.MISSING_STATISTICS`), in a fixed order.
+MISSING_TOKENS = sorted(MISSING_STATISTICS)
+
+#: Decompressed bytes one block reads, 32 MiB: what bounds a Pass 2 worker's
+#: batch, which holds one block and the line the read before it split. FinnGen
+#: R13's 21,326,102-row ACTINOMYCOSIS file reads as 63 batches, the largest of
+#: 346,947 rows, and the read's sampled resident memory peaked at 501 MiB (ADR
+#: 0076 gives `ru_maxrss` beside it). Every columnar reader reads blocks of it.
+BLOCK_BYTES = 1 << 25
 
 #: The cells a declared imputation score reads as missing:
 #: `interface.parse_imputation_score`'s set, which a test holds this to.

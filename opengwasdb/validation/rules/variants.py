@@ -97,7 +97,7 @@ def _blocks(target: Target) -> Iterator[TableBlock]:
 def _read_failure(target: Target, exc: Exception) -> str:
     if target.layout is PrimaryStorageLayout.HYBRID:
         return f"hybrid shared-table validation failed: {exc}"
-    return f"validation failed: {exc}"
+    return validation_rule.failed_words(exc)
 
 
 VARIANT_TABLE: Scan[TableBlock] = Scan("variant_table", _blocks, _read_failure, _n_blocks)

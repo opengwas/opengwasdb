@@ -57,7 +57,7 @@ from opengwasdb.encoding.planes import (
 )
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store.arrays import SE_COEFFICIENTS, array_length, inner_chunk_of
-from opengwasdb.validation.rule import Kind, Scan, Split, Target, Unreadable
+from opengwasdb.validation.rule import Kind, Scan, Split, Target, Unreadable, failed_words
 
 log = logging.getLogger(__name__)
 
@@ -1055,7 +1055,7 @@ def _blocks(target: Target) -> Iterator[Block]:
 def _read_failure(_target: Target, exc: Exception) -> str:
     if isinstance(exc, Undecodable):
         return str(exc)
-    return f"validation failed: {exc}"
+    return failed_words(exc)
 
 
 def _association_blocks(target: Target) -> int:

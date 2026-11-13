@@ -328,8 +328,15 @@ class Check(Rule):
             yield self.finding(target, message)
 
 
-def _validation_failed(_target: Target, exc: Exception) -> str:
+def failed_words(exc: Exception) -> str:
+    """How a rule, or the read a fold stands on, that raised is reported: the one
+    wording, wherever it raised. `validate --format json` carries it, so it does not
+    change in passing (CONTRIBUTING, "Adding a validation rule")."""
     return f"validation failed: {exc}"
+
+
+def _validation_failed(_target: Target, exc: Exception) -> str:
+    return failed_words(exc)
 
 
 class Split(Generic[B]):

@@ -51,6 +51,7 @@ from opengwasdb.validation.rule import (
     Target,
     Unreadable,
     ValidationResult,
+    failed_words,
 )
 
 log = logging.getLogger(__name__)
@@ -853,7 +854,7 @@ def _measured(
                 message=scan.failure(target, exc), unreadable=True, reported_by=exc.reported_by
             )
         except Exception as exc:  # this fold's failure, and no other's
-            outcomes[fold.name] = _Outcome(message=_failed_words(exc))
+            outcomes[fold.name] = _Outcome(message=failed_words(exc))
     parts: dict[str, _Part] = {}
     for name, rider in riders:
         try:
@@ -954,12 +955,7 @@ class _Phase:
 
 
 def _failure(rule: Rule, target: Target, exc: Exception) -> Finding:
-    return rule.finding(target, _failed_words(exc), Severity.ERROR)
-
-
-def _failed_words(exc: Exception) -> str:
-    """How a rule that raised is reported: the one wording, wherever it raised."""
-    return f"validation failed: {exc}"
+    return rule.finding(target, failed_words(exc), Severity.ERROR)
 
 
 def _contained(
