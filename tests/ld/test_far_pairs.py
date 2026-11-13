@@ -136,7 +136,8 @@ def test_a_matrix_fetches_far_chunks_and_no_index_chunk(small_chunks: Path) -> N
     reader.pair_r(rows)
     for _, start, stop in chromosomes(small_chunks):
         reader.region_r(start, stop)
-    fetched = {path for path, _ in reader._cache._kept}
+    # The cache keeps shard indexes beside the chunks since ogld#32; only chunks name an array.
+    fetched = {key[0] for key in reader._cache._kept if isinstance(key, tuple)}
     assert {"far/21/partner", "far/22/partner", "far/21/r", "far/22/r"} <= fetched
     assert not [path for path in fetched if path.startswith("index/")], sorted(fetched)
 

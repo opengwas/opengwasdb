@@ -123,9 +123,11 @@ class StoreReader:
     _cache: ChunkCache
     _columns: dict[str, zarr.Array[Any]]
 
-    def _attach(self, root: zarr.Group, provenance: Provenance, encoding: REncoding) -> None:
+    def _attach(
+        self, root: zarr.Group, provenance: Provenance, encoding: REncoding, cache: ChunkCache
+    ) -> None:
         """Keep the provenance, the encoding and the chromosome ranges of an opened, checked
-        store."""
+        store, and the chunk cache its reads go through."""
         self._root = root
         self._provenance = provenance
         self._encoding = encoding
@@ -135,15 +137,19 @@ class StoreReader:
         self._stops = np.array([stop for _, stop in self._ranges.values()], dtype=np.int64)
         self._loaded = {}
         self._far = {}
-        self._cache = ChunkCache()
+        self._cache = cache
         # Each handle is opened once: opening one reads its metadata document, which over
         # HTTP is a request.
         self._columns = {name: _kept_array(root, f"variants/{name}") for name in _VARIANT_COLUMNS}
 
     @classmethod
-    def open(cls, location: str | os.PathLike[str]) -> StoreReader:
-        """Open the LD Store at a local path or an HTTP(S) URL (ogld#4)."""
-        root = open_group(location)
+    def open(
+        cls, location: str | os.PathLike[str], *, cache_bytes: int | None = None
+    ) -> StoreReader:
+        """Open the LD Store at a local path or an HTTP(S) URL (ogld#4), keeping at most
+        `cache_bytes` of its chunks (spec §10; the default if None, ogld#32)."""
+        cache = ChunkCache(cache_bytes)
+        root = open_group(location, cache=cache)
         recorded = root.attrs.get("ld_store")
         if root.metadata.zarr_format != 3:
             raise InputError(
@@ -164,8 +170,13 @@ class StoreReader:
         except InputError as unimplemented:
             raise InputError(f"{location}: {unimplemented}") from unimplemented
         reader = cls()
-        reader._attach(root, cast(Provenance, recorded), encoding)
+        reader._attach(root, cast(Provenance, recorded), encoding, cache)
         return reader
+
+    @property
+    def cache_bytes(self) -> int:
+        """The bytes of chunks and shard indexes this reader keeps at most (spec §10)."""
+        return self._cache.budget
 
     @property
     def provenance(self) -> Provenance:

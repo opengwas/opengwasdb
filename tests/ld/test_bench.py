@@ -36,6 +36,7 @@ for _path in (SCRIPTS / "bench", SCRIPTS):
 http_static = importlib.import_module("http_static")
 latency = importlib.import_module("latency")
 report = importlib.import_module("report")
+deltas = importlib.import_module("deltas")
 
 TEST_STORE = TEST_PANEL / "store"
 RESULTS = SCRIPTS.parent / "docs" / "benchmarks" / "results"
@@ -174,7 +175,7 @@ def test_the_proxy_waits_once_per_request_and_requests_in_flight_wait_together(
 def instrumented(monkeypatch: pytest.MonkeyPatch) -> Any:
     """The benchmark's counting, put in and taken out again: `instrument` patches classes."""
     monkeypatch.setattr(latency, "TALLY", latency.Tally())
-    latency.instrument(None, "ogld", None, patch=monkeypatch.setattr)
+    latency.instrument(None, None, patch=monkeypatch.setattr)
     return latency
 
 
@@ -307,8 +308,8 @@ def test_a_record_names_the_budget_of_the_cache_the_store_read_through(
 ) -> None:
     from ogld.store.location import ChunkCache
 
-    latency.instrument(None, "ogld", 3, patch=monkeypatch.setattr)
-    assert latency.opened(TEST_STORE)._reader._cache._budget == 3 << 20, "--cache-mib sets it"
+    latency.instrument(None, 3, patch=monkeypatch.setattr)
+    assert latency.opened(TEST_STORE)._reader.cache_bytes == 3 << 20, "--cache-mib sets it"
     # A budget the module's default does not hold: the record must read the cache's own.
     store = latency.opened(TEST_STORE)
     store._reader._cache = ChunkCache(budget=5 << 20)
@@ -361,3 +362,59 @@ def test_a_run_that_read_no_far_pairs_shows_none_not_zero() -> None:
     assert cell(after, "region", far_rows, width_mb=10, state="cold") == "0.063"
     assert cell(after, "region", far_rows, width_mb=3, state="cold") == "0.000"
     assert cell(after, "scattered", far_chunks, chrom="22", state="cold") == "10"
+
+
+def test_every_lever_off_reads_as_before_ogld_32_and_answers_the_same(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `--without` measures ogld#32's levers one at a time against the reader ogld#8 measured:
+    # each lever off is that reader's code, and no lever changes an answer.
+    from ogld.store import location
+
+    rows = np.arange(0, 1056, 9)
+    alids = [str(a) for a in latency.opened(TEST_STORE)._reader.alids_of(rows)]
+    on = latency.opened(TEST_STORE).matrix(alids).r
+    assert latency.without([], None, patch=monkeypatch.setattr) is None, "ogld's default"
+    assert latency.without(["cache"], 7, patch=monkeypatch.setattr) == 7, "the asked budget"
+    budget = latency.without(list(latency.LEVERS), None, patch=monkeypatch.setattr)
+    assert budget == 256, "the budget before ogld#32"
+    assert location.ChunkCache._chunks is latency._sequential_chunks
+    assert location._KeptIndexes.get is latency._index_passed
+    assert location._KeptIndexes.get_sync is latency._index_passed_sync
+    assert location._counted is latency._counted_per_string
+    off = latency.opened(TEST_STORE).matrix(alids).r
+    assert np.isnan(on).any(), "the matrix must hold unstored pairs"
+    assert np.isfinite(on).sum() > len(rows), "and stored ones beside the diagonal"
+    np.testing.assert_array_equal(off, on)
+
+
+def test_the_fast_reader_tables_are_its_records_rendered(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # ogld#32's tables are its records against ogld#8's, as `deltas.py` renders them.
+    ours = sorted(str(p) for p in (RESULTS / "32").glob("*.jsonl.gz"))
+    assert len(ours) == 8, "the six lever runs and the two step-1 runs"
+    before = sorted(str(p) for p in RESULTS.glob("step1-*.jsonl.gz"))
+    after = [p for p in ours if "/step1-" in p]
+    levers = [p for p in ours if "/lever-" in p]
+    argv = ["deltas.py", "--before", *before, "--after", *after, "--levers", *levers]
+    old, sys.argv = sys.argv, argv
+    try:
+        deltas.main()
+    finally:
+        sys.argv = old
+    rendered = capsys.readouterr().out
+    committed = (RESULTS.parent / "fast-reader-tables.md").read_text()
+    assert rendered == committed, "re-render fast-reader-tables.md (scripts/bench/deltas.py)"
+
+
+def test_the_count_before_ogld_32_is_the_cache_s_rule_one_string_at_a_time() -> None:
+    # Both count an ASCII string's bytes exactly, so they agree on ALIDs short and long.
+    from numpy.dtypes import StringDType
+
+    from ogld.store import location
+
+    alids = [f"22:{i}:A:" + "C" * (i % 40) for i in range(2000)]
+    chunk = np.array(alids, dtype=StringDType())
+    assert sum(len(a) > 15 for a in alids) > 1000, "most in the arena, for this to mean anything"
+    assert latency._counted_per_string(chunk) == location._counted(chunk)
