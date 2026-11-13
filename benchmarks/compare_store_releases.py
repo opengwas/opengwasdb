@@ -312,21 +312,427 @@ def _summarise(report: dict[str, Any]) -> None:
         print(f"variants.tsv.gz identical: {report['variants_tsv_gz']['identical']}")
 
 
+# --- Dense releases whose variant axes differ (#322) --------------------------
+#
+# A rebuild that drops rows (#376's off-primary lifts) or spells an indel's ALID
+# another way (#381) has a different variant axis, so the arrays above are not
+# comparable position by position. The aligned comparison decodes both grids
+# through the reader every query uses and compares them cell by cell on the rows
+# they share by ALID. Rows only one side holds are listed whole, and a pair that
+# names one site and one allele pair in two spellings is compared with its
+# orientation taken into account. Nothing is classified as expected here: the
+# caller names the change behind each kind.
+
+#: Rows of each side decoded at a time. A band of 20,000 rows of a 2,514-Analysis
+#: release is three planes of 201 MB a side as float32.
+ALIGNED_BAND_ROWS = 20_000
+
+#: Rows kept per band as examples of a difference; the counts are always whole.
+EXAMPLE_ROWS = 20
+
+PLANES = ("z", "se", "eaf")
+
+_OPEN: dict[str, Any] = {}
+
+
+def _dense_reader(path: str) -> Any:
+    """A Dense grid reader for `path`, opened once per process (after any fork)."""
+    if path not in _OPEN:
+        from opengwasdb.associations import DenseGridReader
+        from opengwasdb.store.open import open_store
+
+        store = open_store(path)
+        root = store.arrays(mode="r")
+        _OPEN[path] = (
+            DenseGridReader.open(root, store.manifest.encoding, source=f"Store Release {path}"),
+            int(root["z"].shape[1]),
+        )
+    return _OPEN[path]
+
+
+def _decoded(path: str, rows: np.ndarray) -> dict[str, np.ndarray]:
+    """Every cell of `rows` (ascending) by every Analysis, decoded, as `rows × analyses`."""
+    from opengwasdb.associations import Cells
+
+    reader, n_analyses = _dense_reader(path)
+    found = reader.inspect(Cells.variants(rows))
+    slot = np.searchsorted(rows, np.asarray(found.variant_index, dtype="int64"))
+    column = np.asarray(found.analysis_index, dtype="int64")
+    grids = {}
+    for plane in PLANES:
+        grid = np.full((rows.size, n_analyses), np.nan, dtype=np.float32)
+        grid[slot, column] = np.asarray(getattr(found, plane), dtype=np.float32)
+        grids[plane] = grid
+    return grids
+
+
+def _float16_rounding(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Where one side is the other's `float16` rounding (a `float16`-coded SE, #355)."""
+    with np.errstate(over="ignore"):
+        a16 = a.astype(np.float16).astype(np.float32)
+        b16 = b.astype(np.float16).astype(np.float32)
+    return (a16 == b) | (b16 == a)
+
+
+#: A row's difference code: one bit per kind of difference any of its cells shows.
+ROW_CODES = {
+    "z_value": 1,
+    "se_value": 2,
+    "se_float16_rounding": 4,
+    "eaf_value": 8,
+    "presence": 16,
+    "se_within_codec": 32,
+}
+
+#: `float16`'s relative precision, as a log-space half step.
+_FLOAT16_LOG_HALF_STEP = float(np.log1p(2.0**-11))
+
+#: Slack for the decode's own `float32` arithmetic, in log space.
+_FLOAT32_LOG_SLACK = 1e-6
+
+
+def se_log_half_step(encoding: dict[str, Any] | None) -> float:
+    """How far, in log space, a decoded SE can sit from the value it encodes.
+
+    An `int8_residual` code decodes to within half a step, `residual_range / 127`,
+    of the source's `log(SE)`, whatever the fitted model predicts (spec §6a);
+    `float16` to within its relative precision. An exact exception is exact.
+    """
+    se = (encoding or {}).get("se") or {}
+    if se.get("kind") == "int8_residual":
+        return float(se["residual_range"]) / 127 / 2
+    if se.get("kind") == "float16":
+        return _FLOAT16_LOG_HALF_STEP
+    raise SystemExit(f"no SE codec bound for encoding {se!r}")
+
+
+def _plane_difference(
+    plane: str,
+    a: np.ndarray,
+    b: np.ndarray,
+    left_rows: np.ndarray,
+    right_rows: np.ndarray,
+    se_log_bound: float = 0.0,
+) -> tuple[dict[str, Any], np.ndarray]:
+    """Counts of one plane's differing cells, and each row's difference code.
+
+    An SE difference no larger than `se_log_bound` in log space is within what the
+    two releases' codecs allow for one source value (a refitted residual model
+    re-quantises every coded cell); it is counted apart from the rest.
+    """
+    nan_a, nan_b = np.isnan(a), np.isnan(b)
+    only_left = ~nan_a & nan_b
+    only_right = nan_a & ~nan_b
+    value = ~nan_a & ~nan_b & (a != b)
+    record: dict[str, Any] = {
+        "only_left": int(only_left.sum()),
+        "only_right": int(only_right.sum()),
+        "value_differs": int(value.sum()),
+        "max_abs_diff": float(np.abs(a[value] - b[value]).max()) if value.any() else 0.0,
+    }
+    code = np.where((only_left | only_right).any(axis=1), ROW_CODES["presence"], 0)
+    if plane == "se":
+        rounding = np.zeros_like(value)
+        rounding[value] = _float16_rounding(a[value], b[value])
+        within = np.zeros_like(value)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            log_ratio = np.abs(np.log(a[value].astype(np.float64) / b[value].astype(np.float64)))
+        within[value] = log_ratio <= se_log_bound + _FLOAT32_LOG_SLACK
+        within &= ~rounding
+        beyond = value & ~rounding & ~within
+        record["value_differs_by_float16_rounding"] = int(rounding.sum())
+        record["value_differs_within_codec"] = int(within.sum())
+        record["value_differs_beyond_codec"] = int(beyond.sum())
+        record["max_abs_log_ratio"] = float(np.nanmax(log_ratio)) if log_ratio.size else 0.0
+        record["se_log_bound"] = se_log_bound
+        code |= np.where(beyond.any(axis=1), ROW_CODES["se_value"], 0)
+        code |= np.where(rounding.any(axis=1), ROW_CODES["se_float16_rounding"], 0)
+        code |= np.where(within.any(axis=1), ROW_CODES["se_within_codec"], 0)
+    else:
+        code |= np.where(value.any(axis=1), ROW_CODES[f"{plane}_value"], 0)
+    differs = only_left | only_right | value
+    examples = []
+    for index in np.flatnonzero(differs.any(axis=1))[:EXAMPLE_ROWS]:
+        column = int(np.flatnonzero(differs[index])[0])
+        examples.append(
+            {
+                "left_row": int(left_rows[index]),
+                "right_row": int(right_rows[index]),
+                "analysis_index": column,
+                "left": _scalar(a[index, column]),
+                "right": _scalar(b[index, column]),
+                "cells_in_row": int(differs[index].sum()),
+            }
+        )
+    record["examples"] = examples
+    return record, code.astype(np.uint8)
+
+
+def _aligned_unit(
+    shared: tuple[str, str, float], unit: tuple[np.ndarray, np.ndarray, np.ndarray]
+) -> dict[str, Any]:
+    """Compare one unit of row pairs. `flip` marks a pair whose effect alleles are swapped:
+    its right-hand Z is negated and its EAF taken as `1 - EAF` before the comparison."""
+    left, right, se_log_bound = shared
+    left_rows, right_rows, flip = unit
+    a = _decoded(left, left_rows)
+    order = np.argsort(right_rows, kind="stable")
+    b_sorted = _decoded(right, right_rows[order])
+    b = {plane: np.empty_like(grid) for plane, grid in b_sorted.items()}
+    for plane, grid in b_sorted.items():
+        b[plane][order] = grid
+    if flip.any():
+        b["z"][flip] = -b["z"][flip]
+        b["eaf"][flip] = np.float32(1.0) - b["eaf"][flip]
+    planes: dict[str, Any] = {}
+    codes = np.zeros(left_rows.size, dtype=np.uint8)
+    for plane in PLANES:
+        planes[plane], code = _plane_difference(
+            plane, a[plane], b[plane], left_rows, right_rows, se_log_bound
+        )
+        codes |= code
+    return {"pairs": int(left_rows.size), "cells": int(a["z"].size), "codes": codes,
+            "planes": planes}
+
+
+def _merge_units(results: Iterator[dict[str, Any]]) -> tuple[dict[str, Any], np.ndarray]:
+    """The units' counts added up, and every row's difference code in input order."""
+    total: dict[str, Any] = {"pairs": 0, "cells": 0, "planes": {}}
+    codes: list[np.ndarray] = []
+    for result in results:
+        total["pairs"] += result["pairs"]
+        total["cells"] += result["cells"]
+        codes.append(result["codes"])
+        for plane, record in result["planes"].items():
+            into = total["planes"].setdefault(plane, {"examples": []})
+            for key, value in record.items():
+                if key == "examples":
+                    into["examples"].extend(value[: max(0, EXAMPLE_ROWS - len(into["examples"]))])
+                elif key in ("max_abs_diff", "max_abs_log_ratio", "se_log_bound"):
+                    into[key] = max(into.get(key, 0.0), value)
+                else:
+                    into[key] = into.get(key, 0) + value
+    every = np.concatenate(codes) if codes else np.zeros(0, dtype=np.uint8)
+    total["rows_differing"] = int(np.count_nonzero(every))
+    total["rows_by_code"] = {
+        "+".join(name for name, bit in ROW_CODES.items() if code & bit): int(count)
+        for code, count in zip(*np.unique(every[every > 0], return_counts=True), strict=True)
+    }
+    return total, every
+
+
+def _units(
+    left_rows: np.ndarray, right_rows: np.ndarray, flip: np.ndarray, band_rows: int
+) -> Iterator[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    for start in range(0, left_rows.size, band_rows):
+        stop = start + band_rows
+        yield left_rows[start:stop], right_rows[start:stop], flip[start:stop]
+
+
+def _variant_rows(path: Path, wanted: np.ndarray) -> dict[int, dict[str, Any]]:
+    """The Store Variant Table rows `wanted`, read in one pass over the table."""
+    from opengwasdb.variants import VariantAxis
+
+    if not wanted.size:
+        return {}
+    axis = VariantAxis(path)
+    try:
+        return {
+            row: {
+                "alid": record.alid,
+                "chromosome": record.chromosome,
+                "position": record.position,
+                "effect_allele": record.effect_allele,
+                "other_allele": record.other_allele,
+                "rsid": record.rsid,
+                "source_alid": record.source_alid,
+            }
+            for row, record in axis.by_indices(sorted(int(r) for r in wanted)).items()
+        }
+    finally:
+        axis.close()
+
+
+def _respelled_pairs(
+    left_only: dict[int, dict[str, Any]], right_only: dict[int, dict[str, Any]]
+) -> list[tuple[int, int, bool]]:
+    """Unmatched rows that name one site and one allele pair: `(left, right, flipped)`.
+
+    A key held by more than one row on either side is not paired: which row would
+    match is then a guess.
+    """
+
+    def key(record: dict[str, Any]) -> tuple[str, int, frozenset[str]]:
+        return (
+            record["chromosome"],
+            record["position"],
+            frozenset((record["effect_allele"], record["other_allele"])),
+        )
+
+    def unique(rows: dict[int, dict[str, Any]]) -> dict[tuple[str, int, frozenset[str]], int]:
+        seen: dict[tuple[str, int, frozenset[str]], list[int]] = {}
+        for row, record in rows.items():
+            seen.setdefault(key(record), []).append(row)
+        return {k: v[0] for k, v in seen.items() if len(v) == 1}
+
+    left_keys, right_keys = unique(left_only), unique(right_only)
+    pairs = []
+    for k in sorted(set(left_keys) & set(right_keys), key=lambda k: left_keys[k]):
+        left_row, right_row = left_keys[k], right_keys[k]
+        flipped = left_only[left_row]["effect_allele"] != right_only[right_row]["effect_allele"]
+        pairs.append((left_row, right_row, flipped))
+    return pairs
+
+
+def compare_aligned(
+    left: Path, right: Path, *, n_workers: int = 1, band_rows: int = ALIGNED_BAND_ROWS
+) -> tuple[dict[str, Any], list[tuple[Any, ...]], dict[str, np.ndarray]]:
+    """Two Dense releases compared cell by cell on the rows they share by ALID.
+
+    Their Analyses must be the same, in the same order. Every row is accounted
+    for: matched by ALID, paired as one site in two spellings, or held by one side
+    only. Returns the report, the unmatched rows with their Store Variant Table
+    rows, and every compared row's difference code (`ROW_CODES`).
+    """
+    from opengwasdb.build.ordered_pool import ordered_map
+    from opengwasdb.validation.observed_view import _map_axis
+
+    left_ids = [row[1] for row in _read_tsv(left / "analyses.tsv")[1:]]
+    right_ids = [row[1] for row in _read_tsv(right / "analyses.tsv")[1:]]
+    if left_ids != right_ids:
+        raise SystemExit("the two releases do not hold the same Analyses in the same order")
+    n_left = int(zarr.open_array(left / "data.zarr" / "z").shape[0])
+    n_right = int(zarr.open_array(right / "data.zarr" / "z").shape[0])
+    axis = _map_axis(left, right, n_left, n_right)
+    mapped = axis.source_to_target
+    hit = mapped >= 0
+    right_hit = np.zeros(n_right, dtype=bool)
+    right_hit[mapped[hit]] = True
+    left_only = _variant_rows(left, np.flatnonzero(~hit))
+    right_only = _variant_rows(right, np.flatnonzero(~right_hit))
+    pairs = _respelled_pairs(left_only, right_only)
+    paired_left = {pair[0] for pair in pairs}
+    paired_right = {pair[1] for pair in pairs}
+
+    se_log_bound = se_log_half_step(_encoding_plan(left)) + se_log_half_step(_encoding_plan(right))
+    shared = (str(left), str(right), se_log_bound)
+    left_rows = np.flatnonzero(hit)
+    matched, matched_codes = _merge_units(
+        ordered_map(
+            _aligned_unit,
+            _units(left_rows, mapped[hit], np.zeros(left_rows.size, dtype=bool), band_rows),
+            n_workers,
+            shared=shared,
+        )
+    )
+    pair_array = np.array([(a, b, f) for a, b, f in pairs], dtype="int64").reshape(-1, 3)
+    respelled, respelled_codes = _merge_units(
+        ordered_map(
+            _aligned_unit,
+            _units(pair_array[:, 0], pair_array[:, 1], pair_array[:, 2].astype(bool), band_rows),
+            n_workers,
+            shared=shared,
+        )
+    )
+    respelled["flipped"] = int(pair_array[:, 2].sum())
+    report = {
+        "left": str(left),
+        "right": str(right),
+        "n_analyses": len(left_ids),
+        "n_rows": {"left": n_left, "right": n_right},
+        "row_codes": ROW_CODES,
+        "matched_by_alid": {"rows": int(hit.sum()), "order_preserved": axis.order_preserved,
+                            **matched},
+        "respelled": {"rows": len(pairs), **respelled},
+        "left_only": {"rows": len(left_only) - len(paired_left)},
+        "right_only": {"rows": len(right_only) - len(paired_right)},
+    }
+    table = [
+        ("left_only", row, "", record, None, "")
+        for row, record in left_only.items() if row not in paired_left
+    ] + [
+        ("right_only", "", row, record, None, "")
+        for row, record in right_only.items() if row not in paired_right
+    ] + [
+        ("respelled", a, b, left_only[a], right_only[b], int(f))
+        for a, b, f in pairs
+    ]
+    codes = {
+        "matched_left_rows": left_rows,
+        "matched_right_rows": mapped[hit],
+        "matched_codes": matched_codes,
+        "respelled_left_rows": pair_array[:, 0],
+        "respelled_right_rows": pair_array[:, 1],
+        "respelled_flipped": pair_array[:, 2].astype(bool),
+        "respelled_codes": respelled_codes,
+    }
+    return report, table, codes
+
+
+UNMATCHED_COLUMNS = (
+    "kind", "left_row", "right_row", "alid", "right_alid", "flipped", "chromosome", "position",
+    "effect_allele", "other_allele", "rsid", "source_alid",
+)
+
+
+def write_unmatched(path: Path, table: list[tuple[Any, ...]]) -> None:
+    """Every row not matched by ALID, with its Store Variant Table row, as a TSV."""
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
+        writer.writerow(UNMATCHED_COLUMNS)
+        for kind, left_row, right_row, record, other, flipped in table:
+            writer.writerow(
+                (kind, left_row, right_row, record["alid"], other["alid"] if other else "",
+                 flipped, record["chromosome"], record["position"], record["effect_allele"],
+                 record["other_allele"], record["rsid"] or "", record["source_alid"] or "")
+            )
+
+
+def _summarise_aligned(report: dict[str, Any]) -> None:
+    matched, respelled = report["matched_by_alid"], report["respelled"]
+    print(f"rows: {report['n_rows']}; matched by ALID {matched['rows']:,}, "
+          f"respelled {respelled['rows']:,} ({respelled['flipped']:,} flipped), "
+          f"left only {report['left_only']['rows']:,}, right only {report['right_only']['rows']:,}")
+    for label, part in (("matched", matched), ("respelled", respelled)):
+        print(f"{label}: {part['rows_differing']:,} rows differ: {part['rows_by_code']}")
+        for plane, record in part["planes"].items():
+            counts = {k: v for k, v in record.items() if k != "examples"}
+            print(f"  {plane}: {counts}")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("left", type=Path, help="the Rebuild from source")
     parser.add_argument("right", type=Path, help="the conversion of the registered release")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--block-cells", type=int, default=BLOCK_CELLS)
+    parser.add_argument(
+        "--aligned",
+        action="store_true",
+        help="compare two Dense releases' decoded cells on the rows they share by ALID, "
+        "for releases whose variant axes differ",
+    )
+    parser.add_argument("--n-workers", type=int, default=1, help="fork pool for --aligned")
+    parser.add_argument("--band-rows", type=int, default=ALIGNED_BAND_ROWS)
     return parser
 
 
 def main() -> int:
     args = _parser().parse_args()
-    report = compare_releases(args.left, args.right, args.block_cells)
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    if args.aligned:
+        report, table, codes = compare_aligned(
+            args.left, args.right, n_workers=args.n_workers, band_rows=args.band_rows
+        )
+        write_unmatched(args.output.with_suffix(".unmatched.tsv"), table)
+        np.savez_compressed(args.output.with_suffix(".codes.npz"), **codes)
+    else:
+        report = compare_releases(args.left, args.right, args.block_cells)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    _summarise(report)
+    if args.aligned:
+        _summarise_aligned(report)
+    else:
+        _summarise(report)
     print(f"Wrote {args.output}")
     return 0
 

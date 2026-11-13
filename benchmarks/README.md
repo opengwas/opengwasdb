@@ -1375,6 +1375,38 @@ records, so these baselines are times, not bytes.
 
 ---
 
+### `compare_store_releases.py`
+
+Compares two Store Releases array by array (metadata, decoded values), with
+`analyses.tsv`, `variants.tsv.gz` and the encoding plans. Arrays are compared
+position by position, so two releases whose variant axes differ are not
+comparable that way.
+
+`--aligned` (#322) compares two Dense releases whose axes differ -- a rebuild
+that drops rows (#376's off-primary lifts) or spells an indel's ALID the other
+way round (#381) -- through the reader every query uses. Rows are matched by
+ALID exactly, as `check-observed-view` maps them; rows left over that name one
+site and one allele pair are paired as a respelling, with the right-hand Z
+negated and EAF taken as `1 − EAF` where the effect alleles swapped; the rest are
+listed as held by one side only. Each pair's decoded Z, SE and EAF are compared
+cell by cell. A differing SE is counted three ways: a `float16` rounding of the
+other side (#355), within both releases' codec bound (a refitted `int8_residual`
+model re-quantises every coded cell: half a `residual_range / 127` step each in
+log space), or beyond it. Nothing is called expected: the caller names the change
+behind each kind. It runs on the fork pool with `--n-workers`, a band of
+`--band-rows` rows at a time.
+
+```bash
+pixi run -e dev python benchmarks/compare_store_releases.py REBUILD PUBLISHED \
+  --aligned --n-workers 32 --output OUT.json
+```
+
+Beside `OUT.json` it writes `OUT.unmatched.tsv` (every row not matched by ALID,
+with its Store Variant Table row) and `OUT.codes.npz` (every compared pair's rows
+and its difference code, the bits in the report's `row_codes`).
+
+---
+
 ### #244: zarr-python 3's read levers, and the 0.2.0 shape screen
 
 #244 moved the package to zarr-python 3.4. These scripts measured what that
