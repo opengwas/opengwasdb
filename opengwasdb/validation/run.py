@@ -362,13 +362,16 @@ class _Run:
         label = _scan_label(scan, target)
         try:
             with log_phase(log, label):
-                with self.timer.phase(label):
+                with self.timer.phase(label) as clock:
                     # The folds share the one read, so they are charged to it, not
                     # timed apart: naming them says which rules the phase serves.
                     log.info("%s: %s", label, ", ".join(_serves(ready, riders)))
                     done.drive()
                     _finish(scan, target)
-                    self.settle_waiting(scan, i, target)
+                    # A waiting check is judged here, in the read's span, but it is
+                    # its own phase: charging it to the scan too would count it twice.
+                    with clock.paused():
+                        self.settle_waiting(scan, i, target)
                     self.settle_held(held, i, target)
                     # The read is over, so what the folds held to measure with goes
                     # before they are judged, not after: on a full-size release the

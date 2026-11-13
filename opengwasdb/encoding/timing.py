@@ -89,6 +89,21 @@ def log_progress_unknown(
     )
 
 
+class PhaseClock:
+    """The running phase's clock: what runs inside `paused` is not charged to it."""
+
+    def __init__(self) -> None:
+        self.paused_seconds = 0.0
+
+    @contextmanager
+    def paused(self) -> Iterator[None]:
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.paused_seconds += time.perf_counter() - started
+
+
 class PhaseTimer:
     """Seconds accumulated per named phase, over a run that visits each many times.
 
@@ -102,19 +117,23 @@ class PhaseTimer:
     row chunk reports the sum of its visits, so `total()` is the accounted work
     and each phase's share of it is a real fraction. Wrapping one phase inside
     another would make both shares meaningless, which is why the callers time
-    leaves only.
+    leaves only. A phase whose span must hand part of itself to other phases --
+    a validation scan that ends by judging the checks that waited for its pass
+    -- pauses its clock around them (`PhaseClock.paused`), so each second is
+    charged once (issue #308).
     """
 
     def __init__(self) -> None:
         self.seconds: dict[str, float] = {}
 
     @contextmanager
-    def phase(self, name: str) -> Iterator[None]:
+    def phase(self, name: str) -> Iterator[PhaseClock]:
+        clock = PhaseClock()
         started = time.perf_counter()
         try:
-            yield
+            yield clock
         finally:
-            self.record(name, time.perf_counter() - started)
+            self.record(name, time.perf_counter() - started - clock.paused_seconds)
 
     def record(self, name: str, seconds: float) -> None:
         """Charge `seconds` to `name`, as `phase` does once the work has finished.

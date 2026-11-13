@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -214,6 +215,55 @@ def test_a_rule_whose_body_skips_gets_one_line_and_no_row(ragged_store_path, log
         message.startswith("sqlite.variant_aliases on .: skipped, ")
         for message in messages
     ), "the rule must say it was skipped"
+
+#: How long the slowed check below takes, far above the fixture's whole scan.
+_DELAY = 1.5
+
+
+def _report_seconds(messages: list[str]) -> dict[str, float]:
+    """Each phase of the closing report with the seconds charged to it."""
+    rows: dict[str, float] = {}
+    for message in messages:
+        if _REPORT in message:
+            for line in message.splitlines():
+                if line.startswith("  ") and not line[2:].startswith("total"):
+                    name, seconds, _share = line[2:].rsplit(None, 2)
+                    rows[name] = float(seconds.rstrip("s"))
+    return rows
+
+
+def test_a_check_judged_when_a_pass_ends_is_charged_once(
+    indexed_store, monkeypatch, logged
+) -> None:
+    """A check that waited for the association scan's pass is judged when the read ends,
+    inside the scan's span. Its time is its own row and not also the scan's: the report
+    partitions the run, so its total is the work done, not more (issues #308, #314).
+
+    `encoding.eaf` is that check wherever the release has an EAF exception table: it
+    decides whether the value folds run, so it is registered before them and waits."""
+    real = validation_run._contained
+
+    def slowed(rule, target, findings):
+        if rule.name == "encoding.eaf":
+            time.sleep(_DELAY)
+        return real(rule, target, findings)
+
+    monkeypatch.setattr(validation_run, "_contained", slowed)
+    started = time.monotonic()
+    validate_store(indexed_store)
+    wall = time.monotonic() - started
+
+    messages = _messages(logged)
+    rows = _report_seconds(messages)
+    check, scan = "encoding.eaf on data.zarr", "scan associations on data.zarr"
+    assert rows[check] >= _DELAY, "the fixture's EAF table check must be the slowed one"
+    assert any(m.startswith(f"{check}: start") for m in messages)
+    # The check rode the pass: it was judged inside the scan's own start and end lines.
+    order = [m for m in messages if m.startswith((f"{check}: start", f"{scan}: done in"))]
+    assert order[0].startswith(check), "the check must be judged inside the scan's span"
+    assert rows[scan] < _DELAY, rows
+    assert sum(rows.values()) <= wall, (rows, wall)
+
 
 #: Rows a band holds in the tests below: the budget is set to this many rows, so the
 #: expected band count is the grid's rows divided by it — not the helper's answer.
