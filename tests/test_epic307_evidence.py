@@ -304,6 +304,31 @@ def test_a_record_yields_the_steps_wall_time_and_each_phases_span(tmp_path):
     assert [p["logged_duration_seconds"] for p in step["phases"]] == [90, 5700]
 
 
+def test_an_interval_whose_two_lines_share_a_second_is_zero_not_missing(tmp_path):
+    """#322's build planned its planes within the second it logged its encoding plan:
+    the interval between those lines is 0 s, and the next `until` is the one after
+    `after` in the log, not the next one a second later."""
+    path = _record(
+        tmp_path,
+        "\n".join(
+            [
+                _line("2026-11-13 03:13:52", "Encoding plan: {'version': 3}"),
+                _line("2026-11-13 03:13:52", "Band-write z: start"),
+                _line("2026-11-13 03:36:15", "Band-write z: done in 22m22s"),
+                _line("2026-11-13 03:36:15", "Band-write se: start"),
+            ]
+        )
+        + "\n",
+    )
+    record = parse_record(path)
+
+    planes = record.interval(r"^Encoding plan:", r"^Band-write z: start$")
+    assert planes is not None and planes["seconds"] == 0.0
+    later = record.interval(r"^Band-write z: done in", r"^Band-write .*: start$")
+    assert later is not None and later["to"] == "2026-11-13T03:36:15"
+    assert record.interval(r"^Band-write se: start$", r"^Band-write z: start$") is None
+
+
 # --- 3. windows -------------------------------------------------------------
 
 
