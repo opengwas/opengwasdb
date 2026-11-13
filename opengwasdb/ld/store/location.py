@@ -6,11 +6,12 @@ ranges reads exactly as it does from disk. zarr opens a URL through fsspec's HTT
 (aiohttp). Nothing here lists a directory: every node is found by its own metadata document,
 which a static host serves like any other file.
 
-Every element a reader or a rule reads goes through a `ChunkCache`. It reads whole inner
-chunks, which is what Zarr fetches and decodes in any case, keeps the decoded chunks up to a
-byte budget, and serves each request from them. So a query that reads a few pairs at a time,
-as clumping does once per lead, fetches each chunk once, from disk or over HTTP. How a store
-is read is decided here, in one place, which ogld#8 tunes when it times the reads.
+Every element a reader reads goes through a `ChunkCache`. It reads whole inner chunks, which
+is what Zarr fetches and decodes in any case, keeps the decoded chunks and the shard indexes
+up to a byte budget, and serves each request from them. So a query that reads a few pairs at a
+time, as clumping does once per lead, fetches each chunk once, from disk or over HTTP. A read's
+missing runs of chunks are fetched together, a bounded batch at a time (ogld#32). How a store is
+read is decided here, in one place, which ogld#8 and ogld#32 measured over HTTP.
 """
 
 from __future__ import annotations
@@ -96,7 +97,7 @@ class ChunkCache:
 
     def take(self, array: zarr.Array[Any], coords: npt.ArrayLike) -> npt.NDArray[Any]:
         """The elements of a 1-D array at `coords`, in that order, from the inner chunks that
-        hold them: each read whole, once, and runs of neighbouring chunks in one read."""
+        hold them: each read whole, once, the missing ones fetched together (`_chunks`)."""
         at = np.asarray(coords, dtype=np.int64)
         if len(at) == 0:
             return np.asarray(array[0:0])
@@ -263,11 +264,17 @@ class _KeptIndexes(WrapperStore[Store]):
     reads nothing else that way. So each suffix read is answered from the cache when it holds
     it, and kept when it is fetched; every other read passes through. A missing shard is not
     kept, and reads as zarr reads it, its array's fill value, which the reader refuses.
+
+    A read fetches its runs together, so two runs of one shard can both miss its index at once.
+    The first fetches it and the second awaits that fetch (`_pending`), so the index is fetched
+    once. zarr runs every asynchronous read on its one event loop, so `_pending` is only ever
+    touched from that loop's thread.
     """
 
     def __init__(self, store: Store, cache: ChunkCache) -> None:
         super().__init__(store)
         self._cache = cache
+        self._pending: dict[tuple[str, int], asyncio.Future[bytes | None]] = {}
 
     def _with_store(self, store: Store) -> _KeptIndexes:
         return type(self)(store, self._cache)
@@ -279,11 +286,28 @@ class _KeptIndexes(WrapperStore[Store]):
             return await self._store.get(key, prototype, byte_range)
         kept = self._cache.index(key, byte_range.suffix)
         if kept is None:
-            fetched = await self._store.get(key, prototype, byte_range)
-            if fetched is None:
-                return None
-            kept = self._cache.keep_index(key, byte_range.suffix, fetched.to_bytes())
-        return prototype.buffer.from_bytes(kept)
+            kept = await self._shared(key, prototype, byte_range)
+        return None if kept is None else prototype.buffer.from_bytes(kept)
+
+    async def _shared(
+        self, key: str, prototype: BufferPrototype, byte_range: SuffixByteRequest
+    ) -> bytes | None:
+        """The index at `key`, from the fetch of it in flight if there is one, else fetched
+        and kept; None for a missing shard."""
+        pending = self._pending.get((key, byte_range.suffix))
+        if pending is None:
+            pending = asyncio.ensure_future(self._fetched(key, prototype, byte_range))
+            self._pending[(key, byte_range.suffix)] = pending
+            pending.add_done_callback(lambda _: self._pending.pop((key, byte_range.suffix)))
+        return await asyncio.shield(pending)
+
+    async def _fetched(
+        self, key: str, prototype: BufferPrototype, byte_range: SuffixByteRequest
+    ) -> bytes | None:
+        fetched = await self._store.get(key, prototype, byte_range)
+        if fetched is None:
+            return None
+        return self._cache.keep_index(key, byte_range.suffix, fetched.to_bytes())
 
     def get_sync(
         self,

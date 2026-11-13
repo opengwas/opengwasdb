@@ -620,6 +620,16 @@ def test_a_read_fetches_its_runs_together(small_chunks: Path) -> None:
     assert flight.peak == len(APART)
 
 
+def test_a_run_is_cut_where_a_shard_ends_and_at_the_bytes_in_flight() -> None:
+    # Chunks 1–9 and 12, four a shard, three chunks' bytes in flight: 1–9 is cut at 4 and 8,
+    # where shards end, and at 7, three chunks on from 4. Batches of two pieces and three chunks.
+    pieces = location._pieces([1, 2, 3, 4, 5, 6, 7, 8, 9, 12], per_shard=4, most=3)
+    assert pieces == [(1, 4), (4, 7), (7, 8), (8, 10), (12, 13)]
+    batches = list(location._batches(pieces, concurrency=2, most=3))
+    assert batches == [[(1, 4)], [(4, 7)], [(7, 8), (8, 10)], [(12, 13)]]
+    assert location._pieces([], per_shard=4, most=3) == []
+
+
 @pytest.mark.parametrize("bound", ["runs", "bytes"])
 def test_a_read_fetches_at_most_its_bounds_at_once(
     small_chunks: Path, monkeypatch: pytest.MonkeyPatch, bound: str
@@ -706,6 +716,19 @@ def test_a_shard_index_is_fetched_once_and_kept_in_the_budget(
     assert [path for path, _ in sent[before:]] == ["/near/22/r/c/5"] * requests
     indexes = [kept for key, kept in cache._kept.items() if key[0] == "near/22/r/c/5"]
     assert sum(held.nbytes for held, _ in indexes) == sum(n for _, n in indexes) <= budget
+
+
+def test_runs_of_one_shard_fetched_together_fetch_its_index_once(served: Served) -> None:
+    # Two runs of shard 5 in one read go out together, and neither finds the index kept: the
+    # second waits for the first's fetch of it rather than fetching it again (ogld#32).
+    url, sent = served
+    cache = location.ChunkCache(1 << 28)
+    near = location.open_group(url, cache=cache)["near/22/r"]
+    assert isinstance(near, zarr.Array)
+    before = len(sent)
+    cache.take(near, [20 * INNER, 22 * INNER])
+    assert sorted({k for _, k in cache._kept if k >= 0}) == [20, 22], "two runs, both fetched"
+    assert [path for path, _ in sent[before:]] == ["/near/22/r/c/5"] * 3
 
 
 @pytest.mark.parametrize("pipeline", ["BatchedCodecPipeline", "FusedCodecPipeline"])
