@@ -26,20 +26,16 @@ from shutil import copytree as copy_release
 import numpy as np
 import pytest
 import zarr
-from dense_sources import build_dense_from_records
 from eaf_tables import rewrite_primary_table
-from residual_stores import dense_completed
 from store_reads import element_reads, times_read
-from test_indexed_subsets import _build, _index_group, _root
+from test_indexed_subsets import _index_group, _root
 
 from opengwasdb.encoding import banding
 from opengwasdb.encoding.codec import EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE, Z_OVERFLOW
 from opengwasdb.layouts.dense import indexed_subsets
-from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.store.arrays import inner_chunk_of
 from opengwasdb.validation import scans, validate_store
 from opengwasdb.validation.rule import Severity
-from opengwasdb.variants import CanonicalVariant, VariantAxis
 
 NAME = "hm3"
 #: Forty-row bands of the two-Analysis grid: five over its 200 variants.
@@ -64,22 +60,6 @@ SE_DIFFER = _message(
 MASK_DIFFER = _message(
     "imputed mask disagrees with the primary release; the index is stale or corrupt"
 )
-
-
-@pytest.fixture(scope="module")
-def completed_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """The completed release with a subset of every third variant, built once."""
-    root = tmp_path_factory.mktemp("one-pass")
-    store, _observed, _panel = dense_completed(root)
-    axis = VariantAxis(store)
-    try:
-        alids = [axis.by_index(row).alid for row in range(0, axis.n_variants, 3)]
-    finally:
-        axis.close()
-    listing = root / "subset.alid.txt"
-    listing.write_text("\n".join(alids) + "\n", encoding="utf-8")
-    _build(store, NAME, listing)
-    return store
 
 
 @pytest.fixture
@@ -218,39 +198,6 @@ def test_a_cell_the_index_cannot_decode_is_named_as_before(
 
 # ── The digest's key: where a value sits, and the run's key ─────────────────
 
-#: A release whose every cell holds its own Z, so moving a value moves something.
-VARIED_VARIANTS = 120
-
-
-@pytest.fixture(scope="module")
-def varied_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """120 variants by two Analyses, each cell a different Z, with a subset of every
-    other variant: three bands of the grid, six comparison units."""
-    root = tmp_path_factory.mktemp("varied")
-    records = [
-        NormalisedAssociation(
-            analysis_id=f"a{col}",
-            variant=CanonicalVariant("1", row + 1, "A", "G"),
-            z=0.01 + 0.03 * row + 0.5 * col,
-            se=0.2,
-            eaf=0.3,
-        )
-        for col in range(2)
-        for row in range(VARIED_VARIANTS)
-    ]
-    store = root / "store.opengwasdb"
-    build_dense_from_records(
-        records, store, store_id="varied", release_id="varied-v1",
-        reference_assembly="GRCh38", chunk_shape=(VARIED_VARIANTS, 2),
-    )
-    listing = root / "subset.alid.txt"
-    listing.write_text(
-        "\n".join(f"1:{row + 1}:A:G" for row in range(0, VARIED_VARIANTS, 2)) + "\n",
-        encoding="utf-8",
-    )
-    _build(store, NAME, listing)
-    return store
-
 
 @pytest.fixture
 def varied(tmp_path: Path, varied_seed: Path) -> Path:
@@ -274,7 +221,7 @@ SWAPPED = (2 * WRITE_UNIT + 1, 2 * WRITE_UNIT + 5)
 def test_the_varied_release_spans_bands_and_units(varied: Path, narrow: None) -> None:
     subset = _subset(varied)
     group = _index_group(varied, NAME)
-    assert len(subset) == VARIED_VARIANTS // 2
+    assert len(subset) == int(_root(varied)["z"].shape[0]) // 2
     bands, tiles = indexed_subsets._comparison_units(group, len(subset), 2)
     assert (len(bands), len(tiles)) == (3, 2)
     assert all(subset[slot] >= 2 * BAND_ROWS for slot in SWAPPED)

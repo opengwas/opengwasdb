@@ -62,6 +62,10 @@ Expected output:
 valid
 ```
 
+On a full-size Dense release, `--n-workers N` reads the planes' bands on N forked
+workers, as many as a quarter of the host's available memory holds, and reports
+exactly what one process reports.
+
 Inspect the release envelope and declared encodings:
 
 ```bash

@@ -100,6 +100,9 @@ class ValidationOptions:
     fidelity_seed: int = 0
     source_assembly: str | None = None
     chain_file: str | Path | None = None
+    #: The forked workers a scan that can be read apart spreads its pass across
+    #: (issue #315); one reads every pass in this process.
+    n_workers: int = 1
 
 
 class Target:
@@ -127,6 +130,7 @@ class Target:
         self.label = label
         self._store = store
         self._group = group
+        self._given_group = group is not None
         self._encoding = encoding
         self._read: dict[str, Any] = {}
         self._until: dict[str, set[str]] = {}
@@ -164,9 +168,28 @@ class Target:
         A grid's is its release's `data.zarr`; a sequence's, `data.zarr/ragged`.
         """
         if self._group is None:
-            path = self.store.data_path
-            self._group = open_group(path / "ragged" if self.kind is Kind.CSR else path)
+            path = self.group_path
+            assert path is not None
+            self._group = open_group(path)
         return self._group
+
+    def reopen(self) -> Any:
+        """Open `group` again, in this process, and read through the new handle from now
+        on: a forked worker's own (issue #315). A group handed in cannot be reopened."""
+        path = self.group_path
+        if path is None:
+            raise RuntimeError(f"target {self.label!r} holds a group no other process can open")
+        self._group = open_group(path)
+        return self._group
+
+    @property
+    def group_path(self) -> Path | None:
+        """Where `group` is opened from, so a forked worker can open its own handle;
+        None for a group handed in, which only this process holds."""
+        if self._given_group:
+            return None
+        path = self.store.data_path
+        return path / "ragged" if self.kind is Kind.CSR else path
 
     def remember(self, key: str, read: Callable[[], T], *, until: str | None = None) -> T:
         """`read()`, once per target: what two rules read about it is read once.
@@ -309,6 +332,40 @@ def _validation_failed(_target: Target, exc: Exception) -> str:
     return f"validation failed: {exc}"
 
 
+class Split(Generic[B]):
+    """A scan's blocks as units a forked worker reads alone (issue #315).
+
+    `units` runs where the pass is driven, in block order, and yields what reading
+    one block takes: its bounds, and whatever the pass reads once for every block --
+    a block's span of a side table -- already cut out. `read` makes the block from
+    its unit in whichever process takes it. A scan whose blocks are read through
+    its split in one process, and one read by workers, read the same blocks.
+
+    `unit_bytes` is what one worker holds while it reads and measures one block:
+    the decoded budget a block is sized by (issue #254), which a pass at N workers
+    holds N times, and the worker's own floor. `result_bytes` is what the driving
+    process holds of one block's outcome until it is added.
+    """
+
+    @property
+    def unit_bytes(self) -> int:
+        raise NotImplementedError
+
+    @property
+    def result_bytes(self) -> int:
+        raise NotImplementedError
+
+    def units(self) -> Iterator[Any]:
+        raise NotImplementedError
+
+    def read(self, unit: Any) -> B:
+        raise NotImplementedError
+
+    def describe(self, unit: Any) -> str:
+        """Which block `unit` is, in words a log names it by."""
+        raise NotImplementedError
+
+
 @dataclass(frozen=True)
 class Scan(Generic[B]):
     """One streamed read of a target, shared by every fold that names it.
@@ -328,24 +385,51 @@ class Scan(Generic[B]):
     #: Reads what the pass's riders asked for and the blocks did not reach -- a side
     #: table's entries past the last block -- once the blocks are read.
     finish: Callable[[Target], None] | None = None
+    #: The target's blocks as units forked workers can read (issue #315); None, or
+    #: a split of None, reads the pass in this process.
+    split: Callable[[Target], Split[B] | None] | None = None
 
 
 def _always_rides(_target: Target) -> bool:
     return True
 
 
+class Rider(Generic[B]):
+    """What a riding check is handed each block of a pass by, in two steps.
+
+    `part` reads what one block adds, in whichever process read the block, and
+    changes nothing; `join` adds it, where the pass is driven, in block order. A
+    pass read in one process hands a block as `join(part(block))`, and one read by
+    forked workers takes each part from the worker that read its block and joins
+    the parts in the same order, so the check sees the same pass either way (issue
+    #315). A part crosses from a worker to the parent, so it is small: what a block
+    adds to the check's totals, not the block.
+    """
+
+    def part(self, block: B) -> Any:
+        raise NotImplementedError
+
+    def join(self, part: Any) -> None:
+        raise NotImplementedError
+
+    def __call__(self, block: B) -> None:
+        self.join(self.part(block))
+
+
 @dataclass(frozen=True)
 class Ride(Generic[B]):
     """What a `Check` takes from a scan's pass rather than reading it again (issue #314).
 
-    `board` is asked before a pass over a target, and returns what to hand each
-    block, or None when the check reads nothing from the blocks themselves (a side
-    table the scan streams, say). What it reads it leaves on the target, where the
-    check finds it; a check whose ride failed, or that no pass carried, reads for
-    itself. What a ride hands a check is the data itself, except the primary planes
-    `subsets.indexed` takes as digests: there a change to one value of one cell is
-    always found, and a corruption of several cells or planes in one comparison unit
-    is missed with probability about 2^-64 per unit, under a key drawn per run.
+    `board` is asked before a pass over a target, and returns the `Rider` each
+    block is handed to, or None when the check reads nothing from the blocks
+    themselves (a side table the scan streams, say). What it reads it leaves on
+    the target, where the check finds it; a check whose ride failed, or that no
+    pass carried, reads for itself. What a ride hands a check is the data itself,
+    except the primary planes `subsets.indexed` takes as digests: there a change to
+    one value of one cell is always found, and a corruption of several cells or
+    planes in one comparison unit is missed with probability about 2^-64 per unit,
+    under a key drawn once per run, in the process that drives the pass, and shared
+    with its workers.
 
     A check registered before its scan's first fold rides a pass that has not
     happened yet, so it is judged when that pass ends, and the folds on the scan
@@ -355,7 +439,7 @@ class Ride(Generic[B]):
     """
 
     scan: Scan[B]
-    board: Callable[[Target], Callable[[B], None] | None]
+    board: Callable[[Target], Rider[B] | None]
     when: Callable[[Target], bool] = _always_rides
 
 

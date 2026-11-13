@@ -3670,6 +3670,24 @@ def _digest_planes(
     return planes, every
 
 
+@dataclass(frozen=True)
+class SeenRows:
+    """What one band of primary rows adds to a subset's digests (issue #315).
+
+    The band's rows and the subset slots `[s0, s1)` they hold; then either each
+    unit's sum over those slots, one row per index write band from the first the
+    slots reach, or that the band could not be digested.
+    """
+
+    r0: int
+    r1: int
+    n_analyses: int
+    s0: int
+    s1: int
+    sums: np.ndarray | None = None
+    undigested: bool = False
+
+
 class SubsetRide:
     """One Indexed Variant Subset's share of the association scan's pass (issue #314).
 
@@ -3731,31 +3749,58 @@ class SubsetRide:
         be decoded; the units it holds are then compared cell by cell, which meets
         the same failure in its own words.
         """
-        if (r0, n_analyses) != (self.rows_seen, self.n_analyses):
-            self.broken = True
-            raise ValueError(f"primary rows from {r0} after {self.rows_seen} were read")
-        self.rows_seen = r1
+        self.join(self.part(r0, r1, n_analyses, plane))
+
+    def part(self, r0: int, r1: int, n_analyses: int, plane: Any) -> SeenRows:
+        """What primary rows `[r0, r1)` add to the digests, without adding it.
+
+        Made wherever the band was decoded -- a validation pass's forked worker, say
+        (issue #315) -- under the key the ride was made with, which is the run's,
+        drawn once where the pass is driven. `join` adds it there, in row order.
+        """
         s0, s1 = (int(edge) for edge in np.searchsorted(self.subset, (r0, r1)))
+        seen = SeenRows(r0, r1, n_analyses, s0, s1)
         if s1 == s0 or bool(self.suspect.all()):
-            return
+            return seen
         local = self.subset[s0:s1] - r0
         try:
             values = [np.asarray(plane(name))[local] for name in self.planes]
         except Exception:  # the cell-by-cell comparison meets it, in its own words
-            for w in self._bands_over(s0, s1):
+            return replace(seen, undigested=True)
+        keys = np.arange(s0, s1, dtype=np.int64)[:, None] + self._analysis_keys[None, :]
+        return replace(seen, sums=self._unit_sums(s0, s1, _cell_digests(keys, values, self.key)))
+
+    def join(self, seen: SeenRows) -> None:
+        """Add rows a `part` saw to the digests, refusing rows out of order.
+
+        Each band's rows follow the last band's: a digest sums whatever is added to
+        it, so rows added twice or skipped would vouch for a unit the pass never
+        read whole.
+        """
+        if (seen.r0, seen.n_analyses) != (self.rows_seen, self.n_analyses):
+            self.broken = True
+            raise ValueError(f"primary rows from {seen.r0} after {self.rows_seen} were read")
+        self.rows_seen = seen.r1
+        if seen.undigested:
+            for w in self._bands_over(seen.s0, seen.s1):
                 self.suspect[w, :] = True
             return
-        keys = np.arange(s0, s1, dtype=np.int64)[:, None] + self._analysis_keys[None, :]
-        self._fold(s0, s1, _cell_digests(keys, values, self.key))
+        if seen.sums is not None:
+            first = self._bands_over(seen.s0, seen.s1).start
+            self.digests[first : first + len(seen.sums)] += seen.sums
 
-    def _fold(self, s0: int, s1: int, cells: np.ndarray) -> None:
-        """Add slots `[s0, s1)`'s cell digests to the units they fall in."""
-        for w in self._bands_over(s0, s1):
+    def _unit_sums(self, s0: int, s1: int, cells: np.ndarray) -> np.ndarray:
+        """Slots `[s0, s1)`'s cell digests summed into each unit they fall in, one row
+        per index write band from the first they reach."""
+        over = self._bands_over(s0, s1)
+        sums = np.zeros((len(over), len(self.tiles)), dtype=np.uint64)
+        for row, w in enumerate(over):
             start, stop = self.bands[w]
             per_analysis = cells[max(start, s0) - s0 : min(stop, s1) - s0].sum(
                 axis=0, dtype=np.uint64
             )
-            self.digests[w] += np.add.reduceat(per_analysis, self._tile_starts)
+            sums[row] = np.add.reduceat(per_analysis, self._tile_starts)
+        return sums
 
     def _bands_over(self, s0: int, s1: int) -> range:
         """The index write bands that slots `[s0, s1)` fall in."""
