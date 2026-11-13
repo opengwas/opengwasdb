@@ -63,6 +63,6 @@ fallback reader and sole writer. numcodecs is already a direct runtime dependenc
   published chain makes fallback explicit and avoids a private-API dependency.
 
 The cache budget is not an RSS limit. A read also holds requested chunks, its result, one
-batch of decoded buffers (and cache copies for fallback runs), compressed ranges, and small indexes/job
-bookkeeping. Concurrent reads each have their own batch. Compressed bytes are not counted
+batch of decoded buffers (and cache copies for fallback runs), compressed ranges, codec
+workspace, and small index/job bookkeeping. Concurrent reads each have their own batch. Compressed bytes are not counted
 as decoded bytes; a codec's encoded size is not in general bounded by its decoded size.

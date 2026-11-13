@@ -5,14 +5,17 @@ from __future__ import annotations
 import asyncio
 import threading
 import tracemalloc
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
 import zarr
-from store_copies import TEST_STORE
+from store_copies import TEST_STORE, resharded
+from zarr.abc.store import RangeByteRequest, SuffixByteRequest
 from zarr.codecs import BytesCodec, Crc32cCodec, GzipCodec, ShardingCodec, ZstdCodec
+from zarr.core.metadata.v3 import RectilinearChunkGridMetadata
 
 from ogld.store import location
 
@@ -35,6 +38,55 @@ def test_numeric_chunks_equal_zarr(tmp_path: Path, endian: str) -> None:
     assert location._NumericDecoder.of(array) is not None
     cache = location.ChunkCache()
     np.testing.assert_array_equal(cache.take(array, np.arange(len(data))), array[:])
+
+
+def test_big_endian_shard_index_equals_zarr(tmp_path: Path) -> None:
+    shard = ShardingCodec(
+        chunk_shape=(8,),
+        codecs=[BytesCodec(endian="big"), ZstdCodec()],
+        index_codecs=[BytesCodec(endian="big"), Crc32cCodec()],
+    )
+    array = zarr.create_array(
+        store=tmp_path / "a",
+        shape=(19,),
+        dtype="int32",
+        chunks=(16,),
+        serializer=shard,
+        compressors=None,
+        fill_value=-1,
+    )
+    array[:] = np.arange(19) * 257
+    assert location._NumericDecoder.of(array) is not None
+    np.testing.assert_array_equal(location.ChunkCache().take(array, np.arange(19)), array[:])
+
+
+def test_non_regular_or_multidimensional_arrays_are_not_recognised(tmp_path: Path) -> None:
+    matrix = zarr.create_array(store=tmp_path / "matrix", shape=(8, 8), dtype="int32")
+    assert location._NumericDecoder.of(matrix) is None
+    array = numbers(tmp_path)
+    meta = replace(
+        array.metadata,
+        shape=(32,),
+        chunk_grid=RectilinearChunkGridMetadata(chunk_shapes=((16, 16),)),
+    )
+    rectilinear = zarr.Array(zarr.AsyncArray(meta, array.store_path))
+    assert location._NumericDecoder.of(rectilinear) is None
+
+
+def test_synchronous_index_reads_keep_the_same_budget(tmp_path: Path) -> None:
+    array = numbers(tmp_path)
+    cache = location.ChunkCache(256)
+    store = location._KeptIndexes(array.store, cache)
+    expected = (tmp_path / "r/c/0").read_bytes()
+    for _ in range(2):
+        got = store.get_sync("c/0", byte_range=SuffixByteRequest(68))
+        assert got is not None
+        assert got.to_bytes() == expected[-68:]
+    assert cache._bytes == 68
+    assert store.get_sync("c/missing", byte_range=SuffixByteRequest(68)) is None
+    prefix = store.get_sync("c/0", byte_range=RangeByteRequest(0, 4))
+    assert prefix is not None
+    assert prefix.to_bytes() == expected[:4]
 
 
 def test_a_sparse_warm_read_does_not_join_whole_chunks(tmp_path: Path) -> None:
@@ -162,6 +214,37 @@ def numbers(tmp_path: Path) -> zarr.Array[Any]:
     array[:] = data
     assert (tmp_path / "r/c/0").exists()
     return array
+
+
+def test_noncontiguous_physical_offsets_equal_zarr(tmp_path: Path) -> None:
+    import numcodecs
+
+    array = numbers(tmp_path)
+    array[:] = np.arange(29, dtype=np.int32) * 17
+    path = tmp_path / "r/c/0"
+    data = path.read_bytes()
+    crc = numcodecs.CRC32C()
+    index = np.frombuffer(crc.decode(data[-68:]), dtype="<u8").copy().reshape(4, 2)
+    # Logical chunks 0,1 now live at physical chunks 0,2, with an unwanted chunk between.
+    index[[1, 2]] = index[[2, 1]]
+    path.write_bytes(data[:-68] + crc.encode(index).tobytes())
+    coords = np.arange(16)
+    np.testing.assert_array_equal(location.ChunkCache().take(array, coords), array[:16])
+
+
+def test_an_elided_near_band_inner_chunk_is_refused(tmp_path: Path) -> None:
+    import ogld
+
+    path = resharded(tmp_path / "store", 512, 4)
+    store = ogld.open(path)
+    start, _ = store._reader._ranges["22"]
+    names = store._reader.alids_of(np.array([start, start + 1])).tolist()
+    assert np.isfinite(store.matrix(names).r).all()
+    array = zarr.open_array(path / "near/22/r", mode="r+")
+    array[:512] = array.fill_value
+    assert (path / "near/22/r/c/0").exists(), "the shard must still hold its other chunks"
+    with pytest.raises(ValueError, match="chunk the store lost"):
+        ogld.open(path).matrix(names)
 
 
 def test_an_empty_inner_chunk_reads_the_fill_value(tmp_path: Path) -> None:

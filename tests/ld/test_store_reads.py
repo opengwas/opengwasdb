@@ -794,7 +794,7 @@ def test_a_repeated_read_fetches_its_chunks_once(
     # by a reader opened with room for them. One opened with none fetches them again.
     url, sent = served
     store = ogld.open(url, cache_bytes=budget)
-    names = list(StoreReader.open(small_chunks).variants(np.arange(500, 560, 3)).alid)
+    names = list(StoreReader.open(small_chunks).variants(np.arange(500, 540, 4)).alid)
 
     def near_bytes() -> int:
         return sum(length for path, length in sent if path.startswith("/near/22/r/c/"))

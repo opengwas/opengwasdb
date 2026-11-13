@@ -889,7 +889,7 @@ CRC32C in an end-located shard index, `location.py` reads indexes and byte range
 store's async interface and decodes on one process-shared five-worker pool. Both declared
 byte orders are honoured. The index's uint64 offset/length pairs are absolute; both all ones
 means an empty chunk, which reads the declared fill value, just like a missing shard. CRC32C
-and zstd corruption raise. No private zarr codec/index API is called. Every other chain,
+mismatches, malformed zstd frames and decoded-length mismatches raise. No private zarr codec/index API is called. Every other chain,
 including strings, goes through zarr unchanged. Zarr remains the format and the writer.
 
 The same per-read planner and cache budget apply to both paths. Each directly decoded native
@@ -899,7 +899,8 @@ conversion scratch. Each frame's full decoded length is checked before adoption.
 one chunk can be read even when its buffers exceed the allowance. No second decoded batch
 is queued. Each range submits at most five decode jobs. A failed piece cancels sibling
 fetches and drains running decode jobs before returning.
-Compressed ranges and small index/job bookkeeping are additional to the decoded-byte bound;
+Compressed ranges, codec workspace and small index/job bookkeeping are additional to the
+decoded-byte bound;
 the cache budget does not bound RSS. The pool is reset after fork and shared across readers,
 not multiplied per chromosome. Applications budget zarr's I/O helpers separately.
 
@@ -959,8 +960,8 @@ hold fall into runs of neighbouring chunks. Each run is cut where a shard ends, 
 reads one shard. The pieces are fetched in batches, every piece of a batch at once on zarr's event
 loop. A batch holds at most zarr's `async.concurrency` pieces (10 by default) and at most 256 MiB
 as the cache counts memory, two of layout C's Near Band shards; a larger run is cut to fit. A
-read holds one batch at a time: it lets each piece go once its chunks are copied out, before it
-fetches the next batch.
+read holds one batch at a time: it lets each piece go once its chunks are copied out or their
+owned buffers adopted, before it fetches the next batch.
 
 A numeric chunk's decoded size is its buffer, known before it is fetched. A string chunk's is not
 known until it is decoded: its strings may be any length. So a string array's batches are planned
