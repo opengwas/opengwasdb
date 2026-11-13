@@ -94,6 +94,10 @@ def fetch(url: str, byte_range: str | None = None) -> tuple[int, bytes]:
         ("/chr22-A.store/near/22/indptr/c/0", "near/indptr"),
         ("/s.store/index/7/partner/c/12", "index/partner"),
         ("index/X/r/c/1", "index/r"),
+        # ogld#31's Far Pairs: named by their kind, never by their chromosome ("22/partner").
+        ("/hgdp1kgp-v2-EUR-k10.store/far/22/partner/c/0", "far/partner"),
+        ("/far/11/r/c/3", "far/r"),
+        ("s.store/far/22/indptr/c/0", "far/indptr"),
         ("variants/alid/c/12", "variants/alid"),
         ("s.store/variants/a1_frequency/c/0", "variants/a1_frequency"),
         ("s.store/near/22/r/zarr.json", "metadata"),
@@ -196,10 +200,12 @@ def test_the_client_counts_what_crossed_the_proxy(instrumented: Any) -> None:
         control(url, "reset")
         store = instrumented.opened(f"{url}/")
         store.matrix(alids)
-        store.proxies(alids[:5], r2=0.8, kb=10_000)
+        store.proxies(alids, r2=0.8, kb=10_000)
         wire = control(url, "stats")
     reached = set(wire["requests_by_array"])
-    assert {"near/r", "index/r", "variants/alid"} <= reached, "the reads must reach these arrays"
+    # A matrix reads its pairs beyond near_bp from the Far Pairs, and proxies the index (ogld#31).
+    wanted = {"near/r", "far/r", "index/r", "variants/alid"}
+    assert wanted <= reached, "the reads must reach these arrays"
     same_counts(instrumented.TALLY.as_json(), wire)
 
 
@@ -331,6 +337,31 @@ def test_a_run_records_whether_its_checkout_is_the_code_that_ran(
     assert asked == [(SCRIPTS.parent, "0.0.1.dev1+gabc")]
     assert (code["clean"], code["problem"]) == (clean, problem)
     assert len(code["commit"]) == 40
+
+
+def test_a_run_that_read_no_far_pairs_shows_none_not_zero() -> None:
+    # #8's runs read a store without far/, so their Far Pairs columns say nothing was read, not
+    # a measured 0; #31's runs read the Far Pairs, and a read that needed none is a true 0.
+    before, _ = report.read(sorted(RESULTS.glob("*.jsonl.gz")))
+    after, _ = report.read([RESULTS / "far-pairs" / "step1-chr22-after.jsonl.gz"])
+
+    def cell(records: list[dict[str, Any]], case: str, column: str, **read: Any) -> str:
+        found = [
+            r for r in records
+            if r.get("step") == "step1" and r.get("case") == case
+            and all(r.get(k) == v for k, v in read.items())
+        ]  # fmt: skip
+        assert found, f"the records must hold step 1's {case} for this to mean anything"
+        if case == "region":
+            return str(report.region_columns()[report.REGION_HEADER.index(column)](found))
+        return str(report.list_columns()[report.LIST_HEADER.index(column)](found))
+
+    far_rows, far_chunks = "MB of Far Pairs rows", "Far Pairs chunks"
+    assert cell(before, "region", far_rows, width_mb=10, state="cold") == "—"
+    assert cell(before, "scattered", far_chunks, chrom="22", state="cold") == "—"
+    assert cell(after, "region", far_rows, width_mb=10, state="cold") == "0.063"
+    assert cell(after, "region", far_rows, width_mb=3, state="cold") == "0.000"
+    assert cell(after, "scattered", far_chunks, chrom="22", state="cold") == "10"
 
 
 def test_every_lever_off_reads_as_before_ogld_32_and_answers_the_same(

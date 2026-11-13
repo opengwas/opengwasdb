@@ -269,4 +269,9 @@ VALIDATION_RULES: Final = (
     "index.threshold",
     "index.symmetric",
     "index.near",
+    "far.rows",
+    "far.codes",
+    "far.distance",
+    "far.threshold",
+    "far.index",
 )

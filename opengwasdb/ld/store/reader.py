@@ -7,8 +7,9 @@ and Stored r as float64. Every unstored pair it reports is NaN, never a
 number, and the meaning of a NaN is the format's to say (`ogld.format.answer_kinds`).
 
 Reads are bounded (spec §10). Opening reads the provenance and the chromosome ranges, and
-nothing else. A chromosome's positions and its two `indptr` arrays are read the first time
-a request touches it, and kept. Every other read goes through the reader's `ChunkCache`,
+nothing else. A chromosome's positions and its Near Band's and Proxy Index's `indptr` are read
+the first time a request touches it, and its Far Pairs' `indptr` the first time a request needs
+its pairs beyond near_bp; each is kept. Every other read goes through the reader's `ChunkCache`,
 which fetches only the inner chunks holding the elements a request needs, from disk or over
 HTTP alike, and keeps them, so a query that reads a few pairs at a time fetches each once.
 
@@ -47,11 +48,12 @@ from ogld.format.geometry import (
     within,
 )
 from ogld.identity import alid_locus
-from ogld.store.layout import chromosomes_listed, never_data, shown_fill
+from ogld.store.layout import chromosomes_listed, never_data, refused_if_lost, shown_fill
 from ogld.store.location import ChunkCache, open_group
 from ogld.store.tables import Partners, Variants
 
-#: Each chromosome's arrays (spec §1), in the order `_Chromosome` takes them.
+#: Each chromosome's arrays a request touching it opens (spec §1), in the order `_Chromosome`
+#: takes them. Its Far Pairs are opened apart, when a request first needs them (`_far_pairs`).
 _CHROMOSOME_ARRAYS: Final = (
     ("near", "indptr"),
     ("near", "r"),
@@ -59,10 +61,22 @@ _CHROMOSOME_ARRAYS: Final = (
     ("index", "partner"),
     ("index", "r"),
 )
+#: A sparse component's arrays, `index/<chrom>/` and `far/<chrom>/` alike (spec §5).
+_SPARSE_ARRAYS: Final = ("indptr", "partner", "r")
 #: The variant table's columns (spec §2).
 _VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
 #: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
 _PAIRS_PER_STEP: Final = 1 << 22
+
+
+@dataclass(frozen=True)
+class _Sparse:
+    """A sparse component of one chromosome, its Proxy Index or its Far Pairs (spec §5): the
+    `indptr` a reader keeps, and handles on `partner` and `r`, read as requests need them."""
+
+    indptr: npt.NDArray[np.int64]
+    partner: zarr.Array[Any]
+    r: zarr.Array[Any]
 
 
 @dataclass(frozen=True)
@@ -76,9 +90,7 @@ class _Chromosome:
     position: npt.NDArray[np.int64]
     near_indptr: npt.NDArray[np.int64]
     near_r: zarr.Array[Any]
-    index_indptr: npt.NDArray[np.int64]
-    index_partner: zarr.Array[Any]
-    index_r: zarr.Array[Any]
+    index: _Sparse
 
 
 @dataclass(frozen=True)
@@ -107,6 +119,7 @@ class StoreReader:
     _names: list[str]
     _stops: npt.NDArray[np.int64]
     _loaded: dict[str, _Chromosome]
+    _far: dict[str, _Sparse]
     _cache: ChunkCache
     _columns: dict[str, zarr.Array[Any]]
 
@@ -123,6 +136,7 @@ class StoreReader:
         self._names = list(self._ranges)
         self._stops = np.array([stop for _, stop in self._ranges.values()], dtype=np.int64)
         self._loaded = {}
+        self._far = {}
         self._cache = cache
         # Each handle is opened once: opening one reads its metadata document, which over
         # HTTP is a request.
@@ -237,8 +251,9 @@ class StoreReader:
         """The square matrix of Stored r among `rows`, in the order given (spec §8, §10).
 
         Pairs within near_bp come from the Near Band, resolved as `r_of_pairs` resolves
-        them; farther ones from the Proxy Index rows of the listed variants, each entry that
-        is a listed pair scattered into the matrix, rather than searched for pair by pair.
+        them; farther ones from the Far Pairs rows of the listed variants, each pair whose
+        partner is listed scattered into the matrix, rather than searched for pair by pair. No
+        Proxy Index entry is read (ADR 0007).
         The diagonal is 1. Every pair the store does not hold, the Bound and Not Measured
         alike, is NaN. The matrix is written in place, so `matrix` holds one float64 copy of
         its result (ogld#14); a row asked for twice is copied from its first.
@@ -330,12 +345,12 @@ class StoreReader:
         `first` and `second` broadcast against each other, so one row in `first` is one row
         against many. A row with itself is 1. Every pair the store does not hold, the Bound,
         Not Measured and a pair across chromosomes alike, is NaN. A pair within near_bp is one
-        element of the Near Band; a pair farther apart is looked up in the Proxy Index row of
-        its earlier variant. `partners` (below t_far, with `among`) and `pair_r` resolve
-        their pairs as it does, so a pair is resolved in one place.
+        element of the Near Band; a pair farther apart is looked up in the Far Pairs row of
+        its earlier variant (spec §8). `partners` (below t_far, with `among`) and `pair_r`
+        resolve their pairs as it does, so a pair is resolved in one place.
 
         Memory: the result, 8 bytes a pair, and one step of at most `_PAIRS_PER_STEP` pairs
-        at a time, about 60 bytes each (58 measured), with the index rows of that step's
+        at a time, about 60 bytes each (58 measured), with the Far Pairs rows of that step's
         earlier variants. The broadcast is never copied, so one row against many holds its
         result and one step. `tests/test_partner_reads.py` holds the bound.
         """
@@ -369,12 +384,12 @@ class StoreReader:
         Each row's Near Band pairs inside the region are one contiguous slice of
         `near/<c>/r`, from the row's first code to its last partner before `stop`, never a
         gather pair by pair, and never the row's partners past the region. The region's pairs
-        beyond near_bp come from its rows' Proxy Index rows, each entry inside the region
-        scattered into the matrix. The diagonal is 1 and every unstored pair is NaN. A span
+        beyond near_bp come from its rows' Far Pairs rows, each pair inside the region scattered
+        into the matrix (ADR 0007). The diagonal is 1 and every unstored pair is NaN. A span
         that leaves its chromosome or the Variant Set raises; start == stop is 0 × 0.
 
         Memory: the n × n float64 result, and one block of rows at a time, at most
-        `_PAIRS_PER_STEP` codes, with their index rows.
+        `_PAIRS_PER_STEP` codes, with their Far Pairs rows.
         """
         c = self._span(start, stop)
         out = np.full((stop - start, stop - start), np.nan)
@@ -429,8 +444,8 @@ class StoreReader:
         self, c: _Chromosome, lo: npt.NDArray[np.int64], hi: npt.NDArray[np.int64]
     ) -> npt.NDArray[np.float64]:
         """The Stored r of local pairs lo ≤ hi (spec §8, Figure 2): 1 for a row with itself,
-        the Near Band within near_bp, the earlier row's Proxy Index row out to far_bp, and
-        NaN for the Bound and Not Measured."""
+        the Near Band within near_bp, the earlier row's Far Pairs row out to far_bp, and NaN
+        for the Bound and Not Measured."""
         p = self._provenance
         gap = c.position[hi] - c.position[lo]
         near = within(gap, p["near_bp"]) & (lo != hi)
@@ -439,7 +454,7 @@ class StoreReader:
         codes = self._read(c.near_r, near_address(c.near_indptr, lo[near], hi[near]))
         r[near] = self._encoding.dequantise(codes)
         if len(far):
-            held, codes = self._index_codes(c, lo[far], hi[far])
+            held, codes = self._far_codes(c, lo[far], hi[far])
             r[far[held]] = self._encoding.dequantise(codes[held])
         return r
 
@@ -454,32 +469,33 @@ class StoreReader:
             out[at[j], at[i]] = r
 
     def _scatter_far(self, c: _Chromosome, placed: _Placed) -> None:
-        """Write the Far Pairs among the placed rows into the square: each earlier row's
-        Proxy Index entries that are later placed rows beyond near_bp. Pairs beyond near_bp
-        that the index lacks stay NaN: the Bound, or Not Measured."""
+        """Write the Far Pairs among the placed rows into the square: each placed row's Far
+        Pairs whose partner is placed. Pairs beyond near_bp that the Far Pairs lack stay NaN:
+        the Bound, or Not Measured. A Far Pair never answers a pair within near_bp, which is
+        the Near Band's (spec §8)."""
         local, at, out = placed.local, placed.at, placed.out
         near_bp = self._provenance["near_bp"]
         position = c.position[local]
         if len(local) == 0 or within(position[-1] - position[0], near_bp):
             return
-        length = c.index_indptr[local + 1] - c.index_indptr[local]
+        far = self._far_pairs(c)
+        length = far.indptr[local + 1] - far.indptr[local]
         for a, b in blocks((indptr_of(length), _PAIRS_PER_STEP)):
-            partner, codes, n = self._index_rows(c, local[a:b])
+            partner, codes, n = self._rows(far, local[a:b])
             owner = owners(n, np.arange(a, b, dtype=np.int64))
             j = np.minimum(np.searchsorted(local, partner), len(local) - 1)
-            keep = (local[j] == partner) & (j > owner)
-            keep &= ~within(position[j] - position[owner], near_bp)
+            keep = (local[j] == partner) & ~within(position[j] - position[owner], near_bp)
             r = self._encoding.dequantise(codes[keep])
             out[at[owner[keep]], at[j[keep]]] = r
             out[at[j[keep]], at[owner[keep]]] = r
 
-    def _index_codes(
+    def _far_codes(
         self, c: _Chromosome, lo: npt.NDArray[np.int64], hi: npt.NDArray[np.int64]
     ) -> tuple[npt.NDArray[np.bool_], npt.NDArray[Any]]:
-        """For local pairs lo < hi beyond near_bp: whether the Proxy Index holds each, as
-        the Far Pair it then is, and its code there; read from each lo's index row."""
+        """For local pairs lo < hi beyond near_bp: whether each is a Far Pair, and its code;
+        read from each lo's Far Pairs row (spec §8)."""
         held_by = np.unique(lo)
-        partner, codes, length = self._index_rows(c, held_by)
+        partner, codes, length = self._rows(self._far_pairs(c), held_by)
         size = c.stop - c.start
         keys = owners(length, held_by) * size + partner
         order = np.argsort(keys, kind="stable")
@@ -491,21 +507,22 @@ class StoreReader:
         at = np.minimum(np.searchsorted(keys, wanted), len(keys) - 1)
         return keys[at] == wanted, codes[at]
 
-    def _index_rows(
-        self, c: _Chromosome, local: npt.NDArray[np.int64]
+    def _rows(
+        self, part: _Sparse, local: npt.NDArray[np.int64]
     ) -> tuple[npt.NDArray[np.int64], npt.NDArray[Any], npt.NDArray[np.int64]]:
-        """The Proxy Index rows of `local` rows, back to back: partners, codes, row lengths."""
-        first = c.index_indptr[local]
-        length = c.index_indptr[local + 1] - first
+        """The rows of `local` rows in a sparse component, back to back: partners, codes, row
+        lengths."""
+        first = part.indptr[local]
+        length = part.indptr[local + 1] - first
         coords = spans(first, length)
-        partner = self._read(c.index_partner, coords).astype(np.int64)
-        return partner, self._read(c.index_r, coords), length
+        partner = self._read(part.partner, coords).astype(np.int64)
+        return partner, self._read(part.r, coords), length
 
     # ------------------------------------------------------------ partners
 
     def _index_entries(self, c: _Chromosome, local: npt.NDArray[np.int64]) -> _RowEntries:
         """Each local row's Proxy Index row: lengths, partners and Stored r (spec §5)."""
-        partner, codes, length = self._index_rows(c, local)
+        partner, codes, length = self._rows(c.index, local)
         return length, partner, self._encoding.dequantise(codes)
 
     def _band_entries(
@@ -610,7 +627,7 @@ class StoreReader:
     ) -> list[npt.NDArray[Any]]:
         """The ragged runs of `array` (spec §10), each one slice, through the chunk cache;
         a lost chunk refused."""
-        return [_refused_if_lost(array, run) for run in self._cache.runs(array, first, length)]
+        return [refused_if_lost(array, run) for run in self._cache.runs(array, first, length)]
 
     def _chromosome(self, name: str) -> _Chromosome:
         """One chromosome's kept arrays, read on first use (spec §10). Each of its five arrays'
@@ -626,14 +643,24 @@ class StoreReader:
                 name,
                 start,
                 stop,
-                _refused_if_lost(position, np.asarray(position[start:stop])).astype(np.int64),
+                refused_if_lost(position, np.asarray(position[start:stop])).astype(np.int64),
                 _indptr(near_indptr),
                 near_r,
-                _indptr(index_indptr),
-                index_partner,
-                index_r,
+                _Sparse(_indptr(index_indptr), index_partner, index_r),
             )
         return self._loaded[name]
+
+    def _far_pairs(self, c: _Chromosome) -> _Sparse:
+        """One chromosome's Far Pairs, opened and their `indptr` kept the first time a request
+        needs its pairs beyond near_bp (spec §10). `proxies` and `clump` never do, so a
+        chromosome they touch reads no more than it did before the Far Pairs. Each array's fill
+        value is judged before any of its elements is decoded."""
+        if c.name not in self._far:
+            indptr, partner, r = (
+                _kept_array(self._root, f"far/{c.name}/{array}") for array in _SPARSE_ARRAYS
+            )
+            self._far[c.name] = _Sparse(_indptr(indptr), partner, r)
+        return self._far[c.name]
 
     def _by_chromosome(
         self, rows: npt.NDArray[np.int64]
@@ -651,7 +678,7 @@ class StoreReader:
 
     def _read(self, array: zarr.Array[Any], coords: npt.NDArray[np.int64]) -> npt.NDArray[Any]:
         """The elements of `array` at `coords`, through the chunk cache; a lost chunk refused."""
-        return _refused_if_lost(array, self._cache.take(array, coords))
+        return refused_if_lost(array, self._cache.take(array, coords))
 
     def _checked(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
         """`rows`, if every one is a row of the Variant Set. An Absent ALID is −1 from `rows_of`
@@ -685,7 +712,7 @@ _Estimate = Callable[["_Chromosome", npt.NDArray[np.int64]], npt.NDArray[np.int6
 
 def _index_length(c: _Chromosome, local: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
     """Each local row's Proxy Index entries."""
-    return c.index_indptr[local + 1] - c.index_indptr[local]
+    return c.index.indptr[local + 1] - c.index.indptr[local]
 
 
 def _window(
@@ -760,19 +787,6 @@ def _loci(
     }
 
 
-def _refused_if_lost(array: zarr.Array[Any], values: npt.NDArray[Any]) -> npt.NDArray[Any]:
-    """`values` read from `array`, unless one is a value no LD Store holds there, as its fill
-    value is: that is a chunk the store lost, and decoding it would be inventing data."""
-    lost = never_data(array.path, values)
-    if lost.any():
-        raise ValueError(
-            f"{array.path} read {int(lost.sum())} element(s) no LD Store holds there, as its "
-            f"fill value {shown_fill(array.fill_value)} is: a chunk the store lost, never data "
-            "(spec §3, §6)"
-        )
-    return values
-
-
 def _group(root: zarr.Group, path: str) -> zarr.Group:
     member = root[path]
     assert isinstance(member, zarr.Group)
@@ -780,7 +794,13 @@ def _group(root: zarr.Group, path: str) -> zarr.Group:
 
 
 def _array(root: zarr.Group, path: str) -> zarr.Array[Any]:
-    member = root[path]
+    """The array at `path`; one the store lacks is refused, naming it, never read as empty."""
+    try:
+        member = root[path]
+    except KeyError:
+        raise ValueError(
+            f"{path} is missing: every LD Store holds it (spec §1, envelope.arrays)"
+        ) from None
     assert isinstance(member, zarr.Array)
     return member
 
@@ -797,4 +817,4 @@ def _kept_array(root: zarr.Group, path: str) -> zarr.Array[Any]:
 
 
 def _indptr(array: zarr.Array[Any]) -> npt.NDArray[np.int64]:
-    return _refused_if_lost(array, np.asarray(array[:]).astype(np.int64))
+    return refused_if_lost(array, np.asarray(array[:]).astype(np.int64))

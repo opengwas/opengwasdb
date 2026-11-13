@@ -64,7 +64,9 @@ def test_the_fixture_reaches_every_array_kind(written: Path) -> None:
     expected = {f"variants/{c}" for c in ("position", "alid", "a1", "a2", "a1_frequency")}
     for chrom in ("21", "22"):
         expected |= {f"near/{chrom}/{a}" for a in ("indptr", "r")}
-        expected |= {f"index/{chrom}/{a}" for a in ("indptr", "partner", "r")}
+        expected |= {
+            f"{kind}/{chrom}/{a}" for kind in ("index", "far") for a in ("indptr", "partner", "r")
+        }
     assert names == expected
 
 
@@ -176,7 +178,7 @@ def test_the_script_writes_the_same_arrays_and_the_same_provenance_again(tmp_pat
     second = script.write_test_store(0, tmp_path / "two", R_SCALE)
     one, two = zarr.open_group(first, mode="r"), zarr.open_group(second, mode="r")
     names = {name: np.asarray(array[:]) for name, array in arrays(one)}
-    assert len(names) == 15, "every array must be compared for this to mean anything"
+    assert len(names) == 21, "every array must be compared for this to mean anything"
     again = {name: np.asarray(array[:]) for name, array in arrays(two)}
     assert names.keys() == again.keys()
     for name, array in names.items():

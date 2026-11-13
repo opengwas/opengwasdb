@@ -1,7 +1,7 @@
 """The spec's validation rules, by name, on write and on demand (spec §12; ogld#4).
 
 Each rule yields where and how one opened hierarchy and its provenance break it. `validate`
-runs all 18, in the spec's order, on a store at a path or URL; `StoreWriter.finish` runs them
+runs all 23, in the spec's order, on a store at a path or URL; `StoreWriter.finish` runs them
 on the store it wrote, before the provenance that makes it readable goes in. A rule never
 trusts what it does not check: when what it needs is missing or malformed it reports that it
 cannot be checked, and when an array will not decode it reports that it cannot be read, each
@@ -9,10 +9,11 @@ as a finding, rather than pass or stop.
 
 Every rule reads in bounded windows, through Zarr directly: a chromosome's positions and
 `indptr` arrays whole, as a reader keeps them (spec §10); a Near Band `_WINDOW` codes, a Proxy
-Index an eighth as many entries, and the variant columns `_ROWS` rows at a time. Eleven rules
-are generators over the whole store. The seven that read the band and the index element by
-element (`_SCANNED`) share one pass over each chromosome instead: each block of rows is read
-once, on the threads the caller gives, and handed to all seven.
+Index and the Far Pairs an eighth as many entries, and the variant columns `_ROWS` rows at a
+time. Eleven rules are generators over the whole store. The twelve that read the band, the
+index and the Far Pairs element by element (`_SCANNED`) share one pass over each chromosome
+instead: each block of rows is read once, on the threads the caller gives, and handed to all
+twelve.
 """
 
 from __future__ import annotations
@@ -50,7 +51,8 @@ from ogld.store.location import open_group
 
 #: Elements of a Near Band or a Proxy Index a rule reads at once: 8 Mi codes are 16 MiB.
 _WINDOW: Final = 1 << 23
-#: A block of rows holds at most `_WINDOW >> _ENTRY_SHIFT` Proxy Index entries, 1 Mi. The rules
+#: A block of rows holds at most `_WINDOW >> _ENTRY_SHIFT` Proxy Index entries, 1 Mi, and as many
+#: Far Pairs, which in a valid store are never more than its rows' index entries. The rules
 #: work on an entry through about 100 bytes of int64 arrays and on a band code through about 6,
 #: so a block's working arrays stay near 150 MiB however dense the index is (spec §12).
 _ENTRY_SHIFT: Final = 3
@@ -280,7 +282,7 @@ class _Store:
         if path not in self._kept:
             values = self.read(path).astype(np.int64)
             for _, problem in _indptr_problems(path, values, rows):
-                raise _Unchecked(path, f"{path} {problem} (near.rows, index.rows)")
+                raise _Unchecked(path, f"{path} {problem} (near.rows, index.rows, far.rows)")
             self._kept[path] = values
         return self._kept[path]
 
@@ -307,6 +309,26 @@ def _flag(where: str, bad: npt.NDArray[np.bool_], first: int, what: str) -> _Pro
 
 # ------------------------------------------------------------------ envelope
 
+
+@dataclass(frozen=True)
+class _Component:
+    """A sparse component of each chromosome, `partner` and `r` delimited by an `indptr` (spec
+    §5): its group, the names the pass gives its two parts, and the name it gives the row that
+    holds each entry. A rule names the component it checks; none is assumed."""
+
+    group: str
+    partner: str
+    code: str
+    owner: str
+
+    def path(self, chrom: str, array: str) -> str:
+        return f"{self.group}/{chrom}/{array}"
+
+
+_INDEX: Final = _Component("index", "partner", "code", "owner")
+_FAR: Final = _Component("far", "far_partner", "far_code", "far_owner")
+#: The Proxy Index and the Far Pairs, in the order §1 lists them.
+_COMPONENTS: Final = (_INDEX, _FAR)
 
 _VARIANT_DTYPES: Final = {
     "position": "int32",
@@ -341,7 +363,8 @@ def _arrays(store: _Store) -> Iterator[str]:
     yield from (f"variants/{name}" for name in _VARIANT_DTYPES)
     for chrom, _, _ in store.chromosomes():
         yield from (f"near/{chrom}/{name}" for name in ("indptr", "r"))
-        yield from (f"index/{chrom}/{name}" for name in ("indptr", "partner", "r"))
+        for k in _COMPONENTS:
+            yield from (k.path(chrom, name) for name in ("indptr", "partner", "r"))
 
 
 def _counted(store: _Store, rows: int) -> _Problems:
@@ -364,12 +387,13 @@ def _envelope_arrays(store: _Store) -> _Problems:
     # The container's dtype: the same for every admitted encoding (spec §1, §3; ADR 0004).
     r_dtype = REncoding.dtype.name
     for chrom, start, stop in ranges:
-        for kind in ("near", "index"):
-            yield from _shape(store, f"{kind}/{chrom}/indptr", "int64", stop - start + 1)
+        for group in ("near", *(k.group for k in _COMPONENTS)):
+            yield from _shape(store, f"{group}/{chrom}/indptr", "int64", stop - start + 1)
         yield from _shape(store, f"near/{chrom}/r", r_dtype, _last(store, f"near/{chrom}/indptr"))
-        entries = _last(store, f"index/{chrom}/indptr")
-        yield from _shape(store, f"index/{chrom}/partner", "int32", entries)
-        yield from _shape(store, f"index/{chrom}/r", r_dtype, entries)
+        for k in _COMPONENTS:
+            entries = _last(store, k.path(chrom, "indptr"))
+            yield from _shape(store, k.path(chrom, "partner"), "int32", entries)
+            yield from _shape(store, k.path(chrom, "r"), r_dtype, entries)
 
 
 @_rule("envelope.fill")
@@ -782,19 +806,25 @@ def _in_order[T, R](work: Callable[[T], R], items: Iterable[T], threads: int) ->
 
 
 #: The arrays the pass reads in blocks of rows, by the names its rules give them.
-_PARTS: Final = {"band": ("near", "r"), "partner": ("index", "partner"), "code": ("index", "r")}
+_PARTS: Final = {"band": ("near", "r")} | {
+    part: (k.group, array)
+    for k in _COMPONENTS
+    for part, array in ((k.partner, "partner"), (k.code, "r"))
+}
 
 
 @dataclass(frozen=True)
 class _Chromosome:
-    """One chromosome's rows [start, stop), with the Near Band's and the Proxy Index's `indptr`
-    where each delimits them, and None where it cannot: a rule that needs it says why."""
+    """One chromosome's rows [start, stop), with the Near Band's, the Proxy Index's and the Far
+    Pairs' `indptr` where each delimits them, and None where it cannot: a rule that needs it
+    says why."""
 
     name: str
     start: int
     stop: int
     band: npt.NDArray[np.int64] | None
     index: npt.NDArray[np.int64] | None
+    far: npt.NDArray[np.int64] | None
 
     @property
     def size(self) -> int:
@@ -805,11 +835,13 @@ class _Chromosome:
         return f"{kind}/{self.name}/{name}"
 
     def indptr(self, part: str) -> npt.NDArray[np.int64] | None:
-        return self.band if part == "band" else self.index
+        return {"near": self.band, "index": self.index, "far": self.far}[_PARTS[part][0]]
 
     def blocks(self) -> list[tuple[int, int]]:
-        """The rows in blocks of at most `_WINDOW` band codes and an eighth as many entries."""
-        limits = [(self.band, _WINDOW), (self.index, _WINDOW >> _ENTRY_SHIFT)]
+        """The rows in blocks of at most `_WINDOW` band codes and an eighth as many entries of
+        the index and of the Far Pairs."""
+        entries = _WINDOW >> _ENTRY_SHIFT
+        limits = [(self.band, _WINDOW), (self.index, entries), (self.far, entries)]
         delimiting = [(indptr, most) for indptr, most in limits if indptr is not None]
         return list(blocks(*delimiting)) if delimiting else []
 
@@ -821,14 +853,16 @@ def _chromosome(store: _Store, name: str, start: int, stop: int) -> _Chromosome:
         except _Unchecked:
             return None
 
-    return _Chromosome(name, start, stop, delimiting("near"), delimiting("index"))
+    return _Chromosome(
+        name, start, stop, delimiting("near"), delimiting("index"), delimiting("far")
+    )
 
 
 @dataclass(frozen=True)
 class _Block:
     """Rows [first, last) of one chromosome as the pass read them: each part's elements, from
     offset `at[part]`, or why they cannot be read; with the index's, "owner", the row that holds
-    each entry."""
+    each entry, and with the Far Pairs', "far_owner"."""
 
     first: int
     last: int
@@ -843,9 +877,11 @@ class _Block:
 
 
 def _part(store: _Store, path: str, lo: int, hi: int) -> npt.NDArray[Any] | _Unchecked:
-    """Elements [lo, hi) of the array at `path`, an index's as int64; or why they cannot be read."""
+    """Elements [lo, hi) of the array at `path`, an index's or the Far Pairs' as int64; or why
+    they cannot be read. An empty span is not read: most blocks hold no Far Pair, and a read of
+    nothing still costs a Zarr call."""
     try:
-        values = store.read(path, lo, hi)
+        values = store.read(path, lo, hi) if hi > lo else np.empty(0, store.array(path).dtype)
     except _Unchecked as unread:
         return unread
     if len(values) != hi - lo:
@@ -866,14 +902,24 @@ def _read_block(
         assert indptr is not None, "a rule takes only a part whose indptr delimits the rows"
         at[part], hi = int(indptr[a]), int(indptr[b])
         held[part] = _part(store, c.path(part), at[part], hi)
-    entries = [held[part] for part in sorted(parts & {"partner", "code"})]
-    if entries and c.index is not None:
-        unread = [found for found in entries if isinstance(found, _Unchecked)]
-        # Built from entries read, never from indptr alone: an indptr that ends far past its
-        # array would otherwise ask for as many owners as it claims.
-        numbered = np.arange(a, b, dtype=np.int64)
-        held["owner"] = unread[0] if unread else owners(np.diff(c.index[a : b + 1]), numbered)
+    for k in _COMPONENTS:
+        entries = [held[part] for part in (k.partner, k.code) if part in parts]
+        indptr = c.indptr(k.partner)
+        if entries and indptr is not None:
+            held[k.owner] = _owners(entries, indptr, a, b)
     return _Block(a, b, at, held)
+
+
+def _owners(
+    entries: list[npt.NDArray[Any] | _Unchecked], indptr: npt.NDArray[np.int64], a: int, b: int
+) -> npt.NDArray[np.int64] | _Unchecked:
+    """The row that holds each entry of rows [a, b) of a sparse component, or why its entries
+    cannot be read. Built from entries read, never from `indptr` alone: an `indptr` that ends far
+    past its array would otherwise ask for as many owners as it claims."""
+    unread = [found for found in entries if isinstance(found, _Unchecked)]
+    if unread:
+        return unread[0]
+    return owners(np.diff(indptr[a : b + 1]), np.arange(a, b, dtype=np.int64))
 
 
 class _Scanned:
@@ -995,9 +1041,10 @@ def _valid(partner: npt.NDArray[np.int64], size: int) -> npt.NDArray[np.bool_]:
     return (partner >= 0) & (partner < size)
 
 
-def _index_indptr(store: _Store, c: _Chromosome) -> npt.NDArray[np.int64]:
-    """The Proxy Index's `indptr`, which a rule reading entries needs to delimit the rows."""
-    return store.indptr(f"index/{c.name}/indptr", c.size)
+def _sparse_indptr(store: _Store, c: _Chromosome, k: _Component) -> npt.NDArray[np.int64]:
+    """The `indptr` of the sparse component `k`, which a rule reading its entries needs to
+    delimit the rows."""
+    return store.indptr(k.path(c.name, "indptr"), c.size)
 
 
 # ------------------------------------------------------------------ the codes
@@ -1047,78 +1094,151 @@ class _NearCodes(_Codes):
 @_scanned("index.codes")
 class _IndexCodes(_Codes):
     def __init__(self, store: _Store, c: _Chromosome) -> None:
-        super().__init__(store, c, "code")
+        super().__init__(store, c, _INDEX.code)
+
+
+@_scanned("far.codes")
+class _FarCodes(_Codes):
+    def __init__(self, store: _Store, c: _Chromosome) -> None:
+        super().__init__(store, c, _FAR.code)
 
 
 # ------------------------------------------------------------------ the Proxy Index
 
 
-def _index_ends(store: _Store, chrom: str) -> int | None:
-    """The length `partner` and `r` share, or None when they disagree."""
-    lengths = {store.array(f"index/{chrom}/{name}").shape[0] for name in ("partner", "r")}
+def _sparse_ends(store: _Store, k: _Component, chrom: str) -> int | None:
+    """The length `k`'s `partner` and `r` share, or None when they disagree."""
+    lengths = {store.array(k.path(chrom, name)).shape[0] for name in ("partner", "r")}
     return lengths.pop() if len(lengths) == 1 else None
 
 
-@_scanned("index.rows")
-class _IndexRows(_Scanned):
-    """`indptr` delimits the rows and ends at the length of `partner` and `r`; within a row,
-    partners ascend, lie in [0, n_c) and are never the row itself. A chromosome whose `indptr`
-    fails is not read further."""
+class _Rows(_Scanned):
+    """A sparse component's `indptr` delimits the rows and ends at the length of `partner` and
+    `r`; within a row, partners ascend and lie in [0, n_c), and each subclass says which other
+    partner is misplaced. A chromosome whose `indptr` fails is not read further."""
+
+    component: _Component
+    #: What a misplaced partner is, as a finding names it.
+    misplaced: str
 
     def __init__(self, store: _Store, c: _Chromosome) -> None:
-        self.c, path, end = c, f"index/{c.name}/indptr", _index_ends(store, c.name)
+        k = self.component
+        self.c, path, end = c, k.path(c.name, "indptr"), _sparse_ends(store, k, c.name)
         indptr = store.read(path).astype(np.int64)
         self.problems = list(_indptr_problems(path, indptr, c.size, end))
         if end is None:
-            self.problems.append((f"index/{c.name}", "partner and r differ in length"))
+            self.problems.append((f"{k.group}/{c.name}", "partner and r differ in length"))
         if not self.problems:
-            self.parts = frozenset({"partner"})
+            self.parts = frozenset({k.partner})
+
+    def is_misplaced(
+        self, partner: npt.NDArray[np.int64], owner: npt.NDArray[np.int64]
+    ) -> npt.NDArray[np.bool_]:
+        raise NotImplementedError
 
     def begin(self) -> _Problems:
         yield from self.problems
 
     def block(self, b: _Block) -> _Problems:
-        partner, owner, at = b.get("partner"), b.get("owner"), b.at["partner"]
-        outside = ~_valid(partner, self.c.size) | (partner == owner)
+        k = self.component
+        partner, owner, at = b.get(k.partner), b.get(k.owner), b.at[k.partner]
+        outside = ~_valid(partner, self.c.size) | self.is_misplaced(partner, owner)
         repeated = (np.diff(partner) <= 0) & (np.diff(owner) == 0)
-        where = self.c.path("partner")
-        yield from _flag(where, outside, at, "a partner outside [0, n_c) or the row itself")
+        where = self.c.path(k.partner)
+        yield from _flag(where, outside, at, f"a partner outside [0, n_c) or {self.misplaced}")
         yield from _flag(where, repeated, at + 1, "a partner not above the one before it")
+
+
+@_scanned("index.rows")
+class _IndexRows(_Rows):
+    """The Proxy Index's partners are never the row itself: each pair is in both its rows."""
+
+    component, misplaced = _INDEX, "the row itself"
+
+    def is_misplaced(
+        self, partner: npt.NDArray[np.int64], owner: npt.NDArray[np.int64]
+    ) -> npt.NDArray[np.bool_]:
+        return np.asarray(partner == owner)
+
+
+@_scanned("far.rows")
+class _FarRows(_Rows):
+    """The Far Pairs' partners are each above their row: each pair is in its earlier row."""
+
+    component, misplaced = _FAR, "not above its row"
+
+    def is_misplaced(
+        self, partner: npt.NDArray[np.int64], owner: npt.NDArray[np.int64]
+    ) -> npt.NDArray[np.bool_]:
+        return np.asarray(partner <= owner)
 
 
 @_scanned("index.distance")
 class _IndexDistance(_Scanned):
     """Every entry's partner lies within far_bp of its row's position."""
 
-    parts = frozenset({"partner"})
+    parts = frozenset({_INDEX.partner})
 
     def __init__(self, store: _Store, c: _Chromosome) -> None:
         self.c, self.far_bp = c, store.integer("far_bp")
-        _index_indptr(store, c)
+        _sparse_indptr(store, c, _INDEX)
         self.pos = store.positions(c.name, c.start, c.stop)
 
     def block(self, b: _Block) -> _Problems:
-        partner, owner = b.get("partner"), b.get("owner")
+        partner, owner = b.get(_INDEX.partner), b.get(_INDEX.owner)
         partner = np.where(_valid(partner, self.c.size), partner, owner)
         beyond = ~within(self.pos[partner] - self.pos[owner], self.far_bp)
         what = f"a partner beyond {self.far_bp:,} bp"
-        yield from _flag(self.c.path("partner"), beyond, b.at["partner"], what)
+        yield from _flag(self.c.path(_INDEX.partner), beyond, b.at[_INDEX.partner], what)
 
 
-@_scanned("index.threshold")
-class _IndexThreshold(_Scanned):
-    """Every entry's |code| reaches far_code_floor."""
+@_scanned("far.distance")
+class _FarDistance(_Scanned):
+    """Every Far Pair lies more than near_bp and at most far_bp apart. A partner outside the
+    chromosome is far.rows' to say."""
 
-    parts = frozenset({"code"})
+    parts = frozenset({_FAR.partner})
+
+    def __init__(self, store: _Store, c: _Chromosome) -> None:
+        self.c, self.near_bp, self.far_bp = c, store.integer("near_bp"), store.integer("far_bp")
+        _sparse_indptr(store, c, _FAR)
+        self.pos = store.positions(c.name, c.start, c.stop)
+
+    def block(self, b: _Block) -> _Problems:
+        partner, owner = b.get(_FAR.partner), b.get(_FAR.owner)
+        valid = _valid(partner, self.c.size)
+        gap = self.pos[np.where(valid, partner, owner)] - self.pos[owner]
+        outside = valid & (within(gap, self.near_bp) | ~within(gap, self.far_bp))
+        what = f"a Far Pair not more than {self.near_bp:,} and at most {self.far_bp:,} bp apart"
+        yield from _flag(self.c.path(_FAR.partner), outside, b.at[_FAR.partner], what)
+
+
+class _Threshold(_Scanned):
+    """Every code of a sparse component, the Proxy Index or the Far Pairs, reaches
+    far_code_floor in magnitude."""
+
+    component: _Component
 
     def __init__(self, store: _Store, c: _Chromosome) -> None:
         self.c, self.floor = c, store.integer("far_code_floor")
-        _index_indptr(store, c)
+        _sparse_indptr(store, c, self.component)
+        self.code = self.component.code
+        self.parts = frozenset({self.code})
 
     def block(self, b: _Block) -> _Problems:
-        below = np.abs(b.get("code")) < self.floor
+        below = np.abs(b.get(self.code)) < self.floor
         what = f"|code| below far_code_floor {self.floor}"
-        yield from _flag(self.c.path("code"), below, b.at["code"], what)
+        yield from _flag(self.c.path(self.code), below, b.at[self.code], what)
+
+
+@_scanned("index.threshold")
+class _IndexThreshold(_Threshold):
+    component = _INDEX
+
+
+@_scanned("far.threshold")
+class _FarThreshold(_Threshold):
+    component = _FAR
 
 
 #: The bits a code takes in a key: the container's width, the same for every admitted encoding.
@@ -1185,13 +1305,15 @@ class _Named:
         return [(a, b) for a, b in blocks if held[a:b].any()]
 
 
-def _odd_pairs(chrom: str, odd: npt.NDArray[np.int64], size: int, what: str) -> _Problems:
+def _odd_pairs(
+    chrom: str, odd: npt.NDArray[np.int64], size: int, what: str, k: _Component
+) -> _Problems:
     """One finding naming the pairs in `odd` (keys of `_keys`), if there are any."""
     pair = odd >> _CODE_BITS
     names = [f"({p // size}, {p % size})" for p in pair[:_NAMED].tolist()]
     if len(odd):
         more = f" and {len(odd) - _NAMED:,} more" if len(odd) > _NAMED else ""
-        yield f"index/{chrom}", f"{what}: {', '.join(names)}{more}"
+        yield f"{k.group}/{chrom}", f"{what}: {', '.join(names)}{more}"
 
 
 @_scanned("index.symmetric")
@@ -1201,14 +1323,14 @@ class _IndexSymmetric(_Scanned):
     sum and the entry in the later row to the other; a row whose two sums differ is the
     earlier row of a pair held one way only, or with two codes."""
 
-    parts = frozenset({"partner", "code"})
+    parts = frozenset({_INDEX.partner, _INDEX.code})
 
     def __init__(self, store: _Store, c: _Chromosome) -> None:
-        _index_indptr(store, c)
+        _sparse_indptr(store, c, _INDEX)
         self.c, self.sums = c, _Sums(c.size)
 
     def block(self, b: _Block) -> _Problems:
-        partner, code, owner = b.get("partner"), b.get("code"), b.get("owner")
+        partner, code, owner = b.get(_INDEX.partner), b.get(_INDEX.code), b.get(_INDEX.owner)
         ok = _valid(partner, self.c.size) & (partner != owner)
         lo, hi = np.minimum(owner, partner)[ok], np.maximum(owner, partner)[ok]
         in_later = (owner > partner)[ok]
@@ -1232,14 +1354,14 @@ class _IndexNear(_Scanned):
     only those entries are checked, each against the band's code for its pair. That such an
     entry exists at all is index.symmetric's to say."""
 
-    parts = frozenset({"band", "partner", "code"})
+    parts = frozenset({"band", _INDEX.partner, _INDEX.code})
 
     def __init__(self, store: _Store, c: _Chromosome) -> None:
         self.store, self.c = store, c
         self.pos = store.positions(c.name, c.start, c.stop)
         self.near_bp, self.floor = store.integer("near_bp"), store.integer("far_code_floor")
         self.band = store.indptr(f"near/{c.name}/indptr", c.size)
-        self.index = _index_indptr(store, c)
+        self.index = _sparse_indptr(store, c, _INDEX)
         self.sums, self.named = _Sums(c.size), _Named(c.size)
 
     def _halves(
@@ -1261,16 +1383,15 @@ class _IndexNear(_Scanned):
 
     def block(self, b: _Block) -> _Problems:
         lo, hi, code = self._kept(b)
-        partner, held, owner = b.get("partner"), b.get("code"), b.get("owner")
+        partner, held, owner = b.get(_INDEX.partner), b.get(_INDEX.code), b.get(_INDEX.owner)
         in_earlier, in_later = self._halves(owner, partner)
         size = self.c.size
         band = _keys(lo, hi, code, size)
         entries = _keys(owner[in_earlier], partner[in_earlier], held[in_earlier], size)
         if not np.array_equal(band, entries):  # both ascend in a store that passes
             odd = np.setxor1d(band, entries)
-            yield from _odd_pairs(
-                self.c.name, odd, size, "not the Near Band's pairs at the far code floor"
-            )
+            what = "not the Near Band's pairs at the far code floor"
+            yield from _odd_pairs(self.c.name, odd, size, what, _INDEX)
         self.sums.add(0, lo, band)
         up, down = partner[in_later], owner[in_later]
         self.sums.add(1, up, _keys(up, down, held[in_later], size))
@@ -1282,7 +1403,7 @@ class _IndexNear(_Scanned):
             return
 
         def recheck(block: tuple[int, int]) -> list[tuple[str, str]]:
-            b = _read_block(self.store, self.c, frozenset({"partner", "code"}), block)
+            b = _read_block(self.store, self.c, frozenset({_INDEX.partner, _INDEX.code}), block)
             return list(self._recheck(rows, b))
 
         blocks = self.named.blocks(rows, self.c.blocks())
@@ -1292,13 +1413,45 @@ class _IndexNear(_Scanned):
     def _recheck(self, rows: npt.NDArray[np.bool_], b: _Block) -> _Problems:
         """The block's entries in a pair's later row whose earlier row is one of `rows`,
         each against the band's code for its pair."""
-        partner, held, owner = b.get("partner"), b.get("code"), b.get("owner")
+        partner, held, owner = b.get(_INDEX.partner), b.get(_INDEX.code), b.get(_INDEX.owner)
         _, in_later = self._halves(owner, partner)
         in_later[in_later] = rows[partner[in_later]]
         up, down, code = partner[in_later], owner[in_later], held[in_later]
         band = self.store.pick(f"near/{self.c.name}/r", near_address(self.band, up, down))
         differ = band.astype(np.int64) != code
         odd = _keys(up[differ], down[differ], code[differ], self.c.size)
-        yield from _odd_pairs(
-            self.c.name, odd, self.c.size, "entries whose code is not the Near Band's"
-        )
+        what = "entries whose code is not the Near Band's"
+        yield from _odd_pairs(self.c.name, odd, self.c.size, what, _INDEX)
+
+
+# ------------------------------------------------------------------ the Far Pairs
+
+
+@_scanned("far.index")
+class _FarIndex(_Scanned):
+    """The Far Pairs are the index's entries beyond near_bp in their pairs' earlier rows, pair
+    for pair and code for code (spec §5; ADR 0007). Both are read by the same block of rows, so
+    each block's Far Pairs are compared with that block's entries, both ways, and nothing is
+    carried. That the index holds each such pair in its later row too is index.symmetric's to
+    say."""
+
+    parts = frozenset({_INDEX.partner, _INDEX.code, _FAR.partner, _FAR.code})
+
+    def __init__(self, store: _Store, c: _Chromosome) -> None:
+        self.c, self.near_bp = c, store.integer("near_bp")
+        _sparse_indptr(store, c, _INDEX)
+        _sparse_indptr(store, c, _FAR)
+        self.pos = store.positions(c.name, c.start, c.stop)
+
+    def block(self, b: _Block) -> _Problems:
+        partner, code, owner = b.get(_INDEX.partner), b.get(_INDEX.code), b.get(_INDEX.owner)
+        size = self.c.size
+        later = _valid(partner, size) & (partner > owner)
+        gap = self.pos[np.where(later, partner, owner)] - self.pos[owner]
+        beyond = later & ~within(gap, self.near_bp)
+        entries = _keys(owner[beyond], partner[beyond], code[beyond], size)
+        held = _keys(b.get(_FAR.owner), b.get(_FAR.partner), b.get(_FAR.code), size)
+        if not np.array_equal(entries, held):  # both ascend in a store that passes
+            odd = np.setxor1d(entries, held)
+            what = "not the Proxy Index's pairs beyond near_bp"
+            yield from _odd_pairs(self.c.name, odd, size, what, _FAR)

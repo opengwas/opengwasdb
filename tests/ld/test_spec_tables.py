@@ -39,8 +39,13 @@ def test_the_validation_rules_are_spec_section_12_s_in_order() -> None:
     assert tuple(rules) == fmt.VALIDATION_RULES
 
 
-def test_no_rule_or_key_names_the_retired_far_component() -> None:
-    # The Proxy Index holds the Far Pairs (spec §5, §11): no `far/` arrays, no far.* rules,
-    # and no PCA settings now that PCs are supplied (ADR 0002).
-    assert not [rule for rule in fmt.VALIDATION_RULES if rule.startswith("far.")]
+def test_the_far_pairs_have_the_five_rules_section_11_named() -> None:
+    # The Far Pairs are their own component again (ADR 0007): the four far.* rules spec §11
+    # named before the merge, and far.index, holding them equal to the index's far entries.
+    far = [rule for rule in fmt.VALIDATION_RULES if rule.startswith("far.")]
+    assert far == ["far.rows", "far.codes", "far.distance", "far.threshold", "far.index"]
+
+
+def test_no_key_names_pca_settings() -> None:
+    # PCs are supplied, not computed (ADR 0002).
     assert not [key for key in fmt.REQUIRED_KEYS if key.startswith("pc_adjustment.")]

@@ -434,9 +434,9 @@ def clump_query(alids: list[str], z: np.ndarray, r2: float) -> Query:
     return query
 
 
-def region_query(centre: int, radius: int) -> Query:
+def region_query(chrom: str, centre: int, radius: int) -> Query:
     def query(store: Any) -> dict[str, Any]:
-        m = store.region("22", centre, radius)
+        m = store.region(chrom, centre, radius)
         return {"variants": len(m.variants.alid), "stored": int((~np.isnan(m.r)).sum())}
 
     return query
@@ -533,12 +533,22 @@ def three_states(b: Bench, store: str, query: Query, **meta: Any) -> None:
     b.again(store, opened, query, "warm", **meta)
 
 
-def regions(b: Bench, store: str, widths: tuple[int, ...]) -> None:
+def regions(
+    b: Bench,
+    store: str,
+    widths: tuple[int, ...],
+    chrom: str = "22",
+    centres: tuple[int, ...] = CENTRES,
+) -> None:
+    """Each region `width` Mb wide at each centre on `chrom`, cold and then warm. A region off
+    chr22 records its chromosome; #8's chr22 records carry none."""
     for width in widths:
-        for centre in CENTRES:
+        for centre in centres:
             meta = {"case": "region", "width_mb": width, "centre": centre}
-            opened = b.cold(store, region_query(centre, width * 500_000), **meta)
-            b.again(store, opened, region_query(centre, width * 500_000), "warm", **meta)
+            meta |= {} if chrom == "22" else {"chrom": chrom}
+            query = region_query(chrom, centre, width * 500_000)
+            opened = b.cold(store, query, **meta)
+            b.again(store, opened, query, "warm", **meta)
             del opened
 
 
@@ -578,10 +588,12 @@ def step1(b: Bench, args: argparse.Namespace) -> None:
     cases = set(args.case or CASES["step1"])
     if "proxies" in cases:
         proxies(b, store, sample, args.seeds)
+    # #8 drew lists on chr22 and genome-wide; another chromosome (#31: chr11) is drawn alone.
+    lists = ("22", None) if args.chrom == "22" else (args.chrom,)
     if "scattered" in cases:
-        scattered(b, store, sample, ("22", None), args.seeds)
+        scattered(b, store, sample, lists, args.seeds)
     if "region" in cases:
-        regions(b, store, (3, 10))
+        regions(b, store, tuple(args.widths), args.chrom, tuple(args.centres))
     if "clump" in cases:
         clump_each(b, store, args, None)
 
@@ -651,6 +663,9 @@ def environment(args: argparse.Namespace) -> dict[str, Any]:
         "argv": sys.argv[1:],
         "commit": code["commit"],
         "code": code,
+        # The ogld a run imported: this checkout's, or another put first on PYTHONPATH, as #31
+        # timed the tip's reader beside its own.
+        "ogld_source": str(Path(ogld.__file__).resolve().parent),
         "versions": {
             "ogld": ogld.__version__,
             "zarr": zarr.__version__,
@@ -674,6 +689,13 @@ def main() -> None:
     parser.add_argument("--analyses", nargs="+", help="the Analyses to clump; all 37 if omitted")
     parser.add_argument("--r2", nargs="+", type=float, default=[0.01, 0.001])
     parser.add_argument("--cold-only", action="store_true", help="clump cold only, not warm")
+    parser.add_argument("--chrom", default="22", help="step 1's chromosome for lists and regions")
+    parser.add_argument(
+        "--centres", nargs="+", type=int, default=list(CENTRES), help="step 1's region centres"
+    )
+    parser.add_argument(
+        "--widths", nargs="+", type=int, default=[3, 10], help="step 1's region widths, Mb"
+    )
     parser.add_argument(
         "--seeds", type=int, default=3, help="draws of 500 scattered, 10 and 100 proxy variants"
     )

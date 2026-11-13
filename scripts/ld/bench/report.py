@@ -40,7 +40,21 @@ def read(paths: Iterable[Path]) -> tuple[list[Record], list[Record]]:
                 started = record["started"]
             else:
                 timings.append({**record, "reader": reader_label(record), "run": started})
-    return latest(timings), environments
+    return latest(with_far_runs(timings)), environments
+
+
+def touched_far(record: Record) -> bool:
+    """Whether a read fetched any Far Pairs array, or any of their chunks (ogld#31)."""
+    client = record["client"]
+    return any(name.startswith("far/") for part in ("gets", "chunks") for name in client[part])
+
+
+def with_far_runs(timings: list[Record]) -> list[Record]:
+    """Each timing marked `far_run` when its run read the Far Pairs at all. A run of a store
+    without `far/`, or of a reader before ogld#31, never did, and its Far Pairs columns are "—";
+    in a run that did, a read that needed none is a measured 0."""
+    runs = {r["run"] for r in timings if touched_far(r)}
+    return [{**r, "far_run": r["run"] in runs} for r in timings]
 
 
 def text_of(path: Path) -> str:
@@ -109,6 +123,18 @@ def array_bytes(record: Record, prefix: str) -> float:
 def index_row_bytes(record: Record) -> float:
     """The bytes of Proxy Index rows read: `partner` and `r`, not the `indptr` a load reads."""
     return array_bytes(record, "index/partner") + array_bytes(record, "index/r")
+
+
+def far_cell(
+    found: list[Record], value: Callable[[Record], float], shown: Callable[[float], str]
+) -> str:
+    """A Far Pairs column's cell: the median, or "—" when no record's run read the Far Pairs."""
+    return shown(median_of(found, value)) if any(r.get("far_run") for r in found) else "—"
+
+
+def far_row_bytes(record: Record) -> float:
+    """The bytes of Far Pairs rows read, as `index_row_bytes` counts the index's (ogld#31)."""
+    return array_bytes(record, "far/partner") + array_bytes(record, "far/r")
 
 
 def load_range(records: list[Record]) -> str:
@@ -251,6 +277,7 @@ def region_columns() -> list[Callable[[list[Record]], str]]:
         *common_columns(),
         lambda f: megabytes(median_of(f, lambda r: array_bytes(r, "near/r"))),
         lambda f: megabytes(median_of(f, index_row_bytes)),
+        lambda f: far_cell(f, far_row_bytes, megabytes),
         lambda f: seconds(median_of(f, lambda r: spent(r, "far_scatter"))),
         load_range,
     ]
@@ -261,6 +288,7 @@ REGION_HEADER = [
     *COMMON_HEADER,
     "MB of `near/r`",
     "MB of index rows",
+    "MB of Far Pairs rows",
     "far-pair scatter",
     "load",
 ]
@@ -271,6 +299,7 @@ def list_columns() -> list[Callable[[list[Record]], str]]:
         *common_columns(),
         lambda f: f"{median_of(f, lambda r: chunk_count(r, 'near')):,.0f}",
         lambda f: f"{median_of(f, lambda r: chunk_count(r, 'index')):,.0f}",
+        lambda f: far_cell(f, lambda r: chunk_count(r, "far"), lambda v: f"{v:,.0f}"),
         lambda f: seconds(median_of(f, lambda r: spent(r, "far_scatter"))),
         lambda f: seconds(median_of(f, lambda r: spent(r, "chromosome_loads"))),
         load_range,
@@ -281,6 +310,7 @@ LIST_HEADER = [
     *COMMON_HEADER,
     "Near Band chunks",
     "index chunks",
+    "Far Pairs chunks",
     "far-pair scatter",
     "chromosome loads",
     "load",
