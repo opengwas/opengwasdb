@@ -161,17 +161,33 @@ class ChunkCache:
         """The decoded chunks `wanted`, in order: kept ones from memory, the rest fetched
         together, a batch of runs at a time (ogld#32)."""
         found = self._kept_chunks(array.path, wanted.tolist())
-        missing = [k for k in wanted.tolist() if k not in found]
+        found.update(
+            self._fetched_chunks(array, [k for k in wanted.tolist() if k not in found], size)
+        )
+        return [found[k] for k in wanted.tolist()]
+
+    def _fetched_chunks(
+        self, array: zarr.Array[Any], missing: list[int], size: int
+    ) -> dict[int, npt.NDArray[Any]]:
+        """The chunks `missing`, ascending, fetched a batch at a time and kept."""
+        found: dict[int, npt.NDArray[Any]] = {}
         if missing and self._chunk_bytes(array, size) is None:
             # A string array none of whose chunks has been counted: one alone, to count it.
             found.update(self._fetch_batch(array, [(missing[0], missing[0] + 1)], size))
             missing = missing[1:]
+        for batch in self._planned(array, missing, size):
+            found.update(self._fetch_batch(array, batch, size))
+        return found
+
+    def _planned(
+        self, array: zarr.Array[Any], missing: list[int], size: int
+    ) -> Iterator[list[tuple[int, int]]]:
+        """The batches `missing` is fetched in: runs cut where a shard ends, at most zarr's
+        `async.concurrency` pieces and `_FETCH_BYTES` as one chunk is planned to hold."""
         per_shard = (array.shards or array.chunks)[0] // size
         most = max(1, _FETCH_BYTES // (self._chunk_bytes(array, size) or 1))
         concurrency = int(zarr.config.get("async.concurrency"))
-        for batch in _batches(_pieces(missing, per_shard, most), concurrency, most):
-            found.update(self._fetch_batch(array, batch, size))
-        return [found[k] for k in wanted.tolist()]
+        return _batches(_pieces(missing, per_shard, most), concurrency, most)
 
     def _chunk_bytes(self, array: zarr.Array[Any], size: int) -> int | None:
         """What one chunk of `array` is planned to hold in flight: a numeric chunk's buffer,
