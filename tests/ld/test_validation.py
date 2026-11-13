@@ -166,13 +166,6 @@ def negate_a_later_entry(store: Path) -> None:
     negate("index/22/r", int(np.flatnonzero(within & (partner < owner))[0]))(store)
 
 
-def first_far_pair(store: Path) -> tuple[int, int]:
-    """chr22's first Far Pair, (row, partner), local rows."""
-    owner, partner, _ = contract().far22(store)
-    assert len(owner), "chr22 must hold a Far Pair for this to mean anything"
-    return int(owner[0]), int(partner[0])
-
-
 def a_far_pair_exactly_near_bp_apart(store: Path) -> None:
     """Adds chr22's one pair exactly 3,000,000 bp apart to its Far Pairs, at the floor: the edge
     a Far Pair lies beyond (review of #31)."""

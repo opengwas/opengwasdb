@@ -184,17 +184,3 @@ def new_r_array(
         compressors=[ZstdCodec(level=3)],
         fill_value=encoding.reserved_code,
     )
-
-
-def put_codes(
-    group: zarr.Group,
-    name: str,
-    codes: npt.NDArray[np.generic],
-    encoding: REncoding,
-    shape: tuple[int, int] = SIDE,
-) -> zarr.Array[Any]:
-    """Create the `r` array `name` in `encoding`'s dtype and fill value, and write `codes`."""
-    array = new_r_array(group, name, len(codes), shape, encoding)
-    if len(codes):
-        array[:] = codes
-    return array
