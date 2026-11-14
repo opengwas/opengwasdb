@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import tracemalloc
+import weakref
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,60 @@ def test_prefetch_fits_or_declines_without_reading(tmp_path: Path) -> None:
     assert not tiny._kept
 
 
+def test_unknown_frame_size_uses_the_validating_decode() -> None:
+    import numcodecs
+
+    source = np.arange(8, dtype=np.int32)
+    codec = numcodecs.Zstd()
+    encoded = codec.encode(source)
+    assert encoded[4] == 0x20, "one-byte content size in a single-segment frame"
+    # Replace the one-byte size with a window descriptor, making a valid unknown-size frame.
+    frame = memoryview(encoded[:4] + b"\x00\x58" + encoded[6:])
+    assert location._frame_size(frame) is None
+    decoder = location._NumericDecoder(8, 1, source.dtype, np.dtype("<u8"))
+    np.testing.assert_array_equal(decoder._frame(codec, frame), source)
+    with pytest.raises(ValueError, match="expected"):
+        location._NumericDecoder(9, 1, source.dtype, np.dtype("<u8"))._frame(codec, frame)
+    larger = codec.encode(np.arange(100, dtype=np.int32))
+    assert location._frame_size(memoryview(larger)) == 400, "two-byte size includes +256"
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_prefetch_corruption_and_missing_shards(tmp_path: Path, missing: bool) -> None:
+    root = resharded(tmp_path / "store", 512, 4)
+    chunk = root / "near/22/r/c/0"
+    if missing:
+        chunk.unlink()
+    else:
+        data = chunk.read_bytes()
+        chunk.write_bytes(b"bad!" + data[4:])
+    cache = location.ChunkCache(1 << 20)
+    array = location.open_group(root, cache=cache)["near/22/r"]
+    assert isinstance(array, zarr.Array)
+    if missing:
+        assert cache.prefetch(array, [0], [512])
+        assert (cache.take(array, [0, 511]) == array.fill_value).all()
+    else:
+        with pytest.raises((RuntimeError, ValueError)):
+            cache.prefetch(array, [0], [512])
+
+
+def test_empty_unsupported_and_key_limited_prefetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = resharded(tmp_path / "store", 512, 4)
+    cache = location.ChunkCache(1 << 20)
+    group = location.open_group(root, cache=cache)
+    near, names = group["near/22/r"], group["variants/alid"]
+    assert isinstance(near, zarr.Array)
+    assert isinstance(names, zarr.Array)
+    assert cache.prefetch(near, [], [])
+    assert not cache.prefetch(names, [0], [1])
+    monkeypatch.setattr(location, "_PREFETCH_CHUNKS", 1)
+    assert not cache.prefetch(near, [0, 1024], [512, 512])
+    assert cache._bytes == 0
+
+
 def test_unused_proxy_indptr_is_loaded_only_when_asked(monkeypatch: pytest.MonkeyPatch) -> None:
     names = ogld.open(TEST_STORE)._reader.alids_of(np.array([500, 520])).tolist()
     read = LocalStore.get_sync
@@ -46,6 +102,35 @@ def test_unused_proxy_indptr_is_loaded_only_when_asked(monkeypatch: pytest.Monke
     assert not any(key.startswith("index/22/indptr/c/") for key in keys)
     store.proxies(names, r2=0.8, kb=3000)
     assert any(key.startswith("index/22/indptr/c/") for key in keys)
+
+
+def test_completed_worker_does_not_retain_released_buffers(monkeypatch: pytest.MonkeyPatch) -> None:
+    retained: list[Any] = []
+    futures: list[Future[Any]] = []
+    references: list[weakref.ReferenceType[np.ndarray]] = []
+
+    class Executor:
+        def submit(self, call: Any) -> Future[Any]:
+            retained.append(call)
+            future: Future[Any] = Future()
+            futures.append(future)
+            future.set_result(call())
+            return future
+
+    def job() -> Any:
+        data = np.empty(1024, dtype=np.uint8)
+        references.append(weakref.ref(data))
+        return lambda: data.nbytes
+
+    monkeypatch.setattr(location, "_DECODE_POOL", Executor())
+    asyncio.run(location._on_pool(job()))
+    assert len(retained) == 1, "the executor deliberately keeps its completed work item"
+    assert references[0]() is None, "completed jobs must not retain released byte credits"
+    value = asyncio.run(location._on_pool(lambda: np.zeros(1024)))
+    reference = weakref.ref(value)
+    del value
+    assert len(futures) == 2, "completed Futures are deliberately kept too"
+    assert reference() is None, "a completed I/O Future must not retain its returned range"
 
 
 def test_encoded_credit_bounds_actual_buffers(monkeypatch: pytest.MonkeyPatch) -> None:

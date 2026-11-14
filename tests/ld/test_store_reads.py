@@ -32,7 +32,7 @@ from contract.support import RangeHandler
 from numpy.dtypes import StringDType
 from store_copies import TEST_STORE, copy_store, resharded
 from zarr.abc.store import SuffixByteRequest
-from zarr.storage import LocalStore
+from zarr.storage import FsspecStore, LocalStore
 
 import ogld
 from ogld.format import InputError, Refusal, RefusalReason, judge_request
@@ -624,6 +624,24 @@ def holding(directory: Path, flight: InFlight) -> Iterator[str]:
         worker.join()
 
 
+def client_flight(monkeypatch: pytest.MonkeyPatch) -> InFlight:
+    """Count awaited store requests, not server finalisers after a response was delivered."""
+    flight = InFlight(together=1)
+    original = FsspecStore.get
+
+    async def get(self: Any, key: str, *args: Any, **kwargs: Any) -> Any:
+        if "/c/" not in key:
+            return await original(self, key, *args, **kwargs)
+        flight.start()
+        try:
+            return await original(self, key, *args, **kwargs)
+        finally:
+            flight.end()
+
+    monkeypatch.setattr(FsspecStore, "get", get)
+    return flight
+
+
 #: Six chunks of chr22's Near Band, in six shards, none a neighbour of another: six runs.
 APART = [0, 8, 16, 24, 32, 40]
 
@@ -725,7 +743,8 @@ def test_a_read_has_at_most_its_bounds_in_flight(
     monkeypatch.setattr(location, "_FETCH_BYTES", budget)
     held = measured_fetches(monkeypatch)
     coords = np.array(APART) * INNER + 5
-    flight = InFlight(together=3, patience=0.15)
+    flight = InFlight(together=3, patience=0.10)
+    client = client_flight(monkeypatch)
     setting = {"async.concurrency": 2 if bound == "runs" else 10}
     with zarr.config.set(setting), holding(small_chunks, flight) as url:
         cache = location.ChunkCache(1 << 28)
@@ -735,9 +754,23 @@ def test_a_read_has_at_most_its_bounds_in_flight(
     # Direct decoding reserves a scratch chunk per output chunk inside the byte bound.
     batches = 6 if bound == "bytes" else 3
     assert len(held.batches) == batches
-    assert flight.peak == (1 if bound == "bytes" else 2)
+    assert client.peak == (1 if bound == "bytes" else 2)
     assert held.earlier == [0] * batches, "no earlier batch survives into the next fetch"
     assert max(held.batches) * 2 <= budget
+
+
+def test_prefetch_limits_actual_http_requests(
+    small_chunks: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = client_flight(monkeypatch)
+    flight = InFlight(together=3, patience=0.05)
+    with zarr.config.set({"async.concurrency": 2}), holding(small_chunks, flight) as url:
+        cache = location.ChunkCache(1 << 20)
+        array = location.open_group(url, cache=cache)["near/22/r"]
+        assert isinstance(array, zarr.Array)
+        assert cache.prefetch(array, np.array(APART) * INNER, np.full(len(APART), INNER))
+    assert client.peak == 2
+    assert cache._bytes <= cache.budget
 
 
 def test_a_read_of_strings_holds_at_most_the_bytes_in_flight(

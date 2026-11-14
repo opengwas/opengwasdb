@@ -2,8 +2,8 @@
 """#40's reads, using #8's runner with result fingerprints, distinct chunks and uptime.
 
 Use latency.py's arguments, including `step1 --target local http10 http50`. Set
-`--zarr-threads 1` and BLAS 1: the direct decoder adds five workers, for eight client
-threads with the caller and zarr loop. HTTP host/proxy processes are separate.
+`--zarr-threads 1` and BLAS 1: seven workers share local I/O and numeric decoding,
+with one fallback codec helper. Use an eight-CPU affinity cap inherited by HTTP children.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def install() -> None:
             record = timed(self, *args, **kwargs)
         finally:
             self.out = out
-        near = {k: n for k, n in CHUNKS.items() if k[0].startswith("near/")}
+        near = {k: n for k, n in CHUNKS.items() if k[0].startswith("near/") and k[0].endswith("/r")}
         record.update(
             uptime_before=before,
             uptime_after=subprocess.check_output(["uptime"], text=True).strip(),

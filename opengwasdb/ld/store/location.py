@@ -550,10 +550,9 @@ class _NumericDecoder:
         Cancelling a future cannot stop zstd on a worker. Shielding and draining keeps that
         worker's buffers inside this read's lifetime and in-flight bound (ADR 0009).
         """
-        loop = asyncio.get_running_loop()
         jobs = [
-            loop.run_in_executor(
-                _DECODE_POOL, self._into, data, offset, chunks[i::_DECODE_WORKERS], out
+            asyncio.create_task(
+                _on_pool(partial(self._into, data, offset, chunks[i::_DECODE_WORKERS], out))
             )
             for i in range(min(_DECODE_WORKERS, len(chunks)))
         ]
@@ -685,12 +684,26 @@ def _frame_size(frame: memoryview) -> int | None:
 
 async def _on_pool(call: Any) -> Any:
     """A cancelled read still owns its worker's buffers until that worker returns."""
-    pending = asyncio.get_running_loop().run_in_executor(_DECODE_POOL, call)
+
+    result: list[Any] = []
+
+    def run() -> None:
+        nonlocal call
+        try:
+            result.append(call())
+        finally:
+            # Neither a retained work item nor its completed Future may keep buffers
+            # after their byte credit is released: the Future's result is always None.
+            call = None
+
+    pending = asyncio.get_running_loop().run_in_executor(_DECODE_POOL, run)
     try:
-        return await asyncio.shield(pending)
+        await asyncio.shield(pending)
     except asyncio.CancelledError:
         await pending
+        result.clear()
         raise
+    return result.pop()
 
 
 def _numeric_shard(array: zarr.Array[Any]) -> ShardingCodec | None:

@@ -91,7 +91,10 @@ onto the same seven-worker pool as decoding. Exact LocalStore only: subclass ove
 HTTP stores continue through their own async get. This avoids serialising all local ranges
 on the loop's one default helper without making another I/O pool or changing global zarr
 settings. Applications budget fallback codec helpers separately; benchmarks use one helper,
-BLAS 1 and an eight-CPU cap. Cancellation drains both I/O and decode jobs.
+BLAS 1 and an eight-CPU cap. Cancellation drains both I/O and decode jobs. Worker closures
+clear captured buffers before Future completion and hand returned ranges through a popped
+result box (the Future itself returns None). Retained executor work items or Futures therefore
+cannot pin ranges after their compressed-byte credits are released.
 
 Known-size zstd frames decode into preallocated numpy buffers. The reader checks the frame
 content size from [RFC 8878 §3.1.1](https://www.rfc-editor.org/rfc/rfc8878.html#section-3.1.1)

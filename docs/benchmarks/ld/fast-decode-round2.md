@@ -58,3 +58,21 @@ and Near Band indptr through the numeric decoder, and defers unused Proxy Index 
 The lazy-index test failed before that change. ALIDs already verified by rows_of name clump
 results directly, preserving present-only string width. This next slice passes 1,260 tests
 in 14.87 s at load 4.90→6.81 with an eight-CPU cap and one fallback helper.
+
+That slice's instrumented cold query took 22.423 s: rows_of 5.542 s, prefetch 14.203 s,
+partners 1.607 s. Near Band decode consumed 44.069 thread-CPU seconds for 43,453 chunks:
+**1.014 ms per chunk**, versus the orchestrator's 1.17 ms raw reference. The extra 1.4 ms
+per chunk is no longer present; prefetch I/O/dispatch and lookup now limit the query.
+Adaptive small-range jobs were slower (33.956 s); sparse uncached string selection reduced
+lookup to 3.711 s but not the whole query (22.738 s), and would weaken the shared cache/bounds
+contract. One-owned-string-chunk dispatch was also slower (35.763 s). None is shipped.
+
+Unknown-content-size zstd frames, missing/corrupt prefetched shards and prefetch-key limits
+have explicit tests. Completed worker closures release their captured range before publishing
+the Future result: an executor retaining completed work items must not retain already released
+byte credits. Completed Futures return None and hand their actual result through a popped
+box, so the same guarantee holds for returned I/O buffers. The weak-reference regression was
+observed red. HTTP flight tests now measure awaited client requests: server finalisers can
+briefly overlap a subsequent request after the preceding body was already delivered. The
+client measurement retains the exact concurrency bound rather than adding timing slack.
+Full default and coverage slices pass 1,266 tests, with all postflight and changed gates green.

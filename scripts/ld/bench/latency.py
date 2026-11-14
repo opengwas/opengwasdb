@@ -52,6 +52,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from collections import Counter
@@ -104,14 +105,20 @@ class Tally:
 
 
 TALLY = Tally()
+_TALLY_LOCK = threading.Lock()
+
+
+def _record_get(key: str, out: Any) -> None:
+    name = http_static.array_of(key)
+    with _TALLY_LOCK:
+        TALLY.gets[name] += 1
+        TALLY.get_bytes[name] += 0 if out is None else len(out)
 
 
 def _counting_get(original: Callable[..., Any]) -> Callable[..., Any]:
     async def get(self: Any, key: str, prototype: Any = None, byte_range: Any = None) -> Any:
         out = await original(self, key, prototype, byte_range)
-        name = http_static.array_of(key)
-        TALLY.gets[name] += 1
-        TALLY.get_bytes[name] += 0 if out is None else len(out)
+        _record_get(key, out)
         return out
 
     return get
@@ -120,9 +127,7 @@ def _counting_get(original: Callable[..., Any]) -> Callable[..., Any]:
 def _counting_get_sync(original: Callable[..., Any]) -> Callable[..., Any]:
     def get(self: Any, key: str, *, prototype: Any = None, byte_range: Any = None) -> Any:
         out = original(self, key, prototype=prototype, byte_range=byte_range)
-        name = http_static.array_of(key)
-        TALLY.gets[name] += 1
-        TALLY.get_bytes[name] += 0 if out is None else len(out)
+        _record_get(key, out)
         return out
 
     return get
