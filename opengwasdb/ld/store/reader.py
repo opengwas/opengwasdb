@@ -7,9 +7,9 @@ and Stored r as float64. Every unstored pair it reports is NaN, never a
 number, and the meaning of a NaN is the format's to say (`ogld.format.answer_kinds`).
 
 Reads are bounded (spec §10). Opening reads the provenance and the chromosome ranges, and
-nothing else. A chromosome's positions and its Near Band's and Proxy Index's `indptr` are read
-the first time a request touches it, and its Far Pairs' `indptr` the first time a request needs
-its pairs beyond near_bp; each is kept. Every other read goes through the reader's `ChunkCache`,
+nothing else. A chromosome's positions and its Near Band's `indptr` are read on first touch;
+its Proxy Index's `indptr` only when the index is used, and its Far Pairs' `indptr` when a
+request needs pairs beyond near_bp. Each is kept. Every other read goes through `ChunkCache`,
 which fetches only the inner chunks holding the elements a request needs, from disk or over
 HTTP alike, and keeps them, so a query that reads a few pairs at a time fetches each once.
 
@@ -24,7 +24,7 @@ import math
 import os
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from functools import partial
+from functools import cached_property, partial
 from typing import Any, Final, cast
 
 import numpy as np
@@ -72,12 +72,17 @@ _PAIRS_PER_STEP: Final = 1 << 22
 
 @dataclass(frozen=True)
 class _Sparse:
-    """A sparse component of one chromosome, its Proxy Index or its Far Pairs (spec §5): the
-    `indptr` a reader keeps, and handles on `partner` and `r`, read as requests need them."""
+    """A sparse component: handles opened and fill-checked together, indptr loaded only on
+    use. Below t_far, clumping must not pay to decode an index it never reads (ogld#40)."""
 
-    indptr: npt.NDArray[np.int64]
+    source: zarr.Array[Any]
+    cache: ChunkCache
     partner: zarr.Array[Any]
     r: zarr.Array[Any]
+
+    @cached_property
+    def indptr(self) -> npt.NDArray[np.int64]:
+        return _indptr(self.source, self.cache)
 
 
 @dataclass(frozen=True)
@@ -679,10 +684,12 @@ class StoreReader:
                 name,
                 start,
                 stop,
-                refused_if_lost(position, np.asarray(position[start:stop])).astype(np.int64),
-                _indptr(near_indptr),
+                self._runs(position, np.array([start]), np.array([stop - start]))[0].astype(
+                    np.int64
+                ),
+                _indptr(near_indptr, self._cache),
                 near_r,
-                _Sparse(_indptr(index_indptr), index_partner, index_r),
+                _Sparse(index_indptr, self._cache, index_partner, index_r),
             )
         return self._loaded[name]
 
@@ -695,7 +702,7 @@ class StoreReader:
             indptr, partner, r = (
                 _kept_array(self._root, f"far/{c.name}/{array}") for array in _SPARSE_ARRAYS
             )
-            self._far[c.name] = _Sparse(_indptr(indptr), partner, r)
+            self._far[c.name] = _Sparse(indptr, self._cache, partner, r)
         return self._far[c.name]
 
     def _by_chromosome(
@@ -878,5 +885,6 @@ def _kept_array(root: zarr.Group, path: str) -> zarr.Array[Any]:
     return array
 
 
-def _indptr(array: zarr.Array[Any]) -> npt.NDArray[np.int64]:
-    return refused_if_lost(array, np.asarray(array[:]).astype(np.int64))
+def _indptr(array: zarr.Array[Any], cache: ChunkCache) -> npt.NDArray[np.int64]:
+    data = cache.runs(array, [0], [array.shape[0]])[0]
+    return refused_if_lost(array, data).astype(np.int64, copy=False)

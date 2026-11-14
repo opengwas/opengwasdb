@@ -38,7 +38,8 @@ def clump(
     absent = tuple(alid for alid, ok in zip(alids, present, strict=True) if not ok)
     rows, scores = found[present], scores[present]
     chrom, position = reader.loci_of(rows)
-    names = reader.alids_of(rows)
+    # rows_of has already compared the complete stored ALID, not only its locus.
+    names = np.array([a for a, ok in zip(alids, present, strict=True) if ok], dtype=np.str_)
 
     lead, r_lead = _chromosome_greedy(reader, rows, scores, chrom, r2=r2, window=window)
     return Clumps(

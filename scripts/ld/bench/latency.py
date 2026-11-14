@@ -238,6 +238,7 @@ def instrument(zarr_threads: int | None, cache_mib: int | None, patch: Patch = s
     import zarr
     from zarr.storage import FsspecStore, LocalStore
 
+    from ogld.query import clumping
     from ogld.store import location
     from ogld.store.location import ChunkCache
     from ogld.store.reader import StoreReader
@@ -257,6 +258,10 @@ def instrument(zarr_threads: int | None, cache_mib: int | None, patch: Patch = s
         # The string reads and the cache's per-string count, the 7% of #14's profile.
         (StoreReader, "rows_of", "rows_of"),
         (StoreReader, "variants", "variants"),
+        (StoreReader, "loci_of", "loci_of"),
+        (StoreReader, "partners", "partners"),
+        (ChunkCache, "prefetch", "prefetch"),
+        (clumping, "_greedy", "greedy"),
         (location, "_counted", "counted"),
     ):
         _wrap(owner, name, lambda original, label=label: _timing(original, label), patch)

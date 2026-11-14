@@ -905,7 +905,9 @@ def test_at_r2_at_or_above_t_far_no_near_band_chunk_is_fetched(query: str) -> No
             proxies_query.proxies(reader, names[::5], r2=support.T_FAR, kb=10_000)
     fetched = {key[0] for key in reader._cache._kept if kind(key) == "chunk"}
     assert {"index/21/r", "index/22/r"} <= fetched, "the Proxy Index rows must be read"
-    assert not [path for path in fetched if path.startswith("near/")], "no Near Band chunk"
+    assert not [path for path in fetched if path.startswith("near/") and path.endswith("/r")], (
+        "no Near Band code chunk; its indptr is still loaded on first chromosome touch"
+    )
     chunks = ("/near/21/r/c/", "/near/22/r/c/")
     assert not [path for path, _ in sent if path.startswith(chunks)], "nor any Near Band byte"
 

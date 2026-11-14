@@ -773,9 +773,9 @@ equal to t_far, rounding onto a threshold, AMR's t_far, a pair at exactly t_far,
 
 ## 10. Reads
 
-_Informative._ A reader keeps a chromosome's `position` range and its Near Band's and Proxy
-Index's `indptr` once it has opened that chromosome, and its Far Pairs' `indptr` once a request
-has needed that chromosome's pairs beyond `near_bp`: 8 bytes a variant each. For HGDP+1kGP EUR's
+_Informative._ A reader keeps a chromosome's `position` range and its Near Band's `indptr`
+once it has opened that chromosome. Its Proxy Index's `indptr` is read only when a request
+uses the index, and its Far Pairs' `indptr` when a request needs pairs beyond `near_bp`: 8 bytes a variant each. For HGDP+1kGP EUR's
 8.59 M variants that is 69 MB of positions, which a reader holds as `int64`, and 137 MB of
 `indptr`, raw, and 69 MB more once matrices have been read on every chromosome. Each query makes one of the reader's reads (`ogld.store.StoreReader`, ogld#14),
 and the reads map onto the arrays as follows.
@@ -870,8 +870,9 @@ cold on that region took A 34.25 s, B 10.92 s, C 3.86 s.
 
 **How ogld reads** (ogld#4). Opening a store reads its provenance and its chromosome ranges, and
 refuses a `format_version` or `encoding` it does not implement (§13). A chromosome's `position`
-range and its Near Band's and Proxy Index's `indptr` are read the first time a request touches
-that chromosome, and kept; its Far Pairs' `indptr` the first time a request needs its pairs
+range and its Near Band's `indptr` are read the first time a request touches that chromosome,
+through the numeric cache, and kept. Its Proxy Index's `indptr` is read only when used;
+its Far Pairs' `indptr` the first time a request needs its pairs
 beyond `near_bp`, so `proxies` and `clump`, which never do, read no more than they did before
 the Far Pairs (ADR 0007). Every other read the reader makes goes through its cache of decoded inner chunks
 (`ogld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request

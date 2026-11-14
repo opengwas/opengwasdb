@@ -50,3 +50,11 @@ The prefetch seam failed before implementation. Disabling streamed point reads f
 8,781,360 traced bytes held to return 128 bytes; the bounded implementation passes. Sliding
 windows and cache zero return the same clumps. The initial full slice passes 1,259 tests in
 29.42 s, lint, strict types and changed-scope gates. Final measurements and certification follow.
+
+The first production warm run took 48.307 s with identical result bytes. It exposed a long
+coalesced range being decoded by one job. Ranges now distribute their requested frames over
+the pool, while retaining both credit and cancellation bounds. Lookup also routes positions
+and Near Band indptr through the numeric decoder, and defers unused Proxy Index indptr data.
+The lazy-index test failed before that change. ALIDs already verified by rows_of name clump
+results directly, preserving present-only string width. This next slice passes 1,260 tests
+in 14.87 s at load 4.90→6.81 with an eight-CPU cap and one fallback helper.

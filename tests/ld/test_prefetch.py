@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import tracemalloc
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
 import zarr
-from store_copies import resharded
+from store_copies import TEST_STORE, resharded
+from zarr.storage import LocalStore
 
 import ogld
 from ogld.store import location
@@ -27,6 +29,23 @@ def test_prefetch_fits_or_declines_without_reading(tmp_path: Path) -> None:
     tiny = location.ChunkCache(1)
     assert not tiny.prefetch(array, [0], [512])
     assert not tiny._kept
+
+
+def test_unused_proxy_indptr_is_loaded_only_when_asked(monkeypatch: pytest.MonkeyPatch) -> None:
+    names = ogld.open(TEST_STORE)._reader.alids_of(np.array([500, 520])).tolist()
+    read = LocalStore.get_sync
+    keys: list[str] = []
+
+    def recording(self: Any, key: str, **kwargs: Any) -> Any:
+        keys.append(key)
+        return read(self, key, **kwargs)
+
+    monkeypatch.setattr(LocalStore, "get_sync", recording)
+    store = ogld.open(TEST_STORE)
+    assert (store._reader.rows_of(names) >= 0).all()
+    assert not any(key.startswith("index/22/indptr/c/") for key in keys)
+    store.proxies(names, r2=0.8, kb=3000)
+    assert any(key.startswith("index/22/indptr/c/") for key in keys)
 
 
 def test_encoded_credit_bounds_actual_buffers(monkeypatch: pytest.MonkeyPatch) -> None:

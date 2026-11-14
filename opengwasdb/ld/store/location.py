@@ -542,7 +542,9 @@ class _NumericDecoder:
         raw = _NUMCODECS.CRC32C().decode(data)
         return np.frombuffer(raw, dtype=self.index_dtype).reshape(self.per_shard, 2)
 
-    async def _decode(self, data: bytes, offset: int, chunks: _ChunkRanges, out: _Decoded) -> None:
+    async def _decode(
+        self, data: bytes | memoryview[int], offset: int, chunks: _ChunkRanges, out: _Decoded
+    ) -> None:
         """At most five jobs per range. Drain running jobs even if another piece fails.
 
         Cancelling a future cannot stop zstd on a worker. Shielding and draining keeps that
@@ -657,7 +659,7 @@ async def _prefetch_shard(
             if data is not None:
                 view = memoryview(data.as_numpy_array()).cast("B")
                 places = [(int(group[k]), a, n) for k, a, n in chunks]
-                await _on_pool(partial(decoder._into, view, lo, places, out))
+                await decoder._decode(view, lo, places, out)
                 del view
             del data
         finally:

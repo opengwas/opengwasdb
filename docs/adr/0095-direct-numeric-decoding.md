@@ -100,6 +100,12 @@ Unknown-size or malformed headers retain allocating decode plus an exact output-
 check. This preserves the short-frame refusal: merely passing out= is not sufficient.
 No new dependency or private zarr codec/index API is introduced.
 
+A chromosome's positions and Near Band indptr now also use the numeric decoder. The Proxy
+Index's handles and fill values are still checked on chromosome opening, but its indptr data
+is loaded only when used. Below t_far this removes an entire unused column load. Clump names
+its present results from the complete ALIDs rows_of already verified, without reading them
+again. A regression test observes no index-indptr data read until an index query asks for it.
+
 The cache budget is not an RSS limit. A read also holds requested chunks, its result, one
 batch of decoded buffers (and cache copies for fallback runs), compressed ranges, codec
 workspace, and small index/job bookkeeping. Concurrent reads each have their own batch. Compressed bytes are not counted
