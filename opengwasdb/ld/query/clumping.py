@@ -93,6 +93,7 @@ def _greedy(
     lead reads its own partners among the hits still open, one call each, so a lead resolves
     only its pairs with its candidates: never a square among them (ogld#14).
     """
+    warm = reader.clump_warmer(rows, r2=r2, window_bp=window)
     hits = _Hits(rows)
     lead = np.full(len(rows), -1, dtype=np.int64)
     r_lead = np.full(len(rows), np.nan)
@@ -104,6 +105,7 @@ def _greedy(
         if _joins(*_ITSELF, r2=r2, window=window).all():
             hits.join(lead, r_lead, i, np.array([rows[i]]), np.ones(1))
         hits.close(rows[i], lead)
+        warm(rows[i])
         found = reader.partners(rows[i : i + 1], r2=r2, window_bp=window, among=hits.open())
         joins = _joins(found.r, found.distance, r2=r2, window=window)
         hits.join(lead, r_lead, i, found.partner[joins], found.r[joins])

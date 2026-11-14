@@ -886,7 +886,7 @@ directly, in bounded windows: one pass over each chromosome, and a second read o
 **Direct numeric decoding** (ogld#40; ADR 0009). For a one-dimensional numeric array whose
 metadata declares exactly sharding_indexed with bytes then zstd internally and bytes then
 CRC32C in an end-located shard index, `location.py` reads indexes and byte ranges through the
-store's async interface and decodes on one process-shared five-worker pool. Both declared
+store's async interface and decodes on one process-shared seven-worker pool. Both declared
 byte orders are honoured. The index's uint64 offset/length pairs are absolute; both all ones
 means an empty chunk, which reads the declared fill value, just like a missing shard. CRC32C
 mismatches, malformed zstd frames and decoded-length mismatches raise. No private zarr codec/index API is called. Every other chain,
@@ -897,12 +897,29 @@ chunk owns its buffer and transfers it to the cache without copying. The planner
 one chunk for trimming a padded tail, or half the allowance for non-native byte-order
 conversion scratch. Each frame's full decoded length is checked before adoption. At least
 one chunk can be read even when its buffers exceed the allowance. No second decoded batch
-is queued. Each range submits at most five decode jobs. A failed piece cancels sibling
+is queued. Each range submits at most seven decode jobs. A failed piece cancels sibling
 fetches and drains running decode jobs before returning.
 Compressed ranges, codec workspace and small index/job bookkeeping are additional to the
 decoded-byte bound;
 the cache budget does not bound RSS. The pool is reset after fork and shared across readers,
 not multiplied per chromosome. Applications budget zarr's I/O helpers separately.
+
+**Clump prefetch** (ogld#40 round 2; ADR 0009). Before a chromosome's greedy pass, the
+reader warms the union of chunks its candidate hit pairs can need, only when the buffers
+and shard indexes fit the cache budget and at most 65,536 chunk keys are needed. A chromosome
+that does not fit uses a sliding positional warm range of W around a lead, halved until it
+fits; ordinary reads still resolve partners outside a smaller warm range. Zero cache skips
+warming. Planning is O(hits + 65,536), not O(hit pairs). Sparse reads stream bounded chunk
+groups, so an oversized warm range never becomes a whole-chromosome decoded pin.
+
+Prefetch uses a separate 256 MiB credit limit for compressed ranges, held until decode
+finishes, in addition to the decoded flight allowance. It coalesces at most 512 KiB gaps
+into at most 16 MiB ranges and decodes only requested chunks. A single oversized chunk is
+the exception to either allowance. Actual store requests remain bounded by async.concurrency.
+The async store wrapper bridges exact LocalStore reads through its public get_sync method
+on the same pool as decoding; subclasses and HTTP retain async get. No global zarr setting
+changes. Known-size zstd frames are checked against RFC 8878 before decoding into a fixed
+buffer; unknown-size frames retain allocating decode and output-length validation.
 
 **The cache and its bound** (ogld#4, ogld#32). An opened store's cache keeps decoded chunks and
 shard indexes up to `cache_bytes`, dropping the least recently used first. The caller sets it

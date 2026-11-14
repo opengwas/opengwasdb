@@ -117,6 +117,17 @@ def _counting_get(original: Callable[..., Any]) -> Callable[..., Any]:
     return get
 
 
+def _counting_get_sync(original: Callable[..., Any]) -> Callable[..., Any]:
+    def get(self: Any, key: str, *, prototype: Any = None, byte_range: Any = None) -> Any:
+        out = original(self, key, prototype=prototype, byte_range=byte_range)
+        name = http_static.array_of(key)
+        TALLY.gets[name] += 1
+        TALLY.get_bytes[name] += 0 if out is None else len(out)
+        return out
+
+    return get
+
+
 def _tally_run(path: str, first: int, stop: int, size: int, itemsize: int) -> None:
     """Count one chunk-cache read of chunks first … stop − 1 of the array at `path`."""
     name = http_static.array_of(path + "/c/0")
@@ -237,6 +248,7 @@ def instrument(zarr_threads: int | None, cache_mib: int | None, patch: Patch = s
         # A reader makes its cache with the module's budget when it opens (`ChunkCache()`).
         patch(location, "CACHE_BYTES", cache_mib << 20)
     _wrap(LocalStore, "get", _counting_get, patch)
+    _wrap(LocalStore, "get_sync", _counting_get_sync, patch)
     _wrap(FsspecStore, "get", _counting_get, patch)
     _wrap(ChunkCache, "_keep_run", _counting_run, patch)
     _wrap(StoreReader, "_chromosome", _loading, patch)

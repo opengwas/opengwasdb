@@ -288,6 +288,32 @@ class StoreReader:
         out[:, repeat] = out[:, source[repeat]]
         return out
 
+    def clump_warmer(
+        self, rows: npt.NDArray[np.int64], *, r2: float, window_bp: float
+    ) -> Callable[[np.int64], None]:
+        """Warm candidate chunks together; oversized chromosomes use positional windows.
+
+        The reader owns candidate geometry and selection of the stored part. Warming is
+        optional: a missed chunk still goes through the ordinary bounded read (ADR 0009).
+        """
+        if r2 >= self._provenance["t_far"] or not len(rows) or self.cache_bytes == 0:
+            return lambda row: None
+        c, _ = next(self._by_chromosome(rows))
+        local = np.unique(local_rows(rows, c.start))
+        reach = math.floor(window_bp)
+        if self._prefetch_hits(c, local, reach):
+            return lambda row: None
+        return _ClumpWindows(self, c, local, reach).warm
+
+    def _prefetch_hits(self, c: _Chromosome, local: npt.NDArray[np.int64], reach: int) -> bool:
+        if len(local) < 2:
+            return True
+        stop = stop_within(c.position[local], reach)
+        at = np.flatnonzero(stop > np.arange(len(local)) + 1)
+        first = near_address(c.near_indptr, local[at], local[at + 1])
+        length = local[stop[at] - 1] - local[at + 1] + 1
+        return self._cache.prefetch(c.near_r, first, length)
+
     def partners(
         self,
         rows: npt.NDArray[np.int64],
@@ -702,6 +728,32 @@ class StoreReader:
                 f"{size} rows: an Absent ALID is not a row (spec §8)"
             )
         return rows
+
+
+class _ClumpWindows:
+    """One sliding positional warm range, never a second cache or chromosome-sized pin."""
+
+    def __init__(
+        self, reader: StoreReader, c: _Chromosome, local: npt.NDArray[np.int64], reach: int
+    ) -> None:
+        self.reader, self.c, self.local, self.reach = reader, c, local, reach
+        self.position = c.position[local]
+        self.low, self.high = 1, 0
+
+    def warm(self, row: np.int64) -> None:
+        centre = int(self.c.position[int(row) - self.c.start])
+        if self.low <= centre <= self.high:
+            return
+        radius = self.reach
+        while True:
+            a, b = position_rows(self.position, centre - radius, centre + radius)
+            if (
+                self.reader._prefetch_hits(self.c, self.local[int(a) : int(b)], self.reach)
+                or radius == 0
+            ):
+                self.low, self.high = centre - radius, centre + radius
+                return
+            radius //= 2
 
 
 #: What a stored part's read gives some rows: row lengths, partners (local rows), Stored r.

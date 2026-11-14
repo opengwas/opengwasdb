@@ -36,9 +36,9 @@ transfers it to the cache without a second copy. The planner reserves one chunk 
 a padded final chunk, or half the allowance for non-native byte-order conversion scratch.
 A frame's decoded length is checked before adoption: decoding directly into a destination
 was rejected because numcodecs accepts a short frame without raising. At least one chunk
-can be read even when it exceeds the allowance. The process shares one five-worker executor,
+can be read even when it exceeds the allowance. The process shares one seven-worker executor,
 reset after fork. A batch submits
-at most five jobs per range, not a pool per reader or chromosome. Cancellation drains
+at most seven jobs per range, not a pool per reader or chromosome. Cancellation drains
 already-running decode jobs before the read releases its buffers. The executor's standard
 Python shutdown waits for its workers. Applications still budget zarr's I/O helper threads
 separately; this is not a process-wide thread limit.
@@ -61,6 +61,44 @@ fallback reader and sole writer. numcodecs is already a direct runtime dependenc
   without retaining uncounted neighbours; zarr's fallback runs still need to be copied.
 - Copy zarr's private sharding machinery: rejected; implementing this deliberately narrow
   published chain makes fallback explicit and avoids a private-API dependency.
+
+## Round 2: bounded chromosome prefetch and shared I/O
+
+The orchestrator's round-2 instruction on #40 requires warming a chromosome's candidate
+chunks before the greedy pass, with positional windows when they do not fit. A bounded
+sparse-graph prototype (1 GiB graph/work allowance plus cache and fetch buffers) took
+68.419 s on GCST90476460, including one graph-cap fallback; prefetch with a shared I/O/decode
+pool took 31.186 s with identical whole-result bytes. Choose prefetch, not the retained graph.
+These are prototypes, not a claim that the 10-second target is met.
+
+The cache plans the union of chunk intervals without enumerating hit pairs. It warms only
+when the candidate chunk buffers plus conservative shard-index storage fit its budget, and
+when at most 65,536 chunk keys are needed. Otherwise the reader warms a sliding range of W
+around a lead, halving that range until it fits. The ordinary read still resolves every
+requested pair, including partners outside a smaller warm range. Zero cache skips warming.
+Sparse point reads stream bounded chunk groups instead of pinning a whole chromosome.
+
+Prefetch has at most 256 MiB of decoded buffers (with conversion/trim allowance), and a
+separate 256 MiB credit limit on compressed ranges held until their decode finishes.
+Individual oversized chunks retain the documented one-chunk exception. Prefetch coalesces
+gaps up to 512 KiB into ranges up to 16 MiB, decoding only requested chunks. At most zarr's
+async.concurrency store requests run together. Candidate planning adds O(hits + 65,536)
+metadata, not O(hit pairs). The cache budget is unchanged; positions/indptr, request/result
+arrays, codec workspace and cache bookkeeping remain additional, as in §10.
+
+The store wrapper's async interface now bridges the **public LocalStore.get_sync** method
+onto the same seven-worker pool as decoding. Exact LocalStore only: subclass overrides and
+HTTP stores continue through their own async get. This avoids serialising all local ranges
+on the loop's one default helper without making another I/O pool or changing global zarr
+settings. Applications budget fallback codec helpers separately; benchmarks use one helper,
+BLAS 1 and an eight-CPU cap. Cancellation drains both I/O and decode jobs.
+
+Known-size zstd frames decode into preallocated numpy buffers. The reader checks the frame
+content size from [RFC 8878 §3.1.1](https://www.rfc-editor.org/rfc/rfc8878.html#section-3.1.1)
+first, including the two-byte +256 rule and declared dictionary/window header widths.
+Unknown-size or malformed headers retain allocating decode plus an exact output-length
+check. This preserves the short-frame refusal: merely passing out= is not sufficient.
+No new dependency or private zarr codec/index API is introduced.
 
 The cache budget is not an RSS limit. A read also holds requested chunks, its result, one
 batch of decoded buffers (and cache copies for fallback runs), compressed ranges, codec
