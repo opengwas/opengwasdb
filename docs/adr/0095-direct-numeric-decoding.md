@@ -34,8 +34,9 @@ and HTTP alike. Only physically adjacent requested ranges are merged. The existi
 planner bounds each read's decoded buffers. Each native decoded chunk owns its buffer and
 transfers it to the cache without a second copy. The planner reserves one chunk for trimming
 a padded final chunk, or half the allowance for non-native byte-order conversion scratch.
-A frame's decoded length is checked before adoption: decoding directly into a destination
-was rejected because numcodecs accepts a short frame without raising. At least one chunk
+A frame's decoded length is checked before adoption. As refined in round 2 below,
+decoding directly into a destination without validating its declared size is rejected,
+because numcodecs accepts a short frame without raising. At least one chunk
 can be read even when it exceeds the allowance. The process shares one seven-worker executor,
 reset after fork. A batch submits
 at most seven jobs per range, not a pool per reader or chromosome. Cancellation drains
@@ -100,7 +101,9 @@ Known-size zstd frames decode into preallocated numpy buffers. The reader checks
 content size from [RFC 8878 §3.1.1](https://www.rfc-editor.org/rfc/rfc8878.html#section-3.1.1)
 first, including the two-byte +256 rule and declared dictionary/window header widths.
 Unknown-size or malformed headers retain allocating decode plus an exact output-length
-check. This preserves the short-frame refusal: merely passing out= is not sufficient.
+check. For native byte order the resulting numpy view retains that raw buffer without a
+second copy; non-native data still converts. A traced-allocation regression fails with
+the unnecessary copy. This preserves the short-frame refusal: merely passing out= is not sufficient.
 No new dependency or private zarr codec/index API is introduced.
 
 A chromosome's positions and Near Band indptr now also use the numeric decoder. The Proxy
