@@ -51,6 +51,26 @@ def test_unknown_frame_size_uses_the_validating_decode() -> None:
     assert location._frame_size(memoryview(larger)) == 400, "two-byte size includes +256"
 
 
+def test_unknown_size_native_frames_do_not_double_the_flight_buffer() -> None:
+    import numcodecs
+
+    source = np.arange(65536, dtype=np.int32)
+    codec = numcodecs.Zstd()
+    encoded = codec.encode(source)
+    assert encoded[4] & 0xE0 == 0xA0, "single segment with four-byte content size"
+    frame = memoryview(encoded[:4] + bytes([encoded[4] & 0x1F, 0x58]) + encoded[9:])
+    assert location._frame_size(frame) is None
+    decoder = location._NumericDecoder(len(source), 1, source.dtype, np.dtype("<u8"))
+    tracemalloc.start()
+    try:
+        got = decoder._frame(codec, frame)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    np.testing.assert_array_equal(got, source)
+    assert peak < source.nbytes * 1.5, "native fallback must not copy the validated raw buffer"
+
+
 @pytest.mark.parametrize("missing", [False, True])
 def test_prefetch_corruption_and_missing_shards(tmp_path: Path, missing: bool) -> None:
     root = resharded(tmp_path / "store", 512, 4)
@@ -187,6 +207,7 @@ def test_sliding_windows_and_zero_cache_equal_whole_chromosome(tmp_path: Path) -
     names = store._reader.alids_of(rows).tolist()
     score = np.random.default_rng(40).random(len(rows))
     expected = store.clump(names, score, r2=0.01, kb=3000)
+    assert (expected.lead != expected.alid).any(), "the fixture must have joined members"
     for budget in [0, 4096]:
         got = ogld.open(root, cache_bytes=budget).clump(names, score, r2=0.01, kb=3000)
         for name, column in expected.columns().items():

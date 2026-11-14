@@ -545,7 +545,7 @@ class _NumericDecoder:
     async def _decode(
         self, data: bytes | memoryview[int], offset: int, chunks: _ChunkRanges, out: _Decoded
     ) -> None:
-        """At most five jobs per range. Drain running jobs even if another piece fails.
+        """At most seven jobs per range. Drain running jobs even if another piece fails.
 
         Cancelling a future cannot stop zstd on a worker. Shielding and draining keeps that
         worker's buffers inside this read's lifetime and in-flight bound (ADR 0009).
@@ -581,7 +581,9 @@ class _NumericDecoder:
             raw = codec.decode(frame)
             if len(raw) != expected:
                 raise ValueError(f"decoded chunk has {len(raw)} bytes, expected {expected}")
-            return np.frombuffer(raw, dtype=self.dtype).astype(self.dtype.newbyteorder("="))
+            return np.frombuffer(raw, dtype=self.dtype).astype(
+                self.dtype.newbyteorder("="), copy=False
+            )
         if declared != expected:
             raise ValueError(f"decoded chunk declares {declared} bytes, expected {expected}")
         out = np.empty(self.size, dtype=self.dtype.newbyteorder("="))
