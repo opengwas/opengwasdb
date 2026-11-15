@@ -165,8 +165,13 @@ WIDTH_ROWS = [
     ("22", 100, LONG[:20], "ACGT"),
     ("22", 100, LONG[:21], "ACGT"),
     ("22", 200, "A", "C"),
+    ("22", 200, LONG[:21], "ACGT"),
     ("22", 300, "A", "G"),
 ]
+
+#: The ALID of `WIDTH_ROWS[3]` cut at the slot: no row of the store has it, so a build that
+#: truncated that row's key into the slot would answer it with another variant's row.
+ABSENT_AT_THE_SLOT = f"22:200:ACGT:{LONG[:20]}"
 
 
 def written(out: Path, rows: list[tuple[str, int, str, str]] = WIDTH_ROWS) -> Path:
@@ -191,13 +196,13 @@ def test_a_store_writes_its_index_and_counts_what_it_leaves_out(tmp_path: Path) 
     root = zarr.open_group(store, mode="r")
     alid = root[f"{layout.ALID_INDEX}/alid"]
     assert alid.dtype == np.dtype("uint8")
-    assert alid.shape == ((len(WIDTH_ROWS) - 1) * layout.ALID_INDEX_WIDTH,)
+    assert alid.shape == ((len(WIDTH_ROWS) - 2) * layout.ALID_INDEX_WIDTH,)
     assert root[f"{layout.ALID_INDEX}/row"].dtype == np.dtype("int32")
     keys, rows = layout.alid_index([orient(*r).alid for r in WIDTH_ROWS])
     np.testing.assert_array_equal(np.asarray(alid[:]), keys.ravel())
     np.testing.assert_array_equal(np.asarray(root[f"{layout.ALID_INDEX}/row"][:]), rows)
     provenance = StoreReader.open(store).provenance
-    assert provenance["counts"]["alids_left_out"] == 1
+    assert provenance["counts"]["alids_left_out"] == 2, "both ALIDs wider than the slot"
 
 
 def test_a_store_derives_its_index_from_its_own_table(tmp_path: Path) -> None:
@@ -212,7 +217,7 @@ def test_a_store_derives_its_index_from_its_own_table(tmp_path: Path) -> None:
     left_out = assembly.derive_alid_index(
         written_from["variants"], written_from["variants"].create_group("alid_index")
     )
-    assert left_out == 1
+    assert left_out == 2
     alids = reader.alids_of(np.arange(len(WIDTH_ROWS)))
     found = reader.rows_of(list(alids))
     assert found.tolist() == list(range(len(WIDTH_ROWS)))
@@ -242,8 +247,10 @@ def rebuild(store: Path, alids: list[str], *, truncating: bool, unsorted: bool) 
         order = np.random.default_rng(0).permutation(len(rows))
         keys, rows = keys[order], rows[order]
     root = zarr.open_group(store, mode="r+")
-    root[f"{layout.ALID_INDEX}/alid"][:] = keys.view(np.uint8).ravel()
-    root[f"{layout.ALID_INDEX}/row"][:] = rows
+    for name, values in (("alid", keys.view(np.uint8).ravel()), ("row", rows)):
+        array = root[f"{layout.ALID_INDEX}/{name}"]
+        array.resize(values.shape)
+        array[:] = values
 
 
 def answer(store: Path, alids: list[str]) -> list[int]:
@@ -286,10 +293,9 @@ def test_rows_of_is_right_on_an_index_a_broken_build_wrote(
 ) -> None:
     built = crafted(tmp_path)
     rebuild(built.path, built.alids, **{"truncating": False, "unsorted": False} | rebuild_with)
-    assert answer(built.path, built.alids) == list(range(len(built.alids)))
-    assert StoreReader.open(built.path).rows_of(built.alids).tolist() == list(
-        range(len(built.alids))
-    )
+    asked = [*built.alids, ABSENT_AT_THE_SLOT]
+    assert answer(built.path, asked) == [*range(len(built.alids)), -1]
+    assert StoreReader.open(built.path).rows_of(asked).tolist() == [*range(len(built.alids)), -1]
 
 
 def test_a_present_alid_is_found_without_loading_its_chromosome(tmp_path: Path) -> None:
@@ -329,7 +335,7 @@ def test_the_derivation_writes_the_group_whole_or_leaves_nothing(tmp_path: Path)
     assert script.derive(store) == 3
     assert (store / layout.ALID_INDEX / "row").exists()
     assert not (store / "variants" / "alid_index-partial").exists()
-    assert StoreReader.open(store).provenance["counts"]["alids_left_out"] == 1
+    assert StoreReader.open(store).provenance["counts"]["alids_left_out"] == 2
     assert StoreReader.open(store).rows_of(["22:200:A:C"]).tolist() == [2]
 
 
