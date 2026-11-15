@@ -17,3 +17,10 @@
   held at the source's `float32` like any other exception. `fidelity.source`
   compares an exception with that value too, rather than with its `float16`
   rounding, which would have failed a correct release at the same cell.
+
+- **`side_tables.se_exceptions_rounded` detects the silent rounding class.** It
+  reports an unusually high share of float16-exact SE exceptions as an error
+  from format 0.2.2 and as a warning on earlier Stores. Every published Dense
+  Store with SE exceptions (OGS-00009 and OGS-00012 to -17) has a float16-exact
+  share of at least 99.7% and now receives that warning; validation does not
+  rewrite these releases.
