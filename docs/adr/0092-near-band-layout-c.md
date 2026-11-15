@@ -10,6 +10,9 @@ the measurements are in `docs/benchmarks/latency.md`, rendered from the records 
 component of their own (ogld#31) and moves the reader's speed-ups to ogld#32. Each of those is
 its own decision; this record is the layout's.
 
+**Partly superseded by ADR 0010.** Decision 2 describes the arrays that existed when layout C
+was chosen. The later ALID search index has its own chunk and shard shapes.
+
 ## Context
 
 Spec §6 named three shapes for the Near Band's `near/<c>/r`, as (inner chunk, shard) in codes:
@@ -30,8 +33,9 @@ read's runs of chunks together.
 1. **`near/<c>/r` is chunked 262,144 codes an inner chunk and 67,108,864 to a shard** (256 inner
    chunks, 128 MiB raw), zstd level 3 inside the shard, as §6's table says. `ogld.store.layout`
    holds the shape (`NEAR_R`), and the writer takes it from there.
-2. **Every other array keeps its one shape**, 16,384 to an inner chunk and 1,048,576 to a shard.
-   ogld#8 measured no read the Proxy Index's or the variant table's shape held back.
+2. **Every other array present at this decision keeps its one shape**, 16,384 to an inner chunk
+   and 1,048,576 to a shard. ogld#8 measured no read the Proxy Index's or the variant table's
+   shape held back. ADR 0010 later gives the ALID search index different shapes.
 3. **A shape is not a format version** (§13). A store re-sharded for serving (ogld#9) reads the
    same, and a reader depends on no shape: each array's metadata records its own.
 
