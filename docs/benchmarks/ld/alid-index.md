@@ -21,6 +21,11 @@ Measured 15 November 2026 on the IEU node, against #40's baseline
   index, and a shorter one takes the exact scan. A binary search over the index, reading only the
   chunks one key's path touches, was measured and rejected: with chunks large enough to read the
   store's index in a second, a few hundred keys touch nearly all of them.
+- **A lookup reads the index a batch of 16 inner chunks (4 MiB) at a time**, not all of it: the
+  search holds 8.9 MB for a 6.4 MB index and 12.6 MB for a 25.6 MB one, where reading it whole held
+  273 MB of EUR's keys twice (548 MB peaked, measured by #42's review). One chunk a read costs
+  4.4 s for a 260,821-key list, 16 chunks 1.0 s, a whole shard (64) 0.79 s, and one whole read
+  0.70 s.
 - **#8's step-1 reads are unchanged**, since every list they time is short: the same chunks and
   the same requests, and the same times within the run-to-run spread of this node.
 

@@ -186,7 +186,10 @@ class ChunkCache:
         hi = (start[some] + count[some] - 1) // size
         wanted = np.unique(spans(lo, hi - lo + 1))
         chunks = dict(zip(wanted.tolist(), self._chunks(array, wanted, size), strict=True))
-        empty = np.asarray(array[0:0])
+        # A run of no elements is an empty array of the array's own dtype, built here rather than
+        # read from the store: one per call is a read of the store's metadata at best, and a
+        # caller that reads one chunk at a time makes a call per chunk (ogld#42).
+        empty = np.empty(0, dtype=array.dtype)
         return [
             _run(chunks, s, n, size) if n else empty
             for s, n in zip(start.tolist(), count.tolist(), strict=True)
