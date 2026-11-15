@@ -229,22 +229,36 @@ class StoreReader:
         loci = _loci(alids, self._ranges)
         if not loci:
             return found
-        # An ALID at the slot's width, or past it, is never asked of the index: a build that
-        # truncated its keys makes a wider ALID's key these same 32 bytes, and it would then
-        # answer for another variant (opengwasdb issue #127). NUL padding keeps every shorter
-        # ALID's key its own, so those are searched for.
-        keyed = np.array([len(alid.encode("utf-8")) < layout.ALID_INDEX_WIDTH for alid in alids])
-        asked = np.array([i for which, _ in loci.values() for i in which[keyed[which]].tolist()])
         scanned = np.ones(len(alids), dtype=bool)
-        if len(asked) and self._index_pays(len(asked)):
-            hits = self._searched([alids[i] for i in asked])
-            where = hits >= 0
-            found[asked[where]] = self._read(self._index().row, hits[where])
-            scanned[asked[where]] = False
+        self._from_index(alids, loci, found, scanned)
         rest = np.flatnonzero(scanned)
         if len(rest):
             found[rest] = self._scanned(alids, rest)
         return found
+
+    def _from_index(
+        self,
+        alids: Sequence[str],
+        loci: dict[str, tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]],
+        found: npt.NDArray[np.int64],
+        scanned: npt.NDArray[np.bool_],
+    ) -> None:
+        """Fill `found` from the ALID index for every ALID it can answer, and clear `scanned`
+        there; what it cannot answer stays for the exact scan (spec §2, §10; ADR 0010).
+
+        An ALID at the slot's width, or past it, is never asked of the index: a build that
+        truncated its keys makes a wider ALID's key these same 32 bytes, and it would then answer
+        for another variant (opengwasdb issue #127). NUL padding keeps every shorter ALID's key its
+        own, so those are searched for. A list too short to pay for the index asks for nothing.
+        """
+        keyed = np.array([len(alid.encode("utf-8")) < layout.ALID_INDEX_WIDTH for alid in alids])
+        asked = np.array([i for which, _ in loci.values() for i in which[keyed[which]].tolist()])
+        if not len(asked) or not self._index_pays(len(asked)):
+            return
+        hits = self._searched([alids[i] for i in asked])
+        where = hits >= 0
+        found[asked[where]] = self._read(self._index().row, hits[where])
+        scanned[asked[where]] = False
 
     def _index_pays(self, count: int) -> bool:
         """Whether `count` ALIDs are worth the whole index: a list that names a `_INDEX_SHARE`th of

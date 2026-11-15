@@ -383,6 +383,16 @@ def _counted(store: _Store, rows: int) -> _Problems:
         yield "n_variants", f"provenance records {recorded:,}, but variants/ holds {rows:,} rows"
 
 
+def _index_shapes(store: _Store) -> _Problems:
+    """The ALID index's two arrays (spec §6, §1): its keys are 32 bytes an entry, and it has as
+    many entries as its `row` array holds. `alid_index.count` holds their lengths to the Variant
+    Set's."""
+    held = store.find(layout.ALID_INDEX_ROW)
+    keys = held.shape[0] * layout.ALID_INDEX_WIDTH if held is not None else None
+    yield from _shape(store, f"{layout.ALID_INDEX}/alid", _ALID_INDEX_DTYPES["alid"], keys)
+    yield from _shape(store, f"{layout.ALID_INDEX}/row", _ALID_INDEX_DTYPES["row"], None)
+
+
 @_rule("envelope.arrays")
 def _envelope_arrays(store: _Store) -> _Problems:
     if store.root.metadata.zarr_format != 3:
@@ -392,12 +402,7 @@ def _envelope_arrays(store: _Store) -> _Problems:
     size = ranges[-1][2] if ranges else 0
     for name, dtype in _VARIANT_DTYPES.items():
         yield from _shape(store, f"variants/{name}", dtype, size)
-    # The index's keys are 32 bytes an entry, and its entries are as many as its rows array;
-    # `alid_index.count` holds their lengths to the Variant Set's.
-    held = store.find(layout.ALID_INDEX_ROW)
-    keys = held.shape[0] * layout.ALID_INDEX_WIDTH if held is not None else None
-    yield from _shape(store, f"{layout.ALID_INDEX}/alid", _ALID_INDEX_DTYPES["alid"], keys)
-    yield from _shape(store, f"{layout.ALID_INDEX}/row", _ALID_INDEX_DTYPES["row"], None)
+    yield from _index_shapes(store)
     yield from _counted(store, size)
     # The container's dtype: the same for every admitted encoding (spec §1, §3; ADR 0004).
     r_dtype = REncoding.dtype.name
@@ -815,8 +820,12 @@ def _indexed(
     size = store.array("variants/position").shape[0]
     for lo, hi in windows(0, size, _ROWS):
         keys, at = layout.alid_keys(_strings(store, "alid", lo, hi), first=lo)
-        if not len(table) or not len(keys):
-            yield at, np.zeros(len(at), dtype=np.int64), np.zeros(len(at), dtype=bool)
+        if not len(table):
+            # An index with no entries holds nothing: `alid_index.complete` names every ALID.
+            yield at, np.full(len(at), -1, dtype=np.int64), np.full(len(at), False)
+            continue
+        if not len(keys):
+            yield at, np.empty(0, dtype=np.int64), np.empty(0, dtype=bool)
             continue
         wanted = keys.view(f"|S{width}").ravel()
         found = np.minimum(np.searchsorted(table, wanted), len(table) - 1)

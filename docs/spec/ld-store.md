@@ -106,8 +106,7 @@ the Variant Set's ALIDs again, as fixed-width keys a binary search can run over:
 Variant Set row of that entry. The entries are sorted by key, bytewise; two ALIDs of one length
 differ only in their own bytes, and padding with NUL sorts an ALID before every ALID it is a
 prefix of, which is the order the engine's own index has. It holds every ALID whose UTF-8 form
-is at most 32 bytes, which is the engine's rule and its width (`is_indexable_alid`,
-opengwasdb `variants/axis.py`; ADR 0010). An ALID wider than the slot MUST be left out of the
+is at most 32 bytes, which is the engine's rule and its width (`is_indexable_alid`; ADR 0010). An ALID wider than the slot MUST be left out of the
 index and counted in `counts.alids_left_out` (§7), never cast into it: the cast truncates, and
 two indels at one position that agree over the slot then share one key, so a lookup by either
 returns whichever row sorts first — one variant answering to another's name, with nothing to
