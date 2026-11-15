@@ -1149,13 +1149,7 @@ def test_a_control_whose_paired_ratios_straddle_one_is_not_resolved(tmp_path, mo
     fake = _Mixed({"reader_head": 4.0, "reader_base": 4.0, "parse_floor": 1.0})
     monkeypatch.setattr(_reader_ab, "run_child", fake)
 
-    record = _reader_ab.measure_source(
-        "opengwasdb.finngen-r13",
-        source,
-        repetitions=2,
-        control=_control(tmp_path),
-        warm=False,
-    )
+    record = _measure_synthetic_finngen(tmp_path, source)
 
     comparison = record["comparisons"]["reader_head_vs_reader_base"]
     assert comparison["verdict"] == "not resolved at this load"
@@ -2343,6 +2337,13 @@ def test_the_control_record_names_a_revision_and_fingerprint_and_no_path(tmp_pat
 # --- cold-cache sides (#322) --------------------------------------------------
 
 
+def _measure_synthetic_finngen(tmp_path: Path, source: Path, *, cold: bool = False) -> dict:
+    return _reader_ab.measure_source(
+        "opengwasdb.finngen-r13", source, repetitions=2,
+        control=_control(tmp_path), warm=False, cold=cold,
+    )
+
+
 def test_a_cold_side_runs_its_warm_counterpart_on_a_file_just_evicted(tmp_path, monkeypatch):
     """The cold floor and control read the file right after it leaves the page cache;
     every other side does not, and each sample says which it met."""
@@ -2361,14 +2362,7 @@ def test_a_cold_side_runs_its_warm_counterpart_on_a_file_just_evicted(tmp_path, 
     monkeypatch.setattr(_reader_ab, "run_child", fake)
     monkeypatch.setattr(_reader_ab, "evict", lambda path: evicted.__setitem__(0, True))
 
-    record = _reader_ab.measure_source(
-        "opengwasdb.finngen-r13",
-        source,
-        repetitions=2,
-        control=_control(tmp_path),
-        warm=False,
-        cold=True,
-    )
+    record = _measure_synthetic_finngen(tmp_path, source, cold=True)
 
     assert record["sides"] == [
         "reader_head",
@@ -2419,8 +2413,7 @@ def _reader_source(warm_floor, cold_floor, warm_control, cold_control) -> dict:
 
 
 def test_the_floor_row_names_the_cache_only_while_the_epics_reading_is_among_the_cold_ones():
-    """The ukb floor (epic 8.2 s): with the epic's reading among the cold samples it is
-    the cache; with the cold samples nowhere near it, the older reason is checked."""
+    """Cold reads can support a cache explanation, not recover a historical cache state."""
     figure = _figure("reader_ukb_floor")
     cache = _ev(reader_ab=[_reader_source([6.0, 6.3, 9.5], [8.77, 9.01, 7.94], [16.0], [18.0])])
     elsewhere = _ev(reader_ab=[_reader_source([6.0, 6.3, 6.5], [6.2, 6.4, 6.6], [16.0], [18.0])])
@@ -2430,12 +2423,12 @@ def test_the_floor_row_names_the_cache_only_while_the_epics_reading_is_among_the
 
     assert attributed["verdict"] == unattributed["verdict"] == "differs"
     assert attributed["reason"].startswith("the epic's single reading lies among")
+    assert "does not establish the historical cause" in attributed["reason"]
     assert unattributed["reason"].startswith("every sample of the floor is faster")
 
 
 def test_the_ratio_row_says_whether_the_cache_reaches_the_epics_ratio():
-    """ukb (epic 1.96x): the cold ratio near it is the cache. FinnGen-like (epic 7.78x):
-    cold and warm both far from it and close to each other cannot be separated."""
+    """A cache effect may reach the epic's ratio or leave a gap neither state explains."""
     ukb = _figure("reader_ukb_control_over_floor")
     finngen = _figure("reader_finngen_control_over_floor")
     near = _ev(reader_ab=[_reader_source([6.31], [8.77], [15.98], [18.05])])
@@ -2447,5 +2440,6 @@ def test_the_ratio_row_says_whether_the_cache_reaches_the_epics_ratio():
     cold_one = measure_figure(ukb, near)
     inseparable = measure_figure(finngen, far)
 
-    assert cold_one["reason"].startswith("the epic's ratio is the cold-cache one")
+    assert cold_one["reason"].startswith("the cold-cache ratio is nearer the epic's")
+    assert "historical cache state was not recorded" in cold_one["reason"]
     assert inseparable["reason"].startswith("evicting the file moves this ratio")

@@ -234,14 +234,18 @@ def _epic_among_the_cold_reads(detail: Mapping[str, Any]) -> bool:
 
 
 def _epic_ratio_is_the_cold_one(detail: Mapping[str, Any]) -> bool:
-    cold, warm, epic = detail.get("cold_ratio"), detail.get("ratio"), detail.get("epic_ratio")
+    cold = detail.get("cold_ratio")
+    warm = detail.get("probe_warm_ratio") or detail.get("ratio")
+    epic = detail.get("epic_ratio")
     if cold is None or warm is None or epic is None:
         return False
     return abs(cold - epic) < abs(warm - epic) / 2
 
 
 def _cache_does_not_reach_the_epic_ratio(detail: Mapping[str, Any]) -> bool:
-    cold, warm, epic = detail.get("cold_ratio"), detail.get("ratio"), detail.get("epic_ratio")
+    cold = detail.get("cold_ratio")
+    warm = detail.get("probe_warm_ratio") or detail.get("ratio")
+    epic = detail.get("epic_ratio")
     if cold is None or warm is None or epic is None:
         return False
     return min(abs(cold - epic), abs(warm - epic)) > abs(cold - warm)
@@ -674,6 +678,10 @@ def _measure_reader(derive: Derive, evidence: Mapping[str, Any]) -> Measured:
     seconds = source["medians"].get(side)
     control = source.get("control") or {}
     cold = [s["seconds"] for s in source["samples"] if s["side"] == side + "_cold"]
+    probe = source.get("cache_probe") or {}
+    if not cold:
+        cold = [s["seconds"] for s in probe.get("samples", [])
+                if s["side"] == side and s["page_cache"] == "cold"]
     return Measured(
         seconds,
         seconds is not None,
@@ -682,7 +690,9 @@ def _measure_reader(derive: Derive, evidence: Mapping[str, Any]) -> Measured:
                 sample["seconds"] for sample in source["samples"] if sample["side"] == side
             ],
             "cold_samples": cold,
-            "cold_median": source["medians"].get(side + "_cold"),
+            "cold_median": source["medians"].get(side + "_cold")
+                           or probe.get("medians", {}).get(side + "_cold"),
+            "cache_probe_note": probe.get("note"),
             "epic_seconds": derive.epic_seconds,
             "n_rows": source["n_rows"],
             "epic_rows": derive.epic_rows,
@@ -741,14 +751,19 @@ def _measure_reader_ratio(derive: Derive, evidence: Mapping[str, Any]) -> Measur
         return Measured(
             None, False, {"reason": f"no control and floor medians for {derive.source}"}
         )
-    control_cold = source["medians"].get("reader_base_cold")
-    floor_cold = source["medians"].get("parse_floor_cold")
+    probe = source.get("cache_probe") or {}
+    medians = probe.get("medians", {})
+    control_cold = source["medians"].get("reader_base_cold") or medians.get("reader_base_cold")
+    floor_cold = source["medians"].get("parse_floor_cold") or medians.get("parse_floor_cold")
+    control_warm, floor_warm = medians.get("reader_base_warm"), medians.get("parse_floor_warm")
     return Measured(
         control / floor,
         True,
         {
             "ratio": control / floor,
             "cold_ratio": control_cold / floor_cold if control_cold and floor_cold else None,
+            "probe_warm_ratio": control_warm / floor_warm if control_warm and floor_warm else None,
+            "cache_probe_note": probe.get("note"),
             "control_seconds": control,
             "floor_seconds": floor,
             "epic_control_seconds": epic_control,
@@ -1119,8 +1134,9 @@ def _floor_row(
         reason=(
             "the epic's single reading lies among this run's readings of the file just evicted "
             "from the page cache, and the warm median lies below both: every warm sample "
-            "follows an untimed warming read, so it measures a cached file, which the epic's "
-            "reading was not",
+            "follows an untimed warming read. This is consistent with a cache-state difference; "
+            "the epic did not record its cache state, so it does not establish the "
+            "historical cause",
             _epic_among_the_cold_reads,
         ),
         alternative_reasons=(
@@ -1151,10 +1167,10 @@ def _ratio_row(
         method="the control side's median over the parse-floor side's, same samples",
         unit="ratio",
         reason=(
-            "the epic's ratio is the cold-cache one: read just after eviction, the control sits "
-            "above the floor about as far as the epic measured, and warm reads lift it, because "
-            "the floor's short read pays the file's disk read as a larger share of its time "
-            "than the reader's long one does",
+            "the cold-cache ratio is nearer the epic's: read just after eviction, the control "
+            "sits above the floor about as far as the epic measured, and warm reads lift it. "
+            "The shorter floor is more sensitive to disk reads, consistent with a cache-state "
+            "difference, but the epic's historical cache state was not recorded",
             _epic_ratio_is_the_cold_one,
         ),
         alternative_reasons=(

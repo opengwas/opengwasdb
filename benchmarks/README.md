@@ -1400,7 +1400,15 @@ so without them nothing says what a cold read costs, and the epic's single
 readings may have been cold ones. The floor and control-over-floor rows then
 check their reasons against both: the epic's reading among the cold samples, or
 the epic's ratio nearer the cold one; and where the cache moves the ratio less
-than its distance from the epic's, they say it cannot be separated.
+than its distance from the epic's, they say it cannot be separated. A cache
+explanation is consistent with those samples, not proof of an unrecorded
+historical cache state.
+
+`--reader-evidence FILE` instead carries an existing A/B unchanged, preserving
+its original revision, timestamp and hash in `reader_evidence_origin`. It cannot
+be combined with `--source`: old head/control comparisons still concern the old
+head. `--reader-cache-probes DIR` attaches #322's existing exploratory probe
+logs separately, without replacing the original samples or calling a reader.
 
 ```bash
 pixi run -e dev python benchmarks/measure_epic307_evidence.py \
@@ -1410,12 +1418,32 @@ pixi run -e dev python benchmarks/measure_epic307_evidence.py \
   --daily-window 01:06-16:10 --tz Europe/London \
   --daily-from 2026-10-14 --until 2026-11-02 \
   --after OGS-00009-322 \
-  --output docs/benchmark-output/opengwasdb_epic307_after.json
+  --reader-evidence docs/benchmark-output/opengwasdb_epic307_evidence.json \
+  --reader-cache-probes docs/benchmark-output/epic307_322/reader-cache \
+  --output <RD>/scratch/322/after-reproduced.json
 ```
 
 | File | Description |
 |---|---|
-| `opengwasdb_epic307_after.json` | The evidence artifact's blocks for the two Stores, plus `after`: per row the baseline, the after value, their ratio and each projection's verdict; the run's unprojected phases and steps; the Store Release's span and milestone #388's verdict. |
+| `opengwasdb_epic307_after.json` | Baseline/after phase rows, all epic projections, unprojected steps and milestone #388's verdict; carried reader evidence and cache-probe attribution. |
+| `opengwasdb_epic307_profiles.json` | All existing whole-tree snapshots and three native worker profiles, with sample-weighted native shares and input hashes. |
+| `opengwasdb_epic307_after.md` | Measurement discussion, full-size #312 proof, correctness classification, reader attribution and artifact-only reproduction commands. |
+
+The completed release took **36,777.574 s**, missing nine hours by
+**4,377.574 s**, principally the **16,443.2 s LD-block phase**. Pass 2 is the
+only phase projection missed; OGS-00009 still uses per-row GWAS-VCF. See the
+measurement discussion for the distinction between the epic's six-step sum
+and the complete release, and the historical SE narrowing that its strict
+codec-only comparison bound does not include.
+
+`benchmarks/summarise_epic307_profiles.py RUN_DIR --output OUT` reads only
+existing py-spy files. Native shares pool sample counts before division;
+non-native numpy callers are not classified as interpreter time.
+`benchmarks/attribute_epic307_comparison.py SCRATCH --output OUT` reads the
+completed comparison, Admission Record and eight variant metadata rows; it
+never repeats the statistic-plane comparison. Both outputs record provenance.
+Do not rebuild OGS-00009 or repeat its completion/index/comparison to regenerate
+the summaries.
 
 ---
 

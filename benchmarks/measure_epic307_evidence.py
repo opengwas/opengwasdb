@@ -72,6 +72,7 @@ from benchmarks._artifact import (
 )
 from benchmarks._epic307_after import compare_after
 from benchmarks._epic307_figures import compare, evidence
+from benchmarks._epic307_reader_cache import load_reader_evidence
 from benchmarks._step_records import (
     Window,
     daily_windows,
@@ -212,6 +213,15 @@ def _parser() -> argparse.ArgumentParser:
         "is set beside OGS-00009's October records and the epic's projections",
     )
     parser.add_argument(
+        "--reader-evidence", type=Path,
+        help="carry an existing reader A/B artifact without re-running it; "
+             "its revision stays named",
+    )
+    parser.add_argument(
+        "--reader-cache-probes", type=Path,
+        help="attach the existing #322 exploratory cache-probe logs to --reader-evidence",
+    )
+    parser.add_argument(
         "--control-revision",
         help="a commit of this repository to export with `git archive` as the control "
         "reader_base imports (the epic's d405de0)",
@@ -311,6 +321,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     until = _clock(args.until) if args.until else None
     sources = _sources(args.source)
+    if args.reader_evidence and sources:
+        raise SystemExit("--reader-evidence and --source are alternative measurement inputs")
+    if args.reader_cache_probes and not args.reader_evidence:
+        raise SystemExit("--reader-cache-probes needs --reader-evidence")
     rounds = _source_repetitions(args.source_repetitions)
     host_start = _host()
     stores = [
@@ -329,6 +343,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             for capability, path in sources
         ]
+    reader_origin = None
+    if args.reader_evidence:
+        reader_ab, reader_origin = load_reader_evidence(
+            args.reader_evidence, args.reader_cache_probes
+        )
     spans = [store_span(store["records"]) for store in stores]
     found = evidence(stores, windows, reader_ab)
     payload = {
@@ -386,6 +405,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             for index, store in enumerate(stores)
         ],
         "reader_ab": reader_ab,
+        "reader_evidence_origin": reader_origin,
         "comparison": compare(found),
     }
     if args.after:
