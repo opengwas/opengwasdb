@@ -133,13 +133,10 @@ def declaration_matches_mask(
 ) -> None:
     """Each Analysis holds imputed cells if and only if it says it does.
 
-    Categorical, not a count comparison: `completion_n_imputed_total` is rolled up
-    from per-block quality and the arrays hold what was actually written, so the
-    two need not agree to the cell. What they may not do is disagree about
-    *whether there are any* -- that is the shape the ancestry-match filter's
-    defect took, an Analysis carried through observed-only while its metadata
-    claimed thousands of imputed cells, and `eaf_scope` derived from the claim
-    (ADR 0028, ADR 0037 §4).
+    This remains the categorical declaration rule (ADR 0028, ADR 0037 §4): an
+    Analysis carried through observed-only must not claim imputed cells and derive
+    its `eaf_scope` from that claim. `completion.quality_counts` separately holds
+    the per-block quality rollup to the exact counts in the stored planes (#361).
     """
     for row in read_analyses(analyses_path).rows:
         try:
@@ -170,6 +167,67 @@ def _disagreement(row: dict[str, str], declared: int, actual: int, label: str) -
             "imputed cells its metadata does not account for"
         )
     return None
+
+
+def _quality_cells(_target: Target, block: Block) -> np.ndarray:
+    """Imputed cells and missing panel cells, measured on the shared scan (#361).
+
+    Dense completion's off-panel missing cells have no LD block and do not belong
+    to completion_quality. Ragged missing rows are retained completion attempts;
+    source-observed rows are present, including off-panel ones (ADR 0039).
+    """
+    assert block.imputed is not None
+    missing = block.z_missing.copy()
+    if block.on_panel is not None:
+        missing &= block.on_panel[:, None] == 1
+    return np.stack((block.per_analysis(block.imputed == 1), block.per_analysis(missing)))
+
+
+def _quality_totals(target: Target) -> tuple[np.ndarray, np.ndarray]:
+    """The Store records block ids and counts, but no block-to-cell membership.
+
+    Judge their per-Analysis sum without consulting an external LD panel: a Store
+    Release must validate on its own. Exact per-block attribution would require
+    that membership to be recorded, not guessed from an arbitrary block name.
+    """
+    n = _n_analyses(target)
+    errors: list[str] = []
+    totals = np.zeros((2, n), dtype=np.int64)
+    attempted = np.zeros(n, dtype=bool)
+    with target.store.index_connection() as connection:
+        _validate_completion_quality_table(connection, n, errors)
+        if errors:
+            raise ValueError("completion_quality cannot be counted: " + "; ".join(errors))
+        for analysis, block_id, imputed, missing in connection.execute(
+            "SELECT analysis_index, block_id, n_imputed, n_missing FROM completion_quality"
+        ):
+            if not all(isinstance(value, int) and value >= 0 for value in (imputed, missing)):
+                raise ValueError(
+                    f"completion_quality for analysis {analysis}, block {block_id!r} "
+                    "has non-integer or negative n_imputed/n_missing"
+                )
+            totals[:, analysis] += (imputed, missing)
+            attempted[analysis] = True
+    return totals, attempted
+
+
+def _judge_quality_counts(target: Target, total: np.ndarray) -> Iterator[str]:
+    expected, attempted = _quality_totals(target)
+    actual = np.zeros_like(expected) + total
+    for analysis in range(expected.shape[1]):
+        if expected[0, analysis] != actual[0, analysis]:
+            yield (
+                f"completion_quality analysis {analysis}: n_imputed={expected[0, analysis]} "
+                f"but the imputed plane marks {actual[0, analysis]} cell(s)"
+            )
+        # An ancestry-unmatched Analysis has no quality row and is observed-only:
+        # its missing Dense panel cells were never completion attempts (ADR 0028).
+        if attempted[analysis] and expected[:, analysis].sum() != actual[:, analysis].sum():
+            yield (
+                f"completion_quality analysis {analysis}: n_imputed + n_missing="
+                f"{expected[:, analysis].sum()} but the planes hold "
+                f"{actual[:, analysis].sum()} imputed or missing panel cell(s)"
+            )
 
 
 CHECKS: tuple[Rule, ...] = (
@@ -204,6 +262,13 @@ RULES: tuple[Rule, ...] = (
         np.zeros((), dtype=np.int64),
         _imputed_per_analysis,
         _judge_declaration,
+        when=completed,
+    ),
+    value_fold(
+        "completion.quality_counts",
+        np.zeros((), dtype=np.int64),
+        _quality_cells,
+        _judge_quality_counts,
         when=completed,
     ),
 )

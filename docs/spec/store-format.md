@@ -1748,6 +1748,10 @@ Reference-Completed releases MUST:
 There is no Z-only completion mode.
 
 Completion preserves every observed association exactly: a source-observed cell has the same decoded Z, SE and EAF in the Reference-Completed release and is not marked imputed, and no source-missing cell is observed in it. In a Hybrid release a Dense cell becomes observed only as a crossover, a source Overflow association moved into the Dense Component when the LD panel extends its axis; it holds what that component's own codec gives for the source value. `check-observed-view` (§20.4) re-derives that from the two releases' arrays.
+A Hybrid crossover also removes the overwritten imputed or missing attempt from
+each owning block's `completion_quality` row, using the LD panel while completing,
+and refreshes the imputed rollup and completion counts. An observed association
+is not a completion attempt merely because the Dense phase first imputed it.
 
 ## 13. LD Reference Panel requirements
 
@@ -2228,6 +2232,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `completion.imputed_present` | grid, sequence | fold | an imputed cell carries both Z and SE |
 | `completion.off_panel` | grid | fold | no off-panel row is imputed |
 | `completion.declaration` | grid, sequence | fold | each Analysis holds imputed cells exactly when it declares them |
+| `completion.quality_counts` | grid, sequence | fold | per Analysis, quality counts equal stored imputed and missing panel cells |
 | `associations.eaf_range` | grid, sequence | fold | no decoded frequency falls outside `[0, 1]`; skipped on a component holding none, and behind `side_tables.eaf_exceptions` where the plane cannot be decoded |
 | `side_tables.z_overflow` | grid, sequence | fold | the `z` overflow table describes exactly the overflow cells |
 | `side_tables.eaf_exceptions` | grid, sequence | fold | the `eaf` exception table describes exactly the exception cells, and a plane that cannot be decoded is reported |
@@ -2261,6 +2266,18 @@ change to this table, which the test suite holds to the registry, in its order.
 | `eaf_orientation.unverified` | release | check, warning | names each Analysis whose orientation is `unverified` |
 | `fidelity.unsupported` | release | check | a source is given only for a Dense release |
 | `fidelity.source` | grid | check | sampled source associations equal the stored ones |
+
+`completion.quality_counts` counts cells on the existing `ASSOCIATIONS` scan,
+without another plane read. Per Analysis, the sum of `completion_quality.n_imputed`
+equals the imputed mask's count, and `n_imputed + n_missing` equals imputed plus
+missing panel cells (the rows completion attempted to add). Dense off-panel missing
+cells are excluded. An ancestry-unmatched Analysis with no quality rows is not
+judged for missing completion attempts. The table records block ids, not
+block-to-variant membership; no self-contained per-block comparison is possible
+from that alone, and a block id is not interpreted as a genomic interval or an
+external panel path. Malformed quality-table structure is reported by
+`completion.quality_table`; `completion.quality_counts` also fails if its counts
+cannot be read, including when selected on its own.
 
 ### 20.1 Validation and inspection CLI interface
 

@@ -626,6 +626,42 @@ def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation
     assert result.n_imputed >= 0
 
 
+def test_an_observed_crossover_is_removed_from_each_blocks_quality_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from completion_counts import quality_counts
+
+    from opengwasdb.completion import block
+
+    source = _build_source(tmp_path)
+    panel = tmp_path / "ld_panel"
+    variants = [*PANEL_ALIDS, OFF_PANEL_ALID]
+    _write_ld_block(
+        panel / "EUR" / "1", "arbitrary-block-name",
+        [(alid, 0.3, int(alid.split(":")[1])) for alid in variants],
+    )
+    monkeypatch.setattr(
+        block, "impute_z_block", lambda z, *args, **kwargs: (np.full(len(z), 2.2), 0.9)
+    )
+    completed = tmp_path / "completed.opengwasdb"
+    complete_hybrid_store(source, completed, panel, min_cor=0.0)
+
+    dense = open_store(completed / "dense")
+    mask = np.asarray(dense.arrays(mode="r")["imputed"][:])
+    assert mask.sum(axis=0).tolist() == [0, 2], "one fill was reclaimed; two must survive"
+    counted = quality_counts(dense.path)
+    assert counted == {
+        (0, "1/arbitrary-block-name"): (0, 0),
+        (1, "1/arbitrary-block-name"): (2, 0),
+    }
+    declarations = [
+        row["completion_n_imputed_total"] for row in read_analyses(dense.analyses_path).rows
+    ]
+    assert declarations == ["0", "2"]
+    result = validate_store(completed)
+    assert result.ok, result.errors
+
+
 def test_result_counts_agree_with_manifest_and_arrays(tmp_path: Path) -> None:
     """The counts a completed Hybrid release reports -- result object, manifest
     provenance and the arrays the phases wrote -- must agree (issue #130): a

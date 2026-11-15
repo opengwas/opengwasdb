@@ -32,8 +32,9 @@ favour of an estimate (issue #99).
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections import defaultdict
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -42,7 +43,9 @@ import numpy as np
 
 from opengwasdb import top_hits
 from opengwasdb.associations import CsrReader
-from opengwasdb.encoding import EAF_BASELINE, StoreEncoding
+from opengwasdb.completion.ld_panel import ceded_at_end, list_all_blocks
+from opengwasdb.completion.schema import completion_quality_rollup
+from opengwasdb.encoding import EAF_BASELINE, DenseZPlane, StoreEncoding
 from opengwasdb.encoding.association_codec import (
     AssociationCodec,
     CellValues,
@@ -215,7 +218,7 @@ def complete_hybrid_store(
         # Phase 2: read the source overflow once, fold panel crossovers into
         # the completed component, and rebuild the shared union axis.
         overflow = _read_source_overflow(src)
-        axis = _remap_shared_axis(dense, overflow)
+        axis = _remap_shared_axis(dense, overflow, ld, ancestry)
         # Phase 3: shared index/variant table/dense_to_shared map, then the
         # overflow CSR rebuilt on the remapped indices.
         analyses = _read_analyses(dense.dir)
@@ -347,7 +350,9 @@ def _read_source_overflow(src: Path) -> _SourceOverflow:
     )
 
 
-def _remap_shared_axis(dense: _CompletedDense, overflow: _SourceOverflow) -> _SharedAxis:
+def _remap_shared_axis(
+    dense: _CompletedDense, overflow: _SourceOverflow, ld_dir: Path, ancestry: str,
+) -> _SharedAxis:
     """Fold panel crossovers into the completed Dense Component and rebuild
     the shared union axis (issue #99): an off-panel variant that became
     on-panel after completion has its real observed value folded in (marked
@@ -365,6 +370,7 @@ def _remap_shared_axis(dense: _CompletedDense, overflow: _SourceOverflow) -> _Sh
         if len(overflow_alids)
         else np.empty(0, dtype=bool)
     )
+    _correct_crossover_quality(dense, overflow, overflow_alids, is_crossover, ld_dir, ancestry)
     n_reclaimed_imputed = _fold_panel_crossovers(
         dense.dir,
         dense.alid_to_row,
@@ -386,8 +392,8 @@ def _remap_shared_axis(dense: _CompletedDense, overflow: _SourceOverflow) -> _Sh
             n_reclaimed_imputed,
         )
         # Rebuild the top-hit index complete_dense_store built from its
-        # pre-patch z; analyses.tsv rollups are not recomputed (accepted,
-        # narrow imprecision for the crossed-over cells' summary statistics).
+        # pre-patch z. Quality counts are corrected above; Top-Hit Count rollups
+        # retain the pre-existing narrow imprecision for crossover cells.
         build_dense_top_hit_indexes(dense.dir, encoding=dense.encoding)
 
     union = sorted_alids(set(dense.alids) | set(overflow_alids.tolist()))
@@ -401,6 +407,90 @@ def _remap_shared_axis(dense: _CompletedDense, overflow: _SourceOverflow) -> _Sh
         n_off_panel=len(union) - len(dense.alids),
         n_imputed=n_imputed,
     )
+
+
+def _correct_crossover_quality(
+    dense: _CompletedDense, overflow: _SourceOverflow, alids: np.ndarray,
+    crossed: np.ndarray, ld_dir: Path, ancestry: str,
+) -> None:
+    """A real Overflow observation replaces a completion attempt, including its counts.
+
+    The Dense phase did not see the Overflow. Keeping its quality row unchanged
+    describes an imputed or missing cell the completed Hybrid no longer holds
+    (#307's completion.quality_counts rule). The panel is still available here,
+    so correct each owning block rather than guessing from its id later.
+    """
+    selected = np.flatnonzero(crossed)
+    if not len(selected):
+        return
+    cells = _crossover_cells(dense, overflow, alids[selected], selected)
+    store = open_store(dense.dir)
+    with store.index_connection() as db:
+        for ai, block_id, filled, empty in _crossover_quality_deltas(cells, ld_dir, ancestry):
+            db.execute(
+                "UPDATE completion_quality SET n_imputed=n_imputed-?, n_missing=n_missing-? "
+                "WHERE analysis_index=? AND block_id=?",
+                (filled, empty, ai, block_id),
+            )
+        invalid = db.execute(
+            "SELECT COUNT(*) FROM completion_quality WHERE n_imputed<0 OR n_missing<0"
+        ).fetchone()[0]
+        if invalid:
+            raise HybridCompletionError("crossover correction would make quality counts negative")
+        rollup = completion_quality_rollup(db, overflow.n_analyses)
+        db.commit()
+    write_analyses_tsv(dense.dir, [
+        replace(a, completion_n_imputed_total=rollup[int(a.analysis_index)].n_imputed_total)
+        for a in _read_analyses(dense.dir)
+    ])
+    provenance = dict(store.manifest.provenance)
+    provenance["completion"] = {
+        **provenance["completion"],
+        "n_imputed": sum(int(r.n_imputed_total) for r in rollup.values()),
+        "n_missing_imputation_failed": sum(int(r.n_missing_total) for r in rollup.values()),
+    }
+    StagedRelease(dense.dir).write_manifest(replace(store.manifest, provenance=provenance))
+
+
+def _crossover_cells(
+    dense: _CompletedDense, overflow: _SourceOverflow, alids: np.ndarray, selected: np.ndarray,
+) -> dict[str, list[tuple[int, int, int]]]:
+    """The Dense cells about to be replaced, by ALID and their previous status."""
+    rows = np.asarray([dense.alid_to_row[alid] for alid in alids], dtype=np.int64)
+    analyses = np.searchsorted(overflow.offsets[1:], selected, side="right")
+    root = open_store(dense.dir).arrays(mode="r")
+    imputed = np.asarray(root["imputed"].vindex[rows, analyses]) == 1
+    missing = np.isnan(DenseZPlane.open(root, dense.encoding).points(rows, analyses))
+    cells: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
+    for alid, ai, filled, empty in zip(alids, analyses, imputed, missing, strict=True):
+        cells[str(alid)].append((int(ai), int(filled), int(empty)))
+    return cells
+
+
+def _crossover_quality_deltas(
+    cells: dict[str, list[tuple[int, int, int]]], ld_dir: Path, ancestry: str,
+) -> Iterator[tuple[int, str, int, int]]:
+    """Each block's own attempted crossovers, excluding ceded shared endpoints."""
+    for chromosome in sorted({alid.split(":", 1)[0] for alid in cells}):
+        blocks = list_all_blocks(ld_dir, ancestry, chromosome)
+        ceded = ceded_at_end(blocks)
+        for block in blocks:
+            owned = {alid for alid in block.alids if alid is not None}
+            owned -= ceded.get(block.block_id, frozenset())
+            for ai, (filled, empty) in _owned_crossover_counts(cells, owned).items():
+                yield ai, block.block_id, filled, empty
+
+
+def _owned_crossover_counts(
+    cells: dict[str, list[tuple[int, int, int]]], owned: set[str],
+) -> dict[int, tuple[int, int]]:
+    """Per Analysis, the former imputed and missing attempts a block must remove."""
+    counts: dict[int, tuple[int, int]] = {}
+    for alid in cells.keys() & owned:
+        for ai, filled, empty in cells[alid]:
+            old_filled, old_empty = counts.get(ai, (0, 0))
+            counts[ai] = old_filled + filled, old_empty + empty
+    return counts
 
 
 # ── Phase 3: shared tables + overflow rebuild ───────────────────────────────
