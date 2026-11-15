@@ -500,6 +500,13 @@ def write_alid_index(store: Path, keys: np.ndarray, rows: np.ndarray) -> None:
     rewrite(store, "variants/alid_index/row", lambda _: rows.astype(np.int32))
 
 
+def shorten_the_key_array(store: Path) -> None:
+    """`variants/alid_index/alid` one key short of `row`'s entries, which still name every row: the
+    two arrays do not agree, so `alid_index.count` names it and a rule that reads the keys says it
+    cannot be checked rather than failing on the shorter array (ogld#42's fix round 3)."""
+    rewrite(store, "variants/alid_index/alid", lambda data: data[:-32])
+
+
 def drop_an_index_entry(store: Path) -> None:
     """The last entry removed from both arrays: the row it named has no entry, and every entry
     left is its row's own ALID."""
@@ -605,8 +612,8 @@ BREAKERS: dict[str, Callable[[Path], None]] = {
     "alid_index.order": swap_two_index_entries,
     # gives one entry an ALID the store does not hold, naming a row it has
     "alid_index.keys": invent_a_key,
-    # records 0 ALIDs left out of the index, where the Test Store leaves out 8
-    "alid_index.count": edit_provenance(lambda p: p["counts"].update(alids_left_out=0)),
+    # leaves the key array one key short of the entries it must hold
+    "alid_index.count": shorten_the_key_array,
     # shortens one Near Band row by one code
     "near.rows": shorten_a_near_row,
     # writes −32768 into near/22/r
@@ -640,6 +647,16 @@ BREAKERS: dict[str, Callable[[Path], None]] = {
 }
 
 
+def test_the_provenance_count_is_a_breaker_of_its_own_rule(tmp_path: Path) -> None:
+    # A recorded count the table does not give fails `alid_index.count` alone: the keys and rows
+    # are untouched (ogld#42's fix round 1).
+    copy = tmp_path / "store"
+    shutil.copytree(support.TEST_STORE, copy)
+    edit_provenance(lambda p: p["counts"].update(alids_left_out=0))(copy)
+    failing = {name for name, found in ogld.validate(copy).items() if found}
+    assert failing == {"alid_index.count"}, failing
+
+
 def test_every_rule_has_a_way_to_break_it() -> None:
     # Not a contract test: it holds the table above to the spec's rule list now.
     assert tuple(BREAKERS) == VALIDATION_RULES
@@ -658,12 +675,18 @@ def test_a_store_that_breaks_a_rule_fails_that_rule(rule: str, tmp_path: Path) -
 @pytest.mark.parametrize("rule", [r for r in VALIDATION_RULES if r.startswith("alid_index.")])
 def test_an_index_rule_s_breaker_fails_only_that_rule(rule: str, tmp_path: Path) -> None:
     # The four index rules judge one array each, so a store built to break one must not be
-    # refused for another: a reader trusts what they agree on (ogld#42's fix round 1).
+    # refused for another: a reader trusts what they agree on (ogld#42's fix round 1). A rule whose
+    # array the breaker shortened says it cannot be checked, which spec §12 requires of it, and
+    # that is not a judgement against the store.
     copy = tmp_path / "store"
     shutil.copytree(support.TEST_STORE, copy)
     BREAKERS[rule](copy)
-    failing = {name for name, found in ogld.validate(copy).items() if found}
-    assert failing == {rule}, failing
+    found = ogld.validate(copy)
+    assert found[rule], f"{rule} passed a store built to break it"
+    for name, findings in found.items():
+        if name == rule or not name.startswith("alid_index."):
+            continue
+        assert all(f.message.startswith("cannot be checked") for f in findings), (name, findings)
 
 
 #: The two stores ogld#42's spec review built, which passed all 28 rules before fix round 1, with

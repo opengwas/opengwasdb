@@ -1260,7 +1260,7 @@ then read and checked at once, and no more are held. `near.codes`, `index.codes`
 at `r`'s length, as when it ends short of `r`: windows of 8,388,608 elements, codes or entries
 alike, t of them at once.
 
-`alid_index.keys` and `alid_index.row` read the ALID index's two arrays whole — 275 MB of keys and
+`alid_index.keys` and `alid_index.rows` read the ALID index's two arrays whole — 275 MB of keys and
 34 MB of rows on HGDP+1kGP EUR's 8.59 M — and walk the variant table in blocks beside them, so each
 entry is judged against the row it names without a scattered read of the table. `alid_index.order`
 reads the keys in blocks, and `alid_index.count` counts the wide ALIDs from the table's own column.

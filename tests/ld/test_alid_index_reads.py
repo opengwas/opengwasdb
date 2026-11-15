@@ -57,8 +57,9 @@ def test_an_absent_a_malformed_and_a_wider_alid_are_not_this_store_s_rows() -> N
 
 
 def test_an_alid_at_the_slot_s_width_is_found(tmp_path: Path) -> None:
-    # A slot-width ALID is the one a truncating build can make answer a wider one's name, so
-    # the reader never asks the index about it (ADR 0010, decision 3).
+    # A slot-width ALID is indexed like any other: `alid_index.keys` refuses an index whose key is
+    # not its row's full ALID, so a truncating build is a store validation fails, not one the
+    # reader second-guesses (ADR 0010).
     store = copy_store(tmp_path / "store")
     rows = oracle(store)
     alid = next(a for a in rows if len(a.encode("utf-8")) == layout.ALID_INDEX_WIDTH)
@@ -74,7 +75,7 @@ def test_an_index_missing_an_entry_falls_back_to_the_scan(tmp_path: Path) -> Non
     keys = np.asarray(root[f"{layout.ALID_INDEX}/alid"][:]).reshape(-1, layout.ALID_INDEX_WIDTH)
     entries = np.asarray(root[f"{layout.ALID_INDEX}/row"][:])
     gone = sorted(rows)[40]
-    assert len(gone.encode("utf-8")) < layout.ALID_INDEX_WIDTH, "a slot-width ALID scans anyway"
+    assert len(gone.encode("utf-8")) < layout.ALID_INDEX_WIDTH, "a slot-width ALID is indexed too"
     lost = np.flatnonzero(entries == rows[gone])
     assert len(lost) == 1
     keys[lost] = np.frombuffer(b"22:99999999:A:C".ljust(32, b"\0"), dtype=np.uint8)
@@ -120,20 +121,35 @@ def test_a_list_with_nothing_to_look_up_reads_no_index(tmp_path: Path, alids: li
 # ------------------------------------------------------------------ what a lookup holds
 
 
-def peak_lookup(tmp_path: Path, entries: int) -> tuple[int, int]:
+DIGITS = 12
+
+
+def fabricated_keys(entries: int) -> tuple[np.ndarray, np.ndarray]:
+    """`entries` keys of a fixed shape, ascending, and the rows they name.
+
+    A key is `22:<12 digits, zero padded>:A:C`, NUL padded to the slot: zero padding makes
+    lexicographic order numeric order, so the keys are built a column at a time and sorted already.
+    """
+    keys = np.zeros((entries, layout.ALID_INDEX_WIDTH), dtype=np.uint8)
+    keys[:, 0:3] = np.frombuffer(b"22:", dtype=np.uint8)
+    numbers = np.arange(entries, dtype=np.int64)
+    for at in range(DIGITS):
+        keys[:, 3 + at] = ord("0") + (numbers // 10 ** (DIGITS - 1 - at)) % 10
+    keys[:, 3 + DIGITS] = ord(":")
+    keys[:, 4 + DIGITS : 7 + DIGITS] = np.frombuffer(b"A:C", dtype=np.uint8)
+    return keys, np.arange(entries, dtype=np.int32) % 1_000
+
+
+def peak_lookup(tmp_path: Path, name: str, entries: int) -> tuple[int, int]:
     """Peak traced bytes while a lookup searches an index of `entries` keys, and the index's size.
 
-    The store's own index is replaced by `entries` keys of one shape, and the reader's cache is
-    set to nothing, so what is traced is the lookup's transient and not the chunks it keeps: the
-    same measurement the review made, which peaked at 548 MB before the search read in batches.
+    The store's own index is replaced by `entries` keys, at a store's own chunk and shard shapes,
+    and the reader's cache is set to nothing, so what is traced is the lookup's transient and not
+    the chunks it keeps: the same measurement the reviews made, which peaked at 548 MB before the
+    search read a shard at a time, and at 50 MB when it kept the previous shard alive.
     """
-    store = copy_store(tmp_path / f"store{entries}")
-    width = layout.ALID_INDEX_WIDTH
-    keys = np.zeros((entries, width), dtype=np.uint8)
-    text = np.sort(np.array([f"22:{i}:A:C" for i in range(entries)], str))
-    for row, key in enumerate(text):
-        keys[row, : len(key)] = np.frombuffer(key.encode(), dtype=np.uint8)
-    rows = np.arange(entries, dtype=np.int32) % 1_000
+    store = copy_store(tmp_path / name)
+    keys, rows = fabricated_keys(entries)
     root = zarr.open_group(store, mode="r+")
     group = root[layout.ALID_INDEX]
     assert isinstance(group, zarr.Group)
@@ -142,8 +158,11 @@ def peak_lookup(tmp_path: Path, entries: int) -> tuple[int, int]:
     layout.put_numbers(group, "alid", keys.reshape(-1), layout.ALID_KEY_FILL, layout.ALID_KEYS)
     layout.put_numbers(group, "row", rows, layout.ALID_ROW_FILL, layout.ALID_ROWS)
     reader = StoreReader.open(store, cache_bytes=0)
-    assert int(reader._index().alid.chunks[0]) == layout.ALID_KEYS[0], "many chunks, as in EUR"
-    present = [f"22:{i}:A:C" for i in range(0, entries, entries // 100)]
+    index = reader._index()
+    assert int(index.alid.chunks[0]) == layout.ALID_KEYS[0], "a store's inner chunks"
+    if entries * layout.ALID_INDEX_WIDTH > layout.ALID_KEYS[1]:
+        assert int(index.alid.shards[0]) == layout.ALID_KEYS[1], "a store's shards"
+    present = [f"22:{i:0{DIGITS}d}:A:C" for i in range(0, entries, entries // 100)]
     tracemalloc.start()
     try:
         hits = reader._searched(layout.alid_keys(present)[0])
@@ -154,25 +173,23 @@ def peak_lookup(tmp_path: Path, entries: int) -> tuple[int, int]:
     return peak, keys.nbytes
 
 
-def test_a_long_lookup_holds_one_shard_of_keys_and_not_the_index(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Four times the keys, the same transient: the index is read a shard at a time, in key order,
-    # so nothing a lookup holds grows with the store (ogld#42's reviews measured a whole read of
-    # EUR's keys held twice, 548 MB, at zero cache).
-    # A shard a sixteenth of a store's 16 MiB and a chunk a thirty-second of its 262 KiB: an index
-    # this size is many shards, so what the bound is about — a shard, not the table — shows, and
-    # the test stays quick. The batch comes from the array's shapes, so it follows this too.
-    monkeypatch.setattr(layout, "ALID_KEYS", (32_768, 1_048_576))
-    short, _ = peak_lookup(tmp_path, 60_000)
-    long, size = peak_lookup(tmp_path, 240_000)
+def test_a_long_lookup_holds_one_shard_of_keys_and_not_the_index(tmp_path: Path) -> None:
+    # Three times the keys, the same transient: the index is read a shard at a time, in key order,
+    # and the shard just read is let go before the next is fetched, so nothing a lookup holds grows
+    # with the store (ogld#42's reviews measured a whole read of EUR's keys held twice, 548 MB, and
+    # a loop that kept the previous shard alive, 50.4 MB at EUR's shapes).
+    # Both are more than a shard, so the two measurements have the same shard: what differs is the
+    # number of them.
+    short, _ = peak_lookup(tmp_path, "short", 600_000)
+    long, size = peak_lookup(tmp_path, "long", 1_100_000)
     shard = layout.ALID_KEYS[1]
-    assert size > 6 * shard, "an index of many shards"
-    # One shard of keys, decoded once and joined (twice), plus 4 MiB of slack for the queries, the
-    # found rows and the allocator: a whole-index read held twice that at twice the size.
-    bound = 2 * shard + (4 << 20)
+    assert size > 2 * shard, "an index of three shards"
+    # Two shards of keys — the one being decoded and the one being joined — plus 8 MiB, half a
+    # shard, of slack for the queries, the rows found and the allocator. A bound any looser could
+    # hide a third shard, which is what the loop kept alive before fix round 3.
+    bound = 2 * shard + (8 << 20)
     assert long < bound, f"{long:,} bytes held, for an index of {size:,} in shard {shard:,}"
-    # The index is 5.8 MB larger; what the lookup holds grew by less than a quarter of that, where
+    # The index is 16 MB larger; what the lookup holds grew by less than a quarter of that, where
     # holding the table itself would have grown by all of it, twice.
     assert long - short < size // 4, (short, long)
 

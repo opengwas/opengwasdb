@@ -795,13 +795,19 @@ def _index_rows(store: _Store) -> npt.NDArray[np.int64]:
 
 
 def _index_keys(store: _Store) -> npt.NDArray[Any]:
-    """The ALID index's keys, whole, as numpy's fixed-width bytes: 32 bytes an entry, sorted."""
+    """The ALID index's keys, whole, as numpy's fixed-width bytes: 32 bytes an entry, sorted.
+
+    Whether the two arrays agree — one key an entry — is `alid_index.count`'s rule, so a key array
+    that does not is a finding there, and every rule that reads the keys says it cannot be checked
+    rather than failing on an array too short for the entries it names (spec §12; ogld#42's fix
+    round 3)."""
     width = layout.ALID_INDEX_WIDTH
     values = store.read(layout.ALID_INDEX_ALID)
-    if values.size % width:
+    entries = int(store.array(layout.ALID_INDEX_ROW).shape[0])
+    if values.size != entries * width:
         raise _Unchecked(
             layout.ALID_INDEX_ALID,
-            f"holds {values.size:,} bytes, not a whole number of {width}-byte keys "
+            f"holds {values.size:,} bytes, not {entries:,} keys of {width}: one key an entry "
             "(alid_index.count)",
         )
     return values.reshape(-1, width).view(f"|S{width}").ravel()

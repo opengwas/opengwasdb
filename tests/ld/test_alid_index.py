@@ -237,17 +237,15 @@ def test_a_lost_chunk_of_the_index_is_refused(tmp_path: Path) -> None:
 # ------------------------------------------------------------------ reads on a crafted store
 
 
-def rebuild(store: Path, alids: list[str], *, truncating: bool, unsorted: bool) -> None:
-    """Write `store`'s index over again from `alids`: one whose entries are in no order, which
-    validation fails (`alid_index.order`) and whose misses a reader still scans. `truncating`
-    writes every ALID cast into the slot, which validation fails and a reader trusts — that case
-    lives in `tests/contract/test_store.py`, as a breaker of `alid_index.keys`."""
-    kept = [row for row, alid in enumerate(alids) if truncating or len(alid.encode()) <= 32]
+def rebuild(store: Path, alids: list[str]) -> None:
+    """Write `store`'s index over again from `alids`, its entries in no order: validation fails it
+    (`alid_index.order`) and its misses a reader still scans. The truncated index is not here: it
+    is `alid_index.keys`' breaker in `tests/contract/test_store.py`."""
+    kept = [row for row, alid in enumerate(alids) if len(alid.encode()) <= 32]
     keys = np.array([alids[row] for row in kept], dtype=f"|S{layout.ALID_INDEX_WIDTH}")
     rows = np.array(kept, dtype=np.int32)
-    if unsorted:
-        order = np.random.default_rng(0).permutation(len(rows))
-        keys, rows = keys[order], rows[order]
+    order = np.random.default_rng(0).permutation(len(rows))
+    keys, rows = keys[order], rows[order]
     root = zarr.open_group(store, mode="r+")
     for name, values in (("alid", keys.view(np.uint8).ravel()), ("row", rows)):
         array = root[f"{layout.ALID_INDEX}/{name}"]
@@ -293,7 +291,7 @@ def test_rows_of_is_right_on_an_unsorted_index(tmp_path: Path) -> None:
     # A miss is scanned, so an index whose entries are in no order still answers as the table
     # does; validation is what fails it (`alid_index.order`).
     built = crafted(tmp_path)
-    rebuild(built.path, built.alids, truncating=False, unsorted=True)
+    rebuild(built.path, built.alids)
     asked = [*built.alids, ABSENT_AT_THE_SLOT]
     assert answer(built.path, asked) == [*range(len(built.alids)), -1]
     assert StoreReader.open(built.path).rows_of(asked).tolist() == [*range(len(built.alids)), -1]

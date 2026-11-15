@@ -303,9 +303,9 @@ class StoreReader:
 
         The index is read one shard at a time — the unit the store itself reads and fetches — in key
         order, and each read's keys are searched for the queries that fall within them. So the table
-        is never held whole beside the chunk cache: a lookup's transient is one shard of keys and
-        the queries' own keys, where reading the array in one run holds all 273 MB of EUR's keys
-        twice; a shard is 16 MiB on EUR (spec §10; ogld#42's reviews).
+        is never held whole beside the chunk cache: a lookup's transient is one shard of keys — 16
+        MiB on EUR, released before the next is fetched — and the queries' own keys, where reading
+        the array in one run holds all 273 MB of EUR's keys twice (spec §10; ogld#42's reviews).
         """
         index = self._index()
         count = int(index.row.shape[0])
@@ -319,7 +319,11 @@ class StoreReader:
         per = max(1, shard // width)
         order = np.argsort(keys.view(f"|S{width}").ravel(), kind="stable")
         wanted = keys[order].view(f"|S{width}").ravel()
+        chunk = np.empty(0, dtype=f"|S{width}")
         for first in range(0, count, per):
+            # Let the shard just searched go before the next is fetched and joined: a lookup holds
+            # one shard's keys, not the one before it as well (ogld#42's fix round 3).
+            del chunk
             chunk = self._chunk(index, first, min(first + per, count))
             a = int(np.searchsorted(wanted, chunk[0], "left"))
             b = int(np.searchsorted(wanted, chunk[-1], "right"))

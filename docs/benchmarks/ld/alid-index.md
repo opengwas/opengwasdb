@@ -23,10 +23,11 @@ Measured 15 November 2026 on the IEU node, against #40's baseline
   store's index in a second, a few hundred keys touch nearly all of them.
 - **A lookup reads the index one shard at a time** — the unit the store itself reads and fetches,
   and the batch comes from the array's own shapes, so a store written with others is read one of
-  its shards at a time too. On EUR a shard is 16 MiB of keys (131,072 of them, 64 inner chunks),
-  where reading the array whole held 273 MB of keys twice (548 MB peaked, measured by #42's first
-  review). For a 260,821-key list: one chunk a read 4.4 s, 16 chunks 1.0 s, a whole shard 0.79 s,
-  one whole read 0.70 s.
+  its shards at a time too. On EUR a shard is 16 MiB of keys: 524,288 of them, 64 inner chunks,
+  each shard let go before the next is fetched, so a lookup holds two shards' worth at most (50 MB
+  without that release, 33.6 MB with it, at 1.1 M keys). Reading the array whole held 273 MB of
+  keys twice (548 MB peaked, measured by #42's first review). For a 260,821-key list: one chunk a
+  read 4.4 s, 16 chunks 1.0 s, a whole shard 0.79 s, one whole read 0.70 s.
 - **#8's step-1 reads are unchanged**, since every list they time is short: the same chunks and
   the same requests, and the same times within the run-to-run spread of this node.
 

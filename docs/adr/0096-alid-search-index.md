@@ -65,7 +65,8 @@ supplies or orders one and a store written before the index gets the same one (A
   pay for it: a list naming about a two-thousandth of the Variant Set's rows or more
   (`_INDEX_SHARE`, 4,000 of EUR's 8.59 M ALIDs). Such a list searches the index with numpy's own binary search, read one
   shard at a time in key order — the unit the store itself reads, from the array's own shapes, 16 MiB
-  of keys on EUR — so nothing a lookup holds grows with the store. A short list takes the exact scan instead, because a search's
+  and 524,288 keys on EUR, each shard let go before the next is fetched — so nothing a lookup holds
+  grows with the store. A short list takes the exact scan instead, because a search's
   chunks cost more than the string chunks a few loci touch: measured, one ALID's scan is 0.07 s
   against the index's 0.9 s, and 500 of them 0.11 against 0.33, while at 4,000 the index wins and
   keeps winning (`docs/benchmarks/alid-index.md`). A binary search reading only the chunks one
@@ -82,7 +83,8 @@ supplies or orders one and a store written before the index gets the same one (A
   exact scan at its own position, which is what found it before. So a miss, an unsorted index and
   an index with an entry dropped all answer as before; only a hit can be faster.
 - Every answer is therefore byte-identical, and `tests/test_alid_index.py` holds that against an
-  index rebuilt with truncation and one rebuilt out of order.
+  index rebuilt out of order, whose misses the scan answers; a truncated index is `alid_index.keys`'
+  breaker, because it is a store validation refuses rather than one a reader second-guesses.
 
 **Nothing else changes.** No existing array's bytes change, no public signature changes, and
 `format_version` stays `0.1.0`: adding an array is not one of §13's three triggers — a change to
@@ -97,7 +99,7 @@ Pairs the same way. §13 now lists the owner's 15 November 2026 decision among t
 - **A `(n, 32)` `uint8` array.** Rejected: not directly decodable, so the keys would read through
   Zarr's slower path, which is what the index exists to avoid.
 - **A key with a length byte or a per-entry width.** Rejected: it buys nothing the NUL padding
-  does not, and the slot-width guard already keeps a truncated key from answering.
+  does not, and `alid_index.keys` holds every entry to its row's full ALID instead.
 - **Search every ALID through the index, a miss meaning absent.** Rejected: a build that left an
   entry out, or wrote its keys unsorted, would then report a present variant absent. The scan is
   what makes the index an optimisation rather than a second source of truth.

@@ -35,8 +35,8 @@ ALID_INDEX: Final = "variants/alid_index"
 ALID_INDEX_ALID: Final = f"{ALID_INDEX}/alid"
 ALID_INDEX_ROW: Final = f"{ALID_INDEX}/row"
 #: Their (inner chunk, shard) in elements, as `SIDE` is. A key is 32 bytes, so an inner chunk of
-#: 262,144 bytes holds 8,192 keys and a 16 MiB shard 131,072: the whole index is 275 MB on EUR, and
-#: one search reads the chunks on its path. `docs/benchmarks/alid-index.md` measured this against
+#: 262,144 bytes holds 8,192 keys and a 16 MiB shard 524,288: the whole index is 275 MB on EUR, and
+#: a search reads it one shard at a time. `docs/benchmarks/alid-index.md` measured this against
 #: `SIDE`'s 16 KiB chunks, whose 16,693 of them made a whole read 4.6 s against 0.2 s.
 ALID_KEYS: Final = (262_144, 16_777_216)
 ALID_ROWS: Final = (262_144, 1_048_576)
