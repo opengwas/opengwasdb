@@ -25,6 +25,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Final, Literal
@@ -845,7 +846,16 @@ class _KeptIndexes(WrapperStore[Store]):
             pending = asyncio.ensure_future(self._fetched(shard, prototype))
             self._pending[shard] = pending
             pending.add_done_callback(lambda _: self._pending.pop(shard))
-        return await asyncio.shield(pending)
+        try:
+            return await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            # Sharing protects other readers, not permission to outlive this read (ADR 0009).
+            # Consume a failure while draining, but preserve this waiter's cancellation.
+            drained = asyncio.gather(pending, return_exceptions=True)
+            while not drained.done():
+                with suppress(asyncio.CancelledError):
+                    await asyncio.shield(drained)
+            raise
 
     async def _fetched(self, shard: _ShardIndex, prototype: BufferPrototype) -> bytes | None:
         fetched = await self._get(shard.key, prototype, SuffixByteRequest(shard.size))

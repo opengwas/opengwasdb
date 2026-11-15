@@ -92,7 +92,12 @@ onto the same seven-worker pool as decoding. Exact LocalStore only: subclass ove
 HTTP stores continue through their own async get. This avoids serialising all local ranges
 on the loop's one default helper without making another I/O pool or changing global zarr
 settings. Applications budget fallback codec helpers separately; benchmarks use one helper,
-BLAS 1 and an eight-CPU cap. Cancellation drains both I/O and decode jobs. Worker closures
+BLAS 1 and an eight-CPU cap. Cancellation drains both I/O and decode jobs. A cancelled
+shard-index waiter shields and drains the shared fetch, even through repeated cancellation;
+it never cancels another reader's fetch. The waiter retains its cancellation if shared I/O
+fails, while an uncancelled reader still receives that failure. Consequently cancellation
+may wait for slow index I/O, rather than abandon a worker outside the read's lifetime.
+Worker closures
 clear captured buffers before Future completion and hand returned ranges through a popped
 result box (the Future itself returns None). Retained executor work items or Futures therefore
 cannot pin ranges after their compressed-byte credits are released.
