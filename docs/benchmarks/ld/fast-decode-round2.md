@@ -173,7 +173,9 @@ shipping the last and fastest observation. Raw uptimes and both prototype runs a
 All 47 real-chr22 answer arrays, including every dtype, shape and byte, equal the integration
 tip. All 74 whole-clump fingerprints equal round 1. The 10 realdata tests pass in **311.99 s**,
 including first/middle/last chunks of every array in all five stores against zarr; this exceeds
-the documented five-minute tier budget by 11.99 s. Acceptance-clump passes **3 in 431.32 s**,
+the documented five-minute tier budget by 11.99 s. (ogld#40 later moved those five store checks
+to `acceptance-stores`, so the tier loses the 11.99 s overrun; the timings here are the run's own
+record and are not restated.) Acceptance-clump passes **3 in 431.32 s**,
 asserting exactly the same eight explained differences.
 
 To avoid multiplying seven-worker pools across pytest processes, final certification uses

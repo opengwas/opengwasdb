@@ -72,8 +72,11 @@ must await workers still holding its buffers.
 
 A reproducible wrapper, `scripts/bench/fast_decode.py`, now runs #8's existing cases and
 records whole-clump SHA-256, distinct chunks counted at `_keep_run`, and full uptime beside
-every timing. The realdata tier samples first/middle/last chunks of every array in all five
-published stores against zarr; it requires `OGLD_STORES` to name their parent directory.
+every timing. The acceptance run of the stores samples first/middle/last chunks of every array in
+all five published stores against zarr (`pixi run -e dev acceptance-stores`, ogld#40); it needs
+no input variable, since `scripts/build_hgdp1kgp.py`'s `store_path` says where they are. That
+sample reads every array of five whole stores, which took the realdata tier past its 5-minute
+budget, so it moved to the run that already reads them all.
 
 ## Final runs at `2811c06`
 
@@ -151,7 +154,8 @@ The four clumps make 6,279 requests instead of 7,537 at 0.01, and 5,729 instead 
   range. All **47 arrays** have identical dtype, shape and every byte against the untouched tip,
   including the 21,850 × 21,850 region. The adapted source is archived with the comparison log.
 - The realdata tier passed **10 tests in 262.35 s**: first/middle/last chunks of every array
-  in each of all five published stores equal zarr, and real build/query checks pass.
+  in each of all five published stores equal zarr, and real build/query checks pass. (Those five
+  store checks now live in `acceptance-stores`; ogld#40 moved them out of the tier's budget.)
 - `acceptance-clump` passed **3 tests in 585.32 s**, asserting exactly the same eight explained
   differences, not merely the same aggregate lead count.
 - Unit/contract tests cover every Test Store array locally and over HTTP, both data byte orders,

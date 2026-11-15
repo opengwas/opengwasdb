@@ -34,36 +34,6 @@ import ogld
 from ogld.format import REncoding
 from ogld.identity import alid_locus, order_key
 
-
-@pytest.mark.parametrize("ancestry", ["AFR", "AMR", "EAS", "EUR", "SAS"])
-def test_sampled_chunks_of_published_stores_equal_zarr(ancestry: str) -> None:
-    # The recipe owns names and roots. The tier's installation guard loads scripts/.
-    import build_hgdp1kgp as recipe
-    import zarr
-
-    from ogld.store.location import ChunkCache, open_group
-
-    required("OGLD_STORES", "the five published HGDP+1kGP stores for decoder equality")
-    path = recipe.store_path(ancestry)
-    assert path.is_dir(), f"published store missing: {path}"
-    cache = ChunkCache(1 << 25)
-    root = open_group(path, cache=cache)
-    arrays = [a for _, a in root.members(max_depth=None) if isinstance(a, zarr.Array)]
-    assert len(arrays) > 100
-    for array in arrays:
-        size, n = int(array.chunks[0]), int(array.shape[0])
-        if n == 0:
-            np.testing.assert_array_equal(cache.take(array, []), array[:])
-            continue
-        last = (n - 1) // size
-        for k in sorted({0, last // 2, last}):
-            coords = np.arange(k * size, min(n, (k + 1) * size))
-            expected = np.asarray(array[k * size : (k + 1) * size])
-            got = cache.take(array, coords)
-            assert got.dtype == expected.dtype, array.path
-            np.testing.assert_array_equal(got, expected, err_msg=f"{ancestry}/{array.path}/{k}")
-
-
 KB = 3000
 #: Fewest Analyses with hits on the slice for the comparison to mean anything.
 MIN_ANALYSES = 20
