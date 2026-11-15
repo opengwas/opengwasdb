@@ -29,6 +29,7 @@ from script_modules import load_script
 from ogld.format import FAR_BP, NEAR_BP, REncoding, Sourced
 from ogld.identity import orient
 from ogld.store import StoreReader, StoreWriter, Variants, assembly, layout
+from ogld.store.validation import validate
 
 DATA = Path(__file__).resolve().parent / "data" / "alid_index"
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
@@ -340,9 +341,11 @@ def test_the_derivation_writes_the_group_whole_or_leaves_nothing(tmp_path: Path)
     assert StoreReader.open(store).rows_of(["22:200:A:C"]).tolist() == [2]
 
 
-def test_the_derivation_leaves_the_store_as_it_was_when_the_count_differs(
+def test_a_recorded_count_that_is_not_the_table_s_refuses_the_derivation(
     tmp_path: Path,
 ) -> None:
+    # A store whose provenance records a count its table does not give is not one to derive over:
+    # the record is not this store's, and nothing is written.
     script = load_script("derive_alid_index")
     store = written(tmp_path / "store")
     shutil.rmtree(store / layout.ALID_INDEX)
@@ -354,3 +357,33 @@ def test_the_derivation_leaves_the_store_as_it_was_when_the_count_differs(
         script.derive(store)
     assert not (store / "variants" / "alid_index-partial").exists()
     assert not (store / layout.ALID_INDEX).exists()
+
+
+def test_a_derivation_that_fails_after_its_rename_is_finished_by_another_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The index is in place before the provenance counts it, so a failure in between leaves a
+    # store validation refuses and a second run finishes it (ogld#42's fix round 1).
+    script = load_script("derive_alid_index")
+    store = written(tmp_path / "store")
+    shutil.rmtree(store / layout.ALID_INDEX)
+    meta = store / "zarr.json"
+    document = json.loads(meta.read_text())
+    del document["attributes"]["ld_store"]["counts"]["alids_left_out"]
+    meta.write_text(json.dumps(document))
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise OSError("no space left on device")
+
+    # The failure is the provenance write, which comes after the index is renamed into place.
+    monkeypatch.setattr(script, "record_count", fail)
+    with pytest.raises(OSError, match="no space"):
+        script.derive(store)
+    monkeypatch.undo()
+    assert (store / layout.ALID_INDEX / "row").exists(), "the index is in place"
+    assert "alids_left_out" not in StoreReader.open(store).provenance["counts"]
+    failing = {name for name, found in validate(store).items() if found}
+    assert failing, "a half-derived store is one validation refuses"
+    assert script.derive(store) == 3
+    assert StoreReader.open(store).provenance["counts"]["alids_left_out"] == 2
+    assert not any(validate(store).values()), "and a second run leaves a store that passes"

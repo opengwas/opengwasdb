@@ -9,14 +9,19 @@ column, padded and sorted (`ogld.store.assembly.derive_alid_index`, the function
 `StoreWriter.finish` calls), so it is derived rather than rebuilt. On HGDP+1kGP EUR chr22 the
 derived index was byte-identical, file for file, to a rebuild's (ogld#42).
 
-The arrays are written under `PARTIAL`, the provenance is rewritten with the count the index
-records (spec §7), and the group is renamed to `alid_index` only when every entry is written and
-the count matches. The provenance is a new file renamed over the old one, and the group is renamed
-into place, so a reader sees a store with the count and no index only for an instant in which no
-reader opens it: a store is read once, and this is run when none is. So a run that fails leaves
-the store as it was, with nothing to clean up, and a `PARTIAL` a killed run left is this script's
-own and is replaced. A store that holds `alid_index` is refused. Validate each store afterwards:
-`ogld validate`, or `pixi run -e dev acceptance-stores` for the five. No other array is written.
+**It is idempotent, and a half-derived store is repaired by running it again.** The steps are
+ordered so that the provenance never counts an index the store lacks: the arrays are written under
+`alid_index-partial/`, renamed to `alid_index` once every entry is written and their number is what
+the table gives, and only then does the provenance record the count, as a new document renamed over
+the old one. So a run that fails anywhere leaves a store validation refuses — a `partial` group, or
+an index whose count is unrecorded — and the next run finishes it: a `partial` is replaced, and an
+index already in place has its count recorded, once that count is shown to be this table's. A store
+that is fully derived is left as it is. This is not one transaction across two renames: a reader
+may open the store between them, so run this when no reader does. No array is written but the
+index's two, and no other file but the root metadata document.
+
+Validate each store afterwards: `ogld validate`, or `pixi run -e dev acceptance-stores` for the
+five.
 """
 
 from __future__ import annotations
@@ -31,10 +36,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import zarr
 
-from ogld.store import StoreReader
-from ogld.store.assembly import derive_alid_index
+from ogld.store import layout
+from ogld.store.assembly import ALID_ROWS, derive_alid_index
 
 #: Where the index is written until every entry is, and counted: then it is renamed `alid_index`.
 #: A reader ignores it (spec §1), and no other writer makes it.
@@ -42,52 +48,94 @@ PARTIAL = "alid_index-partial"
 
 
 def derive(store: Path) -> int:
-    """Write `store`'s ALID index from its own variant table; return how many ALIDs it leaves out.
-    It takes the name `alid_index` only when complete and numbering what its provenance records;
-    otherwise nothing is left."""
-    if (store / "variants" / "alid_index").exists():
-        raise SystemExit(f"{store} holds an ALID index already: it is not derived again")
-    partial = store / "variants" / PARTIAL
-    if partial.exists():  # a killed run's: complete runs and failures alike leave none
-        shutil.rmtree(partial)
-    reader = StoreReader.open(store)
-    recorded = reader.provenance["counts"].get("alids_left_out")
-    try:
-        left_out, entries = _write(store)
-        if recorded not in (None, left_out):
+    """Give `store` the ALID index its table defines, or finish a half-derived one; return how many
+    entries the index holds.
+
+    A store whose index is already in place keeps it: its count is recorded if the provenance lacks
+    it, and refused if the index holds a number of entries this table does not give. A `partial`
+    left by a failed run is replaced. Nothing else in the store is written.
+    """
+    variants = store / "variants"
+    index, partial = variants / "alid_index", variants / PARTIAL
+    rows, wide = table_counts(store)
+    recorded = recorded_count(store)
+    if recorded is not None and recorded != wide:
+        raise SystemExit(
+            f"{store}: its provenance records {recorded:,} ALIDs left out of the index, but its "
+            f"table has {wide:,} wider than the slot: this is not derived over that record"
+        )
+    if index.exists():
+        entries = entry_count(index)
+        if entries != rows - wide:
             raise SystemExit(
-                f"{store}: its table has {left_out:,} ALID(s) wider than the index's slot, but "
-                f"its provenance records {recorded:,}; the index is not written"
+                f"{store}: its index holds {entries:,} entries, but its table has {rows:,} ALIDs "
+                f"of which {wide:,} are too wide for the slot, so {rows - wide:,} belong in it"
             )
-    except BaseException:
+        if recorded is None:
+            record_count(store, wide)
+        return entries
+    if partial.exists():  # a killed run's: complete runs and failures alike leave one to replace
+        shutil.rmtree(partial)
+    left_out, entries = write_partial(store)
+    if (left_out, entries) != (wide, rows - wide):
         shutil.rmtree(partial, ignore_errors=True)
-        raise
-    _record(store, recorded if recorded is not None else left_out)
-    partial.rename(store / "variants" / "alid_index")
+        raise SystemExit(
+            f"{store}: its table gives {wide:,} ALIDs too wide for the slot and {rows - wide:,} "
+            f"entries, but the index written has {left_out:,} and {entries:,}"
+        )
+    partial.rename(index)
+    record_count(store, wide)
     return entries
 
 
-def _record(store: Path, left_out: int) -> None:
+def table_counts(store: Path) -> tuple[int, int]:
+    """The table's rows, and how many of its ALIDs are wider than the index's slot: counted from
+    `variants/alid` itself, block by block, never inferred from an index's length (spec §7)."""
+    alid = zarr.open_array(store / "variants" / "alid", mode="r")
+    rows = int(alid.shape[0])
+    wide = 0
+    for lo in range(0, rows, ALID_ROWS):
+        wide += int((~layout.alid_fits(np.asarray(alid[lo : lo + ALID_ROWS]))).sum())
+    return rows, wide
+
+
+def entry_count(index: Path) -> int:
+    """How many entries the index at `index` holds."""
+    return int(zarr.open_array(index / "row", mode="r").shape[0])
+
+
+def recorded_count(store: Path) -> int | None:
+    """The ALIDs `store`'s provenance records the index leaving out, or None if it records none."""
+    recorded = root_provenance(store)["counts"].get("alids_left_out")
+    return None if recorded is None else int(recorded)
+
+
+def root_provenance(store: Path) -> dict[str, Any]:
+    """The root group's `ld_store` attribute, as recorded (spec §7)."""
+    document: dict[str, Any] = json.loads((store / "zarr.json").read_text())
+    return dict(document["attributes"]["ld_store"])
+
+
+def record_count(store: Path, left_out: int) -> None:
     """Rewrite the store's provenance with `counts.alids_left_out` (spec §7), the one key this
     derivation adds. A new document renamed over the old one, so no reader sees a half one."""
     meta = store / "zarr.json"
-    document: dict[str, Any] = json.loads(meta.read_text())
+    document = json.loads(meta.read_text())
     document["attributes"]["ld_store"]["counts"]["alids_left_out"] = left_out
-    written = meta.with_suffix(".json.partial")
+    written = meta.with_suffix(".json.renamed")
     written.write_text(json.dumps(document))
     os.replace(written, meta)
 
 
-def _write(store: Path) -> tuple[int, int]:
-    """The index, under `partial`, from the store's table: how many ALIDs it leaves out, and how
+def write_partial(store: Path) -> tuple[int, int]:
+    """The index, under `partial`, from the store's table: how many ALIDs it leaves out and how
     many entries it holds."""
     root = zarr.open_group(store, mode="r+")
     variants = root["variants"]
     assert isinstance(variants, zarr.Group)
-    partial = variants.create_group(PARTIAL)
-    left_out = derive_alid_index(variants, partial)
-    entries = int(partial["row"].shape[0])
-    return left_out, entries
+    group = variants.create_group(PARTIAL)
+    left_out = derive_alid_index(variants, group)
+    return left_out, int(group["row"].shape[0])
 
 
 def uptime() -> str:
@@ -104,8 +152,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{store}: start  {uptime()}", flush=True)
         started = time.perf_counter()
         entries = derive(store)
-        seconds = time.perf_counter() - started
-        print(f"{store}: {entries:,} entries in {seconds:.1f} s  {uptime()}", flush=True)
+        print(
+            f"{store}: {entries:,} entries in {time.perf_counter() - started:.1f} s  {uptime()}",
+            flush=True,
+        )
     return 0
 
 
