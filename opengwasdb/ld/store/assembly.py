@@ -60,6 +60,7 @@ from ogld.format.geometry import (
     owners,
     spans_at,
     stop_within,
+    windows,
     within,
 )
 from ogld.store import layout
@@ -67,6 +68,8 @@ from ogld.store import layout
 #: Proxy Index entries `derive_far_pairs` reads at once, or one row's when it holds more: 8 Mi
 #: entries are 48 MiB of `partner` and `r`, and about 200 MiB as they are judged.
 DERIVE_ENTRIES: Final = 1 << 23
+#: Variant Set rows `derive_alid_index` reads at once: 1,048,576 ALIDs, whose keys are 32 MiB.
+ALID_ROWS: Final = 1 << 20
 #: The rows of one bucket of the Proxy Index's carried pairs. Pairs are carried by the bucket
 #: their later row falls in, so a bucket is freed once its rows are written. Only the pairs of
 #: one partly written bucket are held beyond those spanning the row being written.
@@ -557,6 +560,36 @@ def derive_far_pairs(
     return written
 
 
+def derive_alid_index(variants: zarr.Group, index: zarr.Group) -> int:
+    """Write the ALID search index into `index` from `variants`' own ALID column (spec §2, §6;
+    ADR 0010), and return how many ALIDs it leaves out.
+
+    The keys, their padding and their order are `layout.alid_index`'s: a store writes what the
+    rule gives, whether it is being built or derived from the table it already has, and whether
+    its own column is read here or handed over by its producer. An ALID wider than the slot is
+    left out rather than truncated into it, so a lookup can never answer another variant's name
+    (opengwasdb issue #127); such an ALID stays reachable by the exact scan at its position.
+
+    The column is read a block of rows at a time, so nothing holds the table's strings whole:
+    the keys take 32 bytes a variant, read at the end to sort them.
+    """
+    alid = variants["alid"]
+    assert isinstance(alid, zarr.Array)
+    rows = int(alid.shape[0])
+    keys: list[npt.NDArray[np.uint8]] = []
+    at: list[npt.NDArray[np.int64]] = []
+    for lo, hi in windows(0, rows, ALID_ROWS):
+        block, first = layout.alid_keys(np.asarray(alid[lo:hi]), first=lo)
+        keys.append(block)
+        at.append(first)
+    ordered, entries = layout.ordered_index(
+        np.concatenate(keys) if keys else np.empty((0, layout.ALID_INDEX_WIDTH), np.uint8),
+        np.concatenate(at) if at else np.empty(0, np.int64),
+    )
+    layout.put_alid_index(index, ordered, entries)
+    return rows - len(entries)
+
+
 def _whole(group: zarr.Group, name: str, span: slice = slice(None)) -> npt.NDArray[Any]:
     """Elements `span` of the array `name`, refused where one is a value no store holds there;
     an `indptr` or a `partner` as int64."""
@@ -583,12 +616,13 @@ class Tally:
         self.far_pairs += cut.far_pairs
         self.index_entries += 2 * len(cut.codes)
 
-    def counts(self) -> Counts:
+    def counts(self, alids_left_out: int = 0) -> Counts:
         return {
             "near_pairs": self.near_pairs,
             "far_candidates": self.far_candidates,
             "far_pairs": self.far_pairs,
             "index_entries": self.index_entries,
+            "alids_left_out": alids_left_out,
         }
 
 
@@ -623,10 +657,13 @@ class Chromosome:
 _PRODUCER_KEYS: Final = frozenset(Sourced.__required_keys__)
 
 
-def provenance(sourced: Sourced, cutter: Cutter, n_variants: int, tally: Tally) -> Provenance:
+def provenance(
+    sourced: Sourced, cutter: Cutter, n_variants: int, tally: Tally, *, alids_left_out: int = 0
+) -> Provenance:
     """The store's provenance, in spec §7's order. It is the producer's `sourced` plus what the
     store derives from itself: `format_version`, `encoding`, `n_variants`, `near_bp`, `far_bp`,
-    `t_far`, `t_far_q`, `far_code_floor` and `counts`.
+    `t_far`, `t_far_q`, `far_code_floor` and `counts`, the count of ALIDs the search index left
+    out among them (ADR 0010).
 
     Spec §7 lets a store hold other keys, which a reader ignores. This writer records none: a key
     `Sourced` does not name is refused, whether it is one the store derives, which a producer may
@@ -665,7 +702,7 @@ def provenance(sourced: Sourced, cutter: Cutter, n_variants: int, tally: Tally) 
         "t_far": cutter.t_far,
         "t_far_q": T_FAR_Q,
         "far_code_floor": cutter.floor,
-        "counts": tally.counts(),
+        "counts": tally.counts(alids_left_out),
     }
     order = Provenance.__annotations__
     return cast(Provenance, {key: derived.get(key, given.get(key)) for key in order})

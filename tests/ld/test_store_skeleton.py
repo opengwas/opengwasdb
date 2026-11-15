@@ -56,6 +56,7 @@ def arrays(group: zarr.Group, prefix: str = "") -> Iterator[tuple[str, zarr.Arra
 def test_the_fixture_reaches_every_array_kind(written: Path) -> None:
     names = {name for name, _ in arrays(zarr.open_group(written, mode="r"))}
     expected = {f"variants/{c}" for c in ("position", "alid", "a1", "a2", "a1_frequency")}
+    expected |= {"variants/alid_index/alid", "variants/alid_index/row"}
     for chrom in ("21", "22"):
         expected |= {f"near/{chrom}/{a}" for a in ("indptr", "r")}
         expected |= {
@@ -68,6 +69,7 @@ def test_every_array_has_the_fill_value_and_codecs_spec_6_says(written: Path) ->
     fills = {
         "indptr": -1,
         "partner": -1,
+        "row": -1,
         "r": -32768,
         "position": 0,
         "alid": "",
@@ -76,16 +78,18 @@ def test_every_array_has_the_fill_value_and_codecs_spec_6_says(written: Path) ->
     }
     for name, array in arrays(zarr.open_group(written, mode="r")):
         leaf = name.rsplit("/", 1)[1]
-        if leaf == "a1_frequency":
+        if name == "variants/alid_index/alid":
+            # Keys are judged whole: no ALID is empty, which a key of 0 bytes would be (ADR 0010).
+            assert array.fill_value == 0, name
+        elif leaf == "a1_frequency":
             assert np.isnan(array.fill_value), name
         else:
             assert array.fill_value == fills[leaf], name
         meta = array.metadata.to_dict()["codecs"][0]
         assert meta["name"] == "sharding_indexed", name
         inner = [c["name"] for c in meta["configuration"]["codecs"]]
-        assert inner == (
-            ["vlen-utf8", "zstd"] if leaf in {"alid", "a1", "a2"} else ["bytes", "zstd"]
-        ), name
+        strings = leaf in {"alid", "a1", "a2"} and name != "variants/alid_index/alid"
+        assert inner == (["vlen-utf8", "zstd"] if strings else ["bytes", "zstd"]), name
         assert [c["name"] for c in meta["configuration"]["index_codecs"]] == ["bytes", "crc32c"], (
             name
         )
@@ -172,7 +176,7 @@ def test_the_script_writes_the_same_arrays_and_the_same_provenance_again(tmp_pat
     second = script.write_test_store(0, tmp_path / "two", R_SCALE)
     one, two = zarr.open_group(first, mode="r"), zarr.open_group(second, mode="r")
     names = {name: np.asarray(array[:]) for name, array in arrays(one)}
-    assert len(names) == 21, "every array must be compared for this to mean anything"
+    assert len(names) == 23, "every array must be compared for this to mean anything"
     again = {name: np.asarray(array[:]) for name, array in arrays(two)}
     assert names.keys() == again.keys()
     for name, array in names.items():

@@ -8,8 +8,10 @@ quantised, the provenance an LD Store carries, what a reader answers for a pair,
 queries return, and when a request is refused. The decisions behind it are in ADR 0001
 (`docs/adr/0001-near-band-and-thresholded-far-pairs.md`), including its clarification of
 7 November 2026, each store's encoding of r in ADR 0004
-(`docs/adr/0004-per-store-encoding.md`), and the Far Pairs beside the Proxy Index in ADR 0007
-(`docs/adr/0007-far-pairs-beside-the-proxy-index.md`); the build inputs are in `docs/spec/build-inputs.md` (ADR 0002); the terms are in
+(`docs/adr/0004-per-store-encoding.md`), the Far Pairs beside the Proxy Index in ADR 0007
+(`docs/adr/0007-far-pairs-beside-the-proxy-index.md`), and the ALID search index in ADR 0010
+(`docs/adr/0010-alid-search-index.md`); the build inputs are in `docs/spec/build-inputs.md` (ADR
+0002); the terms are in
 `CONTEXT.md`. **ALID**, its **A1** and **Reference Assembly** are the engine's
 (opengwas/opengwasdb `CONTEXT.md`, _Variant Identity_), not redefined here. The engine's glossary
 says an ALID is formed after "upper-casing, trimming and left alignment"; its code at `1ab2b09`
@@ -52,7 +54,10 @@ per (**Source Panel**, **Reference Assembly**) (ADR 0001, decision 1).
 │   ├── alid                 string (UTF-8)
 │   ├── a1                   string (UTF-8)
 │   ├── a2                   string (UTF-8)
-│   └── a1_frequency         float32
+│   ├── a1_frequency         float32
+│   └── alid_index/          the ALID search index (§2; ADR 0010)
+│       ├── alid             uint8, 32 bytes an entry: the key, NUL right-padded
+│       └── row              int32, the Variant Set row of each entry
 ├── near/<chrom>/            the Near Band of one chromosome (§4)
 │   ├── indptr               int64, rows + 1
 │   └── r                    int16, every row's codes, row after row
@@ -95,20 +100,41 @@ identifiers, no per-sample values of any kind. A reader ignores any array or gro
 - `a1_frequency` is A1's frequency in the Source Panel's samples, after the variant filters,
   `float32`.
 
-**Why ALID is stored this way.** The engine keeps ALID in `variants.tsv.gz` and searches it through
-a fixed-width `|S32` sidecar. An ALID wider than 32 bytes is left out of that index and found by
-an exact scan over its position (engine issue #127). An LD Store needs no such index: its rows are
-in position order. So a reader finds an ALID by parsing its chromosome and position, binary-searching
-`position` within the chromosome's row range, and comparing the full ALID strings of the rows at
-that position. That is exact at any length, so there is no fixed-width slot, nothing to leave out
-and no omission to count. Keeping the strings as Zarr arrays leaves the whole LD Store one Zarr
-hierarchy that a client reads over HTTP. The ALID is stored, not derived from the other columns,
-so a reader never reimplements identity. Validation checks it against
-(`chromosome`, `position`, `a1`, `a2`) with the identity function #3 settles (§12). This needs
-no engine change. zarr-python 3.4.1 writes and reads these strings inside sharded arrays (the
-prototype's stores,
-`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/s05_build_stores.py`). A reader in
-another language needs Zarr's variable-length string extension.
+**The ALID search index** (`variants/alid_index/`, owner, 15 November 2026; ADR 0010). It holds
+the Variant Set's ALIDs again, as fixed-width keys a binary search can run over:
+`alid` is one 32-byte key an entry — the ALID's UTF-8 bytes, NUL right-padded — and `row` the
+Variant Set row of that entry. The entries are sorted by key, bytewise; two ALIDs of one length
+differ only in their own bytes, and padding with NUL sorts an ALID before every ALID it is a
+prefix of, which is the order the engine's own index has. It holds every ALID whose UTF-8 form
+is at most 32 bytes, which is the engine's rule and its width (`is_indexable_alid`,
+opengwasdb `variants/axis.py`; ADR 0010). An ALID wider than the slot MUST be left out of the
+index and counted in `counts.alids_left_out` (§7), never cast into it: the cast truncates, and
+two indels at one position that agree over the slot then share one key, so a lookup by either
+returns whichever row sorts first — one variant answering to another's name, with nothing to
+show it (engine issue #127, 342 such variants on the published finngen-r13 release). A left-out
+ALID stays reachable, by the exact scan this section used to describe for every ALID.
+`alid_index.rows`, `alid_index.order`, `alid_index.keys`, `alid_index.complete` and
+`alid_index.count` hold the index to the table it indexes (§12).
+
+**Why ALID is stored this way.** The variant table keeps ALID as Zarr's variable-length UTF-8
+strings, and the index beside it is bytes, because the two reads are different reads. A query
+naming variants finds them by ALID, one search over keys whose bytes are the ALIDs; it never
+parses a position or decodes a string. A query naming rows returns the table's ALIDs, and a
+matrix or a clump returns them for the rows it chose. The index is what the strings are not: an
+array of fixed-width keys, sorted, that a binary search — or numpy's — runs over. Reading ALIDs
+as strings cost 59 s of the 94 s that finding the variants of #403's 37 Analyses took, through
+Zarr's variable-length path, and the keys cost a fraction of that (`docs/benchmarks/alid-index.md`).
+
+Both are stored, not derived from the other columns, so a reader never reimplements identity,
+and validation checks the table against (`chromosome`, `position`, `a1`, `a2`) with the identity
+function #3 settles, and the index against the table (§12). Keeping both as Zarr arrays leaves
+the whole LD Store one Zarr hierarchy that a client reads over HTTP. A reader in another
+language needs Zarr's variable-length string extension for the table and nothing but a byte
+array for the index, which is why the key is `uint8` and not a fixed-length bytes type: Zarr v3
+has no `|S32` data type of its own, and zarr-python 3.4.2 writes one as `null_terminated_bytes`,
+an extension it marks unstable and that other implementations do not read (ADR 0010).
+zarr-python 3.4.1 writes and reads these strings inside sharded arrays (the prototype's stores,
+`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/s05_build_stores.py`).
 
 A variant outside the Variant Set is **Absent** (§8). A string that is not an ALID names no
 variant, so it is Absent too.
@@ -306,7 +332,7 @@ chain. The shard index is `bytes` then `crc32c`, at the end of the shard (zarr-p
 
 | array kind | codecs inside the shard |
 |---|---|
-| numeric: `position`, `a1_frequency`, every `indptr`, `r` and `partner` | `bytes` (little-endian), then `zstd` level 3 |
+| numeric: `position`, `a1_frequency`, every `indptr`, `r` and `partner`, and the ALID index's `alid` and `row` | `bytes` (little-endian), then `zstd` level 3 |
 | string: `alid`, `a1`, `a2` | `vlen-utf8`, then `zstd` level 0, which zstd reads as its default level, 3 (zarr-python's default for strings, and what the prototype's stores used) |
 
 A shard MUST be a whole multiple of its inner chunk. An array shorter than its shard has one
@@ -318,6 +344,8 @@ spec §10a. An inner chunk longer than its array is clipped to the array.
 | `variants/position` | `int32` | (V,) | 16,384 | 1,048,576 | 0 |
 | `variants/alid`, `a1`, `a2` | `string` | (V,) | 16,384 | 1,048,576 | `""` |
 | `variants/a1_frequency` | `float32` | (V,) | 16,384 | 1,048,576 | NaN |
+| `variants/alid_index/alid` | `uint8` | (32N,) | 16,384 | 1,048,576 | 0 |
+| `variants/alid_index/row` | `int32` | (N,) | 16,384 | 1,048,576 | −1 |
 | `near/<chrom>/indptr` | `int64` | (n_c + 1,) | 16,384 | 1,048,576 | −1 |
 | `near/<chrom>/r` | `int16` | (indptr[n_c],) | **262,144** | **67,108,864** | −32768 |
 | `index/<chrom>/indptr` | `int64` | (n_c + 1,) | 16,384 | 1,048,576 | −1 |
@@ -327,17 +355,24 @@ spec §10a. An inner chunk longer than its array is clipped to the array.
 | `far/<chrom>/partner` | `int32` | (far_c,) | 16,384 | 1,048,576 | −1 |
 | `far/<chrom>/r` | `int16` | (far_c,) | 16,384 | 1,048,576 | −32768 |
 
-V is the Variant Set's size, n_c a chromosome's rows, index_c its Proxy Index entries and far_c
-its Far Pairs. An `r`
+V is the Variant Set's size, N the ALID index's entries (V less `counts.alids_left_out`, §7), n_c a
+chromosome's rows, index_c its Proxy Index entries and far_c its Far Pairs. An `r`
 array is `int16` with fill value −32768 at every scale a store may record (§3): the encoding
 changes the codes, never the array's dtype or fill. Every
 fill value is one a valid LD Store never holds, so a chunk that was never written cannot read as
 data. This table describes how a builder writes an LD Store. Each array's own Zarr metadata
 records its chunk, shard and codecs, and readers MUST NOT depend on them: a store re-sharded for
 serving (ogld#9) reads the same. A store may record other fill values, but each MUST be one a
-valid store never holds in that array: −32768 in an `r` array, a negative number in an `indptr` or
-`partner`, a position ≤ 0, `""` in a string column, and a frequency outside (0, 1) or NaN. A reader
+valid store never holds in that array: −32768 in an `r` array, a negative number in an `indptr`,
+`partner` or `row`, a position ≤ 0, `""` in a string column, and a frequency outside (0, 1) or NaN. A reader
 refuses an array whose fill value is not, and `envelope.fill` fails it (§12).
+
+The ALID index's keys are judged 32 bytes at a time, not one byte at a time, and that is why the
+array's fill value MUST be 0: a padding byte is 0, so no single byte is one a store never holds,
+but a whole key of 0 bytes is one it never holds — no ALID is empty. So a chunk the store lost
+reads a whole key of NULs, which the reader refuses, naming the array, rather than a run of empty
+ALIDs; and `variants/alid_index/alid`'s fill value being anything else would let a lost chunk read
+as keys (`refused_if_lost`, §12's `envelope.fill`).
 
 **How a store is written** (ogld#17, ADR 0005). Every producer, a build or an import of a
 published r, writes through `StoreWriter`, and the store makes its arrays from the r it is given,
@@ -589,6 +624,7 @@ when it is created, since it thresholds as rows arrive, and refuses a producer's
 | `counts.far_candidates` | int | pairs more than `near_bp` and at most `far_bp` apart that were examined |
 | `counts.far_pairs` | int | Far Pairs: those of them whose \|code\| reaches `far_code_floor`, each counted once; the entries of every `far/<chrom>/` together |
 | `counts.index_entries` | int | Proxy Index entries, both directions and within `near_bp` included |
+| `counts.alids_left_out` | int | ALIDs wider than the ALID index's 32-byte slot, whose rows it has no entry for; the index holds the other `n_variants` − this many (`n_variants − len(variants/alid_index/row)`), and each of these is found by the exact scan at its position (§2; ADR 0010) |
 | `software` | object | versions, by package name. A build from genotypes records exactly `ogld`, `numpy`, `zarr` and `pgenlib`, its genotype reader (ogld#5's review); `ogld` is the installed version, which names the commit that built the store when the install is fresh (the realdata tier refuses a stale one) |
 | `build.created_at` | string | ISO 8601 UTC |
 | `build.wall_seconds` | float | build time, up to the validation `StoreWriter.finish` runs before it writes this provenance: a provenance cannot hold the time taken to check it. On EUR chr22 that validation took another 80 s of a 2 min build |
@@ -782,6 +818,7 @@ and the reads map onto the arrays as follows.
 
 | read | reader | made by | arrays it touches |
 |---|---|---|---|
+| the rows of a list of ALIDs | `rows_of` | `matrix`, `proxies`, `clump` | the ALID index: the chunks of `variants/alid_index/alid` one binary search a key touches, or the whole of it for a large list, and then `variants/alid_index/row` at the entries found; for an ALID it does not hold, the exact scan: `variants/position` and `variants/alid` at its position. No Proxy Index entry, no `near/` array, and no chromosome loaded for an ALID it does hold |
 | a region | `region_r` | `region` | for each of its rows, one contiguous slice of `near/<c>/r`, from the row's first code to its last partner inside the region, never its partners past the region; for its pairs beyond `near_bp`, the Far Pairs rows of its variants, each pair inside the region scattered into the matrix. No Proxy Index entry |
 | a submatrix for any variant list | `pair_r` | `matrix` | one element of `near/<c>/r` per pair within `near_bp`; for the pairs beyond it, the Far Pairs rows of the listed variants, each pair whose partner is listed scattered into the matrix. No Proxy Index entry |
 | a list of pairs, or one row against many | `r_of_pairs` | `partners` below t_far with `among`; `pair_r`, within `near_bp` only | one element of `near/<c>/r` per pair within `near_bp`; the Far Pairs row of each farther pair's earlier variant, searched. `pair_r`'s pairs beyond `near_bp` are not looked up this way: they are scattered from Far Pairs rows, as its own row says |
@@ -869,7 +906,13 @@ cold on that region took A 34.25 s, B 10.92 s, C 3.86 s.
 - The Proxy Index row that replaces the column read is in §11's table.
 
 **How ogld reads** (ogld#4). Opening a store reads its provenance and its chromosome ranges, and
-refuses a `format_version` or `encoding` it does not implement (§13). A chromosome's `position`
+refuses a `format_version` or `encoding` it does not implement (§13). A search for ALIDs reads the
+ALID index's two arrays, and only when it needs them (ogld#42, ADR 0010): an ALID that fits the
+slot with a byte to spare is looked for in the index, its chunks read through the cache, so it
+finds its row without reading `variants/position` or `variants/alid` at all. An ALID at the
+slot's width or past it, and one the index does not hold, is found by the exact scan at its
+position, which reads that chromosome's positions and the ALID strings there, as every ALID was
+found before the index. So a search can only be faster than it was. A chromosome's `position`
 range and its Near Band's `indptr` are read the first time a request touches that chromosome,
 through the numeric cache, and kept. Its Proxy Index's `indptr` is read only when used;
 its Far Pairs' `indptr` the first time a request needs its pairs
@@ -887,7 +930,8 @@ directly, in bounded windows: one pass over each chromosome, and a second read o
 **Direct numeric decoding** (ogld#40; ADR 0009). For a one-dimensional numeric array whose
 metadata declares exactly sharding_indexed with bytes then zstd internally and bytes then
 CRC32C in an end-located shard index, `location.py` reads through the store's async interface
-using its `decoding.py` backend. That backend owns shard/frame parsing and one process-shared
+using its `decoding.py` backend. A one-byte dtype's `bytes` codec declares no byte order, and the
+backend reads it as it lies (ADR 0010); that is how the ALID index's keys are decoded directly. That backend owns shard/frame parsing and one process-shared
 seven-worker I/O/decode pool. Both declared
 byte orders are honoured. The index's uint64 offset/length pairs are absolute; both all ones
 means an empty chunk, which reads the declared fill value, just like a missing shard. CRC32C
@@ -1153,6 +1197,11 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 | `variants.order` | positions ascend within each chromosome, ties broken by ALID ascending, with no repeated ALID |
 | `variants.identity` | each `alid` is the identity function's ALID for its chromosome, position, `a1` and `a2` (ogld#3) |
 | `variants.frequency` | every `a1_frequency` is finite and in (0, 1) |
+| `alid_index.rows` | `variants/alid_index/row` holds a row of the Variant Set for each entry, none of them twice: one entry a variant (§2) |
+| `alid_index.order` | the entries' keys ascend bytewise, strictly: the order every search over them depends on (§2) |
+| `alid_index.keys` | each entry's key is the full ALID of the row it names, NUL padded, so no key was truncated into the slot and none names another variant (§2; opengwasdb issue #127) |
+| `alid_index.complete` | every ALID of the Variant Set whose UTF-8 form is at most 32 bytes is an entry, so a search that finds none means the variant is Absent (§2, §8) |
+| `alid_index.count` | `variants/alid_index/alid` holds 32 bytes an entry, and `counts.alids_left_out` is `n_variants` minus the entries (§2, §6, §7) |
 | `near.rows` | `indptr` starts at 0 and has n_c + 1 entries; each row's length equals the count of later variants within `near_bp` from `position`. So rows are contiguous and stay within `near_bp` |
 | `near.codes` | every code is one of the store's encoding: none is −32768 and none is past the scale, \|code\| ≤ `r_scale`, so \|r̂\| ≤ 1 holds after dequantisation |
 | `index.rows` | `indptr` starts at 0, has n_c + 1 entries and ends at the length of `partner` and `r`; within a row partners are strictly ascending, in [0, n_c), and never the row itself |
@@ -1170,13 +1219,13 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 No rule checks chunk shapes, shards or codecs (§6). No rule can
 check that every Far Pair was found: that needs the genotypes, and ogld#5's tests check it against
 an independent reference on the Test Panel. Each rule has a store that breaks it, in
-`tests/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 23.
+`tests/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 28.
 
 **On write and on demand** (ogld#4). `ogld.validate(location)` runs the rules on a store on disk
 or over HTTP and returns every rule's findings, an empty list for a rule the store passes.
 `StoreWriter.finish` runs them on the store it wrote, on the threads the builder gives it, judged
 with the provenance it assembled (§7) as JSON will hold it, and writes that provenance only when
-all 23 pass. Otherwise it raises
+all 28 pass. Otherwise it raises
 `ValidationFailed`, naming each failing rule and where, and the store keeps no provenance, so a
 reader refuses it (§13) rather than read it as a short one.
 
@@ -1209,6 +1258,13 @@ then read and checked at once, and no more are held. `near.codes`, `index.codes`
 `r` array in windows of their own instead when its `indptr` cannot delimit the rows or does not end
 at `r`'s length, as when it ends short of `r`: windows of 8,388,608 elements, codes or entries
 alike, t of them at once.
+
+`alid_index.keys` and `alid_index.complete` read the ALID index's keys whole, 32 bytes a variant:
+275 MB on HGDP+1kGP EUR's 8.59 M. They search that array for each block of the variant table's
+ALIDs, rather than read the table's strings twice per entry, and they read the variant columns in
+the blocks the other rules read them in. `alid_index.rows` reads the index's `row` array whole
+(34 MB on EUR), `alid_index.order` reads the keys in blocks, and `alid_index.count` reads only
+their lengths and the provenance.
 
 A chunk that will not decode, such as a corrupt zstd frame, is a "cannot be read" finding of each
 rule that reads it. An `indptr` that ends past its array is a "cannot be checked" finding of each
@@ -1249,5 +1305,6 @@ to §8's answers, is a new format version. A change of chunk or shard shape is n
 a store's scale: any whole scale from 1 to 32767 in the `int16` container is version `0.1.0`, and
 each store records its own (§3, §7). Version `0.1.0` is an unreleased draft: no LD Store in it
 has been published, so the owner's decisions of 7 November 2026, the Proxy Index among them, of
-10 November 2026, the per-store encoding (ADR 0004), and of 12 November 2026, the Far Pairs
-beside the index (ADR 0007), are part of `0.1.0` rather than a new version.
+10 November 2026, the per-store encoding (ADR 0004), of 12 November 2026, the Far Pairs beside
+the index (ADR 0007), and of 15 November 2026, the ALID index beside the variant table (ADR 0010),
+are part of `0.1.0` rather than a new version.

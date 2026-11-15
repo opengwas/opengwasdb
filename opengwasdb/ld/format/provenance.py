@@ -155,6 +155,7 @@ class Counts(TypedDict):
     far_candidates: int
     far_pairs: int
     index_entries: int
+    alids_left_out: int
 
 
 class Build(TypedDict):
@@ -241,6 +242,7 @@ REQUIRED_KEYS: Final = (
     "counts.far_candidates",
     "counts.far_pairs",
     "counts.index_entries",
+    "counts.alids_left_out",
     "software",
     "build.created_at",
     "build.wall_seconds",
@@ -261,6 +263,11 @@ VALIDATION_RULES: Final = (
     "variants.order",
     "variants.identity",
     "variants.frequency",
+    "alid_index.rows",
+    "alid_index.order",
+    "alid_index.keys",
+    "alid_index.complete",
+    "alid_index.count",
     "near.rows",
     "near.codes",
     "index.rows",

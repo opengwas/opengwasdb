@@ -46,6 +46,7 @@ from ogld.format.geometry import (
 from ogld.format.provenance import FORMAT_VERSION, VALIDATION_RULES
 from ogld.format.semantics import InputError
 from ogld.identity import IdentityError, alid_locus, chromosome_rank, orient
+from ogld.store import layout
 from ogld.store.layout import chromosomes_listed, never_data, shown_fill
 from ogld.store.location import open_group
 
@@ -338,6 +339,13 @@ _VARIANT_DTYPES: Final = {
     "a1_frequency": "float32",
 }
 
+#: The ALID search index's two arrays (spec §1, §6; ADR 0010). The keys are bytes, not the
+#: variable-length strings `variants/alid` holds, so a search compares them as they lie.
+_ALID_INDEX_DTYPES: Final = {
+    "alid": "uint8",
+    "row": "int32",
+}
+
 
 def _shape(store: _Store, path: str, dtype: str, length: int | None) -> _Problems:
     array = store.find(path)
@@ -361,6 +369,7 @@ def _last(store: _Store, path: str) -> int | None:
 def _arrays(store: _Store) -> Iterator[str]:
     """The path of every array spec §1 names, for the store's chromosomes."""
     yield from (f"variants/{name}" for name in _VARIANT_DTYPES)
+    yield from (f"{layout.ALID_INDEX}/{name}" for name in _ALID_INDEX_DTYPES)
     for chrom, _, _ in store.chromosomes():
         yield from (f"near/{chrom}/{name}" for name in ("indptr", "r"))
         for k in _COMPONENTS:
@@ -383,6 +392,12 @@ def _envelope_arrays(store: _Store) -> _Problems:
     size = ranges[-1][2] if ranges else 0
     for name, dtype in _VARIANT_DTYPES.items():
         yield from _shape(store, f"variants/{name}", dtype, size)
+    # The index's keys are 32 bytes an entry, and its entries are as many as its rows array;
+    # `alid_index.count` holds their lengths to the Variant Set's.
+    held = store.find(layout.ALID_INDEX_ROW)
+    keys = held.shape[0] * layout.ALID_INDEX_WIDTH if held is not None else None
+    yield from _shape(store, f"{layout.ALID_INDEX}/alid", _ALID_INDEX_DTYPES["alid"], keys)
+    yield from _shape(store, f"{layout.ALID_INDEX}/row", _ALID_INDEX_DTYPES["row"], None)
     yield from _counted(store, size)
     # The container's dtype: the same for every admitted encoding (spec §1, §3; ADR 0004).
     r_dtype = REncoding.dtype.name
@@ -480,6 +495,7 @@ _SCHEMA: Final = {
     "counts.far_candidates": "int",
     "counts.far_pairs": "int",
     "counts.index_entries": "int",
+    "counts.alids_left_out": "int",
     "software": "object",
     "software.ogld": "str",
     "software.numpy": "str",
@@ -763,6 +779,123 @@ def _variants_frequency(store: _Store) -> _Problems:
         with np.errstate(invalid="ignore"):
             bad = ~(np.isfinite(f) & (f > 0) & (f < 1))
         yield from _flag("variants/a1_frequency", bad, lo, "not finite and in (0, 1)")
+
+
+# ------------------------------------------------------------------ the ALID index
+
+
+def _index_keys(store: _Store) -> npt.NDArray[Any]:
+    """The ALID index's keys, whole, as numpy's fixed-width bytes: 32 bytes a variant, sorted."""
+    width = layout.ALID_INDEX_WIDTH
+    values = store.read(layout.ALID_INDEX_ALID)
+    if values.size % width:
+        raise _Unchecked(
+            layout.ALID_INDEX_ALID,
+            f"holds {values.size:,} bytes, not a whole number of {width}-byte keys "
+            "(alid_index.count)",
+        )
+    return values.reshape(-1, width).view(f"|S{width}").ravel()
+
+
+def _index_rows(store: _Store) -> npt.NDArray[np.int64]:
+    """The Variant Set row each entry of the ALID index names, whole."""
+    return store.read(layout.ALID_INDEX_ROW).astype(np.int64)
+
+
+def _indexed(
+    store: _Store,
+) -> Iterator[tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.bool_]]]:
+    """Each block of the Variant Set's rows that fits the slot: their rows, where each one's key
+    lies in the index, and whether the index holds the key at all.
+
+    The search is the one a reader makes, over the whole sorted key array, so a rule sees where
+    each row's entry is without reading the ALID column a second time for it (spec §12)."""
+    table = _index_keys(store)
+    width = layout.ALID_INDEX_WIDTH
+    size = store.array("variants/position").shape[0]
+    for lo, hi in windows(0, size, _ROWS):
+        keys, at = layout.alid_keys(_strings(store, "alid", lo, hi), first=lo)
+        if not len(table) or not len(keys):
+            yield at, np.zeros(len(at), dtype=np.int64), np.zeros(len(at), dtype=bool)
+            continue
+        wanted = keys.view(f"|S{width}").ravel()
+        found = np.minimum(np.searchsorted(table, wanted), len(table) - 1)
+        yield at, found, table[found] == wanted
+
+
+@_rule("alid_index.rows")
+def _alid_index_rows(store: _Store) -> _Problems:
+    """Each entry names one row of the Variant Set, none of them twice: the index is one entry a
+    variant, not a row's second key (spec §2, §6)."""
+    path = layout.ALID_INDEX_ROW
+    rows = _index_rows(store)
+    size = store.array("variants/position").shape[0]
+    yield from _flag(path, (rows < 0) | (rows >= size), 0, "is not a row of the Variant Set")
+    at = np.argsort(rows, kind="stable")
+    twice = rows[at[1:]][rows[at[1:]] == rows[at[:-1]]]
+    if len(twice):
+        named = ", ".join(str(row) for row in twice[:_NAMED])
+        more = f" and {len(twice) - _NAMED:,} more" if len(twice) > _NAMED else ""
+        yield path, f"names row(s) {named}{more} more than once: one entry a variant (spec §2)"
+
+
+@_rule("alid_index.order")
+def _alid_index_order(store: _Store) -> _Problems:
+    """The keys ascend bytewise: the order every search over them depends on (spec §2; ADR 0010)."""
+    path = layout.ALID_INDEX_ALID
+    width = layout.ALID_INDEX_WIDTH
+    count = int(store.array(layout.ALID_INDEX_ALID).shape[0]) // width
+    carry = np.empty(0, dtype=f"|S{width}")
+    for lo, hi in windows(0, count, _ROWS):
+        keys = store.read(path, lo * width, hi * width).reshape(-1, width)
+        both = np.concatenate([carry, keys.view(f"|S{width}").ravel()])
+        yield from _flag(
+            path, ~(both[1:] > both[:-1]), lo - len(carry) + 1, "out of bytewise order"
+        )
+        carry = both[-1:]
+
+
+@_rule("alid_index.keys")
+def _alid_index_keys(store: _Store) -> _Problems:
+    """Each entry's key is its row's full ALID, NUL padded: nothing was truncated into the slot,
+    so no variant answers to another's name (spec §2; ADR 0010; opengwasdb issue #127)."""
+    path = layout.ALID_INDEX_ALID
+    rows = _index_rows(store)
+    for at, found, hit in _indexed(store):
+        # A key the index does not hold is `alid_index.complete`'s finding; this rule judges the
+        # entry the key names, so a key shared with another variant's row shows here.
+        wrong = hit & (rows[found] != at)
+        yield from _flag(path, wrong, int(at[0]) if len(at) else 0, "is not its row's own ALID")
+
+
+@_rule("alid_index.complete")
+def _alid_index_complete(store: _Store) -> _Problems:
+    """Every ALID of the Variant Set that fits the slot is an entry: the index misses none, so a
+    search that finds nothing means the variant is Absent (spec §2; ADR 0010)."""
+    for at, _, hit in _indexed(store):
+        yield from _flag("variants/alid", ~hit, int(at[0]) if len(at) else 0, "is not indexed")
+
+
+@_rule("alid_index.count")
+def _alid_index_count(store: _Store) -> _Problems:
+    """The keys are 32 bytes an entry, and provenance's left-out count is the rows the index has
+    no entry for (spec §2, §7; ADR 0010)."""
+    width = layout.ALID_INDEX_WIDTH
+    size = store.array("variants/position").shape[0]
+    entries = int(store.array(layout.ALID_INDEX_ROW).shape[0])
+    held = int(store.array(layout.ALID_INDEX_ALID).shape[0])
+    if held != entries * width:
+        yield (
+            layout.ALID_INDEX_ALID,
+            f"holds {held:,} bytes, not {entries:,} keys of {width}: one key an entry (spec §6)",
+        )
+    recorded = store.integer("counts.alids_left_out")
+    if recorded != size - entries:
+        yield (
+            "counts.alids_left_out",
+            f"records {recorded:,} left out, but {size:,} rows have {entries:,} entries: "
+            f"{size - entries:,} are left out (spec §7)",
+        )
 
 
 # ------------------------------------------------------------------ the Near Band

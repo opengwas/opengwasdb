@@ -127,8 +127,9 @@ STRING_COLUMNS = ("variants/alid", "variants/a1", "variants/a2")
 def test_a_warm_proxies_decodes_no_string_column_before_its_rows_are_chosen(
     r2: float, kb: float
 ) -> None:
-    # The reader filters on the positions it keeps; the strings read are the queries' ALIDs,
-    # to find them, and then the kept proxies' ALIDs, to name them (ogld#14).
+    # The reader filters on the positions it keeps. The queries are found in the ALID index,
+    # which reads no string column (ogld#42); the strings read are the kept proxies' ALIDs, to
+    # name them (ogld#14).
     rows = passing_rows()[::25]
     reader, cache = counted(support.TEST_STORE)
     proxies_query.proxies(reader, alids(rows), r2=r2, kb=kb)
@@ -141,7 +142,8 @@ def test_a_warm_proxies_decodes_no_string_column_before_its_rows_are_chosen(
     assert candidates > 20 * len(found), "far more candidates than proxies kept"
     assert len(found) > 0, "and some kept"
     strings = {path: n for path, n in cache.taken.items() if path in STRING_COLUMNS}
-    assert strings == {"variants/alid": at_queries + len(found)}
+    assert strings == {"variants/alid": len(found)}
+    assert at_queries > 0, "the queries' own rows are there to be read, and are not"
 
 
 @pytest.mark.parametrize(("centre", "radius"), [(20_771_005, 1_000_000), (21_021_005, 5_000_000)])

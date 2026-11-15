@@ -488,6 +488,44 @@ def repeat_a_partner(store: Path) -> None:
     write_index22(store, owner, partner, codes)
 
 
+def alid_index_entries(store: Path) -> tuple[np.ndarray, np.ndarray]:
+    """The ALID search index as entries: its keys, a row of bytes each, and each entry's row."""
+    group = zarr.open_group(store / "variants/alid_index", mode="r")
+    keys = np.asarray(group["alid"][:]).reshape(-1, 32)
+    return keys, np.asarray(group["row"][:]).astype(np.int64)
+
+
+def write_alid_index(store: Path, keys: np.ndarray, rows: np.ndarray) -> None:
+    rewrite(store, "variants/alid_index/alid", lambda _: keys.ravel())
+    rewrite(store, "variants/alid_index/row", lambda _: rows.astype(np.int32))
+
+
+def repeat_an_index_row(store: Path) -> None:
+    keys, rows = alid_index_entries(store)
+    rows[1] = rows[0]
+    write_alid_index(store, keys, rows)
+
+
+def swap_two_index_keys(store: Path) -> None:
+    keys, rows = alid_index_entries(store)
+    keys[[5, 6]] = keys[[6, 5]]
+    write_alid_index(store, keys, rows)
+
+
+def swap_two_index_rows(store: Path) -> None:
+    keys, rows = alid_index_entries(store)
+    rows[[7, 8]] = rows[[8, 7]]
+    write_alid_index(store, keys, rows)
+
+
+def unindex_an_alid(store: Path) -> None:
+    """One entry's key replaced by one no ALID has, which still sorts last: the ALID it named is
+    no longer in the index, and the order is untouched."""
+    keys, rows = alid_index_entries(store)
+    keys[-1] = 0xFF
+    write_alid_index(store, keys, rows)
+
+
 def set_element(path: str, at: int, value: float) -> Callable[[Path], None]:
     def breaker(store: Path) -> None:
         def change(data: np.ndarray) -> np.ndarray:
@@ -527,6 +565,16 @@ BREAKERS: dict[str, Callable[[Path], None]] = {
     "variants.identity": reverse_an_alid,
     # sets one a1_frequency to 0
     "variants.frequency": set_element("variants/a1_frequency", 7, 0.0),
+    # names one Variant Set row from two index entries
+    "alid_index.rows": repeat_an_index_row,
+    # swaps two neighbouring index keys, so the keys do not ascend
+    "alid_index.order": swap_two_index_keys,
+    # swaps two index entries' rows, so each is another variant's ALID
+    "alid_index.keys": swap_two_index_rows,
+    # writes into the index a key no ALID has, so one ALID is not in it
+    "alid_index.complete": unindex_an_alid,
+    # records 0 ALIDs left out of the index, where the Test Store leaves out 8
+    "alid_index.count": edit_provenance(lambda p: p["counts"].update(alids_left_out=0)),
     # shortens one Near Band row by one code
     "near.rows": shorten_a_near_row,
     # writes −32768 into near/22/r
