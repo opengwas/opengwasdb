@@ -154,15 +154,25 @@ def peak_lookup(tmp_path: Path, entries: int) -> tuple[int, int]:
     return peak, keys.nbytes
 
 
-def test_a_long_lookup_holds_a_batch_of_chunks_and_not_the_index(tmp_path: Path) -> None:
-    # Four times the keys, the same transient: the index is read a batch of chunks at a time, in
-    # key order, so nothing a lookup holds grows with the store (ogld#42's review measured a whole
-    # read of EUR's keys held twice, 548 MB, at zero cache).
-    short, _ = peak_lookup(tmp_path, 200_000)
-    long, size = peak_lookup(tmp_path, 800_000)
-    assert size > 4 * (4 << 20), "an index four times the batch it is read in"
-    assert long < 16 << 20, f"{long:,} bytes held, for an index of {size:,}"
-    # The index is 19 MB larger; what the lookup holds grew by less than a quarter of that, where
+def test_a_long_lookup_holds_one_shard_of_keys_and_not_the_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Four times the keys, the same transient: the index is read a shard at a time, in key order,
+    # so nothing a lookup holds grows with the store (ogld#42's reviews measured a whole read of
+    # EUR's keys held twice, 548 MB, at zero cache).
+    # A shard a sixteenth of a store's 16 MiB and a chunk a thirty-second of its 262 KiB: an index
+    # this size is many shards, so what the bound is about — a shard, not the table — shows, and
+    # the test stays quick. The batch comes from the array's shapes, so it follows this too.
+    monkeypatch.setattr(layout, "ALID_KEYS", (32_768, 1_048_576))
+    short, _ = peak_lookup(tmp_path, 60_000)
+    long, size = peak_lookup(tmp_path, 240_000)
+    shard = layout.ALID_KEYS[1]
+    assert size > 6 * shard, "an index of many shards"
+    # One shard of keys, decoded once and joined (twice), plus 4 MiB of slack for the queries, the
+    # found rows and the allocator: a whole-index read held twice that at twice the size.
+    bound = 2 * shard + (4 << 20)
+    assert long < bound, f"{long:,} bytes held, for an index of {size:,} in shard {shard:,}"
+    # The index is 5.8 MB larger; what the lookup holds grew by less than a quarter of that, where
     # holding the table itself would have grown by all of it, twice.
     assert long - short < size // 4, (short, long)
 

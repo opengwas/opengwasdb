@@ -69,12 +69,6 @@ _SPARSE_ARRAYS: Final = ("indptr", "partner", "r")
 _VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
 #: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
 _PAIRS_PER_STEP: Final = 1 << 22
-#: ALID index inner chunks one read of the search takes: 16 chunks are 4 MiB at a store's 262 KiB
-#: chunks, so a lookup's transient is bounded by that and not by the store — EUR's 8.55 M keys are
-#: 66 reads, not 1,044 (3.0 s) or one whole read of 273 MB twice. Measured: one chunk a read took
-#: 4.4 s for a 260,821-key list, 16 chunks 1.0 s, 64 (a whole shard) 0.79 s, and the whole index
-#: read at once 0.70 s with 273 MB held.
-_INDEX_BATCH: Final = 16
 #: How long a list of ALIDs makes the index worth reading: a `_INDEX_SHARE`th of the Variant Set's
 #: entries or more (ogld#42). The whole index costs about what the exact scan's ALID string chunks
 #: do at about 4,000 of EUR's 8.59 M ALIDs, and below that a list's loci touch fewer chunks than the
@@ -307,11 +301,11 @@ class StoreReader:
     def _searched(self, keys: npt.NDArray[np.uint8]) -> npt.NDArray[np.int64]:
         """Where each key's entry lies in the ALID index, or −1 where the index holds none.
 
-        The index is read a few inner chunks at a time (`_INDEX_BATCH`), in key order, and each
-        read's keys are searched for the queries that fall within them. So the table is never held
-        whole beside the chunk cache: a lookup's transient is a few chunks and the queries' own
-        keys, where reading the array in one run holds all 273 MB of EUR's keys twice (spec §10;
-        ogld#42's review).
+        The index is read one shard at a time — the unit the store itself reads and fetches — in key
+        order, and each read's keys are searched for the queries that fall within them. So the table
+        is never held whole beside the chunk cache: a lookup's transient is one shard of keys and
+        the queries' own keys, where reading the array in one run holds all 273 MB of EUR's keys
+        twice; a shard is 16 MiB on EUR (spec §10; ogld#42's reviews).
         """
         index = self._index()
         count = int(index.row.shape[0])
@@ -319,7 +313,10 @@ class StoreReader:
         if not count or not len(keys):
             return found
         width = layout.ALID_INDEX_WIDTH
-        per = max(1, int(index.alid.chunks[0]) // width) * _INDEX_BATCH
+        # One shard's keys, from the array's own shapes: a store written with other ones is read
+        # one of its shards at a time too. An array with no shards reads one inner chunk.
+        shard = int((index.alid.shards or index.alid.chunks)[0])
+        per = max(1, shard // width)
         order = np.argsort(keys.view(f"|S{width}").ravel(), kind="stable")
         wanted = keys[order].view(f"|S{width}").ravel()
         for first in range(0, count, per):
@@ -334,8 +331,8 @@ class StoreReader:
         return found
 
     def _chunk(self, index: _AlidIndex, first: int, stop: int) -> npt.NDArray[Any]:
-        """The keys of the index's entries [first, stop) — one read, a batch of `_INDEX_BATCH`
-        chunks at most — refused if one of them is lost."""
+        """The keys of the index's entries [first, stop) — one read, one shard at most — refused if
+        one of its chunks is lost."""
         width = layout.ALID_INDEX_WIDTH
         length = np.array([(stop - first) * width])
         run = self._runs(index.alid, np.array([first * width]), length)[0]

@@ -63,9 +63,9 @@ supplies or orders one and a store written before the index gets the same one (A
 
 - An ALID shorter than the slot is looked for in the index — but only in a list long enough to
   pay for it: a list naming about a two-thousandth of the Variant Set's rows or more
-  (`_INDEX_SHARE`, 4,000 of EUR's 8.59 M ALIDs). Such a list searches the index with numpy's own binary search, read a
-  batch of 16 inner chunks (4 MiB) at a time in key order, so nothing a lookup holds grows with
-  the store. A short list takes the exact scan instead, because a search's
+  (`_INDEX_SHARE`, 4,000 of EUR's 8.59 M ALIDs). Such a list searches the index with numpy's own binary search, read one
+  shard at a time in key order — the unit the store itself reads, from the array's own shapes, 16 MiB
+  of keys on EUR — so nothing a lookup holds grows with the store. A short list takes the exact scan instead, because a search's
   chunks cost more than the string chunks a few loci touch: measured, one ALID's scan is 0.07 s
   against the index's 0.9 s, and 500 of them 0.11 against 0.33, while at 4,000 the index wins and
   keeps winning (`docs/benchmarks/alid-index.md`). A binary search reading only the chunks one
