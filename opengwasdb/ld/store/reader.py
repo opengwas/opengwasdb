@@ -108,8 +108,8 @@ class _Chromosome:
 
 @dataclass(frozen=True)
 class _AlidIndex:
-    """The ALID search index (spec §2; ADR 0010): one NUL-padded 32-byte key an entry, sorted,
-    and the Variant Set row each entry names. Strings, so a search compares bytes."""
+    """The ALID search index (spec §2; ADR 0010): one NUL-padded 32-byte key an entry, sorted, and
+    the Variant Set row each entry names. Keys are bytes, so a search compares bytes."""
 
     alid: zarr.Array[Any]
     row: zarr.Array[Any]
@@ -264,7 +264,9 @@ class StoreReader:
         """Whether `count` ALIDs are worth the whole index: a list that names a `_INDEX_SHARE`th of
         the Variant Set or more (spec §10; `docs/benchmarks/alid-index.md`)."""
         counts = self._provenance["counts"]
-        entries = int(self._provenance["n_variants"]) - int(counts["alids_left_out"])
+        # A store written before the index records no count; it has no index to read either, so
+        # the search refuses it by name rather than here.
+        entries = int(self._provenance["n_variants"]) - int(counts.get("alids_left_out", 0))
         return count >= max(1, entries // _INDEX_SHARE)
 
     def _scanned(self, alids: Sequence[str], which: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
