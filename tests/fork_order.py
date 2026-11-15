@@ -18,6 +18,8 @@ from __future__ import annotations
 import multiprocessing
 import os
 import time
+from collections.abc import Callable
+from typing import Any
 
 
 class CompletionOrder:
@@ -61,3 +63,36 @@ class CompletionOrder:
     def order(self) -> list[int]:
         """The finishing indices, first to last."""
         return list(self._order)
+
+
+class CrashAfterTwo:
+    """Fail a selected unit only once two other workers have completed theirs."""
+
+    def __init__(self, message: str) -> None:
+        context = multiprocessing.get_context("fork")
+        self.finished = context.Value("i", 0)
+        self.pid = context.Value("i", 0)
+        self.message = message
+
+    def reset(self) -> None:
+        self.finished.value = self.pid.value = 0
+
+    def run(
+        self, worker: Callable[..., Any], plan: Any, unit: Any, *, crash: bool,
+    ) -> Any:
+        if crash:
+            deadline = time.monotonic() + CompletionOrder.WAIT_SECONDS
+            while self.finished.value < 2:
+                if time.monotonic() > deadline:
+                    raise AssertionError("no two units completed beside the failing one")
+                os.sched_yield()
+            self.pid.value = os.getpid()
+            raise RuntimeError(self.message)
+        result = worker(plan, unit)
+        with self.finished.get_lock():
+            self.finished.value += 1
+        return result
+
+    def assert_worker_crashed(self) -> None:
+        assert self.finished.value >= 2
+        assert self.pid.value not in (0, os.getpid()), "the failing unit ran in the parent"

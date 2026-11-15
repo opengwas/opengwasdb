@@ -17,9 +17,6 @@ before relying on it. "Identical" is `completion_releases.assert_same_release`'s
 
 from __future__ import annotations
 
-import multiprocessing
-import os
-import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -28,7 +25,7 @@ import numpy as np
 import pytest
 import zarr
 from completion_releases import CompletionInputs, assert_same_release
-from fork_order import CompletionOrder
+from fork_order import CompletionOrder, CrashAfterTwo
 from pool_budget import pin_pool_units
 from test_ragged_residual_completion import (
     _FREQS,
@@ -181,26 +178,12 @@ def test_a_release_completed_on_three_workers_is_the_one_completed_on_one(
 
 # ── an interrupted write ───────────────────────────────────────────────────
 
-_FORK = multiprocessing.get_context("fork")
-_ASSEMBLED = _FORK.Value("i", 0)
-_CRASHED_IN_PID = _FORK.Value("i", 0)
-_CRASHING_ANALYSIS = 2
+_ASSEMBLY_CRASH = CrashAfterTwo("simulated crash in the assembly")
 
 
 def _analysis_crashing_after_two_others(assembly: Any, item: tuple[int, Any]) -> Any:
-    if item[0] == _CRASHING_ANALYSIS:
-        deadline = time.monotonic() + CompletionOrder.WAIT_SECONDS
-        while _ASSEMBLED.value < 2:
-            if time.monotonic() > deadline:
-                raise AssertionError("no two Analyses were assembled beside the failing one")
-            os.sched_yield()
-        _CRASHED_IN_PID.value = os.getpid()
-        raise RuntimeError("simulated crash in the assembly")
     assert _REAL_COMPLETE is not None
-    completed = _REAL_COMPLETE(assembly, item)
-    with _ASSEMBLED.get_lock():
-        _ASSEMBLED.value += 1
-    return completed
+    return _ASSEMBLY_CRASH.run(_REAL_COMPLETE, assembly, item, crash=item[0] == 2)
 
 
 def test_a_write_interrupted_after_some_analyses_resumes_to_the_same_release(
@@ -210,8 +193,7 @@ def test_a_write_interrupted_after_some_analyses_resumes_to_the_same_release(
     goes, every LD block's checkpoint stays, and the resumed completion, which
     assembles and writes every Analysis again, is the release one worker writes."""
     dst = tmp_path / "resumed.opengwasdb"
-    _ASSEMBLED.value = 0
-    _CRASHED_IN_PID.value = 0
+    _ASSEMBLY_CRASH.reset()
     with monkeypatch.context() as crash:
         crash.setattr(
             complete_module, "_complete_analysis", _analysis_crashing_after_two_others,
@@ -220,8 +202,7 @@ def test_a_write_interrupted_after_some_analyses_resumes_to_the_same_release(
         with pytest.raises(RuntimeError, match="simulated crash in the assembly"):
             completion.complete(dst, n_workers=N_WORKERS)
 
-    assert _ASSEMBLED.value >= 2
-    assert _CRASHED_IN_PID.value not in (0, os.getpid()), "the Analysis ran in the parent"
+    _ASSEMBLY_CRASH.assert_worker_crashed()
     _assert_resumes_to(dst, completion.serial)
 
 
@@ -383,26 +364,15 @@ def test_a_flush_of_regions_refuses_a_residual_plan_with_no_model(tmp_path: Path
         writer.flush_regions(tmp_path / "refused.opengwasdb", plan, n_workers=2)
 
 
-_REGIONS_WRITTEN = _FORK.Value("i", 0)
-_CRASHED_REGION_PID = _FORK.Value("i", 0)
-_CRASHING_REGION = 2
+_REGION_CRASH = CrashAfterTwo("simulated crash in the CSR write")
 
 
 def _region_crashing_after_two_others(plan: Any, region: tuple[int, int]) -> Any:
     """The region writer, failing on one region once two others are in the planes."""
-    if region[0] // SHARD_CELLS == _CRASHING_REGION:
-        deadline = time.monotonic() + CompletionOrder.WAIT_SECONDS
-        while _REGIONS_WRITTEN.value < 2:
-            if time.monotonic() > deadline:
-                raise AssertionError("no two regions were written beside the failing one")
-            os.sched_yield()
-        _CRASHED_REGION_PID.value = os.getpid()
-        raise RuntimeError("simulated crash in the CSR write")
     assert _REAL_WRITE_REGION is not None
-    outcome = _REAL_WRITE_REGION(plan, region)
-    with _REGIONS_WRITTEN.get_lock():
-        _REGIONS_WRITTEN.value += 1
-    return outcome
+    return _REGION_CRASH.run(
+        _REAL_WRITE_REGION, plan, region, crash=region[0] // SHARD_CELLS == 2,
+    )
 
 
 def test_a_sequence_write_interrupted_after_some_regions_resumes_to_the_same_release(
@@ -416,13 +386,11 @@ def test_a_sequence_write_interrupted_after_some_regions_resumes_to_the_same_rel
     is the release one worker writes."""
     _narrow_shards(monkeypatch)
     dst = tmp_path / "resumed.opengwasdb"
-    _REGIONS_WRITTEN.value = 0
-    _CRASHED_REGION_PID.value = 0
+    _REGION_CRASH.reset()
     with monkeypatch.context() as crash:
         crash.setattr(zarr_csr, "_write_region", _region_crashing_after_two_others)
         with pytest.raises(RuntimeError, match="simulated crash in the CSR write"):
             completion.complete(dst, n_workers=N_WORKERS)
 
-    assert _REGIONS_WRITTEN.value >= 2
-    assert _CRASHED_REGION_PID.value not in (0, os.getpid()), "the region ran in the parent"
+    _REGION_CRASH.assert_worker_crashed()
     _assert_resumes_to(dst, narrow_serial)
