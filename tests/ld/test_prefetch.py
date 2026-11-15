@@ -16,7 +16,7 @@ from store_copies import TEST_STORE, resharded
 from zarr.storage import LocalStore
 
 import ogld
-from ogld.store import location
+from ogld.store import decoding, location
 
 
 def test_prefetch_fits_or_declines_without_reading(tmp_path: Path) -> None:
@@ -42,13 +42,13 @@ def test_unknown_frame_size_uses_the_validating_decode() -> None:
     assert encoded[4] == 0x20, "one-byte content size in a single-segment frame"
     # Replace the one-byte size with a window descriptor, making a valid unknown-size frame.
     frame = memoryview(encoded[:4] + b"\x00\x58" + encoded[6:])
-    assert location._frame_size(frame) is None
-    decoder = location._NumericDecoder(8, 1, source.dtype, np.dtype("<u8"))
+    assert decoding._frame_size(frame) is None
+    decoder = decoding.NumericDecoder(8, 1, source.dtype, np.dtype("<u8"))
     np.testing.assert_array_equal(decoder._frame(codec, frame), source)
     with pytest.raises(ValueError, match="expected"):
-        location._NumericDecoder(9, 1, source.dtype, np.dtype("<u8"))._frame(codec, frame)
+        decoding.NumericDecoder(9, 1, source.dtype, np.dtype("<u8"))._frame(codec, frame)
     larger = codec.encode(np.arange(100, dtype=np.int32))
-    assert location._frame_size(memoryview(larger)) == 400, "two-byte size includes +256"
+    assert decoding._frame_size(memoryview(larger)) == 400, "two-byte size includes +256"
 
 
 def test_unknown_size_native_frames_do_not_double_the_flight_buffer() -> None:
@@ -59,8 +59,8 @@ def test_unknown_size_native_frames_do_not_double_the_flight_buffer() -> None:
     encoded = codec.encode(source)
     assert encoded[4] & 0xE0 == 0xA0, "single segment with four-byte content size"
     frame = memoryview(encoded[:4] + bytes([encoded[4] & 0x1F, 0x58]) + encoded[9:])
-    assert location._frame_size(frame) is None
-    decoder = location._NumericDecoder(len(source), 1, source.dtype, np.dtype("<u8"))
+    assert decoding._frame_size(frame) is None
+    decoder = decoding.NumericDecoder(len(source), 1, source.dtype, np.dtype("<u8"))
     tracemalloc.start()
     try:
         got = decoder._frame(codec, frame)
@@ -142,11 +142,11 @@ def test_completed_worker_does_not_retain_released_buffers(monkeypatch: pytest.M
         references.append(weakref.ref(data))
         return lambda: data.nbytes
 
-    monkeypatch.setattr(location, "_DECODE_POOL", Executor())
-    asyncio.run(location._on_pool(job()))
+    monkeypatch.setattr(decoding, "_DECODE_POOL", Executor())
+    asyncio.run(decoding.on_pool(job()))
     assert len(retained) == 1, "the executor deliberately keeps its completed work item"
     assert references[0]() is None, "completed jobs must not retain released byte credits"
-    value = asyncio.run(location._on_pool(lambda: np.zeros(1024)))
+    value = asyncio.run(decoding.on_pool(lambda: np.zeros(1024)))
     reference = weakref.ref(value)
     del value
     assert len(futures) == 2, "completed Futures are deliberately kept too"

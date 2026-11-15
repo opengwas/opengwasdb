@@ -17,7 +17,8 @@ owns chunk planning, the cache budget, concurrent runs and kept shard indexes.
 
 ## Decision
 
-`ogld/store/location.py` recognises a one-dimensional numeric array only when its declared
+`ogld/store/location.py` calls the numeric backend in `ogld/store/decoding.py`, which
+recognises a one-dimensional numeric array only when its declared
 codec chain is exactly sharding_indexed, with bytes then zstd internally and bytes then
 CRC32C in an end-located index. Both bytes codecs' declared endianness is honoured. Other
 chains, strings included, still use zarr. Shapes and keys come from the opened array's
@@ -121,3 +122,28 @@ The cache budget is not an RSS limit. A read also holds requested chunks, its re
 batch of decoded buffers (and cache copies for fallback runs), compressed ranges, codec
 workspace, and small index/job bookkeeping. Concurrent reads each have their own batch. Compressed bytes are not counted
 as decoded bytes; a codec's encoded size is not in general bounded by its decoded size.
+
+## Review fixes and acceptance ruling, 14 November 2026
+
+The owner accepts #40 with both performance targets **recorded as unmet**: cold
+GCST90476460 improved from 141 to 38 s, independently 116.6 to 25.2 s in review, and the
+37 Analyses from 489 to 272 s. The measured-work bounds, approximately 14.5 s and 155.1 s
+against targets of ≤10 s and ≤90 s, constrain this implementation and workload, not the
+format. Lookup and speculative warming can change. Further speed work belongs to #42's
+ALID search index and #41's symmetric Near Band prototype, under the owner's #40 review-fix
+ruling of 14 November 2026; acceptance does not redefine those targets as met.
+
+The accepted review extraction puts codec recognition, shard-index size and parsing, zstd
+frame validation, owned chunk construction and executor lifecycle in `decoding.py`.
+`location.py` remains the read interface and owns cache accounting, transport wrapping,
+shared index I/O, prefetch planning and encoded credits. Its prefetch requests validated
+physical ranges and decode/ownership operations from the backend; it no longer knows the
+index's byte layout or frame headers. The backend imports no location policy. Reject
+compatibility aliases for the old private decoder/pool names: they would obscure the one
+owner, and no public signature changes. Existing equality, corruption, ownership and
+cancellation tests exercise the extracted backend and location's unchanged interface.
+
+The compressed-credit regression also drives real sparse ranges from three actual Zarr
+shards through the wrapped store and zstd. Weak references count the compressed numpy
+buffers held during decoding and verify their release before returning credits. Removing
+admission control fails that test, unlike merely asserting synthetic credit counters.

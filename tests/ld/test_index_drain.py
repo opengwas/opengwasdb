@@ -14,7 +14,7 @@ from zarr.abc.store import SuffixByteRequest
 from zarr.core.buffer import default_buffer_prototype
 from zarr.storage import LocalStore
 
-from ogld.store import location
+from ogld.store import decoding, location
 
 
 async def reached(event: threading.Event) -> None:
@@ -30,7 +30,7 @@ def test_prefetch_drains_shared_index_io(
     root = resharded(tmp_path / "store", 512, 4)
     array = location.open_group(root, cache=location.ChunkCache())["near/22/r"]
     assert isinstance(array, zarr.Array)
-    decoder = location._NumericDecoder.of(array)
+    decoder = decoding.NumericDecoder.of(array)
     assert decoder is not None
     started, failed, release = threading.Event(), threading.Event(), threading.Event()
     getter = LocalStore.get_sync

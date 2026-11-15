@@ -886,8 +886,9 @@ directly, in bounded windows: one pass over each chromosome, and a second read o
 
 **Direct numeric decoding** (ogld#40; ADR 0009). For a one-dimensional numeric array whose
 metadata declares exactly sharding_indexed with bytes then zstd internally and bytes then
-CRC32C in an end-located shard index, `location.py` reads indexes and byte ranges through the
-store's async interface and decodes on one process-shared seven-worker pool. Both declared
+CRC32C in an end-located shard index, `location.py` reads through the store's async interface
+using its `decoding.py` backend. That backend owns shard/frame parsing and one process-shared
+seven-worker I/O/decode pool. Both declared
 byte orders are honoured. The index's uint64 offset/length pairs are absolute; both all ones
 means an empty chunk, which reads the declared fill value, just like a missing shard. CRC32C
 mismatches, malformed zstd frames and decoded-length mismatches raise. No private zarr codec/index API is called. Every other chain,
@@ -899,7 +900,8 @@ one chunk for trimming a padded tail, or half the allowance for non-native byte-
 conversion scratch. Each frame's full decoded length is checked before adoption. At least
 one chunk can be read even when its buffers exceed the allowance. No second decoded batch
 is queued. Each range submits at most seven decode jobs. A failed piece cancels sibling
-fetches and drains running decode jobs before returning.
+fetches and drains running decode jobs before returning. A cancelled shard-index waiter also
+drains the shielded shared index fetch without cancelling another reader's request.
 Compressed ranges, codec workspace and small index/job bookkeeping are additional to the
 decoded-byte bound;
 the cache budget does not bound RSS. The pool is reset after fork and shared across readers,

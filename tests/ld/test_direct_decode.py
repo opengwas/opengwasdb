@@ -17,7 +17,7 @@ from zarr.abc.store import RangeByteRequest, SuffixByteRequest
 from zarr.codecs import BytesCodec, Crc32cCodec, GzipCodec, ShardingCodec, ZstdCodec
 from zarr.core.metadata.v3 import RectilinearChunkGridMetadata
 
-from ogld.store import location
+from ogld.store import decoding, location
 
 
 @pytest.mark.parametrize("endian", ["little", "big"])
@@ -35,7 +35,7 @@ def test_numeric_chunks_equal_zarr(tmp_path: Path, endian: str) -> None:
         fill_value=-1,
     )
     array[:] = data
-    assert location._NumericDecoder.of(array) is not None
+    assert decoding.NumericDecoder.of(array) is not None
     cache = location.ChunkCache()
     np.testing.assert_array_equal(cache.take(array, np.arange(len(data))), array[:])
 
@@ -56,13 +56,13 @@ def test_big_endian_shard_index_equals_zarr(tmp_path: Path) -> None:
         fill_value=-1,
     )
     array[:] = np.arange(19) * 257
-    assert location._NumericDecoder.of(array) is not None
+    assert decoding.NumericDecoder.of(array) is not None
     np.testing.assert_array_equal(location.ChunkCache().take(array, np.arange(19)), array[:])
 
 
 def test_non_regular_or_multidimensional_arrays_are_not_recognised(tmp_path: Path) -> None:
     matrix = zarr.create_array(store=tmp_path / "matrix", shape=(8, 8), dtype="int32")
-    assert location._NumericDecoder.of(matrix) is None
+    assert decoding.NumericDecoder.of(matrix) is None
     array = numbers(tmp_path)
     meta = replace(
         array.metadata,
@@ -70,7 +70,7 @@ def test_non_regular_or_multidimensional_arrays_are_not_recognised(tmp_path: Pat
         chunk_grid=RectilinearChunkGridMetadata(chunk_shapes=((16, 16),)),
     )
     rectilinear = zarr.Array(zarr.AsyncArray(meta, array.store_path))
-    assert location._NumericDecoder.of(rectilinear) is None
+    assert decoding.NumericDecoder.of(rectilinear) is None
 
 
 def test_synchronous_index_reads_keep_the_same_budget(tmp_path: Path) -> None:
@@ -137,17 +137,17 @@ def test_decoded_chunks_transfer_their_memory_to_the_cache(
 
 def test_cancelled_decode_drains_its_workers(monkeypatch: pytest.MonkeyPatch) -> None:
     started, release, finished = threading.Event(), threading.Event(), threading.Event()
-    decoder = location._NumericDecoder(1, 1, np.dtype("i4"), np.dtype("<u8"))
+    decoder = decoding.NumericDecoder(1, 1, np.dtype("i4"), np.dtype("<u8"))
 
     def held(*args: Any) -> None:
         started.set()
         assert release.wait(2), "the test must release its own worker"
         finished.set()
 
-    monkeypatch.setattr(location._NumericDecoder, "_into", held)
+    monkeypatch.setattr(decoding.NumericDecoder, "_into", held)
 
     async def run() -> None:
-        task = asyncio.create_task(decoder._decode(b"x", 0, [(0, 0, 1)], [None]))
+        task = asyncio.create_task(decoder.decode(b"x", 0, [(0, 0, 1)], [None]))
         while not started.is_set():
             await asyncio.sleep(0.001)
         task.cancel()
@@ -170,7 +170,7 @@ def test_every_test_store_array_equals_zarr() -> None:
     ]
     assert len(arrays) > 20
     for _, array in arrays:
-        decoded = location._NumericDecoder.of(array)
+        decoded = decoding.NumericDecoder.of(array)
         assert (decoded is None) == (array.dtype.kind == "T"), array.path
         coords = np.arange(array.shape[0])
         np.testing.assert_array_equal(location.ChunkCache().take(array, coords), array[:])
@@ -194,7 +194,7 @@ def test_unknown_chains_fall_back_to_zarr(tmp_path: Path, chain: str) -> None:
         fill_value=-1,
     )
     array[:] = np.arange(23) * 17
-    assert location._NumericDecoder.of(array) is None
+    assert decoding.NumericDecoder.of(array) is None
     np.testing.assert_array_equal(location.ChunkCache().take(array, np.arange(23)), array[:])
 
 

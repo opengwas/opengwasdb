@@ -38,7 +38,7 @@ import ogld
 from ogld.format import InputError, Refusal, RefusalReason, judge_request
 from ogld.query import clumping
 from ogld.query import proxies as proxies_query
-from ogld.store import StoreReader, location, reader
+from ogld.store import StoreReader, decoding, location, reader
 from ogld.store.validation import validate_group
 
 #: Inner chunks of 512 elements, 4 to a shard: chr22's Near Band is 136 chunks in 34 shards.
@@ -708,7 +708,7 @@ class Held:
         return sum(
             location._counted(p)
             for p in (ref() for ref in self.alive)
-            if p is not None and not isinstance(p, location._DecodedChunk)
+            if p is not None and not isinstance(p, decoding.DecodedChunk)
         )
 
 
