@@ -29,7 +29,9 @@ path, and the strings were the cost.
 
 **The store carries the engine's index, beside the string column.** `variants/alid_index/alid`
 holds one 32-byte key an entry — an ALID's UTF-8 bytes, NUL right-padded — sorted bytewise, and
-`variants/alid_index/row` the Variant Set row of each entry. `ogld.store.layout` owns the width,
+`variants/alid_index/row` the Variant Set row of each entry, in 262 KiB inner chunks and 16 MiB
+shards: 8.55 M keys are 273 MB decoded, which is 16,693 chunk decodes in 16 KiB chunks (4.6 s for
+a whole read) and 1,044 in these (0.2–0.7 s). `ogld.store.layout` owns the width,
 the padding and the order: `alid_keys`, `ordered_index` and `alid_index`. The entries are the
 ALIDs whose UTF-8 form is at most 32 bytes, which is the engine's rule and its width
 (`is_indexable_alid`), and its ordering: `np.array(..., dtype="|S32")` with a stable argsort,
@@ -100,6 +102,14 @@ Pairs the same way. §13 now lists the owner's 15 November 2026 decision among t
   one search's path are about 0.4 MB.
 - **Rebuild the five stores** rather than derive the index into them. Rejected as in ADR 0007:
   deriving adds files and changes no other byte.
+
+## What it did
+
+On #403's 37 Analyses at r² 0.01, cold, 8 threads, `rows_of` fell from 94.0 s to 50.4 s and the
+37 clumps from 272.5 s to 229.4 s, with 23,445 leads and all 37 result fingerprints unchanged.
+#8's step-1 reads are unchanged: every list they time is short enough to take the exact scan, and
+they read the same chunks and make the same requests as before. `docs/benchmarks/alid-index.md` has
+the phase table, the chunk-size measurements and the list-length crossover.
 
 ## The stores
 
