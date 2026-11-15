@@ -59,10 +59,15 @@ order. The shard index's `bytes` codec declares `little` as before.
 index from the store's own ALID column (`ogld.store.assembly.derive_alid_index`), so no producer
 supplies or orders one and a store written before the index gets the same one (ADR 0005).
 
-- An ALID shorter than the slot is looked for in the index. Up to `_INDEX_PROBES` of them are
-  found by one binary search a key, reading only the chunks on each key's path; a larger list
-  reads the whole index once and searches it with numpy's own. `docs/benchmarks/alid-index.md`
-  measured both.
+- An ALID shorter than the slot is looked for in the index — but only in a list long enough to
+  pay for it: a list naming about a two-thousandth of the Variant Set's rows or more
+  (`_INDEX_SHARE`, 4,000 of EUR's 8.59 M ALIDs). Such a list reads the whole index once and
+  searches it with numpy's own. A short list takes the exact scan instead, because a search's
+  chunks cost more than the string chunks a few loci touch: measured, one ALID's scan is 0.07 s
+  against the index's 0.9 s, and 500 of them 0.11 against 0.33, while at 4,000 the index wins and
+  keeps winning (`docs/benchmarks/alid-index.md`). A binary search reading only the chunks one
+  key's path touches was measured too, and rejected: with chunks big enough to read the whole index
+  in a second, a few hundred keys touch nearly all of them.
 - An ALID at the slot's width, or wider, never asks the index. Only a key at the slot's width can
   be what a truncating build corrupted, and NUL padding keeps every shorter key its own, so the
   slot-width query is the one case where a broken index could answer another variant's name. It

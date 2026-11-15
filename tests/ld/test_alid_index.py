@@ -320,9 +320,17 @@ def test_the_derivation_writes_the_group_whole_or_leaves_nothing(tmp_path: Path)
     script = load_script("derive_alid_index")
     store = written(tmp_path / "store")
     shutil.rmtree(store / layout.ALID_INDEX)
+    # A store written before ADR 0010 records no count of what its index leaves out; the
+    # derivation adds it (spec §7).
+    meta = store / "zarr.json"
+    document = json.loads(meta.read_text())
+    del document["attributes"]["ld_store"]["counts"]["alids_left_out"]
+    meta.write_text(json.dumps(document))
     assert script.derive(store) == 3
     assert (store / layout.ALID_INDEX / "row").exists()
     assert not (store / "variants" / "alid_index-partial").exists()
+    assert StoreReader.open(store).provenance["counts"]["alids_left_out"] == 1
+    assert StoreReader.open(store).rows_of(["22:200:A:C"]).tolist() == [2]
 
 
 def test_the_derivation_leaves_the_store_as_it_was_when_the_count_differs(

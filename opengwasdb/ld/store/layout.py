@@ -32,10 +32,17 @@ ALID_INDEX_WIDTH: Final = 32
 ALID_INDEX: Final = "variants/alid_index"
 ALID_INDEX_ALID: Final = f"{ALID_INDEX}/alid"
 ALID_INDEX_ROW: Final = f"{ALID_INDEX}/row"
-#: The keys' fill value. No ALID is empty, so a whole key of NUL bytes is one no store holds: a
-#: lost chunk reads as those, and every padding byte is NUL too, so a key is judged whole rather
-#: than byte by byte (`refused_if_lost`).
+#: Their (inner chunk, shard) in elements, as `SIDE` is. A key is 32 bytes, so an inner chunk of
+#: 262,144 bytes holds 8,192 keys and a 16 MiB shard 131,072: the whole index is 275 MB on EUR, and
+#: one search reads the chunks on its path. `docs/benchmarks/alid-index.md` measured this against
+#: `SIDE`'s 16 KiB chunks, whose 16,693 of them made a whole read 4.6 s against 0.2 s.
+ALID_KEYS: Final = (262_144, 16_777_216)
+ALID_ROWS: Final = (262_144, 1_048_576)
+#: The keys' fill value: no ALID is empty, so a whole key of NUL bytes is one no store holds. It is
+#: 0 because every padding byte is NUL too, so a key is judged whole rather than byte by byte
+#: (`refused_if_lost`), and a lost chunk reads as keys of no bytes.
 ALID_KEY_FILL: Final = 0
+#: The rows': a row is never negative.
 ALID_ROW_FILL: Final = -1
 
 #: Each array's fill value: one a valid LD Store never holds (spec §6). The `r` arrays' is
@@ -158,8 +165,8 @@ def put_alid_index(
 ) -> None:
     """Write the index's two arrays into the group `index`: the keys' bytes, and each entry's
     Variant Set row (spec §6)."""
-    put_numbers(index, "alid", keys.reshape(-1), ALID_KEY_FILL)
-    put_numbers(index, "row", rows.astype(np.int32), ALID_ROW_FILL)
+    put_numbers(index, "alid", keys.reshape(-1), ALID_KEY_FILL, ALID_KEYS)
+    put_numbers(index, "row", rows.astype(np.int32), ALID_ROW_FILL, ALID_ROWS)
 
 
 #: The keys of one record of `variants.attrs["chromosomes"]` (spec §2).

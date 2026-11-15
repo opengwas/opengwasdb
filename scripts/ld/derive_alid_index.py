@@ -9,25 +9,27 @@ column, padded and sorted (`ogld.store.assembly.derive_alid_index`, the function
 `StoreWriter.finish` calls), so it is derived rather than rebuilt. On HGDP+1kGP EUR chr22 the
 derived index was byte-identical, file for file, to a rebuild's (ogld#42).
 
-Nothing else in a store is written: no array, and not the provenance, which counts the ALIDs the
-index leaves out already (`counts.alids_left_out`). The arrays are written under `PARTIAL` and the
-group is renamed to `alid_index` only when every entry is written and the count matches the
-provenance. So a run that fails, or finds another count, leaves the store as it was, with nothing
-to clean up, and a `PARTIAL` a killed run left is this script's own and is replaced. A store that
-holds `alid_index` is refused. Validate each store afterwards: `ogld validate`, or
-`pixi run -e dev acceptance-stores` for the five. The store's other files are only read, so a
-reader may read it while this runs: a reader ignores a group it does not know (spec §1), and
-`alid_index` appears whole.
+The arrays are written under `PARTIAL`, the provenance is rewritten with the count the index
+records (spec §7), and the group is renamed to `alid_index` only when every entry is written and
+the count matches. The provenance is a new file renamed over the old one, and the group is renamed
+into place, so a reader sees a store with the count and no index only for an instant in which no
+reader opens it: a store is read once, and this is run when none is. So a run that fails leaves
+the store as it was, with nothing to clean up, and a `PARTIAL` a killed run left is this script's
+own and is replaced. A store that holds `alid_index` is refused. Validate each store afterwards:
+`ogld validate`, or `pixi run -e dev acceptance-stores` for the five. No other array is written.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import zarr
 
@@ -49,10 +51,10 @@ def derive(store: Path) -> int:
     if partial.exists():  # a killed run's: complete runs and failures alike leave none
         shutil.rmtree(partial)
     reader = StoreReader.open(store)
-    recorded = reader.provenance["counts"]["alids_left_out"]
+    recorded = reader.provenance["counts"].get("alids_left_out")
     try:
         left_out, entries = _write(store)
-        if left_out != recorded:
+        if recorded not in (None, left_out):
             raise SystemExit(
                 f"{store}: its table has {left_out:,} ALID(s) wider than the index's slot, but "
                 f"its provenance records {recorded:,}; the index is not written"
@@ -60,8 +62,20 @@ def derive(store: Path) -> int:
     except BaseException:
         shutil.rmtree(partial, ignore_errors=True)
         raise
+    _record(store, recorded if recorded is not None else left_out)
     partial.rename(store / "variants" / "alid_index")
     return entries
+
+
+def _record(store: Path, left_out: int) -> None:
+    """Rewrite the store's provenance with `counts.alids_left_out` (spec §7), the one key this
+    derivation adds. A new document renamed over the old one, so no reader sees a half one."""
+    meta = store / "zarr.json"
+    document: dict[str, Any] = json.loads(meta.read_text())
+    document["attributes"]["ld_store"]["counts"]["alids_left_out"] = left_out
+    written = meta.with_suffix(".json.partial")
+    written.write_text(json.dumps(document))
+    os.replace(written, meta)
 
 
 def _write(store: Path) -> tuple[int, int]:

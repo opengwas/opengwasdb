@@ -344,8 +344,8 @@ spec §10a. An inner chunk longer than its array is clipped to the array.
 | `variants/position` | `int32` | (V,) | 16,384 | 1,048,576 | 0 |
 | `variants/alid`, `a1`, `a2` | `string` | (V,) | 16,384 | 1,048,576 | `""` |
 | `variants/a1_frequency` | `float32` | (V,) | 16,384 | 1,048,576 | NaN |
-| `variants/alid_index/alid` | `uint8` | (32N,) | 16,384 | 1,048,576 | 0 |
-| `variants/alid_index/row` | `int32` | (N,) | 16,384 | 1,048,576 | −1 |
+| `variants/alid_index/alid` | `uint8` | (32N,) | **262,144** | **16,777,216** | 0 |
+| `variants/alid_index/row` | `int32` | (N,) | **262,144** | **1,048,576** | −1 |
 | `near/<chrom>/indptr` | `int64` | (n_c + 1,) | 16,384 | 1,048,576 | −1 |
 | `near/<chrom>/r` | `int16` | (indptr[n_c],) | **262,144** | **67,108,864** | −32768 |
 | `index/<chrom>/indptr` | `int64` | (n_c + 1,) | 16,384 | 1,048,576 | −1 |
@@ -818,7 +818,7 @@ and the reads map onto the arrays as follows.
 
 | read | reader | made by | arrays it touches |
 |---|---|---|---|
-| the rows of a list of ALIDs | `rows_of` | `matrix`, `proxies`, `clump` | the ALID index: the chunks of `variants/alid_index/alid` one binary search a key touches, or the whole of it for a large list, and then `variants/alid_index/row` at the entries found; for an ALID it does not hold, the exact scan: `variants/position` and `variants/alid` at its position. No Proxy Index entry, no `near/` array, and no chromosome loaded for an ALID it does hold |
+| the rows of a list of ALIDs | `rows_of` | `matrix`, `proxies`, `clump` | for a long list, the ALID index whole — `variants/alid_index/alid`, then `variants/alid_index/row` at the entries found; for a short one, and for every ALID the index does not hold, the exact scan: `variants/position` and `variants/alid` at each ALID's position. No Proxy Index entry, no `near/` array, and no chromosome loaded for an ALID the index answers |
 | a region | `region_r` | `region` | for each of its rows, one contiguous slice of `near/<c>/r`, from the row's first code to its last partner inside the region, never its partners past the region; for its pairs beyond `near_bp`, the Far Pairs rows of its variants, each pair inside the region scattered into the matrix. No Proxy Index entry |
 | a submatrix for any variant list | `pair_r` | `matrix` | one element of `near/<c>/r` per pair within `near_bp`; for the pairs beyond it, the Far Pairs rows of the listed variants, each pair whose partner is listed scattered into the matrix. No Proxy Index entry |
 | a list of pairs, or one row against many | `r_of_pairs` | `partners` below t_far with `among`; `pair_r`, within `near_bp` only | one element of `near/<c>/r` per pair within `near_bp`; the Far Pairs row of each farther pair's earlier variant, searched. `pair_r`'s pairs beyond `near_bp` are not looked up this way: they are scattered from Far Pairs rows, as its own row says |
@@ -907,12 +907,14 @@ cold on that region took A 34.25 s, B 10.92 s, C 3.86 s.
 
 **How ogld reads** (ogld#4). Opening a store reads its provenance and its chromosome ranges, and
 refuses a `format_version` or `encoding` it does not implement (§13). A search for ALIDs reads the
-ALID index's two arrays, and only when it needs them (ogld#42, ADR 0010): an ALID that fits the
-slot with a byte to spare is looked for in the index, its chunks read through the cache, so it
-finds its row without reading `variants/position` or `variants/alid` at all. An ALID at the
-slot's width or past it, and one the index does not hold, is found by the exact scan at its
-position, which reads that chromosome's positions and the ALID strings there, as every ALID was
-found before the index. So a search can only be faster than it was. A chromosome's `position`
+ALID index's two arrays, and only when they pay for themselves (ogld#42, ADR 0010). A list naming
+about a two-thousandth of the Variant Set's rows or more is searched in the index: an ALID that
+fits the slot with a byte to spare finds its row there, without reading `variants/position` or
+`variants/alid` at all. A shorter list takes the exact scan for every ALID, which reads a few
+string chunks where the index reads the whole of itself. An ALID at the slot's width or past it,
+and one the index does not hold, is found by that same scan at its position, which reads the
+chromosome's positions and the ALID strings there, as every ALID was found before the index. So a
+search can only be faster than it was. A chromosome's `position`
 range and its Near Band's `indptr` are read the first time a request touches that chromosome,
 through the numeric cache, and kept. Its Proxy Index's `indptr` is read only when used;
 its Far Pairs' `indptr` the first time a request needs its pairs
